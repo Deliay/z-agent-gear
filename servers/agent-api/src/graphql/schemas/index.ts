@@ -1,3 +1,9 @@
 import { authTypeDefs } from './auth.js';
 
-export const typeDefs = [authTypeDefs];
+const baseTypeDefs = `#graphql
+  type Query
+
+  type Mutation
+`;
+
+export const typeDefs = [baseTypeDefs, authTypeDefs];
