@@ -28,6 +28,38 @@ npm run start   # Start production controller
 npm run test    # Run tests
 ```
 
+## Development with Aspire
+
+使用 Aspire 编排启动所有服务后，再启动 agent-controller 连接 controller-api。
+
+### 启动流程
+
+```bash
+# 1. 启动 Aspire 编排（拉起 agent-api + controller-api + MongoDB + Redis）
+cd ../../aspire/AgentGear.AppHost
+dotnet run
+
+# 2. 在 Aspire Dashboard 中查看 controller-api 的 HTTP endpoint
+#    默认为 http://localhost:4001（或 Aspire 动态分配的端口）
+
+# 3. 先通过 agent-api 生成 Key（GraphQL Playground: http://localhost:4000/graphql）
+#    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
+
+# 4. 使用生成的 Key 启动 agent-controller
+cd ../../packages/agent-controller
+npm run dev -- --key <rawKey> --server <controller-api-endpoint>
+```
+
+### 示例
+
+```bash
+# Aspire 启动后 controller-api 在 4001 端口
+npm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
+
+# 或使用环境变量
+ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 npm run dev
+```
+
 ## Config Priority
 
 - `--key` > `~/.zag/config.toml` > `ZAG_CONTROLLER_KEY` env
