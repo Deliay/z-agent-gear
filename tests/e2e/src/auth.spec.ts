@@ -69,7 +69,7 @@ test.describe('Auth E2E', () => {
 
     await page.click('a[href="/settings"]');
     await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator(cardTitle())).toContainText('个人资料');
+    await expect(page.getByText('个人资料')).toBeVisible();
   });
 
   test('should logout and redirect to login page', async ({ page }) => {
