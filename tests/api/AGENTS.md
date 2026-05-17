@@ -1,12 +1,40 @@
 # API Tests
 
-## 运行
+## Prerequisites
+
+- [Aspire CLI](https://aspire.dev) installed
+- Docker running (for MongoDB container)
+
+## 启动服务
+
+```bash
+# 启动 Aspire 编排（在项目根目录）
+aspire start --apphost aspire/AgentGear.AppHost
+
+# 等待后端服务就绪
+aspire wait agent-api --apphost aspire/AgentGear.AppHost
+```
+
+## 获取 API 端点
+
+```bash
+# 查看 agent-api 的地址
+aspire describe agent-api --apphost aspire/AgentGear.AppHost
+```
+
+输出中查找 `agent-api` 的 URL，例如 `http://localhost:4000`。
+
+## 运行测试
 
 ```bash
 API_URL=http://localhost:4000/graphql npm test
 ```
 
-默认连接 `http://localhost:4000/graphql`，可通过 `API_URL` 环境变量覆盖。
+## 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `API_URL` | GraphQL API 完整地址 | `http://localhost:4000/graphql` |
 
 ## 测试清单
 
