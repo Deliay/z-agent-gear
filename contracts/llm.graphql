@@ -1,0 +1,71 @@
+enum ProviderType {
+  OpenAI
+  Anthropic
+}
+
+enum CredentialType {
+  api_key
+}
+
+type Provider {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType!
+  credentialValue: String!
+  isEnabled: Boolean!
+  models: [Model!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Model {
+  id: ID!
+  providerId: ID!
+  provider: Provider!
+  name: String!
+  isCustom: Boolean!
+  isEnabled: Boolean!
+  sortOrder: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ProviderInput {
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType! = api_key
+  credentialValue: String!
+}
+
+input CustomModelInput {
+  providerId: ID!
+  name: String!
+}
+
+type ProviderBatchPayload {
+  successCount: Int!
+}
+
+type Query {
+  providers: [Provider!]!
+  models: [Model!]!
+  modelsByProvider(providerId: ID!): [Model!]!
+}
+
+type Mutation {
+  createProvider(input: ProviderInput!): Provider!
+  updateProvider(id: ID!, input: ProviderInput!): Provider!
+  deleteProvider(id: ID!): Boolean!
+  toggleProvider(id: ID!): Provider!
+
+  batchEnableProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDisableProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDeleteProviders(ids: [ID!]!): ProviderBatchPayload!
+
+  createCustomModel(input: CustomModelInput!): Model!
+  toggleModel(id: ID!): Model!
+  updateModelSortOrder(ids: [ID!]!): [Model!]!
+}
