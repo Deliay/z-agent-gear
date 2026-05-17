@@ -28,7 +28,7 @@ describe('LoginPage', () => {
         </AuthProvider>
       </MemoryRouter>,
     );
-    expect(screen.getByRole('heading', { name: '登录' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '登录' })).toBeDefined();
     expect(screen.getByLabelText('用户名')).toBeDefined();
     expect(screen.getByLabelText('密码')).toBeDefined();
   });

@@ -3,9 +3,8 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ProtectedRoute from './ProtectedRoute';
 import { AuthProvider } from '../stores/AuthProvider';
-import type { ReactNode } from 'react';
 
-function renderWithProviders(ui: ReactNode, initialEntry = '/') {
+function renderWithProviders(initialEntry = '/') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <AuthProvider>
@@ -26,13 +25,13 @@ describe('ProtectedRoute', () => {
   });
 
   it('should redirect to /login when no token', () => {
-    renderWithProviders(<ProtectedRoute />, '/');
+    renderWithProviders('/');
     expect(screen.getByText('login page')).toBeDefined();
   });
 
   it('should render children when token exists', () => {
     localStorage.setItem('auth_token', 'valid-token');
-    renderWithProviders(<ProtectedRoute />, '/');
+    renderWithProviders('/');
     expect(screen.getByText('protected content')).toBeDefined();
   });
 });
