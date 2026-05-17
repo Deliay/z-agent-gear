@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { useQuery, useMutation } from '@apollo/client'
+import { useQuery, useMutation } from '@apollo/client/react'
 import {
   DndContext,
   closestCenter,
@@ -96,7 +96,7 @@ export default function ModelSection() {
     }, [])
 
   return (
-    <section id="model-section" className="space-y-4">
+    <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-foreground">可用模型</h3>
         <Button size="sm" variant="outline" onClick={() => setCustomDialogOpen(true)}>

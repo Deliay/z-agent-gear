@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useQuery, useMutation } from '@apollo/client'
+import { useQuery, useMutation } from '@apollo/client/react'
 import {
   GET_PROVIDERS,
 } from '@/graphql/queries'
@@ -161,7 +161,7 @@ export default function ProviderSection() {
   }
 
   return (
-    <section id="provider-section" className="space-y-4">
+    <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-foreground">供应商设置</h3>
         <Button size="sm" onClick={handleAdd}>
