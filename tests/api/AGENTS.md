@@ -74,3 +74,32 @@ API_URL=http://localhost:4000/graphql npm test
 | createCustomModel - 无 auth | 应返回「Not authenticated」 |
 | toggleModel - 无 auth | 应返回「Not authenticated」 |
 | updateModelSortOrder - 无 auth | 应返回「Not authenticated」 |
+
+### Controller Key API (`controller.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| controllerKeys query - 无 token | 应返回「Not authenticated」 |
+| controllers query - 无 token | 应返回「Not authenticated」 |
+| controller query - 无 token | 应返回「Not authenticated」 |
+| createControllerKey - 无 auth | 应返回「Not authenticated」 |
+| createControllerKey - 正常创建 | 应返回 key 和 rawKey（zag_k_ 前缀） |
+| createControllerKey - 空名称 | 应返回校验错误 |
+| controllerKeys query - 已认证 | 应返回 keys 列表 |
+| renameControllerKey - 无 auth | 应返回「Not authenticated」 |
+| renameControllerKey - 正常重命名 | 应返回新 name |
+| renameControllerKey - 不存在的 key | 应返回错误 |
+| revokeControllerKey - 无 auth | 应返回「Not authenticated」 |
+| revokeControllerKey - 正常撤销 | 应返回 true，status 变为 revoked |
+| revokeControllerKey - 不存在的 key | 应返回 false |
+
+### Controller Management API (`controller.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| controllers query - 已认证 | 应返回空列表 |
+| controller query - 不存在 | 应返回 null |
+| renameController - 无 auth | 应返回「Not authenticated」 |
+| renameController - 不存在 | 应返回「Controller not found」 |
+| unbindController - 无 auth | 应返回「Not authenticated」 |
+| unbindController - 不存在 | 应返回 false |
