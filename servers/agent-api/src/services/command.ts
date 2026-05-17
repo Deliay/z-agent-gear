@@ -1,4 +1,4 @@
-import { getRedisClient } from './redis.js';
+import { getRedisClient } from '../middleware/redis.js';
 
 const COMMAND_CHANNEL = 'controller:command';
 
