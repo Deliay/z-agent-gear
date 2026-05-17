@@ -1,9 +1,3 @@
-export const typeDefs = `#graphql
-  type Query {
-    hello: String
-  }
+import { authTypeDefs } from './auth.js';
 
-  type Mutation {
-    ping: String
-  }
-`;
+export const typeDefs = [authTypeDefs];
