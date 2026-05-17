@@ -252,11 +252,13 @@ describe('Controller Key API', () => {
 
 describe('Controller Management API', () => {
   beforeAll(async () => {
-    const uid = `ctrl_mgmt_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
-    expect(authToken).toBeDefined();
+    if (!authToken) {
+      const uid = `ctrl_mgmt_${Date.now()}`;
+      const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+      const body = await res.json();
+      authToken = body.data?.signup?.token ?? '';
+      expect(authToken).toBeTruthy();
+    }
   });
 
   describe('controllers query', () => {

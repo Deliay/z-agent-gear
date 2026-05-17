@@ -10,19 +10,19 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return controllerKeyService.findAllByUser(context.currentUser._id.toString());
+      return controllerKeyService.findAllByUser(context.currentUser.id);
     },
     controllers: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return controllerService.findAllByUser(context.currentUser._id.toString());
+      return controllerService.findAllByUser(context.currentUser.id);
     },
     controller: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return controllerService.findById(args.id, context.currentUser._id.toString());
+      return controllerService.findById(args.id, context.currentUser.id);
     },
   },
   Mutation: {
@@ -34,7 +34,7 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return controllerKeyService.create(context.currentUser._id.toString(), args.input);
+      return controllerKeyService.create(context.currentUser.id, args.input);
     },
     renameControllerKey: async (
       _parent: unknown,
@@ -46,7 +46,7 @@ export const controllerResolvers = {
       }
       const result = await controllerKeyService.rename(
         args.input.id,
-        context.currentUser._id.toString(),
+        context.currentUser.id,
         args.input.name,
       );
       if (!result) {
@@ -62,7 +62,7 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const success = await controllerKeyService.revoke(args.id, context.currentUser._id.toString());
+      const success = await controllerKeyService.revoke(args.id, context.currentUser.id);
       if (success) {
         await commandService.sendShutdown(args.id);
       }
@@ -78,7 +78,7 @@ export const controllerResolvers = {
       }
       const result = await controllerService.rename(
         args.input.id,
-        context.currentUser._id.toString(),
+        context.currentUser.id,
         args.input.name,
       );
       if (!result) {
@@ -94,7 +94,7 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const success = await controllerService.unbind(args.id, context.currentUser._id.toString());
+      const success = await controllerService.unbind(args.id, context.currentUser.id);
       if (success) {
         await commandService.sendShutdown(args.id);
       }

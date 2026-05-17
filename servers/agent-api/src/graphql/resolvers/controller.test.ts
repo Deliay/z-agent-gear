@@ -30,7 +30,7 @@ import { controllerService } from '../../services/controller.js';
 import { commandService } from '../../services/command.js';
 
 const mockContext = {
-  currentUser: { _id: { toString: () => 'user1' } },
+  currentUser: { id: 'user1', username: 'testuser' },
 };
 
 const emptyContext = {
