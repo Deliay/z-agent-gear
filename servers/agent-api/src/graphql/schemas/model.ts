@@ -27,6 +27,7 @@ export const modelTypeDefs = `#graphql
 
   extend type Mutation {
     createCustomModel(input: CustomModelInput!): Model!
+    deleteCustomModel(id: ID!): Model!
     toggleModel(id: ID!): Model!
     updateModelSortOrder(ids: [ID!]!): [Model!]!
   }

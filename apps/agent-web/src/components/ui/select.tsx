@@ -48,11 +48,11 @@ function SelectIcon({ className, ...props }: SelectPrimitive.Icon.Props) {
 function SelectPopup({ className, ...props }: SelectPrimitive.Popup.Props) {
   return (
     <SelectPrimitive.Portal>
-      <SelectPrimitive.Positioner>
+      <SelectPrimitive.Positioner className="z-[60]">
         <SelectPrimitive.Popup
           data-slot="select-popup"
           className={cn(
-            "z-50 min-w-[var(--anchor-width)] origin-[--anchor-transform-origin] rounded-lg border bg-popover p-1 text-sm text-popover-foreground shadow-md transition-transform duration-100 data-starting-style:scale-95 data-starting-style:opacity-0",
+            "min-w-[var(--anchor-width)] origin-[--anchor-transform-origin] rounded-lg border bg-popover p-1 text-sm text-popover-foreground shadow-md transition-transform duration-100 data-starting-style:scale-95 data-starting-style:opacity-0",
             className
           )}
           {...props}

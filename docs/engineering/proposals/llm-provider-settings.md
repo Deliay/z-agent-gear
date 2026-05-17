@@ -2,7 +2,7 @@
 
 **功能名称**: 设置页 LLM 供应商与模型管理
 **关联 PRD**: `llm-provider-settings.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-05-17
 **作者**: ZeroAsh
 **feat-branch**: `feat/llm-provider-settings`
@@ -23,7 +23,7 @@
 
 ### 1.3 范围
 
-- 包含：供应商设置 CRUD、批量操作、模型自动拉取、自定义模型、拖拽排序、模型禁用
+- 包含：供应商设置 CRUD、批量操作、模型自动拉取、自定义模型（含删除）、拖拽排序、模型禁用
 - 不包含：供应商 API 调用代理的限流/重试策略、第三方 OAuth 绑定、模型用量统计
 
 ## 2. 技术架构
@@ -204,6 +204,7 @@ type Mutation {
 
   # 模型管理
   createCustomModel(input: CustomModelInput!): Model!
+  deleteCustomModel(id: ID!): Model!              # 仅可删除 isCustom=true 的模型
   toggleModel(id: ID!): Model!
   updateModelSortOrder(ids: [ID!]!): [Model!]!   # ids 按排序顺序传入
 }

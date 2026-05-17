@@ -86,6 +86,88 @@ describe('ProviderService', () => {
 
       expect(result.name).toBe('Test Provider');
       expect(cryptoModule.encrypt).toHaveBeenCalledWith('sk-test-key');
+      expect(Model.insertMany).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'gpt-4o', isCustom: false }),
+          expect.objectContaining({ name: 'gpt-4o-mini', isCustom: false }),
+        ]),
+      );
+    });
+  });
+
+  describe('update', () => {
+    const VALID_OID = '507f1f77bcf86cd799439011';
+    const mockExisting = {
+      _id: { toString: () => VALID_OID },
+      name: 'Existing Provider',
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      credentialType: 'api_key',
+      encryptedCredential: { iv: 'old-iv', ciphertext: 'old-enc', tag: 'old-tag' },
+      isEnabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    beforeEach(() => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockExisting),
+      });
+    });
+
+    it('should update provider with new credentialValue', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({
+        ...mockExisting,
+        name: 'Updated Provider',
+        type: 'Anthropic',
+        endpoint: 'https://api.anthropic.com',
+      });
+      (Provider.findByIdAndUpdate as any) = updateSpy;
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+      const { llmApiService } = await import('./llm-api');
+
+      const result = await providerService.update(VALID_OID, {
+        name: 'Updated Provider',
+        type: 'Anthropic',
+        endpoint: 'https://api.anthropic.com',
+        credentialType: 'api_key',
+        credentialValue: 'sk-new-key',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.name).toBe('Updated Provider');
+      expect(cryptoModule.encrypt).toHaveBeenCalledWith('sk-new-key');
+      expect(llmApiService.fetchModels).toHaveBeenCalledWith(
+        'Anthropic', 'https://api.anthropic.com', 'sk-new-key',
+      );
+    });
+
+    it('should preserve existing credential when credentialValue is empty (edit without changing key)', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({
+        ...mockExisting,
+        name: 'Renamed Provider',
+        endpoint: 'https://custom.openai.com/v1',
+      });
+      (Provider.findByIdAndUpdate as any) = updateSpy;
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+      const { llmApiService } = await import('./llm-api');
+
+      const result = await providerService.update(VALID_OID, {
+        name: 'Renamed Provider',
+        type: 'OpenAI',
+        endpoint: 'https://custom.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.name).toBe('Renamed Provider');
+      expect(cryptoModule.encrypt).not.toHaveBeenCalled();
+      expect(llmApiService.fetchModels).toHaveBeenCalledWith(
+        'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
+      );
     });
   });
 

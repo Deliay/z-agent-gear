@@ -1,7 +1,8 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVerticalIcon } from 'lucide-react'
+import { GripVerticalIcon, Trash2Icon } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 
 interface ModelData {
   id: string
@@ -21,9 +22,10 @@ interface ModelData {
 interface ModelItemProps {
   model: ModelData
   onToggle: (id: string) => void
+  onDelete: (id: string) => void
 }
 
-export default function ModelItem({ model, onToggle }: ModelItemProps) {
+export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps) {
   const {
     attributes,
     listeners,
@@ -80,6 +82,21 @@ export default function ModelItem({ model, onToggle }: ModelItemProps) {
           <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
         )}
       </div>
+      {model.isCustom && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground hover:text-destructive"
+          onClick={() => {
+            if (window.confirm(`确定要删除自定义模型「${model.name}」吗？`)) {
+              onDelete(model.id)
+            }
+          }}
+          title="删除自定义模型"
+        >
+          <Trash2Icon className="size-4" />
+        </Button>
+      )}
       <Switch
         checked={model.isEnabled && canToggle}
         onCheckedChange={() => canToggle && onToggle(model.id)}

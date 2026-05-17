@@ -102,6 +102,65 @@ describe('ModelService', () => {
     });
   });
 
+  describe('delete', () => {
+    it('should delete a custom model and return it', async () => {
+      const mockModel = {
+        _id: 'model-custom',
+        providerId: { toString: () => 'provider-1' },
+        name: 'my-custom-model',
+        isCustom: true,
+        isEnabled: true,
+        sortOrder: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        toObject: vi.fn().mockReturnValue({
+          _id: { toString: () => 'model-custom' },
+          providerId: { toString: () => 'provider-1' },
+          name: 'my-custom-model',
+          isCustom: true,
+          isEnabled: true,
+          sortOrder: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      };
+
+      (Model.findById as any) = vi.fn().mockResolvedValue(mockModel);
+      (Model.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      const result = await modelService.delete('model-custom');
+      expect(result).not.toBeNull();
+      expect(result!.name).toBe('my-custom-model');
+      expect(result!.isCustom).toBe(true);
+      expect(Model.deleteOne).toHaveBeenCalledWith({ _id: 'model-custom' });
+    });
+
+    it('should return null for auto-synced model (non-custom)', async () => {
+      const mockModel = {
+        _id: 'model-auto',
+        providerId: { toString: () => 'provider-1' },
+        name: 'gpt-4o',
+        isCustom: false,
+        isEnabled: true,
+        sortOrder: 0,
+      };
+
+      (Model.findById as any) = vi.fn().mockResolvedValue(mockModel);
+
+      const result = await modelService.delete('model-auto');
+      expect(result).toBeNull();
+      expect(Model.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('should return null if model not found', async () => {
+      (Model.findById as any) = vi.fn().mockResolvedValue(null);
+
+      const result = await modelService.delete('non-existent');
+      expect(result).toBeNull();
+      expect(Model.deleteOne).not.toHaveBeenCalled();
+    });
+  });
+
   describe('toggle', () => {
     it('should toggle model isEnabled', async () => {
       const mockModel = {

@@ -13,6 +13,7 @@ import {
   Select,
   SelectTrigger,
   SelectValue,
+  SelectIcon,
   SelectPopup,
   SelectItem,
   SelectItemText,
@@ -50,9 +51,11 @@ export default function ProviderFormDialog({
   const [credentialType] = useState('api_key')
   const [credentialValue, setCredentialValue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
+      setError(null)
       if (initialData) {
         setName(initialData.name)
         setType(initialData.type)
@@ -75,8 +78,10 @@ export default function ProviderFormDialog({
   }
 
   const handleSave = async () => {
-    if (!name.trim() || !credentialValue.trim()) return
+    if (!name.trim()) return
+    if (!initialData && !credentialValue.trim()) return
     setSaving(true)
+    setError(null)
     try {
       await onSave({
         name: name.trim(),
@@ -85,12 +90,15 @@ export default function ProviderFormDialog({
         credentialType,
         credentialValue: credentialValue.trim(),
       })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '操作失败，请重试'
+      setError(message)
     } finally {
       setSaving(false)
     }
   }
 
-  const isValid = name.trim() && endpoint.trim() && credentialValue.trim()
+  const isValid = name.trim() && endpoint.trim() && (initialData || credentialValue.trim())
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -111,7 +119,8 @@ export default function ProviderFormDialog({
             <Label>API 类型</Label>
             <Select value={type} onValueChange={handleTypeChange}>
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>{type}</SelectValue>
+                <SelectIcon />
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value="OpenAI">
@@ -145,6 +154,11 @@ export default function ProviderFormDialog({
             />
           </div>
         </div>
+        {error && (
+          <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            {error}
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消

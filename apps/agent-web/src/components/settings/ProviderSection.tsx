@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import {
   GET_PROVIDERS,
+  GET_MODELS,
 } from '@/graphql/queries'
 import {
   CREATE_PROVIDER,
@@ -76,12 +77,12 @@ export default function ProviderSection() {
     if (editingId) {
       await updateProvider({
         variables: { id: editingId, input },
-        refetchQueries: [GET_PROVIDERS],
+        refetchQueries: [GET_PROVIDERS, GET_MODELS],
       })
     } else {
       await createProvider({
         variables: { input },
-        refetchQueries: [GET_PROVIDERS],
+        refetchQueries: [GET_PROVIDERS, GET_MODELS],
       })
     }
     setFormOpen(false)
@@ -92,14 +93,14 @@ export default function ProviderSection() {
   const handleToggle = async (id: string) => {
     await toggleProvider({
       variables: { id },
-      refetchQueries: [GET_PROVIDERS],
+      refetchQueries: [GET_PROVIDERS, GET_MODELS],
     })
   }
 
   const handleDelete = async (id: string) => {
     await deleteProvider({
       variables: { id },
-      refetchQueries: [GET_PROVIDERS],
+      refetchQueries: [GET_PROVIDERS, GET_MODELS],
     })
   }
 
@@ -127,7 +128,7 @@ export default function ProviderSection() {
   const handleBatchEnable = async () => {
     await batchEnable({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS],
+      refetchQueries: [GET_PROVIDERS, GET_MODELS],
     })
     handleCancelMulti()
   }
@@ -135,7 +136,7 @@ export default function ProviderSection() {
   const handleBatchDisable = async () => {
     await batchDisable({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS],
+      refetchQueries: [GET_PROVIDERS, GET_MODELS],
     })
     handleCancelMulti()
   }
@@ -143,7 +144,7 @@ export default function ProviderSection() {
   const handleBatchDelete = async () => {
     await batchDelete({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS],
+      refetchQueries: [GET_PROVIDERS, GET_MODELS],
     })
     handleCancelMulti()
   }

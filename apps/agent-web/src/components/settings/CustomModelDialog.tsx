@@ -75,7 +75,9 @@ export default function CustomModelDialog({
                 <Label>选择供应商</Label>
                 <Select value={providerId} onValueChange={setProviderId}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {providers.find((p) => p.id === providerId)?.name ?? '选择供应商'}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {providers.map((p) => (

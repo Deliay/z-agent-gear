@@ -100,6 +100,14 @@ export const CREATE_CUSTOM_MODEL = gql`
   }
 `
 
+export const DELETE_CUSTOM_MODEL = gql`
+  mutation DeleteCustomModel($id: ID!) {
+    deleteCustomModel(id: $id) {
+      id
+    }
+  }
+`
+
 export const TOGGLE_MODEL = gql`
   mutation ToggleModel($id: ID!) {
     toggleModel(id: $id) {

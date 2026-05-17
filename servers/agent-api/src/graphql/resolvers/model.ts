@@ -40,6 +40,20 @@ export const modelResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    deleteCustomModel: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const result = await modelService.delete(args.id);
+      if (!result) {
+        throw new GraphQLError('Model not found or is not a custom model');
+      }
+      return result;
+    },
     toggleModel: async (
       _parent: unknown,
       args: { id: string },

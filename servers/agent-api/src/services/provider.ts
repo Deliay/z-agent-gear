@@ -56,9 +56,36 @@ export class ProviderService {
     credentialType: string;
     credentialValue: string;
   }) {
-    const encrypted = encrypt(input.credentialValue);
+    const existingProvider = await Provider.findById(id).lean() as { encryptedCredential: { iv: string; ciphertext: string; tag: string }; type: string; endpoint: string } | null;
+    if (!existingProvider) return null;
 
-    const models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
+    const hasNewCredential = input.credentialValue.trim().length > 0;
+    const encrypted = hasNewCredential
+      ? encrypt(input.credentialValue)
+      : existingProvider.encryptedCredential;
+
+    const effectiveApiKey = hasNewCredential ? input.credentialValue : decrypt(existingProvider.encryptedCredential);
+
+    const credentialChanged = hasNewCredential;
+    const typeChanged = input.type !== existingProvider.type;
+    const endpointChanged = input.endpoint !== existingProvider.endpoint;
+
+    if (credentialChanged || typeChanged || endpointChanged) {
+      const models = await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
+
+      await Model.deleteMany({ providerId: id });
+
+      if (models.length > 0) {
+        const modelDocs = models.map((name, i) => ({
+          providerId: new mongoose.Types.ObjectId(id),
+          name,
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: i,
+        }));
+        await Model.insertMany(modelDocs);
+      }
+    }
 
     const provider = await Provider.findByIdAndUpdate(
       id,
@@ -66,25 +93,12 @@ export class ProviderService {
         name: input.name,
         type: input.type,
         endpoint: input.endpoint,
-      credentialType: (input.credentialType || 'api_key') as 'api_key',
+        credentialType: (input.credentialType || 'api_key') as 'api_key',
         encryptedCredential: encrypted,
       },
       { new: true, lean: true },
     );
     if (!provider) return null;
-
-    await Model.deleteMany({ providerId: id });
-
-    if (models.length > 0) {
-      const modelDocs = models.map((name, i) => ({
-        providerId: new mongoose.Types.ObjectId(id),
-        name,
-        isCustom: false,
-        isEnabled: true,
-        sortOrder: i,
-      }));
-      await Model.insertMany(modelDocs);
-    }
 
     return this.mapProvider(provider);
   }

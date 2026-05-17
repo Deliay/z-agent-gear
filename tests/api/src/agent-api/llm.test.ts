@@ -104,6 +104,12 @@ const BATCH_DELETE = `
   }
 `;
 
+const DELETE_CUSTOM_MODEL = `
+  mutation DeleteCustomModel($id: ID!) {
+    deleteCustomModel(id: $id) { id isCustom }
+  }
+`;
+
 const CREATE_CUSTOM_MODEL = `
   mutation CreateCustomModel($input: CustomModelInput!) {
     createCustomModel(input: $input) {
@@ -309,6 +315,20 @@ describe('LLM Provider & Model API', () => {
       expect(body.errors[0].message).toBe('Not authenticated');
     });
 
+    it('should reject deleteCustomModel without auth', async () => {
+      const res = await gqlRequest(DELETE_CUSTOM_MODEL, { id: 'fake' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject deleteCustomModel for non-existent model', async () => {
+      const res = await gqlRequest(DELETE_CUSTOM_MODEL, { id: '000000000000000000000000' }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Model not found or is not a custom model');
+    });
+
     it('should reject toggleModel without auth', async () => {
       const res = await gqlRequest(TOGGLE_MODEL, { id: 'fake' });
       const body = await res.json();
@@ -321,6 +341,109 @@ describe('LLM Provider & Model API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
       expect(body.errors[0].message).toBe('Not authenticated');
+    });
+  });
+
+  // #3: updateProvider with empty credentialValue should preserve existing key
+  describe('updateProvider with empty credentialValue', () => {
+    const hasRealKey = !!process.env.LLM_TEST_API_KEY;
+    const testOrSkip = hasRealKey ? it : it.skip;
+
+    testOrSkip('should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+      const name = `crud-provider-${Date.now()}`;
+      const createRes = await gqlRequest(
+        CREATE_PROVIDER,
+        {
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: process.env.LLM_TEST_ENDPOINT || 'https://api.openai.com/v1',
+            credentialType: 'api_key',
+            credentialValue: process.env.LLM_TEST_API_KEY!,
+          },
+        },
+        authToken,
+      );
+      const created = await createRes.json();
+      expect(created.errors).toBeUndefined();
+      const pid = created.data.createProvider.id;
+
+      // Update with empty credentialValue — should preserve existing
+      const updateRes = await gqlRequest(
+        UPDATE_PROVIDER,
+        {
+          id: pid,
+          input: {
+            name: `${name}-renamed`,
+            type: 'OpenAI',
+            endpoint: 'https://api.openai.com/v1',
+            credentialType: 'api_key',
+            credentialValue: '',
+          },
+        },
+        authToken,
+      );
+      const updated = await updateRes.json();
+      expect(updated.errors).toBeUndefined();
+      expect(updated.data.updateProvider.name).toBe(`${name}-renamed`);
+
+      // Cleanup
+      await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
+    });
+  });
+
+  // #2: Models should be returned after provider creation
+  describe('model lifecycle after provider CRUD', () => {
+    const hasRealKey = !!process.env.LLM_TEST_API_KEY;
+    const testOrSkip = hasRealKey ? it : it.skip;
+
+    let pid = '';
+
+    testOrSkip('should create provider and its models appear in models query', async () => {
+      const name = `lifecycle-provider-${Date.now()}`;
+      const createRes = await gqlRequest(
+        CREATE_PROVIDER,
+        {
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: process.env.LLM_TEST_ENDPOINT || 'https://api.openai.com/v1',
+            credentialType: 'api_key',
+            credentialValue: process.env.LLM_TEST_API_KEY!,
+          },
+        },
+        authToken,
+      );
+      const created = await createRes.json();
+      expect(created.errors).toBeUndefined();
+      pid = created.data.createProvider.id;
+      expect(created.data.createProvider.models.length).toBeGreaterThan(0);
+
+      // Verify models query also returns them
+      const modelsRes = await gqlRequest(MODELS_QUERY, undefined, authToken);
+      const modelsBody = await modelsRes.json();
+      expect(modelsBody.errors).toBeUndefined();
+      const providerModels = modelsBody.data.models.filter(
+        (m: { providerId: string }) => m.providerId === pid,
+      );
+      expect(providerModels.length).toBeGreaterThan(0);
+    });
+
+    // #6: Delete provider should cascade-delete its models
+    testOrSkip('should delete provider and cascade-delete its models', async () => {
+      expect(pid).toBeTruthy();
+
+      const delRes = await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
+      const delBody = await delRes.json();
+      expect(delBody.errors).toBeUndefined();
+      expect(delBody.data.deleteProvider).toBe(true);
+
+      const modelsRes = await gqlRequest(MODELS_QUERY, undefined, authToken);
+      const modelsBody = await modelsRes.json();
+      const remaining = modelsBody.data.models.filter(
+        (m: { providerId: string }) => m.providerId === pid,
+      );
+      expect(remaining.length).toBe(0);
     });
   });
 });

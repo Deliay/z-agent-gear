@@ -31,6 +31,15 @@ export class ModelService {
     return this.mapModel(model.toObject());
   }
 
+  async delete(id: string) {
+    const model = await Model.findById(id);
+    if (!model || !model.isCustom) return null;
+
+    const mapped = this.mapModel(model.toObject());
+    await Model.deleteOne({ _id: id });
+    return mapped;
+  }
+
   async toggle(id: string) {
     const model = await Model.findById(id);
     if (!model) return null;

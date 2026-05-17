@@ -14,11 +14,13 @@ import {
 } from '@dnd-kit/sortable'
 import {
   GET_MODELS,
+  GET_PROVIDERS,
 } from '@/graphql/queries'
 import {
   TOGGLE_MODEL,
   UPDATE_MODEL_SORT_ORDER,
   CREATE_CUSTOM_MODEL,
+  DELETE_CUSTOM_MODEL,
 } from '@/graphql/mutations'
 import { Button } from '@/components/ui/button'
 import ModelItem from './ModelItem'
@@ -41,9 +43,11 @@ interface ModelData {
 
 export default function ModelSection() {
   const { data, loading, refetch } = useQuery(GET_MODELS)
+  const { data: providersData } = useQuery(GET_PROVIDERS)
   const [toggleModel] = useMutation(TOGGLE_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_CUSTOM_MODEL)
+  const [deleteCustomModel] = useMutation(DELETE_CUSTOM_MODEL)
 
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
 
@@ -52,6 +56,13 @@ export default function ModelSection() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
+
+  const handleDelete = useCallback(async (id: string) => {
+    await deleteCustomModel({
+      variables: { id },
+      refetchQueries: [GET_MODELS],
+    })
+  }, [deleteCustomModel])
 
   const handleToggle = async (id: string) => {
     await toggleModel({
@@ -86,14 +97,9 @@ export default function ModelSection() {
     })
   }
 
-  const enabledProviders = models
-    .filter((m) => m.provider?.isEnabled)
-    .reduce<Array<{ id: string; name: string }>>((acc, m) => {
-      if (m.provider && !acc.find((p) => p.id === m.provider!.id)) {
-        acc.push({ id: m.provider.id, name: m.provider.name })
-      }
-      return acc
-    }, [])
+  const enabledProviders = (providersData?.providers ?? [])
+    .filter((p: { isEnabled: boolean }) => p.isEnabled)
+    .map((p: { id: string; name: string }) => ({ id: p.id, name: p.name }))
 
   return (
     <section className="space-y-4">
@@ -126,6 +132,7 @@ export default function ModelSection() {
                   key={model.id}
                   model={model}
                   onToggle={handleToggle}
+                  onDelete={handleDelete}
                 />
               ))}
             </div>
