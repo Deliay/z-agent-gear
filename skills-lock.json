@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "skills": {
+    "z-aspire-orchestrator": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "a54215eded571fa19711a2adf8aa2c30c8b52029adc6dbdf357ae4eca0290c59"
+    },
+    "z-coding": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "7a1c31474a2728d3ac98aa12d99c5c8bffb10287d2d5784dd82dab60f32ca60e"
+    },
+    "z-debugging": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "006c1e386f875c58dafe8868c01e08db31eb613175fa9e5cd84e5e6f9d9c0572"
+    },
+    "z-document": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "10ddcdc01f5fd3a22da19b5030db68ac7d0211772321269a2db9ec6e54a40249"
+    },
+    "z-git": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "501b3173732102f79c00179b90e629aecee86df7a2dffb1d6e4073c92cf08516"
+    },
+    "z-product": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "5a6f7abd6fffbd3788633d1fd5202baf48c62c7f89a3689256f34dfcedba7f3d"
+    },
+    "z-project": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "ba4978d61a7c85f463800f94b33b09345dbd2be8043c6f5226f2497495bc4386"
+    },
+    "z-test": {
+      "source": "deliay/zero-ash-cookbook",
+      "sourceType": "github",
+      "computedHash": "b7ab54488192a56839590e094e648d3e990f2a074f436841ada3d4c4c01c659f"
+    }
+  }
+}
