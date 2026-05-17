@@ -1,10 +1,10 @@
-import type { IResolvers } from '@graphql-tools/schema';
+import { authResolvers } from './auth.js';
 
-export const resolvers: IResolvers = {
+export const resolvers = {
   Query: {
-    hello: () => 'Hello from Agent Gear API!',
+    ...authResolvers.Query,
   },
   Mutation: {
-    ping: () => 'pong',
+    ...authResolvers.Mutation,
   },
 };
