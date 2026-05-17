@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import ProviderSection from '@/components/settings/ProviderSection';
 import ModelSection from '@/components/settings/ModelSection';
+import ControllerListSection from '@/components/settings/ControllerListSection';
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
@@ -63,6 +64,18 @@ export default function SettingsPage() {
               可用模型
             </button>
           </div>
+          <div className="pt-2">
+            <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+              控制器
+            </div>
+            <button
+              type="button"
+              onClick={() => scrollTo('controller-section')}
+              className="w-full rounded-md px-3 py-2 text-sm font-medium text-left hover:bg-accent hover:text-accent-foreground"
+            >
+              控制器管理
+            </button>
+          </div>
         </div>
       </nav>
       <div className="overflow-y-auto p-8">
@@ -102,6 +115,10 @@ export default function SettingsPage() {
 
         <section id="model-section" className="mb-10">
           <ModelSection />
+        </section>
+
+        <section id="controller-section" className="mb-10">
+          <ControllerListSection />
         </section>
       </div>
     </div>

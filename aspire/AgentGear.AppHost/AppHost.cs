@@ -10,6 +10,12 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithReference(mongodb)
     .WithReference(redis);
 
+var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
+    .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithHttpEndpoint(port: 4001, env: "PORT")
+    .WithReference(mongodb)
+    .WithReference(redis);
+
 var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
     .WithReference(agentApi)
     .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"));

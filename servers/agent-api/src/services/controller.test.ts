@@ -1,0 +1,120 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../models/controller.js', () => ({
+  Controller: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    updateOne: vi.fn(),
+  },
+}));
+
+vi.mock('../models/controller-key.js', () => ({
+  ControllerKey: {
+    updateOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+  },
+}));
+
+vi.mock('./command.js', () => ({
+  commandService: {
+    sendShutdown: vi.fn(),
+  },
+}));
+
+import { controllerService } from '../services/controller.js';
+import { Controller } from '../models/controller.js';
+import { ControllerKey } from '../models/controller-key.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('ControllerService', () => {
+  describe('findAllByUser', () => {
+    it('should return all controllers for a user', async () => {
+      const mockControllers = [
+        {
+          _id: { toString: () => 'ctrl1' },
+          name: 'My Machine',
+          hostname: 'dev-machine',
+          type: 'local',
+          status: 'online',
+          keyId: { toString: () => 'key1' },
+          version: '1.0.0',
+          lastHeartbeatAt: new Date(),
+          createdAt: new Date('2024-01-01'),
+          updatedAt: new Date('2024-01-01'),
+        },
+      ];
+
+      vi.mocked(Controller.find).mockReturnValue({
+        sort: vi.fn().mockReturnThis(),
+        lean: vi.fn().mockResolvedValue(mockControllers),
+      } as never);
+
+      const result = await controllerService.findAllByUser('user1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('My Machine');
+    });
+  });
+
+  describe('rename', () => {
+    it('should rename a controller', async () => {
+      vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => 'ctrl1' },
+          name: 'New Name',
+          hostname: 'dev-machine',
+          type: 'local',
+          status: 'online',
+          keyId: { toString: () => 'key1' },
+          version: '1.0.0',
+          lastHeartbeatAt: null,
+          createdAt: new Date('2024-01-01'),
+          updatedAt: new Date('2024-01-01'),
+        }),
+      } as never);
+
+      const result = await controllerService.rename('ctrl1', 'user1', 'New Name');
+
+      expect(result).toBeDefined();
+      expect(result?.name).toBe('New Name');
+    });
+
+    it('should return null when controller not found', async () => {
+      vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await controllerService.rename('ctrl1', 'user1', 'New Name');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('unbind', () => {
+    it('should unbind a controller', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue({
+        keyId: 'key1',
+      } as never);
+      vi.mocked(Controller.updateOne).mockResolvedValue({} as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      const result = await controllerService.unbind('ctrl1', 'user1');
+
+      expect(result).toBe(true);
+      expect(ControllerKey.updateOne).toHaveBeenCalledWith({ _id: 'key1' }, { boundControllerId: null });
+      expect(Controller.updateOne).toHaveBeenCalledWith({ _id: 'ctrl1' }, { status: 'unbound' });
+    });
+
+    it('should return false when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue(null as never);
+
+      const result = await controllerService.unbind('ctrl1', 'user1');
+
+      expect(result).toBe(false);
+    });
+  });
+});

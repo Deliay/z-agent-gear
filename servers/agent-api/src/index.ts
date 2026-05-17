@@ -7,6 +7,7 @@ import { config } from './config/index.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateUser } from './middleware/auth.js';
+import { getRedisClient } from './middleware/redis.js';
 
 const app = express();
 
@@ -35,6 +36,13 @@ async function start() {
     console.log('Connected to MongoDB');
   } catch (err) {
     console.warn('MongoDB not available, starting without database:', (err as Error).message);
+  }
+
+  try {
+    getRedisClient();
+    console.log('Connected to Redis');
+  } catch (err) {
+    console.warn('Redis not available:', (err as Error).message);
   }
 
   app.listen(config.port, () => {
