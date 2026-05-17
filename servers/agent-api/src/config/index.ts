@@ -8,4 +8,5 @@ export const config = {
   redisUri: process.env.REDIS_URI || process.env.REDIS_CONNECTION_STRING || 'redis://localhost:6379',
   nodeEnv: process.env.NODE_ENV || 'development',
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
+  credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
 };

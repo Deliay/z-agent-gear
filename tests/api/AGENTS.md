@@ -51,3 +51,26 @@ API_URL=http://localhost:4000/graphql npm test
 | login - 不存在的用户 | 应返回「Invalid username or password」 |
 | me - 未认证 | 应返回 null |
 | me - 已认证 | 应返回当前用户信息 |
+
+### LLM Provider & Model API (`llm.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| providers query - 无 token | 应返回「Not authenticated」 |
+| models query - 无 token | 应返回「Not authenticated」 |
+| providers query - 已认证 | 应返回空列表 |
+| models query - 已认证 | 应返回空列表 |
+| createProvider - 无效 endpoint | 应返回连通性测试失败 |
+| createProvider - 空名称 | 应返回校验错误 |
+| createProvider - 无 auth | 应返回「Not authenticated」 |
+| batchEnable - 空列表 | 应返回 successCount=0 |
+| batchDisable - 空列表 | 应返回 successCount=0 |
+| batchDelete - 空列表 | 应返回 successCount=0 |
+| batchEnable - 无 auth | 应返回「Not authenticated」 |
+| toggleProvider - 不存在的 provider | 应返回「Provider not found」 |
+| toggleProvider - 无 auth | 应返回「Not authenticated」 |
+| deleteProvider - 不存在的 provider | 应返回 false |
+| updateProvider - 不存在的 provider | 应返回「Provider not found」 |
+| createCustomModel - 无 auth | 应返回「Not authenticated」 |
+| toggleModel - 无 auth | 应返回「Not authenticated」 |
+| updateModelSortOrder - 无 auth | 应返回「Not authenticated」 |

@@ -1,0 +1,119 @@
+import { gql } from '@apollo/client'
+
+export const CREATE_PROVIDER = gql`
+  mutation CreateProvider($input: ProviderInput!) {
+    createProvider(input: $input) {
+      id
+      name
+      type
+      endpoint
+      credentialType
+      credentialValue
+      isEnabled
+      models {
+        id
+        name
+        isEnabled
+        sortOrder
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const UPDATE_PROVIDER = gql`
+  mutation UpdateProvider($id: ID!, $input: ProviderInput!) {
+    updateProvider(id: $id, input: $input) {
+      id
+      name
+      type
+      endpoint
+      credentialType
+      credentialValue
+      isEnabled
+      models {
+        id
+        name
+        isEnabled
+        sortOrder
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const DELETE_PROVIDER = gql`
+  mutation DeleteProvider($id: ID!) {
+    deleteProvider(id: $id)
+  }
+`
+
+export const TOGGLE_PROVIDER = gql`
+  mutation ToggleProvider($id: ID!) {
+    toggleProvider(id: $id) {
+      id
+      isEnabled
+      models {
+        id
+        isEnabled
+      }
+    }
+  }
+`
+
+export const BATCH_ENABLE_PROVIDERS = gql`
+  mutation BatchEnableProviders($ids: [ID!]!) {
+    batchEnableProviders(ids: $ids) {
+      successCount
+    }
+  }
+`
+
+export const BATCH_DISABLE_PROVIDERS = gql`
+  mutation BatchDisableProviders($ids: [ID!]!) {
+    batchDisableProviders(ids: $ids) {
+      successCount
+    }
+  }
+`
+
+export const BATCH_DELETE_PROVIDERS = gql`
+  mutation BatchDeleteProviders($ids: [ID!]!) {
+    batchDeleteProviders(ids: $ids) {
+      successCount
+    }
+  }
+`
+
+export const CREATE_CUSTOM_MODEL = gql`
+  mutation CreateCustomModel($input: CustomModelInput!) {
+    createCustomModel(input: $input) {
+      id
+      providerId
+      name
+      isCustom
+      isEnabled
+      sortOrder
+    }
+  }
+`
+
+export const TOGGLE_MODEL = gql`
+  mutation ToggleModel($id: ID!) {
+    toggleModel(id: $id) {
+      id
+      isEnabled
+    }
+  }
+`
+
+export const UPDATE_MODEL_SORT_ORDER = gql`
+  mutation UpdateModelSortOrder($ids: [ID!]!) {
+    updateModelSortOrder(ids: $ids) {
+      id
+      sortOrder
+    }
+  }
+`
