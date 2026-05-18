@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useQuery } from '@apollo/client/react';
+import { GET_ACP_CAPABILITIES } from '../../graphql/queries';
 
 interface Controller {
   id: string;
@@ -6,22 +8,46 @@ interface Controller {
   status: string;
 }
 
+interface AcpCapability {
+  type: string;
+  available: boolean;
+  version?: string;
+}
+
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, cwd?: string) => void;
+  onCreate: (controllerId: string, acpServerType: string, cwd?: string) => void;
 }
 
 export default function NewSessionDialog({ controllers, onClose, onCreate }: NewSessionDialogProps) {
   const [selectedController, setSelectedController] = useState<string>('');
+  const [selectedAcpServer, setSelectedAcpServer] = useState<string>('');
   const [cwd, setCwd] = useState('');
 
   const onlineControllers = controllers.filter((c) => c.status === 'online');
 
+  const { data: acpData, loading: acpLoading } = useQuery<{ acpCapabilities: AcpCapability[] }>(
+    GET_ACP_CAPABILITIES,
+    {
+      variables: { controllerId: selectedController },
+      skip: !selectedController,
+    },
+  );
+
+  const acpServers = acpData?.acpCapabilities?.filter((s) => s.available) ?? [];
+
+  // Auto-select first available ACP server
+  useEffect(() => {
+    if (acpServers.length > 0 && !selectedAcpServer) {
+      setSelectedAcpServer(acpServers[0].type);
+    }
+  }, [acpServers, selectedAcpServer]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedController) {
-      onCreate(selectedController, cwd || undefined);
+    if (selectedController && selectedAcpServer) {
+      onCreate(selectedController, selectedAcpServer, cwd || undefined);
       onClose();
     }
   };
@@ -38,7 +64,10 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
             <select
               id="controller"
               value={selectedController}
-              onChange={(e) => setSelectedController(e.target.value)}
+              onChange={(e) => {
+                setSelectedController(e.target.value);
+                setSelectedAcpServer('');
+              }}
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               required
             >
@@ -53,6 +82,46 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               <p className="mt-1 text-sm text-red-600">No online controllers available</p>
             )}
           </div>
+
+          {selectedController && (
+            <div className="mb-4">
+              <div className="mb-2 block text-sm font-medium text-gray-700">
+                ACP Server
+              </div>
+              {acpLoading ? (
+                <p className="text-sm text-gray-500">Detecting ACP servers...</p>
+              ) : (
+                <div className="space-y-2">
+                  {(acpServers.length > 0 ? acpServers : [{ type: 'opencode', available: true }]).map((server) => (
+                    <label
+                      key={server.type}
+                      className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 ${
+                        selectedAcpServer === server.type
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="acp-server"
+                        value={server.type}
+                        checked={selectedAcpServer === server.type}
+                        onChange={(e) => setSelectedAcpServer(e.target.value)}
+                        className="h-4 w-4 text-blue-600"
+                      />
+                      <div>
+                        <span className="text-sm font-medium text-gray-900">{server.type}</span>
+                        {server.version && (
+                          <span className="ml-2 text-xs text-gray-500">v{server.version}</span>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mb-6">
             <label htmlFor="cwd" className="mb-2 block text-sm font-medium text-gray-700">
               Working Directory (optional)
@@ -76,7 +145,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
             </button>
             <button
               type="submit"
-              disabled={!selectedController}
+              disabled={!selectedController || !selectedAcpServer}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
             >
               Create Session

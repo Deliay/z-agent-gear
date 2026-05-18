@@ -308,13 +308,22 @@ describe('SessionService', () => {
     });
 
     it('should return empty array when no cache', async () => {
+      vi.useFakeTimers();
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
       } as never);
       vi.mocked(mockRedis.get).mockResolvedValue(null);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
 
-      const result = await sessionService.getAcpCapabilities('ctrl-1', 'user-1');
+      const promise = sessionService.getAcpCapabilities('ctrl-1', 'user-1');
+      // Advance through all polling intervals
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      const result = await promise;
+
       expect(result).toEqual([]);
+      vi.useRealTimers();
     });
 
     it('should throw when controller not found', async () => {

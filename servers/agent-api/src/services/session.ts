@@ -130,14 +130,32 @@ export class SessionService {
       throw new Error('Controller not found');
     }
 
-    // Check Redis cache first
     const redis = getRedisClient();
+
+    // Check Redis cache first
     const cached = await redis.get(`acp:capability:${controllerId}`);
     if (cached) {
       return JSON.parse(cached).servers;
     }
 
-    // For now, return empty array - capabilities will be detected via WebSocket
+    // Trigger ACP capability detection via Redis Pub/Sub
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:check',
+      requestId,
+      controllerId,
+    }));
+
+    // Poll Redis cache for result (controller-api will cache it after detection)
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await redis.get(`acp:capability:${controllerId}`);
+      if (result) {
+        return JSON.parse(result).servers;
+      }
+    }
+
+    // Timeout — return empty
     return [];
   }
 

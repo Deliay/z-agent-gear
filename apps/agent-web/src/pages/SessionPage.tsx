@@ -94,13 +94,13 @@ export default function SessionPage() {
     };
   }, [id]);
 
-  const handleCreateSession = async (controllerId: string, cwd?: string) => {
+  const handleCreateSession = async (controllerId: string, acpServerType: string, cwd?: string) => {
     try {
       const { data } = await createSession({
         variables: {
           input: {
             controllerId,
-            acpServerType: 'opencode',
+            acpServerType,
             cwd,
           },
         },

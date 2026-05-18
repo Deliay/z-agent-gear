@@ -141,6 +141,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
 
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
@@ -158,6 +159,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -181,6 +183,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -202,6 +205,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -224,6 +228,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -246,6 +251,7 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
+    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
