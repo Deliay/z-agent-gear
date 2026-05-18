@@ -4,13 +4,20 @@ vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
     create: vi.fn(),
     find: vi.fn(),
-    findOneAndUpdate: vi.fn(),
     findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    findOneAndDelete: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
 vi.mock('../models/controller.js', () => ({
   Controller: {},
+}));
+
+vi.mock('../services/key-cache.js', () => ({
+  cacheKey: vi.fn(),
+  evictKeyById: vi.fn(),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -39,6 +46,7 @@ vi.mock('mongoose', () => ({
 
 import { controllerKeyService } from '../services/controller-key.js';
 import { ControllerKey } from '../models/controller-key.js';
+import { evictKeyById } from '../services/key-cache.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -70,6 +78,7 @@ describe('ControllerKeyService', () => {
 
       vi.mocked(crypto.randomBytes).mockReturnValue(Buffer.from('a1b2c3d4e5f6') as never);
       vi.mocked(bcrypt.hash).mockResolvedValue('hashed-key' as never);
+      vi.mocked(ControllerKey.findOne).mockResolvedValue(null);
       vi.mocked(ControllerKey.create).mockResolvedValue(mockKeyDoc as never);
 
       const result = await controllerKeyService.create('507f1f77bcf86cd799439011', { name: 'My Key', type: 'local' });
@@ -77,6 +86,46 @@ describe('ControllerKeyService', () => {
       expect(result.rawKey).toMatch(/^zag_k_1_/);
       expect(result.key).toBeDefined();
       expect(ControllerKey.create).toHaveBeenCalled();
+    });
+
+    it('should delete existing unbound key before creating new one', async () => {
+      const existingUnboundKey = {
+        _id: { toString: () => 'old-key' },
+        boundControllerId: null,
+      };
+
+      vi.mocked(ControllerKey.findOne).mockResolvedValue(existingUnboundKey as never);
+      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
+
+      const mockKeyDoc = {
+        _id: { toString: () => 'new-key' },
+        name: 'New Key',
+        type: 'local',
+        keyPrefix: 'zag_k_1',
+        status: 'active',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-01-01'),
+        toObject: () => ({
+          _id: { toString: () => 'new-key' },
+          name: 'New Key',
+          type: 'local',
+          keyPrefix: 'zag_k_1',
+          status: 'active',
+          createdAt: new Date('2024-01-01'),
+          updatedAt: new Date('2024-01-01'),
+        }),
+      };
+
+      vi.mocked(crypto.randomBytes).mockReturnValue(Buffer.from('a1b2c3d4e5f6') as never);
+      vi.mocked(bcrypt.hash).mockResolvedValue('hashed-key' as never);
+      vi.mocked(ControllerKey.create).mockResolvedValue(mockKeyDoc as never);
+
+      const result = await controllerKeyService.create('user1', { name: 'New Key', type: 'local' });
+
+      expect(evictKeyById).toHaveBeenCalledWith('old-key');
+      expect(ControllerKey.deleteOne).toHaveBeenCalled();
+      expect(result.rawKey).toMatch(/^zag_k_1_/);
     });
   });
 
@@ -107,23 +156,22 @@ describe('ControllerKeyService', () => {
     });
   });
 
-  describe('revoke', () => {
-    it('should revoke an active key', async () => {
-      vi.mocked(ControllerKey.findOneAndUpdate).mockResolvedValue({} as never);
+  describe('delete', () => {
+    it('should delete a key and evict from cache', async () => {
+      vi.mocked(ControllerKey.findOneAndDelete).mockResolvedValue({} as never);
+      vi.mocked(evictKeyById).mockResolvedValue();
 
-      const result = await controllerKeyService.revoke('key1', 'user1');
+      const result = await controllerKeyService.delete('key1', 'user1');
 
       expect(result).toBe(true);
-      expect(ControllerKey.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: 'key1', userId: 'user1', status: 'active' },
-        { status: 'revoked' },
-      );
+      expect(ControllerKey.findOneAndDelete).toHaveBeenCalledWith({ _id: 'key1', userId: 'user1' });
+      expect(evictKeyById).toHaveBeenCalledWith('key1');
     });
 
     it('should return false when key not found', async () => {
-      vi.mocked(ControllerKey.findOneAndUpdate).mockResolvedValue(null as never);
+      vi.mocked(ControllerKey.findOneAndDelete).mockResolvedValue(null as never);
 
-      const result = await controllerKeyService.revoke('key1', 'user1');
+      const result = await controllerKeyService.delete('key1', 'user1');
 
       expect(result).toBe(false);
     });

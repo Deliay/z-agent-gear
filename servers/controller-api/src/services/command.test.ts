@@ -6,13 +6,13 @@ vi.mock('../middleware/redis.js', () => ({
 
 vi.mock('../models/controller.js', () => ({
   Controller: {
-    updateMany: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
 vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
-    updateOne: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
@@ -89,8 +89,8 @@ describe('CommandService', () => {
     mockIO.sockets.sockets.set('socket-123', mockSocket as never);
 
     vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
-    vi.mocked(Controller.updateMany).mockResolvedValue({} as never);
-    vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+    vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
+    vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();
 
     const commandService = new CommandService();
@@ -103,8 +103,8 @@ describe('CommandService', () => {
       expect(mockIO.to).toHaveBeenCalledWith('socket-123');
       expect(mockIO.emit).toHaveBeenCalledWith('shutdown', { reason: 'key_revoked' });
       expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
-      expect(Controller.updateMany).toHaveBeenCalledWith({ keyId: 'key123' }, { status: 'unbound' });
-      expect(ControllerKey.updateOne).toHaveBeenCalledWith({ _id: 'key123' }, { boundControllerId: null });
+      expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
+      expect(ControllerKey.deleteOne).toHaveBeenCalledWith({ _id: 'key123' });
       expect(sessionService.cleanupKey).toHaveBeenCalledWith('key123');
     });
   });
@@ -160,8 +160,8 @@ describe('CommandService', () => {
 
     const mockIO = createMockIO();
     vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
-    vi.mocked(Controller.updateMany).mockResolvedValue({} as never);
-    vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+    vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
+    vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();
 
     const commandService = new CommandService();
@@ -172,7 +172,7 @@ describe('CommandService', () => {
     await vi.waitFor(() => {
       expect(sessionService.getSocketId).toHaveBeenCalledWith('key123');
       expect(mockIO.to).not.toHaveBeenCalled();
-      expect(Controller.updateMany).toHaveBeenCalledWith({ keyId: 'key123' }, { status: 'unbound' });
+      expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
     });
   });
 });

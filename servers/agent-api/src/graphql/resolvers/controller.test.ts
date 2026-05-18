@@ -6,7 +6,6 @@ vi.mock('../../services/controller-key.js', () => ({
     create: vi.fn(),
     findAllByUser: vi.fn(),
     rename: vi.fn(),
-    revoke: vi.fn(),
   },
 }));
 
@@ -19,15 +18,8 @@ vi.mock('../../services/controller.js', () => ({
   },
 }));
 
-vi.mock('../../services/command.js', () => ({
-  commandService: {
-    sendShutdown: vi.fn(),
-  },
-}));
-
 import { controllerKeyService } from '../../services/controller-key.js';
 import { controllerService } from '../../services/controller.js';
-import { commandService } from '../../services/command.js';
 
 const mockContext = {
   currentUser: { id: 'user1', username: 'testuser' },
@@ -175,45 +167,6 @@ describe('Controller Resolvers', () => {
     });
   });
 
-  describe('Mutation.revokeControllerKey', () => {
-    it('should revoke a controller key and send shutdown', async () => {
-      vi.mocked(controllerKeyService.revoke).mockResolvedValue(true);
-
-      const result = await controllerResolvers.Mutation.revokeControllerKey(
-        {},
-        { id: 'key1' },
-        mockContext,
-      );
-
-      expect(result).toBe(true);
-      expect(controllerKeyService.revoke).toHaveBeenCalledWith('key1', 'user1');
-      expect(commandService.sendShutdown).toHaveBeenCalledWith('key1');
-    });
-
-    it('should not send shutdown when revoke fails', async () => {
-      vi.mocked(controllerKeyService.revoke).mockResolvedValue(false);
-
-      const result = await controllerResolvers.Mutation.revokeControllerKey(
-        {},
-        { id: 'key1' },
-        mockContext,
-      );
-
-      expect(result).toBe(false);
-      expect(commandService.sendShutdown).not.toHaveBeenCalled();
-    });
-
-    it('should throw when not authenticated', async () => {
-      await expect(
-        controllerResolvers.Mutation.revokeControllerKey(
-          {},
-          { id: 'key1' },
-          emptyContext,
-        ),
-      ).rejects.toThrow('Not authenticated');
-    });
-  });
-
   describe('Mutation.renameController', () => {
     it('should rename a controller', async () => {
       const mockResult = { id: 'ctrl1', name: 'New Name' };
@@ -253,7 +206,7 @@ describe('Controller Resolvers', () => {
   });
 
   describe('Mutation.unbindController', () => {
-    it('should unbind a controller and send shutdown', async () => {
+    it('should unbind a controller', async () => {
       vi.mocked(controllerService.unbind).mockResolvedValue(true);
 
       const result = await controllerResolvers.Mutation.unbindController(
@@ -264,10 +217,9 @@ describe('Controller Resolvers', () => {
 
       expect(result).toBe(true);
       expect(controllerService.unbind).toHaveBeenCalledWith('ctrl1', 'user1');
-      expect(commandService.sendShutdown).toHaveBeenCalledWith('ctrl1');
     });
 
-    it('should not send shutdown when unbind fails', async () => {
+    it('should return false when unbind fails', async () => {
       vi.mocked(controllerService.unbind).mockResolvedValue(false);
 
       const result = await controllerResolvers.Mutation.unbindController(
@@ -277,7 +229,6 @@ describe('Controller Resolvers', () => {
       );
 
       expect(result).toBe(false);
-      expect(commandService.sendShutdown).not.toHaveBeenCalled();
     });
 
     it('should throw when not authenticated', async () => {

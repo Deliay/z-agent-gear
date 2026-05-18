@@ -8,7 +8,6 @@ enum ControllerStatus {
   online
   offline
   registering
-  unbound
 }
 
 enum ControllerKeyStatus {
@@ -65,7 +64,6 @@ type Query {
 type Mutation {
   createControllerKey(input: CreateKeyInput!): CreateKeyPayload!
   renameControllerKey(input: RenameInput!): ControllerKey!
-  revokeControllerKey(id: ID!): Boolean!
   renameController(input: RenameInput!): Controller!
   unbindController(id: ID!): Boolean!
 }

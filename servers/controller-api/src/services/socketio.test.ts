@@ -12,6 +12,7 @@ vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
     findOne: vi.fn(),
     updateOne: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
@@ -19,6 +20,7 @@ vi.mock('../models/controller.js', () => ({
   Controller: {
     findOneAndUpdate: vi.fn(),
     updateOne: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
@@ -153,58 +155,6 @@ describe('SocketIO Service', () => {
       });
     });
 
-    it('should reject with KEY_REVOKED when key is revoked', async () => {
-      const mockSocket = createMockSocket();
-      const mockIO = createMockIO();
-
-      vi.mocked(lookupKey).mockResolvedValue({
-        keyId: 'key123',
-        keyHash: 'hashed-key',
-        userId: 'user1',
-        status: 'revoked',
-        type: 'local',
-      });
-      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-
-      createSocketIOServer(mockIO as never);
-
-      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
-      connectionHandler(mockSocket);
-
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
-
-      await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_REVOKED', message: 'Key has been revoked' });
-        expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
-      });
-    });
-
-    it('should reject with KEY_EXPIRED when key is expired', async () => {
-      const mockSocket = createMockSocket();
-      const mockIO = createMockIO();
-
-      vi.mocked(lookupKey).mockResolvedValue({
-        keyId: 'key123',
-        keyHash: 'hashed-key',
-        userId: 'user1',
-        status: 'expired',
-        type: 'local',
-      });
-      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-
-      createSocketIOServer(mockIO as never);
-
-      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
-      connectionHandler(mockSocket);
-
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
-
-      await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_EXPIRED', message: 'Key has expired' });
-        expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
-      });
-    });
-
     it('should reject with VERSION_MISMATCH when version incompatible', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
@@ -318,7 +268,7 @@ describe('SocketIO Service', () => {
   });
 
   describe('unregister', () => {
-    it('should unregister and clean up when authenticated', async () => {
+    it('should delete key and controller when authenticated', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
@@ -335,7 +285,8 @@ describe('SocketIO Service', () => {
         _id: { toString: () => 'ctrl123' },
       } as never);
       vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
-      vi.mocked(Controller.updateOne).mockResolvedValue({} as never);
+      vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
+      vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
       vi.mocked(sessionService.cleanupKey).mockResolvedValue();
 
       createSocketIOServer(mockIO as never);
@@ -352,8 +303,8 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('unregister', { reason: 'user_detach' });
 
       await vi.waitFor(() => {
-        expect(Controller.updateOne).toHaveBeenCalledWith({ keyId: 'key123' }, { status: 'unbound' });
-        expect(ControllerKey.updateOne).toHaveBeenCalledWith({ _id: 'key123' }, { boundControllerId: null });
+        expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
+        expect(ControllerKey.deleteOne).toHaveBeenCalledWith({ _id: 'key123' });
         expect(sessionService.cleanupKey).toHaveBeenCalledWith('key123');
         expect(mockSocket.emit).toHaveBeenCalledWith('unregistered');
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
@@ -371,7 +322,7 @@ describe('SocketIO Service', () => {
 
       mockSocket._trigger('unregister', { reason: 'user_detach' });
 
-      expect(Controller.updateOne).not.toHaveBeenCalled();
+      expect(Controller.deleteOne).not.toHaveBeenCalled();
     });
   });
 

@@ -46,8 +46,8 @@ export class CommandService {
       this.io.sockets.sockets.get(socketId)?.disconnect(true);
     }
 
-    await Controller.updateMany({ keyId }, { status: 'unbound' });
-    await ControllerKey.updateOne({ _id: keyId }, { boundControllerId: null });
+    await Controller.deleteOne({ keyId });
+    await ControllerKey.deleteOne({ _id: keyId });
     await sessionService.cleanupKey(keyId);
   }
 }

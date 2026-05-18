@@ -9,18 +9,18 @@
 
 ```bash
 # 启动 Aspire 编排（在项目根目录）
-aspire start --apphost aspire/AgentGear.AppHost
+aspire start
 
 # 等待前后端服务就绪
-aspire wait agent-api --apphost aspire/AgentGear.AppHost
-aspire wait agent-web --apphost aspire/AgentGear.AppHost
+aspire wait agent-api
+aspire wait agent-web
 ```
 
 ## 获取前端地址
 
 ```bash
 # 查看 agent-web 的地址
-aspire describe agent-web --apphost aspire/AgentGear.AppHost
+aspire describe agent-web
 ```
 
 输出中查找 `agent-web` 的 `http` URL，例如 `http://localhost:35273`。

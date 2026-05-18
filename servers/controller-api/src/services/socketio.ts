@@ -28,23 +28,11 @@ export function createSocketIOServer(io: SocketIOServer): void {
           return;
         }
 
-        const { keyId, keyHash, userId, status: keyStatus, type: keyType } = cached;
+        const { keyId, keyHash, userId, type: keyType } = cached;
 
         const valid = await bcrypt.compare(key, keyHash);
         if (!valid) {
           socket.emit('error', { code: 'INVALID_KEY', message: 'Invalid key' });
-          socket.disconnect(true);
-          return;
-        }
-
-        if (keyStatus === 'revoked') {
-          socket.emit('error', { code: 'KEY_REVOKED', message: 'Key has been revoked' });
-          socket.disconnect(true);
-          return;
-        }
-
-        if (keyStatus === 'expired') {
-          socket.emit('error', { code: 'KEY_EXPIRED', message: 'Key has expired' });
           socket.disconnect(true);
           return;
         }
@@ -112,10 +100,10 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('unregister', async (payload: { reason: string }) => {
       if (!authenticated || !socket.data.keyId) return;
 
-      const { keyId, userId } = socket.data;
+      const { keyId } = socket.data;
 
-      await Controller.updateOne({ keyId }, { status: 'unbound' });
-      await ControllerKey.updateOne({ _id: keyId }, { boundControllerId: null });
+      await Controller.deleteOne({ keyId });
+      await ControllerKey.deleteOne({ _id: keyId });
       await sessionService.cleanupKey(keyId);
 
       socket.emit('unregistered');

@@ -9,7 +9,6 @@ export const controllerTypeDefs = `#graphql
     online
     offline
     registering
-    unbound
   }
 
   enum ControllerKeyStatus {
@@ -66,7 +65,6 @@ export const controllerTypeDefs = `#graphql
   extend type Mutation {
     createControllerKey(input: CreateKeyInput!): CreateKeyPayload!
     renameControllerKey(input: RenameInput!): ControllerKey!
-    revokeControllerKey(id: ID!): Boolean!
     renameController(input: RenameInput!): Controller!
     unbindController(id: ID!): Boolean!
   }

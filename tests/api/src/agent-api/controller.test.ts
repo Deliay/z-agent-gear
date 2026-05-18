@@ -68,12 +68,6 @@ const RENAME_KEY = `
   }
 `;
 
-const REVOKE_KEY = `
-  mutation RevokeControllerKey($id: ID!) {
-    revokeControllerKey(id: $id)
-  }
-`;
-
 const RENAME_CONTROLLER = `
   mutation RenameController($input: RenameInput!) {
     renameController(input: $input) {
@@ -171,6 +165,33 @@ describe('Controller Key API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
     });
+
+    it('should replace existing unbound key when generating new one', async () => {
+      // Create first key
+      const res1 = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `first-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const body1 = await res1.json();
+      const firstKeyId = body1.data.createControllerKey.key.id;
+
+      // Create second key — should replace the first
+      const res2 = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `second-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const body2 = await res2.json();
+      const secondKeyId = body2.data.createControllerKey.key.id;
+      expect(secondKeyId).not.toBe(firstKeyId);
+
+      // Query keys — should only have the second one (plus any from other tests)
+      const keysRes = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
+      const keysBody = await keysRes.json();
+      const firstKey = keysBody.data.controllerKeys.find((k: { id: string }) => k.id === firstKeyId);
+      expect(firstKey).toBeUndefined();
+    });
   });
 
   describe('controllerKeys query with auth', () => {
@@ -224,48 +245,6 @@ describe('Controller Key API', () => {
       );
       const body = await res.json();
       expect(body.errors).toBeDefined();
-    });
-  });
-
-  describe('revokeControllerKey', () => {
-    let keyId = '';
-
-    beforeAll(async () => {
-      const res = await gqlRequest(
-        CREATE_KEY,
-        { input: { name: `revoke-test-${Date.now()}`, type: 'local' } },
-        authToken,
-      );
-      const body = await res.json();
-      keyId = body.data.createControllerKey.key.id;
-    });
-
-    it('should reject mutation without auth', async () => {
-      const res = await gqlRequest(REVOKE_KEY, { id: keyId });
-      const body = await res.json();
-      expect(body.errors).toBeDefined();
-      expect(body.errors[0].message).toBe('Not authenticated');
-    });
-
-    it('should revoke controller key', async () => {
-      const res = await gqlRequest(REVOKE_KEY, { id: keyId }, authToken);
-      const body = await res.json();
-      expect(body.errors).toBeUndefined();
-      expect(body.data.revokeControllerKey).toBe(true);
-
-      const keysRes = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
-      const keysBody = await keysRes.json();
-      const revokedKey = keysBody.data.controllerKeys.find(
-        (k: { id: string }) => k.id === keyId,
-      );
-      expect(revokedKey.status).toBe('revoked');
-    });
-
-    it('should return false for non-existent key', async () => {
-      const res = await gqlRequest(REVOKE_KEY, { id: '000000000000000000000000' }, authToken);
-      const body = await res.json();
-      expect(body.errors).toBeUndefined();
-      expect(body.data.revokeControllerKey).toBe(false);
     });
   });
 });
@@ -395,7 +374,7 @@ describe('Controller Online Status', () => {
     expect(online.hostname).toBe('test-host');
   });
 
-  it('should show controller as unbound after WebSocket unregister', async () => {
+  it('should delete controller and key after WebSocket unregister', async () => {
     const client = createWSClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
     client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
@@ -410,20 +389,71 @@ describe('Controller Online Status', () => {
     const res = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
     const body = await res.json();
     expect(body.errors).toBeUndefined();
-    expect(body.data.controller.status).toBe('unbound');
+    expect(body.data.controller).toBeNull();
+  });
+
+  it('should delete key on unbind via GraphQL', async () => {
+    // Create a fresh key for this test
+    const createRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `unbind-test-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const createBody = await createRes.json();
+    const testKeyId = createBody.data.createControllerKey.key.id;
+    const testRawKey = createBody.data.createControllerKey.rawKey;
+
+    // Register a controller with this key
+    const client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: testRawKey, hostname: 'unbind-host', version: '1.0.0' });
+    const regData = await registered;
+    const testControllerId = regData.controllerId;
+    client.disconnect();
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Unbind via GraphQL
+    const unbindRes = await gqlRequest(UNBIND_CONTROLLER, { id: testControllerId }, authToken);
+    const unbindBody = await unbindRes.json();
+    expect(unbindBody.errors).toBeUndefined();
+    expect(unbindBody.data.unbindController).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Key should be deleted
+    const keysRes = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
+    const keysBody = await keysRes.json();
+    const deletedKey = keysBody.data.controllerKeys.find((k: { id: string }) => k.id === testKeyId);
+    expect(deletedKey).toBeUndefined();
+
+    // Controller should be deleted
+    const ctrlRes = await gqlRequest(CONTROLLER_QUERY, { id: testControllerId }, authToken);
+    const ctrlBody = await ctrlRes.json();
+    expect(ctrlBody.data.controller).toBeNull();
   });
 
   it('should show controllerKey lastUsedAt updated after register', async () => {
+    // Create a fresh key
+    const createRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `lastused-test-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const createBody = await createRes.json();
+    const testKeyId = createBody.data.createControllerKey.key.id;
+    const testRawKey = createBody.data.createControllerKey.rawKey;
+
     const client = createWSClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    client.emit('register', { key: testRawKey, hostname: 'test-host', version: '1.0.0' });
     await registered;
 
     await new Promise((r) => setTimeout(r, 200));
 
     const res = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
     const body = await res.json();
-    const key = body.data.controllerKeys.find((k: { id: string }) => k.id === keyId);
+    const key = body.data.controllerKeys.find((k: { id: string }) => k.id === testKeyId);
     expect(key).toBeDefined();
     expect(key.lastUsedAt).not.toBeNull();
 

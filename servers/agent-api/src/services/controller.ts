@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
+import { evictKeyById } from './key-cache.js';
+import { commandService } from './command.js';
 
 export class ControllerService {
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
@@ -28,8 +30,17 @@ export class ControllerService {
     const controller = await Controller.findOne({ _id: id, userId });
     if (!controller) return false;
 
-    await ControllerKey.updateOne({ _id: controller.keyId }, { boundControllerId: null });
-    await Controller.updateOne({ _id: id }, { status: 'unbound' });
+    const keyId = controller.keyId.toString();
+
+    // Send shutdown to connected controller
+    await commandService.sendShutdown(keyId);
+
+    // Evict key from Redis cache
+    await evictKeyById(keyId);
+
+    // Delete the key and controller
+    await ControllerKey.deleteOne({ _id: keyId });
+    await Controller.deleteOne({ _id: id });
 
     return true;
   }

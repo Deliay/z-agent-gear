@@ -9,17 +9,17 @@
 
 ```bash
 # 启动 Aspire 编排（在项目根目录）
-aspire start --apphost aspire/AgentGear.AppHost
+aspire start
 
 # 等待后端服务就绪
-aspire wait agent-api --apphost aspire/AgentGear.AppHost
+aspire wait agent-api
 ```
 
 ## 获取 API 端点
 
 ```bash
 # 查看 agent-api 的地址
-aspire describe agent-api --apphost aspire/AgentGear.AppHost
+aspire describe agent-api
 ```
 
 输出中查找 `agent-api` 的 URL，例如 `http://localhost:4000`。

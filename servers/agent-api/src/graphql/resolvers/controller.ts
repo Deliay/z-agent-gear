@@ -1,7 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { controllerKeyService } from '../../services/controller-key.js';
 import { controllerService } from '../../services/controller.js';
-import { commandService } from '../../services/command.js';
 import type { AuthContext } from './auth.js';
 
 export const controllerResolvers = {
@@ -54,20 +53,6 @@ export const controllerResolvers = {
       }
       return result;
     },
-    revokeControllerKey: async (
-      _parent: unknown,
-      args: { id: string },
-      context: AuthContext,
-    ) => {
-      if (!context.currentUser) {
-        throw new GraphQLError('Not authenticated');
-      }
-      const success = await controllerKeyService.revoke(args.id, context.currentUser.id);
-      if (success) {
-        await commandService.sendShutdown(args.id);
-      }
-      return success;
-    },
     renameController: async (
       _parent: unknown,
       args: { input: { id: string; name: string } },
@@ -94,11 +79,7 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const success = await controllerService.unbind(args.id, context.currentUser.id);
-      if (success) {
-        await commandService.sendShutdown(args.id);
-      }
-      return success;
+      return controllerService.unbind(args.id, context.currentUser.id);
     },
   },
 };

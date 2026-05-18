@@ -5,15 +5,18 @@ vi.mock('../models/controller.js', () => ({
     find: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
-    updateOne: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
 vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
-    updateOne: vi.fn(),
-    findOneAndUpdate: vi.fn(),
+    deleteOne: vi.fn(),
   },
+}));
+
+vi.mock('../services/key-cache.js', () => ({
+  evictKeyById: vi.fn(),
 }));
 
 vi.mock('./command.js', () => ({
@@ -25,6 +28,8 @@ vi.mock('./command.js', () => ({
 import { controllerService } from '../services/controller.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
+import { evictKeyById } from '../services/key-cache.js';
+import { commandService } from './command.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -95,18 +100,22 @@ describe('ControllerService', () => {
   });
 
   describe('unbind', () => {
-    it('should unbind a controller', async () => {
+    it('should delete key and controller, send shutdown, and evict cache', async () => {
       vi.mocked(Controller.findOne).mockResolvedValue({
-        keyId: 'key1',
+        keyId: { toString: () => 'key1' },
       } as never);
-      vi.mocked(Controller.updateOne).mockResolvedValue({} as never);
-      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+      vi.mocked(commandService.sendShutdown).mockResolvedValue();
+      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
+      vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
 
       const result = await controllerService.unbind('ctrl1', 'user1');
 
       expect(result).toBe(true);
-      expect(ControllerKey.updateOne).toHaveBeenCalledWith({ _id: 'key1' }, { boundControllerId: null });
-      expect(Controller.updateOne).toHaveBeenCalledWith({ _id: 'ctrl1' }, { status: 'unbound' });
+      expect(commandService.sendShutdown).toHaveBeenCalledWith('key1');
+      expect(evictKeyById).toHaveBeenCalledWith('key1');
+      expect(ControllerKey.deleteOne).toHaveBeenCalledWith({ _id: 'key1' });
+      expect(Controller.deleteOne).toHaveBeenCalledWith({ _id: 'ctrl1' });
     });
 
     it('should return false when controller not found', async () => {
