@@ -73,14 +73,14 @@ v1 已完成控制器注册、绑定、心跳检测功能，用户可以在 Web 
 
 #### 功能点 3: ACP 协议转发
 
-- **描述**: Controller 收到启动指令后拉起 OpenCode ACP 模式，通过 WebSocket 转发 ACP 协议消息
-- **用户价值**: 实现前端与远程 OpenCode 的实时通信
+- **描述**: Controller 收到启动指令后拉起 OpenCode ACP 模式，通过 WebSocket 转发 ACP 协议消息。前端所有输入输出均通过 Agent-API 中转
+- **用户价值**: 实现前端与远程 OpenCode 的实时通信，Agent-API 作为统一入口负责持久化和推送
 - **验收标准**:
   - [ ] Controller 拉起 OpenCode ACP 模式（`opencode acp`）
   - [ ] Controller 与 OpenCode 通过 stdio 进行 JSON-RPC 通信
   - [ ] Controller 通过 WebSocket 将 ACP 消息转发到 Controller-API
-  - [ ] 支持双向通信：前端输入 → Controller-API → Controller → OpenCode
-  - [ ] 支持双向通信：OpenCode 输出 → Controller → Controller-API → 前端
+  - [ ] 输入路径：前端 → Agent-API → Controller-API → Controller → OpenCode
+  - [ ] 输出路径：OpenCode → Controller → Controller-API → Agent-API → 前端
 
 #### 功能点 4: 内容持久化
 
@@ -116,12 +116,13 @@ v1 已完成控制器注册、绑定、心跳检测功能，用户可以在 Web 
 
 #### 功能点 7: 前端 ACP 请求发送
 
-- **描述**: 前端通过输入框发送 ACP 请求，经后端转发到 Agent
+- **描述**: 前端通过输入框发送 ACP 请求，经 Agent-API 转发到后端
 - **用户价值**: 在浏览器中与远程 Agent 交互，如同本地使用
 - **验收标准**:
   - [ ] Session 页面底部显示输入框
-  - [ ] 用户输入后发送 `session/prompt` 请求
-  - [ ] 请求路径：前端 → Agent-API → Controller-API → Controller → OpenCode
+  - [ ] 用户输入后发送 `session/prompt` 请求到 Agent-API
+  - [ ] Agent-API 转发请求到 Controller-API，再由 Controller-API 转发到 Controller
+  - [ ] Controller 将请求写入 OpenCode 的 stdin
   - [ ] 支持发送文本内容和资源引用（如文件路径）
   - [ ] 发送后等待 Agent 响应，显示处理状态
 
