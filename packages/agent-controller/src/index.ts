@@ -44,7 +44,9 @@ program
     const shutdown = () => {
       console.log('Shutting down...');
       unregister(socket);
+      socket.disconnect();
       removePid();
+      process.exit(0);
     };
 
     process.on('SIGINT', shutdown);
