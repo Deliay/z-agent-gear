@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
 import { Button } from '@/components/ui/button'
@@ -74,6 +74,21 @@ const RENAME_CONTROLLER = gql`
 `
 
 const POLL_INTERVAL = 15_000
+const RAWKEY_STORAGE = 'zag_pending_rawkeys'
+
+function loadRawKeys(): Map<string, string> {
+  try {
+    const raw = localStorage.getItem(RAWKEY_STORAGE)
+    if (!raw) return new Map()
+    return new Map(Object.entries(JSON.parse(raw)))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveRawKeys(map: Map<string, string>) {
+  localStorage.setItem(RAWKEY_STORAGE, JSON.stringify(Object.fromEntries(map)))
+}
 
 function autoKeyName(): string {
   const now = new Date()
@@ -94,7 +109,7 @@ export default function ControllerListSection() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
-  const [rawKeys, setRawKeys] = useState<Map<string, string>>(new Map())
+  const [rawKeys, setRawKeys] = useState<Map<string, string>>(() => loadRawKeys())
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
@@ -104,6 +119,30 @@ export default function ControllerListSection() {
 
   const unboundKeys = keys.filter((k: { id: string }) => !controllerByKeyId.has(k.id))
   const boundControllers = controllers
+
+  // Prune rawKeys for keys that no longer exist (bound or deleted)
+  useEffect(() => {
+    if (keysLoading) return
+    const keyIds = new Set(keys.map((k: { id: string }) => k.id))
+    let changed = false
+    const next = new Map<string, string>()
+    for (const [id, raw] of rawKeys) {
+      if (keyIds.has(id)) {
+        next.set(id, raw)
+      } else {
+        changed = true
+      }
+    }
+    if (changed) {
+      setRawKeys(next)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys, keysLoading])
+
+  // Persist rawKeys to localStorage
+  useEffect(() => {
+    saveRawKeys(rawKeys)
+  }, [rawKeys])
 
   const handleGenerateKey = async () => {
     const { data } = await createKey({
