@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -85,6 +87,24 @@ const UNBIND_CONTROLLER = `
     unbindController(id: $id)
   }
 `;
+
+function createWSClient(): ClientSocket {
+  return SocketIOClient(CONTROLLER_API_URL, {
+    transports: ['websocket'],
+    reconnection: false,
+    forceNew: true,
+  });
+}
+
+function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutMs = 5000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout waiting for "${event}"`)), timeoutMs);
+    socket.once(event, (data: T) => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+  });
+}
 
 describe('Controller Key API', () => {
   beforeAll(async () => {
@@ -315,5 +335,98 @@ describe('Controller Management API', () => {
       expect(body.errors).toBeUndefined();
       expect(body.data.unbindController).toBe(false);
     });
+  });
+});
+
+describe('Controller Online Status', () => {
+  let keyId = '';
+  let rawKey = '';
+  let controllerId = '';
+
+  beforeAll(async () => {
+    if (!authToken) {
+      const uid = `ctrl_online_${Date.now()}`;
+      const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+      const body = await res.json();
+      authToken = body.data?.signup?.token ?? '';
+      expect(authToken).toBeTruthy();
+    }
+
+    const res = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `online-test-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const body = await res.json();
+    keyId = body.data.createControllerKey.key.id;
+    rawKey = body.data.createControllerKey.rawKey;
+  });
+
+  it('should show controller as online after WebSocket register', async () => {
+    const client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    const regData = await registered;
+    controllerId = regData.controllerId;
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const res = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.controller).not.toBeNull();
+    expect(body.data.controller.status).toBe('online');
+    expect(body.data.controller.hostname).toBe('test-host');
+    expect(body.data.controller.version).toBe('1.0.0');
+    expect(body.data.controller.keyId).toBe(keyId);
+
+    client.disconnect();
+  });
+
+  it('should include online controller in controllers list', async () => {
+    const res = await gqlRequest(CONTROLLERS_QUERY, undefined, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const online = body.data.controllers.find(
+      (c: { keyId: string }) => c.keyId === keyId,
+    );
+    expect(online).toBeDefined();
+    expect(online.status).toBe('online');
+    expect(online.hostname).toBe('test-host');
+  });
+
+  it('should show controller as unbound after WebSocket unregister', async () => {
+    const client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    await registered;
+
+    const unregistered = waitForEvent(client, 'unregistered');
+    client.emit('unregister', { reason: 'user_detach' });
+    await unregistered;
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    const res = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.controller.status).toBe('unbound');
+  });
+
+  it('should show controllerKey lastUsedAt updated after register', async () => {
+    const client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    await registered;
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const res = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
+    const body = await res.json();
+    const key = body.data.controllerKeys.find((k: { id: string }) => k.id === keyId);
+    expect(key).toBeDefined();
+    expect(key.lastUsedAt).not.toBeNull();
+
+    client.disconnect();
   });
 });

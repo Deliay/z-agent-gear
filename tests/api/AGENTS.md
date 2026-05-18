@@ -27,14 +27,19 @@ aspire describe agent-api --apphost aspire/AgentGear.AppHost
 ## 运行测试
 
 ```bash
-API_URL=http://localhost:4000/graphql npm test
+# 获取各服务 endpoint
+API_URL=$(aspire describe agent-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url+'/graphql')")
+CONTROLLER_URL=$(aspire describe controller-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url)")
+
+API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 ```
 
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `API_URL` | GraphQL API 完整地址 | `http://localhost:4000/graphql` |
+| `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
+| `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 
 ## 测试清单
 
@@ -103,3 +108,24 @@ API_URL=http://localhost:4000/graphql npm test
 | renameController - 不存在 | 应返回「Controller not found」 |
 | unbindController - 无 auth | 应返回「Not authenticated」 |
 | unbindController - 不存在 | 应返回 false |
+
+### Controller Online Status (`controller.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| register 后查询 controller | status 应为 online，hostname/version 正确 |
+| controllers 列表包含在线 controller | 应包含 status=online 的记录 |
+| unregister 后查询 controller | status 应为 unbound |
+| register 后 controllerKeys.lastUsedAt | 应更新为非 null |
+
+### Controller WebSocket API (`controller-api/websocket.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| register - 有效 key | 应返回 controllerId |
+| register - 无效 key | 应返回 INVALID_KEY 并断开 |
+| register - 已撤销 key | 应返回 KEY_REVOKED 并断开 |
+| register - 版本不匹配 | 应返回 VERSION_MISMATCH 并断开 |
+| heartbeat - 已认证客户端 | 应接受心跳，连接保持在线 |
+| unregister - 主动注销 | 应返回 unregistered 并断开 |
+| session 独占 - 重复 key | 第二个连接应收到 KEY_ALREADY_ONLINE |

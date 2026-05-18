@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { ControllerKey } from '../models/controller-key.js';
+import { cacheKey, evictKeyById } from './key-cache.js';
 
 const KEY_FORMAT_VERSION = 1;
 const BCRYPT_ROUNDS = 10;
@@ -20,6 +21,14 @@ export class ControllerKeyService {
       keyHash,
       keyPrefix,
       status: 'active',
+    });
+
+    await cacheKey(rawKey, {
+      keyId: keyDoc._id.toString(),
+      keyHash,
+      userId,
+      status: 'active',
+      type: input.type,
     });
 
     return {
@@ -48,6 +57,9 @@ export class ControllerKeyService {
       { _id: id, userId, status: 'active' },
       { status: 'revoked' },
     );
+    if (result) {
+      await evictKeyById(id);
+    }
     return result !== null;
   }
 

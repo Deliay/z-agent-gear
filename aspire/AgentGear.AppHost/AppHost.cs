@@ -6,13 +6,13 @@ var redis = builder.AddRedis("redis");
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
-    .WithHttpEndpoint(port: 4000, env: "PORT")
+    .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis);
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
-    .WithHttpEndpoint(port: 4001, env: "PORT")
+    .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis);
 

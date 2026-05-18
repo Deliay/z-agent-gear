@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
+import { lookupKey } from './key-cache.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -20,27 +21,29 @@ export function createSocketIOServer(io: SocketIOServer): void {
       try {
         const { key, hostname, version } = payload;
 
-        const keyDoc = await ControllerKey.findOne({ status: { $ne: 'revoked' } }).lean();
-        if (!keyDoc) {
+        const cached = await lookupKey(key);
+        if (!cached) {
           socket.emit('error', { code: 'INVALID_KEY', message: 'Key not found' });
           socket.disconnect(true);
           return;
         }
 
-        const valid = await bcrypt.compare(key, keyDoc.keyHash);
+        const { keyId, keyHash, userId, status: keyStatus, type: keyType } = cached;
+
+        const valid = await bcrypt.compare(key, keyHash);
         if (!valid) {
           socket.emit('error', { code: 'INVALID_KEY', message: 'Invalid key' });
           socket.disconnect(true);
           return;
         }
 
-        if (keyDoc.status === 'revoked') {
+        if (keyStatus === 'revoked') {
           socket.emit('error', { code: 'KEY_REVOKED', message: 'Key has been revoked' });
           socket.disconnect(true);
           return;
         }
 
-        if (keyDoc.status === 'expired') {
+        if (keyStatus === 'expired') {
           socket.emit('error', { code: 'KEY_EXPIRED', message: 'Key has expired' });
           socket.disconnect(true);
           return;
@@ -53,7 +56,6 @@ export function createSocketIOServer(io: SocketIOServer): void {
           return;
         }
 
-        const keyId = (keyDoc._id as unknown as string).toString();
         const acquired = await sessionService.acquireSession(keyId, socket.id);
         if (!acquired) {
           socket.emit('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
@@ -62,13 +64,13 @@ export function createSocketIOServer(io: SocketIOServer): void {
         }
 
         const controller = await Controller.findOneAndUpdate(
-          { keyId: keyDoc._id },
+          { keyId },
           {
-            userId: keyDoc.userId,
+            userId,
             hostname,
-            type: keyDoc.type,
+            type: keyType,
             status: 'online',
-            keyId: keyDoc._id,
+            keyId,
             version,
             lastIp: socket.handshake.address,
             lastHeartbeatAt: new Date(),
@@ -78,15 +80,15 @@ export function createSocketIOServer(io: SocketIOServer): void {
         );
 
         await ControllerKey.updateOne(
-          { _id: keyDoc._id },
+          { _id: keyId },
           { boundControllerId: controller._id, lastUsedAt: new Date() },
         );
 
         authenticated = true;
         socket.data.keyId = keyId;
-        socket.data.userId = keyDoc.userId.toString();
+        socket.data.userId = userId;
         socket.data.lastIp = socket.handshake.address;
-        socket.join(`user:${keyDoc.userId}`);
+        socket.join(`user:${userId}`);
 
         socket.emit('registered', { controllerId: controller._id.toString() });
       } catch (err) {

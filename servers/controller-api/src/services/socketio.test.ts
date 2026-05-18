@@ -4,6 +4,10 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
+vi.mock('./key-cache.js', () => ({
+  lookupKey: vi.fn(),
+}));
+
 vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
     findOne: vi.fn(),
@@ -38,6 +42,7 @@ import { createSocketIOServer } from './socketio.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
+import { lookupKey } from './key-cache.js';
 import bcrypt from 'bcryptjs';
 
 function createMockSocket() {
@@ -77,15 +82,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
       vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
@@ -109,9 +112,7 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue(null),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue(null);
 
       createSocketIOServer(mockIO as never);
 
@@ -130,15 +131,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       createSocketIOServer(mockIO as never);
@@ -158,15 +157,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'revoked',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'revoked',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
 
       createSocketIOServer(mockIO as never);
@@ -186,15 +183,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'expired',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'expired',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
 
       createSocketIOServer(mockIO as never);
@@ -214,15 +209,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
 
       createSocketIOServer(mockIO as never);
@@ -242,15 +235,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
       vi.mocked(sessionService.acquireSession).mockResolvedValue(false);
 
@@ -273,15 +264,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
       vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
@@ -333,15 +322,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
       vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
@@ -393,15 +380,13 @@ describe('SocketIO Service', () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      vi.mocked(ControllerKey.findOne).mockReturnValue({
-        lean: vi.fn().mockResolvedValue({
-          _id: { toString: () => 'key123' },
-          userId: { toString: () => 'user1' },
-          keyHash: 'hashed-key',
-          status: 'active',
-          type: 'local',
-        }),
-      } as never);
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
       vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
