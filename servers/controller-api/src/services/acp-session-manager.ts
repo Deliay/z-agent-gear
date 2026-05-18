@@ -211,6 +211,17 @@ export class ACPSessionManager {
     }
   }
 
+  forwardToController(sessionId: string, message: { type: string; content: string }): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    session.controllerSocket.emit('acp:message', {
+      sessionId,
+      message,
+    });
+    return true;
+  }
+
   private async publishMessage(sessionId: string, message: Record<string, unknown>): Promise<void> {
     const redis = getRedisClient();
     await redis.publish('session:message', JSON.stringify({

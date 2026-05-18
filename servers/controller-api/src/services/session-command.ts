@@ -5,6 +5,7 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { acpSessionManager } from './acp-session-manager.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
+const SESSION_MESSAGE_CHANNEL = 'session:message';
 
 export class SessionCommandService {
   private io: SocketIOServer | null = null;
@@ -25,24 +26,48 @@ export class SessionCommandService {
       }
     });
 
+    subscriber.subscribe(SESSION_MESSAGE_CHANNEL, (err) => {
+      if (err) {
+        console.error('Failed to subscribe to session message channel:', err);
+        return;
+      }
+    });
+
     subscriber.on('message', async (channel: string, message: string) => {
-      if (channel !== SESSION_COMMAND_CHANNEL) return;
-
       try {
-        const command = JSON.parse(message) as {
-          type: string;
-          sessionId: string;
-          controllerId: string;
-          serverType: string;
-          cwd?: string;
-        };
+        if (channel === SESSION_COMMAND_CHANNEL) {
+          const command = JSON.parse(message) as {
+            type: string;
+            sessionId: string;
+            controllerId: string;
+            serverType: string;
+            cwd?: string;
+          };
 
-        if (command.type === 'acp:start') {
-          await this.handleAcpStart(command);
+          if (command.type === 'acp:start') {
+            await this.handleAcpStart(command);
+          }
+        } else if (channel === SESSION_MESSAGE_CHANNEL) {
+          const data = JSON.parse(message) as {
+            sessionId: string;
+            message: { id: string; direction: string; type: string; content: string };
+          };
+
+          if (data.message.direction === 'input') {
+            await this.handleInputMessage(data.sessionId, data.message);
+          }
         }
       } catch (err) {
-        console.error('Failed to process session command:', err);
+        console.error('Failed to process session event:', err);
       }
+    });
+  }
+
+  private async handleInputMessage(sessionId: string, message: { id: string; type: string; content: string }): Promise<void> {
+    // Forward input message to the controller via WebSocket only (DB already saved by agent-api)
+    acpSessionManager.forwardToController(sessionId, {
+      type: message.type,
+      content: message.content,
     });
   }
 

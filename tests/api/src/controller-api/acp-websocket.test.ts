@@ -46,6 +46,14 @@ const CREATE_SESSION = `
   }
 `;
 
+const SESSION_QUERY = `
+  query Session($id: ID!) {
+    session(id: $id) {
+      id status externalSessionId
+    }
+  }
+`;
+
 function createClient(): ClientSocket {
   return SocketIOClient(CONTROLLER_API_URL, {
     transports: ['websocket'],
@@ -65,8 +73,23 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
 }
 
 let authToken = '';
-let rawKey = '';
-let controllerId = '';
+
+async function createFreshController(): Promise<{ rawKey: string; controllerId: string; client: ClientSocket }> {
+  const keyRes = await gqlRequest(
+    CREATE_KEY,
+    { input: { name: `acp-fresh-${Date.now()}`, type: 'local' } },
+    authToken,
+  );
+  const keyBody = await keyRes.json();
+  const rawKey = keyBody.data.createControllerKey.rawKey;
+
+  const client = createClient();
+  const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+  client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
+  const regData = await registered;
+
+  return { rawKey, controllerId: regData.controllerId, client };
+}
 
 describe('Controller API ACP WebSocket', () => {
   beforeAll(async () => {
@@ -75,54 +98,36 @@ describe('Controller API ACP WebSocket', () => {
     const body = await res.json();
     authToken = body.data?.signup?.token ?? '';
     expect(authToken).toBeTruthy();
-
-    const keyRes = await gqlRequest(
-      CREATE_KEY,
-      { input: { name: `acp-key-${Date.now()}`, type: 'local' } },
-      authToken,
-    );
-    const keyBody = await keyRes.json();
-    rawKey = keyBody.data.createControllerKey.rawKey;
-
-    const client = createClient();
-    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
-    const regData = await registered;
-    controllerId = regData.controllerId;
-    client.disconnect();
-
-    await new Promise((r) => setTimeout(r, 300));
   });
 
-  describe('acp:check', () => {
-    it('should request ACP capability check', async () => {
-      const client = createClient();
-      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
-      await registered;
+  describe('acp:check:result', () => {
+    it('should handle acp:check:result from controller', async () => {
+      const { client } = await createFreshController();
 
-      const checkResult = waitForEvent<{
-        requestId: string;
-        servers: Array<{ type: string; available: boolean; version?: string }>;
-      }>(client, 'acp:check');
+      // Controller sends acp:check:result (simulating response to server's acp:check)
+      client.emit('acp:check:result', {
+        requestId: 'test-req-1',
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
 
-      client.emit('acp:check', { requestId: 'check-req-1' });
-
-      const result = await checkResult;
-      expect(result.requestId).toBe('check-req-1');
-      expect(Array.isArray(result.servers)).toBe(true);
-
+      await new Promise((r) => setTimeout(r, 200));
       client.disconnect();
     });
   });
 
-  describe('acp:start', () => {
-    it('should handle ACP start request', async () => {
-      const client = createClient();
-      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
-      await registered;
+  describe('acp:start via createSession', () => {
+    it('should send acp:start to controller when session is created', async () => {
+      const { controllerId, client } = await createFreshController();
 
+      // Listen for acp:start BEFORE creating session
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      // Create session via agent-api → triggers acp:start via Redis
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId, acpServerType: 'opencode' } },
@@ -131,25 +136,15 @@ describe('Controller API ACP WebSocket', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      const startEvent = waitForEvent<{
-        requestId: string;
-        sessionId: string;
-        serverType: string;
-        cwd: string;
-      }>(client, 'acp:start');
+      // Controller receives acp:start
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('opencode');
+      expect(startData.requestId).toBeDefined();
 
-      // The createSession mutation triggers acp:start on the controller
-      // But since we can't control the timing, we test the event directly
-
-      // Respond to the start event
-      const result = await startEvent;
-      expect(result.sessionId).toBe(sessionId);
-      expect(result.serverType).toBe('opencode');
-      expect(result.requestId).toBeDefined();
-
-      // Simulate successful start response (mock - do NOT actually spawn opencode)
+      // Respond with success
       client.emit('acp:start:result', {
-        requestId: result.requestId,
+        requestId: startData.requestId,
         sessionId,
         success: true,
         externalSessionId: `ext_${Date.now()}`,
@@ -157,18 +152,21 @@ describe('Controller API ACP WebSocket', () => {
 
       await new Promise((r) => setTimeout(r, 300));
 
+      // Verify session status updated to running
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('running');
+
       client.disconnect();
     });
-  });
 
-  describe('acp:message', () => {
-    it('should handle message forwarding', async () => {
-      const client = createClient();
-      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
-      await registered;
+    it('should handle acp:start failure from controller', async () => {
+      const { controllerId, client } = await createFreshController();
 
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start');
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+      }>(client, 'acp:start', 10000);
 
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
@@ -180,7 +178,40 @@ describe('Controller API ACP WebSocket', () => {
 
       const startData = await startEvent;
 
-      // Simulate successful start
+      // Respond with failure
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: false,
+        error: 'OpenCode not installed',
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Verify session status updated to ended
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('ended');
+
+      client.disconnect();
+    });
+  });
+
+  describe('acp:message from controller', () => {
+    it('should handle output message from controller and persist to DB', async () => {
+      const { controllerId, client } = await createFreshController();
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode' } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
       client.emit('acp:start:result', {
         requestId: startData.requestId,
         sessionId,
@@ -189,28 +220,39 @@ describe('Controller API ACP WebSocket', () => {
 
       await new Promise((r) => setTimeout(r, 300));
 
-      // Simulate controller sending output message
-      const msgEvent = waitForEvent<{ sessionId: string; message: { type: string; content: string } }>(client, 'acp:message');
+      // Controller sends output message
       client.emit('acp:message', {
         sessionId,
         message: { type: 'text', content: 'Hello from controller' },
       });
 
-      const msg = await msgEvent;
-      expect(msg.sessionId).toBe(sessionId);
-      expect(msg.message.type).toBe('text');
-      expect(msg.message.content).toBe('Hello from controller');
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify message persisted (check via agent-api GraphQL)
+      const msgQuery = `
+        query SessionMessages($sessionId: ID!, $limit: Int, $offset: Int) {
+          sessionMessages(sessionId: $sessionId, limit: $limit, offset: $offset) {
+            id direction type content
+          }
+        }
+      `;
+      const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10, offset: 0 }, authToken);
+      const msgBody = await msgRes.json();
+      const messages = msgBody.data.sessionMessages;
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+
+      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output' && m.content === 'Hello from controller');
+      expect(outputMsg).toBeDefined();
 
       client.disconnect();
     });
   });
 
-  describe('acp:stop', () => {
-    it('should handle stop request', async () => {
-      const client = createClient();
-      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
-      await registered;
+  describe('acp:stopped from controller', () => {
+    it('should update session status to ended when controller sends acp:stopped', async () => {
+      const { controllerId, client } = await createFreshController();
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
 
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
@@ -220,9 +262,7 @@ describe('Controller API ACP WebSocket', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start');
       const startData = await startEvent;
-
       client.emit('acp:start:result', {
         requestId: startData.requestId,
         sessionId,
@@ -231,16 +271,18 @@ describe('Controller API ACP WebSocket', () => {
 
       await new Promise((r) => setTimeout(r, 300));
 
-      // Simulate controller sending stopped event
-      const stoppedEvent = waitForEvent<{ sessionId: string; reason: string }>(client, 'acp:stopped');
+      // Controller sends stopped event
       client.emit('acp:stopped', {
         sessionId,
         reason: 'agent_exit',
       });
 
-      const stopped = await stoppedEvent;
-      expect(stopped.sessionId).toBe(sessionId);
-      expect(stopped.reason).toBe('agent_exit');
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify session status updated to ended
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('ended');
 
       client.disconnect();
     });

@@ -51,8 +51,15 @@ export const sessionResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const session = await sessionService.create(context.currentUser.id, args.input);
-      return { session };
+      try {
+        const session = await sessionService.create(context.currentUser.id, args.input);
+        return { session };
+      } catch (err) {
+        if ((err as Error).message === 'Controller not found') {
+          throw new GraphQLError('Controller not found');
+        }
+        throw new GraphQLError((err as Error).message);
+      }
     },
     closeSession: async (
       _parent: unknown,
