@@ -26,10 +26,12 @@ src/
 ## Dev Commands
 
 ```bash
-npm run dev     # Start dev server with hot reload
+aspire start    # Start all services via Aspire orchestration
 npm run build   # Compile TypeScript
 npm run start   # Start production server
 ```
+
+本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 agent-api 的 HTTP endpoint。
 
 ## Related Rules
 

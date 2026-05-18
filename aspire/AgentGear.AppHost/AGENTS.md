@@ -19,7 +19,9 @@
 ## Dev Commands
 
 ```bash
-dotnet run     # Start Aspire orchestration dashboard
+aspire start   # Start Aspire orchestration (all services)
+aspire stop    # Stop orchestration
+aspire describe # List resources and status
 ```
 
 ## Related Rules

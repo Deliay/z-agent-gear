@@ -12,10 +12,12 @@
 ## Dev Commands
 
 ```bash
-npm run dev      # Start dev server
+aspire start     # Start all services via Aspire orchestration
 npm run build    # Production build
 npm run preview  # Preview production build
 ```
+
+本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 agent-web 的 HTTP endpoint。
 
 ## Related Rules
 

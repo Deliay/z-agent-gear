@@ -22,10 +22,10 @@ src/
 ## Dev Commands
 
 ```bash
-npm run dev     # Start controller
-npm run build   # Compile TypeScript
-npm run start   # Start production controller
-npm run test    # Run tests
+aspire start     # 启动 Aspire 编排（拉起全部服务）
+npm run build    # Compile TypeScript
+npm run start    # Start production controller
+npm run test     # Run tests
 ```
 
 ## Development with Aspire
@@ -35,18 +35,15 @@ npm run test    # Run tests
 ### 启动流程
 
 ```bash
-# 1. 启动 Aspire 编排（拉起 agent-api + controller-api + MongoDB + Redis）
-cd ../../aspire/AgentGear.AppHost
-dotnet run
+# 1. 启动 Aspire 编排（拉起 agent-api + controller-api + MongoDB + Redis + agent-web）
+aspire start
 
-# 2. 在 Aspire Dashboard 中查看 controller-api 的 HTTP endpoint
-#    默认为 http://localhost:4001（或 Aspire 动态分配的端口）
+# 2. 使用 aspire describe 查看 controller-api 的 HTTP endpoint
 
 # 3. 先通过 agent-api 生成 Key（GraphQL Playground: http://localhost:4000/graphql）
 #    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
 
 # 4. 使用生成的 Key 启动 agent-controller
-cd ../../packages/agent-controller
 npm run dev -- --key <rawKey> --server <controller-api-endpoint>
 ```
 

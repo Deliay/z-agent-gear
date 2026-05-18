@@ -9,10 +9,12 @@ z-agent-gear/
 ├── apps/
 │   └── agent-web/           # React + TypeScript + Vite 前端
 ├── servers/
-│   └── agent-api/           # Node.js + Express + GraphQL + Mongoose 后端
+│   ├── agent-api/           # Node.js + Express + GraphQL + Mongoose 后端
+│   └── controller-api/      # Node.js + Express + Socket.IO 后端
+├── packages/
+│   └── agent-controller/    # Node.js CLI 客户端
 ├── aspire/
 │   └── AgentGear.AppHost/   # .NET Aspire 服务编排
-├── packages/                 # 公共包
 ├── docs/
 │   ├── product/              # 产品文档
 │   │   ├── draft/
@@ -23,6 +25,12 @@ z-agent-gear/
 │       └── proposals/
 ├── contracts/                # API 契约文件
 └── tests/                    # 集成/E2E 测试
+```
+
+## 启动项目
+
+```bash
+aspire start    # 启动全部服务（agent-api + controller-api + agent-web + MongoDB + Redis）
 ```
 
 ## 开发流程
