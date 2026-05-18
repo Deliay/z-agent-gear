@@ -13,11 +13,11 @@ export class AcpWebSocketBridge {
   private sessionId: string;
   private controllerId: string;
 
-  constructor(socket: Socket, options: AcpBridgeOptions) {
+  constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     this.socket = socket;
     this.sessionId = options.sessionId;
     this.controllerId = options.controllerId;
-    this.spawner = new AcpSpawner({
+    this.spawner = spawner ?? new AcpSpawner({
       sessionId: options.sessionId,
       cwd: options.cwd,
     });
