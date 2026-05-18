@@ -245,28 +245,7 @@ Session 状态变更通知。
 
 ## 4. SSE 协议（agent-api → 前端）
 
-### 4.1 端点
-
-```
-GET /api/session/:id/stream
-```
-
-### 4.2 事件格式
-
-```
-data: {"type": "history", "data": [...messages]}\n\n
-data: {"type": "message", "data": {...message}}\n\n
-data: {"type": "status", "data": {"status": "running"}}\n\n
-data: {"type": "heartbeat"}\n\n
-```
-
-### 4.3 连接行为
-
-1. 连接时验证用户权限
-2. 返回最近 100 条历史消息（`type: history`）
-3. 订阅 Redis Pub/Sub 实时推送
-4. 每 30s 发送心跳
-5. 断开时清理订阅
+SSE 端点定义见 `agent-session.openapi.yaml`。
 
 ---
 

@@ -1,0 +1,132 @@
+openapi: 3.1.0
+info:
+  title: Agent Session SSE API
+  description: Agent Session SSE 实时消息流接口
+  version: 1.0.0
+
+servers:
+  - url: /api
+    description: agent-api
+
+paths:
+  /session/{id}/stream:
+    get:
+      operationId: streamSession
+      summary: Session SSE 实时消息流
+      description: |
+        建立 Server-Sent Events 连接，实时接收 Session 的 ACP 消息。
+
+        连接建立后：
+        1. 立即返回最近 100 条历史消息（`history` 事件）
+        2. 后续有新消息时实时推送（`message` 事件）
+        3. 每 30s 发送心跳保活（`heartbeat` 事件）
+        4. Session 状态变更时推送（`status` 事件）
+      tags:
+        - Session SSE
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Session ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                history:
+                  summary: 历史消息（连接时一次性返回）
+                  value: |
+                    data: {"type":"history","data":[{"id":"msg_1","sessionId":"sess_1","direction":"output","type":"text","content":"Hello!","createdAt":"2026-05-18T10:00:00Z"}]}
+
+                message:
+                  summary: 新消息（实时推送）
+                  value: |
+                    data: {"type":"message","data":{"id":"msg_2","sessionId":"sess_1","direction":"output","type":"text","content":"How can I help?","createdAt":"2026-05-18T10:00:01Z"}}
+
+                status:
+                  summary: 状态变更
+                  value: |
+                    data: {"type":"status","data":{"status":"running"}}
+
+                heartbeat:
+                  summary: 心跳（每30s）
+                  value: |
+                    data: {"type":"heartbeat"}
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权限访问该 Session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    AcpMessage:
+      type: object
+      required:
+        - id
+        - sessionId
+        - direction
+        - type
+        - content
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: msg_abc123
+        sessionId:
+          type: string
+          example: sess_xyz789
+        direction:
+          type: string
+          enum: [input, output]
+        type:
+          type: string
+          enum: [text, image, tool_call, tool_result, plan, error]
+        content:
+          type: string
+        metadata:
+          type: object
+          properties:
+            toolName:
+              type: string
+            status:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    SessionStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [creating, connecting, running, disconnected, ended]
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
