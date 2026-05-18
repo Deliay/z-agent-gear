@@ -11,3 +11,4 @@ coverage/
 .vite/
 *.user
 *.suo
+test-results/
