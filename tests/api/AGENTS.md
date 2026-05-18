@@ -91,7 +91,7 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | createControllerKey - 正常创建 | 应返回 key 和 rawKey（zag_k_ 前缀） |
 | createControllerKey - 空名称 | 应返回校验错误 |
 | createControllerKey - 替换未绑定 key | 生成新 key 时自动删除旧的未绑定 key |
-| controllerKeys query - 已认证 | 应返回 keys 列表 |
+| controllerKeys query - 已认证 | 应返回未绑定 key 列表（含 rawKey），不返回已绑定 key |
 | renameControllerKey - 无 auth | 应返回「Not authenticated」 |
 | renameControllerKey - 正常重命名 | 应返回新 name |
 | renameControllerKey - 不存在的 key | 应返回错误 |

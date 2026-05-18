@@ -185,6 +185,7 @@ type ControllerKey {
   type: ControllerType!
   keyPrefix: String!
   status: ControllerKeyStatus!
+  rawKey: String
   lastUsedAt: String
   createdAt: String!
   updatedAt: String!
@@ -219,7 +220,7 @@ type CreateKeyPayload {
 }
 
 type Query {
-  controllerKeys: [ControllerKey!]!
+  controllerKeys: [ControllerKey!]! # 仅返回未绑定 key（含 rawKey），已绑定 key 由 controllers 返回
   controllers: [Controller!]!
   controller(id: ID!): Controller
 }
@@ -664,6 +665,8 @@ socket.on('shutdown', (data) => {
   - 每个帐号仅允许一个未绑定的 Key，生成新 Key 时自动替换旧的
   - Key 绑定到控制器后永久生效（无过期/撤销机制）
   - 解绑或注销时，Key 和 Controller 记录均被永久删除
+  - 未绑定 Key 的 rawKey 存储在 Redis 缓存中（30天 TTL），通过 controllerKeys 查询返回
+  - 已绑定的 Key 不再返回 rawKey，仅由 controllers 查询展示控制器信息
 
 #### 实现点 5: 心跳超时检测（controller-api）
 
