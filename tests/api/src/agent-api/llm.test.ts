@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { startMockServer, type MockServer } from '../mock-server.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 
@@ -131,12 +132,20 @@ const UPDATE_MODEL_SORT = `
 `;
 
 describe('LLM Provider & Model API', () => {
+  let mock: MockServer;
+
   beforeAll(async () => {
+    mock = await startMockServer();
+
     const uid = `llm_${Date.now()}`;
     const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
     const body = await res.json();
     authToken = body.data?.signup?.token ?? '';
     expect(authToken).toBeDefined();
+  });
+
+  afterAll(async () => {
+    await mock?.close();
   });
 
   describe('queries without auth', () => {
@@ -346,10 +355,8 @@ describe('LLM Provider & Model API', () => {
 
   // #3: updateProvider with empty credentialValue should preserve existing key
   describe('updateProvider with empty credentialValue', () => {
-    const hasRealKey = !!process.env.LLM_TEST_API_KEY;
-    const testOrSkip = hasRealKey ? it : it.skip;
-
-    testOrSkip('should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+    it('should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+      const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `crud-provider-${Date.now()}`;
       const createRes = await gqlRequest(
         CREATE_PROVIDER,
@@ -357,9 +364,9 @@ describe('LLM Provider & Model API', () => {
           input: {
             name,
             type: 'OpenAI',
-            endpoint: process.env.LLM_TEST_ENDPOINT || 'https://api.openai.com/v1',
+            endpoint: mockEndpoint,
             credentialType: 'api_key',
-            credentialValue: process.env.LLM_TEST_API_KEY!,
+            credentialValue: 'sk-test-fake-key',
           },
         },
         authToken,
@@ -376,7 +383,7 @@ describe('LLM Provider & Model API', () => {
           input: {
             name: `${name}-renamed`,
             type: 'OpenAI',
-            endpoint: 'https://api.openai.com/v1',
+            endpoint: mockEndpoint,
             credentialType: 'api_key',
             credentialValue: '',
           },
@@ -394,12 +401,10 @@ describe('LLM Provider & Model API', () => {
 
   // #2: Models should be returned after provider creation
   describe('model lifecycle after provider CRUD', () => {
-    const hasRealKey = !!process.env.LLM_TEST_API_KEY;
-    const testOrSkip = hasRealKey ? it : it.skip;
-
     let pid = '';
 
-    testOrSkip('should create provider and its models appear in models query', async () => {
+    it('should create provider and its models appear in models query', async () => {
+      const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `lifecycle-provider-${Date.now()}`;
       const createRes = await gqlRequest(
         CREATE_PROVIDER,
@@ -407,9 +412,9 @@ describe('LLM Provider & Model API', () => {
           input: {
             name,
             type: 'OpenAI',
-            endpoint: process.env.LLM_TEST_ENDPOINT || 'https://api.openai.com/v1',
+            endpoint: mockEndpoint,
             credentialType: 'api_key',
-            credentialValue: process.env.LLM_TEST_API_KEY!,
+            credentialValue: 'sk-test-fake-key',
           },
         },
         authToken,
@@ -430,7 +435,7 @@ describe('LLM Provider & Model API', () => {
     });
 
     // #6: Delete provider should cascade-delete its models
-    testOrSkip('should delete provider and cascade-delete its models', async () => {
+    it('should delete provider and cascade-delete its models', async () => {
       expect(pid).toBeTruthy();
 
       const delRes = await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
