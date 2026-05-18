@@ -31,6 +31,16 @@ export class SessionService {
       cwd: input.cwd,
     });
 
+    // Notify controller-api to start ACP session via Redis Pub/Sub
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:start',
+      sessionId: session._id.toString(),
+      controllerId: input.controllerId,
+      serverType: input.acpServerType,
+      cwd: input.cwd,
+    }));
+
     return this.mapSession(session.toObject());
   }
 

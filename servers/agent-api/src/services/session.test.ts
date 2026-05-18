@@ -1,0 +1,328 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../models/session.js', () => ({
+  Session: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    findOneAndDelete: vi.fn(),
+    create: vi.fn(),
+  },
+}));
+
+vi.mock('../models/acp-message.js', () => ({
+  AcpMessage: {
+    find: vi.fn(),
+    create: vi.fn(),
+    deleteMany: vi.fn(),
+  },
+}));
+
+vi.mock('../models/controller.js', () => ({
+  Controller: {
+    findOne: vi.fn(),
+  },
+}));
+
+vi.mock('../middleware/redis.js', () => ({
+  getRedisClient: vi.fn(),
+}));
+
+import { sessionService } from './session.js';
+import { Session } from '../models/session.js';
+import { AcpMessage } from '../models/acp-message.js';
+import { Controller } from '../models/controller.js';
+import { getRedisClient } from '../middleware/redis.js';
+
+const mockRedis = {
+  set: vi.fn(),
+  del: vi.fn(),
+  get: vi.fn(),
+  publish: vi.fn(),
+};
+
+function oid(id: string) {
+  return { toString: () => id } as import('mongoose').Types.ObjectId;
+}
+
+function mockSessionDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: oid('sess-1'),
+    userId: oid('user-1'),
+    controllerId: oid('ctrl-1'),
+    controllerName: 'dev-machine',
+    acpServerType: 'opencode',
+    status: 'creating',
+    externalSessionId: null,
+    cwd: '/home/user/project',
+    createdAt: new Date('2026-01-01'),
+    updatedAt: new Date('2026-01-01'),
+    endedAt: null,
+    toObject() { return { ...this }; },
+    ...overrides,
+  };
+}
+
+function mockMessageDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: oid('msg-1'),
+    sessionId: oid('sess-1'),
+    direction: 'input',
+    type: 'text',
+    content: 'Hello',
+    metadata: null,
+    createdAt: new Date('2026-01-01'),
+    toObject() { return { ...this }; },
+    ...overrides,
+  };
+}
+
+describe('SessionService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  });
+
+  describe('findAllByUser', () => {
+    it('should return mapped sessions for user', async () => {
+      const docs = [mockSessionDoc(), mockSessionDoc({ _id: oid('sess-2') })];
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue(docs),
+        }),
+      } as never);
+
+      const result = await sessionService.findAllByUser('user-1');
+
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('sess-1');
+    });
+
+    it('should return empty array when no sessions', async () => {
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([]),
+        }),
+      } as never);
+
+      const result = await sessionService.findAllByUser('user-1');
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('findById', () => {
+    it('should return mapped session when found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const result = await sessionService.findById('sess-1', 'user-1');
+
+      expect(Session.findOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' });
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe('sess-1');
+      expect(result!.controllerName).toBe('dev-machine');
+    });
+
+    it('should return null when not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await sessionService.findById('sess-1', 'user-1');
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('create', () => {
+    it('should create session with controller name', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({ controllerName: 'my-server' }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        cwd: '/tmp',
+      });
+
+      expect(Controller.findOne).toHaveBeenCalledWith({ _id: 'ctrl-1', userId: 'user-1' });
+      expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        controllerId: 'ctrl-1',
+        controllerName: 'my-server',
+        acpServerType: 'opencode',
+        status: 'creating',
+        cwd: '/tmp',
+      }));
+      expect(result.id).toBe('sess-1');
+    });
+
+    it('should throw when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+      })).rejects.toThrow('Controller not found');
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('should update status and set Redis cache', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'running' }) as never);
+
+      const result = await sessionService.updateStatus('sess-1', 'user-1', 'running');
+
+      expect(result).toBe(true);
+      expect(mockRedis.set).toHaveBeenCalledWith('session:sess-1:status', 'running');
+    });
+
+    it('should delete Redis cache when ended', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
+
+      await sessionService.updateStatus('sess-1', 'user-1', 'ended');
+
+      expect(mockRedis.del).toHaveBeenCalledWith('session:sess-1:status');
+    });
+
+    it('should save externalSessionId when provided', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc() as never);
+
+      await sessionService.updateStatus('sess-1', 'user-1', 'running', 'ext-123');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', userId: 'user-1' },
+        expect.objectContaining({ externalSessionId: 'ext-123' }),
+        { new: true },
+      );
+    });
+
+    it('should return false when session not found', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(null);
+
+      const result = await sessionService.updateStatus('sess-1', 'user-1', 'running');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('close', () => {
+    it('should delegate to updateStatus with ended', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
+
+      const result = await sessionService.close('sess-1', 'user-1');
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('delete', () => {
+    it('should delete session, messages, and Redis cache', async () => {
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+
+      expect(result).toBe(true);
+      expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
+      expect(mockRedis.del).toHaveBeenCalledWith('session:sess-1:status');
+    });
+
+    it('should return false when session not found', async () => {
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(null);
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('getMessages', () => {
+    it('should return mapped messages', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+      vi.mocked(AcpMessage.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          skip: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue({
+              lean: vi.fn().mockResolvedValue([mockMessageDoc()]),
+            }),
+          }),
+        }),
+      } as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1', 10, 0);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('msg-1');
+      expect(result[0].content).toBe('Hello');
+    });
+
+    it('should throw when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(sessionService.getMessages('sess-1', 'user-1')).rejects.toThrow('Session not found');
+    });
+  });
+
+  describe('addMessage', () => {
+    it('should create message and publish to Redis', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockMessageDoc() as never);
+
+      const result = await sessionService.addMessage('sess-1', {
+        direction: 'input',
+        type: 'text',
+        content: 'Hello',
+      });
+
+      expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess-1',
+        direction: 'input',
+        type: 'text',
+        content: 'Hello',
+      }));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.any(String));
+      expect(result.content).toBe('Hello');
+    });
+  });
+
+  describe('getAcpCapabilities', () => {
+    it('should return cached capabilities from Redis', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify({
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+        checkedAt: new Date().toISOString(),
+      }));
+
+      const result = await sessionService.getAcpCapabilities('ctrl-1', 'user-1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(expect.objectContaining({ type: 'opencode', available: true }));
+    });
+
+    it('should return empty array when no cache', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+      vi.mocked(mockRedis.get).mockResolvedValue(null);
+
+      const result = await sessionService.getAcpCapabilities('ctrl-1', 'user-1');
+      expect(result).toEqual([]);
+    });
+
+    it('should throw when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(sessionService.getAcpCapabilities('ctrl-1', 'user-1')).rejects.toThrow('Controller not found');
+    });
+  });
+});

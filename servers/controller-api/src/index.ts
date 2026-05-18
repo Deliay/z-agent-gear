@@ -7,6 +7,7 @@ import { getRedisClient, closeRedis } from './middleware/redis.js';
 import { createSocketIOServer } from './services/socketio.js';
 import { heartbeatService } from './services/heartbeat.js';
 import { commandService } from './services/command.js';
+import { sessionCommandService } from './services/session-command.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -35,6 +36,7 @@ async function start() {
 
   heartbeatService.start(io);
   commandService.start(io);
+  sessionCommandService.start(io);
 
   httpServer.listen(config.port, () => {
     console.log(`Controller API running at http://localhost:${config.port}`);

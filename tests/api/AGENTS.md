@@ -127,3 +127,49 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | heartbeat - 已认证客户端 | 应接受心跳，连接保持在线 |
 | unregister - 主动注销 | 应删除 key 和 controller 记录并断开 |
 | session 独占 - 重复 key | 第二个连接应收到 KEY_ALREADY_ONLINE |
+
+### Session API (`agent-api/session.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| sessions query - 无 token | 应返回「Not authenticated」 |
+| session query - 无 token | 应返回「Not authenticated」 |
+| createSession - 无 auth | 应返回「Not authenticated」 |
+| createSession - 正常创建 | 应返回 session（status=creating） |
+| createSession - 无效 controllerId | 应返回「Controller not found」 |
+| sessions query - 已认证 | 应返回 sessions 列表 |
+| session query - 已存在的 session | 应返回 session 详情 |
+| session query - 不存在的 session | 应返回 null |
+| sendSessionMessage - 正常发送 | 应返回 input 方向消息 |
+| sendSessionMessage - 不存在的 session | 应返回错误 |
+| sessionMessages query - 已有消息 | 应返回消息列表 |
+| sessionMessages query - 不存在的 session | 应返回错误 |
+| closeSession - 正常关闭 | 应返回 true，status 变为 ended |
+| deleteSession - 正常删除 | 应返回 true，session 不再存在 |
+| acpCapabilities - 已认证 | 应返回 capabilities 列表 |
+| acpCapabilities - 不存在的 controller | 应返回错误 |
+
+### Session SSE API (`agent-api/session.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 未认证 SSE 连接 | 应返回 401 |
+| 不存在的 session SSE | 应返回 404 |
+| 正常 SSE 连接 | 应返回 200 + event-stream，发送 history |
+
+### Controller ACP WebSocket (`controller-api/acp-websocket.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| acp:check | 应请求检测并返回 servers 列表 |
+| acp:start | 应发送启动请求，controller 响应 success |
+| acp:message | 应转发 controller 输出消息 |
+| acp:stop | 应发送停止请求，controller 响应 stopped |
+
+### End-to-End: Session 全链路 (`agent-api/session.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| create → acp:start → success → verify running | 创建 session → fake controller 收到 acp:start → 响应 success → 查询 session status=running |
+| create → acp:start → failure → verify ended | 创建 session → fake controller 响应 failure → 查询 session status=ended |
+| create → send message → controller receive → output persisted | 创建 session → GraphQL 发消息 → fake controller 收到 acp:message → 模拟输出 → 查询消息列表验证 input+output 都持久化 |
