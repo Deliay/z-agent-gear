@@ -46,8 +46,18 @@ export default function SessionHeader({ session, status, onClose, onDelete }: Se
         <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusColor(status)}`}>
           {status}
         </span>
+        {session?.acpServerType && (
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+            {session.acpServerType}
+          </span>
+        )}
         {session?.cwd && (
-          <span className="text-sm text-gray-500">{session.cwd}</span>
+          <span className="text-sm text-gray-500 font-mono">{session.cwd}</span>
+        )}
+        {session?.createdAt && (
+          <span className="text-xs text-gray-400">
+            {new Date(session.createdAt).toLocaleString()}
+          </span>
         )}
       </div>
       <div className="flex items-center gap-2">

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
@@ -39,14 +39,17 @@ export default function SessionPage() {
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [messages, setMessages] = useState<AcpMessage[]>([]);
   const [status, setStatus] = useState<string>('connecting');
+  const [sending, setSending] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
     skip: !id,
   });
 
-  const { data: messagesData, loading: messagesLoading } = useQuery<GetSessionMessagesQuery>(GET_SESSION_MESSAGES, {
-    variables: { sessionId: id, limit: 100 },
+  const { data: messagesData, loading: messagesLoading, fetchMore } = useQuery<GetSessionMessagesQuery>(GET_SESSION_MESSAGES, {
+    variables: { sessionId: id, limit: 100, offset: 0 },
     skip: !id,
   });
 
@@ -60,6 +63,7 @@ export default function SessionPage() {
   useEffect(() => {
     if (messagesData?.sessionMessages) {
       setMessages(messagesData.sessionMessages);
+      setHasMore(messagesData.sessionMessages.length >= 100);
     }
   }, [messagesData]);
 
@@ -80,6 +84,9 @@ export default function SessionPage() {
         setMessages(data.data);
       } else if (data.type === 'message') {
         setMessages((prev) => [...prev, data.data]);
+        if (data.data.direction === 'output') {
+          setSending(false);
+        }
       } else if (data.type === 'status') {
         setStatus(data.data.status);
       }
@@ -136,6 +143,7 @@ export default function SessionPage() {
   const handleSendMessage = async (content: string) => {
     if (!id) return;
     try {
+      setSending(true);
       await sendMessage({
         variables: {
           sessionId: id,
@@ -145,8 +153,33 @@ export default function SessionPage() {
       });
     } catch (error) {
       console.error('Failed to send message:', error);
+      setSending(false);
     }
   };
+
+  const handleLoadMore = useCallback(async () => {
+    if (!id || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      await fetchMore({
+        variables: {
+          offset: messages.length,
+        },
+        updateQuery: (prev, { fetchMoreResult }) => {
+          if (!fetchMoreResult?.sessionMessages) return prev;
+          setHasMore(fetchMoreResult.sessionMessages.length >= 100);
+          return {
+            ...prev,
+            sessionMessages: [...fetchMoreResult.sessionMessages, ...prev.sessionMessages],
+          };
+        },
+      });
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [id, loadingMore, hasMore, messages.length, fetchMore]);
 
   if (sessionLoading || messagesLoading) {
     return (
@@ -190,10 +223,16 @@ export default function SessionPage() {
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
       />
-      <MessageList messages={messages} />
+      <MessageList
+        messages={messages}
+        hasMore={hasMore}
+        onLoadMore={handleLoadMore}
+        loadingMore={loadingMore}
+      />
       <InputBox
         onSend={handleSendMessage}
         disabled={status !== 'running'}
+        sending={sending}
       />
 
       {showNewSessionDialog && (
