@@ -22,6 +22,7 @@ import {
   CREATE_CUSTOM_MODEL,
   DELETE_CUSTOM_MODEL,
 } from '@/graphql/mutations'
+import type { GetModelsQuery, GetProvidersQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import ModelItem from './ModelItem'
 import CustomModelDialog from './CustomModelDialog'
@@ -42,8 +43,8 @@ interface ModelData {
 }
 
 export default function ModelSection() {
-  const { data, loading, refetch } = useQuery(GET_MODELS)
-  const { data: providersData } = useQuery(GET_PROVIDERS)
+  const { data, loading } = useQuery<GetModelsQuery>(GET_MODELS)
+  const { data: providersData } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
   const [toggleModel] = useMutation(TOGGLE_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_CUSTOM_MODEL)

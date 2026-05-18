@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
+import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -83,12 +84,12 @@ function autoKeyName(): string {
 }
 
 export default function ControllerListSection() {
-  const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useQuery(GET_CONTROLLER_KEYS)
-  const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useQuery(GET_CONTROLLERS, {
+  const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useQuery<GetControllerKeysQuery>(GET_CONTROLLER_KEYS)
+  const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
     pollInterval: POLL_INTERVAL,
   })
 
-  const [createKey] = useMutation(CREATE_KEY)
+  const [createKey] = useMutation<CreateControllerKeyMutation>(CREATE_KEY)
   const [unbindController] = useMutation(UNBIND_CONTROLLER)
   const [renameController] = useMutation(RENAME_CONTROLLER)
 
@@ -100,9 +101,9 @@ export default function ControllerListSection() {
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
 
-  const controllerByKeyId = new Map(controllers.map((c: { keyId: string; [k: string]: unknown }) => [c.keyId, c]))
+  const controllerByKeyId = new Map(controllers.map((c) => [c.keyId, c]))
 
-  const unboundKeys = keys.filter((k: { id: string; rawKey: string | null }) => !controllerByKeyId.has(k.id) && k.rawKey)
+  const unboundKeys = keys.filter((k) => !controllerByKeyId.has(k.id) && k.rawKey)
   const boundControllers = controllers
 
   const handleGenerateKey = async () => {
@@ -157,7 +158,7 @@ export default function ControllerListSection() {
             </div>
           ) : (
             <div className="space-y-2">
-              {unboundKeys.map((key: { id: string; name: string; type: string; keyPrefix: string; rawKey: string; createdAt: string }) => (
+              {unboundKeys.map((key) => (
                 <div key={key.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -175,7 +176,7 @@ export default function ControllerListSection() {
                         variant="ghost"
                         size="sm"
                         className="h-6 px-2 text-xs shrink-0"
-                        onClick={() => handleCopyKey(key.id, key.rawKey)}
+                        onClick={() => key.rawKey && handleCopyKey(key.id, key.rawKey)}
                       >
                         {copiedId === key.id ? '已复制' : '复制'}
                       </Button>

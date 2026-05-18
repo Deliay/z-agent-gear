@@ -13,6 +13,7 @@ import {
   BATCH_DISABLE_PROVIDERS,
   BATCH_DELETE_PROVIDERS,
 } from '@/graphql/mutations'
+import type { GetProvidersQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import ProviderItem from './ProviderItem'
 import ProviderFormDialog from './ProviderFormDialog'
@@ -27,7 +28,7 @@ interface ProviderInput {
 }
 
 export default function ProviderSection() {
-  const { data, loading, refetch } = useQuery(GET_PROVIDERS)
+  const { data, loading } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
   const [createProvider] = useMutation(CREATE_PROVIDER)
   const [updateProvider] = useMutation(UPDATE_PROVIDER)
   const [deleteProvider] = useMutation(DELETE_PROVIDER)

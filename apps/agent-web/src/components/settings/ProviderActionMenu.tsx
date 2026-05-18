@@ -21,7 +21,7 @@ export default function ProviderActionMenu({ isEnabled, onEdit, onToggle, onDele
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作菜单" />}>
         <MoreHorizontalIcon className="size-4" />
       </DropdownMenuTrigger>
-      <DropdownMenuPopup align="end">
+      <DropdownMenuPopup>
         <DropdownMenuItem onClick={onEdit}>编辑</DropdownMenuItem>
         <DropdownMenuItem onClick={onToggle}>
           {isEnabled ? '禁用' : '启用'}

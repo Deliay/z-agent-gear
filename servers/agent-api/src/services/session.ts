@@ -1,0 +1,163 @@
+import mongoose from 'mongoose';
+import { Session } from '../models/session.js';
+import { AcpMessage } from '../models/acp-message.js';
+import { Controller } from '../models/controller.js';
+import { getRedisClient } from '../middleware/redis.js';
+
+export class SessionService {
+  async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
+    const sessions = await Session.find({ userId }).sort({ createdAt: -1 }).lean();
+    return sessions.map(this.mapSession.bind(this));
+  }
+
+  async findById(id: string, userId: string): Promise<Record<string, unknown> | null> {
+    const session = await Session.findOne({ _id: id, userId }).lean();
+    if (!session) return null;
+    return this.mapSession(session);
+  }
+
+  async create(userId: string, input: { controllerId: string; acpServerType: string; cwd?: string }): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    const session = await Session.create({
+      userId,
+      controllerId: input.controllerId,
+      controllerName: controller.name,
+      acpServerType: input.acpServerType as 'opencode',
+      status: 'creating',
+      cwd: input.cwd,
+    });
+
+    return this.mapSession(session.toObject());
+  }
+
+  async updateStatus(id: string, userId: string, status: string, externalSessionId?: string): Promise<boolean> {
+    const updateData: Record<string, unknown> = { status };
+    if (externalSessionId) {
+      updateData.externalSessionId = externalSessionId;
+    }
+    if (status === 'ended') {
+      updateData.endedAt = new Date();
+    }
+
+    const result = await Session.findOneAndUpdate(
+      { _id: id, userId },
+      updateData,
+      { new: true },
+    );
+
+    if (result) {
+      // Update Redis cache
+      const redis = getRedisClient();
+      await redis.set(`session:${id}:status`, status);
+      if (status === 'ended') {
+        await redis.del(`session:${id}:status`);
+      }
+    }
+
+    return !!result;
+  }
+
+  async close(id: string, userId: string): Promise<boolean> {
+    return this.updateStatus(id, userId, 'ended');
+  }
+
+  async delete(id: string, userId: string): Promise<boolean> {
+    const result = await Session.findOneAndDelete({ _id: id, userId });
+    if (result) {
+      await AcpMessage.deleteMany({ sessionId: id });
+      const redis = getRedisClient();
+      await redis.del(`session:${id}:status`);
+      return true;
+    }
+    return false;
+  }
+
+  async getMessages(sessionId: string, userId: string, limit = 100, offset = 0): Promise<Record<string, unknown>[]> {
+    // Verify session belongs to user
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const messages = await AcpMessage.find({ sessionId })
+      .sort({ createdAt: 1 })
+      .skip(offset)
+      .limit(limit)
+      .lean();
+
+    return messages.map(this.mapMessage.bind(this));
+  }
+
+  async addMessage(sessionId: string, message: { direction: string; type: string; content: string; metadata?: string }): Promise<Record<string, unknown>> {
+    const acpMessage = await AcpMessage.create({
+      sessionId,
+      direction: message.direction as 'input' | 'output',
+      type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
+      content: message.content,
+      metadata: message.metadata,
+    });
+
+    const mappedMessage = this.mapMessage(acpMessage.toObject());
+
+    // Publish to Redis for SSE
+    const redis = getRedisClient();
+    redis.publish('session:message', JSON.stringify({
+      sessionId,
+      message: mappedMessage,
+    }));
+
+    return mappedMessage;
+  }
+
+  async getAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
+    // Verify controller belongs to user
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    // Check Redis cache first
+    const redis = getRedisClient();
+    const cached = await redis.get(`acp:capability:${controllerId}`);
+    if (cached) {
+      return JSON.parse(cached).servers;
+    }
+
+    // For now, return empty array - capabilities will be detected via WebSocket
+    return [];
+  }
+
+  private mapSession(session: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: (session._id as mongoose.Types.ObjectId).toString(),
+      userId: (session.userId as mongoose.Types.ObjectId).toString(),
+      controllerId: (session.controllerId as mongoose.Types.ObjectId).toString(),
+      controllerName: session.controllerName,
+      acpServerType: session.acpServerType,
+      status: session.status,
+      externalSessionId: session.externalSessionId || null,
+      cwd: session.cwd || null,
+      createdAt: (session.createdAt as Date).toISOString(),
+      updatedAt: (session.updatedAt as Date).toISOString(),
+      endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,
+    };
+  }
+
+  private mapMessage(message: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: (message._id as mongoose.Types.ObjectId).toString(),
+      sessionId: (message.sessionId as mongoose.Types.ObjectId).toString(),
+      direction: message.direction,
+      type: message.type,
+      content: message.content,
+      metadata: message.metadata || null,
+      createdAt: (message.createdAt as Date).toISOString(),
+    };
+  }
+}
+
+export const sessionService = new SessionService();

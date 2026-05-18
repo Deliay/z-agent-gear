@@ -117,7 +117,7 @@ export default function ProviderFormDialog({
           </div>
           <div className="space-y-2">
             <Label>API 类型</Label>
-            <Select value={type} onValueChange={handleTypeChange}>
+            <Select value={type} onValueChange={(v) => v && handleTypeChange(v)}>
               <SelectTrigger>
                 <SelectValue>{type}</SelectValue>
                 <SelectIcon />

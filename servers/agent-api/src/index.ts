@@ -8,6 +8,7 @@ import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateUser } from './middleware/auth.js';
 import { getRedisClient } from './middleware/redis.js';
+import { sessionStreamRouter } from './routes/session-stream.js';
 
 const app = express();
 
@@ -25,6 +26,8 @@ const yoga = createYoga({
 });
 
 app.use('/graphql', yoga);
+
+app.use('/api', sessionStreamRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

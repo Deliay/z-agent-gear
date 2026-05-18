@@ -24,7 +24,7 @@ export class ControllerKeyService {
     const keyDoc = await ControllerKey.create({
       userId: new mongoose.Types.ObjectId(userId),
       name: input.name,
-      type: input.type,
+      type: input.type as 'local' | 'cloud' | 'github',
       keyHash,
       keyPrefix,
       status: 'active',

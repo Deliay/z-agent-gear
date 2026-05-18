@@ -125,3 +125,49 @@ export const UPDATE_MODEL_SORT_ORDER = gql`
     }
   }
 `
+
+export const CREATE_SESSION = gql`
+  mutation CreateSession($input: CreateSessionInput!) {
+    createSession(input: $input) {
+      session {
+        id
+        userId
+        controllerId
+        controllerName
+        acpServerType
+        status
+        externalSessionId
+        cwd
+        createdAt
+        updatedAt
+        endedAt
+      }
+    }
+  }
+`
+
+export const CLOSE_SESSION = gql`
+  mutation CloseSession($id: ID!) {
+    closeSession(id: $id)
+  }
+`
+
+export const DELETE_SESSION = gql`
+  mutation DeleteSession($id: ID!) {
+    deleteSession(id: $id)
+  }
+`
+
+export const SEND_SESSION_MESSAGE = gql`
+  mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType) {
+    sendSessionMessage(sessionId: $sessionId, content: $content, type: $type) {
+      id
+      sessionId
+      direction
+      type
+      content
+      metadata
+      createdAt
+    }
+  }
+`

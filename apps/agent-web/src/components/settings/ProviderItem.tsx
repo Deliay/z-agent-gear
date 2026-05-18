@@ -7,6 +7,7 @@ interface ProviderItemData {
   name: string
   type: string
   endpoint: string
+  credentialType: string
   credentialValue: string
   isEnabled: boolean
   models: Array<{ id: string }>

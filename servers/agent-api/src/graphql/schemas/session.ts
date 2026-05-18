@@ -1,0 +1,81 @@
+export const sessionTypeDefs = `#graphql
+  enum SessionStatus {
+    creating
+    connecting
+    running
+    disconnected
+    ended
+  }
+
+  enum AcpServerType {
+    opencode
+  }
+
+  enum AcpMessageDirection {
+    input
+    output
+  }
+
+  enum AcpMessageType {
+    text
+    image
+    tool_call
+    tool_result
+    plan
+    error
+  }
+
+  type Session {
+    id: ID!
+    userId: ID!
+    controllerId: ID!
+    controllerName: String!
+    acpServerType: AcpServerType!
+    status: SessionStatus!
+    externalSessionId: String
+    cwd: String
+    createdAt: String!
+    updatedAt: String!
+    endedAt: String
+  }
+
+  type AcpMessage {
+    id: ID!
+    sessionId: ID!
+    direction: AcpMessageDirection!
+    type: AcpMessageType!
+    content: String!
+    metadata: String
+    createdAt: String!
+  }
+
+  type AcpCapability {
+    type: AcpServerType!
+    available: Boolean!
+    version: String
+  }
+
+  type CreateSessionPayload {
+    session: Session!
+  }
+
+  input CreateSessionInput {
+    controllerId: ID!
+    acpServerType: AcpServerType! = opencode
+    cwd: String
+  }
+
+  extend type Query {
+    sessions: [Session!]!
+    session(id: ID!): Session
+    sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
+    acpCapabilities(controllerId: ID!): [AcpCapability!]!
+  }
+
+  extend type Mutation {
+    createSession(input: CreateSessionInput!): CreateSessionPayload!
+    closeSession(id: ID!): Boolean!
+    deleteSession(id: ID!): Boolean!
+    sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
+  }
+`;

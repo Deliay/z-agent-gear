@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
+import type { CreateControllerKeyMutation } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -37,7 +38,7 @@ interface GenerateKeyDialogProps {
 
 export default function GenerateKeyDialog({ open, onOpenChange, onGenerated }: GenerateKeyDialogProps) {
   const [name, setName] = useState('')
-  const [createKey, { loading }] = useMutation(CREATE_KEY)
+  const [createKey, { loading }] = useMutation<CreateControllerKeyMutation>(CREATE_KEY)
 
   const handleGenerate = async () => {
     if (!name.trim()) return

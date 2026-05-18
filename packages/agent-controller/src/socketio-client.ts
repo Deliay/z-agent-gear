@@ -2,8 +2,11 @@ import { io as createSocketIOClient, type Socket } from 'socket.io-client';
 import { hostname } from 'os';
 import { Heartbeat } from './heartbeat.js';
 import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.js';
+import { acpDetector } from './acp/detector.js';
+import { AcpWebSocketBridge } from './acp/bridge.js';
 
 const CONTROLLER_VERSION = '1.0.0';
+const acpBridges = new Map<string, AcpWebSocketBridge>();
 
 interface RegisteredPayload {
   controllerId: string;
@@ -16,6 +19,27 @@ interface ErrorPayload {
 
 interface ShutdownPayload {
   reason: string;
+}
+
+interface AcpCheckPayload {
+  requestId: string;
+}
+
+interface AcpStartPayload {
+  requestId: string;
+  sessionId: string;
+  serverType: string;
+  cwd: string;
+  mcpServers?: Array<{ name: string; command: string; args?: string[] }>;
+}
+
+interface AcpMessagePayload {
+  sessionId: string;
+  message: { type: string; content: string };
+}
+
+interface AcpStopPayload {
+  sessionId: string;
 }
 
 export function connectToServer(
@@ -70,6 +94,62 @@ export function connectToServer(
     clearConfigKey();
     socket.close();
     process.exit(0);
+  });
+
+  // ACP events
+  socket.on('acp:check', async (data: AcpCheckPayload) => {
+    console.log('ACP check requested');
+    const servers = await acpDetector.detect();
+    socket.emit('acp:check:result', {
+      requestId: data.requestId,
+      servers,
+    });
+  });
+
+  socket.on('acp:start', (data: AcpStartPayload) => {
+    console.log(`ACP start requested for session ${data.sessionId}`);
+    
+    try {
+      const bridge = new AcpWebSocketBridge(socket, {
+        sessionId: data.sessionId,
+        controllerId: '',
+        cwd: data.cwd,
+      });
+
+      acpBridges.set(data.sessionId, bridge);
+      bridge.start();
+
+      // Send success response
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+      });
+    } catch (error) {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:message', (data: AcpMessagePayload) => {
+    console.log(`ACP message for session ${data.sessionId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    if (bridge) {
+      bridge.sendInput(data.message);
+    }
+  });
+
+  socket.on('acp:stop', (data: AcpStopPayload) => {
+    console.log(`ACP stop requested for session ${data.sessionId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    if (bridge) {
+      bridge.stop();
+      acpBridges.delete(data.sessionId);
+    }
   });
 
   socket.on('disconnect', (reason) => {

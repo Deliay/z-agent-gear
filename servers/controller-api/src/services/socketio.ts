@@ -4,6 +4,8 @@ import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
+import { acpSessionManager } from './acp-session-manager.js';
+import { acpCapabilityDetector } from './acp-capability-detector.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -110,10 +112,38 @@ export function createSocketIOServer(io: SocketIOServer): void {
       socket.disconnect(true);
     });
 
+    // ACP events
+    socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
+      if (!authenticated) return;
+      acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);
+    });
+
+    socket.on('acp:start:result', async (payload: {
+      requestId: string;
+      sessionId: string;
+      success: boolean;
+      error?: string;
+      externalSessionId?: string;
+    }) => {
+      if (!authenticated) return;
+      // This is handled by the acpSessionManager through promise resolution
+    });
+
+    socket.on('acp:message', async (payload: { sessionId: string; message: { type: string; content: string; metadata?: Record<string, unknown> } }) => {
+      if (!authenticated) return;
+      await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message);
+    });
+
+    socket.on('acp:stopped', async (payload: { sessionId: string; reason: string; exitCode?: number }) => {
+      if (!authenticated) return;
+      await acpSessionManager.handleControllerStopped(payload.sessionId, payload.reason, payload.exitCode);
+    });
+
     socket.on('disconnect', async () => {
       if (socket.data.keyId) {
         await sessionService.removeSession(socket.data.keyId);
       }
+      await acpSessionManager.handleSocketDisconnect(socket.id);
     });
   });
 }

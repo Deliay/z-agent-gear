@@ -1,13 +1,12 @@
 "use client"
 
-import * as React from "react"
 import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { ChevronDownIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-function SelectRoot({ className, ...props }: SelectPrimitive.Root.Props) {
-  return <SelectPrimitive.Root data-slot="select-root" className={cn(className)} {...props} />
+function SelectRoot(props: SelectPrimitive.Root.Props<string>) {
+  return <SelectPrimitive.Root data-slot="select-root" {...props} />
 }
 
 function SelectTrigger({ className, ...props }: SelectPrimitive.Trigger.Props) {

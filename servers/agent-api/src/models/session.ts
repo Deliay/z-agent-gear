@@ -1,0 +1,18 @@
+import mongoose from 'mongoose';
+
+const sessionSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
+  controllerName: { type: String, required: true },
+  acpServerType: { type: String, enum: ['opencode'], required: true },
+  status: { type: String, enum: ['creating', 'connecting', 'running', 'disconnected', 'ended'], default: 'creating' },
+  externalSessionId: { type: String },
+  cwd: { type: String },
+  endedAt: { type: Date },
+}, { timestamps: true });
+
+sessionSchema.index({ userId: 1, createdAt: -1 });
+sessionSchema.index({ controllerId: 1, status: 1 });
+
+export const Session = mongoose.model('Session', sessionSchema);
+export type ISession = mongoose.InferSchemaType<typeof sessionSchema>;
