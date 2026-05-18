@@ -63,11 +63,11 @@ v1 已完成控制器注册、绑定、心跳检测功能，用户可以在 Web 
 
 #### 功能点 2: Controller ACP 能力检测
 
-- **描述**: Controller 通过 WebSocket 接收检测请求，检查本地 OpenCode 是否可用
+- **描述**: Controller 通过 WebSocket 接收检测请求，检测本地支持的 ACP Server（本期仅 OpenCode）
 - **用户价值**: 自动发现控制器可用的 ACP Server，无需手动配置
 - **验收标准**:
   - [ ] Controller-API 通过 WebSocket 向 Controller 发送检测请求
-  - [ ] Controller 执行 `opencode -v` 命令检测 OpenCode 是否可用
+  - [ ] Controller 检测支持的 ACP Server 列表，其中 OpenCode 的检测方式为执行 `opencode -v`
   - [ ] Controller 返回检测结果和可用的 ACP Server 列表
   - [ ] 检测结果缓存，避免重复检测
 
@@ -169,8 +169,8 @@ sequenceDiagram
     U->>F: 选择Controller
     F->>C: 请求检测ACP能力
     C->>Ctrl: WebSocket发送检测请求
-    Ctrl->>OC: 执行 opencode -v
-    OC-->>Ctrl: 返回版本信息
+    Ctrl->>Ctrl: 检测支持的ACP Server
+    Note right of Ctrl: 执行 opencode -v 检测OpenCode
     Ctrl-->>C: 返回可用ACP Server列表
     C-->>F: 返回检测结果
     
