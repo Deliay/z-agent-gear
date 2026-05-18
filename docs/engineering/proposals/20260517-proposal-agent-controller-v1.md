@@ -2,7 +2,7 @@
 
 **功能名称**: Agent 控制器管理
 **关联 PRD**: `agent-controller-v1.md`
-**技术提案版本**: v1.2
+**技术提案版本**: v1.3
 **创建日期**: 2026-05-17
 **作者**: ZeroAsh
 **feat-branch**: `feat/agent-controller`
@@ -125,7 +125,7 @@ graph TD
     end
 
     subgraph 前端 components
-        CLS[ControllerListSection<br/>Key 管理 Card + 控制器列表 Card]
+        CLS[ControllerListSection<br/>合并 Key 管理和控制器列表 Card]
         KGD[GenerateKeyDialog]
         CD[ControllerDetail]
     end
@@ -151,7 +151,7 @@ graph TD
 | KeyReader | 按优先级读取 Key：`--key` > `~/.zag/config.toml` > `ZAG_CONTROLLER_KEY` | 优先级链、首次输入持久化 |
 | controller-api SessionManager | 管理 Socket.IO 连接会话，确保单 key 单 session | Redis 存储 session 映射，重复连接拒绝 |
 | controller-api HeartbeatService | 心跳接收与超时检测 | 30s 间隔、2 次超时离线 |
-| agent-api KeyService | 生成、验证、撤销控制器 Key | Key 唯一性、绑定状态管理 |
+| agent-api KeyService | 生成、验证控制器 Key，自动替换未绑定 Key | Key 唯一性、绑定状态管理、Redis 缓存 |
 | agent-api ControllerService | 控制器状态查询、重命名、解绑 | 数据读取，实际状态由 controller-api 写入 |
 
 ## 3. API 设计
@@ -171,7 +171,6 @@ enum ControllerStatus {
   online
   offline
   registering
-  unbound
 }
 
 enum ControllerKeyStatus {
@@ -228,8 +227,6 @@ type Query {
 type Mutation {
   createControllerKey(input: CreateKeyInput!): CreateKeyPayload!
   renameControllerKey(input: RenameInput!): ControllerKey!
-  revokeControllerKey(id: ID!): Boolean!
-
   renameController(input: RenameInput!): Controller!
   unbindController(id: ID!): Boolean!
 }
@@ -243,7 +240,7 @@ type Mutation {
 |------|--------|---------|------|
 | 控制器 → 服务端 | `register` | `{ key, hostname, version }` | 注册/认证。`version` 为 semver 格式（如 `1.0.0`），服务端校验 major 版本是否匹配 |
 | 服务端 → 控制器 | `registered` | `{ controllerId }` | 注册成功 |
-| 服务端 → 控制器 | `error` | `{ code, message }` | 错误。code: `INVALID_KEY` / `KEY_REVOKED` / `KEY_EXPIRED` / `KEY_ALREADY_ONLINE` / `VERSION_MISMATCH` / `RATE_LIMITED` |
+| 服务端 → 控制器 | `error` | `{ code, message }` | 错误。code: `INVALID_KEY` / `KEY_ALREADY_ONLINE` / `VERSION_MISMATCH` / `RATE_LIMITED` |
 | 控制器 → 服务端 | `heartbeat` | `{}` | 心跳 |
 | 控制器 → 服务端 | `unregister` | `{ reason }` | 控制器主动注销（如用户执行 `zag controller detach`） |
 | 服务端 → 控制器 | `unregistered` | `{}` | 注销成功确认 |
@@ -264,12 +261,6 @@ sequenceDiagram
     S->>R: 检查 keyId 是否已有活跃 session
     alt 无效 Key
         S-->>C: emit("error", { code: "INVALID_KEY" })
-        S->>S: disconnect
-    else Key 已撤销
-        S-->>C: emit("error", { code: "KEY_REVOKED" })
-        S->>S: disconnect
-    else Key 已过期
-        S-->>C: emit("error", { code: "KEY_EXPIRED" })
         S->>S: disconnect
     else 版本不兼容
         S-->>C: emit("error", { code: "VERSION_MISMATCH" })
@@ -327,7 +318,7 @@ controller-api 订阅该频道，根据 keyId 查找 session 并执行断开。
 | type | String, enum: local/cloud/github, required | 控制器类型 |
 | keyHash | String, required, unique | Key 的 bcrypt 哈希 |
 | keyPrefix | String, required | Key 前 8 位，用于前端展示 |
-| status | String, enum: active/revoked/expired, default: active | 状态 |
+| status | String, enum: active/revoked/expired, default: active | 状态（v1 中绑定后永久有效） |
 | boundControllerId | ObjectId, ref: Controller, default: null | 已绑定的控制器 ID |
 | lastUsedAt | Date | 最后使用时间 |
 | createdAt | Date | 创建时间 |
@@ -344,7 +335,7 @@ controller-api 订阅该频道，根据 keyId 查找 session 并执行断开。
 | name | String, default: hostname | 控制器名称 |
 | hostname | String, required | 机器 hostname |
 | type | String, enum: local/cloud/github, required | 控制器类型 |
-| status | String, enum: online/offline/registering/unbound, default: registering | 在线状态 |
+| status | String, enum: online/offline/registering, default: registering | 在线状态 |
 | keyId | ObjectId, ref: ControllerKey, required, unique | 绑定的 Key |
 | version | String, required | 控制器版本号 |
 | lastHeartbeatAt | Date | 最后心跳时间 |
@@ -385,6 +376,7 @@ sequenceDiagram
     U->>F: 点击「生成 Key」，填写名称、选择类型
     F->>A: mutation createControllerKey({ name, type })
     A->>KS: createKey(userId, input)
+    KS->>KS: 检查并删除已有未绑定 Key
     KS->>KS: 生成随机 Key (zag_k_<random_hex>)
     KS->>KS: bcrypt 哈希 Key
     KS->>D: 存储 { keyHash, keyPrefix, ... }
@@ -408,12 +400,6 @@ sequenceDiagram
     S->>S: bcrypt 比对 keyHash
     alt 无效 Key
         S-->>CT: emit("error", { code: "INVALID_KEY" })
-        S->>CT: disconnect
-    else Key 已撤销
-        S-->>CT: emit("error", { code: "KEY_REVOKED" })
-        S->>CT: disconnect
-    else Key 已过期
-        S-->>CT: emit("error", { code: "KEY_EXPIRED" })
         S->>CT: disconnect
     else 版本不兼容
         S-->>CT: emit("error", { code: "VERSION_MISMATCH" })
@@ -468,8 +454,8 @@ sequenceDiagram
 
     U->>CT: zag controller detach
     CT->>S: emit("unregister", { reason: "user_detach" })
-    S->>D: 更新 Controller.status = unbound
-    S->>D: 清除 Key.boundControllerId
+    S->>D: 删除 Controller 记录
+    S->>D: 删除 Key 记录
     S->>R: DEL session:{keyId}, heartbeat:{keyId}
     S-->>CT: emit("unregistered")
     CT->>CFG: 清空 [key] 配置段
@@ -486,8 +472,10 @@ sequenceDiagram
     participant S as controller-api
     participant CT as Controller
 
-    U->>A: mutation revokeKey / unbindController
-    A->>A: 更新数据库状态
+    U->>A: mutation unbindController
+    A->>A: 发送 shutdown 命令
+    A->>D: 删除 Key 记录
+    A->>D: 删除 Controller 记录
     A->>R: PUBLISH "controller:command" { type: "shutdown", keyId }
     R->>S: SUBSCRIBE 收到消息
     S->>R: GET session:{keyId}
@@ -495,7 +483,7 @@ sequenceDiagram
     S->>CT: emit("shutdown", { reason })
     S->>CT: disconnect
     S->>R: DEL session:{keyId}, heartbeat:{keyId}
-    S->>D: 更新 Controller.status = unbound
+    S->>D: 删除 Controller 和 Key 记录
 ```
 
 ### 5.2 关键实现点
@@ -571,8 +559,6 @@ io.on('connection', (socket) => {
     const { key, hostname, version } = payload;
     const keyDoc = await validateKey(key);
     if (!keyDoc) return socket.emit('error', { code: 'INVALID_KEY' });
-    if (keyDoc.status === 'revoked') return socket.emit('error', { code: 'KEY_REVOKED' });
-    if (keyDoc.status === 'expired') return socket.emit('error', { code: 'KEY_EXPIRED' });
     // 检查版本兼容性（major 版本必须匹配）
     const ctrlVersion = version?.split('.')[0];
     const expectedMajor = '1'; // 当前控制器 API major 版本
@@ -603,8 +589,8 @@ io.on('connection', (socket) => {
   socket.on('unregister', async (payload) => {
     if (!authenticated) return;
     const { keyId, userId } = socket.data;
-    await Controller.updateOne({ keyId }, { status: 'unbound' });
-    await ControllerKey.updateOne({ _id: keyId }, { boundControllerId: null });
+    await Controller.deleteOne({ keyId });
+    await ControllerKey.deleteOne({ _id: keyId });
     await redis.del(`session:${keyId}`, `heartbeat:${keyId}`);
     socket.emit('unregistered');
     socket.disconnect(true);
@@ -675,7 +661,9 @@ socket.on('shutdown', (data) => {
   - 使用 Node.js `crypto.randomBytes(24)` 生成 24 字节随机数 → 48 hex chars
   - 数据库中仅存储 bcrypt 哈希（`keyHash`），明文 Key 永不落盘
   - 前端仅保存 `keyPrefix`（前 8 位）用于展示识别
-  - 撤销 Key 时，设置 `status = revoked`，通过 Redis Pub/Sub 通知 controller-api 推送 `shutdown`
+  - 每个帐号仅允许一个未绑定的 Key，生成新 Key 时自动替换旧的
+  - Key 绑定到控制器后永久生效（无过期/撤销机制）
+  - 解绑或注销时，Key 和 Controller 记录均被永久删除
 
 #### 实现点 5: 心跳超时检测（controller-api）
 
@@ -692,8 +680,9 @@ socket.on('shutdown', (data) => {
 
 - **描述**: agent-api 在解绑/撤销 Key 时，通过 Redis Pub/Sub 通知 controller-api 执行断开
 - **技术细节**:
-  - agent-api 收到 `revokeControllerKey` 或 `unbindController` mutation 后：
-    1. 更新数据库状态
+  - agent-api 收到 `unbindController` mutation 后：
+    1. 发送 shutdown 命令
+    2. 删除 Key 和 Controller 记录
     2. `PUBLISH "controller:command" { type: "shutdown", keyId }`
   - controller-api 订阅 `controller:command` 频道：
     1. 收到消息后 `GET session:{keyId}` 获取 socketId
@@ -705,9 +694,8 @@ socket.on('shutdown', (data) => {
 - **描述**: 在 SettingsPage 新增「控制器管理」导航和 ControllerListSection
 - **技术细节**:
   - 在 `SettingsPage.tsx` 左侧导航新增「控制器管理」分类
-  - 右侧内容区新增 `ControllerListSection`，包含两个 Card：
-    - **Key 管理 Card**：Key 列表（名称、类型、前缀、状态、创建时间）、生成 Key 按钮、重命名/撤销操作
-    - **控制器列表 Card**：控制器列表（hostname、类型标签、在线/离线状态、最后心跳时间）、类型筛选、重命名/解绑操作
+  - 右侧内容区新增 `ControllerListSection`，包含单个 Card：
+    - **控制器 Card**：合并 Key 管理和控制器列表，未绑定 Key 显示为「等待连接」状态，已绑定控制器显示在线/离线状态、hostname、version、key 前缀
   - 生成 Key 后弹窗展示完整 Key，提示「请立即复制保存，关闭后将不再显示」
   - 列表使用轮询（v1 先用 15s 轮询 agent-api GraphQL）更新在线状态
 
@@ -751,12 +739,10 @@ servers/agent-api/
 │   ├── graphql/
 │   │   ├── schemas/
 │   │   │   ├── index.ts                  # 修改：注册 controller typeDefs
-│   │   │   ├── controller-key.ts         # 新增
-│   │   │   └── controller.ts             # 新增
+│   │   │   └── controller.ts             # 新增：GraphQL schema 定义
 │   │   └── resolvers/
 │   │       ├── index.ts                  # 修改
-│   │       ├── controller-key.ts         # 新增
-│   │       └── controller.ts             # 新增
+│   │       └── controller.ts             # 新增：Controller + Key resolvers
 │   ├── models/
 │   │   ├── controller-key.ts             # 新增
 │   │   └── controller.ts                 # 新增
@@ -801,7 +787,7 @@ apps/agent-web/
 │   │   └── SettingsPage.tsx              # 修改：新增控制器管理导航
 │   ├── components/
 │   │   └── settings/
-│   │       ├── ControllerListSection.tsx  # 新增：Key 管理 Card + 控制器列表 Card
+│   │       ├── ControllerListSection.tsx  # 新增：合并 Key 管理和控制器列表
 │   │       ├── GenerateKeyDialog.tsx      # 新增
 │   │       └── ControllerDetail.tsx       # 新增
 │   ├── graphql/
@@ -899,8 +885,7 @@ CLI 参数优先级：`--key` > `--server` > 配置文件 `~/.zag/config.toml` >
 - [ ] 控制器守护进程实现（Key 读取、endpoint 配置、Socket.IO 连接、心跳发送）并测试通过
 - [ ] Aspire 编排 controller-api + agent-api + MongoDB + Redis 启动正常
 - [ ] 跨服务通信（解绑/撤销 → Redis Pub/Sub → controller-api 推 shutdown）测试通过
-- [ ] 前端 Key 管理 Card 可用（生成、列表、重命名、撤销）
-- [ ] 前端控制器列表 Card 可用（状态展示、筛选、重命名、解绑）
+- [ ] 前端控制器管理 Card 可用（生成 Key、列表展示、重命名、解绑）
 - [ ] 端到端流程：生成 Key → 启动控制器 → 页面展示在线 → 离线检测
 
 ## 11. 相关文档

@@ -72,9 +72,7 @@
 
 | 值 | 含义 |
 |----|------|
-| `INVALID_KEY` | Key 无效（数据库中不存在） |
-| `KEY_REVOKED` | Key 已被撤销 |
-| `KEY_EXPIRED` | Key 已过期 |
+| `INVALID_KEY` | Key 无效（缓存中不存在或 bcrypt 验证失败） |
 | `KEY_ALREADY_ONLINE` | 该 Key 已有活跃 session |
 | `VERSION_MISMATCH` | 控制器版本不兼容 |
 | `RATE_LIMITED` | 注册频率超限 |
@@ -99,8 +97,8 @@
 
 **服务端行为：**
 
-1. 更新 Controller 状态为 `unbound`
-2. 清除 Key 绑定关系
+1. 删除 Controller 记录
+2. 删除 Key 记录
 3. 清理 session
 4. 回复 `unregistered`
 
@@ -120,7 +118,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `reason` | `string` | 是 | `key_revoked` 或 `controller_unbound` |
+| `reason` | `string` | 是 | `key_revoked` |
 
 **客户端行为：** 清除本地配置中的 Key，退出进程。
 
@@ -170,3 +168,10 @@ Controller                 controller-api
 
 - 服务端校验 `version` major 字段
 - major 不匹配时返回 `VERSION_MISMATCH`
+
+### 3.5 Key 生命周期
+
+- 每个帐号仅允许一个未绑定的 Key
+- 生成新 Key 时自动替换旧的未绑定 Key
+- Key 绑定到控制器后永久生效（无过期/撤销）
+- 解绑或注销时，Key 和 Controller 记录均被永久删除

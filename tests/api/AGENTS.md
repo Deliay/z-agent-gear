@@ -90,13 +90,11 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | createControllerKey - 无 auth | 应返回「Not authenticated」 |
 | createControllerKey - 正常创建 | 应返回 key 和 rawKey（zag_k_ 前缀） |
 | createControllerKey - 空名称 | 应返回校验错误 |
+| createControllerKey - 替换未绑定 key | 生成新 key 时自动删除旧的未绑定 key |
 | controllerKeys query - 已认证 | 应返回 keys 列表 |
 | renameControllerKey - 无 auth | 应返回「Not authenticated」 |
 | renameControllerKey - 正常重命名 | 应返回新 name |
 | renameControllerKey - 不存在的 key | 应返回错误 |
-| revokeControllerKey - 无 auth | 应返回「Not authenticated」 |
-| revokeControllerKey - 正常撤销 | 应返回 true，status 变为 revoked |
-| revokeControllerKey - 不存在的 key | 应返回 false |
 
 ### Controller Management API (`controller.test.ts`)
 
@@ -115,7 +113,8 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 |------|------|
 | register 后查询 controller | status 应为 online，hostname/version 正确 |
 | controllers 列表包含在线 controller | 应包含 status=online 的记录 |
-| unregister 后查询 controller | status 应为 unbound |
+| unregister 后 controller 和 key 应被删除 | 查询应返回 null |
+| unbind 后 controller 和 key 应被删除 | GraphQL unbind 后查询应返回 null |
 | register 后 controllerKeys.lastUsedAt | 应更新为非 null |
 
 ### Controller WebSocket API (`controller-api/websocket.test.ts`)
@@ -124,8 +123,7 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 |------|------|
 | register - 有效 key | 应返回 controllerId |
 | register - 无效 key | 应返回 INVALID_KEY 并断开 |
-| register - 已撤销 key | 应返回 KEY_REVOKED 并断开 |
 | register - 版本不匹配 | 应返回 VERSION_MISMATCH 并断开 |
 | heartbeat - 已认证客户端 | 应接受心跳，连接保持在线 |
-| unregister - 主动注销 | 应返回 unregistered 并断开 |
+| unregister - 主动注销 | 应删除 key 和 controller 记录并断开 |
 | session 独占 - 重复 key | 第二个连接应收到 KEY_ALREADY_ONLINE |
