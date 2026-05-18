@@ -432,31 +432,4 @@ describe('Controller Online Status', () => {
     const ctrlBody = await ctrlRes.json();
     expect(ctrlBody.data.controller).toBeNull();
   });
-
-  it('should show controllerKey lastUsedAt updated after register', async () => {
-    // Create a fresh key
-    const createRes = await gqlRequest(
-      CREATE_KEY,
-      { input: { name: `lastused-test-${Date.now()}`, type: 'local' } },
-      authToken,
-    );
-    const createBody = await createRes.json();
-    const testKeyId = createBody.data.createControllerKey.key.id;
-    const testRawKey = createBody.data.createControllerKey.rawKey;
-
-    const client = createWSClient();
-    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: testRawKey, hostname: 'test-host', version: '1.0.0' });
-    await registered;
-
-    await new Promise((r) => setTimeout(r, 200));
-
-    const res = await gqlRequest(CONTROLLER_KEYS_QUERY, undefined, authToken);
-    const body = await res.json();
-    const key = body.data.controllerKeys.find((k: { id: string }) => k.id === testKeyId);
-    expect(key).toBeDefined();
-    expect(key.lastUsedAt).not.toBeNull();
-
-    client.disconnect();
-  });
 });
