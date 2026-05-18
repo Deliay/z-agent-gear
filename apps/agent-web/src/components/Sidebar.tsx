@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 
 interface SidebarProps {
@@ -6,26 +5,18 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ username }: SidebarProps) {
-  const [sessions] = useState(() =>
-    Array.from({ length: 20 }, (_, i) => `Session ${i + 1}`)
-  );
-
   return (
     <nav className="flex h-screen flex-col bg-gray-900 text-white" aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
-        <h2 className="mb-4 text-lg font-semibold">Sessions</h2>
-        <ul className="space-y-1">
-          {sessions.map((session) => (
-            <li key={session}>
-              <button
-                type="button"
-                className="w-full rounded px-3 py-2 text-left text-sm text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
-              >
-                {session}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Sessions</h2>
+          <NavLink
+            to="/sessions"
+            className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700"
+          >
+            新建
+          </NavLink>
+        </div>
       </div>
       <div className="sticky bottom-0 border-t border-gray-700 p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">

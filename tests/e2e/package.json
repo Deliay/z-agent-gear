@@ -7,6 +7,7 @@
     "test:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@playwright/test": "^1.60.0"
+    "@playwright/test": "^1.60.0",
+    "socket.io-client": "^4.8.3"
   }
 }

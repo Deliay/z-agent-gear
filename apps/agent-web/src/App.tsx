@@ -4,6 +4,7 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import MainLayout from './pages/MainLayout'
 import SettingsPage from './pages/SettingsPage'
+import SessionPage from './pages/SessionPage'
 import ProtectedRoute from './components/ProtectedRoute'
 
 function App() {
@@ -23,6 +24,8 @@ function App() {
                   选择一个会话
                 </div>
               } />
+              <Route path="sessions" element={<SessionPage />} />
+              <Route path="sessions/:id" element={<SessionPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>

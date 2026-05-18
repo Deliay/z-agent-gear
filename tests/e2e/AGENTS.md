@@ -36,8 +36,10 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `BASE_URL` | 前端应用地址 | `http://localhost:35273` |
+| `API_URL` | agent-api GraphQL 地址 | `http://localhost:4000/graphql` |
+| `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
 
-> 注意: `agent-web` 端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
+> 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
 
 ## 测试清单
 
@@ -73,12 +75,26 @@ BASE_URL=http://localhost:35273 npx playwright test
 
 | 测试 | 描述 |
 |------|------|
+| 注册用户并显示 controller section | API 注册用户 → 登录 → 设置页显示 controller-section |
 | 导航显示控制器管理 | 设置页导航显示「控制器」和「控制器管理」 |
 | controller section 布局 | 显示「控制器管理」标题和「控制器」卡片 |
-| 控制器卡片空状态 | 显示「生成 Key」按钮和「暂无控制器」空状态文字 |
-| 点击生成 Key 直接创建 | 点击「生成 Key」→ 列表出现新 Key（含完整 rawKey） |
-| 未绑定 Key 显示复制按钮 | 未绑定 Key 显示 rawKey 和「复制」按钮 |
-| 复制 Key 后显示已复制 | 点击复制 → 按钮文字变为「已复制」 |
-| Key 显示重命名按钮 | 每个 Key 显示「重命名」按钮 |
+| controller section 空状态 | 显示「生成 Key」按钮和「暂无控制器」空状态文字 |
+| controller 卡片空状态 | 显示「暂无控制器」空状态文字 |
+| 生成 Key 并显示在列表 | 点击「生成 Key」→ 列表出现新 Key（等待连接 + local 标签） |
+| 生成的 Key 显示复制按钮 | 生成 Key 后显示「复制」按钮 |
 | 导航滚动到 controller section | 点击「控制器管理」→ 滚动到 controller section |
-| 侧边栏导航到设置页 | 点击侧边栏设置链接 → 显示 controller section |
+
+### Session E2E (`session.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 空状态显示 | 会话列表页显示「暂无会话」空状态 |
+| 无在线 controller | New Session dialog 显示「无在线控制器」 |
+| 有在线 controller | 注册 controller → New Session dialog 显示在线 controller |
+| 创建会话并跳转 | 选择 controller → 创建 → 跳转到会话详情页 |
+| 会话详情页结构 | 显示会话状态、输入框、消息区域 |
+| 状态未运行时禁用输入 | 会话状态非 running 时输入框禁用 |
+| 显示状态 badge | 会话详情页显示状态 badge |
+| 关闭会话 | 点击关闭 → 状态更新为已关闭 |
+| 删除会话 | 点击删除 → 跳转回会话列表 |
+| 未登录重定向 | 直接访问 `/sessions` → 重定向到登录页 |
