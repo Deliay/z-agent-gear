@@ -76,11 +76,9 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 导航显示控制器管理 | 设置页导航显示「控制器」和「控制器管理」 |
 | controller section 布局 | 显示「控制器管理」标题和「控制器」卡片 |
 | 控制器卡片空状态 | 显示「生成 Key」按钮和「暂无控制器」空状态文字 |
-| 打开生成 Key 对话框 | 点击「生成 Key」→ 弹出对话框，显示名称输入 |
-| 空名称时生成按钮禁用 | 对话框中名称为空时「生成」按钮为 disabled |
-| 取消关闭生成对话框 | 点击取消 → 对话框关闭 |
-| 生成 Key 并显示 rawKey | 输入名称 → 点击生成 → 显示「Key 已生成」对话框 |
-| 生成后 Key 出现在列表 | 生成后列表显示新 Key（名称、等待连接状态、local 类型） |
+| 点击生成 Key 直接创建 | 点击「生成 Key」→ 列表出现新 Key（含完整 rawKey） |
+| 未绑定 Key 显示复制按钮 | 未绑定 Key 显示 rawKey 和「复制」按钮 |
+| 复制 Key 后显示已复制 | 点击复制 → 按钮文字变为「已复制」 |
 | Key 显示重命名按钮 | 每个 Key 显示「重命名」按钮 |
 | 导航滚动到 controller section | 点击「控制器管理」→ 滚动到 controller section |
 | 侧边栏导航到设置页 | 点击侧边栏设置链接 → 显示 controller section |

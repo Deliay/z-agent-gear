@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import GenerateKeyDialog from './GenerateKeyDialog'
 
 const GET_CONTROLLER_KEYS = gql`
   query GetControllerKeys {
@@ -50,18 +49,18 @@ const GET_CONTROLLERS = gql`
   }
 `
 
-const UNBIND_CONTROLLER = gql`
-  mutation UnbindController($id: ID!) {
-    unbindController(id: $id)
+const CREATE_KEY = gql`
+  mutation CreateControllerKey($input: CreateKeyInput!) {
+    createControllerKey(input: $input) {
+      key { id name type keyPrefix status createdAt }
+      rawKey
+    }
   }
 `
 
-const RENAME_KEY = gql`
-  mutation RenameControllerKey($input: RenameInput!) {
-    renameControllerKey(input: $input) {
-      id
-      name
-    }
+const UNBIND_CONTROLLER = gql`
+  mutation UnbindController($id: ID!) {
+    unbindController(id: $id)
   }
 `
 
@@ -76,39 +75,52 @@ const RENAME_CONTROLLER = gql`
 
 const POLL_INTERVAL = 15_000
 
+function autoKeyName(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `Key-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
 export default function ControllerListSection() {
   const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useQuery(GET_CONTROLLER_KEYS)
   const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useQuery(GET_CONTROLLERS, {
     pollInterval: POLL_INTERVAL,
   })
 
+  const [createKey] = useMutation(CREATE_KEY)
   const [unbindController] = useMutation(UNBIND_CONTROLLER)
-  const [renameKey] = useMutation(RENAME_KEY)
   const [renameController] = useMutation(RENAME_CONTROLLER)
 
-  const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
-  const [generatedKey, setGeneratedKey] = useState<string | null>(null)
-  const [showKeyDialog, setShowKeyDialog] = useState(false)
-  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; type: 'key' | 'controller' } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
+  const [rawKeys, setRawKeys] = useState<Map<string, string>>(new Map())
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
 
-  // Build a map of keyId -> controller for quick lookup
-  const controllerByKeyId = new Map(controllers.map((c: { keyId: string;[k: string]: unknown }) => [c.keyId, c]))
+  const controllerByKeyId = new Map(controllers.map((c: { keyId: string; [k: string]: unknown }) => [c.keyId, c]))
 
-  // Unbound keys: keys not bound to any controller
   const unboundKeys = keys.filter((k: { id: string }) => !controllerByKeyId.has(k.id))
-  // Bound controllers (keys that have a controller)
   const boundControllers = controllers
 
-  const handleGenerateKey = useCallback((rawKey: string) => {
-    setGeneratedKey(rawKey)
-    setShowKeyDialog(true)
-    refetchKeys()
-  }, [refetchKeys])
+  const handleGenerateKey = async () => {
+    const { data } = await createKey({
+      variables: { input: { name: autoKeyName(), type: 'local' } },
+    })
+    if (data?.createControllerKey) {
+      const { key, rawKey } = data.createControllerKey
+      setRawKeys((prev) => new Map(prev).set(key.id, rawKey))
+      refetchKeys()
+    }
+  }
+
+  const handleCopyKey = async (keyId: string, rawKey: string) => {
+    await navigator.clipboard.writeText(rawKey)
+    setCopiedId(keyId)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
 
   const handleUnbind = async (id: string) => {
     await unbindController({ variables: { id } })
@@ -119,21 +131,10 @@ export default function ControllerListSection() {
 
   const handleRename = async () => {
     if (!renameTarget || !renameValue.trim()) return
-
-    if (renameTarget.type === 'key') {
-      await renameKey({ variables: { input: { id: renameTarget.id, name: renameValue.trim() } } })
-      refetchKeys()
-    } else {
-      await renameController({ variables: { input: { id: renameTarget.id, name: renameValue.trim() } } })
-      refetchControllers()
-    }
+    await renameController({ variables: { input: { id: renameTarget.id, name: renameValue.trim() } } })
+    refetchControllers()
     setRenameTarget(null)
     setRenameValue('')
-  }
-
-  const openRename = (id: string, name: string, type: 'key' | 'controller') => {
-    setRenameTarget({ id, name, type })
-    setRenameValue(name)
   }
 
   const loading = keysLoading || controllersLoading
@@ -147,7 +148,7 @@ export default function ControllerListSection() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>控制器</CardTitle>
-          <Button size="sm" onClick={() => setGenerateDialogOpen(true)}>
+          <Button size="sm" onClick={handleGenerateKey}>
             生成 Key
           </Button>
         </CardHeader>
@@ -160,95 +161,80 @@ export default function ControllerListSection() {
             </div>
           ) : (
             <div className="space-y-2">
-              {/* Unbound keys — waiting for connection */}
-              {unboundKeys.map((key: { id: string; name: string; type: string; keyPrefix: string; createdAt: string }) => (
-                <div key={key.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">{key.name}</span>
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                        {key.type}
-                      </span>
-                      <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">
-                        等待连接
-                      </span>
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      <code className="font-mono">{key.keyPrefix}...</code>
-                      <span className="ml-2">创建于 {new Date(key.createdAt).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => openRename(key.id, key.name, 'key')}>
-                      重命名
-                    </Button>
-                  </div>
-                </div>
-              ))}
-
-              {/* Bound controllers */}
-              {boundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => {
-                const key = keys.find((k: { id: string }) => k.id === ctrl.keyId)
+              {unboundKeys.map((key: { id: string; name: string; type: string; keyPrefix: string; createdAt: string }) => {
+                const rawKey = rawKeys.get(key.id)
                 return (
-                  <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border p-4">
-                    <div className={`h-2 w-2 rounded-full ${ctrl.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  <div key={key.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-foreground">{ctrl.name || ctrl.hostname}</span>
+                        <span className="font-medium text-foreground">{key.name}</span>
                         <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                          {ctrl.type}
+                          {key.type}
                         </span>
-                        <span className={`rounded px-1.5 py-0.5 text-xs ${
-                          ctrl.status === 'online' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
-                        }`}>
-                          {ctrl.status === 'online' ? '在线' : '离线'}
+                        <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">
+                          等待连接
                         </span>
                       </div>
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        <span>{ctrl.hostname}</span>
-                        <span className="ml-2">v{ctrl.version}</span>
-                        {key && (
-                          <code className="ml-2 font-mono">{key.keyPrefix}</code>
-                        )}
-                        {ctrl.lastHeartbeatAt && (
-                          <span className="ml-2">最后心跳 {new Date(ctrl.lastHeartbeatAt).toLocaleTimeString()}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openRename(ctrl.id, ctrl.name || ctrl.hostname, 'controller')}>
-                        重命名
-                      </Button>
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
-                        解绑
-                      </Button>
+                      {rawKey ? (
+                        <div className="mt-1 flex items-center gap-2">
+                          <code className="break-all font-mono text-sm text-muted-foreground">{rawKey}</code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs shrink-0"
+                            onClick={() => handleCopyKey(key.id, rawKey)}
+                          >
+                            {copiedId === key.id ? '已复制' : '复制'}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          <code className="font-mono">{key.keyPrefix}...</code>
+                          <span className="ml-2">创建于 {new Date(key.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
               })}
+
+              {boundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => (
+                <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border p-4">
+                  <div className={`h-2 w-2 rounded-full ${ctrl.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{ctrl.name || ctrl.hostname}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        {ctrl.type}
+                      </span>
+                      <span className={`rounded px-1.5 py-0.5 text-xs ${
+                        ctrl.status === 'online' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {ctrl.status === 'online' ? '在线' : '离线'}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      <span>{ctrl.hostname}</span>
+                      <span className="ml-2">v{ctrl.version}</span>
+                      {ctrl.lastHeartbeatAt && (
+                        <span className="ml-2">最后心跳 {new Date(ctrl.lastHeartbeatAt).toLocaleTimeString()}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      重命名
+                    </Button>
+                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      解绑
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
       </Card>
-
-      <GenerateKeyDialog open={generateDialogOpen} onOpenChange={setGenerateDialogOpen} onGenerated={handleGenerateKey} />
-
-      <Dialog open={showKeyDialog} onOpenChange={setShowKeyDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Key 已生成</DialogTitle>
-            <DialogDescription>请立即复制保存，关闭后将不再显示。</DialogDescription>
-          </DialogHeader>
-          <div className="rounded-lg bg-muted p-4">
-            <code className="break-all font-mono text-sm">{generatedKey}</code>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => { navigator.clipboard.writeText(generatedKey || ''); setShowKeyDialog(false); setGeneratedKey(null); }}>
-              复制并关闭
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!renameTarget} onOpenChange={() => setRenameTarget(null)}>
         <DialogContent>
