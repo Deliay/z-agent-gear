@@ -29,6 +29,15 @@ export async function lookupKey(rawKey: string): Promise<CachedKey | null> {
   return JSON.parse(raw) as CachedKey;
 }
 
+export async function getRawKeyById(keyId: string): Promise<string | null> {
+  try {
+    const redis = getRedisClient();
+    return await redis.get(`${KEYID_PREFIX}${keyId}`);
+  } catch {
+    return null;
+  }
+}
+
 export async function evictKeyById(keyId: string): Promise<void> {
   try {
     const redis = getRedisClient();

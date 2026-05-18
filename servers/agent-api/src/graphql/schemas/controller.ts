@@ -23,6 +23,7 @@ export const controllerTypeDefs = `#graphql
     type: ControllerType!
     keyPrefix: String!
     status: ControllerKeyStatus!
+    rawKey: String
     lastUsedAt: String
     createdAt: String!
     updatedAt: String!

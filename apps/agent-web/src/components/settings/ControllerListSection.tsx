@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,7 @@ const GET_CONTROLLER_KEYS = gql`
       type
       keyPrefix
       status
+      rawKey
       lastUsedAt
       createdAt
       updatedAt
@@ -74,21 +75,6 @@ const RENAME_CONTROLLER = gql`
 `
 
 const POLL_INTERVAL = 15_000
-const RAWKEY_STORAGE = 'zag_pending_rawkeys'
-
-function loadRawKeys(): Map<string, string> {
-  try {
-    const raw = localStorage.getItem(RAWKEY_STORAGE)
-    if (!raw) return new Map()
-    return new Map(Object.entries(JSON.parse(raw)))
-  } catch {
-    return new Map()
-  }
-}
-
-function saveRawKeys(map: Map<string, string>) {
-  localStorage.setItem(RAWKEY_STORAGE, JSON.stringify(Object.fromEntries(map)))
-}
 
 function autoKeyName(): string {
   const now = new Date()
@@ -109,7 +95,6 @@ export default function ControllerListSection() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
-  const [rawKeys, setRawKeys] = useState<Map<string, string>>(() => loadRawKeys())
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
@@ -117,42 +102,14 @@ export default function ControllerListSection() {
 
   const controllerByKeyId = new Map(controllers.map((c: { keyId: string; [k: string]: unknown }) => [c.keyId, c]))
 
-  const unboundKeys = keys.filter((k: { id: string }) => !controllerByKeyId.has(k.id))
+  const unboundKeys = keys.filter((k: { id: string; rawKey: string | null }) => !controllerByKeyId.has(k.id) && k.rawKey)
   const boundControllers = controllers
 
-  // Prune rawKeys for keys that no longer exist (bound or deleted)
-  useEffect(() => {
-    if (keysLoading) return
-    const keyIds = new Set(keys.map((k: { id: string }) => k.id))
-    let changed = false
-    const next = new Map<string, string>()
-    for (const [id, raw] of rawKeys) {
-      if (keyIds.has(id)) {
-        next.set(id, raw)
-      } else {
-        changed = true
-      }
-    }
-    if (changed) {
-      setRawKeys(next)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keys, keysLoading])
-
-  // Persist rawKeys to localStorage
-  useEffect(() => {
-    saveRawKeys(rawKeys)
-  }, [rawKeys])
-
   const handleGenerateKey = async () => {
-    const { data } = await createKey({
+    await createKey({
       variables: { input: { name: autoKeyName(), type: 'local' } },
     })
-    if (data?.createControllerKey) {
-      const { key, rawKey } = data.createControllerKey
-      setRawKeys((prev) => new Map(prev).set(key.id, rawKey))
-      refetchKeys()
-    }
+    refetchKeys()
   }
 
   const handleCopyKey = async (keyId: string, rawKey: string) => {
@@ -200,42 +157,32 @@ export default function ControllerListSection() {
             </div>
           ) : (
             <div className="space-y-2">
-              {unboundKeys.map((key: { id: string; name: string; type: string; keyPrefix: string; createdAt: string }) => {
-                const rawKey = rawKeys.get(key.id)
-                return (
-                  <div key={key.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-foreground">{key.name}</span>
-                        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                          {key.type}
-                        </span>
-                        <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">
-                          等待连接
-                        </span>
-                      </div>
-                      {rawKey ? (
-                        <div className="mt-1 flex items-center gap-2">
-                          <code className="break-all font-mono text-sm text-muted-foreground">{rawKey}</code>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-xs shrink-0"
-                            onClick={() => handleCopyKey(key.id, rawKey)}
-                          >
-                            {copiedId === key.id ? '已复制' : '复制'}
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="mt-1 text-sm text-muted-foreground">
-                          <code className="font-mono">{key.keyPrefix}...</code>
-                          <span className="ml-2">创建于 {new Date(key.createdAt).toLocaleDateString()}</span>
-                        </div>
-                      )}
+              {unboundKeys.map((key: { id: string; name: string; type: string; keyPrefix: string; rawKey: string; createdAt: string }) => (
+                <div key={key.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{key.name}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        {key.type}
+                      </span>
+                      <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">
+                        等待连接
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="break-all font-mono text-sm text-muted-foreground">{key.rawKey}</code>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs shrink-0"
+                        onClick={() => handleCopyKey(key.id, key.rawKey)}
+                      >
+                        {copiedId === key.id ? '已复制' : '复制'}
+                      </Button>
                     </div>
                   </div>
-                )
-              })}
+                </div>
+              ))}
 
               {boundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => (
                 <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border p-4">

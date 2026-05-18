@@ -18,6 +18,7 @@ vi.mock('../models/controller.js', () => ({
 vi.mock('../services/key-cache.js', () => ({
   cacheKey: vi.fn(),
   evictKeyById: vi.fn(),
+  getRawKeyById: vi.fn(),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -46,7 +47,7 @@ vi.mock('mongoose', () => ({
 
 import { controllerKeyService } from '../services/controller-key.js';
 import { ControllerKey } from '../models/controller-key.js';
-import { evictKeyById } from '../services/key-cache.js';
+import { evictKeyById, getRawKeyById } from '../services/key-cache.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -130,7 +131,7 @@ describe('ControllerKeyService', () => {
   });
 
   describe('findAllByUser', () => {
-    it('should return all keys for a user', async () => {
+    it('should return unbound keys with rawKey', async () => {
       const mockKeys = [
         {
           _id: { toString: () => 'key1' },
@@ -138,6 +139,7 @@ describe('ControllerKeyService', () => {
           type: 'local',
           keyPrefix: 'zag_k_1',
           status: 'active',
+          boundControllerId: null,
           lastUsedAt: null,
           createdAt: new Date('2024-01-01'),
           updatedAt: new Date('2024-01-01'),
@@ -148,11 +150,14 @@ describe('ControllerKeyService', () => {
         sort: vi.fn().mockReturnThis(),
         lean: vi.fn().mockResolvedValue(mockKeys),
       } as never);
+      vi.mocked(getRawKeyById).mockResolvedValue('zag_k_1_abc123');
 
       const result = await controllerKeyService.findAllByUser('user1');
 
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('Key 1');
+      expect(result[0].rawKey).toBe('zag_k_1_abc123');
+      expect(ControllerKey.find).toHaveBeenCalledWith({ userId: 'user1', boundControllerId: null });
     });
   });
 

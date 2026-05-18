@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { ControllerKey } from '../models/controller-key.js';
-import { cacheKey, evictKeyById } from './key-cache.js';
+import { cacheKey, evictKeyById, getRawKeyById } from './key-cache.js';
 
 const KEY_FORMAT_VERSION = 1;
 const BCRYPT_ROUNDS = 10;
@@ -45,8 +45,14 @@ export class ControllerKeyService {
   }
 
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    const keys = await ControllerKey.find({ userId }).sort({ createdAt: -1 }).lean();
-    return keys.map(this.mapKey.bind(this));
+    // Only return unbound keys (bound keys are represented by controllers)
+    const keys = await ControllerKey.find({ userId, boundControllerId: null }).sort({ createdAt: -1 }).lean();
+    const results = await Promise.all(keys.map(async (key) => {
+      const id = (key._id as mongoose.Types.ObjectId).toString();
+      const rawKey = await getRawKeyById(id);
+      return this.mapKey(key, rawKey);
+    }));
+    return results;
   }
 
   async rename(id: string, userId: string, name: string): Promise<Record<string, unknown> | null> {
@@ -67,13 +73,14 @@ export class ControllerKeyService {
     return result !== null;
   }
 
-  private mapKey(key: Record<string, unknown>): Record<string, unknown> {
+  private mapKey(key: Record<string, unknown>, rawKey?: string | null): Record<string, unknown> {
     return {
       id: (key._id as mongoose.Types.ObjectId).toString(),
       name: key.name,
       type: key.type,
       keyPrefix: key.keyPrefix,
       status: key.status,
+      rawKey: rawKey ?? null,
       lastUsedAt: key.lastUsedAt ? (key.lastUsedAt as Date).toISOString() : null,
       createdAt: (key.createdAt as Date).toISOString(),
       updatedAt: (key.updatedAt as Date).toISOString(),
