@@ -187,11 +187,11 @@ export class ACPSessionManager {
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: 'output' as const,
-      type,
+      type: type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
       content: rawContent,
     });
 
-    const doc = acpMessage.toObject();
+    const doc = acpMessage.toObject() as Record<string, unknown>;
     await this.publishMessage(sessionId, {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'output',

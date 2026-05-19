@@ -1,4 +1,5 @@
 import type { ContentChunk } from '@agentclientprotocol/sdk';
+import AcpCard from './AcpCard';
 
 interface ThoughtBlockProps {
   chunks: ContentChunk[];
@@ -12,19 +13,21 @@ export default function ThoughtBlock({ chunks, createdAt }: ThoughtBlockProps) {
 
   if (!text) return null;
 
+  const summary = text.length > 60 ? text.slice(0, 60) + '...' : text;
+
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[70%] rounded-lg bg-gray-200 border border-gray-300 px-4 py-3">
-        <div className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
-          Thinking
-        </div>
-        <div className="font-mono text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
-          {text}
-        </div>
-        <div className="mt-2 text-xs text-gray-500">
-          {createdAt ? new Date(createdAt).toLocaleTimeString() : ''}
-        </div>
+    <AcpCard
+      title="Thinking"
+      summary={summary}
+      defaultCollapsed={true}
+      color="gray"
+    >
+      <div className="font-mono text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+        {text}
       </div>
-    </div>
+      <div className="mt-2 text-xs text-gray-500">
+        {createdAt ? new Date(createdAt).toLocaleTimeString() : ''}
+      </div>
+    </AcpCard>
   );
 }

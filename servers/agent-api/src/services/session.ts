@@ -72,14 +72,36 @@ export class SessionService {
   }
 
   async close(id: string, userId: string): Promise<boolean> {
-    return this.updateStatus(id, userId, 'ended');
+    const result = await Session.findOneAndUpdate(
+      { _id: id, userId },
+      { status: 'ended', endedAt: new Date() },
+    );
+    if (result) {
+      const redis = getRedisClient();
+      await redis.del(`session:${id}:status`);
+      // Notify controller-api to stop ACP session
+      await redis.publish('session:command', JSON.stringify({
+        type: 'acp:stop',
+        sessionId: id,
+        reason: 'user_close',
+      }));
+      return true;
+    }
+    return false;
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
+    // Notify controller-api to stop ACP session before deleting
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:stop',
+      sessionId: id,
+      reason: 'user_delete',
+    }));
+
     const result = await Session.findOneAndDelete({ _id: id, userId });
     if (result) {
       await AcpMessage.deleteMany({ sessionId: id });
-      const redis = getRedisClient();
       await redis.del(`session:${id}:status`);
       return true;
     }

@@ -44,12 +44,15 @@ export class SessionCommandService {
             controllerId?: string;
             serverType?: string;
             cwd?: string;
+            reason?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
             await this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string });
           } else if (command.type === 'acp:check' && command.requestId && command.controllerId) {
             await this.handleAcpCheck(command.requestId, command.controllerId);
+          } else if (command.type === 'acp:stop' && command.sessionId) {
+            await this.handleAcpStop(command.sessionId, command.reason || 'user_request');
           }
         } else if (channel === SESSION_MESSAGE_CHANNEL) {
           const data = JSON.parse(message) as {
@@ -135,19 +138,24 @@ export class SessionCommandService {
     const keyId = controller.keyId.toString();
     const socketId = await sessionService.getSocketId(keyId);
     if (!socketId) {
-      console.error(`Controller not online for ACP check: ${controllerId}`);
+      console.error(`Controller online for ACP check: ${controllerId}`);
       return;
     }
 
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
-      console.error(`Socket not found for ACP check: ${socketId}`);
+      console.error(`Socket not found for ACP check: ${controllerId}`);
       return;
     }
 
     // Use the capability detector to send acp:check and wait for result
     const servers = await acpCapabilityDetector.detectCapabilities(socket, controllerId);
     console.log(`ACP capabilities detected for ${controllerId}:`, servers);
+  }
+
+  private async handleAcpStop(sessionId: string, reason: string): Promise<void> {
+    console.log(`[SessionCommand] Stopping ACP session ${sessionId}: reason=${reason}`);
+    await acpSessionManager.stopSession(sessionId, reason);
   }
 }
 

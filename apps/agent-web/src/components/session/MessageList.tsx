@@ -2,12 +2,14 @@ import { useRef, useEffect, useCallback, useMemo } from 'react';
 import type { SessionUpdate, ContentChunk } from '@agentclientprotocol/sdk';
 import MessageItem from './MessageItem';
 import ThoughtBlock from './ThoughtBlock';
+import ToolCallCard from './ToolCallCard';
 import AvailableCommandsCard from './AvailableCommandsCard';
 import UsageCard from './UsageCard';
 
 interface AcpMessage {
   id: string;
   sessionId: string;
+  messageId?: string | null;
   direction: string;
   type: string;
   content: string;
@@ -19,6 +21,7 @@ interface MessageGroup {
   type: 'message' | 'thought' | 'tool_call' | 'available_commands' | 'usage' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
+  messageId: string | null;
 }
 
 function parseSessionUpdate(content: string): SessionUpdate | null {
@@ -36,6 +39,8 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
   for (const message of messages) {
     const parsed = parseSessionUpdate(message.content);
     const sessionUpdateType = parsed?.sessionUpdate;
+    // Extract messageId from the parsed ACP ContentChunk
+    const chunkMessageId = (parsed as Record<string, unknown>)?.messageId as string | undefined;
 
     let groupType: MessageGroup['type'];
 
@@ -53,20 +58,22 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       groupType = 'unknown';
     }
 
-    // Check if we should continue the current group
+    // Only continue current group if type matches AND messageId matches (for message/thought)
     const shouldContinue =
       currentGroup &&
       currentGroup.type === groupType &&
-      (groupType === 'message' || groupType === 'thought');
+      (groupType === 'message' || groupType === 'thought') &&
+      chunkMessageId &&
+      currentGroup.messageId === chunkMessageId;
 
     if (shouldContinue) {
       currentGroup!.messages.push(message);
     } else {
-      // Start a new group
       currentGroup = {
         type: groupType,
         messages: [message],
         parsed,
+        messageId: chunkMessageId || null,
       };
       groups.push(currentGroup);
     }
@@ -175,8 +182,14 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     data={group.parsed}
                   />
                 ) : null;
-              case 'message':
               case 'tool_call':
+                return (
+                  <ToolCallCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                  />
+                );
+              case 'message':
               case 'unknown':
               default:
                 return group.messages.map((message) => (

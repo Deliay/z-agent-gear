@@ -1,5 +1,6 @@
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import bcrypt from 'bcryptjs';
+import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
@@ -140,7 +141,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('acp:message', async (payload: { sessionId: string; message: Record<string, unknown> }) => {
       if (!authenticated) return;
       try {
-        await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message);
+        await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message as SessionUpdate);
       } catch (err) {
         console.error(`ACP message error for session ${payload.sessionId}:`, err);
       }
