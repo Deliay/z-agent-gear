@@ -128,25 +128,25 @@ export class ACPSessionManager {
 
   async handleControllerMessage(sessionId: string, message: {
     type: string;
-    content: string;
+    content?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
-    // Save output message to database
+    const content = message.content ?? (message.metadata ? JSON.stringify(message.metadata) : '');
+
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: 'output' as const,
       type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
-      content: message.content,
+      content,
       metadata: message.metadata,
     });
 
     const doc = acpMessage.toObject();
-    // Publish message to Redis
     await this.publishMessage(sessionId, {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'output',
       type: message.type,
-      content: message.content,
+      content,
       metadata: message.metadata || null,
       createdAt: (doc.createdAt as Date).toISOString(),
     });

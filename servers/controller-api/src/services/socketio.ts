@@ -90,26 +90,34 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
     socket.on('heartbeat', async () => {
       if (!authenticated || !socket.data.keyId) return;
-      await sessionService.refreshSession(socket.data.keyId);
-      await sessionService.updateHeartbeat(socket.data.keyId);
+      try {
+        await sessionService.refreshSession(socket.data.keyId);
+        await sessionService.updateHeartbeat(socket.data.keyId);
 
-      await Controller.updateOne(
-        { keyId: socket.data.keyId },
-        { lastHeartbeatAt: new Date(), lastIp: socket.data.lastIp },
-      );
+        await Controller.updateOne(
+          { keyId: socket.data.keyId },
+          { lastHeartbeatAt: new Date(), lastIp: socket.data.lastIp },
+        );
+      } catch (err) {
+        console.error('Heartbeat error:', err);
+      }
     });
 
     socket.on('unregister', async (payload: { reason: string }) => {
       if (!authenticated || !socket.data.keyId) return;
 
-      const { keyId } = socket.data;
+      try {
+        const { keyId } = socket.data;
 
-      await Controller.deleteOne({ keyId });
-      await ControllerKey.deleteOne({ _id: keyId });
-      await sessionService.cleanupKey(keyId);
+        await Controller.deleteOne({ keyId });
+        await ControllerKey.deleteOne({ _id: keyId });
+        await sessionService.cleanupKey(keyId);
 
-      socket.emit('unregistered');
-      socket.disconnect(true);
+        socket.emit('unregistered');
+        socket.disconnect(true);
+      } catch (err) {
+        console.error('Unregister error:', err);
+      }
     });
 
     // ACP events
@@ -131,19 +139,31 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
     socket.on('acp:message', async (payload: { sessionId: string; message: { type: string; content: string; metadata?: Record<string, unknown> } }) => {
       if (!authenticated) return;
-      await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message);
+      try {
+        await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message);
+      } catch (err) {
+        console.error(`ACP message error for session ${payload.sessionId}:`, err);
+      }
     });
 
     socket.on('acp:stopped', async (payload: { sessionId: string; reason: string; exitCode?: number }) => {
       if (!authenticated) return;
-      await acpSessionManager.handleControllerStopped(payload.sessionId, payload.reason, payload.exitCode);
+      try {
+        await acpSessionManager.handleControllerStopped(payload.sessionId, payload.reason, payload.exitCode);
+      } catch (err) {
+        console.error(`ACP stopped error for session ${payload.sessionId}:`, err);
+      }
     });
 
     socket.on('disconnect', async () => {
-      if (socket.data.keyId) {
-        await sessionService.removeSession(socket.data.keyId);
+      try {
+        if (socket.data.keyId) {
+          await sessionService.removeSession(socket.data.keyId);
+        }
+        await acpSessionManager.handleSocketDisconnect(socket.id);
+      } catch (err) {
+        console.error('Disconnect error:', err);
       }
-      await acpSessionManager.handleSocketDisconnect(socket.id);
     });
   });
 }
