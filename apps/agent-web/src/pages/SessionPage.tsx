@@ -76,7 +76,9 @@ export default function SessionPage() {
   useEffect(() => {
     if (!id) return;
 
-    const eventSource = new EventSource(`/api/session/${id}/stream`);
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const token = localStorage.getItem('auth_token') || '';
+    const eventSource = new EventSource(`${apiBase}/api/session/${id}/stream?token=${encodeURIComponent(token)}`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);

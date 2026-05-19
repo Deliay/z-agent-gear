@@ -27,7 +27,9 @@ export function useSessionStream({
   useEffect(() => {
     if (!sessionId) return;
 
-    const eventSource = new EventSource(`/api/session/${sessionId}/stream`);
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const token = localStorage.getItem('auth_token') || '';
+    const eventSource = new EventSource(`${apiBase}/api/session/${sessionId}/stream?token=${encodeURIComponent(token)}`);
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {

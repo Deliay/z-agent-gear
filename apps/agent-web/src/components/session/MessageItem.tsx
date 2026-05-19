@@ -20,6 +20,8 @@ interface MessageItemProps {
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
 
+  const metadata = message.metadata ? (() => { try { return JSON.parse(message.metadata); } catch { return null; } })() : null;
+
   const getMessageStyle = (type: string) => {
     switch (type) {
       case 'text':
@@ -34,6 +36,8 @@ export default function MessageItem({ message }: MessageItemProps) {
         return 'bg-yellow-100 text-yellow-900 border border-yellow-200';
       case 'error':
         return 'bg-red-100 text-red-900 border border-red-200';
+      case 'image':
+        return 'bg-indigo-100 text-indigo-900 border border-indigo-200';
       default:
         return 'bg-gray-100 text-gray-900 border border-gray-200';
     }
@@ -42,13 +46,15 @@ export default function MessageItem({ message }: MessageItemProps) {
   const getTypeLabel = (type: string) => {
     switch (type) {
       case 'tool_call':
-        return 'Tool Call';
+        return metadata?.toolName ? `Tool Call: ${metadata.toolName}` : 'Tool Call';
       case 'tool_result':
         return 'Tool Result';
       case 'plan':
         return 'Plan';
       case 'error':
         return 'Error';
+      case 'image':
+        return 'Image';
       default:
         return null;
     }
@@ -63,7 +69,13 @@ export default function MessageItem({ message }: MessageItemProps) {
           <div className="mb-1 text-xs font-medium opacity-75">{typeLabel}</div>
         )}
         <div className="prose prose-sm max-w-none break-words">
-          {isUser ? (
+          {message.type === 'image' ? (
+            <img
+              src={message.content.startsWith('data:') || message.content.startsWith('http') ? message.content : `data:image/png;base64,${message.content}`}
+              alt="ACP output"
+              className="max-h-64 rounded"
+            />
+          ) : isUser ? (
             <div className="whitespace-pre-wrap">{message.content}</div>
           ) : (
             <Markdown
