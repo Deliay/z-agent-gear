@@ -220,10 +220,13 @@ describe('Controller API ACP WebSocket', () => {
 
       await new Promise((r) => setTimeout(r, 300));
 
-      // Controller sends output message
+      // Controller sends output message (ACP SDK format)
       client.emit('acp:message', {
         sessionId,
-        message: { type: 'text', content: 'Hello from controller' },
+        message: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Hello from controller' },
+        },
       });
 
       await new Promise((r) => setTimeout(r, 500));
@@ -241,8 +244,12 @@ describe('Controller API ACP WebSocket', () => {
       const messages = msgBody.data.sessionMessages;
       expect(messages.length).toBeGreaterThanOrEqual(1);
 
-      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output' && m.content === 'Hello from controller');
+      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output');
       expect(outputMsg).toBeDefined();
+      // Content is stored as raw ACP SessionUpdate JSON
+      const parsed = JSON.parse(outputMsg.content);
+      expect(parsed.sessionUpdate).toBe('agent_message_chunk');
+      expect(parsed.content.text).toBe('Hello from controller');
 
       client.disconnect();
     });

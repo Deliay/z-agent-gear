@@ -666,6 +666,7 @@ describe('Session WebSocket ACP Events', () => {
       );
       const msgBody = await msgRes.json();
       expect(msgBody.data.sendSessionMessage.direction).toBe('input');
+      // agent-api stores raw content; ACP wrapping happens in controller-api
       expect(msgBody.data.sendSessionMessage.content).toBe('Hello agent');
 
       // Fake controller receives the message
@@ -673,10 +674,13 @@ describe('Session WebSocket ACP Events', () => {
       expect(msgData.sessionId).toBe(sessionId);
       expect(msgData.message.content).toBe('Hello agent');
 
-      // Simulate controller sending output back
+      // Simulate controller sending output back (ACP SDK format)
       client.emit('acp:message', {
         sessionId,
-        message: { type: 'text', content: 'Hello human' },
+        message: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Hello human' },
+        },
       });
 
       await new Promise((r) => setTimeout(r, 500));
@@ -691,10 +695,14 @@ describe('Session WebSocket ACP Events', () => {
       const messages = messagesBody.data.sessionMessages;
       expect(messages.length).toBeGreaterThanOrEqual(2);
 
-      const inputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'input' && m.content === 'Hello agent');
-      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output' && m.content === 'Hello human');
+      const inputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'input');
+      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output');
       expect(inputMsg).toBeDefined();
       expect(outputMsg).toBeDefined();
+      // Content is stored as raw ACP SessionUpdate JSON
+      const parsedOutput = JSON.parse(outputMsg.content);
+      expect(parsedOutput.sessionUpdate).toBe('agent_message_chunk');
+      expect(parsedOutput.content.text).toBe('Hello human');
 
       client.disconnect();
     });

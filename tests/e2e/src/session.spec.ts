@@ -56,6 +56,13 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       reject(new Error('Timeout registering controller'));
     }, 10000);
 
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
       resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });
@@ -141,7 +148,8 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
 
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
@@ -159,7 +167,8 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -183,7 +192,8 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
@@ -205,11 +215,12 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
-    const statusBadge = page.locator('span.rounded-full');
+    const statusBadge = page.locator('.px-2.py-1.text-xs.font-medium.rounded-full');
     await expect(statusBadge).toBeVisible();
     const statusText = await statusBadge.textContent();
     expect(['creating', 'connecting', 'running']).toContain(statusText);
@@ -228,12 +239,13 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('span.rounded-full')).toContainText('ended', { timeout: 5000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toContainText('ended', { timeout: 5000 });
     await expect(page.locator('textarea')).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
 
@@ -251,7 +263,8 @@ test.describe('Session E2E', () => {
 
     await page.getByRole('button', { name: 'New Session' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await page.locator('input[name="acp-server"]').first().check({ timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('input[name="acp-server"]').first().check();
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 

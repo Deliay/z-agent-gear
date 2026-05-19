@@ -85,7 +85,10 @@ export class ACPSessionManager {
             console.log(`[ACP session] Session ${sessionId} is now running`);
             resolve({ success: true, externalSessionId: payload.externalSessionId });
           } else {
-            await this.cleanupFailedSession(sessionId, statusAtStart);
+            // Controller explicitly reported failure — keep session with 'ended' status
+            await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
+            await this.publishStatus(sessionId, 'ended');
+            console.log(`[ACP session] Session ${sessionId} ended by controller: ${payload.error}`);
             resolve({ success: false, error: payload.error });
           }
         });

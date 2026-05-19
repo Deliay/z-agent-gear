@@ -42,6 +42,15 @@ export function registerController(rawKey: string): Promise<FakeController> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, { transports: ['websocket'], reconnection: false, forceNew: true });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
+
+    // Handle acp:check - respond with available ACP servers
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
       resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), socket: client });

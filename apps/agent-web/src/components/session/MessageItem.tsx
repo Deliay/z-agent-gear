@@ -28,7 +28,6 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (acpUpdate.sessionUpdate) {
       case 'agent_message_chunk':
       case 'user_message_chunk':
-      case 'agent_thought_chunk':
         return 'text';
       case 'tool_call':
         return 'tool_call';
@@ -46,7 +45,6 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (acpUpdate.sessionUpdate) {
       case 'agent_message_chunk':
       case 'user_message_chunk':
-      case 'agent_thought_chunk':
         return acpUpdate.content.type === 'text' ? acpUpdate.content.text : '';
       case 'tool_call':
         return acpUpdate.title;

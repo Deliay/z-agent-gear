@@ -33,7 +33,7 @@ test.describe('Session Chat', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('running', { timeout: 10000 });
 
     // Type and send a message
     const textarea = page.locator('textarea');
@@ -75,7 +75,7 @@ test.describe('Session Chat', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('running', { timeout: 10000 });
 
     const textarea = page.locator('textarea');
     await textarea.fill('Test message');

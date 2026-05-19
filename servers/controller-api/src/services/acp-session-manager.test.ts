@@ -130,9 +130,9 @@ describe('ACPSessionManager', () => {
 
       const result = await resultPromise;
       expect(result.success).toBe(false);
-      expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
-      expect(Session.findByIdAndDelete).toHaveBeenCalledWith('sess-1');
-      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"removed"'));
+      // Controller explicitly reported failure — session kept with 'ended' status
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'ended', endedAt: expect.any(Date) });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"ended"'));
     });
 
     it('should delete session on timeout for connecting session', async () => {

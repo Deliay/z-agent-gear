@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { registerUser, createControllerKey, registerController, loginViaUI, createSession } from './helpers';
 
+const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
+
 test.describe('ACP Message Rendering', () => {
   test('should render text messages', async ({ page }) => {
     const { token, username } = await registerUser(page);
@@ -8,15 +10,19 @@ test.describe('ACP Message Rendering', () => {
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
       setTimeout(() => {
         socket.emit('acp:message', {
           sessionId: data.sessionId,
-          message: { type: 'text', content: 'Hello from agent!' },
-        });
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
+          message: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Hello from agent!' },
+          },
         });
       }, 300);
     });
@@ -24,7 +30,7 @@ test.describe('ACP Message Rendering', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
     await expect(page.getByText('Hello from agent!')).toBeVisible({ timeout: 5000 });
     disconnect();
@@ -36,15 +42,20 @@ test.describe('ACP Message Rendering', () => {
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
       setTimeout(() => {
         socket.emit('acp:message', {
           sessionId: data.sessionId,
-          message: { type: 'tool_call', content: 'Reading file...', metadata: { toolName: 'read_file' } },
-        });
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
+          message: {
+            sessionUpdate: 'tool_call',
+            title: 'read_file',
+            toolCallId: `tc_${Date.now()}`,
+          },
         });
       }, 300);
     });
@@ -52,9 +63,8 @@ test.describe('ACP Message Rendering', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
-    // Should show "Tool Call: read_file"
     await expect(page.getByText('Tool Call: read_file')).toBeVisible({ timeout: 5000 });
     disconnect();
   });
@@ -65,15 +75,19 @@ test.describe('ACP Message Rendering', () => {
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
       setTimeout(() => {
         socket.emit('acp:message', {
           sessionId: data.sessionId,
-          message: { type: 'error', content: 'Something went wrong' },
-        });
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
+          message: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Something went wrong' },
+          },
         });
       }, 300);
     });
@@ -81,10 +95,9 @@ test.describe('ACP Message Rendering', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
-    await expect(page.getByText('Error')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Something went wrong')).toBeVisible();
+    await expect(page.getByText('Something went wrong')).toBeVisible({ timeout: 5000 });
     disconnect();
   });
 
@@ -94,15 +107,19 @@ test.describe('ACP Message Rendering', () => {
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
       setTimeout(() => {
         socket.emit('acp:message', {
           sessionId: data.sessionId,
-          message: { type: 'text', content: 'Here is code:\n\n```typescript\nconst x = 1;\n```' },
-        });
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
+          message: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Here is code:\n\n```typescript\nconst x = 1;\n```' },
+          },
         });
       }, 300);
     });
@@ -110,10 +127,9 @@ test.describe('ACP Message Rendering', () => {
     await loginViaUI(page, username);
     const sessionId = await createSession(page, controllerId, token);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('span.rounded-full')).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
     await expect(page.getByText('Here is code:')).toBeVisible({ timeout: 5000 });
-    // Code block should be rendered with syntax highlighting
     await expect(page.locator('pre, code').first()).toBeVisible();
     disconnect();
   });
