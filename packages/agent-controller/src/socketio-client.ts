@@ -30,7 +30,7 @@ interface AcpStartPayload {
   sessionId: string;
   serverType: string;
   cwd: string;
-  mcpServers?: Array<{ name: string; command: string; args?: string[] }>;
+  mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
 }
 
 interface AcpMessagePayload {
@@ -114,17 +114,39 @@ export function connectToServer(
         sessionId: data.sessionId,
         controllerId: '',
         cwd: data.cwd,
+        mcpServers: data.mcpServers,
       });
 
       acpBridges.set(data.sessionId, bridge);
-      bridge.start();
 
-      // Send success response
-      socket.emit('acp:start:result', {
-        requestId: data.requestId,
-        sessionId: data.sessionId,
-        success: true,
-      });
+      const onInitialized = (payload: { sessionId: string; acpSessionId: string }) => {
+        if (payload.sessionId !== data.sessionId) return;
+        socket.off('acp:initialized', onInitialized);
+        socket.off('acp:stopped', onStopped);
+        socket.emit('acp:start:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: true,
+        });
+      };
+
+      const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
+        if (payload.sessionId !== data.sessionId) return;
+        socket.off('acp:initialized', onInitialized);
+        socket.off('acp:stopped', onStopped);
+        acpBridges.delete(data.sessionId);
+        socket.emit('acp:start:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: false,
+          error: payload.error ?? `ACP process stopped during initialization: ${payload.reason}`,
+        });
+      };
+
+      socket.on('acp:initialized', onInitialized);
+      socket.on('acp:stopped', onStopped);
+
+      bridge.start();
     } catch (error) {
       socket.emit('acp:start:result', {
         requestId: data.requestId,
