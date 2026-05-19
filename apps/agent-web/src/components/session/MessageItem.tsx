@@ -2,6 +2,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import type { SessionUpdate } from '@agentclientprotocol/sdk';
 
 interface AcpMessage {
   id: string;
@@ -20,7 +21,50 @@ interface MessageItemProps {
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
 
-  const metadata = message.metadata ? (() => { try { return JSON.parse(message.metadata); } catch { return null; } })() : null;
+  const acpUpdate = (() => { try { return JSON.parse(message.content) as SessionUpdate; } catch { return null; } })();
+
+  const displayType = (() => {
+    if (!acpUpdate) return message.type;
+    switch (acpUpdate.sessionUpdate) {
+      case 'agent_message_chunk':
+      case 'user_message_chunk':
+      case 'agent_thought_chunk':
+        return 'text';
+      case 'tool_call':
+        return 'tool_call';
+      case 'tool_call_update':
+        return 'tool_call';
+      case 'plan':
+        return 'plan';
+      default:
+        return message.type;
+    }
+  })();
+
+  const displayContent = (() => {
+    if (!acpUpdate) return message.content;
+    switch (acpUpdate.sessionUpdate) {
+      case 'agent_message_chunk':
+      case 'user_message_chunk':
+      case 'agent_thought_chunk':
+        return acpUpdate.content.type === 'text' ? acpUpdate.content.text : '';
+      case 'tool_call':
+        return acpUpdate.title;
+      case 'tool_call_update':
+        return acpUpdate.title || '';
+      case 'plan':
+        return acpUpdate.entries?.map(e => e.content).join('\n') || '';
+      default:
+        return message.content;
+    }
+  })();
+
+  const toolTitle = (() => {
+    if (!acpUpdate) return null;
+    if (acpUpdate.sessionUpdate === 'tool_call') return acpUpdate.title;
+    if (acpUpdate.sessionUpdate === 'tool_call_update') return acpUpdate.title;
+    return null;
+  })();
 
   const getMessageStyle = (type: string) => {
     switch (type) {
@@ -46,9 +90,7 @@ export default function MessageItem({ message }: MessageItemProps) {
   const getTypeLabel = (type: string) => {
     switch (type) {
       case 'tool_call':
-        return metadata?.content?.toolName ? `Tool Call: ${metadata.content.toolName}` : 'Tool Call';
-      case 'tool_result':
-        return 'Tool Result';
+        return toolTitle ? `Tool Call: ${toolTitle}` : 'Tool Call';
       case 'plan':
         return 'Plan';
       case 'error':
@@ -60,23 +102,23 @@ export default function MessageItem({ message }: MessageItemProps) {
     }
   };
 
-  const typeLabel = getTypeLabel(message.type);
+  const typeLabel = getTypeLabel(displayType);
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[70%] rounded-lg px-4 py-2 ${getMessageStyle(message.type)}`}>
+      <div className={`max-w-[70%] rounded-lg px-4 py-2 ${getMessageStyle(displayType)}`}>
         {typeLabel && (
           <div className="mb-1 text-xs font-medium opacity-75">{typeLabel}</div>
         )}
         <div className="prose prose-sm max-w-none break-words">
-          {message.type === 'image' ? (
+          {displayType === 'image' ? (
             <img
-              src={message.content.startsWith('data:') || message.content.startsWith('http') ? message.content : `data:image/png;base64,${message.content}`}
+              src={displayContent.startsWith('data:') || displayContent.startsWith('http') ? displayContent : `data:image/png;base64,${displayContent}`}
               alt="ACP output"
               className="max-h-64 rounded"
             />
           ) : isUser ? (
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            <div className="whitespace-pre-wrap">{displayContent}</div>
           ) : (
             <Markdown
               remarkPlugins={[remarkGfm]}
@@ -123,7 +165,7 @@ export default function MessageItem({ message }: MessageItemProps) {
                 },
               }}
             >
-              {message.content}
+              {displayContent}
             </Markdown>
           )}
         </div>

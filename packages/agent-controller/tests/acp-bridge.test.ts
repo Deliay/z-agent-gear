@@ -288,7 +288,7 @@ describe('AcpWebSocketBridge', () => {
       vi.advanceTimersByTime(50);
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: { sessionUpdate: 'agent_message_chunk', content: { text: 'Hi agent' } },
+        message: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi agent' } },
       });
       vi.useRealTimers();
     });
@@ -308,7 +308,7 @@ describe('AcpWebSocketBridge', () => {
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: { sessionUpdate: 'agent_message_chunk', content: { text: 'searching' } },
+        message: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'searching' } },
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',

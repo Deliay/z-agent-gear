@@ -231,9 +231,10 @@ describe('ACPSessionManager', () => {
 
       expect(result).toBe(true);
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
-        sessionId: 'sess-1', direction: 'input', type: 'text', content: 'Hello',
+        sessionId: 'sess-1', direction: 'input', type: 'text',
+        content: JSON.stringify({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Hello' } }),
       }));
-      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"content":"Hello"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"input"'));
       expect(socket.emit).toHaveBeenCalledWith('acp:message', expect.objectContaining({
         sessionId: 'sess-1',
         message: { type: 'text', content: 'Hello' },
@@ -250,10 +251,12 @@ describe('ACPSessionManager', () => {
     it('should save output message and publish to Redis', async () => {
       vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
 
-      await manager.handleControllerMessage('sess-1', { sessionUpdate: 'agent_message_chunk', content: { text: 'Response' } });
+      const rawUpdate = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Response' } };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
 
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
-        sessionId: 'sess-1', direction: 'output', type: 'text', content: 'Response',
+        sessionId: 'sess-1', direction: 'output', type: 'text',
+        content: JSON.stringify(rawUpdate),
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"output"'));
     });

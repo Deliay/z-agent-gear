@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Socket } from 'socket.io-client';
+import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { AcpSpawner, type AcpProcessOptions } from './spawner.js';
 
 const ACP_PROTOCOL_VERSION = 1;
@@ -254,17 +255,25 @@ export class AcpWebSocketBridge extends EventEmitter {
         break;
       case 'tool_call':
         this.flushTextBuffer();
-        this.sendAcpUpdate(update);
+        this.sendAcpUpdate(update as unknown as SessionUpdate);
+        break;
+      case 'tool_call_update':
+        this.flushTextBuffer();
+        this.sendAcpUpdate(update as unknown as SessionUpdate);
         break;
       case 'tool_result':
         this.flushTextBuffer();
-        this.sendAcpUpdate(update);
+        this.sendAcpUpdate(update as unknown as SessionUpdate);
+        break;
+      case 'plan':
+        this.flushTextBuffer();
+        this.sendAcpUpdate(update as unknown as SessionUpdate);
         break;
       case 'user_message_chunk':
         break;
       default:
         this.flushTextBuffer();
-        this.sendAcpUpdate(update);
+        this.sendAcpUpdate(update as unknown as SessionUpdate);
         break;
     }
   }
@@ -284,15 +293,16 @@ export class AcpWebSocketBridge extends EventEmitter {
       this.textChunkTimer = null;
     }
     if (this.textChunkBuffer) {
-      this.sendAcpUpdate({
+      const update: SessionUpdate = {
         sessionUpdate: 'agent_message_chunk',
-        content: { text: this.textChunkBuffer },
-      });
+        content: { type: 'text', text: this.textChunkBuffer },
+      };
+      this.sendAcpUpdate(update);
       this.textChunkBuffer = '';
     }
   }
 
-  private sendAcpUpdate(update: Record<string, unknown>): void {
+  private sendAcpUpdate(update: SessionUpdate): void {
     this.socket.emit('acp:message', {
       sessionId: this.sessionId,
       message: update,

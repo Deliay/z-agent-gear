@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import type { Socket } from 'socket.io';
+import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
@@ -123,12 +124,17 @@ export class ACPSessionManager {
       return false;
     }
 
+    const rawContent = JSON.stringify({
+      sessionUpdate: 'user_message_chunk' as const,
+      content: { type: 'text' as const, text: message.content },
+    });
+
     // Save input message to database
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: 'input' as const,
-      type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
-      content: message.content,
+      type: 'text',
+      content: rawContent,
     });
 
     const doc = acpMessage.toObject();
@@ -136,8 +142,8 @@ export class ACPSessionManager {
     await this.publishMessage(sessionId, {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'input',
-      type: message.type,
-      content: message.content,
+      type: 'text',
+      content: rawContent,
       metadata: null,
       createdAt: (doc.createdAt as Date).toISOString(),
     });
@@ -151,29 +157,27 @@ export class ACPSessionManager {
     return true;
   }
 
-  async handleControllerMessage(sessionId: string, message: Record<string, unknown>): Promise<void> {
-    const sessionUpdate = message.sessionUpdate as string;
-    const content = message.content as Record<string, unknown> | undefined;
+  async handleControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
+    const rawContent = JSON.stringify(message);
 
     let type: string;
-    let textContent: string;
-
-    switch (sessionUpdate) {
+    switch (message.sessionUpdate) {
       case 'agent_message_chunk':
+      case 'user_message_chunk':
+      case 'agent_thought_chunk':
         type = 'text';
-        textContent = (content?.text as string) || '';
         break;
       case 'tool_call':
         type = 'tool_call';
-        textContent = (content?.toolName as string) || '';
         break;
-      case 'tool_result':
-        type = 'tool_result';
-        textContent = content ? JSON.stringify(content) : '';
+      case 'tool_call_update':
+        type = 'tool_call';
+        break;
+      case 'plan':
+        type = 'plan';
         break;
       default:
         type = 'text';
-        textContent = content ? JSON.stringify(content) : JSON.stringify(message);
         break;
     }
 
@@ -181,8 +185,7 @@ export class ACPSessionManager {
       sessionId,
       direction: 'output' as const,
       type,
-      content: textContent,
-      metadata: message,
+      content: rawContent,
     });
 
     const doc = acpMessage.toObject();
@@ -190,8 +193,8 @@ export class ACPSessionManager {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'output',
       type,
-      content: textContent,
-      metadata: typeof doc.metadata === 'string' ? doc.metadata : (doc.metadata ? JSON.stringify(doc.metadata) : null),
+      content: rawContent,
+      metadata: null,
       createdAt: (doc.createdAt as Date).toISOString(),
     });
   }
