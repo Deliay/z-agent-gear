@@ -1,10 +1,24 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useParams } from 'react-router-dom';
+import { useQuery } from '@apollo/client/react';
+import { GET_SESSIONS } from '../graphql/queries';
+import type { GetSessionsQuery } from '../graphql/types';
 
 interface SidebarProps {
   username: string;
 }
 
+const statusColors: Record<string, string> = {
+  running: 'bg-green-500',
+  connecting: 'bg-yellow-500',
+  creating: 'bg-yellow-500',
+  ended: 'bg-gray-500',
+};
+
 export default function Sidebar({ username }: SidebarProps) {
+  const { id: activeId } = useParams<{ id: string }>();
+  const { data } = useQuery<GetSessionsQuery>(GET_SESSIONS);
+  const sessions = data?.sessions ?? [];
+
   return (
     <nav className="flex h-screen flex-col bg-gray-900 text-white" aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
@@ -17,6 +31,25 @@ export default function Sidebar({ username }: SidebarProps) {
             新建
           </NavLink>
         </div>
+        <ul className="space-y-1">
+          {sessions.map((session) => (
+            <li key={session.id}>
+              <NavLink
+                to={`/sessions/${session.id}`}
+                className={`flex items-center gap-2 rounded px-3 py-2 text-sm transition-colors ${
+                  activeId === session.id
+                    ? 'bg-gray-700 text-white'
+                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                }`}
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                <span className="min-w-0 truncate">
+                  {session.controllerName || session.acpServerType}
+                </span>
+              </NavLink>
+            </li>
+          ))}
+        </ul>
       </div>
       <div className="sticky bottom-0 border-t border-gray-700 p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">

@@ -156,7 +156,9 @@ export class ACPSessionManager {
     content?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
-    const content = message.content || (message.metadata ? JSON.stringify(message.metadata) : JSON.stringify(message));
+    const content = message.content != null && message.content !== ''
+      ? message.content
+      : (message.metadata ? JSON.stringify(message.metadata) : JSON.stringify({ type: message.type }));
 
     const acpMessage = await AcpMessage.create({
       sessionId,

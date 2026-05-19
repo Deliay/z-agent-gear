@@ -31,6 +31,7 @@ export class AcpWebSocketBridge extends EventEmitter {
   private pendingRequests = new Map<number, PendingRequest>();
   private requestIdCounter = 0;
   private inputQueue: Array<{ type: string; content: string }> = [];
+  private textChunkBuffer = '';
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -228,59 +229,92 @@ export class AcpWebSocketBridge extends EventEmitter {
     }
   }
 
+  private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
+
   private handleJsonRpcNotification(message: Record<string, unknown>): void {
     const method = message.method as string;
     const params = message.params as Record<string, unknown>;
 
     if (method === 'session/update') {
-      const acpMessage = this.convertSessionUpdateToAcpMessage(params);
-      if (acpMessage) {
-        this.socket.emit('acp:message', {
-          sessionId: this.sessionId,
-          message: acpMessage,
-        });
-      }
+      this.handleSessionUpdate(params);
     }
   }
 
-  private convertSessionUpdateToAcpMessage(params: Record<string, unknown>): Record<string, unknown> | null {
+  private handleSessionUpdate(params: Record<string, unknown>): void {
     const update = params.update as Record<string, unknown>;
-    if (!update) return null;
+    if (!update) return;
 
     const sessionUpdate = update.sessionUpdate as string;
     const content = update.content as Record<string, unknown>;
 
     switch (sessionUpdate) {
       case 'agent_message_chunk':
-        return {
-          type: 'text',
-          content: content?.text || '',
-          metadata: null,
-        };
+        this.textChunkBuffer += (content?.text as string) || '';
+        this.scheduleTextFlush();
+        break;
       case 'tool_call':
-        return {
+        this.flushTextBuffer();
+        this.sendAcpMessage({
           type: 'tool_call',
           content: content?.toolName || '',
           metadata: content,
-        };
+        });
+        break;
       case 'tool_result':
-        return {
+        this.flushTextBuffer();
+        this.sendAcpMessage({
           type: 'tool_result',
           content: JSON.stringify(content),
           metadata: content,
-        };
+        });
+        break;
       case 'user_message_chunk':
-        return null;
+        break;
       default:
-        return {
+        this.flushTextBuffer();
+        this.sendAcpMessage({
           type: 'text',
           content: JSON.stringify(content),
           metadata: null,
-        };
+        });
+        break;
     }
   }
 
+  private scheduleTextFlush(): void {
+    if (this.textChunkTimer) {
+      clearTimeout(this.textChunkTimer);
+    }
+    this.textChunkTimer = setTimeout(() => {
+      this.flushTextBuffer();
+    }, 50);
+  }
+
+  private flushTextBuffer(): void {
+    if (this.textChunkTimer) {
+      clearTimeout(this.textChunkTimer);
+      this.textChunkTimer = null;
+    }
+    if (this.textChunkBuffer) {
+      this.sendAcpMessage({
+        type: 'text',
+        content: this.textChunkBuffer,
+        metadata: null,
+      });
+      this.textChunkBuffer = '';
+    }
+  }
+
+  private sendAcpMessage(message: Record<string, unknown>): void {
+    this.socket.emit('acp:message', {
+      sessionId: this.sessionId,
+      message,
+    });
+  }
+
   private handleAcpExit(code: number | null, signal: string | null): void {
+    this.flushTextBuffer();
+
     let reason: string;
     if (signal === 'SIGTERM' || signal === 'SIGKILL') {
       reason = 'user_close';

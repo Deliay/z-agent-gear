@@ -270,25 +270,45 @@ describe('AcpWebSocketBridge', () => {
   });
 
   describe('message handling', () => {
-    it('should emit acp:message on agent_message_chunk', () => {
+    it('should buffer text chunks and flush after delay', async () => {
+      vi.useFakeTimers();
       mockSpawner.emit('message', {
         method: 'session/update',
         params: {
-          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'Hi agent' } },
+          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'Hi ' } },
         },
       });
+      mockSpawner.emit('message', {
+        method: 'session/update',
+        params: {
+          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'agent' } },
+        },
+      });
+      expect(mockSocket.emit).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(50);
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
         message: { type: 'text', content: 'Hi agent', metadata: null },
       });
+      vi.useRealTimers();
     });
 
-    it('should emit acp:message for tool_call', () => {
+    it('should flush text buffer on tool_call', () => {
+      mockSpawner.emit('message', {
+        method: 'session/update',
+        params: {
+          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'searching' } },
+        },
+      });
       mockSpawner.emit('message', {
         method: 'session/update',
         params: {
           update: { sessionUpdate: 'tool_call', content: { toolName: 'search' } },
         },
+      });
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
+        sessionId: 'sess-1',
+        message: { type: 'text', content: 'searching', metadata: null },
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
