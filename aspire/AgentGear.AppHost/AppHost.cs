@@ -20,4 +20,10 @@ var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
     .WithReference(agentApi)
     .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"));
 
+var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
+    .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
+    .WithExplicitStart()
+    .WaitFor(controllerApi);
+
 builder.Build().Run();

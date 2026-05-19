@@ -107,7 +107,7 @@ export function connectToServer(
   });
 
   socket.on('acp:start', (data: AcpStartPayload) => {
-    console.log(`ACP start requested for session ${data.sessionId}`);
+    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd}`);
     
     try {
       const bridge = new AcpWebSocketBridge(socket, {
@@ -121,8 +121,10 @@ export function connectToServer(
 
       const onInitialized = (payload: { sessionId: string; acpSessionId: string }) => {
         if (payload.sessionId !== data.sessionId) return;
-        socket.off('acp:initialized', onInitialized);
-        socket.off('acp:stopped', onStopped);
+        console.log(`[ACP ctrl] acp:initialized callback fired: sessionId=${payload.sessionId} acpSessionId=${payload.acpSessionId}`);
+        bridge.off('acp:initialized', onInitialized);
+        bridge.off('acp:stopped', onStopped);
+        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=true`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -132,9 +134,11 @@ export function connectToServer(
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
         if (payload.sessionId !== data.sessionId) return;
-        socket.off('acp:initialized', onInitialized);
-        socket.off('acp:stopped', onStopped);
+        console.log(`[ACP ctrl] acp:stopped callback fired: sessionId=${payload.sessionId} reason=${payload.reason} error=${payload.error}`);
+        bridge.off('acp:initialized', onInitialized);
+        bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
+        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -143,11 +147,13 @@ export function connectToServer(
         });
       };
 
-      socket.on('acp:initialized', onInitialized);
-      socket.on('acp:stopped', onStopped);
+      bridge.on('acp:initialized', onInitialized);
+      bridge.on('acp:stopped', onStopped);
 
+      console.log(`[ACP ctrl] calling bridge.start() for session ${data.sessionId}`);
       bridge.start();
     } catch (error) {
+      console.error(`[ACP ctrl] bridge.start() failed: ${(error as Error).message}`);
       socket.emit('acp:start:result', {
         requestId: data.requestId,
         sessionId: data.sessionId,

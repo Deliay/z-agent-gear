@@ -10,6 +10,7 @@ interface SSEConnection {
 }
 
 const connections = new Map<string, SSEConnection>();
+let globalStatusSubscriber: ReturnType<ReturnType<typeof getRedisClient>['duplicate']> | null = null;
 
 export class SessionSSEService {
   async addConnection(sessionId: string, userId: string, res: Response): Promise<void> {
@@ -32,6 +33,9 @@ export class SessionSSEService {
     const history = await sessionService.getMessages(sessionId, userId, 100);
     res.write(`data: ${JSON.stringify({ type: 'history', data: history })}\n\n`);
 
+    // Send current status
+    res.write(`data: ${JSON.stringify({ type: 'status', data: { sessionId, status: session.status } })}\n\n`);
+
     // Create connection
     const connectionId = `${sessionId}:${userId}`;
     const heartbeat = setInterval(() => {
@@ -45,16 +49,26 @@ export class SessionSSEService {
       heartbeat,
     });
 
-    // Subscribe to Redis channel
+    // Subscribe to global message channel and filter by sessionId
     const redis = getRedisClient();
     const subscriber = redis.duplicate();
-    await subscriber.subscribe(`session:${sessionId}:messages`);
+    await subscriber.subscribe('session:message');
 
     subscriber.on('message', (channel, message) => {
-      if (channel === `session:${sessionId}:messages`) {
-        res.write(`data: ${message}\n\n`);
+      if (channel === 'session:message') {
+        try {
+          const data = JSON.parse(message) as { sessionId: string; message: Record<string, unknown> };
+          if (data.sessionId === sessionId) {
+            res.write(`data: ${JSON.stringify({ type: 'message', data: data.message })}\n\n`);
+          }
+        } catch {
+          // ignore parse errors
+        }
       }
     });
+
+    // Ensure global status subscriber is running
+    this.ensureGlobalStatusSubscriber();
 
     // Clean up on connection close
     res.on('close', () => {
@@ -63,6 +77,30 @@ export class SessionSSEService {
       subscriber.quit();
       connections.delete(connectionId);
     });
+  }
+
+  private ensureGlobalStatusSubscriber(): void {
+    if (globalStatusSubscriber) return;
+
+    const redis = getRedisClient();
+    globalStatusSubscriber = redis.duplicate();
+    globalStatusSubscriber.subscribe('session:status');
+    globalStatusSubscriber.on('message', (_channel, message) => {
+      try {
+        const { sessionId, status } = JSON.parse(message) as { sessionId: string; status: string };
+        this.dispatchStatus(sessionId, status);
+      } catch {
+        // ignore parse errors
+      }
+    });
+  }
+
+  private dispatchStatus(sessionId: string, status: string): void {
+    if (status === 'removed') {
+      this.removeConnections(sessionId);
+      return;
+    }
+    this.broadcastStatus(sessionId, status);
   }
 
   broadcastMessage(sessionId: string, message: Record<string, unknown>): void {
@@ -87,6 +125,8 @@ export class SessionSSEService {
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         clearInterval(connection.heartbeat);
+        // Notify client before closing
+        connection.res.write(`data: ${JSON.stringify({ type: 'status', data: { sessionId, status: 'removed' } })}\n\n`);
         connection.res.end();
         connections.delete(key);
       }

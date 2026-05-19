@@ -116,6 +116,9 @@ describe('AcpWebSocketBridge', () => {
     });
 
     it('should emit acp:initialized after session/new response', async () => {
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
+
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
@@ -137,7 +140,7 @@ describe('AcpWebSocketBridge', () => {
 
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:initialized', {
+      expect(emitSpy).toHaveBeenCalledWith({
         sessionId: 'sess-1',
         acpSessionId: 'acp-sess-abc',
       });

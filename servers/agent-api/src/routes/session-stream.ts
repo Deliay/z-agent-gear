@@ -6,12 +6,15 @@ import { sessionSSEService } from '../services/session-sse.js';
 const router = Router();
 
 async function authenticateExpressUser(req: Request): Promise<{ id: string; username: string } | null> {
+  // Support both Authorization header and ?token= query param (for EventSource which cannot set headers)
+  let token: string | undefined;
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    return null;
+  if (header && header.startsWith('Bearer ')) {
+    token = header.slice(7);
+  } else if (req.query.token && typeof req.query.token === 'string') {
+    token = req.query.token;
   }
 
-  const token = header.slice(7);
   if (!token) {
     return null;
   }

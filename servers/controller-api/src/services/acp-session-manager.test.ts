@@ -3,12 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../models/session.js', () => ({
   Session: {
     findByIdAndUpdate: vi.fn(),
+    findByIdAndDelete: vi.fn(),
+    findById: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    }),
   },
 }));
 
 vi.mock('../models/acp-message.js', () => ({
   AcpMessage: {
     create: vi.fn(),
+    deleteMany: vi.fn(),
   },
 }));
 
@@ -65,13 +70,13 @@ describe('ACPSessionManager', () => {
   describe('startSession', () => {
     it('should update status to connecting and emit acp:start', async () => {
       const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
       const resultPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
       );
 
-      // Wait for async operations (findByIdAndUpdate + publishStatus) to complete
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({
           sessionId: 'sess-1',
@@ -83,7 +88,6 @@ describe('ACPSessionManager', () => {
       expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'connecting' });
       expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"connecting"'));
 
-      // Simulate controller response
       const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
       const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
 
@@ -99,9 +103,12 @@ describe('ACPSessionManager', () => {
       expect(result.externalSessionId).toBe('ext-123');
     });
 
-    it('should handle controller start failure', async () => {
+    it('should delete session on controller start failure for creating session', async () => {
       const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({} as never);
+      vi.mocked(Session.findByIdAndDelete).mockResolvedValue({} as never);
 
       const resultPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
@@ -123,23 +130,76 @@ describe('ACPSessionManager', () => {
 
       const result = await resultPromise;
       expect(result.success).toBe(false);
-      expect(result.error).toBe('OpenCode not found');
+      expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
+      expect(Session.findByIdAndDelete).toHaveBeenCalledWith('sess-1');
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"removed"'));
     });
 
-    it('should return timeout error when controller does not respond', async () => {
+    it('should delete session on timeout for connecting session', async () => {
       const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'connecting' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({} as never);
+      vi.mocked(Session.findByIdAndDelete).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      }, 1000);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('ACP start timeout');
+      expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
+      expect(Session.findByIdAndDelete).toHaveBeenCalledWith('sess-1');
+    }, 35000);
+
+    it('should mark as ended (not delete) when session was already running', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'running' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
       const resultPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
       );
 
-      // Wait for the start event to be emitted
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: false,
+        error: 'error',
+      });
+
+      await resultPromise;
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+      expect(Session.findByIdAndDelete).not.toHaveBeenCalled();
+    });
+
+    it('should return timeout error when controller does not respond', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({} as never);
+      vi.mocked(Session.findByIdAndDelete).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
       }, 1000);
 
-      // Don't trigger the result - wait for real timeout (30s)
       const result = await resultPromise;
       expect(result.success).toBe(false);
       expect(result.error).toBe('ACP start timeout');
@@ -150,9 +210,9 @@ describe('ACPSessionManager', () => {
     it('should create message, publish, and forward to controller', async () => {
       const socket = createMockSocket();
       vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
-      // Start a session first
       const startPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
       );
@@ -202,6 +262,7 @@ describe('ACPSessionManager', () => {
   describe('stopSession', () => {
     it('should send acp:stop, clean up mapping, and update status', async () => {
       const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
       const startPromise = manager.startSession(
@@ -242,6 +303,7 @@ describe('ACPSessionManager', () => {
   describe('handleSocketDisconnect', () => {
     it('should stop all sessions for the socket', async () => {
       const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
       const startPromise = manager.startSession(

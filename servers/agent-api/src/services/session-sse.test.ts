@@ -83,7 +83,7 @@ describe('SessionSSEService', () => {
         'Connection': 'keep-alive',
       }));
       expect(res.write).toHaveBeenCalledWith(expect.stringContaining('"type":"history"'));
-      expect(mockRedis._subscriber.subscribe).toHaveBeenCalledWith('session:sess-1:messages');
+      expect(mockRedis._subscriber.subscribe).toHaveBeenCalledWith('session:message');
     });
 
     it('should forward Redis messages to response', async () => {
@@ -95,13 +95,13 @@ describe('SessionSSEService', () => {
 
       await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
 
-      const msg = JSON.stringify({ type: 'message', data: { id: 'msg-1' } });
-      mockRedis._emitMessage('session:sess-1:messages', msg);
+      const msg = JSON.stringify({ sessionId: 'sess-1', message: { id: 'msg-1', direction: 'output', type: 'text', content: 'hello' } });
+      mockRedis._emitMessage('session:message', msg);
 
-      expect(res.write).toHaveBeenCalledWith(`data: ${msg}\n\n`);
+      expect(res.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'message', data: { id: 'msg-1', direction: 'output', type: 'text', content: 'hello' } })}\n\n`);
     });
 
-    it('should ignore messages from other channels', async () => {
+    it('should ignore messages from other sessions', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
       vi.mocked(sessionService.getMessages).mockResolvedValue([]);
       const mockRedis = createMockRedis();
@@ -111,7 +111,8 @@ describe('SessionSSEService', () => {
       await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
 
       const before = res._written.length;
-      mockRedis._emitMessage('session:sess-2:messages', 'other');
+      const msg = JSON.stringify({ sessionId: 'sess-other', message: { id: 'msg-1' } });
+      mockRedis._emitMessage('session:message', msg);
 
       expect(res._written.length).toBe(before);
     });

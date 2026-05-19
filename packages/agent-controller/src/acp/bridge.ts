@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import type { Socket } from 'socket.io-client';
 import { AcpSpawner, type AcpProcessOptions } from './spawner.js';
 
@@ -18,7 +19,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-export class AcpWebSocketBridge {
+export class AcpWebSocketBridge extends EventEmitter {
   private spawner: AcpSpawner;
   private socket: Socket;
   private sessionId: string;
@@ -32,6 +33,7 @@ export class AcpWebSocketBridge {
   private inputQueue: Array<{ type: string; content: string }> = [];
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
+    super();
     this.socket = socket;
     this.sessionId = options.sessionId;
     this.controllerId = options.controllerId;
@@ -56,6 +58,10 @@ export class AcpWebSocketBridge {
 
     this.spawner.on('error', (error: Error) => {
       console.error('ACP process error:', error);
+      this.emit('acp:stopped', {
+        sessionId: this.sessionId,
+        reason: 'error',
+      });
       this.socket.emit('acp:stopped', {
         sessionId: this.sessionId,
         reason: 'error',
@@ -87,7 +93,10 @@ export class AcpWebSocketBridge {
   }
 
   private async initialize(): Promise<void> {
+    const startTime = Date.now();
     try {
+      console.log(`[ACP bridge] Step 1/3: Sending initialize request for session ${this.sessionId}`);
+      const t1 = Date.now();
       const initResult = await this.sendRequest('initialize', {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: {
@@ -104,8 +113,10 @@ export class AcpWebSocketBridge {
         },
       });
 
-      console.log('ACP initialized:', initResult);
+      console.log(`[ACP bridge] Step 1/3 done in ${Date.now() - t1}ms. Response:`, initResult);
 
+      console.log(`[ACP bridge] Step 2/3: Sending session/new for cwd=${this.cwd}`);
+      const t2 = Date.now();
       const sessionResult = await this.sendRequest('session/new', {
         cwd: this.cwd,
         mcpServers: this.mcpServers ?? [],
@@ -114,16 +125,24 @@ export class AcpWebSocketBridge {
       this.acpSessionId = (sessionResult as { sessionId: string }).sessionId;
       this.initialized = true;
 
-      console.log(`ACP session created: ${this.acpSessionId}`);
+      console.log(`[ACP bridge] Step 2/3 done in ${Date.now() - t2}ms. ACP session created: ${this.acpSessionId}`);
+      console.log(`[ACP bridge] Step 3/3: Emitting acp:initialized for session ${this.sessionId}`);
 
-      this.socket.emit('acp:initialized', {
+      this.emit('acp:initialized', {
         sessionId: this.sessionId,
         acpSessionId: this.acpSessionId,
       });
 
+      console.log(`[ACP bridge] All steps completed in ${Date.now() - startTime}ms`);
+
       this.flushInputQueue();
     } catch (error) {
-      console.error('ACP initialization failed:', error);
+      console.error(`[ACP bridge] Initialization failed after ${Date.now() - startTime}ms for session ${this.sessionId}:`, error);
+      this.emit('acp:stopped', {
+        sessionId: this.sessionId,
+        reason: 'error',
+        error: (error as Error).message,
+      });
       this.socket.emit('acp:stopped', {
         sessionId: this.sessionId,
         reason: 'error',
@@ -278,6 +297,11 @@ export class AcpWebSocketBridge {
     this.pendingRequests.clear();
 
     this.socket.emit('acp:stopped', {
+      sessionId: this.sessionId,
+      reason,
+      exitCode: code,
+    });
+    this.emit('acp:stopped', {
       sessionId: this.sessionId,
       reason,
       exitCode: code,
