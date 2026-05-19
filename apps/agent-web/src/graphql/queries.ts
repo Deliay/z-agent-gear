@@ -67,6 +67,7 @@ export const GET_SESSIONS = gql`
       controllerName
       acpServerType
       status
+      title
       externalSessionId
       cwd
       createdAt
@@ -85,6 +86,7 @@ export const GET_SESSION = gql`
       controllerName
       acpServerType
       status
+      title
       externalSessionId
       cwd
       createdAt

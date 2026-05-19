@@ -133,6 +133,28 @@ export class SessionService {
       metadata: message.metadata,
     });
 
+    // Set session title from first user message
+    if (message.direction === 'input') {
+      const messageCount = await AcpMessage.countDocuments({ sessionId, direction: 'input' });
+      if (messageCount === 1) {
+        // First user message - extract text content as title
+        let title = message.content;
+        try {
+          const parsed = JSON.parse(message.content);
+          if (parsed.sessionUpdate === 'user_message_chunk' && parsed.content?.text) {
+            title = parsed.content.text;
+          }
+        } catch {
+          // use raw content
+        }
+        // Truncate to 50 chars
+        if (title.length > 50) {
+          title = title.slice(0, 50) + '...';
+        }
+        await Session.findByIdAndUpdate(sessionId, { title });
+      }
+    }
+
     const mappedMessage = this.mapMessage(acpMessage.toObject());
 
     // Publish to Redis for SSE
@@ -189,6 +211,7 @@ export class SessionService {
       controllerName: session.controllerName,
       acpServerType: session.acpServerType,
       status: session.status,
+      title: session.title || 'New Session',
       externalSessionId: session.externalSessionId || null,
       cwd: session.cwd || null,
       createdAt: (session.createdAt as Date).toISOString(),

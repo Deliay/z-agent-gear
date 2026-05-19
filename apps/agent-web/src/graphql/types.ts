@@ -65,6 +65,7 @@ export interface SessionData {
   controllerName: string
   acpServerType: string
   status: string
+  title: string | null
   externalSessionId: string | null
   cwd: string | null
   createdAt: string

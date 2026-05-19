@@ -32,6 +32,7 @@ export const sessionTypeDefs = `#graphql
     controllerName: String!
     acpServerType: AcpServerType!
     status: SessionStatus!
+    title: String
     externalSessionId: String
     cwd: String
     createdAt: String!

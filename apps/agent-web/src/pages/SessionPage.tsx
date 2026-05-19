@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   GET_SESSION,
+  GET_SESSIONS,
   GET_SESSION_MESSAGES,
   GET_CONTROLLERS,
 } from '../graphql/queries';
@@ -113,6 +114,7 @@ export default function SessionPage() {
             cwd,
           },
         },
+        refetchQueries: [{ query: GET_SESSIONS }],
       });
       if (data?.createSession?.session?.id) {
         navigate(`/sessions/${data.createSession.session.id}`);
@@ -233,6 +235,7 @@ export default function SessionPage() {
       />
       <InputBox
         onSend={handleSendMessage}
+        onStop={handleCloseSession}
         disabled={status !== 'running'}
         sending={sending}
       />

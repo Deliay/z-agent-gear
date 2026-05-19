@@ -172,7 +172,7 @@ test.describe('Session E2E', () => {
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
-    await expect(page.getByText('e2e-test-host')).toBeVisible();
+    await expect(page.getByText('e2e-test-host').first()).toBeVisible();
     await expect(page.locator('textarea')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();

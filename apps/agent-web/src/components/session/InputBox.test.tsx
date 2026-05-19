@@ -52,9 +52,9 @@ describe('InputBox', () => {
     expect((screen.getByText('Send') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('should show sending state with spinner', () => {
-    render(<InputBox onSend={vi.fn()} disabled={false} sending={true} />);
-    expect(screen.getByText('Sending')).toBeDefined();
+  it('should show Stop button when sending', () => {
+    render(<InputBox onSend={vi.fn()} onStop={vi.fn()} disabled={false} sending={true} />);
+    expect(screen.getByText('Stop')).toBeDefined();
     expect(screen.getByPlaceholderText('Agent is processing...')).toBeDefined();
   });
 
@@ -73,9 +73,11 @@ describe('InputBox', () => {
 
   it('should not call onSend when sending', async () => {
     const onSend = vi.fn();
-    render(<InputBox onSend={onSend} disabled={false} sending={true} />);
-    fireEvent.click(screen.getByText('Sending'));
+    const onStop = vi.fn();
+    render(<InputBox onSend={onSend} onStop={onStop} disabled={false} sending={true} />);
+    fireEvent.click(screen.getByText('Stop'));
     expect(onSend).not.toHaveBeenCalled();
+    expect(onStop).toHaveBeenCalled();
   });
 
   it('should not call onSend with empty input', async () => {

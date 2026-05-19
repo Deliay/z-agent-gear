@@ -5,6 +5,7 @@ vi.mock('../models/session.js', () => ({
     find: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
+    findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
     create: vi.fn(),
   },
@@ -15,6 +16,7 @@ vi.mock('../models/acp-message.js', () => ({
     find: vi.fn(),
     create: vi.fn(),
     deleteMany: vi.fn(),
+    countDocuments: vi.fn(),
   },
 }));
 
@@ -273,6 +275,8 @@ describe('SessionService', () => {
   describe('addMessage', () => {
     it('should create message and publish to Redis', async () => {
       vi.mocked(AcpMessage.create).mockResolvedValue(mockMessageDoc() as never);
+      vi.mocked(AcpMessage.countDocuments).mockResolvedValue(1);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
       const result = await sessionService.addMessage('sess-1', {
         direction: 'input',

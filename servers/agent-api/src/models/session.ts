@@ -6,6 +6,7 @@ const sessionSchema = new mongoose.Schema({
   controllerName: { type: String, required: true },
   acpServerType: { type: String, enum: ['opencode'], required: true },
   status: { type: String, enum: ['creating', 'connecting', 'running', 'disconnected', 'ended'], default: 'creating' },
+  title: { type: String, default: 'New Session' },
   externalSessionId: { type: String },
   cwd: { type: String },
   endedAt: { type: Date },

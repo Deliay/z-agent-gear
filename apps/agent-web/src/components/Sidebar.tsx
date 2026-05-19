@@ -43,9 +43,14 @@ export default function Sidebar({ username }: SidebarProps) {
                 }`}
               >
                 <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
-                <span className="min-w-0 truncate">
-                  {session.controllerName || session.acpServerType}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">
+                    {session.title || 'New Session'}
+                  </div>
+                  <div className="truncate text-xs text-gray-400">
+                    {session.controllerName || session.acpServerType}
+                  </div>
+                </div>
               </NavLink>
             </li>
           ))}
