@@ -288,7 +288,7 @@ describe('AcpWebSocketBridge', () => {
       vi.advanceTimersByTime(50);
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: { type: 'text', content: 'Hi agent', metadata: null },
+        message: { sessionUpdate: 'agent_message_chunk', content: { text: 'Hi agent' } },
       });
       vi.useRealTimers();
     });
@@ -308,11 +308,11 @@ describe('AcpWebSocketBridge', () => {
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: { type: 'text', content: 'searching', metadata: null },
+        message: { sessionUpdate: 'agent_message_chunk', content: { text: 'searching' } },
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: { type: 'tool_call', content: 'search', metadata: { toolName: 'search' } },
+        message: { sessionUpdate: 'tool_call', content: { toolName: 'search' } },
       });
     });
 
@@ -325,7 +325,7 @@ describe('AcpWebSocketBridge', () => {
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
-        message: expect.objectContaining({ type: 'tool_result' }),
+        message: { sessionUpdate: 'tool_result', content: { result: 'ok' } },
       });
     });
 

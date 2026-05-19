@@ -151,29 +151,46 @@ export class ACPSessionManager {
     return true;
   }
 
-  async handleControllerMessage(sessionId: string, message: {
-    type: string;
-    content?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<void> {
-    const content = message.content != null && message.content !== ''
-      ? message.content
-      : (message.metadata ? JSON.stringify(message.metadata) : JSON.stringify({ type: message.type }));
+  async handleControllerMessage(sessionId: string, message: Record<string, unknown>): Promise<void> {
+    const sessionUpdate = message.sessionUpdate as string;
+    const content = message.content as Record<string, unknown> | undefined;
+
+    let type: string;
+    let textContent: string;
+
+    switch (sessionUpdate) {
+      case 'agent_message_chunk':
+        type = 'text';
+        textContent = (content?.text as string) || '';
+        break;
+      case 'tool_call':
+        type = 'tool_call';
+        textContent = (content?.toolName as string) || '';
+        break;
+      case 'tool_result':
+        type = 'tool_result';
+        textContent = content ? JSON.stringify(content) : '';
+        break;
+      default:
+        type = 'text';
+        textContent = content ? JSON.stringify(content) : JSON.stringify(message);
+        break;
+    }
 
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: 'output' as const,
-      type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
-      content,
-      metadata: message.metadata ? JSON.stringify(message.metadata) : null,
+      type,
+      content: textContent,
+      metadata: message,
     });
 
     const doc = acpMessage.toObject();
     await this.publishMessage(sessionId, {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'output',
-      type: message.type,
-      content,
+      type,
+      content: textContent,
       metadata: typeof doc.metadata === 'string' ? doc.metadata : (doc.metadata ? JSON.stringify(doc.metadata) : null),
       createdAt: (doc.createdAt as Date).toISOString(),
     });

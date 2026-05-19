@@ -137,7 +137,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
       // This is handled by the acpSessionManager through promise resolution
     });
 
-    socket.on('acp:message', async (payload: { sessionId: string; message: { type: string; content: string; metadata?: Record<string, unknown> } }) => {
+    socket.on('acp:message', async (payload: { sessionId: string; message: Record<string, unknown> }) => {
       if (!authenticated) return;
       try {
         await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message);

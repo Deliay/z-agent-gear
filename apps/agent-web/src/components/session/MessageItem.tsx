@@ -46,7 +46,7 @@ export default function MessageItem({ message }: MessageItemProps) {
   const getTypeLabel = (type: string) => {
     switch (type) {
       case 'tool_call':
-        return metadata?.toolName ? `Tool Call: ${metadata.toolName}` : 'Tool Call';
+        return metadata?.content?.toolName ? `Tool Call: ${metadata.content.toolName}` : 'Tool Call';
       case 'tool_result':
         return 'Tool Result';
       case 'plan':

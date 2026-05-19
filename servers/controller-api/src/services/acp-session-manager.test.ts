@@ -250,7 +250,7 @@ describe('ACPSessionManager', () => {
     it('should save output message and publish to Redis', async () => {
       vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
 
-      await manager.handleControllerMessage('sess-1', { type: 'text', content: 'Response' });
+      await manager.handleControllerMessage('sess-1', { sessionUpdate: 'agent_message_chunk', content: { text: 'Response' } });
 
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1', direction: 'output', type: 'text', content: 'Response',

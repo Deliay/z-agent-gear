@@ -254,29 +254,17 @@ export class AcpWebSocketBridge extends EventEmitter {
         break;
       case 'tool_call':
         this.flushTextBuffer();
-        this.sendAcpMessage({
-          type: 'tool_call',
-          content: content?.toolName || '',
-          metadata: content,
-        });
+        this.sendAcpUpdate(update);
         break;
       case 'tool_result':
         this.flushTextBuffer();
-        this.sendAcpMessage({
-          type: 'tool_result',
-          content: JSON.stringify(content),
-          metadata: content,
-        });
+        this.sendAcpUpdate(update);
         break;
       case 'user_message_chunk':
         break;
       default:
         this.flushTextBuffer();
-        this.sendAcpMessage({
-          type: 'text',
-          content: JSON.stringify(content),
-          metadata: null,
-        });
+        this.sendAcpUpdate(update);
         break;
     }
   }
@@ -296,19 +284,18 @@ export class AcpWebSocketBridge extends EventEmitter {
       this.textChunkTimer = null;
     }
     if (this.textChunkBuffer) {
-      this.sendAcpMessage({
-        type: 'text',
-        content: this.textChunkBuffer,
-        metadata: null,
+      this.sendAcpUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { text: this.textChunkBuffer },
       });
       this.textChunkBuffer = '';
     }
   }
 
-  private sendAcpMessage(message: Record<string, unknown>): void {
+  private sendAcpUpdate(update: Record<string, unknown>): void {
     this.socket.emit('acp:message', {
       sessionId: this.sessionId,
-      message,
+      message: update,
     });
   }
 
