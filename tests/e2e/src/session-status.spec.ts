@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerUser, createControllerKey, registerController, loginViaUI, createSession } from './helpers';
+import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace } from './helpers';
 
 const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
 
@@ -21,7 +21,8 @@ test.describe('Session Status Transitions', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws1 = await createWorkspace(page, controllerId, '/tmp/e2e-status', token);
+    const sessionId = await createSession(page, controllerId, token, ws1.id);
     await page.goto(`/sessions/${sessionId}`);
 
     // Initial state should be connecting or creating
@@ -54,7 +55,8 @@ test.describe('Session Status Transitions', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws2 = await createWorkspace(page, controllerId, '/tmp/e2e-close', token);
+    const sessionId = await createSession(page, controllerId, token, ws2.id);
     await page.goto(`/sessions/${sessionId}`);
 
     await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });

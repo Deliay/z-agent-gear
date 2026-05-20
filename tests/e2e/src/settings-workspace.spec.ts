@@ -1,0 +1,232 @@
+import { test, expect } from '@playwright/test';
+import { io as SocketIOClient } from 'socket.io-client';
+
+const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+
+async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return page.request.post(API_URL, { headers, data: { query, variables } });
+}
+
+async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
+  const username = `e2e_ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const res = await gqlRequest(page, `
+    mutation Signup($u: String!, $p: String!) {
+      signup(username: $u, password: $p) { token user { id username } }
+    }
+  `, { u: username, p: 'testpass123' });
+  const body = await res.json();
+  return { token: body.data.signup.token, username };
+}
+
+async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<{ rawKey: string }> {
+  const res = await gqlRequest(page, `
+    mutation CreateKey($input: CreateKeyInput!) {
+      createControllerKey(input: $input) { rawKey key { id } }
+    }
+  `, { input: { name: `e2e-key-${Date.now()}`, type: 'local' } }, token);
+  const body = await res.json();
+  return { rawKey: body.data.createControllerKey.rawKey };
+}
+
+function registerController(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
+  return new Promise((resolve, reject) => {
+    const client = SocketIOClient(CONTROLLER_API_URL, {
+      transports: ['websocket'], reconnection: false, forceNew: true,
+    });
+    const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout registering controller')); }, 10000);
+
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
+    client.once('registered', (data: { controllerId: string }) => {
+      clearTimeout(timer);
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });
+    });
+    client.once('error', (data: { code: string; message: string }) => {
+      clearTimeout(timer);
+      client.disconnect();
+      reject(new Error(`Register failed: ${data.message}`));
+    });
+    client.emit('register', { key: rawKey, hostname: `e2e-ws-host-${Date.now()}`, version: '1.0.0' });
+  });
+}
+
+async function loginViaUI(page: import('@playwright/test').Page, username: string) {
+  await page.goto('/login');
+  await page.fill('#username', username);
+  await page.fill('#password', 'testpass123');
+  await page.click('button[type="submit"]');
+  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+}
+
+async function goToSettings(page: import('@playwright/test').Page) {
+  await page.click('a[href="/settings"]');
+  await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
+}
+
+async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string) {
+  const res = await gqlRequest(page, `
+    mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+      createWorkspace(input: $input) { id name path }
+    }
+  `, { input: { controllerId, path } }, token);
+  const body = await res.json();
+  return body.data.createWorkspace;
+}
+
+test.describe('Settings Workspace E2E', () => {
+
+  test('should show workspace management button for online controller', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { disconnect } = await registerController(rawKey);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    const section = page.locator('#controller-section');
+    await expect(section.getByRole('button', { name: '管理工作区' }).first()).toBeVisible({ timeout: 5000 });
+
+    disconnect();
+  });
+
+  test('should open workspace manager dialog with empty state', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { disconnect } = await registerController(rawKey);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('heading', { name: '管理工作区' })).toBeVisible();
+    await expect(page.getByText('暂无工作区')).toBeVisible();
+    await expect(page.getByRole('button', { name: '添加' })).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should add workspace via API and show in dialog', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/project', token);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+
+    await expect(page.getByText('/home/test/project')).toBeVisible();
+    await expect(page.getByText('1 个工作区')).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should delete workspace from dialog', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/project-a', token);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('/home/test/project-a')).toBeVisible();
+
+    await page.getByRole('dialog').getByRole('button', { name: '删除' }).click();
+    await expect(page.getByText('暂无工作区')).toBeVisible();
+    await expect(page.getByText('/home/test/project-a')).not.toBeVisible();
+
+    disconnect();
+  });
+
+  test('should clear all workspaces', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/project-a', token);
+    await createWorkspace(page, controllerId, '/home/test/project-b', token);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+
+    await expect(page.getByText('2 个工作区')).toBeVisible();
+    await expect(page.getByText('/home/test/project-a')).toBeVisible();
+    await expect(page.getByText('/home/test/project-b')).toBeVisible();
+
+    await page.getByRole('dialog').getByRole('button', { name: '清空' }).click();
+    await expect(page.getByText('清空工作区')).toBeVisible();
+    await page.getByRole('button', { name: '确认清空' }).click();
+
+    await expect(page.getByText('暂无工作区')).toBeVisible({ timeout: 5000 });
+
+    disconnect();
+  });
+
+  test('should show workspace selection in New Session dialog', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/workspace-a', token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+
+    await page.getByRole('button', { name: 'New Session' }).click();
+    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+
+    await page.locator('#controller').selectOption({ index: 1 });
+    await expect(page.getByText('workspace-a', { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('/home/test/workspace-a')).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should show sidebar tree with workspace and session', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    const ws = await createWorkspace(page, controllerId, '/home/test/myproject', token);
+    const res = await gqlRequest(page, `
+      mutation CreateSession($input: CreateSessionInput!) {
+        createSession(input: $input) { session { id cwd status } }
+      }
+    `, {
+      input: { controllerId, acpServerType: 'opencode', workspaceId: ws.id },
+    }, token);
+    const sessionBody = await res.json();
+    expect(sessionBody.data.createSession.session.cwd).toBe('/home/test/myproject');
+
+    await loginViaUI(page, username);
+
+    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    await expect(sidebar.getByRole('button', { name: /e2e-ws-host/ })).toBeVisible({ timeout: 5000 });
+
+    await sidebar.getByRole('button', { name: /e2e-ws-host/ }).click();
+    await expect(sidebar.getByText(/myproject/)).toBeVisible();
+
+    disconnect();
+  });
+
+});
