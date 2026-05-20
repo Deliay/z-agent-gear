@@ -23,6 +23,10 @@ export class ProviderService {
     credentialType: string;
     credentialValue: string;
   }) {
+    if (!input.name || input.name.trim().length === 0) {
+      throw new Error('Provider name is required');
+    }
+
     const encrypted = encrypt(input.credentialValue);
 
     const models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);

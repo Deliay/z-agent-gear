@@ -3,6 +3,8 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export type ProviderType = 'OpenAI' | 'Anthropic';
 
+const TIMEOUT_MS = 10_000;
+
 export class LLMAPIService {
   async fetchModels(type: ProviderType, endpoint: string, apiKey: string): Promise<string[]> {
     switch (type) {
@@ -19,6 +21,7 @@ export class LLMAPIService {
     const client = new OpenAI({
       apiKey,
       baseURL: endpoint,
+      timeout: TIMEOUT_MS,
     });
 
     const models: string[] = [];
@@ -32,6 +35,7 @@ export class LLMAPIService {
     const client = new Anthropic({
       apiKey,
       baseURL: endpoint,
+      timeout: TIMEOUT_MS,
     });
 
     const models: string[] = [];
