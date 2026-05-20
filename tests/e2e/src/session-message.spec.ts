@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerUser, createControllerKey, registerController, loginViaUI, createSession } from './helpers';
+import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace } from './helpers';
 
 const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
 
@@ -28,7 +28,8 @@ test.describe('ACP Message Rendering', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws1 = await createWorkspace(page, controllerId, '/tmp/e2e-msg', token);
+    const sessionId = await createSession(page, controllerId, token, ws1.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
@@ -61,7 +62,8 @@ test.describe('ACP Message Rendering', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws2 = await createWorkspace(page, controllerId, '/tmp/e2e-tool', token);
+    const sessionId = await createSession(page, controllerId, token, ws2.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
@@ -93,7 +95,8 @@ test.describe('ACP Message Rendering', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws3 = await createWorkspace(page, controllerId, '/tmp/e2e-error', token);
+    const sessionId = await createSession(page, controllerId, token, ws3.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 
@@ -125,7 +128,8 @@ test.describe('ACP Message Rendering', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws4 = await createWorkspace(page, controllerId, '/tmp/e2e-code', token);
+    const sessionId = await createSession(page, controllerId, token, ws4.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
 

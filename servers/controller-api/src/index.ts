@@ -8,6 +8,7 @@ import { createSocketIOServer } from './services/socketio.js';
 import { heartbeatService } from './services/heartbeat.js';
 import { commandService } from './services/command.js';
 import { sessionCommandService } from './services/session-command.js';
+import { folderBrowserService } from './services/folder-browser.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -37,6 +38,7 @@ async function start() {
   heartbeatService.start(io);
   commandService.start(io);
   sessionCommandService.start(io);
+  folderBrowserService.start(io);
 
   httpServer.listen(config.port, () => {
     console.log(`Controller API running at http://localhost:${config.port}`);

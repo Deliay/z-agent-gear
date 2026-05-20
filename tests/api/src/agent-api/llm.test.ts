@@ -188,7 +188,7 @@ describe('LLM Provider & Model API', () => {
           input: {
             name: `test-provider-${Date.now()}`,
             type: 'OpenAI',
-            endpoint: 'https://invalid-endpoint.example.com/v1',
+            endpoint: 'http://127.0.0.1:1/v1',
             credentialType: 'api_key',
             credentialValue: 'sk-test-fake-key',
           },
@@ -210,7 +210,7 @@ describe('LLM Provider & Model API', () => {
           input: {
             name: '',
             type: 'OpenAI',
-            endpoint: 'https://api.openai.com/v1',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
             credentialType: 'api_key',
             credentialValue: 'sk-test-key',
           },
@@ -226,7 +226,7 @@ describe('LLM Provider & Model API', () => {
         input: {
           name: 'no-auth',
           type: 'OpenAI',
-          endpoint: 'https://api.openai.com/v1',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
           credentialType: 'api_key',
           credentialValue: 'sk-key',
         },
@@ -301,7 +301,7 @@ describe('LLM Provider & Model API', () => {
           input: {
             name: 'updated',
             type: 'OpenAI',
-            endpoint: 'https://invalid-update-endpoint.example.com/v1',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
             credentialType: 'api_key',
             credentialValue: 'sk-updated-key',
           },

@@ -7,6 +7,7 @@ import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { folderBrowserService } from './folder-browser.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -154,6 +155,17 @@ export function createSocketIOServer(io: SocketIOServer): void {
       } catch (err) {
         console.error(`ACP stopped error for session ${payload.sessionId}:`, err);
       }
+    });
+
+    // File system events
+    socket.on('fs:browse:result', async (payload: { requestId: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }) => {
+      if (!authenticated) return;
+      await folderBrowserService.handleBrowseResult(payload.requestId, payload.entries);
+    });
+
+    socket.on('fs:home:result', async (payload: { requestId: string; path: string }) => {
+      if (!authenticated) return;
+      await folderBrowserService.handleHomeResult(payload.requestId, payload.path);
     });
 
     socket.on('disconnect', async () => {

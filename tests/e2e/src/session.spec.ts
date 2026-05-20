@@ -43,6 +43,16 @@ async function createControllerKey(page: import('@playwright/test').Page, token:
   return { rawKey: body.data.createControllerKey.rawKey, keyId: body.data.createControllerKey.key.id };
 }
 
+async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string): Promise<{ id: string }> {
+  const res = await gqlRequest(page, `
+    mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+      createWorkspace(input: $input) { id name path }
+    }
+  `, { input: { controllerId, path } }, token);
+  const body = await res.json();
+  return body.data.createWorkspace;
+}
+
 function registerController(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, {
@@ -119,8 +129,8 @@ test.describe('Session E2E', () => {
   test('should show online controller in New Session dialog', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -140,8 +150,8 @@ test.describe('Session E2E', () => {
   test('should create session and navigate to session detail', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -159,8 +169,8 @@ test.describe('Session E2E', () => {
   test('should show session detail page structure', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -184,8 +194,8 @@ test.describe('Session E2E', () => {
   test('should disable input when session is not running', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -207,8 +217,8 @@ test.describe('Session E2E', () => {
   test('should show session status badge', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -231,8 +241,8 @@ test.describe('Session E2E', () => {
   test('should close session and update status', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
@@ -255,8 +265,8 @@ test.describe('Session E2E', () => {
   test('should delete session and navigate back', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const { disconnect } = await registerController(rawKey);
-
+    const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerUser, createControllerKey, registerController, loginViaUI, createSession } from './helpers';
+import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace } from './helpers';
 
 test.describe('Session Chat', () => {
   test('should send message and receive response', async ({ page }) => {
@@ -31,7 +31,8 @@ test.describe('Session Chat', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-chat', token);
+    const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('running', { timeout: 10000 });
 
@@ -73,7 +74,8 @@ test.describe('Session Chat', () => {
     });
 
     await loginViaUI(page, username);
-    const sessionId = await createSession(page, controllerId, token);
+    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-chat', token);
+    const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('running', { timeout: 10000 });
 

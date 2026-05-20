@@ -72,12 +72,22 @@ export async function loginViaUI(page: import('@playwright/test').Page, username
   await page.locator('nav[aria-label="Sidebar"]').waitFor({ timeout: 10000 });
 }
 
-export async function createSession(page: import('@playwright/test').Page, controllerId: string, token: string): Promise<string> {
+export async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string): Promise<{ id: string }> {
+  const res = await gqlRequest(page, `
+    mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+      createWorkspace(input: $input) { id name path }
+    }
+  `, { input: { controllerId, path } }, token);
+  const body = await res.json();
+  return body.data.createWorkspace;
+}
+
+export async function createSession(page: import('@playwright/test').Page, controllerId: string, token: string, workspaceId: string): Promise<string> {
   const res = await gqlRequest(page, `
     mutation CreateSession($input: CreateSessionInput!) {
       createSession(input: $input) { session { id } }
     }
-  `, { input: { controllerId, acpServerType: 'opencode' } }, token);
+  `, { input: { controllerId, acpServerType: 'opencode', workspaceId } }, token);
   const body = await res.json();
   return body.data.createSession.session.id;
 }

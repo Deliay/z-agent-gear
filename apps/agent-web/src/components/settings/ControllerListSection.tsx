@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import WorkspaceManagerDialog from './WorkspaceManagerDialog'
 
 const GET_CONTROLLER_KEYS = gql`
   query GetControllerKeys {
@@ -97,6 +98,7 @@ export default function ControllerListSection() {
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [workspaceTarget, setWorkspaceTarget] = useState<{ id: string; name: string } | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
@@ -209,6 +211,9 @@ export default function ControllerListSection() {
                     </div>
                   </div>
                   <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setWorkspaceTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      管理工作区
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       重命名
                     </Button>
@@ -258,6 +263,14 @@ export default function ControllerListSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {workspaceTarget && (
+        <WorkspaceManagerDialog
+          controllerId={workspaceTarget.id}
+          controllerName={workspaceTarget.name}
+          onClose={() => setWorkspaceTarget(null)}
+        />
+      )}
     </section>
   )
 }

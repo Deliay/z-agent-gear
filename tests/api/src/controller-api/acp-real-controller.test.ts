@@ -54,6 +54,14 @@ const CREATE_SESSION = `
   }
 `;
 
+const CREATE_WORKSPACE = `
+  mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+    createWorkspace(input: $input) {
+      id controllerId path
+    }
+  }
+`;
+
 const SESSION_QUERY = `
   query Session($id: ID!) {
     session(id: $id) {
@@ -96,6 +104,16 @@ function cleanupPidFile(): void {
   if (existsSync(PID_FILE)) {
     unlinkSync(PID_FILE);
   }
+}
+
+async function createWorkspace(ctrlId: string, token: string): Promise<string> {
+  const res = await gqlRequest(
+    CREATE_WORKSPACE,
+    { input: { controllerId: ctrlId, path: `/tmp/acp-real-test-${Date.now()}` } },
+    token,
+  );
+  const body = await res.json();
+  return body.data.createWorkspace.id;
 }
 
 function spawnController(): { process: ChildProcess; waitForRegistered: Promise<string> } {
@@ -225,9 +243,10 @@ describe('ACP Real Controller Integration', () => {
 
   it('should create ACP session with real opencode', async () => {
     console.log(`[test] Creating session for controller ${controllerId}`);
+    const wsId = await createWorkspace(controllerId, authToken);
     const sessionRes = await gqlRequest(
       CREATE_SESSION,
-      { input: { controllerId, acpServerType: 'opencode' } },
+      { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
       authToken,
     );
     const sessionBody = await sessionRes.json();
@@ -241,9 +260,10 @@ describe('ACP Real Controller Integration', () => {
   }, 60_000);
 
   it('should receive ACP messages via SSE', async () => {
+    const wsId = await createWorkspace(controllerId, authToken);
     const sessionRes = await gqlRequest(
       CREATE_SESSION,
-      { input: { controllerId, acpServerType: 'opencode' } },
+      { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
       authToken,
     );
     const sessionBody = await sessionRes.json();

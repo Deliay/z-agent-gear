@@ -84,6 +84,18 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 生成的 Key 显示复制按钮 | 生成 Key 后显示「复制」按钮 |
 | 导航滚动到 controller section | 点击「控制器管理」→ 滚动到 controller section |
 
+### Settings Workspace E2E (`settings-workspace.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 管理工作区按钮可见 | 在线 controller 显示「管理工作区」按钮 |
+| 打开工作区管理对话框空状态 | 点击按钮 → 对话框显示「暂无工作区」|
+| 通过 API 添加工作区并显示 | GraphQL 创建工作区 → 对话框显示工作区路径 |
+| 从对话框删除工作区 | 点击删除 → 工作区移除 |
+| 清空所有工作区 | 点击清空 → 确认 → 全部移除 |
+| New Session 对话框显示工作区 | 选择 controller → 显示工作区选项 |
+| 侧边栏树状结构 | 创建 session 后侧边栏显示 controller → 工作区 → session |
+
 ### Session E2E (`session.spec.ts`)
 
 | 测试 | 描述 |

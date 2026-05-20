@@ -1,0 +1,489 @@
+import { describe, it, expect, beforeAll } from 'vitest';
+import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+
+const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+
+function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const body: Record<string, unknown> = { query };
+  if (variables) {
+    body.variables = variables;
+  }
+  return fetch(API_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+const SIGNUP = `
+  mutation Signup($username: String!, $password: String!) {
+    signup(username: $username, password: $password) {
+      token
+      user { id username }
+    }
+  }
+`;
+
+const CREATE_KEY = `
+  mutation CreateControllerKey($input: CreateKeyInput!) {
+    createControllerKey(input: $input) {
+      key { id name }
+      rawKey
+    }
+  }
+`;
+
+const WORKSPACES_QUERY = `
+  query ControllerWorkspaces($controllerId: ID!) {
+    controllerWorkspaces(controllerId: $controllerId) {
+      id userId controllerId name path isEnabled createdAt updatedAt
+    }
+  }
+`;
+
+const CREATE_WORKSPACE = `
+  mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+    createWorkspace(input: $input) {
+      id userId controllerId name path isEnabled createdAt updatedAt
+    }
+  }
+`;
+
+const DELETE_WORKSPACE = `
+  mutation DeleteWorkspace($id: ID!) {
+    deleteWorkspace(id: $id)
+  }
+`;
+
+const CLEAR_WORKSPACES = `
+  mutation ClearWorkspaces($controllerId: ID!) {
+    clearWorkspaces(controllerId: $controllerId)
+  }
+`;
+
+const TOGGLE_WORKSPACE = `
+  mutation ToggleWorkspace($id: ID!) {
+    toggleWorkspace(id: $id) {
+      id isEnabled
+    }
+  }
+`;
+
+const BROWSE_FOLDER = `
+  query BrowseFolder($controllerId: ID!, $path: String) {
+    browseFolder(controllerId: $controllerId, path: $path) {
+      name path isDirectory
+    }
+  }
+`;
+
+const GET_HOME_DIRECTORY = `
+  query GetHomeDirectory($controllerId: ID!) {
+    getHomeDirectory(controllerId: $controllerId)
+  }
+`;
+
+const CREATE_SESSION = `
+  mutation CreateSession($input: CreateSessionInput!) {
+    createSession(input: $input) {
+      session {
+        id userId controllerId controllerName acpServerType status
+        externalSessionId cwd createdAt updatedAt endedAt
+      }
+    }
+  }
+`;
+
+function createClient(): ClientSocket {
+  return SocketIOClient(CONTROLLER_API_URL, {
+    transports: ['websocket'],
+    reconnection: false,
+    forceNew: true,
+  });
+}
+
+function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutMs = 5000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout waiting for "${event}"`)), timeoutMs);
+    socket.once(event, (data: T) => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+  });
+}
+
+let authToken = '';
+let rawKey = '';
+let controllerId = '';
+
+async function signup(): Promise<string> {
+  const uid = `ws_${Date.now().toString(36)}`;
+  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+  const body = await res.json();
+  return body.data?.signup?.token ?? '';
+}
+
+async function createKeyAndRegisterController(token: string): Promise<{ rawKey: string; controllerId: string }> {
+  const keyRes = await gqlRequest(
+    CREATE_KEY,
+    { input: { name: `ws-key-${Date.now()}`, type: 'local' } },
+    token,
+  );
+  const keyBody = await keyRes.json();
+  const key = keyBody.data.createControllerKey.rawKey;
+
+  const client = createClient();
+  const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+  client.emit('register', { key, hostname: 'ws-test-host', version: '1.0.0' });
+  const regData = await registered;
+  client.disconnect();
+
+  return { rawKey: key, controllerId: regData.controllerId };
+}
+
+describe('Controller Workspace API', () => {
+  beforeAll(async () => {
+    authToken = await signup();
+    expect(authToken).toBeTruthy();
+
+    const ctrl = await createKeyAndRegisterController(authToken);
+    rawKey = ctrl.rawKey;
+    controllerId = ctrl.controllerId;
+  });
+
+  describe('queries without auth', () => {
+    it('should reject controllerWorkspaces query without token', async () => {
+      const res = await gqlRequest(WORKSPACES_QUERY, { controllerId });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject browseFolder query without token', async () => {
+      const res = await gqlRequest(BROWSE_FOLDER, { controllerId });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject getHomeDirectory query without token', async () => {
+      const res = await gqlRequest(GET_HOME_DIRECTORY, { controllerId });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+  });
+
+  describe('mutations without auth', () => {
+    it('should reject createWorkspace without auth', async () => {
+      const res = await gqlRequest(CREATE_WORKSPACE, {
+        input: { controllerId, path: '/tmp/test' },
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject deleteWorkspace without auth', async () => {
+      const res = await gqlRequest(DELETE_WORKSPACE, { id: '000000000000000000000000' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject clearWorkspaces without auth', async () => {
+      const res = await gqlRequest(CLEAR_WORKSPACES, { controllerId });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject toggleWorkspace without auth', async () => {
+      const res = await gqlRequest(TOGGLE_WORKSPACE, { id: '000000000000000000000000' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+  });
+
+  describe('createWorkspace', () => {
+    it('should create a new workspace', async () => {
+      const res = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/workspace-test' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createWorkspace.id).toBeDefined();
+      expect(body.data.createWorkspace.name).toBe('workspace-test');
+      expect(body.data.createWorkspace.path).toBe('/tmp/workspace-test');
+      expect(body.data.createWorkspace.isEnabled).toBe(true);
+      expect(body.data.createWorkspace.controllerId).toBe(controllerId);
+    });
+
+    it('should reject duplicate workspace path', async () => {
+      await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/dup-test' } },
+        authToken,
+      );
+      const res = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/dup-test' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Workspace already exists');
+    });
+
+    it('should reject workspace for non-existent controller', async () => {
+      const res = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: '000000000000000000000000', path: '/tmp/test' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+    });
+  });
+
+  describe('controllerWorkspaces query', () => {
+    it('should return workspaces list', async () => {
+      const res = await gqlRequest(WORKSPACES_QUERY, { controllerId }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(Array.isArray(body.data.controllerWorkspaces)).toBe(true);
+    });
+
+    it('should return workspaces sorted by name', async () => {
+      const res = await gqlRequest(WORKSPACES_QUERY, { controllerId }, authToken);
+      const body = await res.json();
+      const workspaces = body.data.controllerWorkspaces;
+      if (workspaces.length > 1) {
+        for (let i = 1; i < workspaces.length; i++) {
+          expect(workspaces[i].name.localeCompare(workspaces[i - 1].name)).toBeGreaterThanOrEqual(0);
+        }
+      }
+    });
+  });
+
+  describe('toggleWorkspace', () => {
+    it('should toggle workspace enabled status', async () => {
+      const createRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/toggle-test' } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const workspaceId = createBody.data.createWorkspace.id;
+      expect(createBody.data.createWorkspace.isEnabled).toBe(true);
+
+      const toggleRes = await gqlRequest(TOGGLE_WORKSPACE, { id: workspaceId }, authToken);
+      const toggleBody = await toggleRes.json();
+      expect(toggleBody.errors).toBeUndefined();
+      expect(toggleBody.data.toggleWorkspace.isEnabled).toBe(false);
+
+      const toggleRes2 = await gqlRequest(TOGGLE_WORKSPACE, { id: workspaceId }, authToken);
+      const toggleBody2 = await toggleRes2.json();
+      expect(toggleBody2.data.toggleWorkspace.isEnabled).toBe(true);
+    });
+
+    it('should reject toggling non-existent workspace', async () => {
+      const res = await gqlRequest(
+        TOGGLE_WORKSPACE,
+        { id: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+    });
+  });
+
+  describe('deleteWorkspace', () => {
+    it('should delete a workspace', async () => {
+      const createRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/delete-test' } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const workspaceId = createBody.data.createWorkspace.id;
+
+      const deleteRes = await gqlRequest(DELETE_WORKSPACE, { id: workspaceId }, authToken);
+      const deleteBody = await deleteRes.json();
+      expect(deleteBody.errors).toBeUndefined();
+      expect(deleteBody.data.deleteWorkspace).toBe(true);
+
+      const queryRes = await gqlRequest(WORKSPACES_QUERY, { controllerId }, authToken);
+      const queryBody = await queryRes.json();
+      const found = queryBody.data.controllerWorkspaces.find((w: { id: string }) => w.id === workspaceId);
+      expect(found).toBeUndefined();
+    });
+
+    it('should return false for non-existent workspace', async () => {
+      const res = await gqlRequest(
+        DELETE_WORKSPACE,
+        { id: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.deleteWorkspace).toBe(false);
+    });
+  });
+
+  describe('clearWorkspaces', () => {
+    it('should clear all workspaces for a controller', async () => {
+      await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/clear-test-1' } },
+        authToken,
+      );
+      await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: '/tmp/clear-test-2' } },
+        authToken,
+      );
+
+      const clearRes = await gqlRequest(CLEAR_WORKSPACES, { controllerId }, authToken);
+      const clearBody = await clearRes.json();
+      expect(clearBody.errors).toBeUndefined();
+      expect(clearBody.data.clearWorkspaces).toBe(true);
+
+      const queryRes = await gqlRequest(WORKSPACES_QUERY, { controllerId }, authToken);
+      const queryBody = await queryRes.json();
+      expect(queryBody.data.controllerWorkspaces).toEqual([]);
+    });
+  });
+});
+
+describe('Folder Browser API', () => {
+  beforeAll(async () => {
+    if (!authToken) {
+      authToken = await signup();
+      const ctrl = await createKeyAndRegisterController(authToken);
+      rawKey = ctrl.rawKey;
+      controllerId = ctrl.controllerId;
+    }
+  });
+
+  describe('browseFolder', () => {
+    it('should reject browseFolder for non-existent controller', async () => {
+      const res = await gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: '000000000000000000000000', path: '/tmp' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should reject browseFolder for offline controller', async () => {
+      // Create a controller that is not online
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `offline-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const offlineRawKey = keyBody.data.createControllerKey.rawKey;
+
+      // Register and immediately disconnect
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: offlineRawKey, hostname: 'offline-host', version: '1.0.0' });
+      const regData = await registered;
+      client.disconnect();
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      const res = await gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: regData.controllerId, path: '/tmp' },
+        authToken,
+      );
+      const body = await res.json();
+      // Controller is offline after disconnect, so should get an error
+      expect(body.errors).toBeDefined();
+    });
+  });
+
+  describe('getHomeDirectory', () => {
+    it('should reject getHomeDirectory for non-existent controller', async () => {
+      const res = await gqlRequest(
+        GET_HOME_DIRECTORY,
+        { controllerId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+  });
+});
+
+describe('Session Creation with WorkspaceId', () => {
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    if (!authToken) {
+      authToken = await signup();
+      const ctrl = await createKeyAndRegisterController(authToken);
+      rawKey = ctrl.rawKey;
+      controllerId = ctrl.controllerId;
+    }
+
+    // Create a workspace for testing
+    const createRes = await gqlRequest(
+      CREATE_WORKSPACE,
+      { input: { controllerId, path: '/tmp/session-test' } },
+      authToken,
+    );
+    const createBody = await createRes.json();
+    workspaceId = createBody.data.createWorkspace.id;
+  });
+
+  describe('createSession with workspaceId', () => {
+    it('should create session with workspaceId', async () => {
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.cwd).toBe('/tmp/session-test');
+    });
+
+    it('should reject createSession with invalid workspaceId', async () => {
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId: '000000000000000000000000' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Workspace not found');
+    });
+
+    it('should reject createSession without workspaceId', async () => {
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+    });
+  });
+});

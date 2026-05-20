@@ -23,6 +23,23 @@ export interface ControllerData {
   updatedAt: string
 }
 
+export interface ControllerWorkspaceData {
+  id: string
+  userId: string
+  controllerId: string
+  name: string
+  path: string
+  isEnabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FolderEntryData {
+  name: string
+  path: string
+  isDirectory: boolean
+}
+
 export interface ProviderData {
   id: string
   name: string
@@ -97,6 +114,10 @@ export interface GetControllersQuery {
   controllers: ControllerData[]
 }
 
+export interface GetControllerWorkspacesQuery {
+  controllerWorkspaces: ControllerWorkspaceData[]
+}
+
 export interface GetProvidersQuery {
   providers: ProviderData[]
 }
@@ -126,6 +147,14 @@ export interface CreateControllerKeyMutation {
     key: ControllerKeyData
     rawKey: string
   }
+}
+
+export interface CreateWorkspaceMutation {
+  createWorkspace: ControllerWorkspaceData
+}
+
+export interface ToggleWorkspaceMutation {
+  toggleWorkspace: ControllerWorkspaceData
 }
 
 export interface CreateSessionMutation {
