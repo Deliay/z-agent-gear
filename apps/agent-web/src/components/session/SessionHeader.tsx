@@ -68,7 +68,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         )}
       </div>
       <div className="flex items-center gap-2">
-        {status !== 'ended' && status !== 'creating' && (
+        {status !== 'ended' && status !== 'creating' && !resuming && (
           <button
             type="button"
             onClick={onClose}
@@ -77,7 +77,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             Close
           </button>
         )}
-        {status === 'ended' && (
+        {(status === 'ended' || resuming) && (
           <button
             type="button"
             onClick={onContinue}
