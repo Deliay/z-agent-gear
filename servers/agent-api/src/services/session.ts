@@ -89,21 +89,24 @@ export class SessionService {
     return true;
   }
 
-  async resume(id: string, userId: string): Promise<boolean> {
+  async resume(id: string, userId: string): Promise<{ success: boolean; status: string; error?: string }> {
     const session = await Session.findOne({ _id: id, userId }).lean();
-    if (!session) return false;
-    if (!session.externalSessionId) return false;
-    if (session.status !== 'ended') return false;
+    if (!session) {
+      return { success: false, status: 'ended', error: 'Session not found' };
+    }
+    if (session.status !== 'ended') {
+      return { success: false, status: session.status, error: 'Session is not ended' };
+    }
 
     const redis = getRedisClient();
     await redis.publish('session:command', JSON.stringify({
       type: 'acp:resume',
       sessionId: id,
       controllerId: session.controllerId.toString(),
-      externalSessionId: session.externalSessionId,
-      cwd: session.cwd || process.cwd(),
+      externalSessionId: session.externalSessionId || '',
+      cwd: session.cwd || '',
     }));
-    return true;
+    return { success: true, status: 'connecting' };
   }
 
   async close(id: string, userId: string): Promise<boolean> {

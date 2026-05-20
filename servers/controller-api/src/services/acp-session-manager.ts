@@ -299,6 +299,7 @@ export class ACPSessionManager {
       return new Promise((resolve) => {
         const timeout = setTimeout(() => {
           this.cleanupFailedSession(sessionId, 'connecting');
+          this.publishStatus(sessionId, 'ended', 'RESUME_TIMEOUT');
           resolve({ success: false, error: 'ACP resume timeout' });
         }, 30000);
 
@@ -323,13 +324,13 @@ export class ACPSessionManager {
             socketSessions.add(sessionId);
             this.socketToSessions.set(controllerSocket.id, socketSessions);
 
-            await Session.findByIdAndUpdate(sessionId, { status: 'running' });
-            await this.publishStatus(sessionId, 'running');
+            await Session.findByIdAndUpdate(sessionId, { status: 'idling' });
+            await this.publishStatus(sessionId, 'idling');
 
             resolve({ success: true });
           } else {
             await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
-            await this.publishStatus(sessionId, 'ended');
+            await this.publishStatus(sessionId, 'ended', payload.error || 'ACP_RESUME_FAILED');
             resolve({ success: false, error: payload.error || 'ACP resume failed' });
           }
         });
@@ -338,11 +339,15 @@ export class ACPSessionManager {
           requestId,
           sessionId,
           externalSessionId,
+          controllerId,
+          userId,
           cwd,
         });
       });
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
+      await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
+      await this.publishStatus(sessionId, 'ended', 'ACP_RESUME_FAILED');
       return { success: false, error: (error as Error).message };
     }
   }
@@ -388,12 +393,11 @@ export class ACPSessionManager {
     }));
   }
 
-  private async publishStatus(sessionId: string, status: string): Promise<void> {
+  private async publishStatus(sessionId: string, status: string, error?: string): Promise<void> {
     const redis = getRedisClient();
-    await redis.publish('session:status', JSON.stringify({
-      sessionId,
-      status,
-    }));
+    const payload: Record<string, unknown> = { sessionId, status };
+    if (error) payload.error = error;
+    await redis.publish('session:status', JSON.stringify(payload));
   }
 }
 

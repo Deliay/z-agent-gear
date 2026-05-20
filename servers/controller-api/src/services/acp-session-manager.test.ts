@@ -305,6 +305,114 @@ describe('ACPSessionManager', () => {
     });
   });
 
+  describe('resumeSession', () => {
+    it('should update status to connecting and emit acp:resume', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.objectContaining({
+          sessionId: 'sess-1',
+          externalSessionId: 'ext-123',
+          controllerId: 'ctrl-1',
+          userId: 'user-1',
+          cwd: '/tmp',
+        }));
+      });
+
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'connecting' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"connecting"'));
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      socket._trigger('acp:resume:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+      });
+
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+    });
+
+    it('should set status to idling on success', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      socket._trigger('acp:resume:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+      });
+
+      await resultPromise;
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'idling' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('should set status to ended with error on failure', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      socket._trigger('acp:resume:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: false,
+        error: 'ACP_SESSION_EXPIRED',
+      });
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('ACP_SESSION_EXPIRED');
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"error":"ACP_SESSION_EXPIRED"'));
+    });
+
+    it('should return timeout error when controller does not respond', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      }, 1000);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('ACP resume timeout');
+    }, 35000);
+  });
+
   describe('handleSocketDisconnect', () => {
     it('should stop all sessions for the socket', async () => {
       const socket = createMockSocket();

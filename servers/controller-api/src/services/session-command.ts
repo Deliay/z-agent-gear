@@ -164,6 +164,13 @@ export class SessionCommandService {
     console.log(`ACP capabilities detected for ${controllerId}:`, servers);
   }
 
+  private async publishStatus(sessionId: string, status: string, error?: string): Promise<void> {
+    const redis = getRedisClient();
+    const payload: Record<string, unknown> = { sessionId, status };
+    if (error) payload.error = error;
+    await redis.publish('session:status', JSON.stringify(payload));
+  }
+
   private async handleAcpResume(command: {
     sessionId: string;
     controllerId: string;
@@ -175,6 +182,7 @@ export class SessionCommandService {
     const controller = await Controller.findById(command.controllerId).lean();
     if (!controller) {
       console.error(`Controller not found for resume: ${command.controllerId}`);
+      await this.publishStatus(command.sessionId, 'ended', 'CONTROLLER_OFFLINE');
       return;
     }
 
@@ -182,12 +190,14 @@ export class SessionCommandService {
     const socketId = await sessionService.getSocketId(keyId);
     if (!socketId) {
       console.error(`Controller not online for resume: ${command.controllerId}`);
+      await this.publishStatus(command.sessionId, 'ended', 'CONTROLLER_OFFLINE');
       return;
     }
 
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
       console.error(`Socket not found for resume: ${socketId}`);
+      await this.publishStatus(command.sessionId, 'ended', 'CONTROLLER_OFFLINE');
       return;
     }
 

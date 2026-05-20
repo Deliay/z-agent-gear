@@ -12,11 +12,13 @@ import {
   DELETE_SESSION,
   SEND_SESSION_MESSAGE,
   CANCEL_GENERATION,
+  RESUME_SESSION,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
   GetControllersQuery,
   CreateSessionMutation,
+  ResumeSessionMutation,
 } from '../graphql/types';
 import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
@@ -33,6 +35,20 @@ interface AcpMessage {
   createdAt: string;
 }
 
+const RESUME_TIMEOUT_MS = 30000;
+
+const errorMessages: Record<string, string> = {
+  CONTROLLER_OFFLINE: 'Controller is offline. Please check your controller connection.',
+  ACP_SERVER_UNAVAILABLE: 'ACP server is not available on the controller.',
+  ACP_SESSION_EXPIRED: 'The remote session has expired. Please start a new session.',
+  WORKSPACE_PATH_INVALID: 'The workspace path no longer exists on your controller.',
+  RESUME_TIMEOUT: 'Resume timed out. Please try again or start a new session.',
+};
+
+function getErrorMessage(error?: string): string {
+  return error ? (errorMessages[error] || `Failed to resume session: ${error}`) : 'Failed to resume session. Please try again.';
+}
+
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -40,6 +56,8 @@ export default function SessionPage() {
   const [messages, setMessages] = useState<AcpMessage[]>([]);
   const [status, setStatus] = useState<string>('connecting');
   const [sending, setSending] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
@@ -53,6 +71,7 @@ export default function SessionPage() {
   const [deleteSession] = useMutation(DELETE_SESSION);
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
+  const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
 
   useEffect(() => {
     if (sessionData?.session) {
@@ -78,6 +97,13 @@ export default function SessionPage() {
         }
       } else if (data.type === 'status') {
         setStatus(data.data.status);
+        if (data.data.status === 'ended' && data.data.error) {
+          setResuming(false);
+          setErrorToast(getErrorMessage(data.data.error));
+        }
+        if (data.data.status === 'idling') {
+          setResuming(false);
+        }
       }
     };
 
@@ -89,6 +115,24 @@ export default function SessionPage() {
       eventSource.close();
     };
   }, [id]);
+
+  // Resume timeout protection
+  useEffect(() => {
+    if (!resuming) return;
+    const timeout = setTimeout(() => {
+      setResuming(false);
+      setStatus('ended');
+      setErrorToast(getErrorMessage('RESUME_TIMEOUT'));
+    }, RESUME_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [resuming]);
+
+  // Auto-dismiss error toast
+  useEffect(() => {
+    if (!errorToast) return;
+    const timer = setTimeout(() => setErrorToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [errorToast]);
 
   const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
     try {
@@ -139,6 +183,24 @@ export default function SessionPage() {
     }
   };
 
+  const handleResumeSession = async () => {
+    if (!id) return;
+    setResuming(true);
+    setStatus('connecting');
+    try {
+      const { data } = await resumeSession({ variables: { id } });
+      if (data?.resumeSession?.success === false) {
+        setStatus('ended');
+        setResuming(false);
+        setErrorToast(getErrorMessage(data.resumeSession.error || undefined));
+      }
+    } catch (error) {
+      setStatus('ended');
+      setResuming(false);
+      setErrorToast('Network error. Please check your connection.');
+    }
+  };
+
   const handleSendMessage = async (content: string) => {
     if (!id) return;
     try {
@@ -155,6 +217,11 @@ export default function SessionPage() {
       setSending(false);
     }
   };
+
+  const sessionController = controllersData?.controllers.find(
+    (c) => c.id === sessionData?.session?.controllerId,
+  );
+  const controllerOnline = sessionController?.status === 'online';
 
   if (sessionLoading) {
     return (
@@ -192,11 +259,19 @@ export default function SessionPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {errorToast && (
+        <div className="fixed right-4 top-4 z-50 max-w-sm rounded-md bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg">
+          {errorToast}
+        </div>
+      )}
       <SessionHeader
         session={sessionData?.session ?? null}
         status={status}
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
+        onContinue={handleResumeSession}
+        resuming={resuming}
+        controllerOnline={controllerOnline}
       />
       <MessageList
         messages={messages}
@@ -204,7 +279,7 @@ export default function SessionPage() {
       <InputBox
         onSend={handleSendMessage}
         onStop={handleCancelGeneration}
-        disabled={status !== 'running'}
+        disabled={status !== 'running' && status !== 'idling'}
         sending={sending}
       />
 

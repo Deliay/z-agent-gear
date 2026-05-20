@@ -5,7 +5,7 @@ const sessionSchema = new mongoose.Schema({
   controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
   controllerName: { type: String, required: true },
   acpServerType: { type: String, enum: ['opencode'], required: true },
-  status: { type: String, enum: ['creating', 'connecting', 'running', 'disconnected', 'ended'], default: 'creating' },
+  status: { type: String, enum: ['creating', 'connecting', 'idling', 'running', 'disconnected', 'ended'], default: 'creating' },
   title: { type: String, default: 'New Session' },
   externalSessionId: { type: String },
   cwd: { type: String },

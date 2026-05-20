@@ -166,3 +166,11 @@ export interface CreateSessionMutation {
 export interface SendSessionMessageMutation {
   sendSessionMessage: AcpMessageData
 }
+
+export interface ResumeSessionMutation {
+  resumeSession: {
+    success: boolean
+    status: string
+    error: string | null
+  }
+}

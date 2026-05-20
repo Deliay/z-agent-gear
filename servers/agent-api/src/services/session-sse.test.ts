@@ -183,6 +183,37 @@ describe('SessionSSEService', () => {
       expect(res._written.at(-1)).toContain('"type":"status"');
       expect(res._written.at(-1)).toContain('"status":"running"');
     });
+
+    it('should include error field when provided', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'ended', 'CONTROLLER_OFFLINE');
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"status":"ended"');
+      expect(lastWrite).toContain('"error":"CONTROLLER_OFFLINE"');
+    });
+
+    it('should not include error field when absent', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'ended');
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).not.toContain('"error"');
+    });
   });
 
   describe('removeConnections', () => {

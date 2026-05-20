@@ -87,20 +87,22 @@ export class SessionSSEService {
     globalStatusSubscriber.subscribe('session:status');
     globalStatusSubscriber.on('message', (_channel, message) => {
       try {
-        const { sessionId, status } = JSON.parse(message) as { sessionId: string; status: string };
-        this.dispatchStatus(sessionId, status);
+        const { sessionId, status, error } = JSON.parse(message) as {
+          sessionId: string; status: string; error?: string;
+        };
+        this.dispatchStatus(sessionId, status, error);
       } catch {
         // ignore parse errors
       }
     });
   }
 
-  private dispatchStatus(sessionId: string, status: string): void {
+  private dispatchStatus(sessionId: string, status: string, error?: string): void {
     if (status === 'removed') {
       this.removeConnections(sessionId);
       return;
     }
-    this.broadcastStatus(sessionId, status);
+    this.broadcastStatus(sessionId, status, error);
   }
 
   broadcastMessage(sessionId: string, message: Record<string, unknown>): void {
@@ -112,8 +114,10 @@ export class SessionSSEService {
     }
   }
 
-  broadcastStatus(sessionId: string, status: string): void {
-    const data = JSON.stringify({ type: 'status', data: { sessionId, status } });
+  broadcastStatus(sessionId: string, status: string, error?: string): void {
+    const payload: Record<string, unknown> = { sessionId, status };
+    if (error) payload.error = error;
+    const data = JSON.stringify({ type: 'status', data: payload });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);

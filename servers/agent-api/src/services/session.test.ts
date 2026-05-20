@@ -365,4 +365,64 @@ describe('SessionService', () => {
       await expect(sessionService.getAcpCapabilities('ctrl-1', 'user-1')).rejects.toThrow('Controller not found');
     });
   });
+
+  describe('resume', () => {
+    it('should return error when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: false, status: 'ended', error: 'Session not found' });
+    });
+
+    it('should return error when session is not ended', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'running' })),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: false, status: 'running', error: 'Session is not ended' });
+    });
+
+    it('should return error when session is creating', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'creating' })),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: false, status: 'creating', error: 'Session is not ended' });
+    });
+
+    it('should publish acp:resume and return connecting for ended session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: true, status: 'connecting' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:resume"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"externalSessionId":"ext-123"'));
+    });
+
+    it('should publish acp:resume even without externalSessionId', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: null }),
+        ),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: true, status: 'connecting' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"externalSessionId":""'));
+    });
+  });
 });

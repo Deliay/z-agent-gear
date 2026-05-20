@@ -213,3 +213,13 @@ export const CANCEL_GENERATION = gql`
     cancelGeneration(sessionId: $sessionId)
   }
 `
+
+export const RESUME_SESSION = gql`
+  mutation ResumeSession($id: ID!) {
+    resumeSession(id: $id) {
+      success
+      status
+      error
+    }
+  }
+`
