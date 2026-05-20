@@ -31,6 +31,19 @@ async function createControllerKey(page: import('@playwright/test').Page, token:
   return { rawKey: body.data.createControllerKey.rawKey };
 }
 
+const FAKE_DIR_ENTRIES: Record<string, Array<{ name: string; path: string; isDirectory: boolean }>> = {
+  '/home/user': [
+    { name: 'Documents', path: '/home/user/Documents', isDirectory: true },
+    { name: 'Projects', path: '/home/user/Projects', isDirectory: true },
+    { name: 'Downloads', path: '/home/user/Downloads', isDirectory: true },
+    { name: 'readme.txt', path: '/home/user/readme.txt', isDirectory: false },
+  ],
+  '/home/user/Projects': [
+    { name: 'web-app', path: '/home/user/Projects/web-app', isDirectory: true },
+    { name: 'cli-tool', path: '/home/user/Projects/cli-tool', isDirectory: true },
+  ],
+};
+
 function registerController(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, {
@@ -43,6 +56,15 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
         requestId: data.requestId,
         servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
       });
+    });
+
+    client.on('fs:browse', (data: { requestId: string; path: string | null }) => {
+      const entries = (data.path && FAKE_DIR_ENTRIES[data.path]) || FAKE_DIR_ENTRIES['/home/user'] || [];
+      client.emit('fs:browse:result', { requestId: data.requestId, entries });
+    });
+
+    client.on('fs:home', (data: { requestId: string }) => {
+      client.emit('fs:home:result', { requestId: data.requestId, path: '/home/user' });
     });
 
     client.once('registered', (data: { controllerId: string }) => {
@@ -129,6 +151,66 @@ test.describe('Settings Workspace E2E', () => {
 
     await expect(page.getByText('/home/test/project')).toBeVisible();
     await expect(page.getByText('1 个工作区')).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should show DirectoryPicker UI and browse folders via API', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('暂无工作区')).toBeVisible();
+
+    await page.getByRole('dialog').getByRole('button', { name: '添加' }).click();
+    await expect(page.getByRole('dialog').getByText('选择此目录')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('dialog').getByRole('button', { name: '取消' })).toBeVisible();
+    await expect(page.getByRole('dialog').getByRole('button', { name: '←' })).toBeDisabled();
+
+    const browseRes = await gqlRequest(page, `
+      query BrowseFolder($controllerId: ID!, $path: String) {
+        browseFolder(controllerId: $controllerId, path: $path) {
+          name path isDirectory
+        }
+      }
+    `, { controllerId, path: '/home/user' }, token);
+    const browseBody = await browseRes.json();
+    expect(browseBody.data.browseFolder.length).toBeGreaterThan(0);
+    const projects = browseBody.data.browseFolder.find((e: { name: string }) => e.name === 'Projects');
+    expect(projects).toBeTruthy();
+
+    const browseRes2 = await gqlRequest(page, `
+      query BrowseFolder($controllerId: ID!, $path: String) {
+        browseFolder(controllerId: $controllerId, path: $path) {
+          name path isDirectory
+        }
+      }
+    `, { controllerId, path: projects.path }, token);
+    const browseBody2 = await browseRes2.json();
+    const webApp = browseBody2.data.browseFolder.find((e: { name: string }) => e.name === 'web-app');
+    expect(webApp).toBeTruthy();
+
+    const wsRes = await gqlRequest(page, `
+      mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+        createWorkspace(input: $input) { id name path }
+      }
+    `, { input: { controllerId, path: webApp.path } }, token);
+    const wsBody = await wsRes.json();
+    expect(wsBody.data.createWorkspace.path).toBe(webApp.path);
+
+    await page.getByRole('dialog').getByRole('button', { name: '取消' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click();
+
+    await page.reload();
+    await goToSettings(page);
+    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('dialog').getByText(webApp.path)).toBeVisible({ timeout: 15000 });
 
     disconnect();
   });
