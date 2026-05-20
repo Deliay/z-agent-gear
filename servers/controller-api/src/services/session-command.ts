@@ -4,6 +4,7 @@ import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { folderBrowserService } from './folder-browser.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
 const SESSION_MESSAGE_CHANNEL = 'session:message';
@@ -44,6 +45,7 @@ export class SessionCommandService {
             controllerId?: string;
             serverType?: string;
             cwd?: string;
+            path?: string;
             reason?: string;
           };
 
@@ -53,6 +55,10 @@ export class SessionCommandService {
             await this.handleAcpCheck(command.requestId, command.controllerId);
           } else if (command.type === 'acp:stop' && command.sessionId) {
             await this.handleAcpStop(command.sessionId, command.reason || 'user_request');
+          } else if (command.type === 'fs:browse' && command.requestId && command.controllerId) {
+            await this.handleFsBrowse(command.requestId, command.controllerId, command.path);
+          } else if (command.type === 'fs:home' && command.requestId && command.controllerId) {
+            await this.handleFsHome(command.requestId, command.controllerId);
           }
         } else if (channel === SESSION_MESSAGE_CHANNEL) {
           const data = JSON.parse(message) as {
@@ -156,6 +162,14 @@ export class SessionCommandService {
   private async handleAcpStop(sessionId: string, reason: string): Promise<void> {
     console.log(`[SessionCommand] Stopping ACP session ${sessionId}: reason=${reason}`);
     await acpSessionManager.stopSession(sessionId, reason);
+  }
+
+  private async handleFsBrowse(requestId: string, controllerId: string, path?: string): Promise<void> {
+    await folderBrowserService.browse(requestId, controllerId, path);
+  }
+
+  private async handleFsHome(requestId: string, controllerId: string): Promise<void> {
+    await folderBrowserService.getHomeDirectory(requestId, controllerId);
   }
 }
 

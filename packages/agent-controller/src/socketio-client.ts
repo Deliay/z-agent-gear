@@ -1,5 +1,8 @@
 import { io as createSocketIOClient, type Socket } from 'socket.io-client';
 import { hostname } from 'os';
+import { readdir } from 'fs/promises';
+import { join } from 'path';
+import { homedir } from 'os';
 import { Heartbeat } from './heartbeat.js';
 import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { acpDetector } from './acp/detector.js';
@@ -40,6 +43,15 @@ interface AcpMessagePayload {
 
 interface AcpStopPayload {
   sessionId: string;
+}
+
+interface FsBrowsePayload {
+  requestId: string;
+  path: string | null;
+}
+
+interface FsHomePayload {
+  requestId: string;
 }
 
 export function connectToServer(
@@ -178,6 +190,36 @@ export function connectToServer(
       bridge.stop();
       acpBridges.delete(data.sessionId);
     }
+  });
+
+  // File system events
+  socket.on('fs:browse', async (data: FsBrowsePayload) => {
+    console.log(`FS browse requested: requestId=${data.requestId} path=${data.path}`);
+    try {
+      const targetPath = data.path || homedir();
+      const entries = await readdir(targetPath, { withFileTypes: true });
+      const result = entries
+        .filter((entry) => !entry.name.startsWith('.'))
+        .map((entry) => ({
+          name: entry.name,
+          path: join(targetPath, entry.name),
+          isDirectory: entry.isDirectory(),
+        }))
+        .sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+      socket.emit('fs:browse:result', { requestId: data.requestId, entries: result });
+    } catch (error) {
+      console.error(`FS browse error: ${(error as Error).message}`);
+      socket.emit('fs:browse:result', { requestId: data.requestId, entries: [] });
+    }
+  });
+
+  socket.on('fs:home', async (data: FsHomePayload) => {
+    console.log(`FS home requested: requestId=${data.requestId}`);
+    const homePath = homedir();
+    socket.emit('fs:home:result', { requestId: data.requestId, path: homePath });
   });
 
   socket.on('disconnect', (reason) => {
