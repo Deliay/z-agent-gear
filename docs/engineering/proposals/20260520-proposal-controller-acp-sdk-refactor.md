@@ -523,9 +523,32 @@ socket.on('acp:start:result', async (payload) => {
     await Session.findByIdAndUpdate(payload.sessionId, {
       externalSessionId: payload.externalSessionId,
     });
+    // Redis 缓存映射（TTL 24h，用于快速查重/重连）
+    const redis = getRedisClient();
+    await redis.set(
+      `session:${payload.sessionId}:acpSessionId`,
+      payload.externalSessionId,
+      'EX', 86400,
+    );
   }
 });
 ```
+
+**sessionId ↔ acpSessionId 映射存储汇总：**
+
+| 存储层 | Key/Path | 值 | 用途 |
+|--------|----------|-----|------|
+| MongoDB Session 文档 | `Session.externalSessionId` | ACP session ID | 持久化存储，controller-api 重启后不丢失 |
+| Redis 缓存 | `session:{sessionId}:acpSessionId` | ACP session ID | 快速查询，TTL 24h |
+| acpSessionManager 内存 | `Map<sessionId, ACPSession>` | socket + controllerId + userId | 活跃 session 路由，重启后重建 |
+
+**使用场景：**
+
+| 场景 | 从哪读取 | 写入时机 |
+|------|---------|---------|
+| `acp:start:result` 收到后 | — | MongoDB + Redis |
+| `resumeSession` 请求 | MongoDB | — |
+| 启动时清理孤儿 session | MongoDB | — |
 
 **index.ts** — 启动时清理孤儿 session：
 
