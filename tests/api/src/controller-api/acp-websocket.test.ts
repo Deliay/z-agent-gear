@@ -46,6 +46,14 @@ const CREATE_SESSION = `
   }
 `;
 
+const CREATE_WORKSPACE = `
+  mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+    createWorkspace(input: $input) {
+      id controllerId path
+    }
+  }
+`;
+
 const SESSION_QUERY = `
   query Session($id: ID!) {
     session(id: $id) {
@@ -91,6 +99,16 @@ async function createFreshController(): Promise<{ rawKey: string; controllerId: 
   return { rawKey, controllerId: regData.controllerId, client };
 }
 
+async function createWorkspace(controllerId: string): Promise<string> {
+  const res = await gqlRequest(
+    CREATE_WORKSPACE,
+    { input: { controllerId, path: `/tmp/test-${Date.now()}` } },
+    authToken,
+  );
+  const body = await res.json();
+  return body.data.createWorkspace.id;
+}
+
 describe('Controller API ACP WebSocket', () => {
   beforeAll(async () => {
     const uid = `acp_${Date.now().toString(36)}`;
@@ -118,6 +136,7 @@ describe('Controller API ACP WebSocket', () => {
   describe('acp:start via createSession', () => {
     it('should send acp:start to controller when session is created', async () => {
       const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
 
       // Listen for acp:start BEFORE creating session
       const startEvent = waitForEvent<{
@@ -130,7 +149,7 @@ describe('Controller API ACP WebSocket', () => {
       // Create session via agent-api → triggers acp:start via Redis
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
-        { input: { controllerId, acpServerType: 'opencode' } },
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
         authToken,
       );
       const sessionBody = await sessionRes.json();
@@ -162,6 +181,7 @@ describe('Controller API ACP WebSocket', () => {
 
     it('should handle acp:start failure from controller', async () => {
       const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
 
       const startEvent = waitForEvent<{
         requestId: string;
@@ -170,7 +190,7 @@ describe('Controller API ACP WebSocket', () => {
 
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
-        { input: { controllerId, acpServerType: 'opencode' } },
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
         authToken,
       );
       const sessionBody = await sessionRes.json();
@@ -200,12 +220,13 @@ describe('Controller API ACP WebSocket', () => {
   describe('acp:message from controller', () => {
     it('should handle output message from controller and persist to DB', async () => {
       const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
 
       const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
 
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
-        { input: { controllerId, acpServerType: 'opencode' } },
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
         authToken,
       );
       const sessionBody = await sessionRes.json();
@@ -258,12 +279,13 @@ describe('Controller API ACP WebSocket', () => {
   describe('acp:stopped from controller', () => {
     it('should update session status to ended when controller sends acp:stopped', async () => {
       const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
 
       const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
 
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
-        { input: { controllerId, acpServerType: 'opencode' } },
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
         authToken,
       );
       const sessionBody = await sessionRes.json();
