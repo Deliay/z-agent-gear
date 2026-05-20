@@ -104,14 +104,14 @@ export default function SessionPage() {
     };
   }, [id]);
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, cwd?: string) => {
+  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
     try {
       const { data } = await createSession({
         variables: {
           input: {
             controllerId,
             acpServerType,
-            cwd,
+            workspaceId,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],

@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { NavLink, useParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import { GET_SESSIONS } from '../graphql/queries';
-import type { GetSessionsQuery } from '../graphql/types';
+import { GET_SESSIONS, GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '../graphql/queries';
+import type { GetSessionsQuery, GetControllersQuery, GetControllerWorkspacesQuery } from '../graphql/types';
 
 interface SidebarProps {
   username: string;
@@ -16,8 +17,66 @@ const statusColors: Record<string, string> = {
 
 export default function Sidebar({ username }: SidebarProps) {
   const { id: activeId } = useParams<{ id: string }>();
-  const { data } = useQuery<GetSessionsQuery>(GET_SESSIONS);
-  const sessions = data?.sessions ?? [];
+  const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
+
+  const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS);
+  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS);
+  const { data: workspacesData } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
+    variables: { controllerId: '' },
+    skip: true,
+  });
+
+  const sessions = sessionsData?.sessions ?? [];
+  const controllers = controllersData?.controllers ?? [];
+  const allWorkspaces = workspacesData?.controllerWorkspaces ?? [];
+
+  // Group sessions by controllerId + cwd (workspace path)
+  const sessionsByController = new Map<string, typeof sessions>();
+  const sessionsByWorkspace = new Map<string, typeof sessions>();
+
+  for (const session of sessions) {
+    // Group by controller
+    const controllerSessions = sessionsByController.get(session.controllerId) || [];
+    controllerSessions.push(session);
+    sessionsByController.set(session.controllerId, controllerSessions);
+
+    // Group by workspace (using cwd as workspace path)
+    if (session.cwd) {
+      const workspaceKey = `${session.controllerId}:${session.cwd}`;
+      const workspaceSessions = sessionsByWorkspace.get(workspaceKey) || [];
+      workspaceSessions.push(session);
+      sessionsByWorkspace.set(workspaceKey, workspaceSessions);
+    }
+  }
+
+  const toggleController = (controllerId: string) => {
+    setExpandedControllers((prev) => {
+      const next = new Set(prev);
+      if (next.has(controllerId)) {
+        next.delete(controllerId);
+      } else {
+        next.add(controllerId);
+      }
+      return next;
+    });
+  };
+
+  const toggleWorkspace = (workspaceKey: string) => {
+    setExpandedWorkspaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(workspaceKey)) {
+        next.delete(workspaceKey);
+      } else {
+        next.add(workspaceKey);
+      }
+      return next;
+    });
+  };
+
+  const getWorkspaceName = (path: string) => {
+    return path.split('/').filter(Boolean).pop() || path;
+  };
 
   return (
     <nav className="flex h-screen flex-col bg-gray-900 text-white" aria-label="Sidebar">
@@ -31,31 +90,100 @@ export default function Sidebar({ username }: SidebarProps) {
             新建
           </NavLink>
         </div>
+
         <ul className="space-y-1">
-          {sessions.map((session) => (
-            <li key={session.id}>
-              <NavLink
-                to={`/sessions/${session.id}`}
-                className={`flex items-center gap-2 rounded px-3 py-2 text-sm transition-colors ${
-                  activeId === session.id
-                    ? 'bg-gray-700 text-white'
-                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                }`}
-              >
-                <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">
-                    {session.title || 'New Session'}
-                  </div>
-                  <div className="truncate text-xs text-gray-400">
-                    {session.controllerName || session.acpServerType}
-                  </div>
-                </div>
-              </NavLink>
-            </li>
-          ))}
+          {controllers.map((controller) => {
+            const isExpanded = expandedControllers.has(controller.id);
+            const controllerSessions = sessionsByController.get(controller.id) || [];
+            const isOffline = controller.status !== 'online';
+
+            // Get unique workspace paths for this controller
+            const workspacePaths = new Set(
+              controllerSessions
+                .filter((s) => s.cwd)
+                .map((s) => s.cwd!)
+            );
+
+            return (
+              <li key={controller.id}>
+                <button
+                  type="button"
+                  className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-gray-800 ${
+                    isOffline ? 'opacity-50' : ''
+                  }`}
+                  onClick={() => toggleController(controller.id)}
+                >
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${
+                    controller.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                  }`} />
+                  <span className="flex-1 truncate text-left font-medium">
+                    {controller.name || controller.hostname}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {isExpanded ? '▼' : '▶'}
+                  </span>
+                </button>
+
+                {isExpanded && (
+                  <ul className="ml-4 space-y-1">
+                    {workspacePaths.size === 0 ? (
+                      <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
+                    ) : (
+                      Array.from(workspacePaths).map((workspacePath) => {
+                        const workspaceKey = `${controller.id}:${workspacePath}`;
+                        const isWsExpanded = expandedWorkspaces.has(workspaceKey);
+                        const wsSessions = sessionsByWorkspace.get(workspaceKey) || [];
+
+                        return (
+                          <li key={workspaceKey}>
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-gray-800"
+                              onClick={() => toggleWorkspace(workspaceKey)}
+                            >
+                              <span className="text-xs text-gray-400">
+                                {isWsExpanded ? '▼' : '▶'}
+                              </span>
+                              <span className="flex-1 truncate text-left text-gray-300">
+                                📁 {getWorkspaceName(workspacePath)}
+                              </span>
+                            </button>
+
+                            {isWsExpanded && (
+                              <ul className="ml-4 space-y-1">
+                                {wsSessions.map((session) => (
+                                  <li key={session.id}>
+                                    <NavLink
+                                      to={`/sessions/${session.id}`}
+                                      className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                                        activeId === session.id
+                                          ? 'bg-gray-700 text-white'
+                                          : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                                      }`}
+                                    >
+                                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate">
+                                          {session.title || 'New Session'}
+                                        </div>
+                                      </div>
+                                    </NavLink>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </li>
+                        );
+                      })
+                    )}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
+
       <div className="sticky bottom-0 border-t border-gray-700 p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <span className="truncate text-sm font-medium">{username}</span>
@@ -68,18 +196,9 @@ export default function Sidebar({ username }: SidebarProps) {
               }`
             }
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                fillRule="evenodd"
-                d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z"
-                clipRule="evenodd"
-              />
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
             </svg>
           </NavLink>
         </div>

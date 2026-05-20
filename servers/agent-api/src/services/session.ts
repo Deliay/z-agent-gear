@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
+import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 export class SessionService {
@@ -16,10 +17,15 @@ export class SessionService {
     return this.mapSession(session);
   }
 
-  async create(userId: string, input: { controllerId: string; acpServerType: string; cwd?: string }): Promise<Record<string, unknown>> {
+  async create(userId: string, input: { controllerId: string; acpServerType: string; workspaceId: string }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
+    }
+
+    const workspace = await ControllerWorkspace.findOne({ _id: input.workspaceId, userId, controllerId: input.controllerId }).lean();
+    if (!workspace) {
+      throw new Error('Workspace not found');
     }
 
     const session = await Session.create({
@@ -28,7 +34,7 @@ export class SessionService {
       controllerName: controller.name,
       acpServerType: input.acpServerType as 'opencode',
       status: 'creating',
-      cwd: input.cwd,
+      cwd: workspace.path,
     });
 
     // Notify controller-api to start ACP session via Redis Pub/Sub
@@ -38,7 +44,7 @@ export class SessionService {
       sessionId: session._id.toString(),
       controllerId: input.controllerId,
       serverType: input.acpServerType,
-      cwd: input.cwd,
+      cwd: workspace.path,
     }));
 
     return this.mapSession(session.toObject());

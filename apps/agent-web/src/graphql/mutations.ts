@@ -146,6 +146,42 @@ export const CREATE_SESSION = gql`
   }
 `
 
+export const CREATE_WORKSPACE = gql`
+  mutation CreateWorkspace($input: CreateWorkspaceInput!) {
+    createWorkspace(input: $input) {
+      id
+      userId
+      controllerId
+      name
+      path
+      isEnabled
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const DELETE_WORKSPACE = gql`
+  mutation DeleteWorkspace($id: ID!) {
+    deleteWorkspace(id: $id)
+  }
+`
+
+export const CLEAR_WORKSPACES = gql`
+  mutation ClearWorkspaces($controllerId: ID!) {
+    clearWorkspaces(controllerId: $controllerId)
+  }
+`
+
+export const TOGGLE_WORKSPACE = gql`
+  mutation ToggleWorkspace($id: ID!) {
+    toggleWorkspace(id: $id) {
+      id
+      isEnabled
+    }
+  }
+`
+
 export const CLOSE_SESSION = gql`
   mutation CloseSession($id: ID!) {
     closeSession(id: $id)

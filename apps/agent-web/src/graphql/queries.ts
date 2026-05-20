@@ -136,3 +136,45 @@ export const GET_CONTROLLERS = gql`
     }
   }
 `
+
+export const GET_CONTROLLER_WORKSPACES = gql`
+  query GetControllerWorkspaces($controllerId: ID!) {
+    controllerWorkspaces(controllerId: $controllerId) {
+      id
+      userId
+      controllerId
+      name
+      path
+      isEnabled
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const GET_CONTROLLER_WORKSPACES_ENABLED = gql`
+  query GetControllerWorkspacesEnabled($controllerId: ID!) {
+    controllerWorkspaces(controllerId: $controllerId) {
+      id
+      name
+      path
+      isEnabled
+    }
+  }
+`
+
+export const BROWSE_FOLDER = gql`
+  query BrowseFolder($controllerId: ID!, $path: String) {
+    browseFolder(controllerId: $controllerId, path: $path) {
+      name
+      path
+      isDirectory
+    }
+  }
+`
+
+export const GET_HOME_DIRECTORY = gql`
+  query GetHomeDirectory($controllerId: ID!) {
+    getHomeDirectory(controllerId: $controllerId)
+  }
+`

@@ -63,7 +63,7 @@ export const sessionTypeDefs = `#graphql
   input CreateSessionInput {
     controllerId: ID!
     acpServerType: AcpServerType! = opencode
-    cwd: String
+    workspaceId: ID!
   }
 
   extend type Query {

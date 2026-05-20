@@ -45,7 +45,7 @@ export const sessionResolvers = {
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; cwd?: string } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -57,6 +57,9 @@ export const sessionResolvers = {
       } catch (err) {
         if ((err as Error).message === 'Controller not found') {
           throw new GraphQLError('Controller not found');
+        }
+        if ((err as Error).message === 'Workspace not found') {
+          throw new GraphQLError('Workspace not found');
         }
         throw new GraphQLError((err as Error).message);
       }

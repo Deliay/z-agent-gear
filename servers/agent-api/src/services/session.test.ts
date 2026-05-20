@@ -26,6 +26,12 @@ vi.mock('../models/controller.js', () => ({
   },
 }));
 
+vi.mock('../models/controller-workspace.js', () => ({
+  ControllerWorkspace: {
+    findOne: vi.fn(),
+  },
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -34,6 +40,7 @@ import { sessionService } from './session.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
+import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const mockRedis = {
@@ -138,26 +145,30 @@ describe('SessionService', () => {
   });
 
   describe('create', () => {
-    it('should create session with controller name', async () => {
+    it('should create session with controller name and workspace path', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({ controllerName: 'my-server' }) as never);
 
       const result = await sessionService.create('user-1', {
         controllerId: 'ctrl-1',
         acpServerType: 'opencode',
-        cwd: '/tmp',
+        workspaceId: 'ws-1',
       });
 
       expect(Controller.findOne).toHaveBeenCalledWith({ _id: 'ctrl-1', userId: 'user-1' });
+      expect(ControllerWorkspace.findOne).toHaveBeenCalledWith({ _id: 'ws-1', userId: 'user-1', controllerId: 'ctrl-1' });
       expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         controllerId: 'ctrl-1',
         controllerName: 'my-server',
         acpServerType: 'opencode',
         status: 'creating',
-        cwd: '/tmp',
+        cwd: '/home/user/project',
       }));
       expect(result.id).toBe('sess-1');
     });
@@ -170,7 +181,23 @@ describe('SessionService', () => {
       await expect(sessionService.create('user-1', {
         controllerId: 'ctrl-1',
         acpServerType: 'opencode',
+        workspaceId: 'ws-1',
       })).rejects.toThrow('Controller not found');
+    });
+
+    it('should throw when workspace not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+      })).rejects.toThrow('Workspace not found');
     });
   });
 

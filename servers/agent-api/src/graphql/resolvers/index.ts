@@ -2,6 +2,7 @@ import { authResolvers } from './auth.js';
 import { providerResolvers } from './provider.js';
 import { modelResolvers } from './model.js';
 import { controllerResolvers } from './controller.js';
+import { controllerWorkspaceResolvers } from './controller-workspace.js';
 import { sessionResolvers } from './session.js';
 
 export const resolvers = {
@@ -10,6 +11,7 @@ export const resolvers = {
     ...providerResolvers.Query,
     ...modelResolvers.Query,
     ...controllerResolvers.Query,
+    ...controllerWorkspaceResolvers.Query,
     ...sessionResolvers.Query,
   },
   Mutation: {
@@ -17,6 +19,7 @@ export const resolvers = {
     ...providerResolvers.Mutation,
     ...modelResolvers.Mutation,
     ...controllerResolvers.Mutation,
+    ...controllerWorkspaceResolvers.Mutation,
     ...sessionResolvers.Mutation,
   },
   Provider: {

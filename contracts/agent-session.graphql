@@ -61,7 +61,7 @@ type CreateSessionPayload {
 input CreateSessionInput {
   controllerId: ID!
   acpServerType: AcpServerType! = opencode
-  cwd: String
+  workspaceId: ID!
 }
 
 type Query {
