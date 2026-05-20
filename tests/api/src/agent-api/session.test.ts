@@ -98,6 +98,16 @@ const CLOSE_SESSION = `
   }
 `;
 
+const RESUME_SESSION = `
+  mutation ResumeSession($id: ID!) {
+    resumeSession(id: $id) {
+      success
+      status
+      error
+    }
+  }
+`;
+
 const DELETE_SESSION = `
   mutation DeleteSession($id: ID!) {
     deleteSession(id: $id)
@@ -389,6 +399,67 @@ describe('Session GraphQL API', () => {
     });
   });
 
+  describe('resumeSession', () => {
+    it('should reject resumeSession without auth', async () => {
+      const res = await gqlRequest(RESUME_SESSION, { id: '000000000000000000000000' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should return error for non-existent session', async () => {
+      const res = await gqlRequest(
+        RESUME_SESSION,
+        { id: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.resumeSession.success).toBe(false);
+      expect(body.data.resumeSession.status).toBe('ended');
+      expect(body.data.resumeSession.error).toBe('Session not found');
+    });
+
+    it('should return error when session is not ended', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+
+      // Session is in 'creating' state, not ended
+      const res = await gqlRequest(RESUME_SESSION, { id: sessionId }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.resumeSession.success).toBe(false);
+      expect(body.data.resumeSession.status).toBe('creating');
+      expect(body.data.resumeSession.error).toBe('Session is not ended');
+    });
+
+    it('should return success and status connecting for ended session', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+
+      // Close to get ended status
+      await gqlRequest(CLOSE_SESSION, { id: sessionId }, authToken);
+
+      const res = await gqlRequest(RESUME_SESSION, { id: sessionId }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.resumeSession.success).toBe(true);
+      expect(body.data.resumeSession.status).toBe('connecting');
+    });
+  });
+
   describe('acpCapabilities query', () => {
     it('should return capabilities for controller', async () => {
       const res = await gqlRequest(
@@ -634,6 +705,146 @@ describe('Session WebSocket ACP Events', () => {
       await new Promise((r) => setTimeout(r, 500));
 
       // Verify session status changed to ended
+      const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('ended');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:resume flow: create → acp:start → close → resume → acp:resume → verify idling', async () => {
+      // 1. Register a fresh controller
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `resume-e2e-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'resume-e2e-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      // 2. Create session and start ACP
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = createRes.status === 200
+        ? (await createRes.json()).data.createSession.session.id
+        : '';
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_resume_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+
+      // 3. Close the session
+      await gqlRequest(CLOSE_SESSION, { id: sessionId }, authToken);
+
+      // Verify ended
+      let sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      let sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('ended');
+
+      // 4. Listen for acp:resume
+      const resumeEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        externalSessionId: string;
+      }>(client, 'acp:resume', 10000);
+
+      // 5. Call resumeSession mutation
+      const resumeRes = await gqlRequest(RESUME_SESSION, { id: sessionId }, authToken);
+      const resumeBody = await resumeRes.json();
+      expect(resumeBody.errors).toBeUndefined();
+      expect(resumeBody.data.resumeSession.success).toBe(true);
+      expect(resumeBody.data.resumeSession.status).toBe('connecting');
+
+      // 6. Fake controller receives acp:resume
+      const resumeData = await resumeEvent;
+      expect(resumeData.sessionId).toBe(sessionId);
+
+      client.emit('acp:resume:result', {
+        requestId: resumeData.requestId,
+        sessionId,
+        success: true,
+      });
+
+      // 7. Wait for controller-api to process and verify idling
+      await new Promise((r) => setTimeout(r, 500));
+
+      sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('idling');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:resume failure: resume → controller reports failure → verify ended with error', async () => {
+      // Register fresh controller
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `resume-fail-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'resume-fail-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      // Create session + acp:start
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = createRes.status === 200
+        ? (await createRes.json()).data.createSession.session.id
+        : '';
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_resume_fail_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Close session
+      await gqlRequest(CLOSE_SESSION, { id: sessionId }, authToken);
+
+      // Resume
+      const resumeEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:resume', 10000);
+      await gqlRequest(RESUME_SESSION, { id: sessionId }, authToken);
+
+      const resumeData = await resumeEvent;
+      client.emit('acp:resume:result', {
+        requestId: resumeData.requestId,
+        sessionId,
+        success: false,
+        error: 'ACP_SESSION_EXPIRED',
+      });
+
+      // Verify ended
+      await new Promise((r) => setTimeout(r, 500));
       const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
       const sessionBody = await sessionRes.json();
       expect(sessionBody.data.session.status).toBe('ended');
