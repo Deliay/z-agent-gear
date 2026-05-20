@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   GET_SESSION,
   GET_SESSIONS,
-  GET_SESSION_MESSAGES,
   GET_CONTROLLERS,
 } from '../graphql/queries';
 import {
@@ -16,7 +15,6 @@ import {
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
-  GetSessionMessagesQuery,
   GetControllersQuery,
   CreateSessionMutation,
 } from '../graphql/types';
@@ -42,16 +40,9 @@ export default function SessionPage() {
   const [messages, setMessages] = useState<AcpMessage[]>([]);
   const [status, setStatus] = useState<string>('connecting');
   const [sending, setSending] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
-    skip: !id,
-  });
-
-  const { data: messagesData, loading: messagesLoading, fetchMore } = useQuery<GetSessionMessagesQuery>(GET_SESSION_MESSAGES, {
-    variables: { sessionId: id, limit: 100, offset: 0 },
     skip: !id,
   });
 
@@ -62,13 +53,6 @@ export default function SessionPage() {
   const [deleteSession] = useMutation(DELETE_SESSION);
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
-
-  useEffect(() => {
-    if (messagesData?.sessionMessages) {
-      setMessages(messagesData.sessionMessages);
-      setHasMore(messagesData.sessionMessages.length >= 100);
-    }
-  }, [messagesData]);
 
   useEffect(() => {
     if (sessionData?.session) {
@@ -172,31 +156,7 @@ export default function SessionPage() {
     }
   };
 
-  const handleLoadMore = useCallback(async () => {
-    if (!id || loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    try {
-      await fetchMore({
-        variables: {
-          offset: messages.length,
-        },
-        updateQuery: (prev, { fetchMoreResult }) => {
-          if (!fetchMoreResult?.sessionMessages) return prev;
-          setHasMore(fetchMoreResult.sessionMessages.length >= 100);
-          return {
-            ...prev,
-            sessionMessages: [...fetchMoreResult.sessionMessages, ...prev.sessionMessages],
-          };
-        },
-      });
-    } catch {
-      // ignore
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [id, loadingMore, hasMore, messages.length, fetchMore]);
-
-  if (sessionLoading || messagesLoading) {
+  if (sessionLoading) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600" />
@@ -240,9 +200,6 @@ export default function SessionPage() {
       />
       <MessageList
         messages={messages}
-        hasMore={hasMore}
-        onLoadMore={handleLoadMore}
-        loadingMore={loadingMore}
       />
       <InputBox
         onSend={handleSendMessage}

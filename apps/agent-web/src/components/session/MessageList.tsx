@@ -34,13 +34,15 @@ function parseSessionUpdate(content: string): SessionUpdate | null {
 
 function groupMessages(messages: AcpMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = [];
-  let currentGroup: MessageGroup | null = null;
+  const toolCallGroupMap = new Map<string, number>(); // toolCallId -> group index
+  const thoughtGroupMap = new Map<string, number>();  // messageId -> group index
 
   for (const message of messages) {
     const parsed = parseSessionUpdate(message.content);
     const sessionUpdateType = parsed?.sessionUpdate;
-    // Extract messageId from the parsed ACP ContentChunk
-    const chunkMessageId = (parsed as Record<string, unknown>)?.messageId as string | undefined;
+    const raw = parsed as Record<string, unknown> | null;
+    const chunkMessageId = raw?.messageId as string | undefined;
+    const toolCallId = raw?.toolCallId as string | undefined;
 
     let groupType: MessageGroup['type'];
 
@@ -58,28 +60,70 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       groupType = 'unknown';
     }
 
-    // Only continue current group if type matches AND messageId matches (for message/thought)
-    const shouldContinue =
-      currentGroup &&
-      currentGroup.type === groupType &&
-      (groupType === 'message' || groupType === 'thought') &&
-      chunkMessageId &&
-      currentGroup.messageId === chunkMessageId;
+    let groupIndex = -1;
 
-    if (shouldContinue) {
-      currentGroup!.messages.push(message);
+    if (groupType === 'tool_call' && toolCallId) {
+      // Tool calls: group by toolCallId across the entire message list
+      if (toolCallGroupMap.has(toolCallId)) {
+        groupIndex = toolCallGroupMap.get(toolCallId)!;
+      } else {
+        groupIndex = groups.length;
+        toolCallGroupMap.set(toolCallId, groupIndex);
+        groups.push({ type: groupType, messages: [], parsed, messageId: null });
+      }
+    } else if (groupType === 'thought' && chunkMessageId) {
+      // Thought chunks: group by messageId across the entire list
+      if (thoughtGroupMap.has(chunkMessageId)) {
+        groupIndex = thoughtGroupMap.get(chunkMessageId)!;
+      } else {
+        groupIndex = groups.length;
+        thoughtGroupMap.set(chunkMessageId, groupIndex);
+        groups.push({ type: groupType, messages: [], parsed, messageId: chunkMessageId });
+      }
     } else {
-      currentGroup = {
-        type: groupType,
-        messages: [message],
-        parsed,
-        messageId: chunkMessageId || null,
-      };
-      groups.push(currentGroup);
+      // Consecutive grouping for all other types (message, available_commands, usage, etc.)
+      const lastIndex = groups.length - 1;
+      if (lastIndex >= 0 && groups[lastIndex].type === groupType) {
+        groupIndex = lastIndex;
+      } else {
+        groupIndex = groups.length;
+        groups.push({ type: groupType, messages: [], parsed, messageId: null });
+      }
     }
+
+    groups[groupIndex].messages.push(message);
   }
 
   return groups;
+}
+
+function mergeMessageChunks(messages: AcpMessage[]): string {
+  const parts: string[] = [];
+  for (const msg of messages) {
+    const parsed = parseSessionUpdate(msg.content);
+    if (
+      parsed &&
+      'sessionUpdate' in parsed &&
+      (parsed.sessionUpdate === 'agent_message_chunk' || parsed.sessionUpdate === 'user_message_chunk') &&
+      'content' in parsed &&
+      parsed.content &&
+      typeof parsed.content === 'object' &&
+      'type' in parsed.content &&
+      (parsed.content as { type: string }).type === 'text'
+    ) {
+      parts.push((parsed.content as { text: string }).text || '');
+    }
+  }
+  if (parts.length === 0) return messages[messages.length - 1]?.content || '';
+
+  const last = parseSessionUpdate(messages[messages.length - 1].content);
+  if (last && 'sessionUpdate' in last) {
+    return JSON.stringify({
+      ...last,
+      content: { type: 'text', text: parts.join('') },
+    });
+  }
+  return messages[messages.length - 1]?.content || '';
 }
 
 interface MessageListProps {
@@ -190,6 +234,16 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                   />
                 );
               case 'message':
+                // Merge consecutive message chunks into a single MessageItem
+                return (
+                  <MessageItem
+                    key={group.messages[0].id}
+                    message={{
+                      ...group.messages[0],
+                      content: mergeMessageChunks(group.messages),
+                    }}
+                  />
+                );
               case 'unknown':
               default:
                 return group.messages.map((message) => (

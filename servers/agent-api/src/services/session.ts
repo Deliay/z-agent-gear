@@ -151,7 +151,7 @@ export class SessionService {
     }
 
     const messages = await AcpMessage.find({ sessionId })
-      .sort({ createdAt: 1 })
+      .sort({ _id: 1 })
       .skip(offset)
       .limit(limit)
       .lean();
