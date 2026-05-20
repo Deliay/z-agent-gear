@@ -9,6 +9,7 @@ import { heartbeatService } from './services/heartbeat.js';
 import { commandService } from './services/command.js';
 import { sessionCommandService } from './services/session-command.js';
 import { folderBrowserService } from './services/folder-browser.js';
+import { Session } from './models/session.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -28,6 +29,12 @@ async function start() {
   try {
     await mongoose.connect(config.mongodbUri);
     console.log('Connected to MongoDB');
+
+    // Clean up orphan sessions (stuck in 'connecting' from previous lifecycle)
+    await Session.updateMany(
+      { status: 'connecting' },
+      { status: 'ended', endedAt: new Date() },
+    );
   } catch (err) {
     console.warn('MongoDB not available, starting without database:', (err as Error).message);
   }

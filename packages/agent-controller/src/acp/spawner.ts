@@ -1,38 +1,38 @@
-import { spawn, type ChildProcess } from 'child_process';
-import { EventEmitter } from 'events';
+import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { Writable, Readable } from 'node:stream';
+import { existsSync, mkdirSync } from 'fs';
 
 export interface AcpProcessOptions {
   sessionId: string;
   cwd: string;
+  command?: string;
+  args?: string[];
 }
 
-export class AcpSpawner extends EventEmitter {
+export class AcpSpawner {
   private process: ChildProcess | null = null;
   private sessionId: string;
   private cwd: string;
+  private command: string;
+  private args: string[];
+  private resolveClosed: (() => void) | null = null;
+  private _closed: Promise<void>;
 
   constructor(options: AcpProcessOptions) {
-    super();
     this.sessionId = options.sessionId;
     this.cwd = options.cwd;
+    this.command = options.command ?? 'opencode';
+    this.args = options.args ?? ['acp'];
+    this._closed = new Promise((resolve) => { this.resolveClosed = resolve; });
   }
 
   start(): void {
-    this.process = spawn('opencode', ['acp'], {
+    const cmd = this.resolveCommand();
+    console.log(`Starting ACP server ${cmd}`)
+    mkdirSync(this.cwd, { recursive: true });
+    this.process = spawn(cmd, this.args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      for (const line of lines) {
-        try {
-          const message = JSON.parse(line);
-          this.emit('message', message);
-        } catch (error) {
-          console.error('Failed to parse ACP message:', error);
-        }
-      }
     });
 
     this.process.stderr?.on('data', (data: Buffer) => {
@@ -41,28 +41,32 @@ export class AcpSpawner extends EventEmitter {
 
     this.process.on('exit', (code, signal) => {
       console.log(`ACP process exited with code ${code} and signal ${signal}`);
-      this.emit('exit', { code, signal });
       this.process = null;
+      this.resolveClosed?.();
     });
 
     this.process.on('error', (error) => {
       console.error('ACP process error:', error);
-      this.emit('error', error);
     });
   }
 
-  send(message: Record<string, unknown>): void {
-    if (!this.process?.stdin) {
-      throw new Error('ACP process not running');
-    }
-    this.process.stdin.write(JSON.stringify(message) + '\n');
+  get stdin(): WritableStream {
+    if (!this.process?.stdin) throw new Error('ACP process not running');
+    return Writable.toWeb(this.process.stdin) as WritableStream;
+  }
+
+  get stdout(): ReadableStream<Uint8Array> {
+    if (!this.process?.stdout) throw new Error('ACP process not running');
+    return Readable.toWeb(this.process.stdout) as ReadableStream<Uint8Array>;
+  }
+
+  get closed(): Promise<void> {
+    return this._closed;
   }
 
   stop(): void {
     if (this.process) {
       this.process.kill('SIGTERM');
-      
-      // Force kill after 5 seconds if process hasn't exited
       setTimeout(() => {
         if (this.process) {
           this.process.kill('SIGKILL');
@@ -75,7 +79,16 @@ export class AcpSpawner extends EventEmitter {
     return this.process !== null;
   }
 
-  getSessionId(): string {
-    return this.sessionId;
+  private resolveCommand(): string {
+    if (this.command.includes('/')) return this.command;
+    const candidates = [this.command, `/usr/bin/${this.command}`, `/usr/local/bin/${this.command}`];
+    for (const cmd of candidates) {
+      try {
+        const result = execFileSync('which', [cmd], { encoding: 'utf8', timeout: 1000 });
+        if (result.trim()) return result.trim();
+      } catch { /* try next */ }
+      if (existsSync(cmd)) return cmd;
+    }
+    return this.command;
   }
 }

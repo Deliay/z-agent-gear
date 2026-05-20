@@ -103,5 +103,25 @@ export const sessionResolvers = {
         content: args.content,
       });
     },
+    cancelGeneration: async (
+      _parent: unknown,
+      args: { sessionId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionService.cancelGeneration(args.sessionId, context.currentUser.id);
+    },
+    resumeSession: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionService.resume(args.id, context.currentUser.id);
+    },
   },
 };

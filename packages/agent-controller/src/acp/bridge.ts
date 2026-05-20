@@ -1,290 +1,230 @@
+import * as acp from '@agentclientprotocol/sdk';
 import { EventEmitter } from 'events';
 import type { Socket } from 'socket.io-client';
-import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import { AcpSpawner, type AcpProcessOptions } from './spawner.js';
+import { AcpSpawner } from './spawner.js';
 
 const ACP_PROTOCOL_VERSION = 1;
-const INITIALIZE_TIMEOUT_MS = 30_000;
-const SESSION_NEW_TIMEOUT_MS = 30_000;
 
 export interface AcpBridgeOptions {
   sessionId: string;
-  controllerId: string;
   cwd: string;
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
 }
 
-interface PendingRequest {
-  resolve: (value: unknown) => void;
-  reject: (reason: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+interface QueuedInput {
+  type: string;
+  content: string;
 }
 
-export class AcpWebSocketBridge extends EventEmitter {
+function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] {
+  return (servers ?? []).map((s) => ({
+    name: s.name,
+    command: s.command,
+    args: s.args ?? [],
+    env: s.env ?? [],
+  }));
+}
+
+export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private spawner: AcpSpawner;
   private socket: Socket;
   private sessionId: string;
-  private controllerId: string;
   private cwd: string;
   private mcpServers: AcpBridgeOptions['mcpServers'];
+  private connection: acp.ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
-  private initialized = false;
-  private pendingRequests = new Map<number, PendingRequest>();
-  private requestIdCounter = 0;
-  private inputQueue: Array<{ type: string; content: string }> = [];
+  private activePrompt: Promise<acp.PromptResponse> | null = null;
+  private inputQueue: QueuedInput[] = [];
   private textChunkBuffer = '';
+  private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
+  private initializing = false;
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
     this.socket = socket;
     this.sessionId = options.sessionId;
-    this.controllerId = options.controllerId;
     this.cwd = options.cwd;
     this.mcpServers = options.mcpServers;
-    this.spawner = spawner ?? new AcpSpawner({
-      sessionId: options.sessionId,
-      cwd: options.cwd,
-    });
-
-    this.setupEventHandlers();
+    this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
   }
 
-  private setupEventHandlers(): void {
-    this.spawner.on('message', (message: Record<string, unknown>) => {
-      this.handleAcpMessage(message);
-    });
+  async start(): Promise<void> {
+    if (this.initializing) return;
+    this.initializing = true;
 
-    this.spawner.on('exit', ({ code, signal }: { code: number | null; signal: string | null }) => {
-      this.handleAcpExit(code, signal);
-    });
-
-    this.spawner.on('error', (error: Error) => {
-      console.error('ACP process error:', error);
-      this.emit('acp:stopped', {
-        sessionId: this.sessionId,
-        reason: 'error',
-      });
-      this.socket.emit('acp:stopped', {
-        sessionId: this.sessionId,
-        reason: 'error',
-      });
-    });
-  }
-
-  start(): void {
     this.spawner.start();
-    this.initialize();
-  }
-
-  stop(): void {
-    for (const pending of this.pendingRequests.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error('Session closing'));
-    }
-    this.pendingRequests.clear();
-    this.spawner.stop();
-  }
-
-  sendInput(message: { type: string; content: string }): void {
-    if (!this.initialized || !this.acpSessionId) {
-      this.inputQueue.push(message);
-      return;
-    }
-
-    this.sendPrompt(message);
-  }
-
-  private async initialize(): Promise<void> {
-    const startTime = Date.now();
     try {
-      console.log(`[ACP bridge] Step 1/3: Sending initialize request for session ${this.sessionId}`);
-      const t1 = Date.now();
-      const initResult = await this.sendRequest('initialize', {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: {
-            readTextFile: true,
-            writeTextFile: true,
-          },
-          terminal: true,
-        },
-        clientInfo: {
-          name: 'agent-controller',
-          title: 'Agent Controller',
-          version: '1.0.0',
-        },
-      });
-
-      console.log(`[ACP bridge] Step 1/3 done in ${Date.now() - t1}ms. Response:`, initResult);
-
-      console.log(`[ACP bridge] Step 2/3: Sending session/new for cwd=${this.cwd}`);
-      const t2 = Date.now();
-      const sessionResult = await this.sendRequest('session/new', {
+      await this.initConnection();
+      const result = await this.connection!.newSession({
         cwd: this.cwd,
-        mcpServers: this.mcpServers ?? [],
+        mcpServers: toMcpServers(this.mcpServers),
       });
-
-      this.acpSessionId = (sessionResult as { sessionId: string }).sessionId;
-      this.initialized = true;
-
-      console.log(`[ACP bridge] Step 2/3 done in ${Date.now() - t2}ms. ACP session created: ${this.acpSessionId}`);
-      console.log(`[ACP bridge] Step 3/3: Emitting acp:initialized for session ${this.sessionId}`);
+      this.acpSessionId = result.sessionId;
+      this.initializing = false;
 
       this.emit('acp:initialized', {
         sessionId: this.sessionId,
         acpSessionId: this.acpSessionId,
       });
 
-      console.log(`[ACP bridge] All steps completed in ${Date.now() - startTime}ms`);
-
       this.flushInputQueue();
     } catch (error) {
-      console.error(`[ACP bridge] Initialization failed after ${Date.now() - startTime}ms for session ${this.sessionId}:`, error);
-      this.emit('acp:stopped', {
-        sessionId: this.sessionId,
-        reason: 'error',
-        error: (error as Error).message,
-      });
-      this.socket.emit('acp:stopped', {
-        sessionId: this.sessionId,
-        reason: 'error',
-        error: (error as Error).message,
-      });
-      this.spawner.stop();
+      this.initializing = false;
+      this.handleError(error);
     }
+  }
+
+  async resume(externalSessionId: string): Promise<void> {
+    if (this.initializing) return;
+    this.initializing = true;
+
+    this.spawner.start();
+    try {
+      await this.initConnection();
+      await this.connection!.resumeSession({
+        sessionId: externalSessionId,
+        cwd: this.cwd,
+      });
+      this.acpSessionId = externalSessionId;
+      this.initializing = false;
+
+      this.emit('acp:initialized', {
+        sessionId: this.sessionId,
+        acpSessionId: this.acpSessionId,
+      });
+    } catch (error) {
+      // resumeSession may fail if agent doesn't support session.resume
+      // fallback to newSession
+      try {
+        const result = await this.connection!.newSession({
+          cwd: this.cwd,
+          mcpServers: toMcpServers(this.mcpServers),
+        });
+        this.acpSessionId = result.sessionId;
+        this.initializing = false;
+
+        this.emit('acp:initialized', {
+          sessionId: this.sessionId,
+          acpSessionId: this.acpSessionId,
+        });
+      } catch (fallbackError) {
+        this.initializing = false;
+        this.handleError(fallbackError);
+      }
+    }
+  }
+
+  async stop(): Promise<void> {
+    try {
+      if (this.acpSessionId && this.connection) {
+        await this.connection.cancel({ sessionId: this.acpSessionId });
+        await this.connection.closeSession({ sessionId: this.acpSessionId });
+      }
+    } catch { /* ignore */ }
+    this.activePrompt = null;
+    this.inputQueue = [];
+    this.spawner.stop();
+    this.emitStopped('user_close');
+  }
+
+  cancel(): void {
+    if (this.acpSessionId && this.connection) {
+      this.connection.cancel({ sessionId: this.acpSessionId });
+    }
+  }
+
+  sendInput(message: { type: string; content: string }): void {
+    if (this.activePrompt) {
+      this.inputQueue.push(message);
+      return;
+    }
+    this.processPrompt(message);
+  }
+
+  private async processPrompt(message: QueuedInput): Promise<void> {
+    if (!this.connection || !this.acpSessionId) return;
+
+    this.activePrompt = this.connection.prompt({
+      sessionId: this.acpSessionId,
+      prompt: [{ type: 'text' as const, text: message.content }],
+    });
+
+    try {
+      await this.activePrompt;
+    } catch {
+      // cancelled or error
+    } finally {
+      this.activePrompt = null;
+      if (this.inputQueue.length > 0) {
+        this.processPrompt(this.inputQueue.shift()!);
+      }
+    }
+  }
+
+  private async initConnection(): Promise<void> {
+    const input = this.spawner.stdin;
+    const output = this.spawner.stdout;
+    const stream = acp.ndJsonStream(input, output);
+    this.connection = new acp.ClientSideConnection(() => this, stream);
+    await this.connection.initialize({
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: {},
+      clientInfo: {
+        name: 'agent-controller',
+        version: '1.0.0',
+      },
+    });
   }
 
   private flushInputQueue(): void {
     while (this.inputQueue.length > 0) {
-      const message = this.inputQueue.shift()!;
-      this.sendPrompt(message);
+      this.processPrompt(this.inputQueue.shift()!);
     }
   }
 
-  private sendPrompt(message: { type: string; content: string }): void {
-    const jsonRpcMessage = {
-      jsonrpc: '2.0',
-      id: this.nextRequestId(),
-      method: 'session/prompt',
-      params: {
-        sessionId: this.acpSessionId,
-        prompt: [
-          {
-            type: message.type,
-            text: message.content,
-          },
-        ],
-      },
-    };
+  // ── acp.Client implementation ──
 
-    this.spawner.send(jsonRpcMessage);
-  }
-
-  private sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const id = this.nextRequestId();
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error(`ACP request '${method}' timed out`));
-      }, method === 'initialize' ? INITIALIZE_TIMEOUT_MS : SESSION_NEW_TIMEOUT_MS);
-
-      this.pendingRequests.set(id, { resolve, reject, timer });
-
-      this.spawner.send({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params,
-      });
-    });
-  }
-
-  private nextRequestId(): number {
-    return ++this.requestIdCounter;
-  }
-
-  private handleAcpMessage(message: Record<string, unknown>): void {
-    if (message.id != null && (message.result !== undefined || message.error !== undefined)) {
-      this.handleJsonRpcResponse(message);
-      return;
-    }
-
-    if (message.method) {
-      this.handleJsonRpcNotification(message);
-    }
-  }
-
-  private handleJsonRpcResponse(message: Record<string, unknown>): void {
-    const id = message.id as number;
-    const pending = this.pendingRequests.get(id);
-    if (!pending) return;
-
-    clearTimeout(pending.timer);
-    this.pendingRequests.delete(id);
-
-    if (message.error) {
-      const error = message.error as { code: number; message: string };
-      pending.reject(new Error(`ACP error ${error.code}: ${error.message}`));
-    } else {
-      pending.resolve(message.result);
-    }
-  }
-
-  private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private handleJsonRpcNotification(message: Record<string, unknown>): void {
-    const method = message.method as string;
-    const params = message.params as Record<string, unknown>;
-
-    if (method === 'session/update') {
-      this.handleSessionUpdate(params);
-    }
-  }
-
-  private handleSessionUpdate(params: Record<string, unknown>): void {
-    const update = params.update as Record<string, unknown>;
-    if (!update) return;
-
-    const sessionUpdate = update.sessionUpdate as string;
-    const content = update.content as Record<string, unknown>;
-
-    switch (sessionUpdate) {
+  async sessionUpdate(params: acp.SessionNotification): Promise<void> {
+    const update = params.update;
+    switch (update.sessionUpdate) {
       case 'agent_message_chunk':
-        this.textChunkBuffer += (content?.text as string) || '';
-        this.scheduleTextFlush();
+        if (update.content.type === 'text') {
+          this.textChunkBuffer += update.content.text;
+          this.scheduleTextFlush();
+        }
         break;
       case 'tool_call':
-        this.flushTextBuffer();
-        this.sendAcpUpdate(update as unknown as SessionUpdate);
-        break;
       case 'tool_call_update':
-        this.flushTextBuffer();
-        this.sendAcpUpdate(update as unknown as SessionUpdate);
-        break;
-      case 'tool_result':
-        this.flushTextBuffer();
-        this.sendAcpUpdate(update as unknown as SessionUpdate);
-        break;
       case 'plan':
+      case 'agent_thought_chunk':
         this.flushTextBuffer();
-        this.sendAcpUpdate(update as unknown as SessionUpdate);
+        this.sendUpdate(update);
         break;
       case 'user_message_chunk':
         break;
       default:
         this.flushTextBuffer();
-        this.sendAcpUpdate(update as unknown as SessionUpdate);
+        this.sendUpdate(update);
         break;
     }
   }
 
+  async requestPermission(
+    params: acp.RequestPermissionRequest,
+  ): Promise<acp.RequestPermissionResponse> {
+    return {
+      outcome: {
+        outcome: 'selected',
+        optionId: params.options.find((o) => o.kind === 'allow_once')?.optionId ?? params.options[0]?.optionId ?? 'reject',
+      },
+    };
+  }
+
+  // ── text buffering ──
+
   private scheduleTextFlush(): void {
-    if (this.textChunkTimer) {
-      clearTimeout(this.textChunkTimer);
-    }
-    this.textChunkTimer = setTimeout(() => {
-      this.flushTextBuffer();
-    }, 50);
+    if (this.textChunkTimer) clearTimeout(this.textChunkTimer);
+    this.textChunkTimer = setTimeout(() => this.flushTextBuffer(), 50);
   }
 
   private flushTextBuffer(): void {
@@ -293,49 +233,40 @@ export class AcpWebSocketBridge extends EventEmitter {
       this.textChunkTimer = null;
     }
     if (this.textChunkBuffer) {
-      const update: SessionUpdate = {
-        sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: this.textChunkBuffer },
-      };
-      this.sendAcpUpdate(update);
+      this.sendUpdate({
+        sessionUpdate: 'agent_message_chunk' as const,
+        content: { type: 'text' as const, text: this.textChunkBuffer },
+      } as acp.SessionUpdate);
       this.textChunkBuffer = '';
     }
   }
 
-  private sendAcpUpdate(update: SessionUpdate): void {
+  // ── socket forwarding ──
+
+  private sendUpdate(update: acp.SessionUpdate): void {
     this.socket.emit('acp:message', {
       sessionId: this.sessionId,
       message: update,
     });
   }
 
-  private handleAcpExit(code: number | null, signal: string | null): void {
-    this.flushTextBuffer();
+  private emitStopped(reason: string, exitCode?: number): void {
+    this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
+    this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
+  }
 
-    let reason: string;
-    if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-      reason = 'user_close';
-    } else if (code === 0) {
-      reason = 'agent_exit';
-    } else {
-      reason = 'error';
-    }
-
-    for (const pending of this.pendingRequests.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error('ACP process exited'));
-    }
-    this.pendingRequests.clear();
-
+  private handleError(error: unknown): void {
+    const msg = error instanceof Error ? error.message : String(error);
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
-      reason,
-      exitCode: code,
+      reason: 'error',
+      error: msg,
     });
     this.emit('acp:stopped', {
       sessionId: this.sessionId,
-      reason,
-      exitCode: code,
+      reason: 'error',
+      error: msg,
     });
+    this.spawner.stop();
   }
 }

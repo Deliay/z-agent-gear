@@ -78,5 +78,7 @@ export const sessionTypeDefs = `#graphql
     closeSession(id: ID!): Boolean!
     deleteSession(id: ID!): Boolean!
     sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
+    cancelGeneration(sessionId: ID!): Boolean!
+    resumeSession(id: ID!): Boolean!
   }
 `;

@@ -77,6 +77,35 @@ export class SessionService {
     return !!result;
   }
 
+  async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) return false;
+
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:cancel',
+      sessionId,
+    }));
+    return true;
+  }
+
+  async resume(id: string, userId: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: id, userId }).lean();
+    if (!session) return false;
+    if (!session.externalSessionId) return false;
+    if (session.status !== 'ended') return false;
+
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:resume',
+      sessionId: id,
+      controllerId: session.controllerId.toString(),
+      externalSessionId: session.externalSessionId,
+      cwd: session.cwd || process.cwd(),
+    }));
+    return true;
+  }
+
   async close(id: string, userId: string): Promise<boolean> {
     const result = await Session.findOneAndUpdate(
       { _id: id, userId },

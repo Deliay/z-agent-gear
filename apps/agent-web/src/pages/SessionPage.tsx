@@ -12,6 +12,7 @@ import {
   CLOSE_SESSION,
   DELETE_SESSION,
   SEND_SESSION_MESSAGE,
+  CANCEL_GENERATION,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
@@ -60,6 +61,7 @@ export default function SessionPage() {
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
+  const [cancelGeneration] = useMutation(CANCEL_GENERATION);
 
   useEffect(() => {
     if (messagesData?.sessionMessages) {
@@ -121,6 +123,15 @@ export default function SessionPage() {
       }
     } catch (error) {
       console.error('Failed to create session:', error);
+    }
+  };
+
+  const handleCancelGeneration = async () => {
+    if (!id) return;
+    try {
+      await cancelGeneration({ variables: { sessionId: id } });
+    } catch (error) {
+      console.error('Failed to cancel generation:', error);
     }
   };
 
@@ -235,7 +246,7 @@ export default function SessionPage() {
       />
       <InputBox
         onSend={handleSendMessage}
-        onStop={handleCloseSession}
+        onStop={handleCancelGeneration}
         disabled={status !== 'running'}
         sending={sending}
       />

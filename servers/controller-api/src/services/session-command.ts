@@ -47,10 +47,15 @@ export class SessionCommandService {
             cwd?: string;
             path?: string;
             reason?: string;
+            externalSessionId?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
             await this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string });
+          } else if (command.type === 'acp:resume' && command.sessionId && command.controllerId && command.externalSessionId) {
+            await this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string });
+          } else if (command.type === 'acp:cancel' && command.sessionId) {
+            await this.handleAcpCancel(command.sessionId);
           } else if (command.type === 'acp:check' && command.requestId && command.controllerId) {
             await this.handleAcpCheck(command.requestId, command.controllerId);
           } else if (command.type === 'acp:stop' && command.sessionId) {
@@ -157,6 +162,56 @@ export class SessionCommandService {
     // Use the capability detector to send acp:check and wait for result
     const servers = await acpCapabilityDetector.detectCapabilities(socket, controllerId);
     console.log(`ACP capabilities detected for ${controllerId}:`, servers);
+  }
+
+  private async handleAcpResume(command: {
+    sessionId: string;
+    controllerId: string;
+    externalSessionId: string;
+    cwd?: string;
+  }): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(command.controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for resume: ${command.controllerId}`);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller not online for resume: ${command.controllerId}`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for resume: ${socketId}`);
+      return;
+    }
+
+    const userId = controller.userId.toString();
+    const result = await acpSessionManager.resumeSession(
+      socket,
+      command.sessionId,
+      command.externalSessionId,
+      command.controllerId,
+      userId,
+      command.cwd || process.cwd(),
+    );
+
+    if (!result.success) {
+      console.error(`ACP resume failed: ${result.error}`);
+    }
+  }
+
+  private async handleAcpCancel(sessionId: string): Promise<void> {
+    console.log(`[SessionCommand] Cancelling generation for session ${sessionId}`);
+    const result = await acpSessionManager.cancelGeneration(sessionId);
+    if (!result) {
+      console.error(`ACP cancel failed: session ${sessionId} not found in active sessions`);
+    }
   }
 
   private async handleAcpStop(sessionId: string, reason: string): Promise<void> {

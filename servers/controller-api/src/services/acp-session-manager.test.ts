@@ -28,6 +28,8 @@ import { getRedisClient } from '../middleware/redis.js';
 
 const mockRedis = {
   publish: vi.fn(),
+  set: vi.fn(),
+  get: vi.fn(),
 };
 
 function createMockSocket() {
