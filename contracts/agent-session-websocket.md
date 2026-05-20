@@ -240,6 +240,8 @@ Controller 转发 ACP 输出。
 | `requestId` | `string` | 是 | 请求 ID，用于匹配结果 |
 | `sessionId` | `string` | 是 | Session ID（服务端分配） |
 | `externalSessionId` | `string` | 是 | ACP 返回的原始 Session ID |
+| `controllerId` | `string` | 是 | 控制器 ID |
+| `userId` | `string` | 是 | 用户 ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 
 **客户端行为：**
@@ -266,8 +268,8 @@ Controller 转发 ACP 输出。
 
 **服务端行为：**
 
-1. 成功时：注册 session mapping，更新 status = running
-2. 失败时：fallback 到 `acp:start` 流程（创建新 ACP session）
+1. 成功时：注册 session mapping，更新 status = idling，发布 `session:status`（含 `idling`）
+2. 失败时：更新 status = ended，发布 `session:status`（含 `ended` + `error`）
 
 ---
 
@@ -310,11 +312,14 @@ Session 状态变更通知。
 ```json
 {
   "sessionId": "string",
-  "status": "creating | connecting | running | disconnected | ended",
+  "status": "creating | connecting | idling | running | disconnected | ended",
   "externalSessionId": "string | null",
-  "endedAt": "ISO timestamp | null"
+  "endedAt": "ISO timestamp | null",
+  "error": "string | null"
 }
 ```
+
+`error` 字段仅在 resume 失败时携带，值为错误码之一（详见第 6 章）。
 
 ### 3.4 `session:command`
 
@@ -349,6 +354,7 @@ agent-api 通过此频道向 controller-api 下发命令。
 {
   "type": "acp:resume",
   "sessionId": "string",
+  "controllerId": "string",
   "externalSessionId": "string",
   "cwd": "string"
 }
@@ -367,6 +373,31 @@ agent-api 通过此频道向 controller-api 下发命令。
 ## 4. SSE 协议（agent-api → 前端）
 
 SSE 端点定义见 `agent-session.openapi.yaml`。
+
+### 4.1 事件格式
+
+#### `status` 事件
+
+Session 状态变更时推送。恢复操作失败时携带 `error` 字段。
+
+**Payload:**
+
+```json
+{
+  "type": "status",
+  "data": {
+    "sessionId": "string",
+    "status": "creating | connecting | idling | running | disconnected | ended",
+    "error": "string | null"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `status` | `string` | 是 | 当前状态 |
+| `error` | `string` | 否 | 仅在 resume 失败时携带 |
 
 ---
 
@@ -478,6 +509,9 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
 | `ACP_TIMEOUT` | ACP 操作超时 | 前端提示重试 |
 | `ACP_SESSION_NOT_FOUND` | Session 不存在 | 前端提示刷新页面 |
 | `ACP_PROCESS_CRASHED` | ACP 进程异常退出 | Session 状态更新为 ended |
+| `CONTROLLER_OFFLINE` | 控制器不在线，无法发送 acp:resume | 前端提示检查控制器连接 |
+| `ACP_SESSION_EXPIRED` | ACP Session ID 已过期，无法恢复 | 前端提示创建新会话 |
+| `WORKSPACE_PATH_INVALID` | 工作目录在控制器上已不存在 | 前端提示检查工作目录 |
 
 ### 6.2 重连策略
 

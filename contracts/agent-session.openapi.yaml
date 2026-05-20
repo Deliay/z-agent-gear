@@ -51,7 +51,12 @@ paths:
                 status:
                   summary: 状态变更
                   value: |
-                    data: {"type":"status","data":{"status":"running"}}
+                    data: {"type":"status","data":{"sessionId":"sess_1","status":"idling"}}
+
+                status_error:
+                  summary: 恢复失败
+                  value: |
+                    data: {"type":"status","data":{"sessionId":"sess_1","status":"ended","error":"CONTROLLER_OFFLINE"}}
 
                 heartbeat:
                   summary: 心跳（每30s）
@@ -118,7 +123,10 @@ components:
       properties:
         status:
           type: string
-          enum: [creating, connecting, running, disconnected, ended]
+          enum: [creating, connecting, idling, running, disconnected, ended]
+        error:
+          type: string
+          description: 错误码，仅在 resume 失败时携带
 
     Error:
       type: object

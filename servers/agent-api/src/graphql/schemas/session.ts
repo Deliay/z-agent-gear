@@ -2,6 +2,7 @@ export const sessionTypeDefs = `#graphql
   enum SessionStatus {
     creating
     connecting
+    idling
     running
     disconnected
     ended
@@ -60,6 +61,12 @@ export const sessionTypeDefs = `#graphql
     session: Session!
   }
 
+  type ResumeSessionPayload {
+    success: Boolean!
+    status: SessionStatus!
+    error: String
+  }
+
   input CreateSessionInput {
     controllerId: ID!
     acpServerType: AcpServerType! = opencode
@@ -79,6 +86,6 @@ export const sessionTypeDefs = `#graphql
     deleteSession(id: ID!): Boolean!
     sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
     cancelGeneration(sessionId: ID!): Boolean!
-    resumeSession(id: ID!): Boolean!
+    resumeSession(id: ID!): ResumeSessionPayload!
   }
 `;

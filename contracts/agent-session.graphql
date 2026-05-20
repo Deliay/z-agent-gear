@@ -1,6 +1,7 @@
 enum SessionStatus {
   creating
   connecting
+  idling
   running
   disconnected
   ended
@@ -71,11 +72,17 @@ type Query {
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
 }
 
+type ResumeSessionPayload {
+  success: Boolean!
+  status: SessionStatus!
+  error: String
+}
+
 type Mutation {
   createSession(input: CreateSessionInput!): CreateSessionPayload!
   closeSession(id: ID!): Boolean!
   deleteSession(id: ID!): Boolean!
   sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
   cancelGeneration(sessionId: ID!): Boolean!
-  resumeSession(id: ID!): Boolean!
+  resumeSession(id: ID!): ResumeSessionPayload!
 }
