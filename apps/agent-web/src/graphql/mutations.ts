@@ -207,3 +207,9 @@ export const SEND_SESSION_MESSAGE = gql`
     }
   }
 `
+
+export const CANCEL_GENERATION = gql`
+  mutation CancelGeneration($sessionId: ID!) {
+    cancelGeneration(sessionId: $sessionId)
+  }
+`

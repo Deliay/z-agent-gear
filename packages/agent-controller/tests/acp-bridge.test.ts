@@ -1,48 +1,61 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
 
-class MockAcpSpawner extends EventEmitter {
-  start = vi.fn();
-  stop = vi.fn();
-  send = vi.fn();
-  isRunning = vi.fn().mockReturnValue(true);
-}
-
-import { AcpWebSocketBridge } from '../src/acp/bridge.js';
-
-function createMockSocket() {
-  const listeners = new Map<string, Function[]>();
+function buildMockConn() {
   return {
-    emit: vi.fn(),
-    on: vi.fn((event: string, cb: Function) => {
-      if (!listeners.has(event)) listeners.set(event, []);
-      listeners.get(event)!.push(cb);
-    }),
-    off: vi.fn((event: string, cb: Function) => {
-      const cbs = listeners.get(event);
-      if (cbs) {
-        const idx = cbs.indexOf(cb);
-        if (idx >= 0) cbs.splice(idx, 1);
-      }
-    }),
+    initialize: vi.fn<[unknown], Promise<{ protocolVersion: number }>>().mockResolvedValue({ protocolVersion: 1 }),
+    newSession: vi.fn<[unknown], Promise<{ sessionId: string }>>().mockResolvedValue({ sessionId: 'acp-sess-abc' }),
+    resumeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    prompt: vi.fn<[unknown], Promise<{ stopReason: string }>>().mockResolvedValue({ stopReason: 'end_turn' }),
+    cancel: vi.fn<[unknown], Promise<void>>().mockResolvedValue(undefined),
+    closeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
   };
 }
 
-describe('AcpWebSocketBridge', () => {
+let mockConnInstance = buildMockConn();
+
+vi.mock('@agentclientprotocol/sdk', () => ({
+  ndJsonStream: vi.fn(() => ({})),
+  ClientSideConnection: vi.fn(function () { return mockConnInstance; }),
+}));
+
+import { AcpSessionBridge } from '../../src/acp/bridge.js';
+
+class MockAcpSpawner {
+  start = vi.fn();
+  stop = vi.fn();
+  isRunning = vi.fn().mockReturnValue(true);
+  _stdin = new WritableStream();
+  _stdout = new ReadableStream();
+  get stdin() { return this._stdin; }
+  get stdout() { return this._stdout; }
+  get closed() { return Promise.resolve(); }
+}
+
+function createMockSocket() {
+  return { emit: vi.fn(), on: vi.fn(), off: vi.fn() };
+}
+
+function mc() { return mockConnInstance; }
+
+describe('AcpSessionBridge', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockSpawner: MockAcpSpawner;
-  let bridge: AcpWebSocketBridge;
+
+  function createBridge() {
+    return new AcpSessionBridge(
+      mockSocket as never,
+      { sessionId: 'sess-1', cwd: '/home/user' },
+      mockSpawner as never,
+    );
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    mockConnInstance = buildMockConn();
+
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
-    bridge = new AcpWebSocketBridge(mockSocket as never, {
-      sessionId: 'sess-1',
-      controllerId: 'ctrl-1',
-      cwd: '/home/user',
-    }, mockSpawner as never);
   });
 
   afterEach(() => {
@@ -50,94 +63,30 @@ describe('AcpWebSocketBridge', () => {
     vi.restoreAllMocks();
   });
 
-  it('should start the spawner', () => {
-    bridge.start();
-    expect(mockSpawner.start).toHaveBeenCalledOnce();
-  });
-
-  it('should stop the spawner', () => {
-    bridge.stop();
-    expect(mockSpawner.stop).toHaveBeenCalledOnce();
-  });
-
-  describe('initialization', () => {
-    it('should send initialize request on start', async () => {
+  describe('start', () => {
+    it('should start the spawner and initialize connection', async () => {
+      const bridge = createBridge();
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(mockSpawner.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          jsonrpc: '2.0',
-          method: 'initialize',
-          params: expect.objectContaining({
-            protocolVersion: 1,
-            clientCapabilities: expect.objectContaining({
-              fs: expect.objectContaining({ readTextFile: true, writeTextFile: true }),
-              terminal: true,
-            }),
-            clientInfo: expect.objectContaining({
-              name: 'agent-controller',
-            }),
-          }),
-        }),
-      );
-    });
-
-    it('should send session/new after initialize response', async () => {
-      bridge.start();
-      await vi.advanceTimersByTimeAsync(0);
-
-      const initCall = mockSpawner.send.mock.calls[0][0];
-      const initId = initCall.id;
-
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: initId,
-        result: {
-          protocolVersion: 1,
-          agentCapabilities: { loadSession: true },
-          agentInfo: { name: 'opencode', version: '1.0.0' },
-        },
+      expect(mockSpawner.start).toHaveBeenCalledOnce();
+      expect(mc().initialize).toHaveBeenCalledWith({
+        protocolVersion: 1,
+        clientCapabilities: {},
+        clientInfo: { name: 'agent-controller', version: '1.0.0' },
       });
-
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(mockSpawner.send).toHaveBeenCalledTimes(2);
-      expect(mockSpawner.send).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          jsonrpc: '2.0',
-          method: 'session/new',
-          params: expect.objectContaining({
-            cwd: '/home/user',
-            mcpServers: [],
-          }),
-        }),
-      );
+      expect(mc().newSession).toHaveBeenCalledWith({
+        cwd: '/home/user',
+        mcpServers: [],
+      });
     });
 
-    it('should emit acp:initialized after session/new response', async () => {
+    it('should emit acp:initialized after successful start', async () => {
+      const bridge = createBridge();
       const emitSpy = vi.fn();
       bridge.on('acp:initialized', emitSpy);
 
       bridge.start();
-      await vi.advanceTimersByTimeAsync(0);
-
-      const initCall = mockSpawner.send.mock.calls[0][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: initCall.id,
-        result: { protocolVersion: 1, agentCapabilities: {} },
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-
-      const sessionCall = mockSpawner.send.mock.calls[1][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: sessionCall.id,
-        result: { sessionId: 'acp-sess-abc' },
-      });
-
       await vi.advanceTimersByTimeAsync(0);
 
       expect(emitSpy).toHaveBeenCalledWith({
@@ -147,165 +96,198 @@ describe('AcpWebSocketBridge', () => {
     });
 
     it('should emit acp:stopped on initialize failure', async () => {
+      mc().initialize.mockRejectedValue(new Error('init failed'));
+      const bridge = createBridge();
+
       bridge.start();
-      await vi.advanceTimersByTimeAsync(0);
-
-      const initCall = mockSpawner.send.mock.calls[0][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: initCall.id,
-        error: { code: -32600, message: 'Invalid request' },
-      });
-
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
         sessionId: 'sess-1',
         reason: 'error',
-        error: expect.stringContaining('ACP error'),
+        error: 'init failed',
       });
     });
 
-    it('should emit acp:stopped on initialize timeout', async () => {
+    it('should not start concurrently', async () => {
+      const bridge = createBridge();
       bridge.start();
+      bridge.start();  // concurrent call while first is still running
       await vi.advanceTimersByTimeAsync(0);
 
-      await vi.advanceTimersByTimeAsync(30_001);
+      expect(mockSpawner.start).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('resume', () => {
+    it('should resume an existing ACP session', async () => {
+      const bridge = createBridge();
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
+
+      bridge.resume('existing-sess-id');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mc().resumeSession).toHaveBeenCalledWith({
+        sessionId: 'existing-sess-id',
+        cwd: '/home/user',
+      });
+      expect(emitSpy).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        acpSessionId: 'existing-sess-id',
+      });
+    });
+
+    it('should fallback to newSession when resumeSession fails', async () => {
+      mc().resumeSession.mockRejectedValue(new Error('not supported'));
+      const bridge = createBridge();
+
+      bridge.resume('existing-sess-id');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mc().newSession).toHaveBeenCalledWith({
+        cwd: '/home/user',
+        mcpServers: [],
+      });
+    });
+
+    it('should emit acp:stopped when both resume and fallback fail', async () => {
+      mc().resumeSession.mockRejectedValue(new Error('not supported'));
+      mc().newSession.mockRejectedValue(new Error('new also failed'));
+      const bridge = createBridge();
+
+      bridge.resume('existing-sess-id');
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
         sessionId: 'sess-1',
         reason: 'error',
-        error: expect.stringContaining('timed out'),
+        error: 'new also failed',
       });
+    });
+  });
+
+  describe('cancel', () => {
+    it('should call connection.cancel', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      bridge.cancel();
+
+      expect(mc().cancel).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+      });
+    });
+
+    it('should not throw when not initialized', () => {
+      const bridge = createBridge();
+      expect(() => bridge.cancel()).not.toThrow();
+    });
+  });
+
+  describe('stop', () => {
+    it('should cancel, close session, and stop spawner', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      bridge.stop();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mc().cancel).toHaveBeenCalled();
+      expect(mc().closeSession).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+      });
+      expect(mockSpawner.stop).toHaveBeenCalledOnce();
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
+        sessionId: 'sess-1',
+        reason: 'user_close',
+        exitCode: undefined,
+      });
+    });
+
+    it('should not throw when not initialized', () => {
+      const bridge = createBridge();
+      expect(() => bridge.stop()).not.toThrow();
     });
   });
 
   describe('sendInput', () => {
-    it('should buffer input before initialization completes', async () => {
+    it('should call connection.prompt', async () => {
+      const bridge = createBridge();
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
+
       bridge.sendInput({ type: 'text', content: 'Hello' });
 
-      const promptCalls = mockSpawner.send.mock.calls.filter(
-        (call: Record<string, unknown>[]) => call[0]?.method === 'session/prompt',
-      );
-      expect(promptCalls).toHaveLength(0);
-    });
-
-    it('should flush queued input after initialization', async () => {
-      bridge.start();
-      await vi.advanceTimersByTimeAsync(0);
-      bridge.sendInput({ type: 'text', content: 'Hello' });
-      bridge.sendInput({ type: 'text', content: 'World' });
-
-      const initCall = mockSpawner.send.mock.calls[0][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: initCall.id,
-        result: { protocolVersion: 1, agentCapabilities: {} },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-
-      const sessionCall = mockSpawner.send.mock.calls[1][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: sessionCall.id,
-        result: { sessionId: 'acp-sess-abc' },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-
-      const promptCalls = mockSpawner.send.mock.calls.filter(
-        (call: Record<string, unknown>[]) => call[0]?.method === 'session/prompt',
-      );
-      expect(promptCalls).toHaveLength(2);
-      expect(promptCalls[0][0]).toMatchObject({
-        method: 'session/prompt',
-        params: {
-          sessionId: 'acp-sess-abc',
-          prompt: [{ type: 'text', text: 'Hello' }],
-        },
-      });
-      expect(promptCalls[1][0]).toMatchObject({
-        method: 'session/prompt',
-        params: {
-          sessionId: 'acp-sess-abc',
-          prompt: [{ type: 'text', text: 'World' }],
-        },
+      expect(mc().prompt).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        prompt: [{ type: 'text', text: 'Hello' }],
       });
     });
 
-    it('should send prompt with ACP session ID after initialization', async () => {
+    it('should queue input when prompt is active', async () => {
+      const bridge = createBridge();
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      const initCall = mockSpawner.send.mock.calls[0][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: initCall.id,
-        result: { protocolVersion: 1, agentCapabilities: {} },
-      });
+      mc().prompt.mockReturnValue(new Promise(() => {}));
+      bridge.sendInput({ type: 'text', content: 'First' });
+      bridge.sendInput({ type: 'text', content: 'Second' });
+
+      expect(mc().prompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('should process queue after prompt completes', async () => {
+      const bridge = createBridge();
+      bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      const sessionCall = mockSpawner.send.mock.calls[1][0];
-      mockSpawner.emit('message', {
-        jsonrpc: '2.0',
-        id: sessionCall.id,
-        result: { sessionId: 'acp-sess-abc' },
-      });
+      mc().prompt
+        .mockResolvedValueOnce({ stopReason: 'end_turn' })
+        .mockResolvedValueOnce({ stopReason: 'end_turn' });
+
+      bridge.sendInput({ type: 'text', content: 'First' });
       await vi.advanceTimersByTimeAsync(0);
 
-      bridge.sendInput({ type: 'text', content: 'Hello' });
+      bridge.sendInput({ type: 'text', content: 'Second' });
+      await vi.advanceTimersByTimeAsync(0);
 
-      expect(mockSpawner.send).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          jsonrpc: '2.0',
-          method: 'session/prompt',
-          params: expect.objectContaining({
-            sessionId: 'acp-sess-abc',
-            prompt: [{ type: 'text', text: 'Hello' }],
-          }),
-        }),
-      );
+      expect(mc().prompt).toHaveBeenCalledTimes(2);
     });
   });
 
-  describe('message handling', () => {
-    it('should buffer text chunks and flush after delay', async () => {
-      vi.useFakeTimers();
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'Hi ' } },
-        },
-      });
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'agent' } },
-        },
-      });
+  describe('sessionUpdate handling', () => {
+    it('should buffer text chunks and flush after 50ms', async () => {
+      const bridge = createBridge();
+
+      await bridge.sessionUpdate({
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi ' } },
+      } as never);
+      await bridge.sessionUpdate({
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'agent' } },
+      } as never);
+
       expect(mockSocket.emit).not.toHaveBeenCalled();
       vi.advanceTimersByTime(50);
+
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
         message: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi agent' } },
       });
-      vi.useRealTimers();
     });
 
-    it('should flush text buffer on tool_call', () => {
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'searching' } },
-        },
-      });
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'tool_call', content: { toolName: 'search' } },
-        },
-      });
+    it('should flush text buffer on tool_call', async () => {
+      const bridge = createBridge();
+
+      await bridge.sessionUpdate({
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'searching' } },
+      } as never);
+      await bridge.sessionUpdate({
+        update: { sessionUpdate: 'tool_call', content: { toolName: 'search' } },
+      } as never);
+
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
         sessionId: 'sess-1',
         message: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'searching' } },
@@ -316,34 +298,13 @@ describe('AcpWebSocketBridge', () => {
       });
     });
 
-    it('should emit acp:message for tool_result', () => {
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'tool_result', content: { result: 'ok' } },
-        },
-      });
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:message', {
-        sessionId: 'sess-1',
-        message: { sessionUpdate: 'tool_result', content: { result: 'ok' } },
-      });
-    });
+    it('should ignore user_message_chunk', async () => {
+      const bridge = createBridge();
 
-    it('should ignore user_message_chunk', () => {
-      mockSpawner.emit('message', {
-        method: 'session/update',
-        params: {
-          update: { sessionUpdate: 'user_message_chunk', content: { text: 'user input' } },
-        },
-      });
-      const acpMessageCalls = mockSocket.emit.mock.calls.filter(
-        (call: unknown[]) => call[0] === 'acp:message',
-      );
-      expect(acpMessageCalls).toHaveLength(0);
-    });
+      await bridge.sessionUpdate({
+        update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'user input' } },
+      } as never);
 
-    it('should ignore non session/update methods', () => {
-      mockSpawner.emit('message', { method: 'other', params: {} });
       const acpMessageCalls = mockSocket.emit.mock.calls.filter(
         (call: unknown[]) => call[0] === 'acp:message',
       );
@@ -351,45 +312,19 @@ describe('AcpWebSocketBridge', () => {
     });
   });
 
-  describe('exit handling', () => {
-    it('should emit acp:stopped with user_close on SIGTERM', () => {
-      mockSpawner.emit('exit', { code: null, signal: 'SIGTERM' });
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
-        sessionId: 'sess-1', reason: 'user_close', exitCode: null,
+  describe('requestPermission', () => {
+    it('should auto-accept with allow_once', async () => {
+      const bridge = createBridge();
+      const result = await bridge.requestPermission({
+        options: [
+          { optionId: 'opt-1', kind: 'allow_once', label: 'Allow' },
+          { optionId: 'opt-2', kind: 'reject', label: 'Reject' },
+        ],
+      } as never);
+
+      expect(result).toEqual({
+        outcome: { outcome: 'selected', optionId: 'opt-1' },
       });
-    });
-
-    it('should emit acp:stopped with agent_exit on code 0', () => {
-      mockSpawner.emit('exit', { code: 0, signal: null });
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
-        sessionId: 'sess-1', reason: 'agent_exit', exitCode: 0,
-      });
-    });
-
-    it('should emit acp:stopped with error on non-zero exit', () => {
-      mockSpawner.emit('exit', { code: 1, signal: null });
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
-        sessionId: 'sess-1', reason: 'error', exitCode: 1,
-      });
-    });
-
-    it('should emit acp:stopped on spawner error', () => {
-      mockSpawner.emit('error', new Error('fail'));
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
-        sessionId: 'sess-1', reason: 'error',
-      });
-    });
-
-    it('should reject pending requests on exit', async () => {
-      bridge.start();
-      await vi.advanceTimersByTimeAsync(0);
-
-      await vi.advanceTimersByTimeAsync(30_001);
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', expect.objectContaining({
-        sessionId: 'sess-1',
-        reason: 'error',
-      }));
     });
   });
 });

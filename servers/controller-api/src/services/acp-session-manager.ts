@@ -5,6 +5,8 @@ import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
 
+const EXTERNAL_SESSION_CACHE_TTL = 86400; // 24h
+
 interface ACPSession {
   controllerSocket: Socket;
   sessionId: string;
@@ -81,6 +83,17 @@ export class ACPSessionManager {
               externalSessionId: payload.externalSessionId,
             });
             await this.publishStatus(sessionId, 'running');
+
+            // Cache externalSessionId in Redis for resume
+            if (payload.externalSessionId) {
+              const redis = getRedisClient();
+              await redis.set(
+                `session:${sessionId}:acpSessionId`,
+                payload.externalSessionId,
+                'EX',
+                EXTERNAL_SESSION_CACHE_TTL,
+              );
+            }
 
             console.log(`[ACP session] Session ${sessionId} is now running`);
             resolve({ success: true, externalSessionId: payload.externalSessionId });
@@ -259,6 +272,101 @@ export class ACPSessionManager {
       }
       this.socketToSessions.delete(socketId);
     }
+  }
+
+  async cancelGeneration(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    session.controllerSocket.emit('acp:cancel', { sessionId });
+    return true;
+  }
+
+  async resumeSession(
+    controllerSocket: Socket,
+    sessionId: string,
+    externalSessionId: string,
+    controllerId: string,
+    userId: string,
+    cwd: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      await Session.findByIdAndUpdate(sessionId, { status: 'connecting' });
+      await this.publishStatus(sessionId, 'connecting');
+
+      const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          this.cleanupFailedSession(sessionId, 'connecting');
+          resolve({ success: false, error: 'ACP resume timeout' });
+        }, 30000);
+
+        controllerSocket.once('acp:resume:result', async (payload: {
+          requestId: string;
+          sessionId: string;
+          success: boolean;
+          error?: string;
+        }) => {
+          clearTimeout(timeout);
+          if (payload.requestId !== requestId) return;
+
+          if (payload.success) {
+            this.sessions.set(sessionId, {
+              controllerSocket,
+              sessionId,
+              controllerId,
+              userId,
+            });
+
+            const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
+            socketSessions.add(sessionId);
+            this.socketToSessions.set(controllerSocket.id, socketSessions);
+
+            await Session.findByIdAndUpdate(sessionId, { status: 'running' });
+            await this.publishStatus(sessionId, 'running');
+
+            resolve({ success: true });
+          } else {
+            await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
+            await this.publishStatus(sessionId, 'ended');
+            resolve({ success: false, error: payload.error || 'ACP resume failed' });
+          }
+        });
+
+        controllerSocket.emit('acp:resume', {
+          requestId,
+          sessionId,
+          externalSessionId,
+          cwd,
+        });
+      });
+    } catch (error) {
+      console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  async getExternalSessionId(sessionId: string): Promise<string | null> {
+    // Check Redis cache first
+    const redis = getRedisClient();
+    const cached = await redis.get(`session:${sessionId}:acpSessionId`);
+    if (cached) return cached;
+
+    // Fallback to MongoDB
+    const session = await Session.findById(sessionId).lean();
+    if (session?.externalSessionId) {
+      // Re-cache for future use
+      await redis.set(
+        `session:${sessionId}:acpSessionId`,
+        session.externalSessionId,
+        'EX',
+        EXTERNAL_SESSION_CACHE_TTL,
+      );
+      return session.externalSessionId;
+    }
+
+    return null;
   }
 
   forwardToController(sessionId: string, message: { type: string; content: string }): boolean {

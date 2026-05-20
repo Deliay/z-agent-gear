@@ -464,8 +464,8 @@ describe('Session SSE API', () => {
     const text = decoder.decode(value);
     expect(text).toContain('"type":"history"');
 
-    controller.abort();
     reader.cancel();
+    controller.abort();
   });
 });
 
