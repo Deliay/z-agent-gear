@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
+import { Controller } from '../models/controller.js';
 
 const MAX_WORKSPACES = 10;
 
@@ -18,6 +19,11 @@ export class ControllerWorkspaceService {
   }
 
   async create(controllerId: string, userId: string, path: string): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
     const count = await ControllerWorkspace.countDocuments({ controllerId, userId });
     if (count >= MAX_WORKSPACES) {
       throw new Error('Maximum workspaces reached');

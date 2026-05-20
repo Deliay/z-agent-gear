@@ -23,7 +23,11 @@ export const controllerWorkspaceResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return folderBrowserService.browse(args.controllerId, context.currentUser.id, args.path);
+      try {
+        return await folderBrowserService.browse(args.controllerId, context.currentUser.id, args.path);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
     getHomeDirectory: async (
       _parent: unknown,
@@ -33,7 +37,11 @@ export const controllerWorkspaceResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return folderBrowserService.getHomeDirectory(args.controllerId, context.currentUser.id);
+      try {
+        return await folderBrowserService.getHomeDirectory(args.controllerId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
   },
   Mutation: {
