@@ -35,6 +35,10 @@
 | Server → Controller | `acp:cancel` | 取消当前生成（不结束 session） |
 | Server → Controller | `acp:stop` | 停止 ACP Session |
 | Controller → Server | `acp:stopped` | ACP Session 已停止 |
+| Server → Controller | `acp:list-sessions` | 请求拉取工作目录历史会话列表 |
+| Controller → Server | `acp:list-sessions:result` | 返回历史会话列表 |
+| Server → Controller | `acp:load-session` | 请求加载单个历史会话全量消息 |
+| Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
 
 ### 2.2 `acp:check`（Server → Controller）
 
@@ -271,6 +275,93 @@ Controller 转发 ACP 输出。
 1. 成功时：注册 session mapping，更新 status = idling，发布 `session:status`（含 `idling`）
 2. 失败时：更新 status = ended，发布 `session:status`（含 `ended` + `error`）
 
+### 2.13 `acp:list-sessions`（Server → Controller）
+
+请求获取指定工作目录下的历史会话列表。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配结果 |
+| `cwd` | `string` | 是 | 工作目录绝对路径 |
+
+**客户端行为：**
+
+1. 实例化临时 `AcpSyncBridge`，以 `cwd` 为参数
+2. 连接 ACP Server（spawn `opencode acp`）
+3. 调用 `connection.initialize()`
+4. 调用 `connection.listSessions({ cwd })`
+5. 返回会话列表 → 关闭 ACP 连接
+6. 回复 `acp:list-sessions:result`
+
+### 2.14 `acp:list-sessions:result`（Controller → Server）
+
+返回历史会话列表。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `sessions` | `SessionInfo[]` | 否 | 会话列表（成功时） |
+| `error` | `string` | 否 | 失败原因 |
+
+**SessionInfo 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sessionId` | `string` | ACP 侧唯一标识 |
+| `title` | `string \| null` | 会话标题 |
+| `cwd` | `string` | 工作目录 |
+| `updatedAt` | `string \| null` | ISO 8601 最后活动时间 |
+
+### 2.15 `acp:load-session`（Server → Controller）
+
+请求加载指定历史会话的全量消息。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID |
+| `sessionId` | `string` | 是 | ACP 侧 session ID |
+| `cwd` | `string` | 是 | 工作目录 |
+
+**客户端行为：**
+
+1. 实例化临时 `AcpSyncBridge`，以 `cwd` 为参数
+2. 连接 ACP Server
+3. 调用 `connection.initialize()`
+4. 调用 `connection.loadSession({ cwd, sessionId, mcpServers: [] })`
+5. `loadSession` 会通过 `session/update` 通知流式返回全量历史消息
+6. 收集所有历史消息通知
+7. 回复 `acp:load-session:result`（含所有消息）
+
+### 2.16 `acp:load-session:result`（Controller → Server）
+
+返回历史会话全量消息。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `sessionId` | `string` | 是 | ACP 侧 session ID |
+| `title` | `string \| null` | 否 | 会话标题 |
+| `messages` | `HistoryMessage[]` | 否 | 历史消息列表（成功时） |
+| `error` | `string` | 否 | 失败原因 |
+
+**HistoryMessage 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `direction` | `"input" \| "output"` | 消息方向 |
+| `type` | `string` | 消息类型（同 AcpMessage.type） |
+| `content` | `string` | JSON 序列化的消息内容 |
+
 ---
 
 ## 3. 跨服务事件（Redis Pub/Sub）
@@ -367,6 +458,53 @@ agent-api 通过此频道向 controller-api 下发命令。
 3. 等待 `acp:resume:result`（30s 超时）
 4. 成功时：注册 session mapping，更新 status = running
 5. 失败时：清理 session 映射，标记 status = ended
+
+#### `acp:list-sessions`
+
+获取工作目录下的历史会话列表。
+
+**Payload:**
+
+```json
+{
+  "type": "acp:list-sessions",
+  "requestId": "string",
+  "controllerId": "string",
+  "cwd": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `acp:list-sessions` Socket.IO 事件（含 `requestId`, `cwd`）
+3. 等待 `acp:list-sessions:result`（120s 超时）
+4. 成功时：缓存结果到 Redis `acp:list-sessions:{requestId}`（TTL 120s）
+5. 失败时：缓存空结果
+
+#### `acp:load-session`
+
+加载单个历史会话的全量消息。
+
+**Payload:**
+
+```json
+{
+  "type": "acp:load-session",
+  "requestId": "string",
+  "controllerId": "string",
+  "sessionId": "string",
+  "cwd": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `acp:load-session` Socket.IO 事件（含 `requestId`, `sessionId`, `cwd`）
+3. 等待 `acp:load-session:result`（300s 超时）
+4. 成功时：缓存结果到 Redis `acp:load-session:{requestId}`（TTL 300s）
+5. 失败时：缓存空结果
 
 ---
 

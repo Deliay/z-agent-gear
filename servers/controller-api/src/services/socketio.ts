@@ -8,6 +8,7 @@ import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
 import { folderBrowserService } from './folder-browser.js';
+import { acpSessionSyncService } from './acp-session-sync.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -164,6 +165,50 @@ export function createSocketIOServer(io: SocketIOServer): void {
         await acpSessionManager.handleControllerStopped(payload.sessionId, payload.reason, payload.exitCode);
       } catch (err) {
         console.error(`ACP stopped error for session ${payload.sessionId}:`, err);
+      }
+    });
+
+    socket.on('acp:list-sessions:result', async (payload: {
+      requestId: string;
+      success: boolean;
+      sessions?: Array<{ sessionId: string; title: string | null; cwd: string; updatedAt: string | null }>;
+      error?: string;
+    }) => {
+      if (!authenticated) return;
+      const result = {
+        success: payload.success,
+        sessions: payload.sessions,
+        error: payload.error,
+      };
+      try {
+        acpSessionSyncService.handleListResult(payload.requestId, result);
+        await acpSessionSyncService.cacheListResult(payload.requestId, result);
+      } catch (err) {
+        console.error(`ACP list-sessions:result error:`, err);
+      }
+    });
+
+    socket.on('acp:load-session:result', async (payload: {
+      requestId: string;
+      success: boolean;
+      sessionId?: string;
+      title?: string | null;
+      messages?: Array<{ direction: 'input' | 'output'; type: string; content: string }>;
+      error?: string;
+    }) => {
+      if (!authenticated) return;
+      const result = {
+        success: payload.success,
+        sessionId: payload.sessionId,
+        title: payload.title,
+        messages: payload.messages,
+        error: payload.error,
+      };
+      try {
+        acpSessionSyncService.handleLoadResult(payload.requestId, result);
+        await acpSessionSyncService.cacheLoadResult(payload.requestId, result);
+      } catch (err) {
+        console.error(`ACP load-session:result error:`, err);
       }
     });
 

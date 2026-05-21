@@ -57,6 +57,22 @@ export const sessionTypeDefs = `#graphql
     version: String
   }
 
+  type HistorySessionInfo {
+    sessionId: String!
+    title: String
+    cwd: String!
+    updatedAt: String
+  }
+
+  type ImportSessionResult {
+    sessionId: ID!
+    acpSessionId: String!
+    title: String
+    success: Boolean!
+    error: String
+    messageCount: Int
+  }
+
   type CreateSessionPayload {
     session: Session!
   }
@@ -78,6 +94,7 @@ export const sessionTypeDefs = `#graphql
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
+    listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
   }
 
   extend type Mutation {
@@ -87,5 +104,6 @@ export const sessionTypeDefs = `#graphql
     sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
     cancelGeneration(sessionId: ID!): Boolean!
     resumeSession(id: ID!): ResumeSessionPayload!
+    importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
   }
 `;

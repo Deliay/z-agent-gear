@@ -1,0 +1,127 @@
+import type { Socket } from 'socket.io';
+import { getRedisClient } from '../middleware/redis.js';
+
+interface SessionInfo {
+  sessionId: string;
+  title: string | null;
+  cwd: string;
+  updatedAt: string | null;
+}
+
+interface HistoryMessage {
+  direction: 'input' | 'output';
+  type: string;
+  content: string;
+}
+
+interface ListResult {
+  success: boolean;
+  sessions?: SessionInfo[];
+  error?: string;
+}
+
+interface LoadResult {
+  success: boolean;
+  sessionId?: string;
+  title?: string | null;
+  messages?: HistoryMessage[];
+  error?: string;
+}
+
+export class AcpSessionSyncService {
+  private pendingLists = new Map<string, {
+    resolve: (result: ListResult) => void;
+    timeout: NodeJS.Timeout;
+    controllerSocket: Socket;
+  }>();
+
+  private pendingLoads = new Map<string, {
+    resolve: (result: LoadResult) => void;
+    timeout: NodeJS.Timeout;
+    controllerSocket: Socket;
+  }>();
+
+  async listSessions(controllerSocket: Socket, cwd: string): Promise<ListResult> {
+    const requestId = `sync_list_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingLists.delete(requestId);
+        resolve({ success: false, error: 'ACP list-sessions timeout' });
+      }, 120000);
+
+      this.pendingLists.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          this.pendingLists.delete(requestId);
+          resolve(result);
+        },
+        timeout,
+        controllerSocket,
+      });
+
+      controllerSocket.emit('acp:list-sessions', { requestId, cwd });
+    });
+  }
+
+  async loadSession(controllerSocket: Socket, acpSessionId: string, cwd: string): Promise<LoadResult> {
+    const requestId = `sync_load_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingLoads.delete(requestId);
+        resolve({ success: false, error: 'ACP load-session timeout' });
+      }, 300000);
+
+      this.pendingLoads.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          this.pendingLoads.delete(requestId);
+          resolve(result);
+        },
+        timeout,
+        controllerSocket,
+      });
+
+      controllerSocket.emit('acp:load-session', { requestId, sessionId: acpSessionId, cwd });
+    });
+  }
+
+  handleListResult(requestId: string, result: ListResult): void {
+    const pending = this.pendingLists.get(requestId);
+    if (pending) {
+      pending.resolve(result);
+    }
+  }
+
+  handleLoadResult(requestId: string, result: LoadResult): void {
+    const pending = this.pendingLoads.get(requestId);
+    if (pending) {
+      pending.resolve(result);
+    }
+  }
+
+  async cacheListResult(requestId: string, result: ListResult): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`acp:list-sessions:${requestId}`, JSON.stringify(result), 'EX', 120);
+  }
+
+  async cacheLoadResult(requestId: string, result: LoadResult): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`acp:load-session:${requestId}`, JSON.stringify(result), 'EX', 300);
+  }
+
+  async getCachedListResult(requestId: string): Promise<ListResult | null> {
+    const redis = getRedisClient();
+    const cached = await redis.get(`acp:list-sessions:${requestId}`);
+    return cached ? JSON.parse(cached) : null;
+  }
+
+  async getCachedLoadResult(requestId: string): Promise<LoadResult | null> {
+    const redis = getRedisClient();
+    const cached = await redis.get(`acp:load-session:${requestId}`);
+    return cached ? JSON.parse(cached) : null;
+  }
+}
+
+export const acpSessionSyncService = new AcpSessionSyncService();

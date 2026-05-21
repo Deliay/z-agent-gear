@@ -7,6 +7,7 @@ import { Heartbeat } from './heartbeat.js';
 import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { acpDetector } from './acp/detector.js';
 import { AcpSessionBridge } from './acp/bridge.js';
+import { AcpSyncBridge } from './acp/sync-bridge.js';
 
 const CONTROLLER_VERSION = '1.0.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
@@ -53,6 +54,17 @@ interface AcpResumePayload {
   requestId: string;
   sessionId: string;
   externalSessionId: string;
+  cwd: string;
+}
+
+interface AcpListSessionsPayload {
+  requestId: string;
+  cwd: string;
+}
+
+interface AcpLoadSessionPayload {
+  requestId: string;
+  sessionId: string;
   cwd: string;
 }
 
@@ -229,6 +241,109 @@ export function connectToServer(
         requestId: data.requestId,
         sessionId: data.sessionId,
         success: false,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:list-sessions', async (data: AcpListSessionsPayload) => {
+    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} cwd=${data.cwd}`);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    try {
+      await bridge.connect();
+      const result = await bridge.listSessions(data.cwd);
+      await bridge.disconnect();
+      socket.emit('acp:list-sessions:result', {
+        requestId: data.requestId,
+        success: true,
+        sessions: (result.sessions ?? []).map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title ?? null,
+          cwd: s.cwd,
+          updatedAt: s.updatedAt ?? null,
+        })),
+      });
+    } catch (error) {
+      await bridge.disconnect().catch(() => {});
+      console.error(`[ACP sync] list-sessions failed: ${(error as Error).message}`);
+      socket.emit('acp:list-sessions:result', {
+        requestId: data.requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:load-session', async (data: AcpLoadSessionPayload) => {
+    console.log(`[ACP sync] acp:load-session received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    try {
+      await bridge.connect();
+      const { config, updates } = await bridge.loadSession(data.sessionId, data.cwd);
+      await bridge.disconnect();
+
+      let title: string | null = null;
+      const messages: Array<{ direction: 'input' | 'output'; type: string; content: string }> = [];
+
+      for (const notification of updates) {
+        const update = notification.update;
+        let direction: 'input' | 'output';
+        let type: string;
+
+        switch (update.sessionUpdate) {
+          case 'user_message_chunk':
+            direction = 'input';
+            type = 'text';
+            break;
+          case 'agent_message_chunk':
+            direction = 'output';
+            type = 'text';
+            break;
+          case 'tool_call':
+          case 'tool_call_update':
+            direction = 'output';
+            type = 'tool_call';
+            break;
+          case 'plan':
+            direction = 'output';
+            type = 'plan';
+            break;
+          case 'session_info_update':
+            direction = 'output';
+            type = 'text';
+            title = update.title ?? title;
+            break;
+          case 'usage_update':
+          case 'config_option_update':
+          case 'current_mode_update':
+          case 'available_commands_update':
+          default:
+            direction = 'output';
+            type = 'text';
+            break;
+        }
+
+        messages.push({
+          direction,
+          type,
+          content: JSON.stringify(update),
+        });
+      }
+
+      socket.emit('acp:load-session:result', {
+        requestId: data.requestId,
+        success: true,
+        sessionId: data.sessionId,
+        title,
+        messages,
+      });
+    } catch (error) {
+      await bridge.disconnect().catch(() => {});
+      console.error(`[ACP sync] load-session failed: ${(error as Error).message}`);
+      socket.emit('acp:load-session:result', {
+        requestId: data.requestId,
+        success: false,
+        sessionId: data.sessionId,
         error: (error as Error).message,
       });
     }

@@ -174,3 +174,27 @@ export interface ResumeSessionMutation {
     error: string | null
   }
 }
+
+export interface HistorySessionInfoData {
+  sessionId: string
+  title: string | null
+  cwd: string
+  updatedAt: string | null
+}
+
+export interface ImportSessionResultData {
+  sessionId: string
+  acpSessionId: string
+  title: string | null
+  success: boolean
+  error: string | null
+  messageCount: number
+}
+
+export interface ListHistorySessionsQuery {
+  listHistorySessions: HistorySessionInfoData[]
+}
+
+export interface ImportHistorySessionsMutation {
+  importHistorySessions: ImportSessionResultData[]
+}

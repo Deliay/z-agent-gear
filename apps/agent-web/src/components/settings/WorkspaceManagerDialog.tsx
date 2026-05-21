@@ -13,16 +13,19 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import DirectoryPicker from '../ui/DirectoryPicker';
+import HistorySessionDialog from './HistorySessionDialog';
 
 interface WorkspaceManagerDialogProps {
   controllerId: string;
   controllerName: string;
+  controllerOnline?: boolean;
   onClose: () => void;
 }
 
-export default function WorkspaceManagerDialog({ controllerId, controllerName, onClose }: WorkspaceManagerDialogProps) {
+export default function WorkspaceManagerDialog({ controllerId, controllerName, controllerOnline = false, onClose }: WorkspaceManagerDialogProps) {
   const [showPicker, setShowPicker] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [historyWorkspace, setHistoryWorkspace] = useState<{ id: string; name: string } | null>(null);
 
   const { data, loading, refetch } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
     variables: { controllerId },
@@ -125,6 +128,21 @@ export default function WorkspaceManagerDialog({ controllerId, controllerName, o
                       <div className="truncate text-xs text-muted-foreground">{ws.path}</div>
                     </div>
                     <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!controllerOnline || !ws.isEnabled}
+                      title={
+                        !controllerOnline
+                          ? 'Controller 离线，无法获取历史会话'
+                          : !ws.isEnabled
+                            ? '工作目录未启用'
+                            : ''
+                      }
+                      onClick={() => setHistoryWorkspace({ id: ws.id, name: ws.name })}
+                    >
+                      历史会话
+                    </Button>
+                    <Button
                       variant="ghost"
                       size="sm"
                       className="text-destructive"
@@ -145,6 +163,14 @@ export default function WorkspaceManagerDialog({ controllerId, controllerName, o
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <HistorySessionDialog
+        open={!!historyWorkspace}
+        onOpenChange={() => setHistoryWorkspace(null)}
+        controllerId={controllerId}
+        workspaceId={historyWorkspace?.id ?? ''}
+        workspaceName={historyWorkspace?.name ?? ''}
+      />
 
       <Dialog open={confirmClear} onOpenChange={() => setConfirmClear(false)}>
         <DialogContent className="sm:max-w-sm">

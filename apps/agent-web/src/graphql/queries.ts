@@ -178,3 +178,14 @@ export const GET_HOME_DIRECTORY = gql`
     getHomeDirectory(controllerId: $controllerId)
   }
 `
+
+export const LIST_HISTORY_SESSIONS = gql`
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) {
+      sessionId
+      title
+      cwd
+      updatedAt
+    }
+  }
+`

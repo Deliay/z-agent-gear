@@ -4,6 +4,7 @@ import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { acpSessionSyncService } from './acp-session-sync.js';
 import { folderBrowserService } from './folder-browser.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
@@ -48,6 +49,7 @@ export class SessionCommandService {
             path?: string;
             reason?: string;
             externalSessionId?: string;
+            acpSessionId?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
@@ -64,6 +66,10 @@ export class SessionCommandService {
             await this.handleFsBrowse(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'fs:home' && command.requestId && command.controllerId) {
             await this.handleFsHome(command.requestId, command.controllerId);
+          } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
+            await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
+          } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
+            await this.handleAcpLoadSession(command.requestId, command.controllerId, command.sessionId, command.cwd);
           }
         } else if (channel === SESSION_MESSAGE_CHANNEL) {
           const data = JSON.parse(message) as {
@@ -235,6 +241,58 @@ export class SessionCommandService {
 
   private async handleFsHome(requestId: string, controllerId: string): Promise<void> {
     await folderBrowserService.getHomeDirectory(requestId, controllerId);
+  }
+
+  private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for list-sessions: ${controllerId}`);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller offline for list-sessions: ${controllerId}`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for list-sessions: ${controllerId}`);
+      return;
+    }
+
+    const result = await acpSessionSyncService.listSessions(socket, cwd);
+    await acpSessionSyncService.cacheListResult(requestId, result);
+  }
+
+  private async handleAcpLoadSession(requestId: string, controllerId: string, sessionId: string, cwd: string): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for load-session: ${controllerId}`);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller offline for load-session: ${controllerId}`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for load-session: ${controllerId}`);
+      return;
+    }
+
+    const result = await acpSessionSyncService.loadSession(socket, sessionId, cwd);
+    await acpSessionSyncService.cacheLoadResult(requestId, result);
   }
 }
 

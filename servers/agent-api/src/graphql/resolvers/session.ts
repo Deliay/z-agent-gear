@@ -1,5 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { sessionService } from '../../services/session.js';
+import { sessionImportService } from '../../services/session-import.js';
+import { Controller } from '../../models/controller.js';
 import type { AuthContext } from './auth.js';
 
 export const sessionResolvers = {
@@ -40,6 +42,24 @@ export const sessionResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       return sessionService.getAcpCapabilities(args.controllerId, context.currentUser.id);
+    },
+    listHistorySessions: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionImportService.listHistorySessions(
+          context.currentUser.id,
+          args.controllerId,
+          args.workspaceId,
+        );
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
   },
   Mutation: {
@@ -122,6 +142,29 @@ export const sessionResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       return sessionService.resume(args.id, context.currentUser.id);
+    },
+    importHistorySessions: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string; sessionIds: string[] },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        const controller = await Controller.findOne({ _id: args.controllerId, userId: context.currentUser.id }).lean();
+        const controllerName = controller?.name || 'Unknown';
+
+        return await sessionImportService.importSessions(
+          context.currentUser.id,
+          args.controllerId,
+          controllerName,
+          args.workspaceId,
+          args.sessionIds,
+        );
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
   },
 };

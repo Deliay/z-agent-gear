@@ -98,7 +98,7 @@ export default function ControllerListSection() {
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [workspaceTarget, setWorkspaceTarget] = useState<{ id: string; name: string } | null>(null)
+  const [workspaceTarget, setWorkspaceTarget] = useState<{ id: string; name: string; status: string } | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
@@ -211,7 +211,7 @@ export default function ControllerListSection() {
                     </div>
                   </div>
                   <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => setWorkspaceTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                    <Button variant="ghost" size="sm" onClick={() => setWorkspaceTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname, status: ctrl.status })}>
                       管理工作区
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
@@ -268,6 +268,7 @@ export default function ControllerListSection() {
         <WorkspaceManagerDialog
           controllerId={workspaceTarget.id}
           controllerName={workspaceTarget.name}
+          controllerOnline={workspaceTarget.status === 'online'}
           onClose={() => setWorkspaceTarget(null)}
         />
       )}

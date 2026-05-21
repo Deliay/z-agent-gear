@@ -223,3 +223,16 @@ export const RESUME_SESSION = gql`
     }
   }
 `
+
+export const IMPORT_HISTORY_SESSIONS = gql`
+  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $sessionIds: [String!]!) {
+    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, sessionIds: $sessionIds) {
+      sessionId
+      acpSessionId
+      title
+      success
+      error
+      messageCount
+    }
+  }
+`

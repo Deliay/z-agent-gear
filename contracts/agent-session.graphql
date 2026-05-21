@@ -65,11 +65,28 @@ input CreateSessionInput {
   workspaceId: ID!
 }
 
+type HistorySessionInfo {
+  sessionId: String!
+  title: String
+  cwd: String!
+  updatedAt: String
+}
+
+type ImportSessionResult {
+  sessionId: ID!
+  acpSessionId: String!
+  title: String
+  success: Boolean!
+  error: String
+  messageCount: Int
+}
+
 type Query {
   sessions: [Session!]!
   session(id: ID!): Session
   sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
+  listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
 }
 
 type ResumeSessionPayload {
@@ -85,4 +102,5 @@ type Mutation {
   sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
   cancelGeneration(sessionId: ID!): Boolean!
   resumeSession(id: ID!): ResumeSessionPayload!
+  importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
 }
