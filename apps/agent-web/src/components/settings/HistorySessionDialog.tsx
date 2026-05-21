@@ -34,9 +34,10 @@ export default function HistorySessionDialog({
   const [progress, setProgress] = useState<{ total: number; completed: number } | null>(null);
   const [results, setResults] = useState<ImportSessionResultData[]>([]);
 
-  const { data, loading, error } = useQuery<ListHistorySessionsQuery>(LIST_HISTORY_SESSIONS, {
+  const { data, loading, error, refetch } = useQuery<ListHistorySessionsQuery>(LIST_HISTORY_SESSIONS, {
     variables: { controllerId, workspaceId },
     skip: !open || !workspaceId,
+    fetchPolicy: 'network-only',
   });
 
   const [importHistorySessions] = useMutation(IMPORT_HISTORY_SESSIONS);
@@ -51,6 +52,9 @@ export default function HistorySessionDialog({
   }, [open]);
 
   const sessions = data?.listHistorySessions ?? [];
+  const visibleSessions = importing
+    ? sessions.filter((s) => selectedIds.has(s.sessionId))
+    : sessions;
 
   const handleToggle = useCallback((sessionId: string) => {
     setSelectedIds((prev) => {
@@ -93,6 +97,11 @@ export default function HistorySessionDialog({
         total: selectedIds.size,
         completed: importResults.filter((r) => r.success).length,
       });
+
+      const failedIds = importResults.filter((r) => !r.success).map((r) => r.acpSessionId);
+      setSelectedIds(new Set(failedIds));
+
+      await refetch();
     } catch (err) {
       console.error('Import failed:', err);
     } finally {
@@ -132,7 +141,7 @@ export default function HistorySessionDialog({
           <div className="py-8 text-center text-sm text-destructive">
             获取历史会话列表失败: {error.message}
           </div>
-        ) : sessions.length === 0 ? (
+        ) : visibleSessions.length === 0 && results.length === 0 ? (
           <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
             该工作目录下没有未导入的历史会话
           </div>
@@ -142,17 +151,19 @@ export default function HistorySessionDialog({
               <span className="text-sm text-muted-foreground">
                 {sessions.length} 个可导入的会话
               </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleSelectAll}
-              >
-                {selectedIds.size === sessions.length ? '取消全选' : '全选'}
-              </Button>
+              {!importing && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSelectAll}
+                >
+                  {selectedIds.size === sessions.length ? '取消全选' : '全选'}
+                </Button>
+              )}
             </div>
 
             <ul className="max-h-80 space-y-2 overflow-y-auto">
-              {sessions.map((s: HistorySessionInfoData) => (
+              {visibleSessions.map((s: HistorySessionInfoData) => (
                 <li
                   key={s.sessionId}
                   className="flex items-center gap-3 rounded-lg border p-3"

@@ -71,11 +71,11 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-        <h2 className="mb-4 text-lg font-semibold">New Session</h2>
+      <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
+        <h2 className="mb-4 text-lg font-semibold text-foreground">New Session</h2>
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
-            <label htmlFor="controller" className="mb-2 block text-sm font-medium text-gray-700">
+            <label htmlFor="controller" className="mb-2 block text-sm font-medium text-card-foreground">
               Controller
             </label>
             <select
@@ -86,7 +86,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                 setSelectedAcpServer('');
                 setSelectedWorkspace('');
               }}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               required
             >
               <option value="">Select a controller</option>
@@ -97,17 +97,17 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               ))}
             </select>
             {onlineControllers.length === 0 && (
-              <p className="mt-1 text-sm text-red-600">No online controllers available</p>
+              <p className="mt-1 text-sm text-destructive">No online controllers available</p>
             )}
           </div>
 
           {selectedController && (
             <div className="mb-4">
-              <div className="mb-2 block text-sm font-medium text-gray-700">
+              <div className="mb-2 block text-sm font-medium text-card-foreground">
                 ACP Server
               </div>
               {acpLoading ? (
-                <p className="text-sm text-gray-500">Detecting ACP servers...</p>
+                <p className="text-sm text-muted-foreground">Detecting ACP servers...</p>
               ) : (
                 <div className="space-y-2">
                   {(acpServers.length > 0 ? acpServers : [{ type: 'opencode', available: true }]).map((server) => (
@@ -115,8 +115,8 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                       key={server.type}
                       className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 ${
                         selectedAcpServer === server.type
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
+                          ? 'border-blue-500 bg-accent'
+                          : 'border-border bg-card hover:bg-accent/50'
                       }`}
                     >
                       <input
@@ -128,9 +128,9 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                         className="h-4 w-4 text-blue-600"
                       />
                       <div>
-                        <span className="text-sm font-medium text-gray-900">{server.type}</span>
+                        <span className="text-sm font-medium text-card-foreground">{server.type}</span>
                         {server.version && (
-                          <span className="ml-2 text-xs text-gray-500">v{server.version}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">v{server.version}</span>
                         )}
                       </div>
                     </label>
@@ -142,13 +142,13 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
 
           {selectedController && (
             <div className="mb-6">
-              <div className="mb-2 block text-sm font-medium text-gray-700">
+              <div className="mb-2 block text-sm font-medium text-card-foreground">
                 Working Directory
               </div>
               {wsLoading ? (
-                <p className="text-sm text-gray-500">Loading workspaces...</p>
+                <p className="text-sm text-muted-foreground">Loading workspaces...</p>
               ) : workspaces.length === 0 ? (
-                <div className="rounded-md border border-dashed p-4 text-center text-sm text-gray-500">
+                <div className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
                   暂无工作区，请先在设置中管理工作区
                 </div>
               ) : (
@@ -158,8 +158,8 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                       key={ws.id}
                       className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 ${
                         selectedWorkspace === ws.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
+                          ? 'border-blue-500 bg-accent'
+                          : 'border-border bg-card hover:bg-accent/50'
                       }`}
                     >
                       <input
@@ -171,8 +171,8 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                         className="h-4 w-4 text-blue-600"
                       />
                       <div>
-                        <span className="text-sm font-medium text-gray-900">{ws.name}</span>
-                        <div className="text-xs text-gray-500">{ws.path}</div>
+                        <span className="text-sm font-medium text-card-foreground">{ws.name}</span>
+                        <div className="text-xs text-muted-foreground">{ws.path}</div>
                       </div>
                     </label>
                   ))}
@@ -185,14 +185,14 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              className="rounded-md border border-input bg-background px-4 py-2 text-sm text-card-foreground hover:bg-accent"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!selectedController || !selectedAcpServer || !selectedWorkspace}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
+              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               Create Session
             </button>

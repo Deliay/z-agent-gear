@@ -10,6 +10,16 @@ vi.mock('@apollo/client/react', () => ({
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
 }));
 
+function mockQuery(overrides: Record<string, unknown> = {}) {
+  return {
+    data: null,
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+    ...overrides,
+  };
+}
+
 function baseSessions() {
   return [
     { sessionId: 'hist-1', title: 'Session One', cwd: '/home/user', updatedAt: '2026-01-01T00:00:00Z' },
@@ -32,7 +42,7 @@ describe('HistorySessionDialog', () => {
   };
 
   it('should show loading state', () => {
-    mockUseQuery.mockReturnValue({ data: null, loading: true, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: null, loading: true, error: null }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -40,7 +50,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should show empty state when no sessions', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: [] }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: [] } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -48,7 +58,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should show error state', () => {
-    mockUseQuery.mockReturnValue({ data: null, loading: false, error: new Error('Controller offline') });
+    mockUseQuery.mockReturnValue(mockQuery({ error: new Error('Controller offline') }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -56,7 +66,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should display session list with titles', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -65,7 +75,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should show session count', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -73,7 +83,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should show dialog title with workspace name', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -81,7 +91,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should disable import button when no session selected', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -90,7 +100,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should enable import button when sessions selected', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -102,7 +112,7 @@ describe('HistorySessionDialog', () => {
   });
 
   it('should select all sessions when clicking select all', () => {
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -114,7 +124,7 @@ describe('HistorySessionDialog', () => {
 
   it('should show fallback title when session has no title', () => {
     const sessions = [{ sessionId: 'abc12345', title: null, cwd: '/home/user', updatedAt: null }];
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: sessions }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: sessions } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -123,7 +133,7 @@ describe('HistorySessionDialog', () => {
 
   it('should not trigger query when dialog is closed', () => {
     mockUseQuery.mockReset();
-    mockUseQuery.mockReturnValue({ data: null, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery());
 
     render(<HistorySessionDialog {...defaultProps} open={false} workspaceId="" />);
 
@@ -140,7 +150,7 @@ describe('HistorySessionDialog', () => {
       },
     });
     mockUseMutation.mockReturnValue([importMock]);
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -159,7 +169,7 @@ describe('HistorySessionDialog', () => {
       },
     });
     mockUseMutation.mockReturnValue([importMock]);
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
@@ -178,7 +188,7 @@ describe('HistorySessionDialog', () => {
       },
     });
     mockUseMutation.mockReturnValue([importMock]);
-    mockUseQuery.mockReturnValue({ data: { listHistorySessions: baseSessions() }, loading: false, error: null });
+    mockUseQuery.mockReturnValue(mockQuery({ data: { listHistorySessions: baseSessions() } }));
 
     render(<HistorySessionDialog {...defaultProps} />);
 
