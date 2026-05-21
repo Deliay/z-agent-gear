@@ -1,3 +1,8 @@
+---
+description: Session 管理机制、ACP 协议转发、消息持久化、SSE 推送
+type: Permanent
+---
+
 # Agent拉起与交互
 
 **功能名称**: Agent拉起与交互

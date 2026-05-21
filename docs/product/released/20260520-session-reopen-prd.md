@@ -1,3 +1,8 @@
+---
+description: 已结束会话的恢复（Continue）功能、会话状态流转
+type: Permanent
+---
+
 # Session Re-open（会话恢复）功能
 
 **功能名称**: Session Re-open / Continue Session

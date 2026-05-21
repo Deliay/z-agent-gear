@@ -1,3 +1,8 @@
+---
+description: 控制器注册、绑定、心跳检测、Key 生成与管理
+type: Permanent
+---
+
 # Agent控制器管理 v1 产品草案
 
 **功能名称**: Agent控制器管理
