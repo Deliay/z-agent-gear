@@ -18,13 +18,14 @@ engineering/
 遵循 [[../../.agents/skills/z-document/SKILL.md|z-document]] 标准：
 
 ```
-{ID}-{Title-With-Hyphens}.md
+{YYYYMMDD}-{feat|fix|refactor}-{slug}.md
 ```
 
-- **ID**: 使用创建日期作为唯一标识符，格式 `YYYYMMDD`（如 `20260521-`），仅用于排序和去重
-- **标题**: ID 之后紧跟，使用连字符分隔
+- **日期**: 使用创建日期，格式 `YYYYMMDD`（如 `20260521-`）
+- **类型**: 类型前缀，`feat`（新功能）、`fix`（修复）、`refactor`（重构）
+- **标题**: 类型之后紧跟，使用连字符分隔
 
-示例：`20260521-proposal-acp-session-sync.md`
+示例：`20260521-feat-acp-session-sync.md`
 
 ## 文档结构
 
@@ -127,12 +128,16 @@ flowchart LR
 - [[common-rules.md]] — 通用开发规范
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
-- [[proposals/20260517-proposal-agent-controller-v1.md]] — Agent 控制器管理 v1
-- [[proposals/20260518-proposal-agent-session.md]] — Agent 拉起与交互
-- [[proposals/20260518-test-coverage-agent-session.md]] — Session 测试覆盖
-- [[proposals/20260519-proposal-local-controller-workspace-management.md]] — 本地控制器工作区管理
-- [[proposals/20260520-proposal-controller-acp-sdk-refactor.md]] — ACP SDK 重构
-- [[proposals/20260520-proposal-session-reopen.md]] — Session Re-open
-- [[proposals/20260521-proposal-acp-session-sync.md]] — 工作目录历史会话同步
-- [[proposals/20260517-proposal-llm-provider-settings.md]] — LLM 供应商与模型管理
-- [[proposals/20260517-proposal-user-auth-and-settings.md]] — 用户认证与设置页
+- [[proposals/20260517-feat-agent-controller-v1.md]] — Agent 控制器管理 v1
+- [[proposals/20260517-feat-llm-provider-settings.md]] — LLM 供应商与模型管理
+- [[proposals/20260517-feat-user-auth-and-settings.md]] — 用户认证与设置页
+- [[proposals/20260518-feat-agent-session.md]] — Agent 拉起与交互
+- [[proposals/20260519-feat-local-controller-workspace-management.md]] — 本地控制器工作区管理
+- [[proposals/20260519-feat-test-coverage-agent-session.md]] — Session 测试覆盖
+- [[proposals/20260519-fix-acceptance-issues.md]] — 验收问题分析与修复
+- [[proposals/20260519-fix-acp-rendering.md]] — ACP 消息渲染改造
+- [[proposals/20260519-fix-acp-session-init.md]] — ACP Session 初始化修复
+- [[proposals/20260519-fix-frontend-acp-response.md]] — 前端 ACP 会话修复
+- [[proposals/20260520-feat-session-reopen.md]] — Session Re-open
+- [[proposals/20260520-refactor-controller-acp-sdk.md]] — ACP SDK 重构
+- [[proposals/20260521-feat-acp-session-sync.md]] — 工作目录历史会话同步
