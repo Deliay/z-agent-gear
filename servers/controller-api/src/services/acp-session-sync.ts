@@ -101,6 +101,23 @@ export class AcpSessionSyncService {
     }
   }
 
+  cleanupSocket(socket: Socket): void {
+    for (const [requestId, pending] of this.pendingLists) {
+      if (pending.controllerSocket.id === socket.id) {
+        clearTimeout(pending.timeout);
+        this.pendingLists.delete(requestId);
+        pending.resolve({ success: false, error: 'Controller disconnected' });
+      }
+    }
+    for (const [requestId, pending] of this.pendingLoads) {
+      if (pending.controllerSocket.id === socket.id) {
+        clearTimeout(pending.timeout);
+        this.pendingLoads.delete(requestId);
+        pending.resolve({ success: false, error: 'Controller disconnected' });
+      }
+    }
+  }
+
   async cacheListResult(requestId: string, result: ListResult): Promise<void> {
     const redis = getRedisClient();
     await redis.set(`acp:list-sessions:${requestId}`, JSON.stringify(result), 'EX', 120);

@@ -225,6 +225,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
     socket.on('disconnect', async () => {
       try {
+        acpSessionSyncService.cleanupSocket(socket);
         if (socket.data.keyId) {
           await sessionService.removeSession(socket.data.keyId);
         }

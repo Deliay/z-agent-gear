@@ -2,6 +2,24 @@ import * as acp from '@agentclientprotocol/sdk';
 import { AcpSpawner } from './spawner.js';
 
 const ACP_PROTOCOL_VERSION = 1;
+const CONNECT_TIMEOUT_MS = 30_000;
+const LOAD_SESSION_TIMEOUT_MS = 120_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timerPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timerPromise]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 export interface AcpSyncBridgeOptions {
   cwd: string;
@@ -19,31 +37,60 @@ export class AcpSyncBridge implements acp.Client {
     });
   }
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs: number = CONNECT_TIMEOUT_MS): Promise<void> {
     this.spawner.start();
     const stream = acp.ndJsonStream(this.spawner.stdin, this.spawner.stdout);
     this.connection = new acp.ClientSideConnection(() => this, stream);
-    await this.connection.initialize({
+
+    const exitPromise = this.spawner.closed.then(() => {
+      throw new Error('ACP process exited unexpectedly');
+    });
+    exitPromise.catch(() => {});
+
+    const initPromise = this.connection.initialize({
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {},
       clientInfo: { name: 'agent-controller', version: '1.0.0' },
     });
+
+    await withTimeout(
+      Promise.race([initPromise, exitPromise]),
+      timeoutMs,
+      `ACP connect timed out after ${timeoutMs}ms`,
+    );
   }
 
   async listSessions(cwd: string): Promise<acp.ListSessionsResponse> {
     return this.connection!.listSessions({ cwd });
   }
 
-  async loadSession(sessionId: string, cwd: string): Promise<{
+  async loadSession(
+    sessionId: string,
+    cwd: string,
+    timeoutMs: number = LOAD_SESSION_TIMEOUT_MS,
+  ): Promise<{
     config: acp.LoadSessionResponse;
     updates: acp.SessionNotification[];
   }> {
     this.updates = [];
-    const config = await this.connection!.loadSession({
-      cwd,
-      sessionId,
-      mcpServers: [],
+
+    const exitPromise = this.spawner.closed.then(() => {
+      throw new Error('ACP process exited unexpectedly');
     });
+    exitPromise.catch(() => {});
+
+    const config = await withTimeout(
+      Promise.race([
+        this.connection!.loadSession({
+          cwd,
+          sessionId,
+          mcpServers: [],
+        }),
+        exitPromise,
+      ]),
+      timeoutMs,
+      `ACP load-session timed out after ${timeoutMs}ms`,
+    );
     return { config, updates: [...this.updates] };
   }
 

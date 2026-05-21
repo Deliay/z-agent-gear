@@ -27,9 +27,20 @@ class MockAcpSpawner {
   isRunning = vi.fn().mockReturnValue(true);
   _stdin = new WritableStream();
   _stdout = new ReadableStream();
+  private _resolveClosed: (() => void) | null = null;
+  private _closed: Promise<void>;
+
+  constructor() {
+    this._closed = new Promise((resolve) => { this._resolveClosed = resolve; });
+  }
+
   get stdin() { return this._stdin; }
   get stdout() { return this._stdout; }
-  get closed() { return Promise.resolve(); }
+  get closed() { return this._closed; }
+
+  triggerExit() {
+    this._resolveClosed?.();
+  }
 }
 
 function createBridge(spawner?: MockAcpSpawner) {
@@ -64,6 +75,32 @@ describe('AcpSyncBridge', () => {
       const bridge = createBridge(mockSpawner);
 
       await expect(bridge.connect()).rejects.toThrow('connection failed');
+    });
+
+    it('should throw when process exits during connect', async () => {
+      mc().initialize.mockReturnValue(new Promise(() => {}));
+      const mockSpawner = new MockAcpSpawner();
+      const bridge = createBridge(mockSpawner);
+
+      mockSpawner.triggerExit();
+
+      await expect(bridge.connect()).rejects.toThrow('ACP process exited unexpectedly');
+    });
+
+    it('should throw on connect timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        mc().initialize.mockReturnValue(new Promise(() => {}));
+        const mockSpawner = new MockAcpSpawner();
+        const bridge = createBridge(mockSpawner);
+
+        const connectPromise = bridge.connect(1000);
+        vi.advanceTimersByTime(1000);
+
+        await expect(connectPromise).rejects.toThrow('timed out');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -133,6 +170,34 @@ describe('AcpSyncBridge', () => {
       expect(result.updates).toHaveLength(2);
       expect(result.updates[0].update.sessionUpdate).toBe('user_message_chunk');
       expect(result.updates[1].update.sessionUpdate).toBe('agent_message_chunk');
+    });
+
+    it('should throw when process exits during loadSession', async () => {
+      mc().loadSession.mockReturnValue(new Promise(() => {}));
+      const mockSpawner = new MockAcpSpawner();
+      const bridge = createBridge(mockSpawner);
+      await bridge.connect();
+
+      mockSpawner.triggerExit();
+
+      await expect(bridge.loadSession('hist-1', '/home/user')).rejects.toThrow('ACP process exited unexpectedly');
+    });
+
+    it('should throw on load-session timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        mc().loadSession.mockReturnValue(new Promise(() => {}));
+        const mockSpawner = new MockAcpSpawner();
+        const bridge = createBridge(mockSpawner);
+        await bridge.connect();
+
+        const loadPromise = bridge.loadSession('hist-1', '/home/user', 1000);
+        vi.advanceTimersByTime(1000);
+
+        await expect(loadPromise).rejects.toThrow('timed out');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
