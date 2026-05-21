@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
@@ -461,16 +461,39 @@ describe('Session GraphQL API', () => {
   });
 
   describe('acpCapabilities query', () => {
+    let capControllerId = '';
+    let capClient: ClientSocket;
+
+    beforeAll(async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `cap-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const capKey = keyBody.data.createControllerKey.rawKey;
+
+      capClient = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(capClient, 'registered');
+      capClient.emit('register', { key: capKey, hostname: 'cap-test-host', version: '1.0.0' });
+      const regData = await registered;
+      capControllerId = regData.controllerId;
+    });
+
+    afterAll(() => {
+      capClient?.disconnect();
+    });
+
     it('should return capabilities for controller', async () => {
       const res = await gqlRequest(
         ACP_CAPABILITIES_QUERY,
-        { controllerId },
+        { controllerId: capControllerId },
         authToken,
       );
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(Array.isArray(body.data.acpCapabilities)).toBe(true);
-    });
+    }, 20_000);
 
     it('should reject query for non-existent controller', async () => {
       const res = await gqlRequest(

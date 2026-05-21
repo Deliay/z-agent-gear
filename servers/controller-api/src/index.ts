@@ -64,4 +64,7 @@ async function gracefulShutdown() {
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
-start();
+start().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

@@ -275,7 +275,7 @@ export function connectToServer(
   });
 
   socket.on('acp:load-session', async (data: AcpLoadSessionPayload) => {
-    console.log(`[ACP sync] acp:load-session received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
+    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
     const bridge = new AcpSyncBridge({ cwd: data.cwd });
     try {
       await bridge.connect();
@@ -335,11 +335,26 @@ export function connectToServer(
         success: true,
         sessionId: data.sessionId,
         title,
-        messages,
       });
+
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        socket.emit('acp:load-session:message', {
+          requestId: data.requestId,
+          direction: msg.direction,
+          type: msg.type,
+          content: msg.content,
+        });
+        if (i % 200 === 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      await new Promise(r => setTimeout(r, 5));
+      socket.emit('acp:load-session:complete', { requestId: data.requestId });
     } catch (error) {
       await bridge.disconnect(data.sessionId).catch(() => {});
-      console.error(`[ACP sync] load-session failed: ${(error as Error).message}`);
+      console.error(`[ACP] load-session FAILED: ${(error as Error).message}`);
+      console.log(`[ACP] emitting error result, socket.connected=${socket.connected}`);
       socket.emit('acp:load-session:result', {
         requestId: data.requestId,
         success: false,

@@ -32,6 +32,16 @@ API_URL=$(aspire describe agent-api --format Json 2>/dev/null | node -e "process
 CONTROLLER_URL=$(aspire describe controller-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url)")
 
 API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
+
+## 测试脚本
+
+| 脚本 | 说明 |
+|------|------|
+| `npm test` | 运行 8 个常规测试文件（并行，不含 `acp-real-*`） |
+| `npm run test:real` | 仅运行 `acp-real-*` 测试（串行，超时 30s） |
+| `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
+
+> **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
 ```
 
 ## 环境变量

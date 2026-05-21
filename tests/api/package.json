@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:real": "vitest run --config vitest.real.config.ts",
+    "test:all": "vitest run --config vitest.real.config.ts && vitest run"
   },
   "dependencies": {
     "socket.io-client": "^4.8.3",

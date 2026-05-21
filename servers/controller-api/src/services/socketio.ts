@@ -212,6 +212,25 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:load-session:message', async (payload: {
+      requestId: string;
+      direction: 'input' | 'output';
+      type: string;
+      content: string;
+    }) => {
+      if (!authenticated) return;
+      acpSessionSyncService.handleLoadResultMessage(payload.requestId, {
+        direction: payload.direction,
+        type: payload.type,
+        content: payload.content,
+      });
+    });
+
+    socket.on('acp:load-session:complete', async (payload: { requestId: string }) => {
+      if (!authenticated) return;
+      acpSessionSyncService.finalizeAndCacheLoadResult(payload.requestId);
+    });
+
     // File system events
     socket.on('fs:browse:result', async (payload: { requestId: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }) => {
       if (!authenticated) return;
@@ -223,10 +242,36 @@ export function createSocketIOServer(io: SocketIOServer): void {
       await folderBrowserService.handleHomeResult(payload.requestId, payload.path);
     });
 
+    socket.on('error', (err) => {
+      console.log(`error on connection ${socket.data.keyId} [${socket.id}]: ${err}`);
+    })
+
+    socket.on('connect_error', (err) => {
+      console.error(`Connection error: ${err.message}`);
+    });
+
+    io.on('error', (err) => {
+      console.error(`[ENGINE] error: ${err.message}`);
+    });
+    const transportErrorHandler = (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[ENGINE] transport error: ${msg}`);
+    };
+    io.engine?.on?.('error', transportErrorHandler);
+    io.on('open', () => {
+      io.engine?.on?.('error', transportErrorHandler);
+    });
+
     socket.on('disconnect', async () => {
+      console.log(`disconnecting ${socket.data.keyId} [${socket.id}]`);
+      
       try {
         acpSessionSyncService.cleanupSocket(socket);
         if (socket.data.keyId) {
+          await Controller.updateOne(
+            { keyId: socket.data.keyId },
+            { status: 'offline' },
+          );
           await sessionService.removeSession(socket.data.keyId);
         }
         await acpSessionManager.handleSocketDisconnect(socket.id);

@@ -363,15 +363,29 @@ describe('Controller Online Status', () => {
   });
 
   it('should include online controller in controllers list', async () => {
+    const client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    const onlineKeyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `online-list-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const onlineKeyBody = await onlineKeyRes.json();
+    const onlineKey = onlineKeyBody.data.createControllerKey.rawKey;
+    client.emit('register', { key: onlineKey, hostname: 'list-test-host', version: '1.0.0' });
+    await registered;
+
     const res = await gqlRequest(CONTROLLERS_QUERY, undefined, authToken);
     const body = await res.json();
     expect(body.errors).toBeUndefined();
     const online = body.data.controllers.find(
-      (c: { keyId: string }) => c.keyId === keyId,
+      (c: { keyId: string }) => c.keyId === onlineKeyBody.data.createControllerKey.key.id,
     );
     expect(online).toBeDefined();
     expect(online.status).toBe('online');
-    expect(online.hostname).toBe('test-host');
+    expect(online.hostname).toBe('list-test-host');
+
+    client.disconnect();
   });
 
   it('should delete controller and key after WebSocket unregister', async () => {

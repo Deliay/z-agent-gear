@@ -6,5 +6,6 @@ export default defineConfig({
     environment: 'node',
     setupFiles: [],
     testTimeout: 15_000,
+    exclude: ['src/**/acp-real-*.test.ts'],
   },
 });
