@@ -110,3 +110,12 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 关闭会话 | 点击关闭 → 状态更新为已关闭 |
 | 删除会话 | 点击删除 → 跳转回会话列表 |
 | 未登录重定向 | 直接访问 `/sessions` → 重定向到登录页 |
+
+### Settings History Session E2E (`settings-history-session.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 历史会话按钮可见且可用 | 在线 controller + 启用 workspace 显示「历史会话」按钮 |
+| 列表展示和导入按钮 | 点击历史会话 → 显示 fake controller 返回的 2 个 session |
+| 全选并导入成功 | 全选 → 导入 → 显示成功导入 2 个会话 |
+| 空状态 | 无可用 session 时显示「没有未导入的历史会话」 |

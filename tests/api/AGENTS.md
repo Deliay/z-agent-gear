@@ -173,3 +173,17 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | create → acp:start → success → verify running | 创建 session → fake controller 收到 acp:start → 响应 success → 查询 session status=running |
 | create → acp:start → failure → verify ended | 创建 session → fake controller 响应 failure → 查询 session status=ended |
 | create → send message → controller receive → output persisted | 创建 session → GraphQL 发消息 → fake controller 收到 acp:message → 模拟输出 → 查询消息列表验证 input+output 都持久化 |
+
+### History Session Sync API (`agent-api/history-session-sync.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| listHistorySessions - 无 token | 应返回「Not authenticated」 |
+| listHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
+| listHistorySessions - 不存在的 workspace | 应返回「Workspace not found」 |
+| listHistorySessions - 正常返回 | 通过 fake controller 响应返回 history session 列表 |
+| importHistorySessions - 无 token | 应返回「Not authenticated」 |
+| importHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
+| importHistorySessions - 导入单个 session | 导入 1 个 session，验证 messageCount=2 |
+| importHistorySessions - 导入多个 session | 导入 2 个 session，验证都存在并 status=ended |
+| importHistorySessions - 去重过滤 | 先导入 acp_sync_sess_1，list 应返回 acp_sync_sess_2 但排除 s1 |
