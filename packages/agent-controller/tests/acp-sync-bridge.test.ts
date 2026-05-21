@@ -137,14 +137,25 @@ describe('AcpSyncBridge', () => {
   });
 
   describe('disconnect', () => {
-    it('should close session and stop spawner', async () => {
+    it('should close session with given ID and stop spawner', async () => {
+      const mockSpawner = new MockAcpSpawner();
+      const bridge = createBridge(mockSpawner);
+      await bridge.connect();
+
+      await bridge.disconnect('hist-1');
+
+      expect(mc().closeSession).toHaveBeenCalledWith({ sessionId: 'hist-1' });
+      expect(mockSpawner.stop).toHaveBeenCalledOnce();
+    });
+
+    it('should skip closeSession when no sessionId given', async () => {
       const mockSpawner = new MockAcpSpawner();
       const bridge = createBridge(mockSpawner);
       await bridge.connect();
 
       await bridge.disconnect();
 
-      expect(mc().closeSession).toHaveBeenCalled();
+      expect(mc().closeSession).not.toHaveBeenCalled();
       expect(mockSpawner.stop).toHaveBeenCalledOnce();
     });
 

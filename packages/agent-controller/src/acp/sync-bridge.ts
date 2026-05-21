@@ -47,10 +47,10 @@ export class AcpSyncBridge implements acp.Client {
     return { config, updates: [...this.updates] };
   }
 
-  async disconnect(): Promise<void> {
-    try {
-      await this.connection?.closeSession({ sessionId: '' });
-    } catch { }
+  async disconnect(sessionId?: string): Promise<void> {
+    if (sessionId) {
+      await this.connection?.closeSession({ sessionId }).catch(() => {});
+    }
     this.spawner.stop();
   }
 

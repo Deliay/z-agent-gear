@@ -176,7 +176,10 @@ export default function SessionPage() {
   const handleDeleteSession = async () => {
     if (!id) return;
     try {
-      await deleteSession({ variables: { id } });
+      await deleteSession({
+        variables: { id },
+        refetchQueries: [{ query: GET_SESSIONS }],
+      });
       navigate('/sessions');
     } catch (error) {
       console.error('Failed to delete session:', error);

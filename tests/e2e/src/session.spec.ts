@@ -278,10 +278,19 @@ test.describe('Session E2E', () => {
     await page.getByRole('button', { name: 'Create Session' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
+    // Expand sidebar tree to verify session appears
+    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    await sidebar.getByRole('button', { name: /e2e-test-host/ }).click();
+    await sidebar.getByRole('button', { name: /📁/ }).click();
+    await expect(sidebar.locator('a[href^="/sessions/"]')).toBeVisible({ timeout: 5000 });
+
     page.on('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'Delete' }).click();
     await expect(page).toHaveURL('/sessions', { timeout: 5000 });
     await expect(page.getByText('No sessions found.')).toBeVisible();
+
+    // Sidebar should no longer show the deleted session
+    await expect(sidebar.locator('a[href^="/sessions/"]')).not.toBeVisible();
 
     disconnect();
   });

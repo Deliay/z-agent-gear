@@ -280,7 +280,7 @@ export function connectToServer(
     try {
       await bridge.connect();
       const { config, updates } = await bridge.loadSession(data.sessionId, data.cwd);
-      await bridge.disconnect();
+      await bridge.disconnect(data.sessionId);
 
       let title: string | null = null;
       const messages: Array<{ direction: 'input' | 'output'; type: string; content: string }> = [];
@@ -338,7 +338,7 @@ export function connectToServer(
         messages,
       });
     } catch (error) {
-      await bridge.disconnect().catch(() => {});
+      await bridge.disconnect(data.sessionId).catch(() => {});
       console.error(`[ACP sync] load-session failed: ${(error as Error).message}`);
       socket.emit('acp:load-session:result', {
         requestId: data.requestId,
