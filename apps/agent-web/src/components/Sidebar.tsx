@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { NavLink, useParams } from 'react-router-dom';
-import { useQuery } from '@apollo/client/react';
+import { NavLink, useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '../graphql/queries';
-import type { GetSessionsQuery, GetControllersQuery, GetControllerWorkspacesQuery } from '../graphql/types';
+import { CREATE_SESSION } from '../graphql/mutations';
+import type { GetSessionsQuery, GetControllersQuery, GetControllerWorkspacesQuery, CreateSessionMutation } from '../graphql/types';
+import NewSessionDialog from './session/NewSessionDialog';
 
 interface SidebarProps {
   username: string;
@@ -17,19 +19,42 @@ const statusColors: Record<string, string> = {
 
 export default function Sidebar({ username }: SidebarProps) {
   const { id: activeId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
+  const [showNewDialog, setShowNewDialog] = useState(false);
 
-  const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS);
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS);
+  const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
+    pollInterval: 15000,
+  });
+  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
+    pollInterval: 15000,
+  });
   const { data: workspacesData } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
     variables: { controllerId: '' },
     skip: true,
   });
 
+  const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
+
   const sessions = sessionsData?.sessions ?? [];
   const controllers = controllersData?.controllers ?? [];
   const allWorkspaces = workspacesData?.controllerWorkspaces ?? [];
+
+  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
+    try {
+      const { data } = await createSession({
+        variables: { input: { controllerId, acpServerType, workspaceId } },
+        refetchQueries: [{ query: GET_SESSIONS }],
+      });
+      if (data?.createSession?.session?.id) {
+        navigate(`/sessions/${data.createSession.session.id}`);
+        setShowNewDialog(false);
+      }
+    } catch (error) {
+      console.error('Failed to create session:', error);
+    }
+  };
 
   // Group sessions by controllerId + cwd (workspace path)
   const sessionsByController = new Map<string, typeof sessions>();
@@ -83,12 +108,13 @@ export default function Sidebar({ username }: SidebarProps) {
       <div className="flex-1 overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Sessions</h2>
-          <NavLink
-            to="/sessions"
+          <button
+            type="button"
+            onClick={() => setShowNewDialog(true)}
             className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700"
           >
             新建
-          </NavLink>
+          </button>
         </div>
 
         <ul className="space-y-1">
@@ -183,6 +209,14 @@ export default function Sidebar({ username }: SidebarProps) {
           })}
         </ul>
       </div>
+
+      {showNewDialog && (
+        <NewSessionDialog
+          controllers={controllers}
+          onClose={() => setShowNewDialog(false)}
+          onCreate={handleCreateSession}
+        />
+      )}
 
       <div className="sticky bottom-0 border-t border-gray-700 p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">

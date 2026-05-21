@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_CONTROLLER_WORKSPACES } from '../../graphql/queries';
+import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS } from '../../graphql/queries';
 import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE } from '../../graphql/mutations';
 import type { GetControllerWorkspacesQuery, ControllerWorkspaceData } from '../../graphql/types';
 import {
@@ -35,25 +35,39 @@ export default function WorkspaceManagerDialog({ controllerId, controllerName, o
 
   const workspaces = data?.controllerWorkspaces ?? [];
 
+  const refetchSessions = () => ({ query: GET_SESSIONS });
+
   const handleAdd = async (path: string) => {
-    await createWorkspace({ variables: { input: { controllerId, path } } });
+    await createWorkspace({
+      variables: { input: { controllerId, path } },
+      refetchQueries: [refetchSessions()],
+    });
     await refetch();
     setShowPicker(false);
   };
 
   const handleDelete = async (id: string) => {
-    await deleteWorkspace({ variables: { id } });
+    await deleteWorkspace({
+      variables: { id },
+      refetchQueries: [refetchSessions()],
+    });
     await refetch();
   };
 
   const handleClear = async () => {
-    await clearWorkspaces({ variables: { controllerId } });
+    await clearWorkspaces({
+      variables: { controllerId },
+      refetchQueries: [refetchSessions()],
+    });
     await refetch();
     setConfirmClear(false);
   };
 
   const handleToggle = async (id: string) => {
-    await toggleWorkspace({ variables: { id } });
+    await toggleWorkspace({
+      variables: { id },
+      refetchQueries: [refetchSessions()],
+    });
     await refetch();
   };
 
