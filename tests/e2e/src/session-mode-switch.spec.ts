@@ -5,7 +5,7 @@ const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
 
 test.describe('Session Mode Switch', () => {
 
-  test('should show model badge when acp start result includes currentModel', async ({ page }) => {
+  test('should show model switcher with current model when acp start result includes availableModels', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect, socket } = await registerController(rawKey);
@@ -19,20 +19,20 @@ test.describe('Session Mode Switch', () => {
           externalSessionId: `ext_model_${Date.now()}`,
           modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
           currentModeId: 'code',
-          currentModel: { id: 'gpt-4', name: 'GPT-4' },
+          availableModels: [{ id: 'gpt-4', name: 'GPT-4', provider: 'openai' }],
+          currentModelId: 'gpt-4',
         });
       }, 300);
     });
 
     await loginViaUI(page, username);
-    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-model-badge', token);
+    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-model-switcher', token);
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
     await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
-    const modelBadge = page.locator('span:has-text("GPT-4")');
-    await expect(modelBadge).toBeVisible();
+    await expect(page.getByRole('button', { name: 'GPT-4' })).toBeVisible();
 
     disconnect();
   });
