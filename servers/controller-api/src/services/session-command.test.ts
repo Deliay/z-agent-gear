@@ -26,6 +26,7 @@ vi.mock('./acp-session-manager.js', () => ({
 vi.mock('./acp-capability-detector.js', () => ({
   acpCapabilityDetector: {
     detectCapabilities: vi.fn(),
+    invalidateCache: vi.fn(),
   },
 }));
 
@@ -48,6 +49,7 @@ vi.mock('./folder-browser.js', () => ({
 import { SessionCommandService } from './session-command.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { acpSessionManager } from './acp-session-manager.js';
+import { acpCapabilityDetector } from './acp-capability-detector.js';
 
 function createMockRedis() {
   const messageHandlers: ((channel: string, message: string) => void)[] = [];
@@ -80,6 +82,41 @@ beforeEach(() => {
 });
 
 describe('SessionCommandService', () => {
+  describe('acp:cache:invalidate command', () => {
+    it('should call acpCapabilityDetector.invalidateCache', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:cache:invalidate',
+        controllerId: 'ctrl-1',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpCapabilityDetector.invalidateCache).toHaveBeenCalledWith('ctrl-1');
+      });
+    });
+
+    it('should not call invalidateCache without controllerId', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:cache:invalidate',
+      }));
+
+      // allow async handlers to run
+      await new Promise((r) => setTimeout(r, 50));
+      expect(acpCapabilityDetector.invalidateCache).not.toHaveBeenCalled();
+    });
+  });
+
   describe('acp:set-model command', () => {
     it('should route acp:set-model to acpSessionManager.setModel', async () => {
       const mockRedis = createMockRedis();

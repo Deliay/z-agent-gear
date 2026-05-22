@@ -336,6 +336,8 @@ describe('SessionService', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual(expect.objectContaining({ type: 'opencode', available: true }));
+      expect(result[0].checkedAt).toBeDefined();
+      expect(typeof result[0].checkedAt).toBe('string');
     });
 
     it('should return empty array when no cache', async () => {
@@ -363,6 +365,61 @@ describe('SessionService', () => {
       } as never);
 
       await expect(sessionService.getAcpCapabilities('ctrl-1', 'user-1')).rejects.toThrow('Controller not found');
+    });
+  });
+
+  describe('refreshAcpCapabilities', () => {
+    it('should throw when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(
+        sessionService.refreshAcpCapabilities('ctrl-1', 'user-1'),
+      ).rejects.toThrow('Controller not found');
+    });
+
+    it('should delete cache and publish invalidate', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify({
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+        checkedAt: new Date().toISOString(),
+      }));
+
+      const result = await sessionService.refreshAcpCapabilities('ctrl-1', 'user-1');
+
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:capability:ctrl-1');
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:cache:invalidate"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"controllerId":"ctrl-1"'),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe('opencode');
+    });
+
+    it('should return empty array when refresh produces no data', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+      vi.mocked(mockRedis.get).mockResolvedValue(null);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+
+      const promise = sessionService.refreshAcpCapabilities('ctrl-1', 'user-1');
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      const result = await promise;
+
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:capability:ctrl-1');
+      expect(result).toEqual([]);
+      vi.useRealTimers();
     });
   });
 

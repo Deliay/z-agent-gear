@@ -17,8 +17,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import WorkspaceManagerDialog from './WorkspaceManagerDialog'
-
 const GET_CONTROLLER_KEYS = gql`
   query GetControllerKeys {
     controllerKeys {
@@ -84,7 +82,11 @@ function autoKeyName(): string {
   return `Key-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
 }
 
-export default function ControllerListSection() {
+interface ControllerListSectionProps {
+  onNavigateToConfig?: (controllerId: string) => void;
+}
+
+export default function ControllerListSection({ onNavigateToConfig }: ControllerListSectionProps) {
   const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useQuery<GetControllerKeysQuery>(GET_CONTROLLER_KEYS)
   const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
     pollInterval: POLL_INTERVAL,
@@ -98,7 +100,6 @@ export default function ControllerListSection() {
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [workspaceTarget, setWorkspaceTarget] = useState<{ id: string; name: string; status: string } | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
@@ -211,8 +212,8 @@ export default function ControllerListSection() {
                     </div>
                   </div>
                   <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => setWorkspaceTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname, status: ctrl.status })}>
-                      管理工作区
+                    <Button variant="ghost" size="sm" onClick={() => onNavigateToConfig?.(ctrl.id)}>
+                      配置
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       重命名
@@ -264,14 +265,6 @@ export default function ControllerListSection() {
         </DialogContent>
       </Dialog>
 
-      {workspaceTarget && (
-        <WorkspaceManagerDialog
-          controllerId={workspaceTarget.id}
-          controllerName={workspaceTarget.name}
-          controllerOnline={workspaceTarget.status === 'online'}
-          onClose={() => setWorkspaceTarget(null)}
-        />
-      )}
     </section>
   )
 }

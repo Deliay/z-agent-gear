@@ -245,7 +245,7 @@ export class SessionService {
     // Check Redis cache first
     const cached = await redis.get(`acp:capability:${controllerId}`);
     if (cached) {
-      return JSON.parse(cached).servers;
+      return this.parseCapabilitiesWithCheckedAt(cached);
     }
 
     // Trigger ACP capability detection via Redis Pub/Sub
@@ -261,12 +261,41 @@ export class SessionService {
       await new Promise((resolve) => setTimeout(resolve, 500));
       const result = await redis.get(`acp:capability:${controllerId}`);
       if (result) {
-        return JSON.parse(result).servers;
+        return this.parseCapabilitiesWithCheckedAt(result);
       }
     }
 
     // Timeout — return empty
     return [];
+  }
+
+  private parseCapabilitiesWithCheckedAt(cached: string): Record<string, unknown>[] {
+    const parsed = JSON.parse(cached);
+    return (parsed.servers as Record<string, unknown>[]).map((s) => ({
+      ...s,
+      checkedAt: parsed.checkedAt || null,
+    }));
+  }
+
+  async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    const redis = getRedisClient();
+
+    // Delete Redis cache
+    await redis.del(`acp:capability:${controllerId}`);
+
+    // Notify controller-api to invalidate its in-memory cache
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:cache:invalidate',
+      controllerId,
+    }));
+
+    // Trigger fresh detection and return result
+    return this.getAcpCapabilities(controllerId, userId);
   }
 
   private mapSession(session: Record<string, unknown>): Record<string, unknown> {

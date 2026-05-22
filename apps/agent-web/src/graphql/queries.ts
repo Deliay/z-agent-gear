@@ -133,6 +133,7 @@ export const GET_ACP_CAPABILITIES = gql`
       type
       available
       version
+      checkedAt
     }
   }
 `

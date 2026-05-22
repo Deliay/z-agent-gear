@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/stores/auth';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,10 +19,14 @@ import {
 import ProviderSection from '@/components/settings/ProviderSection';
 import ModelSection from '@/components/settings/ModelSection';
 import ControllerListSection from '@/components/settings/ControllerListSection';
+import ControllerConfigPage from './ControllerConfigPage';
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const controllerId = searchParams.get('controllerId');
 
   const handleLogout = () => {
     logout();
@@ -33,6 +37,19 @@ export default function SettingsPage() {
     const el = document.getElementById(id);
     el?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  const handleNavigateToConfig = (id: string) => {
+    setSearchParams({ controllerId: id });
+  };
+
+  if (controllerId) {
+    return (
+      <ControllerConfigPage
+        controllerId={controllerId}
+        onBack={() => setSearchParams({})}
+      />
+    );
+  }
 
   return (
     <div className="grid h-full grid-cols-[200px_1fr]">
@@ -66,7 +83,7 @@ export default function SettingsPage() {
           </div>
           <div className="pt-2">
             <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-              控制器
+              本地控制器
             </div>
             <button
               type="button"
@@ -118,7 +135,7 @@ export default function SettingsPage() {
         </section>
 
         <section id="controller-section" className="mb-10">
-          <ControllerListSection />
+          <ControllerListSection onNavigateToConfig={handleNavigateToConfig} />
         </section>
       </div>
     </div>

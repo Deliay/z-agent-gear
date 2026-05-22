@@ -72,6 +72,7 @@ export const sessionTypeDefs = `#graphql
     type: AcpServerType!
     available: Boolean!
     version: String
+    checkedAt: String
   }
 
   type HistorySessionInfo {
@@ -124,5 +125,6 @@ export const sessionTypeDefs = `#graphql
     importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
     setSessionMode(sessionId: ID!, modeId: String!): Boolean!
     setSessionModel(sessionId: ID!, modelId: String!): Boolean!
+    refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   }
 `;

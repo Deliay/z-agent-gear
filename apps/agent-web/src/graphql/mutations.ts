@@ -248,3 +248,14 @@ export const IMPORT_HISTORY_SESSIONS = gql`
     }
   }
 `
+
+export const REFRESH_ACP_CAPABILITIES = gql`
+  mutation RefreshAcpCapabilities($controllerId: ID!) {
+    refreshAcpCapabilities(controllerId: $controllerId) {
+      type
+      available
+      version
+      checkedAt
+    }
+  }
+`

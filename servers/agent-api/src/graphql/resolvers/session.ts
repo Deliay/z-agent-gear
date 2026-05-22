@@ -186,5 +186,19 @@ export const sessionResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    refreshAcpCapabilities: async (
+      _parent: unknown,
+      args: { controllerId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionService.refreshAcpCapabilities(args.controllerId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
   },
 };

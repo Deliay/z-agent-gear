@@ -121,6 +121,11 @@ export interface AcpCapabilityData {
   type: string
   available: boolean
   version: string | null
+  checkedAt: string | null
+}
+
+export interface RefreshAcpCapabilitiesMutation {
+  refreshAcpCapabilities: AcpCapabilityData[]
 }
 
 export interface GetControllerKeysQuery {

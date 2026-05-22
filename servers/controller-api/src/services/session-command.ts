@@ -72,6 +72,8 @@ export class SessionCommandService {
             await this.handleAcpSetMode(command.sessionId, command.modeId as string);
           } else if (command.type === 'acp:set-model' && command.sessionId && command.modelId) {
             await this.handleAcpSetModel(command.sessionId, command.modelId as string);
+          } else if (command.type === 'acp:cache:invalidate' && command.controllerId) {
+            acpCapabilityDetector.invalidateCache(command.controllerId);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
