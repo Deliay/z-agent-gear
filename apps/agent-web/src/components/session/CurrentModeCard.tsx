@@ -26,7 +26,7 @@ export default function CurrentModeCard({ messages }: CurrentModeCardProps) {
   if (!parsed?.modeId) return null;
 
   return (
-    <div className="flex justify-center">
+    <div className="w-full">
       <div className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm text-purple-800">
         <span className="font-medium">Mode changed to:</span>{' '}
         <span className="font-mono">{parsed.modeId}</span>

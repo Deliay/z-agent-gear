@@ -27,7 +27,7 @@ export default function ConfigOptionCard({ messages }: ConfigOptionCardProps) {
   if (options.length === 0) return null;
 
   return (
-    <div className="flex justify-center">
+    <div className="w-full">
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
           Settings Updated
