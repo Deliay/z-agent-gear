@@ -25,6 +25,18 @@ enum AcpMessageType {
   error
 }
 
+type AgentMode {
+  id: String!
+  name: String!
+  description: String
+}
+
+type AgentModelInfo {
+  id: String!
+  name: String!
+  provider: String
+}
+
 type Session {
   id: ID!
   userId: ID!
@@ -32,8 +44,12 @@ type Session {
   controllerName: String!
   acpServerType: AcpServerType!
   status: SessionStatus!
+  title: String
   externalSessionId: String
   cwd: String
+  modes: [AgentMode!]
+  currentModeId: String
+  currentModel: AgentModelInfo
   createdAt: String!
   updatedAt: String!
   endedAt: String
@@ -55,16 +71,6 @@ type AcpCapability {
   version: String
 }
 
-type CreateSessionPayload {
-  session: Session!
-}
-
-input CreateSessionInput {
-  controllerId: ID!
-  acpServerType: AcpServerType! = opencode
-  workspaceId: ID!
-}
-
 type HistorySessionInfo {
   sessionId: String!
   title: String
@@ -81,18 +87,28 @@ type ImportSessionResult {
   messageCount: Int
 }
 
-type Query {
-  sessions: [Session!]!
-  session(id: ID!): Session
-  sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
-  acpCapabilities(controllerId: ID!): [AcpCapability!]!
-  listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
+type CreateSessionPayload {
+  session: Session!
+}
+
+input CreateSessionInput {
+  controllerId: ID!
+  acpServerType: AcpServerType! = opencode
+  workspaceId: ID!
 }
 
 type ResumeSessionPayload {
   success: Boolean!
   status: SessionStatus!
   error: String
+}
+
+type Query {
+  sessions: [Session!]!
+  session(id: ID!): Session
+  sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
+  acpCapabilities(controllerId: ID!): [AcpCapability!]!
+  listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
 }
 
 type Mutation {
@@ -103,4 +119,5 @@ type Mutation {
   cancelGeneration(sessionId: ID!): Boolean!
   resumeSession(id: ID!): ResumeSessionPayload!
   importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
+  setSessionMode(sessionId: ID!, modeId: String!): Boolean!
 }

@@ -39,6 +39,7 @@
 | Controller → Server | `acp:list-sessions:result` | 返回历史会话列表 |
 | Server → Controller | `acp:load-session` | 请求加载单个历史会话全量消息 |
 | Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
+| Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
 
 ### 2.2 `acp:check`（Server → Controller）
 
@@ -119,14 +120,34 @@
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string` | 否 | 失败原因 |
 | `externalSessionId` | `string` | 否 | ACP 返回的 Session ID（ACP agent 侧会话标识） |
+| `modes` | `AgentMode[]` | 否 | Agent 支持的可用工作模式列表 |
+| `currentModeId` | `string` | 否 | 当前使用的工作模式 ID |
+| `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
+
+**AgentMode 结构：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | `string` | 是 | 模式唯一标识（如 `code`、`architect`、`ask`、`debug`） |
+| `name` | `string` | 是 | 模式显示名称（如 `Code`、`Architect`） |
+| `description` | `string` | 否 | 模式描述 |
+
+**AgentModelInfo 结构：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | `string` | 是 | 模型 ID |
+| `name` | `string` | 是 | 模型显示名称 |
+| `provider` | `string` | 否 | 模型供应商（如 `anthropic`、`openai`） |
 
 **服务端行为：**
 
 成功时（`success: true`）：
 1. 将 `externalSessionId` 持久化到 MongoDB Session 文档
-2. 在 Redis 中缓存映射关系 `session:{sessionId}:acpSessionId = externalSessionId`（TTL 24h）
-3. 注册 session WebSocket 映射
-4. 发布 `session:status`（含 `externalSessionId`）
+2. 缓存 `modes`、`currentModeId`、`currentModel` 到 Redis `session:{sessionId}:*`（Session 活跃期）
+3. 在 Redis 中缓存映射关系 `session:{sessionId}:acpSessionId = externalSessionId`（TTL 24h）
+4. 注册 session WebSocket 映射
+5. 发布 `session:status`（含 `modes`、`currentModeId`、`currentModel`）
 
 ### 2.6 `acp:message`（Server → Controller）
 
@@ -269,10 +290,17 @@ Controller 转发 ACP 输出。
 | `sessionId` | `string` | 是 | Session ID |
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string` | 否 | 失败原因（`session.resume` 不支持时 fallback 到 `newSession`） |
+| `modes` | `AgentMode[]` | 否 | Agent 支持的可用工作模式列表 |
+| `currentModeId` | `string` | 否 | 当前使用的工作模式 ID |
+| `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
 
 **服务端行为：**
 
-1. 成功时：注册 session mapping，更新 status = idling，发布 `session:status`（含 `idling`）
+1. 成功时：
+   - 注册 session mapping
+   - 缓存 `modes`、`currentModeId`、`currentModel` 到 Redis
+   - 更新 status = idling
+   - 发布 `session:status`（含 `idling` + 模式信息）
 2. 失败时：更新 status = ended，发布 `session:status`（含 `ended` + `error`）
 
 ### 2.13 `acp:list-sessions`（Server → Controller）
@@ -342,6 +370,24 @@ Controller 转发 ACP 输出。
 ### 2.16 `acp:load-session:result`（Controller → Server）
 
 返回历史会话全量消息。
+
+### 2.17 `acp:set-mode`（Server → Controller）
+
+请求切换 Agent 工作模式。仅在 session 处于 idling 状态时发送。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `modeId` | `string` | 是 | 目标模式 ID（如 `code`、`architect`、`ask`、`debug`） |
+
+**客户端行为：**
+
+1. 查找对应 session 的 AcpSessionBridge
+2. 调用 ACP `session/set_mode` JSON-RPC 方法
+3. 切换结果通过 `session/update`（`current_mode_update`）异步通知
+4. 不主动回复事件
 
 **Payload:**
 
@@ -482,6 +528,26 @@ agent-api 通过此频道向 controller-api 下发命令。
 4. 成功时：缓存结果到 Redis `acp:list-sessions:{requestId}`（TTL 120s）
 5. 失败时：缓存空结果
 
+#### `acp:set-mode`
+
+切换 Agent 工作模式。
+
+**Payload:**
+
+```json
+{
+  "type": "acp:set-mode",
+  "sessionId": "string",
+  "modeId": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 session 对应的 controller socket
+2. 发送 `acp:set-mode` Socket.IO 事件（含 `sessionId`, `modeId`）
+3. 不等待结果（切换结果通过 `session/update` 的 `current_mode_update` 通知）
+
 #### `acp:load-session`
 
 加载单个历史会话的全量消息。
@@ -516,7 +582,7 @@ SSE 端点定义见 `agent-session.openapi.yaml`。
 
 #### `status` 事件
 
-Session 状态变更时推送。恢复操作失败时携带 `error` 字段。
+Session 状态变更时推送。恢复操作失败时携带 `error` 字段。Session 创建/恢复成功时携带 `modes`、`currentModeId`、`currentModel` 信息。
 
 **Payload:**
 
@@ -526,7 +592,20 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。
   "data": {
     "sessionId": "string",
     "status": "creating | connecting | idling | running | disconnected | ended",
-    "error": "string | null"
+    "error": "string | null",
+    "modes": [
+      {
+        "id": "code",
+        "name": "Code",
+        "description": "Write and edit code"
+      }
+    ] | null,
+    "currentModeId": "string | null",
+    "currentModel": {
+      "id": "string",
+      "name": "string",
+      "provider": "string | null"
+    } | null
   }
 }
 ```
@@ -536,6 +615,30 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。
 | `sessionId` | `string` | 是 | Session ID |
 | `status` | `string` | 是 | 当前状态 |
 | `error` | `string` | 否 | 仅在 resume 失败时携带 |
+| `modes` | `AgentMode[]` | 否 | 可用工作模式列表，Session 创建/恢复成功后携带 |
+| `currentModeId` | `string` | 否 | 当前工作模式 ID |
+| `currentModel` | `AgentModelInfo` | 否 | 当前 LLM 模型信息 |
+
+#### `mode:changed` 事件
+
+工作模式切换成功后推送。
+
+**Payload:**
+
+```json
+{
+  "type": "mode:changed",
+  "data": {
+    "sessionId": "string",
+    "modeId": "string"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `modeId` | `string` | 是 | 切换后的新模式 ID |
 
 ---
 
@@ -559,6 +662,7 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。
 | `session/update` | Agent → Client | 通知进度更新（流式输出） |
 | `session/cancel` | Client → Agent | 取消操作 |
 | `session/close` | Client → Agent | 关闭会话 |
+| `session/set_mode` | Client → Agent | 切换工作模式（仅在 idling 时有效） |
 
 ### 5.3 消息示例
 
@@ -610,6 +714,60 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
         "text": "Hello, how are you?"
       }
     ]
+  }
+}
+```
+
+**session/set_mode:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "session/set_mode",
+  "params": {
+    "sessionId": "sess_abc123",
+    "modeId": "architect"
+  }
+}
+```
+
+**session/new 返回（扩展）:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "sess_abc123",
+    "modes": [
+      { "id": "code", "name": "Code", "description": "Write and edit code" },
+      { "id": "architect", "name": "Architect", "description": "Design architecture" },
+      { "id": "ask", "name": "Ask", "description": "Ask questions" },
+      { "id": "debug", "name": "Debug", "description": "Debug issues" }
+    ],
+    "currentModeId": "code",
+    "currentModel": {
+      "id": "claude-sonnet-4-20250514",
+      "name": "Claude Sonnet 4",
+      "provider": "anthropic"
+    }
+  }
+}
+```
+
+**current_mode_update（模式变更通知）:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "sess_abc123",
+    "update": {
+      "sessionUpdate": "current_mode_update",
+      "modeId": "architect"
+    }
   }
 }
 ```
