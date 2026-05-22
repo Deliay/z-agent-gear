@@ -95,14 +95,54 @@ describe('SessionService', () => {
     });
   });
 
+  describe('storeResumeToken', () => {
+    it('should generate and store a resume token', async () => {
+      mockRedis.set.mockResolvedValue('OK');
+
+      const token = await sessionService.storeResumeToken('key1');
+
+      expect(token).toBeTruthy();
+      expect(typeof token).toBe('string');
+      expect(mockRedis.set).toHaveBeenCalledWith('resume:key1', token);
+    });
+  });
+
+  describe('acquireSession with resumeToken', () => {
+    it('should allow reconnection when resume token matches', async () => {
+      mockRedis.get
+        .mockResolvedValueOnce('existing-socket')  // session:key1 exists
+        .mockResolvedValueOnce('valid-token');      // resume:key1 matches
+      mockRedis.del.mockResolvedValue(1);
+      mockRedis.set.mockResolvedValue('OK');
+
+      const result = await sessionService.acquireSession('key1', 'new-socket', 'valid-token');
+
+      expect(result).toBe(true);
+      expect(mockRedis.del).toHaveBeenCalledWith('session:key1');
+      expect(mockRedis.set).toHaveBeenCalledWith('session:key1', 'new-socket', 'EX', 90);
+    });
+
+    it('should reject when resume token does not match', async () => {
+      mockRedis.get
+        .mockResolvedValueOnce('existing-socket')  // session:key1 exists
+        .mockResolvedValueOnce('valid-token');      // resume:key1 has different value
+
+      const result = await sessionService.acquireSession('key1', 'new-socket', 'wrong-token');
+
+      expect(result).toBe(false);
+      expect(mockRedis.set).not.toHaveBeenCalled();
+    });
+  });
+
   describe('cleanupKey', () => {
-    it('should remove both session and heartbeat', async () => {
+    it('should remove session, heartbeat, and resume token', async () => {
       mockRedis.del.mockResolvedValue(1);
 
       await sessionService.cleanupKey('key1');
 
       expect(mockRedis.del).toHaveBeenCalledWith('session:key1');
       expect(mockRedis.del).toHaveBeenCalledWith('heartbeat:key1');
+      expect(mockRedis.del).toHaveBeenCalledWith('resume:key1');
     });
   });
 });

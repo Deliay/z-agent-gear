@@ -1,17 +1,39 @@
+import crypto from 'node:crypto';
 import { getRedisClient } from '../middleware/redis.js';
 
 const SESSION_TTL = 90;
 const HEARTBEAT_TTL = 90;
 
 export class SessionService {
-  async acquireSession(keyId: string, socketId: string): Promise<boolean> {
+  async acquireSession(keyId: string, socketId: string, resumeToken?: string): Promise<boolean> {
     const redis = getRedisClient();
     const existing = await redis.get(`session:${keyId}`);
     if (existing) {
-      return false;
+      if (resumeToken) {
+        const stored = await redis.get(`resume:${keyId}`);
+        if (stored === resumeToken) {
+          await redis.del(`session:${keyId}`);
+        } else {
+          return false;
+        }
+      } else {
+        return false;
+      }
     }
     await redis.set(`session:${keyId}`, socketId, 'EX', SESSION_TTL);
     return true;
+  }
+
+  async storeResumeToken(keyId: string): Promise<string> {
+    const redis = getRedisClient();
+    const token = crypto.randomUUID();
+    await redis.set(`resume:${keyId}`, token);
+    return token;
+  }
+
+  async removeResumeToken(keyId: string): Promise<void> {
+    const redis = getRedisClient();
+    await redis.del(`resume:${keyId}`);
   }
 
   async refreshSession(keyId: string): Promise<void> {
@@ -43,6 +65,7 @@ export class SessionService {
     await Promise.all([
       this.removeSession(keyId),
       this.removeHeartbeat(keyId),
+      this.removeResumeToken(keyId),
     ]);
   }
 }

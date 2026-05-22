@@ -27,6 +27,7 @@ vi.mock('../models/controller.js', () => ({
 vi.mock('./session.js', () => ({
   sessionService: {
     acquireSession: vi.fn(),
+    storeResumeToken: vi.fn().mockResolvedValue('test-resume-token'),
     refreshSession: vi.fn(),
     updateHeartbeat: vi.fn(),
     cleanupKey: vi.fn(),
@@ -106,7 +107,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
       });
     });
 
@@ -237,7 +238,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
       });
 
       mockSocket._trigger('heartbeat');
@@ -297,7 +298,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
       });
 
       mockSocket._trigger('unregister', { reason: 'user_detach' });
@@ -354,7 +355,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
       });
 
       mockSocket._trigger('disconnect');

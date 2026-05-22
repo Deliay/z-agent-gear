@@ -51,6 +51,7 @@ export class SessionCommandService {
             externalSessionId?: string;
             acpSessionId?: string;
             modeId?: string;
+            modelId?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
@@ -69,6 +70,8 @@ export class SessionCommandService {
             await this.handleFsHome(command.requestId, command.controllerId);
           } else if (command.type === 'acp:set-mode' && command.sessionId && command.modeId) {
             await this.handleAcpSetMode(command.sessionId, command.modeId as string);
+          } else if (command.type === 'acp:set-model' && command.sessionId && command.modelId) {
+            await this.handleAcpSetModel(command.sessionId, command.modelId as string);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
@@ -251,6 +254,14 @@ export class SessionCommandService {
     const result = await acpSessionManager.setMode(sessionId, modeId);
     if (!result) {
       console.error(`ACP set-mode failed: session ${sessionId} not found in active sessions`);
+    }
+  }
+
+  private async handleAcpSetModel(sessionId: string, modelId: string): Promise<void> {
+    console.log(`[SessionCommand] Setting model for session ${sessionId}: modelId=${modelId}`);
+    const result = await acpSessionManager.setModel(sessionId, modelId);
+    if (!result) {
+      console.error(`ACP set-model failed: session ${sessionId} not found in active sessions`);
     }
   }
 

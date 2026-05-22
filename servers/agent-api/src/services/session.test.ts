@@ -470,4 +470,49 @@ describe('SessionService', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('setModel', () => {
+    it('should return false when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await sessionService.setModel('sess-1', 'user-1', 'model-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should return false when session status is not idling', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'running' })),
+      } as never);
+
+      const result = await sessionService.setModel('sess-1', 'user-1', 'model-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should publish acp:set-model when session is idling', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'idling' })),
+      } as never);
+
+      const result = await sessionService.setModel('sess-1', 'user-1', 'model-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-model"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modelId":"model-1"'));
+    });
+
+    it('should return false when connecting', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'connecting' })),
+      } as never);
+
+      const result = await sessionService.setModel('sess-1', 'user-1', 'model-1');
+
+      expect(result).toBe(false);
+    });
+  });
 });

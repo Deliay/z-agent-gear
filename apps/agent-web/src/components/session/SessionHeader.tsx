@@ -1,9 +1,3 @@
-interface AgentModelInfo {
-  id: string;
-  name: string;
-  provider?: string | null;
-}
-
 interface Session {
   id: string;
   userId: string;
@@ -13,7 +7,6 @@ interface Session {
   status: string;
   externalSessionId: string | null;
   cwd: string | null;
-  currentModel?: AgentModelInfo | null;
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
@@ -63,11 +56,6 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         {session?.acpServerType && (
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
             {session.acpServerType}
-          </span>
-        )}
-        {session?.currentModel && (
-          <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">
-            {session.currentModel.name}
           </span>
         )}
         {session?.cwd && (

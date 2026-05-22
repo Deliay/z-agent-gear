@@ -16,6 +16,7 @@ interface RegisterPayload {
   key: string;
   hostname: string;
   version: string;
+  resumeToken?: string;
 }
 
 export function createSocketIOServer(io: SocketIOServer): void {
@@ -49,7 +50,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
           return;
         }
 
-        const acquired = await sessionService.acquireSession(keyId, socket.id);
+        const acquired = await sessionService.acquireSession(keyId, socket.id, payload.resumeToken);
         if (!acquired) {
           socket.emit('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
           socket.disconnect(true);
@@ -83,7 +84,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
         socket.data.lastIp = socket.handshake.address;
         socket.join(`user:${userId}`);
 
-        socket.emit('registered', { controllerId: controller._id.toString() });
+        // Generate resume token for reconnection after server restart
+        const resumeToken = await sessionService.storeResumeToken(keyId);
+        socket.emit('registered', { controllerId: controller._id.toString(), resumeToken });
       } catch (err) {
         console.error('Register error:', err);
         socket.emit('error', { code: 'INVALID_KEY', message: 'Registration failed' });

@@ -68,6 +68,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         modes: this.extractModes(result.modes),
         currentModeId: result.modes?.currentModeId ?? null,
         currentModel: this.extractCurrentModel(result.models),
+        availableModels: this.extractAvailableModels(result.models),
+        currentModelId: result.models?.currentModelId ?? null,
       });
 
       this.flushInputQueue();
@@ -97,6 +99,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         modes: this.extractModes(result.modes),
         currentModeId: result.modes?.currentModeId ?? null,
         currentModel: this.extractCurrentModel(result.models),
+        availableModels: this.extractAvailableModels(result.models),
+        currentModelId: result.models?.currentModelId ?? null,
       });
     } catch (error) {
       // resumeSession may fail if agent doesn't support session.resume
@@ -115,6 +119,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
           modes: this.extractModes(result.modes),
           currentModeId: result.modes?.currentModeId ?? null,
           currentModel: this.extractCurrentModel(result.models),
+        availableModels: this.extractAvailableModels(result.models),
+        currentModelId: result.models?.currentModelId ?? null,
         });
       } catch (fallbackError) {
         this.initializing = false;
@@ -147,6 +153,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     await this.connection.setSessionMode({
       sessionId: this.acpSessionId,
       modeId,
+    });
+  }
+
+  async setModel(modelId: string): Promise<void> {
+    if (!this.connection || !this.acpSessionId) return;
+    await this.connection.unstable_setSessionModel({
+      sessionId: this.acpSessionId,
+      modelId,
     });
   }
 
@@ -213,6 +227,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     const found = models.availableModels.find((m) => m.modelId === models.currentModelId);
     if (!found) return null;
     return { id: found.modelId, name: found.name };
+  }
+
+  private extractAvailableModels(models: acp.SessionModelState | null | undefined): Array<{ id: string; name: string; provider?: string }> | null {
+    if (!models?.availableModels) return null;
+    return models.availableModels.map((m) => ({
+      id: m.modelId,
+      name: m.name,
+    }));
   }
 
   // ── acp.Client implementation ──

@@ -55,6 +55,11 @@ interface AcpSetModePayload {
   modeId: string;
 }
 
+interface AcpSetModelPayload {
+  sessionId: string;
+  modelId: string;
+}
+
 interface AcpResumePayload {
   requestId: string;
   sessionId: string;
@@ -172,6 +177,8 @@ export function connectToServer(
         if (payload.modes) result.modes = payload.modes;
         if (payload.currentModeId) result.currentModeId = payload.currentModeId;
         if (payload.currentModel) result.currentModel = payload.currentModel;
+        if (payload.availableModels) result.availableModels = payload.availableModels;
+        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
         socket.emit('acp:start:result', result);
       };
 
@@ -228,6 +235,8 @@ export function connectToServer(
         if (payload.modes) result.modes = payload.modes;
         if (payload.currentModeId) result.currentModeId = payload.currentModeId;
         if (payload.currentModel) result.currentModel = payload.currentModel;
+        if (payload.availableModels) result.availableModels = payload.availableModels;
+        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
         socket.emit('acp:resume:result', result);
       };
 
@@ -406,6 +415,16 @@ export function connectToServer(
     if (bridge) {
       bridge.setMode(data.modeId).catch((err) => {
         console.error(`[ACP] setMode failed: ${(err as Error).message}`);
+      });
+    }
+  });
+
+  socket.on('acp:set-model', (data: AcpSetModelPayload) => {
+    console.log(`[ACP] acp:set-model received: sessionId=${data.sessionId} modelId=${data.modelId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    if (bridge) {
+      bridge.setModel(data.modelId).catch((err) => {
+        console.error(`[ACP] setModel failed: ${(err as Error).message}`);
       });
     }
   });

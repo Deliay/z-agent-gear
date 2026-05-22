@@ -5,6 +5,8 @@ import ThoughtBlock from './ThoughtBlock';
 import ToolCallCard from './ToolCallCard';
 import AvailableCommandsCard from './AvailableCommandsCard';
 import UsageCard from './UsageCard';
+import ConfigOptionCard from './ConfigOptionCard';
+import CurrentModeCard from './CurrentModeCard';
 
 interface AcpMessage {
   id: string;
@@ -18,7 +20,7 @@ interface AcpMessage {
 }
 
 interface MessageGroup {
-  type: 'message' | 'thought' | 'tool_call' | 'available_commands' | 'usage' | 'unknown';
+  type: 'message' | 'thought' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
   messageId: string | null;
@@ -56,6 +58,10 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       groupType = 'available_commands';
     } else if (sessionUpdateType === 'usage_update') {
       groupType = 'usage';
+    } else if (sessionUpdateType === 'config_option_update') {
+      groupType = 'config_option_update';
+    } else if (sessionUpdateType === 'current_mode_update') {
+      groupType = 'current_mode_update';
     } else {
       groupType = 'unknown';
     }
@@ -226,6 +232,20 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     data={group.parsed}
                   />
                 ) : null;
+              case 'config_option_update':
+                return (
+                  <ConfigOptionCard
+                    key={groupKey}
+                    messages={group.messages}
+                  />
+                );
+              case 'current_mode_update':
+                return (
+                  <CurrentModeCard
+                    key={groupKey}
+                    messages={group.messages}
+                  />
+                );
               case 'tool_call':
                 return (
                   <ToolCallCard

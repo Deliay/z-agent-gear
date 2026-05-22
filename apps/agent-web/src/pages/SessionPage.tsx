@@ -14,6 +14,7 @@ import {
   CANCEL_GENERATION,
   RESUME_SESSION,
   SET_SESSION_MODE,
+  SET_SESSION_MODEL,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
@@ -64,6 +65,8 @@ export default function SessionPage() {
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
+  const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
+  const [currentModelId, setCurrentModelId] = useState<string | null>(null);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
@@ -79,6 +82,7 @@ export default function SessionPage() {
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
+  const [setSessionModel] = useMutation(SET_SESSION_MODEL);
 
   useEffect(() => {
     if (sessionData?.session) {
@@ -86,6 +90,8 @@ export default function SessionPage() {
       if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
       if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
       if (sessionData.session.currentModel) setCurrentModel(sessionData.session.currentModel as AgentModelInfoData);
+      if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
+      if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
     }
   }, [sessionData]);
 
@@ -105,6 +111,23 @@ export default function SessionPage() {
         if (data.data.direction === 'output') {
           setSending(false);
         }
+        // Parse config_option_update and current_mode_update from message content
+        try {
+          const content = JSON.parse(data.data.content);
+          if (content.sessionUpdate === 'config_option_update') {
+            const configOptions = content.configOptions ?? [];
+            for (const opt of configOptions) {
+              const value = opt.value ?? opt.currentValue;
+              if (opt.id === 'mode' && value) {
+                setCurrentModeId(value);
+              } else if (opt.id === 'model' && value) {
+                setCurrentModelId(value);
+              }
+            }
+          } else if (content.sessionUpdate === 'current_mode_update') {
+            if (content.modeId) setCurrentModeId(content.modeId);
+          }
+        } catch { /* ignore parse errors */ }
       } else if (data.type === 'status') {
         setStatus(data.data.status);
         if (data.data.status === 'ended' && data.data.error) {
@@ -117,8 +140,12 @@ export default function SessionPage() {
         if (data.data.modes) setModes(data.data.modes);
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
         if (data.data.currentModel) setCurrentModel(data.data.currentModel);
+        if (data.data.availableModels) setAvailableModels(data.data.availableModels);
+        if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
       } else if (data.type === 'mode:changed') {
         if (data.data.modeId) setCurrentModeId(data.data.modeId);
+      } else if (data.type === 'model:changed') {
+        if (data.data.modelId) setCurrentModelId(data.data.modelId);
       }
     };
 
@@ -221,7 +248,14 @@ export default function SessionPage() {
 
   const handleSetMode = async (modeId: string) => {
     if (!id) return;
+    setCurrentModeId(modeId);
     await setSessionMode({ variables: { sessionId: id, modeId } });
+  };
+
+  const handleSetModel = async (modelId: string) => {
+    if (!id) return;
+    setCurrentModelId(modelId);
+    await setSessionModel({ variables: { sessionId: id, modelId } });
   };
 
   const handleSendMessage = async (content: string) => {
@@ -288,7 +322,19 @@ export default function SessionPage() {
         </div>
       )}
       <SessionHeader
-        session={sessionData?.session ? { ...sessionData.session, currentModel: currentModel ?? sessionData.session.currentModel } : null}
+        session={sessionData?.session ? {
+          id: sessionData.session.id,
+          userId: sessionData.session.userId,
+          controllerId: sessionData.session.controllerId,
+          controllerName: sessionData.session.controllerName,
+          acpServerType: sessionData.session.acpServerType,
+          status: sessionData.session.status,
+          externalSessionId: sessionData.session.externalSessionId,
+          cwd: sessionData.session.cwd,
+          createdAt: sessionData.session.createdAt,
+          updatedAt: sessionData.session.updatedAt,
+          endedAt: sessionData.session.endedAt,
+        } : null}
         status={status}
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
@@ -308,6 +354,9 @@ export default function SessionPage() {
         currentModeId={currentModeId}
         onSetMode={handleSetMode}
         status={status}
+        availableModels={availableModels}
+        currentModelId={currentModelId}
+        onSetModel={handleSetModel}
       />
 
       {showNewSessionDialog && (

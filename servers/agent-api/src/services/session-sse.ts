@@ -38,6 +38,8 @@ export class SessionSSEService {
     if (session.modes) statusPayload.modes = session.modes;
     if (session.currentModeId) statusPayload.currentModeId = session.currentModeId;
     if (session.currentModel) statusPayload.currentModel = session.currentModel;
+    if (session.availableModels) statusPayload.availableModels = session.availableModels;
+    if (session.currentModelId) statusPayload.currentModelId = session.currentModelId;
     res.write(`data: ${JSON.stringify({ type: 'status', data: statusPayload })}\n\n`);
 
     // Create connection
@@ -98,9 +100,12 @@ export class SessionSSEService {
           if (parsed.modes) extra.modes = parsed.modes;
           if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
+          if (parsed.availableModels) extra.availableModels = parsed.availableModels;
+          if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
           this.dispatchStatus(sessionId, status, error, Object.keys(extra).length ? extra : undefined);
         }
         this.broadcastModeChanged(sessionId, parsed);
+        this.broadcastModelChanged(sessionId, parsed);
       } catch {
         // ignore parse errors
       }
@@ -131,6 +136,8 @@ export class SessionSSEService {
       if (extra.modes) payload.modes = extra.modes;
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
+      if (extra.availableModels) payload.availableModels = extra.availableModels;
+      if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
     for (const [key, connection] of connections) {
@@ -141,8 +148,18 @@ export class SessionSSEService {
   }
 
   broadcastModeChanged(sessionId: string, payload: Record<string, unknown>): void {
-    if (!payload.modeId) return;
-    const data = JSON.stringify({ type: 'mode:changed', data: { sessionId, modeId: payload.modeId } });
+    if (!payload.currentModeId) return;
+    const data = JSON.stringify({ type: 'mode:changed', data: { sessionId, modeId: payload.currentModeId } });
+    for (const [key, connection] of connections) {
+      if (connection.sessionId === sessionId) {
+        connection.res.write(`data: ${data}\n\n`);
+      }
+    }
+  }
+
+  broadcastModelChanged(sessionId: string, payload: Record<string, unknown>): void {
+    if (!payload.currentModelId) return;
+    const data = JSON.stringify({ type: 'model:changed', data: { sessionId, modelId: payload.currentModelId } });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);

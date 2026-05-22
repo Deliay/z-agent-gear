@@ -56,6 +56,8 @@ export class ACPSessionManager {
           modes?: Array<{ id: string; name: string; description?: string }>;
           currentModeId?: string;
           currentModel?: { id: string; name: string; provider?: string };
+          availableModels?: Array<{ id: string; name: string; provider?: string }>;
+          currentModelId?: string;
         }) => {
           clearTimeout(timeout);
           
@@ -88,12 +90,16 @@ export class ACPSessionManager {
             if (payload.modes) updateData.modes = payload.modes;
             if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
+            if (payload.availableModels) updateData.availableModels = payload.availableModels;
+            if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
             await Session.findByIdAndUpdate(sessionId, updateData);
-            await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel);
+            await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
             const statusExtra: Record<string, unknown> = {};
             if (payload.modes) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
+            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
+            if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
             await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
 
             // Cache externalSessionId in Redis for resume
@@ -186,6 +192,40 @@ export class ACPSessionManager {
   }
 
   async handleControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
+    // Handle config_option_update - parse config options to update session state
+    if (message.sessionUpdate === 'config_option_update') {
+      const update = message as Record<string, unknown>;
+      const configOptions = update.configOptions as Array<Record<string, unknown>> | undefined;
+      if (configOptions) {
+        const updateData: Record<string, unknown> = {};
+        const statusExtra: Record<string, unknown> = {};
+        for (const opt of configOptions) {
+          const value = (opt.value ?? opt.currentValue) as string | undefined;
+          if (opt.id === 'mode' && value) {
+            updateData.currentModeId = value;
+            statusExtra.currentModeId = value;
+          } else if (opt.id === 'model' && value) {
+            updateData.currentModelId = value;
+            statusExtra.currentModelId = value;
+          }
+        }
+        if (Object.keys(updateData).length > 0) {
+          await Session.findByIdAndUpdate(sessionId, updateData);
+          await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+        }
+      }
+    }
+
+    // Handle current_mode_update
+    if (message.sessionUpdate === 'current_mode_update') {
+      const update = message as Record<string, unknown>;
+      const modeId = update.modeId as string | undefined;
+      if (modeId) {
+        await Session.findByIdAndUpdate(sessionId, { currentModeId: modeId });
+        await this.publishStatus(sessionId, 'idling', undefined, { currentModeId: modeId });
+      }
+    }
+
     const rawContent = JSON.stringify(message);
 
     let type: string;
@@ -203,6 +243,10 @@ export class ACPSessionManager {
         break;
       case 'plan':
         type = 'plan';
+        break;
+      case 'config_option_update':
+      case 'current_mode_update':
+        type = 'text';
         break;
       default:
         type = 'text';
@@ -323,6 +367,8 @@ export class ACPSessionManager {
           modes?: Array<{ id: string; name: string; description?: string }>;
           currentModeId?: string;
           currentModel?: { id: string; name: string; provider?: string };
+          availableModels?: Array<{ id: string; name: string; provider?: string }>;
+          currentModelId?: string;
         }) => {
           clearTimeout(timeout);
           if (payload.requestId !== requestId) return;
@@ -343,12 +389,16 @@ export class ACPSessionManager {
             if (payload.modes) updateData.modes = payload.modes;
             if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
+            if (payload.availableModels) updateData.availableModels = payload.availableModels;
+            if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
             await Session.findByIdAndUpdate(sessionId, updateData);
-            await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel);
+            await this.refreshSessionCache(sessionId);
             const statusExtra: Record<string, unknown> = {};
             if (payload.modes) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
+            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
+            if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
             await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
 
             resolve({ success: true });
@@ -414,7 +464,46 @@ export class ACPSessionManager {
     if (!session) return false;
 
     session.controllerSocket.emit('acp:set-mode', { sessionId, modeId });
+
+    // Optimistic update
+    await Session.findByIdAndUpdate(sessionId, { currentModeId: modeId });
+    await this.publishStatus(sessionId, 'idling', undefined, { currentModeId: modeId });
+
     return true;
+  }
+
+  async setModel(sessionId: string, modelId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    session.controllerSocket.emit('acp:set-model', { sessionId, modelId });
+
+    // Optimistic update
+    await Session.findByIdAndUpdate(sessionId, { currentModelId: modelId });
+    await this.publishStatus(sessionId, 'idling', undefined, { currentModelId: modelId });
+
+    return true;
+  }
+
+  private async refreshSessionCache(sessionId: string): Promise<void> {
+    const redis = getRedisClient();
+    const session = await Session.findById(sessionId).lean();
+    if (!session) return;
+    if (session.modes) {
+      await redis.set(`session:${sessionId}:modes`, JSON.stringify(session.modes), 'EX', 86400);
+    }
+    if (session.currentModeId) {
+      await redis.set(`session:${sessionId}:currentModeId`, session.currentModeId, 'EX', 86400);
+    }
+    if (session.currentModel) {
+      await redis.set(`session:${sessionId}:currentModel`, JSON.stringify(session.currentModel), 'EX', 86400);
+    }
+    if (session.availableModels) {
+      await redis.set(`session:${sessionId}:availableModels`, JSON.stringify(session.availableModels), 'EX', 86400);
+    }
+    if (session.currentModelId) {
+      await redis.set(`session:${sessionId}:currentModelId`, session.currentModelId, 'EX', 86400);
+    }
   }
 
   private async cacheModes(
@@ -422,6 +511,8 @@ export class ACPSessionManager {
     modes?: Array<{ id: string; name: string; description?: string }>,
     currentModeId?: string,
     currentModel?: { id: string; name: string; provider?: string },
+    availableModels?: Array<{ id: string; name: string; provider?: string }>,
+    currentModelId?: string,
   ): Promise<void> {
     const redis = getRedisClient();
     if (modes) {
@@ -432,6 +523,12 @@ export class ACPSessionManager {
     }
     if (currentModel) {
       await redis.set(`session:${sessionId}:currentModel`, JSON.stringify(currentModel), 'EX', 86400);
+    }
+    if (availableModels) {
+      await redis.set(`session:${sessionId}:availableModels`, JSON.stringify(availableModels), 'EX', 86400);
+    }
+    if (currentModelId) {
+      await redis.set(`session:${sessionId}:currentModelId`, currentModelId, 'EX', 86400);
     }
   }
 
@@ -451,6 +548,8 @@ export class ACPSessionManager {
       if (extra.modes) payload.modes = extra.modes;
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
+      if (extra.availableModels) payload.availableModels = extra.availableModels;
+      if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     await redis.publish('session:status', JSON.stringify(payload));
   }
