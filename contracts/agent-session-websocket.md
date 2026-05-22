@@ -587,6 +587,24 @@ agent-api 通过此频道向 controller-api 下发命令。
 2. 发送 `acp:set-mode` Socket.IO 事件（含 `sessionId`, `modeId`）
 3. 不等待结果（切换结果通过 `session/update` 的 `current_mode_update` 通知）
 
+#### `acp:cache:invalidate`
+
+使控制器 ACP 能力检测缓存失效。agent-api 调用 `refreshAcpCapabilities` mutation 时下发此命令，通知 controller-api 清内存缓存，强使下一次 `acp:check` 重新探测。
+
+**Payload:**
+
+```json
+{
+  "type": "acp:cache:invalidate",
+  "controllerId": "string"
+}
+```
+
+**服务端行为：**
+
+1. 调用 `acpCapabilityDetector.invalidateCache(controllerId)` 清内存缓存
+2. 不回复确认
+
 #### `acp:set-model`
 
 切换 LLM 模型。
