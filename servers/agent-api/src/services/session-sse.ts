@@ -148,8 +148,8 @@ export class SessionSSEService {
   }
 
   broadcastModeChanged(sessionId: string, payload: Record<string, unknown>): void {
-    if (!payload.modeId) return;
-    const data = JSON.stringify({ type: 'mode:changed', data: { sessionId, modeId: payload.modeId } });
+    if (!payload.currentModeId) return;
+    const data = JSON.stringify({ type: 'mode:changed', data: { sessionId, modeId: payload.currentModeId } });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);
@@ -158,8 +158,8 @@ export class SessionSSEService {
   }
 
   broadcastModelChanged(sessionId: string, payload: Record<string, unknown>): void {
-    if (!payload.modelId) return;
-    const data = JSON.stringify({ type: 'model:changed', data: { sessionId, modelId: payload.modelId } });
+    if (!payload.currentModelId) return;
+    const data = JSON.stringify({ type: 'model:changed', data: { sessionId, modelId: payload.currentModelId } });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);

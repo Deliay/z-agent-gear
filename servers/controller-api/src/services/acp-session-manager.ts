@@ -192,6 +192,40 @@ export class ACPSessionManager {
   }
 
   async handleControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
+    // Handle config_option_update - parse config options to update session state
+    if (message.sessionUpdate === 'config_option_update') {
+      const update = message as Record<string, unknown>;
+      const configOptions = update.configOptions as Array<Record<string, unknown>> | undefined;
+      if (configOptions) {
+        const updateData: Record<string, unknown> = {};
+        const statusExtra: Record<string, unknown> = {};
+        for (const opt of configOptions) {
+          const value = (opt.value ?? opt.currentValue) as string | undefined;
+          if (opt.id === 'mode' && value) {
+            updateData.currentModeId = value;
+            statusExtra.currentModeId = value;
+          } else if (opt.id === 'model' && value) {
+            updateData.currentModelId = value;
+            statusExtra.currentModelId = value;
+          }
+        }
+        if (Object.keys(updateData).length > 0) {
+          await Session.findByIdAndUpdate(sessionId, updateData);
+          await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+        }
+      }
+    }
+
+    // Handle current_mode_update
+    if (message.sessionUpdate === 'current_mode_update') {
+      const update = message as Record<string, unknown>;
+      const modeId = update.modeId as string | undefined;
+      if (modeId) {
+        await Session.findByIdAndUpdate(sessionId, { currentModeId: modeId });
+        await this.publishStatus(sessionId, 'idling', undefined, { currentModeId: modeId });
+      }
+    }
+
     const rawContent = JSON.stringify(message);
 
     let type: string;
@@ -209,6 +243,10 @@ export class ACPSessionManager {
         break;
       case 'plan':
         type = 'plan';
+        break;
+      case 'config_option_update':
+      case 'current_mode_update':
+        type = 'text';
         break;
       default:
         type = 'text';
@@ -426,6 +464,11 @@ export class ACPSessionManager {
     if (!session) return false;
 
     session.controllerSocket.emit('acp:set-mode', { sessionId, modeId });
+
+    // Optimistic update
+    await Session.findByIdAndUpdate(sessionId, { currentModeId: modeId });
+    await this.publishStatus(sessionId, 'idling', undefined, { currentModeId: modeId });
+
     return true;
   }
 
@@ -434,6 +477,11 @@ export class ACPSessionManager {
     if (!session) return false;
 
     session.controllerSocket.emit('acp:set-model', { sessionId, modelId });
+
+    // Optimistic update
+    await Session.findByIdAndUpdate(sessionId, { currentModelId: modelId });
+    await this.publishStatus(sessionId, 'idling', undefined, { currentModelId: modelId });
+
     return true;
   }
 

@@ -111,6 +111,23 @@ export default function SessionPage() {
         if (data.data.direction === 'output') {
           setSending(false);
         }
+        // Parse config_option_update and current_mode_update from message content
+        try {
+          const content = JSON.parse(data.data.content);
+          if (content.sessionUpdate === 'config_option_update') {
+            const configOptions = content.configOptions ?? [];
+            for (const opt of configOptions) {
+              const value = opt.value ?? opt.currentValue;
+              if (opt.id === 'mode' && value) {
+                setCurrentModeId(value);
+              } else if (opt.id === 'model' && value) {
+                setCurrentModelId(value);
+              }
+            }
+          } else if (content.sessionUpdate === 'current_mode_update') {
+            if (content.modeId) setCurrentModeId(content.modeId);
+          }
+        } catch { /* ignore parse errors */ }
       } else if (data.type === 'status') {
         setStatus(data.data.status);
         if (data.data.status === 'ended' && data.data.error) {
@@ -231,11 +248,13 @@ export default function SessionPage() {
 
   const handleSetMode = async (modeId: string) => {
     if (!id) return;
+    setCurrentModeId(modeId);
     await setSessionMode({ variables: { sessionId: id, modeId } });
   };
 
   const handleSetModel = async (modelId: string) => {
     if (!id) return;
+    setCurrentModelId(modelId);
     await setSessionModel({ variables: { sessionId: id, modelId } });
   };
 
