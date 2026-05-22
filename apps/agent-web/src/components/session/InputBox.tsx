@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import type { AgentModelInfoData } from '../../graphql/types';
 import ModeSwitcher from './ModeSwitcher';
+import { ModelSwitcher } from './ModelSwitcher';
 
 interface AgentMode {
   id: string;
@@ -16,9 +18,12 @@ interface InputBoxProps {
   currentModeId?: string | null;
   onSetMode?: (modeId: string) => Promise<void>;
   status?: string;
+  availableModels?: AgentModelInfoData[];
+  currentModelId?: string | null;
+  onSetModel?: (modelId: string) => Promise<void>;
 }
 
-export default function InputBox({ onSend, onStop, disabled, sending, modes = [], currentModeId, onSetMode, status = '' }: InputBoxProps) {
+export default function InputBox({ onSend, onStop, disabled, sending, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel }: InputBoxProps) {
   const [input, setInput] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -49,6 +54,14 @@ export default function InputBox({ onSend, onStop, disabled, sending, modes = []
             modes={modes}
             status={status}
             onSetMode={onSetMode}
+          />
+        )}
+        {onSetModel && (
+          <ModelSwitcher
+            currentModelId={currentModelId}
+            availableModels={availableModels}
+            status={status}
+            onSetModel={onSetModel}
           />
         )}
         <textarea

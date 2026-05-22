@@ -37,6 +37,12 @@ type AgentModelInfo {
   provider: String
 }
 
+type AgentModel {
+  id: String!
+  name: String!
+  provider: String
+}
+
 type Session {
   id: ID!
   userId: ID!
@@ -50,6 +56,8 @@ type Session {
   modes: [AgentMode!]
   currentModeId: String
   currentModel: AgentModelInfo
+  availableModels: [AgentModel!]
+  currentModelId: String
   createdAt: String!
   updatedAt: String!
   endedAt: String
@@ -120,4 +128,5 @@ type Mutation {
   resumeSession(id: ID!): ResumeSessionPayload!
   importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
   setSessionMode(sessionId: ID!, modeId: String!): Boolean!
+  setSessionModel(sessionId: ID!, modelId: String!): Boolean!
 }

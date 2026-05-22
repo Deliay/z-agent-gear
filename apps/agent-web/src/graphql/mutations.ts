@@ -230,6 +230,12 @@ export const SET_SESSION_MODE = gql`
   }
 `
 
+export const SET_SESSION_MODEL = gql`
+  mutation SetSessionModel($sessionId: ID!, $modelId: String!) {
+    setSessionModel(sessionId: $sessionId, modelId: $modelId)
+  }
+`;
+
 export const IMPORT_HISTORY_SESSIONS = gql`
   mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $sessionIds: [String!]!) {
     importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, sessionIds: $sessionIds) {

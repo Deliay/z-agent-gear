@@ -100,6 +100,12 @@ export const GET_SESSION = gql`
         name
         provider
       }
+      availableModels {
+        id
+        name
+        provider
+      }
+      currentModelId
       createdAt
       updatedAt
       endedAt

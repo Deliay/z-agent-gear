@@ -51,6 +51,8 @@ export const sessionTypeDefs = `#graphql
     modes: [AgentMode!]
     currentModeId: String
     currentModel: AgentModelInfo
+    availableModels: [AgentModelInfo!]
+    currentModelId: String
     createdAt: String!
     updatedAt: String!
     endedAt: String
@@ -121,5 +123,6 @@ export const sessionTypeDefs = `#graphql
     resumeSession(id: ID!): ResumeSessionPayload!
     importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
     setSessionMode(sessionId: ID!, modeId: String!): Boolean!
+    setSessionModel(sessionId: ID!, modelId: String!): Boolean!
   }
 `;

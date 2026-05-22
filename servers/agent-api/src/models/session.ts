@@ -13,6 +13,8 @@ const sessionSchema = new mongoose.Schema({
   modes: { type: [{ id: String, name: String, description: String }], default: [] },
   currentModeId: { type: String },
   currentModel: { type: { id: String, name: String, provider: String } },
+  currentModelId: { type: String },
+  availableModels: { type: [{ id: String, name: String, provider: String }], default: [] },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });

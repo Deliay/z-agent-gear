@@ -100,6 +100,8 @@ export interface SessionData {
   modes?: AgentModeData[] | null
   currentModeId?: string | null
   currentModel?: AgentModelInfoData | null
+  availableModels?: AgentModelInfoData[] | null
+  currentModelId?: string | null
   createdAt: string
   updatedAt: string
   endedAt: string | null

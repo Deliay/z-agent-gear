@@ -40,6 +40,7 @@
 | Server → Controller | `acp:load-session` | 请求加载单个历史会话全量消息 |
 | Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
 | Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
+| Server → Controller | `acp:set-model` | 请求切换 LLM 模型 |
 
 ### 2.2 `acp:check`（Server → Controller）
 
@@ -123,6 +124,8 @@
 | `modes` | `AgentMode[]` | 否 | Agent 支持的可用工作模式列表 |
 | `currentModeId` | `string` | 否 | 当前使用的工作模式 ID |
 | `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
+| `availableModels` | `AgentModel[]` | 否 | Agent 支持的可用 LLM 模型列表 |
+| `currentModelId` | `string` | 否 | 当前使用的 LLM 模型 ID |
 
 **AgentMode 结构：**
 
@@ -133,6 +136,14 @@
 | `description` | `string` | 否 | 模式描述 |
 
 **AgentModelInfo 结构：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | `string` | 是 | 模型 ID |
+| `name` | `string` | 是 | 模型显示名称 |
+| `provider` | `string` | 否 | 模型供应商（如 `anthropic`、`openai`） |
+
+**AgentModel 结构：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -293,6 +304,8 @@ Controller 转发 ACP 输出。
 | `modes` | `AgentMode[]` | 否 | Agent 支持的可用工作模式列表 |
 | `currentModeId` | `string` | 否 | 当前使用的工作模式 ID |
 | `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
+| `availableModels` | `AgentModel[]` | 否 | Agent 支持的可用 LLM 模型列表 |
+| `currentModelId` | `string` | 否 | 当前使用的 LLM 模型 ID |
 
 **服务端行为：**
 
@@ -408,6 +421,24 @@ Controller 转发 ACP 输出。
 | `type` | `string` | 消息类型（同 AcpMessage.type） |
 | `content` | `string` | JSON 序列化的消息内容 |
 
+### 2.18 `acp:set-model`
+
+请求切换 LLM 模型。仅在 session 处于 idling 状态时发送。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `modelId` | `string` | 是 | 目标模型 ID |
+
+**客户端行为：**
+
+1. 查找对应 session 的 AcpSessionBridge
+2. 调用 ACP `session/set_model` JSON-RPC 方法
+3. 切换结果通过 `session/update`（`current_model_update`）异步通知
+4. 不主动回复事件
+
 ---
 
 ## 3. 跨服务事件（Redis Pub/Sub）
@@ -452,7 +483,15 @@ Session 状态变更通知。
   "status": "creating | connecting | idling | running | disconnected | ended",
   "externalSessionId": "string | null",
   "endedAt": "ISO timestamp | null",
-  "error": "string | null"
+  "error": "string | null",
+  "availableModels": [
+    {
+      "id": "string",
+      "name": "string",
+      "provider": "string | null"
+    }
+  ] | null,
+  "currentModelId": "string | null"
 }
 ```
 
@@ -548,6 +587,26 @@ agent-api 通过此频道向 controller-api 下发命令。
 2. 发送 `acp:set-mode` Socket.IO 事件（含 `sessionId`, `modeId`）
 3. 不等待结果（切换结果通过 `session/update` 的 `current_mode_update` 通知）
 
+#### `acp:set-model`
+
+切换 LLM 模型。
+
+**Payload:**
+
+```json
+{
+  "type": "acp:set-model",
+  "sessionId": "string",
+  "modelId": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 session 对应的 controller socket
+2. 发送 `acp:set-model` Socket.IO 事件（含 `sessionId`, `modelId`）
+3. 不等待结果（切换结果通过 `session/update` 的 `current_model_update` 通知）
+
 #### `acp:load-session`
 
 加载单个历史会话的全量消息。
@@ -605,7 +664,15 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。Ses
       "id": "string",
       "name": "string",
       "provider": "string | null"
-    } | null
+    } | null,
+    "availableModels": [
+      {
+        "id": "string",
+        "name": "string",
+        "provider": "string | null"
+      }
+    ] | null,
+    "currentModelId": "string | null"
   }
 }
 ```
@@ -618,6 +685,8 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。Ses
 | `modes` | `AgentMode[]` | 否 | 可用工作模式列表，Session 创建/恢复成功后携带 |
 | `currentModeId` | `string` | 否 | 当前工作模式 ID |
 | `currentModel` | `AgentModelInfo` | 否 | 当前 LLM 模型信息 |
+| `availableModels` | `AgentModel[]` | 否 | 可用 LLM 模型列表，Session 创建/恢复成功后携带 |
+| `currentModelId` | `string` | 否 | 当前 LLM 模型 ID |
 
 #### `mode:changed` 事件
 
@@ -639,6 +708,27 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。Ses
 |------|------|------|------|
 | `sessionId` | `string` | 是 | Session ID |
 | `modeId` | `string` | 是 | 切换后的新模式 ID |
+
+#### `model:changed` 事件
+
+LLM 模型切换成功后推送。
+
+**Payload:**
+
+```json
+{
+  "type": "model:changed",
+  "data": {
+    "sessionId": "string",
+    "modelId": "string"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `modelId` | `string` | 是 | 切换后的新模型 ID |
 
 ---
 

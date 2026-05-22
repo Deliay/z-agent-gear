@@ -9,6 +9,7 @@ function buildMockConn() {
     cancel: vi.fn<[unknown], Promise<void>>().mockResolvedValue(undefined),
     closeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
     setSessionMode: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    unstable_setSessionModel: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
   };
 }
 
@@ -134,6 +135,33 @@ describe('AcpSessionBridge', () => {
 
       expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
         currentModel: { id: 'gpt-4', name: 'GPT-4' },
+      }));
+    });
+
+    it('should include availableModels and currentModelId in acp:initialized', async () => {
+      mockConnInstance.newSession = vi.fn().mockResolvedValue({
+        sessionId: 'acp-sess-abc',
+        models: {
+          availableModels: [
+            { modelId: 'gpt-4', name: 'GPT-4' },
+            { modelId: 'claude-3', name: 'Claude 3' },
+          ],
+          currentModelId: 'claude-3',
+        },
+      });
+      const bridge = createBridge();
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
+
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
+        availableModels: [
+          { id: 'gpt-4', name: 'GPT-4' },
+          { id: 'claude-3', name: 'Claude 3' },
+        ],
+        currentModelId: 'claude-3',
       }));
     });
 
@@ -394,6 +422,52 @@ describe('AcpSessionBridge', () => {
 
       await expect(bridge.setMode('mode-1')).resolves.toBeUndefined();
       expect(mc().setSessionMode).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setModel', () => {
+    it('should call connection.unstable_setSessionModel with correct params', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setModel('model-2');
+
+      expect(mc().unstable_setSessionModel).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        modelId: 'model-2',
+      });
+    });
+
+    it('should not throw when not initialized', async () => {
+      const bridge = createBridge();
+
+      await expect(bridge.setModel('model-1')).resolves.toBeUndefined();
+      expect(mc().unstable_setSessionModel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('extractAvailableModels', () => {
+    it('should return null when models is null', () => {
+      const bridge = createBridge();
+
+      // Access private method via bracket notation
+      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(null);
+      expect(result).toBeNull();
+    });
+
+    it('should return null when models is undefined', () => {
+      const bridge = createBridge();
+
+      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(undefined);
+      expect(result).toBeNull();
+    });
+
+    it('should return null when availableModels is missing', () => {
+      const bridge = createBridge();
+
+      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels({});
+      expect(result).toBeNull();
     });
   });
 });
