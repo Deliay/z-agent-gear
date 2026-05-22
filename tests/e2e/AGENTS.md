@@ -119,3 +119,13 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 列表展示和导入按钮 | 点击历史会话 → 显示 fake controller 返回的 2 个 session |
 | 全选并导入成功 | 全选 → 导入 → 显示成功导入 2 个会话 |
 | 空状态 | 无可用 session 时显示「没有未导入的历史会话」 |
+
+### Session Mode Switch E2E (`session-mode-switch.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 模型 badge 可见性 | acp:start:result 含 currentModel → 紫色模型 badge |
+| 非 idling 时 mode switcher 禁用 | running 状态时 mode switcher 可见但禁用 |
+| idling 时 mode switcher 启用 | resume 到 idling 后 mode switcher 可用 |
+| 对话框展示可用模式 | 点击 mode switcher → 对话框显示 modes |
+| 选择模式并关闭 | 选择 → Confirm → acp:set-mode → 对话框关闭 |
