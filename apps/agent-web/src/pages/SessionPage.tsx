@@ -322,7 +322,19 @@ export default function SessionPage() {
         </div>
       )}
       <SessionHeader
-        session={sessionData?.session ? { ...sessionData.session, currentModel: currentModel ?? sessionData.session.currentModel } : null}
+        session={sessionData?.session ? {
+          id: sessionData.session.id,
+          userId: sessionData.session.userId,
+          controllerId: sessionData.session.controllerId,
+          controllerName: sessionData.session.controllerName,
+          acpServerType: sessionData.session.acpServerType,
+          status: sessionData.session.status,
+          externalSessionId: sessionData.session.externalSessionId,
+          cwd: sessionData.session.cwd,
+          createdAt: sessionData.session.createdAt,
+          updatedAt: sessionData.session.updatedAt,
+          endedAt: sessionData.session.endedAt,
+        } : null}
         status={status}
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
