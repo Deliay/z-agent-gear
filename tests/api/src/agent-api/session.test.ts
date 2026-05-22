@@ -579,6 +579,78 @@ describe('Session SSE API', () => {
     reader.cancel();
     controller.abort();
   });
+
+  it('should include modes in initial SSE status event after ACP start with modes', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `sse-modes-key-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: freshRawKey, hostname: 'sse-modes-host', version: '1.0.0' });
+    const regData = await registered;
+    const freshControllerId = regData.controllerId;
+
+    const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+    const wsId = await createWorkspace(freshControllerId);
+    const createRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+      authToken,
+    );
+    const sessionId = (await createRes.json()).data.createSession.session.id;
+
+    const startData = await startEvent;
+    client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_sse_modes_${Date.now()}`,
+      modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
+      currentModeId: 'code',
+      currentModel: { id: 'gpt-4', name: 'GPT-4' },
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    const res = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    const { value } = await reader.read();
+    const text = decoder.decode(value);
+
+    // Find the initial status event (before history)
+    const events = text.split('\n').filter((l) => l.startsWith('data: '));
+    const statusEvent = events
+      .map((l) => JSON.parse(l.slice(6)))
+      .find((e) => e.type === 'status');
+    expect(statusEvent).toBeDefined();
+    expect(statusEvent.data.status).toBe('running');
+    expect(statusEvent.data.modes).toBeDefined();
+    expect(statusEvent.data.modes[0].id).toBe('code');
+    expect(statusEvent.data.modes[0].name).toBe('Code');
+    expect(statusEvent.data.currentModeId).toBe('code');
+    expect(statusEvent.data.currentModel).toBeDefined();
+    expect(statusEvent.data.currentModel.id).toBe('gpt-4');
+
+    reader.cancel();
+    controller.abort();
+    client.disconnect();
+  }, 20_000);
 });
 
 describe('Session WebSocket ACP Events', () => {
