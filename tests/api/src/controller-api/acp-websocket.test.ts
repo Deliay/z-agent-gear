@@ -171,10 +171,10 @@ describe('Controller API ACP WebSocket', () => {
 
       await new Promise((r) => setTimeout(r, 300));
 
-      // Verify session status updated to running
+      // Verify session status updated to idling
       const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
       const verifyBody = await verifyRes.json();
-      expect(verifyBody.data.session.status).toBe('running');
+      expect(verifyBody.data.session.status).toBe('idling');
 
       client.disconnect();
     });

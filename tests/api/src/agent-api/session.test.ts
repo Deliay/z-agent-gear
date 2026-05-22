@@ -639,7 +639,7 @@ describe('Session SSE API', () => {
       .map((l) => JSON.parse(l.slice(6)))
       .find((e) => e.type === 'status');
     expect(statusEvent).toBeDefined();
-    expect(statusEvent.data.status).toBe('running');
+    expect(statusEvent.data.status).toBe('idling');
     expect(statusEvent.data.modes).toBeDefined();
     expect(statusEvent.data.modes[0].id).toBe('code');
     expect(statusEvent.data.modes[0].name).toBe('Code');
@@ -817,7 +817,7 @@ describe('Session WebSocket ACP Events', () => {
       let sessionRes = await gqlRequest(SESSION_WITH_MODES_QUERY, { id: sessionId }, authToken);
       let sessionBody = await sessionRes.json();
       expect(sessionBody.errors).toBeUndefined();
-      expect(sessionBody.data.session.status).toBe('running');
+      expect(sessionBody.data.session.status).toBe('idling');
       expect(sessionBody.data.session.modes).toBeDefined();
       expect(sessionBody.data.session.modes[0].id).toBe('code');
       expect(sessionBody.data.session.currentModeId).toBe('code');
@@ -859,7 +859,7 @@ describe('Session WebSocket ACP Events', () => {
   });
 
   describe('End-to-end: createSession → acp:start → controller respond → verify status', () => {
-    it('should update session status to running after controller responds', async () => {
+    it('should update session status to idling after controller responds', async () => {
       // 1. Register a fresh controller
       const keyRes = await gqlRequest(
         CREATE_KEY,
@@ -909,11 +909,12 @@ describe('Session WebSocket ACP Events', () => {
       // 5. Wait for controller-api to process and update MongoDB
       await new Promise((r) => setTimeout(r, 500));
 
-      // 6. Verify session status changed to running via GraphQL query
+      // 6. Verify session status changed to idling via GraphQL query
+
       const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
       const sessionBody = await sessionRes.json();
       expect(sessionBody.errors).toBeUndefined();
-      expect(sessionBody.data.session.status).toBe('running');
+      expect(sessionBody.data.session.status).toBe('idling');
       expect(sessionBody.data.session.externalSessionId).toBeDefined();
 
       client.disconnect();

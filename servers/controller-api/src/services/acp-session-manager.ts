@@ -80,9 +80,9 @@ export class ACPSessionManager {
             socketSessions.add(sessionId);
             this.socketToSessions.set(controllerSocket.id, socketSessions);
 
-            // Update session status to running
+            // Update session status to idling
             const updateData: Record<string, unknown> = {
-              status: 'running',
+              status: 'idling',
               externalSessionId: payload.externalSessionId,
             };
             if (payload.modes) updateData.modes = payload.modes;
@@ -94,7 +94,7 @@ export class ACPSessionManager {
             if (payload.modes) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            await this.publishStatus(sessionId, 'running', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+            await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
 
             // Cache externalSessionId in Redis for resume
             if (payload.externalSessionId) {
@@ -107,7 +107,7 @@ export class ACPSessionManager {
               );
             }
 
-            console.log(`[ACP session] Session ${sessionId} is now running`);
+            console.log(`[ACP session] Session ${sessionId} is now idling`);
             resolve({ success: true, externalSessionId: payload.externalSessionId });
           } else {
             // Controller explicitly reported failure — keep session with 'ended' status

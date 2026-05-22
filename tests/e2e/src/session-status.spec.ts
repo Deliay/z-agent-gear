@@ -4,7 +4,7 @@ import { registerUser, createControllerKey, registerController, loginViaUI, crea
 const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
 
 test.describe('Session Status Transitions', () => {
-  test('should transition from creating to running via SSE', async ({ page }) => {
+  test('should transition from creating to idling via SSE', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect, socket } = await registerController(rawKey);
@@ -32,8 +32,8 @@ test.describe('Session Status Transitions', () => {
     // Input should be disabled
     await expect(page.locator('textarea')).toBeDisabled();
 
-    // Wait for status to become running
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    // Wait for status to become idling
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     // Input should be enabled
     await expect(page.locator('textarea')).toBeEnabled();
@@ -59,7 +59,7 @@ test.describe('Session Status Transitions', () => {
     const sessionId = await createSession(page, controllerId, token, ws2.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(page.locator(statusBadge())).toHaveText('ended', { timeout: 5000 });
@@ -89,7 +89,7 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(page.locator(statusBadge())).toHaveText('ended', { timeout: 5000 });
@@ -121,7 +121,7 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     // Close session
     await page.getByRole('button', { name: 'Close' }).click();
@@ -182,7 +182,7 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     // Close session
     await page.getByRole('button', { name: 'Close' }).click();

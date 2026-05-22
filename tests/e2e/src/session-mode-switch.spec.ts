@@ -29,7 +29,7 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     const modelBadge = page.locator('span:has-text("GPT-4")');
     await expect(modelBadge).toBeVisible();
@@ -37,39 +37,29 @@ test.describe('Session Mode Switch', () => {
     disconnect();
   });
 
-  test('should show mode switcher disabled when session is running', async ({ page }) => {
+  test('should show mode switcher disabled while session is connecting', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
-      setTimeout(() => {
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
-          externalSessionId: `ext_running_disabled_${Date.now()}`,
-          modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
-          currentModeId: 'code',
-        });
-      }, 300);
+      // Don't respond immediately — keep session in connecting state
     });
 
     await loginViaUI(page, username);
-    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-running-switch', token);
+    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-connecting-switch', token);
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
-
-    const modeBtn = page.locator('button[title*="Only available when idle"]');
-    await expect(modeBtn).toBeVisible();
+    // Mode switcher should be visible but disabled (no modes yet while connecting)
+    const modeBtn = page.locator('button[title="No modes available"]');
+    await expect(modeBtn).toBeVisible({ timeout: 5000 });
     await expect(modeBtn).toBeDisabled();
 
     disconnect();
   });
 
-  test('should show mode switcher enabled when session is idling', async ({ page }) => {
+  test('should show mode switcher enabled after resume to idling', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect, socket } = await registerController(rawKey);
@@ -92,7 +82,7 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(page.locator(statusBadge())).toHaveText('ended', { timeout: 5000 });
@@ -148,7 +138,7 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(page.locator(statusBadge())).toHaveText('ended', { timeout: 5000 });
@@ -214,7 +204,7 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('running', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(page.locator(statusBadge())).toHaveText('ended', { timeout: 5000 });
