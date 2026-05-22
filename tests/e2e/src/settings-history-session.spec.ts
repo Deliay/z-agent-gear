@@ -100,6 +100,11 @@ async function createWorkspace(page: import('@playwright/test').Page, controller
   return body.data.createWorkspace;
 }
 
+async function goToConfigPage(page: import('@playwright/test').Page) {
+  await page.locator('#controller-section').getByRole('button', { name: '配置' }).first().click();
+  await expect(page).toHaveURL(/settings\?controllerId=/);
+}
+
 test.describe('Settings History Session E2E', () => {
 
   test('should show history session button for enabled workspace with online controller', async ({ page }) => {
@@ -110,11 +115,9 @@ test.describe('Settings History Session E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/settings');
+    await goToConfigPage(page);
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-
-    const wsButton = page.getByRole('dialog').getByRole('button', { name: '历史会话' });
+    const wsButton = page.getByRole('button', { name: '历史会话' });
     await expect(wsButton).toBeVisible({ timeout: 5000 });
     await expect(wsButton).not.toBeDisabled();
 
@@ -129,16 +132,14 @@ test.describe('Settings History Session E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/settings');
+    await goToConfigPage(page);
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-
-    await page.getByRole('dialog').getByRole('button', { name: '历史会话' }).click();
+    await page.getByRole('button', { name: '历史会话' }).click();
 
     await expect(page.getByRole('heading', { name: /历史会话/ })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText('E2E Test Session 1')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('2 个可导入的会话')).toBeVisible();
-    await expect(page.getByRole('dialog').getByRole('button', { name: /导入已选/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /导入已选/ })).toBeVisible();
 
     disconnect();
   });
@@ -151,22 +152,20 @@ test.describe('Settings History Session E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/settings');
+    await goToConfigPage(page);
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-
-    await page.getByRole('dialog').getByRole('button', { name: '历史会话' }).click();
+    await page.getByRole('button', { name: '历史会话' }).click();
     await expect(page.getByText('2 个可导入的会话')).toBeVisible({ timeout: 15000 });
 
-    await page.getByRole('dialog').getByRole('button', { name: '全选' }).click();
-    await expect(page.getByRole('dialog').getByRole('button', { name: '导入已选 (2)' })).toBeVisible();
+    await page.getByRole('button', { name: '全选' }).click();
+    await expect(page.getByRole('button', { name: '导入已选 (2)' })).toBeVisible();
 
-    await page.getByRole('dialog').getByRole('button', { name: '导入已选 (2)' }).click();
+    await page.getByRole('button', { name: '导入已选 (2)' }).click();
 
     await expect(page.getByText('成功导入 2 个会话')).toBeVisible({ timeout: 30000 });
     await expect(page.getByText('已导入 2/2')).toBeVisible();
 
-    await page.getByRole('dialog').getByRole('button', { name: '完成' }).click();
+    await page.getByRole('button', { name: '完成' }).click();
     await expect(page.getByRole('heading', { name: /历史会话/ })).not.toBeVisible();
 
     disconnect();
@@ -175,7 +174,6 @@ test.describe('Settings History Session E2E', () => {
   test('should show empty state when no history sessions available', async ({ page }) => {
     const { token, username } = await registerUser(page);
 
-    // Create a dedicated key for the empty-sessions controller
     const emptyKeyRes = await gqlRequest(page, `
       mutation CreateKey($input: CreateKeyInput!) {
         createControllerKey(input: $input) { rawKey key { id } }
@@ -200,14 +198,12 @@ test.describe('Settings History Session E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/settings');
+    await goToConfigPage(page);
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-
-    await page.getByRole('dialog').getByRole('button', { name: '历史会话' }).click();
+    await page.getByRole('button', { name: '历史会话' }).click();
 
     await expect(page.getByText('该工作目录下没有未导入的历史会话')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByRole('dialog').getByRole('button', { name: '关闭' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).toBeVisible();
 
     client.disconnect();
   });

@@ -45,7 +45,7 @@ test.describe('Settings Controller E2E', () => {
     await loginAndGoSettings(page);
     const nav = page.locator('nav[aria-label="Settings navigation"]');
 
-    await expect(nav.getByText('控制器', { exact: true })).toBeVisible();
+    await expect(nav.getByText('本地控制器', { exact: true })).toBeVisible();
     await expect(nav.getByRole('button', { name: '控制器管理' })).toBeVisible();
   });
 

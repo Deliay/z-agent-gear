@@ -93,6 +93,11 @@ async function goToSettings(page: import('@playwright/test').Page) {
   await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
 }
 
+async function goToConfigPage(page: import('@playwright/test').Page) {
+  await page.locator('#controller-section').getByRole('button', { name: '配置' }).first().click();
+  await expect(page.getByRole('heading', { name: '工作区' })).toBeVisible({ timeout: 5000 });
+}
+
 async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string) {
   const res = await gqlRequest(page, `
     mutation CreateWorkspace($input: CreateWorkspaceInput!) {
@@ -105,7 +110,7 @@ async function createWorkspace(page: import('@playwright/test').Page, controller
 
 test.describe('Settings Workspace E2E', () => {
 
-  test('should show workspace management button for online controller', async ({ page }) => {
+  test('should show config button for online controller', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { disconnect } = await registerController(rawKey);
@@ -114,29 +119,26 @@ test.describe('Settings Workspace E2E', () => {
     await goToSettings(page);
 
     const section = page.locator('#controller-section');
-    await expect(section.getByRole('button', { name: '管理工作区' }).first()).toBeVisible({ timeout: 5000 });
+    await expect(section.getByRole('button', { name: '配置' }).first()).toBeVisible({ timeout: 5000 });
 
     disconnect();
   });
 
-  test('should open workspace manager dialog with empty state', async ({ page }) => {
+  test('should navigate to config page with empty workspace state', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await goToSettings(page);
+    await goToConfigPage(page);
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('heading', { name: '管理工作区' })).toBeVisible();
-    await expect(page.getByText('暂无工作区')).toBeVisible();
-    await expect(page.getByRole('button', { name: '添加' })).toBeVisible();
+    await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible();
 
     disconnect();
   });
 
-  test('should add workspace via API and show in dialog', async ({ page }) => {
+  test('should add workspace via API and show on config page', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
@@ -145,32 +147,69 @@ test.describe('Settings Workspace E2E', () => {
 
     await loginViaUI(page, username);
     await goToSettings(page);
-
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await goToConfigPage(page);
 
     await expect(page.getByText('/home/test/project')).toBeVisible();
-    await expect(page.getByText('1 个工作区')).toBeVisible();
 
     disconnect();
   });
 
-  test('should show DirectoryPicker UI and browse folders via API', async ({ page }) => {
+  test('should delete workspace from config page', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/project-a', token);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+    await goToConfigPage(page);
+    await expect(page.getByText('/home/test/project-a')).toBeVisible();
+
+    await page.getByRole('button', { name: '删除' }).click();
+    await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible();
+    await expect(page.getByText('/home/test/project-a')).not.toBeVisible();
+
+    disconnect();
+  });
+
+  test('should clear all workspaces', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+
+    await createWorkspace(page, controllerId, '/home/test/project-a', token);
+    await createWorkspace(page, controllerId, '/home/test/project-b', token);
+
+    await loginViaUI(page, username);
+    await goToSettings(page);
+    await goToConfigPage(page);
+    await expect(page.getByText('/home/test/project-a')).toBeVisible();
+    await expect(page.getByText('/home/test/project-b')).toBeVisible();
+
+    await page.getByRole('button', { name: '清空' }).click();
+    await expect(page.getByText('确定要清空所有工作区吗？此操作不可撤销。')).toBeVisible();
+    await page.getByRole('button', { name: '确认清空' }).click();
+
+    await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible({ timeout: 5000 });
+
+    disconnect();
+  });
+
+  test('should show DirectoryPicker UI and browse folders', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await goToSettings(page);
+    await goToConfigPage(page);
+    await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible();
 
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('暂无工作区')).toBeVisible();
-
-    await page.getByRole('dialog').getByRole('button', { name: '添加' }).click();
-    await expect(page.getByRole('dialog').getByText('选择此目录')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('dialog').getByRole('button', { name: '取消' })).toBeVisible();
-    await expect(page.getByRole('dialog').getByRole('button', { name: '←' })).toBeDisabled();
+    await page.getByRole('button', { name: '添加' }).click();
+    await expect(page.getByText('选择此目录')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '取消' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '←', exact: true })).toBeDisabled();
 
     const browseRes = await gqlRequest(page, `
       query BrowseFolder($controllerId: ID!, $path: String) {
@@ -203,62 +242,11 @@ test.describe('Settings Workspace E2E', () => {
     const wsBody = await wsRes.json();
     expect(wsBody.data.createWorkspace.path).toBe(webApp.path);
 
-    await page.getByRole('dialog').getByRole('button', { name: '取消' }).click();
-    await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click();
-
+    await page.getByRole('button', { name: '取消' }).click();
     await page.reload();
     await goToSettings(page);
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('dialog').getByText(webApp.path)).toBeVisible({ timeout: 15000 });
-
-    disconnect();
-  });
-
-  test('should delete workspace from dialog', async ({ page }) => {
-    const { token, username } = await registerUser(page);
-    const { rawKey } = await createControllerKey(page, token);
-    const { controllerId, disconnect } = await registerController(rawKey);
-
-    await createWorkspace(page, controllerId, '/home/test/project-a', token);
-
-    await loginViaUI(page, username);
-    await goToSettings(page);
-
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('/home/test/project-a')).toBeVisible();
-
-    await page.getByRole('dialog').getByRole('button', { name: '删除' }).click();
-    await expect(page.getByText('暂无工作区')).toBeVisible();
-    await expect(page.getByText('/home/test/project-a')).not.toBeVisible();
-
-    disconnect();
-  });
-
-  test('should clear all workspaces', async ({ page }) => {
-    const { token, username } = await registerUser(page);
-    const { rawKey } = await createControllerKey(page, token);
-    const { controllerId, disconnect } = await registerController(rawKey);
-
-    await createWorkspace(page, controllerId, '/home/test/project-a', token);
-    await createWorkspace(page, controllerId, '/home/test/project-b', token);
-
-    await loginViaUI(page, username);
-    await goToSettings(page);
-
-    await page.locator('#controller-section').getByRole('button', { name: '管理工作区' }).first().click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-
-    await expect(page.getByText('2 个工作区')).toBeVisible();
-    await expect(page.getByText('/home/test/project-a')).toBeVisible();
-    await expect(page.getByText('/home/test/project-b')).toBeVisible();
-
-    await page.getByRole('dialog').getByRole('button', { name: '清空' }).click();
-    await expect(page.getByText('清空工作区')).toBeVisible();
-    await page.getByRole('button', { name: '确认清空' }).click();
-
-    await expect(page.getByText('暂无工作区')).toBeVisible({ timeout: 5000 });
+    await goToConfigPage(page);
+    await expect(page.getByText(webApp.path)).toBeVisible({ timeout: 15000 });
 
     disconnect();
   });

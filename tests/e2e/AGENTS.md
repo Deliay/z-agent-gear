@@ -76,7 +76,7 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 测试 | 描述 |
 |------|------|
 | 注册用户并显示 controller section | API 注册用户 → 登录 → 设置页显示 controller-section |
-| 导航显示控制器管理 | 设置页导航显示「控制器」和「控制器管理」 |
+| 导航显示本地控制器管理 | 设置页导航显示「本地控制器」和「控制器管理」 |
 | controller section 布局 | 显示「控制器管理」标题和「控制器」卡片 |
 | controller section 空状态 | 显示「生成 Key」按钮和「暂无控制器」空状态文字 |
 | controller 卡片空状态 | 显示「暂无控制器」空状态文字 |
@@ -84,14 +84,27 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 生成的 Key 显示复制按钮 | 生成 Key 后显示「复制」按钮 |
 | 导航滚动到 controller section | 点击「控制器管理」→ 滚动到 controller section |
 
+### Settings Controller Config Page E2E (`settings-controller-config.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 侧边栏齿轮跳转配置页 | 点击齿轮 → URL 包含 `?controllerId=` |
+| 设置「配置」按钮跳转 | 点击「配置」→ URL 包含 `?controllerId=` |
+| 配置页布局 | 显示返回按钮、控制器名称、工作区、Harness 导航 |
+| 工作区/Harness 切换 | 点击「可用 Harness 工具」→ 显示刷新按钮；切回「工作区」→ 空状态 |
+| Harness 工具列表 | 显示 fake controller 返回的 opencode 能力（可用 + v1.0.0） |
+| 刷新按钮 | 点击刷新 → 按钮不 disabled |
+| 返回设置页 | 点击 ← 返回 → URL 回到 `/settings`，controller-section 可见 |
+| 齿轮不触发展开 | 点击齿轮导航到配置页，不展开侧边栏控制器节点 |
+
 ### Settings Workspace E2E (`settings-workspace.spec.ts`)
 
 | 测试 | 描述 |
 |------|------|
-| 管理工作区按钮可见 | 在线 controller 显示「管理工作区」按钮 |
-| 打开工作区管理对话框空状态 | 点击按钮 → 对话框显示「暂无工作区」|
-| 通过 API 添加工作区并显示 | GraphQL 创建工作区 → 对话框显示工作区路径 |
-| 从对话框删除工作区 | 点击删除 → 工作区移除 |
+| 配置按钮可见 | 在线 controller 显示「配置」按钮 |
+| 配置页工作区空状态 | 点击配置 → 配置页显示「暂无工作区」|
+| 通过 API 添加工作区并显示 | GraphQL 创建工作区 → 配置页显示工作区路径 |
+| 从配置页删除工作区 | 点击删除 → 工作区移除 |
 | 清空所有工作区 | 点击清空 → 确认 → 全部移除 |
 | New Session 对话框显示工作区 | 选择 controller → 显示工作区选项 |
 | 侧边栏树状结构 | 创建 session 后侧边栏显示 controller → 工作区 → session |
