@@ -65,6 +65,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.emit('acp:initialized', {
         sessionId: this.sessionId,
         acpSessionId: this.acpSessionId,
+        modes: this.extractModes(result.modes),
+        currentModeId: result.modes?.currentModeId ?? null,
+        currentModel: this.extractCurrentModel(result.models),
       });
 
       this.flushInputQueue();
@@ -81,7 +84,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.spawner.start();
     try {
       await this.initConnection();
-      await this.connection!.resumeSession({
+      const result = await this.connection!.resumeSession({
         sessionId: externalSessionId,
         cwd: this.cwd,
       });
@@ -91,6 +94,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.emit('acp:initialized', {
         sessionId: this.sessionId,
         acpSessionId: this.acpSessionId,
+        modes: this.extractModes(result.modes),
+        currentModeId: result.modes?.currentModeId ?? null,
+        currentModel: this.extractCurrentModel(result.models),
       });
     } catch (error) {
       // resumeSession may fail if agent doesn't support session.resume
@@ -106,6 +112,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         this.emit('acp:initialized', {
           sessionId: this.sessionId,
           acpSessionId: this.acpSessionId,
+          modes: this.extractModes(result.modes),
+          currentModeId: result.modes?.currentModeId ?? null,
+          currentModel: this.extractCurrentModel(result.models),
         });
       } catch (fallbackError) {
         this.initializing = false;
@@ -131,6 +140,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (this.acpSessionId && this.connection) {
       this.connection.cancel({ sessionId: this.acpSessionId });
     }
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    if (!this.connection || !this.acpSessionId) return;
+    await this.connection.setSessionMode({
+      sessionId: this.acpSessionId,
+      modeId,
+    });
   }
 
   sendInput(message: { type: string; content: string }): void {
@@ -180,6 +197,22 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     while (this.inputQueue.length > 0) {
       this.processPrompt(this.inputQueue.shift()!);
     }
+  }
+
+  private extractModes(modes: acp.SessionModeState | null | undefined): Array<{ id: string; name: string; description?: string }> | null {
+    if (!modes?.availableModes) return null;
+    return modes.availableModes.map((m) => ({
+      id: m.id,
+      name: m.name,
+      description: m.description ?? undefined,
+    }));
+  }
+
+  private extractCurrentModel(models: acp.SessionModelState | null | undefined): { id: string; name: string; provider?: string } | null {
+    if (!models?.availableModels || !models.currentModelId) return null;
+    const found = models.availableModels.find((m) => m.modelId === models.currentModelId);
+    if (!found) return null;
+    return { id: found.modelId, name: found.name };
   }
 
   // ── acp.Client implementation ──

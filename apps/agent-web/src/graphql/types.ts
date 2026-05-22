@@ -75,6 +75,18 @@ export interface ModelData {
   updatedAt: string
 }
 
+export interface AgentModeData {
+  id: string
+  name: string
+  description?: string | null
+}
+
+export interface AgentModelInfoData {
+  id: string
+  name: string
+  provider?: string | null
+}
+
 export interface SessionData {
   id: string
   userId: string
@@ -85,6 +97,9 @@ export interface SessionData {
   title: string | null
   externalSessionId: string | null
   cwd: string | null
+  modes?: AgentModeData[] | null
+  currentModeId?: string | null
+  currentModel?: AgentModelInfoData | null
   createdAt: string
   updatedAt: string
   endedAt: string | null

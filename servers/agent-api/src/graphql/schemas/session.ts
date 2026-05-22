@@ -26,6 +26,18 @@ export const sessionTypeDefs = `#graphql
     error
   }
 
+  type AgentMode {
+    id: String!
+    name: String!
+    description: String
+  }
+
+  type AgentModelInfo {
+    id: String!
+    name: String!
+    provider: String
+  }
+
   type Session {
     id: ID!
     userId: ID!
@@ -36,6 +48,9 @@ export const sessionTypeDefs = `#graphql
     title: String
     externalSessionId: String
     cwd: String
+    modes: [AgentMode!]
+    currentModeId: String
+    currentModel: AgentModelInfo
     createdAt: String!
     updatedAt: String!
     endedAt: String
@@ -105,5 +120,6 @@ export const sessionTypeDefs = `#graphql
     cancelGeneration(sessionId: ID!): Boolean!
     resumeSession(id: ID!): ResumeSessionPayload!
     importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
+    setSessionMode(sessionId: ID!, modeId: String!): Boolean!
   }
 `;

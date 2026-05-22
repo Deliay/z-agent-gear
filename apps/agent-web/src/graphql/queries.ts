@@ -89,6 +89,17 @@ export const GET_SESSION = gql`
       title
       externalSessionId
       cwd
+      modes {
+        id
+        name
+        description
+      }
+      currentModeId
+      currentModel {
+        id
+        name
+        provider
+      }
       createdAt
       updatedAt
       endedAt

@@ -13,12 +13,15 @@ import {
   SEND_SESSION_MESSAGE,
   CANCEL_GENERATION,
   RESUME_SESSION,
+  SET_SESSION_MODE,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
   GetControllersQuery,
   CreateSessionMutation,
   ResumeSessionMutation,
+  AgentModeData,
+  AgentModelInfoData,
 } from '../graphql/types';
 import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
@@ -58,6 +61,9 @@ export default function SessionPage() {
   const [sending, setSending] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [modes, setModes] = useState<AgentModeData[]>([]);
+  const [currentModeId, setCurrentModeId] = useState<string | null>(null);
+  const [currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
@@ -72,10 +78,14 @@ export default function SessionPage() {
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
+  const [setSessionMode] = useMutation(SET_SESSION_MODE);
 
   useEffect(() => {
     if (sessionData?.session) {
       setStatus(sessionData.session.status);
+      if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
+      if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
+      if (sessionData.session.currentModel) setCurrentModel(sessionData.session.currentModel as AgentModelInfoData);
     }
   }, [sessionData]);
 
@@ -104,6 +114,11 @@ export default function SessionPage() {
         if (data.data.status === 'idling') {
           setResuming(false);
         }
+        if (data.data.modes) setModes(data.data.modes);
+        if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
+        if (data.data.currentModel) setCurrentModel(data.data.currentModel);
+      } else if (data.type === 'mode:changed') {
+        if (data.data.modeId) setCurrentModeId(data.data.modeId);
       }
     };
 
@@ -204,6 +219,11 @@ export default function SessionPage() {
     }
   };
 
+  const handleSetMode = async (modeId: string) => {
+    if (!id) return;
+    await setSessionMode({ variables: { sessionId: id, modeId } });
+  };
+
   const handleSendMessage = async (content: string) => {
     if (!id) return;
     try {
@@ -268,7 +288,7 @@ export default function SessionPage() {
         </div>
       )}
       <SessionHeader
-        session={sessionData?.session ?? null}
+        session={sessionData?.session ? { ...sessionData.session, currentModel: currentModel ?? sessionData.session.currentModel } : null}
         status={status}
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
@@ -284,6 +304,10 @@ export default function SessionPage() {
         onStop={handleCancelGeneration}
         disabled={status !== 'running' && status !== 'idling'}
         sending={sending}
+        modes={modes}
+        currentModeId={currentModeId}
+        onSetMode={handleSetMode}
+        status={status}
       />
 
       {showNewSessionDialog && (

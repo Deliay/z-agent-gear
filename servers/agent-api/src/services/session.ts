@@ -77,6 +77,20 @@ export class SessionService {
     return !!result;
   }
 
+  async setMode(sessionId: string, userId: string, modeId: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) return false;
+    if (session.status !== 'idling') return false;
+
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:set-mode',
+      sessionId,
+      modeId,
+    }));
+    return true;
+  }
+
   async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) return false;
@@ -252,6 +266,9 @@ export class SessionService {
       title: session.title || 'New Session',
       externalSessionId: session.externalSessionId || null,
       cwd: session.cwd || null,
+      modes: session.modes || [],
+      currentModeId: session.currentModeId || null,
+      currentModel: session.currentModel || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,

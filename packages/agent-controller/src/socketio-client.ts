@@ -50,6 +50,11 @@ interface AcpStopPayload {
   sessionId: string;
 }
 
+interface AcpSetModePayload {
+  sessionId: string;
+  modeId: string;
+}
+
 interface AcpResumePayload {
   requestId: string;
   sessionId: string;
@@ -153,17 +158,21 @@ export function connectToServer(
 
       acpBridges.set(data.sessionId, bridge);
 
-      const onInitialized = (payload: { sessionId: string; acpSessionId: string }) => {
+      const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=true externalSessionId=${payload.acpSessionId}`);
-        socket.emit('acp:start:result', {
+        const result: Record<string, unknown> = {
           requestId: data.requestId,
           sessionId: data.sessionId,
           success: true,
           externalSessionId: payload.acpSessionId,
-        });
+        };
+        if (payload.modes) result.modes = payload.modes;
+        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
+        if (payload.currentModel) result.currentModel = payload.currentModel;
+        socket.emit('acp:start:result', result);
       };
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
@@ -207,15 +216,19 @@ export function connectToServer(
 
       acpBridges.set(data.sessionId, bridge);
 
-      const onInitialized = (payload: { sessionId: string }) => {
+      const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
-        socket.emit('acp:resume:result', {
+        const result: Record<string, unknown> = {
           requestId: data.requestId,
           sessionId: data.sessionId,
           success: true,
-        });
+        };
+        if (payload.modes) result.modes = payload.modes;
+        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
+        if (payload.currentModel) result.currentModel = payload.currentModel;
+        socket.emit('acp:resume:result', result);
       };
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
@@ -384,6 +397,16 @@ export function connectToServer(
     if (bridge) {
       bridge.stop();
       acpBridges.delete(data.sessionId);
+    }
+  });
+
+  socket.on('acp:set-mode', (data: AcpSetModePayload) => {
+    console.log(`[ACP] acp:set-mode received: sessionId=${data.sessionId} modeId=${data.modeId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    if (bridge) {
+      bridge.setMode(data.modeId).catch((err) => {
+        console.error(`[ACP] setMode failed: ${(err as Error).message}`);
+      });
     }
   });
 

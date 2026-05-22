@@ -34,7 +34,11 @@ export class SessionSSEService {
     res.write(`data: ${JSON.stringify({ type: 'history', data: history })}\n\n`);
 
     // Send current status
-    res.write(`data: ${JSON.stringify({ type: 'status', data: { sessionId, status: session.status } })}\n\n`);
+    const statusPayload: Record<string, unknown> = { sessionId, status: session.status };
+    if (session.modes) statusPayload.modes = session.modes;
+    if (session.currentModeId) statusPayload.currentModeId = session.currentModeId;
+    if (session.currentModel) statusPayload.currentModel = session.currentModel;
+    res.write(`data: ${JSON.stringify({ type: 'status', data: statusPayload })}\n\n`);
 
     // Create connection
     const connectionId = `${sessionId}:${userId}`;
@@ -87,22 +91,28 @@ export class SessionSSEService {
     globalStatusSubscriber.subscribe('session:status');
     globalStatusSubscriber.on('message', (_channel, message) => {
       try {
-        const { sessionId, status, error } = JSON.parse(message) as {
-          sessionId: string; status: string; error?: string;
-        };
-        this.dispatchStatus(sessionId, status, error);
+        const parsed = JSON.parse(message) as Record<string, unknown>;
+        const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
+        if (status) {
+          const extra: Record<string, unknown> = {};
+          if (parsed.modes) extra.modes = parsed.modes;
+          if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
+          if (parsed.currentModel) extra.currentModel = parsed.currentModel;
+          this.dispatchStatus(sessionId, status, error, Object.keys(extra).length ? extra : undefined);
+        }
+        this.broadcastModeChanged(sessionId, parsed);
       } catch {
         // ignore parse errors
       }
     });
   }
 
-  private dispatchStatus(sessionId: string, status: string, error?: string): void {
+  private dispatchStatus(sessionId: string, status: string, error?: string, extra?: Record<string, unknown>): void {
     if (status === 'removed') {
       this.removeConnections(sessionId);
       return;
     }
-    this.broadcastStatus(sessionId, status, error);
+    this.broadcastStatus(sessionId, status, error, extra);
   }
 
   broadcastMessage(sessionId: string, message: Record<string, unknown>): void {
@@ -114,10 +124,25 @@ export class SessionSSEService {
     }
   }
 
-  broadcastStatus(sessionId: string, status: string, error?: string): void {
+  broadcastStatus(sessionId: string, status: string, error?: string, extra?: Record<string, unknown>): void {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
+    if (extra) {
+      if (extra.modes) payload.modes = extra.modes;
+      if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
+      if (extra.currentModel) payload.currentModel = extra.currentModel;
+    }
     const data = JSON.stringify({ type: 'status', data: payload });
+    for (const [key, connection] of connections) {
+      if (connection.sessionId === sessionId) {
+        connection.res.write(`data: ${data}\n\n`);
+      }
+    }
+  }
+
+  broadcastModeChanged(sessionId: string, payload: Record<string, unknown>): void {
+    if (!payload.modeId) return;
+    const data = JSON.stringify({ type: 'mode:changed', data: { sessionId, modeId: payload.modeId } });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);

@@ -1,13 +1,24 @@
 import { useState } from 'react';
+import ModeSwitcher from './ModeSwitcher';
+
+interface AgentMode {
+  id: string;
+  name: string;
+  description?: string | null;
+}
 
 interface InputBoxProps {
   onSend: (content: string) => void;
   onStop?: () => void;
   disabled: boolean;
   sending?: boolean;
+  modes?: AgentMode[];
+  currentModeId?: string | null;
+  onSetMode?: (modeId: string) => Promise<void>;
+  status?: string;
 }
 
-export default function InputBox({ onSend, onStop, disabled, sending }: InputBoxProps) {
+export default function InputBox({ onSend, onStop, disabled, sending, modes = [], currentModeId, onSetMode, status = '' }: InputBoxProps) {
   const [input, setInput] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -32,6 +43,14 @@ export default function InputBox({ onSend, onStop, disabled, sending }: InputBox
   return (
     <div className="border-t border-gray-200 bg-white p-4">
       <form onSubmit={handleSubmit} className="flex gap-2">
+        {onSetMode && (
+          <ModeSwitcher
+            currentModeId={currentModeId}
+            modes={modes}
+            status={status}
+            onSetMode={onSetMode}
+          />
+        )}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}

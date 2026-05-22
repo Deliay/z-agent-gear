@@ -143,6 +143,16 @@ export const sessionResolvers = {
       }
       return sessionService.resume(args.id, context.currentUser.id);
     },
+    setSessionMode: async (
+      _parent: unknown,
+      args: { sessionId: string; modeId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionService.setMode(args.sessionId, context.currentUser.id, args.modeId);
+    },
     importHistorySessions: async (
       _parent: unknown,
       args: { controllerId: string; workspaceId: string; sessionIds: string[] },

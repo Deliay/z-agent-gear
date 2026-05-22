@@ -50,6 +50,7 @@ export class SessionCommandService {
             reason?: string;
             externalSessionId?: string;
             acpSessionId?: string;
+            modeId?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
@@ -66,6 +67,8 @@ export class SessionCommandService {
             await this.handleFsBrowse(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'fs:home' && command.requestId && command.controllerId) {
             await this.handleFsHome(command.requestId, command.controllerId);
+          } else if (command.type === 'acp:set-mode' && command.sessionId && command.modeId) {
+            await this.handleAcpSetMode(command.sessionId, command.modeId as string);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
@@ -241,6 +244,14 @@ export class SessionCommandService {
 
   private async handleFsHome(requestId: string, controllerId: string): Promise<void> {
     await folderBrowserService.getHomeDirectory(requestId, controllerId);
+  }
+
+  private async handleAcpSetMode(sessionId: string, modeId: string): Promise<void> {
+    console.log(`[SessionCommand] Setting mode for session ${sessionId}: modeId=${modeId}`);
+    const result = await acpSessionManager.setMode(sessionId, modeId);
+    if (!result) {
+      console.error(`ACP set-mode failed: session ${sessionId} not found in active sessions`);
+    }
   }
 
   private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string): Promise<void> {

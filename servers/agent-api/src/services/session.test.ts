@@ -425,4 +425,49 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"externalSessionId":""'));
     });
   });
+
+  describe('setMode', () => {
+    it('should return false when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await sessionService.setMode('sess-1', 'user-1', 'mode-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should return false when session status is not idling', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'running' })),
+      } as never);
+
+      const result = await sessionService.setMode('sess-1', 'user-1', 'mode-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should publish acp:set-mode when session is idling', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'idling' })),
+      } as never);
+
+      const result = await sessionService.setMode('sess-1', 'user-1', 'mode-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-mode"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modeId":"mode-1"'));
+    });
+
+    it('should return false when connecting', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'connecting' })),
+      } as never);
+
+      const result = await sessionService.setMode('sess-1', 'user-1', 'mode-1');
+
+      expect(result).toBe(false);
+    });
+  });
 });

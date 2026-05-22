@@ -216,6 +216,94 @@ describe('SessionSSEService', () => {
     });
   });
 
+  describe('broadcastStatus with extra fields', () => {
+    it('should include modes when provided', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'idling', undefined, {
+        modes: [{ id: 'mode-1', name: 'Code', description: 'Coding mode' }],
+        currentModeId: 'mode-1',
+      });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"status"');
+      expect(lastWrite).toContain('"modes"');
+      expect(lastWrite).toContain('"currentModeId":"mode-1"');
+    });
+
+    it('should include currentModel when provided', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'running', undefined, {
+        currentModel: { id: 'model-1', name: 'GPT-4' },
+      });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"currentModel"');
+      expect(lastWrite).toContain('"name":"GPT-4"');
+    });
+  });
+
+  describe('broadcastModeChanged', () => {
+    it('should write mode:changed event to matching connections', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastModeChanged('sess-1', { modeId: 'mode-2' });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"mode:changed"');
+      expect(lastWrite).toContain('"modeId":"mode-2"');
+    });
+
+    it('should not write when payload has no modeId', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      const before = res._written.length;
+      sessionSSEService.broadcastModeChanged('sess-1', {});
+
+      expect(res._written.length).toBe(before);
+    });
+
+    it('should not write to connections for other sessions', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      const before = res._written.length;
+      sessionSSEService.broadcastModeChanged('sess-other', { modeId: 'mode-3' });
+
+      expect(res._written.length).toBe(before);
+    });
+  });
+
   describe('removeConnections', () => {
     it('should end connections and clear heartbeat', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });

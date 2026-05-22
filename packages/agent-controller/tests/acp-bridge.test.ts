@@ -8,6 +8,7 @@ function buildMockConn() {
     prompt: vi.fn<[unknown], Promise<{ stopReason: string }>>().mockResolvedValue({ stopReason: 'end_turn' }),
     cancel: vi.fn<[unknown], Promise<void>>().mockResolvedValue(undefined),
     closeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    setSessionMode: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
   };
 }
 
@@ -89,10 +90,51 @@ describe('AcpSessionBridge', () => {
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(emitSpy).toHaveBeenCalledWith({
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1',
         acpSessionId: 'acp-sess-abc',
+      }));
+    });
+
+    it('should include modes in acp:initialized when available', async () => {
+      mockConnInstance.newSession = vi.fn().mockResolvedValue({
+        sessionId: 'acp-sess-abc',
+        modes: {
+          availableModes: [{ id: 'mode-1', name: 'Code', description: 'Coding mode' }],
+          currentModeId: 'mode-1',
+        },
       });
+      const bridge = createBridge();
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
+
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
+        modes: [{ id: 'mode-1', name: 'Code', description: 'Coding mode' }],
+        currentModeId: 'mode-1',
+      }));
+    });
+
+    it('should include currentModel in acp:initialized when available', async () => {
+      mockConnInstance.newSession = vi.fn().mockResolvedValue({
+        sessionId: 'acp-sess-abc',
+        models: {
+          availableModels: [{ modelId: 'gpt-4', name: 'GPT-4' }],
+          currentModelId: 'gpt-4',
+        },
+      });
+      const bridge = createBridge();
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
+
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
+        currentModel: { id: 'gpt-4', name: 'GPT-4' },
+      }));
     });
 
     it('should emit acp:stopped on initialize failure', async () => {
@@ -132,15 +174,17 @@ describe('AcpSessionBridge', () => {
         sessionId: 'existing-sess-id',
         cwd: '/home/user',
       });
-      expect(emitSpy).toHaveBeenCalledWith({
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1',
         acpSessionId: 'existing-sess-id',
-      });
+      }));
     });
 
     it('should fallback to newSession when resumeSession fails', async () => {
       mc().resumeSession.mockRejectedValue(new Error('not supported'));
       const bridge = createBridge();
+      const emitSpy = vi.fn();
+      bridge.on('acp:initialized', emitSpy);
 
       bridge.resume('existing-sess-id');
       await vi.advanceTimersByTimeAsync(0);
@@ -149,6 +193,9 @@ describe('AcpSessionBridge', () => {
         cwd: '/home/user',
         mcpServers: [],
       });
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess-1',
+      }));
     });
 
     it('should emit acp:stopped when both resume and fallback fail', async () => {
@@ -325,6 +372,28 @@ describe('AcpSessionBridge', () => {
       expect(result).toEqual({
         outcome: { outcome: 'selected', optionId: 'opt-1' },
       });
+    });
+  });
+
+  describe('setMode', () => {
+    it('should call connection.setSessionMode', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setMode('mode-2');
+
+      expect(mc().setSessionMode).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        modeId: 'mode-2',
+      });
+    });
+
+    it('should not throw when not initialized', async () => {
+      const bridge = createBridge();
+
+      await expect(bridge.setMode('mode-1')).resolves.toBeUndefined();
+      expect(mc().setSessionMode).not.toHaveBeenCalled();
     });
   });
 });
