@@ -156,8 +156,12 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | sessionMessages query - 不存在的 session | 应返回错误 |
 | closeSession - 正常关闭 | 应返回 true，status 变为 ended |
 | deleteSession - 正常删除 | 应返回 true，session 不再存在 |
-| acpCapabilities - 已认证 | 应返回 capabilities 列表 |
+| acpCapabilities - 无 token | 应返回「Not authenticated」 |
+| acpCapabilities - 已认证 | 应返回 capabilities 列表（含 checkedAt） |
 | acpCapabilities - 不存在的 controller | 应返回错误 |
+| refreshAcpCapabilities - 无 token | 应返回「Not authenticated」 |
+| refreshAcpCapabilities - 不存在的 controller | 应返回错误 |
+| refreshAcpCapabilities - 已认证 | 应返回 capabilities 列表（含 checkedAt） |
 
 ### Session SSE API (`agent-api/session.test.ts`)
 

@@ -68,7 +68,15 @@ const SESSION_MESSAGES_QUERY = `
 const ACP_CAPABILITIES_QUERY = `
   query AcpCapabilities($controllerId: ID!) {
     acpCapabilities(controllerId: $controllerId) {
-      type available version
+      type available version checkedAt
+    }
+  }
+`;
+
+const REFRESH_ACP_CAPABILITIES_MUTATION = `
+  mutation RefreshAcpCapabilities($controllerId: ID!) {
+    refreshAcpCapabilities(controllerId: $controllerId) {
+      type available version checkedAt
     }
   }
 `;
@@ -502,6 +510,16 @@ describe('Session GraphQL API', () => {
       capClient?.disconnect();
     });
 
+    it('should reject query without token', async () => {
+      const res = await gqlRequest(
+        ACP_CAPABILITIES_QUERY,
+        { controllerId: capControllerId },
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
     it('should return capabilities for controller', async () => {
       const res = await gqlRequest(
         ACP_CAPABILITIES_QUERY,
@@ -511,6 +529,9 @@ describe('Session GraphQL API', () => {
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(Array.isArray(body.data.acpCapabilities)).toBe(true);
+      if (body.data.acpCapabilities.length > 0) {
+        expect(body.data.acpCapabilities[0]).toHaveProperty('checkedAt');
+      }
     }, 20_000);
 
     it('should reject query for non-existent controller', async () => {
@@ -522,6 +543,65 @@ describe('Session GraphQL API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
     });
+  });
+
+  describe('refreshAcpCapabilities mutation', () => {
+    let refreshControllerId = '';
+    let refreshClient: ClientSocket;
+
+    beforeAll(async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `refresh-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const key = keyBody.data.createControllerKey.rawKey;
+
+      refreshClient = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(refreshClient, 'registered');
+      refreshClient.emit('register', { key, hostname: 'refresh-test-host', version: '1.0.0' });
+      const regData = await registered;
+      refreshControllerId = regData.controllerId;
+    });
+
+    afterAll(() => {
+      refreshClient?.disconnect();
+    });
+
+    it('should reject mutation without token', async () => {
+      const res = await gqlRequest(
+        REFRESH_ACP_CAPABILITIES_MUTATION,
+        { controllerId: refreshControllerId },
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject mutation for non-existent controller', async () => {
+      const res = await gqlRequest(
+        REFRESH_ACP_CAPABILITIES_MUTATION,
+        { controllerId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+    });
+
+    it('should return capabilities after refresh', async () => {
+      const res = await gqlRequest(
+        REFRESH_ACP_CAPABILITIES_MUTATION,
+        { controllerId: refreshControllerId },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(Array.isArray(body.data.refreshAcpCapabilities)).toBe(true);
+      if (body.data.refreshAcpCapabilities.length > 0) {
+        expect(body.data.refreshAcpCapabilities[0]).toHaveProperty('checkedAt');
+      }
+    }, 20_000);
   });
 });
 
