@@ -114,6 +114,24 @@ const DELETE_SESSION = `
   }
 `;
 
+const SESSION_WITH_MODES_QUERY = `
+  query Session($id: ID!) {
+    session(id: $id) {
+      id userId controllerId controllerName acpServerType status
+      externalSessionId cwd createdAt updatedAt endedAt
+      modes { id name description }
+      currentModeId
+      currentModel { id name provider }
+    }
+  }
+`;
+
+const SET_SESSION_MODE = `
+  mutation SetSessionMode($sessionId: ID!, $modeId: String!) {
+    setSessionMode(sessionId: $sessionId, modeId: $modeId)
+  }
+`;
+
 const SEND_SESSION_MESSAGE = `
   mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType) {
     sendSessionMessage(sessionId: $sessionId, content: $content, type: $type) {
@@ -622,6 +640,150 @@ describe('Session WebSocket ACP Events', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     client.disconnect();
+  });
+
+  describe('setSessionMode', () => {
+    it('should reject setSessionMode without auth', async () => {
+      const res = await gqlRequest(SET_SESSION_MODE, {
+        sessionId: '000000000000000000000000',
+        modeId: 'mode-1',
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should return false for setSessionMode on non-idling session', async () => {
+      // Register controller
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `setmode-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'setmode-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      // Create session — status will be 'creating' (not idling)
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+
+      // Session is still 'connecting' (not yet responded) — setSessionMode should fail
+      const res = await gqlRequest(
+        SET_SESSION_MODE,
+        { sessionId, modeId: 'mode-1' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setSessionMode).toBe(false);
+
+      // Now respond with acp:start:result to clean up
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      client.disconnect();
+    });
+
+    it('should handle setSessionMode on idling session via resume flow', async () => {
+      // Register controller
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `setmode-idle-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'setmode-idle-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      // Create session with modes in start result
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_setmode_${Date.now()}`,
+        modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
+        currentModeId: 'code',
+        currentModel: { id: 'gpt-4', name: 'GPT-4' },
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify modes are in the session
+      let sessionRes = await gqlRequest(SESSION_WITH_MODES_QUERY, { id: sessionId }, authToken);
+      let sessionBody = await sessionRes.json();
+      expect(sessionBody.errors).toBeUndefined();
+      expect(sessionBody.data.session.status).toBe('running');
+      expect(sessionBody.data.session.modes).toBeDefined();
+      expect(sessionBody.data.session.modes[0].id).toBe('code');
+      expect(sessionBody.data.session.currentModeId).toBe('code');
+      expect(sessionBody.data.session.currentModel.id).toBe('gpt-4');
+
+      // Close session to get ended status
+      await gqlRequest(CLOSE_SESSION, { id: sessionId }, authToken);
+
+      // Resume into idling state
+      const resumeEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:resume', 10000);
+      await gqlRequest(RESUME_SESSION, { id: sessionId }, authToken);
+
+      const resumeData = await resumeEvent;
+      client.emit('acp:resume:result', {
+        requestId: resumeData.requestId,
+        sessionId,
+        success: true,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify session is idling
+      sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('idling');
+
+      // Call setSessionMode — should return true (async, no sync result)
+      const modeRes = await gqlRequest(
+        SET_SESSION_MODE,
+        { sessionId, modeId: 'code' },
+        authToken,
+      );
+      const modeBody = await modeRes.json();
+      expect(modeBody.errors).toBeUndefined();
+      // Returns true because it validated session ownership + idling status
+      expect(modeBody.data.setSessionMode).toBe(true);
+
+      client.disconnect();
+    });
   });
 
   describe('End-to-end: createSession → acp:start → controller respond → verify status', () => {
