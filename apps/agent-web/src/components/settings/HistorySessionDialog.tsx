@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { LIST_HISTORY_SESSIONS } from '../../graphql/queries';
 import { IMPORT_HISTORY_SESSIONS } from '../../graphql/mutations';
-import type { ListHistorySessionsQuery, HistorySessionInfoData, ImportSessionResultData } from '../../graphql/types';
+import type { ListHistorySessionsQuery, HistorySessionInfoData, ImportSessionResultData, ImportHistorySessionsMutation } from '../../graphql/types';
 import {
   Dialog,
   DialogContent,
@@ -40,7 +40,7 @@ export default function HistorySessionDialog({
     fetchPolicy: 'network-only',
   });
 
-  const [importHistorySessions] = useMutation(IMPORT_HISTORY_SESSIONS);
+  const [importHistorySessions] = useMutation<ImportHistorySessionsMutation>(IMPORT_HISTORY_SESSIONS);
 
   useEffect(() => {
     if (open) {

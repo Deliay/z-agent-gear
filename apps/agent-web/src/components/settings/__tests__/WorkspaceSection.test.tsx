@@ -75,7 +75,7 @@ describe('WorkspaceSection', () => {
 
     expect(deleteMutate).toHaveBeenCalledWith({
       variables: { id: 'ws-1' },
-      refetchQueries: [expect.any(Object)],
+      refetchQueries: [expect.any(Object), expect.any(Object)],
     });
   });
 

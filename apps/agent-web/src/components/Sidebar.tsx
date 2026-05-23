@@ -133,7 +133,6 @@ export default function Sidebar({ username }: SidebarProps) {
         <ul className="space-y-1">
           {controllers.map((controller) => {
             const isExpanded = expandedControllers.has(controller.id);
-            const controllerSessions = sessionsByController.get(controller.id) || [];
             const isOffline = controller.status !== 'online';
 
             // Get unique workspace paths for this controller
