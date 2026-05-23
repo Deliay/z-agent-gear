@@ -46,7 +46,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
-    expose:
+    ports:
       - "8000"
     networks:
       - "aspire"
@@ -70,7 +70,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
-    expose:
+    ports:
       - "8001"
     networks:
       - "aspire"

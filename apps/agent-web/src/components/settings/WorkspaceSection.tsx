@@ -155,7 +155,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
     }
   };
 
-  const handleDefaultBranchChange = async (wsId: string, defaultBranch: string) => {
+  const handleDefaultBranchChange = async (wsId: string, defaultBranch: string | null) => {
     await setWorkspaceDefaultBranch({
       variables: { id: wsId, defaultBranch },
     });

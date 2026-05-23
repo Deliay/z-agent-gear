@@ -54,7 +54,7 @@ export default function ToolCallCard({ messages }: ToolCallCardProps) {
       defaultCollapsed={true}
       color={(statusColors[status] as 'yellow' | 'purple' | 'blue' | 'gray') || 'purple'}
     >
-      {rawInput && (
+      {rawInput != null && (
         <div className="mb-2">
           <div className="text-xs font-medium text-gray-500 mb-1">Input</div>
           <pre className="text-xs bg-gray-100 p-2 rounded overflow-x-auto max-h-40 overflow-y-auto">

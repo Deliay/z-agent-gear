@@ -64,9 +64,10 @@ export default function SessionPage() {
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
-  const [currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
+
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const [_currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
