@@ -1,7 +1,7 @@
 {
-  "name": "agent-controller",
+  "name": "zag",
   "version": "1.0.0",
-  "description": "Agent controller daemon - connects to controller-api via Socket.IO",
+  "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "main": "dist/index.js",
   "bin": {
     "zag": "dist/index.js"

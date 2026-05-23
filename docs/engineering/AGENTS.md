@@ -142,3 +142,4 @@ flowchart LR
 - [[proposals/20260520-feat-session-reopen.md]] — Session Re-open
 - [[proposals/20260520-refactor-controller-acp-sdk.md]] — ACP SDK 重构
 - [[proposals/20260521-feat-acp-session-sync.md]] — 工作目录历史会话同步
+- [[proposals/20260524-feat-docker-compose-support.md]] — Aspire Docker Compose 集成

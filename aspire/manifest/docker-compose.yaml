@@ -1,0 +1,82 @@
+services:
+  mongodb:
+    image: "docker.io/mongo:7"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "admin"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD}"
+    expose:
+      - "27017"
+    volumes:
+      - type: "volume"
+        target: "/data/db"
+        source: "agentgear.apphost-795ff385e1-mongodb-data"
+        read_only: false
+    networks:
+      - "aspire"
+  redis:
+    image: "docker.io/library/redis:8.6"
+    command:
+      - "-c"
+      - "redis-server --requirepass $$REDIS_PASSWORD"
+    entrypoint:
+      - "/bin/sh"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    expose:
+      - "6379"
+    networks:
+      - "aspire"
+  agent-api:
+    image: "${AGENT_API_IMAGE}"
+    environment:
+      NODE_ENV: "production"
+      NODE_OPTIONS: "--import tsx"
+      PORT: "8000"
+      ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      MONGODB_HOST: "mongodb"
+      MONGODB_PORT: "27017"
+      MONGODB_USERNAME: "admin"
+      MONGODB_PASSWORD: "${MONGODB_PASSWORD}"
+      MONGODB_AUTHENTICATIONDATABASE: "admin"
+      MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
+      MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      ConnectionStrings__redis: "redis:6379,password=${REDIS_PASSWORD}"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
+    expose:
+      - "8000"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  controller-api:
+    image: "${CONTROLLER_API_IMAGE}"
+    environment:
+      NODE_ENV: "production"
+      NODE_OPTIONS: "--import tsx"
+      PORT: "8001"
+      ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      MONGODB_HOST: "mongodb"
+      MONGODB_PORT: "27017"
+      MONGODB_USERNAME: "admin"
+      MONGODB_PASSWORD: "${MONGODB_PASSWORD}"
+      MONGODB_AUTHENTICATIONDATABASE: "admin"
+      MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
+      MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      ConnectionStrings__redis: "redis:6379,password=${REDIS_PASSWORD}"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
+    expose:
+      - "8001"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+networks:
+  aspire:
+    driver: "bridge"
+volumes:
+  agentgear.apphost-795ff385e1-mongodb-data:
+    driver: "local"

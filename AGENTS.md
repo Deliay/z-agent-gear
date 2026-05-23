@@ -14,6 +14,7 @@ z-agent-gear/
 ├── packages/
 │   └── agent-controller/    # Node.js CLI 客户端
 ├── aspire/
+│   ├── manifest/              # Docker Compose 部署产物（aspire publish 生成）
 │   └── AgentGear.AppHost/   # .NET Aspire 服务编排
 ├── docs/
 │   ├── product/              # 产品文档
@@ -30,7 +31,14 @@ z-agent-gear/
 ## 启动项目
 
 ```bash
+# 方式一：Aspire（默认）
 aspire start    # 启动全部服务（agent-api + controller-api + agent-web + MongoDB + Redis）
+
+# 方式二：Docker Compose
+aspire publish -o aspire/manifest    # 生成 docker-compose.yaml
+rm -f aspire/manifest/*.Dockerfile   # 清理不需要的 Dockerfile
+docker compose -f aspire/manifest/docker-compose.yaml up -d
+docker compose -f aspire/manifest/docker-compose.yaml down
 ```
 
 ## 开发流程

@@ -1,0 +1,35 @@
+name: Build agent-api Image
+
+on:
+  push:
+    branches:
+      - 'release'
+      - 'release/**'
+    paths:
+      - 'servers/agent-api/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_ENDPOINT }}
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: servers/agent-api
+          file: servers/agent-api/Dockerfile
+          tags: |
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/agent-api:${{ github.sha }}
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/agent-api:latest
+          push: true
