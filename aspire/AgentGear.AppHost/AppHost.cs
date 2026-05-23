@@ -11,7 +11,7 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     });
 
 var mongodb = builder.AddMongoDB("mongodb")
-    .WithImage("mongo", "7")
+    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo", "7")
     .WithDataVolume()
     .PublishAsDockerComposeService((resource, service) =>
     {
@@ -19,6 +19,7 @@ var mongodb = builder.AddMongoDB("mongodb")
     });
 
 var redis = builder.AddRedis("redis")
+    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/redis", "8.6")
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "redis";
