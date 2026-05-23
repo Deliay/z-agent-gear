@@ -31,7 +31,7 @@ services:
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
-      CORS_ORIGIN: "*"
+      CORS_ORIGIN: "${CORS_ORIGIN}"
       PORT: "8000"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
