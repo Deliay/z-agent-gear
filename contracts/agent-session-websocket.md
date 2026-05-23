@@ -41,6 +41,10 @@
 | Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
 | Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
 | Server → Controller | `acp:set-model` | 请求切换 LLM 模型 |
+| Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
+| Controller → Server | `git:check:result` | 返回 Git 检测结果 |
+| Server → Controller | `git:init` | 请求初始化 Git 仓库 |
+| Controller → Server | `git:init:result` | 返回初始化结果 |
 
 ### 2.2 `acp:check`（Server → Controller）
 
@@ -423,207 +427,161 @@ Controller 转发 ACP 输出。
 
 ### 2.18 `acp:set-model`
 
-请求切换 LLM 模型。仅在 session 处于 idling 状态时发送。
+请求切换 LLM 模型。
 
 **Payload:**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `sessionId` | `string` | 是 | Session ID |
-| `modelId` | `string` | 是 | 目标模型 ID |
+| `modelId` | `string` | 是 | 模型配置 ID |
 
 **客户端行为：**
 
-1. 查找对应 session 的 AcpSessionBridge
-2. 调用 ACP `session/set_model` JSON-RPC 方法
-3. 切换结果通过 `session/update`（`current_model_update`）异步通知
-4. 不主动回复事件
+1. 查找 `sessionId` 对应的 ACP Session Bridge
+2. 调用 `bridge.setModel(modelId)`
+3. 不等待结果（切换结果通过 `session/update` 的 `current_model_update` 通知）
 
 ---
 
-## 3. 跨服务事件（Redis Pub/Sub）
+## 2. 文件系统与 Git 事件协议
 
-### 3.1 频道定义
+### 2.1 事件总览
 
-| 频道 | 方向 | 说明 |
+| 方向 | 事件名 | 说明 |
+|------|--------|------|
+| Server → Controller | `fs:browse` | 请求浏览目录 |
+| Controller → Server | `fs:browse:result` | 返回目录列表 |
+| Server → Controller | `fs:home` | 请求获取用户主目录 |
+| Controller → Server | `fs:home:result` | 返回主目录路径 |
+| Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
+| Controller → Server | `git:check:result` | 返回 Git 检测结果 |
+| Server → Controller | `git:init` | 请求初始化 Git 仓库 |
+| Controller → Server | `git:init:result` | 返回初始化结果 |
+
+### 2.2 `fs:browse`（Server → Controller）
+
+请求浏览指定目录下的文件和文件夹。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string \| null` | 是 | 待浏览的目录绝对路径，null 时使用默认路径 |
+
+**客户端行为：**
+
+1. 读取指定目录内容
+2. 过滤隐藏文件（`.` 开头）
+3. 按目录优先、名称字母序排列
+4. 回复 `fs:browse:result`
+
+### 2.3 `fs:browse:result`（Controller → Server）
+
+返回目录浏览结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `entries` | `FsEntry[]` | 是 | 目录条目列表 |
+
+**`FsEntry` 结构:**
+
+| 字段 | 类型 | 说明 |
 |------|------|------|
-| `session:message` | controller-api → agent-api | 新消息通知 |
-| `session:status` | controller-api → agent-api | Session 状态变更 |
-| `session:command` | agent-api → controller-api | 命令下发 |
+| `name` | `string` | 文件名 |
+| `path` | `string` | 完整路径 |
+| `isDirectory` | `boolean` | 是否为目录 |
 
-### 3.2 `session:message`
+### 2.4 `fs:home`（Server → Controller）
 
-新消息持久化后通知 agent-api 推送。
-
-**Payload:**
-
-```json
-{
-  "sessionId": "string",
-  "message": {
-    "id": "string",
-    "direction": "input | output",
-    "type": "text | tool_call | tool_result | plan | error",
-    "content": "string",
-    "metadata": "object | null",
-    "createdAt": "ISO timestamp"
-  }
-}
-```
-
-### 3.3 `session:status`
-
-Session 状态变更通知。
+请求获取用户主目录路径。
 
 **Payload:**
 
-```json
-{
-  "sessionId": "string",
-  "status": "creating | connecting | idling | running | disconnected | ended",
-  "externalSessionId": "string | null",
-  "endedAt": "ISO timestamp | null",
-  "error": "string | null",
-  "availableModels": [
-    {
-      "id": "string",
-      "name": "string",
-      "provider": "string | null"
-    }
-  ] | null,
-  "currentModelId": "string | null"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID |
 
-`error` 字段仅在 resume 失败时携带，值为错误码之一（详见第 6 章）。
+**客户端行为：** 返回当前用户的主目录绝对路径。
 
-### 3.4 `session:command`
+### 2.5 `fs:home:result`（Controller → Server）
 
-agent-api 通过此频道向 controller-api 下发命令。
-
-#### `acp:cancel`
-
-取消当前生成。
+返回主目录路径。
 
 **Payload:**
 
-```json
-{
-  "type": "acp:cancel",
-  "sessionId": "string"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `path` | `string` | 是 | 主目录绝对路径 |
 
-**服务端行为：**
+### 2.6 `git:check`（Server → Controller）
 
-1. 查找 session 对应的 controller socket
-2. 发送 `acp:cancel` Socket.IO 事件
-3. 不修改 session 状态，不清理映射
-
-#### `acp:resume`
-
-恢复已有 ACP Session。
+请求检测指定路径是否为合法 Git 仓库，并获取分支信息。
 
 **Payload:**
 
-```json
-{
-  "type": "acp:resume",
-  "sessionId": "string",
-  "controllerId": "string",
-  "externalSessionId": "string",
-  "cwd": "string"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 待检测的目录绝对路径 |
 
-**服务端行为：**
+**客户端行为：**
 
-1. 查找 session 对应的 controller socket
-2. 发送 `acp:resume` Socket.IO 事件（含 `externalSessionId`）
-3. 等待 `acp:resume:result`（30s 超时）
-4. 成功时：注册 session mapping，更新 status = running
-5. 失败时：清理 session 映射，标记 status = ended
+1. 执行 `git rev-parse --git-dir` 检测是否为合法仓库
+2. 若是合法仓库，执行 `git branch --format="%(refname:short)"` 获取所有本地分支
+3. 执行 `git rev-parse --abbrev-ref HEAD` 获取当前分支
+4. 确定默认分支：优先 `main` > `master` > 按字母排序第一个
+5. 回复 `git:check:result`
 
-#### `acp:list-sessions`
+### 2.7 `git:check:result`（Controller → Server）
 
-获取工作目录下的历史会话列表。
+返回 Git 仓库检测结果。
 
 **Payload:**
 
-```json
-{
-  "type": "acp:list-sessions",
-  "requestId": "string",
-  "controllerId": "string",
-  "cwd": "string"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `isGitRepo` | `boolean` | 是 | 是否为合法 Git 仓库 |
+| `currentBranch` | `string \| null` | 否 | 当前分支名（合法仓库时） |
+| `branches` | `string[] \| null` | 否 | 所有本地分支列表（合法仓库时） |
+| `defaultBranch` | `string \| null` | 否 | 默认分支名（合法仓库时） |
+| `error` | `string \| null` | 否 | 失败原因 |
 
-**服务端行为：**
+### 2.8 `git:init`（Server → Controller）
 
-1. 查找 controller socket
-2. 发送 `acp:list-sessions` Socket.IO 事件（含 `requestId`, `cwd`）
-3. 等待 `acp:list-sessions:result`（120s 超时）
-4. 成功时：缓存结果到 Redis `acp:list-sessions:{requestId}`（TTL 120s）
-5. 失败时：缓存空结果
-
-#### `acp:set-mode`
-
-切换 Agent 工作模式。
+请求在指定目录初始化 Git 仓库，并设置默认分支为 `main`。
 
 **Payload:**
 
-```json
-{
-  "type": "acp:set-mode",
-  "sessionId": "string",
-  "modeId": "string"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID |
+| `path` | `string` | 是 | 待初始化目录绝对路径 |
 
-**服务端行为：**
+**客户端行为：**
 
-1. 查找 session 对应的 controller socket
-2. 发送 `acp:set-mode` Socket.IO 事件（含 `sessionId`, `modeId`）
-3. 不等待结果（切换结果通过 `session/update` 的 `current_mode_update` 通知）
+1. 执行 `git init`
+2. 执行 `git branch -m main`
+3. 回复 `git:init:result`
 
-#### `acp:cache:invalidate`
+### 2.9 `git:init:result`（Controller → Server）
 
-使控制器 ACP 能力检测缓存失效。agent-api 调用 `refreshAcpCapabilities` mutation 时下发此命令，通知 controller-api 清内存缓存，强使下一次 `acp:check` 重新探测。
+返回 Git 初始化结果。
 
 **Payload:**
 
-```json
-{
-  "type": "acp:cache:invalidate",
-  "controllerId": "string"
-}
-```
-
-**服务端行为：**
-
-1. 调用 `acpCapabilityDetector.invalidateCache(controllerId)` 清内存缓存
-2. 不回复确认
-
-#### `acp:set-model`
-
-切换 LLM 模型。
-
-**Payload:**
-
-```json
-{
-  "type": "acp:set-model",
-  "sessionId": "string",
-  "modelId": "string"
-}
-```
-
-**服务端行为：**
-
-1. 查找 session 对应的 controller socket
-2. 发送 `acp:set-model` Socket.IO 事件（含 `sessionId`, `modelId`）
-3. 不等待结果（切换结果通过 `session/update` 的 `current_model_update` 通知）
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `error` | `string \| null` | 否 | 失败原因 |
 
 #### `acp:load-session`
 
@@ -648,6 +606,53 @@ agent-api 通过此频道向 controller-api 下发命令。
 3. 等待 `acp:load-session:result`（300s 超时）
 4. 成功时：缓存结果到 Redis `acp:load-session:{requestId}`（TTL 300s）
 5. 失败时：缓存空结果
+
+#### `git:check`
+
+检测指定路径是否为合法 Git 仓库并获取分支信息。
+
+**Payload:**
+
+```json
+{
+  "type": "git:check",
+  "requestId": "string",
+  "controllerId": "string",
+  "path": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:check` Socket.IO 事件（含 `requestId`, `path`）
+3. 等待 `git:check:result`（30s 超时）
+4. 成功时：缓存结果到 Redis `git:check:{requestId}`（TTL 60s）
+5. 同时缓存分支列表到 `git:branches:{controllerId}:{pathMd5}`（TTL 60s）
+6. 失败时：缓存空结果
+
+#### `git:init`
+
+在指定目录初始化 Git 仓库，并设置默认分支为 `main`。
+
+**Payload:**
+
+```json
+{
+  "type": "git:init",
+  "requestId": "string",
+  "controllerId": "string",
+  "path": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:init` Socket.IO 事件（含 `requestId`, `path`）
+3. 等待 `git:init:result`（30s 超时）
+4. 成功时：清理 `git:branches:{controllerId}:{pathMd5}` 缓存
+5. 失败时：缓存空结果到 Redis `git:init:{requestId}`（TTL 30s）
 
 ---
 
