@@ -34,6 +34,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
+    .WithExternalHttpEndpoints()
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "agent-api";
@@ -45,6 +46,7 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
+    .WithExternalHttpEndpoints()
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "controller-api";
