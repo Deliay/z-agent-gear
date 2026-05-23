@@ -11,18 +11,20 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     });
 
 var mongodb = builder.AddMongoDB("mongodb")
-    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo", "7")
+    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo:7")
     .WithDataVolume()
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "mongodb";
+        service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo:7";
     });
 
 var redis = builder.AddRedis("redis")
-    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/redis", "8.6")
+    .WithImage("registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6")
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "redis";
+        service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
