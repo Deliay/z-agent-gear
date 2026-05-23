@@ -35,6 +35,7 @@ type Controller {
   status: ControllerStatus!
   keyId: ID!
   version: String!
+  worktreeDir: String
   lastHeartbeatAt: String
   createdAt: String!
   updatedAt: String!
@@ -66,4 +67,5 @@ type Mutation {
   renameControllerKey(input: RenameInput!): ControllerKey!
   renameController(input: RenameInput!): Controller!
   unbindController(id: ID!): Boolean!
+  setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
 }

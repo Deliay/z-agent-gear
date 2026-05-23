@@ -454,10 +454,20 @@ Controller 转发 ACP 输出。
 | Controller → Server | `fs:browse:result` | 返回目录列表 |
 | Server → Controller | `fs:home` | 请求获取用户主目录 |
 | Controller → Server | `fs:home:result` | 返回主目录路径 |
+| Server → Controller | `fs:mkdir` | 请求创建文件夹 |
+| Controller → Server | `fs:mkdir:result` | 返回创建结果 |
 | Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
 | Controller → Server | `git:check:result` | 返回 Git 检测结果 |
 | Server → Controller | `git:init` | 请求初始化 Git 仓库 |
 | Controller → Server | `git:init:result` | 返回初始化结果 |
+| Server → Controller | `git:worktree:add` | 请求创建 Git Worktree |
+| Controller → Server | `git:worktree:add:result` | 返回创建结果 |
+| Server → Controller | `git:worktree:remove` | 请求移除 Git Worktree |
+| Controller → Server | `git:worktree:remove:result` | 返回移除结果 |
+| Server → Controller | `git:status` | 请求检测 Git 工作区状态（clean/dirty） |
+| Controller → Server | `git:status:result` | 返回工作区状态 |
+| Server → Controller | `git:commit` | 请求在指定路径执行 Git 提交 |
+| Controller → Server | `git:commit:result` | 返回提交结果 |
 
 ### 2.2 `fs:browse`（Server → Controller）
 
@@ -583,6 +593,162 @@ Controller 转发 ACP 输出。
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string \| null` | 否 | 失败原因 |
 
+### 2.10 `fs:mkdir`（Server → Controller）
+
+请求在指定父目录下创建文件夹。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `parentPath` | `string` | 是 | 父目录绝对路径 |
+| `folderName` | `string` | 是 | 待创建的文件夹名称 |
+
+**客户端行为：**
+
+1. 在 `parentPath/folderName` 路径创建目录
+2. 回复 `fs:mkdir:result`
+
+### 2.11 `fs:mkdir:result`（Controller → Server）
+
+返回文件夹创建结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `name` | `string` | 否 | 创建的文件夹名称（成功时） |
+| `path` | `string` | 否 | 创建的文件夹完整路径（成功时） |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 2.12 `git:worktree:add`（Server → Controller）
+
+请求为指定 Git 仓库创建 Worktree。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `repoPath` | `string` | 是 | 原始 Git 仓库绝对路径 |
+| `worktreePath` | `string` | 是 | Worktree 目标目录绝对路径 |
+| `branch` | `string` | 是 | 分支名称（如 `example-repo/test-branch`） |
+
+**客户端行为：**
+
+1. 创建 Worktree 目标目录（如目标目录不存在）
+2. 执行 `git worktree add -b <branch> <worktreePath> <repoPath>`
+3. 回复 `git:worktree:add:result`
+
+### 2.13 `git:worktree:add:result`（Controller → Server）
+
+返回 Worktree 创建结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `worktreePath` | `string` | 否 | Worktree 目标目录路径（成功时） |
+| `branch` | `string` | 否 | 实际创建的分支名（成功时） |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 2.14 `git:worktree:remove`（Server → Controller）
+
+请求移除指定 Worktree。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `repoPath` | `string` | 是 | 原始 Git 仓库绝对路径 |
+| `worktreePath` | `string` | 是 | Worktree 目录绝对路径 |
+
+**客户端行为：**
+
+1. 执行 `git worktree remove <worktreePath>`
+2. 删除 Worktree 目录（如移除后目录仍存在）
+3. 回复 `git:worktree:remove:result`
+
+### 2.15 `git:worktree:remove:result`（Controller → Server）
+
+返回 Worktree 移除结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 2.16 `git:status`（Server → Controller）
+
+请求检测指定路径的 Git 工作区状态是否为 clean。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 待检测的目录绝对路径 |
+
+**客户端行为：**
+
+1. 执行 `git -C <path> status --porcelain`
+2. 解析结果：输出为空则为 clean，否则为 dirty
+3. 回复 `git:status:result`
+
+### 2.17 `git:status:result`（Controller → Server）
+
+返回 Git 工作区状态检测结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `isClean` | `boolean` | 是 | 工作区是否为 clean 状态 |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 2.18 `git:commit`（Server → Controller）
+
+请求在指定路径执行 Git 提交。用于 Session 销毁时自动暂存未提交变更。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | Git 仓库目录绝对路径 |
+| `message` | `string` | 是 | 提交信息 |
+
+**客户端行为：**
+
+1. 执行 `git -C <path> add -A`
+2. 执行 `git -C <path> commit -m "<message>"`
+3. 如没有变更可提交，视为成功
+4. 回复 `git:commit:result`
+
+### 2.19 `git:commit:result`（Controller → Server）
+
+返回 Git 提交结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `commitHash` | `string \| null` | 否 | 提交的 SHA（有实际提交时） |
+| `error` | `string \| null` | 否 | 失败原因 |
+
 #### `acp:load-session`
 
 加载单个历史会话的全量消息。
@@ -653,6 +819,126 @@ Controller 转发 ACP 输出。
 3. 等待 `git:init:result`（30s 超时）
 4. 成功时：清理 `git:branches:{controllerId}:{pathMd5}` 缓存
 5. 失败时：缓存空结果到 Redis `git:init:{requestId}`（TTL 30s）
+
+#### `fs:mkdir`
+
+在指定父目录下创建文件夹。
+
+**Payload:**
+
+```json
+{
+  "type": "fs:mkdir",
+  "requestId": "string",
+  "controllerId": "string",
+  "parentPath": "string",
+  "folderName": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `fs:mkdir` Socket.IO 事件（含 `requestId`, `parentPath`, `folderName`）
+3. 等待 `fs:mkdir:result`（30s 超时）
+4. 成功时：返回 `name` + `path`
+5. 失败时：缓存空结果到 Redis `fs:mkdir:{requestId}`（TTL 30s）
+
+#### `git:worktree:add`
+
+为指定 Git 仓库创建 Worktree。
+
+**Payload:**
+
+```json
+{
+  "type": "git:worktree:add",
+  "requestId": "string",
+  "controllerId": "string",
+  "repoPath": "string",
+  "worktreePath": "string",
+  "branch": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:worktree:add` Socket.IO 事件（含 `requestId`, `repoPath`, `worktreePath`, `branch`）
+3. 等待 `git:worktree:add:result`（30s 超时）
+4. 成功时：缓存结果到 Redis `git:worktree:add:{requestId}`（TTL 60s）
+5. 失败时：缓存空结果
+
+#### `git:worktree:remove`
+
+移除指定 Worktree。
+
+**Payload:**
+
+```json
+{
+  "type": "git:worktree:remove",
+  "requestId": "string",
+  "controllerId": "string",
+  "repoPath": "string",
+  "worktreePath": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:worktree:remove` Socket.IO 事件（含 `requestId`, `repoPath`, `worktreePath`）
+3. 等待 `git:worktree:remove:result`（30s 超时）
+4. 成功时：缓存结果
+5. 失败时：缓存空结果
+
+#### `git:status`
+
+检测指定路径的 Git 工作区状态是否为 clean。
+
+**Payload:**
+
+```json
+{
+  "type": "git:status",
+  "requestId": "string",
+  "controllerId": "string",
+  "path": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:status` Socket.IO 事件（含 `requestId`, `path`）
+3. 等待 `git:status:result`（30s 超时）
+4. 成功时：缓存结果到 Redis `git:status:{requestId}`（TTL 60s）
+5. 失败时：缓存空结果
+
+#### `git:commit`
+
+在指定路径执行 Git 提交。
+
+**Payload:**
+
+```json
+{
+  "type": "git:commit",
+  "requestId": "string",
+  "controllerId": "string",
+  "path": "string",
+  "message": "string"
+}
+```
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:commit` Socket.IO 事件（含 `requestId`, `path`, `message`）
+3. 等待 `git:commit:result`（30s 超时）
+4. 成功时：缓存结果到 Redis `git:commit:{requestId}`（TTL 60s）
+5. 失败时：缓存空结果
 
 ---
 
@@ -921,6 +1207,11 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
 | `CONTROLLER_OFFLINE` | 控制器不在线，无法发送 acp:resume | 前端提示检查控制器连接 |
 | `ACP_SESSION_EXPIRED` | ACP Session ID 已过期，无法恢复 | 前端提示创建新会话 |
 | `WORKSPACE_PATH_INVALID` | 工作目录在控制器上已不存在 | 前端提示检查工作目录 |
+| `WORKTREE_ADD_FAILED` | Git Worktree 创建失败 | 前端提示检查分支名是否冲突或名称是否合法 |
+| `WORKTREE_REMOVE_FAILED` | Git Worktree 移除失败 | 前端提示手动检查 Worktree 状态 |
+| `WORKTREE_COMMIT_FAILED` | 自动提交失败（如缺少 Git 用户配置） | 前端提示配置 Git user.name/user.email |
+| `WORKTREE_NOT_CLEAN` | Worktree 不是 clean 状态 | 自动触发提交后重试移除 |
+| `FOLDER_CREATE_FAILED` | 文件夹创建失败 | 前端提示检查权限或路径合法性 |
 
 ### 6.2 重连策略
 
