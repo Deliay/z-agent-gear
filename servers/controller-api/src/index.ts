@@ -9,6 +9,7 @@ import { heartbeatService } from './services/heartbeat.js';
 import { commandService } from './services/command.js';
 import { sessionCommandService } from './services/session-command.js';
 import { folderBrowserService } from './services/folder-browser.js';
+import { gitBrowserService } from './services/git-browser.js';
 import { Session } from './models/session.js';
 
 const app = express();
@@ -46,6 +47,7 @@ async function start() {
   commandService.start(io);
   sessionCommandService.start(io);
   folderBrowserService.start(io);
+  gitBrowserService.start(io);
 
   httpServer.listen(config.port, () => {
     console.log(`Controller API running at http://localhost:${config.port}`);

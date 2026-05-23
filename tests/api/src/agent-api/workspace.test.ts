@@ -41,7 +41,7 @@ const CREATE_KEY = `
 const WORKSPACES_QUERY = `
   query ControllerWorkspaces($controllerId: ID!) {
     controllerWorkspaces(controllerId: $controllerId) {
-      id userId controllerId name path isEnabled createdAt updatedAt
+      id userId controllerId name path isEnabled defaultBranch createdAt updatedAt
     }
   }
 `;
@@ -95,6 +95,31 @@ const CREATE_SESSION = `
         id userId controllerId controllerName acpServerType status
         externalSessionId cwd createdAt updatedAt endedAt
       }
+    }
+  }
+`;
+
+const DETECT_GIT_REPO = `
+  query DetectGitRepo($controllerId: ID!, $workspaceId: ID!) {
+    detectGitRepo(controllerId: $controllerId, workspaceId: $workspaceId) {
+      isGitRepo
+      currentBranch
+      branches
+      defaultBranch
+    }
+  }
+`;
+
+const INIT_GIT_REPO = `
+  mutation InitGitRepo($controllerId: ID!, $workspaceId: ID!) {
+    initGitRepo(controllerId: $controllerId, workspaceId: $workspaceId)
+  }
+`;
+
+const SET_WORKSPACE_DEFAULT_BRANCH = `
+  mutation SetWorkspaceDefaultBranch($id: ID!, $defaultBranch: String!) {
+    setWorkspaceDefaultBranch(id: $id, defaultBranch: $defaultBranch) {
+      id defaultBranch
     }
   }
 `;
@@ -426,6 +451,381 @@ describe('Folder Browser API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
       expect(body.errors[0].message).toBe('Controller not found');
+    });
+  });
+});
+
+describe('Workspace Git Support', () => {
+  beforeAll(async () => {
+    if (!authToken) {
+      authToken = await signup();
+    }
+  });
+
+  describe('detectGitRepo', () => {
+    it('should reject detectGitRepo without auth', async () => {
+      const res = await gqlRequest(DETECT_GIT_REPO, { controllerId: '000000000000000000000000', workspaceId: '000000000000000000000000' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject detectGitRepo for non-existent controller', async () => {
+      const res = await gqlRequest(
+        DETECT_GIT_REPO,
+        { controllerId: '000000000000000000000000', workspaceId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should reject detectGitRepo for non-existent workspace', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-detect-ws-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-ws', version: '1.0.0' });
+      const regData = await registered;
+
+      const res = await gqlRequest(
+        DETECT_GIT_REPO,
+        { controllerId: regData.controllerId, workspaceId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Workspace not found');
+      client.disconnect();
+    });
+
+    it('should reject detectGitRepo for offline controller', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-offline-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-host', version: '1.0.0' });
+      const regData = await registered;
+      client.disconnect();
+      await new Promise((r) => setTimeout(r, 300));
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/git-offline-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+
+      const res = await gqlRequest(
+        DETECT_GIT_REPO,
+        { controllerId: regData.controllerId, workspaceId: wsBody.data.createWorkspace.id },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller is offline');
+    });
+
+    it('should detect a valid git repo via WebSocket protocol', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-detect-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-host', version: '1.0.0' });
+      const regData = await registered;
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/git-repo-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+      const workspaceId = wsBody.data.createWorkspace.id;
+
+      const gitCheck = waitForEvent<{ requestId: string; path: string }>(client, 'git:check', 10000);
+      const responsePromise = gqlRequest(DETECT_GIT_REPO, { controllerId: regData.controllerId, workspaceId }, authToken);
+
+      const gitData = await gitCheck;
+      expect(gitData.path).toBeDefined();
+
+      client.emit('git:check:result', {
+        requestId: gitData.requestId,
+        success: true,
+        isGitRepo: true,
+        currentBranch: 'main',
+        branches: ['main', 'develop', 'feature/test'],
+        defaultBranch: 'main',
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.detectGitRepo.isGitRepo).toBe(true);
+      expect(body.data.detectGitRepo.currentBranch).toBe('main');
+      expect(body.data.detectGitRepo.branches).toEqual(['main', 'develop', 'feature/test']);
+      expect(body.data.detectGitRepo.defaultBranch).toBe('main');
+
+      client.disconnect();
+    }, 30000);
+
+    it('should detect non-git directory via WebSocket protocol', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-non-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-non-host', version: '1.0.0' });
+      const regData = await registered;
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/not-a-repo-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+      const workspaceId = wsBody.data.createWorkspace.id;
+
+      const gitCheck = waitForEvent<{ requestId: string }>(client, 'git:check', 10000);
+      const responsePromise = gqlRequest(DETECT_GIT_REPO, { controllerId: regData.controllerId, workspaceId }, authToken);
+
+      const gitData = await gitCheck;
+
+      client.emit('git:check:result', {
+        requestId: gitData.requestId,
+        success: true,
+        isGitRepo: false,
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.detectGitRepo.isGitRepo).toBe(false);
+      expect(body.data.detectGitRepo.currentBranch).toBeNull();
+      expect(body.data.detectGitRepo.branches).toBeNull();
+      expect(body.data.detectGitRepo.defaultBranch).toBeNull();
+
+      client.disconnect();
+    }, 30000);
+  });
+
+  describe('initGitRepo', () => {
+    it('should reject initGitRepo without auth', async () => {
+      const res = await gqlRequest(INIT_GIT_REPO, { controllerId: '000000000000000000000000', workspaceId: '000000000000000000000000' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject initGitRepo for non-existent controller', async () => {
+      const res = await gqlRequest(
+        INIT_GIT_REPO,
+        { controllerId: '000000000000000000000000', workspaceId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should reject initGitRepo for non-existent workspace', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-init-ws-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ws', version: '1.0.0' });
+      const regData = await registered;
+
+      const res = await gqlRequest(
+        INIT_GIT_REPO,
+        { controllerId: regData.controllerId, workspaceId: '000000000000000000000000' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Workspace not found');
+      client.disconnect();
+    });
+
+    it('should reject initGitRepo for offline controller', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-init-offline-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-init', version: '1.0.0' });
+      const regData = await registered;
+      client.disconnect();
+      await new Promise((r) => setTimeout(r, 300));
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/git-init-offline-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+
+      const res = await gqlRequest(
+        INIT_GIT_REPO,
+        { controllerId: regData.controllerId, workspaceId: wsBody.data.createWorkspace.id },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller is offline');
+    });
+
+    it('should return true on successful git init via WebSocket protocol', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-init-ok-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ok', version: '1.0.0' });
+      const regData = await registered;
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/git-init-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+      const workspaceId = wsBody.data.createWorkspace.id;
+
+      const gitInit = waitForEvent<{ requestId: string }>(client, 'git:init', 10000);
+      const responsePromise = gqlRequest(INIT_GIT_REPO, { controllerId: regData.controllerId, workspaceId }, authToken);
+
+      const initData = await gitInit;
+      expect(initData.requestId).toBeDefined();
+
+      client.emit('git:init:result', {
+        requestId: initData.requestId,
+        success: true,
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.initGitRepo).toBe(true);
+
+      client.disconnect();
+    }, 30000);
+
+    it('should return GraphQL error when git init fails via WebSocket protocol', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `git-init-fail-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-fail', version: '1.0.0' });
+      const regData = await registered;
+
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: regData.controllerId, path: `/tmp/git-init-fail-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+      const workspaceId = wsBody.data.createWorkspace.id;
+
+      const gitInit = waitForEvent<{ requestId: string }>(client, 'git:init', 10000);
+      const responsePromise = gqlRequest(INIT_GIT_REPO, { controllerId: regData.controllerId, workspaceId }, authToken);
+
+      const initData = await gitInit;
+
+      client.emit('git:init:result', {
+        requestId: initData.requestId,
+        success: false,
+        error: 'git command not found',
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('git command not found');
+
+      client.disconnect();
+    }, 30000);
+  });
+
+  describe('setWorkspaceDefaultBranch', () => {
+    let createdWorkspace: { id: string };
+
+    beforeAll(async () => {
+      const ctrl = await createKeyAndRegisterController(authToken);
+      const wsRes = await gqlRequest(
+        CREATE_WORKSPACE,
+        { input: { controllerId: ctrl.controllerId, path: `/tmp/default-branch-test-${Date.now()}` } },
+        authToken,
+      );
+      const wsBody = await wsRes.json();
+      createdWorkspace = wsBody.data.createWorkspace;
+    });
+
+    it('should reject setWorkspaceDefaultBranch without auth', async () => {
+      const res = await gqlRequest(SET_WORKSPACE_DEFAULT_BRANCH, { id: '000000000000000000000000', defaultBranch: 'main' });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject setWorkspaceDefaultBranch for non-existent workspace', async () => {
+      const res = await gqlRequest(
+        SET_WORKSPACE_DEFAULT_BRANCH,
+        { id: '000000000000000000000000', defaultBranch: 'main' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Workspace not found');
+    });
+
+    it('should set defaultBranch on workspace', async () => {
+      const res = await gqlRequest(
+        SET_WORKSPACE_DEFAULT_BRANCH,
+        { id: createdWorkspace.id, defaultBranch: 'main' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setWorkspaceDefaultBranch.id).toBe(createdWorkspace.id);
+      expect(body.data.setWorkspaceDefaultBranch.defaultBranch).toBe('main');
+    });
+
+    it('should persist defaultBranch in workspace query', async () => {
+      const res = await gqlRequest(WORKSPACES_QUERY, { controllerId: createdWorkspace.controllerId }, authToken);
+      const body = await res.json();
+      const ws = body.data.controllerWorkspaces.find((w: { id: string }) => w.id === createdWorkspace.id);
+      expect(ws).toBeDefined();
+      expect(ws.defaultBranch).toBe('main');
     });
   });
 });
