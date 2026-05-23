@@ -7,6 +7,15 @@ import { Button } from '@/components/ui/button';
 import HistorySessionDialog from './HistorySessionDialog';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
 import { ChevronDownIcon, ChevronRightIcon, GitBranchIcon, LoaderIcon } from 'lucide-react';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPopup,
+  SelectItem,
+  SelectItemText,
+} from '@/components/ui/select';
 
 interface WorkspaceSectionProps {
   controllerId: string;
@@ -163,8 +172,6 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
     });
   };
 
-  const [filterText, setFilterText] = useState('');
-
   return (
     <>
       <div className="flex items-center justify-between mb-6">
@@ -256,52 +263,23 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
                         <span className="font-medium">{gitStates[ws.id].data?.currentBranch}</span>
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor={`branch-filter-${ws.id}`} className="text-xs text-muted-foreground">默认分支</label>
-                        <div className="flex gap-2">
-                          <input
-                            id={`branch-filter-${ws.id}`}
-                            type="text"
-                            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm"
-                            placeholder="搜索分支..."
-                            value={filterText}
-                            onChange={(e) => setFilterText(e.target.value)}
-                          />
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              const branches = gitStates[ws.id]?.data?.branches ?? [];
-                              const filtered = branches.filter(
-                                (b) => !filterText || b.toLowerCase().includes(filterText.toLowerCase()),
-                              );
-                              if (filtered.length > 0) {
-                                handleDefaultBranchChange(ws.id, filtered[0]);
-                              }
-                              setFilterText('');
-                            }}
-                          >
-                            设置
-                          </Button>
-                        </div>
-                        <div className="max-h-32 overflow-y-auto rounded-md border">
-                          {(gitStates[ws.id]?.data?.branches ?? [])
-                            .filter((b) => !filterText || b.toLowerCase().includes(filterText.toLowerCase()))
-                            .map((branch) => (
-                              <button
-                                key={branch}
-                                type="button"
-                                className={`w-full px-3 py-1.5 text-left text-sm hover:bg-muted ${
-                                  branch === gitStates[ws.id]?.data?.defaultBranch
-                                    ? 'bg-primary/10 font-medium'
-                                    : ''
-                                }`}
-                                onClick={() => handleDefaultBranchChange(ws.id, branch)}
-                              >
-                                {branch}
-                                {branch === gitStates[ws.id]?.data?.defaultBranch && ' ✓'}
-                              </button>
+                        <span className="text-xs text-muted-foreground">默认分支</span>
+                        <Select
+                          value={gitStates[ws.id]?.data?.defaultBranch}
+                          onValueChange={(value) => handleDefaultBranchChange(ws.id, value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择分支..." />
+                            <SelectIcon />
+                          </SelectTrigger>
+                          <SelectPopup>
+                            {(gitStates[ws.id]?.data?.branches ?? []).map((branch) => (
+                              <SelectItem key={branch} value={branch}>
+                                <SelectItemText>{branch}</SelectItemText>
+                              </SelectItem>
                             ))}
-                        </div>
+                          </SelectPopup>
+                        </Select>
                       </div>
                     </div>
                   ) : gitStates[ws.id]?.data ? (

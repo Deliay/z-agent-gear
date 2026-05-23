@@ -170,10 +170,16 @@ test.describe('Settings Workspace Git E2E', () => {
     await expandWorkspace(page, wsPath);
 
     await expect(page.getByText('当前分支:')).toBeVisible({ timeout: 35000 });
-    await expect(page.getByText('main', { exact: true })).toBeVisible();
-    await expect(page.getByText('develop')).toBeVisible();
-    await expect(page.getByText('feature/test')).toBeVisible();
+    await expect(page.getByText('main').first()).toBeVisible();
     await expect(page.getByText('默认分支')).toBeVisible();
+
+    const selectTrigger = page.locator('[data-slot="select-trigger"]');
+    await selectTrigger.click();
+    await expect(page.locator('[data-slot="select-popup"]')).toBeVisible();
+    await expect(page.getByRole('option', { name: 'develop' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'feature/test' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'main' })).toBeVisible();
+    await page.locator('[data-slot="select-popup"]').press('Escape');
 
     disconnect();
   });
@@ -209,12 +215,12 @@ test.describe('Settings Workspace Git E2E', () => {
     await page.getByRole('button', { name: '初始化 Git 仓库' }).click();
 
     await expect(page.getByText('当前分支:')).toBeVisible({ timeout: 45000 });
-    await expect(page.getByText('main', { exact: true })).toBeVisible();
+    await expect(page.getByText('main').first()).toBeVisible();
 
     disconnect();
   });
 
-  test('should set default branch from branch list', async ({ page }) => {
+  test('should set default branch from dropdown', async ({ page }) => {
     test.setTimeout(60000);
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
@@ -239,9 +245,13 @@ test.describe('Settings Workspace Git E2E', () => {
     await expandWorkspace(page, wsPath);
     await expect(page.getByText('当前分支:')).toBeVisible({ timeout: 35000 });
 
-    await page.getByRole('button', { name: 'develop', exact: true }).click();
+    const selectTrigger = page.locator('[data-slot="select-trigger"]');
+    await selectTrigger.click();
+    await expect(page.locator('[data-slot="select-popup"]')).toBeVisible();
 
-    await expect(page.getByText('develop ✓')).toBeVisible({ timeout: 5000 });
+    await page.getByRole('option', { name: 'develop' }).click();
+
+    await expect(selectTrigger).toHaveText('develop', { timeout: 5000 });
 
     const verifyRes = await gqlRequest(page, `
       query ControllerWorkspaces($controllerId: ID!) {
@@ -255,7 +265,7 @@ test.describe('Settings Workspace Git E2E', () => {
     disconnect();
   });
 
-  test('should filter branches when typing in search box', async ({ page }) => {
+  test('should show all branches in dropdown', async ({ page }) => {
     test.setTimeout(60000);
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
@@ -270,7 +280,7 @@ test.describe('Settings Workspace Git E2E', () => {
       }),
     );
 
-    const wsPath = `/home/user/search-branches-${Date.now()}`;
+    const wsPath = `/home/user/all-branches-${Date.now()}`;
     await createWorkspace(page, controllerId, wsPath, token);
 
     await loginViaUI(page, username);
@@ -280,15 +290,15 @@ test.describe('Settings Workspace Git E2E', () => {
     await expandWorkspace(page, wsPath);
     await expect(page.getByText('当前分支:')).toBeVisible({ timeout: 35000 });
 
-    await expect(page.getByText('fix/bug')).toBeVisible();
+    const selectTrigger = page.locator('[data-slot="select-trigger"]');
+    await selectTrigger.click();
+    await expect(page.locator('[data-slot="select-popup"]')).toBeVisible();
 
-    const searchInput = page.locator('input[placeholder="搜索分支..."]');
-    await expect(searchInput).toBeVisible();
-
-    await searchInput.fill('feat');
-    await expect(page.getByText('feature/test')).toBeVisible();
-    await expect(page.getByText('feat/other')).toBeVisible();
-    await expect(page.getByText('fix/bug')).not.toBeVisible();
+    await expect(page.getByRole('option', { name: 'main' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'develop' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'feature/test' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'feat/other' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'fix/bug' })).toBeVisible();
 
     disconnect();
   });
