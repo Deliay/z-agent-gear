@@ -22,8 +22,8 @@ function mockQuery(overrides: Record<string, unknown> = {}) {
 
 function baseWorkspaces() {
   return [
-    { id: 'ws-1', userId: 'user-1', controllerId: 'ctrl-1', name: 'Project A', path: '/home/user/project-a', isEnabled: true, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
-    { id: 'ws-2', userId: 'user-1', controllerId: 'ctrl-1', name: 'Project B', path: '/home/user/project-b', isEnabled: false, createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    { id: 'ws-1', userId: 'user-1', controllerId: 'ctrl-1', name: 'Project A', path: '/home/user/project-a', isEnabled: true, defaultBranch: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+    { id: 'ws-2', userId: 'user-1', controllerId: 'ctrl-1', name: 'Project B', path: '/home/user/project-b', isEnabled: false, defaultBranch: null, createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
   ];
 }
 
@@ -98,5 +98,31 @@ describe('WorkspaceSection', () => {
 
     const toggles = screen.getAllByRole('button').filter((b) => b.className.includes('h-4 w-4'));
     expect(toggles.length).toBe(2);
+  });
+
+  it('should open AddWorkspaceDialog on add button click', () => {
+    mockUseQuery.mockReturnValue(mockQuery({ data: { controllerWorkspaces: baseWorkspaces() } }));
+    mockUseMutation.mockReturnValue([vi.fn()]);
+
+    render(<WorkspaceSection {...defaultProps} />);
+
+    const addButton = screen.getByText('添加');
+    fireEvent.click(addButton);
+
+    expect(screen.getByText('选择要添加到工作区的目录')).toBeDefined();
+  });
+
+  it('should expand workspace card on chevron click', () => {
+    mockUseQuery.mockReturnValue(mockQuery({ data: { controllerWorkspaces: baseWorkspaces() } }));
+    mockUseMutation.mockReturnValue([vi.fn()]);
+
+    render(<WorkspaceSection {...defaultProps} />);
+
+    const chevronButtons = screen.getAllByRole('button').filter(
+      (b) => b.querySelector('svg') !== null,
+    );
+    fireEvent.click(chevronButtons[0]);
+
+    expect(screen.getByText('检测 Git 状态中...')).toBeDefined();
   });
 });

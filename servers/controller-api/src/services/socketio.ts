@@ -8,6 +8,7 @@ import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
 import { folderBrowserService } from './folder-browser.js';
+import { gitBrowserService } from './git-browser.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 
 const CURRENT_MAJOR_VERSION = '1';
@@ -243,6 +244,16 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('fs:home:result', async (payload: { requestId: string; path: string }) => {
       if (!authenticated) return;
       await folderBrowserService.handleHomeResult(payload.requestId, payload.path);
+    });
+
+    socket.on('git:check:result', async (payload) => {
+      if (!authenticated) return;
+      await gitBrowserService.handleCheckResult(payload.requestId, payload);
+    });
+
+    socket.on('git:init:result', async (payload) => {
+      if (!authenticated) return;
+      await gitBrowserService.handleInitResult(payload.requestId, payload);
     });
 
     socket.on('error', (err) => {

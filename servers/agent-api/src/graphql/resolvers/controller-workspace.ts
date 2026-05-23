@@ -43,6 +43,20 @@ export const controllerWorkspaceResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    detectGitRepo: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await controllerWorkspaceService.detectGitRepo(args.controllerId, args.workspaceId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
   },
   Mutation: {
     createWorkspace: async (
@@ -96,6 +110,34 @@ export const controllerWorkspaceResolvers = {
         throw new GraphQLError('Workspace not found');
       }
       return result;
+    },
+    initGitRepo: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await controllerWorkspaceService.initGitRepo(args.controllerId, args.workspaceId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    setWorkspaceDefaultBranch: async (
+      _parent: unknown,
+      args: { id: string; defaultBranch: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await controllerWorkspaceService.setDefaultBranch(args.id, context.currentUser.id, args.defaultBranch);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
   },
 };

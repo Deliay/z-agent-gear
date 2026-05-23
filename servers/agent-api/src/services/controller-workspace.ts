@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
+import { createHash } from 'crypto';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
+import { getRedisClient } from '../middleware/redis.js';
 
 const MAX_WORKSPACES = 10;
 
@@ -67,6 +69,107 @@ export class ControllerWorkspaceService {
     return this.mapWorkspace(workspace.toObject());
   }
 
+  async setDefaultBranch(id: string, userId: string, defaultBranch: string): Promise<Record<string, unknown>> {
+    const workspace = await ControllerWorkspace.findOne({ _id: id, userId });
+    if (!workspace) {
+      throw new Error('Workspace not found');
+    }
+
+    workspace.defaultBranch = defaultBranch;
+    await workspace.save();
+
+    return this.mapWorkspace(workspace.toObject());
+  }
+
+  async detectGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    if (controller.status !== 'online') {
+      throw new Error('Controller is offline');
+    }
+
+    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId }).lean();
+    if (!workspace) {
+      throw new Error('Workspace not found');
+    }
+
+    const redis = getRedisClient();
+    const pathMd5 = createHash('md5').update(workspace.path).digest('hex');
+
+    const cached = await redis.get(`git:branches:${controllerId}:${pathMd5}`);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    const requestId = `git_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    await redis.publish('session:command', JSON.stringify({
+      type: 'git:check',
+      requestId,
+      controllerId,
+      path: workspace.path,
+    }));
+
+    for (let i = 0; i < 60; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await redis.get(`git:check:${requestId}`);
+      if (result) {
+        await redis.del(`git:check:${requestId}`);
+        return JSON.parse(result);
+      }
+    }
+
+    throw new Error('Git detection timeout');
+  }
+
+  async initGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<boolean> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    if (controller.status !== 'online') {
+      throw new Error('Controller is offline');
+    }
+
+    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId }).lean();
+    if (!workspace) {
+      throw new Error('Workspace not found');
+    }
+
+    const redis = getRedisClient();
+    const requestId = `git_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    await redis.publish('session:command', JSON.stringify({
+      type: 'git:init',
+      requestId,
+      controllerId,
+      path: workspace.path,
+    }));
+
+    for (let i = 0; i < 60; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await redis.get(`git:init:${requestId}`);
+      if (result) {
+        await redis.del(`git:init:${requestId}`);
+
+        const pathMd5 = createHash('md5').update(workspace.path).digest('hex');
+        await redis.del(`git:branches:${controllerId}:${pathMd5}`);
+
+        const parsed = JSON.parse(result);
+        if (!parsed.success) {
+          throw new Error(parsed.error || 'Git init failed');
+        }
+        return true;
+      }
+    }
+
+    throw new Error('Git init timeout');
+  }
+
   private mapWorkspace(workspace: Record<string, unknown>): Record<string, unknown> {
     return {
       id: (workspace._id as mongoose.Types.ObjectId).toString(),
@@ -75,6 +178,7 @@ export class ControllerWorkspaceService {
       name: workspace.name,
       path: workspace.path,
       isEnabled: workspace.isEnabled,
+      defaultBranch: workspace.defaultBranch || null,
       createdAt: (workspace.createdAt as Date).toISOString(),
       updatedAt: (workspace.updatedAt as Date).toISOString(),
     };

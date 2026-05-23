@@ -6,6 +6,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
     name: String!
     path: String!
     isEnabled: Boolean!
+    defaultBranch: String
     createdAt: String!
     updatedAt: String!
   }
@@ -14,6 +15,13 @@ export const controllerWorkspaceTypeDefs = `#graphql
     name: String!
     path: String!
     isDirectory: Boolean!
+  }
+
+  type GitRepoInfo {
+    isGitRepo: Boolean!
+    currentBranch: String
+    branches: [String!]
+    defaultBranch: String
   }
 
   input CreateWorkspaceInput {
@@ -25,6 +33,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
     controllerWorkspaces(controllerId: ID!): [ControllerWorkspace!]!
     browseFolder(controllerId: ID!, path: String): [FolderEntry!]!
     getHomeDirectory(controllerId: ID!): String
+    detectGitRepo(controllerId: ID!, workspaceId: ID!): GitRepoInfo!
   }
 
   extend type Mutation {
@@ -32,5 +41,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
     deleteWorkspace(id: ID!): Boolean!
     clearWorkspaces(controllerId: ID!): Boolean!
     toggleWorkspace(id: ID!): ControllerWorkspace!
+    initGitRepo(controllerId: ID!, workspaceId: ID!): Boolean!
+    setWorkspaceDefaultBranch(id: ID!, defaultBranch: String!): ControllerWorkspace!
   }
 `;

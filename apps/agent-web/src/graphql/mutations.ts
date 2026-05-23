@@ -259,3 +259,18 @@ export const REFRESH_ACP_CAPABILITIES = gql`
     }
   }
 `
+
+export const INIT_GIT_REPO = gql`
+  mutation InitGitRepo($controllerId: ID!, $workspaceId: ID!) {
+    initGitRepo(controllerId: $controllerId, workspaceId: $workspaceId)
+  }
+`
+
+export const SET_WORKSPACE_DEFAULT_BRANCH = gql`
+  mutation SetWorkspaceDefaultBranch($id: ID!, $defaultBranch: String!) {
+    setWorkspaceDefaultBranch(id: $id, defaultBranch: $defaultBranch) {
+      id
+      defaultBranch
+    }
+  }
+`

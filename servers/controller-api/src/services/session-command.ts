@@ -6,6 +6,7 @@ import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 import { folderBrowserService } from './folder-browser.js';
+import { gitBrowserService } from './git-browser.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
 const SESSION_MESSAGE_CHANNEL = 'session:message';
@@ -72,6 +73,10 @@ export class SessionCommandService {
             await this.handleAcpSetMode(command.sessionId, command.modeId as string);
           } else if (command.type === 'acp:set-model' && command.sessionId && command.modelId) {
             await this.handleAcpSetModel(command.sessionId, command.modelId as string);
+          } else if (command.type === 'git:check' && command.requestId && command.controllerId && command.path) {
+            await this.handleGitCheck(command.requestId, command.controllerId, command.path);
+          } else if (command.type === 'git:init' && command.requestId && command.controllerId && command.path) {
+            await this.handleGitInit(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'acp:cache:invalidate' && command.controllerId) {
             acpCapabilityDetector.invalidateCache(command.controllerId);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
@@ -265,6 +270,14 @@ export class SessionCommandService {
     if (!result) {
       console.error(`ACP set-model failed: session ${sessionId} not found in active sessions`);
     }
+  }
+
+  private async handleGitCheck(requestId: string, controllerId: string, path: string): Promise<void> {
+    await gitBrowserService.check(requestId, controllerId, path);
+  }
+
+  private async handleGitInit(requestId: string, controllerId: string, path: string): Promise<void> {
+    await gitBrowserService.init(requestId, controllerId, path);
   }
 
   private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string): Promise<void> {

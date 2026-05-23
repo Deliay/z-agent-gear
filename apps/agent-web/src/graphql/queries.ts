@@ -207,3 +207,14 @@ export const LIST_HISTORY_SESSIONS = gql`
     }
   }
 `
+
+export const DETECT_GIT_REPO = gql`
+  query DetectGitRepo($controllerId: ID!, $workspaceId: ID!) {
+    detectGitRepo(controllerId: $controllerId, workspaceId: $workspaceId) {
+      isGitRepo
+      currentBranch
+      branches
+      defaultBranch
+    }
+  }
+`

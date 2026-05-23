@@ -34,6 +34,17 @@ export interface ControllerWorkspaceData {
   updatedAt: string
 }
 
+export interface GitRepoInfoData {
+  isGitRepo: boolean
+  currentBranch?: string | null
+  branches?: string[] | null
+  defaultBranch?: string | null
+}
+
+export interface GitInitResultData {
+  success: boolean
+}
+
 export interface FolderEntryData {
   name: string
   path: string
@@ -219,4 +230,24 @@ export interface ListHistorySessionsQuery {
 
 export interface ImportHistorySessionsMutation {
   importHistorySessions: ImportSessionResultData[]
+}
+
+export interface GetControllerWorkspacesQuery {
+  controllerWorkspaces: ControllerWorkspaceData[]
+}
+
+export interface CreateWorkspaceMutation {
+  createWorkspace: ControllerWorkspaceData
+}
+
+export interface ToggleWorkspaceMutation {
+  toggleWorkspace: ControllerWorkspaceData
+}
+
+export interface SetWorkspaceDefaultBranchMutation {
+  setWorkspaceDefaultBranch: ControllerWorkspaceData
+}
+
+export interface DetectGitRepoQuery {
+  detectGitRepo: GitRepoInfoData
 }

@@ -8,6 +8,7 @@ import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.
 import { acpDetector } from './acp/detector.js';
 import { AcpSessionBridge } from './acp/bridge.js';
 import { AcpSyncBridge } from './acp/sync-bridge.js';
+import { gitHandler } from './git-handler.js';
 
 const CONTROLLER_VERSION = '1.0.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
@@ -85,6 +86,16 @@ interface FsBrowsePayload {
 
 interface FsHomePayload {
   requestId: string;
+}
+
+interface GitCheckPayload {
+  requestId: string;
+  path: string;
+}
+
+interface GitInitPayload {
+  requestId: string;
+  path: string;
 }
 
 export function connectToServer(
@@ -457,6 +468,16 @@ export function connectToServer(
     console.log(`FS home requested: requestId=${data.requestId}`);
     const homePath = homedir();
     socket.emit('fs:home:result', { requestId: data.requestId, path: homePath });
+  });
+
+  socket.on('git:check', async (data: GitCheckPayload) => {
+    const result = await gitHandler.check(data.path);
+    socket.emit('git:check:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:init', async (data: GitInitPayload) => {
+    const result = await gitHandler.init(data.path);
+    socket.emit('git:init:result', { requestId: data.requestId, ...result });
   });
 
   socket.on('disconnect', (reason) => {
