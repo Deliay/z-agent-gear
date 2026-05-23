@@ -12,7 +12,7 @@ import { sessionStreamRouter } from './routes/session-stream.js';
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: config.corsOrigin }));
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 

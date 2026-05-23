@@ -16,16 +16,21 @@ var mongodb = builder.AddMongoDB("mongodb")
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "mongodb";
+        service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo:7";
     });
 
 var redis = builder.AddRedis("redis")
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "redis";
+        service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
+
+var corsOrigin = builder.AddParameter("cors-origin");
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)

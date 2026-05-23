@@ -1,6 +1,6 @@
 services:
   mongodb:
-    image: "docker.io/mongo:7"
+    image: "registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo:7"
     environment:
       MONGO_INITDB_ROOT_USERNAME: "admin"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD}"
@@ -14,7 +14,7 @@ services:
     networks:
       - "aspire"
   redis:
-    image: "docker.io/library/redis:8.6"
+    image: "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6"
     command:
       - "-c"
       - "redis-server --requirepass $$REDIS_PASSWORD"
@@ -31,6 +31,7 @@ services:
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
+      CORS_ORIGIN: "${CORS_ORIGIN}"
       PORT: "8000"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
