@@ -181,6 +181,18 @@ export const GET_CONTROLLER_WORKSPACES_ENABLED = gql`
   }
 `
 
+export const GET_WORKSPACES = gql`
+  query GetWorkspaces {
+    workspaces {
+      id
+      controllerId
+      name
+      path
+      isEnabled
+    }
+  }
+`
+
 export const BROWSE_FOLDER = gql`
   query BrowseFolder($controllerId: ID!, $path: String) {
     browseFolder(controllerId: $controllerId, path: $path) {

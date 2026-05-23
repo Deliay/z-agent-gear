@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS } from '../../graphql/queries';
+import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES } from '../../graphql/queries';
 import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH } from '../../graphql/mutations';
 import type { GetControllerWorkspacesQuery, ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
@@ -47,11 +47,12 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const workspaces = data?.controllerWorkspaces ?? [];
 
   const refetchSessions = () => ({ query: GET_SESSIONS });
+  const refetchWorkspaces = () => ({ query: GET_WORKSPACES });
 
   const handleAdd = async (path: string) => {
     await createWorkspace({
       variables: { input: { controllerId, path } },
-      refetchQueries: [refetchSessions()],
+      refetchQueries: [refetchSessions(), refetchWorkspaces()],
     });
     await refetch();
     setShowAddDialog(false);
@@ -60,7 +61,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const handleDelete = async (id: string) => {
     await deleteWorkspace({
       variables: { id },
-      refetchQueries: [refetchSessions()],
+      refetchQueries: [refetchSessions(), refetchWorkspaces()],
     });
     await refetch();
   };
@@ -68,7 +69,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const handleClear = async () => {
     await clearWorkspaces({
       variables: { controllerId },
-      refetchQueries: [refetchSessions()],
+      refetchQueries: [refetchSessions(), refetchWorkspaces()],
     });
     await refetch();
     setConfirmClear(false);
@@ -77,7 +78,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const handleToggle = async (id: string) => {
     await toggleWorkspace({
       variables: { id },
-      refetchQueries: [refetchSessions()],
+      refetchQueries: [refetchSessions(), refetchWorkspaces()],
     });
     await refetch();
   };

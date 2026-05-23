@@ -151,6 +151,10 @@ export interface GetControllerWorkspacesQuery {
   controllerWorkspaces: ControllerWorkspaceData[]
 }
 
+export interface GetWorkspacesQuery {
+  workspaces: ControllerWorkspaceData[]
+}
+
 export interface GetProvidersQuery {
   providers: ProviderData[]
 }

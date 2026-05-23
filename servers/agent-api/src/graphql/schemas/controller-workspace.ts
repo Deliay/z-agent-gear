@@ -31,6 +31,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
 
   extend type Query {
     controllerWorkspaces(controllerId: ID!): [ControllerWorkspace!]!
+    workspaces: [ControllerWorkspace!]!
     browseFolder(controllerId: ID!, path: String): [FolderEntry!]!
     getHomeDirectory(controllerId: ID!): String
     detectGitRepo(controllerId: ID!, workspaceId: ID!): GitRepoInfo!

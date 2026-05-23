@@ -15,6 +15,16 @@ export const controllerWorkspaceResolvers = {
       }
       return controllerWorkspaceService.findAllByController(args.controllerId, context.currentUser.id);
     },
+    workspaces: async (
+      _parent: unknown,
+      _args: unknown,
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return controllerWorkspaceService.findAllByUser(context.currentUser.id);
+    },
     browseFolder: async (
       _parent: unknown,
       args: { controllerId: string; path?: string },

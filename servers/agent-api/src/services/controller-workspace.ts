@@ -7,6 +7,13 @@ import { getRedisClient } from '../middleware/redis.js';
 const MAX_WORKSPACES = 10;
 
 export class ControllerWorkspaceService {
+  async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
+    const workspaces = await ControllerWorkspace.find({ userId })
+      .sort({ name: 1 })
+      .lean();
+    return workspaces.map(this.mapWorkspace.bind(this));
+  }
+
   async findAllByController(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
     const workspaces = await ControllerWorkspace.find({ controllerId, userId })
       .sort({ name: 1 })

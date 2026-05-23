@@ -46,6 +46,14 @@ const WORKSPACES_QUERY = `
   }
 `;
 
+const ALL_WORKSPACES_QUERY = `
+  query AllWorkspaces {
+    workspaces {
+      id userId controllerId name path isEnabled defaultBranch createdAt updatedAt
+    }
+  }
+`;
+
 const CREATE_WORKSPACE = `
   mutation CreateWorkspace($input: CreateWorkspaceInput!) {
     createWorkspace(input: $input) {
@@ -189,6 +197,13 @@ describe('Controller Workspace API', () => {
       expect(body.errors[0].message).toBe('Not authenticated');
     });
 
+    it('should reject workspaces query without token', async () => {
+      const res = await gqlRequest(ALL_WORKSPACES_QUERY);
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
     it('should reject browseFolder query without token', async () => {
       const res = await gqlRequest(BROWSE_FOLDER, { controllerId });
       const body = await res.json();
@@ -296,6 +311,21 @@ describe('Controller Workspace API', () => {
           expect(workspaces[i].name.localeCompare(workspaces[i - 1].name)).toBeGreaterThanOrEqual(0);
         }
       }
+    });
+  });
+
+  describe('workspaces query', () => {
+    it('should return all workspaces across controllers', async () => {
+      const res = await gqlRequest(ALL_WORKSPACES_QUERY, undefined, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(Array.isArray(body.data.workspaces)).toBe(true);
+    });
+
+    it('should include workspaces from previous tests', async () => {
+      const res = await gqlRequest(ALL_WORKSPACES_QUERY, undefined, authToken);
+      const body = await res.json();
+      expect(body.data.workspaces.length).toBeGreaterThanOrEqual(1);
     });
   });
 

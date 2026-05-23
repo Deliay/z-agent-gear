@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { NavLink, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_SESSIONS, GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '../graphql/queries';
+import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { GetSessionsQuery, GetControllersQuery, GetControllerWorkspacesQuery, CreateSessionMutation } from '../graphql/types';
+import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 
 interface SidebarProps {
@@ -30,16 +30,29 @@ export default function Sidebar({ username }: SidebarProps) {
   const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
     pollInterval: 15000,
   });
-  const { data: workspacesData } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
-    variables: { controllerId: '' },
-    skip: true,
+  const { data: workspacesData } = useQuery<GetWorkspacesQuery>(GET_WORKSPACES, {
+    pollInterval: 15000,
   });
 
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
   const sessions = sessionsData?.sessions ?? [];
   const controllers = controllersData?.controllers ?? [];
-  const allWorkspaces = workspacesData?.controllerWorkspaces ?? [];
+  const allWorkspaces = workspacesData?.workspaces ?? [];
+
+  const getWorkspacePaths = (controllerId: string) => {
+    const fromSessions = new Set(
+      sessions
+        .filter((s) => s.cwd && s.controllerId === controllerId)
+        .map((s) => s.cwd!)
+    );
+    const fromConfig = new Set(
+      allWorkspaces
+        .filter((w) => w.controllerId === controllerId && w.isEnabled)
+        .map((w) => w.path)
+    );
+    return new Set([...fromSessions, ...fromConfig]);
+  };
 
   const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
     try {
@@ -124,11 +137,7 @@ export default function Sidebar({ username }: SidebarProps) {
             const isOffline = controller.status !== 'online';
 
             // Get unique workspace paths for this controller
-            const workspacePaths = new Set(
-              controllerSessions
-                .filter((s) => s.cwd)
-                .map((s) => s.cwd!)
-            );
+            const workspacePaths = getWorkspacePaths(controller.id);
 
             return (
               <li key={controller.id}>
