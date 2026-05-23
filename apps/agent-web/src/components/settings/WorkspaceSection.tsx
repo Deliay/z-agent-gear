@@ -84,7 +84,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       setGitStates((prev) => ({ ...prev, [wsId]: { loading: true } }));
 
       try {
-        const { data: gitData } = await refetchGitState(wsId);
+        const gitData = await refetchGitState(wsId);
         setGitStates((prev) => ({
           ...prev,
           [wsId]: { loading: false, data: gitData },
@@ -99,9 +99,11 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   };
 
   const refetchGitState = async (wsId: string) => {
-    const result = await fetch(`/api/graphql`, {
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const token = localStorage.getItem('auth_token');
+    const result = await fetch(`${apiBase}/graphql`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({
         query: `query DetectGitRepo($controllerId: ID!, $workspaceId: ID!) {
           detectGitRepo(controllerId: $controllerId, workspaceId: $workspaceId) {
