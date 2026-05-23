@@ -28,6 +28,7 @@ var redis = builder.AddRedis("redis")
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("CORS_ORIGIN", "*")
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
