@@ -17,7 +17,16 @@ export async function run(): Promise<void> {
     if (batch.length === 0) break;
 
     const operations = batch.map((msg) => {
-      const parsed = JSON.parse(msg.content as string);
+      let parsed;
+      try {
+        parsed = JSON.parse(msg.content as string);
+      } catch {
+        const rawText = String(msg.content ?? '');
+        parsed = {
+          sessionUpdate: msg.direction === 'input' ? 'user_message_chunk' : 'agent_message_chunk',
+          content: { type: 'text', text: rawText },
+        };
+      }
       return {
         updateOne: {
           filter: { _id: msg._id },
