@@ -1,3 +1,4 @@
+import GraphQLJSON from 'graphql-type-json';
 import { authResolvers } from './auth.js';
 import { providerResolvers } from './provider.js';
 import { modelResolvers } from './model.js';
@@ -6,6 +7,7 @@ import { controllerWorkspaceResolvers } from './controller-workspace.js';
 import { sessionResolvers } from './session.js';
 
 export const resolvers = {
+  JSON: GraphQLJSON,
   Query: {
     ...authResolvers.Query,
     ...providerResolvers.Query,
