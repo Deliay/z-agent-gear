@@ -76,7 +76,7 @@ test.describe('Settings Controller Config Page E2E', () => {
     await loginViaUI(page, username);
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    const gearIcon = sidebar.locator('button[title="控制器配置"]');
+    const gearIcon = sidebar.locator('[role="button"][title="控制器配置"]');
     await expect(gearIcon).toBeVisible({ timeout: 5000 });
     await gearIcon.click();
 
@@ -212,7 +212,7 @@ test.describe('Settings Controller Config Page E2E', () => {
     const controllerBtn = sidebar.getByText(/e2e-cfg-host/).first();
     await expect(controllerBtn).toBeVisible({ timeout: 5000 });
 
-    const gearIcon = sidebar.locator('button[title="控制器配置"]');
+    const gearIcon = sidebar.locator('[role="button"][title="控制器配置"]');
     await gearIcon.click();
 
     await expect(page).toHaveURL(/settings\?controllerId=/);
