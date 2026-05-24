@@ -441,9 +441,86 @@ describe('Controller Online Status', () => {
     const deletedKey = keysBody.data.controllerKeys.find((k: { id: string }) => k.id === testKeyId);
     expect(deletedKey).toBeUndefined();
 
-    // Controller should be deleted
+// Controller should be deleted
     const ctrlRes = await gqlRequest(CONTROLLER_QUERY, { id: testControllerId }, authToken);
     const ctrlBody = await ctrlRes.json();
     expect(ctrlBody.data.controller).toBeNull();
+    });
   });
-});
+
+  describe('setControllerWorktreeDir mutation', () => {
+    const SET_WORKTREE_DIR = `
+      mutation SetControllerWorktreeDir($controllerId: ID!, $worktreeDir: String!) {
+        setControllerWorktreeDir(controllerId: $controllerId, worktreeDir: $worktreeDir) {
+          id worktreeDir
+        }
+      }
+    `;
+
+    const CONTROLLER_QUERY_WITH_WORKTREE = `
+      query Controller($id: ID!) {
+        controller(id: $id) {
+          id name hostname type status keyId version worktreeDir lastHeartbeatAt createdAt updatedAt
+        }
+      }
+    `;
+
+    it('should reject mutation without auth', async () => {
+      const res = await gqlRequest(SET_WORKTREE_DIR, {
+        controllerId: '000000000000000000000000',
+        worktreeDir: '/tmp/worktrees',
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject mutation for non-existent controller', async () => {
+      const res = await gqlRequest(
+        SET_WORKTREE_DIR,
+        { controllerId: '000000000000000000000000', worktreeDir: '/tmp/worktrees' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should set worktreeDir on controller and persist', async () => {
+      const createRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `wtd-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const testRawKey = createBody.data.createControllerKey.rawKey;
+
+      const client = createWSClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: testRawKey, hostname: 'wtd-host', version: '1.0.0' });
+      const regData = await registered;
+      const testControllerId = regData.controllerId;
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const res = await gqlRequest(
+        SET_WORKTREE_DIR,
+        { controllerId: testControllerId, worktreeDir: '/home/user/worktrees' },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setControllerWorktreeDir.id).toBe(testControllerId);
+      expect(body.data.setControllerWorktreeDir.worktreeDir).toBe('/home/user/worktrees');
+
+      const queryRes = await gqlRequest(
+        CONTROLLER_QUERY_WITH_WORKTREE,
+        { id: testControllerId },
+        authToken,
+      );
+      const queryBody = await queryRes.json();
+      expect(queryBody.data.controller.worktreeDir).toBe('/home/user/worktrees');
+
+      client.disconnect();
+    });
+  });

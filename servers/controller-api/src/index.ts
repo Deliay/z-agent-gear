@@ -10,6 +10,8 @@ import { commandService } from './services/command.js';
 import { sessionCommandService } from './services/session-command.js';
 import { folderBrowserService } from './services/folder-browser.js';
 import { gitBrowserService } from './services/git-browser.js';
+import { worktreeService } from './services/worktree-service.js';
+import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { Session } from './models/session.js';
 
 const app = express();
@@ -48,6 +50,8 @@ async function start() {
   sessionCommandService.start(io);
   folderBrowserService.start(io);
   gitBrowserService.start(io);
+  worktreeService.start(io);
+  fsMkdirService.start(io);
 
   httpServer.listen(config.port, () => {
     console.log(`Controller API running at http://localhost:${config.port}`);

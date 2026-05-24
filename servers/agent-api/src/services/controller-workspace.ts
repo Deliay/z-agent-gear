@@ -162,7 +162,7 @@ export class ControllerWorkspaceService {
         if (!parsed.success) {
           throw new Error(parsed.error || 'Failed to create folder');
         }
-        return { name: parsed.name, path: parsed.path };
+        return { name: parsed.name, path: parsed.path, isDirectory: true };
       }
     }
 

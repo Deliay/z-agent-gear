@@ -917,3 +917,152 @@ describe('Session Creation with WorkspaceId', () => {
     });
   });
 });
+
+describe('createFolder mutation', () => {
+  const CREATE_FOLDER = `
+    mutation CreateFolder($controllerId: ID!, $parentPath: String!, $folderName: String!) {
+      createFolder(controllerId: $controllerId, parentPath: $parentPath, folderName: $folderName) {
+        name path isDirectory
+      }
+    }
+  `;
+
+  beforeAll(async () => {
+    if (!authToken) {
+      authToken = await signup();
+      const ctrl = await createKeyAndRegisterController(authToken);
+      rawKey = ctrl.rawKey;
+      controllerId = ctrl.controllerId;
+    }
+  });
+
+  it('should reject createFolder without auth', async () => {
+    const res = await gqlRequest(CREATE_FOLDER, {
+      controllerId: '000000000000000000000000',
+      parentPath: '/tmp',
+      folderName: 'new-folder',
+    });
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('should reject createFolder for non-existent controller', async () => {
+    const res = await gqlRequest(
+      CREATE_FOLDER,
+      { controllerId: '000000000000000000000000', parentPath: '/tmp', folderName: 'new-folder' },
+      authToken,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toBe('Controller not found');
+  });
+
+  it('should reject createFolder for offline controller', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `mkdir-offline-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-offline', version: '1.0.0' });
+    const regData = await registered;
+    client.disconnect();
+    await new Promise((r) => setTimeout(r, 300));
+
+    const res = await gqlRequest(
+      CREATE_FOLDER,
+      { controllerId: regData.controllerId, parentPath: '/tmp', folderName: 'new-folder' },
+      authToken,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toBe('Controller is offline');
+  });
+
+  it('should create a folder via WebSocket protocol and return FolderEntry', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `mkdir-ok-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-ok', version: '1.0.0' });
+    const regData = await registered;
+
+    const fsMkdir = waitForEvent<{
+      requestId: string;
+      parentPath: string;
+      folderName: string;
+    }>(client, 'fs:mkdir', 10000);
+
+    const responsePromise = gqlRequest(
+      CREATE_FOLDER,
+      { controllerId: regData.controllerId, parentPath: '/home/user', folderName: 'my-project' },
+      authToken,
+    );
+
+    const mkdirData = await fsMkdir;
+    expect(mkdirData.parentPath).toBe('/home/user');
+    expect(mkdirData.folderName).toBe('my-project');
+
+    client.emit('fs:mkdir:result', {
+      requestId: mkdirData.requestId,
+      success: true,
+      name: 'my-project',
+      path: '/home/user/my-project',
+      isDirectory: true,
+    });
+
+    const res = await responsePromise;
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.createFolder.name).toBe('my-project');
+    expect(body.data.createFolder.path).toBe('/home/user/my-project');
+    expect(body.data.createFolder.isDirectory).toBe(true);
+
+    client.disconnect();
+  }, 30000);
+
+  it('should return GraphQL error when folder creation fails via WebSocket', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `mkdir-fail-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-fail', version: '1.0.0' });
+    const regData = await registered;
+
+    const fsMkdir = waitForEvent<{
+      requestId: string;
+    }>(client, 'fs:mkdir', 10000);
+
+    const responsePromise = gqlRequest(
+      CREATE_FOLDER,
+      { controllerId: regData.controllerId, parentPath: '/home/user', folderName: 'existing-dir' },
+      authToken,
+    );
+
+    const mkdirData = await fsMkdir;
+
+    client.emit('fs:mkdir:result', {
+      requestId: mkdirData.requestId,
+      success: false,
+      error: 'EEXIST: file already exists',
+    });
+
+    const res = await responsePromise;
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toBe('EEXIST: file already exists');
+
+    client.disconnect();
+  }, 30000);
+});
