@@ -25,9 +25,11 @@ test.describe('Session Status Transitions', () => {
     const sessionId = await createSession(page, controllerId, token, ws1.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    // Initial state should be connecting or creating
+    // Wait for initial status to appear (may be creating/connecting or already idling if SSE is fast)
+    await expect(page.locator(statusBadge())).toBeVisible({ timeout: 5000 });
     const initialBadge = await page.locator(statusBadge()).first().textContent();
-    expect(['creating', 'connecting']).toContain(initialBadge);
+    // Allow for idling if session started quickly
+    expect(['creating', 'connecting', 'idling']).toContain(initialBadge);
 
     // Input should be disabled
     await expect(page.locator('textarea')).toBeDisabled();
