@@ -65,7 +65,7 @@ describe('AcpSyncBridge', () => {
       expect(mc().initialize).toHaveBeenCalledWith({
         protocolVersion: 1,
         clientCapabilities: {},
-        clientInfo: { name: 'agent-controller', version: '1.0.0' },
+        clientInfo: { name: 'agent-gear', version: '1.0.0' },
       });
     });
 

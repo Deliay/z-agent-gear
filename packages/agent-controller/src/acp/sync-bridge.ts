@@ -50,7 +50,7 @@ export class AcpSyncBridge implements acp.Client {
     const initPromise = this.connection.initialize({
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {},
-      clientInfo: { name: 'agent-controller', version: '1.0.0' },
+      clientInfo: { name: 'agent-gear', version: '1.0.0' },
     });
 
     await withTimeout(

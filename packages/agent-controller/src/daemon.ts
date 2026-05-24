@@ -2,7 +2,7 @@ import { writeFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const PID_FILE = join(tmpdir(), 'agent-controller.pid');
+const PID_FILE = join(tmpdir(), 'agent-gear.pid');
 
 export function writePid(): void {
   writeFileSync(PID_FILE, process.pid.toString(), 'utf-8');

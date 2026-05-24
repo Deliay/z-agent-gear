@@ -1,10 +1,10 @@
 {
-  "name": "zag",
+  "name": "agent-gear",
   "version": "1.0.0",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "main": "dist/index.js",
   "bin": {
-    "zag": "dist/index.js"
+    "agent-gear": "dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
