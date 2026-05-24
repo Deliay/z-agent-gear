@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import path from 'path';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -17,7 +18,13 @@ export class SessionService {
     return this.mapSession(session);
   }
 
-  async create(userId: string, input: { controllerId: string; acpServerType: string; workspaceId: string }): Promise<Record<string, unknown>> {
+  async create(userId: string, input: {
+    controllerId: string;
+    acpServerType: string;
+    workspaceId: string;
+    enableWorktree?: boolean;
+    worktreeBranchSuffix?: string;
+  }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
@@ -28,23 +35,67 @@ export class SessionService {
       throw new Error('Workspace not found');
     }
 
+    let cwd = workspace.path;
+    let worktreePath: string | undefined;
+    let worktreeBranch: string | undefined;
+    const redis = getRedisClient();
+
+    if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const resolvedWorktreeDir = worktreeDir.replace(/^~/, process.env.HOME || '/root');
+      const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
+      const wtPath = path.join(resolvedWorktreeDir, workspace.name, input.worktreeBranchSuffix);
+
+      const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId,
+        controllerId: input.controllerId,
+        repoPath: workspace.path,
+        worktreePath: wtPath,
+        branch,
+      }));
+
+      let added = false;
+      for (let i = 0; i < 30; i++) {
+        const result = await redis.get(`git:worktree:add:${requestId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          if (!parsed.success) {
+            throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
+          }
+          await redis.del(`git:worktree:add:${requestId}`);
+          cwd = wtPath;
+          worktreePath = wtPath;
+          worktreeBranch = branch;
+          added = true;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (!added) {
+        throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
+      }
+    }
+
     const session = await Session.create({
       userId,
       controllerId: input.controllerId,
       controllerName: controller.name,
       acpServerType: input.acpServerType as 'opencode',
       status: 'creating',
-      cwd: workspace.path,
+      cwd,
+      worktreePath,
+      worktreeBranch,
     });
 
     // Notify controller-api to start ACP session via Redis Pub/Sub
-    const redis = getRedisClient();
     await redis.publish('session:command', JSON.stringify({
       type: 'acp:start',
       sessionId: session._id.toString(),
       controllerId: input.controllerId,
       serverType: input.acpServerType,
-      cwd: workspace.path,
+      cwd,
     }));
 
     return this.mapSession(session.toObject());
@@ -157,14 +208,91 @@ export class SessionService {
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
-    // Notify controller-api to stop ACP session before deleting
     const redis = getRedisClient();
+    const session = await Session.findOne({ _id: id, userId }).lean();
+    if (!session) return false;
+
+    // Worktree cleanup if applicable
+    if ((session as any).worktreePath && (session as any).worktreeBranch) {
+      const workspace = await ControllerWorkspace.findOne({
+        controllerId: session.controllerId,
+        userId,
+      }).lean();
+      const repoPath = workspace?.path || session.cwd || '';
+
+      // 1. git:status — detect if clean
+      const statusReqId = `gs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish('session:command', JSON.stringify({
+        type: 'git:status',
+        requestId: statusReqId,
+        controllerId: session.controllerId.toString(),
+        path: (session as any).worktreePath,
+      }));
+
+      let isClean = false;
+      for (let i = 0; i < 30; i++) {
+        const result = await redis.get(`git:status:${statusReqId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          isClean = parsed.isClean === true;
+          await redis.del(`git:status:${statusReqId}`);
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      // 2. non-clean → git:commit
+      if (!isClean) {
+        const commitReqId = `gc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        await redis.publish('session:command', JSON.stringify({
+          type: 'git:commit',
+          requestId: commitReqId,
+          controllerId: session.controllerId.toString(),
+          path: (session as any).worktreePath,
+          message: 'chore: workspace cleanup code stash',
+        }));
+        for (let i = 0; i < 30; i++) {
+          const result = await redis.get(`git:commit:${commitReqId}`);
+          if (result) {
+            await redis.del(`git:commit:${commitReqId}`);
+            break;
+          }
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      // 3. git:worktree:remove
+      const rmReqId = `wr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish('session:command', JSON.stringify({
+        type: 'git:worktree:remove',
+        requestId: rmReqId,
+        controllerId: session.controllerId.toString(),
+        repoPath,
+        worktreePath: (session as any).worktreePath,
+      }));
+
+      for (let i = 0; i < 30; i++) {
+        const result = await redis.get(`git:worktree:remove:${rmReqId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          await redis.del(`git:worktree:remove:${rmReqId}`);
+          if (!parsed.success) {
+            throw new Error(`WORKTREE_REMOVE_FAILED: ${parsed.error}`);
+          }
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+
+    // Stop ACP session
     await redis.publish('session:command', JSON.stringify({
       type: 'acp:stop',
       sessionId: id,
       reason: 'user_delete',
     }));
 
+    // Delete from DB
     const result = await Session.findOneAndDelete({ _id: id, userId });
     if (result) {
       await AcpMessage.deleteMany({ sessionId: id });
@@ -309,6 +437,8 @@ export class SessionService {
       title: session.title || 'New Session',
       externalSessionId: session.externalSessionId || null,
       cwd: session.cwd || null,
+      worktreePath: (session as any).worktreePath || null,
+      worktreeBranch: (session as any).worktreeBranch || null,
       modes: session.modes || [],
       currentModeId: session.currentModeId || null,
       currentModel: session.currentModel || null,

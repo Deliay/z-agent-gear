@@ -10,6 +10,8 @@ import { acpCapabilityDetector } from './acp-capability-detector.js';
 import { folderBrowserService } from './folder-browser.js';
 import { gitBrowserService } from './git-browser.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
+import { worktreeService } from './worktree-service.js';
+import { fsMkdirService } from './fs-mkdir-service.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -254,6 +256,32 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('git:init:result', async (payload) => {
       if (!authenticated) return;
       await gitBrowserService.handleInitResult(payload.requestId, payload);
+    });
+
+    // Worktree / Git extension result events
+    socket.on('fs:mkdir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await fsMkdirService.handleMkdirResult(payload.requestId, payload);
+    });
+
+    socket.on('git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleAddResult(payload.requestId, payload);
+    });
+
+    socket.on('git:worktree:remove:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleRemoveResult(payload.requestId, payload);
+    });
+
+    socket.on('git:status:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleStatusResult(payload.requestId, payload);
+    });
+
+    socket.on('git:commit:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleCommitResult(payload.requestId, payload);
     });
 
     socket.on('error', (err) => {

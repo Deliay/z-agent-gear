@@ -331,4 +331,68 @@ describe('ControllerWorkspaceService', () => {
       ).rejects.toThrow('Workspace not found');
     });
   });
+
+  describe('createFolder', () => {
+    it('should create folder via redis pub/sub', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: 'ctrl-1',
+          status: 'online',
+        }),
+      } as never);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, name: 'new-folder', path: '/home/user/new-folder' }));
+
+      const result = await controllerWorkspaceService.createFolder('ctrl-1', 'user-1', '/home/user', 'new-folder');
+
+      expect(mockRedisClient.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"fs:mkdir"'),
+      );
+      expect(result.name).toBe('new-folder');
+      expect(result.path).toBe('/home/user/new-folder');
+    });
+
+    it('should throw when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(
+        controllerWorkspaceService.createFolder('ctrl-1', 'user-1', '/home/user', 'new-folder'),
+      ).rejects.toThrow('Controller not found');
+    });
+
+    it('should throw when controller offline', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: 'ctrl-1',
+          status: 'offline',
+        }),
+      } as never);
+
+      await expect(
+        controllerWorkspaceService.createFolder('ctrl-1', 'user-1', '/home/user', 'new-folder'),
+      ).rejects.toThrow('Controller is offline');
+    });
+
+    it('should throw on mkdir failure', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: 'ctrl-1',
+          status: 'online',
+        }),
+      } as never);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'permission denied' }));
+
+      await expect(
+        controllerWorkspaceService.createFolder('ctrl-1', 'user-1', '/home/user', 'new-folder'),
+      ).rejects.toThrow('permission denied');
+    });
+  });
 });

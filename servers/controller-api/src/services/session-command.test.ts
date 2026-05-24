@@ -46,10 +46,27 @@ vi.mock('./folder-browser.js', () => ({
   },
 }));
 
+vi.mock('./worktree-service.js', () => ({
+  worktreeService: {
+    handleAdd: vi.fn(),
+    handleRemove: vi.fn(),
+    handleStatus: vi.fn(),
+    handleCommit: vi.fn(),
+  },
+}));
+
+vi.mock('./fs-mkdir-service.js', () => ({
+  fsMkdirService: {
+    handleMkdir: vi.fn(),
+  },
+}));
+
 import { SessionCommandService } from './session-command.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { worktreeService} from './worktree-service.js';
+import { fsMkdirService } from './fs-mkdir-service.js';
 
 function createMockRedis() {
   const messageHandlers: ((channel: string, message: string) => void)[] = [];
@@ -161,6 +178,116 @@ describe('SessionCommandService', () => {
       });
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('fs:mkdir command', () => {
+    it('should route fs:mkdir to fsMkdirService.handleMkdir', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'fs:mkdir',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        parentPath: '/home/user',
+        folderName: 'new-folder',
+      }));
+
+      await vi.waitFor(() => {
+        expect(fsMkdirService.handleMkdir).toHaveBeenCalledWith('req-1', 'ctrl-1', '/home/user', 'new-folder');
+      });
+    });
+  });
+
+  describe('git:worktree:add command', () => {
+    it('should route git:worktree:add to worktreeService.handleAdd', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleAdd).toHaveBeenCalledWith('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch');
+      });
+    });
+  });
+
+  describe('git:worktree:remove command', () => {
+    it('should route git:worktree:remove to worktreeService.handleRemove', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:remove',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleRemove).toHaveBeenCalledWith('req-1', 'ctrl-1', '/repo', '/wt');
+      });
+    });
+  });
+
+  describe('git:status command', () => {
+    it('should route git:status to worktreeService.handleStatus', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:status',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        path: '/wt',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleStatus).toHaveBeenCalledWith('req-1', 'ctrl-1', '/wt');
+      });
+    });
+  });
+
+  describe('git:commit command', () => {
+    it('should route git:commit to worktreeService.handleCommit', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:commit',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        path: '/wt',
+        message: 'chore: stash',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleCommit).toHaveBeenCalledWith('req-1', 'ctrl-1', '/wt', 'chore: stash');
+      });
     });
   });
 });

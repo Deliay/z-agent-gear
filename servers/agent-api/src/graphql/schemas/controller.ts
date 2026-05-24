@@ -38,6 +38,7 @@ export const controllerTypeDefs = `#graphql
     keyId: ID!
     version: String!
     lastHeartbeatAt: String
+    worktreeDir: String
     createdAt: String!
     updatedAt: String!
   }
@@ -68,5 +69,6 @@ export const controllerTypeDefs = `#graphql
     renameControllerKey(input: RenameInput!): ControllerKey!
     renameController(input: RenameInput!): Controller!
     unbindController(id: ID!): Boolean!
+    setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
   }
 `;

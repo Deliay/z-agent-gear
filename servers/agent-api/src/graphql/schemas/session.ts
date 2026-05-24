@@ -48,6 +48,8 @@ export const sessionTypeDefs = `#graphql
     title: String
     externalSessionId: String
     cwd: String
+    worktreePath: String
+    worktreeBranch: String
     modes: [AgentMode!]
     currentModeId: String
     currentModel: AgentModelInfo
@@ -105,6 +107,8 @@ export const sessionTypeDefs = `#graphql
     controllerId: ID!
     acpServerType: AcpServerType! = opencode
     workspaceId: ID!
+    enableWorktree: Boolean = false
+    worktreeBranchSuffix: String
   }
 
   extend type Query {

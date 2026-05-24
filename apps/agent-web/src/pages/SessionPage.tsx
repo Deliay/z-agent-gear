@@ -177,7 +177,7 @@ export default function SessionPage() {
     return () => clearTimeout(timer);
   }, [errorToast]);
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
+  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string) => {
     try {
       const { data } = await createSession({
         variables: {
@@ -185,6 +185,8 @@ export default function SessionPage() {
             controllerId,
             acpServerType,
             workspaceId,
+            enableWorktree: enableWorktree || false,
+            worktreeBranchSuffix: worktreeBranchSuffix || null,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],
@@ -332,6 +334,7 @@ export default function SessionPage() {
           status: sessionData.session.status,
           externalSessionId: sessionData.session.externalSessionId,
           cwd: sessionData.session.cwd,
+          worktreePath: (sessionData.session as any).worktreePath || null,
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,

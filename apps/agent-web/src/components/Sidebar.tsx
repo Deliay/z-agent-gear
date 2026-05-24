@@ -54,10 +54,24 @@ export default function Sidebar({ username }: SidebarProps) {
     return new Set([...fromSessions, ...fromConfig]);
   };
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
+  const handleCreateSession = async (
+    controllerId: string,
+    acpServerType: string,
+    workspaceId: string,
+    enableWorktree?: boolean,
+    worktreeBranchSuffix?: string,
+  ) => {
     try {
       const { data } = await createSession({
-        variables: { input: { controllerId, acpServerType, workspaceId } },
+        variables: {
+          input: {
+            controllerId,
+            acpServerType,
+            workspaceId,
+            enableWorktree: enableWorktree || false,
+            worktreeBranchSuffix: worktreeBranchSuffix || null,
+          },
+        },
         refetchQueries: [{ query: GET_SESSIONS }],
       });
       if (data?.createSession?.session?.id) {
@@ -209,7 +223,18 @@ export default function Sidebar({ username }: SidebarProps) {
                                           : 'text-gray-300 hover:bg-gray-800 hover:text-white'
                                       }`}
                                     >
-                                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                      {(session as any).worktreePath ? (
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-blue-400">
+                                          <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                                          <path d="M21 3h-3a2 2 0 0 0-2 2v3" />
+                                          <path d="M21 15v3a2 2 0 0 1-2 2h-3" />
+                                          <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                                          <polyline points="7 9 12 4 17 9" />
+                                          <polyline points="7 15 12 20 17 15" />
+                                        </svg>
+                                      ) : (
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                      )}
                                       <div className="min-w-0 flex-1">
                                         <div className="truncate">
                                           {session.title || 'New Session'}

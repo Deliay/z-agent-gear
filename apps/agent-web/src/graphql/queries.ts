@@ -70,6 +70,8 @@ export const GET_SESSIONS = gql`
       title
       externalSessionId
       cwd
+      worktreePath
+      worktreeBranch
       createdAt
       updatedAt
       endedAt
@@ -89,6 +91,8 @@ export const GET_SESSION = gql`
       title
       externalSessionId
       cwd
+      worktreePath
+      worktreeBranch
       modes {
         id
         name

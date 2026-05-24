@@ -135,6 +135,20 @@ export const controllerWorkspaceResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    createFolder: async (
+      _parent: unknown,
+      args: { controllerId: string; parentPath: string; folderName: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await controllerWorkspaceService.createFolder(args.controllerId, context.currentUser.id, args.parentPath, args.folderName);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
     setWorkspaceDefaultBranch: async (
       _parent: unknown,
       args: { id: string; defaultBranch: string },

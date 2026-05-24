@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@apollo/client/react';
+import { useQuery, useMutation } from '@apollo/client/react';
 import { BROWSE_FOLDER, GET_HOME_DIRECTORY } from '../../graphql/queries';
+import { CREATE_FOLDER } from '../../graphql/mutations';
 import type { FolderEntryData } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 interface DirectoryPickerProps {
   controllerId: string;
@@ -13,6 +15,9 @@ interface DirectoryPickerProps {
 export default function DirectoryPicker({ controllerId, onSelect, onClose }: DirectoryPickerProps) {
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [createFolder] = useMutation(CREATE_FOLDER);
 
   const { data: homeData, loading: homeLoading } = useQuery<{ getHomeDirectory: string | null }>(
     GET_HOME_DIRECTORY,
@@ -46,6 +51,27 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
     }
   };
 
+  const handleCreateFolder = async () => {
+    if (!newFolderName.trim() || !currentPath) return;
+    try {
+      const { data } = await createFolder({
+        variables: {
+          controllerId,
+          parentPath: currentPath,
+          folderName: newFolderName.trim(),
+        },
+      });
+      if (data?.createFolder?.path) {
+        setHistory((prev) => [...prev, currentPath!]);
+        setCurrentPath(data.createFolder.path);
+      }
+    } catch (err) {
+      console.error('Failed to create folder:', err);
+    }
+    setShowNewFolder(false);
+    setNewFolderName('');
+  };
+
   const handleSelect = () => {
     if (currentPath) {
       onSelect(currentPath);
@@ -68,6 +94,13 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
         <div className="flex-1 truncate text-sm text-muted-foreground">
           {currentPath || '...'}
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowNewFolder(true)}
+        >
+          + 新建文件夹
+        </Button>
       </div>
 
       <div className="max-h-64 overflow-y-auto rounded-md border">
@@ -100,6 +133,28 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
           选择此目录
         </Button>
       </div>
+    {showNewFolder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-sm rounded-lg bg-card p-6 shadow-xl">
+            <h3 className="mb-4 text-base font-semibold">新建文件夹</h3>
+            <Input
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder="文件夹名称"
+              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); }}
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setShowNewFolder(false)}>
+                取消
+              </Button>
+              <Button size="sm" onClick={handleCreateFolder} disabled={!newFolderName.trim()}>
+                创建
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

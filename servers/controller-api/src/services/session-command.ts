@@ -7,6 +7,8 @@ import { acpCapabilityDetector } from './acp-capability-detector.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 import { folderBrowserService } from './folder-browser.js';
 import { gitBrowserService } from './git-browser.js';
+import { worktreeService } from './worktree-service.js';
+import { fsMkdirService } from './fs-mkdir-service.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
 const SESSION_MESSAGE_CHANNEL = 'session:message';
@@ -53,6 +55,12 @@ export class SessionCommandService {
             acpSessionId?: string;
             modeId?: string;
             modelId?: string;
+            parentPath?: string;
+            folderName?: string;
+            repoPath?: string;
+            worktreePath?: string;
+            branch?: string;
+            message?: string;
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
@@ -83,6 +91,16 @@ export class SessionCommandService {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
             await this.handleAcpLoadSession(command.requestId, command.controllerId, command.sessionId, command.cwd);
+          } else if (command.type === 'fs:mkdir' && command.requestId && command.controllerId && command.parentPath && command.folderName) {
+            await fsMkdirService.handleMkdir(command.requestId, command.controllerId, command.parentPath as string, command.folderName as string);
+          } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
+            await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string);
+          } else if (command.type === 'git:worktree:remove' && command.requestId && command.controllerId && command.repoPath && command.worktreePath) {
+            await worktreeService.handleRemove(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string);
+          } else if (command.type === 'git:status' && command.requestId && command.controllerId && command.path) {
+            await worktreeService.handleStatus(command.requestId, command.controllerId, command.path as string);
+          } else if (command.type === 'git:commit' && command.requestId && command.controllerId && command.path && command.message) {
+            await worktreeService.handleCommit(command.requestId, command.controllerId, command.path as string, command.message as string);
           }
         } else if (channel === SESSION_MESSAGE_CHANNEL) {
           const data = JSON.parse(message) as {

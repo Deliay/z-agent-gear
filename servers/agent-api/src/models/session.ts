@@ -9,6 +9,8 @@ const sessionSchema = new mongoose.Schema({
   title: { type: String, default: 'New Session' },
   externalSessionId: { type: String },
   cwd: { type: String },
+  worktreePath: { type: String },
+  worktreeBranch: { type: String },
   endedAt: { type: Date },
   modes: { type: [{ id: String, name: String, description: String }], default: [] },
   currentModeId: { type: String },
