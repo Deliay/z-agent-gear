@@ -8,7 +8,7 @@ import { writePid, removePid, isRunning } from './daemon.js';
 const program = new Command();
 
 program
-  .name('zag')
+  .name('agent-gear')
   .description('Agent Controller - manages connection to controller-api')
   .version('1.0.0')
   .option('-k, --key <key>', 'Controller key')

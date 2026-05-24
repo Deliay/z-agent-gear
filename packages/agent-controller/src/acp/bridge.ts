@@ -201,7 +201,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {},
       clientInfo: {
-        name: 'agent-controller',
+        name: 'agent-gear',
         version: '1.0.0',
       },
     });

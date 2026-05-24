@@ -16,9 +16,9 @@ function mockExecResolved(stdout: string) {
 }
 
 function mockExecRejected(errorMsg: string) {
-  return vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
+  return vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: unknown, result: unknown) => void) => {
     if (typeof cb === 'function') {
-      cb(new Error(errorMsg), null as never);
+      cb(new Error(errorMsg), null);
     }
   }) as never);
 }
@@ -116,8 +116,8 @@ describe('GitHandler', () => {
       vi.mocked(exec).mockImplementationOnce(((_cmd: string, _opts: unknown, cb: (err: unknown, result: { stdout: string }) => void) => {
         if (typeof cb === 'function') cb(null, { stdout: '.git\n' });
       }) as never);
-      vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
-        if (typeof cb === 'function') cb(new Error('git command failed'), null as never);
+      vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: unknown, result: unknown) => void) => {
+        if (typeof cb === 'function') cb(new Error('git command failed'), null);
       }) as never);
 
       const result = await handler.check('/fake/path');
@@ -129,7 +129,7 @@ describe('GitHandler', () => {
 
   describe('init', () => {
     it('should initialize git repo and rename branch to main', async () => {
-      vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: unknown) => void) => {
+      vi.mocked(exec).mockImplementation(((_cmd: string, _opts: unknown, cb: (err: unknown, result: { stdout: string }) => void) => {
         if (typeof cb === 'function') cb(null, { stdout: '' });
       }) as never);
 

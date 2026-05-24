@@ -1,4 +1,4 @@
-# agent-controller
+# agent-gear
 
 ## Tech Stack
 
@@ -30,7 +30,7 @@ npm run test     # Run tests
 
 ## Development with Aspire
 
-使用 Aspire 编排启动所有服务后，再启动 agent-controller 连接 controller-api。
+使用 Aspire 编排启动所有服务后，再启动 agent-gear 连接 controller-api。
 
 ### 启动流程
 
@@ -43,7 +43,7 @@ aspire start
 # 3. 先通过 agent-api 生成 Key（GraphQL Playground: http://localhost:4000/graphql）
 #    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
 
-# 4. 使用生成的 Key 启动 agent-controller
+# 4. 使用生成的 Key 启动 agent-gear
 npm run dev -- --key <rawKey> --server <controller-api-endpoint>
 ```
 
