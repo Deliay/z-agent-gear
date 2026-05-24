@@ -14,7 +14,7 @@ interface AcpMessage {
   messageId?: string | null;
   direction: string;
   type: string;
-  content: string;
+  content: string | Record<string, unknown>;
   metadata: string | null;
   createdAt: string;
 }
@@ -26,12 +26,15 @@ interface MessageGroup {
   messageId: string | null;
 }
 
-function parseSessionUpdate(content: string): SessionUpdate | null {
-  try {
-    return JSON.parse(content) as SessionUpdate;
-  } catch {
-    return null;
+function parseSessionUpdate(content: string | Record<string, unknown>): SessionUpdate | null {
+  if (typeof content === 'string') {
+    try {
+      return JSON.parse(content) as SessionUpdate;
+    } catch {
+      return null;
+    }
   }
+  return content as unknown as SessionUpdate;
 }
 
 function groupMessages(messages: AcpMessage[]): MessageGroup[] {
@@ -120,7 +123,11 @@ function mergeMessageChunks(messages: AcpMessage[]): string {
       parts.push((parsed.content as { text: string }).text || '');
     }
   }
-  if (parts.length === 0) return messages[messages.length - 1]?.content || '';
+  if (parts.length === 0) {
+    const lastContent = messages[messages.length - 1]?.content;
+    if (typeof lastContent === 'string') return lastContent || '';
+    return JSON.stringify(lastContent) || '';
+  }
 
   const last = parseSessionUpdate(messages[messages.length - 1].content);
   if (last && 'sessionUpdate' in last) {
@@ -129,7 +136,9 @@ function mergeMessageChunks(messages: AcpMessage[]): string {
       content: { type: 'text', text: parts.join('') },
     });
   }
-  return messages[messages.length - 1]?.content || '';
+  const lastContent = messages[messages.length - 1]?.content;
+  if (typeof lastContent === 'string') return lastContent || '';
+  return JSON.stringify(lastContent) || '';
 }
 
 interface MessageListProps {

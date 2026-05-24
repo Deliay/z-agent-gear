@@ -2,7 +2,7 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import AcpCard from './AcpCard';
 
 interface ToolCallCardProps {
-  messages: Array<{ content: string; createdAt: string }>;
+  messages: Array<{ content: string | Record<string, unknown>; createdAt: string }>;
 }
 
 function parseToolCall(update: SessionUpdate) {
@@ -22,7 +22,9 @@ export default function ToolCallCard({ messages }: ToolCallCardProps) {
 
   for (const msg of messages) {
     try {
-      const parsed = JSON.parse(msg.content) as SessionUpdate;
+      const parsed = typeof msg.content === 'object'
+        ? msg.content as SessionUpdate
+        : JSON.parse(msg.content) as SessionUpdate;
       const tc = parseToolCall(parsed);
       const tcu = parseToolCallUpdate(parsed);
       if (tc) {

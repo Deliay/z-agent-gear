@@ -9,6 +9,10 @@ const BCRYPT_ROUNDS = 10;
 
 export class ControllerKeyService {
   async create(userId: string, input: { name: string; type: string }): Promise<{ key: Record<string, unknown>; rawKey: string }> {
+    if (!input.name || input.name.trim().length === 0) {
+      throw new Error('Key name is required');
+    }
+
     // Delete any existing unbound key (only one unbound key allowed at a time)
     const existingUnbound = await ControllerKey.findOne({ userId, boundControllerId: null });
     if (existingUnbound) {

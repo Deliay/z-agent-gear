@@ -7,12 +7,16 @@ import { config } from './config/index.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateUser } from './middleware/auth.js';
+import { compressionMiddleware } from './middleware/compression.js';
 import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
+import { runMigrations } from './migrations/runner.js';
+import * as migration001 from './migrations/001-unify-content-format.js';
 
 const app = express();
 
 app.use(cors({ origin: config.corsOrigin }));
+app.use(compressionMiddleware());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
@@ -39,6 +43,12 @@ async function start() {
     console.log('Connected to MongoDB');
   } catch (err) {
     console.warn('MongoDB not available, starting without database:', (err as Error).message);
+  }
+
+  try {
+    await runMigrations([migration001]);
+  } catch (err) {
+    console.warn('[Migration] Runner failed:', (err as Error).message);
   }
 
   try {

@@ -9,7 +9,7 @@ interface AcpMessage {
   sessionId: string;
   direction: string;
   type: string;
-  content: string;
+  content: string | Record<string, unknown>;
   metadata: string | null;
   createdAt: string;
 }
@@ -21,7 +21,10 @@ interface MessageItemProps {
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
 
-  const acpUpdate = (() => { try { return JSON.parse(message.content) as SessionUpdate; } catch { return null; } })();
+  const acpUpdate = (() => {
+    if (typeof message.content === 'object') return message.content as unknown as SessionUpdate;
+    try { return JSON.parse(message.content) as SessionUpdate; } catch { return null; }
+  })();
 
   const displayType = (() => {
     if (!acpUpdate) return message.type;
