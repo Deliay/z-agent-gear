@@ -1,7 +1,5 @@
 import type express from 'express';
 import { createBrotliCompress, createGzip } from 'node:zlib';
-import { PassThrough } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 
 export function compressionMiddleware(): express.RequestHandler {
   return (req, res, next) => {
@@ -18,12 +16,12 @@ export function compressionMiddleware(): express.RequestHandler {
     const createCompressor = () => (useBrotli ? createBrotliCompress() : createGzip());
 
     const isSSE =
+      req.path.includes('/stream') ||
       (req.headers.accept ?? '').includes('text/event-stream') ||
       res.getHeader('Content-Type') === 'text/event-stream';
 
     if (isSSE) {
       const compressor = createCompressor();
-      const passThrough = new PassThrough();
 
       res.setHeader('Content-Encoding', contentEncoding);
       res.setHeader('Vary', 'Accept-Encoding');
@@ -35,26 +33,22 @@ export function compressionMiddleware(): express.RequestHandler {
       compressor.on('end', () => originalEnd());
 
       res.write = function (chunk: unknown, ...args: unknown[]) {
-        passThrough.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+        compressor.write(buf);
+        compressor.flush();
         return true;
       };
 
       res.end = function (chunk?: unknown, ...args: unknown[]) {
         if (chunk) {
-          passThrough.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+          compressor.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
         }
-        passThrough.end();
+        compressor.end();
         return res;
       };
 
-      pipeline(passThrough, compressor).catch((err) => {
-        console.error('[Compression] SSE pipeline error:', err);
-      });
-
       next();
     } else {
-      const compressor = createCompressor();
-      res.setHeader('Content-Encoding', contentEncoding);
       res.setHeader('Vary', 'Accept-Encoding');
 
       const originalEnd = res.end.bind(res);
@@ -74,10 +68,11 @@ export function compressionMiddleware(): express.RequestHandler {
         const body = Buffer.concat(chunks);
 
         if (body.length < 1024) {
-          res.removeHeader('Content-Encoding');
           return originalEnd(body);
         }
 
+        res.setHeader('Content-Encoding', contentEncoding);
+        const compressor = createCompressor();
         const compressed: Buffer[] = [];
         compressor.on('data', (data: Buffer) => compressed.push(data));
         compressor.on('end', () => originalEnd(Buffer.concat(compressed)));

@@ -320,13 +320,14 @@ describe('Session GraphQL API', () => {
 
       const res = await gqlRequest(
         SEND_SESSION_MESSAGE,
-        { sessionId, content: 'Hello agent', type: 'text' },
+        { sessionId, content: JSON.stringify({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Hello agent' } }), type: 'text' },
         authToken,
       );
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(body.data.sendSessionMessage.direction).toBe('input');
-      expect(body.data.sendSessionMessage.content).toBe('Hello agent');
+      expect(body.data.sendSessionMessage.content.sessionUpdate).toBe('user_message_chunk');
+      expect(body.data.sendSessionMessage.content.content.text).toBe('Hello agent');
       expect(body.data.sendSessionMessage.type).toBe('text');
     });
 
@@ -354,7 +355,7 @@ describe('Session GraphQL API', () => {
 
       await gqlRequest(
         SEND_SESSION_MESSAGE,
-        { sessionId, content: 'test message', type: 'text' },
+        { sessionId, content: JSON.stringify({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'test message' } }), type: 'text' },
         authToken,
       );
 
@@ -367,7 +368,7 @@ describe('Session GraphQL API', () => {
       expect(body.errors).toBeUndefined();
       expect(Array.isArray(body.data.sessionMessages)).toBe(true);
       expect(body.data.sessionMessages.length).toBeGreaterThan(0);
-      expect(body.data.sessionMessages[0].content).toBe('test message');
+      expect(body.data.sessionMessages[0].content.sessionUpdate).toBe('user_message_chunk');
     });
 
     it('should reject query for non-existent session', async () => {
@@ -641,7 +642,7 @@ describe('Session SSE API', () => {
     const timeout = setTimeout(() => controller.abort(), 3000);
 
     const res = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: { Authorization: `Bearer ${authToken}`, 'Accept-Encoding': 'identity' },
       signal: controller.signal,
     });
 
@@ -700,7 +701,7 @@ describe('Session SSE API', () => {
     const timeout = setTimeout(() => controller.abort(), 3000);
 
     const res = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: { Authorization: `Bearer ${authToken}`, 'Accept-Encoding': 'identity' },
       signal: controller.signal,
     });
 
@@ -1236,20 +1237,23 @@ describe('Session WebSocket ACP Events', () => {
         message: { type: string; content: string };
       }>(client, 'acp:message', 5000);
 
+      const msgContent = JSON.stringify({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Hello agent' } });
       // Send message via GraphQL → controller-api forwards to controller
       const msgRes = await gqlRequest(
         SEND_SESSION_MESSAGE,
-        { sessionId, content: 'Hello agent', type: 'text' },
+        { sessionId, content: msgContent, type: 'text' },
         authToken,
       );
       const msgBody = await msgRes.json();
       expect(msgBody.data.sendSessionMessage.direction).toBe('input');
-      // agent-api stores raw content; ACP wrapping happens in controller-api
-      expect(msgBody.data.sendSessionMessage.content).toBe('Hello agent');
+      // agent-api stores content as parsed JSON object
+      expect(msgBody.data.sendSessionMessage.content.sessionUpdate).toBe('user_message_chunk');
+      expect(msgBody.data.sendSessionMessage.content.content.text).toBe('Hello agent');
 
       // Fake controller receives the message
       const msgData = await messageEvent;
       expect(msgData.sessionId).toBe(sessionId);
+      // controller-api forwards the raw user content string
       expect(msgData.message.content).toBe('Hello agent');
 
       // Simulate controller sending output back (ACP SDK format)
@@ -1273,14 +1277,13 @@ describe('Session WebSocket ACP Events', () => {
       const messages = messagesBody.data.sessionMessages;
       expect(messages.length).toBeGreaterThanOrEqual(2);
 
-      const inputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'input');
-      const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output');
+      const inputMsg = messages.find((m: { direction: string; content: Record<string, unknown> }) => m.direction === 'input');
+      const outputMsg = messages.find((m: { direction: string; content: Record<string, unknown> }) => m.direction === 'output');
       expect(inputMsg).toBeDefined();
       expect(outputMsg).toBeDefined();
-      // Content is stored as raw ACP SessionUpdate JSON
-      const parsedOutput = JSON.parse(outputMsg.content);
-      expect(parsedOutput.sessionUpdate).toBe('agent_message_chunk');
-      expect(parsedOutput.content.text).toBe('Hello human');
+      // Content is now stored as JSON object, not string
+      expect(outputMsg.content.sessionUpdate).toBe('agent_message_chunk');
+      expect(outputMsg.content.content.text).toBe('Hello human');
 
       client.disconnect();
     });

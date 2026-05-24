@@ -448,13 +448,19 @@ export class ACPSessionManager {
     return null;
   }
 
-  forwardToController(sessionId: string, message: { type: string; content: string }): boolean {
+  forwardToController(sessionId: string, message: { type: string; content: string | Record<string, unknown> }): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
+    const rawContent = typeof message.content === 'string'
+      ? message.content
+      : (message.content as Record<string, unknown>)?.content && typeof (message.content as Record<string, unknown>).content === 'object'
+        ? ((message.content as Record<string, unknown>).content as Record<string, unknown>).text as string ?? ''
+        : '';
+
     session.controllerSocket.emit('acp:message', {
       sessionId,
-      message,
+      message: { type: message.type, content: rawContent },
     });
     return true;
   }

@@ -211,7 +211,7 @@ export class SessionService {
       direction: message.direction as 'input' | 'output',
       type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
       content: typeof message.content === 'string'
-        ? JSON.parse(message.content)
+        ? (() => { try { return JSON.parse(message.content); } catch { return { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: message.content } }; } })()
         : message.content,
       metadata: message.metadata,
     });
