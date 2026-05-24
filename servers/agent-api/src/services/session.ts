@@ -175,13 +175,28 @@ export class SessionService {
   }
 
   async getMessages(sessionId: string, userId: string, limit = 100, offset = 0): Promise<Record<string, unknown>[]> {
-    // Verify session belongs to user
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) {
       throw new Error('Session not found');
     }
 
-    const messages = await AcpMessage.find({ sessionId })
+    // Query A: find last 3 usage_update _ids
+    const usageIds = await AcpMessage.find(
+      { sessionId, 'content.sessionUpdate': 'usage_update' },
+      { _id: 1 },
+    )
+      .sort({ _id: -1 })
+      .limit(3)
+      .lean();
+
+    // Build filter based on whether we found 3 usage_updates
+    const filter: Record<string, unknown> = { sessionId };
+    if (usageIds.length === 3) {
+      const cutoffId = usageIds[2]._id;
+      filter._id = { $gt: cutoffId };
+    }
+
+    const messages = await AcpMessage.find(filter)
       .sort({ _id: 1 })
       .skip(offset)
       .limit(limit)
@@ -190,12 +205,14 @@ export class SessionService {
     return messages.map(this.mapMessage.bind(this));
   }
 
-  async addMessage(sessionId: string, message: { direction: string; type: string; content: string; metadata?: string }): Promise<Record<string, unknown>> {
+  async addMessage(sessionId: string, message: { direction: string; type: string; content: unknown; metadata?: string }): Promise<Record<string, unknown>> {
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: message.direction as 'input' | 'output',
       type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
-      content: message.content,
+      content: typeof message.content === 'string'
+        ? JSON.parse(message.content)
+        : message.content,
       metadata: message.metadata,
     });
 
@@ -204,14 +221,17 @@ export class SessionService {
       const messageCount = await AcpMessage.countDocuments({ sessionId, direction: 'input' });
       if (messageCount === 1) {
         // First user message - extract text content as title
-        let title = message.content;
-        try {
-          const parsed = JSON.parse(message.content);
-          if (parsed.sessionUpdate === 'user_message_chunk' && parsed.content?.text) {
-            title = parsed.content.text;
-          }
-        } catch {
-          // use raw content
+        let title = message.content as string;
+        let parsedContent: Record<string, unknown> | null = null;
+        if (typeof message.content === 'string') {
+          try {
+            parsedContent = JSON.parse(message.content);
+          } catch { /* use raw content */ }
+        } else {
+          parsedContent = message.content as Record<string, unknown>;
+        }
+        if (parsedContent?.sessionUpdate === 'user_message_chunk' && (parsedContent.content as Record<string, unknown>)?.text) {
+          title = (parsedContent.content as Record<string, unknown>).text as string;
         }
         // Truncate to 50 chars
         if (title.length > 50) {

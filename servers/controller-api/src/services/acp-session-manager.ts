@@ -158,10 +158,10 @@ export class ACPSessionManager {
       return false;
     }
 
-    const rawContent = JSON.stringify({
+    const rawContent = {
       sessionUpdate: 'user_message_chunk' as const,
       content: { type: 'text' as const, text: message.content },
-    });
+    };
 
     // Save input message to database
     const acpMessage = await AcpMessage.create({
@@ -177,7 +177,7 @@ export class ACPSessionManager {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'input',
       type: 'text',
-      content: rawContent,
+      content: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent),
       metadata: null,
       createdAt: (doc.createdAt as Date).toISOString(),
     });
@@ -226,7 +226,7 @@ export class ACPSessionManager {
       }
     }
 
-    const rawContent = JSON.stringify(message);
+    const rawContent = message;
 
     let type: string;
     switch (message.sessionUpdate) {
@@ -265,7 +265,7 @@ export class ACPSessionManager {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
       direction: 'output',
       type,
-      content: rawContent,
+      content: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent),
       metadata: null,
       createdAt: (doc.createdAt as Date).toISOString(),
     });
