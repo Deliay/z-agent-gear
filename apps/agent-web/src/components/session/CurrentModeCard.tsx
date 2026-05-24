@@ -3,7 +3,7 @@ interface AcpMessage {
   sessionId: string;
   direction: string;
   type: string;
-  content: string;
+  content: string | Record<string, unknown>;
   metadata: string | null;
   createdAt: string;
 }
@@ -15,12 +15,16 @@ interface CurrentModeCardProps {
 export default function CurrentModeCard({ messages }: CurrentModeCardProps) {
   if (messages.length === 0) return null;
 
-  const content = messages[messages.length - 1].content;
+  const raw = messages[messages.length - 1].content;
   let parsed: { modeId?: string } | null = null;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return null;
+  if (typeof raw === 'object') {
+    parsed = raw as { modeId?: string };
+  } else {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
 
   if (!parsed?.modeId) return null;

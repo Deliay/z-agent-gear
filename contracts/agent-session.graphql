@@ -1,3 +1,5 @@
+scalar JSON
+
 enum SessionStatus {
   creating
   connecting
@@ -70,7 +72,7 @@ type AcpMessage {
   sessionId: ID!
   direction: AcpMessageDirection!
   type: AcpMessageType!
-  content: String!
+  content: JSON!
   metadata: String
   createdAt: String!
 }

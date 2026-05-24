@@ -1,4 +1,5 @@
 export const sessionTypeDefs = `#graphql
+  scalar JSON
   enum SessionStatus {
     creating
     connecting
@@ -65,7 +66,7 @@ export const sessionTypeDefs = `#graphql
     sessionId: ID!
     direction: AcpMessageDirection!
     type: AcpMessageType!
-    content: String!
+    content: JSON!
     metadata: String
     createdAt: String!
   }

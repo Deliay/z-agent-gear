@@ -439,19 +439,27 @@ describe('SessionService', () => {
   });
 
   describe('getMessages', () => {
-    it('should return mapped messages', async () => {
+    it('should return mapped messages when no usage_update to filter', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockSessionDoc()),
       } as never);
-      vi.mocked(AcpMessage.find).mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          skip: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([mockMessageDoc()]),
-            }),
-          }),
-        }),
-      } as never);
+
+      // Query A: find usage_update → empty (no filter needed)
+      const queryALean = vi.fn().mockResolvedValue([]);
+      const queryALimitChain = { lean: queryALean };
+      const queryASortChain = { limit: vi.fn().mockReturnValue(queryALimitChain) };
+      const queryAFind = { sort: vi.fn().mockReturnValue(queryASortChain) };
+
+      // Query B: find messages → return mock doc
+      const queryBLean = vi.fn().mockResolvedValue([mockMessageDoc()]);
+      const queryBLimitChain = { lean: queryBLean };
+      const queryBSkipChain = { limit: vi.fn().mockReturnValue(queryBLimitChain) };
+      const queryBSortChain = { skip: vi.fn().mockReturnValue(queryBSkipChain) };
+      const queryBFind = { sort: vi.fn().mockReturnValue(queryBSortChain) };
+
+      vi.mocked(AcpMessage.find)
+        .mockReturnValueOnce(queryAFind as never)
+        .mockReturnValueOnce(queryBFind as never);
 
       const result = await sessionService.getMessages('sess-1', 'user-1', 10, 0);
 
@@ -478,14 +486,14 @@ describe('SessionService', () => {
       const result = await sessionService.addMessage('sess-1', {
         direction: 'input',
         type: 'text',
-        content: 'Hello',
+        content: '{"msg":"Hello"}',
       });
 
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1',
         direction: 'input',
         type: 'text',
-        content: 'Hello',
+        content: { msg: 'Hello' },
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.any(String));
       expect(result.content).toBe('Hello');

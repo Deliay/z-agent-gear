@@ -9,7 +9,7 @@ interface AcpMessage {
   sessionId: string;
   direction: string;
   type: string;
-  content: string;
+  content: string | Record<string, unknown>;
   metadata: string | null;
   createdAt: string;
 }
@@ -21,7 +21,10 @@ interface MessageItemProps {
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
 
-  const acpUpdate = (() => { try { return JSON.parse(message.content) as SessionUpdate; } catch { return null; } })();
+  const acpUpdate = (() => {
+    if (typeof message.content === 'object') return message.content as unknown as SessionUpdate;
+    try { return JSON.parse(message.content) as SessionUpdate; } catch { return null; }
+  })();
 
   const displayType = (() => {
     if (!acpUpdate) return message.type;
@@ -40,20 +43,20 @@ export default function MessageItem({ message }: MessageItemProps) {
     }
   })();
 
-  const displayContent = (() => {
-    if (!acpUpdate) return message.content;
+  const displayContent: string = (() => {
+    if (!acpUpdate) return typeof message.content === 'string' ? message.content : '';
     switch (acpUpdate.sessionUpdate) {
       case 'agent_message_chunk':
       case 'user_message_chunk':
         return acpUpdate.content.type === 'text' ? acpUpdate.content.text : '';
       case 'tool_call':
-        return acpUpdate.title;
+        return typeof acpUpdate.title === 'string' ? acpUpdate.title : '';
       case 'tool_call_update':
         return acpUpdate.title || '';
       case 'plan':
         return acpUpdate.entries?.map(e => e.content).join('\n') || '';
       default:
-        return message.content;
+        return typeof message.content === 'string' ? message.content : '';
     }
   })();
 

@@ -267,10 +267,9 @@ describe('Controller API ACP WebSocket', () => {
 
       const outputMsg = messages.find((m: { direction: string; content: string }) => m.direction === 'output');
       expect(outputMsg).toBeDefined();
-      // Content is stored as raw ACP SessionUpdate JSON
-      const parsed = JSON.parse(outputMsg.content);
-      expect(parsed.sessionUpdate).toBe('agent_message_chunk');
-      expect(parsed.content.text).toBe('Hello from controller');
+      // Content is stored as raw ACP SessionUpdate (already JSON object)
+      expect(outputMsg.content.sessionUpdate).toBe('agent_message_chunk');
+      expect(outputMsg.content.content.text).toBe('Hello from controller');
 
       client.disconnect();
     });

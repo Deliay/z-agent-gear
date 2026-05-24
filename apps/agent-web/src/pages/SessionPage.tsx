@@ -34,7 +34,7 @@ interface AcpMessage {
   sessionId: string;
   direction: string;
   type: string;
-  content: string;
+  content: string | Record<string, unknown>;
   metadata: string | null;
   createdAt: string;
 }
