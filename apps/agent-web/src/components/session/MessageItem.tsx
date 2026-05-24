@@ -43,20 +43,20 @@ export default function MessageItem({ message }: MessageItemProps) {
     }
   })();
 
-  const displayContent = (() => {
-    if (!acpUpdate) return message.content;
+  const displayContent: string = (() => {
+    if (!acpUpdate) return typeof message.content === 'string' ? message.content : '';
     switch (acpUpdate.sessionUpdate) {
       case 'agent_message_chunk':
       case 'user_message_chunk':
         return acpUpdate.content.type === 'text' ? acpUpdate.content.text : '';
       case 'tool_call':
-        return acpUpdate.title;
+        return typeof acpUpdate.title === 'string' ? acpUpdate.title : '';
       case 'tool_call_update':
         return acpUpdate.title || '';
       case 'plan':
         return acpUpdate.entries?.map(e => e.content).join('\n') || '';
       default:
-        return message.content;
+        return typeof message.content === 'string' ? message.content : '';
     }
   })();
 
