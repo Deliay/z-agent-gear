@@ -1285,4 +1285,197 @@ describe('Session WebSocket ACP Events', () => {
       client.disconnect();
     });
   });
+
+  describe('createSession with enableWorktree', () => {
+    const CREATE_SESSION_WITH_WORKTREE = `
+      mutation CreateSession($input: CreateSessionInput!) {
+        createSession(input: $input) {
+          session {
+            id userId controllerId controllerName acpServerType status
+            externalSessionId cwd worktreePath worktreeBranch createdAt updatedAt endedAt
+          }
+        }
+      }
+    `;
+
+    it('should create session with enableWorktree and wait for git:worktree:add', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `wt-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'wt-test-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      const wsId = await createWorkspace(freshControllerId);
+      const wsRes = await gqlRequest(
+        `
+          mutation SetDefaultBranch($id: ID!, $defaultBranch: String!) {
+            setWorkspaceDefaultBranch(id: $id, defaultBranch: $defaultBranch) {
+              id defaultBranch
+            }
+          }
+        `,
+        { id: wsId, defaultBranch: 'main' },
+        authToken,
+      );
+      expect(wsRes.status).toBe(200);
+
+      const worktreeAdd = waitForEvent<{
+        requestId: string;
+        repoPath: string;
+        worktreePath: string;
+        branch: string;
+      }>(client, 'git:worktree:add', 10000);
+
+      const createPromise = gqlRequest(
+        CREATE_SESSION_WITH_WORKTREE,
+        {
+          input: {
+            controllerId: freshControllerId,
+            acpServerType: 'opencode',
+            workspaceId: wsId,
+            enableWorktree: true,
+            worktreeBranchSuffix: 'feat/new-feature',
+          },
+        },
+        authToken,
+      );
+
+      const wtData = await worktreeAdd;
+      expect(wtData.repoPath).toBeDefined();
+      expect(wtData.worktreePath).toContain('worktrees');
+      expect(wtData.branch).toContain('feat/new-feature');
+
+      client.emit('git:worktree:add:result', {
+        requestId: wtData.requestId,
+        success: true,
+        path: wtData.worktreePath,
+        branch: wtData.branch,
+      });
+
+      const createRes = await createPromise;
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+      expect(createBody.data.createSession.session.status).toBe('creating');
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      const sessionRes = await gqlRequest(
+        `query Session($id: ID!) { session(id: $id) { id worktreePath worktreeBranch status } }`,
+        { id: sessionId },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.worktreePath).toBe(wtData.worktreePath);
+      expect(sessionBody.data.session.worktreeBranch).toBe(wtData.branch);
+
+      client.disconnect();
+    }, 30000);
+
+    it('should create session with enableWorktree and custom branch suffix', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `wt-custom-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'wt-custom-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+      const wsId = await createWorkspace(freshControllerId);
+
+      const worktreeAdd = waitForEvent<{
+        requestId: string;
+        branch: string;
+      }>(client, 'git:worktree:add', 10000);
+
+      const createPromise = gqlRequest(
+        CREATE_SESSION_WITH_WORKTREE,
+        {
+          input: {
+            controllerId: freshControllerId,
+            acpServerType: 'opencode',
+            workspaceId: wsId,
+            enableWorktree: true,
+            worktreeBranchSuffix: 'custom-branch',
+          },
+        },
+        authToken,
+      );
+
+      const wtData = await worktreeAdd;
+      expect(wtData.branch).toContain('custom-branch');
+
+      client.emit('git:worktree:add:result', {
+        requestId: wtData.requestId,
+        success: true,
+        path: '/tmp/worktree',
+        branch: wtData.branch,
+      });
+
+      await createPromise;
+      client.disconnect();
+    }, 30000);
+
+    it('should handle git:worktree:add failure and set session to ended', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `wt-fail-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'wt-fail-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+      const wsId = await createWorkspace(freshControllerId);
+
+      const worktreeAdd = waitForEvent<{
+        requestId: string;
+      }>(client, 'git:worktree:add', 10000);
+
+      const createPromise = gqlRequest(
+        CREATE_SESSION_WITH_WORKTREE,
+        {
+          input: {
+            controllerId: freshControllerId,
+            acpServerType: 'opencode',
+            workspaceId: wsId,
+            enableWorktree: true,
+            worktreeBranchSuffix: 'feat/fail',
+          },
+        },
+        authToken,
+      );
+
+      const wtData = await worktreeAdd;
+
+      client.emit('git:worktree:add:result', {
+        requestId: wtData.requestId,
+        success: false,
+        error: 'Git worktree add failed',
+      });
+
+      const createRes = await createPromise;
+      const createBody = await createRes.json();
+      expect(createBody.errors).toBeDefined();
+      expect(createBody.errors[0].message).toContain('WORKTREE_ADD_FAILED');
+
+      client.disconnect();
+    }, 30000);
+  });
 });
