@@ -42,9 +42,8 @@ export class SessionService {
 
     if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
-      const resolvedWorktreeDir = worktreeDir.replace(/^~/, process.env.HOME || '/root');
       const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
-      const wtPath = path.join(resolvedWorktreeDir, workspace.name, input.worktreeBranchSuffix);
+      const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
 
       const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       await redis.publish('session:command', JSON.stringify({
@@ -65,8 +64,9 @@ export class SessionService {
             throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
           }
           await redis.del(`git:worktree:add:${requestId}`);
-          cwd = wtPath;
-          worktreePath = wtPath;
+          const resolvedPath = parsed.worktreePath || wtPath;
+          cwd = resolvedPath;
+          worktreePath = resolvedPath;
           worktreeBranch = branch;
           added = true;
           break;
