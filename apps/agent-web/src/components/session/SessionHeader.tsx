@@ -7,6 +7,7 @@ interface Session {
   status: string;
   externalSessionId: string | null;
   cwd: string | null;
+  worktreePath?: string | null;
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
@@ -59,7 +60,22 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           </span>
         )}
         {session?.cwd && (
-          <span className="text-sm text-gray-500 font-mono">{session.cwd}</span>
+          <div className="flex items-center gap-1">
+            <span className="text-sm text-gray-500 font-mono">{session.cwd}</span>
+            {session?.worktreePath && (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700 font-medium flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                  <path d="M21 3h-3a2 2 0 0 0-2 2v3" />
+                  <path d="M21 15v3a2 2 0 0 1-2 2h-3" />
+                  <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                  <polyline points="7 9 12 4 17 9" />
+                  <polyline points="7 15 12 20 17 15" />
+                </svg>
+                Worktree
+              </span>
+            )}
+          </div>
         )}
         {session?.createdAt && (
           <span className="text-xs text-gray-400">

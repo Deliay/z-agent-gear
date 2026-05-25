@@ -9,6 +9,8 @@ import { acpDetector } from './acp/detector.js';
 import { AcpSessionBridge } from './acp/bridge.js';
 import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
+import { worktreeHandler } from './worktree-handler.js';
+import { fsHandler } from './fs-handler.js';
 
 const CONTROLLER_VERSION = '1.0.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
@@ -96,6 +98,36 @@ interface GitCheckPayload {
 interface GitInitPayload {
   requestId: string;
   path: string;
+}
+
+interface FsMkdirPayload {
+  requestId: string;
+  parentPath: string;
+  folderName: string;
+}
+
+interface GitWorktreeAddPayload {
+  requestId: string;
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+}
+
+interface GitWorktreeRemovePayload {
+  requestId: string;
+  repoPath: string;
+  worktreePath: string;
+}
+
+interface GitStatusPayload {
+  requestId: string;
+  path: string;
+}
+
+interface GitCommitPayload {
+  requestId: string;
+  path: string;
+  message: string;
 }
 
 export function connectToServer(
@@ -478,6 +510,32 @@ export function connectToServer(
   socket.on('git:init', async (data: GitInitPayload) => {
     const result = await gitHandler.init(data.path);
     socket.emit('git:init:result', { requestId: data.requestId, ...result });
+  });
+
+  // Worktree / Git extension events
+  socket.on('fs:mkdir', async (data: FsMkdirPayload) => {
+    const result = await fsHandler.mkdir(data.parentPath, data.folderName);
+    socket.emit('fs:mkdir:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:worktree:add', async (data: GitWorktreeAddPayload) => {
+    const result = await worktreeHandler.add(data.repoPath, data.worktreePath, data.branch);
+    socket.emit('git:worktree:add:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:worktree:remove', async (data: GitWorktreeRemovePayload) => {
+    const result = await worktreeHandler.remove(data.repoPath, data.worktreePath);
+    socket.emit('git:worktree:remove:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:status', async (data: GitStatusPayload) => {
+    const result = await worktreeHandler.status(data.path);
+    socket.emit('git:status:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:commit', async (data: GitCommitPayload) => {
+    const result = await worktreeHandler.commit(data.path, data.message);
+    socket.emit('git:commit:result', { requestId: data.requestId, ...result });
   });
 
   socket.on('disconnect', (reason) => {

@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES } from '../../graphql/queries';
-import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH } from '../../graphql/mutations';
+import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR } from '../../graphql/mutations';
 import type { GetControllerWorkspacesQuery, ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
 import HistorySessionDialog from './HistorySessionDialog';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
-import { ChevronDownIcon, ChevronRightIcon, GitBranchIcon, LoaderIcon } from 'lucide-react';
+import DirectoryPicker from '@/components/ui/DirectoryPicker';
+import { ChevronDownIcon, ChevronRightIcon, GitBranchIcon, GitForkIcon, LoaderIcon } from 'lucide-react';
 import {
   Select,
   SelectTrigger,
@@ -32,6 +33,8 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
     data?: GitRepoInfoData;
     error?: string;
   }>>({});
+  const [showWorktreeDirPicker, setShowWorktreeDirPicker] = useState(false);
+  const [worktreeDir, setWorktreeDir] = useState<string | null>(null);
 
   const { data, loading, refetch } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
     variables: { controllerId },
@@ -43,6 +46,40 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const [toggleWorkspace] = useMutation(TOGGLE_WORKSPACE);
   const [initGitRepo] = useMutation(INIT_GIT_REPO);
   const [setWorkspaceDefaultBranch] = useMutation(SET_WORKSPACE_DEFAULT_BRANCH);
+  const [setControllerWorktreeDir] = useMutation(SET_CONTROLLER_WORKTREE_DIR);
+
+  const refetchWorktreeDir = async () => {
+    try {
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+      const token = localStorage.getItem('auth_token');
+      const result = await fetch(`${apiBase}/graphql`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          query: `query GetController($id: ID!) { controller(id: $id) { worktreeDir } }`,
+          variables: { id: controllerId },
+        }),
+      });
+      const json = await result.json();
+      if (json.data?.controller) {
+        setWorktreeDir(json.data.controller.worktreeDir || null);
+      }
+    } catch { }
+  };
+
+  useEffect(() => {
+    if (controllerId) {
+      refetchWorktreeDir();
+    }
+  }, [controllerId]);
+
+  const handleWorktreeDirChange = async (path: string) => {
+    await setControllerWorktreeDir({
+      variables: { controllerId, worktreeDir: path },
+    });
+    setWorktreeDir(path);
+    setShowWorktreeDirPicker(false);
+  };
 
   const workspaces = data?.controllerWorkspaces ?? [];
 
@@ -175,6 +212,27 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
 
   return (
     <>
+      <div className="mb-4 rounded-lg border p-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-1.5">
+              <GitForkIcon className="size-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Git Worktree 工作目录</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {worktreeDir || '~/.zag/worktrees（默认）'}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setShowWorktreeDirPicker(true)}
+          >
+            修改
+          </Button>
+        </div>
+      </div>
+
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold">工作区</h2>
         <div className="flex gap-2">
@@ -314,6 +372,20 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
             <Button variant="destructive" size="sm" onClick={handleClear}>
               确认清空
             </Button>
+          </div>
+        </div>
+      )}
+
+      {showWorktreeDirPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">选择 Worktree 工作目录</h2>
+            <p className="mb-4 text-sm text-muted-foreground">所有 Git Worktree 将创建在此目录下</p>
+            <DirectoryPicker
+              controllerId={controllerId}
+              onSelect={handleWorktreeDirChange}
+              onClose={() => setShowWorktreeDirPicker(false)}
+            />
           </div>
         </div>
       )}

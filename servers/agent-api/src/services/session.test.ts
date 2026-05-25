@@ -199,6 +199,100 @@ describe('SessionService', () => {
         workspaceId: 'ws-1',
       })).rejects.toThrow('Workspace not found');
     });
+
+    it('should create session with worktree when enableWorktree is true', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      mockRedis.publish.mockResolvedValue(1);
+      mockRedis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, worktreePath: '/worktrees/my-project/feat-123', branch: 'my-project/feat-123' }));
+
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        controllerName: 'my-server',
+        cwd: '/worktrees/my-project/feat-123',
+        worktreePath: '/worktrees/my-project/feat-123',
+        worktreeBranch: 'my-project/feat-123',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        worktreeBranchSuffix: 'feat-123',
+      });
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:worktree:add"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:start"'),
+      );
+      expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
+        worktreePath: '/worktrees/my-project/feat-123',
+        worktreeBranch: 'my-project/feat-123',
+      }));
+      expect(result.cwd).toBe('/worktrees/my-project/feat-123');
+    });
+
+    it('should throw on worktree add failure', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      mockRedis.publish.mockResolvedValue(1);
+      mockRedis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }));
+
+      await expect(sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        worktreeBranchSuffix: 'feat-123',
+      })).rejects.toThrow('WORKTREE_ADD_FAILED');
+    });
+
+    it('should throw timeout when no worktree add result', async () => {
+      vi.useFakeTimers();
+
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      mockRedis.publish.mockResolvedValue(1);
+      mockRedis.get.mockResolvedValue(null); // never returns result
+
+      const promise = sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        worktreeBranchSuffix: 'feat-123',
+      });
+      promise.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(31000);
+
+      await expect(promise).rejects.toThrow('WORKTREE_ADD_FAILED: Timeout');
+
+      vi.useRealTimers();
+    });
   });
 
   describe('updateStatus', () => {
@@ -250,6 +344,9 @@ describe('SessionService', () => {
 
   describe('delete', () => {
     it('should delete session, messages, and Redis cache', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
       vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
       vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
 
@@ -261,10 +358,83 @@ describe('SessionService', () => {
     });
 
     it('should return false when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
       vi.mocked(Session.findOneAndDelete).mockResolvedValue(null);
 
       const result = await sessionService.delete('sess-1', 'user-1');
       expect(result).toBe(false);
+    });
+
+    it('should clean up worktree on delete when worktreePath is set and clean', async () => {
+      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(sessionDoc),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+
+      // Return results immediately to avoid waiting
+      mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // status → clean
+        .mockResolvedValueOnce(JSON.stringify({ success: true })); // remove → success
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:status"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:worktree:remove"'),
+      );
+    });
+
+    it('should commit dirty worktree before removal on delete', async () => {
+      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(sessionDoc),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+
+      mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ isClean: false })) // dirty
+        .mockResolvedValueOnce(JSON.stringify({ success: true, commitHash: 'abc123' })) // commit
+        .mockResolvedValueOnce(JSON.stringify({ success: true })); // remove
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:commit"'),
+      );
+    });
+
+    it('should throw error when worktree removal fails', async () => {
+      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(sessionDoc),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+
+      mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // clean, skip commit
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'worktree not found' })); // remove fails
+
+      await expect(sessionService.delete('sess-1', 'user-1')).rejects.toThrow('WORKTREE_REMOVE_FAILED');
     });
   });
 

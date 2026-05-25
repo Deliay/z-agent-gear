@@ -201,3 +201,29 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | importHistorySessions - 导入单个 session | 导入 1 个 session，验证 messageCount=2 |
 | importHistorySessions - 导入多个 session | 导入 2 个 session，验证都存在并 status=ended |
 | importHistorySessions - 去重过滤 | 先导入 acp_sync_sess_1，list 应返回 acp_sync_sess_2 但排除 s1 |
+
+### Worktree Session API (`agent-api/session.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| createSession with enableWorktree - 上传分支后缀 | 创建 session（enableWorktree=true + worktreeBranchSuffix），等待 git:worktree:add，controller 响应成功，验证 worktreePath / worktreeBranch |
+| createSession with enableWorktree - 默认分支后缀 | enableWorktree=true 无后缀，验证 git:worktree:add 的 branch 不包含 "undefined" |
+| createSession with enableWorktree - 失败 | git:worktree:add 返回 failure，验证 session status=ended，worktreePath=null |
+
+### Controller Worktree Dir API (`agent-api/controller.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| setControllerWorktreeDir - 无 auth | 应返回「Not authenticated」 |
+| setControllerWorktreeDir - 不存在的 controller | 应返回「Controller not found」 |
+| setControllerWorktreeDir - 正常设置 | 设置 /home/user/worktrees，验证 controller.worktreeDir 持久化 |
+
+### Folder Creation API (`agent-api/workspace.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| createFolder - 无 auth | 应返回「Not authenticated」 |
+| createFolder - 不存在的 controller | 应返回「Controller not found」 |
+| createFolder - offline controller | 应返回「Controller is offline」 |
+| createFolder - 成功 | 等待 fs:mkdir，controller 响应 success，验证 FolderEntry（name/path/isDirectory） |
+| createFolder - 失败 | fs:mkdir 返回 failure(error)，应返回 GraphQL error |

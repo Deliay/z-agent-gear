@@ -132,6 +132,43 @@ export class ControllerWorkspaceService {
     throw new Error('Git detection timeout');
   }
 
+  async createFolder(controllerId: string, userId: string, parentPath: string, folderName: string): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    if (controller.status !== 'online') {
+      throw new Error('Controller is offline');
+    }
+
+    const redis = getRedisClient();
+    const requestId = `mkdir_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    await redis.publish('session:command', JSON.stringify({
+      type: 'fs:mkdir',
+      requestId,
+      controllerId,
+      parentPath,
+      folderName,
+    }));
+
+    for (let i = 0; i < 30; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const result = await redis.get(`fs:mkdir:${requestId}`);
+      if (result) {
+        await redis.del(`fs:mkdir:${requestId}`);
+        const parsed = JSON.parse(result);
+        if (!parsed.success) {
+          throw new Error(parsed.error || 'Failed to create folder');
+        }
+        return { name: parsed.name, path: parsed.path, isDirectory: true };
+      }
+    }
+
+    throw new Error('Create folder timeout');
+  }
+
   async initGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<boolean> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {

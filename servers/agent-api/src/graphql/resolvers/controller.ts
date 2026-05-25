@@ -81,5 +81,23 @@ export const controllerResolvers = {
       }
       return controllerService.unbind(args.id, context.currentUser.id);
     },
+    setControllerWorktreeDir: async (
+      _parent: unknown,
+      args: { controllerId: string; worktreeDir: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const result = await controllerService.setWorktreeDir(
+        args.controllerId,
+        context.currentUser.id,
+        args.worktreeDir,
+      );
+      if (!result) {
+        throw new GraphQLError('Controller not found');
+      }
+      return result;
+    },
   },
 };

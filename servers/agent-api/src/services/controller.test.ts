@@ -126,4 +126,43 @@ describe('ControllerService', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('setWorktreeDir', () => {
+    it('should set worktreeDir and return controller', async () => {
+      vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => 'ctrl1' },
+          name: 'My Machine',
+          hostname: 'dev-machine',
+          type: 'local',
+          status: 'online',
+          keyId: { toString: () => 'key1' },
+          worktreeDir: '/custom/worktrees',
+          version: '1.0.0',
+          lastHeartbeatAt: null,
+          createdAt: new Date('2024-01-01'),
+          updatedAt: new Date('2024-01-01'),
+        }),
+      } as never);
+
+      const result = await controllerService.setWorktreeDir('ctrl1', 'user1', '/custom/worktrees');
+
+      expect(result).toBeDefined();
+      expect(result?.worktreeDir).toBe('/custom/worktrees');
+      expect(Controller.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'ctrl1', userId: 'user1' },
+        { worktreeDir: '/custom/worktrees' },
+        { new: true },
+      );
+    });
+
+    it('should return null when controller not found', async () => {
+      vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await controllerService.setWorktreeDir('ctrl1', 'user1', '/custom/worktrees');
+      expect(result).toBeNull();
+    });
+  });
 });

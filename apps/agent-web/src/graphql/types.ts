@@ -108,6 +108,8 @@ export interface SessionData {
   title: string | null
   externalSessionId: string | null
   cwd: string | null
+  worktreePath: string | null
+  worktreeBranch: string | null
   modes?: AgentModeData[] | null
   currentModeId?: string | null
   currentModel?: AgentModelInfoData | null

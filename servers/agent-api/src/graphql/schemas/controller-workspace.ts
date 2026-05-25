@@ -44,5 +44,6 @@ export const controllerWorkspaceTypeDefs = `#graphql
     toggleWorkspace(id: ID!): ControllerWorkspace!
     initGitRepo(controllerId: ID!, workspaceId: ID!): Boolean!
     setWorkspaceDefaultBranch(id: ID!, defaultBranch: String!): ControllerWorkspace!
+    createFolder(controllerId: ID!, parentPath: String!, folderName: String!): FolderEntry!
   }
 `;

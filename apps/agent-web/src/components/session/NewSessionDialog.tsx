@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@apollo/client/react';
-import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED } from '../../graphql/queries';
-import type { ControllerWorkspaceData } from '../../graphql/types';
+import { useQuery, useLazyQuery } from '@apollo/client/react';
+import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO } from '../../graphql/queries';
+import type { ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
 
 interface Controller {
   id: string;
@@ -18,13 +18,19 @@ interface AcpCapability {
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string) => void;
+  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string) => void;
 }
 
 export default function NewSessionDialog({ controllers, onClose, onCreate }: NewSessionDialogProps) {
   const [selectedController, setSelectedController] = useState<string>('');
   const [selectedAcpServer, setSelectedAcpServer] = useState<string>('');
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
+  const [isGitRepo, setIsGitRepo] = useState(false);
+  const [enableWorktree, setEnableWorktree] = useState(false);
+  const [branchSuffix, setBranchSuffix] = useState('');
+  const [detectGitRepo] = useLazyQuery<{ detectGitRepo: GitRepoInfoData }>(DETECT_GIT_REPO, {
+    fetchPolicy: 'network-only',
+  });
 
   const onlineControllers = controllers.filter((c) => c.status === 'online');
 
@@ -61,10 +67,30 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
     }
   }, [workspaces, selectedWorkspace]);
 
+  // Detect Git repo when workspace is selected
+  useEffect(() => {
+    if (selectedWorkspace && selectedController) {
+      setIsGitRepo(false);
+      setEnableWorktree(false);
+      detectGitRepo({
+        variables: { controllerId: selectedController, workspaceId: selectedWorkspace },
+      }).then((res) => {
+        if (res.data?.detectGitRepo?.isGitRepo) {
+          setIsGitRepo(true);
+          const ws = workspaces.find((w) => w.id === selectedWorkspace);
+          if (ws) {
+            const defaultSuffix = `feat-${Math.random().toString(36).slice(2, 8)}`;
+            setBranchSuffix(defaultSuffix);
+          }
+        }
+      });
+    }
+  }, [selectedWorkspace, selectedController]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedController && selectedAcpServer && selectedWorkspace) {
-      onCreate(selectedController, selectedAcpServer, selectedWorkspace);
+      onCreate(selectedController, selectedAcpServer, selectedWorkspace, enableWorktree, enableWorktree ? branchSuffix : undefined);
       onClose();
     }
   };
@@ -176,6 +202,40 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                       </div>
                     </label>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {isGitRepo && (
+            <div className="mb-6 rounded-md border p-3">
+              <div className="mb-2 block text-sm font-medium text-card-foreground">
+                Worktree 设置
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 mb-3">
+                <input
+                  type="checkbox"
+                  checked={enableWorktree}
+                  onChange={(e) => setEnableWorktree(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                <span className="text-sm">启用 Git Worktree 隔离工作目录</span>
+              </label>
+              {enableWorktree && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">分支名称</label>
+                  <div className="flex items-center gap-0">
+                    <span className="rounded-l-md border border-r-0 bg-muted px-2 py-1.5 text-sm text-muted-foreground">
+                      {workspaces.find((w) => w.id === selectedWorkspace)?.name || ''}/
+                    </span>
+                    <input
+                      type="text"
+                      value={branchSuffix}
+                      onChange={(e) => setBranchSuffix(e.target.value)}
+                      className="w-full rounded-r-md border px-2 py-1.5 text-sm text-foreground"
+                      placeholder="分支后缀"
+                    />
+                  </div>
                 </div>
               )}
             </div>

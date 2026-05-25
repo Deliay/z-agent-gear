@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { hostname } from 'os';
 import { resolveKey, resolveEndpoint, saveKeyToConfig, saveEndpointToConfig } from './config.js';
-import { connectToServer, unregister } from './socketio-client.js';
+import { connectToServer } from './socketio-client.js';
 import { writePid, removePid, isRunning } from './daemon.js';
 
 const program = new Command();
@@ -43,7 +43,6 @@ program
 
     const shutdown = () => {
       console.log('Shutting down...');
-      unregister(socket);
       socket.disconnect();
       removePid();
       process.exit(0);

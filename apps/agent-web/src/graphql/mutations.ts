@@ -274,3 +274,21 @@ export const SET_WORKSPACE_DEFAULT_BRANCH = gql`
     }
   }
 `
+
+export const SET_CONTROLLER_WORKTREE_DIR = gql`
+  mutation SetControllerWorktreeDir($controllerId: ID!, $worktreeDir: String!) {
+    setControllerWorktreeDir(controllerId: $controllerId, worktreeDir: $worktreeDir) {
+      id
+      worktreeDir
+    }
+  }
+`
+
+export const CREATE_FOLDER = gql`
+  mutation CreateFolder($controllerId: ID!, $parentPath: String!, $folderName: String!) {
+    createFolder(controllerId: $controllerId, parentPath: $parentPath, folderName: $folderName) {
+      name
+      path
+    }
+  }
+`

@@ -45,6 +45,16 @@ export class ControllerService {
     return true;
   }
 
+  async setWorktreeDir(id: string, userId: string, worktreeDir: string): Promise<Record<string, unknown> | null> {
+    const controller = await Controller.findOneAndUpdate(
+      { _id: id, userId },
+      { worktreeDir },
+      { new: true },
+    ).lean();
+    if (!controller) return null;
+    return this.mapController(controller);
+  }
+
   private mapController(controller: Record<string, unknown>): Record<string, unknown> {
     return {
       id: (controller._id as mongoose.Types.ObjectId).toString(),
@@ -54,6 +64,7 @@ export class ControllerService {
       status: controller.status,
       keyId: (controller.keyId as mongoose.Types.ObjectId).toString(),
       version: controller.version,
+      worktreeDir: (controller as any).worktreeDir || null,
       lastHeartbeatAt: controller.lastHeartbeatAt ? (controller.lastHeartbeatAt as Date).toISOString() : null,
       createdAt: (controller.createdAt as Date).toISOString(),
       updatedAt: (controller.updatedAt as Date).toISOString(),

@@ -3,7 +3,7 @@ import { NavLink, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation } from '../graphql/types';
+import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation, SessionData } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 
 interface SidebarProps {
@@ -40,24 +40,51 @@ export default function Sidebar({ username }: SidebarProps) {
   const controllers = controllersData?.controllers ?? [];
   const allWorkspaces = workspacesData?.workspaces ?? [];
 
+  const getWorkspacePath = (session: SessionData): string => {
+    if (session.worktreePath) {
+      const parts = session.worktreePath.split('/').filter(Boolean);
+      const wsName = parts[parts.length - 2];
+      const ws = allWorkspaces.find(
+        (w) => w.name === wsName && w.controllerId === session.controllerId,
+      );
+      return ws?.path || wsName || session.cwd || '';
+    }
+    return session.cwd || '';
+  };
+
   const getWorkspacePaths = (controllerId: string) => {
     const fromSessions = new Set(
       sessions
-        .filter((s) => s.cwd && s.controllerId === controllerId)
-        .map((s) => s.cwd!)
+        .filter((s) => s.controllerId === controllerId)
+        .map((s) => getWorkspacePath(s))
+        .filter(Boolean),
     );
     const fromConfig = new Set(
       allWorkspaces
         .filter((w) => w.controllerId === controllerId && w.isEnabled)
-        .map((w) => w.path)
+        .map((w) => w.path),
     );
     return new Set([...fromSessions, ...fromConfig]);
   };
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string) => {
+  const handleCreateSession = async (
+    controllerId: string,
+    acpServerType: string,
+    workspaceId: string,
+    enableWorktree?: boolean,
+    worktreeBranchSuffix?: string,
+  ) => {
     try {
       const { data } = await createSession({
-        variables: { input: { controllerId, acpServerType, workspaceId } },
+        variables: {
+          input: {
+            controllerId,
+            acpServerType,
+            workspaceId,
+            enableWorktree: enableWorktree || false,
+            worktreeBranchSuffix: worktreeBranchSuffix || null,
+          },
+        },
         refetchQueries: [{ query: GET_SESSIONS }],
       });
       if (data?.createSession?.session?.id) {
@@ -69,7 +96,7 @@ export default function Sidebar({ username }: SidebarProps) {
     }
   };
 
-  // Group sessions by controllerId + cwd (workspace path)
+  // Group sessions by controllerId + workspace path
   const sessionsByController = new Map<string, typeof sessions>();
   const sessionsByWorkspace = new Map<string, typeof sessions>();
 
@@ -79,9 +106,10 @@ export default function Sidebar({ username }: SidebarProps) {
     controllerSessions.push(session);
     sessionsByController.set(session.controllerId, controllerSessions);
 
-    // Group by workspace (using cwd as workspace path)
-    if (session.cwd) {
-      const workspaceKey = `${session.controllerId}:${session.cwd}`;
+    // Group by workspace (resolve worktree sessions to original workspace)
+    const wsPath = getWorkspacePath(session);
+    if (wsPath) {
+      const workspaceKey = `${session.controllerId}:${wsPath}`;
       const workspaceSessions = sessionsByWorkspace.get(workspaceKey) || [];
       workspaceSessions.push(session);
       sessionsByWorkspace.set(workspaceKey, workspaceSessions);
@@ -216,7 +244,18 @@ export default function Sidebar({ username }: SidebarProps) {
                                           : 'text-gray-300 hover:bg-gray-800 hover:text-white'
                                       }`}
                                     >
-                                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                      {(session as any).worktreePath ? (
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-blue-400">
+                                          <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                                          <path d="M21 3h-3a2 2 0 0 0-2 2v3" />
+                                          <path d="M21 15v3a2 2 0 0 1-2 2h-3" />
+                                          <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                                          <polyline points="7 9 12 4 17 9" />
+                                          <polyline points="7 15 12 20 17 15" />
+                                        </svg>
+                                      ) : (
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                      )}
                                       <div className="min-w-0 flex-1">
                                         <div className="truncate">
                                           {session.title || 'New Session'}
