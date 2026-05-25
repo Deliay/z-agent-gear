@@ -257,3 +257,10 @@ export interface SetWorkspaceDefaultBranchMutation {
 export interface DetectGitRepoQuery {
   detectGitRepo: GitRepoInfoData
 }
+
+export interface CreateFolderMutation {
+  createFolder: {
+    name: string
+    path: string
+  } | null
+}
