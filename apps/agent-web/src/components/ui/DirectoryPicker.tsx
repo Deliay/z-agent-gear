@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { BROWSE_FOLDER, GET_HOME_DIRECTORY } from '../../graphql/queries';
 import { CREATE_FOLDER } from '../../graphql/mutations';
-import type { FolderEntryData } from '../../graphql/types';
+import type { FolderEntryData, CreateFolderMutation } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -17,7 +17,7 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
   const [history, setHistory] = useState<string[]>([]);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  const [createFolder] = useMutation(CREATE_FOLDER);
+  const [createFolder] = useMutation<CreateFolderMutation>(CREATE_FOLDER);
 
   const { data: homeData, loading: homeLoading } = useQuery<{ getHomeDirectory: string | null }>(
     GET_HOME_DIRECTORY,
