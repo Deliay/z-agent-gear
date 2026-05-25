@@ -12,6 +12,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +22,6 @@ jobs:
           node-version: 20
           cache: 'npm'
           cache-dependency-path: packages/agent-controller/package-lock.json
-          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm ci
@@ -35,7 +36,5 @@ jobs:
         working-directory: packages/agent-controller
 
       - name: Publish
-        run: npm publish
+        run: npm publish --provenance
         working-directory: packages/agent-controller
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
