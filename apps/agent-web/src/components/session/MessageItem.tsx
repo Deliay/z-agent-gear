@@ -36,8 +36,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return 'tool_call';
       case 'tool_call_update':
         return 'tool_call';
-      case 'plan':
-        return 'plan';
       default:
         return message.type;
     }
@@ -53,8 +51,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return typeof acpUpdate.title === 'string' ? acpUpdate.title : '';
       case 'tool_call_update':
         return acpUpdate.title || '';
-      case 'plan':
-        return acpUpdate.entries?.map(e => e.content).join('\n') || '';
       default:
         return typeof message.content === 'string' ? message.content : '';
     }
@@ -77,8 +73,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return 'bg-purple-100 text-purple-900 border border-purple-200';
       case 'tool_result':
         return 'bg-green-100 text-green-900 border border-green-200';
-      case 'plan':
-        return 'bg-yellow-100 text-yellow-900 border border-yellow-200';
       case 'error':
         return 'bg-red-100 text-red-900 border border-red-200';
       case 'image':
@@ -92,8 +86,6 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (type) {
       case 'tool_call':
         return toolTitle ? `Tool Call: ${toolTitle}` : 'Tool Call';
-      case 'plan':
-        return 'Plan';
       case 'error':
         return 'Error';
       case 'image':
