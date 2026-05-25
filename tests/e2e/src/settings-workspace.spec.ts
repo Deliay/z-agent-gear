@@ -266,7 +266,9 @@ test.describe('Settings Workspace E2E', () => {
     await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByText('workspace-a', { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('workspace-a', { exact: true }).first()).toBeVisible({ timeout: 5000 });
+    // Open workspace select popup to verify path is listed
+    await page.locator('[data-slot="select-trigger"]').nth(1).click();
     await expect(page.getByText('/home/test/workspace-a')).toBeVisible();
 
     disconnect();
