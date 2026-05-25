@@ -2,6 +2,15 @@ import { useState, useEffect } from 'react';
 import { useQuery, useLazyQuery } from '@apollo/client/react';
 import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO } from '../../graphql/queries';
 import type { ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
+import {
+  Select as SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPopup,
+  SelectItem,
+  SelectItemText,
+} from '../../components/ui/select';
 
 interface Controller {
   id: string;
@@ -129,48 +138,46 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
 
           {selectedController && (
             <div className="mb-4">
-              <div className="mb-2 block text-sm font-medium text-card-foreground">
+              <label className="mb-2 block text-sm font-medium text-card-foreground">
                 ACP Server
-              </div>
+              </label>
               {acpLoading ? (
                 <p className="text-sm text-muted-foreground">Detecting ACP servers...</p>
               ) : (
-                <div className="space-y-2">
-                  {(acpServers.length > 0 ? acpServers : [{ type: 'opencode', available: true }]).map((server) => (
-                    <label
-                      key={server.type}
-                      className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 ${
-                        selectedAcpServer === server.type
-                          ? 'border-blue-500 bg-accent'
-                          : 'border-border bg-card hover:bg-accent/50'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="acp-server"
-                        value={server.type}
-                        checked={selectedAcpServer === server.type}
-                        onChange={(e) => setSelectedAcpServer(e.target.value)}
-                        className="h-4 w-4 text-blue-600"
-                      />
-                      <div>
-                        <span className="text-sm font-medium text-card-foreground">{server.type}</span>
-                        {server.version && (
-                          <span className="ml-2 text-xs text-muted-foreground">v{server.version}</span>
-                        )}
-                      </div>
-                    </label>
-                  ))}
-                </div>
+                <SelectRoot
+                  value={selectedAcpServer}
+                  onValueChange={(value) => setSelectedAcpServer(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      {selectedAcpServer || 'Select ACP server'}
+                    </SelectValue>
+                    <SelectIcon />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {(acpServers.length > 0 ? acpServers : [{ type: 'opencode', available: true, version: undefined }]).map((server) => (
+                      <SelectItem key={server.type} value={server.type}>
+                        <SelectItemText>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">{server.type}</span>
+                            {server.version && (
+                              <span className="text-xs text-muted-foreground">v{server.version}</span>
+                            )}
+                          </div>
+                        </SelectItemText>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </SelectRoot>
               )}
             </div>
           )}
 
           {selectedController && (
             <div className="mb-6">
-              <div className="mb-2 block text-sm font-medium text-card-foreground">
+              <label className="mb-2 block text-sm font-medium text-card-foreground">
                 Working Directory
-              </div>
+              </label>
               {wsLoading ? (
                 <p className="text-sm text-muted-foreground">Loading workspaces...</p>
               ) : workspaces.length === 0 ? (
@@ -178,31 +185,31 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                   暂无工作区，请先在设置中管理工作区
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {workspaces.map((ws) => (
-                    <label
-                      key={ws.id}
-                      className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 ${
-                        selectedWorkspace === ws.id
-                          ? 'border-blue-500 bg-accent'
-                          : 'border-border bg-card hover:bg-accent/50'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="workspace"
-                        value={ws.id}
-                        checked={selectedWorkspace === ws.id}
-                        onChange={(e) => setSelectedWorkspace(e.target.value)}
-                        className="h-4 w-4 text-blue-600"
-                      />
-                      <div>
-                        <span className="text-sm font-medium text-card-foreground">{ws.name}</span>
-                        <div className="text-xs text-muted-foreground">{ws.path}</div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
+                <SelectRoot
+                  value={selectedWorkspace}
+                  onValueChange={(value) => setSelectedWorkspace(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      {selectedWorkspace
+                        ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace
+                        : 'Select a workspace'}
+                    </SelectValue>
+                    <SelectIcon />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {workspaces.map((ws) => (
+                      <SelectItem key={ws.id} value={ws.id}>
+                        <SelectItemText>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">{ws.name}</span>
+                            <span className="text-xs text-muted-foreground">{ws.path}</span>
+                          </div>
+                        </SelectItemText>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </SelectRoot>
               )}
             </div>
           )}
@@ -219,23 +226,21 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                   onChange={(e) => setEnableWorktree(e.target.checked)}
                   className="h-4 w-4"
                 />
-                <span className="text-sm">启用 Git Worktree 隔离工作目录</span>
+                <span className="text-sm text-foreground">启用 Git Worktree 隔离工作目录</span>
               </label>
               {enableWorktree && (
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">分支名称</label>
-                  <div className="flex items-center gap-0">
-                    <span className="rounded-l-md border border-r-0 bg-muted px-2 py-1.5 text-sm text-muted-foreground">
-                      {workspaces.find((w) => w.id === selectedWorkspace)?.name || ''}/
-                    </span>
-                    <input
-                      type="text"
-                      value={branchSuffix}
-                      onChange={(e) => setBranchSuffix(e.target.value)}
-                      className="w-full rounded-r-md border px-2 py-1.5 text-sm text-foreground"
-                      placeholder="分支后缀"
-                    />
+                  <div className="mb-1 text-sm text-muted-foreground">
+                    {workspaces.find((w) => w.id === selectedWorkspace)?.name || ''}/
                   </div>
+                  <input
+                    type="text"
+                    value={branchSuffix}
+                    onChange={(e) => setBranchSuffix(e.target.value)}
+                    className="w-full rounded-md border px-2 py-1.5 text-sm text-foreground"
+                    placeholder="分支后缀"
+                  />
                 </div>
               )}
             </div>

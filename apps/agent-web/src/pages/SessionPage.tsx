@@ -61,6 +61,8 @@ export default function SessionPage() {
   const [status, setStatus] = useState<string>('connecting');
   const [sending, setSending] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
@@ -210,16 +212,20 @@ export default function SessionPage() {
 
   const handleCloseSession = async () => {
     if (!id) return;
+    setClosing(true);
     try {
       await closeSession({ variables: { id } });
       setStatus('ended');
     } catch (error) {
       console.error('Failed to close session:', error);
+    } finally {
+      setClosing(false);
     }
   };
 
   const handleDeleteSession = async () => {
     if (!id) return;
+    setDeleting(true);
     try {
       await deleteSession({
         variables: { id },
@@ -228,6 +234,8 @@ export default function SessionPage() {
       navigate('/sessions');
     } catch (error) {
       console.error('Failed to delete session:', error);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -344,12 +352,15 @@ export default function SessionPage() {
         onDelete={handleDeleteSession}
         onContinue={handleResumeSession}
         resuming={resuming}
+        closing={closing}
+        deleting={deleting}
         controllerOnline={controllerOnline}
       />
       <MessageList
         messages={messages}
       />
       <InputBox
+        sessionId={id}
         onSend={handleSendMessage}
         onStop={handleCancelGeneration}
         disabled={status !== 'running' && status !== 'idling'}
