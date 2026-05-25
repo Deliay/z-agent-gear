@@ -45,7 +45,7 @@ export class WorktreeHandler {
         mkdirSync(parentDir, { recursive: true });
       }
       const { stderr } = await execAsync(
-        `git worktree add -b "${branch}" "${worktreePath}" "${repoPath}"`,
+        `git -C "${repoPath}" worktree add -b "${branch}" "${worktreePath}"`,
       );
       if (stderr && !stderr.includes('already exists') && !stderr.includes('done')) {
         return { success: false, error: stderr.trim() };
