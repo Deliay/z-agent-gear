@@ -3,7 +3,7 @@ import { NavLink, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation } from '../graphql/types';
+import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation, SessionData } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 
 interface SidebarProps {
@@ -40,16 +40,29 @@ export default function Sidebar({ username }: SidebarProps) {
   const controllers = controllersData?.controllers ?? [];
   const allWorkspaces = workspacesData?.workspaces ?? [];
 
+  const getWorkspacePath = (session: SessionData): string => {
+    if (session.worktreePath) {
+      const parts = session.worktreePath.split('/').filter(Boolean);
+      const wsName = parts[parts.length - 2];
+      const ws = allWorkspaces.find(
+        (w) => w.name === wsName && w.controllerId === session.controllerId,
+      );
+      return ws?.path || wsName || session.cwd || '';
+    }
+    return session.cwd || '';
+  };
+
   const getWorkspacePaths = (controllerId: string) => {
     const fromSessions = new Set(
       sessions
-        .filter((s) => s.cwd && s.controllerId === controllerId)
-        .map((s) => s.cwd!)
+        .filter((s) => s.controllerId === controllerId)
+        .map((s) => getWorkspacePath(s))
+        .filter(Boolean),
     );
     const fromConfig = new Set(
       allWorkspaces
         .filter((w) => w.controllerId === controllerId && w.isEnabled)
-        .map((w) => w.path)
+        .map((w) => w.path),
     );
     return new Set([...fromSessions, ...fromConfig]);
   };
@@ -83,7 +96,7 @@ export default function Sidebar({ username }: SidebarProps) {
     }
   };
 
-  // Group sessions by controllerId + cwd (workspace path)
+  // Group sessions by controllerId + workspace path
   const sessionsByController = new Map<string, typeof sessions>();
   const sessionsByWorkspace = new Map<string, typeof sessions>();
 
@@ -93,9 +106,10 @@ export default function Sidebar({ username }: SidebarProps) {
     controllerSessions.push(session);
     sessionsByController.set(session.controllerId, controllerSessions);
 
-    // Group by workspace (using cwd as workspace path)
-    if (session.cwd) {
-      const workspaceKey = `${session.controllerId}:${session.cwd}`;
+    // Group by workspace (resolve worktree sessions to original workspace)
+    const wsPath = getWorkspacePath(session);
+    if (wsPath) {
+      const workspaceKey = `${session.controllerId}:${wsPath}`;
       const workspaceSessions = sessionsByWorkspace.get(workspaceKey) || [];
       workspaceSessions.push(session);
       sessionsByWorkspace.set(workspaceKey, workspaceSessions);

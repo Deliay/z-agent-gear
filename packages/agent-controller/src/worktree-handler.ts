@@ -47,7 +47,7 @@ export class WorktreeHandler {
       const { stderr } = await execAsync(
         `git -C "${repoPath}" worktree add -b "${branch}" "${worktreePath}"`,
       );
-      if (stderr && !stderr.includes('already exists') && !stderr.includes('done')) {
+      if (stderr && !stderr.includes('already exists') && !stderr.includes('done') && !stderr.includes('Preparing')) {
         return { success: false, error: stderr.trim() };
       }
       return { success: true, worktreePath, branch };
@@ -56,9 +56,9 @@ export class WorktreeHandler {
     }
   }
 
-  async remove(worktreePath: string): Promise<WorktreeRemoveResult> {
+  async remove(repoPath: string, worktreePath: string): Promise<WorktreeRemoveResult> {
     try {
-      const { stderr } = await execAsync(`git worktree remove "${worktreePath}"`);
+      const { stderr } = await execAsync(`git -C "${repoPath}" worktree remove "${worktreePath}"`);
       if (stderr) return { success: false, error: stderr.trim() };
       try {
         if (existsSync(worktreePath)) {

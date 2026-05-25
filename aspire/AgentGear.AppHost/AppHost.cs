@@ -12,12 +12,16 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
 
 var mongodb = builder.AddMongoDB("mongodb")
     .WithImage("mongo", "7")
-    .WithDataVolume()
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "mongodb";
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/mongo:7";
     });
+
+if (builder.ExecutionContext.IsPublishMode)
+{
+    mongodb = mongodb.WithDataVolume();
+}
 
 var redis = builder.AddRedis("redis")
     .PublishAsDockerComposeService((resource, service) =>

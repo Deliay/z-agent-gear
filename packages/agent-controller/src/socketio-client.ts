@@ -524,7 +524,7 @@ export function connectToServer(
   });
 
   socket.on('git:worktree:remove', async (data: GitWorktreeRemovePayload) => {
-    const result = await worktreeHandler.remove(data.worktreePath);
+    const result = await worktreeHandler.remove(data.repoPath, data.worktreePath);
     socket.emit('git:worktree:remove:result', { requestId: data.requestId, ...result });
   });
 

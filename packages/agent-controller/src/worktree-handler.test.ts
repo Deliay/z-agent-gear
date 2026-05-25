@@ -23,7 +23,7 @@ function getCallback(args: unknown[]): ExecCallback | undefined {
 }
 
 function mockExecSuccess(stdout: string, stderr = '') {
-  (exec as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+  (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
     const cb = getCallback(args);
     if (cb) cb(null, stdout, stderr);
     return { on: vi.fn() };
@@ -31,7 +31,7 @@ function mockExecSuccess(stdout: string, stderr = '') {
 }
 
 function mockExecError(errorMsg: string) {
-  (exec as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+  (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
     const cb = getCallback(args);
     if (cb) cb(new Error(errorMsg), '', '');
     return { on: vi.fn() };
@@ -71,13 +71,13 @@ describe('WorktreeHandler', () => {
   describe('remove', () => {
     it('should successfully remove a worktree', async () => {
       mockExecSuccess('');
-      const result = await handler.remove('/worktrees/ws/branch');
+      const result = await handler.remove('/repo', '/worktrees/ws/branch');
       expect(result.success).toBe(true);
     });
 
     it('should handle removal failure', async () => {
       mockExecError('fatal: worktree not found');
-      const result = await handler.remove('/fake/path');
+      const result = await handler.remove('/repo', '/fake/path');
       expect(result.success).toBe(false);
       expect(result.error).toContain('fatal');
     });
@@ -107,7 +107,7 @@ describe('WorktreeHandler', () => {
   describe('commit', () => {
     it('should successfully commit with hash extraction', async () => {
       let callCount = 0;
-      (exec as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
         callCount++;
         const cb = getCallback(args);
         if (!cb) return { on: vi.fn() };
@@ -126,7 +126,7 @@ describe('WorktreeHandler', () => {
     });
 
     it('should handle commit with no real changes', async () => {
-      (exec as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
         const cb = getCallback(args);
         if (cb) cb(null, 'nothing to commit, working tree clean', '');
         return { on: vi.fn() };

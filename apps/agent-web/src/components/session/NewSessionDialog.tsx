@@ -232,7 +232,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                       type="text"
                       value={branchSuffix}
                       onChange={(e) => setBranchSuffix(e.target.value)}
-                      className="w-full rounded-r-md border px-2 py-1.5 text-sm"
+                      className="w-full rounded-r-md border px-2 py-1.5 text-sm text-foreground"
                       placeholder="分支后缀"
                     />
                   </div>
