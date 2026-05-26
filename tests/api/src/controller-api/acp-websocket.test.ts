@@ -131,6 +131,21 @@ describe('Controller API ACP WebSocket', () => {
       await new Promise((r) => setTimeout(r, 200));
       client.disconnect();
     });
+
+    it('should handle acp:check:result with multiple server types', async () => {
+      const { client } = await createFreshController();
+
+      client.emit('acp:check:result', {
+        requestId: 'test-req-multi',
+        servers: [
+          { type: 'opencode', available: true, version: '1.0.0' },
+          { type: 'github_copilot', available: true, version: '2.0.0' },
+        ],
+      });
+
+      await new Promise((r) => setTimeout(r, 200));
+      client.disconnect();
+    });
   });
 
   describe('acp:start via createSession', () => {
@@ -212,6 +227,47 @@ describe('Controller API ACP WebSocket', () => {
       const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
       const verifyBody = await verifyRes.json();
       expect(verifyBody.data.session.status).toBe('ended');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:start with github_copilot serverType', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'github_copilot', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('github_copilot');
+      expect(startData.requestId).toBeDefined();
+
+      // Respond with success
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_gc_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('idling');
 
       client.disconnect();
     });
