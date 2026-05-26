@@ -12,14 +12,15 @@ interface ModeSwitcherProps {
   modes: AgentMode[];
   status: string;
   onSetMode: (modeId: string) => Promise<void>;
+  disabled?: boolean;
 }
 
-export default function ModeSwitcher({ currentModeId, modes, status, onSetMode }: ModeSwitcherProps) {
+export default function ModeSwitcher({ currentModeId, modes, status, onSetMode, disabled: disabledProp }: ModeSwitcherProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const currentMode = modes.find((m) => m.id === currentModeId);
-  const disabled = status !== 'idling' || modes.length === 0;
+  const disabled = disabledProp || status !== 'idling' || modes.length === 0;
 
   const handleSelect = async (modeId: string) => {
     if (modeId === currentModeId) {

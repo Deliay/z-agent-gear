@@ -14,6 +14,7 @@ interface InputBoxProps {
   onStop?: () => void;
   disabled: boolean;
   sending?: boolean;
+  isWorking?: boolean;
   modes?: AgentMode[];
   currentModeId?: string | null;
   onSetMode?: (modeId: string) => Promise<void>;
@@ -26,7 +27,7 @@ interface InputBoxProps {
 
 const STORAGE_PREFIX = 'session_input_';
 
-export default function InputBox({ onSend, onStop, disabled, sending, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId }: InputBoxProps) {
+export default function InputBox({ onSend, onStop, disabled, sending, isWorking, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId }: InputBoxProps) {
   const [input, setInput] = useState('');
 
   const textareaRef = useState<HTMLTextAreaElement | null>(null);
@@ -90,6 +91,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, modes = []
             modes={modes}
             status={status}
             onSetMode={onSetMode}
+            disabled={isWorking}
           />
         )}
         {onSetModel && (
@@ -98,6 +100,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, modes = []
             availableModels={availableModels}
             status={status}
             onSetModel={onSetModel}
+            disabled={isWorking}
           />
         )}
       </div>
@@ -119,10 +122,10 @@ export default function InputBox({ onSend, onStop, disabled, sending, modes = []
                 : 'Type your message...'
           }
           className="flex-1 resize-none rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
-          style={{ maxHeight: '5rem', overflowY: 'auto' }}
+          style={{ maxHeight: '10rem', overflowY: 'auto' }}
           rows={1}
         />
-        {sending ? (
+        {(sending || isWorking) ? (
           <button
             type="button"
             onClick={handleStop}
