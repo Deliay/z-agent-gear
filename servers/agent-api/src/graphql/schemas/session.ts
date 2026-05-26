@@ -11,6 +11,7 @@ export const sessionTypeDefs = `#graphql
 
   enum AcpServerType {
     opencode
+    github_copilot
   }
 
   enum AcpMessageDirection {
