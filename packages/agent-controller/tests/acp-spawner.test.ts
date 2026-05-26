@@ -2,14 +2,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Writable, Readable } from 'node:stream';
 import type { ChildProcess } from 'child_process';
+import * as os from 'os';
+
+vi.mock('os', () => ({
+  platform: vi.fn(() => 'linux'),
+}));
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
   execFileSync: vi.fn(() => '/usr/bin/opencode'),
 }));
 
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, existsSync: vi.fn(() => false), mkdirSync: vi.fn() };
+});
+
 import { AcpSpawner } from '../../src/acp/spawner.js';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
+import { existsSync } from 'fs';
 
 function createMockChildProcess(): ChildProcess & EventEmitter {
   const proc = new EventEmitter() as ChildProcess & EventEmitter;
@@ -144,6 +155,90 @@ describe('AcpSpawner', () => {
       expect(resolved).toBe(false);
       mockProcess.emit('exit', 0, null);
       await vi.waitFor(() => expect(resolved).toBe(true));
+    });
+  });
+
+  describe('Windows platform', () => {
+    beforeEach(() => {
+      vi.mocked(os.platform).mockReturnValue('win32');
+      vi.mocked(execFileSync).mockReset();
+      vi.mocked(existsSync).mockReset();
+      vi.mocked(spawn).mockClear();
+    });
+
+    afterEach(() => {
+      vi.mocked(os.platform).mockReturnValue('linux');
+    });
+
+    describe('resolveCommand', () => {
+      it('should use `where` instead of `which`', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot', args: ['--acp', '--stdio'] });
+        sp.start();
+        expect(execFileSync).toHaveBeenCalledWith('where', ['copilot'], { encoding: 'utf8', timeout: 1000 });
+      });
+
+      it('should return full path from `where`', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot', args: ['--acp', '--stdio'] });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith(
+          'C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd',
+          ['--acp', '--stdio'],
+          expect.objectContaining({ shell: true }),
+        );
+      });
+
+      it('should fall back to PATHEXT check when `where` fails', () => {
+        vi.mocked(execFileSync).mockImplementation(() => { throw new Error('not found'); });
+        vi.mocked(existsSync).mockImplementation((p: string) => p === 'copilot.cmd');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith('copilot.cmd', expect.any(Array), expect.objectContaining({ shell: true }));
+      });
+
+      it('should return bare command as last resort', () => {
+        vi.mocked(execFileSync).mockImplementation(() => { throw new Error('not found'); });
+        vi.mocked(existsSync).mockReturnValue(false);
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith('copilot', expect.any(Array), expect.objectContaining({ shell: true }));
+      });
+    });
+
+    describe('start', () => {
+      it('should spawn with shell: true', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.any(Array),
+          expect.objectContaining({ shell: true }),
+        );
+      });
+    });
+
+    describe('stop', () => {
+      it('should call kill() without signal on Windows', () => {
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
+        sp.start();
+        sp.stop();
+        expect(mockProcess.kill).toHaveBeenCalledWith();
+        expect(mockProcess.kill).not.toHaveBeenCalledWith('SIGTERM');
+      });
+
+      it('should call kill() again after 5s on Windows', () => {
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
+        sp.start();
+        sp.stop();
+        expect(mockProcess.kill).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(5000);
+        expect(mockProcess.kill).toHaveBeenCalledTimes(2);
+        expect(mockProcess.kill).not.toHaveBeenCalledWith('SIGKILL');
+      });
     });
   });
 });
