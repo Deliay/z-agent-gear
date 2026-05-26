@@ -7,16 +7,17 @@ interface ModelSwitcherProps {
   availableModels: AgentModelInfoData[];
   status: string;
   onSetModel: (modelId: string) => Promise<void>;
+  disabled?: boolean;
 }
 
-export function ModelSwitcher({ currentModelId, availableModels, status, onSetModel }: ModelSwitcherProps) {
+export function ModelSwitcher({ currentModelId, availableModels, status, onSetModel, disabled: disabledProp }: ModelSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const currentModel = currentModelId
     ? availableModels.find((m) => m.id === currentModelId)
     : null;
-  const disabled = status !== 'idling' || availableModels.length === 0;
+  const disabled = disabledProp || status !== 'idling' || availableModels.length === 0;
 
   const handleSelect = async (modelId: string) => {
     setLoading(true);
