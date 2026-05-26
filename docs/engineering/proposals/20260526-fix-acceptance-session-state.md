@@ -6,7 +6,7 @@ type: Permanent
 # Session 状态验收问题修复
 
 **功能名称**: Session 状态验收问题修复
-**技术提案版本**: v1.2
+**技术提案版本**: v1.3
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -14,17 +14,21 @@ type: Permanent
 
 ### 1.1 背景
 
-当前代码中存在三个 Session 状态相关的验收问题：
+当前代码中存在 4 个 Session 状态相关的验收问题：
 
-1. `currentModel` 与 `currentModelId` 两套字段并存，但 `currentModel` 完全是冗余的（可从 `currentModelId` + `availableModels` 推导），增加维护成本和数据传输开销
-2. 当 agent 返回 `config_option_update` 或 `current_mode_update` 这类 setting update 消息后，用户可能因状态未及时切换而无法发送下一条消息
-3. SSE `type: 'status'` 事件的处理不完整，前端未充分利用事件中的 `$.data.status` 字段更新会话状态
+1. **`currentModel` 与 `currentModelId` 两套字段并存**，`currentModel` 是冗余的（可从 `currentModelId` + `availableModels` 推导），增加维护成本和数据传输开销
+2. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
+3. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
+4. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
+
+> **注意**：原问题 4（SubAgent 卡片未渲染）已由 main 的 UI 优化工作解决 - `MessageList.tsx` 已实现 `sub_agent` 分组和 `SubAgentCard` 组件。
 
 ### 1.2 目标
 
 - 移除 `currentModel` 字段，全链路只使用 `currentModelId`
-- setting update 消息后允许用户继续发送消息
-- 确保每个 SSE `type: 'status'` 事件正确更新前端状态
+- 修复 `sessionData` useEffect 被轮询覆盖的问题
+- Setting update 消息后允许用户继续发送消息
+- Session 路由切换时正确显示 loading 状态
 
 ### 1.3 范围
 
@@ -260,7 +264,40 @@ useEffect(() => {
 - **为什么不把 `ref` 放进 `[]` 依赖中**：`initializedRef.current` 的变化不会触发重渲染，放在依赖数组中无意义。
 - **SSE initial status 的冗余**：组件初始化时 `GET_SESSION` + SSE 初始 status 事件都包含相同的数据。先用 `GET_SESSION` 同步初始化（消除白屏等待），SSE 建立后会立即收到一致的 status 事件覆盖——这没有副作用，因为值相同。
 
-### 2.4 问题四：SubAgent 子任务卡片未渲染
+### 2.4 问题四：路由切换 Session 时无 loading 状态
+
+#### 现状
+
+`App.tsx` 的 `SessionPage` 路由没有 `key` prop：
+
+```tsx
+<Route path="sessions/:id" element={<SessionPage />} />
+```
+
+当用户在 `/sessions/sessionA` 时直接导航到 `/sessions/sessionB`，React Router v7 复用 `SessionPage` 组件实例，导致：
+1. `messages` 状态保留旧 session 的数据
+2. 无 loading spinner 显示
+3. 用户看到上一个 session 的消息列表
+
+#### 方案
+
+在 `App.tsx` 中创建包装组件，使用 `location.pathname` 作为 key 强制组件重载：
+
+```tsx
+function SessionPageRoute() {
+  const location = useLocation();
+  return <SessionPage key={location.pathname} />;
+}
+
+// 路由中使用
+<Route path="sessions/:id" element={<SessionPageRoute />} />
+```
+
+### 2.5 已被 main 解决：SubAgent 卡片渲染
+
+`MessageList.tsx` 已实现 `sub_agent` 分组类型（第 86-87 行），`SubAgentCard.tsx` 已实现专用组件。`kind === 'other'` 且 `rawInput.subagent_type` 存在时会被识别为 `sub_agent` 类型并使用 `SubAgentCard` 渲染。
+
+因此原问题 4（SubAgent 卡片未渲染）已在 main 的 UI 优化工作中解决，本次不再处理。
 
 #### 现状
 
