@@ -1,12 +1,12 @@
 ---
-description: 修复三个 Session 状态相关的验收问题：移除 currentModel 冗余字段、允许 setting update 后发送消息、完善 SSE status 事件处理
+description: 修复 Session 状态相关的验收问题：移除 currentModel 冗余字段、修复 SubAgent 卡片渲染、修复 sessionData useEffect 被轮询覆盖、允许 setting update 后发送消息、路由切换时显示 loading 状态
 type: Permanent
 ---
 
 # Session 状态验收问题修复
 
 **功能名称**: Session 状态验收问题修复
-**技术提案版本**: v1.3
+**技术提案版本**: v1.4
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -14,18 +14,18 @@ type: Permanent
 
 ### 1.1 背景
 
-当前代码中存在 4 个 Session 状态相关的验收问题：
+当前代码中存在 5 个 Session 状态相关的验收问题：
 
 1. **`currentModel` 与 `currentModelId` 两套字段并存**，`currentModel` 是冗余的（可从 `currentModelId` + `availableModels` 推导），增加维护成本和数据传输开销
-2. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
-3. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
-4. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
-
-> **注意**：原问题 4（SubAgent 卡片未渲染）已由 main 的 UI 优化工作解决 - `MessageList.tsx` 已实现 `sub_agent` 分组和 `SubAgentCard` 组件。
+2. **SubAgent 子任务卡片未正确路由** - `subagent_type` 的检测代码在 `MessageList.tsx` 的 `else` 分支中（第 86 行），但由于 SubAgent 消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
+3. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
+4. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
+5. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
 
 ### 1.2 目标
 
 - 移除 `currentModel` 字段，全链路只使用 `currentModelId`
+- SubAgent 卡片正确渲染（检测 `subagent_type` 并路由到 `SubAgentCard`）
 - 修复 `sessionData` useEffect 被轮询覆盖的问题
 - Setting update 消息后允许用户继续发送消息
 - Session 路由切换时正确显示 loading 状态
@@ -88,58 +88,107 @@ flowchart TD
     G --> H
 ```
 
-详情见下方【各层具体改动】表格。
-
-### 2.2 问题二：最后一条消息是 setting update 时允许发送
+### 2.2 问题二：SubAgent 子任务卡片未正确路由
 
 #### 现状
 
-```tsx
-// SessionPage.tsx L355
-disabled={status !== 'running' && status !== 'idling'}
+`MessageList.tsx` 的 `groupMessages` 函数中，消息分组类型检测逻辑如下（第 58-94 行）：
+
+```typescript
+if (sessionUpdateType === 'user_message_chunk') {
+  groupType = 'user_message';
+} else if (sessionUpdateType === 'agent_message_chunk') {
+  groupType = 'agent_message';
+} else if (sessionUpdateType === 'agent_thought_chunk') {
+  groupType = 'thought';
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {  // ← 第64行
+  groupType = 'tool_call';
+  // ...
+} else {
+  // ← 第76行：subagent 检测在这里，但永远不会被 tool_call 消息到达
+  if (kind === 'other' && rawInput?.subagent_type) {
+    groupType = 'sub_agent';
+  }
+}
 ```
 
-输入框仅当 `status` 为 `running` 或 `idling` 时启用。而当 agent 返回 setting update 时，`handleControllerMessage`（`acp-session-manager.ts`）会同时：
-1. 将消息写入 DB 并发送 SSE `type: 'message'` 事件
-2. 发布 `publishStatus(sessionId, 'idling', ...)` 发送 SSE `type: 'status'` 事件
+用户反馈的 SubAgent 消息数据结构：
 
-但由于 SSE 事件的到达存在时序差，`message` 事件先到（用户看到 setting update），`status` 事件后到（状态更新为 `idling`）。在间隙中：
-- 如果状态恰好处于非 `running`/`idling` 的组合（如场景导致中继状态），用户无法发送
+```json
+{
+  "id": "6a15643ae7227d801c6dacf2",
+  "direction": "output",
+  "type": "tool_call",
+  "content": {
+    "kind": "other",
+    "title": "task",
+    "status": "in_progress",
+    "subagent_type": "explore",
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_00_FmrB6QVXt3w0WWnpm9IH5651",
+    "rawInput": {
+      "description": "Find currentModel usage",
+      "prompt": "...",
+      "subagent_type": "explore"
+    }
+  },
+  "createdAt": "2026-05-26T09:13:30.228Z"
+}
+```
+
+#### 根因分析
+
+`content.sessionUpdate` 为 `"tool_call_update"`，在第 64 行被 `sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update'` 匹配，`groupType` 被设为 `'tool_call'`。
+
+第 76-93 行的 `else` 分支中虽然有 `sub_agent` 检测（第 86 行：`kind === 'other' && rawInput?.subagent_type`），但该分支**永远不会被 `tool_call`/`tool_call_update` 消息到达**，是死代码。
+
+结果：
+- SubAgent 消息被渲染为 `ToolCallCard`
+- `ToolCallCard` 不处理 `subagent_type`、`rawInput.description`、`rawInput.prompt`、`rawOutput` 等字段
+- 用户看到的是普通的 "Tool Call — in_progress" 卡片，而非 SubAgent 信息
 
 #### 方案
 
-在 SessionPage 中跟踪最近一条 SSE 消息是否为 setting update，放宽 `disabled` 条件：
+在 `tool_call`/`tool_call_update` 分支中增加 `subagent_type` 检测，如果检测到则路由到 `sub_agent` 类型：
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant FE as SessionPage
-    participant SSE as SSE Stream
-
-    Note over SSE: agent returns config_option_update
-    SSE->>FE: type: 'message', content: { sessionUpdate: 'config_option_update' }
-    FE->>FE: set lastMessageIsSettingUpdate = true
-    Note over FE: status 可能尚未更新为 idling
-    User->>FE: 尝试发送新消息
-    FE->>FE: disabled = (status !== 'running' && status !== 'idling') && !lastMessageIsSettingUpdate
-    Note over FE: 因为 lastMessageIsSettingUpdate = true, 允许发送
-    SSE->>FE: type: 'status', status: 'idling'
-    FE->>FE: set status = 'idling', reset flag
+```typescript
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
+  // 检查是否为 SubAgent 消息
+  if (parsed) {
+    const p = parsed as Record<string, unknown>;
+    const kind = p.kind as string | undefined;
+    const rawInput = p.rawInput;
+    const subagentType = p.subagent_type as string | undefined;
+    const rawInputSubagentType = rawInput && typeof rawInput === 'object'
+      ? (rawInput as Record<string, unknown>).subagent_type
+      : undefined;
+    if (kind === 'other' && (subagentType || rawInputSubagentType)) {
+      groupType = 'sub_agent';
+    } else {
+      groupType = 'tool_call';
+    }
+  } else {
+    groupType = 'tool_call';
+  }
 ```
 
-关键行为：
-- SSE 收到 `config_option_update` / `current_mode_update` 时，`lastMessageIsSettingUpdateRef.current = true`
-- SSE 收到 `status` 事件时，如果 status 不是 `idling` 或 `running`，不清除该标记（让后续消息可用）
-- 用户实际发送消息时，清除该标记
-- 使用 `useRef` 而非 `useState` 避免额外渲染
+检测逻辑：
+1. 检查 `kind === 'other'`（SubAgent 消息的约定标识）
+2. 检查 `content` 级别或 `rawInput` 中是否存在 `subagent_type`
+3. 两者任一满足即归类为 `sub_agent`
 
-### 2.3 问题三：SSE `type: 'status'` 事件更新状态
+SubAgent 消息的分组策略（第 98-106 行）：
+- 对于 `sub_agent` 类型，应使用 `toolCallId` 分组（与 `tool_call` 相同），确保同一 SubAgent 的初始调用和后续更新合并到同一组
+
+`SubAgentCard.tsx` 无需修改——它已正确处理 `rawInput.description`、`rawInput.prompt`、`rawOutput` 等字段。
+
+### 2.3 问题三：`sessionData` useEffect 被轮询覆盖
 
 #### 现状
 
 SessionPage.tsx 中 SSE 事件处理已覆盖 SSE status 事件中的各个字段：
 
-```tsx
+```typescript
 } else if (data.type === 'status') {
   setStatus(data.data.status);
   if (data.data.status === 'ended' && data.data.error) { ... }
@@ -154,7 +203,7 @@ SessionPage.tsx 中 SSE 事件处理已覆盖 SSE status 事件中的各个字�
 
 但存在一个**严重的覆盖问题**——`sessionData` 的 `useEffect` 会被后台轮询触发，将 SSE 更新的状态覆盖掉：
 
-```tsx
+```typescript
 // SessionPage.tsx L88-97 — 问题根源
 useEffect(() => {
   if (sessionData?.session) {
@@ -168,38 +217,15 @@ useEffect(() => {
 
 #### 根因分析
 
-`Sidebar.tsx` 每 15 秒轮询 `GET_SESSIONS`（L27-29）：
+`Sidebar.tsx` 每 15 秒轮询 `GET_SESSIONS`：
 
-```tsx
+```typescript
 const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
   pollInterval: 15000,
 });
 ```
 
 该查询返回的 Session 列表包含 `currentModeId`、`currentModelId`、`modes`、`status`、`availableModels` 等字段。Apollo 的归一化缓存（normalized cache）会更新 `Session` 类型的缓存实体。由于 `SessionPage.tsx` 的 `GET_SESSION` 也读取同一个 `Session` 实体，Apollo 缓存更新会触发 `sessionData` 变化，进而触发 `useEffect([sessionData])`，将 React 本地状态覆盖为轮询返回的（可能已过时的）值。
-
-```mermaid
-sequenceDiagram
-    participant Sidebar
-    participant Apollo as Apollo Cache
-    participant SessionPage
-    participant SSE as SSE Stream
-
-    Note over Sidebar: GET_SESSIONS pollInterval: 15000
-    Sidebar->>Apollo: 轮询更新 Session 缓存<br/>(含 stale currentModeId)
-    Apollo->>SessionPage: sessionData 变化（Apollo 归一化通知）
-    Note over SessionPage: useEffect([sessionData]) 触发
-    SessionPage->>SessionPage: setCurrentModeId(staleValue) ← 覆盖！
-
-    Note over SSE: 真正的状态更新来自 SSE
-    SSE->>SessionPage: type: 'status', currentModeId: 'plan'
-    SessionPage->>SessionPage: setCurrentModeId('plan') ✓
-
-    Note over Sidebar: 15s 后再次轮询...
-    Sidebar->>Apollo: 再次返回 old currentModeId
-    Apollo->>SessionPage: sessionData 再次变化
-    SessionPage->>SessionPage: setCurrentModeId(staleValue) ← 再次覆盖！
-```
 
 典型场景复现步骤：
 
@@ -237,7 +263,6 @@ flowchart TD
 1. **`SessionPage.tsx`**：`sessionData` 的 `useEffect` 增加首次加载保护，仅在组件挂载时初始化一次，后续忽略
 
 ```typescript
-// 方案一：使用 initializedRef 确保只初始化一次
 const initializedRef = useRef(false);
 
 useEffect(() => {
@@ -249,22 +274,58 @@ useEffect(() => {
     if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
     if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
   }
-  // sessionData 不再参与依赖 — 改用 id 确保 session 切换时重新初始化
+  // 使用 [id] 而非 [sessionData] 作为依赖
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [id]);
 ```
 
 2. SSE `type: 'status'` 处理保持不变——它已经是状态更新的正确来源
 3. `currentModel` 引用随问题一删除
-4. `useSessionStream.ts` 的 `onStatus` 回调签名从 `(status: string) => void` 改为传递完整的 status event data 对象
 
-#### 补充说明
+### 2.4 问题四：最后一条消息是 setting update 时允许发送
 
-- **为什么用 `id` 做依赖而非 `sessionData`**：当用户导航到另一个 session（路由 `id` 变化）时，组件实例可能复用（React Router 同路径模式），`ref` 会保持旧值。将依赖改为 `id` 确保了 session 切换时重新初始化。
-- **为什么不把 `ref` 放进 `[]` 依赖中**：`initializedRef.current` 的变化不会触发重渲染，放在依赖数组中无意义。
-- **SSE initial status 的冗余**：组件初始化时 `GET_SESSION` + SSE 初始 status 事件都包含相同的数据。先用 `GET_SESSION` 同步初始化（消除白屏等待），SSE 建立后会立即收到一致的 status 事件覆盖——这没有副作用，因为值相同。
+#### 现状
 
-### 2.4 问题四：路由切换 Session 时无 loading 状态
+```typescript
+// SessionPage.tsx
+disabled={status !== 'running' && status !== 'idling'}
+```
+
+输入框仅当 `status` 为 `running` 或 `idling` 时启用。而当 agent 返回 setting update 时，`handleControllerMessage`（`acp-session-manager.ts`）会同时：
+1. 将消息写入 DB 并发送 SSE `type: 'message'` 事件
+2. 发布 `publishStatus(sessionId, 'idling', ...)` 发送 SSE `type: 'status'` 事件
+
+但由于 SSE 事件的到达存在时序差，`message` 事件先到（用户看到 setting update），`status` 事件后到（状态更新为 `idling`）。在间隙中：
+- 如果状态恰好处于非 `running`/`idling` 的组合（如场景导致中继状态），用户无法发送
+
+#### 方案
+
+在 SessionPage 中跟踪最近一条 SSE 消息是否为 setting update，放宽 `disabled` 条件：
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant FE as SessionPage
+    participant SSE as SSE Stream
+
+    Note over SSE: agent returns config_option_update
+    SSE->>FE: type: 'message', content: { sessionUpdate: 'config_option_update' }
+    FE->>FE: set lastMessageIsSettingUpdate = true
+    Note over FE: status 可能尚未更新为 idling
+    User->>FE: 尝试发送新消息
+    FE->>FE: disabled = (status !== 'running' && status !== 'idling') && !lastMessageIsSettingUpdate
+    Note over FE: 因为 lastMessageIsSettingUpdate = true, 允许发送
+    SSE->>FE: type: 'status', status: 'idling'
+    FE->>FE: set status = 'idling', reset flag
+```
+
+关键行为：
+- SSE 收到 `config_option_update` / `current_mode_update` 时，设置 `lastMessageIsSettingUpdateRef.current = true`
+- SSE 收到 `status` 事件时，如果 status 不是 `idling` 或 `running`，不清除该标记（让后续消息可用）
+- 用户实际发送消息时，清除该标记
+- 使用 `useRef` 而非 `useState` 避免额外渲染
+
+### 2.5 问题五：路由切换 Session 时无 loading 状态
 
 #### 现状
 
@@ -293,116 +354,7 @@ function SessionPageRoute() {
 <Route path="sessions/:id" element={<SessionPageRoute />} />
 ```
 
-### 2.5 已被 main 解决：SubAgent 卡片渲染
-
-`MessageList.tsx` 已实现 `sub_agent` 分组类型（第 86-87 行），`SubAgentCard.tsx` 已实现专用组件。`kind === 'other'` 且 `rawInput.subagent_type` 存在时会被识别为 `sub_agent` 类型并使用 `SubAgentCard` 渲染。
-
-因此原问题 4（SubAgent 卡片未渲染）已在 main 的 UI 优化工作中解决，本次不再处理。
-
-#### 现状
-
-用户反映线上环境中 SubAgent（子任务）的卡片没有正确渲染。以下是实际收到的消息数据结构：
-
-```json
-{
-  "id": "6a15643ae7227d801c6dacf2",
-  "direction": "output",
-  "type": "tool_call",
-  "content": {
-    "kind": "other",
-    "title": "task",
-    "status": "in_progress",
-    "subagent_type": "explore",
-    "sessionUpdate": "tool_call_update",
-    "toolCallId": "call_00_FmrB6QVXt3w0WWnpm9IH5651",
-    "rawInput": {
-      "description": "Find currentModel usage",
-      "prompt": "...",
-      "subagent_type": "explore"
-    }
-  },
-  "createdAt": "2026-05-26T09:13:30.228Z"
-}
-```
-
-#### 根因分析
-
-`ToolCallCard.tsx` 的解析逻辑：
-
-```typescript
-// ToolCallCard.tsx L23-43
-for (const msg of messages) {
-  const parsed = /* ... */;
-  const tc = parseToolCall(parsed);
-  const tcu = parseToolCallUpdate(parsed);
-  if (tc) {
-    title = tc.title;   // title = 'task'
-    if (tc.status) status = tc.status;
-    if (tc.rawInput) rawInput = tc.rawInput;
-  }
-  if (tcu) {
-    if (tcu.title) title = tcu.title;  // 再次覆盖
-    if (tcu.status) status = tcu.status;
-    if (tcu.rawInput) rawInput = tcu.rawInput;
-  }
-}
-```
-
-卡片始终渲染为：
-- **标题**：`"Tool Call: task"`（无法区分普通任务还是子任务）
-- **颜色**：默认 `purple`（`statusColors['in_progress']`）
-
-**关键字段**：`subagent_type` 是区分 SubAgent 的标记（值为 `"explore"`），但 `ToolCallCard` 完全未使用该字段。
-
-#### 当前数据结构与组件支持情况
-
-| 字段 | ToolCallCard 支持 | 说明 |
-|------|-------------------|------|
-| `title` | ✅ | 显示为 "Tool Call: {title}" |
-| `status` | ✅ | 显示在 summary 和内部 |
-| `rawInput` | ✅ | 折叠面板中渲染 |
-| `subagent_type` | ❌ | 未使用，但这是区分 SubAgent 的关键字段 |
-| `kind` | ❌ | 固定为 "other"，无区分意义 |
-
-#### 方案
-
-`ToolCallCard` 增加对 `subagent_type` 字段的检测，根据是否存在该字段来区分 SubAgent 和普通 ToolCall：
-
-```typescript
-// ToolCallCard.tsx 改造
-
-// 检测是否为 SubAgent（rawInput 中存在 subagent_type 或直接存在 subagent_type 字段）
-function isSubAgent(parsed: SessionUpdate): boolean {
-  return !!(parsed.subagent_type || (parsed.rawInput && typeof parsed.rawInput === 'object' && (parsed.rawInput as Record<string, unknown>).subagent_type));
-}
-
-// 类型映射
-const subagentTypeLabels: Record<string, string> = {
-  'explore': 'Explore',
-  'general': 'General',
-  // 其他子任务类型...
-};
-
-// 标题生成
-const displayTitle = (() => {
-  const isSub = isSubAgent(parsed);
-  if (isSub) {
-    const subType = parsed.subagent_type || (parsed.rawInput as Record<string, unknown>)?.subagent_type as string;
-    return `SubAgent: ${subagentTypeLabels[subType] || subType || 'task'}`;
-  }
-  return `Tool Call: ${parsed.title || 'task'}`;
-})();
-
-// 颜色映射（SubAgent 用蓝色）
-const displayColor = isSub ? 'blue' : (statusColors[status] || 'purple');
-```
-
-#### 验收标准
-
-1. 存在 `subagent_type` 字段的消息显示为蓝色卡片，标题包含 "SubAgent:" 前缀
-2. 不存在 `subagent_type` 字段的消息保持现有的紫色卡片样式
-3. `subagent_type` 值正确显示在卡片中
-4. 无 `subagent_type` 且无 `rawInput` 时不会导致渲染错误
+---
 
 ## 3. 各层具体改动
 
@@ -455,8 +407,9 @@ const displayColor = isSub ? 'blue' : (statusColors[status] || 'purple');
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `initializedRef` 保护 Effect 重复执行 |
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
-| `apps/agent-web/src/hooks/useSessionStream.ts:12,51-52` | 扩展 `onStatus` 回调签名 |
-| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `subagent_type` 检测，区分 SubAgent / ToolCall 类型和颜色 |
+| `apps/agent-web/src/components/session/MessageList.tsx:64-65` | `tool_call`/`tool_call_update` 分支中增加 `subagent_type` 检测，路由到 `sub_agent` 类型 |
+| `apps/agent-web/src/components/session/MessageList.tsx:98-106` | `sub_agent` 类型也使用 `toolCallId` 分组 |
+| `apps/agent-web/src/App.tsx` | 新增 `SessionPageRoute` 包装组件，使用 `key={location.pathname}` |
 
 ### 3.6 测试层
 
@@ -468,7 +421,46 @@ const displayColor = isSub ? 'blue' : (statusColors[status] || 'purple');
 
 ## 4. 关键实现细节
 
-### 4.1 `lastMessageIsSettingUpdate` 逻辑
+### 4.1 新增：SubAgent 检测逻辑
+
+```typescript
+// MessageList.tsx — groupMessages 函数，第 64-65 行替换
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
+  // 检查是否为 SubAgent 消息
+  if (parsed) {
+    const p = parsed as Record<string, unknown>;
+    const kind = p.kind as string | undefined;
+    const rawInput = p.rawInput;
+    const hasSubagentType = !!(p.subagent_type as string | undefined) ||
+      (rawInput && typeof rawInput === 'object' && !!(rawInput as Record<string, unknown>).subagent_type);
+    if (kind === 'other' && hasSubagentType) {
+      groupType = 'sub_agent';
+    } else {
+      groupType = 'tool_call';
+    }
+  } else {
+    groupType = 'tool_call';
+  }
+```
+
+### 4.2 新增：SubAgent 分组策略
+
+在分组逻辑中，为 `sub_agent` 类型增加 `toolCallId` 分组：
+
+```typescript
+if ((groupType === 'tool_call' || groupType === 'sub_agent') && toolCallId) {
+  // Tool calls and sub-agents: group by toolCallId across the entire message list
+  if (toolCallGroupMap.has(toolCallId)) {
+    groupIndex = toolCallGroupMap.get(toolCallId)!;
+  } else {
+    groupIndex = groups.length;
+    toolCallGroupMap.set(toolCallId, groupIndex);
+    groups.push({ type: groupType, messages: [], parsed, messageId: null });
+  }
+}
+```
+
+### 4.3 `lastMessageIsSettingUpdate` 逻辑
 
 ```typescript
 // SessionPage.tsx
@@ -497,23 +489,7 @@ const handleSendMessage = async (content: string) => {
 disabled={(status !== 'running' && status !== 'idling') && !lastMessageIsSettingUpdateRef.current}
 ```
 
-### 4.2 `useSessionStream` 回调改造
-
-```typescript
-// 当前：
-onStatus?: (status: string) => void;
-
-// 改后：
-interface SessionStatusData {
-  status: string;
-  currentModelId?: string | null;
-  availableModels?: Array<{ id: string; name: string; provider?: string }> | null;
-  currentModeId?: string | null;
-  modes?: Array<{ id: string; name: string; description?: string }> | null;
-  error?: string | null;
-}
-onStatus?: (data: SessionStatusData) => void;
-```
+---
 
 ## 5. 验收标准
 
@@ -521,14 +497,24 @@ onStatus?: (data: SessionStatusData) => void;
 2. 前端 `SessionData` 类型不再包含 `currentModel`
 3. GraphQL `GET_SESSION` 查询不再请求 `currentModel`
 4. SSE status 事件 payload 不再包含 `currentModel`
-5. setting update 作为最后一条消息时，输入框可点击发送
+5. SubAgent 类型消息正确渲染为 `SubAgentCard`，显示 description、prompt、output 等内容
 6. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
 7. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
-8. `useSessionStream` 的 `onStatus` 回调传递完整的 status data 对象
-9. SubAgent 类型消息正确渲染为蓝色卡片，显示 "SubAgent:" 前缀和 `subagent_type`
+8. setting update 作为最后一条消息时，输入框可点击发送
+9. 路由切换 Session 时显示 loading spinner 并清空旧状态
 10. 所有现有测试通过
 
-## 6. 相关文档
+## 6. 执行顺序
+
+```
+Step 1 (移除 currentModel) → Step 2 (SubAgent 卡片渲染) → Step 3 (sessionData 覆盖修复) → Step 4 (setting update) → Step 5 (路由切换)
+```
+
+- Step 1 最复杂，涉及多模块
+- Step 2-5 都是前端改动，可以独立进行
+- 建议按序执行，每个 Step 完成后验证无回归
+
+## 7. 相关文档
 
 - [[contracts/agent-session.graphql]] — Session GraphQL 契约
 - [[contracts/agent-session-websocket.md]] — SSE 协议文档
