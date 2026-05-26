@@ -15,7 +15,7 @@ type: Permanent
 
 | # | 问题 | 范围 |
 |---|------|------|
-| 1 | 前端清理 `currentModel` state + SSE payload | SessionPage.tsx、session-sse.ts、前端类型、契约文档 |
+| 1 | 前端清理 `currentModel` state | SessionPage.tsx、types.ts |
 | 2 | SubAgent / read / fetch 卡片正确渲染 | MessageList.tsx（检测逻辑 + 分组策略） |
 | 3 | 修复 sessionData useEffect 被轮询覆盖 | SessionPage.tsx |
 | 4 | 允许 setting update 后继续发送消息 | SessionPage.tsx |
@@ -25,7 +25,7 @@ type: Permanent
 
 ---
 
-## Step 1: 前端清理 `currentModel` + SSE payload
+## Step 1: 前端清理 `currentModel`
 
 ### 1.1 前端层
 
@@ -39,28 +39,12 @@ type: Permanent
 # - SessionData 类型中移除 currentModel 字段 (约第 115 行)
 ```
 
-### 1.2 SSE 契约层
+### 1.2 验证
 
 ```bash
-# contracts/agent-session-websocket.md
-# - SSE status 事件 payload 示例中移除 currentModel 字段 (约第 972-976 行)
-```
-
-### 1.3 SSE 服务层
-
-```bash
-# servers/agent-api/src/services/session-sse.ts
-# - addConnection 中 statusPayload 移除 currentModel (约第 40 行)
-# - ensureGlobalStatusSubscriber 中 extra 移除 currentModel (约第 102 行)
-# - broadcastStatus 中 extra 移除 currentModel (约第 138 行)
-```
-
-### 1.4 验证
-
-```bash
-# 全局搜索确认无遗漏
-rg "currentModel" --type ts --type tsx --type graphql
-# 预期结果: 无匹配（或仅 DB migration 保留数据）
+# 前端搜索确认无遗漏
+rg "_currentModel|currentModel" apps/agent-web/src --type ts --type tsx
+# 预期结果: 无匹配
 ```
 
 ---
@@ -246,15 +230,14 @@ function SessionPageRoute() {
 
 | # | 检查项 | 验证方式 |
 |---|--------|----------|
-| 1 | 前端 `_currentModel` state 已移除 | 代码检查 |
-| 2 | SSE status 事件不含 `currentModel` | 浏览器 DevTools 检查 SSE 消息 |
-| 3 | SubAgent/read/fetch 消息渲染为对应卡片 | 实际操作观察 |
-| 4 | SubAgent 显示 description/prompt/output；read 显示文件路径/内容；fetch 显示 URL/结果 | 实际操作观察 |
-| 5 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
-| 6 | setting update 后可发送消息 | 实际操作观察 |
-| 7 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
-| 8 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
-| 9 | 所有测试通过 | `npm run test` |
+| 1 | 前端 `_currentModel` state 已移除 | `rg "_currentModel" apps/agent-web/src --type ts --type tsx` 无匹配 |
+| 2 | SubAgent/read/fetch 消息渲染为对应卡片 | 实际操作观察 |
+| 3 | SubAgent 显示 description/prompt/output；read 显示文件路径/内容；fetch 显示 URL/结果 | 实际操作观察 |
+| 4 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
+| 5 | setting update 后可发送消息 | 实际操作观察 |
+| 6 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
+| 7 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
+| 8 | 所有测试通过 | `npm run test` |
 
 ---
 

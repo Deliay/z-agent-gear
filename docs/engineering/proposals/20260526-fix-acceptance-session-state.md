@@ -17,12 +17,12 @@ type: Permanent
 当前代码中存在 5 个 Session 状态相关的验收问题：
 
 1. **前端 `currentModel` 字段冗余** - 前端存在 `_currentModel` state 和 `setCurrentModel` 调用，但 `currentModel` 可从 `currentModelId` + `availableModels` 推导，属于死代码
-2. **SubAgent / read / fetch 卡片未正确路由** - `kind=read`、`kind=fetch`、`kind=other+subagent_type` 的检测代码都在 `MessageList.tsx` 的 `else` 分支中（第 82-87 行），但由于 SubAgent/read/fetch 消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
+2. **SubAgent / read / fetch 卡片未正确路由** - `kind=read`、`kind=fetch`、`kind=other+subagent_type` 的检测代码都在 `MessageList.tsx` 的 `else` 分支中（第 82-87 行），但由于这些消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
 3. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
 4. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
 5. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
 
-> **注意**：后端和契约层的 `currentModel` 暂不处理，保留现有字段不做删除。
+> **注意**：后端 `currentModel` 字段暂不处理，保留现有实现。
 
 ### 1.2 目标
 
@@ -34,7 +34,7 @@ type: Permanent
 
 ### 1.3 范围
 
-涉及 `apps/agent-web` 前端模块，`servers/agent-api`、`servers/controller-api`、`packages/agent-controller`、`contracts` 仅在 SSE 事件 payload 中移除 `currentModel`（不影响后端数据模型和契约定义）。
+涉及 `apps/agent-web` 前端模块。
 
 ## 2. 问题分析与方案
 
@@ -72,20 +72,15 @@ flowchart LR
 
 #### 方案
 
-前端清理 `currentModel` state + SSE payload 清理（按层执行）：
+前端清理 `currentModel` state：
 
 ```mermaid
 flowchart TD
-    A[开始] --> B[契约层: contracts/agent-session-websocket.md 移除 currentModel]
-    B --> C[SSE Service 层: agent-api session-sse.ts 移除 currentModel payload]
-    C --> D[Frontend: 移除 _currentModel state 和 setCurrentModel 调用]
-    D --> E[完成]
-
-    style B fill:#ffcc99
-    style C fill:#ffcc99
+    A[开始] --> B[Frontend: 移除 _currentModel state 和 setCurrentModel 调用]
+    B --> C[完成]
 ```
 
-> **注意**：后端数据模型（MongoDB schema）和 GraphQL 契约（agent-session.graphql, agent-api schema）暂不处理，保留 `currentModel` 字段不做删除。后端服务和控制器层中 SSE 事件 payload 清理见 Step 1。
+> **注意**：后端和契约层的 `currentModel` 暂不处理，SSE payload 也保持不变。
 
 ### 2.2 问题二：SubAgent / read / fetch 卡片未正确路由
 
@@ -409,27 +404,13 @@ function SessionPageRoute() {
 |------|------|
 | `apps/agent-web/src/pages/SessionPage.tsx:70` | 删除 `_currentModel` state |
 | `apps/agent-web/src/pages/SessionPage.tsx:88-97` | `sessionData` useEffect 改为仅首次初始化，依赖从 `[sessionData]` 改为 `[id]` |
-| `apps/agent-web/src/pages/SessionPage.tsx:93,143` | 删除 `setCurrentModel` 调用 |
+| `apps/agent-web/src/pages/SessionPage.tsx` | 删除 `setCurrentModel` 调用 |
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `initializedRef` 保护 Effect 重复执行 |
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
-| `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
+| `apps/agent-web/src/pages/SessionPage.tsx` | 修改 `disabled` 条件 |
 | `apps/agent-web/src/components/session/MessageList.tsx:64-65` | `tool_call`/`tool_call_update` 分支中增加 `kind` 和 `subagent_type` 检测，路由到 `read`/`fetch`/`sub_agent` 类型 |
-| `apps/agent-web/src/components/session/MessageList.tsx:98` | `sub_agent` 类型也使用 `toolCallId` 分组 |
+| `apps/agent-web/src/components/session/MessageList.tsx:98` | specialized 类型也使用 `toolCallId` 分组 |
 | `apps/agent-web/src/App.tsx` | 新增 `SessionPageRoute` 包装组件，使用 `key={location.pathname}` |
-
-### 3.2 SSE 契约层
-
-| 文件 | 改动 |
-|------|------|
-| `contracts/agent-session-websocket.md:972-976` | SSE status 事件 payload 示例中删除 `currentModel` 字段 |
-
-### 3.3 SSE 服务层
-
-| 文件 | 改动 |
-|------|------|
-| `servers/agent-api/src/services/session-sse.ts:40` | `addConnection` 中 statusPayload 移除 `currentModel` |
-| `servers/agent-api/src/services/session-sse.ts:102` | `ensureGlobalStatusSubscriber` 中 extra 移除 `currentModel` |
-| `servers/agent-api/src/services/session-sse.ts:138` | `broadcastStatus` 中 extra 移除 `currentModel` |
 
 ## 4. 关键实现细节
 
@@ -506,13 +487,12 @@ disabled={(status !== 'running' && status !== 'idling') && !lastMessageIsSetting
 ## 5. 验收标准
 
 1. 前端 `_currentModel` state 和 `setCurrentModel` 调用已移除
-2. SSE status 事件 payload 不再包含 `currentModel`
-3. SubAgent 类型消息正确渲染为 `SubAgentCard`，显示 description、prompt、output 等内容
-4. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
-5. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
-6. setting update 作为最后一条消息时，输入框可点击发送
-7. 路由切换 Session 时显示 loading spinner 并清空旧状态
-8. 所有现有测试通过
+2. SubAgent / read / fetch 类型消息正确渲染为对应卡片组件（`SubAgentCard`/`ReadCard`/`FetchCard`），显示各自的内容字段
+3. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
+4. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
+5. setting update 作为最后一条消息时，输入框可点击发送
+6. 路由切换 Session 时显示 loading spinner 并清空旧状态
+7. 所有现有测试通过
 
 ## 6. 执行顺序
 
