@@ -1,5 +1,7 @@
-import type { SessionUpdate } from '@agentclientprotocol/sdk';
+import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk';
 import AcpCard from './AcpCard';
+import DiffView from './DiffView';
+import TerminalOutput from './TerminalOutput';
 
 interface ToolCallCardProps {
   messages: Array<{ content: string | Record<string, unknown>; createdAt: string }>;
@@ -7,122 +9,199 @@ interface ToolCallCardProps {
   onExpandedChange?: (expanded: boolean) => void;
 }
 
-interface StatusEntry {
-  status: string;
-  timestamp: string;
-  rawInput?: unknown;
-  result?: unknown;
-  log?: string;
+interface EditRawInput {
+  filePath?: string;
+  oldString?: string;
+  newString?: string;
+}
+
+interface ExecuteRawInput {
+  workDir?: string;
+  description?: string;
+  command?: string;
+  timeout?: number;
+}
+
+function parseMessage(content: string | Record<string, unknown>): SessionUpdate | null {
+  if (typeof content === 'object') return content as SessionUpdate;
+  try { return JSON.parse(content) as SessionUpdate; } catch { return null; }
+}
+
+function kindLabel(kind?: string): string {
+  switch (kind) {
+    case 'edit': return 'Edit';
+    case 'execute': return 'Command';
+    default: return kind || 'Tool Call';
+  }
+}
+
+function renderContentItem(item: ToolCallContent, i: number) {
+  if (item.type === 'content') {
+    const cb = item.content;
+    if (cb.type === 'text') {
+      return (
+        <div key={i} className="prose prose-sm max-w-none text-gray-900">
+          <div className="whitespace-pre-wrap">{cb.text}</div>
+        </div>
+      );
+    }
+    return null;
+  }
+  if (item.type === 'diff') {
+    return (
+      <div key={i} className="mb-2 last:mb-0">
+        <DiffView
+          oldText={item.oldText}
+          newText={item.newText}
+          filePath={item.path}
+        />
+      </div>
+    );
+  }
+  if (item.type === 'terminal') {
+    return (
+      <div key={i} className="text-sm text-gray-500 italic">
+        Terminal: {item.terminalId}
+      </div>
+    );
+  }
+  return null;
 }
 
 export default function ToolCallCard({ messages, expanded, onExpandedChange }: ToolCallCardProps) {
-  let title = 'Tool Call';
-  let finalStatus: string = 'in_progress';
-  const statusHistory: StatusEntry[] = [];
+  const last = messages[messages.length - 1];
+  const parsed = parseMessage(last.content);
+  if (!parsed) return null;
 
-  for (const msg of messages) {
-    try {
-      const parsed = typeof msg.content === 'object'
-        ? msg.content as SessionUpdate
-        : JSON.parse(msg.content) as SessionUpdate;
-      const tc = parsed.sessionUpdate === 'tool_call' ? parsed : null;
-      const tcu = parsed.sessionUpdate === 'tool_call_update' ? parsed : null;
+  const tc = parsed.sessionUpdate === 'tool_call' ? parsed : null;
+  const tcu = parsed.sessionUpdate === 'tool_call_update' ? parsed : null;
+  const data = tc || tcu;
+  if (!data) return null;
 
-      if (tc) {
-        if (tc.title) title = tc.title;
-        const st = tc.status || 'pending';
-        statusHistory.push({ status: st, timestamp: msg.createdAt, rawInput: tc.rawInput });
-        if (tc.status) finalStatus = tc.status;
+  const kind = data.kind || 'other';
+  const status = data.status || 'in_progress';
+  const title = data.title || kindLabel(kind);
+  const locations = data.locations;
+  const rawInput = data.rawInput as Record<string, unknown> | undefined;
+  const rawOutput = data.rawOutput as Record<string, unknown> | undefined;
+  const contentItems = data.content as ToolCallContent[] | undefined;
+
+  const containerClass = status === 'completed'
+    ? 'rounded-lg border border-green-200 bg-green-50'
+    : 'rounded-lg border border-purple-200 bg-purple-50';
+
+  const summary = `${kindLabel(kind)} ${status === 'completed' ? '✓' : status === 'failed' ? '✗' : '...'}`;
+
+  const renderBody = () => {
+    if (kind === 'edit') {
+      if (status === 'in_progress') {
+        return (
+          <div className="space-y-3">
+            {locations && locations.length > 0 && (
+              <div>
+                <div className="mb-1 text-xs font-medium text-gray-500">Files to modify</div>
+                <div className="space-y-1">
+                  {locations.map((loc, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
+                      <span className="text-gray-400">📄</span>
+                      <span className="font-mono">{loc.path}</span>
+                      {loc.line != null && (
+                        <span className="text-xs text-gray-400">:{loc.line}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {rawInput && (
+              <div>
+                {(rawInput as EditRawInput).filePath && (
+                  <div className="mb-2 text-xs font-medium text-gray-500">
+                    Editing: {(rawInput as EditRawInput).filePath}
+                  </div>
+                )}
+                <DiffView
+                  oldText={(rawInput as EditRawInput).oldString}
+                  newText={(rawInput as EditRawInput).newString || ''}
+                  inline
+                />
+              </div>
+            )}
+          </div>
+        );
       }
-      if (tcu) {
-        if (tcu.title) title = tcu.title;
-        const st = tcu.status || finalStatus;
-        const entry: StatusEntry = { status: st, timestamp: msg.createdAt };
-        if (tcu.rawInput) entry.rawInput = tcu.rawInput;
-        if (tcu.result) entry.result = tcu.result;
-        if (tcu.log) entry.log = tcu.log;
-        statusHistory.push(entry);
-        if (tcu.status) finalStatus = tcu.status;
+
+      if (status === 'completed' && contentItems) {
+        return (
+          <div className="space-y-3">
+            {contentItems.map((item, i) => renderContentItem(item, i))}
+          </div>
+        );
       }
-    } catch {
-      // ignore parse errors
     }
-  }
 
-  const statusBadge: Record<string, { bg: string; text: string; label: string }> = {
-    pending: { bg: 'bg-yellow-100', text: 'text-yellow-800', label: 'Pending' },
-    in_progress: { bg: 'bg-purple-100', text: 'text-purple-800', label: 'In Progress' },
-    completed: { bg: 'bg-blue-100', text: 'text-blue-800', label: 'Completed' },
-    failed: { bg: 'bg-red-100', text: 'text-red-800', label: 'Failed' },
+    if (kind === 'execute') {
+      if (status === 'in_progress' && rawInput) {
+        const exInput = rawInput as ExecuteRawInput;
+        return (
+          <div className="space-y-2 text-sm">
+            {exInput.workDir && (
+              <div>
+                <span className="text-xs font-medium text-gray-500">Directory: </span>
+                <span className="font-mono text-gray-700">{exInput.workDir}</span>
+              </div>
+            )}
+            {exInput.description && (
+              <div>
+                <span className="text-xs font-medium text-gray-500">Description: </span>
+                <span className="text-gray-700">{exInput.description}</span>
+              </div>
+            )}
+            {exInput.command && (
+              <div>
+                <span className="text-xs font-medium text-gray-500">Command: </span>
+                <pre className="mt-1 rounded bg-gray-900 p-2 font-mono text-sm text-green-400">
+                  $ {exInput.command}
+                </pre>
+              </div>
+            )}
+            {exInput.timeout != null && (
+              <div>
+                <span className="text-xs font-medium text-gray-500">Timeout: </span>
+                <span className="text-gray-700">{exInput.timeout}s</span>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      if (status === 'completed' && rawOutput) {
+        const output = (rawOutput as { output?: string }).output;
+        if (output) {
+          return <TerminalOutput output={output} />;
+        }
+      }
+    }
+
+    return (
+      <div className="py-2 text-sm text-gray-500">
+        {kindLabel(kind)} — {status}
+      </div>
+    );
   };
-
-  const finalBadge = statusBadge[finalStatus] || statusBadge.in_progress;
 
   return (
     <AcpCard
       title={`Tool Call: ${title}`}
-      summary={finalBadge.label}
+      summary={summary}
       defaultCollapsed={true}
-      color={(finalStatus === 'completed' ? 'blue' : finalStatus === 'failed' ? 'yellow' : 'purple') as 'blue' | 'yellow' | 'purple'}
+      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
-      <div className="space-y-3">
-        {/* Status timeline */}
-        <div className="space-y-2">
-          {statusHistory.map((entry, i) => {
-            const badge = statusBadge[entry.status] || statusBadge.in_progress;
-            return (
-              <div key={i} className="flex items-start gap-2 text-sm">
-                <div className="mt-0.5 flex flex-col items-center">
-                  <div className={`h-2.5 w-2.5 rounded-full ${badge.bg} border-2 border-current ${badge.text}`} />
-                  {i < statusHistory.length - 1 && <div className="mt-0.5 h-full w-px bg-gray-300" />}
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${badge.bg} ${badge.text}`}>
-                      {badge.label}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  {entry.rawInput != null && (
-                    <div className="mt-1">
-                      <div className="text-xs font-medium text-gray-500">Input</div>
-                      <pre className="mt-0.5 max-h-32 overflow-y-auto rounded bg-gray-100 p-2 text-xs">
-                        {typeof entry.rawInput === 'string' ? entry.rawInput : JSON.stringify(entry.rawInput, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                  {entry.result != null && (
-                    <div className="mt-1">
-                      <div className="text-xs font-medium text-gray-500">Result</div>
-                      <pre className="mt-0.5 max-h-32 overflow-y-auto rounded bg-gray-100 p-2 text-xs">
-                        {typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                  {entry.log && (
-                    <div className="mt-1">
-                      <div className="text-xs font-medium text-gray-500">Log</div>
-                      <pre className="mt-0.5 max-h-20 overflow-y-auto rounded bg-gray-50 p-2 text-xs text-gray-600">
-                        {entry.log}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Final status summary */}
-        <div className="flex items-center gap-2 border-t border-gray-200 pt-2 text-xs text-gray-500">
-          <span>Final Status:</span>
-          <span className={`inline-block rounded px-1.5 py-0.5 font-medium ${finalBadge.bg} ${finalBadge.text}`}>
-            {finalBadge.label}
-          </span>
+      <div className={containerClass}>
+        <div className="p-3">
+          {renderBody()}
         </div>
       </div>
     </AcpCard>
