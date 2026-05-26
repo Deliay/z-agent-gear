@@ -318,8 +318,7 @@ describe('ACPSessionManager', () => {
         expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.objectContaining({
           sessionId: 'sess-1',
           externalSessionId: 'ext-123',
-          controllerId: 'ctrl-1',
-          userId: 'user-1',
+          serverType: 'opencode',
           cwd: '/tmp',
         }));
       });

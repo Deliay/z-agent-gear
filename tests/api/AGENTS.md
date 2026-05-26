@@ -145,7 +145,8 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | sessions query - 无 token | 应返回「Not authenticated」 |
 | session query - 无 token | 应返回「Not authenticated」 |
 | createSession - 无 auth | 应返回「Not authenticated」 |
-| createSession - 正常创建 | 应返回 session（status=creating） |
+| createSession - 正常创建（opencode） | 应返回 session（status=creating, acpServerType=opencode） |
+| createSession - 正常创建（github_copilot） | 应返回 session（status=creating, acpServerType=github_copilot） |
 | createSession - 无效 controllerId | 应返回「Controller not found」 |
 | sessions query - 已认证 | 应返回 sessions 列表 |
 | session query - 已存在的 session | 应返回 session 详情 |
@@ -162,6 +163,9 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | refreshAcpCapabilities - 无 token | 应返回「Not authenticated」 |
 | refreshAcpCapabilities - 不存在的 controller | 应返回错误 |
 | refreshAcpCapabilities - 已认证 | 应返回 capabilities 列表（含 checkedAt） |
+| acp:check:result - opencode | 普通 acp:check:result 响应（仅 opencode） |
+| acp:check:result - 多 Server | acp:check:result 响应包含 opencode + github_copilot 两个 server |
+| gc:start - github_copilot | 创建 session 时 acpServerType=github_copilot，验证 serverType 正确传递 |
 
 ### Session SSE API (`agent-api/session.test.ts`)
 
@@ -170,23 +174,30 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | 未认证 SSE 连接 | 应返回 401 |
 | 不存在的 session SSE | 应返回 404 |
 | 正常 SSE 连接 | 应返回 200 + event-stream，发送 history |
+| SSE modes - acp:start:result 含 modes | SSE 初始 status 事件包含 modes/currentModeId/currentModel |
 
 ### Controller ACP WebSocket (`controller-api/acp-websocket.test.ts`)
 
 | 测试 | 描述 |
 |------|------|
-| acp:check | 应请求检测并返回 servers 列表 |
-| acp:start | 应发送启动请求，controller 响应 success |
-| acp:message | 应转发 controller 输出消息 |
-| acp:stop | 应发送停止请求，controller 响应 stopped |
+| acp:check - opencode | 应请求检测并返回 opencode servers 列表 |
+| acp:check - 多 Server | 应请求检测并返回 opencode + github_copilot 两个 Server |
+| acp:start - opencode | 应发送 acp:start 请求（serverType=opencode），controller 响应 success |
+| acp:start - github_copilot | 应发送 acp:start 请求（serverType=github_copilot），controller 响应 success |
+| acp:start - failure | 应发送启动请求，controller 响应 failure，session status=ended |
+| acp:message | 应转发 controller 输出消息并持久化到 DB |
+| acp:stop | 应发送停止请求，controller 响应 stopped，session status=ended |
 
 ### End-to-End: Session 全链路 (`agent-api/session.test.ts`)
 
 | 测试 | 描述 |
 |------|------|
+| gc:create → acp:start → verify serverType | 创建 github_copilot session → fake controller 收到 acp:start（serverType=github_copilot）→ 响应 success → 验证 acpServerType 和 status |
 | create → acp:start → success → verify running | 创建 session → fake controller 收到 acp:start → 响应 success → 查询 session status=running |
 | create → acp:start → failure → verify ended | 创建 session → fake controller 响应 failure → 查询 session status=ended |
 | create → send message → controller receive → output persisted | 创建 session → GraphQL 发消息 → fake controller 收到 acp:message → 模拟输出 → 查询消息列表验证 input+output 都持久化 |
+| resume → acp:resume → success → verify idling | 创建 session → 关闭 → resume → fake controller 收到 acp:resume → 响应 success → 验证 idling |
+| resume → acp:resume → failure → verify ended | 创建 session → 关闭 → resume → fake controller 响应 failure → 验证 ended |
 
 ### History Session Sync API (`agent-api/history-session-sync.test.ts`)
 

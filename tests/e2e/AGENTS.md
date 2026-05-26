@@ -92,7 +92,8 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 设置「配置」按钮跳转 | 点击「配置」→ URL 包含 `?controllerId=` |
 | 配置页布局 | 显示返回按钮、控制器名称、工作区、Harness 导航 |
 | 工作区/Harness 切换 | 点击「可用 Harness 工具」→ 显示刷新按钮；切回「工作区」→ 空状态 |
-| Harness 工具列表 | 显示 fake controller 返回的 opencode 能力（可用 + v1.0.0） |
+| Harness 工具列表（单 Server） | 显示 fake controller 返回的 opencode 能力（可用 + v1.0.0） |
+| Harness 工具列表（多 Server） | 显示 opencode + github_copilot 两种能力 |
 | 刷新按钮 | 点击刷新 → 按钮不 disabled |
 | 返回设置页 | 点击 ← 返回 → URL 回到 `/settings`，controller-section 可见 |
 | 齿轮不触发展开 | 点击齿轮导航到配置页，不展开侧边栏控制器节点 |
@@ -142,3 +143,11 @@ BASE_URL=http://localhost:35273 npx playwright test
 | idling 时 mode switcher 启用 | resume 到 idling 后 mode switcher 可用 |
 | 对话框展示可用模式 | 点击 mode switcher → 对话框显示 modes |
 | 选择模式并关闭 | 选择 → Confirm → acp:set-mode → 对话框关闭 |
+
+### Session ACP Server 选择 E2E (`session-acp-server.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含 opencode + github_copilot |
+| GitHub Copilot badge | 选择 github_copilot 创建 session → 详情页显示「GitHub Copilot」徽章 |
+| OpenCode badge | 默认 opencode 创建 session → 详情页显示「OpenCode」徽章 |

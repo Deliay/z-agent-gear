@@ -34,9 +34,15 @@ describe('SessionHeader', () => {
     expect(screen.getByText('idling')).toBeDefined();
   });
 
-  it('should display acpServerType badge', () => {
+  it('should display OpenCode label for opencode server type', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('opencode')).toBeDefined();
+    expect(screen.getByText('OpenCode')).toBeDefined();
+  });
+
+  it('should display GitHub Copilot label for github_copilot server type', () => {
+    const copilotSession = { ...baseSession, acpServerType: 'github_copilot' };
+    render(<SessionHeader session={copilotSession} status="running" onClose={noop} onDelete={noop} />);
+    expect(screen.getByText('GitHub Copilot')).toBeDefined();
   });
 
   it('should display cwd', () => {
