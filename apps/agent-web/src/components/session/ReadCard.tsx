@@ -34,7 +34,10 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
     return '';
   })();
   const fileCount = locations?.length || 0;
-  const summary = `Read ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+  const firstFile = locations?.[0]?.path;
+  const summary = firstFile
+    ? `Read: ${firstFile}${fileCount > 1 ? ` +${fileCount - 1}` : ''}`
+    : `Read ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
 
   return (
     <AcpCard
