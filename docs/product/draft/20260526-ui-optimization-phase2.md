@@ -69,15 +69,15 @@ type: Permanent
 #### 功能点 1: 消息内容差异化展示（sub-agent / read / fetch）
 
 - **描述**: 
-  - **sub-agent 消息**（`kind=other`，`rawInput` 包含 `subagent_type`）：展示为专门的 sub-agent 卡片样式。标题区显示 `description`（如"代码审查"），内容区显示发送给子代理的 `prompt`，底部显示子代理返回的结果（`rawOutput.output`），类似于用户消息/AI 消息/edit 消息的展示方式
-  - **读取文件消息**（`kind=read`）：展示为文件读取卡片。上方列出 `locations`（文件路径列表），下方展示读取到的文件内容（`$.content.content`），类似于 AI 消息/用户消息/edit 消息的展示方式
-  - **抓取 URL 消息**（`kind=fetch`）：展示为 URL 抓取卡片，显示目标 URL（`rawInput.url`）和获取的结果（`rawOutput.output`），类似于 AI 消息/用户消息/edit 消息的展示方式
+  - **sub-agent 消息**（`kind=other`，`rawInput` 包含 `subagent_type`）：展示为专门的 sub-agent 卡片样式。标题区显示 `description`（如"代码审查"），内容区显示发送给子代理的 `prompt`，底部显示子代理返回的结果（`rawOutput.output`），外观与工具调用卡片一致
+  - **读取文件消息**（`kind=read`）：展示为文件读取卡片。上方列出 `locations`（文件路径列表），下方展示读取到的文件内容（`$.content.content`），外观与工具调用卡片一致
+  - **抓取 URL 消息**（`kind=fetch`）：展示为 URL 抓取卡片，显示目标 URL（`rawInput.url`）和获取的结果（`rawOutput.output`），外观与工具调用卡片一致
 - **用户价值**: 用户能直观区分消息类型，快速获取各类型的核心信息（子代理的提示词、读取的文件列表、抓取的 URL 来源）
 - **验收标准**:
   - [ ] sub-agent 消息卡片标题显示 `description`，内容区显示 `prompt`，底部显示子代理返回结果
   - [ ] read 消息上方显示文件路径列表，下方显示文件内容
   - [ ] fetch 消息显示目标 URL 和获取结果
-  - [ ] 三种卡片外观与 AI 消息/用户消息/edit 消息风格一致
+  - [ ] 三种卡片外观与工具调用卡片风格一致
 
 #### 功能点 2: Thinking 块支持 Markdown 渲染
 
@@ -193,12 +193,12 @@ flowchart TB
 
 ### 5.1 依赖
 
-- 一期实现的工具调用差异化展示（DiffView, TerminalOutput, ToolCallCard 等组件架构）
+- 一期实现的工具调用差异化展示组件架构
 
 ### 5.2 约束
 
 - Markdown 渲染方式需与 AI 消息内容保持一致（同一套 Markdown 组件）
-- 所有新增消息类型卡片需与已有消息（AI 消息、用户消息、edit 消息）视觉风格统一
+- 所有新增消息类型卡片需与工具调用卡片视觉风格统一
 
 ## 六、相关文档
 
