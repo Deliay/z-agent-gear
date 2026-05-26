@@ -12,12 +12,14 @@ interface DirectoryPickerProps {
   onClose: () => void;
 }
 
-function getParentPath(path: string): string {
+export function getParentPath(path: string): string {
   if (path === '/') return '/';
   const normalized = path.replace(/[\\/]+$/, '');
   const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
   if (lastSep <= 0) return '/';
-  return normalized.slice(0, lastSep);
+  const result = normalized.slice(0, lastSep);
+  if (/^[A-Za-z]:$/.test(result)) return result + '\\';
+  return result;
 }
 
 export default function DirectoryPicker({ controllerId, onSelect, onClose }: DirectoryPickerProps) {
