@@ -115,6 +115,11 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       // Tool calls and specialized types: group by toolCallId across the entire message list
       if (toolCallGroupMap.has(toolCallId)) {
         groupIndex = toolCallGroupMap.get(toolCallId)!;
+        // Upgrade group type if the new message has a more specific type
+        const existing = groups[groupIndex];
+        if (existing.type === 'tool_call' && groupType !== 'tool_call') {
+          existing.type = groupType;
+        }
       } else {
         groupIndex = groups.length;
         toolCallGroupMap.set(toolCallId, groupIndex);
