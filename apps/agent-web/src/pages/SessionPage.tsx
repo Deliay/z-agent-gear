@@ -61,13 +61,27 @@ export default function SessionPage() {
   const [status, setStatus] = useState<string>('connecting');
   const [sending, setSending] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [modes, setModes] = useState<AgentModeData[]>([]);
+  const [sseLoading, setSseLoading] = useState(false);
+  const [sseError, setSseError] = useState(false);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [_currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
+
+  const isWorking = messages.length > 0 && (() => {
+    const last = messages[messages.length - 1];
+    const content = typeof last.content === 'string' ? (() => { try { return JSON.parse(last.content); } catch { return null; } })() : last.content;
+    if (content && typeof content === 'object') {
+      const sessionUpdate = (content as Record<string, unknown>).sessionUpdate;
+      return sessionUpdate !== 'usage_update';
+    }
+    return true;
+  })();
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
@@ -99,15 +113,20 @@ export default function SessionPage() {
   useEffect(() => {
     if (!id) return;
 
-    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const apiBase = import.meta.env.VITE_API_URL || '';
     const token = localStorage.getItem('auth_token') || '';
+    setSseLoading(true);
+    setSseError(false);
+
     const eventSource = new EventSource(`${apiBase}/api/session/${id}/stream?token=${encodeURIComponent(token)}`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'history') {
         setMessages(data.data);
+        setSseLoading(false);
       } else if (data.type === 'message') {
+        setSseLoading(false);
         setMessages((prev) => [...prev, data.data]);
         if (data.data.direction === 'output') {
           setSending(false);
@@ -152,6 +171,8 @@ export default function SessionPage() {
 
     eventSource.onerror = () => {
       console.error('SSE connection error');
+      setSseLoading(false);
+      setSseError(true);
     };
 
     return () => {
@@ -210,16 +231,20 @@ export default function SessionPage() {
 
   const handleCloseSession = async () => {
     if (!id) return;
+    setClosing(true);
     try {
       await closeSession({ variables: { id } });
       setStatus('ended');
     } catch (error) {
       console.error('Failed to close session:', error);
+    } finally {
+      setClosing(false);
     }
   };
 
   const handleDeleteSession = async () => {
     if (!id) return;
+    setDeleting(true);
     try {
       await deleteSession({
         variables: { id },
@@ -228,6 +253,8 @@ export default function SessionPage() {
       navigate('/sessions');
     } catch (error) {
       console.error('Failed to delete session:', error);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -344,16 +371,22 @@ export default function SessionPage() {
         onDelete={handleDeleteSession}
         onContinue={handleResumeSession}
         resuming={resuming}
+        closing={closing}
+        deleting={deleting}
         controllerOnline={controllerOnline}
       />
       <MessageList
         messages={messages}
+        sseLoading={sseLoading}
+        sseError={sseError}
       />
       <InputBox
+        sessionId={id}
         onSend={handleSendMessage}
         onStop={handleCancelGeneration}
         disabled={status !== 'running' && status !== 'idling'}
         sending={sending}
+        isWorking={isWorking}
         modes={modes}
         currentModeId={currentModeId}
         onSetMode={handleSetMode}

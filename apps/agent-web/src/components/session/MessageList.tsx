@@ -1,12 +1,16 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { SessionUpdate, ContentChunk } from '@agentclientprotocol/sdk';
 import MessageItem from './MessageItem';
 import ThoughtBlock from './ThoughtBlock';
 import ToolCallCard from './ToolCallCard';
+import PlanCard from './PlanCard';
 import AvailableCommandsCard from './AvailableCommandsCard';
 import UsageCard from './UsageCard';
 import ConfigOptionCard from './ConfigOptionCard';
 import CurrentModeCard from './CurrentModeCard';
+import SubAgentCard from './SubAgentCard';
+import ReadCard from './ReadCard';
+import FetchCard from './FetchCard';
 
 interface AcpMessage {
   id: string;
@@ -20,7 +24,7 @@ interface AcpMessage {
 }
 
 interface MessageGroup {
-  type: 'message' | 'thought' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
+  type: 'user_message' | 'agent_message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'sub_agent' | 'read' | 'fetch' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
   messageId: string | null;
@@ -51,12 +55,16 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
 
     let groupType: MessageGroup['type'];
 
-    if (sessionUpdateType === 'agent_message_chunk' || sessionUpdateType === 'user_message_chunk') {
-      groupType = 'message';
+    if (sessionUpdateType === 'user_message_chunk') {
+      groupType = 'user_message';
+    } else if (sessionUpdateType === 'agent_message_chunk') {
+      groupType = 'agent_message';
     } else if (sessionUpdateType === 'agent_thought_chunk') {
       groupType = 'thought';
     } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
       groupType = 'tool_call';
+    } else if (sessionUpdateType === 'plan') {
+      groupType = 'plan';
     } else if (sessionUpdateType === 'available_commands_update') {
       groupType = 'available_commands';
     } else if (sessionUpdateType === 'usage_update') {
@@ -66,7 +74,23 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
     } else if (sessionUpdateType === 'current_mode_update') {
       groupType = 'current_mode_update';
     } else {
-      groupType = 'unknown';
+      // For 'other' kind, check rawInput for subagent_type, kind=read, kind=fetch
+      if (parsed) {
+        const p = parsed as Record<string, unknown>;
+        const kind = p.kind as string | undefined;
+        const rawInput = p.rawInput;
+        if (kind === 'read') {
+          groupType = 'read';
+        } else if (kind === 'fetch') {
+          groupType = 'fetch';
+        } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
+          groupType = 'sub_agent';
+        } else {
+          groupType = 'unknown';
+        }
+      } else {
+        groupType = 'unknown';
+      }
     }
 
     let groupIndex = -1;
@@ -89,8 +113,12 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
         thoughtGroupMap.set(chunkMessageId, groupIndex);
         groups.push({ type: groupType, messages: [], parsed, messageId: chunkMessageId });
       }
+    } else if (groupType === 'user_message') {
+      // Bug fix: each user message should be its own group, never merge consecutive
+      groupIndex = groups.length;
+      groups.push({ type: groupType, messages: [], parsed, messageId: null });
     } else {
-      // Consecutive grouping for all other types (message, available_commands, usage, etc.)
+      // Consecutive grouping for all other types (agent_message, available_commands, usage, etc.)
       const lastIndex = groups.length - 1;
       if (lastIndex >= 0 && groups[lastIndex].type === groupType) {
         groupIndex = lastIndex;
@@ -146,9 +174,11 @@ interface MessageListProps {
   hasMore?: boolean;
   onLoadMore?: () => void;
   loadingMore?: boolean;
+  sseLoading?: boolean;
+  sseError?: boolean;
 }
 
-export default function MessageList({ messages, hasMore, onLoadMore, loadingMore }: MessageListProps) {
+export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -186,6 +216,36 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
+  // Auto-expand logic: expand the last expandable group, allow user override
+  const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
+  const prevLastExpandableRef = useRef<string | null>(null);
+
+  const lastExpandableGroup = useMemo(() => {
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (groups[i].type === 'thought' || groups[i].type === 'tool_call' || groups[i].type === 'sub_agent' || groups[i].type === 'read' || groups[i].type === 'fetch') {
+        return groups[i];
+      }
+    }
+    return null;
+  }, [groups]);
+
+  const lastExpandableKey = lastExpandableGroup?.messages[0]?.id || null;
+
+  // When the last expandable group changes (new message arrived), reset overrides
+  useEffect(() => {
+    if (lastExpandableKey !== prevLastExpandableRef.current) {
+      prevLastExpandableRef.current = lastExpandableKey;
+      setExpandedOverrides({});
+    }
+  }, [lastExpandableKey]);
+
+  const isExpanded = (groupKey: string) => {
+    if (groupKey in expandedOverrides) {
+      return expandedOverrides[groupKey];
+    }
+    return groupKey === lastExpandableKey;
+  };
+
   return (
     <div
       ref={listRef}
@@ -193,9 +253,22 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
       className="flex-1 overflow-y-auto bg-gray-50 p-4"
     >
       {messages.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-gray-500">
-          No messages yet. Start a conversation!
-        </div>
+        sseLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+              Loading messages...
+            </div>
+          </div>
+        ) : sseError ? (
+          <div className="flex h-full items-center justify-center text-sm text-red-500">
+            Failed to load messages. Connection error.
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-gray-500">
+            No messages yet. Start a conversation!
+          </div>
+        )
       ) : (
         <div className="space-y-4">
           {hasMore && (
@@ -218,6 +291,10 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           )}
           {groups.map((group) => {
             const groupKey = group.messages[0]?.id || 'unknown';
+            const expanded = isExpanded(groupKey);
+            const handleExpandedChange = (next: boolean) => {
+              setExpandedOverrides((prev) => ({ ...prev, [groupKey]: next }));
+            };
             switch (group.type) {
               case 'thought':
                 return (
@@ -225,6 +302,8 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     key={groupKey}
                     chunks={group.messages.map((m) => parseSessionUpdate(m.content)).filter((p): p is ContentChunk & { sessionUpdate: 'agent_thought_chunk' } => p !== null && p.sessionUpdate === 'agent_thought_chunk')}
                     createdAt={group.messages[0]?.createdAt}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'available_commands':
@@ -255,15 +334,24 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     messages={group.messages}
                   />
                 );
+              case 'plan':
+                return (
+                  <PlanCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                  />
+                );
               case 'tool_call':
                 return (
                   <ToolCallCard
                     key={groupKey}
                     messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
-              case 'message':
-                // Merge consecutive message chunks into a single MessageItem
+              case 'user_message':
+              case 'agent_message':
                 return (
                   <MessageItem
                     key={group.messages[0].id}
@@ -271,6 +359,33 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                       ...group.messages[0],
                       content: mergeMessageChunks(group.messages),
                     }}
+                  />
+                );
+              case 'sub_agent':
+                return (
+                  <SubAgentCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
+                  />
+                );
+              case 'read':
+                return (
+                  <ReadCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
+                  />
+                );
+              case 'fetch':
+                return (
+                  <FetchCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'unknown':

@@ -1,8 +1,5 @@
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
+import MarkdownContent from './MarkdownContent';
 
 interface AcpMessage {
   id: string;
@@ -36,8 +33,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return 'tool_call';
       case 'tool_call_update':
         return 'tool_call';
-      case 'plan':
-        return 'plan';
       default:
         return message.type;
     }
@@ -53,8 +48,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return typeof acpUpdate.title === 'string' ? acpUpdate.title : '';
       case 'tool_call_update':
         return acpUpdate.title || '';
-      case 'plan':
-        return acpUpdate.entries?.map(e => e.content).join('\n') || '';
       default:
         return typeof message.content === 'string' ? message.content : '';
     }
@@ -77,8 +70,6 @@ export default function MessageItem({ message }: MessageItemProps) {
         return 'bg-purple-100 text-purple-900 border border-purple-200';
       case 'tool_result':
         return 'bg-green-100 text-green-900 border border-green-200';
-      case 'plan':
-        return 'bg-yellow-100 text-yellow-900 border border-yellow-200';
       case 'error':
         return 'bg-red-100 text-red-900 border border-red-200';
       case 'image':
@@ -92,8 +83,6 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (type) {
       case 'tool_call':
         return toolTitle ? `Tool Call: ${toolTitle}` : 'Tool Call';
-      case 'plan':
-        return 'Plan';
       case 'error':
         return 'Error';
       case 'image':
@@ -121,53 +110,7 @@ export default function MessageItem({ message }: MessageItemProps) {
           ) : isUser ? (
             <div className="whitespace-pre-wrap">{displayContent}</div>
           ) : (
-            <Markdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code(props) {
-                  const { children, className, ...rest } = props;
-                  const match = /language-(\w+)/.exec(className || '');
-                  const codeString = String(children).replace(/\n$/, '');
-                  if (match) {
-                    return (
-                      <SyntaxHighlighter
-                        style={oneDark}
-                        language={match[1]}
-                        PreTag="div"
-                        className="rounded-md !my-2"
-                      >
-                        {codeString}
-                      </SyntaxHighlighter>
-                    );
-                  }
-                  return (
-                    <code
-                      className="rounded bg-gray-100 px-1.5 py-0.5 text-sm font-mono"
-                      {...rest}
-                    >
-                      {children}
-                    </code>
-                  );
-                },
-                p(props) {
-                  return <p className="!my-1 last:!mb-0" {...props} />;
-                },
-                ul(props) {
-                  return <ul className="!my-1 list-disc pl-4" {...props} />;
-                },
-                ol(props) {
-                  return <ol className="!my-1 list-decimal pl-4" {...props} />;
-                },
-                li(props) {
-                  return <li className="!my-0.5" {...props} />;
-                },
-                pre(props) {
-                  return <pre className="!my-0" {...props} />;
-                },
-              }}
-            >
-              {displayContent}
-            </Markdown>
+            <MarkdownContent content={displayContent} />
           )}
         </div>
         <div className={`mt-1 text-xs ${isUser ? 'text-blue-200' : 'text-gray-500'}`}>
