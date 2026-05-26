@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { SessionUpdate, ContentChunk } from '@agentclientprotocol/sdk';
 import MessageItem from './MessageItem';
 import ThoughtBlock from './ThoughtBlock';
@@ -21,7 +21,7 @@ interface AcpMessage {
 }
 
 interface MessageGroup {
-  type: 'message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
+  type: 'user_message' | 'agent_message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
   messageId: string | null;
@@ -52,8 +52,10 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
 
     let groupType: MessageGroup['type'];
 
-    if (sessionUpdateType === 'agent_message_chunk' || sessionUpdateType === 'user_message_chunk') {
-      groupType = 'message';
+    if (sessionUpdateType === 'user_message_chunk') {
+      groupType = 'user_message';
+    } else if (sessionUpdateType === 'agent_message_chunk') {
+      groupType = 'agent_message';
     } else if (sessionUpdateType === 'agent_thought_chunk') {
       groupType = 'thought';
     } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
@@ -92,8 +94,12 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
         thoughtGroupMap.set(chunkMessageId, groupIndex);
         groups.push({ type: groupType, messages: [], parsed, messageId: chunkMessageId });
       }
+    } else if (groupType === 'user_message') {
+      // Bug fix: each user message should be its own group, never merge consecutive
+      groupIndex = groups.length;
+      groups.push({ type: groupType, messages: [], parsed, messageId: null });
     } else {
-      // Consecutive grouping for all other types (message, available_commands, usage, etc.)
+      // Consecutive grouping for all other types (agent_message, available_commands, usage, etc.)
       const lastIndex = groups.length - 1;
       if (lastIndex >= 0 && groups[lastIndex].type === groupType) {
         groupIndex = lastIndex;
@@ -189,6 +195,36 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
+  // Auto-expand logic: expand the last expandable group, allow user override
+  const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
+  const prevLastExpandableRef = useRef<string | null>(null);
+
+  const lastExpandableGroup = useMemo(() => {
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (groups[i].type === 'thought' || groups[i].type === 'tool_call') {
+        return groups[i];
+      }
+    }
+    return null;
+  }, [groups]);
+
+  const lastExpandableKey = lastExpandableGroup?.messages[0]?.id || null;
+
+  // When the last expandable group changes (new message arrived), reset overrides
+  useEffect(() => {
+    if (lastExpandableKey !== prevLastExpandableRef.current) {
+      prevLastExpandableRef.current = lastExpandableKey;
+      setExpandedOverrides({});
+    }
+  }, [lastExpandableKey]);
+
+  const isExpanded = (groupKey: string) => {
+    if (groupKey in expandedOverrides) {
+      return expandedOverrides[groupKey];
+    }
+    return groupKey === lastExpandableKey;
+  };
+
   return (
     <div
       ref={listRef}
@@ -221,6 +257,10 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           )}
           {groups.map((group) => {
             const groupKey = group.messages[0]?.id || 'unknown';
+            const expanded = isExpanded(groupKey);
+            const handleExpandedChange = (next: boolean) => {
+              setExpandedOverrides((prev) => ({ ...prev, [groupKey]: next }));
+            };
             switch (group.type) {
               case 'thought':
                 return (
@@ -228,6 +268,8 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     key={groupKey}
                     chunks={group.messages.map((m) => parseSessionUpdate(m.content)).filter((p): p is ContentChunk & { sessionUpdate: 'agent_thought_chunk' } => p !== null && p.sessionUpdate === 'agent_thought_chunk')}
                     createdAt={group.messages[0]?.createdAt}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'available_commands':
@@ -270,10 +312,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                   <ToolCallCard
                     key={groupKey}
                     messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
-              case 'message':
-                // Merge consecutive message chunks into a single MessageItem
+              case 'user_message':
+              case 'agent_message':
                 return (
                   <MessageItem
                     key={group.messages[0].id}
