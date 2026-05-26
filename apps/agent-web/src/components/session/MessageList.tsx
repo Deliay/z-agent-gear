@@ -3,6 +3,7 @@ import type { SessionUpdate, ContentChunk } from '@agentclientprotocol/sdk';
 import MessageItem from './MessageItem';
 import ThoughtBlock from './ThoughtBlock';
 import ToolCallCard from './ToolCallCard';
+import PlanCard from './PlanCard';
 import AvailableCommandsCard from './AvailableCommandsCard';
 import UsageCard from './UsageCard';
 import ConfigOptionCard from './ConfigOptionCard';
@@ -20,7 +21,7 @@ interface AcpMessage {
 }
 
 interface MessageGroup {
-  type: 'user_message' | 'agent_message' | 'thought' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
+  type: 'user_message' | 'agent_message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
   messageId: string | null;
@@ -59,6 +60,8 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       groupType = 'thought';
     } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
       groupType = 'tool_call';
+    } else if (sessionUpdateType === 'plan') {
+      groupType = 'plan';
     } else if (sessionUpdateType === 'available_commands_update') {
       groupType = 'available_commands';
     } else if (sessionUpdateType === 'usage_update') {
@@ -295,6 +298,13 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                   <CurrentModeCard
                     key={groupKey}
                     messages={group.messages}
+                  />
+                );
+              case 'plan':
+                return (
+                  <PlanCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
                   />
                 );
               case 'tool_call':
