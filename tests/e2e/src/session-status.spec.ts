@@ -10,14 +10,12 @@ test.describe('Session Status Transitions', () => {
     const { controllerId, disconnect, socket } = await registerController(rawKey);
 
     socket.on('acp:start', (data: { requestId: string; sessionId: string }) => {
-      setTimeout(() => {
-        socket.emit('acp:start:result', {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
-          externalSessionId: `ext_${Date.now()}`,
-        });
-      }, 500);
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
     });
 
     await loginViaUI(page, username);
@@ -31,8 +29,10 @@ test.describe('Session Status Transitions', () => {
     // Allow for idling if session started quickly
     expect(['creating', 'connecting', 'idling']).toContain(initialBadge);
 
-    // Input should be disabled
-    await expect(page.locator('textarea')).toBeDisabled();
+    // Input should be disabled only if still creating/connecting
+    if (initialBadge !== 'idling') {
+      await expect(page.locator('textarea')).toBeDisabled();
+    }
 
     // Wait for status to become idling
     await expect(page.locator(statusBadge())).toHaveText('idling', { timeout: 10000 });

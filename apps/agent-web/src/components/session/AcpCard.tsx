@@ -7,6 +7,8 @@ interface AcpCardProps {
   defaultCollapsed?: boolean;
   color?: 'purple' | 'yellow' | 'gray' | 'blue';
   children: React.ReactNode;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 const colorClasses = {
@@ -42,15 +44,27 @@ export default function AcpCard({
   defaultCollapsed = true,
   color = 'gray',
   children,
+  expanded,
+  onExpandedChange,
 }: AcpCardProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const isControlled = expanded !== undefined;
+  const [internalCollapsed, setInternalCollapsed] = useState(defaultCollapsed);
+  const collapsed = isControlled ? !expanded : internalCollapsed;
   const colors = colorClasses[color];
+
+  const toggle = () => {
+    if (isControlled) {
+      onExpandedChange?.(!expanded);
+    } else {
+      setInternalCollapsed(!internalCollapsed);
+    }
+  };
 
   return (
     <div className={`rounded-lg overflow-hidden ${colors.container}`}>
       <button
         type="button"
-        onClick={() => setCollapsed(!collapsed)}
+        onClick={toggle}
         className={`w-full flex items-center gap-2 px-3 py-2 text-left ${colors.header} hover:opacity-80 transition-opacity`}
       >
         {collapsed ? (

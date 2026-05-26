@@ -4,9 +4,11 @@ import AcpCard from './AcpCard';
 interface ThoughtBlockProps {
   chunks: ContentChunk[];
   createdAt?: string;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
-export default function ThoughtBlock({ chunks, createdAt }: ThoughtBlockProps) {
+export default function ThoughtBlock({ chunks, createdAt, expanded, onExpandedChange }: ThoughtBlockProps) {
   const text = chunks
     .map((chunk) => (chunk.content.type === 'text' ? chunk.content.text : ''))
     .join('');
@@ -21,6 +23,8 @@ export default function ThoughtBlock({ chunks, createdAt }: ThoughtBlockProps) {
       summary={summary}
       defaultCollapsed={true}
       color="gray"
+      expanded={expanded}
+      onExpandedChange={onExpandedChange}
     >
       <div className="font-mono text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
         {text}
