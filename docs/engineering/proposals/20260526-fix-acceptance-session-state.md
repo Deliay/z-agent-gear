@@ -6,7 +6,7 @@ type: Permanent
 # Session 状态验收问题修复
 
 **功能名称**: Session 状态验收问题修复
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -260,6 +260,144 @@ useEffect(() => {
 - **为什么不把 `ref` 放进 `[]` 依赖中**：`initializedRef.current` 的变化不会触发重渲染，放在依赖数组中无意义。
 - **SSE initial status 的冗余**：组件初始化时 `GET_SESSION` + SSE 初始 status 事件都包含相同的数据。先用 `GET_SESSION` 同步初始化（消除白屏等待），SSE 建立后会立即收到一致的 status 事件覆盖——这没有副作用，因为值相同。
 
+### 2.4 问题四：SubAgent 子任务卡片未渲染
+
+#### 现状
+
+用户反映线上环境中 SubAgent（子任务）的卡片没有正确渲染。以下是实际收到的消息数据结构：
+
+```json
+{
+  "id": "6a15643ae7227d801c6dacf2",
+  "direction": "output",
+  "type": "tool_call",
+  "content": {
+    "kind": "other",
+    "title": "task",
+    "status": "in_progress",
+    "subagent_type": "explore",
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_00_FmrB6QVXt3w0WWnpm9IH5651",
+    "rawInput": {
+      "description": "Find currentModel usage",
+      "prompt": "...",
+      "subagent_type": "explore"
+    }
+  },
+  "createdAt": "2026-05-26T09:13:30.228Z"
+}
+```
+
+#### 根因分析
+
+渲染路径追踪：
+
+```mermaid
+flowchart TD
+    A[messages SSE 事件] --> B[MessageList.tsx groupMessages]
+    B --> C{sessionUpdate === 'tool_call_update' ?}
+    C -->|是| D[groupType = 'tool_call']
+    D --> E[ToolCallCard 渲染]
+    E --> F[parseToolCallUpdate]
+    F --> G{update.sessionUpdate === 'tool_call_update' ?}
+    G -->|是| H[提取 rawInput / title / status]
+    G -->|否| I[返回 null → 数据丢失]
+```
+
+`ToolCallCard.tsx` 的解析逻辑存在 BUG：
+
+```typescript
+// ToolCallCard.tsx L13-16
+function parseToolCallUpdate(update: SessionUpdate) {
+  if (update.sessionUpdate === 'tool_call_update') return update;  // ← 检查通过
+  return null;
+}
+
+// L35-39: 更新只发生在 tcu 非 null 时
+if (tcu) {
+  if (tcu.title) title = tcu.title;
+  if (tcu.status) status = tcu.status;
+  if (tcu.rawInput) rawInput = tcu.rawInput;  // ← rawInput 确实被赋值了
+}
+```
+
+但问题在于 `ToolCallCard` 的标题提取逻辑：
+
+```typescript
+// ToolCallCard.tsx L19-20
+let title = 'Tool Call';
+// ...
+if (tc) {
+  title = tc.title;   // ← 'Tool Call' 被覆盖为 'task'
+  if (tc.status) status = tc.status;
+  if (tc.rawInput) rawInput = tc.rawInput;
+}
+```
+
+`title = 'task'` 直接覆盖了默认值，显示为 "Tool Call: task"，无法区分普通 ToolCall 和 SubAgent。
+
+**核心问题**：`kind` 字段（值为 `"other"`）用于区分 ToolCall 类型，但 `ToolCallCard` 完全未使用 `kind` 字段。
+
+#### 当前数据结构与组件支持情况
+
+| 字段 | ToolCallCard 支持 | 说明 |
+|------|-------------------|------|
+| `title` | ✅ | 显示为 "Tool Call: {title}" |
+| `status` | ✅ | 显示在 summary 和内部 |
+| `rawInput` | ✅ | 折叠面板中渲染 |
+| `kind` | ❌ | 未使用，无法区分 "other" / "sub_agent" / 等 |
+| `subagent_type` | ❌ | 未使用，无法显示子任务类型 |
+
+#### 方案
+
+`ToolCallCard` 增加对 `kind` 字段的处理，根据不同类型显示不同样式和标题：
+
+```typescript
+// ToolCallCard.tsx 改造
+
+// 类型映射
+const kindLabels: Record<string, string> = {
+  'sub_agent': 'SubAgent',
+  'subagent': 'SubAgent',
+  'other': 'Tool Call',
+  // 其他类型...
+};
+
+// 颜色映射
+const kindColors: Record<string, 'purple' | 'yellow' | 'gray' | 'blue'> = {
+  'sub_agent': 'blue',   // SubAgent 用蓝色区分
+  'subagent': 'blue',
+  'other': 'purple',
+  // 其他类型...
+};
+
+// 标题生成
+const displayTitle = (() => {
+  if (kind === 'sub_agent' || kind === 'subagent') {
+    return `SubAgent: ${title}`;
+  }
+  return title;
+})();
+
+// 传入 kind 和 subagent_type
+const rawInput = (() => {
+  if (kind === 'sub_agent' || kind === 'subagent') {
+    return {
+      ...parsed.rawInput,
+      subagent_type: parsed.subagent_type,  // 保留子任务类型
+    };
+  }
+  return parsed.rawInput;
+})();
+```
+
+#### 验收标准
+
+1. SubAgent 类型的消息显示为蓝色卡片，标题包含 "SubAgent:" 前缀
+2. `subagent_type` 字段值正确传递给渲染组件
+3. 普通 ToolCall 保持现有的紫色卡片样式
+4. `kind` 字段为未知值时不会导致渲染错误
+
 ## 3. 各层具体改动
 
 ### 3.1 数据模型层
@@ -312,6 +450,8 @@ useEffect(() => {
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
 | `apps/agent-web/src/hooks/useSessionStream.ts:12,51-52` | 扩展 `onStatus` 回调签名 |
+| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `kind` 字段处理，区分 SubAgent / ToolCall 类型 |
+| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `subagent_type` 传递和渲染 |
 
 ### 3.6 测试层
 
@@ -380,7 +520,8 @@ onStatus?: (data: SessionStatusData) => void;
 6. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
 7. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
 8. `useSessionStream` 的 `onStatus` 回调传递完整的 status data 对象
-9. 所有现有测试通过
+9. SubAgent 类型消息正确渲染为蓝色卡片，显示 "SubAgent:" 前缀和 `subagent_type`
+10. 所有现有测试通过
 
 ## 6. 相关文档
 
@@ -388,3 +529,4 @@ onStatus?: (data: SessionStatusData) => void;
 - [[contracts/agent-session-websocket.md]] — SSE 协议文档
 - [[20260522-feat-available-models-and-mode-switch.md]] — 可用模型与模式切换方案
 - [[20260522-feat-model-switch-support.md]] — 模型切换支持方案
+- [[20260519-fix-frontend-acp-response.md]] — 前端 ACP 响应修复（ToolCall 渲染基础）
