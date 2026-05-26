@@ -6,7 +6,7 @@ type: Permanent
 # Session 状态验收问题修复
 
 **功能名称**: Session 状态验收问题修复
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -290,53 +290,32 @@ useEffect(() => {
 
 #### 根因分析
 
-渲染路径追踪：
-
-```mermaid
-flowchart TD
-    A[messages SSE 事件] --> B[MessageList.tsx groupMessages]
-    B --> C{sessionUpdate === 'tool_call_update' ?}
-    C -->|是| D[groupType = 'tool_call']
-    D --> E[ToolCallCard 渲染]
-    E --> F[parseToolCallUpdate]
-    F --> G{update.sessionUpdate === 'tool_call_update' ?}
-    G -->|是| H[提取 rawInput / title / status]
-    G -->|否| I[返回 null → 数据丢失]
-```
-
-`ToolCallCard.tsx` 的解析逻辑存在 BUG：
+`ToolCallCard.tsx` 的解析逻辑：
 
 ```typescript
-// ToolCallCard.tsx L13-16
-function parseToolCallUpdate(update: SessionUpdate) {
-  if (update.sessionUpdate === 'tool_call_update') return update;  // ← 检查通过
-  return null;
-}
-
-// L35-39: 更新只发生在 tcu 非 null 时
-if (tcu) {
-  if (tcu.title) title = tcu.title;
-  if (tcu.status) status = tcu.status;
-  if (tcu.rawInput) rawInput = tcu.rawInput;  // ← rawInput 确实被赋值了
-}
-```
-
-但问题在于 `ToolCallCard` 的标题提取逻辑：
-
-```typescript
-// ToolCallCard.tsx L19-20
-let title = 'Tool Call';
-// ...
-if (tc) {
-  title = tc.title;   // ← 'Tool Call' 被覆盖为 'task'
-  if (tc.status) status = tc.status;
-  if (tc.rawInput) rawInput = tc.rawInput;
+// ToolCallCard.tsx L23-43
+for (const msg of messages) {
+  const parsed = /* ... */;
+  const tc = parseToolCall(parsed);
+  const tcu = parseToolCallUpdate(parsed);
+  if (tc) {
+    title = tc.title;   // title = 'task'
+    if (tc.status) status = tc.status;
+    if (tc.rawInput) rawInput = tc.rawInput;
+  }
+  if (tcu) {
+    if (tcu.title) title = tcu.title;  // 再次覆盖
+    if (tcu.status) status = tcu.status;
+    if (tcu.rawInput) rawInput = tcu.rawInput;
+  }
 }
 ```
 
-`title = 'task'` 直接覆盖了默认值，显示为 "Tool Call: task"，无法区分普通 ToolCall 和 SubAgent。
+卡片始终渲染为：
+- **标题**：`"Tool Call: task"`（无法区分普通任务还是子任务）
+- **颜色**：默认 `purple`（`statusColors['in_progress']`）
 
-**核心问题**：`kind` 字段（值为 `"other"`）用于区分 ToolCall 类型，但 `ToolCallCard` 完全未使用 `kind` 字段。
+**关键字段**：`subagent_type` 是区分 SubAgent 的标记（值为 `"explore"`），但 `ToolCallCard` 完全未使用该字段。
 
 #### 当前数据结构与组件支持情况
 
@@ -345,58 +324,48 @@ if (tc) {
 | `title` | ✅ | 显示为 "Tool Call: {title}" |
 | `status` | ✅ | 显示在 summary 和内部 |
 | `rawInput` | ✅ | 折叠面板中渲染 |
-| `kind` | ❌ | 未使用，无法区分 "other" / "sub_agent" / 等 |
-| `subagent_type` | ❌ | 未使用，无法显示子任务类型 |
+| `subagent_type` | ❌ | 未使用，但这是区分 SubAgent 的关键字段 |
+| `kind` | ❌ | 固定为 "other"，无区分意义 |
 
 #### 方案
 
-`ToolCallCard` 增加对 `kind` 字段的处理，根据不同类型显示不同样式和标题：
+`ToolCallCard` 增加对 `subagent_type` 字段的检测，根据是否存在该字段来区分 SubAgent 和普通 ToolCall：
 
 ```typescript
 // ToolCallCard.tsx 改造
 
-// 类型映射
-const kindLabels: Record<string, string> = {
-  'sub_agent': 'SubAgent',
-  'subagent': 'SubAgent',
-  'other': 'Tool Call',
-  // 其他类型...
-};
+// 检测是否为 SubAgent（rawInput 中存在 subagent_type 或直接存在 subagent_type 字段）
+function isSubAgent(parsed: SessionUpdate): boolean {
+  return !!(parsed.subagent_type || (parsed.rawInput && typeof parsed.rawInput === 'object' && (parsed.rawInput as Record<string, unknown>).subagent_type));
+}
 
-// 颜色映射
-const kindColors: Record<string, 'purple' | 'yellow' | 'gray' | 'blue'> = {
-  'sub_agent': 'blue',   // SubAgent 用蓝色区分
-  'subagent': 'blue',
-  'other': 'purple',
-  // 其他类型...
+// 类型映射
+const subagentTypeLabels: Record<string, string> = {
+  'explore': 'Explore',
+  'general': 'General',
+  // 其他子任务类型...
 };
 
 // 标题生成
 const displayTitle = (() => {
-  if (kind === 'sub_agent' || kind === 'subagent') {
-    return `SubAgent: ${title}`;
+  const isSub = isSubAgent(parsed);
+  if (isSub) {
+    const subType = parsed.subagent_type || (parsed.rawInput as Record<string, unknown>)?.subagent_type as string;
+    return `SubAgent: ${subagentTypeLabels[subType] || subType || 'task'}`;
   }
-  return title;
+  return `Tool Call: ${parsed.title || 'task'}`;
 })();
 
-// 传入 kind 和 subagent_type
-const rawInput = (() => {
-  if (kind === 'sub_agent' || kind === 'subagent') {
-    return {
-      ...parsed.rawInput,
-      subagent_type: parsed.subagent_type,  // 保留子任务类型
-    };
-  }
-  return parsed.rawInput;
-})();
+// 颜色映射（SubAgent 用蓝色）
+const displayColor = isSub ? 'blue' : (statusColors[status] || 'purple');
 ```
 
 #### 验收标准
 
-1. SubAgent 类型的消息显示为蓝色卡片，标题包含 "SubAgent:" 前缀
-2. `subagent_type` 字段值正确传递给渲染组件
-3. 普通 ToolCall 保持现有的紫色卡片样式
-4. `kind` 字段为未知值时不会导致渲染错误
+1. 存在 `subagent_type` 字段的消息显示为蓝色卡片，标题包含 "SubAgent:" 前缀
+2. 不存在 `subagent_type` 字段的消息保持现有的紫色卡片样式
+3. `subagent_type` 值正确显示在卡片中
+4. 无 `subagent_type` 且无 `rawInput` 时不会导致渲染错误
 
 ## 3. 各层具体改动
 
@@ -450,8 +419,7 @@ const rawInput = (() => {
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
 | `apps/agent-web/src/hooks/useSessionStream.ts:12,51-52` | 扩展 `onStatus` 回调签名 |
-| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `kind` 字段处理，区分 SubAgent / ToolCall 类型 |
-| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `subagent_type` 传递和渲染 |
+| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 增加 `subagent_type` 检测，区分 SubAgent / ToolCall 类型和颜色 |
 
 ### 3.6 测试层
 
