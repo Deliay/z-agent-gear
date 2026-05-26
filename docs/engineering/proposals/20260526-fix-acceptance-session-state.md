@@ -133,53 +133,132 @@ sequenceDiagram
 
 #### 现状
 
-SessionPage.tsx 中 SSE 事件处理已覆盖所有事件类型：
+SessionPage.tsx 中 SSE 事件处理已覆盖 SSE status 事件中的各个字段：
 
 ```tsx
 } else if (data.type === 'status') {
   setStatus(data.data.status);
+  if (data.data.status === 'ended' && data.data.error) { ... }
+  if (data.data.status === 'idling') { ... }
   if (data.data.modes) setModes(data.data.modes);
   if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
+  if (data.data.currentModel) setCurrentModel(data.data.currentModel);
   if (data.data.availableModels) setAvailableModels(data.data.availableModels);
   if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
 }
 ```
 
-但存在两个问题：
-1. `currentModel` 字段仍在此处被读取（配合问题一删除）
-2. `useSessionStream` hook 中的 `onStatus` 回调仅传递 `status` 字符串，丢失了 `currentModelId`、`availableModels` 等完整状态
+但存在一个**严重的覆盖问题**——`sessionData` 的 `useEffect` 会被后台轮询触发，将 SSE 更新的状态覆盖掉：
+
+```tsx
+// SessionPage.tsx L88-97 — 问题根源
+useEffect(() => {
+  if (sessionData?.session) {
+    setStatus(sessionData.session.status);
+    if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
+    if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
+    // ... 覆盖所有状态
+  }
+}, [sessionData]); // ← 每次 sessionData 变化都触发
+```
+
+#### 根因分析
+
+`Sidebar.tsx` 每 15 秒轮询 `GET_SESSIONS`（L27-29）：
+
+```tsx
+const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
+  pollInterval: 15000,
+});
+```
+
+该查询返回的 Session 列表包含 `currentModeId`、`currentModelId`、`modes`、`status`、`availableModels` 等字段。Apollo 的归一化缓存（normalized cache）会更新 `Session` 类型的缓存实体。由于 `SessionPage.tsx` 的 `GET_SESSION` 也读取同一个 `Session` 实体，Apollo 缓存更新会触发 `sessionData` 变化，进而触发 `useEffect([sessionData])`，将 React 本地状态覆盖为轮询返回的（可能已过时的）值。
+
+```mermaid
+sequenceDiagram
+    participant Sidebar
+    participant Apollo as Apollo Cache
+    participant SessionPage
+    participant SSE as SSE Stream
+
+    Note over Sidebar: GET_SESSIONS pollInterval: 15000
+    Sidebar->>Apollo: 轮询更新 Session 缓存<br/>(含 stale currentModeId)
+    Apollo->>SessionPage: sessionData 变化（Apollo 归一化通知）
+    Note over SessionPage: useEffect([sessionData]) 触发
+    SessionPage->>SessionPage: setCurrentModeId(staleValue) ← 覆盖！
+
+    Note over SSE: 真正的状态更新来自 SSE
+    SSE->>SessionPage: type: 'status', currentModeId: 'plan'
+    SessionPage->>SessionPage: setCurrentModeId('plan') ✓
+
+    Note over Sidebar: 15s 后再次轮询...
+    Sidebar->>Apollo: 再次返回 old currentModeId
+    Apollo->>SessionPage: sessionData 再次变化
+    SessionPage->>SessionPage: setCurrentModeId(staleValue) ← 再次覆盖！
+```
+
+典型场景复现步骤：
+
+1. 用户在 SessionPage 中通过 `ModelSwitcher` 或 `SetSessionMode` mutation 切换 mode
+2. 后端 `acpSessionManager.setMode()` 乐观更新 DB 并发布 `publishStatus('idling', { currentModeId: 'plan' })`
+3. SSE `type: 'status'` 事件到达前端 → `setCurrentModeId('plan')` ✓
+4. 15 秒后 `Sidebar` 的 `GET_SESSIONS` 轮询返回旧数据（`currentModeId: 'code'`）
+5. Apollo 归一化缓存更新 → `sessionData` 变化 → `useEffect` 触发 → `setCurrentModeId('code')` ← **BUG：覆盖为旧值**
+6. 用户看到 mode 被"弹回"修改前的值
 
 #### 方案
 
+**核心原则：`sessionData` 仅用于首次初始化，后续状态更新完全依赖 SSE `type: 'status'` 事件。**
+
 ```mermaid
-flowchart LR
-    subgraph SSE[SSE Event Source]
-        StatusEvent[type: 'status']
-    end
-    subgraph SessionPage[SessionPage.tsx]
-        Handler[onmessage handler]
-        SetStatus[setStatus]
-        SetModelId[setCurrentModelId]
-        SetModels[setAvailableModels]
-        SetModes[setModes]
-    end
-    subgraph useSessionStream[useSessionStream.ts]
-        Callback[onStatus callback]
+flowchart TD
+    subgraph Init[组件初始化]
+        A[GET_SESSION GraphQL] -->|首次加载| B[sessionData useEffect]
+        B --> C[初始化所有本地状态]
+        C --> D[SSE 建立连接]
+        D --> E[收到初始 status 事件<br/>与 sessionData 一致]
     end
 
-    StatusEvent --> Handler
-    Handler --> SetStatus
-    Handler --> SetModelId
-    Handler --> SetModels
-    Handler --> SetModes
+    subgraph Runtime[运行期]
+        F[GET_SESSIONS 轮询] -->|Apollo 缓存更新| G[sessionData 变化]
+        G -->|已初始化, 跳过| H[不覆盖本地状态]
+        I[SSE status 事件] -->|唯一更新源| J[setCurrentModeId / setStatus / ...]
+    end
 
-    StatusEvent -.-> Callback
-    Note over Callback: 当前仅传递 status 字符串<br/>需要改为传递完整 data 对象
+    Init --> Runtime
 ```
 
 改动：
-1. **`SessionPage.tsx`**：验证当前实现正确，移除 `currentModel` 引用
-2. **`useSessionStream.ts`**：将 `onStatus` 回调签名从 `(status: string) => void` 改为 `(data: { status: string; currentModelId?: string; availableModels?: ... }) => void`，传递完整的 status event data
+
+1. **`SessionPage.tsx`**：`sessionData` 的 `useEffect` 增加首次加载保护，仅在组件挂载时初始化一次，后续忽略
+
+```typescript
+// 方案一：使用 initializedRef 确保只初始化一次
+const initializedRef = useRef(false);
+
+useEffect(() => {
+  if (sessionData?.session && !initializedRef.current) {
+    initializedRef.current = true;
+    setStatus(sessionData.session.status);
+    if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
+    if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
+    if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
+    if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
+  }
+  // sessionData 不再参与依赖 — 改用 id 确保 session 切换时重新初始化
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [id]);
+```
+
+2. SSE `type: 'status'` 处理保持不变——它已经是状态更新的正确来源
+3. `currentModel` 引用随问题一删除
+4. `useSessionStream.ts` 的 `onStatus` 回调签名从 `(status: string) => void` 改为传递完整的 status event data 对象
+
+#### 补充说明
+
+- **为什么用 `id` 做依赖而非 `sessionData`**：当用户导航到另一个 session（路由 `id` 变化）时，组件实例可能复用（React Router 同路径模式），`ref` 会保持旧值。将依赖改为 `id` 确保了 session 切换时重新初始化。
+- **为什么不把 `ref` 放进 `[]` 依赖中**：`initializedRef.current` 的变化不会触发重渲染，放在依赖数组中无意义。
+- **SSE initial status 的冗余**：组件初始化时 `GET_SESSION` + SSE 初始 status 事件都包含相同的数据。先用 `GET_SESSION` 同步初始化（消除白屏等待），SSE 建立后会立即收到一致的 status 事件覆盖——这没有副作用，因为值相同。
 
 ## 3. 各层具体改动
 
@@ -227,7 +306,9 @@ flowchart LR
 | 文件 | 改动 |
 |------|------|
 | `apps/agent-web/src/pages/SessionPage.tsx:70` | 删除 `_currentModel` state |
+| `apps/agent-web/src/pages/SessionPage.tsx:88-97` | `sessionData` useEffect 改为仅首次初始化，依赖从 `[sessionData]` 改为 `[id]` |
 | `apps/agent-web/src/pages/SessionPage.tsx:93,143` | 删除 `setCurrentModel` 调用 |
+| `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `initializedRef` 保护 Effect 重复执行 |
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
 | `apps/agent-web/src/hooks/useSessionStream.ts:12,51-52` | 扩展 `onStatus` 回调签名 |
@@ -296,8 +377,10 @@ onStatus?: (data: SessionStatusData) => void;
 3. GraphQL `GET_SESSION` 查询不再请求 `currentModel`
 4. SSE status 事件 payload 不再包含 `currentModel`
 5. setting update 作为最后一条消息时，输入框可点击发送
-6. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`availableModels` 等状态
-7. 所有现有测试通过
+6. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
+7. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
+8. `useSessionStream` 的 `onStatus` 回调传递完整的 status data 对象
+9. 所有现有测试通过
 
 ## 6. 相关文档
 
