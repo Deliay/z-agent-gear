@@ -22,19 +22,21 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
   const parsed = parseMessage(last.content);
   if (!parsed) return null;
 
+  const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
+  const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
   const locations = parsed.locations as ToolCallLocation[] | undefined;
-  const contentText = (() => {
-    const raw = parsed as Record<string, unknown>;
-    const content = raw.content;
-    if (typeof content === 'string') return content;
-    if (content && typeof content === 'object') {
-      const c = content as Record<string, unknown>;
-      return typeof c.content === 'string' ? c.content : '';
-    }
-    return '';
-  })();
-  const fileCount = locations?.length || 0;
-  const summary = `Read ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+
+  const filePath = (rawInput?.filePath as string) || locations?.[0]?.path || '';
+  const filePaths: string[] = [];
+  if (filePath) filePaths.push(filePath);
+  if (locations) for (const loc of locations) { if (loc.path && !filePaths.includes(loc.path)) filePaths.push(loc.path); }
+
+  const contentText = rawOutput?.output as string || '';
+
+  const fileCount = filePaths.length;
+  const summary = filePath
+    ? `Read: ${filePath}${fileCount > 1 ? ` +${fileCount - 1}` : ''}`
+    : `Read ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
 
   return (
     <AcpCard
@@ -46,16 +48,13 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
       onExpandedChange={onExpandedChange}
     >
       <div className="space-y-3">
-        {locations && locations.length > 0 && (
+        {filePaths.length > 0 && (
           <div>
             <div className="mb-1 text-xs font-medium text-gray-500">Files read</div>
             <div className="space-y-1">
-              {locations.map((loc, i) => (
+              {filePaths.map((path, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                  <span className="font-mono">{loc.path || '(unknown path)'}</span>
-                  {loc.line != null && (
-                    <span className="text-xs text-gray-400">:{loc.line}</span>
-                  )}
+                  <span className="font-mono">{path}</span>
                 </div>
               ))}
             </div>
@@ -63,7 +62,7 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
         )}
         {contentText && (
           <div>
-            {locations && locations.length > 0 && (
+            {filePaths.length > 0 && (
               <div className="mb-1 text-xs font-medium text-gray-500">Content</div>
             )}
             <div className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">

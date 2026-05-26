@@ -62,7 +62,23 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
     } else if (sessionUpdateType === 'agent_thought_chunk') {
       groupType = 'thought';
     } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
-      groupType = 'tool_call';
+      const p = parsed as Record<string, unknown>;
+      const kind = p.kind as string | undefined;
+      const rawInput = p.rawInput;
+      if (kind === 'read') {
+        groupType = 'read';
+      } else if (kind === 'fetch') {
+        groupType = 'fetch';
+      } else if (kind === 'other' && rawInput) {
+        const rawInputObj = typeof rawInput === 'string' ? JSON.parse(rawInput) : rawInput;
+        if ((rawInputObj as Record<string, unknown>).subagent_type) {
+          groupType = 'sub_agent';
+        } else {
+          groupType = 'tool_call';
+        }
+      } else {
+        groupType = 'tool_call';
+      }
     } else if (sessionUpdateType === 'plan') {
       groupType = 'plan';
     } else if (sessionUpdateType === 'available_commands_update') {
@@ -95,10 +111,15 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
 
     let groupIndex = -1;
 
-    if (groupType === 'tool_call' && toolCallId) {
-      // Tool calls: group by toolCallId across the entire message list
+    if ((groupType === 'tool_call' || groupType === 'sub_agent' || groupType === 'read' || groupType === 'fetch') && toolCallId) {
+      // Tool calls and specialized types: group by toolCallId across the entire message list
       if (toolCallGroupMap.has(toolCallId)) {
         groupIndex = toolCallGroupMap.get(toolCallId)!;
+        // Upgrade group type if the new message has a more specific type
+        const existing = groups[groupIndex];
+        if (existing.type === 'tool_call' && groupType !== 'tool_call') {
+          existing.type = groupType;
+        }
       } else {
         groupIndex = groups.length;
         toolCallGroupMap.set(toolCallId, groupIndex);

@@ -1,0 +1,252 @@
+---
+description: Session 状态验收问题修复的实施计划
+type: Permanent
+---
+
+# Session 状态验收问题修复 — 实施计划
+
+**关联提案**: [[../proposals/20260526-fix-acceptance-session-state.md|v1.4]]
+**创建日期**: 2026-05-26
+**状态**: 待 review
+
+## 概览
+
+本次实施包含 5 个独立的验收问题修复，按顺序执行：
+
+| # | 问题 | 范围 |
+|---|------|------|
+| 1 | 前端清理 `currentModel` state | SessionPage.tsx、types.ts |
+| 2 | SubAgent / read / fetch 卡片正确渲染 | MessageList.tsx（检测逻辑 + 分组策略） |
+| 3 | 修复 sessionData useEffect 被轮询覆盖 | SessionPage.tsx |
+| 4 | 允许 setting update 后继续发送消息 | SessionPage.tsx |
+| 5 | 路由切换 Session 时显示 loading 并重置状态 | App.tsx |
+
+> **注意**：后端数据模型（MongoDB schema）和 GraphQL 契约层暂不处理 `currentModel` 字段。
+
+---
+
+## Step 1: 前端清理 `currentModel`
+
+### 1.1 前端层
+
+```bash
+# apps/agent-web/src/pages/SessionPage.tsx
+# - 删除 _currentModel state (约第 74 行)
+# - 删除 sessionData useEffect 中的 setCurrentModel 调用
+# - 删除 SSE status 事件中的 setCurrentModel 调用
+
+# apps/agent-web/src/graphql/types.ts
+# - SessionData 类型中移除 currentModel 字段 (约第 115 行)
+```
+
+### 1.2 验证
+
+```bash
+# 前端搜索确认无遗漏
+rg "_currentModel|currentModel" apps/agent-web/src --type ts --type tsx
+# 预期结果: 无匹配
+```
+
+---
+
+## Step 2: SubAgent / read / fetch 卡片正确渲染
+
+### 2.1 问题根因
+
+`MessageList.tsx` 的 `groupMessages` 函数中，消息分组类型检测逻辑如下：
+
+```typescript
+// 第 64 行：tool_call / tool_call_update 被提前拦截
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
+  groupType = 'tool_call';  // ← read/fetch/sub_agent 消息也被归类为 tool_call
+  // ...
+} else {
+  // 第 82-87 行：read/fetch/sub_agent 检测在 else 分支，永远不会被 tool_call_update 消息到达
+  if (kind === 'read') groupType = 'read';           // ← 死代码
+  else if (kind === 'fetch') groupType = 'fetch';    // ← 死代码
+  else if (kind === 'other' && rawInput?.subagent_type) groupType = 'sub_agent';  // ← 死代码
+}
+```
+
+SubAgent/read/fetch 消息的 `sessionUpdate` 均为 `"tool_call_update"`，被第 64 行提前拦截，永远无法到达第 82-87 行的检测代码。
+
+### 2.2 修改 MessageList.tsx
+
+**改动 A：在 tool_call/tool_call_update 分支中增加 kind 和 subagent_type 检测**
+
+将第 64-65 行替换为：
+
+```typescript
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
+  // 检查是否为 specialized tool call (sub_agent / read / fetch)
+  if (parsed) {
+    const p = parsed as Record<string, unknown>;
+    const kind = p.kind as string | undefined;
+    const rawInput = p.rawInput;
+    if (kind === 'read') {
+      groupType = 'read';
+    } else if (kind === 'fetch') {
+      groupType = 'fetch';
+    } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
+      groupType = 'sub_agent';
+    } else {
+      groupType = 'tool_call';
+    }
+  } else {
+    groupType = 'tool_call';
+  }
+```
+
+**改动 B：specialized 类型也使用 toolCallId 分组**
+
+将第 98 行从：
+
+```typescript
+if (groupType === 'tool_call' && toolCallId) {
+```
+
+改为：
+
+```typescript
+if ((groupType === 'tool_call' || groupType === 'read' || groupType === 'fetch' || groupType === 'sub_agent') && toolCallId) {
+```
+
+### 2.3 ReadCard / FetchCard / SubAgentCard — 无修改
+
+三个卡片组件均已正确实现，各自读取对应的字段渲染。
+
+### 2.4 验证方式
+
+1. 创建产生 SubAgent / read / fetch 任务的消息
+2. 观察是否渲染为对应卡片（`SubAgentCard`/`ReadCard`/`FetchCard`），而不是 `ToolCallCard`
+3. 验证 read 显示文件路径和内容、fetch 显示 URL 和结果、SubAgent 显示 description/prompt/output
+
+---
+
+## Step 3: 修复 sessionData useEffect 被轮询覆盖
+
+### 3.1 问题说明
+
+`SessionPage.tsx` 第 88-97 行的 useEffect 依赖 `sessionData`，每次 Sidebar 的 `GET_SESSIONS` 轮询返回都会触发，覆盖 SSE 更新的状态。
+
+### 3.2 修改 SessionPage.tsx
+
+```typescript
+// 新增一个 ref 跟踪是否已初始化
+const initializedRef = useRef(false);
+
+// 修改 useEffect 依赖为 [id]，并增加 initializedRef 保护
+useEffect(() => {
+  if (sessionData?.session && !initializedRef.current) {
+    initializedRef.current = true;
+    setStatus(sessionData.session.status);
+    if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
+    if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
+    if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
+    if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
+  }
+  // 使用 [id] 而非 [sessionData] 作为依赖
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [id]);
+```
+
+### 3.3 验证方式
+
+1. 启动应用并创建 session
+2. 在 ModelSwitcher 中切换 model
+3. 观察 15 秒后 model 是否被"弹回"（修复前会，修复后不会）
+
+---
+
+## Step 4: 允许 setting update 后继续发送消息
+
+### 4.1 问题说明
+
+当最后一条消息是 setting update（config_option_update / current_mode_update）时，用户可能无法发送新消息。
+
+### 4.2 修改 SessionPage.tsx
+
+```typescript
+// 新增 ref 跟踪最后一条消息是否为 setting update
+const lastMessageIsSettingUpdateRef = useRef(false);
+
+// SSE onmessage handler 中设置标记
+if (data.type === 'message') {
+  setMessages((prev) => [...prev, data.data]);
+  try {
+    const content = JSON.parse(data.data.content);
+    if (content.sessionUpdate === 'config_option_update' || content.sessionUpdate === 'current_mode_update') {
+      lastMessageIsSettingUpdateRef.current = true;
+    }
+  } catch { }
+}
+
+// handleSendMessage 中重置标记
+const handleSendMessage = async (content: string) => {
+  if (!id) return;
+  lastMessageIsSettingUpdateRef.current = false; // reset
+  setSending(true);
+  await sendMessage({ variables: { sessionId: id, content, type: 'text' } });
+};
+
+// 修改 disabled 条件
+disabled={(status !== 'running' && status !== 'idling') && !lastMessageIsSettingUpdateRef.current}
+```
+
+---
+
+## Step 5: 路由切换 Session 时显示 loading 并重置状态
+
+### 5.1 问题说明
+
+`App.tsx` 的 `SessionPage` 路由没有 `key` prop，导致 React Router v7 复用组件实例，Session 路由切换时无 loading 状态。
+
+### 5.2 修改 App.tsx
+
+```tsx
+// 新增包装组件
+function SessionPageRoute() {
+  const location = useLocation();
+  return <SessionPage key={location.pathname} />;
+}
+
+// 路由中使用
+<Route path="sessions" element={<SessionPageRoute />} />
+<Route path="sessions/:id" element={<SessionPageRoute />} />
+```
+
+### 5.3 验证方式
+
+1. 打开 `/sessions/sessionA`
+2. 直接在地址栏输入 `/sessions/sessionB` 并回车
+3. 观察：
+   - 是否立即显示 loading spinner
+   - 是否清空了 sessionA 的消息
+   - 是否在短暂延迟后显示 sessionB 的消息
+
+---
+
+## 验收清单
+
+| # | 检查项 | 验证方式 |
+|---|--------|----------|
+| 1 | 前端 `_currentModel` state 已移除 | `rg "_currentModel" apps/agent-web/src --type ts --type tsx` 无匹配 |
+| 2 | SubAgent/read/fetch 消息渲染为对应卡片 | 实际操作观察 |
+| 3 | SubAgent 显示 description/prompt/output；read 显示文件路径/内容；fetch 显示 URL/结果 | 实际操作观察 |
+| 4 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
+| 5 | setting update 后可发送消息 | 实际操作观察 |
+| 6 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
+| 7 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
+| 8 | 所有测试通过 | `npm run test` |
+
+---
+
+## 执行顺序
+
+```
+Step 1 (currentModel 清理) → Step 2 (SubAgent) → Step 3 (sessionData 覆盖) → Step 4 (setting update) → Step 5 (路由切换)
+         ↓                           ↓                    ↓                     ↓                    ↓
+     前端 + SSE 服务层             前端改动             前端                  前端                  前端
+```
+
+建议每个 Step 完成后运行 `npm run test` 验证无回归，再进行下一步。
