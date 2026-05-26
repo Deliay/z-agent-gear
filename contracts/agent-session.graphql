@@ -11,6 +11,7 @@ enum SessionStatus {
 
 enum AcpServerType {
   opencode
+  github_copilot
 }
 
 enum AcpMessageDirection {

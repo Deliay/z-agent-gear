@@ -26,6 +26,10 @@ interface SessionHeaderProps {
 }
 
 export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline }: SessionHeaderProps) {
+  const acpServerTypeLabels: Record<string, string> = {
+    opencode: 'OpenCode',
+    github_copilot: 'GitHub Copilot',
+  };
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'idling':
@@ -58,7 +62,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         </span>
         {session?.acpServerType && (
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
-            {session.acpServerType}
+            {acpServerTypeLabels[session.acpServerType] || session.acpServerType}
           </span>
         )}
         {session?.cwd && (

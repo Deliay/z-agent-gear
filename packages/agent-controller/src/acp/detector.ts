@@ -11,13 +11,11 @@ interface AcpServerInfo {
 
 export class AcpDetector {
   async detect(): Promise<AcpServerInfo[]> {
-    const servers: AcpServerInfo[] = [];
-
-    // Detect OpenCode
-    const opencode = await this.detectOpenCode();
-    servers.push(opencode);
-
-    return servers;
+    const [opencode, copilot] = await Promise.all([
+      this.detectOpenCode(),
+      this.detectGitHubCopilot(),
+    ]);
+    return [opencode, copilot];
   }
 
   private async detectOpenCode(): Promise<AcpServerInfo> {
@@ -30,8 +28,27 @@ export class AcpDetector {
     }
   }
 
+  private async detectGitHubCopilot(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('copilot --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'github_copilot', available: true, version };
+    } catch {
+      return { type: 'github_copilot', available: false };
+    }
+  }
+
+  getSpawnerConfig(serverType: string): { command: string; args: string[] } {
+    switch (serverType) {
+      case 'github_copilot':
+        return { command: 'copilot', args: ['--acp', '--stdio'] };
+      case 'opencode':
+      default:
+        return { command: 'opencode', args: ['acp'] };
+    }
+  }
+
   private parseVersion(output: string): string {
-    // Try to extract version from output
     const match = output.match(/(\d+\.\d+\.\d+)/);
     return match ? match[1] : 'unknown';
   }
