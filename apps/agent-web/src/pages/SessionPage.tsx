@@ -78,7 +78,7 @@ export default function SessionPage() {
     const content = typeof last.content === 'string' ? (() => { try { return JSON.parse(last.content); } catch { return null; } })() : last.content;
     if (content && typeof content === 'object') {
       const sessionUpdate = (content as Record<string, unknown>).sessionUpdate;
-      return sessionUpdate !== 'usage_update';
+      return sessionUpdate !== 'usage_update' && sessionUpdate !== 'available_commands_update';
     }
     return true;
   })();
