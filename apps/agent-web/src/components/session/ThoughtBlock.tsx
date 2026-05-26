@@ -1,5 +1,6 @@
 import type { ContentChunk } from '@agentclientprotocol/sdk';
 import AcpCard from './AcpCard';
+import MarkdownContent from './MarkdownContent';
 
 interface ThoughtBlockProps {
   chunks: ContentChunk[];
@@ -26,8 +27,8 @@ export default function ThoughtBlock({ chunks, createdAt, expanded, onExpandedCh
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
-      <div className="font-mono text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
-        {text}
+      <div className="text-sm text-gray-700 leading-relaxed">
+        <MarkdownContent content={text} />
       </div>
       <div className="mt-2 text-xs text-gray-500">
         {createdAt ? new Date(createdAt).toLocaleTimeString() : ''}

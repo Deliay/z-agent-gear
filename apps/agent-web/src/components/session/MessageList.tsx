@@ -8,6 +8,9 @@ import AvailableCommandsCard from './AvailableCommandsCard';
 import UsageCard from './UsageCard';
 import ConfigOptionCard from './ConfigOptionCard';
 import CurrentModeCard from './CurrentModeCard';
+import SubAgentCard from './SubAgentCard';
+import ReadCard from './ReadCard';
+import FetchCard from './FetchCard';
 
 interface AcpMessage {
   id: string;
@@ -21,7 +24,7 @@ interface AcpMessage {
 }
 
 interface MessageGroup {
-  type: 'user_message' | 'agent_message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'unknown';
+  type: 'user_message' | 'agent_message' | 'thought' | 'plan' | 'tool_call' | 'available_commands' | 'usage' | 'config_option_update' | 'current_mode_update' | 'sub_agent' | 'read' | 'fetch' | 'unknown';
   messages: AcpMessage[];
   parsed: SessionUpdate | null;
   messageId: string | null;
@@ -71,7 +74,23 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
     } else if (sessionUpdateType === 'current_mode_update') {
       groupType = 'current_mode_update';
     } else {
-      groupType = 'unknown';
+      // For 'other' kind, check rawInput for subagent_type, kind=read, kind=fetch
+      if (parsed) {
+        const p = parsed as Record<string, unknown>;
+        const kind = p.kind as string | undefined;
+        const rawInput = p.rawInput;
+        if (kind === 'read') {
+          groupType = 'read';
+        } else if (kind === 'fetch') {
+          groupType = 'fetch';
+        } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
+          groupType = 'sub_agent';
+        } else {
+          groupType = 'unknown';
+        }
+      } else {
+        groupType = 'unknown';
+      }
     }
 
     let groupIndex = -1;
@@ -155,9 +174,11 @@ interface MessageListProps {
   hasMore?: boolean;
   onLoadMore?: () => void;
   loadingMore?: boolean;
+  sseLoading?: boolean;
+  sseError?: boolean;
 }
 
-export default function MessageList({ messages, hasMore, onLoadMore, loadingMore }: MessageListProps) {
+export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -201,7 +222,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const lastExpandableGroup = useMemo(() => {
     for (let i = groups.length - 1; i >= 0; i--) {
-      if (groups[i].type === 'thought' || groups[i].type === 'tool_call') {
+      if (groups[i].type === 'thought' || groups[i].type === 'tool_call' || groups[i].type === 'sub_agent' || groups[i].type === 'read' || groups[i].type === 'fetch') {
         return groups[i];
       }
     }
@@ -232,9 +253,22 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
       className="flex-1 overflow-y-auto bg-gray-50 p-4"
     >
       {messages.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-gray-500">
-          No messages yet. Start a conversation!
-        </div>
+        sseLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+              Loading messages...
+            </div>
+          </div>
+        ) : sseError ? (
+          <div className="flex h-full items-center justify-center text-sm text-red-500">
+            Failed to load messages. Connection error.
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-gray-500">
+            No messages yet. Start a conversation!
+          </div>
+        )
       ) : (
         <div className="space-y-4">
           {hasMore && (
@@ -325,6 +359,33 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                       ...group.messages[0],
                       content: mergeMessageChunks(group.messages),
                     }}
+                  />
+                );
+              case 'sub_agent':
+                return (
+                  <SubAgentCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
+                  />
+                );
+              case 'read':
+                return (
+                  <ReadCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
+                  />
+                );
+              case 'fetch':
+                return (
+                  <FetchCard
+                    key={groupKey}
+                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'unknown':
