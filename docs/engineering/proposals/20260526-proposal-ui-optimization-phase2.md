@@ -41,18 +41,18 @@
 ### 2.1 系统架构图
 
 ```mermaid
-graph TD
+flowchart TB
     subgraph 前端架构
-        SSP[SessionPage<br/>SSE 连接 + 状态管理] --> ML[MessageList<br/>消息分组 + 类型分发]
-        ML --> TC[ToolCallCard<br/>edit / execute]
-        ML --> SA[SubAgentCard<br/>kind=other<br/>(新增)]
-        ML --> RC[ReadCard<br/>kind=read<br/>(新增)]
-        ML --> FC[FetchCard<br/>kind=fetch<br/>(新增)]
-        ML --> TB[ThoughtBlock<br/>Markdown 渲染<br/>(修改)]
-        ML --> MI[MessageItem<br/>user / agent]
-
-        SSP --> IB[InputBox<br/>10rem + Stop 按钮控制]
-        SSP --> MS[ModeSwitcher / ModelSwitcher<br/>运行时禁用]
+        direction TB
+        SSP[SessionPage: SSE + 状态] --> ML[MessageList: 分组 + 分发]
+        ML --> TC[ToolCallCard: edit/execute]
+        ML --> SA[SubAgentCard: kind=other]
+        ML --> RC[ReadCard: kind=read]
+        ML --> FC[FetchCard: kind=fetch]
+        ML --> TB[ThoughtBlock: Markdown渲染]
+        ML --> MI[MessageItem: user/agent]
+        SSP --> IB[InputBox: 10rem + Stop]
+        SSP --> MS[ModeSwitcher/ModelSwitcher: 运行时禁用]
     end
 ```
 
