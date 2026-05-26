@@ -16,7 +16,7 @@ type: Permanent
 | # | 问题 | 范围 |
 |---|------|------|
 | 1 | 前端清理 `currentModel` state + SSE payload | SessionPage.tsx、session-sse.ts、前端类型、契约文档 |
-| 2 | SubAgent 卡片正确渲染 | MessageList.tsx（检测逻辑 + 分组策略） |
+| 2 | SubAgent / read / fetch 卡片正确渲染 | MessageList.tsx（检测逻辑 + 分组策略） |
 | 3 | 修复 sessionData useEffect 被轮询覆盖 | SessionPage.tsx |
 | 4 | 允许 setting update 后继续发送消息 | SessionPage.tsx |
 | 5 | 路由切换 Session 时显示 loading 并重置状态 | App.tsx |
@@ -65,7 +65,7 @@ rg "currentModel" --type ts --type tsx --type graphql
 
 ---
 
-## Step 2: SubAgent 卡片正确渲染
+## Step 2: SubAgent / read / fetch 卡片正确渲染
 
 ### 2.1 问题根因
 
@@ -74,34 +74,36 @@ rg "currentModel" --type ts --type tsx --type graphql
 ```typescript
 // 第 64 行：tool_call / tool_call_update 被提前拦截
 } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
-  groupType = 'tool_call';  // ← SubAgent 消息也被归类为 tool_call
+  groupType = 'tool_call';  // ← read/fetch/sub_agent 消息也被归类为 tool_call
   // ...
 } else {
-  // 第 86 行：sub_agent 检测在 else 分支，永远不会被 tool_call 消息到达
-  if (kind === 'other' && rawInput?.subagent_type) {
-    groupType = 'sub_agent';  // ← 死代码
-  }
+  // 第 82-87 行：read/fetch/sub_agent 检测在 else 分支，永远不会被 tool_call_update 消息到达
+  if (kind === 'read') groupType = 'read';           // ← 死代码
+  else if (kind === 'fetch') groupType = 'fetch';    // ← 死代码
+  else if (kind === 'other' && rawInput?.subagent_type) groupType = 'sub_agent';  // ← 死代码
 }
 ```
 
-SubAgent 消息的 `sessionUpdate` 为 `"tool_call_update"`，被第 64 行提前拦截，永远无法到达第 86 行的 `sub_agent` 检测。
+SubAgent/read/fetch 消息的 `sessionUpdate` 均为 `"tool_call_update"`，被第 64 行提前拦截，永远无法到达第 82-87 行的检测代码。
 
 ### 2.2 修改 MessageList.tsx
 
-**改动 A：在 tool_call/tool_call_update 分支中增加 subagent 检测**
+**改动 A：在 tool_call/tool_call_update 分支中增加 kind 和 subagent_type 检测**
 
 将第 64-65 行替换为：
 
 ```typescript
 } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
-  // 检查是否为 SubAgent 消息
+  // 检查是否为 specialized tool call (sub_agent / read / fetch)
   if (parsed) {
     const p = parsed as Record<string, unknown>;
     const kind = p.kind as string | undefined;
     const rawInput = p.rawInput;
-    const hasSubagentType = !!(p.subagent_type as string | undefined) ||
-      (rawInput && typeof rawInput === 'object' && !!(rawInput as Record<string, unknown>).subagent_type);
-    if (kind === 'other' && hasSubagentType) {
+    if (kind === 'read') {
+      groupType = 'read';
+    } else if (kind === 'fetch') {
+      groupType = 'fetch';
+    } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
       groupType = 'sub_agent';
     } else {
       groupType = 'tool_call';
@@ -111,7 +113,7 @@ SubAgent 消息的 `sessionUpdate` 为 `"tool_call_update"`，被第 64 行提�
   }
 ```
 
-**改动 B：sub_agent 类型使用 toolCallId 分组**
+**改动 B：specialized 类型也使用 toolCallId 分组**
 
 将第 98 行从：
 
@@ -122,19 +124,18 @@ if (groupType === 'tool_call' && toolCallId) {
 改为：
 
 ```typescript
-if ((groupType === 'tool_call' || groupType === 'sub_agent') && toolCallId) {
+if ((groupType === 'tool_call' || groupType === 'read' || groupType === 'fetch' || groupType === 'sub_agent') && toolCallId) {
 ```
 
-### 2.3 SubAgentCard.tsx — 无修改
+### 2.3 ReadCard / FetchCard / SubAgentCard — 无修改
 
-`SubAgentCard.tsx` 已正确实现：读取 `rawInput.description`、`rawInput.prompt`、`rawOutput.output`，在 `AcpCard` 中渲染。
+三个卡片组件均已正确实现，各自读取对应的字段渲染。
 
 ### 2.4 验证方式
 
-1. 创建一个产生 SubAgent 子任务的 session
-2. 观察 SubAgent 消息是否渲染为 `SubAgentCard`（而不是 `ToolCallCard`）
-3. 验证卡片显示正确的 description、prompt、output 内容
-4. 验证 `sub_agent` 检测也覆盖了初始 `tool_call`（sessionUpdate === 'tool_call'）和后续更新（sessionUpdate === 'tool_call_update'）
+1. 创建产生 SubAgent / read / fetch 任务的消息
+2. 观察是否渲染为对应卡片（`SubAgentCard`/`ReadCard`/`FetchCard`），而不是 `ToolCallCard`
+3. 验证 read 显示文件路径和内容、fetch 显示 URL 和结果、SubAgent 显示 description/prompt/output
 
 ---
 
@@ -247,8 +248,8 @@ function SessionPageRoute() {
 |---|--------|----------|
 | 1 | 前端 `_currentModel` state 已移除 | 代码检查 |
 | 2 | SSE status 事件不含 `currentModel` | 浏览器 DevTools 检查 SSE 消息 |
-| 3 | SubAgent 消息渲染为 SubAgentCard | 实际操作观察 |
-| 4 | SubAgent 消息显示 description/prompt/output | 实际操作观察 |
+| 3 | SubAgent/read/fetch 消息渲染为对应卡片 | 实际操作观察 |
+| 4 | SubAgent 显示 description/prompt/output；read 显示文件路径/内容；fetch 显示 URL/结果 | 实际操作观察 |
 | 5 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
 | 6 | setting update 后可发送消息 | 实际操作观察 |
 | 7 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |

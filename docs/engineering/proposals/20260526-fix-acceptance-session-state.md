@@ -1,5 +1,5 @@
 ---
-description: 修复 Session 状态相关的验收问题：前端清理 currentModel 冗余字段、修复 SubAgent 卡片渲染、修复 sessionData useEffect 被轮询覆盖、允许 setting update 后发送消息、路由切换时显示 loading 状态
+description: 修复 Session 状态相关的验收问题：前端清理 currentModel 冗余字段、修复 SubAgent/read/fetch 卡片渲染（tool_call_update 拦截问题）、修复 sessionData useEffect 被轮询覆盖、允许 setting update 后发送消息、路由切换时显示 loading 状态
 type: Permanent
 ---
 
@@ -17,7 +17,7 @@ type: Permanent
 当前代码中存在 5 个 Session 状态相关的验收问题：
 
 1. **前端 `currentModel` 字段冗余** - 前端存在 `_currentModel` state 和 `setCurrentModel` 调用，但 `currentModel` 可从 `currentModelId` + `availableModels` 推导，属于死代码
-2. **SubAgent 子任务卡片未正确路由** - `subagent_type` 的检测代码在 `MessageList.tsx` 的 `else` 分支中（第 86 行），但由于 SubAgent 消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
+2. **SubAgent / read / fetch 卡片未正确路由** - `kind=read`、`kind=fetch`、`kind=other+subagent_type` 的检测代码都在 `MessageList.tsx` 的 `else` 分支中（第 82-87 行），但由于 SubAgent/read/fetch 消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
 3. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
 4. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
 5. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
@@ -27,7 +27,7 @@ type: Permanent
 ### 1.2 目标
 
 - 前端清理 `currentModel` state 和相关调用
-- SubAgent 卡片正确渲染（检测 `subagent_type` 并路由到 `SubAgentCard`）
+- SubAgent / read / fetch 卡片正确渲染（检测 `kind` 和 `subagent_type` 并路由到对应卡片组件）
 - 修复 `sessionData` useEffect 被轮询覆盖的问题
 - Setting update 消息后允许用户继续发送消息
 - Session 路由切换时正确显示 loading 状态
@@ -87,7 +87,7 @@ flowchart TD
 
 > **注意**：后端数据模型（MongoDB schema）和 GraphQL 契约（agent-session.graphql, agent-api schema）暂不处理，保留 `currentModel` 字段不做删除。后端服务和控制器层中 SSE 事件 payload 清理见 Step 1。
 
-### 2.2 问题二：SubAgent 子任务卡片未正确路由
+### 2.2 问题二：SubAgent / read / fetch 卡片未正确路由
 
 #### 现状
 
@@ -101,39 +101,85 @@ if (sessionUpdateType === 'user_message_chunk') {
 } else if (sessionUpdateType === 'agent_thought_chunk') {
   groupType = 'thought';
 } else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {  // ← 第64行
-  groupType = 'tool_call';
+  groupType = 'tool_call';  // ← 所有 tool_call_update 消息被拦截
   // ...
 } else {
-  // ← 第76行：subagent 检测在这里，但永远不会被 tool_call 消息到达
-  if (kind === 'other' && rawInput?.subagent_type) {
-    groupType = 'sub_agent';
-  }
+  // ← 第76行：read/fetch/sub_agent 检测在这里，但永远不会被 tool_call_update 消息到达
+  if (kind === 'read') groupType = 'read';
+  else if (kind === 'fetch') groupType = 'fetch';
+  else if (kind === 'other' && rawInput?.subagent_type) groupType = 'sub_agent';  // ← 死代码
 }
 ```
 
-用户反馈的 SubAgent 消息数据结构：
+用户反馈的三类消息数据结构：
 
+**SubAgent:**
 ```json
 {
-  "id": "6a15643ae7227d801c6dacf2",
-  "direction": "output",
-  "type": "tool_call",
-  "content": {
-    "kind": "other",
-    "title": "task",
-    "status": "in_progress",
-    "subagent_type": "explore",
-    "sessionUpdate": "tool_call_update",
-    "toolCallId": "call_00_FmrB6QVXt3w0WWnpm9IH5651",
-    "rawInput": {
-      "description": "Find currentModel usage",
-      "prompt": "...",
-      "subagent_type": "explore"
-    }
-  },
-  "createdAt": "2026-05-26T09:13:30.228Z"
+  "sessionUpdate": "tool_call_update",
+  "kind": "other",
+  "subagent_type": "explore",
+  "rawInput": { "subagent_type": "explore", ... }
 }
 ```
+
+**read:**
+```json
+{
+  "sessionUpdate": "tool_call_update",
+  "kind": "read",
+  "locations": [{ "path": "..." }],
+  "rawInput": { "filePath": "...", "limit": 90, "offset": 80 }
+}
+```
+
+**fetch:**
+```json
+{
+  "sessionUpdate": "tool_call_update",
+  "kind": "fetch",
+  "rawInput": { "url": "..." },
+  "rawOutput": { "output": "..." }
+}
+```
+
+#### 根因分析
+
+所有三类消息的 `sessionUpdate` 均为 `"tool_call_update"`，在第 64 行被匹配并归类为 `'tool_call'`。第 76-93 行的 `else` 分支永远不会被这些消息到达，是死代码。
+
+结果：
+- 三类卡片全部被渲染为 `ToolCallCard`
+- `ToolCallCard` 不处理 `locations`、`rawInput` 中的 `filePath`/`url` 等字段
+- read 卡片应显示文件路径和内容、fetch 卡片应显示 URL 和结果，全部无法展示
+
+#### 方案
+
+在 `tool_call`/`tool_call_update` 分支中增加 `kind` 和 `subagent_type` 检测，根据 `kind` 路由到对应类型：
+
+```typescript
+} else if (sessionUpdateType === 'tool_call' || sessionUpdateType === 'tool_call_update') {
+  // 检查是否为 specialized tool call (sub_agent / read / fetch)
+  if (parsed) {
+    const p = parsed as Record<string, unknown>;
+    const kind = p.kind as string | undefined;
+    const rawInput = p.rawInput;
+    if (kind === 'read') {
+      groupType = 'read';
+    } else if (kind === 'fetch') {
+      groupType = 'fetch';
+    } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
+      groupType = 'sub_agent';
+    } else {
+      groupType = 'tool_call';
+    }
+  } else {
+    groupType = 'tool_call';
+  }
+```
+
+分组策略：三类 specialized 类型均使用 `toolCallId` 分组（与 `tool_call` 相同），确保初始调用和后续更新合并到同一组。
+
+`ReadCard.tsx`、`FetchCard.tsx`、`SubAgentCard.tsx` 均已正确实现，无需修改。
 
 #### 根因分析
 
@@ -367,7 +413,7 @@ function SessionPageRoute() {
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `initializedRef` 保护 Effect 重复执行 |
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
-| `apps/agent-web/src/components/session/MessageList.tsx:64-65` | `tool_call`/`tool_call_update` 分支中增加 `subagent_type` 检测，路由到 `sub_agent` 类型 |
+| `apps/agent-web/src/components/session/MessageList.tsx:64-65` | `tool_call`/`tool_call_update` 分支中增加 `kind` 和 `subagent_type` 检测，路由到 `read`/`fetch`/`sub_agent` 类型 |
 | `apps/agent-web/src/components/session/MessageList.tsx:98` | `sub_agent` 类型也使用 `toolCallId` 分组 |
 | `apps/agent-web/src/App.tsx` | 新增 `SessionPageRoute` 包装组件，使用 `key={location.pathname}` |
 
@@ -411,11 +457,11 @@ function SessionPageRoute() {
 
 ### 4.2 新增：SubAgent 分组策略
 
-在分组逻辑中，为 `sub_agent` 类型增加 `toolCallId` 分组：
+在分组逻辑中，为 specialized 类型（`read`/`fetch`/`sub_agent`）增加 `toolCallId` 分组：
 
 ```typescript
-if ((groupType === 'tool_call' || groupType === 'sub_agent') && toolCallId) {
-  // Tool calls and sub-agents: group by toolCallId across the entire message list
+if ((groupType === 'tool_call' || groupType === 'read' || groupType === 'fetch' || groupType === 'sub_agent') && toolCallId) {
+  // Tool calls and specialized types: group by toolCallId across the entire message list
   if (toolCallGroupMap.has(toolCallId)) {
     groupIndex = toolCallGroupMap.get(toolCallId)!;
   } else {
