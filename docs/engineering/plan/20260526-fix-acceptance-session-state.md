@@ -15,92 +15,51 @@ type: Permanent
 
 | # | 问题 | 范围 |
 |---|------|------|
-| 1 | 移除 `currentModel` 冗余字段 | models、GraphQL、SSE、services、前端、测试 |
+| 1 | 前端清理 `currentModel` state + SSE payload | SessionPage.tsx、session-sse.ts、前端类型、契约文档 |
 | 2 | SubAgent 卡片正确渲染 | MessageList.tsx（检测逻辑 + 分组策略） |
 | 3 | 修复 sessionData useEffect 被轮询覆盖 | SessionPage.tsx |
 | 4 | 允许 setting update 后继续发送消息 | SessionPage.tsx |
 | 5 | 路由切换 Session 时显示 loading 并重置状态 | App.tsx |
 
+> **注意**：后端数据模型（MongoDB schema）和 GraphQL 契约层暂不处理 `currentModel` 字段。
+
 ---
 
-## Step 1: 移除 `currentModel` 字段
+## Step 1: 前端清理 `currentModel` + SSE payload
 
-### 1.1 数据模型层
-
-```bash
-# 文件: servers/agent-api/src/models/session.ts
-# 删除 currentModel 字段 (约第 17 行)
-
-# 文件: servers/controller-api/src/models/session.ts
-# 删除 currentModel 字段 (约第 15 行)
-```
-
-### 1.2 GraphQL / 契约层
-
-```bash
-# 1. contracts/agent-session.graphql
-# 删除 Session 类型中的: currentModel: AgentModelInfo
-
-# 2. servers/agent-api/src/graphql/schemas/session.ts
-# 删除 currentModel 字段定义
-
-# 3. servers/agent-api/src/graphql/resolvers/session.ts
-# 检查并移除 mapSession 中对 currentModel 的映射
-
-# 4. apps/agent-web/src/graphql/types.ts
-# 从 GetSessionQuery['session'] 类型中移除 currentModel 字段
-
-# 5. apps/agent-web/src/graphql/queries.ts
-# 从 GET_SESSION 查询中移除 currentModel { id name provider }
-
-# 6. contracts/agent-session-websocket.md
-# 从 SSE status 事件 payload 示例中移除 currentModel 字段
-```
-
-### 1.3 后端服务层
-
-```bash
-# 1. servers/agent-api/src/services/session-sse.ts
-# - addConnection 中 statusPayload 移除 currentModel
-# - ensureGlobalStatusSubscriber 中 extra 移除 currentModel
-# - broadcastStatus 中 extra 移除 currentModel
-
-# 2. servers/agent-api/src/services/session.ts
-# - mapSession 方法中移除 currentModel 映射
-
-# 3. servers/controller-api/src/services/acp-session-manager.ts
-# - 类型定义中移除 currentModel
-# - start/resume 路径: updateData、statusExtra、cacheModes、publishStatus 调用移除 currentModel
-# - refreshSessionCache: 移除 session:${sessionId}:currentModel Redis key
-# - cacheModes: 移除 currentModel 参数和逻辑
-# - publishStatus: 移除 extra.currentModel
-```
-
-### 1.4 Agent 控制器层
-
-```bash
-# 1. packages/agent-controller/src/acp/bridge.ts
-# - 删除 extractCurrentModel 方法
-# - acp:start:result / acp:resume:result / acp:initialized 处理中移除 currentModel
-
-# 2. packages/agent-controller/src/socketio-client.ts
-# - acp:start:result / acp:resume:result 发送时移除 currentModel
-```
-
-### 1.5 前端层
+### 1.1 前端层
 
 ```bash
 # apps/agent-web/src/pages/SessionPage.tsx
-# - 删除 _currentModel state
+# - 删除 _currentModel state (约第 74 行)
 # - 删除 sessionData useEffect 中的 setCurrentModel 调用
 # - 删除 SSE status 事件中的 setCurrentModel 调用
+
+# apps/agent-web/src/graphql/types.ts
+# - SessionData 类型中移除 currentModel 字段 (约第 115 行)
 ```
 
-### 1.6 验证
+### 1.2 SSE 契约层
+
+```bash
+# contracts/agent-session-websocket.md
+# - SSE status 事件 payload 示例中移除 currentModel 字段 (约第 972-976 行)
+```
+
+### 1.3 SSE 服务层
+
+```bash
+# servers/agent-api/src/services/session-sse.ts
+# - addConnection 中 statusPayload 移除 currentModel (约第 40 行)
+# - ensureGlobalStatusSubscriber 中 extra 移除 currentModel (约第 102 行)
+# - broadcastStatus 中 extra 移除 currentModel (约第 138 行)
+```
+
+### 1.4 验证
 
 ```bash
 # 全局搜索确认无遗漏
-rg "currentModel" --type ts --type tsx --type graphql --type md
+rg "currentModel" --type ts --type tsx --type graphql
 # 预期结果: 无匹配（或仅 DB migration 保留数据）
 ```
 
@@ -286,25 +245,24 @@ function SessionPageRoute() {
 
 | # | 检查项 | 验证方式 |
 |---|--------|----------|
-| 1 | `currentModel` 全链路移除 | `rg "currentModel" --type ts --type tsx` 无匹配 |
-| 2 | GraphQL `GET_SESSION` 不含 `currentModel` | Apollo DevTools 检查 network |
-| 3 | SSE status 事件不含 `currentModel` | 浏览器 DevTools 检查 SSE 消息 |
-| 4 | SubAgent 消息渲染为 SubAgentCard | 实际操作观察 |
-| 5 | SubAgent 消息显示 description/prompt/output | 实际操作观察 |
-| 6 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
-| 7 | setting update 后可发送消息 | 实际操作观察 |
-| 8 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
-| 9 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
-| 10 | 所有测试通过 | `npm run test` |
+| 1 | 前端 `_currentModel` state 已移除 | 代码检查 |
+| 2 | SSE status 事件不含 `currentModel` | 浏览器 DevTools 检查 SSE 消息 |
+| 3 | SubAgent 消息渲染为 SubAgentCard | 实际操作观察 |
+| 4 | SubAgent 消息显示 description/prompt/output | 实际操作观察 |
+| 5 | ModelSwitcher 切换后 15s 不被轮询覆盖 | 实际操作观察 |
+| 6 | setting update 后可发送消息 | 实际操作观察 |
+| 7 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
+| 8 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
+| 9 | 所有测试通过 | `npm run test` |
 
 ---
 
 ## 执行顺序
 
 ```
-Step 1 (移除 currentModel) → Step 2 (SubAgent) → Step 3 (sessionData 覆盖) → Step 4 (setting update) → Step 5 (路由切换)
+Step 1 (currentModel 清理) → Step 2 (SubAgent) → Step 3 (sessionData 覆盖) → Step 4 (setting update) → Step 5 (路由切换)
          ↓                           ↓                    ↓                     ↓                    ↓
-      最复杂，涉及多模块            前端改动             前端                  前端                  前端
+     前端 + SSE 服务层             前端改动             前端                  前端                  前端
 ```
 
 建议每个 Step 完成后运行 `npm run test` 验证无回归，再进行下一步。

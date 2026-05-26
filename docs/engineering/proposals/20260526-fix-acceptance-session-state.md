@@ -1,5 +1,5 @@
 ---
-description: 修复 Session 状态相关的验收问题：移除 currentModel 冗余字段、修复 SubAgent 卡片渲染、修复 sessionData useEffect 被轮询覆盖、允许 setting update 后发送消息、路由切换时显示 loading 状态
+description: 修复 Session 状态相关的验收问题：前端清理 currentModel 冗余字段、修复 SubAgent 卡片渲染、修复 sessionData useEffect 被轮询覆盖、允许 setting update 后发送消息、路由切换时显示 loading 状态
 type: Permanent
 ---
 
@@ -16,15 +16,17 @@ type: Permanent
 
 当前代码中存在 5 个 Session 状态相关的验收问题：
 
-1. **`currentModel` 与 `currentModelId` 两套字段并存**，`currentModel` 是冗余的（可从 `currentModelId` + `availableModels` 推导），增加维护成本和数据传输开销
+1. **前端 `currentModel` 字段冗余** - 前端存在 `_currentModel` state 和 `setCurrentModel` 调用，但 `currentModel` 可从 `currentModelId` + `availableModels` 推导，属于死代码
 2. **SubAgent 子任务卡片未正确路由** - `subagent_type` 的检测代码在 `MessageList.tsx` 的 `else` 分支中（第 86 行），但由于 SubAgent 消息的 `sessionUpdate` 为 `tool_call_update`，被第 64 行提前拦截并归类为 `tool_call`
 3. **`sessionData` useEffect 被 `GET_SESSIONS` 轮询覆盖** - Sidebar 每 15s 轮询会通过 Apollo 归一化缓存更新 `Session` 实体，触发 `useEffect([sessionData])`，覆盖 SSE 更新的状态
 4. **Setting update 后可能无法发送消息** - 当最后一条消息是 setting update 且状态未及时切换时，输入框可能被禁用
 5. **Session 路由切换时无 loading 状态** - 从 sessionA 直接导航到 sessionB 时，组件复用导致旧数据残留
 
+> **注意**：后端和契约层的 `currentModel` 暂不处理，保留现有字段不做删除。
+
 ### 1.2 目标
 
-- 移除 `currentModel` 字段，全链路只使用 `currentModelId`
+- 前端清理 `currentModel` state 和相关调用
 - SubAgent 卡片正确渲染（检测 `subagent_type` 并路由到 `SubAgentCard`）
 - 修复 `sessionData` useEffect 被轮询覆盖的问题
 - Setting update 消息后允许用户继续发送消息
@@ -32,7 +34,7 @@ type: Permanent
 
 ### 1.3 范围
 
-涉及 `servers/agent-api`、`servers/controller-api`、`packages/agent-controller`、`apps/agent-web`、`contracts`、`tests` 六个模块。
+涉及 `apps/agent-web` 前端模块，`servers/agent-api`、`servers/controller-api`、`packages/agent-controller`、`contracts` 仅在 SSE 事件 payload 中移除 `currentModel`（不影响后端数据模型和契约定义）。
 
 ## 2. 问题分析与方案
 
@@ -70,23 +72,20 @@ flowchart LR
 
 #### 方案
 
-全链路删除 `currentModel`，按层执行：
+前端清理 `currentModel` state + SSE payload 清理（按层执行）：
 
 ```mermaid
 flowchart TD
-    A[开始] --> B[Models: 移除 schema 字段]
-    B --> C[Contracts: 移除 GraphQL 定义]
-    C --> D[Backend Services]
-    D --> D1[agent-api: session-sse, session.ts mapSession]
-    D --> D2[controller-api: acp-session-manager 中所有引用]
-    D --> D3[bridge.ts: 移除 extractCurrentModel 方法]
-    D --> D4[socketio-client.ts: 移除 currentModel 组装]
-    D --> E[Frontend: 移除 state 和 setCurrentModel 调用]
-    D --> F[Tests: 移除相关断言和夹具]
-    D --> G[Docs: 更新协议文档]
-    F --> H[完成]
-    G --> H
+    A[开始] --> B[契约层: contracts/agent-session-websocket.md 移除 currentModel]
+    B --> C[SSE Service 层: agent-api session-sse.ts 移除 currentModel payload]
+    C --> D[Frontend: 移除 _currentModel state 和 setCurrentModel 调用]
+    D --> E[完成]
+
+    style B fill:#ffcc99
+    style C fill:#ffcc99
 ```
+
+> **注意**：后端数据模型（MongoDB schema）和 GraphQL 契约（agent-session.graphql, agent-api schema）暂不处理，保留 `currentModel` 字段不做删除。后端服务和控制器层中 SSE 事件 payload 清理见 Step 1。
 
 ### 2.2 问题二：SubAgent 子任务卡片未正确路由
 
@@ -358,46 +357,7 @@ function SessionPageRoute() {
 
 ## 3. 各层具体改动
 
-### 3.1 数据模型层
-
-| 文件 | 改动 |
-|------|------|
-| `servers/agent-api/src/models/session.ts:17` | 删除 `currentModel` 字段 |
-| `servers/controller-api/src/models/session.ts:15` | 删除 `currentModel` 字段 |
-
-### 3.2 GraphQL / 契约层
-
-| 文件 | 改动 |
-|------|------|
-| `contracts/agent-session.graphql:62` | 删除 `currentModel: AgentModelInfo` |
-| `servers/agent-api/src/graphql/schemas/session.ts:56` | 删除 `currentModel` 字段 |
-| `apps/agent-web/src/graphql/types.ts:115` | 删除 `currentModel?: AgentModelInfoData \| null` |
-| `apps/agent-web/src/graphql/queries.ts:102-106` | 删除 `currentModel { id name provider }` |
-| `contracts/agent-session-websocket.md:972-976` | 删除 `currentModel` 字段定义 |
-
-### 3.3 后端服务层
-
-| 文件 | 改动 |
-|------|------|
-| `servers/agent-api/src/services/session-sse.ts:40` | `addConnection` 中移除 `currentModel` |
-| `servers/agent-api/src/services/session-sse.ts:102` | `ensureGlobalStatusSubscriber` 中移除 |
-| `servers/agent-api/src/services/session-sse.ts:138` | `broadcastStatus` 中移除 |
-| `servers/agent-api/src/services/session.ts:464` | `mapSession` 中移除 |
-| `servers/controller-api/src/services/acp-session-manager.ts:58,92,96,100` | start 路径移除 |
-| `servers/controller-api/src/services/acp-session-manager.ts:369,391,395,399` | resume 路径移除 |
-| `servers/controller-api/src/services/acp-session-manager.ts:504-506` | `refreshSessionCache` 移除 |
-| `servers/controller-api/src/services/acp-session-manager.ts:519,530-531` | `cacheModes` 移除 |
-| `servers/controller-api/src/services/acp-session-manager.ts:556` | `publishStatus` 移除 |
-
-### 3.4 Agent 控制器层
-
-| 文件 | 改动 |
-|------|------|
-| `packages/agent-controller/src/acp/bridge.ts:225-229` | 删除 `extractCurrentModel` 方法 |
-| `packages/agent-controller/src/acp/bridge.ts:70,101,121` | 删除 `currentModel` 调用 |
-| `packages/agent-controller/src/socketio-client.ts:222,280` | 删除 `currentModel` 组装 |
-
-### 3.5 前端层
+### 3.1 前端层
 
 | 文件 | 改动 |
 |------|------|
@@ -408,16 +368,22 @@ function SessionPageRoute() {
 | `apps/agent-web/src/pages/SessionPage.tsx` | 新增 `lastMessageIsSettingUpdateRef` 和相关逻辑 |
 | `apps/agent-web/src/pages/SessionPage.tsx:355` | 修改 `disabled` 条件 |
 | `apps/agent-web/src/components/session/MessageList.tsx:64-65` | `tool_call`/`tool_call_update` 分支中增加 `subagent_type` 检测，路由到 `sub_agent` 类型 |
-| `apps/agent-web/src/components/session/MessageList.tsx:98-106` | `sub_agent` 类型也使用 `toolCallId` 分组 |
+| `apps/agent-web/src/components/session/MessageList.tsx:98` | `sub_agent` 类型也使用 `toolCallId` 分组 |
 | `apps/agent-web/src/App.tsx` | 新增 `SessionPageRoute` 包装组件，使用 `key={location.pathname}` |
 
-### 3.6 测试层
+### 3.2 SSE 契约层
 
 | 文件 | 改动 |
 |------|------|
-| `tests/api/src/agent-api/session.test.ts:132,696,728-729,893,905` | 删除 `currentModel` 相关断言 |
-| `servers/agent-api/src/services/session-sse.test.ts:240,250,254` | 删除 `currentModel` 相关用例 |
-| `packages/agent-controller/tests/acp-bridge.test.ts:121,137` | 删除 `currentModel` 相关断言 |
+| `contracts/agent-session-websocket.md:972-976` | SSE status 事件 payload 示例中删除 `currentModel` 字段 |
+
+### 3.3 SSE 服务层
+
+| 文件 | 改动 |
+|------|------|
+| `servers/agent-api/src/services/session-sse.ts:40` | `addConnection` 中 statusPayload 移除 `currentModel` |
+| `servers/agent-api/src/services/session-sse.ts:102` | `ensureGlobalStatusSubscriber` 中 extra 移除 `currentModel` |
+| `servers/agent-api/src/services/session-sse.ts:138` | `broadcastStatus` 中 extra 移除 `currentModel` |
 
 ## 4. 关键实现细节
 
@@ -493,16 +459,14 @@ disabled={(status !== 'running' && status !== 'idling') && !lastMessageIsSetting
 
 ## 5. 验收标准
 
-1. `currentModel` 字段在全代码库中无引用（除 DB migration 保留数据外）
-2. 前端 `SessionData` 类型不再包含 `currentModel`
-3. GraphQL `GET_SESSION` 查询不再请求 `currentModel`
-4. SSE status 事件 payload 不再包含 `currentModel`
-5. SubAgent 类型消息正确渲染为 `SubAgentCard`，显示 description、prompt、output 等内容
-6. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
-7. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
-8. setting update 作为最后一条消息时，输入框可点击发送
-9. 路由切换 Session 时显示 loading spinner 并清空旧状态
-10. 所有现有测试通过
+1. 前端 `_currentModel` state 和 `setCurrentModel` 调用已移除
+2. SSE status 事件 payload 不再包含 `currentModel`
+3. SubAgent 类型消息正确渲染为 `SubAgentCard`，显示 description、prompt、output 等内容
+4. 每条 SSE `type: 'status'` 事件都能正确更新 `status`、`currentModelId`、`currentModeId`、`modes`、`availableModels`
+5. `sessionData` 的 `useEffect` 不会因 `GET_SESSIONS` 轮询而覆盖本地状态
+6. setting update 作为最后一条消息时，输入框可点击发送
+7. 路由切换 Session 时显示 loading spinner 并清空旧状态
+8. 所有现有测试通过
 
 ## 6. 执行顺序
 
