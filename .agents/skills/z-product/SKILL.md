@@ -18,7 +18,7 @@ description: 'USE FOR: product design, product solution, write product document,
 
 ## 产品文档管理
 
-将产品文档生命周期分为三类，对应不同文件夹
+将产品文档生命周期分为四类，对应不同文件夹
 
 - `docs/product/draft` 存放产品文档草稿，新建的产品文档一律放入此文件夹
 - `docs/product/reviewed` 通过Review的产品文档

@@ -24,7 +24,7 @@ aspire --version
 
 ## 初始化编排环境
 
-在执行到编排环节时，编排服务需要使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git的能力，基于`<dev-branch>`创建`worktree`，`<type>`为`infra`。如果没有`infra/local-dev`目录，则默认为用户创建用于本地开发编排的`aspire`项目，在`infra/local-dev`目录下
+在执行到编排环节时，编排服务需要使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git的能力，基于`<dev-branch>`创建分支，`<type>`为`infra`。如果没有`infra/local-dev`目录，则默认为用户创建用于本地开发编排的`aspire`项目，在`infra/local-dev`目录下
 
 如果还没有`local-dev`的aspire项目，则新建项目，执行 `aspire init --language typescript` 进行新建项目。
 

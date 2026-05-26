@@ -9,42 +9,50 @@
     "z-aspire-orchestrator": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "a54215eded571fa19711a2adf8aa2c30c8b52029adc6dbdf357ae4eca0290c59"
+      "skillPath": "z-aspire-orchestrator/SKILL.md",
+      "computedHash": "6d2b6ac1b50a34e018eb5e3f5005052f93b64b83b3c78e1c160aab08618f89b6"
     },
     "z-coding": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "7a1c31474a2728d3ac98aa12d99c5c8bffb10287d2d5784dd82dab60f32ca60e"
+      "skillPath": "z-coding/SKILL.md",
+      "computedHash": "6648880e9b9dcc11b3833a03a6045a95f52ae1a82839669daf1f5429245cf505"
     },
     "z-debugging": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "006c1e386f875c58dafe8868c01e08db31eb613175fa9e5cd84e5e6f9d9c0572"
+      "skillPath": "z-debugging/SKILL.md",
+      "computedHash": "4310cfd23d3369e2a6341defaaaa188ed2b2b52837e698dbc6604f20951ede69"
     },
     "z-document": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
+      "skillPath": "z-document/SKILL.md",
       "computedHash": "10ddcdc01f5fd3a22da19b5030db68ac7d0211772321269a2db9ec6e54a40249"
     },
     "z-git": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "501b3173732102f79c00179b90e629aecee86df7a2dffb1d6e4073c92cf08516"
+      "skillPath": "z-git/SKILL.md",
+      "computedHash": "de4ea2ad33e4a225b3d33802b9ec87c7db174816ed4bf4c7b9aefe56f554e019"
     },
     "z-product": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "5a6f7abd6fffbd3788633d1fd5202baf48c62c7f89a3689256f34dfcedba7f3d"
+      "skillPath": "z-product/SKILL.md",
+      "computedHash": "8cfd7f5be16cbaf87fdb0cdb4209b1d23601e0487eaee6099a9d2de9f6c5e710"
     },
     "z-project": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "ba4978d61a7c85f463800f94b33b09345dbd2be8043c6f5226f2497495bc4386"
+      "skillPath": "z-project/SKILL.md",
+      "computedHash": "2d177769d3908890fa469221b8860abfbe62cbabf0e496faa823ce37ec32b754"
     },
     "z-test": {
       "source": "deliay/zero-ash-cookbook",
       "sourceType": "github",
-      "computedHash": "b7ab54488192a56839590e094e648d3e990f2a074f436841ada3d4c4c01c659f"
+      "skillPath": "z-test/SKILL.md",
+      "computedHash": "ad13d78917890f406f013072ff704d829cd8fb8b0bb7e59b43dbeccfdb787e15"
     }
   }
 }
