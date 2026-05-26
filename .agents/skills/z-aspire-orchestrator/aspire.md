@@ -7,7 +7,7 @@ This repository uses Aspire to orchestrate its distributed application. Resource
 | Task | Command |
 |---|---|
 | Start the app | `aspire start` |
-| Start isolated (worktrees) | `aspire start --isolated` |
+| Start isolated | `aspire start --isolated` |
 | Restart the app | `aspire start` (stops previous automatically) |
 | Wait for resource healthy | `aspire wait <resource>` |
 | Stop the app | `aspire stop` |
@@ -35,7 +35,7 @@ Most commands support `--format Json` for machine-readable output. Use `--apphos
 
 ### Running in agent environments
 
-Use `aspire start` to run the AppHost in the background. When working in a git worktree, use `--isolated` to avoid port conflicts and to prevent sharing user secrets or other local state with other running instances:
+Use `aspire start` to run the AppHost in the background. Use `--isolated` to avoid port conflicts and to prevent sharing user secrets or other local state with other running instances:
 
 ```bash
 aspire start --isolated
@@ -90,7 +90,6 @@ aspire mcp call <resource> <tool> --input '{"key":"value"}'   # invoke a tool
 - **Always start the app first** (`aspire start`) before making changes to verify the starting state.
 - **To restart, just run `aspire start` again** — it automatically stops the previous instance. NEVER use `aspire stop` then `aspire run`. NEVER use `aspire run` at all.
 - **Only restart the AppHost when AppHost code changes.** For .NET project resources, use `aspire resource <name> rebuild` instead.
-- Use `--isolated` when working in a worktree.
 - **Avoid persistent containers** early in development to prevent state management issues.
 - **Never install the Aspire workload** — it is obsolete.
 - **For Aspire API reference and documentation, prefer `aspire docs search <query>` and `aspire docs get <slug>`** over searching NuGet package caches or XML doc files. The CLI provides up-to-date content from aspire.dev.

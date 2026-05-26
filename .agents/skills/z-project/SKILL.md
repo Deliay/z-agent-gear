@@ -49,7 +49,7 @@ AGENTS.md中需要显示的注明，要求agent要有SKILL就用SKILL，并附�
 | z-product | 产品文档创建与生命周期管理 (PRD 工作流) |
 | z-project | 项目创建与管理 (monorepo 支持、技术栈选择) |
 | z-coding | 契约式开发工作流 (提案、契约、实现) |
-| z-git | Git 工作流管理 (使用 worktree) |
+| z-git | Git 工作流管理 |
 | z-document | 文档规范 (Zettelkasten 方法、Mermaid 图表) |
 | z-aspire-orchestrator | 使用 Microsoft Aspire 进行服务编排 |
 | z-test | API 测试和 E2E 测试工作流 |
@@ -63,6 +63,20 @@ docs/engineering/backend-rules.md
 ```
 
 `common-rules.md`包含：开发流程，如TDD开发，契约式开发，开发前加载产品文档，覆盖率要求，review要求等），分支规范，commit规范等，需要根据具体的技术栈展开详细内容(这一部分只包含公共的规范)。
+
+其中`common-rules.md`应该包含如下skill的说明
+```
+| Skill | Description |
+|------|------|
+| z-product | 产品文档创建与生命周期管理 (PRD 工作流) |
+| z-project | 项目创建与管理 (monorepo 支持、技术栈选择) |
+| z-coding | 契约式开发工作流 (提案、契约、实现) |
+| z-git | Git 工作流管理 |
+| z-document | 文档规范 (Zettelkasten 方法、Mermaid 图表) |
+| z-aspire-orchestrator | 使用 Microsoft Aspire 进行服务编排 |
+| z-test | API 测试和 E2E 测试工作流 |
+| z-debugging | 调试方法论与故障排除 |
+```
 
 `frontend-rules.md`包含：前端统一的规范，初始化指令，项目选型，项目结构，组件命名，状态管理选型，打包器，测试框架，contract中的契约生成器(codegen)等规范。除了特殊指定，否则都使用这个文件里的选型。需要按照具体的技术栈选型展开写入详细内容。
 
