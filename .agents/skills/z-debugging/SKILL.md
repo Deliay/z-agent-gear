@@ -31,9 +31,9 @@ description: 'USE FOR: debug, debugging, test, api test, e2e test, test environm
 
 ## 环境准备
 
-使用 `@general` subagent 来准备环境：使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git进行分支管理，每次进行调查根据当前分支创建新的`worktree`，`<type>`为`issues`，`<slug>`为上面核实问题的简写。在这个新的`worktree`进行后续操作
+使用 `@general` subagent 来准备环境：使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git进行分支管理，每次进行调查根据当前分支创建新的分支，`<type>`为`issues`，`<slug>`为上面核实问题的简写。在这个新的分支进行后续操作
 
-在这个`worktree`使用你的 orchestrator 技能 来启动相关的服务，准备完成后进入到下一个步骤
+在这个分支使用你的 orchestrator 技能 来启动相关的服务，准备完成后进入到下一个步骤
 
 ## 复现问题
 
@@ -41,5 +41,5 @@ description: 'USE FOR: debug, debugging, test, api test, e2e test, test environm
 
 ## 修复问题
 
-使用 `@general` subagent 来进行修复：修复在`worktree`进行，修复完成后，提`pull request`让用户进行review。
+使用 `@general` subagent 来进行修复：修复完成后，提`pull request`让用户进行review。
 修复时，需要编写e2e test或api test防止之后再出现类似的问题。

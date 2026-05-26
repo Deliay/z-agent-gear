@@ -19,7 +19,7 @@ Z-Product 提供标准化的产品文档创建、修改与发布流程，支持�
 
 ### 创建产品文档
 
-使用设问模式与用户沟通产品细节，基于主分支创建 worktree 工作区，新建文档放入 `docs/product/draft`，提交 PR 待用户 review。
+使用设问模式与用户沟通产品细节，基于主分支创建新的分支，新建文档放入 `docs/product/draft`，提交 PR 待用户 review。
 
 详见 [[prd/create-prd.md]]
 

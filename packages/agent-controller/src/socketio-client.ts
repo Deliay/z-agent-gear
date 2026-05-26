@@ -6,6 +6,7 @@ import { homedir } from 'os';
 import { Heartbeat } from './heartbeat.js';
 import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { acpDetector } from './acp/detector.js';
+import { AcpSpawner } from './acp/spawner.js';
 import { AcpSessionBridge } from './acp/bridge.js';
 import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
@@ -14,6 +15,11 @@ import { fsHandler } from './fs-handler.js';
 
 const CONTROLLER_VERSION = '1.0.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
+
+function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
+  const config = acpDetector.getSpawnerConfig(serverType);
+  return new AcpSpawner({ sessionId, cwd, command: config.command, args: config.args });
+}
 
 interface RegisteredPayload {
   controllerId: string;
@@ -67,6 +73,7 @@ interface AcpResumePayload {
   requestId: string;
   sessionId: string;
   externalSessionId: string;
+  serverType: string;
   cwd: string;
 }
 
@@ -195,14 +202,15 @@ export function connectToServer(
   });
 
   socket.on('acp:start', async (data: AcpStartPayload) => {
-    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
+    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd}`);
 
     try {
+      const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpServers: data.mcpServers,
-      });
+      }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
 
@@ -256,13 +264,14 @@ export function connectToServer(
   });
 
   socket.on('acp:resume', async (data: AcpResumePayload) => {
-    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} externalSessionId=${data.externalSessionId}`);
+    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId}`);
 
     try {
+      const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
-      });
+      }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
 

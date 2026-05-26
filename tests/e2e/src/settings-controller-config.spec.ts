@@ -58,6 +58,36 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
   });
 }
 
+function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
+  return new Promise((resolve, reject) => {
+    const client = SocketIOClient(CONTROLLER_API_URL, {
+      transports: ['websocket'], reconnection: false, forceNew: true,
+    });
+    const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
+
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [
+          { type: 'opencode', available: true, version: '1.0.0' },
+          { type: 'github_copilot', available: true, version: '1.0.0' },
+        ],
+      });
+    });
+
+    client.once('registered', (data: { controllerId: string }) => {
+      clearTimeout(timer);
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });
+    });
+    client.once('error', (data: { code: string; message: string }) => {
+      clearTimeout(timer);
+      client.disconnect();
+      reject(new Error(`Register failed: ${data.message}`));
+    });
+    client.emit('register', { key: rawKey, hostname: `e2e-cfg-multi-host-${Date.now()}`, version: '1.0.0' });
+  });
+}
+
 async function loginViaUI(page: import('@playwright/test').Page, username: string) {
   await page.goto('/login');
   await page.fill('#username', username);
@@ -157,6 +187,25 @@ test.describe('Settings Controller Config Page E2E', () => {
     await expect(page.getByText('opencode')).toBeVisible({ timeout: 15000 });
     await expect(page.getByText('可用', { exact: true })).toBeVisible();
     await expect(page.getByText('v1.0.0')).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should show multiple ACP server types in harness tools section', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { disconnect } = await registerControllerWithMultiAcp(rawKey);
+
+    await loginViaUI(page, username);
+    await page.click('a[href="/settings"]');
+    await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
+
+    await page.locator('#controller-section').getByRole('button', { name: '配置' }).first().click();
+    await page.getByRole('button', { name: '可用 Harness 工具' }).click();
+
+    await expect(page.getByText('opencode')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('github_copilot')).toBeVisible();
+    await expect(page.getByText('可用', { exact: true })).toHaveCount(2);
 
     disconnect();
   });

@@ -347,6 +347,8 @@ export class ACPSessionManager {
     cwd: string,
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      const sess = await Session.findById(sessionId).lean();
+      const acpServerType = sess?.acpServerType ?? 'opencode';
       await Session.findByIdAndUpdate(sessionId, { status: 'connecting' });
       await this.publishStatus(sessionId, 'connecting');
 
@@ -413,8 +415,7 @@ export class ACPSessionManager {
           requestId,
           sessionId,
           externalSessionId,
-          controllerId,
-          userId,
+          serverType: acpServerType,
           cwd,
         });
       });

@@ -21,7 +21,6 @@ z-aspire-orchestrator/
 - **Health Check Management** — Wait for services to be healthy before starting dependents
 - **Environment Variable Injection** — Configure services via `.withEnvironment()`
 - **External Port Exposure** — Use `.withHttpEndpoint()` for frontend/backend access
-- **Worktree Support** — Use `--isolated` flag for git worktree environments
 
 ## Quick Start
 
@@ -80,7 +79,7 @@ aspire describe
 | Command | Description |
 |---------|-------------|
 | `aspire start` | Start the app |
-| `aspire start --isolated` | Start in isolated mode (for worktrees) |
+| `aspire start --isolated` | Start in isolated mode |
 | `aspire stop` | Stop the app |
 | `aspire wait <resource>` | Wait for resource to be healthy |
 | `aspire describe` | List resources |
@@ -107,7 +106,6 @@ aspire docs search get-started-with-the-postgresql-integration
 - **Always start the app first** (`aspire start`) before making changes
 - **To restart, just run `aspire start` again** — it automatically stops the previous instance
 - **Only restart the AppHost when AppHost code changes** — use `aspire resource <name> rebuild` for .NET project resources
-- Use `--isolated` when working in a worktree to avoid port conflicts
 - **Never install the Aspire workload** — it is obsolete
 
 ## Documentation

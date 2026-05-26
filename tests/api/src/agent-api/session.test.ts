@@ -106,6 +106,12 @@ const CLOSE_SESSION = `
   }
 `;
 
+const CLEAR_WORKSPACES = `
+  mutation ClearWorkspaces($controllerId: ID!) {
+    clearWorkspaces(controllerId: $controllerId)
+  }
+`;
+
 const RESUME_SESSION = `
   mutation ResumeSession($id: ID!) {
     resumeSession(id: $id) {
@@ -196,13 +202,21 @@ async function createKeyAndRegisterController(token: string): Promise<{ rawKey: 
 }
 
 async function createWorkspace(ctrlId: string): Promise<string> {
+  const path = `/tmp/sess-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await gqlRequest(
     CREATE_WORKSPACE,
-    { input: { controllerId: ctrlId, path: `/tmp/sess-test-${Date.now()}` } },
+    { input: { controllerId: ctrlId, path } },
     authToken,
   );
   const body = await res.json();
+  if (body.errors) {
+    throw new Error(`createWorkspace failed: ${JSON.stringify(body.errors)} (controllerId=${ctrlId}, path=${path})`);
+  }
   return body.data.createWorkspace.id;
+}
+
+async function clearWorkspaces(ctrlId: string): Promise<void> {
+  await gqlRequest(CLEAR_WORKSPACES, { controllerId: ctrlId }, authToken);
 }
 
 describe('Session GraphQL API', () => {
@@ -213,6 +227,9 @@ describe('Session GraphQL API', () => {
     const ctrl = await createKeyAndRegisterController(authToken);
     rawKey = ctrl.rawKey;
     controllerId = ctrl.controllerId;
+
+    // Clean up any workspaces from previous test runs to avoid hitting MAX_WORKSPACES limit
+    await clearWorkspaces(controllerId);
   });
 
   describe('queries without auth', () => {
@@ -265,6 +282,20 @@ describe('Session GraphQL API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
       expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should create a new session with github_copilot acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'github_copilot', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('github_copilot');
     });
   });
 
@@ -734,7 +765,7 @@ describe('Session SSE API', () => {
   }, 20_000);
 });
 
-describe('Session WebSocket ACP Events', () => {
+  describe('Session WebSocket ACP Events', () => {
   beforeAll(async () => {
     if (!authToken) {
       authToken = await signup();
@@ -742,6 +773,9 @@ describe('Session WebSocket ACP Events', () => {
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
     }
+
+    // Clean up workspaces to avoid hitting MAX_WORKSPACES limit
+    await clearWorkspaces(controllerId);
   });
 
   it('should handle acp:check result from controller', async () => {
@@ -754,6 +788,24 @@ describe('Session WebSocket ACP Events', () => {
     client.emit('acp:check:result', {
       requestId: 'test-req-1',
       servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+    client.disconnect();
+  });
+
+  it('should handle acp:check result with multiple servers from controller', async () => {
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '1.0.0' });
+    await registered;
+
+    client.emit('acp:check:result', {
+      requestId: 'test-req-multi',
+      servers: [
+        { type: 'opencode', available: true, version: '1.0.0' },
+        { type: 'github_copilot', available: true, version: '2.0.0' },
+      ],
     });
 
     await new Promise((r) => setTimeout(r, 200));
@@ -940,6 +992,58 @@ describe('Session WebSocket ACP Events', () => {
   });
 
   describe('End-to-end: createSession → acp:start → controller respond → verify status', () => {
+    it('should create github_copilot session and send acp:start with correct serverType', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `e2e-gc-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'e2e-gc-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'github_copilot', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+      expect(createBody.data.createSession.session.acpServerType).toBe('github_copilot');
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('github_copilot');
+
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_gc_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('idling');
+
+      client.disconnect();
+    });
+
     it('should update session status to idling after controller responds', async () => {
       // 1. Register a fresh controller
       const keyRes = await gqlRequest(

@@ -16,7 +16,7 @@
 按照项目结构，单个`<子项目>`使用`@general` subagent，委托进行关于`proposals`文件的这个`<子项目>`部分的开发。提示词模板如下，细化之后交给agent完成：
 
 ```markdown
-需要使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git的能力，基于`<dev-branch>`创建`worktree`，`<type>`为`<servers>`或者`<apps>`
+需要使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git的能力，基于`<dev-branch>`创建分支，`<type>`为`<servers>`或者`<apps>`
 读取 `<产品文档>`，`contract/`目录下的结构和<proposal>文档，在`<子项目>`中实现这个需求，并覆盖单元测试直到通过。
 
 你有如下待办：
@@ -36,7 +36,7 @@ servers/api   - 使用@general 委托开发`proposals`关于 server/api的变动
 apps/web      - 使用@general 委托开发`proposals`关于 apps/web的变动   
 ```
 
-会产生两个`todo`，在agent完成后，两个worktree分别提一个pull request，让用户进行review。等待用户review通过，执行后续步骤。
+会产生两个`todo`，在agent完成后，分别提一个pull request，让用户进行review。等待用户review通过，执行后续步骤。
 
 ### 代码实现
 
