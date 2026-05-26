@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { AuthProvider } from './stores/AuthProvider'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
@@ -8,6 +8,11 @@ import SessionPage from './pages/SessionPage'
 import ProtectedRoute from './components/ProtectedRoute'
 
 const basename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+
+function SessionPageRoute() {
+  const location = useLocation();
+  return <SessionPage key={location.pathname} />;
+}
 
 function App() {
   return (
@@ -26,8 +31,8 @@ function App() {
                   选择一个会话
                 </div>
               } />
-              <Route path="sessions" element={<SessionPage />} />
-              <Route path="sessions/:id" element={<SessionPage />} />
+              <Route path="sessions" element={<SessionPageRoute />} />
+              <Route path="sessions/:id" element={<SessionPageRoute />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>

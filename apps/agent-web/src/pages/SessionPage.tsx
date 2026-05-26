@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
@@ -68,10 +68,11 @@ export default function SessionPage() {
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
+  const initializedRef = useRef(false);
+  const lastMessageIsSettingUpdateRef = useRef(false);
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
-  const [_currentModel, setCurrentModel] = useState<AgentModelInfoData | null>(null);
 
   const isWorking = messages.length > 0 && (() => {
     const last = messages[messages.length - 1];
@@ -100,15 +101,15 @@ export default function SessionPage() {
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
 
   useEffect(() => {
-    if (sessionData?.session) {
+    if (sessionData?.session && !initializedRef.current) {
+      initializedRef.current = true;
       setStatus(sessionData.session.status);
       if (sessionData.session.modes) setModes(sessionData.session.modes as AgentModeData[]);
       if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
-      if (sessionData.session.currentModel) setCurrentModel(sessionData.session.currentModel as AgentModelInfoData);
       if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
       if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
     }
-  }, [sessionData]);
+  }, [sessionData, id]);
 
   useEffect(() => {
     if (!id) return;
@@ -131,10 +132,10 @@ export default function SessionPage() {
         if (data.data.direction === 'output') {
           setSending(false);
         }
-        // Parse config_option_update and current_mode_update from message content
         try {
           const content = JSON.parse(data.data.content);
-          if (content.sessionUpdate === 'config_option_update') {
+          if (content.sessionUpdate === 'config_option_update' || content.sessionUpdate === 'current_mode_update') {
+            lastMessageIsSettingUpdateRef.current = true;
             const configOptions = content.configOptions ?? [];
             for (const opt of configOptions) {
               const value = opt.value ?? opt.currentValue;
@@ -144,8 +145,8 @@ export default function SessionPage() {
                 setCurrentModelId(value);
               }
             }
-          } else if (content.sessionUpdate === 'current_mode_update') {
-            if (content.modeId) setCurrentModeId(content.modeId);
+          } else {
+            lastMessageIsSettingUpdateRef.current = false;
           }
         } catch { /* ignore parse errors */ }
       } else if (data.type === 'status') {
@@ -159,7 +160,6 @@ export default function SessionPage() {
         }
         if (data.data.modes) setModes(data.data.modes);
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
-        if (data.data.currentModel) setCurrentModel(data.data.currentModel);
         if (data.data.availableModels) setAvailableModels(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
       } else if (data.type === 'mode:changed') {
@@ -291,6 +291,7 @@ export default function SessionPage() {
   const handleSendMessage = async (content: string) => {
     if (!id) return;
     try {
+      lastMessageIsSettingUpdateRef.current = false;
       setSending(true);
       await sendMessage({
         variables: {
@@ -384,7 +385,7 @@ export default function SessionPage() {
         sessionId={id}
         onSend={handleSendMessage}
         onStop={handleCancelGeneration}
-        disabled={status !== 'running' && status !== 'idling'}
+        disabled={status !== 'running' && status !== 'idling' && !lastMessageIsSettingUpdateRef.current}
         sending={sending}
         isWorking={isWorking}
         modes={modes}

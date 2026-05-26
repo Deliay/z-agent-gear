@@ -178,7 +178,19 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
       if (status === 'completed' && rawOutput) {
         const output = (rawOutput as { output?: string }).output;
         if (output) {
-          return <TerminalOutput output={output} />;
+          return (
+            <div className="space-y-2">
+              {rawInput && (rawInput as ExecuteRawInput).command && (
+                <div>
+                  <span className="text-xs font-medium text-gray-500">Command: </span>
+                  <pre className="mt-1 rounded bg-gray-900 p-2 font-mono text-sm text-green-400">
+                    $ {(rawInput as ExecuteRawInput).command}
+                  </pre>
+                </div>
+              )}
+              <TerminalOutput output={output} />
+            </div>
+          );
         }
       }
     }
