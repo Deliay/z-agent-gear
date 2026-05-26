@@ -31,8 +31,6 @@ export default function InputBox({ onSend, onStop, disabled, sending, modes = []
 
   const textareaRef = useState<HTMLTextAreaElement | null>(null);
 
-  const getTextarea = () => textareaRef[0];
-
   useEffect(() => {
     if (!sessionId) return;
     const saved = localStorage.getItem(STORAGE_PREFIX + sessionId);

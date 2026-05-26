@@ -146,7 +146,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               ) : (
                 <SelectRoot
                   value={selectedAcpServer}
-                  onValueChange={(value) => setSelectedAcpServer(value)}
+                  onValueChange={(value) => setSelectedAcpServer(value || '')}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -187,7 +187,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               ) : (
                 <SelectRoot
                   value={selectedWorkspace}
-                  onValueChange={(value) => setSelectedWorkspace(value)}
+                  onValueChange={(value) => setSelectedWorkspace(value || '')}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
