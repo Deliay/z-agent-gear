@@ -69,8 +69,13 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
         groupType = 'read';
       } else if (kind === 'fetch') {
         groupType = 'fetch';
-      } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
-        groupType = 'sub_agent';
+      } else if (kind === 'other' && rawInput) {
+        const rawInputObj = typeof rawInput === 'string' ? JSON.parse(rawInput) : rawInput;
+        if ((rawInputObj as Record<string, unknown>).subagent_type) {
+          groupType = 'sub_agent';
+        } else {
+          groupType = 'tool_call';
+        }
       } else {
         groupType = 'tool_call';
       }
