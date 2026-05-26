@@ -101,7 +101,7 @@ export default function SessionPage() {
   useEffect(() => {
     if (!id) return;
 
-    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const apiBase = import.meta.env.VITE_API_URL || '';
     const token = localStorage.getItem('auth_token') || '';
     const eventSource = new EventSource(`${apiBase}/api/session/${id}/stream?token=${encodeURIComponent(token)}`);
 
