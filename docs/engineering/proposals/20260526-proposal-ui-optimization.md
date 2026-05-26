@@ -2,7 +2,7 @@
 
 **功能名称**: 用户界面优化
 **关联 PRD**: 20260526-ui-optimization.md
-**技术提案版本**: v1.0
+**技术提案版本**: v2.0
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -25,7 +25,8 @@
 |------|---------|---------|
 | 加载状态 | SessionPage, SessionHeader, Sidebar | 新增 state + UI |
 | 输入框 | InputBox | 重构布局 + 新增逻辑 |
-| 消息展示 | MessageList, AcpCard, ToolCallCard, ThoughtBlock | 修改分组/展开逻辑 |
+| 消息展示 | MessageList, AcpCard, ThoughtBlock | 修改分组/展开逻辑 |
+| 工具调用 | ToolCallCard, DiffView, TerminalOutput | 重构（差异化展示） |
 | BUG 修复 | MessageList (groupMessages) | 修复分组 |
 | 创建弹窗 | NewSessionDialog | 样式 + 控件替换 |
 
@@ -223,16 +224,77 @@ interface AcpCardProps {
 - 分支名称前缀：从 `inline-flex` 改为上下两行布局
 - 复选框文字：添加显式 `text-foreground` 或 `text-gray-900` 类
 
-#### 实现点 5: 工具调用状态聚合
+#### 实现点 5: 工具调用差异化展示
 
-`ToolCallCard` 内部遍历 messages，按 status 分类展示：
-- `pending` → 黄色徽标
-- `in_progress` → 紫色徽标（当前状态）
-- `completed` → 蓝色徽标（最终）
-- `failed` → 红色徽标（最终）
+`ToolCallCard` 只展示最新一条 `tool_call` message（不再聚合历史状态），根据 `kind` 和 `status` 决定内容渲染方式：
 
-卡片 `summary`（折叠态显示）只展示最终状态（last status）。
-卡片内部展开后展示所有状态变更的时间线。
+##### 5a: SDK 类型映射
+
+| 用户描述 | SDK 类型 | 说明 |
+|---------|---------|------|
+| `$.kind === 'edit'` | `tool_call.kind === 'edit'` | 文件编辑 |
+| `$.kind === 'bash'` | `tool_call.kind === 'execute'` | 命令行执行 |
+| `$.locations` | `tool_call.locations: Array<{path: string, line?: number}>` | 修改位置 |
+| `$.rawInput` | `tool_call.rawInput: {filePath, oldString, newString}` | edit 输入 |
+| `$.rawInput` | `tool_call.rawInput: {workDir, description, command, timeout}` | execute 输入 |
+| `$.content[]` | `tool_call.content: Array<ToolCallContent>` | 编辑完成结果 |
+| `type=content` | `ToolCallContent & {type: 'content'} → Content` | 文本内容块 |
+| `type=diff` | `ToolCallContent & {type: 'diff'} → Diff` | 文件差异块 |
+| `$.rawOutput.output` | `tool_call.rawOutput.output: string` | 命令输出 |
+
+##### 5b: 渲染逻辑
+
+```typescript
+const message = messages[messages.length - 1]; // 只取最新一条
+const parsed = parseSessionUpdate(message.content);
+if (parsed.sessionUpdate !== 'tool_call' && parsed.sessionUpdate !== 'tool_call_update') return null;
+```
+
+**kind === 'edit' + status === 'in_progress'**:
+- `LocationsList` 组件：遍历 `locations`，每个显示文件路径和行号
+- `DiffView` 组件（内联）：`rawInput.filePath` 作为标题，`rawInput.oldString` / `newString` 左右对比展示
+  - 左右两栏布局，左侧原文本，右侧新文本
+  - 使用 `<pre>` 保留空白格式
+  - 差异行高亮
+
+**kind === 'edit' + status === 'completed'**:
+- 遍历 `content` 数组
+- `type === 'content'` → 使用现有 Markdown 渲染（与 AI 消息相同）
+- `type === 'diff'` → `DiffView` 组件：`oldText` / `newText` 左右对比，`path` 作为标题
+
+**kind === 'execute' + status === 'in_progress'**:
+- `CommandInfo` 组件：展示 `rawInput.workDir`、`rawInput.description`、`rawInput.command`（带代码高亮）、`rawInput.timeout`
+
+**kind === 'execute' + status === 'completed'**:
+- `TerminalOutput` 组件：展示 `rawOutput.output`
+  - `<pre>` 容器，黑色背景，等宽字体
+  - 处理特殊转义/控制字符（至少过滤掉 `\r`、处理 `\n`）
+  - 最大高度限制，超出滚动
+
+##### 5c: 新增子组件
+
+| 组件 | 职责 | 文件 |
+|------|------|------|
+| `DiffView` | 左右对比 diff 展示（oldText vs newText） | `components/session/DiffView.tsx` |
+| `TerminalOutput` | 命令行输出展示（含控制字符处理） | `components/session/TerminalOutput.tsx` |
+
+**DiffView 接口**:
+```typescript
+interface DiffViewProps {
+  oldText?: string | null;
+  newText: string;
+  filePath?: string;
+  inline?: boolean; // true = compact inline (for in_progress), false = full page (for completed)
+}
+```
+
+**TerminalOutput 接口**:
+```typescript
+interface TerminalOutputProps {
+  output: string;
+  maxHeight?: string;
+}
+```
 
 ## 6. 技术决策
 
@@ -258,11 +320,13 @@ interface AcpCardProps {
 apps/agent-web/src/
 ├── components/session/
 │   ├── AcpCard.tsx              # + expanded/onExpandedChange props
+│   ├── DiffView.tsx             # 新增：左右对比 diff 展示
 │   ├── InputBox.tsx             # 重构布局 + auto-grow + 持久化
 │   ├── MessageList.tsx          # 分组逻辑重构 + 展开控制
 │   ├── NewSessionDialog.tsx     # 下拉替换 + 样式修复
 │   ├── SessionHeader.tsx        # + closing/deleting props
-│   ├── ToolCallCard.tsx         # 状态时间线
+│   ├── TerminalOutput.tsx       # 新增：命令行输出展示
+│   ├── ToolCallCard.tsx         # 重构：差异化展示
 │   └── ThoughtBlock.tsx         # 无变化（AcpCard 受控）
 ├── pages/
 │   └── SessionPage.tsx          # + closing/deleting state + sessionId 传入
@@ -281,7 +345,7 @@ apps/agent-web/src/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | InputBox, AcpCard, ToolCallCard |
+| 单元测试 | Vitest | InputBox, AcpCard, ToolCallCard, DiffView, TerminalOutput |
 | 组件测试 | React Testing Library | MessageList 分组逻辑 |
 
 ## 9. 部署方案

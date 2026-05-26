@@ -6,7 +6,7 @@ type: Permanent
 # 用户界面优化
 
 **功能名称**: 用户界面优化
-**PRD 版本**: v2.0
+**PRD 版本**: v3.0
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -34,7 +34,7 @@ type: Permanent
 - 输入框不需要手动拖拽即可输入多行文本
 - 切换页面回来后，输入框内容保持不变（发送后清空）
 - 最新一条可展开的消息进入视野时自动展开，无需手动点击
-- 工具调用的每个阶段（进行中/完成/失败）在卡片内部可追溯，外部只显示最终状态
+- 工具调用按 kind（edit / execute）和 status（in_progress / completed）差异化展示内容，非聚合状态时间线
 - 创建会话的操作路径减少纵向滚动
 
 ## 用户分析
@@ -91,18 +91,30 @@ type: Permanent
   - [ ] 打开 Session 页面时自动恢复该 session 的上次输入内容
   - [ ] 发送成功后清除 localStorage 中对应的输入内容
 
-#### 功能点 3: 工具调用状态聚合展示
+#### 功能点 3: 工具调用差异化展示
 
 - **描述**: 
-  - 工具调用卡片内部按历史状态聚合展示，显示每个阶段（pending → in_progress → completed / failed）的变更记录
-  - 卡片外部（折叠态摘要）仍然只显示最终状态
-  - 考虑工具调用日志（log）的展示，如果有日志信息需要在卡片内可展开查看
-- **用户价值**: 用户可以追溯工具调用的完整生命周期，了解当前执行进度，同时卡片摘要保持简洁
+  - 工具调用只展示最新一条（而非聚合所有历史状态），根据 `$.kind` 和 `$.status` 决定展示内容
+  - `$.kind === 'edit'` 且 `$.status === 'in_progress'`：
+    - 展示 `$.locations` 和 `$.rawInput`（如有）
+    - `$.locations` 展示为修改列表（文件路径 + 行号）
+    - `$.rawInput.filePath` 显示当前修改文件，`$.rawInput.oldString` / `newString` 展示为左右对比的 diff 视图
+  - `$.kind === 'edit'` 且 `$.status === 'completed'`：
+    - 展示数组 `$.content[]`
+    - `type === 'content'` 的项渲染文本内容（与 AI 消息/用户消息渲染方式相同）
+    - `type === 'diff'` 的项展示左右文件差异（基于 `oldText` / `newText`）
+  - `$.kind === 'execute'`（命令行执行）且 `$.status === 'in_progress'`：
+    - 展示 `$.rawInput`：工作路径（workDir）、标题（description）、命令（command）、超时（timeout）
+  - `$.kind === 'execute'` 且 `$.status === 'completed'`：
+    - 使用命令行展示组件展示 `$.rawOutput.output`（可能包含特殊转义/控制字符）
+  - 卡片外部（折叠态摘要）显示 `kind + status` 简要信息
+- **用户价值**: 用户可以清晰看到 AI 正在执行的操作内容（修改文件的具体 diff、执行的命令及输出），而非仅看状态流转
 - **验收标准**:
-  - [ ] 工具调用从发起(pending)到进行中(in_progress)到完成(completed)或失败(failed)都能在卡片内部展示
-  - [ ] 不同状态用不同颜色区分
-  - [ ] 卡片外部摘要只显示最终状态（如 completed / failed）
-  - [ ] 工具调用如有日志信息（log），可在卡片内展开查看
+  - [ ] edit in_progress 时显示修改文件列表和左右 diff 对比
+  - [ ] edit completed 时显示修改结果内容（content 块和 diff 块）
+  - [ ] execute in_progress 时显示工作路径、命令、超时信息
+  - [ ] execute completed 时显示命令输出（含控制字符处理）
+  - [ ] 卡片折叠态摘要显示 `kind + status`
 
 #### 功能点 4: 最后一条可展开消息自动展开
 
@@ -172,7 +184,7 @@ flowchart LR
 |------|------|----------|
 | 会话详情页 Header | 顶部操作栏 | Close/Delete/Continue 按钮（带 loading 状态） |
 | 会话详情页输入区 | 底部输入区域 | Mode 选择器、Model 选择器（第一行）；自适应 textarea + 发送按钮（第二行）；localStorage 持久化 |
-| 会话详情页消息列表 | 中间消息展示 | 可折叠卡片（只折叠上一次展开的卡片，展开最新一条）、工具调用内部状态时间线、独立用户消息 |
+| 会话详情页消息列表 | 中间消息展示 | 可折叠卡片（只折叠上一次展开的卡片，展开最新一条）、工具调用差异化展示（edit diff / execute 终端输出）、独立用户消息 |
 | 新建会话弹窗 | 模态弹窗 | 控制器选择、ACP Server 下拉、工作目录下拉、Worktree 设置（前缀独占一行） |
 
 ### 3.5 异常与边界情况
@@ -181,7 +193,7 @@ flowchart LR
 |------|---------|
 | 快速连续点击 Close | 第一次点击后按钮 disabled，后续点击无效 |
 | 输入框输入极长文本（超过 5rem） | 输入框高度固定 5rem，内容在内部滚动 |
-| 多条工具调用连续返回 | 每个工具调用独立展示各自的状态变化 |
+| 多条工具调用连续返回 | 每个工具调用独立展示最新一条的内容（edit diff 或 execute 输出） |
 | 同时收到多条新消息 | 只展开最后一条可展开消息，折叠上一次自动展开的那条 |
 | 工作目录下拉选项为空 | 显示"暂无工作区，请先在设置中管理工作区"提示 |
 | ACP Server 下拉加载中 | 显示加载状态提示 |

@@ -1,7 +1,7 @@
 # 用户界面优化 - 实现计划
 
 **关联提案**: proposals/20260526-proposal-ui-optimization.md
-**计划版本**: v1.0
+**计划版本**: v2.0
 **创建日期**: 2026-05-26
 **作者**: opencode
 
@@ -100,15 +100,56 @@
   - MessageItem / ThoughtBlock / ToolCallCard 将 expanded 透传给 AcpCard
 - **验证**: 最后一条可展开消息默认展开，新消息到来时折叠旧展开新
 
-#### Task 3.4 ToolCallCard 状态时间线
+#### Task 3.4 DiffView 组件
+
+- **文件**: `apps/agent-web/src/components/session/DiffView.tsx`（新增）
+- **改动**:
+  - 左右两栏布局展示文件差异
+  - 左侧 `oldText` / 右侧 `newText`
+  - `inline` 模式（compact，用于 in_progress）：无边框、小字号
+  - 非 inline 模式（用于 completed）：带文件标题、完整字号
+  - 差异行高亮（使用简单行号对比即可）
+- **Props**:
+  ```typescript
+  interface DiffViewProps {
+    oldText?: string | null;
+    newText: string;
+    filePath?: string;
+    inline?: boolean;
+  }
+  ```
+- **验证**: 渲染左右对比效果
+
+#### Task 3.5 TerminalOutput 组件
+
+- **文件**: `apps/agent-web/src/components/session/TerminalOutput.tsx`（新增）
+- **改动**:
+  - 黑色背景命令行风格展示
+  - 处理转义/控制字符（\r → 当前行覆盖，\n → 换行）
+  - 等宽字体 `<pre>` 容器
+  - 最大高度限制，超出滚动
+- **Props**:
+  ```typescript
+  interface TerminalOutputProps {
+    output: string;
+    maxHeight?: string;
+  }
+  ```
+- **验证**: 命令行输出正确渲染
+
+#### Task 3.6 ToolCallCard 差异化展示重构
 
 - **文件**: `apps/agent-web/src/components/session/ToolCallCard.tsx`
 - **改动**:
-  - 遍历 messages，收集所有 status 变更记录
-  - 卡片内部展开后显示每个状态阶段的时间线
-  - 卡片 summary（折叠态）仍显示最终状态
-  - 增加日志展示区域（如果有 log 信息）
-- **验证**: 卡片内部可见 pending → in_progress → completed 各阶段
+  - 改为只取最新一条 message 渲染（而非聚合全部历史）
+  - 根据 `kind`（edit / execute）和 `status`（in_progress / completed）分支渲染
+  - **edit + in_progress**: 展示 `locations` 列表 + `rawInput` 内联 diff
+  - **edit + completed**: 遍历 `content[]`，`type=content` 渲染文本 / `type=diff` 使用 DiffView
+  - **execute + in_progress**: 展示 `rawInput`（workDir, description, command, timeout）
+  - **execute + completed**: 使用 TerminalOutput 展示 `rawOutput.output`
+  - 卡片 summary（折叠态）显示 `kind + status`（如 "edit in_progress" / "execute completed"）
+  - 不再使用 statusBadge 枚举（pending / in_progress / completed / failed）
+- **验证**: 四类场景各自正确渲染
 
 ### Phase 4: 创建弹窗优化
 
@@ -152,7 +193,8 @@ graph LR
     T2_1 --> T2_3[Task 2.3]
     T3_2[Task 3.2] --> T3_3[Task 3.3]
     T3_1[Task 3.1]
-    T3_4[Task 3.4]
+    T3_4[Task 3.4] --> T3_6[Task 3.6]
+    T3_5[Task 3.5] --> T3_6[Task 3.6]
     T4_1[Task 4.1]
     T4_2[Task 4.2]
     T4_3[Task 4.3]
@@ -160,7 +202,7 @@ graph LR
 ```
 
 - Phase 1-4 无跨阶段依赖，可并行
-- Phase 3 内部：Task 3.2 → Task 3.3 有依赖关系
+- Phase 3 内部：Task 3.2 → Task 3.3（AcpCard 受控 → 自动展开）；Task 3.4 → Task 3.6, Task 3.5 → Task 3.6（DiffView / TerminalOutput → ToolCallCard 重构）
 - Phase 2 内部：Task 2.1 → Task 2.2, Task 2.1 → Task 2.3 有依赖
 
 ## 3. 执行顺序建议
@@ -169,8 +211,9 @@ graph LR
 2. Task 2.1 → Task 2.2 + Task 2.3（输入框重构，auto-grow 和持久化并行）
 3. Task 3.1 (独立，BUG 修复)
 4. Task 3.2 → Task 3.3（AcpCard 受控 → 自动展开）
-5. Task 3.4 (独立)
-6. Task 4.1 ~ 4.4 (独立，可并行)
+5. Task 3.4 + Task 3.5 (独立，可并行，DiffView + TerminalOutput)
+6. Task 3.6 (依赖 Task 3.4 + Task 3.5)
+7. Task 4.1 ~ 4.4 (独立，可并行)
 
 ## 4. 涉及文件清单
 
@@ -182,7 +225,9 @@ graph LR
 | `apps/agent-web/src/components/session/InputBox.tsx` | 重构 |
 | `apps/agent-web/src/components/session/MessageList.tsx` | 修改（核心） |
 | `apps/agent-web/src/components/session/AcpCard.tsx` | 修改（新增 props） |
-| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 修改 |
+| `apps/agent-web/src/components/session/DiffView.tsx` | 新增 |
+| `apps/agent-web/src/components/session/TerminalOutput.tsx` | 新增 |
+| `apps/agent-web/src/components/session/ToolCallCard.tsx` | 重构 |
 | `apps/agent-web/src/components/session/MessageItem.tsx` | 可能不改 |
 | `apps/agent-web/src/components/session/ThoughtBlock.tsx` | 可能不改 |
 | `apps/agent-web/src/components/session/NewSessionDialog.tsx` | 修改 |
