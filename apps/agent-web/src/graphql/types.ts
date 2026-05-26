@@ -112,7 +112,6 @@ export interface SessionData {
   worktreeBranch: string | null
   modes?: AgentModeData[] | null
   currentModeId?: string | null
-  currentModel?: AgentModelInfoData | null
   availableModels?: AgentModelInfoData[] | null
   currentModelId?: string | null
   createdAt: string
