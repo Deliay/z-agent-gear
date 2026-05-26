@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { SessionUpdate, ContentChunk } from '@agentclientprotocol/sdk';
 import MessageItem from './MessageItem';
 import ThoughtBlock from './ThoughtBlock';
@@ -192,8 +192,10 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
-  // Auto-expand logic: track the last expandable group
-  const lastAutoExpandedRef = useRef<string | null>(null);
+  // Auto-expand logic: expand the last expandable group, allow user override
+  const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
+  const prevLastExpandableRef = useRef<string | null>(null);
+
   const lastExpandableGroup = useMemo(() => {
     for (let i = groups.length - 1; i >= 0; i--) {
       if (groups[i].type === 'thought' || groups[i].type === 'tool_call') {
@@ -205,13 +207,19 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const lastExpandableKey = lastExpandableGroup?.messages[0]?.id || null;
 
-  // Update lastAutoExpandedRef when the last expandable group changes
-  if (lastExpandableKey && lastExpandableKey !== lastAutoExpandedRef.current) {
-    lastAutoExpandedRef.current = lastExpandableKey;
-  }
+  // When the last expandable group changes (new message arrived), reset overrides
+  useEffect(() => {
+    if (lastExpandableKey !== prevLastExpandableRef.current) {
+      prevLastExpandableRef.current = lastExpandableKey;
+      setExpandedOverrides({});
+    }
+  }, [lastExpandableKey]);
 
-  const isAutoExpanded = (groupKey: string) => {
-    return lastAutoExpandedRef.current === groupKey;
+  const isExpanded = (groupKey: string) => {
+    if (groupKey in expandedOverrides) {
+      return expandedOverrides[groupKey];
+    }
+    return groupKey === lastExpandableKey;
   };
 
   return (
@@ -246,7 +254,10 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           )}
           {groups.map((group) => {
             const groupKey = group.messages[0]?.id || 'unknown';
-            const autoExpanded = isAutoExpanded(groupKey);
+            const expanded = isExpanded(groupKey);
+            const handleExpandedChange = (next: boolean) => {
+              setExpandedOverrides((prev) => ({ ...prev, [groupKey]: next }));
+            };
             switch (group.type) {
               case 'thought':
                 return (
@@ -254,8 +265,8 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                     key={groupKey}
                     chunks={group.messages.map((m) => parseSessionUpdate(m.content)).filter((p): p is ContentChunk & { sessionUpdate: 'agent_thought_chunk' } => p !== null && p.sessionUpdate === 'agent_thought_chunk')}
                     createdAt={group.messages[0]?.createdAt}
-                    expanded={autoExpanded}
-                    onExpandedChange={() => {}}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'available_commands':
@@ -291,8 +302,8 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                   <ToolCallCard
                     key={groupKey}
                     messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
-                    expanded={autoExpanded}
-                    onExpandedChange={() => {}}
+                    expanded={expanded}
+                    onExpandedChange={handleExpandedChange}
                   />
                 );
               case 'user_message':
