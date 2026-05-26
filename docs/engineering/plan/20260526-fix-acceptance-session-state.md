@@ -11,7 +11,7 @@ type: Permanent
 
 ## 概览
 
-本次实施包含 4 个独立的验收问题修复，按顺序执行：
+本次实施包含 5 个独立的验收问题修复，按顺序执行：
 
 | # | 问题 | 范围 |
 |---|------|------|
@@ -19,6 +19,7 @@ type: Permanent
 | 2 | 允许 setting update 后继续发送消息 | SessionPage.tsx |
 | 3 | 修复 sessionData useEffect 覆盖 SSE 状态 | SessionPage.tsx |
 | 4 | SubAgent 子任务卡片正确渲染 | ToolCallCard.tsx |
+| 5 | 路由切换 Session 时显示 loading 并重置状态 | App.tsx / SessionPage.tsx |
 
 ---
 
@@ -301,6 +302,109 @@ export default ToolCallCard;
 
 ---
 
+## Step 5: 路由切换 Session 时显示 loading 并重置状态
+
+### 5.1 问题说明
+
+当用户在 `/sessions/sessionA` 时直接导航到 `/sessions/sessionB`，由于 React Router v7 复用 `SessionPage` 组件实例（无 `key` prop），导致：
+
+1. `messages` 状态保留旧 session 的数据，直到 SSE `'history'` 到达才更新
+2. 无 loading spinner 显示
+3. 用户看到上一个 session 的消息列表
+
+### 5.2 问题分析
+
+**App.tsx 路由定义：**
+```tsx
+<Route path="sessions/:id" element={<SessionPage />} />
+```
+没有 `key` prop，React Router 复用组件实例。
+
+**SessionPage.tsx state：**
+```tsx
+const [messages, setMessages] = useState<AcpMessage[]>([]);  // 初始化为空数组
+const [status, setStatus] = useState<string>('connecting');
+// ... 其他 state
+```
+
+当 `id` 从 `sessionA` 变为 `sessionB` 时：
+- 组件实例复用，`useState` 的值保持不变
+- `messages` 仍然是 `sessionA` 的消息
+- `sessionLoading` 可能不会触发新的 loading 状态（Apollo 缓存）
+- SSE 连接正确关闭并重建，但 messages 不会立即清空
+
+### 5.3 方案
+
+**方案一（推荐）：在路由上添加 `key` prop 强制组件重载**
+
+```tsx
+// App.tsx
+<Route path="sessions/:id" element={<SessionPage key={useLocation().pathname} />} />
+```
+
+React Router v7 中，当 `key` 变化时会销毁旧组件并创建新组件，实现完全重置。
+
+**方案二：在 SessionPage 内部监听 id 变化并重置所有状态**
+
+```tsx
+// SessionPage.tsx useEffect
+useEffect(() => {
+  // 当 id 变化时，重置所有状态
+  setMessages([]);
+  setStatus('connecting');
+  setSending(false);
+  setResuming(false);
+  setErrorToast(null);
+  // ... 重置其他状态
+  initializedRef.current = false; // 重置初始化标记
+}, [id]);
+```
+
+### 5.4 方案比较
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| 方案一（key prop） | 简单彻底，React 自动处理所有状态重置 | 每次路由变化都销毁重建组件 |
+| 方案二（内部监听） | 更细粒度控制，避免不必要的重载 | 需要手动重置所有 state，容易遗漏 |
+
+**推荐方案一**：因为 SessionPage 本来就是路由页面，切换 session 本质上应该是一个全新的页面视图。
+
+### 5.5 实现
+
+**App.tsx:**
+
+```tsx
+// apps/agent-web/src/App.tsx
+import { useLocation } from 'react-router-dom';
+
+// 在路由中使用 key
+<Route path="sessions/:id" element={<SessionPage key={useLocation().pathname} />} />
+```
+
+**注意：** 需要确保 `useLocation` 在 `Routes` 组件外部被调用，或者将 `key` 改为其他稳定值（如 `id` param）：
+
+```tsx
+// 方案 A: 使用 location.pathname
+<Route path="sessions/:id" element={<SessionPage key={useLocation().pathname} />} />
+
+// 方案 B: 直接使用 id（更精确，每次 session 切换都会重载）
+// 但需要先获取 params，这里无法直接访问
+// 所以方案 A 更适合当前结构
+```
+
+如果方案 A 有问题，可以使用更简单的方式——在 SessionPage 内部实现重置逻辑（方案二）。
+
+### 5.6 验证方式
+
+1. 打开 `/sessions/sessionA`
+2. 直接在地址栏输入 `/sessions/sessionB` 并回车
+3. 观察：
+   - 是否立即显示 loading spinner
+   - 是否清空了 sessionA 的消息
+   - 是否在短暂延迟后显示 sessionB 的消息
+
+---
+
 ## 验收清单
 
 | # | 检查项 | 验证方式 |
@@ -312,16 +416,18 @@ export default ToolCallCard;
 | 5 | setting update 后可发送消息 | 实际操作观察 |
 | 6 | SubAgent 显示蓝色卡片 + "SubAgent:" 前缀 | 触发 SubAgent 任务观察 |
 | 7 | 普通 ToolCall 保持紫色卡片 | 触发普通 ToolCall 观察 |
-| 8 | 所有测试通过 | `npm run test` |
+| 8 | 路由切换 session 时显示 loading spinner | 直接在地址栏切换 session 观察 |
+| 9 | 路由切换 session 时消息列表被清空 | 直接在地址栏切换 session 观察 |
+| 10 | 所有测试通过 | `npm run test` |
 
 ---
 
 ## 执行顺序
 
 ```
-Step 1 (移除 currentModel) → Step 2 (修复 useEffect 覆盖) → Step 3 (setting update) → Step 4 (SubAgent)
-         ↓                           ↓                           ↓                    ↓
-      最复杂，先做                  依赖 SessionPage           独立                  独立
+Step 1 (移除 currentModel) → Step 2 (修复 useEffect 覆盖) → Step 3 (setting update) → Step 4 (SubAgent) → Step 5 (路由切换)
+         ↓                           ↓                           ↓                    ↓                    ↓
+      最复杂，先做                  依赖 SessionPage           独立                  独立                  简单
 ```
 
 建议每个 Step 完成后运行 `npm run test` 验证无回归，再进行下一步。
