@@ -9,9 +9,10 @@ import { getStatusDotColor } from './session/status-colors';
 
 interface SidebarProps {
   username: string;
+  mobile?: boolean;
 }
 
-export default function Sidebar({ username }: SidebarProps) {
+export default function Sidebar({ username, mobile }: SidebarProps) {
   const { id: activeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
@@ -139,7 +140,7 @@ export default function Sidebar({ username }: SidebarProps) {
   };
 
   return (
-    <nav className="flex h-screen flex-col bg-gray-900 text-white" aria-label="Sidebar">
+    <nav className={`flex flex-col bg-gray-900 text-white ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Sessions</h2>
@@ -278,6 +279,16 @@ export default function Sidebar({ username }: SidebarProps) {
           onClose={() => setShowNewDialog(false)}
           onCreate={handleCreateSession}
         />
+      )}
+
+      {mobile && (
+        <NavLink
+          to="/settings"
+          className="flex items-center gap-2 border-t border-gray-700 px-4 py-3 text-sm text-gray-300 hover:text-white"
+        >
+          <span>⚙️</span>
+          <span>设置</span>
+        </NavLink>
       )}
 
       <div className="sticky bottom-0 border-t border-gray-700 p-4">
