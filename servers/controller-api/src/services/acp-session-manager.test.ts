@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../models/session.js', () => ({
   Session: {
     findByIdAndUpdate: vi.fn(),
+    findOneAndUpdate: vi.fn(),
     findByIdAndDelete: vi.fn(),
     findById: vi.fn().mockReturnValue({
       lean: vi.fn().mockResolvedValue(null),
@@ -305,6 +306,58 @@ describe('ACPSessionManager', () => {
     });
   });
 
+  describe('handlePromptStart', () => {
+    it('should set status to running and publish when session is idling', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
+
+      await manager.handlePromptStart('sess-1');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: 'idling' },
+        { status: 'running' },
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"running"'));
+    });
+
+    it('should not publish when session is not idling', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(null);
+
+      await manager.handlePromptStart('sess-1');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: 'idling' },
+        { status: 'running' },
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handlePromptComplete', () => {
+    it('should set status to idling and publish when session is running', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
+
+      await manager.handlePromptComplete('sess-1', 'end_turn');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: 'running' },
+        { status: 'idling' },
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('should not publish when session is not running (crash race)', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(null);
+
+      await manager.handlePromptComplete('sess-1', 'end_turn');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: 'running' },
+        { status: 'idling' },
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+  });
+
   describe('resumeSession', () => {
     it('should update status to connecting and emit acp:resume', async () => {
       const socket = createMockSocket();
@@ -413,10 +466,11 @@ describe('ACPSessionManager', () => {
   });
 
   describe('handleSocketDisconnect', () => {
-    it('should stop all sessions for the socket', async () => {
+    it('should set active sessions to disconnected status', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
 
       const startPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
@@ -433,7 +487,46 @@ describe('ACPSessionManager', () => {
 
       await manager.handleSocketDisconnect('socket-123');
 
-      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: { $in: ['idling', 'running'] } },
+        { status: 'disconnected', disconnectedAt: expect.any(Date) },
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"disconnected"'));
+    });
+
+    it('should set non-active sessions to ended status', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      // First call returns null (session not idling/running), second call succeeds
+      vi.mocked(Session.findOneAndUpdate)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: 'sess-1' } as never);
+
+      const startPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await startPromise;
+
+      mockRedis.publish.mockClear();
+
+      await manager.handleSocketDisconnect('socket-123');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: { $in: ['idling', 'running'] } },
+        { status: 'disconnected', disconnectedAt: expect.any(Date) },
+      );
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: { $nin: ['ended', 'disconnected'] } },
+        { status: 'ended', endedAt: expect.any(Date) },
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"ended"'));
     });
 
     it('should handle disconnect for unknown socket', async () => {

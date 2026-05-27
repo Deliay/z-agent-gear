@@ -174,6 +174,27 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:prompt:start', async (payload: { sessionId: string }) => {
+      if (!authenticated) return;
+      try {
+        await acpSessionManager.handlePromptStart(payload.sessionId);
+      } catch (err) {
+        console.error(`ACP prompt start error for session ${payload.sessionId}:`, err);
+      }
+    });
+
+    socket.on('acp:prompt:complete', async (payload: {
+      sessionId: string;
+      stopReason: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await acpSessionManager.handlePromptComplete(payload.sessionId, payload.stopReason);
+      } catch (err) {
+        console.error(`ACP prompt complete error for session ${payload.sessionId}:`, err);
+      }
+    });
+
     socket.on('acp:list-sessions:result', async (payload: {
       requestId: string;
       success: boolean;
