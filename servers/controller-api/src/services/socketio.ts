@@ -12,6 +12,7 @@ import { gitBrowserService } from './git-browser.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
+import { portForwardRelayService } from './port-forward.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -323,6 +324,28 @@ export function createSocketIOServer(io: SocketIOServer): void {
     io.engine?.on?.('error', transportErrorHandler);
     io.on('open', () => {
       io.engine?.on?.('error', transportErrorHandler);
+    });
+
+    // Port Forward events
+    socket.on('port-forward:created', async (payload: { tunnelId: string; success: boolean; error?: string }) => {
+      if (!authenticated) return;
+      portForwardRelayService.handleTunnelCreated(payload.tunnelId, payload.success, payload.error);
+    });
+
+    socket.on('port-forward:data', async (payload: { tunnelId: string; data: string }) => {
+      if (!authenticated) return;
+      const buffer = Buffer.from(payload.data, 'base64');
+      portForwardRelayService.handleTunnelData(payload.tunnelId, buffer);
+    });
+
+    socket.on('port-forward:close', async (payload: { tunnelId: string }) => {
+      if (!authenticated) return;
+      portForwardRelayService.handleTunnelClose(payload.tunnelId);
+    });
+
+    socket.on('port-forward:error', async (payload: { tunnelId: string; error: string }) => {
+      if (!authenticated) return;
+      portForwardRelayService.handleTunnelError(payload.tunnelId, payload.error);
     });
 
     socket.on('disconnect', async () => {
