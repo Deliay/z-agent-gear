@@ -13,7 +13,7 @@ import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 
-const CONTROLLER_VERSION = '1.0.0';
+const CONTROLLER_VERSION = '1.0.4';
 const acpBridges = new Map<string, AcpSessionBridge>();
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
