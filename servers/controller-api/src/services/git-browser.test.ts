@@ -65,8 +65,8 @@ describe('GitBrowserService', () => {
 
   describe('check', () => {
     it('should emit git:check to controller socket', async () => {
-      vi.mocked(Controller.findById).mockResolvedValue({
-        keyId: 'key-123',
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ keyId: 'key-123' }),
       } as never);
       vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
 
@@ -79,7 +79,9 @@ describe('GitBrowserService', () => {
     });
 
     it('should log error when controller not found', async () => {
-      vi.mocked(Controller.findById).mockResolvedValue(null);
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       await gitBrowserService.check('req-1', 'ctrl-1', '/fake/path');
@@ -89,7 +91,9 @@ describe('GitBrowserService', () => {
     });
 
     it('should log error when controller offline', async () => {
-      vi.mocked(Controller.findById).mockResolvedValue({ keyId: 'key-123' } as never);
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ keyId: 'key-123' }),
+      } as never);
       vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -110,7 +114,9 @@ describe('GitBrowserService', () => {
 
   describe('init', () => {
     it('should emit git:init to controller socket', async () => {
-      vi.mocked(Controller.findById).mockResolvedValue({ keyId: 'key-123' } as never);
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ keyId: 'key-123' }),
+      } as never);
       vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
 
       await gitBrowserService.init('req-1', 'ctrl-1', '/fake/path');

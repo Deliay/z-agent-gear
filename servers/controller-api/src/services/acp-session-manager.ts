@@ -298,6 +298,55 @@ export class ACPSessionManager {
     await this.publishStatus(sessionId, 'ended');
   }
 
+  async handlePromptStart(sessionId: string): Promise<void> {
+    const result = await Session.findOneAndUpdate(
+      { _id: sessionId, status: 'idling' },
+      { status: 'running' },
+    );
+    if (result) {
+      await this.publishStatus(sessionId, 'running');
+    }
+  }
+
+  async handlePromptComplete(sessionId: string, stopReason: string): Promise<void> {
+    const result = await Session.findOneAndUpdate(
+      { _id: sessionId, status: 'running' },
+      { status: 'idling' },
+    );
+    if (result) {
+      await this.publishStatus(sessionId, 'idling');
+    }
+  }
+
+  private async handleControllerDisconnect(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      this.sessions.delete(sessionId);
+      const socketSessions = this.socketToSessions.get(session.controllerSocket.id);
+      if (socketSessions) {
+        socketSessions.delete(sessionId);
+        if (socketSessions.size === 0) {
+          this.socketToSessions.delete(session.controllerSocket.id);
+        }
+      }
+    }
+
+    const result = await Session.findOneAndUpdate(
+      { _id: sessionId, status: { $in: ['idling', 'running'] } },
+      { status: 'disconnected', disconnectedAt: new Date() },
+    );
+    if (result) {
+      await this.publishStatus(sessionId, 'disconnected');
+      return;
+    }
+
+    await Session.findOneAndUpdate(
+      { _id: sessionId, status: { $nin: ['ended', 'disconnected'] } },
+      { status: 'ended', endedAt: new Date() },
+    );
+    await this.publishStatus(sessionId, 'ended');
+  }
+
   async handleControllerStopped(sessionId: string, reason: string, exitCode?: number): Promise<void> {
     // Clean up session mapping
     const session = this.sessions.get(sessionId);
@@ -324,7 +373,7 @@ export class ACPSessionManager {
     const socketSessions = this.socketToSessions.get(socketId);
     if (socketSessions) {
       for (const sessionId of socketSessions) {
-        await this.handleControllerStopped(sessionId, 'socket_disconnect');
+        await this.handleControllerDisconnect(sessionId);
       }
       this.socketToSessions.delete(socketId);
     }

@@ -5,17 +5,11 @@ import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/querie
 import { CREATE_SESSION } from '../graphql/mutations';
 import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation, SessionData } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
+import { getStatusDotColor } from './session/status-colors';
 
 interface SidebarProps {
   username: string;
 }
-
-const statusColors: Record<string, string> = {
-  running: 'bg-green-500',
-  connecting: 'bg-yellow-500',
-  creating: 'bg-yellow-500',
-  ended: 'bg-gray-500',
-};
 
 export default function Sidebar({ username }: SidebarProps) {
   const { id: activeId } = useParams<{ id: string }>();
@@ -254,7 +248,7 @@ export default function Sidebar({ username }: SidebarProps) {
                                           <polyline points="7 15 12 20 17 15" />
                                         </svg>
                                       ) : (
-                                        <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
                                       )}
                                       <div className="min-w-0 flex-1">
                                         <div className="truncate">

@@ -208,7 +208,7 @@ test.describe('Session E2E', () => {
     // Session may have already transitioned to 'idling' via SSE, in which case input is enabled
     const statusBadge = page.locator('.px-2.py-1.text-xs.font-medium.rounded-full');
     const statusText = await statusBadge.textContent();
-    if (statusText !== 'idling' && statusText !== 'running') {
+    if (statusText !== 'Idle' && statusText !== 'Working') {
       await expect(textarea).toBeDisabled();
       await expect(textarea).toHaveAttribute('placeholder', 'Session is not active...');
     }
@@ -234,7 +234,7 @@ test.describe('Session E2E', () => {
     const statusBadge = page.locator('.px-2.py-1.text-xs.font-medium.rounded-full');
     await expect(statusBadge).toBeVisible();
     const statusText = await statusBadge.textContent();
-    expect(['creating', 'connecting', 'running', 'idling']).toContain(statusText);
+    expect(['Creating', 'Connecting', 'Working', 'Idle']).toContain(statusText);
 
     disconnect();
   });
@@ -255,7 +255,7 @@ test.describe('Session E2E', () => {
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toContainText('ended', { timeout: 5000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toContainText('Ended', { timeout: 5000 });
     await expect(page.locator('textarea')).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
 

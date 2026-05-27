@@ -1,3 +1,5 @@
+import { getStatusBadgeClass, STATUS_LABELS } from './status-colors';
+
 interface Session {
   id: string;
   userId: string;
@@ -30,24 +32,6 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
     opencode: 'OpenCode',
     github_copilot: 'GitHub Copilot',
   };
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'idling':
-        return 'bg-green-100 text-green-800';
-      case 'running':
-        return 'bg-blue-100 text-blue-800';
-      case 'connecting':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'creating':
-        return 'bg-blue-100 text-blue-800';
-      case 'disconnected':
-        return 'bg-orange-100 text-orange-800';
-      case 'ended':
-        return 'bg-gray-100 text-gray-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
 
   const continueDisabled = resuming || !controllerOnline;
 
@@ -57,8 +41,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         <h1 className="text-lg font-semibold">
           {session?.controllerName || 'Session'}
         </h1>
-        <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusColor(status)}`}>
-          {status}
+        <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
+          {STATUS_LABELS[status] ?? status}
         </span>
         {session?.acpServerType && (
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
