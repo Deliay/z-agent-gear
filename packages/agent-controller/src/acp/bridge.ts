@@ -38,6 +38,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private textChunkBuffer = '';
   private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
   private initializing = false;
+  private stopped = false;
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -173,19 +174,29 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   private async processPrompt(message: QueuedInput): Promise<void> {
-    if (!this.connection || !this.acpSessionId) return;
+    if (!this.connection || !this.acpSessionId || this.stopped) return;
 
     this.activePrompt = this.connection.prompt({
       sessionId: this.acpSessionId,
       prompt: [{ type: 'text' as const, text: message.content }],
     });
 
+    this.socket.emit('acp:prompt:start', { sessionId: this.sessionId });
+
+    let stopReason = 'end_turn';
     try {
-      await this.activePrompt;
+      const result = await this.activePrompt;
+      stopReason = result?.stopReason ?? 'end_turn';
     } catch {
-      // cancelled or error
+      stopReason = 'error';
     } finally {
       this.activePrompt = null;
+      if (!this.stopped) {
+        this.socket.emit('acp:prompt:complete', {
+          sessionId: this.sessionId,
+          stopReason,
+        });
+      }
       if (this.inputQueue.length > 0) {
         this.processPrompt(this.inputQueue.shift()!);
       }
@@ -306,11 +317,13 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   private emitStopped(reason: string, exitCode?: number): void {
+    this.stopped = true;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }
 
   private handleError(error: unknown): void {
+    this.stopped = true;
     const msg = error instanceof Error ? error.message : String(error);
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
