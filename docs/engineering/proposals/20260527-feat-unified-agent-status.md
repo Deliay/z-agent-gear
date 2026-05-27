@@ -6,7 +6,7 @@ type: Permanent
 # Agent 状态统一 - 技术提案
 
 **功能名称**: Agent 状态统一
-**关联 PRD**: `unified-agent-status.md`
+**关联 PRD**: `20260527-unified-agent-status.md`
 **技术提案版本**: v1.0
 **创建日期**: 2026-05-27
 **作者**: ZeroAsh Agent
@@ -16,7 +16,7 @@ type: Permanent
 
 ### 1.1 背景
 
-基于 PRD `unified-agent-status.md`，当前系统存在以下技术问题：
+基于 PRD `20260527-unified-agent-status.md`，当前系统存在以下技术问题：
 
 1. `running` 状态在 Schema 中定义但生产代码从未设置，前端 `isWorking = status === 'running'` 永远为 false
 2. `disconnected` 状态从未被使用，Controller socket 断连直接转为 `ended`
@@ -743,7 +743,7 @@ apps/agent-web/src/pages/
 
 ## 12. 相关文档
 
-- [Agent 状态统一方案 PRD](../../product/draft/unified-agent-status.md)
+- [Agent 状态统一方案 PRD](../../product/shipping/20260527-unified-agent-status.md)
 - [contracts/agent-session.graphql](../../../contracts/agent-session.graphql)
 - [contracts/agent-session-websocket.md](../../../contracts/agent-session-websocket.md)
 - [ACP 协议规范 - Prompt Turn](https://agentclientprotocol.com/protocol/prompt-turn)

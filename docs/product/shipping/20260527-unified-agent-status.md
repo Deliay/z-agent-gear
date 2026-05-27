@@ -1,3 +1,8 @@
+---
+description: Agent 状态统一方案，基于 ACP v1 协议激活 running/disconnected 状态并统一前端展示
+type: Permanent
+---
+
 # Agent 状态统一方案
 
 **功能名称**: Agent 状态统一
