@@ -238,3 +238,18 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | createFolder - offline controller | 应返回「Controller is offline」 |
 | createFolder - 成功 | 等待 fs:mkdir，controller 响应 success，验证 FolderEntry（name/path/isDirectory） |
 | createFolder - 失败 | fs:mkdir 返回 failure(error)，应返回 GraphQL error |
+
+### Folder Browse API (`agent-api/workspace.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| browseFolder - 无 auth | 应返回「Not authenticated」 |
+| browseFolder - 不存在的 controller | 应返回「Controller not found」 |
+| browseFolder - offline controller | 应返回「Controller is offline」 |
+| browseFolder - 返回目录列表 | 等待 fs:browse，controller 响应 entries，验证 FolderEntry 列表 |
+| browseFolder - 返回空列表 | controller 响应空 entries，验证返回 [] |
+| browseFolder - path=null 使用 home | path 为 null 时 controller 收到 null path，验证透传 |
+| browseFolder - path=/ 根目录 | path 为 / 时 controller 收到 / path，验证返回根目录 entries |
+| getHomeDirectory - 无 auth | 应返回「Not authenticated」 |
+| getHomeDirectory - 不存在的 controller | 应返回「Controller not found」 |
+| getHomeDirectory - 成功 | 等待 fs:home，controller 响应 path，验证返回 home 路径 |

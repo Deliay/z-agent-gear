@@ -74,15 +74,7 @@ export default function SessionPage() {
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
 
-  const isWorking = messages.length > 0 && (() => {
-    const last = messages[messages.length - 1];
-    const content = typeof last.content === 'string' ? (() => { try { return JSON.parse(last.content); } catch { return null; } })() : last.content;
-    if (content && typeof content === 'object') {
-      const sessionUpdate = (content as Record<string, unknown>).sessionUpdate;
-      return sessionUpdate !== 'usage_update';
-    }
-    return true;
-  })();
+  const isWorking = status === 'running';
 
   const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },

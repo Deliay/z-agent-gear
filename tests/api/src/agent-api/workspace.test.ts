@@ -483,6 +483,198 @@ describe('Folder Browser API', () => {
       expect(body.errors[0].message).toBe('Controller not found');
     });
   });
+
+  describe('browseFolder via WebSocket protocol', () => {
+    it('should return directory entries from controller', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `browse-ok-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-ok', version: '1.0.0' });
+      const regData = await registered;
+
+      const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
+      const responsePromise = gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: regData.controllerId, path: '/home/user' },
+        authToken,
+      );
+
+      const browseData = await fsBrowse;
+      expect(browseData.path).toBe('/home/user');
+
+      client.emit('fs:browse:result', {
+        requestId: browseData.requestId,
+        entries: [
+          { name: 'Documents', path: '/home/user/Documents', isDirectory: true },
+          { name: 'file.txt', path: '/home/user/file.txt', isDirectory: false },
+          { name: 'Pictures', path: '/home/user/Pictures', isDirectory: true },
+        ],
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.browseFolder).toHaveLength(3);
+      expect(body.data.browseFolder[0]).toEqual({ name: 'Documents', path: '/home/user/Documents', isDirectory: true });
+      expect(body.data.browseFolder[1]).toEqual({ name: 'file.txt', path: '/home/user/file.txt', isDirectory: false });
+      expect(body.data.browseFolder[2]).toEqual({ name: 'Pictures', path: '/home/user/Pictures', isDirectory: true });
+
+      client.disconnect();
+    }, 30000);
+
+    it('should return empty array when controller returns no entries', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `browse-empty-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-empty', version: '1.0.0' });
+      const regData = await registered;
+
+      const fsBrowse = waitForEvent<{ requestId: string }>(client, 'fs:browse', 10000);
+      const responsePromise = gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: regData.controllerId, path: '/empty' },
+        authToken,
+      );
+
+      const browseData = await fsBrowse;
+
+      client.emit('fs:browse:result', {
+        requestId: browseData.requestId,
+        entries: [],
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.browseFolder).toEqual([]);
+
+      client.disconnect();
+    }, 30000);
+
+    it('should use home directory when path is null', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `browse-null-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-null', version: '1.0.0' });
+      const regData = await registered;
+
+      const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
+      const responsePromise = gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: regData.controllerId },
+        authToken,
+      );
+
+      const browseData = await fsBrowse;
+      expect(browseData.path).toBeNull();
+
+      client.emit('fs:browse:result', {
+        requestId: browseData.requestId,
+        entries: [
+          { name: 'Desktop', path: '/home/user/Desktop', isDirectory: true },
+        ],
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.browseFolder).toHaveLength(1);
+
+      client.disconnect();
+    }, 30000);
+
+    it('should return entries when path is root /', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `browse-root-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-root', version: '1.0.0' });
+      const regData = await registered;
+
+      const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
+      const responsePromise = gqlRequest(
+        BROWSE_FOLDER,
+        { controllerId: regData.controllerId, path: '/' },
+        authToken,
+      );
+
+      const browseData = await fsBrowse;
+      expect(browseData.path).toBe('/');
+
+      client.emit('fs:browse:result', {
+        requestId: browseData.requestId,
+        entries: [
+          { name: 'home', path: '/home', isDirectory: true },
+          { name: 'usr', path: '/usr', isDirectory: true },
+          { name: 'etc', path: '/etc', isDirectory: true },
+        ],
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.browseFolder).toHaveLength(3);
+      expect(body.data.browseFolder[0].name).toBe('home');
+
+      client.disconnect();
+    }, 30000);
+  });
+
+  describe('getHomeDirectory via WebSocket protocol', () => {
+    it('should return home directory path from controller', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `home-ok-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'home-ok', version: '1.0.0' });
+      const regData = await registered;
+
+      const fsHome = waitForEvent<{ requestId: string }>(client, 'fs:home', 10000);
+      const responsePromise = gqlRequest(
+        GET_HOME_DIRECTORY,
+        { controllerId: regData.controllerId },
+        authToken,
+      );
+
+      const homeData = await fsHome;
+      expect(homeData.requestId).toBeDefined();
+
+      client.emit('fs:home:result', {
+        requestId: homeData.requestId,
+        path: '/home/testuser',
+      });
+
+      const res = await responsePromise;
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.getHomeDirectory).toBe('/home/testuser');
+
+      client.disconnect();
+    }, 30000);
+  });
 });
 
 describe('Workspace Git Support', () => {

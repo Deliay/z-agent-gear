@@ -12,6 +12,16 @@ interface DirectoryPickerProps {
   onClose: () => void;
 }
 
+export function getParentPath(path: string): string {
+  if (path === '/') return '/';
+  const normalized = path.replace(/[\\/]+$/, '');
+  const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+  if (lastSep <= 0) return '/';
+  const result = normalized.slice(0, lastSep);
+  if (/^[A-Za-z]:$/.test(result)) return result + '\\';
+  return result;
+}
+
 export default function DirectoryPicker({ controllerId, onSelect, onClose }: DirectoryPickerProps) {
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -37,6 +47,8 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
 
   const entries = folderData?.browseFolder ?? [];
   const directories = entries.filter((e) => e.isDirectory);
+  const parentPath = currentPath ? getParentPath(currentPath) : null;
+  const isRoot = parentPath === currentPath;
 
   const handleNavigate = (path: string) => {
     setHistory((prev) => [...prev, currentPath!]);
@@ -106,21 +118,34 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
       <div className="max-h-64 overflow-y-auto rounded-md border">
         {loading ? (
           <div className="p-4 text-center text-sm text-muted-foreground">加载中...</div>
-        ) : directories.length === 0 ? (
-          <div className="p-4 text-center text-sm text-muted-foreground">无子目录</div>
         ) : (
           <ul className="divide-y">
-            {directories.map((dir) => (
-              <li key={dir.path}>
+            {!isRoot && parentPath && (
+              <li>
                 <button
                   type="button"
                   className="w-full px-3 py-2 text-left text-sm hover:bg-muted"
-                  onClick={() => handleNavigate(dir.path)}
+                  onClick={() => handleNavigate(parentPath)}
                 >
-                  📁 {dir.name}
+                  .. 返回上级
                 </button>
               </li>
-            ))}
+            )}
+            {directories.length === 0 ? (
+              <li className="p-4 text-center text-sm text-muted-foreground">无子目录</li>
+            ) : (
+              directories.map((dir) => (
+                <li key={dir.path}>
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted"
+                    onClick={() => handleNavigate(dir.path)}
+                  >
+                    📁 {dir.name}
+                  </button>
+                </li>
+              ))
+            )}
           </ul>
         )}
       </div>

@@ -1,6 +1,6 @@
 import { io as createSocketIOClient, type Socket } from 'socket.io-client';
-import { hostname } from 'os';
-import { readdir } from 'fs/promises';
+import { hostname, platform } from 'os';
+import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { Heartbeat } from './heartbeat.js';
@@ -13,7 +13,7 @@ import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 
-const CONTROLLER_VERSION = '1.0.0';
+const CONTROLLER_VERSION = '1.0.4';
 const acpBridges = new Map<string, AcpSessionBridge>();
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
@@ -486,6 +486,22 @@ export function connectToServer(
     console.log(`FS browse requested: requestId=${data.requestId} path=${data.path}`);
     try {
       const targetPath = data.path || homedir();
+
+      // On Windows, listing '/' should return available drive letters
+      if ((data.path === '/' || data.path === '') && platform() === 'win32') {
+        const drives: Array<{ name: string; path: string; isDirectory: boolean }> = [];
+        for (let i = 65; i <= 90; i++) {
+          const letter = String.fromCharCode(i);
+          const drivePath = `${letter}:\\`;
+          try {
+            await access(drivePath);
+            drives.push({ name: `${letter}:`, path: drivePath, isDirectory: true });
+          } catch { /* drive not available */ }
+        }
+        socket.emit('fs:browse:result', { requestId: data.requestId, entries: drives });
+        return;
+      }
+
       const entries = await readdir(targetPath, { withFileTypes: true });
       const result = entries
         .filter((entry) => !entry.name.startsWith('.'))
