@@ -331,6 +331,67 @@ describe('AcpSessionBridge', () => {
 
       expect(mc().prompt).toHaveBeenCalledTimes(2);
     });
+
+    it('should emit acp:prompt:start when prompt begins', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      mc().prompt.mockReturnValue(new Promise(() => {}));
+      bridge.sendInput({ type: 'text', content: 'Hello' });
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:prompt:start', {
+        sessionId: 'sess-1',
+      });
+    });
+
+    it('should emit acp:prompt:complete when prompt ends successfully', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      bridge.sendInput({ type: 'text', content: 'Hello' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:prompt:complete', {
+        sessionId: 'sess-1',
+        stopReason: 'end_turn',
+      });
+    });
+
+    it('should emit acp:prompt:complete with error stopReason on prompt failure', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      mc().prompt.mockRejectedValueOnce(new Error('prompt failed'));
+      bridge.sendInput({ type: 'text', content: 'Hello' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:prompt:complete', {
+        sessionId: 'sess-1',
+        stopReason: 'error',
+      });
+    });
+
+    it('should not emit acp:prompt:complete after stop', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      mc().prompt.mockReturnValue(new Promise(() => {}));
+      bridge.sendInput({ type: 'text', content: 'Hello' });
+
+      mockSocket.emit.mockClear();
+      bridge.stop();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', expect.objectContaining({
+        sessionId: 'sess-1',
+        reason: 'user_close',
+      }));
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:prompt:complete', expect.anything());
+    });
   });
 
   describe('sessionUpdate handling', () => {

@@ -10,6 +10,7 @@ const sessionSchema = new mongoose.Schema({
   externalSessionId: { type: String },
   cwd: { type: String },
   endedAt: { type: Date },
+  disconnectedAt: { type: Date },
   modes: { type: [{ id: String, name: String, description: String }], default: [] },
   currentModeId: { type: String },
   currentModel: { type: { id: String, name: String, provider: String } },

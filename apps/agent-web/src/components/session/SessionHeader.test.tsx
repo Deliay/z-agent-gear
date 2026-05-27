@@ -26,12 +26,12 @@ describe('SessionHeader', () => {
 
   it('should display running status badge', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('running')).toBeDefined();
+    expect(screen.getByText('Working')).toBeDefined();
   });
 
   it('should display idling status badge', () => {
     render(<SessionHeader session={baseSession} status="idling" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('idling')).toBeDefined();
+    expect(screen.getByText('Idle')).toBeDefined();
   });
 
   it('should display OpenCode label for opencode server type', () => {
@@ -183,6 +183,17 @@ describe('SessionHeader', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={onDelete} />);
     screen.getByText('Delete').click();
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it('should display running status badge with pulse animation', () => {
+    render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
+    const badge = screen.getByText('Working');
+    expect(badge.className).toContain('animate-pulse');
+  });
+
+  it('should display disconnected status badge', () => {
+    render(<SessionHeader session={baseSession} status="disconnected" onClose={noop} onDelete={noop} />);
+    expect(screen.getByText('Disconnected')).toBeDefined();
   });
 
   it('should show Session fallback when session is null', () => {
