@@ -25,11 +25,25 @@ vi.mock('../src/config.js', () => ({
 
 vi.mock('os', () => ({
   hostname: vi.fn().mockReturnValue('test-machine'),
+  platform: vi.fn(() => 'linux'),
+  homedir: vi.fn(() => '/home/user'),
 }));
+
+vi.mock('fs/promises', () => ({
+  readdir: vi.fn(),
+  access: vi.fn(),
+}));
+
+vi.mock('path', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('path')>();
+  return actual;
+});
 
 import { connectToServer, unregister } from '../src/socketio-client.js';
 import { io } from 'socket.io-client';
 import { clearConfigKey } from '../src/config.js';
+import * as os from 'os';
+import { readdir, access } from 'fs/promises';
 
 function createMockSocket() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
@@ -87,7 +101,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '1.0.0',
+        version: '1.0.4',
       });
     });
 
@@ -102,7 +116,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '1.0.0',
+        version: '1.0.4',
       });
     });
 
@@ -191,6 +205,110 @@ describe('SocketIO Client', () => {
       unregister(socket);
 
       expect(mockSocket.emit).toHaveBeenCalledWith('unregister', { reason: 'user_detach' });
+    });
+  });
+
+  describe('fs:browse', () => {
+    it('should list drives on Windows when path is /', async () => {
+      vi.mocked(os.platform).mockReturnValue('win32');
+      vi.mocked(access).mockImplementation(async (p: string) => {
+        if (p === 'C:\\' || p === 'D:\\') return;
+        throw new Error('not found');
+      });
+
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+
+      mockSocket._trigger('fs:browse', { requestId: 'req-1', path: '/' });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('fs:browse:result', {
+          requestId: 'req-1',
+          entries: [
+            { name: 'C:', path: 'C:\\', isDirectory: true },
+            { name: 'D:', path: 'D:\\', isDirectory: true },
+          ],
+        });
+      });
+    });
+
+    it('should list drives on Windows when path is empty string', async () => {
+      vi.mocked(os.platform).mockReturnValue('win32');
+      vi.mocked(access).mockImplementation(async (p: string) => {
+        if (p === 'C:\\') return;
+        throw new Error('not found');
+      });
+
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+
+      mockSocket._trigger('fs:browse', { requestId: 'req-2', path: '' });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('fs:browse:result', {
+          requestId: 'req-2',
+          entries: [
+            { name: 'C:', path: 'C:\\', isDirectory: true },
+          ],
+        });
+      });
+    });
+
+    it('should NOT list drives on Linux when path is /', async () => {
+      vi.mocked(os.platform).mockReturnValue('linux');
+      vi.mocked(readdir).mockResolvedValue([
+        { name: 'home', isDirectory: () => true },
+        { name: 'usr', isDirectory: () => true },
+      ] as never);
+
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+
+      mockSocket._trigger('fs:browse', { requestId: 'req-3', path: '/' });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('fs:browse:result', {
+          requestId: 'req-3',
+          entries: [
+            { name: 'home', path: '/home', isDirectory: true },
+            { name: 'usr', path: '/usr', isDirectory: true },
+          ],
+        });
+      });
+    });
+
+    it('should skip unavailable drives on Windows', async () => {
+      vi.mocked(os.platform).mockReturnValue('win32');
+      vi.mocked(access).mockImplementation(async (p: string) => {
+        if (p === 'C:\\') return;
+        throw new Error('not found');
+      });
+
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+
+      mockSocket._trigger('fs:browse', { requestId: 'req-4', path: '/' });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('fs:browse:result', {
+          requestId: 'req-4',
+          entries: [
+            { name: 'C:', path: 'C:\\', isDirectory: true },
+          ],
+        });
+      });
     });
   });
 });

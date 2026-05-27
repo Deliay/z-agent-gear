@@ -1,6 +1,7 @@
-import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { spawn, execFileSync, type ChildProcess, type SpawnOptions } from 'child_process';
 import { Writable, Readable } from 'node:stream';
 import { existsSync, mkdirSync } from 'fs';
+import { platform } from 'os';
 
 export interface AcpProcessOptions {
   sessionId: string;
@@ -30,10 +31,16 @@ export class AcpSpawner {
     const cmd = this.resolveCommand();
     console.log(`Starting ACP server ${cmd}`)
     mkdirSync(this.cwd, { recursive: true });
-    this.process = spawn(cmd, this.args, {
+
+    const spawnOptions: SpawnOptions = {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    };
+    if (platform() === 'win32') {
+      spawnOptions.shell = true;
+    }
+
+    this.process = spawn(cmd, this.args, spawnOptions);
 
     this.process.stderr?.on('data', (data: Buffer) => {
       console.error(`ACP stderr: ${data.toString()}`);
@@ -65,7 +72,15 @@ export class AcpSpawner {
   }
 
   stop(): void {
-    if (this.process) {
+    if (!this.process) return;
+    if (platform() === 'win32') {
+      this.process.kill();
+      setTimeout(() => {
+        if (this.process) {
+          this.process.kill();
+        }
+      }, 5000);
+    } else {
       this.process.kill('SIGTERM');
       setTimeout(() => {
         if (this.process) {
@@ -80,7 +95,25 @@ export class AcpSpawner {
   }
 
   private resolveCommand(): string {
-    if (this.command.includes('/')) return this.command;
+    if (this.command.includes('\\') || this.command.includes('/')) return this.command;
+    return platform() === 'win32' ? this.resolveWindowsCommand() : this.resolveUnixCommand();
+  }
+
+  private resolveWindowsCommand(): string {
+    try {
+      const result = execFileSync('where', [this.command], { encoding: 'utf8', timeout: 1000 });
+      const firstMatch = result.trim().split('\n')[0]?.trim();
+      if (firstMatch) return firstMatch;
+    } catch { /* not found via where */ }
+    const pathext = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';');
+    for (const ext of pathext) {
+      const candidate = this.command + ext.toLowerCase();
+      if (existsSync(candidate)) return candidate;
+    }
+    return this.command;
+  }
+
+  private resolveUnixCommand(): string {
     const candidates = [this.command, `/usr/bin/${this.command}`, `/usr/local/bin/${this.command}`];
     for (const cmd of candidates) {
       try {

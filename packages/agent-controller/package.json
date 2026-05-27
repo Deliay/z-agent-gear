@@ -1,6 +1,6 @@
 {
   "name": "agent-gear",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "main": "dist/index.js",
   "bin": {
