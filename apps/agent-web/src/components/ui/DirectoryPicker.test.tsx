@@ -56,7 +56,8 @@ describe('DirectoryPicker', () => {
 
   function setupQueries(currentPath: string, directories: Array<{ name: string; path: string; isDirectory: boolean }> = []) {
     mockUseQuery.mockImplementation((_query: unknown, options: Record<string, unknown>) => {
-      if (options?.variables?.controllerId && !options?.skip) {
+      const variables = options?.variables as Record<string, unknown> | undefined;
+      if (variables?.controllerId && !options?.skip) {
         // GET_HOME_DIRECTORY query
         return mockQuery({ data: { getHomeDirectory: currentPath } });
       }

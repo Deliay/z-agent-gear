@@ -2,6 +2,10 @@
   "name": "agent-gear",
   "version": "1.0.4",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Deliay/z-agent-gear.git"
+  },
   "main": "dist/index.js",
   "bin": {
     "agent-gear": "dist/index.js"
