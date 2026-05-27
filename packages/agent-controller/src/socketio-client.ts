@@ -12,6 +12,7 @@ import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
+import { portForwardManager } from './port-forward.js';
 
 const CONTROLLER_VERSION = '1.0.4';
 const acpBridges = new Map<string, AcpSessionBridge>();
@@ -563,9 +564,25 @@ export function connectToServer(
     socket.emit('git:commit:result', { requestId: data.requestId, ...result });
   });
 
+  // Port Forward events
+  socket.on('port-forward:create', async (data: { tunnelId: string; port: number }) => {
+    console.log(`Port forward create requested: tunnelId=${data.tunnelId} port=${data.port}`);
+    await portForwardManager.createTunnel(data.tunnelId, data.port, socket);
+  });
+
+  socket.on('port-forward:data', (data: { tunnelId: string; data: string }) => {
+    portForwardManager.handleTunnelData(data.tunnelId, data.data);
+  });
+
+  socket.on('port-forward:close', (data: { tunnelId: string }) => {
+    console.log(`Port forward close: tunnelId=${data.tunnelId}`);
+    portForwardManager.closeTunnel(data.tunnelId);
+  });
+
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
+    portForwardManager.closeAll();
   });
 
   socket.on('connect_error', (err) => {

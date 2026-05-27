@@ -292,3 +292,21 @@ export const CREATE_FOLDER = gql`
     }
   }
 `
+
+export const CREATE_PORT_FORWARD = gql`
+  mutation CreatePortForward($controllerId: ID!, $port: Int!) {
+    createPortForward(controllerId: $controllerId, port: $port) {
+      id
+      controllerId
+      port
+      status
+      createdAt
+    }
+  }
+`
+
+export const DELETE_PORT_FORWARD = gql`
+  mutation DeletePortForward($controllerId: ID!, $port: Int!) {
+    deletePortForward(controllerId: $controllerId, port: $port)
+  }
+`

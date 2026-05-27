@@ -10,6 +10,7 @@ import { authenticateUser } from './middleware/auth.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
+import { portForwardProxyRouter } from './routes/port-forward-proxy.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 
@@ -32,6 +33,7 @@ const yoga = createYoga({
 app.use('/graphql', yoga);
 
 app.use('/api', sessionStreamRouter);
+app.use('/api', portForwardProxyRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

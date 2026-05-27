@@ -263,3 +263,29 @@ export interface CreateFolderMutation {
     path: string
   } | null
 }
+
+export interface PortForwardData {
+  id: string
+  controllerId: string
+  port: number
+  status: string
+  createdAt: string
+}
+
+export interface PortForwardListData {
+  portForwards: PortForwardData[]
+  total: number
+  limit: number
+}
+
+export interface GetPortForwardsQuery {
+  portForwards: PortForwardListData
+}
+
+export interface CreatePortForwardMutation {
+  createPortForward: PortForwardData
+}
+
+export interface DeletePortForwardMutation {
+  deletePortForward: boolean
+}

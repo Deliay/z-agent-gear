@@ -253,3 +253,18 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | getHomeDirectory - 无 auth | 应返回「Not authenticated」 |
 | getHomeDirectory - 不存在的 controller | 应返回「Controller not found」 |
 | getHomeDirectory - 成功 | 等待 fs:home，controller 响应 path，验证返回 home 路径 |
+
+### Port Forward API (`agent-api/port-forward.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| portForwards query - 无 token | 应返回「Not authenticated」 |
+| createPortForward - 无 auth | 应返回「Not authenticated」 |
+| deletePortForward - 无 auth | 应返回「Not authenticated」 |
+| createPortForward - 不存在的 controller | 应返回「Controller not found」 |
+| createPortForward - controller 离线 | 应返回「Controller is not online」 |
+| createPortForward - 成功创建 | 应返回端口转发记录（port/status/controllerId） |
+| createPortForward - 端口重复 | 应返回「Port already forwarded」 |
+| portForwards query - 已认证 | 应返回端口转发列表 |
+| deletePortForward - 成功删除 | 应返回 true，列表中不再包含该端口 |
+| deletePortForward - 不存在的端口 | 应返回 false |
