@@ -234,3 +234,19 @@ export const DETECT_GIT_REPO = gql`
     }
   }
 `
+
+export const GET_PORT_FORWARDS = gql`
+  query GetPortForwards($controllerId: ID!) {
+    portForwards(controllerId: $controllerId) {
+      portForwards {
+        id
+        controllerId
+        port
+        status
+        createdAt
+      }
+      total
+      limit
+    }
+  }
+`

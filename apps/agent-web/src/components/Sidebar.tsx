@@ -3,9 +3,16 @@ import { NavLink, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation, SessionData } from '../graphql/types';
+import type {
+  GetSessionsQuery,
+  GetControllersQuery,
+  GetWorkspacesQuery,
+  CreateSessionMutation,
+  SessionData,
+} from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
+import PortForwardSection from './PortForwardSection';
 
 interface SidebarProps {
   username: string;
@@ -203,6 +210,11 @@ export default function Sidebar({ username }: SidebarProps) {
 
                 {isExpanded && (
                   <ul className="ml-4 space-y-1">
+                    {controller.status === 'online' && (
+                      <li>
+                        <PortForwardSection controllerId={controller.id} />
+                      </li>
+                    )}
                     {workspacePaths.size === 0 ? (
                       <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
                     ) : (
