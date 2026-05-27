@@ -27,7 +27,7 @@ async function authenticateExpressUser(req: Request): Promise<{ id: string; user
   }
 }
 
-router.all('/forward/:controllerId/:port/*', async (req: Request, res: Response) => {
+router.all('/forward/:controllerId/:port/{*path}', async (req: Request, res: Response) => {
   const currentUser = await authenticateExpressUser(req);
   if (!currentUser) {
     res.status(401).json({ error: 'Not authenticated' });
@@ -36,7 +36,7 @@ router.all('/forward/:controllerId/:port/*', async (req: Request, res: Response)
 
   const controllerId = req.params.controllerId as string;
   const port = Number(req.params.port as string);
-  const subPath = req.params[0] as string || '/';
+  const subPath = (req.params.path as string) || '/';
 
   const record = await PortForward.findOne({ controllerId, port, status: 'active' });
   if (!record) {
