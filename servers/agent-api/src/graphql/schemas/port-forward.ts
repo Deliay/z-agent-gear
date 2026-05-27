@@ -1,0 +1,24 @@
+export const portForwardTypeDefs = `#graphql
+  type PortForward {
+    id: ID!
+    controllerId: ID!
+    port: Int!
+    status: String!
+    createdAt: String!
+  }
+
+  type PortForwardList {
+    portForwards: [PortForward!]!
+    total: Int!
+    limit: Int!
+  }
+
+  extend type Query {
+    portForwards(controllerId: ID!): PortForwardList!
+  }
+
+  extend type Mutation {
+    createPortForward(controllerId: ID!, port: Int!): PortForward!
+    deletePortForward(controllerId: ID!, port: Int!): Boolean!
+  }
+`;
