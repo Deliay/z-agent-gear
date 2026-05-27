@@ -278,12 +278,18 @@ sequenceDiagram
 
 **文件:** `packages/agent-controller/src/acp/bridge.ts`
 
-**变更:** 在 `processPrompt()` 方法中，设置 `activePrompt` 后发送 `acp:prompt:start`，在 `finally` 块中发送 `acp:prompt:complete`。
+**变更:** 
+1. 新增 `stopped` 标志位，进程终止后抑制 `acp:prompt:complete` 事件
+2. 在 `processPrompt()` 中设置 `activePrompt` 后发送 `acp:prompt:start`，在 `finally` 块中发送 `acp:prompt:complete`（仅在未 stopped 时）
+3. `emitStopped()` 和 `handleError()` 设置 `stopped = true`
 
 ```typescript
+// bridge.ts - 新增字段
+private stopped = false;
+
 // bridge.ts - processPrompt() 修改
 private async processPrompt(message: QueuedInput): Promise<void> {
-  if (!this.connection || !this.acpSessionId) return;
+  if (!this.connection || !this.acpSessionId || this.stopped) return;
 
   this.activePrompt = this.connection.prompt({
     sessionId: this.acpSessionId,
@@ -301,19 +307,68 @@ private async processPrompt(message: QueuedInput): Promise<void> {
     stopReason = 'error';
   } finally {
     this.activePrompt = null;
-    // 新增：通知 server agent 完成工作
-    this.socket.emit('acp:prompt:complete', {
-      sessionId: this.sessionId,
-      stopReason,
-    });
+    // 新增：仅在进程未终止时发送 prompt:complete
+    // 如果进程已崩溃，acp:stopped 是权威的终止信号，不需要 prompt:complete
+    if (!this.stopped) {
+      this.socket.emit('acp:prompt:complete', {
+        sessionId: this.sessionId,
+        stopReason,
+      });
+    }
     if (this.inputQueue.length > 0) {
       this.processPrompt(this.inputQueue.shift()!);
     }
   }
 }
+
+// bridge.ts - emitStopped() 修改
+private emitStopped(reason: string, exitCode?: number): void {
+  this.stopped = true;  // 新增：标记已停止
+  this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
+  this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
+}
+
+// bridge.ts - handleError() 修改
+private handleError(error: unknown): void {
+  this.stopped = true;  // 新增：标记已停止
+  const msg = error instanceof Error ? error.message : String(error);
+  this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason: 'error', error: msg });
+  this.emit('acp:stopped', { sessionId: this.sessionId, reason: 'error', error: msg });
+  this.spawner.stop();
+}
 ```
 
-**风险点:** `connection.prompt()` 返回的 `PromptResponse` 类型需要确认包含 `stopReason` 字段。如果 ACP SDK 版本不支持，需要做类型兼容。
+**崩溃场景时序（修复后）：**
+
+```mermaid
+sequenceDiagram
+    participant Spawner as spawner.ts
+    participant Bridge as bridge.ts
+    participant Client as socketio-client.ts
+    participant Mgr as acp-session-manager
+
+    Note over Bridge: activePrompt != null, stopped = false
+    Note over Spawner: ACP 进程崩溃
+
+    par 路径 A: prompt promise reject
+        Spawner->>Bridge: stdin/stdout 管道断裂
+        Bridge->>Bridge: catch → finally
+        Note over Bridge: stopped == false → 发送 prompt:complete
+        Bridge->>Mgr: acp:prompt:complete { stopReason: 'error' }
+    and 路径 B: spawner exit 事件
+        Spawner->>Client: local 'acp:stopped' 事件
+        Client->>Bridge: emitStopped()
+        Bridge->>Bridge: stopped = true
+        Client->>Mgr: acp:stopped { reason: 'error' }
+    end
+
+    Note over Mgr: 如果 prompt:complete 先到达:<br/>running → idling（短暂）<br/>随后 acp:stopped 到达: idling → ended ✓
+    Note over Mgr: 如果 acp:stopped 先到达:<br/>running → ended<br/>随后 prompt:complete 被 stopped 标志抑制 ✓
+```
+
+**风险点:**
+- `connection.prompt()` 返回的 `PromptResponse` 类型需要确认包含 `stopReason` 字段。如果 ACP SDK 版本不支持，需要做类型兼容。
+- `stopped` 标志是实例级别的，一旦设置不可重置。一个 bridge 实例只对应一个 ACP 进程生命周期，这是合理的。
 
 #### 实现点 2: socketio-client.ts 透传
 
@@ -360,25 +415,34 @@ socket.on('acp:prompt:complete', async (payload: {
 ```typescript
 // acp-session-manager.ts - 新增方法
 async handlePromptStart(sessionId: string): Promise<void> {
-  const session = await Session.findById(sessionId).lean();
-  if (!session || session.status !== 'idling') return;
-
-  await Session.findByIdAndUpdate(sessionId, { status: 'running' });
-  await this.publishStatus(sessionId, 'running');
+  // 原子操作：仅当 status === 'idling' 时更新为 'running'
+  const result = await Session.findOneAndUpdate(
+    { _id: sessionId, status: 'idling' },
+    { status: 'running' },
+  );
+  if (result) {
+    await this.publishStatus(sessionId, 'running');
+  }
 }
 
 async handlePromptComplete(sessionId: string, stopReason: string): Promise<void> {
-  const session = await Session.findById(sessionId).lean();
-  if (!session || session.status !== 'running') return;
-
-  await Session.findByIdAndUpdate(sessionId, { status: 'idling' });
-  await this.publishStatus(sessionId, 'idling');
+  // 原子操作：仅当 status === 'running' 时更新为 'idling'
+  // 关键：消除与 acp:stopped 的竞态——如果 acp:stopped 先将状态设为 ended，
+  // 此处 findOneAndUpdate 的条件不匹配，不会覆盖
+  const result = await Session.findOneAndUpdate(
+    { _id: sessionId, status: 'running' },
+    { status: 'idling' },
+  );
+  if (result) {
+    await this.publishStatus(sessionId, 'idling');
+  }
 }
 ```
 
-**Guard 逻辑：**
-- `handlePromptStart` 仅在 `idling` 状态下生效，避免重复设置
-- `handlePromptComplete` 仅在 `running` 状态下生效，避免与 `ended` / `disconnected` 冲突
+**Guard 逻辑（原子化）：**
+- `handlePromptStart`: `findOneAndUpdate({ status: 'idling' })` — 仅 `idling` → `running`
+- `handlePromptComplete`: `findOneAndUpdate({ status: 'running' })` — 仅 `running` → `idling`
+- 如果 `acp:stopped` 先到达并将状态设为 `ended`，`handlePromptComplete` 的条件不匹配，**原子性地跳过**，不会出现竞态覆盖
 - `stopReason` 暂不使用，预留用于未来扩展（如显示结束原因）
 
 #### 实现点 5: handleSocketDisconnect 使用 disconnected 状态
@@ -415,19 +479,20 @@ private async handleControllerDisconnect(sessionId: string): Promise<void> {
   const dbSession = await Session.findById(sessionId).lean();
   if (!dbSession) return;
 
-  // 活跃 Session（idling/running）→ disconnected
-  if (dbSession.status === 'idling' || dbSession.status === 'running') {
-    await Session.findByIdAndUpdate(sessionId, {
-      status: 'disconnected',
-      disconnectedAt: new Date(),
-    });
+  // 原子操作：活跃 Session（idling/running）→ disconnected
+  // 使用 findOneAndUpdate + 条件确保不会覆盖已 ended 的 Session
+  const result = await Session.findOneAndUpdate(
+    { _id: sessionId, status: { $in: ['idling', 'running'] } },
+    { status: 'disconnected', disconnectedAt: new Date() },
+  );
+  if (result) {
     await this.publishStatus(sessionId, 'disconnected');
   } else {
-    // 其他状态（creating/connecting）→ ended
-    await Session.findByIdAndUpdate(sessionId, {
-      status: 'ended',
-      endedAt: new Date(),
-    });
+    // Session 已经是 ended/creating/connecting → 设为 ended
+    await Session.findOneAndUpdate(
+      { _id: sessionId, status: { $nin: ['ended', 'disconnected'] } },
+      { status: 'ended', endedAt: new Date() },
+    );
     await this.publishStatus(sessionId, 'ended');
   }
 }
@@ -590,7 +655,10 @@ apps/agent-web/src/pages/
 | Controller 断连，Session 为 `running` | 状态变为 `disconnected`，前端显示橙色徽章 |
 | `disconnected` 超过 5 分钟 | 状态自动转为 `ended` |
 | 用户 resume `disconnected` 的 Session | 状态变为 `connecting` → `idling` |
-| `ended` 状态下收到 `acp:prompt:complete` | 忽略（guard 检查 status === 'running'） |
+| `ended` 状态下收到 `acp:prompt:complete` | 忽略（原子 `findOneAndUpdate` 条件不匹配） |
+| **Agent 进程崩溃（工作中）** | `acp:stopped` 将状态设为 `ended`，`acp:prompt:complete` 被 bridge `stopped` 标志抑制或被 controller-api 原子 guard 拦截 |
+| **Agent 进程崩溃（空闲时）** | `acp:stopped` 将状态设为 `ended`，无 `acp:prompt:complete` 发出 |
+| **acp:stopped 与 acp:prompt:complete 竞态** | 无论到达顺序，最终状态为 `ended`（`findOneAndUpdate` 原子条件保证不会被覆盖为 `idling`） |
 
 ## 9. 部署方案
 
