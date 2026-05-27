@@ -117,6 +117,8 @@ export class AcpSessionSyncService {
       }
       if (result.messages && result.messages.length > 0) {
         acc.result.messages = result.messages;
+      }
+      if ((result.messages && result.messages.length > 0) || result.success === false) {
         this.loadAccumulators.delete(requestId);
         const pending = this.pendingLoads.get(requestId);
         if (pending) {
@@ -172,7 +174,7 @@ export class AcpSessionSyncService {
         this.pendingLoads.delete(requestId);
         pending.resolve({ success: false, error: 'ACP load-session message streaming timeout' });
       }
-    }, 300000);
+    }, 310000);
 
     this.loadAccumulators.set(requestId, {
       result: { success: true },
