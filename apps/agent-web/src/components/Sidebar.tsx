@@ -12,7 +12,8 @@ import type {
 } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
-import PortForwardSection from './PortForwardSection';
+// TODO: 端口转发功能整体设计待调整，暂时隐藏入口
+// import PortForwardSection from './PortForwardSection';
 
 interface SidebarProps {
   username: string;
@@ -211,11 +212,12 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
 
                 {isExpanded && (
                   <ul className="ml-4 space-y-1">
+                    {/* TODO: 端口转发功能整体设计待调整，暂时隐藏入口
                     {controller.status === 'online' && (
                       <li>
                         <PortForwardSection controllerId={controller.id} />
                       </li>
-                    )}
+                    )} */}
                     {workspacePaths.size === 0 ? (
                       <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
                     ) : (
