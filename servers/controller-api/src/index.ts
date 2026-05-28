@@ -13,6 +13,7 @@ import { gitBrowserService } from './services/git-browser.js';
 import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { portForwardRelayService } from './services/port-forward.js';
+import { permissionManager } from './services/permission-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
 
@@ -57,6 +58,7 @@ async function start() {
   worktreeService.start(io);
   fsMkdirService.start(io);
   portForwardRelayService.start(io);
+  permissionManager.start(io);
 
   disconnectTimer.start();
 
@@ -68,6 +70,7 @@ async function start() {
 async function gracefulShutdown() {
   console.log('Shutting down...');
   heartbeatService.stop();
+  permissionManager.stop();
   disconnectTimer.stop();
   io.close();
   await closeRedis();

@@ -1,4 +1,5 @@
 import { io as createSocketIOClient, type Socket } from 'socket.io-client';
+import * as acp from '@agentclientprotocol/sdk';
 import { hostname, platform } from 'os';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -16,6 +17,7 @@ import { portForwardManager } from './port-forward.js';
 
 const CONTROLLER_VERSION = '1.0.4';
 const acpBridges = new Map<string, AcpSessionBridge>();
+const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
   const config = acpDetector.getSpawnerConfig(serverType);
@@ -215,6 +217,10 @@ export function connectToServer(
 
       acpBridges.set(data.sessionId, bridge);
 
+      bridge.on('permission:sent', (requestId: string) => {
+        permissionRequestBridge.set(requestId, bridge);
+      });
+
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
@@ -275,6 +281,10 @@ export function connectToServer(
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
+
+      bridge.on('permission:sent', (requestId: string) => {
+        permissionRequestBridge.set(requestId, bridge);
+      });
 
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
@@ -579,10 +589,22 @@ export function connectToServer(
     portForwardManager.closeTunnel(data.tunnelId);
   });
 
+  socket.on('acp:permission:response', (data: {
+    requestId: string;
+    outcome: { outcome: string; optionId?: string };
+  }) => {
+    const bridge = permissionRequestBridge.get(data.requestId);
+    if (bridge) {
+      permissionRequestBridge.delete(data.requestId);
+      bridge.handlePermissionResponse(data.requestId, data.outcome as acp.RequestPermissionOutcome);
+    }
+  });
+
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     portForwardManager.closeAll();
+    permissionRequestBridge.clear();
   });
 
   socket.on('connect_error', (err) => {

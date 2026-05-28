@@ -449,18 +449,45 @@ describe('AcpSessionBridge', () => {
   });
 
   describe('requestPermission', () => {
-    it('should auto-accept with allow_once', async () => {
+    it('should emit acp:permission and wait for response', async () => {
       const bridge = createBridge();
-      const result = await bridge.requestPermission({
-        options: [
-          { optionId: 'opt-1', kind: 'allow_once', label: 'Allow' },
-          { optionId: 'opt-2', kind: 'reject', label: 'Reject' },
-        ],
+      const options = [
+        { optionId: 'opt-1', kind: 'allow_once', label: 'Allow' },
+        { optionId: 'opt-2', kind: 'reject', label: 'Reject' },
+      ];
+
+      const promise = bridge.requestPermission({
+        options,
+        toolCall: { toolCallId: 'tc-1' },
       } as never);
 
-      expect(result).toEqual({
-        outcome: { outcome: 'selected', optionId: 'opt-1' },
-      });
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission', expect.objectContaining({
+        sessionId: 'sess-1',
+        toolCall: { toolCallId: 'tc-1' },
+        options,
+      }));
+
+      const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:permission');
+      const requestId = (emitCall![1] as { requestId: string }).requestId;
+
+      bridge.handlePermissionResponse(requestId, { outcome: 'selected', optionId: 'opt-1' });
+
+      const result = await promise;
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-1' } });
+    });
+
+    it('should resolve with cancelled on 65s timeout', async () => {
+      const bridge = createBridge();
+
+      const promise = bridge.requestPermission({
+        options: [{ optionId: 'opt-1', kind: 'allow_once', label: 'Allow' }],
+        toolCall: { toolCallId: 'tc-1' },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      const result = await promise;
+      expect(result).toEqual({ outcome: { outcome: 'cancelled' } });
     });
   });
 

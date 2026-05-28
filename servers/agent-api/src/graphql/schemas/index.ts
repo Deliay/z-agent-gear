@@ -5,6 +5,7 @@ import { controllerTypeDefs } from './controller.js';
 import { controllerWorkspaceTypeDefs } from './controller-workspace.js';
 import { sessionTypeDefs } from './session.js';
 import { portForwardTypeDefs } from './port-forward.js';
+import { todoTypeDefs } from './todo.js';
 
 const baseTypeDefs = `#graphql
   type Query
@@ -12,4 +13,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, portForwardTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, portForwardTypeDefs, todoTypeDefs];

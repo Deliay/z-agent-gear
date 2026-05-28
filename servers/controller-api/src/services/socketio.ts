@@ -13,6 +13,7 @@ import { acpSessionSyncService } from './acp-session-sync.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { portForwardRelayService } from './port-forward.js';
+import { permissionManager } from './permission-manager.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -131,6 +132,24 @@ export function createSocketIOServer(io: SocketIOServer): void {
     });
 
     // ACP events
+    socket.on('acp:permission', async (data: {
+      requestId: string;
+      sessionId: string;
+      toolCall: { toolCallId: string };
+      options: Array<{ optionId: string; name: string; kind: string }>;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await permissionManager.handlePermissionRequest(socket, data);
+      } catch (error) {
+        console.error('Error handling permission request:', error);
+        socket.emit('acp:permission:response', {
+          requestId: data.requestId,
+          outcome: { outcome: 'cancelled' },
+        });
+      }
+    });
+
     socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
       if (!authenticated) return;
       acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);

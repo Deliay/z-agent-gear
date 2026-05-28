@@ -289,3 +289,55 @@ export interface CreatePortForwardMutation {
 export interface DeletePortForwardMutation {
   deletePortForward: boolean
 }
+
+export interface PermissionOptionData {
+  optionId: string
+  name: string
+  kind: string
+}
+
+export interface PermissionRequestDataFields {
+  requestId: string
+  sessionId: string
+  toolCallId: string
+  options: PermissionOptionData[]
+}
+
+export interface TodoItemData {
+  id: string
+  type: string
+  priority: string
+  title: string
+  description: string | null
+  isRead: boolean
+  data: PermissionRequestDataFields | null
+  createdAt: string
+}
+
+export interface GetTodoListQuery {
+  getTodoList: TodoItemData[]
+}
+
+export interface GetUnreadTodoCountQuery {
+  getUnreadTodoCount: number
+}
+
+export interface RespondPermissionMutation {
+  respondPermission: boolean
+}
+
+export interface MarkTodoReadMutation {
+  markTodoRead: boolean
+}
+
+export interface MarkAllTodoReadMutation {
+  markAllTodoRead: boolean
+}
+
+export interface UpdatePermissionTimeoutMutation {
+  updatePermissionTimeout: boolean
+}
+
+export interface UpdateGlobalPermissionTimeoutMutation {
+  updateGlobalPermissionTimeout: boolean
+}
