@@ -116,11 +116,12 @@ flowchart TD
 
 #### 功能点 4: 权限审批Dialog
 
-- **描述**: 用户点击权限审批待办时，弹出Dialog展示详细信息。Dialog解析`session/request_permission`消息中的`options`和`toolCall.toolCallId`进行展示，其中options显示为审批按钮，toolCallId关联的历史消息在mongo中查询展示。
+- **描述**: 用户点击权限审批待办时，弹出Dialog展示详细信息。Dialog解析`session/request_permission`消息中的`options`和`toolCall.toolCallId`进行展示，其中options显示为审批按钮，toolCallId关联的历史消息在mongo中查询展示。Dialog始终包含一个「取消」选项，用于取消当前prompt turn（返回`cancelled`结果给Agent）。
 - **用户价值**: 用户可以清楚了解Agent要执行的操作，做出明智的审批决策
 - **验收标准**:
   - [ ] Dialog显示操作详情（通过toolCallId查询历史获取）
   - [ ] Dialog显示所有审批选项（如「允许一次」「拒绝」「始终允许」等）
+  - [ ] Dialog始终显示「取消」按钮，点击后返回`cancelled`结果给Agent
   - [ ] 点击选项后将结果返回给Agent
   - [ ] 审批完成后待办标记为已处理
 
@@ -177,10 +178,12 @@ flowchart TD
     H -->|允许| I[返回允许结果给Agent]
     H -->|拒绝| J[返回拒绝结果给Agent]
     H -->|始终允许| K[记录偏好，返回允许]
+    H -->|取消| N[返回cancelled给Agent]
     I --> L[标记待办已处理]
     J --> L
     K --> L
-    L --> M[Agent继续执行]
+    N --> L
+    L --> M[Agent继续执行/取消]
 ```
 
 ### 3.4 页面/界面描述
@@ -202,6 +205,7 @@ flowchart TD
 | 用户刷新页面 | 待办列表从服务端重新加载，未读状态保持 |
 | 待办数量过多（>100） | 分页加载，优先显示高优先级待办 |
 | Dialog中toolCallId关联的消息不存在 | 显示「无法获取操作详情」，仍显示审批选项 |
+| Prompt turn被取消（用户点击取消） | 返回`cancelled`结果给Agent，Agent终止当前操作 |
 
 ## 四、非功能需求
 
