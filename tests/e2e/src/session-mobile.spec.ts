@@ -146,7 +146,7 @@ test.describe('Session Mobile Layout', () => {
       await expect(page.getByText('← 返回')).toBeVisible({ timeout: 10000 });
 
       // Status badge should be visible
-      await expect(page.locator('.rounded-full')).toBeVisible();
+      await expect(page.locator('.rounded-full.px-2')).toBeVisible();
     } finally {
       disconnect();
     }
