@@ -96,7 +96,7 @@ export default function MessageItem({ message }: MessageItemProps) {
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[70%] rounded-lg px-4 py-2 ${getMessageStyle(displayType)}`}>
+      <div className={`max-w-[70%] rounded-lg px-4 py-2 overflow-hidden ${getMessageStyle(displayType)}`}>
         {typeLabel && (
           <div className="mb-1 text-xs font-medium opacity-75">{typeLabel}</div>
         )}
