@@ -71,22 +71,22 @@ export default function CommandSuggest({
 
   return (
     <div
-      className="absolute z-50 max-h-60 w-80 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg"
-      style={{ top: position.top, left: position.left }}
+      className="absolute z-50 max-h-60 w-80 overflow-auto rounded-md border border-border bg-popover shadow-lg"
+      style={{ bottom: '100%', left: position.left, marginBottom: position.top }}
     >
       <div ref={listRef} className="py-1">
         {filteredCommands.map((cmd, index) => (
           <div
             key={cmd.name}
             className={`cursor-pointer px-3 py-2 text-sm ${
-              index === selectedIndex ? 'bg-blue-50' : 'hover:bg-gray-50'
+              index === selectedIndex ? 'bg-accent' : 'hover:bg-accent/50'
             }`}
             onClick={() => onSelect(cmd)}
             onMouseEnter={() => onSelectedIndexChange(index)}
           >
-            <div className="font-medium">/{renderHighlightedName(cmd.name)}</div>
+            <div className="font-medium text-popover-foreground">/{renderHighlightedName(cmd.name)}</div>
             {cmd.description && (
-              <div className="mt-0.5 text-xs text-gray-500">{cmd.description}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{cmd.description}</div>
             )}
           </div>
         ))}

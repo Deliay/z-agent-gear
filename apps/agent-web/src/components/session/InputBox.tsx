@@ -150,7 +150,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
   };
 
   return (
-    <div ref={containerRef} className="relative border-t border-gray-200 bg-white p-4">
+    <div ref={containerRef} className="relative border-t border-border bg-background p-4">
       <div className="mb-2 flex items-center gap-2">
         {onSetMode && (
           <ModeSwitcher
@@ -189,7 +189,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
                   ? 'Agent is processing...'
                   : 'Type your message...'
             }
-            className="w-full resize-none rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+            className="w-full resize-none rounded-md border border-input px-3 py-2 text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-muted disabled:text-muted-foreground"
             style={{ maxHeight: '10rem', overflowY: 'auto' }}
             rows={1}
           />
@@ -209,7 +209,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
           <button
             type="button"
             onClick={handleStop}
-            className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
+            className="rounded-md bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:bg-destructive/90"
           >
             Stop
           </button>
@@ -217,7 +217,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
           <button
             type="submit"
             disabled={disabled || !input.trim()}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
           >
             Send
           </button>
