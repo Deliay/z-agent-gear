@@ -42,7 +42,7 @@ test.describe('Session Chat', () => {
     await page.getByRole('button', { name: 'Send' }).click();
 
     // User message should appear
-    await expect(page.getByText('Hello agent!')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Hello agent!', { exact: true })).toBeVisible({ timeout: 5000 });
 
     // Response should appear
     await expect(page.getByText('Echo: Hello agent!')).toBeVisible({ timeout: 5000 });
