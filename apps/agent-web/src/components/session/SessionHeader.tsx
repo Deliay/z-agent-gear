@@ -1,3 +1,7 @@
+import { getStatusBadgeClass, STATUS_LABELS } from './status-colors';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import MobileBackButton from '../MobileBackButton';
+
 interface Session {
   id: string;
   userId: string;
@@ -26,27 +30,10 @@ interface SessionHeaderProps {
 }
 
 export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline }: SessionHeaderProps) {
+  const isMobile = useIsMobile();
   const acpServerTypeLabels: Record<string, string> = {
     opencode: 'OpenCode',
     github_copilot: 'GitHub Copilot',
-  };
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'idling':
-        return 'bg-green-100 text-green-800';
-      case 'running':
-        return 'bg-blue-100 text-blue-800';
-      case 'connecting':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'creating':
-        return 'bg-blue-100 text-blue-800';
-      case 'disconnected':
-        return 'bg-orange-100 text-orange-800';
-      case 'ended':
-        return 'bg-gray-100 text-gray-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
   };
 
   const continueDisabled = resuming || !controllerOnline;
@@ -54,21 +41,22 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   return (
     <div className="flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
       <div className="flex items-center gap-4">
+        {isMobile && <MobileBackButton to="/sessions" />}
         <h1 className="text-lg font-semibold">
           {session?.controllerName || 'Session'}
         </h1>
-        <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusColor(status)}`}>
-          {status}
+        <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
+          {STATUS_LABELS[status] ?? status}
         </span>
-        {session?.acpServerType && (
+        {session?.acpServerType && !isMobile && (
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
             {acpServerTypeLabels[session.acpServerType] || session.acpServerType}
           </span>
         )}
-        {session?.cwd && (
+        {session?.cwd && !isMobile && (
           <div className="flex items-center gap-1">
             <span className="text-sm text-gray-500 font-mono">{session.cwd}</span>
-            {session?.worktreePath && (
+            {session?.worktreePath && !isMobile && (
               <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700 font-medium flex items-center gap-1">
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M8 3H5a2 2 0 0 0-2 2v3" />

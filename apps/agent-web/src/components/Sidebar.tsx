@@ -3,21 +3,24 @@ import { NavLink, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { GetSessionsQuery, GetControllersQuery, GetWorkspacesQuery, CreateSessionMutation, SessionData } from '../graphql/types';
+import type {
+  GetSessionsQuery,
+  GetControllersQuery,
+  GetWorkspacesQuery,
+  CreateSessionMutation,
+  SessionData,
+} from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
+import { getStatusDotColor } from './session/status-colors';
+// TODO: 端口转发功能整体设计待调整，暂时隐藏入口
+// import PortForwardSection from './PortForwardSection';
 
 interface SidebarProps {
   username: string;
+  mobile?: boolean;
 }
 
-const statusColors: Record<string, string> = {
-  running: 'bg-green-500',
-  connecting: 'bg-yellow-500',
-  creating: 'bg-yellow-500',
-  ended: 'bg-gray-500',
-};
-
-export default function Sidebar({ username }: SidebarProps) {
+export default function Sidebar({ username, mobile }: SidebarProps) {
   const { id: activeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
@@ -145,7 +148,7 @@ export default function Sidebar({ username }: SidebarProps) {
   };
 
   return (
-    <nav className="flex h-screen flex-col bg-gray-900 text-white" aria-label="Sidebar">
+    <nav className={`flex flex-col bg-gray-900 text-white ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Sessions</h2>
@@ -209,6 +212,12 @@ export default function Sidebar({ username }: SidebarProps) {
 
                 {isExpanded && (
                   <ul className="ml-4 space-y-1">
+                    {/* TODO: 端口转发功能整体设计待调整，暂时隐藏入口
+                    {controller.status === 'online' && (
+                      <li>
+                        <PortForwardSection controllerId={controller.id} />
+                      </li>
+                    )} */}
                     {workspacePaths.size === 0 ? (
                       <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
                     ) : (
@@ -254,7 +263,7 @@ export default function Sidebar({ username }: SidebarProps) {
                                           <polyline points="7 15 12 20 17 15" />
                                         </svg>
                                       ) : (
-                                        <span className={`h-2 w-2 shrink-0 rounded-full ${statusColors[session.status] ?? 'bg-gray-500'}`} />
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
                                       )}
                                       <div className="min-w-0 flex-1">
                                         <div className="truncate">
@@ -284,6 +293,16 @@ export default function Sidebar({ username }: SidebarProps) {
           onClose={() => setShowNewDialog(false)}
           onCreate={handleCreateSession}
         />
+      )}
+
+      {mobile && (
+        <NavLink
+          to="/settings"
+          className="flex items-center gap-2 border-t border-gray-700 px-4 py-3 text-sm text-gray-300 hover:text-white"
+        >
+          <span>⚙️</span>
+          <span>设置</span>
+        </NavLink>
       )}
 
       <div className="sticky bottom-0 border-t border-gray-700 p-4">

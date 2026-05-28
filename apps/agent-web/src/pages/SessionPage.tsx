@@ -377,7 +377,7 @@ export default function SessionPage() {
         sessionId={id}
         onSend={handleSendMessage}
         onStop={handleCancelGeneration}
-        disabled={status !== 'running' && status !== 'idling' && !lastMessageIsSettingUpdateRef.current}
+        disabled={status !== 'idling' && status !== 'running'}
         sending={sending}
         isWorking={isWorking}
         modes={modes}

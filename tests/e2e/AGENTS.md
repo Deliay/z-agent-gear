@@ -151,3 +151,16 @@ BASE_URL=http://localhost:35273 npx playwright test
 | ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含 opencode + github_copilot |
 | GitHub Copilot badge | 选择 github_copilot 创建 session → 详情页显示「GitHub Copilot」徽章 |
 | OpenCode badge | 默认 opencode 创建 session → 详情页显示「OpenCode」徽章 |
+
+### Port Forward E2E (`port-forward.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 端口转发 section 可见性 | 在线 controller 展开后显示「端口转发」section |
+| 空状态 | 展开端口转发列表显示「无端口转发」 |
+| 新建对话框 | 点击「+」→ 弹出「新建端口转发」对话框 |
+| 创建端口转发 | 输入端口号 → 创建 → 列表显示 :port + active 状态 |
+| 端口重复 | 创建重复端口 → 显示错误信息 |
+| 删除端口转发 | 点击「✕」→ 端口转发从列表移除 |
+| 取消对话框 | 点击「取消」→ 对话框关闭 |
+| 离线 controller | 离线 controller 不显示端口转发 section |

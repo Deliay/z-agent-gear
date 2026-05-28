@@ -12,6 +12,8 @@ import { folderBrowserService } from './services/folder-browser.js';
 import { gitBrowserService } from './services/git-browser.js';
 import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
+import { portForwardRelayService } from './services/port-forward.js';
+import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
 
 const app = express();
@@ -27,6 +29,8 @@ const io = new SocketIOServer(httpServer, {
 });
 
 createSocketIOServer(io);
+
+const disconnectTimer = new DisconnectTimer();
 
 async function start() {
   try {
@@ -52,6 +56,9 @@ async function start() {
   gitBrowserService.start(io);
   worktreeService.start(io);
   fsMkdirService.start(io);
+  portForwardRelayService.start(io);
+
+  disconnectTimer.start();
 
   httpServer.listen(config.port, () => {
     console.log(`Controller API running at http://localhost:${config.port}`);
@@ -61,6 +68,7 @@ async function start() {
 async function gracefulShutdown() {
   console.log('Shutting down...');
   heartbeatService.stop();
+  disconnectTimer.stop();
   io.close();
   await closeRedis();
   await mongoose.disconnect();
