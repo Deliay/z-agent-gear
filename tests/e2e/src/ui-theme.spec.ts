@@ -10,16 +10,33 @@ test.describe('UI Theme and Component Tests', () => {
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await expect(sidebar).toBeVisible();
 
-    // 检查主题切换按钮是否存在
-    const themeToggle = sidebar.locator('button[title*="模式"]');
+    // 检查主题切换按钮是否存在（使用lucide图标选择器）
+    const themeToggle = sidebar.locator('button').filter({ has: page.locator('svg.lucide-moon, svg.lucide-sun, svg.lucide-monitor') });
     await expect(themeToggle).toBeVisible();
 
-    // 点击切换按钮
-    await themeToggle.click();
+    // 获取初始主题
+    const initialTheme = await page.evaluate(() => localStorage.getItem('theme'));
+    console.log('Initial theme:', initialTheme);
 
-    // 检查是否切换到黑暗模式
-    const html = page.locator('html');
-    await expect(html).toHaveClass(/dark/);
+    // 点击切换按钮（从system切换到light）
+    await themeToggle.click();
+    await page.waitForTimeout(500);
+
+    // 再次点击切换按钮（从light切换到dark）
+    await themeToggle.click();
+    await page.waitForTimeout(500);
+
+    // 检查是否切换到黑暗模式（检查localStorage）
+    const theme = await page.evaluate(() => localStorage.getItem('theme'));
+    console.log('localStorage theme:', theme);
+
+    // 检查html元素是否有dark类
+    const hasDarkClass = await page.evaluate(() => document.documentElement.classList.contains('dark'));
+    console.log('html has dark class:', hasDarkClass);
+
+    // 验证主题已切换到dark
+    expect(theme).toBe('dark');
+    expect(hasDarkClass).toBe(true);
   });
 
   test('should show command suggestions above input', async ({ page }) => {
@@ -62,7 +79,7 @@ test.describe('UI Theme and Component Tests', () => {
       await bellButton.click();
 
       // 检查Popover是否显示
-      const popover = page.locator('[class*="fixed"][class*="z-50"]');
+      const popover = page.locator('.fixed.z-50.rounded-xl.bg-popover');
       if (await popover.isVisible()) {
         // 检查Popover是否在可视范围内
         const popoverBox = await popover.boundingBox();
