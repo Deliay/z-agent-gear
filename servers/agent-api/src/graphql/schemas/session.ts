@@ -57,6 +57,7 @@ export const sessionTypeDefs = `#graphql
     currentModel: AgentModelInfo
     availableModels: [AgentModelInfo!]
     currentModelId: String
+    permissionTimeoutAction: PermissionTimeoutAction
     createdAt: String!
     updatedAt: String!
     endedAt: String

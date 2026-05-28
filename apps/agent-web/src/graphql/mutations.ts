@@ -310,3 +310,33 @@ export const DELETE_PORT_FORWARD = gql`
     deletePortForward(controllerId: $controllerId, port: $port)
   }
 `
+
+export const RESPOND_PERMISSION = gql`
+  mutation RespondPermission($requestId: String!, $outcome: String!, $optionId: String) {
+    respondPermission(requestId: $requestId, outcome: $outcome, optionId: $optionId)
+  }
+`
+
+export const MARK_TODO_READ = gql`
+  mutation MarkTodoRead($todoId: ID!) {
+    markTodoRead(todoId: $todoId)
+  }
+`
+
+export const MARK_ALL_TODO_READ = gql`
+  mutation MarkAllTodoRead {
+    markAllTodoRead
+  }
+`
+
+export const UPDATE_PERMISSION_TIMEOUT = gql`
+  mutation UpdatePermissionTimeout($sessionId: ID, $timeoutAction: PermissionTimeoutAction!) {
+    updatePermissionTimeout(sessionId: $sessionId, timeoutAction: $timeoutAction)
+  }
+`
+
+export const UPDATE_GLOBAL_PERMISSION_TIMEOUT = gql`
+  mutation UpdateGlobalPermissionTimeout($timeoutAction: GlobalPermissionTimeoutAction!) {
+    updateGlobalPermissionTimeout(timeoutAction: $timeoutAction)
+  }
+`

@@ -464,6 +464,7 @@ export class SessionService {
       currentModel: session.currentModel || null,
       currentModelId: session.currentModelId || null,
       availableModels: session.availableModels || [],
+      permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,

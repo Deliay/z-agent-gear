@@ -178,6 +178,15 @@ export class SessionSSEService {
       }
     }
   }
+
+  pushToUser(userId: string, data: Record<string, unknown>): void {
+    const message = JSON.stringify(data);
+    for (const [key, connection] of connections) {
+      if (connection.userId === userId) {
+        connection.res.write(`data: ${message}\n\n`);
+      }
+    }
+  }
 }
 
 export const sessionSSEService = new SessionSSEService();
