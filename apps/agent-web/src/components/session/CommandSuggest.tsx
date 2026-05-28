@@ -72,7 +72,7 @@ export default function CommandSuggest({
   return (
     <div
       className="absolute z-50 max-h-60 w-80 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg"
-      style={{ bottom: position.top, left: position.left }}
+      style={{ top: position.top, left: position.left }}
     >
       <div ref={listRef} className="py-1">
         {filteredCommands.map((cmd, index) => (
