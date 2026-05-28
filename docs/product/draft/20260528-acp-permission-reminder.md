@@ -116,12 +116,12 @@ flowchart TD
 
 #### 功能点 4: 权限审批Dialog
 
-- **描述**: 用户点击权限审批待办时，弹出Dialog展示详细信息。Dialog解析`session/request_permission`消息中的`options`和`toolCall.toolCallId`进行展示，其中options显示为审批按钮，toolCallId关联的历史消息在mongo中查询展示。Dialog始终包含一个「取消」选项，用于取消当前prompt turn（返回`cancelled`结果给Agent）。
+- **描述**: 用户点击权限审批待办时，弹出Dialog展示详细信息。Dialog解析`session/request_permission`消息中的`options`和`toolCall.toolCallId`进行展示，其中options显示为审批按钮，toolCallId关联的历史消息在mongo中查询展示。此Dialog始终包含一个「取消」选项，用于取消当前prompt turn（返回`cancelled`结果给Agent）。注意：此行为仅适用于「Agent权限审批」Dialog，其他类型的Dialog有各自的行为规范。
 - **用户价值**: 用户可以清楚了解Agent要执行的操作，做出明智的审批决策
 - **验收标准**:
   - [ ] Dialog显示操作详情（通过toolCallId查询历史获取）
   - [ ] Dialog显示所有审批选项（如「允许一次」「拒绝」「始终允许」等）
-  - [ ] Dialog始终显示「取消」按钮，点击后返回`cancelled`结果给Agent
+  - [ ] 此Dialog始终显示「取消」按钮，点击后返回`cancelled`结果给Agent
   - [ ] 点击选项后将结果返回给Agent
   - [ ] 审批完成后待办标记为已处理
 
