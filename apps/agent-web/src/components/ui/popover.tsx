@@ -82,8 +82,9 @@ function PopoverContent({
     if (!open) return
 
     const updatePosition = () => {
-      if (triggerRef.current) {
+      if (triggerRef.current && contentRef.current) {
         const rect = triggerRef.current.getBoundingClientRect()
+        const contentRect = contentRef.current.getBoundingClientRect()
         const viewportWidth = window.innerWidth
         const viewportHeight = window.innerHeight
         
@@ -92,8 +93,8 @@ function PopoverContent({
         let right: number | undefined
         
         // 如果底部空间不足，显示在上方
-        if (top + 300 > viewportHeight) {
-          top = rect.top - 300 - 4
+        if (top + contentRect.height > viewportHeight) {
+          top = rect.top - contentRect.height - 4
         }
         
         // 确保不超出顶部
@@ -104,13 +105,13 @@ function PopoverContent({
         if (align === "end") {
           right = viewportWidth - rect.right
           // 确保不超出左侧
-          if (right + 320 > viewportWidth) {
+          if (right + contentRect.width > viewportWidth) {
             right = 4
           }
         } else {
           // 确保不超出右侧
-          if (left + 320 > viewportWidth) {
-            left = viewportWidth - 324
+          if (left + contentRect.width > viewportWidth) {
+            left = viewportWidth - contentRect.width - 4
           }
           // 确保不超出左侧
           if (left < 0) {
