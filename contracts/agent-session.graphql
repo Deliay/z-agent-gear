@@ -26,6 +26,38 @@ enum AcpMessageType {
   tool_result
   plan
   error
+  permission_request
+}
+
+enum PermissionOptionKind {
+  allow_once
+  allow_always
+  reject_once
+  reject_always
+}
+
+enum TodoPriority {
+  immediate
+  urgent
+  medium
+  low
+}
+
+enum TodoType {
+  permission_request
+}
+
+enum PermissionTimeoutAction {
+  use_global
+  allow_once
+  reject
+  cancel
+}
+
+enum GlobalPermissionTimeoutAction {
+  allow_once
+  reject
+  cancel
 }
 
 type AgentMode {
@@ -46,6 +78,30 @@ type AgentModel {
   provider: String
 }
 
+type PermissionOption {
+  optionId: String!
+  name: String!
+  kind: PermissionOptionKind!
+}
+
+type PermissionRequestData {
+  requestId: String!
+  sessionId: ID!
+  toolCallId: String!
+  options: [PermissionOption!]!
+}
+
+type TodoItem {
+  id: ID!
+  type: TodoType!
+  priority: TodoPriority!
+  title: String!
+  description: String
+  isRead: Boolean!
+  data: PermissionRequestData
+  createdAt: String!
+}
+
 type Session {
   id: ID!
   userId: ID!
@@ -63,6 +119,7 @@ type Session {
   currentModel: AgentModelInfo
   availableModels: [AgentModel!]
   currentModelId: String
+  permissionTimeoutAction: PermissionTimeoutAction
   createdAt: String!
   updatedAt: String!
   endedAt: String
@@ -125,6 +182,8 @@ type Query {
   sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
   listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
+  getTodoList: [TodoItem!]!
+  getUnreadTodoCount: Int!
 }
 
 type Mutation {
@@ -138,4 +197,9 @@ type Mutation {
   setSessionMode(sessionId: ID!, modeId: String!): Boolean!
   setSessionModel(sessionId: ID!, modelId: String!): Boolean!
   refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
+  respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!
+  markTodoRead(todoId: ID!): Boolean!
+  markAllTodoRead: Boolean!
+  updatePermissionTimeout(sessionId: ID, timeoutAction: PermissionTimeoutAction!): Boolean!
+  updateGlobalPermissionTimeout(timeoutAction: GlobalPermissionTimeoutAction!): Boolean!
 }
