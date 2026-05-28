@@ -84,9 +84,43 @@ function PopoverContent({
     const updatePosition = () => {
       if (triggerRef.current) {
         const rect = triggerRef.current.getBoundingClientRect()
+        const viewportWidth = window.innerWidth
+        const viewportHeight = window.innerHeight
+        
+        let top = rect.bottom + 4
+        let left = rect.left
+        let right: number | undefined
+        
+        // 如果底部空间不足，显示在上方
+        if (top + 300 > viewportHeight) {
+          top = rect.top - 300 - 4
+        }
+        
+        // 确保不超出顶部
+        if (top < 0) {
+          top = 4
+        }
+        
+        if (align === "end") {
+          right = viewportWidth - rect.right
+          // 确保不超出左侧
+          if (right + 320 > viewportWidth) {
+            right = 4
+          }
+        } else {
+          // 确保不超出右侧
+          if (left + 320 > viewportWidth) {
+            left = viewportWidth - 324
+          }
+          // 确保不超出左侧
+          if (left < 0) {
+            left = 4
+          }
+        }
+        
         setPosition({
-          top: rect.bottom + 4,
-          ...(align === "end" ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+          top,
+          ...(align === "end" ? { right } : { left }),
         })
       }
     }

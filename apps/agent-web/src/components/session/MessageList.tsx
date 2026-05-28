@@ -297,7 +297,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
             Failed to load messages. Connection error.
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-gray-500">
+          <div className="flex h-full items-center justify-center text-muted-foreground">
             No messages yet. Start a conversation!
           </div>
         )
@@ -309,15 +309,15 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           {hasMore && (
             <div className="py-2 text-center">
               {loadingMore ? (
-                <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
                   Loading earlier messages...
                 </div>
               ) : (
                 <button
                   type="button"
                   onClick={onLoadMore}
-                  className="text-sm text-blue-600 hover:text-blue-800"
+                  className="text-sm text-primary hover:text-primary/80"
                 >
                   Load earlier messages
                 </button>

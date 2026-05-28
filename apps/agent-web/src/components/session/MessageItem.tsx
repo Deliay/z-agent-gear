@@ -64,18 +64,18 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (type) {
       case 'text':
         return isUser
-          ? 'bg-blue-600 text-white'
-          : 'bg-white text-gray-900 border border-gray-200';
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-background text-foreground border border-border';
       case 'tool_call':
-        return 'bg-purple-100 text-purple-900 border border-purple-200';
+        return 'bg-secondary text-secondary-foreground border border-border';
       case 'tool_result':
-        return 'bg-green-100 text-green-900 border border-green-200';
+        return 'bg-secondary text-secondary-foreground border border-border';
       case 'error':
-        return 'bg-red-100 text-red-900 border border-red-200';
+        return 'bg-destructive/10 text-destructive border border-destructive/20';
       case 'image':
-        return 'bg-indigo-100 text-indigo-900 border border-indigo-200';
+        return 'bg-secondary text-secondary-foreground border border-border';
       default:
-        return 'bg-gray-100 text-gray-900 border border-gray-200';
+        return 'bg-muted text-foreground border border-border';
     }
   };
 
@@ -113,7 +113,7 @@ export default function MessageItem({ message }: MessageItemProps) {
             <MarkdownContent content={displayContent} />
           )}
         </div>
-        <div className={`mt-1 text-xs ${isUser ? 'text-blue-200' : 'text-gray-500'}`}>
+        <div className={`mt-1 text-xs ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {new Date(message.createdAt).toLocaleTimeString()}
         </div>
       </div>
