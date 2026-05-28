@@ -1,4 +1,5 @@
 import { useMutation } from '@apollo/client/react';
+import { useState } from 'react';
 import { DELETE_PORT_FORWARD } from '../graphql/mutations';
 import { GET_PORT_FORWARDS } from '../graphql/queries';
 import type { DeletePortForwardMutation, PortForwardData } from '../graphql/types';
@@ -12,6 +13,15 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
   const [deletePortForward] = useMutation<DeletePortForwardMutation>(DELETE_PORT_FORWARD, {
     refetchQueries: [{ query: GET_PORT_FORWARDS, variables: { controllerId } }],
   });
+  const [copied, setCopied] = useState(false);
+
+  const accessUrl = `${window.location.origin}/api/forward/${controllerId}/${portForward.port}/`;
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(accessUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleDelete = () => {
     deletePortForward({
@@ -23,6 +33,16 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
     <li className="flex items-center gap-2 rounded px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800">
       <span className="text-xs text-gray-400">↗</span>
       <span className="flex-1 truncate">:{portForward.port}</span>
+      {portForward.status === 'active' && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="text-xs text-blue-400 hover:text-blue-300"
+          title={accessUrl}
+        >
+          {copied ? '已复制' : '复制链接'}
+        </button>
+      )}
       <span
         className={`text-xs ${
           portForward.status === 'active' ? 'text-green-400' : 'text-gray-500'
