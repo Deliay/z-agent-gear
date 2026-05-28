@@ -11,6 +11,7 @@ import CurrentModeCard from './CurrentModeCard';
 import SubAgentCard from './SubAgentCard';
 import ReadCard from './ReadCard';
 import FetchCard from './FetchCard';
+import PlanFloatingCard from './PlanFloatingCard';
 
 interface AcpMessage {
   id: string;
@@ -237,6 +238,16 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
+  // Extract the last plan group for floating display
+  const lastPlanMessages = useMemo(() => {
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (groups[i].type === 'plan') {
+        return groups[i].messages;
+      }
+    }
+    return null;
+  }, [groups]);
+
   // Auto-expand logic: expand the last expandable group, allow user override
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
   const prevLastExpandableRef = useRef<string | null>(null);
@@ -292,6 +303,9 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
         )
       ) : (
         <div className="space-y-4">
+          {lastPlanMessages && (
+            <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
+          )}
           {hasMore && (
             <div className="py-2 text-center">
               {loadingMore ? (

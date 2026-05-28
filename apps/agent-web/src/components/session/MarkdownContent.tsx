@@ -22,7 +22,7 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
                 style={oneDark}
                 language={match[1]}
                 PreTag="div"
-                className="rounded-md !my-2"
+                className="rounded-md !my-2 overflow-x-auto"
               >
                 {codeString}
               </SyntaxHighlighter>
@@ -50,7 +50,7 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
           return <li className="!my-0.5" {...props} />;
         },
         pre(props) {
-          return <pre className="!my-0" {...props} />;
+          return <pre className="!my-0 overflow-x-auto" {...props} />;
         },
       }}
     >
