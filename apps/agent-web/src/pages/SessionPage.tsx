@@ -28,6 +28,7 @@ import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
 import InputBox from '../components/session/InputBox';
 import NewSessionDialog from '../components/session/NewSessionDialog';
+import { useCommandState } from '../hooks/useCommandState';
 
 interface AcpMessage {
   id: string;
@@ -73,6 +74,7 @@ export default function SessionPage() {
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const { commands: availableCommands, updateCommands } = useCommandState();
 
   const isWorking = status === 'running';
 
@@ -137,6 +139,13 @@ export default function SessionPage() {
                 setCurrentModelId(value);
               }
             }
+          } else if (content.sessionUpdate === 'available_commands_update') {
+            lastMessageIsSettingUpdateRef.current = true;
+            const commands = content.availableCommands ?? [];
+            updateCommands(commands.map((cmd: { name: string; description?: string }) => ({
+              name: cmd.name,
+              description: cmd.description,
+            })));
           } else {
             lastMessageIsSettingUpdateRef.current = false;
           }
@@ -170,7 +179,7 @@ export default function SessionPage() {
     return () => {
       eventSource.close();
     };
-  }, [id]);
+  }, [id, updateCommands]);
 
   // Resume timeout protection
   useEffect(() => {
@@ -387,6 +396,7 @@ export default function SessionPage() {
         availableModels={availableModels}
         currentModelId={currentModelId}
         onSetModel={handleSetModel}
+        availableCommands={availableCommands}
       />
 
       {showNewSessionDialog && (
