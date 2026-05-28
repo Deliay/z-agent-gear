@@ -13,6 +13,7 @@ import type {
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
 import { TodoListPanel } from './TodoListPanel';
+import ThemeToggle from './ThemeToggle';
 // TODO: 端口转发功能整体设计待调整，暂时隐藏入口
 // import PortForwardSection from './PortForwardSection';
 
@@ -310,6 +311,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           <span className="truncate text-sm font-medium">{username}</span>
           <div className="flex items-center gap-1">
             <TodoListPanel />
+            <ThemeToggle />
             <NavLink
               to="/settings"
               aria-label="Settings"

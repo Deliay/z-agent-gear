@@ -74,8 +74,32 @@ function PopoverContent({
 }: React.HTMLAttributes<HTMLDivElement> & {
   align?: "start" | "center" | "end"
 }) {
-  const { open, setOpen } = React.useContext(PopoverContext)
+  const { open, setOpen, triggerRef } = React.useContext(PopoverContext)
   const contentRef = React.useRef<HTMLDivElement>(null)
+  const [position, setPosition] = React.useState<{ top: number; right?: number; left?: number }>({ top: 0 })
+
+  React.useEffect(() => {
+    if (!open) return
+
+    const updatePosition = () => {
+      if (triggerRef.current) {
+        const rect = triggerRef.current.getBoundingClientRect()
+        setPosition({
+          top: rect.bottom + 4,
+          ...(align === "end" ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+        })
+      }
+    }
+
+    updatePosition()
+    window.addEventListener("scroll", updatePosition, true)
+    window.addEventListener("resize", updatePosition)
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true)
+      window.removeEventListener("resize", updatePosition)
+    }
+  }, [open, align, triggerRef])
 
   React.useEffect(() => {
     if (!open) return
@@ -100,16 +124,14 @@ function PopoverContent({
 
   if (!open) return null
 
-  const alignClass = align === "end" ? "right-0" : align === "start" ? "left-0" : "left-1/2 -translate-x-1/2"
-
   return (
     <div
       ref={contentRef}
       className={cn(
-        "absolute top-full z-50 mt-1 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 shadow-lg",
-        alignClass,
+        "fixed z-50 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 shadow-lg",
         className
       )}
+      style={position}
       {...props}
     >
       {children}

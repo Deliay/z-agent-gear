@@ -197,7 +197,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
             <CommandSuggest
               commands={availableCommands}
               query={commandQuery}
-              position={{ top: 4, left: 0 }}
+              position={{ top: 8, left: 0 }}
               onSelect={handleCommandSelect}
               onClose={() => setShowSuggest(false)}
               selectedIndex={selectedIndex}
