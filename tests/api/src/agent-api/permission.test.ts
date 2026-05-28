@@ -103,13 +103,13 @@ const MARK_ALL_TODO_READ = `
 `;
 
 const UPDATE_PERMISSION_TIMEOUT = `
-  mutation UpdatePermissionTimeout($sessionId: ID, $timeoutAction: String!) {
+  mutation UpdatePermissionTimeout($sessionId: ID, $timeoutAction: PermissionTimeoutAction!) {
     updatePermissionTimeout(sessionId: $sessionId, timeoutAction: $timeoutAction)
   }
 `;
 
 const UPDATE_GLOBAL_PERMISSION_TIMEOUT = `
-  mutation UpdateGlobalPermissionTimeout($timeoutAction: String!) {
+  mutation UpdateGlobalPermissionTimeout($timeoutAction: GlobalPermissionTimeoutAction!) {
     updateGlobalPermissionTimeout(timeoutAction: $timeoutAction)
   }
 `;
@@ -294,15 +294,18 @@ describe('ACP Permission Reminder API', () => {
         ],
       });
 
-      await new Promise((r) => setTimeout(r, 1000));
+      // Wait for todo to be created (poll up to 10 seconds)
+      let todo: any = null;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const todoRes = await gqlRequest(GET_TODO_LIST, undefined, authToken);
+        const todoBody = await todoRes.json();
+        if (todoBody.data?.getTodoList) {
+          todo = todoBody.data.getTodoList.find((t: any) => t.data?.requestId === permissionRequestId);
+          if (todo) break;
+        }
+      }
 
-      // Check todo list
-      const todoRes = await gqlRequest(GET_TODO_LIST, undefined, authToken);
-      const todoBody = await todoRes.json();
-      expect(todoBody.errors).toBeUndefined();
-      expect(todoBody.data.getTodoList.length).toBeGreaterThan(0);
-
-      const todo = todoBody.data.getTodoList.find((t: any) => t.data?.requestId === permissionRequestId);
       expect(todo).toBeDefined();
       expect(todo.type).toBe('permission_request');
       expect(todo.priority).toBe('immediate');
@@ -470,12 +473,18 @@ describe('ACP Permission Reminder API', () => {
         ],
       });
 
-      await new Promise((r) => setTimeout(r, 1000));
+      // Wait for todo to be created (poll up to 10 seconds)
+      let todo: any = null;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const todoRes = await gqlRequest(GET_TODO_LIST, undefined, authToken);
+        const todoBody = await todoRes.json();
+        if (todoBody.data?.getTodoList) {
+          todo = todoBody.data.getTodoList.find((t: any) => t.data?.requestId === permissionRequestId);
+          if (todo) break;
+        }
+      }
 
-      // Get todo list
-      const todoRes = await gqlRequest(GET_TODO_LIST, undefined, authToken);
-      const todoBody = await todoRes.json();
-      const todo = todoBody.data.getTodoList.find((t: any) => t.data?.requestId === permissionRequestId);
       expect(todo).toBeDefined();
       expect(todo.isRead).toBe(false);
 
@@ -495,6 +504,54 @@ describe('ACP Permission Reminder API', () => {
     });
 
     it('should mark all todos as read', async () => {
+      const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+      const workspaceId = await createWorkspace(ctrlId);
+
+      // Create session
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      // Wait for acp:start and respond
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+      const startData = await startEvent;
+      ctrlClient.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Create a permission request
+      const permissionRequestId = `perm_all_${Date.now()}`;
+      ctrlClient.emit('acp:permission', {
+        requestId: permissionRequestId,
+        sessionId,
+        toolCall: { toolCallId: 'call_all' },
+        options: [
+          { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        ],
+      });
+
+      // Wait for todo to be created
+      let todoCreated = false;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const countRes = await gqlRequest(GET_UNREAD_TODO_COUNT, undefined, authToken);
+        const countBody = await countRes.json();
+        if (countBody.data?.getUnreadTodoCount > 0) {
+          todoCreated = true;
+          break;
+        }
+      }
+      expect(todoCreated).toBe(true);
+
       // Mark all as read
       const res = await gqlRequest(MARK_ALL_TODO_READ, undefined, authToken);
       const body = await res.json();
@@ -505,6 +562,8 @@ describe('ACP Permission Reminder API', () => {
       const countRes = await gqlRequest(GET_UNREAD_TODO_COUNT, undefined, authToken);
       const countBody = await countRes.json();
       expect(countBody.data.getUnreadTodoCount).toBe(0);
+
+      ctrlClient.disconnect();
     });
   });
 
