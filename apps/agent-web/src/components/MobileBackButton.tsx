@@ -12,7 +12,7 @@ export default function MobileBackButton({ to, label = '返回' }: MobileBackBut
     <button
       type="button"
       onClick={() => (to ? navigate(to) : navigate(-1))}
-      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-sm text-gray-600 hover:text-gray-900 md:hidden"
+      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground md:hidden"
     >
       ← {label}
     </button>

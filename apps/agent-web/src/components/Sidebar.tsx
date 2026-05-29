@@ -181,7 +181,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                   onClick={() => toggleController(controller.id)}
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${
-                    controller.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                    controller.status === 'online' ? 'bg-green-500' : 'bg-muted-foreground'
                   }`} />
                   <span className="flex-1 truncate text-left font-medium">
                     {controller.name || controller.hostname}
@@ -199,7 +199,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         navigate(`/settings?controllerId=${controller.id}`);
                       }
                     }}
-                    className="cursor-pointer rounded p-0.5 text-gray-400 hover:text-white"
+                    className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                     title="控制器配置"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -207,7 +207,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       <circle cx="12" cy="12" r="3" />
                     </svg>
                   </span>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-muted-foreground">
                     {isExpanded ? '▼' : '▶'}
                   </span>
                 </button>
@@ -221,7 +221,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       </li>
                     )} */}
                     {workspacePaths.size === 0 ? (
-                      <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
+                      <li className="px-3 py-1 text-xs text-muted-foreground">无工作区</li>
                     ) : (
                       Array.from(workspacePaths).map((workspacePath) => {
                         const workspaceKey = `${controller.id}:${workspacePath}`;
@@ -232,13 +232,13 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           <li key={workspaceKey}>
                             <button
                               type="button"
-                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-gray-800"
+                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
                               onClick={() => toggleWorkspace(workspaceKey)}
                             >
-                              <span className="text-xs text-gray-400">
+                              <span className="text-xs text-muted-foreground">
                                 {isWsExpanded ? '▼' : '▶'}
                               </span>
-                              <span className="flex-1 truncate text-left text-gray-300">
+                              <span className="flex-1 truncate text-left text-sidebar-foreground">
                                 📁 {getWorkspaceName(workspacePath)}
                               </span>
                             </button>
@@ -251,8 +251,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                       to={`/sessions/${session.id}`}
                                       className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
                                         activeId === session.id
-                                          ? 'bg-gray-700 text-white'
-                                          : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                                          ? 'bg-sidebar-accent text-sidebar-foreground'
+                                          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
                                       }`}
                                     >
                                       <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
@@ -299,14 +299,14 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       {mobile && (
         <NavLink
           to="/settings"
-          className="flex items-center gap-2 border-t border-gray-700 px-4 py-3 text-sm text-gray-300 hover:text-white"
+          className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
         >
           <span>⚙️</span>
           <span>设置</span>
         </NavLink>
       )}
 
-      <div className="sticky bottom-0 border-t border-gray-700 p-4">
+      <div className="sticky bottom-0 border-t border-sidebar-border p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <span className="truncate text-sm font-medium">{username}</span>
           <div className="flex items-center gap-1">
@@ -317,7 +317,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
               aria-label="Settings"
               className={({ isActive }) =>
                 `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
-                  isActive ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'
+                  isActive ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:text-sidebar-foreground'
                 }`
               }
             >

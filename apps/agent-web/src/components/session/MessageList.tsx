@@ -282,12 +282,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
     <div
       ref={listRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto bg-gray-50 p-4"
+      className="flex-1 overflow-y-auto bg-background p-4"
     >
       {messages.length === 0 ? (
         sseLoading ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-gray-500">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
               Loading messages...
             </div>

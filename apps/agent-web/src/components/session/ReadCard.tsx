@@ -50,10 +50,10 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
       <div className="space-y-3">
         {filePaths.length > 0 && (
           <div>
-            <div className="mb-1 text-xs font-medium text-gray-500">Files read</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Files read</div>
             <div className="space-y-1">
               {filePaths.map((path, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
+                <div key={i} className="flex items-center gap-2 text-sm text-foreground">
                   <span className="font-mono">{path}</span>
                 </div>
               ))}
@@ -63,9 +63,9 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
         {contentText && (
           <div>
             {filePaths.length > 0 && (
-              <div className="mb-1 text-xs font-medium text-gray-500">Content</div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">Content</div>
             )}
-            <div className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">
+            <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={contentText} />
             </div>
           </div>

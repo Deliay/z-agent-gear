@@ -35,13 +35,13 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
     >
       <div
-        className="w-96 rounded-lg bg-white p-6 shadow-xl"
+        className="w-96 rounded-lg bg-popover p-6 shadow-xl"
         role="dialog"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
       >
-        <h2 className="mb-4 text-lg font-semibold">Switch Mode</h2>
+        <h2 className="mb-4 text-lg font-semibold text-popover-foreground">Switch Mode</h2>
         <div className="space-y-2">
           {modes.map((mode) => (
             <button
@@ -50,17 +50,17 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
               onClick={() => setSelectedId(mode.id)}
               className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm ${
                 selectedId === mode.id
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 hover:bg-gray-50'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border hover:bg-accent'
               }`}
             >
               <div>
-                <div className="font-medium">{mode.name}</div>
+                <div className="font-medium text-popover-foreground">{mode.name}</div>
                 {mode.description && (
-                  <div className="mt-0.5 text-xs text-gray-500">{mode.description}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{mode.description}</div>
                 )}
               </div>
-              {selectedId === mode.id && <span className="text-blue-600">✓</span>}
+              {selectedId === mode.id && <span className="text-primary">✓</span>}
             </button>
           ))}
         </div>
@@ -68,7 +68,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-accent"
           >
             Cancel
           </button>
@@ -76,7 +76,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
             type="button"
             onClick={handleConfirm}
             disabled={!selectedId || loading}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
           >
             {loading ? 'Switching...' : 'Confirm'}
           </button>
