@@ -27,10 +27,10 @@ export default function ThoughtBlock({ chunks, createdAt, expanded, onExpandedCh
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
-      <div className="text-sm text-gray-700 leading-relaxed">
+      <div className="text-sm text-foreground leading-relaxed">
         <MarkdownContent content={text} />
       </div>
-      <div className="mt-2 text-xs text-gray-500">
+      <div className="mt-2 text-xs text-muted-foreground">
         {createdAt ? new Date(createdAt).toLocaleTimeString() : ''}
       </div>
     </AcpCard>
