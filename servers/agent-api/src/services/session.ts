@@ -276,7 +276,7 @@ export class SessionService {
         if (result) {
           const parsed = JSON.parse(result);
           await redis.del(`git:worktree:remove:${rmReqId}`);
-          if (!parsed.success) {
+          if (!parsed.success && !(parsed.error?.includes('is not a working tree'))) {
             throw new Error(`WORKTREE_REMOVE_FAILED: ${parsed.error}`);
           }
           break;
