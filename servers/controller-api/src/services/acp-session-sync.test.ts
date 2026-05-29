@@ -125,7 +125,7 @@ describe('AcpSessionSyncService', () => {
 
       const resultPromise = service.loadSession(socket as never, 'hist-1', '/home/user');
 
-      await vi.advanceTimersByTimeAsync(301000);
+      await vi.advanceTimersByTimeAsync(311000);
 
       const result = await resultPromise;
       expect(result.success).toBe(false);

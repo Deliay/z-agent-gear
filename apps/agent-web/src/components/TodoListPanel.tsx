@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { Bell, Check } from 'lucide-react';
 import { Button } from './ui/button';
@@ -12,6 +12,9 @@ import type { TodoItemData, GetTodoListQuery, GetUnreadTodoCountQuery } from '..
 
 export function TodoListPanel() {
   const [selectedTodo, setSelectedTodo] = useState<TodoItemData | null>(null);
+  const [immediateTodo, setImmediateTodo] = useState<TodoItemData | null>(null);
+  const processedImmediateRef = useRef<Set<string>>(new Set());
+  
   const { data: todoData, refetch: refetchTodos } = useQuery<GetTodoListQuery>(GET_TODO_LIST, {
     pollInterval: 5000,
   });
@@ -23,15 +26,30 @@ export function TodoListPanel() {
   const todos: TodoItemData[] = todoData?.getTodoList ?? [];
   const unreadCount = countData?.getUnreadTodoCount ?? 0;
 
+  // 检测立即优先级的待办，自动弹出全局弹窗
+  useEffect(() => {
+    const immediate = todos.find(
+      (todo) => todo.priority === 'immediate' && !todo.isRead && todo.type === 'permission_request' && todo.data && !processedImmediateRef.current.has(todo.id)
+    );
+    if (immediate) {
+      processedImmediateRef.current.add(immediate.id);
+      setImmediateTodo(immediate);
+    }
+  }, [todos]);
+
   const handleMarkAllRead = async () => {
     await markAllTodoRead();
     refetchTodos();
   };
 
   const handleTodoClick = (todo: TodoItemData) => {
-    if (todo.type === 'permission_request' && todo.data) {
+    if (todo.type === 'permission_request' && todo.data && !todo.isRead) {
       setSelectedTodo(todo);
     }
+  };
+
+  const handleImmediateDialogClose = () => {
+    setImmediateTodo(null);
   };
 
   return (
@@ -102,6 +120,16 @@ export function TodoListPanel() {
             if (!open) setSelectedTodo(null);
           }}
           todo={selectedTodo}
+        />
+      )}
+
+      {immediateTodo && (
+        <PermissionDialog
+          open={!!immediateTodo}
+          onOpenChange={(open) => {
+            if (!open) handleImmediateDialogClose();
+          }}
+          todo={immediateTodo}
         />
       )}
     </>

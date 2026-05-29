@@ -9,7 +9,7 @@ const defaultTodos = [
   {
     id: 'todo-1',
     type: 'permission_request',
-    priority: 'immediate',
+    priority: 'urgent',
     title: 'Agent请求权限审批',
     description: '工具调用 tc-1 请求权限',
     isRead: false,

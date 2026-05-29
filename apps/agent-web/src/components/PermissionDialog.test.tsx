@@ -6,6 +6,7 @@ const mockRespondPermission = vi.fn().mockResolvedValue({});
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: vi.fn(() => [mockRespondPermission]),
+  useQuery: vi.fn(() => ({ data: { sessionMessages: [] } })),
 }));
 
 describe('PermissionDialog', () => {

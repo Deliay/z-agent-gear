@@ -21,6 +21,9 @@ vi.mock('../src/config.js', () => ({
   clearConfigKey: vi.fn(),
   saveKeyToConfig: vi.fn(),
   saveEndpointToConfig: vi.fn(),
+  getResumeTokenFromConfig: vi.fn(),
+  saveResumeTokenToConfig: vi.fn(),
+  clearResumeTokenFromConfig: vi.fn(),
 }));
 
 vi.mock('os', () => ({
@@ -101,7 +104,8 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '1.0.4',
+        version: '1.1.1',
+        resumeToken: undefined,
       });
     });
 
@@ -116,7 +120,8 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '1.0.4',
+        version: '1.1.1',
+        resumeToken: undefined,
       });
     });
 
