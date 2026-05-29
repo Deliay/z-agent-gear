@@ -21,6 +21,9 @@ vi.mock('../src/config.js', () => ({
   clearConfigKey: vi.fn(),
   saveKeyToConfig: vi.fn(),
   saveEndpointToConfig: vi.fn(),
+  getResumeTokenFromConfig: vi.fn(),
+  saveResumeTokenToConfig: vi.fn(),
+  clearResumeTokenFromConfig: vi.fn(),
 }));
 
 vi.mock('os', () => ({
