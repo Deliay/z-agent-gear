@@ -15,7 +15,7 @@ import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { portForwardManager } from './port-forward.js';
 
-const CONTROLLER_VERSION = '1.0.4';
+const CONTROLLER_VERSION = '1.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 
