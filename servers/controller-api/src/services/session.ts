@@ -68,15 +68,6 @@ export class SessionService {
       this.removeResumeToken(keyId),
     ]);
   }
-
-  async cleanupAllSessions(): Promise<void> {
-    const redis = getRedisClient();
-    const keys = await redis.keys('session:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-      console.log(`Cleaned up ${keys.length} stale sessions from Redis`);
-    }
-  }
 }
 
 export const sessionService = new SessionService();
