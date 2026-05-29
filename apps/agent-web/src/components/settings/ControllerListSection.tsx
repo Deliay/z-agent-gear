@@ -198,7 +198,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         {ctrl.type}
                       </span>
                       <span className={`rounded px-1.5 py-0.5 text-xs ${
-                        ctrl.status === 'online' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                        ctrl.status === 'online' ? 'bg-green-500/20 text-green-600' : 'bg-muted text-muted-foreground'
                       }`}>
                         {ctrl.status === 'online' ? '在线' : '离线'}
                       </span>

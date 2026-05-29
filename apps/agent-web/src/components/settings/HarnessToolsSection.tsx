@@ -57,7 +57,7 @@ export default function HarnessToolsSection({ controllerId }: HarnessToolsSectio
                 )}
               </div>
               <span className={`rounded px-1.5 py-0.5 text-xs ${
-                cap.available ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                cap.available ? 'bg-green-500/20 text-green-600' : 'bg-muted text-muted-foreground'
               }`}>
                 {cap.available ? '可用' : '不可用'}
               </span>
