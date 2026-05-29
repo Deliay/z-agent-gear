@@ -62,7 +62,7 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
   const lastEntry = entries[entries.length - 1];
 
   return (
-    <div className="sticky top-0 z-10 mb-2 rounded-lg border border-yellow-200 bg-yellow-50/90 shadow-md backdrop-blur-sm">
+    <div className="sticky top-0 z-10 mb-2 rounded-lg border border-border bg-muted/90 shadow-md backdrop-blur-sm">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
@@ -93,7 +93,7 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
               <div key={i} className="flex items-start gap-2">
                 <Icon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs text-yellow-900 whitespace-pre-wrap break-words">
+                  <div className="text-xs text-foreground whitespace-pre-wrap break-words">
                     {entry.content}
                   </div>
                   <div className={`text-xs mt-0.5 ${colorClass}`}>{label}</div>

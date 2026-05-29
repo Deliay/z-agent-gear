@@ -72,7 +72,7 @@ export default function PlanCard({ messages }: PlanCardProps) {
             <div key={i} className="flex items-start gap-2">
               <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-yellow-900 whitespace-pre-wrap break-words">
+                <div className="text-sm text-foreground whitespace-pre-wrap break-words">
                   {entry.content}
                 </div>
                 <div className={`text-xs mt-0.5 ${colorClass}`}>{label}</div>
