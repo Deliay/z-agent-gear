@@ -10,6 +10,7 @@ export interface ConfigData {
   key?: { value: string };
   server?: { endpoint: string };
   controller?: { name: string };
+  resumeToken?: { value: string };
 }
 
 export function readConfig(): ConfigData {
@@ -72,4 +73,21 @@ export function resolveEndpoint(cliEndpoint?: string): string | undefined {
   const envEndpoint = process.env.ZAG_SERVER_ENDPOINT;
   if (envEndpoint) return envEndpoint;
   return getEndpointFromConfig();
+}
+
+export function getResumeTokenFromConfig(): string | undefined {
+  const config = readConfig();
+  return config.resumeToken?.value;
+}
+
+export function saveResumeTokenToConfig(token: string): void {
+  const config = readConfig();
+  config.resumeToken = { value: token };
+  writeConfig(config);
+}
+
+export function clearResumeTokenFromConfig(): void {
+  const config = readConfig();
+  delete config.resumeToken;
+  writeConfig(config);
 }

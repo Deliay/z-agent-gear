@@ -16,6 +16,7 @@ import { portForwardRelayService } from './services/port-forward.js';
 import { permissionManager } from './services/permission-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
+import { sessionService } from './services/session.js';
 
 const app = express();
 const httpServer = createServer(app);

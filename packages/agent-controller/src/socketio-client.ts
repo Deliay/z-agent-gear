@@ -5,7 +5,7 @@ import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { Heartbeat } from './heartbeat.js';
-import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig } from './config.js';
+import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig, getResumeTokenFromConfig, saveResumeTokenToConfig, clearResumeTokenFromConfig } from './config.js';
 import { acpDetector } from './acp/detector.js';
 import { AcpSpawner } from './acp/spawner.js';
 import { AcpSessionBridge } from './acp/bridge.js';
@@ -26,6 +26,7 @@ function createSpawner(serverType: string, sessionId: string, cwd: string): AcpS
 
 interface RegisteredPayload {
   controllerId: string;
+  resumeToken?: string;
 }
 
 interface ErrorPayload {
@@ -157,22 +158,32 @@ export function connectToServer(
 
   socket.on('connect', () => {
     console.log(`Connected to ${endpoint}`);
+    const resumeToken = getResumeTokenFromConfig();
     socket.emit('register', {
       key,
       hostname: controllerName,
       version: CONTROLLER_VERSION,
+      resumeToken,
     });
   });
 
   socket.on('registered', (data: RegisteredPayload) => {
     console.log(`Controller registered: ${data.controllerId}`);
+    if (data.resumeToken) {
+      saveResumeTokenToConfig(data.resumeToken);
+      console.log('Resume token saved to config');
+    }
     heartbeat.start(() => socket.emit('heartbeat'));
   });
 
   socket.on('error', (data: ErrorPayload) => {
     console.error(`Server error: ${data.code} - ${data.message}`);
     if (data.code === 'KEY_ALREADY_ONLINE') {
-      console.error('This key is already in use on another machine.');
+      console.log('Clearing resume token and retrying connection...');
+      clearResumeTokenFromConfig();
+      // Don't exit, let the reconnection logic handle it
+      socket.disconnect();
+      return;
     }
     socket.disconnect();
     process.exit(1);
