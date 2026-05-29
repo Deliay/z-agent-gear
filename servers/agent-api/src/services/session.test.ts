@@ -436,6 +436,25 @@ describe('SessionService', () => {
 
       await expect(sessionService.delete('sess-1', 'user-1')).rejects.toThrow('WORKTREE_REMOVE_FAILED');
     });
+
+    it('should not throw error when worktree removal fails with "is not a working tree"', async () => {
+      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(sessionDoc),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+
+      mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // clean, skip commit
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: "fatal: '/path/to/worktree' is not a working tree" })); // remove fails with "is not a working tree"
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+      expect(result).toBe(true);
+    });
   });
 
   describe('getMessages', () => {
@@ -750,4 +769,3 @@ describe('SessionService', () => {
       expect(result).toBe(false);
     });
   });
-});
