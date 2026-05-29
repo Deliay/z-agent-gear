@@ -13,28 +13,28 @@ interface AcpCardProps {
 
 const colorClasses = {
   purple: {
-    container: 'bg-purple-50 border border-purple-200',
-    header: 'text-purple-800',
-    summary: 'text-purple-600',
-    chevron: 'text-purple-400 hover:text-purple-600',
+    container: 'bg-muted border border-border',
+    header: 'text-foreground',
+    summary: 'text-muted-foreground',
+    chevron: 'text-muted-foreground hover:text-foreground',
   },
   yellow: {
-    container: 'bg-yellow-50 border border-yellow-200',
-    header: 'text-yellow-800',
-    summary: 'text-yellow-600',
-    chevron: 'text-yellow-400 hover:text-yellow-600',
+    container: 'bg-muted border border-border',
+    header: 'text-foreground',
+    summary: 'text-muted-foreground',
+    chevron: 'text-muted-foreground hover:text-foreground',
   },
   gray: {
-    container: 'bg-gray-100 border border-gray-200',
-    header: 'text-gray-800',
-    summary: 'text-gray-600',
-    chevron: 'text-gray-400 hover:text-gray-600',
+    container: 'bg-muted border border-border',
+    header: 'text-foreground',
+    summary: 'text-muted-foreground',
+    chevron: 'text-muted-foreground hover:text-foreground',
   },
   blue: {
-    container: 'bg-blue-50 border border-blue-200',
-    header: 'text-blue-800',
-    summary: 'text-blue-600',
-    chevron: 'text-blue-400 hover:text-blue-600',
+    container: 'bg-muted border border-border',
+    header: 'text-foreground',
+    summary: 'text-muted-foreground',
+    chevron: 'text-muted-foreground hover:text-foreground',
   },
 };
 

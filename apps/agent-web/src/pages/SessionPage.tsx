@@ -349,7 +349,7 @@ export default function SessionPage() {
   return (
     <div className="flex h-full flex-col">
       {errorToast && (
-        <div className="fixed right-4 top-4 z-50 max-w-sm rounded-md bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg">
+        <div className="fixed right-4 top-4 z-50 max-w-sm rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive shadow-lg">
           {errorToast}
         </div>
       )}

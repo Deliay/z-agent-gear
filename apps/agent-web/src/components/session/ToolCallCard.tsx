@@ -40,7 +40,7 @@ function renderContentItem(item: ToolCallContent, i: number) {
     const cb = item.content;
     if (cb.type === 'text') {
       return (
-        <div key={i} className="prose prose-sm max-w-none text-gray-900">
+        <div key={i} className="prose prose-sm max-w-none text-foreground">
           <div className="whitespace-pre-wrap">{cb.text}</div>
         </div>
       );
@@ -60,7 +60,7 @@ function renderContentItem(item: ToolCallContent, i: number) {
   }
   if (item.type === 'terminal') {
     return (
-      <div key={i} className="text-sm text-gray-500 italic">
+      <div key={i} className="text-sm text-muted-foreground italic">
         Terminal: {item.terminalId}
       </div>
     );
@@ -87,8 +87,8 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
   const contentItems = data.content as ToolCallContent[] | undefined;
 
   const containerClass = status === 'completed'
-    ? 'rounded-lg border border-green-200 bg-green-50'
-    : 'rounded-lg border border-purple-200 bg-purple-50';
+    ? 'rounded-lg border border-border bg-muted'
+    : 'rounded-lg border border-border bg-muted';
 
   const summary = `${kindLabel(kind)} ${status === 'completed' ? '✓' : status === 'failed' ? '✗' : '...'}`;
 
@@ -99,14 +99,14 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
           <div className="space-y-3">
             {locations && locations.length > 0 && (
               <div>
-                <div className="mb-1 text-xs font-medium text-gray-500">Files to modify</div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">Files to modify</div>
                 <div className="space-y-1">
                   {locations.map((loc, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                      <span className="text-gray-400">📄</span>
+                    <div key={i} className="flex items-center gap-2 text-sm text-foreground">
+                      <span className="text-muted-foreground">📄</span>
                       <span className="font-mono">{loc.path}</span>
                       {loc.line != null && (
-                        <span className="text-xs text-gray-400">:{loc.line}</span>
+                        <span className="text-xs text-muted-foreground">:{loc.line}</span>
                       )}
                     </div>
                   ))}
@@ -116,7 +116,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
             {rawInput && (
               <div>
                 {(rawInput as EditRawInput).filePath && (
-                  <div className="mb-2 text-xs font-medium text-gray-500">
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">
                     Editing: {(rawInput as EditRawInput).filePath}
                   </div>
                 )}
@@ -147,28 +147,28 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
           <div className="space-y-2 text-sm">
             {exInput.workDir && (
               <div>
-                <span className="text-xs font-medium text-gray-500">Directory: </span>
-                <span className="font-mono text-gray-700">{exInput.workDir}</span>
+                <span className="text-xs font-medium text-muted-foreground">Directory: </span>
+                <span className="font-mono text-foreground">{exInput.workDir}</span>
               </div>
             )}
             {exInput.description && (
               <div>
-                <span className="text-xs font-medium text-gray-500">Description: </span>
-                <span className="text-gray-700">{exInput.description}</span>
+                <span className="text-xs font-medium text-muted-foreground">Description: </span>
+                <span className="text-foreground">{exInput.description}</span>
               </div>
             )}
             {exInput.command && (
               <div>
-                <span className="text-xs font-medium text-gray-500">Command: </span>
-                <pre className="mt-1 rounded bg-gray-900 p-2 font-mono text-sm text-green-400">
+                <span className="text-xs font-medium text-muted-foreground">Command: </span>
+                <pre className="mt-1 rounded bg-foreground p-2 font-mono text-sm text-background">
                   $ {exInput.command}
                 </pre>
               </div>
             )}
             {exInput.timeout != null && (
               <div>
-                <span className="text-xs font-medium text-gray-500">Timeout: </span>
-                <span className="text-gray-700">{exInput.timeout}s</span>
+                <span className="text-xs font-medium text-muted-foreground">Timeout: </span>
+                <span className="text-foreground">{exInput.timeout}s</span>
               </div>
             )}
           </div>
@@ -182,8 +182,8 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
             <div className="space-y-2">
               {rawInput && (rawInput as ExecuteRawInput).command && (
                 <div>
-                  <span className="text-xs font-medium text-gray-500">Command: </span>
-                  <pre className="mt-1 rounded bg-gray-900 p-2 font-mono text-sm text-green-400">
+                  <span className="text-xs font-medium text-muted-foreground">Command: </span>
+                  <pre className="mt-1 rounded bg-foreground p-2 font-mono text-sm text-background">
                     $ {(rawInput as ExecuteRawInput).command}
                   </pre>
                 </div>
@@ -196,7 +196,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
     }
 
     return (
-      <div className="py-2 text-sm text-gray-500">
+      <div className="py-2 text-sm text-muted-foreground">
         {kindLabel(kind)} — {status}
       </div>
     );
