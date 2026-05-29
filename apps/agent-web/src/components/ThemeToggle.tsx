@@ -31,7 +31,7 @@ export default function ThemeToggle() {
     <button
       type="button"
       onClick={handleClick}
-      className="rounded p-1.5 text-sm text-gray-400 transition-colors hover:text-white"
+      className="rounded p-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       title={label}
     >
       <Icon className="h-4 w-4" />

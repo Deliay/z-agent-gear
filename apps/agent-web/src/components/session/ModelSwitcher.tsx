@@ -35,7 +35,7 @@ export function ModelSwitcher({ currentModelId, availableModels, status, onSetMo
         type="button"
         onClick={() => setOpen(true)}
         disabled={disabled || loading}
-        className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
         title={availableModels.length === 0 ? 'No models available' : 'Switch model'}
       >
         {loading ? 'Switching...' : (currentModel?.name || 'Model')}

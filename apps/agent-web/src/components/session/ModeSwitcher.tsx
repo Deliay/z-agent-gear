@@ -45,10 +45,10 @@ export default function ModeSwitcher({ currentModeId, modes, status, onSetMode, 
         onClick={() => setDialogOpen(true)}
         disabled={disabled}
         title={disabled ? (modes.length === 0 ? 'No modes available' : 'Only available when idle') : 'Switch mode'}
-        className="flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+        className="flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
         <span>{currentMode?.name || 'Mode'}</span>
-        <span className="text-gray-400">▾</span>
+        <span className="text-muted-foreground">▾</span>
       </button>
       <ModeSelectDialog
         open={dialogOpen}

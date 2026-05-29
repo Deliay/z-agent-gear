@@ -333,7 +333,7 @@ export default function SessionPage() {
             New Session
           </button>
         </div>
-        <p className="text-gray-500">No sessions found.</p>
+        <p className="text-muted-foreground">No sessions found.</p>
 
         {showNewSessionDialog && (
           <NewSessionDialog

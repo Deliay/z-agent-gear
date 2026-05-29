@@ -27,8 +27,8 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
       onClick={handleOverlayClick}
       onKeyDown={handleOverlayKeyDown}
     >
-      <div className="w-80 rounded-xl bg-white p-4 shadow-xl">
-        <h3 className="mb-3 text-sm font-semibold text-gray-900">Switch Model</h3>
+      <div className="w-80 rounded-xl bg-popover p-4 shadow-xl">
+        <h3 className="mb-3 text-sm font-semibold text-popover-foreground">Switch Model</h3>
         <div className="mb-3 max-h-60 space-y-1 overflow-y-auto">
           {models.map((model) => (
             <button
@@ -37,18 +37,18 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
               onClick={() => onSelect(model.id)}
               className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                 model.id === currentModelId
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-gray-700 hover:bg-gray-50'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-popover-foreground hover:bg-accent'
               }`}
             >
               <div className="flex flex-col">
                 <span>{model.name}</span>
                 {model.provider && (
-                  <span className="text-xs text-gray-400">{model.provider}</span>
+                  <span className="text-xs text-muted-foreground">{model.provider}</span>
                 )}
               </div>
               {model.id === currentModelId && (
-                <svg className="h-4 w-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <svg className="h-4 w-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               )}
@@ -59,7 +59,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+            className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent"
           >
             Cancel
           </button>
@@ -67,7 +67,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
             type="button"
             onClick={onClose}
             disabled={loading}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {loading ? 'Switching...' : 'Confirm'}
           </button>

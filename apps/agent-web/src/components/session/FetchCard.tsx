@@ -35,12 +35,12 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
       <div className="space-y-3">
         {url && (
           <div>
-            <div className="mb-1 text-xs font-medium text-gray-500">URL</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">URL</div>
             <a
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block truncate rounded-md bg-white px-3 py-2 text-sm text-blue-600 underline hover:text-blue-800"
+              className="block truncate rounded-md bg-background px-3 py-2 text-sm text-primary underline hover:text-primary/80"
             >
               {url}
             </a>
@@ -48,8 +48,8 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
         )}
         {output && (
           <div>
-            <div className="mb-1 text-xs font-medium text-gray-500">Result</div>
-            <div className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Result</div>
+            <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={output} />
             </div>
           </div>
