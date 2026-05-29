@@ -64,7 +64,7 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (type) {
       case 'text':
         return isUser
-          ? 'bg-primary text-primary-foreground'
+          ? 'bg-blue-600 text-white'
           : 'bg-background text-foreground border border-border';
       case 'tool_call':
         return 'bg-secondary text-secondary-foreground border border-border';
