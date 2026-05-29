@@ -268,3 +268,24 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | portForwards query - 已认证 | 应返回端口转发列表 |
 | deletePortForward - 成功删除 | 应返回 true，列表中不再包含该端口 |
 | deletePortForward - 不存在的端口 | 应返回 false |
+
+### ACP Permission Reminder API (`agent-api/permission.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| getTodoList - 无 auth | 应返回「Not authenticated」 |
+| getUnreadTodoCount - 无 auth | 应返回「Not authenticated」 |
+| getTodoList - 初始为空 | 应返回空数组 |
+| getUnreadTodoCount - 初始为 0 | 应返回 0 |
+| respondPermission - 无 auth | 应返回「Not authenticated」 |
+| markTodoRead - 无 auth | 应返回「Not authenticated」 |
+| markAllTodoRead - 无 auth | 应返回「Not authenticated」 |
+| updatePermissionTimeout - 无 auth | 应返回「Not authenticated」 |
+| updateGlobalPermissionTimeout - 无 auth | 应返回「Not authenticated」 |
+| 权限请求流程 - 创建待办 | controller 发送 acp:permission → agent-api 创建待办 → 验证待办内容 |
+| 权限请求流程 - 响应请求 | GraphQL respondPermission → controller 收到 acp:permission:response |
+| 权限请求流程 - 超时处理 | 60秒未响应 → controller 收到 cancelled |
+| 待办管理 - 标记已读 | markTodoRead → 验证 isRead=true |
+| 待办管理 - 全部已读 | markAllTodoRead → 验证 unreadCount=0 |
+| 超时设置 - 全局设置 | updateGlobalPermissionTimeout → 验证保存成功 |
+| 超时设置 - Session 设置 | updatePermissionTimeout → 验证 session.permissionTimeoutAction |

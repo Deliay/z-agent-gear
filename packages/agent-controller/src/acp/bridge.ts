@@ -39,6 +39,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
   private initializing = false;
   private stopped = false;
+  private pendingPermissions = new Map<string, {
+    resolve: (response: acp.RequestPermissionResponse) => void;
+    timeout: NodeJS.Timeout;
+  }>();
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -278,12 +282,37 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   async requestPermission(
     params: acp.RequestPermissionRequest,
   ): Promise<acp.RequestPermissionResponse> {
-    return {
-      outcome: {
-        outcome: 'selected',
-        optionId: params.options.find((o) => o.kind === 'allow_once')?.optionId ?? params.options[0]?.optionId ?? 'reject',
-      },
-    };
+    const requestId = `perm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingPermissions.delete(requestId);
+        resolve({ outcome: { outcome: 'cancelled' } });
+      }, 65_000);
+
+      this.pendingPermissions.set(requestId, { resolve, timeout });
+
+      this.socket.emit('acp:permission', {
+        requestId,
+        sessionId: this.sessionId,
+        toolCall: params.toolCall,
+        options: params.options,
+      });
+
+      this.emit('permission:sent', requestId);
+    });
+  }
+
+  handlePermissionResponse(requestId: string, outcome: acp.RequestPermissionOutcome): void {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) {
+      console.warn(`Permission request ${requestId} not found`);
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingPermissions.delete(requestId);
+    pending.resolve({ outcome });
   }
 
   // ── text buffering ──

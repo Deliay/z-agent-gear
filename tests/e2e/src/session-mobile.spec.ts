@@ -90,11 +90,11 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
 async function createSession(page: import('@playwright/test').Page, controllerId: string, token: string, workspaceId?: string) {
   const res = await gqlRequest(page, `
     mutation CreateSession($input: CreateSessionInput!) {
-      createSession(input: $input) { id status }
+      createSession(input: $input) { session { id } }
     }
   `, { input: { controllerId, acpServerType: 'opencode', ...(workspaceId ? { workspaceId } : {}) } }, token);
   const body = await res.json();
-  return body.data.createSession.id;
+  return body.data.createSession.session.id;
 }
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
@@ -119,7 +119,7 @@ test.describe('Session Mobile Layout', () => {
       await expect(page.locator('h2')).toContainText('Sessions');
 
       // Controller should be visible in the tree
-      await expect(page.getByText('e2e-test-host')).toBeVisible();
+      await expect(page.getByText('e2e-mobile-host')).toBeVisible();
     } finally {
       disconnect();
     }
@@ -136,8 +136,8 @@ test.describe('Session Mobile Layout', () => {
       await loginViaUI(page, username);
 
       // Expand controller and workspace to find session
-      await page.locator(sidebar()).getByText('e2e-test-host').click();
-      await page.locator(sidebar()).getByText('e2e-mob').click();
+      await page.locator(sidebar()).getByText('e2e-mobile-host').click();
+      await page.locator(sidebar()).getByText('📁 e2e-mob').click();
 
       // Click on session
       await page.locator(sidebar()).getByText('New Session').click();
@@ -146,7 +146,7 @@ test.describe('Session Mobile Layout', () => {
       await expect(page.getByText('← 返回')).toBeVisible({ timeout: 10000 });
 
       // Status badge should be visible
-      await expect(page.locator('.rounded-full')).toBeVisible();
+      await expect(page.locator('.rounded-full.px-2')).toBeVisible();
     } finally {
       disconnect();
     }
@@ -187,8 +187,8 @@ test.describe('Session Mobile Layout', () => {
 
     // Tab buttons should be visible
     await expect(page.getByRole('button', { name: '帐号' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '供应商' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '模型' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '供应商', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '模型', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '控制器' })).toBeVisible();
 
     // Back button should be visible
@@ -213,9 +213,10 @@ test.describe('Session Mobile Layout', () => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
+    const ws = await createWorkspace(page, controllerId, '/tmp/e2e-mob-sidebar', token);
 
     try {
-      const sessionId = await createSession(page, controllerId, token);
+      const sessionId = await createSession(page, controllerId, token, ws.id);
       await loginViaUI(page, username);
 
       await page.goto(`/sessions/${sessionId}`);

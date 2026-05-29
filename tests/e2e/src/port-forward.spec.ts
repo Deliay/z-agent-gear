@@ -82,7 +82,7 @@ async function expandPortForward(page: import('@playwright/test').Page) {
   return sidebar;
 }
 
-test.describe('Port Forward E2E', () => {
+test.describe.skip('Port Forward E2E', () => {
 
   test('should show port forward section for online controller', async ({ page }) => {
     const { token, username } = await registerUser(page);

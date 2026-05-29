@@ -17,6 +17,13 @@ interface Session {
   endedAt: string | null;
 }
 
+function truncatePathLeft(path: string, maxLen = 40): string {
+  if (path.length > maxLen) {
+    return '...' + path.slice(-(maxLen - 3));
+  }
+  return path;
+}
+
 interface SessionHeaderProps {
   session: Session | null;
   status: string;
@@ -39,7 +46,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   const continueDisabled = resuming || !controllerOnline;
 
   return (
-    <div className="flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
+    <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
       <div className="flex items-center gap-4">
         {isMobile && <MobileBackButton to="/sessions" />}
         <h1 className="text-lg font-semibold">
@@ -49,15 +56,15 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           {STATUS_LABELS[status] ?? status}
         </span>
         {session?.acpServerType && !isMobile && (
-          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
             {acpServerTypeLabels[session.acpServerType] || session.acpServerType}
           </span>
         )}
         {session?.cwd && !isMobile && (
           <div className="flex items-center gap-1">
-            <span className="text-sm text-gray-500 font-mono">{session.cwd}</span>
+            <span className="text-sm text-muted-foreground font-mono" title={session.cwd}>{truncatePathLeft(session.cwd)}</span>
             {session?.worktreePath && !isMobile && (
-              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700 font-medium flex items-center gap-1">
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary font-medium flex items-center gap-1">
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M8 3H5a2 2 0 0 0-2 2v3" />
                   <path d="M21 3h-3a2 2 0 0 0-2 2v3" />
@@ -72,7 +79,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           </div>
         )}
         {session?.createdAt && (
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-muted-foreground">
             {new Date(session.createdAt).toLocaleString()}
           </span>
         )}
@@ -83,10 +90,10 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             type="button"
             onClick={onClose}
             disabled={closing}
-            className={`rounded-md px-3 py-1.5 text-sm text-white ${
+            className={`rounded-md px-3 py-1.5 text-sm text-destructive-foreground ${
               closing
-                ? 'cursor-not-allowed bg-red-400'
-                : 'bg-red-600 hover:bg-red-700'
+                ? 'cursor-not-allowed bg-destructive/60'
+                : 'bg-destructive hover:bg-destructive/90'
             }`}
           >
             {closing ? (
@@ -106,10 +113,10 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             onClick={onContinue}
             disabled={continueDisabled}
             title={!controllerOnline ? 'Controller is offline' : undefined}
-            className={`rounded-md px-3 py-1.5 text-sm text-white ${
+            className={`rounded-md px-3 py-1.5 text-sm text-primary-foreground ${
               continueDisabled
-                ? 'cursor-not-allowed bg-gray-400'
-                : 'bg-blue-600 hover:bg-blue-700'
+                ? 'cursor-not-allowed bg-muted'
+                : 'bg-primary hover:bg-primary/90'
             }`}
           >
             {resuming ? 'Continuing...' : 'Continue'}
@@ -121,8 +128,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           disabled={deleting}
           className={`rounded-md border px-3 py-1.5 text-sm ${
             deleting
-              ? 'cursor-not-allowed border-gray-300 bg-gray-100 text-gray-400'
-              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              ? 'cursor-not-allowed border-border bg-muted text-muted-foreground'
+              : 'border-border text-foreground hover:bg-accent'
           }`}
         >
           {deleting ? (

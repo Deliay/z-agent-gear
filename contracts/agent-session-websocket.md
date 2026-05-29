@@ -41,6 +41,8 @@
 | Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
 | Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
 | Server → Controller | `acp:set-model` | 请求切换 LLM 模型 |
+| Controller → Server | `acp:permission` | Agent请求用户权限审批 |
+| Server → Controller | `acp:permission:response` | 返回用户权限审批结果 |
 | Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
 | Controller → Server | `git:check:result` | 返回 Git 检测结果 |
 | Server → Controller | `git:init` | 请求初始化 Git 仓库 |
@@ -441,6 +443,68 @@ Controller 转发 ACP 输出。
 1. 查找 `sessionId` 对应的 ACP Session Bridge
 2. 调用 `bridge.setModel(modelId)`
 3. 不等待结果（切换结果通过 `session/update` 的 `current_model_update` 通知）
+
+### 2.19 `acp:permission`（Controller → Server）
+
+当Agent发送`session/request_permission`时，Controller将权限请求转发给Server。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求ID，用于匹配响应 |
+| `sessionId` | `string` | 是 | 当前Session ID |
+| `toolCall` | `object` | 是 | 工具调用信息 |
+| `toolCall.toolCallId` | `string` | 是 | 工具调用ID |
+| `options` | `PermissionOption[]` | 是 | 可选审批选项 |
+
+**PermissionOption 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `optionId` | `string` | 选项ID |
+| `name` | `string` | 显示名称 |
+| `kind` | `PermissionOptionKind` | 选项类型 |
+
+**PermissionOptionKind 枚举：**
+
+| 值 | 说明 |
+|------|------|
+| `allow_once` | 允许一次 |
+| `allow_always` | 始终允许 |
+| `reject_once` | 拒绝一次 |
+| `reject_always` | 始终拒绝 |
+
+**客户端行为：**
+
+1. AcpSessionBridge暂停等待用户响应（Promise）
+2. 通过Socket.IO发送权限请求到Server
+3. 等待`acp:permission:response`响应
+4. 超时（65秒）自动返回`cancelled`
+
+### 2.20 `acp:permission:response`（Server → Controller）
+
+Server将用户审批结果返回给Controller。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求ID |
+| `outcome` | `RequestPermissionOutcome` | 是 | 审批结果 |
+
+**RequestPermissionOutcome 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `outcome` | `'selected' \| 'cancelled'` | 结果类型 |
+| `optionId` | `string?` | 选择的选项ID（outcome=selected时） |
+
+**客户端行为：**
+
+1. 查找对应的pending permission Promise
+2. resolve Promise，返回结果给Agent
+3. Agent继续执行或取消
 
 ---
 

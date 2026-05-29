@@ -164,3 +164,17 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 删除端口转发 | 点击「✕」→ 端口转发从列表移除 |
 | 取消对话框 | 点击「取消」→ 对话框关闭 |
 | 离线 controller | 离线 controller 不显示端口转发 section |
+
+### ACP Permission Reminder E2E (`permission.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 侧边栏显示待办铃铛图标 | 登录后侧边栏显示铃铛图标 |
+| 初始未读数量为0 | 铃铛图标不显示badge |
+| 点击铃铛打开待办列表 | 点击铃铛 → 弹出待办列表面板，显示「待办事项」标题 |
+| 待办列表初始为空状态 | 打开待办列表 → 显示「暂无待办事项」 |
+| 权限请求创建待办 | controller发送acp:permission → 待办列表显示权限审批待办 |
+| 点击待办打开权限审批Dialog | 点击权限待办 → 打开Dialog，显示操作详情和审批选项 |
+| 审批后返回结果给controller | 点击「Allow once」→ controller收到acp:permission:response |
+| 立即优先级待办触发全局弹窗 | 权限请求 → 页面显示全局通知弹窗 |
+| 审批后待办标记为已读 | 响应权限请求 → badge消失 |

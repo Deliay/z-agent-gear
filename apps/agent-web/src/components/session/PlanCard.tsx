@@ -18,8 +18,8 @@ const statusIcons = {
 };
 
 const statusColors = {
-  pending: 'text-gray-400',
-  in_progress: 'text-blue-500',
+  pending: 'text-muted-foreground',
+  in_progress: 'text-primary',
   completed: 'text-green-600',
 };
 
@@ -66,13 +66,13 @@ export default function PlanCard({ messages }: PlanCardProps) {
       <div className="space-y-2">
         {entries.map((entry, i) => {
           const Icon = statusIcons[entry.status as keyof typeof statusIcons] || Circle;
-          const colorClass = statusColors[entry.status as keyof typeof statusColors] || 'text-gray-400';
+          const colorClass = statusColors[entry.status as keyof typeof statusColors] || 'text-muted-foreground';
           const label = statusLabels[entry.status as keyof typeof statusLabels] || 'Pending';
           return (
             <div key={i} className="flex items-start gap-2">
               <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-yellow-900 whitespace-pre-wrap break-words">
+                <div className="text-sm text-foreground whitespace-pre-wrap break-words">
                   {entry.content}
                 </div>
                 <div className={`text-xs mt-0.5 ${colorClass}`}>{label}</div>

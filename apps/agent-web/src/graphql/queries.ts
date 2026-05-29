@@ -250,3 +250,33 @@ export const GET_PORT_FORWARDS = gql`
     }
   }
 `
+
+export const GET_TODO_LIST = gql`
+  query GetTodoList {
+    getTodoList {
+      id
+      type
+      priority
+      title
+      description
+      isRead
+      data {
+        requestId
+        sessionId
+        toolCallId
+        options {
+          optionId
+          name
+          kind
+        }
+      }
+      createdAt
+    }
+  }
+`
+
+export const GET_UNREAD_TODO_COUNT = gql`
+  query GetUnreadTodoCount {
+    getUnreadTodoCount
+  }
+`

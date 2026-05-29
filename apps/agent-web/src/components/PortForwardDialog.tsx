@@ -35,8 +35,8 @@ export default function PortForwardDialog({ controllerId, onClose }: PortForward
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-80 rounded-lg bg-gray-800 p-4 shadow-lg">
-        <h3 className="mb-3 text-sm font-medium text-white">新建端口转发</h3>
+      <div className="w-80 rounded-lg bg-popover p-4 shadow-lg">
+        <h3 className="mb-3 text-sm font-medium text-popover-foreground">新建端口转发</h3>
         <form onSubmit={handleSubmit}>
           <input
             type="number"
@@ -45,22 +45,22 @@ export default function PortForwardDialog({ controllerId, onClose }: PortForward
             placeholder="端口号 (1-65535)"
             value={port}
             onChange={(e) => setPort(e.target.value)}
-            className="mb-2 w-full rounded border border-gray-600 bg-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+            className="mb-2 w-full rounded border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:border-ring focus:outline-none"
             autoFocus
           />
-          {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
+          {error && <p className="mb-2 text-xs text-destructive">{error}</p>}
           <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+              className="rounded px-3 py-1.5 text-sm text-foreground hover:bg-accent"
             >
               取消
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {loading ? '创建中...' : '创建'}
             </button>

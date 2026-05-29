@@ -13,6 +13,7 @@ import { sessionStreamRouter } from './routes/session-stream.js';
 import { portForwardProxyRouter } from './routes/port-forward-proxy.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
+import { permissionSubscriberService } from './services/permission-subscriber.js';
 
 const app = express();
 
@@ -56,6 +57,10 @@ async function start() {
   try {
     getRedisClient();
     console.log('Connected to Redis');
+    
+    // Start permission subscriber
+    permissionSubscriberService.start();
+    console.log('Permission subscriber started');
   } catch (err) {
     console.warn('Redis not available:', (err as Error).message);
   }

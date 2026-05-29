@@ -24,22 +24,22 @@ export default function PortForwardSection({ controllerId }: PortForwardSectionP
     <div>
       <button
         type="button"
-        className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-gray-800"
+        className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
         onClick={(e) => {
           e.stopPropagation();
           setIsExpanded((prev) => !prev);
         }}
       >
-        <span className="text-xs text-gray-400">{isExpanded ? '▼' : '▶'}</span>
-        <span className="text-xs text-gray-400">↗</span>
-        <span className="flex-1 truncate text-left text-gray-300">端口转发</span>
+        <span className="text-xs text-muted-foreground">{isExpanded ? '▼' : '▶'}</span>
+        <span className="text-xs text-muted-foreground">↗</span>
+        <span className="flex-1 truncate text-left text-sidebar-foreground">端口转发</span>
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             setShowDialog(true);
           }}
-          className="rounded bg-blue-600 px-1.5 py-0.5 text-xs text-white hover:bg-blue-700"
+          className="rounded bg-primary px-1.5 py-0.5 text-xs text-primary-foreground hover:bg-primary/90"
         >
           +
         </button>
@@ -48,7 +48,7 @@ export default function PortForwardSection({ controllerId }: PortForwardSectionP
       {isExpanded && (
         <ul className="ml-4 space-y-1">
           {portForwards.length === 0 ? (
-            <li className="px-3 py-1 text-xs text-gray-500">无端口转发</li>
+            <li className="px-3 py-1 text-xs text-muted-foreground">无端口转发</li>
           ) : (
             portForwards.map((pf) => (
               <PortForwardItem

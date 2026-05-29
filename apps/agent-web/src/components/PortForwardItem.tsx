@@ -30,14 +30,14 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
   };
 
   return (
-    <li className="flex items-center gap-2 rounded px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800">
-      <span className="text-xs text-gray-400">↗</span>
+    <li className="flex items-center gap-2 rounded px-3 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent">
+      <span className="text-xs text-muted-foreground">↗</span>
       <span className="flex-1 truncate">:{portForward.port}</span>
       {portForward.status === 'active' && (
         <button
           type="button"
           onClick={handleCopy}
-          className="text-xs text-blue-400 hover:text-blue-300"
+          className="text-xs text-primary hover:text-primary/80"
           title={accessUrl}
         >
           {copied ? '已复制' : '复制链接'}
@@ -45,7 +45,7 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
       )}
       <span
         className={`text-xs ${
-          portForward.status === 'active' ? 'text-green-400' : 'text-gray-500'
+          portForward.status === 'active' ? 'text-green-500' : 'text-muted-foreground'
         }`}
       >
         {portForward.status}
@@ -53,7 +53,7 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
       <button
         type="button"
         onClick={handleDelete}
-        className="text-xs text-red-400 hover:text-red-300"
+        className="text-xs text-destructive hover:text-destructive/80"
         title="删除端口转发"
       >
         ✕

@@ -17,6 +17,7 @@ const sessionSchema = new mongoose.Schema({
   currentModel: { type: { id: String, name: String, provider: String } },
   currentModelId: { type: String },
   availableModels: { type: [{ id: String, name: String, provider: String }], default: [] },
+  permissionTimeoutAction: { type: String, enum: ['use_global', 'allow_once', 'reject', 'cancel'], default: 'use_global' },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });

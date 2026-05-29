@@ -12,6 +12,8 @@ import type {
 } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
+import { TodoListPanel } from './TodoListPanel';
+import ThemeToggle from './ThemeToggle';
 // TODO: 端口转发功能整体设计待调整，暂时隐藏入口
 // import PortForwardSection from './PortForwardSection';
 
@@ -148,7 +150,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   };
 
   return (
-    <nav className={`flex flex-col bg-gray-900 text-white ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
+    <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Sessions</h2>
@@ -173,13 +175,13 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
               <li key={controller.id}>
                 <button
                   type="button"
-                  className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-gray-800 ${
+                  className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent ${
                     isOffline ? 'opacity-50' : ''
                   }`}
                   onClick={() => toggleController(controller.id)}
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${
-                    controller.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                    controller.status === 'online' ? 'bg-green-500' : 'bg-muted-foreground'
                   }`} />
                   <span className="flex-1 truncate text-left font-medium">
                     {controller.name || controller.hostname}
@@ -197,7 +199,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         navigate(`/settings?controllerId=${controller.id}`);
                       }
                     }}
-                    className="cursor-pointer rounded p-0.5 text-gray-400 hover:text-white"
+                    className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                     title="控制器配置"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -205,7 +207,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       <circle cx="12" cy="12" r="3" />
                     </svg>
                   </span>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-muted-foreground">
                     {isExpanded ? '▼' : '▶'}
                   </span>
                 </button>
@@ -219,7 +221,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       </li>
                     )} */}
                     {workspacePaths.size === 0 ? (
-                      <li className="px-3 py-1 text-xs text-gray-500">无工作区</li>
+                      <li className="px-3 py-1 text-xs text-muted-foreground">无工作区</li>
                     ) : (
                       Array.from(workspacePaths).map((workspacePath) => {
                         const workspaceKey = `${controller.id}:${workspacePath}`;
@@ -230,13 +232,13 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           <li key={workspaceKey}>
                             <button
                               type="button"
-                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-gray-800"
+                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
                               onClick={() => toggleWorkspace(workspaceKey)}
                             >
-                              <span className="text-xs text-gray-400">
+                              <span className="text-xs text-muted-foreground">
                                 {isWsExpanded ? '▼' : '▶'}
                               </span>
-                              <span className="flex-1 truncate text-left text-gray-300">
+                              <span className="flex-1 truncate text-left text-sidebar-foreground">
                                 📁 {getWorkspaceName(workspacePath)}
                               </span>
                             </button>
@@ -249,12 +251,13 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                       to={`/sessions/${session.id}`}
                                       className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
                                         activeId === session.id
-                                          ? 'bg-gray-700 text-white'
-                                          : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                                          ? 'bg-sidebar-accent text-sidebar-foreground'
+                                          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
                                       }`}
                                     >
-                                      {(session as any).worktreePath ? (
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-blue-400">
+                                      <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+                                      {session.worktreePath && (
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-blue-400">
                                           <path d="M8 3H5a2 2 0 0 0-2 2v3" />
                                           <path d="M21 3h-3a2 2 0 0 0-2 2v3" />
                                           <path d="M21 15v3a2 2 0 0 1-2 2h-3" />
@@ -262,8 +265,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                           <polyline points="7 9 12 4 17 9" />
                                           <polyline points="7 15 12 20 17 15" />
                                         </svg>
-                                      ) : (
-                                        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
                                       )}
                                       <div className="min-w-0 flex-1">
                                         <div className="truncate">
@@ -298,30 +299,34 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       {mobile && (
         <NavLink
           to="/settings"
-          className="flex items-center gap-2 border-t border-gray-700 px-4 py-3 text-sm text-gray-300 hover:text-white"
+          className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
         >
           <span>⚙️</span>
           <span>设置</span>
         </NavLink>
       )}
 
-      <div className="sticky bottom-0 border-t border-gray-700 p-4">
+      <div className="sticky bottom-0 border-t border-sidebar-border p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <span className="truncate text-sm font-medium">{username}</span>
-          <NavLink
-            to="/settings"
-            aria-label="Settings"
-            className={({ isActive }) =>
-              `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
-                isActive ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'
-              }`
-            }
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </NavLink>
+          <div className="flex items-center gap-1">
+            <TodoListPanel />
+            <ThemeToggle />
+            <NavLink
+              to="/settings"
+              aria-label="Settings"
+              className={({ isActive }) =>
+                `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
+                  isActive ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:text-sidebar-foreground'
+                }`
+              }
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </NavLink>
+          </div>
         </div>
       </div>
     </nav>

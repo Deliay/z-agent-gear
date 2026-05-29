@@ -6,6 +6,7 @@ import { controllerResolvers } from './controller.js';
 import { controllerWorkspaceResolvers } from './controller-workspace.js';
 import { sessionResolvers } from './session.js';
 import { portForwardResolvers } from './port-forward.js';
+import { todoResolvers } from './todo.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -17,6 +18,7 @@ export const resolvers = {
     ...controllerWorkspaceResolvers.Query,
     ...sessionResolvers.Query,
     ...portForwardResolvers.Query,
+    ...todoResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -26,6 +28,7 @@ export const resolvers = {
     ...controllerWorkspaceResolvers.Mutation,
     ...sessionResolvers.Mutation,
     ...portForwardResolvers.Mutation,
+    ...todoResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

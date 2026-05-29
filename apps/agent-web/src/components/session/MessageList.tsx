@@ -11,6 +11,7 @@ import CurrentModeCard from './CurrentModeCard';
 import SubAgentCard from './SubAgentCard';
 import ReadCard from './ReadCard';
 import FetchCard from './FetchCard';
+import PlanFloatingCard from './PlanFloatingCard';
 
 interface AcpMessage {
   id: string;
@@ -237,6 +238,16 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
+  // Extract the last plan group for floating display
+  const lastPlanMessages = useMemo(() => {
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (groups[i].type === 'plan') {
+        return groups[i].messages;
+      }
+    }
+    return null;
+  }, [groups]);
+
   // Auto-expand logic: expand the last expandable group, allow user override
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
   const prevLastExpandableRef = useRef<string | null>(null);
@@ -271,12 +282,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
     <div
       ref={listRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto bg-gray-50 p-4"
+      className="flex-1 overflow-y-auto bg-background p-4"
     >
       {messages.length === 0 ? (
         sseLoading ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-gray-500">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
               Loading messages...
             </div>
@@ -286,24 +297,27 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
             Failed to load messages. Connection error.
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-gray-500">
+          <div className="flex h-full items-center justify-center text-muted-foreground">
             No messages yet. Start a conversation!
           </div>
         )
       ) : (
         <div className="space-y-4">
+          {lastPlanMessages && (
+            <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
+          )}
           {hasMore && (
             <div className="py-2 text-center">
               {loadingMore ? (
-                <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
                   Loading earlier messages...
                 </div>
               ) : (
                 <button
                   type="button"
                   onClick={onLoadMore}
-                  className="text-sm text-blue-600 hover:text-blue-800"
+                  className="text-sm text-primary hover:text-primary/80"
                 >
                   Load earlier messages
                 </button>

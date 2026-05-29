@@ -31,14 +31,14 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
   const diffs = computeLineDiff(oldLines, newLines);
 
   const containerClass = inline
-    ? 'rounded border border-gray-200 text-xs'
-    : 'rounded-lg border border-gray-200 text-sm';
+    ? 'rounded border border-border text-xs'
+    : 'rounded-lg border border-border text-sm';
 
   const lineClass = (type: string) => {
     switch (type) {
-      case 'removed': return 'bg-red-50 text-red-800';
-      case 'added': return 'bg-green-50 text-green-800';
-      default: return 'text-gray-700';
+      case 'removed': return 'bg-destructive/10 text-destructive';
+      case 'added': return 'bg-green-500/10 text-green-600';
+      default: return 'text-foreground';
     }
   };
 
@@ -53,7 +53,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
   return (
     <div className={containerClass}>
       {filePath && (
-        <div className="border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600">
+        <div className="border-b border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
           {filePath}
         </div>
       )}
@@ -64,7 +64,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
               key={i}
               className={`flex ${lineClass(d.type)} ${d.type !== 'same' ? 'font-medium' : ''}`}
             >
-              <span className="w-8 flex-shrink-0 select-none text-right text-gray-400">
+              <span className="w-8 flex-shrink-0 select-none text-right text-muted-foreground">
                 {' '}
               </span>
               <span className="w-4 flex-shrink-0 select-none text-center">

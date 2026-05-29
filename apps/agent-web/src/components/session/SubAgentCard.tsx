@@ -38,16 +38,16 @@ export default function SubAgentCard({ messages, expanded, onExpandedChange }: S
       <div className="space-y-3">
         {prompt && (
           <div>
-            <div className="mb-1 text-xs font-medium text-gray-500">Prompt</div>
-            <div className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt</div>
+            <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={prompt} />
             </div>
           </div>
         )}
         {output && (
           <div>
-            <div className="mb-1 text-xs font-medium text-gray-500">Result</div>
-            <div className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Result</div>
+            <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={output} />
             </div>
           </div>
