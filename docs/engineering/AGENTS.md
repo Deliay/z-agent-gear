@@ -123,6 +123,7 @@ flowchart LR
 | [[../../.agents/skills/z-document/SKILL.md\|z-document]] | 文档格式与命名规范 |
 | [[../../.agents/skills/z-test/SKILL.md\|z-test]] | API 测试与 E2E 测试 |
 | [[../../.agents/skills/z-aspire-orchestrator/SKILL.md\|z-aspire-orchestrator]] | 服务编排 |
+| [[../../.agents/skills/tdd/SKILL.md\|tdd]] | 测试驱动开发（红-绿-重构循环） |
 
 ## 相关文档
 
