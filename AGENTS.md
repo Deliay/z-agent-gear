@@ -45,7 +45,8 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 
 1. Always check and load relevant skills before starting work.
 2. Follow contract-based development: define contracts first, then implement.
-3. Reference rules in `docs/engineering/` before writing code.
+3. **采用TDD模式开发**：使用红-绿-重构循环，先写测试再写实现代码。
+4. Reference rules in `docs/engineering/` before writing code.
 
 ## Skill References
 
@@ -59,3 +60,4 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 | z-aspire-orchestrator | Service orchestration with Microsoft Aspire |
 | z-test | API testing and E2E testing workflow |
 | z-debugging | Debugging methodology and troubleshooting |
+| tdd | Test-driven development with red-green-refactor loop |

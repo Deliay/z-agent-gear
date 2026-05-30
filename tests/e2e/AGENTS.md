@@ -41,6 +41,16 @@ BASE_URL=http://localhost:35273 npx playwright test
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
 
+## TDD Workflow
+
+本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环：
+
+1. **RED**: 编写一个失败测试
+2. **GREEN**: 编写最少代码使测试通过
+3. **REFACTOR**: 重构代码，保持测试通过
+
+详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
+
 ## 测试清单
 
 ### Auth E2E (`auth.spec.ts`)

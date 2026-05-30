@@ -51,6 +51,16 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 
+## TDD Workflow
+
+本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环：
+
+1. **RED**: 编写一个失败测试
+2. **GREEN**: 编写最少代码使测试通过
+3. **REFACTOR**: 重构代码，保持测试通过
+
+详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
+
 ## 测试清单
 
 ### Auth API (`auth.test.ts`)
