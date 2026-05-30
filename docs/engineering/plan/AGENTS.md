@@ -43,3 +43,4 @@ Plan 是开发阶段的核心参考文档，开发过程中可按实际情况更
 | [[../../../.agents/skills/z-coding/SKILL.md\|z-coding]] | 契约式开发全流程 |
 | [[../../../.agents/skills/z-test/SKILL.md\|z-test]] | API 测试与 E2E 测试 |
 | [[../../../.agents/skills/z-aspire-orchestrator/SKILL.md\|z-aspire-orchestrator]] | 服务编排 |
+| [[../../../.agents/skills/tdd/SKILL.md\|tdd]] | 测试驱动开发（红-绿-重构循环） |

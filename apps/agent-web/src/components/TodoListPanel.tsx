@@ -43,7 +43,7 @@ export function TodoListPanel() {
   };
 
   const handleTodoClick = (todo: TodoItemData) => {
-    if (todo.type === 'permission_request' && todo.data) {
+    if (todo.type === 'permission_request' && todo.data && !todo.isRead) {
       setSelectedTodo(todo);
     }
   };

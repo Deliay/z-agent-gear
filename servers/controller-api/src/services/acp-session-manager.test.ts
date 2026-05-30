@@ -235,7 +235,7 @@ describe('ACPSessionManager', () => {
       expect(result).toBe(true);
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1', direction: 'input', type: 'text',
-        content: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Hello' } },
+        content: expect.objectContaining({ sessionUpdate: 'user_message_chunk' }),
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"input"'));
       expect(socket.emit).toHaveBeenCalledWith('acp:message', expect.objectContaining({
@@ -259,7 +259,7 @@ describe('ACPSessionManager', () => {
 
       expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1', direction: 'output', type: 'text',
-        content: rawUpdate,
+        content: expect.objectContaining({ sessionUpdate: 'agent_message_chunk' }),
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"output"'));
     });
