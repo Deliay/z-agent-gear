@@ -71,7 +71,7 @@ graph TD
 
     subgraph "mcp-forwarder (HTTP)"
         FWD[MCP Forwarder Service]
-        ROUTE[/mcp/:sessionId/*]
+        ROUTE["/mcp/:sessionId/*"]
     end
 
     subgraph "agent-gear 三种模式"
