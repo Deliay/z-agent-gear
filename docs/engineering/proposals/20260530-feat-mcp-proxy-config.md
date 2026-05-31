@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: MCP 代理服务与配置下发
 **关联 PRD**: `docs/product/draft/20260530-mcp-proxy-config.md`
-**技术提案版本**: v2.0
+**技术提案版本**: v3.0
 **创建日期**: 2026-05-30
 **作者**: ZeroAsh
 **feat-branch**: `feat/mcp-proxy-config`
@@ -20,9 +20,13 @@ ACP 协议支持在 `acp:start` 时传递 `mcpServers` 参数，当前该字段�
 
 1. 用户可在平台管理 HTTP 类型的 MCP Server 配置（含鉴权）
 2. 创建 Session 时可选择 MCP Servers
-3. 通过服务端转发服务，将用户选择的 MCP Servers 聚合为单一端点下发给 Controller
+3. 通过服务端转发服务，将用户选择的 MCP Servers 聚合为单一 HTTP 端点
+4. Agent 支持 HTTP MCP 时直接使用 HTTP 端点；不支持时通过 agent-gear 内置的 stdio 代理转换
 
-**核心设计原则**：用户的 MCP Server 配置（含鉴权信息）不下发到 Controller，而是由服务端转发服务统一管理。Controller 仅访问服务端提供的转发端点。
+**核心设计原则**：
+- 用户的 MCP Server 配置（含鉴权信息）不下发到 Controller，由服务端转发服务统一管理
+- Controller 仅接收转发端点 URL + Token
+- agent-gear 新增 `mcp` 子命令，提供 stdio → HTTP 代理能力
 
 ### 1.2 目标
 
@@ -30,12 +34,12 @@ ACP 协议支持在 `acp:start` 时传递 `mcpServers` 参数，当前该字段�
 - 新增 GraphQL Schema/Resolver 实现 MCP Server CRUD
 - 新增 `McpSessionEndpoint` 模型，为每个 Session 创建独立的转发端点
 - 实现 MCP 转发服务（mcp-forwarder），聚合多个 MCP Server 为单一 HTTP 端点
-- 转发端点自身需要鉴权，Controller 通过 Token 访问
-- 更新 Session 创建流程，集成 MCP Server 选择
+- agent-gear 新增 `mcp` 子命令，将 HTTP MCP 转为 stdio（供不支持 HTTP 的 Agent 使用）
+- 更新 Session 创建流程，集成 MCP Server 选择和能力检测
 
 ### 1.3 范围
 
-- **包含**：agent-api（GraphQL CRUD + 加密存储）、controller-api（转发端点管理 + 鉴权 Token 下发）、mcp-forwarder 转发服务、contracts（GraphQL + WebSocket 契约更新）、前端（MCP Server 管理 UI + Session 创建选择）
+- **包含**：agent-api（GraphQL CRUD + 加密存储）、controller-api（转发端点管理 + Token 签发）、mcp-forwarder 转发服务、agent-controller（`mcp` 子命令）、contracts（GraphQL + WebSocket 契约更新）、前端（MCP Server 管理 UI + Session 创建选择）
 - **不包含**：MCP Server 的 OAuth 交互式认证流程、MCP Server 市场/推荐
 
 ## 2. 技术架构
@@ -59,7 +63,6 @@ graph TD
     subgraph "controller-api (Socket.IO + HTTP)"
         CAPI[Session Service]
         EP[MCP Endpoint Manager]
-        AUTH[Endpoint Auth Service]
     end
 
     subgraph "mcp-forwarder (HTTP)"
@@ -67,15 +70,18 @@ graph TD
         ROUTE[/mcp/:sessionId/*]
     end
 
-    subgraph "agent-controller (Daemon)"
+    subgraph "agent-controller"
         SIO[Socket.IO Client]
-        HTTP[HTTP Client]
+        subgraph "模式1: controller 守护进程"
+            SERVER[agent-gear --key --server]
+        end
+        subgraph "模式2: stdio MCP 代理"
+            MCP_CMD[agent-gear mcp --endpoint --token]
+        end
     end
 
     subgraph "外部"
-        MCP1[HTTP MCP Server A]
-        MCP2[HTTP MCP Server B]
-        MCP3[HTTP MCP Server C]
+        MCP_EXT[远程 HTTP MCP Server]
     end
 
     UI_MCP -->|CRUD| RES
@@ -85,36 +91,34 @@ graph TD
     SVC --> MOD
 
     CAPI -->|创建 Session| EP
-    EP -->|生成转发端点 + Token| AUTH
-    EP -->|注册端点路由| FWD
+    EP -->|生成转发端点 + Token| FWD
     CAPI -->|下发 endpoint URL + token| SIO
 
-    SIO -->|acp:start| HTTP
-    HTTP -->|HTTP + Bearer Token| ROUTE
+    SIO -->|检测 Agent MCP 能力| SERVER
+    SERVER -->|支持 HTTP| ROUTE
+    SERVER -->|不支持 HTTP| MCP_CMD
+    MCP_CMD -->|stdio JSON-RPC| SERVER
+
     ROUTE --> FWD
-    FWD -->|转发到对应 MCP Server| MCP1
-    FWD -->|转发| MCP2
-    FWD -->|转发| MCP3
+    FWD -->|HTTP + MCP Auth Headers| MCP_EXT
 ```
 
 ### 2.2 核心概念
 
 **转发端点（Session Endpoint）**：
 - 每个 Session 创建时，为其选中的 MCP Servers 生成一个独立的 HTTP 端点
-- 端点格式：`/mcp/:sessionId`
+- 端点格式：`POST /mcp/:sessionId`
 - 该端点聚合了该 Session 选择的所有 MCP Server
 - Controller 通过此单一端点访问所有 MCP 功能
 
 **端点鉴权**：
-- 每个端点生成独立的 Bearer Token
+- 每个端点生成独立的 Bearer Token（JWT）
 - Token 与 Session 绑定，Session 结束后 Token 失效
 - Controller 请求时携带 `Authorization: Bearer <token>`
 
-**转发逻辑**：
-- mcp-forwarder 收到请求后，根据 sessionId 查找对应的 MCP Server 列表
-- 解密各 MCP Server 的鉴权信息
-- 将请求转发到目标 MCP Server（携带对应的鉴权 Headers）
-- 返回响应给 Controller
+**agent-gear 双模式**：
+- `agent-gear --key --server`：原有 controller 守护进程模式
+- `agent-gear mcp --endpoint <url> --token <token>`：stdio MCP 代理模式，将 HTTP MCP 转为 stdio 供 Agent 使用
 
 ### 2.3 技术栈
 
@@ -124,7 +128,7 @@ graph TD
 | agent-api | GraphQL-Yoga + Mongoose | MCP Server CRUD + 加密存储 |
 | controller-api | Socket.IO + Express | 转发端点管理、Token 签发 |
 | mcp-forwarder | Express | MCP 请求转发服务 |
-| agent-controller | Node.js | HTTP 客户端连接转发端点 |
+| agent-controller | Node.js | HTTP 客户端 + stdio 代理 |
 | 加密 | Node.js crypto (AES-256-GCM) | 鉴权信息加密存储 |
 | Token | JWT | 端点访问鉴权 |
 
@@ -134,16 +138,19 @@ graph TD
 graph LR
     A[agent-api<br/>McpServer CRUD] --> B[controller-api<br/>端点管理 + Token]
     B --> C[mcp-forwarder<br/>请求转发]
-    D[agent-controller] -->|HTTP + Token| C
-    C -->|HTTP + MCP Auth| E[远程 MCP Server]
+    D[agent-gear controller] -->|HTTP + Token| C
+    E[agent-gear mcp] -->|HTTP + Token| C
+    D -->|stdio| E
+    C -->|HTTP + MCP Auth| F[远程 MCP Server]
 ```
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
 | agent-api | MCP Server CRUD、加密存储、GraphQL API | AES-256-GCM 加密、Mongoose Model |
-| controller-api | Session 端点管理、Token 签发与验证、端点注册 | JWT 签发、端点生命周期管理 |
-| mcp-forwarder | 接收 Controller 请求、解密鉴权、转发到 MCP Server | 动态路由、鉴权注入、请求转发 |
-| agent-controller | 通过 HTTP 连接转发端点 | HTTP Client、Bearer Token 注入 |
+| controller-api | Session 端点管理、Token 签发与验证 | JWT 签发、端点生命周期管理 |
+| mcp-forwarder | 接收请求、解密鉴权、转发到 MCP Server | 动态路由、鉴权注入、请求转发 |
+| agent-gear (controller) | 守护进程，检测 Agent 能力，选择下发方式 | 能力检测、进程管理 |
+| agent-gear (mcp) | stdio MCP 代理，HTTP 转 stdio | JSON-RPC stdio、HTTP fetch |
 
 ## 3. API 设计
 
@@ -370,7 +377,7 @@ Payload: { sessionId, userId, serverNames, exp }
 
 ## 5. 技术实现方案
 
-### 5.1 核心流程：Session 创建时 MCP 端点创建与下发
+### 5.1 核心流程：Session 创建与 MCP 下发
 
 ```mermaid
 sequenceDiagram
@@ -379,29 +386,98 @@ sequenceDiagram
     participant API as agent-api
     participant CAPI as controller-api
     participant FWD as mcp-forwarder
-    participant CTRL as agent-controller
+    participant CTRL as agent-gear controller
+    participant MCP代理 as agent-gear mcp
     participant MCP as HTTP MCP Server
 
     U->>FE: 创建 Session，选择 MCP Servers
     FE->>API: createSession(input.mcpServerIds)
-    API->>API: 查询 McpServer 配置
-
     API->>CAPI: 创建 Session + mcpServerIds
+
     CAPI->>CAPI: 创建 Mcpsessionendpoint 记录
-    CAPI->>CAPI: 签发 JWT Token（含 sessionId + serverNames）
+    CAPI->>CAPI: 签发 JWT Token
     CAPI->>FWD: 注册端点路由（/mcp/:sessionId）
     CAPI->>CTRL: acp:start + mcpEndpoint(url + token + serverNames)
 
-    CTRL->>FWD: HTTP POST /mcp/:sessionId (Bearer Token)
-    FWD->>FWD: 验证 JWT Token
-    FWD->>FWD: 查找 Session 绑定的 MCP Servers
-    FWD->>FWD: 解密各 MCP Server 鉴权信息
-    FWD->>MCP: 转发请求（携带 MCP Server 鉴权 Headers）
-    MCP->>FWD: 返回响应
-    FWD->>CTRL: 返回响应
+    CTRL->>CTRL: 检测 Agent MCP 能力
+
+    alt Agent 支持 HTTP MCP
+        CTRL->>FWD: Agent 直接 HTTP 请求 (Bearer Token)
+        FWD->>MCP: 转发（携带 MCP Server 鉴权 Headers）
+        MCP->>FWD: 响应
+        FWD->>CTRL: 响应
+    else Agent 不支持 HTTP MCP
+        CTRL->>MCP代理: spawn agent-gear mcp --endpoint <url> --token <token>
+        Note over MCP代理: stdio 模式启动
+        MCP代理->>FWD: HTTP 请求 (Bearer Token)
+        FWD->>MCP: 转发（携带 MCP Server 鉴权 Headers）
+        MCP->>FWD: 响应
+        FWD->>MCP代理: 响应
+        MCP代理->>CTRL: stdio JSON-RPC 响应
+    end
 ```
 
-### 5.2 关键实现点
+### 5.2 agent-gear 双模式设计
+
+#### 5.2.1 模式 1：Controller 守护进程（已有）
+
+```bash
+agent-gear --key <controller-key> --server
+```
+
+- 启动 Socket.IO 守护进程
+- 注册到 controller-api
+- 等待 `acp:start` 等事件
+- 管理 ACP Session 生命周期
+
+#### 5.2.2 模式 2：stdio MCP 代理（新增）
+
+```bash
+agent-gear mcp --endpoint <转发端点URL> --token <bearer-token>
+```
+
+- 启动 stdio JSON-RPC 服务
+- 从 stdin 读取 JSON-RPC 请求
+- 将请求通过 HTTP 转发到 `--endpoint` 指定的转发端点
+- 请求携带 `Authorization: Bearer <token>` Header
+- 将 HTTP 响应写回 stdout
+- Agent 通过 stdio 与此进程通信
+
+#### 5.2.3 入口文件设计
+
+```typescript
+// packages/agent-controller/src/index.ts
+import { parseArgs } from 'node:util';
+
+const args = parseArgs({
+  options: {
+    key: { type: 'string' },
+    server: { type: 'boolean' },
+  },
+  strict: false,
+  allowPositionals: true,
+});
+
+if (args.positionals[0] === 'mcp') {
+  // 模式 2: stdio MCP 代理
+  const mcpArgs = parseArgs({
+    args: args.positionals.slice(1),
+    options: {
+      endpoint: { type: 'string' },
+      token: { type: 'string' },
+    },
+  });
+  await startMcpProxy(mcpArgs.values.endpoint, mcpArgs.values.token);
+} else if (args.values.server) {
+  // 模式 1: controller 守护进程
+  await startController(args.values.key);
+} else {
+  // 显示帮助
+  showHelp();
+}
+```
+
+### 5.3 关键实现点
 
 #### 实现点 1: McpServer Service（agent-api）
 
@@ -424,7 +500,7 @@ sequenceDiagram
 
 #### 实现点 3: MCP Forwarder Service（mcp-forwarder）
 
-- **描述**: 独立的 HTTP 服务，负责接收 Controller 请求并转发到目标 MCP Server
+- **描述**: 独立的 HTTP 服务，负责接收请求并转发到目标 MCP Server
 - **技术细节**:
   - 路由：`POST /mcp/:sessionId`
   - 中间件：验证 JWT Token、检查 Session 有效性
@@ -437,34 +513,26 @@ sequenceDiagram
   - `tools/list` 聚合：返回所有绑定 MCP Server 的工具列表
 - **风险点**: 需处理 MCP Server 不可达、鉴权失败等异常
 
-#### 实现点 4: agent-controller HTTP Client
+#### 实现点 4: agent-gear mcp 子命令
 
-- **描述**: agent-controller 在 `acp:start` 时接收 mcpEndpoint 信息，使用 HTTP 连接转发端点
+- **描述**: 在 agent-controller 包中新增 `mcp` 子命令，实现 stdio MCP 代理
 - **技术细节**:
-  - 收到 `acp:start` 中的 `mcpEndpoint` 后，保存 `url` 和 `token`
-  - Agent 通过 HTTP 请求转发端点，Header 携带 `Authorization: Bearer <token>`
-  - 收到 `mcp:endpoint:revoke` 时，清除本地端点信息
-- **风险点**: 需处理 Token 过期、网络超时等情况
+  - 入口：`packages/agent-controller/src/commands/mcp.ts`
+  - 通过 `--endpoint` 和 `--token` 参数接收转发端点信息
+  - stdio 读取 JSON-RPC → HTTP POST 到 endpoint → 响应写回 stdio
+  - 使用 `readline` 接口逐行读取 stdio JSON-RPC
+  - 请求 Header：`Authorization: Bearer <token>`
+- **风险点**: 需处理 HTTP 超时、连接错误、Token 过期等异常
 
-### 5.3 mcp-forwarder 服务结构
+#### 实现点 5: agent-controller 能力检测与进程管理
 
-```
-servers/mcp-forwarder/
-├── src/
-│   ├── index.ts              # 入口：Express 服务
-│   ├── routes/
-│   │   └── mcp.ts            # /mcp/:sessionId 路由
-│   ├── middleware/
-│   │   └── auth.ts           # JWT 验证中间件
-│   ├── services/
-│   │   ├── endpoint.ts       # 端点查询服务
-│   │   ├── decrypt.ts        # 鉴权信息解密
-│   │   └── forwarder.ts      # 请求转发逻辑
-│   └── config/
-│       └── index.ts          # 配置（JWT Secret、加密 Key）
-├── package.json
-└── tsconfig.json
-```
+- **描述**: agent-controller 在 `acp:start` 时根据 Agent 能力选择下发方式
+- **技术细节**:
+  - 收到 `acp:start` 中的 `mcpEndpoint` 后，检测 Agent 的 `mcpCapabilities.http`
+  - 支持 HTTP → 将 `mcpEndpoint.url` 和 `mcpEndpoint.token` 传递给 Agent
+  - 不支持 HTTP → spawn `agent-gear mcp --endpoint <url> --token <token>`，将 stdio 连接到 Agent
+  - Session 结束时 kill mcp 子进程
+- **风险点**: 需确保子进程异常退出时也能正确清理
 
 ### 5.4 转发端点生命周期
 
@@ -494,12 +562,12 @@ stateDiagram-v2
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
-| MCP 转发位置 | Controller 端 mcp-proxy | 服务端 mcp-forwarder | 服务端 mcp-forwarder | 鉴权信息不下发到 Controller，安全性更高 |
+| MCP 转发位置 | Controller 端独立程序 | 服务端 mcp-forwarder | 服务端 mcp-forwarder | 鉴权信息不下发到 Controller，安全性更高 |
+| stdio 代理位置 | 独立 mcp-proxy 包 | 集成到 agent-gear | 集成到 agent-gear | 统一工具链，减少依赖 |
 | 端点粒度 | 全局共享端点 | 每 Session 独立端点 | 每 Session 独立端点 | 隔离性好，便于权限控制和生命周期管理 |
 | 端点鉴权方式 | API Key | JWT Bearer Token | JWT Bearer Token | 自包含、无状态、可携带元数据 |
 | Token 存储 | 明文存储 | bcrypt hash 存储 | bcrypt hash 存储 | 即使数据库泄露也无法还原 Token |
 | MCP Server 鉴权信息存储 | 明文 | AES-256-GCM | AES-256-GCM | GCM 提供完整性校验，更安全 |
-| 转发服务部署 | 独立服务 | 集成到 controller-api | 独立服务 | 关注点分离，可独立扩展 |
 
 ### 6.2 依赖与约束
 
@@ -519,6 +587,12 @@ z-agent-gear/
 ├── contracts/
 │   ├── mcp-server.graphql          # 新增：MCP Server GraphQL Schema
 │   └── agent-session-websocket.md  # 更新：新增 mcpEndpoint 字段
+├── packages/
+│   └── agent-controller/
+│       └── src/
+│           ├── index.ts            # 更新：新增 mcp 子命令入口
+│           └── commands/
+│               └── mcp.ts          # 新增：stdio MCP 代理逻辑
 ├── servers/
 │   ├── agent-api/
 │   │   └── src/
@@ -562,7 +636,7 @@ z-agent-gear/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | McpServer Service（CRUD + 加密解密）、Endpoint Manager（Token 签发/验证）、Forwarder（转发逻辑） |
+| 单元测试 | Vitest | McpServer Service（CRUD + 加密解密）、Endpoint Manager（Token 签发/验证）、Forwarder（转发逻辑）、mcp 子命令（stdio↔HTTP） |
 | API 测试 | Vitest + GraphQL | MCP Server CRUD 全流程、Session 创建时端点创建 |
 | E2E 测试 | Playwright | MCP Server 管理 UI、Session 创建选择 MCP Server |
 
@@ -574,12 +648,12 @@ z-agent-gear/
 | 创建 MCP Server（各种认证类型） | authConfig 加密存储，查询时解密返回 |
 | 同名 MCP Server 创建 | 返回错误，名称冲突 |
 | Session 创建 + 选择 MCP Servers | 创建端点记录、签发 Token、注册路由 |
-| Controller 访问转发端点（有效 Token） | 请求成功转发到目标 MCP Server |
-| Controller 访问转发端点（无效 Token） | 返回 401 |
-| Controller 访问转发端点（过期 Token） | 返回 401 |
+| Agent 支持 HTTP → 直接访问转发端点 | 请求成功转发到目标 MCP Server |
+| Agent 不支持 HTTP → agent-gear mcp 代理 | stdio 请求正确转换为 HTTP 转发 |
+| 访问转发端点（无效 Token） | 返回 401 |
+| 访问转发端点（过期 Token） | 返回 401 |
 | Session 结束 | Token 撤销、端点标记为 revoked |
-| MCP Server 鉴权失败 | 返回错误，Session 仍可用 |
-| 多 MCP Server 聚合请求 | 正确路由到对应 MCP Server |
+| agent-gear mcp 子进程异常退出 | Controller 正确清理 |
 
 ## 9. 部署方案
 
@@ -621,7 +695,9 @@ services:
 - [ ] MCP Server CRUD 功能完成
 - [ ] 鉴权信息加密存储/解密读取正常
 - [ ] Session 创建时端点创建 + Token 签发正常
-- [ ] Controller 通过 Token 访问转发端点正常
+- [ ] Agent 支持 HTTP 时直接访问转发端点正常
+- [ ] Agent 不支持 HTTP 时 `agent-gear mcp` 代理正常
+- [ ] `agent-gear mcp --endpoint --token` stdio 模式工作正常
 - [ ] 转发请求携带 MCP Server 鉴权 Headers 正常
 - [ ] Session 结束时 Token 撤销正常
 - [ ] 多 MCP Server 聚合路由正常
