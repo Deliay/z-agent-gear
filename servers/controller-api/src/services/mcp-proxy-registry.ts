@@ -1,0 +1,150 @@
+import { Server as SocketIOServer, type Socket } from 'socket.io';
+import bcrypt from 'bcryptjs';
+import { McpServer } from '../models/mcp-server.js';
+import { McpProxyKey } from '../models/mcp-proxy-key.js';
+
+interface ProxyConnection {
+  socket: Socket;
+  serverId: string;
+  userId: string;
+  command: string;
+}
+
+export class McpProxyRegistry {
+  private connections: Map<string, ProxyConnection> = new Map();
+  private pendingRequests: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void; timeout: NodeJS.Timeout }> = new Map();
+
+  constructor(private io: SocketIOServer) {}
+
+  async register(
+    rawKey: string,
+    hostname: string,
+    command: string,
+    serverName: string,
+  ): Promise<{ success: boolean; proxyId?: string; serverId?: string; error?: string }> {
+    const keys = await McpProxyKey.find({ status: 'active' });
+    let userId: string | undefined;
+    let keyId: string | undefined;
+
+    for (const key of keys) {
+      const match = await bcrypt.compare(rawKey, key.keyHash);
+      if (match) {
+        userId = key.userId;
+        keyId = key._id.toString();
+        await McpProxyKey.findByIdAndUpdate(key._id, { lastUsedAt: new Date() });
+        break;
+      }
+    }
+
+    if (!userId || !keyId) {
+      return { success: false, error: 'Invalid key' };
+    }
+
+    const server = await McpServer.create({
+      userId,
+      name: serverName,
+      transport: 'registered_proxy',
+      command,
+      status: 'active',
+    });
+
+    const proxyId = `proxy_${server._id}`;
+    return { success: true, proxyId, serverId: server._id.toString() };
+  }
+
+  setupNamespace(): void {
+    const nsp = this.io.of('/mcp-proxy');
+
+    nsp.on('connection', (socket: Socket) => {
+      let proxyId: string | null = null;
+
+      socket.on('proxy:register', async (data: { proxyId: string; key: string }) => {
+        proxyId = data.proxyId;
+        const serverId = proxyId.replace('proxy_', '');
+
+        const server = await McpServer.findByIdAndUpdate(
+          serverId,
+          { proxyConnectionId: socket.id, status: 'active', lastHeartbeatAt: new Date() },
+          { new: true },
+        );
+
+        if (!server) {
+          socket.emit('proxy:error', { code: 'PROXY_NOT_FOUND', message: 'Server not found' });
+          socket.disconnect(true);
+          return;
+        }
+
+        this.connections.set(proxyId, {
+          socket,
+          serverId,
+          userId: server.userId,
+          command: server.command,
+        });
+
+        socket.emit('proxy:registered', { proxyId, serverId });
+      });
+
+      socket.on('proxy:heartbeat', async (data: { proxyId: string }) => {
+        const conn = this.connections.get(data.proxyId);
+        if (conn) {
+          await McpServer.findByIdAndUpdate(conn.serverId, { lastHeartbeatAt: new Date() });
+        }
+      });
+
+      socket.on('proxy:response', (data: { requestId: string; response: any }) => {
+        const pending = this.pendingRequests.get(data.requestId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          pending.resolve(data.response);
+          this.pendingRequests.delete(data.requestId);
+        }
+      });
+
+      socket.on('proxy:unregister', async () => {
+        if (proxyId) {
+          await this.handleDisconnect(proxyId);
+        }
+      });
+
+      socket.on('disconnect', async () => {
+        if (proxyId) {
+          await this.handleDisconnect(proxyId);
+        }
+      });
+    });
+  }
+
+  async forwardRequest(proxyId: string, request: any): Promise<any> {
+    const conn = this.connections.get(proxyId);
+    if (!conn) {
+      throw new Error('Proxy not connected');
+    }
+
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error('Request timeout'));
+      }, 30000);
+
+      this.pendingRequests.set(requestId, { resolve, reject, timeout });
+      conn.socket.emit('proxy:request', { requestId, request });
+    });
+  }
+
+  private async handleDisconnect(proxyId: string): Promise<void> {
+    const conn = this.connections.get(proxyId);
+    if (conn) {
+      await McpServer.findByIdAndUpdate(conn.serverId, { status: 'offline', proxyConnectionId: null });
+      this.connections.delete(proxyId);
+    }
+  }
+
+  getActiveProxy(serverId: string): ProxyConnection | undefined {
+    const proxyId = `proxy_${serverId}`;
+    return this.connections.get(proxyId);
+  }
+}
+
+export const mcpProxyRegistry = new McpProxyRegistry(null as any);

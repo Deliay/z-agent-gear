@@ -24,6 +24,7 @@ export class SessionService {
     workspaceId: string;
     enableWorktree?: boolean;
     worktreeBranchSuffix?: string;
+    mcpServerIds?: string[];
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
@@ -89,6 +90,28 @@ export class SessionService {
       worktreeBranch,
     });
 
+    // Create MCP endpoint if mcpServerIds provided
+    let mcpEndpoint: { url: string; token: string } | undefined;
+    if (input.mcpServerIds && input.mcpServerIds.length > 0) {
+      const controllerApiUrl = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+      try {
+        const response = await fetch(`${controllerApiUrl}/api/mcp-endpoints`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session._id.toString(),
+            userId,
+            mcpServerIds: input.mcpServerIds,
+          }),
+        });
+        if (response.ok) {
+          mcpEndpoint = await response.json() as { url: string; token: string };
+        }
+      } catch (err) {
+        console.error('Failed to create MCP endpoint:', err);
+      }
+    }
+
     // Notify controller-api to start ACP session via Redis Pub/Sub
     await redis.publish('session:command', JSON.stringify({
       type: 'acp:start',
@@ -96,6 +119,7 @@ export class SessionService {
       controllerId: input.controllerId,
       serverType: input.acpServerType,
       cwd,
+      mcpEndpoint,
     }));
 
     return this.mapSession(session.toObject());

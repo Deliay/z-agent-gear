@@ -21,6 +21,8 @@ import {
 import ProviderSection from '@/components/settings/ProviderSection';
 import ModelSection from '@/components/settings/ModelSection';
 import ControllerListSection from '@/components/settings/ControllerListSection';
+import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
+import McpServerSection from '@/components/settings/McpServerSection';
 import ControllerConfigPage from './ControllerConfigPage';
 
 export default function SettingsPage() {
@@ -66,6 +68,7 @@ export default function SettingsPage() {
           <button type="button" onClick={() => scrollTo('provider-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">供应商</button>
           <button type="button" onClick={() => scrollTo('model-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">模型</button>
           <button type="button" onClick={() => scrollTo('controller-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">控制器</button>
+          <button type="button" onClick={() => scrollTo('mcp-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">MCP</button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           <section id="account-section" className="mb-8">
@@ -103,6 +106,13 @@ export default function SettingsPage() {
           </section>
           <section id="controller-section" className="mb-8">
             <ControllerListSection onNavigateToConfig={handleNavigateToConfig} />
+          </section>
+          <section id="mcp-section" className="mb-8">
+            <h2 className="mb-4 text-lg font-semibold">MCP</h2>
+            <div className="space-y-4">
+              <McpProxyKeySection />
+              <McpServerSection />
+            </div>
           </section>
         </div>
       </div>
@@ -151,6 +161,18 @@ export default function SettingsPage() {
               控制器管理
             </button>
           </div>
+          <div className="pt-2">
+            <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+              MCP 代理
+            </div>
+            <button
+              type="button"
+              onClick={() => scrollTo('mcp-section')}
+              className="w-full rounded-md px-3 py-2 text-sm font-medium text-left hover:bg-accent hover:text-accent-foreground"
+            >
+              MCP 管理
+            </button>
+          </div>
         </div>
       </nav>
       <div className="overflow-y-auto p-8">
@@ -194,6 +216,14 @@ export default function SettingsPage() {
 
         <section id="controller-section" className="mb-10">
           <ControllerListSection onNavigateToConfig={handleNavigateToConfig} />
+        </section>
+
+        <section id="mcp-section" className="mb-10">
+          <h2 className="mb-6 text-xl font-semibold text-foreground">MCP 代理</h2>
+          <div className="space-y-6">
+            <McpProxyKeySection />
+            <McpServerSection />
+          </div>
         </section>
       </div>
     </div>
