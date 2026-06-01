@@ -10,7 +10,17 @@ const mcpServerSchema = new mongoose.Schema(
     status: { type: String, enum: ['active', 'offline', 'disabled'], default: 'active' },
     lastHeartbeatAt: { type: Date },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    toJSON: {
+      transform: (_doc, ret) => {
+        ret.id = ret._id;
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      },
+    },
+  },
 );
 
 mcpServerSchema.index({ userId: 1, name: 1 }, { unique: true });

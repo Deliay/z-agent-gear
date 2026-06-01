@@ -62,11 +62,14 @@ let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp_test_${Date.now()}`;
+  const username = `mcp${Date.now() % 1000000}`;
   const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
   const signupData = await signupRes.json() as any;
-  authToken = signupRes.ok ? signupData.data?.signup?.token : undefined;
-  userId = signupRes.ok ? signupData.data?.signup?.user?.id : undefined;
+  authToken = signupData.data?.signup?.token;
+  userId = signupData.data?.signup?.user?.id;
+  if (!authToken) {
+    console.error('Failed to get auth token:', signupData);
+  }
 });
 
 describe('MCP Server API (agent-api)', () => {

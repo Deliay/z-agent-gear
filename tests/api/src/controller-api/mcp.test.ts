@@ -33,16 +33,20 @@ let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp_ctrl_test_${Date.now()}`;
+  const username = `mcp${Date.now() % 1000000}`;
   const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
   const signupData = await signupRes.json() as any;
-  authToken = signupRes.ok ? signupData.data?.signup?.token : undefined;
-  userId = signupRes.ok ? signupData.data?.signup?.user?.id : undefined;
+  authToken = signupData.data?.signup?.token;
+  userId = signupData.data?.signup?.user?.id;
+  if (!authToken || !userId) {
+    console.error('Failed to get auth token or userId:', signupData);
+  }
 });
 
 describe('MCP Proxy Key API (controller-api)', () => {
   let createdKeyId: string;
   let createdRawKey: string;
+  const testKeyName = `Test MCP Key ${Date.now()}`;
 
   describe('POST /api/mcp-proxy-keys', () => {
     it('should list keys (empty initially)', async () => {
@@ -55,18 +59,21 @@ describe('MCP Proxy Key API (controller-api)', () => {
     });
 
     it('should create a new MCP proxy key', async () => {
+      console.log('Creating key with userId:', userId);
       const res = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId,
         },
-        body: JSON.stringify({ name: 'Test MCP Key' }),
+        body: JSON.stringify({ name: testKeyName }),
       });
-      expect(res.ok).toBe(true);
+      console.log('Create key response status:', res.status);
       const data = await res.json() as any;
+      console.log('Create key response:', JSON.stringify(data, null, 2));
+      expect(res.ok).toBe(true);
       expect(data.rawKey).toMatch(/^mcp_/);
-      expect(data.key.name).toBe('Test MCP Key');
+      expect(data.key.name).toBe(testKeyName);
       expect(data.key.status).toBe('active');
       createdKeyId = data.key.id;
       createdRawKey = data.rawKey;
@@ -79,17 +86,19 @@ describe('MCP Proxy Key API (controller-api)', () => {
           'Content-Type': 'application/json',
           'x-user-id': userId,
         },
-        body: JSON.stringify({ name: 'Test MCP Key' }),
+        body: JSON.stringify({ name: testKeyName }),
       });
       expect(res.status).toBe(409);
     });
 
     it('should list keys after creation', async () => {
+      console.log('Looking for key with id:', createdKeyId);
       const res = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
         headers: { 'x-user-id': userId },
       });
       expect(res.ok).toBe(true);
       const keys = await res.json() as any[];
+      console.log('Keys found:', keys.length, keys.map(k => k.id));
       expect(keys.length).toBeGreaterThan(0);
       expect(keys.some((k: any) => k.id === createdKeyId)).toBe(true);
     });
@@ -97,10 +106,12 @@ describe('MCP Proxy Key API (controller-api)', () => {
 
   describe('POST /api/mcp-proxy-keys/:id/revoke', () => {
     it('should revoke a key', async () => {
+      console.log('Attempting to revoke key:', createdKeyId);
       const res = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys/${createdKeyId}/revoke`, {
         method: 'POST',
         headers: { 'x-user-id': userId },
       });
+      console.log('Revoke response status:', res.status);
       expect(res.ok).toBe(true);
       const data = await res.json() as any;
       expect(data.success).toBe(true);
