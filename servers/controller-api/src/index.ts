@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import mongoose from 'mongoose';
@@ -24,6 +25,7 @@ import { McpProxyRegistry } from './services/mcp-proxy-registry.js';
 const app = express();
 const httpServer = createServer(app);
 
+app.use(cors());
 app.use(express.json());
 
 app.get('/health', (_req, res) => {

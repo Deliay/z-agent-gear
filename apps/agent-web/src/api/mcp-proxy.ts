@@ -14,10 +14,22 @@ export interface CreateMcpProxyKeyResult {
   rawKey: string;
 }
 
+function getUserIdFromToken(token: string): string | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.userId || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMcpProxyKeys(token: string): Promise<McpProxyKey[]> {
+  const userId = getUserIdFromToken(token);
+  if (!userId) throw new Error('Invalid token');
+
   const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'x-user-id': userId,
     },
   });
   if (!response.ok) {
@@ -27,11 +39,14 @@ export async function fetchMcpProxyKeys(token: string): Promise<McpProxyKey[]> {
 }
 
 export async function createMcpProxyKey(token: string, name: string): Promise<CreateMcpProxyKeyResult> {
+  const userId = getUserIdFromToken(token);
+  if (!userId) throw new Error('Invalid token');
+
   const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
+      'x-user-id': userId,
     },
     body: JSON.stringify({ name }),
   });
@@ -42,10 +57,13 @@ export async function createMcpProxyKey(token: string, name: string): Promise<Cr
 }
 
 export async function revokeMcpProxyKey(token: string, id: string): Promise<void> {
+  const userId = getUserIdFromToken(token);
+  if (!userId) throw new Error('Invalid token');
+
   const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys/${id}/revoke`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'x-user-id': userId,
     },
   });
   if (!response.ok) {

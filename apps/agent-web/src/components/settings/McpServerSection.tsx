@@ -1,4 +1,4 @@
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GET_MCP_SERVERS } from '@/graphql/queries';
 import {
   Card,

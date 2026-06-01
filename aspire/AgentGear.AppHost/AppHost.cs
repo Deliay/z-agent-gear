@@ -60,6 +60,7 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
 var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
     .WithReference(agentApi)
     .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
+    .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "agent-web";
