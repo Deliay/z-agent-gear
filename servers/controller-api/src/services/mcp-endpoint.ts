@@ -3,7 +3,11 @@ import bcrypt from 'bcryptjs';
 import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
 import { McpServer } from '../models/mcp-server.js';
 
-const JWT_SECRET = process.env.MCP_ENDPOINT_JWT_SECRET || 'default-secret';
+const JWT_SECRET = process.env.MCP_ENDPOINT_JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('MCP_ENDPOINT_JWT_SECRET environment variable is required');
+}
+
 const SALT_ROUNDS = 10;
 
 export class McpEndpointService {

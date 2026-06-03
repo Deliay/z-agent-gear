@@ -29,7 +29,16 @@ export function createMcpProxyKeyRouter(): Router {
       if (!name) {
         return res.status(400).json({ error: 'Missing name' });
       }
-      const result = await mcpProxyKeyService.createKey(userId, name);
+      if (typeof name !== 'string') {
+        return res.status(400).json({ error: 'Name must be a string' });
+      }
+      if (name.length < 1 || name.length > 100) {
+        return res.status(400).json({ error: 'Name must be between 1 and 100 characters' });
+      }
+      if (!/^[a-zA-Z0-9\s\-_]+$/.test(name)) {
+        return res.status(400).json({ error: 'Name contains invalid characters' });
+      }
+      const result = await mcpProxyKeyService.createKey(userId, name.trim());
       res.json(result);
     } catch (err: any) {
       if (err.code === 11000) {

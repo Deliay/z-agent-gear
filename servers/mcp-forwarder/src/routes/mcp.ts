@@ -2,6 +2,16 @@ import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { forwardToProxy } from '../services/controller-client.js';
 
+interface McpRequest {
+  jsonrpc: string;
+  id: number | string;
+  method: string;
+  params?: {
+    serverName?: string;
+    [key: string]: unknown;
+  };
+}
+
 export function createMcpRouter(): Router {
   const router = Router();
   router.use(authMiddleware);
@@ -16,8 +26,18 @@ export function createMcpRouter(): Router {
     }
 
     try {
-      const request = req.body;
+      const request = req.body as McpRequest;
+      
+      if (!request.jsonrpc || !request.method) {
+        res.status(400).json({ error: 'Invalid MCP request: missing jsonrpc or method' });
+        return;
+      }
+
       const serverName = request.params?.serverName || session.serverNames[0];
+      if (!serverName) {
+        res.status(400).json({ error: 'No server name specified' });
+        return;
+      }
 
       const result = await forwardToProxy(serverName, request);
       res.json(result);

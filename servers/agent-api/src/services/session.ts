@@ -106,9 +106,12 @@ export class SessionService {
         });
         if (response.ok) {
           mcpEndpoint = await response.json() as { url: string; token: string };
+        } else {
+          const errorText = await response.text();
+          console.error(`Failed to create MCP endpoint: ${response.status} ${errorText}`);
         }
       } catch (err) {
-        console.error('Failed to create MCP endpoint:', err);
+        console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
       }
     }
 

@@ -138,6 +138,13 @@ export class McpProxyRegistry {
     if (conn) {
       await McpServer.findByIdAndUpdate(conn.serverId, { status: 'offline', proxyConnectionId: null });
       this.connections.delete(proxyId);
+      
+      // Clean up any pending requests for this proxy
+      for (const [requestId, pending] of this.pendingRequests.entries()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error('Proxy disconnected'));
+        this.pendingRequests.delete(requestId);
+      }
     }
   }
 

@@ -31,6 +31,7 @@ var redis = builder.AddRedis("redis")
     });
 
 var corsOrigin = builder.AddParameter("cors-origin");
+var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -47,6 +48,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
@@ -61,6 +63,7 @@ var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
     .WithReference(agentApi)
     .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
     .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
+    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "agent-web";

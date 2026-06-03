@@ -22,8 +22,16 @@ export class McpProxyKeyService {
   }
 
   async verifyKey(rawKey: string): Promise<{ valid: boolean; keyId?: string; userId?: string }> {
-    const keys = await McpProxyKey.find({ status: 'active' });
-    for (const key of keys) {
+    // Extract prefix for pre-filtering (e.g., "mcp_abc" from "mcp_abc...xyz")
+    const prefix = rawKey.slice(0, 7);
+    
+    // Pre-filter by keyPrefix to reduce the number of bcrypt comparisons
+    const candidates = await McpProxyKey.find({ 
+      status: 'active',
+      keyPrefix: { $regex: `^${prefix}` },
+    });
+
+    for (const key of candidates) {
       const match = await bcrypt.compare(rawKey, key.keyHash);
       if (match) {
         await McpProxyKey.findByIdAndUpdate(key._id, { lastUsedAt: new Date() });

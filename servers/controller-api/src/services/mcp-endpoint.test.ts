@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Set required environment variable before any imports
+process.env.MCP_ENDPOINT_JWT_SECRET = 'test-secret-for-testing';
+
 vi.mock('../models/mcp-session-endpoint.js', () => ({
   McpSessionEndpoint: {
     create: vi.fn(),
@@ -26,9 +29,10 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
-import { McpEndpointService } from './mcp-endpoint.js';
-import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
-import { McpServer } from '../models/mcp-server.js';
+// Dynamic import after env is set
+const { McpEndpointService } = await import('./mcp-endpoint.js');
+const { McpSessionEndpoint } = await import('../models/mcp-session-endpoint.js');
+const { McpServer } = await import('../models/mcp-server.js');
 
 const mcpEndpointService = new McpEndpointService();
 
