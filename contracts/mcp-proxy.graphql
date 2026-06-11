@@ -1,0 +1,27 @@
+enum McpProxyKeyStatus {
+  active
+  revoked
+}
+
+type McpProxyKey {
+  id: ID!
+  name: String!
+  keyPrefix: String!
+  status: McpProxyKeyStatus!
+  lastUsedAt: String
+  createdAt: String!
+}
+
+type CreateMcpProxyKeyPayload {
+  key: McpProxyKey!
+  rawKey: String!
+}
+
+type Query {
+  mcpProxyKeys: [McpProxyKey!]!
+}
+
+type Mutation {
+  createMcpProxyKey(name: String!): CreateMcpProxyKeyPayload!
+  revokeMcpProxyKey(id: ID!): Boolean!
+}

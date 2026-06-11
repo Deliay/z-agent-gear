@@ -98,6 +98,15 @@
 | `serverType` | `string` | 是 | ACP Server 类型（`opencode`） |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `mcpServers` | `McpServerConfig[]` | 否 | MCP Server 配置（预留） |
+| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息 |
+
+**McpEndpoint 结构：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | `string` | 是 | 转发端点 URL |
+| `token` | `string` | 是 | Bearer Token |
+| `serverNames` | `string[]` | 是 | MCP Server 名称列表 |
 
 **McpServerConfig 结构（预留）：**
 

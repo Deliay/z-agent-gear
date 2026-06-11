@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import mongoose from 'mongoose';
@@ -16,9 +17,16 @@ import { portForwardRelayService } from './services/port-forward.js';
 import { permissionManager } from './services/permission-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
+import { createMcpProxyKeyRouter } from './routes/mcp-proxy-key.js';
+import { createMcpProxyRouter } from './routes/mcp-proxy.js';
+import { createMcpEndpointRouter } from './routes/mcp-endpoint.js';
+import { McpProxyRegistry } from './services/mcp-proxy-registry.js';
 
 const app = express();
 const httpServer = createServer(app);
+
+app.use(cors());
+app.use(express.json());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -28,6 +36,13 @@ const io = new SocketIOServer(httpServer, {
   cors: { origin: '*' },
   transports: ['websocket'],
 });
+
+const mcpProxyRegistry = new McpProxyRegistry(io);
+mcpProxyRegistry.setupNamespace();
+
+app.use('/api/mcp-proxy-keys', createMcpProxyKeyRouter());
+app.use('/api/mcp-proxy', createMcpProxyRouter(mcpProxyRegistry));
+app.use('/api/mcp-endpoints', createMcpEndpointRouter());
 
 createSocketIOServer(io);
 
