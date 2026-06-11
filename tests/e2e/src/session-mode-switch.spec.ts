@@ -94,6 +94,8 @@ test.describe('Session Mode Switch', () => {
             requestId: data.requestId,
             sessionId: data.sessionId,
             success: true,
+            modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
+            currentModeId: 'code',
           });
           resolve();
         }, 300);
@@ -150,6 +152,11 @@ test.describe('Session Mode Switch', () => {
             requestId: data.requestId,
             sessionId: data.sessionId,
             success: true,
+            modes: [
+              { id: 'code', name: 'Code', description: 'Coding mode' },
+              { id: 'architect', name: 'Architect', description: 'Architecture mode' },
+            ],
+            currentModeId: 'code',
           });
           resolve();
         }, 300);
@@ -216,6 +223,11 @@ test.describe('Session Mode Switch', () => {
             requestId: data.requestId,
             sessionId: data.sessionId,
             success: true,
+            modes: [
+              { id: 'code', name: 'Code', description: 'Coding mode' },
+              { id: 'architect', name: 'Architect', description: 'Architecture mode' },
+            ],
+            currentModeId: 'code',
           });
           resolve();
         }, 300);

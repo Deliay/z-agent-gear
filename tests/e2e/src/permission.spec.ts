@@ -172,15 +172,12 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for todo to be created and polling to update
-    await page.waitForTimeout(6000);
+    // Wait for todo to be created and auto-popup dialog (immediate priority)
+    await page.waitForTimeout(3000);
 
-    // Click bell to open todo list
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
-    await bellButton.click();
-
-    // Should show permission request todo
-    await expect(page.getByText('Agent请求权限审批').first()).toBeVisible({ timeout: 10000 });
+    // Global notification should auto-popup PermissionDialog for immediate priority
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
 
     disconnect();
   });
@@ -219,19 +216,12 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    await page.waitForTimeout(2000);
+    // Wait for auto-popup dialog (immediate priority)
+    await page.waitForTimeout(3000);
 
-    // Click bell icon
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
-    await bellButton.click();
-
-    // Click on todo item
-    await page.getByText('Agent请求权限审批').first().click();
-
-    // Permission dialog should open
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    // Permission dialog should auto-popup for immediate priority
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
-    await expect(page.getByText('call_dialog_001', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Reject' })).toBeVisible();
     await expect(page.getByRole('button', { name: '取消' })).toBeVisible();
@@ -277,12 +267,11 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    await page.waitForTimeout(2000);
+    // Wait for auto-popup dialog (immediate priority)
+    await page.waitForTimeout(3000);
 
-    // Click bell and open todo
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
-    await bellButton.click();
-    await page.getByText('Agent请求权限审批').click();
+    // Permission dialog should auto-popup for immediate priority
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
 
     // Click Allow once
     await page.getByRole('button', { name: 'Allow once' }).click();
@@ -334,15 +323,12 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for SSE notification
+    // Wait for SSE notification and auto-popup dialog
     await page.waitForTimeout(3000);
 
-    // Click bell to check todo list (global notification may not be implemented yet)
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
-    await bellButton.click();
-
-    // Should show permission request in todo list
-    await expect(page.getByText('Agent请求权限审批').first()).toBeVisible({ timeout: 10000 });
+    // Global notification should auto-popup PermissionDialog for immediate priority
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
 
     disconnect();
   });
@@ -379,15 +365,13 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for todo to be created and polling to update
-    await page.waitForTimeout(6000);
+    // Wait for todo to be created and auto-popup dialog (immediate priority)
+    await page.waitForTimeout(3000);
 
-    // Click bell to open todo list
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
-    await bellButton.click();
+    // Global notification should auto-popup PermissionDialog for immediate priority
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
 
-    // Click on todo and respond
-    await page.getByText('Agent请求权限审批').first().click();
+    // Respond to permission request
     await page.getByRole('button', { name: 'Allow once' }).click();
 
     // Wait for dialog to close
