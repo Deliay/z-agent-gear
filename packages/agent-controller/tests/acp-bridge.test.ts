@@ -536,26 +536,26 @@ describe('AcpSessionBridge', () => {
   });
 
   describe('extractAvailableModels', () => {
-    it('should return null when models is null', () => {
+    it('should return empty array when models is null', () => {
       const bridge = createBridge();
 
       // Access private method via bracket notation
       const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(null);
-      expect(result).toBeNull();
+      expect(result).toEqual([]);
     });
 
-    it('should return null when models is undefined', () => {
+    it('should return empty array when models is undefined', () => {
       const bridge = createBridge();
 
       const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(undefined);
-      expect(result).toBeNull();
+      expect(result).toEqual([]);
     });
 
-    it('should return null when availableModels is missing', () => {
+    it('should return empty array when availableModels is missing', () => {
       const bridge = createBridge();
 
       const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels({});
-      expect(result).toBeNull();
+      expect(result).toEqual([]);
     });
   });
 });

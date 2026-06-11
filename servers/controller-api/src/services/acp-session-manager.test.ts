@@ -414,7 +414,7 @@ describe('ACPSessionManager', () => {
       });
 
       await resultPromise;
-      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'idling' });
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'idling', modes: [], availableModels: [] });
       expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
     });
 
