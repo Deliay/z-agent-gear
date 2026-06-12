@@ -202,11 +202,19 @@ test.describe('Session Mobile Layout', () => {
     await page.goto('/settings');
     await expect(page.locator('h1')).toContainText('设置');
 
-    // Click back
-    await page.getByText('← 返回').click();
+    // Click back button
+    const backButton = page.locator('button:has-text("← 返回")');
+    await expect(backButton).toBeVisible({ timeout: 5000 });
+    await backButton.click();
 
-    // Should be back on sessions list
-    await expect(page.locator('h2')).toContainText('Sessions', { timeout: 5000 });
+    // Wait for navigation
+    await page.waitForURL('**/sessions', { timeout: 5000 });
+
+    // Wait for page to fully render (loading spinner may appear first)
+    await page.waitForSelector('h2:has-text("Sessions")', { timeout: 10000 });
+
+    // Should be back on sessions list (Sidebar renders h2 "Sessions")
+    await expect(page.locator('h2:has-text("Sessions")')).toBeVisible();
   });
 
   test('should not show sidebar on session detail page', async ({ page }) => {

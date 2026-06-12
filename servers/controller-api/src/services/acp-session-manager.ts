@@ -87,20 +87,20 @@ export class ACPSessionManager {
               status: 'idling',
               externalSessionId: payload.externalSessionId,
             };
-            if (payload.modes) updateData.modes = payload.modes;
+            updateData.modes = payload.modes ?? [];
             if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
-            if (payload.availableModels) updateData.availableModels = payload.availableModels;
+            updateData.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
             const statusExtra: Record<string, unknown> = {};
-            if (payload.modes) statusExtra.modes = payload.modes;
+            statusExtra.modes = payload.modes ?? [];
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
+            statusExtra.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
-            await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+            await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
             // Cache externalSessionId in Redis for resume
             if (payload.externalSessionId) {
@@ -437,20 +437,20 @@ export class ACPSessionManager {
             this.socketToSessions.set(controllerSocket.id, socketSessions);
 
             const updateData: Record<string, unknown> = { status: 'idling' };
-            if (payload.modes) updateData.modes = payload.modes;
+            updateData.modes = payload.modes ?? [];
             if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
-            if (payload.availableModels) updateData.availableModels = payload.availableModels;
+            updateData.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.refreshSessionCache(sessionId);
             const statusExtra: Record<string, unknown> = {};
-            if (payload.modes) statusExtra.modes = payload.modes;
+            statusExtra.modes = payload.modes ?? [];
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
+            statusExtra.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
-            await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+            await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
             resolve({ success: true });
           } else {
@@ -601,10 +601,10 @@ export class ACPSessionManager {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
-      if (extra.modes) payload.modes = extra.modes;
+      payload.modes = extra.modes ?? [];
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
-      if (extra.availableModels) payload.availableModels = extra.availableModels;
+      payload.availableModels = extra.availableModels ?? [];
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     await redis.publish('session:status', JSON.stringify(payload));

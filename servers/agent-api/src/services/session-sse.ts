@@ -97,12 +97,12 @@ export class SessionSSEService {
         const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
         if (status) {
           const extra: Record<string, unknown> = {};
-          if (parsed.modes) extra.modes = parsed.modes;
+          extra.modes = parsed.modes ?? [];
           if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
-          if (parsed.availableModels) extra.availableModels = parsed.availableModels;
+          extra.availableModels = parsed.availableModels ?? [];
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
-          this.dispatchStatus(sessionId, status, error, Object.keys(extra).length ? extra : undefined);
+          this.dispatchStatus(sessionId, status, error, extra);
         }
         this.broadcastModeChanged(sessionId, parsed);
         this.broadcastModelChanged(sessionId, parsed);
@@ -133,10 +133,10 @@ export class SessionSSEService {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
-      if (extra.modes) payload.modes = extra.modes;
+      payload.modes = extra.modes ?? [];
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
-      if (extra.availableModels) payload.availableModels = extra.availableModels;
+      payload.availableModels = extra.availableModels ?? [];
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
