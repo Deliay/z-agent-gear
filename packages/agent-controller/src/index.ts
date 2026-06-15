@@ -61,13 +61,13 @@ program
 program
   .command('mcp-proxy')
   .description('Register a local MCP command as a proxy')
-  .requiredOption('--server <endpoint>', 'Server endpoint URL')
-  .requiredOption('--key <key>', 'MCP Proxy Key')
+  .requiredOption('--mcp-server <endpoint>', 'Server endpoint URL')
+  .requiredOption('--mcp-key <key>', 'MCP Proxy Key')
   .requiredOption('--command <command>', 'Local MCP command to proxy')
   .action(async (options) => {
     await startMcpRegistration({
-      server: options.server,
-      key: options.key,
+      server: options.mcpServer,
+      key: options.mcpKey,
       command: options.command,
     });
   });

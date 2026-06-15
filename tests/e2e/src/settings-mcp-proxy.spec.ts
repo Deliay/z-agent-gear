@@ -149,4 +149,39 @@ test.describe('Settings MCP Proxy Key E2E', () => {
 
     await expect(page.locator('#mcp-section')).toBeVisible({ timeout: 5000 });
   });
+
+  test('should show registered MCP server in settings after CLI registration', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const userId = JSON.parse(atob(token.split('.')[1])).userId;
+
+    // Create MCP proxy key via API
+    const keyResponse = await page.request.post(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
+      headers: { 'x-user-id': userId },
+      data: { name: 'E2E Test Key' },
+    });
+    const keyData = await keyResponse.json();
+    const rawKey = keyData.rawKey;
+
+    // Register MCP proxy (simulating CLI behavior)
+    const registerResponse = await page.request.post(`${CONTROLLER_API_URL}/api/mcp-proxy/register`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        key: rawKey,
+        hostname: 'e2e-test-host',
+        command: 'npx -y @modelcontextprotocol/server-everything',
+        serverName: 'test-mcp-server',
+      },
+    });
+    const registerData = await registerResponse.json();
+    expect(registerData.success).toBe(true);
+
+    // Login and check settings page
+    await loginViaUI(page, username);
+    await page.click('a[href="/settings"]');
+
+    // MCP server should be visible
+    await expect(page.getByText('MCP Servers', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('test-mcp-server')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('npx -y @modelcontextprotocol/server-everything')).toBeVisible();
+  });
 });
