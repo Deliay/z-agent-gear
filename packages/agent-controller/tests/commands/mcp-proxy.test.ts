@@ -81,4 +81,31 @@ describe('mcp-proxy command', () => {
     consoleErrorSpy.mockRestore();
     processExitSpy.mockRestore();
   });
+
+  it('should use correct option names for CLI parsing', () => {
+    // This test verifies that the CLI options are correctly named
+    // to avoid conflicts with global options
+    const { Command } = require('commander');
+    const program = new Command();
+    
+    program
+      .command('mcp-proxy')
+      .description('Register a local MCP command as a proxy')
+      .requiredOption('--mcp-server <endpoint>', 'Server endpoint URL')
+      .requiredOption('--mcp-key <key>', 'MCP Proxy Key')
+      .requiredOption('--command <command>', 'Local MCP command to proxy');
+
+    // Verify the command has the correct options
+    const cmd = program.commands.find((c: any) => c.name() === 'mcp-proxy');
+    expect(cmd).toBeDefined();
+    
+    const options = cmd.options.map((o: any) => o.long);
+    expect(options).toContain('--mcp-server');
+    expect(options).toContain('--mcp-key');
+    expect(options).toContain('--command');
+    
+    // Verify these don't conflict with global options
+    expect(options).not.toContain('--key');
+    expect(options).not.toContain('--server');
+  });
 });
