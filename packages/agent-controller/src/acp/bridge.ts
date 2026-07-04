@@ -228,8 +228,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     }
   }
 
-  private extractModes(modes: acp.SessionModeState | null | undefined): Array<{ id: string; name: string; description?: string }> | null {
-    if (!modes?.availableModes) return null;
+  private extractModes(modes: acp.SessionModeState | null | undefined): Array<{ id: string; name: string; description?: string }> {
+    if (!modes?.availableModes) return [];
     return modes.availableModes.map((m) => ({
       id: m.id,
       name: m.name,
@@ -244,8 +244,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     return { id: found.modelId, name: found.name };
   }
 
-  private extractAvailableModels(models: acp.SessionModelState | null | undefined): Array<{ id: string; name: string; provider?: string }> | null {
-    if (!models?.availableModels) return null;
+  private extractAvailableModels(models: acp.SessionModelState | null | undefined): Array<{ id: string; name: string; provider?: string }> {
+    if (!models?.availableModels) return [];
     return models.availableModels.map((m) => ({
       id: m.modelId,
       name: m.name,

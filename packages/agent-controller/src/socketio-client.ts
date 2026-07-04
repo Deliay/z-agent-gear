@@ -243,10 +243,10 @@ export function connectToServer(
           success: true,
           externalSessionId: payload.acpSessionId,
         };
-        if (payload.modes) result.modes = payload.modes;
+        result.modes = payload.modes ?? [];
         if (payload.currentModeId) result.currentModeId = payload.currentModeId;
         if (payload.currentModel) result.currentModel = payload.currentModel;
-        if (payload.availableModels) result.availableModels = payload.availableModels;
+        result.availableModels = payload.availableModels ?? [];
         if (payload.currentModelId) result.currentModelId = payload.currentModelId;
         socket.emit('acp:start:result', result);
       };
@@ -306,10 +306,10 @@ export function connectToServer(
           sessionId: data.sessionId,
           success: true,
         };
-        if (payload.modes) result.modes = payload.modes;
+        result.modes = payload.modes ?? [];
         if (payload.currentModeId) result.currentModeId = payload.currentModeId;
         if (payload.currentModel) result.currentModel = payload.currentModel;
-        if (payload.availableModels) result.availableModels = payload.availableModels;
+        result.availableModels = payload.availableModels ?? [];
         if (payload.currentModelId) result.currentModelId = payload.currentModelId;
         socket.emit('acp:resume:result', result);
       };

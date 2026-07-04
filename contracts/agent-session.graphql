@@ -168,6 +168,7 @@ input CreateSessionInput {
   workspaceId: ID!
   enableWorktree: Boolean = false
   worktreeBranchSuffix: String
+  mcpServerIds: [ID!]
 }
 
 type ResumeSessionPayload {

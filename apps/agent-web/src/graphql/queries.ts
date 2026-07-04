@@ -280,3 +280,33 @@ export const GET_UNREAD_TODO_COUNT = gql`
     getUnreadTodoCount
   }
 `
+
+export const GET_MCP_SERVERS = gql`
+  query GetMcpServers {
+    mcpServers {
+      id
+      name
+      transport
+      command
+      status
+      lastHeartbeatAt
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const GET_MCP_SERVER = gql`
+  query GetMcpServer($id: ID!) {
+    mcpServer(id: $id) {
+      id
+      name
+      transport
+      command
+      status
+      lastHeartbeatAt
+      createdAt
+      updatedAt
+    }
+  }
+`

@@ -4,6 +4,8 @@ import { hostname } from 'os';
 import { resolveKey, resolveEndpoint, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { connectToServer } from './socketio-client.js';
 import { writePid, removePid, isRunning } from './daemon.js';
+import { startMcpRegistration } from './commands/mcp-proxy.js';
+import { startMcpProxy } from './commands/mcp.js';
 
 const program = new Command();
 
@@ -53,6 +55,32 @@ program
 
     process.on('exit', () => {
       removePid();
+    });
+  });
+
+program
+  .command('mcp-proxy')
+  .description('Register a local MCP command as a proxy')
+  .requiredOption('--mcp-server <endpoint>', 'Server endpoint URL')
+  .requiredOption('--mcp-key <key>', 'MCP Proxy Key')
+  .requiredOption('--command <command>', 'Local MCP command to proxy')
+  .action(async (options) => {
+    await startMcpRegistration({
+      server: options.mcpServer,
+      key: options.mcpKey,
+      command: options.command,
+    });
+  });
+
+program
+  .command('mcp')
+  .description('Start stdio MCP proxy (HTTP to stdio)')
+  .requiredOption('--endpoint <url>', 'MCP forwarder endpoint URL')
+  .requiredOption('--token <token>', 'Bearer token for authentication')
+  .action(async (options) => {
+    await startMcpProxy({
+      endpoint: options.endpoint,
+      token: options.token,
     });
   });
 

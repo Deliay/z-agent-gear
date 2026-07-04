@@ -769,3 +769,4 @@ describe('SessionService', () => {
       expect(result).toBe(false);
     });
   });
+});
