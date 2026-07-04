@@ -95,10 +95,10 @@ export class ACPSessionManager {
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
             const statusExtra: Record<string, unknown> = {};
-            statusExtra.modes = payload.modes ?? [];
+            if (payload.modes) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            statusExtra.availableModels = payload.availableModels ?? [];
+            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
             await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
@@ -445,10 +445,10 @@ export class ACPSessionManager {
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.refreshSessionCache(sessionId);
             const statusExtra: Record<string, unknown> = {};
-            statusExtra.modes = payload.modes ?? [];
+            if (payload.modes) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            statusExtra.availableModels = payload.availableModels ?? [];
+            if (payload.availableModels) statusExtra.availableModels = payload.availableModels;
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
             await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
@@ -601,10 +601,10 @@ export class ACPSessionManager {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
-      payload.modes = extra.modes ?? [];
+      if ('modes' in extra) payload.modes = extra.modes ?? [];
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
-      payload.availableModels = extra.availableModels ?? [];
+      if ('availableModels' in extra) payload.availableModels = extra.availableModels ?? [];
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     await redis.publish('session:status', JSON.stringify(payload));

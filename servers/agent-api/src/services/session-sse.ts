@@ -97,10 +97,10 @@ export class SessionSSEService {
         const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
         if (status) {
           const extra: Record<string, unknown> = {};
-          extra.modes = parsed.modes ?? [];
+          if ('modes' in parsed) extra.modes = parsed.modes ?? [];
           if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
-          extra.availableModels = parsed.availableModels ?? [];
+          if ('availableModels' in parsed) extra.availableModels = parsed.availableModels ?? [];
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
           this.dispatchStatus(sessionId, status, error, extra);
         }
@@ -133,10 +133,10 @@ export class SessionSSEService {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
-      payload.modes = extra.modes ?? [];
+      if ('modes' in extra) payload.modes = extra.modes ?? [];
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
-      payload.availableModels = extra.availableModels ?? [];
+      if ('availableModels' in extra) payload.availableModels = extra.availableModels ?? [];
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
