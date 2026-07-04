@@ -35,10 +35,10 @@ export class SessionSSEService {
 
     // Send current status
     const statusPayload: Record<string, unknown> = { sessionId, status: session.status };
-    if (session.modes) statusPayload.modes = session.modes;
+    if (Array.isArray(session.modes) && session.modes.length) statusPayload.modes = session.modes;
     if (session.currentModeId) statusPayload.currentModeId = session.currentModeId;
     if (session.currentModel) statusPayload.currentModel = session.currentModel;
-    if (session.availableModels) statusPayload.availableModels = session.availableModels;
+    if (Array.isArray(session.availableModels) && session.availableModels.length) statusPayload.availableModels = session.availableModels;
     if (session.currentModelId) statusPayload.currentModelId = session.currentModelId;
     res.write(`data: ${JSON.stringify({ type: 'status', data: statusPayload })}\n\n`);
 
@@ -97,10 +97,10 @@ export class SessionSSEService {
         const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
         if (status) {
           const extra: Record<string, unknown> = {};
-          if ('modes' in parsed) extra.modes = parsed.modes ?? [];
+          if (Array.isArray(parsed.modes) && parsed.modes.length) extra.modes = parsed.modes;
           if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
-          if ('availableModels' in parsed) extra.availableModels = parsed.availableModels ?? [];
+          if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
           this.dispatchStatus(sessionId, status, error, extra);
         }
@@ -133,10 +133,10 @@ export class SessionSSEService {
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
-      if ('modes' in extra) payload.modes = extra.modes ?? [];
+      if (Array.isArray(extra.modes) && extra.modes.length) payload.modes = extra.modes;
       if (extra.currentModeId) payload.currentModeId = extra.currentModeId;
       if (extra.currentModel) payload.currentModel = extra.currentModel;
-      if ('availableModels' in extra) payload.availableModels = extra.availableModels ?? [];
+      if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
