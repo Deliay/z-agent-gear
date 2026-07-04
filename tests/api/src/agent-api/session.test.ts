@@ -136,6 +136,8 @@ const SESSION_WITH_MODES_QUERY = `
       modes { id name description }
       currentModeId
       currentModel { id name provider }
+      availableModels { id name provider }
+      currentModelId
     }
   }
 `;
@@ -763,6 +765,111 @@ describe('Session SSE API', () => {
     controller.abort();
     client.disconnect();
   }, 20_000);
+
+  it('should return non-empty modes and models in both GraphQL and SSE after acp:start:result', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `modes-both-key-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: freshRawKey, hostname: 'modes-both-host', version: '1.0.0' });
+    const regData = await registered;
+    const freshControllerId = regData.controllerId;
+
+    const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+    const wsId = await createWorkspace(freshControllerId);
+    const createRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+      authToken,
+    );
+    const sessionId = (await createRes.json()).data.createSession.session.id;
+
+    const startData = await startEvent;
+    client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_modes_both_${Date.now()}`,
+      modes: [{ id: 'code', name: 'Code', description: 'Coding mode' }],
+      currentModeId: 'code',
+      currentModel: { id: 'gpt-4', name: 'GPT-4', provider: 'openai' },
+      availableModels: [{ id: 'gpt-4', name: 'GPT-4', provider: 'openai' }],
+      currentModelId: 'gpt-4',
+    });
+    // Wait for controller-api to process and save to DB
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 1) Verify GraphQL returns non-empty modes/models
+    const gqlRes = await gqlRequest(SESSION_WITH_MODES_QUERY, { id: sessionId }, authToken);
+    const gqlBody = await gqlRes.json();
+    expect(gqlBody.errors).toBeUndefined();
+    const session = gqlBody.data.session;
+    expect(session.status).toBe('idling');
+
+    expect(session.modes).toBeDefined();
+    expect(session.modes.length).toBeGreaterThan(0);
+    expect(session.modes[0].id).toBe('code');
+    expect(session.modes[0].name).toBe('Code');
+
+    expect(session.currentModeId).toBe('code');
+
+    expect(session.currentModel).toBeDefined();
+    expect(session.currentModel.id).toBe('gpt-4');
+    expect(session.currentModel.name).toBe('GPT-4');
+
+    expect(session.availableModels).toBeDefined();
+    expect(session.availableModels.length).toBeGreaterThan(0);
+    expect(session.availableModels[0].id).toBe('gpt-4');
+    expect(session.availableModels[0].name).toBe('GPT-4');
+
+    expect(session.currentModelId).toBe('gpt-4');
+
+    // 2) Verify SSE initial status event also contains non-empty modes/models
+    const sseController = new AbortController();
+    const sseTimeout = setTimeout(() => sseController.abort(), 3000);
+    const sseRes = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
+      headers: { Authorization: `Bearer ${authToken}`, 'Accept-Encoding': 'identity' },
+      signal: sseController.signal,
+    });
+    clearTimeout(sseTimeout);
+
+    expect(sseRes.status).toBe(200);
+    const sseReader = sseRes.body!.getReader();
+    const sseDecoder = new TextDecoder();
+    const { value: sseValue } = await sseReader.read();
+    const sseText = sseDecoder.decode(sseValue);
+
+    const sseEvents = sseText.split('\n').filter((l) => l.startsWith('data: '));
+    const sseStatusEvent = sseEvents
+      .map((l) => JSON.parse(l.slice(6)))
+      .find((e) => e.type === 'status');
+    expect(sseStatusEvent).toBeDefined();
+    expect(sseStatusEvent.data.status).toBe('idling');
+
+    expect(sseStatusEvent.data.modes).toBeDefined();
+    expect(sseStatusEvent.data.modes.length).toBeGreaterThan(0);
+    expect(sseStatusEvent.data.modes[0].id).toBe('code');
+
+    expect(sseStatusEvent.data.currentModeId).toBe('code');
+
+    expect(sseStatusEvent.data.currentModel).toBeDefined();
+    expect(sseStatusEvent.data.currentModel.id).toBe('gpt-4');
+
+    expect(sseStatusEvent.data.availableModels).toBeDefined();
+    expect(sseStatusEvent.data.availableModels.length).toBeGreaterThan(0);
+
+    expect(sseStatusEvent.data.currentModelId).toBe('gpt-4');
+
+    sseReader.cancel();
+    sseController.abort();
+    client.disconnect();
+  }, 30_000);
 });
 
   describe('Session WebSocket ACP Events', () => {
