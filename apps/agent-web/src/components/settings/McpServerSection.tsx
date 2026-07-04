@@ -21,8 +21,12 @@ interface McpServer {
   updatedAt: string;
 }
 
+interface GetMcpServersData {
+  mcpServers: McpServer[];
+}
+
 export default function McpServerSection() {
-  const { data, loading, refetch } = useQuery(GET_MCP_SERVERS);
+  const { data, loading, refetch } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
 
   const servers: McpServer[] = data?.mcpServers || [];
 

@@ -19,7 +19,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Copy, Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   fetchMcpProxyKeys,
@@ -89,11 +89,9 @@ export default function McpProxyKeySection() {
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>MCP Proxy Keys</CardTitle>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm">
+          <DialogTrigger render={<Button size="sm" />}>
               <Plus className="mr-2 h-4 w-4" />
               Generate Key
-            </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
