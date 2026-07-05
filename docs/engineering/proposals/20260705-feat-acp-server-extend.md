@@ -393,7 +393,7 @@ GraphQL 接口增加 `acpServerType` 参数：
 
 ```graphql
 listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
-importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType! = opencode, sessionIds: [String!]!): [ImportSessionResult!]!
+importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!
 ```
 
 #### 实现点 4: controller-api — 无额外改动
@@ -492,14 +492,8 @@ query ListHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType:
     updatedAt
   }
 }
-```
 
-**文件**: `apps/agent-web/src/graphql/mutations.ts`
-
-`IMPORT_HISTORY_SESSIONS` mutation 增加 `acpServerType` 参数：
-
-```graphql
-mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType! = opencode, $sessionIds: [String!]!) {
+mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode, $sessionIds: [String!]!) {
   importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {
     sessionId
     acpSessionId
@@ -510,6 +504,8 @@ mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServer
   }
 }
 ```
+
+
 
 ### 5.3 代码改动清单
 
