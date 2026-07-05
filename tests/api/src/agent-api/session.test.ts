@@ -299,6 +299,48 @@ describe('Session GraphQL API', () => {
       expect(body.data.createSession.session.status).toBe('creating');
       expect(body.data.createSession.session.acpServerType).toBe('github_copilot');
     });
+
+    it('should create a new session with claude_code acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'claude_code', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('claude_code');
+    });
+
+    it('should create a new session with gemini_cli acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'gemini_cli', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('gemini_cli');
+    });
+
+    it('should create a new session with codex acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'codex', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('codex');
+    });
   });
 
   describe('sessions query', () => {

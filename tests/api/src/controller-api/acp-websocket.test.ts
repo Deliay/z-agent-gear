@@ -132,14 +132,17 @@ describe('Controller API ACP WebSocket', () => {
       client.disconnect();
     });
 
-    it('should handle acp:check:result with multiple server types', async () => {
+    it('should handle acp:check:result with all 5 server types', async () => {
       const { client } = await createFreshController();
 
       client.emit('acp:check:result', {
-        requestId: 'test-req-multi',
+        requestId: 'test-req-all-5',
         servers: [
           { type: 'opencode', available: true, version: '1.0.0' },
           { type: 'github_copilot', available: true, version: '2.0.0' },
+          { type: 'claude_code', available: true, version: '3.0.0' },
+          { type: 'gemini_cli', available: true, version: '4.0.0' },
+          { type: 'codex', available: true, version: '5.0.0' },
         ],
       });
 
@@ -261,6 +264,126 @@ describe('Controller API ACP WebSocket', () => {
         sessionId,
         success: true,
         externalSessionId: `ext_gc_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('idling');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:start with claude_code serverType', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'claude_code', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('claude_code');
+      expect(startData.requestId).toBeDefined();
+
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_cc_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('idling');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:start with gemini_cli serverType', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'gemini_cli', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('gemini_cli');
+      expect(startData.requestId).toBeDefined();
+
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_gc_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session.status).toBe('idling');
+
+      client.disconnect();
+    });
+
+    it('should handle acp:start with codex serverType', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'codex', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      expect(startData.serverType).toBe('codex');
+      expect(startData.requestId).toBeDefined();
+
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_cd_${Date.now()}`,
       });
 
       await new Promise((r) => setTimeout(r, 300));
