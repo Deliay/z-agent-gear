@@ -414,6 +414,103 @@ const acpServerTypeLabels: Record<string, string> = {
 };
 ```
 
+#### 实现点 5: 前端历史会话导入 — ACP Server 选择器
+
+**文件**: `apps/agent-web/src/components/settings/HistorySessionDialog.tsx`
+
+当前 `HistorySessionDialog` 仅接收 `controllerId` 和 `workspaceId`，导入时默认使用 OpenCode。需增加 ACP Server 选择功能：
+
+```typescript
+interface HistorySessionDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  controllerId: string;
+  workspaceId: string;
+  workspaceName: string;
+  availableAcpServers: Array<{ type: string; version?: string }>;  // 新增
+}
+```
+
+组件内部增加 ACP Server 选择器状态，并在 GraphQL query/mutation 中传递：
+
+```typescript
+const [acpServerType, setAcpServerType] = useState('opencode');
+
+// list 请求带上 acpServerType
+const { data, loading, error, refetch } = useQuery<ListHistorySessionsQuery>(
+  LIST_HISTORY_SESSIONS,
+  {
+    variables: { controllerId, workspaceId, acpServerType },
+    skip: !open || !workspaceId,
+    fetchPolicy: 'network-only',
+  },
+);
+
+// import 请求带上 acpServerType
+const result = await importHistorySessions({
+  variables: {
+    controllerId,
+    workspaceId,
+    acpServerType,
+    sessionIds: Array.from(selectedIds),
+  },
+});
+
+// UI: ACP Server 下拉选择器
+{
+  availableAcpServers.length > 1 && (
+    <div className="flex items-center gap-2">
+      <label className="text-sm text-muted-foreground">ACP Server:</label>
+      <select
+        value={acpServerType}
+        onChange={(e) => setAcpServerType(e.target.value)}
+        className="rounded border px-2 py-1 text-sm"
+      >
+        {availableAcpServers
+          .filter((s) => s.available)
+          .map((s) => (
+            <option key={s.type} value={s.type}>
+              {acpServerTypeLabels[s.type] || s.type} {s.version ? `(${s.version})` : ''}
+            </option>
+          ))}
+      </select>
+    </div>
+  )
+}
+```
+
+**文件**: `apps/agent-web/src/graphql/queries.ts`
+
+`LIST_HISTORY_SESSIONS` query 增加 `acpServerType` 参数：
+
+```graphql
+query ListHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode) {
+  listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType) {
+    sessionId
+    title
+    cwd
+    updatedAt
+  }
+}
+```
+
+**文件**: `apps/agent-web/src/graphql/mutations.ts`
+
+`IMPORT_HISTORY_SESSIONS` mutation 增加 `acpServerType` 参数：
+
+```graphql
+mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType! = opencode, $sessionIds: [String!]!) {
+  importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {
+    sessionId
+    acpSessionId
+    title
+    success
+    error
+    messageCount
+  }
+}
+```
+
 ### 5.3 代码改动清单
 
 | 文件 | 改动类型 | 说明 |
@@ -431,6 +528,10 @@ const acpServerTypeLabels: Record<string, string> = {
 | `servers/agent-api/src/graphql/resolvers/session.ts` | 修改 | resolver 传递 acpServerType |
 | `contracts/agent-session.graphql` | 修改 | listHistorySessions / importHistorySessions 增加 acpServerType 参数 |
 | `apps/agent-web/src/components/session/SessionHeader.tsx` | 修改 | 标签映射新增三个条目 |
+| `apps/agent-web/src/components/settings/HistorySessionDialog.tsx` | 修改 | 新增 ACP Server 选择器，query/mutation 传递 acpServerType |
+| `apps/agent-web/src/graphql/queries.ts` | 修改 | LIST_HISTORY_SESSIONS 增加 acpServerType 参数 |
+| `apps/agent-web/src/graphql/mutations.ts` | 修改 | IMPORT_HISTORY_SESSIONS 增加 acpServerType 参数 |
+| `apps/agent-web/src/graphql/types.ts` | 修改 | 类型定义同步更新 |
 
 **无需改动的文件**：
 
@@ -492,6 +593,12 @@ servers/controller-api/src/
 
 apps/agent-web/src/components/session/
 ├── SessionHeader.tsx  # 修改：标签映射新增三个条目
+apps/agent-web/src/components/settings/
+├── HistorySessionDialog.tsx  # 修改：新增 ACP Server 选择器
+apps/agent-web/src/graphql/
+├── queries.ts  # 修改：LIST_HISTORY_SESSIONS 增加 acpServerType 参数
+├── mutations.ts  # 修改：IMPORT_HISTORY_SESSIONS 增加 acpServerType 参数
+├── types.ts  # 修改：类型定义同步更新
 
 contracts/
 ├── agent-session.graphql  # 修改：AcpServerType enum 增加三个值 + listHistorySessions/importHistorySessions 增加 acpServerType 参数
@@ -525,6 +632,7 @@ contracts/
 | `servers/controller-api/src/services/acp-session-sync.test.ts` | 修改 | 新增 serverType 透传测试 |
 | `servers/agent-api/src/services/session-import.test.ts` | 修改 | 新增 acpServerType 参数测试 |
 | `apps/agent-web/src/components/session/SessionHeader.test.tsx` | 修改 | 新增三种 Server 的标签展示测试 |
+| `apps/agent-web/src/components/settings/__tests__/HistorySessionDialog.test.tsx` | 修改 | 新增 ACP Server 选择器的交互测试 |
 
 ## 9. 验收标准
 

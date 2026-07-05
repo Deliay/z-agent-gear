@@ -145,6 +145,7 @@ flowchart LR
 | 页面 | 描述 | 关键元素 |
 |------|------|---------|
 | 新建 Session 弹框 | 选择 Controller 后显示可用 ACP Server 下拉列表，包含全部已检测到的 Server | ACP Server 下拉选择器（显示名称+版本），默认选中第一个可用选项 |
+| 历史会话导入弹框 | 选择 Workspace 后显示该目录下的历史会话，用户可通过 ACP Server 下拉筛选/指定导入来源 | ACP Server 下拉选择器（默认 opencode），会话列表，导入按钮 |
 | Session 详情页 | 顶部 Header 区域显示 acpServerType 标签 | 在 Controller 名称旁显示小标签 "OpenCode" / "GitHub Copilot" / "Claude Code" / "Gemini CLI" / "Codex" |
 | Session 列表页 | 每条 Session 记录显示 acpServerType | 列表每行显示 ACP Server 类型标签 |
 
