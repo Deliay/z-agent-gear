@@ -165,6 +165,64 @@ describe('SessionImportService', () => {
       vi.useRealTimers();
     });
 
+    it('should pass serverType in Redis publish command', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'dev-machine' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, sessions: [] }));
+      vi.mocked(Session.find).mockReturnValue({
+        distinct: vi.fn().mockResolvedValue([]),
+      } as never);
+
+      const promise = sessionImportService.listHistorySessions('user-1', 'ctrl-1', 'ws-1', 'claude_code');
+      await advancePollTimers(500, 3);
+      await promise;
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"serverType":"claude_code"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:list-sessions"'),
+      );
+      vi.useRealTimers();
+    });
+
+    it('should default to opencode serverType when not specified', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'dev-machine' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, sessions: [] }));
+      vi.mocked(Session.find).mockReturnValue({
+        distinct: vi.fn().mockResolvedValue([]),
+      } as never);
+
+      const promise = sessionImportService.listHistorySessions('user-1', 'ctrl-1', 'ws-1');
+      await advancePollTimers(500, 3);
+      await promise;
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"serverType":"opencode"'),
+      );
+      vi.useRealTimers();
+    });
+
     it('should filter out already imported sessions', async () => {
       vi.useFakeTimers();
       vi.mocked(Controller.findOne).mockReturnValue({
@@ -251,6 +309,79 @@ describe('SessionImportService', () => {
       expect(result).toHaveLength(1);
       expect(result[0].success).toBe(false);
       expect(result[0].error).toBe('ACP session load failed');
+      vi.useRealTimers();
+    });
+
+    it('should pass serverType in Redis publish for load-session', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'dev-machine' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(Session.create).mockResolvedValue(mockSession() as never);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify(mockLoadResult()));
+
+      const promise = sessionImportService.importSessions('user-1', 'ctrl-1', 'dev-machine', 'ws-1', ['hist-1'], 'gemini_cli');
+      await advancePollTimers(1000, 3);
+      await promise;
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"serverType":"gemini_cli"'),
+      );
+      vi.useRealTimers();
+    });
+
+    it('should create Session with specified acpServerType', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'dev-machine' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(Session.create).mockResolvedValue(mockSession() as never);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify(mockLoadResult()));
+
+      const promise = sessionImportService.importSessions('user-1', 'ctrl-1', 'dev-machine', 'ws-1', ['hist-1'], 'codex');
+      await advancePollTimers(1000, 3);
+      await promise;
+
+      expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
+        acpServerType: 'codex',
+      }));
+      vi.useRealTimers();
+    });
+
+    it('should default to opencode acpServerType when creating Session', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'dev-machine' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(Session.create).mockResolvedValue(mockSession() as never);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify(mockLoadResult()));
+
+      const promise = sessionImportService.importSessions('user-1', 'ctrl-1', 'dev-machine', 'ws-1', ['hist-1']);
+      await advancePollTimers(1000, 3);
+      await promise;
+
+      expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
+        acpServerType: 'opencode',
+      }));
       vi.useRealTimers();
     });
 

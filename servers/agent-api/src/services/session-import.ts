@@ -31,6 +31,7 @@ export class SessionImportService {
     userId: string,
     controllerId: string,
     workspaceId: string,
+    acpServerType: string = 'opencode',
   ): Promise<HistorySessionInfo[]> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -51,6 +52,7 @@ export class SessionImportService {
       type: 'acp:list-sessions',
       requestId,
       controllerId,
+      serverType: acpServerType,
       cwd,
     }));
 
@@ -82,6 +84,7 @@ export class SessionImportService {
     controllerName: string,
     workspaceId: string,
     acpSessionIds: string[],
+    acpServerType: string = 'opencode',
   ): Promise<ImportSessionResult[]> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -98,7 +101,7 @@ export class SessionImportService {
 
     for (const acpSessionId of acpSessionIds) {
       try {
-        const loadResult = await this.loadSessionFromController(controllerId, acpSessionId, cwd);
+        const loadResult = await this.loadSessionFromController(controllerId, acpSessionId, cwd, acpServerType);
 
         const title = loadResult.title || `历史会话 - ${acpSessionId.slice(0, 8)}`;
 
@@ -106,7 +109,7 @@ export class SessionImportService {
           userId,
           controllerId,
           controllerName,
-          acpServerType: 'opencode',
+          acpServerType,
           status: 'ended',
           title,
           externalSessionId: acpSessionId,
@@ -152,6 +155,7 @@ export class SessionImportService {
     controllerId: string,
     acpSessionId: string,
     cwd: string,
+    acpServerType: string = 'opencode',
   ): Promise<{ title?: string | null; messages: HistoryMessage[] }> {
     const requestId = `load_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const redis = getRedisClient();
@@ -159,6 +163,7 @@ export class SessionImportService {
       type: 'acp:load-session',
       requestId,
       controllerId,
+      serverType: acpServerType,
       sessionId: acpSessionId,
       cwd,
     }));
