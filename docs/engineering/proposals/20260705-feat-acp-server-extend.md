@@ -56,11 +56,11 @@ graph TD
         BR --> SPAWN
         SYNC --> SPAWN
 
-        SPAWN -->|opencode args=['acp']| OCPROC[opencode acp]
-        SPAWN -->|copilot args=['--acp','--stdio']| CPROC[copilot --acp --stdio]
-        SPAWN -->|claude args=['--acp','--stdio']| CCPROC[claude --acp --stdio]
-        SPAWN -->|gemini args=['--acp','--stdio']| GMPROC[gemini --acp --stdio]
-        SPAWN -->|codex args=['--acp','--stdio']| CXPROC[codex --acp --stdio]
+        SPAWN -->|"opencode acp"| OCPROC[opencode acp]
+        SPAWN -->|"copilot --acp --stdio"| CPROC[copilot --acp --stdio]
+        SPAWN -->|"claude --acp --stdio"| CCPROC[claude --acp --stdio]
+        SPAWN -->|"gemini --acp --stdio"| GMPROC[gemini --acp --stdio]
+        SPAWN -->|"codex --acp --stdio"| CXPROC[codex --acp --stdio]
     end
 
     subgraph "Contracts / Models"
