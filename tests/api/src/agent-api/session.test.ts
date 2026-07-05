@@ -502,6 +502,10 @@ describe('Session GraphQL API', () => {
   });
 
   describe('resumeSession', () => {
+    beforeEach(async () => {
+      await clearWorkspaces(controllerId);
+    });
+
     it('should reject resumeSession without auth', async () => {
       const res = await gqlRequest(RESUME_SESSION, { id: '000000000000000000000000' });
       const body = await res.json();
@@ -689,6 +693,7 @@ describe('Session SSE API', () => {
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
     }
+    await clearWorkspaces(controllerId);
   });
 
   it('should return 401 for unauthenticated SSE request', async () => {
