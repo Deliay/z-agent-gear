@@ -40,6 +40,7 @@ z-agent-gear 目前已支持 OpenCode 和 GitHub Copilot 两种 ACP Server，用
 - [ ] 旧 Session（opencode / github_copilot）兼容性不受任何影响
 - [ ] 任意组合安装（1 个 / 2 个 / 多个 / 全部）时，前端只显示已安装的可用选项
 - [ ] 三种新 Server 的版本号在检测结果中正常展示
+- [ ] 历史会话导入功能支持在多个 ACP Server 中选择，不限于 OpenCode
 
 ## 用户分析
 
@@ -92,7 +93,19 @@ z-agent-gear 目前已支持 OpenCode 和 GitHub Copilot 两种 ACP Server，用
   - [ ] 取消生成、关闭 Session 等操作正常
   - [ ] Session 重连行为正常
 
-#### 功能点 3: ACP Server 类型展示
+#### 功能点 3: 历史会话导入支持多 ACP Server
+
+- **描述**: 从工作目录导入历史会话时，用户可以选择使用哪个 ACP Server 来执行 `session/list` 和 `session/load` 操作。不同 ACP Server 可能在同一工作目录中持久化了不同格式的会话数据，导入时需使用对应的 Server 类型才能正确读取。
+- **用户价值**: 用户可以从同一个工作目录导入任意 ACP Server 产生的历史会话数据，不限于 OpenCode
+- **验收标准**:
+  - [ ] 历史会话导入流程中支持指定 acpServerType
+  - [ ] 使用 `claude_code` Server 能正确列出并导入其持久化的历史会话
+  - [ ] 使用 `gemini_cli` Server 能正确列出并导入其持久化的历史会话
+  - [ ] 使用 `codex` Server 能正确列出并导入其持久化的历史会话
+  - [ ] 导入后的 Session 记录正确标记对应的 acpServerType
+  - [ ] 向后兼容：不指定 acpServerType 时默认使用 opencode
+
+#### 功能点 4: ACP Server 类型展示
 
 - **描述**: 新建 Session 的 ACP Server 选择器中包含全部可用选项。Session 列表和详情页展示对应 ACP Server 类型的可读名称（"Claude Code" / "Gemini CLI" / "Codex" / "OpenCode" / "GitHub Copilot"）。
 - **用户价值**: 用户随时了解每个 Session 正在使用的 Agent 类型，选择时一目了然
@@ -164,19 +177,20 @@ flowchart LR
 - 历史数据无需迁移
 - 不支持 Session 创建后切换 acpServerType
 - 新 Server 的协议能力差异不做对齐，仅保证基础 ACP 消息通信可用（文本消息的发送和接收）
+- 历史会话导入的 acpServerType 不使用默认值时不向后兼容，前端需确认用户选择
 
 ## 依赖与约束
 
 ### 5.1 依赖
 
-- Claude Code CLI 已在控制器上安装
+- Claude Code CLI 已在控制器上安装（Claude Code 需额外全局安装 ACP 适配器 `@agentclientprotocol/claude-agent-acp`）
 - Gemini CLI 已在控制器上安装
-- Codex CLI 已在控制器上安装
-- 各 CLI 工具都需要支持 ACP 模式（通过 `--acp --stdio` 或等效参数）
+- Codex CLI 已在控制器上安装（Codex 需额外全局安装 ACP 适配器 `@agentclientprotocol/codex-acp`）
 
 ### 5.2 约束
 
 - 本项目不负责各 CLI 工具的安装和认证流程，这些由用户自行完成
+- Claude Code 和 Codex 需通过独立的 ACP 适配器接入，适配器需用户额外安装
 - 不同 ACP Server 的协议版本可能存在差异，基础消息通信保证可用，高级功能不做强制对齐
 - 新增 ACP Server 类型需要定义对应的 enum 值并更新所有相关模块
 
