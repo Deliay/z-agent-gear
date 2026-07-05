@@ -241,9 +241,10 @@ test.describe('Settings History Session E2E', () => {
     await page.getByRole('button', { name: '历史会话' }).click();
     await expect(page.getByRole('heading', { name: /历史会话/ })).toBeVisible({ timeout: 15000 });
 
-    const acpTrigger = page.locator('[role="combobox"]').first();
-    await expect(acpTrigger).toBeVisible({ timeout: 5000 });
-    await expect(acpTrigger).toContainText('opencode');
+    await expect(page.getByText('ACP Server:')).toBeVisible({ timeout: 10000 });
+    const acpSelect = page.locator('select').first();
+    await expect(acpSelect).toBeVisible();
+    await expect(acpSelect).toHaveValue('opencode');
 
     disconnect();
   });
