@@ -18,7 +18,13 @@ type: Permanent
 
 当前系统已支持 OpenCode 和 GitHub Copilot 两种 ACP Server。PRD 要求新增 **Claude Code**（Anthropic）、**Gemini CLI**（Google）、**Codex CLI**（OpenAI）三种 ACP Server。
 
-三种新 CLI 工具均支持 ACP 模式（通过 `--acp --stdio` 或等效参数），通信协议均为 NDJSON over stdio。与现有 Server 的核心差异仅在于：启动命令不同、检测方式（CLI 名称）不同。系统架构已在首次多 ACP Server 支持中做好了扩展准备，新增 Server 类型不需要架构变更。
+三种新工具的 ACP 接入方式各不相同：
+
+- **Gemini CLI**：原生支持 ACP 模式，启动参数为 `gemini --acp`
+- **Claude Code**：需通过官方 ACP 适配器 `@agentclientprotocol/claude-agent-acp`（npm 包）接入，启动命令为 `claude-agent-acp`
+- **Codex CLI**：需通过官方 ACP 适配器 `@agentclientprotocol/codex-acp`（npm 包）接入，启动命令为 `codex-acp`
+
+通信协议均为 ACP JSON-RPC over stdio。系统架构已在首次多 ACP Server 支持中做好了扩展准备，新增 Server 类型不需要架构变更。
 
 ### 1.2 目标
 
@@ -48,9 +54,9 @@ graph TD
 
         DET -->|detect| OC1[opencode -v]
         DET -->|detect| GC[copilot --version]
-        DET -->|detect| CC[claude --version]
+        DET -->|detect| CA[claude-agent-acp --version]
         DET -->|detect| GM[gemini --version]
-        DET -->|detect| CX[codex --version]
+        DET -->|detect| CX[codex-acp --version]
 
         SIO --> BR
         BR --> SPAWN
@@ -58,9 +64,9 @@ graph TD
 
         SPAWN -->|"opencode acp"| OCPROC[opencode acp]
         SPAWN -->|"copilot --acp --stdio"| CPROC[copilot --acp --stdio]
-        SPAWN -->|"claude --acp --stdio"| CCPROC[claude --acp --stdio]
-        SPAWN -->|"gemini --acp --stdio"| GMPROC[gemini --acp --stdio]
-        SPAWN -->|"codex --acp --stdio"| CXPROC[codex --acp --stdio]
+        SPAWN -->|"claude-agent-acp"| CAPROC[claude-agent-acp]
+        SPAWN -->|"gemini --acp"| GMPROC[gemini --acp]
+        SPAWN -->|"codex-acp"| CXPROC[codex-acp]
     end
 
     subgraph "Contracts / Models"
@@ -161,9 +167,9 @@ sequenceDiagram
     par 并行检测
       AC->>AC: opencode -v
       AC->>AC: copilot --version
-      AC->>AC: claude --version
+      AC->>AC: claude-agent-acp --version
       AC->>AC: gemini --version
-      AC->>AC: codex --version
+      AC->>AC: codex-acp --version
     end
     AC-->>CA: acp:check:result { servers: [...] }
     CA-->>F: acpCapabilities (GraphQL)
@@ -174,9 +180,9 @@ sequenceDiagram
     AA->>CA: session:command { type: acp:start, serverType: "claude_code" }
     CA->>AC: acp:start { serverType: "claude_code", cwd, sessionId }
     AC->>AC: getSpawnerConfig('claude_code')
-    Note right of AC: command='claude', args=['--acp','--stdio']
+    Note right of AC: command='claude-agent-acp', args=[]
     AC->>AC: AcpSpawner.start()
-    AC->>CP: claude --acp --stdio
+    AC->>CP: claude-agent-acp
     CP-->>AC: NDJSON stdio
     AC-->>CA: acp:start:result { success: true }
     CA-->>AA: session:status { status: 'idling' }
@@ -206,7 +212,7 @@ export class AcpDetector {
 
   private async detectClaudeCode(): Promise<AcpServerInfo> {
     try {
-      const { stdout } = await execAsync('claude --version');
+      const { stdout } = await execAsync('claude-agent-acp --version');
       const version = this.parseVersion(stdout);
       return { type: 'claude_code', available: true, version };
     } catch {
@@ -226,7 +232,7 @@ export class AcpDetector {
 
   private async detectCodex(): Promise<AcpServerInfo> {
     try {
-      const { stdout } = await execAsync('codex --version');
+      const { stdout } = await execAsync('codex-acp --version');
       const version = this.parseVersion(stdout);
       return { type: 'codex', available: true, version };
     } catch {
@@ -239,11 +245,11 @@ export class AcpDetector {
       case 'github_copilot':
         return { command: 'copilot', args: ['--acp', '--stdio'] };
       case 'claude_code':
-        return { command: 'claude', args: ['--acp', '--stdio'] };
+        return { command: 'claude-agent-acp', args: [] };
       case 'gemini_cli':
-        return { command: 'gemini', args: ['--acp', '--stdio'] };
+        return { command: 'gemini', args: ['--acp'] };
       case 'codex':
-        return { command: 'codex', args: ['--acp', '--stdio'] };
+        return { command: 'codex-acp', args: [] };
       case 'opencode':
       default:
         return { command: 'opencode', args: ['acp'] };
@@ -302,20 +308,23 @@ const acpServerTypeLabels: Record<string, string> = {
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
-| 检测命令格式 | `cli --version` | `cli --acp --version` | `cli --version` | `--version` 是 CLI 工具的标准参数，轻量快速；ACP 模式启动重不适用于检测 |
-| 启动命令的统一性 | 所有新 Server 使用 `--acp --stdio` | 各自可能不同的参数 | 统一使用 `--acp --stdio` | ACP 标准模式参数，三种 CLI 均支持 |
+| 检测命令格式 | `cli --version` | `cli acp --version` | `cli --version` | `--version` 是 CLI 工具的标准参数，轻量快速 |
+| Gemini CLI ACP 启动方式 | `gemini --acp` | `gemini --acp --stdio` | `gemini --acp` | Gemini CLI 原生 ACP 模式仅需 `--acp` 参数，不识别 `--stdio` |
+| Claude Code ACP 接入方式 | 使用官方 ACP 适配器 `claude-agent-acp` | 直接在 `claude` CLI 上加 `--acp` 参数 | 使用 `claude-agent-acp` 适配器 | Claude Code CLI 本身不内置 ACP 模式，需通过适配器接入 |
+| Codex CLI ACP 接入方式 | 使用官方 ACP 适配器 `codex-acp` | 直接在 `codex` CLI 上加 `--acp` 参数 | 使用 `codex-acp` 适配器 | Codex CLI 本身不内置 ACP 模式，需通过适配器接入 |
 | session list/load 对新 Server 的支持 | 分别尝试各 Server | 始终使用 OpenCode | 始终使用 OpenCode | 只有 OpenCode ACP 支持 session 持久化方法 |
-| 是否新增检测超时配置 | 统一超时 5s | 不加超时 | 不加超时 | `execAsync` 继承默认行为即可，CLI `--version` 响应通常在 1s 内 |
+| 适配器检测方式 | 执行适配器二进制 `--version` |  执行 `npx` 检测 | 执行适配器二进制 `--version` | 用户需全局安装适配器包（`npm install -g`），全局安装后二进制在 PATH 中可用 |
 
 ### 6.2 依赖与约束
 
 | 类型 | 内容 | 说明 |
 |------|------|------|
-| 依赖 | Claude Code CLI 已安装 | 非本项目责任，用户自行安装 |
+| 依赖 | `@agentclientprotocol/claude-agent-acp` 已全局安装（`npm install -g @agentclientprotocol/claude-agent-acp`） | 非本项目责任，用户自行安装 |
 | 依赖 | Gemini CLI 已安装 | 非本项目责任，用户自行安装 |
-| 依赖 | Codex CLI 已安装 | 非本项目责任，用户自行安装 |
-| 约束 | 三种 CLI 的 ACP 模式支持成熟度不同 | 仅保证基础 ACP 消息通信可用，高级功能不做强制对齐 |
-| 约束 | 检测命令可能因 CLI 版本差异而不同 | 若某个 CLI 的 `--version` 参数非标准，需单独适配 |
+| 依赖 | `@agentclientprotocol/codex-acp` 已全局安装（`npm install -g @agentclientprotocol/codex-acp`） | 非本项目责任，用户自行安装 |
+| 约束 | Claude 和 Codex 通过独立 ACP 适配器接入，适配器的协议能力可能与原生 OpenCode 存在差异 | 仅保证基础 ACP 消息通信可用，高级功能不做强制对齐 |
+| 约束 | Gemini CLI 原生 ACP 模式需 `--acp` 参数启动 | 与 OpenCode 和 Copilot 的启动参数格式不同 |
+| 约束 | `claude-agent-acp` 和 `codex-acp` 需要用户通过 npm 全局安装 | 检测和 spawner 均假设二进制在 PATH 中 |
 
 ## 7. 项目结构
 
@@ -371,9 +380,9 @@ contracts/
 - [ ] 技术方案评审通过
 - [ ] Contract 中 `AcpServerType` enum 包含 `claude_code`、`gemini_cli`、`codex`
 - [ ] agent-controller `AcpDetector.detect()` 返回 5 个 Server 的检测结果
-- [ ] `getSpawnerConfig('claude_code')` 返回 `{ command: 'claude', args: ['--acp', '--stdio'] }`
-- [ ] `getSpawnerConfig('gemini_cli')` 返回 `{ command: 'gemini', args: ['--acp', '--stdio'] }`
-- [ ] `getSpawnerConfig('codex')` 返回 `{ command: 'codex', args: ['--acp', '--stdio'] }`
+- [ ] `getSpawnerConfig('claude_code')` 返回 `{ command: 'claude-agent-acp', args: [] }`
+- [ ] `getSpawnerConfig('gemini_cli')` 返回 `{ command: 'gemini', args: ['--acp'] }`
+- [ ] `getSpawnerConfig('codex')` 返回 `{ command: 'codex-acp', args: [] }`
 - [ ] 前端 SessionHeader 显示 "Claude Code"、"Gemini CLI"、"Codex" 标签
 - [ ] 现有 opencode / github_copilot Session 完全不受影响
 - [ ] 所有测试通过
