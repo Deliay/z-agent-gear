@@ -64,7 +64,7 @@ graph TD
     end
 
     subgraph "Contracts / Models"
-        ENUM[enum AcpServerType { opencode, github_copilot, claude_code, gemini_cli, codex }]
+        ENUM["enum AcpServerType (opencode, github_copilot, claude_code, gemini_cli, codex)"]
     end
 
     ENUM -.->|type check| SPAWN
