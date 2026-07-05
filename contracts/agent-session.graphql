@@ -12,6 +12,9 @@ enum SessionStatus {
 enum AcpServerType {
   opencode
   github_copilot
+  claude_code
+  gemini_cli
+  codex
 }
 
 enum AcpMessageDirection {
