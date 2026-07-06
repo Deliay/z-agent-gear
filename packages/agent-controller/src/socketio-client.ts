@@ -83,12 +83,14 @@ interface AcpResumePayload {
 
 interface AcpListSessionsPayload {
   requestId: string;
+  serverType: string;
   cwd: string;
 }
 
 interface AcpLoadSessionPayload {
   requestId: string;
   sessionId: string;
+  serverType: string;
   cwd: string;
 }
 
@@ -343,8 +345,10 @@ export function connectToServer(
   });
 
   socket.on('acp:list-sessions', async (data: AcpListSessionsPayload) => {
-    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} cwd=${data.cwd}`);
-    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} serverType=${serverType} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
       const result = await bridge.listSessions(data.cwd);
@@ -371,8 +375,10 @@ export function connectToServer(
   });
 
   socket.on('acp:load-session', async (data: AcpLoadSessionPayload) => {
-    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
-    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${serverType} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
       const { config, updates } = await bridge.loadSession(data.sessionId, data.cwd);

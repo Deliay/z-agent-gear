@@ -32,10 +32,11 @@ describe('AcpSessionSyncService', () => {
   describe('listSessions', () => {
     it('should emit acp:list-sessions and resolve on handleListResult', async () => {
       const socket = createMockSocket();
-      const resultPromise = service.listSessions(socket as never, '/home/user');
+      const resultPromise = service.listSessions(socket as never, 'opencode', '/home/user');
 
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalledWith('acp:list-sessions', expect.objectContaining({
+          serverType: 'opencode',
           cwd: '/home/user',
           requestId: expect.any(String),
         }));
@@ -55,13 +56,23 @@ describe('AcpSessionSyncService', () => {
       expect(result.sessions![0].sessionId).toBe('hist-1');
     });
 
+    it('should pass custom serverType to acp:list-sessions', async () => {
+      const socket = createMockSocket();
+      service.listSessions(socket as never, 'claude_code', '/home/user');
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:list-sessions', expect.objectContaining({
+          serverType: 'claude_code',
+        }));
+      });
+    });
+
     it('should timeout after 120s if no response', async () => {
       vi.useFakeTimers();
       const socket = createMockSocket();
 
-      const resultPromise = service.listSessions(socket as never, '/home/user');
+      const resultPromise = service.listSessions(socket as never, 'opencode', '/home/user');
 
-      // Advance past the 120s timeout
       await vi.advanceTimersByTimeAsync(121000);
 
       const result = await resultPromise;
@@ -73,7 +84,7 @@ describe('AcpSessionSyncService', () => {
 
     it('should handle error result', async () => {
       const socket = createMockSocket();
-      const resultPromise = service.listSessions(socket as never, '/home/user');
+      const resultPromise = service.listSessions(socket as never, 'opencode', '/home/user');
 
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalled();
@@ -93,10 +104,11 @@ describe('AcpSessionSyncService', () => {
   describe('loadSession', () => {
     it('should emit acp:load-session and resolve on handleLoadResult', async () => {
       const socket = createMockSocket();
-      const resultPromise = service.loadSession(socket as never, 'hist-1', '/home/user');
+      const resultPromise = service.loadSession(socket as never, 'opencode', 'hist-1', '/home/user');
 
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalledWith('acp:load-session', expect.objectContaining({
+          serverType: 'opencode',
           sessionId: 'hist-1',
           cwd: '/home/user',
           requestId: expect.any(String),
@@ -119,11 +131,22 @@ describe('AcpSessionSyncService', () => {
       expect(result.messages![0].direction).toBe('input');
     });
 
+    it('should pass custom serverType to acp:load-session', async () => {
+      const socket = createMockSocket();
+      service.loadSession(socket as never, 'gemini_cli', 'hist-1', '/home/user');
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:load-session', expect.objectContaining({
+          serverType: 'gemini_cli',
+        }));
+      });
+    });
+
     it('should timeout after 300s if no response', async () => {
       vi.useFakeTimers();
       const socket = createMockSocket();
 
-      const resultPromise = service.loadSession(socket as never, 'hist-1', '/home/user');
+      const resultPromise = service.loadSession(socket as never, 'opencode', 'hist-1', '/home/user');
 
       await vi.advanceTimersByTimeAsync(311000);
 
@@ -136,7 +159,7 @@ describe('AcpSessionSyncService', () => {
 
     it('should handle load error', async () => {
       const socket = createMockSocket();
-      const resultPromise = service.loadSession(socket as never, 'hist-1', '/home/user');
+      const resultPromise = service.loadSession(socket as never, 'opencode', 'hist-1', '/home/user');
 
       await vi.waitFor(() => {
         expect(socket.emit).toHaveBeenCalled();

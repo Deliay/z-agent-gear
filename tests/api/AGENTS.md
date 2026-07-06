@@ -157,6 +157,9 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | createSession - 无 auth | 应返回「Not authenticated」 |
 | createSession - 正常创建（opencode） | 应返回 session（status=creating, acpServerType=opencode） |
 | createSession - 正常创建（github_copilot） | 应返回 session（status=creating, acpServerType=github_copilot） |
+| createSession - 正常创建（claude_code） | 应返回 session（status=creating, acpServerType=claude_code） |
+| createSession - 正常创建（gemini_cli） | 应返回 session（status=creating, acpServerType=gemini_cli） |
+| createSession - 正常创建（codex） | 应返回 session（status=creating, acpServerType=codex） |
 | createSession - 无效 controllerId | 应返回「Controller not found」 |
 | sessions query - 已认证 | 应返回 sessions 列表 |
 | session query - 已存在的 session | 应返回 session 详情 |
@@ -191,9 +194,12 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | 测试 | 描述 |
 |------|------|
 | acp:check - opencode | 应请求检测并返回 opencode servers 列表 |
-| acp:check - 多 Server | 应请求检测并返回 opencode + github_copilot 两个 Server |
+| acp:check - 全部 5 种 Server | 应请求检测并返回全部 5 种 Server（opencode + github_copilot + claude_code + gemini_cli + codex） |
 | acp:start - opencode | 应发送 acp:start 请求（serverType=opencode），controller 响应 success |
 | acp:start - github_copilot | 应发送 acp:start 请求（serverType=github_copilot），controller 响应 success |
+| acp:start - claude_code | 应发送 acp:start 请求（serverType=claude_code），controller 响应 success |
+| acp:start - gemini_cli | 应发送 acp:start 请求（serverType=gemini_cli），controller 响应 success |
+| acp:start - codex | 应发送 acp:start 请求（serverType=codex），controller 响应 success |
 | acp:start - failure | 应发送启动请求，controller 响应 failure，session status=ended |
 | acp:message | 应转发 controller 输出消息并持久化到 DB |
 | acp:stop | 应发送停止请求，controller 响应 stopped，session status=ended |
@@ -217,11 +223,13 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | listHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
 | listHistorySessions - 不存在的 workspace | 应返回「Workspace not found」 |
 | listHistorySessions - 正常返回 | 通过 fake controller 响应返回 history session 列表 |
+| listHistorySessions - 带 acpServerType 参数 | 使用 acpServerType=claude_code 调用 listHistorySessions，验证成功 |
 | importHistorySessions - 无 token | 应返回「Not authenticated」 |
 | importHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
 | importHistorySessions - 导入单个 session | 导入 1 个 session，验证 messageCount=2 |
 | importHistorySessions - 导入多个 session | 导入 2 个 session，验证都存在并 status=ended |
 | importHistorySessions - 去重过滤 | 先导入 acp_sync_sess_1，list 应返回 acp_sync_sess_2 但排除 s1 |
+| importHistorySessions - 带 acpServerType 参数 | 使用 acpServerType=gemini_cli 调用 importHistorySessions，验证导入成功 |
 
 ### Worktree Session API (`agent-api/session.test.ts`)
 

@@ -45,7 +45,7 @@ export const sessionResolvers = {
     },
     listHistorySessions: async (
       _parent: unknown,
-      args: { controllerId: string; workspaceId: string },
+      args: { controllerId: string; workspaceId: string; acpServerType?: string },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -56,6 +56,7 @@ export const sessionResolvers = {
           context.currentUser.id,
           args.controllerId,
           args.workspaceId,
+          args.acpServerType ?? 'opencode',
         );
       } catch (err) {
         throw new GraphQLError((err as Error).message);
@@ -165,7 +166,7 @@ export const sessionResolvers = {
     },
     importHistorySessions: async (
       _parent: unknown,
-      args: { controllerId: string; workspaceId: string; sessionIds: string[] },
+      args: { controllerId: string; workspaceId: string; acpServerType?: string; sessionIds: string[] },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -181,6 +182,7 @@ export const sessionResolvers = {
           controllerName,
           args.workspaceId,
           args.sessionIds,
+          args.acpServerType ?? 'opencode',
         );
       } catch (err) {
         throw new GraphQLError((err as Error).message);

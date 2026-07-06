@@ -237,8 +237,8 @@ export const SET_SESSION_MODEL = gql`
 `;
 
 export const IMPORT_HISTORY_SESSIONS = gql`
-  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $sessionIds: [String!]!) {
-    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, sessionIds: $sessionIds) {
+  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode, $sessionIds: [String!]!) {
+    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {
       sessionId
       acpSessionId
       title

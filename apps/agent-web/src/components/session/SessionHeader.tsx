@@ -41,6 +41,9 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   const acpServerTypeLabels: Record<string, string> = {
     opencode: 'OpenCode',
     github_copilot: 'GitHub Copilot',
+    claude_code: 'Claude Code',
+    gemini_cli: 'Gemini CLI',
+    codex: 'Codex',
   };
 
   const continueDisabled = resuming || !controllerOnline;

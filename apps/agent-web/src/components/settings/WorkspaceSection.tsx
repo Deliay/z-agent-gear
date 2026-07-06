@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES } from '../../graphql/queries';
+import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES, GET_ACP_CAPABILITIES } from '../../graphql/queries';
 import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR } from '../../graphql/mutations';
 import type { GetControllerWorkspacesQuery, ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,12 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const { data, loading, refetch } = useQuery<GetControllerWorkspacesQuery>(GET_CONTROLLER_WORKSPACES, {
     variables: { controllerId },
   });
+
+  const { data: acpCapData } = useQuery(GET_ACP_CAPABILITIES, {
+    variables: { controllerId },
+    skip: !controllerOnline,
+  });
+  const availableAcpServers = acpCapData?.acpCapabilities?.filter((c: { available: boolean }) => c.available) ?? [];
 
   const [createWorkspace] = useMutation(CREATE_WORKSPACE);
   const [deleteWorkspace] = useMutation(DELETE_WORKSPACE);
@@ -403,6 +409,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
         controllerId={controllerId}
         workspaceId={historyWorkspace?.id ?? ''}
         workspaceName={historyWorkspace?.name ?? ''}
+        availableAcpServers={availableAcpServers}
       />
     </>
   );

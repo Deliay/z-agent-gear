@@ -143,6 +143,7 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 列表展示和导入按钮 | 点击历史会话 → 显示 fake controller 返回的 2 个 session |
 | 全选并导入成功 | 全选 → 导入 → 显示成功导入 2 个会话 |
 | 空状态 | 无可用 session 时显示「没有未导入的历史会话」 |
+| 历史会话 ACP Server 选择器 | 多 Server 可用时历史会话对话框显示 ACP Server 下拉框，默认 opencode |
 
 ### Session Mode Switch E2E (`session-mode-switch.spec.ts`)
 
@@ -158,9 +159,12 @@ BASE_URL=http://localhost:35273 npx playwright test
 
 | 测试 | 描述 |
 |------|------|
-| ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含 opencode + github_copilot |
+| ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含全部 5 种类型 |
 | GitHub Copilot badge | 选择 github_copilot 创建 session → 详情页显示「GitHub Copilot」徽章 |
 | OpenCode badge | 默认 opencode 创建 session → 详情页显示「OpenCode」徽章 |
+| Claude Code badge | 选择 claude_code 创建 session → 详情页显示「Claude Code」徽章 |
+| Gemini CLI badge | 选择 gemini_cli 创建 session → 详情页显示「Gemini CLI」徽章 |
+| Codex badge | 选择 codex 创建 session → 详情页显示「Codex」徽章 |
 
 ### Port Forward E2E (`port-forward.spec.ts`)
 

@@ -214,8 +214,8 @@ export const GET_HOME_DIRECTORY = gql`
 `
 
 export const LIST_HISTORY_SESSIONS = gql`
-  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) {
-    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) {
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType) {
       sessionId
       title
       cwd
