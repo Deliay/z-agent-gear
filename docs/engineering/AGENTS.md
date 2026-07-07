@@ -127,9 +127,14 @@ flowchart LR
 
 ## 相关文档
 
+### 规范文件
+
 - [[common-rules.md]] — 通用开发规范
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
+
+### 技术提案（`proposals/`）
+
 - [[proposals/20260517-feat-agent-controller-v1.md]] — Agent 控制器管理 v1
 - [[proposals/20260517-feat-llm-provider-settings.md]] — LLM 供应商与模型管理
 - [[proposals/20260517-feat-user-auth-and-settings.md]] — 用户认证与设置页
@@ -143,4 +148,24 @@ flowchart LR
 - [[proposals/20260520-feat-session-reopen.md]] — Session Re-open
 - [[proposals/20260520-refactor-controller-acp-sdk.md]] — ACP SDK 重构
 - [[proposals/20260521-feat-acp-session-sync.md]] — 工作目录历史会话同步
+- [[proposals/20260522-feat-available-models-and-mode-switch.md]] — 可用模型与模式切换
+- [[proposals/20260522-feat-local-controller-config-page.md]] — 本地控制器配置页
+- [[proposals/20260522-feat-model-switch-support.md]] — 模型切换支持
+- [[proposals/20260523-feat-git-worktree-support.md]] — Git Worktree 支持
+- [[proposals/20260523-feat-workspace-git-support.md]] — 工作区 Git 支持
 - [[proposals/20260524-feat-docker-compose-support.md]] — Aspire Docker Compose 集成
+- [[proposals/20260524-feat-session-message-history-optimization.md]] — 会话消息历史优化
+- [[proposals/20260526-feat-multi-acp-server-support.md]] — 多 ACP Server 支持
+- [[proposals/20260526-fix-acceptance-session-state.md]] — 验收 Session 状态修复
+- [[proposals/20260526-proposal-ui-optimization.md]] — UI 优化一期
+- [[proposals/20260526-proposal-ui-optimization-phase2.md]] — UI 优化二期
+- [[proposals/20260527-feat-mobile-layout.md]] — 移动端布局
+- [[proposals/20260527-feat-port-forwarding.md]] — 本地 Agent 控制器端口转发
+- [[proposals/20260527-feat-unified-agent-status.md]] — 统一 Agent 状态
+- [[proposals/20260527-fix-acp-server-windows-launch.md]] — ACP Server Windows 启动修复
+- [[proposals/20260528-feat-acp-permission-reminder.md]] — ACP 授权提醒
+- [[proposals/20260528-proposal-ui-optimization-phase3.md]] — UI 优化三期
+- [[proposals/20260529-command-mode.md]] — 命令模式
+- [[proposals/20260529-feat-dark-mode.md]] — 黑暗模式
+- [[proposals/20260530-feat-mcp-proxy-config.md]] — MCP 代理服务配置
+- [[proposals/20260705-feat-acp-server-extend.md]] — ACP Server 支持扩展
