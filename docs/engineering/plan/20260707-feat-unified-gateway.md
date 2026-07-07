@@ -408,7 +408,124 @@ createGateway({ variables: { controllerId, name, port: portNum } });
 
 | 类型 | 文件 | 场景数 | 说明 |
 |------|------|--------|------|
-| GraphQL API | `tests/api/src/agent-api/gateway.test.ts` | 12 | 未认证/不存在/离线/成功创建/名称重复/列表/删除/按名称删除 |
+| GraphQL API | `tests/api/src/agent-api/gateway.test.ts` | 13 | 未认证/不存在/离线/成功创建/名称重复/名称校验/列表/删除/按名称删除 + **隧道打通全链路验证** |
+
+### 关键测试场景：隧道全链路打通验证
+
+这是本次新增的核心测试，验证 `createGateway` → 隧道建立 → REST 代理访问的全流程。
+
+**测试设计**（建立在现有 `agent-api` 测试框架之上，使用 fake socket.io client 模拟 controller）：
+
+```typescript
+describe('gateway tunnel end-to-end', () => {
+  it('should create gateway and proxy request through tunnel successfully', async () => {
+    // 1. 启动一个真实的本地 TCP 服务（在测试进程中）
+    const localServer = net.createServer((socket) => {
+      socket.on('data', (data) => {
+        // 简单响应：收到什么返回什么（echo），或返回固定 HTTP 响应
+        const response = 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from local service!';
+        socket.write(response);
+        socket.end();
+      });
+    });
+    const port = await new Promise<number>((resolve) => {
+      localServer.listen(0, '127.0.0.1', () => resolve((localServer.address() as net.AddressInfo).port));
+    });
+
+    // 2. 注册 fake controller（Socket.IO 客户端）
+    const { client, controllerId } = await registerController('gateway-e2e');
+
+    // 3. 通过 GraphQL 创建 gateway
+    const gqlRes = await gqlRequest(
+      CREATE_GATEWAY,
+      { controllerId, name: 'my-test-service', port },
+      authToken,
+    );
+    const gqlBody = await gqlRes.json();
+    expect(gqlBody.errors).toBeUndefined();
+    expect(gqlBody.data.createGateway.name).toBe('my-test-service');
+
+    // 4. fake controller 等待 controller-api 发来的 port-forward:create 事件
+    const tunnelEvent = await waitForEvent<{ tunnelId: string; port: number }>(
+      client, 'port-forward:create',
+    );
+    expect(tunnelEvent.port).toBe(port);
+
+    // 5. fake controller 模拟隧道建立：回复 port-forward:created
+    client.emit('port-forward:created', { tunnelId: tunnelEvent.tunnelId, success: true });
+
+    // 6. fake controller 监听 port-forward:data（代理请求）
+    const proxyDataPromise = waitForEvent<{ tunnelId: string; data: string }>(
+      client, 'port-forward:data',
+    );
+
+    // 7. 通过 REST 代理访问 localhost service
+    const proxyUrl = `http://localhost:4000/api/gateway/${controllerId}/my-test-service/hello`;
+    const proxyRes = await fetch(proxyUrl, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+
+    // 8. fake controller 收到代理请求数据，验证请求内容
+    const proxyData = await proxyDataPromise;
+    expect(proxyData.tunnelId).toBe(tunnelEvent.tunnelId);
+    const parsedData = JSON.parse(Buffer.from(proxyData.data, 'base64').toString());
+    expect(parsedData.type).toBe('http-request');
+    expect(parsedData.method).toBe('GET');
+    expect(parsedData.path).toBe('/hello');
+
+    // 9. fake controller 模拟本地服务响应：回复 port-forward:data
+    const responseData = JSON.stringify({
+      type: 'http-response',
+      requestId: parsedData.requestId,
+      statusCode: 200,
+      headers: { 'content-type': 'text/plain' },
+      body: Buffer.from('Hello from local service!').toString('base64'),
+    });
+    client.emit('port-forward:data', {
+      tunnelId: tunnelEvent.tunnelId,
+      data: Buffer.from(responseData).toString('base64'),
+    });
+
+    // 10. 验证 REST 代理返回了正确的响应
+    expect(proxyRes.status).toBe(200);
+    const text = await proxyRes.text();
+    expect(text).toBe('Hello from local service!');
+
+    // 11. 清理
+    localServer.close();
+    client.emit('port-forward:close', { tunnelId: tunnelEvent.tunnelId });
+    client.disconnect();
+  });
+});
+```
+
+**流程示意图**：
+
+```mermaid
+sequenceDiagram
+    participant T as 测试进程
+    participant S as 本地 TCP 服务<br/>(测试进程启动)
+    participant FC as Fake Controller<br/>(Socket.IO 客户端)
+    participant A as agent-api
+    participant C as controller-api
+    participant R as Redis
+
+    T->>S: net.createServer()<br/>监听随机端口
+    T->>FC: Socket.IO 连接
+    FC->>C: register
+    T->>A: GraphQL: createGateway(name, port)
+    A->>R: PUBLISH tunnel:create
+    R->>C: 收到命令
+    C->>FC: port-forward:create { tunnelId, port }
+    FC->>C: port-forward:created { success: true }
+    T->>A: REST GET /api/gateway/:cid/:name/hello
+    A->>R: PUBLISH proxy:request
+    R->>C: 收到代理请求
+    C->>FC: port-forward:data { tunnelId, encoded 请求 }
+    FC->>C: port-forward:data { tunnelId, encoded 响应 }
+    C->>R: PUBLISH proxy:response
+    A-->>T: 200 "Hello from local service!"
+```
 
 ### E2E 测试覆盖
 
@@ -425,6 +542,7 @@ createGateway({ variables: { controllerId, name, port: portNum } });
 | 名称格式非法 | 特殊字符返回错误 |
 | 按名称删除 | `deleteGateway(controllerId, name)` 成功 |
 | 按名称代理 | `GET /api/gateway/:cid/:name/path` 正常返回 |
+| **隧道全链路打通** | createGateway → 隧道建立 → REST 代理访问 → 本地服务响应正常返回 |
 
 ### 验证
 
