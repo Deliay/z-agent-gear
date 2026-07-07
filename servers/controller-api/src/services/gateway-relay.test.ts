@@ -207,7 +207,7 @@ describe('GatewayRelayService', () => {
             requestId: 'req-1',
             statusCode: 200,
             headers: { 'content-type': 'text/plain' },
-            body: 'hello',
+            body: responseBody,
           }),
         );
       });

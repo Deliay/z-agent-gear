@@ -172,7 +172,7 @@ export class GatewayRelayService {
     });
   }
 
-  handleTunnelData(tunnelId: string, data: Buffer): void {
+  async handleTunnelData(tunnelId: string, data: Buffer): Promise<void> {
     let matchedRequestId: string | null = null;
     for (const [requestId, ctx] of this.proxyRequests) {
       if (!ctx.resolved) {
@@ -184,11 +184,14 @@ export class GatewayRelayService {
       }
     }
 
-    if (!matchedRequestId) return;
+    if (!matchedRequestId) {
+      return;
+    }
 
     const ctx = this.proxyRequests.get(matchedRequestId)!;
     try {
-      const parsed = JSON.parse(data.toString()) as {
+      const raw = data.toString();
+      const parsed = JSON.parse(raw) as {
         type: string;
         requestId: string;
         statusCode: number;
@@ -201,12 +204,11 @@ export class GatewayRelayService {
         clearTimeout(ctx.timeout);
         this.proxyRequests.delete(matchedRequestId);
 
-        const bodyBuffer = Buffer.from(parsed.body, 'base64');
-        this.publishResponse(
+        await this.publishResponse(
           parsed.requestId,
           parsed.statusCode,
           parsed.headers,
-          bodyBuffer.toString('utf-8'),
+          parsed.body,
         );
       }
     } catch {

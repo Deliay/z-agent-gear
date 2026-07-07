@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
-import net from 'node:net';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const API_BASE = process.env.API_URL ? process.env.API_URL.replace('/graphql', '') : 'http://localhost:4000';
@@ -288,16 +287,7 @@ describe('Gateway API', () => {
 
   describe('gateway tunnel end-to-end', () => {
     it('should create gateway and proxy request through tunnel successfully', async () => {
-      const localServer = net.createServer((socket) => {
-        socket.on('data', () => {
-          const response = 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from local service!';
-          socket.write(response);
-          socket.end();
-        });
-      });
-      const port = await new Promise<number>((resolve) => {
-        localServer.listen(0, '127.0.0.1', () => resolve((localServer.address() as net.AddressInfo).port));
-      });
+      const port = 19999;
 
       const { client, controllerId } = await registerController('e2e-tunnel');
 
@@ -317,14 +307,38 @@ describe('Gateway API', () => {
 
       client.emit('port-forward:created', { tunnelId: tunnelEvent.tunnelId, success: true });
 
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 300));
 
       const proxyUrl = `${API_BASE}/api/gateway/${controllerId}/my-test-service/hello`;
+
+      const onProxyData = (data: { tunnelId: string; data: string }) => {
+        console.log('Tunnel test - received port-forward:data:', data.tunnelId);
+        const parsedRequest = JSON.parse(Buffer.from(data.data, 'base64').toString());
+        console.log('Tunnel test - parsed request:', parsedRequest.type, parsedRequest.method, parsedRequest.path, parsedRequest.requestId?.substring(0, 8));
+
+        const responseData = JSON.stringify({
+          type: 'http-response',
+          requestId: parsedRequest.requestId,
+          statusCode: 200,
+          headers: { 'content-type': 'text/plain' },
+          body: Buffer.from('Hello from local service!').toString('base64'),
+        });
+        console.log('Tunnel test - sending response, requestId:', parsedRequest.requestId?.substring(0, 8));
+        client.emit('port-forward:data', {
+          tunnelId: data.tunnelId,
+          data: Buffer.from(responseData).toString('base64'),
+        });
+      };
+
+      client.on('port-forward:data', onProxyData);
+
+      console.log('Tunnel test - making proxy request to:', proxyUrl);
       const proxyRes = await fetch(proxyUrl, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
+      console.log('Tunnel test - proxy response status:', proxyRes.status);
 
-      localServer.close();
+      client.removeListener('port-forward:data', onProxyData);
       client.emit('port-forward:close', { tunnelId: tunnelEvent.tunnelId });
       client.disconnect();
 

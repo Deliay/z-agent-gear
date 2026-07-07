@@ -246,3 +246,54 @@ test.describe.skip('Gateway E2E', () => {
   });
 
 });
+
+test.describe('Gateway Tunnel E2E', () => {
+  const PROXY_BASE = API_URL.replace('/graphql', '');
+
+  test('should create gateway and proxy request through tunnel successfully', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+
+    const { controllerId, disconnect, socket } = await registerController(rawKey);
+
+    socket.on('port-forward:data', (data: { tunnelId: string; data: string }) => {
+      const parsedRequest = JSON.parse(Buffer.from(data.data, 'base64').toString());
+      const responseData = JSON.stringify({
+        type: 'http-response',
+        requestId: parsedRequest.requestId,
+        statusCode: 200,
+        headers: { 'content-type': 'text/plain' },
+        body: Buffer.from('Hello from gateway tunnel!').toString('base64'),
+      });
+      socket.emit('port-forward:data', {
+        tunnelId: data.tunnelId,
+        data: Buffer.from(responseData).toString('base64'),
+      });
+    });
+
+    const gwName = `tun-svc-${Date.now().toString(36)}`;
+    const gwPort = 18888;
+
+    const gwRes = await gqlRequest(page, `
+      mutation CreateGw($controllerId: ID!, $name: String!, $port: Int!) {
+        createGateway(controllerId: $controllerId, name: $name, port: $port) { id name port status }
+      }
+    `, { controllerId, name: gwName, port: gwPort }, token);
+    const gwBody = await gwRes.json();
+    expect(gwBody.errors).toBeUndefined();
+    expect(gwBody.data.createGateway.name).toBe(gwName);
+    expect(gwBody.data.createGateway.status).toBe('active');
+
+    // Make proxy request through gateway tunnel
+    const proxyUrl = `${PROXY_BASE}/api/gateway/${controllerId}/${gwName}/hello`;
+    const proxyRes = await page.request.get(proxyUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(proxyRes.status()).toBe(200);
+    const proxyText = await proxyRes.text();
+    expect(proxyText).toBe('Hello from gateway tunnel!');
+
+    socket.emit('port-forward:close', { tunnelId: '' });
+    disconnect();
+  });
+});

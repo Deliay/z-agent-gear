@@ -354,7 +354,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('port-forward:data', async (payload: { tunnelId: string; data: string }) => {
       if (!authenticated) return;
       const buffer = Buffer.from(payload.data, 'base64');
-      gatewayRelayService.handleTunnelData(payload.tunnelId, buffer);
+      await gatewayRelayService.handleTunnelData(payload.tunnelId, buffer);
     });
 
     socket.on('port-forward:close', async (payload: { tunnelId: string }) => {
