@@ -43,44 +43,44 @@ PRD 要求将"端口转发"升级为"统一网关"，核心变化：
 ```mermaid
 graph TD
     subgraph "外部用户"
-        EXT[外部请求 /gateway/...]
+        EXT["外部请求 /gateway/..."]
     end
 
     subgraph "前端 (agent-web)"
-        UI[统一网关界面<br/>GatewaySection / Dialog / Item]
+        UI["统一网关界面 (GatewaySection)"]
     end
 
     subgraph "agent-api"
-        GQL[GraphQL API: gateway 管理]
-        GW_PROXY[网关代理路由 /api/gateway/...]
-        AUTH[身份验证]
-        GW_SVC[GatewayService<br/>新增 name 字段逻辑]
+        GQL["GraphQL API: gateway 管理"]
+        GW_PROXY["网关代理路由 /api/gateway/..."]
+        AUTH["身份验证"]
+        GW_SVC["GatewayService (新增 name 逻辑)"]
     end
 
     subgraph "Redis"
-        PUB_SUB[Pub/Sub: port-forward:command<br/>(保持原名, 内部使用)]
+        PUB_SUB["Pub/Sub: port-forward:command (保持原名)"]
     end
 
     subgraph "controller-api"
-        RELAY[GatewayRelayService<br/>(原 PortForwardRelayService)]
-        SIO[Socket.IO<br/>内部事件: port-forward:*]
+        RELAY["GatewayRelayService (原 PortForwardRelayService)"]
+        SIO["Socket.IO 内部事件: port-forward:*"]
     end
 
     subgraph "agent-controller"
-        GW_MGR[GatewayManager<br/>(原 PortForwardManager)]
-        LOCAL_SVC[本地服务 :port]
+        GW_MGR["GatewayManager (原 PortForwardManager)"]
+        LOCAL_SVC["本地服务 :port"]
     end
 
-    UI -->|GraphQL: gateway 查询/变更| GQL
-    EXT -->|HTTP 代理 /gateway/:id/:name/*| GW_PROXY
+    UI -->|"GraphQL: gateway 查询/变更"| GQL
+    EXT -->|"HTTP 代理 /gateway/:id/:name/*"| GW_PROXY
     GQL --> AUTH
     GW_PROXY --> AUTH
-    GQL -->|发布隧道命令| PUB_SUB
-    GW_PROXY -->|发布代理请求| PUB_SUB
+    GQL -->|"发布隧道命令"| PUB_SUB
+    GW_PROXY -->|"发布代理请求"| PUB_SUB
     PUB_SUB --> RELAY
-    RELAY -->|Socket.IO port-forward:*| SIO
-    SIO -->|Socket.IO port-forward:*| GW_MGR
-    GW_MGR -->|TCP| LOCAL_SVC
+    RELAY -->|"Socket.IO port-forward:*"| SIO
+    SIO -->|"Socket.IO port-forward:*"| GW_MGR
+    GW_MGR -->|"TCP"| LOCAL_SVC
 
     style PUB_SUB fill:#f96,stroke:#333
     style SIO fill:#bbf,stroke:#333
