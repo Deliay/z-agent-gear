@@ -10,9 +10,10 @@ import { authenticateUser } from './middleware/auth.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
-import { portForwardProxyRouter } from './routes/port-forward-proxy.js';
+import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
+import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 
 const app = express();
@@ -34,7 +35,7 @@ const yoga = createYoga({
 app.use('/graphql', yoga);
 
 app.use('/api', sessionStreamRouter);
-app.use('/api', portForwardProxyRouter);
+app.use('/api', gatewayProxyRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -49,7 +50,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001]);
+    await runMigrations([migration001, migration002]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }

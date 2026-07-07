@@ -13,7 +13,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `e2e_pf_${Date.now().toString(36)}`;
+  const username = `e2e_gw_${Date.now().toString(36)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
       signup(username: $username, password: $password) { token user { id username } }
@@ -28,7 +28,7 @@ async function createControllerKey(page: import('@playwright/test').Page, token:
     mutation CreateKey($input: CreateKeyInput!) {
       createControllerKey(input: $input) { rawKey key { id } }
     }
-  `, { input: { name: `e2e-pf-${Date.now()}`, type: 'local' } }, token);
+  `, { input: { name: `e2e-gw-${Date.now()}`, type: 'local' } }, token);
   const body = await res.json();
   return { rawKey: body.data.createControllerKey.rawKey };
 }
@@ -58,7 +58,7 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       client.disconnect();
       reject(new Error(`Failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: 'e2e-pf-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'e2e-gw-host', version: '1.0.0' });
   });
 }
 
@@ -72,19 +72,19 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
 
 async function expandController(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await sidebar.getByRole('button', { name: /e2e-pf-host/ }).click();
+  await sidebar.getByRole('button', { name: /e2e-gw-host/ }).click();
   return sidebar;
 }
 
-async function expandPortForward(page: import('@playwright/test').Page) {
+async function expandGateway(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await sidebar.getByText('端口转发').click();
+  await sidebar.getByText('统一网关').click();
   return sidebar;
 }
 
-test.describe.skip('Port Forward E2E', () => {
+test.describe.skip('Gateway E2E', () => {
 
-  test('should show port forward section for online controller', async ({ page }) => {
+  test('should show gateway section for online controller', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
@@ -92,88 +92,91 @@ test.describe.skip('Port Forward E2E', () => {
     await loginViaUI(page, username);
     const sidebar = await expandController(page);
 
-    await expect(sidebar.getByText('端口转发')).toBeVisible({ timeout: 10000 });
+    await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
     disconnect();
   });
 
-  test('should show empty state when expanding port forwards', async ({ page }) => {
+  test('should show empty state when expanding gateways', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await expandController(page);
-    const sidebar = await expandPortForward(page);
+    const sidebar = await expandGateway(page);
 
-    await expect(sidebar.getByText('无端口转发')).toBeVisible({ timeout: 10000 });
+    await expect(sidebar.getByText('无网关暴露')).toBeVisible({ timeout: 10000 });
     disconnect();
   });
 
-  test('should open port forward dialog', async ({ page }) => {
+  test('should open gateway dialog', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await expandController(page);
-    await expandPortForward(page);
+    await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
 
-    await expect(page.getByText('新建端口转发')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('input[type="text"]')).toBeVisible();
     await expect(page.locator('input[type="number"]')).toBeVisible();
     await expect(page.getByText('取消')).toBeVisible();
     await expect(page.getByText('创建')).toBeVisible();
 
     await page.getByText('取消').click();
-    await expect(page.getByText('新建端口转发')).not.toBeVisible();
+    await expect(page.getByText('新建网关暴露')).not.toBeVisible();
     disconnect();
   });
 
-  test('should create a port forward', async ({ page }) => {
+  test('should create a gateway', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await expandController(page);
-    await expandPortForward(page);
+    await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
 
+    await page.locator('input[type="text"]').fill('my-api');
     await page.locator('input[type="number"]').fill('3000');
     await page.getByText('创建').click();
 
-    await expect(page.getByText('新建端口转发')).not.toBeVisible({ timeout: 5000 });
-    await expect(sidebar.getByText(':3000')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
+    await expect(sidebar.getByText('my-api')).toBeVisible({ timeout: 15000 });
+    await expect(sidebar.getByText(':3000')).toBeVisible({ timeout: 5000 });
     await expect(sidebar.getByText('active')).toBeVisible({ timeout: 5000 });
 
     disconnect();
   });
 
-  test('should show error for duplicate port', async ({ page }) => {
+  test('should show error for duplicate name', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await expandController(page);
-    await expandPortForward(page);
+    await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    // Create first port forward
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3001');
     await page.getByText('创建').click();
-    await expect(page.getByText('新建端口转发')).not.toBeVisible({ timeout: 5000 });
-    await expect(sidebar.getByText(':3001')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
+    await expect(sidebar.getByText('dup-svc')).toBeVisible({ timeout: 15000 });
 
-    // Try to create duplicate
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
-    await page.locator('input[type="number"]').fill('3001');
+    await page.locator('input[type="text"]').fill('dup-svc');
+    await page.locator('input[type="number"]').fill('3002');
     await page.getByText('创建').click();
 
     await expect(page.locator('p.text-red-400')).toBeVisible({ timeout: 10000 });
@@ -182,27 +185,26 @@ test.describe.skip('Port Forward E2E', () => {
     disconnect();
   });
 
-  test('should delete a port forward', async ({ page }) => {
+  test('should delete a gateway', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
     await expandController(page);
-    await expandPortForward(page);
+    await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    // Create port forward
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await page.locator('input[type="text"]').fill('del-svc');
     await page.locator('input[type="number"]').fill('4000');
     await page.getByText('创建').click();
-    await expect(sidebar.getByText(':4000')).toBeVisible({ timeout: 15000 });
+    await expect(sidebar.getByText('del-svc')).toBeVisible({ timeout: 15000 });
 
-    // Delete it
-    await sidebar.getByTitle('删除端口转发').click();
-    await expect(sidebar.getByText(':4000')).not.toBeVisible({ timeout: 15000 });
-    await expect(sidebar.getByText('无端口转发')).toBeVisible({ timeout: 5000 });
+    await sidebar.getByTitle('删除网关暴露').click();
+    await expect(sidebar.getByText('del-svc')).not.toBeVisible({ timeout: 15000 });
+    await expect(sidebar.getByText('无网关暴露')).toBeVisible({ timeout: 5000 });
 
     disconnect();
   });
@@ -214,36 +216,33 @@ test.describe.skip('Port Forward E2E', () => {
 
     await loginViaUI(page, username);
     await expandController(page);
-    await expandPortForward(page);
+    await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
 
-    await expect(page.getByText('新建端口转发')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
     await page.getByText('取消').click();
-    await expect(page.getByText('新建端口转发')).not.toBeVisible();
+    await expect(page.getByText('新建网关暴露')).not.toBeVisible();
 
     disconnect();
   });
 
-  test('should not show port forward section for offline controller', async ({ page }) => {
+  test('should not show gateway section for offline controller', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);
 
-    // Disconnect controller before login
     disconnect();
 
     await loginViaUI(page, username);
 
-    // Wait for controller to show as offline (poll interval is 15s, but status may update sooner via SSE)
     await page.waitForTimeout(2000);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: /e2e-pf-host/ }).click();
+    await sidebar.getByRole('button', { name: /e2e-gw-host/ }).click();
 
-    // Port forward section should NOT be visible
-    await expect(sidebar.getByText('端口转发')).not.toBeVisible({ timeout: 5000 });
+    await expect(sidebar.getByText('统一网关')).not.toBeVisible({ timeout: 5000 });
   });
 
 });

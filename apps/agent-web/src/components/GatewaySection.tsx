@@ -1,24 +1,24 @@
 import { useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { GET_PORT_FORWARDS } from '../graphql/queries';
-import type { GetPortForwardsQuery } from '../graphql/types';
-import PortForwardItem from './PortForwardItem';
-import PortForwardDialog from './PortForwardDialog';
+import { GET_GATEWAYS } from '../graphql/queries';
+import type { GetGatewaysQuery } from '../graphql/types';
+import GatewayItem from './GatewayItem';
+import GatewayDialog from './GatewayDialog';
 
-interface PortForwardSectionProps {
+interface GatewaySectionProps {
   controllerId: string;
 }
 
-export default function PortForwardSection({ controllerId }: PortForwardSectionProps) {
+export default function GatewaySection({ controllerId }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
 
-  const { data } = useQuery<GetPortForwardsQuery>(GET_PORT_FORWARDS, {
+  const { data } = useQuery<GetGatewaysQuery>(GET_GATEWAYS, {
     variables: { controllerId },
     skip: !isExpanded,
   });
 
-  const portForwards = data?.portForwards?.portForwards ?? [];
+  const gateways = data?.gateways?.gateways ?? [];
 
   return (
     <div>
@@ -32,7 +32,7 @@ export default function PortForwardSection({ controllerId }: PortForwardSectionP
       >
         <span className="text-xs text-muted-foreground">{isExpanded ? '▼' : '▶'}</span>
         <span className="text-xs text-muted-foreground">↗</span>
-        <span className="flex-1 truncate text-left text-sidebar-foreground">端口转发</span>
+        <span className="flex-1 truncate text-left text-sidebar-foreground">统一网关</span>
         <button
           type="button"
           onClick={(e) => {
@@ -47,13 +47,13 @@ export default function PortForwardSection({ controllerId }: PortForwardSectionP
 
       {isExpanded && (
         <ul className="ml-4 space-y-1">
-          {portForwards.length === 0 ? (
-            <li className="px-3 py-1 text-xs text-muted-foreground">无端口转发</li>
+          {gateways.length === 0 ? (
+            <li className="px-3 py-1 text-xs text-muted-foreground">无网关暴露</li>
           ) : (
-            portForwards.map((pf) => (
-              <PortForwardItem
-                key={pf.id}
-                portForward={pf}
+            gateways.map((gw) => (
+              <GatewayItem
+                key={gw.id}
+                gateway={gw}
                 controllerId={controllerId}
               />
             ))
@@ -62,7 +62,7 @@ export default function PortForwardSection({ controllerId }: PortForwardSectionP
       )}
 
       {showDialog && (
-        <PortForwardDialog
+        <GatewayDialog
           controllerId={controllerId}
           onClose={() => setShowDialog(false)}
         />

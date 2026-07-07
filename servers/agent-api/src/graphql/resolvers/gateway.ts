@@ -1,46 +1,47 @@
 import { GraphQLError } from 'graphql';
-import { portForwardService } from '../../services/port-forward.js';
+import { gatewayService } from '../../services/gateway.js';
 import { config } from '../../config/index.js';
 import type { AuthContext } from './auth.js';
 
-export const portForwardResolvers = {
+export const gatewayResolvers = {
   Query: {
-    portForwards: async (_parent: unknown, args: { controllerId: string }, context: AuthContext) => {
+    gateways: async (_parent: unknown, args: { controllerId: string }, context: AuthContext) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return portForwardService.findAllByController(args.controllerId, context.currentUser.id);
+      return gatewayService.findAllByController(args.controllerId, context.currentUser.id);
     },
   },
   Mutation: {
-    createPortForward: async (
+    createGateway: async (
       _parent: unknown,
-      args: { controllerId: string; port: number },
+      args: { controllerId: string; name: string; port: number },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await portForwardService.create(
+        return await gatewayService.create(
           args.controllerId,
           context.currentUser.id,
+          args.name,
           args.port,
-          config.portForwardMaxPerController,
+          config.gatewayMaxPerController,
         );
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
     },
-    deletePortForward: async (
+    deleteGateway: async (
       _parent: unknown,
-      args: { controllerId: string; port: number },
+      args: { controllerId: string; name: string },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return portForwardService.delete(args.controllerId, context.currentUser.id, args.port);
+      return gatewayService.delete(args.controllerId, context.currentUser.id, args.name);
     },
   },
 };

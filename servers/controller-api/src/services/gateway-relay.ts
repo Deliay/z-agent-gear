@@ -23,7 +23,7 @@ interface ProxyRequestContext {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-export class PortForwardRelayService {
+export class GatewayRelayService {
   private io: SocketIOServer | null = null;
   private tunnels: Map<string, TunnelInfo> = new Map();
   private proxyRequests: Map<string, ProxyRequestContext> = new Map();
@@ -40,7 +40,7 @@ export class PortForwardRelayService {
 
     subscriber.subscribe(COMMAND_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to port-forward command channel:', err);
+        console.error('Failed to subscribe to gateway command channel:', err);
         return;
       }
     });
@@ -71,7 +71,7 @@ export class PortForwardRelayService {
             break;
         }
       } catch (err) {
-        console.error('Failed to process port-forward command:', err);
+        console.error('Failed to process gateway command:', err);
       }
     });
   }
@@ -82,7 +82,7 @@ export class PortForwardRelayService {
 
     subscriber.subscribe(RESPONSE_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to port-forward response channel:', err);
+        console.error('Failed to subscribe to gateway response channel:', err);
         return;
       }
     });
@@ -264,4 +264,4 @@ export class PortForwardRelayService {
   }
 }
 
-export const portForwardRelayService = new PortForwardRelayService();
+export const gatewayRelayService = new GatewayRelayService();

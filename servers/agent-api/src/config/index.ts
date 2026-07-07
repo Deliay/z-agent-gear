@@ -10,5 +10,5 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
   credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
   corsOrigin: process.env.CORS_ORIGIN || '*',
-  portForwardMaxPerController: parseInt(process.env.PORT_FORWARD_MAX_PER_CONTROLLER || '5', 10),
+  gatewayMaxPerController: parseInt(process.env.GATEWAY_MAX_PER_CONTROLLER || '5', 10),
 };

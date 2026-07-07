@@ -1,21 +1,21 @@
 import { useMutation } from '@apollo/client/react';
 import { useState } from 'react';
-import { DELETE_PORT_FORWARD } from '../graphql/mutations';
-import { GET_PORT_FORWARDS } from '../graphql/queries';
-import type { DeletePortForwardMutation, PortForwardData } from '../graphql/types';
+import { DELETE_GATEWAY } from '../graphql/mutations';
+import { GET_GATEWAYS } from '../graphql/queries';
+import type { DeleteGatewayMutation, GatewayData } from '../graphql/types';
 
-interface PortForwardItemProps {
-  portForward: PortForwardData;
+interface GatewayItemProps {
+  gateway: GatewayData;
   controllerId: string;
 }
 
-export default function PortForwardItem({ portForward, controllerId }: PortForwardItemProps) {
-  const [deletePortForward] = useMutation<DeletePortForwardMutation>(DELETE_PORT_FORWARD, {
-    refetchQueries: [{ query: GET_PORT_FORWARDS, variables: { controllerId } }],
+export default function GatewayItem({ gateway, controllerId }: GatewayItemProps) {
+  const [deleteGateway] = useMutation<DeleteGatewayMutation>(DELETE_GATEWAY, {
+    refetchQueries: [{ query: GET_GATEWAYS, variables: { controllerId } }],
   });
   const [copied, setCopied] = useState(false);
 
-  const accessUrl = `${window.location.origin}/api/forward/${controllerId}/${portForward.port}/`;
+  const accessUrl = `${window.location.origin}/api/gateway/${controllerId}/${gateway.name}/`;
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(accessUrl);
@@ -24,16 +24,17 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
   };
 
   const handleDelete = () => {
-    deletePortForward({
-      variables: { controllerId, port: portForward.port },
+    deleteGateway({
+      variables: { controllerId, name: gateway.name },
     });
   };
 
   return (
     <li className="flex items-center gap-2 rounded px-3 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent">
       <span className="text-xs text-muted-foreground">↗</span>
-      <span className="flex-1 truncate">:{portForward.port}</span>
-      {portForward.status === 'active' && (
+      <span className="flex-1 truncate">{gateway.name}</span>
+      <span className="text-xs text-muted-foreground">:{gateway.port}</span>
+      {gateway.status === 'active' && (
         <button
           type="button"
           onClick={handleCopy}
@@ -45,16 +46,16 @@ export default function PortForwardItem({ portForward, controllerId }: PortForwa
       )}
       <span
         className={`text-xs ${
-          portForward.status === 'active' ? 'text-green-500' : 'text-muted-foreground'
+          gateway.status === 'active' ? 'text-green-500' : 'text-muted-foreground'
         }`}
       >
-        {portForward.status}
+        {gateway.status}
       </span>
       <button
         type="button"
         onClick={handleDelete}
         className="text-xs text-destructive hover:text-destructive/80"
-        title="删除端口转发"
+        title="删除网关暴露"
       >
         ✕
       </button>

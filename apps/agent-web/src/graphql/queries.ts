@@ -235,12 +235,13 @@ export const DETECT_GIT_REPO = gql`
   }
 `
 
-export const GET_PORT_FORWARDS = gql`
-  query GetPortForwards($controllerId: ID!) {
-    portForwards(controllerId: $controllerId) {
-      portForwards {
+export const GET_GATEWAYS = gql`
+  query GetGateways($controllerId: ID!) {
+    gateways(controllerId: $controllerId) {
+      gateways {
         id
         controllerId
+        name
         port
         status
         createdAt

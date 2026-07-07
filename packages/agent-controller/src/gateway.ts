@@ -7,7 +7,7 @@ interface Tunnel {
   localSocket: net.Socket;
 }
 
-export class PortForwardManager {
+export class GatewayManager {
   private tunnels: Map<string, Tunnel> = new Map();
 
   async createTunnel(tunnelId: string, port: number, serverSocket: Socket): Promise<void> {
@@ -15,7 +15,7 @@ export class PortForwardManager {
 
     return new Promise<void>((resolve) => {
       const onError = (err: Error) => {
-        console.error(`Port forward tunnel error: tunnelId=${tunnelId} error=${err.message}`);
+        console.error(`Gateway tunnel error: tunnelId=${tunnelId} error=${err.message}`);
         serverSocket.emit('port-forward:created', {
           tunnelId,
           success: false,
@@ -31,7 +31,7 @@ export class PortForwardManager {
         localSocket.removeListener('error', onError);
 
         this.tunnels.set(tunnelId, { id: tunnelId, port, localSocket });
-        console.log(`Port forward tunnel created: tunnelId=${tunnelId} port=${port}`);
+        console.log(`Gateway tunnel created: tunnelId=${tunnelId} port=${port}`);
 
         serverSocket.emit('port-forward:created', { tunnelId, success: true });
 
@@ -43,13 +43,13 @@ export class PortForwardManager {
         });
 
         localSocket.on('close', () => {
-          console.log(`Port forward local socket closed: tunnelId=${tunnelId}`);
+          console.log(`Gateway local socket closed: tunnelId=${tunnelId}`);
           this.tunnels.delete(tunnelId);
           serverSocket.emit('port-forward:close', { tunnelId });
         });
 
         localSocket.on('error', (err: Error) => {
-          console.error(`Port forward local socket error: tunnelId=${tunnelId} error=${err.message}`);
+          console.error(`Gateway local socket error: tunnelId=${tunnelId} error=${err.message}`);
           this.tunnels.delete(tunnelId);
           serverSocket.emit('port-forward:error', { tunnelId, error: err.message });
         });
@@ -62,7 +62,7 @@ export class PortForwardManager {
   handleTunnelData(tunnelId: string, data: string): void {
     const tunnel = this.tunnels.get(tunnelId);
     if (!tunnel) {
-      console.warn(`Port forward data for unknown tunnel: tunnelId=${tunnelId}`);
+      console.warn(`Gateway data for unknown tunnel: tunnelId=${tunnelId}`);
       return;
     }
     tunnel.localSocket.write(Buffer.from(data, 'base64'));
@@ -71,13 +71,13 @@ export class PortForwardManager {
   closeTunnel(tunnelId: string): void {
     const tunnel = this.tunnels.get(tunnelId);
     if (!tunnel) return;
-    console.log(`Port forward closing tunnel: tunnelId=${tunnelId}`);
+    console.log(`Gateway closing tunnel: tunnelId=${tunnelId}`);
     tunnel.localSocket.destroy();
     this.tunnels.delete(tunnelId);
   }
 
   closeAll(): void {
-    console.log(`Port forward closing all tunnels: count=${this.tunnels.size}`);
+    console.log(`Gateway closing all tunnels: count=${this.tunnels.size}`);
     for (const tunnel of this.tunnels.values()) {
       tunnel.localSocket.destroy();
     }
@@ -85,4 +85,4 @@ export class PortForwardManager {
   }
 }
 
-export const portForwardManager = new PortForwardManager();
+export const gatewayManager = new GatewayManager();
