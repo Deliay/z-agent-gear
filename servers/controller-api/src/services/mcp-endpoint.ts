@@ -21,7 +21,7 @@ export class McpEndpointService {
 
     const token = jwt.sign(
       { sessionId, userId, serverNames },
-      JWT_SECRET,
+      JWT_SECRET as string,
       { expiresIn: '24h' },
     );
     const tokenHash = await bcrypt.hash(token, SALT_ROUNDS);

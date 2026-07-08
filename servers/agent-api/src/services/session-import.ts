@@ -109,8 +109,8 @@ export class SessionImportService {
           userId,
           controllerId,
           controllerName,
-          acpServerType,
-          status: 'ended',
+          acpServerType: acpServerType as any,
+          status: 'ended' as const,
           title,
           externalSessionId: acpSessionId,
           cwd,
@@ -118,7 +118,7 @@ export class SessionImportService {
         });
 
         const messages = (loadResult.messages ?? []).map((msg) => ({
-          sessionId: session._id,
+          sessionId: (session as any)._id,
           direction: msg.direction,
           type: msg.type,
           content: msg.content,
@@ -129,7 +129,7 @@ export class SessionImportService {
         }
 
         results.push({
-          sessionId: session._id.toString(),
+          sessionId: (session as any)._id.toString(),
           acpSessionId,
           title,
           success: true,

@@ -29,7 +29,15 @@ aspire describe agent-web
 ## 运行测试
 
 ```bash
-BASE_URL=http://localhost:35273 npx playwright test
+# 获取各服务 endpoint
+aspire describe agent-web 2>/dev/null > /tmp/aspire_web_url.txt
+BASE_URL=$(grep -oP 'http://localhost:\d+' /tmp/aspire_web_url.txt | sort -u | head -1)
+aspire describe agent-api 2>/dev/null > /tmp/aspire_api_url.txt
+API_URL="$(grep -oP 'http://localhost:\d+' /tmp/aspire_api_url.txt | sort -u | head -1)/graphql"
+aspire describe controller-api 2>/dev/null > /tmp/aspire_ctrl_url.txt
+CONTROLLER_API_URL="$(grep -oP 'http://localhost:\d+' /tmp/aspire_ctrl_url.txt | sort -u | head -1)"
+
+API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL BASE_URL=$BASE_URL npx playwright test
 ```
 
 ## 环境变量

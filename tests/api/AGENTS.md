@@ -29,8 +29,13 @@ aspire describe agent-api
 
 ```bash
 # 获取各服务 endpoint
-API_URL="$(aspire describe agent-api 2>/dev/null | tr -d '\000-\037\177-\237' | grep -oP 'http://localhost:\d+' | head -1)/graphql"
-CONTROLLER_API_URL="$(aspire describe controller-api 2>/dev/null | tr -d '\000-\037\177-\237' | grep -oP 'http://localhost:\d+' | head -1)"
+aspire describe agent-api 2>/dev/null > /tmp/aspire_agent_api.txt
+aspire describe controller-api 2>/dev/null > /tmp/aspire_controller_api.txt
+
+AGENT_API=$(grep -oP 'http://localhost:\d+' /tmp/aspire_agent_api.txt | sort -u | head -1)
+CONTROLLER_API=$(grep -oP 'http://localhost:\d+' /tmp/aspire_controller_api.txt | sort -u | head -1)
+API_URL="${AGENT_API}/graphql"
+CONTROLLER_API_URL="${CONTROLLER_API}"
 
 API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL npm test
 
