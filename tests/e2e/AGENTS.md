@@ -3,9 +3,10 @@
 ## Prerequisites
 
 - [Aspire CLI](https://aspire.dev) installed
-- Docker running (for MongoDB container)
 
 ## 启动服务
+
+> **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
 
 ```bash
 # 启动 Aspire 编排（在项目根目录）

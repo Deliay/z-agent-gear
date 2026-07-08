@@ -3,9 +3,10 @@
 ## Prerequisites
 
 - [Aspire CLI](https://aspire.dev) installed
-- Docker running (for MongoDB container)
 
 ## 启动服务
+
+> **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
 
 ```bash
 # 启动 Aspire 编排（在项目根目录）
@@ -28,10 +29,10 @@ aspire describe agent-api
 
 ```bash
 # 获取各服务 endpoint
-API_URL=$(aspire describe agent-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url+'/graphql')")
-CONTROLLER_URL=$(aspire describe controller-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url)")
+API_URL="$(aspire describe agent-api 2>/dev/null | tr -d '\000-\037\177-\237' | grep -oP 'http://localhost:\d+' | head -1)/graphql"
+CONTROLLER_API_URL="$(aspire describe controller-api 2>/dev/null | tr -d '\000-\037\177-\237' | grep -oP 'http://localhost:\d+' | head -1)"
 
-API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
+API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL npm test
 
 ## 测试脚本
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
@@ -91,6 +91,15 @@ const DELETE_GATEWAY = `
   }
 `;
 
+async function waitForControllerOnline(controllerId: string, token: string, timeoutMs = 5000): Promise<void> {
+  const CONTROLLER_QUERY = `query Controller($id: ID!) { controller(id: $id) { status } }`;
+  await vi.waitFor(async () => {
+    const res = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, token);
+    const body = await res.json();
+    expect(body.data?.controller?.status).toBe('online');
+  }, { timeout: timeoutMs, interval: 200 });
+}
+
 async function registerController(nameSuffix: string): Promise<{ client: ClientSocket; controllerId: string }> {
   const keyRes = await gqlRequest(
     CREATE_KEY,
@@ -105,7 +114,7 @@ async function registerController(nameSuffix: string): Promise<{ client: ClientS
   client.emit('register', { key: rawKey, hostname: `gw-host-${nameSuffix}`, version: '1.0.0' });
   const regData = await registered;
 
-  await new Promise((r) => setTimeout(r, 200));
+  await waitForControllerOnline(regData.controllerId, authToken);
 
   return { client, controllerId: regData.controllerId };
 }
@@ -159,7 +168,14 @@ describe('Gateway API', () => {
     it('should reject for offline controller', async () => {
       const { client, controllerId } = await registerController('offline');
       client.disconnect();
-      await new Promise((r) => setTimeout(r, 500));
+
+      // Poll until controller status becomes offline
+      const CONTROLLER_QUERY = `query Controller($id: ID!) { controller(id: $id) { status } }`;
+      await vi.waitFor(async () => {
+        const pollRes = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+        const pollBody = await pollRes.json();
+        expect(pollBody.data?.controller?.status).toBe('offline');
+      }, { timeout: 5000, interval: 200 });
 
       const res = await gqlRequest(
         CREATE_GATEWAY,
@@ -307,15 +323,10 @@ describe('Gateway API', () => {
 
       client.emit('port-forward:created', { tunnelId: tunnelEvent.tunnelId, success: true });
 
-      await new Promise((r) => setTimeout(r, 300));
-
       const proxyUrl = `${API_BASE}/api/gateway/${controllerId}/my-test-service/hello`;
 
       const onProxyData = (data: { tunnelId: string; data: string }) => {
-        console.log('Tunnel test - received port-forward:data:', data.tunnelId);
         const parsedRequest = JSON.parse(Buffer.from(data.data, 'base64').toString());
-        console.log('Tunnel test - parsed request:', parsedRequest.type, parsedRequest.method, parsedRequest.path, parsedRequest.requestId?.substring(0, 8));
-
         const responseData = JSON.stringify({
           type: 'http-response',
           requestId: parsedRequest.requestId,
@@ -323,7 +334,6 @@ describe('Gateway API', () => {
           headers: { 'content-type': 'text/plain' },
           body: Buffer.from('Hello from local service!').toString('base64'),
         });
-        console.log('Tunnel test - sending response, requestId:', parsedRequest.requestId?.substring(0, 8));
         client.emit('port-forward:data', {
           tunnelId: data.tunnelId,
           data: Buffer.from(responseData).toString('base64'),
@@ -332,18 +342,24 @@ describe('Gateway API', () => {
 
       client.on('port-forward:data', onProxyData);
 
-      console.log('Tunnel test - making proxy request to:', proxyUrl);
-      const proxyRes = await fetch(proxyUrl, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      console.log('Tunnel test - proxy response status:', proxyRes.status);
+      // Retry proxy request until tunnel is established (avoids fragile setTimeout)
+      let proxyRes: Response | undefined;
+      await vi.waitFor(async () => {
+        const res = await fetch(proxyUrl, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (res.status !== 502) {
+          proxyRes = res;
+        }
+        expect(res.status).not.toBe(502);
+      }, { timeout: 10000, interval: 500 });
 
       client.removeListener('port-forward:data', onProxyData);
       client.emit('port-forward:close', { tunnelId: tunnelEvent.tunnelId });
       client.disconnect();
 
-      expect(proxyRes.status).toBe(200);
-      const text = await proxyRes.text();
+      expect(proxyRes!.status).toBe(200);
+      const text = await proxyRes!.text();
       expect(text).toBe('Hello from local service!');
     });
   });

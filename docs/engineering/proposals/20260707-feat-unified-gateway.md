@@ -518,7 +518,7 @@ contracts/
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `PORT_FORWARD_MAX_PER_CONTROLLER` | `5` | 保持原名，无需变更 |
+| `GATEWAY_MAX_PER_CONTROLLER` | `5` | 一个 Controller 最多暴露的服务数 |
 
 ### 9.3 数据迁移
 
