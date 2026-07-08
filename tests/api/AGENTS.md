@@ -4,19 +4,18 @@
 
 - [Aspire CLI](https://aspire.dev) installed
 
-## 启动服务
+## 测试步骤
 
 > **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
 
-```bash
-# 启动 Aspire 编排（在项目根目录）
-aspire start
+### 1. 启动服务
 
-# 等待后端服务就绪
-aspire wait agent-api
+```bash
+# 启动 Aspire 编排并等待服务就绪（在项目根目录）
+aspire start && aspire wait agent-api
 ```
 
-## 获取 API 端点
+### 2. 获取 Endpoint
 
 ```bash
 # 查看 agent-api 的地址
@@ -25,19 +24,21 @@ aspire describe agent-api
 
 输出中查找 `agent-api` 的 URL，例如 `http://localhost:4000`。
 
-## 运行测试
+### 3. 填入环境变量并执行测试
 
 ```bash
 # 获取各服务 endpoint
-aspire describe agent-api 2>/dev/null > /tmp/aspire_agent_api.txt
-aspire describe controller-api 2>/dev/null > /tmp/aspire_controller_api.txt
-
-AGENT_API=$(grep -oP 'http://localhost:\d+' /tmp/aspire_agent_api.txt | sort -u | head -1)
-CONTROLLER_API=$(grep -oP 'http://localhost:\d+' /tmp/aspire_controller_api.txt | sort -u | head -1)
-API_URL="${AGENT_API}/graphql"
-CONTROLLER_API_URL="${CONTROLLER_API}"
+ASP_REM_AGENT_API=$(aspire describe agent-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
+ASP_REM_CONTROLLER_API=$(aspire describe controller-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
+API_URL="${ASP_REM_AGENT_API}/graphql"
+CONTROLLER_API_URL="${ASP_REM_CONTROLLER_API}"
 
 API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL npm test
+```
+
+### 4. 重新运行测试
+
+如果需要重新运行测试，必须从**步骤 1** 开始，重新运行 Aspire 实例。
 
 ## 测试脚本
 
@@ -48,7 +49,6 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL npm test
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
-```
 
 ## 环境变量
 

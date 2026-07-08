@@ -4,20 +4,18 @@
 
 - [Aspire CLI](https://aspire.dev) installed
 
-## 启动服务
+## 测试步骤
 
 > **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
 
-```bash
-# 启动 Aspire 编排（在项目根目录）
-aspire start
+### 1. 启动服务
 
-# 等待前后端服务就绪
-aspire wait agent-api
-aspire wait agent-web
+```bash
+# 启动 Aspire 编排并等待服务就绪（在项目根目录）
+aspire start && aspire wait agent-api && aspire wait agent-web
 ```
 
-## 获取前端地址
+### 2. 获取 Endpoint
 
 ```bash
 # 查看 agent-web 的地址
@@ -26,19 +24,23 @@ aspire describe agent-web
 
 输出中查找 `agent-web` 的 `http` URL，例如 `http://localhost:35273`。
 
-## 运行测试
+### 3. 填入环境变量并执行测试
 
 ```bash
 # 获取各服务 endpoint
-aspire describe agent-web 2>/dev/null > /tmp/aspire_web_url.txt
-BASE_URL=$(grep -oP 'http://localhost:\d+' /tmp/aspire_web_url.txt | sort -u | head -1)
-aspire describe agent-api 2>/dev/null > /tmp/aspire_api_url.txt
-API_URL="$(grep -oP 'http://localhost:\d+' /tmp/aspire_api_url.txt | sort -u | head -1)/graphql"
-aspire describe controller-api 2>/dev/null > /tmp/aspire_ctrl_url.txt
-CONTROLLER_API_URL="$(grep -oP 'http://localhost:\d+' /tmp/aspire_ctrl_url.txt | sort -u | head -1)"
+ASP_REM_BASE_URL=$(aspire describe agent-web 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
+ASP_REM_AGENT_API=$(aspire describe agent-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
+ASP_REM_CONTROLLER_API=$(aspire describe controller-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
+API_URL="${ASP_REM_AGENT_API}/graphql"
+CONTROLLER_API_URL="${ASP_REM_CONTROLLER_API}"
+BASE_URL="${ASP_REM_BASE_URL}"
 
 API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL BASE_URL=$BASE_URL npx playwright test
 ```
+
+### 4. 重新运行测试
+
+如果需要重新运行测试，必须从**步骤 1** 开始，重新运行 Aspire 实例。
 
 ## 环境变量
 
