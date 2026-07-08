@@ -264,30 +264,31 @@ export interface CreateFolderMutation {
   } | null
 }
 
-export interface PortForwardData {
+export interface GatewayData {
   id: string
   controllerId: string
+  name: string
   port: number
   status: string
   createdAt: string
 }
 
-export interface PortForwardListData {
-  portForwards: PortForwardData[]
+export interface GatewayListData {
+  gateways: GatewayData[]
   total: number
   limit: number
 }
 
-export interface GetPortForwardsQuery {
-  portForwards: PortForwardListData
+export interface GetGatewaysQuery {
+  gateways: GatewayListData
 }
 
-export interface CreatePortForwardMutation {
-  createPortForward: PortForwardData
+export interface CreateGatewayMutation {
+  createGateway: GatewayData
 }
 
-export interface DeletePortForwardMutation {
-  deletePortForward: boolean
+export interface DeleteGatewayMutation {
+  deleteGateway: boolean
 }
 
 export interface PermissionOptionData {

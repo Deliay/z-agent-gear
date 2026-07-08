@@ -7,7 +7,7 @@ vi.mock('node:net', () => ({
 }));
 
 import net from 'node:net';
-import { PortForwardManager } from './port-forward.js';
+import { GatewayManager } from './gateway.js';
 
 function createMockLocalSocket() {
   const handlers = new Map<string, Function>();
@@ -36,12 +36,12 @@ function createMockServerSocket() {
   };
 }
 
-describe('PortForwardManager', () => {
-  let portForwardManager: PortForwardManager;
+describe('GatewayManager', () => {
+  let gatewayManager: GatewayManager;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    portForwardManager = new PortForwardManager();
+    gatewayManager = new GatewayManager();
   });
 
   describe('createTunnel', () => {
@@ -50,7 +50,7 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
@@ -66,7 +66,7 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('error', new Error('ECONNREFUSED'));
       await promise;
 
@@ -83,7 +83,7 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
@@ -101,7 +101,7 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
@@ -117,7 +117,7 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
@@ -136,19 +136,19 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
       const base64Data = Buffer.from('test payload').toString('base64');
-      portForwardManager.handleTunnelData('tunnel-1', base64Data);
+      gatewayManager.handleTunnelData('tunnel-1', base64Data);
 
       expect(mockLocalSocket.write).toHaveBeenCalledWith(Buffer.from('test payload'));
     });
 
     it('should log warning and ignore for unknown tunnelId', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      portForwardManager.handleTunnelData('unknown-tunnel', 'data');
+      gatewayManager.handleTunnelData('unknown-tunnel', 'data');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('unknown tunnel'),
       );
@@ -162,17 +162,17 @@ describe('PortForwardManager', () => {
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
 
-      const promise = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       mockLocalSocket._trigger('connect');
       await promise;
 
-      portForwardManager.closeTunnel('tunnel-1');
+      gatewayManager.closeTunnel('tunnel-1');
 
       expect(mockLocalSocket.destroy).toHaveBeenCalled();
     });
 
     it('should silently ignore unknown tunnelId', () => {
-      expect(() => portForwardManager.closeTunnel('unknown-tunnel')).not.toThrow();
+      expect(() => gatewayManager.closeTunnel('unknown-tunnel')).not.toThrow();
     });
   });
 
@@ -185,15 +185,15 @@ describe('PortForwardManager', () => {
         .mockReturnValueOnce(socket1 as never)
         .mockReturnValueOnce(socket2 as never);
 
-      const promise1 = portForwardManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      const promise1 = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
       socket1._trigger('connect');
       await promise1;
 
-      const promise2 = portForwardManager.createTunnel('tunnel-2', 4000, mockServerSocket as never);
+      const promise2 = gatewayManager.createTunnel('tunnel-2', 4000, mockServerSocket as never);
       socket2._trigger('connect');
       await promise2;
 
-      portForwardManager.closeAll();
+      gatewayManager.closeAll();
 
       expect(socket1.destroy).toHaveBeenCalled();
       expect(socket2.destroy).toHaveBeenCalled();

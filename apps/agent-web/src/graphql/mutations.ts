@@ -293,11 +293,12 @@ export const CREATE_FOLDER = gql`
   }
 `
 
-export const CREATE_PORT_FORWARD = gql`
-  mutation CreatePortForward($controllerId: ID!, $port: Int!) {
-    createPortForward(controllerId: $controllerId, port: $port) {
+export const CREATE_GATEWAY = gql`
+  mutation CreateGateway($controllerId: ID!, $name: String!, $port: Int!) {
+    createGateway(controllerId: $controllerId, name: $name, port: $port) {
       id
       controllerId
+      name
       port
       status
       createdAt
@@ -305,9 +306,9 @@ export const CREATE_PORT_FORWARD = gql`
   }
 `
 
-export const DELETE_PORT_FORWARD = gql`
-  mutation DeletePortForward($controllerId: ID!, $port: Int!) {
-    deletePortForward(controllerId: $controllerId, port: $port)
+export const DELETE_GATEWAY = gql`
+  mutation DeleteGateway($controllerId: ID!, $name: String!) {
+    deleteGateway(controllerId: $controllerId, name: $name)
   }
 `
 

@@ -23,7 +23,7 @@ interface ProxyRequestContext {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-export class PortForwardRelayService {
+export class GatewayRelayService {
   private io: SocketIOServer | null = null;
   private tunnels: Map<string, TunnelInfo> = new Map();
   private proxyRequests: Map<string, ProxyRequestContext> = new Map();
@@ -40,7 +40,7 @@ export class PortForwardRelayService {
 
     subscriber.subscribe(COMMAND_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to port-forward command channel:', err);
+        console.error('Failed to subscribe to gateway command channel:', err);
         return;
       }
     });
@@ -71,7 +71,7 @@ export class PortForwardRelayService {
             break;
         }
       } catch (err) {
-        console.error('Failed to process port-forward command:', err);
+        console.error('Failed to process gateway command:', err);
       }
     });
   }
@@ -82,7 +82,7 @@ export class PortForwardRelayService {
 
     subscriber.subscribe(RESPONSE_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to port-forward response channel:', err);
+        console.error('Failed to subscribe to gateway response channel:', err);
         return;
       }
     });
@@ -172,7 +172,7 @@ export class PortForwardRelayService {
     });
   }
 
-  handleTunnelData(tunnelId: string, data: Buffer): void {
+  async handleTunnelData(tunnelId: string, data: Buffer): Promise<void> {
     let matchedRequestId: string | null = null;
     for (const [requestId, ctx] of this.proxyRequests) {
       if (!ctx.resolved) {
@@ -184,11 +184,14 @@ export class PortForwardRelayService {
       }
     }
 
-    if (!matchedRequestId) return;
+    if (!matchedRequestId) {
+      return;
+    }
 
     const ctx = this.proxyRequests.get(matchedRequestId)!;
     try {
-      const parsed = JSON.parse(data.toString()) as {
+      const raw = data.toString();
+      const parsed = JSON.parse(raw) as {
         type: string;
         requestId: string;
         statusCode: number;
@@ -201,12 +204,11 @@ export class PortForwardRelayService {
         clearTimeout(ctx.timeout);
         this.proxyRequests.delete(matchedRequestId);
 
-        const bodyBuffer = Buffer.from(parsed.body, 'base64');
-        this.publishResponse(
+        await this.publishResponse(
           parsed.requestId,
           parsed.statusCode,
           parsed.headers,
-          bodyBuffer.toString('utf-8'),
+          parsed.body,
         );
       }
     } catch {
@@ -264,4 +266,4 @@ export class PortForwardRelayService {
   }
 }
 
-export const portForwardRelayService = new PortForwardRelayService();
+export const gatewayRelayService = new GatewayRelayService();

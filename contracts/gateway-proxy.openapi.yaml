@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: Port Forward Proxy API
-  description: 端口转发代理接口，将外部请求代理到 agent-controller 所在机器的本地服务端口。需要身份验证。
+  title: Gateway Proxy API
+  description: 统一网关代理接口，将外部请求代理到 agent-controller 所在机器的本地服务。需要身份验证。
   version: 1.0.0
 
 servers:
@@ -9,20 +9,20 @@ servers:
     description: agent-api
 
 paths:
-  /forward/{controllerId}/{port}/{path}:
+  /gateway/{controllerId}/{name}/{path}:
     get:
-      operationId: proxyPortForward
+      operationId: proxyGateway
       summary: 代理请求到本地服务
       description: |
-        将外部 HTTP 请求代理到 agent-controller 所在机器上的本地服务端口。
-        
-        请求链路：外部用户 → agent-api → Redis Pub/Sub → controller-api → Socket.IO → agent-controller → localhost:{port}
-        
+        按服务名称查找本地服务端口，将外部 HTTP 请求代理到 agent-controller 所在机器上的本地服务。
+
+        请求链路：外部用户 → agent-api(按名称查端口) → Redis Pub/Sub → controller-api → Socket.IO → agent-controller → localhost:{port}
+
         要求：
         - 需要 Bearer token 身份验证
-        - 对应的端口转发记录必须存在且状态为 active
+        - 对应的网关记录必须存在且状态为 active
       tags:
-        - Port Forward Proxy
+        - Gateway Proxy
       parameters:
         - name: controllerId
           in: path
@@ -30,14 +30,12 @@ paths:
           description: Controller ID
           schema:
             type: string
-        - name: port
+        - name: name
           in: path
           required: true
-          description: 目标本地端口号
+          description: 服务名称
           schema:
-            type: integer
-            minimum: 1
-            maximum: 65535
+            type: string
         - name: path
           in: path
           required: true
@@ -56,7 +54,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: 端口转发不存在或未激活
+          description: 网关不存在或未激活
           content:
             application/json:
               schema:

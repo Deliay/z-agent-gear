@@ -20,7 +20,7 @@ vi.mock('node:crypto', () => ({
   default: { randomUUID: vi.fn(() => 'mock-uuid') },
 }));
 
-import { PortForwardRelayService } from './port-forward.js';
+import { GatewayRelayService } from './gateway-relay.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
@@ -54,8 +54,8 @@ function createMockRedis() {
   };
 }
 
-describe('PortForwardRelayService', () => {
-  let service: PortForwardRelayService;
+describe('GatewayRelayService', () => {
+  let service: GatewayRelayService;
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockIO: ReturnType<typeof createMockIO>;
   let mockRedis: ReturnType<typeof createMockRedis>;
@@ -78,7 +78,7 @@ describe('PortForwardRelayService', () => {
     } as never);
     vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
 
-    service = new PortForwardRelayService();
+    service = new GatewayRelayService();
   });
 
   describe('start', () => {
@@ -207,7 +207,7 @@ describe('PortForwardRelayService', () => {
             requestId: 'req-1',
             statusCode: 200,
             headers: { 'content-type': 'text/plain' },
-            body: 'hello',
+            body: responseBody,
           }),
         );
       });
