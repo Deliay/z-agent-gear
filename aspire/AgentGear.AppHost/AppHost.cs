@@ -35,7 +35,7 @@ var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "
 var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
-var githubCallbackUrl = builder.AddParameter("github-callback-url", value: "http://localhost:10001/api/github/callback");
+var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
 var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
 var frontendUrl = builder.AddParameter("frontend-url", value: "http://localhost:5173");
 var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
@@ -48,7 +48,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("JWT_SECRET", jwtSecret)
     .WithEnvironment("GITHUB_APP_ID", githubAppId)
     .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
-    .WithEnvironment("GITHUB_CALLBACK_URL", githubCallbackUrl)
+    .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
     .WithEnvironment("FRONTEND_URL", frontendUrl)

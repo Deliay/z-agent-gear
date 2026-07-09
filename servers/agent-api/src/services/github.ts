@@ -60,7 +60,7 @@ export class GitHubService {
     return { url, state };
   }
 
-  async handleCallback(params: { installationId: number; state: string; userId: string }): Promise<void> {
+  async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
     const accountInfo = await this.getAccountInfo(tokenResponse.token);
     const repos = await this.getRepositories(tokenResponse.token);

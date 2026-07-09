@@ -3,7 +3,7 @@ import { config } from '../config/index.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { githubService } from '../services/github.js';
 
-export async function handleGithubCallback(req: Request, res: Response): Promise<void> {
+export async function handleGithubSetup(req: Request, res: Response): Promise<void> {
   try {
     const { installation_id, state } = req.query;
 
@@ -21,7 +21,7 @@ export async function handleGithubCallback(req: Request, res: Response): Promise
 
     await redis.del(`github:oauth:state:${state}`);
 
-    await githubService.handleCallback({
+    await githubService.handleSetup({
       installationId: parseInt(installation_id as string, 10),
       state: state as string,
       userId: userId as string,
@@ -29,10 +29,10 @@ export async function handleGithubCallback(req: Request, res: Response): Promise
 
     res.redirect(`${config.frontendUrl}/settings?binding=success`);
   } catch (error) {
-    console.error('GitHub callback error:', error);
+    console.error('GitHub setup error:', error);
     res.redirect(`${config.frontendUrl}/settings?binding=error&message=internal_error`);
   }
 }
 
 export const githubRouter = Router();
-githubRouter.get('/github/callback', handleGithubCallback);
+githubRouter.get('/github/setup', handleGithubSetup);
