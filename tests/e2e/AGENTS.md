@@ -27,15 +27,24 @@ aspire describe agent-web
 ### 3. 填入环境变量并执行测试
 
 ```bash
-# 获取各服务 endpoint
-ASP_REM_BASE_URL=$(aspire describe agent-web 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
-ASP_REM_AGENT_API=$(aspire describe agent-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
-ASP_REM_CONTROLLER_API=$(aspire describe controller-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
-API_URL="${ASP_REM_AGENT_API}/graphql"
-CONTROLLER_API_URL="${ASP_REM_CONTROLLER_API}"
-BASE_URL="${ASP_REM_BASE_URL}"
+# 查看各服务 endpoint
+aspire describe agent-web
+aspire describe agent-api
+aspire describe controller-api
+```
 
-API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL BASE_URL=$BASE_URL npx playwright test
+从输出中查找各服务的 `http://localhost:<port>` URL，例如:
+- `agent-web`: `http://localhost:35615`
+- `agent-api`: `http://localhost:10001`
+- `controller-api`: `http://localhost:33237`
+
+填入实际端口后执行：
+
+```bash
+BASE_URL=http://localhost:35615 \
+API_URL=http://localhost:10001/graphql \
+CONTROLLER_API_URL=http://localhost:33237 \
+npx playwright test
 ```
 
 ### 4. 重新运行测试
