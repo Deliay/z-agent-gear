@@ -62,7 +62,7 @@ export class GitHubService {
 
   async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
-    const accountInfo = await this.getAccountInfo(tokenResponse.token);
+    const accountInfo = await this.getInstallationAccount(params.installationId);
     const repos = await this.getRepositories(tokenResponse.token);
 
     const encryptedToken = encrypt(tokenResponse.token);
@@ -194,12 +194,20 @@ export class GitHubService {
     return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
   }
 
-  private async getAccountInfo(token: string): Promise<{ id: number; login: string; avatar_url: string }> {
-    const response = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error('Failed to get account info');
-    return response.json() as any;
+  private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string }> {
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!response.ok) throw new Error('Failed to get installation account info');
+    const data = await response.json() as any;
+    return data.account;
   }
 
   private async getRepositories(token: string): Promise<any[]> {
