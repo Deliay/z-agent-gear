@@ -41,7 +41,7 @@ var githubCallbackUrl = builder.AddParameter("github-callback-url", value: "http
 var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
 var frontendUrl = builder.AddParameter("frontend-url", value: "http://localhost:5173");
 var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
-var githubAppPrivateKey = File.ReadAllText(githubAppPrivateKeyPath);
+var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: File.ReadAllText(githubAppPrivateKeyPath));
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
