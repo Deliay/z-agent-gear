@@ -27,13 +27,21 @@ aspire describe agent-api
 ### 3. 填入环境变量并执行测试
 
 ```bash
-# 获取各服务 endpoint
-ASP_REM_AGENT_API=$(aspire describe agent-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
-ASP_REM_CONTROLLER_API=$(aspire describe controller-api 2>/dev/null | grep -oP 'http://localhost:\d+' | sort -u | head -1)
-API_URL="${ASP_REM_AGENT_API}/graphql"
-CONTROLLER_API_URL="${ASP_REM_CONTROLLER_API}"
+# 查看各服务 endpoint
+aspire describe agent-api
+aspire describe controller-api
+```
 
-API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_API_URL npm test
+从输出中查找各服务的 `http://localhost:<port>` URL，例如:
+- `agent-api`: `http://localhost:10001`
+- `controller-api`: `http://localhost:33237`
+
+填入实际端口后执行：
+
+```bash
+API_URL=http://localhost:10001/graphql \
+CONTROLLER_API_URL=http://localhost:33237 \
+npm test
 ```
 
 ### 4. 重新运行测试
