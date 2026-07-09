@@ -22,6 +22,7 @@ function createMockLocalSocket() {
     destroy: vi.fn(),
     write: vi.fn(),
     emit: vi.fn(),
+    setKeepAlive: vi.fn(),
     _handlers: handlers,
     _trigger(event: string, ...args: unknown[]) {
       const handler = handlers.get(event);
@@ -55,13 +56,14 @@ describe('GatewayManager', () => {
       await promise;
 
       expect(net.connect).toHaveBeenCalledWith({ host: '127.0.0.1', port: 3000 });
+      expect(mockLocalSocket.setKeepAlive).toHaveBeenCalledWith(true, 5000);
       expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:created', {
         tunnelId: 'tunnel-1',
         success: true,
       });
     });
 
-    it('should send port-forward:created(success: false, error) and destroy socket on connection failure', async () => {
+    it('should destroy socket and schedule reconnect on connection failure (not emit failure to server)', async () => {
       const mockLocalSocket = createMockLocalSocket();
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
@@ -70,11 +72,7 @@ describe('GatewayManager', () => {
       mockLocalSocket._trigger('error', new Error('ECONNREFUSED'));
       await promise;
 
-      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:created', {
-        tunnelId: 'tunnel-1',
-        success: false,
-        error: 'ECONNREFUSED',
-      });
+      expect(mockServerSocket.emit).not.toHaveBeenCalled();
       expect(mockLocalSocket.destroy).toHaveBeenCalled();
     });
 
@@ -96,7 +94,7 @@ describe('GatewayManager', () => {
       });
     });
 
-    it('should send port-forward:close and remove tunnel when local socket closes', async () => {
+    it('should schedule reconnect (not emit close) when local socket closes', async () => {
       const mockLocalSocket = createMockLocalSocket();
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
@@ -107,12 +105,10 @@ describe('GatewayManager', () => {
 
       mockLocalSocket._trigger('close');
 
-      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:close', {
-        tunnelId: 'tunnel-1',
-      });
+      expect(mockServerSocket.emit).not.toHaveBeenCalledWith('port-forward:close', expect.anything());
     });
 
-    it('should send port-forward:error and remove tunnel when local socket errors after connect', async () => {
+    it('should send port-forward:error on local socket error after connect', async () => {
       const mockLocalSocket = createMockLocalSocket();
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
@@ -157,7 +153,7 @@ describe('GatewayManager', () => {
   });
 
   describe('closeTunnel', () => {
-    it('should destroy local socket and remove tunnel from map', async () => {
+    it('should destroy local socket, emit close, and remove tunnel from map', async () => {
       const mockLocalSocket = createMockLocalSocket();
       const mockServerSocket = createMockServerSocket();
       vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
@@ -169,6 +165,9 @@ describe('GatewayManager', () => {
       gatewayManager.closeTunnel('tunnel-1');
 
       expect(mockLocalSocket.destroy).toHaveBeenCalled();
+      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:close', {
+        tunnelId: 'tunnel-1',
+      });
     });
 
     it('should silently ignore unknown tunnelId', () => {
@@ -177,7 +176,7 @@ describe('GatewayManager', () => {
   });
 
   describe('closeAll', () => {
-    it('should close all tunnels and clear the map', async () => {
+    it('should close all tunnels, emit close events, and clear the map', async () => {
       const socket1 = createMockLocalSocket();
       const socket2 = createMockLocalSocket();
       const mockServerSocket = createMockServerSocket();
@@ -197,6 +196,12 @@ describe('GatewayManager', () => {
 
       expect(socket1.destroy).toHaveBeenCalled();
       expect(socket2.destroy).toHaveBeenCalled();
+      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:close', {
+        tunnelId: 'tunnel-1',
+      });
+      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:close', {
+        tunnelId: 'tunnel-2',
+      });
     });
   });
 });
