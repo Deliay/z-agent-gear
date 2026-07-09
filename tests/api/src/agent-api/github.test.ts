@@ -43,7 +43,7 @@ const UNBIND = `
 
 describe('GitHub Binding API', () => {
   let token = '';
-  const testUsername = `github_test_${Date.now()}`;
+  const testUsername = `gt_${Date.now()}`;
 
   beforeAll(async () => {
     const res = await gqlRequest(SIGNUP, { username: testUsername, password: 'password123' });

@@ -101,7 +101,6 @@ export default function SettingsPage() {
             </Card>
           </section>
           <section id="github-section" className="mb-8">
-            <h2 className="mb-4 text-lg font-semibold">GitHub 绑定</h2>
             <GithubBindingSection />
           </section>
           <section id="provider-section" className="mb-8">
@@ -225,7 +224,6 @@ export default function SettingsPage() {
           </section>
 
           <section id="github-section" className="mb-10">
-            <h2 className="mb-6 text-xl font-semibold text-foreground">GitHub 绑定</h2>
             <GithubBindingSection />
           </section>
 
