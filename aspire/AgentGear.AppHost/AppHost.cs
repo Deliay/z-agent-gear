@@ -32,11 +32,27 @@ var redis = builder.AddRedis("redis")
 
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
+var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
+var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
+var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
+var githubCallbackUrl = builder.AddParameter("github-callback-url", value: "http://localhost:10001/api/github/callback");
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
+var frontendUrl = builder.AddParameter("frontend-url", value: "http://localhost:5173");
+var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
+var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
+var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
-    .WithHttpEndpoint(env: "PORT")
+    .WithEnvironment("JWT_SECRET", jwtSecret)
+    .WithEnvironment("GITHUB_APP_ID", githubAppId)
+    .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
+    .WithEnvironment("GITHUB_CALLBACK_URL", githubCallbackUrl)
+    .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
+    .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
+    .WithEnvironment("FRONTEND_URL", frontendUrl)
+    .WithHttpEndpoint(port: 10001, env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()

@@ -342,3 +342,54 @@ export interface UpdatePermissionTimeoutMutation {
 export interface UpdateGlobalPermissionTimeoutMutation {
   updateGlobalPermissionTimeout: boolean
 }
+
+export interface GitHubRepoPermissionsData {
+  read: boolean
+  write: boolean
+}
+
+export interface GitHubRepoData {
+  id: string
+  repoId: number
+  repoName: string
+  fullName: string
+  private: boolean
+  permissions: GitHubRepoPermissionsData
+}
+
+export interface GitHubInstallationData {
+  id: string
+  installationId: number
+  repos?: GitHubRepoData[] | null
+  createdAt: string
+}
+
+export interface GitHubAccountData {
+  id: string
+  githubUserId: number
+  githubLogin: string
+  githubAvatarUrl?: string | null
+  installations?: GitHubInstallationData[] | null
+  createdAt: string
+}
+
+export interface GitHubAppUrlData {
+  url: string
+  state: string
+}
+
+export interface GetGithubAccountsQuery {
+  githubAccounts: GitHubAccountData[]
+}
+
+export interface GetGithubAppUrlQuery {
+  githubAppUrl: GitHubAppUrlData
+}
+
+export interface UnbindGitHubAccountMutation {
+  unbindGitHubAccount: boolean
+}
+
+export interface RefreshGitHubInstallationsMutation {
+  refreshGitHubInstallations: GitHubAccountData
+}

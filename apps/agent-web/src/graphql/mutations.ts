@@ -336,6 +336,32 @@ export const UPDATE_PERMISSION_TIMEOUT = gql`
   }
 `
 
+export const UNBIND_GITHUB_ACCOUNT = gql`
+  mutation UnbindGitHubAccount($accountId: ID!) {
+    unbindGitHubAccount(accountId: $accountId)
+  }
+`
+
+export const REFRESH_GITHUB_INSTALLATIONS = gql`
+  mutation RefreshGitHubInstallations($accountId: ID!) {
+    refreshGitHubInstallations(accountId: $accountId) {
+      id
+      installations {
+        id
+        repos {
+          id
+          repoName
+          fullName
+          permissions {
+            read
+            write
+          }
+        }
+      }
+    }
+  }
+`
+
 export const UPDATE_GLOBAL_PERMISSION_TIMEOUT = gql`
   mutation UpdateGlobalPermissionTimeout($timeoutAction: GlobalPermissionTimeoutAction!) {
     updateGlobalPermissionTimeout(timeoutAction: $timeoutAction)
