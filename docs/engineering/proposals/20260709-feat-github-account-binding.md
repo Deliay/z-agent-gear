@@ -83,7 +83,7 @@ graph TD
         GithubResolver[github resolver]
     end
     subgraph 后端 REST
-        CallbackEndpoint[GET /api/github/callback]
+        SetupEndpoint[GET /api/github/setup]
     end
     subgraph 后端 Service
         GithubService[GitHub Service]
@@ -98,7 +98,7 @@ graph TD
     GithubService --> AccountModel
     GithubService --> InstallationModel
     GithubService --> GH[GitHub.com API]
-    CallbackEndpoint --> GithubService
+    SetupEndpoint --> GithubService
 ```
 
 | 模块 | 职责 | 关键技术点 |
@@ -107,7 +107,7 @@ graph TD
 | 后端 github.graphql | GitHub 绑定的 GraphQL typeDefs | Query + Mutation |
 | 后端 github resolver | 处理绑定/解绑/列表查询 | JWT 鉴权上下文 |
 | 后端 GitHub Service | 与 GitHub API 交互的核心逻辑 | OAuth token 换取、用户信息获取 |
-| 后端 Callback Endpoint | 接收 GitHub App 回调 | Express GET route，state 校验 |
+| 后端 Setup Endpoint | 接收 GitHub App 安装后回调 | Express GET route，state 校验 |
 
 ## 3. API 设计
 
@@ -164,10 +164,10 @@ type Mutation {
 
 ### 3.2 REST Endpoint
 
-#### Endpoint: GitHub OAuth Callback
+#### Endpoint: GitHub App Setup URL
 
 - **Method**: GET
-- **Path**: `/api/github/callback`
+- **Path**: `/api/github/setup`
 - **Query 参数**:
   - `installation_id` (required): GitHub App Installation ID
   - `setup_action` (optional): 操作类型 (install/update)
@@ -188,7 +188,7 @@ type Mutation {
 ```typescript
 interface IGitHubService {
   getAppUrl(userId: string): Promise<{ url: string; state: string }>;
-  handleCallback(params: CallbackParams): Promise<void>;
+  handleSetup(params: SetupParams): Promise<void>;
   getAccounts(userId: string): Promise<GitHubAccount[]>;
   unbindAccount(userId: string, accountId: string): Promise<void>;
   refreshInstallations(userId: string, accountId: string): Promise<GitHubAccount>;
@@ -263,7 +263,7 @@ sequenceDiagram
     F-->>U: 跳转到 GitHub
 
     U->>GH: 安装/授权 App
-    GH-->>B: GET /api/github/callback?installation_id=X&state=Y
+    GH-->>B: GET /api/github/setup?installation_id=X&state=Y
 
     B->>R: GET github:oauth:state:{state}
     alt state 无效或过期
@@ -273,8 +273,8 @@ sequenceDiagram
         GH-->>B: { token, expires_at }
         B->>GH: GET /installation/repositories
         GH-->>B: { repositories: [...] }
-        B->>GH: GET /user (使用 installation token 的 app 身份)
-        Note over B,GH: 或通过 /app/installations 获取 account info
+        B->>GH: GET /app/installations/{installation_id} (使用 App JWT)
+        Note over B,GH: 获取安装所属的 account (user/org) 信息
 
         B->>D: upsert GitHubAccount
         B->>D: upsert GitHubInstallation
@@ -324,7 +324,7 @@ sequenceDiagram
     GITHUB_APP_ID=<app_id>
     GITHUB_APP_PRIVATE_KEY=<base64_encoded_private_key>
     GITHUB_APP_URL=https://github.com/apps/<app_name>
-    GITHUB_CALLBACK_URL=https://<api_domain>/api/github/callback
+    GITHUB_SETUP_URL=https://<api_domain>/api/github/setup
     FRONTEND_URL=https://<frontend_domain>
     ```
 - **风险点**: Private Key 泄露会带来安全风险，需妥善保管
@@ -385,7 +385,7 @@ sequenceDiagram
 |------|--------|--------|---------|------|
 | GitHub 集成方式 | GitHub App (Installation) | GitHub OAuth App | GitHub App | GitHub App 支持 Installation 级别的仓库选择，支持 read/write 权限声明 |
 | Token 换取时机 | 回调时立即换取 | 延迟换取（使用时） | 回调时立即换取 | 用户体验好，绑定即完成授权 |
-| Callback 实现 | Express REST Route | GraphQL Mutation | Express REST Route | GitHub 回调是浏览器 302 跳转，无法使用 GraphQL |
+| Setup 实现 | Express REST Route | GraphQL Mutation | Express REST Route | GitHub 回调是浏览器 302 跳转，无法使用 GraphQL |
 | Token 加密方式 | AES-256-GCM | node-crypton | AES-256-GCM | 原生 crypto 模块，零依赖 |
 | 绑定关系存储 | 独立 Collection | 嵌入 User 文档 | 独立 Collection | GitHub 数据结构复杂（多帐号+多 repo），独立 collection 更方便查询和扩展 |
 | 前端状态管理 | React Context | Apollo Cache | Apollo Cache | 绑定数据来自 GraphQL query，Apollo Cache 自动管理 |
@@ -422,7 +422,7 @@ servers/agent-api/
 │   ├── services/
 │   │   └── github.ts                 # 新增: GitHub 业务逻辑服务
 │   ├── routes/
-│   │   └── github.ts                 # 新增: GitHub OAuth callback REST route
+│ │   └── github.ts                 # 新增: GitHub 安装回调 REST route
 │   └── index.ts                      # 修改: 注册 github route
 ├── src/config/
 │   └── index.ts                      # 修改: 新增 GitHub 配置项
@@ -468,7 +468,7 @@ tests/e2e/src/
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
 | 后端 GraphQL 集成测试 | Vitest | githubAccounts query、githubAppUrl query、unbindGitHubAccount mutation |
-| 后端 REST 集成测试 | Vitest + supertest | callback endpoint 正常/异常流程 |
+| 后端 REST 集成测试 | Vitest + supertest | setup endpoint 正常/异常流程 |
 | 后端 Service 单元测试 | Vitest | GitHub API 调用、token 加解密、state 校验 |
 | 前端组件测试 | Vitest + React Testing Library | GithubBindingSection 渲染、绑定/解绑交互、空状态 |
 | API 集成测试 | Vitest (tests/api) | 认证用户执行绑定/解绑全流程，使用真实 GraphQL 端点 |
@@ -549,7 +549,7 @@ test.describe('Settings GitHub Binding E2E', () => {
     await expect(page).toHaveURL(/github\.com\/apps\//);
   });
 
-  test('should show success toast on binding callback', async ({ page }) => {
+  test('should show success toast on binding setup', async ({ page }) => {
     await page.goto('/settings?binding=success');
     await expect(page.getByText(/绑定成功/)).toBeVisible();
   });

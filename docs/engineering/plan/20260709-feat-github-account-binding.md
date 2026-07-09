@@ -241,18 +241,18 @@ export class GitHubService {
   async getAppUrl(userId: string): Promise<{ url: string; state: string }> {
     const state = crypto.randomUUID();
     await fetch(`${config.redisUri}`, {  // 存储 state -> userId 到 Redis
-      // 简化: 由 callback endpoint 直接通过 Redis 校验
+      // 简化: 由 setup endpoint 直接通过 Redis 校验
     });
     const url = `https://github.com/apps/${config.githubAppId}/installations/new?state=${state}`;
     return { url, state };
   }
 
-  async handleCallback(params: { installationId: number; state: string; userId: string }): Promise<void> {
+  async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
     // 1. 使用 App JWT 换取 Installation Token
     const token = await this.getInstallationToken(params.installationId);
 
-    // 2. 获取 GitHub 用户信息
-    const accountInfo = await this.getAccountInfo(token);
+    // 2. 获取安装所属的 GitHub 账号信息 (通过 App JWT + /app/installations/{id})
+    const accountInfo = await this.getInstallationAccount(params.installationId);
 
     // 3. 获取仓库列表
     const repos = await this.getRepositories(token);
@@ -370,12 +370,20 @@ export class GitHubService {
     throw new Error('Not implemented');
   }
 
-  private async getAccountInfo(token: string): Promise<{ id: number; login: string; avatar_url: string }> {
-    const response = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error('Failed to get account info');
-    return response.json() as any;
+  private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string }> {
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!response.ok) throw new Error('Failed to get installation account info');
+    const data = await response.json() as any;
+    return data.account;
   }
 
   private async getRepositories(token: string): Promise<any[]> {
@@ -399,7 +407,7 @@ import { getRedisClient } from '../middleware/redis.js';
 export function createGithubRouter(githubService: GitHubService): Router {
   const router = Router();
 
-  router.get('/github/callback', async (req, res) => {
+  router.get('/github/setup', async (req, res) => {
     try {
       const { installation_id, setup_action, state } = req.query;
 
@@ -420,7 +428,7 @@ export function createGithubRouter(githubService: GitHubService): Router {
       await redis.del(`github:oauth:state:${state}`);
 
       // 处理回调
-      await githubService.handleCallback({
+      await githubService.handleSetup({
         installationId: parseInt(installation_id as string, 10),
         state: state as string,
         userId: userId as string,
@@ -428,7 +436,7 @@ export function createGithubRouter(githubService: GitHubService): Router {
 
       res.redirect(`${config.frontendUrl}/settings?binding=success`);
     } catch (error) {
-      console.error('GitHub callback error:', error);
+      console.error('GitHub setup error:', error);
       res.redirect(`${config.frontendUrl}/settings?binding=error&message=internal_error`);
     }
   });
@@ -641,8 +649,8 @@ npm run test     # 单元测试
 // servers/agent-api/src/services/github.test.ts
 describe('GitHubService', () => {
   it('should generate app URL with state');
-  it('should handle callback and store account');
-  it('should handle callback and store installation with repos');
+  it('should handle setup and store account');
+  it('should handle setup and store installation with repos');
   it('should list accounts with installations');
   it('should unbind account and remove installations');
   it('should refresh installations');
@@ -650,10 +658,10 @@ describe('GitHubService', () => {
 });
 
 // servers/agent-api/src/routes/github.test.ts
-describe('GitHub Callback Route', () => {
+describe('GitHub Setup Route', () => {
   it('should redirect with error when missing params');
   it('should redirect with error when state is invalid');
-  it('should process callback and redirect with success');
+  it('should process setup and redirect with success');
   it('should handle API errors gracefully');
 });
 
