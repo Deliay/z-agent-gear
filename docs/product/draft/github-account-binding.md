@@ -112,9 +112,9 @@
 
 ```mermaid
 flowchart TD
-    A[用户进入设置页] --> B[点击"绑定 GitHub 帐号"]
+    A[用户进入设置页] --> B[点击'绑定 GitHub 帐号']
     B --> C[跳转至 GitHub App 授权页]
-    C --> D{用户是否授权?}
+    C --> D{用户是否授权}
     D -- 是 --> E[GitHub 回调至平台 Endpoint]
     D -- 否 --> F[返回设置页，未绑定]
     E --> G[验证回调参数]
@@ -129,7 +129,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph "解绑流程"
-        N[在设置页点击"解绑"] --> O[确认解绑]
+        N[在设置页点击'解绑'] --> O[确认解绑]
         O --> P[删除关联数据和 Token]
         P --> Q[可选: 跳转 GitHub 取消 App 授权]
     end
