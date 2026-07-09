@@ -40,6 +40,8 @@ var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github
 var githubCallbackUrl = builder.AddParameter("github-callback-url", value: "http://localhost:10001/api/github/callback");
 var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
 var frontendUrl = builder.AddParameter("frontend-url", value: "http://localhost:5173");
+var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
+var githubAppPrivateKey = File.ReadAllText(githubAppPrivateKeyPath);
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -50,6 +52,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_CLIENT_SECRET", githubClientSecret)
     .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
     .WithEnvironment("GITHUB_CALLBACK_URL", githubCallbackUrl)
+    .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
     .WithEnvironment("FRONTEND_URL", frontendUrl)
     .WithHttpEndpoint(port: 10001, env: "PORT")
