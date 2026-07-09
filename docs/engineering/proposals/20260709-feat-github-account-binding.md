@@ -447,8 +447,10 @@ contracts/
 └── github.graphql                    # 新增: GitHub binding GraphQL schema
 
 # Tests
-tests/api/
-└── github.test.ts                    # 新增: GitHub binding API 测试
+tests/api/src/agent-api/
+└── github.test.ts                    # 新增: GitHub binding API 集成测试
+tests/e2e/src/
+└── settings-github-binding.spec.ts   # 新增: GitHub binding E2E 测试
 ```
 
 ## 8. 测试策略
@@ -458,6 +460,8 @@ tests/api/
 - 后端 GraphQL query/mutation 全覆盖
 - 回调 endpoint 全覆盖（含异常场景）
 - 前端组件渲染和交互覆盖
+- API 集成测试覆盖核心绑定/解绑流程
+- E2E 测试覆盖设置页 GitHub 绑定 UI 交互
 
 ### 8.2 测试类型
 
@@ -467,6 +471,102 @@ tests/api/
 | 后端 REST 集成测试 | Vitest + supertest | callback endpoint 正常/异常流程 |
 | 后端 Service 单元测试 | Vitest | GitHub API 调用、token 加解密、state 校验 |
 | 前端组件测试 | Vitest + React Testing Library | GithubBindingSection 渲染、绑定/解绑交互、空状态 |
+| API 集成测试 | Vitest (tests/api) | 认证用户执行绑定/解绑全流程，使用真实 GraphQL 端点 |
+| E2E 测试 | Playwright (tests/e2e) | 设置页 GitHub 绑定 section 可见性、空状态、绑定跳转、解绑确认 |
+
+### 8.3 API 集成测试 (`tests/api/src/agent-api/github.test.ts`)
+
+通过 `gqlRequest` 辅助函数（复用 `auth.test.ts` 模式）直接调用 GraphQL 端点进行集成测试：
+
+```typescript
+describe('GitHub Binding API', () => {
+  const SIGNUP = `mutation Signup(...) { signup(...) { token user { id } } }`;
+
+  it('githubAppUrl - 无 auth', async () => {
+    const res = await gqlRequest(GITHUB_APP_URL);
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('githubAppUrl - 已认证', async () => {
+    const res = await gqlRequest(GITHUB_APP_URL, undefined, token);
+    const body = await res.json();
+    expect(body.data.githubAppUrl.url).toContain('github.com');
+    expect(body.data.githubAppUrl.state).toBeDefined();
+  });
+
+  it('githubAccounts - 无 auth', async () => {
+    const res = await gqlRequest(GITHUB_ACCOUNTS);
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('githubAccounts - 初始为空', async () => {
+    const res = await gqlRequest(GITHUB_ACCOUNTS, undefined, token);
+    const body = await res.json();
+    expect(body.data.githubAccounts).toEqual([]);
+  });
+
+  it('unbindGitHubAccount - 无 auth', async () => {
+    const res = await gqlRequest(UNBIND, { accountId: 'fake' });
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('unbindGitHubAccount - 不存在的帐号应返回 false', async () => {
+    const res = await gqlRequest(UNBIND, { accountId: new ObjectId().toString() }, token);
+    const body = await res.json();
+    expect(body.data.unbindGitHubAccount).toBe(false);
+  });
+});
+```
+
+### 8.4 E2E 测试 (`tests/e2e/src/settings-github-binding.spec.ts`)
+
+使用 Playwright 模拟用户在设置页的 GitHub 绑定交互：
+
+```typescript
+test.describe('Settings GitHub Binding E2E', () => {
+  test.beforeAll(async ({ browser }) => {
+    // 注册用户并登录
+  });
+
+  test('should show GitHub binding section in settings', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('GitHub 绑定')).toBeVisible();
+  });
+
+  test('should show empty state when no accounts bound', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText(/暂无绑定/)).toBeVisible();
+    await expect(page.getByRole('button', { name: '绑定 GitHub 帐号' })).toBeVisible();
+  });
+
+  test('should navigate to GitHub App on bind click', async ({ page }) => {
+    await page.goto('/settings');
+    await page.getByRole('button', { name: '绑定 GitHub 帐号' }).click();
+    // 检查是否跳转到 github.com/apps/...
+    await expect(page).toHaveURL(/github\.com\/apps\//);
+  });
+
+  test('should show success toast on binding callback', async ({ page }) => {
+    await page.goto('/settings?binding=success');
+    await expect(page.getByText(/绑定成功/)).toBeVisible();
+  });
+
+  test('should show error toast on binding failure', async ({ page }) => {
+    await page.goto('/settings?binding=error&message=invalid_state');
+    await expect(page.getByText(/绑定失败/)).toBeVisible();
+  });
+
+  test('should show confirm dialog on unbind', async ({ page }) => {
+    // 先通过 API 创建绑定数据
+    await page.goto('/settings');
+    await page.getByRole('button', { name: '解绑' }).first().click();
+    await expect(page.getByText(/确认解绑/)).toBeVisible();
+  });
+});
+```
 
 ## 9. 验收标准
 

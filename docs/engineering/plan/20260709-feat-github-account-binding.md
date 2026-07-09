@@ -628,15 +628,17 @@ npm run test     # 单元测试
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/agent-api/src/services/github.test.ts` | 新增 | GitHub Service 测试 |
-| `servers/agent-api/src/routes/github.test.ts` | 新增 | 回调 endpoint 测试 |
-| `servers/agent-api/src/graphql/resolvers/github.test.ts` | 新增 | GraphQL resolver 测试 |
+| `servers/agent-api/src/services/github.test.ts` | 新增 | GitHub Service 单元测试 |
+| `servers/agent-api/src/routes/github.test.ts` | 新增 | 回调 endpoint 单元测试 |
+| `servers/agent-api/src/graphql/resolvers/github.test.ts` | 新增 | GraphQL resolver 单元测试 |
 | `apps/agent-web/src/components/settings/__tests__/GithubBindingSection.test.tsx` | 新增 | 前端组件测试 |
+| `tests/api/src/agent-api/github.test.ts` | 新增 | API 集成测试（graphql endpoint 直连） |
+| `tests/e2e/src/settings-github-binding.spec.ts` | 新增 | E2E 测试（Playwright UI 交互） |
 
-### 测试要点
+### Phase 4a: 单元测试
 
 ```typescript
-// services/github.test.ts
+// servers/agent-api/src/services/github.test.ts
 describe('GitHubService', () => {
   it('should generate app URL with state');
   it('should handle callback and store account');
@@ -647,7 +649,7 @@ describe('GitHubService', () => {
   it('should encrypt and decrypt tokens');
 });
 
-// routes/github.test.ts
+// servers/agent-api/src/routes/github.test.ts
 describe('GitHub Callback Route', () => {
   it('should redirect with error when missing params');
   it('should redirect with error when state is invalid');
@@ -655,7 +657,7 @@ describe('GitHub Callback Route', () => {
   it('should handle API errors gracefully');
 });
 
-// resolvers/github.test.ts
+// servers/agent-api/src/graphql/resolvers/github.test.ts
 describe('GitHub Resolvers', () => {
   it('should return accounts for authenticated user');
   it('should return app URL for authenticated user');
@@ -663,7 +665,7 @@ describe('GitHub Resolvers', () => {
   it('should unbind account');
 });
 
-// frontend/GithubBindingSection.test.tsx
+// apps/agent-web/src/components/settings/__tests__/GithubBindingSection.test.tsx
 describe('GithubBindingSection', () => {
   it('should show empty state when no accounts');
   it('should show bind button');
@@ -673,11 +675,208 @@ describe('GithubBindingSection', () => {
 });
 ```
 
+### Phase 4b: API 集成测试
+
+`tests/api/src/agent-api/github.test.ts` — 使用 `gqlRequest` 直接调用 GraphQL 端点，验证认证和绑定的完整流程。
+
+```typescript
+import { describe, it, expect } from 'vitest';
+
+const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+
+function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(API_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables }),
+  });
+}
+
+const SIGNUP = `
+  mutation Signup($username: String!, $password: String!) {
+    signup(username: $username, password: $password) {
+      token
+      user { id }
+    }
+  }
+`;
+
+const GITHUB_APP_URL = `
+  query GetGithubAppUrl {
+    githubAppUrl { url state }
+  }
+`;
+
+const GITHUB_ACCOUNTS = `
+  query GetGithubAccounts {
+    githubAccounts {
+      id
+      githubLogin
+      githubUserId
+      installations { id installationId repos { id repoName fullName permissions { read write } } }
+    }
+  }
+`;
+
+const UNBIND = `
+  mutation Unbind($accountId: ID!) {
+    unbindGitHubAccount(accountId: $accountId)
+  }
+`;
+
+describe('GitHub Binding API', () => {
+  let token = '';
+
+  beforeAll(async () => {
+    const res = await gqlRequest(SIGNUP, { username: `github_test_${Date.now()}`, password: 'password123' });
+    const body = await res.json();
+    token = body.data.signup.token;
+  });
+
+  it('githubAppUrl - should reject unauthenticated request', async () => {
+    const res = await gqlRequest(GITHUB_APP_URL);
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('githubAppUrl - should return URL for authenticated user', async () => {
+    const res = await gqlRequest(GITHUB_APP_URL, undefined, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.githubAppUrl.url).toContain('github.com/apps/');
+    expect(body.data.githubAppUrl.state).toBeDefined();
+  });
+
+  it('githubAccounts - should reject unauthenticated request', async () => {
+    const res = await gqlRequest(GITHUB_ACCOUNTS);
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('githubAccounts - should return empty list initially', async () => {
+    const res = await gqlRequest(GITHUB_ACCOUNTS, undefined, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.githubAccounts).toEqual([]);
+  });
+
+  it('unbindGitHubAccount - should reject unauthenticated request', async () => {
+    const res = await gqlRequest(UNBIND, { accountId: 'fake' });
+    const body = await res.json();
+    expect(body.errors[0].message).toBe('Not authenticated');
+  });
+
+  it('unbindGitHubAccount - should return false for non-existent account', async () => {
+    const res = await gqlRequest(UNBIND, { accountId: '000000000000000000000000' }, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.unbindGitHubAccount).toBe(false);
+  });
+});
+```
+
+| 测试 | 描述 |
+|------|------|
+| githubAppUrl - 无 auth | 应返回「Not authenticated」 |
+| githubAppUrl - 已认证 | 应返回包含 github.com/apps/ 的 URL 和 state |
+| githubAccounts - 无 auth | 应返回「Not authenticated」 |
+| githubAccounts - 初始为空 | 应返回空数组 |
+| unbindGitHubAccount - 无 auth | 应返回「Not authenticated」 |
+| unbindGitHubAccount - 不存在 | 应返回 false |
+
+### Phase 4c: E2E 测试
+
+`tests/e2e/src/settings-github-binding.spec.ts` — 使用 Playwright 模拟用户在设置页的 GitHub 绑定交互。
+
+```typescript
+import { test, expect } from '@playwright/test';
+import { registerUser } from './helpers.js';
+
+test.describe('Settings GitHub Binding E2E', () => {
+  let token = '';
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    const user = await registerUser(page);
+    token = user.token;
+    await page.goto('/login');
+    await page.fill('#username', user.username);
+    await page.fill('#password', 'testpass123');
+    await page.click('button[type="submit"]');
+    await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+    await page.close();
+  });
+
+  test.beforeEach(async ({ page }) => {
+    const user = await registerUser(page);
+    await page.goto('/login');
+    await page.fill('#username', user.username);
+    await page.fill('#password', 'testpass123');
+    await page.click('button[type="submit"]');
+    await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+    await page.click('a[href="/settings"]');
+    await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('should show GitHub binding section in settings page', async ({ page }) => {
+    await expect(page.getByText('GitHub 绑定')).toBeVisible();
+  });
+
+  test('should show empty state with bind button when no accounts', async ({ page }) => {
+    await expect(page.getByText(/暂无绑定/)).toBeVisible();
+    await expect(page.getByRole('button', { name: '绑定 GitHub 帐号' })).toBeVisible();
+  });
+
+  test('should navigate to GitHub App authorization page on bind click', async ({ page }) => {
+    await page.getByRole('button', { name: '绑定 GitHub 帐号' }).click();
+    await expect(page).toHaveURL(/github\.com\/apps\//);
+  });
+
+  test('should show success toast when binding=success query param', async ({ page }) => {
+    await page.goto('/settings?binding=success');
+    await expect(page.getByText(/绑定成功/)).toBeVisible();
+  });
+
+  test('should show error toast when binding=error query param', async ({ page }) => {
+    await page.goto('/settings?binding=error&message=invalid_state');
+    await expect(page.getByText(/绑定失败/)).toBeVisible();
+  });
+
+  test('should show unbind confirm dialog on unbind click', async ({ page }) => {
+    // 注入绑定数据后展示解绑按钮
+    await page.goto('/settings');
+    const unbindBtn = page.getByRole('button', { name: '解绑' }).first();
+    if (await unbindBtn.isVisible()) {
+      await unbindBtn.click();
+      await expect(page.getByText(/确认解绑/)).toBeVisible();
+    }
+  });
+});
+```
+
+| 测试 | 描述 |
+|------|------|
+| 设置页 section 可见性 | 设置页显示「GitHub 绑定」标题 |
+| 空状态 + 绑定按钮 | 未绑定时显示空状态文字和「绑定 GitHub 帐号」按钮 |
+| 点击绑定跳转 GitHub | 点击按钮后跳转到 github.com/apps/ 授权页 |
+| 绑定成功 Toast | 携带 binding=success 参数时显示成功提示 |
+| 绑定失败 Toast | 携带 binding=error 参数时显示失败提示 |
+| 解绑确认对话框 | 点击解绑后弹出二次确认弹窗 |
+
 ### 运行测试
 
 ```bash
-# 各子项目目录下
-npm run test
+# 单元测试
+cd servers/agent-api && npm run test
+cd apps/agent-web && npm run test
+
+# API 测试（需要启动 Aspire）
+cd tests/api && API_URL=http://localhost:10001/graphql npm test -- github.test.ts
+
+# E2E 测试（需要启动 Aspire）
+cd tests/e2e && BASE_URL=http://localhost:5173 npx playwright test --grep "GitHub Binding"
 ```
 
 ---
