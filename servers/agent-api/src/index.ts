@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { createYoga } from 'graphql-yoga';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import mongoose from 'mongoose';
@@ -21,6 +22,7 @@ const app = express();
 
 app.use(cors({ origin: config.corsOrigin }));
 app.use(compressionMiddleware());
+app.use(cookieParser());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 

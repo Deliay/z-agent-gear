@@ -19,12 +19,20 @@ const gatewayResponseSubscriber = (() => {
   return sub;
 })();
 
-async function authenticateExpressUser(req: Request): Promise<{ id: string; username: string } | null> {
+export async function authenticateExpressUser(req: Request): Promise<{ id: string; username: string } | null> {
+  let token: string | undefined;
+
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    return null;
+  if (header?.startsWith('Bearer ')) {
+    token = header.slice(7);
   }
-  const token = header.slice(7);
+
+  if (!token) {
+    token = req.cookies?.token;
+  }
+
+  if (!token) return null;
+
   try {
     const payload = verifyToken(token);
     const user = await User.findById(payload.userId).select('username');
