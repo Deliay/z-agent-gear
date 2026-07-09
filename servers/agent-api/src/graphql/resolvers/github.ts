@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { githubService } from '../../services/github.js';
+import { getRedisClient } from '../../middleware/redis.js';
 import type { AuthContext } from './auth.js';
 
 export const githubResolvers = {
@@ -10,7 +11,10 @@ export const githubResolvers = {
     },
     githubAppUrl: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
-      return githubService.getAppUrl(context.currentUser.id);
+      const { url, state } = await githubService.getAppUrl(context.currentUser.id);
+      const redis = getRedisClient();
+      await redis.set(`github:oauth:state:${state}`, context.currentUser.id, 'EX', 600);
+      return { url, state };
     },
   },
   Mutation: {

@@ -20,6 +20,7 @@ vi.mock('../models/github-installation.js', () => ({
 vi.mock('../config/index.js', () => ({
   config: {
     githubAppId: 'test-app',
+    githubAppUrl: 'https://github.com/apps/test-app',
     githubTokenEncryptionKey: '0000000000000000000000000000000000000000000000000000000000000000',
     frontendUrl: 'http://localhost:5173',
   },

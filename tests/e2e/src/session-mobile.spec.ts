@@ -186,10 +186,10 @@ test.describe('Session Mobile Layout', () => {
     await expect(page.locator('h1')).toContainText('设置');
 
     // Tab buttons should be visible
-    await expect(page.getByRole('button', { name: '帐号' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '帐号', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '供应商', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '模型', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '控制器' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '控制器', exact: true })).toBeVisible();
 
     // Back button should be visible
     await expect(page.getByText('← 返回')).toBeVisible();

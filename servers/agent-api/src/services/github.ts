@@ -1,7 +1,32 @@
 import { config } from '../config/index.js';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+
+interface GitHubRepoInfo {
+  repoId: number;
+  repoName: string;
+  fullName: string;
+  private: boolean;
+  permissions: { read: boolean; write: boolean };
+}
+
+interface GitHubInstallationInfo {
+  id: string;
+  installationId: number;
+  createdAt: string;
+  repos: GitHubRepoInfo[];
+}
+
+interface GitHubAccountInfo {
+  id: string;
+  githubUserId: number;
+  githubLogin: string;
+  githubAvatarUrl?: string;
+  createdAt: string;
+  installations: GitHubInstallationInfo[];
+}
 
 const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
 
@@ -30,16 +55,17 @@ function decrypt(encryptedText: string): string {
 export class GitHubService {
   async getAppUrl(userId: string): Promise<{ url: string; state: string }> {
     const state = crypto.randomUUID();
-    const url = `https://github.com/apps/${config.githubAppId}/installations/new?state=${state}`;
+    const baseUrl = config.githubAppUrl || `https://github.com/apps/${config.githubAppId}`;
+    const url = `${baseUrl}/installations/new?state=${state}`;
     return { url, state };
   }
 
   async handleCallback(params: { installationId: number; state: string; userId: string }): Promise<void> {
-    const token = await this.getInstallationToken(params.installationId);
-    const accountInfo = await this.getAccountInfo(token);
-    const repos = await this.getRepositories(token);
+    const tokenResponse = await this.getInstallationToken(params.installationId);
+    const accountInfo = await this.getAccountInfo(tokenResponse.token);
+    const repos = await this.getRepositories(tokenResponse.token);
 
-    const encryptedToken = encrypt(token);
+    const encryptedToken = encrypt(tokenResponse.token);
     const account = await GitHubAccount.findOneAndUpdate(
       { userId: params.userId, githubUserId: accountInfo.id },
       {
@@ -48,6 +74,7 @@ export class GitHubService {
         githubLogin: accountInfo.login,
         githubAvatarUrl: accountInfo.avatar_url,
         accessToken: encryptedToken,
+        tokenExpiresAt: tokenResponse.expiresAt,
       },
       { upsert: true, new: true },
     );
@@ -72,7 +99,7 @@ export class GitHubService {
     ).lean();
   }
 
-  async getAccounts(userId: string): Promise<any[]> {
+  async getAccounts(userId: string): Promise<GitHubAccountInfo[]> {
     const accounts = await GitHubAccount.find({ userId }).lean();
     const installations = await GitHubInstallation.find({
       accountId: { $in: accounts.map(a => a._id) },
@@ -83,14 +110,20 @@ export class GitHubService {
       githubUserId: account.githubUserId,
       githubLogin: account.githubLogin,
       githubAvatarUrl: account.githubAvatarUrl,
-      createdAt: account.createdAt.toISOString(),
+      createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
       installations: installations
         .filter(i => i.accountId.toString() === account._id.toString())
         .map(i => ({
           id: i._id.toString(),
           installationId: i.installationId,
-          createdAt: i.createdAt.toISOString(),
-          repos: i.repos,
+          createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
+          repos: (i.repos || []).map(r => ({
+            repoId: r.repoId,
+            repoName: r.repoName,
+            fullName: r.fullName,
+            private: r.private,
+            permissions: { read: r.permissions.read, write: r.permissions.write },
+          })),
         })),
     }));
   }
@@ -104,7 +137,7 @@ export class GitHubService {
     return false;
   }
 
-  async refreshInstallations(userId: string, accountId: string): Promise<any> {
+  async refreshInstallations(userId: string, accountId: string): Promise<GitHubAccountInfo | undefined> {
     const account = await GitHubAccount.findOne({ _id: accountId, userId });
     if (!account) throw new Error('Account not found');
 
@@ -130,25 +163,35 @@ export class GitHubService {
     return accounts.find(a => a.id === accountId);
   }
 
-  private async getInstallationToken(installationId: number): Promise<string> {
-    const jwt = this.createAppJwt();
+  private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
+    const appJwt = this.createAppJwt();
     const response = await fetch(
       `https://api.github.com/app/installations/${installationId}/access_tokens`,
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${jwt}`,
+          Authorization: `Bearer ${appJwt}`,
           Accept: 'application/vnd.github+json',
         },
       },
     );
     if (!response.ok) throw new Error(`Failed to get installation token: ${response.status}`);
     const data = await response.json() as any;
-    return data.token;
+    return { token: data.token, expiresAt: new Date(data.expires_at) };
   }
 
   private createAppJwt(): string {
-    throw new Error('Not implemented');
+    const privateKey = config.githubAppPrivateKey;
+    if (!privateKey) {
+      throw new Error('GitHub App private key is not configured');
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iat: now - 60,
+      exp: now + 600,
+      iss: config.githubAppId,
+    };
+    return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
   }
 
   private async getAccountInfo(token: string): Promise<{ id: number; login: string; avatar_url: string }> {

@@ -112,4 +112,44 @@ describe('GithubBindingSection', () => {
     expect(screen.getByText('user1')).toBeDefined();
     expect(screen.getByText('user2')).toBeDefined();
   });
+
+  it('should show success toast when binding=success query param', () => {
+    const mockSetSearchParams = vi.fn();
+    mockUseSearchParams.mockReturnValue([new URLSearchParams('binding=success'), mockSetSearchParams]);
+    mockUseQuery.mockReturnValue(mockQuery({ data: { githubAccounts: [] } }));
+
+    render(<GithubBindingSection />);
+
+    expect(screen.getByText(/GitHub 帐号绑定成功/)).toBeDefined();
+    expect(mockSetSearchParams).toHaveBeenCalled();
+  });
+
+  it('should show error toast when binding=error query param', () => {
+    const mockSetSearchParams = vi.fn();
+    mockUseSearchParams.mockReturnValue([new URLSearchParams('binding=error&message=invalid_state'), mockSetSearchParams]);
+    mockUseQuery.mockReturnValue(mockQuery({ data: { githubAccounts: [] } }));
+
+    render(<GithubBindingSection />);
+
+    expect(screen.getByText(/GitHub 绑定失败/)).toBeDefined();
+    expect(screen.getByText(/invalid_state/)).toBeDefined();
+    expect(mockSetSearchParams).toHaveBeenCalled();
+  });
+
+  it('should show unbind button when account exists', async () => {
+    const mockUnbind = vi.fn();
+    mockUseMutation.mockReturnValue([mockUnbind, { loading: false }]);
+    mockUseQuery.mockReturnValue(mockQuery({
+      data: {
+        githubAccounts: [
+          { id: 'acc1', githubUserId: 12345, githubLogin: 'testuser', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
+        ],
+      },
+    }));
+
+    render(<GithubBindingSection />);
+
+    const unbindButton = screen.getByRole('button', { name: '解绑' });
+    expect(unbindButton).toBeDefined();
+  });
 });

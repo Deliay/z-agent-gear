@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../../middleware/redis.js', () => ({
+  getRedisClient: vi.fn(() => ({
+    set: vi.fn().mockResolvedValue('OK'),
+  })),
+}));
+
 vi.mock('../../services/github.js', () => ({
   githubService: {
     getAccounts: vi.fn(),

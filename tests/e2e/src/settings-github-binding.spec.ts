@@ -4,20 +4,6 @@ import { registerUser } from './helpers.js';
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 
 test.describe('Settings GitHub Binding E2E', () => {
-  let token = '';
-
-  test.beforeAll(async ({ browser }) => {
-    const page = await browser.newPage();
-    const user = await registerUser(page);
-    token = user.token;
-    await page.goto('/login');
-    await page.fill('#username', user.username);
-    await page.fill('#password', 'testpass123');
-    await page.click('button[type="submit"]');
-    await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
-    await page.close();
-  });
-
   test.beforeEach(async ({ page }) => {
     const user = await registerUser(page);
     await page.goto('/login');
@@ -48,10 +34,9 @@ test.describe('Settings GitHub Binding E2E', () => {
     ]);
 
     if (popup) {
-      expect(popup.url()).toContain('github.com/apps/');
+      expect(popup.url()).toMatch(/github\.com\/(?:apps\/|login\?)/);
       await popup.close();
     } else {
-      // window.open may be blocked; verify the bind button is present as fallback
       await expect(page.getByRole('button', { name: '绑定 GitHub 帐号' })).toBeVisible();
     }
   });
