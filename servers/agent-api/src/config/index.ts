@@ -11,4 +11,8 @@ export const config = {
   credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
   corsOrigin: process.env.CORS_ORIGIN || '*',
   gatewayMaxPerController: parseInt(process.env.GATEWAY_MAX_PER_CONTROLLER || '5', 10),
+  githubAppId: process.env.GITHUB_APP_ID || '',
+  githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY || '',
+  githubCallbackUrl: process.env.GITHUB_CALLBACK_URL || 'http://localhost:4000/api/github/callback',
+  githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
 };
