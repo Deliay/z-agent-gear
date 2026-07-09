@@ -33,18 +33,25 @@ var redis = builder.AddRedis("redis")
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
 var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
+var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
+var githubClientId = builder.AddParameter("github-client-id", value: "Iv23liS5M1MfNZG31jcH");
+var githubClientSecret = builder.AddParameter("github-client-secret", secret: true, value: "bc9c1b42351f1e2fc5f5c82c6507e6c8b04aa670");
+var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
+var githubCallbackUrl = builder.AddParameter("github-callback-url", value: "http://localhost:10001/api/github/callback");
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
+var frontendUrl = builder.AddParameter("frontend-url", value: "http://localhost:5173");
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("JWT_SECRET", jwtSecret)
-    .WithEnvironment("GITHUB_APP_ID", "4253594")
-    .WithEnvironment("GITHUB_CLIENT_ID", "Iv23liS5M1MfNZG31jcH")
-    .WithEnvironment("GITHUB_CLIENT_SECRET", "bc9c1b42351f1e2fc5f5c82c6507e6c8b04aa670")
-    .WithEnvironment("GITHUB_APP_URL", "https://github.com/apps/z-agent-bot-test")
-    .WithEnvironment("GITHUB_CALLBACK_URL", "http://localhost:10001/api/github/callback")
-    .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000")
-    .WithEnvironment("FRONTEND_URL", "http://localhost:5173")
+    .WithEnvironment("GITHUB_APP_ID", githubAppId)
+    .WithEnvironment("GITHUB_CLIENT_ID", githubClientId)
+    .WithEnvironment("GITHUB_CLIENT_SECRET", githubClientSecret)
+    .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
+    .WithEnvironment("GITHUB_CALLBACK_URL", githubCallbackUrl)
+    .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
+    .WithEnvironment("FRONTEND_URL", frontendUrl)
     .WithHttpEndpoint(port: 10001, env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
