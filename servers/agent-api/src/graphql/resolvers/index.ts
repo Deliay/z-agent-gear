@@ -8,6 +8,7 @@ import { sessionResolvers } from './session.js';
 import { gatewayResolvers } from './gateway.js';
 import { todoResolvers } from './todo.js';
 import { mcpServerResolvers } from './mcp-server.js';
+import { githubResolvers } from './github.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -21,6 +22,7 @@ export const resolvers = {
     ...gatewayResolvers.Query,
     ...todoResolvers.Query,
     ...mcpServerResolvers.Query,
+    ...githubResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -31,6 +33,7 @@ export const resolvers = {
     ...sessionResolvers.Mutation,
     ...gatewayResolvers.Mutation,
     ...todoResolvers.Mutation,
+    ...githubResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

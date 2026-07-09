@@ -297,6 +297,42 @@ export const GET_MCP_SERVERS = gql`
   }
 `
 
+export const GET_GITHUB_ACCOUNTS = gql`
+  query GetGithubAccounts {
+    githubAccounts {
+      id
+      githubUserId
+      githubLogin
+      githubAvatarUrl
+      createdAt
+      installations {
+        id
+        installationId
+        repos {
+          id
+          repoId
+          repoName
+          fullName
+          private
+          permissions {
+            read
+            write
+          }
+        }
+      }
+    }
+  }
+`
+
+export const GET_GITHUB_APP_URL = gql`
+  query GetGithubAppUrl {
+    githubAppUrl {
+      url
+      state
+    }
+  }
+`
+
 export const GET_MCP_SERVER = gql`
   query GetMcpServer($id: ID!) {
     mcpServer(id: $id) {

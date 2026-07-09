@@ -23,6 +23,7 @@ import ModelSection from '@/components/settings/ModelSection';
 import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpServerSection from '@/components/settings/McpServerSection';
+import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import ControllerConfigPage from './ControllerConfigPage';
 
 export default function SettingsPage() {
@@ -65,6 +66,7 @@ export default function SettingsPage() {
         </div>
         <div className="flex gap-1 overflow-x-auto border-b px-4 py-2">
           <button type="button" onClick={() => scrollTo('account-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">帐号</button>
+          <button type="button" onClick={() => scrollTo('github-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">GitHub</button>
           <button type="button" onClick={() => scrollTo('provider-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">供应商</button>
           <button type="button" onClick={() => scrollTo('model-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">模型</button>
           <button type="button" onClick={() => scrollTo('controller-section')} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent">控制器</button>
@@ -98,6 +100,10 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </section>
+          <section id="github-section" className="mb-8">
+            <h2 className="mb-4 text-lg font-semibold">GitHub 绑定</h2>
+            <GithubBindingSection />
+          </section>
           <section id="provider-section" className="mb-8">
             <ProviderSection />
           </section>
@@ -130,6 +136,18 @@ export default function SettingsPage() {
           >
             帐号
           </button>
+          <div className="pt-2">
+            <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+              GitHub
+            </div>
+            <button
+              type="button"
+              onClick={() => scrollTo('github-section')}
+              className="w-full rounded-md px-3 py-2 text-sm font-medium text-left hover:bg-accent hover:text-accent-foreground"
+            >
+              GitHub 绑定
+            </button>
+          </div>
           <div className="pt-2">
             <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
               模型设置
@@ -176,39 +194,44 @@ export default function SettingsPage() {
         </div>
       </nav>
       <div className="overflow-y-auto p-8">
-        <section id="account-section" className="mb-10">
-          <h2 className="mb-6 text-xl font-semibold text-foreground">帐号</h2>
-          <Card>
-            <CardHeader>
-              <CardTitle>个人资料</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <span className="block text-sm font-medium text-muted-foreground">用户名</span>
-                <p className="mt-1 text-foreground">{user?.username ?? ''}</p>
-              </div>
-              <Dialog>
-                <DialogTrigger render={<Button variant="destructive">退出登录</Button>} />
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>确认退出</DialogTitle>
-                    <DialogDescription>确定要退出登录吗？</DialogDescription>
-                  </DialogHeader>
-                  <DialogFooter>
-                    <DialogTrigger render={<Button variant="outline">取消</Button>} />
-                    <Button variant="destructive" onClick={handleLogout}>
-                      退出
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-            </CardContent>
-          </Card>
-        </section>
+          <section id="account-section" className="mb-10">
+            <h2 className="mb-6 text-xl font-semibold text-foreground">帐号</h2>
+            <Card>
+              <CardHeader>
+                <CardTitle>个人资料</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <span className="block text-sm font-medium text-muted-foreground">用户名</span>
+                  <p className="mt-1 text-foreground">{user?.username ?? ''}</p>
+                </div>
+                <Dialog>
+                  <DialogTrigger render={<Button variant="destructive">退出登录</Button>} />
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>确认退出</DialogTitle>
+                      <DialogDescription>确定要退出登录吗？</DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                      <DialogTrigger render={<Button variant="outline">取消</Button>} />
+                      <Button variant="destructive" onClick={handleLogout}>
+                        退出
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </CardContent>
+            </Card>
+          </section>
 
-        <section id="provider-section" className="mb-10">
-          <ProviderSection />
-        </section>
+          <section id="github-section" className="mb-10">
+            <h2 className="mb-6 text-xl font-semibold text-foreground">GitHub 绑定</h2>
+            <GithubBindingSection />
+          </section>
+
+          <section id="provider-section" className="mb-10">
+            <ProviderSection />
+          </section>
 
         <section id="model-section" className="mb-10">
           <ModelSection />
