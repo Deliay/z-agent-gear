@@ -3,11 +3,24 @@ import { config } from '../config/index.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { githubService } from '../services/github.js';
 
-export async function handleGithubCallback(req: Request, res: Response): Promise<void> {
+export async function handleGithubSetup(req: Request, res: Response): Promise<void> {
   try {
-    const { installation_id, state } = req.query;
+    const { installation_id, setup_action, state } = req.query;
 
-    if (!installation_id || !state) {
+    if (!installation_id) {
+      res.redirect(`${config.frontendUrl}/settings?binding=error&message=missing_params`);
+      return;
+    }
+
+    const installationId = parseInt(installation_id as string, 10);
+
+    if (setup_action === 'update' && !state) {
+      await githubService.handleSetupUpdate(installationId);
+      res.redirect(`${config.frontendUrl}/settings?binding=success`);
+      return;
+    }
+
+    if (!state) {
       res.redirect(`${config.frontendUrl}/settings?binding=error&message=missing_params`);
       return;
     }
@@ -21,18 +34,18 @@ export async function handleGithubCallback(req: Request, res: Response): Promise
 
     await redis.del(`github:oauth:state:${state}`);
 
-    await githubService.handleCallback({
-      installationId: parseInt(installation_id as string, 10),
+    await githubService.handleSetup({
+      installationId,
       state: state as string,
       userId: userId as string,
     });
 
     res.redirect(`${config.frontendUrl}/settings?binding=success`);
   } catch (error) {
-    console.error('GitHub callback error:', error);
+    console.error('GitHub setup error:', error);
     res.redirect(`${config.frontendUrl}/settings?binding=error&message=internal_error`);
   }
 }
 
 export const githubRouter = Router();
-githubRouter.get('/github/callback', handleGithubCallback);
+githubRouter.get('/github/setup', handleGithubSetup);

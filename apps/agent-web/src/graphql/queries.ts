@@ -308,6 +308,7 @@ export const GET_GITHUB_ACCOUNTS = gql`
       installations {
         id
         installationId
+        managementUrl
         repos {
           id
           repoId

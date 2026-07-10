@@ -31,19 +31,8 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
 
   return (
     <li className="flex items-center gap-2 rounded px-3 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent">
-      <span className="text-xs text-muted-foreground">↗</span>
       <span className="flex-1 truncate">{gateway.name}</span>
       <span className="text-xs text-muted-foreground">:{gateway.port}</span>
-      {gateway.status === 'active' && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="text-xs text-primary hover:text-primary/80"
-          title={accessUrl}
-        >
-          {copied ? '已复制' : '复制链接'}
-        </button>
-      )}
       <span
         className={`text-xs ${
           gateway.status === 'active' ? 'text-green-500' : 'text-muted-foreground'
@@ -51,6 +40,16 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       >
         {gateway.status}
       </span>
+      {gateway.status === 'active' && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="text-xs text-muted-foreground hover:text-sidebar-foreground"
+          title={copied ? '已复制' : accessUrl}
+        >
+          {copied ? '✓' : '📋'}
+        </button>
+      )}
       <button
         type="button"
         onClick={handleDelete}

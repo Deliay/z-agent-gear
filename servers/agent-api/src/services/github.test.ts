@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('jsonwebtoken', () => ({
+  default: { sign: vi.fn().mockReturnValue('fake-jwt') },
+  sign: vi.fn().mockReturnValue('fake-jwt'),
+}));
+
 vi.mock('../models/github-account.js', () => ({
   GitHubAccount: {
     find: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
@@ -22,6 +28,7 @@ vi.mock('../config/index.js', () => ({
     githubAppId: 'test-app',
     githubAppUrl: 'https://github.com/apps/test-app',
     githubTokenEncryptionKey: '0000000000000000000000000000000000000000000000000000000000000000',
+    githubAppPrivateKey: 'fake-private-key',
     frontendUrl: 'http://localhost:5173',
   },
 }));
@@ -109,21 +116,52 @@ describe('GitHubService', () => {
   });
 
   describe('unbindAccount', () => {
-    it('should return true when account exists and delete installations', async () => {
-      vi.mocked(GitHubAccount.findOneAndDelete).mockResolvedValue({
-        _id: 'acc1',
-      } as never);
-      vi.mocked(GitHubInstallation.deleteMany).mockResolvedValue({ deletedCount: 1 } as never);
+    it('should uninstall app and delete installations when account exists', async () => {
+      const mockInstallations = [{ installationId: 42 }, { installationId: 43 }];
+
+      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1' } as any);
+      vi.mocked(GitHubInstallation.find).mockResolvedValue(mockInstallations as any);
+      vi.mocked(GitHubInstallation.deleteMany).mockResolvedValue({ deletedCount: 2 } as any);
+
+      const fetchCalls: any[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = ((...args: any[]) => {
+        fetchCalls.push(args);
+        return Promise.resolve({ ok: true } as any);
+      }) as any;
 
       const result = await githubService.unbindAccount('user1', 'acc1');
 
+      globalThis.fetch = originalFetch;
+
       expect(result).toBe(true);
-      expect(GitHubAccount.findOneAndDelete).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
+      expect(GitHubAccount.findOne).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
+      expect(GitHubInstallation.find).toHaveBeenCalledWith({ accountId: 'acc1' });
+      expect(fetchCalls.length).toBe(2);
+      expect(fetchCalls[0][0]).toBe('https://api.github.com/app/installations/42');
+      expect(fetchCalls[1][0]).toBe('https://api.github.com/app/installations/43');
       expect(GitHubInstallation.deleteMany).toHaveBeenCalledWith({ accountId: 'acc1' });
+      expect(GitHubAccount.deleteOne).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
+    });
+
+    it('should clean up local data even if uninstall fails', async () => {
+      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1' } as any);
+      vi.mocked(GitHubInstallation.find).mockResolvedValue([{ installationId: 42 }] as any);
+      vi.mocked(GitHubInstallation.deleteMany).mockResolvedValue({ deletedCount: 1 } as any);
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (() => Promise.reject(new Error('Network error'))) as any;
+
+      const result = await githubService.unbindAccount('user1', 'acc1');
+
+      globalThis.fetch = originalFetch;
+
+      expect(result).toBe(true);
+      expect(GitHubInstallation.deleteMany).toHaveBeenCalled();
     });
 
     it('should return false when account not found', async () => {
-      vi.mocked(GitHubAccount.findOneAndDelete).mockResolvedValue(null);
+      vi.mocked(GitHubAccount.findOne).mockResolvedValue(null);
 
       const result = await githubService.unbindAccount('user1', 'nonexistent');
 

@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 
-interface GitHubRepoInfo {
+export interface GitHubRepoInfo {
   repoId: number;
   repoName: string;
   fullName: string;
@@ -12,14 +12,15 @@ interface GitHubRepoInfo {
   permissions: { read: boolean; write: boolean };
 }
 
-interface GitHubInstallationInfo {
+export interface GitHubInstallationInfo {
   id: string;
   installationId: number;
+  managementUrl: string;
   createdAt: string;
   repos: GitHubRepoInfo[];
 }
 
-interface GitHubAccountInfo {
+export interface GitHubAccountInfo {
   id: string;
   githubUserId: number;
   githubLogin: string;
@@ -60,9 +61,9 @@ export class GitHubService {
     return { url, state };
   }
 
-  async handleCallback(params: { installationId: number; state: string; userId: string }): Promise<void> {
+  async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
-    const accountInfo = await this.getAccountInfo(tokenResponse.token);
+    const accountInfo = await this.getInstallationAccount(params.installationId);
     const repos = await this.getRepositories(tokenResponse.token);
 
     const encryptedToken = encrypt(tokenResponse.token);
@@ -84,6 +85,8 @@ export class GitHubService {
       {
         accountId: account._id,
         installationId: params.installationId,
+        accountLogin: accountInfo.login,
+        accountType: accountInfo.type,
         repos: repos.map(r => ({
           repoId: r.id,
           repoName: r.name,
@@ -109,32 +112,45 @@ export class GitHubService {
       id: account._id.toString(),
       githubUserId: account.githubUserId,
       githubLogin: account.githubLogin,
-      githubAvatarUrl: account.githubAvatarUrl,
+      githubAvatarUrl: account.githubAvatarUrl ?? undefined,
       createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
       installations: installations
         .filter(i => i.accountId.toString() === account._id.toString())
         .map(i => ({
           id: i._id.toString(),
           installationId: i.installationId,
+          managementUrl: i.accountType === 'Organization'
+            ? `https://github.com/organizations/${i.accountLogin}/settings/installations/${i.installationId}`
+            : `https://github.com/settings/installations/${i.installationId}`,
           createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
           repos: (i.repos || []).map(r => ({
+            id: String(r.repoId),
             repoId: r.repoId,
             repoName: r.repoName,
             fullName: r.fullName,
             private: r.private,
-            permissions: { read: r.permissions.read, write: r.permissions.write },
+            permissions: { read: r.permissions?.read ?? false, write: r.permissions?.write ?? false },
           })),
         })),
     }));
   }
 
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
-    const account = await GitHubAccount.findOneAndDelete({ _id: accountId, userId });
-    if (account) {
-      await GitHubInstallation.deleteMany({ accountId: account._id });
-      return true;
+    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    if (!account) return false;
+
+    const installations = await GitHubInstallation.find({ accountId: account._id });
+    for (const inst of installations) {
+      try {
+        await this.uninstallApp(inst.installationId);
+      } catch {
+        // ignore uninstall failure — clean up local data regardless
+      }
     }
-    return false;
+
+    await GitHubInstallation.deleteMany({ accountId: account._id });
+    await GitHubAccount.deleteOne({ _id: accountId, userId });
+    return true;
   }
 
   async refreshInstallations(userId: string, accountId: string): Promise<GitHubAccountInfo | undefined> {
@@ -161,6 +177,26 @@ export class GitHubService {
 
     const accounts = await this.getAccounts(userId);
     return accounts.find(a => a.id === accountId);
+  }
+
+  async handleSetupUpdate(installationId: number): Promise<void> {
+    const installation = await GitHubInstallation.findOne({ installationId });
+    if (!installation) return;
+
+    const tokenResponse = await this.getInstallationToken(installationId);
+    const repos = await this.getRepositories(tokenResponse.token);
+
+    installation.repos = repos.map(r => ({
+      repoId: r.id,
+      repoName: r.name,
+      fullName: r.full_name,
+      private: r.private,
+      permissions: {
+        read: r.permissions.pull || r.permissions.push || r.permissions.admin,
+        write: r.permissions.push || r.permissions.admin,
+      },
+    })) as any;
+    await installation.save();
   }
 
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
@@ -194,12 +230,20 @@ export class GitHubService {
     return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
   }
 
-  private async getAccountInfo(token: string): Promise<{ id: number; login: string; avatar_url: string }> {
-    const response = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error('Failed to get account info');
-    return response.json() as any;
+  private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string; type: 'User' | 'Organization' }> {
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!response.ok) throw new Error('Failed to get installation account info');
+    const data = await response.json() as any;
+    return data.account;
   }
 
   private async getRepositories(token: string): Promise<any[]> {
@@ -209,6 +253,23 @@ export class GitHubService {
     if (!response.ok) throw new Error('Failed to get repositories');
     const data = await response.json() as any;
     return data.repositories;
+  }
+
+  private async uninstallApp(installationId: number): Promise<void> {
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Failed to uninstall app: ${response.status}`);
+    }
   }
 }
 

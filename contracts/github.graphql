@@ -15,6 +15,7 @@ type GitHubRepo {
 type GitHubInstallation {
   id: ID!
   installationId: Int!
+  managementUrl: String!
   repos: [GitHubRepo!]
   createdAt: String!
 }

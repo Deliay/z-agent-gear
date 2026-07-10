@@ -14,7 +14,7 @@ export const config = {
   githubAppId: process.env.GITHUB_APP_ID || '',
   githubAppUrl: process.env.GITHUB_APP_URL || '',
   githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY || '',
-  githubCallbackUrl: process.env.GITHUB_CALLBACK_URL || 'http://localhost:4000/api/github/callback',
+  githubSetupUrl: process.env.GITHUB_SETUP_URL || 'http://localhost:4000/api/github/setup',
   githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
 };
