@@ -136,12 +136,20 @@ export class GitHubService {
   }
 
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
-    const account = await GitHubAccount.findOneAndDelete({ _id: accountId, userId });
-    if (account) {
-      await GitHubInstallation.deleteMany({ accountId: account._id });
-      return true;
+    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    if (!account) return false;
+
+    const installations = await GitHubInstallation.find({ accountId: account._id });
+    for (const inst of installations) {
+      try {
+        await this.uninstallApp(inst.installationId);
+      } catch {
+        // ignore uninstall failure — clean up local data regardless
+      }
     }
-    return false;
+
+    await GitHubInstallation.deleteMany({ accountId: account._id });
+    return true;
   }
 
   async refreshInstallations(userId: string, accountId: string): Promise<GitHubAccountInfo | undefined> {
@@ -244,6 +252,23 @@ export class GitHubService {
     if (!response.ok) throw new Error('Failed to get repositories');
     const data = await response.json() as any;
     return data.repositories;
+  }
+
+  private async uninstallApp(installationId: number): Promise<void> {
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Failed to uninstall app: ${response.status}`);
+    }
   }
 }
 

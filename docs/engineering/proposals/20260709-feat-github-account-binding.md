@@ -303,12 +303,11 @@ sequenceDiagram
     U->>F: 点击"解绑"
     F->>B: mutation unbindGitHubAccount(accountId)
     B->>D: 查找 GitHubAccount + Installations
-    B->>B: 解密 token
-    opt 可选
-        B->>GH: DELETE /app/installations/{id}/suspended
+    loop 每个安装
+        B->>GH: DELETE /app/installations/{id}（使用 App JWT）
+        GH-->>B: 204 No Content
     end
-    B->>D: 删除 GitHubInstallation
-    B->>D: 删除 GitHubAccount
+    B->>D: 删除所有 GitHubInstallation
     B-->>F: true
     F-->>U: 列表刷新，帐号消失
 ```

@@ -130,8 +130,9 @@ flowchart TD
 flowchart TD
     subgraph "解绑流程"
         N[在设置页点击'解绑'] --> O[确认解绑]
-        O --> P[删除关联数据和 Token]
-        P --> Q[可选: 跳转 GitHub 取消 App 授权]
+        O --> P[后端自动调用 GitHub API 卸载 App]
+        P --> Q[删除本地关联数据和 Token]
+        Q --> R[完成解绑]
     end
 ```
 
