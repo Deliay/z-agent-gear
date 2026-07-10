@@ -149,6 +149,7 @@ export class GitHubService {
     }
 
     await GitHubInstallation.deleteMany({ accountId: account._id });
+    await GitHubAccount.deleteOne({ _id: accountId, userId });
     return true;
   }
 

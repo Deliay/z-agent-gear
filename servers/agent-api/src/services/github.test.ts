@@ -11,6 +11,7 @@ vi.mock('../models/github-account.js', () => ({
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    deleteOne: vi.fn(),
   },
 }));
 
@@ -140,6 +141,7 @@ describe('GitHubService', () => {
       expect(fetchCalls[0][0]).toBe('https://api.github.com/app/installations/42');
       expect(fetchCalls[1][0]).toBe('https://api.github.com/app/installations/43');
       expect(GitHubInstallation.deleteMany).toHaveBeenCalledWith({ accountId: 'acc1' });
+      expect(GitHubAccount.deleteOne).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
     });
 
     it('should clean up local data even if uninstall fails', async () => {
