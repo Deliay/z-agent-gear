@@ -71,7 +71,6 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
     .WithReference(mongodb)
     .WithReference(redis)
-    .WithExternalHttpEndpoints()
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "agent-api";
@@ -83,12 +82,14 @@ if (builder.ExecutionContext.IsPublishMode)
 {
     var frontendEndpoint = builder.AddParameter("frontend-endpoint");
     agentApi.WithEnvironment("FRONTEND_URL", frontendEndpoint)
-    .WithHttpEndpoint(env: "PORT");
+        .WithHttpEndpoint(env: "PORT")
+        .WithExternalHttpEndpoints();
 }
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
-    .WithHttpEndpoint(10001, env: "PORT");
+        .WithHttpEndpoint(10001, env: "PORT")
+        .WithExternalHttpEndpoints();
 }
 
 agentWeb
