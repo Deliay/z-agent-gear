@@ -360,7 +360,6 @@ export interface GitHubRepoData {
 export interface GitHubInstallationData {
   id: string
   installationId: number
-  managementUrl: string
   repos?: GitHubRepoData[] | null
   createdAt: string
 }

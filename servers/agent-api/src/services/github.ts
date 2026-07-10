@@ -15,7 +15,6 @@ interface GitHubRepoInfo {
 interface GitHubInstallationInfo {
   id: string;
   installationId: number;
-  managementUrl: string;
   createdAt: string;
   repos: GitHubRepoInfo[];
 }
@@ -85,8 +84,6 @@ export class GitHubService {
       {
         accountId: account._id,
         installationId: params.installationId,
-        accountLogin: accountInfo.login,
-        accountType: accountInfo.type,
         repos: repos.map(r => ({
           repoId: r.id,
           repoName: r.name,
@@ -119,9 +116,6 @@ export class GitHubService {
         .map(i => ({
           id: i._id.toString(),
           installationId: i.installationId,
-          managementUrl: i.accountType === 'Organization'
-            ? `https://github.com/organizations/${i.accountLogin}/settings/installations/${i.installationId}`
-            : `https://github.com/settings/installations/${i.installationId}`,
           createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
           repos: (i.repos || []).map(r => ({
             id: String(r.repoId),
@@ -201,7 +195,7 @@ export class GitHubService {
     return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
   }
 
-  private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string; type: 'User' | 'Organization' }> {
+  private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
       `https://api.github.com/app/installations/${installationId}`,

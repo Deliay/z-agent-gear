@@ -16,7 +16,6 @@ export const githubTypeDefs = `#graphql
   type GitHubInstallation {
     id: ID!
     installationId: Int!
-    managementUrl: String!
     repos: [GitHubRepo!]
     createdAt: String!
   }

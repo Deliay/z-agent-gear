@@ -14,8 +14,6 @@ const gitHubRepoSchema = new mongoose.Schema({
 const githubInstallationSchema = new mongoose.Schema({
   accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'GitHubAccount', required: true, index: true },
   installationId: { type: Number, required: true, unique: true },
-  accountLogin: { type: String, required: true },
-  accountType: { type: String, enum: ['User', 'Organization'], required: true },
   repos: [gitHubRepoSchema],
 }, { timestamps: true });
 
