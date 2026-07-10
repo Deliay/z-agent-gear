@@ -118,6 +118,7 @@ export class GitHubService {
           installationId: i.installationId,
           createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
           repos: (i.repos || []).map(r => ({
+            id: String(r.repoId),
             repoId: r.repoId,
             repoName: r.repoName,
             fullName: r.fullName,
