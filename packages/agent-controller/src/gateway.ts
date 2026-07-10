@@ -6,16 +6,20 @@ interface Tunnel {
   port: number;
   localSocket: net.Socket | null;
   serverSocket: Socket;
+  pendingRequestId?: string | null;
+  responseBuffer: Buffer[];
+  responseTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 const RECONNECT_INTERVAL_MS = 3000;
+const HTTP_RESPONSE_COLLECT_MS = 100;
 
 export class GatewayManager {
   private tunnels: Map<string, Tunnel> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   async createTunnel(tunnelId: string, port: number, serverSocket: Socket): Promise<void> {
-    this.tunnels.set(tunnelId, { id: tunnelId, port, localSocket: null, serverSocket });
+    this.tunnels.set(tunnelId, { id: tunnelId, port, localSocket: null, serverSocket, responseBuffer: [] });
     await this.connect(tunnelId, true);
   }
 
@@ -47,10 +51,16 @@ export class GatewayManager {
         }
 
         localSocket.on('data', (data: Buffer) => {
-          tunnel.serverSocket.emit('port-forward:data', {
-            tunnelId,
-            data: data.toString('base64'),
-          });
+          if (tunnel.pendingRequestId) {
+            tunnel.responseBuffer.push(data);
+            if (tunnel.responseTimer) clearTimeout(tunnel.responseTimer);
+            tunnel.responseTimer = setTimeout(() => this.flushResponse(tunnel), HTTP_RESPONSE_COLLECT_MS);
+          } else {
+            tunnel.serverSocket.emit('port-forward:data', {
+              tunnelId,
+              data: data.toString('base64'),
+            });
+          }
         });
 
         localSocket.on('close', () => {
@@ -66,6 +76,24 @@ export class GatewayManager {
 
         resolve();
       });
+    });
+  }
+
+  private flushResponse(tunnel: Tunnel): void {
+    if (!tunnel.pendingRequestId) return;
+    const combined = Buffer.concat(tunnel.responseBuffer);
+    tunnel.responseBuffer = [];
+    const requestId = tunnel.pendingRequestId;
+    tunnel.pendingRequestId = null;
+    tunnel.responseTimer = null;
+
+    tunnel.serverSocket.emit('port-forward:data', {
+      tunnelId: tunnel.id,
+      data: Buffer.from(JSON.stringify({
+        type: 'http-response',
+        requestId,
+        body: combined.toString('base64'),
+      })).toString('base64'),
     });
   }
 
@@ -87,24 +115,41 @@ export class GatewayManager {
       console.warn(`Gateway data for unknown tunnel: tunnelId=${tunnelId}`);
       return;
     }
-    if (tunnel.localSocket) {
-      tunnel.localSocket.write(Buffer.from(data, 'base64'));
+
+    const buffer = Buffer.from(data, 'base64');
+    let parsed: any;
+    try {
+      parsed = JSON.parse(buffer.toString('utf8'));
+    } catch {
+      if (tunnel.localSocket) {
+        tunnel.localSocket.write(buffer);
+      }
       return;
     }
 
-    console.log(`Gateway reconnect on data: tunnelId=${tunnelId}`);
+    if (parsed.type === 'http-request') {
+      const { method, path, headers, body } = parsed;
+      let rawRequest = `${method} ${path} HTTP/1.1\r\n`;
+      for (const [key, value] of Object.entries(headers || {})) {
+        rawRequest += `${key}: ${value}\r\n`;
+      }
+      rawRequest += `Host: 127.0.0.1:${tunnel.port}\r\n`;
+      rawRequest += 'Connection: close\r\n';
+      rawRequest += '\r\n';
+      if (body) rawRequest += Buffer.from(body, 'base64').toString('utf8');
 
-    const timer = this.reconnectTimers.get(tunnelId);
-    if (timer) {
-      clearTimeout(timer);
-      this.reconnectTimers.delete(tunnelId);
+      tunnel.pendingRequestId = parsed.requestId;
+      tunnel.responseBuffer = [];
+
+      if (tunnel.localSocket) {
+        tunnel.localSocket.write(rawRequest);
+      }
+      return;
     }
 
-    this.connect(tunnelId, false).then(() => {
-      if (tunnel.localSocket) {
-        tunnel.localSocket.write(Buffer.from(data, 'base64'));
-      }
-    });
+    if (tunnel.localSocket) {
+      tunnel.localSocket.write(buffer);
+    }
   }
 
   closeTunnel(tunnelId: string): void {

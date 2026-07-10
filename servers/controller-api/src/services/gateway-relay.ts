@@ -189,31 +189,50 @@ export class GatewayRelayService {
     }
 
     const ctx = this.proxyRequests.get(matchedRequestId)!;
-    try {
-      const raw = data.toString();
-      const parsed = JSON.parse(raw) as {
-        type: string;
-        requestId: string;
-        statusCode: number;
-        headers: Record<string, string>;
-        body: string;
-      };
 
-      if (parsed.type === 'http-response' && parsed.requestId === ctx.requestId) {
-        ctx.resolved = true;
-        clearTimeout(ctx.timeout);
-        this.proxyRequests.delete(matchedRequestId);
+    if (data[0] === 123) {
+      try {
+        const raw = data.toString();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed.type === 'http-response' && parsed.requestId === ctx.requestId) {
+          ctx.resolved = true;
+          clearTimeout(ctx.timeout);
+          this.proxyRequests.delete(matchedRequestId);
 
-        await this.publishResponse(
-          parsed.requestId,
-          parsed.statusCode,
-          parsed.headers,
-          parsed.body,
-        );
+          const bodyBuffer = Buffer.from(parsed.body as string, 'base64');
+          const headerEnd = bodyBuffer.indexOf('\r\n\r\n');
+          if (headerEnd === -1) {
+            await this.publishResponse(parsed.requestId as string, 502, {}, 'Bad gateway response');
+            return;
+          }
+
+          const headerBlock = bodyBuffer.subarray(0, headerEnd).toString();
+          const responseBody = bodyBuffer.subarray(headerEnd + 4);
+          const statusLine = headerBlock.split('\r\n')[0];
+          const statusCode = parseInt(statusLine.split(' ')[1], 10) || 502;
+
+          const headers: Record<string, string> = {};
+          for (const line of headerBlock.split('\r\n').slice(1)) {
+            const idx = line.indexOf(':');
+            if (idx !== -1) {
+              headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
+            }
+          }
+
+          await this.publishResponse(
+            parsed.requestId as string,
+            statusCode,
+            headers,
+            responseBody.toString('base64'),
+          );
+          return;
+        }
+      } catch {
+        // fall through to chunk buffering
       }
-    } catch {
-      ctx.responseChunks.push(data);
     }
+
+    ctx.responseChunks.push(data);
   }
 
   handleTunnelCreated(tunnelId: string, success: boolean, error?: string): void {

@@ -189,13 +189,11 @@ describe('GatewayRelayService', () => {
         timeout,
       });
 
-      const responseBody = Buffer.from('hello').toString('base64');
+      const rawHttp = 'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 5\r\n\r\nhello';
       const data = Buffer.from(JSON.stringify({
         type: 'http-response',
         requestId: 'req-1',
-        statusCode: 200,
-        headers: { 'content-type': 'text/plain' },
-        body: responseBody,
+        body: Buffer.from(rawHttp).toString('base64'),
       }));
 
       service.handleTunnelData('tunnel-1', data);
@@ -206,8 +204,8 @@ describe('GatewayRelayService', () => {
           JSON.stringify({
             requestId: 'req-1',
             statusCode: 200,
-            headers: { 'content-type': 'text/plain' },
-            body: responseBody,
+            headers: { 'content-type': 'text/plain', 'content-length': '5' },
+            body: Buffer.from('hello').toString('base64'),
           }),
         );
       });
