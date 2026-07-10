@@ -41,11 +41,11 @@ export default function GithubAccountCard({ account, onUnbind }: Props) {
               {expanded ? '收起仓库' : '查看仓库'}
             </Button>
           )}
-          {account.installations && account.installations[0] && (
+          {account.installations && account.installations[0]?.managementUrl && (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.open(`https://github.com/settings/installations/${account.installations![0]!.installationId}`, '_blank')}
+              onClick={() => window.open(account.installations![0]!.managementUrl, '_blank')}
             >
               更新绑定
             </Button>

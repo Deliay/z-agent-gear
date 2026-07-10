@@ -128,6 +128,7 @@ type GitHubAccount {
 type GitHubInstallation {
   id: ID!
   installationId: Int!
+  managementUrl: String!
   repos: [GitHubRepo!]
   createdAt: String!
 }
@@ -222,6 +223,8 @@ interface IGitHubService {
 | _id | ObjectId | 主键 |
 | accountId | ObjectId, ref: GitHubAccount, required | 关联的 GitHub 帐号 |
 | installationId | Number, required | GitHub App Installation ID |
+| accountLogin | String, required | 安装所属的 GitHub 登录名（用于构建管理 URL） |
+| accountType | String, required | 安装所属的账号类型: User / Organization |
 | repos | Array | 授权仓库列表 |
 | repos[].repoId | Number | GitHub 仓库 ID |
 | repos[].repoName | String | 仓库名称 |
@@ -376,6 +379,18 @@ sequenceDiagram
   - 将 `{ state: userId }` 存入 Redis，TTL 10 分钟
   - 回调时校验 state 存在且匹配，校验后立即删除
   - 避免重放攻击
+
+#### 实现点 6: 更新绑定按钮
+
+- **描述**: 绑定后用户可快速回到 GitHub 安装配置页管理仓库授权
+- **技术细节**:
+  - 后端在 `handleSetup` 中存储 `accountLogin` 和 `accountType`（User/Organization）
+  - 后端 `getAccounts` 计算 `managementUrl`：
+    - User 类型: `https://github.com/settings/installations/{installationId}`
+    - Organization 类型: `https://github.com/organizations/{login}/settings/installations/{installationId}`
+  - GraphQL `GitHubInstallation` type 新增 `managementUrl: String!`
+  - Contract `contracts/github.graphql` 同步更新
+  - 前端从 `managementUrl` 取值，打开新标签页
 
 ## 6. 技术决策
 
