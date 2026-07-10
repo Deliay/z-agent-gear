@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { githubService } from '../../services/github.js';
+import type { GitHubAccountInfo } from '../../services/github.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import type { AuthContext } from './auth.js';
 
