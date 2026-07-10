@@ -69,7 +69,6 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
-    .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()
@@ -83,11 +82,13 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
 if (builder.ExecutionContext.IsPublishMode)
 {
     var frontendEndpoint = builder.AddParameter("frontend-endpoint");
-    agentApi.WithEnvironment("FRONTEND_URL", frontendEndpoint);
+    agentApi.WithEnvironment("FRONTEND_URL", frontendEndpoint)
+    .WithHttpEndpoint(env: "PORT");
 }
 else
 {
-    agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"));
+    agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+    .WithHttpEndpoint(10001, env: "PORT");
 }
 
 agentWeb
