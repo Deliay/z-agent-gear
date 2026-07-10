@@ -264,30 +264,31 @@ export interface CreateFolderMutation {
   } | null
 }
 
-export interface PortForwardData {
+export interface GatewayData {
   id: string
   controllerId: string
+  name: string
   port: number
   status: string
   createdAt: string
 }
 
-export interface PortForwardListData {
-  portForwards: PortForwardData[]
+export interface GatewayListData {
+  gateways: GatewayData[]
   total: number
   limit: number
 }
 
-export interface GetPortForwardsQuery {
-  portForwards: PortForwardListData
+export interface GetGatewaysQuery {
+  gateways: GatewayListData
 }
 
-export interface CreatePortForwardMutation {
-  createPortForward: PortForwardData
+export interface CreateGatewayMutation {
+  createGateway: GatewayData
 }
 
-export interface DeletePortForwardMutation {
-  deletePortForward: boolean
+export interface DeleteGatewayMutation {
+  deleteGateway: boolean
 }
 
 export interface PermissionOptionData {
@@ -340,4 +341,56 @@ export interface UpdatePermissionTimeoutMutation {
 
 export interface UpdateGlobalPermissionTimeoutMutation {
   updateGlobalPermissionTimeout: boolean
+}
+
+export interface GitHubRepoPermissionsData {
+  read: boolean
+  write: boolean
+}
+
+export interface GitHubRepoData {
+  id: string
+  repoId: number
+  repoName: string
+  fullName: string
+  private: boolean
+  permissions: GitHubRepoPermissionsData
+}
+
+export interface GitHubInstallationData {
+  id: string
+  installationId: number
+  managementUrl: string
+  repos?: GitHubRepoData[] | null
+  createdAt: string
+}
+
+export interface GitHubAccountData {
+  id: string
+  githubUserId: number
+  githubLogin: string
+  githubAvatarUrl?: string | null
+  installations?: GitHubInstallationData[] | null
+  createdAt: string
+}
+
+export interface GitHubAppUrlData {
+  url: string
+  state: string
+}
+
+export interface GetGithubAccountsQuery {
+  githubAccounts: GitHubAccountData[]
+}
+
+export interface GetGithubAppUrlQuery {
+  githubAppUrl: GitHubAppUrlData
+}
+
+export interface UnbindGitHubAccountMutation {
+  unbindGitHubAccount: boolean
+}
+
+export interface RefreshGitHubInstallationsMutation {
+  refreshGitHubInstallations: GitHubAccountData
 }

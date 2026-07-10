@@ -27,11 +27,11 @@ export class McpProxyRegistry {
     let keyId: string | undefined;
 
     for (const key of keys) {
-      const match = await bcrypt.compare(rawKey, key.keyHash);
+      const match = await bcrypt.compare(rawKey, (key as any).keyHash as string);
       if (match) {
-        userId = key.userId;
-        keyId = key._id.toString();
-        await McpProxyKey.findByIdAndUpdate(key._id, { lastUsedAt: new Date() });
+        userId = (key as any).userId as string;
+        keyId = (key as any)._id.toString();
+        await McpProxyKey.findByIdAndUpdate((key as any)._id, { lastUsedAt: new Date() });
         break;
       }
     }
@@ -77,8 +77,8 @@ export class McpProxyRegistry {
         this.connections.set(proxyId, {
           socket,
           serverId,
-          userId: server.userId,
-          command: server.command,
+          userId: (server as any).userId as string,
+          command: (server as any).command as string,
         });
 
         socket.emit('proxy:registered', { proxyId, serverId });

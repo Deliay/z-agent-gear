@@ -15,4 +15,10 @@
     <PackageReference Include="Aspire.Hosting.Redis" Version="13.3.5" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="github-app-private-key.pem">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

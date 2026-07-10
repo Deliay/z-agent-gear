@@ -62,6 +62,22 @@ const IMPORT_HISTORY_SESSIONS = `
   }
 `;
 
+const LIST_HISTORY_SESSIONS_WITH_TYPE = `
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType) {
+      sessionId title cwd updatedAt
+    }
+  }
+`;
+
+const IMPORT_HISTORY_SESSIONS_WITH_TYPE = `
+  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType, $sessionIds: [String!]!) {
+    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {
+      sessionId acpSessionId title success error messageCount
+    }
+  }
+`;
+
 const SESSIONS_QUERY = `
   query Sessions {
     sessions {
@@ -211,6 +227,26 @@ describe('History Session Sync API', () => {
 
       client.disconnect();
     }, 15000);
+
+    it('should return history sessions with acpServerType parameter', async () => {
+      const { controllerId, client } = await createFreshController();
+      const wsId = await createTestWorkspace(controllerId);
+
+      autoRespondToSyncEvents(client);
+
+      const res = await gqlRequest(LIST_HISTORY_SESSIONS_WITH_TYPE, {
+        controllerId,
+        workspaceId: wsId,
+        acpServerType: 'claude_code',
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      const sessions = body.data.listHistorySessions;
+      expect(Array.isArray(sessions)).toBe(true);
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+
+      client.disconnect();
+    }, 15000);
   });
 
   describe('importHistorySessions mutation', () => {
@@ -322,5 +358,27 @@ describe('History Session Sync API', () => {
 
       client.disconnect();
     }, 30000);
+
+    it('should import with acpServerType parameter', async () => {
+      const { controllerId, client } = await createFreshController();
+      const wsId = await createTestWorkspace(controllerId);
+
+      autoRespondToSyncEvents(client);
+
+      const res = await gqlRequest(IMPORT_HISTORY_SESSIONS_WITH_TYPE, {
+        controllerId,
+        workspaceId: wsId,
+        acpServerType: 'gemini_cli',
+        sessionIds: ['acp_import_with_type'],
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      const results = body.data.importHistorySessions;
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+      expect(results[0].acpSessionId).toBe('acp_import_with_type');
+
+      client.disconnect();
+    }, 20000);
   });
 });

@@ -32,10 +32,10 @@ export class McpProxyKeyService {
     });
 
     for (const key of candidates) {
-      const match = await bcrypt.compare(rawKey, key.keyHash);
+      const match = await bcrypt.compare(rawKey, (key as any).keyHash);
       if (match) {
-        await McpProxyKey.findByIdAndUpdate(key._id, { lastUsedAt: new Date() });
-        return { valid: true, keyId: key._id.toString(), userId: key.userId };
+        await McpProxyKey.findByIdAndUpdate((key as any)._id, { lastUsedAt: new Date() });
+        return { valid: true, keyId: (key as any)._id.toString(), userId: (key as any).userId };
       }
     }
     return { valid: false };

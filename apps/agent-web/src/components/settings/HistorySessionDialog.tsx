@@ -20,7 +20,16 @@ interface HistorySessionDialogProps {
   controllerId: string;
   workspaceId: string;
   workspaceName: string;
+  availableAcpServers?: Array<{ type: string; version?: string }>;
 }
+
+const acpServerTypeLabels: Record<string, string> = {
+  opencode: 'OpenCode',
+  github_copilot: 'GitHub Copilot',
+  claude_code: 'Claude Code',
+  gemini_cli: 'Gemini CLI',
+  codex: 'Codex',
+};
 
 export default function HistorySessionDialog({
   open,
@@ -28,14 +37,16 @@ export default function HistorySessionDialog({
   controllerId,
   workspaceId,
   workspaceName,
+  availableAcpServers,
 }: HistorySessionDialogProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<{ total: number; completed: number } | null>(null);
   const [results, setResults] = useState<ImportSessionResultData[]>([]);
+  const [acpServerType, setAcpServerType] = useState('opencode');
 
   const { data, loading, error, refetch } = useQuery<ListHistorySessionsQuery>(LIST_HISTORY_SESSIONS, {
-    variables: { controllerId, workspaceId },
+    variables: { controllerId, workspaceId, acpServerType },
     skip: !open || !workspaceId,
     fetchPolicy: 'network-only',
   });
@@ -87,6 +98,7 @@ export default function HistorySessionDialog({
         variables: {
           controllerId,
           workspaceId,
+          acpServerType,
           sessionIds: Array.from(selectedIds),
         },
       });
@@ -147,6 +159,22 @@ export default function HistorySessionDialog({
           </div>
         ) : (
           <>
+            {availableAcpServers && availableAcpServers.length > 0 && (
+              <div className="flex items-center gap-2 mb-2">
+                <label className="text-sm text-muted-foreground">ACP Server:</label>
+                <select
+                  value={acpServerType}
+                  onChange={(e) => setAcpServerType(e.target.value)}
+                  className="rounded border px-2 py-1 text-sm"
+                >
+                  {availableAcpServers.map((s) => (
+                    <option key={s.type} value={s.type}>
+                      {acpServerTypeLabels[s.type] || s.type} {s.version ? `(${s.version})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">
                 {sessions.length} 个可导入的会话

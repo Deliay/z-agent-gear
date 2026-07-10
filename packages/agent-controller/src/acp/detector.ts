@@ -11,11 +11,14 @@ interface AcpServerInfo {
 
 export class AcpDetector {
   async detect(): Promise<AcpServerInfo[]> {
-    const [opencode, copilot] = await Promise.all([
+    const [opencode, copilot, claudeCode, geminiCli, codex] = await Promise.all([
       this.detectOpenCode(),
       this.detectGitHubCopilot(),
+      this.detectClaudeCode(),
+      this.detectGeminiCli(),
+      this.detectCodex(),
     ]);
-    return [opencode, copilot];
+    return [opencode, copilot, claudeCode, geminiCli, codex];
   }
 
   private async detectOpenCode(): Promise<AcpServerInfo> {
@@ -38,10 +41,46 @@ export class AcpDetector {
     }
   }
 
+  private async detectClaudeCode(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('claude-agent-acp --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'claude_code', available: true, version };
+    } catch {
+      return { type: 'claude_code', available: false };
+    }
+  }
+
+  private async detectGeminiCli(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('gemini --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'gemini_cli', available: true, version };
+    } catch {
+      return { type: 'gemini_cli', available: false };
+    }
+  }
+
+  private async detectCodex(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('codex-acp --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'codex', available: true, version };
+    } catch {
+      return { type: 'codex', available: false };
+    }
+  }
+
   getSpawnerConfig(serverType: string): { command: string; args: string[] } {
     switch (serverType) {
       case 'github_copilot':
         return { command: 'copilot', args: ['--acp', '--stdio'] };
+      case 'claude_code':
+        return { command: 'claude-agent-acp', args: [] };
+      case 'gemini_cli':
+        return { command: 'gemini', args: ['--acp'] };
+      case 'codex':
+        return { command: 'codex-acp', args: [] };
       case 'opencode':
       default:
         return { command: 'opencode', args: ['acp'] };

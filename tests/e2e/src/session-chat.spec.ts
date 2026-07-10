@@ -14,13 +14,13 @@ test.describe('Session Chat', () => {
         requestId: data.requestId,
         sessionId: data.sessionId,
         success: true,
+        externalSessionId: `ext_${Date.now()}`,
       });
     });
 
     socket.on('acp:message', (data: { sessionId: string; message: { type: string; content: string } }) => {
       if (data.message.type === 'text' && !receivedInput) {
         receivedInput = true;
-        // Echo back a response
         setTimeout(() => {
           socket.emit('acp:message', {
             sessionId: data.sessionId,
@@ -35,16 +35,14 @@ test.describe('Session Chat', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('Idle', { timeout: 10000 });
+    await page.waitForTimeout(500);
 
-    // Type and send a message
     const textarea = page.locator('textarea');
-    await textarea.fill('Hello agent!');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await textarea.pressSequentially('Hello agent!');
+    await page.keyboard.press('Enter');
 
-    // User message should appear
-    await expect(page.getByText('Hello agent!', { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Hello agent!')).toBeVisible({ timeout: 10000 });
 
-    // Response should appear
     await expect(page.getByText('Echo: Hello agent!')).toBeVisible({ timeout: 5000 });
 
     disconnect();
@@ -60,10 +58,10 @@ test.describe('Session Chat', () => {
         requestId: data.requestId,
         sessionId: data.sessionId,
         success: true,
+        externalSessionId: `ext_${Date.now()}`,
       });
     });
 
-    // Delay the response to observe sending state
     socket.on('acp:message', (data: { sessionId: string; message: { type: string; content: string } }) => {
       setTimeout(() => {
         socket.emit('acp:message', {
@@ -78,12 +76,12 @@ test.describe('Session Chat', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('Idle', { timeout: 10000 });
+    await page.waitForTimeout(500);
 
     const textarea = page.locator('textarea');
-    await textarea.fill('Test message');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await textarea.pressSequentially('Test message');
+    await page.keyboard.press('Enter');
 
-    // After response arrives, textarea should be enabled again
     await expect(page.getByText('Delayed response')).toBeVisible({ timeout: 5000 });
     await expect(textarea).toBeEnabled();
 

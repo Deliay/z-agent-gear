@@ -65,6 +65,8 @@ import { SessionCommandService } from './session-command.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { acpSessionSyncService } from './acp-session-sync.js';
+import { Controller } from '../models/controller.js';
 import { worktreeService} from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 
@@ -99,6 +101,78 @@ beforeEach(() => {
 });
 
 describe('SessionCommandService', () => {
+  describe('acp:list-sessions command', () => {
+    beforeEach(() => {
+      const mockController = {
+        _id: 'ctrl-1',
+        keyId: { toString: () => 'key-1' },
+        userId: { toString: () => 'user-1' },
+      };
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockController),
+      } as never);
+    });
+
+    it('should pass serverType from Redis command to acpSessionSyncService', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      vi.mocked(acpSessionSyncService.listSessions).mockResolvedValue({ success: true, sessions: [] });
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      io.sockets.sockets.set('socket-1', { id: 'socket-1', emit: vi.fn() } as never);
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:list-sessions',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        serverType: 'claude_code',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionSyncService.listSessions).toHaveBeenCalledWith(
+          expect.anything(),
+          'claude_code',
+          '/home/user',
+        );
+      });
+    });
+
+    it('should default to opencode when serverType not provided', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      vi.mocked(acpSessionSyncService.listSessions).mockResolvedValue({ success: true, sessions: [] });
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      io.sockets.sockets.set('socket-1', { id: 'socket-1', emit: vi.fn() } as never);
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:list-sessions',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionSyncService.listSessions).toHaveBeenCalledWith(
+          expect.anything(),
+          'opencode',
+          '/home/user',
+        );
+      });
+    });
+  });
+
   describe('acp:cache:invalidate command', () => {
     it('should call acpCapabilityDetector.invalidateCache', async () => {
       const mockRedis = createMockRedis();

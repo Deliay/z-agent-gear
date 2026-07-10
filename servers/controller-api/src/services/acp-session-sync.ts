@@ -50,7 +50,7 @@ export class AcpSessionSyncService {
 
   private loadAccumulators = new Map<string, LoadAccumulator>();
 
-  async listSessions(controllerSocket: Socket, cwd: string): Promise<ListResult> {
+  async listSessions(controllerSocket: Socket, serverType: string, cwd: string): Promise<ListResult> {
     const requestId = `sync_list_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
     return new Promise((resolve) => {
@@ -69,11 +69,11 @@ export class AcpSessionSyncService {
         controllerSocket,
       });
 
-      controllerSocket.emit('acp:list-sessions', { requestId, cwd });
+      controllerSocket.emit('acp:list-sessions', { requestId, serverType, cwd });
     });
   }
 
-  async loadSession(controllerSocket: Socket, acpSessionId: string, cwd: string): Promise<LoadResult> {
+  async loadSession(controllerSocket: Socket, serverType: string, acpSessionId: string, cwd: string): Promise<LoadResult> {
     const requestId = `sync_load_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
     this.initLoadAccumulator(requestId, controllerSocket);
@@ -95,7 +95,7 @@ export class AcpSessionSyncService {
         controllerSocket,
       });
 
-      controllerSocket.emit('acp:load-session', { requestId, sessionId: acpSessionId, cwd });
+      controllerSocket.emit('acp:load-session', { requestId, serverType, sessionId: acpSessionId, cwd });
     });
   }
 

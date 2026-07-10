@@ -299,6 +299,48 @@ describe('Session GraphQL API', () => {
       expect(body.data.createSession.session.status).toBe('creating');
       expect(body.data.createSession.session.acpServerType).toBe('github_copilot');
     });
+
+    it('should create a new session with claude_code acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'claude_code', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('claude_code');
+    });
+
+    it('should create a new session with gemini_cli acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'gemini_cli', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('gemini_cli');
+    });
+
+    it('should create a new session with codex acpServerType', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const res = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'codex', workspaceId: wsId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.createSession.session.id).toBeDefined();
+      expect(body.data.createSession.session.status).toBe('creating');
+      expect(body.data.createSession.session.acpServerType).toBe('codex');
+    });
   });
 
   describe('sessions query', () => {
@@ -460,6 +502,10 @@ describe('Session GraphQL API', () => {
   });
 
   describe('resumeSession', () => {
+    beforeEach(async () => {
+      await clearWorkspaces(controllerId);
+    });
+
     it('should reject resumeSession without auth', async () => {
       const res = await gqlRequest(RESUME_SESSION, { id: '000000000000000000000000' });
       const body = await res.json();
@@ -647,6 +693,7 @@ describe('Session SSE API', () => {
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
     }
+    await clearWorkspaces(controllerId);
   });
 
   it('should return 401 for unauthenticated SSE request', async () => {

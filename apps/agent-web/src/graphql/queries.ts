@@ -214,8 +214,8 @@ export const GET_HOME_DIRECTORY = gql`
 `
 
 export const LIST_HISTORY_SESSIONS = gql`
-  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) {
-    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) {
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType) {
       sessionId
       title
       cwd
@@ -235,12 +235,13 @@ export const DETECT_GIT_REPO = gql`
   }
 `
 
-export const GET_PORT_FORWARDS = gql`
-  query GetPortForwards($controllerId: ID!) {
-    portForwards(controllerId: $controllerId) {
-      portForwards {
+export const GET_GATEWAYS = gql`
+  query GetGateways($controllerId: ID!) {
+    gateways(controllerId: $controllerId) {
+      gateways {
         id
         controllerId
+        name
         port
         status
         createdAt
@@ -292,6 +293,43 @@ export const GET_MCP_SERVERS = gql`
       lastHeartbeatAt
       createdAt
       updatedAt
+    }
+  }
+`
+
+export const GET_GITHUB_ACCOUNTS = gql`
+  query GetGithubAccounts {
+    githubAccounts {
+      id
+      githubUserId
+      githubLogin
+      githubAvatarUrl
+      createdAt
+      installations {
+        id
+        installationId
+        managementUrl
+        repos {
+          id
+          repoId
+          repoName
+          fullName
+          private
+          permissions {
+            read
+            write
+          }
+        }
+      }
+    }
+  }
+`
+
+export const GET_GITHUB_APP_URL = gql`
+  query GetGithubAppUrl {
+    githubAppUrl {
+      url
+      state
     }
   }
 `

@@ -7,6 +7,16 @@ function restoreUser(): User | null {
   try { return JSON.parse(raw) as User; } catch { return null; }
 }
 
+const COOKIE_OPTIONS = 'path=/; max-age=86400; SameSite=Lax';
+
+function setTokenCookie(value: string) {
+  document.cookie = `token=${value}; ${COOKIE_OPTIONS}`;
+}
+
+function clearTokenCookie() {
+  document.cookie = 'token=; path=/; max-age=0';
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(() => restoreUser());
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('auth_token'));
@@ -15,6 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = (newToken: string, newUser: User) => {
     localStorage.setItem('auth_token', newToken);
     localStorage.setItem('auth_user', JSON.stringify(newUser));
+    setTokenCookie(newToken);
     setToken(newToken);
     setUserState(newUser);
   };
@@ -22,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
+    clearTokenCookie();
     setToken(null);
     setUserState(null);
   };

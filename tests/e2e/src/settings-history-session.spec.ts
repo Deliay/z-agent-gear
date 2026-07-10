@@ -100,6 +100,63 @@ async function createWorkspace(page: import('@playwright/test').Page, controller
   return body.data.createWorkspace;
 }
 
+function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
+  return new Promise((resolve, reject) => {
+    const client = SocketIOClient(CONTROLLER_API_URL, {
+      transports: ['websocket'], reconnection: false, forceNew: true,
+    });
+    const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout registering controller')); }, 10000);
+
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [
+          { type: 'opencode', available: true, version: '1.0.0' },
+          { type: 'github_copilot', available: true, version: '1.0.0' },
+          { type: 'claude_code', available: true, version: '1.0.0' },
+          { type: 'gemini_cli', available: true, version: '1.0.0' },
+          { type: 'codex', available: true, version: '1.0.0' },
+        ],
+      });
+    });
+
+    client.on('acp:list-sessions', (data: { requestId: string; cwd: string }) => {
+      client.emit('acp:list-sessions:result', {
+        requestId: data.requestId,
+        success: true,
+        sessions: [
+          { sessionId: 'e2e_sess_1', title: 'E2E Test Session 1', cwd: data.cwd, updatedAt: new Date().toISOString() },
+          { sessionId: 'e2e_sess_2', title: null, cwd: data.cwd, updatedAt: null },
+        ],
+      });
+    });
+
+    client.on('acp:load-session', (data: { requestId: string; sessionId: string; cwd: string }) => {
+      client.emit('acp:load-session:result', {
+        requestId: data.requestId,
+        success: true,
+        sessionId: data.sessionId,
+        title: `History - ${data.sessionId}`,
+        messages: [
+          { direction: 'input', type: 'text', content: JSON.stringify({ text: 'Hello from history' }) },
+          { direction: 'output', type: 'text', content: JSON.stringify({ text: 'Hi back' }) },
+        ],
+      });
+    });
+
+    client.once('registered', (data: { controllerId: string }) => {
+      clearTimeout(timer);
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });
+    });
+    client.once('error', (data: { code: string; message: string }) => {
+      clearTimeout(timer);
+      client.disconnect();
+      reject(new Error(`Register failed: ${data.message}`));
+    });
+    client.emit('register', { key: rawKey, hostname: `e2e-hs-multi-acp-host-${Date.now()}`, version: '1.0.0' });
+  });
+}
+
 async function goToConfigPage(page: import('@playwright/test').Page) {
   await page.locator('#controller-section').getByRole('button', { name: '配置' }).first().click();
   await expect(page).toHaveURL(/settings\?controllerId=/);
@@ -167,6 +224,27 @@ test.describe('Settings History Session E2E', () => {
 
     await page.getByRole('button', { name: '完成' }).click();
     await expect(page.getByRole('heading', { name: /历史会话/ })).not.toBeVisible();
+
+    disconnect();
+  });
+
+  test('should show ACP Server selector in history session dialog when multiple servers available', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerControllerWithMultiAcp(rawKey);
+    await createWorkspace(page, controllerId, '/home/user/project', token);
+
+    await loginViaUI(page, username);
+    await page.goto('/settings');
+    await goToConfigPage(page);
+
+    await page.getByRole('button', { name: '历史会话' }).click();
+    await expect(page.getByRole('heading', { name: /历史会话/ })).toBeVisible({ timeout: 15000 });
+
+    await expect(page.getByText('ACP Server:')).toBeVisible({ timeout: 10000 });
+    const acpSelect = page.locator('select').first();
+    await expect(acpSelect).toBeVisible();
+    await expect(acpSelect).toHaveValue('opencode');
 
     disconnect();
   });

@@ -13,7 +13,7 @@ import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
-import { portForwardManager } from './port-forward.js';
+import { gatewayManager } from './gateway.js';
 
 const CONTROLLER_VERSION = '1.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
@@ -83,12 +83,14 @@ interface AcpResumePayload {
 
 interface AcpListSessionsPayload {
   requestId: string;
+  serverType: string;
   cwd: string;
 }
 
 interface AcpLoadSessionPayload {
   requestId: string;
   sessionId: string;
+  serverType: string;
   cwd: string;
 }
 
@@ -343,8 +345,10 @@ export function connectToServer(
   });
 
   socket.on('acp:list-sessions', async (data: AcpListSessionsPayload) => {
-    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} cwd=${data.cwd}`);
-    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} serverType=${serverType} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
       const result = await bridge.listSessions(data.cwd);
@@ -371,8 +375,10 @@ export function connectToServer(
   });
 
   socket.on('acp:load-session', async (data: AcpLoadSessionPayload) => {
-    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} cwd=${data.cwd}`);
-    const bridge = new AcpSyncBridge({ cwd: data.cwd });
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${serverType} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
       const { config, updates } = await bridge.loadSession(data.sessionId, data.cwd);
@@ -585,19 +591,19 @@ export function connectToServer(
     socket.emit('git:commit:result', { requestId: data.requestId, ...result });
   });
 
-  // Port Forward events
+  // Port Forward events (event names kept unchanged for backward compatibility)
   socket.on('port-forward:create', async (data: { tunnelId: string; port: number }) => {
-    console.log(`Port forward create requested: tunnelId=${data.tunnelId} port=${data.port}`);
-    await portForwardManager.createTunnel(data.tunnelId, data.port, socket);
+    console.log(`Gateway tunnel create requested: tunnelId=${data.tunnelId} port=${data.port}`);
+    await gatewayManager.createTunnel(data.tunnelId, data.port, socket);
   });
 
   socket.on('port-forward:data', (data: { tunnelId: string; data: string }) => {
-    portForwardManager.handleTunnelData(data.tunnelId, data.data);
+    gatewayManager.handleTunnelData(data.tunnelId, data.data);
   });
 
   socket.on('port-forward:close', (data: { tunnelId: string }) => {
-    console.log(`Port forward close: tunnelId=${data.tunnelId}`);
-    portForwardManager.closeTunnel(data.tunnelId);
+    console.log(`Gateway tunnel close: tunnelId=${data.tunnelId}`);
+    gatewayManager.closeTunnel(data.tunnelId);
   });
 
   socket.on('acp:permission:response', (data: {
@@ -614,7 +620,7 @@ export function connectToServer(
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
-    portForwardManager.closeAll();
+    gatewayManager.closeAll();
     permissionRequestBridge.clear();
   });
 

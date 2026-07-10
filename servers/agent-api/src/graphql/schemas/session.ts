@@ -12,6 +12,9 @@ export const sessionTypeDefs = `#graphql
   enum AcpServerType {
     opencode
     github_copilot
+    claude_code
+    gemini_cli
+    codex
   }
 
   enum AcpMessageDirection {
@@ -119,7 +122,7 @@ export const sessionTypeDefs = `#graphql
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
-    listHistorySessions(controllerId: ID!, workspaceId: ID!): [HistorySessionInfo!]!
+    listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   }
 
   extend type Mutation {
@@ -129,7 +132,7 @@ export const sessionTypeDefs = `#graphql
     sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
     cancelGeneration(sessionId: ID!): Boolean!
     resumeSession(id: ID!): ResumeSessionPayload!
-    importHistorySessions(controllerId: ID!, workspaceId: ID!, sessionIds: [String!]!): [ImportSessionResult!]!
+    importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!
     setSessionMode(sessionId: ID!, modeId: String!): Boolean!
     setSessionModel(sessionId: ID!, modelId: String!): Boolean!
     refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!

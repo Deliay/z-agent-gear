@@ -47,3 +47,20 @@ npm run start   # Start production server
 
 - [Common Rules](../../docs/engineering/common-rules.md)
 - [Backend Rules](../../docs/engineering/backend-rules.md)
+
+## Lessons Learned
+
+### 重构时断言所有关键副作用
+
+当重构将链式操作拆解（如 `findOneAndDelete` → `findOne` + `deleteOne`），测试必须断言**所有的关键副作用**，不能只断言新调用而忽略旧行为中隐含的步骤。
+
+具体检查清单：
+1. 新调用的方法是否被正确调用 ✅
+2. **旧调用中隐含的操作是否仍然存在** ❌（常见遗漏点）
+3. 删除操作（`deleteOne`/`deleteMany`/`findOneAndDelete`）是否仍被执行
+4. 不带返回值的方法（如 `deleteOne`）最容易被遗忘，必须显式 mock + 断言
+
+### Mock 配置要与实际代码同步
+
+- `vi.mock` 中列出的 mock 方法必须覆盖实际代码使用的所有方法，否则测试可能因"方法不存在"而静默失败。
+- 重构增删了数据访问方法后，同步更新 `vi.mock` 工厂中的 mock 列表。

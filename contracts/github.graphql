@@ -1,0 +1,45 @@
+type GitHubRepoPermissions {
+  read: Boolean!
+  write: Boolean!
+}
+
+type GitHubRepo {
+  id: ID!
+  repoId: Int!
+  repoName: String!
+  fullName: String!
+  private: Boolean!
+  permissions: GitHubRepoPermissions!
+}
+
+type GitHubInstallation {
+  id: ID!
+  installationId: Int!
+  managementUrl: String!
+  repos: [GitHubRepo!]
+  createdAt: String!
+}
+
+type GitHubAccount {
+  id: ID!
+  githubUserId: Int!
+  githubLogin: String!
+  githubAvatarUrl: String
+  installations: [GitHubInstallation!]
+  createdAt: String!
+}
+
+type GitHubAppUrl {
+  url: String!
+  state: String!
+}
+
+extend type Query {
+  githubAccounts: [GitHubAccount!]!
+  githubAppUrl: GitHubAppUrl!
+}
+
+extend type Mutation {
+  unbindGitHubAccount(accountId: ID!): Boolean!
+  refreshGitHubInstallations(accountId: ID!): GitHubAccount!
+}

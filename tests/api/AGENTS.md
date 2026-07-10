@@ -3,19 +3,19 @@
 ## Prerequisites
 
 - [Aspire CLI](https://aspire.dev) installed
-- Docker running (for MongoDB container)
 
-## 启动服务
+## 测试步骤
+
+> **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
+
+### 1. 启动服务
 
 ```bash
-# 启动 Aspire 编排（在项目根目录）
-aspire start
-
-# 等待后端服务就绪
-aspire wait agent-api
+# 启动 Aspire 编排并等待服务就绪（在项目根目录）
+aspire start && aspire wait agent-api
 ```
 
-## 获取 API 端点
+### 2. 获取 Endpoint
 
 ```bash
 # 查看 agent-api 的地址
@@ -24,14 +24,29 @@ aspire describe agent-api
 
 输出中查找 `agent-api` 的 URL，例如 `http://localhost:4000`。
 
-## 运行测试
+### 3. 填入环境变量并执行测试
 
 ```bash
-# 获取各服务 endpoint
-API_URL=$(aspire describe agent-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url+'/graphql')")
-CONTROLLER_URL=$(aspire describe controller-api --format Json 2>/dev/null | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).resources[0].urls.find(u=>u.name==='http').url)")
+# 查看各服务 endpoint
+aspire describe agent-api
+aspire describe controller-api
+```
 
-API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
+从输出中查找各服务的 `http://localhost:<port>` URL，例如:
+- `agent-api`: `http://localhost:10001`
+- `controller-api`: `http://localhost:33237`
+
+填入实际端口后执行：
+
+```bash
+API_URL=http://localhost:10001/graphql \
+CONTROLLER_API_URL=http://localhost:33237 \
+npm test
+```
+
+### 4. 重新运行测试
+
+如果需要重新运行测试，必须从**步骤 1** 开始，重新运行 Aspire 实例。
 
 ## 测试脚本
 
@@ -42,7 +57,6 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
-```
 
 ## 环境变量
 
@@ -157,6 +171,9 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | createSession - 无 auth | 应返回「Not authenticated」 |
 | createSession - 正常创建（opencode） | 应返回 session（status=creating, acpServerType=opencode） |
 | createSession - 正常创建（github_copilot） | 应返回 session（status=creating, acpServerType=github_copilot） |
+| createSession - 正常创建（claude_code） | 应返回 session（status=creating, acpServerType=claude_code） |
+| createSession - 正常创建（gemini_cli） | 应返回 session（status=creating, acpServerType=gemini_cli） |
+| createSession - 正常创建（codex） | 应返回 session（status=creating, acpServerType=codex） |
 | createSession - 无效 controllerId | 应返回「Controller not found」 |
 | sessions query - 已认证 | 应返回 sessions 列表 |
 | session query - 已存在的 session | 应返回 session 详情 |
@@ -191,9 +208,12 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | 测试 | 描述 |
 |------|------|
 | acp:check - opencode | 应请求检测并返回 opencode servers 列表 |
-| acp:check - 多 Server | 应请求检测并返回 opencode + github_copilot 两个 Server |
+| acp:check - 全部 5 种 Server | 应请求检测并返回全部 5 种 Server（opencode + github_copilot + claude_code + gemini_cli + codex） |
 | acp:start - opencode | 应发送 acp:start 请求（serverType=opencode），controller 响应 success |
 | acp:start - github_copilot | 应发送 acp:start 请求（serverType=github_copilot），controller 响应 success |
+| acp:start - claude_code | 应发送 acp:start 请求（serverType=claude_code），controller 响应 success |
+| acp:start - gemini_cli | 应发送 acp:start 请求（serverType=gemini_cli），controller 响应 success |
+| acp:start - codex | 应发送 acp:start 请求（serverType=codex），controller 响应 success |
 | acp:start - failure | 应发送启动请求，controller 响应 failure，session status=ended |
 | acp:message | 应转发 controller 输出消息并持久化到 DB |
 | acp:stop | 应发送停止请求，controller 响应 stopped，session status=ended |
@@ -217,11 +237,13 @@ API_URL=$API_URL CONTROLLER_API_URL=$CONTROLLER_URL npm test
 | listHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
 | listHistorySessions - 不存在的 workspace | 应返回「Workspace not found」 |
 | listHistorySessions - 正常返回 | 通过 fake controller 响应返回 history session 列表 |
+| listHistorySessions - 带 acpServerType 参数 | 使用 acpServerType=claude_code 调用 listHistorySessions，验证成功 |
 | importHistorySessions - 无 token | 应返回「Not authenticated」 |
 | importHistorySessions - 不存在的 controller | 应返回「Controller not found」 |
 | importHistorySessions - 导入单个 session | 导入 1 个 session，验证 messageCount=2 |
 | importHistorySessions - 导入多个 session | 导入 2 个 session，验证都存在并 status=ended |
 | importHistorySessions - 去重过滤 | 先导入 acp_sync_sess_1，list 应返回 acp_sync_sess_2 但排除 s1 |
+| importHistorySessions - 带 acpServerType 参数 | 使用 acpServerType=gemini_cli 调用 importHistorySessions，验证导入成功 |
 
 ### Worktree Session API (`agent-api/session.test.ts`)
 

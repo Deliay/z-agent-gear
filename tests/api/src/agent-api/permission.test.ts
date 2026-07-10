@@ -261,7 +261,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session first
+      // Register acp:start listener before creating session to avoid race
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -270,8 +271,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,
@@ -325,7 +324,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session
+      // Register acp:start listener before creating session
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -334,8 +334,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,
@@ -389,7 +387,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session
+      // Register acp:start listener before creating session
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -398,8 +397,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,
@@ -441,7 +438,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session
+      // Register acp:start listener before creating session
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -450,8 +448,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,
@@ -507,7 +503,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session
+      // Register acp:start listener before creating session
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -516,8 +513,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,
@@ -583,7 +578,8 @@ describe('ACP Permission Reminder API', () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
-      // Create session
+      // Register acp:start listener before creating session
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const sessionRes = await gqlRequest(
         CREATE_SESSION,
         { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
@@ -592,8 +588,6 @@ describe('ACP Permission Reminder API', () => {
       const sessionBody = await sessionRes.json();
       const sessionId = sessionBody.data.createSession.session.id;
 
-      // Wait for acp:start and respond
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
       const startData = await startEvent;
       ctrlClient.emit('acp:start:result', {
         requestId: startData.requestId,

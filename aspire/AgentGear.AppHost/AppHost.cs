@@ -32,19 +32,14 @@ var redis = builder.AddRedis("redis")
 
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
-
-var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
-    .WithEnvironment("NODE_OPTIONS", "--import tsx")
-    .WithEnvironment("CORS_ORIGIN", corsOrigin)
-    .WithHttpEndpoint(env: "PORT")
-    .WithReference(mongodb)
-    .WithReference(redis)
-    .WithExternalHttpEndpoints()
-    .PublishAsDockerComposeService((resource, service) =>
-    {
-        service.Name = "agent-api";
-        service.Restart = "unless-stopped";
-    });
+var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
+var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
+var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
+var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
+var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
+var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
+var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -60,10 +55,32 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     });
 
 var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
-    .WithReference(agentApi)
-    .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
     .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
-    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
+    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret);
+
+var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
+    .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("CORS_ORIGIN", corsOrigin)
+    .WithEnvironment("JWT_SECRET", jwtSecret)
+    .WithEnvironment("GITHUB_APP_ID", githubAppId)
+    .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
+    .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
+    .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
+    .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
+    .WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+    .WithHttpEndpoint(port: 10001, env: "PORT")
+    .WithReference(mongodb)
+    .WithReference(redis)
+    .WithExternalHttpEndpoints()
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "agent-api";
+        service.Restart = "unless-stopped";
+    });
+
+agentWeb
+    .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
+    .WithReference(agentApi)
     .PublishAsDockerComposeService((resource, service) =>
     {
         service.Name = "agent-web";

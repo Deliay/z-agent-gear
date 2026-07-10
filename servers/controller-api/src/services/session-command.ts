@@ -88,9 +88,9 @@ export class SessionCommandService {
           } else if (command.type === 'acp:cache:invalidate' && command.controllerId) {
             acpCapabilityDetector.invalidateCache(command.controllerId);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
-            await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd);
+            await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd, command.serverType ?? 'opencode');
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
-            await this.handleAcpLoadSession(command.requestId, command.controllerId, command.sessionId, command.cwd);
+            await this.handleAcpLoadSession(command.requestId, command.controllerId, command.sessionId, command.cwd, command.serverType ?? 'opencode');
           } else if (command.type === 'fs:mkdir' && command.requestId && command.controllerId && command.parentPath && command.folderName) {
             await fsMkdirService.handleMkdir(command.requestId, command.controllerId, command.parentPath as string, command.folderName as string);
           } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
@@ -298,7 +298,7 @@ export class SessionCommandService {
     await gitBrowserService.init(requestId, controllerId, path);
   }
 
-  private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string): Promise<void> {
+  private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string, serverType: string = 'opencode'): Promise<void> {
     if (!this.io) return;
 
     const controller = await Controller.findById(controllerId).lean();
@@ -320,11 +320,11 @@ export class SessionCommandService {
       return;
     }
 
-    const result = await acpSessionSyncService.listSessions(socket, cwd);
+    const result = await acpSessionSyncService.listSessions(socket, serverType, cwd);
     await acpSessionSyncService.cacheListResult(requestId, result);
   }
 
-  private async handleAcpLoadSession(requestId: string, controllerId: string, sessionId: string, cwd: string): Promise<void> {
+  private async handleAcpLoadSession(requestId: string, controllerId: string, sessionId: string, cwd: string, serverType: string = 'opencode'): Promise<void> {
     if (!this.io) return;
 
     const controller = await Controller.findById(controllerId).lean();
@@ -346,7 +346,7 @@ export class SessionCommandService {
       return;
     }
 
-    const result = await acpSessionSyncService.loadSession(socket, sessionId, cwd);
+    const result = await acpSessionSyncService.loadSession(socket, serverType, sessionId, cwd);
     await acpSessionSyncService.cacheLoadResult(requestId, result);
   }
 }

@@ -237,8 +237,8 @@ export const SET_SESSION_MODEL = gql`
 `;
 
 export const IMPORT_HISTORY_SESSIONS = gql`
-  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $sessionIds: [String!]!) {
-    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, sessionIds: $sessionIds) {
+  mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode, $sessionIds: [String!]!) {
+    importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {
       sessionId
       acpSessionId
       title
@@ -293,11 +293,12 @@ export const CREATE_FOLDER = gql`
   }
 `
 
-export const CREATE_PORT_FORWARD = gql`
-  mutation CreatePortForward($controllerId: ID!, $port: Int!) {
-    createPortForward(controllerId: $controllerId, port: $port) {
+export const CREATE_GATEWAY = gql`
+  mutation CreateGateway($controllerId: ID!, $name: String!, $port: Int!) {
+    createGateway(controllerId: $controllerId, name: $name, port: $port) {
       id
       controllerId
+      name
       port
       status
       createdAt
@@ -305,9 +306,9 @@ export const CREATE_PORT_FORWARD = gql`
   }
 `
 
-export const DELETE_PORT_FORWARD = gql`
-  mutation DeletePortForward($controllerId: ID!, $port: Int!) {
-    deletePortForward(controllerId: $controllerId, port: $port)
+export const DELETE_GATEWAY = gql`
+  mutation DeleteGateway($controllerId: ID!, $name: String!) {
+    deleteGateway(controllerId: $controllerId, name: $name)
   }
 `
 
@@ -332,6 +333,32 @@ export const MARK_ALL_TODO_READ = gql`
 export const UPDATE_PERMISSION_TIMEOUT = gql`
   mutation UpdatePermissionTimeout($sessionId: ID, $timeoutAction: PermissionTimeoutAction!) {
     updatePermissionTimeout(sessionId: $sessionId, timeoutAction: $timeoutAction)
+  }
+`
+
+export const UNBIND_GITHUB_ACCOUNT = gql`
+  mutation UnbindGitHubAccount($accountId: ID!) {
+    unbindGitHubAccount(accountId: $accountId)
+  }
+`
+
+export const REFRESH_GITHUB_INSTALLATIONS = gql`
+  mutation RefreshGitHubInstallations($accountId: ID!) {
+    refreshGitHubInstallations(accountId: $accountId) {
+      id
+      installations {
+        id
+        repos {
+          id
+          repoName
+          fullName
+          permissions {
+            read
+            write
+          }
+        }
+      }
+    }
   }
 `
 

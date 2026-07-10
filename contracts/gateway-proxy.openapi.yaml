@@ -1,0 +1,94 @@
+openapi: 3.1.0
+info:
+  title: Gateway Proxy API
+  description: |
+    统一网关代理接口，将外部请求代理到 agent-controller 所在机器的本地服务。需要身份验证。
+
+    认证方式（按优先级）：
+    1. `Authorization: Bearer <JWT>` header — API 客户端（curl/fetch）
+    2. `Cookie: token=<JWT>` — 浏览器直接访问
+  version: 1.0.0
+
+servers:
+  - url: /api
+    description: agent-api
+
+paths:
+  /gateway/{controllerId}/{name}/{path}:
+    get:
+      operationId: proxyGateway
+      summary: 代理请求到本地服务
+      description: |
+        按服务名称查找本地服务端口，将外部 HTTP 请求代理到 agent-controller 所在机器上的本地服务。
+
+        请求链路：外部用户 → agent-api(按名称查端口) → Redis Pub/Sub → controller-api → Socket.IO → agent-controller → localhost:{port}
+
+        要求：
+        - 需要身份验证（支持 Authorization header 或 token cookie）
+        - 对应的网关记录必须存在且状态为 active
+      tags:
+        - Gateway Proxy
+      parameters:
+        - name: controllerId
+          in: path
+          required: true
+          description: Controller ID
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          description: 服务名称
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          description: 代理路径（本地服务的子路径）
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 本地服务的响应（透传状态码、Headers、Body）
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 网关不存在或未激活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 代理失败（本地服务不可达或响应异常）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: token
+      description: JWT token cookie，由前端登录后自动写入
+
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string

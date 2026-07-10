@@ -44,12 +44,24 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
         servers: [
           { type: 'opencode', available: true, version: '1.0.0' },
           { type: 'github_copilot', available: true, version: '1.0.0' },
+          { type: 'claude_code', available: true, version: '1.0.0' },
+          { type: 'gemini_cli', available: true, version: '1.0.0' },
+          { type: 'codex', available: true, version: '1.0.0' },
         ],
       });
     });
 
     client.on('fs:mkdir', (data: { requestId: string }) => {
       client.emit('fs:mkdir:result', { requestId: data.requestId, success: true });
+    });
+
+    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      client.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_acp_${Date.now()}`,
+      });
     });
 
     client.once('registered', (data: { controllerId: string }) => {
@@ -104,10 +116,13 @@ test.describe('Session ACP Server Type', () => {
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 10000 });
 
-    // Click to open dropdown and verify both options
+    // Click to open dropdown and verify all options
     await acpTrigger.click();
     await expect(page.getByRole('option', { name: /opencode/ })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole('option', { name: /github_copilot/ })).toBeVisible();
+    await expect(page.getByRole('option', { name: /claude_code/ })).toBeVisible();
+    await expect(page.getByRole('option', { name: /gemini_cli/ })).toBeVisible();
+    await expect(page.getByRole('option', { name: /codex/ })).toBeVisible();
 
     disconnect();
   });
@@ -173,6 +188,111 @@ test.describe('Session ACP Server Type', () => {
 
     // Verify OpenCode badge is visible
     await expect(page.getByText('OpenCode')).toBeVisible({ timeout: 10000 });
+
+    disconnect();
+  });
+
+  test('should create session with claude_code and show Claude Code badge', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerControllerWithMultiAcp(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-acp-cc-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'New Session' }).click();
+    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+
+    await page.locator('#controller').selectOption({ index: 1 });
+
+    // Wait for ACP Server loading to complete
+    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    const acpTrigger = page.locator('[role="combobox"]').first();
+    await expect(acpTrigger).toBeVisible({ timeout: 5000 });
+    await acpTrigger.click();
+    await page.getByRole('option', { name: /claude_code/ }).click();
+    await expect(acpTrigger).toContainText('claude_code', { timeout: 5000 });
+
+    // Create Session should now be enabled
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Create Session' }).click();
+
+    // Should navigate to session detail
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    // Verify Claude Code badge is visible
+    await expect(page.getByText('Claude Code')).toBeVisible({ timeout: 10000 });
+
+    disconnect();
+  });
+
+  test('should create session with gemini_cli and show Gemini CLI badge', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerControllerWithMultiAcp(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-acp-gc-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'New Session' }).click();
+    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+
+    await page.locator('#controller').selectOption({ index: 1 });
+
+    // Wait for ACP Server loading to complete
+    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    const acpTrigger = page.locator('[role="combobox"]').first();
+    await expect(acpTrigger).toBeVisible({ timeout: 5000 });
+    await acpTrigger.click();
+    await page.getByRole('option', { name: /gemini_cli/ }).click();
+    await expect(acpTrigger).toContainText('gemini_cli', { timeout: 5000 });
+
+    // Create Session should now be enabled
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Create Session' }).click();
+
+    // Should navigate to session detail
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    // Verify Gemini CLI badge is visible
+    await expect(page.getByText('Gemini CLI')).toBeVisible({ timeout: 10000 });
+
+    disconnect();
+  });
+
+  test('should create session with codex and show Codex badge', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerControllerWithMultiAcp(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-acp-cx-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'New Session' }).click();
+    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+
+    await page.locator('#controller').selectOption({ index: 1 });
+
+    // Wait for ACP Server loading to complete
+    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    const acpTrigger = page.locator('[role="combobox"]').first();
+    await expect(acpTrigger).toBeVisible({ timeout: 5000 });
+    await acpTrigger.click();
+    await page.getByRole('option', { name: /codex/ }).click();
+    await expect(acpTrigger).toContainText('codex', { timeout: 5000 });
+
+    // Create Session should now be enabled
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Create Session' }).click();
+
+    // Should navigate to session detail
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    // Verify Codex badge is visible
+    await expect(page.getByText('Codex')).toBeVisible({ timeout: 10000 });
 
     disconnect();
   });

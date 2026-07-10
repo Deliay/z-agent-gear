@@ -5,9 +5,10 @@ import { modelResolvers } from './model.js';
 import { controllerResolvers } from './controller.js';
 import { controllerWorkspaceResolvers } from './controller-workspace.js';
 import { sessionResolvers } from './session.js';
-import { portForwardResolvers } from './port-forward.js';
+import { gatewayResolvers } from './gateway.js';
 import { todoResolvers } from './todo.js';
 import { mcpServerResolvers } from './mcp-server.js';
+import { githubResolvers } from './github.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -18,9 +19,10 @@ export const resolvers = {
     ...controllerResolvers.Query,
     ...controllerWorkspaceResolvers.Query,
     ...sessionResolvers.Query,
-    ...portForwardResolvers.Query,
+    ...gatewayResolvers.Query,
     ...todoResolvers.Query,
     ...mcpServerResolvers.Query,
+    ...githubResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -29,8 +31,9 @@ export const resolvers = {
     ...controllerResolvers.Mutation,
     ...controllerWorkspaceResolvers.Mutation,
     ...sessionResolvers.Mutation,
-    ...portForwardResolvers.Mutation,
+    ...gatewayResolvers.Mutation,
     ...todoResolvers.Mutation,
+    ...githubResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

@@ -4,9 +4,10 @@ import { modelTypeDefs } from './model.js';
 import { controllerTypeDefs } from './controller.js';
 import { controllerWorkspaceTypeDefs } from './controller-workspace.js';
 import { sessionTypeDefs } from './session.js';
-import { portForwardTypeDefs } from './port-forward.js';
+import { gatewayTypeDefs } from './gateway.js';
 import { todoTypeDefs } from './todo.js';
 import { mcpServerTypeDefs } from './mcp-server.js';
+import { githubTypeDefs } from './github.js';
 
 const baseTypeDefs = `#graphql
   type Query
@@ -14,4 +15,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, portForwardTypeDefs, todoTypeDefs, mcpServerTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs];

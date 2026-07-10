@@ -3,20 +3,19 @@
 ## Prerequisites
 
 - [Aspire CLI](https://aspire.dev) installed
-- Docker running (for MongoDB container)
 
-## 启动服务
+## 测试步骤
+
+> **注意**: 只允许使用 Aspire 编排服务，禁止直接使用 Docker 命令。
+
+### 1. 启动服务
 
 ```bash
-# 启动 Aspire 编排（在项目根目录）
-aspire start
-
-# 等待前后端服务就绪
-aspire wait agent-api
-aspire wait agent-web
+# 启动 Aspire 编排并等待服务就绪（在项目根目录）
+aspire start && aspire wait agent-api && aspire wait agent-web
 ```
 
-## 获取前端地址
+### 2. 获取 Endpoint
 
 ```bash
 # 查看 agent-web 的地址
@@ -25,11 +24,32 @@ aspire describe agent-web
 
 输出中查找 `agent-web` 的 `http` URL，例如 `http://localhost:35273`。
 
-## 运行测试
+### 3. 填入环境变量并执行测试
 
 ```bash
-BASE_URL=http://localhost:35273 npx playwright test
+# 查看各服务 endpoint
+aspire describe agent-web
+aspire describe agent-api
+aspire describe controller-api
 ```
+
+从输出中查找各服务的 `http://localhost:<port>` URL，例如:
+- `agent-web`: `http://localhost:35615`
+- `agent-api`: `http://localhost:10001`
+- `controller-api`: `http://localhost:33237`
+
+填入实际端口后执行：
+
+```bash
+BASE_URL=http://localhost:35615 \
+API_URL=http://localhost:10001/graphql \
+CONTROLLER_API_URL=http://localhost:33237 \
+npx playwright test
+```
+
+### 4. 重新运行测试
+
+如果需要重新运行测试，必须从**步骤 1** 开始，重新运行 Aspire 实例。
 
 ## 环境变量
 
@@ -143,6 +163,7 @@ BASE_URL=http://localhost:35273 npx playwright test
 | 列表展示和导入按钮 | 点击历史会话 → 显示 fake controller 返回的 2 个 session |
 | 全选并导入成功 | 全选 → 导入 → 显示成功导入 2 个会话 |
 | 空状态 | 无可用 session 时显示「没有未导入的历史会话」 |
+| 历史会话 ACP Server 选择器 | 多 Server 可用时历史会话对话框显示 ACP Server 下拉框，默认 opencode |
 
 ### Session Mode Switch E2E (`session-mode-switch.spec.ts`)
 
@@ -158,9 +179,12 @@ BASE_URL=http://localhost:35273 npx playwright test
 
 | 测试 | 描述 |
 |------|------|
-| ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含 opencode + github_copilot |
+| ACP Server 选择器 | 选择 controller 后出现 ACP Server 下拉框，包含全部 5 种类型 |
 | GitHub Copilot badge | 选择 github_copilot 创建 session → 详情页显示「GitHub Copilot」徽章 |
 | OpenCode badge | 默认 opencode 创建 session → 详情页显示「OpenCode」徽章 |
+| Claude Code badge | 选择 claude_code 创建 session → 详情页显示「Claude Code」徽章 |
+| Gemini CLI badge | 选择 gemini_cli 创建 session → 详情页显示「Gemini CLI」徽章 |
+| Codex badge | 选择 codex 创建 session → 详情页显示「Codex」徽章 |
 
 ### Port Forward E2E (`port-forward.spec.ts`)
 

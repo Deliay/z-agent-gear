@@ -13,6 +13,8 @@ interface UseSessionStreamOptions {
   onError?: (error: Event) => void;
 }
 
+const MAX_CONSECUTIVE_ERRORS = 3;
+
 export function useSessionStream({
   sessionId,
   onMessage,
@@ -23,9 +25,12 @@ export function useSessionStream({
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Event | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const errorCountRef = useRef(0);
 
   useEffect(() => {
     if (!sessionId) return;
+
+    errorCountRef.current = 0;
 
     const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
     const token = localStorage.getItem('auth_token') || '';
@@ -35,6 +40,7 @@ export function useSessionStream({
     eventSource.onopen = () => {
       setIsConnected(true);
       setError(null);
+      errorCountRef.current = 0;
     };
 
     eventSource.onmessage = (event) => {
@@ -64,6 +70,14 @@ export function useSessionStream({
 
     eventSource.onerror = (event) => {
       setIsConnected(false);
+      errorCountRef.current += 1;
+
+      if (errorCountRef.current >= MAX_CONSECUTIVE_ERRORS && !localStorage.getItem('auth_token')) {
+        eventSource.close();
+        window.location.href = '/login';
+        return;
+      }
+
       setError(event);
       onError?.(event);
     };

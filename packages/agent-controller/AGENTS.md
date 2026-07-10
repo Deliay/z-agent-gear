@@ -75,3 +75,26 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
+
+## Lessons Learned
+
+### 跨服务协议必须有双向集成测试
+
+本次 Proxy timeout bug 的根因是 agent-controller 没有理解 controller-api 发送的 `http-request` JSON 协议，直接把 JSON 字符串当原始 TCP 数据写入了目标服务。测试未覆盖的原因：
+
+| 测试层 | 为什么没发现问题 |
+|--------|----------------|
+| `gateway.test.ts`（agent-controller 单元测试） | `handleTunnelData` 只测了纯 TCP 数据（`Buffer.from('test payload')`），从未构造 `http-request` JSON 作为输入 |
+| `gateway-relay.test.ts`（controller-api 单元测试） | Mock 了 Socket.IO 层，构造的 `http-response` 数据格式与 agent-controller 实际发送的格式不一致，但测试双方各自通过 |
+| `gateway-proxy.test.ts`（agent-api 单元测试） | Mock 了整个 Redis Pub/Sub 层，无法检测 controller-api ↔ agent-controller 之间的协议不匹配 |
+| E2E 测试 | Fake controller 的协议实现与真实 agent-controller 不同，掩盖了问题 |
+
+**教训**：
+1. **协议变更时必须同时更新两端的测试** — 当 controller-api 引入 `http-request`/`http-response` 协议时，agent-controller 侧没有添加对应的输入/输出测试用例
+2. **Mock 隔离测试无法验证跨服务协议匹配** — 即使两端各自单元测试通过，真实交互仍可能失败。关键协议边界需要集成测试
+3. **伪造实现 vs 真实实现的差异不可忽略** — E2E 的 fake controller 不应与真实 agent-controller 在协议处理上存在差异
+
+**改进措施**：
+- 引入新协议或修改现有协议时，先编写跨服务的集成测试（启动真实 agent-controller 或 mock 端精确模拟协议格式）
+- handleTunnelData 的测试必须覆盖所有入站数据类型（纯 TCP 数据 + JSON 协议数据）
+- handleTunnelData 的出站（localSocket.on('data')）测试必须验证响应格式与 controller-api 端期望的格式一致

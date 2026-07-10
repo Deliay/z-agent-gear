@@ -109,10 +109,30 @@ flowchart LR
 
 ## 相关文档
 
-- [[draft/20260521-acp-session-sync-PRD.md]] — 工作目录历史会话同步（草稿）
+### 已发布文档（`released/`）
+
 - [[released/20260517-agent-controller-v1.md]] — Agent 控制器管理 v1
-- [[released/20260518-agent-session-interaction.md]] — Agent 拉起与交互
 - [[released/20260517-llm-provider-settings.md]] — LLM 供应商与模型管理
+- [[released/20260517-user-auth-and-settings.md]] — 用户认证与设置页
+- [[released/20260518-agent-session-interaction.md]] — Agent 拉起与交互
 - [[released/20260519-local-controller-workspace-management.md]] — 本地控制器工作区管理
 - [[released/20260520-session-reopen-prd.md]] — Session Re-open
-- [[released/20260517-user-auth-and-settings.md]] — 用户认证与设置页
+- [[released/20260521-acp-session-sync-history.md]] — 工作目录历史会话同步
+- [[released/20260522-available-models-and-mode-switch.md]] — 可用模型与模式切换
+- [[released/20260522-local-controller-config-page.md]] — 本地控制器配置页
+- [[released/20260522-model-switch-support.md]] — 模型切换支持
+- [[released/20260523-git-worktree-support-prd.md]] — Git Worktree 支持
+- [[released/20260523-workspace-git-support-prd.md]] — 工作区 Git 支持
+- [[released/20260524-session-message-history-optimization.md]] — 会话消息历史优化
+- [[released/20260526-multi-acp-server-support.md]] — 多 ACP Server 支持
+- [[released/20260526-ui-optimization.md]] — UI 优化一期
+- [[released/20260526-ui-optimization-phase2.md]] — UI 优化二期
+- [[released/20260527-mobile-layout.md]] — 移动端布局
+- [[released/20260527-port-forwarding-for-local-agent-controller.md]] — 本地 Agent 控制器端口转发
+- [[released/20260527-unified-agent-status.md]] — 统一 Agent 状态
+- [[released/20260528-acp-permission-reminder.md]] — ACP 授权提醒
+- [[released/20260528-frontend-ui-optimization.md]] — 前端界面优化三期
+- [[released/20260529-command-mode.md]] — 命令模式
+- [[released/20260529-dark-mode.md]] — 黑暗模式
+- [[released/20260530-mcp-proxy-config.md]] — MCP 代理服务配置
+- [[released/20260705-acp-server-extend.md]] — ACP Server 支持扩展

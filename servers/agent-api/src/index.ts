@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { createYoga } from 'graphql-yoga';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import mongoose from 'mongoose';
@@ -10,15 +11,18 @@ import { authenticateUser } from './middleware/auth.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
-import { portForwardProxyRouter } from './routes/port-forward-proxy.js';
+import { gatewayProxyRouter } from './routes/gateway-proxy.js';
+import { githubRouter } from './routes/github.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
+import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 
 const app = express();
 
 app.use(cors({ origin: config.corsOrigin }));
 app.use(compressionMiddleware());
+app.use(cookieParser());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
@@ -34,7 +38,8 @@ const yoga = createYoga({
 app.use('/graphql', yoga);
 
 app.use('/api', sessionStreamRouter);
-app.use('/api', portForwardProxyRouter);
+app.use('/api', gatewayProxyRouter);
+app.use('/api', githubRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -49,7 +54,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001]);
+    await runMigrations([migration001, migration002]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }

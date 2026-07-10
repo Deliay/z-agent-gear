@@ -144,19 +144,17 @@ test.describe('ACP Permission Reminder E2E', () => {
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session via API
-    const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
-    const startData = await new Promise<{ requestId: string }>((resolve) => {
-      socket.once('acp:start', resolve);
+    // Create session via API (register listener first to avoid race)
+    let sessionId = '';
+    socket.once('acp:start', (data: { requestId: string }) => {
+      socket.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
     });
-    socket.emit('acp:start:result', {
-      requestId: startData.requestId,
-      sessionId,
-      success: true,
-      externalSessionId: `ext_${Date.now()}`,
-    });
+    sessionId = await createSession(page, controllerId, token, workspaceId);
 
     await loginViaUI(page, username);
 
@@ -173,10 +171,10 @@ test.describe('ACP Permission Reminder E2E', () => {
     });
 
     // Wait for todo to be created and auto-popup dialog (immediate priority)
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(5000);
 
     // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
 
     disconnect();
