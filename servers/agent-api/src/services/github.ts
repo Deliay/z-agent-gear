@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 
-interface GitHubRepoInfo {
+export interface GitHubRepoInfo {
   repoId: number;
   repoName: string;
   fullName: string;
@@ -12,7 +12,7 @@ interface GitHubRepoInfo {
   permissions: { read: boolean; write: boolean };
 }
 
-interface GitHubInstallationInfo {
+export interface GitHubInstallationInfo {
   id: string;
   installationId: number;
   managementUrl: string;
@@ -20,7 +20,7 @@ interface GitHubInstallationInfo {
   repos: GitHubRepoInfo[];
 }
 
-interface GitHubAccountInfo {
+export interface GitHubAccountInfo {
   id: string;
   githubUserId: number;
   githubLogin: string;
@@ -112,7 +112,7 @@ export class GitHubService {
       id: account._id.toString(),
       githubUserId: account.githubUserId,
       githubLogin: account.githubLogin,
-      githubAvatarUrl: account.githubAvatarUrl,
+      githubAvatarUrl: account.githubAvatarUrl ?? undefined,
       createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
       installations: installations
         .filter(i => i.accountId.toString() === account._id.toString())
@@ -129,7 +129,7 @@ export class GitHubService {
             repoName: r.repoName,
             fullName: r.fullName,
             private: r.private,
-            permissions: { read: r.permissions.read, write: r.permissions.write },
+            permissions: { read: r.permissions?.read ?? false, write: r.permissions?.write ?? false },
           })),
         })),
     }));

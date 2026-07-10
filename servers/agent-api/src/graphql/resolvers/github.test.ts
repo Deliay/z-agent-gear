@@ -57,7 +57,14 @@ describe('GitHub Resolvers', () => {
   describe('Query.githubAccounts', () => {
     it('should return accounts for authenticated user', async () => {
       const mockAccounts = [
-        { id: 'acc1', githubUserId: 12345, githubLogin: 'testuser', installations: [] },
+        {
+          id: 'acc1',
+          githubUserId: 12345,
+          githubLogin: 'testuser',
+          githubAvatarUrl: undefined,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          installations: [],
+        },
       ];
       vi.mocked(githubService.getAccounts).mockResolvedValue(mockAccounts);
 
@@ -95,7 +102,14 @@ describe('GitHub Resolvers', () => {
 
   describe('Mutation.refreshGitHubInstallations', () => {
     it('should refresh installations for authenticated user', async () => {
-      const mockAccount = { id: 'acc1', installations: [] };
+      const mockAccount = {
+        id: 'acc1',
+        githubUserId: 12345,
+        githubLogin: 'testuser',
+        githubAvatarUrl: undefined,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        installations: [],
+      };
       vi.mocked(githubService.refreshInstallations).mockResolvedValue(mockAccount);
 
       const result = await githubResolvers.Mutation.refreshGitHubInstallations(
