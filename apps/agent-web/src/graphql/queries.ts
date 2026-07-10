@@ -305,10 +305,11 @@ export const GET_GITHUB_ACCOUNTS = gql`
       githubLogin
       githubAvatarUrl
       createdAt
-      installations {
-        id
-        installationId
-        repos {
+        installations {
+          id
+          installationId
+          managementUrl
+          repos {
           id
           repoId
           repoName

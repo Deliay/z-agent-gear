@@ -22,7 +22,7 @@
 
 ### 1.3 范围
 
-- 包含：GitHub App OAuth 绑定流程、回调 endpoint、设置页 UI、数据模型
+- 包含：GitHub App OAuth 绑定流程、回调 endpoint、设置页 UI、数据模型、更新绑定（仓库权限管理）
 - 不包含：基于绑定的后续功能（PR 管理、CI 触发等）、GitHub Enterprise 支持
 
 ## 2. 技术架构
@@ -128,6 +128,7 @@ type GitHubAccount {
 type GitHubInstallation {
   id: ID!
   installationId: Int!
+  managementUrl: String!
   repos: [GitHubRepo!]
   createdAt: String!
 }
@@ -222,6 +223,8 @@ interface IGitHubService {
 | _id | ObjectId | 主键 |
 | accountId | ObjectId, ref: GitHubAccount, required | 关联的 GitHub 帐号 |
 | installationId | Number, required | GitHub App Installation ID |
+| accountLogin | String, required | 安装所属的 GitHub 登录名（用于构建管理 URL） |
+| accountType | String, required | 安装所属的账号类型: User / Organization |
 | repos | Array | 授权仓库列表 |
 | repos[].repoId | Number | GitHub 仓库 ID |
 | repos[].repoName | String | 仓库名称 |
@@ -285,6 +288,23 @@ sequenceDiagram
     U->>F: 看到设置页成功提示
     F->>B: query githubAccounts
     B-->>F: 已绑定列表
+```
+
+#### 更新绑定流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant F as 前端
+    participant GH as GitHub
+
+    U->>F: 点击 "更新绑定"
+    Note over F: 从 installation.managementUrl 获取 URL
+    F-->>U: 在新标签页打开 GitHub 安装配置页
+    U->>GH: 添加/移除授权仓库
+    GH-->>U: 保存成功
+    U->>F: 返回设置页，点击 "刷新仓库"
+    Note over F: 调用 refreshGitHubInstallations mutation 同步最新仓库列表
 ```
 
 #### 解绑流程
@@ -367,6 +387,17 @@ sequenceDiagram
   ├── GithubRepoList.tsx             # 仓库列表
   └── UnbindConfirmDialog.tsx        # 解绑确认弹窗
   ```
+
+#### 实现点 6: 更新绑定按钮
+
+- **描述**: 绑定后用户可快速回到 GitHub 安装配置页管理仓库授权
+- **技术细节**:
+  - 后端在 `handleSetup` 中存储 `accountLogin` 和 `accountType`（User/Organization）
+  - 后端 `getAccounts` 计算 `managementUrl`：
+    - User 类型: `https://github.com/settings/installations/{installationId}`
+    - Organization 类型: `https://github.com/organizations/{login}/settings/installations/{installationId}`
+  - GraphQL `GitHubInstallation` type 新增 `managementUrl: String!`
+  - 前端帐号卡片新增"更新绑定"按钮，点击 `window.open(managementUrl, '_blank')`
 
 #### 实现点 5: OAuth CSRF 防护
 
@@ -564,6 +595,16 @@ test.describe('Settings GitHub Binding E2E', () => {
     await page.goto('/settings');
     await page.getByRole('button', { name: '解绑' }).first().click();
     await expect(page.getByText(/确认解绑/)).toBeVisible();
+  });
+
+  test('should open GitHub config page on 更新绑定 click', async ({ page }) => {
+    // 先通过 API 创建绑定数据
+    await page.goto('/settings');
+    const [newPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.getByRole('button', { name: '更新绑定' }).click(),
+    ]);
+    await expect(newPage).toHaveURL(/github\.com\/(settings|organizations)\/installations\//);
   });
 });
 ```
