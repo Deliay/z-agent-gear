@@ -142,6 +142,100 @@ describe('GatewayManager', () => {
       expect(mockLocalSocket.write).toHaveBeenCalledWith(Buffer.from('test payload'));
     });
 
+    it('should parse http-request JSON and write raw HTTP request to local socket', async () => {
+      const mockLocalSocket = createMockLocalSocket();
+      const mockServerSocket = createMockServerSocket();
+      vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
+
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      mockLocalSocket._trigger('connect');
+      await promise;
+
+      const httpRequest = {
+        type: 'http-request',
+        requestId: 'req-1',
+        method: 'POST',
+        path: '/api/test',
+        headers: { 'content-type': 'application/json', 'x-custom': 'val' },
+        body: Buffer.from('{"key":"value"}').toString('base64'),
+      };
+      const base64Data = Buffer.from(JSON.stringify(httpRequest)).toString('base64');
+      gatewayManager.handleTunnelData('tunnel-1', base64Data);
+
+      const expected = 'POST /api/test HTTP/1.1\r\n' +
+        'content-type: application/json\r\n' +
+        'x-custom: val\r\n' +
+        'Host: 127.0.0.1:3000\r\n' +
+        'Connection: close\r\n' +
+        '\r\n' +
+        '{"key":"value"}';
+
+      expect(mockLocalSocket.write).toHaveBeenCalledWith(expected);
+    });
+
+    it('should send raw base64 TCP response when no pending http-request', async () => {
+      const mockLocalSocket = createMockLocalSocket();
+      const mockServerSocket = createMockServerSocket();
+      vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
+
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      mockLocalSocket._trigger('connect');
+      await promise;
+
+      const testData = Buffer.from('HTTP/1.1 200 OK\r\n\r\nok');
+      mockLocalSocket._trigger('data', testData);
+
+      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:data', {
+        tunnelId: 'tunnel-1',
+        data: testData.toString('base64'),
+      });
+    });
+
+    it('should wrap TCP response in http-response JSON when pendingRequestId is set', async () => {
+      vi.useFakeTimers();
+
+      const mockLocalSocket = createMockLocalSocket();
+      const mockServerSocket = createMockServerSocket();
+      vi.mocked(net.connect).mockReturnValue(mockLocalSocket as never);
+
+      const promise = gatewayManager.createTunnel('tunnel-1', 3000, mockServerSocket as never);
+      mockLocalSocket._trigger('connect');
+      await promise;
+
+      const httpRequest = {
+        type: 'http-request',
+        requestId: 'req-42',
+        method: 'GET',
+        path: '/',
+        headers: {},
+      };
+      gatewayManager.handleTunnelData('tunnel-1', Buffer.from(JSON.stringify(httpRequest)).toString('base64'));
+
+      mockLocalSocket.write.mockClear();
+      mockServerSocket.emit.mockClear();
+
+      const tcpResponse = Buffer.from('HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok');
+      mockLocalSocket._trigger('data', tcpResponse);
+
+      expect(mockServerSocket.emit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(150);
+
+      expect(mockServerSocket.emit).toHaveBeenCalledWith('port-forward:data', expect.objectContaining({
+        tunnelId: 'tunnel-1',
+      }));
+      const emitArg = mockServerSocket.emit.mock.calls.find(
+        (c: any[]) => c[0] === 'port-forward:data',
+      )?.[1];
+      expect(emitArg).toBeDefined();
+      const decoded = JSON.parse(Buffer.from(emitArg.data as string, 'base64').toString('utf8'));
+      expect(decoded.type).toBe('http-response');
+      expect(decoded.requestId).toBe('req-42');
+      expect(decoded.body).toBe(tcpResponse.toString('base64'));
+
+      vi.useRealTimers();
+    });
+
     it('should log warning and ignore for unknown tunnelId', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       gatewayManager.handleTunnelData('unknown-tunnel', 'data');

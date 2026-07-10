@@ -228,6 +228,34 @@ describe('GatewayRelayService', () => {
 
       expect(mockRedis.publish).not.toHaveBeenCalled();
     });
+
+    it('should buffer raw TCP bytes in responseChunks when http-response JSON parse fails', async () => {
+      service.start(mockIO as never);
+
+      (service as any).tunnels.set('tunnel-1', {
+        controllerId: 'ctrl-1',
+        port: 8080,
+        socketId: 'socket-123',
+      });
+
+      const timeout = setTimeout(() => {}, 30_000);
+      (service as any).proxyRequests.set('req-1', {
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        port: 8080,
+        socket: mockSocket,
+        responseChunks: [],
+        resolved: false,
+        timeout,
+      });
+
+      const rawBytes = Buffer.from('HTTP/1.1 200 OK\r\n\r\nhello');
+      service.handleTunnelData('tunnel-1', rawBytes);
+
+      const ctx = (service as any).proxyRequests.get('req-1');
+      expect(ctx.responseChunks.length).toBe(1);
+      expect(ctx.responseChunks[0]).toEqual(rawBytes);
+    });
   });
 
   describe('handleTunnelCreate (via command channel)', () => {
