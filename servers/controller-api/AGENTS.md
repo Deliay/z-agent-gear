@@ -50,3 +50,26 @@ npm run test    # Run tests
 
 - [Common Rules](../../docs/engineering/common-rules.md)
 - [Backend Rules](../../docs/engineering/backend-rules.md)
+
+## Lessons Learned
+
+### 跨服务协议必须有双向集成测试
+
+本次 Proxy timeout bug 的根因是 controller-api 与 agent-controller 之间的 HTTP 代理协议实现不一致。测试未覆盖的原因：
+
+| 测试层 | 为什么没发现问题 |
+|--------|----------------|
+| `gateway-relay.test.ts`（controller-api 单元测试） | `handleTunnelData` 测试构造的 `http-response` JSON 数据格式（含 `statusCode`/`headers`/`body`）与真实 agent-controller 返回的格式不一致，但测试只验证 JSON 被正确处理，未验证真实 agent-controller 的输出格式 |
+| `gateway.test.ts`（agent-controller 单元测试） | 从未测试 `http-request` JSON 输入和 `http-response` JSON 输出，只测了纯 TCP 数据通道 |
+| `gateway-proxy.test.ts`（agent-api 单元测试） | Mock 了整个 Redis 层，无法发现下游协议不匹配 |
+| E2E 测试 | Fake controller 与真实 agent-controller 的协议处理不同，掩盖了问题 |
+
+**教训**：
+1. **协议响应格式的测试数据必须来源于真实对端的输出** — `handleTunnelData` 的 `http-response` 测试数据与 agent-controller 实际发送的格式不符，导致解析逻辑错误地通过了测试
+2. **跨服务边界的数据格式应在文档中精确定义，且测试数据必须严格遵循该定义** — `statusCode`/`headers` 分离格式 vs 原始 HTTP 响应字节格式的差异未被及时同步
+3. **Mock 测试无法替代端到端协议一致性检查** — 关键数据通道需要集成测试来验证双向格式匹配
+
+**改进措施**：
+- 修改协议时，两端测试必须使用同一份 fixture 数据（避免 controller-api 用格式 A 测试，agent-controller 用格式 B 发送）
+- `handleTunnelData` 的测试数据应直接来源于 agent-controller 的输出格式定义，而不是凭空构造
+- 跨服务的数据格式变更需要两端的 AGENTS.md 同步更新协议说明
