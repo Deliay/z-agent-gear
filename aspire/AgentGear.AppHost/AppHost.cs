@@ -8,6 +8,7 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .ConfigureComposeFile(composeFile =>
     {
         composeFile.Services.Remove("agent-controller");
+        composeFile.Services.Remove("agent-web");
     });
 
 var mongodb = builder.AddMongoDB("mongodb")
@@ -52,6 +53,7 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     {
         service.Name = "controller-api";
         service.Restart = "unless-stopped";
+        service.Ports = [.. service.Ports.Select(p => $"{p}:{p}")];
     });
 
 var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
@@ -67,8 +69,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
-    .WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
-    .WithHttpEndpoint(port: 10001, env: "PORT")
+    .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()
@@ -76,15 +77,22 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     {
         service.Name = "agent-api";
         service.Restart = "unless-stopped";
+        service.Ports = [.. service.Ports.Select(p => $"{p}:{p}")];
     });
+
+if (builder.ExecutionContext.IsPublishMode)
+{
+    var frontendEndpoint = builder.AddParameter("frontend-endpoint");
+    agentApi.WithEnvironment("FRONTEND_URL", frontendEndpoint);
+}
+else
+{
+    agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"));
+}
 
 agentWeb
     .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
-    .WithReference(agentApi)
-    .PublishAsDockerComposeService((resource, service) =>
-    {
-        service.Name = "agent-web";
-    });
+    .WithReference(agentApi);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")

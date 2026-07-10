@@ -26,12 +26,12 @@ services:
       - "6379"
     networks:
       - "aspire"
-  agent-api:
-    image: "${AGENT_API_IMAGE}"
+  controller-api:
+    image: "${CONTROLLER_API_IMAGE}"
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
-      CORS_ORIGIN: "${CORS_ORIGIN}"
+      MCP_ENDPOINT_JWT_SECRET: "${MCP_JWT_SECRET}"
       PORT: "8000"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
@@ -47,15 +47,22 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
     ports:
-      - "8000"
+      - "8000:8000"
     networks:
       - "aspire"
     restart: "unless-stopped"
-  controller-api:
-    image: "${CONTROLLER_API_IMAGE}"
+  agent-api:
+    image: "${AGENT_API_IMAGE}"
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
+      CORS_ORIGIN: "${CORS_ORIGIN}"
+      JWT_SECRET: "${JWT_SECRET}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID}"
+      GITHUB_APP_URL: "${GITHUB_APP_URL}"
+      GITHUB_SETUP_URL: "${GITHUB_SETUP_URL}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY}"
+      GITHUB_TOKEN_ENCRYPTION_KEY: "${GITHUB_TOKEN_ENCRYPTION_KEY}"
       PORT: "8001"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
@@ -70,8 +77,9 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
+      FRONTEND_URL: "${FRONTEND_ENDPOINT}"
     ports:
-      - "8001"
+      - "8001:8001"
     networks:
       - "aspire"
     restart: "unless-stopped"
