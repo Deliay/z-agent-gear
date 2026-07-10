@@ -170,6 +170,26 @@ export class GitHubService {
     return accounts.find(a => a.id === accountId);
   }
 
+  async handleSetupUpdate(installationId: number): Promise<void> {
+    const installation = await GitHubInstallation.findOne({ installationId });
+    if (!installation) return;
+
+    const tokenResponse = await this.getInstallationToken(installationId);
+    const repos = await this.getRepositories(tokenResponse.token);
+
+    installation.repos = repos.map(r => ({
+      repoId: r.id,
+      repoName: r.name,
+      fullName: r.full_name,
+      private: r.private,
+      permissions: {
+        read: r.permissions.pull || r.permissions.push || r.permissions.admin,
+        write: r.permissions.push || r.permissions.admin,
+      },
+    })) as any;
+    await installation.save();
+  }
+
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(

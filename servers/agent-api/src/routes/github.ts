@@ -5,9 +5,22 @@ import { githubService } from '../services/github.js';
 
 export async function handleGithubSetup(req: Request, res: Response): Promise<void> {
   try {
-    const { installation_id, state } = req.query;
+    const { installation_id, setup_action, state } = req.query;
 
-    if (!installation_id || !state) {
+    if (!installation_id) {
+      res.redirect(`${config.frontendUrl}/settings?binding=error&message=missing_params`);
+      return;
+    }
+
+    const installationId = parseInt(installation_id as string, 10);
+
+    if (setup_action === 'update' && !state) {
+      await githubService.handleSetupUpdate(installationId);
+      res.redirect(`${config.frontendUrl}/settings?binding=success`);
+      return;
+    }
+
+    if (!state) {
       res.redirect(`${config.frontendUrl}/settings?binding=error&message=missing_params`);
       return;
     }
@@ -22,7 +35,7 @@ export async function handleGithubSetup(req: Request, res: Response): Promise<vo
     await redis.del(`github:oauth:state:${state}`);
 
     await githubService.handleSetup({
-      installationId: parseInt(installation_id as string, 10),
+      installationId,
       state: state as string,
       userId: userId as string,
     });

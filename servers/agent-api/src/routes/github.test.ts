@@ -6,7 +6,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 vi.mock('../services/github.js', () => ({
   GitHubService: vi.fn(),
-  githubService: { handleSetup: vi.fn() },
+  githubService: { handleSetup: vi.fn(), handleSetupUpdate: vi.fn() },
 }));
 
 import { getRedisClient } from '../middleware/redis.js';
@@ -88,6 +88,34 @@ describe('GitHub Setup Route', () => {
     vi.mocked(getRedisClient).mockResolvedValue(mockRedis as any);
 
     const req = mockReq({ installation_id: '42', state: 'valid-state' });
+    const res = mockRes();
+
+    await handleGithubSetup(req, res);
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      expect.stringContaining('binding=error&message=internal_error'),
+    );
+  });
+
+  it('should process update without state when setup_action=update', async () => {
+    const { githubService } = await import('../services/github.js');
+
+    const req = mockReq({ installation_id: '42', setup_action: 'update' });
+    const res = mockRes();
+
+    await handleGithubSetup(req, res);
+
+    expect(githubService.handleSetupUpdate).toHaveBeenCalledWith(42);
+    expect(res.redirect).toHaveBeenCalledWith(
+      expect.stringContaining('binding=success'),
+    );
+  });
+
+  it('should redirect with error when update fails', async () => {
+    const { githubService } = await import('../services/github.js');
+    vi.mocked(githubService.handleSetupUpdate).mockRejectedValue(new Error('API error'));
+
+    const req = mockReq({ installation_id: '42', setup_action: 'update' });
     const res = mockRes();
 
     await handleGithubSetup(req, res);
