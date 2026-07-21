@@ -11,14 +11,16 @@ interface AcpServerInfo {
 
 export class AcpDetector {
   async detect(): Promise<AcpServerInfo[]> {
-    const [opencode, copilot, claudeCode, geminiCli, codex] = await Promise.all([
+    const [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode] = await Promise.all([
       this.detectOpenCode(),
       this.detectGitHubCopilot(),
       this.detectClaudeCode(),
       this.detectGeminiCli(),
       this.detectCodex(),
+      this.detectMiMoCode(),
+      this.detectKimiCode(),
     ]);
-    return [opencode, copilot, claudeCode, geminiCli, codex];
+    return [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode];
   }
 
   private async detectOpenCode(): Promise<AcpServerInfo> {
@@ -71,6 +73,26 @@ export class AcpDetector {
     }
   }
 
+  private async detectMiMoCode(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('mimo --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'mimo_code', available: true, version };
+    } catch {
+      return { type: 'mimo_code', available: false };
+    }
+  }
+
+  private async detectKimiCode(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('kimi --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'kimi_code', available: true, version };
+    } catch {
+      return { type: 'kimi_code', available: false };
+    }
+  }
+
   getSpawnerConfig(serverType: string): { command: string; args: string[] } {
     switch (serverType) {
       case 'github_copilot':
@@ -81,6 +103,10 @@ export class AcpDetector {
         return { command: 'gemini', args: ['--acp'] };
       case 'codex':
         return { command: 'codex-acp', args: [] };
+      case 'mimo_code':
+        return { command: 'mimo', args: ['acp'] };
+      case 'kimi_code':
+        return { command: 'kimi', args: ['acp'] };
       case 'opencode':
       default:
         return { command: 'opencode', args: ['acp'] };
