@@ -43,11 +43,6 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
             e.stopPropagation();
             setShowDialog(true);
           }}
-          onKeyDown={(e) => {
-            if (e.key === ' ') {
-              e.preventDefault();
-            }
-          }}
           className={buttonVariants({ size: 'xs' })}
         >
           +
