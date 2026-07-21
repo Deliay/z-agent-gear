@@ -33,31 +33,31 @@ export default function McpServerSection() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active':
-        return 'bg-green-500';
+        return 'bg-success';
       case 'offline':
-        return 'bg-yellow-500';
+        return 'bg-warning';
       case 'disabled':
-        return 'bg-gray-500';
+        return 'bg-muted-foreground';
       default:
-        return 'bg-gray-500';
+        return 'bg-muted-foreground';
     }
   };
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>MCP Servers</CardTitle>
+        <CardTitle>MCP 服务</CardTitle>
         <Button variant="outline" size="sm" onClick={() => refetch()}>
           <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
+          刷新
         </Button>
       </CardHeader>
       <CardContent>
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
+          <p className="text-sm text-muted-foreground">加载中...</p>
         ) : servers.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No MCP servers registered yet. Use the MCP Proxy Key to register local MCP commands.
+            暂无已注册的 MCP 服务。使用 MCP 代理密钥注册本地 MCP 命令。
           </p>
         ) : (
           <div className="space-y-4">
@@ -76,7 +76,7 @@ export default function McpServerSection() {
                   <code className="text-sm text-muted-foreground">{server.command}</code>
                   {server.lastHeartbeatAt && (
                     <p className="text-xs text-muted-foreground">
-                      Last heartbeat: {new Date(server.lastHeartbeatAt).toLocaleString()}
+                      最后心跳: {new Date(server.lastHeartbeatAt).toLocaleString()}
                     </p>
                   )}
                 </div>

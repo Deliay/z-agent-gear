@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { DELETE_GATEWAY } from '../graphql/mutations';
 import { GET_GATEWAYS } from '../graphql/queries';
 import type { DeleteGatewayMutation, GatewayData } from '../graphql/types';
+import { Copy, Trash2, Check } from 'lucide-react';
 
 interface GatewayItemProps {
   gateway: GatewayData;
@@ -35,7 +36,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       <span className="text-xs text-muted-foreground">:{gateway.port}</span>
       <span
         className={`text-xs ${
-          gateway.status === 'active' ? 'text-green-500' : 'text-muted-foreground'
+          gateway.status === 'active' ? 'text-success' : 'text-muted-foreground'
         }`}
       >
         {gateway.status}
@@ -47,7 +48,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
           className="text-xs text-muted-foreground hover:text-sidebar-foreground"
           title={copied ? '已复制' : accessUrl}
         >
-          {copied ? '✓' : '📋'}
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </button>
       )}
       <button
@@ -56,7 +57,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
         className="text-xs text-destructive hover:text-destructive/80"
         title="删除网关暴露"
       >
-        ✕
+        <Trash2 className="size-3" />
       </button>
     </li>
   );

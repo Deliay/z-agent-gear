@@ -30,7 +30,7 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     await expect(page.getByRole('button', { name: 'GPT-4' })).toBeVisible();
 
@@ -82,10 +82,10 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
     const resumePromise = new Promise<void>((resolve) => {
       socket.on('acp:resume', (data: { requestId: string; sessionId: string }) => {
@@ -102,10 +102,10 @@ test.describe('Session Mode Switch', () => {
       });
     });
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByRole('button', { name: 'Continuing...' })).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByRole('button', { name: '继续中...' })).toBeVisible({ timeout: 3000 });
     await resumePromise;
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     const modeBtn = page.locator('button:has-text("Code")');
     await expect(modeBtn).toBeVisible();
@@ -140,10 +140,10 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
     const resumePromise = new Promise<void>((resolve) => {
       socket.on('acp:resume', (data: { requestId: string; sessionId: string }) => {
@@ -163,15 +163,15 @@ test.describe('Session Mode Switch', () => {
       });
     });
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByRole('button', { name: 'Continuing...' })).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByRole('button', { name: '继续中...' })).toBeVisible({ timeout: 3000 });
     await resumePromise;
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     const modeBtn = page.locator('button:has-text("Code")').first();
     await modeBtn.click();
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '切换模式' })).toBeVisible();
 
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('Architect', { exact: true })).toBeVisible();
@@ -179,8 +179,8 @@ test.describe('Session Mode Switch', () => {
     await expect(dialog.getByText('Code', { exact: true })).toBeVisible();
     await expect(dialog.getByText('Coding mode')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Cancel' }).first().click();
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).not.toBeVisible();
+    await page.getByRole('button', { name: '取消' }).first().click();
+    await expect(page.getByRole('heading', { name: '切换模式' })).not.toBeVisible();
 
     disconnect();
   });
@@ -211,10 +211,10 @@ test.describe('Session Mode Switch', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
     const resumePromise = new Promise<void>((resolve) => {
       socket.on('acp:resume', (data: { requestId: string; sessionId: string }) => {
@@ -234,10 +234,10 @@ test.describe('Session Mode Switch', () => {
       });
     });
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByRole('button', { name: 'Continuing...' })).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByRole('button', { name: '继续中...' })).toBeVisible({ timeout: 3000 });
     await resumePromise;
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     let setModeRequestId: string | null = null;
     const setModePromise = new Promise<void>((resolve) => {
@@ -256,14 +256,14 @@ test.describe('Session Mode Switch', () => {
     const modeBtn = page.locator('button:has-text("Code")').first();
     await modeBtn.click();
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '切换模式' })).toBeVisible();
 
     await page.getByText('Architect', { exact: true }).click();
-    await page.getByRole('button', { name: 'Confirm' }).click();
+    await page.getByRole('button', { name: '确认' }).click();
 
     await setModePromise;
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('heading', { name: '切换模式' })).not.toBeVisible({ timeout: 5000 });
 
     disconnect();
   });

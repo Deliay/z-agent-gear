@@ -24,7 +24,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-2 border-b px-4 py-3">
           <MobileBackButton to="/settings" />
-          <span className={`h-2 w-2 rounded-full shrink-0 ${controller?.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+          <span className={`h-2 w-2 rounded-full shrink-0 ${controller?.status === 'online' ? 'bg-success' : 'bg-muted-foreground'}`} />
           <span className="font-medium truncate">{controller?.name || '加载中...'}</span>
         </div>
         <div className="flex gap-1 border-b px-4 py-2">
@@ -55,7 +55,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             ← 返回
           </button>
           <div className="mt-4 flex items-center gap-2 px-3">
-            <span className={`h-2 w-2 rounded-full shrink-0 ${controller?.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+          <span className={`h-2 w-2 rounded-full shrink-0 ${controller?.status === 'online' ? 'bg-success' : 'bg-muted-foreground'}`} />
             <span className="font-medium truncate">{controller?.name || '加载中...'}</span>
           </div>
           <div className="mt-6 space-y-1">

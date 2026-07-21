@@ -4,6 +4,8 @@ import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
+import { buttonVariants } from './ui/button';
+import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 
 interface GatewaySectionProps {
   controllerId: string;
@@ -22,28 +24,30 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
 
   return (
     <div>
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
-        onClick={(e) => {
-          e.stopPropagation();
-          setIsExpanded((prev) => !prev);
-        }}
-      >
-        <span className="text-xs text-muted-foreground">{isExpanded ? '▼' : '▶'}</span>
-        <span className="text-xs text-muted-foreground">↗</span>
-        <span className="flex-1 truncate text-left text-sidebar-foreground">统一网关</span>
+      <div className="flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent">
+        <button
+          type="button"
+          className="flex flex-1 items-center gap-2 text-left"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsExpanded((prev) => !prev);
+          }}
+        >
+          <span className="text-xs text-muted-foreground">{isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}</span>
+          <ExternalLink className="size-3 text-muted-foreground" />
+          <span className="flex-1 truncate text-sidebar-foreground">统一网关</span>
+        </button>
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             setShowDialog(true);
           }}
-          className="rounded bg-primary px-1.5 py-0.5 text-xs text-primary-foreground hover:bg-primary/90"
+          className={buttonVariants({ size: 'xs' })}
         >
           +
         </button>
-      </button>
+      </div>
 
       {isExpanded && (
         <ul className="ml-4 space-y-1">

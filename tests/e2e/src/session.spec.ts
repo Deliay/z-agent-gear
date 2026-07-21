@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
 async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
@@ -17,7 +17,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `e2e_sess_${Date.now().toString(36)}`;
+  const username = `es${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
       signup(username: $username, password: $password) {
@@ -105,9 +105,9 @@ test.describe('Session E2E', () => {
     await loginViaUI(page, username);
 
     await page.goto('/sessions');
-    await expect(page.locator('h1')).toContainText('Sessions');
-    await expect(page.getByText('No sessions found.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
+    await expect(page.locator('h1')).toContainText('会话');
+    await expect(page.getByText('暂无会话')).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible();
   });
 
   test('should show no online controllers in New Session dialog', async ({ page }) => {
@@ -115,15 +115,15 @@ test.describe('Session E2E', () => {
     await loginViaUI(page, username);
 
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
-    await expect(page.getByText('No online controllers available')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeDisabled();
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
+    await expect(page.getByText('无在线控制器')).toBeVisible();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeDisabled();
 
-    await page.getByRole('button', { name: 'Cancel' }).click();
-    await expect(page.getByText('No online controllers available')).not.toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+    await expect(page.getByText('无在线控制器')).not.toBeVisible();
   });
 
   test('should show online controller in New Session dialog', async ({ page }) => {
@@ -133,17 +133,17 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     const select = page.locator('#controller');
     await expect(select).toBeVisible();
     await expect(select.locator('option')).toHaveCount(2); // placeholder + 1 controller
     await expect(select.locator('option').nth(1)).toContainText('e2e-test-host');
 
-    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: '取消' }).click();
     disconnect();
   });
 
@@ -154,12 +154,12 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
     disconnect();
@@ -172,19 +172,19 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     await expect(page.getByText('e2e-test-host').first()).toBeVisible();
     await expect(page.locator('textarea')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '删除' })).toBeVisible();
 
     disconnect();
   });
@@ -196,19 +196,19 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     const textarea = page.locator('textarea');
     // Session may have already transitioned to 'idling' via SSE, in which case input is enabled
     const statusBadge = page.locator('.px-2.py-1.text-xs.font-medium.rounded-full');
     const statusText = await statusBadge.textContent();
-    if (statusText !== 'Idle' && statusText !== 'Working') {
+    if (statusText !== '空闲' && statusText !== '工作中') {
       await expect(textarea).toBeDisabled();
       await expect(textarea).toHaveAttribute('placeholder', 'Session is not active...');
     }
@@ -223,18 +223,18 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     const statusBadge = page.locator('.px-2.py-1.text-xs.font-medium.rounded-full');
     await expect(statusBadge).toBeVisible();
     const statusText = await statusBadge.textContent();
-    expect(['Creating', 'Connecting', 'Working', 'Idle']).toContain(statusText);
+    expect(['创建中', '连接中', '工作中', '空闲']).toContain(statusText);
 
     disconnect();
   });
@@ -246,18 +246,18 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toContainText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toContainText('已结束', { timeout: 5000 });
     await expect(page.locator('textarea')).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).not.toBeVisible();
 
     disconnect();
   });
@@ -269,24 +269,24 @@ test.describe('Session E2E', () => {
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-session-${Math.random().toString(36).slice(2, 8)}`, token);
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
+    await page.getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 10000 });
 
     // Expand sidebar tree to verify session appears
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await sidebar.getByRole('button', { name: /e2e-test-host/ }).click();
-    await sidebar.getByRole('button', { name: /📁/ }).click();
+    await sidebar.getByRole('button', { name: /e2e-session/ }).click();
     await expect(sidebar.locator('a[href^="/sessions/"]')).toBeVisible({ timeout: 5000 });
 
     page.on('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: '删除' }).click();
     await expect(page).toHaveURL('/sessions', { timeout: 5000 });
-    await expect(page.getByText('No sessions found.')).toBeVisible();
+    await expect(page.getByText('暂无会话')).toBeVisible();
 
     // Sidebar should no longer show the deleted session
     await expect(sidebar.locator('a[href^="/sessions/"]')).not.toBeVisible();

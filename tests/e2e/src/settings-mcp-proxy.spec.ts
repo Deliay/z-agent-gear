@@ -26,7 +26,7 @@ test.describe('Settings MCP Proxy Key E2E', () => {
     await loginViaUI(page, username);
     await page.click('a[href="/settings"]');
 
-    await expect(page.getByText('MCP Servers', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('MCP 服务', { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('should show empty state for MCP Proxy Keys', async ({ page }) => {
@@ -42,7 +42,7 @@ test.describe('Settings MCP Proxy Key E2E', () => {
     await loginViaUI(page, username);
     await page.click('a[href="/settings"]');
 
-    await expect(page.getByText(/No MCP servers registered yet/)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/暂无已注册的 MCP 服务/)).toBeVisible({ timeout: 10000 });
   });
 
   test('should open generate key dialog', async ({ page }) => {
@@ -180,7 +180,7 @@ test.describe('Settings MCP Proxy Key E2E', () => {
     await page.click('a[href="/settings"]');
 
     // MCP server should be visible
-    await expect(page.getByText('MCP Servers', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('MCP 服务', { exact: true })).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('test-mcp-server')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('npx -y @modelcontextprotocol/server-everything')).toBeVisible();
   });

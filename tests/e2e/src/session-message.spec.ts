@@ -31,7 +31,7 @@ test.describe('ACP Message Rendering', () => {
     const ws1 = await createWorkspace(page, controllerId, '/tmp/e2e-msg', token);
     const sessionId = await createSession(page, controllerId, token, ws1.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     await expect(page.getByText('Hello from agent!')).toBeVisible({ timeout: 5000 });
     disconnect();
@@ -65,7 +65,7 @@ test.describe('ACP Message Rendering', () => {
     const ws2 = await createWorkspace(page, controllerId, '/tmp/e2e-tool', token);
     const sessionId = await createSession(page, controllerId, token, ws2.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     await expect(page.getByText('Tool Call: read_file')).toBeVisible({ timeout: 5000 });
     disconnect();
@@ -98,7 +98,7 @@ test.describe('ACP Message Rendering', () => {
     const ws3 = await createWorkspace(page, controllerId, '/tmp/e2e-error', token);
     const sessionId = await createSession(page, controllerId, token, ws3.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     await expect(page.getByText('Something went wrong')).toBeVisible({ timeout: 5000 });
     disconnect();
@@ -131,7 +131,7 @@ test.describe('ACP Message Rendering', () => {
     const ws4 = await createWorkspace(page, controllerId, '/tmp/e2e-code', token);
     const sessionId = await createSession(page, controllerId, token, ws4.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     await expect(page.getByText('Here is code:')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('pre, code').first()).toBeVisible();

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
 // iPhone 13 viewport
@@ -16,7 +16,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `e2e_mob_${Date.now().toString(36)}`;
+  const username = `em${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
       signup(username: $username, password: $password) {
@@ -116,7 +116,7 @@ test.describe('Session Mobile Layout', () => {
       await expect(sidebarEl).toBeVisible();
 
       // Sessions heading should be visible
-      await expect(page.locator('h2')).toContainText('Sessions');
+      await expect(page.locator('h2')).toContainText('会话');
 
       // Controller should be visible in the tree
       await expect(page.getByText('e2e-mobile-host')).toBeVisible();
@@ -137,10 +137,10 @@ test.describe('Session Mobile Layout', () => {
 
       // Expand controller and workspace to find session
       await page.locator(sidebar()).getByText('e2e-mobile-host').click();
-      await page.locator(sidebar()).getByText('📁 e2e-mob').click();
+      await page.locator(sidebar()).getByText('e2e-mob', { exact: true }).click();
 
-      // Click on session
-      await page.locator(sidebar()).getByText('New Session').click();
+      // Click on session - use link selector since sessions are rendered as NavLinks
+      await page.locator(sidebar()).locator('a[href^="/sessions/"]').first().click();
 
       // Should navigate to detail page - back button should be visible on mobile
       await expect(page.getByText('← 返回')).toBeVisible({ timeout: 10000 });
@@ -170,7 +170,7 @@ test.describe('Session Mobile Layout', () => {
       await page.getByText('← 返回').click();
 
       // Should be back on list - Sessions heading visible
-      await expect(page.locator('h2')).toContainText('Sessions', { timeout: 5000 });
+      await expect(page.locator('h2')).toContainText('会话', { timeout: 5000 });
     } finally {
       disconnect();
     }
@@ -187,9 +187,9 @@ test.describe('Session Mobile Layout', () => {
 
     // Tab buttons should be visible
     await expect(page.getByRole('button', { name: '帐号', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '供应商', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '模型', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '控制器', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '供应商设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '可用模型', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '控制器管理', exact: true })).toBeVisible();
 
     // Back button should be visible
     await expect(page.getByText('← 返回')).toBeVisible();
@@ -211,10 +211,10 @@ test.describe('Session Mobile Layout', () => {
     await page.waitForURL('**/sessions', { timeout: 5000 });
 
     // Wait for page to fully render (loading spinner may appear first)
-    await page.waitForSelector('h2:has-text("Sessions")', { timeout: 10000 });
+    await page.waitForSelector('h2:has-text("会话")', { timeout: 10000 });
 
     // Should be back on sessions list (Sidebar renders h2 "Sessions")
-    await expect(page.locator('h2:has-text("Sessions")')).toBeVisible();
+    await expect(page.locator('h2:has-text("会话")')).toBeVisible();
   });
 
   test('should not show sidebar on session detail page', async ({ page }) => {
