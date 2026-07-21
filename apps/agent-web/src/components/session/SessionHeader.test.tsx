@@ -45,6 +45,18 @@ describe('SessionHeader', () => {
     expect(screen.getByText('GitHub Copilot')).toBeDefined();
   });
 
+  it('should display MiMo Code label for mimo_code server type', () => {
+    const mimoSession = { ...baseSession, acpServerType: 'mimo_code' };
+    render(<SessionHeader session={mimoSession} status="running" onClose={noop} onDelete={noop} />);
+    expect(screen.getByText('MiMo Code')).toBeDefined();
+  });
+
+  it('should display Kimi Code label for kimi_code server type', () => {
+    const kimiSession = { ...baseSession, acpServerType: 'kimi_code' };
+    render(<SessionHeader session={kimiSession} status="running" onClose={noop} onDelete={noop} />);
+    expect(screen.getByText('Kimi Code')).toBeDefined();
+  });
+
   it('should display cwd', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
     expect(screen.getByText('/home/user/project')).toBeDefined();

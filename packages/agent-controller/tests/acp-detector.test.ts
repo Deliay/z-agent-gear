@@ -32,21 +32,25 @@ describe('AcpDetector', () => {
   });
 
   describe('detect', () => {
-    it('should detect all 5 servers when all available', async () => {
+    it('should detect all 7 servers when all available', async () => {
       mockExecSuccessOnce('opencode v1.2.3\n');
       mockExecSuccessOnce('copilot 1.0.0\n');
       mockExecSuccessOnce('claude-agent-acp 0.1.0\n');
       mockExecSuccessOnce('gemini 2.0.0\n');
       mockExecSuccessOnce('codex-acp 0.5.0\n');
+      mockExecSuccessOnce('mimo 0.1.0\n');
+      mockExecSuccessOnce('kimi 1.0.0\n');
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(7);
       expect(result[0]).toEqual({ type: 'opencode', available: true, version: '1.2.3' });
       expect(result[1]).toEqual({ type: 'github_copilot', available: true, version: '1.0.0' });
       expect(result[2]).toEqual({ type: 'claude_code', available: true, version: '0.1.0' });
       expect(result[3]).toEqual({ type: 'gemini_cli', available: true, version: '2.0.0' });
       expect(result[4]).toEqual({ type: 'codex', available: true, version: '0.5.0' });
+      expect(result[5]).toEqual({ type: 'mimo_code', available: true, version: '0.1.0' });
+      expect(result[6]).toEqual({ type: 'kimi_code', available: true, version: '1.0.0' });
     });
 
     it('should detect as unavailable when command fails', async () => {
@@ -55,15 +59,19 @@ describe('AcpDetector', () => {
       mockExecFailureOnce();
       mockExecFailureOnce();
       mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(7);
       expect(result[0]).toEqual({ type: 'opencode', available: false });
       expect(result[1]).toEqual({ type: 'github_copilot', available: false });
       expect(result[2]).toEqual({ type: 'claude_code', available: false });
       expect(result[3]).toEqual({ type: 'gemini_cli', available: false });
       expect(result[4]).toEqual({ type: 'codex', available: false });
+      expect(result[5]).toEqual({ type: 'mimo_code', available: false });
+      expect(result[6]).toEqual({ type: 'kimi_code', available: false });
     });
 
     it('should detect claude_code only when other servers fail', async () => {
@@ -72,15 +80,19 @@ describe('AcpDetector', () => {
       mockExecSuccessOnce('claude-agent-acp 0.1.0\n');
       mockExecFailureOnce();
       mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(7);
       expect(result[0]).toEqual({ type: 'opencode', available: false });
       expect(result[1]).toEqual({ type: 'github_copilot', available: false });
       expect(result[2]).toEqual({ type: 'claude_code', available: true, version: '0.1.0' });
       expect(result[3]).toEqual({ type: 'gemini_cli', available: false });
       expect(result[4]).toEqual({ type: 'codex', available: false });
+      expect(result[5]).toEqual({ type: 'mimo_code', available: false });
+      expect(result[6]).toEqual({ type: 'kimi_code', available: false });
     });
 
     it('should detect gemini_cli only when other servers fail', async () => {
@@ -89,10 +101,12 @@ describe('AcpDetector', () => {
       mockExecFailureOnce();
       mockExecSuccessOnce('gemini 2.0.0\n');
       mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(7);
       expect(result[3]).toEqual({ type: 'gemini_cli', available: true, version: '2.0.0' });
     });
 
@@ -102,11 +116,43 @@ describe('AcpDetector', () => {
       mockExecFailureOnce();
       mockExecFailureOnce();
       mockExecSuccessOnce('codex-acp 0.5.0\n');
+      mockExecFailureOnce();
+      mockExecFailureOnce();
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(7);
       expect(result[4]).toEqual({ type: 'codex', available: true, version: '0.5.0' });
+    });
+
+    it('should detect mimo_code only when other servers fail', async () => {
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecSuccessOnce('mimo 0.1.0\n');
+      mockExecFailureOnce();
+
+      const result = await detector.detect();
+
+      expect(result).toHaveLength(7);
+      expect(result[5]).toEqual({ type: 'mimo_code', available: true, version: '0.1.0' });
+    });
+
+    it('should detect kimi_code only when other servers fail', async () => {
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecFailureOnce();
+      mockExecSuccessOnce('kimi 2.0.0\n');
+
+      const result = await detector.detect();
+
+      expect(result).toHaveLength(7);
+      expect(result[6]).toEqual({ type: 'kimi_code', available: true, version: '2.0.0' });
     });
 
     it('should parse version with different formats', async () => {
@@ -115,6 +161,8 @@ describe('AcpDetector', () => {
       mockExecSuccessOnce('v0.1.0\n');
       mockExecSuccessOnce('Gemini 2.0.0\n');
       mockExecSuccessOnce('codex-acp version 0.5.0\n');
+      mockExecSuccessOnce('MiMo CLI v1.0.0\n');
+      mockExecSuccessOnce('kimi 2.0.0\n');
 
       const result = await detector.detect();
 
@@ -123,6 +171,8 @@ describe('AcpDetector', () => {
       expect(result[2].version).toBe('0.1.0');
       expect(result[3].version).toBe('2.0.0');
       expect(result[4].version).toBe('0.5.0');
+      expect(result[5].version).toBe('1.0.0');
+      expect(result[6].version).toBe('2.0.0');
     });
   });
 
@@ -150,6 +200,16 @@ describe('AcpDetector', () => {
     it('should return codex spawner config', () => {
       const config = detector.getSpawnerConfig('codex');
       expect(config).toEqual({ command: 'codex-acp', args: [] });
+    });
+
+    it('should return mimo_code spawner config', () => {
+      const config = detector.getSpawnerConfig('mimo_code');
+      expect(config).toEqual({ command: 'mimo', args: ['acp'] });
+    });
+
+    it('should return kimi_code spawner config', () => {
+      const config = detector.getSpawnerConfig('kimi_code');
+      expect(config).toEqual({ command: 'kimi', args: ['acp'] });
     });
 
     it('should return opencode as default for unknown serverType', () => {
