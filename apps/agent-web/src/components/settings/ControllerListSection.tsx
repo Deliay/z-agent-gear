@@ -169,7 +169,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                       <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                         {key.type}
                       </span>
-                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning-foreground">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning">
                         等待连接
                       </span>
                     </div>

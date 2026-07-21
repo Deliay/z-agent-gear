@@ -32,7 +32,7 @@ export default function ConfigOptionCard({ messages }: ConfigOptionCardProps) {
 
   return (
     <div className="w-full">
-      <div className="rounded-lg border border-info/30 bg-info/10 px-4 py-2 text-sm text-info-foreground">
+      <div className="rounded-lg border border-info/30 bg-info/10 px-4 py-2 text-sm text-info">
         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-info">
           设置已更新
         </div>

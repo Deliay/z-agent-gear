@@ -1,8 +1,8 @@
 export const STATUS_COLORS = {
-  creating:     { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning-foreground' },
-  connecting:   { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning-foreground' },
-  idling:       { dot: 'bg-success',               badge: 'bg-success/15 text-success-foreground' },
-  running:      { dot: 'bg-info animate-pulse',     badge: 'bg-info/15 text-info-foreground animate-pulse' },
+  creating:     { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning' },
+  connecting:   { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning' },
+  idling:       { dot: 'bg-success',               badge: 'bg-success/15 text-success' },
+  running:      { dot: 'bg-info animate-pulse',     badge: 'bg-info/15 text-info animate-pulse' },
   disconnected: { dot: 'bg-destructive',            badge: 'bg-destructive/15 text-destructive' },
   ended:        { dot: 'bg-muted-foreground',        badge: 'bg-muted text-muted-foreground' },
 } as const;

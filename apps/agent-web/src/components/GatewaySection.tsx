@@ -4,7 +4,6 @@ import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
-import { Button } from './ui/button';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 
 interface GatewaySectionProps {
@@ -35,15 +34,23 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
         <span className="text-xs text-muted-foreground">{isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}</span>
         <ExternalLink className="size-3 text-muted-foreground" />
         <span className="flex-1 truncate text-left text-sidebar-foreground">统一网关</span>
-          <Button
-            size="xs"
-            onClick={(e) => {
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowDialog(true);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
               e.stopPropagation();
               setShowDialog(true);
-            }}
-          >
-            +
-          </Button>
+            }
+          }}
+          className="inline-flex h-6 items-center justify-center rounded px-2 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
+        >
+          +
+        </span>
       </button>
 
       {isExpanded && (

@@ -82,7 +82,7 @@ export default function SettingsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b px-4 py-3 md:px-0 md:py-0 md:border-0 md:hidden">
+      <div className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
         <MobileBackButton to="/sessions" />
         <h1 className="text-lg font-semibold">设置</h1>
       </div>
@@ -105,9 +105,11 @@ export default function SettingsPage() {
           <div className="space-y-1">
             {NAV_GROUPS.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
-                <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-                  {group.label}
-                </div>
+                {group.items.length > 1 && (
+                  <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+                    {group.label}
+                  </div>
+                )}
                 {group.items.map((item) => (
                   <button
                     key={item.id}
