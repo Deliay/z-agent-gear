@@ -1,16 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { registerUser } from './helpers.js';
+import { registerUser, loginViaUI } from './helpers.js';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 test.describe('Settings GitHub Binding E2E', () => {
   test.beforeEach(async ({ page }) => {
-    const user = await registerUser(page);
-    await page.goto('/login');
-    await page.fill('#username', user.username);
-    await page.fill('#password', 'testpass123');
-    await page.click('button[type="submit"]');
-    await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+    const { username } = await registerUser(page);
+    await loginViaUI(page, username);
 
     await page.click('a[href="/settings"]');
     await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });

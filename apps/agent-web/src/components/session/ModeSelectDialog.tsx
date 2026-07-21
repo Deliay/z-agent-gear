@@ -70,7 +70,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
             onClick={onClose}
             className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-accent"
           >
-            Cancel
+            取消
           </button>
           <button
             type="button"
@@ -78,7 +78,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
             disabled={!selectedId || loading}
             className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
           >
-            {loading ? 'Switching...' : 'Confirm'}
+            {loading ? '切换中...' : '确认'}
           </button>
         </div>
       </div>

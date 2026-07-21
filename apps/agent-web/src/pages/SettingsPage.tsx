@@ -105,11 +105,9 @@ export default function SettingsPage() {
           <div className="space-y-1">
             {NAV_GROUPS.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
-                {group.items.length > 1 && (
-                  <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-                    {group.label}
-                  </div>
-                )}
+                <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {group.label}
+                </div>
                 {group.items.map((item) => (
                   <button
                     key={item.id}

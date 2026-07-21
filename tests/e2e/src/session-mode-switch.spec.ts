@@ -259,7 +259,7 @@ test.describe('Session Mode Switch', () => {
     await expect(page.getByRole('heading', { name: 'Switch Mode' })).toBeVisible();
 
     await page.getByText('Architect', { exact: true }).click();
-    await page.getByRole('button', { name: 'Confirm' }).click();
+    await page.getByRole('button', { name: '确认' }).click();
 
     await setModePromise;
 

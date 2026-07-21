@@ -13,7 +13,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string; userId: string }> {
-  const username = `e2e_perm_${Date.now().toString(36)}`;
+  const username = `ep${Date.now().toString(36).slice(-6)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
       signup(username: $username, password: $password) { token user { id username } }
