@@ -169,3 +169,4 @@ flowchart LR
 - [[proposals/20260529-feat-dark-mode.md]] — 黑暗模式
 - [[proposals/20260530-feat-mcp-proxy-config.md]] — MCP 代理服务配置
 - [[proposals/20260705-feat-acp-server-extend.md]] — ACP Server 支持扩展
+- [[proposals/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化（设计语言升级与视觉重构）
