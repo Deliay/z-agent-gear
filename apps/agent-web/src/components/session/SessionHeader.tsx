@@ -44,6 +44,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
     claude_code: 'Claude Code',
     gemini_cli: 'Gemini CLI',
     codex: 'Codex',
+    mimo_code: 'MiMo Code',
+    kimi_code: 'Kimi Code',
   };
 
   const continueDisabled = resuming || !controllerOnline;
