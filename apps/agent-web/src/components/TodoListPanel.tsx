@@ -94,7 +94,7 @@ export function TodoListPanel() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium">{todo.title}</span>
                       {!todo.isRead && (
-                        <div className="h-2 w-2 rounded-full bg-blue-500" />
+                        <div className="h-2 w-2 rounded-full bg-info" />
                       )}
                     </div>
                     {todo.description && (

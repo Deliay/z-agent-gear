@@ -1,25 +1,25 @@
 export const STATUS_COLORS = {
-  creating:     { dot: 'bg-yellow-500', badge: 'bg-yellow-100 text-yellow-800' },
-  connecting:   { dot: 'bg-yellow-500', badge: 'bg-yellow-100 text-yellow-800' },
-  idling:       { dot: 'bg-green-500',  badge: 'bg-green-100 text-green-800' },
-  running:      { dot: 'bg-blue-500 animate-pulse',   badge: 'bg-blue-100 text-blue-800 animate-pulse' },
-  disconnected: { dot: 'bg-orange-500', badge: 'bg-orange-100 text-orange-800' },
-  ended:        { dot: 'bg-gray-500',   badge: 'bg-gray-100 text-gray-800' },
+  creating:     { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning' },
+  connecting:   { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning' },
+  idling:       { dot: 'bg-success',               badge: 'bg-success/15 text-success' },
+  running:      { dot: 'bg-info animate-pulse',     badge: 'bg-info/15 text-info animate-pulse' },
+  disconnected: { dot: 'bg-destructive',            badge: 'bg-destructive/15 text-destructive' },
+  ended:        { dot: 'bg-muted-foreground',        badge: 'bg-muted text-muted-foreground' },
 } as const;
 
 export const STATUS_LABELS: Record<string, string> = {
-  creating: 'Creating',
-  connecting: 'Connecting',
-  idling: 'Idle',
-  running: 'Working',
-  disconnected: 'Disconnected',
-  ended: 'Ended',
+  creating: '创建中',
+  connecting: '连接中',
+  idling: '空闲',
+  running: '工作中',
+  disconnected: '已断连',
+  ended: '已结束',
 };
 
 export function getStatusDotColor(status: string): string {
-  return STATUS_COLORS[status as keyof typeof STATUS_COLORS]?.dot ?? 'bg-gray-500';
+  return STATUS_COLORS[status as keyof typeof STATUS_COLORS]?.dot ?? 'bg-muted-foreground';
 }
 
 export function getStatusBadgeClass(status: string): string {
-  return STATUS_COLORS[status as keyof typeof STATUS_COLORS]?.badge ?? 'bg-gray-100 text-gray-800';
+  return STATUS_COLORS[status as keyof typeof STATUS_COLORS]?.badge ?? 'bg-muted text-muted-foreground';
 }

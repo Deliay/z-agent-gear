@@ -37,7 +37,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
   const lineClass = (type: string) => {
     switch (type) {
       case 'removed': return 'bg-destructive/10 text-destructive';
-      case 'added': return 'bg-green-500/10 text-green-600';
+      case 'added': return 'bg-success/10 text-success';
       default: return 'text-foreground';
     }
   };

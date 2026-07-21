@@ -49,7 +49,7 @@ export default function HarnessToolsSection({ controllerId }: HarnessToolsSectio
         <div className="space-y-2">
           {capabilities.map((cap) => (
             <div key={cap.type} className="flex items-center gap-3 rounded-lg border p-4">
-              <div className={`h-2 w-2 rounded-full shrink-0 ${cap.available ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <div className={`h-2 w-2 rounded-full shrink-0 ${cap.available ? 'bg-success' : 'bg-muted-foreground'}`} />
               <div className="flex-1">
                 <div className="font-medium">{cap.type}</div>
                 {cap.version && (
@@ -57,7 +57,7 @@ export default function HarnessToolsSection({ controllerId }: HarnessToolsSectio
                 )}
               </div>
               <span className={`rounded px-1.5 py-0.5 text-xs ${
-                cap.available ? 'bg-green-500/20 text-green-600' : 'bg-muted text-muted-foreground'
+                cap.available ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'
               }`}>
                 {cap.available ? '可用' : '不可用'}
               </span>

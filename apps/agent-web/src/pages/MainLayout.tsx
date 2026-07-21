@@ -11,7 +11,7 @@ export default function MainLayout() {
   if (loading) {
     return (
       <output className="flex h-screen items-center justify-center" aria-label="Loading…">
-        <div className="motion-safe:h-8 motion-safe:w-8 motion-safe:animate-spin motion-safe:rounded-full motion-safe:border-4 motion-safe:border-gray-300 motion-safe:border-t-blue-600" />
+        <div className="motion-safe:h-8 motion-safe:w-8 motion-safe:animate-spin motion-safe:rounded-full motion-safe:border-4 motion-safe:border-muted motion-safe:border-t-primary" />
         <span className="sr-only">Loading…</span>
       </output>
     );

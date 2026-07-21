@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
 async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
@@ -11,7 +11,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `e2e_ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const username = `ew${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($u: String!, $p: String!) {
       signup(username: $u, password: $p) { token user { id username } }
@@ -260,10 +260,10 @@ test.describe('Settings Workspace E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
     await expect(page.getByText('workspace-a', { exact: true }).first()).toBeVisible({ timeout: 5000 });

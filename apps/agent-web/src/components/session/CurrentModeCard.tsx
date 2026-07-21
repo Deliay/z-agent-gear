@@ -31,8 +31,8 @@ export default function CurrentModeCard({ messages }: CurrentModeCardProps) {
 
   return (
     <div className="w-full">
-      <div className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm text-purple-800">
-        <span className="font-medium">Mode changed to:</span>{' '}
+      <div className="rounded-lg border border-accent bg-accent/50 px-4 py-2 text-sm text-accent-foreground">
+        <span className="font-medium">模式已切换为：</span>{' '}
         <span className="font-mono">{parsed.modeId}</span>
       </div>
     </div>

@@ -76,7 +76,7 @@ describe('TodoListPanel', () => {
   it('should display unread indicator for unread todos', () => {
     render(<TodoListPanel />);
     fireEvent.click(screen.getByLabelText('待办事项'));
-    const blueDots = document.querySelectorAll('.bg-blue-500');
+    const blueDots = document.querySelectorAll('.bg-info');
     expect(blueDots.length).toBe(1);
   });
 

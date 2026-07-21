@@ -27,15 +27,15 @@ test.describe('Session Status Transitions', () => {
     await expect(page.locator(statusBadge())).toBeVisible({ timeout: 5000 });
     const initialBadge = await page.locator(statusBadge()).first().textContent();
     // Allow for idling if session started quickly
-    expect(['Creating', 'Connecting', 'Idle']).toContain(initialBadge);
+    expect(['创建中', '连接中', '空闲']).toContain(initialBadge);
 
     // Input should be disabled only if still creating/connecting
-    if (initialBadge !== 'Idle') {
+    if (initialBadge !== '空闲') {
       await expect(page.locator('textarea')).toBeDisabled();
     }
 
     // Wait for status to become idling
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     // Input should be enabled
     await expect(page.locator('textarea')).toBeEnabled();
@@ -61,12 +61,12 @@ test.describe('Session Status Transitions', () => {
     const sessionId = await createSession(page, controllerId, token, ws2.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
     await expect(page.locator('textarea')).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).not.toBeVisible();
 
     disconnect();
   });
@@ -91,14 +91,14 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
-    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '继续' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '删除' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).not.toBeVisible();
 
     disconnect();
   });
@@ -123,11 +123,11 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     // Close session
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
     // Listen for acp:resume
     const resumePromise = new Promise<void>((resolve) => {
@@ -144,23 +144,23 @@ test.describe('Session Resume (Continue)', () => {
     });
 
     // Click Continue
-    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: '继续' }).click();
 
     // Wait for button to show loading state
-    await expect(page.getByRole('button', { name: 'Continuing...' })).toBeVisible({ timeout: 3000 });
+    await expect(page.getByRole('button', { name: '继续中...' })).toBeVisible({ timeout: 3000 });
 
     // Wait for acp:resume response and status update
     await resumePromise;
 
     // Should transition to idling
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     // Input should be enabled
     await expect(page.locator('textarea')).toBeEnabled();
 
     // Continue button should disappear, Close should reappear
-    await expect(page.getByRole('button', { name: 'Continue' })).not.toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '继续' })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).toBeVisible();
 
     disconnect();
   });
@@ -184,11 +184,11 @@ test.describe('Session Resume (Continue)', () => {
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
 
-    await expect(page.locator(statusBadge())).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     // Close session
-    await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 5000 });
+    await page.getByRole('button', { name: '关闭' }).click();
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 5000 });
 
     // Listen for acp:resume and respond with failure
     const resumePromise = new Promise<void>((resolve) => {
@@ -205,15 +205,15 @@ test.describe('Session Resume (Continue)', () => {
       });
     });
 
-    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: '继续' }).click();
     await resumePromise;
 
     // Should remain ended
-    await expect(page.locator(statusBadge())).toHaveText('Ended', { timeout: 10000 });
+    await expect(page.locator(statusBadge())).toHaveText('已结束', { timeout: 10000 });
 
     // Continue button should still be visible
-    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close' })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: '继续' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '关闭' })).not.toBeVisible();
 
     disconnect();
   });

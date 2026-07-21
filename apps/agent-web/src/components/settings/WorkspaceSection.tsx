@@ -277,7 +277,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
                 </button>
                 <button
                   type="button"
-                  className={`h-4 w-4 rounded shrink-0 ${ws.isEnabled ? 'bg-green-500' : 'bg-gray-300'}`}
+                  className={`h-4 w-4 rounded shrink-0 ${ws.isEnabled ? 'bg-success' : 'bg-muted-foreground'}`}
                   onClick={() => handleToggle(ws.id)}
                 />
                 <div className="flex-1 min-w-0">
