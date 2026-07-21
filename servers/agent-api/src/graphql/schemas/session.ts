@@ -15,6 +15,8 @@ export const sessionTypeDefs = `#graphql
     claude_code
     gemini_cli
     codex
+    mimo_code
+    kimi_code
   }
 
   enum AcpMessageDirection {
