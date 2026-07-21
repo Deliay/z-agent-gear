@@ -105,14 +105,14 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // ACP Server section should appear and loading should complete
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 10000 });
 
@@ -135,14 +135,14 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // Wait for ACP Server loading to complete
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 5000 });
     await acpTrigger.click();
@@ -150,8 +150,8 @@ test.describe('Session ACP Server Type', () => {
     await expect(acpTrigger).toContainText('github_copilot', { timeout: 5000 });
 
     // Create Session should now be enabled
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     // Should navigate to session detail
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
@@ -170,18 +170,18 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // Wait for ACP Server loading to complete - opencode is auto-selected
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
 
     // Create Session should be enabled with auto-selected opencode
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     // Should navigate to session detail
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
@@ -200,14 +200,14 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // Wait for ACP Server loading to complete
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 5000 });
     await acpTrigger.click();
@@ -215,8 +215,8 @@ test.describe('Session ACP Server Type', () => {
     await expect(acpTrigger).toContainText('claude_code', { timeout: 5000 });
 
     // Create Session should now be enabled
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     // Should navigate to session detail
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
@@ -235,14 +235,14 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // Wait for ACP Server loading to complete
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 5000 });
     await acpTrigger.click();
@@ -250,8 +250,8 @@ test.describe('Session ACP Server Type', () => {
     await expect(acpTrigger).toContainText('gemini_cli', { timeout: 5000 });
 
     // Create Session should now be enabled
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     // Should navigate to session detail
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
@@ -270,14 +270,14 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
 
     // Wait for ACP Server loading to complete
-    await expect(page.getByText('Detecting ACP servers...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
     const acpTrigger = page.locator('[role="combobox"]').first();
     await expect(acpTrigger).toBeVisible({ timeout: 5000 });
     await acpTrigger.click();
@@ -285,8 +285,8 @@ test.describe('Session ACP Server Type', () => {
     await expect(acpTrigger).toContainText('codex', { timeout: 5000 });
 
     // Create Session should now be enabled
-    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10000 });
-    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
 
     // Should navigate to session detail
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });

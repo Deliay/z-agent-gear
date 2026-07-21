@@ -260,10 +260,10 @@ test.describe('Settings Workspace E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: 'New Session' }).click();
-    await expect(page.getByRole('heading', { name: 'New Session' })).toBeVisible();
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
     await expect(page.getByText('workspace-a', { exact: true }).first()).toBeVisible({ timeout: 5000 });

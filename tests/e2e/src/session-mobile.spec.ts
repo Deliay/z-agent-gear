@@ -116,7 +116,7 @@ test.describe('Session Mobile Layout', () => {
       await expect(sidebarEl).toBeVisible();
 
       // Sessions heading should be visible
-      await expect(page.locator('h2')).toContainText('Sessions');
+      await expect(page.locator('h2')).toContainText('会话');
 
       // Controller should be visible in the tree
       await expect(page.getByText('e2e-mobile-host')).toBeVisible();
@@ -140,7 +140,7 @@ test.describe('Session Mobile Layout', () => {
       await page.locator(sidebar()).getByText('📁 e2e-mob').click();
 
       // Click on session
-      await page.locator(sidebar()).getByText('New Session').click();
+      await page.locator(sidebar()).getByText('新建会话').click();
 
       // Should navigate to detail page - back button should be visible on mobile
       await expect(page.getByText('← 返回')).toBeVisible({ timeout: 10000 });
@@ -170,7 +170,7 @@ test.describe('Session Mobile Layout', () => {
       await page.getByText('← 返回').click();
 
       // Should be back on list - Sessions heading visible
-      await expect(page.locator('h2')).toContainText('Sessions', { timeout: 5000 });
+      await expect(page.locator('h2')).toContainText('会话', { timeout: 5000 });
     } finally {
       disconnect();
     }
@@ -211,10 +211,10 @@ test.describe('Session Mobile Layout', () => {
     await page.waitForURL('**/sessions', { timeout: 5000 });
 
     // Wait for page to fully render (loading spinner may appear first)
-    await page.waitForSelector('h2:has-text("Sessions")', { timeout: 10000 });
+    await page.waitForSelector('h2:has-text("会话")', { timeout: 10000 });
 
     // Should be back on sessions list (Sidebar renders h2 "Sessions")
-    await expect(page.locator('h2:has-text("Sessions")')).toBeVisible();
+    await expect(page.locator('h2:has-text("会话")')).toBeVisible();
   });
 
   test('should not show sidebar on session detail page', async ({ page }) => {

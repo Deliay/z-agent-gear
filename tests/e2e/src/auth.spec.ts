@@ -28,7 +28,7 @@ test.describe('Auth E2E', () => {
     await page.click('button[type="submit"]');
 
     await expect(page.locator(sidebar())).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('Sessions')).toBeVisible();
+    await expect(page.getByText('会话')).toBeVisible();
   });
 
   test('should show username in sidebar after login', async ({ page }) => {

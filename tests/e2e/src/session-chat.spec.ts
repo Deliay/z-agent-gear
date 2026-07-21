@@ -34,7 +34,7 @@ test.describe('Session Chat', () => {
     const ws = await createWorkspace(page, controllerId, '/tmp/e2e-chat', token);
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('空闲', { timeout: 10000 });
     await page.waitForTimeout(500);
 
     const textarea = page.locator('textarea');
@@ -75,7 +75,7 @@ test.describe('Session Chat', () => {
     const ws = await createWorkspace(page, controllerId, '/tmp/e2e-chat', token);
     const sessionId = await createSession(page, controllerId, token, ws.id);
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('Idle', { timeout: 10000 });
+    await expect(page.locator('.px-2.py-1.text-xs.font-medium.rounded-full')).toHaveText('空闲', { timeout: 10000 });
     await page.waitForTimeout(500);
 
     const textarea = page.locator('textarea');

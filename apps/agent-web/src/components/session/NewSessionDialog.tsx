@@ -107,11 +107,11 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
-        <h2 className="mb-4 text-lg font-semibold text-foreground">New Session</h2>
+        <h2 className="mb-4 text-lg font-semibold text-foreground">新建会话</h2>
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
             <label htmlFor="controller" className="mb-2 block text-sm font-medium text-card-foreground">
-              Controller
+              控制器
             </label>
             <select
               id="controller"
@@ -121,10 +121,10 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                 setSelectedAcpServer('');
                 setSelectedWorkspace('');
               }}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
               required
             >
-              <option value="">Select a controller</option>
+              <option value="">选择控制器</option>
               {onlineControllers.map((controller) => (
                 <option key={controller.id} value={controller.id}>
                   {controller.name}
@@ -132,17 +132,17 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               ))}
             </select>
             {onlineControllers.length === 0 && (
-              <p className="mt-1 text-sm text-destructive">No online controllers available</p>
+              <p className="mt-1 text-sm text-destructive">无在线控制器</p>
             )}
           </div>
 
           {selectedController && (
             <div className="mb-4">
               <label className="mb-2 block text-sm font-medium text-card-foreground">
-                ACP Server
+                ACP 服务
               </label>
               {acpLoading ? (
-                <p className="text-sm text-muted-foreground">Detecting ACP servers...</p>
+                <p className="text-sm text-muted-foreground">检测 ACP 服务中...</p>
               ) : (
                 <SelectRoot
                   value={selectedAcpServer}
@@ -150,7 +150,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {selectedAcpServer || 'Select ACP server'}
+                      {selectedAcpServer || '选择 ACP 服务'}
                     </SelectValue>
                     <SelectIcon />
                   </SelectTrigger>
@@ -176,10 +176,10 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
           {selectedController && (
             <div className="mb-6">
               <label className="mb-2 block text-sm font-medium text-card-foreground">
-                Working Directory
+                工作目录
               </label>
               {wsLoading ? (
-                <p className="text-sm text-muted-foreground">Loading workspaces...</p>
+                <p className="text-sm text-muted-foreground">加载工作区中...</p>
               ) : workspaces.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
                   暂无工作区，请先在设置中管理工作区
@@ -193,7 +193,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                     <SelectValue>
                       {selectedWorkspace
                         ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace
-                        : 'Select a workspace'}
+                        : '选择工作区'}
                     </SelectValue>
                     <SelectIcon />
                   </SelectTrigger>
@@ -252,14 +252,14 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
               onClick={onClose}
               className="rounded-md border border-input bg-background px-4 py-2 text-sm text-card-foreground hover:bg-accent"
             >
-              Cancel
+              取消
             </button>
             <button
               type="submit"
               disabled={!selectedController || !selectedAcpServer || !selectedWorkspace}
               className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              Create Session
+              创建会话
             </button>
           </div>
         </form>

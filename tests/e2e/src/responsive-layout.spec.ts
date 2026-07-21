@@ -97,7 +97,7 @@ test.describe('Responsive Layout', () => {
 
     // Should be in list mode
     await expect(page.locator(sidebar())).toBeVisible();
-    await expect(page.locator('h2')).toContainText('Sessions');
+    await expect(page.locator('h2')).toContainText('会话');
 
     // Verify we're in mobile mode (no separate main content)
     // The page should show the sidebar as the main content
