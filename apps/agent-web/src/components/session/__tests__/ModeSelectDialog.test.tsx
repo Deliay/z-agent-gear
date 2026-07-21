@@ -21,7 +21,7 @@ describe('ModeSelectDialog', () => {
       />,
     );
 
-    expect(screen.queryByText('Switch Mode')).toBeNull();
+    expect(screen.queryByText('切换模式')).toBeNull();
   });
 
   it('should render when open', () => {
@@ -36,7 +36,7 @@ describe('ModeSelectDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Switch Mode')).toBeDefined();
+    expect(screen.getByText('切换模式')).toBeDefined();
   });
 
   it('should display all modes', () => {
@@ -101,7 +101,7 @@ describe('ModeSelectDialog', () => {
     );
 
     fireEvent.click(screen.getByText('Code'));
-    fireEvent.click(screen.getByText('Confirm'));
+    fireEvent.click(screen.getByText('确认'));
 
     expect(onSelect).toHaveBeenCalledWith('code');
   });
@@ -118,11 +118,11 @@ describe('ModeSelectDialog', () => {
       />,
     );
 
-    const confirmButton = screen.getByText('Confirm') as HTMLButtonElement;
+    const confirmButton = screen.getByText('确认') as HTMLButtonElement;
     expect(confirmButton.disabled).toBe(true);
   });
 
-  it('should show "Switching..." text when loading', () => {
+  it('should show loading text when loading', () => {
     render(
       <ModeSelectDialog
         open={true}
@@ -134,7 +134,7 @@ describe('ModeSelectDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Switching...')).toBeDefined();
+    expect(screen.getByText('切换中...')).toBeDefined();
   });
 
   it('should call onClose when cancel button is clicked', () => {
@@ -150,7 +150,7 @@ describe('ModeSelectDialog', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Cancel'));
+    fireEvent.click(screen.getByText('取消'));
 
     expect(onClose).toHaveBeenCalled();
   });

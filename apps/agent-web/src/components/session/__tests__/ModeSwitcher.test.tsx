@@ -87,6 +87,6 @@ describe('ModeSwitcher', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('Switch Mode')).toBeDefined();
+    expect(screen.getByText('切换模式')).toBeDefined();
   });
 });

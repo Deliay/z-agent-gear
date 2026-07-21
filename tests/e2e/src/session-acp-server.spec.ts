@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
 async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {

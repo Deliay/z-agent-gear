@@ -41,7 +41,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
       >
-        <h2 className="mb-4 text-lg font-semibold text-popover-foreground">Switch Mode</h2>
+        <h2 className="mb-4 text-lg font-semibold text-popover-foreground">切换模式</h2>
         <div className="space-y-2">
           {modes.map((mode) => (
             <button

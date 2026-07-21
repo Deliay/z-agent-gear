@@ -14,7 +14,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<string> {
-  const username = `ea${Date.now().toString(36).slice(-6)}`;
+  const username = `ea${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   await gqlRequest(page, `
     mutation Signup($u: String!, $p: String!) {
       signup(username: $u, password: $p) { token user { id username } }
@@ -34,7 +34,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
 test.describe('Auth E2E', () => {
 
   test('should register a new user and redirect to main page', async ({ page }) => {
-    const username = `er${Date.now().toString(36).slice(-6)}`;
+    const username = `er${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
     await page.goto('/register');
     await expect(page.locator(cardTitle())).toContainText('注册');
 

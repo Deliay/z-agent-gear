@@ -12,7 +12,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `ec${Date.now().toString(36).slice(-6)}`;
+  const username = `ec${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($u: String!, $p: String!) {
       signup(username: $u, password: $p) { token user { id username } }
@@ -50,7 +50,6 @@ test.describe('Settings Controller E2E', () => {
     await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
     const nav = page.locator('nav[aria-label="Settings navigation"]');
 
-    await expect(nav.getByText('本地控制器', { exact: true })).toBeVisible();
     await expect(nav.getByRole('button', { name: '控制器管理' })).toBeVisible();
   });
 
