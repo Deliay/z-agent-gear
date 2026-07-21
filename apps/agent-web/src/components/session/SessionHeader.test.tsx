@@ -26,12 +26,12 @@ describe('SessionHeader', () => {
 
   it('should display running status badge', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Working')).toBeDefined();
+    expect(screen.getByText('工作中')).toBeDefined();
   });
 
   it('should display idling status badge', () => {
     render(<SessionHeader session={baseSession} status="idling" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Idle')).toBeDefined();
+    expect(screen.getByText('空闲')).toBeDefined();
   });
 
   it('should display OpenCode label for opencode server type', () => {
@@ -57,27 +57,27 @@ describe('SessionHeader', () => {
 
   it('should show Close button when status is running', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Close')).toBeDefined();
+    expect(screen.getByText('关闭')).toBeDefined();
   });
 
   it('should show Close button when status is idling', () => {
     render(<SessionHeader session={baseSession} status="idling" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Close')).toBeDefined();
+    expect(screen.getByText('关闭')).toBeDefined();
   });
 
   it('should hide Close button when status is ended', () => {
     render(<SessionHeader session={baseSession} status="ended" onClose={noop} onDelete={noop} />);
-    expect(screen.queryByText('Close')).toBeNull();
+    expect(screen.queryByText('关闭')).toBeNull();
   });
 
   it('should hide Close button when status is creating', () => {
     render(<SessionHeader session={baseSession} status="creating" onClose={noop} onDelete={noop} />);
-    expect(screen.queryByText('Close')).toBeNull();
+    expect(screen.queryByText('关闭')).toBeNull();
   });
 
   it('should always show Delete button', () => {
     render(<SessionHeader session={baseSession} status="ended" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Delete')).toBeDefined();
+    expect(screen.getByText('删除')).toBeDefined();
   });
 
   it('should show Continue button when status is ended', () => {
@@ -91,7 +91,7 @@ describe('SessionHeader', () => {
         controllerOnline={true}
       />,
     );
-    expect(screen.getByText('Continue')).toBeDefined();
+    expect(screen.getByText('继续')).toBeDefined();
   });
 
   it('should hide Continue button when status is not ended', () => {
@@ -105,7 +105,7 @@ describe('SessionHeader', () => {
         controllerOnline={true}
       />,
     );
-    expect(screen.queryByText('Continue')).toBeNull();
+    expect(screen.queryByText('继续')).toBeNull();
   });
 
   it('should disable Continue button when controller is offline', () => {
@@ -119,7 +119,7 @@ describe('SessionHeader', () => {
         controllerOnline={false}
       />,
     );
-    const btn = screen.getByText('Continue') as HTMLButtonElement;
+    const btn = screen.getByText('继续') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 
@@ -135,7 +135,7 @@ describe('SessionHeader', () => {
         resuming={true}
       />,
     );
-    const btn = screen.getByText('Continuing...');
+    const btn = screen.getByText('继续中...');
     expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -151,8 +151,8 @@ describe('SessionHeader', () => {
         resuming={true}
       />,
     );
-    expect(screen.getByText('Continuing...')).toBeDefined();
-    expect(screen.queryByText('Continue')).toBeNull();
+    expect(screen.getByText('继续中...')).toBeDefined();
+    expect(screen.queryByText('继续')).toBeNull();
   });
 
   it('should call onContinue when Continue clicked', () => {
@@ -167,33 +167,33 @@ describe('SessionHeader', () => {
         controllerOnline={true}
       />,
     );
-    screen.getByText('Continue').click();
+    screen.getByText('继续').click();
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
   it('should call onClose when Close button clicked', async () => {
     const onClose = vi.fn();
     render(<SessionHeader session={baseSession} status="running" onClose={onClose} onDelete={noop} />);
-    screen.getByText('Close').click();
+    screen.getByText('关闭').click();
     expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('should call onDelete when Delete button clicked', async () => {
     const onDelete = vi.fn();
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={onDelete} />);
-    screen.getByText('Delete').click();
+    screen.getByText('删除').click();
     expect(onDelete).toHaveBeenCalledOnce();
   });
 
   it('should display running status badge with pulse animation', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    const badge = screen.getByText('Working');
+    const badge = screen.getByText('工作中');
     expect(badge.className).toContain('animate-pulse');
   });
 
   it('should display disconnected status badge', () => {
     render(<SessionHeader session={baseSession} status="disconnected" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Disconnected')).toBeDefined();
+    expect(screen.getByText('已断连')).toBeDefined();
   });
 
   it('should show Session fallback when session is null', () => {

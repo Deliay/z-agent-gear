@@ -19,7 +19,7 @@ export default function TerminalOutput({ output, maxHeight = '24rem' }: Terminal
 
   return (
     <div
-      className="overflow-y-auto rounded-lg bg-gray-950 p-3 font-mono text-sm leading-relaxed text-green-400"
+      className="overflow-y-auto rounded-lg bg-background p-3 font-mono text-sm leading-relaxed text-success border border-border"
       style={{ maxHeight }}
     >
       {lines.map((line, i) => (

@@ -169,7 +169,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                       <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                         {key.type}
                       </span>
-                      <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning-foreground">
                         等待连接
                       </span>
                     </div>
@@ -190,7 +190,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
 
               {boundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => (
                 <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border p-4">
-                  <div className={`h-2 w-2 rounded-full ${ctrl.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  <div className={`h-2 w-2 rounded-full ${ctrl.status === 'online' ? 'bg-success' : 'bg-muted-foreground'}`} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground">{ctrl.name || ctrl.hostname}</span>
@@ -198,7 +198,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         {ctrl.type}
                       </span>
                       <span className={`rounded px-1.5 py-0.5 text-xs ${
-                        ctrl.status === 'online' ? 'bg-green-500/20 text-green-600' : 'bg-muted text-muted-foreground'
+                        ctrl.status === 'online' ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'
                       }`}>
                         {ctrl.status === 'online' ? '在线' : '离线'}
                       </span>

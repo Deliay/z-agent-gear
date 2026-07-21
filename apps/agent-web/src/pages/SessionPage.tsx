@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
+import { toast } from 'sonner';
 import {
   GET_SESSION,
   GET_SESSIONS,
@@ -28,6 +29,7 @@ import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
 import InputBox from '../components/session/InputBox';
 import NewSessionDialog from '../components/session/NewSessionDialog';
+import { Button } from '../components/ui/button';
 import { useCommandState } from '../hooks/useCommandState';
 
 interface AcpMessage {
@@ -64,7 +66,6 @@ export default function SessionPage() {
   const [resuming, setResuming] = useState(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [errorToast, setErrorToast] = useState<string | null>(null);
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
@@ -154,7 +155,7 @@ export default function SessionPage() {
         setStatus(data.data.status);
         if (data.data.status === 'ended' && data.data.error) {
           setResuming(false);
-          setErrorToast(getErrorMessage(data.data.error));
+          toast.error(getErrorMessage(data.data.error));
         }
         if (data.data.status === 'idling') {
           setResuming(false);
@@ -187,17 +188,10 @@ export default function SessionPage() {
     const timeout = setTimeout(() => {
       setResuming(false);
       setStatus('ended');
-      setErrorToast(getErrorMessage('RESUME_TIMEOUT'));
+      toast.error(getErrorMessage('RESUME_TIMEOUT'));
     }, RESUME_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [resuming]);
-
-  // Auto-dismiss error toast
-  useEffect(() => {
-    if (!errorToast) return;
-    const timer = setTimeout(() => setErrorToast(null), 5000);
-    return () => clearTimeout(timer);
-  }, [errorToast]);
 
   const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string) => {
     try {
@@ -268,12 +262,12 @@ export default function SessionPage() {
       if (data?.resumeSession?.success === false) {
         setStatus('ended');
         setResuming(false);
-        setErrorToast(getErrorMessage(data.resumeSession.error || undefined));
+        toast.error(getErrorMessage(data.resumeSession.error || undefined));
       }
     } catch (error) {
       setStatus('ended');
       setResuming(false);
-      setErrorToast('Network error. Please check your connection.');
+      toast.error('网络错误，请检查连接。');
     }
   };
 
@@ -315,7 +309,7 @@ export default function SessionPage() {
   if (sessionLoading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
       </div>
     );
   }
@@ -324,16 +318,12 @@ export default function SessionPage() {
     return (
       <div className="p-6">
         <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Sessions</h1>
-          <button
-            type="button"
-            onClick={() => setShowNewSessionDialog(true)}
-            className="rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-          >
-            New Session
-          </button>
+          <h1 className="text-2xl font-bold">会话</h1>
+          <Button onClick={() => setShowNewSessionDialog(true)}>
+            新建会话
+          </Button>
         </div>
-        <p className="text-muted-foreground">No sessions found.</p>
+        <p className="text-muted-foreground">暂无会话</p>
 
         {showNewSessionDialog && (
           <NewSessionDialog
@@ -348,11 +338,6 @@ export default function SessionPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {errorToast && (
-        <div className="fixed right-4 top-4 z-50 max-w-sm rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive shadow-lg">
-          {errorToast}
-        </div>
-      )}
       <SessionHeader
         session={sessionData?.session ? {
           id: sessionData.session.id,
