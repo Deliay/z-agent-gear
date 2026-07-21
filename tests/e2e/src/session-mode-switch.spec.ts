@@ -171,7 +171,7 @@ test.describe('Session Mode Switch', () => {
     const modeBtn = page.locator('button:has-text("Code")').first();
     await modeBtn.click();
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '切换模式' })).toBeVisible();
 
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('Architect', { exact: true })).toBeVisible();
@@ -180,7 +180,7 @@ test.describe('Session Mode Switch', () => {
     await expect(dialog.getByText('Coding mode')).toBeVisible();
 
     await page.getByRole('button', { name: '取消' }).first().click();
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: '切换模式' })).not.toBeVisible();
 
     disconnect();
   });
@@ -256,14 +256,14 @@ test.describe('Session Mode Switch', () => {
     const modeBtn = page.locator('button:has-text("Code")').first();
     await modeBtn.click();
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '切换模式' })).toBeVisible();
 
     await page.getByText('Architect', { exact: true }).click();
     await page.getByRole('button', { name: '确认' }).click();
 
     await setModePromise;
 
-    await expect(page.getByRole('heading', { name: 'Switch Mode' })).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('heading', { name: '切换模式' })).not.toBeVisible({ timeout: 5000 });
 
     disconnect();
   });
