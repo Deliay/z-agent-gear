@@ -185,7 +185,11 @@ type ResumeSessionPayload {
 type Query {
   sessions: [Session!]!
   session(id: ID!): Session
-  sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
+  # 返回按时间升序排列的消息列表
+  # before: 可选游标，仅返回该消息之前（更早）的消息
+  # limit: 可选，默认25，上限100
+  # hasMore: 返回条数 == limit 则可能还有更多
+  sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
   listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   getTodoList: [TodoItem!]!

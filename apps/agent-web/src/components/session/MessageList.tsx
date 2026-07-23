@@ -203,6 +203,8 @@ interface MessageListProps {
 export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isPrependRef = useRef(false);
+  const scrollStateRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -210,12 +212,37 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   // Scroll to bottom when messages change (only for new messages, not initial load)
   const prevCountRef = useRef(messages.length);
+  const prevFirstIdRef = useRef<string | null>(null);
   useEffect(() => {
+    const currentFirstId = messages[0]?.id || null;
+    
+    // Detect prepend: first message ID changed means history was prepended
+    if (prevFirstIdRef.current !== null && currentFirstId !== prevFirstIdRef.current) {
+      isPrependRef.current = true;
+    }
+    prevFirstIdRef.current = currentFirstId;
+
     if (messages.length > prevCountRef.current) {
-      scrollToBottom();
+      if (isPrependRef.current) {
+        // Prepend: restore scroll position
+        isPrependRef.current = false;
+        const list = listRef.current;
+        const savedState = scrollStateRef.current;
+        if (list && savedState) {
+          // Use requestAnimationFrame to ensure DOM has updated
+          requestAnimationFrame(() => {
+            const newScrollHeight = list.scrollHeight;
+            list.scrollTop = newScrollHeight - savedState.scrollHeight + savedState.scrollTop;
+            scrollStateRef.current = null;
+          });
+        }
+      } else {
+        // Append: scroll to bottom for new messages
+        scrollToBottom();
+      }
     }
     prevCountRef.current = messages.length;
-  }, [messages.length, scrollToBottom]);
+  }, [messages, scrollToBottom]);
 
   // Scroll to bottom on initial load
   const initialLoadDone = useRef(false);
@@ -232,6 +259,11 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
     // Load more when scrolled near the top
     if (list.scrollTop < 100) {
+      // Save scroll state before loading
+      scrollStateRef.current = {
+        scrollHeight: list.scrollHeight,
+        scrollTop: list.scrollTop,
+      };
       onLoadMore();
     }
   }, [hasMore, loadingMore, onLoadMore]);
@@ -306,7 +338,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           {lastPlanMessages && (
             <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
           )}
-          {hasMore && (
+          {hasMore ? (
             <div className="py-2 text-center">
               {loadingMore ? (
                 <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -323,7 +355,11 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                 </button>
               )}
             </div>
-          )}
+          ) : messages.length > 0 ? (
+            <div className="py-2 text-center text-sm text-muted-foreground">
+              已加载全部历史
+            </div>
+          ) : null}
           {groups.map((group) => {
             const groupKey = group.messages[0]?.id || 'unknown';
             const expanded = isExpanded(groupKey);

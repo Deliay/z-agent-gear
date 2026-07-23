@@ -30,7 +30,7 @@ export class SessionSSEService {
     });
 
     // Send history messages
-    const history = await sessionService.getMessages(sessionId, userId, 0);
+    const history = await sessionService.getMessages(sessionId, userId, { limit: 25 });
     res.write(`data: ${JSON.stringify({ type: 'history', data: history })}\n\n`);
 
     // Send current status

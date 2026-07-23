@@ -329,35 +329,26 @@ export class SessionService {
     return false;
   }
 
-  async getMessages(sessionId: string, userId: string, limit = 100, offset = 0): Promise<Record<string, unknown>[]> {
+  async getMessages(sessionId: string, userId: string, options: { before?: string; limit?: number } = {}): Promise<Record<string, unknown>[]> {
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) {
       throw new Error('Session not found');
     }
 
-    // Query A: find last 3 usage_update _ids
-    const usageIds = await AcpMessage.find(
-      { sessionId, 'content.sessionUpdate': 'usage_update' },
-      { _id: 1 },
-    )
-      .sort({ _id: -1 })
-      .limit(3)
-      .lean();
+    const { before, limit: rawLimit = 25 } = options;
+    const limit = Math.min(Math.max(rawLimit, 1), 100);
 
-    // Build filter based on whether we found 3 usage_updates
     const filter: Record<string, unknown> = { sessionId };
-    if (usageIds.length === 3) {
-      const cutoffId = usageIds[2]._id;
-      filter._id = { $gt: cutoffId };
+    if (before && mongoose.Types.ObjectId.isValid(before)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(before) };
     }
 
     const messages = await AcpMessage.find(filter)
-      .sort({ _id: 1 })
-      .skip(offset)
+      .sort({ _id: -1 })
       .limit(limit)
       .lean();
 
-    return messages.map(this.mapMessage.bind(this));
+    return messages.reverse().map(this.mapMessage.bind(this));
   }
 
   async addMessage(sessionId: string, message: { direction: string; type: string; content: unknown; metadata?: string }): Promise<Record<string, unknown>> {

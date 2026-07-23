@@ -20,7 +20,7 @@ export const sessionResolvers = {
     },
     sessionMessages: async (
       _parent: unknown,
-      args: { sessionId: string; limit?: number; offset?: number },
+      args: { sessionId: string; before?: string; limit?: number },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -29,8 +29,7 @@ export const sessionResolvers = {
       return sessionService.getMessages(
         args.sessionId,
         context.currentUser.id,
-        args.limit,
-        args.offset,
+        { before: args.before, limit: args.limit },
       );
     },
     acpCapabilities: async (

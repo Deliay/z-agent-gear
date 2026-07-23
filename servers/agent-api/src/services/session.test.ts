@@ -463,24 +463,14 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue(mockSessionDoc()),
       } as never);
 
-      // Query A: find usage_update → empty (no filter needed)
-      const queryALean = vi.fn().mockResolvedValue([]);
-      const queryALimitChain = { lean: queryALean };
-      const queryASortChain = { limit: vi.fn().mockReturnValue(queryALimitChain) };
-      const queryAFind = { sort: vi.fn().mockReturnValue(queryASortChain) };
+      const queryLean = vi.fn().mockResolvedValue([mockMessageDoc()]);
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
 
-      // Query B: find messages → return mock doc
-      const queryBLean = vi.fn().mockResolvedValue([mockMessageDoc()]);
-      const queryBLimitChain = { lean: queryBLean };
-      const queryBSkipChain = { limit: vi.fn().mockReturnValue(queryBLimitChain) };
-      const queryBSortChain = { skip: vi.fn().mockReturnValue(queryBSkipChain) };
-      const queryBFind = { sort: vi.fn().mockReturnValue(queryBSortChain) };
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
 
-      vi.mocked(AcpMessage.find)
-        .mockReturnValueOnce(queryAFind as never)
-        .mockReturnValueOnce(queryBFind as never);
-
-      const result = await sessionService.getMessages('sess-1', 'user-1', 10, 0);
+      const result = await sessionService.getMessages('sess-1', 'user-1', { limit: 10 });
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('msg-1');
@@ -493,6 +483,161 @@ describe('SessionService', () => {
       } as never);
 
       await expect(sessionService.getMessages('sess-1', 'user-1')).rejects.toThrow('Session not found');
+    });
+
+    it('should return recent 25 messages by default', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = Array.from({ length: 25 }, (_, i) => 
+        mockMessageDoc({ _id: oid(`msg-${i + 1}`) })
+      );
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages);
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1');
+
+      expect(AcpMessage.find).toHaveBeenCalledWith({ sessionId: 'sess-1' });
+      expect(result).toHaveLength(25);
+    });
+
+    it('should return all messages when total is less than 25', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = Array.from({ length: 10 }, (_, i) => 
+        mockMessageDoc({ _id: oid(`msg-${i + 1}`) })
+      );
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages.reverse());
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1');
+
+      expect(result).toHaveLength(10);
+    });
+
+    it('should support before cursor for pagination', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = Array.from({ length: 25 }, (_, i) => 
+        mockMessageDoc({ _id: oid(`msg-${i + 1}`) })
+      );
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages);
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      // 使用有效的ObjectId格式
+      const beforeId = '507f1f77bcf86cd799439011';
+      const result = await sessionService.getMessages('sess-1', 'user-1', { before: beforeId });
+
+      expect(AcpMessage.find).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        _id: { $lt: expect.any(Object) },
+      });
+      expect(result).toHaveLength(25);
+    });
+
+    it('should clamp limit to 100 when exceeds maximum', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = Array.from({ length: 100 }, (_, i) => 
+        mockMessageDoc({ _id: oid(`msg-${i + 1}`) })
+      );
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages.reverse());
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1', { limit: 200 });
+
+      expect(result).toHaveLength(100);
+    });
+
+    it('should ignore invalid before cursor', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = Array.from({ length: 25 }, (_, i) => 
+        mockMessageDoc({ _id: oid(`msg-${i + 1}`) })
+      );
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages.reverse());
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1', { before: 'invalid-id' });
+
+      expect(AcpMessage.find).toHaveBeenCalledWith({ sessionId: 'sess-1' });
+      expect(result).toHaveLength(25);
+    });
+
+    it('should return empty array for empty session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const queryLean = vi.fn().mockResolvedValue([]);
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('should return messages in ascending order', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const mockMessages = [
+        mockMessageDoc({ _id: oid('msg-3') }),
+        mockMessageDoc({ _id: oid('msg-2') }),
+        mockMessageDoc({ _id: oid('msg-1') }),
+      ];
+
+      const queryLean = vi.fn().mockResolvedValue(mockMessages);
+      const queryLimitChain = { lean: queryLean };
+      const querySortChain = { limit: vi.fn().mockReturnValue(queryLimitChain) };
+      const queryFind = { sort: vi.fn().mockReturnValue(querySortChain) };
+
+      vi.mocked(AcpMessage.find).mockReturnValue(queryFind as never);
+
+      const result = await sessionService.getMessages('sess-1', 'user-1');
+
+      expect(result[0].id).toBe('msg-1');
+      expect(result[1].id).toBe('msg-2');
+      expect(result[2].id).toBe('msg-3');
     });
   });
 
