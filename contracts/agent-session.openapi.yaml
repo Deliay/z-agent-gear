@@ -17,7 +17,7 @@ paths:
         建立 Server-Sent Events 连接，实时接收 Session 的 ACP 消息。
 
         连接建立后：
-        1. 立即返回最近 100 条历史消息（`history` 事件）
+        1. 立即返回最近最多 25 条历史消息（`history` 事件）
         2. 后续有新消息时实时推送（`message` 事件）
         3. 每 30s 发送心跳保活（`heartbeat` 事件）
         4. Session 状态变更时推送（`status` 事件）

@@ -58,8 +58,8 @@ const SESSION_QUERY = `
 `;
 
 const SESSION_MESSAGES_QUERY = `
-  query SessionMessages($sessionId: ID!, $limit: Int, $offset: Int) {
-    sessionMessages(sessionId: $sessionId, limit: $limit, offset: $offset) {
+  query SessionMessages($sessionId: ID!, $before: ID, $limit: Int) {
+    sessionMessages(sessionId: $sessionId, before: $before, limit: $limit) {
       id sessionId direction type content metadata createdAt
     }
   }
@@ -436,7 +436,7 @@ describe('Session GraphQL API', () => {
 
       const res = await gqlRequest(
         SESSION_MESSAGES_QUERY,
-        { sessionId, limit: 10, offset: 0 },
+        { sessionId, limit: 10 },
         authToken,
       );
       const body = await res.json();
@@ -449,7 +449,7 @@ describe('Session GraphQL API', () => {
     it('should reject query for non-existent session', async () => {
       const res = await gqlRequest(
         SESSION_MESSAGES_QUERY,
-        { sessionId: '000000000000000000000000', limit: 10, offset: 0 },
+        { sessionId: '000000000000000000000000', limit: 10 },
         authToken,
       );
       const body = await res.json();
@@ -1528,7 +1528,7 @@ describe('Session SSE API', () => {
       // Verify output message persisted
       const messagesRes = await gqlRequest(
         SESSION_MESSAGES_QUERY,
-        { sessionId, limit: 10, offset: 0 },
+        { sessionId, limit: 10 },
         authToken,
       );
       const messagesBody = await messagesRes.json();

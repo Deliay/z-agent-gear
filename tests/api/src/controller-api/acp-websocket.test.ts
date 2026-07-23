@@ -433,13 +433,13 @@ describe('Controller API ACP WebSocket', () => {
 
       // Verify message persisted (check via agent-api GraphQL)
       const msgQuery = `
-        query SessionMessages($sessionId: ID!, $limit: Int, $offset: Int) {
-          sessionMessages(sessionId: $sessionId, limit: $limit, offset: $offset) {
+        query SessionMessages($sessionId: ID!, $before: ID, $limit: Int) {
+          sessionMessages(sessionId: $sessionId, before: $before, limit: $limit) {
             id direction type content
           }
         }
       `;
-      const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10, offset: 0 }, authToken);
+      const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10 }, authToken);
       const msgBody = await msgRes.json();
       const messages = msgBody.data.sessionMessages;
       expect(messages.length).toBeGreaterThanOrEqual(1);
