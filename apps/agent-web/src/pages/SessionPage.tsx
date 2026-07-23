@@ -341,6 +341,7 @@ export default function SessionPage() {
       }
     } catch (error) {
       console.error('Failed to load more messages:', error);
+      toast.error('加载历史消息失败，请重试');
     } finally {
       setLoadingMore(false);
     }

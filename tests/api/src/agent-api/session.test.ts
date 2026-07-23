@@ -737,6 +737,13 @@ describe('Session SSE API', () => {
     const text = decoder.decode(value);
     expect(text).toContain('"type":"history"');
 
+    // Verify history event contains at most 25 messages
+    const historyMatch = text.match(/data: ({.*?"type":"history".*?})\n/);
+    if (historyMatch) {
+      const historyData = JSON.parse(historyMatch[1]);
+      expect(historyData.data.length).toBeLessThanOrEqual(25);
+    }
+
     reader.cancel();
     controller.abort();
   });
