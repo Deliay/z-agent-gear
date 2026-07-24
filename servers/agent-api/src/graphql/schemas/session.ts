@@ -122,7 +122,7 @@ export const sessionTypeDefs = `#graphql
   extend type Query {
     sessions: [Session!]!
     session(id: ID!): Session
-    sessionMessages(sessionId: ID!, limit: Int, offset: Int): [AcpMessage!]!
+    sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
     listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   }

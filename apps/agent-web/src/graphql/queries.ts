@@ -118,8 +118,8 @@ export const GET_SESSION = gql`
 `
 
 export const GET_SESSION_MESSAGES = gql`
-  query GetSessionMessages($sessionId: ID!, $limit: Int, $offset: Int) {
-    sessionMessages(sessionId: $sessionId, limit: $limit, offset: $offset) {
+  query GetSessionMessages($sessionId: ID!, $before: ID, $limit: Int) {
+    sessionMessages(sessionId: $sessionId, before: $before, limit: $limit) {
       id
       sessionId
       direction

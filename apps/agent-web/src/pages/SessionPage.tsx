@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation } from '@apollo/client/react';
+import { useQuery, useMutation, useApolloClient } from '@apollo/client/react';
 import { toast } from 'sonner';
 import {
   GET_SESSION,
   GET_SESSIONS,
   GET_CONTROLLERS,
+  GET_SESSION_MESSAGES,
 } from '../graphql/queries';
 import {
   CREATE_SESSION,
@@ -70,12 +71,15 @@ export default function SessionPage() {
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const initializedRef = useRef(false);
   const lastMessageIsSettingUpdateRef = useRef(false);
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const { commands: availableCommands, updateCommands } = useCommandState();
+  const client = useApolloClient();
 
   const isWorking = status === 'running';
 
@@ -120,6 +124,7 @@ export default function SessionPage() {
       const data = JSON.parse(event.data);
       if (data.type === 'history') {
         setMessages(data.data);
+        setHasMore(data.data.length >= 25);
         setSseLoading(false);
       } else if (data.type === 'message') {
         setSseLoading(false);
@@ -301,6 +306,47 @@ export default function SessionPage() {
     }
   };
 
+  const handleLoadMore = async () => {
+    if (!id || !hasMore || loadingMore || messages.length === 0) return;
+    
+    setLoadingMore(true);
+    try {
+      const firstMessageId = messages[0]?.id;
+      if (!firstMessageId) {
+        setLoadingMore(false);
+        return;
+      }
+
+      const { data } = await client.query({
+        query: GET_SESSION_MESSAGES,
+        variables: {
+          sessionId: id,
+          before: firstMessageId,
+          limit: 25,
+        },
+        fetchPolicy: 'network-only',
+      });
+
+      if (data?.sessionMessages) {
+        const olderMessages = data.sessionMessages;
+        if (olderMessages.length < 25) {
+          setHasMore(false);
+        }
+        
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(msg => msg.id));
+          const newMessages = olderMessages.filter((msg: AcpMessage) => !existingIds.has(msg.id));
+          return [...newMessages, ...prev];
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load more messages:', error);
+      toast.error('加载历史消息失败，请重试');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const sessionController = controllersData?.controllers.find(
     (c) => c.id === sessionData?.session?.controllerId,
   );
@@ -366,6 +412,9 @@ export default function SessionPage() {
         messages={messages}
         sseLoading={sseLoading}
         sseError={sseError}
+        hasMore={hasMore}
+        onLoadMore={handleLoadMore}
+        loadingMore={loadingMore}
       />
       <InputBox
         sessionId={id}
