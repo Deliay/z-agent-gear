@@ -70,14 +70,16 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       if (json.data?.controller) {
         setWorktreeDir(json.data.controller.worktreeDir || null);
       }
-    } catch { }
+    } catch {
+      // ignore error
+    }
   };
 
   useEffect(() => {
     if (controllerId) {
       refetchWorktreeDir();
     }
-  }, [controllerId]);
+  }, [controllerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleWorktreeDirChange = async (path: string) => {
     await setControllerWorktreeDir({

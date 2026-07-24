@@ -12,7 +12,7 @@ interface DirectoryPickerProps {
   onClose: () => void;
 }
 
-export function getParentPath(path: string): string {
+export function getParentPath(path: string): string { // eslint-disable-line react-refresh/only-export-components
   if (path === '/') return '/';
   const normalized = path.replace(/[\\/]+$/, '');
   const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
