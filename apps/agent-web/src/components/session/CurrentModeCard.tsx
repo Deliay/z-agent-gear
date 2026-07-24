@@ -16,7 +16,7 @@ export default function CurrentModeCard({ messages }: CurrentModeCardProps) {
   if (messages.length === 0) return null;
 
   const raw = messages[messages.length - 1].content;
-  let parsed: { modeId?: string } | null = null;
+  let parsed: { modeId?: string } | null;
   if (typeof raw === 'object') {
     parsed = raw as { modeId?: string };
   } else {

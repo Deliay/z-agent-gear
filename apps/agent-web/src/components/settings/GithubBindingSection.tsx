@@ -32,7 +32,7 @@ export default function GithubBindingSection() {
       next.delete('message')
       setSearchParams(next, { replace: true })
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (toast) {

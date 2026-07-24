@@ -264,7 +264,7 @@ export default function SessionPage() {
         setResuming(false);
         toast.error(getErrorMessage(data.resumeSession.error || undefined));
       }
-    } catch (error) {
+    } catch {
       setStatus('ended');
       setResuming(false);
       toast.error('网络错误，请检查连接。');
@@ -295,8 +295,8 @@ export default function SessionPage() {
           type: 'text',
         },
       });
-    } catch (error) {
-      console.error('Failed to send message:', error);
+    } catch {
+      console.error('Failed to send message:');
       setSending(false);
     }
   };
@@ -348,7 +348,7 @@ export default function SessionPage() {
           status: sessionData.session.status,
           externalSessionId: sessionData.session.externalSessionId,
           cwd: sessionData.session.cwd,
-          worktreePath: (sessionData.session as any).worktreePath || null,
+          worktreePath: ('worktreePath' in sessionData.session ? (sessionData.session as { worktreePath?: string }).worktreePath : null) || null,
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,

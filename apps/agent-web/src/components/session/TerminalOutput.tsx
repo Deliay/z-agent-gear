@@ -7,9 +7,9 @@ function cleanOutput(text: string): string {
   let result = text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
-  result = result.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-  result = result.replace(/\x1b\][0-9;]*[^\x1b]*(\x1b\\)|(\x07)/g, '');
-  result = result.replace(/\x1b[^a-zA-Z]*[a-zA-Z]/g, '');
+  result = result.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, ''); // eslint-disable-line no-control-regex
+  result = result.replace(/\x1b\][0-9;]*[^\x1b]*(\x1b\\)|(\x07)/g, ''); // eslint-disable-line no-control-regex
+  result = result.replace(/\x1b[^a-zA-Z]*[a-zA-Z]/g, ''); // eslint-disable-line no-control-regex
   return result;
 }
 

@@ -94,7 +94,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
         }
       });
     }
-  }, [selectedWorkspace, selectedController]);
+  }, [selectedWorkspace, selectedController, detectGitRepo, workspaces]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -110,7 +110,7 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       }
     }
 
-    let groupIndex = -1;
+    let groupIndex: number;
 
     if ((groupType === 'tool_call' || groupType === 'sub_agent' || groupType === 'read' || groupType === 'fetch') && toolCallId) {
       // Tool calls and specialized types: group by toolCallId across the entire message list
