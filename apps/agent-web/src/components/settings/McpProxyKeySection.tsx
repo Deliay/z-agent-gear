@@ -38,14 +38,14 @@ export default function McpProxyKeySection() {
 
   useEffect(() => {
     loadKeys();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadKeys = async () => {
     try {
       setLoading(true);
       const data = await fetchMcpProxyKeys(token!);
       setKeys(data);
-    } catch (err) {
+    } catch {
       toast.error('Failed to load MCP proxy keys');
     } finally {
       setLoading(false);
@@ -64,7 +64,7 @@ export default function McpProxyKeySection() {
       setCreatedKey(result.rawKey);
       setNewKeyName('');
       toast.success('MCP proxy key created');
-    } catch (err) {
+    } catch {
       toast.error('Failed to create MCP proxy key');
     }
   };
@@ -74,7 +74,7 @@ export default function McpProxyKeySection() {
       await revokeMcpProxyKey(token!, id);
       setKeys(keys.map(k => k.id === id ? { ...k, status: 'revoked' } : k));
       toast.success('MCP proxy key revoked');
-    } catch (err) {
+    } catch {
       toast.error('Failed to revoke MCP proxy key');
     }
   };

@@ -16,7 +16,7 @@ export default function ConfigOptionCard({ messages }: ConfigOptionCardProps) {
   if (messages.length === 0) return null;
 
   const raw = messages[messages.length - 1].content;
-  let parsed: { configOptions?: Array<{ id: string; name?: string; value?: string; currentValue?: string }> } | null = null;
+  let parsed: { configOptions?: Array<{ id: string; name?: string; value?: string; currentValue?: string }> } | null;
   if (typeof raw === 'object') {
     parsed = raw as { configOptions?: Array<{ id: string; name?: string; value?: string; currentValue?: string }> };
   } else {
