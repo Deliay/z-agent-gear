@@ -20,6 +20,7 @@ import {
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
+  GetSessionMessagesQuery,
   GetControllersQuery,
   CreateSessionMutation,
   ResumeSessionMutation,
@@ -317,7 +318,7 @@ export default function SessionPage() {
         return;
       }
 
-      const { data } = await client.query({
+      const { data } = await client.query<GetSessionMessagesQuery>({
         query: GET_SESSION_MESSAGES,
         variables: {
           sessionId: id,
