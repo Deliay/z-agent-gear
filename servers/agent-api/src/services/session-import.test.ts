@@ -348,13 +348,15 @@ describe('SessionImportService', () => {
       expect(mockRedis.publish).not.toHaveBeenCalled();
     });
 
-    it('should reject deleting a connecting session', async () => {
+    it('should allow deleting a connecting (stuck) session', async () => {
       vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'connecting' }) as never);
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
 
-      await expect(sessionImportService.deleteHistorySession('user-1', 'sess-1')).rejects.toThrow(
-        "Cannot delete session in 'connecting' status",
-      );
-      expect(Session.deleteOne).not.toHaveBeenCalled();
+      const result = await sessionImportService.deleteHistorySession('user-1', 'sess-1', false);
+
+      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' });
+      expect(result).toEqual({ success: true, syncedToAgent: false, error: null });
     });
 
     it('should allow deleting an idling session', async () => {

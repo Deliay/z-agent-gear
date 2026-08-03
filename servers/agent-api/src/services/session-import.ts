@@ -95,8 +95,8 @@ export class SessionImportService {
     }
 
     const sessionStatus = (session as unknown as { status?: string }).status;
-    if (sessionStatus && sessionStatus !== 'ended' && sessionStatus !== 'idling') {
-      throw new Error(`Cannot delete session in '${sessionStatus}' status; only ended or idling sessions can be deleted`);
+    if (sessionStatus === 'running') {
+      throw new Error(`Cannot delete session in 'running' status; stop the session before deleting`);
     }
 
     await Session.deleteOne({ _id: sessionId, userId });

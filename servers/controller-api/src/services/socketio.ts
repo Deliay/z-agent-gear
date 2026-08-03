@@ -4,7 +4,6 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { getRedisClient } from '../middleware/redis.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
-import { Session } from '../models/session.js';
 import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
@@ -194,7 +193,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
       if (!authenticated) return;
       try {
         const configOptions = payload.configOptions ?? [];
-        await Session.findByIdAndUpdate(payload.sessionId, { configOptions });
+        // publishConfigOptions 内部已写入 Session（含 mode/model 字段），此处无需重复写
         await acpSessionManager.publishConfigOptions(payload.sessionId, configOptions);
       } catch (err) {
         console.error(`ACP config-options error for session ${payload.sessionId}:`, err);

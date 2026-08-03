@@ -41,7 +41,7 @@ test.describe('Session Chat', () => {
     await textarea.pressSequentially('Hello agent!');
     await page.keyboard.press('Enter');
 
-    await expect(page.getByText('Hello agent!')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Hello agent!', { exact: true })).toBeVisible({ timeout: 10000 });
 
     await expect(page.getByText('Echo: Hello agent!')).toBeVisible({ timeout: 5000 });
 

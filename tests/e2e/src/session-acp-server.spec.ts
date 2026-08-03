@@ -4,8 +4,6 @@ import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-cli
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
-const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
-
 async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -104,6 +102,8 @@ function registerControllerWithConfigOptions(rawKey: string): Promise<{ controll
           sessionId: data.sessionId,
           success: true,
           externalSessionId: `ext_cfg_${Date.now()}`,
+          availableModels: [{ id: 'default', name: 'Default' }, { id: 'fast', name: 'Fast' }],
+          currentModelId: 'default',
           configOptions: [
             { id: 'autosave', name: 'Autosave', type: 'boolean', currentValue: 'false', category: 'general' },
             { id: 'model', name: 'Model', type: 'select', currentValue: 'default', category: 'model', options: [{ value: 'default', name: 'Default' }, { value: 'fast', name: 'Fast' }] },
@@ -415,7 +415,7 @@ test.describe('Session ACP Server Type', () => {
     const { controllerId, disconnect, socket } = await registerControllerWithConfigOptions(rawKey);
     const ws = await createWorkspace(page, controllerId, `/tmp/e2e-acp-cfg-${Math.random().toString(36).slice(2, 8)}`, token);
 
-    const setConfigPromise = new Promise<void>((resolve) => {
+    const setConfigPromise = new Promise<{ sessionId: string; configId: string; value: string }>((resolve) => {
       socket.on('acp:set-config-option', (data: { sessionId: string; configId: string; value: string }) => {
         socket.emit('acp:set-config-option:result', {
           sessionId: data.sessionId,
@@ -423,7 +423,13 @@ test.describe('Session ACP Server Type', () => {
           value: data.value,
           success: true,
         });
-        resolve();
+        resolve(data);
+      });
+    });
+
+    const setModelPromise = new Promise<{ sessionId: string; modelId: string }>((resolve) => {
+      socket.on('acp:set-model', (data: { sessionId: string; modelId: string }) => {
+        resolve(data);
       });
     });
 
@@ -438,18 +444,25 @@ test.describe('Session ACP Server Type', () => {
     await page.getByRole('button', { name: '创建会话' }).click();
 
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
-    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
+    await expect(page.getByTestId('session-status-badge')).toHaveText('空闲', { timeout: 10000 });
 
-    // Config options panel renders a boolean switch + select
+    // Config options panel renders the boolean switch (category=mode/model 由 ModeSwitcher/ModelSwitcher 负责，不在面板中)
     const switchBtn = page.getByRole('switch', { name: 'Autosave' });
     await expect(switchBtn).toBeVisible({ timeout: 10000 });
     await expect(switchBtn).toBeEnabled();
-    await expect(page.getByRole('combobox', { name: 'Model' })).toBeVisible();
-    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveValue('default');
 
-    // Toggle the switch → controller receives acp:set-config-option
+    // Toggle the switch → controller receives acp:set-config-option (category=general 走配置项通道)
     await switchBtn.click();
-    await setConfigPromise;
+    const setConfigData = await setConfigPromise;
+    expect(setConfigData.configId).toBe('autosave');
+    expect(setConfigData.value).toBe('true');
+
+    // Switch model via ModelSwitcher → controller receives acp:set-model
+    // (category=model 双轨路由；bridge 内部再转到 setSessionConfigOption，由 acp-bridge 单测覆盖)
+    await page.getByRole('button', { name: 'Default' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Fast' }).click();
+    const setModelData = await setModelPromise;
+    expect(setModelData.modelId).toBe('fast');
 
     disconnect();
   });

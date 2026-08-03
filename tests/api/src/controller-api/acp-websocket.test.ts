@@ -598,6 +598,9 @@ describe('Controller API ACP WebSocket', () => {
         sessionId,
         success: true,
         externalSessionId: `ext_cfgopt_${Date.now()}`,
+        configOptions: [
+          { id: 'autosave', name: 'Autosave', category: 'general', type: 'boolean', currentValue: 'false' },
+        ],
       });
       await new Promise((r) => setTimeout(r, 300));
 

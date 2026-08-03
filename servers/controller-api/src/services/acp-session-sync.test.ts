@@ -245,6 +245,17 @@ describe('AcpSessionSyncService', () => {
     });
   });
 
+  describe('getCachedLoadResult', () => {
+    it('should return cached load result', async () => {
+      const cached = { success: true, sessionId: 'hist-1', messages: [] };
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(cached));
+
+      const result = await service.getCachedLoadResult('req-1');
+
+      expect(result).toEqual(cached);
+    });
+  });
+
   describe('deleteHistorySession', () => {
     it('should emit acp:delete-history-session and resolve on handleDeleteResult', async () => {
       const socket = createMockSocket();
