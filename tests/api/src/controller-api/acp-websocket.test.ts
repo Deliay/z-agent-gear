@@ -62,6 +62,30 @@ const SESSION_QUERY = `
   }
 `;
 
+const SET_SESSION_CONFIG_OPTION = `
+  mutation SetSessionConfigOption($sessionId: ID!, $configId: String!, $value: String!) {
+    setSessionConfigOption(sessionId: $sessionId, configId: $configId, value: $value)
+  }
+`;
+
+const DELETE_HISTORY_SESSION = `
+  mutation DeleteHistorySession($sessionId: ID!, $syncAgent: Boolean) {
+    deleteHistorySession(sessionId: $sessionId, syncAgent: $syncAgent) {
+      success
+      syncedToAgent
+      error
+    }
+  }
+`;
+
+const LIST_HISTORY_SESSIONS = `
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) {
+      sessionId title cwd updatedAt
+    }
+  }
+`;
+
 function createClient(): ClientSocket {
   return SocketIOClient(CONTROLLER_API_URL, {
     transports: ['websocket'],
@@ -493,5 +517,170 @@ describe('Controller API ACP WebSocket', () => {
 
       client.disconnect();
     });
+  });
+
+  describe('acp:set-config-option', () => {
+    it('should forward setSessionConfigOption to controller for idling session', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_cfgopt_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Listen for acp:set-config-option before calling the mutation
+      const setOptionEvent = waitForEvent<{
+        sessionId: string;
+        configId: string;
+        value: string;
+      }>(client, 'acp:set-config-option', 10000);
+
+      const setRes = await gqlRequest(
+        SET_SESSION_CONFIG_OPTION,
+        { sessionId, configId: 'autosave', value: 'true' },
+        authToken,
+      );
+      const setBody = await setRes.json();
+      expect(setBody.errors).toBeUndefined();
+      expect(setBody.data.setSessionConfigOption).toBe(true);
+
+      const setData = await setOptionEvent;
+      expect(setData.sessionId).toBe(sessionId);
+      expect(setData.configId).toBe('autosave');
+      expect(setData.value).toBe('true');
+
+      client.disconnect();
+    });
+  });
+
+  describe('acp:delete-history-session', () => {
+    it('should forward deleteHistorySession to controller and report syncedToAgent', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_del_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Listen for acp:delete-history-session
+      const deleteEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        externalSessionId: string;
+      }>(client, 'acp:delete-history-session', 10000);
+
+      const deletePromise = gqlRequest(
+        DELETE_HISTORY_SESSION,
+        { sessionId, syncAgent: true },
+        authToken,
+      );
+
+      const deleteData = await deleteEvent;
+      expect(deleteData.sessionId).toBe(sessionId);
+      expect(deleteData.externalSessionId).toBeDefined();
+
+      // Controller responds with success + supported
+      client.emit('acp:delete-history-session:result', {
+        requestId: deleteData.requestId,
+        sessionId: deleteData.sessionId,
+        success: true,
+        supported: true,
+      });
+
+      const deleteBody = await (await deletePromise).json();
+      expect(deleteBody.errors).toBeUndefined();
+      expect(deleteBody.data.deleteHistorySession.success).toBe(true);
+      expect(deleteBody.data.deleteHistorySession.syncedToAgent).toBe(true);
+
+      // Session removed locally
+      const verifyRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.session).toBeNull();
+
+      client.disconnect();
+    });
+  });
+
+  describe('acp:list-sessions with cursor', () => {
+    it('should return paginated sessions and tolerate nextCursor passthrough', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      // Respond to list-sessions with nextCursor (agent-controller-style payload)
+      const listEvent = waitForEvent<{
+        requestId: string;
+        serverType: string;
+        cwd: string;
+      }>(client, 'acp:list-sessions', 10000);
+      client.on('acp:list-sessions', (payload: {
+        requestId: string;
+        serverType: string;
+        cwd: string;
+      }) => {
+        client.emit('acp:list-sessions:result', {
+          requestId: payload.requestId,
+          success: true,
+          sessions: [
+            { sessionId: 'cursor_sess_1', title: 'Cursor Session 1', cwd: payload.cwd, updatedAt: null },
+          ],
+          nextCursor: 'cursor-2',
+        });
+      });
+
+      const listRes = await gqlRequest(
+        LIST_HISTORY_SESSIONS,
+        { controllerId, workspaceId },
+        authToken,
+      );
+      const listBody = await listRes.json();
+
+      const listData = await listEvent;
+      expect(listData.serverType).toBe('opencode');
+      expect(listData.cwd).toBeDefined();
+
+      expect(listBody.errors).toBeUndefined();
+      const sessions = listBody.data.listHistorySessions;
+      expect(Array.isArray(sessions)).toBe(true);
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+      expect(sessions.some((s: { sessionId: string }) => s.sessionId === 'cursor_sess_1')).toBe(true);
+
+      client.disconnect();
+    }, 15000);
   });
 });

@@ -156,6 +156,22 @@ const SEND_SESSION_MESSAGE = `
   }
 `;
 
+const SET_SESSION_CONFIG_OPTION = `
+  mutation SetSessionConfigOption($sessionId: ID!, $configId: String!, $value: String!) {
+    setSessionConfigOption(sessionId: $sessionId, configId: $configId, value: $value)
+  }
+`;
+
+const DELETE_HISTORY_SESSION = `
+  mutation DeleteHistorySession($sessionId: ID!, $syncAgent: Boolean) {
+    deleteHistorySession(sessionId: $sessionId, syncAgent: $syncAgent) {
+      success
+      syncedToAgent
+      error
+    }
+  }
+`;
+
 function createClient(): ClientSocket {
   return SocketIOClient(CONTROLLER_API_URL, {
     transports: ['websocket'],
@@ -682,6 +698,230 @@ describe('Session GraphQL API', () => {
         expect(body.data.refreshAcpCapabilities[0]).toHaveProperty('checkedAt');
       }
     }, 20_000);
+  });
+
+  describe('setSessionConfigOption mutation', () => {
+    it('should reject without auth', async () => {
+      const res = await gqlRequest(SET_SESSION_CONFIG_OPTION, {
+        sessionId: '000000000000000000000000',
+        configId: 'autosave',
+        value: 'true',
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should return false for non-existent session', async () => {
+      const res = await gqlRequest(SET_SESSION_CONFIG_OPTION, {
+        sessionId: '000000000000000000000000',
+        configId: 'autosave',
+        value: 'true',
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setSessionConfigOption).toBe(false);
+    });
+
+    it('should return false when session is not idling', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const sessionId = createBody.data.createSession.session.id;
+
+      // Session is in 'creating' (not idling) — mutation should return false
+      const res = await gqlRequest(SET_SESSION_CONFIG_OPTION, {
+        sessionId,
+        configId: 'autosave',
+        value: 'true',
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setSessionConfigOption).toBe(false);
+    });
+
+    it('should publish acp:set-config-option to controller when session is idling', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `cfgopt-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'cfgopt-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = (await createRes.json()).data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_cfgopt_${Date.now()}`,
+        configOptions: [
+          { id: 'autosave', name: 'Autosave', type: 'boolean', currentValue: 'false' },
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify session is idling
+      const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session.status).toBe('idling');
+
+      // Listen for acp:set-config-option on the controller socket
+      const setOptionEvent = waitForEvent<{
+        sessionId: string;
+        configId: string;
+        value: string;
+      }>(client, 'acp:set-config-option', 10000);
+
+      const res = await gqlRequest(SET_SESSION_CONFIG_OPTION, {
+        sessionId,
+        configId: 'autosave',
+        value: 'true',
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.setSessionConfigOption).toBe(true);
+
+      const setData = await setOptionEvent;
+      expect(setData.sessionId).toBe(sessionId);
+      expect(setData.configId).toBe('autosave');
+      expect(setData.value).toBe('true');
+
+      client.disconnect();
+    });
+  });
+
+  describe('deleteHistorySession mutation', () => {
+    it('should reject without auth', async () => {
+      const res = await gqlRequest(DELETE_HISTORY_SESSION, {
+        sessionId: '000000000000000000000000',
+        syncAgent: false,
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should return error for non-existent session', async () => {
+      const res = await gqlRequest(DELETE_HISTORY_SESSION, {
+        sessionId: '000000000000000000000000',
+        syncAgent: false,
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Session not found');
+    });
+
+    it('should delete local session with syncAgent=false without syncing to agent', async () => {
+      const wsId = await createWorkspace(controllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = (await createRes.json()).data.createSession.session.id;
+
+      const res = await gqlRequest(DELETE_HISTORY_SESSION, {
+        sessionId,
+        syncAgent: false,
+      }, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.deleteHistorySession.success).toBe(true);
+      expect(body.data.deleteHistorySession.syncedToAgent).toBe(false);
+
+      const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session).toBeNull();
+    });
+
+    it('should sync delete to agent when externalSessionId present and controller supports it', async () => {
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `delhist-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const keyBody = await keyRes.json();
+      const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'delhist-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = (await createRes.json()).data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_delhist_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Listen for acp:delete-history-session on the controller socket
+      const deleteEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        externalSessionId: string;
+        serverType: string;
+      }>(client, 'acp:delete-history-session', 10000);
+
+      const deletePromise = gqlRequest(DELETE_HISTORY_SESSION, {
+        sessionId,
+        syncAgent: true,
+      }, authToken);
+
+      const deleteData = await deleteEvent;
+      expect(deleteData.sessionId).toBe(sessionId);
+      expect(deleteData.externalSessionId).toBeDefined();
+
+      client.emit('acp:delete-history-session:result', {
+        requestId: deleteData.requestId,
+        sessionId: deleteData.sessionId,
+        success: true,
+        supported: true,
+      });
+
+      const body = await (await deletePromise).json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.deleteHistorySession.success).toBe(true);
+      expect(body.data.deleteHistorySession.syncedToAgent).toBe(true);
+
+      const sessionRes = await gqlRequest(SESSION_QUERY, { id: sessionId }, authToken);
+      const sessionBody = await sessionRes.json();
+      expect(sessionBody.data.session).toBeNull();
+
+      client.disconnect();
+    });
   });
 });
 
