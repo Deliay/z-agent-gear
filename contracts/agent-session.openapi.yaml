@@ -58,6 +58,16 @@ paths:
                   value: |
                     data: {"type":"status","data":{"sessionId":"sess_1","status":"ended","error":"CONTROLLER_OFFLINE"}}
 
+                config_changed:
+                  summary: 会话配置项变更
+                  value: |
+                    data: {"type":"config:changed","data":{"sessionId":"sess_1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"claude-4","options":[{"value":"claude-4","name":"Claude 4"}]}]}}
+
+                auth_required:
+                  summary: Agent 要求认证
+                  value: |
+                    data: {"type":"auth:required","data":{"sessionId":"sess_1","authMethods":[{"id":"env","kind":"env_var","description":"Sign in with GitHub"}]}}
+
                 heartbeat:
                   summary: 心跳（每30s）
                   value: |

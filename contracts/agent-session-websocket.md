@@ -41,6 +41,16 @@
 | Controller → Server | `acp:load-session:result` | 返回历史会话全量消息 |
 | Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
 | Server → Controller | `acp:set-model` | 请求切换 LLM 模型 |
+| Server → Controller | `acp:set-config-option` | 请求设置会话配置项（含模式/模型 category） |
+| Controller → Server | `acp:config-options` | 上报会话配置项全量快照（初始化与变更后） |
+| Server → Controller | `acp:delete-session` | 请求删除 Agent 侧历史会话 |
+| Controller → Server | `acp:delete-session:result` | 删除结果 |
+| Server → Controller | `acp:authenticate` | 请求执行 Agent 认证 |
+| Controller → Server | `acp:authenticate:result` | 认证结果 |
+| Controller → Server | `acp:auth:required` | Agent 要求认证（initialize 返回 authMethods） |
+| Server → Controller | `acp:logout` | 请求登出 |
+| Controller → Server | `acp:logout:result` | 登出结果 |
+| Controller → Server | `acp:protocol-version-mismatch` | Agent 协议版本不兼容告警 |
 | Controller → Server | `acp:permission` | Agent请求用户权限审批 |
 | Server → Controller | `acp:permission:response` | 返回用户权限审批结果 |
 | Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
@@ -99,6 +109,7 @@
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `mcpServers` | `McpServerConfig[]` | 否 | MCP Server 配置（预留） |
 | `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息 |
+| `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径，Agent 支持 `session.additionalDirectories` 时使用） |
 
 **McpEndpoint 结构：**
 
@@ -141,6 +152,47 @@
 | `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
 | `availableModels` | `AgentModel[]` | 否 | Agent 支持的可用 LLM 模型列表 |
 | `currentModelId` | `string` | 否 | 当前使用的 LLM 模型 ID |
+| `configOptions` | `SessionConfigOption[]` | 否 | 会话配置项全量快照（Agent 提供时以配置项为准） |
+| `promptCapabilities` | `PromptCapabilities` | 否 | Prompt 多模态能力（image/audio/embeddedContext） |
+| `agentInfo` | `AgentInfo` | 否 | Agent 名称与版本 |
+| `authMethods` | `AuthMethodInfo[]` | 否 | Agent 支持的认证方式（非空表示要求认证） |
+| `supportsAdditionalDirectories` | `boolean` | 否 | Agent 是否支持附加工作目录 |
+
+**SessionConfigOption 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 配置项 ID |
+| `name` | `string` | 显示名称 |
+| `description` | `string \| null` | 描述 |
+| `category` | `string \| null` | 语义分类（`mode`/`model`/`model_config`/`thought_level`/其他） |
+| `type` | `"select" \| "boolean"` | 配置项类型 |
+| `currentValue` | `string` | 当前值（boolean 序列化为 `"true"`/`"false"`） |
+| `options` | `SessionConfigOptionValue[]` | select 类型的可选值 |
+
+**PromptCapabilities 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `image` | `boolean` | 支持图片输入 |
+| `audio` | `boolean` | 支持音频输入 |
+| `embeddedContext` | `boolean` | 支持嵌入资源上下文 |
+
+**AgentInfo 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | `string` | Agent 名称 |
+| `version` | `string \| null` | Agent 版本 |
+
+**AuthMethodInfo 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 认证方式 ID |
+| `kind` | `"env_var" \| "terminal" \| "agent" \| null` | 认证方式类型 |
+| `description` | `string \| null` | 说明 |
+| `url` | `string \| null` | 跳转链接（agent 类型时） |
 
 **AgentMode 结构：**
 
@@ -213,10 +265,11 @@ Controller 转发 ACP 输出。
 | `type` | `string` | 是 | 消息类型（`text`/`tool_call`/`tool_result`/`plan`/`error`） |
 | `content` | `string` | 是 | 消息内容 |
 | `metadata` | `object` | 否 | 额外数据（如 tool name、status） |
+| `messageId` | `string` | 否 | ACP 消息 ID（Agent 提供时用于精确分组） |
 
 **服务端行为：**
 
-1. 持久化消息到 MongoDB
+1. 持久化消息到 MongoDB（含 `messageId`，可选）
 2. 通过 Redis Pub/Sub 通知 agent-api
 3. agent-api 推送到 SSE 连接
 
@@ -294,6 +347,7 @@ Controller 转发 ACP 输出。
 | `controllerId` | `string` | 是 | 控制器 ID |
 | `userId` | `string` | 是 | 用户 ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
+| `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径） |
 
 **客户端行为：**
 
@@ -514,6 +568,146 @@ Server将用户审批结果返回给Controller。
 1. 查找对应的pending permission Promise
 2. resolve Promise，返回结果给Agent
 3. Agent继续执行或取消
+
+### 2.21 `acp:set-config-option`（Server → Controller）
+
+请求设置会话配置项。Agent 提供 `configOptions` 时用于模式/模型/推理档位/开关等所有配置项。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `sessionId` | `string` | 是 | Session ID |
+| `configId` | `string` | 是 | 配置项 ID |
+| `value` | `string \| boolean` | 是 | 配置值（boolean 类型配置项传布尔值） |
+
+**客户端行为：**
+
+1. 查找对应 session 的 AcpSessionBridge
+2. 调用 ACP `session/set_config_option` JSON-RPC 方法
+3. 回复 `acp:config-options`（全量配置项快照，唯一事实源）
+
+### 2.22 `acp:config-options`（Controller → Server）
+
+上报会话配置项全量快照。在会话初始化（`acp:start:result`/`acp:resume:result`）与配置变更（`set_config_option` 响应、`config_option_update` 通知）后推送。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `configOptions` | `SessionConfigOption[]` | 是 | 配置项全量快照 |
+
+### 2.23 `acp:delete-session`（Server → Controller）
+
+请求删除 Agent 侧历史会话（Agent 声明 `session.delete` capability 时）。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `sessionId` | `string` | 是 | Session ID（服务端） |
+| `externalSessionId` | `string` | 是 | ACP 侧 session ID |
+| `cwd` | `string` | 是 | 工作目录（绝对路径） |
+
+**客户端行为：**
+
+1. 实例化临时 `AcpSyncBridge`（或以现有会话 bridge 复用）
+2. 调用 SDK `connection.deleteSession({ sessionId: externalSessionId })`
+3. 回复 `acp:delete-session:result`
+
+### 2.24 `acp:delete-session:result`（Controller → Server）
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `sessionId` | `string` | 是 | Session ID（服务端） |
+| `error` | `string` | 否 | 失败原因 |
+
+### 2.25 `acp:auth:required`（Controller → Server）
+
+Agent 在 `initialize` 响应中返回非空 `authMethods` 时上报，表示该 Agent 要求认证。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `authMethods` | `AuthMethodInfo[]` | 是 | 支持的认证方式列表 |
+
+### 2.26 `acp:authenticate`（Server → Controller）
+
+请求执行 Agent 认证。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `sessionId` | `string` | 是 | Session ID |
+| `methodId` | `string` | 是 | 认证方式 ID |
+| `input` | `object` | 否 | 认证输入（如环境变量名/值） |
+
+**客户端行为：**
+
+1. 调用 SDK `connection.authenticate({ methodId, input })`
+2. 回复 `acp:authenticate:result`
+3. 凭据仅内存透传，不落库、不进日志
+
+### 2.27 `acp:authenticate:result`（Controller → Server）
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `sessionId` | `string` | 是 | Session ID |
+| `error` | `string` | 否 | 失败原因 |
+
+### 2.28 `acp:logout`（Server → Controller）
+
+请求登出 Agent 认证。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `sessionId` | `string` | 是 | Session ID |
+
+**客户端行为：**
+
+1. 调用 SDK `connection.logout({})`
+2. 回复 `acp:logout:result`
+
+### 2.29 `acp:logout:result`（Controller → Server）
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `sessionId` | `string` | 是 | Session ID |
+| `error` | `string` | 否 | 失败原因 |
+
+### 2.30 `acp:protocol-version-mismatch`（Controller → Server）
+
+Agent 在 `initialize` 响应中返回的协议版本与客户端不兼容时上报。**不断连**，由上层提示用户。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `expectedVersion` | `number` | 是 | 客户端期望的协议版本（1） |
+| `agentVersion` | `number` | 是 | Agent 返回的协议版本 |
 
 ---
 
@@ -1134,13 +1328,18 @@ LLM 模型切换成功后推送。
 | `session/update` | Agent → Client | 通知进度更新（流式输出） |
 | `session/cancel` | Client → Agent | 取消操作 |
 | `session/close` | Client → Agent | 关闭会话 |
-| `session/set_mode` | Client → Agent | 切换工作模式（仅在 idling 时有效） |
+| `session/set_mode` | Client → Agent | 切换工作模式（仅在 idling 时有效，旧 Agent 回退通道） |
+| `session/set_config_option` | Client → Agent | 设置会话配置项（含模式/模型 category，配置项通道） |
+| `session/delete` | Client → Agent | 删除历史会话（需 agent 支持 `session.delete`） |
+| `authenticate` | Client → Agent | 执行 Agent 认证（需 agent 返回 `authMethods`） |
+| `logout` | Client → Agent | 登出 Agent 认证 |
+| `session/list` | Client → Agent | 列出历史会话（cursor 分页） |
 
 ### 5.3 消息示例
 
 **initialize:**
 
-Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理。
+Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项。
 
 ```json
 {
@@ -1149,7 +1348,13 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
   "method": "initialize",
   "params": {
     "protocolVersion": 1,
-    "clientCapabilities": {},
+    "clientCapabilities": {
+      "session": {
+        "configOptions": {
+          "boolean": {}
+        }
+      }
+    },
     "clientInfo": {
       "name": "z-agent-gear",
       "version": "1.0.0"
