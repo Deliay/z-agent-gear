@@ -330,9 +330,9 @@ describe('Gateway API', () => {
         const responseData = JSON.stringify({
           type: 'http-response',
           requestId: parsedRequest.requestId,
-          statusCode: 200,
-          headers: { 'content-type': 'text/plain' },
-          body: Buffer.from('Hello from local service!').toString('base64'),
+          body: Buffer.from(
+            'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\nHello from local service!',
+          ).toString('base64'),
         });
         client.emit('port-forward:data', {
           tunnelId: data.tunnelId,

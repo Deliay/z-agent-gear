@@ -475,8 +475,10 @@ test.describe('Session ACP Server Type', () => {
     await expect(page.getByText('成功导入 1 个会话')).toBeVisible({ timeout: 30000 });
     await page.getByRole('button', { name: '完成' }).click();
 
-    // Open the imported session from the sessions list
+    // Open the imported session from the sidebar sessions list
     await page.goto('/sessions');
+    await page.getByText(/e2e-acp-del-host-/).click();
+    await page.getByText(/e2e-del-/).click();
     await expect(page.getByText('History - Delete Me')).toBeVisible({ timeout: 10000 });
     await page.getByText('History - Delete Me').click();
 
