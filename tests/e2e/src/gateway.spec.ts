@@ -132,7 +132,7 @@ test.describe('Gateway E2E', () => {
     await expect(page.locator('input[type="text"]')).toBeVisible();
     await expect(page.locator('input[type="number"]')).toBeVisible();
     await expect(page.getByText('取消')).toBeVisible();
-    await expect(page.getByText('创建')).toBeVisible();
+    await expect(page.getByRole('button', { name: '创建', exact: true })).toBeVisible();
 
     await page.getByText('取消').click();
     await expect(page.getByText('新建网关暴露')).not.toBeVisible();
@@ -151,7 +151,7 @@ test.describe('Gateway E2E', () => {
 
     await page.locator('input[type="text"]').fill('my-api');
     await page.locator('input[type="number"]').fill('3000');
-    await page.getByText('创建').click();
+    await page.getByRole('button', { name: '创建', exact: true }).click();
 
     await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
     await expect(sidebar.getByText('my-api', { exact: true })).toBeAttached({ timeout: 15000 });
@@ -173,14 +173,14 @@ test.describe('Gateway E2E', () => {
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3001');
-    await page.getByText('创建').click();
+    await page.getByRole('button', { name: '创建', exact: true }).click();
     await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
     await expect(sidebar.getByText('dup-svc')).toBeAttached({ timeout: 15000 });
 
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3002');
-    await page.getByText('创建').click();
+    await page.getByRole('button', { name: '创建', exact: true }).click();
 
     await expect(page.locator('.text-destructive')).toBeVisible({ timeout: 10000 });
 
@@ -200,7 +200,7 @@ test.describe('Gateway E2E', () => {
     await sidebar.getByRole('button', { name: '+', exact: true }).click();
     await page.locator('input[type="text"]').fill('del-svc');
     await page.locator('input[type="number"]').fill('4000');
-    await page.getByText('创建').click();
+    await page.getByRole('button', { name: '创建', exact: true }).click();
     await expect(sidebar.getByText('del-svc')).toBeAttached({ timeout: 15000 });
 
     await sidebar.getByTitle('删除网关暴露').click();
@@ -261,9 +261,9 @@ test.describe('Gateway Tunnel E2E', () => {
       const responseData = JSON.stringify({
         type: 'http-response',
         requestId: parsedRequest.requestId,
-        statusCode: 200,
-        headers: { 'content-type': 'text/plain' },
-        body: Buffer.from('Hello from gateway tunnel!').toString('base64'),
+        body: Buffer.from(
+          'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\nHello from gateway tunnel!',
+        ).toString('base64'),
       });
       socket.emit('port-forward:data', {
         tunnelId: data.tunnelId,

@@ -29,6 +29,7 @@ export class AcpSyncBridge implements acp.Client {
   private spawner: AcpSpawner;
   private connection: acp.ClientSideConnection | null = null;
   private updates: acp.SessionNotification[] = [];
+  private capabilities: acp.AgentCapabilities | null = null;
 
   constructor(options: AcpSyncBridgeOptions, spawner?: AcpSpawner) {
     this.spawner = spawner ?? new AcpSpawner({
@@ -53,15 +54,30 @@ export class AcpSyncBridge implements acp.Client {
       clientInfo: { name: 'agent-gear', version: '1.0.0' },
     });
 
-    await withTimeout(
+    const result = await withTimeout(
       Promise.race([initPromise, exitPromise]),
       timeoutMs,
       `ACP connect timed out after ${timeoutMs}ms`,
     );
+    this.capabilities = result.agentCapabilities ?? null;
   }
 
-  async listSessions(cwd: string): Promise<acp.ListSessionsResponse> {
-    return this.connection!.listSessions({ cwd });
+  supportsDelete(): boolean {
+    return Boolean(this.capabilities?.sessionCapabilities?.delete);
+  }
+
+  async listSessions(cwd: string, cursor?: string | null): Promise<acp.ListSessionsResponse> {
+    if (!this.connection) {
+      throw new Error('ACP connection not established');
+    }
+    return this.connection.listSessions({ cwd, ...(cursor ? { cursor } : {}) });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    if (!this.connection) {
+      throw new Error('ACP connection not established');
+    }
+    await this.connection.deleteSession({ sessionId });
   }
 
   async loadSession(

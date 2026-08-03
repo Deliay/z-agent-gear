@@ -83,6 +83,61 @@ type AgentModel {
   provider: String
 }
 
+type SessionConfigOptionValue {
+  value: String!
+  name: String
+}
+
+type SessionConfigOption {
+  id: String!
+  name: String!
+  description: String
+  category: String
+  # select | boolean
+  type: String!
+  # boolean 类型时序列化为 "true"/"false"
+  currentValue: String
+  options: [SessionConfigOptionValue!]
+}
+
+type PromptCapabilities {
+  image: Boolean!
+  audio: Boolean!
+  embeddedContext: Boolean!
+}
+
+type AgentInfo {
+  name: String!
+  version: String
+}
+
+enum AuthMethodKind {
+  env_var
+  terminal
+  agent
+}
+
+type AuthMethodInfo {
+  id: String!
+  kind: AuthMethodKind
+  name: String
+  description: String
+  url: String
+}
+
+input MessageAttachmentInput {
+  # image | audio | resource | resource_link
+  type: String!
+  data: String
+  mimeType: String
+  uri: String
+  text: String
+  name: String
+  description: String
+  size: Int
+  title: String
+}
+
 type PermissionOption {
   optionId: String!
   name: String!
@@ -124,6 +179,12 @@ type Session {
   currentModel: AgentModelInfo
   availableModels: [AgentModel!]
   currentModelId: String
+  configOptions: [SessionConfigOption!]
+  agentInfo: AgentInfo
+  authRequired: Boolean!
+  authMethods: [AuthMethodInfo!]
+  promptCapabilities: PromptCapabilities
+  supportsAdditionalDirectories: Boolean!
   permissionTimeoutAction: PermissionTimeoutAction
   createdAt: String!
   updatedAt: String!
@@ -137,6 +198,7 @@ type AcpMessage {
   type: AcpMessageType!
   content: JSON!
   metadata: String
+  messageId: String
   createdAt: String!
 }
 
@@ -167,6 +229,18 @@ type CreateSessionPayload {
   session: Session!
 }
 
+type DeleteHistorySessionPayload {
+  success: Boolean!
+  syncedToAgent: Boolean!
+  error: String
+}
+
+type AuthenticateSessionPayload {
+  success: Boolean!
+  authRequired: Boolean
+  error: String
+}
+
 input CreateSessionInput {
   controllerId: ID!
   acpServerType: AcpServerType! = opencode
@@ -174,6 +248,7 @@ input CreateSessionInput {
   enableWorktree: Boolean = false
   worktreeBranchSuffix: String
   mcpServerIds: [ID!]
+  additionalDirectories: [String!]
 }
 
 type ResumeSessionPayload {
@@ -200,12 +275,17 @@ type Mutation {
   createSession(input: CreateSessionInput!): CreateSessionPayload!
   closeSession(id: ID!): Boolean!
   deleteSession(id: ID!): Boolean!
-  sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
+  sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text, attachments: [MessageAttachmentInput!]): AcpMessage!
   cancelGeneration(sessionId: ID!): Boolean!
-  resumeSession(id: ID!): ResumeSessionPayload!
+  resumeSession(id: ID!, additionalDirectories: [String!]): ResumeSessionPayload!
   importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!
   setSessionMode(sessionId: ID!, modeId: String!): Boolean!
   setSessionModel(sessionId: ID!, modelId: String!): Boolean!
+  setSessionConfigOption(sessionId: ID!, configId: String!, value: String!): Boolean!
+  deleteHistorySession(sessionId: ID!, syncAgent: Boolean = true): DeleteHistorySessionPayload!
+  authenticateAcpSession(sessionId: ID!, methodId: String!, input: JSON): AuthenticateSessionPayload!
+  logoutAcpSession(sessionId: ID!): Boolean!
+  respondElicitation(sessionId: ID!, elicitationId: String!, values: JSON): Boolean!
   refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!
   markTodoRead(todoId: ID!): Boolean!

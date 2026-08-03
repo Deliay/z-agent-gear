@@ -42,10 +42,11 @@ function parseSessionUpdate(content: string | Record<string, unknown>): SessionU
   return content as unknown as SessionUpdate;
 }
 
-function groupMessages(messages: AcpMessage[]): MessageGroup[] {
+export function groupMessages(messages: AcpMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = [];
   const toolCallGroupMap = new Map<string, number>(); // toolCallId -> group index
   const thoughtGroupMap = new Map<string, number>();  // messageId -> group index
+  const agentMessageGroupMap = new Map<string, number>(); // messageId -> group index
 
   for (const message of messages) {
     const parsed = parseSessionUpdate(message.content);
@@ -133,6 +134,15 @@ function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       } else {
         groupIndex = groups.length;
         thoughtGroupMap.set(chunkMessageId, groupIndex);
+        groups.push({ type: groupType, messages: [], parsed, messageId: chunkMessageId });
+      }
+    } else if (groupType === 'agent_message' && chunkMessageId) {
+      // Agent message chunks with messageId: group by messageId across the entire list
+      if (agentMessageGroupMap.has(chunkMessageId)) {
+        groupIndex = agentMessageGroupMap.get(chunkMessageId)!;
+      } else {
+        groupIndex = groups.length;
+        agentMessageGroupMap.set(chunkMessageId, groupIndex);
         groups.push({ type: groupType, messages: [], parsed, messageId: chunkMessageId });
       }
     } else if (groupType === 'user_message') {

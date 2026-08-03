@@ -9,7 +9,9 @@ function buildMockConn() {
     cancel: vi.fn<[unknown], Promise<void>>().mockResolvedValue(undefined),
     closeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
     setSessionMode: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
-    unstable_setSessionModel: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    setSessionConfigOption: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    authenticate: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
+    logout: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
   };
 }
 
@@ -20,7 +22,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
   ClientSideConnection: vi.fn(function () { return mockConnInstance; }),
 }));
 
-import { AcpSessionBridge } from '../../src/acp/bridge.js';
+import { AcpSessionBridge, extractConfigOptions } from '../../src/acp/bridge.js';
 
 class MockAcpSpawner {
   start = vi.fn();
@@ -74,8 +76,12 @@ describe('AcpSessionBridge', () => {
       expect(mockSpawner.start).toHaveBeenCalledOnce();
       expect(mc().initialize).toHaveBeenCalledWith({
         protocolVersion: 1,
-        clientCapabilities: {},
-        clientInfo: { name: 'agent-gear', version: '1.0.0' },
+        clientCapabilities: {
+          session: {
+            configOptions: { boolean: {} },
+          },
+        },
+        clientInfo: { name: 'agent-gear', version: '1.1.5' },
       });
       expect(mc().newSession).toHaveBeenCalledWith({
         cwd: '/home/user',
@@ -121,10 +127,16 @@ describe('AcpSessionBridge', () => {
     it('should include currentModel in acp:initialized when available', async () => {
       mockConnInstance.newSession = vi.fn().mockResolvedValue({
         sessionId: 'acp-sess-abc',
-        models: {
-          availableModels: [{ modelId: 'gpt-4', name: 'GPT-4' }],
-          currentModelId: 'gpt-4',
-        },
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'gpt-4',
+            options: [{ value: 'gpt-4', name: 'GPT-4' }],
+          },
+        ],
       });
       const bridge = createBridge();
       const emitSpy = vi.fn();
@@ -141,13 +153,19 @@ describe('AcpSessionBridge', () => {
     it('should include availableModels and currentModelId in acp:initialized', async () => {
       mockConnInstance.newSession = vi.fn().mockResolvedValue({
         sessionId: 'acp-sess-abc',
-        models: {
-          availableModels: [
-            { modelId: 'gpt-4', name: 'GPT-4' },
-            { modelId: 'claude-3', name: 'Claude 3' },
-          ],
-          currentModelId: 'claude-3',
-        },
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'claude-3',
+            options: [
+              { value: 'gpt-4', name: 'GPT-4' },
+              { value: 'claude-3', name: 'Claude 3' },
+            ],
+          },
+        ],
       });
       const bridge = createBridge();
       const emitSpy = vi.fn();
@@ -163,6 +181,22 @@ describe('AcpSessionBridge', () => {
         ],
         currentModelId: 'claude-3',
       }));
+    });
+
+    it('should map auth method without type field to kind agent', async () => {
+      mc().initialize.mockResolvedValue({
+        protocolVersion: 1,
+        authMethods: [{ id: 'oauth', description: 'Login with agent' }],
+      });
+      const bridge = createBridge();
+
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:auth:required', {
+        sessionId: 'sess-1',
+        authMethods: [{ id: 'oauth', kind: 'agent', description: null, url: null }],
+      });
     });
 
     it('should emit acp:stopped on initialize failure', async () => {
@@ -511,51 +545,236 @@ describe('AcpSessionBridge', () => {
       await expect(bridge.setMode('mode-1')).resolves.toBeUndefined();
       expect(mc().setSessionMode).not.toHaveBeenCalled();
     });
-  });
 
-  describe('setModel', () => {
-    it('should call connection.unstable_setSessionModel with correct params', async () => {
+    it('should use setSessionConfigOption when mode config option exists', async () => {
+      mockConnInstance.newSession = vi.fn().mockResolvedValue({
+        sessionId: 'acp-sess-abc',
+        configOptions: [
+          {
+            id: 'mode',
+            name: 'Mode',
+            category: 'mode',
+            type: 'select',
+            currentValue: 'code',
+            options: [{ value: 'code', name: 'Code' }, { value: 'plan', name: 'Plan' }],
+          },
+        ],
+      });
       const bridge = createBridge();
       bridge.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      await bridge.setModel('model-2');
+      await bridge.setMode('plan');
 
-      expect(mc().unstable_setSessionModel).toHaveBeenCalledWith({
+      expect(mc().setSessionConfigOption).toHaveBeenCalledWith({
         sessionId: 'acp-sess-abc',
-        modelId: 'model-2',
+        configId: 'mode',
+        value: 'plan',
       });
+    });
+  });
+
+  describe('setModel', () => {
+    it('should call setSessionConfigOption when model config option exists', async () => {
+      mockConnInstance.newSession = vi.fn().mockResolvedValue({
+        sessionId: 'acp-sess-abc',
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'gpt-4',
+            options: [{ value: 'gpt-4', name: 'GPT-4' }, { value: 'claude-3', name: 'Claude 3' }],
+          },
+        ],
+      });
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setModel('claude-3');
+
+      expect(mc().setSessionConfigOption).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        configId: 'model',
+        value: 'claude-3',
+      });
+    });
+
+    it('should throw when initialized but no model config option', async () => {
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(bridge.setModel('model-1')).rejects.toThrow(
+        'Model switching is not supported',
+      );
+      expect(mc().setSessionConfigOption).not.toHaveBeenCalled();
     });
 
     it('should not throw when not initialized', async () => {
       const bridge = createBridge();
 
       await expect(bridge.setModel('model-1')).resolves.toBeUndefined();
-      expect(mc().unstable_setSessionModel).not.toHaveBeenCalled();
     });
   });
 
-  describe('extractAvailableModels', () => {
-    it('should return empty array when models is null', () => {
+  describe('setConfigOption', () => {
+    it('should call connection.setSessionConfigOption with boolean value', async () => {
       const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
 
-      // Access private method via bracket notation
-      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(null);
-      expect(result).toEqual([]);
+      await bridge.setConfigOption('opt-1', true);
+
+      expect(mc().setSessionConfigOption).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        configId: 'opt-1',
+        value: true,
+        type: 'boolean',
+      });
     });
 
-    it('should return empty array when models is undefined', () => {
+    it('should call connection.setSessionConfigOption with select value', async () => {
       const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
 
-      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels(undefined);
-      expect(result).toEqual([]);
+      await bridge.setConfigOption('opt-2', 'val-1');
+
+      expect(mc().setSessionConfigOption).toHaveBeenCalledWith({
+        sessionId: 'acp-sess-abc',
+        configId: 'opt-2',
+        value: 'val-1',
+      });
     });
 
-    it('should return empty array when availableModels is missing', () => {
+    it('should update snapshot and emit acp:config-options from set_config_option response', async () => {
+      mockConnInstance.setSessionConfigOption = vi.fn().mockResolvedValue({
+        configOptions: [
+          {
+            id: 'flags',
+            name: 'Flags',
+            category: null,
+            type: 'boolean',
+            currentValue: true,
+          },
+        ],
+      });
       const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
 
-      const result = (bridge as unknown as Record<string, unknown>).extractAvailableModels({});
-      expect(result).toEqual([]);
+      await bridge.setConfigOption('flags', 'true');
+
+      expect(bridge.getConfigOptions()).toEqual([
+        {
+          id: 'flags',
+          name: 'Flags',
+          description: null,
+          category: null,
+          type: 'boolean',
+          currentValue: 'true',
+          options: [],
+        },
+      ]);
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:config-options', {
+        sessionId: 'sess-1',
+        configOptions: bridge.getConfigOptions(),
+      });
+    });
+
+    it('should not emit acp:config-options when response has no configOptions', async () => {
+      mockConnInstance.setSessionConfigOption = vi.fn().mockResolvedValue({});
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setConfigOption('opt-2', 'val-1');
+
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:config-options', expect.anything());
+    });
+  });
+
+  describe('extractConfigOptions', () => {
+    it('should return empty array when configOptions is null or undefined', () => {
+      expect(extractConfigOptions(null)).toEqual([]);
+      expect(extractConfigOptions(undefined)).toEqual([]);
+    });
+
+    it('should flatten grouped select options with group name prefix', () => {
+      const result = extractConfigOptions([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-4',
+          options: [
+            {
+              group: 'openai',
+              name: 'OpenAI',
+              options: [
+                { value: 'gpt-4', name: 'GPT-4' },
+                { value: 'gpt-4o', name: 'GPT-4o' },
+              ],
+            },
+            {
+              group: 'anthropic',
+              name: 'Anthropic',
+              options: [{ value: 'claude-3', name: 'Claude 3' }],
+            },
+          ],
+        },
+      ]);
+
+      expect(result[0].options).toEqual([
+        { value: 'gpt-4', name: 'OpenAI/GPT-4' },
+        { value: 'gpt-4o', name: 'OpenAI/GPT-4o' },
+        { value: 'claude-3', name: 'Anthropic/Claude 3' },
+      ]);
+    });
+
+    it('should map select and boolean config options', () => {
+      const result = extractConfigOptions([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-4',
+          options: [{ value: 'gpt-4', name: 'GPT-4' }],
+        },
+        {
+          id: 'flags',
+          name: 'Flags',
+          category: null,
+          type: 'boolean',
+          currentValue: true,
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          id: 'model',
+          name: 'Model',
+          description: null,
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-4',
+          options: [{ value: 'gpt-4', name: 'GPT-4' }],
+        },
+        {
+          id: 'flags',
+          name: 'Flags',
+          description: null,
+          category: null,
+          type: 'boolean',
+          currentValue: 'true',
+          options: [],
+        },
+      ]);
     });
   });
 });

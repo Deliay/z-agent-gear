@@ -4,8 +4,9 @@ function buildMockConn() {
   return {
     initialize: vi.fn<[unknown], Promise<{ protocolVersion: number }>>().mockResolvedValue({ protocolVersion: 1 }),
     newSession: vi.fn<[unknown], Promise<{ sessionId: string }>>().mockResolvedValue({ sessionId: 'sync-sess-1' }),
-    listSessions: vi.fn<[unknown], Promise<{ sessions: Array<{ sessionId: string; title: string | null; cwd: string; updatedAt: string | null }> }>>()
+    listSessions: vi.fn<[unknown], Promise<{ sessions: Array<{ sessionId: string; title: string | null; cwd: string; updatedAt: string | null }>; nextCursor?: string | null }>>()
       .mockResolvedValue({ sessions: [{ sessionId: 'hist-1', title: 'Session 1', cwd: '/home/user', updatedAt: '2026-01-01T00:00:00Z' }] }),
+    deleteSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
     loadSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
     cancel: vi.fn<[unknown], Promise<void>>().mockResolvedValue(undefined),
     closeSession: vi.fn<[unknown], Promise<object>>().mockResolvedValue({}),
@@ -127,6 +128,43 @@ describe('AcpSyncBridge', () => {
       const result = await bridge.listSessions('/home/user');
 
       expect(result.sessions).toEqual([]);
+    });
+
+    it('should throw when not connected', async () => {
+      const bridge = createBridge(new MockAcpSpawner());
+      await expect(bridge.listSessions('/home/user')).rejects.toThrow('ACP connection not established');
+    });
+
+    it('should pass cursor to ACP and return nextCursor', async () => {
+      mc().listSessions.mockResolvedValue({
+        sessions: [{ sessionId: 'hist-2', title: 'Session 2', cwd: '/home/user', updatedAt: null }],
+        nextCursor: 'cursor-2',
+      });
+      const mockSpawner = new MockAcpSpawner();
+      const bridge = createBridge(mockSpawner);
+      await bridge.connect();
+
+      const result = await bridge.listSessions('/home/user', 'cursor-1');
+
+      expect(mc().listSessions).toHaveBeenCalledWith({ cwd: '/home/user', cursor: 'cursor-1' });
+      expect(result.nextCursor).toBe('cursor-2');
+    });
+  });
+
+  describe('deleteSession', () => {
+    it('should call ACP deleteSession with the given session ID', async () => {
+      const mockSpawner = new MockAcpSpawner();
+      const bridge = createBridge(mockSpawner);
+      await bridge.connect();
+
+      await bridge.deleteSession('hist-1');
+
+      expect(mc().deleteSession).toHaveBeenCalledWith({ sessionId: 'hist-1' });
+    });
+
+    it('should throw when not connected', async () => {
+      const bridge = createBridge(new MockAcpSpawner());
+      await expect(bridge.deleteSession('hist-1')).rejects.toThrow();
     });
   });
 

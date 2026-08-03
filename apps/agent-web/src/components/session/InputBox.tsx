@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { AgentModelInfoData } from '../../graphql/types';
+import type { SessionConfigOptionData } from '../../graphql/types';
 import type { Command } from '../../hooks/useCommandState';
 import { fuzzyMatch } from '../../lib/fuzzyMatch';
 import ModeSwitcher from './ModeSwitcher';
 import { ModelSwitcher } from './ModelSwitcher';
+import ConfigOptionsPanel from './ConfigOptionsPanel';
 import CommandSuggest from './CommandSuggest';
 
 interface AgentMode {
@@ -27,11 +29,13 @@ interface InputBoxProps {
   onSetModel?: (modelId: string) => Promise<void>;
   sessionId?: string;
   availableCommands?: Command[];
+  configOptions?: SessionConfigOptionData[];
+  onSetConfigOption?: (configId: string, value: string) => Promise<void>;
 }
 
 const STORAGE_PREFIX = 'session_input_';
 
-export default function InputBox({ onSend, onStop, disabled, sending, isWorking, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId, availableCommands = [] }: InputBoxProps) {
+export default function InputBox({ onSend, onStop, disabled, sending, isWorking, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId, availableCommands = [], configOptions = [], onSetConfigOption }: InputBoxProps) {
   const [input, setInput] = useState(() => {
     if (sessionId) {
       return localStorage.getItem(STORAGE_PREFIX + sessionId) || '';
@@ -151,6 +155,13 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
 
   return (
     <div ref={containerRef} className="relative border-t border-border bg-background p-4">
+      {onSetConfigOption && (
+        <ConfigOptionsPanel
+          configOptions={configOptions}
+          status={status}
+          onSetConfigOption={onSetConfigOption}
+        />
+      )}
       <div className="mb-2 flex items-center gap-2">
         {onSetMode && (
           <ModeSwitcher

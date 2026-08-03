@@ -20,6 +20,12 @@ export interface ImportSessionResult {
   messageCount: number;
 }
 
+export interface DeleteHistorySessionResult {
+  success: boolean;
+  syncedToAgent: boolean;
+  error: string | null;
+}
+
 interface HistoryMessage {
   direction: 'input' | 'output';
   type: string;
@@ -76,6 +82,61 @@ export class SessionImportService {
     }).distinct('externalSessionId');
 
     return rawSessions.filter((s) => !existingIds.includes(s.sessionId));
+  }
+
+  async deleteHistorySession(
+    userId: string,
+    sessionId: string,
+    syncAgent: boolean = true,
+  ): Promise<DeleteHistorySessionResult> {
+    const session = await Session.findOne({ _id: sessionId, userId });
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const sessionStatus = (session as unknown as { status?: string }).status;
+    if (sessionStatus === 'running') {
+      throw new Error(`Cannot delete session in 'running' status; stop the session before deleting`);
+    }
+
+    await Session.deleteOne({ _id: sessionId, userId });
+    await AcpMessage.deleteMany({ sessionId });
+
+    const record = session as unknown as {
+      externalSessionId?: string | null;
+      controllerId?: string;
+      cwd?: string;
+      acpServerType?: string;
+    };
+
+    let syncedToAgent = false;
+    let syncError: string | null = null;
+    if (syncAgent && record.externalSessionId) {
+      const requestId = `delete_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const redis = getRedisClient();
+      await redis.publish('session:command', JSON.stringify({
+        type: 'acp:delete-history-session',
+        requestId,
+        controllerId: record.controllerId,
+        sessionId,
+        externalSessionId: record.externalSessionId,
+        serverType: record.acpServerType ?? 'opencode',
+        cwd: record.cwd,
+      }));
+
+      const result = await this.pollRedisCache<{ success: boolean; supported?: boolean; error?: string }>(
+        `acp:delete-session:${requestId}`,
+        120,
+        500,
+      );
+
+      syncedToAgent = Boolean(result && result.success && result.supported);
+      if (result && !result.success && result.supported && result.error) {
+        syncError = result.error;
+      }
+    }
+
+    return { success: true, syncedToAgent, error: syncError };
   }
 
   async importSessions(

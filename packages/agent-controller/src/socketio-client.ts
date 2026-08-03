@@ -48,11 +48,12 @@ interface AcpStartPayload {
   serverType: string;
   cwd: string;
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
+  additionalDirectories?: string[];
 }
 
 interface AcpMessagePayload {
   sessionId: string;
-  message: { type: string; content: string };
+  message: { type: string; content: string; attachments?: Array<Record<string, unknown>> };
 }
 
 interface AcpCancelPayload {
@@ -60,6 +61,29 @@ interface AcpCancelPayload {
 }
 
 interface AcpStopPayload {
+  sessionId: string;
+}
+
+interface AcpSetConfigOptionPayload {
+  sessionId: string;
+  configId: string;
+  value: string | boolean;
+}
+
+interface AcpDeleteHistorySessionPayload {
+  requestId: string;
+  sessionId: string;
+  externalSessionId: string;
+  cwd: string;
+  serverType?: string;
+}
+
+interface AcpAuthenticatePayload {
+  sessionId: string;
+  methodId: string;
+}
+
+interface AcpLogoutPayload {
   sessionId: string;
 }
 
@@ -79,12 +103,14 @@ interface AcpResumePayload {
   externalSessionId: string;
   serverType: string;
   cwd: string;
+  additionalDirectories?: string[];
 }
 
 interface AcpListSessionsPayload {
   requestId: string;
   serverType: string;
   cwd: string;
+  cursor?: string | null;
 }
 
 interface AcpLoadSessionPayload {
@@ -226,6 +252,7 @@ export function connectToServer(
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpServers: data.mcpServers,
+        additionalDirectories: data.additionalDirectories,
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
@@ -250,6 +277,13 @@ export function connectToServer(
         if (payload.currentModel) result.currentModel = payload.currentModel;
         result.availableModels = payload.availableModels ?? [];
         if (payload.currentModelId) result.currentModelId = payload.currentModelId;
+        result.configOptions = payload.configOptions ?? [];
+        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
+        if (payload.authMethods) result.authMethods = payload.authMethods;
+        if (payload.supportsAdditionalDirectories != null) {
+          result.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
+        }
         socket.emit('acp:start:result', result);
       };
 
@@ -291,6 +325,7 @@ export function connectToServer(
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
+        additionalDirectories: data.additionalDirectories,
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
@@ -313,6 +348,10 @@ export function connectToServer(
         if (payload.currentModel) result.currentModel = payload.currentModel;
         result.availableModels = payload.availableModels ?? [];
         if (payload.currentModelId) result.currentModelId = payload.currentModelId;
+        result.configOptions = payload.configOptions ?? [];
+        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
+        if (payload.authMethods) result.authMethods = payload.authMethods;
         socket.emit('acp:resume:result', result);
       };
 
@@ -351,7 +390,7 @@ export function connectToServer(
     const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
-      const result = await bridge.listSessions(data.cwd);
+      const result = await bridge.listSessions(data.cwd, data.cursor);
       await bridge.disconnect();
       socket.emit('acp:list-sessions:result', {
         requestId: data.requestId,
@@ -362,6 +401,7 @@ export function connectToServer(
           cwd: s.cwd,
           updatedAt: s.updatedAt ?? null,
         })),
+        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
       });
     } catch (error) {
       await bridge.disconnect().catch(() => {});
@@ -505,6 +545,118 @@ export function connectToServer(
     if (bridge) {
       bridge.setModel(data.modelId).catch((err) => {
         console.error(`[ACP] setModel failed: ${(err as Error).message}`);
+      });
+    }
+  });
+
+  socket.on('acp:set-config-option', (data: AcpSetConfigOptionPayload) => {
+    console.log(`[ACP] acp:set-config-option received: sessionId=${data.sessionId} configId=${data.configId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    if (!bridge) {
+      socket.emit('acp:set-config-option:result', {
+        sessionId: data.sessionId,
+        success: false,
+        configId: data.configId,
+        error: 'ACP bridge not found for session',
+      });
+      return;
+    }
+    // 成功时 bridge 内部已用响应快照更新 configOptions 并 emit acp:config-options
+    bridge.setConfigOption(data.configId, data.value).then(
+      () => {
+        socket.emit('acp:set-config-option:result', {
+          sessionId: data.sessionId,
+          success: true,
+          configId: data.configId,
+        });
+      },
+      (err) => {
+        console.error(`[ACP] setConfigOption failed: ${(err as Error).message}`);
+        socket.emit('acp:set-config-option:result', {
+          sessionId: data.sessionId,
+          success: false,
+          configId: data.configId,
+          error: (err as Error).message,
+        });
+      },
+    );
+  });
+
+  socket.on('acp:delete-history-session', async (data: AcpDeleteHistorySessionPayload) => {
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP sync] acp:delete-history-session received: sessionId=${data.externalSessionId} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
+    try {
+      await bridge.connect();
+      if (!bridge.supportsDelete()) {
+        await bridge.disconnect().catch(() => {});
+        socket.emit('acp:delete-history-session:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: false,
+          supported: false,
+          error: 'Session delete not supported by agent',
+        });
+        return;
+      }
+      await bridge.deleteSession(data.externalSessionId);
+      await bridge.disconnect();
+      socket.emit('acp:delete-history-session:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        supported: true,
+      });
+    } catch (error) {
+      await bridge.disconnect().catch(() => {});
+      console.error(`[ACP sync] delete-history-session failed: ${(error as Error).message}`);
+      socket.emit('acp:delete-history-session:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: false,
+        supported: true,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:authenticate', async (data: AcpAuthenticatePayload) => {
+    console.log(`[ACP] acp:authenticate received: sessionId=${data.sessionId} methodId=${data.methodId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    try {
+      if (!bridge) throw new Error('ACP bridge not found for session');
+      await bridge.authenticate(data.methodId);
+      socket.emit('acp:authenticate:result', {
+        sessionId: data.sessionId,
+        success: true,
+      });
+    } catch (error) {
+      console.error(`[ACP] authenticate failed: ${(error as Error).message}`);
+      socket.emit('acp:authenticate:result', {
+        sessionId: data.sessionId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:logout', async (data: AcpLogoutPayload) => {
+    console.log(`[ACP] acp:logout received: sessionId=${data.sessionId}`);
+    const bridge = acpBridges.get(data.sessionId);
+    try {
+      if (!bridge) throw new Error('ACP bridge not found for session');
+      await bridge.logout();
+      socket.emit('acp:logout:result', {
+        sessionId: data.sessionId,
+        success: true,
+      });
+    } catch (error) {
+      console.error(`[ACP] logout failed: ${(error as Error).message}`);
+      socket.emit('acp:logout:result', {
+        sessionId: data.sessionId,
+        success: false,
+        error: (error as Error).message,
       });
     }
   });

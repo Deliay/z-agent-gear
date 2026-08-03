@@ -1,5 +1,15 @@
 import mongoose from 'mongoose';
 
+const configOptionSchema = new mongoose.Schema({
+  id: String,
+  name: String,
+  description: String,
+  category: String,
+  type: String,
+  currentValue: mongoose.Schema.Types.Mixed,
+  options: [{ value: String, name: String }],
+}, { _id: false });
+
 const sessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
@@ -17,6 +27,12 @@ const sessionSchema = new mongoose.Schema({
   currentModel: { type: { id: String, name: String, provider: String } },
   currentModelId: { type: String },
   availableModels: { type: [{ id: String, name: String, provider: String }], default: [] },
+  configOptions: { type: [configOptionSchema], default: [] },
+  promptCapabilities: { type: { image: Boolean, audio: Boolean, embeddedContext: Boolean } },
+  agentInfo: { type: { name: String, version: String } },
+  authMethods: { type: [{ id: String, kind: String, name: String, description: String, url: String }], default: [] },
+  authRequired: { type: Boolean, default: false },
+  supportsAdditionalDirectories: { type: Boolean, default: false },
   permissionTimeoutAction: { type: String, enum: ['use_global', 'allow_once', 'reject', 'cancel'], default: 'use_global' },
 }, { timestamps: true });
 

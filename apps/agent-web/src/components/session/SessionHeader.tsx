@@ -59,7 +59,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         <h1 className="text-lg font-semibold">
           {session?.controllerName || 'Session'}
         </h1>
-        <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
+        <span data-testid="session-status-badge" className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
           {STATUS_LABELS[status] ?? status}
         </span>
         {session?.acpServerType && !isMobile && (

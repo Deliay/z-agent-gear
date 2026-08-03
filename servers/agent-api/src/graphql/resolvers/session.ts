@@ -104,6 +104,24 @@ export const sessionResolvers = {
       }
       return sessionService.delete(args.id, context.currentUser.id);
     },
+    deleteHistorySession: async (
+      _parent: unknown,
+      args: { sessionId: string; syncAgent?: boolean },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionImportService.deleteHistorySession(
+          context.currentUser.id,
+          args.sessionId,
+          args.syncAgent ?? true,
+        );
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
     sendSessionMessage: async (
       _parent: unknown,
       args: { sessionId: string; content: string; type: string },
@@ -162,6 +180,16 @@ export const sessionResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       return sessionService.setModel(args.sessionId, context.currentUser.id, args.modelId);
+    },
+    setSessionConfigOption: async (
+      _parent: unknown,
+      args: { sessionId: string; configId: string; value: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionService.setConfigOption(args.sessionId, context.currentUser.id, args.configId, args.value);
     },
     importHistorySessions: async (
       _parent: unknown,

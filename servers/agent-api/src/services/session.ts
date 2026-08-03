@@ -183,6 +183,23 @@ export class SessionService {
     return true;
   }
 
+  async setConfigOption(sessionId: string, userId: string, configId: string, value: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) return false;
+    if (session.status !== 'idling') return false;
+    const configOptions = (session as Record<string, unknown>).configOptions as unknown[] | undefined;
+    if (!configOptions || configOptions.length === 0) return false;
+
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:set-config-option',
+      sessionId,
+      configId,
+      value,
+    }));
+    return true;
+  }
+
   async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) return false;
@@ -482,11 +499,29 @@ export class SessionService {
       currentModel: session.currentModel || null,
       currentModelId: session.currentModelId || null,
       availableModels: session.availableModels || [],
+      configOptions: (session as any).configOptions || [],
+      promptCapabilities: (session as any).promptCapabilities || null,
+      agentInfo: (session as any).agentInfo || null,
+      authRequired: (session as any).authRequired || false,
+      authMethods: this.mapAuthMethods((session as any).authMethods),
+      supportsAdditionalDirectories: (session as any).supportsAdditionalDirectories || false,
       permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,
     };
+  }
+
+  private mapAuthMethods(authMethods: unknown): Record<string, unknown>[] {
+    if (!Array.isArray(authMethods)) return [];
+    const validKinds = new Set(['env_var', 'terminal', 'agent']);
+    return authMethods.map((method) => {
+      const m = method as Record<string, unknown>;
+      return {
+        ...m,
+        kind: typeof m.kind === 'string' && validKinds.has(m.kind) ? m.kind : null,
+      };
+    });
   }
 
   private mapMessage(message: Record<string, unknown>): Record<string, unknown> {
@@ -497,6 +532,7 @@ export class SessionService {
       type: message.type,
       content: message.content,
       metadata: message.metadata || null,
+      messageId: (message as any).messageId || null,
       createdAt: (message.createdAt as Date).toISOString(),
     };
   }
