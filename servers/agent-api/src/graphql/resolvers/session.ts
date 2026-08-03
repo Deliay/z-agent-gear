@@ -104,6 +104,20 @@ export const sessionResolvers = {
       }
       return sessionService.delete(args.id, context.currentUser.id);
     },
+    deleteHistorySession: async (
+      _parent: unknown,
+      args: { sessionId: string; syncAgent?: boolean },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionImportService.deleteHistorySession(
+        context.currentUser.id,
+        args.sessionId,
+        args.syncAgent ?? true,
+      );
+    },
     sendSessionMessage: async (
       _parent: unknown,
       args: { sessionId: string; content: string; type: string },

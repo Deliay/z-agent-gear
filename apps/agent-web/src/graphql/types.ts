@@ -277,6 +277,14 @@ export interface ImportHistorySessionsMutation {
   importHistorySessions: ImportSessionResultData[]
 }
 
+export interface DeleteHistorySessionMutation {
+  deleteHistorySession: {
+    success: boolean
+    syncedToAgent: boolean
+    error: string | null
+  }
+}
+
 export interface GetControllerWorkspacesQuery {
   controllerWorkspaces: ControllerWorkspaceData[]
 }

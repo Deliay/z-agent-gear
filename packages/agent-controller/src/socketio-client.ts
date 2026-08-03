@@ -75,6 +75,14 @@ interface AcpDeleteSessionPayload {
   sessionId: string;
 }
 
+interface AcpDeleteHistorySessionPayload {
+  requestId: string;
+  sessionId: string;
+  externalSessionId: string;
+  cwd: string;
+  serverType?: string;
+}
+
 interface AcpAuthenticatePayload {
   sessionId: string;
   methodId: string;
@@ -107,6 +115,7 @@ interface AcpListSessionsPayload {
   requestId: string;
   serverType: string;
   cwd: string;
+  cursor?: string | null;
 }
 
 interface AcpLoadSessionPayload {
@@ -386,7 +395,7 @@ export function connectToServer(
     const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
       await bridge.connect();
-      const result = await bridge.listSessions(data.cwd);
+      const result = await bridge.listSessions(data.cwd, data.cursor);
       await bridge.disconnect();
       socket.emit('acp:list-sessions:result', {
         requestId: data.requestId,
@@ -397,6 +406,7 @@ export function connectToServer(
           cwd: s.cwd,
           updatedAt: s.updatedAt ?? null,
         })),
+        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
       });
     } catch (error) {
       await bridge.disconnect().catch(() => {});
@@ -587,6 +597,45 @@ export function connectToServer(
         requestId: data.requestId,
         sessionId: data.sessionId,
         success: false,
+        error: (error as Error).message,
+      });
+    }
+  });
+
+  socket.on('acp:delete-history-session', async (data: AcpDeleteHistorySessionPayload) => {
+    const serverType = data.serverType ?? 'opencode';
+    console.log(`[ACP sync] acp:delete-history-session received: sessionId=${data.externalSessionId} cwd=${data.cwd}`);
+    const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
+    const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
+    try {
+      await bridge.connect();
+      if (!bridge.supportsDelete()) {
+        await bridge.disconnect().catch(() => {});
+        socket.emit('acp:delete-history-session:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: false,
+          supported: false,
+          error: 'Session delete not supported by agent',
+        });
+        return;
+      }
+      await bridge.deleteSession(data.externalSessionId);
+      await bridge.disconnect();
+      socket.emit('acp:delete-history-session:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        supported: true,
+      });
+    } catch (error) {
+      await bridge.disconnect().catch(() => {});
+      console.error(`[ACP sync] delete-history-session failed: ${(error as Error).message}`);
+      socket.emit('acp:delete-history-session:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: false,
+        supported: true,
         error: (error as Error).message,
       });
     }

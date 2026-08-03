@@ -148,6 +148,12 @@ export const sessionTypeDefs = `#graphql
     messageCount: Int
   }
 
+  type DeleteHistorySessionPayload {
+    success: Boolean!
+    syncedToAgent: Boolean!
+    error: String
+  }
+
   type CreateSessionPayload {
     session: Session!
   }
@@ -185,6 +191,7 @@ export const sessionTypeDefs = `#graphql
     setSessionMode(sessionId: ID!, modeId: String!): Boolean!
     setSessionModel(sessionId: ID!, modelId: String!): Boolean!
     setSessionConfigOption(sessionId: ID!, configId: String!, value: String!): Boolean!
+    deleteHistorySession(sessionId: ID!, syncAgent: Boolean = true): DeleteHistorySessionPayload!
     refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   }
 `;

@@ -250,6 +250,27 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:delete-history-session:result', async (payload: {
+      requestId: string;
+      sessionId: string;
+      success: boolean;
+      supported?: boolean;
+      error?: string;
+    }) => {
+      if (!authenticated) return;
+      const result = {
+        success: payload.success,
+        supported: payload.supported,
+        error: payload.error,
+      };
+      try {
+        acpSessionSyncService.handleDeleteResult(payload.requestId, result);
+        await acpSessionSyncService.cacheDeleteResult(payload.requestId, result);
+      } catch (err) {
+        console.error(`ACP delete-history-session:result error:`, err);
+      }
+    });
+
     socket.on('acp:load-session:result', async (payload: {
       requestId: string;
       success: boolean;

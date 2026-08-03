@@ -95,6 +95,8 @@ export class SessionCommandService {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd, command.serverType ?? 'opencode');
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
             await this.handleAcpLoadSession(command.requestId, command.controllerId, command.sessionId, command.cwd, command.serverType ?? 'opencode');
+          } else if (command.type === 'acp:delete-history-session' && command.requestId && command.controllerId && command.sessionId && command.externalSessionId && command.cwd) {
+            await this.handleAcpDeleteHistorySession(command.requestId, command.controllerId, command.sessionId as string, command.externalSessionId as string, command.cwd as string, command.serverType ?? 'opencode');
           } else if (command.type === 'fs:mkdir' && command.requestId && command.controllerId && command.parentPath && command.folderName) {
             await fsMkdirService.handleMkdir(command.requestId, command.controllerId, command.parentPath as string, command.folderName as string);
           } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
@@ -360,6 +362,32 @@ export class SessionCommandService {
 
     const result = await acpSessionSyncService.loadSession(socket, serverType, sessionId, cwd);
     await acpSessionSyncService.cacheLoadResult(requestId, result);
+  }
+
+  private async handleAcpDeleteHistorySession(requestId: string, controllerId: string, sessionId: string, externalSessionId: string, cwd: string, serverType: string = 'opencode'): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for delete-history-session: ${controllerId}`);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller offline for delete-history-session: ${controllerId}`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for delete-history-session: ${controllerId}`);
+      return;
+    }
+
+    const result = await acpSessionSyncService.deleteHistorySession(socket, serverType, sessionId, externalSessionId, cwd);
+    await acpSessionSyncService.cacheDeleteResult(requestId, result);
   }
 }
 

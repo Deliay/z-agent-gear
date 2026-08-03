@@ -12,6 +12,7 @@ import {
   CREATE_SESSION,
   CLOSE_SESSION,
   DELETE_SESSION,
+  DELETE_HISTORY_SESSION,
   SEND_SESSION_MESSAGE,
   CANCEL_GENERATION,
   RESUME_SESSION,
@@ -25,6 +26,7 @@ import type {
   GetControllersQuery,
   CreateSessionMutation,
   ResumeSessionMutation,
+  DeleteHistorySessionMutation,
   AgentModeData,
   AgentModelInfoData,
   SessionConfigOptionData,
@@ -97,6 +99,7 @@ export default function SessionPage() {
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
+  const [deleteHistorySession] = useMutation<DeleteHistorySessionMutation>(DELETE_HISTORY_SESSION);
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
@@ -258,10 +261,21 @@ export default function SessionPage() {
     if (!id) return;
     setDeleting(true);
     try {
-      await deleteSession({
-        variables: { id },
-        refetchQueries: [{ query: GET_SESSIONS }],
-      });
+      const isHistorySession = Boolean(sessionData?.session?.externalSessionId);
+      if (isHistorySession) {
+        const { data } = await deleteHistorySession({
+          variables: { sessionId: id, syncAgent: true },
+          refetchQueries: [{ query: GET_SESSIONS }],
+        });
+        if (data?.deleteHistorySession?.syncedToAgent === false && data.deleteHistorySession.error) {
+          toast.warning(data.deleteHistorySession.error);
+        }
+      } else {
+        await deleteSession({
+          variables: { id },
+          refetchQueries: [{ query: GET_SESSIONS }],
+        });
+      }
       navigate('/sessions');
     } catch (error) {
       console.error('Failed to delete session:', error);

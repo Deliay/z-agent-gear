@@ -9,6 +9,25 @@ const { mockStart, mockStop, MockHeartbeat } = vi.hoisted(() => {
   return { mockStart: start, mockStop: stop, MockHeartbeat: HB };
 });
 
+const { MockAcpSyncBridge, mockBridge } = vi.hoisted(() => {
+  const bridge = {
+    connect: vi.fn().mockResolvedValue(undefined),
+    disconnect: vi.fn().mockResolvedValue(undefined),
+    listSessions: vi.fn(),
+    deleteSession: vi.fn(),
+    supportsDelete: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    resume: vi.fn(),
+  };
+  const Cls = vi.fn(function () { return bridge; });
+  return { MockAcpSyncBridge: Cls, mockBridge: bridge };
+});
+
+vi.mock('../src/acp/sync-bridge.js', () => ({
+  AcpSyncBridge: MockAcpSyncBridge,
+}));
+
 vi.mock('socket.io-client', () => ({
   io: vi.fn(),
 }));
@@ -312,6 +331,173 @@ describe('SocketIO Client', () => {
           entries: [
             { name: 'C:', path: 'C:\\', isDirectory: true },
           ],
+        });
+      });
+    });
+  });
+
+  describe('acp:list-sessions', () => {
+    function setup() {
+      mockBridge.connect.mockClear();
+      mockBridge.disconnect.mockClear();
+      mockBridge.listSessions.mockClear();
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+      return mockSocket;
+    }
+
+    it('should pass cursor and emit nextCursor in result', async () => {
+      mockBridge.listSessions.mockResolvedValue({
+        sessions: [{ sessionId: 'hist-2', title: 'Session 2', cwd: '/home/user', updatedAt: null }],
+        nextCursor: 'cursor-2',
+      });
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:list-sessions', {
+        requestId: 'req-1',
+        serverType: 'opencode',
+        cwd: '/home/user',
+        cursor: 'cursor-1',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockBridge.listSessions).toHaveBeenCalledWith('/home/user', 'cursor-1');
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:list-sessions:result', {
+          requestId: 'req-1',
+          success: true,
+          sessions: [{ sessionId: 'hist-2', title: 'Session 2', cwd: '/home/user', updatedAt: null }],
+          nextCursor: 'cursor-2',
+        });
+      });
+    });
+
+    it('should omit nextCursor when absent', async () => {
+      mockBridge.listSessions.mockResolvedValue({
+        sessions: [{ sessionId: 'hist-1', title: 'Session 1', cwd: '/home/user', updatedAt: null }],
+      });
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:list-sessions', {
+        requestId: 'req-2',
+        serverType: 'opencode',
+        cwd: '/home/user',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockBridge.listSessions).toHaveBeenCalledWith('/home/user', undefined);
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:list-sessions:result', {
+          requestId: 'req-2',
+          success: true,
+          sessions: [{ sessionId: 'hist-1', title: 'Session 1', cwd: '/home/user', updatedAt: null }],
+        });
+      });
+    });
+
+    it('should emit failure result on error', async () => {
+      mockBridge.listSessions.mockRejectedValue(new Error('boom'));
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:list-sessions', {
+        requestId: 'req-3',
+        serverType: 'opencode',
+        cwd: '/home/user',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:list-sessions:result', {
+          requestId: 'req-3',
+          success: false,
+          error: 'boom',
+        });
+      });
+    });
+  });
+
+  describe('acp:delete-history-session', () => {
+    function setup() {
+      mockBridge.connect.mockClear();
+      mockBridge.disconnect.mockClear();
+      mockBridge.deleteSession.mockClear();
+      mockBridge.supportsDelete.mockClear();
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+      return mockSocket;
+    }
+
+    it('should delete session via sync bridge when supported', async () => {
+      mockBridge.supportsDelete.mockReturnValue(true);
+      mockBridge.deleteSession.mockResolvedValue(undefined);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:delete-history-session', {
+        requestId: 'req-1',
+        sessionId: 'db-id-1',
+        externalSessionId: 'ext-1',
+        cwd: '/home/user',
+        serverType: 'opencode',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockBridge.connect).toHaveBeenCalled();
+        expect(mockBridge.supportsDelete).toHaveBeenCalled();
+        expect(mockBridge.deleteSession).toHaveBeenCalledWith('ext-1');
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:delete-history-session:result', {
+          requestId: 'req-1',
+          sessionId: 'db-id-1',
+          success: true,
+          supported: true,
+        });
+      });
+    });
+
+    it('should report unsupported without deleting when agent lacks capability', async () => {
+      mockBridge.supportsDelete.mockReturnValue(false);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:delete-history-session', {
+        requestId: 'req-2',
+        sessionId: 'db-id-2',
+        externalSessionId: 'ext-2',
+        cwd: '/home/user',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockBridge.deleteSession).not.toHaveBeenCalled();
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:delete-history-session:result', {
+          requestId: 'req-2',
+          sessionId: 'db-id-2',
+          success: false,
+          supported: false,
+          error: 'Session delete not supported by agent',
+        });
+      });
+    });
+
+    it('should emit failure result on error', async () => {
+      mockBridge.supportsDelete.mockReturnValue(true);
+      mockBridge.deleteSession.mockRejectedValue(new Error('boom'));
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:delete-history-session', {
+        requestId: 'req-3',
+        sessionId: 'db-id-3',
+        externalSessionId: 'ext-3',
+        cwd: '/home/user',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:delete-history-session:result', {
+          requestId: 'req-3',
+          sessionId: 'db-id-3',
+          success: false,
+          supported: true,
+          error: 'boom',
         });
       });
     });

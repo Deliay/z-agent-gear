@@ -245,14 +245,77 @@ describe('AcpSessionSyncService', () => {
     });
   });
 
-  describe('getCachedLoadResult', () => {
-    it('should return cached load result', async () => {
-      const cached = { success: true, sessionId: 'hist-1', messages: [] };
-      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(cached));
+  describe('deleteHistorySession', () => {
+    it('should emit acp:delete-history-session and resolve on handleDeleteResult', async () => {
+      const socket = createMockSocket();
+      const resultPromise = service.deleteHistorySession(socket as never, 'opencode', 'db-id-1', 'ext-1', '/home/user');
 
-      const result = await service.getCachedLoadResult('req-1');
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:delete-history-session', expect.objectContaining({
+          serverType: 'opencode',
+          sessionId: 'db-id-1',
+          externalSessionId: 'ext-1',
+          cwd: '/home/user',
+          requestId: expect.any(String),
+        }));
+      });
 
-      expect(result).toEqual(cached);
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:delete-history-session');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      service.handleDeleteResult(requestId, { success: true, supported: true });
+
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+      expect(result.supported).toBe(true);
+    });
+
+    it('should handle unsupported result', async () => {
+      const socket = createMockSocket();
+      const resultPromise = service.deleteHistorySession(socket as never, 'opencode', 'db-id-1', 'ext-1', '/home/user');
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalled();
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:delete-history-session');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      service.handleDeleteResult(requestId, { success: false, supported: false, error: 'Session delete not supported by agent' });
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.supported).toBe(false);
+    });
+
+    it('should timeout after 120s if no response', async () => {
+      vi.useFakeTimers();
+      const socket = createMockSocket();
+
+      const resultPromise = service.deleteHistorySession(socket as never, 'opencode', 'db-id-1', 'ext-1', '/home/user');
+
+      await vi.advanceTimersByTimeAsync(121000);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('ACP delete-session timeout');
+
+      vi.useRealTimers();
+    }, 15000);
+  });
+
+  describe('cacheDeleteResult', () => {
+    it('should cache result in Redis with 120s TTL', async () => {
+      vi.mocked(mockRedis.set).mockResolvedValue(undefined);
+
+      await service.cacheDeleteResult('req-1', { success: true, supported: true });
+
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        'acp:delete-session:req-1',
+        expect.any(String),
+        'EX',
+        120,
+      );
     });
   });
 });
