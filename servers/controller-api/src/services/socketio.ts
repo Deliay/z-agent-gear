@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import bcrypt from 'bcryptjs';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
+import { getRedisClient } from '../middleware/redis.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
@@ -185,6 +186,40 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:config-options', async (payload: {
+      sessionId: string;
+      configOptions: Array<Record<string, unknown>>;
+    }) => {
+      if (!authenticated) return;
+      try {
+        const configOptions = payload.configOptions ?? [];
+        // publishConfigOptions 内部已写入 Session（含 mode/model 字段），此处无需重复写
+        await acpSessionManager.publishConfigOptions(payload.sessionId, configOptions);
+      } catch (err) {
+        console.error(`ACP config-options error for session ${payload.sessionId}:`, err);
+      }
+    });
+
+    socket.on('acp:protocol-version-mismatch', async (payload: {
+      sessionId: string;
+      expectedVersion: number;
+      agentVersion: number;
+    }) => {
+      if (!authenticated) return;
+      try {
+        const redis = getRedisClient();
+        await redis.publish('session:status', JSON.stringify({
+          sessionId: payload.sessionId,
+          protocolVersionMismatch: {
+            expectedVersion: payload.expectedVersion,
+            agentVersion: payload.agentVersion,
+          },
+        }));
+      } catch (err) {
+        console.error(`ACP protocol-version-mismatch error for session ${payload.sessionId}:`, err);
+      }
+    });
+
     socket.on('acp:stopped', async (payload: { sessionId: string; reason: string; exitCode?: number }) => {
       if (!authenticated) return;
       try {
@@ -232,6 +267,27 @@ export function createSocketIOServer(io: SocketIOServer): void {
         await acpSessionSyncService.cacheListResult(payload.requestId, result);
       } catch (err) {
         console.error(`ACP list-sessions:result error:`, err);
+      }
+    });
+
+    socket.on('acp:delete-history-session:result', async (payload: {
+      requestId: string;
+      sessionId: string;
+      success: boolean;
+      supported?: boolean;
+      error?: string;
+    }) => {
+      if (!authenticated) return;
+      const result = {
+        success: payload.success,
+        supported: payload.supported,
+        error: payload.error,
+      };
+      try {
+        acpSessionSyncService.handleDeleteResult(payload.requestId, result);
+        await acpSessionSyncService.cacheDeleteResult(payload.requestId, result);
+      } catch (err) {
+        console.error(`ACP delete-history-session:result error:`, err);
       }
     });
 

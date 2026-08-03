@@ -20,6 +20,12 @@ interface ListResult {
   error?: string;
 }
 
+interface DeleteResult {
+  success: boolean;
+  supported?: boolean;
+  error?: string;
+}
+
 interface LoadResult {
   success: boolean;
   sessionId?: string;
@@ -44,6 +50,12 @@ export class AcpSessionSyncService {
 
   private pendingLoads = new Map<string, {
     resolve: (result: LoadResult) => void;
+    timeout: NodeJS.Timeout;
+    controllerSocket: Socket;
+  }>();
+
+  private pendingDeletes = new Map<string, {
+    resolve: (result: DeleteResult) => void;
     timeout: NodeJS.Timeout;
     controllerSocket: Socket;
   }>();
@@ -99,8 +111,38 @@ export class AcpSessionSyncService {
     });
   }
 
+  async deleteHistorySession(controllerSocket: Socket, serverType: string, sessionId: string, externalSessionId: string, cwd: string): Promise<DeleteResult> {
+    const requestId = `sync_delete_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingDeletes.delete(requestId);
+        resolve({ success: false, error: 'ACP delete-session timeout' });
+      }, 120000);
+
+      this.pendingDeletes.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          this.pendingDeletes.delete(requestId);
+          resolve(result);
+        },
+        timeout,
+        controllerSocket,
+      });
+
+      controllerSocket.emit('acp:delete-history-session', { requestId, serverType, sessionId, externalSessionId, cwd });
+    });
+  }
+
   handleListResult(requestId: string, result: ListResult): void {
     const pending = this.pendingLists.get(requestId);
+    if (pending) {
+      pending.resolve(result);
+    }
+  }
+
+  handleDeleteResult(requestId: string, result: DeleteResult): void {
+    const pending = this.pendingDeletes.get(requestId);
     if (pending) {
       pending.resolve(result);
     }
@@ -199,6 +241,13 @@ export class AcpSessionSyncService {
         pending.resolve({ success: false, error: 'Controller disconnected' });
       }
     }
+    for (const [requestId, pending] of this.pendingDeletes) {
+      if (pending.controllerSocket.id === socket.id) {
+        clearTimeout(pending.timeout);
+        this.pendingDeletes.delete(requestId);
+        pending.resolve({ success: false, error: 'Controller disconnected' });
+      }
+    }
     for (const [requestId, acc] of this.loadAccumulators) {
       if (acc.controllerSocket.id === socket.id) {
         clearTimeout(acc.timeout);
@@ -210,6 +259,11 @@ export class AcpSessionSyncService {
   async cacheListResult(requestId: string, result: ListResult): Promise<void> {
     const redis = getRedisClient();
     await redis.set(`acp:list-sessions:${requestId}`, JSON.stringify(result), 'EX', 120);
+  }
+
+  async cacheDeleteResult(requestId: string, result: DeleteResult): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`acp:delete-session:${requestId}`, JSON.stringify(result), 'EX', 120);
   }
 
   async cacheLoadResult(requestId: string, result: LoadResult): Promise<void> {

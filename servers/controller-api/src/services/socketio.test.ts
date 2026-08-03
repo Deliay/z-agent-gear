@@ -4,6 +4,10 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
+const mockRedis = {
+  publish: vi.fn().mockResolvedValue(1),
+};
+
 vi.mock('./key-cache.js', () => ({
   lookupKey: vi.fn(),
 }));
@@ -46,6 +50,7 @@ import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
+import { getRedisClient } from '../middleware/redis.js';
 import bcrypt from 'bcryptjs';
 
 function createMockSocket() {
@@ -377,6 +382,57 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('disconnect');
 
       expect(sessionService.removeSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('acp:protocol-version-mismatch', () => {
+    function setupAuthenticated() {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      return mockSocket;
+    }
+
+    it('should publish protocol version mismatch to session:status channel', async () => {
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const mockSocket = setupAuthenticated();
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', expect.anything());
+      });
+
+      mockSocket._trigger('acp:protocol-version-mismatch', {
+        sessionId: 'sess-1',
+        expectedVersion: 1,
+        agentVersion: 2,
+      });
+
+      await vi.waitFor(() => {
+        expect(mockRedis.publish).toHaveBeenCalledWith('session:status', JSON.stringify({
+          sessionId: 'sess-1',
+          protocolVersionMismatch: { expectedVersion: 1, agentVersion: 2 },
+        }));
+      });
     });
   });
 });

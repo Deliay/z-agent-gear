@@ -263,6 +263,33 @@ describe('ACPSessionManager', () => {
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"output"'));
     });
+
+    it('should persist and publish messageId when present in update', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+
+      const rawUpdate = {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Response' },
+        messageId: 'msg-abc-123',
+      };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess-1', direction: 'output', type: 'text',
+        messageId: 'msg-abc-123',
+      }));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"messageId":"msg-abc-123"'));
+    });
+
+    it('should omit messageId when not present in update', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+
+      const rawUpdate = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Response' } };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      const createCall = vi.mocked(AcpMessage.create).mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(createCall.messageId).toBeUndefined();
+    });
   });
 
   describe('stopSession', () => {
@@ -414,7 +441,7 @@ describe('ACPSessionManager', () => {
       });
 
       await resultPromise;
-      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'idling', modes: [], availableModels: [] });
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { status: 'idling', modes: [], availableModels: [], authRequired: false });
       expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
     });
 
@@ -463,6 +490,32 @@ describe('ACPSessionManager', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('ACP resume timeout');
     }, 35000);
+
+    it('should set authRequired true when authMethods provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      socket._trigger('acp:resume:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        authMethods: [{ id: 'oauth', kind: 'agent' }],
+      });
+
+      await resultPromise;
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ authRequired: true }));
+    });
   });
 
   describe('handleSocketDisconnect', () => {
@@ -531,6 +584,106 @@ describe('ACPSessionManager', () => {
 
     it('should handle disconnect for unknown socket', async () => {
       await expect(manager.handleSocketDisconnect('unknown')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('startSession authRequired', () => {
+    it('should set authRequired true when authMethods provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        authMethods: [{ id: 'oauth', kind: 'agent' }],
+      });
+      await resultPromise;
+
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ authRequired: true }));
+    });
+
+    it('should reset authRequired to false when no authMethods provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        authMethods: [],
+      });
+      await resultPromise;
+
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ authRequired: false }));
+    });
+  });
+
+  describe('config option status publishing', () => {
+    it('should publish current session status for config_option_update (running)', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'running' }) } as never);
+
+      const rawUpdate = {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ id: 'model', category: 'model', currentValue: 'model-2' }],
+      };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"running"'));
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('should fall back to idling for config_option_update when session not found', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) } as never);
+
+      const rawUpdate = {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ id: 'mode', category: 'mode', currentValue: 'code' }],
+      };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('should publish current session status for publishConfigOptions (running)', async () => {
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'running' }) } as never);
+
+      await manager.publishConfigOptions('sess-1', [{ id: 'model', category: 'model', currentValue: 'model-2' }]);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"running"'));
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('should fall back to idling for publishConfigOptions when session not found', async () => {
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) } as never);
+
+      await manager.publishConfigOptions('sess-1', [{ id: 'model', category: 'model', currentValue: 'model-2' }]);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
     });
   });
 });

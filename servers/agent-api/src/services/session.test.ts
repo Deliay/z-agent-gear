@@ -142,6 +142,37 @@ describe('SessionService', () => {
       const result = await sessionService.findById('sess-1', 'user-1');
       expect(result).toBeNull();
     });
+
+    it('should null out authMethod kind values outside the enum', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({
+          authMethods: [
+            { id: 'a', kind: 'env_var', description: 'token' },
+            { id: 'b', kind: 'oauth' },
+            { id: 'c', kind: null },
+            { id: 'd' },
+          ],
+        })),
+      } as never);
+
+      const result = await sessionService.findById('sess-1', 'user-1');
+
+      const authMethods = result!.authMethods as Array<Record<string, unknown>>;
+      expect(authMethods).toHaveLength(4);
+      expect(authMethods[0].kind).toBe('env_var');
+      expect(authMethods[1].kind).toBeNull();
+      expect(authMethods[2].kind).toBeNull();
+      expect(authMethods[3].kind).toBeNull();
+    });
+
+    it('should default authMethods to empty array when missing', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
+
+      const result = await sessionService.findById('sess-1', 'user-1');
+      expect(result!.authMethods).toEqual([]);
+    });
   });
 
   describe('create', () => {
@@ -912,6 +943,64 @@ describe('SessionService', () => {
       const result = await sessionService.setModel('sess-1', 'user-1', 'model-1');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('setConfigOption', () => {
+    it('should return false when session not found', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      const result = await sessionService.setConfigOption('sess-1', 'user-1', 'model', 'model-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should return false when session status is not idling', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'running', configOptions: [{ id: 'model' }] })),
+      } as never);
+
+      const result = await sessionService.setConfigOption('sess-1', 'user-1', 'model', 'model-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('should return false and not publish when session has empty configOptions', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'idling', configOptions: [] })),
+      } as never);
+
+      const result = await sessionService.setConfigOption('sess-1', 'user-1', 'model', 'model-1');
+
+      expect(result).toBe(false);
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('should return false and not publish when session has no configOptions field', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'idling' })),
+      } as never);
+
+      const result = await sessionService.setConfigOption('sess-1', 'user-1', 'model', 'model-1');
+
+      expect(result).toBe(false);
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('should publish acp:set-config-option when session is idling with configOptions', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'idling', configOptions: [{ id: 'model' }] })),
+      } as never);
+
+      const result = await sessionService.setConfigOption('sess-1', 'user-1', 'model', 'model-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-config-option"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"configId":"model"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"value":"model-1"'));
     });
   });
 });

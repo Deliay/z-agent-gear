@@ -194,6 +194,16 @@ export const DELETE_SESSION = gql`
   }
 `
 
+export const DELETE_HISTORY_SESSION = gql`
+  mutation DeleteHistorySession($sessionId: ID!, $syncAgent: Boolean) {
+    deleteHistorySession(sessionId: $sessionId, syncAgent: $syncAgent) {
+      success
+      syncedToAgent
+      error
+    }
+  }
+`
+
 export const SEND_SESSION_MESSAGE = gql`
   mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType) {
     sendSessionMessage(sessionId: $sessionId, content: $content, type: $type) {
@@ -233,6 +243,12 @@ export const SET_SESSION_MODE = gql`
 export const SET_SESSION_MODEL = gql`
   mutation SetSessionModel($sessionId: ID!, $modelId: String!) {
     setSessionModel(sessionId: $sessionId, modelId: $modelId)
+  }
+`;
+
+export const SET_SESSION_CONFIG_OPTION = gql`
+  mutation SetSessionConfigOption($sessionId: ID!, $configId: String!, $value: String!) {
+    setSessionConfigOption(sessionId: $sessionId, configId: $configId, value: $value)
   }
 `;
 

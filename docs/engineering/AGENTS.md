@@ -170,3 +170,4 @@ flowchart LR
 - [[proposals/20260530-feat-mcp-proxy-config.md]] — MCP 代理服务配置
 - [[proposals/20260705-feat-acp-server-extend.md]] — ACP Server 支持扩展
 - [[proposals/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化（设计语言升级与视觉重构）
+- [[proposals/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化

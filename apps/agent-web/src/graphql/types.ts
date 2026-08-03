@@ -98,6 +98,40 @@ export interface AgentModelInfoData {
   provider?: string | null
 }
 
+export interface SessionConfigOptionValueData {
+  value: string
+  name?: string | null
+}
+
+export interface SessionConfigOptionData {
+  id: string
+  name: string
+  description?: string | null
+  category?: string | null
+  type: string
+  currentValue?: string | null
+  options?: SessionConfigOptionValueData[] | null
+}
+
+export interface PromptCapabilitiesData {
+  image: boolean
+  audio: boolean
+  embeddedContext: boolean
+}
+
+export interface AgentInfoData {
+  name: string
+  version?: string | null
+}
+
+export interface AuthMethodInfoData {
+  id: string
+  kind: string
+  name?: string | null
+  description?: string | null
+  url?: string | null
+}
+
 export interface SessionData {
   id: string
   userId: string
@@ -114,6 +148,12 @@ export interface SessionData {
   currentModeId?: string | null
   availableModels?: AgentModelInfoData[] | null
   currentModelId?: string | null
+  configOptions?: SessionConfigOptionData[] | null
+  promptCapabilities?: PromptCapabilitiesData | null
+  agentInfo?: AgentInfoData | null
+  authRequired?: boolean | null
+  authMethods?: AuthMethodInfoData[] | null
+  supportsAdditionalDirectories?: boolean | null
   createdAt: string
   updatedAt: string
   endedAt: string | null
@@ -235,6 +275,18 @@ export interface ListHistorySessionsQuery {
 
 export interface ImportHistorySessionsMutation {
   importHistorySessions: ImportSessionResultData[]
+}
+
+export interface SetSessionConfigOptionMutation {
+  setSessionConfigOption: boolean
+}
+
+export interface DeleteHistorySessionMutation {
+  deleteHistorySession: {
+    success: boolean
+    syncedToAgent: boolean
+    error: string | null
+  }
 }
 
 export interface GetControllerWorkspacesQuery {

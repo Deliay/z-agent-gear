@@ -12,11 +12,13 @@ import {
   CREATE_SESSION,
   CLOSE_SESSION,
   DELETE_SESSION,
+  DELETE_HISTORY_SESSION,
   SEND_SESSION_MESSAGE,
   CANCEL_GENERATION,
   RESUME_SESSION,
   SET_SESSION_MODE,
   SET_SESSION_MODEL,
+  SET_SESSION_CONFIG_OPTION,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
@@ -24,8 +26,11 @@ import type {
   GetControllersQuery,
   CreateSessionMutation,
   ResumeSessionMutation,
+  SetSessionConfigOptionMutation,
+  DeleteHistorySessionMutation,
   AgentModeData,
   AgentModelInfoData,
+  SessionConfigOptionData,
 } from '../graphql/types';
 import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
@@ -71,6 +76,7 @@ export default function SessionPage() {
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
+  const [protocolMismatch, setProtocolMismatch] = useState<{ expectedVersion: number; agentVersion: number } | null>(null);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -79,6 +85,7 @@ export default function SessionPage() {
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const [configOptions, setConfigOptions] = useState<SessionConfigOptionData[]>([]);
   const { commands: availableCommands, updateCommands } = useCommandState();
   const client = useApolloClient();
 
@@ -94,11 +101,13 @@ export default function SessionPage() {
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
+  const [deleteHistorySession] = useMutation<DeleteHistorySessionMutation>(DELETE_HISTORY_SESSION);
   const [sendMessage] = useMutation(SEND_SESSION_MESSAGE);
   const [cancelGeneration] = useMutation(CANCEL_GENERATION);
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
+  const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
 
   useEffect(() => {
     if (sessionData?.session && !initializedRef.current) {
@@ -108,6 +117,7 @@ export default function SessionPage() {
       if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
       if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
       if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
+      if (sessionData.session.configOptions) setConfigOptions(sessionData.session.configOptions as SessionConfigOptionData[]);
     }
   }, [sessionData, id]);
 
@@ -137,13 +147,16 @@ export default function SessionPage() {
           const content = JSON.parse(data.data.content);
           if (content.sessionUpdate === 'config_option_update' || content.sessionUpdate === 'current_mode_update') {
             lastMessageIsSettingUpdateRef.current = true;
-            const configOptions = content.configOptions ?? [];
-            for (const opt of configOptions) {
-              const value = opt.value ?? opt.currentValue;
-              if (opt.id === 'mode' && value) {
-                setCurrentModeId(value);
-              } else if (opt.id === 'model' && value) {
-                setCurrentModelId(value);
+            if (content.configOptions != null) {
+              const configOptions = content.configOptions;
+              setConfigOptions(configOptions);
+              for (const opt of configOptions) {
+                const value = opt.value ?? opt.currentValue;
+                if (opt.id === 'mode' && value) {
+                  setCurrentModeId(value);
+                } else if (opt.id === 'model' && value) {
+                  setCurrentModelId(value);
+                }
               }
             }
           } else if (content.sessionUpdate === 'available_commands_update') {
@@ -170,10 +183,18 @@ export default function SessionPage() {
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
         if (data.data.availableModels) setAvailableModels(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
+        if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
+      } else if (data.type === 'config:changed') {
+        if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'mode:changed') {
         if (data.data.modeId) setCurrentModeId(data.data.modeId);
       } else if (data.type === 'model:changed') {
         if (data.data.modelId) setCurrentModelId(data.data.modelId);
+      } else if (data.type === 'protocol-version-mismatch') {
+        setProtocolMismatch({
+          expectedVersion: data.data.expectedVersion,
+          agentVersion: data.data.agentVersion,
+        });
       }
     };
 
@@ -247,10 +268,21 @@ export default function SessionPage() {
     if (!id) return;
     setDeleting(true);
     try {
-      await deleteSession({
-        variables: { id },
-        refetchQueries: [{ query: GET_SESSIONS }],
-      });
+      const isHistorySession = Boolean(sessionData?.session?.externalSessionId);
+      if (isHistorySession) {
+        const { data } = await deleteHistorySession({
+          variables: { sessionId: id, syncAgent: true },
+          refetchQueries: [{ query: GET_SESSIONS }],
+        });
+        if (data?.deleteHistorySession?.syncedToAgent === false && data.deleteHistorySession.error) {
+          toast.warning(data.deleteHistorySession.error);
+        }
+      } else {
+        await deleteSession({
+          variables: { id },
+          refetchQueries: [{ query: GET_SESSIONS }],
+        });
+      }
       navigate('/sessions');
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -287,6 +319,19 @@ export default function SessionPage() {
     if (!id) return;
     setCurrentModelId(modelId);
     await setSessionModel({ variables: { sessionId: id, modelId } });
+  };
+
+  const handleSetConfigOption = async (configId: string, value: string) => {
+    if (!id) return;
+    try {
+      const { data } = await setSessionConfigOption({ variables: { sessionId: id, configId, value } });
+      if (data?.setSessionConfigOption === false) {
+        toast.error('设置配置项失败，请稍后重试');
+      }
+    } catch (error) {
+      console.error('Failed to set config option:', error);
+      toast.error('设置配置项失败，请稍后重试');
+    }
   };
 
   const handleSendMessage = async (content: string) => {
@@ -385,6 +430,11 @@ export default function SessionPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {protocolMismatch && (
+        <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
+        </div>
+      )}
       <SessionHeader
         session={sessionData?.session ? {
           id: sessionData.session.id,
@@ -432,6 +482,8 @@ export default function SessionPage() {
         currentModelId={currentModelId}
         onSetModel={handleSetModel}
         availableCommands={availableCommands}
+        configOptions={configOptions}
+        onSetConfigOption={handleSetConfigOption}
       />
 
       {showNewSessionDialog && (

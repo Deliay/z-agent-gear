@@ -110,6 +110,36 @@ export const GET_SESSION = gql`
         provider
       }
       currentModelId
+      configOptions {
+        id
+        name
+        description
+        category
+        type
+        currentValue
+        options {
+          value
+          name
+        }
+      }
+      promptCapabilities {
+        image
+        audio
+        embeddedContext
+      }
+      agentInfo {
+        name
+        version
+      }
+      authRequired
+      authMethods {
+        id
+        kind
+        name
+        description
+        url
+      }
+      supportsAdditionalDirectories
       createdAt
       updatedAt
       endedAt

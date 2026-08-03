@@ -31,8 +31,21 @@ function kindLabel(kind?: string): string {
   switch (kind) {
     case 'edit': return 'Edit';
     case 'execute': return 'Command';
+    case 'delete': return 'Delete';
+    case 'move': return 'Move';
+    case 'search': return 'Search';
+    case 'think': return 'Think';
     default: return kind || 'Tool Call';
   }
+}
+
+function pick(raw: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+  if (!raw) return undefined;
+  for (const key of keys) {
+    const v = raw[key];
+    if (typeof v === 'string' && v) return v;
+  }
+  return undefined;
 }
 
 function renderContentItem(item: ToolCallContent, i: number) {
@@ -193,6 +206,59 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
           );
         }
       }
+    }
+
+    if (kind === 'delete') {
+      const filePath = pick(rawInput as Record<string, unknown>, ['filePath', 'file_path']);
+      return (
+        <div className="space-y-2 text-sm">
+          {filePath && (
+            <div className="flex items-center gap-2 text-destructive">
+              <span className="text-base">🗑️</span>
+              <span className="font-mono">{filePath}</span>
+            </div>
+          )}
+          {!filePath && (
+            <div className="text-destructive">删除操作 — {status}</div>
+          )}
+        </div>
+      );
+    }
+
+    if (kind === 'move') {
+      const source = pick(rawInput as Record<string, unknown>, ['sourcePath', 'source_path', 'from']);
+      const dest = pick(rawInput as Record<string, unknown>, ['destinationPath', 'destination_path', 'to']);
+      return (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {source && <span className="font-mono text-foreground">{source}</span>}
+          <span className="text-muted-foreground">→</span>
+          {dest && <span className="font-mono text-foreground">{dest}</span>}
+        </div>
+      );
+    }
+
+    if (kind === 'search') {
+      const query = pick(rawInput as Record<string, unknown>, ['query', 'pattern']);
+      return (
+        <div className="space-y-2 text-sm">
+          {query && (
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">Query: </span>
+              <span className="rounded bg-muted px-2 py-0.5 font-mono text-foreground">"{query}"</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (kind === 'think') {
+      const thoughts = pick(rawOutput as Record<string, unknown>, ['thoughts', 'text', 'reasoning']);
+      return (
+        <div className="rounded border border-border bg-muted/50 p-2 text-sm">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">💭 Thinking</div>
+          <div className="whitespace-pre-wrap text-foreground/80">{thoughts ?? '思考中...'}</div>
+        </div>
+      );
     }
 
     return (

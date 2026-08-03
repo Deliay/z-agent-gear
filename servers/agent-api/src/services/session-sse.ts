@@ -102,10 +102,17 @@ export class SessionSSEService {
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
           if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
+          if (Array.isArray(parsed.configOptions) && parsed.configOptions.length) extra.configOptions = parsed.configOptions;
           this.dispatchStatus(sessionId, status, error, extra);
         }
         this.broadcastModeChanged(sessionId, parsed);
         this.broadcastModelChanged(sessionId, parsed);
+        if (parsed.protocolVersionMismatch) {
+          const mismatch = parsed.protocolVersionMismatch as { expectedVersion?: number; agentVersion?: number };
+          if (typeof mismatch.expectedVersion === 'number' && typeof mismatch.agentVersion === 'number') {
+            this.broadcastProtocolVersionMismatch(sessionId, mismatch.expectedVersion, mismatch.agentVersion);
+          }
+        }
       } catch {
         // ignore parse errors
       }
@@ -138,6 +145,7 @@ export class SessionSSEService {
       if (extra.currentModel) payload.currentModel = extra.currentModel;
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
+      if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
     for (const [key, connection] of connections) {
@@ -160,6 +168,18 @@ export class SessionSSEService {
   broadcastModelChanged(sessionId: string, payload: Record<string, unknown>): void {
     if (!payload.currentModelId) return;
     const data = JSON.stringify({ type: 'model:changed', data: { sessionId, modelId: payload.currentModelId } });
+    for (const [key, connection] of connections) {
+      if (connection.sessionId === sessionId) {
+        connection.res.write(`data: ${data}\n\n`);
+      }
+    }
+  }
+
+  broadcastProtocolVersionMismatch(sessionId: string, expectedVersion: number, agentVersion: number): void {
+    const data = JSON.stringify({
+      type: 'protocol-version-mismatch',
+      data: { sessionId, expectedVersion, agentVersion },
+    });
     for (const [key, connection] of connections) {
       if (connection.sessionId === sessionId) {
         connection.res.write(`data: ${data}\n\n`);

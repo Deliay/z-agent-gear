@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { io as SocketIOClient } from 'socket.io-client';
+import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -74,6 +74,118 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
       reject(new Error(`Register failed: ${data.message}`));
     });
     client.emit('register', { key: rawKey, hostname: `e2e-acp-host-${Date.now()}`, version: '1.0.0' });
+  });
+}
+
+function registerControllerWithConfigOptions(rawKey: string): Promise<{ controllerId: string; disconnect: () => void; socket: ClientSocket }> {
+  return new Promise((resolve, reject) => {
+    const client = SocketIOClient(CONTROLLER_API_URL, {
+      transports: ['websocket'], reconnection: false, forceNew: true,
+    });
+    const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout registering controller')); }, 10000);
+
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
+    client.on('fs:mkdir', (data: { requestId: string }) => {
+      client.emit('fs:mkdir:result', { requestId: data.requestId, success: true });
+    });
+
+    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      setTimeout(() => {
+        client.emit('acp:start:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: true,
+          externalSessionId: `ext_cfg_${Date.now()}`,
+          availableModels: [{ id: 'default', name: 'Default' }, { id: 'fast', name: 'Fast' }],
+          currentModelId: 'default',
+          configOptions: [
+            { id: 'autosave', name: 'Autosave', type: 'boolean', currentValue: 'false', category: 'general' },
+            { id: 'model', name: 'Model', type: 'select', currentValue: 'default', category: 'model', options: [{ value: 'default', name: 'Default' }, { value: 'fast', name: 'Fast' }] },
+          ],
+        });
+      }, 300);
+    });
+
+    client.once('registered', (data: { controllerId: string }) => {
+      clearTimeout(timer);
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), socket: client });
+    });
+    client.once('error', (data: { code: string; message: string }) => {
+      clearTimeout(timer);
+      client.disconnect();
+      reject(new Error(`Register failed: ${data.message}`));
+    });
+    client.emit('register', { key: rawKey, hostname: `e2e-acp-cfg-host-${Date.now()}`, version: '1.0.0' });
+  });
+}
+
+function registerControllerWithDelete(rawKey: string): Promise<{ controllerId: string; disconnect: () => void; waitForDelete: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const client = SocketIOClient(CONTROLLER_API_URL, {
+      transports: ['websocket'], reconnection: false, forceNew: true,
+    });
+    const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout registering controller')); }, 10000);
+
+    client.on('acp:check', (data: { requestId: string }) => {
+      client.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
+    client.on('acp:list-sessions', (data: { requestId: string; cwd: string }) => {
+      client.emit('acp:list-sessions:result', {
+        requestId: data.requestId,
+        success: true,
+        sessions: [
+          { sessionId: 'e2e_del_sess_1', title: 'Delete Me Session', cwd: data.cwd, updatedAt: new Date().toISOString() },
+        ],
+      });
+    });
+
+    client.on('acp:load-session', (data: { requestId: string; sessionId: string; cwd: string }) => {
+      client.emit('acp:load-session:result', {
+        requestId: data.requestId,
+        success: true,
+        sessionId: data.sessionId,
+        title: 'History - Delete Me',
+        messages: [
+          { direction: 'input', type: 'text', content: JSON.stringify({ text: 'hi' }) },
+          { direction: 'output', type: 'text', content: JSON.stringify({ text: 'hello' }) },
+        ],
+      });
+    });
+
+    let deleteResolve: (() => void) | null = null;
+    const deletePromise = new Promise<void>((resolveDelete) => {
+      deleteResolve = resolveDelete;
+    });
+    client.on('acp:delete-history-session', (data: { requestId: string; sessionId: string }) => {
+      client.emit('acp:delete-history-session:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        supported: true,
+      });
+      deleteResolve?.();
+    });
+
+    client.once('registered', (data: { controllerId: string }) => {
+      clearTimeout(timer);
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), waitForDelete: () => deletePromise });
+    });
+    client.once('error', (data: { code: string; message: string }) => {
+      clearTimeout(timer);
+      client.disconnect();
+      reject(new Error(`Register failed: ${data.message}`));
+    });
+    client.emit('register', { key: rawKey, hostname: `e2e-acp-del-host-${Date.now()}`, version: '1.0.0' });
   });
 }
 
@@ -293,6 +405,106 @@ test.describe('Session ACP Server Type', () => {
 
     // Verify Codex badge is visible
     await expect(page.getByText('Codex')).toBeVisible({ timeout: 10000 });
+
+    disconnect();
+  });
+
+  test('should render config options panel with boolean switch and forward changes to controller', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect, socket } = await registerControllerWithConfigOptions(rawKey);
+    const ws = await createWorkspace(page, controllerId, `/tmp/e2e-acp-cfg-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    const setConfigPromise = new Promise<{ sessionId: string; configId: string; value: string }>((resolve) => {
+      socket.on('acp:set-config-option', (data: { sessionId: string; configId: string; value: string }) => {
+        socket.emit('acp:set-config-option:result', {
+          sessionId: data.sessionId,
+          configId: data.configId,
+          value: data.value,
+          success: true,
+        });
+        resolve(data);
+      });
+    });
+
+    const setModelPromise = new Promise<{ sessionId: string; modelId: string }>((resolve) => {
+      socket.on('acp:set-model', (data: { sessionId: string; modelId: string }) => {
+        resolve(data);
+      });
+    });
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: '新建会话' }).click();
+    await page.locator('#controller').selectOption({ index: 1 });
+
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
+
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+    await expect(page.getByTestId('session-status-badge')).toHaveText('空闲', { timeout: 10000 });
+
+    // Config options panel renders the boolean switch (category=mode/model 由 ModeSwitcher/ModelSwitcher 负责，不在面板中)
+    const switchBtn = page.getByRole('switch', { name: 'Autosave' });
+    await expect(switchBtn).toBeVisible({ timeout: 10000 });
+    await expect(switchBtn).toBeEnabled();
+
+    // Toggle the switch → controller receives acp:set-config-option (category=general 走配置项通道)
+    await switchBtn.click();
+    const setConfigData = await setConfigPromise;
+    expect(setConfigData.configId).toBe('autosave');
+    expect(setConfigData.value).toBe('true');
+
+    // Switch model via ModelSwitcher → controller receives acp:set-model
+    // (category=model 双轨路由；bridge 内部再转到 setSessionConfigOption，由 acp-bridge 单测覆盖)
+    await page.getByRole('button', { name: 'Default' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Fast' }).click();
+    const setModelData = await setModelPromise;
+    expect(setModelData.modelId).toBe('fast');
+
+    disconnect();
+  });
+
+  test('should delete imported history session and sync to agent', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect, waitForDelete } = await registerControllerWithDelete(rawKey);
+    await createWorkspace(page, controllerId, `/tmp/e2e-del-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+
+    // Import the history session via settings
+    await page.goto('/settings');
+    await page.locator('#controller-section').getByRole('button', { name: '配置' }).first().click();
+    await expect(page).toHaveURL(/settings\?controllerId=/);
+    await page.getByRole('button', { name: '历史会话' }).click();
+    await expect(page.getByText('Delete Me Session')).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: '全选' }).click();
+    await page.getByRole('button', { name: '导入已选 (1)' }).click();
+    await expect(page.getByText('成功导入 1 个会话')).toBeVisible({ timeout: 30000 });
+    await page.getByRole('button', { name: '完成' }).click();
+
+    // Open the imported session from the sidebar sessions list
+    await page.goto('/sessions');
+    await page.getByText(/e2e-acp-del-host-/).click();
+    await page.getByText(/e2e-del-/).click();
+    await expect(page.getByText('History - Delete Me')).toBeVisible({ timeout: 10000 });
+    await page.getByText('History - Delete Me').click();
+
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    // Delete the imported history session → syncs to agent
+    await page.getByRole('button', { name: '删除' }).click();
+
+    await waitForDelete();
+    await expect(page).toHaveURL(/\/sessions$/, { timeout: 10000 });
+
+    // Session removed from list
+    await expect(page.getByText('History - Delete Me')).not.toBeVisible({ timeout: 10000 });
 
     disconnect();
   });
