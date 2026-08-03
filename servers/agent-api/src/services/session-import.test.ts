@@ -320,6 +320,54 @@ describe('SessionImportService', () => {
       vi.useRealTimers();
     });
 
+    it('should pass through agent error when agent supports delete but fails', async () => {
+      vi.useFakeTimers();
+      vi.mocked(Session.findOne).mockResolvedValue(mockSession() as never);
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, supported: true, error: 'agent delete failed' }));
+
+      const promise = sessionImportService.deleteHistorySession('user-1', 'sess-1');
+      await advancePollTimers(500, 3);
+      const result = await promise;
+
+      expect(result).toEqual({ success: true, syncedToAgent: false, error: 'agent delete failed' });
+      vi.useRealTimers();
+    });
+
+    it('should reject deleting a running session', async () => {
+      vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'running' }) as never);
+
+      await expect(sessionImportService.deleteHistorySession('user-1', 'sess-1')).rejects.toThrow(
+        "Cannot delete session in 'running' status",
+      );
+      expect(Session.deleteOne).not.toHaveBeenCalled();
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('should reject deleting a connecting session', async () => {
+      vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'connecting' }) as never);
+
+      await expect(sessionImportService.deleteHistorySession('user-1', 'sess-1')).rejects.toThrow(
+        "Cannot delete session in 'connecting' status",
+      );
+      expect(Session.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('should allow deleting an idling session', async () => {
+      vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'idling' }) as never);
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
+
+      const result = await sessionImportService.deleteHistorySession('user-1', 'sess-1', false);
+
+      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' });
+      expect(result).toEqual({ success: true, syncedToAgent: false, error: null });
+    });
+
     it('should throw when session not found', async () => {
       vi.mocked(Session.findOne).mockResolvedValue(null);
 

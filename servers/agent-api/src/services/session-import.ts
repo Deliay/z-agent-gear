@@ -94,6 +94,11 @@ export class SessionImportService {
       throw new Error('Session not found');
     }
 
+    const sessionStatus = (session as unknown as { status?: string }).status;
+    if (sessionStatus && sessionStatus !== 'ended' && sessionStatus !== 'idling') {
+      throw new Error(`Cannot delete session in '${sessionStatus}' status; only ended or idling sessions can be deleted`);
+    }
+
     await Session.deleteOne({ _id: sessionId, userId });
     await AcpMessage.deleteMany({ sessionId });
 
@@ -105,6 +110,7 @@ export class SessionImportService {
     };
 
     let syncedToAgent = false;
+    let syncError: string | null = null;
     if (syncAgent && record.externalSessionId) {
       const requestId = `delete_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const redis = getRedisClient();
@@ -125,9 +131,12 @@ export class SessionImportService {
       );
 
       syncedToAgent = Boolean(result && result.success && result.supported);
+      if (result && !result.success && result.supported && result.error) {
+        syncError = result.error;
+      }
     }
 
-    return { success: true, syncedToAgent, error: null };
+    return { success: true, syncedToAgent, error: syncError };
   }
 
   async importSessions(

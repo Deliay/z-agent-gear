@@ -104,7 +104,7 @@ export class ACPSessionManager {
             if (payload.supportsAdditionalDirectories != null) {
               updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
             }
-            if (payload.authMethods?.length) updateData.authRequired = true;
+            updateData.authRequired = Boolean(payload.authMethods?.length);
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
             await this.cacheConfigOptions(sessionId, payload.configOptions);
@@ -237,7 +237,8 @@ export class ACPSessionManager {
         }
         await Session.findByIdAndUpdate(sessionId, updateData);
         await this.cacheConfigOptions(sessionId, configOptions);
-        await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+        const currentStatus = await this.getCurrentSessionStatus(sessionId);
+        await this.publishStatus(sessionId, currentStatus, undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
       }
     }
 
@@ -482,7 +483,7 @@ export class ACPSessionManager {
             if (payload.supportsAdditionalDirectories != null) {
               updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
             }
-            if (payload.authMethods?.length) updateData.authRequired = true;
+            updateData.authRequired = Boolean(payload.authMethods?.length);
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.refreshSessionCache(sessionId);
             await this.cacheConfigOptions(sessionId, payload.configOptions);
@@ -611,7 +612,13 @@ export class ACPSessionManager {
     }
     await Session.findByIdAndUpdate(sessionId, updateData);
     await this.cacheConfigOptions(sessionId, configOptions);
-    await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+    const currentStatus = await this.getCurrentSessionStatus(sessionId);
+    await this.publishStatus(sessionId, currentStatus, undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+  }
+
+  private async getCurrentSessionStatus(sessionId: string): Promise<string> {
+    const session = await Session.findById(sessionId).lean();
+    return (session?.status as string | undefined) ?? 'idling';
   }
 
   private async cacheConfigOptions(

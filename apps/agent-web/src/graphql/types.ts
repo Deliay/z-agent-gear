@@ -277,6 +277,10 @@ export interface ImportHistorySessionsMutation {
   importHistorySessions: ImportSessionResultData[]
 }
 
+export interface SetSessionConfigOptionMutation {
+  setSessionConfigOption: boolean
+}
+
 export interface DeleteHistorySessionMutation {
   deleteHistorySession: {
     success: boolean

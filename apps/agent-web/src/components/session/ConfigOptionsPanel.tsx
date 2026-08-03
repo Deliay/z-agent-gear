@@ -7,10 +7,26 @@ interface ConfigOptionsPanelProps {
   onSetConfigOption: (configId: string, value: string) => Promise<void>;
 }
 
+const UNCATEGORIZED = '其他';
+
 export default function ConfigOptionsPanel({ configOptions, status, onSetConfigOption }: ConfigOptionsPanelProps) {
   const [savingId, setSavingId] = useState<string | null>(null);
 
-  if (configOptions.length === 0) return null;
+  // mode/model 由 ModeSwitcher/ModelSwitcher 负责（bridge 已双轨路由到 setSessionConfigOption），此处过滤避免重复控件
+  const visibleOptions = configOptions.filter((opt) => opt.category !== 'mode' && opt.category !== 'model');
+
+  if (visibleOptions.length === 0) return null;
+
+  const groups: Array<{ category: string; options: SessionConfigOptionData[] }> = [];
+  for (const opt of visibleOptions) {
+    const category = opt.category || UNCATEGORIZED;
+    let group = groups.find((g) => g.category === category);
+    if (!group) {
+      group = { category, options: [] };
+      groups.push(group);
+    }
+    group.options.push(opt);
+  }
 
   const disabled = status !== 'idling';
 
@@ -25,8 +41,15 @@ export default function ConfigOptionsPanel({ configOptions, status, onSetConfigO
   };
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-border bg-muted/30 px-2 py-1.5">
-      {configOptions.map((opt) => {
+    <div className="mb-2 flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1.5">
+      {groups.map((group) => (
+        <div key={group.category} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {groups.length > 1 && (
+            <span className="w-full text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {group.category}
+            </span>
+          )}
+          {group.options.map((opt) => {
         const currentValue = opt.currentValue ?? '';
         if (opt.type === 'boolean') {
           const checked = currentValue === 'true';
@@ -98,7 +121,9 @@ export default function ConfigOptionsPanel({ configOptions, status, onSetConfigO
         }
 
         return null;
-      })}
+          })}
+        </div>
+      ))}
     </div>
   );
 }

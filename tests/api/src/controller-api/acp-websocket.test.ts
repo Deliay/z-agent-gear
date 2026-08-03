@@ -476,6 +476,61 @@ describe('Controller API ACP WebSocket', () => {
 
       client.disconnect();
     });
+
+    it('should persist messageId from controller message and expose it via query', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Controller sends output message carrying ACP messageId
+      client.emit('acp:message', {
+        sessionId,
+        message: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Hello with messageId' },
+          messageId: 'msg-e2e-123',
+        },
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify messageId persisted (check via agent-api GraphQL)
+      const msgQuery = `
+        query SessionMessages($sessionId: ID!, $before: ID, $limit: Int) {
+          sessionMessages(sessionId: $sessionId, before: $before, limit: $limit) {
+            id direction type content messageId
+          }
+        }
+      `;
+      const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10 }, authToken);
+      const msgBody = await msgRes.json();
+      const messages = msgBody.data.sessionMessages;
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+
+      const outputMsg = messages.find((m: { direction: string; messageId?: string }) => m.direction === 'output');
+      expect(outputMsg).toBeDefined();
+      expect(outputMsg.messageId).toBe('msg-e2e-123');
+
+      client.disconnect();
+    });
   });
 
   describe('acp:stopped from controller', () => {

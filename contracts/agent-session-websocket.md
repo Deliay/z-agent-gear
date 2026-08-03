@@ -42,9 +42,10 @@
 | Server → Controller | `acp:set-mode` | 请求切换 Agent 工作模式 |
 | Server → Controller | `acp:set-model` | 请求切换 LLM 模型 |
 | Server → Controller | `acp:set-config-option` | 请求设置会话配置项（含模式/模型 category） |
+| Controller → Server | `acp:set-config-option:result` | 设置配置项结果（成功/失败回执） |
 | Controller → Server | `acp:config-options` | 上报会话配置项全量快照（初始化与变更后） |
-| Server → Controller | `acp:delete-session` | 请求删除 Agent 侧历史会话 |
-| Controller → Server | `acp:delete-session:result` | 删除结果 |
+| Server → Controller | `acp:delete-history-session` | 请求删除 Agent 侧历史会话 |
+| Controller → Server | `acp:delete-history-session:result` | 删除结果 |
 | Server → Controller | `acp:authenticate` | 请求执行 Agent 认证 |
 | Controller → Server | `acp:authenticate:result` | 认证结果 |
 | Controller → Server | `acp:auth:required` | Agent 要求认证（initialize 返回 authMethods） |
@@ -394,14 +395,16 @@ Controller 转发 ACP 输出。
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `requestId` | `string` | 是 | 请求 ID，用于匹配结果 |
+| `serverType` | `string` | 是 | Agent 类型（如 `opencode`） |
 | `cwd` | `string` | 是 | 工作目录绝对路径 |
+| `cursor` | `string \| null` | 否 | 分页游标（透传 ACP `session/list` 的 cursor） |
 
 **客户端行为：**
 
 1. 实例化临时 `AcpSyncBridge`，以 `cwd` 为参数
 2. 连接 ACP Server（spawn `opencode acp`）
 3. 调用 `connection.initialize()`
-4. 调用 `connection.listSessions({ cwd })`
+4. 调用 `connection.listSessions({ cwd, cursor? })`
 5. 返回会话列表 → 关闭 ACP 连接
 6. 回复 `acp:list-sessions:result`
 
@@ -416,7 +419,10 @@ Controller 转发 ACP 输出。
 | `requestId` | `string` | 是 | 对应的请求 ID |
 | `success` | `boolean` | 是 | 是否成功 |
 | `sessions` | `SessionInfo[]` | 否 | 会话列表（成功时） |
+| `nextCursor` | `string \| null` | 否 | 下一页游标（ACP 返回时透传） |
 | `error` | `string` | 否 | 失败原因 |
+
+> 取舍说明：当前 Server 端只消费第一页结果，忽略 `nextCursor`（不发起翻页请求）。后续如需完整列表可基于 `cursor`/`nextCursor` 扩展。
 
 **SessionInfo 结构：**
 
@@ -577,16 +583,30 @@ Server将用户审批结果返回给Controller。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `requestId` | `string` | 否 | 请求 ID（当前 Server 端未发送，保留用于匹配响应） |
 | `sessionId` | `string` | 是 | Session ID |
 | `configId` | `string` | 是 | 配置项 ID |
-| `value` | `string \| boolean` | 是 | 配置值（boolean 类型配置项传布尔值） |
+| `value` | `string` | 是 | 配置值（全程字符串；boolean 配置项传 `'true'`/`'false'`） |
 
 **客户端行为：**
 
 1. 查找对应 session 的 AcpSessionBridge
 2. 调用 ACP `session/set_config_option` JSON-RPC 方法
-3. 回复 `acp:config-options`（全量配置项快照，唯一事实源）
+3. 以响应中的全量快照更新内部 `configOptions`，回复 `acp:config-options`（全量配置项快照，唯一事实源，与 `config_option_update` 通知路径同源）
+4. 同时回复 `acp:set-config-option:result` 回执（见 §2.21.1）；bridge 不存在时直接回复 `success: false`
+
+### 2.21.1 `acp:set-config-option:result`（Controller → Server）
+
+设置配置项的成功/失败回执。新值以 `acp:config-options` 快照为准，本事件仅表示调用结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `configId` | `string` | 是 | 配置项 ID |
+| `error` | `string` | 否 | 失败原因 |
 
 ### 2.22 `acp:config-options`（Controller → Server）
 
@@ -599,7 +619,7 @@ Server将用户审批结果返回给Controller。
 | `sessionId` | `string` | 是 | Session ID |
 | `configOptions` | `SessionConfigOption[]` | 是 | 配置项全量快照 |
 
-### 2.23 `acp:delete-session`（Server → Controller）
+### 2.23 `acp:delete-history-session`（Server → Controller）
 
 请求删除 Agent 侧历史会话（Agent 声明 `session.delete` capability 时）。
 
@@ -611,14 +631,16 @@ Server将用户审批结果返回给Controller。
 | `sessionId` | `string` | 是 | Session ID（服务端） |
 | `externalSessionId` | `string` | 是 | ACP 侧 session ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
+| `serverType` | `string` | 否 | Agent 类型（缺省 `opencode`） |
 
 **客户端行为：**
 
-1. 实例化临时 `AcpSyncBridge`（或以现有会话 bridge 复用）
-2. 调用 SDK `connection.deleteSession({ sessionId: externalSessionId })`
-3. 回复 `acp:delete-session:result`
+1. 实例化临时 `AcpSyncBridge` 并连接 ACP Server
+2. 检查 `session.delete` capability，不支持时直接回复 `supported: false`
+3. 调用 SDK `connection.deleteSession({ sessionId: externalSessionId })`
+4. 回复 `acp:delete-history-session:result`
 
-### 2.24 `acp:delete-session:result`（Controller → Server）
+### 2.24 `acp:delete-history-session:result`（Controller → Server）
 
 **Payload:**
 
@@ -627,6 +649,7 @@ Server将用户审批结果返回给Controller。
 | `requestId` | `string` | 是 | 对应的请求 ID |
 | `success` | `boolean` | 是 | 是否成功 |
 | `sessionId` | `string` | 是 | Session ID（服务端） |
+| `supported` | `boolean` | 否 | Agent 是否支持删除会话（`false` 表示 Agent 无 `session.delete` capability） |
 | `error` | `string` | 否 | 失败原因 |
 
 ### 2.25 `acp:auth:required`（Controller → Server）
@@ -1339,7 +1362,7 @@ LLM 模型切换成功后推送。
 
 **initialize:**
 
-Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项。
+Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项（注意：`session.configOptions.boolean` 是扩展字段，非 ACP 官方 schema 属性）。
 
 ```json
 {

@@ -120,6 +120,7 @@ enum AuthMethodKind {
 type AuthMethodInfo {
   id: String!
   kind: AuthMethodKind
+  name: String
   description: String
   url: String
 }

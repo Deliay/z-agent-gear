@@ -26,8 +26,8 @@ function computeLineDiff(oldLines: string[], newLines: string[]): Array<{ type: 
 }
 
 export default function DiffView({ oldText, newText, filePath, inline }: DiffViewProps) {
-  const isNewFile = oldText == null || oldText === '';
-  const oldLines = (oldText || '').split('\n');
+  const isNewFile = oldText == null;
+  const oldLines = isNewFile ? [] : (oldText ?? '').split('\n');
   const newLines = newText.split('\n');
   const diffs = computeLineDiff(oldLines, newLines);
 

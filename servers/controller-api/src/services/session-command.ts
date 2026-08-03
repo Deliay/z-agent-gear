@@ -370,6 +370,7 @@ export class SessionCommandService {
     const controller = await Controller.findById(controllerId).lean();
     if (!controller) {
       console.error(`Controller not found for delete-history-session: ${controllerId}`);
+      await acpSessionSyncService.cacheDeleteResult(requestId, { success: false, supported: false, error: 'Controller not found' });
       return;
     }
 
@@ -377,12 +378,14 @@ export class SessionCommandService {
     const socketId = await sessionService.getSocketId(keyId);
     if (!socketId) {
       console.error(`Controller offline for delete-history-session: ${controllerId}`);
+      await acpSessionSyncService.cacheDeleteResult(requestId, { success: false, supported: false, error: 'Controller offline' });
       return;
     }
 
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
       console.error(`Socket not found for delete-history-session: ${controllerId}`);
+      await acpSessionSyncService.cacheDeleteResult(requestId, { success: false, supported: false, error: 'Controller socket not found' });
       return;
     }
 

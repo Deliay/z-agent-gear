@@ -18,4 +18,18 @@ describe('DiffView', () => {
     expect(screen.getByText('old line')).toBeDefined();
     expect(screen.getByText('new line')).toBeDefined();
   });
+
+  it('should not mark an existing empty file as new file', () => {
+    render(<DiffView oldText={''} newText={'line1'} filePath="src/empty.ts" />);
+
+    expect(screen.getByText('src/empty.ts')).toBeDefined();
+    expect(screen.queryByText('新建文件')).toBeNull();
+  });
+
+  it('should not render a pseudo removed first line for new files', () => {
+    render(<DiffView oldText={null} newText={'line1\nline2'} filePath="src/new.ts" />);
+
+    expect(screen.getByText('新建文件')).toBeDefined();
+    expect(screen.queryByText('−')).toBeNull();
+  });
 });

@@ -26,6 +26,7 @@ import type {
   GetControllersQuery,
   CreateSessionMutation,
   ResumeSessionMutation,
+  SetSessionConfigOptionMutation,
   DeleteHistorySessionMutation,
   AgentModeData,
   AgentModelInfoData,
@@ -106,7 +107,7 @@ export default function SessionPage() {
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
-  const [setSessionConfigOption] = useMutation(SET_SESSION_CONFIG_OPTION);
+  const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
 
   useEffect(() => {
     if (sessionData?.session && !initializedRef.current) {
@@ -146,16 +147,16 @@ export default function SessionPage() {
           const content = JSON.parse(data.data.content);
           if (content.sessionUpdate === 'config_option_update' || content.sessionUpdate === 'current_mode_update') {
             lastMessageIsSettingUpdateRef.current = true;
-            const configOptions = content.configOptions ?? [];
-            if (configOptions.length > 0) {
+            if (content.configOptions != null) {
+              const configOptions = content.configOptions;
               setConfigOptions(configOptions);
-            }
-            for (const opt of configOptions) {
-              const value = opt.value ?? opt.currentValue;
-              if (opt.id === 'mode' && value) {
-                setCurrentModeId(value);
-              } else if (opt.id === 'model' && value) {
-                setCurrentModelId(value);
+              for (const opt of configOptions) {
+                const value = opt.value ?? opt.currentValue;
+                if (opt.id === 'mode' && value) {
+                  setCurrentModeId(value);
+                } else if (opt.id === 'model' && value) {
+                  setCurrentModelId(value);
+                }
               }
             }
           } else if (content.sessionUpdate === 'available_commands_update') {
@@ -182,9 +183,9 @@ export default function SessionPage() {
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
         if (data.data.availableModels) setAvailableModels(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
-        if (data.data.configOptions) setConfigOptions(data.data.configOptions);
+        if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'config:changed') {
-        if (data.data.configOptions) setConfigOptions(data.data.configOptions);
+        if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'mode:changed') {
         if (data.data.modeId) setCurrentModeId(data.data.modeId);
       } else if (data.type === 'model:changed') {
@@ -323,9 +324,13 @@ export default function SessionPage() {
   const handleSetConfigOption = async (configId: string, value: string) => {
     if (!id) return;
     try {
-      await setSessionConfigOption({ variables: { sessionId: id, configId, value } });
+      const { data } = await setSessionConfigOption({ variables: { sessionId: id, configId, value } });
+      if (data?.setSessionConfigOption === false) {
+        toast.error('设置配置项失败，请稍后重试');
+      }
     } catch (error) {
       console.error('Failed to set config option:', error);
+      toast.error('设置配置项失败，请稍后重试');
     }
   };
 

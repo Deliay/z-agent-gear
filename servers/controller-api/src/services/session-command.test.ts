@@ -221,6 +221,91 @@ describe('SessionCommandService', () => {
         expect(acpSessionSyncService.cacheDeleteResult).toHaveBeenCalledWith('req-1', { success: true, supported: true });
       });
     });
+
+    it('should cache failure result when controller not found', async () => {
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:delete-history-session',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'db-id-1',
+        externalSessionId: 'ext-1',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionSyncService.cacheDeleteResult).toHaveBeenCalledWith('req-1', {
+          success: false,
+          supported: false,
+          error: 'Controller not found',
+        });
+      });
+      expect(acpSessionSyncService.deleteHistorySession).not.toHaveBeenCalled();
+    });
+
+    it('should cache failure result when controller offline', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:delete-history-session',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'db-id-1',
+        externalSessionId: 'ext-1',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionSyncService.cacheDeleteResult).toHaveBeenCalledWith('req-1', {
+          success: false,
+          supported: false,
+          error: 'Controller offline',
+        });
+      });
+      expect(acpSessionSyncService.deleteHistorySession).not.toHaveBeenCalled();
+    });
+
+    it('should cache failure result when controller socket missing', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:delete-history-session',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'db-id-1',
+        externalSessionId: 'ext-1',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionSyncService.cacheDeleteResult).toHaveBeenCalledWith('req-1', {
+          success: false,
+          supported: false,
+          error: 'Controller socket not found',
+        });
+      });
+      expect(acpSessionSyncService.deleteHistorySession).not.toHaveBeenCalled();
+    });
   });
 
   describe('acp:cache:invalidate command', () => {

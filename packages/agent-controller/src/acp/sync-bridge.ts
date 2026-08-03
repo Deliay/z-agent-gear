@@ -67,7 +67,10 @@ export class AcpSyncBridge implements acp.Client {
   }
 
   async listSessions(cwd: string, cursor?: string | null): Promise<acp.ListSessionsResponse> {
-    return this.connection!.listSessions({ cwd, ...(cursor ? { cursor } : {}) });
+    if (!this.connection) {
+      throw new Error('ACP connection not established');
+    }
+    return this.connection.listSessions({ cwd, ...(cursor ? { cursor } : {}) });
   }
 
   async deleteSession(sessionId: string): Promise<void> {

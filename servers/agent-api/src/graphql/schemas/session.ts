@@ -79,7 +79,7 @@ export const sessionTypeDefs = `#graphql
 
   type AuthMethodInfo {
     id: String!
-    kind: AuthMethodKind!
+    kind: AuthMethodKind
     name: String
     description: String
     url: String

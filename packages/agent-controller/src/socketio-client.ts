@@ -70,11 +70,6 @@ interface AcpSetConfigOptionPayload {
   value: string | boolean;
 }
 
-interface AcpDeleteSessionPayload {
-  requestId: string;
-  sessionId: string;
-}
-
 interface AcpDeleteHistorySessionPayload {
   requestId: string;
   sessionId: string;
@@ -557,49 +552,34 @@ export function connectToServer(
   socket.on('acp:set-config-option', (data: AcpSetConfigOptionPayload) => {
     console.log(`[ACP] acp:set-config-option received: sessionId=${data.sessionId} configId=${data.configId}`);
     const bridge = acpBridges.get(data.sessionId);
-    if (bridge) {
-      bridge.setConfigOption(data.configId, data.value).then(
-        (response) => {
-          socket.emit('acp:set-config-option:result', {
-            sessionId: data.sessionId,
-            success: true,
-            configId: data.configId,
-          });
-        },
-        (err) => {
-          console.error(`[ACP] setConfigOption failed: ${(err as Error).message}`);
-          socket.emit('acp:set-config-option:result', {
-            sessionId: data.sessionId,
-            success: false,
-            configId: data.configId,
-            error: (err as Error).message,
-          });
-        },
-      );
-    }
-  });
-
-  socket.on('acp:delete-session', async (data: AcpDeleteSessionPayload) => {
-    console.log(`[ACP] acp:delete-session received: sessionId=${data.sessionId}`);
-    const bridge = acpBridges.get(data.sessionId);
-    try {
-      if (!bridge) throw new Error('ACP bridge not found for session');
-      bridge.stop();
-      await bridge.deleteSession();
-      acpBridges.delete(data.sessionId);
-      socket.emit('acp:delete-session:result', {
-        requestId: data.requestId,
-        sessionId: data.sessionId,
-        success: true,
-      });
-    } catch (error) {
-      socket.emit('acp:delete-session:result', {
-        requestId: data.requestId,
+    if (!bridge) {
+      socket.emit('acp:set-config-option:result', {
         sessionId: data.sessionId,
         success: false,
-        error: (error as Error).message,
+        configId: data.configId,
+        error: 'ACP bridge not found for session',
       });
+      return;
     }
+    // 成功时 bridge 内部已用响应快照更新 configOptions 并 emit acp:config-options
+    bridge.setConfigOption(data.configId, data.value).then(
+      () => {
+        socket.emit('acp:set-config-option:result', {
+          sessionId: data.sessionId,
+          success: true,
+          configId: data.configId,
+        });
+      },
+      (err) => {
+        console.error(`[ACP] setConfigOption failed: ${(err as Error).message}`);
+        socket.emit('acp:set-config-option:result', {
+          sessionId: data.sessionId,
+          success: false,
+          configId: data.configId,
+          error: (err as Error).message,
+        });
+      },
+    );
   });
 
   socket.on('acp:delete-history-session', async (data: AcpDeleteHistorySessionPayload) => {

@@ -130,6 +130,11 @@ describe('AcpSyncBridge', () => {
       expect(result.sessions).toEqual([]);
     });
 
+    it('should throw when not connected', async () => {
+      const bridge = createBridge(new MockAcpSpawner());
+      await expect(bridge.listSessions('/home/user')).rejects.toThrow('ACP connection not established');
+    });
+
     it('should pass cursor to ACP and return nextCursor', async () => {
       mc().listSessions.mockResolvedValue({
         sessions: [{ sessionId: 'hist-2', title: 'Session 2', cwd: '/home/user', updatedAt: null }],

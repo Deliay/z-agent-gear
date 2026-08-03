@@ -416,6 +416,31 @@ describe('SocketIO Client', () => {
     });
   });
 
+  describe('acp:set-config-option', () => {
+    it('should emit failure result when bridge not found', async () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('connect');
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
+
+      mockSocket._trigger('acp:set-config-option', {
+        sessionId: 'unknown-sess',
+        configId: 'opt-1',
+        value: 'val-1',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:set-config-option:result', {
+          sessionId: 'unknown-sess',
+          success: false,
+          configId: 'opt-1',
+          error: 'ACP bridge not found for session',
+        });
+      });
+    });
+  });
+
   describe('acp:delete-history-session', () => {
     function setup() {
       mockBridge.connect.mockClear();

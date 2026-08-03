@@ -183,6 +183,22 @@ describe('AcpSessionBridge', () => {
       }));
     });
 
+    it('should map auth method without type field to kind agent', async () => {
+      mc().initialize.mockResolvedValue({
+        protocolVersion: 1,
+        authMethods: [{ id: 'oauth', description: 'Login with agent' }],
+      });
+      const bridge = createBridge();
+
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:auth:required', {
+        sessionId: 'sess-1',
+        authMethods: [{ id: 'oauth', kind: 'agent', description: null, url: null }],
+      });
+    });
+
     it('should emit acp:stopped on initialize failure', async () => {
       mc().initialize.mockRejectedValue(new Error('init failed'));
       const bridge = createBridge();
@@ -633,12 +649,91 @@ describe('AcpSessionBridge', () => {
         value: 'val-1',
       });
     });
+
+    it('should update snapshot and emit acp:config-options from set_config_option response', async () => {
+      mockConnInstance.setSessionConfigOption = vi.fn().mockResolvedValue({
+        configOptions: [
+          {
+            id: 'flags',
+            name: 'Flags',
+            category: null,
+            type: 'boolean',
+            currentValue: true,
+          },
+        ],
+      });
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setConfigOption('flags', 'true');
+
+      expect(bridge.getConfigOptions()).toEqual([
+        {
+          id: 'flags',
+          name: 'Flags',
+          description: null,
+          category: null,
+          type: 'boolean',
+          currentValue: 'true',
+          options: [],
+        },
+      ]);
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:config-options', {
+        sessionId: 'sess-1',
+        configOptions: bridge.getConfigOptions(),
+      });
+    });
+
+    it('should not emit acp:config-options when response has no configOptions', async () => {
+      mockConnInstance.setSessionConfigOption = vi.fn().mockResolvedValue({});
+      const bridge = createBridge();
+      bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await bridge.setConfigOption('opt-2', 'val-1');
+
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:config-options', expect.anything());
+    });
   });
 
   describe('extractConfigOptions', () => {
     it('should return empty array when configOptions is null or undefined', () => {
       expect(extractConfigOptions(null)).toEqual([]);
       expect(extractConfigOptions(undefined)).toEqual([]);
+    });
+
+    it('should flatten grouped select options with group name prefix', () => {
+      const result = extractConfigOptions([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-4',
+          options: [
+            {
+              group: 'openai',
+              name: 'OpenAI',
+              options: [
+                { value: 'gpt-4', name: 'GPT-4' },
+                { value: 'gpt-4o', name: 'GPT-4o' },
+              ],
+            },
+            {
+              group: 'anthropic',
+              name: 'Anthropic',
+              options: [{ value: 'claude-3', name: 'Claude 3' }],
+            },
+          ],
+        },
+      ]);
+
+      expect(result[0].options).toEqual([
+        { value: 'gpt-4', name: 'OpenAI/GPT-4' },
+        { value: 'gpt-4o', name: 'OpenAI/GPT-4o' },
+        { value: 'claude-3', name: 'Anthropic/Claude 3' },
+      ]);
     });
 
     it('should map select and boolean config options', () => {

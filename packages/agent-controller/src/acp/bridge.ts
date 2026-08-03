@@ -79,7 +79,11 @@ export function extractConfigOptions(
       };
     }
     const options = Array.isArray(opt.options)
-      ? (opt.options as Array<{ value: string; name?: string }>).map((o) => ({ value: o.value, name: o.name }))
+      ? (opt.options as Array<acp.SessionConfigSelectOption | acp.SessionConfigSelectGroup>).flatMap((o) =>
+          'group' in o
+            ? o.options.map((inner) => ({ value: inner.value, name: `${o.name}/${inner.name}` }))
+            : [{ value: o.value, name: o.name }],
+        )
       : [];
     return {
       ...base,
@@ -135,7 +139,8 @@ function toAuthMethods(authMethods: acp.AuthMethod[] | undefined): AcpAuthMethod
         url: (m as { url?: string | null }).url ?? null,
       };
     }
-    return { id: m.id, kind: null, description: null, url: null };
+    // AuthMethodAgent 无 type 字段（SDK 1.3.0），是默认认证方式
+    return { id: m.id, kind: 'agent', description: null, url: null };
   });
 }
 
@@ -294,11 +299,20 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (!this.connection || !this.acpSessionId) {
       throw new Error('ACP bridge is not initialized');
     }
-    return this.connection.setSessionConfigOption({
+    const response = await this.connection.setSessionConfigOption({
       sessionId: this.acpSessionId,
       configId,
       ...(typeof value === 'boolean' ? { value, type: 'boolean' as const } : { value }),
     });
+    if (response.configOptions) {
+      // SDK 1.3.0：set_config_option 响应携带全量快照，与 config_option_update 通知同源
+      this.configOptions = extractConfigOptions(response.configOptions);
+      this.socket.emit('acp:config-options', {
+        sessionId: this.sessionId,
+        configOptions: this.configOptions,
+      });
+    }
+    return response;
   }
 
   async authenticate(methodId: string): Promise<void> {
