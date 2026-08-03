@@ -58,6 +58,11 @@ export class ACPSessionManager {
           currentModel?: { id: string; name: string; provider?: string };
           availableModels?: Array<{ id: string; name: string; provider?: string }>;
           currentModelId?: string;
+          configOptions?: Array<Record<string, unknown>>;
+          promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean };
+          agentInfo?: { name: string; version?: string };
+          authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>;
+          supportsAdditionalDirectories?: boolean;
         }) => {
           clearTimeout(timeout);
           
@@ -92,14 +97,31 @@ export class ACPSessionManager {
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
             updateData.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
+            if (payload.configOptions) updateData.configOptions = payload.configOptions;
+            if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
+            if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
+            if (payload.authMethods) updateData.authMethods = payload.authMethods;
+            if (payload.supportsAdditionalDirectories != null) {
+              updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
+            }
+            if (payload.authMethods?.length) updateData.authRequired = true;
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
+            await this.cacheConfigOptions(sessionId, payload.configOptions);
+            await this.cacheCapabilities(sessionId, {
+              promptCapabilities: payload.promptCapabilities,
+              agentInfo: payload.agentInfo,
+              authMethods: payload.authMethods,
+              supportsAdditionalDirectories: payload.supportsAdditionalDirectories,
+              authRequired: payload.authMethods?.length ? true : undefined,
+            });
             const statusExtra: Record<string, unknown> = {};
             if (payload.modes?.length) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
             if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
+            if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
             await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
             // Cache externalSessionId in Redis for resume
@@ -192,27 +214,30 @@ export class ACPSessionManager {
   }
 
   async handleControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
-    // Handle config_option_update - parse config options to update session state
+    // Handle config_option_update - full configOptions is the single source of truth
     if (message.sessionUpdate === 'config_option_update') {
       const update = message as Record<string, unknown>;
       const configOptions = update.configOptions as Array<Record<string, unknown>> | undefined;
       if (configOptions) {
-        const updateData: Record<string, unknown> = {};
-        const statusExtra: Record<string, unknown> = {};
+        const updateData: Record<string, unknown> = { configOptions };
+        const statusExtra: Record<string, unknown> = { configOptions };
         for (const opt of configOptions) {
-          const value = (opt.value ?? opt.currentValue) as string | undefined;
-          if (opt.id === 'mode' && value) {
-            updateData.currentModeId = value;
-            statusExtra.currentModeId = value;
-          } else if (opt.id === 'model' && value) {
-            updateData.currentModelId = value;
-            statusExtra.currentModelId = value;
+          const value = (opt.currentValue ?? opt.value) as string | undefined;
+          if (opt.category === 'mode' || opt.id === 'mode') {
+            if (value) {
+              updateData.currentModeId = value;
+              statusExtra.currentModeId = value;
+            }
+          } else if (opt.category === 'model' || opt.id === 'model') {
+            if (value) {
+              updateData.currentModelId = value;
+              statusExtra.currentModelId = value;
+            }
           }
         }
-        if (Object.keys(updateData).length > 0) {
-          await Session.findByIdAndUpdate(sessionId, updateData);
-          await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
-        }
+        await Session.findByIdAndUpdate(sessionId, updateData);
+        await this.cacheConfigOptions(sessionId, configOptions);
+        await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
       }
     }
 
@@ -420,6 +445,11 @@ export class ACPSessionManager {
           currentModel?: { id: string; name: string; provider?: string };
           availableModels?: Array<{ id: string; name: string; provider?: string }>;
           currentModelId?: string;
+          configOptions?: Array<Record<string, unknown>>;
+          promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean };
+          agentInfo?: { name: string; version?: string };
+          authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>;
+          supportsAdditionalDirectories?: boolean;
         }) => {
           clearTimeout(timeout);
           if (payload.requestId !== requestId) return;
@@ -442,14 +472,24 @@ export class ACPSessionManager {
             if (payload.currentModel) updateData.currentModel = payload.currentModel;
             updateData.availableModels = payload.availableModels ?? [];
             if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
+            if (payload.configOptions) updateData.configOptions = payload.configOptions;
+            if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
+            if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
+            if (payload.authMethods) updateData.authMethods = payload.authMethods;
+            if (payload.supportsAdditionalDirectories != null) {
+              updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
+            }
+            if (payload.authMethods?.length) updateData.authRequired = true;
             await Session.findByIdAndUpdate(sessionId, updateData);
             await this.refreshSessionCache(sessionId);
+            await this.cacheConfigOptions(sessionId, payload.configOptions);
             const statusExtra: Record<string, unknown> = {};
             if (payload.modes?.length) statusExtra.modes = payload.modes;
             if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
             if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
             if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
             if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
+            if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
             await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
 
             resolve({ success: true });
@@ -541,6 +581,75 @@ export class ACPSessionManager {
     return true;
   }
 
+  async setConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    session.controllerSocket.emit('acp:set-config-option', { sessionId, configId, value });
+    return true;
+  }
+
+  async publishConfigOptions(sessionId: string, configOptions: Array<Record<string, unknown>>): Promise<void> {
+    const updateData: Record<string, unknown> = { configOptions };
+    const statusExtra: Record<string, unknown> = { configOptions };
+    for (const opt of configOptions) {
+      const value = (opt.currentValue ?? opt.value) as string | undefined;
+      if (opt.category === 'mode' || opt.id === 'mode') {
+        if (value) {
+          updateData.currentModeId = value;
+          statusExtra.currentModeId = value;
+        }
+      } else if (opt.category === 'model' || opt.id === 'model') {
+        if (value) {
+          updateData.currentModelId = value;
+          statusExtra.currentModelId = value;
+        }
+      }
+    }
+    await Session.findByIdAndUpdate(sessionId, updateData);
+    await this.cacheConfigOptions(sessionId, configOptions);
+    await this.publishStatus(sessionId, 'idling', undefined, Object.keys(statusExtra).length ? statusExtra : undefined);
+  }
+
+  private async cacheConfigOptions(
+    sessionId: string,
+    configOptions?: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    if (!configOptions) return;
+    const redis = getRedisClient();
+    await redis.set(`session:${sessionId}:configOptions`, JSON.stringify(configOptions), 'EX', 86400);
+  }
+
+  private async cacheCapabilities(
+    sessionId: string,
+    capabilities: {
+      promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean };
+      agentInfo?: { name: string; version?: string };
+      authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>;
+      supportsAdditionalDirectories?: boolean;
+      authRequired?: boolean;
+    },
+  ): Promise<void> {
+    const redis = getRedisClient();
+    const session = await Session.findById(sessionId).lean();
+    if (!session) return;
+    if (capabilities.promptCapabilities) {
+      await redis.set(`session:${sessionId}:promptCapabilities`, JSON.stringify(capabilities.promptCapabilities), 'EX', 86400);
+    }
+    if (capabilities.agentInfo) {
+      await redis.set(`session:${sessionId}:agentInfo`, JSON.stringify(capabilities.agentInfo), 'EX', 86400);
+    }
+    if (capabilities.authMethods) {
+      await redis.set(`session:${sessionId}:authMethods`, JSON.stringify(capabilities.authMethods), 'EX', 86400);
+    }
+    if (capabilities.authRequired != null) {
+      await redis.set(`session:${sessionId}:authRequired`, String(capabilities.authRequired), 'EX', 86400);
+    }
+    if (capabilities.supportsAdditionalDirectories != null) {
+      await redis.set(`session:${sessionId}:supportsAdditionalDirectories`, String(capabilities.supportsAdditionalDirectories), 'EX', 86400);
+    }
+  }
+
   private async refreshSessionCache(sessionId: string): Promise<void> {
     const redis = getRedisClient();
     const session = await Session.findById(sessionId).lean();
@@ -559,6 +668,9 @@ export class ACPSessionManager {
     }
     if (session.currentModelId) {
       await redis.set(`session:${sessionId}:currentModelId`, session.currentModelId, 'EX', 86400);
+    }
+    if (session.configOptions) {
+      await redis.set(`session:${sessionId}:configOptions`, JSON.stringify(session.configOptions), 'EX', 86400);
     }
   }
 
@@ -606,6 +718,7 @@ export class ACPSessionManager {
       if (extra.currentModel) payload.currentModel = extra.currentModel;
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
+      if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
     }
     await redis.publish('session:status', JSON.stringify(payload));
   }

@@ -183,6 +183,21 @@ export class SessionService {
     return true;
   }
 
+  async setConfigOption(sessionId: string, userId: string, configId: string, value: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) return false;
+    if (session.status !== 'idling') return false;
+
+    const redis = getRedisClient();
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:set-config-option',
+      sessionId,
+      configId,
+      value,
+    }));
+    return true;
+  }
+
   async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) return false;
@@ -482,6 +497,12 @@ export class SessionService {
       currentModel: session.currentModel || null,
       currentModelId: session.currentModelId || null,
       availableModels: session.availableModels || [],
+      configOptions: (session as any).configOptions || [],
+      promptCapabilities: (session as any).promptCapabilities || null,
+      agentInfo: (session as any).agentInfo || null,
+      authRequired: (session as any).authRequired || false,
+      authMethods: (session as any).authMethods || [],
+      supportsAdditionalDirectories: (session as any).supportsAdditionalDirectories || false,
       permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),

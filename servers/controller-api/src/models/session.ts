@@ -16,6 +16,12 @@ const sessionSchema = new mongoose.Schema({
   currentModel: { type: { id: String, name: String, provider: String } },
   currentModelId: { type: String },
   availableModels: { type: [{ id: String, name: String, provider: String }], default: [] },
+  configOptions: { type: [{ id: String, name: String, description: String, category: String, type: String, currentValue: mongoose.Schema.Types.Mixed, options: [{ value: String, name: String }] }], default: [] },
+  promptCapabilities: { type: { image: Boolean, audio: Boolean, embeddedContext: Boolean } },
+  agentInfo: { type: { name: String, version: String } },
+  authMethods: { type: [{ id: String, kind: String, description: String, url: String }], default: [] },
+  authRequired: { type: Boolean, default: false },
+  supportsAdditionalDirectories: { type: Boolean, default: false },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });

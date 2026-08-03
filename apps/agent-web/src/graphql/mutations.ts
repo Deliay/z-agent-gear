@@ -236,6 +236,12 @@ export const SET_SESSION_MODEL = gql`
   }
 `;
 
+export const SET_SESSION_CONFIG_OPTION = gql`
+  mutation SetSessionConfigOption($sessionId: ID!, $configId: String!, $value: String!) {
+    setSessionConfigOption(sessionId: $sessionId, configId: $configId, value: $value)
+  }
+`;
+
 export const IMPORT_HISTORY_SESSIONS = gql`
   mutation ImportHistorySessions($controllerId: ID!, $workspaceId: ID!, $acpServerType: AcpServerType = opencode, $sessionIds: [String!]!) {
     importHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId, acpServerType: $acpServerType, sessionIds: $sessionIds) {

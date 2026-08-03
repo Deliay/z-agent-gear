@@ -17,6 +17,7 @@ import {
   RESUME_SESSION,
   SET_SESSION_MODE,
   SET_SESSION_MODEL,
+  SET_SESSION_CONFIG_OPTION,
 } from '../graphql/mutations';
 import type {
   GetSessionQuery,
@@ -26,6 +27,7 @@ import type {
   ResumeSessionMutation,
   AgentModeData,
   AgentModelInfoData,
+  SessionConfigOptionData,
 } from '../graphql/types';
 import SessionHeader from '../components/session/SessionHeader';
 import MessageList from '../components/session/MessageList';
@@ -79,6 +81,7 @@ export default function SessionPage() {
 
   const [availableModels, setAvailableModels] = useState<AgentModelInfoData[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const [configOptions, setConfigOptions] = useState<SessionConfigOptionData[]>([]);
   const { commands: availableCommands, updateCommands } = useCommandState();
   const client = useApolloClient();
 
@@ -99,6 +102,7 @@ export default function SessionPage() {
   const [resumeSession] = useMutation<ResumeSessionMutation>(RESUME_SESSION);
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
+  const [setSessionConfigOption] = useMutation(SET_SESSION_CONFIG_OPTION);
 
   useEffect(() => {
     if (sessionData?.session && !initializedRef.current) {
@@ -108,6 +112,7 @@ export default function SessionPage() {
       if (sessionData.session.currentModeId) setCurrentModeId(sessionData.session.currentModeId);
       if (sessionData.session.availableModels) setAvailableModels(sessionData.session.availableModels as AgentModelInfoData[]);
       if (sessionData.session.currentModelId) setCurrentModelId(sessionData.session.currentModelId);
+      if (sessionData.session.configOptions) setConfigOptions(sessionData.session.configOptions as SessionConfigOptionData[]);
     }
   }, [sessionData, id]);
 
@@ -138,6 +143,9 @@ export default function SessionPage() {
           if (content.sessionUpdate === 'config_option_update' || content.sessionUpdate === 'current_mode_update') {
             lastMessageIsSettingUpdateRef.current = true;
             const configOptions = content.configOptions ?? [];
+            if (configOptions.length > 0) {
+              setConfigOptions(configOptions);
+            }
             for (const opt of configOptions) {
               const value = opt.value ?? opt.currentValue;
               if (opt.id === 'mode' && value) {
@@ -170,6 +178,9 @@ export default function SessionPage() {
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
         if (data.data.availableModels) setAvailableModels(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
+        if (data.data.configOptions) setConfigOptions(data.data.configOptions);
+      } else if (data.type === 'config:changed') {
+        if (data.data.configOptions) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'mode:changed') {
         if (data.data.modeId) setCurrentModeId(data.data.modeId);
       } else if (data.type === 'model:changed') {
@@ -287,6 +298,15 @@ export default function SessionPage() {
     if (!id) return;
     setCurrentModelId(modelId);
     await setSessionModel({ variables: { sessionId: id, modelId } });
+  };
+
+  const handleSetConfigOption = async (configId: string, value: string) => {
+    if (!id) return;
+    try {
+      await setSessionConfigOption({ variables: { sessionId: id, configId, value } });
+    } catch (error) {
+      console.error('Failed to set config option:', error);
+    }
   };
 
   const handleSendMessage = async (content: string) => {
@@ -432,6 +452,8 @@ export default function SessionPage() {
         currentModelId={currentModelId}
         onSetModel={handleSetModel}
         availableCommands={availableCommands}
+        configOptions={configOptions}
+        onSetConfigOption={handleSetConfigOption}
       />
 
       {showNewSessionDialog && (

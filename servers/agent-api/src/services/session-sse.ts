@@ -138,6 +138,7 @@ export class SessionSSEService {
       if (extra.currentModel) payload.currentModel = extra.currentModel;
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
+      if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
     for (const [key, connection] of connections) {

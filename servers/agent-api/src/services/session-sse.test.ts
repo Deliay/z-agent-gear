@@ -278,6 +278,42 @@ describe('SessionSSEService', () => {
     });
   });
 
+  describe('broadcastStatus with configOptions', () => {
+    it('should include configOptions when provided', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'idling', undefined, {
+        configOptions: [{ id: 'temperature', type: 'number', currentValue: '0.7' }],
+      });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"status"');
+      expect(lastWrite).toContain('"configOptions"');
+      expect(lastWrite).toContain('"currentValue":"0.7"');
+    });
+
+    it('should omit configOptions when empty array', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'idling', undefined, { configOptions: [] });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).not.toContain('"configOptions"');
+    });
+  });
+
   describe('broadcastModeChanged', () => {
     it('should write mode:changed event to matching connections', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });

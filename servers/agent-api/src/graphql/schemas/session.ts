@@ -45,6 +45,46 @@ export const sessionTypeDefs = `#graphql
     provider: String
   }
 
+  type SessionConfigOptionValue {
+    value: String!
+    name: String
+  }
+
+  type SessionConfigOption {
+    id: String!
+    name: String!
+    description: String
+    category: String
+    type: String!
+    currentValue: String
+    options: [SessionConfigOptionValue!]
+  }
+
+  type PromptCapabilities {
+    image: Boolean!
+    audio: Boolean!
+    embeddedContext: Boolean!
+  }
+
+  type AgentInfo {
+    name: String!
+    version: String
+  }
+
+  enum AuthMethodKind {
+    env_var
+    terminal
+    agent
+  }
+
+  type AuthMethodInfo {
+    id: String!
+    kind: AuthMethodKind!
+    name: String
+    description: String
+    url: String
+  }
+
   type Session {
     id: ID!
     userId: ID!
@@ -62,6 +102,12 @@ export const sessionTypeDefs = `#graphql
     currentModel: AgentModelInfo
     availableModels: [AgentModelInfo!]
     currentModelId: String
+    configOptions: [SessionConfigOption!]
+    promptCapabilities: PromptCapabilities
+    agentInfo: AgentInfo
+    authRequired: Boolean!
+    authMethods: [AuthMethodInfo!]
+    supportsAdditionalDirectories: Boolean!
     permissionTimeoutAction: PermissionTimeoutAction
     createdAt: String!
     updatedAt: String!
@@ -137,6 +183,7 @@ export const sessionTypeDefs = `#graphql
     importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!
     setSessionMode(sessionId: ID!, modeId: String!): Boolean!
     setSessionModel(sessionId: ID!, modelId: String!): Boolean!
+    setSessionConfigOption(sessionId: ID!, configId: String!, value: String!): Boolean!
     refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   }
 `;

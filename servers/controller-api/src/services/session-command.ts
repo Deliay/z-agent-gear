@@ -55,6 +55,8 @@ export class SessionCommandService {
             acpSessionId?: string;
             modeId?: string;
             modelId?: string;
+            configId?: string;
+            value?: string | boolean;
             parentPath?: string;
             folderName?: string;
             repoPath?: string;
@@ -81,6 +83,8 @@ export class SessionCommandService {
             await this.handleAcpSetMode(command.sessionId, command.modeId as string);
           } else if (command.type === 'acp:set-model' && command.sessionId && command.modelId) {
             await this.handleAcpSetModel(command.sessionId, command.modelId as string);
+          } else if (command.type === 'acp:set-config-option' && command.sessionId && command.configId && command.value !== undefined) {
+            await this.handleAcpSetConfigOption(command.sessionId, command.configId as string, command.value);
           } else if (command.type === 'git:check' && command.requestId && command.controllerId && command.path) {
             await this.handleGitCheck(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'git:init' && command.requestId && command.controllerId && command.path) {
@@ -287,6 +291,14 @@ export class SessionCommandService {
     const result = await acpSessionManager.setModel(sessionId, modelId);
     if (!result) {
       console.error(`ACP set-model failed: session ${sessionId} not found in active sessions`);
+    }
+  }
+
+  private async handleAcpSetConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<void> {
+    console.log(`[SessionCommand] Setting config option for session ${sessionId}: configId=${configId} value=${String(value)}`);
+    const result = await acpSessionManager.setConfigOption(sessionId, configId, value);
+    if (!result) {
+      console.error(`ACP set-config-option failed: session ${sessionId} not found in active sessions`);
     }
   }
 

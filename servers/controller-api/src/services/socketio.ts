@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
+import { Session } from '../models/session.js';
 import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
@@ -182,6 +183,20 @@ export function createSocketIOServer(io: SocketIOServer): void {
         await acpSessionManager.handleControllerMessage(payload.sessionId, payload.message as SessionUpdate);
       } catch (err) {
         console.error(`ACP message error for session ${payload.sessionId}:`, err);
+      }
+    });
+
+    socket.on('acp:config-options', async (payload: {
+      sessionId: string;
+      configOptions: Array<Record<string, unknown>>;
+    }) => {
+      if (!authenticated) return;
+      try {
+        const configOptions = payload.configOptions ?? [];
+        await Session.findByIdAndUpdate(payload.sessionId, { configOptions });
+        await acpSessionManager.publishConfigOptions(payload.sessionId, configOptions);
+      } catch (err) {
+        console.error(`ACP config-options error for session ${payload.sessionId}:`, err);
       }
     });
 
