@@ -518,6 +518,7 @@ export class SessionService {
       type: message.type,
       content: message.content,
       metadata: message.metadata || null,
+      messageId: (message as any).messageId || null,
       createdAt: (message.createdAt as Date).toISOString(),
     };
   }

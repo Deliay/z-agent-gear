@@ -252,6 +252,7 @@ export class ACPSessionManager {
     }
 
     const rawContent = message;
+    const messageId = (message as Record<string, unknown>).messageId as string | undefined;
 
     let type: string;
     switch (message.sessionUpdate) {
@@ -283,6 +284,7 @@ export class ACPSessionManager {
       direction: 'output' as const,
       type: type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
       content: rawContent,
+      ...(messageId ? { messageId } : {}),
     });
 
     const doc = acpMessage.toObject() as Record<string, unknown>;
@@ -292,6 +294,7 @@ export class ACPSessionManager {
       type,
       content: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent),
       metadata: null,
+      ...(messageId ? { messageId } : {}),
       createdAt: (doc.createdAt as Date).toISOString(),
     });
   }

@@ -263,6 +263,33 @@ describe('ACPSessionManager', () => {
       }));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"output"'));
     });
+
+    it('should persist and publish messageId when present in update', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+
+      const rawUpdate = {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Response' },
+        messageId: 'msg-abc-123',
+      };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      expect(AcpMessage.create).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess-1', direction: 'output', type: 'text',
+        messageId: 'msg-abc-123',
+      }));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"messageId":"msg-abc-123"'));
+    });
+
+    it('should omit messageId when not present in update', async () => {
+      vi.mocked(AcpMessage.create).mockResolvedValue(mockAcpMessageDoc() as never);
+
+      const rawUpdate = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Response' } };
+      await manager.handleControllerMessage('sess-1', rawUpdate as never);
+
+      const createCall = vi.mocked(AcpMessage.create).mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(createCall.messageId).toBeUndefined();
+    });
   });
 
   describe('stopSession', () => {

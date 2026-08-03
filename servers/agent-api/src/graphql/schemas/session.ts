@@ -121,6 +121,7 @@ export const sessionTypeDefs = `#graphql
     type: AcpMessageType!
     content: JSON!
     metadata: String
+    messageId: String
     createdAt: String!
   }
 
