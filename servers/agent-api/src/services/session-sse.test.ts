@@ -350,6 +350,30 @@ describe('SessionSSEService', () => {
     });
   });
 
+  describe('global status subscriber forwards configOptions', () => {
+    it('should forward configOptions from session:status Redis message to SSE', async () => {
+      vi.resetModules();
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      const { sessionSSEService: freshService } = await import('./session-sse.js');
+      await freshService.addConnection('sess-1', 'user-1', res as never);
+
+      mockRedis._emitMessage('session:status', JSON.stringify({
+        sessionId: 'sess-1',
+        status: 'idling',
+        configOptions: [{ id: 'autosave', type: 'boolean', currentValue: 'false' }],
+      }));
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"status"');
+      expect(lastWrite).toContain('"configOptions"');
+    });
+  });
+
   describe('broadcastModeChanged', () => {
     it('should write mode:changed event to matching connections', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });

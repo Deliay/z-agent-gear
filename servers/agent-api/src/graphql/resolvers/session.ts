@@ -112,11 +112,15 @@ export const sessionResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return sessionImportService.deleteHistorySession(
-        context.currentUser.id,
-        args.sessionId,
-        args.syncAgent ?? true,
-      );
+      try {
+        return await sessionImportService.deleteHistorySession(
+          context.currentUser.id,
+          args.sessionId,
+          args.syncAgent ?? true,
+        );
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
     },
     sendSessionMessage: async (
       _parent: unknown,

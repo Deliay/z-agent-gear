@@ -102,6 +102,7 @@ export class SessionSSEService {
           if (parsed.currentModel) extra.currentModel = parsed.currentModel;
           if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
+          if (Array.isArray(parsed.configOptions) && parsed.configOptions.length) extra.configOptions = parsed.configOptions;
           this.dispatchStatus(sessionId, status, error, extra);
         }
         this.broadcastModeChanged(sessionId, parsed);
