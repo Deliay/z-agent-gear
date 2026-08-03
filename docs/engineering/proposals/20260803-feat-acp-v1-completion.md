@@ -6,7 +6,7 @@ type: Permanent
 # ACP v1 协议补全与展示优化 — 技术提案
 
 **功能名称**: ACP v1 协议补全
-**关联 PRD**: `docs/product/draft/20260803-acp-v1-completion.md`
+**关联 PRD**: `docs/product/reviewed/20260803-acp-v1-completion.md`
 **技术提案版本**: v1.1
 **创建日期**: 2026-08-03
 **作者**: Kimi
@@ -306,7 +306,7 @@ flowchart LR
 
 ## 10. 相关文档
 
-- 关联 PRD：`docs/product/draft/20260803-acp-v1-completion.md`
+- 关联 PRD：`docs/product/reviewed/20260803-acp-v1-completion.md`
 - ACP 协议规范：https://agentclientprotocol.com/（Protocol / Updates 页，2026-02 ~ 2026-07 稳定项）
 - 关联 Contract：`contracts/agent-session.graphql`、`contracts/agent-session.openapi.yaml`、`contracts/agent-session-websocket.md`
 - 历史提案：`proposals/20260520-refactor-controller-acp-sdk.md`、`proposals/20260705-feat-acp-server-extend.md`、`proposals/20260721-feat-acp-mimo-kimi.md`
