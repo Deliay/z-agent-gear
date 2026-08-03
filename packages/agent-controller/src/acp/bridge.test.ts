@@ -11,7 +11,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
       cancel: vi.fn().mockResolvedValue(undefined),
       closeSession: vi.fn().mockResolvedValue({}),
       setSessionMode: vi.fn().mockResolvedValue({}),
-      unstable_setSessionModel: vi.fn().mockResolvedValue({}),
+      setSessionConfigOption: vi.fn().mockResolvedValue({}),
     };
   }),
 }));

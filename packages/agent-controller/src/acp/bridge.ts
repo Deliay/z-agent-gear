@@ -8,12 +8,46 @@ const ACP_PROTOCOL_VERSION = 1;
 export interface AcpBridgeOptions {
   sessionId: string;
   cwd: string;
+  additionalDirectories?: string[];
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
 }
 
 interface QueuedInput {
   type: string;
   content: string;
+}
+
+export interface SessionConfigOptionData {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  type: 'select' | 'boolean';
+  currentValue: string | null;
+  options: Array<{ value: string; name?: string }>;
+}
+
+export interface AcpAuthMethodData {
+  id: string;
+  kind: 'env_var' | 'terminal' | 'agent' | null;
+  description?: string | null;
+  url?: string | null;
+}
+
+export interface AcpInitializedPayload {
+  sessionId: string;
+  acpSessionId: string | null;
+  modes: Array<{ id: string; name: string; description?: string }>;
+  currentModeId: string | null;
+  currentModel: { id: string; name: string; provider?: string } | null;
+  availableModels: Array<{ id: string; name: string; provider?: string }>;
+  currentModelId: string | null;
+  configOptions: SessionConfigOptionData[];
+  promptCapabilities: { image: boolean; audio: boolean; embeddedContext: boolean } | null;
+  agentInfo: { name: string; version?: string | null } | null;
+  authMethods: AcpAuthMethodData[];
+  supportsAdditionalDirectories: boolean;
+  protocolVersion?: number | null;
 }
 
 function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] {
@@ -25,17 +59,99 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
   }));
 }
 
+export function extractConfigOptions(
+  configOptions: acp.SessionConfigOption[] | null | undefined,
+): SessionConfigOptionData[] {
+  if (!configOptions) return [];
+  return configOptions.map((opt) => {
+    const base = {
+      id: opt.id,
+      name: opt.name,
+      description: opt.description ?? null,
+      category: opt.category ?? null,
+    };
+    if (opt.type === 'boolean') {
+      return {
+        ...base,
+        type: 'boolean' as const,
+        currentValue: String(opt.currentValue),
+        options: [],
+      };
+    }
+    const options = Array.isArray(opt.options)
+      ? (opt.options as Array<{ value: string; name?: string }>).map((o) => ({ value: o.value, name: o.name }))
+      : [];
+    return {
+      ...base,
+      type: 'select' as const,
+      currentValue: opt.currentValue,
+      options,
+    };
+  });
+}
+
+function findConfigByCategory(
+  configOptions: SessionConfigOptionData[],
+  category: string,
+): SessionConfigOptionData | null {
+  return configOptions.find((o) => o.category === category) ?? null;
+}
+
+function extractConfigModes(
+  configOptions: SessionConfigOptionData[],
+): { modes: Array<{ id: string; name: string }>; currentModeId: string | null } | null {
+  const opt = findConfigByCategory(configOptions, 'mode');
+  if (!opt || opt.type !== 'select') return null;
+  return {
+    modes: opt.options.map((o) => ({ id: o.value, name: o.name ?? o.value })),
+    currentModeId: opt.currentValue,
+  };
+}
+
+function extractConfigModels(
+  configOptions: SessionConfigOptionData[],
+): {
+  availableModels: Array<{ id: string; name: string; provider?: string }>;
+  currentModelId: string | null;
+  currentModel: { id: string; name: string; provider?: string } | null;
+} | null {
+  const opt = findConfigByCategory(configOptions, 'model');
+  if (!opt || opt.type !== 'select') return null;
+  const availableModels = opt.options.map((o) => ({ id: o.value, name: o.name ?? o.value }));
+  const currentModelId = opt.currentValue;
+  const current = availableModels.find((m) => m.id === currentModelId) ?? null;
+  return { availableModels, currentModelId, currentModel: current };
+}
+
+function toAuthMethods(authMethods: acp.AuthMethod[] | undefined): AcpAuthMethodData[] {
+  if (!authMethods || authMethods.length === 0) return [];
+  return authMethods.map((m) => {
+    if ('type' in m) {
+      const kind = m.type === 'env_var' ? 'env_var' : m.type === 'terminal' ? 'terminal' : 'agent';
+      return {
+        id: m.id,
+        kind,
+        description: (m as { description?: string | null }).description ?? null,
+        url: (m as { url?: string | null }).url ?? null,
+      };
+    }
+    return { id: m.id, kind: null, description: null, url: null };
+  });
+}
+
 export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private spawner: AcpSpawner;
   private socket: Socket;
   private sessionId: string;
   private cwd: string;
+  private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
   private connection: acp.ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private activePrompt: Promise<acp.PromptResponse> | null = null;
   private inputQueue: QueuedInput[] = [];
   private textChunkBuffer = '';
+  private textChunkMessageId: string | null | undefined;
   private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
   private initializing = false;
   private stopped = false;
@@ -44,11 +160,20 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     timeout: NodeJS.Timeout;
   }>();
 
+  // Capability snapshot from initialize / session/new / resume
+  private configOptions: SessionConfigOptionData[] = [];
+  private promptCapabilities: AcpInitializedPayload['promptCapabilities'] = null;
+  private agentInfo: AcpInitializedPayload['agentInfo'] = null;
+  private authMethods: AcpAuthMethodData[] = [];
+  private supportsAdditionalDirectories = false;
+  private agentProtocolVersion: number | null = null;
+
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
     this.socket = socket;
     this.sessionId = options.sessionId;
     this.cwd = options.cwd;
+    this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
     this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
   }
@@ -63,20 +188,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       const result = await this.connection!.newSession({
         cwd: this.cwd,
         mcpServers: toMcpServers(this.mcpServers),
+        additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = result.sessionId;
       this.initializing = false;
 
-      this.emit('acp:initialized', {
-        sessionId: this.sessionId,
-        acpSessionId: this.acpSessionId,
-        modes: this.extractModes(result.modes),
-        currentModeId: result.modes?.currentModeId ?? null,
-        currentModel: this.extractCurrentModel(result.models),
-        availableModels: this.extractAvailableModels(result.models),
-        currentModelId: result.models?.currentModelId ?? null,
-      });
-
+      this.emit('acp:initialized', this.buildInitializedPayload(result));
       this.flushInputQueue();
     } catch (error) {
       this.initializing = false;
@@ -94,19 +211,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       const result = await this.connection!.resumeSession({
         sessionId: externalSessionId,
         cwd: this.cwd,
+        additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = externalSessionId;
       this.initializing = false;
 
-      this.emit('acp:initialized', {
-        sessionId: this.sessionId,
-        acpSessionId: this.acpSessionId,
-        modes: this.extractModes(result.modes),
-        currentModeId: result.modes?.currentModeId ?? null,
-        currentModel: this.extractCurrentModel(result.models),
-        availableModels: this.extractAvailableModels(result.models),
-        currentModelId: result.models?.currentModelId ?? null,
-      });
+      this.emit('acp:initialized', this.buildInitializedPayload(result));
     } catch (error) {
       // resumeSession may fail if agent doesn't support session.resume
       // fallback to newSession
@@ -114,19 +224,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         const result = await this.connection!.newSession({
           cwd: this.cwd,
           mcpServers: toMcpServers(this.mcpServers),
+          additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
         });
         this.acpSessionId = result.sessionId;
         this.initializing = false;
 
-        this.emit('acp:initialized', {
-          sessionId: this.sessionId,
-          acpSessionId: this.acpSessionId,
-          modes: this.extractModes(result.modes),
-          currentModeId: result.modes?.currentModeId ?? null,
-          currentModel: this.extractCurrentModel(result.models),
-        availableModels: this.extractAvailableModels(result.models),
-        currentModelId: result.models?.currentModelId ?? null,
-        });
+        this.emit('acp:initialized', this.buildInitializedPayload(result));
       } catch (fallbackError) {
         this.initializing = false;
         this.handleError(fallbackError);
@@ -155,6 +258,16 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
   async setMode(modeId: string): Promise<void> {
     if (!this.connection || !this.acpSessionId) return;
+    const modeConfig = findConfigByCategory(this.configOptions, 'mode');
+    if (modeConfig) {
+      // 配置项通道：Agent 提供 configOptions 时以配置项为准
+      await this.connection.setSessionConfigOption({
+        sessionId: this.acpSessionId,
+        configId: modeConfig.id,
+        value: modeId,
+      });
+      return;
+    }
     await this.connection.setSessionMode({
       sessionId: this.acpSessionId,
       modeId,
@@ -163,13 +276,61 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
   async setModel(modelId: string): Promise<void> {
     if (!this.connection || !this.acpSessionId) return;
-    await this.connection.unstable_setSessionModel({
+    const modelConfig = findConfigByCategory(this.configOptions, 'model');
+    if (modelConfig) {
+      await this.connection.setSessionConfigOption({
+        sessionId: this.acpSessionId,
+        configId: modelConfig.id,
+        value: modelId,
+      });
+      return;
+    }
+    // SDK 1.x 已移除 unstable_setSessionModel：无 configOptions 的旧 Agent 无法走配置项通道。
+    // 模型切换暂不支持，由上层提示（不保留 unstable 调用）。
+    throw new Error('Model switching is not supported: agent does not expose a model config option');
+  }
+
+  async setConfigOption(configId: string, value: string | boolean): Promise<acp.SetSessionConfigOptionResponse> {
+    if (!this.connection || !this.acpSessionId) {
+      throw new Error('ACP bridge is not initialized');
+    }
+    return this.connection.setSessionConfigOption({
       sessionId: this.acpSessionId,
-      modelId,
+      configId,
+      ...(typeof value === 'boolean' ? { value, type: 'boolean' as const } : { value }),
     });
   }
 
-  sendInput(message: { type: string; content: string }): void {
+  async authenticate(methodId: string): Promise<void> {
+    if (!this.connection) {
+      throw new Error('ACP bridge is not initialized');
+    }
+    await this.connection.authenticate({ methodId });
+  }
+
+  async logout(): Promise<void> {
+    if (!this.connection) {
+      throw new Error('ACP bridge is not initialized');
+    }
+    await this.connection.logout({});
+  }
+
+  async deleteSession(): Promise<void> {
+    if (!this.connection || !this.acpSessionId) {
+      throw new Error('ACP bridge is not initialized');
+    }
+    await this.connection.deleteSession({ sessionId: this.acpSessionId });
+  }
+
+  getConfigOptions(): SessionConfigOptionData[] {
+    return this.configOptions;
+  }
+
+  getSupportsAdditionalDirectories(): boolean {
+    return this.supportsAdditionalDirectories;
+  }
+
+  sendInput(message: { type: string; content: string; attachments?: Array<Record<string, unknown>> }): void {
     if (this.activePrompt) {
       this.inputQueue.push(message);
       return;
@@ -177,12 +338,18 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.processPrompt(message);
   }
 
-  private async processPrompt(message: QueuedInput): Promise<void> {
+  private async processPrompt(message: QueuedInput & { attachments?: Array<Record<string, unknown>> }): Promise<void> {
     if (!this.connection || !this.acpSessionId || this.stopped) return;
+
+    const prompt: acp.ContentBlock[] = [];
+    for (const attachment of message.attachments ?? []) {
+      prompt.push(attachment as acp.ContentBlock);
+    }
+    prompt.push({ type: 'text' as const, text: message.content });
 
     this.activePrompt = this.connection.prompt({
       sessionId: this.acpSessionId,
-      prompt: [{ type: 'text' as const, text: message.content }],
+      prompt,
     });
 
     this.socket.emit('acp:prompt:start', { sessionId: this.sessionId });
@@ -212,44 +379,106 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     const output = this.spawner.stdout;
     const stream = acp.ndJsonStream(input, output);
     this.connection = new acp.ClientSideConnection(() => this, stream);
-    await this.connection.initialize({
+    const result = await this.connection.initialize({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: {},
+      clientCapabilities: {
+        session: {
+          configOptions: { boolean: {} },
+        },
+      },
       clientInfo: {
         name: 'agent-gear',
-        version: '1.0.0',
+        version: '1.1.5',
       },
     });
+
+    this.agentProtocolVersion = result.protocolVersion ?? null;
+    if (result.protocolVersion != null && result.protocolVersion !== ACP_PROTOCOL_VERSION) {
+      // 版本不兼容：不断连，由上层提示用户
+      this.socket.emit('acp:protocol-version-mismatch', {
+        sessionId: this.sessionId,
+        expectedVersion: ACP_PROTOCOL_VERSION,
+        agentVersion: result.protocolVersion,
+      });
+    }
+
+    this.promptCapabilities = result.agentCapabilities?.promptCapabilities
+      ? {
+          image: result.agentCapabilities.promptCapabilities.image ?? false,
+          audio: result.agentCapabilities.promptCapabilities.audio ?? false,
+          embeddedContext: result.agentCapabilities.promptCapabilities.embeddedContext ?? false,
+        }
+      : null;
+    this.agentInfo = result.agentInfo
+      ? { name: result.agentInfo.name, version: result.agentInfo.version ?? null }
+      : null;
+    this.authMethods = toAuthMethods(result.authMethods);
+    this.supportsAdditionalDirectories =
+      result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== undefined &&
+      result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== null;
+
+    if (this.authMethods.length > 0) {
+      this.socket.emit('acp:auth:required', {
+        sessionId: this.sessionId,
+        authMethods: this.authMethods,
+      });
+    }
+  }
+
+  private buildInitializedPayload(
+    result: acp.NewSessionResponse | acp.ResumeSessionResponse,
+  ): AcpInitializedPayload {
+    const configOptions = extractConfigOptions(result.configOptions);
+    this.configOptions = configOptions.length > 0 ? configOptions : this.configOptions;
+
+    // 协议要求：响应含 configOptions 时以其为准（忽略 modes）
+    const configModes = extractConfigModes(this.configOptions);
+    const configModels = extractConfigModels(this.configOptions);
+
+    let modes: Array<{ id: string; name: string; description?: string }> = [];
+    let currentModeId: string | null = null;
+    if (configModes) {
+      modes = configModes.modes;
+      currentModeId = configModes.currentModeId;
+    } else if (result.modes?.availableModes) {
+      modes = result.modes.availableModes.map((m) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description ?? undefined,
+      }));
+      currentModeId = result.modes.currentModeId ?? null;
+    }
+
+    let currentModel: AcpInitializedPayload['currentModel'] = null;
+    let availableModels: Array<{ id: string; name: string; provider?: string }> = [];
+    let currentModelId: string | null = null;
+    if (configModels) {
+      availableModels = configModels.availableModels;
+      currentModelId = configModels.currentModelId;
+      currentModel = configModels.currentModel;
+    }
+
+    return {
+      sessionId: this.sessionId,
+      acpSessionId: this.acpSessionId,
+      modes,
+      currentModeId,
+      currentModel,
+      availableModels,
+      currentModelId,
+      configOptions: this.configOptions,
+      promptCapabilities: this.promptCapabilities,
+      agentInfo: this.agentInfo,
+      authMethods: this.authMethods,
+      supportsAdditionalDirectories: this.supportsAdditionalDirectories,
+      protocolVersion: this.agentProtocolVersion,
+    };
   }
 
   private flushInputQueue(): void {
     while (this.inputQueue.length > 0) {
       this.processPrompt(this.inputQueue.shift()!);
     }
-  }
-
-  private extractModes(modes: acp.SessionModeState | null | undefined): Array<{ id: string; name: string; description?: string }> {
-    if (!modes?.availableModes) return [];
-    return modes.availableModes.map((m) => ({
-      id: m.id,
-      name: m.name,
-      description: m.description ?? undefined,
-    }));
-  }
-
-  private extractCurrentModel(models: acp.SessionModelState | null | undefined): { id: string; name: string; provider?: string } | null {
-    if (!models?.availableModels || !models.currentModelId) return null;
-    const found = models.availableModels.find((m) => m.modelId === models.currentModelId);
-    if (!found) return null;
-    return { id: found.modelId, name: found.name };
-  }
-
-  private extractAvailableModels(models: acp.SessionModelState | null | undefined): Array<{ id: string; name: string; provider?: string }> {
-    if (!models?.availableModels) return [];
-    return models.availableModels.map((m) => ({
-      id: m.modelId,
-      name: m.name,
-    }));
   }
 
   // ── acp.Client implementation ──
@@ -259,8 +488,22 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
         if (update.content.type === 'text') {
+          if (this.textChunkBuffer && this.textChunkMessageId !== update.messageId) {
+            // messageId 边界：不同消息立即 flush
+            this.flushTextBuffer();
+          }
           this.textChunkBuffer += update.content.text;
-          this.scheduleTextFlush();
+          this.textChunkMessageId = update.messageId;
+          if (update.messageId) {
+            // 有 messageId 时跳过 50ms debounce 猜测，按 ID 边界 flush
+            this.flushTextBuffer();
+          } else {
+            this.scheduleTextFlush();
+          }
+        } else {
+          // 非 text chunk（image/audio/resource）原样透传
+          this.flushTextBuffer();
+          this.sendUpdate(update);
         }
         break;
       case 'tool_call':
@@ -269,6 +512,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       case 'agent_thought_chunk':
         this.flushTextBuffer();
         this.sendUpdate(update);
+        break;
+      case 'config_option_update':
+        this.flushTextBuffer();
+        this.configOptions = extractConfigOptions(update.configOptions);
+        this.socket.emit('acp:config-options', {
+          sessionId: this.sessionId,
+          configOptions: this.configOptions,
+        });
         break;
       case 'user_message_chunk':
         break;
@@ -331,8 +582,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.sendUpdate({
         sessionUpdate: 'agent_message_chunk' as const,
         content: { type: 'text' as const, text: this.textChunkBuffer },
+        ...(this.textChunkMessageId ? { messageId: this.textChunkMessageId } : {}),
       } as acp.SessionUpdate);
       this.textChunkBuffer = '';
+      this.textChunkMessageId = undefined;
     }
   }
 
