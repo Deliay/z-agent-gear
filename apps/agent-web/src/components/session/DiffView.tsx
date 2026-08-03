@@ -26,6 +26,7 @@ function computeLineDiff(oldLines: string[], newLines: string[]): Array<{ type: 
 }
 
 export default function DiffView({ oldText, newText, filePath, inline }: DiffViewProps) {
+  const isNewFile = oldText == null || oldText === '';
   const oldLines = (oldText || '').split('\n');
   const newLines = newText.split('\n');
   const diffs = computeLineDiff(oldLines, newLines);
@@ -53,8 +54,13 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
   return (
     <div className={containerClass}>
       {filePath && (
-        <div className="border-b border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
-          {filePath}
+        <div className="flex items-center justify-between border-b border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
+          <span>{filePath}</span>
+          {isNewFile && (
+            <span className="rounded bg-success/20 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+              新建文件
+            </span>
+          )}
         </div>
       )}
       <div className="overflow-x-auto">

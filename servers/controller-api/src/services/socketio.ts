@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import bcrypt from 'bcryptjs';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
+import { getRedisClient } from '../middleware/redis.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { Session } from '../models/session.js';
@@ -197,6 +198,26 @@ export function createSocketIOServer(io: SocketIOServer): void {
         await acpSessionManager.publishConfigOptions(payload.sessionId, configOptions);
       } catch (err) {
         console.error(`ACP config-options error for session ${payload.sessionId}:`, err);
+      }
+    });
+
+    socket.on('acp:protocol-version-mismatch', async (payload: {
+      sessionId: string;
+      expectedVersion: number;
+      agentVersion: number;
+    }) => {
+      if (!authenticated) return;
+      try {
+        const redis = getRedisClient();
+        await redis.publish('session:status', JSON.stringify({
+          sessionId: payload.sessionId,
+          protocolVersionMismatch: {
+            expectedVersion: payload.expectedVersion,
+            agentVersion: payload.agentVersion,
+          },
+        }));
+      } catch (err) {
+        console.error(`ACP protocol-version-mismatch error for session ${payload.sessionId}:`, err);
       }
     });
 

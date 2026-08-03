@@ -256,6 +256,42 @@ describe('SessionSSEService', () => {
     });
   });
 
+  describe('broadcastProtocolVersionMismatch', () => {
+    it('should write mismatch event to matching connections', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      const before = res._written.length;
+      sessionSSEService.broadcastProtocolVersionMismatch('sess-1', 1, 2);
+
+      expect(res._written.length).toBe(before + 1);
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"protocol-version-mismatch"');
+      expect(lastWrite).toContain('"expectedVersion":1');
+      expect(lastWrite).toContain('"agentVersion":2');
+    });
+
+    it('should not write to connections for other sessions', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      const before = res._written.length;
+      sessionSSEService.broadcastProtocolVersionMismatch('sess-other', 1, 2);
+
+      expect(res._written.length).toBe(before);
+    });
+  });
+
   describe('broadcastStatus with model fields', () => {
     it('should include availableModels and currentModelId when provided', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });

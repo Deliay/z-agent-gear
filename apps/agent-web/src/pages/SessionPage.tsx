@@ -75,6 +75,7 @@ export default function SessionPage() {
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
+  const [protocolMismatch, setProtocolMismatch] = useState<{ expectedVersion: number; agentVersion: number } | null>(null);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -188,6 +189,11 @@ export default function SessionPage() {
         if (data.data.modeId) setCurrentModeId(data.data.modeId);
       } else if (data.type === 'model:changed') {
         if (data.data.modelId) setCurrentModelId(data.data.modelId);
+      } else if (data.type === 'protocol-version-mismatch') {
+        setProtocolMismatch({
+          expectedVersion: data.data.expectedVersion,
+          agentVersion: data.data.agentVersion,
+        });
       }
     };
 
@@ -419,6 +425,11 @@ export default function SessionPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {protocolMismatch && (
+        <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
+        </div>
+      )}
       <SessionHeader
         session={sessionData?.session ? {
           id: sessionData.session.id,
