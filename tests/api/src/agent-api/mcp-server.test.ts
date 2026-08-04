@@ -34,8 +34,17 @@ const GET_MCP_SERVERS = `
       id
       name
       transport
+      source
+      enabled
       command
+      url
+      hostname
       status
+      tools {
+        name
+        description
+      }
+      toolsSyncedAt
       lastHeartbeatAt
       createdAt
       updatedAt
@@ -49,11 +58,31 @@ const GET_MCP_SERVER = `
       id
       name
       transport
+      source
+      enabled
       command
+      url
+      hostname
       status
+      tools {
+        name
+        description
+      }
+      toolsSyncedAt
       lastHeartbeatAt
       createdAt
       updatedAt
+    }
+  }
+`;
+
+const SET_MCP_SERVER_ENABLED = `
+  mutation SetMcpServerEnabled($id: ID!, $enabled: Boolean!) {
+    setMcpServerEnabled(id: $id, enabled: $enabled) {
+      id
+      name
+      enabled
+      status
     }
   }
 `;
@@ -98,6 +127,24 @@ describe('MCP Server API (agent-api)', () => {
       const res = await gqlRequest(GET_MCP_SERVER, { id: '000000000000000000000000' }, authToken);
       const data = await res.json() as any;
       expect(data.data?.mcpServer).toBeNull();
+    });
+  });
+
+  describe('setMcpServerEnabled mutation', () => {
+    it('should require authentication', async () => {
+      const res = await gqlRequest(SET_MCP_SERVER_ENABLED, { id: '000000000000000000000000', enabled: false });
+      const data = await res.json() as any;
+      expect(data.errors?.[0]?.message).toContain('Not authenticated');
+    });
+
+    it('should throw Server not found for non-existent server', async () => {
+      const res = await gqlRequest(
+        SET_MCP_SERVER_ENABLED,
+        { id: '000000000000000000000000', enabled: false },
+        authToken,
+      );
+      const data = await res.json() as any;
+      expect(data.errors?.[0]?.message).toContain('Server not found');
     });
   });
 });

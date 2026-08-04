@@ -21,7 +21,7 @@ import ProviderSection from '@/components/settings/ProviderSection';
 import ModelSection from '@/components/settings/ModelSection';
 import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
-import McpServerSection from '@/components/settings/McpServerSection';
+import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
@@ -177,7 +177,7 @@ export default function SettingsPage() {
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">MCP 代理</h2>
             <div className="space-y-4 md:space-y-6">
               <McpProxyKeySection />
-              <McpServerSection />
+              <McpRegistrySection />
             </div>
           </section>
         </div>

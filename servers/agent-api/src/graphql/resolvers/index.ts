@@ -33,6 +33,7 @@ export const resolvers = {
     ...sessionResolvers.Mutation,
     ...gatewayResolvers.Mutation,
     ...todoResolvers.Mutation,
+    ...mcpServerResolvers.Mutation,
     ...githubResolvers.Mutation,
   },
   Provider: {

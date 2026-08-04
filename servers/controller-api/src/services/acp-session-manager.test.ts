@@ -106,6 +106,61 @@ describe('ACPSessionManager', () => {
       expect(result.externalSessionId).toBe('ext-123');
     });
 
+    it('should include mcpEndpoint in acp:start payload when provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp', mcpEndpoint,
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({
+          sessionId: 'sess-1',
+          mcpEndpoint,
+        }));
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        externalSessionId: 'ext-123',
+      });
+      await resultPromise;
+    });
+
+    it('should omit mcpEndpoint from acp:start payload when not provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({ sessionId: 'sess-1' }));
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const payload = emitArgs?.[1] as Record<string, unknown>;
+      expect(payload.mcpEndpoint).toBeUndefined();
+
+      const requestId = payload?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        externalSessionId: 'ext-123',
+      });
+      await resultPromise;
+    });
+
     it('should delete session on controller start failure for creating session', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
@@ -417,6 +472,29 @@ describe('ACPSessionManager', () => {
 
       const result = await resultPromise;
       expect(result.success).toBe(true);
+    });
+
+    it('should include mcpEndpoint in acp:resume payload when provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp', mcpEndpoint,
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.objectContaining({ mcpEndpoint }));
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:resume:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+      });
+      await resultPromise;
     });
 
     it('should set status to idling on success', async () => {

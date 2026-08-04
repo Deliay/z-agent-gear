@@ -86,6 +86,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     workspaceId: string,
     enableWorktree?: boolean,
     worktreeBranchSuffix?: string,
+    mcpServerIds?: string[],
   ) => {
     try {
       const { data } = await createSession({
@@ -96,6 +97,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             workspaceId,
             enableWorktree: enableWorktree || false,
             worktreeBranchSuffix: worktreeBranchSuffix || null,
+            mcpServerIds: mcpServerIds || null,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],

@@ -43,7 +43,6 @@ var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret:
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
-    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
@@ -55,19 +54,20 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     });
 
 var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
-    .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
-    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret);
+    .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"));
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("JWT_SECRET", jwtSecret)
+    .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
     .WithEnvironment("GITHUB_APP_ID", githubAppId)
     .WithEnvironment("GITHUB_APP_URL", githubAppUrl)
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
     .WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+    .WithEnvironment("GATEWAY_URL", "http://localhost:10001")
     .WithHttpEndpoint(port: 10001, env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)

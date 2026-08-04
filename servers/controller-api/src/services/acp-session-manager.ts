@@ -25,6 +25,7 @@ export class ACPSessionManager {
     userId: string,
     serverType: string,
     cwd: string,
+    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
     try {
@@ -147,12 +148,16 @@ export class ACPSessionManager {
         });
 
         console.log(`[ACP session] Emitting acp:start to controller socket ${controllerSocket.id} for session ${sessionId}`);
-        controllerSocket.emit('acp:start', {
+        const startPayload: Record<string, unknown> = {
           requestId,
           sessionId,
           serverType,
           cwd,
-        });
+        };
+        if (mcpEndpoint) {
+          startPayload.mcpEndpoint = mcpEndpoint;
+        }
+        controllerSocket.emit('acp:start', startPayload);
       });
     } catch (error) {
       console.error(`[ACP session] Error starting session ${sessionId}:`, error);
@@ -423,6 +428,7 @@ export class ACPSessionManager {
     controllerId: string,
     userId: string,
     cwd: string,
+    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const sess = await Session.findById(sessionId).lean();
@@ -504,13 +510,17 @@ export class ACPSessionManager {
           }
         });
 
-        controllerSocket.emit('acp:resume', {
+        const resumePayload: Record<string, unknown> = {
           requestId,
           sessionId,
           externalSessionId,
           serverType: acpServerType,
           cwd,
-        });
+        };
+        if (mcpEndpoint) {
+          resumePayload.mcpEndpoint = mcpEndpoint;
+        }
+        controllerSocket.emit('acp:resume', resumePayload);
       });
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
