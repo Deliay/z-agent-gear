@@ -428,6 +428,7 @@ export class ACPSessionManager {
     controllerId: string,
     userId: string,
     cwd: string,
+    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const sess = await Session.findById(sessionId).lean();
@@ -509,13 +510,17 @@ export class ACPSessionManager {
           }
         });
 
-        controllerSocket.emit('acp:resume', {
+        const resumePayload: Record<string, unknown> = {
           requestId,
           sessionId,
           externalSessionId,
           serverType: acpServerType,
           cwd,
-        });
+        };
+        if (mcpEndpoint) {
+          resumePayload.mcpEndpoint = mcpEndpoint;
+        }
+        controllerSocket.emit('acp:resume', resumePayload);
       });
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
