@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 集成式 MCP 注册中心（Integrated MCP Registry）
 **关联 PRD**: `docs/product/draft/20260804-integrated-mcp-registry.md`
-**技术提案版本**: v2.1
+**技术提案版本**: v2.2
 **创建日期**: 2026-08-04
 **作者**: ZeroAsh
 **feat-branch**: `feat/integrated-mcp-registry`
@@ -19,6 +19,10 @@ type: Permanent
 > v2.1 变更（验收意见）：
 > 1. **会话级鉴权收紧**：所有 MCP 访问经 agent-api 校验 JWT + endpoint 状态，会话关闭即吊销令牌与访问地址，重开时重新签发；
 > 2. **按需装配**：创建会话默认不装配任何 MCP，由用户按任务勾选子集，避免大量工具浪费 Agent 上下文。
+>
+> v2.2 变更（实现 Review, PR #146）：
+> 1. **会话 MCP 下发改为每 server 独立端点**（`/mcp/{sessionId}/{serverName}`）：标准 MCP 客户端不会携带 `params.serverName`，单聚合端点下多 server 流量无法区分；每 server 独立 URL 零协议侵入即可正确路由（决策表相应修订）；
+> 2. **会话结束吊销兜底**：controller-api 自主结束会话的路径（agent 退出/控制器报错/acp:stop）不写 agent-api，agent-api 新增订阅者监听 `session:status` 终态事件完成吊销。
 
 ## 1. 概述
 
@@ -126,7 +130,7 @@ flowchart TD
 - **鉴权**: Bearer JWT（`MCP_ENDPOINT_JWT_SECRET`，payload 含 `sessionId/userId/serverNames`），URL sessionId 须与 JWT 一致。
 - **处理**:
   1. 校验 endpoint 状态（Redis `mcp:endpoint:{sessionId}` → Mongo 回源），revoked/expired → 401；
-  2. 从 `params.serverName`（缺省取 JWT `serverNames[0]`）解析目标 McpServer；
+  2. 从 URL 路径 `/:serverName`（每 server 独立端点，推荐）解析目标 McpServer；缺省回落 `params.serverName`（兼容），再回落 JWT `serverNames[0]`；目标 server 必须包含在 JWT `serverNames` 中；
   3. 按 transport 分流：
      - `registered_proxy` → Redis 请求-响应转发（见 3.3）；
      - `http` / `platform`（P2）→ agent-api 直接发起 HTTP JSON-RPC 调用（注入存储的 headers，10s 超时）；
@@ -279,7 +283,7 @@ sequenceDiagram
 | http/platform 转发 | 经 Redis 到 controller-api | agent-api 直接 HTTP 调用 | **B** | agent-api 同时具备公网/内网访问能力，无需多一跳 |
 | Registry 管理面落点 | agent-api GraphQL 直写 Mongo | 转发到 controller-api REST | A | 沿用共享库既有模式 |
 | 同名工具冲突 | 禁止同名 | serverName 前缀改写 | B | 不限制用户注册自由，Agent 侧无冲突 |
-| 会话 MCP 下发 | 每 server 独立端点 | 单聚合端点 + serverName 路由 | B | Agent 只需配置一个入口 |
+| 会话 MCP 下发 | 每 server 独立端点 | 单聚合端点 + serverName 路由 | **A**（v2.2 修订） | 标准 MCP 客户端不会携带 `params.serverName`，单端点下多 server 无法区分流量，全部落到 `serverNames[0]`；每 server 独立 URL（`/mcp/{sessionId}/{serverName}`）零协议侵入即可正确路由 |
 | 默认装配策略 | 默认装配全部已启用服务 | 默认不装配，按需勾选 | **B** | Registry 服务增多后全量装配浪费 Agent 上下文；按任务精确组合 |
 | 端点失效时机 | 固定 TTL 到期 | 会话关闭即吊销 + 活跃期滑动续期 | **B** | 令牌生命周期严格跟随会话，会话关闭后地址与令牌同时失效 |
 
