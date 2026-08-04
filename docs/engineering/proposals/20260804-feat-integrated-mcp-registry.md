@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 集成式 MCP 注册中心（Integrated MCP Registry）
 **关联 PRD**: `docs/product/draft/20260804-integrated-mcp-registry.md`
-**技术提案版本**: v2.0
+**技术提案版本**: v2.1
 **创建日期**: 2026-08-04
 **作者**: ZeroAsh
 **feat-branch**: `feat/integrated-mcp-registry`
@@ -15,6 +15,10 @@ type: Permanent
 > v2.0 变更（Review 意见）：
 > 1. **移除独立的 mcp-forwarder 服务**，MCP HTTP 入口收敛到 agent-api（经统一网关暴露），减少一个服务的部署与编排成本；
 > 2. **入口到执行侧改为 Redis 请求-响应交互**，复用 `port-forward` 既有模式，天然支持 controller-api 多副本部署下的代理寻址。
+>
+> v2.1 变更（验收意见）：
+> 1. **会话级鉴权收紧**：所有 MCP 访问经 agent-api 校验 JWT + endpoint 状态，会话关闭即吊销令牌与访问地址，重开时重新签发；
+> 2. **按需装配**：创建会话默认不装配任何 MCP，由用户按任务勾选子集，避免大量工具浪费 Agent 上下文。
 
 ## 1. 概述
 
@@ -39,13 +43,13 @@ type: Permanent
 2. **Redis 请求-响应转发**：agent-api → Redis → 持有目标代理连接的 controller-api 副本 → WebSocket → mcp-proxy，复用 `port-forward:command/response` 既有模式，解决多副本寻址（#8）。
 3. 修复断链（#1–#5），使「注册 → 装配 → 调用」端到端可用。
 4. 将 McpServer 集合升级为 **Integrated MCP Registry**：统一抽象三种来源（`registered_proxy` / `http` / `platform`），携带工具清单元数据（#6、#7）。
-5. 会话创建时自动装配全部已启用 MCP 服务；平台自身能力（首期：会话只读查询）以内置 MCP 服务形式注册（P2）。
+5. 会话创建时**按需勾选装配** MCP 服务（默认不装配，避免大量工具浪费 Agent 上下文）；所有 MCP 访问经 agent-api 做会话级鉴权，**会话关闭即吊销令牌与访问地址**。平台自身能力（首期：会话只读查询）以内置 MCP 服务形式注册（P2）。
 
 ### 1.3 范围
 
 **分期（与 PRD 约束对齐）：**
 
-- **P1（本期主体）**：移除 mcp-forwarder、入口收敛 agent-api + Redis 转发、链路修复（#1–#5、#8）、Registry 数据模型升级、会话自动装配 + 创建对话框 MCP 多选、Registry 目录页（状态/来源/启停用）、endpoint 吊销即时生效。
+- **P1（本期主体）**：移除 mcp-forwarder、入口收敛 agent-api + Redis 转发、链路修复（#1–#5、#8）、Registry 数据模型升级、会话按需勾选装配 + 创建对话框 MCP 多选、Registry 目录页（状态/来源/启停用）、endpoint 随会话关闭即吊销。
 - **P2**：远程 HTTP MCP 绑定（agent-api 直连转发）、平台内置 MCP 服务、工具清单抓取与展示、同名工具命名空间隔离。
 
 **不做：** MCP notifications / sampling 等双向特性（保持请求-响应模式）；平台写操作类 MCP 工具；对接官方 MCP Registry。
@@ -205,8 +209,8 @@ sequenceDiagram
     participant R as Redis
     participant P as mcp-proxy(机器B)
 
-    W->>A: createSession(mcpServerIds 默认=全部已启用)
-    A->>A: 签发/续期 mcpEndpoint (url=网关/mcp/:sessionId)
+    W->>A: createSession(mcpServerIds=用户勾选子集)
+    A->>A: 勾选非空才签发 mcpEndpoint (url=网关/mcp/:sessionId)
     A->>R: acp:start (携带 mcpEndpoint)
     R->>C: 消费并透传
     C->>G: acp:start (mcpEndpoint)
@@ -239,24 +243,31 @@ sequenceDiagram
 
 #### 实现点 3: 会话装配链路补齐
 
-- agent-api：`CreateSessionInput` schema 补 `mcpServerIds`；缺省时取该用户全部 `enabled=true` 的 server（自动装配）；endpoint 直接由 agent-api 签发（`McpEndpointService` 从 controller-api 迁移/共享到 agent-api，共享 Mongo）。
+- agent-api：`CreateSessionInput` schema 补 `mcpServerIds`；**仅在用户显式勾选时装配**——`mcpServerIds` 为空/缺省则不签发 endpoint、不下发 `mcpEndpoint`，会话无 MCP 能力（与现状行为一致，静默降级）；endpoint 直接由 agent-api 签发（`McpEndpointService` 从 controller-api 迁移/共享到 agent-api，共享 Mongo）。
 - controller-api `handleAcpStart`：透传 `mcpEndpoint` 到 agent-controller。
 - agent-controller：`acp:start` 收到 `mcpEndpoint` 后构造 ACP `mcpServers`——Agent 支持 HTTP MCP 则直连网关 URL；否则 spawn `agent-gear mcp --endpoint --token` 作 stdio 桥（复用已有子命令，客户端侧保留）。
 
-#### 实现点 4: 工具名命名空间（P2）
+#### 实现点 4: 端点生命周期与会话绑定（会话级鉴权）
+
+- 所有 MCP 访问必经 agent-api 入口，每次请求校验 JWT + endpoint 状态（Redis → Mongo 回源）双重关卡。
+- **会话关闭即吊销**：agent-api `SessionService` 的会话关闭/结束流程中同步吊销 endpoint（Mongo status=revoked + 写 Redis），此后原令牌与访问地址调用一律 401。
+- 会话重开/恢复时重新签发新 endpoint（不复用旧令牌）。
+- 会话异常中断（执行机器掉线）：心跳续期停止，endpoint 随 JWT TTL 自然过期兜底。
+
+#### 实现点 5: 工具名命名空间（P2）
 
 - 入口聚合 `tools/list` 时将工具名改写为 `{serverName}__{tool}`；`tools/call` 按前缀拆解路由到对应 server，避免多服务同名工具冲突。
 
-#### 实现点 5: 平台内置 MCP（P2）
+#### 实现点 6: 平台内置 MCP（P2）
 
 - agent-api 暴露内网 HTTP JSON-RPC 端点 `/internal/mcp`（仅平台网络可达），实现只读 tools：`list_sessions`、`get_session_status`。
 - 服务启动时 upsert 一条 `transport=platform, source=platform` 的 McpServer（幂等，url 指向内网地址）；不可删除，可停用。
 - 入口分流时 platform/http 统一走 agent-api HTTP JSON-RPC 客户端（注入 headers、10s 超时），**不经过 Redis**。
 
-#### 实现点 6: Registry 目录页与会话装配 UI（P1）
+#### 实现点 7: Registry 目录页与会话装配 UI（P1）
 
 - 设置页「MCP」区块升级为目录视图：来源徽标（代理/远程/内置）、状态、工具数、启停用开关。
-- NewSessionDialog 增加按来源分组的 MCP 多选（默认全选已启用项），提交时携带 `mcpServerIds`。
+- NewSessionDialog 增加按来源分组的 MCP 多选（**默认不勾选**，服务较多时支持搜索过滤），提交时携带 `mcpServerIds`；不勾选则不装配。
 
 ## 6. 技术决策
 
@@ -269,6 +280,8 @@ sequenceDiagram
 | Registry 管理面落点 | agent-api GraphQL 直写 Mongo | 转发到 controller-api REST | A | 沿用共享库既有模式 |
 | 同名工具冲突 | 禁止同名 | serverName 前缀改写 | B | 不限制用户注册自由，Agent 侧无冲突 |
 | 会话 MCP 下发 | 每 server 独立端点 | 单聚合端点 + serverName 路由 | B | Agent 只需配置一个入口 |
+| 默认装配策略 | 默认装配全部已启用服务 | 默认不装配，按需勾选 | **B** | Registry 服务增多后全量装配浪费 Agent 上下文；按任务精确组合 |
+| 端点失效时机 | 固定 TTL 到期 | 会话关闭即吊销 + 活跃期滑动续期 | **B** | 令牌生命周期严格跟随会话，会话关闭后地址与令牌同时失效 |
 
 ## 7. 项目结构（主要改动文件）
 
@@ -302,7 +315,7 @@ apps/agent-web/src/
 
 ## 8. 测试策略
 
-- 单元测试：入口 JWT/endpoint 校验、Redis 转发 requestId 关联与超时、owner 注册表 fail-fast、工具名改写、自动装配缺省逻辑；覆盖率 ≥ 80%（新增代码）。
+- 单元测试：入口 JWT/endpoint 校验、会话关闭吊销钩子、Redis 转发 requestId 关联与超时、owner 注册表 fail-fast、工具名改写、空勾选不签发端点逻辑；覆盖率 ≥ 80%（新增代码）。
 - API 测试（`tests/api/`）：`POST /mcp/:sessionId` 全链路（mock Redis + 代理）、多副本场景（两个 registry 实例仅持有者响应）、bind/unbind、启停用、revoke 即时生效。
 - E2E（`tests/e2e/`）：注册代理 → 目录可见 → 创建会话自动装配 → 工具列表包含注册服务的工具。
 - 遵循 TDD 红-绿-重构循环，先写失败测试再实现。
@@ -319,7 +332,8 @@ apps/agent-web/src/
 - [ ] Contract 更新评审通过
 - [ ] P1：两台机器各注册一个 MCP 服务，同一会话可同时调用两者工具（E2E 通过）
 - [ ] P1：controller-api 双副本部署下，请求能正确路由到持有代理连接的副本
-- [ ] P1：创建会话默认装配全部已启用服务，revoke 后调用即时 401
+- [ ] P1：创建会话按需勾选装配，未勾选的服务不出现在 Agent 工具列表
+- [ ] P1：会话关闭后原令牌与访问地址立即失效（调用返回 401）；会话重开签发新令牌
 - [ ] P1：`servers/mcp-forwarder/` 移除后 `aspire start` 一键拉起全部服务
 - [ ] P2：绑定远程 HTTP MCP 成功并可调用；平台内置服务开箱可用
 - [ ] 单元 / API / E2E 测试全部通过
