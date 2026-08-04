@@ -13,10 +13,10 @@ interface AcpCardProps {
 
 const colorClasses = {
   purple: {
-    container: 'bg-muted border border-border',
-    header: 'text-foreground',
-    summary: 'text-muted-foreground',
-    chevron: 'text-muted-foreground hover:text-foreground',
+    container: 'bg-info/10 border border-info motion-safe:animate-pulse',
+    header: 'text-info',
+    summary: 'text-info',
+    chevron: 'text-info hover:text-info',
   },
   yellow: {
     container: 'bg-muted border border-border',

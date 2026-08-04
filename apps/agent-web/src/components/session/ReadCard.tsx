@@ -25,6 +25,7 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
   const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
   const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
   const locations = parsed.locations as ToolCallLocation[] | undefined;
+  const status = typeof parsed.status === 'string' ? parsed.status : 'in_progress';
 
   const filePath = (rawInput?.filePath as string) || locations?.[0]?.path || '';
   const filePaths: string[] = [];
@@ -43,7 +44,7 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
       title="Read Files"
       summary={summary}
       defaultCollapsed={true}
-      color="purple"
+      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >

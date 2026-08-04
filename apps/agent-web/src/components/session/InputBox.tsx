@@ -140,7 +140,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -198,7 +198,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
                 ? 'Session is not active...'
                 : sending
                   ? 'Agent is processing...'
-                  : 'Type your message...'
+                  : 'Type your message... Ctrl+Enter to send'
             }
             className="w-full resize-none rounded-md border border-input px-3 py-2 text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-muted disabled:text-muted-foreground"
             style={{ maxHeight: '10rem', overflowY: 'auto' }}
