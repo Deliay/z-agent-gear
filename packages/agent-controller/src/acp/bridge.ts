@@ -10,6 +10,7 @@ export interface AcpBridgeOptions {
   cwd: string;
   additionalDirectories?: string[];
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
 }
 
 interface QueuedInput {
@@ -56,6 +57,16 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
     command: s.command,
     args: s.args ?? [],
     env: s.env ?? [],
+  }));
+}
+
+function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
+  const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
+  return mcpEndpoint.serverNames.map((name) => ({
+    type: 'http' as const,
+    name,
+    url: mcpEndpoint.url,
+    headers,
   }));
 }
 
@@ -151,6 +162,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private cwd: string;
   private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
+  private mcpEndpoint: AcpBridgeOptions['mcpEndpoint'];
   private connection: acp.ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private activePrompt: Promise<acp.PromptResponse> | null = null;
@@ -180,7 +192,15 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.cwd = options.cwd;
     this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
+    this.mcpEndpoint = options.mcpEndpoint;
     this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
+  }
+
+  private resolveMcpServers(): acp.McpServer[] {
+    if (this.mcpEndpoint) {
+      return toMcpEndpointServers(this.mcpEndpoint);
+    }
+    return toMcpServers(this.mcpServers);
   }
 
   async start(): Promise<void> {
@@ -192,7 +212,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       await this.initConnection();
       const result = await this.connection!.newSession({
         cwd: this.cwd,
-        mcpServers: toMcpServers(this.mcpServers),
+        mcpServers: this.resolveMcpServers(),
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = result.sessionId;
@@ -216,6 +236,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       const result = await this.connection!.resumeSession({
         sessionId: externalSessionId,
         cwd: this.cwd,
+        mcpServers: this.resolveMcpServers(),
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = externalSessionId;
@@ -228,7 +249,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       try {
         const result = await this.connection!.newSession({
           cwd: this.cwd,
-          mcpServers: toMcpServers(this.mcpServers),
+          mcpServers: this.resolveMcpServers(),
           additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
         });
         this.acpSessionId = result.sessionId;

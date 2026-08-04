@@ -1,19 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('@agentclientprotocol/sdk', () => ({
-  ndJsonStream: vi.fn(() => ({})),
-  ClientSideConnection: vi.fn(function () {
+const { mockNewSession, mockResumeSession, mockClientSideConnection } = vi.hoisted(() => {
+  const mockNewSession = vi.fn().mockResolvedValue({ sessionId: 'acp-sess-abc' });
+  const mockResumeSession = vi.fn().mockResolvedValue({});
+  const mockClientSideConnection = vi.fn(function () {
     return {
       initialize: vi.fn().mockResolvedValue({ protocolVersion: 1 }),
-      newSession: vi.fn().mockResolvedValue({ sessionId: 'acp-sess-abc' }),
-      resumeSession: vi.fn().mockResolvedValue({}),
+      newSession: mockNewSession,
+      resumeSession: mockResumeSession,
       prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
       cancel: vi.fn().mockResolvedValue(undefined),
       closeSession: vi.fn().mockResolvedValue({}),
       setSessionMode: vi.fn().mockResolvedValue({}),
       setSessionConfigOption: vi.fn().mockResolvedValue({}),
     };
-  }),
+  });
+  return { mockNewSession, mockResumeSession, mockClientSideConnection };
+});
+
+vi.mock('@agentclientprotocol/sdk', () => ({
+  ndJsonStream: vi.fn(() => ({})),
+  ClientSideConnection: mockClientSideConnection,
 }));
 
 import { AcpSessionBridge } from './bridge.js';
@@ -192,5 +199,72 @@ describe('AcpSessionBridge - requestPermission', () => {
     bridge.handlePermissionResponse(requestId, { outcome: 'selected', optionId: 'opt-1' });
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+describe('AcpSessionBridge - mcpEndpoint injection', () => {
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let mockSpawner: MockAcpSpawner;
+
+  function createBridge(mcpEndpoint?: { url: string; token: string; serverNames: string[] }) {
+    return new AcpSessionBridge(
+      mockSocket as never,
+      { sessionId: 'sess-1', cwd: '/home/user', mcpEndpoint },
+      mockSpawner as never,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockSocket = createMockSocket();
+    mockSpawner = new MockAcpSpawner();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('should pass http mcpServers to newSession when mcpEndpoint provided', async () => {
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'tok-1',
+      serverNames: ['github-mcp', 'fs-mcp'],
+    });
+
+    await bridge.start();
+
+    expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: [
+        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'fs-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+      ],
+    }));
+  });
+
+  it('should not set mcpServers when mcpEndpoint absent', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+
+    expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: [],
+    }));
+  });
+
+  it('should pass http mcpServers to resumeSession when mcpEndpoint provided', async () => {
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'tok-1',
+      serverNames: ['github-mcp'],
+    });
+
+    await bridge.resume('ext-123');
+
+    expect(mockResumeSession).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: [
+        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+      ],
+    }));
   });
 });

@@ -60,6 +60,14 @@ export class McpEndpointService {
     await redis.set(`mcp:endpoint:${sessionId}`, 'revoked');
   }
 
+  async reissueEndpoint(sessionId: string, userId: string): Promise<{ url: string; token: string } | null> {
+    const endpoint = await McpSessionEndpoint.findOne({ sessionId }).lean();
+    if (!endpoint || !endpoint.mcpServerIds || endpoint.mcpServerIds.length === 0) {
+      return null;
+    }
+    return this.createEndpoint(sessionId, userId, endpoint.mcpServerIds as string[]);
+  }
+
   async getStatus(sessionId: string): Promise<string> {
     const redis = getRedisClient();
     const cached = await redis.get(`mcp:endpoint:${sessionId}`);

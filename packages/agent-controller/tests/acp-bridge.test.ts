@@ -235,6 +235,7 @@ describe('AcpSessionBridge', () => {
       expect(mc().resumeSession).toHaveBeenCalledWith({
         sessionId: 'existing-sess-id',
         cwd: '/home/user',
+        mcpServers: [],
       });
       expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1',

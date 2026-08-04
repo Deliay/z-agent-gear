@@ -48,6 +48,7 @@ interface AcpStartPayload {
   serverType: string;
   cwd: string;
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
 }
 
@@ -103,6 +104,7 @@ interface AcpResumePayload {
   externalSessionId: string;
   serverType: string;
   cwd: string;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
 }
 
@@ -252,6 +254,7 @@ export function connectToServer(
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpServers: data.mcpServers,
+        mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
       }, spawner);
 
@@ -325,6 +328,7 @@ export function connectToServer(
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
+        mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
       }, spawner);
 
