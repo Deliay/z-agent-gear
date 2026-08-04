@@ -5,14 +5,14 @@ import InputBox from './InputBox';
 describe('InputBox', () => {
   it('should render textarea and Send button', () => {
     render(<InputBox onSend={vi.fn()} disabled={false} />);
-    expect(screen.getByPlaceholderText('Type your message...')).toBeDefined();
+    expect(screen.getByPlaceholderText(/Type your message/)).toBeDefined();
     expect(screen.getByText('Send')).toBeDefined();
   });
 
   it('should call onSend with input text on submit', async () => {
     const onSend = vi.fn();
     render(<InputBox onSend={onSend} disabled={false} />);
-    const textarea = screen.getByPlaceholderText('Type your message...');
+    const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.click(screen.getByText('Send'));
     expect(onSend).toHaveBeenCalledWith('Hello');
@@ -21,28 +21,80 @@ describe('InputBox', () => {
   it('should clear input after sending', async () => {
     const onSend = vi.fn();
     render(<InputBox onSend={onSend} disabled={false} />);
-    const textarea = screen.getByPlaceholderText('Type your message...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Type your message/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.click(screen.getByText('Send'));
     expect(textarea.value).toBe('');
   });
 
-  it('should submit on Enter key', async () => {
+  it('should not submit on Enter key (newline behavior)', async () => {
     const onSend = vi.fn();
     render(<InputBox onSend={onSend} disabled={false} />);
-    const textarea = screen.getByPlaceholderText('Type your message...');
+    const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
-    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it('should not submit on Shift+Enter', async () => {
     const onSend = vi.fn();
     render(<InputBox onSend={onSend} disabled={false} />);
-    const textarea = screen.getByPlaceholderText('Type your message...');
+    const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('should submit on Ctrl+Enter', async () => {
+    const onSend = vi.fn();
+    render(<InputBox onSend={onSend} disabled={false} />);
+    const textarea = screen.getByPlaceholderText(/Type your message/);
+    fireEvent.change(textarea, { target: { value: 'Hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    expect(onSend).toHaveBeenCalledWith('Hello');
+  });
+
+  it('should submit on Cmd+Enter', async () => {
+    const onSend = vi.fn();
+    render(<InputBox onSend={onSend} disabled={false} />);
+    const textarea = screen.getByPlaceholderText(/Type your message/);
+    fireEvent.change(textarea, { target: { value: 'Hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
+    expect(onSend).toHaveBeenCalledWith('Hello');
+  });
+
+  it('should not submit on Ctrl+Enter with empty input', async () => {
+    const onSend = vi.fn();
+    render(<InputBox onSend={onSend} disabled={false} />);
+    const textarea = screen.getByPlaceholderText(/Type your message/);
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('should not submit on Ctrl+Enter with whitespace-only input', async () => {
+    const onSend = vi.fn();
+    render(<InputBox onSend={onSend} disabled={false} />);
+    const textarea = screen.getByPlaceholderText(/Type your message/);
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('should select command with Enter when suggest panel is open', async () => {
+    const onSend = vi.fn();
+    const { container } = render(
+      <InputBox
+        onSend={onSend}
+        disabled={false}
+        availableCommands={[{ name: 'clear', description: 'Clear session' }]}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/Type your message/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '/cl' } });
+    expect(container.textContent).toContain('/clear');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('/clear ');
   });
 
   it('should disable textarea and button when disabled', () => {

@@ -13,7 +13,7 @@ export default function AvailableCommandsCard({ data }: AvailableCommandsCardPro
     <AcpCard
       title="Tools"
       summary={summary}
-      color="purple"
+      color="gray"
       defaultCollapsed={true}
     >
       <div className="space-y-2">
