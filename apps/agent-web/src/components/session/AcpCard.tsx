@@ -16,7 +16,7 @@ const colorClasses = {
     container: 'bg-info/10 border border-info motion-safe:animate-pulse',
     header: 'text-info',
     summary: 'text-info',
-    chevron: 'text-info hover:text-info',
+    chevron: 'text-info hover:opacity-70',
   },
   yellow: {
     container: 'bg-muted border border-border',
