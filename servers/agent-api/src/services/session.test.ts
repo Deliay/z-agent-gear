@@ -32,6 +32,12 @@ vi.mock('../models/controller-workspace.js', () => ({
   },
 }));
 
+vi.mock('../models/mcp-server.js', () => ({
+  McpServer: {
+    countDocuments: vi.fn(),
+  },
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -49,6 +55,7 @@ import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
+import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
@@ -342,6 +349,7 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
         url: 'http://gateway/mcp/sess-1',
         token: 'mcp-token',
@@ -397,6 +405,7 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockRejectedValue(new Error('SERVER_NOT_FOUND'));
 
       const result = await sessionService.create('user-1', {
@@ -407,6 +416,29 @@ describe('SessionService', () => {
       });
 
       expect(result.id).toBe('sess-1');
+    });
+
+    it('should fail session creation when selected MCP servers are invalid or disabled', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      // Only 1 of the 2 requested servers is selectable
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: ['server-1', 'server-2'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_FOUND');
+
+      expect(Session.create).not.toHaveBeenCalled();
+      expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
     });
   });
 

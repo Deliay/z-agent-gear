@@ -4,7 +4,7 @@ import { config } from '../config/index.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from '../services/mcp-endpoint.js';
-import { mcpForwarder } from '../services/mcp-forwarder.js';
+import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
 
 const router = Router();
 
@@ -18,8 +18,9 @@ function jsonRpcError(res: Response, id: unknown, code: string, message: string)
   res.status(200).json({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 }
 
-router.post('/:sessionId', async (req: Request, res: Response) => {
+const mcpEntryHandler = async (req: Request, res: Response) => {
   const sessionId = req.params.sessionId as string;
+  const pathServerName = req.params.serverName as string | undefined;
 
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
@@ -63,13 +64,21 @@ router.post('/:sessionId', async (req: Request, res: Response) => {
     return;
   }
 
-  const serverName = request.params?.serverName ?? payload.serverNames?.[0];
+  // Per-server URL path takes precedence; fall back to params.serverName
+  // (legacy clients), then to the first assembled server.
+  const serverName = pathServerName ?? request.params?.serverName ?? payload.serverNames?.[0];
   if (!serverName) {
     res.status(400).json({
       jsonrpc: '2.0',
       id: request.id ?? null,
       error: { code: 'INVALID_REQUEST', message: 'No server name specified' },
     });
+    return;
+  }
+
+  // The target server must have been assembled into this session at creation time.
+  if (payload.serverNames && !payload.serverNames.includes(serverName)) {
+    jsonRpcError(res, request.id, 'SERVER_NOT_FOUND', 'Server not assembled in this session');
     return;
   }
 
@@ -95,13 +104,17 @@ router.post('/:sessionId', async (req: Request, res: Response) => {
     const result = await mcpForwarder.request({ serverId: server._id.toString(), sessionId, request: req.body });
     res.json(result);
   } catch (err) {
-    const message = (err as Error).message;
-    if (message === 'FORWARD_TIMEOUT') {
-      jsonRpcError(res, request.id, 'FORWARD_TIMEOUT', 'Forward timeout');
+    if (err instanceof ForwardError) {
+      jsonRpcError(res, request.id, err.code, err.message);
     } else {
-      jsonRpcError(res, request.id, 'SERVER_OFFLINE', message);
+      jsonRpcError(res, request.id, 'FORWARD_ERROR', (err as Error).message);
     }
   }
-});
+};
+
+// Express 5 / path-to-regexp v8 has no optional-param syntax, so register both
+// shapes explicitly: legacy single endpoint and per-server URL.
+router.post('/:sessionId', mcpEntryHandler);
+router.post('/:sessionId/:serverName', mcpEntryHandler);
 
 export const mcpRouter = router;

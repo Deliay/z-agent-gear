@@ -12,7 +12,10 @@ const mcpSessionEndpointSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-mcpSessionEndpointSchema.index({ status: 1, expiresAt: 1 }, { expireAfterSeconds: 0 });
+// NOTE: no TTL index here. Expired documents are kept so that resuming a
+// long-paused session can re-issue an endpoint from the stored mcpServerIds;
+// expiry is enforced in code (getStatus) and by the JWT's own exp.
+mcpSessionEndpointSchema.index({ status: 1 });
 
 export const McpSessionEndpoint = mongoose.model('McpSessionEndpoint', mcpSessionEndpointSchema);
 export type IMcpSessionEndpoint = mongoose.InferSchemaType<typeof mcpSessionEndpointSchema>;

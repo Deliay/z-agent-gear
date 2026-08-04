@@ -237,8 +237,8 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [
-        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
-        { type: 'http', name: 'fs-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'fs-mcp', url: 'http://gateway/mcp/sess-1/fs-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
       ],
     }));
   });
@@ -263,7 +263,7 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     expect(mockResumeSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [
-        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
       ],
     }));
   });

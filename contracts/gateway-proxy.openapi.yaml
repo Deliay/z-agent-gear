@@ -27,6 +27,7 @@ paths:
         - 需要 Bearer JWT（MCP_ENDPOINT_JWT_SECRET 签发，payload 含 sessionId/userId/serverNames）
         - URL sessionId 须与 JWT payload 中的 sessionId 一致
         - 对应会话的 endpoint 状态必须为 active
+        - 目标 server 通过 URL 后缀 `/mcp/{sessionId}/{serverName}` 指定（每 server 独立 URL）；不带后缀时回落到 `params.serverName`（兼容），再回落到 JWT `serverNames[0]`
       tags:
         - MCP
       parameters:
@@ -48,7 +49,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '502':
-          description: 代理失败（SERVER_OFFLINE / FORWARD_TIMEOUT）
+          description: 代理失败（SERVER_OFFLINE / FORWARD_TIMEOUT / FORWARD_ERROR）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /mcp/{sessionId}/{serverName}:
+    post:
+      operationId: forwardMcpRequestToServer
+      summary: MCP 统一入口（会话级 + server 级）
+      description: |
+        与 `/mcp/{sessionId}` 相同，但目标 MCP Server 由路径中的 `serverName` 指定。
+
+        agent-controller 为会话装配的每个 MCP Server 生成独立的 ACP HTTP MCP 端点（`{url}/{serverName}`），标准 MCP 客户端无需携带任何自定义参数即可正确路由。`serverName` 必须包含在 JWT `serverNames` 中（即创建会话时已勾选装配）。
+      tags:
+        - MCP
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: 会话 ID
+          schema:
+            type: string
+        - name: serverName
+          in: path
+          required: true
+          description: 目标 MCP Server 名称（须为会话已装配的 server）
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: JSON-RPC 响应（server 未装配 / 不存在 / 离线时返回 JSON-RPC error：SERVER_NOT_FOUND / SERVER_OFFLINE / FORWARD_TIMEOUT / FORWARD_ERROR）
+        '401':
+          description: 未认证或 endpoint 已吊销（ENDPOINT_REVOKED）
           content:
             application/json:
               schema:

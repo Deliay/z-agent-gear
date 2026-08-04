@@ -1,8 +1,19 @@
 import crypto from 'crypto';
+import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
 
 const REQUEST_CHANNEL = 'mcp:forward:request';
 const RESPONSE_CHANNEL = 'mcp:forward:response';
+
+export class ForwardError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ForwardError';
+  }
+}
 
 interface ForwardRequest {
   serverId: string;
@@ -13,22 +24,27 @@ interface ForwardRequest {
 export class McpForwarder {
   constructor(private readonly timeoutMs: number = 30_000) {}
 
-  private subscriber: ReturnType<typeof getRedisClient> | null = null;
+  private subscriberPromise: Promise<Redis> | null = null;
 
-  private getSubscriber(): ReturnType<typeof getRedisClient> {
-    if (!this.subscriber) {
+  private getSubscriber(): Promise<Redis> {
+    if (!this.subscriberPromise) {
       const sub = getRedisClient().duplicate();
-      sub.subscribe(RESPONSE_CHANNEL).catch((err: Error) => {
-        console.error(`Failed to subscribe to ${RESPONSE_CHANNEL}:`, err.message);
-      });
-      this.subscriber = sub;
+      this.subscriberPromise = sub
+        .subscribe(RESPONSE_CHANNEL)
+        .then(() => sub)
+        .catch((err: Error) => {
+          this.subscriberPromise = null;
+          throw new ForwardError('FORWARD_ERROR', `Failed to subscribe ${RESPONSE_CHANNEL}: ${err.message}`);
+        });
     }
-    return this.subscriber;
+    return this.subscriberPromise;
   }
 
-  request(msg: ForwardRequest): Promise<unknown> {
+  async request(msg: ForwardRequest): Promise<unknown> {
     const requestId = crypto.randomUUID();
-    const subscriber = this.getSubscriber();
+    // Await the subscription before publishing so the response can never arrive
+    // before this client has joined the channel.
+    const subscriber = await this.getSubscriber();
 
     return new Promise((resolve, reject) => {
       const onMessage = (channel: string, message: string) => {
@@ -43,7 +59,7 @@ export class McpForwarder {
           clearTimeout(timeout);
           subscriber.off('message', onMessage);
           if (data.error) {
-            reject(new Error(data.error.message || 'FORWARD_ERROR'));
+            reject(new ForwardError(data.error.code || 'FORWARD_ERROR', data.error.message || 'Forward error'));
             return;
           }
           resolve(data.response);
@@ -52,7 +68,7 @@ export class McpForwarder {
 
       const timeout = setTimeout(() => {
         subscriber.off('message', onMessage);
-        reject(new Error('FORWARD_TIMEOUT'));
+        reject(new ForwardError('FORWARD_TIMEOUT', 'Forward timeout'));
       }, this.timeoutMs);
       timeout.unref?.();
 

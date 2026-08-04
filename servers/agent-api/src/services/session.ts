@@ -5,6 +5,7 @@ import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
 export class SessionService {
@@ -77,6 +78,19 @@ export class SessionService {
       }
       if (!added) {
         throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
+      }
+    }
+
+    // Validate selected MCP servers up front so an invalid selection fails the
+    // mutation instead of silently creating a session without MCP.
+    if (input.mcpServerIds && input.mcpServerIds.length > 0) {
+      const selectable = await McpServer.countDocuments({
+        _id: { $in: input.mcpServerIds },
+        userId,
+        enabled: true,
+      });
+      if (selectable !== input.mcpServerIds.length) {
+        throw new Error('MCP_SERVER_NOT_FOUND: some selected MCP servers are invalid or disabled');
       }
     }
 

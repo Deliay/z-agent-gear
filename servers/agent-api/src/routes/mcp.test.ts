@@ -15,11 +15,23 @@ vi.mock('../services/mcp-endpoint.js', () => ({
   },
 }));
 
-vi.mock('../services/mcp-forwarder.js', () => ({
-  mcpForwarder: {
-    request: vi.fn(),
-  },
-}));
+vi.mock('../services/mcp-forwarder.js', () => {
+  class ForwardError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+    ) {
+      super(message);
+      this.name = 'ForwardError';
+    }
+  }
+  return {
+    mcpForwarder: {
+      request: vi.fn(),
+    },
+    ForwardError,
+  };
+});
 
 vi.mock('../models/mcp-server.js', () => ({
   McpServer: {
@@ -33,7 +45,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 import jwt from 'jsonwebtoken';
 import { mcpEndpointService } from '../services/mcp-endpoint.js';
-import { mcpForwarder } from '../services/mcp-forwarder.js';
+import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpRouter } from './mcp.js';
@@ -218,7 +230,7 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
     vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
-    vi.mocked(mcpForwarder.request).mockRejectedValue(new Error('FORWARD_TIMEOUT'));
+    vi.mocked(mcpForwarder.request).mockRejectedValue(new ForwardError('FORWARD_TIMEOUT', 'Forward timeout'));
 
     const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
 
@@ -227,18 +239,63 @@ describe('MCP HTTP Entry', () => {
     expect(body.error.code).toBe('FORWARD_TIMEOUT');
   });
 
-  it('should return 200 JSON-RPC SERVER_OFFLINE on forwarder error', async () => {
+  it('should pass through FORWARD_ERROR code from the forwarder', async () => {
     vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
     vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
-    vi.mocked(mcpForwarder.request).mockRejectedValue(new Error('owner socket gone'));
+    vi.mocked(mcpForwarder.request).mockRejectedValue(new ForwardError('FORWARD_ERROR', 'owner socket gone'));
 
     const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.error.code).toBe('SERVER_OFFLINE');
+    expect(body.error.code).toBe('FORWARD_ERROR');
     expect(body.error.message).toBe('owner socket gone');
+  });
+
+  it('should route to the server given in the URL path', async () => {
+    vi.mocked(jwt.verify).mockReturnValue({ ...VALID_PAYLOAD, serverNames: ['github-mcp', 'db-mcp'] } as never);
+    vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+    vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
+    vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
+    vi.mocked(mcpForwarder.request).mockResolvedValue({ jsonrpc: '2.0', id: 1, result: {} } as never);
+
+    const res = await post('/mcp/session-1/db-mcp', VALID_REQUEST, 'valid-token');
+
+    expect(res.status).toBe(200);
+    expect(McpServer.findOne).toHaveBeenCalledWith({
+      userId: 'user-1',
+      name: 'db-mcp',
+      enabled: true,
+    });
+  });
+
+  it('should reject a path server that was not assembled into the session', async () => {
+    vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
+    vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+
+    const res = await post('/mcp/session-1/other-mcp', VALID_REQUEST, 'valid-token');
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe('SERVER_NOT_FOUND');
+    expect(McpServer.findOne).not.toHaveBeenCalled();
+    expect(mcpForwarder.request).not.toHaveBeenCalled();
+  });
+
+  it('should return 200 JSON-RPC FORWARD_ERROR on unexpected forwarder failure', async () => {
+    vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
+    vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+    vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
+    vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
+    vi.mocked(mcpForwarder.request).mockRejectedValue(new Error('unexpected boom'));
+
+    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORWARD_ERROR');
+    expect(body.error.message).toBe('unexpected boom');
   });
 });

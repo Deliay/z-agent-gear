@@ -57,7 +57,9 @@ export class McpEndpointService {
       { $set: { status: 'revoked' } },
     );
     const redis = getRedisClient();
-    await redis.set(`mcp:endpoint:${sessionId}`, 'revoked');
+    // The revoked marker only needs to outlive the token itself; without a TTL
+    // every closed session would leave a permanent key in Redis.
+    await redis.set(`mcp:endpoint:${sessionId}`, 'revoked', 'EX', config.mcpEndpointTokenTtl);
   }
 
   async reissueEndpoint(sessionId: string, userId: string): Promise<{ url: string; token: string } | null> {
@@ -75,7 +77,13 @@ export class McpEndpointService {
       return cached;
     }
     const endpoint = await McpSessionEndpoint.findOne({ sessionId, status: 'active' });
-    return endpoint ? 'active' : 'revoked';
+    const remainingMs = endpoint ? endpoint.expiresAt.getTime() - Date.now() : 0;
+    if (!endpoint || remainingMs <= 0) {
+      return 'revoked';
+    }
+    // Refill the cache so subsequent requests do not hit Mongo on every call.
+    await redis.set(`mcp:endpoint:${sessionId}`, 'active', 'EX', Math.max(Math.floor(remainingMs / 1000), 1));
+    return 'active';
   }
 }
 

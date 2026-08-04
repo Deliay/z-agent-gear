@@ -63,10 +63,14 @@ function createTestContext() {
   const nspOn = vi.mocked(io.of).mock.results[0].value.on;
   const connectionHandler = nspOn.mock.calls.find((c: [string, unknown]) => c[0] === 'connection')![1] as (socket: ReturnType<typeof makeSocket>) => void;
 
-  const socket = makeSocket();
-  connectionHandler(socket as never);
+  const connectSocket = () => {
+    const s = makeSocket();
+    connectionHandler(s as never);
+    return s;
+  };
+  const socket = connectSocket();
 
-  return { registry, mockRedis, socket };
+  return { registry, mockRedis, socket, connectSocket };
 }
 
 beforeEach(() => {
@@ -187,6 +191,38 @@ describe('McpProxyRegistry', () => {
       await expect(
         createTestContext().registry.forwardRequest('proxy_nonexistent', { method: 'tools/list' }),
       ).rejects.toThrow('Proxy not connected');
+    });
+
+    it('should reject only the disconnected proxy\'s pending requests', async () => {
+      const { registry, socket, connectSocket } = createTestContext();
+      vi.mocked(McpServer.findByIdAndUpdate).mockResolvedValue({
+        _id: 'server-1',
+        userId: 'user-1',
+        command: 'cmd',
+      } as never);
+      await socket._trigger('proxy:register', { proxyId: 'proxy_server-1', key: 'key' });
+
+      const socket2 = connectSocket();
+      socket2.id = 'socket-2';
+      vi.mocked(McpServer.findByIdAndUpdate).mockResolvedValue({
+        _id: 'server-2',
+        userId: 'user-1',
+        command: 'cmd',
+      } as never);
+      await socket2._trigger('proxy:register', { proxyId: 'proxy_server-2', key: 'key' });
+
+      const p1 = registry.forwardRequest('proxy_server-1', { method: 'tools/list' });
+      const p1Rejected = expect(p1).rejects.toThrow('Proxy disconnected');
+      const p2 = registry.forwardRequest('proxy_server-2', { method: 'tools/list' });
+
+      // Disconnecting proxy 1 must not interrupt proxy 2's in-flight request.
+      await socket._trigger('disconnect', {});
+      await p1Rejected;
+
+      const proxyRequestCall = vi.mocked(socket2.emit).mock.calls.find((c) => c[0] === 'proxy:request');
+      const { requestId } = proxyRequestCall![1] as { requestId: string };
+      await socket2._trigger('proxy:response', { requestId, response: { ok: true } });
+      await expect(p2).resolves.toEqual({ ok: true });
     });
   });
 });

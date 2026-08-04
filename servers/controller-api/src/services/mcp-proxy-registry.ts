@@ -17,7 +17,7 @@ interface ProxyConnection {
 
 export class McpProxyRegistry {
   private connections: Map<string, ProxyConnection> = new Map();
-  private pendingRequests: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void; timeout: NodeJS.Timeout }> = new Map();
+  private pendingRequests: Map<string, { proxyId: string; resolve: (value: any) => void; reject: (reason: any) => void; timeout: NodeJS.Timeout }> = new Map();
   readonly instanceId: string = crypto.randomUUID();
 
   constructor(
@@ -147,7 +147,7 @@ export class McpProxyRegistry {
         reject(new Error('Request timeout'));
       }, 30000);
 
-      this.pendingRequests.set(requestId, { resolve, reject, timeout });
+      this.pendingRequests.set(requestId, { proxyId, resolve, reject, timeout });
       conn.socket.emit('proxy:request', { requestId, request });
     });
   }
@@ -159,8 +159,10 @@ export class McpProxyRegistry {
       await this.clearOwner(conn.serverId);
       this.connections.delete(proxyId);
       
-      // Clean up any pending requests for this proxy
+      // Clean up pending requests owned by this proxy only — rejecting every
+      // in-flight request would break other proxies on the same replica.
       for (const [requestId, pending] of this.pendingRequests.entries()) {
+        if (pending.proxyId !== proxyId) continue;
         clearTimeout(pending.timeout);
         pending.reject(new Error('Proxy disconnected'));
         this.pendingRequests.delete(requestId);

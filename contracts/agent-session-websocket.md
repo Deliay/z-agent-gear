@@ -116,7 +116,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | `string` | 是 | 统一网关转发端点 URL（`GATEWAY_URL/mcp/{sessionId}`，指向 agent-api 入口） |
+| `url` | `string` | 是 | 统一网关转发端点基础 URL（`GATEWAY_URL/mcp/{sessionId}`，指向 agent-api 入口）；agent-controller 为每个装配的 server 追加 `/{serverName}` 构成独立端点 |
 | `token` | `string` | 是 | Bearer Token（会话级 JWT，会话关闭即吊销） |
 | `serverNames` | `string[]` | 是 | MCP Server 名称列表（签发时快照） |
 

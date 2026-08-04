@@ -90,7 +90,7 @@ describe('McpEndpointService', () => {
   });
 
   describe('revokeEndpoint', () => {
-    it('should set mongo status revoked and persist redis status', async () => {
+    it('should set mongo status revoked and persist redis status with TTL', async () => {
       vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
 
       await mcpEndpointService.revokeEndpoint('session-1');
@@ -99,7 +99,9 @@ describe('McpEndpointService', () => {
         { sessionId: 'session-1' },
         { $set: { status: 'revoked' } },
       );
-      expect(mockRedis.set).toHaveBeenCalledWith('mcp:endpoint:session-1', 'revoked');
+      // The revoked marker must expire (default token TTL: 86400s) instead of
+      // leaking a permanent key per closed session.
+      expect(mockRedis.set).toHaveBeenCalledWith('mcp:endpoint:session-1', 'revoked', 'EX', 86400);
     });
   });
 
@@ -114,14 +116,39 @@ describe('McpEndpointService', () => {
       expect(McpSessionEndpoint.findOne).not.toHaveBeenCalled();
     });
 
-    it('should fall back to mongo when redis is empty and return active', async () => {
+    it('should fall back to mongo when redis is empty and return active, refilling the cache', async () => {
       vi.mocked(mockRedis.get).mockResolvedValue(null);
-      vi.mocked(McpSessionEndpoint.findOne).mockResolvedValue({ status: 'active' } as never);
+      vi.mocked(McpSessionEndpoint.findOne).mockResolvedValue({
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000),
+      } as never);
 
       const status = await mcpEndpointService.getStatus('session-1');
 
       expect(status).toBe('active');
       expect(McpSessionEndpoint.findOne).toHaveBeenCalledWith({ sessionId: 'session-1', status: 'active' });
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        'mcp:endpoint:session-1',
+        'active',
+        'EX',
+        expect.any(Number),
+      );
+      const ttl = mockRedis.set.mock.calls[0][3] as number;
+      expect(ttl).toBeGreaterThan(3500);
+      expect(ttl).toBeLessThanOrEqual(3600);
+    });
+
+    it('should return revoked when the mongo endpoint is expired', async () => {
+      vi.mocked(mockRedis.get).mockResolvedValue(null);
+      vi.mocked(McpSessionEndpoint.findOne).mockResolvedValue({
+        status: 'active',
+        expiresAt: new Date(Date.now() - 1000),
+      } as never);
+
+      const status = await mcpEndpointService.getStatus('session-1');
+
+      expect(status).toBe('revoked');
+      expect(mockRedis.set).not.toHaveBeenCalled();
     });
 
     it('should fall back to mongo and return revoked when no active endpoint', async () => {

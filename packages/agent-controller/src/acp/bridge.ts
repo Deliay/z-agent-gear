@@ -62,10 +62,12 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
 
 function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
   const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
+  // Each assembled server gets its own URL so the entry point can route
+  // standard MCP clients (which never send a serverName param) correctly.
   return mcpEndpoint.serverNames.map((name) => ({
     type: 'http' as const,
     name,
-    url: mcpEndpoint.url,
+    url: `${mcpEndpoint.url}/${encodeURIComponent(name)}`,
     headers,
   }));
 }
