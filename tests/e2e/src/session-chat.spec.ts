@@ -74,7 +74,7 @@ test.describe('Session Chat', () => {
     await page.keyboard.press('Enter');
     await textarea.pressSequentially('Line two');
 
-    await expect(page.getByText('Line one', { exact: false })).not.toBeVisible({ timeout: 1000 });
+    await expect(textarea).toHaveValue('Line one\nLine two');
 
     await page.getByRole('button', { name: 'Send' }).click();
 
