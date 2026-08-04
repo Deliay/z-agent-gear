@@ -9,6 +9,7 @@ const mcpServerSchema = new mongoose.Schema(
     enabled: { type: Boolean, default: true },
     command: { type: String },
     url: { type: String },
+    hostname: { type: String },
     headersEncrypted: { type: Object },
     proxyConnectionId: { type: String, index: true },
     status: { type: String, enum: ['active', 'offline', 'disabled'], default: 'active' },
