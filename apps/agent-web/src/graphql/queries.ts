@@ -318,8 +318,17 @@ export const GET_MCP_SERVERS = gql`
       id
       name
       transport
+      source
+      enabled
       command
+      url
+      hostname
       status
+      tools {
+        name
+        description
+      }
+      toolsSyncedAt
       lastHeartbeatAt
       createdAt
       updatedAt
@@ -370,8 +379,17 @@ export const GET_MCP_SERVER = gql`
       id
       name
       transport
+      source
+      enabled
       command
+      url
+      hostname
       status
+      tools {
+        name
+        description
+      }
+      toolsSyncedAt
       lastHeartbeatAt
       createdAt
       updatedAt
