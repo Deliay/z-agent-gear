@@ -16,6 +16,7 @@ import { githubRouter } from './routes/github.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
+import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 
 const app = express();
@@ -54,7 +55,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001, migration002]);
+    await runMigrations([migration001, migration002, migration003]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }
