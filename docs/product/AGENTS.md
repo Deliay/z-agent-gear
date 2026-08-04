@@ -109,6 +109,10 @@ flowchart LR
 
 ## 相关文档
 
+### 已审文档（`reviewed/`）
+
+- [[reviewed/20260803-acp-v1-completion.md]] — ACP v1 协议补全与展示优化
+
 ### 已发布文档（`released/`）
 
 - [[released/20260517-agent-controller-v1.md]] — Agent 控制器管理 v1
@@ -136,3 +140,8 @@ flowchart LR
 - [[released/20260529-dark-mode.md]] — 黑暗模式
 - [[released/20260530-mcp-proxy-config.md]] — MCP 代理服务配置
 - [[released/20260705-acp-server-extend.md]] — ACP Server 支持扩展
+- [[released/20260707-unified-gateway.md]] — 统一网关功能
+- [[released/20260709-github-account-binding.md]] — GitHub 帐号绑定
+- [[released/20260721-acp-server-mimo-kimi.md]] — ACP Server 支持 MiMo Code / Kimi Code CLI
+- [[released/20260721-frontend-design-overhaul.md]] — 整体前端设计优化
+- [[released/20260723-session-scroll-loading.md]] — Session 对话滚动加载

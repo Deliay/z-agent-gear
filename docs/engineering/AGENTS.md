@@ -171,3 +171,31 @@ flowchart LR
 - [[proposals/20260705-feat-acp-server-extend.md]] — ACP Server 支持扩展
 - [[proposals/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化（设计语言升级与视觉重构）
 - [[proposals/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化
+
+### 实现计划（`plan/`）
+
+- [[plan/20260522-feat-available-models-and-mode-switch.md]] — 可用模型与模式切换实现计划
+- [[plan/20260522-feat-local-controller-config-page.md]] — 本地控制器配置页实现计划
+- [[plan/20260523-feat-git-worktree-support.md]] — Git Worktree 支持实现计划
+- [[plan/20260523-feat-workspace-git-support.md]] — 工作区 Git 支持实现计划
+- [[plan/20260524-feat-session-message-history-optimization.md]] — 会话消息历史优化实现计划
+- [[plan/20260526-feat-multi-acp-server-support.md]] — 多 ACP Server 支持实现计划
+- [[plan/20260526-fix-acceptance-session-state.md]] — 验收 Session 状态修复实现计划
+- [[plan/20260526-plan-ui-optimization.md]] — UI 优化一期实现计划
+- [[plan/20260526-plan-ui-optimization-phase2.md]] — UI 优化二期实现计划
+- [[plan/20260527-feat-port-forwarding.md]] — 本地 Agent 控制器端口转发实现计划
+- [[plan/20260527-fix-acp-server-windows-launch.md]] — ACP Server Windows 启动修复实现计划
+- [[plan/20260527-mobile-layout.md]] — 移动端布局实现计划
+- [[plan/20260527-unified-agent-status.md]] — 统一 Agent 状态实现计划
+- [[plan/20260528-feat-acp-permission-reminder.md]] — ACP 授权提醒实现计划
+- [[plan/20260528-plan-ui-optimization-phase3.md]] — UI 优化三期实现计划
+- [[plan/20260529-command-mode-implementation.md]] — 命令模式实现计划
+- [[plan/20260529-feat-dark-mode.md]] — 黑暗模式实现计划
+- [[plan/20260530-feat-mcp-proxy-config.md]] — MCP 代理服务配置实现计划
+- [[plan/20260707-feat-unified-gateway.md]] — 统一网关实现计划
+- [[plan/20260709-feat-github-account-binding.md]] — GitHub 帐号绑定实现计划
+- [[plan/20260710-fix-gateway-dual-auth.md]] — 网关双重认证修复实现计划
+- [[plan/20260721-feat-acp-mimo-kimi.md]] — ACP Server 支持 MiMo Code / Kimi Code CLI 实现计划
+- [[plan/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化实现计划
+- [[plan/20260723-feat-session-scroll-loading.md]] — Session 对话滚动加载实现计划
+- [[plan/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化实现计划
