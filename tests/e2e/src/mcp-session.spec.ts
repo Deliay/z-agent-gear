@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerUser, createControllerKey, registerController, createWorkspace } from './helpers.js';
+import { registerUser, createControllerKey, registerController, createWorkspace, loginViaUI } from './helpers.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -30,8 +30,6 @@ async function registerMcpProxy(page: import('@playwright/test').Page, token: st
 test.describe('MCP Session Integration (register → directory → select → create)', () => {
   test('registered proxy appears in MCP 目录 and can be selected in session creation', async ({ page }) => {
     const { token, username } = await registerUser(page);
-    await page.goto('/');
-    await page.evaluate((t) => localStorage.setItem('token', t), token);
 
     // Create a controller key and register a fake controller
     const { rawKey } = await createControllerKey(page, token);
@@ -54,6 +52,7 @@ test.describe('MCP Session Integration (register → directory → select → cr
     expect(reg.serverId).toBeDefined();
 
     // Directory page should list the registered server
+    await loginViaUI(page, username);
     await page.goto('/settings');
     await expect(page.getByText('MCP 目录', { exact: true })).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('e2e-everything-mcp')).toBeVisible({ timeout: 10000 });
