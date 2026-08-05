@@ -60,6 +60,19 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
   }));
 }
 
+// Sanitized, token-free summary of the MCP servers about to be sent to the
+// agent, so launch failures are diagnosable from local logs alone.
+function describeMcpServersForLog(servers: acp.McpServer[]): string {
+  if (servers.length === 0) return 'none';
+  return servers.map((s) => {
+    if ('url' in s) {
+      const headerNames = (s.headers ?? []).map((h) => h.name).join('+');
+      return `${s.name}(type=${(s as { type?: string }).type ?? 'http'}, url=${s.url}${headerNames ? `, headers=${headerNames}` : ''})`;
+    }
+    return `${s.name}(type=stdio, cmd=${(s as { command?: string }).command})`;
+  }).join(' ');
+}
+
 function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
   // Fail loudly with a diagnosable message instead of a raw TypeError when the
   // upstream payload drifts from the contract (serverNames is required).
@@ -194,6 +207,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private authMethods: AcpAuthMethodData[] = [];
   private supportsAdditionalDirectories = false;
   private agentProtocolVersion: number | null = null;
+  private agentMcpCapabilities: { http?: boolean | null; sse?: boolean | null } | null = null;
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -213,6 +227,20 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     return toMcpServers(this.mcpServers);
   }
 
+  // Log the MCP configuration that is about to be handed to the agent via
+  // session/new (or session/resume), and warn when the agent did not
+  // advertise the required MCP transport capability in initialize.
+  private logMcpServersForSession(method: 'session/new' | 'session/resume', servers: acp.McpServer[]): void {
+    console.log(`[ACP bridge] session ${this.sessionId}: passing MCP servers via ${method}: ${describeMcpServersForLog(servers)}`);
+    const httpServers = servers.filter((s) => 'url' in s && (s as { type?: string }).type === 'http');
+    if (httpServers.length > 0 && this.agentMcpCapabilities && this.agentMcpCapabilities.http === false) {
+      console.warn(
+        `[ACP bridge] session ${this.sessionId}: agent did not advertise mcpCapabilities.http ` +
+        `but ${httpServers.length} http MCP server(s) are being passed: ${httpServers.map((s) => s.name).join(', ')}`,
+      );
+    }
+  }
+
   async start(): Promise<void> {
     if (this.initializing) return;
     this.initializing = true;
@@ -220,9 +248,11 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.spawner.start();
     try {
       await this.initConnection();
+      const mcpServers = this.resolveMcpServers();
+      this.logMcpServersForSession('session/new', mcpServers);
       const result = await this.connection!.newSession({
         cwd: this.cwd,
-        mcpServers: this.resolveMcpServers(),
+        mcpServers,
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = result.sessionId;
@@ -243,10 +273,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.spawner.start();
     try {
       await this.initConnection();
+      const mcpServers = this.resolveMcpServers();
+      this.logMcpServersForSession('session/resume', mcpServers);
       const result = await this.connection!.resumeSession({
         sessionId: externalSessionId,
         cwd: this.cwd,
-        mcpServers: this.resolveMcpServers(),
+        mcpServers,
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = externalSessionId;
@@ -458,6 +490,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       ? { name: result.agentInfo.name, version: result.agentInfo.version ?? null }
       : null;
     this.authMethods = toAuthMethods(result.authMethods);
+    this.agentMcpCapabilities = result.agentCapabilities?.mcpCapabilities ?? null;
+    console.log(
+      `[ACP bridge] session ${this.sessionId}: agent capabilities: ` +
+      `protocolVersion=${result.protocolVersion ?? 'n/a'} mcp=${JSON.stringify(this.agentMcpCapabilities)} ` +
+      `agent=${this.agentInfo ? `${this.agentInfo.name}@${this.agentInfo.version ?? 'n/a'}` : 'n/a'}`,
+    );
     this.supportsAdditionalDirectories =
       result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== undefined &&
       result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== null;
