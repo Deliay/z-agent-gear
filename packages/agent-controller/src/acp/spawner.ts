@@ -29,7 +29,7 @@ export class AcpSpawner {
 
   start(): void {
     const cmd = this.resolveCommand();
-    console.log(`Starting ACP server ${cmd}`)
+    console.log(`Starting ACP server: session=${this.sessionId} cmd=${cmd} args=${JSON.stringify(this.args)} cwd=${this.cwd}`);
     mkdirSync(this.cwd, { recursive: true });
 
     const spawnOptions: SpawnOptions = {
@@ -43,17 +43,17 @@ export class AcpSpawner {
     this.process = spawn(cmd, this.args, spawnOptions);
 
     this.process.stderr?.on('data', (data: Buffer) => {
-      console.error(`ACP stderr: ${data.toString()}`);
+      console.error(`ACP stderr (session=${this.sessionId}): ${data.toString()}`);
     });
 
     this.process.on('exit', (code, signal) => {
-      console.log(`ACP process exited with code ${code} and signal ${signal}`);
+      console.log(`ACP process exited: session=${this.sessionId} code=${code} signal=${signal} cmd=${cmd} args=${JSON.stringify(this.args)}`);
       this.process = null;
       this.resolveClosed?.();
     });
 
     this.process.on('error', (error) => {
-      console.error('ACP process error:', error);
+      console.error(`ACP process error (session=${this.sessionId}, cmd=${cmd}):`, error);
     });
   }
 

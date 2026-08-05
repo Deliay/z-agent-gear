@@ -68,7 +68,34 @@ describe('AcpSpawner', () => {
       spawner.start();
       const stderr = mockProcess.stderr as Readable;
       stderr.emit('data', Buffer.from('some warning\n'));
-      expect(consoleErrorSpy).toHaveBeenCalledWith('ACP stderr: some warning\n');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('ACP stderr (session=sess-1): some warning\n');
+    });
+
+    it('should log resolved command, args and cwd on start', () => {
+      const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      spawner.start();
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        'Starting ACP server: session=sess-1 cmd=/usr/bin/opencode args=["acp"] cwd=/tmp/project',
+      );
+    });
+
+    it('should log exit code, signal and spawn params on process exit', () => {
+      const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      spawner.start();
+      mockProcess.emit('exit', 1, null);
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        'ACP process exited: session=sess-1 code=1 signal=null cmd=/usr/bin/opencode args=["acp"]',
+      );
+    });
+
+    it('should log process error with session and command', () => {
+      spawner.start();
+      const error = new Error('spawn opencode ENOENT');
+      mockProcess.emit('error', error);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'ACP process error (session=sess-1, cmd=/usr/bin/opencode):',
+        error,
+      );
     });
 
     it('should resolve closed on process exit', async () => {

@@ -57,6 +57,19 @@ interface AcpMessagePayload {
   message: { type: string; content: string; attachments?: Array<Record<string, unknown>> };
 }
 
+// Summarize the MCP configuration of an acp:start/acp:resume payload for logs,
+// without leaking the endpoint token.
+function describeMcpConfig(data: { mcpServers?: unknown[]; mcpEndpoint?: { url: string; serverNames?: string[] } }): string {
+  const parts: string[] = [];
+  if (data.mcpServers && data.mcpServers.length > 0) {
+    parts.push(`mcpServers=${data.mcpServers.length}`);
+  }
+  if (data.mcpEndpoint) {
+    parts.push(`mcpEndpoint(url=${data.mcpEndpoint.url}, serverNames=${JSON.stringify(data.mcpEndpoint.serverNames ?? null)})`);
+  }
+  return parts.length > 0 ? `mcp=[${parts.join(' ')}]` : 'mcp=[none]';
+}
+
 interface AcpCancelPayload {
   sessionId: string;
 }
@@ -246,7 +259,7 @@ export function connectToServer(
   });
 
   socket.on('acp:start', async (data: AcpStartPayload) => {
-    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd}`);
+    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
 
     try {
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
@@ -295,7 +308,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
-        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false`);
+        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -321,7 +334,7 @@ export function connectToServer(
   });
 
   socket.on('acp:resume', async (data: AcpResumePayload) => {
-    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId}`);
+    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
 
     try {
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
@@ -364,6 +377,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
+        console.log(`[ACP ctrl] emitting acp:resume:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:resume:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,

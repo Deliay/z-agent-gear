@@ -54,6 +54,9 @@ describe('McpEndpointService', () => {
       expect(result.url).toBe('http://localhost:10001/mcp/session-1');
       expect(typeof result.token).toBe('string');
       expect(result.token.length).toBeGreaterThan(0);
+      // agent-controller needs serverNames to assemble per-server MCP URLs
+      // (see contracts/agent-session-websocket.md: mcpEndpoint.serverNames is required)
+      expect(result.serverNames).toEqual(['github-mcp', 'database-mcp']);
 
       const payload = jwt.decode(result.token) as { sessionId: string; userId: string; serverNames: string[] };
       expect(payload.sessionId).toBe('session-1');

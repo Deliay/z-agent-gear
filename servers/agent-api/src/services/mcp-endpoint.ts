@@ -7,12 +7,18 @@ import { getRedisClient } from '../middleware/redis.js';
 
 const SALT_ROUNDS = 10;
 
+export interface McpEndpointInfo {
+  url: string;
+  token: string;
+  serverNames: string[];
+}
+
 export class McpEndpointService {
   async createEndpoint(
     sessionId: string,
     userId: string,
     mcpServerIds: string[],
-  ): Promise<{ url: string; token: string }> {
+  ): Promise<McpEndpointInfo> {
     const servers = await McpServer.find({ _id: { $in: mcpServerIds }, userId, enabled: true });
     if (servers.length !== mcpServerIds.length) {
       throw new Error('SERVER_NOT_FOUND');
@@ -48,6 +54,7 @@ export class McpEndpointService {
     return {
       url: `${config.gatewayUrl}/mcp/${sessionId}`,
       token,
+      serverNames,
     };
   }
 
@@ -62,7 +69,7 @@ export class McpEndpointService {
     await redis.set(`mcp:endpoint:${sessionId}`, 'revoked', 'EX', config.mcpEndpointTokenTtl);
   }
 
-  async reissueEndpoint(sessionId: string, userId: string): Promise<{ url: string; token: string } | null> {
+  async reissueEndpoint(sessionId: string, userId: string): Promise<McpEndpointInfo | null> {
     const endpoint = await McpSessionEndpoint.findOne({ sessionId }).lean();
     if (!endpoint || !endpoint.mcpServerIds || endpoint.mcpServerIds.length === 0) {
       return null;
