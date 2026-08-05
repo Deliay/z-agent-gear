@@ -267,4 +267,43 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
       ],
     }));
   });
+
+  it('should fail with a diagnosable error when mcpEndpoint.serverNames is missing', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'tok-1',
+      // simulate an upstream payload that drifts from the contract
+      serverNames: undefined as never,
+    });
+
+    await bridge.start();
+
+    expect(mockNewSession).not.toHaveBeenCalled();
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', expect.objectContaining({
+      sessionId: 'sess-1',
+      reason: 'error',
+      error: expect.stringContaining('serverNames'),
+    }));
+    // the failure must be visible in local logs, not only via socket events
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('serverNames'));
+    expect(mockSpawner.stop).toHaveBeenCalled();
+  });
+
+  it('should fail with a diagnosable error when mcpEndpoint.serverNames is empty', async () => {
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'tok-1',
+      serverNames: [],
+    });
+
+    await bridge.start();
+
+    expect(mockNewSession).not.toHaveBeenCalled();
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', expect.objectContaining({
+      sessionId: 'sess-1',
+      reason: 'error',
+      error: expect.stringContaining('serverNames'),
+    }));
+  });
 });

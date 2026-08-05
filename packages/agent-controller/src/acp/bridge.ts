@@ -61,6 +61,14 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
 }
 
 function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
+  // Fail loudly with a diagnosable message instead of a raw TypeError when the
+  // upstream payload drifts from the contract (serverNames is required).
+  if (!Array.isArray(mcpEndpoint.serverNames) || mcpEndpoint.serverNames.length === 0) {
+    throw new Error(
+      `Invalid mcpEndpoint payload: "serverNames" must be a non-empty array ` +
+      `(received: ${JSON.stringify(mcpEndpoint.serverNames)}, url: ${mcpEndpoint.url})`,
+    );
+  }
   const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
   // Each assembled server gets its own URL so the entry point can route
   // standard MCP clients (which never send a serverName param) correctly.
@@ -636,14 +644,17 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   private emitStopped(reason: string, exitCode?: number): void {
+    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}`);
     this.stopped = true;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }
 
   private handleError(error: unknown): void {
-    this.stopped = true;
     const msg = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error(`[ACP bridge] session ${this.sessionId} failed: ${msg}${stack ? `\n${stack}` : ''}`);
+    this.stopped = true;
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
       reason: 'error',

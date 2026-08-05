@@ -58,6 +58,15 @@ test.describe('MCP Session Integration (register → directory → select → cr
     await expect(page.getByText('e2e-everything-mcp')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('代理注册')).toBeVisible({ timeout: 10000 });
 
+    // Listen for acp:start on the fake controller BEFORE creating the session
+    const acpStart = new Promise<{ requestId: string; sessionId: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] } }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timeout waiting for acp:start')), 10000);
+      controller.socket.once('acp:start', (data) => {
+        clearTimeout(timer);
+        resolve(data);
+      });
+    });
+
     // Create session via GraphQL with mcpServerIds selected
     const createRes = await gqlRequest(page, `
       mutation CreateSession($input: CreateSessionInput!) {
@@ -73,6 +82,16 @@ test.describe('MCP Session Integration (register → directory → select → cr
     }, token);
     const createData = await createRes.json();
     expect(createData.data.createSession.session.id).toBeDefined();
+
+    // The agent-controller receives acp:start with a complete mcpEndpoint
+    // (url + token + serverNames); a missing serverNames field previously
+    // crashed the agent bridge with an undiagnosable TypeError.
+    const startData = await acpStart;
+    expect(startData.sessionId).toBe(createData.data.createSession.session.id);
+    expect(startData.mcpEndpoint).toBeDefined();
+    expect(startData.mcpEndpoint!.url).toContain(`/mcp/${startData.sessionId}`);
+    expect(startData.mcpEndpoint!.token).toBeTruthy();
+    expect(startData.mcpEndpoint!.serverNames).toEqual(['e2e-everything-mcp']);
 
     controller.disconnect();
   });
