@@ -109,16 +109,16 @@
 | `serverType` | `string` | 是 | ACP Server 类型（`opencode`） |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `mcpServers` | `McpServerConfig[]` | 否 | MCP Server 配置（预留） |
-| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息 |
+| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息（仅用户勾选装配 MCP 时携带） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径，Agent 支持 `session.additionalDirectories` 时使用） |
 
 **McpEndpoint 结构：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | `string` | 是 | 转发端点 URL |
-| `token` | `string` | 是 | Bearer Token |
-| `serverNames` | `string[]` | 是 | MCP Server 名称列表 |
+| `url` | `string` | 是 | 统一网关转发端点基础 URL（`GATEWAY_URL/mcp/{sessionId}`，指向 agent-api 入口）；agent-controller 为每个装配的 server 追加 `/{serverName}` 构成独立端点 |
+| `token` | `string` | 是 | Bearer Token（会话级 JWT，会话关闭即吊销） |
+| `serverNames` | `string[]` | 是 | MCP Server 名称列表（签发时快照） |
 
 **McpServerConfig 结构（预留）：**
 

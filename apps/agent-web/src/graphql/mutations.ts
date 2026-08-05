@@ -383,3 +383,14 @@ export const UPDATE_GLOBAL_PERMISSION_TIMEOUT = gql`
     updateGlobalPermissionTimeout(timeoutAction: $timeoutAction)
   }
 `
+
+export const SET_MCP_SERVER_ENABLED = gql`
+  mutation SetMcpServerEnabled($id: ID!, $enabled: Boolean!) {
+    setMcpServerEnabled(id: $id, enabled: $enabled) {
+      id
+      name
+      enabled
+      status
+    }
+  }
+`

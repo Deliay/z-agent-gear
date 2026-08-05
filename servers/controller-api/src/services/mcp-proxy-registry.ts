@@ -1,7 +1,12 @@
+import crypto from 'crypto';
+import type { Redis } from 'ioredis';
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import bcrypt from 'bcryptjs';
 import { McpServer } from '../models/mcp-server.js';
 import { McpProxyKey } from '../models/mcp-proxy-key.js';
+import { getRedisClient } from '../middleware/redis.js';
+
+const OWNER_TTL_SECONDS = 45;
 
 interface ProxyConnection {
   socket: Socket;
@@ -12,9 +17,21 @@ interface ProxyConnection {
 
 export class McpProxyRegistry {
   private connections: Map<string, ProxyConnection> = new Map();
-  private pendingRequests: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void; timeout: NodeJS.Timeout }> = new Map();
+  private pendingRequests: Map<string, { proxyId: string; resolve: (value: any) => void; reject: (reason: any) => void; timeout: NodeJS.Timeout }> = new Map();
+  readonly instanceId: string = crypto.randomUUID();
 
-  constructor(private io: SocketIOServer) {}
+  constructor(
+    private io: SocketIOServer,
+    private redis: Redis = getRedisClient(),
+  ) {}
+
+  private async setOwner(serverId: string): Promise<void> {
+    await this.redis.set(`mcp:proxy:owner:${serverId}`, this.instanceId, 'EX', OWNER_TTL_SECONDS);
+  }
+
+  private async clearOwner(serverId: string): Promise<void> {
+    await this.redis.del(`mcp:proxy:owner:${serverId}`);
+  }
 
   async register(
     rawKey: string,
@@ -81,6 +98,7 @@ export class McpProxyRegistry {
           command: (server as any).command as string,
         });
 
+        await this.setOwner(serverId);
         socket.emit('proxy:registered', { proxyId, serverId });
       });
 
@@ -88,6 +106,7 @@ export class McpProxyRegistry {
         const conn = this.connections.get(data.proxyId);
         if (conn) {
           await McpServer.findByIdAndUpdate(conn.serverId, { lastHeartbeatAt: new Date() });
+          await this.setOwner(conn.serverId);
         }
       });
 
@@ -128,7 +147,7 @@ export class McpProxyRegistry {
         reject(new Error('Request timeout'));
       }, 30000);
 
-      this.pendingRequests.set(requestId, { resolve, reject, timeout });
+      this.pendingRequests.set(requestId, { proxyId, resolve, reject, timeout });
       conn.socket.emit('proxy:request', { requestId, request });
     });
   }
@@ -137,10 +156,13 @@ export class McpProxyRegistry {
     const conn = this.connections.get(proxyId);
     if (conn) {
       await McpServer.findByIdAndUpdate(conn.serverId, { status: 'offline', proxyConnectionId: null });
+      await this.clearOwner(conn.serverId);
       this.connections.delete(proxyId);
       
-      // Clean up any pending requests for this proxy
+      // Clean up pending requests owned by this proxy only — rejecting every
+      // in-flight request would break other proxies on the same replica.
       for (const [requestId, pending] of this.pendingRequests.entries()) {
+        if (pending.proxyId !== proxyId) continue;
         clearTimeout(pending.timeout);
         pending.reject(new Error('Proxy disconnected'));
         this.pendingRequests.delete(requestId);
@@ -152,6 +174,8 @@ export class McpProxyRegistry {
     const proxyId = `proxy_${serverId}`;
     return this.connections.get(proxyId);
   }
-}
 
-export const mcpProxyRegistry = new McpProxyRegistry(null as any);
+  hasActiveProxy(serverId: string): boolean {
+    return this.getActiveProxy(serverId) !== undefined;
+  }
+}

@@ -170,6 +170,7 @@ export const sessionTypeDefs = `#graphql
     workspaceId: ID!
     enableWorktree: Boolean = false
     worktreeBranchSuffix: String
+    mcpServerIds: [ID!]
   }
 
   extend type Query {

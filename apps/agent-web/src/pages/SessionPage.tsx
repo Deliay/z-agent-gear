@@ -220,7 +220,7 @@ export default function SessionPage() {
     return () => clearTimeout(timeout);
   }, [resuming]);
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string) => {
+  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[]) => {
     try {
       const { data } = await createSession({
         variables: {
@@ -230,6 +230,7 @@ export default function SessionPage() {
             workspaceId,
             enableWorktree: enableWorktree || false,
             worktreeBranchSuffix: worktreeBranchSuffix || null,
+            mcpServerIds: mcpServerIds || null,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],

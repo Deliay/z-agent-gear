@@ -109,6 +109,10 @@ flowchart LR
 
 ## 相关文档
 
+### 草稿文档（`draft/`）
+
+- [[draft/20260804-integrated-mcp-registry.md]] — 集成式 MCP 注册中心
+
 ### 已发布文档（`released/`）
 
 - [[released/20260517-agent-controller-v1.md]] — Agent 控制器管理 v1

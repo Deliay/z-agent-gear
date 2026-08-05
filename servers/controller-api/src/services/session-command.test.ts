@@ -20,6 +20,10 @@ vi.mock('./acp-session-manager.js', () => ({
   acpSessionManager: {
     setMode: vi.fn(),
     setModel: vi.fn(),
+    startSession: vi.fn().mockResolvedValue({ success: true }),
+    cancelGeneration: vi.fn(),
+    stopSession: vi.fn(),
+    setConfigOption: vi.fn(),
   },
 }));
 
@@ -103,6 +107,89 @@ beforeEach(() => {
 });
 
 describe('SessionCommandService', () => {
+  describe('acp:start command', () => {
+    beforeEach(() => {
+      const mockController = {
+        _id: 'ctrl-1',
+        keyId: { toString: () => 'key-1' },
+        userId: { toString: () => 'user-1' },
+      };
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockController),
+      } as never);
+    });
+
+    it('should pass mcpEndpoint through to acpSessionManager.startSession', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      const socket = { id: 'socket-1', emit: vi.fn() };
+      io.sockets.sockets.set('socket-1', socket as never);
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:start',
+        sessionId: 'sess-1',
+        controllerId: 'ctrl-1',
+        serverType: 'opencode',
+        cwd: '/home/user',
+        mcpEndpoint,
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionManager.startSession).toHaveBeenCalledWith(
+          socket,
+          'sess-1',
+          'ctrl-1',
+          'user-1',
+          'opencode',
+          '/home/user',
+          mcpEndpoint,
+        );
+      });
+    });
+
+    it('should call startSession without mcpEndpoint when absent', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      const socket = { id: 'socket-1', emit: vi.fn() };
+      io.sockets.sockets.set('socket-1', socket as never);
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:start',
+        sessionId: 'sess-1',
+        controllerId: 'ctrl-1',
+        serverType: 'opencode',
+        cwd: '/home/user',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionManager.startSession).toHaveBeenCalledWith(
+          socket,
+          'sess-1',
+          'ctrl-1',
+          'user-1',
+          'opencode',
+          '/home/user',
+          undefined,
+        );
+      });
+    });
+  });
+
   describe('acp:list-sessions command', () => {
     beforeEach(() => {
       const mockController = {

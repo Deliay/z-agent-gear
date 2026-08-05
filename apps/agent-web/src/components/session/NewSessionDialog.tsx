@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useLazyQuery } from '@apollo/client/react';
-import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO } from '../../graphql/queries';
+import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO, GET_MCP_SERVERS } from '../../graphql/queries';
 import type { ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
 import {
   Select as SelectRoot,
@@ -24,10 +24,23 @@ interface AcpCapability {
   version?: string;
 }
 
+interface McpServer {
+  id: string;
+  name: string;
+  transport: string;
+  source: string;
+  enabled: boolean;
+  status: string;
+}
+
+interface GetMcpServersData {
+  mcpServers: McpServer[];
+}
+
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string) => void;
+  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[]) => void;
 }
 
 export default function NewSessionDialog({ controllers, onClose, onCreate }: NewSessionDialogProps) {
@@ -37,11 +50,20 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [enableWorktree, setEnableWorktree] = useState(false);
   const [branchSuffix, setBranchSuffix] = useState('');
+  const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([]);
+  const [mcpSearch, setMcpSearch] = useState('');
   const [detectGitRepo] = useLazyQuery<{ detectGitRepo: GitRepoInfoData }>(DETECT_GIT_REPO, {
     fetchPolicy: 'network-only',
   });
 
   const onlineControllers = controllers.filter((c) => c.status === 'online');
+
+  const { data: mcpData } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
+
+  const enabledMcpServers = (mcpData?.mcpServers ?? []).filter((s) => s.enabled);
+  const filteredMcpServers = mcpSearch
+    ? enabledMcpServers.filter((s) => s.name.toLowerCase().includes(mcpSearch.toLowerCase()))
+    : enabledMcpServers;
 
   const { data: acpData, loading: acpLoading } = useQuery<{ acpCapabilities: AcpCapability[] }>(
     GET_ACP_CAPABILITIES,
@@ -99,7 +121,14 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedController && selectedAcpServer && selectedWorkspace) {
-      onCreate(selectedController, selectedAcpServer, selectedWorkspace, enableWorktree, enableWorktree ? branchSuffix : undefined);
+      onCreate(
+        selectedController,
+        selectedAcpServer,
+        selectedWorkspace,
+        enableWorktree,
+        enableWorktree ? branchSuffix : undefined,
+        selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+      );
       onClose();
     }
   };
@@ -243,6 +272,51 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                   />
                 </div>
               )}
+            </div>
+          )}
+
+          {selectedController && enabledMcpServers.length > 0 && (
+            <div className="mb-6">
+              <label className="mb-2 block text-sm font-medium text-card-foreground">
+                MCP 服务（可选，默认不装配）
+              </label>
+              <div className="rounded-md border border-border p-3">
+                {enabledMcpServers.length > 8 && (
+                  <input
+                    type="text"
+                    value={mcpSearch}
+                    onChange={(e) => setMcpSearch(e.target.value)}
+                    className="mb-2 w-full rounded-md border px-2 py-1.5 text-sm text-foreground"
+                    placeholder="搜索 MCP 服务"
+                  />
+                )}
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {filteredMcpServers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">无匹配的 MCP 服务</p>
+                  ) : (
+                    filteredMcpServers.map((server) => (
+                      <label key={server.id} className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedMcpServerIds.includes(server.id)}
+                          onChange={(e) => {
+                            setSelectedMcpServerIds((prev) =>
+                              e.target.checked
+                                ? [...prev, server.id]
+                                : prev.filter((id) => id !== server.id),
+                            );
+                          }}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-sm text-foreground">{server.name}</span>
+                        {server.source === 'platform' && (
+                          <span className="text-xs text-muted-foreground">平台内置</span>
+                        )}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
