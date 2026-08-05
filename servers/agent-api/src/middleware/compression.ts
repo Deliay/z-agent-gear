@@ -15,9 +15,13 @@ export function compressionMiddleware(): express.RequestHandler {
     const contentEncoding = useBrotli ? 'br' : 'gzip';
     const createCompressor = () => (useBrotli ? createBrotliCompress() : createGzip());
 
+    // Only compress actual SSE streams. NOTE: the request's Accept header
+    // must NOT be used for this decision — MCP Streamable HTTP clients send
+    // `Accept: application/json, text/event-stream` on ordinary JSON-RPC
+    // POSTs, and compressing those one-shot responses truncated the gzip
+    // stream (stale Content-Length), which hung MCP client handshakes.
     const isSSE =
       req.path.includes('/stream') ||
-      (req.headers.accept ?? '').includes('text/event-stream') ||
       res.getHeader('Content-Type') === 'text/event-stream';
 
     if (!isSSE) {

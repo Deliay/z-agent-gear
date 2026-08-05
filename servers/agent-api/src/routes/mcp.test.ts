@@ -298,4 +298,34 @@ describe('MCP HTTP Entry', () => {
     expect(body.error.code).toBe('FORWARD_ERROR');
     expect(body.error.message).toBe('unexpected boom');
   });
+
+  it('should answer JSON-RPC notifications with 202 immediately and forward fire-and-forget', async () => {
+    vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
+    vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+    vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
+    vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
+    // the forward chain NEVER resolves for a notification (MCP servers do not
+    // respond to them) — the entry point must not wait on it
+    vi.mocked(mcpForwarder.request).mockReturnValue(new Promise(() => {}) as never);
+    const notification = { jsonrpc: '2.0', method: 'notifications/initialized' };
+
+    const start = Date.now();
+    const res = await post('/mcp/session-1', notification, 'valid-token');
+
+    expect(Date.now() - start).toBeLessThan(5000);
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe('');
+    // the notification is still delivered to the stdio server (handshake)
+    expect(mcpForwarder.request).toHaveBeenCalledWith({
+      serverId: 'server-1',
+      sessionId: 'session-1',
+      request: notification,
+    });
+  });
+
+  it('should respond 405 to GET (standalone SSE stream not offered)', async () => {
+    const res = await fetch(`${baseUrl}/mcp/session-1/github-mcp`);
+
+    expect(res.status).toBe(405);
+  });
 });
