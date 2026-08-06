@@ -90,6 +90,8 @@
 
 转发 MCP 请求到本地代理。
 
+**注意（notification 语义）：** 当 `request` 为 JSON-RPC notification（无 `id`，如 `notifications/initialized`）时，按 MCP 规范目标 server 不会产生响应。代理必须以 fire-and-forget 方式处理：写入本地命令 stdin 后立即回 `proxy:response`（response 为 `null`），**不得**等待 stdout 响应（否则整条链路将空等至超时）。
+
 **Payload：**
 
 | 字段 | 类型 | 必填 | 说明 |

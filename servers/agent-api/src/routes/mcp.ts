@@ -8,6 +8,26 @@ import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
 
 const router = Router();
 
+// Request-level visibility for the MCP entry: the forward chain spans three
+// processes, so without this the only way to debug onboarding failures is
+// packet capture. Kept to one line per request/response.
+router.use((req, res, next) => {
+  const start = Date.now();
+  let method = '';
+  try {
+    method = (req.body as { method?: string })?.method ?? '';
+  } catch { /* body not parsed yet */ }
+  res.on('finish', () => {
+    console.log(`[MCP entry] ${req.method} ${req.originalUrl} rpc=${method || '-'} -> ${res.statusCode} in ${Date.now() - start}ms`);
+  });
+  res.on('close', () => {
+    if (!res.writableFinished) {
+      console.warn(`[MCP entry] ${req.method} ${req.originalUrl} rpc=${method || '-'} -> connection closed WITHOUT response after ${Date.now() - start}ms`);
+    }
+  });
+  next();
+});
+
 interface McpTokenPayload {
   sessionId?: string;
   userId?: string;
@@ -100,10 +120,27 @@ const mcpEntryHandler = async (req: Request, res: Response) => {
     return;
   }
 
+  // JSON-RPC notifications (no id) get no response per the MCP spec, so the
+  // forward chain must not be waited on: acknowledge immediately with 202
+  // (MCP Streamable HTTP) and deliver the notification fire-and-forget.
+  // Waiting here stalled every notification (e.g. notifications/initialized)
+  // for the full 30s forward timeout, which breaks MCP client handshakes.
+  const isNotification = request.id === undefined || request.id === null;
+  if (isNotification) {
+    mcpForwarder
+      .request({ serverId: server._id.toString(), sessionId, request: req.body })
+      .catch((err: Error) => {
+        console.warn(`[MCP entry] notification forward failed: session=${sessionId} server=${serverName} method=${request.method}: ${err.message}`);
+      });
+    res.status(202).end();
+    return;
+  }
+
   try {
     const result = await mcpForwarder.request({ serverId: server._id.toString(), sessionId, request: req.body });
     res.json(result);
   } catch (err) {
+    console.warn(`[MCP entry] forward failed: session=${sessionId} server=${serverName} method=${request.method} id=${JSON.stringify(request.id)}: ${(err as Error).message}`);
     if (err instanceof ForwardError) {
       jsonRpcError(res, request.id, err.code, err.message);
     } else {
@@ -116,5 +153,14 @@ const mcpEntryHandler = async (req: Request, res: Response) => {
 // shapes explicitly: legacy single endpoint and per-server URL.
 router.post('/:sessionId', mcpEntryHandler);
 router.post('/:sessionId/:serverName', mcpEntryHandler);
+
+// MCP Streamable HTTP allows a standalone SSE stream via GET; this endpoint
+// does not offer one, which per spec is signaled with 405.
+router.get('/:sessionId', (_req, res) => {
+  res.status(405).json({ jsonrpc: '2.0', id: null, error: { code: 'METHOD_NOT_ALLOWED', message: 'SSE stream not supported' } });
+});
+router.get('/:sessionId/:serverName', (_req, res) => {
+  res.status(405).json({ jsonrpc: '2.0', id: null, error: { code: 'METHOD_NOT_ALLOWED', message: 'SSE stream not supported' } });
+});
 
 export const mcpRouter = router;

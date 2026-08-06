@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockNewSession, mockResumeSession, mockClientSideConnection } = vi.hoisted(() => {
+const { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection } = vi.hoisted(() => {
   const mockNewSession = vi.fn().mockResolvedValue({ sessionId: 'acp-sess-abc' });
   const mockResumeSession = vi.fn().mockResolvedValue({});
+  const mockInitialize = vi.fn().mockResolvedValue({ protocolVersion: 1 });
   const mockClientSideConnection = vi.fn(function () {
     return {
-      initialize: vi.fn().mockResolvedValue({ protocolVersion: 1 }),
+      initialize: mockInitialize,
       newSession: mockNewSession,
       resumeSession: mockResumeSession,
       prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
@@ -15,7 +16,7 @@ const { mockNewSession, mockResumeSession, mockClientSideConnection } = vi.hoist
       setSessionConfigOption: vi.fn().mockResolvedValue({}),
     };
   });
-  return { mockNewSession, mockResumeSession, mockClientSideConnection };
+  return { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection };
 });
 
 vi.mock('@agentclientprotocol/sdk', () => ({
@@ -304,6 +305,44 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
       sessionId: 'sess-1',
       reason: 'error',
       error: expect.stringContaining('serverNames'),
+    }));
+  });
+
+  it('should log the MCP servers passed to session/new without leaking the token', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'secret-token',
+      serverNames: ['fluentui-mcp'],
+    });
+
+    await bridge.start();
+
+    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+    const mcpLog = logLines.find((l) => l.includes('passing MCP servers via session/new'));
+    expect(mcpLog).toBeDefined();
+    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://gateway/mcp/sess-1/fluentui-mcp');
+    expect(mcpLog).not.toContain('secret-token');
+  });
+
+  it('should warn when passing http MCP servers to an agent without http MCP capability', async () => {
+    mockInitialize.mockResolvedValueOnce({
+      protocolVersion: 1,
+      agentCapabilities: { mcpCapabilities: { http: false, sse: true } },
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = createBridge({
+      url: 'http://gateway/mcp/sess-1',
+      token: 'tok-1',
+      serverNames: ['fluentui-mcp'],
+    });
+
+    await bridge.start();
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mcpCapabilities.http'));
+    // still passes the servers through — the agent decides
+    expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: [expect.objectContaining({ type: 'http', name: 'fluentui-mcp' })],
     }));
   });
 });

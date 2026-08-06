@@ -42,6 +42,11 @@ paths:
       responses:
         '200':
           description: JSON-RPC 响应
+        '202':
+          description: |
+            JSON-RPC notification（无 id，如 `notifications/initialized`）已被接受。
+            notification 按 MCP 规范转发但不等待响应（fire-and-forget），避免
+            整条转发链路空等超时。
         '401':
           description: 未认证或 endpoint 已吊销（ENDPOINT_REVOKED）
           content:
@@ -50,6 +55,30 @@ paths:
                 $ref: '#/components/schemas/Error'
         '502':
           description: 代理失败（SERVER_OFFLINE / FORWARD_TIMEOUT / FORWARD_ERROR）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      operationId: mcpStandaloneStream
+      summary: MCP standalone SSE stream（不支持）
+      description: |
+        MCP Streamable HTTP 允许客户端通过 GET 打开独立 SSE 流。本端点不提供该能力，
+        按规范返回 405；客户端应继续通过 POST 完成请求-响应。
+      tags:
+        - MCP
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: 会话 ID
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '405':
+          description: SSE stream not supported（METHOD_NOT_ALLOWED）
           content:
             application/json:
               schema:
@@ -83,8 +112,38 @@ paths:
       responses:
         '200':
           description: JSON-RPC 响应（server 未装配 / 不存在 / 离线时返回 JSON-RPC error：SERVER_NOT_FOUND / SERVER_OFFLINE / FORWARD_TIMEOUT / FORWARD_ERROR）
+        '202':
+          description: JSON-RPC notification（无 id）已接受并转发（fire-and-forget）
         '401':
           description: 未认证或 endpoint 已吊销（ENDPOINT_REVOKED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      operationId: mcpStandaloneStreamToServer
+      summary: MCP standalone SSE stream（不支持，返回 405）
+      description: 与 `/mcp/{sessionId}` 的 GET 相同，本端点不提供独立 SSE 流，按规范返回 405。
+      tags:
+        - MCP
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: 会话 ID
+          schema:
+            type: string
+        - name: serverName
+          in: path
+          required: true
+          description: 目标 MCP Server 名称
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '405':
+          description: SSE stream not supported（METHOD_NOT_ALLOWED）
           content:
             application/json:
               schema:
