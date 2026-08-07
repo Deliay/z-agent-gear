@@ -349,11 +349,65 @@ export interface PermissionOptionData {
   kind: string
 }
 
+export interface PermissionToolCallData {
+  toolCallId: string
+  title?: string
+  kind?: string
+  rawInput?: Record<string, unknown>
+  locations?: Array<{ path: string; line?: number }>
+}
+
 export interface PermissionRequestDataFields {
   requestId: string
   sessionId: string
   toolCallId: string
+  toolCall?: PermissionToolCallData
   options: PermissionOptionData[]
+}
+
+export type ElicitationAction = 'accept' | 'decline' | 'cancel'
+
+export interface ElicitationSchemaOneOfOption {
+  const: unknown
+  title?: string
+  description?: string
+}
+
+export interface ElicitationSchemaProperty {
+  type?: string
+  title?: string
+  description?: string
+  enum?: unknown[]
+  oneOf?: ElicitationSchemaOneOfOption[]
+  format?: string
+  minLength?: number
+  maxLength?: number
+  minimum?: number
+  maximum?: number
+  default?: unknown
+  items?: {
+    enum?: unknown[]
+    oneOf?: ElicitationSchemaOneOfOption[]
+  }
+}
+
+export interface ElicitationRequestedSchema {
+  type: 'object'
+  title?: string
+  description?: string
+  properties?: Record<string, ElicitationSchemaProperty>
+  required?: string[]
+}
+
+export interface ElicitationRequestDataFields {
+  requestId: string
+  sessionId: string
+  toolCallId?: string | null
+  mode: 'form' | 'url'
+  message: string
+  requestedSchema?: ElicitationRequestedSchema | null
+  elicitationId?: string | null
+  url?: string | null
 }
 
 export interface TodoItemData {
@@ -364,6 +418,7 @@ export interface TodoItemData {
   description: string | null
   isRead: boolean
   data: PermissionRequestDataFields | null
+  elicitationData?: ElicitationRequestDataFields | null
   createdAt: string
 }
 
@@ -377,6 +432,10 @@ export interface GetUnreadTodoCountQuery {
 
 export interface RespondPermissionMutation {
   respondPermission: boolean
+}
+
+export interface RespondElicitationMutation {
+  respondElicitation: boolean
 }
 
 export interface MarkTodoReadMutation {

@@ -295,11 +295,28 @@ export const GET_TODO_LIST = gql`
         requestId
         sessionId
         toolCallId
+        toolCall {
+          toolCallId
+          title
+          kind
+          rawInput
+          locations
+        }
         options {
           optionId
           name
           kind
         }
+      }
+      elicitationData {
+        requestId
+        sessionId
+        toolCallId
+        mode
+        message
+        requestedSchema
+        elicitationId
+        url
       }
       createdAt
     }
