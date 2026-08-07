@@ -50,6 +50,7 @@ enum TodoPriority {
 
 enum TodoType {
   permission_request
+  elicitation_request
 }
 
 enum PermissionTimeoutAction {
@@ -144,11 +145,45 @@ type PermissionOption {
   kind: PermissionOptionKind!
 }
 
+type PermissionToolCall {
+  toolCallId: String!
+  title: String
+  kind: String
+  rawInput: JSON
+  locations: JSON
+}
+
 type PermissionRequestData {
   requestId: String!
   sessionId: ID!
   toolCallId: String!
+  # 完整工具调用信息（权限提醒展示用，由 ACP ToolCall 聚合提取）
+  toolCall: PermissionToolCall
   options: [PermissionOption!]!
+}
+
+enum ElicitationMode {
+  form
+  url
+}
+
+enum ElicitationAction {
+  accept
+  decline
+  cancel
+}
+
+type ElicitationRequestData {
+  requestId: String!
+  sessionId: ID!
+  toolCallId: String
+  mode: ElicitationMode!
+  message: String!
+  # form 模式：受限 JSON Schema（仅原始类型与枚举）
+  requestedSchema: JSON
+  # url 模式：Agent 侧 Elicitation ID 与目标 URL
+  elicitationId: String
+  url: String
 }
 
 type TodoItem {
@@ -159,6 +194,7 @@ type TodoItem {
   description: String
   isRead: Boolean!
   data: PermissionRequestData
+  elicitationData: ElicitationRequestData
   createdAt: String!
 }
 
@@ -285,7 +321,7 @@ type Mutation {
   deleteHistorySession(sessionId: ID!, syncAgent: Boolean = true): DeleteHistorySessionPayload!
   authenticateAcpSession(sessionId: ID!, methodId: String!, input: JSON): AuthenticateSessionPayload!
   logoutAcpSession(sessionId: ID!): Boolean!
-  respondElicitation(sessionId: ID!, elicitationId: String!, values: JSON): Boolean!
+  respondElicitation(requestId: String!, action: ElicitationAction!, values: JSON): Boolean!
   refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!
   markTodoRead(todoId: ID!): Boolean!

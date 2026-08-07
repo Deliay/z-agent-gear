@@ -4,7 +4,7 @@ const { Schema } = mongoose;
 
 const todoItemSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  type: { type: String, enum: ['permission_request'], required: true },
+  type: { type: String, enum: ['permission_request', 'elicitation_request'], required: true },
   priority: { type: String, enum: ['immediate', 'urgent', 'medium', 'low'], required: true },
   title: { type: String, required: true },
   description: { type: String },
@@ -18,6 +18,23 @@ const todoItemSchema = new Schema({
       name: String,
       kind: String,
     }],
+    toolCall: {
+      toolCallId: String,
+      title: String,
+      kind: String,
+      rawInput: Schema.Types.Mixed,
+      locations: [{ _id: false, path: String, line: Number }],
+    },
+  },
+  elicitationData: {
+    requestId: String,
+    sessionId: Schema.Types.ObjectId,
+    toolCallId: String,
+    mode: { type: String, enum: ['form', 'url'] },
+    message: String,
+    requestedSchema: Schema.Types.Mixed,
+    elicitationId: String,
+    url: String,
   },
   expiresAt: { type: Date },
 }, { timestamps: true });

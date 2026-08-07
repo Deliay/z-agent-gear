@@ -42,4 +42,10 @@ export const resolvers = {
   Model: {
     ...modelResolvers.Model,
   },
+  TodoItem: {
+    ...todoResolvers.TodoItem,
+  },
+  PermissionRequestData: {
+    ...todoResolvers.PermissionRequestData,
+  },
 };

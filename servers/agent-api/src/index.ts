@@ -19,6 +19,7 @@ import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
 import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
+import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
 
 const app = express();
@@ -72,6 +73,10 @@ async function start() {
     // Start permission subscriber
     permissionSubscriberService.start();
     console.log('Permission subscriber started');
+
+    // Start elicitation subscriber
+    elicitationSubscriberService.start();
+    console.log('Elicitation subscriber started');
 
     // Revoke session MCP endpoints when sessions reach a terminal status
     mcpEndpointRevokeSubscriber.start();

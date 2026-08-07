@@ -18,6 +18,7 @@ import { gatewayManager } from './gateway.js';
 const CONTROLLER_VERSION = '1.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
+const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
   const config = acpDetector.getSpawnerConfig(serverType);
@@ -277,6 +278,10 @@ export function connectToServer(
         permissionRequestBridge.set(requestId, bridge);
       });
 
+      bridge.on('elicitation:sent', (requestId: string) => {
+        elicitationRequestBridge.set(requestId, bridge);
+      });
+
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
@@ -349,6 +354,10 @@ export function connectToServer(
 
       bridge.on('permission:sent', (requestId: string) => {
         permissionRequestBridge.set(requestId, bridge);
+      });
+
+      bridge.on('elicitation:sent', (requestId: string) => {
+        elicitationRequestBridge.set(requestId, bridge);
       });
 
       const onInitialized = (payload: Record<string, unknown>) => {
@@ -787,11 +796,24 @@ export function connectToServer(
     }
   });
 
+  socket.on('acp:elicitation:response', (data: {
+    requestId: string;
+    action: 'accept' | 'decline' | 'cancel';
+    content?: Record<string, unknown>;
+  }) => {
+    const bridge = elicitationRequestBridge.get(data.requestId);
+    if (bridge) {
+      elicitationRequestBridge.delete(data.requestId);
+      bridge.handleElicitationResponse(data.requestId, data.action, data.content);
+    }
+  });
+
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     gatewayManager.closeAll();
     permissionRequestBridge.clear();
+    elicitationRequestBridge.clear();
   });
 
   socket.on('connect_error', (err) => {

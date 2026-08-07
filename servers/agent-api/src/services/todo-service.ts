@@ -8,14 +8,37 @@ interface PermissionOption {
   kind: string;
 }
 
+interface PermissionToolCall {
+  toolCallId: string;
+  title?: string;
+  kind?: string;
+  rawInput?: unknown;
+  locations?: Array<{ path: string; line?: number }>;
+}
+
 interface PermissionRequestData {
   requestId: string;
   controllerId: string;
   sessionId: string;
   userId: string;
-  toolCall: { toolCallId: string };
+  toolCall: PermissionToolCall;
   options: PermissionOption[];
 }
+
+interface ElicitationRequestData {
+  requestId: string;
+  controllerId: string;
+  sessionId: string;
+  userId: string;
+  mode: 'form' | 'url';
+  message: string;
+  toolCallId?: string;
+  requestedSchema?: { title?: string } & Record<string, unknown>;
+  elicitationId?: string;
+  url?: string;
+}
+
+const SUMMARY_MAX_LENGTH = 200;
 
 export class TodoService {
   async createPermissionTodo(data: PermissionRequestData): Promise<InstanceType<typeof TodoItem>> {
@@ -23,13 +46,61 @@ export class TodoService {
       userId: data.userId,
       type: 'permission_request',
       priority: 'immediate',
-      title: 'Agent请求权限审批',
-      description: `工具调用 ${data.toolCall.toolCallId} 请求权限`,
+      title: `Agent请求权限：${data.toolCall.title || data.toolCall.toolCallId}`,
+      description: this.summarizeToolCall(data.toolCall),
       data: {
         requestId: data.requestId,
         sessionId: data.sessionId,
         toolCallId: data.toolCall.toolCallId,
+        toolCall: data.toolCall,
         options: data.options,
+      },
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    return todo;
+  }
+
+  private summarizeToolCall(toolCall: PermissionToolCall): string {
+    const rawInput = (toolCall.rawInput ?? {}) as Record<string, unknown>;
+    const parts: string[] = [];
+
+    if (toolCall.kind === 'execute' && typeof rawInput.command === 'string') {
+      parts.push(`执行命令：${rawInput.command}`);
+    } else if (['read', 'edit', 'write', 'delete', 'move'].includes(toolCall.kind ?? '') && typeof rawInput.path === 'string') {
+      parts.push(`操作文件：${rawInput.path}`);
+    }
+
+    if (toolCall.locations && toolCall.locations.length > 0) {
+      parts.push(`涉及位置：${toolCall.locations.map((loc) => loc.path).join('、')}`);
+    }
+
+    if (parts.length === 0) {
+      parts.push(`工具调用 ${toolCall.title || toolCall.toolCallId} 请求权限`);
+    }
+
+    const summary = parts.join('；');
+    return summary.length > SUMMARY_MAX_LENGTH
+      ? `${summary.slice(0, SUMMARY_MAX_LENGTH - 3)}...`
+      : summary;
+  }
+
+  async createElicitationTodo(data: ElicitationRequestData): Promise<InstanceType<typeof TodoItem>> {
+    const todo = await TodoItem.create({
+      userId: data.userId,
+      type: 'elicitation_request',
+      priority: 'immediate',
+      title: `Agent请求输入：${data.mode === 'url' ? '打开链接授权' : (data.requestedSchema?.title || '填写信息')}`,
+      description: data.message,
+      elicitationData: {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        toolCallId: data.toolCallId,
+        mode: data.mode,
+        message: data.message,
+        requestedSchema: data.requestedSchema,
+        elicitationId: data.elicitationId,
+        url: data.url,
       },
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
@@ -65,7 +136,14 @@ export class TodoService {
 
   async markTodoAsResponded(requestId: string): Promise<void> {
     await TodoItem.updateOne(
-      { 'data.requestId': requestId },
+      { $or: [{ 'data.requestId': requestId }, { 'elicitationData.requestId': requestId }] },
+      { $set: { isRead: true } },
+    );
+  }
+
+  async markElicitationCompleted(elicitationId: string): Promise<void> {
+    await TodoItem.updateOne(
+      { 'elicitationData.elicitationId': elicitationId },
       { $set: { isRead: true } },
     );
   }

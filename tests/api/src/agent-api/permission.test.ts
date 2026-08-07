@@ -67,6 +67,13 @@ const GET_TODO_LIST = `
         requestId
         sessionId
         toolCallId
+        toolCall {
+          toolCallId
+          title
+          kind
+          rawInput
+          locations
+        }
         options {
           optionId
           name
@@ -74,6 +81,9 @@ const GET_TODO_LIST = `
         }
       }
       createdAt
+      elicitationData {
+        requestId
+      }
     }
   }
 `;
@@ -308,7 +318,7 @@ describe('ACP Permission Reminder API', () => {
       expect(todo).toBeDefined();
       expect(todo.type).toBe('permission_request');
       expect(todo.priority).toBe('immediate');
-      expect(todo.title).toBe('Agent请求权限审批');
+      expect(todo.title).toBe('Agent请求权限：call_001');
       expect(todo.data.toolCallId).toBe('call_001');
       expect(todo.data.options).toHaveLength(2);
 
@@ -316,6 +326,73 @@ describe('ACP Permission Reminder API', () => {
       const countRes = await gqlRequest(GET_UNREAD_TODO_COUNT, undefined, authToken);
       const countBody = await countRes.json();
       expect(countBody.data.getUnreadTodoCount).toBeGreaterThan(0);
+
+      ctrlClient.disconnect();
+    });
+
+    it('should persist full toolCall details in permission todo', async () => {
+      const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+      const workspaceId = await createWorkspace(ctrlId);
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      ctrlClient.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Send permission request carrying the full ACP ToolCall object
+      const permissionRequestId = `perm_detail_${Date.now()}`;
+      ctrlClient.emit('acp:permission', {
+        requestId: permissionRequestId,
+        sessionId,
+        toolCall: {
+          toolCallId: 'call_detail_001',
+          title: 'Bash: npm test',
+          kind: 'execute',
+          rawInput: { command: 'npm test' },
+          locations: [{ path: 'package.json', line: 12 }],
+        },
+        options: [
+          { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        ],
+      });
+
+      // Wait for todo to be created (poll up to 10 seconds)
+      let todo: any = null;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const todoRes = await gqlRequest(GET_TODO_LIST, undefined, authToken);
+        const todoBody = await todoRes.json();
+        if (todoBody.data?.getTodoList) {
+          todo = todoBody.data.getTodoList.find((t: any) => t.data?.requestId === permissionRequestId);
+          if (todo) break;
+        }
+      }
+
+      expect(todo).toBeDefined();
+      expect(todo.title).toBe('Agent请求权限：Bash: npm test');
+      expect(todo.description).toContain('npm test');
+      expect(todo.data.toolCallId).toBe('call_detail_001');
+      expect(todo.data.toolCall).toBeDefined();
+      expect(todo.data.toolCall.title).toBe('Bash: npm test');
+      expect(todo.data.toolCall.kind).toBe('execute');
+      expect(todo.data.toolCall.rawInput).toEqual({ command: 'npm test' });
+      expect(todo.data.toolCall.locations).toEqual([{ path: 'package.json', line: 12 }]);
+      // 混合列表：权限待办的 elicitationData 必须为 null（Mongoose 空子文档归一化）
+      expect(todo.elicitationData).toBeNull();
 
       ctrlClient.disconnect();
     });

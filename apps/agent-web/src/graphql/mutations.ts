@@ -334,6 +334,12 @@ export const RESPOND_PERMISSION = gql`
   }
 `
 
+export const RESPOND_ELICITATION = gql`
+  mutation RespondElicitation($requestId: String!, $action: ElicitationAction!, $values: JSON) {
+    respondElicitation(requestId: $requestId, action: $action, values: $values)
+  }
+`
+
 export const MARK_TODO_READ = gql`
   mutation MarkTodoRead($todoId: ID!) {
     markTodoRead(todoId: $todoId)

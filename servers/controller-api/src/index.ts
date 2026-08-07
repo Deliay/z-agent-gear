@@ -15,6 +15,7 @@ import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { gatewayRelayService } from './services/gateway-relay.js';
 import { permissionManager } from './services/permission-manager.js';
+import { elicitationManager } from './services/elicitation-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
 import { createMcpProxyKeyRouter } from './routes/mcp-proxy-key.js';
@@ -76,6 +77,7 @@ async function start() {
   fsMkdirService.start(io);
   gatewayRelayService.start(io);
   permissionManager.start(io);
+  elicitationManager.start(io);
 
   disconnectTimer.start();
 
@@ -88,6 +90,7 @@ async function gracefulShutdown() {
   console.log('Shutting down...');
   heartbeatService.stop();
   permissionManager.stop();
+  elicitationManager.stop();
   disconnectTimer.stop();
   mcpForwardConsumer.stop();
   io.close();
