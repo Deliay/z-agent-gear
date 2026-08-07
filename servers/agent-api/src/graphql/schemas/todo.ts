@@ -15,6 +15,7 @@ export const todoTypeDefs = `#graphql
 
   enum TodoType {
     permission_request
+    elicitation_request
   }
 
   enum PermissionTimeoutAction {
@@ -36,11 +37,42 @@ export const todoTypeDefs = `#graphql
     kind: PermissionOptionKind!
   }
 
+  type PermissionToolCall {
+    toolCallId: String!
+    title: String
+    kind: String
+    rawInput: JSON
+    locations: JSON
+  }
+
   type PermissionRequestData {
     requestId: String!
     sessionId: ID!
     toolCallId: String!
+    toolCall: PermissionToolCall
     options: [PermissionOption!]!
+  }
+
+  enum ElicitationMode {
+    form
+    url
+  }
+
+  enum ElicitationAction {
+    accept
+    decline
+    cancel
+  }
+
+  type ElicitationRequestData {
+    requestId: String!
+    sessionId: ID!
+    toolCallId: String
+    mode: ElicitationMode!
+    message: String!
+    requestedSchema: JSON
+    elicitationId: String
+    url: String
   }
 
   type TodoItem {
@@ -51,6 +83,7 @@ export const todoTypeDefs = `#graphql
     description: String
     isRead: Boolean!
     data: PermissionRequestData
+    elicitationData: ElicitationRequestData
     createdAt: String!
   }
 
@@ -61,6 +94,7 @@ export const todoTypeDefs = `#graphql
 
   extend type Mutation {
     respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!
+    respondElicitation(requestId: String!, action: ElicitationAction!, values: JSON): Boolean!
     markTodoRead(todoId: ID!): Boolean!
     markAllTodoRead: Boolean!
     updatePermissionTimeout(sessionId: ID, timeoutAction: PermissionTimeoutAction!): Boolean!

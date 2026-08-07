@@ -39,13 +39,14 @@ function mockTodoDoc(overrides: Record<string, unknown> = {}) {
     userId: oid('user-1'),
     type: 'permission_request',
     priority: 'immediate',
-    title: 'Agent请求权限审批',
+    title: 'Agent请求权限：tc-1',
     description: '工具调用 tc-1 请求权限',
     isRead: false,
     data: {
       requestId: 'req-1',
       sessionId: oid('sess-1'),
       toolCallId: 'tc-1',
+      toolCall: { toolCallId: 'tc-1' },
       options: [{ optionId: 'opt-1', name: '允许一次', kind: 'allow_once' }],
     },
     expiresAt: new Date(Date.now() + 300_000),
@@ -81,16 +82,153 @@ describe('TodoService', () => {
         userId: 'user-1',
         type: 'permission_request',
         priority: 'immediate',
-        title: 'Agent请求权限审批',
+        title: 'Agent请求权限：tc-1',
         description: '工具调用 tc-1 请求权限',
         data: {
           requestId: 'req-1',
           sessionId: 'sess-1',
           toolCallId: 'tc-1',
+          toolCall: { toolCallId: 'tc-1' },
           options: [{ optionId: 'opt-1', name: '允许一次', kind: 'allow_once' }],
         },
       }));
       expect(result).toBe(mockTodo);
+    });
+
+    it('should store the full toolCall in data.toolCall', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      const toolCall = {
+        toolCallId: 'tc-1',
+        title: 'Bash: npm test',
+        kind: 'execute',
+        rawInput: { command: 'npm test' },
+        locations: [{ path: 'package.json', line: 10 }],
+      };
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall,
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          toolCallId: 'tc-1',
+          toolCall,
+        }),
+      }));
+    });
+
+    it('should use toolCall title when present', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: { toolCallId: 'tc-1', title: 'Bash: npm test' },
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Agent请求权限：Bash: npm test',
+      }));
+    });
+
+    it('should fall back to toolCallId when title is missing', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: { toolCallId: 'tc-1', kind: 'think' },
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Agent请求权限：tc-1',
+        description: '工具调用 tc-1 请求权限',
+      }));
+    });
+
+    it('should summarize command for execute tool calls', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: { toolCallId: 'tc-1', kind: 'execute', rawInput: { command: 'npm test' } },
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        description: '执行命令：npm test',
+      }));
+    });
+
+    it('should summarize file path for edit tool calls', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: { toolCallId: 'tc-1', kind: 'edit', rawInput: { path: 'src/index.ts' } },
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        description: '操作文件：src/index.ts',
+      }));
+    });
+
+    it('should list locations in the summary', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: {
+          toolCallId: 'tc-1',
+          kind: 'execute',
+          rawInput: { command: 'npm test' },
+          locations: [{ path: 'a.ts' }, { path: 'b.ts', line: 3 }],
+        },
+        options: [],
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        description: '执行命令：npm test；涉及位置：a.ts、b.ts',
+      }));
+    });
+
+    it('should truncate long summaries to 200 characters', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createPermissionTodo({
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        toolCall: { toolCallId: 'tc-1', kind: 'execute', rawInput: { command: 'x'.repeat(500) } },
+        options: [],
+      });
+
+      const callArgs = vi.mocked(TodoItem.create).mock.calls[0][0] as { description: string };
+      expect(callArgs.description.length).toBe(200);
+      expect(callArgs.description.endsWith('...')).toBe(true);
     });
 
     it('should set expiresAt to 5 minutes from now', async () => {
@@ -104,6 +242,105 @@ describe('TodoService', () => {
         userId: 'user-1',
         toolCall: { toolCallId: 'tc-1' },
         options: [],
+      });
+
+      const callArgs = vi.mocked(TodoItem.create).mock.calls[0][0] as { expiresAt: Date };
+      const expiresAtMs = callArgs.expiresAt.getTime();
+      expect(expiresAtMs).toBeGreaterThanOrEqual(before + 5 * 60 * 1000);
+      expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 5 * 60 * 1000 + 100);
+    });
+  });
+
+  describe('createElicitationTodo', () => {
+    it('should create an elicitation todo with correct fields', async () => {
+      const mockTodo = mockTodoDoc({ type: 'elicitation_request' });
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodo as never);
+
+      const requestedSchema = { type: 'object', title: '填写发布信息', properties: { name: { type: 'string' } } };
+
+      const result = await service.createElicitationTodo({
+        requestId: 'elic_1',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        mode: 'form',
+        message: '请提供发布所需的信息',
+        toolCallId: 'tc-1',
+        requestedSchema,
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        type: 'elicitation_request',
+        priority: 'immediate',
+        title: 'Agent请求输入：填写发布信息',
+        description: '请提供发布所需的信息',
+        elicitationData: {
+          requestId: 'elic_1',
+          sessionId: 'sess-1',
+          toolCallId: 'tc-1',
+          mode: 'form',
+          message: '请提供发布所需的信息',
+          requestedSchema,
+          elicitationId: undefined,
+          url: undefined,
+        },
+      }));
+      expect(result).toBe(mockTodo);
+    });
+
+    it('should use url mode title for url elicitations', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createElicitationTodo({
+        requestId: 'elic_2',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        mode: 'url',
+        message: '请打开链接完成授权',
+        elicitationId: 'agent-elic-1',
+        url: 'https://example.com/oauth',
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Agent请求输入：打开链接授权',
+        elicitationData: expect.objectContaining({
+          mode: 'url',
+          elicitationId: 'agent-elic-1',
+          url: 'https://example.com/oauth',
+        }),
+      }));
+    });
+
+    it('should fall back to default title when requestedSchema has no title', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createElicitationTodo({
+        requestId: 'elic_3',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        mode: 'form',
+        message: '请填写信息',
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Agent请求输入：填写信息',
+      }));
+    });
+
+    it('should set expiresAt to 5 minutes from now', async () => {
+      const before = Date.now();
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+
+      await service.createElicitationTodo({
+        requestId: 'elic_4',
+        controllerId: 'ctrl-1',
+        sessionId: 'sess-1',
+        userId: 'user-1',
+        mode: 'form',
+        message: '请填写信息',
       });
 
       const callArgs = vi.mocked(TodoItem.create).mock.calls[0][0] as { expiresAt: Date };
@@ -195,13 +432,26 @@ describe('TodoService', () => {
   });
 
   describe('markTodoAsResponded', () => {
-    it('should mark todo with matching requestId as read', async () => {
+    it('should mark todo with matching requestId as read (permission or elicitation)', async () => {
       vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
       await service.markTodoAsResponded('req-1');
 
       expect(TodoItem.updateOne).toHaveBeenCalledWith(
-        { 'data.requestId': 'req-1' },
+        { $or: [{ 'data.requestId': 'req-1' }, { 'elicitationData.requestId': 'req-1' }] },
+        { $set: { isRead: true } },
+      );
+    });
+  });
+
+  describe('markElicitationCompleted', () => {
+    it('should mark elicitation todo with matching elicitationId as read', async () => {
+      vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+
+      await service.markElicitationCompleted('elic-id-1');
+
+      expect(TodoItem.updateOne).toHaveBeenCalledWith(
+        { 'elicitationData.elicitationId': 'elic-id-1' },
         { $set: { isRead: true } },
       );
     });

@@ -1,0 +1,138 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../middleware/redis.js', () => ({
+  getRedisClient: vi.fn(),
+}));
+
+vi.mock('./todo-service.js', () => ({
+  todoService: {
+    createElicitationTodo: vi.fn(),
+    markElicitationCompleted: vi.fn(),
+  },
+}));
+
+vi.mock('./session-sse.js', () => ({
+  sessionSSEService: {
+    pushToUser: vi.fn(),
+  },
+}));
+
+import { ElicitationSubscriberService } from './elicitation-subscriber.js';
+import { getRedisClient } from '../middleware/redis.js';
+import { todoService } from './todo-service.js';
+import { sessionSSEService } from './session-sse.js';
+
+type MessageHandler = (channel: string, message: string) => Promise<void>;
+
+const mockSubscriber = {
+  subscribe: vi.fn(),
+  on: vi.fn(),
+  unsubscribe: vi.fn(),
+  quit: vi.fn(),
+};
+
+const mockRedis = {
+  duplicate: vi.fn(),
+};
+
+function getMessageHandler(): MessageHandler {
+  const call = mockSubscriber.on.mock.calls.find(([event]) => event === 'message');
+  if (!call) throw new Error('message handler not registered');
+  return call[1] as MessageHandler;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockRedis.duplicate.mockReturnValue(mockSubscriber);
+  mockSubscriber.subscribe.mockImplementation((...args: unknown[]) => {
+    const cb = args[args.length - 1] as (err: Error | null) => void;
+    cb(null);
+  });
+  vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+});
+
+describe('ElicitationSubscriberService', () => {
+  it('should create todo and push SSE on elicitation request', async () => {
+    const todo = { _id: 'todo-1', createdAt: new Date('2026-08-07T00:00:00Z') };
+    vi.mocked(todoService.createElicitationTodo).mockResolvedValue(todo as never);
+
+    const service = new ElicitationSubscriberService();
+    service.start();
+
+    const handler = getMessageHandler();
+    await handler('elicitation:request', JSON.stringify({
+      requestId: 'elic-1',
+      controllerId: 'ctrl-1',
+      sessionId: 'sess-1',
+      userId: 'user-1',
+      mode: 'form',
+      message: 'Which strategy?',
+      requestedSchema: { type: 'object', properties: { strategy: { type: 'string' } } },
+    }));
+
+    expect(todoService.createElicitationTodo).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'elic-1',
+      userId: 'user-1',
+      mode: 'form',
+    }));
+    expect(sessionSSEService.pushToUser).toHaveBeenCalledWith('user-1', {
+      type: 'elicitation_request',
+      data: expect.objectContaining({
+        requestId: 'elic-1',
+        sessionId: 'sess-1',
+        mode: 'form',
+        message: 'Which strategy?',
+        todoId: 'todo-1',
+      }),
+    });
+
+    service.stop();
+  });
+
+  it('should mark todo completed and push SSE on elicitation complete', async () => {
+    const service = new ElicitationSubscriberService();
+    service.start();
+
+    const handler = getMessageHandler();
+    await handler('elicitation:complete', JSON.stringify({
+      sessionId: 'sess-1',
+      elicitationId: 'github-oauth-001',
+      userId: 'user-1',
+    }));
+
+    expect(todoService.markElicitationCompleted).toHaveBeenCalledWith('github-oauth-001');
+    expect(sessionSSEService.pushToUser).toHaveBeenCalledWith('user-1', {
+      type: 'elicitation_complete',
+      data: { elicitationId: 'github-oauth-001' },
+    });
+
+    service.stop();
+  });
+
+  it('should ignore messages from other channels', async () => {
+    const service = new ElicitationSubscriberService();
+    service.start();
+
+    const handler = getMessageHandler();
+    await handler('permission:request', JSON.stringify({ requestId: 'x' }));
+
+    expect(todoService.createElicitationTodo).not.toHaveBeenCalled();
+    expect(todoService.markElicitationCompleted).not.toHaveBeenCalled();
+
+    service.stop();
+  });
+
+  it('should not fail on malformed messages', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const service = new ElicitationSubscriberService();
+    service.start();
+
+    const handler = getMessageHandler();
+    await handler('elicitation:request', 'not-json');
+
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+
+    service.stop();
+  });
+});

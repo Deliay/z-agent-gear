@@ -10,7 +10,13 @@ interface PermissionRequestData {
   controllerId: string;
   sessionId: string;
   userId: string;
-  toolCall: { toolCallId: string };
+  toolCall: {
+    toolCallId: string;
+    title?: string;
+    kind?: string;
+    rawInput?: unknown;
+    locations?: Array<{ path: string; line?: number }>;
+  };
   options: Array<{ optionId: string; name: string; kind: string }>;
 }
 
@@ -57,6 +63,7 @@ export class PermissionSubscriberService {
         requestId: data.requestId,
         sessionId: data.sessionId,
         toolCallId: data.toolCall.toolCallId,
+        toolCall: data.toolCall,
         options: data.options,
         todoId: todo._id,
         createdAt: todo.createdAt,

@@ -38,6 +38,26 @@ export const todoResolvers = {
 
       return true;
     },
+    respondElicitation: async (
+      _parent: unknown,
+      args: { requestId: string; action: 'accept' | 'decline' | 'cancel'; values?: Record<string, unknown> },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+
+      const redis = getRedisClient();
+      await redis.publish('elicitation:response', JSON.stringify({
+        requestId: args.requestId,
+        action: args.action,
+        ...(args.action === 'accept' && args.values ? { content: args.values } : {}),
+      }));
+
+      await todoService.markTodoAsResponded(args.requestId);
+
+      return true;
+    },
     markTodoRead: async (
       _parent: unknown,
       args: { todoId: string },
