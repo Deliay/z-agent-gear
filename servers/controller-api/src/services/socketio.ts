@@ -15,6 +15,7 @@ import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
+import { elicitationManager } from './elicitation-manager.js';
 
 const CURRENT_MAJOR_VERSION = '1';
 
@@ -136,7 +137,13 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('acp:permission', async (data: {
       requestId: string;
       sessionId: string;
-      toolCall: { toolCallId: string };
+      toolCall: {
+        toolCallId: string;
+        title?: string;
+        kind?: string;
+        rawInput?: unknown;
+        locations?: Array<{ path: string; line?: number }>;
+      };
       options: Array<{ optionId: string; name: string; kind: string }>;
     }) => {
       if (!authenticated) return;
@@ -148,6 +155,40 @@ export function createSocketIOServer(io: SocketIOServer): void {
           requestId: data.requestId,
           outcome: { outcome: 'cancelled' },
         });
+      }
+    });
+
+    socket.on('acp:elicitation', async (data: {
+      requestId: string;
+      sessionId: string;
+      mode: 'form' | 'url';
+      message: string;
+      toolCallId?: string | null;
+      requestedSchema?: unknown;
+      elicitationId?: string;
+      url?: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await elicitationManager.handleElicitationRequest(socket, data);
+      } catch (error) {
+        console.error('Error handling elicitation request:', error);
+        socket.emit('acp:elicitation:response', {
+          requestId: data.requestId,
+          action: 'cancel',
+        });
+      }
+    });
+
+    socket.on('acp:elicitation:complete', async (data: {
+      sessionId: string;
+      elicitationId: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await elicitationManager.handleElicitationComplete(socket, data);
+      } catch (error) {
+        console.error('Error handling elicitation complete:', error);
       }
     });
 
