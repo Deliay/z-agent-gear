@@ -199,6 +199,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     resolve: (response: acp.RequestPermissionResponse) => void;
     timeout: NodeJS.Timeout;
   }>();
+  private pendingElicitations = new Map<string, {
+    resolve: (response: acp.CreateElicitationResponse) => void;
+    timeout: NodeJS.Timeout;
+  }>();
 
   // Capability snapshot from initialize / session/new / resume
   private configOptions: SessionConfigOptionData[] = [];
@@ -462,6 +466,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         session: {
           configOptions: { boolean: {} },
         },
+        elicitation: { form: {}, url: {} },
       },
       clientInfo: {
         name: 'agent-gear',
@@ -647,6 +652,78 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     clearTimeout(pending.timeout);
     this.pendingPermissions.delete(requestId);
     pending.resolve({ outcome });
+  }
+
+  async unstable_createElicitation(
+    params: acp.CreateElicitationRequest,
+  ): Promise<acp.CreateElicitationResponse> {
+    // custom/未知模式不支持：立即取消，避免挂起 Agent
+    if (!acp.CreateElicitationRequest.isForm(params) && !acp.CreateElicitationRequest.isUrl(params)) {
+      return { action: 'cancel' };
+    }
+
+    const requestId = `elic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const toolCallId = 'toolCallId' in params ? params.toolCallId : undefined;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingElicitations.delete(requestId);
+        resolve({ action: 'cancel' });
+      }, 65_000);
+
+      this.pendingElicitations.set(requestId, { resolve, timeout });
+
+      if (acp.CreateElicitationRequest.isForm(params)) {
+        this.socket.emit('acp:elicitation', {
+          requestId,
+          sessionId: this.sessionId,
+          mode: 'form',
+          message: params.message,
+          ...(toolCallId != null ? { toolCallId } : {}),
+          requestedSchema: params.requestedSchema,
+        });
+      } else {
+        this.socket.emit('acp:elicitation', {
+          requestId,
+          sessionId: this.sessionId,
+          mode: 'url',
+          message: params.message,
+          ...(toolCallId != null ? { toolCallId } : {}),
+          elicitationId: params.elicitationId,
+          url: params.url,
+        });
+      }
+
+      this.emit('elicitation:sent', requestId);
+    });
+  }
+
+  handleElicitationResponse(
+    requestId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, unknown>,
+  ): void {
+    const pending = this.pendingElicitations.get(requestId);
+    if (!pending) {
+      console.warn(`Elicitation request ${requestId} not found`);
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingElicitations.delete(requestId);
+    pending.resolve({
+      action,
+      ...(action === 'accept' && content
+        ? { content: content as Record<string, acp.ElicitationContentValue> }
+        : {}),
+    });
+  }
+
+  async unstable_completeElicitation(params: acp.CompleteElicitationNotification): Promise<void> {
+    this.socket.emit('acp:elicitation:complete', {
+      sessionId: this.sessionId,
+      elicitationId: params.elicitationId,
+    });
   }
 
   // ── text buffering ──
