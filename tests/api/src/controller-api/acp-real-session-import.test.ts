@@ -11,6 +11,16 @@ const CONFIG_DIR = join(homedir(), '.zag');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.toml');
 const PID_FILE = join(tmpdir(), 'agent-controller.pid');
 
+// Environment for spawned agent-controller processes: strip inherited
+// ZAG_CONTROLLER_KEY / ZAG_SERVER_ENDPOINT overrides so the freshly written
+// ~/.zag/config.toml stays authoritative (config priority: CLI > env > file).
+function spawnEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
+  const env = { ...process.env, NODE_OPTIONS: '--import tsx', ...extra };
+  delete env.ZAG_CONTROLLER_KEY;
+  delete env.ZAG_SERVER_ENDPOINT;
+  return env;
+}
+
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -51,7 +61,7 @@ function spawnController(): { process: ChildProcess; waitForRegistered: Promise<
   const proc = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: CONTROLLER_PKG,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_OPTIONS: '--import tsx' },
+    env: spawnEnv(),
   });
 
   proc.stdout?.on('data', (data: Buffer) => { console.log(`[ctrl-out] ${data.toString().trim()}`); });

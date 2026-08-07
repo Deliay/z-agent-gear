@@ -81,6 +81,9 @@ const GET_TODO_LIST = `
         }
       }
       createdAt
+      elicitationData {
+        requestId
+      }
     }
   }
 `;
@@ -388,6 +391,8 @@ describe('ACP Permission Reminder API', () => {
       expect(todo.data.toolCall.kind).toBe('execute');
       expect(todo.data.toolCall.rawInput).toEqual({ command: 'npm test' });
       expect(todo.data.toolCall.locations).toEqual([{ path: 'package.json', line: 12 }]);
+      // 混合列表：权限待办的 elicitationData 必须为 null（Mongoose 空子文档归一化）
+      expect(todo.elicitationData).toBeNull();
 
       ctrlClient.disconnect();
     });

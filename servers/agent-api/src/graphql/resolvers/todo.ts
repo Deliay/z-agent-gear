@@ -4,6 +4,19 @@ import { getRedisClient } from '../../middleware/redis.js';
 import type { AuthContext } from './auth.js';
 
 export const todoResolvers = {
+  // Mongoose 会把 schema 中声明的嵌套子文档物化为空对象（所有字段为 undefined），
+  // 即使创建时未赋值。这里在非空校验前把它们归一为 null，
+  // 避免非空标量字段（如 ElicitationRequestData.requestId）解析报错。
+  TodoItem: {
+    data: (todo: { data?: { requestId?: string } | null }) =>
+      todo.data?.requestId ? todo.data : null,
+    elicitationData: (todo: { elicitationData?: { requestId?: string } | null }) =>
+      todo.elicitationData?.requestId ? todo.elicitationData : null,
+  },
+  PermissionRequestData: {
+    toolCall: (data: { toolCall?: { toolCallId?: string } | null }) =>
+      data?.toolCall?.toolCallId ? data.toolCall : null,
+  },
   Query: {
     getTodoList: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       if (!context.currentUser) {

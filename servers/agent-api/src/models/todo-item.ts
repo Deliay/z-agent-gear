@@ -23,7 +23,7 @@ const todoItemSchema = new Schema({
       title: String,
       kind: String,
       rawInput: Schema.Types.Mixed,
-      locations: [{ path: String, line: Number }],
+      locations: [{ _id: false, path: String, line: Number }],
     },
   },
   elicitationData: {

@@ -63,6 +63,14 @@ const GET_TODO_LIST = `
       title
       description
       isRead
+      data {
+        requestId
+        toolCallId
+        toolCall {
+          toolCallId
+          title
+        }
+      }
       elicitationData {
         requestId
         sessionId
@@ -220,6 +228,8 @@ describe('ACP Elicitation API', () => {
       const todo = await findTodoByRequestId(requestId);
       expect(todo).toBeDefined();
       expect(todo.type).toBe('elicitation_request');
+      // 混合列表：信息请求待办的权限数据必须为 null（Mongoose 空子文档归一化）
+      expect(todo.data).toBeNull();
       expect(todo.priority).toBe('immediate');
       expect(todo.title).toBe('Agent请求输入：重构策略');
       expect(todo.description).toBe('How should I approach this refactoring?');

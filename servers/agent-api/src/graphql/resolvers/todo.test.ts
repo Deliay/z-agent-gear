@@ -90,4 +90,37 @@ describe('Todo Resolvers', () => {
       expect(published).toEqual({ requestId: 'elic-3', action: 'cancel' });
     });
   });
+
+  describe('field resolvers', () => {
+    it('should return null data when Mongoose materialized an empty subdocument', () => {
+      expect(todoResolvers.TodoItem.data({ data: {} })).toBeNull();
+      expect(todoResolvers.TodoItem.data({})).toBeNull();
+    });
+
+    it('should pass through data when requestId exists', () => {
+      const data = { requestId: 'req-1', toolCallId: 'tc-1' };
+      expect(todoResolvers.TodoItem.data({ data })).toBe(data);
+    });
+
+    it('should return null elicitationData when Mongoose materialized an empty subdocument', () => {
+      expect(todoResolvers.TodoItem.elicitationData({ elicitationData: {} })).toBeNull();
+      expect(todoResolvers.TodoItem.elicitationData({ elicitationData: null })).toBeNull();
+      expect(todoResolvers.TodoItem.elicitationData({})).toBeNull();
+    });
+
+    it('should pass through elicitationData when requestId exists', () => {
+      const elicitationData = { requestId: 'elic-1', mode: 'form' };
+      expect(todoResolvers.TodoItem.elicitationData({ elicitationData })).toBe(elicitationData);
+    });
+
+    it('should return null toolCall when Mongoose materialized an empty subdocument', () => {
+      expect(todoResolvers.PermissionRequestData.toolCall({ toolCall: {} })).toBeNull();
+      expect(todoResolvers.PermissionRequestData.toolCall({})).toBeNull();
+    });
+
+    it('should pass through toolCall when toolCallId exists', () => {
+      const toolCall = { toolCallId: 'tc-1', title: 'Bash: ls' };
+      expect(todoResolvers.PermissionRequestData.toolCall({ toolCall })).toBe(toolCall);
+    });
+  });
 });
