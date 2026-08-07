@@ -11,7 +11,8 @@ engineering/
 ├── backend-rules.md      # 后端开发规范
 ├── frontend-rules.md     # 前端开发规范
 ├── proposals/            # 技术提案（评审后锁定）
-└── plan/                 # 实现计划（从 proposal 拆解出的可执行任务）
+├── plan/                 # 实现计划（从 proposal 拆解出的可执行任务）
+└── acceptance/           # 验收报告（含 archived/ 归档子目录，规范见 acceptance/AGENTS.md）
 ```
 
 ## 文件命名规范

@@ -23,6 +23,7 @@ z-agent-gear/
 │   │   ├── shipping/
 │   │   └── released/
 │   └── engineering/          # 开发规范
+│       ├── acceptance/       # 验收报告
 │       └── proposals/
 ├── contracts/                # API 契约文件
 └── tests/                    # 集成/E2E 测试
