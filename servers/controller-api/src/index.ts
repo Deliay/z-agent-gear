@@ -15,12 +15,13 @@ import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { gatewayRelayService } from './services/gateway-relay.js';
 import { permissionManager } from './services/permission-manager.js';
+import { elicitationManager } from './services/elicitation-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
 import { createMcpProxyKeyRouter } from './routes/mcp-proxy-key.js';
 import { createMcpProxyRouter } from './routes/mcp-proxy.js';
-import { createMcpEndpointRouter } from './routes/mcp-endpoint.js';
 import { McpProxyRegistry } from './services/mcp-proxy-registry.js';
+import { McpForwardConsumer } from './services/mcp-forward-consumer.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -39,10 +40,10 @@ const io = new SocketIOServer(httpServer, {
 
 const mcpProxyRegistry = new McpProxyRegistry(io);
 mcpProxyRegistry.setupNamespace();
+const mcpForwardConsumer = new McpForwardConsumer(mcpProxyRegistry);
 
 app.use('/api/mcp-proxy-keys', createMcpProxyKeyRouter());
 app.use('/api/mcp-proxy', createMcpProxyRouter(mcpProxyRegistry));
-app.use('/api/mcp-endpoints', createMcpEndpointRouter());
 
 createSocketIOServer(io);
 
@@ -65,6 +66,8 @@ async function start() {
   getRedisClient();
   console.log('Connected to Redis');
 
+  mcpForwardConsumer.start();
+
   heartbeatService.start(io);
   commandService.start(io);
   sessionCommandService.start(io);
@@ -74,6 +77,7 @@ async function start() {
   fsMkdirService.start(io);
   gatewayRelayService.start(io);
   permissionManager.start(io);
+  elicitationManager.start(io);
 
   disconnectTimer.start();
 
@@ -86,7 +90,9 @@ async function gracefulShutdown() {
   console.log('Shutting down...');
   heartbeatService.stop();
   permissionManager.stop();
+  elicitationManager.stop();
   disconnectTimer.stop();
+  mcpForwardConsumer.stop();
   io.close();
   await closeRedis();
   await mongoose.disconnect();

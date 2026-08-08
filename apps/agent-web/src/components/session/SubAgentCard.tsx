@@ -19,6 +19,7 @@ export default function SubAgentCard({ messages, expanded, onExpandedChange }: S
 
   const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
   const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
+  const status = typeof parsed.status === 'string' ? parsed.status : 'in_progress';
   const description = typeof rawInput?.description === 'string' ? rawInput.description : '';
   const prompt = typeof rawInput?.prompt === 'string' ? rawInput.prompt : '';
   const output = typeof rawOutput?.output === 'string' ? rawOutput.output : '';
@@ -31,7 +32,7 @@ export default function SubAgentCard({ messages, expanded, onExpandedChange }: S
       title={title}
       summary={summary}
       defaultCollapsed={true}
-      color="purple"
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >

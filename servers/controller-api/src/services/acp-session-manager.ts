@@ -17,6 +17,10 @@ interface ACPSession {
 export class ACPSessionManager {
   private sessions = new Map<string, ACPSession>();
   private socketToSessions = new Map<string, Set<string>>();
+  // Per-session promise chain：保证同一 session 的消息「落库 → 推送」严格按到达顺序串行执行。
+  // Socket.IO 不等待 async 监听器完成，高频消息并发落库会导致 Redis publish 顺序 ≠ 到达顺序，
+  // 进而造成 SSE 推送乱序（DB 按 _id 排序仍正确）。
+  private messageQueues = new Map<string, Promise<void>>();
 
   async startSession(
     controllerSocket: Socket,
@@ -25,6 +29,7 @@ export class ACPSessionManager {
     userId: string,
     serverType: string,
     cwd: string,
+    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
     try {
@@ -147,12 +152,16 @@ export class ACPSessionManager {
         });
 
         console.log(`[ACP session] Emitting acp:start to controller socket ${controllerSocket.id} for session ${sessionId}`);
-        controllerSocket.emit('acp:start', {
+        const startPayload: Record<string, unknown> = {
           requestId,
           sessionId,
           serverType,
           cwd,
-        });
+        };
+        if (mcpEndpoint) {
+          startPayload.mcpEndpoint = mcpEndpoint;
+        }
+        controllerSocket.emit('acp:start', startPayload);
       });
     } catch (error) {
       console.error(`[ACP session] Error starting session ${sessionId}:`, error);
@@ -214,6 +223,22 @@ export class ACPSessionManager {
   }
 
   async handleControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
+    // 串行化同一 session 的消息处理，不同 session 之间互不阻塞
+    const tail = (this.messageQueues.get(sessionId) ?? Promise.resolve()).then(() =>
+      this.processControllerMessage(sessionId, message),
+    );
+    // 队列尾部始终吞掉错误，保证前一条失败不阻塞后续消息；错误仍通过返回值抛给调用方
+    const safeTail = tail.catch(() => {});
+    this.messageQueues.set(sessionId, safeTail);
+    void safeTail.finally(() => {
+      if (this.messageQueues.get(sessionId) === safeTail) {
+        this.messageQueues.delete(sessionId);
+      }
+    });
+    return tail;
+  }
+
+  private async processControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
     // Handle config_option_update - full configOptions is the single source of truth
     if (message.sessionUpdate === 'config_option_update') {
       const update = message as Record<string, unknown>;
@@ -423,6 +448,7 @@ export class ACPSessionManager {
     controllerId: string,
     userId: string,
     cwd: string,
+    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const sess = await Session.findById(sessionId).lean();
@@ -504,13 +530,17 @@ export class ACPSessionManager {
           }
         });
 
-        controllerSocket.emit('acp:resume', {
+        const resumePayload: Record<string, unknown> = {
           requestId,
           sessionId,
           externalSessionId,
           serverType: acpServerType,
           cwd,
-        });
+        };
+        if (mcpEndpoint) {
+          resumePayload.mcpEndpoint = mcpEndpoint;
+        }
+        controllerSocket.emit('acp:resume', resumePayload);
       });
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);

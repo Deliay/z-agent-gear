@@ -7,10 +7,18 @@ interface PermissionOption {
   kind: string;
 }
 
+interface PermissionToolCall {
+  toolCallId: string;
+  title?: string;
+  kind?: string;
+  rawInput?: unknown;
+  locations?: Array<{ path: string; line?: number }>;
+}
+
 interface PermissionRequestData {
   requestId: string;
   sessionId: string;
-  toolCall: { toolCallId: string };
+  toolCall: PermissionToolCall;
   options: PermissionOption[];
 }
 

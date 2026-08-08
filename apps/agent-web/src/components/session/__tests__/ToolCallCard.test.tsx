@@ -11,6 +11,14 @@ function renderToolCall(message: Record<string, unknown>) {
   );
 }
 
+function renderCollapsedToolCall(message: Record<string, unknown>) {
+  return render(
+    <ToolCallCard
+      messages={[{ content: message as never, createdAt: '2026-01-01T00:00:00Z' }]}
+    />,
+  );
+}
+
 describe('ToolCallCard kinds', () => {
   it('should render edit kind with diff content', () => {
     renderToolCall({
@@ -88,5 +96,109 @@ describe('ToolCallCard kinds', () => {
     });
 
     expect(screen.getByText(/term-1/)).toBeDefined();
+  });
+});
+
+describe('ToolCallCard statuses', () => {
+  it('should render in_progress with active color and files to modify', () => {
+    const { container } = renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'in_progress',
+      title: 'Edit file',
+      locations: [{ path: 'src/a.ts', line: 1 }],
+    });
+
+    expect(container.firstElementChild?.textContent).toBeDefined();
+    expect(screen.getByText('src/a.ts')).toBeDefined();
+    expect(container.firstElementChild?.className).toContain('bg-info/10');
+  });
+
+  it('should treat pending same as in_progress for execute kind', () => {
+    const { container } = renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'execute',
+      status: 'pending',
+      title: 'Run command',
+      rawInput: { command: 'npm test', workDir: '/repo' },
+    });
+
+    expect(screen.getByText(/npm test/)).toBeDefined();
+    expect(container.firstElementChild?.className).toContain('bg-info/10');
+  });
+
+  it('should show ellipsis summary for in_progress and pending when collapsed', () => {
+    const first = renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'in_progress',
+      title: 'Edit file',
+    });
+    expect(screen.getByText(/\.\.\./)).toBeDefined();
+
+    first.unmount();
+    renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'execute',
+      status: 'pending',
+      title: 'Run command',
+    });
+    expect(screen.getByText(/\.\.\./)).toBeDefined();
+  });
+
+  it('should show checkmark summary for completed when collapsed', () => {
+    renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'completed',
+      title: 'Edit file',
+    });
+    expect(screen.getByText(/✓/)).toBeDefined();
+  });
+
+  it('should keep completed highlighted with softer same-family color', () => {
+    const { container } = renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'completed',
+      title: 'Edit file',
+    });
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).toContain('border-info/40');
+    expect(card.className).not.toContain('animate-pulse');
+    expect(card.className).not.toContain('bg-muted');
+  });
+
+  it('should keep failed highlighted with destructive summary accent', () => {
+    const { container } = renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'failed',
+      title: 'Edit file',
+    });
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).not.toContain('animate-pulse');
+    expect(screen.getByText(/✗/).className).toContain('text-destructive');
+  });
+
+  it('should show cross summary for failed when collapsed', () => {
+    renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'failed',
+      title: 'Edit file',
+    });
+    expect(screen.getByText(/✗/)).toBeDefined();
+  });
+
+  it('should default to in_progress when status is missing', () => {
+    renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      title: 'Edit file',
+    });
+    expect(screen.getByText(/\.\.\./)).toBeDefined();
   });
 });

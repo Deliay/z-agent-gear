@@ -5,6 +5,8 @@ import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { McpServer } from '../models/mcp-server.js';
+import { mcpEndpointService } from './mcp-endpoint.js';
 
 export class SessionService {
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
@@ -79,6 +81,19 @@ export class SessionService {
       }
     }
 
+    // Validate selected MCP servers up front so an invalid selection fails the
+    // mutation instead of silently creating a session without MCP.
+    if (input.mcpServerIds && input.mcpServerIds.length > 0) {
+      const selectable = await McpServer.countDocuments({
+        _id: { $in: input.mcpServerIds },
+        userId,
+        enabled: true,
+      });
+      if (selectable !== input.mcpServerIds.length) {
+        throw new Error('MCP_SERVER_NOT_FOUND: some selected MCP servers are invalid or disabled');
+      }
+    }
+
     const session = await Session.create({
       userId,
       controllerId: input.controllerId,
@@ -90,26 +105,15 @@ export class SessionService {
       worktreeBranch,
     });
 
-    // Create MCP endpoint if mcpServerIds provided
-    let mcpEndpoint: { url: string; token: string } | undefined;
+    // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
+    let mcpEndpoint: { url: string; token: string; serverNames: string[] } | undefined;
     if (input.mcpServerIds && input.mcpServerIds.length > 0) {
-      const controllerApiUrl = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
       try {
-        const response = await fetch(`${controllerApiUrl}/api/mcp-endpoints`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: session._id.toString(),
-            userId,
-            mcpServerIds: input.mcpServerIds,
-          }),
-        });
-        if (response.ok) {
-          mcpEndpoint = await response.json() as { url: string; token: string };
-        } else {
-          const errorText = await response.text();
-          console.error(`Failed to create MCP endpoint: ${response.status} ${errorText}`);
-        }
+        mcpEndpoint = await mcpEndpointService.createEndpoint(
+          session._id.toString(),
+          userId,
+          input.mcpServerIds,
+        );
       } catch (err) {
         console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
       }
@@ -221,6 +225,15 @@ export class SessionService {
       return { success: false, status: session.status, error: 'Session is not ended' };
     }
 
+    // Re-issue a fresh MCP endpoint (do not reuse the revoked token)
+    let mcpEndpoint: { url: string; token: string; serverNames: string[] } | undefined;
+    try {
+      const reissued = await mcpEndpointService.reissueEndpoint(id, userId);
+      if (reissued) mcpEndpoint = reissued;
+    } catch (err) {
+      console.error('Failed to reissue MCP endpoint on resume:', err instanceof Error ? err.message : err);
+    }
+
     const redis = getRedisClient();
     await redis.publish('session:command', JSON.stringify({
       type: 'acp:resume',
@@ -228,6 +241,7 @@ export class SessionService {
       controllerId: session.controllerId.toString(),
       externalSessionId: session.externalSessionId || '',
       cwd: session.cwd || '',
+      mcpEndpoint,
     }));
     return { success: true, status: 'connecting' };
   }
@@ -240,6 +254,8 @@ export class SessionService {
     if (result) {
       const redis = getRedisClient();
       await redis.del(`session:${id}:status`);
+      // Revoke MCP endpoint: session close invalidates token and access address immediately
+      await mcpEndpointService.revokeEndpoint(id);
       // Notify controller-api to stop ACP session
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
@@ -335,6 +351,9 @@ export class SessionService {
       sessionId: id,
       reason: 'user_delete',
     }));
+
+    // Revoke MCP endpoint
+    await mcpEndpointService.revokeEndpoint(id);
 
     // Delete from DB
     const result = await Session.findOneAndDelete({ _id: id, userId });

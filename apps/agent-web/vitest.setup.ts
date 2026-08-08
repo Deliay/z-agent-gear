@@ -5,3 +5,5 @@ window.matchMedia = window.matchMedia || (() => ({
   addEventListener: () => {},
   removeEventListener: () => {},
 }));
+
+Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || (() => {});

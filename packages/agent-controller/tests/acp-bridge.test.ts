@@ -20,6 +20,10 @@ let mockConnInstance = buildMockConn();
 vi.mock('@agentclientprotocol/sdk', () => ({
   ndJsonStream: vi.fn(() => ({})),
   ClientSideConnection: vi.fn(function () { return mockConnInstance; }),
+  CreateElicitationRequest: {
+    isForm: (v: { mode?: string }) => v.mode === 'form',
+    isUrl: (v: { mode?: string }) => v.mode === 'url',
+  },
 }));
 
 import { AcpSessionBridge, extractConfigOptions } from '../../src/acp/bridge.js';
@@ -80,6 +84,7 @@ describe('AcpSessionBridge', () => {
           session: {
             configOptions: { boolean: {} },
           },
+          elicitation: { form: {}, url: {} },
         },
         clientInfo: { name: 'agent-gear', version: '1.1.5' },
       });
@@ -235,6 +240,7 @@ describe('AcpSessionBridge', () => {
       expect(mc().resumeSession).toHaveBeenCalledWith({
         sessionId: 'existing-sess-id',
         cwd: '/home/user',
+        mcpServers: [],
       });
       expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess-1',
@@ -522,6 +528,119 @@ describe('AcpSessionBridge', () => {
 
       const result = await promise;
       expect(result).toEqual({ outcome: { outcome: 'cancelled' } });
+    });
+  });
+
+  describe('unstable_createElicitation', () => {
+    it('form 模式：emit acp:elicitation 并在响应后 resolve accept + content', async () => {
+      const bridge = createBridge();
+      const requestedSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      };
+
+      const promise = bridge.unstable_createElicitation({
+        mode: 'form',
+        message: 'Need your name',
+        sessionId: 'acp-sess-abc',
+        toolCallId: 'tc-1',
+        requestedSchema,
+      } as never);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation', expect.objectContaining({
+        sessionId: 'sess-1',
+        mode: 'form',
+        message: 'Need your name',
+        toolCallId: 'tc-1',
+        requestedSchema,
+      }));
+
+      const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:elicitation');
+      const requestId = (emitCall![1] as { requestId: string }).requestId;
+      expect(requestId).toMatch(/^elic_/);
+
+      bridge.handleElicitationResponse(requestId, 'accept', { name: 'ash' });
+
+      const result = await promise;
+      expect(result).toEqual({ action: 'accept', content: { name: 'ash' } });
+    });
+
+    it('url 模式：透传 elicitationId 与 url', async () => {
+      const bridge = createBridge();
+
+      const promise = bridge.unstable_createElicitation({
+        mode: 'url',
+        message: 'Authorize access',
+        sessionId: 'acp-sess-abc',
+        elicitationId: 'elic-agent-1',
+        url: 'https://example.com/auth',
+      } as never);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation', expect.objectContaining({
+        sessionId: 'sess-1',
+        mode: 'url',
+        message: 'Authorize access',
+        elicitationId: 'elic-agent-1',
+        url: 'https://example.com/auth',
+      }));
+
+      const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:elicitation');
+      const requestId = (emitCall![1] as { requestId: string }).requestId;
+      bridge.handleElicitationResponse(requestId, 'decline');
+
+      const result = await promise;
+      expect(result).toEqual({ action: 'decline' });
+    });
+
+    it('custom/未知模式：立即返回 cancel 且不 emit socket 事件', async () => {
+      const bridge = createBridge();
+
+      const result = await bridge.unstable_createElicitation({
+        mode: '_vendor_custom',
+        message: 'custom request',
+        sessionId: 'acp-sess-abc',
+      } as never);
+
+      expect(result).toEqual({ action: 'cancel' });
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation', expect.anything());
+    });
+
+    it('65s 超时自动 resolve cancel', async () => {
+      const bridge = createBridge();
+
+      const promise = bridge.unstable_createElicitation({
+        mode: 'form',
+        message: 'm',
+        sessionId: 'acp-sess-abc',
+        requestedSchema: { type: 'object' },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      const result = await promise;
+      expect(result).toEqual({ action: 'cancel' });
+    });
+
+    it('handleElicitationResponse 未知 requestId 打 warn 不抛错', () => {
+      const bridge = createBridge();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      expect(() => bridge.handleElicitationResponse('elic_unknown', 'cancel')).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('elic_unknown'));
+    });
+  });
+
+  describe('unstable_completeElicitation', () => {
+    it('emit acp:elicitation:complete', async () => {
+      const bridge = createBridge();
+
+      await bridge.unstable_completeElicitation({ elicitationId: 'elic-agent-1' } as never);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:complete', {
+        sessionId: 'sess-1',
+        elicitationId: 'elic-agent-1',
+      });
     });
   });
 

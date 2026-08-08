@@ -124,4 +124,12 @@ export class AcpSyncBridge implements acp.Client {
   async requestPermission(): Promise<acp.RequestPermissionResponse> {
     return { outcome: { outcome: 'cancelled' } };
   }
+
+  async unstable_createElicitation(): Promise<acp.CreateElicitationResponse> {
+    return { action: 'cancel' };
+  }
+
+  async unstable_completeElicitation(): Promise<void> {
+    // no-op
+  }
 }

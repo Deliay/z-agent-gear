@@ -93,21 +93,18 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
 
   const kind = data.kind || 'other';
   const status = data.status || 'in_progress';
+  const isActive = status === 'in_progress' || status === 'pending';
   const title = data.title || kindLabel(kind);
   const locations = data.locations;
   const rawInput = data.rawInput as Record<string, unknown> | undefined;
   const rawOutput = data.rawOutput as Record<string, unknown> | undefined;
   const contentItems = data.content as ToolCallContent[] | undefined;
 
-  const containerClass = status === 'completed'
-    ? 'rounded-lg border border-border bg-muted'
-    : 'rounded-lg border border-border bg-muted';
-
   const summary = `${kindLabel(kind)} ${status === 'completed' ? '✓' : status === 'failed' ? '✗' : '...'}`;
 
   const renderBody = () => {
     if (kind === 'edit') {
-      if (status === 'in_progress') {
+      if (isActive) {
         return (
           <div className="space-y-3">
             {locations && locations.length > 0 && (
@@ -154,7 +151,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
     }
 
     if (kind === 'execute') {
-      if (status === 'in_progress' && rawInput) {
+      if (isActive && rawInput) {
         const exInput = rawInput as ExecuteRawInput;
         return (
           <div className="space-y-2 text-sm">
@@ -273,11 +270,11 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
       title={`Tool Call: ${title}`}
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
-      <div className={containerClass}>
+      <div className="rounded-lg border border-border bg-muted">
         <div className="p-3">
           {renderBody()}
         </div>

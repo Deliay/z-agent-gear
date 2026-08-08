@@ -54,6 +54,9 @@
 | Controller → Server | `acp:protocol-version-mismatch` | Agent 协议版本不兼容告警 |
 | Controller → Server | `acp:permission` | Agent请求用户权限审批 |
 | Server → Controller | `acp:permission:response` | 返回用户权限审批结果 |
+| Controller → Server | `acp:elicitation` | Agent请求用户结构化输入（Elicitation） |
+| Server → Controller | `acp:elicitation:response` | 返回用户 Elicitation 响应 |
+| Controller → Server | `acp:elicitation:complete` | 转发 Agent 的 URL 模式 Elicitation 完成通知 |
 | Server → Controller | `git:check` | 请求检测 Git 仓库状态 |
 | Controller → Server | `git:check:result` | 返回 Git 检测结果 |
 | Server → Controller | `git:init` | 请求初始化 Git 仓库 |
@@ -109,16 +112,16 @@
 | `serverType` | `string` | 是 | ACP Server 类型（`opencode`） |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `mcpServers` | `McpServerConfig[]` | 否 | MCP Server 配置（预留） |
-| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息 |
+| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息（仅用户勾选装配 MCP 时携带） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径，Agent 支持 `session.additionalDirectories` 时使用） |
 
 **McpEndpoint 结构：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | `string` | 是 | 转发端点 URL |
-| `token` | `string` | 是 | Bearer Token |
-| `serverNames` | `string[]` | 是 | MCP Server 名称列表 |
+| `url` | `string` | 是 | 统一网关转发端点基础 URL（`GATEWAY_URL/mcp/{sessionId}`，指向 agent-api 入口）；agent-controller 为每个装配的 server 追加 `/{serverName}` 构成独立端点 |
+| `token` | `string` | 是 | Bearer Token（会话级 JWT，会话关闭即吊销） |
+| `serverNames` | `string[]` | 是 | MCP Server 名称列表（签发时快照） |
 
 **McpServerConfig 结构（预留）：**
 
@@ -523,8 +526,12 @@ Controller 转发 ACP 输出。
 |------|------|------|------|
 | `requestId` | `string` | 是 | 请求ID，用于匹配响应 |
 | `sessionId` | `string` | 是 | 当前Session ID |
-| `toolCall` | `object` | 是 | 工具调用信息 |
+| `toolCall` | `object` | 是 | 工具调用信息（ACP `ToolCall` 对象透传） |
 | `toolCall.toolCallId` | `string` | 是 | 工具调用ID |
+| `toolCall.title` | `string` | 否 | 工具调用标题（人类可读，如 `Bash: npm test`） |
+| `toolCall.kind` | `string` | 否 | 工具类型（`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`switch_mode`/`other`） |
+| `toolCall.rawInput` | `object` | 否 | 工具原始输入参数（如命令行、文件路径等） |
+| `toolCall.locations` | `object[]` | 否 | 涉及的文件位置（`[{ path, line? }]`） |
 | `options` | `PermissionOption[]` | 是 | 可选审批选项 |
 
 **PermissionOption 结构：**
@@ -731,6 +738,64 @@ Agent 在 `initialize` 响应中返回的协议版本与客户端不兼容时上
 | `sessionId` | `string` | 是 | Session ID |
 | `expectedVersion` | `number` | 是 | 客户端期望的协议版本（1） |
 | `agentVersion` | `number` | 是 | Agent 返回的协议版本 |
+
+### 2.31 `acp:elicitation`（Controller → Server）
+
+当 Agent 发送 `elicitation/create`（ACP Elicitation，UNSTABLE）时，Controller 将请求转发给 Server。Elicitation 用于 Agent 向用户请求结构化输入，支持两种模式：
+
+- **form**：表单模式，按 `requestedSchema`（受限 JSON Schema，仅原始类型与枚举）收集非敏感数据
+- **url**：URL 模式，引导用户打开外部链接完成敏感/外部交互（如 OAuth）
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求ID（Controller 生成，`elic_` 前缀），用于匹配响应 |
+| `sessionId` | `string` | 是 | 当前Session ID |
+| `mode` | `'form' \| 'url'` | 是 | Elicitation 模式 |
+| `message` | `string` | 是 | 向用户展示的请求说明 |
+| `toolCallId` | `string` | 否 | 关联的工具调用ID（session 范围内可关联 tool call） |
+| `requestedSchema` | `object` | form 必填 | 表单 Schema：`{ type: 'object', properties: {...}, required?: string[], title?, description? }` |
+| `elicitationId` | `string` | url 必填 | Agent 侧 Elicitation ID（URL 模式，用于匹配完成通知） |
+| `url` | `string` | url 必填 | 引导用户打开的 URL |
+
+**客户端行为：**
+
+1. AcpSessionBridge 暂停等待用户响应（Promise）
+2. 通过 Socket.IO 发送 Elicitation 请求到 Server
+3. 等待 `acp:elicitation:response` 响应
+4. 超时（65秒）自动返回 `{ action: 'cancel' }`
+
+### 2.32 `acp:elicitation:response`（Server → Controller）
+
+Server 将用户的 Elicitation 响应返回给 Controller。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求ID |
+| `action` | `'accept' \| 'decline' \| 'cancel'` | 是 | 用户动作：提交 / 明确拒绝 / 取消 |
+| `content` | `object` | 否 | 表单数据（`action=accept` 且 form 模式时），键值符合 `requestedSchema` |
+
+**客户端行为：**
+
+1. 查找对应的 pending elicitation Promise
+2. resolve Promise，按 ACP `CreateElicitationResponse` 返回给 Agent
+3. Agent 根据 `action` 继续执行、回退或取消
+
+### 2.33 `acp:elicitation:complete`（Controller → Server）
+
+当 Agent 发送 `elicitation/complete` 通知（URL 模式外部交互完成后）时，Controller 透传给 Server，用于关闭/更新用户侧的 Elicitation 待办。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | 当前Session ID |
+| `elicitationId` | `string` | 是 | Agent 侧 Elicitation ID（与 `acp:elicitation` 中的 `elicitationId` 对应） |
+
+**客户端行为：** 无需响应，收到后忽略未知或已完成的 `elicitationId`。
 
 ---
 
@@ -1357,12 +1422,15 @@ LLM 模型切换成功后推送。
 | `authenticate` | Client → Agent | 执行 Agent 认证（需 agent 返回 `authMethods`） |
 | `logout` | Client → Agent | 登出 Agent 认证 |
 | `session/list` | Client → Agent | 列出历史会话（cursor 分页） |
+| `session/request_permission` | Agent → Client | 请求用户权限审批 |
+| `elicitation/create` | Agent → Client | 请求用户结构化输入（UNSTABLE，form/url 模式） |
+| `elicitation/complete` | Agent → Client | URL 模式 Elicitation 完成通知（UNSTABLE） |
 
 ### 5.3 消息示例
 
 **initialize:**
 
-Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项（注意：`session.configOptions.boolean` 是扩展字段，非 ACP 官方 schema 属性）。
+Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项（注意：`session.configOptions.boolean` 是扩展字段，非 ACP 官方 schema 属性）；声明 `elicitation.form`/`elicitation.url` 以支持 Elicitation 两种模式（ACP UNSTABLE 能力，仅显式声明的模式可被 Agent 使用）。
 
 ```json
 {
@@ -1372,6 +1440,10 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
   "params": {
     "protocolVersion": 1,
     "clientCapabilities": {
+      "elicitation": {
+        "form": {},
+        "url": {}
+      },
       "session": {
         "configOptions": {
           "boolean": {}

@@ -1,5 +1,13 @@
 enum McpServerTransport {
   registered_proxy
+  http      # P2 启用
+  platform  # P2 启用
+}
+
+enum McpServerSource {
+  proxy
+  manual    # P2 启用
+  platform  # P2 启用
 }
 
 enum McpServerStatus {
@@ -8,12 +16,23 @@ enum McpServerStatus {
   disabled
 }
 
+type McpServerTool {
+  name: String!
+  description: String
+}
+
 type McpServer {
   id: ID!
   name: String!
   transport: McpServerTransport!
-  command: String!
+  source: McpServerSource!
+  enabled: Boolean!
+  command: String
+  url: String
+  hostname: String
   status: McpServerStatus!
+  tools: [McpServerTool!]!
+  toolsSyncedAt: String
   lastHeartbeatAt: String
   createdAt: String!
   updatedAt: String!
@@ -22,4 +41,26 @@ type McpServer {
 type Query {
   mcpServers: [McpServer!]!
   mcpServer(id: ID!): McpServer
+}
+
+type Mutation {
+  setMcpServerEnabled(id: ID!, enabled: Boolean!): McpServer!
+  # P2
+  bindRemoteMcpServer(input: BindRemoteMcpServerInput!): BindRemoteMcpServerResult!
+  unbindMcpServer(id: ID!): Boolean!
+}
+
+input BindRemoteMcpServerInput {
+  name: String!
+  url: String!
+  headers: [HeaderInput!]
+}
+
+input HeaderInput {
+  key: String!
+  value: String!
+}
+
+type BindRemoteMcpServerResult {
+  server: McpServer!
 }

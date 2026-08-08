@@ -12,6 +12,16 @@ const CONFIG_DIR = join(homedir(), '.zag');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.toml');
 const PID_FILE = join(tmpdir(), 'agent-controller.pid');
 
+// Environment for spawned agent-controller processes: strip inherited
+// ZAG_CONTROLLER_KEY / ZAG_SERVER_ENDPOINT overrides so the freshly written
+// ~/.zag/config.toml stays authoritative (config priority: CLI > env > file).
+function spawnEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
+  const env = { ...process.env, NODE_OPTIONS: '--import tsx', ...extra };
+  delete env.ZAG_CONTROLLER_KEY;
+  delete env.ZAG_SERVER_ENDPOINT;
+  return env;
+}
+
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) {
@@ -120,7 +130,7 @@ function spawnController(): { process: ChildProcess; waitForRegistered: Promise<
   const proc = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: CONTROLLER_PKG,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_OPTIONS: '--import tsx' },
+    env: spawnEnv(),
   });
 
   // Keep stdout/stderr listeners active for the entire lifetime of the process
@@ -254,9 +264,9 @@ describe('ACP Real Controller Integration', () => {
     console.log(`[test] Session created: ${sessionId}`);
     expect(sessionId).toBeTruthy();
 
-    const status = await waitForSessionStatus(sessionId, 'running', authToken, 30_000);
+    const status = await waitForSessionStatus(sessionId, 'idling', authToken, 30_000);
     console.log(`[test] Session status: ${status}`);
-    expect(status).toBe('running');
+    expect(status).toBe('idling');
   }, 60_000);
 
   it('should receive ACP messages via SSE', async () => {
@@ -269,17 +279,18 @@ describe('ACP Real Controller Integration', () => {
     const sessionBody = await sessionRes.json();
     const sessionId = sessionBody.data.createSession.session.id;
 
-    await waitForSessionStatus(sessionId, 'running', authToken, 30_000);
+    await waitForSessionStatus(sessionId, 'idling', authToken, 30_000);
 
     const msgQuery = `
-      query SessionMessages($sessionId: ID!, $limit: Int, $offset: Int) {
-        sessionMessages(sessionId: $sessionId, limit: $limit, offset: $offset) {
+      query SessionMessages($sessionId: ID!, $limit: Int) {
+        sessionMessages(sessionId: $sessionId, limit: $limit) {
           id direction type content
         }
       }
     `;
-    const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10, offset: 0 }, authToken);
+    const msgRes = await gqlRequest(msgQuery, { sessionId, limit: 10 }, authToken);
     const msgBody = await msgRes.json();
+    expect(msgBody.errors).toBeUndefined();
     const messages = msgBody.data.sessionMessages;
 
     expect(Array.isArray(messages)).toBe(true);

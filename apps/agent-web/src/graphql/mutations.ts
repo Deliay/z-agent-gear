@@ -334,6 +334,12 @@ export const RESPOND_PERMISSION = gql`
   }
 `
 
+export const RESPOND_ELICITATION = gql`
+  mutation RespondElicitation($requestId: String!, $action: ElicitationAction!, $values: JSON) {
+    respondElicitation(requestId: $requestId, action: $action, values: $values)
+  }
+`
+
 export const MARK_TODO_READ = gql`
   mutation MarkTodoRead($todoId: ID!) {
     markTodoRead(todoId: $todoId)
@@ -381,5 +387,16 @@ export const REFRESH_GITHUB_INSTALLATIONS = gql`
 export const UPDATE_GLOBAL_PERMISSION_TIMEOUT = gql`
   mutation UpdateGlobalPermissionTimeout($timeoutAction: GlobalPermissionTimeoutAction!) {
     updateGlobalPermissionTimeout(timeoutAction: $timeoutAction)
+  }
+`
+
+export const SET_MCP_SERVER_ENABLED = gql`
+  mutation SetMcpServerEnabled($id: ID!, $enabled: Boolean!) {
+    setMcpServerEnabled(id: $id, enabled: $enabled) {
+      id
+      name
+      enabled
+      status
+    }
   }
 `

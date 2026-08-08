@@ -18,6 +18,7 @@ import { gatewayManager } from './gateway.js';
 const CONTROLLER_VERSION = '1.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
+const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
   const config = acpDetector.getSpawnerConfig(serverType);
@@ -48,12 +49,26 @@ interface AcpStartPayload {
   serverType: string;
   cwd: string;
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
 }
 
 interface AcpMessagePayload {
   sessionId: string;
   message: { type: string; content: string; attachments?: Array<Record<string, unknown>> };
+}
+
+// Summarize the MCP configuration of an acp:start/acp:resume payload for logs,
+// without leaking the endpoint token.
+function describeMcpConfig(data: { mcpServers?: unknown[]; mcpEndpoint?: { url: string; serverNames?: string[] } }): string {
+  const parts: string[] = [];
+  if (data.mcpServers && data.mcpServers.length > 0) {
+    parts.push(`mcpServers=${data.mcpServers.length}`);
+  }
+  if (data.mcpEndpoint) {
+    parts.push(`mcpEndpoint(url=${data.mcpEndpoint.url}, serverNames=${JSON.stringify(data.mcpEndpoint.serverNames ?? null)})`);
+  }
+  return parts.length > 0 ? `mcp=[${parts.join(' ')}]` : 'mcp=[none]';
 }
 
 interface AcpCancelPayload {
@@ -103,6 +118,7 @@ interface AcpResumePayload {
   externalSessionId: string;
   serverType: string;
   cwd: string;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
 }
 
@@ -244,7 +260,7 @@ export function connectToServer(
   });
 
   socket.on('acp:start', async (data: AcpStartPayload) => {
-    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd}`);
+    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
 
     try {
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
@@ -252,6 +268,7 @@ export function connectToServer(
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpServers: data.mcpServers,
+        mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
       }, spawner);
 
@@ -259,6 +276,10 @@ export function connectToServer(
 
       bridge.on('permission:sent', (requestId: string) => {
         permissionRequestBridge.set(requestId, bridge);
+      });
+
+      bridge.on('elicitation:sent', (requestId: string) => {
+        elicitationRequestBridge.set(requestId, bridge);
       });
 
       const onInitialized = (payload: Record<string, unknown>) => {
@@ -292,7 +313,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
-        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false`);
+        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -318,13 +339,14 @@ export function connectToServer(
   });
 
   socket.on('acp:resume', async (data: AcpResumePayload) => {
-    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId}`);
+    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
 
     try {
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
+        mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
       }, spawner);
 
@@ -332,6 +354,10 @@ export function connectToServer(
 
       bridge.on('permission:sent', (requestId: string) => {
         permissionRequestBridge.set(requestId, bridge);
+      });
+
+      bridge.on('elicitation:sent', (requestId: string) => {
+        elicitationRequestBridge.set(requestId, bridge);
       });
 
       const onInitialized = (payload: Record<string, unknown>) => {
@@ -360,6 +386,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
+        console.log(`[ACP ctrl] emitting acp:resume:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:resume:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -769,11 +796,24 @@ export function connectToServer(
     }
   });
 
+  socket.on('acp:elicitation:response', (data: {
+    requestId: string;
+    action: 'accept' | 'decline' | 'cancel';
+    content?: Record<string, unknown>;
+  }) => {
+    const bridge = elicitationRequestBridge.get(data.requestId);
+    if (bridge) {
+      elicitationRequestBridge.delete(data.requestId);
+      bridge.handleElicitationResponse(data.requestId, data.action, data.content);
+    }
+  });
+
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     gatewayManager.closeAll();
     permissionRequestBridge.clear();
+    elicitationRequestBridge.clear();
   });
 
   socket.on('connect_error', (err) => {

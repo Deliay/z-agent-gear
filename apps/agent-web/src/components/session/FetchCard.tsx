@@ -19,6 +19,7 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
 
   const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
   const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
+  const status = typeof parsed.status === 'string' ? parsed.status : 'in_progress';
   const url = typeof rawInput?.url === 'string' ? rawInput.url : '';
   const output = typeof rawOutput?.output === 'string' ? rawOutput.output : '';
   const summary = url ? `Fetch: ${url.length > 40 ? url.slice(0, 40) + '...' : url}` : 'Fetch URL';
@@ -28,7 +29,7 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
       title="Fetch URL"
       summary={summary}
       defaultCollapsed={true}
-      color="purple"
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >

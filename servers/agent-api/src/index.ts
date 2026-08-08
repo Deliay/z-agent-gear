@@ -13,16 +13,21 @@ import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
+import { mcpRouter } from './routes/mcp.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
+import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
+import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
+import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
 
 const app = express();
 
 app.use(cors({ origin: config.corsOrigin }));
 app.use(compressionMiddleware());
 app.use(cookieParser());
+app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
@@ -41,6 +46,8 @@ app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
 
+app.use('/mcp', mcpRouter);
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
@@ -54,7 +61,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001, migration002]);
+    await runMigrations([migration001, migration002, migration003]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }
@@ -66,6 +73,14 @@ async function start() {
     // Start permission subscriber
     permissionSubscriberService.start();
     console.log('Permission subscriber started');
+
+    // Start elicitation subscriber
+    elicitationSubscriberService.start();
+    console.log('Elicitation subscriber started');
+
+    // Revoke session MCP endpoints when sessions reach a terminal status
+    mcpEndpointRevokeSubscriber.start();
+    console.log('MCP endpoint revoke subscriber started');
   } catch (err) {
     console.warn('Redis not available:', (err as Error).message);
   }

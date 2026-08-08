@@ -105,6 +105,7 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
 }
 
 let authToken = '';
+let userId = '';
 
 async function createFreshController(): Promise<{ rawKey: string; controllerId: string; client: ClientSocket }> {
   const keyRes = await gqlRequest(
@@ -139,6 +140,7 @@ describe('Controller API ACP WebSocket', () => {
     const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
     const body = await res.json();
     authToken = body.data?.signup?.token ?? '';
+    userId = body.data?.signup?.user?.id ?? '';
     expect(authToken).toBeTruthy();
   });
 
@@ -218,6 +220,69 @@ describe('Controller API ACP WebSocket', () => {
       const verifyBody = await verifyRes.json();
       expect(verifyBody.data.session.status).toBe('idling');
 
+      client.disconnect();
+    });
+
+    it('should include mcpEndpoint with serverNames in acp:start when session created with MCP servers', async () => {
+      const { controllerId, client } = await createFreshController();
+      const workspaceId = await createWorkspace(controllerId);
+
+      // Register an MCP proxy server (mcp-proxy) so it can be selected
+      const keyRes = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        body: JSON.stringify({ name: `acp-ws-mcp-key-${Date.now()}` }),
+      });
+      const keyData = await keyRes.json();
+      expect(keyData.rawKey).toBeDefined();
+
+      const serverName = `fluentui-mcp-${Date.now().toString(36)}`;
+      const regRes = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: keyData.rawKey,
+          hostname: 'acp-ws-test-host',
+          command: 'npx -y fluentui-mcp',
+          serverName,
+        }),
+      });
+      const regData = await regRes.json();
+      expect(regData.success).toBe(true);
+      expect(regData.serverId).toBeDefined();
+
+      const startEvent = waitForEvent<{
+        requestId: string;
+        sessionId: string;
+        mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+      }>(client, 'acp:start', 10000);
+
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'opencode', workspaceId, mcpServerIds: [regData.serverId] } },
+        authToken,
+      );
+      const sessionBody = await sessionRes.json();
+      const sessionId = sessionBody.data.createSession.session.id;
+
+      const startData = await startEvent;
+      expect(startData.sessionId).toBe(sessionId);
+      // Regression: agent-controller requires serverNames to assemble per-server
+      // MCP URLs; a missing field previously crashed the bridge with a raw
+      // TypeError and no diagnostic output.
+      expect(startData.mcpEndpoint).toBeDefined();
+      expect(startData.mcpEndpoint!.url).toContain(`/mcp/${sessionId}`);
+      expect(startData.mcpEndpoint!.token).toBeTruthy();
+      expect(startData.mcpEndpoint!.serverNames).toEqual([serverName]);
+
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
       client.disconnect();
     });
 

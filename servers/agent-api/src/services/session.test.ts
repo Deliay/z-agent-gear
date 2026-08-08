@@ -32,8 +32,22 @@ vi.mock('../models/controller-workspace.js', () => ({
   },
 }));
 
+vi.mock('../models/mcp-server.js', () => ({
+  McpServer: {
+    countDocuments: vi.fn(),
+  },
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
+}));
+
+vi.mock('./mcp-endpoint.js', () => ({
+  mcpEndpointService: {
+    createEndpoint: vi.fn(),
+    revokeEndpoint: vi.fn(),
+    reissueEndpoint: vi.fn(),
+  },
 }));
 
 import { sessionService } from './session.js';
@@ -41,7 +55,9 @@ import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
+import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { mcpEndpointService } from './mcp-endpoint.js';
 
 const mockRedis = {
   set: vi.fn(),
@@ -324,6 +340,107 @@ describe('SessionService', () => {
 
       vi.useRealTimers();
     });
+
+    it('should issue MCP endpoint and include it in acp:start when mcpServerIds provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+        url: 'http://gateway/mcp/sess-1',
+        token: 'mcp-token',
+        serverNames: ['fluentui-mcp'],
+      });
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        mcpServerIds: ['server-1'],
+      });
+
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1']);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:start"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"mcpEndpoint":{"url":"http://gateway/mcp/sess-1","token":"mcp-token","serverNames":["fluentui-mcp"]}'),
+      );
+    });
+
+    it('should not issue MCP endpoint when mcpServerIds is empty', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+      });
+
+      expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:start"'),
+      );
+      const startCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:start"'));
+      expect(String(startCall?.[1])).not.toContain('mcpEndpoint');
+    });
+
+    it('should continue session creation when MCP endpoint issuance fails', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(mcpEndpointService.createEndpoint).mockRejectedValue(new Error('SERVER_NOT_FOUND'));
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        mcpServerIds: ['server-1'],
+      });
+
+      expect(result.id).toBe('sess-1');
+    });
+
+    it('should fail session creation when selected MCP servers are invalid or disabled', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      // Only 1 of the 2 requested servers is selectable
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: ['server-1', 'server-2'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_FOUND');
+
+      expect(Session.create).not.toHaveBeenCalled();
+      expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateStatus', () => {
@@ -371,6 +488,18 @@ describe('SessionService', () => {
       const result = await sessionService.close('sess-1', 'user-1');
       expect(result).toBe(true);
     });
+
+    it('should revoke MCP endpoint on close', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
+
+      await sessionService.close('sess-1', 'user-1');
+
+      expect(mcpEndpointService.revokeEndpoint).toHaveBeenCalledWith('sess-1');
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+    });
   });
 
   describe('delete', () => {
@@ -386,6 +515,7 @@ describe('SessionService', () => {
       expect(result).toBe(true);
       expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
       expect(mockRedis.del).toHaveBeenCalledWith('session:sess-1:status');
+      expect(mcpEndpointService.revokeEndpoint).toHaveBeenCalledWith('sess-1');
     });
 
     it('should return false when session not found', async () => {
@@ -853,6 +983,42 @@ describe('SessionService', () => {
 
       expect(result).toEqual({ success: true, status: 'connecting' });
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"externalSessionId":""'));
+    });
+
+    it('should reissue MCP endpoint and include in acp:resume', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+      vi.mocked(mcpEndpointService.reissueEndpoint).mockResolvedValue({
+        url: 'http://gateway/mcp/sess-1',
+        token: 'new-mcp-token',
+        serverNames: ['fluentui-mcp'],
+      });
+
+      await sessionService.resume('sess-1', 'user-1');
+
+      expect(mcpEndpointService.reissueEndpoint).toHaveBeenCalledWith('sess-1', 'user-1');
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"mcpEndpoint":{"url":"http://gateway/mcp/sess-1","token":"new-mcp-token","serverNames":["fluentui-mcp"]}'),
+      );
+    });
+
+    it('should resume without mcpEndpoint when no endpoint to reissue', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+      vi.mocked(mcpEndpointService.reissueEndpoint).mockResolvedValue(null);
+
+      await sessionService.resume('sess-1', 'user-1');
+
+      expect(mcpEndpointService.reissueEndpoint).toHaveBeenCalledWith('sess-1', 'user-1');
+      const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
+      expect(String(resumeCall?.[1])).not.toContain('mcpEndpoint');
     });
   });
 

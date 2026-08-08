@@ -175,7 +175,7 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     // Global notification should auto-popup PermissionDialog for immediate priority
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
+    await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
 
     disconnect();
   });
@@ -219,7 +219,7 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     // Permission dialog should auto-popup for immediate priority
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
+    await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Reject' })).toBeVisible();
     await expect(page.getByRole('button', { name: '取消' })).toBeVisible();
@@ -326,7 +326,60 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     // Global notification should auto-popup PermissionDialog for immediate priority
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('dialog').getByText('Agent请求权限审批')).toBeVisible();
+    await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
+
+    disconnect();
+  });
+
+  test('should show tool call details in permission dialog', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, socket, disconnect } = await registerController(rawKey);
+    const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
+
+    // Create session
+    const sessionId = await createSession(page, controllerId, token, workspaceId);
+
+    // Wait for acp:start and respond
+    const startData = await new Promise<{ requestId: string }>((resolve) => {
+      socket.once('acp:start', resolve);
+    });
+    socket.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_${Date.now()}`,
+    });
+
+    await loginViaUI(page, username);
+
+    // Send permission request with full tool call details
+    socket.emit('acp:permission', {
+      requestId: `perm_detail_${Date.now()}`,
+      sessionId,
+      toolCall: {
+        toolCallId: 'call_detail_e2e',
+        title: 'Bash: npm run danger',
+        kind: 'execute',
+        rawInput: { command: 'npm run danger' },
+        locations: [{ path: 'src/index.ts', line: 42 }],
+      },
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+      ],
+    });
+
+    // Wait for auto-popup dialog (immediate priority)
+    await page.waitForTimeout(3000);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    // Tool call details should be rendered directly: title, kind badge, command, location
+    await expect(dialog.getByText('Bash: npm run danger', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('execute')).toBeVisible();
+    await expect(dialog.getByText('npm run danger', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('src/index.ts:42')).toBeVisible();
 
     disconnect();
   });

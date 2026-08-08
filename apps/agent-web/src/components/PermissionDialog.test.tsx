@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useQuery } from '@apollo/client/react';
 import { PermissionDialog } from './PermissionDialog';
+
+const mockUseQuery = useQuery as unknown as ReturnType<typeof vi.fn>;
 
 const mockRespondPermission = vi.fn().mockResolvedValue({});
 
@@ -133,5 +136,76 @@ describe('PermissionDialog', () => {
     render(<PermissionDialog {...defaultProps} />);
     const allowBtn = screen.getByText('允许一次');
     expect(allowBtn.className).toContain('bg-primary');
+  });
+
+  describe('toolCall detail from todo.data', () => {
+    const todoWithToolCall = {
+      ...baseTodo,
+      data: {
+        ...baseTodo.data,
+        toolCall: {
+          toolCallId: 'tc-123',
+          title: '删除临时文件',
+          kind: 'delete',
+          rawInput: { filePath: '/tmp/cache.txt' },
+          locations: [{ path: '/tmp/cache.txt', line: 12 }],
+        },
+      },
+    };
+
+    it('should render tool call details directly when toolCall has title/rawInput', () => {
+      render(<PermissionDialog {...defaultProps} todo={todoWithToolCall} />);
+      expect(screen.getByText('删除临时文件')).toBeDefined();
+      expect(screen.getByText('delete')).toBeDefined();
+      // 参数摘要（文件路径）与 locations 列表
+      expect(screen.getAllByText('/tmp/cache.txt').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('/tmp/cache.txt:12')).toBeDefined();
+      // 不再展示裸 toolCallId 兜底
+      expect(screen.queryByText('工具调用 ID')).toBeNull();
+    });
+
+    it('should skip session messages query when toolCall detail is available', () => {
+      mockUseQuery.mockClear();
+      render(<PermissionDialog {...defaultProps} todo={todoWithToolCall} />);
+      expect(mockUseQuery).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ skip: true }),
+      );
+    });
+
+    it('should render command summary for execute kind', () => {
+      const todoWithExecute = {
+        ...baseTodo,
+        data: {
+          ...baseTodo.data,
+          toolCall: {
+            toolCallId: 'tc-123',
+            title: '运行测试',
+            kind: 'execute',
+            rawInput: { command: 'npm run test' },
+          },
+        },
+      };
+      render(<PermissionDialog {...defaultProps} todo={todoWithExecute} />);
+      expect(screen.getByText('npm run test')).toBeDefined();
+    });
+
+    it('should fall back to session messages lookup when toolCall has no detail', () => {
+      mockUseQuery.mockClear();
+      const todoWithoutDetail = {
+        ...baseTodo,
+        data: {
+          ...baseTodo.data,
+          toolCall: { toolCallId: 'tc-123' },
+        },
+      };
+      render(<PermissionDialog {...defaultProps} todo={todoWithoutDetail} />);
+      // 未跳过查询且走原有 toolCallId 兜底展示
+      expect(mockUseQuery).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ skip: false }),
+      );
+      expect(screen.getByText('tc-123')).toBeDefined();
+    });
   });
 });

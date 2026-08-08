@@ -10,6 +10,7 @@ export interface AcpBridgeOptions {
   cwd: string;
   additionalDirectories?: string[];
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
 }
 
 interface QueuedInput {
@@ -56,6 +57,39 @@ function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] 
     command: s.command,
     args: s.args ?? [],
     env: s.env ?? [],
+  }));
+}
+
+// Sanitized, token-free summary of the MCP servers about to be sent to the
+// agent, so launch failures are diagnosable from local logs alone.
+function describeMcpServersForLog(servers: acp.McpServer[]): string {
+  if (servers.length === 0) return 'none';
+  return servers.map((s) => {
+    if ('url' in s) {
+      const headerNames = (s.headers ?? []).map((h) => h.name).join('+');
+      return `${s.name}(type=${(s as { type?: string }).type ?? 'http'}, url=${s.url}${headerNames ? `, headers=${headerNames}` : ''})`;
+    }
+    return `${s.name}(type=stdio, cmd=${(s as { command?: string }).command})`;
+  }).join(' ');
+}
+
+function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
+  // Fail loudly with a diagnosable message instead of a raw TypeError when the
+  // upstream payload drifts from the contract (serverNames is required).
+  if (!Array.isArray(mcpEndpoint.serverNames) || mcpEndpoint.serverNames.length === 0) {
+    throw new Error(
+      `Invalid mcpEndpoint payload: "serverNames" must be a non-empty array ` +
+      `(received: ${JSON.stringify(mcpEndpoint.serverNames)}, url: ${mcpEndpoint.url})`,
+    );
+  }
+  const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
+  // Each assembled server gets its own URL so the entry point can route
+  // standard MCP clients (which never send a serverName param) correctly.
+  return mcpEndpoint.serverNames.map((name) => ({
+    type: 'http' as const,
+    name,
+    url: `${mcpEndpoint.url}/${encodeURIComponent(name)}`,
+    headers,
   }));
 }
 
@@ -151,6 +185,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private cwd: string;
   private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
+  private mcpEndpoint: AcpBridgeOptions['mcpEndpoint'];
   private connection: acp.ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private activePrompt: Promise<acp.PromptResponse> | null = null;
@@ -164,6 +199,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     resolve: (response: acp.RequestPermissionResponse) => void;
     timeout: NodeJS.Timeout;
   }>();
+  private pendingElicitations = new Map<string, {
+    resolve: (response: acp.CreateElicitationResponse) => void;
+    timeout: NodeJS.Timeout;
+  }>();
 
   // Capability snapshot from initialize / session/new / resume
   private configOptions: SessionConfigOptionData[] = [];
@@ -172,6 +211,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private authMethods: AcpAuthMethodData[] = [];
   private supportsAdditionalDirectories = false;
   private agentProtocolVersion: number | null = null;
+  private agentMcpCapabilities: { http?: boolean | null; sse?: boolean | null } | null = null;
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -180,7 +220,29 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.cwd = options.cwd;
     this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
+    this.mcpEndpoint = options.mcpEndpoint;
     this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
+  }
+
+  private resolveMcpServers(): acp.McpServer[] {
+    if (this.mcpEndpoint) {
+      return toMcpEndpointServers(this.mcpEndpoint);
+    }
+    return toMcpServers(this.mcpServers);
+  }
+
+  // Log the MCP configuration that is about to be handed to the agent via
+  // session/new (or session/resume), and warn when the agent did not
+  // advertise the required MCP transport capability in initialize.
+  private logMcpServersForSession(method: 'session/new' | 'session/resume', servers: acp.McpServer[]): void {
+    console.log(`[ACP bridge] session ${this.sessionId}: passing MCP servers via ${method}: ${describeMcpServersForLog(servers)}`);
+    const httpServers = servers.filter((s) => 'url' in s && (s as { type?: string }).type === 'http');
+    if (httpServers.length > 0 && this.agentMcpCapabilities && this.agentMcpCapabilities.http === false) {
+      console.warn(
+        `[ACP bridge] session ${this.sessionId}: agent did not advertise mcpCapabilities.http ` +
+        `but ${httpServers.length} http MCP server(s) are being passed: ${httpServers.map((s) => s.name).join(', ')}`,
+      );
+    }
   }
 
   async start(): Promise<void> {
@@ -190,9 +252,11 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.spawner.start();
     try {
       await this.initConnection();
+      const mcpServers = this.resolveMcpServers();
+      this.logMcpServersForSession('session/new', mcpServers);
       const result = await this.connection!.newSession({
         cwd: this.cwd,
-        mcpServers: toMcpServers(this.mcpServers),
+        mcpServers,
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = result.sessionId;
@@ -213,9 +277,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.spawner.start();
     try {
       await this.initConnection();
+      const mcpServers = this.resolveMcpServers();
+      this.logMcpServersForSession('session/resume', mcpServers);
       const result = await this.connection!.resumeSession({
         sessionId: externalSessionId,
         cwd: this.cwd,
+        mcpServers,
         additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
       });
       this.acpSessionId = externalSessionId;
@@ -228,7 +295,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       try {
         const result = await this.connection!.newSession({
           cwd: this.cwd,
-          mcpServers: toMcpServers(this.mcpServers),
+          mcpServers: this.resolveMcpServers(),
           additionalDirectories: this.additionalDirectories.length > 0 ? this.additionalDirectories : undefined,
         });
         this.acpSessionId = result.sessionId;
@@ -399,6 +466,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         session: {
           configOptions: { boolean: {} },
         },
+        elicitation: { form: {}, url: {} },
       },
       clientInfo: {
         name: 'agent-gear',
@@ -427,6 +495,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       ? { name: result.agentInfo.name, version: result.agentInfo.version ?? null }
       : null;
     this.authMethods = toAuthMethods(result.authMethods);
+    this.agentMcpCapabilities = result.agentCapabilities?.mcpCapabilities ?? null;
+    console.log(
+      `[ACP bridge] session ${this.sessionId}: agent capabilities: ` +
+      `protocolVersion=${result.protocolVersion ?? 'n/a'} mcp=${JSON.stringify(this.agentMcpCapabilities)} ` +
+      `agent=${this.agentInfo ? `${this.agentInfo.name}@${this.agentInfo.version ?? 'n/a'}` : 'n/a'}`,
+    );
     this.supportsAdditionalDirectories =
       result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== undefined &&
       result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== null;
@@ -580,6 +654,78 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     pending.resolve({ outcome });
   }
 
+  async unstable_createElicitation(
+    params: acp.CreateElicitationRequest,
+  ): Promise<acp.CreateElicitationResponse> {
+    // custom/未知模式不支持：立即取消，避免挂起 Agent
+    if (!acp.CreateElicitationRequest.isForm(params) && !acp.CreateElicitationRequest.isUrl(params)) {
+      return { action: 'cancel' };
+    }
+
+    const requestId = `elic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const toolCallId = 'toolCallId' in params ? params.toolCallId : undefined;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingElicitations.delete(requestId);
+        resolve({ action: 'cancel' });
+      }, 65_000);
+
+      this.pendingElicitations.set(requestId, { resolve, timeout });
+
+      if (acp.CreateElicitationRequest.isForm(params)) {
+        this.socket.emit('acp:elicitation', {
+          requestId,
+          sessionId: this.sessionId,
+          mode: 'form',
+          message: params.message,
+          ...(toolCallId != null ? { toolCallId } : {}),
+          requestedSchema: params.requestedSchema,
+        });
+      } else {
+        this.socket.emit('acp:elicitation', {
+          requestId,
+          sessionId: this.sessionId,
+          mode: 'url',
+          message: params.message,
+          ...(toolCallId != null ? { toolCallId } : {}),
+          elicitationId: params.elicitationId,
+          url: params.url,
+        });
+      }
+
+      this.emit('elicitation:sent', requestId);
+    });
+  }
+
+  handleElicitationResponse(
+    requestId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, unknown>,
+  ): void {
+    const pending = this.pendingElicitations.get(requestId);
+    if (!pending) {
+      console.warn(`Elicitation request ${requestId} not found`);
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingElicitations.delete(requestId);
+    pending.resolve({
+      action,
+      ...(action === 'accept' && content
+        ? { content: content as Record<string, acp.ElicitationContentValue> }
+        : {}),
+    });
+  }
+
+  async unstable_completeElicitation(params: acp.CompleteElicitationNotification): Promise<void> {
+    this.socket.emit('acp:elicitation:complete', {
+      sessionId: this.sessionId,
+      elicitationId: params.elicitationId,
+    });
+  }
+
   // ── text buffering ──
 
   private scheduleTextFlush(): void {
@@ -613,14 +759,17 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   private emitStopped(reason: string, exitCode?: number): void {
+    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}`);
     this.stopped = true;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }
 
   private handleError(error: unknown): void {
-    this.stopped = true;
     const msg = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error(`[ACP bridge] session ${this.sessionId} failed: ${msg}${stack ? `\n${stack}` : ''}`);
+    this.stopped = true;
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
       reason: 'error',

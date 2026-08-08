@@ -33,6 +33,7 @@ export const resolvers = {
     ...sessionResolvers.Mutation,
     ...gatewayResolvers.Mutation,
     ...todoResolvers.Mutation,
+    ...mcpServerResolvers.Mutation,
     ...githubResolvers.Mutation,
   },
   Provider: {
@@ -40,5 +41,11 @@ export const resolvers = {
   },
   Model: {
     ...modelResolvers.Model,
+  },
+  TodoItem: {
+    ...todoResolvers.TodoItem,
+  },
+  PermissionRequestData: {
+    ...todoResolvers.PermissionRequestData,
   },
 };
