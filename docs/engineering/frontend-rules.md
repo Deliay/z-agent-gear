@@ -48,3 +48,7 @@ apps/agent-web/
 
 - Use Apollo Client for GraphQL queries/mutations.
 - Generate TypeScript types from GraphQL schema using GraphQL Code Generator.
+
+## Styling Conventions
+
+- **配色映射表要语义化而非颜色名**。命名颜色键（`purple`/`blue`/`yellow`/`gray`）名不副实、易腐化；改用语义键（`active`/`completed`/`failed`）表达意图，且保留旧键避免破坏存量调用方。
