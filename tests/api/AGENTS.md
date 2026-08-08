@@ -202,6 +202,7 @@ npm test
 | 不存在的 session SSE | 应返回 404 |
 | 正常 SSE 连接 | 应返回 200 + event-stream，发送 history |
 | SSE modes - acp:start:result 含 modes | SSE 初始 status 事件包含 modes/currentModeId/currentModel |
+| SSE 高频消息时序 | 高频连发 5 条消息，SSE 推送顺序应与到达顺序一致 |
 
 ### Controller ACP WebSocket (`controller-api/acp-websocket.test.ts`)
 
