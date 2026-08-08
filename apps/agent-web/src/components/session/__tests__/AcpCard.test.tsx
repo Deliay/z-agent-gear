@@ -70,4 +70,44 @@ describe('AcpCard', () => {
       unmount();
     }
   });
+
+  it('should apply strongest info highlight and pulse for active color', () => {
+    const { container } = render(
+      <AcpCard title="Tool Call" summary="..." color="active">
+        <div>content</div>
+      </AcpCard>,
+    );
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/10');
+    expect(card.className).toContain('border-info');
+    expect(card.className).toContain('motion-safe:animate-pulse');
+  });
+
+  it('should apply softer same-family highlight without pulse for completed color', () => {
+    const { container } = render(
+      <AcpCard title="Tool Call" summary="✓" color="completed">
+        <div>content</div>
+      </AcpCard>,
+    );
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).toContain('border-info/40');
+    expect(card.className).not.toContain('animate-pulse');
+    const header = screen.getByText('Tool Call').closest('button') as HTMLElement;
+    expect(header.className).toContain('text-info');
+  });
+
+  it('should apply same-family highlight with destructive summary for failed color', () => {
+    const { container } = render(
+      <AcpCard title="Tool Call" summary="✗" color="failed">
+        <div>content</div>
+      </AcpCard>,
+    );
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).toContain('border-info/40');
+    expect(card.className).not.toContain('animate-pulse');
+    const summary = screen.getByText('✗');
+    expect(summary.className).toContain('text-destructive');
+  });
 });

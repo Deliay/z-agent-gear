@@ -44,7 +44,7 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
       title="Read Files"
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >
