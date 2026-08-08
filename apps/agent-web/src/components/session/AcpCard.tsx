@@ -5,7 +5,9 @@ interface AcpCardProps {
   title: string;
   summary: string;
   defaultCollapsed?: boolean;
-  color?: 'purple' | 'yellow' | 'gray' | 'blue';
+  // purple/yellow/gray/blue 为历史配色（仅 purple 高亮）；
+  // active/completed/failed 为工具调用恒高亮配色：info 同色系按状态区分强度。
+  color?: 'purple' | 'yellow' | 'gray' | 'blue' | 'active' | 'completed' | 'failed';
   children: React.ReactNode;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
@@ -35,6 +37,25 @@ const colorClasses = {
     header: 'text-foreground',
     summary: 'text-muted-foreground',
     chevron: 'text-muted-foreground hover:text-foreground',
+  },
+  // 恒高亮：进行中最强（脉冲），完成/失败减弱为同色系浅高亮，失败摘要用 destructive 略微区分
+  active: {
+    container: 'bg-info/10 border border-info motion-safe:animate-pulse',
+    header: 'text-info',
+    summary: 'text-info',
+    chevron: 'text-info hover:opacity-70',
+  },
+  completed: {
+    container: 'bg-info/5 border border-info/40',
+    header: 'text-info',
+    summary: 'text-info/70',
+    chevron: 'text-info/70 hover:opacity-70',
+  },
+  failed: {
+    container: 'bg-info/5 border border-info/40',
+    header: 'text-info',
+    summary: 'text-destructive',
+    chevron: 'text-info/70 hover:opacity-70',
   },
 };
 

@@ -156,6 +156,33 @@ describe('ToolCallCard statuses', () => {
     expect(screen.getByText(/✓/)).toBeDefined();
   });
 
+  it('should keep completed highlighted with softer same-family color', () => {
+    const { container } = renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'completed',
+      title: 'Edit file',
+    });
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).toContain('border-info/40');
+    expect(card.className).not.toContain('animate-pulse');
+    expect(card.className).not.toContain('bg-muted');
+  });
+
+  it('should keep failed highlighted with destructive summary accent', () => {
+    const { container } = renderCollapsedToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'failed',
+      title: 'Edit file',
+    });
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('bg-info/5');
+    expect(card.className).not.toContain('animate-pulse');
+    expect(screen.getByText(/✗/).className).toContain('text-destructive');
+  });
+
   it('should show cross summary for failed when collapsed', () => {
     renderCollapsedToolCall({
       sessionUpdate: 'tool_call',

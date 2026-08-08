@@ -1060,6 +1060,87 @@ describe('Session SSE API', () => {
     client.disconnect();
   }, 20_000);
 
+  it('should stream rapidly emitted messages in arrival order', async () => {
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `sse-order-key-${Date.now()}`, type: 'local' } },
+      authToken,
+    );
+    const keyBody = await keyRes.json();
+    const freshRawKey = keyBody.data.createControllerKey.rawKey;
+
+    const client = createClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', { key: freshRawKey, hostname: 'sse-order-host', version: '1.0.0' });
+    const regData = await registered;
+    const freshControllerId = regData.controllerId;
+
+    const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+    const wsId = await createWorkspace(freshControllerId);
+    const createRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+      authToken,
+    );
+    const sessionId = (await createRes.json()).data.createSession.session.id;
+
+    const startData = await startEvent;
+    client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_sse_order_${Date.now()}`,
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const controller = new AbortController();
+    const res = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
+      headers: { Authorization: `Bearer ${authToken}`, 'Accept-Encoding': 'identity' },
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+
+    // 等待 SSE 订阅就绪后，高频连发 5 条消息（模拟 agent 快速输出）
+    await new Promise((r) => setTimeout(r, 500));
+    for (let i = 1; i <= 5; i++) {
+      client.emit('acp:message', {
+        sessionId,
+        message: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: `seq-${i}` },
+        },
+      });
+    }
+
+    // 收集 SSE 推送的 message 事件
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const received: string[] = [];
+    const deadline = Date.now() + 8000;
+    while (received.length < 5 && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const evt = JSON.parse(line.slice(6));
+        if (evt.type !== 'message' || typeof evt.data?.content !== 'string') continue;
+        if (!evt.data.content.includes('seq-')) continue;
+        const update = JSON.parse(evt.data.content);
+        received.push(update.content.text);
+      }
+    }
+
+    reader.cancel();
+    controller.abort();
+    client.disconnect();
+
+    expect(received).toEqual(['seq-1', 'seq-2', 'seq-3', 'seq-4', 'seq-5']);
+  }, 20_000);
+
   it('should return non-empty modes and models in both GraphQL and SSE after acp:start:result', async () => {
     const keyRes = await gqlRequest(
       CREATE_KEY,

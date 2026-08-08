@@ -29,7 +29,7 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
       title="Fetch URL"
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >

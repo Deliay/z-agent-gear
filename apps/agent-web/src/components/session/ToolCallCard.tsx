@@ -270,7 +270,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
       title={`Tool Call: ${title}`}
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'blue' : status === 'failed' ? 'yellow' : 'purple'}
+      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
     >

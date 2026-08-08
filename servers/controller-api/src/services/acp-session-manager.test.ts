@@ -345,6 +345,61 @@ describe('ACPSessionManager', () => {
       const createCall = vi.mocked(AcpMessage.create).mock.calls[0]?.[0] as Record<string, unknown>;
       expect(createCall.messageId).toBeUndefined();
     });
+
+    it('should publish messages in arrival order even when persistence completes out of order', async () => {
+      const docWithId = (id: string) => ({ ...mockAcpMessageDoc(), _id: { toString: () => id } });
+      vi.mocked(AcpMessage.create).mockImplementation((async (input: { content: { content: { text: string } } }) => {
+        const text = input.content.content.text;
+        // 模拟 MongoDB 写入完成乱序：先到达的消息落库更慢
+        await new Promise((resolve) => setTimeout(resolve, text === 'one' ? 30 : 0));
+        return docWithId(text === 'one' ? 'msg-1' : 'msg-2');
+      }) as never);
+
+      const chunk = (text: string) => ({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text },
+      });
+      await Promise.all([
+        manager.handleControllerMessage('sess-1', chunk('one') as never),
+        manager.handleControllerMessage('sess-1', chunk('two') as never),
+      ]);
+
+      const published = mockRedis.publish.mock.calls
+        .filter((call) => call[0] === 'session:message')
+        .map((call) => JSON.parse(call[1] as string) as { message: { id: string } });
+      expect(published.map((payload) => payload.message.id)).toEqual(['msg-1', 'msg-2']);
+    });
+
+    it('should not serialize messages across different sessions', async () => {
+      const resolvers: Array<(doc: unknown) => void> = [];
+      vi.mocked(AcpMessage.create).mockImplementation(
+        (() => new Promise((resolve) => { resolvers.push(resolve); })) as never,
+      );
+
+      const chunk = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } };
+      const p1 = manager.handleControllerMessage('sess-1', chunk as never);
+      const p2 = manager.handleControllerMessage('sess-2', chunk as never);
+
+      // 两个 session 的落库应并发开始，互不阻塞
+      await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+      resolvers[0]!(mockAcpMessageDoc());
+      resolvers[1]!(mockAcpMessageDoc());
+      await Promise.all([p1, p2]);
+    });
+
+    it('should continue processing later messages when an earlier one fails', async () => {
+      vi.mocked(AcpMessage.create)
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValueOnce(mockAcpMessageDoc() as never);
+
+      const chunk = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } };
+      const p1 = manager.handleControllerMessage('sess-1', chunk as never);
+      const p2 = manager.handleControllerMessage('sess-1', chunk as never);
+
+      await expect(p1).rejects.toThrow('db down');
+      await p2;
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:message', expect.stringContaining('"direction":"output"'));
+    });
   });
 
   describe('stopSession', () => {
