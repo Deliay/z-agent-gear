@@ -298,7 +298,7 @@ cd tests/e2e && npm run test
 
 ## Phase 12: $/cancel_request + Elicitation + agentInfo + v2 评估
 
-> **状态更新（2026-08-08）**：Elicitation 部分已随验收修复落地（契约 → bridge → controller-api → agent-api → web 全链路 + 单测/API/E2E/真实 opencode 握手覆盖），见 [[../acceptance/20260807-acp-permission-elicitation-acceptance-report.md]]。`$/cancel_request`、agentInfo 展示与 v2 评估仍未实施。
+> **状态更新（2026-08-08）**：Elicitation 部分已随验收修复落地（契约 → bridge → controller-api → agent-api → web 全链路 + 单测/API/E2E/真实 opencode 握手覆盖），见 [[../acceptance/archived/20260807-acp-permission-elicitation-acceptance-report.md]]。`$/cancel_request`、agentInfo 展示与 v2 评估仍未实施。
 
 ### 文件修改
 

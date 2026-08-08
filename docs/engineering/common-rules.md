@@ -87,6 +87,14 @@ test: add agent resolver tests
 - All automated checks must pass.
 - No direct pushes to `main` branch.
 
+## Test Pitfalls
+
+- **API 测试能确定性复现分布式时序 bug**。fake 上游高频连发 + 真实 Mongo/Redis + SSE 接收的组合，把单测中需精心构造的竞态在集成环境直接暴露，是此类 bug 最有效的回归手段。
+- **真实 agent 的确定性覆盖边界**。真实 opencode 的 initialize/session/new 可确定性验证（能力协商、握手回归），但触发 agent 主动发起动作需要 LLM 决策，不确定性部分用 wire 级 fake agent（同一协议字节流）补齐，形成「真实握手 + 协议字节流 + 全链路 stub」三层覆盖。
+- **测试进程环境要隔离宿主 env**。spawn 真实进程做集成测试时，`{ ...process.env }` 会把宿主配置覆盖变量（如 `ZAG_CONTROLLER_KEY`）带进被测进程，config 优先级（CLI > env > file）会放大该问题。
+- **状态机语义演进要回填测试断言**。状态语义变更（如拆出 `idling`）后，存量测试期望旧值会形成基线腐化；应全局检索测试断言同步更新。
+- **E2E 与 API 套件不宜并行跑在同一套服务上**。二者共用 Mongo/Redis/服务进程，并行会造成超时型假失败；验收验证应串行执行或隔离环境。
+
 ## Available Skills
 
 | Skill | Description |
