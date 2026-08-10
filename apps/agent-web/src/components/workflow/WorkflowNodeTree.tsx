@@ -256,15 +256,15 @@ function NodeCard({
       {!collapsed && (
       <>
       {node.description && (
-        <p className="mt-1 text-xs text-muted-foreground">{node.description}</p>
+        <p className="mt-1 text-xs wrap-anywhere text-muted-foreground">{node.description}</p>
       )}
       {node.rejectInfo && node.status === 'REJECT' && (
-        <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+        <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
           打回理由：{node.rejectInfo.reason}
         </p>
       )}
       {node.failInfo && node.status === 'FAILED' && (
-        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
           <p>失败原因：{node.failInfo.reason}</p>
           <p className="mt-0.5 text-destructive/80">
             需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。
@@ -278,7 +278,7 @@ function NodeCard({
           </div>
           {nodeArtifacts.map((artifact) => (
             <div key={artifact.title} className="rounded-md border bg-muted/30 p-2">
-              <div className="mb-0.5 text-xs font-medium text-foreground">
+              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">
                 {artifact.title}
               </div>
               <div className="text-xs text-muted-foreground">
@@ -305,7 +305,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       {stages.map((stage) => (
         <div key={stage}>
           <h3 className="mb-2 text-sm font-semibold text-foreground">{stage}</h3>

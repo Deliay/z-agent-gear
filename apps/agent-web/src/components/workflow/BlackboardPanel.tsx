@@ -63,7 +63,7 @@ function CollapsibleSection({
 /** 工作流黑板与垃圾桶面板（均默认折叠，标题显示条目数量；内容以 Markdown 渲染） */
 export default function BlackboardPanel({ blackboard, trash }: BlackboardPanelProps) {
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <CollapsibleSection
         title="工作流黑板"
         count={blackboard.length}

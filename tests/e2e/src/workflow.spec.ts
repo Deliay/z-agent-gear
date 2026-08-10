@@ -1133,6 +1133,26 @@ test.describe('Workflow E2E', () => {
     );
     expect(overflowX).toBeLessThanOrEqual(1);
 
+    // 极端内容：exec 完成并写入超长不可断产物（无空格长串 + 超长标题），全部展开后仍无横向溢出
+    const execStartE12 = await waitFor(
+      () => env.controller.starts.find((s) => s.mcpEndpoint?.token),
+      15000,
+      'exec acp:start',
+    );
+    await callWorkflowTool(page, execStartE12.sessionId, execStartE12.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: `超长产物标题${'z'.repeat(60)}`, value: `报告 ${'x'.repeat(180)} https://example.com/${'y'.repeat(120)} 结尾` }],
+    });
+    for (const name of ['需求输入', 'AI执行']) {
+      const btn = nodeCard(page, name).getByRole('button', { name: `${name} 展开` });
+      if (await btn.count()) await btn.click();
+    }
+    await page.getByRole('button', { name: /^工作流黑板（\d+）$/ }).click();
+    await expect(page.getByText(`超长产物标题${'z'.repeat(60)}`).first()).toBeVisible({ timeout: 15000 });
+    const overflowX2 = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflowX2).toBeLessThanOrEqual(1);
+
     env.controller.disconnect();
   });
 

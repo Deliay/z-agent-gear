@@ -38,7 +38,9 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
           );
         },
         p(props) {
-          return <p className="!my-1 last:!mb-0" {...props} />;
+          // wrap-anywhere（overflow-wrap:anywhere）：缩减 min-content，超长不可断字符串也能换行，
+          // 防止撑破窄面板（break-words 不影响 min-content，无效）
+          return <p className="!my-1 last:!mb-0 wrap-anywhere" {...props} />;
         },
         ul(props) {
           return <ul className="!my-1 list-disc pl-4" {...props} />;
