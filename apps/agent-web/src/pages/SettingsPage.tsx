@@ -23,6 +23,7 @@ import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
+import WorkflowSection from '@/components/settings/WorkflowSection';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
   User,
@@ -31,6 +32,7 @@ import {
   Cpu,
   Server,
   Puzzle,
+  Workflow,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -40,6 +42,7 @@ const NAV_ITEMS = [
   { id: 'model-section', label: '可用模型', icon: Cpu },
   { id: 'controller-section', label: '控制器管理', icon: Server },
   { id: 'mcp-section', label: 'MCP 管理', icon: Puzzle },
+  { id: 'workflow-section', label: '工作流', icon: Workflow },
 ];
 
 const NAV_GROUPS = [
@@ -48,6 +51,7 @@ const NAV_GROUPS = [
   { label: '模型设置', items: [NAV_ITEMS[2], NAV_ITEMS[3]] },
   { label: '本地控制器', items: [NAV_ITEMS[4]] },
   { label: 'MCP 代理', items: [NAV_ITEMS[5]] },
+  { label: '工作流', items: [NAV_ITEMS[6]] },
 ];
 
 export default function SettingsPage() {
@@ -179,6 +183,11 @@ export default function SettingsPage() {
               <McpProxyKeySection />
               <McpRegistrySection />
             </div>
+          </section>
+
+          <section id="workflow-section" className="mb-8 md:mb-10">
+            <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">工作流</h2>
+            <WorkflowSection />
           </section>
         </div>
       </div>

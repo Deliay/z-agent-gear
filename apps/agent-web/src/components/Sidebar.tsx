@@ -12,6 +12,7 @@ import type {
 } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
+import WorkflowSidebarGroup from './workflow/WorkflowSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
 import GatewaySection from './GatewaySection';
@@ -230,6 +231,10 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         const workspaceKey = `${controller.id}:${workspacePath}`;
                         const isWsExpanded = expandedWorkspaces.has(workspaceKey);
                         const wsSessions = sessionsByWorkspace.get(workspaceKey) || [];
+                        // 工作流实例直接挂 workspaceId，仅配置过的工作区展示「工作流」分组
+                        const workspace = allWorkspaces.find(
+                          (w) => w.controllerId === controller.id && w.path === workspacePath && w.isEnabled,
+                        );
 
                         return (
                           <li key={workspaceKey}>
@@ -248,6 +253,12 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
 
                             {isWsExpanded && (
                               <ul className="ml-4 space-y-1">
+                                {workspace && (
+                                  <WorkflowSidebarGroup
+                                    workspaceId={workspace.id}
+                                    controllerId={controller.id}
+                                  />
+                                )}
                                 {wsSessions.map((session) => (
                                   <li key={session.id}>
                                     <NavLink

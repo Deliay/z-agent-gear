@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import MessageList, { groupMessages } from './MessageList';
+import MessageList from './MessageList';
+import { groupMessages } from './group-messages';
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();

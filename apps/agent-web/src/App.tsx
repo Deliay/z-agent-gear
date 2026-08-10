@@ -7,6 +7,7 @@ import RegisterPage from './pages/RegisterPage'
 import MainLayout from './pages/MainLayout'
 import SettingsPage from './pages/SettingsPage'
 import SessionPage from './pages/SessionPage'
+import WorkflowInstancePage from './pages/WorkflowInstancePage'
 import HomePage from './pages/HomePage'
 import ProtectedRoute from './components/ProtectedRoute'
 
@@ -34,6 +35,7 @@ function App() {
                 <Route index element={<HomePage />} />
                 <Route path="sessions" element={<SessionPageRoute />} />
                 <Route path="sessions/:id" element={<SessionPageRoute />} />
+                <Route path="workflows/:id" element={<WorkflowInstancePage />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Route>
