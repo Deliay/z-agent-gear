@@ -136,6 +136,37 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **修复 commit**：2aa294f
 
+### 8. AI 节点无失败状态：会话提醒后仍停止则节点卡死（第四轮验收）
+
+**问题描述**：AI 节点会话停止后系统仅兜底提醒 1 次；提醒后仍停止则节点永远停在 RUNNING（死节点），流程暗中卡死且无任何用户感知。另需支持 LLM 判断任务无法继续时主动标记失败、人类介入后恢复。
+
+**修复方案**：
+
+1. **契约**：`contracts/workflow.graphql` 节点状态枚举加 `FAILED`，新增 `WorkflowNodeFailInfo { reason, source, at }`（source：SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记）。
+2. **引擎**（`engine.ts`）：新增转移事件 `fail`（RUNNING→FAILED，写 failInfo）与 `resumeFailed`（FAILED→RUNNING，清 failInfo）；失败天然阻断流程（非 DONE 下游永不激活），均不触发会话 hook。
+3. **编排器**（`orchestrator.ts`）：`handleSessionEnded` 兜底提醒后会话再次停止 → 自动 `fail`（SESSION_STUCK），不再静默 return。
+4. **MCP 工具**（`tool-handlers.ts`）：新增 `failCurrentNode`（reason 必填，LLM 主动标记）与 `resumeFailedNode`（人类对话给出指示后由 AI 调用恢复）。
+5. **前端**：节点 badge 「失败」（destructive）+ 失败原因/人工介入引导块；实例页顶部阻断 banner（节点名+原因+引导）+ toast 强提醒（每节点仅一次，轮询去重）。
+
+**验证结果**：✅ agent-api 单测 935/935（E13-E15 引擎转移、O6 二次停止升级失败、工具 12 个定义+fail/resumeFailed 用例）；API 测试 A22（MCP 标记失败阻断+恢复+恢复后可完成）、A23（二次停止→SESSION_STUCK）通过；E2E-4 扩展（二次停止→FAILED+UI banner/失败 badge+人类「继续」恢复会话后 resumeFailedNode→RUNNING）通过
+
+**修复 commit**：c1b59bd
+
+### 9. 对话内容太长仍会撑开容器（第四轮验收）
+
+**问题描述**：会话面板加宽+上一轮修复后，长对话内容仍横向溢出。探查发现系统性遗漏：`prose` 类实际无效（未安装 @tailwindcss/typography），GFM 表格无滚动容器、行内 code/链接不断词、用户消息只 break-words（不缩 min-content）、ToolCallCard 结果文本/think 块与多处 font-mono 路径/值 span 无断行、SessionSidePanel grid item 缺 min-w-0。
+
+**修复方案**：
+
+1. `MarkdownContent`：新增 GFM `table` 渲染器（`overflow-x-auto` 包裹 + 单元格 `break-words`）、行内 `code` 与 `a` 加 `break-all`（一处修复覆盖 agent 消息/Thought/Fetch/Read 全部 markdown 场景）。
+2. `MessageItem` 用户消息 `whitespace-pre-wrap` 加 `break-all`。
+3. `ToolCallCard` 结果文本/think 块/全部 font-mono 路径与值 span 加 `break-all`。
+4. `SessionSidePanel` 内容容器加 `min-w-0 overflow-hidden`（防 min-content 传播撑开 popup 列轨）；`DiffView` 文件头路径、`ReadCard` 路径、`ConfigOptionCard`/`ConfigOptionsPanel` 值加 `break-all`。
+
+**验证结果**：✅ 新增单测 8 例（MarkdownContent 表格/行内 code/链接、用户消息 break-all、工具结果/think 断行、DiffView 长路径），agent-web 314/314、lint 0 error；E2E-5 无横向溢出断言（`scrollWidth - clientWidth ≤ 1`）持续通过
+
+**修复 commit**：c1b59bd
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -147,16 +178,18 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 5 | 「初始化中」文案表意不清 | 前端展示文案 | ✅ 已修复 | 2aa294f |
 | 6 | 节点产物只在黑板展示 | 节点卡片未聚合本节点产物 | ✅ 已修复 | 2aa294f |
 | 7 | 会话侧面板内容溢出不可见 | 面板过窄 + 内部元素无换行/截断 | ✅ 已修复 | 2aa294f |
+| 8 | AI 节点无失败状态，提醒后仍停止则卡死 | 兜底仅 1 次后静默 return，无失败语义 | ✅ 已修复 | c1b59bd |
+| 9 | 对话内容太长仍撑开容器 | prose 无效 + 表格/行内 code/用户消息等系统性缺断行 | ✅ 已修复 | c1b59bd |
 
 ## 最终验证
 
 | 项目 | 结果 |
 |------|------|
-| agent-api build/单测 | ✅ tsc 通过，930/930 |
+| agent-api build/单测 | ✅ tsc 通过，935/935 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，304/304 |
-| API 测试（tests/api） | ✅ 全量通过（含 A19/A20/A21） |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，314/314 |
+| API 测试（tests/api） | ✅ 全量通过（含 A19/A20/A21/A22/A23） |
 | E2E 测试（tests/e2e workflow.spec） | ✅ 9/9（E2E-1~9） |
 
 ## 经验总结
@@ -169,3 +202,6 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **fake controller 秒回响应会掩盖竞态**：API/E2E 测试中的假 controller 应有意识地引入延迟变体（startDelayMs），才能覆盖真实 harness 的慢启动场景。
 - **flex 行内容器默认不收缩，窄容器必溢出**：`<pre>` 默认不换行、flex 子项默认 `min-width: auto`，把完整视图嵌入窄面板（Dialog/Sheet）前必须系统性检查 `whitespace-pre-wrap break-all` / `min-w-0 truncate` / `shrink-0` 三件套；E2E 用 `scrollWidth - clientWidth ≤ 1` 可直接断言「无横向溢出」。
 - **动画中的元素尺寸断言会抖动**：入场 zoom 动画期间 `boundingBox()` 量到的是缩放后的尺寸，宽度断言应用 `clientWidth`（布局尺寸，不受 transform 影响）。
+- **「兜底 N 次后静默」等于隐性死节点**：防御性兜底（防死循环）必须配升级路径（失败状态+通知），否则最坏情况恰是最需要感知的情况。
+- **会话关闭后其 MCP scoped token 随之失效**：E2E/集成测试模拟「人类介入后 AI 调工具」时，需先恢复会话拿到新签发的 token 再调 MCP。
+- **Tailwind `prose` 类不是免费午餐**：未装 `@tailwindcss/typography` 时 `prose` 完全不生效，markdown 渲染的表格/链接/行内 code 必须在 components 覆写里自行约束断行与滚动；`break-words` 不缩 min-content，根治不可断长词要用 `break-all`。}

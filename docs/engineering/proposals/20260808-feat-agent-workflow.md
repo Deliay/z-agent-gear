@@ -96,7 +96,7 @@ graph LR
 | WorkflowEngine | 节点状态转移校验、事件（start/complete/reject/rework/resume）调度 | 纯函数状态机 + Mongo 事务更新 |
 | NodeSessionOrchestrator | AI 节点会话的拉起、继续、结束；提示词组装（系统提示 + 节点提示词数组 + 上游产物） | 复用 `SessionService.create/resume`，会话打标 `workflowInstanceId/workflowNodeId` |
 | BlackboardService | 黑板 key-value 读写、产物 key 前缀匹配、移除入垃圾桶、打回记录 | Mongo `Map` 字段 |
-| WorkflowToolHandlers | 10 个 MCP 工具的参数校验、状态转移校验、错误提示 | 挂载 `transport: platform` 的 McpServer |
+| WorkflowToolHandlers | 12 个 MCP 工具的参数校验、状态转移校验、错误提示 | 挂载 `transport: platform` 的 McpServer |
 | Scoped MCP Registry | 节点作用域 token 签发与映射 | 扩展 `McpSessionEndpoint` token payload |
 
 ## 3. API 设计
@@ -336,7 +336,7 @@ sequenceDiagram
     E->>D: transition(resume) REJECT→RUNNING<br/>提示其用 MCP 重新获取产物
 ```
 
-**会话兜底**：`SessionService` 状态变为 `ended` 时，引擎检查其绑定节点状态是否在会话存续期内发生过转移；若未转移且节点仍处于 RUNNING，则 `resume()` 会话并发送兜底提示词（面向 LLM 撰写，说明其身处自动化系统、必须使用提供的工作流工具对当前节点执行完成/打回等操作）。兜底重试限 1 次，防止死循环。
+**会话兜底**：`SessionService` 状态变为 `ended` 时，引擎检查其绑定节点状态是否在会话存续期内发生过转移；若未转移且节点仍处于 RUNNING，则 `resume()` 会话并发送兜底提示词（面向 LLM 撰写，说明其身处自动化系统、必须使用提供的工作流工具对当前节点执行完成/打回等操作）。兜底提醒限 1 次；提醒后会话再次停止（仍未转移）时，节点升级为 **FAILED**（failInfo.source=SESSION_STUCK），流程阻断并等待人工介入。LLM 判断任务无法继续时也可主动调用 `failCurrentNode`（source=LLM_REPORTED）；人类在节点会话中给出处理指示后，由 AI 调用 `resumeFailedNode`（FAILED→RUNNING）恢复。
 
 ### 5.2 关键实现点
 
