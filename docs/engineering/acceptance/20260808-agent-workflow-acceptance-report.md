@@ -183,6 +183,35 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **修复 commit**：de15e2f
 
+### 11. 工作流黑板未默认折叠且无数量显示（第五轮验收）
+
+**问题描述**：实例页右侧边栏的「工作流黑板」始终展开，条目多时占据大量版面；垃圾桶已默认折叠并显示数量，黑板应保持一致交互。
+
+**修复方案**（`BlackboardPanel.tsx`）：抽取 `CollapsibleSection` 组件（button + chevron + 图标 + 标题内联数量，默认折叠），黑板与垃圾桶统一走该模式（`工作流黑板（N）`/`垃圾桶（N）`）。
+
+**验证结果**：✅ 前端新增 BlackboardPanel 4 例（默认折叠+数量、展开/折叠切换、黑板/垃圾桶 Markdown 渲染）
+
+### 12. 黑板内容未做 Markdown 渲染（第五轮验收）
+
+**问题描述**：黑板/垃圾桶条目值与节点卡片内聚合产物均以 `<pre>` 纯文本展示，AI 写入的 Markdown 产物（表格、列表、加粗等）不可读。
+
+**修复方案**：`BlackboardPanel.EntryList` 与 `WorkflowNodeTree` 产物聚合区块的值渲染统一替换为会话页同款 `MarkdownContent`（react-markdown + GFM，表格横向滚动/断行约束已内置）。
+
+**验证结果**：✅ 前端单测覆盖（BlackboardPanel 2 例、WorkflowNodeTree 1 例，断言 `**重点**` 渲染为 `<strong>`）
+
+### 13. REWORK 状态节点无法再次打回上游（第五轮验收）
+
+**问题描述**：a→b→c 流程中，c 打回 b 后 b 处于 REWORK；若 b 返工时发现问题根源在 a，需要再次打回 a，但引擎 `reject` 转移仅允许 `RUNNING→REJECT`，REWORK 节点调用打回被「不允许执行」拒绝。
+
+**修复方案**：
+
+1. **引擎**（`engine.ts`）：`reject` 转移源状态放宽为 `RUNNING`/`REWORK`（语义自然成立：REWORK 节点打回后自身进 REJECT、rejectInfo 覆盖、上游再次 REWORK 且 reworkCount 再 +1）。
+2. **MCP 工具描述**（`tool-handlers.ts`）：`rejectCurrentNode` 描述同步为「RUNNING/REWORK→REJECT」。
+3. **返工提示词**（`orchestrator.ts`）：REWORK 提示词补充「若返工中发现问题根源在更上游，可调用 rejectCurrentNode 将本节点打回并触发上游返工」。
+4. **契约**（`contracts/workflow.graphql`）：`rejectNode` 注释同步。
+
+**验证结果**：✅ 引擎单测新增 E16（REWORK→REJECT：rejectInfo 覆盖、黑板打回记录、上游再次 REWORK）；API 新增 A24（c 打回 b→b REWORK→b 打回 a→a REWORK 全链路留痕）
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -197,17 +226,20 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 8 | AI 节点无失败状态，提醒后仍停止则卡死 | 兜底仅 1 次后静默 return，无失败语义 | ✅ 已修复 | c1b59bd |
 | 9 | 对话内容太长仍撑开容器 | prose 无效 + 表格/行内 code/用户消息等系统性缺断行 | ✅ 已修复 | c1b59bd |
 | 10 | 断连会话收不到兜底提示词，无恢复路径 | resume 仅允许 ended + UI 无继续入口 | ✅ 已修复 | de15e2f |
+| 11 | 黑板未默认折叠、无数量显示 | 黑板区始终展开，未复用垃圾桶折叠模式 | ✅ 已修复 | 97ee0c5 |
+| 12 | 黑板内容未 Markdown 渲染 | 条目值以 pre 纯文本展示 | ✅ 已修复 | 97ee0c5 |
+| 13 | REWORK 节点无法再次打回上游 | 引擎 reject 转移仅允许 RUNNING | ✅ 已修复 | 97ee0c5 |
 
 ## 最终验证
 
 | 项目 | 结果 |
 |------|------|
-| agent-api build/单测 | ✅ tsc 通过，935/935 |
+| agent-api build/单测 | ✅ tsc 通过，937/937 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，314/314 |
-| API 测试（tests/api） | ✅ 全量通过（含 A19/A20/A21/A22/A23） |
-| E2E 测试（tests/e2e workflow.spec） | ✅ 9/9（E2E-1~9） |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，323/323 |
+| API 测试（tests/api） | ✅ 全量通过 282/282（含 A19/A20/A21/A22/A23/A24） |
+| E2E 测试（tests/e2e workflow.spec） | ✅ 10/10（E2E-1~10） |
 
 ## 经验总结
 

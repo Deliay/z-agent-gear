@@ -329,7 +329,7 @@ sequenceDiagram
     participant D as 下游节点会话/人类
     participant E as WorkflowEngine
     participant U as 上游节点
-    D->>E: rejectNode(reason) 校验 RUNNING→REJECT
+    D->>E: rejectNode(reason) 校验 RUNNING/REWORK→REJECT
     E->>E: 黑板写入打回记录
     E->>U: transition(rework) → REWORK<br/>resume 原会话并发送打回原因
     U->>E: completeRework() 校验 REWORK→DONE<br/>重置产物
@@ -459,6 +459,7 @@ contracts/
 | E2 | READY→RUNNING（收到全部上游 start 事件） | 允许，写入 startedAt |
 | E3 | RUNNING→DONE（complete） | 允许，触发下游 start + 结束本会话 |
 | E4 | RUNNING→REJECT（reject，携带 reason） | 允许，写黑板打回记录，触发上游 REWORK |
+| E16 | REWORK→REJECT（返工中再次打回上游，a→b→c 中 c 打回 b 后 b 打回 a） | 允许，rejectInfo 覆盖，上游再次 REWORK |
 | E5 | REJECT→RUNNING（上游 REWORK→DONE 后 resume） | 允许 |
 | E6 | REWORK→DONE（completeRework） | 允许，重置产物，通知下游 resume |
 | E7 | READY/RUNNING/DONE→REWORK（收到打回） | 允许，reworkCount+1，写 reworkedAt |
