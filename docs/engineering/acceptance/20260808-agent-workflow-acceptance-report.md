@@ -101,6 +101,41 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **修复 commit**：5e7eaa5
 
+### 5. 节点状态「初始化中」文案表意不清（第三轮验收）
+
+**问题描述**：下游节点等待上游完成时显示「初始化中」，用户难以理解其语义。
+
+**修复方案**：`WorkflowNodeTree.tsx` `NODE_STATUS_LABELS.INITIALIZING` 改为「等待中」（仅前端展示文案，状态枚举不变）；E2E-1/E2E-5 断言同步更新。
+
+**验证结果**：✅ 新增单测「INITIALIZING 显示为等待中」通过；E2E-1/E2E-5 断言「等待中」通过
+
+**修复 commit**：2aa294f
+
+### 6. 节点产物只在黑板展示，节点卡片内看不到（第三轮验收）
+
+**问题描述**：节点产物（人类输入/AI 产出）仅聚合在底部「工作流黑板」面板，查看单个节点的产出需要到黑板中按 key 人肉匹配。
+
+**修复方案**：不改后端——产物 key 约定为 `{nodeId}-{nodeName}-产物-{title}`（`blackboard.ts artifactKey`），前端 `WorkflowNodeTree` 按 `node.id + node.name` 前缀过滤黑板条目，在节点卡片内新增「产物（N）」区块（标题 + 内容，与后端 `getArtifactKeys` 前缀匹配同构）。
+
+**验证结果**：✅ 新增单测 3 例（卡片内展示本节点产物/不混入其他节点/无产物不显示区块）；E2E-5 新增节点卡片产物断言通过
+
+**修复 commit**：2aa294f
+
+### 7. 会话侧面板宽度不足，内容超出 client area 不可见（第三轮验收）
+
+**问题描述**：节点「会话」侧面板（`sm:max-w-2xl` 672px）内嵌完整 SessionView，工具调用卡片的 `<pre>` 命令块（`white-space: pre` 不换行且无横向滚动）、AcpCard 折叠头标题/摘要、SessionHeader 左侧信息组均无收缩/换行处理，长内容直接撑破面板，部分内容在 client area 之外不可见。
+
+**修复方案**：
+
+1. `SessionSidePanel` 加宽为 `sm:max-w-4xl`（896px）。
+2. `ToolCallCard` 两处命令 `<pre>` 加 `whitespace-pre-wrap break-all`（换行而非溢出/隐藏滚动）。
+3. `AcpCard` 折叠头 title/summary 加 `min-w-0 truncate`，chevron 加 `shrink-0`。
+4. `SessionHeader` 左侧容器加 `min-w-0 flex-1 flex-wrap`、标题 `truncate`、右侧按钮组 `shrink-0`。
+
+**验证结果**：✅ 新增单测 2 例（长命令 pre 换行类名/AcpCard 截断类名）；E2E-5 新增断言（面板 clientWidth ≥ 896 且 `scrollWidth - clientWidth ≤ 1`）通过
+
+**修复 commit**：2aa294f
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -109,6 +144,9 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 2 | 实例页刷新清掉人类输入 | 条件渲染卸载 + 无草稿持久化 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
 | 3 | 流转后 harness 不执行 | start/prompt 跨频道竞态，消息静默丢弃 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
 | 4 | RUNNING 人类节点完成报错 | completeHumanNode 无条件 start | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
+| 5 | 「初始化中」文案表意不清 | 前端展示文案 | ✅ 已修复 | 2aa294f |
+| 6 | 节点产物只在黑板展示 | 节点卡片未聚合本节点产物 | ✅ 已修复 | 2aa294f |
+| 7 | 会话侧面板内容溢出不可见 | 面板过窄 + 内部元素无换行/截断 | ✅ 已修复 | 2aa294f |
 
 ## 最终验证
 
@@ -117,7 +155,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | agent-api build/单测 | ✅ tsc 通过，930/930 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，296/296 |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，304/304 |
 | API 测试（tests/api） | ✅ 全量通过（含 A19/A20/A21） |
 | E2E 测试（tests/e2e workflow.spec） | ✅ 9/9（E2E-1~9） |
 
@@ -129,3 +167,5 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **Apollo Client v4 轮询陷阱**：`notifyOnNetworkStatusChange` 默认 `true`，`if (loading) return <Spinner/>` 写法会在每次轮询卸载整页——加载分支必须写成 `loading && !data`，「保留草稿」与「不打断输入」是两个问题，前者靠持久化，后者靠不卸载（焦点/IME 断言才能抓到）。
 - **能力数据的获取时机要区分**：CLI 版本检查 ≠ 会话能力；modes/models 只有 session/new 后才有，配置阶段需要「空实例探测」这类按需懒加载链路，并按 controllerId+type 缓存避免重复拉起。
 - **fake controller 秒回响应会掩盖竞态**：API/E2E 测试中的假 controller 应有意识地引入延迟变体（startDelayMs），才能覆盖真实 harness 的慢启动场景。
+- **flex 行内容器默认不收缩，窄容器必溢出**：`<pre>` 默认不换行、flex 子项默认 `min-width: auto`，把完整视图嵌入窄面板（Dialog/Sheet）前必须系统性检查 `whitespace-pre-wrap break-all` / `min-w-0 truncate` / `shrink-0` 三件套；E2E 用 `scrollWidth - clientWidth ≤ 1` 可直接断言「无横向溢出」。
+- **动画中的元素尺寸断言会抖动**：入场 zoom 动画期间 `boundingBox()` 量到的是缩放后的尺寸，宽度断言应用 `clientWidth`（布局尺寸，不受 transform 影响）。
