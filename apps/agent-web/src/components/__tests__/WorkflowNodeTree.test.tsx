@@ -61,6 +61,8 @@ describe('节点状态标签', () => {
         onOpenSession={vi.fn()}
       />,
     );
+    // INITIALIZING 默认折叠，展开后可见状态 badge
+    fireEvent.click(screen.getByRole('button', { name: /评审 展开/ }));
     expect(screen.getByText('等待中')).toBeDefined();
   });
 
@@ -95,6 +97,8 @@ describe('节点产物聚合展示', () => {
     instance.blackboard = [entry('n1-评审-产物-输入', '评审通过，可以开发')];
 
     render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+    // DONE 默认折叠，展开后可见产物
+    fireEvent.click(screen.getByRole('button', { name: /评审 展开/ }));
 
     expect(screen.getByText('产物（1）')).toBeDefined();
     expect(screen.getByText('输入')).toBeDefined();
@@ -112,6 +116,10 @@ describe('节点产物聚合展示', () => {
     ];
 
     render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+    // DONE 默认折叠，展开两个节点
+    for (const name of ['评审', '开发']) {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`${name} 展开`) }));
+    }
 
     const reviewCard = screen.getByText('评审').closest('div.rounded-lg')!;
     const devCard = screen.getByText('开发').closest('div.rounded-lg')!;
@@ -135,6 +143,7 @@ describe('节点产物聚合展示', () => {
     instance.blackboard = [entry('n1-评审-产物-报告', '**结论**：通过')];
 
     render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /评审 展开/ }));
 
     expect(screen.getByText('结论').tagName).toBe('STRONG');
   });
@@ -190,5 +199,88 @@ describe('WorkflowNodeTree 人类节点输入草稿', () => {
     await vi.waitFor(() => {
       expect(localStorage.getItem('workflow-node-draft:inst-1:n1')).toBeNull();
     });
+  });
+});
+
+
+describe('节点折叠（移动端适配）', () => {
+  function nodeInStage(overrides: Partial<WorkflowNodeData> = {}) {
+    return makeNode({ type: 'AI', name: '代码实现', description: '实现计算器', ...overrides });
+  }
+
+  it('已完成/等待中节点默认折叠：只展示节点类型与标题', () => {
+    for (const status of ['DONE', 'INITIALIZING'] as const) {
+      const { unmount } = render(
+        <WorkflowNodeTree
+          instance={makeInstance([nodeInStage({ status })])}
+          onOpenSession={vi.fn()}
+        />,
+      );
+      // 类型与标题可见
+      expect(screen.getByText('AI', { exact: true })).toBeDefined();
+      expect(screen.getByText('代码实现')).toBeDefined();
+      // 折叠后其余内容（描述/状态 badge）不展示
+      expect(screen.queryByText('实现计算器')).toBeNull();
+      expect(screen.queryByText('已完成', { exact: true })).toBeNull();
+      expect(screen.queryByText('等待中', { exact: true })).toBeNull();
+      unmount();
+    }
+  });
+
+  it('执行中/已打回/返工中/失败/待开始节点默认展开', () => {
+    for (const status of ['RUNNING', 'REJECT', 'REWORK', 'FAILED', 'READY'] as const) {
+      const { unmount } = render(
+        <WorkflowNodeTree
+          instance={makeInstance([nodeInStage({ status })])}
+          onOpenSession={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('实现计算器')).toBeDefined();
+      unmount();
+    }
+  });
+
+  it('点击折叠的节点展开全部内容，再次点击折叠回去', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([nodeInStage({ status: 'DONE' })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+
+    const toggle = screen.getByRole('button', { name: /代码实现/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+    expect(screen.getByText('实现计算器')).toBeDefined();
+    expect(screen.getByText('已完成', { exact: true })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: /代码实现/ }));
+    expect(screen.queryByText('实现计算器')).toBeNull();
+  });
+
+  it('展开的节点可手动折叠', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([nodeInStage({ status: 'RUNNING' })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('实现计算器')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: /折叠/ }));
+    expect(screen.queryByText('实现计算器')).toBeNull();
+    expect(screen.queryByText('执行中', { exact: true })).toBeNull();
+  });
+
+  it('节点卡片头部行允许换行（flex-wrap）以适配窄屏', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([nodeInStage({ status: 'RUNNING' })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    const badge = screen.getByText('AI', { exact: true });
+    expect(badge.parentElement!.className).toContain('flex-wrap');
   });
 });

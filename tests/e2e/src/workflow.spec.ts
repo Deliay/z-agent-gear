@@ -411,7 +411,11 @@ test.describe('Workflow E2E', () => {
     const instanceId = page.url().match(/\/workflows\/([a-f0-9]+)/)![1];
     await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
     await expect(nodeCard(page, '需求输入').getByText('待开始', { exact: true })).toBeVisible();
-    await expect(nodeCard(page, 'AI执行').getByText('等待中', { exact: true })).toBeVisible();
+    // AI 节点 INITIALIZING（等待中）默认折叠：展开后可见
+    const execCardE1 = nodeCard(page, 'AI执行');
+    await expect(execCardE1.getByText('等待中', { exact: true })).toBeHidden();
+    await execCardE1.getByRole('button', { name: 'AI执行 展开' }).click();
+    await expect(execCardE1.getByText('等待中', { exact: true })).toBeVisible();
 
     // 人类节点 UI 输入需求并完成 → 下游 AI 节点拉起会话
     const inputCard = nodeCard(page, '需求输入');
@@ -426,9 +430,12 @@ test.describe('Workflow E2E', () => {
     expect(execStart.serverType).toBe('opencode');
     const execSessionId = execStart.sessionId;
 
-    // 实例状态推进（UI）
+    // 实例状态推进（UI）：已完成节点默认折叠，展开后可见状态
     await expect(page.getByRole('main').getByText('执行中：AI执行')).toBeVisible({ timeout: 15000 });
-    await expect(nodeCard(page, '需求输入').getByText('已完成', { exact: true })).toBeVisible();
+    const inputCardE1 = nodeCard(page, '需求输入');
+    await expect(inputCardE1.getByText('已完成', { exact: true })).toBeHidden();
+    await inputCardE1.getByRole('button', { name: '需求输入 展开' }).click();
+    await expect(inputCardE1.getByText('已完成', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible();
 
     // 会话打标（API 校验）：默认排除工作流会话；includeWorkflowSessions=true 可见且带打标
@@ -567,9 +574,11 @@ test.describe('Workflow E2E', () => {
     expect(inst.blackboard.find((e) => e.key === artifactKey)?.value).toBe('计算器代码 v2');
     expect(inst.blackboardTrash.find((e) => e.key === artifactKey)?.value).toBe('计算器代码 v1');
 
-    // UI：verify 回到执行中，exec 显示返工次数
+    // UI：verify 回到执行中；exec 已完成（默认折叠），展开后可见返工次数
     await expect(nodeCard(page, 'AI验收').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
-    await expect(nodeCard(page, 'AI执行').getByText('返工 1 次')).toBeVisible();
+    const execCardE3 = nodeCard(page, 'AI执行');
+    await execCardE3.getByRole('button', { name: 'AI执行 展开' }).click();
+    await expect(execCardE3.getByText('返工 1 次')).toBeVisible();
 
     env.controller.disconnect();
   });
@@ -683,10 +692,14 @@ test.describe('Workflow E2E', () => {
     await expect(page.getByRole('heading', { name: '开发', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '验收', exact: true })).toBeVisible();
 
-    // 状态 badge
-    await expect(nodeCard(page, '需求输入').getByText('已完成', { exact: true })).toBeVisible();
+    // 状态 badge：已完成/等待中默认折叠（展开后断言），执行中默认展开
+    const inputCardE5s = nodeCard(page, '需求输入');
+    await inputCardE5s.getByRole('button', { name: '需求输入 展开' }).click();
+    await expect(inputCardE5s.getByText('已完成', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible();
-    await expect(nodeCard(page, 'AI验收').getByText('等待中', { exact: true })).toBeVisible();
+    const verifyCardE5 = nodeCard(page, 'AI验收');
+    await verifyCardE5.getByRole('button', { name: 'AI验收 展开' }).click();
+    await expect(verifyCardE5.getByText('等待中', { exact: true })).toBeVisible();
     await expect(nodeCard(page, '需求输入').getByText('人类', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('AI', { exact: true })).toBeVisible();
 
@@ -887,7 +900,9 @@ test.describe('Workflow E2E', () => {
 
     // 验收#4：RUNNING 状态点「完成」应成功（不再报「不允许执行「启动」」）
     await nodeCard(page, '评审').getByRole('button', { name: '完成', exact: true }).click();
-    await expect(nodeCard(page, '评审').getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, '评审').getByRole('button', { name: '评审 展开' })).toBeVisible({ timeout: 15000 });
+    await nodeCard(page, '评审').getByRole('button', { name: '评审 展开' }).click();
+    await expect(nodeCard(page, '评审').getByText('已完成', { exact: true })).toBeVisible();
 
     // 草稿已清除，产物写入黑板
     const draft = await page.evaluate(
@@ -1086,6 +1101,45 @@ test.describe('Workflow E2E', () => {
     // 节点会话已被删除（API 校验，含工作流会话）
     const allSessions = await getSessions(page, env.token, true);
     expect(allSessions.find((s) => s.id === execStart.sessionId)).toBeUndefined();
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-12 移动端窄屏：节点按状态默认折叠/展开，页面无横向溢出
+  // -------------------------------------------------------------------------
+  test('E2E-12: mobile viewport - nodes collapse by status and page has no horizontal overflow', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e12');
+    const instanceName = `wf-e12-实例-${Date.now().toString(36)}`;
+    const { instanceId } = await advanceToExecRunning(page, env, instanceName);
+
+    await page.setViewportSize({ width: 375, height: 720 });
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 默认折叠：已完成（需求输入）/等待中（AI验收）只展示类型与标题
+    const inputCard = nodeCard(page, '需求输入');
+    await expect(inputCard.getByText('人类', { exact: true })).toBeVisible();
+    await expect(inputCard.getByText('需求输入', { exact: true })).toBeVisible();
+    await expect(inputCard.getByText('已完成', { exact: true })).toBeHidden();
+    await expect(nodeCard(page, 'AI验收').getByText('等待中', { exact: true })).toBeHidden();
+    // 默认展开：执行中（AI执行）
+    await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible();
+
+    // 展开已完成节点 → 状态 badge 与产物可见；再折叠回去
+    await inputCard.getByRole('button', { name: '需求输入 展开' }).click();
+    await expect(inputCard.getByText('已完成', { exact: true })).toBeVisible();
+    await expect(inputCard.getByText('产物（1）')).toBeVisible();
+    await inputCard.getByRole('button', { name: '需求输入 折叠' }).click();
+    await expect(inputCard.getByText('已完成', { exact: true })).toBeHidden();
+
+    // 窄屏无横向溢出
+    const overflowX = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflowX).toBeLessThanOrEqual(1);
 
     env.controller.disconnect();
   });

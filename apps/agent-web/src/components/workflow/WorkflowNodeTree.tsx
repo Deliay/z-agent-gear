@@ -23,7 +23,7 @@ import {
   type WorkflowNodeStatus,
   type WorkflowNodeType,
 } from '@/graphql/workflow'
-import { MessageSquare, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageSquare, RotateCcw } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -192,6 +192,121 @@ function HumanNodeActions({
   )
 }
 
+/** 默认折叠的状态：已完成/等待中（其余状态默认展开，需关注或可操作） */
+const DEFAULT_COLLAPSED_STATUSES: WorkflowNodeStatus[] = ['DONE', 'INITIALIZING']
+
+/** 单个节点卡片：支持折叠（折叠后只展示节点类型与标题）；头部行 flex-wrap 适配窄屏 */
+function NodeCard({
+  instanceId,
+  node,
+  blackboard,
+  onOpenSession,
+}: {
+  instanceId: string
+  node: WorkflowNodeData
+  blackboard: BlackboardEntryData[]
+  onOpenSession: (sessionId: string) => void
+}) {
+  // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
+  const [toggled, setToggled] = useState<boolean | null>(null)
+  const collapsed = toggled ?? DEFAULT_COLLAPSED_STATUSES.includes(node.status)
+  const nodeArtifacts = artifactsOf(node, blackboard)
+
+  if (collapsed) {
+    return (
+      <div className="rounded-lg border p-3">
+        <button
+          type="button"
+          className="flex w-full min-w-0 items-center gap-2"
+          onClick={() => setToggled(false)}
+          aria-expanded={false}
+          aria-label={`${node.name} 展开`}
+        >
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
+          <span className="min-w-0 flex-1 truncate text-left text-sm font-medium">{node.name}</span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="flex items-center"
+          onClick={() => setToggled(true)}
+          aria-expanded={true}
+          aria-label={`${node.name} 折叠`}
+        >
+          <ChevronDown className="size-4 text-muted-foreground" />
+        </button>
+        <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{node.name}</span>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[node.status]}`}
+        >
+          {NODE_STATUS_LABELS[node.status]}
+        </span>
+        {node.reworkCount > 0 && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <RotateCcw className="size-3" />
+            返工 {node.reworkCount} 次
+          </span>
+        )}
+        {node.sessionId && (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => onOpenSession(node.sessionId!)}
+          >
+            <MessageSquare className="size-3" />
+            会话
+          </Button>
+        )}
+      </div>
+      {node.description && (
+        <p className="mt-1 text-xs text-muted-foreground">{node.description}</p>
+      )}
+      {node.rejectInfo && node.status === 'REJECT' && (
+        <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          打回理由：{node.rejectInfo.reason}
+        </p>
+      )}
+      {node.failInfo && node.status === 'FAILED' && (
+        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          <p>失败原因：{node.failInfo.reason}</p>
+          <p className="mt-0.5 text-destructive/80">
+            需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。
+          </p>
+        </div>
+      )}
+      {nodeArtifacts.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          <div className="text-xs font-medium text-muted-foreground">
+            产物（{nodeArtifacts.length}）
+          </div>
+          {nodeArtifacts.map((artifact) => (
+            <div key={artifact.title} className="rounded-md border bg-muted/30 p-2">
+              <div className="mb-0.5 text-xs font-medium text-foreground">
+                {artifact.title}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                <MarkdownContent content={artifact.value} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {node.type === 'HUMAN' &&
+        (node.status === 'READY' || node.status === 'RUNNING') && (
+          <HumanNodeActions instanceId={instanceId} node={node} />
+        )}
+    </div>
+  )
+}
+
 export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNodeTreeProps) {
   const stages: string[] = []
   for (const node of instance.nodes) {
@@ -206,75 +321,15 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
           <div className="space-y-2">
             {instance.nodes
               .filter((node) => node.stage === stage)
-              .map((node) => {
-                const nodeArtifacts = artifactsOf(node, instance.blackboard)
-                return (
-                <div key={node.id} className="rounded-lg border p-3">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
-                    <span className="flex-1 truncate text-sm font-medium">{node.name}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[node.status]}`}
-                    >
-                      {NODE_STATUS_LABELS[node.status]}
-                    </span>
-                    {node.reworkCount > 0 && (
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <RotateCcw className="size-3" />
-                        返工 {node.reworkCount} 次
-                      </span>
-                    )}
-                    {node.sessionId && (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => onOpenSession(node.sessionId!)}
-                      >
-                        <MessageSquare className="size-3" />
-                        会话
-                      </Button>
-                    )}
-                  </div>
-                  {node.description && (
-                    <p className="mt-1 text-xs text-muted-foreground">{node.description}</p>
-                  )}
-                  {node.rejectInfo && node.status === 'REJECT' && (
-                    <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
-                      打回理由：{node.rejectInfo.reason}
-                    </p>
-                  )}
-                  {node.failInfo && node.status === 'FAILED' && (
-                    <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
-                      <p>失败原因：{node.failInfo.reason}</p>
-                      <p className="mt-0.5 text-destructive/80">
-                        需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。
-                      </p>
-                    </div>
-                  )}
-                  {nodeArtifacts.length > 0 && (
-                    <div className="mt-2 space-y-1.5">
-                      <div className="text-xs font-medium text-muted-foreground">
-                        产物（{nodeArtifacts.length}）
-                      </div>
-                      {nodeArtifacts.map((artifact) => (
-                        <div key={artifact.title} className="rounded-md border bg-muted/30 p-2">
-                          <div className="mb-0.5 text-xs font-medium text-foreground">
-                            {artifact.title}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            <MarkdownContent content={artifact.value} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {node.type === 'HUMAN' &&
-                    (node.status === 'READY' || node.status === 'RUNNING') && (
-                      <HumanNodeActions instanceId={instance.id} node={node} />
-                    )}
-                </div>
-                )
-              })}
+              .map((node) => (
+                <NodeCard
+                  key={node.id}
+                  instanceId={instance.id}
+                  node={node}
+                  blackboard={instance.blackboard}
+                  onOpenSession={onOpenSession}
+                />
+              ))}
           </div>
         </div>
       ))}
