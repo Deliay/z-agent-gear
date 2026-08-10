@@ -19,11 +19,14 @@ export default function WorkflowInstancePage() {
     variables: { id: id ?? '' },
     skip: !id,
     pollInterval: 5000,
+    // Apollo v4 默认 notifyOnNetworkStatusChange=true：轮询会反复置 loading，
+    // 导致整页卸载成 spinner、打断用户输入；轮询期间保持渲染现有内容。
+    notifyOnNetworkStatusChange: false,
   })
 
   const instance = data?.workflowInstance
 
-  if (loading) {
+  if (loading && !instance) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />

@@ -814,11 +814,12 @@ test.describe('Workflow E2E', () => {
     const reviewCard = nodeCard(page, '评审');
     await expect(reviewCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
 
-    // 验收#2：输入内容跨 5s 轮询周期保留
+    // 验收#2：输入内容跨 5s 轮询周期保留，且轮询不得打断输入（焦点保持）
     const textarea = reviewCard.getByLabel('评审 完成输入');
     await textarea.fill('同意方案，但请补充埋点');
     await page.waitForTimeout(6000);
     await expect(textarea).toHaveValue('同意方案，但请补充埋点');
+    await expect(textarea).toBeFocused();
 
     // 页面刷新后从 localStorage 恢复
     await page.reload();

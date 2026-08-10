@@ -50,15 +50,17 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 **根因分析**：
 
 - `WorkflowInstancePage` 使用 `pollInterval: 5000`；人类节点输入框 `HumanNodeActions` 的 `input` 是纯组件内 `useState`（`WorkflowNodeTree.tsx`）。
-- 工作流是活的：轮询期间任意节点状态翻转（如 READY↔RUNNING、REJECT→RUNNING）都会使 `HumanNodeActions` 的条件渲染（`status === READY || RUNNING`）变化，组件卸载重挂导致输入丢失。
+- **（第一轮修复后仍复现）** Apollo Client v4 将 `notifyOnNetworkStatusChange` 默认值改为 `true`：每次轮询 `loading` 都会重新置为 `true`，页面 `if (loading)` 分支把整棵内容树替换成全屏 spinner，组件**卸载重挂**，焦点与 IME 输入组合被打断——这才是「刷新打断输入」的直接原因。
+- 工作流是活的：轮询期间节点状态翻转（READY↔RUNNING 等）也会使条件渲染的 `HumanNodeActions` 卸载重挂。
 - 全仓无任何草稿/临时保存机制。
 
 **修复方案**：
 
-1. `WorkflowNodeTree.tsx` 的 `HumanNodeActions`：输入内容按 `workflow-node-draft:<instanceId>:<nodeId>` 键持久化到 localStorage，挂载时恢复，变更时保存，完成/打回成功后清除。
-2. 保持 5s 轮询不变（工作流状态需要近实时），输入不再受刷新影响。
+1. `WorkflowInstancePage.tsx`：`useQuery` 显式 `notifyOnNetworkStatusChange: false`，且加载分支改为 `loading && !instance`——仅首次加载显示 spinner，轮询期间保持渲染现有内容，刷新不再卸载组件（焦点/IME 不受影响）。
+2. `WorkflowNodeTree.tsx` 的 `HumanNodeActions`（第一轮已修）：输入内容按 `workflow-node-draft:<instanceId>:<nodeId>` 持久化到 localStorage，挂载时恢复，变更时保存，完成/打回成功后清除——状态翻转导致的重挂也不丢内容。
+3. 保持 5s 轮询不变（工作流状态需要近实时），输入不再受刷新影响。
 
-**验证结果**：✅ agent-web 单测含 WorkflowNodeTree 草稿 3 例（持久化/隔离/完成后清除）；E2E-7 前半段（输入跨 5s 轮询周期保留 + 页面刷新后 localStorage 恢复）通过
+**验证结果**：✅ 页面级单测 2 例（轮询 refetch 中保持内容/焦点，首次加载显示 spinner）；agent-web 单测 298/298，lint 0 error；E2E-7 增强断言（跨 5s 轮询周期值保留 + **`toBeFocused` 焦点保持** + reload 恢复）通过；且已反向验证：回退本修复后 E2E-7 恰好失败在焦点断言上，证明该断言真实捕获「刷新打断输入」
 
 **修复 commit**：5e7eaa5
 
@@ -124,5 +126,6 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **跨频道异步链路必须假设乱序**：agent-api 经 Redis pub/sub 发出的「命令」与「消息」在 controller-api 侧不保证处理顺序，凡「先启动会话再发消息」的模式都要在接收端做排队补发，且「发送失败」不允许静默 return，至少要记日志。
 - **组合操作要考虑自动状态机**：引擎会自动推进节点状态（READY→RUNNING），人工操作接口（completeHumanNode）不能假设起始状态，应按当前状态幂等处理。
 - **轮询刷新 + 条件渲染 = 输入必丢**：活数据页面的表单输入要么受控于不受条件渲染影响的层级，要么持久化草稿（localStorage 按键隔离即可，成本极低）。
+- **Apollo Client v4 轮询陷阱**：`notifyOnNetworkStatusChange` 默认 `true`，`if (loading) return <Spinner/>` 写法会在每次轮询卸载整页——加载分支必须写成 `loading && !data`，「保留草稿」与「不打断输入」是两个问题，前者靠持久化，后者靠不卸载（焦点/IME 断言才能抓到）。
 - **能力数据的获取时机要区分**：CLI 版本检查 ≠ 会话能力；modes/models 只有 session/new 后才有，配置阶段需要「空实例探测」这类按需懒加载链路，并按 controllerId+type 缓存避免重复拉起。
 - **fake controller 秒回响应会掩盖竞态**：API/E2E 测试中的假 controller 应有意识地引入延迟变体（startDelayMs），才能覆盖真实 harness 的慢启动场景。
