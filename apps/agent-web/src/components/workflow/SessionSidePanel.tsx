@@ -16,7 +16,7 @@ export default function SessionSidePanel({ sessionId, onClose }: SessionSidePane
   return (
     <Dialog open={sessionId != null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="top-0 right-0 left-auto grid-rows-[auto_1fr] h-full max-h-none w-full translate-x-0 translate-y-0 rounded-none sm:max-w-2xl"
+        className="top-0 right-0 left-auto grid-rows-[auto_1fr] h-full max-h-none w-full translate-x-0 translate-y-0 rounded-none sm:max-w-4xl"
         showCloseButton
       >
         <DialogHeader>

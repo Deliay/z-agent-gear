@@ -18,6 +18,7 @@ import {
   REJECT_NODE,
   type WorkflowInstanceData,
   type WorkflowNodeData,
+  type BlackboardEntryData,
   type WorkflowNodeStatus,
   type WorkflowNodeType,
 } from '@/graphql/workflow'
@@ -30,7 +31,7 @@ const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
 }
 
 const NODE_STATUS_LABELS: Record<WorkflowNodeStatus, string> = {
-  INITIALIZING: '初始化中',
+  INITIALIZING: '等待中',
   READY: '待开始',
   RUNNING: '执行中',
   DONE: '已完成',
@@ -50,6 +51,17 @@ const NODE_STATUS_BADGE: Record<WorkflowNodeStatus, string> = {
 interface WorkflowNodeTreeProps {
   instance: WorkflowInstanceData
   onOpenSession: (sessionId: string) => void
+}
+
+// 产物 key 约定（对齐 agent-api blackboard.ts artifactKey）：{nodeId}-{nodeName}-产物-{title}
+const ARTIFACT_KEY_MARKER = '-产物-'
+
+/** 从黑板聚合本节点产物（与后端 getArtifactKeys 前缀匹配同构） */
+function artifactsOf(node: WorkflowNodeData, blackboard: BlackboardEntryData[]) {
+  const prefix = `${node.id}-${node.name}${ARTIFACT_KEY_MARKER}`
+  return blackboard
+    .filter((entry) => entry.key.startsWith(prefix))
+    .map((entry) => ({ title: entry.key.slice(prefix.length), value: entry.value }))
 }
 
 /** 人类节点操作：完成（文本输入）/ 打回（弹框输入理由） */
@@ -191,7 +203,9 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
           <div className="space-y-2">
             {instance.nodes
               .filter((node) => node.stage === stage)
-              .map((node) => (
+              .map((node) => {
+                const nodeArtifacts = artifactsOf(node, instance.blackboard)
+                return (
                 <div key={node.id} className="rounded-lg border p-3">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
@@ -226,12 +240,30 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                       打回理由：{node.rejectInfo.reason}
                     </p>
                   )}
+                  {nodeArtifacts.length > 0 && (
+                    <div className="mt-2 space-y-1.5">
+                      <div className="text-xs font-medium text-muted-foreground">
+                        产物（{nodeArtifacts.length}）
+                      </div>
+                      {nodeArtifacts.map((artifact) => (
+                        <div key={artifact.title} className="rounded-md border bg-muted/30 p-2">
+                          <div className="mb-0.5 text-xs font-medium text-foreground">
+                            {artifact.title}
+                          </div>
+                          <pre className="text-xs break-all whitespace-pre-wrap text-muted-foreground">
+                            {artifact.value}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {node.type === 'HUMAN' &&
                     (node.status === 'READY' || node.status === 'RUNNING') && (
                       <HumanNodeActions instanceId={instance.id} node={node} />
                     )}
                 </div>
-              ))}
+                )
+              })}
           </div>
         </div>
       ))}

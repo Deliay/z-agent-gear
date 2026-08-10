@@ -110,4 +110,16 @@ describe('AcpCard', () => {
     const summary = screen.getByText('✗');
     expect(summary.className).toContain('text-destructive');
   });
+
+  it('should truncate title and summary to fit narrow containers', () => {
+    const longTitle = `Tool Call: ${'Edit src/very/long/path/'.repeat(10)}file.ts`;
+    const longSummary = `Edit ${'✓'.repeat(50)} done`;
+    render(
+      <AcpCard title={longTitle} summary={longSummary}>
+        <div>content</div>
+      </AcpCard>,
+    );
+    expect(screen.getByText(longTitle).className).toContain('truncate');
+    expect(screen.getByText(longSummary).className).toContain('truncate');
+  });
 });

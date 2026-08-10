@@ -403,12 +403,12 @@ test.describe('Workflow E2E', () => {
     await dialog.getByLabel('实例名称').fill(instanceName);
     await dialog.getByRole('button', { name: '实例化', exact: true }).click();
 
-    // 跳转到实例视图：首节点 READY（待开始），AI 节点 INITIALIZING（初始化中）
+    // 跳转到实例视图：首节点 READY（待开始），AI 节点 INITIALIZING（等待中）
     await page.waitForURL(/\/workflows\/[a-f0-9]+/, { timeout: 10000 });
     const instanceId = page.url().match(/\/workflows\/([a-f0-9]+)/)![1];
     await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
     await expect(nodeCard(page, '需求输入').getByText('待开始', { exact: true })).toBeVisible();
-    await expect(nodeCard(page, 'AI执行').getByText('初始化中', { exact: true })).toBeVisible();
+    await expect(nodeCard(page, 'AI执行').getByText('等待中', { exact: true })).toBeVisible();
 
     // 人类节点 UI 输入需求并完成 → 下游 AI 节点拉起会话
     const inputCard = nodeCard(page, '需求输入');
@@ -644,14 +644,21 @@ test.describe('Workflow E2E', () => {
     // 状态 badge
     await expect(nodeCard(page, '需求输入').getByText('已完成', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible();
-    await expect(nodeCard(page, 'AI验收').getByText('初始化中', { exact: true })).toBeVisible();
+    await expect(nodeCard(page, 'AI验收').getByText('等待中', { exact: true })).toBeVisible();
     await expect(nodeCard(page, '需求输入').getByText('人类', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('AI', { exact: true })).toBeVisible();
 
     // 黑板面板：首节点产物可见
     await expect(page.getByRole('heading', { name: '工作流黑板' })).toBeVisible();
-    await expect(page.getByText(`${inputNode.id}-需求输入-产物-输入`)).toBeVisible();
-    await expect(page.getByText('做一个计算器')).toBeVisible();
+    const blackboardSection = page.getByRole('heading', { name: '工作流黑板' }).locator('..');
+    await expect(blackboardSection.getByText(`${inputNode.id}-需求输入-产物-输入`)).toBeVisible();
+    await expect(blackboardSection.getByText('做一个计算器')).toBeVisible();
+
+    // 节点产物聚合：产物同时展示在对应节点卡片内
+    const inputCardE5 = nodeCard(page, '需求输入');
+    await expect(inputCardE5.getByText('产物（1）')).toBeVisible();
+    await expect(inputCardE5.getByText('做一个计算器')).toBeVisible();
+    await expect(nodeCard(page, 'AI执行').getByText(/^产物（/)).toBeHidden();
 
     // 点击会话入口打开侧面板（SessionView 可见，展示节点提示词）
     await nodeCard(page, 'AI执行').getByRole('button', { name: '会话' }).click();
@@ -659,6 +666,15 @@ test.describe('Workflow E2E', () => {
     await expect(dialog.getByText('节点会话')).toBeVisible();
     await expect(dialog.getByText(/你身处一个工作流系统/)).toBeVisible({ timeout: 15000 });
     expect(execStart.sessionId).toBeTruthy();
+
+    // 会话面板足够宽（≥ max-w-4xl）且内容不横向溢出 client area
+    // （clientWidth 不受入场 zoom 动画影响，boundingBox 会在动画中途量到缩放后的尺寸）
+    const { width, overflowX } = await dialog.evaluate((el) => ({
+      width: el.clientWidth,
+      overflowX: el.scrollWidth - el.clientWidth,
+    }));
+    expect(width).toBeGreaterThanOrEqual(896);
+    expect(overflowX).toBeLessThanOrEqual(1);
 
     env.controller.disconnect();
   });

@@ -170,7 +170,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
             {exInput.command && (
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Command: </span>
-                <pre className="mt-1 rounded bg-muted p-2 font-mono text-sm text-foreground">
+                <pre className="mt-1 rounded bg-muted p-2 font-mono text-sm whitespace-pre-wrap break-all text-foreground">
                   $ {exInput.command}
                 </pre>
               </div>
@@ -193,7 +193,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
               {rawInput && (rawInput as ExecuteRawInput).command && (
                 <div>
                   <span className="text-xs font-medium text-muted-foreground">Command: </span>
-                  <pre className="mt-1 rounded bg-muted p-2 font-mono text-sm text-foreground">
+                  <pre className="mt-1 rounded bg-muted p-2 font-mono text-sm whitespace-pre-wrap break-all text-foreground">
                     $ {(rawInput as ExecuteRawInput).command}
                   </pre>
                 </div>

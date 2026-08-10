@@ -53,10 +53,10 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   const continueDisabled = resuming || !controllerOnline;
 
   return (
-    <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
-      <div className="flex items-center gap-4">
+    <div className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
         {isMobile && <MobileBackButton to="/sessions" />}
-        <h1 className="text-lg font-semibold">
+        <h1 className="truncate text-lg font-semibold">
           {session?.controllerName || 'Session'}
         </h1>
         <span data-testid="session-status-badge" className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
@@ -84,7 +84,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {status !== 'ended' && status !== 'creating' && !resuming && (
           <Button
             variant="destructive"

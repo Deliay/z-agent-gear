@@ -127,6 +127,20 @@ describe('ToolCallCard statuses', () => {
     expect(container.firstElementChild?.className).toContain('bg-info/10');
   });
 
+  it('should wrap long commands instead of overflowing narrow panels', () => {
+    const { container } = renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'execute',
+      status: 'pending',
+      title: 'Run command',
+      rawInput: { command: `echo ${'x'.repeat(300)}` },
+    });
+
+    const pre = container.querySelector('pre')!;
+    expect(pre.className).toContain('whitespace-pre-wrap');
+    expect(pre.className).toContain('break-all');
+  });
+
   it('should show ellipsis summary for in_progress and pending when collapsed', () => {
     const first = renderCollapsedToolCall({
       sessionUpdate: 'tool_call',

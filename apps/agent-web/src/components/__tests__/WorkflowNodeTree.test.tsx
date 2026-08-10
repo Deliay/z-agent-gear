@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import WorkflowNodeTree from '../workflow/WorkflowNodeTree';
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow';
 
@@ -51,6 +51,66 @@ function makeInstance(nodes: WorkflowNodeData[]): WorkflowInstanceData {
     updatedAt: '2026-08-08T00:00:00Z',
   } as WorkflowInstanceData;
 }
+
+describe('节点状态标签', () => {
+  it('INITIALIZING 显示为「等待中」', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ type: 'AI', status: 'INITIALIZING' })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('等待中')).toBeDefined();
+  });
+});
+
+describe('节点产物聚合展示', () => {
+  const entry = (key: string, value: string) => ({
+    key,
+    value,
+    updatedAt: '2026-08-08T00:00:00Z',
+  });
+
+  it('节点卡片内展示本节点产物的标题与内容', () => {
+    const instance = makeInstance([makeNode({ status: 'DONE' })]);
+    instance.blackboard = [entry('n1-评审-产物-输入', '评审通过，可以开发')];
+
+    render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText('产物（1）')).toBeDefined();
+    expect(screen.getByText('输入')).toBeDefined();
+    expect(screen.getByText('评审通过，可以开发')).toBeDefined();
+  });
+
+  it('只展示本节点产物，不混入其他节点', () => {
+    const instance = makeInstance([
+      makeNode({ id: 'n1', name: '评审', status: 'DONE' }),
+      makeNode({ id: 'n2', name: '开发', type: 'AI', status: 'DONE' }),
+    ]);
+    instance.blackboard = [
+      entry('n1-评审-产物-输入', '评审意见'),
+      entry('n2-开发-产物-代码', '计算器代码 v1'),
+    ];
+
+    render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+
+    const reviewCard = screen.getByText('评审').closest('div.rounded-lg')!;
+    const devCard = screen.getByText('开发').closest('div.rounded-lg')!;
+    expect(within(reviewCard).getByText('评审意见')).toBeDefined();
+    expect(within(reviewCard).queryByText('计算器代码 v1')).toBeNull();
+    expect(within(devCard).getByText('计算器代码 v1')).toBeDefined();
+  });
+
+  it('无产物时不显示产物区块', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ status: 'DONE' })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/^产物（/)).toBeNull();
+  });
+});
 
 describe('WorkflowNodeTree 人类节点输入草稿', () => {
   beforeEach(() => {
