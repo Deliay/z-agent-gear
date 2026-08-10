@@ -212,6 +212,27 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ 引擎单测新增 E16（REWORK→REJECT：rejectInfo 覆盖、黑板打回记录、上游再次 REWORK）；API 新增 A24（c 打回 b→b REWORK→b 打回 a→a REWORK 全链路留痕）
 
+### 14. 链式打回后 b 完成时流程卡住（第六轮验收）
+
+**问题描述**：a→b→c 链式打回（c 打回 b、b 打回 a）后，a 完成返工使 b 复工（RUNNING），但 c 仍为 REJECT；此时 b 调用 `completeCurrentNode`/`completeCurrentRework`，引擎对下游 c 执行 `start` 转移（仅允许 INITIALIZING/READY），报「不允许执行『启动』」，流程永久卡住。
+
+**修复方案**（`engine.ts` `complete` 分支）：推进下游时按状态分派——下游为 REJECT 则执行 `resume`（REJECT→RUNNING，触发 onNodeResume 通知会话重新获取产物，语义与 `completeRework` 的「通知下游 REJECT 复工」一致），其余状态仍走 `start`。
+
+**验证结果**：✅ 引擎单测新增 E17（complete 使下游 REJECT 节点 resume）；API 新增 A25（四节点链 c→b→a 链式打回 → a 返工完成 b 复工 → b 完成 c 自动复工，全流程不卡住）
+
+### 15. 工作流实例缺少删除功能（第六轮验收）
+
+**问题描述**：实例无法删除；删除需停止流程运转、对流程下所有会话执行删除操作，且实例必须软删除（标记删除，不删真实数据）。
+
+**修复方案**：
+
+1. **契约/schema**：新增 `deleteWorkflowInstance(id: ID!): Boolean!`。
+2. **Model**：`WorkflowInstance` 加 `deletedAt`（默认 null）。
+3. **Service**（`instance.ts deleteInstance`）：**先标记 deletedAt**（引擎 `transition` 对已删实例直接抛错、orchestrator 兜底查询排除已删实例，避免删会话过程中的竞态），再 `Session.find({ workflowInstanceId })` 逐个走 `sessionService.delete`（停止 ACP 会话、清理 worktree 与消息；单个失败记日志不中断）；`listForWorkspace`/`findById`/`completeHumanNode`/`rejectNode` 均过滤 `deletedAt: null`。
+4. **前端**：实例页头部「删除实例」按钮 + 确认框（说明停流程、删除全部节点会话、软删不可撤销），确认后删除并跳转回会话列表。
+
+**验证结果**：✅ 单测新增 7 例（实例服务软删/排除/幂等 5 例、引擎已删实例拒转 1 例、查询过滤 2 例）；API 新增 A26（删除后详情/列表排除、会话已删、已删实例拒绝操作、二次删除报错）；E2E-11（实例页删除 → 确认框 → 跳转 → 实例页不可访问 → 侧边栏移除 → 会话已删）；前端新增 2 例（确认框流程/取消）
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -229,17 +250,19 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 11 | 黑板未默认折叠、无数量显示 | 黑板区始终展开，未复用垃圾桶折叠模式 | ✅ 已修复 | 97ee0c5 |
 | 12 | 黑板内容未 Markdown 渲染 | 条目值以 pre 纯文本展示 | ✅ 已修复 | 97ee0c5 |
 | 13 | REWORK 节点无法再次打回上游 | 引擎 reject 转移仅允许 RUNNING | ✅ 已修复 | 97ee0c5 |
+| 14 | 链式打回后 b 完成时流程卡住 | complete 对下游 REJECT 节点走 start（非法） | ✅ 已修复 | 5deae6c |
+| 15 | 实例缺少删除功能 | 无软删除机制与入口 | ✅ 已修复 | 5deae6c |
 
 ## 最终验证
 
 | 项目 | 结果 |
 |------|------|
-| agent-api build/单测 | ✅ tsc 通过，937/937 |
+| agent-api build/单测 | ✅ tsc 通过，944/944 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，323/323 |
-| API 测试（tests/api） | ✅ 全量通过 282/282（含 A19/A20/A21/A22/A23/A24） |
-| E2E 测试（tests/e2e workflow.spec） | ✅ 10/10（E2E-1~10） |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，325/325 |
+| API 测试（tests/api） | ✅ 全量通过 284/284（含 A19~A26） |
+| E2E 测试（tests/e2e workflow.spec） | ✅ 11/11（E2E-1~11） |
 
 ## 经验总结
 

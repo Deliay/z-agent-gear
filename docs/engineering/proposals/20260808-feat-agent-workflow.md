@@ -336,6 +336,10 @@ sequenceDiagram
     E->>D: transition(resume) REJECT→RUNNING<br/>提示其用 MCP 重新获取产物
 ```
 
+**链式打回复工**：a→b→c 链式打回（c 打回 b、b 打回 a）后，a 返工完成使 b 复工（RUNNING），但 c 仍为 REJECT；此时 b `complete` 会对下游 REJECT 节点执行 `resume`（而非 `start`——`start` 对 REJECT 非法会导致流程卡住），语义与 `completeRework` 的「通知下游 REJECT 复工」一致。
+
+**实例删除（软删除）**：`deleteWorkflowInstance(id)` 停止流程运转并删除流程下全部会话（`Session.find({ workflowInstanceId })` 逐个走 `sessionService.delete`：停止 ACP 会话、清理 worktree 与消息），实例文档仅标记 `deletedAt` 不物理删除。实现上**先标记 deletedAt 再删会话**：引擎 `transition` 对 `deletedAt` 非空的实例直接抛错，orchestrator 兜底查询排除已删实例，避免删除过程中的状态竞态；实例列表/详情查询均过滤 `deletedAt: null`。前端实例页头部提供「删除实例」按钮与确认框，删除后跳转回会话列表。
+
 **会话兜底**：`SessionService` 状态变为 `ended` 时，引擎检查其绑定节点状态是否在会话存续期内发生过转移；若未转移且节点仍处于 RUNNING，则 `resume()` 会话并发送兜底提示词（面向 LLM 撰写，说明其身处自动化系统、必须使用提供的工作流工具对当前节点执行完成/打回等操作）。兜底提醒限 1 次；提醒后会话再次停止（仍未转移）时，节点升级为 **FAILED**（failInfo.source=SESSION_STUCK），流程阻断并等待人工介入。LLM 判断任务无法继续时也可主动调用 `failCurrentNode`（source=LLM_REPORTED）；人类在节点会话中给出处理指示后，由 AI 调用 `resumeFailedNode`（FAILED→RUNNING）恢复。
 
 **断连恢复**：Controller socket 断连时会话进入 `disconnected`（不触发上述兜底，提示词无法送达）。`resume()` 允许 `ended`/`disconnected`；前端断连会话显示「继续」（而非「关闭」），点击后弹确认框，确认并等会话 ready（SSE idling）后自动发送工作流继续提示词（显式要求 AI 调 `getNodeInfo`/`resumeFailedNode`/`completeCurrentNode` 等 MCP 工具继续之前的工作）。
@@ -460,6 +464,7 @@ contracts/
 | E3 | RUNNING→DONE（complete） | 允许，触发下游 start + 结束本会话 |
 | E4 | RUNNING→REJECT（reject，携带 reason） | 允许，写黑板打回记录，触发上游 REWORK |
 | E16 | REWORK→REJECT（返工中再次打回上游，a→b→c 中 c 打回 b 后 b 打回 a） | 允许，rejectInfo 覆盖，上游再次 REWORK |
+| E17 | 链式打回后 complete（下游仍为 REJECT） | 允许，下游 REJECT 节点 resume 复工（而非 start，避免流程卡住） |
 | E5 | REJECT→RUNNING（上游 REWORK→DONE 后 resume） | 允许 |
 | E6 | REWORK→DONE（completeRework） | 允许，重置产物，通知下游 resume |
 | E7 | READY/RUNNING/DONE→REWORK（收到打回） | 允许，reworkCount+1，写 reworkedAt |
