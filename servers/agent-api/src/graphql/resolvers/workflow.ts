@@ -111,6 +111,9 @@ function mapInstance(doc: Doc) {
     workspaceId: toId(doc.workspaceId),
     name: doc.name,
     currentNodeNames: doc.currentNodeNames ?? [],
+    lastNodeName: doc.lastNodeName ?? null,
+    lastNodeStatus: doc.lastNodeStatus ?? null,
+    archived: Boolean(doc.archivedAt),
     nodes: ((doc.nodes as Doc[]) ?? []).map(mapInstanceNode),
     blackboard: mapBlackboardEntries(doc.blackboard, doc.blackboardUpdatedAt),
     blackboardTrash: mapBlackboardEntries(doc.blackboardTrash, doc.blackboardUpdatedAt),
@@ -162,9 +165,9 @@ export const workflowResolvers = {
       const doc = await configuredWorkflowService.findById(args.id, userId);
       return doc ? mapConfigured(doc as unknown as Doc) : null;
     },
-    workflowInstances: async (_parent: unknown, args: { workspaceId: string }, context: AuthContext) => {
+    workflowInstances: async (_parent: unknown, args: { workspaceId: string; archived?: boolean }, context: AuthContext) => {
       const userId = requireUser(context);
-      const docs = await workflowInstanceService.listForWorkspace(userId, args.workspaceId);
+      const docs = await workflowInstanceService.listForWorkspace(userId, args.workspaceId, args.archived ?? false);
       return docs.map((doc) => mapInstance(doc as unknown as Doc));
     },
     workflowInstance: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
@@ -264,6 +267,10 @@ export const workflowResolvers = {
     deleteWorkflowInstance: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.deleteInstance(userId, args.id));
+    },
+    archiveWorkflowInstance: async (_parent: unknown, args: { id: string; archived: boolean }, context: AuthContext) => {
+      const userId = requireUser(context);
+      return wrap(() => workflowInstanceService.setArchived(userId, args.id, args.archived));
     },
   },
 };

@@ -300,6 +300,22 @@ describe('WorkflowInstanceService 查询排除已删除实例', () => {
       userId: 'user-1',
       workspaceId: 'ws-1',
       deletedAt: null,
+      archivedAt: null,
+    });
+  });
+
+  it('listForWorkspace(archived=true) 仅返回已归档实例', async () => {
+    const lean = vi.fn().mockResolvedValue([]);
+    const sort = vi.fn().mockReturnValue({ lean });
+    vi.mocked(WorkflowInstance.find).mockReturnValue({ sort } as never);
+
+    await workflowInstanceService.listForWorkspace('user-1', 'ws-1', true);
+
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+      deletedAt: null,
+      archivedAt: { $ne: null },
     });
   });
 
@@ -377,5 +393,49 @@ describe('WorkflowInstanceService.deleteInstance', () => {
     await expect(workflowInstanceService.deleteInstance('user-1', 'inst-x')).rejects.toThrow(/不存在/);
     expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
     expect(sessionService.delete).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('WorkflowInstanceService.setArchived', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('归档：置 archivedAt 为当前时间，返回 true', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1') }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+
+    const result = await workflowInstanceService.setArchived('user-1', 'inst-1', true);
+
+    expect(result).toBe(true);
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { archivedAt: expect.any(Date) } },
+    );
+  });
+
+  it('取消归档：archivedAt 置回 null', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1'), archivedAt: new Date() }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+
+    const result = await workflowInstanceService.setArchived('user-1', 'inst-1', false);
+
+    expect(result).toBe(true);
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { archivedAt: null } },
+    );
+  });
+
+  it('实例不存在、无权限或已删除时拒绝', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null));
+
+    await expect(workflowInstanceService.setArchived('user-1', 'inst-x', true)).rejects.toThrow(/不存在/);
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
   });
 });

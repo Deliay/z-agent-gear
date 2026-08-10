@@ -66,6 +66,11 @@ const workflowInstanceSchema = new mongoose.Schema(
     blackboardUpdatedAt: { type: Map, of: Date, default: {} },
     // 软删除标记：删除实例时置为删除时间（实例数据保留，查询/引擎均排除）
     deletedAt: { type: Date, default: null },
+    // 归档标记：归档仅移入「已归档」分组，不影响流程运转
+    archivedAt: { type: Date, default: null },
+    // 最后执行过的节点（实例对外状态展示；引擎每次转移按时间序更新）
+    lastNodeName: { type: String, default: null },
+    lastNodeStatus: { type: String, enum: WORKFLOW_NODE_STATUSES, default: null },
   },
   { timestamps: true },
 );

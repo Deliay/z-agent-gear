@@ -146,7 +146,7 @@ const DELETE_CONFIGURED_WORKFLOW = `
 const INSTANTIATE_WORKFLOW = `
   mutation InstantiateWorkflow($configuredWorkflowId: ID!, $workspaceId: ID!, $name: String!) {
     instantiateWorkflow(configuredWorkflowId: $configuredWorkflowId, workspaceId: $workspaceId, name: $name) {
-      id configuredWorkflowId controllerId workspaceId name currentNodeNames
+      id configuredWorkflowId controllerId workspaceId name currentNodeNames lastNodeName lastNodeStatus
       nodes { id nodeKey type name status stage sessionId reworkCount }
     }
   }
@@ -155,7 +155,7 @@ const INSTANTIATE_WORKFLOW = `
 const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
-      id name currentNodeNames
+      id name currentNodeNames lastNodeName lastNodeStatus archived
       nodes { id nodeKey type name status stage sessionId startedAt reworkedAt reworkCount rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
@@ -164,8 +164,8 @@ const WORKFLOW_INSTANCE_QUERY = `
 `;
 
 const WORKFLOW_INSTANCES_QUERY = `
-  query WorkflowInstances($workspaceId: ID!) {
-    workflowInstances(workspaceId: $workspaceId) { id name }
+  query WorkflowInstances($workspaceId: ID!, $archived: Boolean) {
+    workflowInstances(workspaceId: $workspaceId, archived: $archived) { id name lastNodeName lastNodeStatus archived }
   }
 `;
 
@@ -1365,6 +1365,12 @@ const DELETE_WORKFLOW_INSTANCE = `
   mutation DeleteWorkflowInstance($id: ID!) { deleteWorkflowInstance(id: $id) }
 `;
 
+const ARCHIVE_WORKFLOW_INSTANCE = `
+  mutation ArchiveWorkflowInstance($id: ID!, $archived: Boolean!) {
+    archiveWorkflowInstance(id: $id, archived: $archived)
+  }
+`;
+
 /** 等待指定 sessionId 的 acp:resume 事件（链式打回会触发多个 resume，需按会话过滤） */
 function waitForResume<T = unknown>(socket: ClientSocket, sessionId: string, timeoutMs = 10000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -1396,7 +1402,7 @@ function chainTemplateInput(name: string) {
   };
 }
 
-describe('Workflow Chain Reject & Instance Delete (A25-A27)', () => {
+describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
   let token = '';
   let fake: FakeController;
   let workspaceId = '';
@@ -1664,5 +1670,144 @@ describe('Workflow Chain Reject & Instance Delete (A25-A27)', () => {
     // exec 会话收到复工通知消息
     const resumeMsg = await resumeMsgPromise;
     expect(resumeMsg.sessionId).toBe(execSess.sessionId);
+  }, 60_000);
+
+  it('A28: archiveWorkflowInstance 归档行为：活跃排除/归档包含/详情可访问/取消归档恢复/节点仍运行', async () => {
+    // 创建三节点实例（H→AI→H）并推进到 exec 会话启动
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a28-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a28-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a28-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 完成首节点 → exec 会话启动
+    const startPromise = answerNextStart('a28');
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const execSess = await startPromise;
+
+    // 归档前：活跃列表包含，归档列表不含
+    const activeList1 = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token)).json()).data.workflowInstances;
+    expect(activeList1.find((i: Record<string, any>) => i.id === instanceId)).toBeDefined();
+    const archList1 = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId, archived: true }, token)).json()).data.workflowInstances;
+    expect(archList1.find((i: Record<string, any>) => i.id === instanceId)).toBeUndefined();
+
+    // 归档
+    const archiveRes = await gqlRequest(ARCHIVE_WORKFLOW_INSTANCE, { id: instanceId, archived: true }, token);
+    const archiveBody = await archiveRes.json();
+    expect(archiveBody.errors).toBeUndefined();
+    expect(archiveBody.data.archiveWorkflowInstance).toBe(true);
+
+    // 归档后：活跃列表排除，归档列表包含
+    const activeList2 = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token)).json()).data.workflowInstances;
+    expect(activeList2.find((i: Record<string, any>) => i.id === instanceId)).toBeUndefined();
+    const archList2 = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId, archived: true }, token)).json()).data.workflowInstances;
+    const archived = archList2.find((i: Record<string, any>) => i.id === instanceId);
+    expect(archived).toBeDefined();
+    expect(archived.archived).toBe(true);
+
+    // 详情仍可访问
+    const detail = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(detail).not.toBeNull();
+    expect(detail.archived).toBe(true);
+
+    // exec 节点仍为 RUNNING（归档不影响流程）
+    const execNode = detail.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+
+    // 取消归档 → 恢复到活跃列表
+    const unarchiveRes = await gqlRequest(ARCHIVE_WORKFLOW_INSTANCE, { id: instanceId, archived: false }, token);
+    const unarchiveBody = await unarchiveRes.json();
+    expect(unarchiveBody.errors).toBeUndefined();
+    expect(unarchiveBody.data.archiveWorkflowInstance).toBe(true);
+
+    const activeList3 = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token)).json()).data.workflowInstances;
+    const restored = activeList3.find((i: Record<string, any>) => i.id === instanceId);
+    expect(restored).toBeDefined();
+    expect(restored.archived).toBe(false);
+  }, 60_000);
+
+  it('A29: lastNodeName/lastNodeStatus 实例状态追踪：实例化→首节点 READY；complete→下游 RUNNING；终端完成→自身 DONE', async () => {
+    // 两节点模板：HUMAN(input) → AI(exec)
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: simpleTemplateInput(`wf-a29-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a29-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+
+    // 实例化 → lastNode = 首节点 READY
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a29-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    expect(inst.lastNodeName).toBe('需求输入');
+    expect(inst.lastNodeStatus).toBe('READY');
+
+    // completeHumanNode → lastNode = 下游 exec RUNNING
+    const startPromise = answerNextStart('a29');
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const execSess = await startPromise;
+
+    const instAfterComplete = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(instAfterComplete.lastNodeName).toBe('AI执行');
+    expect(instAfterComplete.lastNodeStatus).toBe('RUNNING');
+
+    // completeCurrentNode → lastNode = 自身 DONE
+    const done = parseToolResult(
+      (await callWorkflowTool(execSess.sessionId, execSess.mcpToken, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '计算器已完成' }],
+      })).body,
+    );
+    expect(done.isError).toBe(false);
+
+    const instAfterDone = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(instAfterDone.lastNodeName).toBe('AI执行');
+    expect(instAfterDone.lastNodeStatus).toBe('DONE');
   }, 60_000);
 });

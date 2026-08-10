@@ -5,9 +5,10 @@ import { toast } from 'sonner'
 import {
   GET_WORKFLOW_INSTANCE,
   DELETE_WORKFLOW_INSTANCE,
+  ARCHIVE_WORKFLOW_INSTANCE,
   type GetWorkflowInstanceQuery,
 } from '@/graphql/workflow'
-import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
+import WorkflowNodeTree, { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTree'
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import MobileBackButton from '@/components/MobileBackButton'
@@ -21,7 +22,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Trash2 } from 'lucide-react'
 
 export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
@@ -30,6 +31,7 @@ export default function WorkflowInstancePage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
+  const [archiveWorkflowInstance] = useMutation(ARCHIVE_WORKFLOW_INSTANCE)
 
   const { data, loading } = useQuery<GetWorkflowInstanceQuery>(GET_WORKFLOW_INSTANCE, {
     variables: { id: id ?? '' },
@@ -86,6 +88,20 @@ export default function WorkflowInstancePage() {
     }
   }
 
+  const handleArchive = async () => {
+    try {
+      await archiveWorkflowInstance({ variables: { id: instance.id, archived: !instance.archived } })
+      if (instance.archived) {
+        toast.success('已取消归档')
+      } else {
+        toast.success('工作流实例已归档')
+        navigate('/sessions')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '操作失败，请重试')
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="mb-4 flex items-center gap-2">
@@ -97,13 +113,37 @@ export default function WorkflowInstancePage() {
               执行中：{name}
             </Badge>
           ))
+        ) : instance.lastNodeName && instance.lastNodeStatus ? (
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[instance.lastNodeStatus]}`}
+          >
+            {instance.lastNodeName} · {NODE_STATUS_LABELS[instance.lastNodeStatus]}
+          </span>
         ) : (
           <Badge variant="secondary">暂无执行中的节点</Badge>
         )}
         <Button
           variant="outline"
           size="sm"
-          className="ml-auto text-destructive hover:text-destructive"
+          className="ml-auto"
+          onClick={handleArchive}
+        >
+          {instance.archived ? (
+            <>
+              <ArchiveRestore className="size-3.5" />
+              取消归档
+            </>
+          ) : (
+            <>
+              <Archive className="size-3.5" />
+              归档
+            </>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-destructive hover:text-destructive"
           onClick={() => setDeleteOpen(true)}
         >
           <Trash2 className="size-3.5" />

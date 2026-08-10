@@ -4,9 +4,11 @@ import { useQuery } from '@apollo/client/react'
 import {
   GET_WORKFLOW_INSTANCES,
   type GetWorkflowInstancesQuery,
+  type WorkflowInstanceSummaryData,
 } from '@/graphql/workflow'
+import { instanceStatusText } from './WorkflowNodeTree'
 import InstantiateWorkflowDialog from './InstantiateWorkflowDialog'
-import { Workflow, Plus } from 'lucide-react'
+import { Archive, ChevronDown, ChevronRight, Workflow, Plus } from 'lucide-react'
 
 interface WorkflowSidebarGroupProps {
   workspaceId: string
@@ -19,12 +21,40 @@ export default function WorkflowSidebarGroup({
   controllerId,
 }: WorkflowSidebarGroupProps) {
   const [showInstantiate, setShowInstantiate] = useState(false)
+  const [archivedOpen, setArchivedOpen] = useState(false)
   const { data } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
     variables: { workspaceId },
     pollInterval: 15000,
   })
+  const { data: archivedData } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
+    variables: { workspaceId, archived: true },
+    pollInterval: 15000,
+  })
 
   const instances = data?.workflowInstances ?? []
+  const archivedInstances = archivedData?.workflowInstances ?? []
+
+  const renderItem = (instance: WorkflowInstanceSummaryData) => (
+    <li key={instance.id}>
+      <NavLink
+        to={`/workflows/${instance.id}`}
+        className={({ isActive }) =>
+          `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+            isActive
+              ? 'bg-sidebar-accent text-sidebar-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-accent'
+          }`
+        }
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate">{instance.name}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {instanceStatusText(instance)}
+          </div>
+        </div>
+      </NavLink>
+    </li>
+  )
 
   return (
     <li>
@@ -44,30 +74,28 @@ export default function WorkflowSidebarGroup({
 
       {instances.length > 0 && (
         <ul className="ml-4 space-y-1">
-          {instances.map((instance) => (
-            <li key={instance.id}>
-              <NavLink
-                to={`/workflows/${instance.id}`}
-                className={({ isActive }) =>
-                  `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                    isActive
-                      ? 'bg-sidebar-accent text-sidebar-foreground'
-                      : 'text-sidebar-foreground hover:bg-sidebar-accent'
-                  }`
-                }
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate">{instance.name}</div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {instance.currentNodeNames.length > 0
-                      ? `执行中：${instance.currentNodeNames.join('、')}`
-                      : '暂无执行中的节点'}
-                  </div>
-                </div>
-              </NavLink>
-            </li>
-          ))}
+          {instances.map(renderItem)}
         </ul>
+      )}
+
+      {archivedInstances.length > 0 && (
+        <div className="ml-4">
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setArchivedOpen((prev) => !prev)}
+            aria-expanded={archivedOpen}
+          >
+            {archivedOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+            <Archive className="size-3" />
+            已归档（{archivedInstances.length}）
+          </button>
+          {archivedOpen && (
+            <ul className="space-y-1">
+              {archivedInstances.map(renderItem)}
+            </ul>
+          )}
+        </div>
       )}
 
       <InstantiateWorkflowDialog

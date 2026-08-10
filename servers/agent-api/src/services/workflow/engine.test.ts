@@ -421,4 +421,38 @@ describe('WorkflowEngine.transition', () => {
     await expect(workflowEngine.transition('inst-1', 'n2', 'complete', {})).rejects.toThrow(/已删除/);
     expect(instance.nodes[1].status).toBe('RUNNING');
   });
+
+  it('E18: 转移记录最后执行节点（级联末位为准）：complete 有下游时为下游节点', async () => {
+    const instance = linearInstance();
+    instance.nodes[0].status = 'DONE';
+    instance.nodes[1].status = 'RUNNING';
+    loadInstance(instance);
+
+    // n2 complete → 下游 n3 start（AI，上游全 DONE → RUNNING）→ lastNode = n3
+    await workflowEngine.transition('inst-1', 'n2', 'complete', {});
+
+    expect(instance.lastNodeName).toBe('代码实现');
+    expect(instance.lastNodeStatus).toBe('RUNNING');
+  });
+
+  it('E19: 终端 complete 的 lastNode 为自身 DONE；reject 级联后 lastNode 为上游 REWORK', async () => {
+    // 终端节点 complete → lastNode = 自身 DONE
+    const inst1 = linearInstance();
+    inst1.nodes[0].status = 'DONE';
+    inst1.nodes[1].status = 'DONE';
+    inst1.nodes[2].status = 'RUNNING';
+    loadInstance(inst1);
+    await workflowEngine.transition('inst-1', 'n3', 'complete', {});
+    expect(inst1.lastNodeName).toBe('代码实现');
+    expect(inst1.lastNodeStatus).toBe('DONE');
+
+    // n2 reject → 级联 n1 REWORK → lastNode = n1 REWORK
+    const inst2 = linearInstance();
+    inst2.nodes[0].status = 'DONE';
+    inst2.nodes[1].status = 'RUNNING';
+    loadInstance(inst2);
+    await workflowEngine.transition('inst-1', 'n2', 'reject', { reason: '方案不完整' });
+    expect(inst2.lastNodeName).toBe('需求');
+    expect(inst2.lastNodeStatus).toBe('REWORK');
+  });
 });

@@ -36,6 +36,9 @@ export interface WorkflowInstanceDoc {
   blackboardUpdatedAt: Map<string, Date>;
   /** 软删除标记（删除实例时置为删除时间；非空则拒绝一切转移） */
   deletedAt?: Date | null;
+  /** 最后执行过的节点（实例对外状态展示；每次转移按时间序更新，级联末位为准） */
+  lastNodeName?: string | null;
+  lastNodeStatus?: string | null;
   save(): Promise<unknown>;
 }
 
@@ -149,11 +152,14 @@ class WorkflowEngine {
       case 'start': {
         node.status = 'READY';
         await this.maybeActivate(instance, node);
+        // FLAG 透传已在 maybeActivate 内按时间序记录，避免覆盖下游
+        if (node.type !== 'FLAG') this.markLastNode(instance, node);
         break;
       }
       case 'complete': {
         this.writeArtifacts(instance, node, payload.artifacts);
         node.status = 'DONE';
+        this.markLastNode(instance, node);
         // 先推进下游再结束本会话：
         // - 下游 REJECT（链式打回场景：下游在打回更上游时自身被打回）→ resume 复工
         // - 其余 → start（新建会话/激活）
@@ -178,6 +184,7 @@ class WorkflowEngine {
         }
         node.status = 'REJECT';
         node.rejectInfo = { reason: payload.reason ?? '', fromNodeId: payload.fromNodeId ?? null, at: new Date() };
+        this.markLastNode(instance, node);
         await addRejectRecord(instance, node.nodeId, payload.reason ?? '', payload.fromNodeId);
         // 触发直接上游 REWORK（可通过 targetNodeIds 限定范围）
         const targets = payload.targetNodeIds ? new Set(payload.targetNodeIds) : null;
@@ -191,6 +198,7 @@ class WorkflowEngine {
       }
       case 'rework': {
         node.status = 'REWORK';
+        this.markLastNode(instance, node);
         node.reworkCount = (node.reworkCount ?? 0) + 1;
         node.reworkedAt = new Date();
         await this.hooks.onNodeRework?.(instance, node, payload);
@@ -203,6 +211,7 @@ class WorkflowEngine {
         }
         this.writeArtifacts(instance, node, payload.artifacts);
         node.status = 'DONE';
+        this.markLastNode(instance, node);
         // 通知下游 REJECT 节点复工
         for (const downstream of this.downstreamsOf(instance, node)) {
           if (downstream.status === 'REJECT') {
@@ -213,6 +222,7 @@ class WorkflowEngine {
       }
       case 'resume': {
         node.status = 'RUNNING';
+        this.markLastNode(instance, node);
         await this.hooks.onNodeResume?.(instance, node);
         break;
       }
@@ -220,6 +230,7 @@ class WorkflowEngine {
         // 失败：阻断流程（非 DONE 下游永不激活），等待人工介入；不触发会话 hook
         // （SESSION_STUCK 来源会话已 ended；LLM_REPORTED 来源会话保留供人类对话介入）
         node.status = 'FAILED';
+        this.markLastNode(instance, node);
         node.failInfo = {
           reason: payload.reason ?? '',
           source: payload.source ?? 'LLM_REPORTED',
@@ -230,10 +241,17 @@ class WorkflowEngine {
       case 'resumeFailed': {
         // 人工在节点会话中给出指示后由 LLM 调用恢复；会话仍在，无需 hook
         node.status = 'RUNNING';
+        this.markLastNode(instance, node);
         node.failInfo = null;
         break;
       }
     }
+  }
+
+  /** 记录最后执行过的节点（实例对外状态展示用；级联转移时后调用者覆盖先调用者） */
+  private markLastNode(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): void {
+    instance.lastNodeName = node.name;
+    instance.lastNodeStatus = node.status;
   }
 
   /** READY 节点的激活评估：上游全部 DONE 后按类型推进 */
@@ -244,6 +262,7 @@ class WorkflowEngine {
     if (node.type === 'FLAG') {
       // FLAG 节点透传：自身 DONE，不产生会话，直接接力下游
       node.status = 'DONE';
+      this.markLastNode(instance, node);
       for (const downstream of this.downstreamsOf(instance, node)) {
         await this.apply(instance, downstream, 'start', {});
       }

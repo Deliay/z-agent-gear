@@ -135,6 +135,11 @@ type WorkflowInstance {
   name: String!
   # 实例对外状态 = 全部 RUNNING 节点名
   currentNodeNames: [String!]!
+  # 最后执行过的节点名与状态（实例状态展示：RUNNING 为空时以此为准）
+  lastNodeName: String
+  lastNodeStatus: String
+  # 是否已归档（归档仅移入「已归档」分组，不影响流程运转；区别于删除）
+  archived: Boolean!
   nodes: [WorkflowNode!]!
   blackboard: [BlackboardEntry!]!
   blackboardTrash: [BlackboardEntry!]!
@@ -187,7 +192,8 @@ type Query {
   workflowTemplate(id: ID!): WorkflowTemplate
   configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
   configuredWorkflow(id: ID!): ConfiguredWorkflow
-  workflowInstances(workspaceId: ID!): [WorkflowInstance!]!
+  # archived 缺省/false 返回活跃实例（未归档）；true 返回已归档实例
+  workflowInstances(workspaceId: ID!, archived: Boolean): [WorkflowInstance!]!
   workflowInstance(id: ID!): WorkflowInstance
 }
 
@@ -211,4 +217,6 @@ type Mutation {
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
+  # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）
+  archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
 }

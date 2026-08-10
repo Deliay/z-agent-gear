@@ -11,8 +11,16 @@ import { workflowEngine } from './engine.js';
  * 状态转移一律走 WorkflowEngine.transition（唯一入口）。
  */
 class WorkflowInstanceService {
-  async listForWorkspace(userId: string, workspaceId: string) {
-    return WorkflowInstance.find({ userId, workspaceId, deletedAt: null }).sort({ createdAt: -1 }).lean();
+  /** 实例列表：默认仅活跃（未归档）；archived=true 仅已归档 */
+  async listForWorkspace(userId: string, workspaceId: string, archived = false) {
+    return WorkflowInstance.find({
+      userId,
+      workspaceId,
+      deletedAt: null,
+      archivedAt: archived ? { $ne: null } : null,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
   async findById(id: string, userId: string) {
@@ -76,6 +84,9 @@ class WorkflowInstanceService {
       name,
       nodes,
       currentNodeNames: [],
+      // 实例初始状态 = 首节点就绪
+      lastNodeName: first?.name ?? null,
+      lastNodeStatus: first ? 'READY' : null,
     });
   }
 
@@ -116,6 +127,19 @@ class WorkflowInstanceService {
       throw new Error('工作流实例不存在或无权限');
     }
     return workflowEngine.transition(instanceId, nodeId, 'reject', { reason, fromNodeId: null });
+  }
+
+  /** 归档/取消归档实例：仅分组展示差异，不影响流程运转与节点会话 */
+  async setArchived(userId: string, id: string, archived: boolean) {
+    const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    await WorkflowInstance.updateOne(
+      { _id: id },
+      { $set: { archivedAt: archived ? new Date() : null } },
+    );
+    return true;
   }
 
   /**

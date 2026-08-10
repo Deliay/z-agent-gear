@@ -187,3 +187,55 @@ describe('WorkflowInstancePage 删除实例', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
+
+
+describe('WorkflowInstancePage 实例状态与归档', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('无执行中节点时展示最后执行节点及其状态 badge', () => {
+    const instance = makeInstance();
+    instance.currentNodeNames = [];
+    (instance as WorkflowInstanceData).lastNodeName = '完成开发';
+    (instance as WorkflowInstanceData).lastNodeStatus = 'DONE';
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
+
+    render(<WorkflowInstancePage />);
+
+    expect(screen.getByText('完成开发 · 已完成')).toBeDefined();
+    expect(screen.queryByText('暂无执行中的节点')).toBeNull();
+  });
+
+  it('点击「归档」调用归档 mutation 并跳转回会话列表', async () => {
+    const instance = makeInstance();
+    (instance as WorkflowInstanceData).archived = false;
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /归档/ }));
+
+    await waitFor(() =>
+      expect(mockDelete).toHaveBeenCalledWith(
+        expect.objectContaining({ variables: { id: 'inst-1', archived: true } }),
+      ),
+    );
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/sessions'));
+  });
+
+  it('已归档实例显示「取消归档」，点击后调用 mutation 且不跳转', async () => {
+    const instance = makeInstance();
+    (instance as WorkflowInstanceData).archived = true;
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '取消归档' }));
+
+    await waitFor(() =>
+      expect(mockDelete).toHaveBeenCalledWith(
+        expect.objectContaining({ variables: { id: 'inst-1', archived: false } }),
+      ),
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});

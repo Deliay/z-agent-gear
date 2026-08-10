@@ -101,6 +101,9 @@ export interface WorkflowInstanceSummaryData {
   workspaceId: string
   name: string
   currentNodeNames: string[]
+  lastNodeName: string | null
+  lastNodeStatus: WorkflowNodeStatus | null
+  archived: boolean
   createdAt: string
   updatedAt: string
 }
@@ -220,14 +223,17 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
 `
 
 export const GET_WORKFLOW_INSTANCES = gql`
-  query GetWorkflowInstances($workspaceId: ID!) {
-    workflowInstances(workspaceId: $workspaceId) {
+  query GetWorkflowInstances($workspaceId: ID!, $archived: Boolean) {
+    workflowInstances(workspaceId: $workspaceId, archived: $archived) {
       id
       configuredWorkflowId
       controllerId
       workspaceId
       name
       currentNodeNames
+      lastNodeName
+      lastNodeStatus
+      archived
       createdAt
       updatedAt
     }
@@ -243,6 +249,9 @@ export const GET_WORKFLOW_INSTANCE = gql`
       workspaceId
       name
       currentNodeNames
+      lastNodeName
+      lastNodeStatus
+      archived
       nodes {
         id
         nodeKey
@@ -343,6 +352,12 @@ export const DELETE_CONFIGURED_WORKFLOW = gql`
 export const DELETE_WORKFLOW_INSTANCE = gql`
   mutation DeleteWorkflowInstance($id: ID!) {
     deleteWorkflowInstance(id: $id)
+  }
+`
+
+export const ARCHIVE_WORKFLOW_INSTANCE = gql`
+  mutation ArchiveWorkflowInstance($id: ID!, $archived: Boolean!) {
+    archiveWorkflowInstance(id: $id, archived: $archived)
   }
 `
 

@@ -118,6 +118,9 @@ export const workflowTypeDefs = `#graphql
     workspaceId: ID!
     name: String!
     currentNodeNames: [String!]!
+    lastNodeName: String
+    lastNodeStatus: String
+    archived: Boolean!
     nodes: [WorkflowNode!]!
     blackboard: [BlackboardEntry!]!
     blackboardTrash: [BlackboardEntry!]!
@@ -170,7 +173,7 @@ export const workflowTypeDefs = `#graphql
     workflowTemplate(id: ID!): WorkflowTemplate
     configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
     configuredWorkflow(id: ID!): ConfiguredWorkflow
-    workflowInstances(workspaceId: ID!): [WorkflowInstance!]!
+    workflowInstances(workspaceId: ID!, archived: Boolean): [WorkflowInstance!]!
     workflowInstance(id: ID!): WorkflowInstance
   }
 
@@ -185,5 +188,6 @@ export const workflowTypeDefs = `#graphql
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
+    archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
   }
 `;
