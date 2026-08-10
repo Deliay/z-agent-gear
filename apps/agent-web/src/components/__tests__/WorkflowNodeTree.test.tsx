@@ -208,7 +208,7 @@ describe('节点折叠（移动端适配）', () => {
     return makeNode({ type: 'AI', name: '代码实现', description: '实现计算器', ...overrides });
   }
 
-  it('已完成/等待中节点默认折叠：只展示节点类型与标题', () => {
+  it('已完成/等待中节点默认折叠：展示类型、标题与状态 badge，隐藏描述等内容', () => {
     for (const status of ['DONE', 'INITIALIZING'] as const) {
       const { unmount } = render(
         <WorkflowNodeTree
@@ -216,15 +216,31 @@ describe('节点折叠（移动端适配）', () => {
           onOpenSession={vi.fn()}
         />,
       );
-      // 类型与标题可见
+      // 类型、标题、状态 badge 可见
       expect(screen.getByText('AI', { exact: true })).toBeDefined();
       expect(screen.getByText('代码实现')).toBeDefined();
-      // 折叠后其余内容（描述/状态 badge）不展示
+      expect(
+        screen.getByText(status === 'DONE' ? '已完成' : '等待中', { exact: true }),
+      ).toBeDefined();
+      // 折叠后描述等内容不展示
       expect(screen.queryByText('实现计算器')).toBeNull();
-      expect(screen.queryByText('已完成', { exact: true })).toBeNull();
-      expect(screen.queryByText('等待中', { exact: true })).toBeNull();
       unmount();
     }
+  });
+
+  it('折叠的节点仍展示返工次数与「会话」按钮', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          nodeInStage({ status: 'DONE', reworkCount: 2, sessionId: 'sess-1' }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('返工 2 次')).toBeDefined();
+    expect(screen.getByRole('button', { name: '会话' })).toBeDefined();
+    // 内容区仍折叠
+    expect(screen.queryByText('实现计算器')).toBeNull();
   });
 
   it('执行中/已打回/返工中/失败/待开始节点默认展开', () => {
@@ -282,8 +298,9 @@ describe('节点折叠（移动端适配）', () => {
     expect(screen.getByText('实现计算器')).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: /折叠/ }));
+    // 折叠后内容区隐藏，状态 badge 仍展示
     expect(screen.queryByText('实现计算器')).toBeNull();
-    expect(screen.queryByText('执行中', { exact: true })).toBeNull();
+    expect(screen.getByText('执行中', { exact: true })).toBeDefined();
   });
 
   it('节点卡片头部行允许换行（flex-wrap）以适配窄屏', () => {

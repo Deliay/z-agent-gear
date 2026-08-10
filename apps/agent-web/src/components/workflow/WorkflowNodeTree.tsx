@@ -212,35 +212,22 @@ function NodeCard({
   const collapsed = toggled ?? DEFAULT_COLLAPSED_STATUSES.includes(node.status)
   const nodeArtifacts = artifactsOf(node, blackboard)
 
-  if (collapsed) {
-    return (
-      <div className="rounded-lg border p-3">
-        <button
-          type="button"
-          className="flex w-full min-w-0 items-center gap-2"
-          onClick={() => setToggled(false)}
-          aria-expanded={false}
-          aria-label={`${node.name} 展开`}
-        >
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-          <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
-          <span className="min-w-0 flex-1 truncate text-left text-sm font-medium">{node.name}</span>
-        </button>
-      </div>
-    )
-  }
-
+  // 头部行折叠/展开均展示（类型、标题、状态 badge、返工次数、会话按钮）；折叠仅隐藏内容区
   return (
     <div className="rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="flex items-center"
-          onClick={() => setToggled(true)}
-          aria-expanded={true}
-          aria-label={`${node.name} 折叠`}
+          onClick={() => setToggled(!collapsed)}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `${node.name} 展开` : `${node.name} 折叠`}
         >
-          <ChevronDown className="size-4 text-muted-foreground" />
+          {collapsed ? (
+            <ChevronRight className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="size-4 text-muted-foreground" />
+          )}
         </button>
         <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{node.name}</span>
@@ -266,6 +253,8 @@ function NodeCard({
           </Button>
         )}
       </div>
+      {!collapsed && (
+      <>
       {node.description && (
         <p className="mt-1 text-xs text-muted-foreground">{node.description}</p>
       )}
@@ -303,6 +292,8 @@ function NodeCard({
         (node.status === 'READY' || node.status === 'RUNNING' || node.status === 'REWORK') && (
           <HumanNodeActions instanceId={instanceId} node={node} />
         )}
+      </>
+      )}
     </div>
   )
 }
