@@ -21,6 +21,8 @@ import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
+import { workflowOrchestrator } from './services/workflow/orchestrator.js';
+import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
 const app = express();
 
@@ -53,9 +55,14 @@ app.get('/health', (_req, res) => {
 });
 
 async function start() {
+  // 注册工作流引擎 hook（节点会话编排）与会话结束兜底回调
+  workflowOrchestrator.register();
+
   try {
     await mongoose.connect(config.mongodbUri);
     console.log('Connected to MongoDB');
+    // 幂等 upsert 内置「开发工作流」模板
+    await seedBuiltinWorkflowTemplate();
   } catch (err) {
     console.warn('MongoDB not available, starting without database:', (err as Error).message);
   }

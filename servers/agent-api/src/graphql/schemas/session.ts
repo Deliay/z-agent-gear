@@ -109,6 +109,8 @@ export const sessionTypeDefs = `#graphql
     authMethods: [AuthMethodInfo!]
     supportsAdditionalDirectories: Boolean!
     permissionTimeoutAction: PermissionTimeoutAction
+    workflowInstanceId: ID
+    workflowNodeId: String
     createdAt: String!
     updatedAt: String!
     endedAt: String
@@ -174,7 +176,7 @@ export const sessionTypeDefs = `#graphql
   }
 
   extend type Query {
-    sessions: [Session!]!
+    sessions(includeWorkflowSessions: Boolean): [Session!]!
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!

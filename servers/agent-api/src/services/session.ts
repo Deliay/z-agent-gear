@@ -9,8 +9,19 @@ import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
 export class SessionService {
-  async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    const sessions = await Session.find({ userId }).sort({ createdAt: -1 }).lean();
+  /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
+  private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
+
+  onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionEndedCallback = callback;
+  }
+
+  async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {
+    // 默认排除工作流节点会话（workflowInstanceId != null）
+    const filter: Record<string, unknown> = options.includeWorkflowSessions
+      ? { userId }
+      : { userId, workflowInstanceId: null };
+    const sessions = await Session.find(filter).sort({ createdAt: -1 }).lean();
     return sessions.map(this.mapSession.bind(this));
   }
 
@@ -27,6 +38,9 @@ export class SessionService {
     enableWorktree?: boolean;
     worktreeBranchSuffix?: string;
     mcpServerIds?: string[];
+    /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
+    workflowInstanceId?: string;
+    workflowNodeId?: string;
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
@@ -103,6 +117,8 @@ export class SessionService {
       cwd,
       worktreePath,
       worktreeBranch,
+      ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
+      ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
@@ -113,6 +129,10 @@ export class SessionService {
           session._id.toString(),
           userId,
           input.mcpServerIds,
+          // 工作流节点会话：token 扩展节点作用域
+          input.workflowInstanceId && input.workflowNodeId
+            ? { instanceId: input.workflowInstanceId, nodeId: input.workflowNodeId }
+            : undefined,
         );
       } catch (err) {
         console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
@@ -153,6 +173,8 @@ export class SessionService {
       await redis.set(`session:${id}:status`, status);
       if (status === 'ended') {
         await redis.del(`session:${id}:status`);
+        // 工作流兜底检查（节点仍 RUNNING 且未转移时 resume 并发送兜底提示词）
+        await this.sessionEndedCallback?.(id);
       }
     }
 
@@ -262,6 +284,8 @@ export class SessionService {
         sessionId: id,
         reason: 'user_close',
       }));
+      // 工作流兜底检查
+      await this.sessionEndedCallback?.(id);
       return true;
     }
     return false;
@@ -525,6 +549,10 @@ export class SessionService {
       authMethods: this.mapAuthMethods((session as any).authMethods),
       supportsAdditionalDirectories: (session as any).supportsAdditionalDirectories || false,
       permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
+      workflowInstanceId: (session as any).workflowInstanceId
+        ? (session as any).workflowInstanceId.toString()
+        : null,
+      workflowNodeId: (session as any).workflowNodeId || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,

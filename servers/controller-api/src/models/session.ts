@@ -32,6 +32,9 @@ const sessionSchema = new mongoose.Schema({
   authMethods: { type: [{ id: String, kind: String, description: String, url: String }], default: [] },
   authRequired: { type: Boolean, default: false },
   supportsAdditionalDirectories: { type: Boolean, default: false },
+  // 工作流打标（与 agent-api 同步的副本字段，两服务共享 Mongo）
+  workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance' },
+  workflowNodeId: { type: String },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });

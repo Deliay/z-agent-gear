@@ -6,11 +6,17 @@ import type { AuthContext } from './auth.js';
 
 export const sessionResolvers = {
   Query: {
-    sessions: async (_parent: unknown, _args: unknown, context: AuthContext) => {
+    sessions: async (
+      _parent: unknown,
+      args: { includeWorkflowSessions?: boolean },
+      context: AuthContext,
+    ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return sessionService.findAllByUser(context.currentUser.id);
+      return sessionService.findAllByUser(context.currentUser.id, {
+        includeWorkflowSessions: args.includeWorkflowSessions,
+      });
     },
     session: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       if (!context.currentUser) {

@@ -1,0 +1,365 @@
+import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
+import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
+
+/** 平台内置工作流工具服务名（transport: platform / source: platform） */
+export const PLATFORM_SERVER_NAME = 'agent-workflow-tools';
+
+/** 工具错误：code + 面向 LLM 可读的中文 message */
+export class WorkflowToolError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'WorkflowToolError';
+  }
+}
+
+/** 节点作用域（从 scoped token 的 workflow payload 解析） */
+export interface WorkflowToolScope {
+  instanceId: string;
+  nodeId: string;
+  userId: string;
+}
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+const ARTIFACTS_PARAM = {
+  artifacts: {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: { title: { type: 'string' }, value: { type: 'string' } },
+      required: ['title', 'value'],
+    },
+    description: '产物列表，写入工作流黑板（key 为 {节点ID}-{节点名称}-产物-{title}）',
+  },
+} as const;
+
+const TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: 'getCurrentNodeId',
+    description: '获得当前节点 ID（节点作用域映射）',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'getParentNodeIds',
+    description: '获得当前节点的父节点（上游）ID 列表',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'getNodeInfo',
+    description: '按节点 ID 获得节点信息（默认当前节点）',
+    inputSchema: {
+      type: 'object',
+      properties: { nodeId: { type: 'string', description: '节点 ID，缺省为当前节点' } },
+    },
+  },
+  {
+    name: 'getNodeArtifactKeys',
+    description: '获得某节点的所有产物黑板 keys（前缀匹配 {节点ID}-{节点名称}-产物，默认当前节点）',
+    inputSchema: {
+      type: 'object',
+      properties: { nodeId: { type: 'string', description: '节点 ID，缺省为当前节点' } },
+    },
+  },
+  {
+    name: 'getBlackboardKeys',
+    description: '获得工作流黑板 keys（可用 prefix 过滤）',
+    inputSchema: {
+      type: 'object',
+      properties: { prefix: { type: 'string', description: 'key 前缀过滤' } },
+    },
+  },
+  {
+    name: 'getBlackboardValue',
+    description: '按 key 读取工作流黑板 value',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'removeBlackboardKey',
+    description: '移除一个工作流黑板 key（被移除的信息挪入黑板垃圾桶）',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'completeCurrentNode',
+    description: '操作当前节点「节点完成」（RUNNING→DONE），产物写入黑板并触发下游节点开始',
+    inputSchema: { type: 'object', properties: { ...ARTIFACTS_PARAM } },
+  },
+  {
+    name: 'rejectCurrentNode',
+    description: '操作当前节点「节点打回」（RUNNING→REJECT），必须给出打回原因；targetNodeId 可限定返工的直接上游（默认全部直接上游）',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: '打回原因（必填）' },
+        targetNodeId: { type: 'string', description: '限定返工的上游节点 ID（必须是当前节点的直接上游）' },
+      },
+      required: ['reason'],
+    },
+  },
+  {
+    name: 'completeCurrentRework',
+    description: '操作当前节点「节点返工完成」（REWORK→DONE），重置产物并通知下游复工',
+    inputSchema: { type: 'object', properties: { ...ARTIFACTS_PARAM } },
+  },
+];
+
+export function getWorkflowToolDefinitions(): ToolDefinition[] {
+  return TOOL_DEFINITIONS;
+}
+
+/** 加载实例并校验 token 作用域（实例归属 + 节点存在） */
+async function loadScopeContext(
+  scope: WorkflowToolScope | undefined,
+): Promise<{ instance: WorkflowInstanceDoc; node: WorkflowNodeDoc }> {
+  if (!scope) {
+    throw new WorkflowToolError(
+      'UNAUTHORIZED',
+      '当前会话不是工作流节点会话（token 无 workflow 作用域），无法使用工作流工具',
+    );
+  }
+  const instance = (await WorkflowInstance.findById(scope.instanceId)) as unknown as WorkflowInstanceDoc | null;
+  if (!instance || instance.userId.toString() !== scope.userId) {
+    throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
+  }
+  const node = instance.nodes.find((n) => n.nodeId === scope.nodeId);
+  if (!node) {
+    throw new WorkflowToolError('NODE_NOT_FOUND', `当前会话绑定的节点 ${scope.nodeId} 不在实例中`);
+  }
+  return { instance, node };
+}
+
+function findNode(instance: WorkflowInstanceDoc, nodeId: string): WorkflowNodeDoc {
+  const node = instance.nodes.find((n) => n.nodeId === nodeId);
+  if (!node) {
+    throw new WorkflowToolError('NODE_NOT_FOUND', `实例中不存在节点：${nodeId}`);
+  }
+  return node;
+}
+
+function requireString(args: Record<string, unknown>, field: string, hint: string): string {
+  const value = args[field];
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new WorkflowToolError('INVALID_PARAMS', `参数 ${field} 必填且为非空字符串。${hint}`);
+  }
+  return value;
+}
+
+function parseArtifacts(args: Record<string, unknown>, required: boolean): { title: string; value: string }[] {
+  const raw = args.artifacts;
+  if (raw === undefined || raw === null) {
+    if (required) {
+      throw new WorkflowToolError(
+        'INVALID_PARAMS',
+        '参数 artifacts 必填：产物列表 [{title, value}]。请将你的工作成果作为产物提交。',
+      );
+    }
+    return [];
+  }
+  if (!Array.isArray(raw) || (required && raw.length === 0)) {
+    throw new WorkflowToolError('INVALID_PARAMS', '参数 artifacts 必须为数组：[{title, value}]。');
+  }
+  for (const item of raw) {
+    if (
+      typeof item !== 'object' || item === null ||
+      typeof (item as Record<string, unknown>).title !== 'string' ||
+      typeof (item as Record<string, unknown>).value !== 'string'
+    ) {
+      throw new WorkflowToolError('INVALID_PARAMS', 'artifacts 的每一项必须包含字符串字段 title 与 value。');
+    }
+  }
+  return raw as { title: string; value: string }[];
+}
+
+/** 引擎错误统一包装为 INVALID_STATE（保留可读 message） */
+async function transition(
+  scope: WorkflowToolScope,
+  event: 'complete' | 'reject' | 'completeRework',
+  payload: TransitionPayload,
+): Promise<unknown> {
+  try {
+    const node = await workflowEngine.transition(scope.instanceId, scope.nodeId, event, payload);
+    return { nodeId: node.nodeId, status: node.status };
+  } catch (err) {
+    throw new WorkflowToolError('INVALID_STATE', err instanceof Error ? err.message : String(err));
+  }
+}
+
+function mapNodeInfo(node: WorkflowNodeDoc): Record<string, unknown> {
+  return {
+    nodeId: node.nodeId,
+    nodeKey: node.nodeKey,
+    type: node.type,
+    name: node.name,
+    description: node.description ?? null,
+    stage: node.stage,
+    status: node.status,
+    sessionId: node.sessionId ? node.sessionId.toString() : null,
+    createdAt: node.createdAt ?? null,
+    startedAt: node.startedAt ?? null,
+    reworkedAt: node.reworkedAt ?? null,
+    reworkCount: node.reworkCount ?? 0,
+    rejectInfo: node.rejectInfo ?? null,
+  };
+}
+
+/** 工作流工具统一入口：参数校验 + 作用域校验 + 状态转移校验 */
+export async function callWorkflowTool(
+  scope: WorkflowToolScope | undefined,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { instance, node } = await loadScopeContext(scope);
+  const toolScope = scope!;
+
+  switch (name) {
+    case 'getCurrentNodeId':
+      return { nodeId: node.nodeId };
+
+    case 'getParentNodeIds':
+      return { parentNodeIds: [...(node.dependsOn ?? [])] };
+
+    case 'getNodeInfo': {
+      const target = typeof args.nodeId === 'string' && args.nodeId ? findNode(instance, args.nodeId) : node;
+      return mapNodeInfo(target);
+    }
+
+    case 'getNodeArtifactKeys': {
+      const target = typeof args.nodeId === 'string' && args.nodeId ? findNode(instance, args.nodeId) : node;
+      return { keys: getArtifactKeys(instance, target.nodeId, target.name) };
+    }
+
+    case 'getBlackboardKeys': {
+      const keys = listKeys(instance);
+      const prefix = typeof args.prefix === 'string' && args.prefix ? args.prefix : null;
+      return { keys: prefix ? keys.filter((k) => k.startsWith(prefix)) : keys };
+    }
+
+    case 'getBlackboardValue': {
+      const key = requireString(args, 'key', '可用 getBlackboardKeys 查看全部 keys。');
+      const value = getValue(instance, key);
+      if (value === null) {
+        throw new WorkflowToolError('KEY_NOT_FOUND', `黑板中不存在 key「${key}」，可用 getBlackboardKeys 查看全部 keys。`);
+      }
+      return { key, value };
+    }
+
+    case 'removeBlackboardKey': {
+      const key = requireString(args, 'key', '可用 getBlackboardKeys 查看全部 keys。');
+      try {
+        await removeKey(instance, key);
+      } catch (err) {
+        throw new WorkflowToolError('KEY_NOT_FOUND', err instanceof Error ? err.message : String(err));
+      }
+      return { removed: true, key };
+    }
+
+    case 'completeCurrentNode': {
+      const artifacts = parseArtifacts(args, false);
+      return transition(toolScope, 'complete', { artifacts });
+    }
+
+    case 'rejectCurrentNode': {
+      const reason = requireString(args, 'reason', '打回必须给出明确原因，供上游节点返工参考。');
+      let targetNodeIds: string[] | undefined;
+      if (typeof args.targetNodeId === 'string' && args.targetNodeId) {
+        if (!(node.dependsOn ?? []).includes(args.targetNodeId)) {
+          throw new WorkflowToolError(
+            'INVALID_PARAMS',
+            `targetNodeId「${args.targetNodeId}」不是当前节点的直接上游（可选：${(node.dependsOn ?? []).join('、') || '无'}）。`,
+          );
+        }
+        targetNodeIds = [args.targetNodeId];
+      }
+      return transition(toolScope, 'reject', { reason, fromNodeId: node.nodeId, targetNodeIds });
+    }
+
+    case 'completeCurrentRework': {
+      const artifacts = parseArtifacts(args, false);
+      return transition(toolScope, 'completeRework', { artifacts });
+    }
+
+    default:
+      throw new WorkflowToolError(
+        'UNKNOWN_TOOL',
+        `未知工具「${name}」。可用工具：${TOOL_DEFINITIONS.map((t) => t.name).join('、')}。`,
+      );
+  }
+}
+
+/** MCP 请求级调用方上下文（来自 scoped token payload） */
+export interface McpCaller {
+  userId?: string;
+  workflow?: { instanceId: string; nodeId: string };
+}
+
+interface JsonRpcRequest {
+  method?: string;
+  params?: { name?: string; arguments?: Record<string, unknown> };
+}
+
+/**
+ * 平台 MCP 服务请求处理（不经 Redis 转发，本地直接处理）。
+ * 工具级错误以 MCP 约定返回 isError 结果（LLM 可读），协议级错误返回 error。
+ */
+export async function handlePlatformMcpRequest(
+  caller: McpCaller,
+  request: JsonRpcRequest,
+): Promise<{ result?: unknown; error?: { code: string; message: string } }> {
+  switch (request.method) {
+    case 'initialize':
+      return {
+        result: {
+          protocolVersion: '2025-03-26',
+          capabilities: { tools: {} },
+          serverInfo: { name: PLATFORM_SERVER_NAME, version: '1.0.0' },
+        },
+      };
+    case 'notifications/initialized':
+    case 'notifications/cancelled':
+      return { result: {} };
+    case 'ping':
+      return { result: {} };
+    case 'tools/list':
+      return { result: { tools: getWorkflowToolDefinitions() } };
+    case 'tools/call': {
+      const toolName = request.params?.name;
+      if (!toolName) {
+        return { error: { code: 'INVALID_PARAMS', message: 'tools/call 缺少 params.name' } };
+      }
+      const scope: WorkflowToolScope | undefined = caller.workflow
+        ? { instanceId: caller.workflow.instanceId, nodeId: caller.workflow.nodeId, userId: caller.userId ?? '' }
+        : undefined;
+      try {
+        const output = await callWorkflowTool(scope, toolName, request.params?.arguments ?? {});
+        return { result: { content: [{ type: 'text', text: JSON.stringify(output) }] } };
+      } catch (err) {
+        if (err instanceof WorkflowToolError) {
+          return {
+            result: {
+              content: [{ type: 'text', text: JSON.stringify({ code: err.code, message: err.message }) }],
+              isError: true,
+            },
+          };
+        }
+        return { error: { code: 'INTERNAL_ERROR', message: err instanceof Error ? err.message : String(err) } };
+      }
+    }
+    default:
+      return { error: { code: 'METHOD_NOT_FOUND', message: `不支持的方法：${request.method}` } };
+  }
+}

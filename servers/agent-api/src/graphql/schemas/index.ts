@@ -8,6 +8,7 @@ import { gatewayTypeDefs } from './gateway.js';
 import { todoTypeDefs } from './todo.js';
 import { mcpServerTypeDefs } from './mcp-server.js';
 import { githubTypeDefs } from './github.js';
+import { workflowTypeDefs } from './workflow.js';
 
 const baseTypeDefs = `#graphql
   type Query
@@ -15,4 +16,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs];
