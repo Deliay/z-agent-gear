@@ -338,6 +338,8 @@ sequenceDiagram
 
 **会话兜底**：`SessionService` 状态变为 `ended` 时，引擎检查其绑定节点状态是否在会话存续期内发生过转移；若未转移且节点仍处于 RUNNING，则 `resume()` 会话并发送兜底提示词（面向 LLM 撰写，说明其身处自动化系统、必须使用提供的工作流工具对当前节点执行完成/打回等操作）。兜底提醒限 1 次；提醒后会话再次停止（仍未转移）时，节点升级为 **FAILED**（failInfo.source=SESSION_STUCK），流程阻断并等待人工介入。LLM 判断任务无法继续时也可主动调用 `failCurrentNode`（source=LLM_REPORTED）；人类在节点会话中给出处理指示后，由 AI 调用 `resumeFailedNode`（FAILED→RUNNING）恢复。
 
+**断连恢复**：Controller socket 断连时会话进入 `disconnected`（不触发上述兜底，提示词无法送达）。`resume()` 允许 `ended`/`disconnected`；前端断连会话显示「继续」（而非「关闭」），点击后弹确认框，确认并等会话 ready（SSE idling）后自动发送工作流继续提示词（显式要求 AI 调 `getNodeInfo`/`resumeFailedNode`/`completeCurrentNode` 等 MCP 工具继续之前的工作）。
+
 ### 5.2 关键实现点
 
 #### 实现点 1：节点作用域 MCP Registry（Scoped MCP Registry）

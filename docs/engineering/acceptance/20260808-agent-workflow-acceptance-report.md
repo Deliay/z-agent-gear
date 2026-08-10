@@ -167,6 +167,22 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **修复 commit**：c1b59bd
 
+### 10. 断连状态会话收不到兜底提示词，无人工恢复路径（第四轮验收）
+
+**问题描述**：Controller 断连时会话进入 `disconnected` 状态，此时自动发送的「节点状态仍未推进」兜底提示词无法送达 AI；且后端 `resume()` 仅允许 `ended`，断连会话无法恢复；UI 上断连会话右上角显示「关闭」而非「继续」。
+
+**修复方案**：
+
+1. **后端**（`session.ts`）：`resume()` 放宽为允许 `ended`/`disconnected`（controller-api 的 pendingInputs 队列对断连会话天然有效，resume 成功后自动补发）。
+2. **前端按钮**（`SessionHeader`）：`disconnected` 时显示「继续」而非「关闭」；`SessionView` 的 controllers 查询加 10s 轮询（controller 重连后「继续」按钮自动解锁）。
+3. **确认框**（新组件 `ResumeConfirmDialog`）：断连会话点「继续」先弹「检测到 AI 断连，是否让 AI 继续？」确认框；工作流节点会话额外说明将自动发送工作流提示词。
+4. **自动提示词**（`SessionView`）：确认后标记 `autoPromptAfterResumeRef`，SSE 收到 `idling`（会话 ready）时自动发送 `WORKFLOW_CONTINUE_PROMPT`——显式要求 AI 用 `getNodeInfo` 确认节点状态、FAILED 则先调 `resumeFailedNode`，然后继续之前的工作并以 `completeCurrentNode`/`rejectCurrentNode`/`failCurrentNode` 收尾；resume 超时自动清除标记防误发。
+5. **契约/类型**：前端 GET_SESSION 补查 `workflowInstanceId`/`workflowNodeId`（后端早已暴露，仅前端未取）。
+
+**验证结果**：✅ agent-api 单测新增 disconnected resume 用例；前端新增 4 例（SessionHeader 断连按钮、ResumeConfirmDialog 3 例）；E2E-10 全流程（断连→disconnected→UI「继续」→确认框→重连 resume→ready 自动发提示词→AI 调 completeCurrentNode 完成）通过
+
+**修复 commit**：de15e2f
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -180,6 +196,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 7 | 会话侧面板内容溢出不可见 | 面板过窄 + 内部元素无换行/截断 | ✅ 已修复 | 2aa294f |
 | 8 | AI 节点无失败状态，提醒后仍停止则卡死 | 兜底仅 1 次后静默 return，无失败语义 | ✅ 已修复 | c1b59bd |
 | 9 | 对话内容太长仍撑开容器 | prose 无效 + 表格/行内 code/用户消息等系统性缺断行 | ✅ 已修复 | c1b59bd |
+| 10 | 断连会话收不到兜底提示词，无恢复路径 | resume 仅允许 ended + UI 无继续入口 | ✅ 已修复 | de15e2f |
 
 ## 最终验证
 
@@ -204,4 +221,5 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **动画中的元素尺寸断言会抖动**：入场 zoom 动画期间 `boundingBox()` 量到的是缩放后的尺寸，宽度断言应用 `clientWidth`（布局尺寸，不受 transform 影响）。
 - **「兜底 N 次后静默」等于隐性死节点**：防御性兜底（防死循环）必须配升级路径（失败状态+通知），否则最坏情况恰是最需要感知的情况。
 - **会话关闭后其 MCP scoped token 随之失效**：E2E/集成测试模拟「人类介入后 AI 调工具」时，需先恢复会话拿到新签发的 token 再调 MCP。
-- **Tailwind `prose` 类不是免费午餐**：未装 `@tailwindcss/typography` 时 `prose` 完全不生效，markdown 渲染的表格/链接/行内 code 必须在 components 覆写里自行约束断行与滚动；`break-words` 不缩 min-content，根治不可断长词要用 `break-all`。}
+- **Tailwind `prose` 类不是免费午餐**：未装 `@tailwindcss/typography` 时 `prose` 完全不生效，markdown 渲染的表格/链接/行内 code 必须在 components 覆写里自行约束断行与滚动；`break-words` 不缩 min-content，根治不可断长词要用 `break-all`。
+- **状态机放宽要配全链路检查**：`resume` 放宽到 `disconnected` 看似一行改动，但需确认下游每个环节对该状态兼容（controller-api pendingInputs 队列、前端按钮解锁所依赖的 controllerOnline 轮询新鲜度），并在 E2E 里跑通「断连→重连→恢复」全流程才算闭环。}
