@@ -102,7 +102,8 @@ class WorkflowOrchestrator {
       type: 'text',
       content:
         `你的工作流节点产出被下游节点打回，需要返工。打回原因：${payload.reason ?? '（未提供）'}。\n` +
-        '请根据打回原因修订产出，通过工作流工具重新写入产物后调用 completeCurrentRework 完成返工。',
+        '请根据打回原因修订产出，通过工作流工具重新写入产物后调用 completeCurrentRework 完成返工。\n' +
+        '若返工中发现问题根源在更上游（本节点无法独立修正），可调用 rejectCurrentNode 将本节点打回并触发上游返工。',
     });
   }
 

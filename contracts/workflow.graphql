@@ -207,6 +207,6 @@ type Mutation {
   instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
   # 人类节点完成（input 为产物文本，写入黑板）
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
-  # 人类打回（RUNNING→REJECT，触发上游 REWORK）
+  # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
 }

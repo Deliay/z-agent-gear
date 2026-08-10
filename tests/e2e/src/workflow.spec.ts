@@ -690,9 +690,11 @@ test.describe('Workflow E2E', () => {
     await expect(nodeCard(page, '需求输入').getByText('人类', { exact: true })).toBeVisible();
     await expect(nodeCard(page, 'AI执行').getByText('AI', { exact: true })).toBeVisible();
 
-    // 黑板面板：首节点产物可见
-    await expect(page.getByRole('heading', { name: '工作流黑板' })).toBeVisible();
-    const blackboardSection = page.getByRole('heading', { name: '工作流黑板' }).locator('..');
+    // 黑板面板：默认折叠显示数量，展开后首节点产物可见
+    const blackboardToggle = page.getByRole('button', { name: /^工作流黑板（\d+）$/ });
+    await expect(blackboardToggle).toBeVisible();
+    await blackboardToggle.click();
+    const blackboardSection = blackboardToggle.locator('..');
     await expect(blackboardSection.getByText(`${inputNode.id}-需求输入-产物-输入`)).toBeVisible();
     await expect(blackboardSection.getByText('做一个计算器')).toBeVisible();
 

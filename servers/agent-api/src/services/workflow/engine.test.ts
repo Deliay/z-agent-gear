@@ -231,6 +231,34 @@ describe('WorkflowEngine.transition', () => {
     expect(instance.nodes[0].status).toBe('RUNNING');
   });
 
+  it('E16: REWORK→REJECT（返工中再次打回上游）：a→b→c 中 c 打回 b 后，b 可再打回 a', async () => {
+    const instance = linearInstance();
+    // 场景：n3 打回 n2 后，n2 处于 REWORK（reworkCount=1），n1 已 DONE
+    instance.nodes[0].status = 'DONE';
+    instance.nodes[1].status = 'REWORK';
+    instance.nodes[1].reworkCount = 1;
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'reject', { reason: '需求本身有问题', fromNodeId: null });
+
+    // n2：REWORK→REJECT，rejectInfo 覆盖为本次打回
+    const node = instance.nodes[1];
+    expect(node.status).toBe('REJECT');
+    expect(node.rejectInfo).toMatchObject({ reason: '需求本身有问题', fromNodeId: null });
+    // 黑板追加打回记录
+    const record = JSON.parse(instance.blackboard.get('打回-n2-1')!);
+    expect(record).toMatchObject({ reason: '需求本身有问题' });
+    // 上游 n1（DONE）再次进入 REWORK
+    const upstream = instance.nodes[0];
+    expect(upstream.status).toBe('REWORK');
+    expect(upstream.reworkCount).toBe(1);
+    expect(hooks.onNodeRework).toHaveBeenCalledWith(
+      instance,
+      upstream,
+      expect.objectContaining({ reason: '需求本身有问题', fromNodeId: 'n2' }),
+    );
+  });
+
   it('E10: 多上游汇合：部分上游 DONE 时不 RUNNING，全部 DONE 才 READY→RUNNING', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'DONE' }),

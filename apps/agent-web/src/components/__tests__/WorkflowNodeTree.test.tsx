@@ -129,6 +129,15 @@ describe('节点产物聚合展示', () => {
     );
     expect(screen.queryByText(/^产物（/)).toBeNull();
   });
+
+  it('产物内容以 Markdown 渲染', () => {
+    const instance = makeInstance([makeNode({ status: 'DONE' })]);
+    instance.blackboard = [entry('n1-评审-产物-报告', '**结论**：通过')];
+
+    render(<WorkflowNodeTree instance={instance} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText('结论').tagName).toBe('STRONG');
+  });
 });
 
 describe('WorkflowNodeTree 人类节点输入草稿', () => {

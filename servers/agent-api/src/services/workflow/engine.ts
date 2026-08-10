@@ -78,7 +78,8 @@ export interface EngineHooks {
 const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
   start: { from: ['INITIALIZING', 'READY'], to: 'READY' },
   complete: { from: ['RUNNING'], to: 'DONE' },
-  reject: { from: ['RUNNING'], to: 'REJECT' },
+  // 返工中（REWORK）也允许再次打回：a→b→c 中 c 打回 b 后，b 可继续打回 a
+  reject: { from: ['RUNNING', 'REWORK'], to: 'REJECT' },
   rework: { from: ['READY', 'RUNNING', 'DONE'], to: 'REWORK' },
   completeRework: { from: ['REWORK'], to: 'DONE' },
   resume: { from: ['REJECT'], to: 'RUNNING' },

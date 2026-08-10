@@ -101,7 +101,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'rejectCurrentNode',
-    description: '操作当前节点「节点打回」（RUNNING→REJECT），必须给出打回原因；targetNodeId 可限定返工的直接上游（默认全部直接上游）',
+    description: '操作当前节点「节点打回」（RUNNING/REWORK→REJECT），必须给出打回原因；targetNodeId 可限定返工的直接上游（默认全部直接上游）',
     inputSchema: {
       type: 'object',
       properties: {

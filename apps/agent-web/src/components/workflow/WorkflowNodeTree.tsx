@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import MarkdownContent from '@/components/session/MarkdownContent'
 import {
   GET_WORKFLOW_INSTANCE,
   COMPLETE_HUMAN_NODE,
@@ -260,9 +261,9 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                           <div className="mb-0.5 text-xs font-medium text-foreground">
                             {artifact.title}
                           </div>
-                          <pre className="text-xs break-all whitespace-pre-wrap text-muted-foreground">
-                            {artifact.value}
-                          </pre>
+                          <div className="text-xs text-muted-foreground">
+                            <MarkdownContent content={artifact.value} />
+                          </div>
                         </div>
                       ))}
                     </div>

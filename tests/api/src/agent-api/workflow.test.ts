@@ -1244,3 +1244,114 @@ describe('Workflow Node Failure (A22-A23)', () => {
     expect(inst2.currentNodeNames).toEqual([]);
   }, 40_000);
 });
+
+
+// ---------------------------------------------------------------------------
+// REWORK 节点再次打回（A24，验收第六轮#3）：a→b→c 中 c 打回 b 后，b（REWORK）可再打回 a
+// ---------------------------------------------------------------------------
+
+describe('Workflow Rework Reject (A24)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfrwrj');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'rwrj');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A24: c 打回 b（b 进入 REWORK）后，b 可再次打回 a（REWORK→REJECT）', async () => {
+    // 三节点实例（input HUMAN → exec AI → review HUMAN）推进到 exec 会话启动
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a24-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a24-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a24-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_a24_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // b（exec）完成 → DONE，c（review 人类节点）自动激活 RUNNING
+    const done = parseToolResult(
+      (await callWorkflowTool(startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '完成' }],
+      })).body,
+    );
+    expect(done.isError).toBe(false);
+
+    // c 打回 b：review REJECT，exec 进入 REWORK
+    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const reviewNode = inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'review');
+    expect(reviewNode.status).toBe('RUNNING');
+    const rej1 = await (await gqlRequest(
+      REJECT_NODE,
+      { instanceId, nodeId: reviewNode.id, reason: '执行结果不符合需求' },
+      token,
+    )).json();
+    expect(rej1.errors).toBeUndefined();
+
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('REWORK');
+
+    // b（REWORK）再次打回 a：REWORK→REJECT 允许，a（input）进入 REWORK
+    const rej2 = await (await gqlRequest(
+      REJECT_NODE,
+      { instanceId, nodeId: execNode.id, reason: '需求本身有问题，无法按现状执行' },
+      token,
+    )).json();
+    expect(rej2.errors).toBeUndefined();
+    expect(rej2.data.rejectNode.status).toBe('REJECT');
+    expect(rej2.data.rejectNode.rejectInfo.reason).toBe('需求本身有问题，无法按现状执行');
+
+    const inst3 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const inputNodeFinal = inst3.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    expect(inputNodeFinal.status).toBe('REWORK');
+    expect(inputNodeFinal.reworkCount).toBe(1);
+    // 黑板打回记录留痕（exec 节点）
+    const record = inst3.blackboard.find((e: Record<string, any>) => e.key.startsWith(`打回-${execNode.id}-`));
+    expect(record).toBeDefined();
+    expect(JSON.parse(record.value).reason).toBe('需求本身有问题，无法按现状执行');
+  }, 40_000);
+});
