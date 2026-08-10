@@ -21,6 +21,11 @@ export class ACPSessionManager {
   // Socket.IO 不等待 async 监听器完成，高频消息并发落库会导致 Redis publish 顺序 ≠ 到达顺序，
   // 进而造成 SSE 推送乱序（DB 按 _id 排序仍正确）。
   private messageQueues = new Map<string, Promise<void>>();
+  // 会话尚未就绪（acp:start/acp:resume 进行中）时到达的输入消息队列。
+  // agent-api 的 create/resume 与紧随的 addMessage 经不同 Redis channel 并发处理，
+  // 消息可能在 acp:start:result/acp:resume:result 之前到达，必须先排队、会话注册后按序补发，
+  // 否则首条 prompt 会被静默丢弃（harness 进程已拉起但永远收不到 session/prompt）。
+  private pendingInputs = new Map<string, Array<{ type: string; content: string | Record<string, unknown> }>>();
 
   async startSession(
     controllerSocket: Socket,
@@ -86,6 +91,7 @@ export class ACPSessionManager {
               controllerId,
               userId,
             });
+            this.flushPendingInputs(sessionId);
 
             // Track socket to sessions mapping
             const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
@@ -171,6 +177,7 @@ export class ACPSessionManager {
   }
 
   private async cleanupFailedSession(sessionId: string, previousStatus: string): Promise<void> {
+    this.pendingInputs.delete(sessionId);
     // Only delete sessions that never successfully connected
     if (previousStatus === 'creating' || previousStatus === 'connecting') {
       console.log(`[ACP] Removing failed session ${sessionId} (was ${previousStatus})`);
@@ -336,6 +343,7 @@ export class ACPSessionManager {
 
     // Clean up session mapping
     this.sessions.delete(sessionId);
+    this.pendingInputs.delete(sessionId);
     const socketSessions = this.socketToSessions.get(session.controllerSocket.id);
     if (socketSessions) {
       socketSessions.delete(sessionId);
@@ -376,6 +384,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
+      this.pendingInputs.delete(sessionId);
       const socketSessions = this.socketToSessions.get(session.controllerSocket.id);
       if (socketSessions) {
         socketSessions.delete(sessionId);
@@ -406,6 +415,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
+      this.pendingInputs.delete(sessionId);
       const socketSessions = this.socketToSessions.get(session.controllerSocket.id);
       if (socketSessions) {
         socketSessions.delete(sessionId);
@@ -491,6 +501,7 @@ export class ACPSessionManager {
               controllerId,
               userId,
             });
+            this.flushPendingInputs(sessionId);
 
             const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
             socketSessions.add(sessionId);
@@ -574,7 +585,18 @@ export class ACPSessionManager {
 
   forwardToController(sessionId: string, message: { type: string; content: string | Record<string, unknown> }): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session) return false;
+    if (!session) {
+      // 会话尚未进入 active map（start/resume 进行中）：入队等待补发，不再静默丢弃
+      const queue = this.pendingInputs.get(sessionId) ?? [];
+      if (queue.length >= 100) {
+        console.warn(`[ACP session] Pending input queue for session ${sessionId} is full (100), dropping message`);
+        return false;
+      }
+      queue.push(message);
+      this.pendingInputs.set(sessionId, queue);
+      console.log(`[ACP session] Session ${sessionId} not active yet, queued input message (queue size=${queue.length})`);
+      return true;
+    }
 
     const rawContent = typeof message.content === 'string'
       ? message.content
@@ -587,6 +609,17 @@ export class ACPSessionManager {
       message: { type: message.type, content: rawContent },
     });
     return true;
+  }
+
+  /** 会话注册成功后按到达顺序补发排队中的输入消息 */
+  private flushPendingInputs(sessionId: string): void {
+    const queue = this.pendingInputs.get(sessionId);
+    if (!queue || queue.length === 0) return;
+    this.pendingInputs.delete(sessionId);
+    console.log(`[ACP session] Flushing ${queue.length} queued input message(s) for session ${sessionId}`);
+    for (const message of queue) {
+      this.forwardToController(sessionId, message);
+    }
   }
 
   async setMode(sessionId: string, modeId: string): Promise<boolean> {

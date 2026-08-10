@@ -119,7 +119,7 @@ describe('SessionService', () => {
 
       const result = await sessionService.findAllByUser('user-1');
 
-      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null });
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe('sess-1');
     });
@@ -363,7 +363,7 @@ describe('SessionService', () => {
         mcpServerIds: ['server-1'],
       });
 
-      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1']);
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1'], undefined);
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
         expect.stringContaining('"type":"acp:start"'),
@@ -957,6 +957,19 @@ describe('SessionService', () => {
       expect(result).toEqual({ success: false, status: 'creating', error: 'Session is not ended' });
     });
 
+    it('should publish acp:resume and return connecting for disconnected session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'disconnected', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: true, status: 'connecting' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:resume"'));
+    });
+
     it('should publish acp:resume and return connecting for ended session', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(
@@ -1167,6 +1180,136 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"configId":"model"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"value":"model-1"'));
+    });
+  });
+
+  describe('workflow tagging', () => {
+    it('create should persist workflowInstanceId/workflowNodeId when provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(
+        mockSessionDoc({ workflowInstanceId: oid('inst-1'), workflowNodeId: 'node-1' }) as never,
+      );
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        workflowInstanceId: 'inst-1',
+        workflowNodeId: 'node-1',
+      });
+
+      expect(Session.create).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowInstanceId: 'inst-1', workflowNodeId: 'node-1' }),
+      );
+      expect(result.workflowInstanceId).toBe('inst-1');
+      expect(result.workflowNodeId).toBe('node-1');
+    });
+
+    it('create should not persist workflow fields when not provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+      });
+
+      const createArg = vi.mocked(Session.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(createArg).not.toHaveProperty('workflowInstanceId');
+      expect(createArg).not.toHaveProperty('workflowNodeId');
+      expect(result.workflowInstanceId).toBeNull();
+      expect(result.workflowNodeId).toBeNull();
+    });
+
+    it('create with mcpServerIds and workflow tags should pass workflow scope to createEndpoint', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+        url: 'http://gateway/mcp/sess-1',
+        token: 'mcp-token',
+        serverNames: ['agent-workflow-tools'],
+      });
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        mcpServerIds: ['server-1'],
+        workflowInstanceId: 'inst-1',
+        workflowNodeId: 'node-1',
+      });
+
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1'], {
+        instanceId: 'inst-1',
+        nodeId: 'node-1',
+      });
+    });
+
+    it('findAllByUser should exclude workflow sessions by default', async () => {
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      } as never);
+
+      await sessionService.findAllByUser('user-1');
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null });
+    });
+
+    it('findAllByUser should include workflow sessions when includeWorkflowSessions=true', async () => {
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      } as never);
+
+      await sessionService.findAllByUser('user-1', { includeWorkflowSessions: true });
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1' });
+    });
+  });
+
+  describe('onSessionEnded callback', () => {
+    it('updateStatus to ended should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionEnded(callback);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
+
+      await sessionService.updateStatus('sess-1', 'user-1', 'ended');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+
+    it('updateStatus to non-ended should not invoke callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionEnded(callback);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'running' }) as never);
+
+      await sessionService.updateStatus('sess-1', 'user-1', 'running');
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it('close should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionEnded(callback);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
+
+      await sessionService.close('sess-1', 'user-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
     });
   });
 });

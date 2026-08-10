@@ -9,6 +9,7 @@ import { gatewayResolvers } from './gateway.js';
 import { todoResolvers } from './todo.js';
 import { mcpServerResolvers } from './mcp-server.js';
 import { githubResolvers } from './github.js';
+import { workflowResolvers } from './workflow.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -23,6 +24,7 @@ export const resolvers = {
     ...todoResolvers.Query,
     ...mcpServerResolvers.Query,
     ...githubResolvers.Query,
+    ...workflowResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -35,6 +37,7 @@ export const resolvers = {
     ...todoResolvers.Mutation,
     ...mcpServerResolvers.Mutation,
     ...githubResolvers.Mutation,
+    ...workflowResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

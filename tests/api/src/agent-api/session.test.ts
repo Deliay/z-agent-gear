@@ -431,6 +431,63 @@ describe('Session GraphQL API', () => {
       const body = await res.json();
       expect(body.errors).toBeDefined();
     });
+
+    it('start 完成前发送的消息应排队，会话激活后补发给 controller（验收#3 回归）', async () => {
+      // 独立 fake controller：手动控制 acp:start:result 时机，模拟 harness 慢启动
+      const keyRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `queue-key-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const freshRawKey = (await keyRes.json()).data.createControllerKey.rawKey;
+      const client = createClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: freshRawKey, hostname: 'queue-host', version: '1.0.0' });
+      const regData = await registered;
+      const freshControllerId = regData.controllerId;
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
+      const wsId = await createWorkspace(freshControllerId);
+      const createRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: freshControllerId, acpServerType: 'opencode', workspaceId: wsId } },
+        authToken,
+      );
+      const sessionId = (await createRes.json()).data.createSession.session.id;
+      const startData = await startEvent;
+
+      // 会话尚未激活（故意不回 acp:start:result）时立即发消息
+      const sendRes = await gqlRequest(
+        SEND_SESSION_MESSAGE,
+        { sessionId, content: '排队消息', type: 'text' },
+        authToken,
+      );
+      expect((await sendRes.json()).errors).toBeUndefined();
+
+      // 激活前不应转发给 controller（排队中）
+      let receivedEarly = false;
+      client.on('acp:message', () => { receivedEarly = true; });
+      await new Promise((r) => setTimeout(r, 800));
+      expect(receivedEarly).toBe(false);
+
+      // start 完成 → 排队消息按序补发
+      const messageEvent = waitForEvent<{ sessionId: string; message: { type: string; content: string } }>(
+        client,
+        'acp:message',
+        10000,
+      );
+      client.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_queue_${Date.now()}`,
+      });
+      const msg = await messageEvent;
+      expect(msg.sessionId).toBe(sessionId);
+      expect(msg.message.content).toContain('排队消息');
+
+      client.disconnect();
+    }, 20000);
   });
 
   describe('sessionMessages query', () => {

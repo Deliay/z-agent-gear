@@ -43,11 +43,16 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
+vi.mock('../services/workflow/tool-handlers.js', () => ({
+  handlePlatformMcpRequest: vi.fn(),
+}));
+
 import jwt from 'jsonwebtoken';
 import { mcpEndpointService } from '../services/mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { handlePlatformMcpRequest } from '../services/workflow/tool-handlers.js';
 import { mcpRouter } from './mcp.js';
 
 let server: Server;
@@ -327,5 +332,91 @@ describe('MCP HTTP Entry', () => {
     const res = await fetch(`${baseUrl}/mcp/session-1/github-mcp`);
 
     expect(res.status).toBe(405);
+  });
+
+  describe('platform server (agent-workflow-tools)', () => {
+    const WORKFLOW_PAYLOAD = {
+      ...VALID_PAYLOAD,
+      serverNames: ['agent-workflow-tools'],
+      workflow: { instanceId: 'inst-1', nodeId: 'n2' },
+    };
+
+    function mockPlatformServer() {
+      vi.mocked(McpServer.findOne).mockResolvedValue(
+        mockServerDoc({ name: 'agent-workflow-tools', transport: 'platform', source: 'platform' }) as never,
+      );
+    }
+
+    it('平台服务不经 Redis 转发，直接分发到本地 handler 并返回 result', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(WORKFLOW_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServer();
+      vi.mocked(handlePlatformMcpRequest).mockResolvedValue({
+        result: { tools: [{ name: 'getCurrentNodeId' }] },
+      });
+
+      const res = await post(
+        '/mcp/session-1/agent-workflow-tools',
+        { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+        'valid-token',
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.result.tools).toHaveLength(1);
+      // 节点作用域透传到 handler
+      expect(handlePlatformMcpRequest).toHaveBeenCalledWith(
+        { userId: 'user-1', workflow: { instanceId: 'inst-1', nodeId: 'n2' } },
+        expect.objectContaining({ method: 'tools/list' }),
+      );
+      expect(mcpForwarder.request).not.toHaveBeenCalled();
+    });
+
+    it('平台服务的协议级 error 以 JSON-RPC error 返回', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(WORKFLOW_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServer();
+      vi.mocked(handlePlatformMcpRequest).mockResolvedValue({
+        error: { code: 'METHOD_NOT_FOUND', message: '不支持的方法：x' },
+      });
+
+      const res = await post(
+        '/mcp/session-1/agent-workflow-tools',
+        { jsonrpc: '2.0', id: 2, method: 'x' },
+        'valid-token',
+      );
+
+      const body = await res.json();
+      expect(body.error.code).toBe('METHOD_NOT_FOUND');
+    });
+
+    it('平台服务的 notification 立即 202', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(WORKFLOW_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServer();
+      vi.mocked(handlePlatformMcpRequest).mockResolvedValue({ result: {} });
+
+      const res = await post(
+        '/mcp/session-1/agent-workflow-tools',
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        'valid-token',
+      );
+
+      expect(res.status).toBe(202);
+    });
+
+    it('S3: 会话结束后（endpoint 吊销）调用平台工具返回 401', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(WORKFLOW_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('revoked');
+
+      const res = await post(
+        '/mcp/session-1/agent-workflow-tools',
+        { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'getCurrentNodeId' } },
+        'valid-token',
+      );
+
+      expect(res.status).toBe(401);
+      expect(handlePlatformMcpRequest).not.toHaveBeenCalled();
+    });
   });
 });

@@ -222,6 +222,10 @@ type Session {
   promptCapabilities: PromptCapabilities
   supportsAdditionalDirectories: Boolean!
   permissionTimeoutAction: PermissionTimeoutAction
+  # 归属工作流实例（工作流节点会话才有，普通会话为 null）
+  workflowInstanceId: ID
+  # 归属实例节点（工作流节点会话才有，普通会话为 null）
+  workflowNodeId: ID
   createdAt: String!
   updatedAt: String!
   endedAt: String
@@ -243,6 +247,30 @@ type AcpCapability {
   available: Boolean!
   version: String
   checkedAt: String
+}
+
+# ACP 工具的可选 Mode（经空实例探测获得）
+type AcpModeOption {
+  id: String!
+  name: String!
+  description: String
+}
+
+# ACP 工具的可选模型（经空实例探测获得）
+type AcpModelOption {
+  id: String!
+  name: String!
+  provider: String
+}
+
+# 指定 ACP 工具的 Mode/模型选项：由 controller 动态拉起空实例（session/new）探测
+# 探测失败或工具不支持时 modes/models 为空数组（调用方可回退手动输入）
+type AcpServerOptions {
+  modes: [AcpModeOption!]!
+  models: [AcpModelOption!]!
+  currentModeId: String
+  currentModelId: String
+  probedAt: String
 }
 
 type HistorySessionInfo {
@@ -294,7 +322,8 @@ type ResumeSessionPayload {
 }
 
 type Query {
-  sessions: [Session!]!
+  # 默认排除工作流节点会话；includeWorkflowSessions=true 时包含（供工作流实例视图使用）
+  sessions(includeWorkflowSessions: Boolean): [Session!]!
   session(id: ID!): Session
   # 返回按时间升序排列的消息列表
   # before: 可选游标，仅返回该消息之前（更早）的消息
@@ -302,6 +331,8 @@ type Query {
   # hasMore: 返回条数 == limit 则可能还有更多
   sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
+  # 拉起空实例探测指定工具的 Mode/模型选项（结果按 controllerId+type 缓存 1h）
+  acpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
   listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   getTodoList: [TodoItem!]!
   getUnreadTodoCount: Int!

@@ -5,6 +5,7 @@ import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from '../services/mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
+import { handlePlatformMcpRequest } from '../services/workflow/tool-handlers.js';
 
 const router = Router();
 
@@ -32,6 +33,8 @@ interface McpTokenPayload {
   sessionId?: string;
   userId?: string;
   serverNames?: string[];
+  /** 节点作用域：工作流节点会话的实例节点映射 */
+  workflow?: { instanceId: string; nodeId: string };
 }
 
 function jsonRpcError(res: Response, id: unknown, code: string, message: string): void {
@@ -73,7 +76,7 @@ const mcpEntryHandler = async (req: Request, res: Response) => {
     jsonrpc?: string;
     method?: string;
     id?: unknown;
-    params?: { serverName?: string };
+    params?: { serverName?: string; name?: string; arguments?: Record<string, unknown> };
   };
   if (!request?.jsonrpc || !request.method) {
     res.status(400).json({
@@ -105,6 +108,25 @@ const mcpEntryHandler = async (req: Request, res: Response) => {
   const server = await McpServer.findOne({ userId: payload.userId, name: serverName, enabled: true });
   if (!server) {
     jsonRpcError(res, request.id, 'SERVER_NOT_FOUND', 'Server not found');
+    return;
+  }
+
+  // 平台内置服务（如 agent-workflow-tools）：不经 Redis 转发，直接分发到本地 handler
+  if (server.transport === 'platform') {
+    const isPlatformNotification = request.id === undefined || request.id === null;
+    const outcome = await handlePlatformMcpRequest(
+      { userId: payload.userId, workflow: payload.workflow },
+      request,
+    );
+    if (isPlatformNotification) {
+      res.status(202).end();
+      return;
+    }
+    if (outcome.error) {
+      jsonRpcError(res, request.id, outcome.error.code, outcome.error.message);
+      return;
+    }
+    res.json({ jsonrpc: '2.0', id: request.id, result: outcome.result });
     return;
   }
 

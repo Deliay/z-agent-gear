@@ -108,7 +108,7 @@ export default function MessageItem({ message }: MessageItemProps) {
               className="max-h-64 rounded"
             />
           ) : isUser ? (
-            <div className="whitespace-pre-wrap">{displayContent}</div>
+            <div className="whitespace-pre-wrap break-all">{displayContent}</div>
           ) : (
             <MarkdownContent content={displayContent} />
           )}

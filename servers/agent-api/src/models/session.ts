@@ -34,6 +34,9 @@ const sessionSchema = new mongoose.Schema({
   authRequired: { type: Boolean, default: false },
   supportsAdditionalDirectories: { type: Boolean, default: false },
   permissionTimeoutAction: { type: String, enum: ['use_global', 'allow_once', 'reject', 'cancel'], default: 'use_global' },
+  // 工作流打标（引擎内部创建节点会话时写入；GraphQL CreateSessionInput 不暴露）
+  workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance' },
+  workflowNodeId: { type: String },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });

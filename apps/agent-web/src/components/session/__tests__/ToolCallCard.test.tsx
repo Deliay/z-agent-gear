@@ -127,6 +127,44 @@ describe('ToolCallCard statuses', () => {
     expect(container.firstElementChild?.className).toContain('bg-info/10');
   });
 
+  it('should wrap long commands instead of overflowing narrow panels', () => {
+    const { container } = renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'execute',
+      status: 'pending',
+      title: 'Run command',
+      rawInput: { command: `echo ${'x'.repeat(300)}` },
+    });
+
+    const pre = container.querySelector('pre')!;
+    expect(pre.className).toContain('whitespace-pre-wrap');
+    expect(pre.className).toContain('break-all');
+  });
+
+  it('should break long tool result text instead of overflowing', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'edit',
+      status: 'completed',
+      title: 'Edit file',
+      content: [{ type: 'content', content: { type: 'text', text: 'y'.repeat(500) } }],
+    });
+    const text = screen.getByText('y'.repeat(500));
+    expect(text.className).toContain('break-all');
+  });
+
+  it('should break long thinking output instead of overflowing', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call',
+      kind: 'think',
+      status: 'completed',
+      title: 'Think',
+      rawOutput: { thoughts: 'z'.repeat(500) },
+    });
+    const text = screen.getByText('z'.repeat(500));
+    expect(text.className).toContain('break-all');
+  });
+
   it('should show ellipsis summary for in_progress and pending when collapsed', () => {
     const first = renderCollapsedToolCall({
       sessionUpdate: 'tool_call',
