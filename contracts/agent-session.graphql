@@ -222,6 +222,10 @@ type Session {
   promptCapabilities: PromptCapabilities
   supportsAdditionalDirectories: Boolean!
   permissionTimeoutAction: PermissionTimeoutAction
+  # 归属工作流实例（工作流节点会话才有，普通会话为 null）
+  workflowInstanceId: ID
+  # 归属实例节点（工作流节点会话才有，普通会话为 null）
+  workflowNodeId: ID
   createdAt: String!
   updatedAt: String!
   endedAt: String
@@ -294,7 +298,8 @@ type ResumeSessionPayload {
 }
 
 type Query {
-  sessions: [Session!]!
+  # 默认排除工作流节点会话；includeWorkflowSessions=true 时包含（供工作流实例视图使用）
+  sessions(includeWorkflowSessions: Boolean): [Session!]!
   session(id: ID!): Session
   # 返回按时间升序排列的消息列表
   # before: 可选游标，仅返回该消息之前（更早）的消息
