@@ -256,6 +256,14 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ 单测新增 2 例（completeHumanNode REWORK 走 completeRework；REWORK 人类节点操作区可见）；API 新增 A27（AI rejectCurrentNode 打回人类 → 人类重新提交 → exec 复工 RUNNING、旧产物入垃圾桶、复工消息送达）；E2E-13（AI 打回 → UI 返工中+操作区 → 重新提交 → exec 执行中、黑板/垃圾桶校验）
 
+### 18. 折叠的节点需展示状态 badge、返工次数与「会话」按钮（第八轮验收）
+
+**问题描述**：#16 的节点折叠实现折叠后只展示类型与标题，状态 badge、返工次数、「会话」按钮也被隐藏，折叠态下无法识别节点状态、也无法直达会话。
+
+**修复方案**（`WorkflowNodeTree.tsx NodeCard`）：重构为统一头部行——折叠/展开均展示 chevron + 类型 + 标题 + 状态 badge + 返工次数 + 「会话」按钮（头部行保持 flex-wrap 适配窄屏），折叠仅隐藏内容区（描述/打回与失败信息/产物/人类操作区）。
+
+**验证结果**：✅ 前端单测更新 3 例（折叠展示 badge/返工次数/会话按钮、折叠隐藏内容区）；E2E-12 移动端断言同步（折叠可见 badge、产物隐藏）；E2E-1/3/13 断言同步
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -277,6 +285,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 15 | 实例缺少删除功能 | 无软删除机制与入口 | ✅ 已修复 | 5deae6c |
 | 16 | 工作流界面未做移动端支持 | 节点头部行不换行溢出 + 无节点折叠 | ✅ 已修复 | cd70ad9 |
 | 17 | AI 打回人类节点后无重新提交渠道 | completeHumanNode 不支持 REWORK + UI 操作区仅 READY/RUNNING | ✅ 已修复 | b26e190 |
+| 18 | 折叠节点丢失状态 badge/返工次数/会话按钮 | 折叠态只渲染类型与标题 | ✅ 已修复 | 55932af |
 
 ## 最终验证
 
@@ -285,7 +294,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | agent-api build/单测 | ✅ tsc 通过，945/945 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，331/331 |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，332/332 |
 | API 测试（tests/api） | ✅ 全量通过 285/285（含 A19~A27；gateway 隧道用例偶发环境超时 flake，隔离复跑通过） |
 | E2E 测试（tests/e2e workflow.spec） | ✅ 13/13（E2E-1~13） |
 
