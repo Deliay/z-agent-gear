@@ -178,7 +178,8 @@ class WorkflowTemplateService {
   }
 
   async update(id: string, userId: string, input: WorkflowTemplateInput) {
-    const template = await WorkflowTemplate.findOne({ _id: id, userId });
+    // 内置模板（userId=null）也要能查到，以便命中下方的只读保护，而不是误报「不存在」
+    const template = await WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] });
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }
@@ -195,7 +196,7 @@ class WorkflowTemplateService {
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
-    const template = await WorkflowTemplate.findOne({ _id: id, userId });
+    const template = await WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] });
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }

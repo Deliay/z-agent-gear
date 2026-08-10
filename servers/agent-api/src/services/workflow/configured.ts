@@ -179,9 +179,11 @@ class ConfiguredWorkflowService {
     if (!workflow) {
       throw new Error('已配置工作流不存在或无权限');
     }
+    // 注意：数组字段上 'nodes.status': { $ne } 的语义是「没有任何节点为该状态」，
+    // 无法表达「存在未终结节点」；必须用 $elemMatch 匹配任一非终结态节点。
     const activeInstance = await WorkflowInstance.exists({
       configuredWorkflowId: id,
-      'nodes.status': { $ne: 'DONE' },
+      nodes: { $elemMatch: { status: { $nin: ['DONE', 'REJECT'] } } },
     });
     if (activeInstance) {
       throw new Error('存在未终结的工作流实例引用该配置，无法删除；请先等待实例全部节点终结');

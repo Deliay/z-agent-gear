@@ -326,6 +326,20 @@ describe('ConfiguredWorkflowService.delete', () => {
     );
   });
 
+  it('活跃实例判定使用 $elemMatch（数组上 $ne 语义为「没有任何节点为该状态」）', async () => {
+    const doc = { _id: oid('cfg-1'), deleteOne: vi.fn() };
+    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
+    vi.mocked(WorkflowInstance.exists).mockResolvedValue(null as never);
+
+    await configuredWorkflowService.delete('user-1', 'cfg-1');
+    // 终结态 = DONE / REJECT；任一节点处于其他状态即视为活跃实例
+    expect(WorkflowInstance.exists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodes: { $elemMatch: { status: { $nin: ['DONE', 'REJECT'] } } },
+      }),
+    );
+  });
+
   it('实例全部终结（或无实例）时允许删除', async () => {
     const doc = { _id: oid('cfg-1'), deleteOne: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
