@@ -27,7 +27,11 @@ interface WorkflowController {
   disconnect: () => void;
 }
 
-function registerWorkflowController(rawKey: string, hostname: string): Promise<WorkflowController> {
+function registerWorkflowController(
+  rawKey: string,
+  hostname: string,
+  opts: { startDelayMs?: number } = {},
+): Promise<WorkflowController> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, {
       transports: ['websocket'], reconnection: false, forceNew: true,
@@ -53,11 +57,34 @@ function registerWorkflowController(rawKey: string, hostname: string): Promise<W
 
     client.on('acp:start', (data: StartEvent) => {
       starts.push(data);
-      client.emit('acp:start:result', {
+      const respond = () =>
+        client.emit('acp:start:result', {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: true,
+          externalSessionId: `ext_${data.sessionId}`,
+        });
+      // startDelayMs：模拟 harness 慢启动（验收#3 回归场景）
+      if (opts.startDelayMs) {
+        setTimeout(respond, opts.startDelayMs);
+      } else {
+        respond();
+      }
+    });
+
+    // 空实例探测：返回固定 Mode/模型选项（验收#1 场景）
+    client.on('acp:probe-options', (data: { requestId: string; serverType: string }) => {
+      client.emit('acp:probe-options:result', {
         requestId: data.requestId,
-        sessionId: data.sessionId,
+        serverType: data.serverType,
         success: true,
-        externalSessionId: `ext_${data.sessionId}`,
+        modes: [
+          { id: 'code', name: 'Code' },
+          { id: 'ask', name: 'Ask' },
+        ],
+        availableModels: [{ id: 'gpt-5', name: 'GPT-5', provider: 'openai' }],
+        currentModeId: 'code',
+        currentModelId: 'gpt-5',
       });
     });
 
@@ -710,6 +737,183 @@ test.describe('Workflow E2E', () => {
     const configuredCard = section.locator('[data-slot="card"]').filter({ hasText: configuredName });
     await expect(configuredCard).toBeVisible({ timeout: 10000 });
     await expect(configuredCard.getByText(/复制自模板 v1/)).toBeVisible();
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-7 RUNNING 人类节点 UI 完成 + 输入草稿保留（验收#2/#4 回归）
+  // -------------------------------------------------------------------------
+  test('E2E-7: RUNNING human node completes via UI; draft survives polling refresh and reload', async ({ page }) => {
+    test.setTimeout(120000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerWorkflowController(rawKey, `wf-e7-host-${Date.now().toString(36)}`);
+    await refreshCapabilities(page, token, controller.controllerId);
+    const ws = await createWorkspace(page, controller.controllerId, `/tmp/e2e-wf-e7-${Date.now().toString(36)}`, token);
+
+    // 三节点模板：需求输入(HUMAN) → AI执行(AI) → 评审(HUMAN)
+    const tplRes = await gqlRequest(page, `
+      mutation CreateWorkflowTemplate($input: WorkflowTemplateInput!) {
+        createWorkflowTemplate(input: $input) { id }
+      }
+    `, {
+      input: {
+        name: `wf-e7-模板-${Date.now().toString(36)}`,
+        description: 'E2E 验收#4 模板',
+        nodes: [
+          { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+          {
+            nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+            prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+            dependsOn: ['input'], requiresWorktree: false,
+          },
+          { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
+        ],
+      },
+    }, token);
+    const templateId = (await tplRes.json()).data.createWorkflowTemplate.id;
+
+    const cfgRes = await gqlRequest(page, `
+      mutation ConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
+        configureWorkflow(templateId: $templateId, input: $input) { id }
+      }
+    `, {
+      templateId,
+      input: {
+        name: `wf-e7-配置-${Date.now().toString(36)}`,
+        controllerId: controller.controllerId,
+        nodes: [
+          { nodeKey: 'input' },
+          { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          { nodeKey: 'review' },
+        ],
+      },
+    }, token);
+    const configuredId = (await cfgRes.json()).data.configureWorkflow.id;
+
+    // 实例化并完成首节点 → exec RUNNING
+    const inst = await instantiate(page, token, configuredId, ws.id, `wf-e7-实例-${Date.now().toString(36)}`);
+    const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
+    const reviewNode = inst.nodes.find((n) => n.nodeKey === 'review')!;
+    await completeHumanNode(page, token, inst.id, inputNode.id, '做一个计算器');
+    const execStart = await waitFor(() => controller.starts[0], 15000, 'exec acp:start');
+
+    // exec 完成 → 下游评审人类节点被引擎自动激活为 RUNNING
+    await callWorkflowTool(page, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
+    });
+    await waitFor(
+      async () => (await getInstance(page, token, inst.id)).nodes.find((n) => n.nodeKey === 'review')!.status === 'RUNNING' || undefined,
+      15000,
+      'review node RUNNING',
+    );
+
+    await loginViaUI(page, username);
+    await page.goto(`/workflows/${inst.id}`);
+    const reviewCard = nodeCard(page, '评审');
+    await expect(reviewCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    // 验收#2：输入内容跨 5s 轮询周期保留
+    const textarea = reviewCard.getByLabel('评审 完成输入');
+    await textarea.fill('同意方案，但请补充埋点');
+    await page.waitForTimeout(6000);
+    await expect(textarea).toHaveValue('同意方案，但请补充埋点');
+
+    // 页面刷新后从 localStorage 恢复
+    await page.reload();
+    await expect(nodeCard(page, '评审').getByLabel('评审 完成输入')).toHaveValue('同意方案，但请补充埋点', { timeout: 15000 });
+
+    // 验收#4：RUNNING 状态点「完成」应成功（不再报「不允许执行「启动」」）
+    await nodeCard(page, '评审').getByRole('button', { name: '完成', exact: true }).click();
+    await expect(nodeCard(page, '评审').getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    // 草稿已清除，产物写入黑板
+    const draft = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      `workflow-node-draft:${inst.id}:${reviewNode.id}`,
+    );
+    expect(draft).toBeNull();
+    const instAfter = await getInstance(page, token, inst.id);
+    expect(instAfter.blackboard.find((e) => e.key === `${reviewNode.id}-评审-产物-输入`)?.value).toBe('同意方案，但请补充埋点');
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-8 harness 慢启动时首条提示词排队补发（验收#3 回归）
+  // -------------------------------------------------------------------------
+  test('E2E-8: first prompt is queued and flushed when harness start is slow', async ({ page }) => {
+    test.setTimeout(60000);
+    const { token } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    // 延迟 2s 回 acp:start:result，模拟真实 harness 慢启动
+    const controller = await registerWorkflowController(rawKey, `wf-e8-host-${Date.now().toString(36)}`, { startDelayMs: 2000 });
+    await refreshCapabilities(page, token, controller.controllerId);
+    const ws = await createWorkspace(page, controller.controllerId, `/tmp/e2e-wf-e8-${Date.now().toString(36)}`, token);
+    const templateId = await createThreeNodeTemplate(page, token, `wf-e8-模板-${Date.now().toString(36)}`);
+    const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, `wf-e8-配置-${Date.now().toString(36)}`);
+
+    const inst = await instantiate(page, token, configuredId, ws.id, `wf-e8-实例-${Date.now().toString(36)}`);
+    const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
+    await completeHumanNode(page, token, inst.id, inputNode.id, '做一个计算器');
+
+    const execStart = await waitFor(() => controller.starts[0], 15000, 'exec acp:start');
+
+    // start:result 延迟期间 orchestrator 的首条提示词被排队；会话激活后必须补发到 controller socket
+    // （修复前：消息被静默丢弃，controller.messages 永远收不到，harness 不开始工作）
+    const prompt = await waitFor(
+      () => controller.messages.find(
+        (m) => m.sessionId === execStart.sessionId && m.content.includes('你身处一个工作流系统'),
+      ),
+      15000,
+      'queued prompt delivered to controller after slow start',
+    );
+    expect(prompt.content).toContain('做一个计算器');
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-9 配置工作流对话框 Mode/模型动态下拉（验收#1 回归）
+  // -------------------------------------------------------------------------
+  test('E2E-9: configure dialog shows probed mode/model dropdowns after harness selection', async ({ page }) => {
+    test.setTimeout(90000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-e9-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+
+    await loginViaUI(page, username);
+    await page.click('a[href="/settings"]');
+    const section = page.locator('#workflow-section');
+    await expect(section).toBeVisible({ timeout: 5000 });
+
+    await section.getByRole('button', { name: '配置工作流' }).first().click();
+    const dialog = page.getByRole('dialog');
+
+    // 选择内置模板（含 AI 节点）与 Controller
+    await dialog.locator('[data-slot="select-trigger"][aria-label="工作流模板"]').click();
+    await page.getByRole('option', { name: /开发工作流/ }).first().click();
+    await dialog.locator('[data-slot="select-trigger"][aria-label="Controller"]').click();
+    await page.getByRole('option', { name: hostname }).click();
+
+    // 选择首个 AI 节点的 Harness 工具 → 触发空实例探测
+    await dialog.locator('[data-slot="select-trigger"][aria-label*="Harness 工具"]').first().click();
+    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+
+    // 探测完成后 Mode 变为下拉，包含 Code/Ask 选项
+    const modeTrigger = dialog.locator('[data-slot="select-trigger"][aria-label*="Mode"]').first();
+    await expect(modeTrigger).toBeVisible({ timeout: 40000 });
+    await modeTrigger.click();
+    await page.getByRole('option', { name: 'Code' }).click();
+
+    // 模型下拉包含 GPT-5
+    const modelTrigger = dialog.locator('[data-slot="select-trigger"][aria-label*="模型"]').first();
+    await expect(modelTrigger).toBeVisible();
+    await modelTrigger.click();
+    await expect(page.getByRole('option', { name: 'GPT-5' })).toBeVisible();
 
     controller.disconnect();
   });

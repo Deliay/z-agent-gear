@@ -906,3 +906,197 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
     expect(mBody1.errors[0].message).toContain('不存在或无权限');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// 验收修复回归（A19-A20）
+// ---------------------------------------------------------------------------
+
+const ACP_SERVER_OPTIONS_QUERY = `
+  query AcpServerOptions($controllerId: ID!, $acpServerType: AcpServerType!) {
+    acpServerOptions(controllerId: $controllerId, acpServerType: $acpServerType) {
+      modes { id name description }
+      models { id name provider }
+      currentModeId
+      currentModelId
+      probedAt
+    }
+  }
+`;
+
+/** 三节点模板：HUMAN(input) → AI(exec) → HUMAN(review) */
+function humanReviewTemplateInput(name: string) {
+  return {
+    name,
+    description: 'API 测试用三节点工作流（末端人类评审）',
+    nodes: [
+      { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+      {
+        nodeKey: 'exec',
+        type: 'AI',
+        name: 'AI执行',
+        stage: '阶段一',
+        prompts: ['阅读上游产物并完成执行'],
+        artifactTitles: ['执行结果'],
+        dependsOn: ['input'],
+        requiresWorktree: false,
+      },
+      { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '阶段二', dependsOn: ['exec'], requiresWorktree: false },
+    ],
+  };
+}
+
+describe('Workflow Acceptance Fixes (A19-A20)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfacc');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'acc');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A19: 下游人类节点被引擎激活（RUNNING）后可人工完成（验收#4 回归）', async () => {
+    // 三节点模板：HUMAN → AI → HUMAN
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a19-${Date.now()}`) },
+      token,
+    );
+    const tplBody = await tplRes.json();
+    expect(tplBody.errors).toBeUndefined();
+    const tplId = tplBody.data.createWorkflowTemplate.id;
+
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a19-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgBody = await cfgRes.json();
+    expect(cfgBody.errors).toBeUndefined();
+    const cfgId = cfgBody.data.configureWorkflow.id;
+
+    // 实例化并完成首节点 → exec AI 节点拉起会话
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a19-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const reviewNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'review');
+    expect(reviewNode.status).toBe('INITIALIZING');
+
+    const startEvent = waitForEvent<{
+      requestId: string;
+      sessionId: string;
+      mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+    }>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_a19_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // exec 节点经 MCP 工具完成 → 下游 review 人类节点被引擎自动激活为 RUNNING
+    const completeRes = await callWorkflowTool(startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '执行结果', value: '计算器已完成' }],
+    });
+    const completeOut = parseToolResult(completeRes.body);
+    expect(completeOut.isError).toBe(false);
+
+    const instRes2 = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token);
+    const inst2 = (await instRes2.json()).data.workflowInstance;
+    const reviewNode2 = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'review');
+    expect(reviewNode2.status).toBe('RUNNING');
+    expect(inst2.currentNodeNames).toContain('评审');
+
+    // 验收#4：RUNNING 状态下人工完成应成功（不再报「不允许执行「启动」」）
+    const doneRes = await gqlRequest(
+      COMPLETE_HUMAN_NODE,
+      { instanceId: inst.id, nodeId: reviewNode.id, input: '同意方案' },
+      token,
+    );
+    const doneBody = await doneRes.json();
+    expect(doneBody.errors).toBeUndefined();
+    expect(doneBody.data.completeHumanNode.status).toBe('DONE');
+
+    // 人类输入产物写入黑板
+    const instRes3 = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token);
+    const inst3 = (await instRes3.json()).data.workflowInstance;
+    const artifact = inst3.blackboard.find((e: Record<string, any>) => e.key === `${reviewNode.id}-评审-产物-输入`);
+    expect(artifact).toBeDefined();
+    expect(artifact.value).toBe('同意方案');
+  }, 30_000);
+
+  it('A20: acpServerOptions 空实例探测返回 Mode/模型选项，二次查询命中缓存（验收#1）', async () => {
+    let probeCount = 0;
+    fake.client.on('acp:probe-options', (data: { requestId: string; serverType: string }) => {
+      probeCount++;
+      fake.client.emit('acp:probe-options:result', {
+        requestId: data.requestId,
+        serverType: data.serverType,
+        success: true,
+        modes: [
+          { id: 'code', name: 'Code', description: '编码模式' },
+          { id: 'ask', name: 'Ask' },
+        ],
+        availableModels: [{ id: 'gpt-5', name: 'GPT-5', provider: 'openai' }],
+        currentModeId: 'code',
+        currentModelId: 'gpt-5',
+      });
+    });
+
+    const res = await gqlRequest(
+      ACP_SERVER_OPTIONS_QUERY,
+      { controllerId: fake.controllerId, acpServerType: 'opencode' },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const options = body.data.acpServerOptions;
+    expect(options.modes).toEqual([
+      { id: 'code', name: 'Code', description: '编码模式' },
+      { id: 'ask', name: 'Ask', description: null },
+    ]);
+    expect(options.models).toEqual([{ id: 'gpt-5', name: 'GPT-5', provider: 'openai' }]);
+    expect(options.currentModeId).toBe('code');
+    expect(options.currentModelId).toBe('gpt-5');
+    expect(options.probedAt).toBeTruthy();
+    expect(probeCount).toBe(1);
+
+    // 二次查询命中 Redis 缓存，不再发起探测
+    const res2 = await gqlRequest(
+      ACP_SERVER_OPTIONS_QUERY,
+      { controllerId: fake.controllerId, acpServerType: 'opencode' },
+      token,
+    );
+    const body2 = await res2.json();
+    expect(body2.errors).toBeUndefined();
+    expect(body2.data.acpServerOptions.modes).toHaveLength(2);
+    expect(probeCount).toBe(1);
+  }, 40_000);
+});
