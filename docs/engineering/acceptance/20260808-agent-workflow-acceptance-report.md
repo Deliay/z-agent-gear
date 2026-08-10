@@ -264,6 +264,22 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ 前端单测更新 3 例（折叠展示 badge/返工次数/会话按钮、折叠隐藏内容区）；E2E-12 移动端断言同步（折叠可见 badge、产物隐藏）；E2E-1/3/13 断言同步
 
+### 19. 节点宽度依然溢出屏幕（第八轮验收）
+
+**问题描述**：移动端与较窄桌面窗口下节点树仍超出屏幕宽度产生横向滚动。#16/#18 修了头部行换行但溢出未根治。
+
+**根因**（Playwright 探针逐元素定位）：
+
+1. **主因**：实例页网格 `grid gap-6 lg:grid-cols-[1fr_320px]` 在 lg 以下是隐式 `auto` 列，列轨按内容 max-content 宽度伸展（实测撑到 1187px），整个节点树随之超宽。
+2. **次因**：Markdown 段落（`MarkdownContent` 的 `p` 渲染器）与产物标题对超长不可断字符串无 `overflow-wrap: anywhere`，min-content 撑破容器（`break-words` 不影响 min-content，此类场景无效）。
+
+**修复方案**：
+
+1. 网格改 `grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]`（Tailwind `grid-cols-1` = `minmax(0,1fr)`，列轨被约束在容器内）；节点树与黑板面板根节点加 `min-w-0`。
+2. `MarkdownContent` 的 `p` 渲染器、节点描述/打回理由/失败信息、产物标题统一加 `wrap-anywhere`（overflow-wrap:anywhere，缩减 min-content）。
+
+**验证结果**：✅ E2E-12 增强（375px 窄屏 + 180 字符无空格产物值 + 60 字符产物标题 + 全节点/黑板展开，断言无横向溢出）；E2E 13/13 全绿；agent-web 单测 332/332、lint 0 error
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -286,6 +302,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 16 | 工作流界面未做移动端支持 | 节点头部行不换行溢出 + 无节点折叠 | ✅ 已修复 | cd70ad9 |
 | 17 | AI 打回人类节点后无重新提交渠道 | completeHumanNode 不支持 REWORK + UI 操作区仅 READY/RUNNING | ✅ 已修复 | b26e190 |
 | 18 | 折叠节点丢失状态 badge/返工次数/会话按钮 | 折叠态只渲染类型与标题 | ✅ 已修复 | 55932af |
+| 19 | 节点宽度依然溢出屏幕（移动端/窄桌面） | 实例页网格隐式 auto 列按 max-content 伸展 + 长不可断文本无 wrap-anywhere | ✅ 已修复 | c46ccc1 |
 
 ## 最终验证
 
@@ -311,4 +328,5 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **「兜底 N 次后静默」等于隐性死节点**：防御性兜底（防死循环）必须配升级路径（失败状态+通知），否则最坏情况恰是最需要感知的情况。
 - **会话关闭后其 MCP scoped token 随之失效**：E2E/集成测试模拟「人类介入后 AI 调工具」时，需先恢复会话拿到新签发的 token 再调 MCP。
 - **Tailwind `prose` 类不是免费午餐**：未装 `@tailwindcss/typography` 时 `prose` 完全不生效，markdown 渲染的表格/链接/行内 code 必须在 components 覆写里自行约束断行与滚动；`break-words` 不缩 min-content，根治不可断长词要用 `break-all`。
+- **CSS Grid 隐式列是横向溢出的隐形炸弹**：`grid` 不显式声明 `grid-cols-1` 时，移动端单列是 `auto` 轨按 max-content 伸展，任何子内容超宽都会撑破整页；显式 `grid-cols-1`（minmax(0,1fr)）+ 子级 `min-w-0` + 文本 `wrap-anywhere` 三件套缺一不可，且要用「超长无空格内容 + 全展开 + 窄视口」的极端场景做 E2E 溢出断言，空内容场景测不出来。
 - **状态机放宽要配全链路检查**：`resume` 放宽到 `disconnected` 看似一行改动，但需确认下游每个环节对该状态兼容（controller-api pendingInputs 队列、前端按钮解锁所依赖的 controllerOnline 轮询新鲜度），并在 E2E 里跑通「断连→重连→恢复」全流程才算闭环。}
