@@ -244,6 +244,18 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ 前端新增 5 例（默认折叠/展开、切换、flex-wrap 断言），旧有用例同步适配展开前置；E2E-12（375px 窄屏：默认折叠/展开、手动展开折叠、页面无横向溢出）；E2E-1/3/5/7 断言同步适配折叠
 
+### 17. AI 打回人类节点后，人类无重新提交渠道（第七轮验收）
+
+**问题描述**：AI 节点调用 `rejectCurrentNode` 打回上游人类节点后，人类节点进入 REWORK，但 `completeHumanNode` 对 REWORK 状态走 `complete` 转移报「不允许执行」，且前端操作区仅 READY/RUNNING 显示——人类没有任何重新提交的路径，流程卡死。
+
+**修复方案**：
+
+1. **后端**（`instance.ts completeHumanNode`）：REWORK 人类节点改走 `completeRework` 转移（重置旧产物入垃圾桶、写新产物、DONE 并复工下游 REJECT 节点），与 AI 节点 `completeCurrentRework` 语义对齐。
+2. **前端**（`WorkflowNodeTree`）：人类节点操作区（完成输入 + 完成/打回按钮）显示条件放宽为 READY/RUNNING/**REWORK**（REWORK 默认展开，操作区直接可见；REWORK 再点打回走第六轮已支持的 REWORK→REJECT）。
+3. **契约**：`completeHumanNode` 注释同步 REWORK 语义。
+
+**验证结果**：✅ 单测新增 2 例（completeHumanNode REWORK 走 completeRework；REWORK 人类节点操作区可见）；API 新增 A27（AI rejectCurrentNode 打回人类 → 人类重新提交 → exec 复工 RUNNING、旧产物入垃圾桶、复工消息送达）；E2E-13（AI 打回 → UI 返工中+操作区 → 重新提交 → exec 执行中、黑板/垃圾桶校验）
+
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
@@ -264,17 +276,18 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 14 | 链式打回后 b 完成时流程卡住 | complete 对下游 REJECT 节点走 start（非法） | ✅ 已修复 | 5deae6c |
 | 15 | 实例缺少删除功能 | 无软删除机制与入口 | ✅ 已修复 | 5deae6c |
 | 16 | 工作流界面未做移动端支持 | 节点头部行不换行溢出 + 无节点折叠 | ✅ 已修复 | cd70ad9 |
+| 17 | AI 打回人类节点后无重新提交渠道 | completeHumanNode 不支持 REWORK + UI 操作区仅 READY/RUNNING | ✅ 已修复 | b26e190 |
 
 ## 最终验证
 
 | 项目 | 结果 |
 |------|------|
-| agent-api build/单测 | ✅ tsc 通过，944/944 |
+| agent-api build/单测 | ✅ tsc 通过，945/945 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，330/330 |
-| API 测试（tests/api） | ✅ 全量通过 284/284（含 A19~A26；gateway 隧道用例偶发环境超时 flake，隔离复跑 12/12 通过） |
-| E2E 测试（tests/e2e workflow.spec） | ✅ 12/12（E2E-1~12） |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，331/331 |
+| API 测试（tests/api） | ✅ 全量通过 285/285（含 A19~A27；gateway 隧道用例偶发环境超时 flake，隔离复跑通过） |
+| E2E 测试（tests/e2e workflow.spec） | ✅ 13/13（E2E-1~13） |
 
 ## 经验总结
 

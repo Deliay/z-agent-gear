@@ -338,6 +338,8 @@ sequenceDiagram
 
 **链式打回复工**：a→b→c 链式打回（c 打回 b、b 打回 a）后，a 返工完成使 b 复工（RUNNING），但 c 仍为 REJECT；此时 b `complete` 会对下游 REJECT 节点执行 `resume`（而非 `start`——`start` 对 REJECT 非法会导致流程卡住），语义与 `completeRework` 的「通知下游 REJECT 复工」一致。
 
+**人类节点返工**：人类节点被下游打回（REWORK）后，`completeHumanNode` 走 `completeRework` 转移重新提交（重置旧产物入垃圾桶、写新产物、复工下游 REJECT 节点），与 AI 节点 `completeCurrentRework` 语义对齐；前端人类节点操作区在 READY/RUNNING/REWORK 均可见。
+
 **实例删除（软删除）**：`deleteWorkflowInstance(id)` 停止流程运转并删除流程下全部会话（`Session.find({ workflowInstanceId })` 逐个走 `sessionService.delete`：停止 ACP 会话、清理 worktree 与消息），实例文档仅标记 `deletedAt` 不物理删除。实现上**先标记 deletedAt 再删会话**：引擎 `transition` 对 `deletedAt` 非空的实例直接抛错，orchestrator 兜底查询排除已删实例，避免删除过程中的状态竞态；实例列表/详情查询均过滤 `deletedAt: null`。前端实例页头部提供「删除实例」按钮与确认框，删除后跳转回会话列表。
 
 **会话兜底**：`SessionService` 状态变为 `ended` 时，引擎检查其绑定节点状态是否在会话存续期内发生过转移；若未转移且节点仍处于 RUNNING，则 `resume()` 会话并发送兜底提示词（面向 LLM 撰写，说明其身处自动化系统、必须使用提供的工作流工具对当前节点执行完成/打回等操作）。兜底提醒限 1 次；提醒后会话再次停止（仍未转移）时，节点升级为 **FAILED**（failInfo.source=SESSION_STUCK），流程阻断并等待人工介入。LLM 判断任务无法继续时也可主动调用 `failCurrentNode`（source=LLM_REPORTED）；人类在节点会话中给出处理指示后，由 AI 调用 `resumeFailedNode`（FAILED→RUNNING）恢复。
