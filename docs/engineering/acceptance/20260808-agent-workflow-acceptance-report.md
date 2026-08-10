@@ -303,6 +303,8 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 17 | AI 打回人类节点后无重新提交渠道 | completeHumanNode 不支持 REWORK + UI 操作区仅 READY/RUNNING | ✅ 已修复 | b26e190 |
 | 18 | 折叠节点丢失状态 badge/返工次数/会话按钮 | 折叠态只渲染类型与标题 | ✅ 已修复 | 55932af |
 | 19 | 节点宽度依然溢出屏幕（移动端/窄桌面） | 实例页网格隐式 auto 列按 max-content 伸展 + 长不可断文本无 wrap-anywhere | ✅ 已修复 | c46ccc1 |
+| 20 | 实例缺少归档功能 | 无 archivedAt 软归档机制与 UI 入口 | ✅ 已修复 | pending |
+| 21 | 实例状态缺少最后执行节点信息 | 无 lastNodeName/lastNodeStatus 字段与引擎 markLastNode 记录 | ✅ 已修复 | pending |
 
 ## 最终验证
 
@@ -311,8 +313,8 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | agent-api build/单测 | ✅ tsc 通过，945/945 |
 | controller-api build/单测 | ✅ tsc 通过，383/383 |
 | agent-controller build/单测 | ✅ tsc 通过，259/259 |
-| agent-web lint/build/单测 | ✅ tsc + lint 0 error，332/332 |
-| API 测试（tests/api） | ✅ 全量通过 285/285（含 A19~A27；gateway 隧道用例偶发环境超时 flake，隔离复跑通过） |
+| agent-web lint/build/单测 | ✅ tsc + lint 0 error，340/340 |
+| API 测试（tests/api） | ✅ 全量通过 287/287（含 A19~A29；gateway 隧道用例偶发环境超时 flake，隔离复跑通过） |
 | E2E 测试（tests/e2e workflow.spec） | ✅ 13/13（E2E-1~13） |
 
 ## 经验总结
