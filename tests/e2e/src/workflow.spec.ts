@@ -1053,4 +1053,40 @@ test.describe('Workflow E2E', () => {
 
     controller2.disconnect();
   });
+
+  // -------------------------------------------------------------------------
+  // E2E-11 实例页删除实例（软删除：停流程 + 删节点会话 + 侧边栏移除）
+  // -------------------------------------------------------------------------
+  test('E2E-11: delete workflow instance from instance page stops the workflow and removes it from sidebar', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e11');
+    const instanceName = `wf-e11-实例-${Date.now().toString(36)}`;
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 删除实例：确认框说明停流程 + 删全部节点会话
+    await page.getByRole('button', { name: /删除实例/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(/停止流程运转/)).toBeVisible();
+    await expect(dialog.getByText(/删除全部节点会话/)).toBeVisible();
+    await dialog.getByRole('button', { name: '确认删除' }).click();
+
+    // 跳回会话列表；实例页不可再访问
+    await page.waitForURL(/\/sessions/, { timeout: 10000 });
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByText('工作流实例不存在')).toBeVisible({ timeout: 10000 });
+
+    // 侧边栏工作流分组不再显示该实例
+    const nav = page.locator(sidebar());
+    await expect(nav.locator(`a[href="/workflows/${instanceId}"]`)).toHaveCount(0);
+
+    // 节点会话已被删除（API 校验，含工作流会话）
+    const allSessions = await getSessions(page, env.token, true);
+    expect(allSessions.find((s) => s.id === execStart.sessionId)).toBeUndefined();
+
+    env.controller.disconnect();
+  });
 });

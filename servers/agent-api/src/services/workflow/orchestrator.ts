@@ -133,6 +133,7 @@ class WorkflowOrchestrator {
   async handleSessionEnded(sessionId: string): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
+      deletedAt: null,
     })) as unknown as WorkflowInstanceDoc | null;
     if (!instance) return;
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { useQuery } from '@apollo/client/react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
   GET_WORKFLOW_INSTANCE,
+  DELETE_WORKFLOW_INSTANCE,
   type GetWorkflowInstanceQuery,
 } from '@/graphql/workflow'
 import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
@@ -11,10 +12,24 @@ import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import MobileBackButton from '@/components/MobileBackButton'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Trash2 } from 'lucide-react'
 
 export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [sideSessionId, setSideSessionId] = useState<string | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
 
   const { data, loading } = useQuery<GetWorkflowInstanceQuery>(GET_WORKFLOW_INSTANCE, {
     variables: { id: id ?? '' },
@@ -58,6 +73,19 @@ export default function WorkflowInstancePage() {
 
   const failedNodes = instance.nodes.filter((node) => node.status === 'FAILED')
 
+  const handleDelete = async () => {
+    setDeleting(true)
+    try {
+      await deleteWorkflowInstance({ variables: { id: instance.id } })
+      toast.success('工作流实例已删除')
+      navigate('/sessions')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试')
+      setDeleting(false)
+      setDeleteOpen(false)
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="mb-4 flex items-center gap-2">
@@ -72,6 +100,15 @@ export default function WorkflowInstancePage() {
         ) : (
           <Badge variant="secondary">暂无执行中的节点</Badge>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto text-destructive hover:text-destructive"
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 className="size-3.5" />
+          删除实例
+        </Button>
       </div>
 
       {failedNodes.length > 0 && (
@@ -105,6 +142,26 @@ export default function WorkflowInstancePage() {
         sessionId={sideSessionId}
         onClose={() => setSideSessionId(null)}
       />
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除工作流实例「{instance.name}」？</DialogTitle>
+            <DialogDescription>
+              删除将停止流程运转，并删除全部节点会话（含进行中的 AI 会话与 worktree）。
+              实例数据会保留为已删除标记，不再出现在列表中，且无法继续流转。此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

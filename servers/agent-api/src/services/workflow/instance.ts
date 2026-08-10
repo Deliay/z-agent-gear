@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
+import { Session } from '../../models/session.js';
+import { sessionService } from '../session.js';
 import { workflowEngine } from './engine.js';
 
 /**
@@ -10,11 +12,11 @@ import { workflowEngine } from './engine.js';
  */
 class WorkflowInstanceService {
   async listForWorkspace(userId: string, workspaceId: string) {
-    return WorkflowInstance.find({ userId, workspaceId }).sort({ createdAt: -1 }).lean();
+    return WorkflowInstance.find({ userId, workspaceId, deletedAt: null }).sort({ createdAt: -1 }).lean();
   }
 
   async findById(id: string, userId: string) {
-    return WorkflowInstance.findOne({ _id: id, userId }).lean();
+    return WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
   }
 
   /**
@@ -79,7 +81,7 @@ class WorkflowInstanceService {
 
   /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板 */
   async completeHumanNode(userId: string, instanceId: string, nodeId: string, input?: string | null) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -100,13 +102,35 @@ class WorkflowInstanceService {
     });
   }
 
-  /** 人类打回：RUNNING→REJECT 并触发上游 REWORK（引擎校验） */
+  /** 人类打回：RUNNING/REWORK→REJECT 并触发上游 REWORK（引擎校验） */
   async rejectNode(userId: string, instanceId: string, nodeId: string, reason: string) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
     return workflowEngine.transition(instanceId, nodeId, 'reject', { reason, fromNodeId: null });
+  }
+
+  /**
+   * 删除实例（软删除）：停止流程运转、删除流程下全部会话，实例数据保留（仅标记 deletedAt）。
+   * 先标记 deletedAt 使引擎/orchestrator 兜底立即排除本实例，再逐个删除节点会话，避免竞态。
+   */
+  async deleteInstance(userId: string, id: string) {
+    const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    await WorkflowInstance.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+    // 删除流程下全部会话（停止 ACP 会话、清理 worktree 与消息记录）
+    const sessions = await Session.find({ workflowInstanceId: id }).select('_id').lean();
+    for (const session of sessions) {
+      try {
+        await sessionService.delete(session._id.toString(), userId);
+      } catch (err) {
+        console.error(`删除工作流实例「${instance.name}」的会话失败（${session._id}）：`, err);
+      }
+    }
+    return true;
   }
 }
 

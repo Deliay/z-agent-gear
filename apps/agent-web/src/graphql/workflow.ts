@@ -340,6 +340,12 @@ export const DELETE_CONFIGURED_WORKFLOW = gql`
   }
 `
 
+export const DELETE_WORKFLOW_INSTANCE = gql`
+  mutation DeleteWorkflowInstance($id: ID!) {
+    deleteWorkflowInstance(id: $id)
+  }
+`
+
 export const INSTANTIATE_WORKFLOW = gql`
   mutation InstantiateWorkflow($configuredWorkflowId: ID!, $workspaceId: ID!, $name: String!) {
     instantiateWorkflow(configuredWorkflowId: $configuredWorkflowId, workspaceId: $workspaceId, name: $name) {

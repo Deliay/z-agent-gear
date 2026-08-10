@@ -209,4 +209,6 @@ type Mutation {
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+  # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
+  deleteWorkflowInstance(id: ID!): Boolean!
 }

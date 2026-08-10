@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import WorkflowInstancePage from '../WorkflowInstancePage';
 import { toast } from 'sonner';
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow';
 
 const mockUseQuery = vi.fn();
+const mockDelete = vi.fn().mockResolvedValue({});
+const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
-  useMutation: () => [vi.fn().mockResolvedValue({})],
+  useMutation: () => [mockDelete],
 }));
 
 vi.mock('react-router-dom', () => ({
   useParams: () => ({ id: 'inst-1' }),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('@/components/workflow/BlackboardPanel', () => ({
@@ -145,5 +148,42 @@ describe('WorkflowInstancePage 节点失败强提醒', () => {
     render(<WorkflowInstancePage />);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('WorkflowInstancePage 删除实例', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+  });
+
+  it('点击「删除实例」弹确认框（说明停流程+删会话），确认后调用删除并跳转回会话列表', async () => {
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /删除实例/ }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('停止流程运转');
+    expect(dialog.textContent).toContain('删除全部节点会话');
+    expect(dialog.textContent).toContain('测试实例');
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() =>
+      expect(mockDelete).toHaveBeenCalledWith(expect.objectContaining({ variables: { id: 'inst-1' } })),
+    );
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/sessions'));
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('取消删除不调用 mutation 也不跳转', () => {
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /删除实例/ }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });

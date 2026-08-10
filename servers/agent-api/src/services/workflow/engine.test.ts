@@ -259,6 +259,25 @@ describe('WorkflowEngine.transition', () => {
     );
   });
 
+  it('E17: 链式打回后 complete：下游仍为 REJECT 的节点随本节点完成而复工（流程不卡住）', async () => {
+    const instance = linearInstance();
+    // 场景：n3 打回 n2、n2 打回 n1 后，n1 返工完成使 n2 复工（RUNNING）；n3 仍为 REJECT
+    instance.nodes[0].status = 'DONE';
+    instance.nodes[1].status = 'RUNNING';
+    instance.nodes[2].status = 'REJECT';
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'complete', {
+      artifacts: [{ title: '方案', value: '修订版方案' }],
+    });
+
+    expect(instance.nodes[1].status).toBe('DONE');
+    // 下游 REJECT 节点被 resume（而非 start，start 对 REJECT 非法会卡住流程）
+    expect(instance.nodes[2].status).toBe('RUNNING');
+    expect(hooks.onNodeResume).toHaveBeenCalledWith(instance, instance.nodes[2]);
+    expect(hooks.onNodeDone).toHaveBeenCalledWith(instance, instance.nodes[1]);
+  });
+
   it('E10: 多上游汇合：部分上游 DONE 时不 RUNNING，全部 DONE 才 READY→RUNNING', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'DONE' }),
@@ -391,5 +410,15 @@ describe('WorkflowEngine.transition', () => {
     const instance = linearInstance();
     loadInstance(instance);
     await expect(workflowEngine.transition('inst-1', 'ghost', 'start')).rejects.toThrow(/不存在节点/);
+  });
+
+  it('已删除实例（deletedAt 非空）拒绝一切转移', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RUNNING';
+    instance.deletedAt = new Date();
+    loadInstance(instance);
+
+    await expect(workflowEngine.transition('inst-1', 'n2', 'complete', {})).rejects.toThrow(/已删除/);
+    expect(instance.nodes[1].status).toBe('RUNNING');
   });
 });

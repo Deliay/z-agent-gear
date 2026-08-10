@@ -34,6 +34,8 @@ export interface WorkflowInstanceDoc {
   blackboard: Map<string, string>;
   blackboardTrash: Map<string, string>;
   blackboardUpdatedAt: Map<string, Date>;
+  /** 软删除标记（删除实例时置为删除时间；非空则拒绝一切转移） */
+  deletedAt?: Date | null;
   save(): Promise<unknown>;
 }
 
@@ -117,6 +119,9 @@ class WorkflowEngine {
     if (!instance) {
       throw new Error(`工作流实例不存在：${instanceId}`);
     }
+    if (instance.deletedAt) {
+      throw new Error('工作流实例已删除，无法继续流转');
+    }
     const node = instance.nodes.find((n) => n.nodeId === nodeId);
     if (!node) {
       throw new Error(`工作流实例中不存在节点：${nodeId}`);
@@ -149,9 +154,15 @@ class WorkflowEngine {
       case 'complete': {
         this.writeArtifacts(instance, node, payload.artifacts);
         node.status = 'DONE';
-        // 先触发下游 start（新建会话），再结束本会话
+        // 先推进下游再结束本会话：
+        // - 下游 REJECT（链式打回场景：下游在打回更上游时自身被打回）→ resume 复工
+        // - 其余 → start（新建会话/激活）
         for (const downstream of this.downstreamsOf(instance, node)) {
-          await this.apply(instance, downstream, 'start', {});
+          if (downstream.status === 'REJECT') {
+            await this.apply(instance, downstream, 'resume', {});
+          } else {
+            await this.apply(instance, downstream, 'start', {});
+          }
         }
         // 先落库再结束本会话：onNodeDone 关闭会话会触发兜底检查（读取 DB 节点状态），
         // 若此时新状态未持久化，兜底逻辑会误读节点仍为 RUNNING 而错误 resume 会话

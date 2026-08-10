@@ -261,5 +261,9 @@ export const workflowResolvers = {
         ),
       );
     },
+    deleteWorkflowInstance: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
+      const userId = requireUser(context);
+      return wrap(() => workflowInstanceService.deleteInstance(userId, args.id));
+    },
   },
 };

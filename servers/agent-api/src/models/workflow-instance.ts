@@ -64,6 +64,8 @@ const workflowInstanceSchema = new mongoose.Schema(
     blackboardTrash: { type: Map, of: String, default: {} },
     // 每个 key 的最后更新时间（供 BlackboardEntry.updatedAt 使用）
     blackboardUpdatedAt: { type: Map, of: Date, default: {} },
+    // 软删除标记：删除实例时置为删除时间（实例数据保留，查询/引擎均排除）
+    deletedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

@@ -16,6 +16,20 @@ vi.mock('../../models/workflow-instance.js', () => ({
   WorkflowInstance: {
     create: vi.fn(),
     findOne: vi.fn(),
+    find: vi.fn(),
+    updateOne: vi.fn(),
+  },
+}));
+
+vi.mock('../../models/session.js', () => ({
+  Session: {
+    find: vi.fn(),
+  },
+}));
+
+vi.mock('../session.js', () => ({
+  sessionService: {
+    delete: vi.fn(),
   },
 }));
 
@@ -30,6 +44,8 @@ import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { Session } from '../../models/session.js';
+import { sessionService } from '../session.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -242,5 +258,102 @@ describe('WorkflowInstanceService.rejectNode', () => {
       reason: '方案不完整',
       fromNodeId: null,
     });
+  });
+});
+
+
+describe('WorkflowInstanceService 查询排除已删除实例', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('listForWorkspace 过滤 deletedAt: null', async () => {
+    const lean = vi.fn().mockResolvedValue([]);
+    const sort = vi.fn().mockReturnValue({ lean });
+    vi.mocked(WorkflowInstance.find).mockReturnValue({ sort } as never);
+
+    await workflowInstanceService.listForWorkspace('user-1', 'ws-1');
+
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+      deletedAt: null,
+    });
+  });
+
+  it('findById 过滤 deletedAt: null', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null));
+
+    const result = await workflowInstanceService.findById('inst-1', 'user-1');
+
+    expect(WorkflowInstance.findOne).toHaveBeenCalledWith({
+      _id: 'inst-1',
+      userId: 'user-1',
+      deletedAt: null,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+describe('WorkflowInstanceService.deleteInstance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockSessions(ids: string[]) {
+    const lean = vi.fn().mockResolvedValue(ids.map((id) => ({ _id: oid(id) })));
+    const select = vi.fn().mockReturnValue({ lean });
+    vi.mocked(Session.find).mockReturnValue({ select } as never);
+  }
+
+  it('软删除：先标记 deletedAt，再逐个删除流程下全部会话，返回 true', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1') }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    mockSessions(['sess-1', 'sess-2']);
+    vi.mocked(sessionService.delete).mockResolvedValue(true as never);
+
+    const result = await workflowInstanceService.deleteInstance('user-1', 'inst-1');
+
+    expect(result).toBe(true);
+    // 先标记删除（阻断引擎/兜底），再删会话
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { deletedAt: expect.any(Date) } },
+    );
+    expect(vi.mocked(WorkflowInstance.updateOne).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sessionService.delete).mock.invocationCallOrder[0],
+    );
+    expect(Session.find).toHaveBeenCalledWith({ workflowInstanceId: 'inst-1' });
+    expect(sessionService.delete).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sessionService.delete).mock.calls[0][0]).toBe('sess-1');
+    expect(vi.mocked(sessionService.delete).mock.calls[1][0]).toBe('sess-2');
+  });
+
+  it('单个会话删除失败不中断其余会话清理', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1') }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    mockSessions(['sess-1', 'sess-2']);
+    vi.mocked(sessionService.delete)
+      .mockRejectedValueOnce(new Error('worktree 清理失败'))
+      .mockResolvedValueOnce(true as never);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(workflowInstanceService.deleteInstance('user-1', 'inst-1')).resolves.toBe(true);
+
+    expect(sessionService.delete).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('实例不存在、无权限或已删除时拒绝', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null));
+
+    await expect(workflowInstanceService.deleteInstance('user-1', 'inst-x')).rejects.toThrow(/不存在/);
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+    expect(sessionService.delete).not.toHaveBeenCalled();
   });
 });

@@ -1355,3 +1355,240 @@ describe('Workflow Rework Reject (A24)', () => {
     expect(JSON.parse(record.value).reason).toBe('需求本身有问题，无法按现状执行');
   }, 40_000);
 });
+
+
+// ---------------------------------------------------------------------------
+// 链式打回后 complete 复工（A25，验收第六轮#1）+ 实例软删除（A26，验收第六轮#2）
+// ---------------------------------------------------------------------------
+
+const DELETE_WORKFLOW_INSTANCE = `
+  mutation DeleteWorkflowInstance($id: ID!) { deleteWorkflowInstance(id: $id) }
+`;
+
+/** 等待指定 sessionId 的 acp:resume 事件（链式打回会触发多个 resume，需按会话过滤） */
+function waitForResume<T = unknown>(socket: ClientSocket, sessionId: string, timeoutMs = 10000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off('acp:resume', handler);
+      reject(new Error(`Timeout waiting for "acp:resume" of ${sessionId}`));
+    }, timeoutMs);
+    const handler = (data: T) => {
+      if ((data as { sessionId?: string }).sessionId !== sessionId) return;
+      clearTimeout(timer);
+      socket.off('acp:resume', handler);
+      resolve(data);
+    };
+    socket.on('acp:resume', handler);
+  });
+}
+
+/** 四节点链式模板：start(HUMAN) → a(AI) → b(AI) → c(AI) */
+function chainTemplateInput(name: string) {
+  return {
+    name,
+    description: 'API 测试用四节点链式工作流',
+    nodes: [
+      { nodeKey: 'start', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+      { nodeKey: 'a', type: 'AI', name: '节点A', stage: '阶段一', prompts: ['完成 A'], artifactTitles: ['A产物'], dependsOn: ['start'], requiresWorktree: false },
+      { nodeKey: 'b', type: 'AI', name: '节点B', stage: '阶段二', prompts: ['完成 B'], artifactTitles: ['B产物'], dependsOn: ['a'], requiresWorktree: false },
+      { nodeKey: 'c', type: 'AI', name: '节点C', stage: '阶段三', prompts: ['完成 C'], artifactTitles: ['C产物'], dependsOn: ['b'], requiresWorktree: false },
+    ],
+  };
+}
+
+describe('Workflow Chain Reject & Instance Delete (A25-A26)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfchain');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'chain');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  /** 等待下一个 AI 节点会话启动并应答成功，返回会话与 MCP token */
+  async function answerNextStart(tag: string) {
+    const startData = await waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_${tag}_${Date.now()}`,
+    });
+    await sleep(500);
+    return { sessionId: startData.sessionId, mcpToken: startData.mcpEndpoint!.token };
+  }
+
+  it('A25: 链式打回（c→b→a）后 a 完成返工 b 复工；b 完成时下游 c（REJECT）自动复工，流程不卡住', async () => {
+    // 实例化四节点链
+    const tplRes = await gqlRequest(CREATE_WORKFLOW_TEMPLATE, { input: chainTemplateInput(`wf-a25-${Date.now()}`) }, token);
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a25-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'start' },
+            { nodeKey: 'a', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'b', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'c', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a25-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const nodeIdOf = (key: string) => inst.nodes.find((n: Record<string, any>) => n.nodeKey === key).id as string;
+
+    // start(H) 完成 → a 启动；a 完成 → b 启动；b 完成 → c 启动
+    // （acp:start 监听器必须在 complete 调用前挂上，否则事件可能先于监听到达而丢失）
+    const startPromise = answerNextStart('a25a');
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: nodeIdOf('start'), input: '链式需求' }, token);
+    const sessA = await startPromise;
+
+    const startBPromise = answerNextStart('a25b');
+    const doneA = parseToolResult(
+      (await callWorkflowTool(sessA.sessionId, sessA.mcpToken, 'completeCurrentNode', {
+        artifacts: [{ title: 'A产物', value: 'a 完成' }],
+      })).body,
+    );
+    expect(doneA.isError).toBe(false);
+    const sessB = await startBPromise;
+
+    const startCPromise = answerNextStart('a25c');
+    const doneB = parseToolResult(
+      (await callWorkflowTool(sessB.sessionId, sessB.mcpToken, 'completeCurrentNode', {
+        artifacts: [{ title: 'B产物', value: 'b 完成' }],
+      })).body,
+    );
+    expect(doneB.isError).toBe(false);
+    const sessC = await startCPromise;
+
+    // c 打回 b：c REJECT，b REWORK（b 会话 resume）
+    const resumeBPromise = waitForResume<StartEventData>(fake.client, sessB.sessionId, 15000);
+    const rej1 = await (await gqlRequest(REJECT_NODE, { instanceId, nodeId: nodeIdOf('c'), reason: 'b 的产出不合格' }, token)).json();
+    expect(rej1.errors).toBeUndefined();
+    const resumeB = await resumeBPromise;
+    fake.client.emit('acp:resume:result', { requestId: resumeB.requestId, sessionId: sessB.sessionId, success: true });
+    await sleep(500);
+    const bResumeToken = resumeB.mcpEndpoint!.token;
+
+    // b（REWORK）再打回 a：b REJECT，a REWORK（a 会话 resume）
+    const resumeAPromise = waitForResume<StartEventData>(fake.client, sessA.sessionId, 15000);
+    const rej2 = await (await gqlRequest(REJECT_NODE, { instanceId, nodeId: nodeIdOf('b'), reason: 'a 的方向有问题' }, token)).json();
+    expect(rej2.errors).toBeUndefined();
+    const resumeA = await resumeAPromise;
+    fake.client.emit('acp:resume:result', { requestId: resumeA.requestId, sessionId: sessA.sessionId, success: true });
+    await sleep(500);
+
+    // a 完成返工 → a DONE，下游 REJECT 的 b 复工 RUNNING
+    const reworkA = parseToolResult(
+      (await callWorkflowTool(sessA.sessionId, resumeA.mcpEndpoint!.token, 'completeCurrentRework', {
+        artifacts: [{ title: 'A产物', value: 'a 修订' }],
+      })).body,
+    );
+    expect(reworkA.isError).toBe(false);
+    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const nodeB1 = inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'b');
+    const nodeC1 = inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'c');
+    expect(nodeB1.status).toBe('RUNNING');
+    expect(nodeC1.status).toBe('REJECT');
+
+    // b（RUNNING）完成：下游 c 仍为 REJECT——应 resume 复工而非 start（否则流程卡住）
+    const doneB2 = parseToolResult(
+      (await callWorkflowTool(sessB.sessionId, bResumeToken, 'completeCurrentNode', {
+        artifacts: [{ title: 'B产物', value: 'b 修订完成' }],
+      })).body,
+    );
+    expect(doneB2.isError).toBe(false);
+
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'a').status).toBe('DONE');
+    expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'b').status).toBe('DONE');
+    expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'c').status).toBe('RUNNING');
+  }, 90_000);
+
+  it('A26: deleteWorkflowInstance 软删除：会话被删除、列表/详情排除、已删实例拒绝操作', async () => {
+    // 三节点实例（H→AI→H）推进到 exec 会话启动
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a26-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a26-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a26-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    // acp:start 监听器在 complete 调用前挂上（防事件先于监听到达）
+    const startPromise = answerNextStart('a26');
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const execSess = await startPromise;
+
+    // 删除实例 → true
+    const delRes = await gqlRequest(DELETE_WORKFLOW_INSTANCE, { id: instanceId }, token);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeUndefined();
+    expect(delBody.data.deleteWorkflowInstance).toBe(true);
+    await sleep(500);
+
+    // 详情/列表排除已删实例
+    const detail = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(detail).toBeNull();
+    const list = (await (await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token)).json()).data.workflowInstances;
+    expect(list.find((i: Record<string, any>) => i.id === instanceId)).toBeUndefined();
+
+    // 流程下会话已被删除
+    const sessRes = await gqlRequest(SESSIONS_QUERY, { includeWorkflowSessions: true }, token);
+    const sessions = (await sessRes.json()).data.sessions;
+    expect(sessions.find((s: Record<string, any>) => s.id === execSess.sessionId)).toBeUndefined();
+
+    // 已删实例拒绝任何操作（人类节点完成报错）
+    const opRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: 'x' }, token);
+    const opBody = await opRes.json();
+    expect(opBody.errors).toBeDefined();
+
+    // 二次删除幂等报错（已删除视为不存在）
+    const del2 = await (await gqlRequest(DELETE_WORKFLOW_INSTANCE, { id: instanceId }, token)).json();
+    expect(del2.errors).toBeDefined();
+  }, 60_000);
+});

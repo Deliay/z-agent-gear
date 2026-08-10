@@ -184,5 +184,6 @@ export const workflowTypeDefs = `#graphql
     instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+    deleteWorkflowInstance(id: ID!): Boolean!
   }
 `;
