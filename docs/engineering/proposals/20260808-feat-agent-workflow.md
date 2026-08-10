@@ -150,10 +150,34 @@ type BlackboardEntry { key: String!, value: String!, updatedAt: String! }
 
 type Query {
   workflowTemplates: [WorkflowTemplate!]!
+  workflowTemplate(id: ID!): WorkflowTemplate
   configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
+  configuredWorkflow(id: ID!): ConfiguredWorkflow
   workflowInstances(workspaceId: ID!): [WorkflowInstance!]!
   workflowInstance(id: ID!): WorkflowInstance
 }
+
+input WorkflowTemplateNodeInput {
+  nodeKey: String!, type: WorkflowNodeType!, name: String!, description: String
+  stage: String!, prompts: [String!], artifactTitles: [String!]
+  dependsOn: [String!]!, requiresWorktree: Boolean!
+}
+input WorkflowTemplateInput {
+  name: String!, description: String
+  nodes: [WorkflowTemplateNodeInput!]!
+}
+input ConfiguredWorkflowNodeInput {
+  nodeKey: String!, agentConfig: AgentNodeConfigInput
+}
+input AgentNodeConfigInput {
+  acpServerType: String!, modeId: String, modelId: String
+  initNewWorktree: Boolean!
+}
+input ConfigureWorkflowInput {
+  name: String!, controllerId: ID!
+  nodes: [ConfiguredWorkflowNodeInput!]!
+}
+
 type Mutation {
   createWorkflowTemplate(input: WorkflowTemplateInput!): WorkflowTemplate!
   updateWorkflowTemplate(id: ID!, input: WorkflowTemplateInput!): WorkflowTemplate!
@@ -186,10 +210,34 @@ type Mutation {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| userId | ObjectId | 归属用户（内置模板为系统用户/空 + `isBuiltin`） |
+| userId | ObjectId | 归属用户（内置模板 `isBuiltin=true`，用户只读） |
 | name / description | String | 模板名称/描述 |
-| nodes[] | SubDoc | nodeKey, type, name, description, stage, prompts[], artifactTitles[], dependsOn[], requiresWorktree |
+| version | Number | 模板版本号，每次更新 +1（配置工作流快照记录来源版本） |
+| nodes[] | SubDoc | 模板节点（结构见下表） |
 | isBuiltin | Boolean | 是否为内置默认模板 |
+| createdAt / updatedAt | Date | 时间戳 |
+
+**模板节点（nodes[] 子文档）**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| nodeKey | String | 模板内唯一标识（稳定 key，供 dependsOn 引用；实例化后映射为实例节点 nodeId） |
+| type | Enum | `HUMAN` / `AI` / `FLAG` |
+| name / description | String | 节点名称/描述 |
+| stage | String | 所属阶段名称（同 stage 的节点共享一个 worktree） |
+| prompts | [String] | AI 节点提示词数组；首元素由系统强制注入工作流系统提示（存储时不含，组装时注入） |
+| artifactTitles | [String] | 预定义产物 title，用于提示词生成与产物 key 校验提示 |
+| dependsOn | [String] | 上游 nodeKey 列表，空数组 = 首节点候选 |
+| requiresWorktree | Boolean | 该节点会话是否需要 worktree 隔离 |
+
+**模板校验规则**（`createWorkflowTemplate` / `updateWorkflowTemplate` 时执行，失败返回具体错误信息）：
+
+1. `nodeKey` 全局唯一；`dependsOn` 引用的 nodeKey 必须存在。
+2. 图必须是 DAG（拓扑排序检测环，检测到环时报出环上的节点）。
+3. 入度为 0 的节点**有且仅有一个**，且 `type = HUMAN`（PRD 约束：首节点只允许人类节点）。
+4. `AI` 节点 `prompts` 至少 1 条；`HUMAN`/`FLAG` 节点不允许有 `prompts`/`artifactTitles`（FLAG 节点同时要求无出度或作为终结点，仅告警不拦截）。
+5. 同一 `stage` 的节点在拓扑序上应连续（不强制，仅用于展示分组）。
+6. 内置模板（`isBuiltin=true`）不允许 `update/delete`，仅允许 `configureWorkflow` 复制。
 
 #### 集合： configured_workflows
 
@@ -197,8 +245,17 @@ type Mutation {
 |------|------|------|
 | userId / controllerId | ObjectId | 归属用户 / 关联 Controller |
 | name | String | 名称 |
-| sourceTemplateId / sourceTemplateVersion | ObjectId / String | 复制来源（仅展示用，**无强关联**） |
-| nodes[] | SubDoc | 模板节点的**快照副本** + agentConfig（acpServerType/modeId/modelId/initNewWorktree） |
+| sourceTemplateId / sourceTemplateVersion | ObjectId / Number | 复制来源模板及版本（仅展示用，**无强关联**；模板后续更新不影响本副本） |
+| nodes[] | SubDoc | 模板节点的**完整快照副本**（含模板节点全部字段）+ agentConfig（AI 节点：acpServerType/modeId/modelId/initNewWorktree；HUMAN 节点：operatorUserId，默认实例化操作人） |
+| createdAt / updatedAt | Date | 时间戳 |
+
+**配置校验规则**（`configureWorkflow` / `updateConfiguredWorkflow` 时执行）：
+
+1. `controllerId` 必须属于当前用户。
+2. 所有 `AI` 节点必须提供完整 `agentConfig`；`acpServerType` 必须在该 Controller 的 ACP capabilities（Redis `acp:capability:<controllerId>`）可用列表内。
+3. `modeId`/`modelId` 允许为空（会话创建后由用户或 Agent 切换），非空时仅做格式校验，不在配置期强校验存在性（capabilities 是动态的）。
+4. `nodes` 的 nodeKey 集合必须与来源模板快照一致（`updateConfiguredWorkflow` 不允许增删节点，仅允许改 `name/controllerId/agentConfig`；如需改图则重新从模板复制）。
+5. 删除约束：存在未终结（仍有节点未 DONE/REJECT 终结态）实例引用时，`deleteConfiguredWorkflow` 拒绝并提示；无引用或实例已全部终结时允许删除（实例保留快照副本不受影响）。
 
 #### 集合： workflow_instances
 
@@ -308,6 +365,14 @@ sequenceDiagram
 
 - **描述**：agent-api 启动时幂等 upsert 内置模板「开发工作流」（10 节点：产品需求 → 产出产品需求技术方案 → 审核产品文档与技术方案 → 产出实现方案 → 审核实现文档 → 代码实现 → AI审核代码 → 人类审核代码与验收 → 代码合并 → 完成开发），各 AI 节点提示词数组按 PRD §3.4 完善为面向 LLM 的正式文案，产物 title 预定义，首节点为人类节点，`requiresWorktree: true`。
 
+#### 实现点 6：工作流模板与已配置工作流管理
+
+- **模板编辑交互**：设置页「工作流模板」列表 + 「创建工作流模板」按钮进入模板编辑器。编辑器采用「节点列表 + 依赖下拉多选」的表单形态（本期不引入可视化拖拽画布，节点图以阶段分组的只读流程图预览，用 Mermaid/静态渲染呈现），降低前端复杂度。每个节点可编辑类型、名称、描述、阶段、提示词数组（AI 节点）、产物 title 列表、依赖节点。保存时前端先做基础校验（nodeKey 唯一、dependsOn 存在），后端执行完整校验规则（见 §4.1）。
+- **配置工作流交互**：设置页「已配置工作流」列表 + 「配置工作流」按钮 → 选择一个模板 → 生成快照副本（深拷贝 nodes，记录 `sourceTemplateId/sourceTemplateVersion`）→ 进入配置表单：选择 Controller（在线），逐个 AI 节点选择 Agent 配置（acpServerType 从该 Controller 的 capabilities 下拉选择；modeId/modelId 可选；initNewWorktree 开关）。表单顶部展示文案：「本配置复制自模板《{模板名}》v{version}，模板后续更新不会同步到此配置」。
+- **更新语义**：`updateConfiguredWorkflow` 仅允许修改 name/controllerId/agentConfig，不允许改图；模板更新后，已配置工作流卡片展示「模板已更新至 v{latest}，当前配置基于 v{source}」的非阻断提示，用户可选择「重新从模板复制」生成新配置（不覆盖旧配置）。
+- **内置模板保护**：`isBuiltin` 模板在设置页只读展示（可复制），update/delete mutation 直接拒绝。
+- **后端组织**：`services/workflow/template.ts`（模板 CRUD + 图校验 `validateTemplateGraph()`，纯函数便于单测）、`services/workflow/configured.ts`（复制快照 + 配置校验 + 删除约束）。
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -366,14 +431,112 @@ contracts/
 
 - 状态机引擎：所有合法/非法转移 100% 覆盖（单元测试）。
 - API 测试覆盖：`workflow.graphql` 全部 Query/Mutation；`/mcp` 工作流工具的参数校验与作用域校验。
+- 后端单测沿用 vitest（`.test.ts` 与源码同目录，如 `services/workflow/engine.test.ts`）；前端组件测试沿用 `__tests__` 目录约定。
 
-### 8.2 测试类型
+### 8.2 单元测试用例（agent-api）
+
+**模板图校验 `validateTemplateGraph()`**（`services/workflow/template.test.ts`）：
+
+| # | 用例 | 预期 |
+|---|------|------|
+| T1 | 合法线性链 A→B→C | 通过 |
+| T2 | nodeKey 重复 | 拒绝，报重复 key |
+| T3 | dependsOn 引用不存在的 nodeKey | 拒绝，报缺失引用 |
+| T4 | 存在环 A→B→A | 拒绝，报环上节点 |
+| T5 | 两个入度为 0 的节点 | 拒绝（首节点必须唯一） |
+| T6 | 首节点为 AI 节点 | 拒绝（首节点必须 HUMAN） |
+| T7 | AI 节点 prompts 为空 | 拒绝 |
+| T8 | HUMAN 节点携带 prompts | 拒绝 |
+| T9 | 钻石型依赖 A→(B,C)→D | 通过，拓扑序正确 |
+
+**状态机引擎 `WorkflowEngine.transition()`**（`services/workflow/engine.test.ts`）：
+
+| # | 用例 | 预期 |
+|---|------|------|
+| E1 | INITIALIZING→READY（AI 节点会话关联成功） | 允许 |
+| E2 | READY→RUNNING（收到全部上游 start 事件） | 允许，写入 startedAt |
+| E3 | RUNNING→DONE（complete） | 允许，触发下游 start + 结束本会话 |
+| E4 | RUNNING→REJECT（reject，携带 reason） | 允许，写黑板打回记录，触发上游 REWORK |
+| E5 | REJECT→RUNNING（上游 REWORK→DONE 后 resume） | 允许 |
+| E6 | REWORK→DONE（completeRework） | 允许，重置产物，通知下游 resume |
+| E7 | READY/RUNNING/DONE→REWORK（收到打回） | 允许，reworkCount+1，写 reworkedAt |
+| E8 | INITIALIZING→DONE / READY→DONE / DONE→RUNNING 等非法转移 | 拒绝，返回可读错误 |
+| E9 | 打回无依赖上游的节点（首节点） | 拒绝，提示无上游可打回 |
+| E10 | 多上游节点：部分上游 DONE 时 | 不 start；全部 DONE 才 READY→RUNNING |
+| E11 | FLAG 节点收到上游完成事件 | 透传事件到下游，自身不产生会话 |
+| E12 | 并行分支两个节点同时 RUNNING | 实例 currentNodeNames 含两个节点名 |
+
+**黑板服务**（`services/workflow/blackboard.test.ts`）：
+
+| # | 用例 | 预期 |
+|---|------|------|
+| B1 | set/get value | 读写一致，更新 updatedAt |
+| B2 | remove key | key 从黑板消失，出现在垃圾桶 |
+| B3 | 产物 key 前缀匹配 `{nodeId}-{nodeName}-产物` | 仅返回该节点产物 keys |
+| B4 | 打回记录 key 写入 `打回-{nodeId}-{序号}` | 序号递增，内容含 reason/来源节点/时间 |
+
+**会话编排**（`services/workflow/orchestrator.test.ts`）：
+
+| # | 用例 | 预期 |
+|---|------|------|
+| O1 | AI 节点 start 提示词组装 | 含工作流系统提示 + 节点提示词数组 + 全部上游产物 |
+| O2 | 无上游产物的节点 | 提示词仅含系统提示 + 节点提示词 |
+| O3 | 会话打标 | create 参数含 workflowInstanceId/workflowNodeId |
+| O4 | 阶段 worktree 后缀 | `<instance-slug>/<stage-slug>`，同阶段节点复用 |
+| O5 | requiresWorktree=true 但工作区不支持 git | 实例化拒绝并提示 |
+| O6 | 兜底：会话 ended 且节点状态未转移 | resume 会话并发送兜底提示词（仅 1 次） |
+| O7 | 兜底：会话 ended 但节点已转移 | 不发送兜底提示词 |
+| O8 | 节点完成 | 先触发下游 start（新建会话）再结束本会话 |
+
+**Scoped MCP token**（`services/mcp-endpoint.test.ts` 增量）：
+
+| # | 用例 | 预期 |
+|---|------|------|
+| S1 | 节点会话 endpoint token | payload 含 workflow.{instanceId,nodeId} |
+| S2 | 普通会话 endpoint token | payload 无 workflow 字段，兼容既有逻辑 |
+| S3 | 会话结束后调用工具 | 401 未授权 |
+
+### 8.3 API 测试用例（tests/api）
+
+| # | 接口 | 用例 | 预期 |
+|---|------|------|------|
+| A1 | createWorkflowTemplate | 合法模板 | 创建成功 |
+| A2 | createWorkflowTemplate | 非法图（环/双首节点/AI 首节点） | 422 + 具体错误 |
+| A3 | updateWorkflowTemplate | 内置模板 | 拒绝 |
+| A4 | updateWorkflowTemplate | version 自增 | version+1 |
+| A5 | configureWorkflow | 从模板复制 | 快照完整，记录来源版本；后续改模板不影响副本 |
+| A6 | configureWorkflow | 缺 AI 节点 agentConfig | 422 指出缺失节点 |
+| A7 | configureWorkflow | acpServerType 不在 controller capabilities | 422 |
+| A8 | updateConfiguredWorkflow | 尝试增删节点 | 拒绝 |
+| A9 | deleteConfiguredWorkflow | 存在活跃实例引用 | 拒绝并提示 |
+| A10 | instantiateWorkflow | 正常 | 首节点 READY，其余 INITIALIZING/待激活 |
+| A11 | instantiateWorkflow | requiresWorktree 但工作区非 git | 拒绝 |
+| A12 | completeHumanNode | 首节点输入文本 | 产物写入黑板，下游 AI 节点拉起会话 |
+| A13 | rejectNode | 人类打回 | 黑板有打回记录，上游 REWORK |
+| A14 | sessions 查询 | 默认 | 不含工作流会话；`includeWorkflowSessions=true` 含 |
+| A15 | /mcp 工具 getCurrentNodeId | 节点会话 token | 返回正确 nodeId；普通会话 token 不可用 |
+| A16 | /mcp 工具 completeCurrentNode | 非 RUNNING 状态调用 | 返回状态非法提示 |
+| A17 | /mcp 工具 removeBlackboardKey | 移除后查询 | 黑板无，垃圾桶有 |
+| A18 | workflowInstance 查询 | 权限 | 他人实例 404/未授权 |
+
+### 8.4 E2E 测试用例（tests/e2e）
+
+| # | 场景 | 验证点 |
+|---|------|--------|
+| E2E-1 | 配置默认模板 → 实例化 → 人类节点输入需求 → AI 节点拉起 | 实例状态推进、会话打标、侧边栏不可见工作流会话 |
+| E2E-2 | AI 节点完成接力 | 下游会话收到含上游产物的提示词，上游会话结束 |
+| E2E-3 | 打回 → 返工 → 复工 | 原会话被 resume 收到打回原因；返工完成后下游继续 |
+| E2E-4 | 会话兜底 | 会话结束未转移状态时收到兜底提示词 |
+| E2E-5 | 实例视图 | 节点树按阶段分组、黑板可见、会话侧面板可打开 |
+| E2E-6 | 设置页模板/配置管理 | 创建模板、从模板复制配置、复制关系文案可见 |
+
+### 8.5 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | vitest | 状态机、提示词组装、黑板 key 前缀匹配、兜底逻辑 |
-| API 测试 | 既有 tests/api 框架 | workflow GraphQL、scoped MCP token、会话打标与排除 |
-| E2E 测试 | 既有 tests/e2e 框架 | 实例化 → 人类节点完成 → AI 节点接力 → 打回 → 返工 → 完成 全链路 |
+| 单元测试 | vitest | 模板校验、状态机、提示词组装、黑板 key 匹配、兜底逻辑、scoped token |
+| API 测试 | 既有 tests/api 框架 | workflow GraphQL 全量、/mcp 工作流工具、会话打标与排除 |
+| E2E 测试 | 既有 tests/e2e 框架 | 实例化 → 接力 → 打回/返工 → 完成 全链路 |
 
 ## 9. 部署方案
 
