@@ -336,6 +336,8 @@ async function callWorkflowTool(
 interface WorkflowEnv {
   token: string;
   username: string;
+  rawKey: string;
+  hostname: string;
   controller: WorkflowController;
   workspaceId: string;
   workspacePath: string;
@@ -345,13 +347,14 @@ interface WorkflowEnv {
 async function setupWorkflowEnv(page: Page, tag: string): Promise<WorkflowEnv> {
   const { token, username } = await registerUser(page);
   const { rawKey } = await createControllerKey(page, token);
-  const controller = await registerWorkflowController(rawKey, `wf-${tag}-host-${Date.now().toString(36)}`);
+  const hostname = `wf-${tag}-host-${Date.now().toString(36)}`;
+  const controller = await registerWorkflowController(rawKey, hostname);
   await refreshCapabilities(page, token, controller.controllerId);
   const workspacePath = `/tmp/e2e-wf-${tag}-${Date.now().toString(36)}`;
   const ws = await createWorkspace(page, controller.controllerId, workspacePath, token);
   const templateId = await createThreeNodeTemplate(page, token, `wf-${tag}-模板-${Date.now().toString(36)}`);
   const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, `wf-${tag}-配置-${Date.now().toString(36)}`);
-  return { token, username, controller, workspaceId: ws.id, workspacePath, configuredId };
+  return { token, username, rawKey, hostname, controller, workspaceId: ws.id, workspacePath, configuredId };
 }
 
 /** 实例化并完成首节点，推进到 AI执行 RUNNING，返回实例与 exec 会话信息 */
@@ -972,5 +975,80 @@ test.describe('Workflow E2E', () => {
     await expect(page.getByRole('option', { name: 'GPT-5' })).toBeVisible();
 
     controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-10 断连会话恢复（验收第四轮）
+  // -------------------------------------------------------------------------
+  test('E2E-10: disconnected workflow node session resumes via confirm dialog and auto-sends workflow continue prompt', async ({ page }) => {
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'e10');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e10-实例-${Date.now().toString(36)}`);
+    const execSessionId = execStart.sessionId;
+
+    // Controller 断连 → 会话变为 disconnected（兜底提示词在此状态下无法送达，需人工「继续」）
+    env.controller.disconnect();
+    await waitFor(
+      async () => (await getSessionStatus(page, env.token, execSessionId)) === 'disconnected' || undefined,
+      15000,
+      'exec session disconnected',
+    );
+
+    // UI：打开节点会话，断连时头部按钮为「继续」而非「关闭」
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: /wf-e10-实例/ })).toBeVisible({ timeout: 10000 });
+    await nodeCard(page, 'AI执行').getByRole('button', { name: '会话' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('节点会话')).toBeVisible();
+    await expect(dialog.getByText('已断连')).toBeVisible({ timeout: 10000 });
+    await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeHidden();
+    const continueButton = dialog.getByRole('button', { name: '继续', exact: true });
+    await expect(continueButton).toBeVisible();
+
+    // Controller 重连（同一 rawKey）→ GET_CONTROLLERS 轮询解锁「继续」按钮
+    const controller2 = await registerWorkflowController(env.rawKey, env.hostname);
+    await expect(continueButton).toBeEnabled({ timeout: 20000 });
+
+    // 点击「继续」→ 确认框：检测到 AI 断连，提示是否让 AI 继续
+    await continueButton.click();
+    await expect(page.getByText('检测到 AI 断连')).toBeVisible();
+    await expect(page.getByText(/工作流 MCP 工具继续之前的工作/)).toBeVisible();
+    await page.getByRole('button', { name: '让 AI 继续' }).click();
+
+    // 确认后：resume 流程（新 controller 自动应答 acp:resume）
+    await waitFor(
+      () => controller2.resumes.find((r) => r.sessionId === execSessionId),
+      15000,
+      'acp:resume after reconnect',
+    );
+
+    // 会话 ready（idling）后自动发送工作流继续提示词，显式要求调用 MCP 工具
+    const promptMsg = await waitFor(
+      async () => {
+        const msgs = await getSessionMessagesText(page, env.token, execSessionId);
+        return msgs.find((m) => m.includes('resumeFailedNode'));
+      },
+      20000,
+      'workflow continue prompt message',
+    );
+    expect(promptMsg).toContain('getNodeInfo');
+    expect(promptMsg).toContain('completeCurrentNode');
+
+    // 节点仍 RUNNING，AI 可继续之前的工作（工作流工具可用）
+    const inst = await getInstance(page, env.token, instanceId);
+    expect(inst.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('RUNNING');
+    const resumeEvent = controller2.resumes.find((r) => r.sessionId === execSessionId)!;
+    const done = await callWorkflowTool(
+      page,
+      execSessionId,
+      resumeEvent.mcpEndpoint?.token ?? execStart.mcpEndpoint!.token,
+      'completeCurrentNode',
+      { artifacts: [{ title: '开发产物', value: '计算器代码' }] },
+    );
+    expect(done.isError).toBe(false);
+    expect(done.data).toMatchObject({ status: 'DONE' });
+
+    controller2.disconnect();
   });
 });

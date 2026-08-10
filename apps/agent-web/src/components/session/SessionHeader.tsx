@@ -85,7 +85,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {status !== 'ended' && status !== 'creating' && !resuming && (
+        {status !== 'ended' && status !== 'creating' && status !== 'disconnected' && !resuming && (
           <Button
             variant="destructive"
             onClick={onClose}
@@ -99,7 +99,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             ) : '关闭'}
           </Button>
         )}
-        {(status === 'ended' || resuming) && (
+        {(status === 'ended' || status === 'disconnected' || resuming) && (
           <Button
             onClick={onContinue}
             disabled={continueDisabled}

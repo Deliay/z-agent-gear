@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useApolloClient } from '@apollo/client/react';
 import { toast } from 'sonner';
 import {
@@ -32,6 +32,7 @@ import type {
 import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
+import ResumeConfirmDialog from './ResumeConfirmDialog';
 import { useCommandState } from '../../hooks/useCommandState';
 
 interface AcpMessage {
@@ -45,6 +46,17 @@ interface AcpMessage {
 }
 
 const RESUME_TIMEOUT_MS = 30000;
+
+/**
+ * 断连恢复后自动发送的工作流继续提示词（对齐 orchestrator FALLBACK_PROMPT 语义）：
+ * 显式要求 AI 调用工作流 MCP 工具恢复/推进节点，而不是只输出文本。
+ */
+const WORKFLOW_CONTINUE_PROMPT =
+  '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到会话此前断连，现已恢复。' +
+  '你必须使用提供的工作流 MCP 工具对当前节点执行操作：先用 getNodeInfo 确认当前节点状态；' +
+  '若节点为 FAILED，先调用 resumeFailedNode 将节点恢复为运行状态；然后继续你之前的工作，' +
+  '完成时调用 completeCurrentNode（产物通过黑板工具写入），需要上游返工时调用 rejectCurrentNode 并给出明确原因，' +
+  '确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
 
 const errorMessages: Record<string, string> = {
   CONTROLLER_OFFLINE: 'Controller is offline. Please check your controller connection.',
@@ -69,6 +81,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [status, setStatus] = useState<string>('connecting');
   const [sending, setSending] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [resumeConfirmOpen, setResumeConfirmOpen] = useState(false);
+  // 断连「继续」确认后：会话 ready（SSE idling）时自动发送工作流继续提示词
+  const autoPromptAfterResumeRef = useRef(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [modes, setModes] = useState<AgentModeData[]>([]);
@@ -93,7 +108,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     variables: { id },
   });
 
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS);
+  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
+    // 断连场景：controller 重连后「继续」按钮依赖 controllerOnline 解锁，轮询保持新鲜
+    pollInterval: 10000,
+  });
 
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
@@ -104,6 +122,24 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
   const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
+
+  const handleSendMessage = useCallback(async (content: string) => {
+    if (!id) return;
+    try {
+      lastMessageIsSettingUpdateRef.current = false;
+      setSending(true);
+      await sendMessage({
+        variables: {
+          sessionId: id,
+          content,
+          type: 'text',
+        },
+      });
+    } catch {
+      console.error('Failed to send message:');
+      setSending(false);
+    }
+  }, [id, sendMessage]);
 
   useEffect(() => {
     if (sessionData?.session && !initializedRef.current) {
@@ -174,6 +210,11 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         }
         if (data.data.status === 'idling') {
           setResuming(false);
+          // 断连恢复 ready：自动发送工作流继续提示词，引导 AI 调 MCP 工具推进节点
+          if (autoPromptAfterResumeRef.current) {
+            autoPromptAfterResumeRef.current = false;
+            handleSendMessage(WORKFLOW_CONTINUE_PROMPT);
+          }
         }
         if (data.data.modes) setModes(data.data.modes);
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
@@ -203,12 +244,13 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     return () => {
       eventSource.close();
     };
-  }, [id, updateCommands]);
+  }, [id, updateCommands, handleSendMessage]);
 
   // Resume timeout protection
   useEffect(() => {
     if (!resuming) return;
     const timeout = setTimeout(() => {
+      autoPromptAfterResumeRef.current = false;
       setResuming(false);
       setStatus('ended');
       toast.error(getErrorMessage('RESUME_TIMEOUT'));
@@ -265,6 +307,24 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     }
   };
 
+  const isWorkflowNodeSession = Boolean(sessionData?.session?.workflowInstanceId);
+
+  /** 「继续」入口：断连会话先弹确认框，已结束会话直接 resume */
+  const handleContinueClick = () => {
+    if (status === 'disconnected') {
+      setResumeConfirmOpen(true);
+    } else {
+      handleResumeSession();
+    }
+  };
+
+  /** 确认让 AI 继续：工作流节点会话标记 ready 后自动发送继续提示词 */
+  const handleConfirmResume = () => {
+    setResumeConfirmOpen(false);
+    autoPromptAfterResumeRef.current = isWorkflowNodeSession;
+    handleResumeSession();
+  };
+
   const handleResumeSession = async () => {
     if (!id) return;
     setResuming(true);
@@ -305,24 +365,6 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     } catch (error) {
       console.error('Failed to set config option:', error);
       toast.error('设置配置项失败，请稍后重试');
-    }
-  };
-
-  const handleSendMessage = async (content: string) => {
-    if (!id) return;
-    try {
-      lastMessageIsSettingUpdateRef.current = false;
-      setSending(true);
-      await sendMessage({
-        variables: {
-          sessionId: id,
-          content,
-          type: 'text',
-        },
-      });
-    } catch {
-      console.error('Failed to send message:');
-      setSending(false);
     }
   };
 
@@ -405,7 +447,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         status={status}
         onClose={handleCloseSession}
         onDelete={handleDeleteSession}
-        onContinue={handleResumeSession}
+        onContinue={handleContinueClick}
         resuming={resuming}
         closing={closing}
         deleting={deleting}
@@ -436,6 +478,12 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         availableCommands={availableCommands}
         configOptions={configOptions}
         onSetConfigOption={handleSetConfigOption}
+      />
+      <ResumeConfirmDialog
+        open={resumeConfirmOpen}
+        onOpenChange={setResumeConfirmOpen}
+        onConfirm={handleConfirmResume}
+        isWorkflowNode={isWorkflowNodeSession}
       />
     </div>
   );

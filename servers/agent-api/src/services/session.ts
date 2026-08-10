@@ -243,7 +243,8 @@ export class SessionService {
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
     }
-    if (session.status !== 'ended') {
+    // ended/disconnected 均可恢复（disconnected 为 Controller 临时断连，重连后可 resume）
+    if (session.status !== 'ended' && session.status !== 'disconnected') {
       return { success: false, status: session.status, error: 'Session is not ended' };
     }
 

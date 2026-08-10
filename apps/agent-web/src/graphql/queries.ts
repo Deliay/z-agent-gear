@@ -140,6 +140,8 @@ export const GET_SESSION = gql`
         url
       }
       supportsAdditionalDirectories
+      workflowInstanceId
+      workflowNodeId
       createdAt
       updatedAt
       endedAt

@@ -154,6 +154,9 @@ export interface SessionData {
   authRequired?: boolean | null
   authMethods?: AuthMethodInfoData[] | null
   supportsAdditionalDirectories?: boolean | null
+  /** 工作流节点会话才有，普通会话为 null */
+  workflowInstanceId?: string | null
+  workflowNodeId?: string | null
   createdAt: string
   updatedAt: string
   endedAt: string | null

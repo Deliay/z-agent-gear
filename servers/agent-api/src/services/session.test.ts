@@ -957,6 +957,19 @@ describe('SessionService', () => {
       expect(result).toEqual({ success: false, status: 'creating', error: 'Session is not ended' });
     });
 
+    it('should publish acp:resume and return connecting for disconnected session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'disconnected', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: true, status: 'connecting' });
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:resume"'));
+    });
+
     it('should publish acp:resume and return connecting for ended session', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(
