@@ -41,7 +41,7 @@ Phase 1: 契约更新（contracts/）
 
 ### 验证
 
-- [ ] 契约与提案 §3.1 一致，评审通过
+- [x] 契约与提案 §3.1 一致，评审通过
 
 ---
 
@@ -69,9 +69,9 @@ cd servers/agent-api && npm run build && npm run test
 
 ### 验收 checklist
 
-- [ ] `validateTemplateGraph()` 纯函数覆盖 T1–T9 全部通过
-- [ ] 从模板复制生成快照，修改模板后副本不变
-- [ ] 黑板 remove 后数据进入 blackboardTrash
+- [x] `validateTemplateGraph()` 纯函数覆盖 T1–T9 全部通过
+- [x] 从模板复制生成快照，修改模板后副本不变
+- [x] 黑板 remove 后数据进入 blackboardTrash
 
 ---
 
@@ -93,8 +93,8 @@ cd servers/agent-api && npm run build && npm run test
 
 ### 验收 checklist
 
-- [ ] E1–E12 全部通过，非法转移错误信息人类可读
-- [ ] 引擎不直接 import Orchestrator（依赖注入/hook）
+- [x] E1–E12 全部通过，非法转移错误信息人类可读
+- [x] 引擎不直接 import Orchestrator（依赖注入/hook）
 
 ---
 
@@ -113,9 +113,9 @@ cd servers/agent-api && npm run build && npm run test
 
 ### 验收 checklist
 
-- [ ] O1–O8 全部通过
-- [ ] 兜底仅触发 1 次，无死循环
-- [ ] `sessions` 默认查询不含工作流会话
+- [x] O1–O8 全部通过
+- [x] 兜底仅触发 1 次，无死循环
+- [x] `sessions` 默认查询不含工作流会话
 
 ---
 
@@ -133,8 +133,8 @@ cd servers/agent-api && npm run build && npm run test
 
 ### 验收 checklist
 
-- [ ] 节点会话 token 可正确映射 instanceId/nodeId；普通会话调用返回未授权
-- [ ] 非法状态转移的操作类工具返回结构化错误提示
+- [x] 节点会话 token 可正确映射 instanceId/nodeId；普通会话调用返回未授权
+- [x] 非法状态转移的操作类工具返回结构化错误提示
 
 ---
 
@@ -153,8 +153,8 @@ cd servers/agent-api && npm run build && npm run test
 
 ### 验收 checklist
 
-- [ ] `npm run build && npm run test` 通过
-- [ ] 服务启动后内置模板可见且不可编辑
+- [x] `npm run build && npm run test` 通过
+- [x] 服务启动后内置模板可见且不可编辑
 
 ---
 
@@ -181,9 +181,9 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ### 验收 checklist
 
-- [ ] SessionPage 行为回归无变化
-- [ ] 模板编辑器可创建/编辑/删除模板，非法图有前端提示
-- [ ] 配置工作流表单展示「复制自模板 vX」文案
+- [x] SessionPage 行为回归无变化
+- [x] 模板编辑器可创建/编辑/删除模板，非法图有前端提示
+- [x] 配置工作流表单展示「复制自模板 vX」文案
 
 ---
 
@@ -204,8 +204,8 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ### 验收 checklist
 
-- [ ] 侧边栏出现工作流层级，工作流会话不可见于会话列表
-- [ ] 实例视图可完成人类节点、打回（弹框输入理由）、打开会话侧面板
+- [x] 侧边栏出现工作流层级，工作流会话不可见于会话列表
+- [x] 实例视图可完成人类节点、打回（弹框输入理由）、打开会话侧面板
 
 ---
 
@@ -223,7 +223,7 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ### 验收 checklist
 
-- [ ] A1–A18 全部通过
+- [x] A1–A18 全部通过
 
 ---
 
@@ -240,7 +240,7 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ### 验收 checklist
 
-- [ ] E2E-1 ~ E2E-6 全部通过
+- [x] E2E-1 ~ E2E-6 全部通过
 
 ---
 
@@ -256,7 +256,7 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ## 总体验收
 
-- [ ] 所有 Phase checklist 完成
-- [ ] `servers/agent-api` / `apps/agent-web` build + lint + test 全绿
-- [ ] API 测试 A1–A18、E2E 测试 E2E-1~6 通过
+- [x] 所有 Phase checklist 完成
+- [x] `servers/agent-api` / `apps/agent-web` build + lint + test 全绿
+- [x] API 测试 A1–A18、E2E 测试 E2E-1~6 通过
 - [ ] 使用默认「开发工作流」完成一次真实需求演示
