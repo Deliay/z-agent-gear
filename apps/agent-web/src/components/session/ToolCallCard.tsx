@@ -54,7 +54,7 @@ function renderContentItem(item: ToolCallContent, i: number) {
     if (cb.type === 'text') {
       return (
         <div key={i} className="prose prose-sm max-w-none text-foreground">
-          <div className="whitespace-pre-wrap">{cb.text}</div>
+          <div className="whitespace-pre-wrap break-all">{cb.text}</div>
         </div>
       );
     }
@@ -114,7 +114,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
                   {locations.map((loc, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm text-foreground">
                       <span className="text-muted-foreground">📄</span>
-                      <span className="font-mono">{loc.path}</span>
+                      <span className="font-mono break-all">{loc.path}</span>
                       {loc.line != null && (
                         <span className="text-xs text-muted-foreground">:{loc.line}</span>
                       )}
@@ -158,7 +158,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
             {exInput.workDir && (
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Directory: </span>
-                <span className="font-mono text-foreground">{exInput.workDir}</span>
+                <span className="font-mono break-all text-foreground">{exInput.workDir}</span>
               </div>
             )}
             {exInput.description && (
@@ -212,7 +212,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
           {filePath && (
             <div className="flex items-center gap-2 text-destructive">
               <span className="text-base">🗑️</span>
-              <span className="font-mono">{filePath}</span>
+              <span className="font-mono break-all">{filePath}</span>
             </div>
           )}
           {!filePath && (
@@ -227,9 +227,9 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
       const dest = pick(rawInput as Record<string, unknown>, ['destinationPath', 'destination_path', 'to']);
       return (
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          {source && <span className="font-mono text-foreground">{source}</span>}
+          {source && <span className="font-mono break-all text-foreground">{source}</span>}
           <span className="text-muted-foreground">→</span>
-          {dest && <span className="font-mono text-foreground">{dest}</span>}
+          {dest && <span className="font-mono break-all text-foreground">{dest}</span>}
         </div>
       );
     }
@@ -241,7 +241,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
           {query && (
             <div>
               <span className="text-xs font-medium text-muted-foreground">Query: </span>
-              <span className="rounded bg-muted px-2 py-0.5 font-mono text-foreground">"{query}"</span>
+              <span className="rounded bg-muted px-2 py-0.5 font-mono break-all text-foreground">"{query}"</span>
             </div>
           )}
         </div>
@@ -253,7 +253,7 @@ export default function ToolCallCard({ messages, expanded, onExpandedChange }: T
       return (
         <div className="rounded border border-border bg-muted/50 p-2 text-sm">
           <div className="mb-1 text-xs font-medium text-muted-foreground">💭 Thinking</div>
-          <div className="whitespace-pre-wrap text-foreground/80">{thoughts ?? '思考中...'}</div>
+          <div className="whitespace-pre-wrap break-all text-foreground/80">{thoughts ?? '思考中...'}</div>
         </div>
       );
     }

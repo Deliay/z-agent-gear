@@ -15,6 +15,8 @@ enum WorkflowNodeStatus {
   DONE
   REJECT
   REWORK
+  # 失败：阻断流程，需人工介入（MCP resumeFailedNode 恢复 RUNNING）
+  FAILED
 }
 
 # ---------- 工作流模板 ----------
@@ -94,6 +96,13 @@ type WorkflowNodeRejectInfo {
   at: String!
 }
 
+type WorkflowNodeFailInfo {
+  reason: String!
+  # 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）
+  source: String!
+  at: String!
+}
+
 type WorkflowNode {
   id: ID!
   nodeKey: String!
@@ -109,6 +118,7 @@ type WorkflowNode {
   reworkedAt: String
   reworkCount: Int!
   rejectInfo: WorkflowNodeRejectInfo
+  failInfo: WorkflowNodeFailInfo
 }
 
 type BlackboardEntry {

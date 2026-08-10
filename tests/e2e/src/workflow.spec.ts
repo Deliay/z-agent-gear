@@ -234,7 +234,7 @@ async function getInstance(page: Page, token: string, instanceId: string) {
     query WorkflowInstance($id: ID!) {
       workflowInstance(id: $id) {
         id name currentNodeNames
-        nodes { id nodeKey name type status stage sessionId reworkCount rejectInfo { reason } }
+        nodes { id nodeKey name type status stage sessionId reworkCount rejectInfo { reason } failInfo { reason source } }
         blackboard { key value }
         blackboardTrash { key value }
       }
@@ -609,13 +609,52 @@ test.describe('Workflow E2E', () => {
       'exec session idling after fallback resume',
     );
 
-    // 再次结束会话：每节点仅兜底 1 次，不再 resume
+    // 再次结束会话：每节点仅兜底 1 次，不再 resume；节点升级为 FAILED（阻断流程）
     await closeSession(page, env.token, execSessionId);
     await waitFor(() => env.controller.stops.filter((s) => s === execSessionId).length >= 2 || undefined, 15000, 'second acp:stop');
     await page.waitForTimeout(3000);
     expect(env.controller.resumes.filter((r) => r.sessionId === execSessionId)).toHaveLength(1);
     const msgsAfter = await getSessionMessagesText(page, env.token, execSessionId);
     expect(msgsAfter.filter((m) => m.includes('你身处一个自动化工作流系统'))).toHaveLength(1);
+
+    // 节点 FAILED（SESSION_STUCK），流程阻断
+    const failedNode = await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        const n = i.nodes.find((n) => n.nodeKey === 'exec')!;
+        return n.status === 'FAILED' ? n : undefined;
+      },
+      15000,
+      'exec node FAILED after second stop',
+    );
+    expect(failedNode.failInfo?.source).toBe('SESSION_STUCK');
+
+    // UI 强提醒：节点「失败」badge + 顶部阻断 banner
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(nodeCard(page, 'AI执行').getByText('失败', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('alert')).toContainText('需要人工介入');
+    await expect(page.getByRole('alert')).toContainText('AI执行');
+
+    // 人类打开会话点「继续」恢复会话（会话关闭后旧 MCP token 已失效，需重新签发），
+    // 再在对话中给出指示，AI 调 resumeFailedNode 将节点恢复为 RUNNING
+    const resumeRes = await gqlRequest(page, `
+      mutation ResumeSession($id: ID!) { resumeSession(id: $id) { success error } }
+    `, { id: execSessionId }, env.token);
+    expect((await resumeRes.json()).data.resumeSession.success).toBe(true);
+    await waitFor(
+      () => env.controller.resumes.filter((r) => r.sessionId === execSessionId).length >= 2 || undefined,
+      15000,
+      'manual acp:resume',
+    );
+    const manualResume = env.controller.resumes.filter((r) => r.sessionId === execSessionId).at(-1)!;
+    const mcpToken = manualResume.mcpEndpoint?.token ?? execStart.mcpEndpoint!.token;
+    const resumeResult = await callWorkflowTool(page, execSessionId, mcpToken, 'resumeFailedNode', {});
+    expect(resumeResult.isError).toBe(false);
+    expect(resumeResult.data).toMatchObject({ status: 'RUNNING' });
+    const instResumed = await getInstance(page, env.token, instanceId);
+    expect(instResumed.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('RUNNING');
+    expect(instResumed.nodes.find((n) => n.nodeKey === 'exec')!.failInfo).toBeNull();
 
     env.controller.disconnect();
   });

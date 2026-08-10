@@ -37,6 +37,7 @@ const NODE_STATUS_LABELS: Record<WorkflowNodeStatus, string> = {
   DONE: '已完成',
   REJECT: '已打回',
   REWORK: '返工中',
+  FAILED: '失败',
 }
 
 const NODE_STATUS_BADGE: Record<WorkflowNodeStatus, string> = {
@@ -46,6 +47,7 @@ const NODE_STATUS_BADGE: Record<WorkflowNodeStatus, string> = {
   DONE: 'bg-success/15 text-success',
   REJECT: 'bg-destructive/15 text-destructive',
   REWORK: 'bg-warning/15 text-warning',
+  FAILED: 'bg-destructive/15 text-destructive',
 }
 
 interface WorkflowNodeTreeProps {
@@ -239,6 +241,14 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                     <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
                       打回理由：{node.rejectInfo.reason}
                     </p>
+                  )}
+                  {node.failInfo && node.status === 'FAILED' && (
+                    <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+                      <p>失败原因：{node.failInfo.reason}</p>
+                      <p className="mt-0.5 text-destructive/80">
+                        需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。
+                      </p>
+                    </div>
                   )}
                   {nodeArtifacts.length > 0 && (
                     <div className="mt-2 space-y-1.5">

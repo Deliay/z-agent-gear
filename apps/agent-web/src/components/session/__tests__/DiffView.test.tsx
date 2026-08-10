@@ -32,4 +32,11 @@ describe('DiffView', () => {
     expect(screen.getByText('新建文件')).toBeDefined();
     expect(screen.queryByText('−')).toBeNull();
   });
+
+  it('should break long file paths instead of overflowing the header', () => {
+    const longPath = `src/${'deep/'.repeat(60)}file.ts`;
+    render(<DiffView oldText={'a'} newText={'b'} filePath={longPath} />);
+
+    expect(screen.getByText(longPath).className).toContain('break-all');
+  });
 });

@@ -18,6 +18,7 @@ export interface WorkflowNodeDoc {
   reworkCount: number;
   fallbackSent?: boolean;
   rejectInfo?: { reason: string; fromNodeId?: string | null; at: Date } | null;
+  failInfo?: { reason: string; source: string; at: Date } | null;
 }
 
 /** 引擎可操作的最小实例结构 */
@@ -36,7 +37,15 @@ export interface WorkflowInstanceDoc {
   save(): Promise<unknown>;
 }
 
-export type WorkflowEvent = 'start' | 'complete' | 'reject' | 'rework' | 'completeRework' | 'resume';
+export type WorkflowEvent =
+  | 'start'
+  | 'complete'
+  | 'reject'
+  | 'rework'
+  | 'completeRework'
+  | 'resume'
+  | 'fail'
+  | 'resumeFailed';
 
 export interface TransitionPayload {
   /** reject：打回原因 */
@@ -47,6 +56,8 @@ export interface TransitionPayload {
   targetNodeIds?: string[];
   /** complete/completeRework：产物列表，写入黑板 */
   artifacts?: { title: string; value: string }[];
+  /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记） */
+  source?: string;
 }
 
 /**
@@ -71,6 +82,8 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
   rework: { from: ['READY', 'RUNNING', 'DONE'], to: 'REWORK' },
   completeRework: { from: ['REWORK'], to: 'DONE' },
   resume: { from: ['REJECT'], to: 'RUNNING' },
+  fail: { from: ['RUNNING'], to: 'FAILED' },
+  resumeFailed: { from: ['FAILED'], to: 'RUNNING' },
 };
 
 const EVENT_LABEL: Record<WorkflowEvent, string> = {
@@ -80,6 +93,8 @@ const EVENT_LABEL: Record<WorkflowEvent, string> = {
   rework: '返工',
   completeRework: '返工完成',
   resume: '复工',
+  fail: '标记失败',
+  resumeFailed: '恢复运行',
 };
 
 class WorkflowEngine {
@@ -187,6 +202,23 @@ class WorkflowEngine {
       case 'resume': {
         node.status = 'RUNNING';
         await this.hooks.onNodeResume?.(instance, node);
+        break;
+      }
+      case 'fail': {
+        // 失败：阻断流程（非 DONE 下游永不激活），等待人工介入；不触发会话 hook
+        // （SESSION_STUCK 来源会话已 ended；LLM_REPORTED 来源会话保留供人类对话介入）
+        node.status = 'FAILED';
+        node.failInfo = {
+          reason: payload.reason ?? '',
+          source: payload.source ?? 'LLM_REPORTED',
+          at: new Date(),
+        };
+        break;
+      }
+      case 'resumeFailed': {
+        // 人工在节点会话中给出指示后由 LLM 调用恢复；会话仍在，无需 hook
+        node.status = 'RUNNING';
+        node.failInfo = null;
         break;
       }
     }

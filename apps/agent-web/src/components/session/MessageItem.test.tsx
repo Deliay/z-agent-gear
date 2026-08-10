@@ -30,6 +30,13 @@ describe('MessageItem', () => {
     expect(msg.closest('.flex')?.className).toContain('justify-end');
   });
 
+  it('should break long unbroken user text instead of stretching the container', () => {
+    render(<MessageItem message={{ ...userMessage, content: 'x'.repeat(500) }} />);
+    const msg = screen.getByText('x'.repeat(500));
+    expect(msg.className).toContain('whitespace-pre-wrap');
+    expect(msg.className).toContain('break-all');
+  });
+
   it('should render agent message aligned left with white style', () => {
     render(<MessageItem message={agentMessage} />);
     const msg = screen.getByText('Hello User');

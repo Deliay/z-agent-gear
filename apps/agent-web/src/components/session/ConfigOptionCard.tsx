@@ -42,7 +42,7 @@ export default function ConfigOptionCard({ messages }: ConfigOptionCardProps) {
           return (
             <div key={opt.id} className="flex gap-2">
               <span className="font-medium capitalize">{opt.id.replace(/_/g, ' ')}:</span>
-              <span className="font-mono">{value}</span>
+              <span className="font-mono min-w-0 break-all">{value}</span>
             </div>
           );
         })}

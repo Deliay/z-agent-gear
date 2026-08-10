@@ -116,6 +116,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: '操作当前节点「节点返工完成」（REWORK→DONE），重置产物并通知下游复工',
     inputSchema: { type: 'object', properties: { ...ARTIFACTS_PARAM } },
   },
+  {
+    name: 'failCurrentNode',
+    description:
+      '操作当前节点「标记失败」（RUNNING→FAILED）。当你判断任务无法继续（缺少关键信息、环境不可用、需要人类决策）时调用；' +
+      '失败后工作流阻断并提醒人类介入。人类在对话中给出明确指示后，调用 resumeFailedNode 恢复运行',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: '失败原因（必填），面向人类可读，说明为何无法继续' },
+      },
+      required: ['reason'],
+    },
+  },
+  {
+    name: 'resumeFailedNode',
+    description:
+      '操作当前节点「恢复运行」（FAILED→RUNNING）。仅在人类已在对话中给出明确处理指示后调用',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 export function getWorkflowToolDefinitions(): ToolDefinition[] {
@@ -188,7 +207,7 @@ function parseArtifacts(args: Record<string, unknown>, required: boolean): { tit
 /** 引擎错误统一包装为 INVALID_STATE（保留可读 message） */
 async function transition(
   scope: WorkflowToolScope,
-  event: 'complete' | 'reject' | 'completeRework',
+  event: 'complete' | 'reject' | 'completeRework' | 'fail' | 'resumeFailed',
   payload: TransitionPayload,
 ): Promise<unknown> {
   try {
@@ -214,6 +233,7 @@ function mapNodeInfo(node: WorkflowNodeDoc): Record<string, unknown> {
     reworkedAt: node.reworkedAt ?? null,
     reworkCount: node.reworkCount ?? 0,
     rejectInfo: node.rejectInfo ?? null,
+    failInfo: node.failInfo ?? null,
   };
 }
 
@@ -291,6 +311,15 @@ export async function callWorkflowTool(
     case 'completeCurrentRework': {
       const artifacts = parseArtifacts(args, false);
       return transition(toolScope, 'completeRework', { artifacts });
+    }
+
+    case 'failCurrentNode': {
+      const reason = requireString(args, 'reason', '标记失败必须给出人类可读的失败原因，供人工介入参考。');
+      return transition(toolScope, 'fail', { reason, source: 'LLM_REPORTED' });
+    }
+
+    case 'resumeFailedNode': {
+      return transition(toolScope, 'resumeFailed', {});
     }
 
     default:

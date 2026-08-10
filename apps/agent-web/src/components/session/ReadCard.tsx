@@ -55,7 +55,7 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
             <div className="space-y-1">
               {filePaths.map((path, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm text-foreground">
-                  <span className="font-mono">{path}</span>
+                  <span className="font-mono break-all">{path}</span>
                 </div>
               ))}
             </div>

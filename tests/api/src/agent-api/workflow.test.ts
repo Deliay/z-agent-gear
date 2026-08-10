@@ -156,7 +156,7 @@ const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
       id name currentNodeNames
-      nodes { id nodeKey type name status stage sessionId startedAt reworkedAt reworkCount rejectInfo { reason fromNodeId at } }
+      nodes { id nodeKey type name status stage sessionId startedAt reworkedAt reworkCount rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
     }
@@ -1098,5 +1098,149 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
     expect(body2.errors).toBeUndefined();
     expect(body2.data.acpServerOptions.modes).toHaveLength(2);
     expect(probeCount).toBe(1);
+  }, 40_000);
+});
+
+// ---------------------------------------------------------------------------
+// 节点失败状态（A22-A23，验收第四轮#1）
+// ---------------------------------------------------------------------------
+
+const CLOSE_SESSION = `
+  mutation CloseSession($id: ID!) { closeSession(id: $id) }
+`;
+
+interface StartEventData {
+  requestId: string;
+  sessionId: string;
+  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+}
+
+describe('Workflow Node Failure (A22-A23)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wffail');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'fail');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  /** 三节点实例（HUMAN→AI→HUMAN）推进到 exec AI 节点会话启动 */
+  async function advanceToExecRunning(tag: string) {
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-${tag}-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-${tag}-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-${tag}-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_${tag}_${Date.now()}`,
+    });
+    await sleep(500);
+    return { instanceId: inst.id as string, sessionId: startData.sessionId, mcpToken: startData.mcpEndpoint!.token };
+  }
+
+  it('A22: failCurrentNode 标记失败阻断流程，resumeFailedNode 恢复运行', async () => {
+    const { instanceId, sessionId, mcpToken } = await advanceToExecRunning('a22');
+
+    // reason 必填
+    const noReason = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'failCurrentNode', {})).body);
+    expect(noReason.isError).toBe(true);
+    expect(noReason.data.code).toBe('INVALID_PARAMS');
+
+    // LLM 主动标记失败 → FAILED + failInfo(LLM_REPORTED)，流程阻断
+    const failed = parseToolResult(
+      (await callWorkflowTool(sessionId, mcpToken, 'failCurrentNode', { reason: '缺少需求细节，无法继续' })).body,
+    );
+    expect(failed.isError).toBe(false);
+    expect(failed.data.status).toBe('FAILED');
+
+    const inst = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('FAILED');
+    expect(execNode.failInfo).toMatchObject({ reason: '缺少需求细节，无法继续', source: 'LLM_REPORTED' });
+    expect(execNode.failInfo.at).toBeTruthy();
+    expect(inst.currentNodeNames).toEqual([]);
+    // 阻断：下游人类节点保持 INITIALIZING
+    expect(inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'review').status).toBe('INITIALIZING');
+
+    // 失败状态下 complete 非法
+    const completeWhileFailed = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'completeCurrentNode', {})).body);
+    expect(completeWhileFailed.isError).toBe(true);
+    expect(completeWhileFailed.data.code).toBe('INVALID_STATE');
+
+    // 人类对话给出指示后 AI 恢复节点 → RUNNING，failInfo 清空，可正常完成
+    const resumed = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'resumeFailedNode', {})).body);
+    expect(resumed.isError).toBe(false);
+    expect(resumed.data.status).toBe('RUNNING');
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').failInfo).toBeNull();
+
+    const done = parseToolResult(
+      (await callWorkflowTool(sessionId, mcpToken, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '完成' }],
+      })).body,
+    );
+    expect(done.isError).toBe(false);
+    expect(done.data.status).toBe('DONE');
+  }, 40_000);
+
+  it('A23: 兜底提醒后会话再次停止 → 节点升级 FAILED（SESSION_STUCK）', async () => {
+    const { instanceId, sessionId } = await advanceToExecRunning('a23');
+
+    // 第一次停止：兜底 resume + 提醒提示词，节点保持 RUNNING
+    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    const resumeEvent = await waitForEvent<{ requestId: string; sessionId: string }>(fake.client, 'acp:resume', 15000);
+    fake.client.emit('acp:resume:result', { requestId: resumeEvent.requestId, sessionId, success: true });
+    await sleep(800);
+    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
+
+    // 第二次停止：不再 resume，节点升级 FAILED（SESSION_STUCK）
+    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    await sleep(1500);
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('FAILED');
+    expect(execNode.failInfo.source).toBe('SESSION_STUCK');
+    expect(inst2.currentNodeNames).toEqual([]);
   }, 40_000);
 });

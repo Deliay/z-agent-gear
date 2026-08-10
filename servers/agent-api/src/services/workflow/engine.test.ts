@@ -302,6 +302,60 @@ describe('WorkflowEngine.transition', () => {
     expect(instance.nodes[2].status).toBe('DONE');
   });
 
+  it('E13: RUNNING→FAILED（fail 携带 reason/source）：写 failInfo，阻断流程（下游不激活）', async () => {
+    const instance = linearInstance();
+    instance.nodes[0].status = 'DONE';
+    instance.nodes[1].status = 'RUNNING';
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'fail', {
+      reason: '缺少关键信息，无法继续',
+      source: 'LLM_REPORTED',
+    });
+
+    const node = instance.nodes[1];
+    expect(node.status).toBe('FAILED');
+    expect(node.failInfo).toMatchObject({ reason: '缺少关键信息，无法继续', source: 'LLM_REPORTED' });
+    expect(node.failInfo?.at).toBeInstanceOf(Date);
+    // 阻断：下游保持 INITIALIZING，不触发任何会话 hook
+    expect(instance.nodes[2].status).toBe('INITIALIZING');
+    expect(hooks.onNodeStart).not.toHaveBeenCalled();
+    expect(instance.currentNodeNames).toEqual([]);
+    expect(instance.save).toHaveBeenCalled();
+  });
+
+  it('E14: FAILED→RUNNING（resumeFailed）：清 failInfo；非 FAILED 状态拒绝', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'FAILED';
+    instance.nodes[1].failInfo = { reason: 'r', source: 'LLM_REPORTED', at: new Date() };
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'resumeFailed');
+
+    expect(instance.nodes[1].status).toBe('RUNNING');
+    expect(instance.nodes[1].failInfo).toBeNull();
+    expect(instance.currentNodeNames).toEqual(['技术方案']);
+
+    // 非 FAILED 状态拒绝 resumeFailed
+    for (const status of ['RUNNING', 'DONE', 'READY'] as const) {
+      const inst2 = linearInstance();
+      inst2.nodes[1].status = status;
+      loadInstance(inst2);
+      await expect(workflowEngine.transition('inst-1', 'n2', 'resumeFailed')).rejects.toThrow(/不允许/);
+    }
+  });
+
+  it('E15: 非 RUNNING 状态调 fail 拒绝', async () => {
+    for (const status of ['READY', 'DONE', 'FAILED', 'REJECT'] as const) {
+      const instance = linearInstance();
+      instance.nodes[1].status = status;
+      loadInstance(instance);
+      await expect(
+        workflowEngine.transition('inst-1', 'n2', 'fail', { reason: 'r' }),
+      ).rejects.toThrow(/不允许/);
+    }
+  });
+
   it('实例或节点不存在时拒绝', async () => {
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(null as never);
     await expect(workflowEngine.transition('inst-x', 'n1', 'start')).rejects.toThrow(/实例不存在/);

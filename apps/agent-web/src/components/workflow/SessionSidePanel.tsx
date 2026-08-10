@@ -22,7 +22,7 @@ export default function SessionSidePanel({ sessionId, onClose }: SessionSidePane
         <DialogHeader>
           <DialogTitle>节点会话</DialogTitle>
         </DialogHeader>
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {sessionId && <SessionView key={sessionId} sessionId={sessionId} />}
         </div>
       </DialogContent>

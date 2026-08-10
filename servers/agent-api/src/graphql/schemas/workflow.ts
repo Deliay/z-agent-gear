@@ -13,6 +13,7 @@ export const workflowTypeDefs = `#graphql
     DONE
     REJECT
     REWORK
+    FAILED
   }
 
   # ---------- 工作流模板 ----------
@@ -81,6 +82,12 @@ export const workflowTypeDefs = `#graphql
     at: String!
   }
 
+  type WorkflowNodeFailInfo {
+    reason: String!
+    source: String!
+    at: String!
+  }
+
   type WorkflowNode {
     id: ID!
     nodeKey: String!
@@ -95,6 +102,7 @@ export const workflowTypeDefs = `#graphql
     reworkedAt: String
     reworkCount: Int!
     rejectInfo: WorkflowNodeRejectInfo
+    failInfo: WorkflowNodeFailInfo
   }
 
   type BlackboardEntry {

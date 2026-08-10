@@ -11,6 +11,7 @@ export type WorkflowNodeStatus =
   | 'DONE'
   | 'REJECT'
   | 'REWORK'
+  | 'FAILED'
 
 export interface WorkflowTemplateNodeData {
   nodeKey: string
@@ -63,6 +64,13 @@ export interface WorkflowNodeRejectInfoData {
   at: string
 }
 
+export interface WorkflowNodeFailInfoData {
+  reason: string
+  /** SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode） */
+  source: string
+  at: string
+}
+
 export interface WorkflowNodeData {
   id: string
   nodeKey: string
@@ -77,6 +85,7 @@ export interface WorkflowNodeData {
   reworkedAt: string | null
   reworkCount: number
   rejectInfo: WorkflowNodeRejectInfoData | null
+  failInfo: WorkflowNodeFailInfoData | null
 }
 
 export interface BlackboardEntryData {
@@ -250,6 +259,11 @@ export const GET_WORKFLOW_INSTANCE = gql`
         rejectInfo {
           reason
           fromNodeId
+          at
+        }
+        failInfo {
+          reason
+          source
           at
         }
       }

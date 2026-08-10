@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { WORKFLOW_NODE_TYPES } from './workflow-template.js';
 
-export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK'] as const;
+export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED'] as const;
 export type WorkflowNodeStatus = (typeof WORKFLOW_NODE_STATUSES)[number];
 
 const rejectInfoSchema = new mongoose.Schema(
@@ -9,6 +9,16 @@ const rejectInfoSchema = new mongoose.Schema(
     reason: { type: String, required: true },
     // 发起打回的节点 nodeId
     fromNodeId: { type: String },
+    at: { type: Date, required: true },
+  },
+  { _id: false },
+);
+
+const failInfoSchema = new mongoose.Schema(
+  {
+    reason: { type: String, required: true },
+    // 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）
+    source: { type: String, required: true },
     at: { type: Date, required: true },
   },
   { _id: false },
@@ -33,6 +43,7 @@ const instanceNodeSchema = new mongoose.Schema(
     // 会话兜底提示词是否已发送（每节点仅 1 次，防死循环）
     fallbackSent: { type: Boolean, default: false },
     rejectInfo: { type: rejectInfoSchema, default: undefined },
+    failInfo: { type: failInfoSchema, default: undefined },
   },
   { _id: false },
 );

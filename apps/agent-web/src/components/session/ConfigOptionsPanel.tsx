@@ -115,7 +115,7 @@ export default function ConfigOptionsPanel({ configOptions, status, onSetConfigO
               className="text-xs text-foreground"
             >
               <span className="font-medium">{opt.name || opt.id.replace(/_/g, ' ')}:</span>{' '}
-              <span className="font-mono">{currentValue}</span>
+              <span className="font-mono break-all">{currentValue}</span>
             </span>
           );
         }

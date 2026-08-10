@@ -32,6 +32,7 @@ function makeNode(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     reworkedAt: null,
     reworkCount: 0,
     rejectInfo: null,
+    failInfo: null,
     ...overrides,
   };
 }
@@ -61,6 +62,24 @@ describe('节点状态标签', () => {
       />,
     );
     expect(screen.getByText('等待中')).toBeDefined();
+  });
+
+  it('FAILED 显示为「失败」并展示失败原因与人工介入引导', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          makeNode({
+            type: 'AI',
+            status: 'FAILED',
+            failInfo: { reason: '会话在系统提醒后再次停止', source: 'SESSION_STUCK', at: '2026-08-08T00:00:00Z' },
+          }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('失败', { exact: true })).toBeDefined();
+    expect(screen.getByText(/失败原因：会话在系统提醒后再次停止/)).toBeDefined();
+    expect(screen.getByText(/需要人工介入/)).toBeDefined();
   });
 });
 

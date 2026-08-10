@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import WorkflowInstancePage from '../WorkflowInstancePage';
-import type { WorkflowInstanceData } from '@/graphql/workflow';
+import { toast } from 'sonner';
+import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow';
 
 const mockUseQuery = vi.fn();
 
@@ -97,5 +98,52 @@ describe('WorkflowInstancePage 轮询刷新不打断输入', () => {
     const { container } = render(<WorkflowInstancePage />);
     expect(container.querySelector('.animate-spin')).toBeTruthy();
     expect(screen.queryByLabelText('评审 完成输入')).toBeNull();
+  });
+});
+
+describe('WorkflowInstancePage 节点失败强提醒', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeFailedInstance(): WorkflowInstanceData {
+    const instance = makeInstance();
+    instance.currentNodeNames = [];
+    instance.nodes = [
+      {
+        ...(instance.nodes[0] as WorkflowNodeData),
+        id: 'n2',
+        type: 'AI',
+        name: '代码实现',
+        status: 'FAILED',
+        failInfo: { reason: '环境不可用', source: 'LLM_REPORTED', at: '2026-08-08T00:00:00Z' },
+      } as WorkflowNodeData,
+    ];
+    return instance;
+  }
+
+  it('存在 FAILED 节点时显示阻断 banner（节点名+原因+引导）并 toast 强提醒一次', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeFailedInstance() }, loading: false });
+    const view = render(<WorkflowInstancePage />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('1 个节点失败');
+    expect(alert.textContent).toContain('代码实现');
+    expect(alert.textContent).toContain('环境不可用');
+    expect(alert.textContent).toContain('人工介入');
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain('代码实现');
+
+    // 轮询再次返回同一失败状态：toast 不重复
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeFailedInstance() }, loading: false });
+    view.rerender(<WorkflowInstancePage />);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('无 FAILED 节点时不显示 banner 也不 toast', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

@@ -90,7 +90,7 @@ describe('workflow tool-handlers', () => {
   });
 
   describe('工具定义', () => {
-    it('提供全部 10 个工具且带 inputSchema', () => {
+    it('提供全部 12 个工具且带 inputSchema', () => {
       const defs = getWorkflowToolDefinitions();
       expect(defs.map((d) => d.name).sort()).toEqual(
         [
@@ -104,6 +104,8 @@ describe('workflow tool-handlers', () => {
           'completeCurrentNode',
           'rejectCurrentNode',
           'completeCurrentRework',
+          'failCurrentNode',
+          'resumeFailedNode',
         ].sort(),
       );
       for (const def of defs) {
@@ -273,6 +275,38 @@ describe('workflow tool-handlers', () => {
       ).rejects.toSatisfy(expectToolError('INVALID_PARAMS'));
       await expect(callWorkflowTool(SCOPE, 'rejectCurrentNode', {})).rejects.toSatisfy(
         expectToolError('INVALID_PARAMS'),
+      );
+    });
+
+    it('failCurrentNode 走引擎 fail 转移（reason 必填，source=LLM_REPORTED）', async () => {
+      loadInstance();
+      vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n2', status: 'FAILED' } as never);
+
+      const result = await callWorkflowTool(SCOPE, 'failCurrentNode', { reason: '缺少关键信息' });
+
+      expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n2', 'fail', {
+        reason: '缺少关键信息',
+        source: 'LLM_REPORTED',
+      });
+      expect(result).toMatchObject({ nodeId: 'n2', status: 'FAILED' });
+
+      await expect(callWorkflowTool(SCOPE, 'failCurrentNode', {})).rejects.toSatisfy(
+        expectToolError('INVALID_PARAMS'),
+      );
+    });
+
+    it('resumeFailedNode 走引擎 resumeFailed 转移，引擎错误包装为 INVALID_STATE', async () => {
+      loadInstance();
+      vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n2', status: 'RUNNING' } as never);
+
+      const result = await callWorkflowTool(SCOPE, 'resumeFailedNode', {});
+
+      expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n2', 'resumeFailed', {});
+      expect(result).toMatchObject({ nodeId: 'n2', status: 'RUNNING' });
+
+      vi.mocked(workflowEngine.transition).mockRejectedValue(new Error('节点当前状态为 RUNNING，不允许执行「恢复运行」'));
+      await expect(callWorkflowTool(SCOPE, 'resumeFailedNode', {})).rejects.toSatisfy(
+        expectToolError('INVALID_STATE'),
       );
     });
 

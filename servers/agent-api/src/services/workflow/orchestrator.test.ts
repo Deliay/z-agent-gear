@@ -279,11 +279,15 @@ describe('WorkflowOrchestrator', () => {
     expect(instance.nodes[0].fallbackSent).toBe(true);
     expect(instance.save).toHaveBeenCalled();
 
-    // 第二次不再发送（防死循环）
+    // 第二次停止：不再 resume（防死循环），节点升级为 FAILED（阻断流程等待人工介入）
     vi.clearAllMocks();
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
     await workflowOrchestrator.handleSessionEnded('sess-2');
     expect(sessionService.resume).not.toHaveBeenCalled();
     expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('FAILED');
+    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_STUCK' });
+    expect(instance.save).toHaveBeenCalled();
   });
 
   it('O7: 兜底——会话 ended 但节点已转移（非 RUNNING）时不发送兜底提示词', async () => {

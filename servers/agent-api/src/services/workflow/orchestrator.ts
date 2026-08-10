@@ -126,7 +126,8 @@ class WorkflowOrchestrator {
 
   /**
    * 会话兜底：会话 ended 且绑定节点仍 RUNNING（存续期内未转移）时，
-   * resume 会话并发送兜底提示词。每节点仅 1 次（fallbackSent），防止死循环。
+   * resume 会话并发送兜底提示词。每节点仅提醒 1 次（fallbackSent）；
+   * 提醒后仍停止 → 节点升级为 FAILED，阻断流程等待人工介入。
    */
   async handleSessionEnded(sessionId: string): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
@@ -134,7 +135,15 @@ class WorkflowOrchestrator {
     })) as unknown as WorkflowInstanceDoc | null;
     if (!instance) return;
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
-    if (!node || node.status !== 'RUNNING' || node.fallbackSent) return;
+    if (!node || node.status !== 'RUNNING') return;
+
+    if (node.fallbackSent) {
+      await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+        reason: '会话在系统提醒后再次停止，节点未能推进',
+        source: 'SESSION_STUCK',
+      });
+      return;
+    }
 
     node.fallbackSent = true;
     await instance.save();

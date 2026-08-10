@@ -68,6 +68,7 @@ function mapConfigured(doc: Doc) {
 
 function mapInstanceNode(node: Doc) {
   const rejectInfo = node.rejectInfo as Doc | null | undefined;
+  const failInfo = node.failInfo as Doc | null | undefined;
   return {
     id: node.nodeId,
     nodeKey: node.nodeKey,
@@ -84,6 +85,9 @@ function mapInstanceNode(node: Doc) {
     // 归一化：缺 reason 的空对象视为 null
     rejectInfo: rejectInfo?.reason
       ? { reason: rejectInfo.reason, fromNodeId: rejectInfo.fromNodeId ?? null, at: toIso(rejectInfo.at) }
+      : null,
+    failInfo: failInfo?.reason
+      ? { reason: failInfo.reason, source: failInfo.source, at: toIso(failInfo.at) }
       : null,
   };
 }

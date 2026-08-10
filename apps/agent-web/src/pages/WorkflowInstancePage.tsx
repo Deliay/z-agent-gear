@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@apollo/client/react'
+import { toast } from 'sonner'
 import {
   GET_WORKFLOW_INSTANCE,
   type GetWorkflowInstanceQuery,
@@ -25,6 +26,19 @@ export default function WorkflowInstancePage() {
   })
 
   const instance = data?.workflowInstance
+  const nodes = instance?.nodes
+
+  // 失败节点强提醒：toast 每个节点仅一次（轮询会反复返回同一失败状态）
+  const toastedFailedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!nodes) return
+    for (const node of nodes) {
+      if (node.status === 'FAILED' && !toastedFailedRef.current.has(node.id)) {
+        toastedFailedRef.current.add(node.id)
+        toast.error(`工作流节点「${node.name}」失败，需要人工介入`, { duration: 10000 })
+      }
+    }
+  }, [nodes])
 
   if (loading && !instance) {
     return (
@@ -42,6 +56,8 @@ export default function WorkflowInstancePage() {
     )
   }
 
+  const failedNodes = instance.nodes.filter((node) => node.status === 'FAILED')
+
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="mb-4 flex items-center gap-2">
@@ -57,6 +73,25 @@ export default function WorkflowInstancePage() {
           <Badge variant="secondary">暂无执行中的节点</Badge>
         )}
       </div>
+
+      {failedNodes.length > 0 && (
+        <div
+          role="alert"
+          className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+        >
+          <p className="text-sm font-semibold text-destructive">
+            ⚠️ {failedNodes.length} 个节点失败，流程已阻断，需要人工介入
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-destructive/90">
+            {failedNodes.map((node) => (
+              <li key={node.id}>
+                「{node.name}」：{node.failInfo?.reason || '未提供失败原因'}
+                （打开节点会话给出处理指示，AI 确认后会恢复节点运行）
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <WorkflowNodeTree instance={instance} onOpenSession={setSideSessionId} />
