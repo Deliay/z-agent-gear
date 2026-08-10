@@ -134,6 +134,27 @@ export const sessionTypeDefs = `#graphql
     checkedAt: String
   }
 
+  type AcpModeOption {
+    id: String!
+    name: String!
+    description: String
+  }
+
+  type AcpModelOption {
+    id: String!
+    name: String!
+    provider: String
+  }
+
+  # 指定 ACP 工具的 Mode/模型选项（由 controller 拉起空实例探测）
+  type AcpServerOptions {
+    modes: [AcpModeOption!]!
+    models: [AcpModelOption!]!
+    currentModeId: String
+    currentModelId: String
+    probedAt: String
+  }
+
   type HistorySessionInfo {
     sessionId: String!
     title: String
@@ -180,6 +201,7 @@ export const sessionTypeDefs = `#graphql
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
+    acpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
     listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   }
 

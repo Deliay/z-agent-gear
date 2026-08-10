@@ -172,6 +172,18 @@ export const GET_ACP_CAPABILITIES = gql`
   }
 `
 
+export const GET_ACP_SERVER_OPTIONS = gql`
+  query GetAcpServerOptions($controllerId: ID!, $acpServerType: AcpServerType!) {
+    acpServerOptions(controllerId: $controllerId, acpServerType: $acpServerType) {
+      modes { id name description }
+      models { id name provider }
+      currentModeId
+      currentModelId
+      probedAt
+    }
+  }
+`
+
 export const GET_CONTROLLERS = gql`
   query GetControllers {
     controllers {

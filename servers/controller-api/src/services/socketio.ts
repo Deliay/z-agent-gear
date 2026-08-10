@@ -8,6 +8,7 @@ import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { acpOptionsProber } from './acp-options-prober.js';
 import { folderBrowserService } from './folder-browser.js';
 import { gitBrowserService } from './git-browser.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
@@ -88,6 +89,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
         authenticated = true;
         socket.data.keyId = keyId;
         socket.data.userId = userId;
+        socket.data.controllerId = controller._id.toString();
         socket.data.lastIp = socket.handshake.address;
         socket.join(`user:${userId}`);
 
@@ -195,6 +197,20 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
       if (!authenticated) return;
       acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);
+    });
+
+    socket.on('acp:probe-options:result', async (payload: {
+      requestId: string;
+      serverType: string;
+      success: boolean;
+      modes?: Array<{ id: string; name: string; description?: string }>;
+      availableModels?: Array<{ id: string; name: string; provider?: string }>;
+      currentModeId?: string | null;
+      currentModelId?: string | null;
+      error?: string;
+    }) => {
+      if (!authenticated || !socket.data.controllerId) return;
+      await acpOptionsProber.handleProbeResult(socket.data.controllerId, payload);
     });
 
     socket.on('acp:start:result', async (payload: {

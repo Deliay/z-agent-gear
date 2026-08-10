@@ -183,6 +183,29 @@ describe('WorkflowInstanceService.completeHumanNode', () => {
     ]);
   });
 
+  it('下游人类节点已被引擎激活（RUNNING）：跳过 start 直接 complete', async () => {
+    const instance = {
+      _id: oid('inst-1'),
+      userId: oid('user-1'),
+      nodes: [
+        { nodeId: 'n1', nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', status: 'DONE', dependsOn: [] },
+        { nodeId: 'n2', nodeKey: 'review', type: 'HUMAN', name: '评审', status: 'RUNNING', dependsOn: ['n1'] },
+      ],
+    };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
+    vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
+
+    await workflowInstanceService.completeHumanNode('user-1', 'inst-1', 'n2', '同意方案');
+
+    expect(workflowEngine.transition).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(workflowEngine.transition).mock.calls[0]).toEqual([
+      'inst-1',
+      'n2',
+      'complete',
+      { artifacts: [{ title: '输入', value: '同意方案' }] },
+    ]);
+  });
+
   it('非人类节点拒绝人工完成', async () => {
     const instance = {
       _id: oid('inst-1'),

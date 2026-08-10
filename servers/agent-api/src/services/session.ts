@@ -503,6 +503,50 @@ export class SessionService {
     }));
   }
 
+  /**
+   * 探测指定 ACP 工具的 Mode/模型选项（controller 拉起空实例获得）。
+   * 缓存优先（acp:options:<controllerId>:<serverType>，由 controller-api 写入）；
+   * 未命中时发布 acp:probe-options 命令并轮询等待结果（最长 35s，覆盖 30s 探测超时）。
+   * 探测失败返回空选项（probedAt=null），由前端回退手动输入。
+   */
+  async getAcpServerOptions(
+    controllerId: string,
+    acpServerType: string,
+    userId: string,
+  ): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    const redis = getRedisClient();
+    const cacheKey = `acp:options:${controllerId}:${acpServerType}`;
+
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as Record<string, unknown>;
+    }
+
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:probe-options',
+      requestId,
+      controllerId,
+      serverType: acpServerType,
+    }));
+
+    for (let i = 0; i < 70; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await redis.get(cacheKey);
+      if (result) {
+        return JSON.parse(result) as Record<string, unknown>;
+      }
+    }
+
+    // 超时 — 返回空选项
+    return { modes: [], models: [], currentModeId: null, currentModelId: null, probedAt: null };
+  }
+
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {

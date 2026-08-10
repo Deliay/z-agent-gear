@@ -4,6 +4,7 @@ import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import { acpSessionManager } from './acp-session-manager.js';
 import { acpCapabilityDetector } from './acp-capability-detector.js';
+import { acpOptionsProber } from './acp-options-prober.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 import { folderBrowserService } from './folder-browser.js';
 import { gitBrowserService } from './git-browser.js';
@@ -74,6 +75,8 @@ export class SessionCommandService {
             await this.handleAcpCancel(command.sessionId);
           } else if (command.type === 'acp:check' && command.requestId && command.controllerId) {
             await this.handleAcpCheck(command.requestId, command.controllerId);
+          } else if (command.type === 'acp:probe-options' && command.requestId && command.controllerId && command.serverType) {
+            await this.handleAcpProbeOptions(command.requestId, command.controllerId, command.serverType);
           } else if (command.type === 'acp:stop' && command.sessionId) {
             await this.handleAcpStop(command.sessionId, command.reason || 'user_request');
           } else if (command.type === 'fs:browse' && command.requestId && command.controllerId) {
@@ -208,6 +211,32 @@ export class SessionCommandService {
     // Use the capability detector to send acp:check and wait for result
     const servers = await acpCapabilityDetector.detectCapabilities(socket, controllerId);
     console.log(`ACP capabilities detected for ${controllerId}:`, servers);
+  }
+
+  private async handleAcpProbeOptions(requestId: string, controllerId: string, serverType: string): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for probe-options: ${controllerId}`);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller offline for probe-options: ${controllerId}`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for probe-options: ${socketId}`);
+      return;
+    }
+
+    const options = await acpOptionsProber.probeOptions(socket, controllerId, serverType);
+    console.log(`ACP options probed for ${controllerId}/${serverType}: modes=${options.modes.length} models=${options.models.length} requestId=${requestId}`);
   }
 
   private async publishStatus(sessionId: string, status: string, error?: string): Promise<void> {

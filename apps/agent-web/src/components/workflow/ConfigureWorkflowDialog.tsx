@@ -22,8 +22,8 @@ import {
   SelectItem,
   SelectItemText,
 } from '@/components/ui/select'
-import { GET_CONTROLLERS, GET_ACP_CAPABILITIES } from '@/graphql/queries'
-import type { GetControllersQuery, GetAcpCapabilitiesQuery } from '@/graphql/types'
+import { GET_CONTROLLERS, GET_ACP_CAPABILITIES, GET_ACP_SERVER_OPTIONS } from '@/graphql/queries'
+import type { GetControllersQuery, GetAcpCapabilitiesQuery, GetAcpServerOptionsQuery } from '@/graphql/types'
 import {
   GET_WORKFLOW_TEMPLATES,
   GET_CONFIGURED_WORKFLOWS,
@@ -39,6 +39,117 @@ interface AgentConfigForm {
   modeId: string
   modelId: string
   initNewWorktree: boolean
+}
+
+/** 下拉「留空」哨兵值（Select 不接受空字符串） */
+const EMPTY_OPTION_VALUE = '__default__'
+
+/**
+ * Mode/模型字段：选中 Harness 工具后由 controller 拉起空实例探测可选选项。
+ * 探测到选项 → 下拉选择（含「留空」项）；探测中/失败/工具不支持 → 回退文本输入。
+ */
+function AgentOptionField({
+  label,
+  ariaLabel,
+  value,
+  options,
+  probing,
+  onChange,
+}: {
+  label: string
+  ariaLabel: string
+  value: string
+  options: { id: string; name: string }[]
+  probing: boolean
+  onChange: (v: string) => void
+}) {
+  if (options.length === 0) {
+    return (
+      <div className="space-y-1.5">
+        <Label>{label}</Label>
+        <Input
+          aria-label={ariaLabel}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="留空则由会话内切换"
+        />
+        {probing && <p className="text-xs text-muted-foreground">正在拉起空实例探测可选选项…</p>}
+      </div>
+    )
+  }
+
+  const known = options.some((o) => o.id === value)
+  const displayName = value === '' ? '留空（默认）' : (options.find((o) => o.id === value)?.name ?? value)
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Select
+        value={value || EMPTY_OPTION_VALUE}
+        onValueChange={(v) => v && onChange(v === EMPTY_OPTION_VALUE ? '' : v)}
+      >
+        <SelectTrigger aria-label={ariaLabel}>
+          <SelectValue>{displayName}</SelectValue>
+          <SelectIcon />
+        </SelectTrigger>
+        <SelectPopup>
+          <SelectItem value={EMPTY_OPTION_VALUE}>
+            <SelectItemText>留空（默认）</SelectItemText>
+          </SelectItem>
+          {options.map((o) => (
+            <SelectItem key={o.id} value={o.id}>
+              <SelectItemText>{o.name}</SelectItemText>
+            </SelectItem>
+          ))}
+          {value && !known && (
+            <SelectItem value={value}>
+              <SelectItemText>{value}（当前值）</SelectItemText>
+            </SelectItem>
+          )}
+        </SelectPopup>
+      </Select>
+    </div>
+  )
+}
+
+/** 单个 AI 节点的 Mode/模型字段组：按所选工具独立发起选项探测 */
+function AgentNodeOptionFields({
+  controllerId,
+  nodeName,
+  config,
+  onChange,
+}: {
+  controllerId: string
+  nodeName: string
+  config: AgentConfigForm
+  onChange: (patch: Partial<AgentConfigForm>) => void
+}) {
+  const { data, loading } = useQuery<GetAcpServerOptionsQuery>(GET_ACP_SERVER_OPTIONS, {
+    variables: { controllerId, acpServerType: config.acpServerType },
+    skip: !controllerId || !config.acpServerType,
+  })
+  const probing = Boolean(config.acpServerType) && loading
+  const modes = data?.acpServerOptions.modes ?? []
+  const models = data?.acpServerOptions.models ?? []
+  return (
+    <>
+      <AgentOptionField
+        label="Mode（可选）"
+        ariaLabel={`${nodeName} Mode`}
+        value={config.modeId}
+        options={modes}
+        probing={probing}
+        onChange={(v) => onChange({ modeId: v })}
+      />
+      <AgentOptionField
+        label="模型（可选）"
+        ariaLabel={`${nodeName} 模型`}
+        value={config.modelId}
+        options={models}
+        probing={probing}
+        onChange={(v) => onChange({ modelId: v })}
+      />
+    </>
+  )
 }
 
 interface ConfigureWorkflowDialogProps {
@@ -317,28 +428,12 @@ export default function ConfigureWorkflowDialog({
                           <p className="text-xs text-muted-foreground">该 Controller 暂无可用工具</p>
                         )}
                       </div>
-                      <div className="space-y-1.5">
-                        <Label>Mode（可选）</Label>
-                        <Input
-                          aria-label={`${node.name} Mode`}
-                          value={config.modeId}
-                          onChange={(e) =>
-                            updateAgentConfig(node.nodeKey, { modeId: e.target.value })
-                          }
-                          placeholder="留空则由会话内切换"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>模型（可选）</Label>
-                        <Input
-                          aria-label={`${node.name} 模型`}
-                          value={config.modelId}
-                          onChange={(e) =>
-                            updateAgentConfig(node.nodeKey, { modelId: e.target.value })
-                          }
-                          placeholder="留空则由会话内切换"
-                        />
-                      </div>
+                      <AgentNodeOptionFields
+                        controllerId={controllerId}
+                        nodeName={node.name}
+                        config={config}
+                        onChange={(patch) => updateAgentConfig(node.nodeKey, patch)}
+                      />
                     </div>
                     <div className="flex items-center gap-2">
                       <Switch

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -60,10 +60,23 @@ function HumanNodeActions({
   instanceId: string
   node: WorkflowNodeData
 }) {
-  const [input, setInput] = useState('')
+  // 实例页 5s 轮询期间工作流持续流转，节点状态翻转会使本组件卸载重挂；
+  // 输入内容按 instanceId+nodeId 持久化到 localStorage，刷新/重挂后自动恢复，完成/打回后清除。
+  const draftKey = `workflow-node-draft:${instanceId}:${node.id}`
+  const [input, setInput] = useState(
+    () => localStorage.getItem(draftKey) ?? '',
+  )
   const [rejectOpen, setRejectOpen] = useState(false)
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (input) {
+      localStorage.setItem(draftKey, input)
+    } else {
+      localStorage.removeItem(draftKey)
+    }
+  }, [draftKey, input])
 
   const [completeHumanNode] = useMutation(COMPLETE_HUMAN_NODE)
   const [rejectNode] = useMutation(REJECT_NODE)
@@ -78,6 +91,7 @@ function HumanNodeActions({
         refetchQueries: refetch,
       })
       setInput('')
+      localStorage.removeItem(draftKey)
       toast.success('节点已完成')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '操作失败，请重试')

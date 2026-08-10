@@ -48,6 +48,20 @@ export const sessionResolvers = {
       }
       return sessionService.getAcpCapabilities(args.controllerId, context.currentUser.id);
     },
+    acpServerOptions: async (
+      _parent: unknown,
+      args: { controllerId: string; acpServerType: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionService.getAcpServerOptions(
+        args.controllerId,
+        args.acpServerType,
+        context.currentUser.id,
+      );
+    },
     listHistorySessions: async (
       _parent: unknown,
       args: { controllerId: string; workspaceId: string; acpServerType?: string },
