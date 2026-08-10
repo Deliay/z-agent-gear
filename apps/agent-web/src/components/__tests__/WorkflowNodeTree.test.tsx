@@ -259,6 +259,19 @@ describe('节点折叠（移动端适配）', () => {
     expect(screen.queryByText('实现计算器')).toBeNull();
   });
 
+  it('REWORK 人类节点显示完成/打回操作区（被打回后可重新提交）', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ type: 'HUMAN', status: 'REWORK', reworkCount: 1 })])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    // REWORK 默认展开，操作区可见
+    expect(screen.getByLabelText('评审 完成输入')).toBeDefined();
+    expect(screen.getByRole('button', { name: '完成', exact: true })).toBeDefined();
+    expect(screen.getByRole('button', { name: '打回', exact: true })).toBeDefined();
+  });
+
   it('展开的节点可手动折叠', () => {
     render(
       <WorkflowNodeTree

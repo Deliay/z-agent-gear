@@ -79,7 +79,8 @@ class WorkflowInstanceService {
     });
   }
 
-  /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板 */
+  /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板；
+   *  REWORK（被 AI 打回）时走 completeRework 重新提交：重置旧产物入垃圾桶、复工下游 REJECT 节点 */
   async completeHumanNode(userId: string, instanceId: string, nodeId: string, input?: string | null) {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
@@ -91,6 +92,12 @@ class WorkflowInstanceService {
     }
     if (node.type !== 'HUMAN') {
       throw new Error(`节点「${node.name}」不是人类节点，不能人工完成`);
+    }
+    // REWORK：被下游打回后重新提交，走 completeRework（重置产物 + 复工下游）
+    if (node.status === 'REWORK') {
+      return workflowEngine.transition(instanceId, nodeId, 'completeRework', {
+        artifacts: input ? [{ title: '输入', value: input }] : [],
+      });
     }
     // 下游人类节点在上游全部 DONE 时会被引擎自动激活为 RUNNING（「待人工处理」），
     // 此时无需补 start；READY 时才需要 start→complete 组合。其余非法状态由 complete 转移报错。

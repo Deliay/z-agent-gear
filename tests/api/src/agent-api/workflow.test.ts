@@ -1396,7 +1396,7 @@ function chainTemplateInput(name: string) {
   };
 }
 
-describe('Workflow Chain Reject & Instance Delete (A25-A26)', () => {
+describe('Workflow Chain Reject & Instance Delete (A25-A27)', () => {
   let token = '';
   let fake: FakeController;
   let workspaceId = '';
@@ -1590,5 +1590,79 @@ describe('Workflow Chain Reject & Instance Delete (A25-A26)', () => {
     // 二次删除幂等报错（已删除视为不存在）
     const del2 = await (await gqlRequest(DELETE_WORKFLOW_INSTANCE, { id: instanceId }, token)).json();
     expect(del2.errors).toBeDefined();
+  }, 60_000);
+
+  it('A27: AI 打回人类节点后，人类可重新提交（REWORK 人类节点 completeHumanNode → completeRework）', async () => {
+    // 三节点实例（H→AI→H）推进到 exec 会话启动
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a27-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a27-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'review' },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a27-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    // acp:start 监听器在 complete 调用前挂上（防事件先于监听到达）
+    const startPromise = answerNextStart('a27');
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const execSess = await startPromise;
+
+    // AI（exec）打回人类提交：exec REJECT，input（HUMAN）进入 REWORK
+    const rej = parseToolResult(
+      (await callWorkflowTool(execSess.sessionId, execSess.mcpToken, 'rejectCurrentNode', {
+        reason: '需求描述不清楚，请补充',
+      })).body,
+    );
+    expect(rej.isError).toBe(false);
+    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'input').status).toBe('REWORK');
+
+    // 人类重新提交：REWORK → completeRework → DONE，旧产物入垃圾桶，exec 复工 RUNNING
+    // （REJECT 节点会话仍然存活，复工走 onNodeResume 推送消息而非 acp:resume）
+    const resumeMsgPromise = waitForEvent<{ sessionId: string; message: { content: string } }>(
+      fake.client,
+      'acp:message',
+      15000,
+    );
+    const redo = await (await gqlRequest(
+      COMPLETE_HUMAN_NODE,
+      { instanceId, nodeId: inputNode.id, input: '做一个支持加减乘除的计算器' },
+      token,
+    )).json();
+    expect(redo.errors).toBeUndefined();
+    expect(redo.data.completeHumanNode.status).toBe('DONE');
+
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
+    const artifactKey = `${inputNode.id}-需求输入-产物-输入`;
+    expect(inst2.blackboard.find((e: Record<string, any>) => e.key === artifactKey)?.value).toBe('做一个支持加减乘除的计算器');
+    expect(inst2.blackboardTrash.find((e: Record<string, any>) => e.key === artifactKey)?.value).toBe('做一个计算器');
+
+    // exec 会话收到复工通知消息
+    const resumeMsg = await resumeMsgPromise;
+    expect(resumeMsg.sessionId).toBe(execSess.sessionId);
   }, 60_000);
 });

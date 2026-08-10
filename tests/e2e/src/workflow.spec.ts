@@ -1143,4 +1143,47 @@ test.describe('Workflow E2E', () => {
 
     env.controller.disconnect();
   });
+
+  // -------------------------------------------------------------------------
+  // E2E-13 AI 打回人类节点后，人类节点可重新提交（REWORK 完成返工）
+  // -------------------------------------------------------------------------
+  test('E2E-13: human node rejected by AI can resubmit via node actions (REWORK rework completion)', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e13');
+    const instanceName = `wf-e13-实例-${Date.now().toString(36)}`;
+    const { instanceId, inputNode, execStart } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // AI（exec）打回人类提交：exec 已打回，input 进入返工
+    const rej = await callWorkflowTool(
+      page,
+      execStart.sessionId,
+      execStart.mcpEndpoint!.token,
+      'rejectCurrentNode',
+      { reason: '需求描述不清楚，请补充' },
+    );
+    expect(rej.isError).toBe(false);
+
+    // UI：input 节点返工中（默认展开），可重新输入并提交
+    const inputCard = nodeCard(page, '需求输入');
+    await expect(inputCard.getByText('返工中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, 'AI执行').getByText('已打回', { exact: true })).toBeVisible();
+    await inputCard.getByLabel('需求输入 完成输入').fill('做一个支持加减乘除的计算器');
+    await inputCard.getByRole('button', { name: '完成', exact: true }).click();
+
+    // input 完成返工（DONE 默认折叠），exec 复工执行中
+    await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(inputCard.getByText('返工 1 次')).toBeHidden();
+
+    // API 校验：新产物上黑板，旧产物入垃圾桶
+    const inst = await getInstance(page, env.token, instanceId);
+    const artifactKey = `${inputNode.id}-需求输入-产物-输入`;
+    expect(inst.blackboard.find((e) => e.key === artifactKey)?.value).toBe('做一个支持加减乘除的计算器');
+    expect(inst.blackboardTrash.find((e) => e.key === artifactKey)?.value).toBe('做一个计算器');
+
+    env.controller.disconnect();
+  });
 });

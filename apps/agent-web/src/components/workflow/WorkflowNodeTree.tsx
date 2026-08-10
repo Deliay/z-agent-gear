@@ -300,7 +300,7 @@ function NodeCard({
         </div>
       )}
       {node.type === 'HUMAN' &&
-        (node.status === 'READY' || node.status === 'RUNNING') && (
+        (node.status === 'READY' || node.status === 'RUNNING' || node.status === 'REWORK') && (
           <HumanNodeActions instanceId={instanceId} node={node} />
         )}
     </div>

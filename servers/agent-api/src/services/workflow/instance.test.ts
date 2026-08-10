@@ -222,6 +222,28 @@ describe('WorkflowInstanceService.completeHumanNode', () => {
     ]);
   });
 
+  it('REWORK 人类节点重新提交：走 completeRework 转移（重置产物入垃圾桶、复工下游）', async () => {
+    const instance = {
+      _id: oid('inst-1'),
+      userId: oid('user-1'),
+      nodes: [
+        { nodeId: 'n1', nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', status: 'REWORK', dependsOn: [], reworkCount: 1 },
+      ],
+    };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
+    vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
+
+    await workflowInstanceService.completeHumanNode('user-1', 'inst-1', 'n1', '修订后的需求');
+
+    expect(workflowEngine.transition).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(workflowEngine.transition).mock.calls[0]).toEqual([
+      'inst-1',
+      'n1',
+      'completeRework',
+      { artifacts: [{ title: '输入', value: '修订后的需求' }] },
+    ]);
+  });
+
   it('非人类节点拒绝人工完成', async () => {
     const instance = {
       _id: oid('inst-1'),

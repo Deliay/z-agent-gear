@@ -205,7 +205,7 @@ type Mutation {
   deleteConfiguredWorkflow(id: ID!): Boolean!
   # 实例化：首节点（人类）READY，其余 INITIALIZING
   instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
-  # 人类节点完成（input 为产物文本，写入黑板）
+  # 人类节点完成（input 为产物文本，写入黑板；REWORK 状态时走 completeRework 重新提交：重置产物入垃圾桶并复工下游）
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
