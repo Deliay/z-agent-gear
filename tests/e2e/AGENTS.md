@@ -199,6 +199,19 @@ npx playwright test
 | 取消对话框 | 点击「取消」→ 对话框关闭 |
 | 离线 controller | 离线 controller 不显示端口转发 section |
 
+### Workflow E2E (`workflow.spec.ts`)
+
+> 实用主义原则：实例准备用 GraphQL API 做 setup；Agent 行为（调 MCP 工具、结束会话）用 fake controller 捕获 socket 事件（acp:start/resume/stop/message）+ HTTP 调 `/mcp/<sessionId>/agent-workflow-tools` 模拟；UI 只驱动关键路径。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-1 实例化 → 人类节点输入 → AI 节点拉起 | 侧边栏实例化对话框创建实例 → 实例页完成人类节点 → AI 节点状态推进为执行中；API 校验会话打标（workflowInstanceId/workflowNodeId）；侧边栏会话列表不可见工作流会话但实例入口可见 |
+| E2E-2 AI 节点完成接力 | fake controller 用 acp:start 的 mcpEndpoint.token 调 completeCurrentNode → 下游会话收到 acp:start（首条消息提示词含上游产物）、上游会话收到 acp:stop 且状态 ended |
+| E2E-3 打回 → 返工 → 复工 | rejectNode 打回 → UI 显示已打回/打回理由/返工中；原会话收到 acp:resume 且消息含打回原因；completeCurrentRework（resume 新 token）→ 下游 REJECT→RUNNING 并收到复工消息，旧产物入垃圾桶 |
+| E2E-4 会话兜底 | closeSession 且节点未转移 → 会话被 resume 且收到兜底提示词；再次结束不再 resume（每节点仅 1 次） |
+| E2E-5 实例视图 UI | 节点树按阶段分组、状态/类型 badge、黑板面板产物可见、点击「会话」打开侧面板（SessionView 渲染节点提示词） |
+| E2E-6 设置页管理 UI | 工作流 section 可见；TemplateEditorDialog 创建模板；内置模板只读（查看对话框无保存按钮）；从内置模板「配置工作流」并显示「本配置复制自模板」文案；已配置工作流卡片显示「复制自模板 v1」 |
+
 ### ACP Permission Reminder E2E (`permission.spec.ts`)
 
 | 测试 | 描述 |

@@ -172,6 +172,20 @@ export const GET_WORKFLOW_TEMPLATES = gql`
   ${TEMPLATE_NODE_FIELDS}
 `
 
+const CONFIGURED_NODE_FIELDS = gql`
+  fragment ConfiguredNodeFields on ConfiguredWorkflowNode {
+    nodeKey
+    type
+    name
+    description
+    stage
+    prompts
+    artifactTitles
+    dependsOn
+    requiresWorktree
+  }
+`
+
 export const GET_CONFIGURED_WORKFLOWS = gql`
   query GetConfiguredWorkflows($controllerId: ID) {
     configuredWorkflows(controllerId: $controllerId) {
@@ -181,7 +195,7 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
       sourceTemplateId
       sourceTemplateVersion
       nodes {
-        ...TemplateNodeFields
+        ...ConfiguredNodeFields
         agentConfig {
           acpServerType
           modeId
@@ -193,7 +207,7 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
       updatedAt
     }
   }
-  ${TEMPLATE_NODE_FIELDS}
+  ${CONFIGURED_NODE_FIELDS}
 `
 
 export const GET_WORKFLOW_INSTANCES = gql`

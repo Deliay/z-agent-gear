@@ -137,6 +137,10 @@ class WorkflowEngine {
         for (const downstream of this.downstreamsOf(instance, node)) {
           await this.apply(instance, downstream, 'start', {});
         }
+        // 先落库再结束本会话：onNodeDone 关闭会话会触发兜底检查（读取 DB 节点状态），
+        // 若此时新状态未持久化，兜底逻辑会误读节点仍为 RUNNING 而错误 resume 会话
+        this.refreshCurrentNodeNames(instance);
+        await instance.save();
         await this.hooks.onNodeDone?.(instance, node);
         break;
       }
