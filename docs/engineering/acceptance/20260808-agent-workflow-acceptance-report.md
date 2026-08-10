@@ -5,7 +5,7 @@ type: Permanent
 
 # Agent 工作流验收报告（2026-08-08）
 
-> **状态**: 本轮受理 4 个验收反馈，已全部修复并验证通过（4/4 闭环，待随 commit 回填）
+> **状态**: 本轮受理 4 个验收反馈，已全部修复并验证通过（4/4 闭环）
 
 ## 关联文档
 
@@ -41,7 +41,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ controller-api 单测 383/383（含 prober 4 例）；agent-controller 单测 259/259（含 prober 3 例）；agent-web 单测 296/296（含配置对话框 3 例），tsc/lint 0 error；API 测试 A20（探测返回选项 + 二次查询命中缓存）通过；E2E-9（设置页对话框选择 Harness 后 Mode/模型变为下拉）通过
 
-**修复 commit**：待回填
+**修复 commit**：5e7eaa5
 
 ### 2. 工作流实例页频繁刷新，人类节点输入被清掉且无临时保存
 
@@ -60,7 +60,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ agent-web 单测含 WorkflowNodeTree 草稿 3 例（持久化/隔离/完成后清除）；E2E-7 前半段（输入跨 5s 轮询周期保留 + 页面刷新后 localStorage 恢复）通过
 
-**修复 commit**：待回填
+**修复 commit**：5e7eaa5
 
 ### 3. 工作流流转后 harness 不开始工作（首条提示词被静默丢弃）
 
@@ -79,7 +79,7 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ controller-api 单测含排队补发 3 例（start 竞态按序补发 / resume 竞态补发 / 失败清空）；API 测试 session.test.ts 新增「start 完成前发送的消息应排队，会话激活后补发」通过；E2E-8（acp:start:result 延迟 2s，首条提示词仍送达 controller socket）通过
 
-**修复 commit**：待回填
+**修复 commit**：5e7eaa5
 
 ### 4. 人类节点 RUNNING 状态下点「完成」报「不允许执行「启动」（start）」
 
@@ -97,16 +97,16 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 **验证结果**：✅ agent-api 单测 930/930（含 RUNNING 人类节点直接 complete 用例）；API 测试 A19（三节点 HUMAN→AI→HUMAN：下游人类节点 RUNNING 后人工完成 + 产物写黑板）通过；E2E-7 后半段（RUNNING 评审节点 UI 点「完成」成功）通过
 
-**修复 commit**：待回填
+**修复 commit**：5e7eaa5
 
 ## 修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|------|------|------|-------------|
-| 1 | mode/model 无动态选项 | 能力探测只做版本检查，无空实例探测链路 | ✅ 已修复 | 待回填 |
-| 2 | 实例页刷新清掉人类输入 | 条件渲染卸载 + 无草稿持久化 | ✅ 已修复 | 待回填 |
-| 3 | 流转后 harness 不执行 | start/prompt 跨频道竞态，消息静默丢弃 | ✅ 已修复 | 待回填 |
-| 4 | RUNNING 人类节点完成报错 | completeHumanNode 无条件 start | ✅ 已修复 | 待回填 |
+| 1 | mode/model 无动态选项 | 能力探测只做版本检查，无空实例探测链路 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
+| 2 | 实例页刷新清掉人类输入 | 条件渲染卸载 + 无草稿持久化 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
+| 3 | 流转后 harness 不执行 | start/prompt 跨频道竞态，消息静默丢弃 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
+| 4 | RUNNING 人类节点完成报错 | completeHumanNode 无条件 start | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
 
 ## 最终验证
 
