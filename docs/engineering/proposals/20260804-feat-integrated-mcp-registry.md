@@ -6,7 +6,7 @@ type: Permanent
 # 集成式 MCP 注册中心 - 技术提案
 
 **功能名称**: 集成式 MCP 注册中心（Integrated MCP Registry）
-**关联 PRD**: `docs/product/draft/20260804-integrated-mcp-registry.md`
+**关联 PRD**: `docs/product/released/20260804-integrated-mcp-registry.md`
 **技术提案版本**: v2.2
 **创建日期**: 2026-08-04
 **作者**: ZeroAsh
@@ -346,4 +346,4 @@ apps/agent-web/src/
 
 - [[20260530-feat-mcp-proxy-config.md]] — MCP 代理配置技术方案（本方案的前置）
 - [[20260707-feat-unified-gateway.md]] — 统一网关（MCP 入口的网关集成与 port-forward Redis 模式来源）
-- PRD：`docs/product/draft/20260804-integrated-mcp-registry.md`
+- PRD：`docs/product/released/20260804-integrated-mcp-registry.md`

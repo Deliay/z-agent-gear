@@ -9,7 +9,7 @@ type: Permanent
 
 ## 关联文档
 
-- PRD：[[20260808-agent-workflow]]（docs/product/draft/20260808-agent-workflow.md）
+- PRD：[[20260808-agent-workflow]]（docs/product/released/20260808-agent-workflow.md）
 - 技术方案：[[20260808-feat-agent-workflow]]（docs/engineering/proposals/20260808-feat-agent-workflow.md）
 - 实现方案（plan）：docs/engineering/proposals/ 内同轮 plan 文档
 - 分支：`feat/agent-workflow`（PR #154 → main）

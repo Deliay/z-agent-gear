@@ -6,7 +6,7 @@ type: Permanent
 # 对话交互优化 — 技术提案
 
 **功能名称**: 对话交互优化
-**关联 PRD**: `docs/product/draft/20260804-chat-interaction-optimization.md`
+**关联 PRD**: `docs/product/released/20260804-chat-interaction-optimization.md`
 **技术提案版本**: v1.0
 **创建日期**: 2026-08-04
 **作者**: Kimi
@@ -224,6 +224,6 @@ apps/agent-web/src/
 
 ## 11. 相关文档
 
-- 关联 PRD：`docs/product/draft/20260804-chat-interaction-optimization.md`
+- 关联 PRD：`docs/product/released/20260804-chat-interaction-optimization.md`
 - [[20260526-proposal-ui-optimization]]（工具调用按状态渲染的初版方案）
 - 开发规范：`docs/engineering/frontend-rules.md`、`docs/engineering/common-rules.md`

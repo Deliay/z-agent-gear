@@ -6,7 +6,7 @@ type: Permanent
 # Agent 工作流 - 实现计划
 
 **关联 Proposal**: `proposals/20260808-feat-agent-workflow.md`
-**关联 PRD**: `docs/product/draft/20260808-agent-workflow.md`
+**关联 PRD**: `docs/product/released/20260808-agent-workflow.md`
 **feat-branch**: `feat/agent-workflow`
 **创建日期**: 2026-08-08
 
