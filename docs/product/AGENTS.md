@@ -111,7 +111,7 @@ flowchart LR
 
 ### 草稿文档（`draft/`）
 
-- [[draft/20260804-integrated-mcp-registry.md]] — 集成式 MCP 注册中心
+- 当前无草稿文档
 
 ### 已发布文档（`released/`）
 
@@ -146,3 +146,6 @@ flowchart LR
 - [[released/20260721-frontend-design-overhaul.md]] — 整体前端设计优化
 - [[released/20260723-session-scroll-loading.md]] — Session 对话滚动加载
 - [[released/20260803-acp-v1-completion.md]] — ACP v1 协议补全与展示优化
+- [[released/20260804-chat-interaction-optimization.md]] — 对话交互优化
+- [[released/20260804-integrated-mcp-registry.md]] — 集成式 MCP 注册中心
+- [[released/20260808-agent-workflow.md]] — Agent 工作流

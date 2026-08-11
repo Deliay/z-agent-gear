@@ -94,6 +94,9 @@ test: add agent resolver tests
 - **测试进程环境要隔离宿主 env**。spawn 真实进程做集成测试时，`{ ...process.env }` 会把宿主配置覆盖变量（如 `ZAG_CONTROLLER_KEY`）带进被测进程，config 优先级（CLI > env > file）会放大该问题。
 - **状态机语义演进要回填测试断言**。状态语义变更（如拆出 `idling`）后，存量测试期望旧值会形成基线腐化；应全局检索测试断言同步更新。
 - **E2E 与 API 套件不宜并行跑在同一套服务上**。二者共用 Mongo/Redis/服务进程，并行会造成超时型假失败；验收验证应串行执行或隔离环境。
+- **fake controller 秒回响应会掩盖竞态**。API/E2E 测试中的假 controller 应有意识地引入延迟变体（如 `startDelayMs`），才能覆盖真实 harness 的慢启动场景（如「start 完成前发送的消息需排队补发」）。
+- **动画中的元素尺寸断言会抖动**。入场 zoom 动画期间 `boundingBox()` 量到的是缩放后的尺寸，宽度断言应用 `clientWidth`（布局尺寸，不受 transform 影响）。
+- **会话关闭后其 MCP scoped token 随之失效**。E2E/集成测试模拟「人类介入后 AI 调工具」时，需先恢复会话拿到新签发的 token 再调 MCP。
 
 ## Available Skills
 

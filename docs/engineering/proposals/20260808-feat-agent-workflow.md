@@ -6,7 +6,7 @@ type: Permanent
 # Agent 工作流 — 技术提案
 
 **功能名称**: Agent 工作流
-**关联 PRD**: `docs/product/draft/20260808-agent-workflow.md`
+**关联 PRD**: `docs/product/released/20260808-agent-workflow.md`
 **技术提案版本**: v1.0
 **创建日期**: 2026-08-08
 **作者**: Kimi
@@ -573,6 +573,6 @@ contracts/
 
 ## 11. 相关文档
 
-- 关联 PRD：`docs/product/draft/20260808-agent-workflow.md`
+- 关联 PRD：`docs/product/released/20260808-agent-workflow.md`
 - 关联 Contract：`contracts/workflow.graphql`（待新增）
 - 参考：[[20260523-feat-git-worktree-support]]

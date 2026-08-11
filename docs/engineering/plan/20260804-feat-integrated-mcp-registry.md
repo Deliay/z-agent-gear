@@ -6,7 +6,7 @@ type: Permanent
 # 集成式 MCP 注册中心 - 实现计划
 
 **关联 Proposal**: [[../proposals/20260804-feat-integrated-mcp-registry.md]]（v2.1）
-**关联 PRD**: `docs/product/draft/20260804-integrated-mcp-registry.md`（v1.1）
+**关联 PRD**: `docs/product/released/20260804-integrated-mcp-registry.md`（v1.1）
 **feat-branch**: `feat/integrated-mcp-registry`
 **创建日期**: 2026-08-04
 
