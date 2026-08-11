@@ -58,7 +58,7 @@ graph TD
     B --> INST[InstanceService<br/>统一实例化 input]
     INST --> SNAP[实例节点快照<br/>prompts/artifactTitles/agentConfig]
     B --> NM[updateWorkflowNode<br/>状态校验后改快照]
-    AG[任意 AI 会话] -->|MCP over HTTP| MCP[/mcp 路由<br/>platform 分发]
+    AG[任意 AI 会话] -->|MCP over HTTP| MCP["/mcp 路由<br/>platform 分发"]
     MCP -->|serverName=agent-workflow-tools| WT[节点作用域工具<br/>一期]
     MCP -->|serverName=agent-workflow-admin-tools| AT[工作流管理工具集<br/>二期]
     AT --> TPL
