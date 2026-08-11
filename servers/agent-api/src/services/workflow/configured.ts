@@ -117,8 +117,7 @@ class ConfiguredWorkflowService {
   }
 
   /** 从模板复制生成已配置工作流（快照副本） */
-  async configure(userId: string, templateId: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {
-    const template = await WorkflowTemplate.findOne({
+  async configure(userId: string, templateId: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {    const template = await WorkflowTemplate.findOne({
       _id: templateId,
       $or: [{ userId }, { isBuiltin: true }],
     }).lean();
@@ -208,6 +207,31 @@ class ConfiguredWorkflowService {
     }
     const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
     return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
+  }
+
+  /**
+   * 直接从完整节点图创建已配置工作流（工作流管理工具集用，无来源模板）。
+   * 与 configure（模板复制）共用图校验与 agentConfig 校验；创建记录 AI 归属。
+   */
+  async configureFromContent(
+    userId: string,
+    input: ConfigureWorkflowInput,
+    meta?: ConfiguredWorkflowCreationMeta,
+  ) {
+    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const fullNodes = this.normalizeConfiguredNodes(input.nodes);
+    validateTemplateGraph(fullNodes as never);
+    validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);
+    return ConfiguredWorkflow.create({
+      userId,
+      controllerId: input.controllerId,
+      name: input.name,
+      sourceTemplateId: undefined,
+      sourceTemplateVersion: undefined,
+      nodes: fullNodes,
+      createdBy: meta?.createdBy ?? 'HUMAN',
+      createdBySessionId: meta?.createdBySessionId ?? undefined,
+    });
   }
 }
 
