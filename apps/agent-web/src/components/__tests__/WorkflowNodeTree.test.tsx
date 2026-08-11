@@ -45,12 +45,15 @@ function makeInstance(nodes: WorkflowNodeData[]): WorkflowInstanceData {
     workspaceId: 'ws-1',
     name: '测试实例',
     currentNodeNames: [],
+    lastNodeName: null,
+    lastNodeStatus: null,
+    archived: false,
     nodes,
     blackboard: [],
     blackboardTrash: [],
     createdAt: '2026-08-08T00:00:00Z',
     updatedAt: '2026-08-08T00:00:00Z',
-  } as WorkflowInstanceData;
+  };
 }
 
 describe('节点状态标签', () => {
@@ -121,8 +124,8 @@ describe('节点产物聚合展示', () => {
       fireEvent.click(screen.getByRole('button', { name: new RegExp(`${name} 展开`) }));
     }
 
-    const reviewCard = screen.getByText('评审').closest('div.rounded-lg')!;
-    const devCard = screen.getByText('开发').closest('div.rounded-lg')!;
+    const reviewCard = screen.getByText('评审').closest('div.rounded-lg') as HTMLElement;
+    const devCard = screen.getByText('开发').closest('div.rounded-lg') as HTMLElement;
     expect(within(reviewCard).getByText('评审意见')).toBeDefined();
     expect(within(reviewCard).queryByText('计算器代码 v1')).toBeNull();
     expect(within(devCard).getByText('计算器代码 v1')).toBeDefined();
@@ -284,8 +287,8 @@ describe('节点折叠（移动端适配）', () => {
     );
     // REWORK 默认展开，操作区可见
     expect(screen.getByLabelText('评审 完成输入')).toBeDefined();
-    expect(screen.getByRole('button', { name: '完成', exact: true })).toBeDefined();
-    expect(screen.getByRole('button', { name: '打回', exact: true })).toBeDefined();
+    expect(screen.getByRole('button', { name: '完成' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '打回' })).toBeDefined();
   });
 
   it('展开的节点可手动折叠', () => {
