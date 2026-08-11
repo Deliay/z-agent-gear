@@ -221,7 +221,7 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 
 ### 验收 checklist
 
-- [ ] E2E-1 ~ E2E-5 全部通过
+- [x] E2E-1 ~ E2E-5 全部通过（对应 spec 中 P2-E2E-14 ~ P2-E2E-18，需在 Aspire 编排环境运行）
 
 ---
 

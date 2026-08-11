@@ -30,6 +30,11 @@ vi.mock('../../models/mcp-server.js', () => ({
   },
 }));
 
+vi.mock('./admin-tools.js', () => ({
+  ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
+  ensureAdminToolsServer: vi.fn().mockResolvedValue('mcp-admin-1'),
+}));
+
 import { workflowOrchestrator, WORKFLOW_SYSTEM_PROMPT } from './orchestrator.js';
 import { workflowEngine, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { sessionService } from '../session.js';
@@ -174,7 +179,7 @@ describe('WorkflowOrchestrator', () => {
     expect(node.sessionId).toBe('sess-new');
   });
 
-  it('O3b: 节点会话自动装配平台工作流工具服务（幂等 upsert transport/source=platform）', async () => {
+  it('O3b: 节点会话自动装配平台工作流工具服务 + 管理工具集（幂等 upsert transport/source=platform）', async () => {
     const instance = makeInstance([
       makeNode(),
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
@@ -194,9 +199,10 @@ describe('WorkflowOrchestrator', () => {
       },
       { upsert: true, new: true },
     );
+    // 管理工具集同样被装配进节点会话
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({ mcpServerIds: ['mcp-platform-1'] }),
+      expect.objectContaining({ mcpServerIds: ['mcp-platform-1', 'mcp-admin-1'] }),
     );
   });
 

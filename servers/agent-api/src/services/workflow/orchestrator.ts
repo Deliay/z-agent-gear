@@ -10,6 +10,7 @@ import {
 } from './engine.js';
 import { getArtifactKeys, getValue } from './blackboard.js';
 import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
+import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
 
 /** 工作流系统提示（注入到每个 AI 节点会话提示词首位） */
 export const WORKFLOW_SYSTEM_PROMPT =
@@ -76,8 +77,11 @@ class WorkflowOrchestrator {
       worktreeBranchSuffix: enableWorktree ? `${instanceSlug}/${stageSlug}` : undefined,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
-      // 节点会话自动装配平台工作流工具服务
-      mcpServerIds: [await this.ensureWorkflowToolsServer(instance.userId.toString())],
+      // 节点会话自动装配平台工作流工具服务 + 管理工作流管理工具集（AI 可通过 admin 工具集完成编排）
+      mcpServerIds: [
+        await this.ensureWorkflowToolsServer(instance.userId.toString()),
+        await ensureAdminToolsServer(instance.userId.toString()),
+      ],
     });
     node.sessionId = session.id as string;
 
