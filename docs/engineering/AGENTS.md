@@ -200,3 +200,4 @@ flowchart LR
 - [[plan/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化实现计划
 - [[plan/20260723-feat-session-scroll-loading.md]] — Session 对话滚动加载实现计划
 - [[plan/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化实现计划
+- [[plan/20260811-feat-agent-workflow-phase2.md]] — Agent 工作流二期（工作流管理与实例化机制完善）实现计划
