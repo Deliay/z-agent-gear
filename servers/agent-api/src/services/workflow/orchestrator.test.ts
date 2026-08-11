@@ -323,4 +323,48 @@ describe('WorkflowOrchestrator', () => {
 
     expect(lastInputMessage()).toContain('重新获取');
   });
+
+  it('S1: 新实例节点（含快照字段）提示词/Agent 配置来自快照，不回查配置', async () => {
+    const snapshotNode = {
+      ...makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
+      prompts: ['快照提示词A', '快照提示词B'],
+      requiresWorktree: true,
+      agentConfig: { acpServerType: 'claude_code', modeId: 'plan', modelId: null, initNewWorktree: true },
+    };
+    const instance = makeInstance([makeNode(), snapshotNode]);
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    // 不回查配置
+    expect(ConfiguredWorkflow.findById).not.toHaveBeenCalled();
+    const content = lastInputMessage();
+    expect(content).toContain('快照提示词A');
+    expect(content).not.toContain('产出技术方案');
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ acpServerType: 'claude_code', enableWorktree: true }),
+    );
+  });
+
+  it('S2: 旧实例节点（无快照字段）回退 loadConfiguredNode，行为与一期一致', async () => {
+    const oldNode = makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] });
+    const instance = makeInstance([makeNode(), oldNode]);
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(makeConfigured()));
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    expect(ConfiguredWorkflow.findById).toHaveBeenCalled();
+    const content = lastInputMessage();
+    expect(content).toContain('产出技术方案');
+  });
+
+  it('S3: 配置被删除后旧实例节点回查失败，错误可读', async () => {
+    const oldNode = makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] });
+    const instance = makeInstance([makeNode(), oldNode]);
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(null));
+
+    await expect(workflowOrchestrator.startNodeSession(instance, instance.nodes[1])).rejects.toThrow(
+      /已配置工作流不存在/,
+    );
+  });
 });

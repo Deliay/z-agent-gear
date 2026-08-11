@@ -55,7 +55,7 @@ class WorkflowOrchestrator {
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
   async startNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
-    const configuredNode = await this.loadConfiguredNode(instance, node);
+    const configuredNode = await this.loadNodeConfig(instance, node);
     const agentConfig = configuredNode.agentConfig;
     if (!agentConfig) {
       throw new Error(`节点「${node.name}」（${node.nodeKey}）缺少 Agent 配置，无法拉起会话`);
@@ -80,6 +80,18 @@ class WorkflowOrchestrator {
       mcpServerIds: [await this.ensureWorkflowToolsServer(instance.userId.toString())],
     });
     node.sessionId = session.id as string;
+
+    // 若节点配置指定了 Mode，则在会话创建后应用
+    if (agentConfig.modeId && node.sessionId) {
+      try {
+        await sessionService.setMode(node.sessionId as string, instance.userId.toString(), agentConfig.modeId);
+      } catch (err) {
+        console.warn(
+          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
     await sessionService.addMessage(node.sessionId as string, {
       direction: 'input',
@@ -196,6 +208,30 @@ class WorkflowOrchestrator {
       { upsert: true, new: true },
     );
     return server._id.toString();
+  }
+
+  /**
+   * 读取节点配置：优先使用实例节点快照（prompts/agentConfig/requiresWorktree）；
+   * 快照字段缺失（一期旧实例）时回退 loadConfiguredNode 按 nodeKey 回查配置。
+   */
+  private async loadNodeConfig(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+  ): Promise<ConfiguredNodeLike> {
+    const nodeWithSnapshot = node as unknown as {
+      prompts?: string[] | null;
+      requiresWorktree?: boolean;
+      agentConfig?: ConfiguredNodeLike['agentConfig'];
+    };
+    if (nodeWithSnapshot.prompts !== undefined || nodeWithSnapshot.agentConfig !== undefined) {
+      return {
+        nodeKey: node.nodeKey,
+        prompts: nodeWithSnapshot.prompts ?? null,
+        requiresWorktree: nodeWithSnapshot.requiresWorktree ?? false,
+        agentConfig: nodeWithSnapshot.agentConfig ?? null,
+      };
+    }
+    return this.loadConfiguredNode(instance, node);
   }
 
   private async loadConfiguredNode(

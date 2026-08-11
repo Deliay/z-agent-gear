@@ -1,8 +1,8 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
-import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { Controller } from '../../models/controller.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 
 export interface AgentNodeConfigInput {
   acpServerType: string;
@@ -11,8 +11,17 @@ export interface AgentNodeConfigInput {
   initNewWorktree: boolean;
 }
 
+/** 已配置工作流节点入参（全量节点字段，与模板节点同构 + agentConfig） */
 export interface ConfiguredWorkflowNodeInput {
   nodeKey: string;
+  type?: 'HUMAN' | 'AI' | 'FLAG';
+  name?: string;
+  description?: string | null;
+  stage?: string;
+  prompts?: string[] | null;
+  artifactTitles?: string[] | null;
+  dependsOn?: string[];
+  requiresWorktree?: boolean;
   agentConfig?: AgentNodeConfigInput | null;
 }
 
@@ -20,6 +29,11 @@ export interface ConfigureWorkflowInput {
   name: string;
   controllerId: string;
   nodes: ConfiguredWorkflowNodeInput[];
+}
+
+export interface ConfiguredWorkflowCreationMeta {
+  createdBy?: WorkflowCreatedBy;
+  createdBySessionId?: string | null;
 }
 
 /** 模板/已配置工作流节点的最小结构（供纯函数使用，兼容 lean 文档） */
@@ -68,34 +82,17 @@ export function copyFromTemplate(template: TemplateLike, input: ConfigureWorkflo
 }
 
 /**
- * 校验配置输入与模板快照节点的一致性（纯函数）：
- * - nodeKey 集合必须与模板/现有快照一致（不允许增删节点）
- * - 所有 AI 节点必须有完整 agentConfig
- * - acpServerType 必须在控制器 capabilities 可用列表内（modeId/modelId 允许为空）
+ * 校验配置/实例化输入中的 Agent 配置（纯函数）：
+ * 遍历节点图，所有 AI 节点必须有完整 agentConfig（acpServerType），
+ * 且 acpServerType 必须在控制器 capabilities 可用列表内（modeId/modelId 允许为空）。
  */
 export function validateAgentConfigs(
-  sourceNodes: SourceNodeLike[],
-  inputNodes: ConfiguredWorkflowNodeInput[],
+  nodes: SourceNodeLike[],
   availableServerTypes: string[],
 ): void {
-  const sourceKeys = new Set(sourceNodes.map((n) => n.nodeKey));
-  const inputKeys = new Set(inputNodes.map((n) => n.nodeKey));
-
-  for (const node of sourceNodes) {
-    if (!inputKeys.has(node.nodeKey)) {
-      throw new Error(`配置缺少节点「${node.name}」（${node.nodeKey}），不允许增删节点`);
-    }
-  }
-  for (const node of inputNodes) {
-    if (!sourceKeys.has(node.nodeKey)) {
-      throw new Error(`配置包含模板中不存在的节点「${node.nodeKey}」，不允许增删节点`);
-    }
-  }
-
-  const configByKey = new Map(inputNodes.map((n) => [n.nodeKey, n.agentConfig ?? null]));
-  for (const node of sourceNodes) {
+  for (const node of nodes) {
     if (node.type !== 'AI') continue;
-    const config = configByKey.get(node.nodeKey);
+    const config = (node as { agentConfig?: AgentNodeConfigInput | null }).agentConfig;
     if (!config || !config.acpServerType) {
       throw new Error(`AI 节点「${node.name}」（${node.nodeKey}）缺少 Agent 配置（agentConfig.acpServerType）`);
     }
@@ -120,7 +117,7 @@ class ConfiguredWorkflowService {
   }
 
   /** 从模板复制生成已配置工作流（快照副本） */
-  async configure(userId: string, templateId: string, input: ConfigureWorkflowInput) {
+  async configure(userId: string, templateId: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {
     const template = await WorkflowTemplate.findOne({
       _id: templateId,
       $or: [{ userId }, { isBuiltin: true }],
@@ -129,8 +126,9 @@ class ConfiguredWorkflowService {
       throw new Error('工作流模板不存在或无权限');
     }
     const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
-    validateAgentConfigs(template.nodes, input.nodes, availableServerTypes);
     const snapshot = copyFromTemplate(template, input);
+    // 校验模板节点图的 agentConfig 完整性 + capabilities
+    validateAgentConfigs(snapshot.nodes as unknown as SourceNodeLike[], availableServerTypes);
     return ConfiguredWorkflow.create({
       userId,
       controllerId: input.controllerId,
@@ -138,58 +136,63 @@ class ConfiguredWorkflowService {
       sourceTemplateId: template._id,
       sourceTemplateVersion: snapshot.sourceTemplateVersion,
       nodes: snapshot.nodes,
+      createdBy: meta?.createdBy ?? 'HUMAN',
+      createdBySessionId: meta?.createdBySessionId ?? undefined,
     });
   }
 
-  /** 更新已配置工作流：仅允许修改 name/controllerId/agentConfig，不允许增删节点 */
-  async update(userId: string, id: string, input: ConfigureWorkflowInput) {
+  /** 更新已配置工作流：接受全量节点图（完整图校验），nodeKey 集合可变；实例保有自身快照不受影响 */
+  async update(userId: string, id: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {
     const workflow = await ConfiguredWorkflow.findOne({ _id: id, userId });
     if (!workflow) {
       throw new Error('已配置工作流不存在或无权限');
     }
 
-    const existingKeys = workflow.nodes.map((n) => n.nodeKey).sort();
-    const inputKeys = input.nodes.map((n) => n.nodeKey).sort();
-    const sameKeys =
-      existingKeys.length === inputKeys.length && existingKeys.every((key, i) => key === inputKeys[i]);
-    if (!sameKeys) {
-      throw new Error('不允许增删节点（nodeKey 集合必须与现有配置一致），如需改图请重新从模板复制');
-    }
-
     const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
-    validateAgentConfigs(workflow.nodes, input.nodes, availableServerTypes);
+    const fullNodes = this.normalizeConfiguredNodes(input.nodes);
+    // 完整图校验 + agentConfig 校验（与模板一致）
+    validateTemplateGraph(fullNodes as never);
+    validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);
 
     workflow.name = input.name;
     workflow.controllerId = input.controllerId as never;
-    const configByKey = new Map(input.nodes.map((n) => [n.nodeKey, n.agentConfig ?? null]));
-    for (const node of workflow.nodes) {
-      const config = configByKey.get(node.nodeKey);
-      (node as { agentConfig?: unknown }).agentConfig = config ? { ...config } : null;
-    }
+    workflow.nodes = fullNodes as never;
+    if (meta?.createdBy) workflow.createdBy = meta.createdBy as never;
+    if (meta?.createdBySessionId) workflow.createdBySessionId = meta.createdBySessionId as never;
     await workflow.save();
     return workflow;
   }
 
   /**
    * 删除已配置工作流。
-   * 删除约束：存在未终结实例（引用该配置且仍有节点非 DONE 终态）时拒绝删除。
+   * 快照模型下实例自包含，删除配置不影响任何实例，不再校验活跃实例引用。
    */
-  async delete(userId: string, id: string): Promise<boolean> {
+  async delete(userId: string, id: string, opts?: { requireAiOwned?: boolean }): Promise<boolean> {
     const workflow = await ConfiguredWorkflow.findOne({ _id: id, userId });
     if (!workflow) {
       throw new Error('已配置工作流不存在或无权限');
     }
-    // 注意：数组字段上 'nodes.status': { $ne } 的语义是「没有任何节点为该状态」，
-    // 无法表达「存在未终结节点」；必须用 $elemMatch 匹配任一非终结态节点。
-    const activeInstance = await WorkflowInstance.exists({
-      configuredWorkflowId: id,
-      nodes: { $elemMatch: { status: { $nin: ['DONE', 'REJECT'] } } },
-    });
-    if (activeInstance) {
-      throw new Error('存在未终结的工作流实例引用该配置，无法删除；请先等待实例全部节点终结');
+    if (opts?.requireAiOwned) {
+      assertAiOwned(workflow as { createdBy?: string | null }, '已配置工作流');
     }
     await workflow.deleteOne();
     return true;
+  }
+
+  /** 将输入节点归一化为完整节点结构（补默认值，供图校验与落库） */
+  private normalizeConfiguredNodes(nodes: ConfiguredWorkflowNodeInput[]) {
+    return nodes.map((n) => ({
+      nodeKey: n.nodeKey,
+      type: n.type ?? 'AI',
+      name: n.name ?? n.nodeKey,
+      description: n.description ?? null,
+      stage: n.stage ?? '默认阶段',
+      prompts: n.prompts ? [...n.prompts] : undefined,
+      artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
+      dependsOn: [...(n.dependsOn ?? [])],
+      requiresWorktree: n.requiresWorktree ?? false,
+      agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+    }));
   }
 
   /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */

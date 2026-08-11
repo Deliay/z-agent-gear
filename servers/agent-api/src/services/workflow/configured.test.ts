@@ -93,11 +93,25 @@ function makeTemplate() {
 function makeInput(overrides: Record<string, unknown> = {}) {
   const nodes: {
     nodeKey: string;
+    type: string;
+    name: string;
+    stage: string;
+    prompts?: string[];
+    artifactTitles?: string[];
+    dependsOn: string[];
+    requiresWorktree: boolean;
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
   }[] = [
-    { nodeKey: 'requirement' },
+    { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false },
     {
       nodeKey: 'tech-design',
+      type: 'AI',
+      name: '技术方案',
+      stage: '设计',
+      prompts: ['产出技术方案'],
+      artifactTitles: ['技术方案文档'],
+      dependsOn: ['requirement'],
+      requiresWorktree: true,
       agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: true },
     },
   ];
@@ -192,7 +206,7 @@ describe('ConfiguredWorkflowService.configure', () => {
   });
 
   it('AI 节点缺少 agentConfig 时拒绝并指出节点', async () => {
-    const input = makeInput({ nodes: [{ nodeKey: 'requirement' }, { nodeKey: 'tech-design' }] });
+    const input = makeInput({ nodes: [{ nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false }, { nodeKey: 'tech-design', type: 'AI', name: '技术方案', stage: '设计', prompts: ['x'], dependsOn: ['requirement'], requiresWorktree: false }] });
     await expect(configuredWorkflowService.configure('user-1', 'tpl-1', input as never)).rejects.toThrow(
       /技术方案.*Agent 配置|Agent 配置.*技术方案/,
     );
@@ -202,8 +216,8 @@ describe('ConfiguredWorkflowService.configure', () => {
   it('acpServerType 不在 controller capabilities 可用列表内时拒绝', async () => {
     const input = makeInput({
       nodes: [
-        { nodeKey: 'requirement' },
-        { nodeKey: 'tech-design', agentConfig: { acpServerType: 'gemini_cli', initNewWorktree: true } },
+        { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false },
+        { nodeKey: 'tech-design', type: 'AI', name: '技术方案', stage: '设计', prompts: ['x'], dependsOn: ['requirement'], requiresWorktree: false, agentConfig: { acpServerType: 'gemini_cli', initNewWorktree: true } },
       ],
     });
     await expect(configuredWorkflowService.configure('user-1', 'tpl-1', input as never)).rejects.toThrow(
@@ -218,14 +232,10 @@ describe('ConfiguredWorkflowService.configure', () => {
     );
   });
 
-  it('输入包含模板中不存在的节点时拒绝', async () => {
-    const input = makeInput({
-      nodes: [
-        ...makeInput().nodes,
-        { nodeKey: 'ghost', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-      ],
-    });
-    await expect(configuredWorkflowService.configure('user-1', 'tpl-1', input as never)).rejects.toThrow(/ghost/);
+  it('copyFromTemplate 以模板节点为准，input 仅提供 agentConfig', async () => {
+    const input = makeInput({ nodes: [{ nodeKey: 'requirement' }, { nodeKey: 'tech-design', agentConfig: { acpServerType: 'opencode', initNewWorktree: true } }] });
+    vi.mocked(ConfiguredWorkflow.create).mockResolvedValue({ _id: oid('cfg-1') } as never);
+    await expect(configuredWorkflowService.configure('user-1', 'tpl-1', input as never)).resolves.toBeTruthy();
   });
 });
 
@@ -236,11 +246,16 @@ describe('ConfiguredWorkflowService.update', () => {
     name: '旧名字',
     controllerId: oid('ctrl-1'),
     nodes: [
-      { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', agentConfig: null },
+      { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false, agentConfig: null },
       {
         nodeKey: 'tech-design',
         type: 'AI',
         name: '技术方案',
+        stage: '设计',
+        prompts: ['旧提示词'],
+        artifactTitles: ['旧产物'],
+        dependsOn: ['requirement'],
+        requiresWorktree: true,
         agentConfig: { acpServerType: 'opencode', initNewWorktree: true },
       },
     ],
@@ -254,32 +269,7 @@ describe('ConfiguredWorkflowService.update', () => {
     mockCapabilities(['opencode', 'claude_code']);
   });
 
-  it('禁止增删节点：nodeKey 集合不一致时拒绝', async () => {
-    const doc = existingDoc();
-    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
-
-    // 少一个节点
-    await expect(
-      configuredWorkflowService.update('user-1', 'cfg-1', makeInput({ nodes: [{ nodeKey: 'requirement' }] }) as never),
-    ).rejects.toThrow(/不允许增删节点/);
-
-    // 多一个节点
-    await expect(
-      configuredWorkflowService.update(
-        'user-1',
-        'cfg-1',
-        makeInput({
-          nodes: [
-            ...makeInput().nodes,
-            { nodeKey: 'extra', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-          ],
-        }) as never,
-      ),
-    ).rejects.toThrow(/不允许增删节点/);
-    expect(doc.save).not.toHaveBeenCalled();
-  });
-
-  it('成功：仅更新 name/controllerId/agentConfig', async () => {
+  it('C1: 成功修改 prompts/增删节点/调依赖，通过完整图校验后整体替换 nodes', async () => {
     const doc = existingDoc();
     vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
 
@@ -289,15 +279,36 @@ describe('ConfiguredWorkflowService.update', () => {
       makeInput({
         name: '新名字',
         nodes: [
-          { nodeKey: 'requirement' },
-          { nodeKey: 'tech-design', agentConfig: { acpServerType: 'claude_code', modeId: 'plan', initNewWorktree: false } },
+          { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false },
+          { nodeKey: 'tech-design', type: 'AI', name: '技术方案', stage: '设计', prompts: ['新提示词'], artifactTitles: ['新产物'], dependsOn: ['requirement'], requiresWorktree: true, agentConfig: { acpServerType: 'claude_code', modeId: 'plan', initNewWorktree: false } },
+          { nodeKey: 'extra', type: 'AI', name: '额外', stage: '实现', prompts: ['做某事'], dependsOn: ['tech-design'], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
         ],
       }) as never,
     );
 
     expect(doc.name).toBe('新名字');
-    expect(doc.nodes[1].agentConfig).toMatchObject({ acpServerType: 'claude_code', modeId: 'plan' });
+    expect(doc.nodes).toHaveLength(3);
+    expect(doc.nodes.map((n: { nodeKey: string }) => n.nodeKey)).toEqual(['requirement', 'tech-design', 'extra']);
     expect(doc.save).toHaveBeenCalled();
+  });
+
+  it('C2: 非法图（双首节点）报与模板校验一致的具体错误，不保存', async () => {
+    const doc = existingDoc();
+    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
+
+    await expect(
+      configuredWorkflowService.update(
+        'user-1',
+        'cfg-1',
+        makeInput({
+          nodes: [
+            { nodeKey: 'requirement', type: 'HUMAN', name: '产品需求', stage: '需求', dependsOn: [], requiresWorktree: false },
+            { nodeKey: 'tech-design', type: 'AI', name: '技术方案', stage: '设计', prompts: ['x'], dependsOn: [], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          ],
+        }) as never,
+      ),
+    ).rejects.toThrow(/首节点必须唯一/);
+    expect(doc.save).not.toHaveBeenCalled();
   });
 
   it('已配置工作流不存在时拒绝', async () => {
@@ -313,39 +324,29 @@ describe('ConfiguredWorkflowService.delete', () => {
     vi.clearAllMocks();
   });
 
-  it('存在未终结实例引用时拒绝删除', async () => {
-    const doc = { _id: oid('cfg-1'), deleteOne: vi.fn() };
-    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
-    vi.mocked(WorkflowInstance.exists).mockResolvedValue({ _id: oid('inst-1') } as never);
-
-    await expect(configuredWorkflowService.delete('user-1', 'cfg-1')).rejects.toThrow(/未终结|无法删除/);
-    expect(doc.deleteOne).not.toHaveBeenCalled();
-    // 校验查询条件包含 configuredWorkflowId 与非 DONE 节点
-    expect(WorkflowInstance.exists).toHaveBeenCalledWith(
-      expect.objectContaining({ configuredWorkflowId: 'cfg-1' }),
-    );
-  });
-
-  it('活跃实例判定使用 $elemMatch（数组上 $ne 语义为「没有任何节点为该状态」）', async () => {
-    const doc = { _id: oid('cfg-1'), deleteOne: vi.fn() };
-    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
-    vi.mocked(WorkflowInstance.exists).mockResolvedValue(null as never);
-
-    await configuredWorkflowService.delete('user-1', 'cfg-1');
-    // 终结态 = DONE / REJECT；任一节点处于其他状态即视为活跃实例
-    expect(WorkflowInstance.exists).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodes: { $elemMatch: { status: { $nin: ['DONE', 'REJECT'] } } },
-      }),
-    );
-  });
-
-  it('实例全部终结（或无实例）时允许删除', async () => {
+  it('A6: 存在活跃实例也可删除（快照模型下实例自包含，删除约束已移除）', async () => {
     const doc = { _id: oid('cfg-1'), deleteOne: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
-    vi.mocked(WorkflowInstance.exists).mockResolvedValue(null as never);
 
     await expect(configuredWorkflowService.delete('user-1', 'cfg-1')).resolves.toBe(true);
+    expect(doc.deleteOne).toHaveBeenCalled();
+  });
+
+  it('requireAiOwned：人类创建的配置拒绝 AI 删除', async () => {
+    const doc = { _id: oid('cfg-1'), createdBy: 'HUMAN', deleteOne: vi.fn() };
+    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
+
+    await expect(configuredWorkflowService.delete('user-1', 'cfg-1', { requireAiOwned: true })).rejects.toThrow(
+      /人类创建，不允许 AI 删除/,
+    );
+    expect(doc.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('requireAiOwned：AI 创建的配置允许 AI 删除', async () => {
+    const doc = { _id: oid('cfg-1'), createdBy: 'AI', deleteOne: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(ConfiguredWorkflow.findOne).mockResolvedValue(doc as never);
+
+    await expect(configuredWorkflowService.delete('user-1', 'cfg-1', { requireAiOwned: true })).resolves.toBe(true);
     expect(doc.deleteOne).toHaveBeenCalled();
   });
 

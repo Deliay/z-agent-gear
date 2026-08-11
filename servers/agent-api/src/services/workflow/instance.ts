@@ -2,14 +2,45 @@ import mongoose from 'mongoose';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
+import { Controller } from '../../models/controller.js';
 import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
 import { workflowEngine } from './engine.js';
+import { validateTemplateGraph } from './template.js';
+import { validateAgentConfigs } from './configured.js';
+import { getRedisClient } from '../../middleware/redis.js';
 
-/**
- * 工作流实例服务：实例化入口 + 人类节点操作。
- * 状态转移一律走 WorkflowEngine.transition（唯一入口）。
- */
+export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
+
+export interface InstantiateNodeInput {
+  nodeKey: string;
+  type?: 'HUMAN' | 'AI' | 'FLAG';
+  name?: string;
+  description?: string | null;
+  stage?: string;
+  prompts?: string[] | null;
+  artifactTitles?: string[] | null;
+  dependsOn?: string[];
+  requiresWorktree?: boolean;
+  agentConfig?: {
+    acpServerType: string;
+    modeId?: string | null;
+    modelId?: string | null;
+    initNewWorktree: boolean;
+  } | null;
+}
+
+export interface InstantiateWorkflowInput {
+  source: InstantiateSource;
+  configuredWorkflowId?: string | null;
+  templateId?: string | null;
+  controllerId: string;
+  workspaceId: string;
+  name: string;
+  nodes: InstantiateNodeInput[];
+}
+
+/** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
 class WorkflowInstanceService {
   /** 实例列表：默认仅活跃（未归档）；archived=true 仅已归档 */
   async listForWorkspace(userId: string, workspaceId: string, archived = false) {
@@ -27,38 +58,78 @@ class WorkflowInstanceService {
     return WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
   }
 
-  /**
-   * 实例化：校验 → 创建实例（全部 INITIALIZING，首节点 READY）。
-   * 校验：已配置工作流归属、工作区归属、requiresWorktree 节点要求工作区为 git 仓库（已设置默认分支）。
-   */
-  async instantiate(userId: string, configuredWorkflowId: string, workspaceId: string, name: string) {
-    const configured = await ConfiguredWorkflow.findOne({ _id: configuredWorkflowId, userId }).lean();
-    if (!configured) {
-      throw new Error('已配置工作流不存在或无权限');
+  /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */
+  private async getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('控制器不存在或不属于当前用户');
     }
+    const redis = getRedisClient();
+    const cached = await redis.get(`acp:capability:${controllerId}`);
+    if (!cached) {
+      throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
+    }
+    const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
+    return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
+  }
+
+  /** 将节点图归一化为完整结构（补默认值，供图校验与快照落库） */
+  private normalizeNodes(nodes: InstantiateNodeInput[]) {
+    return nodes.map((n) => ({
+      nodeKey: n.nodeKey,
+      type: n.type ?? 'AI',
+      name: n.name ?? n.nodeKey,
+      description: n.description ?? null,
+      stage: n.stage ?? '默认阶段',
+      prompts: n.prompts ? [...n.prompts] : undefined,
+      artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
+      dependsOn: [...(n.dependsOn ?? [])],
+      requiresWorktree: n.requiresWorktree ?? false,
+      agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+    }));
+  }
+
+  /**
+   * 统一实例化：三来源（CONFIGURED/TEMPLATE/BLANK）仅决定节点图初值，
+   * 服务端始终以 input.nodes 提交图为准校验并快照落库。
+   * 校验：controller/workspace 归属、完整图校验 + agentConfig 校验、requiresWorktree git 校验。
+   */
+  async instantiate(userId: string, input: InstantiateWorkflowInput) {
+    // 1. 三来源必填校验
+    if (input.source === 'CONFIGURED' && !input.configuredWorkflowId) {
+      throw new Error('来源为已配置工作流时必须提供 configuredWorkflowId');
+    }
+    if (input.source === 'TEMPLATE' && !input.templateId) {
+      throw new Error('来源为模板时必须提供 templateId');
+    }
+
+    // 2. controller/workspace 归属校验
     const workspace = await ControllerWorkspace.findOne({
-      _id: workspaceId,
+      _id: input.workspaceId,
       userId,
-      controllerId: configured.controllerId,
+      controllerId: input.controllerId,
     }).lean();
     if (!workspace) {
       throw new Error('工作区不存在、无权限或不属于该控制器');
     }
+    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
 
-    const needsWorktree = configured.nodes.some(
-      (n) => n.requiresWorktree && n.agentConfig?.initNewWorktree,
-    );
+    // 3. 完整图校验 + agentConfig 校验（以提交图为准）
+    const fullNodes = this.normalizeNodes(input.nodes);
+    validateTemplateGraph(fullNodes as never);
+    validateAgentConfigs(fullNodes as unknown as Parameters<typeof validateAgentConfigs>[0], availableServerTypes);
+
+    // 4. requiresWorktree git 校验
+    const needsWorktree = fullNodes.some((n) => n.requiresWorktree && n.agentConfig?.initNewWorktree);
     if (needsWorktree && !workspace.defaultBranch) {
       throw new Error(
         '该工作流包含需要 Worktree 隔离的节点，但工作区不是 Git 仓库（未设置默认分支），无法实例化',
       );
     }
 
-    // nodeKey → 实例节点 nodeId 映射，dependsOn 同步改写为 nodeId 引用
-    const nodeIdByKey = new Map(
-      configured.nodes.map((n) => [n.nodeKey, new mongoose.Types.ObjectId().toString()]),
-    );
-    const nodes = configured.nodes.map((n) => ({
+    // 5. 节点全量快照落库（nodeKey → nodeId 映射，dependsOn 改写为 nodeId 引用）
+    const nodeIdByKey = new Map(fullNodes.map((n) => [n.nodeKey, new mongoose.Types.ObjectId().toString()]));
+    const nodes = fullNodes.map((n) => ({
       nodeId: nodeIdByKey.get(n.nodeKey)!,
       nodeKey: n.nodeKey,
       type: n.type,
@@ -69,6 +140,11 @@ class WorkflowInstanceService {
       dependsOn: (n.dependsOn ?? []).map((key) => nodeIdByKey.get(key)!),
       createdAt: new Date(),
       reworkCount: 0,
+      // 实例快照字段
+      prompts: n.prompts ? [...n.prompts] : undefined,
+      artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
+      agentConfig: n.agentConfig ? { ...n.agentConfig } : undefined,
+      requiresWorktree: n.requiresWorktree,
     }));
     // 首节点（入度为 0 的人类节点）READY
     const first = nodes.find((n) => n.dependsOn.length === 0);
@@ -78,16 +154,117 @@ class WorkflowInstanceService {
 
     return WorkflowInstance.create({
       userId,
-      controllerId: configured.controllerId,
-      workspaceId,
-      configuredWorkflowId,
-      name,
+      controllerId: input.controllerId,
+      workspaceId: input.workspaceId,
+      configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
+      name: input.name,
       nodes,
       currentNodeNames: [],
-      // 实例初始状态 = 首节点就绪
       lastNodeName: first?.name ?? null,
       lastNodeStatus: first ? 'READY' : null,
     });
+  }
+
+  /**
+   * 修改未开始的实例节点（原子条件更新）。
+   * 条件：节点 status ∈ [INITIALIZING,READY] 且 startedAt=null（从未开始过）。
+   * 旧实例节点（无快照字段）先按回查补齐快照再应用修改。
+   * 未匹配时二次查询区分「节点不存在」与「已开始」。
+   */
+  async updateNode(userId: string, instanceId: string, nodeId: string, input: {
+    name?: string | null;
+    description?: string | null;
+    stage?: string;
+    prompts?: string[] | null;
+    artifactTitles?: string[] | null;
+    requiresWorktree?: boolean;
+    agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
+  }) {
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    const node = instance.nodes.find((n) => n.nodeId === nodeId);
+    if (!node) {
+      throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+
+    // 快照字段存在的节点可直接原子更新；旧实例节点先补齐快照再更新
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch['nodes.$[n].name'] = input.name;
+    if (input.description !== undefined) patch['nodes.$[n].description'] = input.description;
+    if (input.stage !== undefined) patch['nodes.$[n].stage'] = input.stage;
+    if (input.requiresWorktree !== undefined) patch['nodes.$[n].requiresWorktree'] = input.requiresWorktree;
+    if (input.prompts !== undefined) patch['nodes.$[n].prompts'] = input.prompts ?? null;
+    if (input.artifactTitles !== undefined) patch['nodes.$[n].artifactTitles'] = input.artifactTitles ?? null;
+    if (input.agentConfig !== undefined) patch['nodes.$[n].agentConfig'] = input.agentConfig ?? null;
+
+    // 若该节点是旧实例（无快照字段），先补齐快照（回查已配置工作流）
+    if (node.prompts === undefined && node.agentConfig === undefined) {
+      await this.backfillSnapshotFromConfigured(
+        instance as unknown as Record<string, unknown>,
+        node as unknown as Record<string, unknown>,
+      );
+    }
+
+    const updated = await WorkflowInstance.findOneAndUpdate(
+      {
+        _id: instanceId,
+        deletedAt: null,
+        nodes: {
+          $elemMatch: {
+            nodeId,
+            status: { $in: ['INITIALIZING', 'READY'] },
+            startedAt: null,
+          },
+        },
+      },
+      { $set: patch },
+      {
+        arrayFilters: [{ 'n.nodeId': nodeId }],
+        new: true,
+      },
+    ).lean();
+
+    if (!updated) {
+      // 二次查询区分原因
+      const cur = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+      const curNode = cur?.nodes.find((n) => n.nodeId === nodeId);
+      if (!curNode) {
+        throw new Error(`工作流实例中不存在节点：${nodeId}`);
+      }
+      throw new Error(`节点「${curNode.name}」已开始，不可修改（仅从未开始过的节点可编辑）`);
+    }
+
+    const updatedNode = updated.nodes.find((n) => n.nodeId === nodeId)!;
+    // 使节点缓存失效
+    const redis = getRedisClient();
+    await redis.del(`workflow:instance:${instanceId}`);
+    return { instance: updated, node: updatedNode };
+  }
+
+  /** 旧实例节点：按 nodeKey 回查已配置工作流补齐快照字段（仅用于旧实例兼容） */
+  private async backfillSnapshotFromConfigured(instance: Record<string, unknown>, node: Record<string, unknown>) {
+    const configured = await ConfiguredWorkflow.findById(instance.configuredWorkflowId as string).lean();
+    if (!configured) {
+      throw new Error(`实例引用的已配置工作流不存在：${String(instance.configuredWorkflowId)}`);
+    }
+    const configuredNode = (configured.nodes as { nodeKey: string; prompts?: string[] | null; artifactTitles?: string[] | null; agentConfig?: unknown; requiresWorktree?: boolean }[]).find(
+      (n) => n.nodeKey === node.nodeKey,
+    );
+    if (!configuredNode) {
+      throw new Error(`旧实例引用的配置已变更：节点「${String(node.name)}」（${String(node.nodeKey)}）已不存在`);
+    }
+    const fill: Record<string, unknown> = {};
+    fill['nodes.$[n].prompts'] = configuredNode.prompts ? [...configuredNode.prompts] : null;
+    fill['nodes.$[n].artifactTitles'] = configuredNode.artifactTitles ? [...configuredNode.artifactTitles] : null;
+    fill['nodes.$[n].requiresWorktree'] = configuredNode.requiresWorktree ?? false;
+    fill['nodes.$[n].agentConfig'] = configuredNode.agentConfig ?? null;
+    await WorkflowInstance.updateOne(
+      { _id: instance._id },
+      { $set: fill },
+      { arrayFilters: [{ 'n.nodeId': node.nodeId }] },
+    );
   }
 
   /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板；
