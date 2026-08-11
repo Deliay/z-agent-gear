@@ -14,7 +14,7 @@ type: Permanent
 
 ### 1.1 背景
 
-平台目前已支持在任意 Controller 的工作区下创建 Agent 会话，并通过 Git Worktree 隔离会话工作内容（见 [[../released/20260523-git-worktree-support-prd]]）。但单个会话只能完成单一任务，一个完整的需求开发（产出方案 → 审核 → 实现 → 评审 → 合并）需要用户手动创建多个会话、手动传递上下文、手动跟进进度，存在以下问题：
+平台目前已支持在任意 Controller 的工作区下创建 Agent 会话，并通过 Git Worktree 隔离会话工作内容（见 [[20260523-git-worktree-support-prd]]）。但单个会话只能完成单一任务，一个完整的需求开发（产出方案 → 审核 → 实现 → 评审 → 合并）需要用户手动创建多个会话、手动传递上下文、手动跟进进度，存在以下问题：
 
 1. **多会话协作靠人肉串联**：一个需求从产品方案到代码合并需要多个会话接力，会话之间的上下文（产物）完全依赖用户复制粘贴。
 2. **进度不可视**：用户无法直观看到一个需求当前推进到哪一步、谁在执行、卡在哪里。
@@ -275,6 +275,6 @@ flowchart TD
 
 ## 六、相关文档
 
-- [[../released/20260523-git-worktree-support-prd]]
+- [[20260523-git-worktree-support-prd]]
 - [[20260804-integrated-mcp-registry]]
 - 技术提案：`docs/engineering/proposals/20260808-feat-agent-workflow.md`
