@@ -1113,6 +1113,8 @@ interface StartEventData {
   requestId: string;
   sessionId: string;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  modeId?: string;
+  modelId?: string;
 }
 
 describe('Workflow Node Failure (A22-A23)', () => {
@@ -1810,4 +1812,72 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     expect(instAfterDone.lastNodeName).toBe('AI执行');
     expect(instAfterDone.lastNodeStatus).toBe('DONE');
   }, 60_000);
+});
+
+describe('Workflow Session Initial Mode/Model (A30)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfinit');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'init');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A30: 节点配置 modeId/modelId 透传到 AI 会话 acp:start（harness 初始化为配置值而非默认）', async () => {
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: simpleTemplateInput(`wf-a30-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a30-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input' },
+            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: false } },
+          ],
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a30-实例-${Date.now()}` },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+
+    // harness 会话初始化参数携带节点配置的 mode/model
+    expect(startData.modeId).toBe('code');
+    expect(startData.modelId).toBe('gpt-5');
+
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_a30_${Date.now()}`,
+    });
+    await sleep(500);
+  }, 30_000);
 });
