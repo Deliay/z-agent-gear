@@ -32,9 +32,10 @@ export default function MainLayout() {
   // Mobile: show list or detail based on route
   const path = location.pathname;
   const isSessionDetail = /^\/sessions\/[^/]+$/.test(path);
+  const isWorkflowDetail = /^\/workflows\/[^/]+$/.test(path);
   const isSettings = path.startsWith('/settings');
 
-  if (isSessionDetail || isSettings) {
+  if (isSessionDetail || isWorkflowDetail || isSettings) {
     return (
       <main className="h-screen overflow-auto">
         <Outlet />

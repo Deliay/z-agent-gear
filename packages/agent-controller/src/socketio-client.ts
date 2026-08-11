@@ -7,6 +7,7 @@ import { homedir } from 'os';
 import { Heartbeat } from './heartbeat.js';
 import { clearConfigKey, saveKeyToConfig, saveEndpointToConfig, getResumeTokenFromConfig, saveResumeTokenToConfig, clearResumeTokenFromConfig } from './config.js';
 import { acpDetector } from './acp/detector.js';
+import { probeAcpServerOptions } from './acp/prober.js';
 import { AcpSpawner } from './acp/spawner.js';
 import { AcpSessionBridge } from './acp/bridge.js';
 import { AcpSyncBridge } from './acp/sync-bridge.js';
@@ -41,6 +42,11 @@ interface ShutdownPayload {
 
 interface AcpCheckPayload {
   requestId: string;
+}
+
+interface AcpProbeOptionsPayload {
+  requestId: string;
+  serverType: string;
 }
 
 interface AcpStartPayload {
@@ -257,6 +263,29 @@ export function connectToServer(
       requestId: data.requestId,
       servers,
     });
+  });
+
+  // 空实例探测：拉起指定工具的临时会话，收集 Mode/模型选项后关闭
+  socket.on('acp:probe-options', async (data: AcpProbeOptionsPayload) => {
+    console.log(`[ACP ctrl] acp:probe-options received: requestId=${data.requestId} serverType=${data.serverType}`);
+    try {
+      const options = await probeAcpServerOptions(data.serverType);
+      console.log(`[ACP ctrl] probe-options success: serverType=${data.serverType} modes=${options.modes.length} models=${options.availableModels.length}`);
+      socket.emit('acp:probe-options:result', {
+        requestId: data.requestId,
+        serverType: data.serverType,
+        success: true,
+        ...options,
+      });
+    } catch (error) {
+      console.warn(`[ACP ctrl] probe-options failed: serverType=${data.serverType} error=${(error as Error).message}`);
+      socket.emit('acp:probe-options:result', {
+        requestId: data.requestId,
+        serverType: data.serverType,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
   });
 
   socket.on('acp:start', async (data: AcpStartPayload) => {

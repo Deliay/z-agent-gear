@@ -89,13 +89,13 @@ export default function AcpCard({
         className={`w-full flex items-center gap-2 px-3 py-2 text-left ${colors.header} hover:opacity-80 transition-opacity`}
       >
         {collapsed ? (
-          <ChevronRight className={`h-4 w-4 ${colors.chevron}`} />
+          <ChevronRight className={`h-4 w-4 shrink-0 ${colors.chevron}`} />
         ) : (
-          <ChevronDown className={`h-4 w-4 ${colors.chevron}`} />
+          <ChevronDown className={`h-4 w-4 shrink-0 ${colors.chevron}`} />
         )}
-        <span className="font-medium text-sm">{title}</span>
+        <span className="min-w-0 truncate font-medium text-sm">{title}</span>
         {collapsed && (
-          <span className={`ml-auto text-xs ${colors.summary}`}>{summary}</span>
+          <span className={`ml-auto min-w-0 truncate text-xs ${colors.summary}`}>{summary}</span>
         )}
       </button>
       {!collapsed && (

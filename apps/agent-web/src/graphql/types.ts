@@ -154,6 +154,9 @@ export interface SessionData {
   authRequired?: boolean | null
   authMethods?: AuthMethodInfoData[] | null
   supportsAdditionalDirectories?: boolean | null
+  /** 工作流节点会话才有，普通会话为 null */
+  workflowInstanceId?: string | null
+  workflowNodeId?: string | null
   createdAt: string
   updatedAt: string
   endedAt: string | null
@@ -218,6 +221,30 @@ export interface GetSessionMessagesQuery {
 
 export interface GetAcpCapabilitiesQuery {
   acpCapabilities: AcpCapabilityData[]
+}
+
+export interface AcpModeOptionData {
+  id: string
+  name: string
+  description: string | null
+}
+
+export interface AcpModelOptionData {
+  id: string
+  name: string
+  provider: string | null
+}
+
+export interface AcpServerOptionsData {
+  modes: AcpModeOptionData[]
+  models: AcpModelOptionData[]
+  currentModeId: string | null
+  currentModelId: string | null
+  probedAt: string | null
+}
+
+export interface GetAcpServerOptionsQuery {
+  acpServerOptions: AcpServerOptionsData
 }
 
 export interface CreateControllerKeyMutation {

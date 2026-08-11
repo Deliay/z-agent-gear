@@ -30,7 +30,7 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
           }
           return (
             <code
-              className="rounded bg-muted px-1.5 py-0.5 text-sm font-mono"
+              className="rounded bg-muted px-1.5 py-0.5 text-sm font-mono break-all"
               {...rest}
             >
               {children}
@@ -38,7 +38,9 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
           );
         },
         p(props) {
-          return <p className="!my-1 last:!mb-0" {...props} />;
+          // wrap-anywhere（overflow-wrap:anywhere）：缩减 min-content，超长不可断字符串也能换行，
+          // 防止撑破窄面板（break-words 不影响 min-content，无效）
+          return <p className="!my-1 last:!mb-0 wrap-anywhere" {...props} />;
         },
         ul(props) {
           return <ul className="!my-1 list-disc pl-4" {...props} />;
@@ -51,6 +53,24 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
         },
         pre(props) {
           return <pre className="!my-0 overflow-x-auto" {...props} />;
+        },
+        // GFM 表格/长链接无排版兜底（未装 @tailwindcss/typography，prose 类无效），
+        // 必须自行约束：表格包横向滚动容器、单元格/链接断词，否则撑破窄面板。
+        table(props) {
+          return (
+            <div className="!my-2 overflow-x-auto">
+              <table className="border-collapse text-sm" {...props} />
+            </div>
+          );
+        },
+        th(props) {
+          return <th className="border border-border px-2 py-1 text-left font-medium break-words" {...props} />;
+        },
+        td(props) {
+          return <td className="border border-border px-2 py-1 break-words" {...props} />;
+        },
+        a(props) {
+          return <a className="break-all text-info underline" target="_blank" rel="noreferrer" {...props} />;
         },
       }}
     >

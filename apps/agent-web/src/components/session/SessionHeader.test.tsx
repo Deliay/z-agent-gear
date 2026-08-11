@@ -77,6 +77,12 @@ describe('SessionHeader', () => {
     expect(screen.getByText('关闭')).toBeDefined();
   });
 
+  it('should show Continue button instead of Close when status is disconnected', () => {
+    render(<SessionHeader session={baseSession} status="disconnected" onClose={noop} onDelete={noop} onContinue={noop} controllerOnline />);
+    expect(screen.queryByText('关闭')).toBeNull();
+    expect(screen.getByText('继续')).toBeDefined();
+  });
+
   it('should hide Close button when status is ended', () => {
     render(<SessionHeader session={baseSession} status="ended" onClose={noop} onDelete={noop} />);
     expect(screen.queryByText('关闭')).toBeNull();

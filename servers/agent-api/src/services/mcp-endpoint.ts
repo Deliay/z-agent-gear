@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { McpServer } from '../models/mcp-server.js';
 import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
+import { Session } from '../models/session.js';
 import { config } from '../config/index.js';
 import { getRedisClient } from '../middleware/redis.js';
 
@@ -13,11 +14,18 @@ export interface McpEndpointInfo {
   serverNames: string[];
 }
 
+/** 节点作用域：工作流节点会话的 token 映射到具体实例节点 */
+export interface WorkflowScope {
+  instanceId: string;
+  nodeId: string;
+}
+
 export class McpEndpointService {
   async createEndpoint(
     sessionId: string,
     userId: string,
     mcpServerIds: string[],
+    workflow?: WorkflowScope,
   ): Promise<McpEndpointInfo> {
     const servers = await McpServer.find({ _id: { $in: mcpServerIds }, userId, enabled: true });
     if (servers.length !== mcpServerIds.length) {
@@ -28,7 +36,7 @@ export class McpEndpointService {
     const ttl = config.mcpEndpointTokenTtl;
 
     const token = jwt.sign(
-      { sessionId, userId, serverNames },
+      { sessionId, userId, serverNames, ...(workflow ? { workflow } : {}) },
       config.mcpEndpointJwtSecret,
       { expiresIn: `${ttl}s` },
     );
@@ -74,7 +82,13 @@ export class McpEndpointService {
     if (!endpoint || !endpoint.mcpServerIds || endpoint.mcpServerIds.length === 0) {
       return null;
     }
-    return this.createEndpoint(sessionId, userId, endpoint.mcpServerIds as string[]);
+    // 工作流节点会话重签时保留节点作用域（返工/兜底 resume 场景）
+    const session = await Session.findById(sessionId).lean();
+    const workflow =
+      session?.workflowInstanceId && session?.workflowNodeId
+        ? { instanceId: session.workflowInstanceId.toString(), nodeId: session.workflowNodeId }
+        : undefined;
+    return this.createEndpoint(sessionId, userId, endpoint.mcpServerIds as string[], workflow);
   }
 
   async getStatus(sessionId: string): Promise<string> {

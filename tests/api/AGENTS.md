@@ -302,6 +302,31 @@ npm test
 | deletePortForward - 成功删除 | 应返回 true，列表中不再包含该端口 |
 | deletePortForward - 不存在的端口 | 应返回 false |
 
+### Agent Workflow API (`agent-api/workflow.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| A1 创建合法模板 | 创建成功，version=1，isBuiltin=false |
+| A2 非法图拒绝 | 环 / 双首节点 / AI 首节点分别返回具体校验错误 |
+| A3 内置模板只读 | 对 isBuiltin 模板 update/delete 拒绝（「内置模板不允许修改/删除」） |
+| A4 version 自增 | 每次 update version+1 |
+| A5 复制快照与隔离 | configureWorkflow 深拷贝节点并记录来源版本；改模板不影响副本 |
+| A6 缺 agentConfig 拒绝 | AI 节点无 agentConfig 时报缺失节点 |
+| A7 capabilities 校验 | acpServerType 不在 controller 可用列表内拒绝（fake controller 应答 acp:check） |
+| A8 禁止增删节点 | updateConfiguredWorkflow 增/删 nodeKey 均拒绝 |
+| A9 活跃实例删除约束 | 存在未终结实例时 deleteConfiguredWorkflow 拒绝；无引用时可删除 |
+| A10 实例化 | 首节点（HUMAN）READY，其余 INITIALIZING |
+| A11 非 git 工作区拒绝 | requiresWorktree+initNewWorktree 但工作区无 defaultBranch 时实例化拒绝 |
+| A12 completeHumanNode 接力 | 产物写黑板（{nodeId}-{name}-产物-{title}），下游 AI 节点 RUNNING 且 fake controller 收到 acp:start（含 agent-workflow-tools 装配与节点作用域 token） |
+| A13 rejectNode 打回留痕 | 节点 REJECT + rejectInfo，黑板写入「打回-{nodeId}-{序号}」记录，上游 REWORK 且 reworkCount+1 |
+| A14 sessions 排除工作流会话 | 默认不含工作流会话；includeWorkflowSessions=true 含（带 workflowInstanceId/workflowNodeId） |
+| A15 getCurrentNodeId 作用域 | 节点 token 返回当前 nodeId；普通会话 token 返回 UNAUTHORIZED |
+| A16 非 RUNNING 状态提示 | REJECT 状态调用 completeCurrentNode 返回 INVALID_STATE 可读提示 |
+| A17 removeBlackboardKey | 移除后黑板无、blackboardTrash 有 |
+| A18 权限隔离 | 他人 workflowInstance 查询为 null、列表为空、mutation 报「不存在或无权限」 |
+
+> MCP 工具调用：`POST <agent-api>/mcp/<sessionId>/agent-workflow-tools`，Bearer 为会话 MCP endpoint token（从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取）。
+
 ### ACP Permission Reminder API (`agent-api/permission.test.ts`)
 
 | 测试 | 描述 |

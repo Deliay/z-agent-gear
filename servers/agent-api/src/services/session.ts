@@ -9,8 +9,19 @@ import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
 export class SessionService {
-  async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    const sessions = await Session.find({ userId }).sort({ createdAt: -1 }).lean();
+  /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
+  private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
+
+  onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionEndedCallback = callback;
+  }
+
+  async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {
+    // 默认排除工作流节点会话（workflowInstanceId != null）
+    const filter: Record<string, unknown> = options.includeWorkflowSessions
+      ? { userId }
+      : { userId, workflowInstanceId: null };
+    const sessions = await Session.find(filter).sort({ createdAt: -1 }).lean();
     return sessions.map(this.mapSession.bind(this));
   }
 
@@ -27,6 +38,9 @@ export class SessionService {
     enableWorktree?: boolean;
     worktreeBranchSuffix?: string;
     mcpServerIds?: string[];
+    /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
+    workflowInstanceId?: string;
+    workflowNodeId?: string;
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
@@ -103,6 +117,8 @@ export class SessionService {
       cwd,
       worktreePath,
       worktreeBranch,
+      ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
+      ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
@@ -113,6 +129,10 @@ export class SessionService {
           session._id.toString(),
           userId,
           input.mcpServerIds,
+          // 工作流节点会话：token 扩展节点作用域
+          input.workflowInstanceId && input.workflowNodeId
+            ? { instanceId: input.workflowInstanceId, nodeId: input.workflowNodeId }
+            : undefined,
         );
       } catch (err) {
         console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
@@ -153,6 +173,8 @@ export class SessionService {
       await redis.set(`session:${id}:status`, status);
       if (status === 'ended') {
         await redis.del(`session:${id}:status`);
+        // 工作流兜底检查（节点仍 RUNNING 且未转移时 resume 并发送兜底提示词）
+        await this.sessionEndedCallback?.(id);
       }
     }
 
@@ -221,7 +243,8 @@ export class SessionService {
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
     }
-    if (session.status !== 'ended') {
+    // ended/disconnected 均可恢复（disconnected 为 Controller 临时断连，重连后可 resume）
+    if (session.status !== 'ended' && session.status !== 'disconnected') {
       return { success: false, status: session.status, error: 'Session is not ended' };
     }
 
@@ -262,6 +285,8 @@ export class SessionService {
         sessionId: id,
         reason: 'user_close',
       }));
+      // 工作流兜底检查
+      await this.sessionEndedCallback?.(id);
       return true;
     }
     return false;
@@ -479,6 +504,50 @@ export class SessionService {
     }));
   }
 
+  /**
+   * 探测指定 ACP 工具的 Mode/模型选项（controller 拉起空实例获得）。
+   * 缓存优先（acp:options:<controllerId>:<serverType>，由 controller-api 写入）；
+   * 未命中时发布 acp:probe-options 命令并轮询等待结果（最长 35s，覆盖 30s 探测超时）。
+   * 探测失败返回空选项（probedAt=null），由前端回退手动输入。
+   */
+  async getAcpServerOptions(
+    controllerId: string,
+    acpServerType: string,
+    userId: string,
+  ): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+
+    const redis = getRedisClient();
+    const cacheKey = `acp:options:${controllerId}:${acpServerType}`;
+
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as Record<string, unknown>;
+    }
+
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    await redis.publish('session:command', JSON.stringify({
+      type: 'acp:probe-options',
+      requestId,
+      controllerId,
+      serverType: acpServerType,
+    }));
+
+    for (let i = 0; i < 70; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await redis.get(cacheKey);
+      if (result) {
+        return JSON.parse(result) as Record<string, unknown>;
+      }
+    }
+
+    // 超时 — 返回空选项
+    return { modes: [], models: [], currentModeId: null, currentModelId: null, probedAt: null };
+  }
+
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -525,6 +594,10 @@ export class SessionService {
       authMethods: this.mapAuthMethods((session as any).authMethods),
       supportsAdditionalDirectories: (session as any).supportsAdditionalDirectories || false,
       permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
+      workflowInstanceId: (session as any).workflowInstanceId
+        ? (session as any).workflowInstanceId.toString()
+        : null,
+      workflowNodeId: (session as any).workflowNodeId || null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,

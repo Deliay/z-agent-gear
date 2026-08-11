@@ -1,0 +1,222 @@
+# Agent 工作流契约
+# 关联 PRD: docs/product/draft/20260808-agent-workflow.md
+# 关联提案: docs/engineering/proposals/20260808-feat-agent-workflow.md
+
+enum WorkflowNodeType {
+  HUMAN
+  AI
+  FLAG
+}
+
+enum WorkflowNodeStatus {
+  INITIALIZING
+  READY
+  RUNNING
+  DONE
+  REJECT
+  REWORK
+  # 失败：阻断流程，需人工介入（MCP resumeFailedNode 恢复 RUNNING）
+  FAILED
+}
+
+# ---------- 工作流模板 ----------
+
+type WorkflowTemplateNode {
+  # 模板内唯一标识（稳定 key，供 dependsOn 引用）
+  nodeKey: String!
+  type: WorkflowNodeType!
+  name: String!
+  description: String
+  # 所属阶段名称（同 stage 的节点共享一个 worktree）
+  stage: String!
+  # AI 节点提示词数组（HUMAN/FLAG 节点为 null）
+  prompts: [String!]
+  # 预定义产物 title，产物 key = {nodeId}-{nodeName}-产物-{title}
+  artifactTitles: [String!]
+  # 上游 nodeKey 列表，空数组 = 首节点候选
+  dependsOn: [String!]!
+  # 该节点会话是否需要 worktree 隔离
+  requiresWorktree: Boolean!
+}
+
+type WorkflowTemplate {
+  id: ID!
+  name: String!
+  description: String
+  # 模板版本号，每次更新 +1
+  version: Int!
+  nodes: [WorkflowTemplateNode!]!
+  # 内置默认模板（只读，可复制）
+  isBuiltin: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# ---------- 已配置工作流（模板快照副本） ----------
+
+type AgentNodeConfig {
+  acpServerType: String!
+  modeId: String
+  modelId: String
+  initNewWorktree: Boolean!
+}
+
+type ConfiguredWorkflowNode {
+  nodeKey: String!
+  type: WorkflowNodeType!
+  name: String!
+  description: String
+  stage: String!
+  prompts: [String!]
+  artifactTitles: [String!]
+  dependsOn: [String!]!
+  requiresWorktree: Boolean!
+  # AI 节点必填；HUMAN/FLAG 节点为 null
+  agentConfig: AgentNodeConfig
+}
+
+type ConfiguredWorkflow {
+  id: ID!
+  name: String!
+  controllerId: ID!
+  # 复制来源（仅展示用，无强关联；模板后续更新不影响本副本）
+  sourceTemplateId: ID
+  sourceTemplateVersion: Int
+  nodes: [ConfiguredWorkflowNode!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# ---------- 工作流实例 ----------
+
+type WorkflowNodeRejectInfo {
+  reason: String!
+  # 发起打回的节点 nodeId
+  fromNodeId: String
+  at: String!
+}
+
+type WorkflowNodeFailInfo {
+  reason: String!
+  # 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）
+  source: String!
+  at: String!
+}
+
+type WorkflowNode {
+  id: ID!
+  nodeKey: String!
+  type: WorkflowNodeType!
+  name: String!
+  description: String
+  status: WorkflowNodeStatus!
+  stage: String!
+  # 关联会话（AI 节点会话 / 人类节点可无）
+  sessionId: ID
+  createdAt: String!
+  startedAt: String
+  reworkedAt: String
+  reworkCount: Int!
+  rejectInfo: WorkflowNodeRejectInfo
+  failInfo: WorkflowNodeFailInfo
+}
+
+type BlackboardEntry {
+  key: String!
+  value: String!
+  updatedAt: String!
+}
+
+type WorkflowInstance {
+  id: ID!
+  configuredWorkflowId: ID!
+  controllerId: ID!
+  workspaceId: ID!
+  name: String!
+  # 实例对外状态 = 全部 RUNNING 节点名
+  currentNodeNames: [String!]!
+  # 最后执行过的节点名与状态（实例状态展示：RUNNING 为空时以此为准）
+  lastNodeName: String
+  lastNodeStatus: String
+  # 是否已归档（归档仅移入「已归档」分组，不影响流程运转；区别于删除）
+  archived: Boolean!
+  nodes: [WorkflowNode!]!
+  blackboard: [BlackboardEntry!]!
+  blackboardTrash: [BlackboardEntry!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# ---------- Input ----------
+
+input WorkflowTemplateNodeInput {
+  nodeKey: String!
+  type: WorkflowNodeType!
+  name: String!
+  description: String
+  stage: String!
+  prompts: [String!]
+  artifactTitles: [String!]
+  dependsOn: [String!]!
+  requiresWorktree: Boolean!
+}
+
+input WorkflowTemplateInput {
+  name: String!
+  description: String
+  nodes: [WorkflowTemplateNodeInput!]!
+}
+
+input AgentNodeConfigInput {
+  acpServerType: String!
+  modeId: String
+  modelId: String
+  initNewWorktree: Boolean!
+}
+
+input ConfiguredWorkflowNodeInput {
+  nodeKey: String!
+  agentConfig: AgentNodeConfigInput
+}
+
+input ConfigureWorkflowInput {
+  name: String!
+  controllerId: ID!
+  nodes: [ConfiguredWorkflowNodeInput!]!
+}
+
+# ---------- Query / Mutation ----------
+
+type Query {
+  workflowTemplates: [WorkflowTemplate!]!
+  workflowTemplate(id: ID!): WorkflowTemplate
+  configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
+  configuredWorkflow(id: ID!): ConfiguredWorkflow
+  # archived 缺省/false 返回活跃实例（未归档）；true 返回已归档实例
+  workflowInstances(workspaceId: ID!, archived: Boolean): [WorkflowInstance!]!
+  workflowInstance(id: ID!): WorkflowInstance
+}
+
+type Mutation {
+  createWorkflowTemplate(input: WorkflowTemplateInput!): WorkflowTemplate!
+  # 内置模板（isBuiltin=true）拒绝更新；每次更新 version +1
+  updateWorkflowTemplate(id: ID!, input: WorkflowTemplateInput!): WorkflowTemplate!
+  # 内置模板拒绝删除
+  deleteWorkflowTemplate(id: ID!): Boolean!
+  # 从模板复制生成快照副本（深拷贝 nodes + 记录来源版本）
+  configureWorkflow(templateId: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
+  # 仅允许修改 name/controllerId/agentConfig，不允许增删节点（改图需重新从模板复制）
+  updateConfiguredWorkflow(id: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
+  # 存在未终结实例引用时拒绝删除
+  deleteConfiguredWorkflow(id: ID!): Boolean!
+  # 实例化：首节点（人类）READY，其余 INITIALIZING
+  instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
+  # 人类节点完成（input 为产物文本，写入黑板；REWORK 状态时走 completeRework 重新提交：重置产物入垃圾桶并复工下游）
+  completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
+  # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
+  rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+  # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
+  deleteWorkflowInstance(id: ID!): Boolean!
+  # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）
+  archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
+}

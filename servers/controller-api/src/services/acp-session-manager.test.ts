@@ -264,6 +264,81 @@ describe('ACPSessionManager', () => {
     }, 35000);
   });
 
+  describe('forwardToController 排队补发（start/resume 竞态）', () => {
+    async function startAndGetRequestId(socket: ReturnType<typeof createMockSocket>, sessionId = 'sess-1') {
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      const resultPromise = manager.startSession(
+        socket as never, sessionId, 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      return { resultPromise, requestId };
+    }
+
+    it('start 完成前到达的输入消息排队，start:result 后按序补发', async () => {
+      const socket = createMockSocket();
+      const { resultPromise, requestId } = await startAndGetRequestId(socket);
+
+      // 会话尚未注册（acp:start:result 未回），消息到达 → 排队，不直接 emit
+      expect(manager.forwardToController('sess-1', { type: 'text', content: '第一条 prompt' })).toBe(true);
+      expect(manager.forwardToController('sess-1', { type: 'text', content: '第二条 prompt' })).toBe(true);
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:message', expect.anything());
+
+      socket.emit.mockClear();
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await resultPromise;
+
+      const messages = socket.emit.mock.calls
+        .filter((c) => c[0] === 'acp:message')
+        .map((c) => (c[1] as { message: { content: string } }).message.content);
+      expect(messages).toEqual(['第一条 prompt', '第二条 prompt']);
+    });
+
+    it('resume 完成前到达的输入消息排队，resume:result 后补发', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-2', 'ext-1', 'ctrl-1', 'user-1', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      expect(manager.forwardToController('sess-2', { type: 'text', content: '返工提示词' })).toBe(true);
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:message', expect.anything());
+
+      socket.emit.mockClear();
+      socket._trigger('acp:resume:result', { requestId, sessionId: 'sess-2', success: true });
+      await resultPromise;
+
+      expect(socket.emit).toHaveBeenCalledWith('acp:message', expect.objectContaining({
+        sessionId: 'sess-2',
+        message: { type: 'text', content: '返工提示词' },
+      }));
+    });
+
+    it('start 失败后队列被清空，不再补发', async () => {
+      const socket = createMockSocket();
+      const { resultPromise, requestId } = await startAndGetRequestId(socket);
+
+      manager.forwardToController('sess-1', { type: 'text', content: '第一条 prompt' });
+
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: false, error: 'spawn failed' });
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:message', expect.anything());
+    });
+  });
+
   describe('sendMessage', () => {
     it('should create message, publish, and forward to controller', async () => {
       const socket = createMockSocket();

@@ -1,13 +1,15 @@
 enum McpServerTransport {
   registered_proxy
   http      # P2 启用
-  platform  # P2 启用
+  # 平台内置 MCP 服务（如 agent-workflow-tools），由 agent-api 直接处理，不经 MCP Proxy 转发
+  platform
 }
 
 enum McpServerSource {
   proxy
   manual    # P2 启用
-  platform  # P2 启用
+  # 平台内置服务，随系统自动注册（仅在工作流节点会话装配时生效）
+  platform
 }
 
 enum McpServerStatus {
