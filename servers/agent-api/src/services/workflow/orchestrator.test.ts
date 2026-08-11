@@ -97,7 +97,7 @@ function makeConfigured() {
         prompts: ['产出技术方案', '包含架构图'],
         dependsOn: ['requirement'],
         requiresWorktree: true,
-        agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: true },
+        agentConfig: { acpServerType: 'opencode', modeId: null as string | null, modelId: null as string | null, initNewWorktree: true },
       },
       {
         nodeKey: 'impl',
@@ -107,7 +107,7 @@ function makeConfigured() {
         prompts: ['实现代码'],
         dependsOn: ['design'],
         requiresWorktree: true,
-        agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: true },
+        agentConfig: { acpServerType: 'opencode', modeId: null as string | null, modelId: null as string | null, initNewWorktree: true },
       },
     ],
   };
@@ -156,6 +156,51 @@ describe('WorkflowOrchestrator', () => {
     expect(content).toContain(WORKFLOW_SYSTEM_PROMPT);
     expect(content).toContain('产出技术方案');
     expect(content).not.toContain('上游产物');
+  });
+
+  it('O3a: AI 节点配置的 modeId/modelId 透传到 sessionService.create（harness 会话初始化为配置值而非默认）', async () => {
+    const configured = makeConfigured();
+    configured.nodes[1].agentConfig = {
+      acpServerType: 'opencode',
+      modeId: 'code',
+      modelId: 'gpt-5',
+      initNewWorktree: true,
+    };
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
+
+    const instance = makeInstance([
+      makeNode(),
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
+    ]);
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ modeId: 'code', modelId: 'gpt-5' }),
+    );
+  });
+
+  it('O3b: agentConfig 未配置 mode/model 时不透传（保持 undefined，使用 harness 默认）', async () => {
+    const configured = makeConfigured();
+    configured.nodes[1].agentConfig = {
+      acpServerType: 'opencode',
+      modeId: null,
+      modelId: null,
+      initNewWorktree: true,
+    };
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
+
+    const instance = makeInstance([
+      makeNode(),
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
+    ]);
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    const call = vi.mocked(sessionService.create).mock.calls[0][1] as Record<string, unknown>;
+    expect(call.modeId).toBeUndefined();
+    expect(call.modelId).toBeUndefined();
   });
 
   it('O3: 会话打标：create 参数含 workflowInstanceId/workflowNodeId，节点回填 sessionId', async () => {

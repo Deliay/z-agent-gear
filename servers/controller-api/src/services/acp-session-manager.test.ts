@@ -134,6 +134,63 @@ describe('ACPSessionManager', () => {
       await resultPromise;
     });
 
+    it('should include modeId/modelId in acp:start payload when provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp', undefined,
+        { modeId: 'code', modelId: 'gpt-5' },
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({
+          sessionId: 'sess-1',
+          modeId: 'code',
+          modelId: 'gpt-5',
+        }));
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        externalSessionId: 'ext-123',
+      });
+      await resultPromise;
+    });
+
+    it('should omit modeId/modelId from acp:start payload when not provided', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({ sessionId: 'sess-1' }));
+      });
+
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const payload = emitArgs?.[1] as Record<string, unknown>;
+      expect(payload.modeId).toBeUndefined();
+      expect(payload.modelId).toBeUndefined();
+
+      const requestId = payload?.requestId as string;
+      socket._trigger('acp:start:result', {
+        requestId,
+        sessionId: 'sess-1',
+        success: true,
+        externalSessionId: 'ext-123',
+      });
+      await resultPromise;
+    });
+
     it('should omit mcpEndpoint from acp:start payload when not provided', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);

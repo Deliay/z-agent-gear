@@ -11,6 +11,9 @@ export interface AcpBridgeOptions {
   additionalDirectories?: string[];
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  /** 会话初始化时应用的工作模式/模型（工作流节点配置；不提供则使用 harness 默认） */
+  initialModeId?: string;
+  initialModelId?: string;
 }
 
 interface QueuedInput {
@@ -186,6 +189,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
   private mcpEndpoint: AcpBridgeOptions['mcpEndpoint'];
+  private initialModeId: string | undefined;
+  private initialModelId: string | undefined;
   private connection: acp.ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private activePrompt: Promise<acp.PromptResponse> | null = null;
@@ -221,6 +226,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
     this.mcpEndpoint = options.mcpEndpoint;
+    this.initialModeId = options.initialModeId;
+    this.initialModelId = options.initialModelId;
     this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
   }
 
@@ -262,7 +269,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.acpSessionId = result.sessionId;
       this.initializing = false;
 
-      this.emit('acp:initialized', this.buildInitializedPayload(result));
+      const initialized = this.buildInitializedPayload(result);
+      // 工作流节点配置的初始 mode/model：在首条 prompt 前应用，而非使用 harness 默认设置
+      await this.applyInitialModeModel();
+      this.emit('acp:initialized', initialized);
       this.flushInputQueue();
     } catch (error) {
       this.initializing = false;
@@ -360,6 +370,27 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     // SDK 1.x 已移除 unstable_setSessionModel：无 configOptions 的旧 Agent 无法走配置项通道。
     // 模型切换暂不支持，由上层提示（不保留 unstable 调用）。
     throw new Error('Model switching is not supported: agent does not expose a model config option');
+  }
+
+  /** 会话初始化（session/new 之后、首条 prompt 之前）应用工作流节点配置的初始 mode/model */
+  private async applyInitialModeModel(): Promise<void> {
+    if (this.initialModeId) {
+      try {
+        await this.setMode(this.initialModeId);
+        console.log(`[ACP bridge] session ${this.sessionId}: applied initial mode=${this.initialModeId}`);
+      } catch (err) {
+        // 应用初始 mode 失败不阻断会话：回退 harness 默认，仅记录日志
+        console.warn(`[ACP bridge] session ${this.sessionId}: failed to apply initial mode: ${(err as Error).message}`);
+      }
+    }
+    if (this.initialModelId) {
+      try {
+        await this.setModel(this.initialModelId);
+        console.log(`[ACP bridge] session ${this.sessionId}: applied initial model=${this.initialModelId}`);
+      } catch (err) {
+        console.warn(`[ACP bridge] session ${this.sessionId}: failed to apply initial model: ${(err as Error).message}`);
+      }
+    }
   }
 
   async setConfigOption(configId: string, value: string | boolean): Promise<acp.SetSessionConfigOptionResponse> {
