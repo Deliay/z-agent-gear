@@ -1,4 +1,18 @@
-import type { WorkflowNodeType, WorkflowTemplateNodeInput } from '@/graphql/workflow'
+import type {
+  WorkflowNodeType,
+  WorkflowTemplateNodeInput,
+  ConfiguredWorkflowNodeInput,
+  AgentNodeConfigInput,
+  ConfiguredWorkflowNodeData,
+} from '@/graphql/workflow'
+
+/** Agent 配置表单状态（acpServerType/modeId/modelId/initNewWorktree） */
+export interface AgentConfigForm {
+  acpServerType: string
+  modeId: string
+  modelId: string
+  initNewWorktree: boolean
+}
 
 /** 模板编辑器中的可编辑节点（prompts/artifactTitles 以「每行一条」文本编辑） */
 export interface EditableNode {
@@ -11,6 +25,8 @@ export interface EditableNode {
   artifactTitlesText: string
   dependsOn: string[]
   requiresWorktree: boolean
+  /** 已配置/实例化场景下的 Agent 配置；模板节点为 null（模板不含 agentConfig） */
+  agentConfig?: AgentConfigForm | null
 }
 
 export function createEmptyNode(type: WorkflowNodeType = 'HUMAN'): EditableNode {
@@ -24,7 +40,12 @@ export function createEmptyNode(type: WorkflowNodeType = 'HUMAN'): EditableNode 
     artifactTitlesText: '',
     dependsOn: [],
     requiresWorktree: false,
+    agentConfig: null,
   }
+}
+
+export function emptyAgentConfig(): AgentConfigForm {
+  return { acpServerType: '', modeId: '', modelId: '', initNewWorktree: false }
 }
 
 function splitLines(text: string): string[] {
@@ -34,6 +55,50 @@ function splitLines(text: string): string[] {
     .filter(Boolean)
 }
 
+/** 模板节点 → 可编辑节点（不含 agentConfig） */
+export function templateNodeToEditable(
+  node: {
+    nodeKey: string
+    type: WorkflowNodeType
+    name: string
+    description: string | null
+    stage: string
+    prompts: string[] | null
+    artifactTitles: string[] | null
+    dependsOn: string[]
+    requiresWorktree: boolean
+  },
+): EditableNode {
+  return {
+    nodeKey: node.nodeKey,
+    type: node.type,
+    name: node.name,
+    description: node.description ?? '',
+    stage: node.stage,
+    promptsText: (node.prompts ?? []).join('\n'),
+    artifactTitlesText: (node.artifactTitles ?? []).join('\n'),
+    dependsOn: node.dependsOn,
+    requiresWorktree: node.requiresWorktree,
+    agentConfig: null,
+  }
+}
+
+/** 已配置工作流节点 → 可编辑节点（含 agentConfig，供配置界面/实例化界面载入） */
+export function configuredNodeToEditable(node: ConfiguredWorkflowNodeData): EditableNode {
+  return {
+    ...templateNodeToEditable(node),
+    agentConfig: node.agentConfig
+      ? {
+          acpServerType: node.agentConfig.acpServerType,
+          modeId: node.agentConfig.modeId ?? '',
+          modelId: node.agentConfig.modelId ?? '',
+          initNewWorktree: node.agentConfig.initNewWorktree,
+        }
+      : null,
+  }
+}
+
+/** 可编辑节点 → 模板节点入参（不含 agentConfig，模板编辑器使用） */
 export function toNodeInput(node: EditableNode): WorkflowTemplateNodeInput {
   const isAi = node.type === 'AI'
   return {
@@ -46,6 +111,32 @@ export function toNodeInput(node: EditableNode): WorkflowTemplateNodeInput {
     artifactTitles: isAi ? splitLines(node.artifactTitlesText) : null,
     dependsOn: node.dependsOn,
     requiresWorktree: isAi ? node.requiresWorktree : false,
+  }
+}
+
+/** 可编辑节点 → 已配置工作流节点入参（全量，含 agentConfig，配置界面/实例化界面使用） */
+export function toConfiguredNodeInput(node: EditableNode): ConfiguredWorkflowNodeInput {
+  const isAi = node.type === 'AI'
+  const config: AgentNodeConfigInput | null =
+    isAi && node.agentConfig
+      ? {
+          acpServerType: node.agentConfig.acpServerType,
+          modeId: node.agentConfig.modeId.trim() || null,
+          modelId: node.agentConfig.modelId.trim() || null,
+          initNewWorktree: node.agentConfig.initNewWorktree,
+        }
+      : null
+  return {
+    nodeKey: node.nodeKey.trim(),
+    type: node.type,
+    name: node.name.trim(),
+    description: node.description.trim() || null,
+    stage: node.stage.trim(),
+    prompts: isAi ? splitLines(node.promptsText) : null,
+    artifactTitles: isAi ? splitLines(node.artifactTitlesText) : null,
+    dependsOn: node.dependsOn,
+    requiresWorktree: isAi ? node.requiresWorktree : false,
+    agentConfig: config,
   }
 }
 
@@ -106,5 +197,21 @@ export function validateTemplateNodes(nodes: EditableNode[]): string[] {
     errors.push('首节点必须是人类节点')
   }
 
+  return errors
+}
+
+/**
+ * 已配置/实例化节点图校验 = 图校验 + Agent 配置校验。
+ * 图校验与模板一致；AI 节点需已选 acpServerType（模式/模型可选）。
+ */
+export function validateConfiguredNodes(nodes: EditableNode[]): string[] {
+  const errors = validateTemplateNodes(nodes)
+  nodes.forEach((node, index) => {
+    if (node.type !== 'AI') return
+    const label = `节点 ${index + 1}`
+    if (!node.agentConfig?.acpServerType) {
+      errors.push(`${label}「${node.name.trim() || node.nodeKey.trim()}」：请为 AI 节点选择 Harness 工具`)
+    }
+  })
   return errors
 }

@@ -4,6 +4,10 @@ import { gql } from '@apollo/client'
 
 export type WorkflowNodeType = 'HUMAN' | 'AI' | 'FLAG'
 
+export type ResourceCreatedBy = 'HUMAN' | 'AI'
+
+export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK'
+
 export type WorkflowNodeStatus =
   | 'INITIALIZING'
   | 'READY'
@@ -32,6 +36,7 @@ export interface WorkflowTemplateData {
   version: number
   nodes: WorkflowTemplateNodeData[]
   isBuiltin: boolean
+  createdBy: ResourceCreatedBy
   createdAt: string
   updatedAt: string
 }
@@ -54,6 +59,7 @@ export interface ConfiguredWorkflowData {
   sourceTemplateId: string | null
   sourceTemplateVersion: number | null
   nodes: ConfiguredWorkflowNodeData[]
+  createdBy: ResourceCreatedBy
   createdAt: string
   updatedAt: string
 }
@@ -80,6 +86,11 @@ export interface WorkflowNodeData {
   status: WorkflowNodeStatus
   stage: string
   sessionId: string | null
+  // 实例快照字段（实例化时从最终节点图复制；旧实例可能缺失）
+  prompts: string[] | null
+  artifactTitles: string[] | null
+  agentConfig: AgentNodeConfigData | null
+  requiresWorktree: boolean | null
   createdAt: string
   startedAt: string | null
   reworkedAt: string | null
@@ -141,6 +152,15 @@ export interface AgentNodeConfigInput {
 
 export interface ConfiguredWorkflowNodeInput {
   nodeKey: string
+  type: WorkflowNodeType
+  name: string
+  description?: string | null
+  stage: string
+  prompts?: string[] | null
+  artifactTitles?: string[] | null
+  dependsOn: string[]
+  requiresWorktree: boolean
+  // AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig?: AgentNodeConfigInput | null
 }
 
@@ -148,6 +168,29 @@ export interface ConfigureWorkflowInput {
   name: string
   controllerId: string
   nodes: ConfiguredWorkflowNodeInput[]
+}
+
+export interface InstantiateWorkflowInput {
+  source: InstantiateSource
+  // source=CONFIGURED 必填
+  configuredWorkflowId?: string | null
+  // source=TEMPLATE 必填
+  templateId?: string | null
+  controllerId: string
+  workspaceId: string
+  name: string
+  // 实例化前配置界面编辑后的最终节点图（服务端以此为准校验并快照落库）
+  nodes: ConfiguredWorkflowNodeInput[]
+}
+
+export interface WorkflowNodeUpdateInput {
+  name?: string | null
+  description?: string | null
+  stage?: string | null
+  prompts?: string[] | null
+  artifactTitles?: string[] | null
+  requiresWorktree?: boolean | null
+  agentConfig?: AgentNodeConfigInput | null
 }
 
 // ---------- Query ----------
@@ -177,6 +220,7 @@ export const GET_WORKFLOW_TEMPLATES = gql`
         ...TemplateNodeFields
       }
       isBuiltin
+      createdBy
       createdAt
       updatedAt
     }
@@ -215,6 +259,7 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
           initNewWorktree
         }
       }
+      createdBy
       createdAt
       updatedAt
     }
@@ -261,6 +306,15 @@ export const GET_WORKFLOW_INSTANCE = gql`
         status
         stage
         sessionId
+        prompts
+        artifactTitles
+        agentConfig {
+          acpServerType
+          modeId
+          modelId
+          initNewWorktree
+        }
+        requiresWorktree
         createdAt
         startedAt
         reworkedAt
@@ -362,12 +416,21 @@ export const ARCHIVE_WORKFLOW_INSTANCE = gql`
 `
 
 export const INSTANTIATE_WORKFLOW = gql`
-  mutation InstantiateWorkflow($configuredWorkflowId: ID!, $workspaceId: ID!, $name: String!) {
-    instantiateWorkflow(configuredWorkflowId: $configuredWorkflowId, workspaceId: $workspaceId, name: $name) {
+  mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
+    instantiateWorkflow(input: $input) {
       id
       name
       workspaceId
       currentNodeNames
+    }
+  }
+`
+
+export const UPDATE_WORKFLOW_NODE = gql`
+  mutation UpdateWorkflowNode($instanceId: ID!, $nodeId: ID!, $input: WorkflowNodeUpdateInput!) {
+    updateWorkflowNode(instanceId: $instanceId, nodeId: $nodeId, input: $input) {
+      id
+      status
     }
   }
 `

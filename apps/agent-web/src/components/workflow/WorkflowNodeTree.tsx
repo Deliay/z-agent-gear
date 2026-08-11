@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useMutation } from '@apollo/client/react'
+import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import MarkdownContent from '@/components/session/MarkdownContent'
+import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
+import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
 import {
   GET_WORKFLOW_INSTANCE,
   COMPLETE_HUMAN_NODE,
@@ -23,7 +25,8 @@ import {
   type WorkflowNodeStatus,
   type WorkflowNodeType,
 } from '@/graphql/workflow'
-import { ChevronDown, ChevronRight, MessageSquare, RotateCcw } from 'lucide-react'
+import EditInstanceNodeDialog from './EditInstanceNodeDialog'
+import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -215,11 +218,13 @@ function NodeCard({
   node,
   blackboard,
   onOpenSession,
+  onEdit,
 }: {
   instanceId: string
   node: WorkflowNodeData
   blackboard: BlackboardEntryData[]
   onOpenSession: (sessionId: string) => void
+  onEdit: (node: WorkflowNodeData) => void
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -256,6 +261,12 @@ function NodeCard({
             返工 {node.reworkCount} 次
           </span>
         )}
+        {(node.status === 'INITIALIZING' || node.status === 'READY') && (
+          <Button size="xs" variant="outline" onClick={() => onEdit(node)}>
+            <Pencil className="size-3" />
+            编辑
+          </Button>
+        )}
         {node.sessionId && (
           <Button
             size="xs"
@@ -271,6 +282,16 @@ function NodeCard({
       <>
       {node.description && (
         <p className="mt-1 text-xs wrap-anywhere text-muted-foreground">{node.description}</p>
+      )}
+      {node.type === 'AI' && node.prompts && node.prompts.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">
+            节点提示词（实例节点为实例化时的副本）
+          </div>
+          {node.prompts.map((prompt, i) => (
+            <p key={i} className="text-xs text-muted-foreground">{prompt}</p>
+          ))}
+        </div>
       )}
       {node.rejectInfo && node.status === 'REJECT' && (
         <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
@@ -318,6 +339,15 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
     if (!stages.includes(node.stage)) stages.push(node.stage)
   }
 
+  const [editNode, setEditNode] = useState<WorkflowNodeData | null>(null)
+  const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
+    variables: { controllerId: instance.controllerId },
+    skip: !instance.controllerId,
+  })
+  const availableServerTypes = (capabilitiesData?.acpCapabilities ?? [])
+    .filter((c) => c.available && c.type)
+    .map((c) => c.type)
+
   return (
     <div className="min-w-0 space-y-6">
       {stages.map((stage) => (
@@ -333,11 +363,24 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                   node={node}
                   blackboard={instance.blackboard}
                   onOpenSession={onOpenSession}
+                  onEdit={setEditNode}
                 />
               ))}
           </div>
         </div>
       ))}
+      {editNode && (
+        <EditInstanceNodeDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditNode(null)
+          }}
+          instanceId={instance.id}
+          node={editNode}
+          controllerId={instance.controllerId}
+          availableServerTypes={availableServerTypes}
+        />
+      )}
     </div>
   )
 }
