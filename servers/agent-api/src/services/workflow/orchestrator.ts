@@ -78,6 +78,9 @@ class WorkflowOrchestrator {
       workflowNodeId: node.nodeId,
       // 节点会话自动装配平台工作流工具服务
       mcpServerIds: [await this.ensureWorkflowToolsServer(instance.userId.toString())],
+      // 节点配置的 mode/model：harness 会话初始化为配置值，而非 harness 默认设置
+      ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
+      ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
     });
     node.sessionId = session.id as string;
 

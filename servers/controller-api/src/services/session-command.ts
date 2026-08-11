@@ -68,7 +68,7 @@ export class SessionCommandService {
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
-            await this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] } });
+            await this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] }; modeId?: string; modelId?: string });
           } else if (command.type === 'acp:resume' && command.sessionId && command.controllerId && command.externalSessionId) {
             await this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] } });
           } else if (command.type === 'acp:cancel' && command.sessionId) {
@@ -142,6 +142,8 @@ export class SessionCommandService {
     serverType: string;
     cwd?: string;
     mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+    modeId?: string;
+    modelId?: string;
   }): Promise<void> {
     if (!this.io) return;
 
@@ -178,6 +180,7 @@ export class SessionCommandService {
       command.serverType,
       command.cwd || process.cwd(),
       command.mcpEndpoint,
+      command.modeId || command.modelId ? { modeId: command.modeId, modelId: command.modelId } : undefined,
     );
 
     if (!result.success) {

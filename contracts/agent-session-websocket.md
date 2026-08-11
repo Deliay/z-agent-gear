@@ -114,6 +114,8 @@
 | `mcpServers` | `McpServerConfig[]` | 否 | MCP Server 配置（预留） |
 | `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息（仅用户勾选装配 MCP 时携带） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径，Agent 支持 `session.additionalDirectories` 时使用） |
+| `modeId` | `string` | 否 | 初始工作模式 ID（工作流节点配置；不提供则使用 harness 默认） |
+| `modelId` | `string` | 否 | 初始 LLM 模型 ID（工作流节点配置；不提供则使用 harness 默认） |
 
 **McpEndpoint 结构：**
 

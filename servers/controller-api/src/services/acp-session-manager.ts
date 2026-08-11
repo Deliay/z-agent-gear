@@ -35,6 +35,7 @@ export class ACPSessionManager {
     serverType: string,
     cwd: string,
     mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
     try {
@@ -166,6 +167,12 @@ export class ACPSessionManager {
         };
         if (mcpEndpoint) {
           startPayload.mcpEndpoint = mcpEndpoint;
+        }
+        if (initial?.modeId) {
+          startPayload.modeId = initial.modeId;
+        }
+        if (initial?.modelId) {
+          startPayload.modelId = initial.modelId;
         }
         controllerSocket.emit('acp:start', startPayload);
       });
