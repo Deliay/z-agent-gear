@@ -5,6 +5,7 @@ bin/
 obj/
 .env
 .env.local
+!aspire/manifest/.env
 *.log
 .DS_Store
 coverage/
