@@ -42,6 +42,9 @@ function makeInstance(): WorkflowInstanceData {
     workspaceId: 'ws-1',
     name: '测试实例',
     currentNodeNames: ['评审'],
+    lastNodeName: null,
+    lastNodeStatus: null,
+    archived: false,
     nodes: [
       {
         id: 'n1',
@@ -57,13 +60,14 @@ function makeInstance(): WorkflowInstanceData {
         reworkedAt: null,
         reworkCount: 0,
         rejectInfo: null,
+        failInfo: null,
       },
     ],
     blackboard: [],
     blackboardTrash: [],
     createdAt: '2026-08-08T00:00:00Z',
     updatedAt: '2026-08-08T00:00:00Z',
-  } as WorkflowInstanceData;
+  };
 }
 
 describe('WorkflowInstancePage 轮询刷新不打断输入', () => {
