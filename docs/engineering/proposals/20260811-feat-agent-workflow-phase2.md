@@ -29,7 +29,7 @@ type: Permanent
 2. 实例节点改为**快照模型**（实例化时复制 prompts/artifactTitles/agentConfig 入实例节点），为「实例化前覆盖」「实例节点编辑」「配置可自由迭代」三者共同奠基。
 3. 实例化三入口（已配置工作流 / 模板 / 空白）+ 实例化前统一配置界面，契约收敛为单一 `instantiateWorkflow(input)`。
 4. 未开始实例节点支持编辑（保存时状态校验，仅 `INITIALIZING/READY` 且未开始过）。
-5. 新增「工作流管理工具集」平台 MCP 服务（独立 scope）：模板管理、控制器列表、已配置工作流管理、三种方式实例化；AI 创建的资源记录归属，仅可删除自己创建的。
+5. 新增「工作流管理工具集」平台 MCP 服务（独立 scope）：模板管理、控制器列表、已配置工作流管理、三种方式实例化、入参 schema 查询；AI 创建的资源记录归属，仅可删除自己创建的。
 
 ### 1.3 范围
 
@@ -161,7 +161,7 @@ type Mutation {
 - `validateTemplateGraph(nodes)`（一期已有，纯函数）：被 `template.create/update`、`configured.configure/update`、`instance.instantiate`（含 MCP 从原始内容实例化）四方复用。
 - `instance.instantiate(userId, input)`：三来源统一入口；来源仅决定「节点图初始值」，服务端始终以 `input.nodes` 为准校验并快照落库（前端在配置界面中把来源节点图载入后供用户编辑，提交的就是最终图）。
 - `instance.updateNode(instanceId, nodeId, input)`：状态校验（见 §5.2 实现点 3）后更新实例节点快照字段。
-- `admin-tools.ts`：`handleAdminToolCall(name, args, { userId, sessionId })`，12 个工具薄封装服务层（见 §5.2 实现点 4）。
+- `admin-tools.ts`：`handleAdminToolCall(name, args, { userId, sessionId })`，13 个工具薄封装服务层（见 §5.2 实现点 4）。
 
 ## 4. 数据模型
 
@@ -265,8 +265,12 @@ sequenceDiagram
     M->>S: Controller.find(userId)
     A->>M: createWorkflowTemplate(节点图)
     M->>S: template.create(createdBy=AI, sessionId)
+    A->>M: getWorkflowToolInputSchema("createConfiguredWorkflow")
+    M-->>A: 入参 JSON Schema(节点图/agentConfig 结构)
     A->>M: createConfiguredWorkflow(templateId, controllerId, agentConfigs)
     M->>S: configured.configure(createdBy=AI)
+    A->>M: getWorkflowToolInputSchema("instantiateWorkflowFromConfigured")
+    M-->>A: 入参 JSON Schema
     A->>M: instantiateWorkflowFromConfigured(configuredWorkflowId, workspaceId)
     M->>S: instance.instantiate(source=CONFIGURED)
     S-->>A: WorkflowInstance(首节点 READY)
@@ -294,14 +298,16 @@ sequenceDiagram
 
 #### 实现点 4：工作流管理 MCP 工具集（新 scope）
 
-- **描述**：新增平台服务 `agent-workflow-admin-tools`（`transport/source: platform`），随系统启动按 `{name}` 幂等 upsert（同 `ensureWorkflowToolsServer` 模式）。工具清单（12 个）：
+- **描述**：新增平台服务 `agent-workflow-admin-tools`（`transport/source: platform`），随系统启动按 `{name}` 幂等 upsert（同 `ensureWorkflowToolsServer` 模式）。工具清单（13 个）：
   - 模板：`createWorkflowTemplate` / `listWorkflowTemplates` / `getWorkflowTemplate` / `deleteWorkflowTemplate`
   - 控制器：`listControllers`（返回 id/name/在线状态/acpServerTypes 摘要）
   - 已配置工作流：`createConfiguredWorkflow` / `listConfiguredWorkflows` / `getConfiguredWorkflow` / `deleteConfiguredWorkflow`
   - 实例化：`instantiateWorkflowFromTemplate` / `instantiateWorkflowFromConfigured` / `instantiateWorkflowFromContent`，三者均必填 `controllerId`（+ `workspaceId`、`name`；FromContent 直接传完整节点图，不落库模板/配置）
+  - 入参 schema 查询：`getWorkflowToolInputSchema(toolName)` —— 返回指定管理工具的入参 JSON Schema（含字段类型、必填项、嵌套结构与字段说明），供 AI 在调用 `createConfiguredWorkflow`、`instantiateWorkflowFromConfigured` 等复杂入参工具前获取准确的参数结构；`toolName` 限管理工具集内的工具名，非法工具名返回可读错误
 - **技术细节**：
   - **分发泛化**：`tool-handlers.ts` 抽出 platform 公共层 `PLATFORM_HANDLERS: Record<serverName, PlatformHandler>`；`routes/mcp.ts` 的 platform 分支按 serverName 查表分发。`agent-workflow-tools` 仍要求 token 含 `workflow` payload（节点作用域）；`agent-workflow-admin-tools` 仅需 `{userId, sessionId}`（会话作用域）。
   - **装配**：admin 工具集不经 orchestrator 硬编码注入，而是作为普通 McpServer 出现在 MCP Registry，用户/AI 在会话创建时通过既有 `mcpServerIds` 装配；token `serverNames` 白名单（既有逻辑）天然完成访问门控。
+  - **入参 schema 单一来源**：admin 工具集每个工具的入参 JSON Schema 集中定义为 `ADMIN_TOOL_SCHEMAS`（同时服务于 `tools/list` 的 `inputSchema` 与调用前参数校验），`getWorkflowToolInputSchema` 直接从中查表返回，保证「AI 读到的 schema」与「服务端实际校验的 schema」一致，不维护第二份描述。
   - **归属**：创建类工具写 `createdBy=AI` + `createdBySessionId`；删除类工具仅允许 `createdBy=AI` 的资源，否则返回结构化错误「该资源由人类创建，不允许 AI 删除」。内置模板（`isBuiltin`）删除拒绝沿用一期逻辑。
   - **复用**：所有工具薄封装 `template.ts/configured.ts/instance.ts` 的既有服务函数，校验规则与 GraphQL 路径完全一致。
 - **风险点**：AI 误操作实例化 → 实例化产物（实例、会话）均在实例视图可见可删，人类可兜底；token 泄漏风险与一期相同（TTL + 会话结束吊销）。
@@ -352,7 +358,7 @@ servers/agent-api/src/
 │   ├── configured.ts               # update 图编辑语义；delete 约束移除
 │   ├── instance.ts                 # 统一 instantiate(input)；updateNode()；快照落库
 │   ├── orchestrator.ts             # 快照读取优先，旧实例回退 loadConfiguredNode
-│   ├── admin-tools.ts              # 新增：工作流管理工具集 12 个工具
+│   ├── admin-tools.ts              # 新增：工作流管理工具集 13 个工具（含入参 schema 查询）
 │   └── tool-handlers.ts            # 抽 platform 公共层，按 serverName 分发
 ├── graphql/workflow/               # 契约增量 resolver
 └── routes/mcp.ts                   # platform 分支按 serverName 查表分发
@@ -375,7 +381,7 @@ contracts/
 ### 8.1 测试覆盖要求
 
 - `updateWorkflowNode` 状态校验全组合（单元测试 100% 覆盖状态枚举）。
-- API 测试覆盖：新增/变更的全部 Query/Mutation 与 12 个管理工具。
+- API 测试覆盖：新增/变更的全部 Query/Mutation 与 13 个管理工具。
 - 后端单测沿用 vitest（`.test.ts` 与源码同目录）；前端组件测试沿用 `__tests__` 约定。
 
 ### 8.2 单元测试用例（agent-api）
@@ -422,6 +428,8 @@ contracts/
 | M7 | 三个实例化工具缺 controllerId | 参数错误 |
 | M8 | instantiateWorkflowFromContent 传完整图 | 不落库模板/配置，直接建实例 |
 | M9 | 无 workflow payload 的 token 调节点工具 / 反之越权 | 结构化错误 |
+| M10 | getWorkflowToolInputSchema("createConfiguredWorkflow") / ("instantiateWorkflowFromConfigured") | 返回与 ADMIN_TOOL_SCHEMAS 一致的入参 JSON Schema |
+| M11 | getWorkflowToolInputSchema 传非法/非管理工具名 | 可读错误，列出可用工具名 |
 
 **已配置工作流图编辑**（`configured.test.ts` 增量）：
 
