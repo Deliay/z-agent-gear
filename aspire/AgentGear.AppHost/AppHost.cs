@@ -53,9 +53,6 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
         service.Restart = "unless-stopped";
     });
 
-var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
-    .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"));
-
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
@@ -66,9 +63,6 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
-    .WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
-    .WithEnvironment("GATEWAY_URL", "http://localhost:10001")
-    .WithHttpEndpoint(port: 10001, env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()
@@ -78,19 +72,37 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
         service.Restart = "unless-stopped";
     });
 
-agentWeb
-    .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
-    .WithReference(agentApi)
-    .PublishAsDockerComposeService((resource, service) =>
-    {
-        service.Name = "agent-web";
-    });
-
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
     .WithExplicitStart()
     .WaitFor(controllerApi)
     .ExcludeFromManifest();
+
+if (!builder.ExecutionContext.IsPublishMode)
+{
+    var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
+        .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
+        .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
+        .WithReference(agentApi)
+        .PublishAsDockerComposeService((resource, service) =>
+        {
+            service.Name = "agent-web";
+        });
+    agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+        .WithEnvironment("GATEWAY_URL", agentApi.GetEndpoint("http"))
+        .WithHttpEndpoint(port: 10001, env: "PORT");
+}
+else
+{
+    agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
+        .WithHttpEndpoint(port: 8000, env: "PORT")
+        .WithEnvironment("GATEWAY_URL", builder.AddParameter("gateway-url"))
+        .WithExternalHttpEndpoints();
+
+    controllerApi
+        .WithHttpEndpoint(port: 8001, env: "PORT")
+        .WithExternalHttpEndpoints();
+}
 
 builder.Build().Run();
