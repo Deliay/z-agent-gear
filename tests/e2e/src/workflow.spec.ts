@@ -798,10 +798,12 @@ test.describe('Workflow E2E', () => {
     let dialog = page.getByRole('dialog');
     await expect(dialog.getByText('定义工作流的节点、依赖关系、提示词与产物', { exact: false })).toBeVisible();
     await dialog.getByLabel('模板名称').fill(templateName);
+    await dialog.getByRole('button', { name: '展开节点 1' }).click();
     await dialog.getByLabel('节点 1 标识').fill('input');
     await dialog.getByLabel('节点 1 名称').fill('需求输入');
     await dialog.getByLabel('节点 1 阶段').fill('需求');
     await dialog.getByRole('button', { name: '添加节点' }).click();
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
     await dialog.getByLabel('节点 2 标识').fill('exec');
     await dialog.getByLabel('节点 2 名称').fill('AI执行');
     await dialog.getByLabel('节点 2 阶段').fill('开发');
@@ -1267,6 +1269,7 @@ test.describe('Workflow E2E', () => {
     await expect(dialog.getByText('编辑已配置工作流')).toBeVisible();
 
     // 修改 exec 节点提示词（节点 2，AI 节点提示词为每行一条）
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
     await dialog.getByLabel('节点 2 提示词').fill('阅读上游产物并完成执行\n追加二期编辑提示词');
     await dialog.getByRole('button', { name: '保存' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 10000 });
@@ -1367,11 +1370,13 @@ test.describe('Workflow E2E', () => {
 
     // 步骤 2：空白默认含 1 个 HUMAN 节点，编辑其字段
     await expect(dialog.getByText('实例化前配置')).toBeVisible();
+    await dialog.getByRole('button', { name: '展开节点 1' }).click();
     await dialog.getByLabel('节点 1 标识').fill('input');
     await dialog.getByLabel('节点 1 名称').fill('需求输入');
     await dialog.getByLabel('节点 1 阶段').fill('需求');
     // 添加 AI 节点并补全配置
     await dialog.getByRole('button', { name: '添加节点' }).click();
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
     await dialog.getByLabel('节点 2 标识').fill('exec');
     await dialog.getByLabel('节点 2 名称').fill('AI执行');
     await dialog.getByLabel('节点 2 阶段').fill('开发');

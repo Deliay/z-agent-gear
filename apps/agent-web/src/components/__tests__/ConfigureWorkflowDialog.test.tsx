@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import ConfigureWorkflowDialog from '../workflow/ConfigureWorkflowDialog';
 import {
   GET_WORKFLOW_TEMPLATES,
@@ -103,6 +104,50 @@ describe('ConfigureWorkflowDialog Mode/模型动态选项', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseMutation.mockReturnValue([vi.fn().mockResolvedValue({})]);
+  });
+
+  it('dismiss 后再次打开仍载入模板节点图（不复为空）', async () => {
+    setupQueries({
+      acpServerOptions: {
+        modes: [],
+        models: [],
+        currentModeId: null,
+        currentModelId: null,
+        probedAt: '2026-08-08T00:00:00Z',
+      },
+    });
+
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>打开</button>
+          <ConfigureWorkflowDialog open={open} onOpenChange={setOpen} initialTemplateId="tpl-1" />
+        </>
+      );
+    }
+    render(<Harness />);
+
+    // 第一次打开 → 模板节点图已载入（节点 2 为 AI，AgentConfig 可见，且展开节点 2 后详情字段可见）
+    fireEvent.click(screen.getByRole('button', { name: '打开' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('AI执行 Harness 工具')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '展开节点 2' }));
+    expect(screen.getByLabelText('节点 2 标识')).toBeInTheDocument();
+    expect(screen.getByLabelText('节点 2 提示词')).toHaveValue('执行');
+
+    // dismiss（关闭对话框）
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    // 再次打开 → 节点图应重新载入，而非空
+    fireEvent.click(screen.getByRole('button', { name: '打开' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('AI执行 Harness 工具')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '展开节点 2' }));
+    expect(screen.getByLabelText('节点 2 标识')).toBeInTheDocument();
+    expect(screen.getByLabelText('节点 2 提示词')).toHaveValue('执行');
   });
 
   it('探测到选项时 Mode/模型渲染为下拉选择', async () => {

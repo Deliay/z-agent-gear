@@ -1,4 +1,5 @@
 import { useQuery } from '@apollo/client/react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -21,7 +22,7 @@ import {
   type EditableNode,
   type AgentConfigForm,
 } from './template-validation'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -273,7 +274,7 @@ interface WorkflowGraphEditorProps {
   controllerId?: string
 }
 
-/** 节点图表单组件：增删节点、依赖多选、提示词/产物、阶段、Agent 配置。 */
+/** 节点图表单组件：增删节点、依赖多选、提示词/产物、阶段、Agent 配置。支持按节点折叠（默认全部折叠）。 */
 export default function WorkflowGraphEditor({
   nodes,
   onNodesChange,
@@ -282,6 +283,8 @@ export default function WorkflowGraphEditor({
   availableServerTypes = [],
   controllerId = '',
 }: WorkflowGraphEditorProps) {
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set(nodes.map((_, i) => i)))
+
   const updateNode = (index: number, patch: Partial<EditableNode>) => {
     onNodesChange(nodes.map((n, i) => (i === index ? { ...n, ...patch } : n)))
   }
@@ -306,6 +309,11 @@ export default function WorkflowGraphEditor({
           dependsOn: n.dependsOn.filter((dep) => dep !== removed.nodeKey.trim()),
         })),
     )
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      next.delete(index)
+      return next
+    })
   }
 
   const toggleDependsOn = (index: number, depKey: string, checked: boolean) => {
@@ -322,168 +330,199 @@ export default function WorkflowGraphEditor({
     )
   }
 
-  const addNode = () => onNodesChange([...nodes, createEmptyNode('AI')])
+  const addNode = () => {
+    onNodesChange([...nodes, createEmptyNode('AI')])
+    setCollapsed((prev) => new Set(prev).add(nodes.length))
+  }
+
+  const toggleCollapse = (index: number) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
 
   return (
     <div className="space-y-3">
-      {nodes.map((node, index) => (
-        <div key={index} className="space-y-3 rounded-lg border p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1">
-              {NODE_TYPE_ORDER.map((t) => (
+      {nodes.map((node, index) => {
+        const isCollapsed = collapsed.has(index)
+        return (
+          <div key={index} className="space-y-3 rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1">
                 <Button
-                  key={t}
                   size="xs"
-                  variant={node.type === t ? 'default' : 'outline'}
-                  aria-pressed={node.type === t}
+                  variant="ghost"
+                  aria-label={isCollapsed ? `展开节点 ${index + 1}` : `折叠节点 ${index + 1}`}
+                  onClick={() => toggleCollapse(index)}
                   disabled={readOnly}
-                  onClick={() => updateNode(index, { type: t })}
                 >
-                  {NODE_TYPE_LABELS[t]}
+                  {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
                 </Button>
-              ))}
-            </div>
-            {!readOnly && nodes.length > 1 && (
-              <Button
-                size="xs"
-                variant="ghost"
-                aria-label={`删除节点 ${index + 1}`}
-                onClick={() => removeNode(index)}
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            )}
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label>节点标识</Label>
-              <Input
-                aria-label={`节点 ${index + 1} 标识`}
-                value={node.nodeKey}
-                onChange={(e) => updateNode(index, { nodeKey: e.target.value })}
-                placeholder="如: requirement"
-                disabled={readOnly}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>节点名称</Label>
-              <Input
-                aria-label={`节点 ${index + 1} 名称`}
-                value={node.name}
-                onChange={(e) => updateNode(index, { name: e.target.value })}
-                placeholder="如: 产品需求"
-                disabled={readOnly}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>所属阶段</Label>
-              <Input
-                aria-label={`节点 ${index + 1} 阶段`}
-                value={node.stage}
-                onChange={(e) => updateNode(index, { stage: e.target.value })}
-                placeholder="如: 方案阶段"
-                disabled={readOnly}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>节点描述</Label>
-            <Input
-              aria-label={`节点 ${index + 1} 描述`}
-              value={node.description}
-              onChange={(e) => updateNode(index, { description: e.target.value })}
-              placeholder="可选"
-              disabled={readOnly}
-            />
-          </div>
-
-          {node.type === 'AI' && (
-            <>
-              <div className="space-y-1.5">
-                <Label>提示词（每行一条）</Label>
-                <textarea
-                  aria-label={`节点 ${index + 1} 提示词`}
-                  className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                  value={node.promptsText}
-                  onChange={(e) => updateNode(index, { promptsText: e.target.value })}
-                  placeholder={'每行一条提示词\n如: 参照项目中的 AGENTS.md 产出技术方案'}
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>产物标题（每行一条）</Label>
-                <textarea
-                  aria-label={`节点 ${index + 1} 产物标题`}
-                  className="min-h-12 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                  value={node.artifactTitlesText}
-                  onChange={(e) => updateNode(index, { artifactTitlesText: e.target.value })}
-                  placeholder={'每行一个产物标题\n如: 产品需求和技术方案'}
-                  disabled={readOnly}
-                />
+                {NODE_TYPE_ORDER.map((t) => (
+                  <Button
+                    key={t}
+                    size="xs"
+                    variant={node.type === t ? 'default' : 'outline'}
+                    aria-pressed={node.type === t}
+                    disabled={readOnly}
+                    onClick={() => updateNode(index, { type: t })}
+                  >
+                    {NODE_TYPE_LABELS[t]}
+                  </Button>
+                ))}
               </div>
               <div className="flex items-center gap-2">
-                <Switch
-                  aria-label={`节点 ${index + 1} Worktree 隔离`}
-                  checked={node.requiresWorktree}
-                  onCheckedChange={(checked) =>
-                    updateNode(index, { requiresWorktree: checked === true })
-                  }
-                  disabled={readOnly}
-                />
-                <Label>该节点会话需要 Worktree 隔离</Label>
-              </div>
-            </>
-          )}
-
-          {showAgentConfig && node.type === 'AI' && (
-            <AgentConfigFields
-              nodeName={node.name || node.nodeKey || `节点 ${index + 1}`}
-              config={
-                node.agentConfig ?? {
-                  acpServerType: '',
-                  modeId: '',
-                  modelId: '',
-                  initNewWorktree: false,
-                }
-              }
-              availableServerTypes={availableServerTypes}
-              controllerId={controllerId}
-              readOnly={readOnly}
-              onChange={(patch) => updateAgentConfig(index, patch)}
-            />
-          )}
-
-          {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (
-            <div className="space-y-1.5">
-              <Label>依赖的上游节点</Label>
-              <div className="flex flex-wrap gap-3">
-                {nodes.map((other, otherIndex) => {
-                  const depKey = other.nodeKey.trim()
-                  if (otherIndex === index || !depKey) return null
-                  const checked = node.dependsOn.includes(depKey)
-                  return (
-                    <label
-                      key={`${otherIndex}-${depKey}`}
-                      className="flex items-center gap-1.5 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        className="size-4 accent-primary"
-                        checked={checked}
-                        disabled={readOnly}
-                        onChange={(e) => toggleDependsOn(index, depKey, e.target.checked)}
-                      />
-                      {other.name.trim() || depKey}（{depKey}）
-                    </label>
-                  )
-                })}
+                <span className="text-sm font-medium">{node.name.trim() || node.nodeKey.trim() || `节点 ${index + 1}`}</span>
+                {!readOnly && nodes.length > 1 && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`删除节点 ${index + 1}`}
+                    onClick={() => removeNode(index)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                )}
               </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {showAgentConfig && node.type === 'AI' && (
+              <AgentConfigFields
+                nodeName={node.name || node.nodeKey || `节点 ${index + 1}`}
+                config={
+                  node.agentConfig ?? {
+                    acpServerType: '',
+                    modeId: '',
+                    modelId: '',
+                    initNewWorktree: false,
+                  }
+                }
+                availableServerTypes={availableServerTypes}
+                controllerId={controllerId}
+                readOnly={readOnly}
+                onChange={(patch) => updateAgentConfig(index, patch)}
+              />
+            )}
+
+            {!isCollapsed && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label>节点标识</Label>
+                    <Input
+                      aria-label={`节点 ${index + 1} 标识`}
+                      value={node.nodeKey}
+                      onChange={(e) => updateNode(index, { nodeKey: e.target.value })}
+                      placeholder="如: requirement"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>节点名称</Label>
+                    <Input
+                      aria-label={`节点 ${index + 1} 名称`}
+                      value={node.name}
+                      onChange={(e) => updateNode(index, { name: e.target.value })}
+                      placeholder="如: 产品需求"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>所属阶段</Label>
+                    <Input
+                      aria-label={`节点 ${index + 1} 阶段`}
+                      value={node.stage}
+                      onChange={(e) => updateNode(index, { stage: e.target.value })}
+                      placeholder="如: 方案阶段"
+                      disabled={readOnly}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>节点描述</Label>
+                  <Input
+                    aria-label={`节点 ${index + 1} 描述`}
+                    value={node.description}
+                    onChange={(e) => updateNode(index, { description: e.target.value })}
+                    placeholder="可选"
+                    disabled={readOnly}
+                  />
+                </div>
+
+                {node.type === 'AI' && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label>提示词（每行一条）</Label>
+                      <textarea
+                        aria-label={`节点 ${index + 1} 提示词`}
+                        className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                        value={node.promptsText}
+                        onChange={(e) => updateNode(index, { promptsText: e.target.value })}
+                        placeholder={'每行一条提示词\n如: 参照项目中的 AGENTS.md 产出技术方案'}
+                        disabled={readOnly}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>产物标题（每行一条）</Label>
+                      <textarea
+                        aria-label={`节点 ${index + 1} 产物标题`}
+                        className="min-h-12 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                        value={node.artifactTitlesText}
+                        onChange={(e) => updateNode(index, { artifactTitlesText: e.target.value })}
+                        placeholder={'每行一个产物标题\n如: 产品需求和技术方案'}
+                        disabled={readOnly}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        aria-label={`节点 ${index + 1} Worktree 隔离`}
+                        checked={node.requiresWorktree}
+                        onCheckedChange={(checked) =>
+                          updateNode(index, { requiresWorktree: checked === true })
+                        }
+                        disabled={readOnly}
+                      />
+                      <Label>该节点会话需要 Worktree 隔离</Label>
+                    </div>
+                  </>
+                )}
+
+                {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (
+                  <div className="space-y-1.5">
+                    <Label>依赖的上游节点</Label>
+                    <div className="flex flex-wrap gap-3">
+                      {nodes.map((other, otherIndex) => {
+                        const depKey = other.nodeKey.trim()
+                        if (otherIndex === index || !depKey) return null
+                        const checked = node.dependsOn.includes(depKey)
+                        return (
+                          <label
+                            key={`${otherIndex}-${depKey}`}
+                            className="flex items-center gap-1.5 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              className="size-4 accent-primary"
+                              checked={checked}
+                              disabled={readOnly}
+                              onChange={(e) => toggleDependsOn(index, depKey, e.target.checked)}
+                            />
+                            {other.name.trim() || depKey}（{depKey}）
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )
+      })}
 
       {!readOnly && (
         <Button variant="outline" size="sm" onClick={addNode}>

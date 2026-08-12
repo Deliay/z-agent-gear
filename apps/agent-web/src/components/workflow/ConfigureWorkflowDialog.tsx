@@ -103,13 +103,15 @@ export default function ConfigureWorkflowDialog({
     }
   }, [open, editing, initialTemplateId])
 
-  // 创建模式：模板确定后载入模板节点图作为初值
+  // 创建模式：模板确定后载入模板节点图作为初值。
+  // 依赖 open：对话框 dismiss 后再次打开时需重新加载模板节点图（同模板 sourceTemplate?.id 不变，
+  // 仅靠 id 依赖无法重新触发；加入 open 确保每次打开都重置并载入）。
   useEffect(() => {
     if (editing || !sourceTemplate) return
     setNodes(sourceTemplate.nodes.map(templateNodeToEditable))
     if (!name) setName(sourceTemplate.name)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceTemplate?.id])
+  }, [open, sourceTemplate?.id])
 
   const handleSave = async () => {
     if (!name.trim()) {
