@@ -82,6 +82,9 @@ class WorkflowOrchestrator {
         await this.ensureWorkflowToolsServer(instance.userId.toString()),
         await ensureAdminToolsServer(instance.userId.toString()),
       ],
+      // 节点配置的 mode/model：harness 会话初始化为配置值，而非 harness 默认设置
+      ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
+      ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
     });
     node.sessionId = session.id as string;
 

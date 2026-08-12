@@ -151,6 +151,44 @@ describe('SessionCommandService', () => {
           'opencode',
           '/home/user',
           mcpEndpoint,
+          undefined,
+        );
+      });
+    });
+
+    it('should pass modeId/modelId through to acpSessionManager.startSession', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      const socket = { id: 'socket-1', emit: vi.fn() };
+      io.sockets.sockets.set('socket-1', socket as never);
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:start',
+        sessionId: 'sess-1',
+        controllerId: 'ctrl-1',
+        serverType: 'opencode',
+        cwd: '/home/user',
+        modeId: 'code',
+        modelId: 'gpt-5',
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionManager.startSession).toHaveBeenCalledWith(
+          socket,
+          'sess-1',
+          'ctrl-1',
+          'user-1',
+          'opencode',
+          '/home/user',
+          undefined,
+          { modeId: 'code', modelId: 'gpt-5' },
         );
       });
     });
@@ -184,6 +222,7 @@ describe('SessionCommandService', () => {
           'user-1',
           'opencode',
           '/home/user',
+          undefined,
           undefined,
         );
       });

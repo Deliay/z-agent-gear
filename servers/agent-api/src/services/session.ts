@@ -41,6 +41,9 @@ export class SessionService {
     /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
     workflowInstanceId?: string;
     workflowNodeId?: string;
+    /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
+    modeId?: string;
+    modelId?: string;
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
@@ -147,6 +150,8 @@ export class SessionService {
       serverType: input.acpServerType,
       cwd,
       mcpEndpoint,
+      ...(input.modeId ? { modeId: input.modeId } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
     }));
 
     return this.mapSession(session.toObject());

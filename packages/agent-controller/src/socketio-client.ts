@@ -57,6 +57,8 @@ interface AcpStartPayload {
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
+  modeId?: string;
+  modelId?: string;
 }
 
 interface AcpMessagePayload {
@@ -299,6 +301,8 @@ export function connectToServer(
         mcpServers: data.mcpServers,
         mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
+        initialModeId: data.modeId,
+        initialModelId: data.modelId,
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);

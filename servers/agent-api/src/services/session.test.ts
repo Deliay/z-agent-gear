@@ -343,6 +343,49 @@ describe('SessionService', () => {
       vi.useRealTimers();
     });
 
+    it('should include modeId/modelId in acp:start command when provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        modeId: 'code',
+        modelId: 'gpt-5',
+      });
+
+      const startCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:start"'));
+      expect(startCall).toBeDefined();
+      expect(String(startCall?.[1])).toContain('"modeId":"code"');
+      expect(String(startCall?.[1])).toContain('"modelId":"gpt-5"');
+    });
+
+    it('should omit modeId/modelId from acp:start command when absent', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+      });
+
+      const startCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:start"'));
+      expect(String(startCall?.[1])).not.toContain('modeId');
+      expect(String(startCall?.[1])).not.toContain('modelId');
+    });
+
     it('should issue MCP endpoint and include it in acp:start when mcpServerIds provided', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),

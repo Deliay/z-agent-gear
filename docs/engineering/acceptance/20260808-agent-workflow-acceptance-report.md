@@ -282,6 +282,26 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 
 ## 修复总览
 
+### 22. 工作流初始化的 harness 会话未应用节点配置的 mode/model（第九轮验收）
+
+**问题描述**：配置工作流节点时选定的 Mode/模型（`agentConfig.modeId`/`modelId`）在 AI 节点拉起 harness 会话时未被初始化，会话沿用 harness 自身的默认 mode/model 设置。
+
+**根因分析**：
+
+- 链路断裂：`orchestrator.ts startNodeSession` 读取了 `agentConfig`（含 `modeId`/`modelId`），但从未将其传给 `sessionService.create`；`create` 发布 `acp:start` 命令时也不携带，controller-api `startSession` → agent-controller `acp:start` payload 均无这两个字段。
+- `AcpSessionBridge.start()` 在 `session/new` 后直接 `emit('acp:initialized')` 并 flush 首条 prompt，从未按初始配置调用 `setMode`/`setModel`，因此会话保持 harness 默认值。
+- 普通会话有 UI 手动切换 mode/model（`setSessionMode`/`setSessionModel`），工作流节点会话无人值守，无人调用。
+
+**修复方案**（全链路透传初始 mode/model）：
+
+1. **契约**：`contracts/agent-session-websocket.md` `acp:start` payload 新增可选 `modeId`/`modelId`。
+2. **orchestrator**（`servers/agent-api/src/services/workflow/orchestrator.ts`）：`startNodeSession` 将 `agentConfig.modeId`/`modelId` 透传到 `sessionService.create`（未配置时不传，保持 harness 默认）。
+3. **session service**（`servers/agent-api/src/services/session.ts`）：`create` input 新增可选 `modeId`/`modelId`，随 `acp:start` Redis 命令下发。
+4. **controller-api**：`session-command.ts handleAcpStart` 透传 → `acp-session-manager.ts startSession` 接收 `initial:{modeId,modelId}` 并写入 `acp:start` socket payload。
+5. **agent-controller**：`socketio-client.ts` `AcpStartPayload` 新增 `modeId`/`modelId` 并传入 bridge options；`bridge.ts` `start()` 在 `session/new` 成功后、首条 prompt 前调用 `applyInitialModeModel()`（复用 `setMode`/`setModel` 的 config option 通道优先策略），应用失败仅 warn 不阻断会话。
+
+**验证结果**：✅ agent-api 单测新增 2 例（orchestrator 透传/不传、session acp:start 命令携带/省略）；controller-api 新增 3 例（session-command 透传、startSession payload 携带/省略）；agent-controller bridge 新增 5 例（setSessionMode 通道 / config option 通道 mode / config option 通道 model / 无 model 配置 warn 续跑 / 未配置不调用）。agent-api、controller-api、agent-controller tsc + 单测全部通过
+
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|------|------|------|-------------|
 | 1 | mode/model 无动态选项 | 能力探测只做版本检查，无空实例探测链路 | ✅ 已修复 | 5e7eaa5 + 03b4da7 |
@@ -305,14 +325,15 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 | 19 | 节点宽度依然溢出屏幕（移动端/窄桌面） | 实例页网格隐式 auto 列按 max-content 伸展 + 长不可断文本无 wrap-anywhere | ✅ 已修复 | c46ccc1 |
 | 20 | 实例缺少归档功能 | 无 archivedAt 软归档机制与 UI 入口 | ✅ 已修复 | pending |
 | 21 | 实例状态缺少最后执行节点信息 | 无 lastNodeName/lastNodeStatus 字段与引擎 markLastNode 记录 | ✅ 已修复 | pending |
+| 22 | 工作流会话未应用节点配置的 mode/model | 初始 mode/model 未透传，harness 沿用默认 | ✅ 已修复 | pending |
 
 ## 最终验证
 
 | 项目 | 结果 |
 |------|------|
-| agent-api build/单测 | ✅ tsc 通过，945/945 |
-| controller-api build/单测 | ✅ tsc 通过，383/383 |
-| agent-controller build/单测 | ✅ tsc 通过，259/259 |
+| agent-api build/单测 | ✅ tsc 通过，964 例（含 O3a/O3b 初始 mode/model 透传；`workflowInstances` 1 例为 base 分支既有失败，与本修复无关） |
+| controller-api build/单测 | ✅ tsc 通过，382/382（含 startSession 初始 mode/model 3 例） |
+| agent-controller build/单测 | ✅ tsc 通过，254/254（含 bridge 初始 mode/model 5 例） |
 | agent-web lint/build/单测 | ✅ tsc + lint 0 error，340/340 |
 | API 测试（tests/api） | ✅ 全量通过 287/287（含 A19~A29；gateway 隧道用例偶发环境超时 flake，隔离复跑通过） |
 | E2E 测试（tests/e2e workflow.spec） | ✅ 13/13（E2E-1~13） |
@@ -331,4 +352,5 @@ Agent 工作流：模板 → 已配置工作流 → 实例，人类节点与 AI 
 - **会话关闭后其 MCP scoped token 随之失效**：E2E/集成测试模拟「人类介入后 AI 调工具」时，需先恢复会话拿到新签发的 token 再调 MCP。
 - **Tailwind `prose` 类不是免费午餐**：未装 `@tailwindcss/typography` 时 `prose` 完全不生效，markdown 渲染的表格/链接/行内 code 必须在 components 覆写里自行约束断行与滚动；`break-words` 不缩 min-content，根治不可断长词要用 `break-all`。
 - **CSS Grid 隐式列是横向溢出的隐形炸弹**：`grid` 不显式声明 `grid-cols-1` 时，移动端单列是 `auto` 轨按 max-content 伸展，任何子内容超宽都会撑破整页；显式 `grid-cols-1`（minmax(0,1fr)）+ 子级 `min-w-0` + 文本 `wrap-anywhere` 三件套缺一不可，且要用「超长无空格内容 + 全展开 + 窄视口」的极端场景做 E2E 溢出断言，空内容场景测不出来。
-- **状态机放宽要配全链路检查**：`resume` 放宽到 `disconnected` 看似一行改动，但需确认下游每个环节对该状态兼容（controller-api pendingInputs 队列、前端按钮解锁所依赖的 controllerOnline 轮询新鲜度），并在 E2E 里跑通「断连→重连→恢复」全流程才算闭环。}
+- **状态机放宽要配全链路检查**：`resume` 放宽到 `disconnected` 看似一行改动，但需确认下游每个环节对该状态兼容（controller-api pendingInputs 队列、前端按钮解锁所依赖的 controllerOnline 轮询新鲜度），并在 E2E 里跑通「断连→重连→恢复」全流程才算闭环。
+- **无人值守会话的初始配置必须在拉启时注入**：工作流节点会话没有 UI 手动切换 mode/model 的时机，节点配置必须随 `acp:start` 全链路透传并在 `session/new` 后、首条 prompt 前应用；且初始配置应用失败不能阻断会话（warn + 回退 harness 默认），否则拉启失败比「用默认配置跑」代价更大。

@@ -346,3 +346,106 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
     }));
   });
 });
+
+describe('AcpSessionBridge - initial mode/model', () => {
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let mockSpawner: MockAcpSpawner;
+
+  function createBridge(opts: { modeId?: string; modelId?: string } = {}) {
+    const options: { sessionId: string; cwd: string; initialModeId?: string; initialModelId?: string } = {
+      sessionId: 'sess-1',
+      cwd: '/home/user',
+    };
+    if (opts.modeId) options.initialModeId = opts.modeId;
+    if (opts.modelId) options.initialModelId = opts.modelId;
+    return new AcpSessionBridge(mockSocket as never, options, mockSpawner as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockSocket = createMockSocket();
+    mockSpawner = new MockAcpSpawner();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('should apply initial mode via setSessionMode after session/new', async () => {
+    const bridge = createBridge({ modeId: 'code' });
+
+    await bridge.start();
+
+    expect(mockNewSession).toHaveBeenCalled();
+    const conn = mockClientSideConnection.mock.results[0].value;
+    expect(conn.setSessionMode).toHaveBeenCalledWith({
+      sessionId: 'acp-sess-abc',
+      modeId: 'code',
+    });
+  });
+
+  it('should apply initial mode via setSessionConfigOption when agent exposes mode config option', async () => {
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [
+        { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'build', options: [{ value: 'build', name: 'Build' }, { value: 'code', name: 'Code' }] },
+      ],
+    });
+    const bridge = createBridge({ modeId: 'code' });
+
+    await bridge.start();
+
+    const conn = mockClientSideConnection.mock.results[0].value;
+    expect(conn.setSessionConfigOption).toHaveBeenCalledWith({
+      sessionId: 'acp-sess-abc',
+      configId: 'mode',
+      value: 'code',
+    });
+  });
+
+  it('should apply initial model via setSessionConfigOption when agent exposes model config option', async () => {
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [
+        { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gpt-4', options: [{ value: 'gpt-4', name: 'GPT-4' }, { value: 'gpt-5', name: 'GPT-5' }] },
+      ],
+    });
+    const bridge = createBridge({ modelId: 'gpt-5' });
+
+    await bridge.start();
+
+    const conn = mockClientSideConnection.mock.results[0].value;
+    expect(conn.setSessionConfigOption).toHaveBeenCalledWith({
+      sessionId: 'acp-sess-abc',
+      configId: 'model',
+      value: 'gpt-5',
+    });
+  });
+
+  it('should warn and continue the session when agent does not expose model config option', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = createBridge({ modelId: 'gpt-5' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.start();
+
+    // session still initializes successfully; only a warning is logged
+    expect(initialized).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess-1',
+    }));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('initial model'));
+  });
+
+  it('should not apply mode/model when not provided', async () => {
+    const bridge = createBridge();
+
+    await bridge.start();
+
+    const conn = mockClientSideConnection.mock.results[0].value;
+    expect(conn.setSessionMode).not.toHaveBeenCalled();
+    expect(conn.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+});
