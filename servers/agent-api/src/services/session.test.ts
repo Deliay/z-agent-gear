@@ -8,6 +8,7 @@ vi.mock('../models/session.js', () => ({
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
     create: vi.fn(),
+    updateOne: vi.fn(),
   },
 }));
 
@@ -106,6 +107,7 @@ describe('SessionService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
   });
 
   describe('findAllByUser', () => {
@@ -1110,6 +1112,7 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-mode"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modeId":"mode-1"'));
+      expect(Session.updateOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' }, { currentModeId: 'mode-1' });
     });
 
     it('should return false when connecting', async () => {
@@ -1155,6 +1158,7 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-model"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modelId":"model-1"'));
+      expect(Session.updateOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' }, { currentModelId: 'model-1' });
     });
 
     it('should return false when connecting', async () => {

@@ -12,7 +12,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectTrigger,
@@ -22,8 +21,8 @@ import {
   SelectItem,
   SelectItemText,
 } from '@/components/ui/select'
-import { GET_CONTROLLERS, GET_ACP_CAPABILITIES, GET_ACP_SERVER_OPTIONS } from '@/graphql/queries'
-import type { GetControllersQuery, GetAcpCapabilitiesQuery, GetAcpServerOptionsQuery } from '@/graphql/types'
+import { GET_CONTROLLERS, GET_ACP_CAPABILITIES } from '@/graphql/queries'
+import type { GetControllersQuery, GetAcpCapabilitiesQuery } from '@/graphql/types'
 import {
   GET_WORKFLOW_TEMPLATES,
   GET_CONFIGURED_WORKFLOWS,
@@ -33,131 +32,21 @@ import {
   type ConfiguredWorkflowData,
   type ConfigureWorkflowInput,
 } from '@/graphql/workflow'
-
-interface AgentConfigForm {
-  acpServerType: string
-  modeId: string
-  modelId: string
-  initNewWorktree: boolean
-}
-
-/** 下拉「留空」哨兵值（Select 不接受空字符串） */
-const EMPTY_OPTION_VALUE = '__default__'
-
-/**
- * Mode/模型字段：选中 Harness 工具后由 controller 拉起空实例探测可选选项。
- * 探测到选项 → 下拉选择（含「留空」项）；探测中/失败/工具不支持 → 回退文本输入。
- */
-function AgentOptionField({
-  label,
-  ariaLabel,
-  value,
-  options,
-  probing,
-  onChange,
-}: {
-  label: string
-  ariaLabel: string
-  value: string
-  options: { id: string; name: string }[]
-  probing: boolean
-  onChange: (v: string) => void
-}) {
-  if (options.length === 0) {
-    return (
-      <div className="space-y-1.5">
-        <Label>{label}</Label>
-        <Input
-          aria-label={ariaLabel}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="留空则由会话内切换"
-        />
-        {probing && <p className="text-xs text-muted-foreground">正在拉起空实例探测可选选项…</p>}
-      </div>
-    )
-  }
-
-  const known = options.some((o) => o.id === value)
-  const displayName = value === '' ? '留空（默认）' : (options.find((o) => o.id === value)?.name ?? value)
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <Select
-        value={value || EMPTY_OPTION_VALUE}
-        onValueChange={(v) => v && onChange(v === EMPTY_OPTION_VALUE ? '' : v)}
-      >
-        <SelectTrigger aria-label={ariaLabel}>
-          <SelectValue>{displayName}</SelectValue>
-          <SelectIcon />
-        </SelectTrigger>
-        <SelectPopup>
-          <SelectItem value={EMPTY_OPTION_VALUE}>
-            <SelectItemText>留空（默认）</SelectItemText>
-          </SelectItem>
-          {options.map((o) => (
-            <SelectItem key={o.id} value={o.id}>
-              <SelectItemText>{o.name}</SelectItemText>
-            </SelectItem>
-          ))}
-          {value && !known && (
-            <SelectItem value={value}>
-              <SelectItemText>{value}（当前值）</SelectItemText>
-            </SelectItem>
-          )}
-        </SelectPopup>
-      </Select>
-    </div>
-  )
-}
-
-/** 单个 AI 节点的 Mode/模型字段组：按所选工具独立发起选项探测 */
-function AgentNodeOptionFields({
-  controllerId,
-  nodeName,
-  config,
-  onChange,
-}: {
-  controllerId: string
-  nodeName: string
-  config: AgentConfigForm
-  onChange: (patch: Partial<AgentConfigForm>) => void
-}) {
-  const { data, loading } = useQuery<GetAcpServerOptionsQuery>(GET_ACP_SERVER_OPTIONS, {
-    variables: { controllerId, acpServerType: config.acpServerType },
-    skip: !controllerId || !config.acpServerType,
-  })
-  const probing = Boolean(config.acpServerType) && loading
-  const modes = data?.acpServerOptions.modes ?? []
-  const models = data?.acpServerOptions.models ?? []
-  return (
-    <>
-      <AgentOptionField
-        label="Mode（可选）"
-        ariaLabel={`${nodeName} Mode`}
-        value={config.modeId}
-        options={modes}
-        probing={probing}
-        onChange={(v) => onChange({ modeId: v })}
-      />
-      <AgentOptionField
-        label="模型（可选）"
-        ariaLabel={`${nodeName} 模型`}
-        value={config.modelId}
-        options={models}
-        probing={probing}
-        onChange={(v) => onChange({ modelId: v })}
-      />
-    </>
-  )
-}
+import {
+  configuredNodeToEditable,
+  templateNodeToEditable,
+  toConfiguredNodeInput,
+  validateConfiguredNodes,
+  type EditableNode,
+} from './template-validation'
+import WorkflowGraphEditor from './WorkflowGraphEditor'
 
 interface ConfigureWorkflowDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** 预选模板（从模板卡片「配置工作流」/「重新复制」进入时传入） */
   initialTemplateId?: string | null
-  /** 编辑已配置工作流时传入（仅允许修改名称/Controller/Agent 配置） */
+  /** 编辑已配置工作流时传入（允许编辑完整节点图） */
   editing?: ConfiguredWorkflowData | null
 }
 
@@ -170,7 +59,7 @@ export default function ConfigureWorkflowDialog({
   const [templateId, setTemplateId] = useState<string>('')
   const [name, setName] = useState('')
   const [controllerId, setControllerId] = useState('')
-  const [agentConfigs, setAgentConfigs] = useState<Record<string, AgentConfigForm>>({})
+  const [nodes, setNodes] = useState<EditableNode[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -193,11 +82,9 @@ export default function ConfigureWorkflowDialog({
     ? templates.find((t) => t.id === editing.sourceTemplateId)
     : templates.find((t) => t.id === templateId)
 
-  // 节点定义：编辑模式使用配置快照副本，创建模式使用所选模板
-  const nodeDefs = editing ? editing.nodes : (sourceTemplate?.nodes ?? [])
-  const aiNodes = nodeDefs.filter((n) => n.type === 'AI')
-
-  const availableAcpTypes = (capabilitiesData?.acpCapabilities ?? []).filter((c) => c.available)
+  const availableAcpTypes = (capabilitiesData?.acpCapabilities ?? []).filter(
+    (c) => c.available && c.type,
+  ).map((c) => c.type)
 
   useEffect(() => {
     if (!open) return
@@ -207,54 +94,24 @@ export default function ConfigureWorkflowDialog({
       setTemplateId(editing.sourceTemplateId ?? '')
       setName(editing.name)
       setControllerId(editing.controllerId)
-      const configs: Record<string, AgentConfigForm> = {}
-      for (const node of editing.nodes) {
-        if (node.type === 'AI') {
-          configs[node.nodeKey] = {
-            acpServerType: node.agentConfig?.acpServerType ?? '',
-            modeId: node.agentConfig?.modeId ?? '',
-            modelId: node.agentConfig?.modelId ?? '',
-            initNewWorktree: node.agentConfig?.initNewWorktree ?? false,
-          }
-        }
-      }
-      setAgentConfigs(configs)
+      setNodes(editing.nodes.map(configuredNodeToEditable))
     } else {
       setTemplateId(initialTemplateId ?? '')
       setName('')
       setControllerId('')
-      setAgentConfigs({})
+      setNodes(initialTemplateId ? [] : [])
     }
   }, [open, editing, initialTemplateId])
 
-  // 选择模板后，为该模板的 AI 节点初始化配置表单
+  // 创建模式：模板确定后载入模板节点图作为初值。
+  // 依赖 open：对话框 dismiss 后再次打开时需重新加载模板节点图（同模板 sourceTemplate?.id 不变，
+  // 仅靠 id 依赖无法重新触发；加入 open 确保每次打开都重置并载入）。
   useEffect(() => {
     if (editing || !sourceTemplate) return
-    setAgentConfigs((prev) => {
-      const next: Record<string, AgentConfigForm> = {}
-      for (const node of sourceTemplate.nodes) {
-        if (node.type === 'AI') {
-          next[node.nodeKey] =
-            prev[node.nodeKey] ?? {
-              acpServerType: '',
-              modeId: '',
-              modelId: '',
-              initNewWorktree: false,
-            }
-        }
-      }
-      return next
-    })
+    setNodes(sourceTemplate.nodes.map(templateNodeToEditable))
     if (!name) setName(sourceTemplate.name)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceTemplate?.id])
-
-  const updateAgentConfig = (nodeKey: string, patch: Partial<AgentConfigForm>) => {
-    setAgentConfigs((prev) => ({
-      ...prev,
-      [nodeKey]: { ...prev[nodeKey], ...patch },
-    }))
-  }
+  }, [open, sourceTemplate?.id])
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -269,28 +126,16 @@ export default function ConfigureWorkflowDialog({
       setError('请选择一个工作流模板')
       return
     }
-    for (const node of aiNodes) {
-      if (!agentConfigs[node.nodeKey]?.acpServerType) {
-        setError(`请为 AI 节点「${node.name}」选择 Harness 工具`)
-        return
-      }
+    const nextErrors = validateConfiguredNodes(nodes)
+    if (nextErrors.length > 0) {
+      setError(nextErrors[0])
+      return
     }
 
     const input: ConfigureWorkflowInput = {
       name: name.trim(),
       controllerId,
-      nodes: nodeDefs.map((node) => ({
-        nodeKey: node.nodeKey,
-        agentConfig:
-          node.type === 'AI'
-            ? {
-                acpServerType: agentConfigs[node.nodeKey].acpServerType,
-                modeId: agentConfigs[node.nodeKey].modeId.trim() || null,
-                modelId: agentConfigs[node.nodeKey].modelId.trim() || null,
-                initNewWorktree: agentConfigs[node.nodeKey].initNewWorktree,
-              }
-            : null,
-      })),
+      nodes: nodes.map(toConfiguredNodeInput),
     }
 
     setSaving(true)
@@ -337,9 +182,7 @@ export default function ConfigureWorkflowDialog({
               <Label>工作流模板</Label>
               <Select value={templateId} onValueChange={(v) => v && setTemplateId(v)}>
                 <SelectTrigger aria-label="工作流模板">
-                  <SelectValue>
-                    {sourceTemplate?.name ?? '选择模板'}
-                  </SelectValue>
+                  <SelectValue>{sourceTemplate?.name ?? '选择模板'}</SelectValue>
                   <SelectIcon />
                 </SelectTrigger>
                 <SelectPopup>
@@ -390,66 +233,13 @@ export default function ConfigureWorkflowDialog({
             </div>
           </div>
 
-          {aiNodes.length > 0 && (
-            <div className="space-y-3">
-              <Label>AI 节点 Agent 配置</Label>
-              {aiNodes.map((node) => {
-                const config = agentConfigs[node.nodeKey] ?? {
-                  acpServerType: '',
-                  modeId: '',
-                  modelId: '',
-                  initNewWorktree: false,
-                }
-                return (
-                  <div key={node.nodeKey} className="space-y-3 rounded-lg border p-3">
-                    <div className="text-sm font-medium">{node.name}</div>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="space-y-1.5">
-                        <Label>Harness 工具</Label>
-                        <Select
-                          value={config.acpServerType}
-                          onValueChange={(v) =>
-                            v && updateAgentConfig(node.nodeKey, { acpServerType: v })
-                          }
-                        >
-                          <SelectTrigger aria-label={`${node.name} Harness 工具`}>
-                            <SelectValue>{config.acpServerType || '选择工具'}</SelectValue>
-                            <SelectIcon />
-                          </SelectTrigger>
-                          <SelectPopup>
-                            {availableAcpTypes.map((c) => (
-                              <SelectItem key={c.type} value={c.type}>
-                                <SelectItemText>{c.type}</SelectItemText>
-                              </SelectItem>
-                            ))}
-                          </SelectPopup>
-                        </Select>
-                        {controllerId && availableAcpTypes.length === 0 && (
-                          <p className="text-xs text-muted-foreground">该 Controller 暂无可用工具</p>
-                        )}
-                      </div>
-                      <AgentNodeOptionFields
-                        controllerId={controllerId}
-                        nodeName={node.name}
-                        config={config}
-                        onChange={(patch) => updateAgentConfig(node.nodeKey, patch)}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        aria-label={`${node.name} 初始化新 Worktree`}
-                        checked={config.initNewWorktree}
-                        onCheckedChange={(checked) =>
-                          updateAgentConfig(node.nodeKey, { initNewWorktree: checked === true })
-                        }
-                      />
-                      <Label>初始化新 Worktree</Label>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+          <WorkflowGraphEditor
+            nodes={nodes}
+            onNodesChange={setNodes}
+            showAgentConfig
+            availableServerTypes={availableAcpTypes}
+            controllerId={controllerId}
+          />
 
           {error && (
             <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>

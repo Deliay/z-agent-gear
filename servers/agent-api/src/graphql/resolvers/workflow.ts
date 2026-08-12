@@ -36,6 +36,7 @@ function mapTemplate(doc: Doc) {
     version: doc.version ?? 1,
     nodes: ((doc.nodes as Doc[]) ?? []).map(mapTemplateNode),
     isBuiltin: doc.isBuiltin ?? false,
+    createdBy: doc.createdBy ?? 'HUMAN',
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -61,6 +62,7 @@ function mapConfigured(doc: Doc) {
             }
           : null,
     })),
+    createdBy: doc.createdBy ?? 'HUMAN',
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -69,6 +71,7 @@ function mapConfigured(doc: Doc) {
 function mapInstanceNode(node: Doc) {
   const rejectInfo = node.rejectInfo as Doc | null | undefined;
   const failInfo = node.failInfo as Doc | null | undefined;
+  const agentConfig = node.agentConfig as Doc | null | undefined;
   return {
     id: node.nodeId,
     nodeKey: node.nodeKey,
@@ -78,6 +81,18 @@ function mapInstanceNode(node: Doc) {
     status: node.status,
     stage: node.stage,
     sessionId: toId(node.sessionId),
+    prompts: node.prompts ?? null,
+    artifactTitles: node.artifactTitles ?? null,
+    agentConfig:
+      agentConfig && (agentConfig as Doc).acpServerType
+        ? {
+            acpServerType: (agentConfig as Doc).acpServerType,
+            modeId: (agentConfig as Doc).modeId ?? null,
+            modelId: (agentConfig as Doc).modelId ?? null,
+            initNewWorktree: (agentConfig as Doc).initNewWorktree ?? false,
+          }
+        : null,
+    requiresWorktree: node.requiresWorktree ?? null,
     createdAt: toIso(node.createdAt),
     startedAt: toIso(node.startedAt),
     reworkedAt: toIso(node.reworkedAt),
@@ -225,20 +240,31 @@ export const workflowResolvers = {
     },
     instantiateWorkflow: async (
       _parent: unknown,
-      args: { configuredWorkflowId: string; workspaceId: string; name: string },
+      args: { input: never },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
       return wrap(async () =>
         mapInstance(
-          (await workflowInstanceService.instantiate(
-            userId,
-            args.configuredWorkflowId,
-            args.workspaceId,
-            args.name,
-          )) as unknown as Doc,
+          (await workflowInstanceService.instantiate(userId, args.input as never)) as unknown as Doc,
         ),
       );
+    },
+    updateWorkflowNode: async (
+      _parent: unknown,
+      args: { instanceId: string; nodeId: string; input: never },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () => {
+        const { node } = await workflowInstanceService.updateNode(
+          userId,
+          args.instanceId,
+          args.nodeId,
+          args.input as never,
+        );
+        return mapInstanceNode(node as unknown as Doc);
+      });
     },
     completeHumanNode: async (
       _parent: unknown,

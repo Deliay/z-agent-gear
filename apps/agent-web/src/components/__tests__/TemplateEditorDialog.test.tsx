@@ -22,6 +22,11 @@ function renderDialog(props: Partial<Parameters<typeof TemplateEditorDialog>[0]>
   );
 }
 
+/** 节点默认折叠：展开指定节点（1-indexed）后再操作其字段 */
+function expandNode(index: number) {
+  fireEvent.click(screen.getByRole('button', { name: `展开节点 ${index}` }));
+}
+
 describe('TemplateEditorDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -30,6 +35,7 @@ describe('TemplateEditorDialog', () => {
 
   it('创建模式：默认包含一个人类节点', () => {
     renderDialog();
+    expandNode(1);
 
     expect(screen.getByText('创建工作流模板')).toBeInTheDocument();
     expect(screen.getByLabelText('节点 1 标识')).toBeInTheDocument();
@@ -52,6 +58,7 @@ describe('TemplateEditorDialog', () => {
     const mutate = vi.fn().mockResolvedValue({});
     mockUseMutation.mockReturnValue([mutate]);
     renderDialog();
+    expandNode(1);
 
     fireEvent.change(screen.getByLabelText('模板名称'), { target: { value: '测试模板' } });
     fireEvent.change(screen.getByLabelText('节点 1 标识'), { target: { value: 'requirement' } });
@@ -86,6 +93,7 @@ describe('TemplateEditorDialog', () => {
     const mutate = vi.fn();
     mockUseMutation.mockReturnValue([mutate]);
     renderDialog();
+    expandNode(1);
 
     fireEvent.change(screen.getByLabelText('模板名称'), { target: { value: '测试模板' } });
     fireEvent.change(screen.getByLabelText('节点 1 标识'), { target: { value: 'requirement' } });
@@ -94,6 +102,7 @@ describe('TemplateEditorDialog', () => {
 
     // 添加一个 AI 节点并依赖首节点
     fireEvent.click(screen.getByRole('button', { name: /添加节点/ }));
+    expandNode(2);
     fireEvent.change(screen.getByLabelText('节点 2 标识'), { target: { value: 'plan' } });
     fireEvent.change(screen.getByLabelText('节点 2 名称'), { target: { value: '产出方案' } });
     fireEvent.change(screen.getByLabelText('节点 2 阶段'), { target: { value: '方案阶段' } });
@@ -105,8 +114,22 @@ describe('TemplateEditorDialog', () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it('节点默认折叠：展开前不展示详情字段，展开后展示', () => {
+    renderDialog();
+
+    // 默认折叠：详情字段不可见，但节点标题与折叠按钮可见
+    expect(screen.queryByLabelText('节点 1 标识')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '展开节点 1' })).toBeInTheDocument();
+
+    // 展开后详情字段可见，按钮切换为「折叠」
+    expandNode(1);
+    expect(screen.getByLabelText('节点 1 标识')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '折叠节点 1' })).toBeInTheDocument();
+  });
+
   it('流程预览按阶段分组展示节点', () => {
     renderDialog();
+    expandNode(1);
 
     fireEvent.change(screen.getByLabelText('节点 1 标识'), { target: { value: 'requirement' } });
     fireEvent.change(screen.getByLabelText('节点 1 名称'), { target: { value: '产品需求' } });

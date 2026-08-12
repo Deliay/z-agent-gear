@@ -45,6 +45,12 @@ vi.mock('../middleware/redis.js', () => ({
 
 vi.mock('../services/workflow/tool-handlers.js', () => ({
   handlePlatformMcpRequest: vi.fn(),
+  PLATFORM_SERVER_NAME: 'agent-workflow-tools',
+}));
+
+vi.mock('../services/workflow/admin-tools.js', () => ({
+  handleAdminPlatformMcpRequest: vi.fn(),
+  ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
 }));
 
 import jwt from 'jsonwebtoken';

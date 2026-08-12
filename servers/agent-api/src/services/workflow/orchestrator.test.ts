@@ -6,6 +6,8 @@ vi.mock('../session.js', () => ({
     addMessage: vi.fn(),
     resume: vi.fn(),
     close: vi.fn(),
+    setMode: vi.fn(),
+    setModel: vi.fn(),
     onSessionEnded: vi.fn(),
   },
 }));
@@ -28,6 +30,11 @@ vi.mock('../../models/mcp-server.js', () => ({
   McpServer: {
     findOneAndUpdate: vi.fn(),
   },
+}));
+
+vi.mock('./admin-tools.js', () => ({
+  ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
+  ensureAdminToolsServer: vi.fn().mockResolvedValue('mcp-admin-1'),
 }));
 
 import { workflowOrchestrator, WORKFLOW_SYSTEM_PROMPT } from './orchestrator.js';
@@ -219,7 +226,7 @@ describe('WorkflowOrchestrator', () => {
     expect(node.sessionId).toBe('sess-new');
   });
 
-  it('O3b: 节点会话自动装配平台工作流工具服务（幂等 upsert transport/source=platform）', async () => {
+  it('O3b: 节点会话自动装配平台工作流工具服务 + 管理工具集（幂等 upsert transport/source=platform）', async () => {
     const instance = makeInstance([
       makeNode(),
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
@@ -239,9 +246,10 @@ describe('WorkflowOrchestrator', () => {
       },
       { upsert: true, new: true },
     );
+    // 管理工具集同样被装配进节点会话
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({ mcpServerIds: ['mcp-platform-1'] }),
+      expect.objectContaining({ mcpServerIds: ['mcp-platform-1', 'mcp-admin-1'] }),
     );
   });
 
@@ -347,25 +355,84 @@ describe('WorkflowOrchestrator', () => {
     expect(sessionService.addMessage).not.toHaveBeenCalled();
   });
 
-  it('reworkNodeSession: resume 原会话并发送打回原因', async () => {
+  it('reworkNodeSession: resume 原会话、重发打回原因并应用 Mode/模型配置', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2' }),
     ]);
     vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
+    vi.mocked(sessionService.setMode).mockResolvedValue(true);
+    vi.mocked(sessionService.setModel).mockResolvedValue(true);
+    const configured = makeConfigured();
+    configured.nodes[1].agentConfig = { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: true } as unknown as typeof configured.nodes[1]['agentConfig'];
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
 
     await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], { reason: '方案不完整', fromNodeId: 'n3' });
 
     expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1');
+    // resume 后按节点配置重新应用 Mode/模型
+    expect(sessionService.setMode).toHaveBeenCalledWith('sess-2', 'user-1', 'code');
+    expect(sessionService.setModel).toHaveBeenCalledWith('sess-2', 'user-1', 'gpt-5');
     expect(lastInputMessage()).toContain('方案不完整');
   });
 
-  it('resumeNodeSession: 通知 REJECT 节点会话重新获取产物', async () => {
+  it('resumeNodeSession: 关闭下游 REJECT 节点空闲会话，并以全新会话复工', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'RUNNING', dependsOn: [], sessionId: 'sess-3' }),
     ]);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
 
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
-    expect(lastInputMessage()).toContain('重新获取');
+    // 关闭阻塞期间的空闲会话
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    // 以全新会话复工（startNodeSession 创建新会话并发送提示词）
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ workflowNodeId: 'n3' }),
+    );
+  });
+
+  it('S1: 新实例节点（含快照字段）提示词/Agent 配置来自快照，不回查配置', async () => {
+    const snapshotNode = {
+      ...makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
+      prompts: ['快照提示词A', '快照提示词B'],
+      requiresWorktree: true,
+      agentConfig: { acpServerType: 'claude_code', modeId: 'plan', modelId: null, initNewWorktree: true },
+    };
+    const instance = makeInstance([makeNode(), snapshotNode]);
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    // 不回查配置
+    expect(ConfiguredWorkflow.findById).not.toHaveBeenCalled();
+    const content = lastInputMessage();
+    expect(content).toContain('快照提示词A');
+    expect(content).not.toContain('产出技术方案');
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ acpServerType: 'claude_code', enableWorktree: true }),
+    );
+  });
+
+  it('S2: 旧实例节点（无快照字段）回退 loadConfiguredNode，行为与一期一致', async () => {
+    const oldNode = makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] });
+    const instance = makeInstance([makeNode(), oldNode]);
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(makeConfigured()));
+
+    await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+    expect(ConfiguredWorkflow.findById).toHaveBeenCalled();
+    const content = lastInputMessage();
+    expect(content).toContain('产出技术方案');
+  });
+
+  it('S3: 配置被删除后旧实例节点回查失败，错误可读', async () => {
+    const oldNode = makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] });
+    const instance = makeInstance([makeNode(), oldNode]);
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(null));
+
+    await expect(workflowOrchestrator.startNodeSession(instance, instance.nodes[1])).rejects.toThrow(
+      /已配置工作流不存在/,
+    );
   });
 });

@@ -136,7 +136,7 @@ describe('workflow resolvers', () => {
       await expect(
         workflowResolvers.Mutation.instantiateWorkflow(
           {},
-          { configuredWorkflowId: 'c', workspaceId: 'w', name: 'n' },
+          { input: {} as never },
           emptyCtx,
         ),
       ).rejects.toThrow('Not authenticated');
@@ -183,7 +183,7 @@ describe('workflow resolvers', () => {
 
       const result = await workflowResolvers.Query.workflowInstances({}, { workspaceId: 'ws-1' }, ctx);
 
-      expect(workflowInstanceService.listForWorkspace).toHaveBeenCalledWith('user-1', 'ws-1');
+      expect(workflowInstanceService.listForWorkspace).toHaveBeenCalledWith('user-1', 'ws-1', false);
       const inst = result[0];
       expect(inst).toMatchObject({ id: 'inst-1', currentNodeNames: ['技术方案'] });
       expect(inst.blackboard).toEqual([
@@ -262,11 +262,18 @@ describe('workflow resolvers', () => {
 
       const result = await workflowResolvers.Mutation.instantiateWorkflow(
         {},
-        { configuredWorkflowId: 'cfg-1', workspaceId: 'ws-1', name: '需求A开发' },
+        { input: { source: 'CONFIGURED', configuredWorkflowId: 'cfg-1', workspaceId: 'ws-1', name: '需求A开发', controllerId: 'ctrl-1', nodes: [] } as never },
         ctx,
       );
 
-      expect(workflowInstanceService.instantiate).toHaveBeenCalledWith('user-1', 'cfg-1', 'ws-1', '需求A开发');
+      expect(workflowInstanceService.instantiate).toHaveBeenCalledWith('user-1', {
+        source: 'CONFIGURED',
+        configuredWorkflowId: 'cfg-1',
+        workspaceId: 'ws-1',
+        name: '需求A开发',
+        controllerId: 'ctrl-1',
+        nodes: [],
+      });
       expect(result).toMatchObject({ id: 'inst-1', name: '需求A开发' });
     });
 

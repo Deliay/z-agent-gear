@@ -1,4 +1,6 @@
-import { WorkflowTemplate } from '../../models/workflow-template.js';
+import { WorkflowTemplate, type WorkflowCreatedBy } from '../../models/workflow-template.js';
+
+export type { WorkflowCreatedBy };
 
 export interface WorkflowTemplateNodeInput {
   nodeKey: string;
@@ -10,6 +12,12 @@ export interface WorkflowTemplateNodeInput {
   artifactTitles?: string[] | null;
   dependsOn: string[];
   requiresWorktree: boolean;
+}
+
+export interface WorkflowTemplateCreationMeta {
+  /** 归属（默认 HUMAN）；工作流管理工具集创建时传 AI */
+  createdBy?: WorkflowCreatedBy;
+  createdBySessionId?: string | null;
 }
 
 export interface WorkflowTemplateInput {
@@ -153,6 +161,16 @@ function topologicalSort(nodes: WorkflowTemplateNodeInput[]): string[] {
   return order;
 }
 
+/** 校验 AI 归属：AI 只能删除自己（AI）创建的资源；内置模板另由调用方拒绝。供管理工具集复用 */
+export function assertAiOwned(resource: { createdBy?: string | null } | null | undefined, label: string): void {
+  if (!resource) {
+    throw new Error(`${label}不存在或无权限`);
+  }
+  if (resource.createdBy && resource.createdBy !== 'AI') {
+    throw new Error(`该${label}由人类创建，不允许 AI 删除`);
+  }
+}
+
 class WorkflowTemplateService {
   /** 列出用户自有模板 + 内置模板 */
   async listForUser(userId: string) {
@@ -165,7 +183,7 @@ class WorkflowTemplateService {
     return WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] }).lean();
   }
 
-  async create(userId: string, input: WorkflowTemplateInput) {
+  async create(userId: string, input: WorkflowTemplateInput, meta?: WorkflowTemplateCreationMeta) {
     validateTemplateGraph(input.nodes);
     return WorkflowTemplate.create({
       userId,
@@ -174,6 +192,8 @@ class WorkflowTemplateService {
       nodes: input.nodes,
       version: 1,
       isBuiltin: false,
+      createdBy: meta?.createdBy ?? 'HUMAN',
+      createdBySessionId: meta?.createdBySessionId ?? undefined,
     });
   }
 
@@ -195,13 +215,16 @@ class WorkflowTemplateService {
     return template;
   }
 
-  async delete(id: string, userId: string): Promise<boolean> {
+  async delete(id: string, userId: string, opts?: { requireAiOwned?: boolean }): Promise<boolean> {
     const template = await WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] });
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }
     if (template.isBuiltin) {
       throw new Error('内置模板不允许删除');
+    }
+    if (opts?.requireAiOwned) {
+      assertAiOwned(template as { createdBy?: string | null }, '工作流模板');
     }
     await template.deleteOne();
     return true;

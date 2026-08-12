@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../models/configured-workflow.js', () => ({
   ConfiguredWorkflow: {
     findOne: vi.fn(),
+    findById: vi.fn(),
   },
 }));
 
@@ -18,7 +19,18 @@ vi.mock('../../models/workflow-instance.js', () => ({
     findOne: vi.fn(),
     find: vi.fn(),
     updateOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
+}));
+
+vi.mock('../../models/controller.js', () => ({
+  Controller: {
+    findOne: vi.fn(),
+  },
+}));
+
+vi.mock('../../middleware/redis.js', () => ({
+  getRedisClient: vi.fn(),
 }));
 
 vi.mock('../../models/session.js', () => ({
@@ -44,8 +56,10 @@ import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { Controller } from '../../models/controller.js';
 import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
+import { getRedisClient } from '../../middleware/redis.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -54,6 +68,8 @@ function oid(id: string) {
 function leanQuery(result: unknown) {
   return { lean: vi.fn().mockResolvedValue(result) } as never;
 }
+
+const mockRedis = { get: vi.fn(), del: vi.fn() };
 
 function makeConfigured(overrides: Record<string, unknown> = {}) {
   return {
@@ -97,17 +113,69 @@ function makeWorkspace(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeNodes() {
+  return [
+    {
+      nodeKey: 'requirement',
+      type: 'HUMAN' as const,
+      name: '产品需求',
+      stage: '需求',
+      dependsOn: [],
+      requiresWorktree: false,
+      agentConfig: null,
+    },
+    {
+      nodeKey: 'design',
+      type: 'AI' as const,
+      name: '技术方案',
+      stage: '设计',
+      prompts: ['产出技术方案'],
+      artifactTitles: ['技术方案文档'],
+      dependsOn: ['requirement'],
+      requiresWorktree: true,
+      agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: true },
+    },
+  ];
+}
+
+function instantiateInput(overrides: Record<string, unknown> = {}) {
+  return {
+    source: 'CONFIGURED',
+    configuredWorkflowId: 'cfg-1',
+    controllerId: 'ctrl-1',
+    workspaceId: 'ws-1',
+    name: '需求A开发',
+    nodes: makeNodes(),
+    ...overrides,
+  };
+}
+
+function mockControllerFound() {
+  vi.mocked(Controller.findOne).mockReturnValue(
+    leanQuery({ _id: oid('ctrl-1'), userId: oid('user-1'), name: 'dev-machine' }),
+  );
+}
+
+function mockCapabilities(types: string[]) {
+  mockRedis.get.mockResolvedValue(
+    JSON.stringify({ servers: types.map((t) => ({ type: t, available: true })), checkedAt: new Date().toISOString() }),
+  );
+}
+
 describe('WorkflowInstanceService.instantiate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    mockControllerFound();
+    mockCapabilities(['opencode', 'claude_code']);
     vi.mocked(ConfiguredWorkflow.findOne).mockReturnValue(leanQuery(makeConfigured()));
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace()));
   });
 
-  it('正常实例化：首节点 READY，其余 INITIALIZING，dependsOn 映射为实例节点 nodeId', async () => {
+  it('I1: CONFIGURED 正常实例化：节点全量快照落库，首节点 READY，其余 INITIALIZING', async () => {
     vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
 
-    await workflowInstanceService.instantiate('user-1', 'cfg-1', 'ws-1', '需求A开发');
+    await workflowInstanceService.instantiate('user-1', instantiateInput() as never);
 
     const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as {
       userId: string;
@@ -123,51 +191,237 @@ describe('WorkflowInstanceService.instantiate', () => {
         status: string;
         dependsOn: string[];
         reworkCount: number;
+        prompts?: string[];
+        artifactTitles?: string[];
+        agentConfig?: { acpServerType: string };
+        requiresWorktree: boolean;
       }[];
     };
     expect(created).toMatchObject({
       userId: 'user-1',
+      controllerId: 'ctrl-1',
       workspaceId: 'ws-1',
       configuredWorkflowId: 'cfg-1',
       name: '需求A开发',
       currentNodeNames: [],
     });
     expect(created.nodes).toHaveLength(2);
-    // 首节点（人类，无上游）READY
-    expect(created.nodes[0]).toMatchObject({ nodeKey: 'requirement', status: 'READY', reworkCount: 0 });
-    // 其余 INITIALIZING，dependsOn 已映射为首节点的 nodeId
-    expect(created.nodes[1]).toMatchObject({ nodeKey: 'design', status: 'INITIALIZING' });
+    expect(created.nodes[0]).toMatchObject({
+      nodeKey: 'requirement',
+      status: 'READY',
+      reworkCount: 0,
+      requiresWorktree: false,
+    });
+    expect(created.nodes[1]).toMatchObject({
+      nodeKey: 'design',
+      status: 'INITIALIZING',
+      prompts: ['产出技术方案'],
+      artifactTitles: ['技术方案文档'],
+      requiresWorktree: true,
+    });
+    expect(created.nodes[1].agentConfig).toMatchObject({ acpServerType: 'opencode', initNewWorktree: true });
     expect(created.nodes[1].dependsOn).toEqual([created.nodes[0].nodeId]);
     expect(created.nodes[0].nodeId).toBeTruthy();
   });
 
-  it('已配置工作流不存在时拒绝', async () => {
-    vi.mocked(ConfiguredWorkflow.findOne).mockReturnValue(leanQuery(null));
-    await expect(workflowInstanceService.instantiate('user-1', 'cfg-x', 'ws-1', 'x')).rejects.toThrow(/不存在/);
+  it('I2: 来源必填校验——TEMPLATE 缺 templateId 报错', async () => {
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ source: 'TEMPLATE' }) as never),
+    ).rejects.toThrow(/templateId/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I2b: CONFIGURED 缺 configuredWorkflowId 报错', async () => {
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ configuredWorkflowId: null }) as never),
+    ).rejects.toThrow(/configuredWorkflowId/);
     expect(WorkflowInstance.create).not.toHaveBeenCalled();
   });
 
   it('工作区不存在或不属于该控制器时拒绝', async () => {
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(null));
-    await expect(workflowInstanceService.instantiate('user-1', 'cfg-1', 'ws-x', 'x')).rejects.toThrow(/工作区/);
-  });
-
-  it('O5: 模板含 requiresWorktree 节点但工作区非 git（无默认分支）时拒绝实例化', async () => {
-    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
-    await expect(workflowInstanceService.instantiate('user-1', 'cfg-1', 'ws-1', 'x')).rejects.toThrow(
-      /Git|git/,
-    );
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput() as never),
+    ).rejects.toThrow(/工作区/);
     expect(WorkflowInstance.create).not.toHaveBeenCalled();
   });
 
-  it('O5b: 无 requiresWorktree 节点时非 git 工作区也可实例化', async () => {
-    const configured = makeConfigured();
-    configured.nodes[1].requiresWorktree = false;
-    vi.mocked(ConfiguredWorkflow.findOne).mockReturnValue(leanQuery(configured));
+  it('I3: 非法图（双首节点）拒绝并报具体错误', async () => {
+    const nodes = makeNodes();
+    nodes[1].dependsOn = [];
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never),
+    ).rejects.toThrow(/首节点必须唯一/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I4: AI 节点缺 agentConfig 拒绝并指出节点', async () => {
+    const nodes = makeNodes();
+    nodes[1].agentConfig = null;
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never),
+    ).rejects.toThrow(/Agent 配置.*技术方案|技术方案.*Agent 配置/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I4b: acpServerType 不在 capabilities 内拒绝', async () => {
+    const nodes = makeNodes();
+    nodes[1].agentConfig = { acpServerType: 'gemini_cli', modeId: null, modelId: null, initNewWorktree: true };
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never),
+    ).rejects.toThrow(/gemini_cli/);
+  });
+
+  it('I5: requiresWorktree 但工作区非 git 拒绝', async () => {
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput() as never),
+    ).rejects.toThrow(/Git|git/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I5b: 无 requiresWorktree 节点时非 git 工作区也可实例化', async () => {
+    const nodes = makeNodes();
+    nodes[1].requiresWorktree = false;
+    nodes[1].agentConfig = { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false };
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
     vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
 
-    await expect(workflowInstanceService.instantiate('user-1', 'cfg-1', 'ws-1', 'x')).resolves.toBeTruthy();
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never),
+    ).resolves.toBeTruthy();
+  });
+
+  it('I6: 提交图与来源图不同（实例化前被修改）时以提交图为准落库', async () => {
+    // 来源是配置 cfg-1，但提交图新增一个节点，服务端应以提交图为准
+    const nodes = [...makeNodes(), { nodeKey: 'extra', type: 'AI' as const, name: '额外', stage: '实现', prompts: ['做某事'], dependsOn: ['design'], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } }];
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+
+    await workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never);
+
+    const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as { nodes: { nodeKey: string }[] };
+    expect(created.nodes).toHaveLength(3);
+    expect(created.nodes.map((n) => n.nodeKey)).toEqual(['requirement', 'design', 'extra']);
+  });
+
+  it('TEMPLATE/BLANK 来源也能实例化（无 configuredWorkflowId 落库为 null）', async () => {
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+    await workflowInstanceService.instantiate('user-1', instantiateInput({ source: 'TEMPLATE', templateId: 'tpl-1', configuredWorkflowId: null }) as never);
+    const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as { configuredWorkflowId: unknown };
+    expect(created.configuredWorkflowId).toBeNull();
+  });
+});
+
+describe('WorkflowInstanceService.updateNode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  });
+
+  function makeInstance(nodes: Record<string, unknown>[] = []) {
+    return {
+      _id: oid('inst-1'),
+      userId: oid('user-1'),
+      configuredWorkflowId: oid('cfg-1'),
+      nodes,
+    };
+  }
+
+  function makeNode(overrides: Record<string, unknown> = {}) {
+    return {
+      nodeId: 'n1',
+      nodeKey: 'design',
+      type: 'AI',
+      name: '技术方案',
+      stage: '设计',
+      status: 'READY',
+      startedAt: null,
+      prompts: ['旧提示词'],
+      artifactTitles: ['旧产物'],
+      requiresWorktree: true,
+      agentConfig: { acpServerType: 'opencode', initNewWorktree: true },
+      ...overrides,
+    };
+  }
+
+  it('N1: INITIALIZING/READY 且 startedAt=null 更新成功', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([makeNode()]) as never));
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValueOnce(
+      leanQuery(makeInstance([makeNode({ prompts: ['新提示词'], name: '新名字' })]) as never),
+    );
+
+    await workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', {
+      name: '新名字',
+      prompts: ['新提示词'],
+    });
+
+    expect(WorkflowInstance.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: 'inst-1',
+        nodes: {
+          $elemMatch: { nodeId: 'n1', status: { $in: ['INITIALIZING', 'READY'] }, startedAt: null },
+        },
+      }),
+      expect.objectContaining({ $set: expect.objectContaining({ 'nodes.$[n].name': '新名字' }) }),
+      expect.objectContaining({ arrayFilters: [{ 'n.nodeId': 'n1' }], new: true }),
+    );
+    expect(mockRedis.del).toHaveBeenCalledWith('workflow:instance:inst-1');
+  });
+
+  it('N2: RUNNING/DONE/REJECT/REWORK/FAILED 拒绝「节点已开始，不可修改」', async () => {
+    for (const status of ['RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED']) {
+      vi.clearAllMocks();
+      vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([makeNode({ status })]) as never));
+      vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValueOnce(leanQuery(null) as never);
+      vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([makeNode({ status })]) as never));
+
+      await expect(
+        workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', { name: 'x' }),
+      ).rejects.toThrow(/已开始，不可修改/);
+    }
+  });
+
+  it('N3: 旧实例节点（无快照字段）先回查补齐快照再应用修改', async () => {
+    const oldNode = { nodeId: 'n1', nodeKey: 'design', type: 'AI', name: '技术方案', stage: '设计', status: 'READY', startedAt: null };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([oldNode]) as never));
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValueOnce(
+      leanQuery(makeConfigured()),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValueOnce(
+      leanQuery(makeInstance([makeNode({ prompts: ['补齐后的提示词'] })]) as never),
+    );
+
+    await workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', { prompts: ['补齐后的提示词'] });
+
+    // 先回查补齐快照
+    expect(ConfiguredWorkflow.findById).toHaveBeenCalledTimes(1);
+    expect(WorkflowInstance.updateOne).toHaveBeenCalled();
+  });
+
+  it('N3b: 旧实例节点引用配置已变更（nodeKey 已删除）报可读错误', async () => {
+    const oldNode = { nodeId: 'n1', nodeKey: 'ghost', type: 'AI', name: '技术方案', stage: '设计', status: 'READY', startedAt: null };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([oldNode]) as never));
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValueOnce(leanQuery(makeConfigured()));
+
+    await expect(
+      workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', { name: 'x' }),
+    ).rejects.toThrow(/已变更|不存在/);
+  });
+
+  it('N4: 实例已删除（deletedAt 非空）拒绝', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(null) as never);
+    await expect(
+      workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', { name: 'x' }),
+    ).rejects.toThrow(/不存在/);
+    expect(WorkflowInstance.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('N4b: 节点不存在拒绝', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([]) as never));
+    await expect(
+      workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', { name: 'x' }),
+    ).rejects.toThrow(/不存在节点/);
   });
 });
 

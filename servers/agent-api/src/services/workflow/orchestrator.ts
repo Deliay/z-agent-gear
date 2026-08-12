@@ -10,6 +10,7 @@ import {
 } from './engine.js';
 import { getArtifactKeys, getValue } from './blackboard.js';
 import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
+import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
 
 /** 工作流系统提示（注入到每个 AI 节点会话提示词首位） */
 export const WORKFLOW_SYSTEM_PROMPT =
@@ -55,7 +56,7 @@ class WorkflowOrchestrator {
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
   async startNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
-    const configuredNode = await this.loadConfiguredNode(instance, node);
+    const configuredNode = await this.loadNodeConfig(instance, node);
     const agentConfig = configuredNode.agentConfig;
     if (!agentConfig) {
       throw new Error(`节点「${node.name}」（${node.nodeKey}）缺少 Agent 配置，无法拉起会话`);
@@ -76,13 +77,19 @@ class WorkflowOrchestrator {
       worktreeBranchSuffix: enableWorktree ? `${instanceSlug}/${stageSlug}` : undefined,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
-      // 节点会话自动装配平台工作流工具服务
-      mcpServerIds: [await this.ensureWorkflowToolsServer(instance.userId.toString())],
+      // 节点会话自动装配平台工作流工具服务 + 管理工作流管理工具集（AI 可通过 admin 工具集完成编排）
+      mcpServerIds: [
+        await this.ensureWorkflowToolsServer(instance.userId.toString()),
+        await ensureAdminToolsServer(instance.userId.toString()),
+      ],
       // 节点配置的 mode/model：harness 会话初始化为配置值，而非 harness 默认设置
       ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
       ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
     });
     node.sessionId = session.id as string;
+
+    // 若节点配置指定了 Mode/模型，则在会话创建后应用
+    await this.applyAgentConfig(instance, node, node.sessionId as string, agentConfig);
 
     await sessionService.addMessage(node.sessionId as string, {
       direction: 'input',
@@ -91,7 +98,37 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 节点进入 REWORK：resume 原会话并发送打回原因 */
+  /** 应用节点配置的 Mode/模型设置到指定会话（与 start 场景保持一致） */
+  private async applyAgentConfig(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    sessionId: string,
+    agentConfig?: ConfiguredNodeLike['agentConfig'],
+  ): Promise<void> {
+    if (!agentConfig) return;
+    if (agentConfig.modeId) {
+      try {
+        await sessionService.setMode(sessionId, instance.userId.toString(), agentConfig.modeId);
+      } catch (err) {
+        console.warn(
+          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (agentConfig.modelId) {
+      try {
+        await sessionService.setModel(sessionId, instance.userId.toString(), agentConfig.modelId);
+      } catch (err) {
+        console.warn(
+          `节点「${node.name}」（${node.nodeKey}）应用模型「${agentConfig.modelId}」失败：`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  /** 节点进入 REWORK：resume 原会话、重发打回原因并重新应用 Mode/模型配置 */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
@@ -100,6 +137,9 @@ class WorkflowOrchestrator {
     if (!node.sessionId) return;
     const sessionId = node.sessionId.toString();
     await sessionService.resume(sessionId, instance.userId.toString());
+    // 重新应用节点配置的 Mode/模型（resume 后会话可能回退默认，需按工作流配置设置）
+    const configuredNode = await this.loadNodeConfig(instance, node);
+    await this.applyAgentConfig(instance, node, sessionId, configuredNode.agentConfig);
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -110,16 +150,14 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** REJECT→RUNNING：通知其用 MCP 工具重新获取上游产物后继续 */
+  /** REJECT→RUNNING：关闭下游 REJECT 节点阻塞期间的空闲会话，再以全新会话复工（含最新上游产物与 Mode/模型配置） */
   async resumeNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
-    if (!node.sessionId) return;
-    await sessionService.addMessage(node.sessionId.toString(), {
-      direction: 'input',
-      type: 'text',
-      content:
-        '上游节点已完成返工，其产物已更新。请使用工作流工具重新获取最新产物后继续你的工作；' +
-        '完成后调用 completeCurrentNode，仍需上游调整时调用 rejectCurrentNode。',
-    });
+    // 关闭下游 REJECT 节点原有的空闲会话，避免资源浪费
+    if (node.sessionId) {
+      await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+      node.sessionId = undefined;
+    }
+    await this.startNodeSession(instance, node);
   }
 
   /** 节点 DONE：结束本会话（由引擎保证在下游 start 之后调用） */
@@ -199,6 +237,30 @@ class WorkflowOrchestrator {
       { upsert: true, new: true },
     );
     return server._id.toString();
+  }
+
+  /**
+   * 读取节点配置：优先使用实例节点快照（prompts/agentConfig/requiresWorktree）；
+   * 快照字段缺失（一期旧实例）时回退 loadConfiguredNode 按 nodeKey 回查配置。
+   */
+  private async loadNodeConfig(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+  ): Promise<ConfiguredNodeLike> {
+    const nodeWithSnapshot = node as unknown as {
+      prompts?: string[] | null;
+      requiresWorktree?: boolean;
+      agentConfig?: ConfiguredNodeLike['agentConfig'];
+    };
+    if (nodeWithSnapshot.prompts !== undefined || nodeWithSnapshot.agentConfig !== undefined) {
+      return {
+        nodeKey: node.nodeKey,
+        prompts: nodeWithSnapshot.prompts ?? null,
+        requiresWorktree: nodeWithSnapshot.requiresWorktree ?? false,
+        agentConfig: nodeWithSnapshot.agentConfig ?? null,
+      };
+    }
+    return this.loadConfiguredNode(instance, node);
   }
 
   private async loadConfiguredNode(

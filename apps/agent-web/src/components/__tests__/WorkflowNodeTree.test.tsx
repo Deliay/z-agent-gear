@@ -7,6 +7,7 @@ const mockComplete = vi.fn().mockResolvedValue({});
 const mockReject = vi.fn().mockResolvedValue({});
 
 vi.mock('@apollo/client/react', () => ({
+  useQuery: () => ({ data: { acpCapabilities: [] } }),
   useMutation: (doc: unknown) => {
     const name = JSON.stringify(doc);
     return [name.includes('CompleteHumanNode') ? mockComplete : mockReject];
@@ -27,6 +28,10 @@ function makeNode(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     status: 'RUNNING',
     stage: '验收',
     sessionId: null,
+    prompts: null,
+    artifactTitles: null,
+    agentConfig: null,
+    requiresWorktree: null,
     createdAt: '2026-08-08T00:00:00Z',
     startedAt: null,
     reworkedAt: null,
