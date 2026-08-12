@@ -192,6 +192,8 @@ export class SessionService {
       sessionId,
       modeId,
     }));
+    // 同步更新 Session 文档缓存，保证前端查询为最新值
+    await Session.updateOne({ _id: sessionId, userId }, { currentModeId: modeId });
     return true;
   }
 
@@ -206,6 +208,8 @@ export class SessionService {
       sessionId,
       modelId,
     }));
+    // 同步更新 Session 文档缓存，保证前端查询为最新值
+    await Session.updateOne({ _id: sessionId, userId }, { currentModelId: modelId });
     return true;
   }
 
