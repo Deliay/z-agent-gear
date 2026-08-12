@@ -577,12 +577,28 @@ test.describe('Workflow E2E', () => {
     });
     expect(reworkResult.isError).toBe(false);
 
-    // verify 会话（未结束）收到复工通知消息
+    // 阻塞期间的空闲 verify 会话被关闭，并拉起全新会话复工
     await waitFor(
-      () => env.controller.messages.find((m) => m.sessionId === verifyStart.sessionId && m.content.includes('上游节点已完成返工')),
+      () => env.controller.stops.includes(verifyStart.sessionId) || undefined,
       15000,
-      'verify resume message',
+      'verify stale acp:stop',
     );
+    const verifyRestart = await waitFor(
+      () => env.controller.starts.find((s) => s.sessionId !== verifyStart.sessionId && s.mcpEndpoint?.serverNames.includes('agent-workflow-tools')),
+      15000,
+      'verify fresh acp:start',
+    );
+    expect(verifyRestart.mcpEndpoint?.token).toBeTruthy();
+    // 新会话提示词含最新上游产物（计算器代码 v2）
+    const verifyPrompt = await waitFor(
+      async () => {
+        const msgs = await getSessionMessagesText(page, env.token, verifyRestart.sessionId);
+        return msgs.find((m) => m.includes('你身处一个工作流系统'));
+      },
+      15000,
+      'verify fresh prompt',
+    );
+    expect(verifyPrompt).toContain('计算器代码 v2');
 
     // 实例状态与黑板：exec DONE / verify RUNNING；旧产物入垃圾桶，新产物上黑板
     inst = await getInstance(page, env.token, instanceId);

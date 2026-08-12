@@ -6,6 +6,8 @@ vi.mock('../session.js', () => ({
     addMessage: vi.fn(),
     resume: vi.fn(),
     close: vi.fn(),
+    setMode: vi.fn(),
+    setModel: vi.fn(),
     onSessionEnded: vi.fn(),
   },
 }));
@@ -308,26 +310,41 @@ describe('WorkflowOrchestrator', () => {
     expect(sessionService.addMessage).not.toHaveBeenCalled();
   });
 
-  it('reworkNodeSession: resume 原会话并发送打回原因', async () => {
+  it('reworkNodeSession: resume 原会话、重发打回原因并应用 Mode/模型配置', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2' }),
     ]);
     vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
+    vi.mocked(sessionService.setMode).mockResolvedValue(true);
+    vi.mocked(sessionService.setModel).mockResolvedValue(true);
+    const configured = makeConfigured();
+    configured.nodes[1].agentConfig = { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: true } as unknown as typeof configured.nodes[1]['agentConfig'];
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
 
     await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], { reason: '方案不完整', fromNodeId: 'n3' });
 
     expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1');
+    // resume 后按节点配置重新应用 Mode/模型
+    expect(sessionService.setMode).toHaveBeenCalledWith('sess-2', 'user-1', 'code');
+    expect(sessionService.setModel).toHaveBeenCalledWith('sess-2', 'user-1', 'gpt-5');
     expect(lastInputMessage()).toContain('方案不完整');
   });
 
-  it('resumeNodeSession: 通知 REJECT 节点会话重新获取产物', async () => {
+  it('resumeNodeSession: 关闭下游 REJECT 节点空闲会话，并以全新会话复工', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'RUNNING', dependsOn: [], sessionId: 'sess-3' }),
     ]);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
 
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
-    expect(lastInputMessage()).toContain('重新获取');
+    // 关闭阻塞期间的空闲会话
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    // 以全新会话复工（startNodeSession 创建新会话并发送提示词）
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ workflowNodeId: 'n3' }),
+    );
   });
 
   it('S1: 新实例节点（含快照字段）提示词/Agent 配置来自快照，不回查配置', async () => {

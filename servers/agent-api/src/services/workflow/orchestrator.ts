@@ -85,17 +85,8 @@ class WorkflowOrchestrator {
     });
     node.sessionId = session.id as string;
 
-    // 若节点配置指定了 Mode，则在会话创建后应用
-    if (agentConfig.modeId && node.sessionId) {
-      try {
-        await sessionService.setMode(node.sessionId as string, instance.userId.toString(), agentConfig.modeId);
-      } catch (err) {
-        console.warn(
-          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
+    // 若节点配置指定了 Mode/模型，则在会话创建后应用
+    await this.applyAgentConfig(instance, node, node.sessionId as string, agentConfig);
 
     await sessionService.addMessage(node.sessionId as string, {
       direction: 'input',
@@ -104,7 +95,37 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 节点进入 REWORK：resume 原会话并发送打回原因 */
+  /** 应用节点配置的 Mode/模型设置到指定会话（与 start 场景保持一致） */
+  private async applyAgentConfig(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    sessionId: string,
+    agentConfig?: ConfiguredNodeLike['agentConfig'],
+  ): Promise<void> {
+    if (!agentConfig) return;
+    if (agentConfig.modeId) {
+      try {
+        await sessionService.setMode(sessionId, instance.userId.toString(), agentConfig.modeId);
+      } catch (err) {
+        console.warn(
+          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (agentConfig.modelId) {
+      try {
+        await sessionService.setModel(sessionId, instance.userId.toString(), agentConfig.modelId);
+      } catch (err) {
+        console.warn(
+          `节点「${node.name}」（${node.nodeKey}）应用模型「${agentConfig.modelId}」失败：`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  /** 节点进入 REWORK：resume 原会话、重发打回原因并重新应用 Mode/模型配置 */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
@@ -113,6 +134,9 @@ class WorkflowOrchestrator {
     if (!node.sessionId) return;
     const sessionId = node.sessionId.toString();
     await sessionService.resume(sessionId, instance.userId.toString());
+    // 重新应用节点配置的 Mode/模型（resume 后会话可能回退默认，需按工作流配置设置）
+    const configuredNode = await this.loadNodeConfig(instance, node);
+    await this.applyAgentConfig(instance, node, sessionId, configuredNode.agentConfig);
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -123,16 +147,14 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** REJECT→RUNNING：通知其用 MCP 工具重新获取上游产物后继续 */
+  /** REJECT→RUNNING：关闭下游 REJECT 节点阻塞期间的空闲会话，再以全新会话复工（含最新上游产物与 Mode/模型配置） */
   async resumeNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
-    if (!node.sessionId) return;
-    await sessionService.addMessage(node.sessionId.toString(), {
-      direction: 'input',
-      type: 'text',
-      content:
-        '上游节点已完成返工，其产物已更新。请使用工作流工具重新获取最新产物后继续你的工作；' +
-        '完成后调用 completeCurrentNode，仍需上游调整时调用 rejectCurrentNode。',
-    });
+    // 关闭下游 REJECT 节点原有的空闲会话，避免资源浪费
+    if (node.sessionId) {
+      await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+      node.sessionId = undefined;
+    }
+    await this.startNodeSession(instance, node);
   }
 
   /** 节点 DONE：结束本会话（由引擎保证在下游 start 之后调用） */
