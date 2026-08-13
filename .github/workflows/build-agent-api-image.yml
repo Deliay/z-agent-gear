@@ -27,8 +27,6 @@ jobs:
 
       - name: Build and push
         uses: docker/build-push-action@v6
-        env:
-          BUILDKIT_PROGRESS: plain
         with:
           context: servers/agent-api
           file: servers/agent-api/Dockerfile
@@ -36,3 +34,5 @@ jobs:
             ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/agent-api:${{ github.sha }}
             ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/agent-api:latest
           push: true
+          provenance: false
+          sbom: false
