@@ -27,6 +27,8 @@ jobs:
 
       - name: Build and push
         uses: docker/build-push-action@v6
+        env:
+          BUILDKIT_PROGRESS: plain
         with:
           context: servers/agent-api
           file: servers/agent-api/Dockerfile
