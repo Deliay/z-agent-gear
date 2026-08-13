@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useMutation } from '@apollo/client/react'
+import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,17 +13,21 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import MarkdownContent from '@/components/session/MarkdownContent'
+import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
+import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
 import {
   GET_WORKFLOW_INSTANCE,
   COMPLETE_HUMAN_NODE,
   REJECT_NODE,
+  RESTART_NODE,
   type WorkflowInstanceData,
   type WorkflowNodeData,
   type BlackboardEntryData,
   type WorkflowNodeStatus,
   type WorkflowNodeType,
 } from '@/graphql/workflow'
-import { ChevronDown, ChevronRight, MessageSquare, RotateCcw } from 'lucide-react'
+import EditInstanceNodeDialog from './EditInstanceNodeDialog'
+import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -215,11 +219,15 @@ function NodeCard({
   node,
   blackboard,
   onOpenSession,
+  onEdit,
+  onRestart,
 }: {
   instanceId: string
   node: WorkflowNodeData
   blackboard: BlackboardEntryData[]
   onOpenSession: (sessionId: string) => void
+  onEdit: (node: WorkflowNodeData) => void
+  onRestart: (node: WorkflowNodeData) => void
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -256,6 +264,19 @@ function NodeCard({
             返工 {node.reworkCount} 次
           </span>
         )}
+        {(node.status === 'INITIALIZING' || node.status === 'READY') && (
+          <Button size="xs" variant="outline" onClick={() => onEdit(node)}>
+            <Pencil className="size-3" />
+            编辑
+          </Button>
+        )}
+        {node.type === 'AI' &&
+          (node.status === 'RUNNING' || node.status === 'REWORK' || node.status === 'FAILED') && (
+            <Button size="xs" variant="outline" onClick={() => onRestart(node)}>
+              <RefreshCw className="size-3" />
+              重启
+            </Button>
+          )}
         {node.sessionId && (
           <Button
             size="xs"
@@ -271,6 +292,16 @@ function NodeCard({
       <>
       {node.description && (
         <p className="mt-1 text-xs wrap-anywhere text-muted-foreground">{node.description}</p>
+      )}
+      {node.type === 'AI' && node.prompts && node.prompts.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">
+            节点提示词（实例节点为实例化时的副本）
+          </div>
+          {node.prompts.map((prompt, i) => (
+            <p key={i} className="text-xs text-muted-foreground">{prompt}</p>
+          ))}
+        </div>
       )}
       {node.rejectInfo && node.status === 'REJECT' && (
         <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
@@ -318,6 +349,41 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
     if (!stages.includes(node.stage)) stages.push(node.stage)
   }
 
+  const [editNode, setEditNode] = useState<WorkflowNodeData | null>(null)
+  const [restartTarget, setRestartTarget] = useState<WorkflowNodeData | null>(null)
+  const [restarting, setRestarting] = useState(false)
+  const [restartNode] = useMutation(RESTART_NODE)
+  const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
+    variables: { controllerId: instance.controllerId },
+    skip: !instance.controllerId,
+  })
+  const availableServerTypes = (capabilitiesData?.acpCapabilities ?? [])
+    .filter((c) => c.available && c.type)
+    .map((c) => c.type)
+
+  const refetch = [{ query: GET_WORKFLOW_INSTANCE, variables: { id: instance.id } }]
+
+  // 重启前弹框确认：明确告知会删除之前的会话并重新拉起全新会话
+  const handleRestart = (node: WorkflowNodeData) => {
+    setRestartTarget(node)
+  }
+
+  const confirmRestart = async (node: WorkflowNodeData) => {
+    setRestarting(true)
+    try {
+      await restartNode({
+        variables: { instanceId: instance.id, nodeId: node.id },
+        refetchQueries: refetch,
+      })
+      toast.success(`节点「${node.name}」已重启`)
+      setRestartTarget(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '重启失败，请重试')
+    } finally {
+      setRestarting(false)
+    }
+  }
+
   return (
     <div className="min-w-0 space-y-6">
       {stages.map((stage) => (
@@ -333,11 +399,61 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                   node={node}
                   blackboard={instance.blackboard}
                   onOpenSession={onOpenSession}
+                  onEdit={setEditNode}
+                  onRestart={handleRestart}
                 />
               ))}
           </div>
         </div>
       ))}
+      {editNode && (
+        <EditInstanceNodeDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditNode(null)
+          }}
+          instanceId={instance.id}
+          node={editNode}
+          controllerId={instance.controllerId}
+          availableServerTypes={availableServerTypes}
+        />
+      )}
+      <Dialog
+        open={restartTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !restarting) setRestartTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重启节点「{restartTarget?.name ?? ''}」</DialogTitle>
+            <DialogDescription>
+              重启将关闭并删除当前节点的会话，然后重新拉起一个全新会话重试。节点当前的产物与打回记录会保留。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-warning">
+              确认要删除当前会话并重新开始吗？该操作不可撤销。
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={restarting}
+              onClick={() => setRestartTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={restarting || !restartTarget}
+              onClick={() => restartTarget && confirmRestart(restartTarget)}
+            >
+              {restarting ? '重启中…' : '确认重启'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

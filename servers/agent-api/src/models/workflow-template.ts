@@ -3,6 +3,9 @@ import mongoose from 'mongoose';
 export const WORKFLOW_NODE_TYPES = ['HUMAN', 'AI', 'FLAG'] as const;
 export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
 
+export const WORKFLOW_CREATED_BY = ['HUMAN', 'AI'] as const;
+export type WorkflowCreatedBy = (typeof WORKFLOW_CREATED_BY)[number];
+
 const templateNodeSchema = new mongoose.Schema(
   {
     nodeKey: { type: String, required: true },
@@ -29,6 +32,9 @@ const workflowTemplateSchema = new mongoose.Schema(
     version: { type: Number, default: 1 },
     nodes: { type: [templateNodeSchema], default: [] },
     isBuiltin: { type: Boolean, default: false },
+    // 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
+    createdBy: { type: String, enum: WORKFLOW_CREATED_BY, default: 'HUMAN' },
+    createdBySessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
   },
   { timestamps: true },
 );

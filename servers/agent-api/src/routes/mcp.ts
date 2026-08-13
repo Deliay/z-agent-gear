@@ -6,6 +6,11 @@ import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from '../services/mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
 import { handlePlatformMcpRequest } from '../services/workflow/tool-handlers.js';
+import {
+  handleAdminPlatformMcpRequest,
+  ADMIN_PLATFORM_SERVER_NAME,
+} from '../services/workflow/admin-tools.js';
+import { PLATFORM_SERVER_NAME } from '../services/workflow/tool-handlers.js';
 
 const router = Router();
 
@@ -111,13 +116,22 @@ const mcpEntryHandler = async (req: Request, res: Response) => {
     return;
   }
 
-  // 平台内置服务（如 agent-workflow-tools）：不经 Redis 转发，直接分发到本地 handler
+  // 平台内置服务（如 agent-workflow-tools / agent-workflow-admin-tools）：不经 Redis 转发，直接分发到本地 handler
   if (server.transport === 'platform') {
     const isPlatformNotification = request.id === undefined || request.id === null;
-    const outcome = await handlePlatformMcpRequest(
-      { userId: payload.userId, workflow: payload.workflow },
-      request,
-    );
+    // 按 serverName 分发：节点作用域工具集要求 workflow payload；管理工具集仅需 userId/sessionId
+    const outcome =
+      serverName === ADMIN_PLATFORM_SERVER_NAME
+        ? await handleAdminPlatformMcpRequest(
+            { userId: payload.userId, sessionId: payload.sessionId },
+            request,
+          )
+        : serverName === PLATFORM_SERVER_NAME
+          ? await handlePlatformMcpRequest(
+              { userId: payload.userId, workflow: payload.workflow },
+              request,
+            )
+          : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } };
     if (isPlatformNotification) {
       res.status(202).end();
       return;

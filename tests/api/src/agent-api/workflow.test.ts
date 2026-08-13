@@ -144,11 +144,25 @@ const DELETE_CONFIGURED_WORKFLOW = `
 `;
 
 const INSTANTIATE_WORKFLOW = `
-  mutation InstantiateWorkflow($configuredWorkflowId: ID!, $workspaceId: ID!, $name: String!) {
-    instantiateWorkflow(configuredWorkflowId: $configuredWorkflowId, workspaceId: $workspaceId, name: $name) {
+  mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
+    instantiateWorkflow(input: $input) {
       id configuredWorkflowId controllerId workspaceId name currentNodeNames lastNodeName lastNodeStatus
-      nodes { id nodeKey type name status stage sessionId reworkCount }
+      nodes { id nodeKey type name status stage sessionId reworkCount prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
     }
+  }
+`;
+
+const UPDATE_WORKFLOW_NODE = `
+  mutation UpdateWorkflowNode($instanceId: ID!, $nodeId: ID!, $input: WorkflowNodeUpdateInput!) {
+    updateWorkflowNode(instanceId: $instanceId, nodeId: $nodeId, input: $input) {
+      id nodeKey name status prompts requiresWorktree
+    }
+  }
+`;
+
+const DELETE_WORKFLOW_INSTANCE_MUT = `
+  mutation DeleteWorkflowInstance($id: ID!) {
+    deleteWorkflowInstance(id: $id)
   }
 `;
 
@@ -292,14 +306,34 @@ async function createSimpleTemplate(token: string, name: string, requiresWorktre
   return body.data.createWorkflowTemplate.id;
 }
 
+/** 模板节点 → 全量 configure 入参节点（AI 节点补 agentConfig） */
+function configureNodes(
+  templateNodes: {
+    nodeKey: string; type: string; name: string; stage: string;
+    prompts?: string[]; artifactTitles?: string[]; dependsOn: string[]; requiresWorktree: boolean;
+  }[],
+  agentConfigs: Record<string, { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null> = {},
+) {
+  return templateNodes.map((n) => ({
+    nodeKey: n.nodeKey,
+    type: n.type,
+    name: n.name,
+    stage: n.stage,
+    prompts: n.prompts,
+    artifactTitles: n.artifactTitles,
+    dependsOn: n.dependsOn,
+    requiresWorktree: n.requiresWorktree,
+    agentConfig: n.type === 'AI' ? (agentConfigs[n.nodeKey] ?? { acpServerType: 'opencode', initNewWorktree: false }) : null,
+  }));
+}
+
 function configureInput(name: string, controllerId: string, initNewWorktree = false) {
   return {
     name,
     controllerId,
-    nodes: [
-      { nodeKey: 'input' },
-      { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree } },
-    ],
+    nodes: configureNodes(simpleTemplateInput('_').nodes, {
+      exec: { acpServerType: 'opencode', initNewWorktree },
+    }),
   };
 }
 
@@ -320,6 +354,37 @@ async function configureFromTemplate(
     throw new Error(`configureWorkflow failed: ${JSON.stringify(body.errors)}`);
   }
   return body.data.configureWorkflow.id;
+}
+
+/** 实例化入参（CONFIGURED 来源，节点图沿用两节点 simple 模板结构） */
+function instantiateInput(
+  controllerId: string,
+  configuredWorkflowId: string,
+  workspaceId: string,
+  name: string,
+  initNewWorktree = false,
+) {
+  return {
+    source: 'CONFIGURED',
+    configuredWorkflowId,
+    controllerId,
+    workspaceId,
+    name,
+    nodes: [
+      { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+      {
+        nodeKey: 'exec',
+        type: 'AI',
+        name: 'AI执行',
+        stage: '阶段一',
+        prompts: ['阅读上游产物并完成执行'],
+        artifactTitles: ['执行结果'],
+        dependsOn: ['input'],
+        requiresWorktree: initNewWorktree,
+        agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree },
+      },
+    ],
+  };
 }
 
 /** 调用平台工作流 MCP 工具，返回 { httpStatus, body } */
@@ -541,7 +606,10 @@ describe('Configured Workflow API (A5-A8)', () => {
         input: {
           name: `wf-a6-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [{ nodeKey: 'input' }, { nodeKey: 'exec' }],
+          nodes: [
+            { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+            { nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '阶段一', prompts: ['阅读上游产物并完成执行'], dependsOn: ['input'], requiresWorktree: false },
+          ],
         },
       },
       token,
@@ -562,8 +630,8 @@ describe('Configured Workflow API (A5-A8)', () => {
           name: `wf-a7-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
           nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'claude_code', initNewWorktree: false } },
+            { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+            { nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '阶段一', prompts: ['阅读上游产物并完成执行'], dependsOn: ['input'], requiresWorktree: false, agentConfig: { acpServerType: 'claude_code', initNewWorktree: false } },
           ],
         },
       },
@@ -574,47 +642,71 @@ describe('Configured Workflow API (A5-A8)', () => {
     expect(body.errors[0].message).toContain('不在该控制器可用列表内');
   });
 
-  it('A8: updateConfiguredWorkflow 禁止增删节点', async () => {
+  it('A8: updateConfiguredWorkflow 支持全量图编辑（改 prompts/增删节点/调依赖）', async () => {
     const tplId = await createSimpleTemplate(token, `wf-a8-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a8-cfg-${Date.now()}`);
 
-    // 新增节点
-    const addRes = await gqlRequest(
+    // 全量图编辑：改 exec 提示词 + 新增 review 节点 + 依赖调整
+    const updateRes = await gqlRequest(
       UPDATE_CONFIGURED_WORKFLOW,
       {
         id: cfgId,
         input: {
-          name: `wf-a8-add-${Date.now()}`,
+          name: `wf-a8-edited-${Date.now()}`,
           controllerId: fake.controllerId,
           nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'extra', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+            { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+            {
+              nodeKey: 'exec',
+              type: 'AI',
+              name: 'AI执行',
+              stage: '阶段一',
+              prompts: ['编辑后的提示词'],
+              artifactTitles: ['执行结果'],
+              dependsOn: ['input'],
+              requiresWorktree: false,
+              agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+            },
+            { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '阶段二', dependsOn: ['exec'], requiresWorktree: false },
           ],
         },
       },
       token,
     );
-    const addBody = await addRes.json();
-    expect(addBody.errors).toBeDefined();
-    expect(addBody.errors[0].message).toContain('不允许增删节点');
+    const updateBody = await updateRes.json();
+    expect(updateBody.errors).toBeUndefined();
+    expect(updateBody.data.updateConfiguredWorkflow.name).toContain('wf-a8-edited');
 
-    // 删除节点
-    const delRes = await gqlRequest(
+    // 校验保存后的节点图
+    const qRes = await gqlRequest(CONFIGURED_WORKFLOW_QUERY, { id: cfgId }, token);
+    const cfg = (await qRes.json()).data.configuredWorkflow;
+    expect(cfg.nodes).toHaveLength(3);
+    const exec = cfg.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(exec.prompts).toEqual(['编辑后的提示词']);
+  });
+
+  it('A8b: updateConfiguredWorkflow 非法图拒绝（双首节点）', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a8b-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a8b-cfg-${Date.now()}`);
+
+    const res = await gqlRequest(
       UPDATE_CONFIGURED_WORKFLOW,
       {
         id: cfgId,
         input: {
-          name: `wf-a8-del-${Date.now()}`,
+          name: `wf-a8b-bad-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [{ nodeKey: 'input' }],
+          nodes: [
+            { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+            { nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '阶段一', prompts: ['x'], dependsOn: [], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          ],
         },
       },
       token,
     );
-    const delBody = await delRes.json();
-    expect(delBody.errors).toBeDefined();
-    expect(delBody.errors[0].message).toContain('不允许增删节点');
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('首节点必须唯一');
   });
 });
 
@@ -660,7 +752,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
   it('A10: 实例化后首节点 READY，其余 INITIALIZING', async () => {
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: configuredId, workspaceId, name: `wf-it-实例-${Date.now()}` },
+      { input: instantiateInput(fake.controllerId, configuredId, workspaceId, `wf-it-实例-${Date.now()}`) },
       token,
     );
     const body = await res.json();
@@ -689,7 +781,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
 
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId: wsId, name: `wf-a11-实例-${Date.now()}` },
+      { input: instantiateInput(fake.controllerId, cfgId, wsId, `wf-a11-实例-${Date.now()}`, true) },
       token,
     );
     const body = await res.json();
@@ -748,18 +840,17 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
     expect(artifact.value).toBe('做一个计算器');
   }, 20_000);
 
-  it('A9: 存在活跃实例时 deleteConfiguredWorkflow 拒绝，无引用时可删除', async () => {
+  it('A9: 存在活跃实例时 deleteConfiguredWorkflow 仍可删除（快照模型自包含），实例不受影响', async () => {
     const res = await gqlRequest(DELETE_CONFIGURED_WORKFLOW, { id: configuredId }, token);
     const body = await res.json();
-    expect(body.errors).toBeDefined();
-    expect(body.errors[0].message).toContain('未终结');
+    expect(body.errors).toBeUndefined();
+    expect(body.data.deleteConfiguredWorkflow).toBe(true);
 
-    // 无实例引用的配置可正常删除
-    const freeCfgId = await configureFromTemplate(token, templateId, fake.controllerId, `wf-a9-cfg-${Date.now()}`);
-    const delRes = await gqlRequest(DELETE_CONFIGURED_WORKFLOW, { id: freeCfgId }, token);
-    const delBody = await delRes.json();
-    expect(delBody.errors).toBeUndefined();
-    expect(delBody.data.deleteConfiguredWorkflow).toBe(true);
+    // 实例仍可查询，节点不受影响
+    const instRes = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token);
+    const instBody = await instRes.json();
+    expect(instBody.errors).toBeUndefined();
+    expect(instBody.data.workflowInstance.nodes).toHaveLength(2);
   });
 
   it('A14: sessions 默认排除工作流会话，includeWorkflowSessions=true 包含', async () => {
@@ -982,11 +1073,7 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
         input: {
           name: `wf-a19-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -998,7 +1085,7 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
     // 实例化并完成首节点 → exec AI 节点拉起会话
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a19-实例-${Date.now()}` },
+      { input: humanReviewInstantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a19-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1150,11 +1237,7 @@ describe('Workflow Node Failure (A22-A23)', () => {
         input: {
           name: `wf-${tag}-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1162,7 +1245,7 @@ describe('Workflow Node Failure (A22-A23)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-${tag}-实例-${Date.now()}` },
+      { input: humanReviewInstantiateInput(fake.controllerId, cfgId, workspaceId, `wf-${tag}-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1285,11 +1368,7 @@ describe('Workflow Rework Reject (A24)', () => {
         input: {
           name: `wf-a24-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1297,7 +1376,7 @@ describe('Workflow Rework Reject (A24)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a24-实例-${Date.now()}` },
+      { input: humanReviewInstantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a24-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1446,12 +1525,11 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
         input: {
           name: `wf-a25-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'start' },
-            { nodeKey: 'a', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'b', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'c', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-          ],
+          nodes: configureNodes(chainTemplateInput('_').nodes, {
+            a: { acpServerType: 'opencode', initNewWorktree: false },
+            b: { acpServerType: 'opencode', initNewWorktree: false },
+            c: { acpServerType: 'opencode', initNewWorktree: false },
+          }),
         },
       },
       token,
@@ -1459,7 +1537,20 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a25-实例-${Date.now()}` },
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a25-实例-${Date.now()}`,
+          nodes: configureNodes(chainTemplateInput('_').nodes, {
+            a: { acpServerType: 'opencode', initNewWorktree: false },
+            b: { acpServerType: 'opencode', initNewWorktree: false },
+            c: { acpServerType: 'opencode', initNewWorktree: false },
+          }),
+        },
+      },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1497,7 +1588,6 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     const resumeB = await resumeBPromise;
     fake.client.emit('acp:resume:result', { requestId: resumeB.requestId, sessionId: sessB.sessionId, success: true });
     await sleep(500);
-    const bResumeToken = resumeB.mcpEndpoint!.token;
 
     // b（REWORK）再打回 a：b REJECT，a REWORK（a 会话 resume）
     const resumeAPromise = waitForResume<StartEventData>(fake.client, sessA.sessionId, 15000);
@@ -1507,22 +1597,24 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     fake.client.emit('acp:resume:result', { requestId: resumeA.requestId, sessionId: sessA.sessionId, success: true });
     await sleep(500);
 
-    // a 完成返工 → a DONE，下游 REJECT 的 b 复工 RUNNING
+    // a 完成返工 → a DONE，下游 REJECT 的 b 复工（关闭旧会话 + 拉起全新会话）
+    const bRestartPromise = answerNextStart('a25b2');
     const reworkA = parseToolResult(
       (await callWorkflowTool(sessA.sessionId, resumeA.mcpEndpoint!.token, 'completeCurrentRework', {
         artifacts: [{ title: 'A产物', value: 'a 修订' }],
       })).body,
     );
     expect(reworkA.isError).toBe(false);
+    const sessB2 = await bRestartPromise;
     const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
     const nodeB1 = inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'b');
     const nodeC1 = inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'c');
     expect(nodeB1.status).toBe('RUNNING');
     expect(nodeC1.status).toBe('REJECT');
 
-    // b（RUNNING）完成：下游 c 仍为 REJECT——应 resume 复工而非 start（否则流程卡住）
+    // b（RUNNING，新会话）完成：下游 c 仍为 REJECT——应 resume 复工而非 start（否则流程卡住）
     const doneB2 = parseToolResult(
-      (await callWorkflowTool(sessB.sessionId, bResumeToken, 'completeCurrentNode', {
+      (await callWorkflowTool(sessB2.sessionId, sessB2.mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: 'B产物', value: 'b 修订完成' }],
       })).body,
     );
@@ -1549,11 +1641,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
         input: {
           name: `wf-a26-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1561,7 +1649,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a26-实例-${Date.now()}` },
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a26-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1615,11 +1703,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
         input: {
           name: `wf-a27-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1627,7 +1711,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a27-实例-${Date.now()}` },
+      { input: humanReviewInstantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a27-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1649,12 +1733,8 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'input').status).toBe('REWORK');
 
     // 人类重新提交：REWORK → completeRework → DONE，旧产物入垃圾桶，exec 复工 RUNNING
-    // （REJECT 节点会话仍然存活，复工走 onNodeResume 推送消息而非 acp:resume）
-    const resumeMsgPromise = waitForEvent<{ sessionId: string; message: { content: string } }>(
-      fake.client,
-      'acp:message',
-      15000,
-    );
+    // （REJECT 节点复工走 onNodeResume：关闭旧会话 + 拉起全新会话）
+    const newStartPromise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
     const redo = await (await gqlRequest(
       COMPLETE_HUMAN_NODE,
       { instanceId, nodeId: inputNode.id, input: '做一个支持加减乘除的计算器' },
@@ -1669,9 +1749,16 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     expect(inst2.blackboard.find((e: Record<string, any>) => e.key === artifactKey)?.value).toBe('做一个支持加减乘除的计算器');
     expect(inst2.blackboardTrash.find((e: Record<string, any>) => e.key === artifactKey)?.value).toBe('做一个计算器');
 
-    // exec 会话收到复工通知消息
-    const resumeMsg = await resumeMsgPromise;
-    expect(resumeMsg.sessionId).toBe(execSess.sessionId);
+    // exec 复工：旧会话被关闭，以全新会话复工
+    const newStart = await newStartPromise;
+    expect(newStart.sessionId).not.toBe(execSess.sessionId);
+    fake.client.emit('acp:start:result', {
+      requestId: newStart.requestId,
+      sessionId: newStart.sessionId,
+      success: true,
+      externalSessionId: `ext_a27_2_${Date.now()}`,
+    });
+    await sleep(500);
   }, 60_000);
 
   it('A28: archiveWorkflowInstance 归档行为：活跃排除/归档包含/详情可访问/取消归档恢复/节点仍运行', async () => {
@@ -1689,11 +1776,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
         input: {
           name: `wf-a28-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-            { nodeKey: 'review' },
-          ],
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1701,7 +1784,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a28-实例-${Date.now()}` },
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a28-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1769,10 +1852,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
         input: {
           name: `wf-a29-cfg-${Date.now()}`,
           controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-          ],
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
         },
       },
       token,
@@ -1782,7 +1862,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     // 实例化 → lastNode = 首节点 READY
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a29-实例-${Date.now()}` },
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a29-实例-${Date.now()}`) },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
@@ -1814,6 +1894,149 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
   }, 60_000);
 });
 
+// ---------------------------------------------------------------------------
+// 二期（工作流管理 + 实例化机制完善）：A1-A6
+// ---------------------------------------------------------------------------
+
+const UPDATE_CONFIGURED_WORKFLOW_FULL = `
+  mutation UpdateConfiguredWorkflowFull($id: ID!, $input: ConfigureWorkflowInput!) {
+    updateConfiguredWorkflow(id: $id, input: $input) {
+      id name
+      nodes { nodeKey type name stage prompts artifactTitles dependsOn requiresWorktree agentConfig { acpServerType initNewWorktree } }
+    }
+  }
+`;
+
+const INSTANTIATE_FROM_TEMPLATE = `
+  mutation InstantiateFromTemplate($input: InstantiateWorkflowInput!) {
+    instantiateWorkflow(input: $input) {
+      id configuredWorkflowId name
+      nodes { id nodeKey type name status prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
+    }
+  }
+`;
+
+describe('Workflow Phase-2 (A1-A6)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfp2');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'phase2');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A1: updateConfiguredWorkflow 全量图编辑，来源模板不变', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-p2a1-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-p2a1-cfg-${Date.now()}`);
+
+    const res = await gqlRequest(
+      UPDATE_CONFIGURED_WORKFLOW_FULL,
+      {
+        id: cfgId,
+        input: {
+          name: `wf-p2a1-edited-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: [
+            { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+            { nodeKey: 'exec', type: 'AI', name: 'AI执行v2', stage: '阶段一', prompts: ['编辑后的提示词'], artifactTitles: ['结果'], dependsOn: ['input'], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+          ],
+        },
+      },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const cfg = body.data.updateConfiguredWorkflow;
+    expect(cfg.nodes).toHaveLength(2);
+    expect(cfg.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').prompts).toEqual(['编辑后的提示词']);
+
+    // 来源模板不变
+    const tplRes = await gqlRequest(WORKFLOW_TEMPLATES_QUERY, undefined, token);
+    const tpl = (await tplRes.json()).data.workflowTemplates.find((t: Record<string, any>) => t.id === tplId);
+    expect(tpl.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').prompts).toEqual(['阅读上游产物并完成执行']);
+  });
+
+  it('A2: instantiateWorkflow 三来源均创建成功，节点快照完整', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-p2a2-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-p2a2-cfg-${Date.now()}`);
+
+    // 从已配置工作流
+    const cfgInst = await gqlRequest(INSTANTIATE_FROM_TEMPLATE, { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-p2a2-cfg-实例-${Date.now()}`) }, token);
+    const cfgBody = await cfgInst.json();
+    expect(cfgBody.errors).toBeUndefined();
+    expect(cfgBody.data.instantiateWorkflow.nodes[1].prompts).toEqual(['阅读上游产物并完成执行']);
+
+    // 从模板
+    const tplInput = { ...instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-p2a2-tpl-实例-${Date.now()}`), source: 'TEMPLATE', templateId: tplId, configuredWorkflowId: null };
+    const tplInst = await gqlRequest(INSTANTIATE_FROM_TEMPLATE, { input: tplInput }, token);
+    const tplBody = await tplInst.json();
+    expect(tplBody.errors).toBeUndefined();
+
+    // 从空白
+    const blankInput = { source: 'BLANK', controllerId: fake.controllerId, workspaceId, name: `wf-p2a2-blank-${Date.now()}`, nodes: [{ nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false }, { nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '阶段一', prompts: ['x'], artifactTitles: ['r'], dependsOn: ['input'], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } }] };
+    const blankInst = await gqlRequest(INSTANTIATE_FROM_TEMPLATE, { input: blankInput }, token);
+    const blankBody = await blankInst.json();
+    expect(blankBody.errors).toBeUndefined();
+  });
+
+  it('A3: updateWorkflowNode 未开始节点成功，已开始节点拒绝', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-p2a3-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-p2a3-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(INSTANTIATE_FROM_TEMPLATE, { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-p2a3-实例-${Date.now()}`) }, token);
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    // exec 为 INITIALIZING（未开始），可编辑
+    expect(execNode.status).toBe('INITIALIZING');
+
+    const editRes = await gqlRequest(UPDATE_WORKFLOW_NODE, { instanceId, nodeId: execNode.id, input: { prompts: ['修改后的提示词'], requiresWorktree: false } }, token);
+    const editBody = await editRes.json();
+    expect(editBody.errors).toBeUndefined();
+    expect(editBody.data.updateWorkflowNode.prompts).toEqual(['修改后的提示词']);
+
+    // 完成首节点 → exec 启动（RUNNING，startedAt 非空）→ 编辑被拒
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', { requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_p2a3_${Date.now()}` });
+    await sleep(500);
+
+    const rejectRes = await gqlRequest(UPDATE_WORKFLOW_NODE, { instanceId, nodeId: execNode.id, input: { prompts: ['不可修改'] } }, token);
+    const rejectBody = await rejectRes.json();
+    expect(rejectBody.errors).toBeDefined();
+    expect(rejectBody.errors[0].message).toContain('已开始，不可修改');
+  }, 30_000);
+
+  it('A6: deleteConfiguredWorkflow 存在活跃实例时删除成功，实例不受影响', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-p2a6-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-p2a6-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(INSTANTIATE_FROM_TEMPLATE, { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-p2a6-实例-${Date.now()}`) }, token);
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+
+    const delRes = await gqlRequest(DELETE_CONFIGURED_WORKFLOW, { id: cfgId }, token);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeUndefined();
+    expect(delBody.data.deleteConfiguredWorkflow).toBe(true);
+
+    // 实例不受影响
+    const qRes = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token);
+    const instBody = await qRes.json();
+    expect(instBody.errors).toBeUndefined();
+    expect(instBody.data.workflowInstance.nodes).toHaveLength(2);
+  });
+});
+
 describe('Workflow Session Initial Mode/Model (A30)', () => {
   let token = '';
   let fake: FakeController;
@@ -1833,34 +2056,16 @@ describe('Workflow Session Initial Mode/Model (A30)', () => {
   });
 
   it('A30: 节点配置 modeId/modelId 透传到 AI 会话 acp:start（harness 初始化为配置值而非默认）', async () => {
-    const tplRes = await gqlRequest(
-      CREATE_WORKFLOW_TEMPLATE,
-      { input: simpleTemplateInput(`wf-a30-${Date.now()}`) },
-      token,
-    );
-    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
-    const cfgRes = await gqlRequest(
-      CONFIGURE_WORKFLOW,
-      {
-        templateId: tplId,
-        input: {
-          name: `wf-a30-cfg-${Date.now()}`,
-          controllerId: fake.controllerId,
-          nodes: [
-            { nodeKey: 'input' },
-            { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: false } },
-          ],
-        },
-      },
-      token,
-    );
-    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const tplId = await createSimpleTemplate(token, `wf-a30-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a30-cfg-${Date.now()}`);
 
-    const instRes = await gqlRequest(
-      INSTANTIATE_WORKFLOW,
-      { configuredWorkflowId: cfgId, workspaceId, name: `wf-a30-实例-${Date.now()}` },
-      token,
-    );
+    // 实例化入参：exec 节点 agentConfig 带 mode/model
+    const input = instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a30-实例-${Date.now()}`);
+    (input.nodes[1] as { agentConfig?: Record<string, unknown> }).agentConfig = {
+      acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: false,
+    };
+
+    const instRes = await gqlRequest(INSTANTIATE_WORKFLOW, { input }, token);
     const inst = (await instRes.json()).data.instantiateWorkflow;
     const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
 
@@ -1879,5 +2084,345 @@ describe('Workflow Session Initial Mode/Model (A30)', () => {
       externalSessionId: `ext_a30_${Date.now()}`,
     });
     await sleep(500);
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// 人类验收问题修复（A31-A32）
+// ---------------------------------------------------------------------------
+
+/** 解码 JWT payload（无依赖，base64url） */
+function decodeJwtPayload(token: string): Record<string, any> {
+  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+}
+
+/** 三节点实例化入参（HUMAN input → AI exec → HUMAN review） */
+function humanReviewInstantiateInput(
+  controllerId: string,
+  configuredWorkflowId: string,
+  workspaceId: string,
+  name: string,
+) {
+  return {
+    source: 'CONFIGURED',
+    configuredWorkflowId,
+    controllerId,
+    workspaceId,
+    name,
+    nodes: [
+      { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '阶段一', dependsOn: [], requiresWorktree: false },
+      {
+        nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '阶段一',
+        prompts: ['阅读上游产物并完成执行'], artifactTitles: ['执行结果'],
+        dependsOn: ['input'], requiresWorktree: false,
+        agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false },
+      },
+      { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '阶段二', dependsOn: ['exec'], requiresWorktree: false },
+    ],
+  };
+}
+
+describe('Workflow Human Acceptance (A31-A32)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfhacc');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'hacc');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A31: 多节点打回回流（c打回b→b打回a→a重新提供→b完成→c复工）人类末端节点不卡死', async () => {
+    // 三节点模板（input HUMAN → exec AI → review HUMAN）
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: humanReviewTemplateInput(`wf-a31-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a31-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: configureNodes(humanReviewTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: humanReviewInstantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a31-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 1) 完成首节点 → exec AI 会话启动（acp:start #1）
+    const startPromise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const s1 = await startPromise;
+    fake.client.emit('acp:start:result', {
+      requestId: s1.requestId, sessionId: s1.sessionId, success: true, externalSessionId: `ext_a31_1_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 2) exec 完成 → review 人类节点 RUNNING
+    const done1 = parseToolResult(
+      (await callWorkflowTool(s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '计算器代码 v1' }],
+      })).body,
+    );
+    expect(done1.isError).toBe(false);
+
+    // 3) review（c）打回 exec（b）：review REJECT，exec REWORK（resume S1）
+    let instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const reviewNode = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'review');
+    expect(reviewNode.status).toBe('RUNNING');
+    const resumeB = waitForResume<StartEventData>(fake.client, s1.sessionId, 15000);
+    await gqlRequest(REJECT_NODE, { instanceId, nodeId: reviewNode.id, reason: '执行结果不符合需求' }, token);
+    const resumeBData = await resumeB;
+    fake.client.emit('acp:resume:result', { requestId: resumeBData.requestId, sessionId: s1.sessionId, success: true });
+    await sleep(500);
+    const bReworkToken = resumeBData.mcpEndpoint!.token;
+
+    // 4) exec（b）打回 input（a）：exec REJECT，input REWORK
+    const rejB = parseToolResult(
+      (await callWorkflowTool(s1.sessionId, bReworkToken, 'rejectCurrentNode', {
+        reason: '需求本身有问题，无法按现状执行',
+      })).body,
+    );
+    expect(rejB.isError).toBe(false);
+    instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'input').status).toBe('REWORK');
+
+    // 5) input（a）重新提供信息：REWORK → completeRework；exec REJECT → resume（关闭旧会话 + 新会话 S2）
+    const s2Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个支持加减乘除的计算器' }, token);
+    const s2 = await s2Promise;
+    expect(s2.sessionId).not.toBe(s1.sessionId);
+    fake.client.emit('acp:start:result', {
+      requestId: s2.requestId, sessionId: s2.sessionId, success: true, externalSessionId: `ext_a31_2_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 6) exec（b）完成 → 下游 review（c）仍 REJECT → resume；人类节点复工 RUNNING（不应报「缺少 Agent 配置」）
+    const done2 = parseToolResult(
+      (await callWorkflowTool(s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '计算器代码 v2' }],
+      })).body,
+    );
+    expect(done2.isError).toBe(false);
+
+    // 7) 流程不再卡死：exec DONE，review RUNNING（人工处理）
+    instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('DONE');
+    expect(instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'review').status).toBe('RUNNING');
+  }, 90_000);
+
+  it('A32: 工作流节点会话 MCP token 无 exp（有效性跟随工作流），普通会话 token 有 exp（跟随会话）', async () => {
+    // 两节点实例推进到 exec 会话启动
+    const tplRes = await gqlRequest(
+      CREATE_WORKFLOW_TEMPLATE,
+      { input: simpleTemplateInput(`wf-a32-${Date.now()}`) },
+      token,
+    );
+    const tplId = (await tplRes.json()).data.createWorkflowTemplate.id;
+    const cfgRes = await gqlRequest(
+      CONFIGURE_WORKFLOW,
+      {
+        templateId: tplId,
+        input: {
+          name: `wf-a32-cfg-${Date.now()}`,
+          controllerId: fake.controllerId,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+        },
+      },
+      token,
+    );
+    const cfgId = (await cfgRes.json()).data.configureWorkflow.id;
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a32-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const startData = await startEvent;
+    const wfToken = startData.mcpEndpoint!.token;
+    expect(wfToken).toBeTruthy();
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a32_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 工作流节点会话 token：payload 含 workflow 作用域且无 exp
+    const wfPayload = decodeJwtPayload(wfToken);
+    expect(wfPayload.workflow).toBeDefined();
+    expect(wfPayload.exp).toBeUndefined();
+
+    // 普通会话（用户装配同一平台 MCP 服务）：token 无 workflow 作用域且有 exp（TTL）
+    const serversRes = await gqlRequest(MCP_SERVERS_QUERY, undefined, token);
+    const serversBody = await serversRes.json();
+    expect(serversBody.errors).toBeUndefined();
+    const platformServer = (serversBody.data.mcpServers as { id: string; name: string }[])
+      .find((s) => s.name === 'agent-workflow-tools');
+    expect(platformServer, '工作流平台 MCP 服务应已注册').toBeDefined();
+
+    const normalStartEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const createRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: fake.controllerId, acpServerType: 'opencode', workspaceId, mcpServerIds: [platformServer!.id] } },
+      token,
+    );
+    const createBody = await createRes.json();
+    expect(createBody.errors).toBeUndefined();
+    const normalSessionId = createBody.data.createSession.session.id;
+    const normalStartData = await normalStartEvent;
+    expect(normalStartData.sessionId).toBe(normalSessionId);
+    const normalToken = normalStartData.mcpEndpoint!.token;
+    expect(normalToken).toBeTruthy();
+    fake.client.emit('acp:start:result', {
+      requestId: normalStartData.requestId, sessionId: normalSessionId, success: true, externalSessionId: `ext_a32_n_${Date.now()}`,
+    });
+    await sleep(500);
+
+    const normalPayload = decodeJwtPayload(normalToken);
+    expect(normalPayload.workflow).toBeUndefined();
+    expect(normalPayload.exp).toBeDefined();
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// 节点重启（A33，人类验收返工#1）：RUNNING/REWORK/FAILED 会话失败时人工重启
+// ---------------------------------------------------------------------------
+
+const RESTART_NODE = `
+  mutation RestartNode($instanceId: ID!, $nodeId: ID!) {
+    restartNode(instanceId: $instanceId, nodeId: $nodeId) { id nodeKey name status }
+  }
+`;
+
+describe('Workflow Node Restart (A33)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfrst');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'rst');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A33: 重启 RUNNING 节点关闭旧会话拉起全新会话；重启 FAILED 节点清 failInfo 复工', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a33-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a33-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a33-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+
+    // 完成首节点 → exec RUNNING（会话 S1）
+    const s1Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '做一个计算器' }, token);
+    const s1 = await s1Promise;
+    fake.client.emit('acp:start:result', {
+      requestId: s1.requestId, sessionId: s1.sessionId, success: true, externalSessionId: `ext_a33_1_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 重启 RUNNING 节点 → 关闭旧会话 S1，拉起全新会话 S2
+    const s2Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    const rstRes = await gqlRequest(RESTART_NODE, { instanceId, nodeId: execNode.id }, token);
+    const rstBody = await rstRes.json();
+    expect(rstBody.errors).toBeUndefined();
+    expect(rstBody.data.restartNode.status).toBe('RUNNING');
+    const s2 = await s2Promise;
+    expect(s2.sessionId).not.toBe(s1.sessionId);
+    fake.client.emit('acp:start:result', {
+      requestId: s2.requestId, sessionId: s2.sessionId, success: true, externalSessionId: `ext_a33_2_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 节点标记失败（LLM_REPORTED）
+    const failed = parseToolResult(
+      (await callWorkflowTool(s2.sessionId, s2.mcpEndpoint!.token, 'failCurrentNode', { reason: '会话卡住，无法继续' })).body,
+    );
+    expect(failed.isError).toBe(false);
+    expect(failed.data.status).toBe('FAILED');
+    let instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('FAILED');
+
+    // 重启 FAILED 节点 → 清 failInfo，复工 RUNNING，拉起全新会话 S3
+    const s3Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 15000);
+    const rst2Res = await gqlRequest(RESTART_NODE, { instanceId, nodeId: execNode.id }, token);
+    const rst2Body = await rst2Res.json();
+    expect(rst2Body.errors).toBeUndefined();
+    expect(rst2Body.data.restartNode.status).toBe('RUNNING');
+    const s3 = await s3Promise;
+    expect(s3.sessionId).not.toBe(s2.sessionId);
+    fake.client.emit('acp:start:result', {
+      requestId: s3.requestId, sessionId: s3.sessionId, success: true, externalSessionId: `ext_a33_3_${Date.now()}`,
+    });
+    await sleep(500);
+
+    instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const execFinal = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execFinal.status).toBe('RUNNING');
+    expect(execFinal.failInfo).toBeNull();
+
+    // 重启后节点可正常完成
+    const done = parseToolResult(
+      (await callWorkflowTool(s3.sessionId, s3.mcpEndpoint!.token, 'completeCurrentNode', {
+        artifacts: [{ title: '执行结果', value: '重启后完成' }],
+      })).body,
+    );
+    expect(done.isError).toBe(false);
+    expect(done.data.status).toBe('DONE');
+  }, 60_000);
+
+  it('A33b: 重启 READY/DONE/REJECT 节点被拒绝', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a33b-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a33b-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a33b-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('INITIALIZING');
+
+    const rstRes = await gqlRequest(RESTART_NODE, { instanceId: inst.id, nodeId: execNode.id }, token);
+    const rstBody = await rstRes.json();
+    expect(rstBody.errors).toBeDefined();
+    expect(rstBody.errors[0].message).toContain('不允许执行');
   }, 30_000);
 });

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { WORKFLOW_NODE_TYPES } from './workflow-template.js';
+import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 // 注意：agentConfig 使用独立子 Schema 声明，避免内联嵌套对象被 Mongoose 物化为 {}
 //（HUMAN/FLAG 节点的 agentConfig 必须保持为 null/undefined）
@@ -39,6 +39,9 @@ const configuredWorkflowSchema = new mongoose.Schema(
     sourceTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowTemplate' },
     sourceTemplateVersion: { type: Number },
     nodes: { type: [configuredNodeSchema], default: [] },
+    // 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
+    createdBy: { type: String, enum: WORKFLOW_CREATED_BY, default: 'HUMAN' },
+    createdBySessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
   },
   { timestamps: true },
 );

@@ -1,8 +1,18 @@
 import mongoose from 'mongoose';
-import { WORKFLOW_NODE_TYPES } from './workflow-template.js';
+import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED'] as const;
 export type WorkflowNodeStatus = (typeof WORKFLOW_NODE_STATUSES)[number];
+
+const agentNodeConfigSchema = new mongoose.Schema(
+  {
+    acpServerType: { type: String, required: true },
+    modeId: { type: String },
+    modelId: { type: String },
+    initNewWorktree: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
 
 const rejectInfoSchema = new mongoose.Schema(
   {
@@ -44,6 +54,12 @@ const instanceNodeSchema = new mongoose.Schema(
     fallbackSent: { type: Boolean, default: false },
     rejectInfo: { type: rejectInfoSchema, default: undefined },
     failInfo: { type: failInfoSchema, default: undefined },
+    // ---- 实例快照字段（实例化时从最终节点图复制；旧实例缺失时由 orchestrator 回退读配置） ----
+    prompts: { type: [String], default: undefined },
+    artifactTitles: { type: [String], default: undefined },
+    // AI 节点 Agent 配置快照（HUMAN/FLAG 节点为 null/undefined）
+    agentConfig: { type: agentNodeConfigSchema, default: undefined },
+    requiresWorktree: { type: Boolean, default: undefined },
   },
   { _id: false },
 );
@@ -53,7 +69,7 @@ const workflowInstanceSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', required: true },
-    configuredWorkflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ConfiguredWorkflow', required: true },
+    configuredWorkflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ConfiguredWorkflow', default: null },
     name: { type: String, required: true },
     nodes: { type: [instanceNodeSchema], default: [] },
     // 实例对外状态 = 全部 RUNNING 节点名（引擎每次转移后维护）

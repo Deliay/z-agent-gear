@@ -8,6 +8,7 @@ vi.mock('../models/session.js', () => ({
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
     create: vi.fn(),
+    updateOne: vi.fn(),
   },
 }));
 
@@ -106,6 +107,7 @@ describe('SessionService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
   });
 
   describe('findAllByUser', () => {
@@ -526,18 +528,41 @@ describe('SessionService', () => {
 
   describe('close', () => {
     it('should delegate to updateStatus with ended', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
       vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
 
       const result = await sessionService.close('sess-1', 'user-1');
       expect(result).toBe(true);
     });
 
-    it('should revoke MCP endpoint on close', async () => {
+    it('should revoke MCP endpoint on close for normal session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+      } as never);
       vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
 
       await sessionService.close('sess-1', 'user-1');
 
       expect(mcpEndpointService.revokeEndpoint).toHaveBeenCalledWith('sess-1');
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+    });
+
+    it('should NOT revoke MCP endpoint on close for workflow node session (validity follows workflow)', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
+      } as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(
+        mockSessionDoc({ status: 'ended', workflowInstanceId: oid('inst-1') }) as never,
+      );
+
+      await sessionService.close('sess-1', 'user-1');
+
+      expect(mcpEndpointService.revokeEndpoint).not.toHaveBeenCalled();
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
         expect.stringContaining('"type":"acp:stop"'),
@@ -1110,6 +1135,7 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-mode"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modeId":"mode-1"'));
+      expect(Session.updateOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' }, { currentModeId: 'mode-1' });
     });
 
     it('should return false when connecting', async () => {
@@ -1155,6 +1181,7 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:set-model"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"sessionId":"sess-1"'));
       expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"modelId":"model-1"'));
+      expect(Session.updateOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' }, { currentModelId: 'model-1' });
     });
 
     it('should return false when connecting', async () => {

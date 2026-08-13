@@ -8,6 +8,17 @@ enum WorkflowNodeType {
   FLAG
 }
 
+enum ResourceCreatedBy {
+  HUMAN
+  AI
+}
+
+enum InstantiateSource {
+  CONFIGURED
+  TEMPLATE
+  BLANK
+}
+
 enum WorkflowNodeStatus {
   INITIALIZING
   READY
@@ -48,6 +59,8 @@ type WorkflowTemplate {
   nodes: [WorkflowTemplateNode!]!
   # 内置默认模板（只读，可复制）
   isBuiltin: Boolean!
+  # 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
+  createdBy: ResourceCreatedBy!
   createdAt: String!
   updatedAt: String!
 }
@@ -83,6 +96,8 @@ type ConfiguredWorkflow {
   sourceTemplateId: ID
   sourceTemplateVersion: Int
   nodes: [ConfiguredWorkflowNode!]!
+  # 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
+  createdBy: ResourceCreatedBy!
   createdAt: String!
   updatedAt: String!
 }
@@ -113,6 +128,11 @@ type WorkflowNode {
   stage: String!
   # 关联会话（AI 节点会话 / 人类节点可无）
   sessionId: ID
+  # 实例快照字段（实例化时从最终节点图复制；旧实例可能缺失）
+  prompts: [String!]
+  artifactTitles: [String!]
+  agentConfig: AgentNodeConfig
+  requiresWorktree: Boolean
   createdAt: String!
   startedAt: String
   reworkedAt: String
@@ -129,7 +149,8 @@ type BlackboardEntry {
 
 type WorkflowInstance {
   id: ID!
-  configuredWorkflowId: ID!
+  # 统一实例化三来源（CONFIGURED/TEMPLATE/BLANK）中仅 CONFIGURED 来源保证存在，故可空
+  configuredWorkflowId: ID
   controllerId: ID!
   workspaceId: ID!
   name: String!
@@ -176,13 +197,51 @@ input AgentNodeConfigInput {
 
 input ConfiguredWorkflowNodeInput {
   nodeKey: String!
+  type: WorkflowNodeType!
+  name: String!
+  description: String
+  stage: String!
+  prompts: [String!]
+  artifactTitles: [String!]
+  dependsOn: [String!]!
+  requiresWorktree: Boolean!
+  # AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig: AgentNodeConfigInput
 }
 
 input ConfigureWorkflowInput {
   name: String!
   controllerId: ID!
+  # 全量节点图（与模板节点同构 + agentConfig），更新时执行完整图校验
   nodes: [ConfiguredWorkflowNodeInput!]!
+}
+
+# ---------- 统一实例化 ----------
+
+input InstantiateWorkflowInput {
+  source: InstantiateSource!
+  # source=CONFIGURED 必填
+  configuredWorkflowId: ID
+  # source=TEMPLATE 必填
+  templateId: ID
+  # 三来源均必填（实例归属控制器）
+  controllerId: ID!
+  workspaceId: ID!
+  name: String!
+  # 实例化前配置界面编辑后的最终节点图（服务端以此为准校验并快照落库）
+  nodes: [ConfiguredWorkflowNodeInput!]!
+}
+
+# ---------- 实例节点编辑 ----------
+
+input WorkflowNodeUpdateInput {
+  name: String
+  description: String
+  stage: String
+  prompts: [String!]
+  artifactTitles: [String!]
+  requiresWorktree: Boolean
+  agentConfig: AgentNodeConfigInput
 }
 
 # ---------- Query / Mutation ----------
@@ -205,16 +264,20 @@ type Mutation {
   deleteWorkflowTemplate(id: ID!): Boolean!
   # 从模板复制生成快照副本（深拷贝 nodes + 记录来源版本）
   configureWorkflow(templateId: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
-  # 仅允许修改 name/controllerId/agentConfig，不允许增删节点（改图需重新从模板复制）
+  # 允许修改全量节点图（完整图校验），nodeKey 集合可变；实例保有自身快照不受影响
   updateConfiguredWorkflow(id: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
-  # 存在未终结实例引用时拒绝删除
+  # 实例已快照自包含，删除配置不影响实例
   deleteConfiguredWorkflow(id: ID!): Boolean!
-  # 实例化：首节点（人类）READY，其余 INITIALIZING
-  instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
+  # 统一实例化（三来源 CONFIGURED/TEMPLATE/BLANK）；首节点（人类）READY，其余 INITIALIZING
+  instantiateWorkflow(input: InstantiateWorkflowInput!): WorkflowInstance!
+  # 修改未开始的实例节点（仅 INITIALIZING/READY 且 startedAt=null）；已开始拒绝
+  updateWorkflowNode(instanceId: ID!, nodeId: ID!, input: WorkflowNodeUpdateInput!): WorkflowNode!
   # 人类节点完成（input 为产物文本，写入黑板；REWORK 状态时走 completeRework 重新提交：重置产物入垃圾桶并复工下游）
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+  # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+  restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）

@@ -183,6 +183,25 @@ async function createThreeNodeTemplate(page: Page, token: string, name: string):
   return body.data.createWorkflowTemplate.id;
 }
 
+/** 标准三节点图（input→exec→verify）的 configure 全量节点（AI 节点含 agentConfig） */
+function threeNodeConfigureNodes() {
+  return [
+    { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+    {
+      nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+      prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+      dependsOn: ['input'], requiresWorktree: false,
+      agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+    },
+    {
+      nodeKey: 'verify', type: 'AI', name: 'AI验收', stage: '验收',
+      prompts: ['验收开发产物'], artifactTitles: ['验收报告'],
+      dependsOn: ['exec'], requiresWorktree: false,
+      agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+    },
+  ];
+}
+
 async function configureFromTemplate(page: Page, token: string, templateId: string, controllerId: string, name: string): Promise<string> {
   const res = await gqlRequest(page, `
     mutation ConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
@@ -193,11 +212,7 @@ async function configureFromTemplate(page: Page, token: string, templateId: stri
     input: {
       name,
       controllerId,
-      nodes: [
-        { nodeKey: 'input' },
-        { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-        { nodeKey: 'verify', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-      ],
+      nodes: threeNodeConfigureNodes(),
     },
   }, token);
   const body = await res.json();
@@ -216,14 +231,62 @@ interface InstanceNode {
   reworkCount: number;
 }
 
-async function instantiate(page: Page, token: string, configuredId: string, workspaceId: string, name: string) {
+interface InstantiateNodeInput {
+  nodeKey: string;
+  type: string;
+  name: string;
+  stage: string;
+  dependsOn: string[];
+  requiresWorktree: boolean;
+  prompts?: string[];
+  artifactTitles?: string[];
+  agentConfig?: unknown;
+}
+
+/** 标准三节点图（input→exec→verify）的实例化节点快照（AI 节点含 agentConfig） */
+function threeNodeInstantiateNodes(): InstantiateNodeInput[] {
+  return [
+    { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+    {
+      nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+      prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+      dependsOn: ['input'], requiresWorktree: false,
+      agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+    },
+    {
+      nodeKey: 'verify', type: 'AI', name: 'AI验收', stage: '验收',
+      prompts: ['验收开发产物'], artifactTitles: ['验收报告'],
+      dependsOn: ['exec'], requiresWorktree: false,
+      agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+    },
+  ];
+}
+
+async function instantiate(
+  page: Page,
+  token: string,
+  controllerId: string,
+  configuredId: string,
+  workspaceId: string,
+  name: string,
+  nodes: InstantiateNodeInput[],
+) {
   const res = await gqlRequest(page, `
-    mutation InstantiateWorkflow($configuredWorkflowId: ID!, $workspaceId: ID!, $name: String!) {
-      instantiateWorkflow(configuredWorkflowId: $configuredWorkflowId, workspaceId: $workspaceId, name: $name) {
+    mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
+      instantiateWorkflow(input: $input) {
         id nodes { id nodeKey name type status stage sessionId reworkCount }
       }
     }
-  `, { configuredWorkflowId: configuredId, workspaceId, name }, token);
+  `, {
+    input: {
+      source: 'CONFIGURED',
+      configuredWorkflowId: configuredId,
+      controllerId,
+      workspaceId,
+      name,
+      nodes,
+    },
+  }, token);
   const body = await res.json();
   if (body.errors) throw new Error(`instantiateWorkflow failed: ${JSON.stringify(body.errors)}`);
   return body.data.instantiateWorkflow as { id: string; nodes: InstanceNode[] };
@@ -234,7 +297,7 @@ async function getInstance(page: Page, token: string, instanceId: string) {
     query WorkflowInstance($id: ID!) {
       workflowInstance(id: $id) {
         id name currentNodeNames
-        nodes { id nodeKey name type status stage sessionId reworkCount rejectInfo { reason } failInfo { reason source } }
+        nodes { id nodeKey name type status stage sessionId reworkCount prompts artifactTitles requiresWorktree rejectInfo { reason } failInfo { reason source } }
         blackboard { key value }
         blackboardTrash { key value }
       }
@@ -246,7 +309,13 @@ async function getInstance(page: Page, token: string, instanceId: string) {
     id: string;
     name: string;
     currentNodeNames: string[];
-    nodes: (InstanceNode & { rejectInfo: { reason: string } | null })[];
+    nodes: (InstanceNode & {
+      prompts?: string[] | null;
+      artifactTitles?: string[] | null;
+      requiresWorktree?: boolean;
+      rejectInfo: { reason: string } | null;
+      failInfo: { reason: string; source: string } | null;
+    })[];
     blackboard: { key: string; value: string }[];
     blackboardTrash: { key: string; value: string }[];
   };
@@ -329,6 +398,24 @@ async function callWorkflowTool(
   return { isError: Boolean(body.result.isError), data: JSON.parse(body.result.content[0].text) };
 }
 
+/** 调用平台管理工作流 MCP 工具集（agent-workflow-admin-tools，模拟 AI 编排） */
+async function callAdminTool(
+  page: Page,
+  sessionId: string,
+  mcpToken: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ isError: boolean; data: Record<string, unknown> }> {
+  const res = await page.request.post(`${MCP_BASE_URL}/${sessionId}/agent-workflow-admin-tools`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mcpToken}` },
+    data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+  });
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.error).toBeUndefined();
+  return { isError: Boolean(body.result.isError), data: JSON.parse(body.result.content[0].text) };
+}
+
 // ---------------------------------------------------------------------------
 // 公共 setup：用户 + fake controller + 工作区 + 模板 + 已配置工作流
 // ---------------------------------------------------------------------------
@@ -359,7 +446,7 @@ async function setupWorkflowEnv(page: Page, tag: string): Promise<WorkflowEnv> {
 
 /** 实例化并完成首节点，推进到 AI执行 RUNNING，返回实例与 exec 会话信息 */
 async function advanceToExecRunning(page: Page, env: WorkflowEnv, instanceName: string) {
-  const inst = await instantiate(page, env.token, env.configuredId, env.workspaceId, instanceName);
+  const inst = await instantiate(page, env.token, env.controller.controllerId, env.configuredId, env.workspaceId, instanceName, threeNodeInstantiateNodes());
   const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
   const execNode = inst.nodes.find((n) => n.nodeKey === 'exec')!;
   expect(inputNode.status).toBe('READY');
@@ -404,7 +491,9 @@ test.describe('Workflow E2E', () => {
     await expect(dialog.getByText('实例化工作流')).toBeVisible();
     await dialog.getByRole('button', { name: /wf-e1-配置/ }).click();
     await dialog.getByLabel('实例名称').fill(instanceName);
-    await dialog.getByRole('button', { name: '实例化', exact: true }).click();
+    await dialog.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(dialog.getByText('实例化前配置')).toBeVisible();
+    await dialog.getByRole('button', { name: '确认实例化', exact: true }).click();
 
     // 跳转到实例视图：首节点 READY（待开始），AI 节点 INITIALIZING（等待中）
     await page.waitForURL(/\/workflows\/[a-f0-9]+/, { timeout: 10000 });
@@ -551,12 +640,28 @@ test.describe('Workflow E2E', () => {
     });
     expect(reworkResult.isError).toBe(false);
 
-    // verify 会话（未结束）收到复工通知消息
+    // 阻塞期间的空闲 verify 会话被关闭，并拉起全新会话复工
     await waitFor(
-      () => env.controller.messages.find((m) => m.sessionId === verifyStart.sessionId && m.content.includes('上游节点已完成返工')),
+      () => env.controller.stops.includes(verifyStart.sessionId) || undefined,
       15000,
-      'verify resume message',
+      'verify stale acp:stop',
     );
+    const verifyRestart = await waitFor(
+      () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.sessionId !== verifyStart.sessionId && s.mcpEndpoint?.serverNames.includes('agent-workflow-tools')),
+      15000,
+      'verify fresh acp:start',
+    );
+    expect(verifyRestart.mcpEndpoint?.token).toBeTruthy();
+    // 新会话提示词含最新上游产物（计算器代码 v2）
+    const verifyPrompt = await waitFor(
+      async () => {
+        const msgs = await getSessionMessagesText(page, env.token, verifyRestart.sessionId);
+        return msgs.find((m) => m.includes('你身处一个工作流系统'));
+      },
+      15000,
+      'verify fresh prompt',
+    );
+    expect(verifyPrompt).toContain('计算器代码 v2');
 
     // 实例状态与黑板：exec DONE / verify RUNNING；旧产物入垃圾桶，新产物上黑板
     inst = await getInstance(page, env.token, instanceId);
@@ -756,10 +861,12 @@ test.describe('Workflow E2E', () => {
     let dialog = page.getByRole('dialog');
     await expect(dialog.getByText('定义工作流的节点、依赖关系、提示词与产物', { exact: false })).toBeVisible();
     await dialog.getByLabel('模板名称').fill(templateName);
+    await dialog.getByRole('button', { name: '展开节点 1' }).click();
     await dialog.getByLabel('节点 1 标识').fill('input');
     await dialog.getByLabel('节点 1 名称').fill('需求输入');
     await dialog.getByLabel('节点 1 阶段').fill('需求');
     await dialog.getByRole('button', { name: '添加节点' }).click();
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
     await dialog.getByLabel('节点 2 标识').fill('exec');
     await dialog.getByLabel('节点 2 名称').fill('AI执行');
     await dialog.getByLabel('节点 2 阶段').fill('开发');
@@ -849,16 +956,30 @@ test.describe('Workflow E2E', () => {
         name: `wf-e7-配置-${Date.now().toString(36)}`,
         controllerId: controller.controllerId,
         nodes: [
-          { nodeKey: 'input' },
-          { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
-          { nodeKey: 'review' },
+          { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+          {
+            nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+            prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+            dependsOn: ['input'], requiresWorktree: false,
+            agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+          },
+          { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
         ],
       },
     }, token);
     const configuredId = (await cfgRes.json()).data.configureWorkflow.id;
 
     // 实例化并完成首节点 → exec RUNNING
-    const inst = await instantiate(page, token, configuredId, ws.id, `wf-e7-实例-${Date.now().toString(36)}`);
+    const inst = await instantiate(page, token, controller.controllerId, configuredId, ws.id, `wf-e7-实例-${Date.now().toString(36)}`, [
+      { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+      {
+        nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+        prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+        dependsOn: ['input'], requiresWorktree: false,
+        agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+      },
+      { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
+    ]);
     const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
     const reviewNode = inst.nodes.find((n) => n.nodeKey === 'review')!;
     await completeHumanNode(page, token, inst.id, inputNode.id, '做一个计算器');
@@ -922,7 +1043,7 @@ test.describe('Workflow E2E', () => {
     const templateId = await createThreeNodeTemplate(page, token, `wf-e8-模板-${Date.now().toString(36)}`);
     const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, `wf-e8-配置-${Date.now().toString(36)}`);
 
-    const inst = await instantiate(page, token, configuredId, ws.id, `wf-e8-实例-${Date.now().toString(36)}`);
+    const inst = await instantiate(page, token, controller.controllerId, configuredId, ws.id, `wf-e8-实例-${Date.now().toString(36)}`, threeNodeInstantiateNodes());
     const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
     await completeHumanNode(page, token, inst.id, inputNode.id, '做一个计算器');
 
@@ -1195,6 +1316,474 @@ test.describe('Workflow E2E', () => {
     const artifactKey = `${inputNode.id}-需求输入-产物-输入`;
     expect(inst.blackboard.find((e) => e.key === artifactKey)?.value).toBe('做一个支持加减乘除的计算器');
     expect(inst.blackboardTrash.find((e) => e.key === artifactKey)?.value).toBe('做一个计算器');
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 二期 E2E-14 设置页已配置工作流图编辑（保存成功、来源模板不变）
+  // -------------------------------------------------------------------------
+  test('P2-E2E-14: settings page edits configured workflow graph and saves', async ({ page }) => {
+    test.setTimeout(90000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-p2e14-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+    const templateId = await createThreeNodeTemplate(page, token, `wf-p2e14-模板-${Date.now().toString(36)}`);
+    const configuredName = `wf-p2e14-配置-${Date.now().toString(36)}`;
+    const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, configuredName);
+
+    await loginViaUI(page, username);
+    await page.click('a[href="/settings"]');
+    const section = page.locator('#workflow-section');
+    await expect(section).toBeVisible({ timeout: 5000 });
+
+    // 已配置工作流卡片 → 编辑（打开完整节点图编辑器）
+    const configuredCard = section.locator('[data-slot="card"]').filter({ hasText: configuredName });
+    await configuredCard.getByRole('button', { name: '编辑' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('编辑已配置工作流')).toBeVisible();
+
+    // 修改 exec 节点提示词（节点 2，AI 节点提示词为每行一条）
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
+    await dialog.getByLabel('节点 2 提示词').fill('阅读上游产物并完成执行\n追加二期编辑提示词');
+    await dialog.getByRole('button', { name: '保存' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+    // 保存成功：重新查询已配置工作流节点
+    const q = await gqlRequest(page, `
+      query GetConfigured($controllerId: ID) {
+        configuredWorkflows(controllerId: $controllerId) { id nodes { nodeKey prompts } }
+      }
+    `, { controllerId: controller.controllerId }, token);
+    const body = await q.json();
+    const cfg = body.data.configuredWorkflows.find((c: Record<string, any>) => c.id === configuredId);
+    const exec = cfg.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(exec.prompts).toEqual(['阅读上游产物并完成执行', '追加二期编辑提示词']);
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 二期 E2E-15 从模板实例化（实例化前配置界面补齐 Agent 配置）
+  // -------------------------------------------------------------------------
+  test('P2-E2E-15: instantiate from template via sidebar with pre-instantiation config UI', async ({ page }) => {
+    test.setTimeout(60000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-p2e15-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+    const workspacePath = `/tmp/e2e-p2e15-${Date.now().toString(36)}`;
+    const ws = await createWorkspace(page, controller.controllerId, workspacePath, token);
+    const templateName = `wf-p2e15-模板-${Date.now().toString(36)}`;
+    const templateId = await createThreeNodeTemplate(page, token, templateName);
+
+    await loginViaUI(page, username);
+    const nav = page.locator(sidebar());
+    await nav.getByRole('button', { name: new RegExp(hostname) }).click();
+    const wsName = workspacePath.split('/').pop()!;
+    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('实例化工作流')).toBeVisible();
+
+    // 步骤 1：来源选择「模板」
+    await dialog.getByRole('button', { name: /^模板/ }).click();
+    await dialog.getByRole('button', { name: new RegExp(templateName) }).click();
+    await dialog.getByLabel('实例名称').fill(`wf-p2e15-实例-${Date.now().toString(36)}`);
+    await dialog.getByRole('button', { name: '下一步', exact: true }).click();
+
+    // 步骤 2：实例化前配置界面 —— 模板 AI 节点缺 Agent 配置，需补齐 Harness 工具
+    await expect(dialog.getByText('实例化前配置')).toBeVisible();
+    await expect(dialog.getByText(/来源：模板/)).toBeVisible();
+    await dialog.locator('[data-slot="select-trigger"][aria-label="AI执行 Harness 工具"]').click();
+    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    await dialog.locator('[data-slot="select-trigger"][aria-label="AI验收 Harness 工具"]').click();
+    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    await dialog.getByRole('button', { name: '确认实例化', exact: true }).click();
+
+    // 跳转到实例视图
+    await page.waitForURL(/\/workflows\/[a-f0-9]+/, { timeout: 10000 });
+    const instanceId = page.url().match(/\/workflows\/([a-f0-9]+)/)![1];
+    await expect(page.getByRole('heading', { name: /wf-p2e15-实例/ })).toBeVisible({ timeout: 10000 });
+
+    // 实例节点快照 = 配置界面提交内容（提示词完整、agentConfig 为 opencode）
+    const inst = await getInstance(page, token, instanceId);
+    const execNode = inst.nodes.find((n) => n.nodeKey === 'exec')!;
+    expect(execNode.status).toBe('INITIALIZING');
+    await expect(nodeCard(page, 'AI执行').getByText('等待中', { exact: true })).toBeVisible();
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 二期 E2E-16 从空白实例化（配置界面从零搭建节点图）
+  // -------------------------------------------------------------------------
+  test('P2-E2E-16: instantiate from blank, build node graph in config UI', async ({ page }) => {
+    test.setTimeout(60000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-p2e16-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+    const workspacePath = `/tmp/e2e-p2e16-${Date.now().toString(36)}`;
+    const ws = await createWorkspace(page, controller.controllerId, workspacePath, token);
+
+    await loginViaUI(page, username);
+    const nav = page.locator(sidebar());
+    await nav.getByRole('button', { name: new RegExp(hostname) }).click();
+    const wsName = workspacePath.split('/').pop()!;
+    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('实例化工作流')).toBeVisible();
+
+    // 步骤 1：来源选择「空白」
+    await dialog.getByRole('button', { name: /^空白/ }).click();
+    await dialog.getByLabel('实例名称').fill(`wf-p2e16-实例-${Date.now().toString(36)}`);
+    await dialog.getByRole('button', { name: '下一步', exact: true }).click();
+
+    // 步骤 2：空白默认含 1 个 HUMAN 节点，编辑其字段
+    await expect(dialog.getByText('实例化前配置')).toBeVisible();
+    await dialog.getByRole('button', { name: '展开节点 1' }).click();
+    await dialog.getByLabel('节点 1 标识').fill('input');
+    await dialog.getByLabel('节点 1 名称').fill('需求输入');
+    await dialog.getByLabel('节点 1 阶段').fill('需求');
+    // 添加 AI 节点并补全配置
+    await dialog.getByRole('button', { name: '添加节点' }).click();
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
+    await dialog.getByLabel('节点 2 标识').fill('exec');
+    await dialog.getByLabel('节点 2 名称').fill('AI执行');
+    await dialog.getByLabel('节点 2 阶段').fill('开发');
+    await dialog.getByLabel('节点 2 提示词').fill('执行开发任务');
+    await dialog.getByLabel('节点 2 产物标题').fill('开发产物');
+    await dialog.locator('[data-slot="select-trigger"][aria-label="AI执行 Harness 工具"]').click();
+    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    // 设置 exec 依赖 input
+    await dialog.getByText(/需求输入（input）/).click();
+    await dialog.getByRole('button', { name: '确认实例化', exact: true }).click();
+
+    await page.waitForURL(/\/workflows\/[a-f0-9]+/, { timeout: 10000 });
+    const instanceId = page.url().match(/\/workflows\/([a-f0-9]+)/)![1];
+    await expect(page.getByRole('heading', { name: /wf-p2e16-实例/ })).toBeVisible({ timeout: 10000 });
+    await expect(nodeCard(page, '需求输入').getByText('待开始', { exact: true })).toBeVisible();
+    await expect(nodeCard(page, 'AI执行').getByText('等待中', { exact: true })).toBeVisible();
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 二期 E2E-17 实例视图编辑未开始节点（保存生效；开始后再编辑被拒）
+  // -------------------------------------------------------------------------
+  test('P2-E2E-17: edit not-started instance node in instance view', async ({ page }) => {
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'p2e17');
+    const instanceName = `wf-p2e17-实例-${Date.now().toString(36)}`;
+    const inst = await instantiate(page, env.token, env.controller.controllerId, env.configuredId, env.workspaceId, instanceName, threeNodeInstantiateNodes());
+    const instanceId = inst.id as string;
+    const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
+    const execNode = inst.nodes.find((n) => n.nodeKey === 'exec')!;
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // exec 为 INITIALIZING（等待中），展示「编辑」入口
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('等待中', { exact: true })).toBeVisible();
+    await expect(execCard.getByRole('button', { name: '编辑' })).toBeVisible();
+
+    // 打开编辑对话框，修改节点名称/提示词并保存
+    await execCard.getByRole('button', { name: '编辑' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('编辑节点「AI执行」')).toBeVisible();
+    await dialog.getByLabel('提示词').fill('编辑后的执行提示词');
+    await dialog.getByRole('button', { name: '保存' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+    // 保存生效（API 校验快照更新）
+    await waitFor(async () => {
+      const i = await getInstance(page, env.token, instanceId);
+      const n = i.nodes.find((x) => x.nodeKey === 'exec')!;
+      return n.prompts?.includes('编辑后的执行提示词') ? i : undefined;
+    }, 15000, 'exec node snapshot updated');
+
+    // 开始节点后（完成 input → exec RUNNING）「编辑」入口消失（已开始不可修改）
+    await completeHumanNode(page, env.token, instanceId, inputNode.id, '做一个计算器');
+    await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        return i.nodes.find((x) => x.nodeKey === 'exec')!.status === 'RUNNING' ? i : undefined;
+      },
+      15000,
+      'exec RUNNING',
+    );
+    await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, 'AI执行').getByRole('button', { name: '编辑' })).toHaveCount(0);
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 二期 E2E-18 AI 会话装配管理工具集完成编排（创建模板→配置→实例化；删人类资源被拒）
+  // -------------------------------------------------------------------------
+  test('P2-E2E-18: AI node session has admin toolset assembled and can orchestrate; cannot delete human resource', async ({ page }) => {
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'p2e18');
+    const instanceName = `wf-p2e18-实例-${Date.now().toString(36)}`;
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, instanceName);
+    const sessionId = execStart.sessionId;
+    const mcpToken = execStart.mcpEndpoint!.token;
+
+    // AI 会话已装配管理工作流工具集（serverNames 含 agent-workflow-admin-tools）
+    expect(execStart.mcpEndpoint?.serverNames).toContain('agent-workflow-admin-tools');
+
+    // 用管理工具集完整编排：创建模板 → 配置 → 实例化
+    const createdTpl = await callAdminTool(page, sessionId, mcpToken, 'createWorkflowTemplate', {
+      name: `wf-p2e18-AI模板-${Date.now().toString(36)}`,
+      nodes: [
+        { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+        { nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发', prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'], dependsOn: ['input'], requiresWorktree: false },
+      ],
+    });
+    expect(createdTpl.isError).toBe(false);
+    const aiTemplateId = (createdTpl.data as { id: string }).id;
+
+    const createdCfg = await callAdminTool(page, sessionId, mcpToken, 'createConfiguredWorkflow', {
+      name: `wf-p2e18-AI配置-${Date.now().toString(36)}`,
+      controllerId: env.controller.controllerId,
+      templateId: aiTemplateId,
+      nodes: [
+        { nodeKey: 'input' },
+        { nodeKey: 'exec', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+      ],
+    });
+    expect(createdCfg.isError).toBe(false);
+    const aiCfgId = (createdCfg.data as { id: string }).id;
+
+    const instantiated = await callAdminTool(page, sessionId, mcpToken, 'instantiateWorkflowFromConfigured', {
+      configuredWorkflowId: aiCfgId,
+      controllerId: env.controller.controllerId,
+      workspaceId: env.workspaceId,
+      name: `wf-p2e18-AI实例-${Date.now().toString(36)}`,
+      nodes: [
+        { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+        {
+          nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+          prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+          dependsOn: ['input'], requiresWorktree: false,
+          agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+        },
+      ],
+    });
+    expect(instantiated.isError).toBe(false);
+
+    // 人类创建的资源（本用户 setup 时创建的模板）不可被 AI 删除（requireAiOwned）
+    const humanTpl = await callAdminTool(page, sessionId, mcpToken, 'listWorkflowTemplates', {});
+    expect(humanTpl.isError).toBe(false);
+    const humanTemplate = (humanTpl.data as { templates: { id: string; name: string; isBuiltin: boolean }[] }).templates.find(
+      (t) => t.name.startsWith(`wf-p2e18-模板`),
+    );
+    const delHuman = await callAdminTool(page, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: humanTemplate!.id });
+    expect(delHuman.isError).toBe(true);
+
+    // AI 创建的模板可被删除（归属校验通过）
+    const delAi = await callAdminTool(page, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: aiTemplateId });
+    expect(delAi.isError).toBe(false);
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 人类验收：多节点打回回流（c打回b→b打回a→a重新提供→b完成→c复工）不卡死
+  // -------------------------------------------------------------------------
+  test('E2E-19: multi-node rework chain with human terminal node resumes without stalling', async ({ page }) => {
+    test.setTimeout(120000);
+    const { token } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerWorkflowController(rawKey, `wf-e19-host-${Date.now().toString(36)}`);
+    await refreshCapabilities(page, token, controller.controllerId);
+    const ws = await createWorkspace(page, controller.controllerId, `/tmp/e2e-wf-e19-${Date.now().toString(36)}`, token);
+
+    // 三节点模板：input(HUMAN) → exec(AI) → review(HUMAN)
+    const tplRes = await gqlRequest(page, `
+      mutation CreateWorkflowTemplate($input: WorkflowTemplateInput!) {
+        createWorkflowTemplate(input: $input) { id }
+      }
+    `, {
+      input: {
+        name: `wf-e19-模板-${Date.now().toString(36)}`,
+        description: 'E2E 人类验收回流模板',
+        nodes: [
+          { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+          {
+            nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+            prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+            dependsOn: ['input'], requiresWorktree: false,
+          },
+          { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
+        ],
+      },
+    }, token);
+    const templateId = (await tplRes.json()).data.createWorkflowTemplate.id;
+
+    const cfgRes = await gqlRequest(page, `
+      mutation ConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
+        configureWorkflow(templateId: $templateId, input: $input) { id }
+      }
+    `, {
+      templateId,
+      input: {
+        name: `wf-e19-配置-${Date.now().toString(36)}`,
+        controllerId: controller.controllerId,
+        nodes: [
+          { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+          {
+            nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+            prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+            dependsOn: ['input'], requiresWorktree: false,
+            agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+          },
+          { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
+        ],
+      },
+    }, token);
+    const configuredId = (await cfgRes.json()).data.configureWorkflow.id;
+
+    const inst = await instantiate(page, token, controller.controllerId, configuredId, ws.id, `wf-e19-实例-${Date.now().toString(36)}`, [
+      { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+      {
+        nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+        prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+        dependsOn: ['input'], requiresWorktree: false,
+        agentConfig: { acpServerType: 'opencode', initNewWorktree: false },
+      },
+      { nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', dependsOn: ['exec'], requiresWorktree: false },
+    ]);
+    const instanceId = inst.id;
+    const inputNode = inst.nodes.find((n) => n.nodeKey === 'input')!;
+    const reviewNode = inst.nodes.find((n) => n.nodeKey === 'review')!;
+
+    // 1) 完成首节点 → exec 会话启动
+    await completeHumanNode(page, token, instanceId, inputNode.id, '做一个计算器');
+    const s1 = await waitFor(() => controller.starts.find((s) => s.mcpEndpoint?.token), 15000, 'exec acp:start #1');
+
+    // 2) exec 完成 → review RUNNING
+    await callWorkflowTool(page, s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
+    });
+    await waitFor(
+      async () => (await getInstance(page, token, instanceId)).nodes.find((n) => n.nodeKey === 'review')!.status === 'RUNNING' || undefined,
+      15000,
+      'review RUNNING',
+    );
+
+    // 3) review（c）打回 exec（b）：exec REWORK（原会话 resume）
+    await rejectNode(page, token, instanceId, reviewNode.id, '执行结果不符合需求');
+    const execResume = await waitFor(
+      () => controller.resumes.find((r) => r.sessionId === s1.sessionId && r.mcpEndpoint?.token),
+      15000,
+      'exec acp:resume',
+    );
+
+    // 4) exec（b）打回 input（a）
+    const rejB = await callWorkflowTool(page, s1.sessionId, execResume.mcpEndpoint!.token, 'rejectCurrentNode', {
+      reason: '需求本身有问题，无法按现状执行',
+    });
+    expect(rejB.isError).toBe(false);
+
+    // 5) input（a）重新提供 → exec 复工（新会话 S2）
+    await completeHumanNode(page, token, instanceId, inputNode.id, '做一个支持加减乘除的计算器');
+    const s2 = await waitFor(
+      () => controller.starts.find((s) => s.sessionId !== s1.sessionId && s.mcpEndpoint?.token),
+      15000,
+      'exec acp:start #2',
+    );
+
+    // 6) exec（b）完成 → review（c）复工 RUNNING（人类节点不报「缺少 Agent 配置」）
+    const done2 = await callWorkflowTool(page, s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '开发产物', value: '计算器代码 v2' }],
+    });
+    expect(done2.isError).toBe(false);
+
+    // 7) 流程不卡死：exec DONE，review RUNNING
+    const instFinal = await getInstance(page, token, instanceId);
+    expect(instFinal.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('DONE');
+    expect(instFinal.nodes.find((n) => n.nodeKey === 'review')!.status).toBe('RUNNING');
+
+    controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 人类验收：工作流 MCP token 有效性跟随工作流（无 TTL exp）
+  // -------------------------------------------------------------------------
+  test('E2E-20: workflow node session MCP token has no expiry (validity follows workflow)', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e20');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e20-实例-${Date.now().toString(36)}`);
+
+    const token = execStart.mcpEndpoint!.token;
+    expect(token).toBeTruthy();
+    // 工作流节点会话 MCP token：payload 无 exp（有效性跟随工作流实例，不受 TTL 限制）
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    expect(payload.workflow).toBeDefined();
+    expect(payload.exp).toBeUndefined();
+
+    // 节点 MCP 工具仍可用（getCurrentNodeId 返回当前节点）
+    const nodeIdRes = await callWorkflowTool(page, execStart.sessionId, token, 'getCurrentNodeId', {});
+    expect(nodeIdRes.isError).toBe(false);
+    expect(nodeIdRes.data.nodeId).toBe(
+      (await getInstance(page, env.token, instanceId)).nodes.find((n) => n.nodeKey === 'exec')!.id,
+    );
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 人类验收返工：节点「执行中/返工中/失败」可点击「重启」拉起全新会话重试
+  // -------------------------------------------------------------------------
+  test('E2E-21: restart node button restarts a running node session', async ({ page }) => {
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'e21');
+    const instanceName = `wf-e21-实例-${Date.now().toString(36)}`;
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 执行中的 AI 节点展示「重启」按钮
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    const restartButton = execCard.getByRole('button', { name: '重启' });
+    await expect(restartButton).toBeVisible();
+
+    // 点击「重启」先弹出确认框，明确「删除旧会话并重新拉起全新会话」语义
+    await restartButton.click();
+    const confirmDialog = page.getByRole('dialog');
+    await expect(confirmDialog.getByText(/重启节点「AI执行」/)).toBeVisible();
+    await expect(confirmDialog.getByText(/删除当前会话并重新开始/)).toBeVisible();
+
+    // 点击确认 → 旧会话关闭 + 全新会话拉起（acp:start 会话变化）
+    const restartStartPromise = waitFor(
+      () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
+      15000,
+      'restarted exec acp:start',
+    );
+    await confirmDialog.getByRole('button', { name: '确认重启' }).click();
+    const restarted = await restartStartPromise;
+    expect(restarted.mcpEndpoint?.token).toBeTruthy();
+
+    // 节点仍为执行中，会话已切换；重启后节点可继续完成
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '开发产物', value: '重启后完成' }],
+    });
+    expect(done.isError).toBe(false);
 
     env.controller.disconnect();
   });

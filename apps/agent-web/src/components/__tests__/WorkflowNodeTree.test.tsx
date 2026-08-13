@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import WorkflowNodeTree from '../workflow/WorkflowNodeTree';
+import { toast } from 'sonner';
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow';
 
 const mockComplete = vi.fn().mockResolvedValue({});
 const mockReject = vi.fn().mockResolvedValue({});
+const mockRestart = vi.fn().mockResolvedValue({});
 
 vi.mock('@apollo/client/react', () => ({
+  useQuery: () => ({ data: { acpCapabilities: [] } }),
   useMutation: (doc: unknown) => {
     const name = JSON.stringify(doc);
+    if (name.includes('RestartNode')) return [mockRestart];
     return [name.includes('CompleteHumanNode') ? mockComplete : mockReject];
   },
 }));
@@ -27,6 +31,10 @@ function makeNode(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     status: 'RUNNING',
     stage: '验收',
     sessionId: null,
+    prompts: null,
+    artifactTitles: null,
+    agentConfig: null,
+    requiresWorktree: null,
     createdAt: '2026-08-08T00:00:00Z',
     startedAt: null,
     reworkedAt: null,
@@ -315,5 +323,78 @@ describe('节点折叠（移动端适配）', () => {
     );
     const badge = screen.getByText('AI', { exact: true });
     expect(badge.parentElement!.className).toContain('flex-wrap');
+  });
+});
+
+describe('节点重启（确认弹框）', () => {
+  beforeEach(() => {
+    mockRestart.mockClear();
+    mockRestart.mockResolvedValue({});
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it('点击「重启」先弹确认框，未确认不调用 restartNode', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          makeNode({ id: 'n-ai', nodeKey: 'exec', type: 'AI', name: '执行', status: 'RUNNING' }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重启' }));
+    // 弹框出现，且尚未触发 mutation
+    expect(screen.getByText('重启节点「执行」')).toBeDefined();
+    expect(mockRestart).not.toHaveBeenCalled();
+  });
+
+  it('确认后调用 restartNode 并提示成功', async () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          makeNode({ id: 'n-ai', nodeKey: 'exec', type: 'AI', name: '执行', status: 'RUNNING' }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重启' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认重启' }));
+    expect(mockRestart).toHaveBeenCalledTimes(1);
+    const variables = mockRestart.mock.calls[0][0].variables;
+    expect(variables).toEqual({ instanceId: 'inst-1', nodeId: 'n-ai' });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('节点「执行」已重启');
+    });
+    expect(screen.queryByText('重启节点「执行」')).toBeNull();
+  });
+
+  it('取消则关闭弹框且不调用 restartNode', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          makeNode({ id: 'n-ai', nodeKey: 'exec', type: 'AI', name: '执行', status: 'RUNNING' }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重启' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(mockRestart).not.toHaveBeenCalled();
+    expect(screen.queryByText('重启节点「执行」')).toBeNull();
+  });
+
+  it('弹框文案明确删除旧会话并重新拉起全新会话的语义', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([
+          makeNode({ id: 'n-ai', nodeKey: 'exec', type: 'AI', name: '执行', status: 'FAILED' }),
+        ])}
+        onOpenSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重启' }));
+    expect(screen.getByText(/删除当前会话并重新开始/)).toBeDefined();
+    expect(screen.getByText(/关闭并删除当前节点的会话/)).toBeDefined();
   });
 });

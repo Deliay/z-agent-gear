@@ -6,6 +6,17 @@ export const workflowTypeDefs = `#graphql
     FLAG
   }
 
+  enum ResourceCreatedBy {
+    HUMAN
+    AI
+  }
+
+  enum InstantiateSource {
+    CONFIGURED
+    TEMPLATE
+    BLANK
+  }
+
   enum WorkflowNodeStatus {
     INITIALIZING
     READY
@@ -37,6 +48,7 @@ export const workflowTypeDefs = `#graphql
     version: Int!
     nodes: [WorkflowTemplateNode!]!
     isBuiltin: Boolean!
+    createdBy: ResourceCreatedBy!
     createdAt: String!
     updatedAt: String!
   }
@@ -70,6 +82,7 @@ export const workflowTypeDefs = `#graphql
     sourceTemplateId: ID
     sourceTemplateVersion: Int
     nodes: [ConfiguredWorkflowNode!]!
+    createdBy: ResourceCreatedBy!
     createdAt: String!
     updatedAt: String!
   }
@@ -97,6 +110,11 @@ export const workflowTypeDefs = `#graphql
     status: WorkflowNodeStatus!
     stage: String!
     sessionId: ID
+    # 实例快照字段（实例化时复制；旧实例可能缺失）
+    prompts: [String!]
+    artifactTitles: [String!]
+    agentConfig: AgentNodeConfig
+    requiresWorktree: Boolean
     createdAt: String!
     startedAt: String
     reworkedAt: String
@@ -113,7 +131,8 @@ export const workflowTypeDefs = `#graphql
 
   type WorkflowInstance {
     id: ID!
-    configuredWorkflowId: ID!
+    # 统一实例化三来源（CONFIGURED/TEMPLATE/BLANK）中仅 CONFIGURED 来源保证存在，故可空
+    configuredWorkflowId: ID
     controllerId: ID!
     workspaceId: ID!
     name: String!
@@ -157,6 +176,14 @@ export const workflowTypeDefs = `#graphql
 
   input ConfiguredWorkflowNodeInput {
     nodeKey: String!
+    type: WorkflowNodeType!
+    name: String!
+    description: String
+    stage: String!
+    prompts: [String!]
+    artifactTitles: [String!]
+    dependsOn: [String!]!
+    requiresWorktree: Boolean!
     agentConfig: AgentNodeConfigInput
   }
 
@@ -164,6 +191,30 @@ export const workflowTypeDefs = `#graphql
     name: String!
     controllerId: ID!
     nodes: [ConfiguredWorkflowNodeInput!]!
+  }
+
+  # ---------- 统一实例化 ----------
+
+  input InstantiateWorkflowInput {
+    source: InstantiateSource!
+    configuredWorkflowId: ID
+    templateId: ID
+    controllerId: ID!
+    workspaceId: ID!
+    name: String!
+    nodes: [ConfiguredWorkflowNodeInput!]!
+  }
+
+  # ---------- 实例节点编辑 ----------
+
+  input WorkflowNodeUpdateInput {
+    name: String
+    description: String
+    stage: String
+    prompts: [String!]
+    artifactTitles: [String!]
+    requiresWorktree: Boolean
+    agentConfig: AgentNodeConfigInput
   }
 
   # ---------- Query / Mutation ----------
@@ -184,9 +235,12 @@ export const workflowTypeDefs = `#graphql
     configureWorkflow(templateId: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
     updateConfiguredWorkflow(id: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
     deleteConfiguredWorkflow(id: ID!): Boolean!
-    instantiateWorkflow(configuredWorkflowId: ID!, workspaceId: ID!, name: String!): WorkflowInstance!
+    instantiateWorkflow(input: InstantiateWorkflowInput!): WorkflowInstance!
+    updateWorkflowNode(instanceId: ID!, nodeId: ID!, input: WorkflowNodeUpdateInput!): WorkflowNode!
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+    # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+    restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
   }
