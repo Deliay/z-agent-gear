@@ -34,11 +34,13 @@ export class McpEndpointService {
 
     const serverNames = servers.map(s => s.name);
     const ttl = config.mcpEndpointTokenTtl;
+    // 工作流节点会话：token 有效性跟随工作流实例（不设 TTL，由 getStatus 与实例删除兜底撤销）
+    const isWorkflow = Boolean(workflow);
 
     const token = jwt.sign(
       { sessionId, userId, serverNames, ...(workflow ? { workflow } : {}) },
       config.mcpEndpointJwtSecret,
-      { expiresIn: `${ttl}s` },
+      isWorkflow ? {} : { expiresIn: `${ttl}s` },
     );
     const tokenHash = await bcrypt.hash(token, SALT_ROUNDS);
 
@@ -50,14 +52,19 @@ export class McpEndpointService {
           mcpServerIds,
           tokenHash,
           status: 'active',
-          expiresAt: new Date(Date.now() + ttl * 1000),
+          workflowInstanceId: workflow?.instanceId ?? null,
+          expiresAt: isWorkflow ? null : new Date(Date.now() + ttl * 1000),
         },
       },
       { upsert: true },
     );
 
     const redis = getRedisClient();
-    await redis.set(`mcp:endpoint:${sessionId}`, 'active', 'EX', ttl);
+    if (isWorkflow) {
+      await redis.set(`mcp:endpoint:${sessionId}`, 'active');
+    } else {
+      await redis.set(`mcp:endpoint:${sessionId}`, 'active', 'EX', ttl);
+    }
 
     return {
       url: `${config.gatewayUrl}/mcp/${sessionId}`,
@@ -98,8 +105,16 @@ export class McpEndpointService {
       return cached;
     }
     const endpoint = await McpSessionEndpoint.findOne({ sessionId, status: 'active' });
-    const remainingMs = endpoint ? endpoint.expiresAt.getTime() - Date.now() : 0;
-    if (!endpoint || remainingMs <= 0) {
+    if (!endpoint) {
+      return 'revoked';
+    }
+    // 工作流节点会话 endpoint：有效性跟随工作流实例，无 TTL 判过期
+    if (endpoint.workflowInstanceId) {
+      await redis.set(`mcp:endpoint:${sessionId}`, 'active');
+      return 'active';
+    }
+    const remainingMs = endpoint.expiresAt ? endpoint.expiresAt.getTime() - Date.now() : 0;
+    if (remainingMs <= 0) {
       return 'revoked';
     }
     // Refill the cache so subsequent requests do not hit Mongo on every call.

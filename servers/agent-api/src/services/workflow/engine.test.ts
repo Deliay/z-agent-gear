@@ -59,6 +59,7 @@ const hooks = {
   onNodeRework: vi.fn(),
   onNodeResume: vi.fn(),
   onNodeDone: vi.fn(),
+  onNodeRestart: vi.fn(),
 };
 
 function loadInstance(instance: ReturnType<typeof makeInstance>) {
@@ -410,6 +411,51 @@ describe('WorkflowEngine.transition', () => {
     const instance = linearInstance();
     loadInstance(instance);
     await expect(workflowEngine.transition('inst-1', 'ghost', 'start')).rejects.toThrow(/不存在节点/);
+  });
+
+  it('R1: restart 允许 RUNNING/REWORK/FAILED→RUNNING，清失败/打回标记并触发 onNodeRestart', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RUNNING';
+    instance.nodes[1].sessionId = 'sess-2';
+    instance.nodes[1].failInfo = { reason: 'r', source: 'LLM_REPORTED', at: new Date() };
+    instance.nodes[1].rejectInfo = { reason: 'r', fromNodeId: null, at: new Date() };
+    instance.nodes[1].fallbackSent = true;
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'restart', {});
+
+    const node = instance.nodes[1];
+    expect(node.status).toBe('RUNNING');
+    expect(node.failInfo).toBeNull();
+    expect(node.rejectInfo).toBeNull();
+    expect(node.fallbackSent).toBe(false);
+    expect(hooks.onNodeRestart).toHaveBeenCalledWith(instance, node);
+    expect(instance.currentNodeNames).toEqual(['技术方案']);
+  });
+
+  it('R2: restart 允许 FAILED/REWORK 起点（清 failInfo 后 RUNNING）', async () => {
+    for (const from of ['FAILED', 'REWORK'] as const) {
+      vi.clearAllMocks();
+      const instance = linearInstance();
+      instance.nodes[1].status = from;
+      instance.nodes[1].failInfo = { reason: 'r', source: 'SESSION_STUCK', at: new Date() };
+      loadInstance(instance);
+
+      await workflowEngine.transition('inst-1', 'n2', 'restart', {});
+
+      expect(instance.nodes[1].status).toBe('RUNNING');
+      expect(instance.nodes[1].failInfo).toBeNull();
+      expect(hooks.onNodeRestart).toHaveBeenCalled();
+    }
+  });
+
+  it('R3: restart 非法状态（INITIALIZING/READY/DONE/REJECT）拒绝', async () => {
+    for (const status of ['INITIALIZING', 'READY', 'DONE', 'REJECT'] as const) {
+      const instance = linearInstance();
+      instance.nodes[1].status = status;
+      loadInstance(instance);
+      await expect(workflowEngine.transition('inst-1', 'n2', 'restart', {})).rejects.toThrow(/不允许/);
+    }
   });
 
   it('已删除实例（deletedAt 非空）拒绝一切转移', async () => {

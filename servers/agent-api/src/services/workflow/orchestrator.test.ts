@@ -392,6 +392,78 @@ describe('WorkflowOrchestrator', () => {
     );
   });
 
+  it('resumeNodeSession: HUMAN 节点复工不拉起会话（不调用 close/create）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n3', nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', status: 'RUNNING', dependsOn: [] }),
+    ]);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+  });
+
+  it('resumeNodeSession: FLAG 节点复工不拉起会话（不调用 close/create）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'f1', nodeKey: 'milestone', type: 'FLAG', name: '里程碑', stage: '验收', status: 'RUNNING', dependsOn: [] }),
+    ]);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+  });
+
+  it('resumeNodeSession: AI 节点复工仍关闭旧会话并拉起全新会话', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'RUNNING', dependsOn: [], sessionId: 'sess-3' }),
+    ]);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ workflowNodeId: 'n3' }),
+    );
+  });
+
+  it('restart 节点：引擎 restart 事件关闭旧会话并拉起全新会话（onNodeRestart 接 resumeNodeSession）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'FAILED', dependsOn: [], sessionId: 'sess-3', failInfo: { reason: 'r', source: 'SESSION_STUCK', at: new Date() } }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    workflowOrchestrator.register();
+
+    await workflowEngine.transition('inst-1', 'n3', 'restart', {});
+
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ workflowNodeId: 'n3' }),
+    );
+    expect(instance.nodes[0].status).toBe('RUNNING');
+    expect(instance.nodes[0].failInfo).toBeNull();
+  });
+
+  it('restart 人类节点不拉起会话（类型守卫）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n3', nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', status: 'RUNNING', dependsOn: [] }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    workflowOrchestrator.register();
+
+    await workflowEngine.transition('inst-1', 'n3', 'restart', {});
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('RUNNING');
+  });
+
   it('S1: 新实例节点（含快照字段）提示词/Agent 配置来自快照，不回查配置', async () => {
     const snapshotNode = {
       ...makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),

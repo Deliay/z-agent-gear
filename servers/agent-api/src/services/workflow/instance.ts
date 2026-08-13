@@ -306,6 +306,15 @@ class WorkflowInstanceService {
     return workflowEngine.transition(instanceId, nodeId, 'reject', { reason, fromNodeId: null });
   }
 
+  /** 重启节点：RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话（引擎校验） */
+  async restartNode(userId: string, instanceId: string, nodeId: string) {
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    return workflowEngine.transition(instanceId, nodeId, 'restart', {});
+  }
+
   /** 归档/取消归档实例：仅分组展示差异，不影响流程运转与节点会话 */
   async setArchived(userId: string, id: string, archived: boolean) {
     const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();

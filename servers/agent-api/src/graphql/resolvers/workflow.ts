@@ -290,6 +290,18 @@ export const workflowResolvers = {
         ),
       );
     },
+    restartNode: async (
+      _parent: unknown,
+      args: { instanceId: string; nodeId: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstanceNode(
+          (await workflowInstanceService.restartNode(userId, args.instanceId, args.nodeId)) as unknown as Doc,
+        ),
+      );
+    },
     deleteWorkflowInstance: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.deleteInstance(userId, args.id));

@@ -50,6 +50,7 @@ class WorkflowOrchestrator {
       onNodeRework: (instance, node, payload) => this.reworkNodeSession(instance, node, payload),
       onNodeResume: (instance, node) => this.resumeNodeSession(instance, node),
       onNodeDone: (instance, node) => this.endNodeSession(instance, node),
+      onNodeRestart: (instance, node) => this.resumeNodeSession(instance, node),
     });
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
   }
@@ -152,6 +153,10 @@ class WorkflowOrchestrator {
 
   /** REJECT→RUNNING：关闭下游 REJECT 节点阻塞期间的空闲会话，再以全新会话复工（含最新上游产物与 Mode/模型配置） */
   async resumeNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
+    // HUMAN/FLAG 节点无会话，复工仅需引擎置 RUNNING，无需拉起会话
+    if (node.type !== 'AI') {
+      return;
+    }
     // 关闭下游 REJECT 节点原有的空闲会话，避免资源浪费
     if (node.sessionId) {
       await sessionService.close(node.sessionId.toString(), instance.userId.toString());

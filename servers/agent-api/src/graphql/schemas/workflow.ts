@@ -131,7 +131,8 @@ export const workflowTypeDefs = `#graphql
 
   type WorkflowInstance {
     id: ID!
-    configuredWorkflowId: ID!
+    # 统一实例化三来源（CONFIGURED/TEMPLATE/BLANK）中仅 CONFIGURED 来源保证存在，故可空
+    configuredWorkflowId: ID
     controllerId: ID!
     workspaceId: ID!
     name: String!
@@ -238,6 +239,8 @@ export const workflowTypeDefs = `#graphql
     updateWorkflowNode(instanceId: ID!, nodeId: ID!, input: WorkflowNodeUpdateInput!): WorkflowNode!
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+    # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+    restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
   }

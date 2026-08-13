@@ -34,3 +34,5 @@ jobs:
             ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/controller-api:${{ github.sha }}
             ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/controller-api:latest
           push: true
+          provenance: false
+          sbom: false
