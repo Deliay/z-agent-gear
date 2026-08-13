@@ -142,10 +142,13 @@ async resumeNodeSession(instance, node) {
 - 服务层新增 `restartNode(userId, instanceId, nodeId)`；GraphQL 新增 `restartNode(instanceId, nodeId)` mutation（契约 + schema + resolver）。
 - 前端 `WorkflowNodeTree` 为 AI 节点在 RUNNING/REWORK/FAILED 状态展示「重启」按钮（`RESTART_NODE` mutation）。
 
+**返工（确认弹框）**：点击「重启」先弹出确认框，明确「关闭并删除当前会话、重新拉起全新会话重试」的语义（删除会话不可撤销、节点产物与打回记录保留）；确认后才执行 `restartNode`。`WorkflowNodeTree` 新增 `restartTarget`/`restarting` 状态与 `RestartNodeDialog`；前端单测新增 4 例（点击先弹框不触发、确认触发、取消不触发、文案语义）；E2E-21 补充弹框与确认点击断言。
+
 **验证**：
 - 单测：engine.test.ts R1–R3（restart 状态转移 + 非法状态拒绝）、orchestrator.test.ts（restart 关闭旧会话拉起全新会话 / 人类节点不拉起）——525/525
+- 前端单测：WorkflowNodeTree.test.tsx 新增重启确认框 4 例——346/346
 - API：A33（重启 RUNNING→全新会话；重启 FAILED→清 failInfo 复工；A33b 非法状态拒绝）——300/300
-- E2E：E2E-21（执行中节点展示「重启」按钮，点击后会话切换并可继续完成）——21/21
+- E2E：E2E-21（执行中节点展示「重启」按钮，弹框确认后会话切换并可继续完成）——21/21
 
 ## 8. 相关文档
 

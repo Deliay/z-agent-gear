@@ -1762,13 +1762,19 @@ test.describe('Workflow E2E', () => {
     const restartButton = execCard.getByRole('button', { name: '重启' });
     await expect(restartButton).toBeVisible();
 
-    // 点击重启 → 旧会话关闭 + 全新会话拉起（acp:start 会话变化）
+    // 点击「重启」先弹出确认框，明确「删除旧会话并重新拉起全新会话」语义
+    await restartButton.click();
+    const confirmDialog = page.getByRole('dialog');
+    await expect(confirmDialog.getByText(/重启节点「AI执行」/)).toBeVisible();
+    await expect(confirmDialog.getByText(/删除当前会话并重新开始/)).toBeVisible();
+
+    // 点击确认 → 旧会话关闭 + 全新会话拉起（acp:start 会话变化）
     const restartStartPromise = waitFor(
       () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
       15000,
       'restarted exec acp:start',
     );
-    await restartButton.click();
+    await confirmDialog.getByRole('button', { name: '确认重启' }).click();
     const restarted = await restartStartPromise;
     expect(restarted.mcpEndpoint?.token).toBeTruthy();
 

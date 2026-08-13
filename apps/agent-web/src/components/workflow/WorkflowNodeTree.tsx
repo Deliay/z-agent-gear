@@ -350,6 +350,8 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
   }
 
   const [editNode, setEditNode] = useState<WorkflowNodeData | null>(null)
+  const [restartTarget, setRestartTarget] = useState<WorkflowNodeData | null>(null)
+  const [restarting, setRestarting] = useState(false)
   const [restartNode] = useMutation(RESTART_NODE)
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
     variables: { controllerId: instance.controllerId },
@@ -361,15 +363,24 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
 
   const refetch = [{ query: GET_WORKFLOW_INSTANCE, variables: { id: instance.id } }]
 
-  const handleRestart = async (node: WorkflowNodeData) => {
+  // 重启前弹框确认：明确告知会删除之前的会话并重新拉起全新会话
+  const handleRestart = (node: WorkflowNodeData) => {
+    setRestartTarget(node)
+  }
+
+  const confirmRestart = async (node: WorkflowNodeData) => {
+    setRestarting(true)
     try {
       await restartNode({
         variables: { instanceId: instance.id, nodeId: node.id },
         refetchQueries: refetch,
       })
       toast.success(`节点「${node.name}」已重启`)
+      setRestartTarget(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '重启失败，请重试')
+    } finally {
+      setRestarting(false)
     }
   }
 
@@ -407,6 +418,42 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
           availableServerTypes={availableServerTypes}
         />
       )}
+      <Dialog
+        open={restartTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !restarting) setRestartTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重启节点「{restartTarget?.name ?? ''}」</DialogTitle>
+            <DialogDescription>
+              重启将关闭并删除当前节点的会话，然后重新拉起一个全新会话重试。节点当前的产物与打回记录会保留。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-warning">
+              确认要删除当前会话并重新开始吗？该操作不可撤销。
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={restarting}
+              onClick={() => setRestartTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={restarting || !restartTarget}
+              onClick={() => restartTarget && confirmRestart(restartTarget)}
+            >
+              {restarting ? '重启中…' : '确认重启'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
