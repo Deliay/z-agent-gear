@@ -107,7 +107,8 @@ export interface BlackboardEntryData {
 
 export interface WorkflowInstanceSummaryData {
   id: string
-  configuredWorkflowId: string
+  // 统一实例化三来源中仅 CONFIGURED 来源保证存在，故可空
+  configuredWorkflowId: string | null
   controllerId: string
   workspaceId: string
   name: string
@@ -447,6 +448,15 @@ export const COMPLETE_HUMAN_NODE = gql`
 export const REJECT_NODE = gql`
   mutation RejectNode($instanceId: ID!, $nodeId: ID!, $reason: String!) {
     rejectNode(instanceId: $instanceId, nodeId: $nodeId, reason: $reason) {
+      id
+      status
+    }
+  }
+`
+
+export const RESTART_NODE = gql`
+  mutation RestartNode($instanceId: ID!, $nodeId: ID!) {
+    restartNode(instanceId: $instanceId, nodeId: $nodeId) {
       id
       status
     }

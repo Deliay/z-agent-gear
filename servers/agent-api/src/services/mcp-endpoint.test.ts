@@ -78,6 +78,7 @@ describe('McpEndpointService', () => {
             mcpServerIds: ['server-1', 'server-2'],
             tokenHash: expect.any(String),
             status: 'active',
+            workflowInstanceId: null,
             expiresAt: expect.any(Date),
           },
         },
@@ -124,6 +125,48 @@ describe('McpEndpointService', () => {
 
       const payload = jwt.decode(result.token) as Record<string, unknown>;
       expect(payload).not.toHaveProperty('workflow');
+    });
+
+    it('S3: 工作流节点会话 endpoint 不设 JWT exp（有效性跟随工作流实例，不受 TTL 限制）', async () => {
+      vi.mocked(McpServer.find).mockResolvedValue([{ _id: 'server-1', name: 'agent-workflow-tools' }] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const result = await mcpEndpointService.createEndpoint('session-1', 'user-1', ['server-1'], {
+        instanceId: 'inst-1',
+        nodeId: 'node-1',
+      });
+
+      const payload = jwt.decode(result.token) as { exp?: number; workflow?: { instanceId: string; nodeId: string } };
+      expect(payload.workflow).toEqual({ instanceId: 'inst-1', nodeId: 'node-1' });
+      expect(payload.exp).toBeUndefined();
+      // expiresAt 落 null（无 TTL）
+      expect(McpSessionEndpoint.findOneAndUpdate).toHaveBeenCalledWith(
+        { sessionId: 'session-1' },
+        {
+          $set: {
+            userId: 'user-1',
+            mcpServerIds: ['server-1'],
+            tokenHash: expect.any(String),
+            status: 'active',
+            workflowInstanceId: 'inst-1',
+            expiresAt: null,
+          },
+        },
+        { upsert: true },
+      );
+      // Redis 状态不设 EX（不随 TTL 过期）
+      expect(mockRedis.set).toHaveBeenCalledWith('mcp:endpoint:session-1', 'active');
+    });
+
+    it('S4: 普通会话 endpoint 仍带 JWT exp（有效性跟随会话，保留 TTL）', async () => {
+      vi.mocked(McpServer.find).mockResolvedValue([{ _id: 'server-1', name: 'github-mcp' }] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const result = await mcpEndpointService.createEndpoint('session-1', 'user-1', ['server-1']);
+
+      const payload = jwt.decode(result.token) as { exp?: number; workflow?: unknown };
+      expect(payload.workflow).toBeUndefined();
+      expect(payload.exp).toBeDefined();
     });
   });
 
@@ -233,6 +276,20 @@ describe('McpEndpointService', () => {
       const status = await mcpEndpointService.getStatus('session-1');
 
       expect(status).toBe('revoked');
+    });
+
+    it('should return active for workflow-scoped endpoint regardless of expiresAt (no TTL)', async () => {
+      vi.mocked(mockRedis.get).mockResolvedValue(null);
+      vi.mocked(McpSessionEndpoint.findOne).mockResolvedValue({
+        status: 'active',
+        workflowInstanceId: 'inst-1',
+        expiresAt: null,
+      } as never);
+
+      const status = await mcpEndpointService.getStatus('session-1');
+
+      expect(status).toBe('active');
+      expect(mockRedis.set).toHaveBeenCalledWith('mcp:endpoint:session-1', 'active');
     });
   });
 });

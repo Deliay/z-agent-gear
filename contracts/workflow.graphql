@@ -149,7 +149,8 @@ type BlackboardEntry {
 
 type WorkflowInstance {
   id: ID!
-  configuredWorkflowId: ID!
+  # 统一实例化三来源（CONFIGURED/TEMPLATE/BLANK）中仅 CONFIGURED 来源保证存在，故可空
+  configuredWorkflowId: ID
   controllerId: ID!
   workspaceId: ID!
   name: String!
@@ -275,6 +276,8 @@ type Mutation {
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
+  # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+  restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）

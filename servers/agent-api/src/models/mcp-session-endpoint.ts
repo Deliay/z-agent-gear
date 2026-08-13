@@ -7,7 +7,9 @@ const mcpSessionEndpointSchema = new mongoose.Schema(
     mcpServerIds: [{ type: String }],
     tokenHash: { type: String, required: true },
     status: { type: String, enum: ['active', 'revoked'], default: 'active' },
-    expiresAt: { type: Date, required: true },
+    // 工作流节点会话 endpoint 标记：有效性跟随工作流实例，而非 TTL/会话关闭
+    workflowInstanceId: { type: String, default: null },
+    expiresAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

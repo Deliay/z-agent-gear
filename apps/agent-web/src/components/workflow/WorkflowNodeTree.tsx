@@ -19,6 +19,7 @@ import {
   GET_WORKFLOW_INSTANCE,
   COMPLETE_HUMAN_NODE,
   REJECT_NODE,
+  RESTART_NODE,
   type WorkflowInstanceData,
   type WorkflowNodeData,
   type BlackboardEntryData,
@@ -26,7 +27,7 @@ import {
   type WorkflowNodeType,
 } from '@/graphql/workflow'
 import EditInstanceNodeDialog from './EditInstanceNodeDialog'
-import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -219,12 +220,14 @@ function NodeCard({
   blackboard,
   onOpenSession,
   onEdit,
+  onRestart,
 }: {
   instanceId: string
   node: WorkflowNodeData
   blackboard: BlackboardEntryData[]
   onOpenSession: (sessionId: string) => void
   onEdit: (node: WorkflowNodeData) => void
+  onRestart: (node: WorkflowNodeData) => void
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -267,6 +270,13 @@ function NodeCard({
             编辑
           </Button>
         )}
+        {node.type === 'AI' &&
+          (node.status === 'RUNNING' || node.status === 'REWORK' || node.status === 'FAILED') && (
+            <Button size="xs" variant="outline" onClick={() => onRestart(node)}>
+              <RefreshCw className="size-3" />
+              重启
+            </Button>
+          )}
         {node.sessionId && (
           <Button
             size="xs"
@@ -340,6 +350,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
   }
 
   const [editNode, setEditNode] = useState<WorkflowNodeData | null>(null)
+  const [restartNode] = useMutation(RESTART_NODE)
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
     variables: { controllerId: instance.controllerId },
     skip: !instance.controllerId,
@@ -347,6 +358,20 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
   const availableServerTypes = (capabilitiesData?.acpCapabilities ?? [])
     .filter((c) => c.available && c.type)
     .map((c) => c.type)
+
+  const refetch = [{ query: GET_WORKFLOW_INSTANCE, variables: { id: instance.id } }]
+
+  const handleRestart = async (node: WorkflowNodeData) => {
+    try {
+      await restartNode({
+        variables: { instanceId: instance.id, nodeId: node.id },
+        refetchQueries: refetch,
+      })
+      toast.success(`节点「${node.name}」已重启`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '重启失败，请重试')
+    }
+  }
 
   return (
     <div className="min-w-0 space-y-6">
@@ -364,6 +389,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                   blackboard={instance.blackboard}
                   onOpenSession={onOpenSession}
                   onEdit={setEditNode}
+                  onRestart={handleRestart}
                 />
               ))}
           </div>

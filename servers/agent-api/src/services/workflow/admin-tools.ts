@@ -298,7 +298,11 @@ export async function callAdminTool(
 
     case 'deleteWorkflowTemplate': {
       const id = requireString(args, 'id');
-      await workflowTemplateService.delete(id, userId, { requireAiOwned: true });
+      try {
+        await workflowTemplateService.delete(id, userId, { requireAiOwned: true });
+      } catch (err) {
+        throw new AdminToolError('FORBIDDEN', err instanceof Error ? err.message : String(err));
+      }
       return { deleted: true, id };
     }
 
@@ -346,7 +350,11 @@ export async function callAdminTool(
 
     case 'deleteConfiguredWorkflow': {
       const id = requireString(args, 'id');
-      await configuredWorkflowService.delete(userId, id, { requireAiOwned: true });
+      try {
+        await configuredWorkflowService.delete(userId, id, { requireAiOwned: true });
+      } catch (err) {
+        throw new AdminToolError('FORBIDDEN', err instanceof Error ? err.message : String(err));
+      }
       return { deleted: true, id };
     }
 

@@ -50,7 +50,8 @@ export type WorkflowEvent =
   | 'completeRework'
   | 'resume'
   | 'fail'
-  | 'resumeFailed';
+  | 'resumeFailed'
+  | 'restart';
 
 export interface TransitionPayload {
   /** reject：打回原因 */
@@ -77,6 +78,7 @@ export interface EngineHooks {
   onNodeRework?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
   onNodeResume?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeDone?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
+  onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
 }
 
 /** 显式状态转移表（event → 允许的源状态 → 目标状态） */
@@ -90,6 +92,8 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
   resume: { from: ['REJECT'], to: 'RUNNING' },
   fail: { from: ['RUNNING'], to: 'FAILED' },
   resumeFailed: { from: ['FAILED'], to: 'RUNNING' },
+  // 重启节点：会话失败/卡住时人工触发，关闭旧会话并拉起全新会话重试
+  restart: { from: ['RUNNING', 'REWORK', 'FAILED'], to: 'RUNNING' },
 };
 
 const EVENT_LABEL: Record<WorkflowEvent, string> = {
@@ -101,6 +105,7 @@ const EVENT_LABEL: Record<WorkflowEvent, string> = {
   resume: '复工',
   fail: '标记失败',
   resumeFailed: '恢复运行',
+  restart: '重启节点',
 };
 
 class WorkflowEngine {
@@ -243,6 +248,16 @@ class WorkflowEngine {
         node.status = 'RUNNING';
         this.markLastNode(instance, node);
         node.failInfo = null;
+        break;
+      }
+      case 'restart': {
+        // 会话失败/卡住时人工重启：清失败/打回标记与兜底提醒，关闭旧会话拉起全新会话
+        node.status = 'RUNNING';
+        node.failInfo = null;
+        node.rejectInfo = null;
+        node.fallbackSent = false;
+        this.markLastNode(instance, node);
+        await this.hooks.onNodeRestart?.(instance, node);
         break;
       }
     }

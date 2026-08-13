@@ -279,6 +279,7 @@ export class SessionService {
   }
 
   async close(id: string, userId: string): Promise<boolean> {
+    const session = await Session.findOne({ _id: id, userId }).lean();
     const result = await Session.findOneAndUpdate(
       { _id: id, userId },
       { status: 'ended', endedAt: new Date() },
@@ -286,8 +287,11 @@ export class SessionService {
     if (result) {
       const redis = getRedisClient();
       await redis.del(`session:${id}:status`);
-      // Revoke MCP endpoint: session close invalidates token and access address immediately
-      await mcpEndpointService.revokeEndpoint(id);
+      // 工作流节点会话：MCP endpoint 有效性跟随工作流实例（不因会话关闭而失效）；
+      // 普通会话：关闭即撤销 endpoint（token 立即失效）
+      if (!session?.workflowInstanceId) {
+        await mcpEndpointService.revokeEndpoint(id);
+      }
       // Notify controller-api to stop ACP session
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
