@@ -1,5 +1,5 @@
 ---
-description: 会话生命周期与 Worktree 管理增强技术提案 - ACP 进程彻底销毁、进程注册表与对账、侧边栏 Worktree 分组与强制删除
+description: 会话生命周期与 Worktree 管理增强技术提案 - ACP 进程彻底销毁、进程注册表与对账、侧边栏 Worktree 分组与强制删除、多工作流并发 MCP 丢失修复
 type: Permanent
 ---
 
@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 会话生命周期与 Worktree 管理增强
 **关联 PRD**: docs/product/draft/20260817-session-lifecycle-and-worktree-management.md
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1（返工：补充多工作流并发 MCP 丢失修复方案）
 **创建日期**: 2026-08-17
 **作者**: AI
 **feat-branch**: `feat/session-lifecycle-worktree`
@@ -27,19 +27,22 @@ type: Permanent
 
 同时，Worktree 目前只是 Session 的冗余字段（`worktreePath`/`worktreeBranch`），无实体、无列表 API，侧边栏将 Worktree 会话平铺混在工作区会话列表中，缺少「workspace → worktree → session」层级及 Worktree 维度的添加/删除能力。
 
+此外，调研确认一个**多工作流并发缺陷**：当多个工作流实例同时运行时，只有一个节点会话能正常使用 workflow MCP 工具，其余会话拿不到 MCP 工具。根因是 controller-api `startSession`/`resumeSession` 使用 `controllerSocket.once('acp:start:result')` 等待结果（`servers/controller-api/src/services/acp-session-manager.ts:61-85, 478-502`）：同一 controller 上多个并发启动共享同一 Socket.IO 连接，第一个到达的 `acp:start:result` 会触发**所有**挂起的 `once` 监听器；requestId 不匹配的监听器在 `clearTimeout` 后直接 return，但 `once` 语义已将其注销——等它们自己的结果到达时已无监听器，且 30s 超时兜底也被提前清除，Promise 永不 resolve。后果：输家会话永远停留在 `connecting`、不进入 `this.sessions`、首条 prompt 滞留 `pendingInputs`，表现为「只有第一个会话真正可用」。另有两个加剧因素：平台 MCP server 文档（`agent-workflow-tools`/`agent-workflow-admin-tools`）并发首建时触发 `{userId, name}` 唯一索引 `E11000` 使节点启动直接抛错（`orchestrator.ts:230-245`、`mcp-server.ts:23`）；MCP endpoint 创建失败被静默吞掉，会话以 `mcpServers: []` 启动（`session.ts:129-143`），同样表现为无 MCP 工具且无任何报错。
+
 ### 1.2 目标
 
 - 任意删除路径（删除单会话、删除工作流实例、删除 Worktree）下，ACP 进程及其子进程被**彻底销毁**，且链路有送达保证与对账兜底。
 - 新增 Worktree 列表能力与侧边栏「工作区 → Worktree → 对话」层级展示（仅 Git 仓库）。
 - 新增 Worktree 维度操作：在该 Worktree 下新建会话 / 拉起工作流实例；Worktree 强制删除（递归关闭全部会话 + 彻底删除目录）。
+- 修复多工作流并发场景下节点会话丢失 workflow MCP 工具的缺陷：同一 controller 上 N 个并发启动的会话全部正常建立并获得 MCP 工具。
 
 ### 1.3 范围
 
 **做**：
 
 - agent-controller：进程注册表（PID 持久化）、进程组 kill、stop 超时、daemon 退出清理、重连对账、`git:worktree:list`、强制删除 worktree 事件。
-- controller-api：`acp:stop` 送达保证（ack + 离线补发）。
-- agent-api：删除顺序修正、worktree 列表查询、Worktree 强制删除 mutation、会话按路径批量终止。
+- controller-api：`acp:stop` 送达保证（ack + 离线补发）；`acp:start`/`acp:resume` 结果按 requestId 路由（修复并发 `once` 竞态）。
+- agent-api：删除顺序修正、worktree 列表查询、Worktree 强制删除 mutation、会话按路径批量终止；平台 MCP server upsert 竞态与 endpoint 创建失败处理加固。
 - agent-web：侧边栏 Worktree 层级、Worktree 节点添加/删除入口、删除确认弹窗、新建会话预选 worktree 目录。
 - contracts：GraphQL 与 WebSocket 契约更新。
 
@@ -322,6 +325,15 @@ sequenceDiagram
 - **描述**: 「添加」按钮弹出菜单：「新建会话」→ 打开 `NewSessionDialog` 并预选 controller/workspace/`existingWorktreePath`（隐藏 worktree 创建 Section）；「拉起工作流实例」→ 打开 `InstantiateWorkflowDialog`（复用 `WorkflowSidebarGroup` 入口逻辑）。「删除」→ `DeleteWorktreeConfirmDialog`（参考 `ResumeConfirmDialog` 与 `ui/Dialog`），文案含「彻底删除」「不可恢复」及将关闭的对话数量（由 `workspaceWorktrees` 的 `sessionCount` 提供），确认后调用 `deleteWorktree` mutation。
 - **风险点**: 删除期间用户可能正在查看其中某个会话页面，删除成功后前端需跳转回首页并刷新会话列表。
 
+#### 实现点 6: 多工作流并发 MCP 丢失修复
+
+- **描述**: 修复「多个工作流同时运行时只有一个会话拿到 workflow MCP」的并发缺陷，分三层：
+  1. **根因修复（controller-api）**：`acp-session-manager.ts` 将 `acp:start`/`acp:resume` 的 per-call `controllerSocket.once(...)` 改为「每 socket 一个常驻 dispatcher + `Map<requestId, PendingRequest>` 路由」。`startSession`/`resumeSession` 不再各自注册 `once`，而是向 Map 登记 `{resolve, timeout, sessionId, statusAtStart}`；常驻 handler 收到 `acp:start:result`/`acp:resume:result` 后按 `payload.requestId` 精确路由到对应 PendingRequest，命中后才 `clearTimeout` 并 resolve，未命中（未知 requestId）仅记录日志。socket 断开时遍历该 socket 全部 PendingRequest 统一失败处理。同一改造同步审计 `acp:stop` 等其它 `once` 等待点，确保无同类竞态。
+  2. **并发首建加固（agent-api）**：`ensureWorkflowToolsServer`/`ensureAdminToolsServer` 的 `findOneAndUpdate(upsert)` 并发触发 `{userId, name}` 唯一索引 `E11000` 时，捕获后重新 `findOne` 读取既有文档返回（或改用 `$setOnInsert` 语义），保证并发首次启动工作流不会因 upsert 竞态抛错。
+  3. **失败显性化（agent-api）**：`session.ts` 中 MCP endpoint 创建失败不再静默吞掉——当会话显式携带 `mcpServerIds`（工作流节点会话必定携带）时直接抛错使创建失败，避免会话以 `mcpServers: []`「裸奔」启动；无 `mcpServerIds` 的普通会话维持现状。
+- **技术细节**: 现有 `socketio.ts:216-235` 的 socket 级 no-op handler 注释已声明「由 acpSessionManager 通过 promise 处理」，改造后该注释路径与 dispatcher 对应；`cleanupFailedSession` 逻辑复用，由 dispatcher 在未命中/超时/断连路径统一调用。
+- **风险点**: dispatcher 需处理结果先于登记到达的乱序（理论上同 socket 内 emit/回包有序，风险低，防御性丢弃并记日志即可）；需为「同一 socket 并发 N 个 startSession」补充单元测试（现有测试只覆盖消息顺序，未覆盖并发启动，`common-rules.md:97` 已指出即时回复的 fake controller 会掩盖此类竞态，测试需注入延迟与乱序）。
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -333,6 +345,7 @@ sequenceDiagram
 | stop 不送达的处理 | agent-api 直接标记失败 | 离线挂起 + 重连对账补发 | B | 满足「彻底销毁」语义，且不阻塞用户删除操作 |
 | 强制删除目录能力 | 复用 `git:worktree:remove` | remove(force) + 独立 `fs:remove-dir` 兜底 | B | force remove 仍可能因锁文件等残留目录，需要独立递归删除兜底；`fs:remove-dir` 必须限制路径白名单 |
 | Windows 进程树 kill | 保持 `shell: true` + kill | 直接 spawn + `taskkill /T /F` | B | `shell: true` 下 kill 只杀 cmd 包装器，agent 本体残留 |
+| start/resume 结果等待 | per-call `socket.once('acp:start:result')` | 常驻 dispatcher + `Map<requestId, …>` 路由 | B | `once` 在并发下同 socket 相互消费监听器，输家 Promise 永不 resolve；按 requestId 精确路由是唯一正确语义 |
 
 ### 6.2 依赖与约束
 
@@ -358,13 +371,14 @@ packages/agent-controller/src/
 └── index.ts                    # 改：退出信号先清理注册表全部进程
 
 servers/controller-api/src/services/
-├── acp-session-manager.ts      # 改：stopSession ack 等待/重发/离线挂起
+├── acp-session-manager.ts      # 改：stopSession ack 等待/重发/离线挂起；start/resume 结果改常驻 dispatcher + requestId 路由（修并发竞态）
 └── session-command.ts          # 改：acp:stopped 回传写 Redis、pending 补发
 
 servers/agent-api/src/
 ├── models/controller-workspace.ts   # 改：新增 isGitRepo
-├── services/session.ts              # 改：delete/close 顺序修正、ack 等待、existingWorktreePath
+├── services/session.ts              # 改：delete/close 顺序修正、ack 等待、existingWorktreePath；MCP endpoint 创建失败对显式 mcpServerIds 会话 fail-fast
 ├── services/worktree.ts             # 新：list 聚合、deleteWorktree 编排
+├── services/workflow/orchestrator.ts # 改：平台 MCP server upsert 竞态（E11000 捕获重读）
 ├── services/workflow/instance.ts    # 改：删除失败项汇报（沿用 sessionService.delete）
 └── graphql/{schemas,resolvers}/     # 改：workspaceWorktrees/deleteWorktree/isGitRepo
 
@@ -393,7 +407,7 @@ contracts/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | ProcessRegistry 注册/注销/原子写、PID 校验；spawner 进程组 kill 参数；worktree 归组并集逻辑；路径白名单校验 |
+| 单元测试 | Vitest | ProcessRegistry 注册/注销/原子写、PID 校验；spawner 进程组 kill 参数；worktree 归组并集逻辑；路径白名单校验；start/resume dispatcher 并发 N 个请求按 requestId 正确路由（注入延迟与乱序结果）、socket 断连统一失败；平台 MCP server 并发 upsert 不抛 E11000 |
 | API 测试 | tests/api | 上述 GraphQL 端点的正常/异常路径（controller 离线降级、部分会话清理失败、worktree remove 失败走 fs:remove-dir） |
 | E2E 测试 | tests/e2e (Playwright) | 侧边栏 Git 仓库工作区展示 worktree 层级、非 Git 不展示；worktree 展开显示会话；添加菜单两条路径；删除确认弹窗文案与确认后会话消失；删除会话后进程不复存在（通过测试控制器桩验证） |
 
@@ -410,6 +424,7 @@ TDD：按红-绿-重构循环，先写 API/单元测试再实现。
 - [ ] 删除单会话/工作流实例/Worktree 后宿主机无残留 ACP 进程（含子进程）
 - [ ] controller 重启后对账清理生效（孤儿进程被收割）
 - [ ] controller 离线期间删除会话，重连后补做进程清理
+- [ ] 同一 controller 并发启动 N 个工作流实例，全部节点会话正常建立且均可用 workflow MCP 工具（无 stuck `connecting`）
 
 ## 10. 相关文档
 
