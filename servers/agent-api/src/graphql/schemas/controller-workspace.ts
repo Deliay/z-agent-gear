@@ -26,10 +26,22 @@ export const controllerWorkspaceTypeDefs = `#graphql
   }
 
   type WorkspaceWorktree {
-    worktreePath: String!
-    branch: String!
+    path: String!
+    branch: String
+    sessions: [Session!]!
     sessionCount: Int!
-    sessionIds: [String!]!
+  }
+
+  type WorktreeDeleteFailure {
+    sessionId: ID!
+    error: String!
+  }
+
+  type DeleteWorktreeResult {
+    success: Boolean!
+    closedSessionIds: [ID!]!
+    failures: [WorktreeDeleteFailure!]!
+    error: String
   }
 
   input CreateWorkspaceInput {
@@ -54,6 +66,6 @@ export const controllerWorkspaceTypeDefs = `#graphql
     initGitRepo(controllerId: ID!, workspaceId: ID!): Boolean!
     setWorkspaceDefaultBranch(id: ID!, defaultBranch: String!): ControllerWorkspace!
     createFolder(controllerId: ID!, parentPath: String!, folderName: String!): FolderEntry!
-    deleteWorktree(controllerId: ID!, workspaceId: ID!, worktreePath: String!): Boolean!
+    deleteWorktree(controllerId: ID!, workspaceId: ID!, worktreePath: String!): DeleteWorktreeResult!
   }
 `;

@@ -40,7 +40,7 @@ interface GetMcpServersData {
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[]) => void;
+  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void;
   existingWorktreePath?: string;
   existingControllerId?: string;
   existingWorkspaceId?: string;
@@ -143,6 +143,7 @@ export default function NewSessionDialog({
         enableWorktree,
         enableWorktree ? branchSuffix : undefined,
         selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+        isPreselected ? existingWorktreePath : undefined,
       );
       onClose();
     }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@apollo/client/react'
 import { WORKSPACE_WORKTREES } from '@/graphql/queries'
-import type { GetWorkspaceWorktreesQuery, WorkspaceWorktreeData } from '@/graphql/types'
+import type { GetWorkspaceWorktreesQuery, WorkspaceWorktreeData, ControllerData } from '@/graphql/types'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -25,12 +25,16 @@ interface WorktreeSidebarGroupProps {
   workspaceId: string
   controllerId: string
   workspaceName: string
+  controllers: ControllerData[]
+  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void
 }
 
 export default function WorktreeSidebarGroup({
   workspaceId,
   controllerId,
   workspaceName,
+  controllers,
+  onCreate,
 }: WorktreeSidebarGroupProps) {
   const [expandedWorktrees, setExpandedWorktrees] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceWorktreeData | null>(null)
@@ -167,12 +171,16 @@ export default function WorktreeSidebarGroup({
 
       {showNewSession && (
         <NewSessionDialog
-          controllers={[]}
+          controllers={controllers}
           onClose={() => {
             setShowNewSession(false)
             setNewSessionWorktreePath(undefined)
           }}
-          onCreate={() => {}}
+          onCreate={(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath) => {
+            onCreate(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath ?? newSessionWorktreePath)
+            setShowNewSession(false)
+            setNewSessionWorktreePath(undefined)
+          }}
           existingWorktreePath={newSessionWorktreePath}
           existingControllerId={controllerId}
           existingWorkspaceId={workspaceId}

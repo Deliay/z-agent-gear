@@ -89,6 +89,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     enableWorktree?: boolean,
     worktreeBranchSuffix?: string,
     mcpServerIds?: string[],
+    existingWorktreePath?: string,
   ) => {
     try {
       const { data } = await createSession({
@@ -97,9 +98,10 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             controllerId,
             acpServerType,
             workspaceId,
-            enableWorktree: enableWorktree || false,
+            enableWorktree: existingWorktreePath ? false : (enableWorktree || false),
             worktreeBranchSuffix: worktreeBranchSuffix || null,
             mcpServerIds: mcpServerIds || null,
+            existingWorktreePath: existingWorktreePath || null,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],
@@ -265,6 +267,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                     workspaceId={workspace.id}
                                     controllerId={controller.id}
                                     workspaceName={getWorkspaceName(workspacePath)}
+                                    controllers={controllers}
+                                    onCreate={handleCreateSession}
                                   />
                                 )}
                                 {wsSessions
