@@ -268,6 +268,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                     controllerId={controller.id}
                                     workspaceName={getWorkspaceName(workspacePath)}
                                     controllers={controllers}
+                                    fallbackSessions={wsSessions.filter((session) => session.worktreePath)}
                                     onCreate={handleCreateSession}
                                   />
                                 )}

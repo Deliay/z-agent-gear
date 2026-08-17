@@ -261,6 +261,17 @@ export default function NewSessionDialog({
             </div>
           )}
 
+          {isPreselected && existingWorktreePath && (
+            <div className="mb-6">
+              <label className="mb-2 block text-sm font-medium text-card-foreground">
+                Worktree 路径
+              </label>
+              <p className="rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground break-all">
+                {existingWorktreePath}
+              </p>
+            </div>
+          )}
+
           {isGitRepo && !isPreselected && (
             <div className="mb-6 rounded-md border p-3">
               <div className="mb-2 block text-sm font-medium text-card-foreground">
