@@ -1,3 +1,5 @@
+import path from 'path';
+import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -71,11 +73,12 @@ class WorktreeService {
       }
     }
 
-    // Find sessions with worktreePath in this workspace's controller
+    // Find non-ended sessions with worktreePath in this workspace's controller
     const sessions = await Session.find({
       controllerId,
       userId,
       worktreePath: { $ne: null },
+      status: { $ne: 'ended' },
     }).lean();
 
     // Merge: group by worktreePath
@@ -90,10 +93,18 @@ class WorktreeService {
       });
     }
 
+    // Only group sessions whose worktree belongs to this workspace: either a
+    // controller-reported git worktree of this repo, or a path under the
+    // workspace's worktreeDir scope (<worktreeDir>/<workspace.name>/).
+    const worktreeDir = (controller as any)?.worktreeDir || '~/.zag/worktrees';
+    const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+    const isWorkspaceWorktreePath = (wtPath: string) =>
+      worktreeMap.has(wtPath) || path.normalize(wtPath).startsWith(scopePrefix);
+
     for (const session of sessions) {
       const wtPath = (session as any).worktreePath as string | undefined;
-      if (!wtPath) continue;
-      const mappedSession = { ...session, id: (session._id as any).toString() };
+      if (!wtPath || !isWorkspaceWorktreePath(wtPath)) continue;
+      const mappedSession = sessionService.mapSession(session as unknown as Record<string, unknown>);
       const existing = worktreeMap.get(wtPath);
       if (existing) {
         existing.sessionCount++;
@@ -128,6 +139,16 @@ class WorktreeService {
     }).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
+    }
+
+    // Path must be a worktree known to this workspace (git worktrees reported
+    // by the controller or session-grouped paths under its worktreeDir scope)
+    // before we allow any git/fs removal against it.
+    const knownWorktrees = await this.list(controllerId, workspaceId, userId);
+    if (!knownWorktrees.some((wt) => wt.path === worktreePath)) {
+      throw new GraphQLError('worktreePath is not managed by this workspace', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
 
     const closedSessionIds: string[] = [];
@@ -197,13 +218,16 @@ class WorktreeService {
         }
         await new Promise(r => setTimeout(r, 1000));
       }
-      if (!fsRemoved) {
+      if (fsRemoved) {
+        // Directory is gone despite the git error — clear it.
+        removeError = null;
+      } else {
         removeError = removeError || 'Failed to remove worktree directory';
       }
     }
 
     return {
-      success: failures.length === 0,
+      success: failures.length === 0 && removeError === null,
       closedSessionIds,
       failures,
       error: removeError,

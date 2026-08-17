@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import path from 'path';
+import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -59,7 +60,9 @@ export class SessionService {
     }
 
     if (input.existingWorktreePath && input.enableWorktree) {
-      throw new Error('existingWorktreePath and enableWorktree are mutually exclusive');
+      throw new GraphQLError('existingWorktreePath and enableWorktree are mutually exclusive', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
 
     let cwd = workspace.path;
@@ -68,12 +71,19 @@ export class SessionService {
     const redis = getRedisClient();
 
     if (input.existingWorktreePath) {
-      // Reuse an existing worktree (no git:worktree:add needed)
+      // Reuse an existing worktree (no git:worktree:add needed).
+      // The path must belong to this workspace's worktree scope, and the
+      // session must NOT record worktreeBranch — that field marks ownership
+      // and would make delete() run git cleanup on a shared worktree.
+      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+      if (!path.normalize(input.existingWorktreePath).startsWith(scopePrefix)) {
+        throw new GraphQLError('existingWorktreePath does not belong to this workspace', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
       cwd = input.existingWorktreePath;
       worktreePath = input.existingWorktreePath;
-      worktreeBranch = (workspace.name && input.worktreeBranchSuffix)
-        ? `${workspace.name}/${input.worktreeBranchSuffix}`
-        : undefined;
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
@@ -329,9 +339,14 @@ export class SessionService {
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) return false;
 
-    // Stop ACP session first, then do worktree cleanup
-    const needsStop = session.status === 'running' || session.status === 'idling';
+    // Stop ACP session first, then do worktree cleanup.
+    // creating/connecting sessions also get acp:stop: the controller may be
+    // about to spawn the ACP process, and skipping stop would orphan it.
+    const needsStop = ['creating', 'connecting', 'running', 'idling'].includes(session.status);
     if (needsStop) {
+      // Drop any stale ack (e.g. written by a user_close acp:stopped) so
+      // waitForStopAck only consumes an ack produced after this stop request.
+      await redis.del(`acp:stop:ack:${id}`);
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
         sessionId: id,
@@ -623,7 +638,7 @@ export class SessionService {
     return this.getAcpCapabilities(controllerId, userId);
   }
 
-  private mapSession(session: Record<string, unknown>): Record<string, unknown> {
+  mapSession(session: Record<string, unknown>): Record<string, unknown> {
     return {
       id: (session._id as mongoose.Types.ObjectId).toString(),
       userId: (session.userId as mongoose.Types.ObjectId).toString(),
