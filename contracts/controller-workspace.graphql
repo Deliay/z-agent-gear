@@ -6,6 +6,7 @@ type ControllerWorkspace {
   path: String!
   isEnabled: Boolean!
   defaultBranch: String
+  isGitRepo: Boolean
   createdAt: String!
   updatedAt: String!
 }

@@ -32,6 +32,7 @@
 | Controller → Server | `unregister` | 控制器主动注销 |
 | Server → Controller | `unregistered` | 注销成功确认 |
 | Server → Controller | `shutdown` | 服务器强制断开连接 |
+| Server → Controller | `acp:reconcile` | 重连后下发权威存活 sessionId 列表 |
 
 ### 2.2 `register`（Controller → Server）
 
@@ -175,3 +176,25 @@ Controller                 controller-api
 - 生成新 Key 时自动替换旧的未绑定 Key
 - Key 绑定到控制器后永久生效（无过期/撤销）
 - 解绑或注销时，Key 和 Controller 记录均被永久删除
+
+### 3.6 重连对账
+
+Controller 重连注册后，Server 下发 `acp:reconcile` 事件，Controller 据此清理孤儿进程和待清理会话。
+
+#### `acp:reconcile`（Server → Controller）
+
+Controller 重连注册成功后，Server 立即下发此事件。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `activeSessionIds` | `string[]` | 是 | 当前该 Controller 下所有活跃 Session ID 列表（权威来源） |
+| `pendingKillSessionIds` | `string[]` | 是 | 需要强制终止的 Session ID 列表（待清理） |
+
+**客户端行为：**
+
+1. 遍历本地进程注册表（`~/.zag/processes.json`）中的每个进程
+2. 对 `pendingKillSessionIds` 中的每个 sessionId：按注册表 PID 强制 kill 进程组，然后注销
+3. 对注册表中存在但不在 `activeSessionIds` 中的条目（孤儿进程）：kill 进程组并注销
+4. 对注册表中存在且在 `activeSessionIds` 中的条目：保留（正常运行）
