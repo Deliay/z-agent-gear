@@ -375,7 +375,7 @@ export class ACPSessionManager {
   }
 
   async handleControllerStopped(sessionId: string, reason: string, exitCode?: number): Promise<void> {
-    // Clean up session mapping
+    // Clean up session mapping (idempotent: skip if already cleaned by stopSessionWithAck)
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
@@ -389,7 +389,9 @@ export class ACPSessionManager {
       }
     }
 
-    // Update session status
+    // Always update DB status to ended (idempotent).
+    // When called after stopSessionWithAck, the session mapping is already
+    // cleaned up but the DB update is safe to repeat.
     await Session.findByIdAndUpdate(sessionId, {
       status: 'ended',
       endedAt: new Date(),

@@ -1091,7 +1091,9 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 
 ### 2.18 `fs:remove-dir`（Server → Controller）
 
-请求递归删除目录（仅限 worktreeDir 下或已注册 worktree 路径）。
+请求递归删除目录。
+
+**安全模型**：Controller 端使用黑名单阻止系统关键路径（`/etc`、`/usr`、`/bin`、`/sbin`、`/var`、`/proc`、`/sys`、用户主目录）。Agent-api 端（`worktreeService.deleteWorktree`）仅发送已知工作区下的 worktree 路径，通过上游控制保证路径合法性。
 
 **Payload:**
 

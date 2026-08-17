@@ -32,7 +32,7 @@ class WorktreeService {
       type: 'git:worktree:list',
       requestId,
       controllerId,
-      repoPath: workspace.path,
+      cwd: workspace.path,
     }));
 
     const gitWorktrees: { path: string; branch: string }[] = [];

@@ -2,6 +2,11 @@ import { mkdirSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 
+// Security: block system-critical paths and user home directory.
+// The controller cannot enforce workspace-scoped whitelists because it
+// does not know which workspaces are registered in agent-api.
+// The agent-api side (worktreeService.deleteWorktree) controls which
+// paths are allowed by only sending paths under known workspace dirs.
 const BLOCKED_PATHS = ['/etc', '/usr', '/bin', '/sbin', '/var', '/proc', '/sys', homedir()];
 
 function isPathSafe(targetPath: string): boolean {
