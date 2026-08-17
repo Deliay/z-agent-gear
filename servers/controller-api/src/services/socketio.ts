@@ -438,6 +438,16 @@ export function createSocketIOServer(io: SocketIOServer): void {
       await worktreeService.handleCommitResult(payload.requestId, payload);
     });
 
+    socket.on('git:worktree:list:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleListResult(payload.requestId, payload);
+    });
+
+    socket.on('fs:remove-dir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleRemoveDirResult(payload.requestId, payload);
+    });
+
     socket.on('error', (err) => {
       console.log(`error on connection ${socket.data.keyId} [${socket.id}]: ${err}`);
     })

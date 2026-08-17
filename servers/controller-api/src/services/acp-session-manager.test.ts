@@ -31,19 +31,33 @@ const mockRedis = {
   publish: vi.fn(),
   set: vi.fn(),
   get: vi.fn(),
+  lpush: vi.fn(),
+  expire: vi.fn(),
 };
 
 function createMockSocket() {
-  const handlers: Record<string, (...args: unknown[]) => void> = {};
+  const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
   return {
     id: 'socket-123',
     emit: vi.fn(),
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      if (!handlers[event]) handlers[event] = [];
+      handlers[event].push(handler);
+    }),
     once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      handlers[event] = handler;
+      if (!handlers[event]) handlers[event] = [];
+      handlers[event].push(handler);
+    }),
+    off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      if (handlers[event]) {
+        handlers[event] = handlers[event].filter((h) => h !== handler);
+      }
     }),
     _handlers: handlers,
     _trigger(event: string, ...args: unknown[]) {
-      handlers[event]?.(...args);
+      for (const handler of handlers[event] ?? []) {
+        handler(...args);
+      }
     },
   };
 }
@@ -535,7 +549,7 @@ describe('ACPSessionManager', () => {
   });
 
   describe('stopSession', () => {
-    it('should send acp:stop, clean up mapping, and update status', async () => {
+    it('should send acp:stop with ackRequired, clean up mapping, and update status', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
@@ -554,11 +568,17 @@ describe('ACPSessionManager', () => {
       socket.emit.mockClear();
       mockRedis.publish.mockClear();
 
-      await manager.stopSession('sess-1', 'user_close');
+      // Simulate ack response to avoid timeout
+      const stopPromise = manager.stopSession('sess-1', 'user_close');
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+      });
+      // Trigger the ack
+      socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_close' });
+      await stopPromise;
 
-      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1' });
       expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
-    });
+    }, 15000);
 
     it('should handle stop for nonexistent session', async () => {
       await expect(manager.stopSession('nonexistent', 'user_close')).resolves.toBeUndefined();

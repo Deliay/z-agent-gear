@@ -106,7 +106,12 @@ export class SessionCommandService {
           } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
             await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string);
           } else if (command.type === 'git:worktree:remove' && command.requestId && command.controllerId && command.repoPath && command.worktreePath) {
-            await worktreeService.handleRemove(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string);
+            const force = (command as Record<string, unknown>).force === true;
+            await worktreeService.handleRemove(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, force);
+          } else if (command.type === 'git:worktree:list' && command.requestId && command.controllerId && command.cwd) {
+            await worktreeService.handleList(command.requestId, command.controllerId, command.cwd as string);
+          } else if (command.type === 'fs:remove-dir' && command.requestId && command.controllerId && command.path) {
+            await worktreeService.handleRemoveDir(command.requestId, command.controllerId, command.path as string);
           } else if (command.type === 'git:status' && command.requestId && command.controllerId && command.path) {
             await worktreeService.handleStatus(command.requestId, command.controllerId, command.path as string);
           } else if (command.type === 'git:commit' && command.requestId && command.controllerId && command.path && command.message) {
