@@ -8,6 +8,8 @@ import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
+const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
+
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
@@ -37,6 +39,7 @@ export class SessionService {
     workspaceId: string;
     enableWorktree?: boolean;
     worktreeBranchSuffix?: string;
+    existingWorktreePath?: string;
     mcpServerIds?: string[];
     /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
     workflowInstanceId?: string;
@@ -55,12 +58,24 @@ export class SessionService {
       throw new Error('Workspace not found');
     }
 
+    if (input.existingWorktreePath && input.enableWorktree) {
+      throw new Error('existingWorktreePath and enableWorktree are mutually exclusive');
+    }
+
     let cwd = workspace.path;
     let worktreePath: string | undefined;
     let worktreeBranch: string | undefined;
     const redis = getRedisClient();
 
-    if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+    if (input.existingWorktreePath) {
+      // Reuse an existing worktree (no git:worktree:add needed)
+      cwd = input.existingWorktreePath;
+      worktreePath = input.existingWorktreePath;
+      worktreeBranch = (workspace.name && input.worktreeBranchSuffix)
+        ? `${workspace.name}/${input.worktreeBranchSuffix}`
+        : undefined;
+    } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+      // Create a new worktree via controller git:worktree:add
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
       const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
       const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
@@ -138,7 +153,11 @@ export class SessionService {
             : undefined,
         );
       } catch (err) {
-        console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
+        // 当会话显式携带 mcpServerIds 时 fail-fast：删除已创建的会话并抛错
+        await Session.deleteOne({ _id: session._id });
+        throw new Error(
+          `MCP endpoint 创建失败：${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -305,10 +324,26 @@ export class SessionService {
     return false;
   }
 
-  async delete(id: string, userId: string): Promise<boolean> {
+  async delete(id: string, userId: string, opts?: { skipAckWait?: boolean }): Promise<boolean> {
     const redis = getRedisClient();
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) return false;
+
+    // Stop ACP session first, then do worktree cleanup
+    const needsStop = session.status === 'running' || session.status === 'idling';
+    if (needsStop) {
+      await redis.publish('session:command', JSON.stringify({
+        type: 'acp:stop',
+        sessionId: id,
+        reason: 'user_delete',
+      }));
+      if (!opts?.skipAckWait) {
+        const stopAckReceived = await this.waitForStopAck(redis, id);
+        if (!stopAckReceived) {
+          console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+        }
+      }
+    }
 
     // Worktree cleanup if applicable
     if ((session as any).worktreePath && (session as any).worktreeBranch) {
@@ -383,13 +418,6 @@ export class SessionService {
       }
     }
 
-    // Stop ACP session
-    await redis.publish('session:command', JSON.stringify({
-      type: 'acp:stop',
-      sessionId: id,
-      reason: 'user_delete',
-    }));
-
     // Revoke MCP endpoint
     await mcpEndpointService.revokeEndpoint(id);
 
@@ -399,6 +427,19 @@ export class SessionService {
       await AcpMessage.deleteMany({ sessionId: id });
       await redis.del(`session:${id}:status`);
       return true;
+    }
+    return false;
+  }
+
+  private async waitForStopAck(redis: ReturnType<typeof getRedisClient>, sessionId: string): Promise<boolean> {
+    const key = `acp:stop:ack:${sessionId}`;
+    const deadline = Date.now() + ACP_STOP_ACK_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await redis.get(key)) {
+        await redis.del(key);
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return false;
   }

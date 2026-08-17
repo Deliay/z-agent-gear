@@ -125,7 +125,12 @@ export class ControllerWorkspaceService {
       const result = await redis.get(`git:check:${requestId}`);
       if (result) {
         await redis.del(`git:check:${requestId}`);
-        return JSON.parse(result);
+        const parsed = JSON.parse(result);
+        // Persist isGitRepo to workspace so Sidebar can render WorktreeSidebarGroup
+        if (parsed.isGitRepo !== undefined) {
+          await ControllerWorkspace.findByIdAndUpdate(workspaceId, { isGitRepo: parsed.isGitRepo });
+        }
+        return parsed;
       }
     }
 
@@ -222,6 +227,7 @@ export class ControllerWorkspaceService {
       name: workspace.name,
       path: workspace.path,
       isEnabled: workspace.isEnabled,
+      isGitRepo: workspace.isGitRepo ?? null,
       defaultBranch: workspace.defaultBranch || null,
       createdAt: (workspace.createdAt as Date).toISOString(),
       updatedAt: (workspace.updatedAt as Date).toISOString(),

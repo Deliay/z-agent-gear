@@ -223,6 +223,9 @@ class WorkflowEngine {
             await this.apply(instance, downstream, 'resume', {});
           }
         }
+        this.refreshCurrentNodeNames(instance);
+        await instance.save();
+        await this.hooks.onNodeDone?.(instance, node);
         break;
       }
       case 'resume': {

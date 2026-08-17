@@ -85,7 +85,7 @@ export const sessionResolvers = {
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; mcpServerIds?: string[] } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {

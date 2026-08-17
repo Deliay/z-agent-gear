@@ -7,6 +7,7 @@ vi.mock('../models/session.js', () => ({
     findOneAndUpdate: vi.fn(),
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    deleteOne: vi.fn(),
     create: vi.fn(),
     updateOne: vi.fn(),
   },
@@ -443,7 +444,7 @@ describe('SessionService', () => {
       expect(String(startCall?.[1])).not.toContain('mcpEndpoint');
     });
 
-    it('should continue session creation when MCP endpoint issuance fails', async () => {
+    it('should fail session creation when MCP endpoint issuance fails and mcpServerIds provided', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
@@ -451,17 +452,21 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
       vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockRejectedValue(new Error('SERVER_NOT_FOUND'));
 
-      const result = await sessionService.create('user-1', {
-        controllerId: 'ctrl-1',
-        acpServerType: 'opencode',
-        workspaceId: 'ws-1',
-        mcpServerIds: ['server-1'],
-      });
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: ['server-1'],
+        }),
+      ).rejects.toThrow('MCP endpoint 创建失败');
 
-      expect(result.id).toBe('sess-1');
+      // Session should be cleaned up
+      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
     });
 
     it('should fail session creation when selected MCP servers are invalid or disabled', async () => {
@@ -485,6 +490,27 @@ describe('SessionService', () => {
 
       expect(Session.create).not.toHaveBeenCalled();
       expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should reject when both existingWorktreePath and enableWorktree are provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'proj' }),
+      } as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          enableWorktree: true,
+          existingWorktreePath: '/tmp/conflict',
+        }),
+      ).rejects.toThrow('mutually exclusive');
+
+      expect(Session.create).not.toHaveBeenCalled();
     });
   });
 
@@ -577,6 +603,8 @@ describe('SessionService', () => {
       } as never);
       vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
       vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      // waitForStopAck polls until it gets the ack or times out
+      mockRedis.get.mockResolvedValue(JSON.stringify({ stopped: true }));
 
       const result = await sessionService.delete('sess-1', 'user-1');
 
@@ -584,6 +612,47 @@ describe('SessionService', () => {
       expect(AcpMessage.deleteMany).toHaveBeenCalledWith({ sessionId: 'sess-1' });
       expect(mockRedis.del).toHaveBeenCalledWith('session:sess-1:status');
       expect(mcpEndpointService.revokeEndpoint).toHaveBeenCalledWith('sess-1');
+    });
+
+    it('should wait for the ACP stop ack before cleaning a worktree', async () => {
+      const sessionDoc = mockSessionDoc({ status: 'running', worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      vi.mocked(Session.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(sessionDoc) } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }) } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      // ack: first call returns null (no ack yet), second call returns ack (simulating delay)
+      // then status: returns clean, then worktree remove: returns success
+      mockRedis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ stopped: true }))
+        .mockResolvedValueOnce(JSON.stringify({ isClean: true }))
+        .mockResolvedValueOnce(JSON.stringify({ success: true }));
+
+      await sessionService.delete('sess-1', 'user-1');
+
+      // First call should be the ack poll
+      expect(mockRedis.get.mock.calls[0][0]).toBe('acp:stop:ack:sess-1');
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:stop:ack:sess-1');
+    });
+
+    it('should warn and continue when ACP stop ack times out', async () => {
+      const sessionDoc = mockSessionDoc({ status: 'running' });
+      vi.mocked(Session.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(sessionDoc) } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      // Stub waitForStopAck to immediately return false (simulating timeout)
+      const origWait = (sessionService as any).waitForStopAck.bind(sessionService);
+      (sessionService as any).waitForStopAck = async () => false;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await sessionService.delete('sess-1', 'user-1');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ACP stop ack timeout'),
+        expect.objectContaining({ sessionId: 'sess-1' }),
+      );
+      warnSpy.mockRestore();
+      (sessionService as any).waitForStopAck = origWait;
     });
 
     it('should return false when session not found', async () => {
@@ -609,6 +678,7 @@ describe('SessionService', () => {
 
       // Return results immediately to avoid waiting
       mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ stopped: true })) // ack → received
         .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // status → clean
         .mockResolvedValueOnce(JSON.stringify({ success: true })); // remove → success
 
@@ -637,6 +707,7 @@ describe('SessionService', () => {
       vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
 
       mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ stopped: true })) // ack → received
         .mockResolvedValueOnce(JSON.stringify({ isClean: false })) // dirty
         .mockResolvedValueOnce(JSON.stringify({ success: true, commitHash: 'abc123' })) // commit
         .mockResolvedValueOnce(JSON.stringify({ success: true })); // remove
@@ -660,6 +731,7 @@ describe('SessionService', () => {
       } as never);
 
       mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ stopped: true })) // ack → received
         .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // clean, skip commit
         .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'worktree not found' })); // remove fails
 
@@ -667,7 +739,7 @@ describe('SessionService', () => {
     });
 
     it('should not throw error when worktree removal fails with "is not a working tree"', async () => {
-      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      const sessionDoc = mockSessionDoc({ status: 'running', worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(sessionDoc),
       } as never);
@@ -678,6 +750,7 @@ describe('SessionService', () => {
       vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
 
       mockRedis.get
+        .mockResolvedValueOnce(JSON.stringify({ stopped: true })) // ack → received
         .mockResolvedValueOnce(JSON.stringify({ isClean: true })) // clean, skip commit
         .mockResolvedValueOnce(JSON.stringify({ success: false, error: "fatal: '/path/to/worktree' is not a working tree" })); // remove fails with "is not a working tree"
 

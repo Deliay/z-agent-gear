@@ -26,8 +26,16 @@ export class WorktreeService {
     await this.emitToController(controllerId, 'git:worktree:add', { requestId, repoPath, worktreePath, branch });
   }
 
-  async handleRemove(requestId: string, controllerId: string, repoPath: string, worktreePath: string): Promise<void> {
-    await this.emitToController(controllerId, 'git:worktree:remove', { requestId, repoPath, worktreePath });
+  async handleRemove(requestId: string, controllerId: string, repoPath: string, worktreePath: string, force?: boolean): Promise<void> {
+    await this.emitToController(controllerId, 'git:worktree:remove', { requestId, repoPath, worktreePath, ...(force ? { force: true } : {}) });
+  }
+
+  async handleList(requestId: string, controllerId: string, workspacePath: string): Promise<void> {
+    await this.emitToController(controllerId, 'git:worktree:list', { requestId, workspacePath });
+  }
+
+  async handleRemoveDir(requestId: string, controllerId: string, path: string): Promise<void> {
+    await this.emitToController(controllerId, 'fs:remove-dir', { requestId, path });
   }
 
   async handleStatus(requestId: string, controllerId: string, path: string): Promise<void> {
@@ -56,6 +64,16 @@ export class WorktreeService {
   async handleCommitResult(requestId: string, result: Record<string, unknown>): Promise<void> {
     const redis = getRedisClient();
     await redis.set(`git:commit:${requestId}`, JSON.stringify(result), 'EX', 60);
+  }
+
+  async handleListResult(requestId: string, result: Record<string, unknown>): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`git:worktree:list:${requestId}`, JSON.stringify(result), 'EX', 60);
+  }
+
+  async handleRemoveDirResult(requestId: string, result: Record<string, unknown>): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`fs:remove-dir:${requestId}`, JSON.stringify(result), 'EX', 60);
   }
 }
 

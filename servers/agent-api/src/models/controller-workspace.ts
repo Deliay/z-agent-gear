@@ -6,6 +6,7 @@ const controllerWorkspaceSchema = new mongoose.Schema({
   name: { type: String, required: true },
   path: { type: String, required: true },
   isEnabled: { type: Boolean, default: true },
+  isGitRepo: { type: Boolean, default: null },
   defaultBranch: { type: String, default: null },
 }, { timestamps: true });
 

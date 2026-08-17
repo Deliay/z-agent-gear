@@ -91,7 +91,7 @@ let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp${Date.now() % 1000000}`;
+  const username = `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
   const signupData = await signupRes.json() as any;
   authToken = signupData.data?.signup?.token;

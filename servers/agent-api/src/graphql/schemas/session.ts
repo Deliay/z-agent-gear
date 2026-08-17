@@ -193,6 +193,7 @@ export const sessionTypeDefs = `#graphql
     workspaceId: ID!
     enableWorktree: Boolean = false
     worktreeBranchSuffix: String
+    existingWorktreePath: String
     mcpServerIds: [ID!]
   }
 

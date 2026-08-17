@@ -322,8 +322,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   async stop(): Promise<void> {
     try {
       if (this.acpSessionId && this.connection) {
-        await this.connection.cancel({ sessionId: this.acpSessionId });
-        await this.connection.closeSession({ sessionId: this.acpSessionId });
+        // 5s timeout for cancel/closeSession to prevent hanging
+        await Promise.race([
+          (async () => {
+            await this.connection!.cancel({ sessionId: this.acpSessionId! });
+            await this.connection!.closeSession({ sessionId: this.acpSessionId! });
+          })(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+        ]);
       }
     } catch { /* ignore */ }
     this.activePrompt = null;

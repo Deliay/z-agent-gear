@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess, type SpawnOptions } from 'child_process';
+import { spawn, execFileSync, execFile, type ChildProcess, type SpawnOptions } from 'child_process';
 import { Writable, Readable } from 'node:stream';
 import { existsSync, mkdirSync } from 'fs';
 import { platform } from 'os';
@@ -37,7 +37,9 @@ export class AcpSpawner {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
     if (platform() === 'win32') {
-      spawnOptions.shell = true;
+      // spawn executable directly (no shell) for reliable taskkill targeting
+    } else {
+      spawnOptions.detached = true;
     }
 
     this.process = spawn(cmd, this.args, spawnOptions);
@@ -71,20 +73,29 @@ export class AcpSpawner {
     return this._closed;
   }
 
+  get pid(): number | null {
+    return this.process?.pid ?? null;
+  }
+
   stop(): void {
     if (!this.process) return;
-    if (platform() === 'win32') {
+    const pid = this.process.pid;
+    if (!pid) {
       this.process.kill();
-      setTimeout(() => {
-        if (this.process) {
-          this.process.kill();
+      return;
+    }
+    if (platform() === 'win32') {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], (err) => {
+        if (err) {
+          try { process.kill(pid, 'SIGKILL'); } catch { /* process already gone */ }
         }
-      }, 5000);
+      });
     } else {
-      this.process.kill('SIGTERM');
+      process.kill(-pid, 'SIGTERM');
       setTimeout(() => {
-        if (this.process) {
-          this.process.kill('SIGKILL');
+        // Only send SIGKILL if process is still running
+        if (this.process && this.process.pid === pid) {
+          try { process.kill(-pid, 'SIGKILL'); } catch { /* process already gone */ }
         }
       }, 5000);
     }

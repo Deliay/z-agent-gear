@@ -6,6 +6,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
     name: String!
     path: String!
     isEnabled: Boolean!
+    isGitRepo: Boolean
     defaultBranch: String
     createdAt: String!
     updatedAt: String!
@@ -24,6 +25,25 @@ export const controllerWorkspaceTypeDefs = `#graphql
     defaultBranch: String
   }
 
+  type WorkspaceWorktree {
+    path: String!
+    branch: String
+    sessions: [Session!]!
+    sessionCount: Int!
+  }
+
+  type WorktreeDeleteFailure {
+    sessionId: ID!
+    error: String!
+  }
+
+  type DeleteWorktreeResult {
+    success: Boolean!
+    closedSessionIds: [ID!]!
+    failures: [WorktreeDeleteFailure!]!
+    error: String
+  }
+
   input CreateWorkspaceInput {
     controllerId: ID!
     path: String!
@@ -35,6 +55,7 @@ export const controllerWorkspaceTypeDefs = `#graphql
     browseFolder(controllerId: ID!, path: String): [FolderEntry!]!
     getHomeDirectory(controllerId: ID!): String
     detectGitRepo(controllerId: ID!, workspaceId: ID!): GitRepoInfo!
+    workspaceWorktrees(controllerId: ID!, workspaceId: ID!): [WorkspaceWorktree!]!
   }
 
   extend type Mutation {
@@ -45,5 +66,6 @@ export const controllerWorkspaceTypeDefs = `#graphql
     initGitRepo(controllerId: ID!, workspaceId: ID!): Boolean!
     setWorkspaceDefaultBranch(id: ID!, defaultBranch: String!): ControllerWorkspace!
     createFolder(controllerId: ID!, parentPath: String!, folderName: String!): FolderEntry!
+    deleteWorktree(controllerId: ID!, workspaceId: ID!, worktreePath: String!): DeleteWorktreeResult!
   }
 `;

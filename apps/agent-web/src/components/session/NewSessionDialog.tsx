@@ -40,18 +40,29 @@ interface GetMcpServersData {
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[]) => void;
+  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void;
+  existingWorktreePath?: string;
+  existingControllerId?: string;
+  existingWorkspaceId?: string;
 }
 
-export default function NewSessionDialog({ controllers, onClose, onCreate }: NewSessionDialogProps) {
-  const [selectedController, setSelectedController] = useState<string>('');
+export default function NewSessionDialog({
+  controllers,
+  onClose,
+  onCreate,
+  existingWorktreePath,
+  existingControllerId,
+  existingWorkspaceId,
+}: NewSessionDialogProps) {
+  const isPreselected = Boolean(existingWorktreePath && existingControllerId && existingWorkspaceId);
+  const [selectedController, setSelectedController] = useState<string>(existingControllerId ?? '');
   const [selectedAcpServer, setSelectedAcpServer] = useState<string>('');
-  const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string>(existingWorkspaceId ?? '');
+  const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([]);
+  const [mcpSearch, setMcpSearch] = useState('');
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [enableWorktree, setEnableWorktree] = useState(false);
   const [branchSuffix, setBranchSuffix] = useState('');
-  const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([]);
-  const [mcpSearch, setMcpSearch] = useState('');
   const [detectGitRepo] = useLazyQuery<{ detectGitRepo: GitRepoInfoData }>(DETECT_GIT_REPO, {
     fetchPolicy: 'network-only',
   });
@@ -91,15 +102,19 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
     }
   }, [acpServers, selectedAcpServer]);
 
-  // Auto-select first enabled workspace
+  // Auto-select first enabled workspace (skip if preselected)
   useEffect(() => {
-    if (workspaces.length > 0 && !selectedWorkspace) {
+    if (!isPreselected && workspaces.length > 0 && !selectedWorkspace) {
       setSelectedWorkspace(workspaces[0].id);
     }
-  }, [workspaces, selectedWorkspace]);
+  }, [workspaces, selectedWorkspace, isPreselected]);
 
   // Detect Git repo when workspace is selected
   useEffect(() => {
+    if (isPreselected) {
+      setIsGitRepo(true);
+      return;
+    }
     if (selectedWorkspace && selectedController) {
       setIsGitRepo(false);
       setEnableWorktree(false);
@@ -116,7 +131,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
         }
       });
     }
-  }, [selectedWorkspace, selectedController, detectGitRepo, workspaces]);
+  }, [selectedWorkspace, selectedController, detectGitRepo, workspaces, isPreselected]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -128,6 +143,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
         enableWorktree,
         enableWorktree ? branchSuffix : undefined,
         selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+        isPreselected ? existingWorktreePath : undefined,
       );
       onClose();
     }
@@ -150,7 +166,8 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                 setSelectedAcpServer('');
                 setSelectedWorkspace('');
               }}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+              disabled={isPreselected}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               required
             >
               <option value="">选择控制器</option>
@@ -217,8 +234,9 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
                 <SelectRoot
                   value={selectedWorkspace}
                   onValueChange={(value) => setSelectedWorkspace(value || '')}
+                  disabled={isPreselected}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}>
                     <SelectValue>
                       {selectedWorkspace
                         ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace
@@ -243,7 +261,7 @@ export default function NewSessionDialog({ controllers, onClose, onCreate }: New
             </div>
           )}
 
-          {isGitRepo && (
+          {isGitRepo && !isPreselected && (
             <div className="mb-6 rounded-md border p-3">
               <div className="mb-2 block text-sm font-medium text-card-foreground">
                 Worktree 设置

@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { folderBrowserService } from '../../services/folder-browser.js';
+import { worktreeService } from '../../services/worktree.js';
 import type { AuthContext } from './auth.js';
 
 export const controllerWorkspaceResolvers = {
@@ -63,6 +64,20 @@ export const controllerWorkspaceResolvers = {
       }
       try {
         return await controllerWorkspaceService.detectGitRepo(args.controllerId, args.workspaceId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    workspaceWorktrees: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await worktreeService.list(args.controllerId, args.workspaceId, context.currentUser.id);
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
@@ -159,6 +174,25 @@ export const controllerWorkspaceResolvers = {
       }
       try {
         return await controllerWorkspaceService.setDefaultBranch(args.id, context.currentUser.id, args.defaultBranch);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    deleteWorktree: async (
+      _parent: unknown,
+      args: { controllerId: string; workspaceId: string; worktreePath: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await worktreeService.deleteWorktree(
+          args.controllerId,
+          args.workspaceId,
+          args.worktreePath,
+          context.currentUser.id,
+        );
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }

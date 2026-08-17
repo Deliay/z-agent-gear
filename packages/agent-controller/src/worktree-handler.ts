@@ -31,6 +31,18 @@ export interface WorktreeRemoveResult {
   error?: string;
 }
 
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  head: string;
+}
+
+export interface WorktreeListResult {
+  success: boolean;
+  worktrees?: WorktreeInfo[];
+  error?: string;
+}
+
 export interface GitStatusResult {
   isClean: boolean;
   error?: string;
@@ -62,10 +74,37 @@ export class WorktreeHandler {
     }
   }
 
-  async remove(repoPath: string, worktreePath: string): Promise<WorktreeRemoveResult> {
+  async list(workspacePath: string): Promise<WorktreeListResult> {
+    try {
+      const resolvedPath = expandTilde(workspacePath);
+      const { stdout } = await execAsync(`git -C "${resolvedPath}" worktree list --porcelain`);
+      const worktrees: WorktreeInfo[] = [];
+      const blocks = stdout.trim().split('\n\n');
+      for (const block of blocks) {
+        if (!block.trim()) continue;
+        const lines = Object.fromEntries(
+          block.split('\n').map(line => {
+            const idx = line.indexOf(' ');
+            return [line.slice(0, idx), line.slice(idx + 1)];
+          }),
+        );
+        worktrees.push({
+          path: lines['worktree'] || '',
+          branch: lines['branch']?.replace('refs/heads/', '') ?? null,
+          head: lines['HEAD'] || '',
+        });
+      }
+      return { success: true, worktrees };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  }
+
+  async remove(repoPath: string, worktreePath: string, force = false): Promise<WorktreeRemoveResult> {
     try {
       const resolvedPath = expandTilde(worktreePath);
-      const { stderr } = await execAsync(`git -C "${repoPath}" worktree remove "${resolvedPath}"`);
+      const forceFlag = force ? ' --force' : '';
+      const { stderr } = await execAsync(`git -C "${repoPath}" worktree remove${forceFlag} "${resolvedPath}"`);
       if (stderr) return { success: false, error: stderr.trim() };
       try {
         if (existsSync(resolvedPath)) {

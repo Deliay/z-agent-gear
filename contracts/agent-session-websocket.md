@@ -288,6 +288,7 @@ Controller 转发 ACP 输出。
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `sessionId` | `string` | 是 | Session ID |
+| `ackRequired` | `boolean` | 否 | 是否需要 ack 回执（默认 false）；`true` 时 Controller 处理完必须回复 `acp:stopped` |
 
 **客户端行为：**
 
@@ -297,7 +298,7 @@ Controller 转发 ACP 输出。
 4. 等待进程退出（最多 5s）
 5. 如果未退出，发送 SIGKILL
 6. 清理资源
-7. 回复 `acp:stopped`
+7. 回复 `acp:stopped`（`ackRequired: true` 时必须回复；bridge 未命中时查注册表按 PID 强杀并回复 `acp:stopped { killed: true }`）
 
 ### 2.9 `acp:stopped`（Controller → Server）
 
@@ -310,6 +311,7 @@ Controller 转发 ACP 输出。
 | `sessionId` | `string` | 是 | Session ID |
 | `reason` | `string` | 是 | 停止原因（`user_close`/`agent_exit`/`error`） |
 | `exitCode` | `number` | 否 | 进程退出码（agent_exit/error 时返回） |
+| `killed` | `boolean` | 否 | 是否通过注册表 PID 强杀（bridge 未命中时的兜底路径） |
 
 **服务端行为：**
 
@@ -821,6 +823,10 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | Controller → Server | `git:worktree:add:result` | 返回创建结果 |
 | Server → Controller | `git:worktree:remove` | 请求移除 Git Worktree |
 | Controller → Server | `git:worktree:remove:result` | 返回移除结果 |
+| Server → Controller | `git:worktree:list` | 请求列出 Git Worktree |
+| Controller → Server | `git:worktree:list:result` | 返回 Worktree 列表 |
+| Server → Controller | `fs:remove-dir` | 请求递归删除目录 |
+| Controller → Server | `fs:remove-dir:result` | 返回删除结果 |
 | Server → Controller | `git:status` | 请求检测 Git 工作区状态（clean/dirty） |
 | Controller → Server | `git:status:result` | 返回工作区状态 |
 | Server → Controller | `git:commit` | 请求在指定路径执行 Git 提交 |
@@ -1025,16 +1031,86 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
 | `repoPath` | `string` | 是 | 原始 Git 仓库绝对路径 |
 | `worktreePath` | `string` | 是 | Worktree 目录绝对路径 |
+| `force` | `boolean` | 否 | 是否强制移除（默认 false）；`force: true` 时执行 `git worktree remove --force`，不做 commit 暂存 |
 
 **客户端行为：**
 
-1. 执行 `git worktree remove <worktreePath>`
+1. 执行 `git worktree remove [--force] <worktreePath>`
 2. 删除 Worktree 目录（如移除后目录仍存在）
 3. 回复 `git:worktree:remove:result`
 
 ### 2.15 `git:worktree:remove:result`（Controller → Server）
 
 返回 Worktree 移除结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 2.16 `git:worktree:list`（Server → Controller）
+
+请求列出指定 Git 仓库的全部 Worktree。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配结果 |
+| `workspacePath` | `string` | 是 | Git 仓库根目录绝对路径 |
+
+**客户端行为：**
+
+1. 执行 `git worktree list --porcelain`
+2. 解析输出为 `[{ path, branch, head }]` 数组
+3. 回复 `git:worktree:list:result`
+
+### 2.17 `git:worktree:list:result`（Controller → Server）
+
+返回 Worktree 列表。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否成功 |
+| `worktrees` | `WorktreeInfo[]` | 否 | Worktree 列表（成功时） |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+**WorktreeInfo 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `path` | `string` | Worktree 目录绝对路径 |
+| `branch` | `string \| null` | 分支名（HEAD detached 时为 null） |
+| `head` | `string` | HEAD commit hash |
+
+### 2.18 `fs:remove-dir`（Server → Controller）
+
+请求递归删除目录。
+
+**安全模型**：Controller 端使用黑名单阻止系统关键路径（`/etc`、`/usr`、`/bin`、`/sbin`、`/var`、`/proc`、`/sys`、用户主目录）。Agent-api 端（`worktreeService.deleteWorktree`）仅发送已知工作区下的 worktree 路径，通过上游控制保证路径合法性。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配结果 |
+| `path` | `string` | 是 | 待删除目录绝对路径 |
+
+**客户端行为：**
+
+1. 校验路径白名单（仅允许 worktreeDir 之下或已注册 workspace 的 worktree 路径）
+2. 执行 `fs.rm(path, { recursive: true, force: true })`
+3. 回复 `fs:remove-dir:result`
+
+### 2.19 `fs:remove-dir:result`（Controller → Server）
+
+返回目录删除结果。
 
 **Payload:**
 

@@ -578,7 +578,7 @@ describe('SessionCommandService', () => {
       }));
 
       await vi.waitFor(() => {
-        expect(worktreeService.handleRemove).toHaveBeenCalledWith('req-1', 'ctrl-1', '/repo', '/wt');
+        expect(worktreeService.handleRemove).toHaveBeenCalledWith('req-1', 'ctrl-1', '/repo', '/wt', false);
       });
     });
   });
