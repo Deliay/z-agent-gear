@@ -13,6 +13,23 @@ async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 15000, 
   throw new Error(`${label}: timed out after ${timeoutMs}ms`);
 }
 
+/** Expand controller and workspace nodes in sidebar to reveal worktree groups */
+async function expandSidebarToWorktrees(page: Page, hostname = 'e2e-host'): Promise<void> {
+  const sidebar = page.locator('nav[aria-label="Sidebar"]');
+  // Expand the controller node (shows hostname)
+  await sidebar.getByRole('button', { name: new RegExp(hostname) }).click();
+  await page.waitForTimeout(500);
+
+  // Expand the workspace node - click the button containing workspace name
+  await waitFor(async () => {
+    const wsButton = sidebar.locator('button').filter({ hasText: /e2e-ws-/ }).first();
+    return (await wsButton.count()) > 0;
+  }, 10000, 'waiting for workspace button');
+  const wsButton = sidebar.locator('button').filter({ hasText: /e2e-ws-/ }).first();
+  await wsButton.click();
+  await page.waitForTimeout(500);
+}
+
 /** Register a fake controller that auto-answers ACP + worktree events */
 async function registerWorktreeController(rawKey: string): Promise<FakeController> {
   const ctrl = await registerController(rawKey);
@@ -31,6 +48,20 @@ async function registerWorktreeController(rawKey: string): Promise<FakeControlle
   });
   ctrl.socket.on('fs:remove-dir', (data: { requestId: string }) => {
     ctrl.socket.emit('fs:remove-dir:result', { requestId: data.requestId, success: true });
+  });
+  ctrl.socket.on('git:check', (data: { requestId: string; path: string }) => {
+    ctrl.socket.emit('git:check:result', {
+      requestId: data.requestId,
+      isGitRepo: true,
+      currentBranch: 'main',
+      branches: ['main', 'feature/test'],
+      defaultBranch: 'main',
+    });
+  });
+  ctrl.socket.on('acp:stop', (data: { sessionId: string; ackRequired?: boolean }) => {
+    if (data.ackRequired) {
+      ctrl.socket.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete', killed: true });
+    }
   });
   return ctrl;
 }
@@ -54,11 +85,15 @@ test.describe('Worktree E2E Tests', () => {
     workspaceId = ws.id;
 
     // Detect git repo to persist isGitRepo
-    await gqlRequest(page, `
+    const detectRes = await gqlRequest(page, `
       query DetectGitRepo($controllerId: ID!, $workspaceId: ID!) {
-        detectGitRepo(controllerId: $controllerId, workspaceId: $workspaceId) { isGitRepo }
+        detectGitRepo(controllerId: $controllerId, workspaceId: $workspaceId) { isGitRepo currentBranch branches defaultBranch }
       }
     `, { controllerId: ctrl.controllerId, workspaceId }, token);
+    const detectBody = await detectRes.json();
+    if (detectBody.errors) {
+      console.error('detectGitRepo failed:', JSON.stringify(detectBody.errors));
+    }
 
     await page.close();
   });
@@ -71,9 +106,9 @@ test.describe('Worktree E2E Tests', () => {
   test('E2E-1: sidebar shows worktree hierarchy for git workspace', async ({ page }) => {
     test.setTimeout(60000);
     await loginViaUI(page, username);
+    await expandSidebarToWorktrees(page);
 
     // The sidebar should show the workspace with worktree groups
-    // Look for the worktree branch names rendered by WorktreeSidebarGroup
     await waitFor(async () => {
       const worktreeText = await page.locator('text=main').count();
       return worktreeText > 0;
@@ -91,6 +126,9 @@ test.describe('Worktree E2E Tests', () => {
 
     // Create a session in the worktree
     const sessionId = await createSession(page, ctrl.controllerId, token, workspaceId);
+
+    // Expand sidebar to worktrees
+    await expandSidebarToWorktrees(page);
 
     // Wait for sidebar to load
     await waitFor(async () => {
@@ -120,6 +158,9 @@ test.describe('Worktree E2E Tests', () => {
     test.setTimeout(60000);
     await loginViaUI(page, username);
 
+    // Expand sidebar to worktrees
+    await expandSidebarToWorktrees(page);
+
     // Wait for worktree to appear
     await waitFor(async () => {
       return (await page.locator('text=main').count()) > 0;
@@ -145,6 +186,9 @@ test.describe('Worktree E2E Tests', () => {
   test('E2E-4: delete worktree confirmation dialog', async ({ page }) => {
     test.setTimeout(60000);
     await loginViaUI(page, username);
+
+    // Expand sidebar to worktrees
+    await expandSidebarToWorktrees(page);
 
     // Wait for worktree to appear
     await waitFor(async () => {

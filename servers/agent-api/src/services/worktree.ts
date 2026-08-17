@@ -1,4 +1,5 @@
 import { Session } from '../models/session.js';
+import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { sessionService } from './session.js';
@@ -39,29 +40,35 @@ class WorktreeService {
 
     const redis = getRedisClient();
 
-    // Query git worktrees from controller via Redis
-    const requestId = `wtl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await redis.publish('session:command', JSON.stringify({
-      type: 'git:worktree:list',
-      requestId,
-      controllerId,
-      cwd: workspace.path,
-    }));
+    // Check if controller is online before querying git worktrees
+    const controller = await Controller.findById(controllerId).lean();
+    const isOnline = controller?.status === 'online';
 
+    // Query git worktrees from controller via Redis (only if online)
     const gitWorktrees: { path: string; branch: string }[] = [];
-    for (let i = 0; i < 30; i++) {
-      const result = await redis.get(`git:worktree:list:${requestId}`);
-      if (result) {
-        const parsed = JSON.parse(result);
-        if (parsed.success && Array.isArray(parsed.worktrees)) {
-          for (const wt of parsed.worktrees) {
-            gitWorktrees.push({ path: wt.path, branch: wt.branch || '' });
+    if (isOnline) {
+      const requestId = `wtl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish('session:command', JSON.stringify({
+        type: 'git:worktree:list',
+        requestId,
+        controllerId,
+        cwd: workspace.path,
+      }));
+
+      for (let i = 0; i < 30; i++) {
+        const result = await redis.get(`git:worktree:list:${requestId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          if (parsed.success && Array.isArray(parsed.worktrees)) {
+            for (const wt of parsed.worktrees) {
+              gitWorktrees.push({ path: wt.path, branch: wt.branch || '' });
+            }
           }
+          await redis.del(`git:worktree:list:${requestId}`);
+          break;
         }
-        await redis.del(`git:worktree:list:${requestId}`);
-        break;
+        await new Promise(r => setTimeout(r, 1000));
       }
-      await new Promise(r => setTimeout(r, 1000));
     }
 
     // Find sessions with worktreePath in this workspace's controller
@@ -86,15 +93,16 @@ class WorktreeService {
     for (const session of sessions) {
       const wtPath = (session as any).worktreePath as string | undefined;
       if (!wtPath) continue;
+      const mappedSession = { ...session, id: (session._id as any).toString() };
       const existing = worktreeMap.get(wtPath);
       if (existing) {
         existing.sessionCount++;
-        existing.sessions.push(session);
+        existing.sessions.push(mappedSession);
       } else {
         worktreeMap.set(wtPath, {
           path: wtPath,
           branch: (session as any).worktreeBranch || null,
-          sessions: [session],
+          sessions: [mappedSession],
           sessionCount: 1,
         });
       }

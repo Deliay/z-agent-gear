@@ -42,6 +42,9 @@ async function signup(tag: string): Promise<string> {
   const uid = `${tag}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
   const body = await res.json();
+  if (!body.data?.signup?.token) {
+    console.error('signup failed:', JSON.stringify(body));
+  }
   return body.data?.signup?.token ?? '';
 }
 
@@ -60,6 +63,9 @@ async function registerFakeController(
 ): Promise<FakeController> {
   const keyRes = await gqlRequest(CREATE_KEY, { input: { name: `wt-${tag}-${Date.now()}`, type: 'local' } }, token);
   const keyBody = await keyRes.json();
+  if (!keyBody.data?.createControllerKey) {
+    console.error('createControllerKey failed:', JSON.stringify(keyBody));
+  }
   const rawKey = keyBody.data.createControllerKey.rawKey;
   const client = createClient();
   client.on('acp:check', (data: { requestId: string }) => {
@@ -74,6 +80,18 @@ async function registerFakeController(
   });
   client.on('fs:remove-dir', (data: { requestId: string }) => {
     client.emit('fs:remove-dir:result', { requestId: data.requestId, success: true });
+  });
+  // Auto-answer git:worktree:add (create worktree)
+  client.on('git:worktree:add', (data: { requestId: string; repoPath: string; worktreePath: string; branch: string }) => {
+    client.emit('git:worktree:add:result', { requestId: data.requestId, success: true, worktreePath: data.worktreePath });
+  });
+  // Auto-answer git:status (check if worktree is clean)
+  client.on('git:status', (data: { requestId: string; path: string }) => {
+    client.emit('git:status:result', { requestId: data.requestId, isClean: true });
+  });
+  // Auto-answer git:commit (commit worktree changes)
+  client.on('git:commit', (data: { requestId: string }) => {
+    client.emit('git:commit:result', { requestId: data.requestId, success: true });
   });
   // Auto-answer ACP start requests
   client.on('acp:start', (data: { requestId: string; sessionId: string; serverType: string; cwd: string }) => {
@@ -155,8 +173,8 @@ describe('Worktree API Tests', () => {
   describe('A2: workspaceWorktrees controller offline degradation', () => {
     it('should degrade to session-only grouping when controller offline', async () => {
       // Create workspace pointing to a different (offline) controller
-      const offlineToken = await signup('wt-offline');
-      const offlineCtrl = await registerFakeController(offlineToken, 'wt-offline-offline');
+      const offlineToken = await signup('wtoff');
+      const offlineCtrl = await registerFakeController(offlineToken, 'wtoff-off');
       const offWs = await createWorkspace(offlineToken, offlineCtrl.controllerId);
       offlineCtrl.client.disconnect();
 
@@ -324,6 +342,12 @@ describe('Worktree API Tests', () => {
   describe('A9: concurrent session creation', () => {
     it('should handle multiple concurrent session starts', async () => {
       const count = 3;
+      // Register listeners BEFORE firing mutations to avoid race condition
+      const startPromises = Array.from({ length: count }, () =>
+        waitForEvent<{ requestId: string; sessionId: string; serverType: string; cwd: string }>(
+          ctrl.client, 'acp:start', 15000,
+        ),
+      );
       const promises: Promise<unknown>[] = [];
       for (let i = 0; i < count; i++) {
         promises.push(
@@ -337,12 +361,10 @@ describe('Worktree API Tests', () => {
         const body = await res.json();
         expect(body.data?.createSession?.session?.id).toBeTruthy();
       }
-      // All should have gotten acp:start (dispatcher routes by requestId)
-      for (let i = 0; i < count; i++) {
-        const payload = await waitForEvent<{
-          requestId: string; sessionId: string; success: boolean;
-        }>(ctrl.client, 'acp:start:result', 15000);
-        expect(payload.success).toBe(true);
+      // Wait for all acp:start events (listeners were registered before mutations)
+      const payloads = await Promise.all(startPromises);
+      for (const payload of payloads) {
+        expect(payload.sessionId).toBeTruthy();
       }
     }, 30000);
   });
