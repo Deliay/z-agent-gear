@@ -7,6 +7,7 @@ vi.mock('../models/session.js', () => ({
     findOneAndUpdate: vi.fn(),
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    deleteOne: vi.fn(),
     create: vi.fn(),
     updateOne: vi.fn(),
   },
@@ -443,7 +444,7 @@ describe('SessionService', () => {
       expect(String(startCall?.[1])).not.toContain('mcpEndpoint');
     });
 
-    it('should continue session creation when MCP endpoint issuance fails', async () => {
+    it('should fail session creation when MCP endpoint issuance fails and mcpServerIds provided', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
@@ -451,17 +452,21 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
       vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockRejectedValue(new Error('SERVER_NOT_FOUND'));
 
-      const result = await sessionService.create('user-1', {
-        controllerId: 'ctrl-1',
-        acpServerType: 'opencode',
-        workspaceId: 'ws-1',
-        mcpServerIds: ['server-1'],
-      });
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: ['server-1'],
+        }),
+      ).rejects.toThrow('MCP endpoint 创建失败');
 
-      expect(result.id).toBe('sess-1');
+      // Session should be cleaned up
+      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
     });
 
     it('should fail session creation when selected MCP servers are invalid or disabled', async () => {

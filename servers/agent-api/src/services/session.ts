@@ -153,7 +153,11 @@ export class SessionService {
             : undefined,
         );
       } catch (err) {
-        console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
+        // 当会话显式携带 mcpServerIds 时 fail-fast：删除已创建的会话并抛错
+        await Session.deleteOne({ _id: session._id });
+        throw new Error(
+          `MCP endpoint 创建失败：${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
