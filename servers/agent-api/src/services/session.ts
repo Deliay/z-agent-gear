@@ -67,48 +67,49 @@ export class SessionService {
     let worktreeBranch: string | undefined;
     const redis = getRedisClient();
 
-    if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
-      if (input.existingWorktreePath) {
-        // Use provided worktree path directly (skip git:worktree:add)
-        cwd = input.existingWorktreePath;
-        worktreePath = input.existingWorktreePath;
-        worktreeBranch = `${workspace.name}/${input.worktreeBranchSuffix}`;
-      } else {
-        const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
-        const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
-        const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
+    if (input.existingWorktreePath) {
+      // Reuse an existing worktree (no git:worktree:add needed)
+      cwd = input.existingWorktreePath;
+      worktreePath = input.existingWorktreePath;
+      worktreeBranch = (workspace.name && input.worktreeBranchSuffix)
+        ? `${workspace.name}/${input.worktreeBranchSuffix}`
+        : undefined;
+    } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+      // Create a new worktree via controller git:worktree:add
+      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
+      const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
 
-        const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        await redis.publish('session:command', JSON.stringify({
-          type: 'git:worktree:add',
-          requestId,
-          controllerId: input.controllerId,
-          repoPath: workspace.path,
-          worktreePath: wtPath,
-          branch,
-        }));
+      const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId,
+        controllerId: input.controllerId,
+        repoPath: workspace.path,
+        worktreePath: wtPath,
+        branch,
+      }));
 
-        let added = false;
-        for (let i = 0; i < 30; i++) {
-          const result = await redis.get(`git:worktree:add:${requestId}`);
-          if (result) {
-            const parsed = JSON.parse(result);
-            if (!parsed.success) {
-              throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
-            }
-            await redis.del(`git:worktree:add:${requestId}`);
-            const resolvedPath = parsed.worktreePath || wtPath;
-            cwd = resolvedPath;
-            worktreePath = resolvedPath;
-            worktreeBranch = branch;
-            added = true;
-            break;
+      let added = false;
+      for (let i = 0; i < 30; i++) {
+        const result = await redis.get(`git:worktree:add:${requestId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          if (!parsed.success) {
+            throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
           }
-          await new Promise(r => setTimeout(r, 1000));
+          await redis.del(`git:worktree:add:${requestId}`);
+          const resolvedPath = parsed.worktreePath || wtPath;
+          cwd = resolvedPath;
+          worktreePath = resolvedPath;
+          worktreeBranch = branch;
+          added = true;
+          break;
         }
-        if (!added) {
-          throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
-        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (!added) {
+        throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
       }
     }
 
@@ -330,7 +331,10 @@ export class SessionService {
       sessionId: id,
       reason: 'user_delete',
     }));
-    await this.waitForStopAck(redis, id);
+    const stopAckReceived = await this.waitForStopAck(redis, id);
+    if (!stopAckReceived) {
+      console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+    }
 
     // Worktree cleanup if applicable
     if ((session as any).worktreePath && (session as any).worktreeBranch) {
@@ -418,16 +422,17 @@ export class SessionService {
     return false;
   }
 
-  private async waitForStopAck(redis: ReturnType<typeof getRedisClient>, sessionId: string): Promise<void> {
+  private async waitForStopAck(redis: ReturnType<typeof getRedisClient>, sessionId: string): Promise<boolean> {
     const key = `acp:stop:ack:${sessionId}`;
     const deadline = Date.now() + ACP_STOP_ACK_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (await redis.get(key)) {
         await redis.del(key);
-        return;
+        return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    return false;
   }
 
   async getMessages(sessionId: string, userId: string, options: { before?: string; limit?: number } = {}): Promise<Record<string, unknown>[]> {

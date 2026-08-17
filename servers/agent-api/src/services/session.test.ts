@@ -630,6 +630,26 @@ describe('SessionService', () => {
       expect(mockRedis.del).toHaveBeenCalledWith('acp:stop:ack:sess-1');
     });
 
+    it('should warn and continue when ACP stop ack times out', async () => {
+      const sessionDoc = mockSessionDoc();
+      vi.mocked(Session.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(sessionDoc) } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      // Stub waitForStopAck to immediately return false (simulating timeout)
+      const origWait = (sessionService as any).waitForStopAck.bind(sessionService);
+      (sessionService as any).waitForStopAck = async () => false;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await sessionService.delete('sess-1', 'user-1');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ACP stop ack timeout'),
+        expect.objectContaining({ sessionId: 'sess-1' }),
+      );
+      warnSpy.mockRestore();
+      (sessionService as any).waitForStopAck = origWait;
+    });
+
     it('should return false when session not found', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(null),
