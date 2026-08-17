@@ -13,6 +13,7 @@ import type {
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
 import WorkflowSidebarGroup from './workflow/WorkflowSidebarGroup';
+import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
 import GatewaySection from './GatewaySection';
@@ -259,28 +260,57 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                                     controllerId={controller.id}
                                   />
                                 )}
-                                {wsSessions.map((session) => (
-                                  <li key={session.id}>
-                                    <NavLink
-                                      to={`/sessions/${session.id}`}
-                                      className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                                        activeId === session.id
-                                          ? 'bg-sidebar-accent text-sidebar-foreground'
-                                          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
-                                      }`}
-                                    >
-                                      <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-                                      {session.worktreePath && (
-                                        <GitFork className="size-3 shrink-0 text-info" />
-                                      )}
-                                      <div className="min-w-0 flex-1">
-                                        <div className="truncate">
-                                          {session.title || 'New Session'}
+                                {workspace?.isGitRepo && (
+                                  <WorktreeSidebarGroup
+                                    workspaceId={workspace.id}
+                                    controllerId={controller.id}
+                                    workspaceName={getWorkspaceName(workspacePath)}
+                                  />
+                                )}
+                                {wsSessions
+                                  .filter((session) => !session.worktreePath)
+                                  .map((session) => (
+                                    <li key={session.id}>
+                                      <NavLink
+                                        to={`/sessions/${session.id}`}
+                                        className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                                          activeId === session.id
+                                            ? 'bg-sidebar-accent text-sidebar-foreground'
+                                            : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                                        }`}
+                                      >
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate">
+                                            {session.title || 'New Session'}
+                                          </div>
                                         </div>
-                                      </div>
-                                    </NavLink>
-                                  </li>
-                                ))}
+                                      </NavLink>
+                                    </li>
+                                  ))}
+                                {!workspace?.isGitRepo &&
+                                  wsSessions
+                                    .filter((session) => session.worktreePath)
+                                    .map((session) => (
+                                      <li key={session.id}>
+                                        <NavLink
+                                          to={`/sessions/${session.id}`}
+                                          className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                                            activeId === session.id
+                                              ? 'bg-sidebar-accent text-sidebar-foreground'
+                                              : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                                          }`}
+                                        >
+                                          <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+                                          <GitFork className="size-3 shrink-0 text-info" />
+                                          <div className="min-w-0 flex-1">
+                                            <div className="truncate">
+                                              {session.title || 'New Session'}
+                                            </div>
+                                          </div>
+                                        </NavLink>
+                                      </li>
+                                    ))}
                               </ul>
                             )}
                           </li>

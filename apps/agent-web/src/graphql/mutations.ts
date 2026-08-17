@@ -390,6 +390,20 @@ export const UPDATE_GLOBAL_PERMISSION_TIMEOUT = gql`
   }
 `
 
+export const DELETE_WORKTREE = gql`
+  mutation DeleteWorktree($controllerId: ID!, $workspaceId: ID!, $worktreePath: String!) {
+    deleteWorktree(controllerId: $controllerId, workspaceId: $workspaceId, worktreePath: $worktreePath) {
+      success
+      closedSessionIds
+      failures {
+        sessionId
+        error
+      }
+      error
+    }
+  }
+`
+
 export const SET_MCP_SERVER_ENABLED = gql`
   mutation SetMcpServerEnabled($id: ID!, $enabled: Boolean!) {
     setMcpServerEnabled(id: $id, enabled: $enabled) {
