@@ -228,20 +228,29 @@ class WorkflowOrchestrator {
 
   /** 幂等 upsert 平台工作流工具服务（transport/source: platform），返回其 _id */
   private async ensureWorkflowToolsServer(userId: string): Promise<string> {
-    const server = await McpServer.findOneAndUpdate(
-      { userId, name: PLATFORM_SERVER_NAME },
-      {
-        $setOnInsert: {
-          userId,
-          name: PLATFORM_SERVER_NAME,
-          transport: 'platform',
-          source: 'platform',
-          enabled: true,
+    try {
+      const server = await McpServer.findOneAndUpdate(
+        { userId, name: PLATFORM_SERVER_NAME },
+        {
+          $setOnInsert: {
+            userId,
+            name: PLATFORM_SERVER_NAME,
+            transport: 'platform',
+            source: 'platform',
+            enabled: true,
+          },
         },
-      },
-      { upsert: true, new: true },
-    );
-    return server._id.toString();
+        { upsert: true, new: true },
+      );
+      return server._id.toString();
+    } catch (err: unknown) {
+      // E11000 duplicate key error — race condition: another request inserted first
+      if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+        const existing = await McpServer.findOne({ userId, name: PLATFORM_SERVER_NAME }).lean();
+        if (existing) return existing._id.toString();
+      }
+      throw err;
+    }
   }
 
   /**
