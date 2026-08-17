@@ -486,6 +486,27 @@ describe('SessionService', () => {
       expect(Session.create).not.toHaveBeenCalled();
       expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
     });
+
+    it('should reject when both existingWorktreePath and enableWorktree are provided', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'proj' }),
+      } as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          enableWorktree: true,
+          existingWorktreePath: '/tmp/conflict',
+        }),
+      ).rejects.toThrow('mutually exclusive');
+
+      expect(Session.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateStatus', () => {

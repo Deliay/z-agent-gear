@@ -75,6 +75,16 @@ async function registerFakeController(
   client.on('fs:remove-dir', (data: { requestId: string }) => {
     client.emit('fs:remove-dir:result', { requestId: data.requestId, success: true });
   });
+  // Auto-answer ACP start requests
+  client.on('acp:start', (data: { requestId: string; sessionId: string; serverType: string; cwd: string }) => {
+    client.emit('acp:start:result', { requestId: data.requestId, success: true, sessionId: data.sessionId });
+  });
+  // Auto-answer ACP stop requests (emit acp:stopped ack)
+  client.on('acp:stop', (data: { sessionId: string; ackRequired?: boolean }) => {
+    if (data.ackRequired) {
+      client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete', killed: true });
+    }
+  });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
   client.emit('register', { key: rawKey, hostname: `wt-${tag}-host`, version: '1.0.0' });
   const regData = await registered;

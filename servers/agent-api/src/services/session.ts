@@ -58,6 +58,10 @@ export class SessionService {
       throw new Error('Workspace not found');
     }
 
+    if (input.existingWorktreePath && input.enableWorktree) {
+      throw new Error('existingWorktreePath and enableWorktree are mutually exclusive');
+    }
+
     let cwd = workspace.path;
     let worktreePath: string | undefined;
     let worktreeBranch: string | undefined;
