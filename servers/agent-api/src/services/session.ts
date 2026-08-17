@@ -8,6 +8,8 @@ import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
+const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
+
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
@@ -324,6 +326,7 @@ export class SessionService {
       sessionId: id,
       reason: 'user_delete',
     }));
+    await this.waitForStopAck(redis, id);
 
     // Worktree cleanup if applicable
     if ((session as any).worktreePath && (session as any).worktreeBranch) {
@@ -409,6 +412,18 @@ export class SessionService {
       return true;
     }
     return false;
+  }
+
+  private async waitForStopAck(redis: ReturnType<typeof getRedisClient>, sessionId: string): Promise<void> {
+    const key = `acp:stop:ack:${sessionId}`;
+    const deadline = Date.now() + ACP_STOP_ACK_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await redis.get(key)) {
+        await redis.del(key);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   async getMessages(sessionId: string, userId: string, options: { before?: string; limit?: number } = {}): Promise<Record<string, unknown>[]> {

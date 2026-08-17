@@ -397,6 +397,8 @@ export class ACPSessionManager {
       endedAt: new Date(),
     });
     await this.publishStatus(sessionId, 'ended');
+    const redis = getRedisClient();
+    await redis.set(`acp:stop:ack:${sessionId}`, JSON.stringify({ reason, exitCode }), 'EX', 30);
   }
 
   async handleSocketDisconnect(socketId: string): Promise<void> {

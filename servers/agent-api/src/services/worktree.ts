@@ -1,6 +1,7 @@
 import { Session } from '../models/session.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { sessionService } from './session.js';
 
 export interface WorkspaceWorktree {
   path: string;
@@ -121,7 +122,6 @@ class WorktreeService {
       throw new Error('Workspace not found');
     }
 
-    const redis = getRedisClient();
     const closedSessionIds: string[] = [];
     const failures: WorktreeDeleteFailure[] = [];
 
@@ -135,20 +135,13 @@ class WorktreeService {
     for (const session of sessions) {
       const sessionId = (session._id as any).toString();
       try {
-        await redis.publish('session:command', JSON.stringify({
-          type: 'acp:stop',
-          sessionId,
-          reason: 'worktree_delete',
-        }));
-        await Session.findOneAndUpdate(
-          { _id: sessionId },
-          { status: 'ended', endedAt: new Date() },
-        );
-        closedSessionIds.push(sessionId);
+        if (await sessionService.delete(sessionId, userId)) closedSessionIds.push(sessionId);
       } catch (err) {
         failures.push({ sessionId, error: (err as Error).message });
       }
     }
+
+    const redis = getRedisClient();
 
     // 2. git:worktree:remove --force
     let removed = false;
