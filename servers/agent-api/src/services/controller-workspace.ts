@@ -125,7 +125,12 @@ export class ControllerWorkspaceService {
       const result = await redis.get(`git:check:${requestId}`);
       if (result) {
         await redis.del(`git:check:${requestId}`);
-        return JSON.parse(result);
+        const parsed = JSON.parse(result);
+        // Persist isGitRepo to workspace so Sidebar can render WorktreeSidebarGroup
+        if (parsed.isGitRepo !== undefined) {
+          await ControllerWorkspace.findByIdAndUpdate(workspaceId, { isGitRepo: parsed.isGitRepo });
+        }
+        return parsed;
       }
     }
 

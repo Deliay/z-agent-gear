@@ -8,6 +8,8 @@ vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: {
     find: vi.fn(),
     findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
     countDocuments: vi.fn(),
     deleteMany: vi.fn(),
