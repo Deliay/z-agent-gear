@@ -610,7 +610,7 @@ describe('SessionService', () => {
     });
 
     it('should wait for the ACP stop ack before cleaning a worktree', async () => {
-      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      const sessionDoc = mockSessionDoc({ status: 'running', worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
       vi.mocked(Session.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(sessionDoc) } as never);
       vi.mocked(ControllerWorkspace.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }) } as never);
       vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
@@ -631,7 +631,7 @@ describe('SessionService', () => {
     });
 
     it('should warn and continue when ACP stop ack times out', async () => {
-      const sessionDoc = mockSessionDoc();
+      const sessionDoc = mockSessionDoc({ status: 'running' });
       vi.mocked(Session.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(sessionDoc) } as never);
       vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
       vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
@@ -734,7 +734,7 @@ describe('SessionService', () => {
     });
 
     it('should not throw error when worktree removal fails with "is not a working tree"', async () => {
-      const sessionDoc = mockSessionDoc({ worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
+      const sessionDoc = mockSessionDoc({ status: 'running', worktreePath: '/worktrees/project/branch', worktreeBranch: 'project/branch' });
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(sessionDoc),
       } as never);

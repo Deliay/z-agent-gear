@@ -320,20 +320,25 @@ export class SessionService {
     return false;
   }
 
-  async delete(id: string, userId: string): Promise<boolean> {
+  async delete(id: string, userId: string, opts?: { skipAckWait?: boolean }): Promise<boolean> {
     const redis = getRedisClient();
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) return false;
 
     // Stop ACP session first, then do worktree cleanup
-    await redis.publish('session:command', JSON.stringify({
-      type: 'acp:stop',
-      sessionId: id,
-      reason: 'user_delete',
-    }));
-    const stopAckReceived = await this.waitForStopAck(redis, id);
-    if (!stopAckReceived) {
-      console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+    const needsStop = session.status === 'running' || session.status === 'idling';
+    if (needsStop) {
+      await redis.publish('session:command', JSON.stringify({
+        type: 'acp:stop',
+        sessionId: id,
+        reason: 'user_delete',
+      }));
+      if (!opts?.skipAckWait) {
+        const stopAckReceived = await this.waitForStopAck(redis, id);
+        if (!stopAckReceived) {
+          console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+        }
+      }
     }
 
     // Worktree cleanup if applicable
