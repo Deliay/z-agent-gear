@@ -28,6 +28,76 @@ vi.mock('../src/acp/sync-bridge.js', () => ({
   AcpSyncBridge: MockAcpSyncBridge,
 }));
 
+const { bridgeInstances } = vi.hoisted(() => ({
+  bridgeInstances: [] as Array<{ sessionId: string; emit: (event: string, payload: unknown) => boolean }>,
+}));
+
+vi.mock('../src/acp/bridge.js', async () => {
+  const { EventEmitter } = await import('events');
+  class FakeAcpSessionBridge extends EventEmitter {
+    sessionId: string;
+    constructor(_socket: unknown, options: { sessionId: string }, _spawner: unknown) {
+      super();
+      this.sessionId = options.sessionId;
+      bridgeInstances.push(this as never);
+    }
+    async start() {
+      this.emit('acp:initialized', {
+        sessionId: this.sessionId,
+        acpSessionId: 'acp-ext-1',
+        modes: [],
+        availableModels: [],
+        configOptions: [],
+        authMethods: [],
+      });
+    }
+    async resume() {
+      this.emit('acp:initialized', {
+        sessionId: this.sessionId,
+        acpSessionId: 'acp-ext-1',
+        modes: [],
+        availableModels: [],
+        configOptions: [],
+        authMethods: [],
+      });
+    }
+    async stop() {
+      this.emit('acp:stopped', { sessionId: this.sessionId, reason: 'user_close' });
+    }
+    sendInput() {}
+    cancel() {}
+  }
+  return { AcpSessionBridge: FakeAcpSessionBridge };
+});
+
+vi.mock('../src/acp/spawner.js', () => ({
+  AcpSpawner: class {
+    pid = 4321;
+    constructor(_options: unknown) {}
+    start() {}
+    stop() {}
+    get closed() { return Promise.resolve(); }
+  },
+}));
+
+vi.mock('../src/acp/detector.js', () => ({
+  acpDetector: {
+    detect: vi.fn(async () => []),
+    getSpawnerConfig: vi.fn(() => ({ command: 'opencode', args: ['acp'] })),
+  },
+}));
+
+vi.mock('../src/acp/process-registry.js', () => ({
+  processRegistry: {
+    register: vi.fn(),
+    deregister: vi.fn(),
+    get: vi.fn(),
+    list: vi.fn(() => []),
+    listEntries: vi.fn(() => []),
+  },
+  isProcessAlive: vi.fn(() => true),
+}));
+
 vi.mock('socket.io-client', () => ({
   io: vi.fn(),
 }));
@@ -66,6 +136,8 @@ import { io } from 'socket.io-client';
 import { clearConfigKey } from '../src/config.js';
 import * as os from 'os';
 import { readdir, access } from 'fs/promises';
+import { fsHandler } from '../src/fs-handler.js';
+import { processRegistry, isProcessAlive } from '../src/acp/process-registry.js';
 
 function createMockSocket() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
@@ -525,6 +597,194 @@ describe('SocketIO Client', () => {
           error: 'boom',
         });
       });
+    });
+  });
+
+  describe('acp:start registry lifecycle', () => {
+    function setup() {
+      bridgeInstances.length = 0;
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      return mockSocket;
+    }
+
+    async function startSession(mockSocket: ReturnType<typeof createMockSocket>, sessionId: string, cwd: string) {
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-start',
+        sessionId,
+        serverType: 'opencode',
+        cwd,
+      });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({ sessionId, success: true }));
+      });
+    }
+
+    it('registers the session cwd as an allowed fs path', async () => {
+      const registerSpy = vi.spyOn(fsHandler, 'registerAllowedPath');
+      const mockSocket = setup();
+
+      await startSession(mockSocket, 'sess-1', '/home/user/wt-1');
+
+      expect(registerSpy).toHaveBeenCalledWith('/home/user/wt-1');
+    });
+
+    it('deregisters the PID when the bridge emits acp:stopped', async () => {
+      const mockSocket = setup();
+      await startSession(mockSocket, 'sess-1', '/home/user/wt-1');
+      vi.mocked(processRegistry.deregister).mockClear();
+
+      bridgeInstances[0].emit('acp:stopped', { sessionId: 'sess-1', reason: 'user_close' });
+
+      expect(processRegistry.deregister).toHaveBeenCalledWith('sess-1');
+    });
+
+    it('deregisters the PID on the acp:stop bridge path', async () => {
+      const mockSocket = setup();
+      await startSession(mockSocket, 'sess-1', '/home/user/wt-1');
+      vi.mocked(processRegistry.deregister).mockClear();
+
+      mockSocket._trigger('acp:stop', { sessionId: 'sess-1' });
+
+      await vi.waitFor(() => {
+        expect(processRegistry.deregister).toHaveBeenCalledWith('sess-1');
+      });
+    });
+  });
+
+  describe('acp:stop fallback kill', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.mocked(os.platform).mockReturnValue('linux');
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function setup() {
+      bridgeInstances.length = 0;
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      return mockSocket;
+    }
+
+    it('kills by registry PID and probes liveness before SIGKILL', async () => {
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      vi.mocked(processRegistry.get).mockReturnValue({ pid: 2222, cwd: '/x', acpServerType: 'opencode', startedAt: '2026-01-01' });
+      vi.mocked(isProcessAlive).mockReturnValue(true);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:stop', { sessionId: 'sess-x', ackRequired: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(killSpy).toHaveBeenCalledWith(-2222, 'SIGTERM');
+      expect(processRegistry.deregister).toHaveBeenCalledWith('sess-x');
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:stopped', {
+        sessionId: 'sess-x',
+        reason: 'user_close',
+        killed: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(isProcessAlive).toHaveBeenCalledWith(2222);
+      expect(killSpy).toHaveBeenCalledWith(-2222, 'SIGKILL');
+    });
+
+    it('skips SIGKILL when the process is already dead (PID reuse guard)', async () => {
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      vi.mocked(processRegistry.get).mockReturnValue({ pid: 2222, cwd: '/x', acpServerType: 'opencode', startedAt: '2026-01-01' });
+      vi.mocked(isProcessAlive).mockReturnValue(false);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:stop', { sessionId: 'sess-x' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(killSpy).toHaveBeenCalledWith(-2222, 'SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(killSpy).not.toHaveBeenCalledWith(-2222, 'SIGKILL');
+    });
+
+    it('ignores malformed payloads with a warning', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:stop', { ackRequired: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+    });
+  });
+
+  describe('acp:reconcile', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.mocked(os.platform).mockReturnValue('linux');
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function setup() {
+      bridgeInstances.length = 0;
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      return mockSocket;
+    }
+
+    it('kills orphan registry entries and probes liveness before SIGKILL', async () => {
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      vi.mocked(processRegistry.listEntries).mockReturnValue([
+        { sessionId: 's1', pid: 3333, cwd: '/x', acpServerType: 'opencode', startedAt: '2026-01-01' },
+      ]);
+      vi.mocked(isProcessAlive).mockReturnValue(false);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:reconcile', { activeSessionIds: [], pendingKillSessionIds: [] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(killSpy).toHaveBeenCalledWith(-3333, 'SIGTERM');
+      expect(processRegistry.deregister).toHaveBeenCalledWith('s1');
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(isProcessAlive).toHaveBeenCalledWith(3333);
+      expect(killSpy).not.toHaveBeenCalledWith(-3333, 'SIGKILL');
+    });
+
+    it('keeps sessions listed in activeSessionIds', async () => {
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      vi.mocked(processRegistry.listEntries).mockReturnValue([
+        { sessionId: 's1', pid: 3333, cwd: '/x', acpServerType: 'opencode', startedAt: '2026-01-01' },
+      ]);
+      const mockSocket = setup();
+
+      mockSocket._trigger('acp:reconcile', { activeSessionIds: ['s1'], pendingKillSessionIds: [] });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(processRegistry.deregister).not.toHaveBeenCalled();
+    });
+
+    it('ignores malformed payloads with a warning', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      const mockSocket = setup();
+      // connectToServer seeds the fs whitelist via listEntries once; clear it
+      vi.mocked(processRegistry.listEntries).mockClear();
+
+      mockSocket._trigger('acp:reconcile', { activeSessionIds: 'oops', pendingKillSessionIds: null });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(processRegistry.listEntries).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
     });
   });
 });

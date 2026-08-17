@@ -1,7 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { tmpdir } from 'os';
 
 const REGISTRY_DIR = join(homedir(), '.zag');
 const REGISTRY_FILE = join(REGISTRY_DIR, 'processes.json');
@@ -32,12 +31,13 @@ function ensureDir(): void {
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM: process exists but is owned by another user — alive, not dead
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -57,7 +57,9 @@ function readRaw(): RegistryFile | null {
 
 function writeRaw(data: RegistryFile): void {
   ensureDir();
-  const tmpFile = join(tmpdir(), `processes-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  // Temp file lives inside REGISTRY_DIR: rename is only atomic on the same
+  // filesystem (writing to os.tmpdir() first breaks with EXDEV on Linux).
+  const tmpFile = join(REGISTRY_DIR, `processes-${Date.now()}-${Math.random().toString(36).slice(2)}.json.tmp`);
   writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf-8');
   renameSync(tmpFile, REGISTRY_FILE);
 }
@@ -124,7 +126,13 @@ export class ProcessRegistry {
   }
 
   private flush(): void {
-    writeRaw({ version: 1, processes: Array.from(this.processes.values()) });
+    try {
+      writeRaw({ version: 1, processes: Array.from(this.processes.values()) });
+    } catch (err) {
+      // Persistence is best-effort: a flush failure must never crash the
+      // controller (this can be called from timer callbacks).
+      console.warn(`[ProcessRegistry] flush failed: ${(err as Error).message}`);
+    }
   }
 }
 

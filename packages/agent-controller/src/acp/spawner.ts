@@ -37,7 +37,12 @@ export class AcpSpawner {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
     if (platform() === 'win32') {
-      // spawn executable directly (no shell) for reliable taskkill targeting
+      // .cmd/.bat cannot be spawned without a shell since Node 18.20.2/20.12.2
+      // (CVE-2024-27980, spawn throws EINVAL); real executables spawn directly
+      // (no shell) for reliable taskkill targeting.
+      if (/\.(cmd|bat)$/i.test(cmd)) {
+        spawnOptions.shell = true;
+      }
     } else {
       spawnOptions.detached = true;
     }
