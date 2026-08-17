@@ -289,25 +289,6 @@ type ImportSessionResult {
   messageCount: Int
 }
 
-type WorkspaceWorktree {
-  path: String!
-  branch: String
-  sessions: [Session!]!
-  sessionCount: Int!
-}
-
-type WorktreeDeleteFailure {
-  sessionId: ID!
-  error: String!
-}
-
-type DeleteWorktreeResult {
-  success: Boolean!
-  closedSessionIds: [ID!]!
-  failures: [WorktreeDeleteFailure!]!
-  error: String
-}
-
 type CreateSessionPayload {
   session: Session!
 }
@@ -356,8 +337,6 @@ type Query {
   listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   getTodoList: [TodoItem!]!
   getUnreadTodoCount: Int!
-  # 查询工作区下的 Worktree 列表（Git 仓库工作区），返回 git worktree list 与 sessions 归组的并集
-  workspaceWorktrees(controllerId: ID!, workspaceId: ID!): [WorkspaceWorktree!]!
 }
 
 type Mutation {
@@ -381,6 +360,4 @@ type Mutation {
   markAllTodoRead: Boolean!
   updatePermissionTimeout(sessionId: ID, timeoutAction: PermissionTimeoutAction!): Boolean!
   updateGlobalPermissionTimeout(timeoutAction: GlobalPermissionTimeoutAction!): Boolean!
-  # 强制删除 Worktree：递归终止关联会话 → git worktree remove --force → fs:remove-dir 兜底
-  deleteWorktree(controllerId: ID!, workspaceId: ID!, worktreePath: String!): DeleteWorktreeResult!
 }
