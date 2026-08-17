@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 会话生命周期与 Worktree 管理增强
 **关联 PRD**: docs/product/draft/20260817-session-lifecycle-and-worktree-management.md
-**技术提案版本**: v1.1（返工：补充多工作流并发 MCP 丢失修复方案）
+**技术提案版本**: v1.2（返工：追加返工完成后节点会话未关闭修复方案）
 **创建日期**: 2026-08-17
 **作者**: AI
 **feat-branch**: `feat/session-lifecycle-worktree`
@@ -29,12 +29,15 @@ type: Permanent
 
 此外，调研确认一个**多工作流并发缺陷**：当多个工作流实例同时运行时，只有一个节点会话能正常使用 workflow MCP 工具，其余会话拿不到 MCP 工具。根因是 controller-api `startSession`/`resumeSession` 使用 `controllerSocket.once('acp:start:result')` 等待结果（`servers/controller-api/src/services/acp-session-manager.ts:61-85, 478-502`）：同一 controller 上多个并发启动共享同一 Socket.IO 连接，第一个到达的 `acp:start:result` 会触发**所有**挂起的 `once` 监听器；requestId 不匹配的监听器在 `clearTimeout` 后直接 return，但 `once` 语义已将其注销——等它们自己的结果到达时已无监听器，且 30s 超时兜底也被提前清除，Promise 永不 resolve。后果：输家会话永远停留在 `connecting`、不进入 `this.sessions`、首条 prompt 滞留 `pendingInputs`，表现为「只有第一个会话真正可用」。另有两个加剧因素：平台 MCP server 文档（`agent-workflow-tools`/`agent-workflow-admin-tools`）并发首建时触发 `{userId, name}` 唯一索引 `E11000` 使节点启动直接抛错（`orchestrator.ts:230-245`、`mcp-server.ts:23`）；MCP endpoint 创建失败被静默吞掉，会话以 `mcpServers: []` 启动（`session.ts:129-143`），同样表现为无 MCP 工具且无任何报错。
 
+还确认一个**返工会话泄漏缺陷**：工作流中节点被打回后会以原会话 resume 返工（`onNodeRework → reworkNodeSession`，`orchestrator.ts:133-152`，不新建会话），但返工完成（`completeCurrentRework`）后该节点会话不会自动关闭。根因：`engine.ts` 状态机中 `case 'complete'`（`engine.ts:164-183`）末尾会 `await this.hooks.onNodeDone?.(instance, node)` 触发 `endNodeSession → sessionService.close`（关闭会话），而 `case 'completeRework'`（`engine.ts:212-226`）只重置产物、置 DONE、复工下游 REJECT 节点，**从未调用 `onNodeDone`**——返工会话就此残留运行，直到实例被删除或会话自然死亡。
+
 ### 1.2 目标
 
 - 任意删除路径（删除单会话、删除工作流实例、删除 Worktree）下，ACP 进程及其子进程被**彻底销毁**，且链路有送达保证与对账兜底。
 - 新增 Worktree 列表能力与侧边栏「工作区 → Worktree → 对话」层级展示（仅 Git 仓库）。
 - 新增 Worktree 维度操作：在该 Worktree 下新建会话 / 拉起工作流实例；Worktree 强制删除（递归关闭全部会话 + 彻底删除目录）。
 - 修复多工作流并发场景下节点会话丢失 workflow MCP 工具的缺陷：同一 controller 上 N 个并发启动的会话全部正常建立并获得 MCP 工具。
+- 修复节点返工完成后会话不自动关闭的缺陷：`completeCurrentRework` 与 `completeCurrentNode` 行为一致，节点 DONE 后会话被正常结束。
 
 ### 1.3 范围
 
@@ -42,7 +45,7 @@ type: Permanent
 
 - agent-controller：进程注册表（PID 持久化）、进程组 kill、stop 超时、daemon 退出清理、重连对账、`git:worktree:list`、强制删除 worktree 事件。
 - controller-api：`acp:stop` 送达保证（ack + 离线补发）；`acp:start`/`acp:resume` 结果按 requestId 路由（修复并发 `once` 竞态）。
-- agent-api：删除顺序修正、worktree 列表查询、Worktree 强制删除 mutation、会话按路径批量终止；平台 MCP server upsert 竞态与 endpoint 创建失败处理加固。
+- agent-api：删除顺序修正、worktree 列表查询、Worktree 强制删除 mutation、会话按路径批量终止；平台 MCP server upsert 竞态与 endpoint 创建失败处理加固；工作流引擎 `completeRework` 补齐 `onNodeDone`（返工完成后关闭节点会话）。
 - agent-web：侧边栏 Worktree 层级、Worktree 节点添加/删除入口、删除确认弹窗、新建会话预选 worktree 目录。
 - contracts：GraphQL 与 WebSocket 契约更新。
 
@@ -334,6 +337,12 @@ sequenceDiagram
 - **技术细节**: 现有 `socketio.ts:216-235` 的 socket 级 no-op handler 注释已声明「由 acpSessionManager 通过 promise 处理」，改造后该注释路径与 dispatcher 对应；`cleanupFailedSession` 逻辑复用，由 dispatcher 在未命中/超时/断连路径统一调用。
 - **风险点**: dispatcher 需处理结果先于登记到达的乱序（理论上同 socket 内 emit/回包有序，风险低，防御性丢弃并记日志即可）；需为「同一 socket 并发 N 个 startSession」补充单元测试（现有测试只覆盖消息顺序，未覆盖并发启动，`common-rules.md:97` 已指出即时回复的 fake controller 会掩盖此类竞态，测试需注入延迟与乱序）。
 
+#### 实现点 7: 返工完成后节点会话未关闭修复
+
+- **描述**: 修复「节点返工完成（`completeCurrentRework`）后会话不自动关闭」的缺陷。根因：`engine.ts` `case 'completeRework'`（`engine.ts:212-226`）未像 `case 'complete'` 那样调用 `hooks.onNodeDone`。修复方式：在 `completeRework` 末尾对齐 `complete` 的收尾逻辑——先 `refreshCurrentNodeNames(instance)` + `await instance.save()` 落库，再 `await this.hooks.onNodeDone?.(instance, node)` 触发 `endNodeSession → sessionService.close`（置 `ended` 并发布 `acp:stop`）。
+- **技术细节**: 必须先落库再调 hook——`sessionService.close` 会触发兜底检查读取 DB 节点状态，若 DONE 未持久化，兜底逻辑会误读节点仍为 REWORK/RUNNING 而错误 resume 会话（与 `complete` 路径既有注释 `engine.ts:178-179` 同一约束）。返工 resume 的是**原会话**（`reworkNodeSession` 复用 `node.sessionId`），无旧会话泄漏；`endNodeSession` 对无 `sessionId` 的 HUMAN 节点已有 guard，`completeHumanNode → completeRework` 路径天然安全。
+- **风险点**: `onNodeDone` 抛错会中断 transition（此时节点已落库 DONE），与现有 `complete` 路径暴露面一致，不引入新风险；测试上扩展 `engine.test.ts` E6 用例，断言 `completeRework` 后 `hooks.onNodeDone` 以该节点被调用，并补 API 级用例断言返工完成后节点会话状态为 `ended`。
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -379,6 +388,7 @@ servers/agent-api/src/
 ├── services/session.ts              # 改：delete/close 顺序修正、ack 等待、existingWorktreePath；MCP endpoint 创建失败对显式 mcpServerIds 会话 fail-fast
 ├── services/worktree.ts             # 新：list 聚合、deleteWorktree 编排
 ├── services/workflow/orchestrator.ts # 改：平台 MCP server upsert 竞态（E11000 捕获重读）
+├── services/workflow/engine.ts      # 改：completeRework 补齐 refreshCurrentNodeNames/save/onNodeDone 收尾（返工完成关闭会话）
 ├── services/workflow/instance.ts    # 改：删除失败项汇报（沿用 sessionService.delete）
 └── graphql/{schemas,resolvers}/     # 改：workspaceWorktrees/deleteWorktree/isGitRepo
 
@@ -407,7 +417,7 @@ contracts/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | ProcessRegistry 注册/注销/原子写、PID 校验；spawner 进程组 kill 参数；worktree 归组并集逻辑；路径白名单校验；start/resume dispatcher 并发 N 个请求按 requestId 正确路由（注入延迟与乱序结果）、socket 断连统一失败；平台 MCP server 并发 upsert 不抛 E11000 |
+| 单元测试 | Vitest | ProcessRegistry 注册/注销/原子写、PID 校验；spawner 进程组 kill 参数；worktree 归组并集逻辑；路径白名单校验；start/resume dispatcher 并发 N 个请求按 requestId 正确路由（注入延迟与乱序结果）、socket 断连统一失败；平台 MCP server 并发 upsert 不抛 E11000；引擎 `completeRework` 断言触发 `onNodeDone` 且先于 close 落库 DONE |
 | API 测试 | tests/api | 上述 GraphQL 端点的正常/异常路径（controller 离线降级、部分会话清理失败、worktree remove 失败走 fs:remove-dir） |
 | E2E 测试 | tests/e2e (Playwright) | 侧边栏 Git 仓库工作区展示 worktree 层级、非 Git 不展示；worktree 展开显示会话；添加菜单两条路径；删除确认弹窗文案与确认后会话消失；删除会话后进程不复存在（通过测试控制器桩验证） |
 
@@ -425,6 +435,7 @@ TDD：按红-绿-重构循环，先写 API/单元测试再实现。
 - [ ] controller 重启后对账清理生效（孤儿进程被收割）
 - [ ] controller 离线期间删除会话，重连后补做进程清理
 - [ ] 同一 controller 并发启动 N 个工作流实例，全部节点会话正常建立且均可用 workflow MCP 工具（无 stuck `connecting`）
+- [ ] 节点返工完成（completeCurrentRework）后，该节点会话自动结束（状态 `ended`、ACP 进程停止），无残留
 
 ## 10. 相关文档
 
