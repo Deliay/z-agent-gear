@@ -96,7 +96,7 @@ test.describe('Worktree E2E Tests', () => {
       }
     `, { controllerId: ctrl.controllerId, workspaceId }, token);
     const detectBody = await detectRes.json();
-    console.log('detectGitRepo result:', JSON.stringify(detectBody));
+    if (detectBody.errors) console.error('detectGitRepo errors:', detectBody.errors);
 
     await page.close();
   });
