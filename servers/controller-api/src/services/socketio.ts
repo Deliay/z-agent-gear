@@ -96,6 +96,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
         // Generate resume token for reconnection after server restart
         const resumeToken = await sessionService.storeResumeToken(keyId);
         socket.emit('registered', { controllerId: controller._id.toString(), resumeToken });
+
+        // 重连对账：下发权威活跃会话与待清理会话，controller 据此收割孤儿进程（内部容错，不影响注册）
+        await acpSessionManager.reconcileOnRegister(socket, controller._id.toString());
       } catch (err) {
         console.error('Register error:', err);
         socket.emit('error', { code: 'INVALID_KEY', message: 'Registration failed' });

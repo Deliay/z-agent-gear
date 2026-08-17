@@ -6,8 +6,11 @@ import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const EXTERNAL_SESSION_CACHE_TTL = 86400; // 24h
-const STOP_ACK_TIMEOUT_MS = 10_000;
+// 单次 ack 等待窗口：2 次尝试合计 ~10s，与 agent-api waitForStopAck 的 10s 等待上限对齐
+const STOP_ACK_TIMEOUT_MS = 5_000;
 const STOP_MAX_RETRIES = 1;
+// acp:stop:ack:{sessionId} 的 TTL，与提案统一为 60s
+const STOP_ACK_TTL_SECONDS = 60;
 
 interface ACPSession {
   controllerSocket: Socket;
@@ -389,16 +392,19 @@ export class ACPSessionManager {
       }
     }
 
-    // Always update DB status to ended (idempotent).
-    // When called after stopSessionWithAck, the session mapping is already
-    // cleaned up but the DB update is safe to repeat.
-    await Session.findByIdAndUpdate(sessionId, {
-      status: 'ended',
-      endedAt: new Date(),
-    });
-    await this.publishStatus(sessionId, 'ended');
+    // 会话处于 connecting（start/resume 进行中）时不落 ended：
+    // 此时最终状态由 start/resume 结果决定，无条件置 ended 会造成
+    // 「stop 后立即 resume」的 ended→idling 状态抖动。
+    // 其他状态下幂等落 ended（stopSessionWithAck 之后重复更新无害）。
+    const result = await Session.findOneAndUpdate(
+      { _id: sessionId, status: { $ne: 'connecting' } },
+      { status: 'ended', endedAt: new Date() },
+    );
+    if (result) {
+      await this.publishStatus(sessionId, 'ended');
+    }
     const redis = getRedisClient();
-    await redis.set(`acp:stop:ack:${sessionId}`, JSON.stringify({ reason, exitCode }), 'EX', 30);
+    await redis.set(`acp:stop:ack:${sessionId}`, JSON.stringify({ reason, exitCode }), 'EX', STOP_ACK_TTL_SECONDS);
   }
 
   async handleSocketDisconnect(socketId: string): Promise<void> {
@@ -819,6 +825,14 @@ export class ACPSessionManager {
   async stopSessionWithAck(sessionId: string, reason: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      // Controller 离线（无活跃映射）：记录 pending，待 controller 重连后 reconcile 补做
+      const doc = await Session.findById(sessionId).lean();
+      if (doc?.controllerId) {
+        console.log(`[ACP session] Session ${sessionId} not active (controller offline), recording stop as pending`);
+        const redis = getRedisClient();
+        await redis.lpush(`acp:stop:pending:${doc.controllerId}`, sessionId);
+        await redis.expire(`acp:stop:pending:${doc.controllerId}`, 86400);
+      }
       return;
     }
 
@@ -850,7 +864,9 @@ export class ACPSessionManager {
         console.log(`[ACP session] Received acp:stopped ack for session ${sessionId}: reason=${payload.reason} killed=${payload.killed ?? false}`);
       }
     };
-    controllerSocket.once('acp:stopped', onStopped);
+    // 用 on + 手动移除：once 会被同 socket 其他 session 的 acp:stopped 消耗，
+    // 导致本 session 的 ack 永远等不到而误走超时
+    controllerSocket.on('acp:stopped', onStopped);
 
     for (let attempt = 0; attempt <= STOP_MAX_RETRIES; attempt++) {
       controllerSocket.emit('acp:stop', { sessionId, ackRequired: true });
@@ -881,6 +897,44 @@ export class ACPSessionManager {
       const redis = getRedisClient();
       await redis.lpush(`acp:stop:pending:${session.controllerId}`, sessionId);
       await redis.expire(`acp:stop:pending:${session.controllerId}`, 86400);
+    }
+  }
+
+  /**
+   * Controller 注册/重连后下发 acp:reconcile（契约见 contracts/agent-controller-websocket.md §3.6）：
+   * activeSessionIds 为权威活跃会话（DB 未 ended 会话 ∪ 内存活跃映射），
+   * pendingKillSessionIds 来自离线期间积累的 acp:stop:pending 列表（读取后消费删除）。
+   * 失败仅记日志，不影响注册流程。
+   */
+  async reconcileOnRegister(controllerSocket: Socket, controllerId: string): Promise<void> {
+    try {
+      const redis = getRedisClient();
+
+      const activeSessionIds = new Set<string>();
+      for (const session of this.sessions.values()) {
+        if (session.controllerId === controllerId) {
+          activeSessionIds.add(session.sessionId);
+        }
+      }
+      const docs = await Session.find({ controllerId, status: { $ne: 'ended' } }).lean();
+      for (const doc of docs) {
+        activeSessionIds.add(String(doc._id));
+      }
+
+      const pendingKey = `acp:stop:pending:${controllerId}`;
+      const pending = await redis.lrange(pendingKey, 0, -1);
+      const pendingKillSessionIds = [...new Set(pending)];
+      if (pending.length > 0) {
+        await redis.del(pendingKey);
+      }
+
+      console.log(`[ACP session] Sending acp:reconcile to controller ${controllerId}: active=${activeSessionIds.size} pendingKill=${pendingKillSessionIds.length}`);
+      controllerSocket.emit('acp:reconcile', {
+        activeSessionIds: [...activeSessionIds],
+        pendingKillSessionIds,
+      });
+    } catch (error) {
+      console.error(`[ACP session] Failed to reconcile controller ${controllerId}:`, error);
     }
   }
 }

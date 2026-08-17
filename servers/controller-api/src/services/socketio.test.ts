@@ -6,6 +6,8 @@ vi.mock('../middleware/redis.js', () => ({
 
 const mockRedis = {
   publish: vi.fn().mockResolvedValue(1),
+  lrange: vi.fn().mockResolvedValue([]),
+  del: vi.fn().mockResolvedValue(1),
 };
 
 vi.mock('./key-cache.js', () => ({
@@ -25,6 +27,12 @@ vi.mock('../models/controller.js', () => ({
     findOneAndUpdate: vi.fn(),
     updateOne: vi.fn(),
     deleteOne: vi.fn(),
+  },
+}));
+
+vi.mock('../models/session.js', () => ({
+  Session: {
+    find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
   },
 }));
 
@@ -82,6 +90,7 @@ function createMockIO() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
 });
 
 describe('SocketIO Service', () => {
@@ -113,6 +122,14 @@ describe('SocketIO Service', () => {
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+      });
+
+      // 注册成功后下发重连对账事件（activeSessionIds/pendingKillSessionIds）
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:reconcile', {
+          activeSessionIds: [],
+          pendingKillSessionIds: [],
+        });
       });
     });
 
