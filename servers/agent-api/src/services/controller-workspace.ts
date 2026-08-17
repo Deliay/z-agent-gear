@@ -128,7 +128,9 @@ export class ControllerWorkspaceService {
         const parsed = JSON.parse(result);
         // Persist isGitRepo to workspace so Sidebar can render WorktreeSidebarGroup
         if (parsed.isGitRepo !== undefined) {
-          await ControllerWorkspace.findByIdAndUpdate(workspaceId, { isGitRepo: parsed.isGitRepo });
+          console.log('[detectGitRepo] persisting isGitRepo=', parsed.isGitRepo, 'for workspaceId=', workspaceId);
+          const updateResult = await ControllerWorkspace.findByIdAndUpdate(workspaceId, { isGitRepo: parsed.isGitRepo });
+          console.log('[detectGitRepo] updateResult:', updateResult ? 'found' : 'null');
         }
         return parsed;
       }
@@ -227,6 +229,7 @@ export class ControllerWorkspaceService {
       name: workspace.name,
       path: workspace.path,
       isEnabled: workspace.isEnabled,
+      isGitRepo: workspace.isGitRepo ?? null,
       defaultBranch: workspace.defaultBranch || null,
       createdAt: (workspace.createdAt as Date).toISOString(),
       updatedAt: (workspace.updatedAt as Date).toISOString(),
