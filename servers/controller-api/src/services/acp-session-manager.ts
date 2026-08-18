@@ -114,7 +114,6 @@ export class ACPSessionManager {
           controllerId,
           userId,
         });
-        this.flushPendingInputs(sessionId);
 
         // Track socket to sessions mapping
         const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
@@ -157,6 +156,11 @@ export class ACPSessionManager {
         if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
         if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
         await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
+
+        // 补发排队输入必须在状态落库 idling 之后：补发 prompt 会立即触发
+        // acp:prompt:start → handlePromptStart 以 status='idling' 为条件转 running，
+        // 若补发先于落库，条件更新未命中，会话状态将永久停留「空闲」
+        this.flushPendingInputs(sessionId);
 
         // Cache externalSessionId in Redis for resume
         if (payload.externalSessionId) {
@@ -493,7 +497,6 @@ export class ACPSessionManager {
           controllerId,
           userId,
         });
-        this.flushPendingInputs(sessionId);
 
         const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
         socketSessions.add(sessionId);
@@ -524,6 +527,9 @@ export class ACPSessionManager {
         if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
         if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
         await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
+
+        // 补发排队输入必须在状态落库 idling 之后（同 startSession 的竞态防护）
+        this.flushPendingInputs(sessionId);
 
         return { success: true };
       } else {

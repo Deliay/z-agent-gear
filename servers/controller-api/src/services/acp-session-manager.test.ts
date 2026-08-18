@@ -377,6 +377,53 @@ describe('ACPSessionManager', () => {
       expect(messages).toEqual(['第一条 prompt', '第二条 prompt']);
     });
 
+    it('start：补发排队输入必须发生在状态落库 idling 之后（否则 prompt:start 的 idling→running 更新未命中，状态停留「空闲」）', async () => {
+      const socket = createMockSocket();
+      const { resultPromise, requestId } = await startAndGetRequestId(socket);
+
+      manager.forwardToController('sess-1', { type: 'text', content: '首条 prompt' });
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await resultPromise;
+
+      // 状态落库 idling 必须先于 acp:message 补发：handlePromptStart 以 status='idling' 为条件转 running
+      const updateCalls = vi.mocked(Session.findByIdAndUpdate).mock.calls;
+      const idlingIdx = updateCalls.findIndex((c) => (c[1] as Record<string, unknown>).status === 'idling');
+      expect(idlingIdx).toBeGreaterThanOrEqual(0);
+      const idlingOrder = vi.mocked(Session.findByIdAndUpdate).mock.invocationCallOrder[idlingIdx];
+      const msgIdx = socket.emit.mock.calls.findIndex((c) => c[0] === 'acp:message');
+      expect(msgIdx).toBeGreaterThanOrEqual(0);
+      const msgOrder = socket.emit.mock.invocationCallOrder[msgIdx];
+      expect(idlingOrder).toBeLessThan(msgOrder);
+    });
+
+    it('resume：补发排队输入必须发生在状态落库 idling 之后', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-2', 'ext-1', 'ctrl-1', 'user-1', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      manager.forwardToController('sess-2', { type: 'text', content: '返工提示词' });
+      socket._trigger('acp:resume:result', { requestId, sessionId: 'sess-2', success: true });
+      await resultPromise;
+
+      const updateCalls = vi.mocked(Session.findByIdAndUpdate).mock.calls;
+      const idlingIdx = updateCalls.findIndex((c) => (c[1] as Record<string, unknown>).status === 'idling');
+      expect(idlingIdx).toBeGreaterThanOrEqual(0);
+      const idlingOrder = vi.mocked(Session.findByIdAndUpdate).mock.invocationCallOrder[idlingIdx];
+      const msgIdx = socket.emit.mock.calls.findIndex((c) => c[0] === 'acp:message');
+      expect(msgIdx).toBeGreaterThanOrEqual(0);
+      const msgOrder = socket.emit.mock.invocationCallOrder[msgIdx];
+      expect(idlingOrder).toBeLessThan(msgOrder);
+    });
+
     it('resume 完成前到达的输入消息排队，resume:result 后补发', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
