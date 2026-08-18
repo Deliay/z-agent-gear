@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第五轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」「resume 路径 mode/model 时序」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第六轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」「resume 路径 mode/model 时序」「AI→AI 节点会话拉起失败」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -342,6 +342,44 @@ type: Permanent
 | 各子项目 build | ✅ tsc strict 全部通过 |
 | API 测试（tests/api） | ✅ 308/308 |
 | E2E 测试（tests/e2e） | ✅ 177/177（本轮全套 2 个用例单次失败——permission 弹窗、github binding toast——单跑 16/16 全绿，同为与改动无关的时序抖动） |
+
+## 修复记录（2026-08-18 第六轮：AI→AI 节点会话拉起失败）
+
+人工复验发现：**AI 节点完成、下一个节点也是 AI 节点时，会出现会话不能拉起**。现场日志显示 `acp:start` 30s 超时 → 会话被 `cleanupFailedSession` 删除（publish `removed`）→ 迟到的 `acp:start:result` 被 dispatcher 以 unknown requestId 丢弃 → 节点停在 RUNNING、sessionId 悬空，流程静默卡死。
+
+修复方案：[[20260818-fix-ai-node-session-start-timeout]]（docs/engineering/proposals/20260818-fix-ai-node-session-start-timeout.md）
+
+### 根因（三层缺陷）
+
+1. start 超时删除会话后，agent-api 对 `removed` 状态只关 SSE（`session-sse.ts`），**不通知编排器** → 节点 RUNNING 悬空、无感知、不可恢复（主因）。
+2. 迟到的成功 start/resume result 仅记日志 → ACP 进程孤儿（验收 #18）。
+3. controller 端同 sessionId 重复 start/resume 直接覆盖 bridge → 旧 bridge/进程泄漏。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/agent-api/src/services/session.ts` | 新增 `onSessionRemoved`/`notifySessionRemoved`（与 onSessionEnded 同模式） |
+| `servers/agent-api/src/services/session-sse.ts` | `removed` 状态分支触发 `notifySessionRemoved` |
+| `servers/agent-api/src/services/workflow/orchestrator.ts` | 新增 `handleSessionRemoved`：节点 RUNNING/REWORK → 升级 FAILED（`SESSION_START_FAILED`，人工可重启节点恢复） |
+| `servers/controller-api/src/services/acp-session-manager.ts` | dispatcher unknown requestId 且 success、会话无活跃映射且无在途 start/resume → emit `acp:stop` 收割孤儿 |
+| `packages/agent-controller/src/socketio-client.ts` | acp:start/acp:resume 遇同 sessionId 旧 bridge 先 stop 再替换（防同会话双进程） |
+| `contracts/workflow.graphql` | failInfo.source 注释补 `SESSION_START_FAILED` |
+
+### 新增测试
+
+- agent-api：`notifySessionRemoved` 回调触发（session.test.ts）；removed 状态经 SSE 订阅层通知 sessionService（session-sse.test.ts）；orchestrator O9/O9b（RUNNING→FAILED(SESSION_START_FAILED)；DONE→忽略）。
+- controller-api：迟到 success result 收割 / failure 不收割 / 有在途 start 不收割（acp-session-manager.test.ts ×3）。
+- agent-controller：同 sessionId 重复 acp:start 先停旧 bridge（socketio-client.test.ts）。
+
+### 验证结果（第六轮）
+
+| 项目 | 结果 |
+|------|------|
+| 四子项目单测 | ✅ agent-api 552/552、controller-api 406/406、agent-controller 359/359、agent-web 358/358（无改动） |
+| 各子项目 build | ✅ tsc strict 全部通过 |
+| API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（本轮全套 2 个已知抖动用例单次失败——permission 弹窗、tool_call 高亮——单跑 16/16 全绿，与改动无关） |
 
 ### 最终验证（修复后）
 
