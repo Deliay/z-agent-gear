@@ -356,6 +356,8 @@ Controller 转发 ACP 输出。
 | `userId` | `string` | 是 | 用户 ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径） |
+| `modeId` | `string` | 否 | 初始工作模式 ID（工作流节点配置；不提供则使用 harness 默认） |
+| `modelId` | `string` | 否 | 初始模型 ID（工作流节点配置；不提供则使用 harness 默认） |
 
 **客户端行为：**
 
@@ -364,7 +366,8 @@ Controller 转发 ACP 输出。
 3. 调用 SDK `connection.initialize()` — 不声明 `fs`/`terminal` 能力
 4. 调用 SDK `connection.resumeSession({ sessionId: externalSessionId })`
 5. 如果 agent 不支持 `session.resume`，fallback 到 `newSession`
-6. 回复 `acp:resume:result`
+6. 若 payload 携带 `modeId`/`modelId`，在回复结果前应用初始工作模式/模型（同 `acp:start` §2.4：必须在 `acp:initialized`/`acp:resume:result` 之前完成，保证首条 prompt 以配置值执行）
+7. 回复 `acp:resume:result`
 
 ### 2.12 `acp:resume:result`（Controller → Server）
 

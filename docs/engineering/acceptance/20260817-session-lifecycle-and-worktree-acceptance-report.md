@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第四轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第五轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」「resume 路径 mode/model 时序」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -303,6 +303,45 @@ type: Permanent
 | 其余子项目单测/build | ✅ 本轮无改动，沿第三轮结果；agent-api tsc strict 通过 |
 | API 测试（tests/api） | ✅ 308/308 |
 | E2E 测试（tests/e2e） | ✅ 177/177（三轮全套各 1 个不同用例单次失败——session-message 高亮、mcp-session 注册、permission 审批——单文件重跑均全绿，确认为全量负载下的时序抖动，与本改动无关） |
+
+## 修复记录（2026-08-18 第五轮：节点 resume 路径 mode/model 时序）
+
+人工复验质疑：**轮到新节点时 setModel/setMode 指令可能没发过去就开始执行 prompt，时序是否受控**。
+
+修复方案：[[20260818-fix-resume-mode-model-sequencing]]（docs/engineering/proposals/20260818-fix-resume-mode-model-sequencing.md）
+
+### 根因
+
+- **create 路径时序本就受控**：modeId/modelId 随 `acp:start` 带内下发，bridge 在 `acp:initialized` 之前应用，prompt 在 `acp:start:result` 成功后才从 pendingInputs 补发。
+- **resume 路径（reworkNodeSession / handleSessionEnded 兜底）时序不受控**，全链路四段缺失：① `sessionService.resume` 的 acp:resume 发布不带 modeId/modelId；② orchestrator 补救用的 `applyAgentConfig`→`setMode/setModel` 有 `status !== 'idling'` 守卫，resume 发起时状态为 ended/connecting → **静默丢弃、从未生效**；③ controller-api resumeSession 的 socket payload 不含 mode/model；④ controller 端 acp:resume handler 不传 initialModeId/initialModelId 且 `bridge.resume()` 不调用 `applyInitialModeModel()`。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/agent-api/src/services/session.ts` | `resume()` 支持可选 `initial: { modeId, modelId }`，随 acp:resume 带内发布 |
+| `servers/agent-api/src/services/workflow/orchestrator.ts` | reworkNodeSession / handleSessionEnded 以节点配置调 resume；删除恒为 no-op 的 `applyAgentConfig` 死调用（start/rework 两处） |
+| `servers/controller-api/src/services/acp-session-manager.ts` | `resumeSession` 支持 initial 参数，modeId/modelId 写入 acp:resume payload |
+| `servers/controller-api/src/services/session-command.ts` | `handleAcpResume` 透传 modeId/modelId |
+| `packages/agent-controller/src/socketio-client.ts` | `AcpResumePayload` 增加 modeId/modelId；acp:resume handler 传 initialModeId/initialModelId |
+| `packages/agent-controller/src/acp/bridge.ts` | `resume()` 两个分支（resumeSession 成功 / newSession fallback）在 emit `acp:initialized` 前 `applyInitialModeModel()` |
+| `contracts/agent-session-websocket.md` | §2.11 acp:resume payload 增加 modeId/modelId 可选字段 + 客户端行为第 6 步（result 前应用初始 mode/model） |
+
+### 新增/更新测试
+
+- agent-api `session.test.ts`：resume 传 initial → acp:resume 含 modeId/modelId；不传 → 不含。
+- agent-api `orchestrator.test.ts`：rework 以节点配置调 resume（不再调 setMode/setModel）；兜底 resume 第三参断言。
+- controller-api `acp-session-manager.test.ts`：acp:resume payload 含 modeId/modelId；`session-command.test.ts`：acp:resume 命令透传（manager mock 补 resumeSession）。
+- agent-controller `bridge.test.ts`：resume 两个分支均在 acp:initialized 前应用初始 mode/model（调用顺序断言）。
+
+### 验证结果（第五轮）
+
+| 项目 | 结果 |
+|------|------|
+| 四子项目单测 | ✅ agent-api 548/548、controller-api 400/400、agent-controller 358/358、agent-web 358/358（无改动） |
+| 各子项目 build | ✅ tsc strict 全部通过 |
+| API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（本轮全套 2 个用例单次失败——permission 弹窗、github binding toast——单跑 16/16 全绿，同为与改动无关的时序抖动） |
 
 ### 最终验证（修复后）
 
