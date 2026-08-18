@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, rmSync, statSync } from 'fs';
 import { join, parse, resolve, sep } from 'path';
 import { homedir } from 'os';
 
@@ -88,6 +88,15 @@ export class FsHandler {
       if (!this.isPathSafe(path)) {
         return { success: false, error: `Path not allowed: ${path}` };
       }
+      // 主工作区保护（最后一道防线）：git 主工作区的 .git 是目录，
+      // linked worktree 的 .git 是指向主仓库 gitdir 的普通文件。
+      // 白名单可能被会话 cwd（= 仓库根）污染，凭路径无法区分，
+      // 凭 .git 形态可以——含 .git 目录的路径一律拒绝删除。
+      try {
+        if (statSync(join(resolve(path), '.git')).isDirectory()) {
+          return { success: false, error: `Refusing to remove a git main working tree: ${path}` };
+        }
+      } catch { /* no .git entry — not a repo root, proceed */ }
       rmSync(path, { recursive: true, force: true });
       return { success: true };
     } catch (err) {
