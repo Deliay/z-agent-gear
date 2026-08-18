@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第二轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第三轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」与「删除 Worktree 误删根工作区」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -235,6 +235,41 @@ type: Permanent
 | 各子项目 build | ✅ tsc strict / vite 全部通过 |
 | API 测试（tests/api，Aspire 真实 Mongo/Redis） | ✅ 308/308（含 deleteHistorySession 先 stop 后同步的新断言） |
 | E2E 测试（tests/e2e，Playwright 全套） | ✅ 177/177 |
+
+## 修复记录（2026-08-18 第三轮：删除 Worktree 误删根工作区）
+
+人工复验发现：**删除 worktree 时把根工作区（仓库本体）也删除了，本地 .git 丢失**——严重数据丢失。
+
+修复方案：[[20260818-fix-worktree-delete-root-workspace]]（docs/engineering/proposals/20260818-fix-worktree-delete-root-workspace.md）
+
+### 根因（三层失守）
+
+1. `git worktree list --porcelain` 首条即主工作区（仓库根），`worktreeService.list()` 未过滤 → 根目录作为可删 worktree 展示且通过 `deleteWorktree` 的 list 校验（`worktree.ts`）。
+2. `git worktree remove --force <根>` 被 git 拒绝（main working tree）→ 进入 `fs:remove-dir` 兜底。
+3. controller 端 `acp:start`/`acp:resume` 无条件 `fsHandler.registerAllowedPath(data.cwd)`，普通会话 cwd 即仓库根 → 根目录早在 `fs:remove-dir` 白名单内 → `rmSync(根, recursive)` 执行。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/agent-api/src/services/worktree.ts` | ① `list()` 过滤主工作区（归一化比较 `wt.path === workspace.path`）；② `deleteWorktree` 显式拒绝根路径（`BAD_USER_INPUT`），先于 list 校验，不发出任何删除命令 |
+| `packages/agent-controller/src/fs-handler.ts` | ③ `removeDir` 拒绝删除「`.git` 为目录」的路径（主工作区特征；linked worktree 的 `.git` 是普通文件不受影响）——与路径无关的最后一道防线 |
+
+### 新增测试
+
+- agent-api `worktree.test.ts`：list 过滤主工作区；deleteWorktree 根路径拒绝（无 git/fs 命令发出）。
+- agent-controller `tests/fs-handler.test.ts`（新建，真实 fs）：`.git` 目录路径拒绝且目录完整；`.git` 文件路径（linked worktree）正常删除；未注册路径拒绝。
+
+### 验证结果（第三轮）
+
+| 项目 | 结果 |
+|------|------|
+| agent-api 单测 | ✅ 545/545（38 文件，+2） |
+| agent-controller 单测 | ✅ 354/354（28 文件，+3 真实 fs 用例） |
+| controller-api / agent-web 单测 | ✅ 396/396、358/358（本轮无改动，沿第二轮结果） |
+| 各子项目 build | ✅ tsc strict 通过 |
+| API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（`session-message.spec.ts` tool_call 高亮用例首跑失败、单文件重跑 6/6 通过，确认为与本次改动无关的动画时序抖动） |
 
 ### 最终验证（修复后）
 
