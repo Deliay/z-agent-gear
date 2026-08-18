@@ -630,6 +630,34 @@ describe('SocketIO Client', () => {
       expect(registerSpy).toHaveBeenCalledWith('/home/user/wt-1');
     });
 
+    it('stops the previous bridge when acp:start arrives for the same sessionId again', async () => {
+      const mockSocket = setup();
+      await startSession(mockSocket, 'sess-1', '/home/user/wt-1');
+      const oldBridge = bridgeInstances[0] as unknown as { stop: () => Promise<void> };
+      const stopSpy = vi.spyOn(oldBridge, 'stop');
+
+      // 同 sessionId 再次 acp:start（如超时重试/兜底 resume 后迟到）：旧 bridge 必须先停，
+      // 否则同会话双进程、旧 bridge 泄漏
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-start-2',
+        sessionId: 'sess-1',
+        serverType: 'opencode',
+        cwd: '/home/user/wt-1',
+      });
+
+      await vi.waitFor(() => {
+        expect(stopSpy).toHaveBeenCalled();
+      });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({
+          requestId: 'req-start-2',
+          sessionId: 'sess-1',
+          success: true,
+        }));
+      });
+      expect(bridgeInstances).toHaveLength(2);
+    });
+
     it('deregisters the PID when the bridge emits acp:stopped', async () => {
       const mockSocket = setup();
       await startSession(mockSocket, 'sess-1', '/home/user/wt-1');

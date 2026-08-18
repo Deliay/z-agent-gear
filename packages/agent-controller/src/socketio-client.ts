@@ -308,6 +308,14 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
 
     try {
+      // 同 sessionId 重复 start（如 start 超时后的兜底 resume/重试与迟到初始化交叠）：
+      // 先停掉旧 bridge，避免同会话双进程、旧 bridge 泄漏
+      const existingBridge = acpBridges.get(data.sessionId);
+      if (existingBridge) {
+        console.warn(`[ACP ctrl] acp:start for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        acpBridges.delete(data.sessionId);
+        await existingBridge.stop().catch(() => {});
+      }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
@@ -425,6 +433,13 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
 
     try {
+      // 同 sessionId 重复 resume/start：先停掉旧 bridge（同 acp:start 的防双进程处理）
+      const existingBridge = acpBridges.get(data.sessionId);
+      if (existingBridge) {
+        console.warn(`[ACP ctrl] acp:resume for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        acpBridges.delete(data.sessionId);
+        await existingBridge.stop().catch(() => {});
+      }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
