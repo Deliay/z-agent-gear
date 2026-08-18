@@ -367,7 +367,9 @@ export class ACPSessionManager {
       { status: 'idling' },
     );
     if (result) {
-      await this.publishStatus(sessionId, 'idling');
+      // promptCompleted 标记：区分「turn 结束落 idling」与「start 落 idling」，
+      // agent-api 据此检测工作流节点会话的空闲停滞（节点未推进但 turn 已结束）
+      await this.publishStatus(sessionId, 'idling', undefined, { promptCompleted: true });
     }
   }
 
@@ -778,6 +780,7 @@ export class ACPSessionManager {
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
       if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
+      if (extra.promptCompleted === true) payload.promptCompleted = true;
     }
     await redis.publish('session:status', JSON.stringify(payload));
   }

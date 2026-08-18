@@ -956,6 +956,18 @@ describe('ACPSessionManager', () => {
       expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
     });
 
+    it('published idling carries promptCompleted marker（区分 start 落 idling 与 turn 结束落 idling）', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
+
+      await manager.handlePromptComplete('sess-1', 'cancelled');
+
+      // 工作流节点会话停滞检测依赖该标记：turn 结束且节点未推进 = 停滞
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:status',
+        expect.stringContaining('"promptCompleted":true'),
+      );
+    });
+
     it('should not publish when session is not running (crash race)', async () => {
       vi.mocked(Session.findOneAndUpdate).mockResolvedValue(null);
 
