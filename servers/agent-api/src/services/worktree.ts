@@ -41,6 +41,7 @@ class WorktreeService {
     }
 
     const redis = getRedisClient();
+    const workspaceRoot = path.normalize(workspace.path);
 
     // Check if controller is online before querying git worktrees
     const controller = await Controller.findById(controllerId).lean();
@@ -63,6 +64,9 @@ class WorktreeService {
           const parsed = JSON.parse(result);
           if (parsed.success && Array.isArray(parsed.worktrees)) {
             for (const wt of parsed.worktrees) {
+              // git worktree list 首条是主工作区（仓库根）——它不是可管理 worktree，
+              // 必须过滤，否则侧边栏可对它发起删除，fs 兜底会 rm 掉整个仓库（含 .git）
+              if (path.normalize(wt.path) === workspaceRoot) continue;
               gitWorktrees.push({ path: wt.path, branch: wt.branch || '' });
             }
           }
@@ -139,6 +143,14 @@ class WorktreeService {
     }).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
+    }
+
+    // 根工作区（仓库本体）永远不可删除——即使上层 list 过滤失守，
+    // 也不得对根路径发出任何 git/fs 删除命令（否则 .git 丢失）
+    if (path.normalize(worktreePath) === path.normalize(workspace.path)) {
+      throw new GraphQLError('cannot delete the workspace root (main working tree)', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
 
     // Path must be a worktree known to this workspace (git worktrees reported

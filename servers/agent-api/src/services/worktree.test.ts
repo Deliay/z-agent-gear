@@ -185,6 +185,33 @@ describe('WorktreeService', () => {
       expect(result[0].branch).toBe('feat-x');
       expect(result[0].sessionCount).toBe(1);
     });
+
+    it('should filter out the main worktree (workspace root) from git worktree list', async () => {
+      mockWorkspace(); // workspace.path = /home/user/project
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'online', worktreeDir: '/worktrees' }),
+      } as never);
+      mockRedis.get.mockImplementation(async (key: string) => {
+        if (key.startsWith('git:worktree:list:')) {
+          // git worktree list --porcelain 首条即主工作区（仓库根）
+          return JSON.stringify({
+            success: true,
+            worktrees: [
+              { path: '/home/user/project', branch: 'main' },
+              { path: '/worktrees/my-project/feat-1', branch: 'my-project/feat-1' },
+            ],
+          });
+        }
+        return null;
+      });
+      mockSessionFind([]);
+
+      const result = await worktreeService.list('ctrl-1', 'ws-1', 'user-1');
+
+      // 主工作区不得作为可管理 worktree 出现（否则侧边栏可删除仓库根，.git 丢失）
+      expect(result).toHaveLength(1);
+      expect(result[0].path).toBe('/worktrees/my-project/feat-1');
+    });
   });
 
   describe('deleteWorktree', () => {
@@ -199,6 +226,28 @@ describe('WorktreeService', () => {
         return null;
       });
     }
+
+    it('should reject deleting the workspace root itself with BAD_USER_INPUT', async () => {
+      mockWorkspace(); // workspace.path = /home/user/project
+      // 即使 list 因故仍包含根路径，也不得对根路径发出任何删除命令
+      mockControllerOnlineWithWorktrees(['/home/user/project', '/worktrees/my-project/feat-1']);
+      mockSessionFind([]);
+
+      const err = await worktreeService
+        .deleteWorktree('ctrl-1', 'ws-1', '/home/user/project', 'user-1')
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:worktree:remove"'),
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"fs:remove-dir"'),
+      );
+    });
 
     it('should reject a worktreePath outside the workspace worktree scope with BAD_USER_INPUT', async () => {
       mockWorkspace();
