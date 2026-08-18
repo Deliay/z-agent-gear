@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第三轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」与「删除 Worktree 误删根工作区」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第四轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -270,6 +270,39 @@ type: Permanent
 | 各子项目 build | ✅ tsc strict 通过 |
 | API 测试（tests/api） | ✅ 308/308 |
 | E2E 测试（tests/e2e） | ✅ 177/177（`session-message.spec.ts` tool_call 高亮用例首跑失败、单文件重跑 6/6 通过，确认为与本次改动无关的动画时序抖动） |
+
+## 修复记录（2026-08-18 第四轮：agent-workflow-admin-tools 默认启用）
+
+人工复验发现：**`agent-workflow-admin-tools` 似乎不会默认启用**。
+
+修复方案：[[20260818-fix-admin-tools-default-available]]（docs/engineering/proposals/20260818-fix-admin-tools-default-available.md）
+
+### 根因
+
+平台服务文档按 `{userId, name}` 隔离，由 `ensureAdminToolsServer(userId)` 幂等 upsert（`admin-tools.ts:461`），但该函数**只在 orchestrator 拉起 AI 节点会话时惰性调用**（`orchestrator.ts:84`）；二期提案承诺的「随系统启动幂等 upsert」从未实现。从未跑过工作流的用户，MCP Registry 与新建会话对话框的 MCP 选择器里根本不存在该服务——PRD 功能点 4「工作流管理工具集作为独立 scope 注册，可装配到普通会话」不成立。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/agent-api/src/graphql/resolvers/mcp-server.ts` | `Query.mcpServers` 查询前 `await ensureAdminToolsServer(userId)`（读路径幂等注册，覆盖存量与未来用户；启动时 upsert 无法覆盖未来注册用户，注册时 upsert 无法覆盖存量用户） |
+
+前端无需改动（`McpRegistrySection` 已有「平台内置」badge；`NewSessionDialog` 按 `enabled` 过滤后自然出现该选项）。`agent-workflow-tools` 维持节点作用域设计不变。
+
+### 新增/更新测试（状态语义演进回填断言）
+
+- agent-api `resolvers/mcp-server.test.ts`：mcpServers 查询调用 `ensureAdminToolsServer(userId)`；未认证不调用。
+- API `mcp-server.test.ts`：原「authenticated 返回空列表」回填为「默认包含平台内置 agent-workflow-admin-tools（enabled/source/transport=platform）」。
+- E2E `settings-mcp-proxy.spec.ts`：原「MCP Servers 空状态」回填为「新用户默认展示 agent-workflow-admin-tools（平台内置）」；key 列表 active 断言限定行内（新默认条目也带 active badge，原全局选择器 strict 冲突）。
+
+### 验证结果（第四轮）
+
+| 项目 | 结果 |
+|------|------|
+| agent-api 单测 | ✅ 546/546（38 文件，+1） |
+| 其余子项目单测/build | ✅ 本轮无改动，沿第三轮结果；agent-api tsc strict 通过 |
+| API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（三轮全套各 1 个不同用例单次失败——session-message 高亮、mcp-session 注册、permission 审批——单文件重跑均全绿，确认为全量负载下的时序抖动，与本改动无关） |
 
 ### 最终验证（修复后）
 
