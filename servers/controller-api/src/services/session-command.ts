@@ -16,10 +16,27 @@ const SESSION_MESSAGE_CHANNEL = 'session:message';
 
 export class SessionCommandService {
   private io: SocketIOServer | null = null;
+  // 同一 session 的生命周期命令（acp:start/acp:resume/acp:stop）按到达顺序串行处理。
+  // Redis 订阅回调不等待 async handler，stop 与在途 start 并发处理时，
+  // acpSessionManager 的 sessions Map 尚未写入，stop 会被误判为离线而吞掉（进程泄漏）。
+  private sessionLifecycleChains = new Map<string, Promise<void>>();
 
   start(io: SocketIOServer): void {
     this.io = io;
     this.subscribe();
+  }
+
+  private enqueueSessionLifecycle(sessionId: string, task: () => Promise<void>): Promise<void> {
+    const prev = this.sessionLifecycleChains.get(sessionId) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(task);
+    this.sessionLifecycleChains.set(sessionId, next);
+    // 链尾清理：map 中仍是本次任务时才删除，避免误删后续排队任务
+    void next.finally(() => {
+      if (this.sessionLifecycleChains.get(sessionId) === next) {
+        this.sessionLifecycleChains.delete(sessionId);
+      }
+    });
+    return next;
   }
 
   private subscribe(): void {
@@ -68,9 +85,9 @@ export class SessionCommandService {
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
-            await this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] }; modeId?: string; modelId?: string });
+            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] }; modeId?: string; modelId?: string }));
           } else if (command.type === 'acp:resume' && command.sessionId && command.controllerId && command.externalSessionId) {
-            await this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] } });
+            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] } }));
           } else if (command.type === 'acp:cancel' && command.sessionId) {
             await this.handleAcpCancel(command.sessionId);
           } else if (command.type === 'acp:check' && command.requestId && command.controllerId) {
@@ -78,7 +95,7 @@ export class SessionCommandService {
           } else if (command.type === 'acp:probe-options' && command.requestId && command.controllerId && command.serverType) {
             await this.handleAcpProbeOptions(command.requestId, command.controllerId, command.serverType);
           } else if (command.type === 'acp:stop' && command.sessionId) {
-            await this.handleAcpStop(command.sessionId, command.reason || 'user_request');
+            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpStop(command.sessionId as string, command.reason || 'user_request'));
           } else if (command.type === 'fs:browse' && command.requestId && command.controllerId) {
             await this.handleFsBrowse(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'fs:home' && command.requestId && command.controllerId) {

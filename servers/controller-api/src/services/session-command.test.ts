@@ -229,6 +229,66 @@ describe('SessionCommandService', () => {
     });
   });
 
+  describe('acp:start / acp:stop 同会话串行化', () => {
+    beforeEach(() => {
+      const mockController = {
+        _id: 'ctrl-1',
+        keyId: { toString: () => 'key-1' },
+        userId: { toString: () => 'user-1' },
+      };
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockController),
+      } as never);
+    });
+
+    it('acp:stop 必须等待同会话在途的 acp:start 处理完成后才调用 stopSession', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const { sessionService } = await import('./session.js');
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-1');
+
+      const io = createMockIO();
+      const socket = { id: 'socket-1', emit: vi.fn() };
+      io.sockets.sockets.set('socket-1', socket as never);
+
+      // start 挂起，模拟 harness 慢启动
+      let resolveStart!: (value: { success: boolean }) => void;
+      vi.mocked(acpSessionManager.startSession).mockReturnValue(
+        new Promise((resolve) => { resolveStart = resolve; }),
+      );
+
+      const service = new SessionCommandService();
+      service.start(io as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:start',
+        sessionId: 'sess-1',
+        controllerId: 'ctrl-1',
+        serverType: 'opencode',
+        cwd: '/home/user',
+      }));
+      await vi.waitFor(() => {
+        expect(acpSessionManager.startSession).toHaveBeenCalled();
+      });
+
+      // start 未结算时 stop 到达：不得立即调用 stopSession
+      // （否则 manager 内 sessions Map 未命中，stop 被吞，进程泄漏）
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:stop',
+        sessionId: 'sess-1',
+        reason: 'user_delete',
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(acpSessionManager.stopSession).not.toHaveBeenCalled();
+
+      // start 结算后，stop 按序执行
+      resolveStart({ success: true });
+      await vi.waitFor(() => {
+        expect(acpSessionManager.stopSession).toHaveBeenCalledWith('sess-1', 'user_delete');
+      });
+    });
+  });
+
   describe('acp:list-sessions command', () => {
     beforeEach(() => {
       const mockController = {

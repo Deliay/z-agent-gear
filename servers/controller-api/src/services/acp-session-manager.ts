@@ -41,6 +41,23 @@ export class ACPSessionManager {
   // Dispatcher: per-socket Map<requestId, PendingRequest> for start/resume results.
   // Replaces per-call socket.once() to fix concurrent session start race condition.
   private socketDispatchers = new Map<string, Map<string, PendingRequest>>();
+  // start/resume 在途跟踪：sessions Map 要等 start:result 成功才写入，
+  // 此期间到达的 acp:stop 必须先等待在途 start/resume 结算再处理，
+  // 否则会被误判为「controller 离线」写入 pending（在线时永不补做），导致 ACP 进程泄漏。
+  private startingSessions = new Map<string, Promise<void>>();
+
+  /** 登记一次 start/resume 在途过程，返回结算函数（finally 中调用） */
+  private trackStarting(sessionId: string): () => void {
+    let settle!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      settle = () => {
+        this.startingSessions.delete(sessionId);
+        resolve();
+      };
+    });
+    this.startingSessions.set(sessionId, inFlight);
+    return settle;
+  }
 
   async startSession(
     controllerSocket: Socket,
@@ -53,6 +70,7 @@ export class ACPSessionManager {
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
+    const settleStarting = this.trackStarting(sessionId);
     try {
       const session = await Session.findById(sessionId).lean();
       statusAtStart = session?.status ?? 'creating';
@@ -164,6 +182,8 @@ export class ACPSessionManager {
       console.error(`[ACP session] Error starting session ${sessionId}:`, error);
       await this.cleanupFailedSession(sessionId, statusAtStart);
       return { success: false, error: (error as Error).message };
+    } finally {
+      settleStarting();
     }
   }
 
@@ -434,6 +454,7 @@ export class ACPSessionManager {
     cwd: string,
     mcpEndpoint?: { url: string; token: string; serverNames: string[] },
   ): Promise<{ success: boolean; error?: string }> {
+    const settleStarting = this.trackStarting(sessionId);
     try {
       const sess = await Session.findById(sessionId).lean();
       const acpServerType = sess?.acpServerType ?? 'opencode';
@@ -507,6 +528,8 @@ export class ACPSessionManager {
       await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
       await this.publishStatus(sessionId, 'ended', 'ACP_RESUME_FAILED');
       return { success: false, error: (error as Error).message };
+    } finally {
+      settleStarting();
     }
   }
 
@@ -823,7 +846,17 @@ export class ACPSessionManager {
    * wait for acp:stopped ack, retry once on timeout.
    */
   async stopSessionWithAck(sessionId: string, reason: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      // start/resume 在途：sessions Map 尚未写入。等待其结算后重查，
+      // 避免把「启动中」误判为「controller 离线」而只写 pending（在线时永不补做，进程泄漏）
+      const inFlight = this.startingSessions.get(sessionId);
+      if (inFlight) {
+        console.log(`[ACP session] stop requested while start/resume in-flight for session ${sessionId}, waiting for it to settle`);
+        await inFlight;
+        session = this.sessions.get(sessionId);
+      }
+    }
     if (!session) {
       // Controller 离线（无活跃映射）：记录 pending，待 controller 重连后 reconcile 补做
       const doc = await Session.findById(sessionId).lean();

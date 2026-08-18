@@ -623,6 +623,41 @@ describe('ACPSessionManager', () => {
     it('should handle stop for nonexistent session', async () => {
       await expect(manager.stopSession('nonexistent', 'user_close')).resolves.toBeUndefined();
     });
+
+    it('start 在途时收到 stop：等待 start 结算后再停，不得走离线 pending', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating', controllerId: 'ctrl-1' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      // start 开始但不立即结算（模拟 harness 慢启动）
+      const startPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      // start 在途期间收到 stop：此时 sessions Map 未命中
+      const stopPromise = manager.stopSession('sess-1', 'user_delete');
+      await new Promise((r) => setTimeout(r, 50));
+      // 不得立即发 acp:stop（bridge 尚未就绪），也不得误入离线 pending
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+
+      // start 结算成功 → stop 应继续走正常流程
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await startPromise;
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+      });
+      socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_delete' });
+      await stopPromise;
+
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+    }, 15000);
   });
 
   describe('handleControllerStopped', () => {
