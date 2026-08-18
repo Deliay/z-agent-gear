@@ -250,6 +250,11 @@ async function registerFakeController(
   client.on('acp:check', (data: { requestId: string }) => {
     client.emit('acp:check:result', { requestId: data.requestId, servers });
   });
+  // 生命周期命令（start/stop/resume）串行处理：acp:stop 未 ack 会阻塞后续 resume，
+  // fake controller 须像真实 controller 一样 ack
+  client.on('acp:stop', (data: { sessionId: string }) => {
+    client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
+  });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
   client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '1.0.0' });
   const regData = await registered;
