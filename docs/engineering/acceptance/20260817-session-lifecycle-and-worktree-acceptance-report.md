@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第一轮修复完成 —— 3 阻塞 + 7 严重全部修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第二轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -192,8 +192,49 @@ type: Permanent
 
 ### 跟进项（本轮未处理）
 
-- **SessionView 删除存活会话可能绕过 stop-ack 生命周期**（`SessionView.tsx:287` 仅凭 `externalSessionId` 非空走 `deleteHistorySession`）：经核实为 release 存量行为（本 PR diff 未触碰该文件），建议另立修复轮次评估「存活会话统一走 deleteSession」。
+- ~~**SessionView 删除存活会话可能绕过 stop-ack 生命周期**（`SessionView.tsx:287` 仅凭 `externalSessionId` 非空走 `deleteHistorySession`）~~ → **已在第二轮修复闭环**，见下方「修复记录（2026-08-18 第二轮）」。
 - 一般项 #12/#15/#16/#17/#18/#19/#20/#24 与建议项 #28-#33/#42 未在本轮范围，按方案 §1.3 留待后续。
+
+## 修复记录（2026-08-18 第二轮：删除存活会话 ACP 进程泄漏）
+
+人工复验发现：**新建会话后直接点击「删除」，ACP 进程被保留；点击「关闭」则进程正常结束**。
+
+修复方案：[[20260818-fix-delete-session-acp-process-leak]]（docs/engineering/proposals/20260818-fix-delete-session-acp-process-leak.md）
+
+### 根因
+
+| # | 根因 | 位置 |
+|---|------|------|
+| R1 | 前端对任何初始化成功的会话（有 `externalSessionId`）走 `deleteHistorySession`，该 mutation 只删库 + 同步 agent 历史，从不发送 `acp:stop` → 存活 ACP 进程泄漏；「关闭」走 `closeSession` 正常停进程 | `SessionView.tsx:287`、`session-import.ts:87` |
+| R2 | creating/connecting 窗口内删除时，controller-api `stopSessionWithAck` 因 sessions 映射未写入（要等 `acp:start:result` 成功）误入「离线 pending」分支，pending 仅在重连时消费，在线永不补做 → 进程泄漏 | `acp-session-manager.ts:826`、`session-command.ts`（Redis 订阅回调 async 不串行） |
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/agent-api/src/services/session-import.ts` | `deleteHistorySession` 对非 ended 会话先委托 `sessionService.delete()`（acp:stop + 等 ack + worktree 清理 + MCP 撤销 + 删库），再做 agent 历史同步；running 拒绝守卫不变 |
+| `servers/controller-api/src/services/acp-session-manager.ts` | 新增 `startingSessions` 在途跟踪（start/resume 登记，finally 结算）；`stopSessionWithAck` 未命中映射时先等在途 start/resume 结算再重查，命中走正常 stop |
+| `servers/controller-api/src/services/session-command.ts` | 同一 sessionId 的 `acp:start`/`acp:resume`/`acp:stop` 按到达顺序串行处理（per-session promise 链），消除 stop 先于 start 进入 manager 的残留窗口 |
+| `apps/agent-web` | 不改（deleteHistorySession 语义修正后现有路由即正确） |
+
+### 新增/更新测试
+
+- `session-import.test.ts`：connecting/idling 会话委托 `sessionService.delete`（不再直接 deleteOne）；idling 会话删除仍同步 agent 历史。
+- `acp-session-manager.test.ts`：start 在途时收到 stop → 等待 start 结算后正常下发 `acp:stop(ackRequired)`，不写 pending。
+- `session-command.test.ts`：同会话 acp:start 未结算时 acp:stop 不提前调用 stopSession，start 结算后按序执行。
+- API 测试：两个 deleteHistorySession 用例补「先收 acp:stop 再收 acp:delete-history-session」断言；close→resume 类用例的 fake controller 补 acp:stop ack（串行化后未 ack 的 stop 会阻塞后续 resume，真实 controller 总会 ack）。
+
+### 验证结果（第二轮）
+
+| 项目 | 结果 |
+|------|------|
+| agent-api 单测 | ✅ 543/543（38 文件；session-import 新增/更新 2 用例） |
+| controller-api 单测 | ✅ 396/396（36 文件；新增 start 在途 stop、生命周期串行化 2 用例） |
+| agent-controller 单测 | ✅ 351/351（27 文件，无改动回归） |
+| agent-web 单测 | ✅ 358/358（43 文件，无改动回归） |
+| 各子项目 build | ✅ tsc strict / vite 全部通过 |
+| API 测试（tests/api，Aspire 真实 Mongo/Redis） | ✅ 308/308（含 deleteHistorySession 先 stop 后同步的新断言） |
+| E2E 测试（tests/e2e，Playwright 全套） | ✅ 177/177 |
 
 ### 最终验证（修复后）
 
