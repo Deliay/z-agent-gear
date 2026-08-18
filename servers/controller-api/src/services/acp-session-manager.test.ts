@@ -404,6 +404,29 @@ describe('ACPSessionManager', () => {
       }));
     });
 
+    it('resumeSession 携带 initial mode/model 时随 acp:resume payload 下发', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-2', 'ext-1', 'ctrl-1', 'user-1', '/tmp', undefined,
+        { modeId: 'code', modelId: 'gpt-5' },
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const payload = emitArgs?.[1] as Record<string, unknown>;
+      // 工作流节点 rework：初始 mode/model 随 acp:resume 带内下发，
+      // bridge 在 acp:initialized（→ resume:result → prompt 补发）之前应用
+      expect(payload.modeId).toBe('code');
+      expect(payload.modelId).toBe('gpt-5');
+
+      socket._trigger('acp:resume:result', { requestId: payload.requestId, sessionId: 'sess-2', success: true });
+      await resultPromise;
+    });
+
     it('start 失败后队列被清空，不再补发', async () => {
       const socket = createMockSocket();
       const { resultPromise, requestId } = await startAndGetRequestId(socket);

@@ -453,6 +453,7 @@ export class ACPSessionManager {
     userId: string,
     cwd: string,
     mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string }> {
     const settleStarting = this.trackStarting(sessionId);
     try {
@@ -472,6 +473,13 @@ export class ACPSessionManager {
       };
       if (mcpEndpoint) {
         resumePayload.mcpEndpoint = mcpEndpoint;
+      }
+      // 初始 mode/model 带内下发（bridge 在 acp:initialized 前应用，时序同 acp:start）
+      if (initial?.modeId) {
+        resumePayload.modeId = initial.modeId;
+      }
+      if (initial?.modelId) {
+        resumePayload.modelId = initial.modelId;
       }
       controllerSocket.emit('acp:resume', resumePayload);
 
