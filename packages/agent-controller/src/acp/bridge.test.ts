@@ -448,4 +448,41 @@ describe('AcpSessionBridge - initial mode/model', () => {
     expect(conn.setSessionMode).not.toHaveBeenCalled();
     expect(conn.setSessionConfigOption).not.toHaveBeenCalled();
   });
+
+  it('resume: should apply initial mode before acp:initialized (rework 时序受控)', async () => {
+    const bridge = createBridge({ modeId: 'code' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.resume('ext-123');
+
+    // 初始 mode 必须在 acp:initialized 之前应用（initialized → resume:result → prompt 补发）
+    const conn = mockClientSideConnection.mock.results[0].value;
+    expect(conn.setSessionMode).toHaveBeenCalledWith({
+      sessionId: 'ext-123',
+      modeId: 'code',
+    });
+    const setModeOrder = conn.setSessionMode.mock.invocationCallOrder[0];
+    expect(setModeOrder).toBeLessThan(initialized.mock.invocationCallOrder[0]);
+  });
+
+  it('resume fallback (newSession): should apply initial mode/model before acp:initialized', async () => {
+    mockResumeSession.mockRejectedValueOnce(new Error('resume not supported'));
+    const bridge = createBridge({ modeId: 'code', modelId: 'gpt-5' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.resume('ext-123');
+
+    const conn = mockClientSideConnection.mock.results[0].value;
+    // fallback newSession 产生新 acpSessionId，初始 mode/model 仍须先应用
+    expect(mockNewSession).toHaveBeenCalled();
+    expect(conn.setSessionMode).toHaveBeenCalledWith({
+      sessionId: 'acp-sess-abc',
+      modeId: 'code',
+    });
+    expect(conn.setSessionMode.mock.invocationCallOrder[0]).toBeLessThan(
+      initialized.mock.invocationCallOrder[0],
+    );
+  });
 });

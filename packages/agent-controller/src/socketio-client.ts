@@ -134,6 +134,8 @@ interface AcpResumePayload {
   cwd: string;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
+  modeId?: string;
+  modelId?: string;
 }
 
 interface AcpListSessionsPayload {
@@ -429,6 +431,9 @@ export function connectToServer(
         cwd: data.cwd,
         mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
+        // 初始 mode/model：resume 完成后、acp:initialized 之前应用（时序同 acp:start）
+        initialModeId: data.modeId,
+        initialModelId: data.modelId,
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
