@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第六轮修复完成 —— 人工复验发现的「删除存活会话 ACP 进程泄漏」「删除 Worktree 误删根工作区」「admin-tools 不默认启用」「resume 路径 mode/model 时序」「AI→AI 节点会话拉起失败」均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第七轮修复完成 —— 人工复验发现的六项问题（ACP 进程泄漏/误删根工作区/admin-tools 默认启用/resume mode·model 时序/AI→AI 会话拉起失败/接力会话停留空闲）均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -380,6 +380,35 @@ type: Permanent
 | 各子项目 build | ✅ tsc strict 全部通过 |
 | API 测试（tests/api） | ✅ 308/308 |
 | E2E 测试（tests/e2e） | ✅ 177/177（本轮全套 2 个已知抖动用例单次失败——permission 弹窗、tool_call 高亮——单跑 16/16 全绿，与改动无关） |
+
+## 修复记录（2026-08-18 第七轮：节点接力会话状态停留「空闲」）
+
+人工复验发现：**人类节点完成交接到下一个 AI 节点时，拉起的会话状态只是「空闲」（idling）**。
+
+修复方案：[[20260818-fix-node-session-stuck-idling]]（docs/engineering/proposals/20260818-fix-node-session-stuck-idling.md）
+
+### 根因（状态竞态）
+
+`acp-session-manager.ts` `startSession`/`resumeSession` 成功分支中，`flushPendingInputs`（补发排队 prompt）在状态落库 `idling` **之前**执行。真实 harness 下：补发 prompt → bridge 立即执行并 emit `acp:prompt:start` → `handlePromptStart` 以 `status='idling'` 为条件转 `running`——此刻 DB 仍是 `connecting`，条件更新未命中；随后落库 `idling`；prompt 结束时 `handlePromptComplete` 要求 `running` 又未命中 → 状态永久停留「空闲」。是否命中取决于 Mongo 写库与 socket 往返的毫秒级先后（「有时候」复现）。fake controller 从不 emit `acp:prompt:start`，测试从未覆盖。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/controller-api/src/services/acp-session-manager.ts` | startSession/resumeSession 成功分支：`flushPendingInputs` 移到状态落库 `idling` 与 publishStatus **之后**，保证 `idling→running→idling` 严格有序 |
+
+### 新增测试
+
+- controller-api `acp-session-manager.test.ts` ×2：start/resume 补发排队输入时，`findByIdAndUpdate(status:'idling')` 必须先于 `acp:message` emit（invocationCallOrder 断言）。
+
+### 验证结果（第七轮）
+
+| 项目 | 结果 |
+|------|------|
+| controller-api 单测 | ✅ 410/410（36 文件，+2）；其余子项目本轮无改动 |
+| build | ✅ tsc strict 通过 |
+| API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（一次全绿） |
 
 ### 最终验证（修复后）
 
