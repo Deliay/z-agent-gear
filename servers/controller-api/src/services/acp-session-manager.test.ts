@@ -683,6 +683,77 @@ describe('ACPSessionManager', () => {
     }, 15000);
   });
 
+  describe('迟到的 start/resume result（unknown requestId）孤儿收割', () => {
+    async function startAndSettle(socket: ReturnType<typeof createMockSocket>) {
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await resultPromise;
+    }
+
+    it('超时后迟到的 success result 且会话无活跃映射/在途启动 → emit acp:stop 收割孤儿进程', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      // 先正常 start 一个会话以安装 socket dispatcher
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      // 另一个会话的 start 超时后，controller 仍拉起成功，result 迟到（requestId 未知）
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: true });
+
+      // 孤儿收割：通知 controller 停掉该进程
+      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost' });
+    });
+
+    it('迟到的 failure result → 不收割（进程未拉起）', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: false, error: 'spawn failed' });
+
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+    });
+
+    it('迟到的 success result 但该会话已有新的在途 start/resume → 不收割（避免误停新 bridge）', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      // 同一 session 新的 start 在途（requestId2 未结算）
+      const startPromise2 = manager.startSession(socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp');
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({ sessionId: 'sess-1' }));
+      });
+      const emitArgs2 = socket.emit.mock.calls.filter((c) => c[0] === 'acp:start');
+      const requestId2 = (emitArgs2[0]?.[1] as Record<string, unknown>)?.requestId as string;
+      socket.emit.mockClear();
+
+      // 旧 start 的迟到 success result（requestId 未知）
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-1', success: true });
+
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+
+      // 收尾：让第二个 start 结算，避免悬挂
+      socket._trigger('acp:start:result', { requestId: requestId2, sessionId: 'sess-1', success: true });
+      await startPromise2;
+    });
+  });
+
   describe('handleControllerStopped', () => {
     it('should clean up and update status', async () => {
       vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);

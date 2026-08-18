@@ -797,6 +797,7 @@ export class ACPSessionManager {
         pending.resolve(payload);
       } else {
         console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.reapLateResultOrphan(socket, payload);
       }
     });
 
@@ -809,6 +810,7 @@ export class ACPSessionManager {
         pending.resolve(payload);
       } else {
         console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.reapLateResultOrphan(socket, payload);
       }
     });
 
@@ -823,6 +825,19 @@ export class ACPSessionManager {
       dispatcher.clear();
       this.socketDispatchers.delete(socket.id);
     });
+  }
+
+  /**
+   * 迟到的 start/resume 结果收割：requestId 已因超时被移除（unknown），若 controller 侧
+   * 进程实际拉起成功（success=true）且会话无活跃映射、无在途 start/resume，
+   * 该进程已成孤儿——通知 controller 停掉，避免泄漏。
+   * 有在途 start/resume 时不收割：新 bridge 建立时会先停掉同 sessionId 的旧 bridge。
+   */
+  private reapLateResultOrphan(socket: Socket, payload: { sessionId: string; success: boolean }): void {
+    if (!payload.success) return;
+    if (this.sessions.has(payload.sessionId) || this.startingSessions.has(payload.sessionId)) return;
+    console.log(`[ACP session] Late successful start/resume result for session ${payload.sessionId} with no active session, reaping orphan process`);
+    socket.emit('acp:stop', { sessionId: payload.sessionId });
   }
 
   /**
