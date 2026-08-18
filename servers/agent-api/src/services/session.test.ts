@@ -1641,4 +1641,15 @@ describe('SessionService', () => {
       expect(callback).toHaveBeenCalledWith('sess-1');
     });
   });
+
+  describe('onSessionIdled callback', () => {
+    it('notifySessionIdled should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionIdled(callback);
+
+      await sessionService.notifySessionIdled('sess-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
 });

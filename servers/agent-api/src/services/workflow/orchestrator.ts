@@ -1,4 +1,5 @@
 import { sessionService } from '../session.js';
+import { todoService } from '../todo-service.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
@@ -21,6 +22,12 @@ export const FALLBACK_PROMPT =
   '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到会话已结束，但节点状态仍未推进。' +
   '你必须使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
   '需要上游返工时调用 rejectCurrentNode 并给出明确原因。不要只输出文本而不调用工具。';
+
+/** 空闲停滞提醒：turn 结束（如权限审批超时）但节点未推进时使用（会话仍存活，无需 resume） */
+export const IDLE_NUDGE_PROMPT =
+  '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到本轮执行已停止（可能因权限审批超时），但节点状态仍未推进。' +
+  '你必须继续执行任务，并使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
+  '需要上游返工时调用 rejectCurrentNode 并给出明确原因；确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
 
 /** 转为 slug（小写字母/数字/连字符）；无 ASCII 字符时返回空串由调用方兜底 */
 export function slugify(text: string): string {
@@ -54,6 +61,50 @@ class WorkflowOrchestrator {
     });
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
     sessionService.onSessionRemoved((sessionId) => this.handleSessionRemoved(sessionId));
+    sessionService.onSessionIdled((sessionId) => this.handleSessionIdled(sessionId));
+  }
+
+  /**
+   * 空闲停滞检测：工作流节点会话 turn 结束（promptCompleted→idling）但节点未推进时触发。
+   * 典型场景：权限审批超时 → harness 取消当前 turn → 会话空闲，节点停在 RUNNING。
+   * 首次补发提醒提示词让 AI 继续（若卡在权限，重试会再次弹出审批待办，即现场提醒）；
+   * 再次停滞（与 handleSessionEnded 共享 fallbackSent 计数）→ 升级 FAILED 并创建
+   * immediate 优先级「人工介入」待办（强提醒）。
+   */
+  async handleSessionIdled(sessionId: string): Promise<void> {
+    const instance = (await WorkflowInstance.findOne({
+      'nodes.sessionId': sessionId,
+      deletedAt: null,
+    })) as unknown as WorkflowInstanceDoc | null;
+    if (!instance) return;
+    const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
+    if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
+
+    if (node.fallbackSent) {
+      await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止），需要人工介入',
+        source: 'SESSION_STUCK',
+      });
+      await todoService.createWorkflowInterventionTodo({
+        userId: instance.userId.toString(),
+        instanceId: instance._id.toString(),
+        instanceName: instance.name,
+        nodeId: node.nodeId,
+        nodeName: node.name,
+        sessionId,
+        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止）',
+      });
+      return;
+    }
+
+    node.fallbackSent = true;
+    await instance.save();
+    // 会话仍存活（idling，映射仍在）：直接补发提醒提示词即可，无需 resume
+    await sessionService.addMessage(sessionId, {
+      direction: 'input',
+      type: 'text',
+      content: IDLE_NUDGE_PROMPT,
+    });
   }
 
   /**

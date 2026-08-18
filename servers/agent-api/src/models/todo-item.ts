@@ -4,7 +4,7 @@ const { Schema } = mongoose;
 
 const todoItemSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  type: { type: String, enum: ['permission_request', 'elicitation_request'], required: true },
+  type: { type: String, enum: ['permission_request', 'elicitation_request', 'workflow_intervention'], required: true },
   priority: { type: String, enum: ['immediate', 'urgent', 'medium', 'low'], required: true },
   title: { type: String, required: true },
   description: { type: String },

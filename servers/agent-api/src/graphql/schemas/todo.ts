@@ -16,6 +16,7 @@ export const todoTypeDefs = `#graphql
   enum TodoType {
     permission_request
     elicitation_request
+    workflow_intervention
   }
 
   enum PermissionTimeoutAction {

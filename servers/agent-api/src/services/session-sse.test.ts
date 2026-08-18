@@ -4,7 +4,6 @@ vi.mock('../services/session.js', () => ({
   sessionService: {
     findById: vi.fn(),
     getMessages: vi.fn(),
-    notifySessionRemoved: vi.fn(),
   },
 }));
 
@@ -372,26 +371,6 @@ describe('SessionSSEService', () => {
       const lastWrite = res._written.at(-1);
       expect(lastWrite).toContain('"type":"status"');
       expect(lastWrite).toContain('"configOptions"');
-    });
-
-    it('should notify sessionService.notifyRemoved on removed status (工作流节点会话启动失败感知)', async () => {
-      vi.resetModules();
-      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
-      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
-      const mockRedis = createMockRedis();
-      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-      const res = createMockResponse();
-
-      const { sessionSSEService: freshService } = await import('./session-sse.js');
-      await freshService.addConnection('sess-1', 'user-1', res as never);
-
-      mockRedis._emitMessage('session:status', JSON.stringify({
-        sessionId: 'sess-1',
-        status: 'removed',
-      }));
-
-      // start/resume 失败被清理（removed）时必须通知编排层，否则工作流节点静默卡死
-      expect(sessionService.notifySessionRemoved).toHaveBeenCalledWith('sess-1');
     });
   });
 

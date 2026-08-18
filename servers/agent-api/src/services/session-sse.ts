@@ -122,8 +122,6 @@ export class SessionSSEService {
   private dispatchStatus(sessionId: string, status: string, error?: string, extra?: Record<string, unknown>): void {
     if (status === 'removed') {
       this.removeConnections(sessionId);
-      // start/resume 失败被清理：通知编排层（工作流节点会话需升级节点失败，避免静默卡死）
-      void sessionService.notifySessionRemoved(sessionId).catch(() => {});
       return;
     }
     this.broadcastStatus(sessionId, status, error, extra);

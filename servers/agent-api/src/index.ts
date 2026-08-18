@@ -21,6 +21,7 @@ import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
+import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
@@ -88,6 +89,10 @@ async function start() {
     // Revoke session MCP endpoints when sessions reach a terminal status
     mcpEndpointRevokeSubscriber.start();
     console.log('MCP endpoint revoke subscriber started');
+
+    // Workflow session lifecycle events (removed / prompt-completed idling)
+    sessionLifecycleSubscriber.start();
+    console.log('Session lifecycle subscriber started');
   } catch (err) {
     console.warn('Redis not available:', (err as Error).message);
   }

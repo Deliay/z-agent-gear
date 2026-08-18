@@ -85,6 +85,30 @@ export class TodoService {
       : summary;
   }
 
+  /**
+   * 工作流节点人工介入待办（强提醒）：节点会话停滞升级为 FAILED 时创建。
+   * immediate 优先级 + 未读，待办列表与全局提醒立即可见。
+   */
+  async createWorkflowInterventionTodo(data: {
+    userId: string;
+    instanceId: string;
+    instanceName: string;
+    nodeId: string;
+    nodeName: string;
+    sessionId: string;
+    reason: string;
+  }): Promise<InstanceType<typeof TodoItem>> {
+    const todo = await TodoItem.create({
+      userId: data.userId,
+      type: 'workflow_intervention',
+      priority: 'immediate',
+      title: `工作流节点「${data.nodeName}」需要人工介入`,
+      description: `实例「${data.instanceName}」：${data.reason}。请打开工作流实例查看并处理（重启节点或在会话中给出指示）。`,
+    });
+
+    return todo;
+  }
+
   async createElicitationTodo(data: ElicitationRequestData): Promise<InstanceType<typeof TodoItem>> {
     const todo = await TodoItem.create({
       userId: data.userId,
