@@ -1319,6 +1319,36 @@ describe('SessionService', () => {
       const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
       expect(String(resumeCall?.[1])).not.toContain('mcpEndpoint');
     });
+
+    it('should include initial modeId/modelId in acp:resume when provided', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      await sessionService.resume('sess-1', 'user-1', { modeId: 'code', modelId: 'gpt-5' });
+
+      // 工作流节点 rework/兜底 resume：初始 mode/model 必须随 acp:resume 带内下发，
+      // 由 bridge 在首条 prompt 前应用（setMode/setModel 的 idling 守卫在此阶段恒丢弃）
+      const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
+      expect(String(resumeCall?.[1])).toContain('"modeId":"code"');
+      expect(String(resumeCall?.[1])).toContain('"modelId":"gpt-5"');
+    });
+
+    it('should omit modeId/modelId in acp:resume when not provided', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      await sessionService.resume('sess-1', 'user-1');
+
+      const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
+      expect(String(resumeCall?.[1])).not.toContain('modeId');
+      expect(String(resumeCall?.[1])).not.toContain('modelId');
+    });
   });
 
   describe('setMode', () => {

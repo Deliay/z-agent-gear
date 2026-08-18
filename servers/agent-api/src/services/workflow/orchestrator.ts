@@ -83,14 +83,11 @@ class WorkflowOrchestrator {
         await this.ensureWorkflowToolsServer(instance.userId.toString()),
         await ensureAdminToolsServer(instance.userId.toString()),
       ],
-      // 节点配置的 mode/model：harness 会话初始化为配置值，而非 harness 默认设置
+      // 节点配置的 mode/model：随 acp:start 带内下发，bridge 在首条 prompt 前应用
       ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
       ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
     });
     node.sessionId = session.id as string;
-
-    // 若节点配置指定了 Mode/模型，则在会话创建后应用
-    await this.applyAgentConfig(instance, node, node.sessionId as string, agentConfig);
 
     await sessionService.addMessage(node.sessionId as string, {
       direction: 'input',
@@ -99,37 +96,16 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 应用节点配置的 Mode/模型设置到指定会话（与 start 场景保持一致） */
-  private async applyAgentConfig(
-    instance: WorkflowInstanceDoc,
-    node: WorkflowNodeDoc,
-    sessionId: string,
-    agentConfig?: ConfiguredNodeLike['agentConfig'],
-  ): Promise<void> {
-    if (!agentConfig) return;
-    if (agentConfig.modeId) {
-      try {
-        await sessionService.setMode(sessionId, instance.userId.toString(), agentConfig.modeId);
-      } catch (err) {
-        console.warn(
-          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-    if (agentConfig.modelId) {
-      try {
-        await sessionService.setModel(sessionId, instance.userId.toString(), agentConfig.modelId);
-      } catch (err) {
-        console.warn(
-          `节点「${node.name}」（${node.nodeKey}）应用模型「${agentConfig.modelId}」失败：`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
+  /** 提取节点配置的初始 mode/model（随 acp:start/acp:resume 带内下发）；无配置返回 undefined */
+  private initialModeModel(agentConfig?: ConfiguredNodeLike['agentConfig']): { modeId?: string; modelId?: string } | undefined {
+    if (!agentConfig || (!agentConfig.modeId && !agentConfig.modelId)) return undefined;
+    return {
+      ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
+      ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
+    };
   }
 
-  /** 节点进入 REWORK：resume 原会话、重发打回原因并重新应用 Mode/模型配置 */
+  /** 节点进入 REWORK：resume 原会话（初始 mode/model 带内下发）、重发打回原因 */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
@@ -137,10 +113,12 @@ class WorkflowOrchestrator {
   ): Promise<void> {
     if (!node.sessionId) return;
     const sessionId = node.sessionId.toString();
-    await sessionService.resume(sessionId, instance.userId.toString());
-    // 重新应用节点配置的 Mode/模型（resume 后会话可能回退默认，需按工作流配置设置）
     const configuredNode = await this.loadNodeConfig(instance, node);
-    await this.applyAgentConfig(instance, node, sessionId, configuredNode.agentConfig);
+    await sessionService.resume(
+      sessionId,
+      instance.userId.toString(),
+      this.initialModeModel(configuredNode.agentConfig),
+    );
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -195,7 +173,14 @@ class WorkflowOrchestrator {
 
     node.fallbackSent = true;
     await instance.save();
-    await sessionService.resume(sessionId, instance.userId.toString());
+    // 兜底 resume 同样带内下发节点配置的初始 mode/model；
+    // 配置读取失败不阻断兜底（仍以默认配置 resume）
+    let initial: { modeId?: string; modelId?: string } | undefined;
+    try {
+      const configuredNode = await this.loadNodeConfig(instance, node);
+      initial = this.initialModeModel(configuredNode.agentConfig);
+    } catch { /* ignore — fallback resume must not be blocked by config lookup */ }
+    await sessionService.resume(sessionId, instance.userId.toString(), initial);
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',

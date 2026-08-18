@@ -276,7 +276,7 @@ export class SessionService {
     return true;
   }
 
-  async resume(id: string, userId: string): Promise<{ success: boolean; status: string; error?: string }> {
+  async resume(id: string, userId: string, initial?: { modeId?: string; modelId?: string }): Promise<{ success: boolean; status: string; error?: string }> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
@@ -303,6 +303,10 @@ export class SessionService {
       externalSessionId: session.externalSessionId || '',
       cwd: session.cwd || '',
       mcpEndpoint,
+      // 初始 mode/model 带内下发（bridge 在首条 prompt 前应用）；
+      // setMode/setModel 的 idling 守卫在 resume 阶段恒丢弃，不能作为应用通道
+      ...(initial?.modeId ? { modeId: initial.modeId } : {}),
+      ...(initial?.modelId ? { modelId: initial.modelId } : {}),
     }));
     return { success: true, status: 'connecting' };
   }
