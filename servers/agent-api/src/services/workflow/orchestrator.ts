@@ -53,6 +53,27 @@ class WorkflowOrchestrator {
       onNodeRestart: (instance, node) => this.resumeNodeSession(instance, node),
     });
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
+    sessionService.onSessionRemoved((sessionId) => this.handleSessionRemoved(sessionId));
+  }
+
+  /**
+   * 会话被移除（start/resume 失败清理）：节点仍 RUNNING/REWORK 时升级 FAILED。
+   * 会话文档已删除，兜底 resume 无意义——必须让节点可见地失败，
+   * 否则节点停在 RUNNING、sessionId 悬空，流程永久卡死（人工可「重启节点」恢复）。
+   */
+  async handleSessionRemoved(sessionId: string): Promise<void> {
+    const instance = (await WorkflowInstance.findOne({
+      'nodes.sessionId': sessionId,
+      deletedAt: null,
+    })) as unknown as WorkflowInstanceDoc | null;
+    if (!instance) return;
+    const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
+    if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
+
+    await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+      reason: '节点会话启动失败或运行中被移除，请人工介入后重启节点',
+      source: 'SESSION_START_FAILED',
+    });
   }
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */

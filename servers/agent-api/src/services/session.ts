@@ -14,9 +14,20 @@ const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
+  /** 会话被移除（start/resume 失败清理）时的回调（由工作流 Orchestrator 注册用于节点失败升级） */
+  private sessionRemovedCallback?: (sessionId: string) => void | Promise<void>;
 
   onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
     this.sessionEndedCallback = callback;
+  }
+
+  onSessionRemoved(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionRemovedCallback = callback;
+  }
+
+  /** controller-api 清理失败会话（publish removed）后由 SSE 订阅层触发 */
+  async notifySessionRemoved(sessionId: string): Promise<void> {
+    await this.sessionRemovedCallback?.(sessionId);
   }
 
   async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {

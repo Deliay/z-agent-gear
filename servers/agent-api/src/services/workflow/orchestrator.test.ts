@@ -9,6 +9,7 @@ vi.mock('../session.js', () => ({
     setMode: vi.fn(),
     setModel: vi.fn(),
     onSessionEnded: vi.fn(),
+    onSessionRemoved: vi.fn(),
   },
 }));
 
@@ -354,6 +355,34 @@ describe('WorkflowOrchestrator', () => {
 
     expect(sessionService.resume).not.toHaveBeenCalled();
     expect(sessionService.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('O9: 会话被移除（start/resume 失败清理）且节点仍 RUNNING → 节点升级 FAILED（SESSION_START_FAILED）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionRemoved('sess-2');
+
+    // 会话已不存在，兜底 resume 无意义——节点必须可见地失败，而非静默卡死
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('FAILED');
+    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
+    expect(instance.save).toHaveBeenCalled();
+  });
+
+  it('O9b: 会话被移除但节点已转移（DONE）→ 忽略', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'DONE', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionRemoved('sess-2');
+
+    expect(instance.nodes[0].status).toBe('DONE');
+    expect(instance.save).not.toHaveBeenCalled();
   });
 
   it('reworkNodeSession: resume 原会话、初始 Mode/模型随 acp:resume 带内下发、重发打回原因', async () => {

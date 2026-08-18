@@ -1630,4 +1630,15 @@ describe('SessionService', () => {
       expect(callback).toHaveBeenCalledWith('sess-1');
     });
   });
+
+  describe('onSessionRemoved callback', () => {
+    it('notifySessionRemoved should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionRemoved(callback);
+
+      await sessionService.notifySessionRemoved('sess-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
 });
