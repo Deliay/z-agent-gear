@@ -5,7 +5,7 @@ type: Permanent
 
 # 会话生命周期与 Worktree 管理验收报告（2026-08-17）
 
-> **状态**: 🔧 第七轮修复完成 —— 人工复验发现的六项问题（ACP 进程泄漏/误删根工作区/admin-tools 默认启用/resume mode·model 时序/AI→AI 会话拉起失败/接力会话停留空闲）均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
+> **状态**: 🔧 第八轮修复完成 —— 人工复验发现的七项问题（ACP 进程泄漏/误删根工作区/admin-tools 默认启用/resume mode·model 时序/AI→AI 会话拉起失败/接力会话停留空闲/审批超时节点静默停滞）均已修复并验证通过（单测/API/E2E 全绿），待复验合入 release
 
 ## 关联文档
 
@@ -408,6 +408,42 @@ type: Permanent
 | controller-api 单测 | ✅ 410/410（36 文件，+2）；其余子项目本轮无改动 |
 | build | ✅ tsc strict 通过 |
 | API 测试（tests/api） | ✅ 308/308 |
+| E2E 测试（tests/e2e） | ✅ 177/177（一次全绿） |
+
+## 修复记录（2026-08-18 第八轮：审批超时后节点静默停留「执行中」）
+
+人工复验发现：**审批弹窗未及时审批 → agent 自动停止 → 会话状态「空闲」，但工作流节点仍「执行中」，无任何提醒，流程永久停滞**。
+
+修复方案：[[20260818-fix-workflow-idle-stall-intervention]]（docs/engineering/proposals/20260818-fix-workflow-idle-stall-intervention.md）
+
+### 根因
+
+现有兜底（`handleSessionEnded`/SESSION_STUCK）只覆盖会话 **ended** 场景。「权限审批超时 → harness 取消 turn」走的是 `acp:prompt:complete` → `running→idling`——会话没结束只是空闲，兜底不触发，节点 RUNNING 悬空、人类无感知。推广：工作流节点会话任何 turn 结束且节点未推进即为停滞（正常推进时 completeCurrentNode 在 turn 内完成，节点先 DONE、会话后 ended，不误伤）。
+
+### 修复内容
+
+| 文件 | 修改 |
+|------|------|
+| `servers/controller-api/.../acp-session-manager.ts` | `handlePromptComplete` 发布 idling 携带 `promptCompleted: true`（publishStatus extra 白名单补字段），区分 start 落 idling 与 turn 结束落 idling |
+| `servers/agent-api/.../session-lifecycle-subscriber.ts`（新增） | 启动时订阅 `session:status`：`removed` → notifySessionRemoved；`idling+promptCompleted` → notifySessionIdled。**替代第六轮挂在 SSE 层的通知**——编排感知不再依赖 SSE 连接存在（并回退 session-sse 的通知调用） |
+| `servers/agent-api/.../session.ts` | `onSessionIdled`/`notifySessionIdled` 回调 |
+| `servers/agent-api/.../orchestrator.ts` | `handleSessionIdled`：节点 RUNNING/REWORK 停滞 → 首次置 fallbackSent + 补发 IDLE_NUDGE_PROMPT（会话存活直接补发，卡在权限时重试会再弹审批待办=现场提醒）；再次 → FAILED(SESSION_STUCK) + `createWorkflowInterventionTodo`（immediate 强提醒） |
+| `todo-service.ts` / `todo-item.ts` / `schemas/todo.ts` | 新待办类型 `workflow_intervention`（模型/契约 enum 同步） |
+| `apps/agent-web/.../TodoListPanel.tsx` | `workflow_intervention` badge「人工介入」 |
+
+### 新增测试
+
+- agent-api：session-lifecycle-subscriber ×4（removed/idled/裸 idling/非法消息）、onSessionIdled 回调、orchestrator O10-O10d（首次提醒不 resume/二次 FAILED+待办/DONE 忽略/非工作流忽略）、createWorkflowInterventionTodo 字段断言。
+- controller-api：handlePromptComplete 发布携带 promptCompleted 标记。
+- API：A34 全链路（fake controller prompt:start/complete 不调完成工具 → 收到兜底提醒；再次停滞 → FAILED + workflow_intervention 待办）。
+
+### 验证结果（第八轮）
+
+| 项目 | 结果 |
+|------|------|
+| 四子项目单测 | ✅ agent-api 561/561、controller-api 412/412、agent-web 358/358、agent-controller 359/359（无改动） |
+| 各子项目 build | ✅ tsc strict / vite 全部通过 |
+| API 测试（tests/api） | ✅ 309/309（+A34） |
 | E2E 测试（tests/e2e） | ✅ 177/177（一次全绿） |
 
 ### 最终验证（修复后）
