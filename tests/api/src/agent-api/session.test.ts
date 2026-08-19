@@ -944,6 +944,12 @@ describe('Session GraphQL API', () => {
       });
       await new Promise((r) => setTimeout(r, 500));
 
+      // 存活会话删除前必须先停 ACP 进程：fake controller 像真实 controller 一样 ack acp:stop
+      const stopEvent = waitForEvent<{ sessionId: string; ackRequired?: boolean }>(client, 'acp:stop', 10000);
+      client.on('acp:stop', (data: { sessionId: string }) => {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete' });
+      });
+
       // Listen for acp:delete-history-session on the controller socket
       const deleteEvent = waitForEvent<{
         requestId: string;
@@ -956,6 +962,10 @@ describe('Session GraphQL API', () => {
         sessionId,
         syncAgent: true,
       }, authToken);
+
+      // 先收到 acp:stop（停 ACP 进程），再收到 acp:delete-history-session（同步历史删除）
+      const stopData = await stopEvent;
+      expect(stopData.sessionId).toBe(sessionId);
 
       const deleteData = await deleteEvent;
       expect(deleteData.sessionId).toBe(sessionId);
@@ -1462,6 +1472,11 @@ describe('Session SSE API', () => {
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
+      // 生命周期命令（start/stop/resume）按序串行处理：close 的 acp:stop 未 ack 会阻塞后续 resume
+      client.on('acp:stop', (data: { sessionId: string }) => {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
+      });
+
       // Create session with modes in start result
       const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
       const wsId = await createWorkspace(freshControllerId);
@@ -1710,6 +1725,12 @@ describe('Session SSE API', () => {
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
+      // 生命周期命令（start/stop/resume）按序串行处理：close 的 acp:stop 未 ack 会阻塞后续 resume，
+      // fake controller 须像真实 controller 一样 ack acp:stop
+      client.on('acp:stop', (data: { sessionId: string }) => {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
+      });
+
       // 2. Create session and start ACP
       const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);
       const wsId = await createWorkspace(freshControllerId);
@@ -1788,6 +1809,12 @@ describe('Session SSE API', () => {
       client.emit('register', { key: freshRawKey, hostname: 'resume-fail-host', version: '1.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
+
+      // 生命周期命令（start/stop/resume）按序串行处理：close 的 acp:stop 未 ack 会阻塞后续 resume，
+      // fake controller 须像真实 controller 一样 ack acp:stop
+      client.on('acp:stop', (data: { sessionId: string }) => {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
+      });
 
       // Create session + acp:start
       const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(client, 'acp:start', 10000);

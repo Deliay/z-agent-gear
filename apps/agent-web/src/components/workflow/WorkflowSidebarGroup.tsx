@@ -6,7 +6,7 @@ import {
   type GetWorkflowInstancesQuery,
   type WorkflowInstanceSummaryData,
 } from '@/graphql/workflow'
-import { instanceStatusText } from './WorkflowNodeTree'
+import { instanceStatusText } from './WorkflowNodeTreeConstants'
 import InstantiateWorkflowDialog from './InstantiateWorkflowDialog'
 import { Archive, ChevronDown, ChevronRight, Workflow, Plus } from 'lucide-react'
 

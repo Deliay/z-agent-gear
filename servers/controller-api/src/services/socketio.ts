@@ -96,6 +96,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
         // Generate resume token for reconnection after server restart
         const resumeToken = await sessionService.storeResumeToken(keyId);
         socket.emit('registered', { controllerId: controller._id.toString(), resumeToken });
+
+        // 重连对账：下发权威活跃会话与待清理会话，controller 据此收割孤儿进程（内部容错，不影响注册）
+        await acpSessionManager.reconcileOnRegister(socket, controller._id.toString());
       } catch (err) {
         console.error('Register error:', err);
         socket.emit('error', { code: 'INVALID_KEY', message: 'Registration failed' });
@@ -436,6 +439,16 @@ export function createSocketIOServer(io: SocketIOServer): void {
     socket.on('git:commit:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleCommitResult(payload.requestId, payload);
+    });
+
+    socket.on('git:worktree:list:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleListResult(payload.requestId, payload);
+    });
+
+    socket.on('fs:remove-dir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleRemoveDirResult(payload.requestId, payload);
     });
 
     socket.on('error', (err) => {

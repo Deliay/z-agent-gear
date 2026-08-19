@@ -1,4 +1,5 @@
 import { sessionService } from '../session.js';
+import { todoService } from '../todo-service.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
@@ -21,6 +22,12 @@ export const FALLBACK_PROMPT =
   '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到会话已结束，但节点状态仍未推进。' +
   '你必须使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
   '需要上游返工时调用 rejectCurrentNode 并给出明确原因。不要只输出文本而不调用工具。';
+
+/** 空闲停滞提醒：turn 结束（如权限审批超时）但节点未推进时使用（会话仍存活，无需 resume） */
+export const IDLE_NUDGE_PROMPT =
+  '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到本轮执行已停止（可能因权限审批超时），但节点状态仍未推进。' +
+  '你必须继续执行任务，并使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
+  '需要上游返工时调用 rejectCurrentNode 并给出明确原因；确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
 
 /** 转为 slug（小写字母/数字/连字符）；无 ASCII 字符时返回空串由调用方兜底 */
 export function slugify(text: string): string {
@@ -53,6 +60,71 @@ class WorkflowOrchestrator {
       onNodeRestart: (instance, node) => this.resumeNodeSession(instance, node),
     });
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
+    sessionService.onSessionRemoved((sessionId) => this.handleSessionRemoved(sessionId));
+    sessionService.onSessionIdled((sessionId) => this.handleSessionIdled(sessionId));
+  }
+
+  /**
+   * 空闲停滞检测：工作流节点会话 turn 结束（promptCompleted→idling）但节点未推进时触发。
+   * 典型场景：权限审批超时 → harness 取消当前 turn → 会话空闲，节点停在 RUNNING。
+   * 首次补发提醒提示词让 AI 继续（若卡在权限，重试会再次弹出审批待办，即现场提醒）；
+   * 再次停滞（与 handleSessionEnded 共享 fallbackSent 计数）→ 升级 FAILED 并创建
+   * immediate 优先级「人工介入」待办（强提醒）。
+   */
+  async handleSessionIdled(sessionId: string): Promise<void> {
+    const instance = (await WorkflowInstance.findOne({
+      'nodes.sessionId': sessionId,
+      deletedAt: null,
+    })) as unknown as WorkflowInstanceDoc | null;
+    if (!instance) return;
+    const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
+    if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
+
+    if (node.fallbackSent) {
+      await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止），需要人工介入',
+        source: 'SESSION_STUCK',
+      });
+      await todoService.createWorkflowInterventionTodo({
+        userId: instance.userId.toString(),
+        instanceId: instance._id.toString(),
+        instanceName: instance.name,
+        nodeId: node.nodeId,
+        nodeName: node.name,
+        sessionId,
+        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止）',
+      });
+      return;
+    }
+
+    node.fallbackSent = true;
+    await instance.save();
+    // 会话仍存活（idling，映射仍在）：直接补发提醒提示词即可，无需 resume
+    await sessionService.addMessage(sessionId, {
+      direction: 'input',
+      type: 'text',
+      content: IDLE_NUDGE_PROMPT,
+    });
+  }
+
+  /**
+   * 会话被移除（start/resume 失败清理）：节点仍 RUNNING/REWORK 时升级 FAILED。
+   * 会话文档已删除，兜底 resume 无意义——必须让节点可见地失败，
+   * 否则节点停在 RUNNING、sessionId 悬空，流程永久卡死（人工可「重启节点」恢复）。
+   */
+  async handleSessionRemoved(sessionId: string): Promise<void> {
+    const instance = (await WorkflowInstance.findOne({
+      'nodes.sessionId': sessionId,
+      deletedAt: null,
+    })) as unknown as WorkflowInstanceDoc | null;
+    if (!instance) return;
+    const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
+    if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
+
+    await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+      reason: '节点会话启动失败或运行中被移除，请人工介入后重启节点',
+      source: 'SESSION_START_FAILED',
+    });
   }
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
@@ -83,14 +155,11 @@ class WorkflowOrchestrator {
         await this.ensureWorkflowToolsServer(instance.userId.toString()),
         await ensureAdminToolsServer(instance.userId.toString()),
       ],
-      // 节点配置的 mode/model：harness 会话初始化为配置值，而非 harness 默认设置
+      // 节点配置的 mode/model：随 acp:start 带内下发，bridge 在首条 prompt 前应用
       ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
       ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
     });
     node.sessionId = session.id as string;
-
-    // 若节点配置指定了 Mode/模型，则在会话创建后应用
-    await this.applyAgentConfig(instance, node, node.sessionId as string, agentConfig);
 
     await sessionService.addMessage(node.sessionId as string, {
       direction: 'input',
@@ -99,37 +168,16 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 应用节点配置的 Mode/模型设置到指定会话（与 start 场景保持一致） */
-  private async applyAgentConfig(
-    instance: WorkflowInstanceDoc,
-    node: WorkflowNodeDoc,
-    sessionId: string,
-    agentConfig?: ConfiguredNodeLike['agentConfig'],
-  ): Promise<void> {
-    if (!agentConfig) return;
-    if (agentConfig.modeId) {
-      try {
-        await sessionService.setMode(sessionId, instance.userId.toString(), agentConfig.modeId);
-      } catch (err) {
-        console.warn(
-          `节点「${node.name}」（${node.nodeKey}）应用 Mode「${agentConfig.modeId}」失败：`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-    if (agentConfig.modelId) {
-      try {
-        await sessionService.setModel(sessionId, instance.userId.toString(), agentConfig.modelId);
-      } catch (err) {
-        console.warn(
-          `节点「${node.name}」（${node.nodeKey}）应用模型「${agentConfig.modelId}」失败：`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
+  /** 提取节点配置的初始 mode/model（随 acp:start/acp:resume 带内下发）；无配置返回 undefined */
+  private initialModeModel(agentConfig?: ConfiguredNodeLike['agentConfig']): { modeId?: string; modelId?: string } | undefined {
+    if (!agentConfig || (!agentConfig.modeId && !agentConfig.modelId)) return undefined;
+    return {
+      ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
+      ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
+    };
   }
 
-  /** 节点进入 REWORK：resume 原会话、重发打回原因并重新应用 Mode/模型配置 */
+  /** 节点进入 REWORK：resume 原会话（初始 mode/model 带内下发）、重发打回原因 */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
@@ -137,10 +185,12 @@ class WorkflowOrchestrator {
   ): Promise<void> {
     if (!node.sessionId) return;
     const sessionId = node.sessionId.toString();
-    await sessionService.resume(sessionId, instance.userId.toString());
-    // 重新应用节点配置的 Mode/模型（resume 后会话可能回退默认，需按工作流配置设置）
     const configuredNode = await this.loadNodeConfig(instance, node);
-    await this.applyAgentConfig(instance, node, sessionId, configuredNode.agentConfig);
+    await sessionService.resume(
+      sessionId,
+      instance.userId.toString(),
+      this.initialModeModel(configuredNode.agentConfig),
+    );
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -195,7 +245,14 @@ class WorkflowOrchestrator {
 
     node.fallbackSent = true;
     await instance.save();
-    await sessionService.resume(sessionId, instance.userId.toString());
+    // 兜底 resume 同样带内下发节点配置的初始 mode/model；
+    // 配置读取失败不阻断兜底（仍以默认配置 resume）
+    let initial: { modeId?: string; modelId?: string } | undefined;
+    try {
+      const configuredNode = await this.loadNodeConfig(instance, node);
+      initial = this.initialModeModel(configuredNode.agentConfig);
+    } catch { /* ignore — fallback resume must not be blocked by config lookup */ }
+    await sessionService.resume(sessionId, instance.userId.toString(), initial);
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -228,20 +285,29 @@ class WorkflowOrchestrator {
 
   /** 幂等 upsert 平台工作流工具服务（transport/source: platform），返回其 _id */
   private async ensureWorkflowToolsServer(userId: string): Promise<string> {
-    const server = await McpServer.findOneAndUpdate(
-      { userId, name: PLATFORM_SERVER_NAME },
-      {
-        $setOnInsert: {
-          userId,
-          name: PLATFORM_SERVER_NAME,
-          transport: 'platform',
-          source: 'platform',
-          enabled: true,
+    try {
+      const server = await McpServer.findOneAndUpdate(
+        { userId, name: PLATFORM_SERVER_NAME },
+        {
+          $setOnInsert: {
+            userId,
+            name: PLATFORM_SERVER_NAME,
+            transport: 'platform',
+            source: 'platform',
+            enabled: true,
+          },
         },
-      },
-      { upsert: true, new: true },
-    );
-    return server._id.toString();
+        { upsert: true, new: true },
+      );
+      return server._id.toString();
+    } catch (err: unknown) {
+      // E11000 duplicate key error — race condition: another request inserted first
+      if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+        const existing = await McpServer.findOne({ userId, name: PLATFORM_SERVER_NAME }).lean();
+        if (existing) return existing._id.toString();
+      }
+      throw err;
+    }
   }
 
   /**

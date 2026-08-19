@@ -116,6 +116,9 @@ export function TodoListPanel() {
                         {todo.type === 'elicitation_request' && (
                           <Badge variant="outline" className="text-xs">信息请求</Badge>
                         )}
+                        {todo.type === 'workflow_intervention' && (
+                          <Badge variant="destructive" className="text-xs">人工介入</Badge>
+                        )}
                         {!todo.isRead && (
                           <div className="h-2 w-2 rounded-full bg-info" />
                         )}

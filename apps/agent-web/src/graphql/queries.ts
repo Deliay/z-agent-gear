@@ -225,6 +225,7 @@ export const GET_CONTROLLER_WORKSPACES_ENABLED = gql`
       name
       path
       isEnabled
+      isGitRepo
     }
   }
 `
@@ -237,6 +238,7 @@ export const GET_WORKSPACES = gql`
       name
       path
       isEnabled
+      isGitRepo
     }
   }
 `
@@ -400,6 +402,22 @@ export const GET_GITHUB_APP_URL = gql`
     githubAppUrl {
       url
       state
+    }
+  }
+`
+
+export const WORKSPACE_WORKTREES = gql`
+  query WorkspaceWorktrees($controllerId: ID!, $workspaceId: ID!) {
+    workspaceWorktrees(controllerId: $controllerId, workspaceId: $workspaceId) {
+      path
+      branch
+      sessionCount
+      sessions {
+        id
+        title
+        status
+        worktreePath
+      }
     }
   }
 `

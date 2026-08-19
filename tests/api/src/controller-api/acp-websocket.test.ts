@@ -721,6 +721,12 @@ describe('Controller API ACP WebSocket', () => {
       });
       await new Promise((r) => setTimeout(r, 300));
 
+      // 存活会话删除前必须先停 ACP 进程：fake controller 像真实 controller 一样 ack acp:stop
+      const stopEvent = waitForEvent<{ sessionId: string; ackRequired?: boolean }>(client, 'acp:stop', 10000);
+      client.on('acp:stop', (data: { sessionId: string }) => {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete' });
+      });
+
       // Listen for acp:delete-history-session
       const deleteEvent = waitForEvent<{
         requestId: string;
@@ -733,6 +739,10 @@ describe('Controller API ACP WebSocket', () => {
         { sessionId, syncAgent: true },
         authToken,
       );
+
+      // 先收到 acp:stop（停 ACP 进程），再收到 acp:delete-history-session（同步历史删除）
+      const stopData = await stopEvent;
+      expect(stopData.sessionId).toBe(sessionId);
 
       const deleteData = await deleteEvent;
       expect(deleteData.sessionId).toBe(sessionId);

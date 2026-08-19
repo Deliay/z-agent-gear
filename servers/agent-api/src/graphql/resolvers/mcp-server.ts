@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import type { Types } from 'mongoose';
 import { McpServer, type IMcpServer } from '../../models/mcp-server.js';
+import { ensureAdminToolsServer } from '../../services/workflow/admin-tools.js';
 import type { AuthContext } from './auth.js';
 
 type McpServerDoc = IMcpServer & { _id: Types.ObjectId };
@@ -47,6 +48,11 @@ export const mcpServerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
+      // 平台内置「工作流管理工具集」默认启用、可装配到任意会话（PRD 功能点 4）：
+      // ensure 按 {userId, name} 幂等 upsert，此前仅在工作流节点会话启动时惰性调用，
+      // 未跑过工作流的用户在 Registry/新建会话选择器中看不到该服务。
+      // 读路径确保注册，覆盖存量与未来用户。
+      await ensureAdminToolsServer(context.currentUser.id);
       const servers = await McpServer.find({ userId: context.currentUser.id }).sort({ createdAt: -1 }).lean();
       return servers.map(mapMcpServer);
     },

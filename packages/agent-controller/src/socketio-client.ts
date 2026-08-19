@@ -15,11 +15,16 @@ import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { gatewayManager } from './gateway.js';
+import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 
 const CONTROLLER_VERSION = '1.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
   const config = acpDetector.getSpawnerConfig(serverType);
@@ -85,6 +90,7 @@ interface AcpCancelPayload {
 
 interface AcpStopPayload {
   sessionId: string;
+  ackRequired?: boolean;
 }
 
 interface AcpSetConfigOptionPayload {
@@ -128,6 +134,8 @@ interface AcpResumePayload {
   cwd: string;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   additionalDirectories?: string[];
+  modeId?: string;
+  modelId?: string;
 }
 
 interface AcpListSessionsPayload {
@@ -207,6 +215,12 @@ export function connectToServer(
 
   const heartbeat = new Heartbeat();
   const controllerName = options?.serverName || hostname();
+
+  // Seed the fs:remove-dir whitelist with cwds of ACP processes that survived
+  // a controller restart (their worktrees remain controller-managed).
+  for (const entry of processRegistry.listEntries()) {
+    fsHandler.registerAllowedPath(entry.cwd);
+  }
 
   socket.on('connect', () => {
     console.log(`Connected to ${endpoint}`);
@@ -294,6 +308,14 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
 
     try {
+      // 同 sessionId 重复 start（如 start 超时后的兜底 resume/重试与迟到初始化交叠）：
+      // 先停掉旧 bridge，避免同会话双进程、旧 bridge 泄漏
+      const existingBridge = acpBridges.get(data.sessionId);
+      if (existingBridge) {
+        console.warn(`[ACP ctrl] acp:start for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        acpBridges.delete(data.sessionId);
+        await existingBridge.stop().catch(() => {});
+      }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
@@ -306,6 +328,41 @@ export function connectToServer(
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
+
+      // The session cwd is a controller-managed worktree: allow fs:remove-dir on it
+      fsHandler.registerAllowedPath(data.cwd);
+      // Registry lifecycle is bound to the bridge: any stop exit (user close,
+      // agent exit, error) deregisters the PID so stale entries cannot pile up
+      bridge.on('acp:stopped', (payload: { sessionId: string }) => {
+        if (payload.sessionId === data.sessionId) {
+          processRegistry.deregister(data.sessionId);
+        }
+      });
+
+      // Register PID in process registry after spawner starts
+      const registerPid = () => {
+        const pid = spawner.pid;
+        if (pid) {
+          processRegistry.register(data.sessionId, {
+            pid,
+            cwd: data.cwd,
+            acpServerType: data.serverType,
+          });
+        }
+      };
+      // Register immediately if pid already available, otherwise wait for spawn
+      registerPid();
+      if (!spawner.pid) {
+        spawner.closed.then(() => {}).catch(() => {});
+        // Poll briefly for pid to appear after spawn
+        const pollId = setInterval(() => {
+          if (spawner.pid) {
+            clearInterval(pollId);
+            registerPid();
+          }
+        }, 50);
+        setTimeout(() => clearInterval(pollId), 5000);
+      }
 
       bridge.on('permission:sent', (requestId: string) => {
         permissionRequestBridge.set(requestId, bridge);
@@ -346,6 +403,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
+        processRegistry.deregister(data.sessionId);
         console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
@@ -375,15 +433,32 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
 
     try {
+      // 同 sessionId 重复 resume/start：先停掉旧 bridge（同 acp:start 的防双进程处理）
+      const existingBridge = acpBridges.get(data.sessionId);
+      if (existingBridge) {
+        console.warn(`[ACP ctrl] acp:resume for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        acpBridges.delete(data.sessionId);
+        await existingBridge.stop().catch(() => {});
+      }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpEndpoint: data.mcpEndpoint,
         additionalDirectories: data.additionalDirectories,
+        // 初始 mode/model：resume 完成后、acp:initialized 之前应用（时序同 acp:start）
+        initialModeId: data.modeId,
+        initialModelId: data.modelId,
       }, spawner);
 
       acpBridges.set(data.sessionId, bridge);
+
+      fsHandler.registerAllowedPath(data.cwd);
+      bridge.on('acp:stopped', (payload: { sessionId: string }) => {
+        if (payload.sessionId === data.sessionId) {
+          processRegistry.deregister(data.sessionId);
+        }
+      });
 
       bridge.on('permission:sent', (requestId: string) => {
         permissionRequestBridge.set(requestId, bridge);
@@ -419,6 +494,7 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
+        processRegistry.deregister(data.sessionId);
         console.log(`[ACP ctrl] emitting acp:resume:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:resume:result', {
           requestId: data.requestId,
@@ -580,12 +656,47 @@ export function connectToServer(
     }
   });
 
-  socket.on('acp:stop', (data: AcpStopPayload) => {
-    console.log(`ACP stop requested for session ${data.sessionId}`);
+  socket.on('acp:stop', async (data: AcpStopPayload) => {
+    if (!data || typeof data.sessionId !== 'string') {
+      console.warn(`[ACP ctrl] acp:stop ignored: invalid payload ${JSON.stringify(data)}`);
+      return;
+    }
+    console.log(`ACP stop requested for session ${data.sessionId} ackRequired=${data.ackRequired ?? false}`);
     const bridge = acpBridges.get(data.sessionId);
+    let killedByRegistry = false;
     if (bridge) {
-      bridge.stop();
+      await bridge.stop();
       acpBridges.delete(data.sessionId);
+    } else {
+      // Bridge not found: fallback to registry PID kill
+      const entry = processRegistry.get(data.sessionId);
+      if (entry) {
+        console.log(`[ACP ctrl] bridge not found for session ${data.sessionId}, killing by PID ${entry.pid}`);
+        killedByRegistry = true;
+        try {
+          if (platform() === 'win32') {
+            const { execFile } = await import('child_process');
+            await new Promise<void>((resolve) => {
+              execFile('taskkill', ['/PID', String(entry.pid), '/T', '/F'], () => resolve());
+            });
+          } else {
+            process.kill(-entry.pid, 'SIGTERM');
+            setTimeout(() => {
+              // Probe before SIGKILL: the PID may have been reused after exit
+              if (!isProcessAlive(entry.pid)) return;
+              try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
+            }, 5000);
+          }
+        } catch { /* process may already be dead */ }
+        processRegistry.deregister(data.sessionId);
+      }
+    }
+    if (data.ackRequired) {
+      socket.emit('acp:stopped', {
+        sessionId: data.sessionId,
+        reason: 'user_close',
+        killed: killedByRegistry,
+      });
     }
   });
 
@@ -780,16 +891,22 @@ export function connectToServer(
   // Worktree / Git extension events
   socket.on('fs:mkdir', async (data: FsMkdirPayload) => {
     const result = await fsHandler.mkdir(data.parentPath, data.folderName);
+    if (result.success && result.path) {
+      fsHandler.registerAllowedPath(result.path);
+    }
     socket.emit('fs:mkdir:result', { requestId: data.requestId, ...result });
   });
 
   socket.on('git:worktree:add', async (data: GitWorktreeAddPayload) => {
     const result = await worktreeHandler.add(data.repoPath, data.worktreePath, data.branch);
+    if (result.success) {
+      fsHandler.registerAllowedPath(data.worktreePath);
+    }
     socket.emit('git:worktree:add:result', { requestId: data.requestId, ...result });
   });
 
-  socket.on('git:worktree:remove', async (data: GitWorktreeRemovePayload) => {
-    const result = await worktreeHandler.remove(data.repoPath, data.worktreePath);
+  socket.on('git:worktree:remove', async (data: GitWorktreeRemovePayload & { force?: boolean }) => {
+    const result = await worktreeHandler.remove(data.repoPath, data.worktreePath, data.force);
     socket.emit('git:worktree:remove:result', { requestId: data.requestId, ...result });
   });
 
@@ -801,6 +918,60 @@ export function connectToServer(
   socket.on('git:commit', async (data: GitCommitPayload) => {
     const result = await worktreeHandler.commit(data.path, data.message);
     socket.emit('git:commit:result', { requestId: data.requestId, ...result });
+  });
+
+  // Worktree list event
+  socket.on('git:worktree:list', async (data: { requestId: string; workspacePath: string }) => {
+    console.log(`[ACP ctrl] git:worktree:list received: requestId=${data.requestId} workspacePath=${data.workspacePath}`);
+    const result = await worktreeHandler.list(data.workspacePath);
+    socket.emit('git:worktree:list:result', { requestId: data.requestId, ...result });
+  });
+
+  // FS remove-dir event
+  socket.on('fs:remove-dir', async (data: { requestId: string; path: string }) => {
+    console.log(`[ACP ctrl] fs:remove-dir received: requestId=${data.requestId} path=${data.path}`);
+    const result = await fsHandler.removeDir(data.path);
+    if (result.success) {
+      fsHandler.unregisterAllowedPath(data.path);
+    }
+    socket.emit('fs:remove-dir:result', { requestId: data.requestId, ...result });
+  });
+
+  // Reconnection reconciliation
+  socket.on('acp:reconcile', async (data: { activeSessionIds: string[]; pendingKillSessionIds: string[] }) => {
+    if (!data || !isStringArray(data.activeSessionIds) || !isStringArray(data.pendingKillSessionIds)) {
+      console.warn(`[ACP ctrl] acp:reconcile ignored: invalid payload ${JSON.stringify(data)}`);
+      return;
+    }
+    console.log(`[ACP ctrl] acp:reconcile received: active=${data.activeSessionIds.length} pendingKill=${data.pendingKillSessionIds.length}`);
+    const registered = processRegistry.listEntries();
+    for (const entry of registered) {
+      const shouldKill = data.pendingKillSessionIds.includes(entry.sessionId) || !data.activeSessionIds.includes(entry.sessionId);
+      if (shouldKill) {
+        console.log(`[ACP ctrl] reconcile: killing session=${entry.sessionId} pid=${entry.pid} (pendingKill=${data.pendingKillSessionIds.includes(entry.sessionId)})`);
+        try {
+          if (platform() === 'win32') {
+            const { execFile } = await import('child_process');
+            await new Promise<void>((resolve) => {
+              execFile('taskkill', ['/PID', String(entry.pid), '/T', '/F'], () => resolve());
+            });
+          } else {
+            process.kill(-entry.pid, 'SIGTERM');
+            setTimeout(() => {
+              // Probe before SIGKILL: the PID may have been reused after exit
+              if (!isProcessAlive(entry.pid)) return;
+              try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
+            }, 5000);
+          }
+        } catch { /* process may already be dead */ }
+        processRegistry.deregister(entry.sessionId);
+        // Also clean up bridge if present
+        const bridge = acpBridges.get(entry.sessionId);
+        if (bridge) {
+          acpBridges.delete(entry.sessionId);
+        }
+      }
+    }
   });
 
   // Port Forward events (event names kept unchanged for backward compatibility)

@@ -85,7 +85,7 @@ export const sessionResolvers = {
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; mcpServerIds?: string[] } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -95,6 +95,9 @@ export const sessionResolvers = {
         const session = await sessionService.create(context.currentUser.id, args.input);
         return { session };
       } catch (err) {
+        if (err instanceof GraphQLError) {
+          throw err;
+        }
         if ((err as Error).message === 'Controller not found') {
           throw new GraphQLError('Controller not found');
         }

@@ -6,12 +6,24 @@ import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const EXTERNAL_SESSION_CACHE_TTL = 86400; // 24h
+// 单次 ack 等待窗口：2 次尝试合计 ~10s，与 agent-api waitForStopAck 的 10s 等待上限对齐
+const STOP_ACK_TIMEOUT_MS = 5_000;
+const STOP_MAX_RETRIES = 1;
+// acp:stop:ack:{sessionId} 的 TTL，与提案统一为 60s
+const STOP_ACK_TTL_SECONDS = 60;
 
 interface ACPSession {
   controllerSocket: Socket;
   sessionId: string;
   controllerId: string;
   userId: string;
+}
+
+interface PendingRequest {
+  resolve: (value: { success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }) => void;
+  timeout: ReturnType<typeof setTimeout>;
+  sessionId: string;
+  statusAtStart: string;
 }
 
 export class ACPSessionManager {
@@ -26,6 +38,26 @@ export class ACPSessionManager {
   // 消息可能在 acp:start:result/acp:resume:result 之前到达，必须先排队、会话注册后按序补发，
   // 否则首条 prompt 会被静默丢弃（harness 进程已拉起但永远收不到 session/prompt）。
   private pendingInputs = new Map<string, Array<{ type: string; content: string | Record<string, unknown> }>>();
+  // Dispatcher: per-socket Map<requestId, PendingRequest> for start/resume results.
+  // Replaces per-call socket.once() to fix concurrent session start race condition.
+  private socketDispatchers = new Map<string, Map<string, PendingRequest>>();
+  // start/resume 在途跟踪：sessions Map 要等 start:result 成功才写入，
+  // 此期间到达的 acp:stop 必须先等待在途 start/resume 结算再处理，
+  // 否则会被误判为「controller 离线」写入 pending（在线时永不补做），导致 ACP 进程泄漏。
+  private startingSessions = new Map<string, Promise<void>>();
+
+  /** 登记一次 start/resume 在途过程，返回结算函数（finally 中调用） */
+  private trackStarting(sessionId: string): () => void {
+    let settle!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      settle = () => {
+        this.startingSessions.delete(sessionId);
+        resolve();
+      };
+    });
+    this.startingSessions.set(sessionId, inFlight);
+    return settle;
+  }
 
   async startSession(
     controllerSocket: Socket,
@@ -38,6 +70,7 @@ export class ACPSessionManager {
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
+    const settleStarting = this.trackStarting(sessionId);
     try {
       const session = await Session.findById(sessionId).lean();
       statusAtStart = session?.status ?? 'creating';
@@ -51,135 +84,110 @@ export class ACPSessionManager {
       
       console.log(`[ACP session] Starting session ${sessionId}: requestId=${requestId} controllerId=${controllerId} serverType=${serverType} cwd=${cwd}`);
       
-      return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          console.log(`[ACP session] TIMEOUT after 30s for session ${sessionId} requestId=${requestId}`);
-          this.cleanupFailedSession(sessionId, statusAtStart);
-          resolve({ success: false, error: 'ACP start timeout' });
-        }, 30000);
+      const startPayload: Record<string, unknown> = {
+        requestId,
+        sessionId,
+        serverType,
+        cwd,
+      };
+      if (mcpEndpoint) {
+        startPayload.mcpEndpoint = mcpEndpoint;
+      }
+      if (initial?.modeId) {
+        startPayload.modeId = initial.modeId;
+      }
+      if (initial?.modelId) {
+        startPayload.modelId = initial.modelId;
+      }
+      controllerSocket.emit('acp:start', startPayload);
 
-        controllerSocket.once('acp:start:result', async (payload: {
-          requestId: string;
-          sessionId: string;
-          success: boolean;
-          error?: string;
-          externalSessionId?: string;
-          modes?: Array<{ id: string; name: string; description?: string }>;
-          currentModeId?: string;
-          currentModel?: { id: string; name: string; provider?: string };
-          availableModels?: Array<{ id: string; name: string; provider?: string }>;
-          currentModelId?: string;
-          configOptions?: Array<Record<string, unknown>>;
-          promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean };
-          agentInfo?: { name: string; version?: string };
-          authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>;
-          supportsAdditionalDirectories?: boolean;
-        }) => {
-          clearTimeout(timeout);
-          
-          console.log(`[ACP session] Received acp:start:result for session ${sessionId}: requestId=${payload.requestId} success=${payload.success} error=${payload.error}`);
-          
-          if (payload.requestId !== requestId) {
-            console.log(`[ACP session] requestId mismatch: expected=${requestId} got=${payload.requestId} (ignoring)`);
-            return;
-          }
-
-          if (payload.success) {
-            // Store session mapping
-            this.sessions.set(sessionId, {
-              controllerSocket,
-              sessionId,
-              controllerId,
-              userId,
-            });
-            this.flushPendingInputs(sessionId);
-
-            // Track socket to sessions mapping
-            const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
-            socketSessions.add(sessionId);
-            this.socketToSessions.set(controllerSocket.id, socketSessions);
-
-            // Update session status to idling
-            const updateData: Record<string, unknown> = {
-              status: 'idling',
-              externalSessionId: payload.externalSessionId,
-            };
-            updateData.modes = payload.modes ?? [];
-            if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
-            if (payload.currentModel) updateData.currentModel = payload.currentModel;
-            updateData.availableModels = payload.availableModels ?? [];
-            if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
-            if (payload.configOptions) updateData.configOptions = payload.configOptions;
-            if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
-            if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
-            if (payload.authMethods) updateData.authMethods = payload.authMethods;
-            if (payload.supportsAdditionalDirectories != null) {
-              updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
-            }
-            updateData.authRequired = Boolean(payload.authMethods?.length);
-            await Session.findByIdAndUpdate(sessionId, updateData);
-            await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
-            await this.cacheConfigOptions(sessionId, payload.configOptions);
-            await this.cacheCapabilities(sessionId, {
-              promptCapabilities: payload.promptCapabilities,
-              agentInfo: payload.agentInfo,
-              authMethods: payload.authMethods,
-              supportsAdditionalDirectories: payload.supportsAdditionalDirectories,
-              authRequired: payload.authMethods?.length ? true : undefined,
-            });
-            const statusExtra: Record<string, unknown> = {};
-            if (payload.modes?.length) statusExtra.modes = payload.modes;
-            if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
-            if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
-            if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
-            if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
-            await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
-
-            // Cache externalSessionId in Redis for resume
-            if (payload.externalSessionId) {
-              const redis = getRedisClient();
-              await redis.set(
-                `session:${sessionId}:acpSessionId`,
-                payload.externalSessionId,
-                'EX',
-                EXTERNAL_SESSION_CACHE_TTL,
-              );
-            }
-
-            console.log(`[ACP session] Session ${sessionId} is now idling`);
-            resolve({ success: true, externalSessionId: payload.externalSessionId });
-          } else {
-            // Controller explicitly reported failure — keep session with 'ended' status
-            await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
-            await this.publishStatus(sessionId, 'ended');
-            console.log(`[ACP session] Session ${sessionId} ended by controller: ${payload.error}`);
-            resolve({ success: false, error: payload.error });
-          }
+      // Use dispatcher to wait for result (supports concurrent starts on same socket)
+      const payload = await this.registerPendingRequest(controllerSocket, requestId, sessionId, statusAtStart, 30000);
+      
+      console.log(`[ACP session] Received acp:start:result for session ${sessionId}: requestId=${requestId} success=${payload.success} error=${payload.error}`);
+      
+      if (payload.success) {
+        // Store session mapping
+        this.sessions.set(sessionId, {
+          controllerSocket,
+          sessionId,
+          controllerId,
+          userId,
         });
 
-        console.log(`[ACP session] Emitting acp:start to controller socket ${controllerSocket.id} for session ${sessionId}`);
-        const startPayload: Record<string, unknown> = {
-          requestId,
-          sessionId,
-          serverType,
-          cwd,
+        // Track socket to sessions mapping
+        const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
+        socketSessions.add(sessionId);
+        this.socketToSessions.set(controllerSocket.id, socketSessions);
+
+        // Update session status to idling
+        const updateData: Record<string, unknown> = {
+          status: 'idling',
+          externalSessionId: payload.externalSessionId,
         };
-        if (mcpEndpoint) {
-          startPayload.mcpEndpoint = mcpEndpoint;
+        updateData.modes = payload.modes ?? [];
+        if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
+        if (payload.currentModel) updateData.currentModel = payload.currentModel;
+        updateData.availableModels = payload.availableModels ?? [];
+        if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
+        if (payload.configOptions) updateData.configOptions = payload.configOptions;
+        if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
+        if (payload.authMethods) updateData.authMethods = payload.authMethods;
+        if (payload.supportsAdditionalDirectories != null) {
+          updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
         }
-        if (initial?.modeId) {
-          startPayload.modeId = initial.modeId;
+        updateData.authRequired = Boolean(payload.authMethods?.length);
+        await Session.findByIdAndUpdate(sessionId, updateData);
+        await this.cacheModes(sessionId, payload.modes, payload.currentModeId, payload.currentModel, payload.availableModels, payload.currentModelId);
+        await this.cacheConfigOptions(sessionId, payload.configOptions);
+        await this.cacheCapabilities(sessionId, {
+          promptCapabilities: payload.promptCapabilities,
+          agentInfo: payload.agentInfo,
+          authMethods: payload.authMethods,
+          supportsAdditionalDirectories: payload.supportsAdditionalDirectories,
+          authRequired: payload.authMethods?.length ? true : undefined,
+        });
+        const statusExtra: Record<string, unknown> = {};
+        if (payload.modes?.length) statusExtra.modes = payload.modes;
+        if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
+        if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
+        if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
+        if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
+        if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
+        await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
+
+        // 补发排队输入必须在状态落库 idling 之后：补发 prompt 会立即触发
+        // acp:prompt:start → handlePromptStart 以 status='idling' 为条件转 running，
+        // 若补发先于落库，条件更新未命中，会话状态将永久停留「空闲」
+        this.flushPendingInputs(sessionId);
+
+        // Cache externalSessionId in Redis for resume
+        if (payload.externalSessionId) {
+          const redis = getRedisClient();
+          await redis.set(
+            `session:${sessionId}:acpSessionId`,
+            payload.externalSessionId,
+            'EX',
+            EXTERNAL_SESSION_CACHE_TTL,
+          );
         }
-        if (initial?.modelId) {
-          startPayload.modelId = initial.modelId;
-        }
-        controllerSocket.emit('acp:start', startPayload);
-      });
+
+        console.log(`[ACP session] Session ${sessionId} is now idling`);
+        return { success: true, externalSessionId: payload.externalSessionId };
+      } else {
+        // Controller explicitly reported failure — keep session with 'ended' status
+        await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
+        await this.publishStatus(sessionId, 'ended');
+        console.log(`[ACP session] Session ${sessionId} ended by controller: ${payload.error}`);
+        return { success: false, error: payload.error };
+      }
     } catch (error) {
       console.error(`[ACP session] Error starting session ${sessionId}:`, error);
       await this.cleanupFailedSession(sessionId, statusAtStart);
       return { success: false, error: (error as Error).message };
+    } finally {
+      settleStarting();
     }
   }
 
@@ -340,31 +348,7 @@ export class ACPSessionManager {
   }
 
   async stopSession(sessionId: string, reason: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-
-    // Send acp:stop to controller
-    session.controllerSocket.emit('acp:stop', { sessionId });
-
-    // Clean up session mapping
-    this.sessions.delete(sessionId);
-    this.pendingInputs.delete(sessionId);
-    const socketSessions = this.socketToSessions.get(session.controllerSocket.id);
-    if (socketSessions) {
-      socketSessions.delete(sessionId);
-      if (socketSessions.size === 0) {
-        this.socketToSessions.delete(session.controllerSocket.id);
-      }
-    }
-
-    // Update session status
-    await Session.findByIdAndUpdate(sessionId, {
-      status: 'ended',
-      endedAt: new Date(),
-    });
-    await this.publishStatus(sessionId, 'ended');
+    return this.stopSessionWithAck(sessionId, reason);
   }
 
   async handlePromptStart(sessionId: string): Promise<void> {
@@ -383,7 +367,9 @@ export class ACPSessionManager {
       { status: 'idling' },
     );
     if (result) {
-      await this.publishStatus(sessionId, 'idling');
+      // promptCompleted 标记：区分「turn 结束落 idling」与「start 落 idling」，
+      // agent-api 据此检测工作流节点会话的空闲停滞（节点未推进但 turn 已结束）
+      await this.publishStatus(sessionId, 'idling', undefined, { promptCompleted: true });
     }
   }
 
@@ -418,7 +404,7 @@ export class ACPSessionManager {
   }
 
   async handleControllerStopped(sessionId: string, reason: string, exitCode?: number): Promise<void> {
-    // Clean up session mapping
+    // Clean up session mapping (idempotent: skip if already cleaned by stopSessionWithAck)
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
@@ -432,12 +418,19 @@ export class ACPSessionManager {
       }
     }
 
-    // Update session status
-    await Session.findByIdAndUpdate(sessionId, {
-      status: 'ended',
-      endedAt: new Date(),
-    });
-    await this.publishStatus(sessionId, 'ended');
+    // 会话处于 connecting（start/resume 进行中）时不落 ended：
+    // 此时最终状态由 start/resume 结果决定，无条件置 ended 会造成
+    // 「stop 后立即 resume」的 ended→idling 状态抖动。
+    // 其他状态下幂等落 ended（stopSessionWithAck 之后重复更新无害）。
+    const result = await Session.findOneAndUpdate(
+      { _id: sessionId, status: { $ne: 'connecting' } },
+      { status: 'ended', endedAt: new Date() },
+    );
+    if (result) {
+      await this.publishStatus(sessionId, 'ended');
+    }
+    const redis = getRedisClient();
+    await redis.set(`acp:stop:ack:${sessionId}`, JSON.stringify({ reason, exitCode }), 'EX', STOP_ACK_TTL_SECONDS);
   }
 
   async handleSocketDisconnect(socketId: string): Promise<void> {
@@ -466,7 +459,9 @@ export class ACPSessionManager {
     userId: string,
     cwd: string,
     mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string }> {
+    const settleStarting = this.trackStarting(sessionId);
     try {
       const sess = await Session.findById(sessionId).lean();
       const acpServerType = sess?.acpServerType ?? 'opencode';
@@ -475,96 +470,82 @@ export class ACPSessionManager {
 
       const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-      return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          this.cleanupFailedSession(sessionId, 'connecting');
-          this.publishStatus(sessionId, 'ended', 'RESUME_TIMEOUT');
-          resolve({ success: false, error: 'ACP resume timeout' });
-        }, 30000);
+      const resumePayload: Record<string, unknown> = {
+        requestId,
+        sessionId,
+        externalSessionId,
+        serverType: acpServerType,
+        cwd,
+      };
+      if (mcpEndpoint) {
+        resumePayload.mcpEndpoint = mcpEndpoint;
+      }
+      // 初始 mode/model 带内下发（bridge 在 acp:initialized 前应用，时序同 acp:start）
+      if (initial?.modeId) {
+        resumePayload.modeId = initial.modeId;
+      }
+      if (initial?.modelId) {
+        resumePayload.modelId = initial.modelId;
+      }
+      controllerSocket.emit('acp:resume', resumePayload);
 
-        controllerSocket.once('acp:resume:result', async (payload: {
-          requestId: string;
-          sessionId: string;
-          success: boolean;
-          error?: string;
-          modes?: Array<{ id: string; name: string; description?: string }>;
-          currentModeId?: string;
-          currentModel?: { id: string; name: string; provider?: string };
-          availableModels?: Array<{ id: string; name: string; provider?: string }>;
-          currentModelId?: string;
-          configOptions?: Array<Record<string, unknown>>;
-          promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean };
-          agentInfo?: { name: string; version?: string };
-          authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>;
-          supportsAdditionalDirectories?: boolean;
-        }) => {
-          clearTimeout(timeout);
-          if (payload.requestId !== requestId) return;
+      // Use dispatcher to wait for result (supports concurrent resumes on same socket)
+      const payload = await this.registerPendingRequest(controllerSocket, requestId, sessionId, 'connecting', 30000, 'ACP resume timeout');
 
-          if (payload.success) {
-            this.sessions.set(sessionId, {
-              controllerSocket,
-              sessionId,
-              controllerId,
-              userId,
-            });
-            this.flushPendingInputs(sessionId);
-
-            const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
-            socketSessions.add(sessionId);
-            this.socketToSessions.set(controllerSocket.id, socketSessions);
-
-            const updateData: Record<string, unknown> = { status: 'idling' };
-            updateData.modes = payload.modes ?? [];
-            if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
-            if (payload.currentModel) updateData.currentModel = payload.currentModel;
-            updateData.availableModels = payload.availableModels ?? [];
-            if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
-            if (payload.configOptions) updateData.configOptions = payload.configOptions;
-            if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
-            if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
-            if (payload.authMethods) updateData.authMethods = payload.authMethods;
-            if (payload.supportsAdditionalDirectories != null) {
-              updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
-            }
-            updateData.authRequired = Boolean(payload.authMethods?.length);
-            await Session.findByIdAndUpdate(sessionId, updateData);
-            await this.refreshSessionCache(sessionId);
-            await this.cacheConfigOptions(sessionId, payload.configOptions);
-            const statusExtra: Record<string, unknown> = {};
-            if (payload.modes?.length) statusExtra.modes = payload.modes;
-            if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
-            if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
-            if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
-            if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
-            if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
-            await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
-
-            resolve({ success: true });
-          } else {
-            await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
-            await this.publishStatus(sessionId, 'ended', payload.error || 'ACP_RESUME_FAILED');
-            resolve({ success: false, error: payload.error || 'ACP resume failed' });
-          }
+      if (payload.success) {
+        this.sessions.set(sessionId, {
+          controllerSocket,
+          sessionId,
+          controllerId,
+          userId,
         });
 
-        const resumePayload: Record<string, unknown> = {
-          requestId,
-          sessionId,
-          externalSessionId,
-          serverType: acpServerType,
-          cwd,
-        };
-        if (mcpEndpoint) {
-          resumePayload.mcpEndpoint = mcpEndpoint;
+        const socketSessions = this.socketToSessions.get(controllerSocket.id) || new Set();
+        socketSessions.add(sessionId);
+        this.socketToSessions.set(controllerSocket.id, socketSessions);
+
+        const updateData: Record<string, unknown> = { status: 'idling' };
+        updateData.modes = payload.modes ?? [];
+        if (payload.currentModeId) updateData.currentModeId = payload.currentModeId;
+        if (payload.currentModel) updateData.currentModel = payload.currentModel;
+        updateData.availableModels = payload.availableModels ?? [];
+        if (payload.currentModelId) updateData.currentModelId = payload.currentModelId;
+        if (payload.configOptions) updateData.configOptions = payload.configOptions;
+        if (payload.promptCapabilities) updateData.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) updateData.agentInfo = payload.agentInfo;
+        if (payload.authMethods) updateData.authMethods = payload.authMethods;
+        if (payload.supportsAdditionalDirectories != null) {
+          updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
         }
-        controllerSocket.emit('acp:resume', resumePayload);
-      });
+        updateData.authRequired = Boolean(payload.authMethods?.length);
+        await Session.findByIdAndUpdate(sessionId, updateData);
+        await this.refreshSessionCache(sessionId);
+        await this.cacheConfigOptions(sessionId, payload.configOptions);
+        const statusExtra: Record<string, unknown> = {};
+        if (payload.modes?.length) statusExtra.modes = payload.modes;
+        if (payload.currentModeId) statusExtra.currentModeId = payload.currentModeId;
+        if (payload.currentModel) statusExtra.currentModel = payload.currentModel;
+        if (payload.availableModels?.length) statusExtra.availableModels = payload.availableModels;
+        if (payload.currentModelId) statusExtra.currentModelId = payload.currentModelId;
+        if (payload.configOptions?.length) statusExtra.configOptions = payload.configOptions;
+        await this.publishStatus(sessionId, 'idling', undefined, statusExtra);
+
+        // 补发排队输入必须在状态落库 idling 之后（同 startSession 的竞态防护）
+        this.flushPendingInputs(sessionId);
+
+        return { success: true };
+      } else {
+        await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
+        await this.publishStatus(sessionId, 'ended', payload.error || 'ACP_RESUME_FAILED');
+        return { success: false, error: payload.error || 'ACP resume failed' };
+      }
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
       await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
       await this.publishStatus(sessionId, 'ended', 'ACP_RESUME_FAILED');
       return { success: false, error: (error as Error).message };
+    } finally {
+      settleStarting();
     }
   }
 
@@ -799,8 +780,227 @@ export class ACPSessionManager {
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
       if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
+      if (extra.promptCompleted === true) payload.promptCompleted = true;
     }
     await redis.publish('session:status', JSON.stringify(payload));
+  }
+
+  /**
+   * Ensure a persistent dispatcher is registered for the given socket.
+   * The dispatcher listens for acp:start:result and acp:resume:result,
+   * routing by requestId to the correct PendingRequest.
+   * This replaces per-call socket.once() which caused race conditions
+   * when multiple sessions started concurrently on the same socket.
+   */
+  ensureSocketDispatcher(socket: Socket): void {
+    if (this.socketDispatchers.has(socket.id)) return;
+    const dispatcher = new Map<string, PendingRequest>();
+    this.socketDispatchers.set(socket.id, dispatcher);
+
+    socket.on('acp:start:result', (payload: { requestId: string; sessionId: string; success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }) => {
+      const pending = dispatcher.get(payload.requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        dispatcher.delete(payload.requestId);
+        console.log(`[ACP session] Dispatcher resolved start result: requestId=${payload.requestId} sessionId=${pending.sessionId} success=${payload.success}`);
+        pending.resolve(payload);
+      } else {
+        console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.reapLateResultOrphan(socket, payload);
+      }
+    });
+
+    socket.on('acp:resume:result', (payload: { requestId: string; sessionId: string; success: boolean; error?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }) => {
+      const pending = dispatcher.get(payload.requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        dispatcher.delete(payload.requestId);
+        console.log(`[ACP session] Dispatcher resolved resume result: requestId=${payload.requestId} sessionId=${pending.sessionId} success=${payload.success}`);
+        pending.resolve(payload);
+      } else {
+        console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.reapLateResultOrphan(socket, payload);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      // Fail all pending requests for this socket
+      for (const [requestId, pending] of dispatcher) {
+        clearTimeout(pending.timeout);
+        console.log(`[ACP session] Socket disconnected, failing pending request: requestId=${requestId} sessionId=${pending.sessionId}`);
+        this.cleanupFailedSession(pending.sessionId, pending.statusAtStart);
+        pending.resolve({ success: false, error: 'Controller socket disconnected' });
+      }
+      dispatcher.clear();
+      this.socketDispatchers.delete(socket.id);
+    });
+  }
+
+  /**
+   * 迟到的 start/resume 结果收割：requestId 已因超时被移除（unknown），若 controller 侧
+   * 进程实际拉起成功（success=true）且会话无活跃映射、无在途 start/resume，
+   * 该进程已成孤儿——通知 controller 停掉，避免泄漏。
+   * 有在途 start/resume 时不收割：新 bridge 建立时会先停掉同 sessionId 的旧 bridge。
+   */
+  private reapLateResultOrphan(socket: Socket, payload: { sessionId: string; success: boolean }): void {
+    if (!payload.success) return;
+    if (this.sessions.has(payload.sessionId) || this.startingSessions.has(payload.sessionId)) return;
+    console.log(`[ACP session] Late successful start/resume result for session ${payload.sessionId} with no active session, reaping orphan process`);
+    socket.emit('acp:stop', { sessionId: payload.sessionId });
+  }
+
+  /**
+   * Register a pending start/resume request in the dispatcher for the given socket.
+   */
+  private registerPendingRequest(
+    socket: Socket,
+    requestId: string,
+    sessionId: string,
+    statusAtStart: string,
+    timeoutMs: number,
+    timeoutMessage?: string,
+  ): Promise<{ success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }> {
+    this.ensureSocketDispatcher(socket);
+    const dispatcher = this.socketDispatchers.get(socket.id)!;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        dispatcher.delete(requestId);
+        console.log(`[ACP session] TIMEOUT after ${timeoutMs}ms for session ${sessionId} requestId=${requestId}`);
+        this.cleanupFailedSession(sessionId, statusAtStart);
+        resolve({ success: false, error: timeoutMessage ?? 'ACP start timeout' });
+      }, timeoutMs);
+      dispatcher.set(requestId, { resolve, timeout, sessionId, statusAtStart });
+    });
+  }
+
+  /**
+   * Stop a session with ack guarantee: emit acp:stop with ackRequired,
+   * wait for acp:stopped ack, retry once on timeout.
+   */
+  async stopSessionWithAck(sessionId: string, reason: string): Promise<void> {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      // start/resume 在途：sessions Map 尚未写入。等待其结算后重查，
+      // 避免把「启动中」误判为「controller 离线」而只写 pending（在线时永不补做，进程泄漏）
+      const inFlight = this.startingSessions.get(sessionId);
+      if (inFlight) {
+        console.log(`[ACP session] stop requested while start/resume in-flight for session ${sessionId}, waiting for it to settle`);
+        await inFlight;
+        session = this.sessions.get(sessionId);
+      }
+    }
+    if (!session) {
+      // Controller 离线（无活跃映射）：记录 pending，待 controller 重连后 reconcile 补做
+      const doc = await Session.findById(sessionId).lean();
+      if (doc?.controllerId) {
+        console.log(`[ACP session] Session ${sessionId} not active (controller offline), recording stop as pending`);
+        const redis = getRedisClient();
+        await redis.lpush(`acp:stop:pending:${doc.controllerId}`, sessionId);
+        await redis.expire(`acp:stop:pending:${doc.controllerId}`, 86400);
+      }
+      return;
+    }
+
+    const controllerSocket = session.controllerSocket;
+
+    // Clean up session mapping immediately
+    this.sessions.delete(sessionId);
+    this.pendingInputs.delete(sessionId);
+    const socketSessions = this.socketToSessions.get(controllerSocket.id);
+    if (socketSessions) {
+      socketSessions.delete(sessionId);
+      if (socketSessions.size === 0) {
+        this.socketToSessions.delete(controllerSocket.id);
+      }
+    }
+
+    // Update session status
+    await Session.findByIdAndUpdate(sessionId, {
+      status: 'ended',
+      endedAt: new Date(),
+    });
+    await this.publishStatus(sessionId, 'ended');
+
+    // Send acp:stop with ackRequired and wait for ack
+    let ackReceived = false;
+    const onStopped = (payload: { sessionId: string; reason: string; killed?: boolean }) => {
+      if (payload.sessionId === sessionId) {
+        ackReceived = true;
+        console.log(`[ACP session] Received acp:stopped ack for session ${sessionId}: reason=${payload.reason} killed=${payload.killed ?? false}`);
+      }
+    };
+    // 用 on + 手动移除：once 会被同 socket 其他 session 的 acp:stopped 消耗，
+    // 导致本 session 的 ack 永远等不到而误走超时
+    controllerSocket.on('acp:stopped', onStopped);
+
+    for (let attempt = 0; attempt <= STOP_MAX_RETRIES; attempt++) {
+      controllerSocket.emit('acp:stop', { sessionId, ackRequired: true });
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => resolve(), STOP_ACK_TIMEOUT_MS);
+        const checkAck = () => {
+          if (ackReceived) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+        // Poll for ack
+        const poll = setInterval(() => {
+          checkAck();
+          if (ackReceived) clearInterval(poll);
+        }, 100);
+        setTimeout(() => clearInterval(poll), STOP_ACK_TIMEOUT_MS + 100);
+      });
+      if (ackReceived) break;
+      console.log(`[ACP session] acp:stop ack timeout for session ${sessionId}, attempt ${attempt + 1}/${STOP_MAX_RETRIES + 1}`);
+    }
+
+    controllerSocket.off('acp:stopped', onStopped);
+
+    if (!ackReceived) {
+      // Controller may be offline — record for pending reconciliation
+      console.log(`[ACP session] acp:stop ack not received for session ${sessionId}, recording as pending`);
+      const redis = getRedisClient();
+      await redis.lpush(`acp:stop:pending:${session.controllerId}`, sessionId);
+      await redis.expire(`acp:stop:pending:${session.controllerId}`, 86400);
+    }
+  }
+
+  /**
+   * Controller 注册/重连后下发 acp:reconcile（契约见 contracts/agent-controller-websocket.md §3.6）：
+   * activeSessionIds 为权威活跃会话（DB 未 ended 会话 ∪ 内存活跃映射），
+   * pendingKillSessionIds 来自离线期间积累的 acp:stop:pending 列表（读取后消费删除）。
+   * 失败仅记日志，不影响注册流程。
+   */
+  async reconcileOnRegister(controllerSocket: Socket, controllerId: string): Promise<void> {
+    try {
+      const redis = getRedisClient();
+
+      const activeSessionIds = new Set<string>();
+      for (const session of this.sessions.values()) {
+        if (session.controllerId === controllerId) {
+          activeSessionIds.add(session.sessionId);
+        }
+      }
+      const docs = await Session.find({ controllerId, status: { $ne: 'ended' } }).lean();
+      for (const doc of docs) {
+        activeSessionIds.add(String(doc._id));
+      }
+
+      const pendingKey = `acp:stop:pending:${controllerId}`;
+      const pending = await redis.lrange(pendingKey, 0, -1);
+      const pendingKillSessionIds = [...new Set(pending)];
+      if (pending.length > 0) {
+        await redis.del(pendingKey);
+      }
+
+      console.log(`[ACP session] Sending acp:reconcile to controller ${controllerId}: active=${activeSessionIds.size} pendingKill=${pendingKillSessionIds.length}`);
+      controllerSocket.emit('acp:reconcile', {
+        activeSessionIds: [...activeSessionIds],
+        pendingKillSessionIds,
+      });
+    } catch (error) {
+      console.error(`[ACP session] Failed to reconcile controller ${controllerId}:`, error);
+    }
   }
 }
 

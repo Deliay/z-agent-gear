@@ -250,6 +250,11 @@ async function registerFakeController(
   client.on('acp:check', (data: { requestId: string }) => {
     client.emit('acp:check:result', { requestId: data.requestId, servers });
   });
+  // 生命周期命令（start/stop/resume）串行处理：acp:stop 未 ack 会阻塞后续 resume，
+  // fake controller 须像真实 controller 一样 ack
+  client.on('acp:stop', (data: { sessionId: string }) => {
+    client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
+  });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
   client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '1.0.0' });
   const regData = await registered;
@@ -1327,6 +1332,43 @@ describe('Workflow Node Failure (A22-A23)', () => {
     expect(execNode.status).toBe('FAILED');
     expect(execNode.failInfo.source).toBe('SESSION_STUCK');
     expect(inst2.currentNodeNames).toEqual([]);
+  }, 40_000);
+
+  it('A34: 节点会话 turn 结束（审批超时自动停止）但节点未推进 → 兜底提醒；再次停滞 → FAILED + 人工介入待办', async () => {
+    const { instanceId, sessionId } = await advanceToExecRunning('a34');
+
+    // 模拟审批超时自动停止：prompt:start（running）→ prompt:complete（idling），全程未调用完成工具
+    fake.client.emit('acp:prompt:start', { sessionId });
+    await sleep(500);
+    const nudgeEvent = waitForEvent<{ message?: { content?: string } }>(fake.client, 'acp:message', 15000);
+    fake.client.emit('acp:prompt:complete', { sessionId, stopReason: 'cancelled' });
+
+    // 首次停滞：兜底提醒提示词直接补发（会话仍存活，无需 resume），节点保持 RUNNING
+    const nudge = await nudgeEvent;
+    expect(String(nudge.message?.content ?? '')).toContain('工作流');
+    await sleep(500);
+    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
+
+    // 再次停滞：节点升级 FAILED（SESSION_STUCK）+ 人工介入强提醒待办
+    fake.client.emit('acp:prompt:start', { sessionId });
+    await sleep(500);
+    fake.client.emit('acp:prompt:complete', { sessionId, stopReason: 'cancelled' });
+    await sleep(1500);
+    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('FAILED');
+    expect(execNode.failInfo.source).toBe('SESSION_STUCK');
+
+    const todosRes = await gqlRequest(
+      `query { getTodoList { id type priority title } }`,
+      undefined,
+      token,
+    );
+    const todos = (await todosRes.json()).data.getTodoList as Array<{ type: string; priority: string; title: string }>;
+    const intervention = todos.find((t) => t.type === 'workflow_intervention');
+    expect(intervention, '应创建人工介入强提醒待办').toBeDefined();
+    expect(intervention!.priority).toBe('immediate');
   }, 40_000);
 });
 

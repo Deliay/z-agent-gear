@@ -91,7 +91,7 @@ let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp${Date.now() % 1000000}`;
+  const username = `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
   const signupData = await signupRes.json() as any;
   authToken = signupData.data?.signup?.token;
@@ -109,10 +109,16 @@ describe('MCP Server API (agent-api)', () => {
       expect(data.errors?.[0]?.message).toContain('Not authenticated');
     });
 
-    it('should return empty list for authenticated user', async () => {
+    it('should include the platform admin-tools server by default for authenticated user', async () => {
       const res = await gqlRequest(GET_MCP_SERVERS, undefined, authToken);
       const data = await res.json() as any;
-      expect(data.data?.mcpServers).toEqual([]);
+      expect(data.errors).toBeUndefined();
+      // 平台内置「工作流管理工具集」默认启用、可装配到任意会话（读路径幂等注册）
+      const admin = (data.data?.mcpServers as any[])?.find((s) => s.name === 'agent-workflow-admin-tools');
+      expect(admin, 'mcpServers 应默认包含平台内置 agent-workflow-admin-tools').toBeDefined();
+      expect(admin.enabled).toBe(true);
+      expect(admin.source).toBe('platform');
+      expect(admin.transport).toBe('platform');
     });
   });
 

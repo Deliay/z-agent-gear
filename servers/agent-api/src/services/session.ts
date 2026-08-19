@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import path from 'path';
+import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -8,12 +9,36 @@ import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
+const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
+
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
+  /** 会话被移除（start/resume 失败清理）时的回调（由工作流 Orchestrator 注册用于节点失败升级） */
+  private sessionRemovedCallback?: (sessionId: string) => void | Promise<void>;
+  /** 会话 turn 结束进入空闲（promptCompleted）时的回调（由工作流 Orchestrator 注册用于停滞检测） */
+  private sessionIdledCallback?: (sessionId: string) => void | Promise<void>;
 
   onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
     this.sessionEndedCallback = callback;
+  }
+
+  onSessionRemoved(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionRemovedCallback = callback;
+  }
+
+  onSessionIdled(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionIdledCallback = callback;
+  }
+
+  /** controller-api 清理失败会话（publish removed）后由 SSE 订阅层触发 */
+  async notifySessionRemoved(sessionId: string): Promise<void> {
+    await this.sessionRemovedCallback?.(sessionId);
+  }
+
+  /** prompt 完成（running→idling 且带 promptCompleted 标记）后由 SSE 订阅层触发 */
+  async notifySessionIdled(sessionId: string): Promise<void> {
+    await this.sessionIdledCallback?.(sessionId);
   }
 
   async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {
@@ -37,6 +62,7 @@ export class SessionService {
     workspaceId: string;
     enableWorktree?: boolean;
     worktreeBranchSuffix?: string;
+    existingWorktreePath?: string;
     mcpServerIds?: string[];
     /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
     workflowInstanceId?: string;
@@ -55,12 +81,33 @@ export class SessionService {
       throw new Error('Workspace not found');
     }
 
+    if (input.existingWorktreePath && input.enableWorktree) {
+      throw new GraphQLError('existingWorktreePath and enableWorktree are mutually exclusive', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+    }
+
     let cwd = workspace.path;
     let worktreePath: string | undefined;
     let worktreeBranch: string | undefined;
     const redis = getRedisClient();
 
-    if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+    if (input.existingWorktreePath) {
+      // Reuse an existing worktree (no git:worktree:add needed).
+      // The path must belong to this workspace's worktree scope, and the
+      // session must NOT record worktreeBranch — that field marks ownership
+      // and would make delete() run git cleanup on a shared worktree.
+      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+      if (!path.normalize(input.existingWorktreePath).startsWith(scopePrefix)) {
+        throw new GraphQLError('existingWorktreePath does not belong to this workspace', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+      cwd = input.existingWorktreePath;
+      worktreePath = input.existingWorktreePath;
+    } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
+      // Create a new worktree via controller git:worktree:add
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
       const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
       const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
@@ -138,7 +185,11 @@ export class SessionService {
             : undefined,
         );
       } catch (err) {
-        console.error('Failed to create MCP endpoint:', err instanceof Error ? err.message : err);
+        // 当会话显式携带 mcpServerIds 时 fail-fast：删除已创建的会话并抛错
+        await Session.deleteOne({ _id: session._id });
+        throw new Error(
+          `MCP endpoint 创建失败：${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -247,7 +298,7 @@ export class SessionService {
     return true;
   }
 
-  async resume(id: string, userId: string): Promise<{ success: boolean; status: string; error?: string }> {
+  async resume(id: string, userId: string, initial?: { modeId?: string; modelId?: string }): Promise<{ success: boolean; status: string; error?: string }> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
@@ -274,6 +325,10 @@ export class SessionService {
       externalSessionId: session.externalSessionId || '',
       cwd: session.cwd || '',
       mcpEndpoint,
+      // 初始 mode/model 带内下发（bridge 在首条 prompt 前应用）；
+      // setMode/setModel 的 idling 守卫在 resume 阶段恒丢弃，不能作为应用通道
+      ...(initial?.modeId ? { modeId: initial.modeId } : {}),
+      ...(initial?.modelId ? { modelId: initial.modelId } : {}),
     }));
     return { success: true, status: 'connecting' };
   }
@@ -305,10 +360,31 @@ export class SessionService {
     return false;
   }
 
-  async delete(id: string, userId: string): Promise<boolean> {
+  async delete(id: string, userId: string, opts?: { skipAckWait?: boolean }): Promise<boolean> {
     const redis = getRedisClient();
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) return false;
+
+    // Stop ACP session first, then do worktree cleanup.
+    // creating/connecting sessions also get acp:stop: the controller may be
+    // about to spawn the ACP process, and skipping stop would orphan it.
+    const needsStop = ['creating', 'connecting', 'running', 'idling'].includes(session.status);
+    if (needsStop) {
+      // Drop any stale ack (e.g. written by a user_close acp:stopped) so
+      // waitForStopAck only consumes an ack produced after this stop request.
+      await redis.del(`acp:stop:ack:${id}`);
+      await redis.publish('session:command', JSON.stringify({
+        type: 'acp:stop',
+        sessionId: id,
+        reason: 'user_delete',
+      }));
+      if (!opts?.skipAckWait) {
+        const stopAckReceived = await this.waitForStopAck(redis, id);
+        if (!stopAckReceived) {
+          console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+        }
+      }
+    }
 
     // Worktree cleanup if applicable
     if ((session as any).worktreePath && (session as any).worktreeBranch) {
@@ -383,13 +459,6 @@ export class SessionService {
       }
     }
 
-    // Stop ACP session
-    await redis.publish('session:command', JSON.stringify({
-      type: 'acp:stop',
-      sessionId: id,
-      reason: 'user_delete',
-    }));
-
     // Revoke MCP endpoint
     await mcpEndpointService.revokeEndpoint(id);
 
@@ -399,6 +468,19 @@ export class SessionService {
       await AcpMessage.deleteMany({ sessionId: id });
       await redis.del(`session:${id}:status`);
       return true;
+    }
+    return false;
+  }
+
+  private async waitForStopAck(redis: ReturnType<typeof getRedisClient>, sessionId: string): Promise<boolean> {
+    const key = `acp:stop:ack:${sessionId}`;
+    const deadline = Date.now() + ACP_STOP_ACK_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await redis.get(key)) {
+        await redis.del(key);
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return false;
   }
@@ -582,7 +664,7 @@ export class SessionService {
     return this.getAcpCapabilities(controllerId, userId);
   }
 
-  private mapSession(session: Record<string, unknown>): Record<string, unknown> {
+  mapSession(session: Record<string, unknown>): Record<string, unknown> {
     return {
       id: (session._id as mongoose.Types.ObjectId).toString(),
       userId: (session.userId as mongoose.Types.ObjectId).toString(),

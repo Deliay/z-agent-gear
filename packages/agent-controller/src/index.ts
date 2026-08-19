@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { hostname } from 'os';
+import { hostname, platform } from 'os';
 import { resolveKey, resolveEndpoint, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { connectToServer } from './socketio-client.js';
 import { writePid, removePid, isRunning } from './daemon.js';
 import { startMcpRegistration } from './commands/mcp-proxy.js';
 import { startMcpProxy } from './commands/mcp.js';
+import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 
 const program = new Command();
 
@@ -43,8 +44,32 @@ program
       serverName: options.name || hostname(),
     });
 
-    const shutdown = () => {
+    const shutdown = async () => {
       console.log('Shutting down...');
+      // Kill all registered ACP processes before exiting, using the same
+      // TERM → short wait → KILL semantics as the acp:stop handler
+      const registered = processRegistry.listEntries();
+      if (registered.length > 0) {
+        console.log(`Killing ${registered.length} registered ACP process(es)...`);
+        for (const entry of registered) {
+          try {
+            if (platform() === 'win32') {
+              const { execFileSync } = await import('child_process');
+              execFileSync('taskkill', ['/PID', String(entry.pid), '/T', '/F'], { timeout: 5000 });
+            } else {
+              process.kill(-entry.pid, 'SIGTERM');
+            }
+          } catch { /* process may already be dead */ }
+        }
+        // Give processes a moment to exit
+        await new Promise((r) => setTimeout(r, 1000));
+        for (const entry of registered) {
+          if (platform() !== 'win32' && isProcessAlive(entry.pid)) {
+            try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
+          }
+          processRegistry.deregister(entry.sessionId);
+        }
+      }
       socket.disconnect();
       removePid();
       process.exit(0);

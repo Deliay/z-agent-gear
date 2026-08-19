@@ -32,7 +32,14 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
+vi.mock('./session.js', () => ({
+  sessionService: {
+    delete: vi.fn(),
+  },
+}));
+
 import { sessionImportService } from './session-import.js';
+import { sessionService } from './session.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -348,26 +355,38 @@ describe('SessionImportService', () => {
       expect(mockRedis.publish).not.toHaveBeenCalled();
     });
 
-    it('should allow deleting a connecting (stuck) session', async () => {
+    it('should allow deleting a connecting (stuck) session via sessionService.delete (stops ACP)', async () => {
       vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'connecting' }) as never);
-      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
-      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
+      vi.mocked(sessionService.delete).mockResolvedValue(true);
 
       const result = await sessionImportService.deleteHistorySession('user-1', 'sess-1', false);
 
-      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' });
+      // 存活会话必须委托 sessionService.delete：发送 acp:stop 并等 ack，避免 ACP 进程泄漏
+      expect(sessionService.delete).toHaveBeenCalledWith('sess-1', 'user-1');
+      expect(Session.deleteOne).not.toHaveBeenCalled();
       expect(result).toEqual({ success: true, syncedToAgent: false, error: null });
     });
 
-    it('should allow deleting an idling session', async () => {
+    it('should delete an idling session via sessionService.delete and still sync agent history', async () => {
+      vi.useFakeTimers();
       vi.mocked(Session.findOne).mockResolvedValue(mockSession({ status: 'idling' }) as never);
-      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
-      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
+      vi.mocked(sessionService.delete).mockResolvedValue(true);
+      vi.mocked(mockRedis.publish).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, supported: true }));
 
-      const result = await sessionImportService.deleteHistorySession('user-1', 'sess-1', false);
+      const promise = sessionImportService.deleteHistorySession('user-1', 'sess-1');
+      await advancePollTimers(500, 3);
+      const result = await promise;
 
-      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: 'sess-1', userId: 'user-1' });
-      expect(result).toEqual({ success: true, syncedToAgent: false, error: null });
+      // 先停 ACP 进程（委托 delete），再同步 agent 历史删除
+      expect(sessionService.delete).toHaveBeenCalledWith('sess-1', 'user-1');
+      expect(Session.deleteOne).not.toHaveBeenCalled();
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:delete-history-session"'));
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"externalSessionId":"hist-1"'));
+      expect(result).toEqual({ success: true, syncedToAgent: true, error: null });
+      vi.useRealTimers();
     });
 
     it('should throw when session not found', async () => {

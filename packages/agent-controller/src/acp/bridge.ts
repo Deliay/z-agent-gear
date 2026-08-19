@@ -298,6 +298,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.acpSessionId = externalSessionId;
       this.initializing = false;
 
+      // 初始 mode/model 在 acp:initialized 之前应用（时序同 start：initialized → resume:result → prompt 补发）
+      await this.applyInitialModeModel();
       this.emit('acp:initialized', this.buildInitializedPayload(result));
     } catch (error) {
       // resumeSession may fail if agent doesn't support session.resume
@@ -311,6 +313,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         this.acpSessionId = result.sessionId;
         this.initializing = false;
 
+        await this.applyInitialModeModel();
         this.emit('acp:initialized', this.buildInitializedPayload(result));
       } catch (fallbackError) {
         this.initializing = false;
@@ -322,8 +325,14 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   async stop(): Promise<void> {
     try {
       if (this.acpSessionId && this.connection) {
-        await this.connection.cancel({ sessionId: this.acpSessionId });
-        await this.connection.closeSession({ sessionId: this.acpSessionId });
+        // 5s timeout for cancel/closeSession to prevent hanging
+        await Promise.race([
+          (async () => {
+            await this.connection!.cancel({ sessionId: this.acpSessionId! });
+            await this.connection!.closeSession({ sessionId: this.acpSessionId! });
+          })(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+        ]);
       }
     } catch { /* ignore */ }
     this.activePrompt = null;

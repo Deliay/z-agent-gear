@@ -11,6 +11,7 @@ vi.mock('os', () => ({
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
   execFileSync: vi.fn(() => '/usr/bin/opencode'),
+  execFile: vi.fn(),
 }));
 
 vi.mock('fs', async (importOriginal) => {
@@ -19,7 +20,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { AcpSpawner } from '../../src/acp/spawner.js';
-import { spawn, execFileSync } from 'child_process';
+import { spawn, execFileSync, execFile } from 'child_process';
 import { existsSync } from 'fs';
 
 function createMockChildProcess(): ChildProcess & EventEmitter {
@@ -31,6 +32,7 @@ function createMockChildProcess(): ChildProcess & EventEmitter {
   Object.defineProperty(proc, 'stdout', { value: stdoutMock, writable: true });
   Object.defineProperty(proc, 'stderr', { value: new Readable({ read() {} }), writable: true });
   Object.defineProperty(proc, 'kill', { value: vi.fn().mockReturnValue(true), writable: true });
+  Object.defineProperty(proc, 'pid', { value: 12345, writable: true });
   return proc;
 }
 
@@ -60,6 +62,7 @@ describe('AcpSpawner', () => {
       spawner.start();
       expect(spawn).toHaveBeenCalledWith('/usr/bin/opencode', ['acp'], {
         cwd: '/tmp/project',
+        detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     });
@@ -130,26 +133,39 @@ describe('AcpSpawner', () => {
   });
 
   describe('stop', () => {
-    it('should send SIGTERM to process', () => {
+    let processKillSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      processKillSpy = vi.spyOn(process, 'kill').mockReturnValue(true as any);
+    });
+
+    afterEach(() => {
+      processKillSpy.mockRestore();
+    });
+
+    it('should send SIGTERM to process group', () => {
       spawner.start();
+      const pid = mockProcess.pid;
       spawner.stop();
-      expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processKillSpy).toHaveBeenCalledWith(-pid, 'SIGTERM');
     });
 
     it('should send SIGKILL after 5s if process has not exited', () => {
       spawner.start();
+      const pid = mockProcess.pid;
       spawner.stop();
-      expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processKillSpy).toHaveBeenCalledWith(-pid, 'SIGTERM');
       vi.advanceTimersByTime(5000);
-      expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(processKillSpy).toHaveBeenCalledWith(-pid, 'SIGKILL');
     });
 
     it('should not send SIGKILL if process already exited', () => {
       spawner.start();
+      const pid = mockProcess.pid;
       spawner.stop();
       mockProcess.emit('exit', 0, null);
       vi.advanceTimersByTime(5000);
-      expect(mockProcess.kill).toHaveBeenCalledTimes(1);
+      expect(processKillSpy).not.toHaveBeenCalledWith(-pid, 'SIGKILL');
     });
 
     it('should handle stop when no process', () => {
@@ -205,14 +221,14 @@ describe('AcpSpawner', () => {
         expect(execFileSync).toHaveBeenCalledWith('where', ['copilot'], { encoding: 'utf8', timeout: 1000 });
       });
 
-      it('should return full path from `where`', () => {
+      it('should return full path from `where` and use shell for .cmd', () => {
         vi.mocked(execFileSync).mockReturnValue('C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd\r\n');
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot', args: ['--acp', '--stdio'] });
         sp.start();
         expect(spawn).toHaveBeenCalledWith(
           'C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd',
           ['--acp', '--stdio'],
-          expect.objectContaining({ shell: true }),
+          expect.objectContaining({ cwd: 'C:\\project', stdio: ['pipe', 'pipe', 'pipe'], shell: true }),
         );
       });
 
@@ -221,7 +237,7 @@ describe('AcpSpawner', () => {
         vi.mocked(existsSync).mockImplementation((p: string) => p === 'copilot.cmd');
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
         sp.start();
-        expect(spawn).toHaveBeenCalledWith('copilot.cmd', expect.any(Array), expect.objectContaining({ shell: true }));
+        expect(spawn).toHaveBeenCalledWith('copilot.cmd', expect.any(Array), expect.objectContaining({ cwd: 'C:\\project' }));
       });
 
       it('should return bare command as last resort', () => {
@@ -229,42 +245,58 @@ describe('AcpSpawner', () => {
         vi.mocked(existsSync).mockReturnValue(false);
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
         sp.start();
-        expect(spawn).toHaveBeenCalledWith('copilot', expect.any(Array), expect.objectContaining({ shell: true }));
+        expect(spawn).toHaveBeenCalledWith('copilot', expect.any(Array), expect.objectContaining({ cwd: 'C:\\project' }));
       });
     });
 
     describe('start', () => {
-      it('should spawn with shell: true', () => {
+      it('should spawn .cmd with shell: true on Windows (Node EINVAL on shell-less .cmd)', () => {
         vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
         sp.start();
         expect(spawn).toHaveBeenCalledWith(
-          expect.any(String),
+          'C:\\npm\\copilot.cmd',
           expect.any(Array),
-          expect.objectContaining({ shell: true }),
+          expect.objectContaining({ cwd: 'C:\\project', shell: true }),
         );
+      });
+
+      it('should spawn .bat with shell: true on Windows', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\agent.bat\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'agent' });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith(
+          'C:\\npm\\agent.bat',
+          expect.any(Array),
+          expect.objectContaining({ cwd: 'C:\\project', shell: true }),
+        );
+      });
+
+      it('should spawn a real .exe directly without shell on Windows', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\tools\\opencode.exe\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'opencode' });
+        sp.start();
+        const spawnOptions = vi.mocked(spawn).mock.calls[0][2];
+        expect(spawn).toHaveBeenCalledWith('C:\\tools\\opencode.exe', expect.any(Array), expect.objectContaining({ cwd: 'C:\\project' }));
+        expect(spawnOptions).not.toHaveProperty('shell');
       });
     });
 
     describe('stop', () => {
-      it('should call kill() without signal on Windows', () => {
+      it('should use taskkill on Windows instead of signal kill', () => {
+        vi.mocked(execFile).mockImplementation((_cmd: any, _args: any, cb: any) => {
+          if (typeof cb === 'function') cb(null, '', '');
+          return {} as any;
+        });
+        const processKillSpy = vi.spyOn(process, 'kill').mockReturnValue(true as any);
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
         vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
         sp.start();
         sp.stop();
-        expect(mockProcess.kill).toHaveBeenCalledWith();
-        expect(mockProcess.kill).not.toHaveBeenCalledWith('SIGTERM');
-      });
-
-      it('should call kill() again after 5s on Windows', () => {
-        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
-        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
-        sp.start();
-        sp.stop();
-        expect(mockProcess.kill).toHaveBeenCalledTimes(1);
-        vi.advanceTimersByTime(5000);
-        expect(mockProcess.kill).toHaveBeenCalledTimes(2);
-        expect(mockProcess.kill).not.toHaveBeenCalledWith('SIGKILL');
+        // On Windows, stop() should call taskkill, not POSIX signals
+        expect(processKillSpy).not.toHaveBeenCalledWith(expect.anything(), 'SIGTERM');
+        expect(processKillSpy).not.toHaveBeenCalledWith(expect.anything(), 'SIGKILL');
+        processKillSpy.mockRestore();
       });
     });
   });

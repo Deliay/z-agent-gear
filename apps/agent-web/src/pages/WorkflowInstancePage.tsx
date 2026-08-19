@@ -8,7 +8,8 @@ import {
   ARCHIVE_WORKFLOW_INSTANCE,
   type GetWorkflowInstanceQuery,
 } from '@/graphql/workflow'
-import WorkflowNodeTree, { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTree'
+import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
+import { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTreeConstants'
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import MobileBackButton from '@/components/MobileBackButton'

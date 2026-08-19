@@ -9,6 +9,14 @@ vi.mock('../session.js', () => ({
     setMode: vi.fn(),
     setModel: vi.fn(),
     onSessionEnded: vi.fn(),
+    onSessionRemoved: vi.fn(),
+    onSessionIdled: vi.fn(),
+  },
+}));
+
+vi.mock('../todo-service.js', () => ({
+  todoService: {
+    createWorkflowInterventionTodo: vi.fn(),
   },
 }));
 
@@ -40,6 +48,7 @@ vi.mock('./admin-tools.js', () => ({
 import { workflowOrchestrator, WORKFLOW_SYSTEM_PROMPT } from './orchestrator.js';
 import { workflowEngine, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { sessionService } from '../session.js';
+import { todoService } from '../todo-service.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
@@ -325,7 +334,8 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowOrchestrator.handleSessionEnded('sess-2');
 
-    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1');
+    // 兜底 resume 同样带内下发初始配置（无配置时为 undefined）
+    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1', undefined);
     const content = lastInputMessage();
     expect(content).toContain('工作流');
     expect(content).toContain('工具');
@@ -355,23 +365,105 @@ describe('WorkflowOrchestrator', () => {
     expect(sessionService.addMessage).not.toHaveBeenCalled();
   });
 
-  it('reworkNodeSession: resume 原会话、重发打回原因并应用 Mode/模型配置', async () => {
+  it('O9: 会话被移除（start/resume 失败清理）且节点仍 RUNNING → 节点升级 FAILED（SESSION_START_FAILED）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionRemoved('sess-2');
+
+    // 会话已不存在，兜底 resume 无意义——节点必须可见地失败，而非静默卡死
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('FAILED');
+    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
+    expect(instance.save).toHaveBeenCalled();
+  });
+
+  it('O9b: 会话被移除但节点已转移（DONE）→ 忽略', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'DONE', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionRemoved('sess-2');
+
+    expect(instance.nodes[0].status).toBe('DONE');
+    expect(instance.save).not.toHaveBeenCalled();
+  });
+
+  it('O10: 空闲停滞（turn 结束节点未推进）首次 → 置 fallbackSent 并补发提醒提示词（不 resume）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-2');
+
+    // 会话仍存活（idling），无需 resume；直接补发提醒让 AI 继续
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).toHaveBeenCalled();
+    expect(lastInputMessage()).toContain('工作流');
+    expect(instance.nodes[0].fallbackSent).toBe(true);
+    expect(instance.save).toHaveBeenCalled();
+    // 未升级失败
+    expect(instance.nodes[0].status).toBe('RUNNING');
+  });
+
+  it('O10b: 再次空闲停滞 → 节点升级 FAILED（SESSION_STUCK）并创建人工介入强提醒待办', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-2');
+
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('FAILED');
+    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_STUCK' });
+    expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', nodeName: '技术方案' }),
+    );
+  });
+
+  it('O10c: 空闲事件但节点已转移（DONE）→ 忽略', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'DONE', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-2');
+
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(instance.save).not.toHaveBeenCalled();
+  });
+
+  it('O10d: 非工作流会话的空闲事件 → 忽略', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(null as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-normal');
+
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('reworkNodeSession: resume 原会话、初始 Mode/模型随 acp:resume 带内下发、重发打回原因', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2' }),
     ]);
     vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
-    vi.mocked(sessionService.setMode).mockResolvedValue(true);
-    vi.mocked(sessionService.setModel).mockResolvedValue(true);
     const configured = makeConfigured();
     configured.nodes[1].agentConfig = { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: true } as unknown as typeof configured.nodes[1]['agentConfig'];
     vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
 
     await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], { reason: '方案不完整', fromNodeId: 'n3' });
 
-    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1');
-    // resume 后按节点配置重新应用 Mode/模型
-    expect(sessionService.setMode).toHaveBeenCalledWith('sess-2', 'user-1', 'code');
-    expect(sessionService.setModel).toHaveBeenCalledWith('sess-2', 'user-1', 'gpt-5');
+    // 初始 mode/model 随 resume 带内下发（bridge 在首条 prompt 前应用）；
+    // setMode/setModel 的 idling 守卫在 resume 阶段恒丢弃，不得再依赖
+    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1', { modeId: 'code', modelId: 'gpt-5' });
+    expect(sessionService.setMode).not.toHaveBeenCalled();
+    expect(sessionService.setModel).not.toHaveBeenCalled();
     expect(lastInputMessage()).toContain('方案不完整');
   });
 

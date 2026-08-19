@@ -30,6 +30,7 @@ export interface ControllerWorkspaceData {
   name: string
   path: string
   isEnabled: boolean
+  isGitRepo?: boolean | null
   createdAt: string
   updatedAt: string
 }
@@ -531,4 +532,38 @@ export interface UnbindGitHubAccountMutation {
 
 export interface RefreshGitHubInstallationsMutation {
   refreshGitHubInstallations: GitHubAccountData
+}
+
+export interface WorkspaceWorktreeSessionData {
+  id: string
+  title: string | null
+  status: string
+  worktreePath: string | null
+}
+
+export interface WorkspaceWorktreeData {
+  path: string
+  branch: string | null
+  sessionCount: number
+  sessions: WorkspaceWorktreeSessionData[]
+}
+
+export interface GetWorkspaceWorktreesQuery {
+  workspaceWorktrees: WorkspaceWorktreeData[]
+}
+
+export interface WorktreeDeleteFailureData {
+  sessionId: string
+  error: string
+}
+
+export interface DeleteWorktreeResultData {
+  success: boolean
+  closedSessionIds: string[]
+  failures: WorktreeDeleteFailureData[]
+  error: string | null
+}
+
+export interface DeleteWorktreeMutation {
+  deleteWorktree: DeleteWorktreeResultData
 }

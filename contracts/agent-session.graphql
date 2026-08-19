@@ -311,6 +311,7 @@ input CreateSessionInput {
   workspaceId: ID!
   enableWorktree: Boolean = false
   worktreeBranchSuffix: String
+  existingWorktreePath: String
   mcpServerIds: [ID!]
   additionalDirectories: [String!]
 }

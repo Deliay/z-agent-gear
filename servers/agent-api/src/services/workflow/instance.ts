@@ -342,7 +342,7 @@ class WorkflowInstanceService {
     const sessions = await Session.find({ workflowInstanceId: id }).select('_id').lean();
     for (const session of sessions) {
       try {
-        await sessionService.delete(session._id.toString(), userId);
+        await sessionService.delete(session._id.toString(), userId, { skipAckWait: true });
       } catch (err) {
         console.error(`删除工作流实例「${instance.name}」的会话失败（${session._id}）：`, err);
       }

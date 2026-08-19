@@ -99,6 +99,8 @@ function registerWorkflowController(
 
     client.on('acp:stop', (data: { sessionId: string }) => {
       stops.push(data.sessionId);
+      // 生命周期命令串行处理：ack acp:stop 避免阻塞后续 resume（模拟真实 controller 行为）
+      client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
     });
 
     client.on('acp:message', (data: { sessionId: string; message: { type: string; content: string } }) => {
