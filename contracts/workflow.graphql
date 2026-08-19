@@ -113,7 +113,7 @@ type WorkflowNodeRejectInfo {
 
 type WorkflowNodeFailInfo {
   reason: String!
-  # 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）
+  # 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/ SESSION_START_FAILED（节点会话启动失败或被移除）
   source: String!
   at: String!
 }

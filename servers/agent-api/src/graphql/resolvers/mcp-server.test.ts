@@ -9,7 +9,13 @@ vi.mock('../../models/mcp-server.js', () => ({
   },
 }));
 
+vi.mock('../../services/workflow/admin-tools.js', () => ({
+  ensureAdminToolsServer: vi.fn().mockResolvedValue('mcp-admin-1'),
+  ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
+}));
+
 import { McpServer } from '../../models/mcp-server.js';
+import { ensureAdminToolsServer } from '../../services/workflow/admin-tools.js';
 
 const mockContext = {
   currentUser: { id: 'user1', username: 'testuser' },
@@ -83,10 +89,24 @@ describe('McpServer Resolvers', () => {
       expect(result[0].tools).toEqual([]);
     });
 
+    it('should ensure the platform admin-tools server is registered before listing', async () => {
+      vi.mocked(McpServer.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      } as never);
+
+      await mcpServerResolvers.Query.mcpServers({}, {}, mockContext);
+
+      // 平台内置「工作流管理工具集」默认启用、可装配到任意会话：
+      // 读路径幂等 upsert，覆盖从未跑过工作流的用户
+      expect(ensureAdminToolsServer).toHaveBeenCalledWith('user1');
+      expect(McpServer.find).toHaveBeenCalledWith({ userId: 'user1' });
+    });
+
     it('should throw when not authenticated', async () => {
       await expect(
         mcpServerResolvers.Query.mcpServers({}, {}, emptyContext),
       ).rejects.toThrow('Not authenticated');
+      expect(ensureAdminToolsServer).not.toHaveBeenCalled();
     });
   });
 

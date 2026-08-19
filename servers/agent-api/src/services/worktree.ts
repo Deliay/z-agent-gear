@@ -1,3 +1,5 @@
+import path from 'path';
+import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -39,6 +41,7 @@ class WorktreeService {
     }
 
     const redis = getRedisClient();
+    const workspaceRoot = path.normalize(workspace.path);
 
     // Check if controller is online before querying git worktrees
     const controller = await Controller.findById(controllerId).lean();
@@ -61,6 +64,9 @@ class WorktreeService {
           const parsed = JSON.parse(result);
           if (parsed.success && Array.isArray(parsed.worktrees)) {
             for (const wt of parsed.worktrees) {
+              // git worktree list 首条是主工作区（仓库根）——它不是可管理 worktree，
+              // 必须过滤，否则侧边栏可对它发起删除，fs 兜底会 rm 掉整个仓库（含 .git）
+              if (path.normalize(wt.path) === workspaceRoot) continue;
               gitWorktrees.push({ path: wt.path, branch: wt.branch || '' });
             }
           }
@@ -71,11 +77,12 @@ class WorktreeService {
       }
     }
 
-    // Find sessions with worktreePath in this workspace's controller
+    // Find non-ended sessions with worktreePath in this workspace's controller
     const sessions = await Session.find({
       controllerId,
       userId,
       worktreePath: { $ne: null },
+      status: { $ne: 'ended' },
     }).lean();
 
     // Merge: group by worktreePath
@@ -90,10 +97,18 @@ class WorktreeService {
       });
     }
 
+    // Only group sessions whose worktree belongs to this workspace: either a
+    // controller-reported git worktree of this repo, or a path under the
+    // workspace's worktreeDir scope (<worktreeDir>/<workspace.name>/).
+    const worktreeDir = (controller as any)?.worktreeDir || '~/.zag/worktrees';
+    const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+    const isWorkspaceWorktreePath = (wtPath: string) =>
+      worktreeMap.has(wtPath) || path.normalize(wtPath).startsWith(scopePrefix);
+
     for (const session of sessions) {
       const wtPath = (session as any).worktreePath as string | undefined;
-      if (!wtPath) continue;
-      const mappedSession = { ...session, id: (session._id as any).toString() };
+      if (!wtPath || !isWorkspaceWorktreePath(wtPath)) continue;
+      const mappedSession = sessionService.mapSession(session as unknown as Record<string, unknown>);
       const existing = worktreeMap.get(wtPath);
       if (existing) {
         existing.sessionCount++;
@@ -128,6 +143,24 @@ class WorktreeService {
     }).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
+    }
+
+    // 根工作区（仓库本体）永远不可删除——即使上层 list 过滤失守，
+    // 也不得对根路径发出任何 git/fs 删除命令（否则 .git 丢失）
+    if (path.normalize(worktreePath) === path.normalize(workspace.path)) {
+      throw new GraphQLError('cannot delete the workspace root (main working tree)', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+    }
+
+    // Path must be a worktree known to this workspace (git worktrees reported
+    // by the controller or session-grouped paths under its worktreeDir scope)
+    // before we allow any git/fs removal against it.
+    const knownWorktrees = await this.list(controllerId, workspaceId, userId);
+    if (!knownWorktrees.some((wt) => wt.path === worktreePath)) {
+      throw new GraphQLError('worktreePath is not managed by this workspace', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
 
     const closedSessionIds: string[] = [];
@@ -197,13 +230,16 @@ class WorktreeService {
         }
         await new Promise(r => setTimeout(r, 1000));
       }
-      if (!fsRemoved) {
+      if (fsRemoved) {
+        // Directory is gone despite the git error — clear it.
+        removeError = null;
+      } else {
         removeError = removeError || 'Failed to remove worktree directory';
       }
     }
 
     return {
-      success: failures.length === 0,
+      success: failures.length === 0 && removeError === null,
       closedSessionIds,
       failures,
       error: removeError,

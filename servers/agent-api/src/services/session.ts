@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import path from 'path';
+import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -13,9 +14,31 @@ const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
+  /** 会话被移除（start/resume 失败清理）时的回调（由工作流 Orchestrator 注册用于节点失败升级） */
+  private sessionRemovedCallback?: (sessionId: string) => void | Promise<void>;
+  /** 会话 turn 结束进入空闲（promptCompleted）时的回调（由工作流 Orchestrator 注册用于停滞检测） */
+  private sessionIdledCallback?: (sessionId: string) => void | Promise<void>;
 
   onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
     this.sessionEndedCallback = callback;
+  }
+
+  onSessionRemoved(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionRemovedCallback = callback;
+  }
+
+  onSessionIdled(callback: (sessionId: string) => void | Promise<void>): void {
+    this.sessionIdledCallback = callback;
+  }
+
+  /** controller-api 清理失败会话（publish removed）后由 SSE 订阅层触发 */
+  async notifySessionRemoved(sessionId: string): Promise<void> {
+    await this.sessionRemovedCallback?.(sessionId);
+  }
+
+  /** prompt 完成（running→idling 且带 promptCompleted 标记）后由 SSE 订阅层触发 */
+  async notifySessionIdled(sessionId: string): Promise<void> {
+    await this.sessionIdledCallback?.(sessionId);
   }
 
   async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {
@@ -59,7 +82,9 @@ export class SessionService {
     }
 
     if (input.existingWorktreePath && input.enableWorktree) {
-      throw new Error('existingWorktreePath and enableWorktree are mutually exclusive');
+      throw new GraphQLError('existingWorktreePath and enableWorktree are mutually exclusive', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
 
     let cwd = workspace.path;
@@ -68,12 +93,19 @@ export class SessionService {
     const redis = getRedisClient();
 
     if (input.existingWorktreePath) {
-      // Reuse an existing worktree (no git:worktree:add needed)
+      // Reuse an existing worktree (no git:worktree:add needed).
+      // The path must belong to this workspace's worktree scope, and the
+      // session must NOT record worktreeBranch — that field marks ownership
+      // and would make delete() run git cleanup on a shared worktree.
+      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+      if (!path.normalize(input.existingWorktreePath).startsWith(scopePrefix)) {
+        throw new GraphQLError('existingWorktreePath does not belong to this workspace', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
       cwd = input.existingWorktreePath;
       worktreePath = input.existingWorktreePath;
-      worktreeBranch = (workspace.name && input.worktreeBranchSuffix)
-        ? `${workspace.name}/${input.worktreeBranchSuffix}`
-        : undefined;
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
@@ -266,7 +298,7 @@ export class SessionService {
     return true;
   }
 
-  async resume(id: string, userId: string): Promise<{ success: boolean; status: string; error?: string }> {
+  async resume(id: string, userId: string, initial?: { modeId?: string; modelId?: string }): Promise<{ success: boolean; status: string; error?: string }> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
@@ -293,6 +325,10 @@ export class SessionService {
       externalSessionId: session.externalSessionId || '',
       cwd: session.cwd || '',
       mcpEndpoint,
+      // 初始 mode/model 带内下发（bridge 在首条 prompt 前应用）；
+      // setMode/setModel 的 idling 守卫在 resume 阶段恒丢弃，不能作为应用通道
+      ...(initial?.modeId ? { modeId: initial.modeId } : {}),
+      ...(initial?.modelId ? { modelId: initial.modelId } : {}),
     }));
     return { success: true, status: 'connecting' };
   }
@@ -329,9 +365,14 @@ export class SessionService {
     const session = await Session.findOne({ _id: id, userId }).lean();
     if (!session) return false;
 
-    // Stop ACP session first, then do worktree cleanup
-    const needsStop = session.status === 'running' || session.status === 'idling';
+    // Stop ACP session first, then do worktree cleanup.
+    // creating/connecting sessions also get acp:stop: the controller may be
+    // about to spawn the ACP process, and skipping stop would orphan it.
+    const needsStop = ['creating', 'connecting', 'running', 'idling'].includes(session.status);
     if (needsStop) {
+      // Drop any stale ack (e.g. written by a user_close acp:stopped) so
+      // waitForStopAck only consumes an ack produced after this stop request.
+      await redis.del(`acp:stop:ack:${id}`);
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
         sessionId: id,
@@ -623,7 +664,7 @@ export class SessionService {
     return this.getAcpCapabilities(controllerId, userId);
   }
 
-  private mapSession(session: Record<string, unknown>): Record<string, unknown> {
+  mapSession(session: Record<string, unknown>): Record<string, unknown> {
     return {
       id: (session._id as mongoose.Types.ObjectId).toString(),
       userId: (session.userId as mongoose.Types.ObjectId).toString(),

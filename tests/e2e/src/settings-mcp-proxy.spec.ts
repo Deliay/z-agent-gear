@@ -37,12 +37,15 @@ test.describe('Settings MCP Proxy Key E2E', () => {
     await expect(page.getByText(/No MCP proxy keys yet/)).toBeVisible({ timeout: 10000 });
   });
 
-  test('should show empty state for MCP Servers', async ({ page }) => {
+  test('should show platform admin-tools server by default for MCP Servers', async ({ page }) => {
     const { token, username } = await registerUser(page);
     await loginViaUI(page, username);
     await page.click('a[href="/settings"]');
 
-    await expect(page.getByText(/暂无已注册的 MCP 服务/)).toBeVisible({ timeout: 10000 });
+    // 平台内置「工作流管理工具集」默认启用（可装配到任意会话），新用户亦可直接看到
+    const adminEntry = page.locator('div.rounded-lg.border', { hasText: 'agent-workflow-admin-tools' });
+    await expect(adminEntry).toBeVisible({ timeout: 10000 });
+    await expect(adminEntry.getByText('平台内置', { exact: true })).toBeVisible();
   });
 
   test('should open generate key dialog', async ({ page }) => {
@@ -93,8 +96,10 @@ test.describe('Settings MCP Proxy Key E2E', () => {
     await page.getByRole('button', { name: 'Generate' }).click();
     await page.getByText('Copy & Close').click();
 
-    await expect(page.getByText('List Test Key')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('active')).toBeVisible();
+    // 默认存在的平台内置服务也带 active badge，断言需限定在 key 行内
+    const keyEntry = page.locator('div.rounded-lg.border', { hasText: 'List Test Key' });
+    await expect(keyEntry).toBeVisible({ timeout: 5000 });
+    await expect(keyEntry.getByText('active', { exact: true })).toBeVisible();
   });
 
   test('should revoke MCP proxy key', async ({ page }) => {

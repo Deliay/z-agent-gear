@@ -356,6 +356,8 @@ Controller 转发 ACP 输出。
 | `userId` | `string` | 是 | 用户 ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径） |
+| `modeId` | `string` | 否 | 初始工作模式 ID（工作流节点配置；不提供则使用 harness 默认） |
+| `modelId` | `string` | 否 | 初始模型 ID（工作流节点配置；不提供则使用 harness 默认） |
 
 **客户端行为：**
 
@@ -364,7 +366,8 @@ Controller 转发 ACP 输出。
 3. 调用 SDK `connection.initialize()` — 不声明 `fs`/`terminal` 能力
 4. 调用 SDK `connection.resumeSession({ sessionId: externalSessionId })`
 5. 如果 agent 不支持 `session.resume`，fallback 到 `newSession`
-6. 回复 `acp:resume:result`
+6. 若 payload 携带 `modeId`/`modelId`，在回复结果前应用初始工作模式/模型（同 `acp:start` §2.4：必须在 `acp:initialized`/`acp:resume:result` 之前完成，保证首条 prompt 以配置值执行）
+7. 回复 `acp:resume:result`
 
 ### 2.12 `acp:resume:result`（Controller → Server）
 
@@ -803,9 +806,9 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 
 ---
 
-## 2. 文件系统与 Git 事件协议
+## 3. 文件系统与 Git 事件协议
 
-### 2.1 事件总览
+### 3.1 事件总览
 
 | 方向 | 事件名 | 说明 |
 |------|--------|------|
@@ -832,7 +835,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | Server → Controller | `git:commit` | 请求在指定路径执行 Git 提交 |
 | Controller → Server | `git:commit:result` | 返回提交结果 |
 
-### 2.2 `fs:browse`（Server → Controller）
+### 3.2 `fs:browse`（Server → Controller）
 
 请求浏览指定目录下的文件和文件夹。
 
@@ -850,7 +853,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 3. 按目录优先、名称字母序排列
 4. 回复 `fs:browse:result`
 
-### 2.3 `fs:browse:result`（Controller → Server）
+### 3.3 `fs:browse:result`（Controller → Server）
 
 返回目录浏览结果。
 
@@ -869,7 +872,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `path` | `string` | 完整路径 |
 | `isDirectory` | `boolean` | 是否为目录 |
 
-### 2.4 `fs:home`（Server → Controller）
+### 3.4 `fs:home`（Server → Controller）
 
 请求获取用户主目录路径。
 
@@ -881,7 +884,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 
 **客户端行为：** 返回当前用户的主目录绝对路径。
 
-### 2.5 `fs:home:result`（Controller → Server）
+### 3.5 `fs:home:result`（Controller → Server）
 
 返回主目录路径。
 
@@ -892,7 +895,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `requestId` | `string` | 是 | 对应的请求 ID |
 | `path` | `string` | 是 | 主目录绝对路径 |
 
-### 2.6 `git:check`（Server → Controller）
+### 3.6 `git:check`（Server → Controller）
 
 请求检测指定路径是否为合法 Git 仓库，并获取分支信息。
 
@@ -911,7 +914,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 4. 确定默认分支：优先 `main` > `master` > 按字母排序第一个
 5. 回复 `git:check:result`
 
-### 2.7 `git:check:result`（Controller → Server）
+### 3.7 `git:check:result`（Controller → Server）
 
 返回 Git 仓库检测结果。
 
@@ -927,7 +930,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `defaultBranch` | `string \| null` | 否 | 默认分支名（合法仓库时） |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.8 `git:init`（Server → Controller）
+### 3.8 `git:init`（Server → Controller）
 
 请求在指定目录初始化 Git 仓库，并设置默认分支为 `main`。
 
@@ -944,7 +947,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 2. 执行 `git branch -m main`
 3. 回复 `git:init:result`
 
-### 2.9 `git:init:result`（Controller → Server）
+### 3.9 `git:init:result`（Controller → Server）
 
 返回 Git 初始化结果。
 
@@ -956,7 +959,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.10 `fs:mkdir`（Server → Controller）
+### 3.10 `fs:mkdir`（Server → Controller）
 
 请求在指定父目录下创建文件夹。
 
@@ -973,7 +976,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 1. 在 `parentPath/folderName` 路径创建目录
 2. 回复 `fs:mkdir:result`
 
-### 2.11 `fs:mkdir:result`（Controller → Server）
+### 3.11 `fs:mkdir:result`（Controller → Server）
 
 返回文件夹创建结果。
 
@@ -987,7 +990,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `path` | `string` | 否 | 创建的文件夹完整路径（成功时） |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.12 `git:worktree:add`（Server → Controller）
+### 3.12 `git:worktree:add`（Server → Controller）
 
 请求为指定 Git 仓库创建 Worktree。
 
@@ -1006,7 +1009,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 2. 执行 `git worktree add -b <branch> <worktreePath> <repoPath>`
 3. 回复 `git:worktree:add:result`
 
-### 2.13 `git:worktree:add:result`（Controller → Server）
+### 3.13 `git:worktree:add:result`（Controller → Server）
 
 返回 Worktree 创建结果。
 
@@ -1020,7 +1023,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `branch` | `string` | 否 | 实际创建的分支名（成功时） |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.14 `git:worktree:remove`（Server → Controller）
+### 3.14 `git:worktree:remove`（Server → Controller）
 
 请求移除指定 Worktree。
 
@@ -1039,7 +1042,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 2. 删除 Worktree 目录（如移除后目录仍存在）
 3. 回复 `git:worktree:remove:result`
 
-### 2.15 `git:worktree:remove:result`（Controller → Server）
+### 3.15 `git:worktree:remove:result`（Controller → Server）
 
 返回 Worktree 移除结果。
 
@@ -1051,7 +1054,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.16 `git:worktree:list`（Server → Controller）
+### 3.16 `git:worktree:list`（Server → Controller）
 
 请求列出指定 Git 仓库的全部 Worktree。
 
@@ -1068,7 +1071,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 2. 解析输出为 `[{ path, branch, head }]` 数组
 3. 回复 `git:worktree:list:result`
 
-### 2.17 `git:worktree:list:result`（Controller → Server）
+### 3.17 `git:worktree:list:result`（Controller → Server）
 
 返回 Worktree 列表。
 
@@ -1089,11 +1092,11 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `branch` | `string \| null` | 分支名（HEAD detached 时为 null） |
 | `head` | `string` | HEAD commit hash |
 
-### 2.18 `fs:remove-dir`（Server → Controller）
+### 3.18 `fs:remove-dir`（Server → Controller）
 
 请求递归删除目录。
 
-**安全模型**：Controller 端使用黑名单阻止系统关键路径（`/etc`、`/usr`、`/bin`、`/sbin`、`/var`、`/proc`、`/sys`、用户主目录）。Agent-api 端（`worktreeService.deleteWorktree`）仅发送已知工作区下的 worktree 路径，通过上游控制保证路径合法性。
+**安全模型**：Controller 端使用白名单校验路径——仅允许该 Controller 已注册/活跃会话持有的 worktree 路径及其子路径；显式拒绝 `/`、用户主目录、进程 cwd 及 Windows 系统关键路径（如 `C:\Windows`、`C:\Program Files`）。Agent-api 端（`worktreeService.deleteWorktree`）仅发送已知工作区下的 worktree 路径，通过上游控制进一步保证路径合法性。
 
 **Payload:**
 
@@ -1104,11 +1107,11 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 
 **客户端行为：**
 
-1. 校验路径白名单（仅允许 worktreeDir 之下或已注册 workspace 的 worktree 路径）
+1. 校验路径白名单（仅允许已注册/活跃会话持有的 worktree 路径及其子路径；显式拒绝 `/`、用户主目录、进程 cwd 及 Windows 系统关键路径）
 2. 执行 `fs.rm(path, { recursive: true, force: true })`
 3. 回复 `fs:remove-dir:result`
 
-### 2.19 `fs:remove-dir:result`（Controller → Server）
+### 3.19 `fs:remove-dir:result`（Controller → Server）
 
 返回目录删除结果。
 
@@ -1120,7 +1123,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `success` | `boolean` | 是 | 是否成功 |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.16 `git:status`（Server → Controller）
+### 3.20 `git:status`（Server → Controller）
 
 请求检测指定路径的 Git 工作区状态是否为 clean。
 
@@ -1137,7 +1140,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 2. 解析结果：输出为空则为 clean，否则为 dirty
 3. 回复 `git:status:result`
 
-### 2.17 `git:status:result`（Controller → Server）
+### 3.21 `git:status:result`（Controller → Server）
 
 返回 Git 工作区状态检测结果。
 
@@ -1150,7 +1153,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `isClean` | `boolean` | 是 | 工作区是否为 clean 状态 |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 2.18 `git:commit`（Server → Controller）
+### 3.22 `git:commit`（Server → Controller）
 
 请求在指定路径执行 Git 提交。用于 Session 销毁时自动暂存未提交变更。
 
@@ -1169,7 +1172,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 3. 如没有变更可提交，视为成功
 4. 回复 `git:commit:result`
 
-### 2.19 `git:commit:result`（Controller → Server）
+### 3.23 `git:commit:result`（Controller → Server）
 
 返回 Git 提交结果。
 
@@ -1181,6 +1184,10 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `success` | `boolean` | 是 | 是否成功 |
 | `commitHash` | `string \| null` | 否 | 提交的 SHA（有实际提交时） |
 | `error` | `string \| null` | 否 | 失败原因 |
+
+### 3.24 服务端处理流程
+
+agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Controller 并处理结果。
 
 #### `acp:load-session`
 

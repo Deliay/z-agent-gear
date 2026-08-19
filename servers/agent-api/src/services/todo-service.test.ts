@@ -350,6 +350,32 @@ describe('TodoService', () => {
     });
   });
 
+  describe('createWorkflowInterventionTodo', () => {
+    it('should create an immediate workflow_intervention todo with node context', async () => {
+      const mockTodo = mockTodoDoc({ type: 'workflow_intervention' });
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodo as never);
+
+      const result = await service.createWorkflowInterventionTodo({
+        userId: 'user-1',
+        instanceId: 'inst-1',
+        instanceName: 'demo-instance',
+        nodeId: 'n2',
+        nodeName: '技术方案',
+        sessionId: 'sess-2',
+        reason: '会话再次进入空闲且节点未推进',
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        type: 'workflow_intervention',
+        priority: 'immediate',
+        title: expect.stringContaining('技术方案'),
+        description: expect.stringContaining('会话再次进入空闲且节点未推进'),
+      }));
+      expect(result).toBe(mockTodo);
+    });
+  });
+
   describe('getTodoList', () => {
     it('should return todos sorted by priority and createdAt', async () => {
       const mockTodos = [mockTodoDoc(), mockTodoDoc({ _id: oid('todo-2') })];

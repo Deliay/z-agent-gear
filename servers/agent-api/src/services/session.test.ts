@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { GraphQLError } from 'graphql';
 
 vi.mock('../models/session.js', () => ({
   Session: {
@@ -500,17 +501,90 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'proj' }),
       } as never);
 
-      await expect(
-        sessionService.create('user-1', {
-          controllerId: 'ctrl-1',
-          acpServerType: 'opencode',
-          workspaceId: 'ws-1',
-          enableWorktree: true,
-          existingWorktreePath: '/tmp/conflict',
-        }),
-      ).rejects.toThrow('mutually exclusive');
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        existingWorktreePath: '/tmp/conflict',
+      }).catch((e) => e);
 
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect(err.message).toContain('mutually exclusive');
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
       expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject existingWorktreePath outside the workspace worktree scope', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/worktrees/other-project/feat-9',
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject existingWorktreePath that escapes the scope via path traversal', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/worktrees/my-project/../other-project/feat-9',
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('should reuse an existing worktree without taking ownership (no worktreeBranch)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: '/worktrees/my-project/feat-1',
+        worktreePath: '/worktrees/my-project/feat-1',
+        worktreeBranch: null,
+      }) as never);
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/worktrees/my-project/feat-1',
+        worktreeBranchSuffix: 'feat-1',
+      });
+
+      const createArg = vi.mocked(Session.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(createArg.cwd).toBe('/worktrees/my-project/feat-1');
+      expect(createArg.worktreePath).toBe('/worktrees/my-project/feat-1');
+      expect(createArg.worktreeBranch).toBeUndefined();
+      // Reusing a worktree must not trigger git:worktree:add
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:worktree:add"'),
+      );
     });
   });
 
@@ -756,6 +830,77 @@ describe('SessionService', () => {
 
       const result = await sessionService.delete('sess-1', 'user-1');
       expect(result).toBe(true);
+    });
+
+    it.each(['creating', 'connecting'])('should send acp:stop and wait for ack when deleting a %s session', async (status) => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status })),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      mockRedis.get.mockResolvedValue(JSON.stringify({ stopped: true }));
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"reason":"user_delete"'),
+      );
+      expect(mockRedis.get).toHaveBeenCalledWith('acp:stop:ack:sess-1');
+    });
+
+    it('should clear any stale stop ack before requesting stop', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'running' })),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      mockRedis.get.mockResolvedValue(JSON.stringify({ stopped: true }));
+
+      await sessionService.delete('sess-1', 'user-1');
+
+      const delAckIndex = mockRedis.del.mock.calls.findIndex((c) => c[0] === 'acp:stop:ack:sess-1');
+      expect(delAckIndex).toBeGreaterThanOrEqual(0);
+      const delAckOrder = mockRedis.del.mock.invocationCallOrder[delAckIndex];
+      const stopPublishIndex = mockRedis.publish.mock.calls.findIndex((c) => String(c[1]).includes('"type":"acp:stop"'));
+      expect(stopPublishIndex).toBeGreaterThanOrEqual(0);
+      const stopPublishOrder = mockRedis.publish.mock.invocationCallOrder[stopPublishIndex];
+      expect(delAckOrder).toBeLessThan(stopPublishOrder);
+    });
+
+    it('should not run worktree cleanup on delete when the session only reused the worktree (no worktreeBranch)', async () => {
+      const sessionDoc = mockSessionDoc({
+        status: 'idling',
+        worktreePath: '/worktrees/my-project/feat-1',
+        worktreeBranch: null,
+      });
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(sessionDoc),
+      } as never);
+      vi.mocked(Session.findOneAndDelete).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue(undefined as never);
+      mockRedis.get.mockResolvedValue(JSON.stringify({ stopped: true }));
+
+      const result = await sessionService.delete('sess-1', 'user-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:worktree:remove"'),
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:commit"'),
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"git:status"'),
+      );
     });
   });
 
@@ -1174,6 +1319,36 @@ describe('SessionService', () => {
       const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
       expect(String(resumeCall?.[1])).not.toContain('mcpEndpoint');
     });
+
+    it('should include initial modeId/modelId in acp:resume when provided', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      await sessionService.resume('sess-1', 'user-1', { modeId: 'code', modelId: 'gpt-5' });
+
+      // 工作流节点 rework/兜底 resume：初始 mode/model 必须随 acp:resume 带内下发，
+      // 由 bridge 在首条 prompt 前应用（setMode/setModel 的 idling 守卫在此阶段恒丢弃）
+      const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
+      expect(String(resumeCall?.[1])).toContain('"modeId":"code"');
+      expect(String(resumeCall?.[1])).toContain('"modelId":"gpt-5"');
+    });
+
+    it('should omit modeId/modelId in acp:resume when not provided', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          mockSessionDoc({ status: 'ended', externalSessionId: 'ext-123' }),
+        ),
+      } as never);
+
+      await sessionService.resume('sess-1', 'user-1');
+
+      const resumeCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:resume"'));
+      expect(String(resumeCall?.[1])).not.toContain('modeId');
+      expect(String(resumeCall?.[1])).not.toContain('modelId');
+    });
   });
 
   describe('setMode', () => {
@@ -1451,6 +1626,28 @@ describe('SessionService', () => {
       vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc({ status: 'ended' }) as never);
 
       await sessionService.close('sess-1', 'user-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
+
+  describe('onSessionRemoved callback', () => {
+    it('notifySessionRemoved should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionRemoved(callback);
+
+      await sessionService.notifySessionRemoved('sess-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
+
+  describe('onSessionIdled callback', () => {
+    it('notifySessionIdled should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionIdled(callback);
+
+      await sessionService.notifySessionIdled('sess-1');
 
       expect(callback).toHaveBeenCalledWith('sess-1');
     });

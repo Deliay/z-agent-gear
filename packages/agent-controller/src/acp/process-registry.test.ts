@@ -95,6 +95,25 @@ describe('ProcessRegistry', () => {
       expect(reg.get('s1')).toBeDefined();
     });
 
+    it('should treat EPERM (process owned by another user) as alive', () => {
+      fs.existsSync.mockReturnValue(true);
+      fs.readFileSync.mockReturnValue(JSON.stringify({
+        version: 1,
+        processes: [
+          { sessionId: 's1', pid: 4242, cwd: '/tmp', acpServerType: 'opencode', startedAt: '2026-01-01T00:00:00Z' },
+        ],
+      }));
+      processKillSpy.mockImplementation(() => {
+        const err = new Error('kill EPERM') as NodeJS.ErrnoException;
+        err.code = 'EPERM';
+        throw err;
+      });
+
+      const reg = new ProcessRegistry();
+      expect(reg.list()).toHaveLength(1);
+      expect(reg.get('s1')).toBeDefined();
+    });
+
     it('should prune dead processes on load and rewrite file', () => {
       fs.existsSync.mockReturnValue(true);
       fs.readFileSync.mockReturnValue(JSON.stringify({
@@ -130,6 +149,20 @@ describe('ProcessRegistry', () => {
       expect(written.version).toBe(1);
       expect(written.processes).toHaveLength(1);
       expect(written.processes[0].sessionId).toBe('s1');
+    });
+
+    it('should write the temp file inside REGISTRY_DIR (same-filesystem atomic rename)', () => {
+      registry.register('s1', { pid: 1234, cwd: '/tmp', acpServerType: 'opencode' });
+      const tmpPath = fs.writeFileSync.mock.calls[0][0] as string;
+      expect(tmpPath.startsWith(REGISTRY_DIR)).toBe(true);
+      expect(tmpPath).not.toBe(REGISTRY_FILE);
+      expect(fs.renameSync).toHaveBeenCalledWith(tmpPath, REGISTRY_FILE);
+    });
+
+    it('should not throw when flush fails (e.g. unwritable directory)', () => {
+      fs.writeFileSync.mockImplementation(() => { throw new Error('EROFS: read-only file system'); });
+      expect(() => registry.register('s1', { pid: 1234, cwd: '/tmp', acpServerType: 'opencode' })).not.toThrow();
+      expect(registry.get('s1')).toBeDefined();
     });
 
     it('should use provided startedAt', () => {

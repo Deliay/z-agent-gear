@@ -194,6 +194,9 @@ export const controllerWorkspaceResolvers = {
           context.currentUser.id,
         );
       } catch (err) {
+        if (err instanceof GraphQLError) {
+          throw err;
+        }
         throw new GraphQLError((err as Error).message);
       }
     },

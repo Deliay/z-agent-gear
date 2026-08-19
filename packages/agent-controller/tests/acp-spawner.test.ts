@@ -221,14 +221,14 @@ describe('AcpSpawner', () => {
         expect(execFileSync).toHaveBeenCalledWith('where', ['copilot'], { encoding: 'utf8', timeout: 1000 });
       });
 
-      it('should return full path from `where`', () => {
+      it('should return full path from `where` and use shell for .cmd', () => {
         vi.mocked(execFileSync).mockReturnValue('C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd\r\n');
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot', args: ['--acp', '--stdio'] });
         sp.start();
         expect(spawn).toHaveBeenCalledWith(
           'C:\\Users\\ash\\AppData\\Roaming\\npm\\copilot.cmd',
           ['--acp', '--stdio'],
-          expect.objectContaining({ cwd: 'C:\\project', stdio: ['pipe', 'pipe', 'pipe'] }),
+          expect.objectContaining({ cwd: 'C:\\project', stdio: ['pipe', 'pipe', 'pipe'], shell: true }),
         );
       });
 
@@ -250,15 +250,35 @@ describe('AcpSpawner', () => {
     });
 
     describe('start', () => {
-      it('should spawn without shell: true on Windows (direct executable)', () => {
+      it('should spawn .cmd with shell: true on Windows (Node EINVAL on shell-less .cmd)', () => {
         vi.mocked(execFileSync).mockReturnValue('C:\\npm\\copilot.cmd\r\n');
         const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'copilot' });
         sp.start();
         expect(spawn).toHaveBeenCalledWith(
           'C:\\npm\\copilot.cmd',
           expect.any(Array),
-          expect.objectContaining({ cwd: 'C:\\project' }),
+          expect.objectContaining({ cwd: 'C:\\project', shell: true }),
         );
+      });
+
+      it('should spawn .bat with shell: true on Windows', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\npm\\agent.bat\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'agent' });
+        sp.start();
+        expect(spawn).toHaveBeenCalledWith(
+          'C:\\npm\\agent.bat',
+          expect.any(Array),
+          expect.objectContaining({ cwd: 'C:\\project', shell: true }),
+        );
+      });
+
+      it('should spawn a real .exe directly without shell on Windows', () => {
+        vi.mocked(execFileSync).mockReturnValue('C:\\tools\\opencode.exe\r\n');
+        const sp = new AcpSpawner({ sessionId: 's', cwd: 'C:\\project', command: 'opencode' });
+        sp.start();
+        const spawnOptions = vi.mocked(spawn).mock.calls[0][2];
+        expect(spawn).toHaveBeenCalledWith('C:\\tools\\opencode.exe', expect.any(Array), expect.objectContaining({ cwd: 'C:\\project' }));
+        expect(spawnOptions).not.toHaveProperty('shell');
       });
     });
 

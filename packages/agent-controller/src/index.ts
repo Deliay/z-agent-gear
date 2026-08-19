@@ -6,7 +6,7 @@ import { connectToServer } from './socketio-client.js';
 import { writePid, removePid, isRunning } from './daemon.js';
 import { startMcpRegistration } from './commands/mcp-proxy.js';
 import { startMcpProxy } from './commands/mcp.js';
-import { processRegistry } from './acp/process-registry.js';
+import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 
 const program = new Command();
 
@@ -46,7 +46,8 @@ program
 
     const shutdown = async () => {
       console.log('Shutting down...');
-      // Kill all registered ACP processes before exiting
+      // Kill all registered ACP processes before exiting, using the same
+      // TERM → short wait → KILL semantics as the acp:stop handler
       const registered = processRegistry.listEntries();
       if (registered.length > 0) {
         console.log(`Killing ${registered.length} registered ACP process(es)...`);
@@ -62,6 +63,12 @@ program
         }
         // Give processes a moment to exit
         await new Promise((r) => setTimeout(r, 1000));
+        for (const entry of registered) {
+          if (platform() !== 'win32' && isProcessAlive(entry.pid)) {
+            try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
+          }
+          processRegistry.deregister(entry.sessionId);
+        }
       }
       socket.disconnect();
       removePid();

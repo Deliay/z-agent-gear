@@ -3,6 +3,11 @@ import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { sessionService } from './session.js';
+
+// 非 ended 的会话可能仍有存活（或即将拉起）的 ACP 进程：
+// 删除前必须委托 sessionService.delete 走 acp:stop + ack 生命周期，否则进程泄漏
+const LIVE_SESSION_STATUSES = ['creating', 'connecting', 'idling', 'disconnected'];
 
 export interface HistorySessionInfo {
   sessionId: string;
@@ -99,15 +104,21 @@ export class SessionImportService {
       throw new Error(`Cannot delete session in 'running' status; stop the session before deleting`);
     }
 
-    await Session.deleteOne({ _id: sessionId, userId });
-    await AcpMessage.deleteMany({ sessionId });
-
     const record = session as unknown as {
       externalSessionId?: string | null;
       controllerId?: string;
       cwd?: string;
       acpServerType?: string;
     };
+
+    if (sessionStatus && LIVE_SESSION_STATUSES.includes(sessionStatus)) {
+      // 存活会话：委托 sessionService.delete（acp:stop + 等 ack + worktree 清理 +
+      // MCP endpoint 撤销 + 删库删消息），否则 ACP 进程会被保留
+      await sessionService.delete(sessionId, userId);
+    } else {
+      await Session.deleteOne({ _id: sessionId, userId });
+      await AcpMessage.deleteMany({ sessionId });
+    }
 
     let syncedToAgent = false;
     let syncError: string | null = null;

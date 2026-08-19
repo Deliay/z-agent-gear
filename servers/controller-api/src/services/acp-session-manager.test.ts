@@ -5,6 +5,7 @@ vi.mock('../models/session.js', () => ({
     findByIdAndUpdate: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findByIdAndDelete: vi.fn(),
+    find: vi.fn(),
     findById: vi.fn().mockReturnValue({
       lean: vi.fn().mockResolvedValue(null),
     }),
@@ -33,6 +34,8 @@ const mockRedis = {
   get: vi.fn(),
   lpush: vi.fn(),
   expire: vi.fn(),
+  lrange: vi.fn(),
+  del: vi.fn(),
 };
 
 function createMockSocket() {
@@ -44,9 +47,14 @@ function createMockSocket() {
       if (!handlers[event]) handlers[event] = [];
       handlers[event].push(handler);
     }),
+    // 与真实 EventEmitter 一致：once 监听器首次触发后即移除
     once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (!handlers[event]) handlers[event] = [];
-      handlers[event].push(handler);
+      const wrapped = (...args: unknown[]) => {
+        handlers[event] = handlers[event].filter((h) => h !== wrapped);
+        handler(...args);
+      };
+      handlers[event].push(wrapped);
     }),
     off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (handlers[event]) {
@@ -369,6 +377,53 @@ describe('ACPSessionManager', () => {
       expect(messages).toEqual(['第一条 prompt', '第二条 prompt']);
     });
 
+    it('start：补发排队输入必须发生在状态落库 idling 之后（否则 prompt:start 的 idling→running 更新未命中，状态停留「空闲」）', async () => {
+      const socket = createMockSocket();
+      const { resultPromise, requestId } = await startAndGetRequestId(socket);
+
+      manager.forwardToController('sess-1', { type: 'text', content: '首条 prompt' });
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await resultPromise;
+
+      // 状态落库 idling 必须先于 acp:message 补发：handlePromptStart 以 status='idling' 为条件转 running
+      const updateCalls = vi.mocked(Session.findByIdAndUpdate).mock.calls;
+      const idlingIdx = updateCalls.findIndex((c) => (c[1] as Record<string, unknown>).status === 'idling');
+      expect(idlingIdx).toBeGreaterThanOrEqual(0);
+      const idlingOrder = vi.mocked(Session.findByIdAndUpdate).mock.invocationCallOrder[idlingIdx];
+      const msgIdx = socket.emit.mock.calls.findIndex((c) => c[0] === 'acp:message');
+      expect(msgIdx).toBeGreaterThanOrEqual(0);
+      const msgOrder = socket.emit.mock.invocationCallOrder[msgIdx];
+      expect(idlingOrder).toBeLessThan(msgOrder);
+    });
+
+    it('resume：补发排队输入必须发生在状态落库 idling 之后', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-2', 'ext-1', 'ctrl-1', 'user-1', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      manager.forwardToController('sess-2', { type: 'text', content: '返工提示词' });
+      socket._trigger('acp:resume:result', { requestId, sessionId: 'sess-2', success: true });
+      await resultPromise;
+
+      const updateCalls = vi.mocked(Session.findByIdAndUpdate).mock.calls;
+      const idlingIdx = updateCalls.findIndex((c) => (c[1] as Record<string, unknown>).status === 'idling');
+      expect(idlingIdx).toBeGreaterThanOrEqual(0);
+      const idlingOrder = vi.mocked(Session.findByIdAndUpdate).mock.invocationCallOrder[idlingIdx];
+      const msgIdx = socket.emit.mock.calls.findIndex((c) => c[0] === 'acp:message');
+      expect(msgIdx).toBeGreaterThanOrEqual(0);
+      const msgOrder = socket.emit.mock.invocationCallOrder[msgIdx];
+      expect(idlingOrder).toBeLessThan(msgOrder);
+    });
+
     it('resume 完成前到达的输入消息排队，resume:result 后补发', async () => {
       const socket = createMockSocket();
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
@@ -394,6 +449,29 @@ describe('ACPSessionManager', () => {
         sessionId: 'sess-2',
         message: { type: 'text', content: '返工提示词' },
       }));
+    });
+
+    it('resumeSession 携带 initial mode/model 时随 acp:resume payload 下发', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'ended', acpServerType: 'opencode' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const resultPromise = manager.resumeSession(
+        socket as never, 'sess-2', 'ext-1', 'ctrl-1', 'user-1', '/tmp', undefined,
+        { modeId: 'code', modelId: 'gpt-5' },
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:resume', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:resume');
+      const payload = emitArgs?.[1] as Record<string, unknown>;
+      // 工作流节点 rework：初始 mode/model 随 acp:resume 带内下发，
+      // bridge 在 acp:initialized（→ resume:result → prompt 补发）之前应用
+      expect(payload.modeId).toBe('code');
+      expect(payload.modelId).toBe('gpt-5');
+
+      socket._trigger('acp:resume:result', { requestId: payload.requestId, sessionId: 'sess-2', success: true });
+      await resultPromise;
     });
 
     it('start 失败后队列被清空，不再补发', async () => {
@@ -580,18 +658,262 @@ describe('ACPSessionManager', () => {
       expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
     }, 15000);
 
+    it('同 socket 其他 session 的 acp:stopped 不应消耗本 session 的 ack 监听', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      const startPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await startPromise;
+
+      socket.emit.mockClear();
+
+      const stopPromise = manager.stopSession('sess-1', 'user_close');
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+      });
+      // 同 socket 上另一个 session 的 acp:stopped 先到 —— 不得结算/消耗 sess-1 的 ack 等待
+      socket._trigger('acp:stopped', { sessionId: 'sess-other', reason: 'user_close' });
+      // 本 session 的 ack 随后到达，应正常结算
+      socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_close' });
+      await stopPromise;
+
+      // ack 已收到，不应进入 pending 列表
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+    }, 15000);
+
     it('should handle stop for nonexistent session', async () => {
       await expect(manager.stopSession('nonexistent', 'user_close')).resolves.toBeUndefined();
+    });
+
+    it('start 在途时收到 stop：等待 start 结算后再停，不得走离线 pending', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating', controllerId: 'ctrl-1' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      // start 开始但不立即结算（模拟 harness 慢启动）
+      const startPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+
+      // start 在途期间收到 stop：此时 sessions Map 未命中
+      const stopPromise = manager.stopSession('sess-1', 'user_delete');
+      await new Promise((r) => setTimeout(r, 50));
+      // 不得立即发 acp:stop（bridge 尚未就绪），也不得误入离线 pending
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+
+      // start 结算成功 → stop 应继续走正常流程
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await startPromise;
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+      });
+      socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_delete' });
+      await stopPromise;
+
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+    }, 15000);
+  });
+
+  describe('迟到的 start/resume result（unknown requestId）孤儿收割', () => {
+    async function startAndSettle(socket: ReturnType<typeof createMockSocket>) {
+      const resultPromise = manager.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
+      await resultPromise;
+    }
+
+    it('超时后迟到的 success result 且会话无活跃映射/在途启动 → emit acp:stop 收割孤儿进程', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      // 先正常 start 一个会话以安装 socket dispatcher
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      // 另一个会话的 start 超时后，controller 仍拉起成功，result 迟到（requestId 未知）
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: true });
+
+      // 孤儿收割：通知 controller 停掉该进程
+      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost' });
+    });
+
+    it('迟到的 failure result → 不收割（进程未拉起）', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: false, error: 'spawn failed' });
+
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+    });
+
+    it('迟到的 success result 但该会话已有新的在途 start/resume → 不收割（避免误停新 bridge）', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+      await startAndSettle(socket);
+      socket.emit.mockClear();
+
+      // 同一 session 新的 start 在途（requestId2 未结算）
+      const startPromise2 = manager.startSession(socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp');
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.objectContaining({ sessionId: 'sess-1' }));
+      });
+      const emitArgs2 = socket.emit.mock.calls.filter((c) => c[0] === 'acp:start');
+      const requestId2 = (emitArgs2[0]?.[1] as Record<string, unknown>)?.requestId as string;
+      socket.emit.mockClear();
+
+      // 旧 start 的迟到 success result（requestId 未知）
+      socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-1', success: true });
+
+      expect(socket.emit).not.toHaveBeenCalledWith('acp:stop', expect.anything());
+
+      // 收尾：让第二个 start 结算，避免悬挂
+      socket._trigger('acp:start:result', { requestId: requestId2, sessionId: 'sess-1', success: true });
+      await startPromise2;
     });
   });
 
   describe('handleControllerStopped', () => {
     it('should clean up and update status', async () => {
-      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
 
       await manager.handleControllerStopped('sess-1', 'agent_exit', 0);
 
-      expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', expect.objectContaining({ status: 'ended' }));
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: { $ne: 'connecting' } },
+        expect.objectContaining({ status: 'ended' }),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"ended"'));
+    });
+
+    it('会话处于 connecting（start/resume 进行中）时不落 ended，避免 stop 后立即 resume 的状态抖动', async () => {
+      // 状态为 connecting 时条件更新不命中
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(null);
+
+      await manager.handleControllerStopped('sess-1', 'user_close');
+
+      expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sess-1', status: { $ne: 'connecting' } },
+        expect.objectContaining({ status: 'ended' }),
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"ended"'));
+      // ack 标记仍写入，agent-api 的 waitForStopAck 不受影响（TTL 60s）
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        'acp:stop:ack:sess-1',
+        expect.any(String),
+        'EX',
+        60,
+      );
+    });
+  });
+
+  describe('stopSessionWithAck 离线 pending', () => {
+    it('session 不在活跃映射（controller 离线）时写入 pending 列表', async () => {
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ controllerId: 'ctrl-1' }) } as never);
+
+      await manager.stopSession('sess-offline', 'user_close');
+
+      expect(mockRedis.lpush).toHaveBeenCalledWith('acp:stop:pending:ctrl-1', 'sess-offline');
+      expect(mockRedis.expire).toHaveBeenCalledWith('acp:stop:pending:ctrl-1', 86400);
+    });
+
+    it('DB 中也不存在会话记录时不写 pending', async () => {
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) } as never);
+
+      await manager.stopSession('ghost', 'user_close');
+
+      expect(mockRedis.lpush).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcileOnRegister（acp:reconcile 下发）', () => {
+    it('离线删除 → 重连 reconcile 补做：pending 写入后随 reconcile 下发并清除', async () => {
+      // 离线期间删除：sessions Map 未命中，但 DB 会话记录尚在 → 写 pending
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ controllerId: 'ctrl-1' }) } as never);
+      await manager.stopSession('sess-1', 'user_close');
+      expect(mockRedis.lpush).toHaveBeenCalledWith('acp:stop:pending:ctrl-1', 'sess-1');
+
+      // controller 重连注册：读取活跃会话 + pending 列表，emit acp:reconcile
+      const socket = createMockSocket();
+      vi.mocked(Session.find).mockReturnValue({ lean: vi.fn().mockResolvedValue([{ _id: 'sess-2' }]) } as never);
+      mockRedis.lrange.mockResolvedValue(['sess-1']);
+
+      await manager.reconcileOnRegister(socket as never, 'ctrl-1');
+
+      expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
+        activeSessionIds: ['sess-2'],
+        pendingKillSessionIds: ['sess-1'],
+      });
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:stop:pending:ctrl-1');
+    });
+
+    it('活跃会话取内存映射与 DB 未 ended 会话的并集，pending 去重', async () => {
+      const socket = createMockSocket();
+      // 内存中一个活跃会话（属于 ctrl-1）
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      const startPromise = manager.startSession(
+        socket as never, 'sess-mem', 'ctrl-1', 'user-1', 'opencode', '/tmp',
+      );
+      await vi.waitFor(() => {
+        expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+      });
+      const emitArgs = socket.emit.mock.calls.find((c) => c[0] === 'acp:start');
+      const requestId = (emitArgs?.[1] as Record<string, unknown>)?.requestId as string;
+      socket._trigger('acp:start:result', { requestId, sessionId: 'sess-mem', success: true });
+      await startPromise;
+
+      vi.mocked(Session.find).mockReturnValue({ lean: vi.fn().mockResolvedValue([{ _id: 'sess-db' }]) } as never);
+      mockRedis.lrange.mockResolvedValue(['sess-kill', 'sess-kill']);
+
+      await manager.reconcileOnRegister(socket as never, 'ctrl-1');
+
+      expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
+        activeSessionIds: expect.arrayContaining(['sess-mem', 'sess-db']),
+        pendingKillSessionIds: ['sess-kill'],
+      });
+    });
+
+    it('pending 为空时不删 key，仍下发空 pendingKillSessionIds', async () => {
+      const socket = createMockSocket();
+      vi.mocked(Session.find).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) } as never);
+      mockRedis.lrange.mockResolvedValue([]);
+
+      await manager.reconcileOnRegister(socket as never, 'ctrl-1');
+
+      expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
+        activeSessionIds: [],
+        pendingKillSessionIds: [],
+      });
+      expect(mockRedis.del).not.toHaveBeenCalled();
     });
   });
 
@@ -632,6 +954,18 @@ describe('ACPSessionManager', () => {
         { status: 'idling' },
       );
       expect(mockRedis.publish).toHaveBeenCalledWith('session:status', expect.stringContaining('"status":"idling"'));
+    });
+
+    it('published idling carries promptCompleted marker（区分 start 落 idling 与 turn 结束落 idling）', async () => {
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue({ _id: 'sess-1' } as never);
+
+      await manager.handlePromptComplete('sess-1', 'cancelled');
+
+      // 工作流节点会话停滞检测依赖该标记：turn 结束且节点未推进 = 停滞
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:status',
+        expect.stringContaining('"promptCompleted":true'),
+      );
     });
 
     it('should not publish when session is not running (crash race)', async () => {

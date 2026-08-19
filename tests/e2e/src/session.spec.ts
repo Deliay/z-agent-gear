@@ -73,6 +73,25 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       });
     });
 
+    // ack acp:stop（agent-api 删除会话前等待 stop ack，缺 ack 会阻塞约 10s）
+    client.on('acp:stop', (data: { sessionId: string; ackRequired?: boolean }) => {
+      if (data.ackRequired) {
+        client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete', killed: true });
+      }
+    });
+
+    // 应答 acp:start：只有 start 成功后会话才进入 controller-api 活跃映射，
+    // 否则删除会话时 acp:stop 无法下发、agent-api 侧只能等 ack 超时。
+    // 注意不带 externalSessionId：带了他前端会把会话当“历史会话”走
+    // deleteHistorySession（轮询 agent 侧删除确认最长 60s），而非 deleteSession。
+    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      client.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+      });
+    });
+
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
       resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });

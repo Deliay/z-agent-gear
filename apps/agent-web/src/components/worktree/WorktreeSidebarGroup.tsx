@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@apollo/client/react'
 import { WORKSPACE_WORKTREES } from '@/graphql/queries'
-import type { GetWorkspaceWorktreesQuery, WorkspaceWorktreeData, ControllerData } from '@/graphql/types'
+import type { GetWorkspaceWorktreesQuery, WorkspaceWorktreeData, ControllerData, SessionData } from '@/graphql/types'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -26,6 +26,8 @@ interface WorktreeSidebarGroupProps {
   controllerId: string
   workspaceName: string
   controllers: ControllerData[]
+  /** worktree 会话平铺展示的回退数据（归组查询失败/无数据时使用） */
+  fallbackSessions: SessionData[]
   onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void
 }
 
@@ -34,6 +36,7 @@ export default function WorktreeSidebarGroup({
   controllerId,
   workspaceName,
   controllers,
+  fallbackSessions,
   onCreate,
 }: WorktreeSidebarGroupProps) {
   const [expandedWorktrees, setExpandedWorktrees] = useState<Set<string>>(new Set())
@@ -42,12 +45,16 @@ export default function WorktreeSidebarGroup({
   const [showInstantiateWorkflow, setShowInstantiateWorkflow] = useState(false)
   const [newSessionWorktreePath, setNewSessionWorktreePath] = useState<string | undefined>()
 
-  const { data } = useQuery<GetWorkspaceWorktreesQuery>(WORKSPACE_WORKTREES, {
+  const { data, error } = useQuery<GetWorkspaceWorktreesQuery>(WORKSPACE_WORKTREES, {
     variables: { controllerId, workspaceId },
     pollInterval: 15000,
   })
 
   const worktrees: WorkspaceWorktreeData[] = data?.workspaceWorktrees ?? []
+
+  if (error) {
+    console.warn('加载 worktree 列表失败，回退为平铺展示', error)
+  }
 
   const toggleWorktree = (path: string) => {
     setExpandedWorktrees((prev) => {
@@ -68,6 +75,41 @@ export default function WorktreeSidebarGroup({
 
   const getBranchDisplay = (wt: WorkspaceWorktreeData) => {
     return wt.branch || wt.path.split('/').filter(Boolean).pop() || 'unknown'
+  }
+
+  // 归组查询失败或无归组数据时回退为平铺展示（release 版行为），避免 worktree 会话从侧边栏消失
+  const shouldFallback = Boolean(error) || (data !== undefined && worktrees.length === 0)
+
+  if (shouldFallback) {
+    if (fallbackSessions.length === 0) {
+      return null
+    }
+    return (
+      <>
+        {fallbackSessions.map((session) => (
+          <li key={session.id}>
+            <NavLink
+              to={`/sessions/${session.id}`}
+              className={({ isActive }) =>
+                `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                  isActive
+                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                }`
+              }
+            >
+              <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+              <GitFork className="size-3 shrink-0 text-info" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate">
+                  {session.title || 'New Session'}
+                </div>
+              </div>
+            </NavLink>
+          </li>
+        ))}
+      </>
+    )
   }
 
   if (worktrees.length === 0) {
@@ -107,10 +149,10 @@ export default function WorktreeSidebarGroup({
                   <Plus className="size-3.5" />
                 </DropdownMenuTrigger>
                 <DropdownMenuPopup>
-                  <DropdownMenuItem onSelect={() => handleNewSessionInWorktree(wt.path)}>
+                  <DropdownMenuItem onClick={() => handleNewSessionInWorktree(wt.path)}>
                     新建会话
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setShowInstantiateWorkflow(true)}>
+                  <DropdownMenuItem onClick={() => setShowInstantiateWorkflow(true)}>
                     实例化工作流
                   </DropdownMenuItem>
                 </DropdownMenuPopup>
