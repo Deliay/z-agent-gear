@@ -25,6 +25,7 @@ function mapTemplateNode(node: Doc) {
     artifactTitles: node.artifactTitles ?? null,
     dependsOn: node.dependsOn ?? [],
     requiresWorktree: node.requiresWorktree ?? false,
+    sortOrder: node.sortOrder ?? null,
   };
 }
 
@@ -93,6 +94,7 @@ function mapInstanceNode(node: Doc) {
           }
         : null,
     requiresWorktree: node.requiresWorktree ?? null,
+    sortOrder: node.sortOrder ?? null,
     createdAt: toIso(node.createdAt),
     startedAt: toIso(node.startedAt),
     reworkedAt: toIso(node.reworkedAt),
@@ -129,6 +131,8 @@ function mapInstance(doc: Doc) {
     lastNodeName: doc.lastNodeName ?? null,
     lastNodeStatus: doc.lastNodeStatus ?? null,
     archived: Boolean(doc.archivedAt),
+    workflowWorktreePath: doc.workflowWorktreePath ?? null,
+    workflowWorktreeBranch: doc.workflowWorktreeBranch ?? null,
     nodes: ((doc.nodes as Doc[]) ?? []).map(mapInstanceNode),
     blackboard: mapBlackboardEntries(doc.blackboard, doc.blackboardUpdatedAt),
     blackboardTrash: mapBlackboardEntries(doc.blackboardTrash, doc.blackboardUpdatedAt),
@@ -292,13 +296,13 @@ export const workflowResolvers = {
     },
     restartNode: async (
       _parent: unknown,
-      args: { instanceId: string; nodeId: string },
+      args: { instanceId: string; nodeId: string; agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
       return wrap(async () =>
         mapInstanceNode(
-          (await workflowInstanceService.restartNode(userId, args.instanceId, args.nodeId)) as unknown as Doc,
+          (await workflowInstanceService.restartNode(userId, args.instanceId, args.nodeId, args.agentConfig)) as unknown as Doc,
         ),
       );
     },

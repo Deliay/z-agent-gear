@@ -60,6 +60,8 @@ const instanceNodeSchema = new mongoose.Schema(
     // AI 节点 Agent 配置快照（HUMAN/FLAG 节点为 null/undefined）
     agentConfig: { type: agentNodeConfigSchema, default: undefined },
     requiresWorktree: { type: Boolean, default: undefined },
+    // 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: { type: Number, default: undefined },
   },
   { _id: false },
 );
@@ -87,6 +89,10 @@ const workflowInstanceSchema = new mongoose.Schema(
     // 最后执行过的节点（实例对外状态展示；引擎每次转移按时间序更新）
     lastNodeName: { type: String, default: null },
     lastNodeStatus: { type: String, enum: WORKFLOW_NODE_STATUSES, default: null },
+    // 工作流 Worktree 路径（createWorkflowWorktree=true 且 Git 工作区时存在）
+    workflowWorktreePath: { type: String, default: undefined },
+    // 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在）
+    workflowWorktreeBranch: { type: String, default: undefined },
   },
   { timestamps: true },
 );

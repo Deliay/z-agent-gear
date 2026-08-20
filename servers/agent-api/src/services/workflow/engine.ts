@@ -64,6 +64,13 @@ export interface TransitionPayload {
   artifacts?: { title: string; value: string }[];
   /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记） */
   source?: string;
+  /** restart：可选的新 Agent 配置 */
+  agentConfig?: {
+    acpServerType: string;
+    modeId?: string | null;
+    modelId?: string | null;
+    initNewWorktree: boolean;
+  } | null;
 }
 
 /**

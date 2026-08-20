@@ -23,6 +23,7 @@ export interface ConfiguredWorkflowNodeInput {
   dependsOn?: string[];
   requiresWorktree?: boolean;
   agentConfig?: AgentNodeConfigInput | null;
+  sortOrder?: number | null;
 }
 
 export interface ConfigureWorkflowInput {
@@ -191,6 +192,7 @@ class ConfiguredWorkflowService {
       dependsOn: [...(n.dependsOn ?? [])],
       requiresWorktree: n.requiresWorktree ?? false,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+      sortOrder: n.sortOrder ?? undefined,
     }));
   }
 
@@ -202,11 +204,42 @@ class ConfiguredWorkflowService {
     }
     const redis = getRedisClient();
     const cached = await redis.get(`acp:capability:${controllerId}`);
-    if (!cached) {
-      throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
+    if (cached) {
+      const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
+      return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
     }
-    const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
-    return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
+
+    // 缓存缺失：回源查询控制器状态
+    if (controller.status === 'online') {
+      // 控制器在线：通过控制器通道主动拉取能力并回热缓存（短超时）
+      try {
+        const requestId = `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        await redis.publish(
+          'session:command',
+          JSON.stringify({
+            type: 'acp:capability:query',
+            requestId,
+            controllerId,
+          }),
+        );
+        // 等待控制器响应（最多 5 秒）
+        for (let i = 0; i < 5; i++) {
+          const result = await redis.get(`acp:capability:query:${requestId}`);
+          if (result) {
+            const parsed = JSON.parse(result);
+            await redis.set(`acp:capability:${controllerId}`, JSON.stringify(parsed), 'EX', 300);
+            await redis.del(`acp:capability:query:${requestId}`);
+            return (parsed.servers ?? []).filter((s: { available: boolean }) => s.available).map((s: { type: string }) => s.type);
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        // 超时：继续报错
+      } catch (err) {
+        console.error(`回源查询控制器能力失败（${controllerId}）：`, err);
+      }
+    }
+
+    throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
   }
 
   /**

@@ -137,10 +137,19 @@ class WorkflowOrchestrator {
 
     const prompt = this.assemblePrompt(instance, node, configuredNode.prompts ?? []);
 
+    // 工作目录优先级：
+    // 1. 节点 initNewWorktree && requiresWorktree → 维持现状建节点级 Worktree
+    // 2. 实例存在 workflowWorktreePath → 以 existingWorktreePath 下发
+    // 3. 否则工作区根目录
+    const enableWorktree = Boolean(configuredNode.requiresWorktree && agentConfig.initNewWorktree);
+    const instanceWithWorktree = instance as unknown as { workflowWorktreePath?: string };
+    const existingWorktreePath = !enableWorktree && instanceWithWorktree.workflowWorktreePath
+      ? instanceWithWorktree.workflowWorktreePath
+      : undefined;
+
     // 阶段 worktree 后缀：<instance-slug>/<stage-slug>（同阶段节点会话复用同一 worktree）
     const instanceSlug = slugify(instance.name) || instance._id.toString();
     const stageSlug = slugify(node.stage) || 'stage';
-    const enableWorktree = Boolean(configuredNode.requiresWorktree && agentConfig.initNewWorktree);
 
     const session = await sessionService.create(instance.userId.toString(), {
       controllerId: instance.controllerId.toString(),
@@ -148,6 +157,7 @@ class WorkflowOrchestrator {
       workspaceId: instance.workspaceId.toString(),
       enableWorktree,
       worktreeBranchSuffix: enableWorktree ? `${instanceSlug}/${stageSlug}` : undefined,
+      existingWorktreePath,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
       // 节点会话自动装配平台工作流工具服务 + 管理工作流管理工具集（AI 可通过 admin 工具集完成编排）
