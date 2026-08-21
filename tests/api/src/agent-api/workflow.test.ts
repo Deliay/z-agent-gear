@@ -152,11 +152,19 @@ const DELETE_CONFIGURED_WORKFLOW = `
   }
 `;
 
+const SET_WORKSPACE_DEFAULT_BRANCH = `
+  mutation SetWorkspaceDefaultBranch($id: ID!, $defaultBranch: String!) {
+    setWorkspaceDefaultBranch(id: $id, defaultBranch: $defaultBranch) {
+      id defaultBranch
+    }
+  }
+`;
+
 const INSTANTIATE_WORKFLOW = `
   mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
     instantiateWorkflow(input: $input) {
       id configuredWorkflowId controllerId workspaceId name currentNodeNames lastNodeName lastNodeStatus
-      nodes { id nodeKey type name status stage sessionId reworkCount prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
+      nodes { id nodeKey type name status stage sortOrder sessionId reworkCount prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
     }
   }
 `;
@@ -179,7 +187,7 @@ const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
       id name currentNodeNames lastNodeName lastNodeStatus archived
-      nodes { id nodeKey type name status stage sessionId startedAt reworkedAt reworkCount rejectInfo { reason fromNodeId at } failInfo { reason source at } }
+      nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
     }
@@ -288,6 +296,23 @@ async function createWorkspace(token: string, controllerId: string): Promise<str
     throw new Error(`createWorkspace failed: ${JSON.stringify(body.errors)}`);
   }
   return body.data.createWorkspace.id;
+}
+
+async function createGitWorkspace(token: string, controllerId: string): Promise<string> {
+  const path = `/tmp/wf-test-git-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const res = await gqlRequest(CREATE_WORKSPACE, { input: { controllerId, path } }, token);
+  const body = await res.json();
+  if (body.errors) {
+    throw new Error(`createWorkspace failed: ${JSON.stringify(body.errors)}`);
+  }
+  const wsId = body.data.createWorkspace.id;
+  // 设置 defaultBranch 使其成为 Git 工作区
+  const setBranchRes = await gqlRequest(SET_WORKSPACE_DEFAULT_BRANCH, { id: wsId, defaultBranch: 'main' }, token);
+  const setBranchBody = await setBranchRes.json();
+  if (setBranchBody.errors) {
+    throw new Error(`setWorkspaceDefaultBranch failed: ${JSON.stringify(setBranchBody.errors)}`);
+  }
+  return wsId;
 }
 
 /** 简单两节点模板：HUMAN(input) → AI(exec) */
@@ -2522,7 +2547,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     fake = await registerFakeController(token, 'opt');
     const available = await refreshCapabilities(token, fake.controllerId);
     expect(available).toContain('opencode');
-    workspaceId = await createWorkspace(token, fake.controllerId);
+    workspaceId = await createGitWorkspace(token, fake.controllerId);
   }, 30_000);
 
   afterAll(() => {
@@ -2929,6 +2954,9 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     // 注册一个新的 fake controller（无缓存）
     const newFake = await registerFakeController(token, 'opt-nocache');
 
+    // 为新控制器创建 Git workspace
+    const newWorkspaceId = await createGitWorkspace(token, newFake.controllerId);
+
     // configureFromTemplate 会触发 getAvailableServerTypes → 缓存缺失 → 回源
     const tplId = await createSimpleTemplate(token, `wf-a46-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, newFake.controllerId, `wf-a46-cfg-${Date.now()}`);
@@ -2939,7 +2967,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     // 实例化也应成功（此时缓存已回热）
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { input: instantiateInput(newFake.controllerId, cfgId, workspaceId, `wf-a46-实例-${Date.now()}`) },
+      { input: instantiateInput(newFake.controllerId, cfgId, newWorkspaceId, `wf-a46-实例-${Date.now()}`) },
       token,
     );
     const body = await res.json();
@@ -2958,6 +2986,9 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     const offlineFake = await registerFakeController(token, 'opt-offline');
     const offlineControllerId = offlineFake.controllerId;
 
+    // 为离线控制器创建 Git workspace
+    const offlineWorkspaceId = await createGitWorkspace(token, offlineControllerId);
+
     const tplId = await createSimpleTemplate(token, `wf-a47-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, offlineControllerId, `wf-a47-cfg-${Date.now()}`);
 
@@ -2975,7 +3006,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     // 由于控制器已离线且缓存缺失，应报错
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
-      { input: instantiateInput(offlineControllerId, cfgId, workspaceId, `wf-a47-实例-${Date.now()}`) },
+      { input: instantiateInput(offlineControllerId, cfgId, offlineWorkspaceId, `wf-a47-实例-${Date.now()}`) },
       token,
     );
     const body = await res.json();
