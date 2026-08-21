@@ -1846,14 +1846,15 @@ test.describe('Workflow E2E', () => {
     await page.waitForTimeout(300);
 
     // 测试 2: 非 Git 工作区（禁用）
-    // 创建一个新的非 Git 工作区（避免 Apollo cache-first 问题）
-    const nonGitWorkspaceId = await createWorkspace(page, env.controllerId);
-    
     // 修改 git:check 处理器返回 false（模拟非 Git 工作区）
     env.controller.socket.off('git:check');
     env.controller.socket.on('git:check', (data: { requestId: string }) => {
       env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: false });
     });
+
+    // 通过 UI 刷新页面（导航到新上下文，避免 Apollo cache-first）
+    await page.goto('/sessions');
+    await page.waitForTimeout(500);
 
     // 重新打开对话框
     await newWorkflowButton.click();
