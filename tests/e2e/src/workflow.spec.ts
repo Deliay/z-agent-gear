@@ -1846,6 +1846,12 @@ test.describe('Workflow E2E', () => {
     await page.waitForTimeout(300);
 
     // 测试 2: 非 Git 工作区（禁用）
+    // 修改 git:check 处理器返回 false（模拟非 Git 工作区）
+    env.controller.socket.off('git:check');
+    env.controller.socket.on('git:check', (data: { requestId: string }) => {
+      env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: false });
+    });
+
     // 重新打开对话框
     await newWorkflowButton.click();
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -1858,7 +1864,7 @@ test.describe('Workflow E2E', () => {
 
     // 点击下一步
     await dialog.getByRole('button', { name: '下一步' }).click();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000); // 等待 git:check 请求完成
 
     // 验证提示文案「当前工作区不是 Git 仓库，无法创建 Worktree」
     await expect(dialog.getByText('当前工作区不是 Git 仓库，无法创建 Worktree')).toBeVisible({ timeout: 5000 });
@@ -2001,7 +2007,7 @@ test.describe('Workflow E2E', () => {
     // 等待 Harness 选择器加载
     await page.waitForTimeout(1000);
 
-    // 点击确认重启（使用当前配置）
+    // 点击确认重启（使用当前配置，验证重启链路）
     const confirmRestartPromise = waitFor(
       () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
       15000,
@@ -2012,6 +2018,7 @@ test.describe('Workflow E2E', () => {
     // 等待新会话启动
     const restarted = await confirmRestartPromise;
     expect(restarted.mcpEndpoint?.token).toBeTruthy();
+    expect(restarted.serverType).toBe('opencode');
 
     // 验证节点仍为执行中，会话已切换
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });

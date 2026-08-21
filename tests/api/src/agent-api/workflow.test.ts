@@ -1204,6 +1204,8 @@ const CLOSE_SESSION = `
 interface StartEventData {
   requestId: string;
   sessionId: string;
+  serverType?: string;
+  cwd?: string;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   modeId?: string;
   modelId?: string;
@@ -2868,24 +2870,16 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   // A45: Worktree 创建失败回滚（方案 A3）
   // ---------------------------------------------------------------------------
 
-  it('A45: Worktree 创建失败 → 整体失败、无半成品实例、已建 Worktree 回滚', async () => {
+  it('A45: Worktree 创建失败 → 整体失败、无半成品实例', async () => {
     const tplId = await createSimpleTemplate(token, `wf-a45-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a45-cfg-${Date.now()}`);
 
     // 注册 git:worktree:add 返回 failure
-    const removedWorktrees: string[] = [];
     fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
       fake.client.emit('git:worktree:add:result', {
         requestId: data.requestId,
         success: false,
         error: 'Worktree creation failed',
-      });
-    });
-    fake.client.on('git:worktree:remove', (data: { requestId: string; worktreePath: string }) => {
-      removedWorktrees.push(data.worktreePath);
-      fake.client.emit('git:worktree:remove:result', {
-        requestId: data.requestId,
-        success: true,
       });
     });
 
@@ -2919,30 +2913,27 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   }, 30_000);
 
   // ---------------------------------------------------------------------------
-  // A46: 能力缓存缺失+控制器在线时回源成功（方案 A4，真正的缓存缺失路径）
+  // A46: 能力缓存缺失+控制器在线时回源成功（方案 A4）
   // ---------------------------------------------------------------------------
 
   it('A46: 能力缓存缺失+控制器在线时回源成功（误报回归 - 缓存缺失路径）', async () => {
-    // 通过 Redis 直接删除缓存 key，模拟缓存缺失
-    const redisKey = `acp:capability:${fake.controllerId}`;
-    // 注意：这里无法直接操作 Redis，但可以通过注册新的 fake controller 来测试
-    // 或者使用 refreshCapabilities 先填充，然后依赖回源逻辑
-
-    // 实际测试：注册一个新的 fake controller（无缓存），然后实例化
+    // 注册一个新的 fake controller（无缓存）
     const newFake = await registerFakeController(token, 'opt-nocache');
 
-    // 此时新 controller 无 Redis 缓存，实例化会触发回源
+    // configureFromTemplate 会触发 getAvailableServerTypes → 缓存缺失 → 回源
     const tplId = await createSimpleTemplate(token, `wf-a46-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, newFake.controllerId, `wf-a46-cfg-${Date.now()}`);
 
-    // 实例化（会触发 getAvailableServerTypes → 缓存缺失 → 回源）
+    // configure 成功说明回源成功（旧 bug 存在时 configure 即失败）
+    expect(cfgId).toBeTruthy();
+
+    // 实例化也应成功（此时缓存已回热）
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
       { input: instantiateInput(newFake.controllerId, cfgId, workspaceId, `wf-a46-实例-${Date.now()}`) },
       token,
     );
     const body = await res.json();
-    // 回源成功，实例化成功
     expect(body.errors).toBeUndefined();
     expect(body.data.instantiateWorkflow.id).toBeDefined();
 
@@ -2954,16 +2945,22 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   // ---------------------------------------------------------------------------
 
   it('A47: 能力缓存缺失+控制器离线时准确报离线（误报回归 - 离线路径）', async () => {
-    // 注册一个 fake controller 然后立即断开，模拟离线
+    // 先注册一个 fake controller（在线），完成 configure
     const offlineFake = await registerFakeController(token, 'opt-offline');
     const offlineControllerId = offlineFake.controllerId;
-    offlineFake.client.disconnect();
-    await sleep(500);
 
-    // 确保控制器离线后，其实例化应失败
     const tplId = await createSimpleTemplate(token, `wf-a47-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, offlineControllerId, `wf-a47-cfg-${Date.now()}`);
 
+    // configure 成功（控制器在线）
+    expect(cfgId).toBeTruthy();
+
+    // 断开控制器连接，模拟离线
+    offlineFake.client.disconnect();
+    await sleep(500);
+
+    // 实例化时，getAvailableServerTypes 会检查 controller.status
+    // 由于控制器已离线，应报错
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
       { input: instantiateInput(offlineControllerId, cfgId, workspaceId, `wf-a47-实例-${Date.now()}`) },
@@ -3018,9 +3015,8 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
     const startData = await startEvent;
 
-    // 验证 acp:start 的 cwd 包含实例 Worktree 路径
-    // 注意：fake controller 的 acp:start 事件不包含 cwd，但 sessionService.create 会使用 existingWorktreePath
-    // 这里验证会话创建成功即可（cwd 优先级在 orchestrator 中处理）
+    // 验证 acp:start 的 cwd 为实例 Worktree 路径
+    expect(startData.cwd).toBe(worktreePath);
     expect(startData.sessionId).toBeTruthy();
     expect(startData.serverType).toBe('opencode');
 
