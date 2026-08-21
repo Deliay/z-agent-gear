@@ -19,7 +19,6 @@ import {
   GET_WORKFLOW_INSTANCE,
   COMPLETE_HUMAN_NODE,
   REJECT_NODE,
-  RESTART_NODE,
   type WorkflowInstanceData,
   type WorkflowNodeData,
   type BlackboardEntryData,
@@ -180,14 +179,12 @@ function NodeCard({
   blackboard,
   onOpenSession,
   onEdit,
-  onRestart,
 }: {
   instanceId: string
   node: WorkflowNodeData
   blackboard: BlackboardEntryData[]
   onOpenSession: (sessionId: string) => void
-  onEdit: (node: WorkflowNodeData) => void
-  onRestart: (node: WorkflowNodeData) => void
+  onEdit: (node: WorkflowNodeData, restartMode?: boolean) => void
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -213,6 +210,18 @@ function NodeCard({
         </button>
         <Badge variant="secondary">{NODE_TYPE_LABELS[node.type]}</Badge>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{node.name}</span>
+        {node.type === 'AI' && node.agentConfig && (
+          <div className="flex items-center gap-1">
+            <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              {node.agentConfig.acpServerType}
+            </span>
+            {node.agentConfig.modelId && (
+              <span className="rounded bg-secondary/20 px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
+                {node.agentConfig.modelId}
+              </span>
+            )}
+          </div>
+        )}
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[node.status]}`}
         >
@@ -232,7 +241,7 @@ function NodeCard({
         )}
         {node.type === 'AI' &&
           (node.status === 'RUNNING' || node.status === 'REWORK' || node.status === 'FAILED') && (
-            <Button size="xs" variant="outline" onClick={() => onRestart(node)}>
+            <Button size="xs" variant="outline" onClick={() => onEdit(node, true)}>
               <RefreshCw className="size-3" />
               重启
             </Button>
@@ -310,9 +319,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
   }
 
   const [editNode, setEditNode] = useState<WorkflowNodeData | null>(null)
-  const [restartTarget, setRestartTarget] = useState<WorkflowNodeData | null>(null)
-  const [restarting, setRestarting] = useState(false)
-  const [restartNode] = useMutation(RESTART_NODE)
+  const [editNodeRestartMode, setEditNodeRestartMode] = useState(false)
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
     variables: { controllerId: instance.controllerId },
     skip: !instance.controllerId,
@@ -321,27 +328,10 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
     .filter((c) => c.available && c.type)
     .map((c) => c.type)
 
-  const refetch = [{ query: GET_WORKFLOW_INSTANCE, variables: { id: instance.id } }]
-
-  // 重启前弹框确认：明确告知会删除之前的会话并重新拉起全新会话
-  const handleRestart = (node: WorkflowNodeData) => {
-    setRestartTarget(node)
-  }
-
-  const confirmRestart = async (node: WorkflowNodeData) => {
-    setRestarting(true)
-    try {
-      await restartNode({
-        variables: { instanceId: instance.id, nodeId: node.id },
-        refetchQueries: refetch,
-      })
-      toast.success(`节点「${node.name}」已重启`)
-      setRestartTarget(null)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重启失败，请重试')
-    } finally {
-      setRestarting(false)
-    }
+  // 编辑按钮点击
+  const handleEdit = (node: WorkflowNodeData, restartMode = false) => {
+    setEditNode(node)
+    setEditNodeRestartMode(restartMode)
   }
 
   return (
@@ -359,8 +349,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                   node={node}
                   blackboard={instance.blackboard}
                   onOpenSession={onOpenSession}
-                  onEdit={setEditNode}
-                  onRestart={handleRestart}
+                  onEdit={handleEdit}
                 />
               ))}
           </div>
@@ -370,50 +359,18 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
         <EditInstanceNodeDialog
           open
           onOpenChange={(open) => {
-            if (!open) setEditNode(null)
+            if (!open) {
+              setEditNode(null)
+              setEditNodeRestartMode(false)
+            }
           }}
           instanceId={instance.id}
           node={editNode}
           controllerId={instance.controllerId}
           availableServerTypes={availableServerTypes}
+          restartMode={editNodeRestartMode}
         />
       )}
-      <Dialog
-        open={restartTarget != null}
-        onOpenChange={(open) => {
-          if (!open && !restarting) setRestartTarget(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>重启节点「{restartTarget?.name ?? ''}」</DialogTitle>
-            <DialogDescription>
-              重启将关闭并删除当前节点的会话，然后重新拉起一个全新会话重试。节点当前的产物与打回记录会保留。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p className="rounded-md bg-warning/10 px-3 py-2 text-warning">
-              确认要删除当前会话并重新开始吗？该操作不可撤销。
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={restarting}
-              onClick={() => setRestartTarget(null)}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={restarting || !restartTarget}
-              onClick={() => restartTarget && confirmRestart(restartTarget)}
-            >
-              {restarting ? '重启中…' : '确认重启'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

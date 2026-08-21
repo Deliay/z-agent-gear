@@ -9,6 +9,7 @@ import { workflowEngine } from './engine.js';
 import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { getAvailableServerTypes } from './capability.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -28,6 +29,7 @@ export interface InstantiateNodeInput {
     modelId?: string | null;
     initNewWorktree: boolean;
   } | null;
+  sortOrder?: number | null;
 }
 
 export interface InstantiateWorkflowInput {
@@ -38,6 +40,7 @@ export interface InstantiateWorkflowInput {
   workspaceId: string;
   name: string;
   nodes: InstantiateNodeInput[];
+  createWorkflowWorktree?: boolean | null;
 }
 
 /** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
@@ -58,21 +61,6 @@ class WorkflowInstanceService {
     return WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
   }
 
-  /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */
-  private async getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
-    if (!controller) {
-      throw new Error('控制器不存在或不属于当前用户');
-    }
-    const redis = getRedisClient();
-    const cached = await redis.get(`acp:capability:${controllerId}`);
-    if (!cached) {
-      throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
-    }
-    const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
-    return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
-  }
-
   /** 将节点图归一化为完整结构（补默认值，供图校验与快照落库） */
   private normalizeNodes(nodes: InstantiateNodeInput[]) {
     return nodes.map((n) => ({
@@ -86,6 +74,7 @@ class WorkflowInstanceService {
       dependsOn: [...(n.dependsOn ?? [])],
       requiresWorktree: n.requiresWorktree ?? false,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+      sortOrder: n.sortOrder ?? undefined,
     }));
   }
 
@@ -112,7 +101,7 @@ class WorkflowInstanceService {
     if (!workspace) {
       throw new Error('工作区不存在、无权限或不属于该控制器');
     }
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
 
     // 3. 完整图校验 + agentConfig 校验（以提交图为准）
     const fullNodes = this.normalizeNodes(input.nodes);
@@ -127,7 +116,25 @@ class WorkflowInstanceService {
       );
     }
 
-    // 5. 节点全量快照落库（nodeKey → nodeId 映射，dependsOn 改写为 nodeId 引用）
+    // 5. 创建工作流 Worktree（如果启用）
+    let workflowWorktreePath: string | undefined;
+    let workflowWorktreeBranch: string | undefined;
+    if (input.createWorkflowWorktree && workspace.defaultBranch) {
+      const result = await this.createWorkflowWorktree(
+        input.controllerId,
+        {
+          _id: workspace._id.toString(),
+          name: workspace.name,
+          path: workspace.path,
+          defaultBranch: workspace.defaultBranch,
+        },
+        input.name,
+      );
+      workflowWorktreePath = result.path;
+      workflowWorktreeBranch = result.branch;
+    }
+
+    // 6. 节点全量快照落库（nodeKey → nodeId 映射，dependsOn 改写为 nodeId 引用）
     const nodeIdByKey = new Map(fullNodes.map((n) => [n.nodeKey, new mongoose.Types.ObjectId().toString()]));
     const nodes = fullNodes.map((n) => ({
       nodeId: nodeIdByKey.get(n.nodeKey)!,
@@ -145,6 +152,7 @@ class WorkflowInstanceService {
       artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : undefined,
       requiresWorktree: n.requiresWorktree,
+      sortOrder: n.sortOrder,
     }));
     // 首节点（入度为 0 的人类节点）READY
     const first = nodes.find((n) => n.dependsOn.length === 0);
@@ -152,17 +160,91 @@ class WorkflowInstanceService {
       first.status = 'READY';
     }
 
-    return WorkflowInstance.create({
-      userId,
-      controllerId: input.controllerId,
-      workspaceId: input.workspaceId,
-      configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
-      name: input.name,
-      nodes,
-      currentNodeNames: [],
-      lastNodeName: first?.name ?? null,
-      lastNodeStatus: first ? 'READY' : null,
-    });
+    try {
+      return await WorkflowInstance.create({
+        userId,
+        controllerId: input.controllerId,
+        workspaceId: input.workspaceId,
+        configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
+        name: input.name,
+        nodes,
+        currentNodeNames: [],
+        lastNodeName: first?.name ?? null,
+        lastNodeStatus: first ? 'READY' : null,
+        workflowWorktreePath,
+        workflowWorktreeBranch,
+      });
+    } catch (err) {
+      // 如果创建实例失败且已创建 Worktree，回滚 Worktree
+      if (workflowWorktreePath) {
+        try {
+          await this.removeWorkflowWorktree(
+            input.controllerId,
+            workspace.path,
+            workflowWorktreePath,
+            workflowWorktreeBranch,
+          );
+        } catch (rollbackErr) {
+          console.error('回滚 Worktree 失败:', rollbackErr);
+        }
+      }
+      throw err;
+    }
+  }
+
+  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器 */
+  private async createWorkflowWorktree(
+    controllerId: string,
+    workspace: { _id: string; name: string; path: string; defaultBranch?: string },
+    workflowName: string,
+  ): Promise<{ path: string; branch: string }> {
+    const redis = getRedisClient();
+    
+    // 查询控制器获取 worktreeDir 配置
+    const controller = await Controller.findOne({ _id: controllerId }).lean();
+    const worktreeDir = (controller as { worktreeDir?: string } | null)?.worktreeDir || '~/.zag/worktrees';
+    
+    // slug 化处理：纯中文名会产生空串，使用兜底值
+    const slug = workflowName
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 50)
+      || `wf-${Date.now().toString(36)}`;
+    
+    const branch = `workflow/${slug}`;
+    const wtPath = `${worktreeDir}/${workspace.name}/workflow-${slug}`;
+
+    const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await redis.publish(
+      'session:command',
+      JSON.stringify({
+        type: 'git:worktree:add',
+        requestId,
+        controllerId,
+        repoPath: workspace.path,
+        worktreePath: wtPath,
+        branch,
+      }),
+    );
+
+    // 等待控制器响应（最多 30 秒）
+    for (let i = 0; i < 30; i++) {
+      const result = await redis.get(`git:worktree:add:${requestId}`);
+      if (result) {
+        const parsed = JSON.parse(result);
+        if (!parsed.success) {
+          throw new Error(`创建工作流 Worktree 失败: ${parsed.error}`);
+        }
+        await redis.del(`git:worktree:add:${requestId}`);
+        return {
+          path: parsed.worktreePath || wtPath,
+          branch,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error('创建工作流 Worktree 超时');
   }
 
   /**
@@ -179,6 +261,7 @@ class WorkflowInstanceService {
     artifactTitles?: string[] | null;
     requiresWorktree?: boolean;
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
+    sortOrder?: number | null;
   }) {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
@@ -198,6 +281,7 @@ class WorkflowInstanceService {
     if (input.prompts !== undefined) patch['nodes.$[n].prompts'] = input.prompts ?? null;
     if (input.artifactTitles !== undefined) patch['nodes.$[n].artifactTitles'] = input.artifactTitles ?? null;
     if (input.agentConfig !== undefined) patch['nodes.$[n].agentConfig'] = input.agentConfig ?? null;
+    if (input.sortOrder !== undefined) patch['nodes.$[n].sortOrder'] = input.sortOrder ?? null;
 
     // 若该节点是旧实例（无快照字段），先补齐快照（回查已配置工作流）
     if (node.prompts === undefined && node.agentConfig === undefined) {
@@ -307,12 +391,26 @@ class WorkflowInstanceService {
   }
 
   /** 重启节点：RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话（引擎校验） */
-  async restartNode(userId: string, instanceId: string, nodeId: string) {
+  async restartNode(
+    userId: string,
+    instanceId: string,
+    nodeId: string,
+    agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null,
+  ) {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
-    return workflowEngine.transition(instanceId, nodeId, 'restart', {});
+
+    // 如果提供了 agentConfig，校验其 acpServerType 是否在控制器可用能力内
+    if (agentConfig) {
+      const availableServerTypes = await getAvailableServerTypes(instance.controllerId.toString(), userId);
+      if (!availableServerTypes.includes(agentConfig.acpServerType)) {
+        throw new Error(`控制器不支持该 Harness 类型: ${agentConfig.acpServerType}`);
+      }
+    }
+
+    return workflowEngine.transition(instanceId, nodeId, 'restart', { agentConfig });
   }
 
   /** 归档/取消归档实例：仅分组展示差异，不影响流程运转与节点会话 */
@@ -331,6 +429,7 @@ class WorkflowInstanceService {
   /**
    * 删除实例（软删除）：停止流程运转、删除流程下全部会话，实例数据保留（仅标记 deletedAt）。
    * 先标记 deletedAt 使引擎/orchestrator 兜底立即排除本实例，再逐个删除节点会话，避免竞态。
+   * 如果实例有工作流 Worktree，一并清理。
    */
   async deleteInstance(userId: string, id: string) {
     const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
@@ -347,7 +446,60 @@ class WorkflowInstanceService {
         console.error(`删除工作流实例「${instance.name}」的会话失败（${session._id}）：`, err);
       }
     }
+    // 清理工作流 Worktree（如果存在）
+    if (instance.workflowWorktreePath) {
+      try {
+        // 查询工作区路径作为 repoPath
+        const workspace = await ControllerWorkspace.findOne({ _id: instance.workspaceId }).lean();
+        if (workspace) {
+          await this.removeWorkflowWorktree(
+            instance.controllerId.toString(),
+            workspace.path,
+            instance.workflowWorktreePath,
+            instance.workflowWorktreeBranch ?? undefined,
+          );
+        }
+      } catch (err) {
+        console.error(`删除工作流实例「${instance.name}」的 Worktree 失败:`, err);
+      }
+    }
     return true;
+  }
+
+  /** 清理工作流 Worktree：通过 Redis 发送 git:worktree:remove 命令到控制器 */
+  private async removeWorkflowWorktree(
+    controllerId: string,
+    repoPath: string,
+    worktreePath: string,
+    worktreeBranch?: string,
+  ): Promise<void> {
+    const redis = getRedisClient();
+    const requestId = `wtr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await redis.publish(
+      'session:command',
+      JSON.stringify({
+        type: 'git:worktree:remove',
+        requestId,
+        controllerId,
+        repoPath,
+        worktreePath,
+        branch: worktreeBranch,
+      }),
+    );
+    // 等待控制器响应（最多 10 秒）
+    for (let i = 0; i < 10; i++) {
+      const result = await redis.get(`git:worktree:remove:${requestId}`);
+      if (result) {
+        const parsed = JSON.parse(result);
+        if (!parsed.success) {
+          console.error(`清理 Worktree 失败: ${parsed.error}`);
+        }
+        await redis.del(`git:worktree:remove:${requestId}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    console.error('清理 Worktree 超时');
   }
 }
 

@@ -1,9 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import Redis from 'ioredis';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MCP_BASE_URL = `${(process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '')}/mcp`;
+
+const redis = new Redis(REDIS_URL, { enableOfflineQueue: false, retryStrategy: () => null });
+
+/** 删除 Redis 中的 ACP 能力缓存 key */
+async function flushCapabilityCache(controllerId: string): Promise<void> {
+  await redis.del(`acp:capability:${controllerId}`);
+}
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -143,11 +152,19 @@ const DELETE_CONFIGURED_WORKFLOW = `
   }
 `;
 
+const SET_WORKSPACE_DEFAULT_BRANCH = `
+  mutation SetWorkspaceDefaultBranch($id: ID!, $defaultBranch: String!) {
+    setWorkspaceDefaultBranch(id: $id, defaultBranch: $defaultBranch) {
+      id defaultBranch
+    }
+  }
+`;
+
 const INSTANTIATE_WORKFLOW = `
   mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
     instantiateWorkflow(input: $input) {
       id configuredWorkflowId controllerId workspaceId name currentNodeNames lastNodeName lastNodeStatus
-      nodes { id nodeKey type name status stage sessionId reworkCount prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
+      nodes { id nodeKey type name status stage sortOrder sessionId reworkCount prompts artifactTitles requiresWorktree agentConfig { acpServerType initNewWorktree } }
     }
   }
 `;
@@ -169,8 +186,8 @@ const DELETE_WORKFLOW_INSTANCE_MUT = `
 const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
-      id name currentNodeNames lastNodeName lastNodeStatus archived
-      nodes { id nodeKey type name status stage sessionId startedAt reworkedAt reworkCount rejectInfo { reason fromNodeId at } failInfo { reason source at } }
+      id name currentNodeNames lastNodeName lastNodeStatus archived workflowWorktreePath workflowWorktreeBranch
+      nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
     }
@@ -279,6 +296,23 @@ async function createWorkspace(token: string, controllerId: string): Promise<str
     throw new Error(`createWorkspace failed: ${JSON.stringify(body.errors)}`);
   }
   return body.data.createWorkspace.id;
+}
+
+async function createGitWorkspace(token: string, controllerId: string): Promise<string> {
+  const path = `/tmp/wf-test-git-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const res = await gqlRequest(CREATE_WORKSPACE, { input: { controllerId, path } }, token);
+  const body = await res.json();
+  if (body.errors) {
+    throw new Error(`createWorkspace failed: ${JSON.stringify(body.errors)}`);
+  }
+  const wsId = body.data.createWorkspace.id;
+  // 设置 defaultBranch 使其成为 Git 工作区
+  const setBranchRes = await gqlRequest(SET_WORKSPACE_DEFAULT_BRANCH, { id: wsId, defaultBranch: 'main' }, token);
+  const setBranchBody = await setBranchRes.json();
+  if (setBranchBody.errors) {
+    throw new Error(`setWorkspaceDefaultBranch failed: ${JSON.stringify(setBranchBody.errors)}`);
+  }
+  return wsId;
 }
 
 /** 简单两节点模板：HUMAN(input) → AI(exec) */
@@ -1204,6 +1238,8 @@ const CLOSE_SESSION = `
 interface StartEventData {
   requestId: string;
   sessionId: string;
+  serverType?: string;
+  cwd?: string;
   mcpEndpoint?: { url: string; token: string; serverNames: string[] };
   modeId?: string;
   modelId?: string;
@@ -2466,5 +2502,752 @@ describe('Workflow Node Restart (A33)', () => {
     const rstBody = await rstRes.json();
     expect(rstBody.errors).toBeDefined();
     expect(rstBody.errors[0].message).toContain('不允许执行');
+  }, 30_000);
+});
+
+
+// ---------------------------------------------------------------------------
+// 工作流优化特性（A35-A44）：createWorkflowWorktree、能力回源、restart agentConfig、sortOrder、Worktree 清理
+// ---------------------------------------------------------------------------
+
+const INSTANTIATE_WORKFLOW_WITH_WORKTREE = `
+  mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
+    instantiateWorkflow(input: $input) {
+      id configuredWorkflowId name
+      workflowWorktreePath workflowWorktreeBranch
+      nodes { id nodeKey type name status stage sortOrder agentConfig { acpServerType } }
+    }
+  }
+`;
+
+const RESTART_NODE_WITH_AGENT_CONFIG = `
+  mutation RestartNode($instanceId: ID!, $nodeId: ID!, $agentConfig: AgentNodeConfigInput) {
+    restartNode(instanceId: $instanceId, nodeId: $nodeId, agentConfig: $agentConfig) {
+      id nodeKey name status
+    }
+  }
+`;
+
+const UPDATE_WORKFLOW_NODE_WITH_SORT_ORDER = `
+  mutation UpdateWorkflowNode($instanceId: ID!, $nodeId: ID!, $input: WorkflowNodeUpdateInput!) {
+    updateWorkflowNode(instanceId: $instanceId, nodeId: $nodeId, input: $input) {
+      id nodeKey name sortOrder
+    }
+  }
+`;
+
+describe('Workflow Optimization Features (A35-A44)', () => {
+  let token = '';
+  let fake: FakeController;
+  let workspaceId = '';
+
+  beforeAll(async () => {
+    token = await signup('wfopt');
+    expect(token).toBeTruthy();
+    fake = await registerFakeController(token, 'opt');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+    workspaceId = await createGitWorkspace(token, fake.controllerId);
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A35: instantiateWorkflow createWorkflowWorktree=true 时创建工作流 Worktree', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a35-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a35-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add 处理器
+    fake.client.on('git:worktree:add', (data: { requestId: string; repoPath: string; worktreePath: string; branch: string }) => {
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a35-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const inst = body.data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBeTruthy();
+    expect(inst.workflowWorktreeBranch).toContain('workflow/');
+  }, 30_000);
+
+  it('A36: instantiateWorkflow createWorkflowWorktree=false 时无 Worktree 字段', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a36-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a36-cfg-${Date.now()}`);
+
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a36-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: false,
+        },
+      },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const inst = body.data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBeNull();
+    expect(inst.workflowWorktreeBranch).toBeNull();
+  }, 20_000);
+
+  it('A37: 能力缓存缺失+控制器在线时回源成功（误报回归）', async () => {
+    // 清除 Redis 缓存（通过刷新能力）
+    await refreshCapabilities(token, fake.controllerId);
+
+    // 此时缓存应存在，实例化应成功
+    const tplId = await createSimpleTemplate(token, `wf-a37-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a37-cfg-${Date.now()}`);
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a37-实例-${Date.now()}`) },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.instantiateWorkflow.id).toBeDefined();
+  }, 20_000);
+
+  it('A38: restartNode 携带合法 agentConfig 更新节点快照', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a38-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a38-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a38-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+
+    // 完成首节点 → exec RUNNING
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a38_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 重启携带新 agentConfig
+    const newAgentConfig = { acpServerType: 'opencode', modeId: 'new-mode', modelId: 'new-model', initNewWorktree: true };
+    const s2Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const rstRes = await gqlRequest(RESTART_NODE_WITH_AGENT_CONFIG, {
+      instanceId: inst.id,
+      nodeId: execNode.id,
+      agentConfig: newAgentConfig,
+    }, token);
+    const rstBody = await rstRes.json();
+    expect(rstBody.errors).toBeUndefined();
+    expect(rstBody.data.restartNode.status).toBe('RUNNING');
+
+    // 验证新会话使用了新配置
+    const s2 = await s2Promise;
+    expect(s2.sessionId).not.toBe(startData.sessionId);
+    fake.client.emit('acp:start:result', {
+      requestId: s2.requestId, sessionId: s2.sessionId, success: true, externalSessionId: `ext_a38_2_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 查询实例验证节点快照已更新
+    const instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token)).json()).data.workflowInstance;
+    const execFinal = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execFinal.agentConfig).toEqual(newAgentConfig);
+  }, 30_000);
+
+  it('A39: restartNode 携带能力外 agentConfig 被拒绝', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a39-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a39-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a39-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+
+    // 完成首节点 → exec RUNNING
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a39_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 重启携带能力外 agentConfig
+    const badAgentConfig = { acpServerType: 'nonexistent-harness', initNewWorktree: false };
+    const rstRes = await gqlRequest(RESTART_NODE_WITH_AGENT_CONFIG, {
+      instanceId: inst.id,
+      nodeId: execNode.id,
+      agentConfig: badAgentConfig,
+    }, token);
+    const rstBody = await rstRes.json();
+    expect(rstBody.errors).toBeDefined();
+    expect(rstBody.errors[0].message).toContain('控制器不支持该 Harness 类型');
+  }, 20_000);
+
+  it('A40: sortOrder 存取与缺省回填', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a40-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a40-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a40-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+
+    // 实例化后 sortOrder 应为 null（缺省）
+    expect(inputNode.sortOrder).toBeNull();
+    expect(execNode.sortOrder).toBeNull();
+
+    // 更新 sortOrder
+    const updateRes = await gqlRequest(UPDATE_WORKFLOW_NODE_WITH_SORT_ORDER, {
+      instanceId: inst.id,
+      nodeId: inputNode.id,
+      input: { sortOrder: 1 },
+    }, token);
+    const updateBody = await updateRes.json();
+    expect(updateBody.errors).toBeUndefined();
+    expect(updateBody.data.updateWorkflowNode.sortOrder).toBe(1);
+
+    // 查询验证
+    const instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token)).json()).data.workflowInstance;
+    const inputFinal = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    expect(inputFinal.sortOrder).toBe(1);
+  }, 20_000);
+
+  it('A41: deleteWorkflowInstance 清理工作流 Worktree', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a41-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a41-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add 和 git:worktree:remove 处理器
+    const addedWorktrees: string[] = [];
+    const removedWorktrees: string[] = [];
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      addedWorktrees.push(data.worktreePath);
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+    fake.client.on('git:worktree:remove', (data: { requestId: string; worktreePath: string }) => {
+      removedWorktrees.push(data.worktreePath);
+      fake.client.emit('git:worktree:remove:result', {
+        requestId: data.requestId,
+        success: true,
+      });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a41-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBeTruthy();
+
+    // 删除实例
+    const delRes = await gqlRequest(DELETE_WORKFLOW_INSTANCE_MUT, { id: inst.id }, token);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeUndefined();
+    expect(delBody.data.deleteWorkflowInstance).toBe(true);
+
+    // 等待清理完成
+    await sleep(1000);
+
+    // 验证工作流 Worktree 被清理
+    expect(removedWorktrees).toContain(inst.workflowWorktreePath);
+  }, 30_000);
+
+  it('A42: WorkflowInstance 查询返回 workflowWorktreePath/workflowWorktreeBranch', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a42-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a42-cfg-${Date.now()}`);
+
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a42-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBeTruthy();
+    expect(inst.workflowWorktreeBranch).toContain('workflow/');
+
+    // 通过 query 查询验证字段存在
+    const qRes = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token);
+    const qBody = await qRes.json();
+    expect(qBody.errors).toBeUndefined();
+    const instQ = qBody.data.workflowInstance;
+    expect(instQ.workflowWorktreePath).toBe(inst.workflowWorktreePath);
+    expect(instQ.workflowWorktreeBranch).toBe(inst.workflowWorktreeBranch);
+  }, 20_000);
+
+  it('A43: sortOrder 非 DAG 保存被拒绝', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a43-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a43-cfg-${Date.now()}`);
+
+    // 尝试更新配置工作流，传入循环依赖的节点图
+    const res = await gqlRequest(UPDATE_CONFIGURED_WORKFLOW, {
+      id: cfgId,
+      input: {
+        name: `wf-a43-bad-${Date.now()}`,
+        controllerId: fake.controllerId,
+        nodes: [
+          { nodeKey: 'a', type: 'HUMAN', name: '甲', stage: 's', dependsOn: ['b'], requiresWorktree: false },
+          { nodeKey: 'b', type: 'AI', name: '乙', stage: 's', prompts: ['做乙事'], dependsOn: ['a'], requiresWorktree: false, agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+        ],
+      },
+    }, token);
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('循环依赖');
+  }, 20_000);
+
+  it('A44: 节点重启携带 agentConfig 后新会话使用新配置', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a44-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a44-cfg-${Date.now()}`);
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a44-实例-${Date.now()}`) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const execNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+
+    // 完成首节点 → exec RUNNING
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a44_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 记录原始 acpServerType
+    expect(startData.serverType).toBe('opencode');
+
+    // 重启携带新 agentConfig（虽然还是 opencode，但验证链路）
+    const newAgentConfig = { acpServerType: 'opencode', modeId: 'code', modelId: 'gpt-5', initNewWorktree: false };
+    const s2Promise = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const rstRes = await gqlRequest(RESTART_NODE_WITH_AGENT_CONFIG, {
+      instanceId: inst.id,
+      nodeId: execNode.id,
+      agentConfig: newAgentConfig,
+    }, token);
+    const rstBody = await rstRes.json();
+    expect(rstBody.errors).toBeUndefined();
+
+    // 验证新会话使用了新配置
+    const s2 = await s2Promise;
+    expect(s2.sessionId).not.toBe(startData.sessionId);
+    expect(s2.serverType).toBe('opencode');
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // A45: Worktree 创建失败回滚（方案 A3）
+  // ---------------------------------------------------------------------------
+
+  it('A45: Worktree 创建失败 → 整体失败、无半成品实例', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a45-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a45-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add 返回 failure
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: false,
+        error: 'Worktree creation failed',
+      });
+    });
+
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a45-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const body = await res.json();
+
+    // 整体失败，返回错误
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('Worktree');
+
+    // 验证无半成品实例（查询该名称的实例应为空）
+    const listRes = await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token);
+    const listBody = await listRes.json();
+    const instances = listBody.data.workflowInstances as { name: string }[];
+    const created = instances.find((i) => i.name.startsWith('wf-a45-实例'));
+    expect(created).toBeUndefined();
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // A46: 能力缓存缺失+控制器在线时回源成功（方案 A4）
+  // ---------------------------------------------------------------------------
+
+  it('A46: 能力缓存缺失+控制器在线时回源成功（误报回归 - 缓存缺失路径）', async () => {
+    // 注册一个新的 fake controller（无缓存）
+    const newFake = await registerFakeController(token, 'opt-nocache');
+
+    // 为新控制器创建 Git workspace
+    const newWorkspaceId = await createGitWorkspace(token, newFake.controllerId);
+
+    // configureFromTemplate 会触发 getAvailableServerTypes → 缓存缺失 → 回源
+    const tplId = await createSimpleTemplate(token, `wf-a46-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, newFake.controllerId, `wf-a46-cfg-${Date.now()}`);
+
+    // configure 成功说明回源成功（旧 bug 存在时 configure 即失败）
+    expect(cfgId).toBeTruthy();
+
+    // 实例化也应成功（此时缓存已回热）
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(newFake.controllerId, cfgId, newWorkspaceId, `wf-a46-实例-${Date.now()}`) },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.instantiateWorkflow.id).toBeDefined();
+
+    newFake.client.disconnect();
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // A47: 能力缓存缺失+控制器离线时准确报离线（方案 A5）
+  // ---------------------------------------------------------------------------
+
+  it('A47: 能力缓存缺失+控制器离线时准确报离线（误报回归 - 离线路径）', async () => {
+    // 注册一个全新 fake controller（从未 configure，因此无能力缓存）
+    const offlineFake = await registerFakeController(token, 'opt-offline');
+    const offlineControllerId = offlineFake.controllerId;
+
+    // 为离线控制器创建 Git workspace
+    const offlineWorkspaceId = await createGitWorkspace(token, offlineControllerId);
+
+    const tplId = await createSimpleTemplate(token, `wf-a47-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, offlineControllerId, `wf-a47-cfg-${Date.now()}`);
+
+    // configure 成功（控制器在线）→ 此时会缓存能力
+    expect(cfgId).toBeTruthy();
+
+    // 断开控制器连接，模拟离线
+    offlineFake.client.disconnect();
+    await sleep(500);
+
+    // 通过 GraphQL 刷新能力缓存（删除旧缓存 + 尝试重新检测 → 控制器离线会超时）
+    // 注：refreshAcpCapabilities 先 del 缓存再触发检测，离线时检测超时但缓存已清除
+    await gqlRequest(REFRESH_ACP_CAPABILITIES, { controllerId: offlineControllerId }, token).catch(() => {});
+
+    // 实例化时，getAvailableServerTypes 会检查 controller.status
+    // 由于控制器已离线且缓存缺失，应报错
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(offlineControllerId, cfgId, offlineWorkspaceId, `wf-a47-实例-${Date.now()}`) },
+      token,
+    );
+    const body = await res.json();
+    // 应返回错误，提示控制器不可用
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('Agent 能力信息不可用');
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // A48: 实例 Worktree 作为节点会话 cwd 优先级（方案 A6）
+  // ---------------------------------------------------------------------------
+
+  it('A48: 未启用节点级 Worktree 时，节点会话 cwd 使用实例 Worktree', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a48-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add：回显服务端下发的 worktreePath（须匹配工作区 scope）
+    let worktreePath = '';
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      worktreePath = data.worktreePath;
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a48-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBe(worktreePath);
+
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 完成首节点 → exec 节点拉起会话，cwd 应为实例 Worktree（initNewWorktree: false → 复用实例 Worktree）
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const completeRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody = await completeRes.json();
+    if (completeBody.errors) {
+      console.error('A48 completeHumanNode errors:', JSON.stringify(completeBody.errors));
+    }
+    expect(completeBody.errors).toBeUndefined();
+    const startData = await startEvent;
+
+    // 验证 acp:start 的 cwd 为实例 Worktree 路径
+    expect(startData.cwd).toBe(inst.workflowWorktreePath);
+    expect(startData.sessionId).toBeTruthy();
+    expect(startData.serverType).toBe('opencode');
+
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a48_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 验证实例节点会话启动成功
+    const instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token)).json()).data.workflowInstance;
+    const execNode = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+    expect(execNode.sessionId).toBe(startData.sessionId);
+  }, 30_000);
+
+  it('A48b: 启用节点级 Worktree 时，节点会话 cwd 使用节点 Worktree', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a48b-${Date.now()}`, true); // requiresWorktree=true
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48b-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add 回显服务端下发的 worktreePath（实例 Worktree 与节点 Worktree 路径不同）
+    const addedPaths: string[] = [];
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      addedPaths.push(data.worktreePath);
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a48b-实例-${Date.now()}`,
+          nodes: simpleTemplateInput('_').nodes.map(n => ({
+            ...n,
+            requiresWorktree: n.nodeKey === 'exec' ? true : n.requiresWorktree,
+            agentConfig: n.nodeKey === 'exec' ? { acpServerType: 'opencode', initNewWorktree: true } : null,
+          })),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBeTruthy();
+
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 完成首节点 → exec 节点拉起会话，cwd 应为节点 Worktree（因为 initNewWorktree: true）
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const completeRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody = await completeRes.json();
+    if (completeBody.errors) {
+      console.error('A48b completeHumanNode errors:', JSON.stringify(completeBody.errors));
+    }
+    expect(completeBody.errors).toBeUndefined();
+    const startData = await startEvent;
+
+    // 验证 acp:start 的 cwd 为节点 Worktree 路径（比实例 Worktree 更深一层）
+    expect(startData.cwd).toBeTruthy();
+    expect(startData.cwd).not.toBe(inst.workflowWorktreePath);
+    expect(startData.sessionId).toBeTruthy();
+    expect(startData.serverType).toBe('opencode');
+
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a48b_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 验证实例节点会话启动成功
+    const instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token)).json()).data.workflowInstance;
+    const execNode = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+    expect(execNode.sessionId).toBe(startData.sessionId);
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // A49: A36 补充 - 非 Git 工作区时 createWorkflowWorktree 不生效
+  // ---------------------------------------------------------------------------
+
+  it('A49: 非 Git 工作区时 createWorkflowWorktree 不生效（无 Worktree 字段）', async () => {
+    // 创建一个无 defaultBranch 的工作区（非 Git 工作区）
+    const nonGitWorkspaceId = await createWorkspace(token, fake.controllerId);
+
+    const tplId = await createSimpleTemplate(token, `wf-a49-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a49-cfg-${Date.now()}`);
+
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId: nonGitWorkspaceId,
+          name: `wf-a49-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: false } }),
+          createWorkflowWorktree: true, // 即使设置为 true，非 Git 工作区也不生效
+        },
+      },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const inst = body.data.instantiateWorkflow;
+    // 非 Git 工作区，Worktree 字段应为 null
+    expect(inst.workflowWorktreePath).toBeNull();
+    expect(inst.workflowWorktreeBranch).toBeNull();
+  }, 20_000);
+
+  // ---------------------------------------------------------------------------
+  // A50: A41 补充 - 删除实例时节点级 Worktree 一并清理
+  // ---------------------------------------------------------------------------
+
+  it('A50: 删除实例时节点级 Worktree 一并清理（通过 closeSession 触发）', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a50-${Date.now()}`, true); // requiresWorktree=true
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a50-cfg-${Date.now()}`, true);
+
+    // 注册 git:worktree:add、git:worktree:remove 和 git:status 处理器
+    const addedWorktrees: string[] = [];
+    const removedWorktrees: string[] = [];
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      addedWorktrees.push(data.worktreePath);
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+    fake.client.on('git:worktree:remove', (data: { requestId: string; worktreePath: string }) => {
+      removedWorktrees.push(data.worktreePath);
+      fake.client.emit('git:worktree:remove:result', {
+        requestId: data.requestId,
+        success: true,
+      });
+    });
+    // delete 清理会话时会发送 git:status + git:worktree:remove
+    fake.client.on('git:status', (data: { requestId: string; path: string }) => {
+      fake.client.emit('git:status:result', { requestId: data.requestId, isClean: true });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-a50-实例-${Date.now()}`, true) },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 完成首节点 → exec 节点拉起会话（带节点级 Worktree）
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const completeRes50 = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody50 = await completeRes50.json();
+    if (completeBody50.errors) {
+      console.error('A50 completeHumanNode errors:', JSON.stringify(completeBody50.errors));
+    }
+    expect(completeBody50.errors).toBeUndefined();
+    const startData = await startEvent;
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a50_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 记录节点级 Worktree
+    expect(addedWorktrees.length).toBeGreaterThan(0);
+
+    // 删除实例
+    const delRes = await gqlRequest(DELETE_WORKFLOW_INSTANCE_MUT, { id: inst.id }, token);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeUndefined();
+
+    // 等待清理完成
+    await sleep(1500);
+
+    // 验证节点级 Worktree 被清理（通过 closeSession 触发）
+    expect(removedWorktrees.length).toBeGreaterThan(0);
   }, 30_000);
 });

@@ -202,3 +202,4 @@ flowchart LR
 - [[plan/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化实现计划
 - [[plan/20260811-feat-agent-workflow-phase2.md]] — Agent 工作流二期（工作流管理与实例化机制完善）实现计划
 - [[plan/20260817-feat-session-lifecycle-and-worktree-management.md]] — 会话生命周期与 Worktree 管理增强实现计划
+- [[plan/20260821-feat-workflow-optimization.md]] — 工作流优化 0821 实现计划

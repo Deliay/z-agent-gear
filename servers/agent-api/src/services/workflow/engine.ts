@@ -19,6 +19,12 @@ export interface WorkflowNodeDoc {
   fallbackSent?: boolean;
   rejectInfo?: { reason: string; fromNodeId?: string | null; at: Date } | null;
   failInfo?: { reason: string; source: string; at: Date } | null;
+  agentConfig?: {
+    acpServerType: string;
+    modeId?: string | null;
+    modelId?: string | null;
+    initNewWorktree: boolean;
+  } | null;
 }
 
 /** 引擎可操作的最小实例结构 */
@@ -64,6 +70,13 @@ export interface TransitionPayload {
   artifacts?: { title: string; value: string }[];
   /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记） */
   source?: string;
+  /** restart：可选的新 Agent 配置 */
+  agentConfig?: {
+    acpServerType: string;
+    modeId?: string | null;
+    modelId?: string | null;
+    initNewWorktree: boolean;
+  } | null;
 }
 
 /**
@@ -72,13 +85,14 @@ export interface TransitionPayload {
  * - onNodeRework：节点进入 REWORK（resume 原会话并发送打回原因）
  * - onNodeResume：REJECT→RUNNING（通知其重新获取产物）
  * - onNodeDone：节点 DONE 后结束本会话（在下游 start 之后调用）
+ * - onNodeRestart：重启节点（可携带新 agentConfig 更新节点快照）
  */
 export interface EngineHooks {
   onNodeStart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeRework?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
   onNodeResume?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeDone?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
-  onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
+  onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
 }
 
 /** 显式状态转移表（event → 允许的源状态 → 目标状态） */
@@ -259,8 +273,12 @@ class WorkflowEngine {
         node.failInfo = null;
         node.rejectInfo = null;
         node.fallbackSent = false;
+        // 如果提供了新 agentConfig，更新节点快照
+        if (payload.agentConfig) {
+          node.agentConfig = payload.agentConfig;
+        }
         this.markLastNode(instance, node);
-        await this.hooks.onNodeRestart?.(instance, node);
+        await this.hooks.onNodeRestart?.(instance, node, payload);
         break;
       }
     }

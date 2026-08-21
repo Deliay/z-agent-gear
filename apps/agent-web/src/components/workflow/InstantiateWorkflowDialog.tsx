@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
@@ -66,6 +66,8 @@ export default function InstantiateWorkflowDialog({
   // 步骤 2：实例化前配置界面
   const [step, setStep] = useState<1 | 2>(1)
   const [nodes, setNodes] = useState<EditableNode[]>([])
+  const [createWorkflowWorktree, setCreateWorkflowWorktree] = useState(false)
+  const userTouchedWorktreeRef = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -95,6 +97,7 @@ export default function InstantiateWorkflowDialog({
   const isGitRepo = gitData?.detectGitRepo?.isGitRepo ?? false
   const blockedByGit = requiresWorktree && !isGitRepo
 
+  // 打开对话框时重置状态，并根据 isGitRepo 设置 Worktree 默认值
   useEffect(() => {
     if (!open) return
     setStep(1)
@@ -102,9 +105,19 @@ export default function InstantiateWorkflowDialog({
     setSourceId('')
     setName('')
     setNodes([])
+    // 若已检测到 Git 仓库且用户未手动操作，默认勾选 Worktree
+    setCreateWorkflowWorktree(isGitRepo && !userTouchedWorktreeRef.current)
+    userTouchedWorktreeRef.current = false
     setError(null)
     setSubmitting(false)
   }, [open])
+
+  // isGitRepo 查询延迟返回时，补充设置默认值
+  useEffect(() => {
+    if (isGitRepo && !userTouchedWorktreeRef.current && open) {
+      setCreateWorkflowWorktree(true)
+    }
+  }, [isGitRepo, open])
 
   const handleSourceIdSelect = (id: string, workflowName?: string) => {
     setSourceId(id)
@@ -153,6 +166,7 @@ export default function InstantiateWorkflowDialog({
         workspaceId,
         name: name.trim(),
         nodes: nodes.map(toConfiguredNodeInput),
+        createWorkflowWorktree: isGitRepo ? createWorkflowWorktree : false,
       }
       const { data } = await instantiateWorkflow({
         variables: { input },
@@ -292,6 +306,30 @@ export default function InstantiateWorkflowDialog({
                 availableServerTypes={availableAcpTypes}
                 controllerId={controllerId}
               />
+
+              {isGitRepo && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="createWorkflowWorktree"
+                    checked={createWorkflowWorktree}
+                    onChange={(e) => {
+                      userTouchedWorktreeRef.current = true
+                      setCreateWorkflowWorktree(e.target.checked)
+                    }}
+                    className="h-4 w-4 rounded border-gray-300"
+                  />
+                  <Label htmlFor="createWorkflowWorktree" className="text-sm">
+                    为工作流创建独立 Worktree
+                  </Label>
+                </div>
+              )}
+
+              {!isGitRepo && (
+                <div className="text-xs text-muted-foreground">
+                  当前工作区不是 Git 仓库，无法创建 Worktree
+                </div>
+              )}
 
               {blockedByGit && (
                 <div className="rounded-md bg-warning/10 p-3 text-sm text-warning">
