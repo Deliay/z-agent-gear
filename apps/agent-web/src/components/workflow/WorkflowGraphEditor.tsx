@@ -272,6 +272,7 @@ function SortableNodeItem({
             <button
               type="button"
               className="cursor-grab active:cursor-grabbing"
+              aria-label={`拖动排序 ${index + 1}`}
               {...attributes}
               {...listeners}
             >
