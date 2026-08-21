@@ -39,6 +39,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     dependsOn: [String!]!
     requiresWorktree: Boolean!
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
   }
 
   type WorkflowTemplate {
@@ -73,6 +75,8 @@ export const workflowTypeDefs = `#graphql
     dependsOn: [String!]!
     requiresWorktree: Boolean!
     agentConfig: AgentNodeConfig
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
   }
 
   type ConfiguredWorkflow {
@@ -115,6 +119,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     agentConfig: AgentNodeConfig
     requiresWorktree: Boolean
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
     createdAt: String!
     startedAt: String
     reworkedAt: String
@@ -140,6 +146,10 @@ export const workflowTypeDefs = `#graphql
     lastNodeName: String
     lastNodeStatus: String
     archived: Boolean!
+    # 工作流 Worktree 路径（createWorkflowWorktree=true 且 Git 工作区时存在）
+    workflowWorktreePath: String
+    # 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在）
+    workflowWorktreeBranch: String
     nodes: [WorkflowNode!]!
     blackboard: [BlackboardEntry!]!
     blackboardTrash: [BlackboardEntry!]!
@@ -159,6 +169,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     dependsOn: [String!]!
     requiresWorktree: Boolean!
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
   }
 
   input WorkflowTemplateInput {
@@ -185,6 +197,8 @@ export const workflowTypeDefs = `#graphql
     dependsOn: [String!]!
     requiresWorktree: Boolean!
     agentConfig: AgentNodeConfigInput
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
   }
 
   input ConfigureWorkflowInput {
@@ -203,6 +217,8 @@ export const workflowTypeDefs = `#graphql
     workspaceId: ID!
     name: String!
     nodes: [ConfiguredWorkflowNodeInput!]!
+    # 是否为工作流创建独立 Worktree（默认 false）
+    createWorkflowWorktree: Boolean
   }
 
   # ---------- 实例节点编辑 ----------
@@ -215,6 +231,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     requiresWorktree: Boolean
     agentConfig: AgentNodeConfigInput
+    # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: Int
   }
 
   # ---------- Query / Mutation ----------
@@ -240,7 +258,7 @@ export const workflowTypeDefs = `#graphql
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
     # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
-    restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
+    restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
   }
