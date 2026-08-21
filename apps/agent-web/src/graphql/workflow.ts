@@ -94,6 +94,7 @@ export interface WorkflowNodeData {
   agentConfig: AgentNodeConfigData | null
   requiresWorktree: boolean | null
   sortOrder: number | null
+  dependsOn: string[]
   createdAt: string
   startedAt: string | null
   reworkedAt: string | null
@@ -331,6 +332,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
         }
         requiresWorktree
         sortOrder
+        dependsOn
         createdAt
         startedAt
         reworkedAt

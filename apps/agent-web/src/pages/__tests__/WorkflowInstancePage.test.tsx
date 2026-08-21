@@ -62,6 +62,7 @@ function makeInstance(): WorkflowInstanceData {
         agentConfig: null,
         requiresWorktree: null,
         sortOrder: null,
+        dependsOn: [],
         createdAt: '2026-08-08T00:00:00Z',
         startedAt: null,
         reworkedAt: null,

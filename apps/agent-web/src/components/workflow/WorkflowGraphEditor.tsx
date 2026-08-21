@@ -52,13 +52,20 @@ const NODE_TYPE_ORDER: WorkflowNodeType[] = ['HUMAN', 'AI', 'FLAG']
 /** 下拉「留空」哨兵值（Select 不接受空字符串） */
 const EMPTY_OPTION_VALUE = '__default__'
 
-/** 只读流程图预览：按阶段分组静态渲染 */
+/** 只读流程图预览：按阶段分组静态渲染，按 sortOrder 排序 */
 function FlowPreview({ nodes }: { nodes: EditableNode[] }) {
   const stages: string[] = []
   for (const node of nodes) {
     const stage = node.stage.trim() || '未命名阶段'
     if (!stages.includes(stage)) stages.push(stage)
   }
+
+  // 按 sortOrder 排序节点
+  const sortedNodes = [...nodes].sort((a, b) => {
+    const orderA = a.sortOrder ?? Infinity
+    const orderB = b.sortOrder ?? Infinity
+    return orderA - orderB
+  })
 
   return (
     <div className="rounded-lg border bg-muted/30 p-3" data-testid="flow-preview">
@@ -68,7 +75,7 @@ function FlowPreview({ nodes }: { nodes: EditableNode[] }) {
           <div key={stage}>
             <div className="mb-1 text-xs font-semibold text-foreground">{stage}</div>
             <div className="flex flex-wrap gap-1.5">
-              {nodes
+              {sortedNodes
                 .filter((n) => (n.stage.trim() || '未命名阶段') === stage)
                 .map((n, i) => (
                   <Badge key={`${n.nodeKey}-${i}`} variant="secondary">
@@ -181,8 +188,8 @@ function AgentNodeOptionFields({
     skip: !controllerId || !config.acpServerType,
   })
   const probing = Boolean(config.acpServerType) && loading
-  const modes = data?.acpServerOptions.modes ?? []
-  const models = data?.acpServerOptions.models ?? []
+  const modes = data?.acpServerOptions?.modes ?? []
+  const models = data?.acpServerOptions?.models ?? []
   return (
     <>
       <AgentOptionField
@@ -615,7 +622,12 @@ export default function WorkflowGraphEditor({
 
     if (oldIndex !== -1 && newIndex !== -1) {
       const newNodes = arrayMove(nodes, oldIndex, newIndex)
-      onNodesChange(newNodes)
+      // 拖拽结束时重排并写入 sortOrder（0..n-1）
+      const sortedNodes = newNodes.map((node, index) => ({
+        ...node,
+        sortOrder: index,
+      }))
+      onNodesChange(sortedNodes)
     }
   }
 
