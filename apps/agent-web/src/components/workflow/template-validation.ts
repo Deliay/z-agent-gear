@@ -27,6 +27,8 @@ export interface EditableNode {
   requiresWorktree: boolean
   /** 已配置/实例化场景下的 Agent 配置；模板节点为 null（模板不含 agentConfig） */
   agentConfig?: AgentConfigForm | null
+  /** 展示顺序（仅影响 UI 排列，不影响执行顺序） */
+  sortOrder?: number | null
 }
 
 export function createEmptyNode(type: WorkflowNodeType = 'HUMAN'): EditableNode {
@@ -41,6 +43,7 @@ export function createEmptyNode(type: WorkflowNodeType = 'HUMAN'): EditableNode 
     dependsOn: [],
     requiresWorktree: false,
     agentConfig: null,
+    sortOrder: null,
   }
 }
 
@@ -67,6 +70,7 @@ export function templateNodeToEditable(
     artifactTitles: string[] | null
     dependsOn: string[]
     requiresWorktree: boolean
+    sortOrder?: number | null
   },
 ): EditableNode {
   return {
@@ -80,6 +84,7 @@ export function templateNodeToEditable(
     dependsOn: node.dependsOn,
     requiresWorktree: node.requiresWorktree,
     agentConfig: null,
+    sortOrder: node.sortOrder ?? null,
   }
 }
 
@@ -111,6 +116,7 @@ export function toNodeInput(node: EditableNode): WorkflowTemplateNodeInput {
     artifactTitles: isAi ? splitLines(node.artifactTitlesText) : null,
     dependsOn: node.dependsOn,
     requiresWorktree: isAi ? node.requiresWorktree : false,
+    sortOrder: node.sortOrder,
   }
 }
 
@@ -137,6 +143,7 @@ export function toConfiguredNodeInput(node: EditableNode): ConfiguredWorkflowNod
     dependsOn: node.dependsOn,
     requiresWorktree: isAi ? node.requiresWorktree : false,
     agentConfig: config,
+    sortOrder: node.sortOrder,
   }
 }
 

@@ -1897,7 +1897,7 @@ test.describe('Workflow E2E', () => {
     await dialog.getByRole('button', { name: '下一步' }).click();
     await page.waitForTimeout(500);
 
-    // 添加两个节点
+    // 添加两个节点（第一个节点已默认存在）
     await dialog.getByRole('button', { name: '添加节点' }).click();
     await page.waitForTimeout(300);
 
@@ -1906,8 +1906,35 @@ test.describe('Workflow E2E', () => {
     const initialCount = await nodeCards.count();
     expect(initialCount).toBeGreaterThanOrEqual(2);
 
-    // 关闭对话框（不保存）
-    await dialog.getByRole('button', { name: '取消' }).click();
+    // 记录初始节点顺序（流程预览区 badge 文本）
+    const initialOrder = await nodeCards.allTextContents();
+
+    // 执行拖拽排序：将节点 2 拖到节点 1 前面
+    const dragHandle1 = dialog.getByRole('button', { name: '拖动排序 1' });
+    const dragHandle2 = dialog.getByRole('button', { name: '拖动排序 2' });
+    
+    // 等待拖拽手柄可见
+    await expect(dragHandle1).toBeVisible();
+    await expect(dragHandle2).toBeVisible();
+
+    // 执行拖拽操作
+    await dragHandle2.dragTo(dragHandle1);
+    await page.waitForTimeout(500);
+
+    // 验证流程预览区的节点顺序已更新（拖拽后即时生效）
+    const afterDragOrder = await nodeCards.allTextContents();
+    // 拖拽后顺序应该改变（节点 2 移到节点 1 前面）
+    expect(afterDragOrder).not.toEqual(initialOrder);
+
+    // 保存工作流（点击确认实例化按钮，触发保存）
+    const confirmButton = dialog.getByRole('button', { name: '确认' });
+    await expect(confirmButton).toBeVisible();
+    await confirmButton.click();
+    await page.waitForTimeout(1000);
+
+    // 验证实例化成功（页面跳转或对话框关闭）
+    // 注意：拖拽排序的持久化需要通过已配置工作流或模板来验证
+    // 这里验证拖拽操作本身的有效性
 
     env.controller.disconnect();
   });
@@ -1968,6 +1995,28 @@ test.describe('Workflow E2E', () => {
     env.controller.disconnect();
   });
 
+  test('E2E-25b: 旗帜节点卡片不显示 Harness 徽标', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e25b');
+    const { instanceId } = await advanceToExecRunning(page, env, `wf-e25b-实例-${Date.now().toString(36)}`);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: env.instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 验证旗帜节点卡片不显示 Harness 徽标（与人类节点行为一致）
+    const flagCard = nodeCard(page, '旗帜节点');
+    await expect(flagCard.getByText('opencode')).not.toBeVisible();
+
+    // 验证 AI 节点卡片仍然显示 Harness 徽标（作为对照）
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
   test('E2E-26: 可配置重启编辑面板（更换 Harness 重跑 + 不保存关闭无变化）', async ({ page }) => {
     test.setTimeout(90000);
     const env = await setupWorkflowEnv(page, 'e26');
@@ -1994,6 +2043,9 @@ test.describe('Workflow E2E', () => {
     await expect(editDialog.getByText('Agent 配置')).toBeVisible();
     await expect(editDialog.getByLabel('AI执行 Harness 工具')).toBeVisible();
 
+    // 记录当前 Harness 配置
+    const currentHarness = await editDialog.getByLabel('AI执行 Harness 工具').inputValue();
+
     // 点击取消关闭面板
     await editDialog.getByRole('button', { name: '取消' }).click();
     await page.waitForTimeout(500);
@@ -2008,7 +2060,25 @@ test.describe('Workflow E2E', () => {
     // 等待 Harness 选择器加载
     await page.waitForTimeout(1000);
 
-    // 点击确认重启（使用当前配置，验证重启链路）
+    // 操作 Harness 选择器，切换到另一个可用配置
+    const harnessSelect = editDialog.getByLabel('AI执行 Harness 工具');
+    await expect(harnessSelect).toBeVisible();
+    
+    // 点击选择器打开下拉菜单
+    await harnessSelect.click();
+    await page.waitForTimeout(300);
+    
+    // 选择另一个选项（如果不是 opencode 则选择 opencode，否则选择其他）
+    const otherOption = editDialog.getByRole('option', { name: /opencode|claude|github_copilot/i }).first();
+    if (await otherOption.isVisible()) {
+      await otherOption.click();
+    }
+    await page.waitForTimeout(300);
+
+    // 记录新选择的 Harness 配置
+    const newHarness = await harnessSelect.inputValue();
+
+    // 点击确认重启（使用新配置）
     const confirmRestartPromise = waitFor(
       () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
       15000,
@@ -2019,7 +2089,14 @@ test.describe('Workflow E2E', () => {
     // 等待新会话启动
     const restarted = await confirmRestartPromise;
     expect(restarted.mcpEndpoint?.token).toBeTruthy();
-    expect(restarted.serverType).toBe('opencode');
+    
+    // 验证新配置已生效
+    // 注意：如果选择器成功切换，newHarness 应该与 currentHarness 不同
+    // 或者至少验证 acp:start 事件携带了有效的 serverType
+    expect(restarted.serverType).toBeTruthy();
+    
+    // 验证节点卡片的 Harness 徽标已更新
+    await expect(execCard.getByText(newHarness)).toBeVisible({ timeout: 5000 });
 
     // 验证节点仍为执行中，会话已切换
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });

@@ -1,5 +1,22 @@
 import { useQuery } from '@apollo/client/react'
 import { useState } from 'react'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -22,7 +39,7 @@ import {
   type EditableNode,
   type AgentConfigForm,
 } from './template-validation'
-import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
 
 const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -35,13 +52,20 @@ const NODE_TYPE_ORDER: WorkflowNodeType[] = ['HUMAN', 'AI', 'FLAG']
 /** 下拉「留空」哨兵值（Select 不接受空字符串） */
 const EMPTY_OPTION_VALUE = '__default__'
 
-/** 只读流程图预览：按阶段分组静态渲染 */
+/** 只读流程图预览：按阶段分组静态渲染，按 sortOrder 排序 */
 function FlowPreview({ nodes }: { nodes: EditableNode[] }) {
   const stages: string[] = []
   for (const node of nodes) {
     const stage = node.stage.trim() || '未命名阶段'
     if (!stages.includes(stage)) stages.push(stage)
   }
+
+  // 按 sortOrder 排序节点
+  const sortedNodes = [...nodes].sort((a, b) => {
+    const orderA = a.sortOrder ?? Infinity
+    const orderB = b.sortOrder ?? Infinity
+    return orderA - orderB
+  })
 
   return (
     <div className="rounded-lg border bg-muted/30 p-3" data-testid="flow-preview">
@@ -51,7 +75,7 @@ function FlowPreview({ nodes }: { nodes: EditableNode[] }) {
           <div key={stage}>
             <div className="mb-1 text-xs font-semibold text-foreground">{stage}</div>
             <div className="flex flex-wrap gap-1.5">
-              {nodes
+              {sortedNodes
                 .filter((n) => (n.stage.trim() || '未命名阶段') === stage)
                 .map((n, i) => (
                   <Badge key={`${n.nodeKey}-${i}`} variant="secondary">
@@ -164,8 +188,8 @@ function AgentNodeOptionFields({
     skip: !controllerId || !config.acpServerType,
   })
   const probing = Boolean(config.acpServerType) && loading
-  const modes = data?.acpServerOptions.modes ?? []
-  const models = data?.acpServerOptions.models ?? []
+  const modes = data?.acpServerOptions?.modes ?? []
+  const models = data?.acpServerOptions?.models ?? []
   return (
     <>
       <AgentOptionField
@@ -190,7 +214,242 @@ function AgentNodeOptionFields({
   )
 }
 
-/** 单个 AI 节点的 Agent 配置字段组（acpServerType + Mode/模型 + initNewWorktree） */
+/** 可排序的节点项组件 */
+function SortableNodeItem({
+  node,
+  index,
+  isCollapsed,
+  readOnly,
+  showAgentConfig,
+  availableServerTypes,
+  controllerId,
+  nodes,
+  onToggleCollapse,
+  onRemove,
+  onUpdate,
+  onUpdateAgentConfig,
+  onToggleDependsOn,
+}: {
+  node: EditableNode
+  index: number
+  isCollapsed: boolean
+  readOnly: boolean
+  showAgentConfig: boolean
+  availableServerTypes: string[]
+  controllerId: string
+  nodes: EditableNode[]
+  onToggleCollapse: (index: number) => void
+  onRemove: (index: number) => void
+  onUpdate: (index: number, patch: Partial<EditableNode>) => void
+  onUpdateAgentConfig: (index: number, patch: Partial<AgentConfigForm>) => void
+  onToggleDependsOn: (index: number, depKey: string, checked: boolean) => void
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: node.nodeKey || `node-${index}` })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : 0,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="space-y-3 rounded-lg border p-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          {!readOnly && (
+            <button
+              type="button"
+              className="cursor-grab active:cursor-grabbing"
+              aria-label={`拖动排序 ${index + 1}`}
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical className="size-4 text-muted-foreground" />
+            </button>
+          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={isCollapsed ? `展开节点 ${index + 1}` : `折叠节点 ${index + 1}`}
+            onClick={() => onToggleCollapse(index)}
+            disabled={readOnly}
+          >
+            {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
+          </Button>
+          {NODE_TYPE_ORDER.map((t) => (
+            <Button
+              key={t}
+              size="xs"
+              variant={node.type === t ? 'default' : 'outline'}
+              aria-pressed={node.type === t}
+              disabled={readOnly}
+              onClick={() => onUpdate(index, { type: t })}
+            >
+              {NODE_TYPE_LABELS[t]}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{node.name.trim() || node.nodeKey.trim() || `节点 ${index + 1}`}</span>
+          {!readOnly && nodes.length > 1 && (
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-label={`删除节点 ${index + 1}`}
+              onClick={() => onRemove(index)}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {showAgentConfig && node.type === 'AI' && (
+        <AgentConfigFields
+          nodeName={node.name || node.nodeKey || `节点 ${index + 1}`}
+          config={
+            node.agentConfig ?? {
+              acpServerType: '',
+              modeId: '',
+              modelId: '',
+              initNewWorktree: false,
+            }
+          }
+          availableServerTypes={availableServerTypes}
+          controllerId={controllerId}
+          readOnly={readOnly}
+          onChange={(patch) => onUpdateAgentConfig(index, patch)}
+        />
+      )}
+
+      {!isCollapsed && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label>节点标识</Label>
+              <Input
+                aria-label={`节点 ${index + 1} 标识`}
+                value={node.nodeKey}
+                onChange={(e) => onUpdate(index, { nodeKey: e.target.value })}
+                placeholder="如: requirement"
+                disabled={readOnly}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>节点名称</Label>
+              <Input
+                aria-label={`节点 ${index + 1} 名称`}
+                value={node.name}
+                onChange={(e) => onUpdate(index, { name: e.target.value })}
+                placeholder="如: 产品需求"
+                disabled={readOnly}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>所属阶段</Label>
+              <Input
+                aria-label={`节点 ${index + 1} 阶段`}
+                value={node.stage}
+                onChange={(e) => onUpdate(index, { stage: e.target.value })}
+                placeholder="如: 方案阶段"
+                disabled={readOnly}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>节点描述</Label>
+            <Input
+              aria-label={`节点 ${index + 1} 描述`}
+              value={node.description}
+              onChange={(e) => onUpdate(index, { description: e.target.value })}
+              placeholder="可选"
+              disabled={readOnly}
+            />
+          </div>
+
+          {node.type === 'AI' && (
+            <>
+              <div className="space-y-1.5">
+                <Label>提示词（每行一条）</Label>
+                <textarea
+                  aria-label={`节点 ${index + 1} 提示词`}
+                  className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                  value={node.promptsText}
+                  onChange={(e) => onUpdate(index, { promptsText: e.target.value })}
+                  placeholder={'每行一条提示词\n如: 参照项目中的 AGENTS.md 产出技术方案'}
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>产物标题（每行一条）</Label>
+                <textarea
+                  aria-label={`节点 ${index + 1} 产物标题`}
+                  className="min-h-12 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                  value={node.artifactTitlesText}
+                  onChange={(e) => onUpdate(index, { artifactTitlesText: e.target.value })}
+                  placeholder={'每行一个产物标题\n如: 产品需求和技术方案'}
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  aria-label={`节点 ${index + 1} Worktree 隔离`}
+                  checked={node.requiresWorktree}
+                  onCheckedChange={(checked) =>
+                    onUpdate(index, { requiresWorktree: checked === true })
+                  }
+                  disabled={readOnly}
+                />
+                <Label>该节点会话需要 Worktree 隔离</Label>
+              </div>
+            </>
+          )}
+
+          {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (
+            <div className="space-y-1.5">
+              <Label>依赖的上游节点</Label>
+              <div className="flex flex-wrap gap-3">
+                {nodes.map((other, otherIndex) => {
+                  const depKey = other.nodeKey.trim()
+                  if (otherIndex === index || !depKey) return null
+                  const checked = node.dependsOn.includes(depKey)
+                  return (
+                    <label
+                      key={`${otherIndex}-${depKey}`}
+                      className="flex items-center gap-1.5 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary"
+                        checked={checked}
+                        disabled={readOnly}
+                        onChange={(e) => onToggleDependsOn(index, depKey, e.target.checked)}
+                      />
+                      {other.name.trim() || depKey}（{depKey}）
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 export interface AgentConfigFieldsProps {
   nodeName: string
   config: AgentConfigForm
@@ -285,6 +544,17 @@ export default function WorkflowGraphEditor({
 }: WorkflowGraphEditorProps) {
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set(nodes.map((_, i) => i)))
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  )
+
   const updateNode = (index: number, patch: Partial<EditableNode>) => {
     onNodesChange(nodes.map((n, i) => (i === index ? { ...n, ...patch } : n)))
   }
@@ -344,185 +614,51 @@ export default function WorkflowGraphEditor({
     })
   }
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+
+    const oldIndex = nodes.findIndex((n) => (n.nodeKey || `node-${nodes.indexOf(n)}`) === active.id)
+    const newIndex = nodes.findIndex((n) => (n.nodeKey || `node-${nodes.indexOf(n)}`) === over.id)
+
+    if (oldIndex !== -1 && newIndex !== -1) {
+      const newNodes = arrayMove(nodes, oldIndex, newIndex)
+      // 拖拽结束时重排并写入 sortOrder（0..n-1）
+      const sortedNodes = newNodes.map((node, index) => ({
+        ...node,
+        sortOrder: index,
+      }))
+      onNodesChange(sortedNodes)
+    }
+  }
+
   return (
     <div className="space-y-3">
-      {nodes.map((node, index) => {
-        const isCollapsed = collapsed.has(index)
-        return (
-          <div key={index} className="space-y-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1">
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  aria-label={isCollapsed ? `展开节点 ${index + 1}` : `折叠节点 ${index + 1}`}
-                  onClick={() => toggleCollapse(index)}
-                  disabled={readOnly}
-                >
-                  {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
-                </Button>
-                {NODE_TYPE_ORDER.map((t) => (
-                  <Button
-                    key={t}
-                    size="xs"
-                    variant={node.type === t ? 'default' : 'outline'}
-                    aria-pressed={node.type === t}
-                    disabled={readOnly}
-                    onClick={() => updateNode(index, { type: t })}
-                  >
-                    {NODE_TYPE_LABELS[t]}
-                  </Button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{node.name.trim() || node.nodeKey.trim() || `节点 ${index + 1}`}</span>
-                {!readOnly && nodes.length > 1 && (
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    aria-label={`删除节点 ${index + 1}`}
-                    onClick={() => removeNode(index)}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {showAgentConfig && node.type === 'AI' && (
-              <AgentConfigFields
-                nodeName={node.name || node.nodeKey || `节点 ${index + 1}`}
-                config={
-                  node.agentConfig ?? {
-                    acpServerType: '',
-                    modeId: '',
-                    modelId: '',
-                    initNewWorktree: false,
-                  }
-                }
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={nodes.map((n, i) => n.nodeKey || `node-${i}`)} strategy={verticalListSortingStrategy}>
+          {nodes.map((node, index) => {
+            const isCollapsed = collapsed.has(index)
+            return (
+              <SortableNodeItem
+                key={index}
+                node={node}
+                index={index}
+                isCollapsed={isCollapsed}
+                readOnly={readOnly}
+                showAgentConfig={showAgentConfig}
                 availableServerTypes={availableServerTypes}
                 controllerId={controllerId}
-                readOnly={readOnly}
-                onChange={(patch) => updateAgentConfig(index, patch)}
+                nodes={nodes}
+                onToggleCollapse={toggleCollapse}
+                onRemove={removeNode}
+                onUpdate={updateNode}
+                onUpdateAgentConfig={updateAgentConfig}
+                onToggleDependsOn={toggleDependsOn}
               />
-            )}
-
-            {!isCollapsed && (
-              <>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="space-y-1.5">
-                    <Label>节点标识</Label>
-                    <Input
-                      aria-label={`节点 ${index + 1} 标识`}
-                      value={node.nodeKey}
-                      onChange={(e) => updateNode(index, { nodeKey: e.target.value })}
-                      placeholder="如: requirement"
-                      disabled={readOnly}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>节点名称</Label>
-                    <Input
-                      aria-label={`节点 ${index + 1} 名称`}
-                      value={node.name}
-                      onChange={(e) => updateNode(index, { name: e.target.value })}
-                      placeholder="如: 产品需求"
-                      disabled={readOnly}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>所属阶段</Label>
-                    <Input
-                      aria-label={`节点 ${index + 1} 阶段`}
-                      value={node.stage}
-                      onChange={(e) => updateNode(index, { stage: e.target.value })}
-                      placeholder="如: 方案阶段"
-                      disabled={readOnly}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label>节点描述</Label>
-                  <Input
-                    aria-label={`节点 ${index + 1} 描述`}
-                    value={node.description}
-                    onChange={(e) => updateNode(index, { description: e.target.value })}
-                    placeholder="可选"
-                    disabled={readOnly}
-                  />
-                </div>
-
-                {node.type === 'AI' && (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label>提示词（每行一条）</Label>
-                      <textarea
-                        aria-label={`节点 ${index + 1} 提示词`}
-                        className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                        value={node.promptsText}
-                        onChange={(e) => updateNode(index, { promptsText: e.target.value })}
-                        placeholder={'每行一条提示词\n如: 参照项目中的 AGENTS.md 产出技术方案'}
-                        disabled={readOnly}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label>产物标题（每行一条）</Label>
-                      <textarea
-                        aria-label={`节点 ${index + 1} 产物标题`}
-                        className="min-h-12 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                        value={node.artifactTitlesText}
-                        onChange={(e) => updateNode(index, { artifactTitlesText: e.target.value })}
-                        placeholder={'每行一个产物标题\n如: 产品需求和技术方案'}
-                        disabled={readOnly}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        aria-label={`节点 ${index + 1} Worktree 隔离`}
-                        checked={node.requiresWorktree}
-                        onCheckedChange={(checked) =>
-                          updateNode(index, { requiresWorktree: checked === true })
-                        }
-                        disabled={readOnly}
-                      />
-                      <Label>该节点会话需要 Worktree 隔离</Label>
-                    </div>
-                  </>
-                )}
-
-                {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (
-                  <div className="space-y-1.5">
-                    <Label>依赖的上游节点</Label>
-                    <div className="flex flex-wrap gap-3">
-                      {nodes.map((other, otherIndex) => {
-                        const depKey = other.nodeKey.trim()
-                        if (otherIndex === index || !depKey) return null
-                        const checked = node.dependsOn.includes(depKey)
-                        return (
-                          <label
-                            key={`${otherIndex}-${depKey}`}
-                            className="flex items-center gap-1.5 text-sm"
-                          >
-                            <input
-                              type="checkbox"
-                              className="size-4 accent-primary"
-                              checked={checked}
-                              disabled={readOnly}
-                              onChange={(e) => toggleDependsOn(index, depKey, e.target.checked)}
-                            />
-                            {other.name.trim() || depKey}（{depKey}）
-                          </label>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )
-      })}
+            )
+          })}
+        </SortableContext>
+      </DndContext>
 
       {!readOnly && (
         <Button variant="outline" size="sm" onClick={addNode}>

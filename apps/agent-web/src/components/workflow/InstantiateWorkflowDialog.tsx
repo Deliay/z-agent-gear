@@ -66,6 +66,7 @@ export default function InstantiateWorkflowDialog({
   // 步骤 2：实例化前配置界面
   const [step, setStep] = useState<1 | 2>(1)
   const [nodes, setNodes] = useState<EditableNode[]>([])
+  const [createWorkflowWorktree, setCreateWorkflowWorktree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -102,6 +103,7 @@ export default function InstantiateWorkflowDialog({
     setSourceId('')
     setName('')
     setNodes([])
+    setCreateWorkflowWorktree(false)
     setError(null)
     setSubmitting(false)
   }, [open])
@@ -153,6 +155,7 @@ export default function InstantiateWorkflowDialog({
         workspaceId,
         name: name.trim(),
         nodes: nodes.map(toConfiguredNodeInput),
+        createWorkflowWorktree: isGitRepo ? createWorkflowWorktree : false,
       }
       const { data } = await instantiateWorkflow({
         variables: { input },
@@ -292,6 +295,27 @@ export default function InstantiateWorkflowDialog({
                 availableServerTypes={availableAcpTypes}
                 controllerId={controllerId}
               />
+
+              {isGitRepo && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="createWorkflowWorktree"
+                    checked={createWorkflowWorktree}
+                    onChange={(e) => setCreateWorkflowWorktree(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300"
+                  />
+                  <Label htmlFor="createWorkflowWorktree" className="text-sm">
+                    为工作流创建独立 Worktree
+                  </Label>
+                </div>
+              )}
+
+              {!isGitRepo && (
+                <div className="text-xs text-muted-foreground">
+                  当前工作区不是 Git 仓库，无法创建 Worktree
+                </div>
+              )}
 
               {blockedByGit && (
                 <div className="rounded-md bg-warning/10 p-3 text-sm text-warning">
