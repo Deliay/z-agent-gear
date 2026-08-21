@@ -1847,9 +1847,11 @@ test.describe('Workflow E2E', () => {
     await dialog.getByRole('button', { name: '下一步' }).click();
     await page.waitForTimeout(500);
 
-    // 验证「为工作流创建 Worktree」选项可见（Git 工作区）
+    // 验证「为工作流创建 Worktree」选项可见且默认勾选（Git 工作区）
     const worktreeCheckbox = dialog.getByLabel('为工作流创建独立 Worktree');
     await expect(worktreeCheckbox).toBeVisible({ timeout: 5000 });
+    // git:check 异步返回后 useEffect 将 checkbox 默认置 true，需等待
+    await expect(worktreeCheckbox).toBeChecked({ timeout: 5000 });
 
     // 关闭对话框（step 2 footer 按钮为「上一步」）
     await dialog.getByRole('button', { name: '上一步' }).click();
@@ -1890,7 +1892,7 @@ test.describe('Workflow E2E', () => {
     env.controller.disconnect();
   });
 
-  test('E2E-23: 拖拽排序保存后实例页节点顺序保持', async ({ page }) => {
+  test('E2E-23: 空白实例化后实例页节点顺序与配置一致（拖拽排序交互依赖人工验收）', async ({ page }) => {
     test.setTimeout(60000);
     const env = await setupWorkflowEnv(page, 'e23');
 
@@ -1987,7 +1989,7 @@ test.describe('Workflow E2E', () => {
     // 收集实例页所有节点卡片的名称文本
     const instanceNodeNames = await instanceNodes.allTextContents();
 
-    // afterDragOrder 是 badge 文本（如 "人类 · 需求输入"、"AI · AI执行"），实例页节点卡片包含节点名
+    // badge 文本（如 "人类 · 需求输入"、"AI · AI执行"），实例页节点卡片包含节点名
     // 逐个验证配置区的顺序在实例页保持（提取 "·" 后的名称部分匹配）
     for (const badgeText of initialOrder) {
       const nodeName = badgeText.includes('·') ? badgeText.split('·')[1].trim() : badgeText;

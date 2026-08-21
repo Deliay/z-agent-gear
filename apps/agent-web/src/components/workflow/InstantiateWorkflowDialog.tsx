@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
@@ -67,6 +67,7 @@ export default function InstantiateWorkflowDialog({
   const [step, setStep] = useState<1 | 2>(1)
   const [nodes, setNodes] = useState<EditableNode[]>([])
   const [createWorkflowWorktree, setCreateWorkflowWorktree] = useState(false)
+  const userTouchedWorktreeRef = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -96,6 +97,13 @@ export default function InstantiateWorkflowDialog({
   const isGitRepo = gitData?.detectGitRepo?.isGitRepo ?? false
   const blockedByGit = requiresWorktree && !isGitRepo
 
+  // Git 工作区检测完成后，若用户未手动操作，默认勾选「创建 Worktree」
+  useEffect(() => {
+    if (isGitRepo && !userTouchedWorktreeRef.current) {
+      setCreateWorkflowWorktree(true)
+    }
+  }, [isGitRepo])
+
   useEffect(() => {
     if (!open) return
     setStep(1)
@@ -104,6 +112,7 @@ export default function InstantiateWorkflowDialog({
     setName('')
     setNodes([])
     setCreateWorkflowWorktree(false)
+    userTouchedWorktreeRef.current = false
     setError(null)
     setSubmitting(false)
   }, [open])
@@ -302,7 +311,10 @@ export default function InstantiateWorkflowDialog({
                     type="checkbox"
                     id="createWorkflowWorktree"
                     checked={createWorkflowWorktree}
-                    onChange={(e) => setCreateWorkflowWorktree(e.target.checked)}
+                    onChange={(e) => {
+                      userTouchedWorktreeRef.current = true
+                      setCreateWorkflowWorktree(e.target.checked)
+                    }}
                     className="h-4 w-4 rounded border-gray-300"
                   />
                   <Label htmlFor="createWorkflowWorktree" className="text-sm">
