@@ -97,13 +97,7 @@ export default function InstantiateWorkflowDialog({
   const isGitRepo = gitData?.detectGitRepo?.isGitRepo ?? false
   const blockedByGit = requiresWorktree && !isGitRepo
 
-  // Git 工作区检测完成后，若用户未手动操作，默认勾选「创建 Worktree」
-  useEffect(() => {
-    if (isGitRepo && !userTouchedWorktreeRef.current) {
-      setCreateWorkflowWorktree(true)
-    }
-  }, [isGitRepo])
-
+  // 打开对话框时重置状态，并根据 isGitRepo 设置 Worktree 默认值
   useEffect(() => {
     if (!open) return
     setStep(1)
@@ -111,11 +105,19 @@ export default function InstantiateWorkflowDialog({
     setSourceId('')
     setName('')
     setNodes([])
-    setCreateWorkflowWorktree(false)
+    // 若已检测到 Git 仓库且用户未手动操作，默认勾选 Worktree
+    setCreateWorkflowWorktree(isGitRepo && !userTouchedWorktreeRef.current)
     userTouchedWorktreeRef.current = false
     setError(null)
     setSubmitting(false)
   }, [open])
+
+  // isGitRepo 查询延迟返回时，补充设置默认值
+  useEffect(() => {
+    if (isGitRepo && !userTouchedWorktreeRef.current && open) {
+      setCreateWorkflowWorktree(true)
+    }
+  }, [isGitRepo, open])
 
   const handleSourceIdSelect = (id: string, workflowName?: string) => {
     setSourceId(id)
