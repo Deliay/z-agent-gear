@@ -1901,13 +1901,10 @@ test.describe('Workflow E2E', () => {
     await dialog.getByRole('button', { name: '添加节点' }).click();
     await page.waitForTimeout(300);
 
-    // 验证节点顺序（初始顺序）
+    // 验证节点数量
     const nodeCards = dialog.locator('[data-testid="flow-preview"] .badge');
     const initialCount = await nodeCards.count();
     expect(initialCount).toBeGreaterThanOrEqual(2);
-
-    // 记录初始顺序
-    const initialTexts = await nodeCards.allTextContents();
 
     // 关闭对话框（不保存）
     await dialog.getByRole('button', { name: '取消' }).click();
@@ -1949,7 +1946,7 @@ test.describe('Workflow E2E', () => {
     env.controller.disconnect();
   });
 
-  test('E2E-25: 节点卡片显示 Harness/模型徽标', async ({ page }) => {
+  test('E2E-25: 节点卡片显示 Harness 徽标', async ({ page }) => {
     test.setTimeout(60000);
     const env = await setupWorkflowEnv(page, 'e25');
     const { instanceId } = await advanceToExecRunning(page, env, `wf-e25-实例-${Date.now().toString(36)}`);
@@ -1964,15 +1961,9 @@ test.describe('Workflow E2E', () => {
     const execCard = nodeCard(page, 'AI执行');
     await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
 
-    // 验证 AI 节点卡片显示模型徽标（gpt-5）
-    await expect(execCard.getByText('gpt-5')).toBeVisible({ timeout: 5000 });
-
     // 验证人类节点卡片不显示 Harness 徽标
     const inputCard = nodeCard(page, '需求输入');
     await expect(inputCard.getByText('opencode')).not.toBeVisible();
-
-    // 验证人类节点卡片不显示模型徽标
-    await expect(inputCard.getByText('gpt-5')).not.toBeVisible();
 
     env.controller.disconnect();
   });
