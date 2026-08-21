@@ -1,9 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import Redis from 'ioredis';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MCP_BASE_URL = `${(process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '')}/mcp`;
+
+const redis = new Redis(REDIS_URL);
+
+/** 删除 Redis 中的 ACP 能力缓存 key */
+async function flushCapabilityCache(controllerId: string): Promise<void> {
+  await redis.del(`acp:capability:${controllerId}`);
+}
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -2959,8 +2968,11 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     offlineFake.client.disconnect();
     await sleep(500);
 
+    // 删除 Redis 缓存 key，确保实例化时走缓存缺失路径
+    await flushCapabilityCache(offlineControllerId);
+
     // 实例化时，getAvailableServerTypes 会检查 controller.status
-    // 由于控制器已离线，应报错
+    // 由于控制器已离线且缓存缺失，应报错
     const res = await gqlRequest(
       INSTANTIATE_WORKFLOW,
       { input: instantiateInput(offlineControllerId, cfgId, workspaceId, `wf-a47-实例-${Date.now()}`) },
