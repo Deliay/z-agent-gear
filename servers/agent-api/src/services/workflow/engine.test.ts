@@ -458,6 +458,32 @@ describe('WorkflowEngine.transition', () => {
     }
   });
 
+  it('R4: restart 携带 agentConfig 时更新节点快照', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RUNNING';
+    instance.nodes[1].agentConfig = {
+      acpServerType: 'old-harness',
+      modeId: null,
+      modelId: null,
+      initNewWorktree: false,
+    };
+    loadInstance(instance);
+
+    const newAgentConfig = {
+      acpServerType: 'new-harness',
+      modeId: 'mode-1',
+      modelId: 'model-1',
+      initNewWorktree: true,
+    };
+
+    await workflowEngine.transition('inst-1', 'n2', 'restart', { agentConfig: newAgentConfig });
+
+    const node = instance.nodes[1];
+    expect(node.status).toBe('RUNNING');
+    expect(node.agentConfig).toEqual(newAgentConfig);
+    expect(hooks.onNodeRestart).toHaveBeenCalledWith(instance, node, { agentConfig: newAgentConfig });
+  });
+
   it('已删除实例（deletedAt 非空）拒绝一切转移', async () => {
     const instance = linearInstance();
     instance.nodes[1].status = 'RUNNING';

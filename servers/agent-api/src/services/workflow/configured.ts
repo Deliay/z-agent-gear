@@ -1,7 +1,5 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
-import { Controller } from '../../models/controller.js';
-import { getRedisClient } from '../../middleware/redis.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 import { getAvailableServerTypes } from './capability.js';
 
