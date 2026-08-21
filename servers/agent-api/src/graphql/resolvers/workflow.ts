@@ -94,6 +94,7 @@ function mapInstanceNode(node: Doc) {
           }
         : null,
     requiresWorktree: node.requiresWorktree ?? null,
+    dependsOn: node.dependsOn ?? null,
     sortOrder: node.sortOrder ?? null,
     createdAt: toIso(node.createdAt),
     startedAt: toIso(node.startedAt),

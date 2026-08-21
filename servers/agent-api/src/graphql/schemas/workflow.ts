@@ -118,6 +118,7 @@ export const workflowTypeDefs = `#graphql
     prompts: [String!]
     artifactTitles: [String!]
     agentConfig: AgentNodeConfig
+    dependsOn: [String!]
     requiresWorktree: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
