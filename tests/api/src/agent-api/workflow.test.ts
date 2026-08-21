@@ -186,7 +186,7 @@ const DELETE_WORKFLOW_INSTANCE_MUT = `
 const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
-      id name currentNodeNames lastNodeName lastNodeStatus archived
+      id name currentNodeNames lastNodeName lastNodeStatus archived workflowWorktreePath workflowWorktreeBranch
       nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
