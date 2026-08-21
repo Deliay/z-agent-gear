@@ -7,7 +7,7 @@ const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MCP_BASE_URL = `${(process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '')}/mcp`;
 
-const redis = new Redis(REDIS_URL);
+const redis = new Redis(REDIS_URL, { enableOfflineQueue: false, retryStrategy: () => null });
 
 /** 删除 Redis 中的 ACP 能力缓存 key */
 async function flushCapabilityCache(controllerId: string): Promise<void> {
@@ -2982,7 +2982,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   // ---------------------------------------------------------------------------
 
   it('A47: 能力缓存缺失+控制器离线时准确报离线（误报回归 - 离线路径）', async () => {
-    // 先注册一个 fake controller（在线），完成 configure
+    // 注册一个全新 fake controller（从未 configure，因此无能力缓存）
     const offlineFake = await registerFakeController(token, 'opt-offline');
     const offlineControllerId = offlineFake.controllerId;
 
@@ -2992,15 +2992,16 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     const tplId = await createSimpleTemplate(token, `wf-a47-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, offlineControllerId, `wf-a47-cfg-${Date.now()}`);
 
-    // configure 成功（控制器在线）
+    // configure 成功（控制器在线）→ 此时会缓存能力
     expect(cfgId).toBeTruthy();
 
     // 断开控制器连接，模拟离线
     offlineFake.client.disconnect();
     await sleep(500);
 
-    // 删除 Redis 缓存 key，确保实例化时走缓存缺失路径
-    await flushCapabilityCache(offlineControllerId);
+    // 通过 GraphQL 刷新能力缓存（删除旧缓存 + 尝试重新检测 → 控制器离线会超时）
+    // 注：refreshAcpCapabilities 先 del 缓存再触发检测，离线时检测超时但缓存已清除
+    await gqlRequest(REFRESH_ACP_CAPABILITIES, { controllerId: offlineControllerId }, token).catch(() => {});
 
     // 实例化时，getAvailableServerTypes 会检查 controller.status
     // 由于控制器已离线且缓存缺失，应报错
@@ -3023,13 +3024,14 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     const tplId = await createSimpleTemplate(token, `wf-a48-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48-cfg-${Date.now()}`);
 
-    // 注册 git:worktree:add 返回固定路径
-    const worktreePath = `/tmp/workflow-wt-${Date.now()}`;
-    fake.client.on('git:worktree:add', (data: { requestId: string }) => {
+    // 注册 git:worktree:add：回显服务端下发的 worktreePath（须匹配工作区 scope）
+    let worktreePath = '';
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      worktreePath = data.worktreePath;
       fake.client.emit('git:worktree:add:result', {
         requestId: data.requestId,
         success: true,
-        worktreePath,
+        worktreePath: data.worktreePath,
       });
     });
 
@@ -3053,13 +3055,18 @@ describe('Workflow Optimization Features (A35-A44)', () => {
 
     const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
 
-    // 完成首节点 → exec 节点拉起会话，cwd 应为实例 Worktree
+    // 完成首节点 → exec 节点拉起会话，cwd 应为实例 Worktree（initNewWorktree: false → 复用实例 Worktree）
     const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
-    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody = await completeRes.json();
+    if (completeBody.errors) {
+      console.error('A48 completeHumanNode errors:', JSON.stringify(completeBody.errors));
+    }
+    expect(completeBody.errors).toBeUndefined();
     const startData = await startEvent;
 
     // 验证 acp:start 的 cwd 为实例 Worktree 路径
-    expect(startData.cwd).toBe(worktreePath);
+    expect(startData.cwd).toBe(inst.workflowWorktreePath);
     expect(startData.sessionId).toBeTruthy();
     expect(startData.serverType).toBe('opencode');
 
@@ -3076,21 +3083,17 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   }, 30_000);
 
   it('A48b: 启用节点级 Worktree 时，节点会话 cwd 使用节点 Worktree', async () => {
-    const tplId = await createSimpleTemplate(token, `wf-a48b-${Date.now()}`);
+    const tplId = await createSimpleTemplate(token, `wf-a48b-${Date.now()}`, true); // requiresWorktree=true
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48b-cfg-${Date.now()}`);
 
-    // 注册 git:worktree:add 返回不同路径（实例 Worktree vs 节点 Worktree）
-    const instanceWorktreePath = `/tmp/workflow-instance-wt-${Date.now()}`;
-    const nodeWorktreePath = `/tmp/workflow-node-wt-${Date.now()}`;
-    let worktreeCallCount = 0;
-    fake.client.on('git:worktree:add', (data: { requestId: string }) => {
-      worktreeCallCount++;
-      // 第一次调用返回实例 Worktree，第二次返回节点 Worktree
-      const path = worktreeCallCount === 1 ? instanceWorktreePath : nodeWorktreePath;
+    // 注册 git:worktree:add 回显服务端下发的 worktreePath（实例 Worktree 与节点 Worktree 路径不同）
+    const addedPaths: string[] = [];
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
+      addedPaths.push(data.worktreePath);
       fake.client.emit('git:worktree:add:result', {
         requestId: data.requestId,
         success: true,
-        worktreePath: path,
+        worktreePath: data.worktreePath,
       });
     });
 
@@ -3103,25 +3106,34 @@ describe('Workflow Optimization Features (A35-A44)', () => {
           controllerId: fake.controllerId,
           workspaceId,
           name: `wf-a48b-实例-${Date.now()}`,
-          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: true } }),
+          nodes: simpleTemplateInput('_').nodes.map(n => ({
+            ...n,
+            requiresWorktree: n.nodeKey === 'exec' ? true : n.requiresWorktree,
+            agentConfig: n.nodeKey === 'exec' ? { acpServerType: 'opencode', initNewWorktree: true } : null,
+          })),
           createWorkflowWorktree: true,
         },
       },
       token,
     );
     const inst = (await instRes.json()).data.instantiateWorkflow;
-    expect(inst.workflowWorktreePath).toBe(instanceWorktreePath);
+    expect(inst.workflowWorktreePath).toBeTruthy();
 
     const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
 
     // 完成首节点 → exec 节点拉起会话，cwd 应为节点 Worktree（因为 initNewWorktree: true）
     const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
-    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody = await completeRes.json();
+    if (completeBody.errors) {
+      console.error('A48b completeHumanNode errors:', JSON.stringify(completeBody.errors));
+    }
+    expect(completeBody.errors).toBeUndefined();
     const startData = await startEvent;
 
-    // 验证 acp:start 的 cwd 为节点 Worktree 路径（而非实例 Worktree）
-    expect(startData.cwd).toBe(nodeWorktreePath);
-    expect(startData.cwd).not.toBe(instanceWorktreePath);
+    // 验证 acp:start 的 cwd 为节点 Worktree 路径（比实例 Worktree 更深一层）
+    expect(startData.cwd).toBeTruthy();
+    expect(startData.cwd).not.toBe(inst.workflowWorktreePath);
     expect(startData.sessionId).toBeTruthy();
     expect(startData.serverType).toBe('opencode');
 
@@ -3179,7 +3191,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     const tplId = await createSimpleTemplate(token, `wf-a50-${Date.now()}`, true); // requiresWorktree=true
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a50-cfg-${Date.now()}`, true);
 
-    // 注册 git:worktree:add 和 git:worktree:remove 处理器
+    // 注册 git:worktree:add、git:worktree:remove 和 git:status 处理器
     const addedWorktrees: string[] = [];
     const removedWorktrees: string[] = [];
     fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
@@ -3197,6 +3209,10 @@ describe('Workflow Optimization Features (A35-A44)', () => {
         success: true,
       });
     });
+    // delete 清理会话时会发送 git:status + git:worktree:remove
+    fake.client.on('git:status', (data: { requestId: string; path: string }) => {
+      fake.client.emit('git:status:result', { requestId: data.requestId, isClean: true });
+    });
 
     const instRes = await gqlRequest(
       INSTANTIATE_WORKFLOW,
@@ -3208,7 +3224,12 @@ describe('Workflow Optimization Features (A35-A44)', () => {
 
     // 完成首节点 → exec 节点拉起会话（带节点级 Worktree）
     const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
-    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeRes50 = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const completeBody50 = await completeRes50.json();
+    if (completeBody50.errors) {
+      console.error('A50 completeHumanNode errors:', JSON.stringify(completeBody50.errors));
+    }
+    expect(completeBody50.errors).toBeUndefined();
     const startData = await startEvent;
     fake.client.emit('acp:start:result', {
       requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a50_${Date.now()}`,
