@@ -174,19 +174,36 @@ class WorkflowInstanceService {
       first.status = 'READY';
     }
 
-    return WorkflowInstance.create({
-      userId,
-      controllerId: input.controllerId,
-      workspaceId: input.workspaceId,
-      configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
-      name: input.name,
-      nodes,
-      currentNodeNames: [],
-      lastNodeName: first?.name ?? null,
-      lastNodeStatus: first ? 'READY' : null,
-      workflowWorktreePath,
-      workflowWorktreeBranch,
-    });
+    try {
+      return await WorkflowInstance.create({
+        userId,
+        controllerId: input.controllerId,
+        workspaceId: input.workspaceId,
+        configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
+        name: input.name,
+        nodes,
+        currentNodeNames: [],
+        lastNodeName: first?.name ?? null,
+        lastNodeStatus: first ? 'READY' : null,
+        workflowWorktreePath,
+        workflowWorktreeBranch,
+      });
+    } catch (err) {
+      // 如果创建实例失败且已创建 Worktree，回滚 Worktree
+      if (workflowWorktreePath) {
+        try {
+          await this.removeWorkflowWorktree(
+            input.controllerId,
+            workspace.path,
+            workflowWorktreePath,
+            workflowWorktreeBranch,
+          );
+        } catch (rollbackErr) {
+          console.error('回滚 Worktree 失败:', rollbackErr);
+        }
+      }
+      throw err;
+    }
   }
 
   /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器 */
@@ -196,12 +213,19 @@ class WorkflowInstanceService {
     workflowName: string,
   ): Promise<{ path: string; branch: string }> {
     const redis = getRedisClient();
-    const worktreeDir = '~/.zag/worktrees';
+    
+    // 查询控制器获取 worktreeDir 配置
+    const controller = await Controller.findOne({ _id: controllerId }).lean();
+    const worktreeDir = (controller as { worktreeDir?: string } | null)?.worktreeDir || '~/.zag/worktrees';
+    
+    // slug 化处理：纯中文名会产生空串，使用兜底值
     const slug = workflowName
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
       .replace(/^-|-$/g, '')
-      .slice(0, 50);
+      .slice(0, 50)
+      || `wf-${Date.now().toString(36)}`;
+    
     const branch = `workflow/${slug}`;
     const wtPath = `${worktreeDir}/${workspace.name}/workflow-${slug}`;
 
@@ -439,11 +463,16 @@ class WorkflowInstanceService {
     // 清理工作流 Worktree（如果存在）
     if (instance.workflowWorktreePath) {
       try {
-        await this.removeWorkflowWorktree(
-          instance.controllerId.toString(),
-          instance.workflowWorktreePath,
-          instance.workflowWorktreeBranch ?? undefined,
-        );
+        // 查询工作区路径作为 repoPath
+        const workspace = await ControllerWorkspace.findOne({ _id: instance.workspaceId }).lean();
+        if (workspace) {
+          await this.removeWorkflowWorktree(
+            instance.controllerId.toString(),
+            workspace.path,
+            instance.workflowWorktreePath,
+            instance.workflowWorktreeBranch ?? undefined,
+          );
+        }
       } catch (err) {
         console.error(`删除工作流实例「${instance.name}」的 Worktree 失败:`, err);
       }
@@ -454,6 +483,7 @@ class WorkflowInstanceService {
   /** 清理工作流 Worktree：通过 Redis 发送 git:worktree:remove 命令到控制器 */
   private async removeWorkflowWorktree(
     controllerId: string,
+    repoPath: string,
     worktreePath: string,
     worktreeBranch?: string,
   ): Promise<void> {
@@ -465,6 +495,7 @@ class WorkflowInstanceService {
         type: 'git:worktree:remove',
         requestId,
         controllerId,
+        repoPath,
         worktreePath,
         branch: worktreeBranch,
       }),

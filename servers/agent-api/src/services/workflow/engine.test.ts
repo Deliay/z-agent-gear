@@ -429,7 +429,7 @@ describe('WorkflowEngine.transition', () => {
     expect(node.failInfo).toBeNull();
     expect(node.rejectInfo).toBeNull();
     expect(node.fallbackSent).toBe(false);
-    expect(hooks.onNodeRestart).toHaveBeenCalledWith(instance, node);
+    expect(hooks.onNodeRestart).toHaveBeenCalledWith(instance, node, {});
     expect(instance.currentNodeNames).toEqual(['技术方案']);
   });
 

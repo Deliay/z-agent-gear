@@ -57,7 +57,7 @@ class WorkflowOrchestrator {
       onNodeRework: (instance, node, payload) => this.reworkNodeSession(instance, node, payload),
       onNodeResume: (instance, node) => this.resumeNodeSession(instance, node),
       onNodeDone: (instance, node) => this.endNodeSession(instance, node),
-      onNodeRestart: (instance, node) => this.resumeNodeSession(instance, node),
+      onNodeRestart: (instance, node, payload) => this.restartNodeSession(instance, node, payload),
     });
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
     sessionService.onSessionRemoved((sessionId) => this.handleSessionRemoved(sessionId));
@@ -222,6 +222,26 @@ class WorkflowOrchestrator {
       await sessionService.close(node.sessionId.toString(), instance.userId.toString());
       node.sessionId = undefined;
     }
+    await this.startNodeSession(instance, node);
+  }
+
+  /** 重启节点：关闭旧会话，以全新会话重启（可携带新 agentConfig 更新节点快照） */
+  async restartNodeSession(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    payload: { agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null },
+  ): Promise<void> {
+    // HUMAN/FLAG 节点无会话，重启仅需引擎置 RUNNING，无需拉起会话
+    if (node.type !== 'AI') {
+      return;
+    }
+    // 关闭旧会话
+    if (node.sessionId) {
+      await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+      node.sessionId = undefined;
+    }
+    // 注意：engine.ts 已在 restart 转移前将新 agentConfig 写入节点快照
+    // 此处 startNodeSession 会读取最新的 node.agentConfig
     await this.startNodeSession(instance, node);
   }
 
