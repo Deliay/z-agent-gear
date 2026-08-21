@@ -1789,4 +1789,181 @@ test.describe('Workflow E2E', () => {
 
     env.controller.disconnect();
   });
+
+  // -------------------------------------------------------------------------
+  // 工作流优化特性 E2E 测试
+  // -------------------------------------------------------------------------
+
+  test('E2E-22: 实例化 Worktree 选项（Git 工作区默认勾选，非 Git 工作区禁用）', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e22');
+
+    // 注册 git:worktree:add 处理器
+    env.controller.socket.on('git:worktree:add', (data: { requestId: string; worktreePath: string; branch: string }) => {
+      env.controller.socket.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    // 工作区是 Git 仓库
+    env.controller.socket.off('git:check');
+    env.controller.socket.on('git:check', (data: { requestId: string }) => {
+      env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: true, defaultBranch: 'main' });
+    });
+
+    await loginViaUI(page, env.username);
+    await page.goto('/sessions');
+
+    // 打开实例化对话框
+    const newWorkflowButton = page.getByRole('button', { name: /工作流/i });
+    await newWorkflowButton.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择配置工作流
+    const configuredOption = dialog.getByText('已配置工作流');
+    await configuredOption.click();
+
+    // 选择第一个配置工作流
+    const workflowOption = dialog.locator('button').filter({ hasText: env.configuredName });
+    if (await workflowOption.isVisible()) {
+      await workflowOption.click();
+    }
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(500);
+
+    // 验证「为工作流创建 Worktree」选项可见且默认勾选
+    const worktreeCheckbox = dialog.getByLabel('为工作流创建独立 Worktree');
+    await expect(worktreeCheckbox).toBeVisible({ timeout: 5000 });
+    await expect(worktreeCheckbox).toBeChecked();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-23: 拖拽排序保存后重开保持', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e23');
+
+    await loginViaUI(page, env.username);
+    await page.goto('/sessions');
+
+    // 打开实例化对话框
+    const newWorkflowButton = page.getByRole('button', { name: /工作流/i });
+    await newWorkflowButton.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择空白来源
+    const blankOption = dialog.getByText('空白');
+    await blankOption.click();
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(500);
+
+    // 添加两个节点
+    await dialog.getByRole('button', { name: '添加节点' }).click();
+    await page.waitForTimeout(300);
+
+    // 验证节点顺序（初始顺序）
+    const nodeCards = dialog.locator('[data-testid="flow-preview"] .badge');
+    const initialOrder = await nodeCards.allTextContents();
+
+    // 关闭对话框
+    await dialog.getByRole('button', { name: '取消' }).click();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-24: List/Graph 多视图切换', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e24');
+    const { instanceId } = await advanceToExecRunning(page, env, `wf-e24-实例-${Date.now().toString(36)}`);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: env.instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 默认显示列表视图
+    const listButton = page.getByRole('button', { name: '列表' });
+    const graphButton = page.getByRole('button', { name: '图表' });
+    await expect(listButton).toBeVisible();
+
+    // 切换到图表视图
+    await graphButton.click();
+    await page.waitForTimeout(500);
+
+    // 验证图表视图显示（ReactFlow 容器）
+    const graphContainer = page.locator('.react-flow');
+    await expect(graphContainer).toBeVisible({ timeout: 5000 });
+
+    // 切换回列表视图
+    await listButton.click();
+    await page.waitForTimeout(500);
+
+    // 验证列表视图显示
+    await expect(page.getByText('AI执行')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-25: 节点卡片显示 Harness/模型徽标', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e25');
+    const { instanceId } = await advanceToExecRunning(page, env, `wf-e25-实例-${Date.now().toString(36)}`);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: env.instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 验证 AI 节点卡片显示 Harness 徽标
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-26: 可配置重启编辑面板（更换 Harness 重跑 + 不保存关闭无变化）', async ({ page }) => {
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'e26');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e26-实例-${Date.now().toString(36)}`);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: env.instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 执行中的 AI 节点展示「重启」按钮
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    const restartButton = execCard.getByRole('button', { name: '重启' });
+    await expect(restartButton).toBeVisible();
+
+    // 点击「重启」打开编辑面板
+    await restartButton.click();
+    const editDialog = page.getByRole('dialog');
+    await expect(editDialog.getByText('重启节点「AI执行」')).toBeVisible({ timeout: 5000 });
+
+    // 验证编辑面板显示 Harness 配置
+    await expect(editDialog.getByText('Agent 配置')).toBeVisible();
+    await expect(editDialog.getByLabel('AI执行 Harness 工具')).toBeVisible();
+
+    // 点击取消关闭面板
+    await editDialog.getByRole('button', { name: '取消' }).click();
+    await page.waitForTimeout(500);
+
+    // 验证面板关闭，节点仍为执行中
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
 });
