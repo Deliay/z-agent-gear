@@ -27,6 +27,7 @@ export interface WorkflowTemplateNodeData {
   artifactTitles: string[] | null
   dependsOn: string[]
   requiresWorktree: boolean
+  sortOrder: number | null
 }
 
 export interface WorkflowTemplateData {
@@ -50,6 +51,7 @@ export interface AgentNodeConfigData {
 
 export interface ConfiguredWorkflowNodeData extends WorkflowTemplateNodeData {
   agentConfig: AgentNodeConfigData | null
+  sortOrder: number | null
 }
 
 export interface ConfiguredWorkflowData {
@@ -91,6 +93,7 @@ export interface WorkflowNodeData {
   artifactTitles: string[] | null
   agentConfig: AgentNodeConfigData | null
   requiresWorktree: boolean | null
+  sortOrder: number | null
   createdAt: string
   startedAt: string | null
   reworkedAt: string | null
@@ -121,6 +124,8 @@ export interface WorkflowInstanceSummaryData {
 }
 
 export interface WorkflowInstanceData extends WorkflowInstanceSummaryData {
+  workflowWorktreePath: string | null
+  workflowWorktreeBranch: string | null
   nodes: WorkflowNodeData[]
   blackboard: BlackboardEntryData[]
   blackboardTrash: BlackboardEntryData[]
@@ -136,6 +141,7 @@ export interface WorkflowTemplateNodeInput {
   artifactTitles?: string[] | null
   dependsOn: string[]
   requiresWorktree: boolean
+  sortOrder?: number | null
 }
 
 export interface WorkflowTemplateInput {
@@ -163,6 +169,7 @@ export interface ConfiguredWorkflowNodeInput {
   requiresWorktree: boolean
   // AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig?: AgentNodeConfigInput | null
+  sortOrder?: number | null
 }
 
 export interface ConfigureWorkflowInput {
@@ -182,6 +189,8 @@ export interface InstantiateWorkflowInput {
   name: string
   // 实例化前配置界面编辑后的最终节点图（服务端以此为准校验并快照落库）
   nodes: ConfiguredWorkflowNodeInput[]
+  // 是否为工作流创建独立 Worktree（默认 false）
+  createWorkflowWorktree?: boolean | null
 }
 
 export interface WorkflowNodeUpdateInput {
@@ -192,6 +201,7 @@ export interface WorkflowNodeUpdateInput {
   artifactTitles?: string[] | null
   requiresWorktree?: boolean | null
   agentConfig?: AgentNodeConfigInput | null
+  sortOrder?: number | null
 }
 
 // ---------- Query ----------
@@ -207,6 +217,7 @@ const TEMPLATE_NODE_FIELDS = gql`
     artifactTitles
     dependsOn
     requiresWorktree
+    sortOrder
   }
 `
 
@@ -240,6 +251,7 @@ const CONFIGURED_NODE_FIELDS = gql`
     artifactTitles
     dependsOn
     requiresWorktree
+    sortOrder
   }
 `
 
@@ -298,6 +310,8 @@ export const GET_WORKFLOW_INSTANCE = gql`
       lastNodeName
       lastNodeStatus
       archived
+      workflowWorktreePath
+      workflowWorktreeBranch
       nodes {
         id
         nodeKey
@@ -316,6 +330,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
           initNewWorktree
         }
         requiresWorktree
+        sortOrder
         createdAt
         startedAt
         reworkedAt
@@ -455,8 +470,8 @@ export const REJECT_NODE = gql`
 `
 
 export const RESTART_NODE = gql`
-  mutation RestartNode($instanceId: ID!, $nodeId: ID!) {
-    restartNode(instanceId: $instanceId, nodeId: $nodeId) {
+  mutation RestartNode($instanceId: ID!, $nodeId: ID!, $agentConfig: AgentNodeConfigInput) {
+    restartNode(instanceId: $instanceId, nodeId: $nodeId, agentConfig: $agentConfig) {
       id
       status
     }
