@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import WorkflowNodeTree from '../workflow/WorkflowNodeTree';
 import { toast } from 'sonner';
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow';
