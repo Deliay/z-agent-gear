@@ -1906,6 +1906,9 @@ test.describe('Workflow E2E', () => {
     const initialCount = await nodeCards.count();
     expect(initialCount).toBeGreaterThanOrEqual(2);
 
+    // 记录初始顺序
+    const initialTexts = await nodeCards.allTextContents();
+
     // 关闭对话框（不保存）
     await dialog.getByRole('button', { name: '取消' }).click();
 
@@ -1960,6 +1963,9 @@ test.describe('Workflow E2E', () => {
     // 验证 AI 节点卡片显示 Harness 徽标
     const execCard = nodeCard(page, 'AI执行');
     await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    // 验证 AI 节点卡片显示模型徽标（gpt-5）
+    await expect(execCard.getByText('gpt-5')).toBeVisible({ timeout: 5000 });
 
     // 验证人类节点卡片不显示 Harness 徽标
     const inputCard = nodeCard(page, '需求输入');
