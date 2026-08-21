@@ -1,8 +1,7 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
-import { Controller } from '../../models/controller.js';
-import { getRedisClient } from '../../middleware/redis.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
+import { getAvailableServerTypes } from './capability.js';
 
 export interface AgentNodeConfigInput {
   acpServerType: string;
@@ -23,6 +22,7 @@ export interface ConfiguredWorkflowNodeInput {
   dependsOn?: string[];
   requiresWorktree?: boolean;
   agentConfig?: AgentNodeConfigInput | null;
+  sortOrder?: number | null;
 }
 
 export interface ConfigureWorkflowInput {
@@ -124,7 +124,7 @@ class ConfiguredWorkflowService {
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const snapshot = copyFromTemplate(template, input);
     // 校验模板节点图的 agentConfig 完整性 + capabilities
     validateAgentConfigs(snapshot.nodes as unknown as SourceNodeLike[], availableServerTypes);
@@ -147,7 +147,7 @@ class ConfiguredWorkflowService {
       throw new Error('已配置工作流不存在或无权限');
     }
 
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const fullNodes = this.normalizeConfiguredNodes(input.nodes);
     // 完整图校验 + agentConfig 校验（与模板一致）
     validateTemplateGraph(fullNodes as never);
@@ -191,22 +191,8 @@ class ConfiguredWorkflowService {
       dependsOn: [...(n.dependsOn ?? [])],
       requiresWorktree: n.requiresWorktree ?? false,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+      sortOrder: n.sortOrder ?? undefined,
     }));
-  }
-
-  /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */
-  private async getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
-    if (!controller) {
-      throw new Error('控制器不存在或不属于当前用户');
-    }
-    const redis = getRedisClient();
-    const cached = await redis.get(`acp:capability:${controllerId}`);
-    if (!cached) {
-      throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
-    }
-    const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
-    return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
   }
 
   /**
@@ -218,7 +204,7 @@ class ConfiguredWorkflowService {
     input: ConfigureWorkflowInput,
     meta?: ConfiguredWorkflowCreationMeta,
   ) {
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const fullNodes = this.normalizeConfiguredNodes(input.nodes);
     validateTemplateGraph(fullNodes as never);
     validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);

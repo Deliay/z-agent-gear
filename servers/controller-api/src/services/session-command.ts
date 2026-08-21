@@ -112,6 +112,8 @@ export class SessionCommandService {
             await this.handleGitInit(command.requestId, command.controllerId, command.path);
           } else if (command.type === 'acp:cache:invalidate' && command.controllerId) {
             acpCapabilityDetector.invalidateCache(command.controllerId);
+          } else if (command.type === 'acp:capability:query' && command.requestId && command.controllerId) {
+            await this.handleAcpCapabilityQuery(command.requestId, command.controllerId);
           } else if (command.type === 'acp:list-sessions' && command.requestId && command.controllerId && command.cwd) {
             await this.handleAcpListSessions(command.requestId, command.controllerId, command.cwd, command.serverType ?? 'opencode');
           } else if (command.type === 'acp:load-session' && command.requestId && command.controllerId && command.sessionId && command.cwd) {
@@ -372,6 +374,41 @@ export class SessionCommandService {
 
   private async handleGitInit(requestId: string, controllerId: string, path: string): Promise<void> {
     await gitBrowserService.init(requestId, controllerId, path);
+  }
+
+  private async handleAcpCapabilityQuery(requestId: string, controllerId: string): Promise<void> {
+    if (!this.io) return;
+
+    const controller = await Controller.findById(controllerId).lean();
+    if (!controller) {
+      console.error(`Controller not found for capability query: ${controllerId}`);
+      const redis = getRedisClient();
+      await redis.set(`acp:capability:query:${requestId}`, JSON.stringify({ success: false, error: 'Controller not found' }), 'EX', 60);
+      return;
+    }
+
+    const keyId = controller.keyId.toString();
+    const socketId = await sessionService.getSocketId(keyId);
+    if (!socketId) {
+      console.error(`Controller offline for capability query: ${controllerId}`);
+      const redis = getRedisClient();
+      await redis.set(`acp:capability:query:${requestId}`, JSON.stringify({ success: false, error: 'Controller offline' }), 'EX', 60);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      console.error(`Socket not found for capability query: ${controllerId}`);
+      const redis = getRedisClient();
+      await redis.set(`acp:capability:query:${requestId}`, JSON.stringify({ success: false, error: 'Socket not found' }), 'EX', 60);
+      return;
+    }
+
+    // 主动探测能力并回写缓存
+    const servers = await acpCapabilityDetector.detectCapabilities(socket, controllerId);
+    const redis = getRedisClient();
+    await redis.set(`acp:capability:query:${requestId}`, JSON.stringify({ success: true, servers }), 'EX', 60);
+    console.log(`Capability query completed for ${controllerId}: ${servers.length} servers detected`);
   }
 
   private async handleAcpListSessions(requestId: string, controllerId: string, cwd: string, serverType: string = 'opencode'): Promise<void> {

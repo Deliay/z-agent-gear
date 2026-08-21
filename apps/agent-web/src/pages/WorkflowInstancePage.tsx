@@ -9,6 +9,7 @@ import {
   type GetWorkflowInstanceQuery,
 } from '@/graphql/workflow'
 import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
+import WorkflowGraphView from '@/components/workflow/WorkflowGraphView'
 import { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTreeConstants'
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
@@ -23,7 +24,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Archive, ArchiveRestore, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Trash2, List, GitBranch } from 'lucide-react'
 
 export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
@@ -33,6 +34,16 @@ export default function WorkflowInstancePage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
   const [archiveWorkflowInstance] = useMutation(ARCHIVE_WORKFLOW_INSTANCE)
+  // 视图切换：List/Graph，localStorage 持久化
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
+    const saved = localStorage.getItem('workflow-view-mode')
+    return (saved === 'graph' || saved === 'list') ? saved : 'list'
+  })
+
+  const handleViewModeChange = (mode: 'list' | 'graph') => {
+    setViewMode(mode)
+    localStorage.setItem('workflow-view-mode', mode)
+  }
 
   const { data, loading } = useQuery<GetWorkflowInstanceQuery>(GET_WORKFLOW_INSTANCE, {
     variables: { id: id ?? '' },
@@ -123,10 +134,27 @@ export default function WorkflowInstancePage() {
         ) : (
           <Badge variant="secondary">暂无执行中的节点</Badge>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            variant={viewMode === 'list' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => handleViewModeChange('list')}
+          >
+            <List className="size-3.5" />
+            列表
+          </Button>
+          <Button
+            variant={viewMode === 'graph' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => handleViewModeChange('graph')}
+          >
+            <GitBranch className="size-3.5" />
+            图表
+          </Button>
+        </div>
         <Button
           variant="outline"
           size="sm"
-          className="ml-auto"
           onClick={handleArchive}
         >
           {instance.archived ? (
@@ -172,7 +200,19 @@ export default function WorkflowInstancePage() {
       )}
 
       <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-        <WorkflowNodeTree instance={instance} onOpenSession={setSideSessionId} />
+        {viewMode === 'list' ? (
+          <WorkflowNodeTree instance={instance} onOpenSession={setSideSessionId} />
+        ) : (
+          <WorkflowGraphView
+            instance={instance}
+            onNodeClick={(nodeId) => {
+              const node = instance.nodes.find((n) => n.id === nodeId)
+              if (node?.sessionId) {
+                setSideSessionId(node.sessionId)
+              }
+            }}
+          />
+        )}
         <BlackboardPanel
           blackboard={instance.blackboard}
           trash={instance.blackboardTrash}

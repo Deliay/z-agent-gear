@@ -30,7 +30,7 @@ interface WorkflowController {
 function registerWorkflowController(
   rawKey: string,
   hostname: string,
-  opts: { startDelayMs?: number } = {},
+  opts: { startDelayMs?: number; acpServers?: Array<{ type: string; available: boolean; version: string }> } = {},
 ): Promise<WorkflowController> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, {
@@ -44,9 +44,10 @@ function registerWorkflowController(
     const messages: ControllerMessage[] = [];
 
     client.on('acp:check', (data: { requestId: string }) => {
+      const servers = opts.acpServers ?? [{ type: 'opencode', available: true, version: '1.0.0' }];
       client.emit('acp:check:result', {
         requestId: data.requestId,
-        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+        servers,
       });
     });
 
@@ -431,19 +432,25 @@ interface WorkflowEnv {
   workspaceId: string;
   workspacePath: string;
   configuredId: string;
+  configuredName: string;
 }
 
-async function setupWorkflowEnv(page: Page, tag: string): Promise<WorkflowEnv> {
+async function setupWorkflowEnv(
+  page: Page,
+  tag: string,
+  opts?: { acpServers?: Array<{ type: string; available: boolean; version: string }> },
+): Promise<WorkflowEnv> {
   const { token, username } = await registerUser(page);
   const { rawKey } = await createControllerKey(page, token);
   const hostname = `wf-${tag}-host-${Date.now().toString(36)}`;
-  const controller = await registerWorkflowController(rawKey, hostname);
+  const controller = await registerWorkflowController(rawKey, hostname, { acpServers: opts?.acpServers });
   await refreshCapabilities(page, token, controller.controllerId);
   const workspacePath = `/tmp/e2e-wf-${tag}-${Date.now().toString(36)}`;
   const ws = await createWorkspace(page, controller.controllerId, workspacePath, token);
   const templateId = await createThreeNodeTemplate(page, token, `wf-${tag}-模板-${Date.now().toString(36)}`);
-  const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, `wf-${tag}-配置-${Date.now().toString(36)}`);
-  return { token, username, rawKey, hostname, controller, workspaceId: ws.id, workspacePath, configuredId };
+  const configuredName = `wf-${tag}-配置-${Date.now().toString(36)}`;
+  const configuredId = await configureFromTemplate(page, token, templateId, controller.controllerId, configuredName);
+  return { token, username, rawKey, hostname, controller, workspaceId: ws.id, workspacePath, configuredId, configuredName };
 }
 
 /** 实例化并完成首节点，推进到 AI执行 RUNNING，返回实例与 exec 会话信息 */
@@ -1768,7 +1775,7 @@ test.describe('Workflow E2E', () => {
     await restartButton.click();
     const confirmDialog = page.getByRole('dialog');
     await expect(confirmDialog.getByText(/重启节点「AI执行」/)).toBeVisible();
-    await expect(confirmDialog.getByText(/删除当前会话并重新开始/)).toBeVisible();
+    await expect(confirmDialog.getByText(/重启将关闭当前会话并以新配置重新拉起/)).toBeVisible();
 
     // 点击确认 → 旧会话关闭 + 全新会话拉起（acp:start 会话变化）
     const restartStartPromise = waitFor(
@@ -1784,6 +1791,399 @@ test.describe('Workflow E2E', () => {
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
     const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '重启后完成' }],
+    });
+    expect(done.isError).toBe(false);
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // 工作流优化特性 E2E 测试
+  // -------------------------------------------------------------------------
+
+  test('E2E-22: 实例化 Worktree 选项（Git 工作区默认勾选，非 Git 工作区禁用）', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e22');
+
+    // 注册 git:worktree:add 处理器
+    env.controller.socket.on('git:worktree:add', (data: { requestId: string; worktreePath: string; branch: string }) => {
+      env.controller.socket.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath,
+      });
+    });
+
+    // 测试 1: Git 工作区（默认勾选）
+    env.controller.socket.off('git:check');
+    env.controller.socket.on('git:check', (data: { requestId: string }) => {
+      env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: true, defaultBranch: 'main' });
+    });
+
+    await loginViaUI(page, env.username);
+    const nav = page.locator(sidebar());
+
+    // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
+    await nav.getByRole('button', { name: new RegExp(`wf-e22-host`) }).click();
+    const wsName = env.workspacePath.split('/').pop()!;
+    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+
+    // 打开实例化对话框
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择配置工作流
+    const configuredOption = dialog.getByRole('button', { name: /已配置工作流/ }).first();
+    await configuredOption.click();
+
+    // 选择第一个配置工作流
+    const workflowOption = dialog.locator('button').filter({ hasText: env.configuredName });
+    if (await workflowOption.isVisible()) {
+      await workflowOption.click();
+    }
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(500);
+
+    // 验证「为工作流创建 Worktree」选项可见且默认勾选（Git 工作区）
+    const worktreeCheckbox = dialog.getByLabel('为工作流创建独立 Worktree');
+    await expect(worktreeCheckbox).toBeVisible({ timeout: 5000 });
+    // git:check 异步返回后 useEffect 将 checkbox 默认置 true，需等待
+    await expect(worktreeCheckbox).toBeChecked({ timeout: 5000 });
+
+    // 关闭对话框（step 2 footer 按钮为「上一步」）
+    await dialog.getByRole('button', { name: '上一步' }).click();
+    await page.waitForTimeout(300);
+    await dialog.getByRole('button', { name: '取消' }).click();
+    await page.waitForTimeout(300);
+
+    // 测试 2: 非 Git 工作区（禁用）
+    // 修改 git:check 处理器返回 false（模拟非 Git 工作区）
+    env.controller.socket.off('git:check');
+    env.controller.socket.on('git:check', (data: { requestId: string }) => {
+      env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: false });
+    });
+
+    // 通过 UI 刷新页面（导航到新上下文，避免 Apollo cache-first）
+    await page.goto('/sessions');
+    await page.waitForTimeout(500);
+
+    // 重新通过侧边栏打开对话框
+    await nav.getByRole('button', { name: new RegExp(`wf-e22-host`) }).click();
+    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择配置工作流
+    await configuredOption.click();
+    if (await workflowOption.isVisible()) {
+      await workflowOption.click();
+    }
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(1000); // 等待 git:check 请求完成
+
+    // 验证提示文案「当前工作区不是 Git 仓库，无法创建 Worktree」
+    await expect(dialog.getByText('当前工作区不是 Git 仓库，无法创建 Worktree')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-23: 空白实例化后实例页节点顺序与配置一致（拖拽排序交互依赖人工验收）', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e23');
+
+    await loginViaUI(page, env.username);
+    const nav = page.locator(sidebar());
+
+    // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
+    await nav.getByRole('button', { name: new RegExp(`wf-e23-host`) }).click();
+    const wsName = env.workspacePath.split('/').pop()!;
+    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+
+    // 打开实例化对话框
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择空白来源
+    const blankOption = dialog.getByText('空白');
+    await blankOption.click();
+
+    // 填写实例名称
+    await dialog.getByLabel('实例名称').fill(`wf-e23-实例-${Date.now().toString(36)}`);
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(500);
+
+    // 添加两个节点（第一个节点已默认存在）
+    await dialog.getByRole('button', { name: '添加节点' }).click();
+    await page.waitForTimeout(300);
+
+    // 验证节点数量（Badge 组件渲染为 div）
+    const nodeCards = dialog.locator('[data-testid="flow-preview"]').locator('div.flex-wrap > div');
+    const initialCount = await nodeCards.count();
+    expect(initialCount).toBeGreaterThanOrEqual(2);
+
+    // 注意：dnd-kit 拖拽在 headless Playwright 中无法可靠触发 sensor，
+    // 但「排序保持」可通过确认实例化后在实例页验证节点顺序一致来覆盖。
+
+    // 节点 1：展开并填写 nodeKey + 名称 + 阶段
+    await dialog.getByRole('button', { name: '展开节点 1' }).click();
+    await page.waitForTimeout(200);
+    await dialog.getByLabel('节点 1 标识').fill('input');
+    await dialog.getByLabel('节点 1 名称').fill('需求输入');
+    await dialog.getByLabel('节点 1 阶段').fill('需求');
+    await dialog.getByRole('button', { name: '折叠节点 1' }).click();
+    await page.waitForTimeout(200);
+
+    // 节点 2：展开并填写 nodeKey + 名称 + 阶段 + 提示词（AI 节点必填）+ 上游依赖
+    await dialog.getByRole('button', { name: '展开节点 2' }).click();
+    await page.waitForTimeout(200);
+    await dialog.getByLabel('节点 2 标识').fill('exec');
+    await dialog.getByLabel('节点 2 名称').fill('AI执行');
+    await dialog.getByLabel('节点 2 阶段').fill('开发');
+    await dialog.getByLabel('节点 2 提示词').fill('你是一个开发者');
+    // 勾选上游依赖节点 1（确保首节点唯一）
+    const depCheckbox = dialog.getByLabel(/需求输入/);
+    if (await depCheckbox.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await depCheckbox.check();
+    }
+    await dialog.getByRole('button', { name: '折叠节点 2' }).click();
+    await page.waitForTimeout(200);
+
+    // 选择 AI 节点的 Harness 工具（AI 节点必须选择才能确认）
+    const harnessCombobox = dialog.getByRole('combobox', { name: /Harness 工具/ });
+    await harnessCombobox.click();
+    await page.waitForTimeout(300);
+    const opencodeOption = page.getByRole('option', { name: /opencode/i });
+    await expect(opencodeOption).toBeVisible({ timeout: 3000 });
+    await opencodeOption.click();
+    await page.waitForTimeout(300);
+
+    // 记录节点顺序（填写完节点名后，流程预览区 badge 应已更新）
+    await page.waitForTimeout(500);
+    const initialOrder = await nodeCards.allTextContents();
+    expect(initialOrder.length).toBeGreaterThanOrEqual(2);
+
+    // 保存工作流（点击确认实例化按钮，触发保存）
+    const confirmButton = dialog.getByRole('button', { name: '确认' });
+    await expect(confirmButton).toBeVisible();
+    await confirmButton.click();
+
+    // 等待对话框关闭（实例化成功）
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+    // 等待跳转到实例页
+    await page.waitForURL(/\/workflows\//, { timeout: 10000 });
+
+    // 在实例页验证节点顺序与拖拽后一致
+    // WorkflowNodeTree 按 nodes 数组顺序渲染（分阶段），顺序与拖拽后一致
+    const instanceNodes = page.locator('div.rounded-lg.border.p-3');
+    await expect(instanceNodes.first()).toBeVisible({ timeout: 10000 });
+
+    // 收集实例页所有节点卡片的名称文本
+    const instanceNodeNames = await instanceNodes.allTextContents();
+
+    // badge 文本（如 "人类 · 需求输入"、"AI · AI执行"），实例页节点卡片包含节点名
+    // 逐个验证配置区的顺序在实例页保持（提取 "·" 后的名称部分匹配）
+    for (const badgeText of initialOrder) {
+      const nodeName = badgeText.includes('·') ? badgeText.split('·')[1].trim() : badgeText;
+      const match = instanceNodeNames.some((cardText) => cardText.includes(nodeName));
+      expect(match, `实例页应包含节点 "${nodeName}"`).toBe(true);
+    }
+
+    // 验证顺序：配置区排第一的节点在实例页也排第一
+    const firstBadge = initialOrder[0];
+    const firstName = firstBadge.includes('·') ? firstBadge.split('·')[1].trim() : firstBadge;
+    const firstCardIndex = instanceNodeNames.findIndex((t) => t.includes(firstName));
+    expect(firstCardIndex).toBe(0);
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-24: List/Graph 多视图切换', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e24');
+    const instanceName = `wf-e24-实例-${Date.now().toString(36)}`;
+    const { instanceId } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 默认显示列表视图
+    const listButton = page.getByRole('button', { name: '列表' });
+    const graphButton = page.getByRole('button', { name: '图表' });
+    await expect(listButton).toBeVisible();
+
+    // 切换到图表视图
+    await graphButton.click();
+    await page.waitForTimeout(500);
+
+    // 验证图表视图显示（ReactFlow 容器）
+    const graphContainer = page.locator('.react-flow');
+    await expect(graphContainer).toBeVisible({ timeout: 5000 });
+
+    // 切换回列表视图
+    await listButton.click();
+    await page.waitForTimeout(500);
+
+    // 验证列表视图显示
+    await expect(page.getByText('AI执行', { exact: true })).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-25: 节点卡片显示 Harness 徽标', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e25');
+    const instanceName = `wf-e25-实例-${Date.now().toString(36)}`;
+    const { instanceId } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 验证 AI 节点卡片显示 Harness 徽标
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    // 验证人类节点卡片不显示 Harness 徽标
+    const inputCard = nodeCard(page, '需求输入');
+    await expect(inputCard.getByText('opencode')).not.toBeVisible();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-25b: 旗帜节点卡片不显示 Harness 徽标', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e25b');
+    const instanceName = `wf-e25b-实例-${Date.now().toString(36)}`;
+    const { instanceId } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 验证旗帜节点卡片不显示 Harness 徽标（与人类节点行为一致）
+    const flagCard = nodeCard(page, '旗帜节点');
+    await expect(flagCard.getByText('opencode')).not.toBeVisible();
+
+    // 验证 AI 节点卡片仍然显示 Harness 徽标（作为对照）
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-26: 可配置重启编辑面板（更换 Harness 重跑 + 不保存关闭无变化）', async ({ page }) => {
+    test.setTimeout(90000);
+    // 注册双 server（opencode + claude_code），确保选择器有第二个选项
+    const env = await setupWorkflowEnv(page, 'e26', {
+      acpServers: [
+        { type: 'opencode', available: true, version: '1.0.0' },
+        { type: 'claude_code', available: true, version: '1.0.0' },
+      ],
+    });
+    const instanceName = `wf-e26-实例-${Date.now().toString(36)}`;
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, instanceName);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 执行中的 AI 节点展示「重启」按钮
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    const restartButton = execCard.getByRole('button', { name: '重启' });
+    await expect(restartButton).toBeVisible();
+
+    // 测试 1: 点击取消关闭面板（不保存无变化）
+    await restartButton.click();
+    const editDialog = page.getByRole('dialog');
+    await expect(editDialog.getByText('重启节点「AI执行」')).toBeVisible({ timeout: 5000 });
+
+    // 验证编辑面板显示 Harness 配置
+    await expect(editDialog.getByText('Agent 配置')).toBeVisible();
+    await expect(editDialog.getByLabel('AI执行 Harness 工具')).toBeVisible();
+
+    // 记录当前 Harness 配置（Select trigger 文本）
+    const harnessTrigger = editDialog.getByLabel('AI执行 Harness 工具');
+    const currentHarness = (await harnessTrigger.textContent())?.trim() ?? '';
+
+    // 点击取消关闭面板
+    await editDialog.getByRole('button', { name: '取消' }).click();
+    await page.waitForTimeout(500);
+
+    // 验证面板关闭，节点仍为执行中
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 5000 });
+
+    // 测试 2: 更换 Harness 保存后节点以新配置重跑
+    await restartButton.click();
+    await expect(editDialog.getByText('重启节点「AI执行」')).toBeVisible({ timeout: 5000 });
+
+    // 等待 Harness 选择器加载
+    await page.waitForTimeout(1000);
+
+    // 操作 Harness 选择器，切换到另一个可用配置
+    const harnessSelect = editDialog.getByLabel('AI执行 Harness 工具');
+    await expect(harnessSelect).toBeVisible();
+
+    // 点击选择器打开下拉菜单
+    await harnessSelect.click();
+    await page.waitForTimeout(300);
+
+    // 选择与当前值不同的选项（确保实际切换）— Select popup 在 Portal 中渲染，需从 page 查找
+    const targetServer = currentHarness === 'opencode' ? 'claude_code' : 'opencode';
+    const otherOption = page.getByRole('option', { name: new RegExp(targetServer, 'i') });
+    await expect(otherOption).toBeVisible({ timeout: 3000 });
+    await otherOption.click();
+    await page.waitForTimeout(300);
+
+    // 记录新选择的 Harness 配置（Select trigger 文本）
+    const newHarness = (await harnessSelect.textContent())?.trim() ?? '';
+
+    // 断言选择器确实切换了值
+    expect(newHarness).not.toBe(currentHarness);
+
+    // 点击确认重启（使用新配置）
+    const confirmRestartPromise = waitFor(
+      () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
+      15000,
+      'restarted exec acp:start after config change',
+    );
+    await editDialog.getByRole('button', { name: '确认重启' }).click();
+
+    // 等待新会话启动
+    const restarted = await confirmRestartPromise;
+    expect(restarted.mcpEndpoint?.token).toBeTruthy();
+
+    // 断言 acp:start 携带新配置
+    expect(restarted.serverType).toBe(newHarness);
+
+    // 验证节点卡片的 Harness 徽标已更新（新值可见、旧值消失）
+    await expect(execCard.getByText(newHarness)).toBeVisible({ timeout: 5000 });
+    await expect(execCard.getByText(currentHarness)).not.toBeVisible({ timeout: 5000 });
+
+    // 验证节点仍为执行中，会话已切换
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    // 完成节点验证重启后可正常工作
+    const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '执行结果', value: '重启后完成' }],
     });
     expect(done.isError).toBe(false);
 
