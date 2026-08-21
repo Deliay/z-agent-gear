@@ -3044,6 +3044,68 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     expect(execNode.sessionId).toBe(startData.sessionId);
   }, 30_000);
 
+  it('A48b: 启用节点级 Worktree 时，节点会话 cwd 使用节点 Worktree', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-a48b-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48b-cfg-${Date.now()}`);
+
+    // 注册 git:worktree:add 返回不同路径（实例 Worktree vs 节点 Worktree）
+    const instanceWorktreePath = `/tmp/workflow-instance-wt-${Date.now()}`;
+    const nodeWorktreePath = `/tmp/workflow-node-wt-${Date.now()}`;
+    let worktreeCallCount = 0;
+    fake.client.on('git:worktree:add', (data: { requestId: string }) => {
+      worktreeCallCount++;
+      // 第一次调用返回实例 Worktree，第二次返回节点 Worktree
+      const path = worktreeCallCount === 1 ? instanceWorktreePath : nodeWorktreePath;
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: path,
+      });
+    });
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-a48b-实例-${Date.now()}`,
+          nodes: configureNodes(simpleTemplateInput('_').nodes, { exec: { acpServerType: 'opencode', initNewWorktree: true } }),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const inst = (await instRes.json()).data.instantiateWorkflow;
+    expect(inst.workflowWorktreePath).toBe(instanceWorktreePath);
+
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+
+    // 完成首节点 → exec 节点拉起会话，cwd 应为节点 Worktree（因为 initNewWorktree: true）
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    const startData = await startEvent;
+
+    // 验证 acp:start 的 cwd 为节点 Worktree 路径（而非实例 Worktree）
+    expect(startData.cwd).toBe(nodeWorktreePath);
+    expect(startData.cwd).not.toBe(instanceWorktreePath);
+    expect(startData.sessionId).toBeTruthy();
+    expect(startData.serverType).toBe('opencode');
+
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_a48b_${Date.now()}`,
+    });
+    await sleep(500);
+
+    // 验证实例节点会话启动成功
+    const instQ = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: inst.id }, token)).json()).data.workflowInstance;
+    const execNode = instQ.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+    expect(execNode.sessionId).toBe(startData.sessionId);
+  }, 30_000);
+
   // ---------------------------------------------------------------------------
   // A49: A36 补充 - 非 Git 工作区时 createWorkflowWorktree 不生效
   // ---------------------------------------------------------------------------
