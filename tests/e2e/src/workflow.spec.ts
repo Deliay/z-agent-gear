@@ -1995,6 +1995,28 @@ test.describe('Workflow E2E', () => {
     env.controller.disconnect();
   });
 
+  test('E2E-25b: 旗帜节点卡片不显示 Harness 徽标', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e25b');
+    const { instanceId } = await advanceToExecRunning(page, env, `wf-e25b-实例-${Date.now().toString(36)}`);
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 等待实例加载
+    await expect(page.getByRole('heading', { name: env.instanceName })).toBeVisible({ timeout: 10000 });
+
+    // 验证旗帜节点卡片不显示 Harness 徽标（与人类节点行为一致）
+    const flagCard = nodeCard(page, '旗帜节点');
+    await expect(flagCard.getByText('opencode')).not.toBeVisible();
+
+    // 验证 AI 节点卡片仍然显示 Harness 徽标（作为对照）
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
+
+    env.controller.disconnect();
+  });
+
   test('E2E-26: 可配置重启编辑面板（更换 Harness 重跑 + 不保存关闭无变化）', async ({ page }) => {
     test.setTimeout(90000);
     const env = await setupWorkflowEnv(page, 'e26');
