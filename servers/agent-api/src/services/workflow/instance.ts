@@ -9,6 +9,7 @@ import { workflowEngine } from './engine.js';
 import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { getAvailableServerTypes } from './capability.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -60,21 +61,6 @@ class WorkflowInstanceService {
     return WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
   }
 
-  /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */
-  private async getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
-    if (!controller) {
-      throw new Error('控制器不存在或不属于当前用户');
-    }
-    const redis = getRedisClient();
-    const cached = await redis.get(`acp:capability:${controllerId}`);
-    if (!cached) {
-      throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
-    }
-    const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
-    return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
-  }
-
   /** 将节点图归一化为完整结构（补默认值，供图校验与快照落库） */
   private normalizeNodes(nodes: InstantiateNodeInput[]) {
     return nodes.map((n) => ({
@@ -115,7 +101,7 @@ class WorkflowInstanceService {
     if (!workspace) {
       throw new Error('工作区不存在、无权限或不属于该控制器');
     }
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
 
     // 3. 完整图校验 + agentConfig 校验（以提交图为准）
     const fullNodes = this.normalizeNodes(input.nodes);
@@ -418,7 +404,7 @@ class WorkflowInstanceService {
 
     // 如果提供了 agentConfig，校验其 acpServerType 是否在控制器可用能力内
     if (agentConfig) {
-      const availableServerTypes = await this.getAvailableServerTypes(instance.controllerId.toString(), userId);
+      const availableServerTypes = await getAvailableServerTypes(instance.controllerId.toString(), userId);
       if (!availableServerTypes.includes(agentConfig.acpServerType)) {
         throw new Error(`控制器不支持该 Harness 类型: ${agentConfig.acpServerType}`);
       }

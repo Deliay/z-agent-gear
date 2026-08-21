@@ -3,6 +3,7 @@ import { WorkflowTemplate } from '../../models/workflow-template.js';
 import { Controller } from '../../models/controller.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
+import { getAvailableServerTypes } from './capability.js';
 
 export interface AgentNodeConfigInput {
   acpServerType: string;
@@ -125,7 +126,7 @@ class ConfiguredWorkflowService {
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const snapshot = copyFromTemplate(template, input);
     // 校验模板节点图的 agentConfig 完整性 + capabilities
     validateAgentConfigs(snapshot.nodes as unknown as SourceNodeLike[], availableServerTypes);
@@ -148,7 +149,7 @@ class ConfiguredWorkflowService {
       throw new Error('已配置工作流不存在或无权限');
     }
 
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const fullNodes = this.normalizeConfiguredNodes(input.nodes);
     // 完整图校验 + agentConfig 校验（与模板一致）
     validateTemplateGraph(fullNodes as never);
@@ -196,52 +197,6 @@ class ConfiguredWorkflowService {
     }));
   }
 
-  /** 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`） */
-  private async getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
-    if (!controller) {
-      throw new Error('控制器不存在或不属于当前用户');
-    }
-    const redis = getRedisClient();
-    const cached = await redis.get(`acp:capability:${controllerId}`);
-    if (cached) {
-      const parsed = JSON.parse(cached) as { servers?: { type: string; available: boolean }[] };
-      return (parsed.servers ?? []).filter((s) => s.available).map((s) => s.type);
-    }
-
-    // 缓存缺失：回源查询控制器状态
-    if (controller.status === 'online') {
-      // 控制器在线：通过控制器通道主动拉取能力并回热缓存（短超时）
-      try {
-        const requestId = `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        await redis.publish(
-          'session:command',
-          JSON.stringify({
-            type: 'acp:capability:query',
-            requestId,
-            controllerId,
-          }),
-        );
-        // 等待控制器响应（最多 5 秒）
-        for (let i = 0; i < 5; i++) {
-          const result = await redis.get(`acp:capability:query:${requestId}`);
-          if (result) {
-            const parsed = JSON.parse(result);
-            await redis.set(`acp:capability:${controllerId}`, JSON.stringify(parsed), 'EX', 300);
-            await redis.del(`acp:capability:query:${requestId}`);
-            return (parsed.servers ?? []).filter((s: { available: boolean }) => s.available).map((s: { type: string }) => s.type);
-          }
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-        // 超时：继续报错
-      } catch (err) {
-        console.error(`回源查询控制器能力失败（${controllerId}）：`, err);
-      }
-    }
-
-    throw new Error(`控制器「${controller.name || controllerId}」的 Agent 能力信息不可用（可能离线），请确认控制器在线后重试`);
-  }
-
   /**
    * 直接从完整节点图创建已配置工作流（工作流管理工具集用，无来源模板）。
    * 与 configure（模板复制）共用图校验与 agentConfig 校验；创建记录 AI 归属。
@@ -251,7 +206,7 @@ class ConfiguredWorkflowService {
     input: ConfigureWorkflowInput,
     meta?: ConfiguredWorkflowCreationMeta,
   ) {
-    const availableServerTypes = await this.getAvailableServerTypes(input.controllerId, userId);
+    const availableServerTypes = await getAvailableServerTypes(input.controllerId, userId);
     const fullNodes = this.normalizeConfiguredNodes(input.nodes);
     validateTemplateGraph(fullNodes as never);
     validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);
