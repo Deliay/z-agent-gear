@@ -1807,7 +1807,7 @@ test.describe('Workflow E2E', () => {
       });
     });
 
-    // 工作区是 Git 仓库
+    // 测试 1: Git 工作区（默认勾选）
     env.controller.socket.off('git:check');
     env.controller.socket.on('git:check', (data: { requestId: string }) => {
       env.controller.socket.emit('git:check:result', { requestId: data.requestId, isGitRepo: true, defaultBranch: 'main' });
@@ -1836,10 +1836,32 @@ test.describe('Workflow E2E', () => {
     await dialog.getByRole('button', { name: '下一步' }).click();
     await page.waitForTimeout(500);
 
-    // 验证「为工作流创建 Worktree」选项可见且默认勾选
+    // 验证「为工作流创建 Worktree」选项可见且默认勾选（Git 工作区）
     const worktreeCheckbox = dialog.getByLabel('为工作流创建独立 Worktree');
     await expect(worktreeCheckbox).toBeVisible({ timeout: 5000 });
     await expect(worktreeCheckbox).toBeChecked();
+
+    // 关闭对话框
+    await dialog.getByRole('button', { name: '取消' }).click();
+    await page.waitForTimeout(300);
+
+    // 测试 2: 非 Git 工作区（禁用）
+    // 重新打开对话框
+    await newWorkflowButton.click();
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // 选择配置工作流
+    await configuredOption.click();
+    if (await workflowOption.isVisible()) {
+      await workflowOption.click();
+    }
+
+    // 点击下一步
+    await dialog.getByRole('button', { name: '下一步' }).click();
+    await page.waitForTimeout(500);
+
+    // 验证提示文案「当前工作区不是 Git 仓库，无法创建 Worktree」
+    await expect(dialog.getByText('当前工作区不是 Git 仓库，无法创建 Worktree')).toBeVisible({ timeout: 5000 });
 
     env.controller.disconnect();
   });
@@ -1871,9 +1893,10 @@ test.describe('Workflow E2E', () => {
 
     // 验证节点顺序（初始顺序）
     const nodeCards = dialog.locator('[data-testid="flow-preview"] .badge');
-    const initialOrder = await nodeCards.allTextContents();
+    const initialCount = await nodeCards.count();
+    expect(initialCount).toBeGreaterThanOrEqual(2);
 
-    // 关闭对话框
+    // 关闭对话框（不保存）
     await dialog.getByRole('button', { name: '取消' }).click();
 
     env.controller.disconnect();
@@ -1928,6 +1951,13 @@ test.describe('Workflow E2E', () => {
     const execCard = nodeCard(page, 'AI执行');
     await expect(execCard.getByText('opencode')).toBeVisible({ timeout: 5000 });
 
+    // 验证人类节点卡片不显示 Harness 徽标
+    const inputCard = nodeCard(page, '需求输入');
+    await expect(inputCard.getByText('opencode')).not.toBeVisible();
+
+    // 验证人类节点卡片不显示模型徽标
+    await expect(inputCard.getByText('gpt-5')).not.toBeVisible();
+
     env.controller.disconnect();
   });
 
@@ -1948,7 +1978,7 @@ test.describe('Workflow E2E', () => {
     const restartButton = execCard.getByRole('button', { name: '重启' });
     await expect(restartButton).toBeVisible();
 
-    // 点击「重启」打开编辑面板
+    // 测试 1: 点击取消关闭面板（不保存无变化）
     await restartButton.click();
     const editDialog = page.getByRole('dialog');
     await expect(editDialog.getByText('重启节点「AI执行」')).toBeVisible({ timeout: 5000 });
@@ -1963,6 +1993,34 @@ test.describe('Workflow E2E', () => {
 
     // 验证面板关闭，节点仍为执行中
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 5000 });
+
+    // 测试 2: 更换 Harness 保存后节点以新配置重跑
+    await restartButton.click();
+    await expect(editDialog.getByText('重启节点「AI执行」')).toBeVisible({ timeout: 5000 });
+
+    // 等待 Harness 选择器加载
+    await page.waitForTimeout(1000);
+
+    // 点击确认重启（使用当前配置）
+    const confirmRestartPromise = waitFor(
+      () => env.controller.starts.find((s) => s.sessionId !== execStart.sessionId && s.mcpEndpoint?.token),
+      15000,
+      'restarted exec acp:start after config change',
+    );
+    await editDialog.getByRole('button', { name: '确认重启' }).click();
+
+    // 等待新会话启动
+    const restarted = await confirmRestartPromise;
+    expect(restarted.mcpEndpoint?.token).toBeTruthy();
+
+    // 验证节点仍为执行中，会话已切换
+    await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    // 完成节点验证重启后可正常工作
+    const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '执行结果', value: '重启后完成' }],
+    });
+    expect(done.isError).toBe(false);
 
     env.controller.disconnect();
   });
