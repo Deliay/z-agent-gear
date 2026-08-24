@@ -5,7 +5,7 @@ type: Permanent
 
 # 工作流优化 0821 验收报告（2026-08-24）
 
-> **状态**: ✅ Review 复验通过 —— 实例级 Worktree 路径前缀不一致（问题 9）已修复，commit 已推送到远端，API/E2E 测试验收通过，`integration → release` 可进入合并
+> **状态**: ✅ Review 复验通过 —— 第 6 轮复验确认问题 3（Worktree 清理失败标记无效）已修复：`removeWorkflowWorktree` 失败/超时改为 throw，`deleteInstance` 的 catch 分支可真实写入 `worktreeCleanupFailed` 标记，单测已验证通过。`integration → release` 可进入合并。
 
 ## 关联文档
 
@@ -64,6 +64,14 @@ type: Permanent
 - `instance.ts deleteInstance` 清理失败时执行 `WorkflowInstance.updateOne({ _id: id }, { $set: { worktreeCleanupFailed: true } })` 标记
 - 后续可通过查询 `worktreeCleanupFailed: true` 的已删除实例进行孤儿 Worktree 回收
 
+> **🔴 第 5 轮复验发现修复无效（打回）**：`deleteInstance` 通过 `try/catch` 包裹 `removeWorkflowWorktree` 来捕获清理失败并写入 `worktreeCleanupFailed` 标记（`instance.ts:480-499`）。但 `removeWorkflowWorktree`（`instance.ts:503-537`）在失败/超时路径上只 `console.error` **从不 throw**——失败分支 `return`、超时循环结束后同样 `return`。因此 `deleteInstance` 的 `catch` 分支永远不会执行，`worktreeCleanupFailed: true` 标记在实际运行中**永远不会写入**。
+>
+> **根因**：标记的触发依赖「异常传播」，但函数约定为「吞错 + 正常返回」（内部已打印日志），两处契约不一致。
+>
+> **建议修复**：让 `removeWorkflowWorktree` 在失败/超时时 `throw`（或返回 `{ success: false }`），由 `deleteInstance` 依据返回值/异常决定是否写入 `worktreeCleanupFailed` 标记，保证可观测标记真实生效。
+>
+> **✅ 第 6 轮复验已修复**（commit: `921b177`）：`removeWorkflowWorktree` 失败时 `throw new Error(...)`、超时时 `throw new Error('清理 Worktree 超时')`（替代原 `console.error + return`），并补充 2 个单测（清理失败→标记置位 / 无 worktree→不触发清理）。`instance.test.ts` → 34 passed；workflow 全量 → **173 passed**。修复有效，问题 3 闭环。
+
 ### 4. 能力读取双路径并存（`acp:check` vs `acp:capability:query`），缓存双源写入且 TTL 不一致
 
 **问题描述**：`session.ts getAcpCapabilities` 仍走 `acp:check`，而 workflow 侧新增 `acp:capability:query`；同一 `acp:capability:<controllerId>` 缓存由 controller-api（TTL **3600**）与 workflow 回源（TTL **300**）两处写入，shape 一致但 TTL 不同。两套协议做同一件事，语义重复，后续维护易漂移。
@@ -93,7 +101,7 @@ type: Permanent
 |---|------|------|------|----------|
 | 1 | 能力回源 5s < 上游 10s，慢控制器误报离线 | 轮询预算与上游探测超时不匹配 | ✅ 已修复 | 轮询改为 12s + 统一为 acp:check 协议 |
 | 2 | 创建实例阻塞 30s + 同名分支冲突无兜底 | worktree 同步轮询、slug 无去歧 | ✅ 已修复 | 3次重试 + 分支冲突后缀 + 路径安全处理 |
-| 3 | 删除实例残留孤儿 worktree | 清理失败仅日志 | ✅ 已修复 | 新增 worktreeCleanupFailed 标记 |
+| 3 | 删除实例残留孤儿 worktree | 清理失败仅日志 | ✅ 第6轮复验已修复 | removeWorkflowWorktree 失败/超时 throw（commit `921b177`），deleteInstance catch 写入标记 |
 | 4 | 能力读取双路径/TTL 不一致 | 新增协议未收敛 | ✅ 已修复 | 统一为 acp:check 单一协议 |
 | 5 | dependsOn 非空 schema 与 ?? null 兜底 | resolver 防御过度 | 💡 建议 | - |
 | 6 | restart 对 HUMAN/FLAG 未拦截 | 服务端缺类型校验 | ✅ 已修复 | restartNode 校验节点类型 |
@@ -105,7 +113,7 @@ type: Permanent
 
 | 项 | 结果 |
 |----|------|
-| 后端单测（workflow services + session） | ✅ 261 passed（本轮复验：`vitest run src/services/session.test.ts src/services/workflow/` → 261 passed） |
+| 后端单测（workflow services + session） | ✅ workflow `173 passed`（第 6 轮复验：`vitest run src/services/workflow/instance.test.ts` → 34 passed；`src/services/workflow/` → 173 passed）；第 5 轮含 session 合计 261 passed |
 | 前端单测（全量） | ✅ 358 passed |
 | 前端类型检查（tsc -b） | ✅ 通过 |
 | API 集成测试（tests/api） | ✅ 326 passed / 17 文件（本轮复验） |
@@ -126,6 +134,28 @@ type: Permanent
 - workflow.spec.ts 27 个 E2E 用例全部通过（E2E-1~26 + P2-E2E-14~18）
 
 **结论**：问题 9 已闭环，commit 已推送到远端，API/E2E 测试验收通过。无新增严重/一般问题，`integration → release` 可进入合并。
+
+## 本轮 Review 复验记录（2026-08-24，第 5 轮复验 → 打回）
+
+下游 Review 对第 4 轮返工提交（`aac7ce7`）复验，确认问题 1/2/4/6/9 已修复且 API/E2E 测试通过，但发现问题 3 的修复无效：
+
+- **问题 3 打回**：`worktreeCleanupFailed` 标记依赖 `removeWorkflowWorktree` 抛错才写入，但该方法失败/超时从不 throw（仅日志 + return），`deleteInstance` 的 `catch` 永不触发，标记实际永不写入 → 孤儿 worktree 可观测性仍未达成。
+- 复验范围：`aac7ce7` diff（capability.ts / instance.ts / worktree-utils.ts / session.ts / worktree-instance.ts / engine.ts / orchestrator.ts）
+
+**要求**：`removeWorkflowWorktree` 改为失败/超时抛错（或返回显式 `{ success }`），`deleteInstance` 依据结果写入 `worktreeCleanupFailed`，补充对应单测后重新推送。
+
+## 本轮 Review 复验记录（2026-08-24，第 6 轮复验 → 通过）
+
+针对第 5 轮打回的问题 3，修复者提交 `921b177` 并推送至 `origin/integration`。本轮复验：
+
+- **代码复验**（`921b177` diff）：
+  - `removeWorkflowWorktree`（`instance.ts:503-537`）失败分支由 `console.error + return` 改为 `throw new Error(...)`；超时循环结束后由 `console.error + return` 改为 `throw new Error('清理 Worktree 超时')`。
+  - `deleteInstance`（`instance.ts:479-499`）的 `try/catch` 现可捕获异常并写入 `worktreeCleanupFailed: true` 标记。契约一致，标记可真实写入。
+  - redis 响应 key 的 `del` 移至 `throw` 之前，失败时也会清理响应 key，避免残留。
+- **单测复验**：新增 2 个用例（失败→标记置位 / 无 worktree→不触发），`instance.test.ts` → **34 passed**；`vitest run src/services/workflow/` → **173 passed**。
+- **验证测试实际执行**：通过 ✅（见「最终验证」表）。
+
+**结论**：问题 3 修复有效且闭环。其余问题（1/2/4/6/9）此前已确认修复。无新增严重/一般问题，`integration → release` 可进入合并。
 
 ## E2E 失败项分析（非本次验收范围）
 
@@ -149,6 +179,7 @@ type: Permanent
 | `servers/agent-api/src/services/session.ts` | existingWorktreePath 校验使用 sanitizeWorkspaceName；enableWorktree 路径也使用 sanitize |
 | `servers/agent-api/src/services/workflow/engine.ts` | WorkflowInstanceDoc 补充 workflowWorktreePath/workflowWorktreeBranch 字段 |
 | `servers/agent-api/src/models/workflow-instance.ts` | 新增 worktreeCleanupFailed 字段 |
+| `servers/agent-api/src/services/workflow/instance.ts` | （复验 `921b177`）removeWorkflowWorktree 失败/超时 throw，deleteInstance catch 写入 worktreeCleanupFailed |
 
 ## 经验总结
 
