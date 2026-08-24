@@ -500,7 +500,7 @@ class WorkflowInstanceService {
     return true;
   }
 
-  /** 清理工作流 Worktree：通过 Redis 发送 git:worktree:remove 命令到控制器 */
+  /** 清理工作流 Worktree：通过 Redis 发送 git:worktree:remove 命令到控制器，失败/超时抛错 */
   private async removeWorkflowWorktree(
     controllerId: string,
     repoPath: string,
@@ -525,15 +525,15 @@ class WorkflowInstanceService {
       const result = await redis.get(`git:worktree:remove:${requestId}`);
       if (result) {
         const parsed = JSON.parse(result);
-        if (!parsed.success) {
-          console.error(`清理 Worktree 失败: ${parsed.error}`);
-        }
         await redis.del(`git:worktree:remove:${requestId}`);
+        if (!parsed.success) {
+          throw new Error(`清理 Worktree 失败: ${parsed.error}`);
+        }
         return;
       }
       await new Promise((r) => setTimeout(r, 1000));
     }
-    console.error('清理 Worktree 超时');
+    throw new Error('清理 Worktree 超时');
   }
 }
 

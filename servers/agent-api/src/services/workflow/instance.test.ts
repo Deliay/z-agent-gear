@@ -69,7 +69,7 @@ function leanQuery(result: unknown) {
   return { lean: vi.fn().mockResolvedValue(result) } as never;
 }
 
-const mockRedis = { get: vi.fn(), del: vi.fn() };
+const mockRedis = { get: vi.fn(), del: vi.fn(), publish: vi.fn() };
 
 function makeConfigured(overrides: Record<string, unknown> = {}) {
   return {
@@ -647,6 +647,67 @@ describe('WorkflowInstanceService.deleteInstance', () => {
     await expect(workflowInstanceService.deleteInstance('user-1', 'inst-x')).rejects.toThrow(/不存在/);
     expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
     expect(sessionService.delete).not.toHaveBeenCalled();
+  });
+
+  it('Worktree 清理失败时标记 worktreeCleanupFailed', async () => {
+    vi.mocked(WorkflowInstance.findOne)
+      .mockReturnValueOnce(
+        leanQuery({
+          _id: oid('inst-1'),
+          userId: oid('user-1'),
+          workflowWorktreePath: '/worktrees/my-project/workflow-test',
+          workflowWorktreeBranch: 'workflow/test',
+          workspaceId: oid('ws-1'),
+          controllerId: oid('ctrl-1'),
+        }),
+      );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    mockSessions([]);
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(
+      leanQuery({ _id: oid('ws-1'), path: '/home/user/project', name: 'my-project' }),
+    );
+    // 模拟 git:worktree:remove 返回失败
+    mockRedis.publish.mockResolvedValue(1 as never);
+    mockRedis.get.mockResolvedValue(JSON.stringify({ success: false, error: 'branch not found' }));
+    mockRedis.del.mockResolvedValue(null as never);
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const result = await workflowInstanceService.deleteInstance('user-1', 'inst-1');
+
+    expect(result).toBe(true);
+    // 应调用 publish 发送 git:worktree:remove
+    expect(mockRedis.publish).toHaveBeenCalledWith(
+      'session:command',
+      expect.stringContaining('git:worktree:remove'),
+    );
+    // 应写入 worktreeCleanupFailed 标记
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { worktreeCleanupFailed: true } },
+    );
+  });
+
+  it('无 Worktree 的实例删除时不触发清理', async () => {
+    vi.mocked(WorkflowInstance.findOne)
+      .mockReturnValueOnce(
+        leanQuery({
+          _id: oid('inst-1'),
+          userId: oid('user-1'),
+        }),
+      );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    mockSessions([]);
+
+    const result = await workflowInstanceService.deleteInstance('user-1', 'inst-1');
+
+    expect(result).toBe(true);
+    // 不应调用 publish（无 worktree 需清理）
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+    // 不应写入 worktreeCleanupFailed 标记
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { worktreeCleanupFailed: true } },
+    );
   });
 });
 
