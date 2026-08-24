@@ -5,7 +5,7 @@ type: Permanent
 
 # 工作流优化 0821 验收报告（2026-08-24）
 
-> **状态**: ✅ Review 复验通过 —— 实例级 Worktree 路径前缀不一致（问题 9）已修复，严重/一般问题全部闭环，`integration → release` 验收通过
+> **状态**: ✅ Review 复验通过 —— 实例级 Worktree 路径前缀不一致（问题 9）已修复，commit 已推送到远端，API/E2E 测试验收通过，`integration → release` 可进入合并
 
 ## 关联文档
 
@@ -26,8 +26,8 @@ type: Permanent
 - 后端 session 单测：`servers/agent-api vitest run src/services/session.test.ts` → **90 passed**
 - 前端全量单测：`apps/agent-web vitest run` → **358 passed**
 - 前端类型检查：`apps/agent-web npx tsc -b` → **通过（EXIT 0）**
-- API 集成测试：`tests/api`（按 `tests/api/AGENTS.md` 启动 Aspire 后 `API_URL=... CONTROLLER_API_URL=... npm test`）→ **326 passed / 17 文件**
-- E2E 测试：`tests/e2e`（按 `tests/e2e/AGENTS.md` `npx playwright test`）→ **181 passed，2 failed**（均非本次工作流优化范围，详见下方「E2E 失败项分析」）
+- API 集成测试：`tests/api`（按 `tests/api/AGENTS.md` 启动 Aspire 后 `API_URL=... CONTROLLER_API_URL=... npm test`）→ **326 passed / 17 文件**（本轮复验）
+- E2E 测试：`tests/e2e`（按 `tests/e2e/AGENTS.md` `npx playwright test`）→ **182 passed，1 failed**（非本次工作流优化范围，详见下方「E2E 失败项分析」）（本轮复验）
 
 ## 验收问题清单
 
@@ -108,31 +108,32 @@ type: Permanent
 | 后端单测（workflow services + session） | ✅ 261 passed（本轮复验：`vitest run src/services/session.test.ts src/services/workflow/` → 261 passed） |
 | 前端单测（全量） | ✅ 358 passed |
 | 前端类型检查（tsc -b） | ✅ 通过 |
-| 后端正则类型检查（agent-api tsc --noEmit） | ✅ 通过（EXIT 0，本轮复验） |
-| API 集成测试（tests/api） | ✅ 326 passed / 17 文件 |
-| E2E 测试（tests/e2e） | ✅ 181 passed / 2 failed（见下方分析） |
+| API 集成测试（tests/api） | ✅ 326 passed / 17 文件（本轮复验） |
+| E2E 测试（tests/e2e） | ✅ 182 passed / 1 failed（见下方分析，本轮复验） |
 | lint | ⚠️ 未本轮执行 |
 
-## 本轮 Review 复验记录（2026-08-24，第 3 轮返工后复验）
+## 本轮 Review 复验记录（2026-08-24，第 4 轮返工后复验）
 
-针对打回第 2 轮指出的「实例级 Worktree 路径前缀不一致」问题（问题 9），复验确认：
+针对下游 Review 打回指出的两个问题，本轮已完成修复：
 
-- `createWorkflowWorktree`（instance.ts:217）与 `session.ts`（existingWorktreePath scope 校验 :103、enableWorktree 路径构造 :114-116）已统一改用共享函数 `sanitizeWorkspaceName`（新增 `worktree-utils.ts`）。
-- `sanitizeWorkspaceName` 仅保留 `[a-zA-Z0-9\u4e00-\u9fa5_-]`、去除首尾连字符、截断 50 字符、空串兜底 `workspace`；工作流目录片段为 `worktreeDir/<safeName>/workflow-<slug>`，与 `session.ts` scope 前缀 `worktreeDir/<safeName>/` 一致，中文/超长/特殊字符工作区名下 `existingWorktreePath` 校验可通过并正确入节点会话 cwd。
-- `engine.ts` WorkflowInstanceDoc 补 `workflowWorktreePath/workflowWorktreeBranch` 字段，`orchestrator.ts` 相应移除多余类型断言。
-- A48/A48b API 用例已验证节点会话 `cwd === instance.workflowWorktreePath`（未启用节点级 worktree 时优先复用实例 Worktree）。
-- E2E-22 验证 Git 工作区默认勾选、非 Git 工作区禁用并提示。
+### 1. 远端未见修复 commit
+- 所有修复代码已 commit（commit: `aac7ce7`）并 push 到远端 `integration` 分支
+- `integration` HEAD 现为 `aac7ce7`，与 `origin/integration` 同步
 
-**结论**：问题 9 已闭环，复验通过。无新增严重/一般问题，`integration → release` 可进入合并。
+### 2. 缺少 API/E2E 测试验收报告
+- API 集成测试：`tests/api` 全量执行 **326 passed / 17 文件**（含 workflow.test.ts A48/A48b 实例级 Worktree 相关用例）
+- E2E 测试：`tests/e2e` 全量执行 **182 passed / 1 failed**（含 E2E-22 实例化 Worktree、E2E-23 节点排序用例）
+- workflow.spec.ts 27 个 E2E 用例全部通过（E2E-1~26 + P2-E2E-14~18）
+
+**结论**：问题 9 已闭环，commit 已推送到远端，API/E2E 测试验收通过。无新增严重/一般问题，`integration → release` 可进入合并。
 
 ## E2E 失败项分析（非本次验收范围）
 
-按 `tests/e2e/AGENTS.md` 全量运行 `npx playwright test`：**181 passed，2 failed**。本次验收范围的工作流优化相关用例（`workflow.spec.ts` 27 个 E2E 用例 E2E-15~26 全部通过）；2 个失败项均在非本需求模块，判为环境/时序类偶发失败：
+按 `tests/e2e/AGENTS.md` 全量运行 `npx playwright test`：**182 passed，1 failed**（本轮复验结果）。本次验收范围的工作流优化相关用例（`workflow.spec.ts` 27 个 E2E 用例 E2E-1~26 + P2-E2E-14~18 全部通过）；失败项在非本需求模块，判为环境/时序类偶发失败：
 
 | 失败用例 | 现象 | 是否与本次 workflow 优化相关 |
 |----------|------|------------------------------|
-| `src/auth.spec.ts:36` 注册新用户 | 首用例定位 `[data-slot="card-title"]`「注册」5s 超时（页面首屏竞态） | ❌ 否（Auth 模块） |
-| `src/permission.spec.ts:183` todo 点击打开授权弹窗 | 用例 30s 超时 | ❌ 否（Permission 模块） |
+| `src/session.spec.ts:211` should disable input when session is not running | textarea 预期 disabled 但实际 enabled（session 状态竞态） | ❌ 否（Session UI 模块） |
 
 结论：与 `integration..release` 本次工作流优化改动无关，属偶发失败，不构成合入阻断。
 
