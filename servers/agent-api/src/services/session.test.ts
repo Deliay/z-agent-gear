@@ -294,7 +294,7 @@ describe('SessionService', () => {
       expect(result.cwd).toBe('/worktrees/my-project/feat-123');
     });
 
-    it('should throw on worktree add failure', async () => {
+    it('should throw on worktree add failure (non-retryable error)', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
@@ -305,6 +305,33 @@ describe('SessionService', () => {
       mockRedis.publish.mockResolvedValue(1);
       mockRedis.get
         .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'permission denied' }));
+
+      await expect(sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        worktreeBranchSuffix: 'feat-123',
+      })).rejects.toThrow('WORKTREE_ADD_FAILED: permission denied');
+    });
+
+    it('should throw when worktree add fails with already exists after all retries exhausted', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      mockRedis.publish.mockResolvedValue(1);
+      // 3 次重试全部失败（分支已存在）
+      mockRedis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }))
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }))
+        .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }));
 
       await expect(sessionService.create('user-1', {
@@ -313,7 +340,46 @@ describe('SessionService', () => {
         workspaceId: 'ws-1',
         enableWorktree: true,
         worktreeBranchSuffix: 'feat-123',
-      })).rejects.toThrow('WORKTREE_ADD_FAILED');
+      })).rejects.toThrow('WORKTREE_ADD_FAILED: 分支冲突重试耗尽');
+    });
+
+    it('should retry with incremented suffix when worktree add fails with already exists', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+      } as never);
+
+      mockRedis.publish.mockResolvedValue(1);
+      mockRedis.get
+        // 第一次尝试：轮询后返回分支已存在
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }))
+        // 第二次尝试：轮询后成功
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify({ success: true, worktreePath: '/worktrees/my-project/feat-123-2' }));
+
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        controllerName: 'my-server',
+        cwd: '/worktrees/my-project/feat-123-2',
+        worktreePath: '/worktrees/my-project/feat-123-2',
+        worktreeBranch: 'my-project/feat-123-2',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        enableWorktree: true,
+        worktreeBranchSuffix: 'feat-123',
+      });
+
+      // 验证第二次尝试使用了递增后缀
+      const publishCalls = mockRedis.publish.mock.calls.map(c => String(c[1]));
+      expect(publishCalls[0]).toContain('"branch":"my-project/feat-123"');
+      expect(publishCalls[1]).toContain('"branch":"my-project/feat-123-2"');
+      expect(result.cwd).toBe('/worktrees/my-project/feat-123-2');
     });
 
     it('should throw timeout when no worktree add result', async () => {
@@ -340,7 +406,7 @@ describe('SessionService', () => {
 
       await vi.advanceTimersByTimeAsync(31000);
 
-      await expect(promise).rejects.toThrow('WORKTREE_ADD_FAILED: Timeout');
+      await expect(promise).rejects.toThrow('WORKTREE_ADD_FAILED: 分支冲突重试耗尽或等待 git worktree add 超时');
 
       vi.useRealTimers();
     });

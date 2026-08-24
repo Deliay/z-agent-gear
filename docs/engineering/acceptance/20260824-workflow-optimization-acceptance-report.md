@@ -5,7 +5,7 @@ type: Permanent
 
 # 工作流优化 0821 验收报告（2026-08-24）
 
-> **状态**: ✅ Review 复验通过 —— 第 6 轮复验确认问题 3（Worktree 清理失败标记无效）已修复：`removeWorkflowWorktree` 失败/超时改为 throw，`deleteInstance` 的 catch 分支可真实写入 `worktreeCleanupFailed` 标记，单测已验证通过。`integration → release` 可进入合并。
+> **状态**: ✅ Review 复验通过 —— 第 7 轮返工确认问题 10（node 级 Worktree 创建无冲突后缀去重）已修复：`session.ts` enableWorktree 分支新增重试机制，分支冲突时追加递增后缀（`-2`/`-3`），3 次重试耗尽才抛错，单测已验证通过。`integration → release` 可进入合并。
 
 ## 关联文档
 
@@ -54,6 +54,29 @@ type: Permanent
 - 错误信息更明确：超时信息包含"分支冲突重试耗尽"
 
 ### 一般
+
+### 10. node 级 Worktree 创建无冲突后缀去重，多实例并发时 `/stage` 路径/分支碰撞直接失败（打回）
+
+**问题描述**：多个工作流实例（或同一实例多个节点）开启 `requiresWorktree && initNewWorktree` 时，node 级 worktree 由 `session.ts:111-148`（enableWorktree 分支）创建：路径=`${worktreeDir}/${safeName}/${worktreeBranchSuffix}`、分支=`${safeName}/${worktreeBranchSuffix}`（`orchestrator.ts:158` 传 `worktreeBranchSuffix = ${instanceSlug}/${stageSlug}`，`stageSlug = slugify(node.stage) || 'stage'`）。
+
+该路径创建**没有任何冲突去重/重试**：`git:worktree:add` 返回 `success: false` 时直接抛 `WORKTREE_ADD_FAILED`（`session.ts:134`）。
+
+- 当多个实例 (`instanceSlug` 相同，如同名工作流或 slug 碰撞) 或同一实例内多节点同 stage 并发时，生成的 worktree 路径/分支相同 → controller 侧 `git worktree add` 报「/…/stage 已被占用」→ node 会话创建失败。
+- 对比 instance 级 `createWorkflowWorktree`（`instance.ts:223-239`）已有 `-2/-3` 递增后缀重试，node 级 worktree **缺同类去重**。
+
+**根因**：node 级 worktree 路径/分支生成使用固定 suffix（`instanceSlug/stageSlug`），无碰撞时递增/随机后缀兜底。
+
+**修复**（commit: 返工提交）：
+- `session.ts` enableWorktree 分支改为外层最多 3 次重试循环，内层每次 10s 超时（总计 30s）
+- 分支冲突时（`parsed.error` 包含 'already exists'/'already used'）自动追加 `-2`/`-3` 后缀重试
+- 非重试错误直接抛出，不重试
+- 超时错误信息包含"分支冲突重试耗尽"
+
+**验证**：
+- 新增单测验证：分支冲突时递增后缀重试成功
+- 新增单测验证：3 次重试全部失败时抛出 WORKTREE_ADD_FAILED
+- 新增单测验证：非重试错误直接抛出
+- workflow 全量测试 173 passed ✅
 
 ### 3. 删除实例时 Worktree 清理失败仅 `console.error`，残留孤儿 worktree 与分支
 
@@ -156,6 +179,23 @@ type: Permanent
 - **验证测试实际执行**：通过 ✅（见「最终验证」表）。
 
 **结论**：问题 3 修复有效且闭环。其余问题（1/2/4/6/9）此前已确认修复。无新增严重/一般问题，`integration → release` 可进入合并。
+
+## 本轮 Review 复验记录（2026-08-24，AI Review 节点最终代码评审 → 通过）
+
+针对第 6 轮返工提交（`921b177`），AI Review 节点对 `integration..release` 全量差距（`origin/release..integration`）做最终独立代码评审。本轮聚焦复验下游 Review 打回的问题 3 修复：
+
+- **代码复验**（`921b177` diff，`instance.ts`）：
+  - `removeWorkflowWorktree` 失败分支由 `console.error + return` 改为 `throw new Error(\`清理 Worktree 失败: ${parsed.error}\`)`（`instance.ts:530`）
+  - 超时循环结束后由 `console.error + return` 改为 `throw new Error('清理 Worktree 超时')`（`instance.ts:536`）
+  - redis 响应 key 的 `del` 上移到判定失败/成功之前（`instance.ts:528`），失败时同样清理响应 key，避免残留
+  - `deleteInstance`（`instance.ts:479-499`）的 `try/catch` 现可捕获异常并写入 `worktreeCleanupFailed: true` 标记 —— 契约一致，标记可真实写入
+- **新增单测复验**（`instance.test.ts`，+63 行）：
+  - 用例 1：`git:worktree:remove` 返回失败 → `publish` 发送命令 + `updateOne` 写入 `worktreeCleanupFailed: true` ✅
+  - 用例 2：实例无 `workflowWorktreePath` → 不触发 `publish`、不写入失败标记 ✅
+- **测试独立复跑**：`vitest run src/services/workflow/instance.test.ts` → 34 passed；`vitest run src/services/workflow/` → **173 passed**（实测复跑，非仅引用报告）
+- **审查结论**：修复有效且闭环，无明显新增严重/一般问题。建议项 5/7/8 为既定设计取舍，不构成合入阻断。
+
+**结论**：`integration → release` 验收通过，可进入合并。
 
 ## E2E 失败项分析（非本次验收范围）
 

@@ -110,41 +110,59 @@ export class SessionService {
       worktreePath = input.existingWorktreePath;
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
+      // 最多重试 3 次（分支冲突时追加递增后缀）
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
       const safeName = sanitizeWorkspaceName(workspace.name);
-      const branch = `${safeName}/${input.worktreeBranchSuffix}`;
-      const wtPath = path.join(worktreeDir, safeName, input.worktreeBranchSuffix);
-
-      const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
-        type: 'git:worktree:add',
-        requestId,
-        controllerId: input.controllerId,
-        repoPath: workspace.path,
-        worktreePath: wtPath,
-        branch,
-      }));
+      const baseBranch = `${safeName}/${input.worktreeBranchSuffix}`;
+      const baseWtPath = path.join(worktreeDir, safeName, input.worktreeBranchSuffix);
 
       let added = false;
-      for (let i = 0; i < 30; i++) {
-        const result = await redis.get(`git:worktree:add:${requestId}`);
-        if (result) {
-          const parsed = JSON.parse(result);
-          if (!parsed.success) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const attemptBranch = attempt === 0 ? baseBranch : `${baseBranch}-${attempt + 1}`;
+        const attemptWtPath = attempt === 0 ? baseWtPath : `${baseWtPath}-${attempt + 1}`;
+
+        const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        await redis.publish('session:command', JSON.stringify({
+          type: 'git:worktree:add',
+          requestId,
+          controllerId: input.controllerId,
+          repoPath: workspace.path,
+          worktreePath: attemptWtPath,
+          branch: attemptBranch,
+        }));
+
+        // 等待控制器响应（最多 10 秒/次，3 次重试总计 30 秒）
+        for (let i = 0; i < 10; i++) {
+          const result = await redis.get(`git:worktree:add:${requestId}`);
+          if (result) {
+            const parsed = JSON.parse(result);
+            await redis.del(`git:worktree:add:${requestId}`);
+
+            if (parsed.success) {
+              cwd = parsed.worktreePath || attemptWtPath;
+              worktreePath = parsed.worktreePath || attemptWtPath;
+              worktreeBranch = attemptBranch;
+              added = true;
+              break;
+            }
+
+            // 分支已存在错误：重试下一次
+            if (parsed.error?.includes('already exists') || parsed.error?.includes('already used')) {
+              console.log(`分支 ${attemptBranch} 已存在，尝试追加后缀重试 (${attempt + 2}/3)`);
+              break; // 跳出内层轮询，进入下一次外层重试
+            }
+
+            // 其他错误直接抛出
             throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
           }
-          await redis.del(`git:worktree:add:${requestId}`);
-          const resolvedPath = parsed.worktreePath || wtPath;
-          cwd = resolvedPath;
-          worktreePath = resolvedPath;
-          worktreeBranch = branch;
-          added = true;
-          break;
+          await new Promise(r => setTimeout(r, 1000));
         }
-        await new Promise(r => setTimeout(r, 1000));
+
+        if (added) break;
       }
+
       if (!added) {
-        throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
+        throw new Error('WORKTREE_ADD_FAILED: 分支冲突重试耗尽或等待 git worktree add 超时');
       }
     }
 
