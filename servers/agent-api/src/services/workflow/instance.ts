@@ -10,7 +10,7 @@ import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { getAvailableServerTypes } from './capability.js';
-import { sanitizeWorkspaceName } from './worktree-utils.js';
+import { sanitizeWorkspaceName, generateWorktreeSuffix } from './worktree-utils.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -193,7 +193,7 @@ class WorkflowInstanceService {
     }
   }
 
-  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器，分支冲突时追加随机后缀重试 */
+  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器，使用随机后缀天然去重 */
   private async createWorkflowWorktree(
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
@@ -216,54 +216,43 @@ class WorkflowInstanceService {
     // 使用共享 sanitize 函数，确保与 session.ts 校验前缀一致
     const safeWorkspaceName = sanitizeWorkspaceName(workspace.name);
     
-    const branch = `workflow/${slug}`;
-    const baseWtPath = `${worktreeDir}/${safeWorkspaceName}/workflow-${slug}`;
+    // 使用随机后缀天然去重，避免多实例并发碰撞
+    const uniqueSuffix = generateWorktreeSuffix();
+    const branch = `workflow/${slug}-${uniqueSuffix}`;
+    const wtPath = `${worktreeDir}/${safeWorkspaceName}/workflow-${slug}-${uniqueSuffix}`;
 
-    // 最多重试 3 次（分支冲突时追加随机后缀）
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const attemptBranch = attempt === 0 ? branch : `${branch}-${attempt + 1}`;
-      const attemptWtPath = attempt === 0 ? baseWtPath : `${baseWtPath}-${attempt + 1}`;
+    const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await redis.publish(
+      'session:command',
+      JSON.stringify({
+        type: 'git:worktree:add',
+        requestId,
+        controllerId,
+        repoPath: workspace.path,
+        worktreePath: wtPath,
+        branch,
+      }),
+    );
 
-      const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish(
-        'session:command',
-        JSON.stringify({
-          type: 'git:worktree:add',
-          requestId,
-          controllerId,
-          repoPath: workspace.path,
-          worktreePath: attemptWtPath,
-          branch: attemptBranch,
-        }),
-      );
-
-      // 等待控制器响应（最多 10 秒/次，3 次重试总计 30 秒）
-      for (let i = 0; i < 10; i++) {
-        const result = await redis.get(`git:worktree:add:${requestId}`);
-        if (result) {
-          const parsed = JSON.parse(result);
-          await redis.del(`git:worktree:add:${requestId}`);
-          
-          if (parsed.success) {
-            return {
-              path: parsed.worktreePath || attemptWtPath,
-              branch: attemptBranch,
-            };
-          }
-          
-          // 分支已存在错误：重试下一次
-          if (parsed.error?.includes('already exists') || parsed.error?.includes('already used')) {
-            console.log(`分支 ${attemptBranch} 已存在，尝试追加后缀重试 (${attempt + 2}/3)`);
-            break; // 跳出内层轮询，进入下一次外层重试
-          }
-          
-          // 其他错误：直接抛出
+    // 等待控制器响应（最多 30 秒）
+    for (let i = 0; i < 30; i++) {
+      const result = await redis.get(`git:worktree:add:${requestId}`);
+      if (result) {
+        const parsed = JSON.parse(result);
+        await redis.del(`git:worktree:add:${requestId}`);
+        
+        if (!parsed.success) {
           throw new Error(`创建工作流 Worktree 失败: ${parsed.error}`);
         }
-        await new Promise((r) => setTimeout(r, 1000));
+        
+        return {
+          path: parsed.worktreePath || wtPath,
+          branch,
+        };
       }
+      await new Promise((r) => setTimeout(r, 1000));
     }
-    throw new Error('创建工作流 Worktree 超时（可能分支冲突重试耗尽）');
+    throw new Error('创建工作流 Worktree 超时');
   }
 
   /**
