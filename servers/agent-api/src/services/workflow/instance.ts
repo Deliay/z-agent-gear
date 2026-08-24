@@ -10,6 +10,7 @@ import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { getAvailableServerTypes } from './capability.js';
+import { sanitizeWorkspaceName } from './worktree-utils.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -192,7 +193,7 @@ class WorkflowInstanceService {
     }
   }
 
-  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器 */
+  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器，分支冲突时追加随机后缀重试 */
   private async createWorkflowWorktree(
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
@@ -212,39 +213,57 @@ class WorkflowInstanceService {
       .slice(0, 50)
       || `wf-${Date.now().toString(36)}`;
     
+    // 使用共享 sanitize 函数，确保与 session.ts 校验前缀一致
+    const safeWorkspaceName = sanitizeWorkspaceName(workspace.name);
+    
     const branch = `workflow/${slug}`;
-    const wtPath = `${worktreeDir}/${workspace.name}/workflow-${slug}`;
+    const baseWtPath = `${worktreeDir}/${safeWorkspaceName}/workflow-${slug}`;
 
-    const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await redis.publish(
-      'session:command',
-      JSON.stringify({
-        type: 'git:worktree:add',
-        requestId,
-        controllerId,
-        repoPath: workspace.path,
-        worktreePath: wtPath,
-        branch,
-      }),
-    );
+    // 最多重试 3 次（分支冲突时追加随机后缀）
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const attemptBranch = attempt === 0 ? branch : `${branch}-${attempt + 1}`;
+      const attemptWtPath = attempt === 0 ? baseWtPath : `${baseWtPath}-${attempt + 1}`;
 
-    // 等待控制器响应（最多 30 秒）
-    for (let i = 0; i < 30; i++) {
-      const result = await redis.get(`git:worktree:add:${requestId}`);
-      if (result) {
-        const parsed = JSON.parse(result);
-        if (!parsed.success) {
+      const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await redis.publish(
+        'session:command',
+        JSON.stringify({
+          type: 'git:worktree:add',
+          requestId,
+          controllerId,
+          repoPath: workspace.path,
+          worktreePath: attemptWtPath,
+          branch: attemptBranch,
+        }),
+      );
+
+      // 等待控制器响应（最多 10 秒/次，3 次重试总计 30 秒）
+      for (let i = 0; i < 10; i++) {
+        const result = await redis.get(`git:worktree:add:${requestId}`);
+        if (result) {
+          const parsed = JSON.parse(result);
+          await redis.del(`git:worktree:add:${requestId}`);
+          
+          if (parsed.success) {
+            return {
+              path: parsed.worktreePath || attemptWtPath,
+              branch: attemptBranch,
+            };
+          }
+          
+          // 分支已存在错误：重试下一次
+          if (parsed.error?.includes('already exists') || parsed.error?.includes('already used')) {
+            console.log(`分支 ${attemptBranch} 已存在，尝试追加后缀重试 (${attempt + 2}/3)`);
+            break; // 跳出内层轮询，进入下一次外层重试
+          }
+          
+          // 其他错误：直接抛出
           throw new Error(`创建工作流 Worktree 失败: ${parsed.error}`);
         }
-        await redis.del(`git:worktree:add:${requestId}`);
-        return {
-          path: parsed.worktreePath || wtPath,
-          branch,
-        };
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      await new Promise((r) => setTimeout(r, 1000));
     }
-    throw new Error('创建工作流 Worktree 超时');
+    throw new Error('创建工作流 Worktree 超时（可能分支冲突重试耗尽）');
   }
 
   /**
@@ -402,6 +421,16 @@ class WorkflowInstanceService {
       throw new Error('工作流实例不存在或无权限');
     }
 
+    const node = instance.nodes.find((n) => n.nodeId === nodeId);
+    if (!node) {
+      throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+
+    // HUMAN/FLAG 节点无会话，不接受 agentConfig（忽略传入值，避免写入无意义的快照）
+    if (node.type !== 'AI') {
+      agentConfig = undefined;
+    }
+
     // 如果提供了 agentConfig，校验其 acpServerType 是否在控制器可用能力内
     if (agentConfig) {
       const availableServerTypes = await getAvailableServerTypes(instance.controllerId.toString(), userId);
@@ -429,7 +458,7 @@ class WorkflowInstanceService {
   /**
    * 删除实例（软删除）：停止流程运转、删除流程下全部会话，实例数据保留（仅标记 deletedAt）。
    * 先标记 deletedAt 使引擎/orchestrator 兜底立即排除本实例，再逐个删除节点会话，避免竞态。
-   * 如果实例有工作流 Worktree，一并清理。
+   * 如果实例有工作流 Worktree，一并清理；清理失败时标记 worktreeCleanupFailed 供后续孤儿回收。
    */
   async deleteInstance(userId: string, id: string) {
     const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
@@ -461,6 +490,11 @@ class WorkflowInstanceService {
         }
       } catch (err) {
         console.error(`删除工作流实例「${instance.name}」的 Worktree 失败:`, err);
+        // 标记清理失败，便于后续孤儿 Worktree 回收
+        await WorkflowInstance.updateOne(
+          { _id: id },
+          { $set: { worktreeCleanupFailed: true } },
+        );
       }
     }
     return true;
