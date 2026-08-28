@@ -48,6 +48,8 @@ type WorkflowTemplateNode {
   dependsOn: [String!]!
   # 该节点会话是否需要 worktree 隔离
   requiresWorktree: Boolean!
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
 }
 
 type WorkflowTemplate {
@@ -86,6 +88,8 @@ type ConfiguredWorkflowNode {
   requiresWorktree: Boolean!
   # AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig: AgentNodeConfig
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
 }
 
 type ConfiguredWorkflow {
@@ -133,6 +137,8 @@ type WorkflowNode {
   artifactTitles: [String!]
   agentConfig: AgentNodeConfig
   requiresWorktree: Boolean
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
   createdAt: String!
   startedAt: String
   reworkedAt: String
@@ -161,6 +167,10 @@ type WorkflowInstance {
   lastNodeStatus: String
   # 是否已归档（归档仅移入「已归档」分组，不影响流程运转；区别于删除）
   archived: Boolean!
+  # 工作流 Worktree 路径（createWorkflowWorktree=true 且 Git 工作区时存在）
+  workflowWorktreePath: String
+  # 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在）
+  workflowWorktreeBranch: String
   nodes: [WorkflowNode!]!
   blackboard: [BlackboardEntry!]!
   blackboardTrash: [BlackboardEntry!]!
@@ -180,6 +190,8 @@ input WorkflowTemplateNodeInput {
   artifactTitles: [String!]
   dependsOn: [String!]!
   requiresWorktree: Boolean!
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
 }
 
 input WorkflowTemplateInput {
@@ -207,6 +219,8 @@ input ConfiguredWorkflowNodeInput {
   requiresWorktree: Boolean!
   # AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig: AgentNodeConfigInput
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
 }
 
 input ConfigureWorkflowInput {
@@ -230,6 +244,8 @@ input InstantiateWorkflowInput {
   name: String!
   # 实例化前配置界面编辑后的最终节点图（服务端以此为准校验并快照落库）
   nodes: [ConfiguredWorkflowNodeInput!]!
+  # 是否为工作流创建独立 Worktree（默认 false）
+  createWorkflowWorktree: Boolean
 }
 
 # ---------- 实例节点编辑 ----------
@@ -242,6 +258,8 @@ input WorkflowNodeUpdateInput {
   artifactTitles: [String!]
   requiresWorktree: Boolean
   agentConfig: AgentNodeConfigInput
+  # 展示顺序（仅影响 UI 排列，不影响执行顺序）
+  sortOrder: Int
 }
 
 # ---------- Query / Mutation ----------
@@ -277,7 +295,7 @@ type Mutation {
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
   # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
-  restartNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
+  restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）

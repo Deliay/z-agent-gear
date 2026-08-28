@@ -45,6 +45,8 @@ function makeInstance(): WorkflowInstanceData {
     lastNodeName: null,
     lastNodeStatus: null,
     archived: false,
+    workflowWorktreePath: null,
+    workflowWorktreeBranch: null,
     nodes: [
       {
         id: 'n1',
@@ -59,6 +61,8 @@ function makeInstance(): WorkflowInstanceData {
         artifactTitles: null,
         agentConfig: null,
         requiresWorktree: null,
+        sortOrder: null,
+        dependsOn: [],
         createdAt: '2026-08-08T00:00:00Z',
         startedAt: null,
         reworkedAt: null,

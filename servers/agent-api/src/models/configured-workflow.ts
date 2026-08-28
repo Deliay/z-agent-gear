@@ -26,6 +26,8 @@ const configuredNodeSchema = new mongoose.Schema(
     requiresWorktree: { type: Boolean, default: false },
     // AI 节点必填；HUMAN/FLAG 节点为 null
     agentConfig: { type: agentNodeConfigSchema, default: undefined },
+    // 展示顺序（仅影响 UI 排列，不影响执行顺序）
+    sortOrder: { type: Number, default: undefined },
   },
   { _id: false },
 );

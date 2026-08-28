@@ -8,6 +8,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
+import { sanitizeWorkspaceName, generateWorktreeSuffix } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
@@ -98,7 +99,8 @@ export class SessionService {
       // session must NOT record worktreeBranch — that field marks ownership
       // and would make delete() run git cleanup on a shared worktree.
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
-      const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+      // 使用 sanitizeWorkspaceName 确保与 createWorkflowWorktree 的路径生成一致
+      const scopePrefix = path.normalize(path.join(worktreeDir, sanitizeWorkspaceName(workspace.name))) + path.sep;
       if (!path.normalize(input.existingWorktreePath).startsWith(scopePrefix)) {
         throw new GraphQLError('existingWorktreePath does not belong to this workspace', {
           extensions: { code: 'BAD_USER_INPUT' },
@@ -108,9 +110,12 @@ export class SessionService {
       worktreePath = input.existingWorktreePath;
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
+      // 使用随机后缀天然去重，避免多实例/多节点并发碰撞
       const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
-      const branch = `${workspace.name}/${input.worktreeBranchSuffix}`;
-      const wtPath = path.join(worktreeDir, workspace.name, input.worktreeBranchSuffix);
+      const safeName = sanitizeWorkspaceName(workspace.name);
+      const uniqueSuffix = generateWorktreeSuffix();
+      const branch = `${safeName}/${input.worktreeBranchSuffix}-${uniqueSuffix}`;
+      const wtPath = path.join(worktreeDir, safeName, `${input.worktreeBranchSuffix}-${uniqueSuffix}`);
 
       const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       await redis.publish('session:command', JSON.stringify({
@@ -127,10 +132,12 @@ export class SessionService {
         const result = await redis.get(`git:worktree:add:${requestId}`);
         if (result) {
           const parsed = JSON.parse(result);
+          await redis.del(`git:worktree:add:${requestId}`);
+
           if (!parsed.success) {
             throw new Error(`WORKTREE_ADD_FAILED: ${parsed.error}`);
           }
-          await redis.del(`git:worktree:add:${requestId}`);
+
           const resolvedPath = parsed.worktreePath || wtPath;
           cwd = resolvedPath;
           worktreePath = resolvedPath;
@@ -140,8 +147,9 @@ export class SessionService {
         }
         await new Promise(r => setTimeout(r, 1000));
       }
+
       if (!added) {
-        throw new Error('WORKTREE_ADD_FAILED: Timeout waiting for git worktree add');
+        throw new Error('WORKTREE_ADD_FAILED: 等待 git worktree add 超时');
       }
     }
 

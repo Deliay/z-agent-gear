@@ -262,13 +262,13 @@ describe('SessionService', () => {
       mockRedis.publish.mockResolvedValue(1);
       mockRedis.get
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(JSON.stringify({ success: true, worktreePath: '/worktrees/my-project/feat-123', branch: 'my-project/feat-123' }));
+        .mockResolvedValueOnce(JSON.stringify({ success: true, worktreePath: '/worktrees/my-project/feat-123-abc12345', branch: 'my-project/feat-123-abc12345' }));
 
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
         controllerName: 'my-server',
-        cwd: '/worktrees/my-project/feat-123',
-        worktreePath: '/worktrees/my-project/feat-123',
-        worktreeBranch: 'my-project/feat-123',
+        cwd: '/worktrees/my-project/feat-123-abc12345',
+        worktreePath: '/worktrees/my-project/feat-123-abc12345',
+        worktreeBranch: 'my-project/feat-123-abc12345',
       }) as never);
 
       const result = await sessionService.create('user-1', {
@@ -287,14 +287,19 @@ describe('SessionService', () => {
         'session:command',
         expect.stringContaining('"type":"acp:start"'),
       );
+      // 验证分支名包含随机后缀
+      const publishCalls = mockRedis.publish.mock.calls.map(c => String(c[1]));
+      const addCall = publishCalls.find(c => c.includes('git:worktree:add'));
+      expect(addCall).toBeDefined();
+      expect(addCall).toMatch(/"branch":"my-project\/feat-123-[a-f0-9]+"/);
       expect(Session.create).toHaveBeenCalledWith(expect.objectContaining({
-        worktreePath: '/worktrees/my-project/feat-123',
-        worktreeBranch: 'my-project/feat-123',
+        worktreePath: '/worktrees/my-project/feat-123-abc12345',
+        worktreeBranch: expect.stringMatching(/my-project\/feat-123-[a-f0-9]+/),
       }));
-      expect(result.cwd).toBe('/worktrees/my-project/feat-123');
+      expect(result.cwd).toBe('/worktrees/my-project/feat-123-abc12345');
     });
 
-    it('should throw on worktree add failure', async () => {
+    it('should throw on worktree add failure (non-retryable error)', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
@@ -305,7 +310,7 @@ describe('SessionService', () => {
       mockRedis.publish.mockResolvedValue(1);
       mockRedis.get
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'branch already exists' }));
+        .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'permission denied' }));
 
       await expect(sessionService.create('user-1', {
         controllerId: 'ctrl-1',
@@ -313,7 +318,7 @@ describe('SessionService', () => {
         workspaceId: 'ws-1',
         enableWorktree: true,
         worktreeBranchSuffix: 'feat-123',
-      })).rejects.toThrow('WORKTREE_ADD_FAILED');
+      })).rejects.toThrow('WORKTREE_ADD_FAILED: permission denied');
     });
 
     it('should throw timeout when no worktree add result', async () => {
@@ -340,7 +345,7 @@ describe('SessionService', () => {
 
       await vi.advanceTimersByTimeAsync(31000);
 
-      await expect(promise).rejects.toThrow('WORKTREE_ADD_FAILED: Timeout');
+      await expect(promise).rejects.toThrow('WORKTREE_ADD_FAILED: 等待 git worktree add 超时');
 
       vi.useRealTimers();
     });
