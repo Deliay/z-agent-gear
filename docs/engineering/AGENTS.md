@@ -172,6 +172,7 @@ flowchart LR
 - [[proposals/20260705-feat-acp-server-extend.md]] — ACP Server 支持扩展
 - [[proposals/20260721-refactor-frontend-design-overhaul.md]] — 整体前端设计优化（设计语言升级与视觉重构）
 - [[proposals/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化
+- [[proposals/20260829-fix-workflow-worktree-session-start.md]] — 工作流 Worktree 节点会话启动失败修复
 
 ### 实现计划（`plan/`）
 
@@ -203,3 +204,4 @@ flowchart LR
 - [[plan/20260811-feat-agent-workflow-phase2.md]] — Agent 工作流二期（工作流管理与实例化机制完善）实现计划
 - [[plan/20260817-feat-session-lifecycle-and-worktree-management.md]] — 会话生命周期与 Worktree 管理增强实现计划
 - [[plan/20260821-feat-workflow-optimization.md]] — 工作流优化 0821 实现计划
+- [[plan/20260829-fix-workflow-worktree-session-start.md]] — 工作流 Worktree 节点会话启动失败修复实现计划

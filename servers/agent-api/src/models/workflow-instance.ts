@@ -93,6 +93,8 @@ const workflowInstanceSchema = new mongoose.Schema(
     workflowWorktreePath: { type: String, default: undefined },
     // 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在）
     workflowWorktreeBranch: { type: String, default: undefined },
+    // Worktree 清理失败标记（deleteInstance 时清理失败，孤儿 worktree 需手动回收）
+    worktreeCleanupFailed: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

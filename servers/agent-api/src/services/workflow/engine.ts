@@ -42,9 +42,13 @@ export interface WorkflowInstanceDoc {
   blackboardUpdatedAt: Map<string, Date>;
   /** 软删除标记（删除实例时置为删除时间；非空则拒绝一切转移） */
   deletedAt?: Date | null;
-  /** 最后执行过的节点（实例对外状态展示；每次转移按时间序更新，级联末位为准） */
+  /** 最后执行过的节点（实例对外状态展示；引擎每次转移按时间序更新，级联末位为准） */
   lastNodeName?: string | null;
   lastNodeStatus?: string | null;
+  /** 工作流 Worktree 路径（createWorkflowWorktree=true 且 Git 工作区时存在） */
+  workflowWorktreePath?: string | null;
+  /** 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在） */
+  workflowWorktreeBranch?: string | null;
   save(): Promise<unknown>;
 }
 

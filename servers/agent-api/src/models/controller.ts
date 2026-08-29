@@ -11,6 +11,8 @@ const controllerSchema = new mongoose.Schema({
   lastHeartbeatAt: { type: Date },
   lastIp: { type: String },
   worktreeDir: { type: String },
+  homeDir: { type: String },
+  platform: { type: String },
 }, { timestamps: true });
 
 controllerSchema.index({ userId: 1, status: 1 });

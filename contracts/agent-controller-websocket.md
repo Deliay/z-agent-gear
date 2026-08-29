@@ -45,6 +45,10 @@
 | `key` | `string` | 是 | 完整控制器 Key |
 | `hostname` | `string` | 是 | 机器主机名 |
 | `version` | `string` | 是 | 控制器 semver 版本号（如 `1.2.3`） |
+| `homeDir` | `string` | 否 | 控制器本机 `os.homedir()`（用于 `~` 展开与路径归属校验；旧版本控制器可不上报） |
+| `platform` | `string` | 否 | 控制器本机 `os.platform()`（`linux`/`darwin`/`win32`，用于路径归一化比较；旧版本控制器可不上报） |
+
+> 注：`homeDir`/`platform` 为可选字段，旧版本控制器不上报时服务端按字段缺失处理，不破坏既有握手。GraphQL 契约（`CreateSessionInput.existingWorktreePath`、错误码 `BAD_USER_INPUT`）不变。
 
 ### 2.3 `registered`（Server → Controller）
 

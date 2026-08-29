@@ -133,6 +133,78 @@ describe('SocketIO Service', () => {
       });
     });
 
+    it('should persist homeDir/platform on register with extended payload (T-S1)', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      createSocketIOServer(mockIO as never);
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', {
+        key: 'zag_k_1_abc123',
+        hostname: 'dev-machine',
+        version: '1.0.0',
+        homeDir: '/home/user',
+        platform: 'linux',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+      });
+
+      const upsertCall = vi.mocked(Controller.findOneAndUpdate).mock.calls[0]!;
+      expect(upsertCall[1]).toMatchObject({ homeDir: '/home/user', platform: 'linux' });
+    });
+
+    it('should handle old payload without homeDir/platform without error (T-S2)', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      createSocketIOServer(mockIO as never);
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+      });
+
+      const upsertCall = vi.mocked(Controller.findOneAndUpdate).mock.calls[0]!;
+      const updateArg = upsertCall[1] as Record<string, unknown>;
+      expect(updateArg.homeDir).toBeUndefined();
+      expect(updateArg.platform).toBeUndefined();
+    });
+
     it('should reject with INVALID_KEY when key not found', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();

@@ -52,28 +52,19 @@ describe('getAvailableServerTypes', () => {
     expect(mockRedis.publish).not.toHaveBeenCalled();
   });
 
-  it('缓存缺失+控制器在线时回源成功', async () => {
+  it('缓存缺失+控制器在线时回源成功（acp:check 路径）', async () => {
     mockRedis.get
-      .mockResolvedValueOnce(null) // acp:capability:ctrl-1
-      .mockResolvedValueOnce(JSON.stringify({ success: true, servers: [{ type: 'opencode', available: true }] })); // acp:capability:query:req_xxx
+      .mockResolvedValueOnce(null) // 首次查 acp:capability:ctrl-1
+      .mockResolvedValueOnce(null) // 第1秒轮询
+      .mockResolvedValueOnce(JSON.stringify({ // 第2秒轮询：回写成功
+        servers: [{ type: 'opencode', available: true }],
+        checkedAt: new Date().toISOString(),
+      }));
     
     const result = await getAvailableServerTypes('ctrl-1', 'user-1');
     expect(result).toEqual(['opencode']);
-    expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('acp:capability:query'));
-    expect(mockRedis.set).toHaveBeenCalledWith(
-      'acp:capability:ctrl-1',
-      expect.any(String),
-      'EX',
-      300,
-    );
-  });
-
-  it('缓存缺失+回源失败时不写缓存并抛错', async () => {
-    mockRedis.get
-      .mockResolvedValueOnce(null) // acp:capability:ctrl-1
-      .mockResolvedValueOnce(JSON.stringify({ success: false, error: 'Controller offline' })); // acp:capability:query:req_xxx
-    
-    await expect(getAvailableServerTypes('ctrl-1', 'user-1')).rejects.toThrow('Agent 能力信息不可用');
+    expect(mockRedis.publish).toHaveBeenCalledWith('session:command', expect.stringContaining('"type":"acp:check"'));
+    // 不再写入缓存（由 controller-api 统一回写）
     expect(mockRedis.set).not.toHaveBeenCalled();
   });
 
@@ -88,10 +79,8 @@ describe('getAvailableServerTypes', () => {
   });
 
   it('回源超时时抛错', async () => {
-    mockRedis.get
-      .mockResolvedValueOnce(null) // acp:capability:ctrl-1
-      .mockResolvedValue(null); // acp:capability:query 永远返回 null
+    mockRedis.get.mockResolvedValue(null); // 永远返回 null
     
     await expect(getAvailableServerTypes('ctrl-1', 'user-1')).rejects.toThrow('Agent 能力信息不可用');
-  }, 10000);
+  }, 15000);
 });

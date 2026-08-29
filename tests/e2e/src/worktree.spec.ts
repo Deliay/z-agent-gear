@@ -97,10 +97,11 @@ test.describe('Worktree E2E Tests', () => {
     const wsPath = `/tmp/e2e-ws-${Date.now()}`;
     const ws = await createWorkspace(page, ctrl.controllerId, wsPath, token);
     workspaceId = ws.id;
-    // worktree 路径须归属该 workspace 的 worktreeDir scope（与 A3/A6 API 测试一致）
+    // worktree 路径须归属该 workspace 的 worktreeDir scope（与 A3/A6 API 测试一致）。
+    // 校验端会用控制器上报的 homeDir（helpers.ts 中 /home/fake）将 ~ 展开为绝对路径，故此处用展开后的绝对路径。
     const wsName = wsPath.split('/').filter(Boolean).pop()!;
-    mainWorktreePath = `~/.zag/worktrees/${wsName}/main`;
-    featureWorktreePath = `~/.zag/worktrees/${wsName}/feature-test`;
+    mainWorktreePath = `/home/fake/.zag/worktrees/${wsName}/main`;
+    featureWorktreePath = `/home/fake/.zag/worktrees/${wsName}/feature-test`;
 
     const detectRes = await gqlRequest(page, `
       query DetectGitRepo($controllerId: ID!, $workspaceId: ID!) {

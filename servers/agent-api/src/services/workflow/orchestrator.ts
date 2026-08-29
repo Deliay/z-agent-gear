@@ -142,9 +142,8 @@ class WorkflowOrchestrator {
     // 2. 实例存在 workflowWorktreePath → 以 existingWorktreePath 下发
     // 3. 否则工作区根目录
     const enableWorktree = Boolean(configuredNode.requiresWorktree && agentConfig.initNewWorktree);
-    const instanceWithWorktree = instance as unknown as { workflowWorktreePath?: string };
-    const existingWorktreePath = !enableWorktree && instanceWithWorktree.workflowWorktreePath
-      ? instanceWithWorktree.workflowWorktreePath
+    const existingWorktreePath = !enableWorktree && instance.workflowWorktreePath
+      ? instance.workflowWorktreePath
       : undefined;
 
     // 阶段 worktree 后缀：<instance-slug>/<stage-slug>（同阶段节点会话复用同一 worktree）
