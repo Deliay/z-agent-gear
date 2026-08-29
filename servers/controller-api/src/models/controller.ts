@@ -8,6 +8,8 @@ const controllerSchema = new mongoose.Schema({
   status: { type: String, enum: ['online', 'offline', 'registering', 'unbound'], default: 'registering' },
   keyId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerKey', required: true, unique: true },
   version: { type: String, required: true },
+  homeDir: { type: String },
+  platform: { type: String },
   lastHeartbeatAt: { type: Date },
   lastIp: { type: String },
 }, { timestamps: true });

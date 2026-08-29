@@ -230,6 +230,8 @@ export function connectToServer(
       hostname: controllerName,
       version: CONTROLLER_VERSION,
       resumeToken,
+      homeDir: homedir(),
+      platform: platform(),
     });
   });
 

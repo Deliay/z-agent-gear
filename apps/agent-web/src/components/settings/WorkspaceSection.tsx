@@ -230,6 +230,9 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
             <p className="text-xs text-muted-foreground mt-0.5">
               {worktreeDir || '~/.zag/worktrees（默认）'}
             </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              注：`~` 指控制器本机用户主目录，默认目录与后端生效默认值保持一致。
+            </p>
           </div>
           <Button
             size="sm"

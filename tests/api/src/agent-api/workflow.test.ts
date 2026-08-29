@@ -251,6 +251,9 @@ interface FakeController {
   rawKey: string;
 }
 
+/** 服务端默认 worktreeDir（~/.zag/worktrees）展开所用控制器 home；fake 统一上报此值 */
+const FAKE_CONTROLLER_HOME = '/home/fake';
+
 /** 注册 fake controller 并保持连接；自动应答 acp:check 能力检测（默认仅 opencode 可用） */
 async function registerFakeController(
   token: string,
@@ -273,7 +276,7 @@ async function registerFakeController(
     client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
   });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '1.0.0' });
+  client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '1.0.0', homeDir: FAKE_CONTROLLER_HOME, platform: 'linux' });
   const regData = await registered;
   return { client, controllerId: regData.controllerId, rawKey };
 }
@@ -3024,14 +3027,14 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     const tplId = await createSimpleTemplate(token, `wf-a48-${Date.now()}`);
     const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-a48-cfg-${Date.now()}`);
 
-    // 注册 git:worktree:add：回显服务端下发的 worktreePath（须匹配工作区 scope）
+    // 注册 git:worktree:add：回显服务端下发的 worktreePath（与真实控制器一致，将 ~/ 展开为本机 home）
     let worktreePath = '';
     fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string }) => {
-      worktreePath = data.worktreePath;
+      worktreePath = data.worktreePath.replace(/^~\//, `${FAKE_CONTROLLER_HOME}/`);
       fake.client.emit('git:worktree:add:result', {
         requestId: data.requestId,
         success: true,
-        worktreePath: data.worktreePath,
+        worktreePath,
       });
     });
 

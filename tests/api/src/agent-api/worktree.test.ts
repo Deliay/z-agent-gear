@@ -62,13 +62,16 @@ interface FakeController {
   rawKey: string;
 }
 
+/** 服务端默认 worktreeDir（~/.zag/worktrees）展开所用控制器 home；fake 统一上报此值 */
+const FAKE_CONTROLLER_HOME = '/home/fake';
+
 async function registerFakeController(
   token: string,
   tag: string,
   servers: { type: string; available: boolean; version?: string }[] = [
     { type: 'opencode', available: true, version: '1.0.0' },
   ],
-  opts: { failWorktreeRemove?: boolean; failFsRemove?: boolean } = {},
+  opts: { failWorktreeRemove?: boolean; failFsRemove?: boolean; noHomeDir?: boolean } = {},
 ): Promise<FakeController> {
   const keyRes = await gqlRequest(CREATE_KEY, { input: { name: `wt-${tag}-${Date.now()}`, type: 'local' } }, token);
   const keyBody = await keyRes.json();
@@ -98,9 +101,10 @@ async function registerFakeController(
       client.emit('fs:remove-dir:result', { requestId: data.requestId, success: true });
     }
   });
-  // Auto-answer git:worktree:add (create worktree)
+  // Auto-answer git:worktree:add (create worktree)：与真实控制器一致，将 ~/ 展开为本机 home 后再返回
   client.on('git:worktree:add', (data: { requestId: string; repoPath: string; worktreePath: string; branch: string }) => {
-    client.emit('git:worktree:add:result', { requestId: data.requestId, success: true, worktreePath: data.worktreePath });
+    const expanded = data.worktreePath.replace(/^~\//, `${FAKE_CONTROLLER_HOME}/`);
+    client.emit('git:worktree:add:result', { requestId: data.requestId, success: true, worktreePath: expanded });
   });
   // Auto-answer git:status (check if worktree is clean)
   client.on('git:status', (data: { requestId: string; path: string }) => {
@@ -121,7 +125,12 @@ async function registerFakeController(
     }
   });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: `wt-${tag}-host`, version: '1.0.0' });
+  const registerPayload: Record<string, string> = { key: rawKey, hostname: `wt-${tag}-host`, version: '1.0.0' };
+  if (!opts.noHomeDir) {
+    registerPayload.homeDir = FAKE_CONTROLLER_HOME;
+    registerPayload.platform = 'linux';
+  }
+  client.emit('register', registerPayload);
   const regData = await registered;
   return { client, controllerId: regData.controllerId, rawKey };
 }
@@ -146,9 +155,10 @@ function workspaceNameOf(wsPath: string): string {
   return wsPath.split('/').filter(Boolean).pop() || wsPath;
 }
 
-/** 服务端默认 worktreeDir 下的归属路径（existingWorktreePath 必须位于该 scope 内） */
+/** 服务端默认 worktreeDir 下的归属路径（existingWorktreePath 必须位于该 scope 内）。
+ * 注意：校验端会用控制器上报的 homeDir 将 ~ 展开成绝对路径，故此处返回展开后的绝对路径。 */
 function scopedWorktreePath(wsName: string, suffix: string): string {
-  return `~/.zag/worktrees/${wsName}/${suffix}`;
+  return `${FAKE_CONTROLLER_HOME}/.zag/worktrees/${wsName}/${suffix}`;
 }
 
 /** 轮询直到条件成立 */
@@ -352,6 +362,30 @@ describe('Worktree API Tests', () => {
     }, 15000);
   });
 
+  // ── A4b: 旧控制器（未上报 homeDir）+ 生效目录含 ~ 边界 ──────
+  describe('A4b: old controller without homeDir boundary', () => {
+    it('should reject session creation with a clear upgrade/absolute-path error', async () => {
+      const oldCtrl = await registerFakeController(token, 'wt-a4b-old', undefined, { noHomeDir: true });
+      const ws = await createWorkspace(token, oldCtrl.controllerId);
+      const wsName = workspaceNameOf(ws.path);
+
+      const res = await gqlRequest(CREATE_SESSION, {
+        input: {
+          controllerId: oldCtrl.controllerId,
+          acpServerType: 'opencode',
+          workspaceId: ws.id,
+          existingWorktreePath: `~/.zag/worktrees/${wsName}/reuse-old`,
+        },
+      }, token);
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      const errMsg = body.errors[0]?.message || '';
+      expect(errMsg).toMatch(/homeDir/i);
+      expect(body.errors[0]?.extensions?.code).toBe('BAD_USER_INPUT');
+      oldCtrl.client.disconnect();
+    }, 30000);
+  });
+
   // ── A4: createSession existingWorktreePath + enableWorktree 互斥 ──
   describe('A4: createSession existingWorktreePath + enableWorktree mutual exclusion', () => {
     it('should reject when both existingWorktreePath and enableWorktree are provided', async () => {
@@ -375,6 +409,8 @@ describe('Worktree API Tests', () => {
   // ── A5: deleteSession ack 顺序 ──────────────────────────────
   describe('A5: deleteSession with ack ordering', () => {
     it('should stop process before worktree cleanup', async () => {
+      // 先注册 acp:start 监听，再发创建会话，避免事件先于监听注册到达（并发下时序不稳定）
+      const startPromise = waitForEvent<{ sessionId: string }>(ctrl.client, 'acp:start', 10000);
       // Create a session with worktree
       const sessionRes = await gqlRequest(CREATE_SESSION, {
         input: { controllerId: ctrl.controllerId, acpServerType: 'opencode', workspaceId, enableWorktree: true, worktreeBranchSuffix: 'a5-del' },
@@ -384,7 +420,7 @@ describe('Worktree API Tests', () => {
       expect(sessionId).toBeTruthy();
 
       // Wait for acp:start
-      await waitForEvent(ctrl.client, 'acp:start', 10000);
+      await startPromise;
 
       // Delete the session
       const deleteRes = await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
@@ -404,12 +440,13 @@ describe('Worktree API Tests', () => {
     it('should close all sessions and remove worktree', async () => {
       // Create sessions in a worktree（路径须归属本 workspace 的 worktreeDir scope）
       const wtPath = scopedWorktreePath(workspaceName, `del-${Date.now()}`);
+      const s1StartPromise = waitForEvent(ctrl.client, 'acp:start', 10000);
       const s1Res = await gqlRequest(CREATE_SESSION, {
         input: { controllerId: ctrl.controllerId, acpServerType: 'opencode', workspaceId, existingWorktreePath: wtPath },
       }, token);
       const s1Body = await s1Res.json();
       const s1Id = s1Body.data?.createSession?.session?.id;
-      await waitForEvent(ctrl.client, 'acp:start', 10000);
+      await s1StartPromise;
 
       // Delete the worktree
       const res = await gqlRequest(DELETE_WORKTREE, {
@@ -457,6 +494,7 @@ describe('Worktree API Tests', () => {
     it('should report session cleanup failure and removal error (success=false)', async () => {
       // 会话通过 enableWorktree 创建 → 会话“拥有”该 worktree（记录 worktreeBranch），
       // deleteWorktree 逐会话清理时会对该 worktree 执行 git:worktree:remove（此处注入失败）
+      const failStartPromise = waitForEvent(failCtrl.client, 'acp:start', 10000);
       const sRes = await gqlRequest(CREATE_SESSION, {
         input: { controllerId: failCtrl.controllerId, acpServerType: 'opencode', workspaceId: failWorkspaceId, enableWorktree: true, worktreeBranchSuffix: 'pfail' },
       }, token);
@@ -465,7 +503,7 @@ describe('Worktree API Tests', () => {
       const session = sBody.data.createSession.session;
       const sessionId = session.id as string;
       expect(session.worktreePath).toBeTruthy();
-      await waitForEvent(failCtrl.client, 'acp:start', 10000);
+      await failStartPromise;
 
       const res = await gqlRequest(DELETE_WORKTREE, {
         controllerId: failCtrl.controllerId,
@@ -494,13 +532,14 @@ describe('Worktree API Tests', () => {
       // existingWorktreePath 复用的会话不拥有 worktree（无 worktreeBranch），
       // 会话清理不会失败；git:worktree:remove 注入失败，fs 兜底成功应清除 error
       const wtPath = scopedWorktreePath(fbWsName, `fb-${Date.now()}`);
+      const fbStartPromise = waitForEvent(fbCtrl.client, 'acp:start', 10000);
       const sRes = await gqlRequest(CREATE_SESSION, {
         input: { controllerId: fbCtrl.controllerId, acpServerType: 'opencode', workspaceId: fbWorkspaceId, existingWorktreePath: wtPath },
       }, token);
       const sBody = await sRes.json();
       expect(sBody.errors).toBeUndefined();
       const sessionId = sBody.data.createSession.session.id as string;
-      await waitForEvent(fbCtrl.client, 'acp:start', 10000);
+      await fbStartPromise;
 
       const res = await gqlRequest(DELETE_WORKTREE, {
         controllerId: fbCtrl.controllerId,

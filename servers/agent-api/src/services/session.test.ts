@@ -591,6 +591,178 @@ describe('SessionService', () => {
         expect.stringContaining('"type":"git:worktree:add"'),
       );
     });
+
+    it('should accept an expanded default worktree path when homeDir is reported (T-A1)', async () => {
+      // 未配置 worktreeDir → 生效默认 ~/.zag/worktrees；控制器上报 homeDir；existingWorktreePath 为展开后绝对路径
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: '/home/user/.zag/worktrees/my-project/wf-abc',
+        worktreePath: '/home/user/.zag/worktrees/my-project/wf-abc',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/home/user/.zag/worktrees/my-project/wf-abc',
+      });
+
+      expect(result.cwd).toBe('/home/user/.zag/worktrees/my-project/wf-abc');
+      expect(Session.create).toHaveBeenCalled();
+    });
+
+    it('should use a configured custom worktreeDir (absolute) for validation and generation (T-A2)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '/data/wt', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: '/data/wt/my-project/wf-abc',
+        worktreePath: '/data/wt/my-project/wf-abc',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/data/wt/my-project/wf-abc',
+      });
+
+      expect(result.cwd).toBe('/data/wt/my-project/wf-abc');
+    });
+
+    it('should use a configured custom worktreeDir containing ~ for validation (T-A2 tilde)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '~/wt', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: '/home/user/wt/my-project/wf-abc',
+        worktreePath: '/home/user/wt/my-project/wf-abc',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/home/user/wt/my-project/wf-abc',
+      });
+
+      expect(result.cwd).toBe('/home/user/wt/my-project/wf-abc');
+    });
+
+    it('should still reject a traversal path that escapes the expanded scope (T-A3)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/home/user/.zag/worktrees/my-project/../evil/feat-9',
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject an existingWorktreePath from another workspace (T-A3 other-ws)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/home/user/.zag/worktrees/other-project/wf-abc',
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+    });
+
+    it('should throw a clear error when homeDir missing and effective dir contains ~ (T-A4)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+
+      const err = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/home/user/.zag/worktrees/my-project/wf-abc',
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect(err.message).toContain('homeDir');
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('should correctly determine ownership for a win32 controller (T-A5)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', homeDir: 'C:\\Users\\dev', platform: 'win32' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: 'C:\\repo\\my-project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: 'C:\\Users\\dev\\.zag\\worktrees\\My-Project\\WF-ABC',
+        worktreePath: 'C:\\Users\\dev\\.zag\\worktrees\\My-Project\\WF-ABC',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: 'C:\\Users\\dev\\.zag\\worktrees\\My-Project\\WF-ABC',
+      });
+
+      expect(result.cwd).toBe('C:\\Users\\dev\\.zag\\worktrees\\My-Project\\WF-ABC');
+    });
+
+    it('should not depend on homeDir when effective dir is absolute (T-A6)', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', name: 'dev', worktreeDir: '/data/wt' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/repo/my-project', name: 'my-project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc({
+        cwd: '/data/wt/my-project/wf-abc',
+        worktreePath: '/data/wt/my-project/wf-abc',
+      }) as never);
+
+      const result = await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        existingWorktreePath: '/data/wt/my-project/wf-abc',
+      });
+
+      expect(result.cwd).toBe('/data/wt/my-project/wf-abc');
+    });
   });
 
   describe('updateStatus', () => {

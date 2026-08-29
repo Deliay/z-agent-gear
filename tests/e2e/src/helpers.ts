@@ -60,7 +60,13 @@ export function registerController(rawKey: string): Promise<FakeController> {
       client.disconnect();
       reject(new Error(`Failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: 'e2e-host', version: '1.0.0' });
+    client.emit('register', {
+      key: rawKey,
+      hostname: 'e2e-host',
+      version: '1.0.0',
+      homeDir: '/home/fake',
+      platform: 'linux',
+    });
   });
 }
 
