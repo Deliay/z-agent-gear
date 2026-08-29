@@ -60,15 +60,18 @@ export class LocalMcpServer {
     let bodyStr = '';
     let tooLarge = false;
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       bodyStr += chunk;
-      if (Buffer.byteLength(bodyStr) > MAX_BODY_BYTES) tooLarge = true;
+      if (Buffer.byteLength(bodyStr) > MAX_BODY_BYTES) {
+        tooLarge = true;
+        // 立即断流并响应 502，避免继续累加超限请求体 / 挂起等待 'end'
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: 'PAYLOAD_TOO_LARGE', message: 'MCP request body exceeds 16MB' } }));
+        req.destroy();
+      }
     });
     req.on('end', async () => {
-      if (tooLarge) {
-        res.writeHead(502);
-        res.end();
-        return;
-      }
+      if (tooLarge) return;
       let body: unknown;
       try {
         body = JSON.parse(bodyStr || '{}');
@@ -77,9 +80,15 @@ export class LocalMcpServer {
         res.end();
         return;
       }
-      const result = await this.relay.forward(sessionId, serverName, body);
-      res.writeHead(result.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result.body));
+      try {
+        const result = await this.relay.forward(sessionId, serverName, body);
+        res.writeHead(result.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result.body));
+      } catch (err) {
+        console.error(`[MCP local] forward failed: session=${sessionId} server=${serverName}: ${(err as Error).message}`);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: 'MCP forward failed' } }));
+      }
     });
   }
 }

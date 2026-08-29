@@ -9,6 +9,11 @@ const { mockStart, mockStop, MockHeartbeat } = vi.hoisted(() => {
   return { mockStart: start, mockStop: stop, MockHeartbeat: HB };
 });
 
+const { relayInstances, localServerInstances } = vi.hoisted(() => ({
+  relayInstances: [] as Array<Record<string, ReturnType<typeof vi.fn>>>,
+  localServerInstances: [] as Array<{ start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; port: number }>,
+}));
+
 const { MockAcpSyncBridge, mockBridge } = vi.hoisted(() => {
   const bridge = {
     connect: vi.fn().mockResolvedValue(undefined),
@@ -115,6 +120,9 @@ vi.mock('../src/mcp/relay.js', () => ({
     hasSession = vi.fn(() => true);
     hasServer = vi.fn(() => true);
     forward = vi.fn();
+    constructor() {
+      relayInstances.push(this as never);
+    }
   },
 }));
 
@@ -123,6 +131,9 @@ vi.mock('../src/mcp/local-server.js', () => ({
     port = 0;
     start = vi.fn(async () => {});
     stop = vi.fn(async () => {});
+    constructor() {
+      localServerInstances.push(this as never);
+    }
   },
 }));
 
@@ -179,6 +190,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockStart.mockClear();
   mockStop.mockClear();
+  relayInstances.length = 0;
+  localServerInstances.length = 0;
   vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -837,6 +850,163 @@ describe('SocketIO Client', () => {
       expect(warnSpy).toHaveBeenCalled();
       expect(processRegistry.listEntries).not.toHaveBeenCalled();
       expect(killSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MCP local endpoint lifecycle', () => {
+    function setup() {
+      bridgeInstances.length = 0;
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      return mockSocket;
+    }
+
+    it('starts the local loopback server exactly once at daemon startup and never stops on disconnect', async () => {
+      const mockSocket = setup();
+      const server = localServerInstances[0];
+      expect(server).toBeDefined();
+      expect(server.start).toHaveBeenCalledTimes(1);
+
+      // 断线→重连后服务不停止、端口不变（存活会话注入的旧 URL 仍可用）
+      mockSocket._trigger('disconnect', 'transport close');
+      expect(server.stop).not.toHaveBeenCalled();
+      mockSocket._trigger('connect');
+      expect(server.start).toHaveBeenCalledTimes(1);
+      // disconnect 仅触发 relay 快速失败（503），不触碰 HTTP 服务
+      const relay = relayInstances[0];
+      expect(relay.handleDisconnect).toHaveBeenCalled();
+    });
+
+    it('registers the session endpoint and injects the loopback port on acp:start', async () => {
+      const mockSocket = setup();
+      localServerInstances[0].port = 34567;
+      const relay = relayInstances[0];
+
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-mcp',
+        sessionId: 'sess-mcp',
+        serverType: 'opencode',
+        cwd: '/home/user/wt',
+        mcpEndpoint: { token: 'tok-1', serverNames: ['tools', 'proxy'] },
+      });
+
+      await vi.waitFor(() => {
+        expect(relay.registerSession).toHaveBeenCalledWith('sess-mcp', {
+          token: 'tok-1',
+          serverNames: ['tools', 'proxy'],
+        });
+      });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({ sessionId: 'sess-mcp', success: true }));
+      });
+    });
+
+    it('fails loudly (does not inject port 0) when the loopback server is not listening', async () => {
+      const mockSocket = setup();
+      localServerInstances[0].port = 0;
+      const relay = relayInstances[0];
+
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-mcp0',
+        sessionId: 'sess-mcp0',
+        serverType: 'opencode',
+        cwd: '/home/user/wt',
+        mcpEndpoint: { token: 'tok-0', serverNames: ['tools'] },
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({
+          sessionId: 'sess-mcp0',
+          success: false,
+        }));
+      });
+      // registerSession 不得被调用（端口校验失败，不注入坏 URL）
+      expect(relay.registerSession).not.toHaveBeenCalledWith('sess-mcp0', expect.anything());
+    });
+
+    it('routes mcp:response to the relay', async () => {
+      const mockSocket = setup();
+      const relay = relayInstances[0];
+
+      mockSocket._trigger('mcp:response', { requestId: 'mcpreq_1', status: 200, body: { jsonrpc: '2.0', id: 1, result: {} } });
+
+      expect(relay.handleMcpResponse).toHaveBeenCalledWith('mcpreq_1', 200, { jsonrpc: '2.0', id: 1, result: {} });
+    });
+
+    it('outputs an upgrade guide and exits on VERSION_MISMATCH', () => {
+      const mockSocket = setup();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      mockSocket._trigger('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('upgrade agent-controller'));
+      expect(mockSocket.disconnect).toHaveBeenCalled();
+      expect(process.exit).toHaveBeenCalledWith(1);
+    });
+
+    it('unregisters the session endpoint when the agent process exits on its own (onStopped)', async () => {
+      const mockSocket = setup();
+      localServerInstances[0].port = 34567;
+      const relay = relayInstances[0];
+
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-exit',
+        sessionId: 'sess-exit',
+        serverType: 'opencode',
+        cwd: '/home/user/wt',
+        mcpEndpoint: { token: 'tok-x', serverNames: ['tools'] },
+      });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({ sessionId: 'sess-exit', success: true }));
+      });
+
+      vi.mocked(relay.unregisterSession).mockClear();
+      bridgeInstances[0].emit('acp:stopped', { sessionId: 'sess-exit', reason: 'user_close' });
+
+      expect(relay.unregisterSession).toHaveBeenCalledWith('sess-exit');
+    });
+
+    it('unregisters the session endpoint on acp:stop', async () => {
+      const mockSocket = setup();
+      localServerInstances[0].port = 34567;
+      const relay = relayInstances[0];
+
+      mockSocket._trigger('acp:start', {
+        requestId: 'req-stop',
+        sessionId: 'sess-stop',
+        serverType: 'opencode',
+        cwd: '/home/user/wt',
+        mcpEndpoint: { token: 'tok-s', serverNames: ['tools'] },
+      });
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('acp:start:result', expect.objectContaining({ sessionId: 'sess-stop', success: true }));
+      });
+
+      vi.mocked(relay.unregisterSession).mockClear();
+      mockSocket._trigger('acp:stop', { sessionId: 'sess-stop' });
+
+      await vi.waitFor(() => {
+        expect(relay.unregisterSession).toHaveBeenCalledWith('sess-stop');
+      });
+    });
+
+    it('unregisters the session endpoint on acp:reconcile kill', async () => {
+      const mockSocket = setup();
+      vi.mocked(processRegistry.listEntries).mockReturnValue([
+        { sessionId: 's-recon', pid: 4444, cwd: '/x', acpServerType: 'opencode', startedAt: '2026-01-01' },
+      ]);
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
+      vi.mocked(isProcessAlive).mockReturnValue(false);
+      const relay = relayInstances[0];
+      vi.mocked(relay.unregisterSession).mockClear();
+
+      mockSocket._trigger('acp:reconcile', { activeSessionIds: [], pendingKillSessionIds: [] });
+
+      await vi.waitFor(() => {
+        expect(relay.unregisterSession).toHaveBeenCalledWith('s-recon');
+      });
+      expect(killSpy).toHaveBeenCalledWith(-4444, 'SIGTERM');
     });
   });
 });

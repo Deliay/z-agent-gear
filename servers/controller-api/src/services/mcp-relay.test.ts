@@ -90,7 +90,7 @@ describe('McpRelayService', () => {
     const socket = createMockSocket();
     vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
 
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_1',
       sessionId: 'sess-1',
       serverName: 'server-1',
@@ -124,12 +124,12 @@ describe('McpRelayService', () => {
     expect(subscribers[0].sub.disconnect).toHaveBeenCalled();
   });
 
-  it('T-S2: should return 404 without publishing when session does not belong to controller', () => {
+  it('T-S2: should return 404 without publishing when session does not belong to controller', async () => {
     const { mockRedis, service } = createContext();
     const socket = createMockSocket();
     vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(false);
 
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_2',
       sessionId: 'other-sess',
       serverName: 'server-1',
@@ -147,7 +147,7 @@ describe('McpRelayService', () => {
     const socket = createMockSocket();
     vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
 
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_3',
       sessionId: 'sess-1',
       serverName: 'server-1',
@@ -162,19 +162,19 @@ describe('McpRelayService', () => {
     expect(mockRedis.publish).toHaveBeenCalled();
   });
 
-  it('T-S4: should match concurrent requests by requestId without cross-talk', () => {
+  it('T-S4: should match concurrent requests by requestId without cross-talk', async () => {
     const { subscribers, service, triggerOn } = createContext();
     const socket = createMockSocket();
     vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
 
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_a',
       sessionId: 'sess-1',
       serverName: 'server-1',
       token: 'token-1',
       body: { jsonrpc: '2.0', id: 1, method: 'tools/call' },
     });
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_b',
       sessionId: 'sess-1',
       serverName: 'server-2',
@@ -208,12 +208,12 @@ describe('McpRelayService', () => {
     ]);
   });
 
-  it('T-S4b: should fail all pending requests with 503 on socket disconnect', () => {
+  it('T-S4b: should fail all pending requests with 503 on socket disconnect', async () => {
     const { subscribers, service } = createContext();
     const socket = createMockSocket();
     vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
 
-    service.handleMcpRequest(socket as never, {
+    await service.handleMcpRequest(socket as never, {
       requestId: 'mcpreq_x',
       sessionId: 'sess-1',
       serverName: 'server-1',

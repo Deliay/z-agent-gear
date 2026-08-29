@@ -91,6 +91,13 @@ function toMcpEndpointServers(
       `(received: ${JSON.stringify(mcpEndpoint.serverNames)})`,
     );
   }
+  // Never emit a loopback URL with a zero/negative port (invalid): fail loudly so
+  // the launch fails diagnosably instead of silently wiring a broken MCP address.
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(
+      `Invalid MCP loopback port: ${JSON.stringify(port)}. The local MCP endpoint must be listening before session launch.`,
+    );
+  }
   const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
   // Each assembled server gets its own loopback URL so the entry point can
   // route standard MCP clients (which never send a serverName param) correctly.

@@ -25,7 +25,7 @@ interface PendingRequest {
 export class McpRelayService {
   private pending = new Map<string, PendingRequest>();
 
-  handleMcpRequest(socket: Socket, payload: McpRequestPayload): void {
+  async handleMcpRequest(socket: Socket, payload: McpRequestPayload): Promise<void> {
     const { requestId, sessionId, serverName, token, body } = payload;
     const controllerId = socket.data.controllerId as string | undefined;
 
@@ -69,12 +69,17 @@ export class McpRelayService {
     };
 
     subscriber.on('message', onMessage);
-    subscriber.subscribe(responseChannel).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${responseChannel}:`, err.message);
-    });
-
     const timeout = setTimeout(() => settle(504), REQUEST_TIMEOUT_MS);
     this.pending.set(requestId, { socket, requestId, subscriber, timeout });
+
+    // 先 await 订阅完成再 publish，避免「响应先于订阅」竞态导致响应丢失而 60s 超时
+    try {
+      await subscriber.subscribe(responseChannel);
+    } catch (err) {
+      console.error(`Failed to subscribe to ${responseChannel}:`, (err as Error).message);
+      settle(504);
+      return;
+    }
 
     redis.publish(
       RELAY_REQUEST_CHANNEL,

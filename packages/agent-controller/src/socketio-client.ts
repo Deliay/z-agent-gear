@@ -219,6 +219,13 @@ export function connectToServer(
   const controllerName = options?.serverName || hostname();
   const mcpRelay = new McpRelay((payload) => socket.emit('mcp:request', payload));
   const localServer = new LocalMcpServer(mcpRelay);
+  // 回环 HTTP 服务在守护进程内只启动一次、进程退出前不停止（提案 Phase 2 要求全守护进程共享一个端口）。
+  // 断线快速失败由 mcpRelay.handleDisconnect()（503）承担，无需随 socket 连接启停 HTTP 服务。
+  // ready promise 保证 acp:start/acp:resume 读取 localServer.port 前服务已 listening（启动只 await 一次）。
+  const mcpServerReady = localServer.start();
+  mcpServerReady.catch((err: Error) => {
+    console.error(`[MCP] failed to start local MCP endpoint: ${err.message}`);
+  });
 
   // Seed the fs:remove-dir whitelist with cwds of ACP processes that survived
   // a controller restart (their worktrees remain controller-managed).
@@ -228,9 +235,6 @@ export function connectToServer(
 
   socket.on('connect', () => {
     console.log(`Connected to ${endpoint}`);
-    localServer.start().catch((err) => {
-      console.error(`[MCP] failed to start local MCP endpoint: ${(err as Error).message}`);
-    });
     const resumeToken = getResumeTokenFromConfig();
     socket.emit('register', {
       key,
@@ -334,6 +338,11 @@ export function connectToServer(
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
+        // 确保回环服务已 listening 后再读取 port 并注入（启动失败时 fail loudly，不静默注入端口 0）
+        await mcpServerReady;
+        if (localServer.port <= 0) {
+          throw new Error(`MCP endpoint unavailable: local loopback server not listening (port=${localServer.port})`);
+        }
         mcpRelay.registerSession(data.sessionId, {
           token: data.mcpEndpoint.token,
           serverNames: data.mcpEndpoint.serverNames,
@@ -359,6 +368,7 @@ export function connectToServer(
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
         if (payload.sessionId === data.sessionId) {
           processRegistry.deregister(data.sessionId);
+          mcpRelay.unregisterSession(data.sessionId);
         }
       });
 
@@ -427,6 +437,7 @@ export function connectToServer(
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
         processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
         console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:start:result', {
           requestId: data.requestId,
@@ -443,6 +454,7 @@ export function connectToServer(
       await bridge.start();
     } catch (error) {
       console.error(`[ACP ctrl] bridge.start() failed: ${(error as Error).message}`);
+      mcpRelay.unregisterSession(data.sessionId);
       socket.emit('acp:start:result', {
         requestId: data.requestId,
         sessionId: data.sessionId,
@@ -465,6 +477,11 @@ export function connectToServer(
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
+        // 确保回环服务已 listening 后再读取 port 并注入（启动失败时 fail loudly，不静默注入端口 0）
+        await mcpServerReady;
+        if (localServer.port <= 0) {
+          throw new Error(`MCP endpoint unavailable: local loopback server not listening (port=${localServer.port})`);
+        }
         mcpRelay.registerSession(data.sessionId, {
           token: data.mcpEndpoint.token,
           serverNames: data.mcpEndpoint.serverNames,
@@ -487,6 +504,7 @@ export function connectToServer(
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
         if (payload.sessionId === data.sessionId) {
           processRegistry.deregister(data.sessionId);
+          mcpRelay.unregisterSession(data.sessionId);
         }
       });
 
@@ -525,6 +543,7 @@ export function connectToServer(
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
         processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
         console.log(`[ACP ctrl] emitting acp:resume:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
         socket.emit('acp:resume:result', {
           requestId: data.requestId,
@@ -540,6 +559,7 @@ export function connectToServer(
       await bridge.resume(data.externalSessionId);
     } catch (error) {
       console.error(`[ACP ctrl] bridge.resume() failed: ${(error as Error).message}`);
+      mcpRelay.unregisterSession(data.sessionId);
       socket.emit('acp:resume:result', {
         requestId: data.requestId,
         sessionId: data.sessionId,
@@ -1055,9 +1075,6 @@ export function connectToServer(
     permissionRequestBridge.clear();
     elicitationRequestBridge.clear();
     mcpRelay.handleDisconnect();
-    localServer.stop().catch((err) => {
-      console.error(`[MCP] failed to stop local MCP endpoint: ${(err as Error).message}`);
-    });
   });
 
   socket.on('connect_error', (err) => {

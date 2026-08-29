@@ -53,10 +53,14 @@ export class McpRelayConsumer {
         };
       }
 
-      getRedisClient().publish(
-        `mcp:relay:response:${parsed.requestId}`,
-        JSON.stringify({ requestId: parsed.requestId, status: result.status, body: result.body }),
-      );
+      try {
+        await getRedisClient().publish(
+          `mcp:relay:response:${parsed.requestId}`,
+          JSON.stringify({ requestId: parsed.requestId, status: result.status, body: result.body }),
+        );
+      } catch (err) {
+        console.error(`[MCP relay] failed to publish response: requestId=${parsed.requestId}: ${(err as Error).message}`);
+      }
     });
   }
 
