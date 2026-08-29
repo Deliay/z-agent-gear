@@ -99,7 +99,7 @@ export class SessionService {
       // session must NOT record worktreeBranch — that field marks ownership
       // and would make delete() run git cleanup on a shared worktree.
       const effectiveDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
-      if (effectiveDir.includes('~') && !(controller as any).homeDir) {
+      if ((effectiveDir.startsWith('~/') || effectiveDir === '~') && !(controller as any).homeDir) {
         // 旧版控制器不上报 homeDir，且生效目录含 `~`：无法可靠展开，明确报错引导升级/配置绝对路径，不静默放行
         throw new GraphQLError(
           'Worktree 目录包含 `~` 但控制器未上报 homeDir，无法校验路径归属。请升级控制器，或在设置页将「Git Worktree 工作目录」配置为绝对路径。',

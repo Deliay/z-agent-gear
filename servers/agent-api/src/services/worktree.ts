@@ -102,18 +102,17 @@ class WorktreeService {
     // controller-reported git worktree of this repo, or a path under the
     // workspace's worktreeDir scope (<worktreeDir>/<workspace.name>/).
     const effectiveDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
-    if (effectiveDir.includes('~') && !(controller as any)?.homeDir) {
-      throw new GraphQLError(
-        'Worktree 目录包含 `~` 但控制器未上报 homeDir，无法校验路径归属。请升级控制器，或在设置页将「Git Worktree 工作目录」配置为绝对路径。',
-        { extensions: { code: 'BAD_USER_INPUT' } },
-      );
-    }
-    const scopePrefix = normalizeForCompare(
-      worktreeScopePrefix(effectiveDir, workspace.name, (controller as any)?.homeDir),
-      (controller as any)?.platform,
-    );
+    // 旧控制器未上报 homeDir 且生效目录含 `~`：无法可靠展开，list/delete 入口退化为「不做工作区 scope 归组」，
+    // 仅按控制器上报的 git worktree（worktreeMap）归组，避免整页抛错（会话创建路径仍会明确报错）。
+    const scopePrefix =
+      (effectiveDir.startsWith('~/') || effectiveDir === '~') && !(controller as any)?.homeDir
+        ? null
+        : normalizeForCompare(
+            worktreeScopePrefix(effectiveDir, workspace.name, (controller as any)?.homeDir),
+            (controller as any)?.platform,
+          );
     const isWorkspaceWorktreePath = (wtPath: string) =>
-      worktreeMap.has(wtPath) || normalizeForCompare(wtPath, (controller as any)?.platform).startsWith(scopePrefix);
+      worktreeMap.has(wtPath) || (!!scopePrefix && normalizeForCompare(wtPath, (controller as any)?.platform).startsWith(scopePrefix));
 
     for (const session of sessions) {
       const wtPath = (session as any).worktreePath as string | undefined;
