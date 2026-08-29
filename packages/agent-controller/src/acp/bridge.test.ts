@@ -207,10 +207,10 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockSpawner: MockAcpSpawner;
 
-  function createBridge(mcpEndpoint?: { url: string; token: string; serverNames: string[] }) {
+  function createBridge(mcpEndpoint?: { token: string; serverNames: string[] }) {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user', mcpEndpoint },
+      { sessionId: 'sess-1', cwd: '/home/user', mcpEndpoint, mcpPort: 47291 },
       mockSpawner as never,
     );
   }
@@ -229,7 +229,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
   it('should pass http mcpServers to newSession when mcpEndpoint provided', async () => {
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'tok-1',
       serverNames: ['github-mcp', 'fs-mcp'],
     });
@@ -238,8 +237,8 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [
-        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
-        { type: 'http', name: 'fs-mcp', url: 'http://gateway/mcp/sess-1/fs-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'github-mcp', url: 'http://127.0.0.1:47291/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'fs-mcp', url: 'http://127.0.0.1:47291/mcp/sess-1/fs-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
       ],
     }));
   });
@@ -255,7 +254,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
   it('should pass http mcpServers to resumeSession when mcpEndpoint provided', async () => {
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'tok-1',
       serverNames: ['github-mcp'],
     });
@@ -264,7 +262,7 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     expect(mockResumeSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [
-        { type: 'http', name: 'github-mcp', url: 'http://gateway/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
+        { type: 'http', name: 'github-mcp', url: 'http://127.0.0.1:47291/mcp/sess-1/github-mcp', headers: [{ name: 'Authorization', value: 'Bearer tok-1' }] },
       ],
     }));
   });
@@ -272,7 +270,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   it('should fail with a diagnosable error when mcpEndpoint.serverNames is missing', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'tok-1',
       // simulate an upstream payload that drifts from the contract
       serverNames: undefined as never,
@@ -293,7 +290,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
   it('should fail with a diagnosable error when mcpEndpoint.serverNames is empty', async () => {
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'tok-1',
       serverNames: [],
     });
@@ -311,7 +307,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   it('should log the MCP servers passed to session/new without leaking the token', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'secret-token',
       serverNames: ['fluentui-mcp'],
     });
@@ -321,7 +316,7 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
     const logLines = logSpy.mock.calls.map((c) => String(c[0]));
     const mcpLog = logLines.find((l) => l.includes('passing MCP servers via session/new'));
     expect(mcpLog).toBeDefined();
-    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://gateway/mcp/sess-1/fluentui-mcp');
+    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:47291/mcp/sess-1/fluentui-mcp');
     expect(mcpLog).not.toContain('secret-token');
   });
 
@@ -332,7 +327,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
     });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge({
-      url: 'http://gateway/mcp/sess-1',
       token: 'tok-1',
       serverNames: ['fluentui-mcp'],
     });
@@ -344,6 +338,30 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
     expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [expect.objectContaining({ type: 'http', name: 'fluentui-mcp' })],
     }));
+  });
+
+  it('T-C11 generates only loopback URLs with Bearer headers and no public address', async () => {
+    const bridge = createBridge({
+      token: 'tok-1',
+      serverNames: ['github-mcp', 'fs-mcp'],
+    });
+
+    await bridge.start();
+
+    const servers = mockNewSession.mock.calls[0][0].mcpServers as Array<{ url: string; headers: Array<{ name: string; value: string }> }>;
+    expect(servers).toHaveLength(2);
+    const urls = servers.map((s) => s.url);
+    expect(urls).toEqual([
+      'http://127.0.0.1:47291/mcp/sess-1/github-mcp',
+      'http://127.0.0.1:47291/mcp/sess-1/fs-mcp',
+    ]);
+    for (const url of urls) {
+      expect(url.startsWith('http://127.0.0.1:')).toBe(true);
+    }
+    expect(JSON.stringify(urls)).not.toMatch(/https?:\/\/(?!127\.0\.0\.1)/);
+    for (const s of servers) {
+      expect(s.headers).toEqual([{ name: 'Authorization', value: 'Bearer tok-1' }]);
+    }
   });
 });
 

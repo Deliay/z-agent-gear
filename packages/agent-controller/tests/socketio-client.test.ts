@@ -106,6 +106,26 @@ vi.mock('../src/heartbeat.js', () => ({
   Heartbeat: MockHeartbeat,
 }));
 
+vi.mock('../src/mcp/relay.js', () => ({
+  McpRelay: class {
+    registerSession = vi.fn();
+    unregisterSession = vi.fn();
+    handleDisconnect = vi.fn();
+    handleMcpResponse = vi.fn();
+    hasSession = vi.fn(() => true);
+    hasServer = vi.fn(() => true);
+    forward = vi.fn();
+  },
+}));
+
+vi.mock('../src/mcp/local-server.js', () => ({
+  LocalMcpServer: class {
+    port = 0;
+    start = vi.fn(async () => {});
+    stop = vi.fn(async () => {});
+  },
+}));
+
 vi.mock('../src/config.js', () => ({
   clearConfigKey: vi.fn(),
   saveKeyToConfig: vi.fn(),
@@ -195,7 +215,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '1.1.1',
+        version: '2.0.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -213,7 +233,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '1.1.1',
+        version: '2.0.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',

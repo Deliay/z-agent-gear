@@ -66,7 +66,7 @@ export class ACPSessionManager {
     userId: string,
     serverType: string,
     cwd: string,
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    mcpEndpoint?: { token: string; serverNames: string[] },
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
@@ -443,6 +443,12 @@ export class ACPSessionManager {
     }
   }
 
+  /** sessionId 是否归属指定 controller（MCP 转发归属校验） */
+  sessionBelongsToController(sessionId: string, controllerId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session?.controllerId === controllerId;
+  }
+
   async cancelGeneration(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
@@ -458,7 +464,7 @@ export class ACPSessionManager {
     controllerId: string,
     userId: string,
     cwd: string,
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    mcpEndpoint?: { token: string; serverNames: string[] },
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string }> {
     const settleStarting = this.trackStarting(sessionId);

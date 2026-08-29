@@ -79,7 +79,7 @@
 |----|------|
 | `INVALID_KEY` | Key 无效（缓存中不存在或 bcrypt 验证失败） |
 | `KEY_ALREADY_ONLINE` | 该 Key 已有活跃 session |
-| `VERSION_MISMATCH` | 控制器版本不兼容 |
+| `VERSION_MISMATCH` | 控制器版本不兼容；客户端应输出明确升级指引后退出 |
 | `RATE_LIMITED` | 注册频率超限 |
 
 ### 2.5 `heartbeat`（Controller → Server）
@@ -173,6 +173,7 @@ Controller                 controller-api
 
 - 服务端校验 `version` major 字段
 - major 不匹配时返回 `VERSION_MISMATCH`
+- **一期 Break Change**：要求 major 为 `2`（旧版 major `1` 被拒绝）。原因：MCP 公网入口下线，旧版控制器无法提供 MCP 能力。
 
 ### 3.5 Key 生命周期
 

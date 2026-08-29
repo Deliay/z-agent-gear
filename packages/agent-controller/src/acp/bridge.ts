@@ -10,7 +10,9 @@ export interface AcpBridgeOptions {
   cwd: string;
   additionalDirectories?: string[];
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
-  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  mcpEndpoint?: { token: string; serverNames: string[] };
+  /** 本机回环 MCP 端点共享端口（由 local-server 注册时提供） */
+  mcpPort?: number;
   /** 会话初始化时应用的工作模式/模型（工作流节点配置；不提供则使用 harness 默认） */
   initialModeId?: string;
   initialModelId?: string;
@@ -76,22 +78,26 @@ function describeMcpServersForLog(servers: acp.McpServer[]): string {
   }).join(' ');
 }
 
-function toMcpEndpointServers(mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>): acp.McpServer[] {
+function toMcpEndpointServers(
+  mcpEndpoint: NonNullable<AcpBridgeOptions['mcpEndpoint']>,
+  sessionId: string,
+  port: number,
+): acp.McpServer[] {
   // Fail loudly with a diagnosable message instead of a raw TypeError when the
   // upstream payload drifts from the contract (serverNames is required).
   if (!Array.isArray(mcpEndpoint.serverNames) || mcpEndpoint.serverNames.length === 0) {
     throw new Error(
       `Invalid mcpEndpoint payload: "serverNames" must be a non-empty array ` +
-      `(received: ${JSON.stringify(mcpEndpoint.serverNames)}, url: ${mcpEndpoint.url})`,
+      `(received: ${JSON.stringify(mcpEndpoint.serverNames)})`,
     );
   }
   const headers: acp.HttpHeader[] = [{ name: 'Authorization', value: `Bearer ${mcpEndpoint.token}` }];
-  // Each assembled server gets its own URL so the entry point can route
-  // standard MCP clients (which never send a serverName param) correctly.
+  // Each assembled server gets its own loopback URL so the entry point can
+  // route standard MCP clients (which never send a serverName param) correctly.
   return mcpEndpoint.serverNames.map((name) => ({
     type: 'http' as const,
     name,
-    url: `${mcpEndpoint.url}/${encodeURIComponent(name)}`,
+    url: `http://127.0.0.1:${port}/mcp/${sessionId}/${encodeURIComponent(name)}`,
     headers,
   }));
 }
@@ -189,6 +195,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
   private mcpEndpoint: AcpBridgeOptions['mcpEndpoint'];
+  private mcpPort: number | undefined;
   private initialModeId: string | undefined;
   private initialModelId: string | undefined;
   private connection: acp.ClientSideConnection | null = null;
@@ -226,6 +233,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
     this.mcpEndpoint = options.mcpEndpoint;
+    this.mcpPort = options.mcpPort;
     this.initialModeId = options.initialModeId;
     this.initialModelId = options.initialModelId;
     this.spawner = spawner ?? new AcpSpawner({ sessionId: options.sessionId, cwd: options.cwd });
@@ -233,7 +241,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
   private resolveMcpServers(): acp.McpServer[] {
     if (this.mcpEndpoint) {
-      return toMcpEndpointServers(this.mcpEndpoint);
+      return toMcpEndpointServers(this.mcpEndpoint, this.sessionId, this.mcpPort ?? 0);
     }
     return toMcpServers(this.mcpServers);
   }

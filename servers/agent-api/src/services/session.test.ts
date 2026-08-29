@@ -403,7 +403,6 @@ describe('SessionService', () => {
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
       vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
-        url: 'http://gateway/mcp/sess-1',
         token: 'mcp-token',
         serverNames: ['fluentui-mcp'],
       });
@@ -422,7 +421,7 @@ describe('SessionService', () => {
       );
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
-        expect.stringContaining('"mcpEndpoint":{"url":"http://gateway/mcp/sess-1","token":"mcp-token","serverNames":["fluentui-mcp"]}'),
+        expect.stringContaining('"mcpEndpoint":{"token":"mcp-token","serverNames":["fluentui-mcp"]}'),
       );
     });
 
@@ -1468,7 +1467,6 @@ describe('SessionService', () => {
         ),
       } as never);
       vi.mocked(mcpEndpointService.reissueEndpoint).mockResolvedValue({
-        url: 'http://gateway/mcp/sess-1',
         token: 'new-mcp-token',
         serverNames: ['fluentui-mcp'],
       });
@@ -1478,7 +1476,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.reissueEndpoint).toHaveBeenCalledWith('sess-1', 'user-1');
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
-        expect.stringContaining('"mcpEndpoint":{"url":"http://gateway/mcp/sess-1","token":"new-mcp-token","serverNames":["fluentui-mcp"]}'),
+        expect.stringContaining('"mcpEndpoint":{"token":"new-mcp-token","serverNames":["fluentui-mcp"]}'),
       );
     });
 
@@ -1737,7 +1735,6 @@ describe('SessionService', () => {
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
       vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
       vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
-        url: 'http://gateway/mcp/sess-1',
         token: 'mcp-token',
         serverNames: ['agent-workflow-tools'],
       });

@@ -16,8 +16,10 @@ import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
+import { McpRelay } from './mcp/relay.js';
+import { LocalMcpServer } from './mcp/local-server.js';
 
-const CONTROLLER_VERSION = '1.1.1';
+const CONTROLLER_VERSION = '2.0.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
@@ -60,7 +62,7 @@ interface AcpStartPayload {
   serverType: string;
   cwd: string;
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Array<{ name: string; value: string }> }>;
-  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  mcpEndpoint?: { token: string; serverNames: string[] };
   additionalDirectories?: string[];
   modeId?: string;
   modelId?: string;
@@ -73,13 +75,13 @@ interface AcpMessagePayload {
 
 // Summarize the MCP configuration of an acp:start/acp:resume payload for logs,
 // without leaking the endpoint token.
-function describeMcpConfig(data: { mcpServers?: unknown[]; mcpEndpoint?: { url: string; serverNames?: string[] } }): string {
+function describeMcpConfig(data: { mcpServers?: unknown[]; mcpEndpoint?: { serverNames?: string[] } }): string {
   const parts: string[] = [];
   if (data.mcpServers && data.mcpServers.length > 0) {
     parts.push(`mcpServers=${data.mcpServers.length}`);
   }
   if (data.mcpEndpoint) {
-    parts.push(`mcpEndpoint(url=${data.mcpEndpoint.url}, serverNames=${JSON.stringify(data.mcpEndpoint.serverNames ?? null)})`);
+    parts.push(`mcpEndpoint(serverNames=${JSON.stringify(data.mcpEndpoint.serverNames ?? null)})`);
   }
   return parts.length > 0 ? `mcp=[${parts.join(' ')}]` : 'mcp=[none]';
 }
@@ -132,7 +134,7 @@ interface AcpResumePayload {
   externalSessionId: string;
   serverType: string;
   cwd: string;
-  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  mcpEndpoint?: { token: string; serverNames: string[] };
   additionalDirectories?: string[];
   modeId?: string;
   modelId?: string;
@@ -215,6 +217,8 @@ export function connectToServer(
 
   const heartbeat = new Heartbeat();
   const controllerName = options?.serverName || hostname();
+  const mcpRelay = new McpRelay((payload) => socket.emit('mcp:request', payload));
+  const localServer = new LocalMcpServer(mcpRelay);
 
   // Seed the fs:remove-dir whitelist with cwds of ACP processes that survived
   // a controller restart (their worktrees remain controller-managed).
@@ -224,6 +228,9 @@ export function connectToServer(
 
   socket.on('connect', () => {
     console.log(`Connected to ${endpoint}`);
+    localServer.start().catch((err) => {
+      console.error(`[MCP] failed to start local MCP endpoint: ${(err as Error).message}`);
+    });
     const resumeToken = getResumeTokenFromConfig();
     socket.emit('register', {
       key,
@@ -246,6 +253,13 @@ export function connectToServer(
 
   socket.on('error', (data: ErrorPayload) => {
     console.error(`Server error: ${data.code} - ${data.message}`);
+    if (data.code === 'VERSION_MISMATCH') {
+      console.error('The agent-controller version is not supported by the server.');
+      console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
+      socket.disconnect();
+      process.exit(1);
+      return;
+    }
     if (data.code === 'KEY_ALREADY_ONLINE') {
       console.log('Clearing resume token and retrying connection...');
       clearResumeTokenFromConfig();
@@ -319,11 +333,18 @@ export function connectToServer(
         await existingBridge.stop().catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
+      if (data.mcpEndpoint) {
+        mcpRelay.registerSession(data.sessionId, {
+          token: data.mcpEndpoint.token,
+          serverNames: data.mcpEndpoint.serverNames,
+        });
+      }
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpServers: data.mcpServers,
         mcpEndpoint: data.mcpEndpoint,
+        mcpPort: localServer.port,
         additionalDirectories: data.additionalDirectories,
         initialModeId: data.modeId,
         initialModelId: data.modelId,
@@ -443,10 +464,17 @@ export function connectToServer(
         await existingBridge.stop().catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
+      if (data.mcpEndpoint) {
+        mcpRelay.registerSession(data.sessionId, {
+          token: data.mcpEndpoint.token,
+          serverNames: data.mcpEndpoint.serverNames,
+        });
+      }
       const bridge = new AcpSessionBridge(socket, {
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpEndpoint: data.mcpEndpoint,
+        mcpPort: localServer.port,
         additionalDirectories: data.additionalDirectories,
         // 初始 mode/model：resume 完成后、acp:initialized 之前应用（时序同 acp:start）
         initialModeId: data.modeId,
@@ -693,6 +721,7 @@ export function connectToServer(
         processRegistry.deregister(data.sessionId);
       }
     }
+    mcpRelay.unregisterSession(data.sessionId);
     if (data.ackRequired) {
       socket.emit('acp:stopped', {
         sessionId: data.sessionId,
@@ -967,6 +996,7 @@ export function connectToServer(
           }
         } catch { /* process may already be dead */ }
         processRegistry.deregister(entry.sessionId);
+        mcpRelay.unregisterSession(entry.sessionId);
         // Also clean up bridge if present
         const bridge = acpBridges.get(entry.sessionId);
         if (bridge) {
@@ -1014,12 +1044,20 @@ export function connectToServer(
     }
   });
 
+  socket.on('mcp:response', (data: { requestId: string; status: number; body: unknown }) => {
+    mcpRelay.handleMcpResponse(data.requestId, data.status, data.body);
+  });
+
   socket.on('disconnect', (reason) => {
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     gatewayManager.closeAll();
     permissionRequestBridge.clear();
     elicitationRequestBridge.clear();
+    mcpRelay.handleDisconnect();
+    localServer.stop().catch((err) => {
+      console.error(`[MCP] failed to stop local MCP endpoint: ${(err as Error).message}`);
+    });
   });
 
   socket.on('connect_error', (err) => {
