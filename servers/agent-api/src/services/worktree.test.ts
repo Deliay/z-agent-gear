@@ -186,6 +186,26 @@ describe('WorktreeService', () => {
       expect(result[0].sessionCount).toBe(1);
     });
 
+    it('should expand ~ and sanitize workspace name consistently with session.create (T-A7)', async () => {
+      // worktreeDir 含 ~ + 工作区名含空格/斜杠：list 归属判断与会话创建入口同一口径
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: oid('ws-1'), name: 'My WS/名', path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Controller.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'offline', worktreeDir: '~/.zag/worktrees', homeDir: '/home/user', platform: 'linux' }),
+      } as never);
+      mockSessionFind([
+        mockSessionDoc({ _id: oid('sess-mine'), worktreePath: '/home/user/.zag/worktrees/My-WS-名/feat-1' }),
+        mockSessionDoc({ _id: oid('sess-other'), worktreePath: '/home/user/.zag/worktrees/Other-WS/feat-9' }),
+      ]);
+
+      const result = await worktreeService.list('ctrl-1', 'ws-1', 'user-1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].path).toBe('/home/user/.zag/worktrees/My-WS-名/feat-1');
+      expect((result[0].sessions[0] as Record<string, unknown>).id).toBe('sess-mine');
+    });
+
     it('should filter out the main worktree (workspace root) from git worktree list', async () => {
       mockWorkspace(); // workspace.path = /home/user/project
       vi.mocked(Controller.findById).mockReturnValue({

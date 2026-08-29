@@ -5,6 +5,7 @@ import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { sessionService } from './session.js';
+import { resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 export interface WorkspaceWorktree {
   path: string;
@@ -100,10 +101,18 @@ class WorktreeService {
     // Only group sessions whose worktree belongs to this workspace: either a
     // controller-reported git worktree of this repo, or a path under the
     // workspace's worktreeDir scope (<worktreeDir>/<workspace.name>/).
-    const worktreeDir = (controller as any)?.worktreeDir || '~/.zag/worktrees';
-    const scopePrefix = path.normalize(path.join(worktreeDir, workspace.name)) + path.sep;
+    const effectiveDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
+    // 旧控制器未上报 homeDir 且生效目录含 `~`：无法可靠展开，list/delete 入口退化为「不做工作区 scope 归组」，
+    // 仅按控制器上报的 git worktree（worktreeMap）归组，避免整页抛错（会话创建路径仍会明确报错）。
+    const scopePrefix =
+      (effectiveDir.startsWith('~/') || effectiveDir === '~') && !(controller as any)?.homeDir
+        ? null
+        : normalizeForCompare(
+            worktreeScopePrefix(effectiveDir, workspace.name, (controller as any)?.homeDir),
+            (controller as any)?.platform,
+          );
     const isWorkspaceWorktreePath = (wtPath: string) =>
-      worktreeMap.has(wtPath) || path.normalize(wtPath).startsWith(scopePrefix);
+      worktreeMap.has(wtPath) || (!!scopePrefix && normalizeForCompare(wtPath, (controller as any)?.platform).startsWith(scopePrefix));
 
     for (const session of sessions) {
       const wtPath = (session as any).worktreePath as string | undefined;
