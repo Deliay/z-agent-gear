@@ -25,6 +25,8 @@ interface RegisterPayload {
   hostname: string;
   version: string;
   resumeToken?: string;
+  homeDir?: string;
+  platform?: string;
 }
 
 export function createSocketIOServer(io: SocketIOServer): void {
@@ -74,6 +76,8 @@ export function createSocketIOServer(io: SocketIOServer): void {
             status: 'online',
             keyId,
             version,
+            homeDir: payload.homeDir,
+            platform: payload.platform,
             lastIp: socket.handshake.address,
             lastHeartbeatAt: new Date(),
             name: hostname,

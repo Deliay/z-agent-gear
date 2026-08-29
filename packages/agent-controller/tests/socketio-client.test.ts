@@ -197,6 +197,8 @@ describe('SocketIO Client', () => {
         hostname: 'my-machine',
         version: '1.1.1',
         resumeToken: undefined,
+        homeDir: '/home/user',
+        platform: 'linux',
       });
     });
 
@@ -213,6 +215,8 @@ describe('SocketIO Client', () => {
         hostname: 'test-machine',
         version: '1.1.1',
         resumeToken: undefined,
+        homeDir: '/home/user',
+        platform: 'linux',
       });
     });
 

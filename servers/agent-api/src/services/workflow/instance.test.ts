@@ -224,6 +224,35 @@ describe('WorkflowInstanceService.instantiate', () => {
     expect(created.nodes[0].nodeId).toBeTruthy();
   });
 
+  it('I1b (T-A8): 配置了自定义 worktreeDir 时，创建工作流 Worktree 下发的 wtPath 以配置值为准', async () => {
+    vi.mocked(Controller.findOne).mockReturnValue(
+      leanQuery({ _id: oid('ctrl-1'), userId: oid('user-1'), name: 'dev-machine', worktreeDir: '/data/wt' }),
+    );
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+    mockRedis.get.mockImplementation(async (key: string) => {
+      if (key.startsWith('git:worktree:add:')) {
+        return JSON.stringify({ success: true, worktreePath: '/data/wt/my-project/workflow-wf-abcd' });
+      }
+      return JSON.stringify({
+        servers: ['opencode', 'claude_code'].map((type) => ({ type, available: true })),
+        checkedAt: new Date().toISOString(),
+      });
+    });
+
+    await workflowInstanceService.instantiate('user-1', instantiateInput({ createWorkflowWorktree: true }) as never);
+
+    const publishCalls = vi.mocked(mockRedis.publish).mock.calls.filter(
+      ([ch]) => ch === 'session:command',
+    );
+    const addCall = publishCalls
+      .map(([, payload]) => JSON.parse(payload as string))
+      .find((p: { type?: string }) => p.type === 'git:worktree:add');
+    expect(addCall).toBeTruthy();
+    // 生成端以配置值为准，不再命中硬编码默认值 '~/.zag/worktrees'
+    expect((addCall as { worktreePath: string }).worktreePath.startsWith('/data/wt/my-project/')).toBe(true);
+    expect((addCall as { worktreePath: string }).worktreePath).not.toContain('~/.zag/worktrees');
+  });
+
   it('I2: 来源必填校验——TEMPLATE 缺 templateId 报错', async () => {
     await expect(
       workflowInstanceService.instantiate('user-1', instantiateInput({ source: 'TEMPLATE' }) as never),

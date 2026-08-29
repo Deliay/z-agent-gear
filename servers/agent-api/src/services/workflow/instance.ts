@@ -10,7 +10,7 @@ import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { getAvailableServerTypes } from './capability.js';
-import { sanitizeWorkspaceName, generateWorktreeSuffix } from './worktree-utils.js';
+import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -201,9 +201,9 @@ class WorkflowInstanceService {
   ): Promise<{ path: string; branch: string }> {
     const redis = getRedisClient();
     
-    // 查询控制器获取 worktreeDir 配置
+    // 查询控制器获取 worktreeDir 配置（生效目录解析：已配置用配置值，未配置回退默认值，与校验端同源）
     const controller = await Controller.findOne({ _id: controllerId }).lean();
-    const worktreeDir = (controller as { worktreeDir?: string } | null)?.worktreeDir || '~/.zag/worktrees';
+    const worktreeDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
     
     // slug 化处理：纯中文名会产生空串，使用兜底值
     const slug = workflowName

@@ -8,7 +8,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
-import { sanitizeWorkspaceName, generateWorktreeSuffix } from './workflow/worktree-utils.js';
+import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
@@ -98,10 +98,20 @@ export class SessionService {
       // The path must belong to this workspace's worktree scope, and the
       // session must NOT record worktreeBranch — that field marks ownership
       // and would make delete() run git cleanup on a shared worktree.
-      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
-      // 使用 sanitizeWorkspaceName 确保与 createWorkflowWorktree 的路径生成一致
-      const scopePrefix = path.normalize(path.join(worktreeDir, sanitizeWorkspaceName(workspace.name))) + path.sep;
-      if (!path.normalize(input.existingWorktreePath).startsWith(scopePrefix)) {
+      const effectiveDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
+      if (effectiveDir.includes('~') && !(controller as any).homeDir) {
+        // 旧版控制器不上报 homeDir，且生效目录含 `~`：无法可靠展开，明确报错引导升级/配置绝对路径，不静默放行
+        throw new GraphQLError(
+          'Worktree 目录包含 `~` 但控制器未上报 homeDir，无法校验路径归属。请升级控制器，或在设置页将「Git Worktree 工作目录」配置为绝对路径。',
+          { extensions: { code: 'BAD_USER_INPUT' } },
+        );
+      }
+      // 使用共享工具构造校验前缀，与 createWorkflowWorktree 的路径生成口径一致（展开 `~` + 清洗工作区名 + 归一化）
+      const scopePrefix = normalizeForCompare(
+        worktreeScopePrefix(effectiveDir, workspace.name, (controller as any).homeDir),
+        (controller as any).platform,
+      );
+      if (!normalizeForCompare(input.existingWorktreePath, (controller as any).platform).startsWith(scopePrefix)) {
         throw new GraphQLError('existingWorktreePath does not belong to this workspace', {
           extensions: { code: 'BAD_USER_INPUT' },
         });
@@ -111,7 +121,7 @@ export class SessionService {
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
       // 使用随机后缀天然去重，避免多实例/多节点并发碰撞
-      const worktreeDir = (controller as any).worktreeDir || '~/.zag/worktrees';
+      const worktreeDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
       const safeName = sanitizeWorkspaceName(workspace.name);
       const uniqueSuffix = generateWorktreeSuffix();
       const branch = `${safeName}/${input.worktreeBranchSuffix}-${uniqueSuffix}`;
