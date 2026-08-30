@@ -9,6 +9,7 @@ export const controllerTypeDefs = `#graphql
     online
     offline
     registering
+    unbound
   }
 
   enum ControllerKeyStatus {

@@ -129,7 +129,8 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
   const controllerByKeyId = new Map(controllers.map((c) => [c.keyId, c]))
 
   const unboundKeys = keys.filter((k) => !controllerByKeyId.has(k.id) && k.rawKey)
-  const boundControllers = controllers
+  const boundControllers = controllers.filter((c) => c.status !== 'unbound')
+  const unboundControllers = controllers.filter((c) => c.status === 'unbound')
 
   const handleGenerateKey = async () => {
     await createKey({
@@ -267,6 +268,32 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                     </Button>
                     <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       解绑
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              {unboundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => (
+                <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
+                  <div className="h-2 w-2 rounded-full bg-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{ctrl.name || ctrl.hostname}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        {ctrl.type}
+                      </span>
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning">
+                        未绑定
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      <span>{ctrl.hostname}</span>
+                      <span className="ml-2">v{ctrl.version}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      删除
                     </Button>
                   </div>
                 </div>
