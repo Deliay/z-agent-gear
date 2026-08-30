@@ -60,9 +60,11 @@ export class McpRelay {
     const endpoint = this.sessionEndpoints.get(sessionId);
     if (!endpoint) return { status: 404, body: { error: 'SESSION_NOT_FOUND' } };
     const requestId = `mcpreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    console.log(`[MCP relay] forward requestId=${requestId} session=${sessionId} server=${serverName} method=${(body as { method?: string })?.method ?? '?'}`);
     return new Promise<McpRelayResult>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(requestId);
+        console.log(`[MCP relay] requestId=${requestId} -> 504 (timeout after ${REQUEST_TIMEOUT_MS}ms, no mcp:response received)`);
         resolve({ status: 504, body: { error: 'TIMEOUT', message: 'MCP request timed out' } });
       }, REQUEST_TIMEOUT_MS);
       this.pendingRequests.set(requestId, { sessionId, resolve, timer });
@@ -72,7 +74,11 @@ export class McpRelay {
 
   handleMcpResponse(requestId: string, status: number, body: unknown): void {
     const pending = this.pendingRequests.get(requestId);
-    if (!pending) return;
+    if (!pending) {
+      console.log(`[MCP relay] response requestId=${requestId} status=${status} IGNORED (no pending request)`);
+      return;
+    }
+    console.log(`[MCP relay] response requestId=${requestId} status=${status}`);
     clearTimeout(pending.timer);
     this.pendingRequests.delete(requestId);
     pending.resolve({ status, body });

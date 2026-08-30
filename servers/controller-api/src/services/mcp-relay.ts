@@ -29,7 +29,9 @@ export class McpRelayService {
     const { requestId, sessionId, serverName, token, body } = payload;
     const controllerId = socket.data.controllerId as string | undefined;
 
+    console.log(`[MCP relay] mcp:request requestId=${requestId} session=${sessionId} server=${serverName} method=${(body as { method?: string })?.method ?? '?'} controller=${controllerId ?? '-'}`);
     if (!controllerId || !acpSessionManager.sessionBelongsToController(sessionId, controllerId)) {
+      console.log(`[MCP relay] requestId=${requestId} -> 404 (session not owned by controller)`);
       socket.emit('mcp:response', { requestId, status: 404, body: {} });
       return;
     }
@@ -41,6 +43,7 @@ export class McpRelayService {
     const settle = (status: number): void => {
       const pending = this.pending.get(requestId);
       if (!pending) return;
+      console.log(`[MCP relay] requestId=${requestId} -> ${status} (settle)`);
       this.pending.delete(requestId);
       clearTimeout(pending.timeout);
       subscriber.off('message', onMessage);
@@ -58,6 +61,7 @@ export class McpRelayService {
       subscriber.disconnect();
       try {
         const parsed = JSON.parse(message) as { requestId?: string; status?: number; body?: unknown };
+        console.log(`[MCP relay] requestId=${requestId} <- agent-api status=${parsed.status ?? 200}`);
         pending.socket.emit('mcp:response', {
           requestId: parsed.requestId ?? requestId,
           status: parsed.status ?? 200,

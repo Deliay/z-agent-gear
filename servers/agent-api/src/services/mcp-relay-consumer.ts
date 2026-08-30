@@ -37,6 +37,7 @@ export class McpRelayConsumer {
       }
       if (!parsed.requestId || !parsed.sessionId || !parsed.token) return;
 
+      console.log(`[MCP relay] request requestId=${parsed.requestId} session=${parsed.sessionId} server=${parsed.serverName ?? '-'} method=${(parsed.body as { method?: string })?.method ?? '?'}`);
       let result: { status: number; body: unknown };
       try {
         result = await dispatch({
@@ -52,6 +53,7 @@ export class McpRelayConsumer {
           body: { jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: (err as Error).message } },
         };
       }
+      console.log(`[MCP relay] dispatch result requestId=${parsed.requestId} status=${result.status} body=${JSON.stringify(result.body)?.slice(0, 300)}`);
 
       try {
         await getRedisClient().publish(
