@@ -162,19 +162,26 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
 
   const handleRegenerate = async () => {
     if (!confirmRegenerate) return
-    const { data } = await regenerateControllerKey({
-      variables: { input: { controllerId: confirmRegenerate.id } },
-    })
-    if (data?.regenerateControllerKey) {
-      setRegeneratedKey({
-        controllerId: confirmRegenerate.id,
-        rawKey: data.regenerateControllerKey.rawKey,
+    try {
+      const { data } = await regenerateControllerKey({
+        variables: { input: { controllerId: confirmRegenerate.id } },
       })
-      await navigator.clipboard.writeText(data.regenerateControllerKey.rawKey)
+      if (data?.regenerateControllerKey) {
+        setRegeneratedKey({
+          controllerId: confirmRegenerate.id,
+          rawKey: data.regenerateControllerKey.rawKey,
+        })
+        try {
+          await navigator.clipboard.writeText(data.regenerateControllerKey.rawKey)
+        } catch {
+          // Clipboard API may not be available in all contexts
+        }
+      }
+    } finally {
+      refetchKeys()
+      refetchControllers()
+      setConfirmRegenerate(null)
     }
-    refetchKeys()
-    refetchControllers()
-    setConfirmRegenerate(null)
   }
 
   const handleCopyRegeneratedKey = async () => {
