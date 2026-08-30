@@ -200,7 +200,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
         <CardContent>
           {loading ? (
             <div className="text-sm text-muted-foreground">加载中...</div>
-          ) : unboundKeys.length === 0 && boundControllers.length === 0 ? (
+          ) : unboundKeys.length === 0 && boundControllers.length === 0 && unboundControllers.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
               暂无控制器，点击「生成 Key」开始配置
             </div>
