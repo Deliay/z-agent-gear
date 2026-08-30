@@ -90,14 +90,12 @@ if (!builder.ExecutionContext.IsPublishMode)
             service.Name = "agent-web";
         });
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
-        .WithEnvironment("GATEWAY_URL", agentApi.GetEndpoint("http"))
         .WithHttpEndpoint(port: 10001, env: "PORT");
 }
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
         .WithHttpEndpoint(port: 8000, env: "PORT")
-        .WithEnvironment("GATEWAY_URL", builder.AddParameter("gateway-url"))
         .WithExternalHttpEndpoints();
 
     controllerApi

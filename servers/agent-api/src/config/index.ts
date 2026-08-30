@@ -9,7 +9,6 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
   mcpEndpointJwtSecret: process.env.MCP_ENDPOINT_JWT_SECRET || 'default-dev-secret-key-for-testing',
-  gatewayUrl: process.env.GATEWAY_URL || 'http://localhost:10001',
   mcpEndpointTokenTtl: parseInt(process.env.MCP_ENDPOINT_TOKEN_TTL || '86400', 10),
   credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
   corsOrigin: process.env.CORS_ORIGIN || '*',

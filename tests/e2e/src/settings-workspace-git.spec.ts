@@ -83,7 +83,7 @@ function registerController(
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-git-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-git-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 

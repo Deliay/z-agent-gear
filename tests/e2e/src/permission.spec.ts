@@ -60,7 +60,7 @@ function registerController(rawKey: string): Promise<FakeController> {
       client.disconnect();
       reject(new Error(`Failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: 'e2e-perm-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'e2e-perm-host', version: '2.0.0' });
   });
 }
 

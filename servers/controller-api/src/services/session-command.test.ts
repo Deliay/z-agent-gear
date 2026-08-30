@@ -133,7 +133,7 @@ describe('SessionCommandService', () => {
       const service = new SessionCommandService();
       service.start(io as never);
 
-      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      const mcpEndpoint = { token: 'tok', serverNames: ['github-mcp'] };
       mockRedis._emitMessage('session:command', JSON.stringify({
         type: 'acp:start',
         sessionId: 'sess-1',

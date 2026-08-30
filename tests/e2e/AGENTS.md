@@ -201,7 +201,7 @@ npx playwright test
 
 ### Workflow E2E (`workflow.spec.ts`)
 
-> 实用主义原则：实例准备用 GraphQL API 做 setup；Agent 行为（调 MCP 工具、结束会话）用 fake controller 捕获 socket 事件（acp:start/resume/stop/message）+ HTTP 调 `/mcp/<sessionId>/agent-workflow-tools` 模拟；UI 只驱动关键路径。
+> 实用主义原则：实例准备用 GraphQL API 做 setup；Agent 行为（调 MCP 工具、结束会话）用 fake controller 捕获 socket 事件（acp:start/resume/stop/message）模拟；MCP 工具调用经 fake controller 主 WebSocket 走 relay 协议（`mcp:request` → `mcp:response`，按 requestId 匹配，参考 workflow.spec.ts 的 `callWorkflowTool`/`callAdminTool`）——MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线；UI 只驱动关键路径。
 
 | 测试 | 描述 |
 |------|------|

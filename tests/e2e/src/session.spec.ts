@@ -103,7 +103,7 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       reject(new Error(`Register failed: ${data.message}`));
     });
 
-    client.emit('register', { key: rawKey, hostname: 'e2e-test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'e2e-test-host', version: '2.0.0' });
   });
 }
 

@@ -73,7 +73,7 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-acp-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-acp-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 
@@ -121,7 +121,7 @@ function registerControllerWithConfigOptions(rawKey: string): Promise<{ controll
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-acp-cfg-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-acp-cfg-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 
@@ -185,7 +185,7 @@ function registerControllerWithDelete(rawKey: string): Promise<{ controllerId: s
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-acp-del-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-acp-del-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 

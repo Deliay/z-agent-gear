@@ -13,7 +13,6 @@ import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
-import { mcpRouter } from './routes/mcp.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
@@ -21,6 +20,7 @@ import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
+import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
@@ -48,8 +48,6 @@ app.use('/graphql', yoga);
 app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
-
-app.use('/mcp', mcpRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -89,6 +87,10 @@ async function start() {
     // Revoke session MCP endpoints when sessions reach a terminal status
     mcpEndpointRevokeSubscriber.start();
     console.log('MCP endpoint revoke subscriber started');
+
+    // Consume MCP requests bridged from controller-api over Redis
+    mcpRelayConsumer.start();
+    console.log('MCP relay consumer started');
 
     // Workflow session lifecycle events (removed / prompt-completed idling)
     sessionLifecycleSubscriber.start();

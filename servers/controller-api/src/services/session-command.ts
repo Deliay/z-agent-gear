@@ -81,13 +81,13 @@ export class SessionCommandService {
             worktreePath?: string;
             branch?: string;
             message?: string;
-            mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+            mcpEndpoint?: { token: string; serverNames: string[] };
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
-            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] }; modeId?: string; modelId?: string }));
+            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpStart(command as { sessionId: string; controllerId: string; serverType: string; cwd?: string; mcpEndpoint?: { token: string; serverNames: string[] }; modeId?: string; modelId?: string }));
           } else if (command.type === 'acp:resume' && command.sessionId && command.controllerId && command.externalSessionId) {
-            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string; mcpEndpoint?: { url: string; token: string; serverNames: string[] }; modeId?: string; modelId?: string }));
+            await this.enqueueSessionLifecycle(command.sessionId, () => this.handleAcpResume(command as { sessionId: string; controllerId: string; externalSessionId: string; cwd?: string; mcpEndpoint?: { token: string; serverNames: string[] }; modeId?: string; modelId?: string }));
           } else if (command.type === 'acp:cancel' && command.sessionId) {
             await this.handleAcpCancel(command.sessionId);
           } else if (command.type === 'acp:check' && command.requestId && command.controllerId) {
@@ -165,7 +165,7 @@ export class SessionCommandService {
     controllerId: string;
     serverType: string;
     cwd?: string;
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+    mcpEndpoint?: { token: string; serverNames: string[] };
     modeId?: string;
     modelId?: string;
   }): Promise<void> {
@@ -278,7 +278,7 @@ export class SessionCommandService {
     controllerId: string;
     externalSessionId: string;
     cwd?: string;
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+    mcpEndpoint?: { token: string; serverNames: string[] };
     modeId?: string;
     modelId?: string;
   }): Promise<void> {

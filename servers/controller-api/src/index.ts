@@ -36,6 +36,7 @@ app.get('/health', (_req, res) => {
 const io = new SocketIOServer(httpServer, {
   cors: { origin: '*' },
   transports: ['websocket'],
+  maxHttpBufferSize: 16 * 1024 * 1024,
 });
 
 const mcpProxyRegistry = new McpProxyRegistry(io);

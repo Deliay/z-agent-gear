@@ -1,7 +1,4 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
-import express from 'express';
-import type { Server } from 'http';
-import type { AddressInfo } from 'net';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('jsonwebtoken', () => ({
   default: {
@@ -9,13 +6,13 @@ vi.mock('jsonwebtoken', () => ({
   },
 }));
 
-vi.mock('../services/mcp-endpoint.js', () => ({
+vi.mock('./mcp-endpoint.js', () => ({
   mcpEndpointService: {
     getStatus: vi.fn(),
   },
 }));
 
-vi.mock('../services/mcp-forwarder.js', () => {
+vi.mock('./mcp-forwarder.js', () => {
   class ForwardError extends Error {
     constructor(
       public readonly code: string,
@@ -43,52 +40,28 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
-vi.mock('../services/workflow/tool-handlers.js', () => ({
+vi.mock('./workflow/tool-handlers.js', () => ({
   handlePlatformMcpRequest: vi.fn(),
   PLATFORM_SERVER_NAME: 'agent-workflow-tools',
 }));
 
-vi.mock('../services/workflow/admin-tools.js', () => ({
+vi.mock('./workflow/admin-tools.js', () => ({
   handleAdminPlatformMcpRequest: vi.fn(),
   ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
 }));
 
 import jwt from 'jsonwebtoken';
-import { mcpEndpointService } from '../services/mcp-endpoint.js';
-import { mcpForwarder, ForwardError } from '../services/mcp-forwarder.js';
+import { mcpEndpointService } from './mcp-endpoint.js';
+import { mcpForwarder, ForwardError } from './mcp-forwarder.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
-import { handlePlatformMcpRequest } from '../services/workflow/tool-handlers.js';
-import { mcpRouter } from './mcp.js';
-
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/mcp', mcpRouter);
-  server = app.listen(0);
-  await new Promise<void>(resolve => server.once('listening', resolve));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
-
-afterAll(async () => {
-  await new Promise<void>(resolve => server.close(() => resolve()));
-});
+import { handlePlatformMcpRequest } from './workflow/tool-handlers.js';
+import { dispatch } from './mcp-dispatch.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn(), set: vi.fn(), del: vi.fn() } as never);
 });
-
-function post(path: string, body: unknown, token?: string) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return fetch(baseUrl + path, { method: 'POST', headers, body: JSON.stringify(body) });
-}
 
 const VALID_PAYLOAD = { sessionId: 'session-1', userId: 'user-1', serverNames: ['github-mcp'] };
 const VALID_REQUEST = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search' } };
@@ -101,74 +74,73 @@ function mockServerDoc(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('MCP HTTP Entry', () => {
-  it('should return 401 when token is missing', async () => {
-    const res = await post('/mcp/session-1', VALID_REQUEST);
+function jsonRpcErrorBody(result: { status: number; body: unknown }) {
+  return result.body as { error: { code: string; message: string }; result?: any };
+}
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error.code).toBe('ENDPOINT_REVOKED');
+describe('MCP Dispatch', () => {
+  it('should return 401 when token is missing', async () => {
+    const result = await dispatch({ sessionId: 'session-1', body: VALID_REQUEST });
+
+    expect(result.status).toBe(401);
+    expect(jsonRpcErrorBody(result).error.code).toBe('ENDPOINT_REVOKED');
     expect(jwt.verify).not.toHaveBeenCalled();
   });
 
   it('should return 401 when token is invalid', async () => {
     vi.mocked(jwt.verify).mockImplementation(() => { throw new Error('jwt malformed'); });
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'bad-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'bad-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error.code).toBe('ENDPOINT_REVOKED');
+    expect(result.status).toBe(401);
+    expect(jsonRpcErrorBody(result).error.code).toBe('ENDPOINT_REVOKED');
   });
 
   it('should return 401 when token sessionId does not match path', async () => {
     vi.mocked(jwt.verify).mockReturnValue({ ...VALID_PAYLOAD, sessionId: 'other-session' } as never);
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error.code).toBe('ENDPOINT_REVOKED');
+    expect(result.status).toBe(401);
+    expect(jsonRpcErrorBody(result).error.code).toBe('ENDPOINT_REVOKED');
   });
 
   it('should return 401 when endpoint is revoked', async () => {
     vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('revoked');
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error.code).toBe('ENDPOINT_REVOKED');
+    expect(result.status).toBe(401);
+    expect(jsonRpcErrorBody(result).error.code).toBe('ENDPOINT_REVOKED');
   });
 
   it('should return 400 when jsonrpc is missing', async () => {
     vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
 
-    const res = await post('/mcp/session-1', { id: 1, method: 'tools/call' }, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: { id: 1, method: 'tools/call' } });
 
-    expect(res.status).toBe(400);
+    expect(result.status).toBe(400);
   });
 
   it('should return 400 when method is missing', async () => {
     vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
 
-    const res = await post('/mcp/session-1', { jsonrpc: '2.0', id: 1 }, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: { jsonrpc: '2.0', id: 1 } });
 
-    expect(res.status).toBe(400);
+    expect(result.status).toBe(400);
   });
 
   it('should return 400 when no server name specified', async () => {
     vi.mocked(jwt.verify).mockReturnValue({ sessionId: 'session-1', userId: 'user-1', serverNames: [] } as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.error.message).toBe('No server name specified');
+    expect(result.status).toBe(400);
+    expect(jsonRpcErrorBody(result).error.message).toBe('No server name specified');
   });
 
   it('should return 200 JSON-RPC SERVER_NOT_FOUND when server not found', async () => {
@@ -176,11 +148,10 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
     vi.mocked(McpServer.findOne).mockResolvedValue(null as never);
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('SERVER_NOT_FOUND');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_NOT_FOUND');
     expect(McpServer.findOne).toHaveBeenCalledWith({
       userId: 'user-1',
       name: 'github-mcp',
@@ -193,11 +164,10 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
     vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc({ transport: 'http' }) as never);
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('SERVER_NOT_FOUND');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_NOT_FOUND');
   });
 
   it('should return 200 JSON-RPC SERVER_OFFLINE when no owner registered', async () => {
@@ -206,11 +176,10 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(McpServer.findOne).mockResolvedValue(mockServerDoc() as never);
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue(null), set: vi.fn(), del: vi.fn() } as never);
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('SERVER_OFFLINE');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_OFFLINE');
     expect(mcpForwarder.request).not.toHaveBeenCalled();
   });
 
@@ -223,11 +192,10 @@ describe('MCP HTTP Entry', () => {
     const forwardResponse = { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: 'hi' }] } };
     vi.mocked(mcpForwarder.request).mockResolvedValue(forwardResponse as never);
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body).toEqual(forwardResponse);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(forwardResponse);
     expect(redis.get).toHaveBeenCalledWith('mcp:proxy:owner:server-1');
     expect(mcpForwarder.request).toHaveBeenCalledWith({
       serverId: 'server-1',
@@ -243,11 +211,10 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
     vi.mocked(mcpForwarder.request).mockRejectedValue(new ForwardError('FORWARD_TIMEOUT', 'Forward timeout'));
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('FORWARD_TIMEOUT');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('FORWARD_TIMEOUT');
   });
 
   it('should pass through FORWARD_ERROR code from the forwarder', async () => {
@@ -257,12 +224,11 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
     vi.mocked(mcpForwarder.request).mockRejectedValue(new ForwardError('FORWARD_ERROR', 'owner socket gone'));
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('FORWARD_ERROR');
-    expect(body.error.message).toBe('owner socket gone');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('FORWARD_ERROR');
+    expect(jsonRpcErrorBody(result).error.message).toBe('owner socket gone');
   });
 
   it('should route to the server given in the URL path', async () => {
@@ -272,9 +238,9 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
     vi.mocked(mcpForwarder.request).mockResolvedValue({ jsonrpc: '2.0', id: 1, result: {} } as never);
 
-    const res = await post('/mcp/session-1/db-mcp', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', serverName: 'db-mcp', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
+    expect(result.status).toBe(200);
     expect(McpServer.findOne).toHaveBeenCalledWith({
       userId: 'user-1',
       name: 'db-mcp',
@@ -286,11 +252,10 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
     vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
 
-    const res = await post('/mcp/session-1/other-mcp', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', serverName: 'other-mcp', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('SERVER_NOT_FOUND');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_NOT_FOUND');
     expect(McpServer.findOne).not.toHaveBeenCalled();
     expect(mcpForwarder.request).not.toHaveBeenCalled();
   });
@@ -302,12 +267,11 @@ describe('MCP HTTP Entry', () => {
     vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn().mockResolvedValue('instance-1'), set: vi.fn(), del: vi.fn() } as never);
     vi.mocked(mcpForwarder.request).mockRejectedValue(new Error('unexpected boom'));
 
-    const res = await post('/mcp/session-1', VALID_REQUEST, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: VALID_REQUEST });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.error.code).toBe('FORWARD_ERROR');
-    expect(body.error.message).toBe('unexpected boom');
+    expect(result.status).toBe(200);
+    expect(jsonRpcErrorBody(result).error.code).toBe('FORWARD_ERROR');
+    expect(jsonRpcErrorBody(result).error.message).toBe('unexpected boom');
   });
 
   it('should answer JSON-RPC notifications with 202 immediately and forward fire-and-forget', async () => {
@@ -321,23 +285,17 @@ describe('MCP HTTP Entry', () => {
     const notification = { jsonrpc: '2.0', method: 'notifications/initialized' };
 
     const start = Date.now();
-    const res = await post('/mcp/session-1', notification, 'valid-token');
+    const result = await dispatch({ sessionId: 'session-1', token: 'valid-token', body: notification });
 
     expect(Date.now() - start).toBeLessThan(5000);
-    expect(res.status).toBe(202);
-    expect(await res.text()).toBe('');
+    expect(result.status).toBe(202);
+    expect(result.body).toBeUndefined();
     // the notification is still delivered to the stdio server (handshake)
     expect(mcpForwarder.request).toHaveBeenCalledWith({
       serverId: 'server-1',
       sessionId: 'session-1',
       request: notification,
     });
-  });
-
-  it('should respond 405 to GET (standalone SSE stream not offered)', async () => {
-    const res = await fetch(`${baseUrl}/mcp/session-1/github-mcp`);
-
-    expect(res.status).toBe(405);
   });
 
   describe('platform server (agent-workflow-tools)', () => {
@@ -361,15 +319,15 @@ describe('MCP HTTP Entry', () => {
         result: { tools: [{ name: 'getCurrentNodeId' }] },
       });
 
-      const res = await post(
-        '/mcp/session-1/agent-workflow-tools',
-        { jsonrpc: '2.0', id: 1, method: 'tools/list' },
-        'valid-token',
-      );
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-workflow-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      });
 
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.result.tools).toHaveLength(1);
+      expect(result.status).toBe(200);
+      expect(jsonRpcErrorBody(result).result!.tools).toHaveLength(1);
       // 节点作用域透传到 handler
       expect(handlePlatformMcpRequest).toHaveBeenCalledWith(
         { userId: 'user-1', workflow: { instanceId: 'inst-1', nodeId: 'n2' } },
@@ -386,14 +344,14 @@ describe('MCP HTTP Entry', () => {
         error: { code: 'METHOD_NOT_FOUND', message: '不支持的方法：x' },
       });
 
-      const res = await post(
-        '/mcp/session-1/agent-workflow-tools',
-        { jsonrpc: '2.0', id: 2, method: 'x' },
-        'valid-token',
-      );
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-workflow-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 2, method: 'x' },
+      });
 
-      const body = await res.json();
-      expect(body.error.code).toBe('METHOD_NOT_FOUND');
+      expect(jsonRpcErrorBody(result).error.code).toBe('METHOD_NOT_FOUND');
     });
 
     it('平台服务的 notification 立即 202', async () => {
@@ -402,26 +360,28 @@ describe('MCP HTTP Entry', () => {
       mockPlatformServer();
       vi.mocked(handlePlatformMcpRequest).mockResolvedValue({ result: {} });
 
-      const res = await post(
-        '/mcp/session-1/agent-workflow-tools',
-        { jsonrpc: '2.0', method: 'notifications/initialized' },
-        'valid-token',
-      );
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-workflow-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', method: 'notifications/initialized' },
+      });
 
-      expect(res.status).toBe(202);
+      expect(result.status).toBe(202);
     });
 
     it('S3: 会话结束后（endpoint 吊销）调用平台工具返回 401', async () => {
       vi.mocked(jwt.verify).mockReturnValue(WORKFLOW_PAYLOAD as never);
       vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('revoked');
 
-      const res = await post(
-        '/mcp/session-1/agent-workflow-tools',
-        { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'getCurrentNodeId' } },
-        'valid-token',
-      );
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-workflow-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'getCurrentNodeId' } },
+      });
 
-      expect(res.status).toBe(401);
+      expect(result.status).toBe(401);
       expect(handlePlatformMcpRequest).not.toHaveBeenCalled();
     });
   });

@@ -118,7 +118,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
@@ -158,7 +158,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', {
         key: 'zag_k_1_abc123',
         hostname: 'dev-machine',
-        version: '1.0.0',
+        version: '2.0.0',
         homeDir: '/home/user',
         platform: 'linux',
       });
@@ -193,7 +193,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
@@ -216,7 +216,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'invalid-key', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'invalid-key', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Key not found' });
@@ -242,7 +242,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'wrong-key', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'wrong-key', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Invalid key' });
@@ -250,7 +250,7 @@ describe('SocketIO Service', () => {
       });
     });
 
-    it('should reject with VERSION_MISMATCH when version incompatible', async () => {
+    it('should reject with VERSION_MISMATCH when major version is 1', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
@@ -268,12 +268,43 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.5.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
+    });
+
+    it('should accept register when major version is 2', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+      });
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
     });
 
     it('should reject with KEY_ALREADY_ONLINE when session exists', async () => {
@@ -295,7 +326,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
@@ -329,7 +360,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
@@ -389,7 +420,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
@@ -446,7 +477,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
@@ -498,7 +529,7 @@ describe('SocketIO Service', () => {
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.0.0' });
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
       return mockSocket;
     }
 
