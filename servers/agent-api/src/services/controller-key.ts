@@ -81,10 +81,10 @@ export class ControllerKeyService {
 
   async regenerate(controllerId: string, userId: string): Promise<{ key: Record<string, unknown>; rawKey: string } | null> {
     // Find the controller and verify ownership
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, userId });
     if (!controller) return null;
 
-    const keyId = (controller.keyId as mongoose.Types.ObjectId).toString();
+    const keyId = controller.keyId.toString();
 
     // Find the existing key
     const existingKey = await ControllerKey.findOne({ _id: keyId, userId }).lean();
@@ -96,7 +96,7 @@ export class ControllerKeyService {
     const keyHash = await bcrypt.hash(rawKey, BCRYPT_ROUNDS);
     const keyPrefix = rawKey.slice(0, 8);
 
-    // Update the key record
+    // Update the key record with new hash
     const updatedKey = await ControllerKey.findOneAndUpdate(
       { _id: keyId, userId },
       {
@@ -108,6 +108,12 @@ export class ControllerKeyService {
     ).lean();
 
     if (!updatedKey) return null;
+
+    // Update controller status to unbound (needs re-registration)
+    await Controller.findOneAndUpdate(
+      { _id: controllerId, userId },
+      { status: 'unbound' },
+    );
 
     // Evict old key from cache and cache new key
     await evictKeyById(keyId);
