@@ -517,7 +517,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
         acpSessionSyncService.cleanupSocket(socket);
         if (socket.data.keyId) {
           await Controller.updateOne(
-            { keyId: socket.data.keyId },
+            { keyId: socket.data.keyId, status: { $ne: 'unbound' } },
             { status: 'offline' },
           );
           await sessionService.removeSession(socket.data.keyId);

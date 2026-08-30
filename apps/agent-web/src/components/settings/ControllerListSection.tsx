@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
-import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation } from '@/graphql/types'
+import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation, RegenerateControllerKeyMutation } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -74,6 +74,25 @@ const RENAME_CONTROLLER = gql`
   }
 `
 
+const REGENERATE_CONTROLLER_KEY = gql`
+  mutation RegenerateControllerKey($input: RegenerateControllerKeyInput!) {
+    regenerateControllerKey(input: $input) {
+      key {
+        id
+        name
+        type
+        keyPrefix
+        status
+        rawKey
+        lastUsedAt
+        createdAt
+        updatedAt
+      }
+      rawKey
+    }
+  }
+`
+
 const POLL_INTERVAL = 15_000
 
 function autoKeyName(): string {
@@ -95,11 +114,14 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
   const [createKey] = useMutation<CreateControllerKeyMutation>(CREATE_KEY)
   const [unbindController] = useMutation(UNBIND_CONTROLLER)
   const [renameController] = useMutation(RENAME_CONTROLLER)
+  const [regenerateControllerKey] = useMutation<RegenerateControllerKeyMutation>(REGENERATE_CONTROLLER_KEY)
 
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
+  const [confirmRegenerate, setConfirmRegenerate] = useState<{ id: string; name: string } | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [regeneratedKey, setRegeneratedKey] = useState<{ controllerId: string; rawKey: string } | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
@@ -107,7 +129,8 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
   const controllerByKeyId = new Map(controllers.map((c) => [c.keyId, c]))
 
   const unboundKeys = keys.filter((k) => !controllerByKeyId.has(k.id) && k.rawKey)
-  const boundControllers = controllers
+  const boundControllers = controllers.filter((c) => c.status !== 'unbound')
+  const unboundControllers = controllers.filter((c) => c.status === 'unbound')
 
   const handleGenerateKey = async () => {
     await createKey({
@@ -137,6 +160,35 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
     setRenameValue('')
   }
 
+  const handleRegenerate = async () => {
+    if (!confirmRegenerate) return
+    try {
+      const { data } = await regenerateControllerKey({
+        variables: { input: { controllerId: confirmRegenerate.id } },
+      })
+      if (data?.regenerateControllerKey) {
+        setRegeneratedKey({
+          controllerId: confirmRegenerate.id,
+          rawKey: data.regenerateControllerKey.rawKey,
+        })
+        try {
+          await navigator.clipboard.writeText(data.regenerateControllerKey.rawKey)
+        } catch {
+          // Clipboard API may not be available in all contexts
+        }
+      }
+    } finally {
+      refetchKeys()
+      refetchControllers()
+      setConfirmRegenerate(null)
+    }
+  }
+
+  const handleCopyRegeneratedKey = async () => {
+    if (!regeneratedKey) return
+    await navigator.clipboard.writeText(regeneratedKey.rawKey)
+  }
+
   const loading = keysLoading || controllersLoading
 
   return (
@@ -155,7 +207,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
         <CardContent>
           {loading ? (
             <div className="text-sm text-muted-foreground">加载中...</div>
-          ) : unboundKeys.length === 0 && boundControllers.length === 0 ? (
+          ) : unboundKeys.length === 0 && boundControllers.length === 0 && unboundControllers.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
               暂无控制器，点击「生成 Key」开始配置
             </div>
@@ -218,8 +270,37 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                     <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       重命名
                     </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmRegenerate({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      重新生成Key
+                    </Button>
                     <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       解绑
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              {unboundControllers.map((ctrl: { id: string; name: string; hostname: string; type: string; status: string; keyId: string; version: string; lastHeartbeatAt: string | null }) => (
+                <div key={ctrl.id} className="flex items-center gap-3 rounded-lg border border-dashed p-4">
+                  <div className="h-2 w-2 rounded-full bg-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{ctrl.name || ctrl.hostname}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        {ctrl.type}
+                      </span>
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning">
+                        未绑定
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      <span>{ctrl.hostname}</span>
+                      <span className="ml-2">v{ctrl.version}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      删除
                     </Button>
                   </div>
                 </div>
@@ -261,6 +342,42 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
             <Button variant="destructive" onClick={() => confirmUnbind && handleUnbind(confirmUnbind.id)}>
               确认
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!confirmRegenerate} onOpenChange={() => setConfirmRegenerate(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重新生成Key</DialogTitle>
+            <DialogDescription>
+              重新生成key后，旧key将立即失效，控制器需要使用新key重新连接。是否继续？
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            控制器: {confirmRegenerate?.name}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRegenerate(null)}>取消</Button>
+            <Button onClick={handleRegenerate}>确认</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!regeneratedKey} onOpenChange={() => setRegeneratedKey(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>新Key已生成</DialogTitle>
+            <DialogDescription>
+              新Key已生成并复制到剪贴板，请妥善保存。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border bg-muted p-3">
+            <code className="break-all font-mono text-sm">{regeneratedKey?.rawKey}</code>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRegeneratedKey(null)}>关闭</Button>
+            <Button onClick={handleCopyRegeneratedKey}>复制Key</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -6,6 +6,7 @@ vi.mock('../../services/controller-key.js', () => ({
     create: vi.fn(),
     findAllByUser: vi.fn(),
     rename: vi.fn(),
+    regenerate: vi.fn(),
   },
 }));
 
@@ -236,6 +237,44 @@ describe('Controller Resolvers', () => {
         controllerResolvers.Mutation.unbindController(
           {},
           { id: 'ctrl1' },
+          emptyContext,
+        ),
+      ).rejects.toThrow('Not authenticated');
+    });
+  });
+
+  describe('Mutation.regenerateControllerKey', () => {
+    it('should regenerate a controller key', async () => {
+      const mockResult = { key: { id: 'key1' }, rawKey: 'zag_k_1_newkey' };
+      vi.mocked(controllerKeyService.regenerate).mockResolvedValue(mockResult);
+
+      const result = await controllerResolvers.Mutation.regenerateControllerKey(
+        {},
+        { input: { controllerId: 'ctrl1' } },
+        mockContext,
+      );
+
+      expect(result).toEqual(mockResult);
+      expect(controllerKeyService.regenerate).toHaveBeenCalledWith('ctrl1', 'user1');
+    });
+
+    it('should throw when controller not found', async () => {
+      vi.mocked(controllerKeyService.regenerate).mockResolvedValue(null);
+
+      await expect(
+        controllerResolvers.Mutation.regenerateControllerKey(
+          {},
+          { input: { controllerId: 'ctrl1' } },
+          mockContext,
+        ),
+      ).rejects.toThrow('Controller not found');
+    });
+
+    it('should throw when not authenticated', async () => {
+      await expect(
+        controllerResolvers.Mutation.regenerateControllerKey(
+          {},
+          { input: { controllerId: 'ctrl1' } },
           emptyContext,
         ),
       ).rejects.toThrow('Not authenticated');

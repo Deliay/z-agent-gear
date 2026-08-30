@@ -99,5 +99,22 @@ export const controllerResolvers = {
       }
       return result;
     },
+    regenerateControllerKey: async (
+      _parent: unknown,
+      args: { input: { controllerId: string } },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const result = await controllerKeyService.regenerate(
+        args.input.controllerId,
+        context.currentUser.id,
+      );
+      if (!result) {
+        throw new GraphQLError('Controller not found');
+      }
+      return result;
+    },
   },
 };
