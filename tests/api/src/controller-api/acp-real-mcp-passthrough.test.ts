@@ -4,16 +4,16 @@ import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-cli
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import http, { type Server } from 'node:http';
 
 // End-to-end MCP passthrough verification against REAL services:
-//   1. The MCP URL handed to the agent via ACP conforms to the contract and
-//      the full forward chain works (initialize/tools/list/tools/call), with
-//      JSON-RPC notifications answered immediately (202) instead of stalling
-//      for the 30s forward timeout (the regression that silently broke MCP
-//      onboarding in agents).
-//   2. A real opencode agent, given the endpoint via ACP session/new (exactly
-//      like the agent-controller bridge does), actually registers the MCP
-//      server and can call its tool. If the tool is missing the agent is
+//   1. The MCP endpoint handed to the agent via ACP conforms to the new
+//      contract ({token, serverNames}, no public url) and the relay chain works
+//      (initialize/tools/list/tools/call), with JSON-RPC notifications answered
+//      immediately (202) instead of stalling for the forward timeout.
+//   2. A real opencode agent, given the loopback relay URL via ACP session/new
+//      (exactly like the agent-controller bridge does), actually registers the
+//      MCP server and can call its tool. If the tool is missing the agent is
 //      asked to print TOOL_MISSING so failures are diagnosable.
 //
 // Requires: agent-api + controller-api + redis + mongo running (aspire),
@@ -21,7 +21,6 @@ import { join, resolve } from 'path';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:10001';
 
 const CONTROLLER_PKG = resolve(__dirname, '../../../../packages/agent-controller');
 const MCP_FIXTURE = resolve(__dirname, '../../fixtures/mock-mcp-stdio.mjs');
@@ -58,7 +57,7 @@ interface ChainContext {
   proxyLog: () => string;
   binDir: string;
   sessionId: string;
-  mcpEndpoint: { url: string; token: string; serverNames: string[] };
+  mcpEndpoint: { url?: string; token: string; serverNames: string[] };
   serverName: string;
 }
 
@@ -128,7 +127,7 @@ async function setupChain(): Promise<ChainContext> {
   const registered = await new Promise<{ controllerId: string }>((resolvePromise, reject) => {
     const timer = setTimeout(() => reject(new Error('controller register timeout')), 10_000);
     controllerSocket.once('registered', (d: { controllerId: string }) => { clearTimeout(timer); resolvePromise(d); });
-    controllerSocket.emit('register', { key: ctrlKey, hostname: 'mcppt-host', version: '1.0.0' });
+    controllerSocket.emit('register', { key: ctrlKey, hostname: 'mcppt-host', version: '2.0.0' });
   });
   const controllerId = registered.controllerId;
 
@@ -189,17 +188,33 @@ function teardownChain(ctx: ChainContext): void {
   rmSync(ctx.binDir, { recursive: true, force: true });
 }
 
+// Drive an MCP request through the relay protocol exactly as the real
+// agent-controller does: emit `mcp:request` on the controller WebSocket and
+// resolve the matching `mcp:response` (controller-api validates the session
+// belongs to this controller, publishes Redis, agent-api relays and publishes
+// back, controller-api emits `mcp:response`).
 async function postMcp(ctx: ChainContext, body: Record<string, unknown>): Promise<{ status: number; latencyMs: number; json: any }> {
-  const url = `${ctx.mcpEndpoint.url}/${encodeURIComponent(ctx.serverName)}`;
+  const requestId = `mcpreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const t0 = Date.now();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.mcpEndpoint.token}` },
-    body: JSON.stringify(body),
+  const res = await new Promise<{ status: number; body: any }>((resolvePromise, reject) => {
+    const timer = setTimeout(() => reject(new Error(`mcp:response timeout for ${requestId}`)), 15_000);
+    const onResponse = (payload: { requestId: string; status: number; body: any }) => {
+      if (payload.requestId !== requestId) return;
+      clearTimeout(timer);
+      ctx.controllerSocket.off('mcp:response', onResponse);
+      resolvePromise({ status: payload.status, body: payload.body });
+    };
+    ctx.controllerSocket.on('mcp:response', onResponse);
+    ctx.controllerSocket.emit('mcp:request', {
+      requestId,
+      sessionId: ctx.sessionId,
+      serverName: ctx.serverName,
+      token: ctx.mcpEndpoint.token,
+      body,
+    });
   });
-  const text = await res.text();
   let json: any = null;
-  try { json = JSON.parse(text); } catch { /* 202 has no body */ }
+  try { json = res.body; } catch { /* 202 has no body */ }
   return { status: res.status, latencyMs: Date.now() - t0, json };
 }
 
@@ -214,14 +229,12 @@ describe('ACP MCP passthrough (real services)', () => {
     if (ctx) teardownChain(ctx);
   });
 
-  it('should hand the agent a contract-conformant MCP endpoint URL', () => {
-    // contracts/agent-session-websocket.md: mcpEndpoint = { url, token, serverNames }
+  it('should hand the agent a contract-conformant MCP endpoint', () => {
+    // contracts/agent-session-websocket.md: mcpEndpoint = { token, serverNames }
+    // (public /mcp url removed; relayed via controller loopback → WebSocket)
     expect(ctx.mcpEndpoint.token).toBeTruthy();
     expect(ctx.mcpEndpoint.serverNames).toEqual([MCP_SERVER_NAME]);
-    // per-server URL assembled by the bridge: {url}/{serverName}
-    expect(ctx.mcpEndpoint.url).toBe(`${GATEWAY_URL}/mcp/${ctx.sessionId}`);
-    const perServerUrl = `${ctx.mcpEndpoint.url}/${encodeURIComponent(ctx.serverName)}`;
-    expect(perServerUrl).toBe(`${GATEWAY_URL}/mcp/${ctx.sessionId}/${MCP_SERVER_NAME}`);
+    expect(ctx.mcpEndpoint.url).toBeUndefined();
   });
 
   it('should complete an MCP initialize handshake through the gateway chain', async () => {
@@ -249,16 +262,18 @@ describe('ACP MCP passthrough (real services)', () => {
     expect(toolNames).toContain(TOOL_NAME);
   }, 30_000);
 
-  it('should invoke the mock MCP tool through the gateway chain and return the marker', async () => {
-    const perServerUrl = `${ctx.mcpEndpoint.url}/${encodeURIComponent(ctx.serverName)}`;
+  it('should invoke the mock MCP tool through the relay chain and return the marker', async () => {
+    // The public per-server url no longer exists; the mock tool only echoes the
+    // address it was given, so pass a relay-flavoured placeholder.
+    const address = `mock://relay/${encodeURIComponent(ctx.serverName)}`;
     const res = await postMcp(ctx, {
       jsonrpc: '2.0', id: 3, method: 'tools/call',
-      params: { name: TOOL_NAME, arguments: { address: perServerUrl } },
+      params: { name: TOOL_NAME, arguments: { address } },
     });
     expect(res.status).toBe(200);
     const text = res.json.result?.content?.[0]?.text ?? '';
     expect(text).toContain(MARKER);
-    expect(text).toContain(`address=${perServerUrl}`);
+    expect(text).toContain(`address=${address}`);
   }, 30_000);
 });
 
@@ -332,21 +347,82 @@ function spawnOpencodeAcp(cwd: string): AcpClient {
   };
 }
 
+interface LoopbackRelay {
+  url: string;
+  port: number;
+  close: () => Promise<void>;
+}
+
+// Spin up a real loopback HTTP endpoint mimicking the agent-controller's
+// local-server.ts + relay.ts: POST /mcp/{sessionId}/{serverName} is converted
+// into a `mcp:request` emit, and the matching `mcp:response` is written back to
+// the HTTP response. This is what the real bridge hands the agent.
+function createLoopbackRelay(ctx: ChainContext): Promise<LoopbackRelay> {
+  const server: Server = http.createServer((req, res) => {
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    const match = /^\/mcp\/([^/]+)\/([^/]+)\/?$/.exec(req.url ?? '');
+    if (!match) { res.writeHead(404); res.end(); return; }
+    const sessionId = decodeURIComponent(match[1]);
+    const serverName = decodeURIComponent(match[2]);
+
+    let bodyStr = '';
+    req.on('data', (chunk) => { bodyStr += chunk; });
+    req.on('end', () => {
+      let body: unknown;
+      try { body = JSON.parse(bodyStr || '{}'); } catch { res.writeHead(400); res.end(); return; }
+      const requestId = `mcpreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const timer = setTimeout(() => { res.writeHead(504); res.end(); }, 60_000);
+      const onResponse = (payload: { requestId: string; status: number; body: any }) => {
+        if (payload.requestId !== requestId) return;
+        clearTimeout(timer);
+        ctx.controllerSocket.off('mcp:response', onResponse);
+        res.writeHead(payload.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload.body));
+      };
+      ctx.controllerSocket.on('mcp:response', onResponse);
+      ctx.controllerSocket.emit('mcp:request', {
+        requestId,
+        sessionId,
+        serverName,
+        token: ctx.mcpEndpoint.token,
+        body,
+      });
+    });
+  });
+
+  return new Promise((resolvePromise, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = address && typeof address === 'object' ? address.port : 0;
+      server.off('error', reject);
+      resolvePromise({
+        port,
+        url: `http://127.0.0.1:${port}`,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
 describe('opencode agent MCP passthrough (real agent)', () => {
   const hasOpencode = commandExists('opencode');
   let ctx: ChainContext;
+  let relay: LoopbackRelay;
   let acp: AcpClient;
   let acpCwd = '';
 
   beforeAll(async () => {
     if (!hasOpencode) return;
     ctx = await setupChain();
+    relay = await createLoopbackRelay(ctx);
     acpCwd = mkdtempSync(join(tmpdir(), 'acp-mcppt-'));
     acp = spawnOpencodeAcp(acpCwd);
   }, 90_000);
 
   afterAll(() => {
     acp?.close();
+    relay?.close();
     if (ctx) teardownChain(ctx);
     if (acpCwd) rmSync(acpCwd, { recursive: true, force: true });
   });
@@ -362,13 +438,14 @@ describe('opencode agent MCP passthrough (real agent)', () => {
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
     });
 
-    // identical to agent-controller bridge.ts toMcpEndpointServers()
+    // identical to agent-controller bridge.ts toMcpEndpointServers(): the agent
+    // is handed the loopback relay URL for each server, which relays via WS.
     const session = await acp.send('session/new', {
       cwd: acpCwd,
       mcpServers: ctx.mcpEndpoint.serverNames.map((name) => ({
         type: 'http',
         name,
-        url: `${ctx.mcpEndpoint.url}/${encodeURIComponent(name)}`,
+        url: `${relay.url}/mcp/${ctx.sessionId}/${encodeURIComponent(name)}`,
         headers: [{ name: 'Authorization', value: `Bearer ${ctx.mcpEndpoint.token}` }],
       })),
     });

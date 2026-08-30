@@ -172,7 +172,7 @@ async function createKeyAndRegisterController(token: string): Promise<{ rawKey: 
 
   const client = createClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key, hostname: 'ws-test-host', version: '1.0.0' });
+  client.emit('register', { key, hostname: 'ws-test-host', version: '2.0.0' });
   const regData = await registered;
   client.disconnect();
 
@@ -454,7 +454,7 @@ describe('Folder Browser API', () => {
       // Register and immediately disconnect
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: offlineRawKey, hostname: 'offline-host', version: '1.0.0' });
+      client.emit('register', { key: offlineRawKey, hostname: 'offline-host', version: '2.0.0' });
       const regData = await registered;
       client.disconnect();
 
@@ -494,7 +494,7 @@ describe('Folder Browser API', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-ok', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-ok', version: '2.0.0' });
       const regData = await registered;
 
       const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
@@ -536,7 +536,7 @@ describe('Folder Browser API', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-empty', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-empty', version: '2.0.0' });
       const regData = await registered;
 
       const fsBrowse = waitForEvent<{ requestId: string }>(client, 'fs:browse', 10000);
@@ -570,7 +570,7 @@ describe('Folder Browser API', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-null', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-null', version: '2.0.0' });
       const regData = await registered;
 
       const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
@@ -607,7 +607,7 @@ describe('Folder Browser API', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-root', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'browse-root', version: '2.0.0' });
       const regData = await registered;
 
       const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(client, 'fs:browse', 10000);
@@ -649,7 +649,7 @@ describe('Folder Browser API', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'home-ok', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'home-ok', version: '2.0.0' });
       const regData = await registered;
 
       const fsHome = waitForEvent<{ requestId: string }>(client, 'fs:home', 10000);
@@ -712,7 +712,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-ws', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-ws', version: '2.0.0' });
       const regData = await registered;
 
       const res = await gqlRequest(
@@ -735,7 +735,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-host', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-host', version: '2.0.0' });
       const regData = await registered;
       client.disconnect();
       await new Promise((r) => setTimeout(r, 300));
@@ -766,7 +766,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-host', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-detect-host', version: '2.0.0' });
       const regData = await registered;
 
       const wsRes = await gqlRequest(
@@ -812,7 +812,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-non-host', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-non-host', version: '2.0.0' });
       const regData = await registered;
 
       const wsRes = await gqlRequest(
@@ -874,7 +874,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ws', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ws', version: '2.0.0' });
       const regData = await registered;
 
       const res = await gqlRequest(
@@ -897,7 +897,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-init', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'offline-init', version: '2.0.0' });
       const regData = await registered;
       client.disconnect();
       await new Promise((r) => setTimeout(r, 300));
@@ -928,7 +928,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ok', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-ok', version: '2.0.0' });
       const regData = await registered;
 
       const wsRes = await gqlRequest(
@@ -967,7 +967,7 @@ describe('Workspace Git Support', () => {
       const keyBody = await keyRes.json();
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-fail', version: '1.0.0' });
+      client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'git-init-fail', version: '2.0.0' });
       const regData = await registered;
 
       const wsRes = await gqlRequest(
@@ -1159,7 +1159,7 @@ describe('createFolder mutation', () => {
     const keyBody = await keyRes.json();
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-offline', version: '1.0.0' });
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-offline', version: '2.0.0' });
     const regData = await registered;
     client.disconnect();
     await new Promise((r) => setTimeout(r, 300));
@@ -1183,7 +1183,7 @@ describe('createFolder mutation', () => {
     const keyBody = await keyRes.json();
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-ok', version: '1.0.0' });
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-ok', version: '2.0.0' });
     const regData = await registered;
 
     const fsMkdir = waitForEvent<{
@@ -1229,7 +1229,7 @@ describe('createFolder mutation', () => {
     const keyBody = await keyRes.json();
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-fail', version: '1.0.0' });
+    client.emit('register', { key: keyBody.data.createControllerKey.rawKey, hostname: 'mkdir-fail', version: '2.0.0' });
     const regData = await registered;
 
     const fsMkdir = waitForEvent<{

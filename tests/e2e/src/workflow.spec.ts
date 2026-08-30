@@ -4,7 +4,6 @@ import { registerUser, createControllerKey, loginViaUI, createWorkspace, gqlRequ
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const MCP_BASE_URL = `${API_URL.replace(/\/graphql\/?$/, '')}/mcp`;
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
 
@@ -12,7 +11,7 @@ const sidebar = () => 'nav[aria-label="Sidebar"]';
 // Fake controller（带工作流事件捕获 + 自动应答）
 // ---------------------------------------------------------------------------
 
-interface McpEndpoint { url: string; token: string; serverNames: string[] }
+interface McpEndpoint { token: string; serverNames: string[] }
 interface StartEvent { requestId: string; sessionId: string; serverType: string; mcpEndpoint?: McpEndpoint }
 interface ResumeEvent { requestId: string; sessionId: string; mcpEndpoint?: McpEndpoint }
 interface ControllerMessage { sessionId: string; content: string }
@@ -125,7 +124,7 @@ function registerWorkflowController(
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname, version: '2.0.0' });
   });
 }
 
@@ -383,40 +382,63 @@ async function getSessions(page: Page, token: string, includeWorkflowSessions: b
   return body.data.sessions as { id: string; status: string; workflowInstanceId: string | null; workflowNodeId: string | null }[];
 }
 
+/** 经 fake controller socket 走 MCP relay 协议（mcp:request → mcp:response）调用平台 MCP 工具 */
+function relayMcpCall(
+  controller: WorkflowController,
+  sessionId: string,
+  serverName: string,
+  token: string,
+  body: unknown,
+  timeoutMs = 10000,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const requestId = `e2e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    let timer: ReturnType<typeof setTimeout>;
+    const onResponse = (data: { requestId: string; status: number; body: unknown }) => {
+      if (data.requestId !== requestId) return;
+      clearTimeout(timer);
+      controller.socket.off('mcp:response', onResponse);
+      resolve({ status: data.status, body: (data.body ?? {}) as Record<string, unknown> });
+    };
+    timer = setTimeout(() => {
+      controller.socket.off('mcp:response', onResponse);
+      reject(new Error(`Timeout waiting for mcp:response (${serverName}/${sessionId})`));
+    }, timeoutMs);
+    controller.socket.on('mcp:response', onResponse);
+    controller.socket.emit('mcp:request', { requestId, sessionId, serverName, token, body });
+  });
+}
+
 /** 调用平台工作流 MCP 工具（模拟 Agent 行为），返回 { isError, data } */
 async function callWorkflowTool(
-  page: Page,
+  controller: WorkflowController,
   sessionId: string,
   mcpToken: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ isError: boolean; data: Record<string, unknown> }> {
-  const res = await page.request.post(`${MCP_BASE_URL}/${sessionId}/agent-workflow-tools`, {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mcpToken}` },
-    data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+  const res = await relayMcpCall(controller, sessionId, 'agent-workflow-tools', mcpToken, {
+    jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args },
   });
-  expect(res.status()).toBe(200);
-  const body = await res.json();
-  expect(body.error).toBeUndefined();
-  return { isError: Boolean(body.result.isError), data: JSON.parse(body.result.content[0].text) };
+  expect(res.status).toBe(200);
+  expect(res.body.error).toBeUndefined();
+  return { isError: Boolean((res.body as { result?: { isError?: boolean } }).result?.isError), data: JSON.parse((res.body as { result: { content: { text: string }[] } }).result.content[0].text) };
 }
 
 /** 调用平台管理工作流 MCP 工具集（agent-workflow-admin-tools，模拟 AI 编排） */
 async function callAdminTool(
-  page: Page,
+  controller: WorkflowController,
   sessionId: string,
   mcpToken: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ isError: boolean; data: Record<string, unknown> }> {
-  const res = await page.request.post(`${MCP_BASE_URL}/${sessionId}/agent-workflow-admin-tools`, {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mcpToken}` },
-    data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+  const res = await relayMcpCall(controller, sessionId, 'agent-workflow-admin-tools', mcpToken, {
+    jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args },
   });
-  expect(res.status()).toBe(200);
-  const body = await res.json();
-  expect(body.error).toBeUndefined();
-  return { isError: Boolean(body.result.isError), data: JSON.parse(body.result.content[0].text) };
+  expect(res.status).toBe(200);
+  expect(res.body.error).toBeUndefined();
+  return { isError: Boolean((res.body as { result?: { isError?: boolean } }).result?.isError), data: JSON.parse((res.body as { result: { content: { text: string }[] } }).result.content[0].text) };
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +578,7 @@ test.describe('Workflow E2E', () => {
     const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e2-实例-${Date.now().toString(36)}`);
 
     // fake controller 模拟 Agent：用节点 token 调 completeCurrentNode
-    const result = await callWorkflowTool(page, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+    const result = await callWorkflowTool(env.controller, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
     });
     expect(result.isError).toBe(false);
@@ -602,7 +624,7 @@ test.describe('Workflow E2E', () => {
     const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e3-实例-${Date.now().toString(36)}`);
 
     // exec 完成 → verify RUNNING
-    await callWorkflowTool(page, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+    await callWorkflowTool(env.controller, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
     });
     const verifyStart = await waitFor(
@@ -644,7 +666,7 @@ test.describe('Workflow E2E', () => {
     expect(execMessages).toContain('completeCurrentRework');
 
     // 返工完成（resume 后的新 token）→ 下游 REJECT→RUNNING
-    const reworkResult = await callWorkflowTool(page, execStart.sessionId, execResume.mcpEndpoint!.token, 'completeCurrentRework', {
+    const reworkResult = await callWorkflowTool(env.controller, execStart.sessionId, execResume.mcpEndpoint!.token, 'completeCurrentRework', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v2' }],
     });
     expect(reworkResult.isError).toBe(false);
@@ -767,7 +789,7 @@ test.describe('Workflow E2E', () => {
     );
     const manualResume = env.controller.resumes.filter((r) => r.sessionId === execSessionId).at(-1)!;
     const mcpToken = manualResume.mcpEndpoint?.token ?? execStart.mcpEndpoint!.token;
-    const resumeResult = await callWorkflowTool(page, execSessionId, mcpToken, 'resumeFailedNode', {});
+    const resumeResult = await callWorkflowTool(env.controller, execSessionId, mcpToken, 'resumeFailedNode', {});
     expect(resumeResult.isError).toBe(false);
     expect(resumeResult.data).toMatchObject({ status: 'RUNNING' });
     const instResumed = await getInstance(page, env.token, instanceId);
@@ -995,7 +1017,7 @@ test.describe('Workflow E2E', () => {
     const execStart = await waitFor(() => controller.starts[0], 15000, 'exec acp:start');
 
     // exec 完成 → 下游评审人类节点被引擎自动激活为 RUNNING
-    await callWorkflowTool(page, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+    await callWorkflowTool(controller, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
     });
     await waitFor(
@@ -1179,7 +1201,7 @@ test.describe('Workflow E2E', () => {
     expect(inst.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('RUNNING');
     const resumeEvent = controller2.resumes.find((r) => r.sessionId === execSessionId)!;
     const done = await callWorkflowTool(
-      page,
+      controller2,
       execSessionId,
       resumeEvent.mcpEndpoint?.token ?? execStart.mcpEndpoint!.token,
       'completeCurrentNode',
@@ -1269,7 +1291,7 @@ test.describe('Workflow E2E', () => {
       15000,
       'exec acp:start',
     );
-    await callWorkflowTool(page, execStartE12.sessionId, execStartE12.mcpEndpoint!.token, 'completeCurrentNode', {
+    await callWorkflowTool(env.controller, execStartE12.sessionId, execStartE12.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: `超长产物标题${'z'.repeat(60)}`, value: `报告 ${'x'.repeat(180)} https://example.com/${'y'.repeat(120)} 结尾` }],
     });
     for (const name of ['需求输入', 'AI执行']) {
@@ -1301,7 +1323,7 @@ test.describe('Workflow E2E', () => {
 
     // AI（exec）打回人类提交：exec 已打回，input 进入返工
     const rej = await callWorkflowTool(
-      page,
+      env.controller,
       execStart.sessionId,
       execStart.mcpEndpoint!.token,
       'rejectCurrentNode',
@@ -1552,7 +1574,7 @@ test.describe('Workflow E2E', () => {
     expect(execStart.mcpEndpoint?.serverNames).toContain('agent-workflow-admin-tools');
 
     // 用管理工具集完整编排：创建模板 → 配置 → 实例化
-    const createdTpl = await callAdminTool(page, sessionId, mcpToken, 'createWorkflowTemplate', {
+    const createdTpl = await callAdminTool(env.controller, sessionId, mcpToken, 'createWorkflowTemplate', {
       name: `wf-p2e18-AI模板-${Date.now().toString(36)}`,
       nodes: [
         { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
@@ -1562,7 +1584,7 @@ test.describe('Workflow E2E', () => {
     expect(createdTpl.isError).toBe(false);
     const aiTemplateId = (createdTpl.data as { id: string }).id;
 
-    const createdCfg = await callAdminTool(page, sessionId, mcpToken, 'createConfiguredWorkflow', {
+    const createdCfg = await callAdminTool(env.controller, sessionId, mcpToken, 'createConfiguredWorkflow', {
       name: `wf-p2e18-AI配置-${Date.now().toString(36)}`,
       controllerId: env.controller.controllerId,
       templateId: aiTemplateId,
@@ -1574,7 +1596,7 @@ test.describe('Workflow E2E', () => {
     expect(createdCfg.isError).toBe(false);
     const aiCfgId = (createdCfg.data as { id: string }).id;
 
-    const instantiated = await callAdminTool(page, sessionId, mcpToken, 'instantiateWorkflowFromConfigured', {
+    const instantiated = await callAdminTool(env.controller, sessionId, mcpToken, 'instantiateWorkflowFromConfigured', {
       configuredWorkflowId: aiCfgId,
       controllerId: env.controller.controllerId,
       workspaceId: env.workspaceId,
@@ -1592,16 +1614,16 @@ test.describe('Workflow E2E', () => {
     expect(instantiated.isError).toBe(false);
 
     // 人类创建的资源（本用户 setup 时创建的模板）不可被 AI 删除（requireAiOwned）
-    const humanTpl = await callAdminTool(page, sessionId, mcpToken, 'listWorkflowTemplates', {});
+    const humanTpl = await callAdminTool(env.controller, sessionId, mcpToken, 'listWorkflowTemplates', {});
     expect(humanTpl.isError).toBe(false);
     const humanTemplate = (humanTpl.data as { templates: { id: string; name: string; isBuiltin: boolean }[] }).templates.find(
       (t) => t.name.startsWith(`wf-p2e18-模板`),
     );
-    const delHuman = await callAdminTool(page, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: humanTemplate!.id });
+    const delHuman = await callAdminTool(env.controller, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: humanTemplate!.id });
     expect(delHuman.isError).toBe(true);
 
     // AI 创建的模板可被删除（归属校验通过）
-    const delAi = await callAdminTool(page, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: aiTemplateId });
+    const delAi = await callAdminTool(env.controller, sessionId, mcpToken, 'deleteWorkflowTemplate', { id: aiTemplateId });
     expect(delAi.isError).toBe(false);
 
     env.controller.disconnect();
@@ -1682,7 +1704,7 @@ test.describe('Workflow E2E', () => {
     const s1 = await waitFor(() => controller.starts.find((s) => s.mcpEndpoint?.token), 15000, 'exec acp:start #1');
 
     // 2) exec 完成 → review RUNNING
-    await callWorkflowTool(page, s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
+    await callWorkflowTool(controller, s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v1' }],
     });
     await waitFor(
@@ -1700,7 +1722,7 @@ test.describe('Workflow E2E', () => {
     );
 
     // 4) exec（b）打回 input（a）
-    const rejB = await callWorkflowTool(page, s1.sessionId, execResume.mcpEndpoint!.token, 'rejectCurrentNode', {
+    const rejB = await callWorkflowTool(controller, s1.sessionId, execResume.mcpEndpoint!.token, 'rejectCurrentNode', {
       reason: '需求本身有问题，无法按现状执行',
     });
     expect(rejB.isError).toBe(false);
@@ -1714,7 +1736,7 @@ test.describe('Workflow E2E', () => {
     );
 
     // 6) exec（b）完成 → review（c）复工 RUNNING（人类节点不报「缺少 Agent 配置」）
-    const done2 = await callWorkflowTool(page, s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
+    const done2 = await callWorkflowTool(controller, s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '计算器代码 v2' }],
     });
     expect(done2.isError).toBe(false);
@@ -1743,7 +1765,7 @@ test.describe('Workflow E2E', () => {
     expect(payload.exp).toBeUndefined();
 
     // 节点 MCP 工具仍可用（getCurrentNodeId 返回当前节点）
-    const nodeIdRes = await callWorkflowTool(page, execStart.sessionId, token, 'getCurrentNodeId', {});
+    const nodeIdRes = await callWorkflowTool(env.controller, execStart.sessionId, token, 'getCurrentNodeId', {});
     expect(nodeIdRes.isError).toBe(false);
     expect(nodeIdRes.data.nodeId).toBe(
       (await getInstance(page, env.token, instanceId)).nodes.find((n) => n.nodeKey === 'exec')!.id,
@@ -1789,7 +1811,7 @@ test.describe('Workflow E2E', () => {
 
     // 节点仍为执行中，会话已切换；重启后节点可继续完成
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
-    const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
+    const done = await callWorkflowTool(env.controller, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '开发产物', value: '重启后完成' }],
     });
     expect(done.isError).toBe(false);
@@ -2182,7 +2204,7 @@ test.describe('Workflow E2E', () => {
     await expect(execCard.getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
 
     // 完成节点验证重启后可正常工作
-    const done = await callWorkflowTool(page, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
+    const done = await callWorkflowTool(env.controller, restarted.sessionId, restarted.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '执行结果', value: '重启后完成' }],
     });
     expect(done.isError).toBe(false);

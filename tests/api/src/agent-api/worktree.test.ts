@@ -125,7 +125,7 @@ async function registerFakeController(
     }
   });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  const registerPayload: Record<string, string> = { key: rawKey, hostname: `wt-${tag}-host`, version: '1.0.0' };
+  const registerPayload: Record<string, string> = { key: rawKey, hostname: `wt-${tag}-host`, version: '2.0.0' };
   if (!opts.noHomeDir) {
     registerPayload.homeDir = FAKE_CONTROLLER_HOME;
     registerPayload.platform = 'linux';

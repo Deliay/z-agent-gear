@@ -96,7 +96,7 @@ describe('Controller API WebSocket', () => {
       const client = createClient();
 
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+      client.emit('register', { key: rawKey, hostname: 'test-host', version: '2.0.0' });
 
       const data = await registered;
       expect(data.controllerId).toBeDefined();
@@ -109,7 +109,7 @@ describe('Controller API WebSocket', () => {
       const client = createClient();
 
       const error = waitForEvent<{ code: string; message: string }>(client, 'error');
-      client.emit('register', { key: 'zag_k_1_nonexistent', hostname: 'test-host', version: '1.0.0' });
+      client.emit('register', { key: 'zag_k_1_nonexistent', hostname: 'test-host', version: '2.0.0' });
 
       const err = await error;
       expect(err.code).toBe('INVALID_KEY');
@@ -135,7 +135,7 @@ describe('Controller API WebSocket', () => {
       const client = createClient();
 
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+      client.emit('register', { key: rawKey, hostname: 'test-host', version: '2.0.0' });
       await registered;
 
       client.emit('heartbeat');
@@ -153,7 +153,7 @@ describe('Controller API WebSocket', () => {
       const client = createClient();
 
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+      client.emit('register', { key: rawKey, hostname: 'test-host', version: '2.0.0' });
       await registered;
 
       const unregistered = waitForEvent(client, 'unregistered');
@@ -171,12 +171,12 @@ describe('Controller API WebSocket', () => {
 
       const client1 = createClient();
       const registered1 = waitForEvent<{ controllerId: string }>(client1, 'registered');
-      client1.emit('register', { key: rawKey, hostname: 'host-1', version: '1.0.0' });
+      client1.emit('register', { key: rawKey, hostname: 'host-1', version: '2.0.0' });
       await registered1;
 
       const client2 = createClient();
       const error2 = waitForEvent<{ code: string }>(client2, 'error');
-      client2.emit('register', { key: rawKey, hostname: 'host-2', version: '1.0.0' });
+      client2.emit('register', { key: rawKey, hostname: 'host-2', version: '2.0.0' });
 
       const err = await error2;
       expect(err.code).toBe('KEY_ALREADY_ONLINE');

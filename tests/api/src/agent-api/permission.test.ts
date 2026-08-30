@@ -165,7 +165,7 @@ async function createFreshController(): Promise<{ rawKey: string; controllerId: 
 
   const client = createClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: 'perm-test-host', version: '1.0.0' });
+  client.emit('register', { key: rawKey, hostname: 'perm-test-host', version: '2.0.0' });
   const regData = await registered;
 
   return { rawKey, controllerId: regData.controllerId, client };

@@ -123,7 +123,7 @@ async function createFreshController(): Promise<{ controllerId: string; client: 
 
   const client = createClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: 'elic-test-host', version: '1.0.0' });
+  client.emit('register', { key: rawKey, hostname: 'elic-test-host', version: '2.0.0' });
   const regData = await registered;
 
   return { controllerId: regData.controllerId, client };
