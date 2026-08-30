@@ -44,7 +44,7 @@ beforeEach(() => {
 
 describe('McpEndpointService', () => {
   describe('createEndpoint', () => {
-    it('should sign JWT with serverNames, return url, upsert endpoint and write redis status', async () => {
+    it('should sign JWT with serverNames, return token/serverNames, upsert endpoint and write redis status', async () => {
       vi.mocked(McpServer.find).mockResolvedValue([
         { _id: 'server-1', name: 'github-mcp' },
         { _id: 'server-2', name: 'database-mcp' },
@@ -58,7 +58,6 @@ describe('McpEndpointService', () => {
         userId: 'user-1',
         enabled: true,
       });
-      expect(result.url).toBe('http://localhost:10001/mcp/session-1');
       expect(typeof result.token).toBe('string');
       expect(result.token.length).toBeGreaterThan(0);
       // agent-controller needs serverNames to assemble per-server MCP URLs

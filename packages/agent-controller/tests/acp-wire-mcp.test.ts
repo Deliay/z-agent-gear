@@ -49,10 +49,10 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
       sessionId: 'sess-wire',
       cwd: workdir,
       mcpEndpoint: {
-        url: 'http://gateway/mcp/sess-wire',
         token: 'wire-token',
         serverNames: ['fluentui-mcp', 'fs-mcp'],
       },
+      mcpPort: 41234,
     }, spawner);
     return socket;
   }
@@ -76,13 +76,13 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
       {
         type: 'http',
         name: 'fluentui-mcp',
-        url: 'http://gateway/mcp/sess-wire/fluentui-mcp',
+        url: 'http://127.0.0.1:41234/mcp/sess-wire/fluentui-mcp',
         headers: [{ name: 'Authorization', value: 'Bearer wire-token' }],
       },
       {
         type: 'http',
         name: 'fs-mcp',
-        url: 'http://gateway/mcp/sess-wire/fs-mcp',
+        url: 'http://127.0.0.1:41234/mcp/sess-wire/fs-mcp',
         headers: [{ name: 'Authorization', value: 'Bearer wire-token' }],
       },
     ]);
@@ -92,7 +92,7 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
     const logLines = logSpy.mock.calls.map((c) => String(c[0]));
     const mcpLog = logLines.find((l) => l.includes('passing MCP servers via session/new'));
     expect(mcpLog).toBeDefined();
-    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://gateway/mcp/sess-wire/fluentui-mcp, headers=Authorization)');
+    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:41234/mcp/sess-wire/fluentui-mcp, headers=Authorization)');
     expect(mcpLog).not.toContain('wire-token');
   }, 15000);
 

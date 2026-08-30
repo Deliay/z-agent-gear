@@ -344,7 +344,7 @@ describe('Controller Online Status', () => {
   it('should show controller as online after WebSocket register', async () => {
     const client = createWSClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'test-host', version: '2.0.0' });
     const regData = await registered;
     controllerId = regData.controllerId;
 
@@ -356,7 +356,7 @@ describe('Controller Online Status', () => {
     expect(body.data.controller).not.toBeNull();
     expect(body.data.controller.status).toBe('online');
     expect(body.data.controller.hostname).toBe('test-host');
-    expect(body.data.controller.version).toBe('1.0.0');
+    expect(body.data.controller.version).toBe('2.0.0');
     expect(body.data.controller.keyId).toBe(keyId);
 
     client.disconnect();
@@ -372,7 +372,7 @@ describe('Controller Online Status', () => {
     );
     const onlineKeyBody = await onlineKeyRes.json();
     const onlineKey = onlineKeyBody.data.createControllerKey.rawKey;
-    client.emit('register', { key: onlineKey, hostname: 'list-test-host', version: '1.0.0' });
+    client.emit('register', { key: onlineKey, hostname: 'list-test-host', version: '2.0.0' });
     await registered;
 
     const res = await gqlRequest(CONTROLLERS_QUERY, undefined, authToken);
@@ -391,7 +391,7 @@ describe('Controller Online Status', () => {
   it('should delete controller and key after WebSocket unregister', async () => {
     const client = createWSClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'test-host', version: '2.0.0' });
     await registered;
 
     const unregistered = waitForEvent(client, 'unregistered');
@@ -420,7 +420,7 @@ describe('Controller Online Status', () => {
     // Register a controller with this key
     const client = createWSClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: testRawKey, hostname: 'unbind-host', version: '1.0.0' });
+    client.emit('register', { key: testRawKey, hostname: 'unbind-host', version: '2.0.0' });
     const regData = await registered;
     const testControllerId = regData.controllerId;
     client.disconnect();
@@ -497,7 +497,7 @@ describe('Controller Online Status', () => {
 
       const client = createWSClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: testRawKey, hostname: 'wtd-host', version: '1.0.0' });
+      client.emit('register', { key: testRawKey, hostname: 'wtd-host', version: '2.0.0' });
       const regData = await registered;
       const testControllerId = regData.controllerId;
 

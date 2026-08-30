@@ -63,7 +63,7 @@ export function registerController(rawKey: string): Promise<FakeController> {
     client.emit('register', {
       key: rawKey,
       hostname: 'e2e-host',
-      version: '1.0.0',
+      version: '2.0.0',
       homeDir: '/home/fake',
       platform: 'linux',
     });

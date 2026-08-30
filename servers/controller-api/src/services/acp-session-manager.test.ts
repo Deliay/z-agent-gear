@@ -133,7 +133,7 @@ describe('ACPSessionManager', () => {
       vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
-      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      const mcpEndpoint = { token: 'tok', serverNames: ['github-mcp'] };
       const resultPromise = manager.startSession(
         socket as never, 'sess-1', 'ctrl-1', 'user-1', 'opencode', '/tmp', mcpEndpoint,
       );
@@ -1019,7 +1019,7 @@ describe('ACPSessionManager', () => {
       const socket = createMockSocket();
       vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
 
-      const mcpEndpoint = { url: 'http://gateway/mcp/sess-1', token: 'tok', serverNames: ['github-mcp'] };
+      const mcpEndpoint = { token: 'tok', serverNames: ['github-mcp'] };
       const resultPromise = manager.resumeSession(
         socket as never, 'sess-1', 'ext-123', 'ctrl-1', 'user-1', '/tmp', mcpEndpoint,
       );

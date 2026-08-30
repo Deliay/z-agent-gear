@@ -29,6 +29,12 @@ interface PendingRequest {
 export class ACPSessionManager {
   private sessions = new Map<string, ACPSession>();
   private socketToSessions = new Map<string, Set<string>>();
+  // MCP 转发归属记录：在 acp:start/acp:resume 发出时即登记（早于 start:result），
+  // 保证真实 agent 在 session/new 期间发起的 MCP initialize 握手能通过归属校验。
+  // sessions Map 只在 start:result 成功后写入，若仅依赖它，启动窗口内的
+  // mcp:request 会因归属校验失败回 404，导致 agent 永久弃用该 MCP server。
+  // 失败/停止/断线路径负责清理（见 registerRelayOwner/unregisterRelayOwner）。
+  private relayOwners = new Map<string, string>();
   // Per-session promise chain：保证同一 session 的消息「落库 → 推送」严格按到达顺序串行执行。
   // Socket.IO 不等待 async 监听器完成，高频消息并发落库会导致 Redis publish 顺序 ≠ 到达顺序，
   // 进而造成 SSE 推送乱序（DB 按 _id 排序仍正确）。
@@ -66,7 +72,7 @@ export class ACPSessionManager {
     userId: string,
     serverType: string,
     cwd: string,
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    mcpEndpoint?: { token: string; serverNames: string[] },
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string; externalSessionId?: string }> {
     let statusAtStart = 'creating';
@@ -100,6 +106,9 @@ export class ACPSessionManager {
         startPayload.modelId = initial.modelId;
       }
       controllerSocket.emit('acp:start', startPayload);
+      // 发出即登记 MCP 归属：真实 agent 会在 session/new 期间发起 MCP initialize，
+      // 早于 start:result，归属校验需在此时即通过（失败/停止路径负责清理）。
+      this.registerRelayOwner(sessionId, controllerId);
 
       // Use dispatcher to wait for result (supports concurrent starts on same socket)
       const payload = await this.registerPendingRequest(controllerSocket, requestId, sessionId, statusAtStart, 30000);
@@ -177,6 +186,7 @@ export class ACPSessionManager {
         return { success: true, externalSessionId: payload.externalSessionId };
       } else {
         // Controller explicitly reported failure — keep session with 'ended' status
+        this.unregisterRelayOwner(sessionId);
         await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
         await this.publishStatus(sessionId, 'ended');
         console.log(`[ACP session] Session ${sessionId} ended by controller: ${payload.error}`);
@@ -193,6 +203,7 @@ export class ACPSessionManager {
 
   private async cleanupFailedSession(sessionId: string, previousStatus: string): Promise<void> {
     this.pendingInputs.delete(sessionId);
+    this.unregisterRelayOwner(sessionId);
     // Only delete sessions that never successfully connected
     if (previousStatus === 'creating' || previousStatus === 'connecting') {
       console.log(`[ACP] Removing failed session ${sessionId} (was ${previousStatus})`);
@@ -374,6 +385,7 @@ export class ACPSessionManager {
   }
 
   private async handleControllerDisconnect(sessionId: string): Promise<void> {
+    this.unregisterRelayOwner(sessionId);
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
@@ -405,6 +417,7 @@ export class ACPSessionManager {
 
   async handleControllerStopped(sessionId: string, reason: string, exitCode?: number): Promise<void> {
     // Clean up session mapping (idempotent: skip if already cleaned by stopSessionWithAck)
+    this.unregisterRelayOwner(sessionId);
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
@@ -443,6 +456,24 @@ export class ACPSessionManager {
     }
   }
 
+  /** sessionId 是否归属指定 controller（MCP 转发归属校验） */
+  sessionBelongsToController(sessionId: string, controllerId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (session?.controllerId === controllerId) return true;
+    // 启动窗口（acp:start/resume 已发出、start:result 未回）内的会话由 relayOwners 覆盖
+    return this.relayOwners.get(sessionId) === controllerId;
+  }
+
+  /** acp:start/acp:resume 发出时登记 MCP 归属（早于 start:result） */
+  private registerRelayOwner(sessionId: string, controllerId: string): void {
+    this.relayOwners.set(sessionId, controllerId);
+  }
+
+  /** 会话终止/失败/断线时清除 MCP 归属记录 */
+  private unregisterRelayOwner(sessionId: string): void {
+    this.relayOwners.delete(sessionId);
+  }
+
   async cancelGeneration(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
@@ -458,7 +489,7 @@ export class ACPSessionManager {
     controllerId: string,
     userId: string,
     cwd: string,
-    mcpEndpoint?: { url: string; token: string; serverNames: string[] },
+    mcpEndpoint?: { token: string; serverNames: string[] },
     initial?: { modeId?: string; modelId?: string },
   ): Promise<{ success: boolean; error?: string }> {
     const settleStarting = this.trackStarting(sessionId);
@@ -488,6 +519,8 @@ export class ACPSessionManager {
         resumePayload.modelId = initial.modelId;
       }
       controllerSocket.emit('acp:resume', resumePayload);
+      // 同 acp:start：发出即登记 MCP 归属，覆盖 resume 启动窗口内的 MCP 握手
+      this.registerRelayOwner(sessionId, controllerId);
 
       // Use dispatcher to wait for result (supports concurrent resumes on same socket)
       const payload = await this.registerPendingRequest(controllerSocket, requestId, sessionId, 'connecting', 30000, 'ACP resume timeout');
@@ -535,12 +568,14 @@ export class ACPSessionManager {
 
         return { success: true };
       } else {
+        this.unregisterRelayOwner(sessionId);
         await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
         await this.publishStatus(sessionId, 'ended', payload.error || 'ACP_RESUME_FAILED');
         return { success: false, error: payload.error || 'ACP resume failed' };
       }
     } catch (error) {
       console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
+      this.unregisterRelayOwner(sessionId);
       await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
       await this.publishStatus(sessionId, 'ended', 'ACP_RESUME_FAILED');
       return { success: false, error: (error as Error).message };
@@ -904,6 +939,7 @@ export class ACPSessionManager {
     const controllerSocket = session.controllerSocket;
 
     // Clean up session mapping immediately
+    this.unregisterRelayOwner(sessionId);
     this.sessions.delete(sessionId);
     this.pendingInputs.delete(sessionId);
     const socketSessions = this.socketToSessions.get(controllerSocket.id);

@@ -121,9 +121,10 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | `string` | 是 | 统一网关转发端点基础 URL（`GATEWAY_URL/mcp/{sessionId}`，指向 agent-api 入口）；agent-controller 为每个装配的 server 追加 `/{serverName}` 构成独立端点 |
 | `token` | `string` | 是 | Bearer Token（会话级 JWT，会话关闭即吊销） |
 | `serverNames` | `string[]` | 是 | MCP Server 名称列表（签发时快照） |
+
+> **注**：MCP 转发不再携带 `url` 字段。回环地址由 agent-controller 本机生成，为每个装配的 server 生成独立端点 `http://127.0.0.1:{port}/mcp/{sessionId}/{serverName}`（`{port}` 为 agent-controller 守护进程共享的回环端口，仅监听 `127.0.0.1`）。
 
 **McpServerConfig 结构（预留）：**
 
@@ -355,6 +356,7 @@ Controller 转发 ACP 输出。
 | `controllerId` | `string` | 是 | 控制器 ID |
 | `userId` | `string` | 是 | 用户 ID |
 | `cwd` | `string` | 是 | 工作目录（绝对路径） |
+| `mcpEndpoint` | `McpEndpoint` | 否 | MCP 转发端点信息（仅用户勾选装配 MCP 时携带；仅含 `token`/`serverNames`，无 `url`） |
 | `additionalDirectories` | `string[]` | 否 | 附加工作目录（绝对路径） |
 | `modeId` | `string` | 否 | 初始工作模式 ID（工作流节点配置；不提供则使用 harness 默认） |
 | `modelId` | `string` | 否 | 初始模型 ID（工作流节点配置；不提供则使用 harness 默认） |
@@ -395,6 +397,44 @@ Controller 转发 ACP 输出。
    - 更新 status = idling
    - 发布 `session:status`（含 `idling` + 模式信息）
 2. 失败时：更新 status = ended，发布 `session:status`（含 `ended` + `error`）
+
+### 2.12.1 `mcp:request`（Controller → Server）
+
+转发 Agent 侧 MCP 调用请求到 controller-api，由其桥接至 agent-api 分发（MCP 传递重构一期：公网入口下线，MCP 访问改由 controller 本机回环端点经主 WebSocket 代理）。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID（controller 侧 `mcpreq_*` 前缀，用于匹配响应） |
+| `sessionId` | `string` | 是 | Session ID |
+| `serverName` | `string` | 是 | MCP Server 名称 |
+| `token` | `string` | 是 | Bearer Token（会话级 JWT） |
+| `body` | `object` | 是 | JSON-RPC 请求体（`jsonrpc`/`method`/`id`/`params`） |
+
+**约束：**
+
+- sessionId 归属校验：若该 sessionId 不属于当前 Controller，直接回 404，不转发。
+- 单次请求 60s 超时：无响应回 504。
+- Controller 断线：全部 pending 立即 503 快速失败，不挂起。
+- Socket.IO 单帧体积上限：controller-api `maxHttpBufferSize` 调为 16MB，超限回 502。
+
+### 2.12.2 `mcp:response`（Server → Controller）
+
+返回 MCP 调用结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `status` | `number` | 是 | HTTP 状态码（取值 `200`/`401`/`404`/`410`/`502`/`503`/`504`） |
+| `body` | `object` | 是 | JSON-RPC 响应体 |
+
+**客户端行为：**
+
+1. 按 `requestId` 匹配 pending 请求并 resolve 回环端点的 HTTP 响应
+2. 未知 `requestId` 的 `mcp:response` 忽略不抛错
 
 ### 2.13 `acp:list-sessions`（Server → Controller）
 

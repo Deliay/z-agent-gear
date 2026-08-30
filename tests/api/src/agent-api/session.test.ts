@@ -212,7 +212,7 @@ async function createKeyAndRegisterController(token: string): Promise<{ rawKey: 
 
   const client = createClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key, hostname: 'sess-test-host', version: '1.0.0' });
+  client.emit('register', { key, hostname: 'sess-test-host', version: '2.0.0' });
   const regData = await registered;
   client.disconnect();
 
@@ -442,7 +442,7 @@ describe('Session GraphQL API', () => {
       const freshRawKey = (await keyRes.json()).data.createControllerKey.rawKey;
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'queue-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'queue-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -654,7 +654,7 @@ describe('Session GraphQL API', () => {
 
       capClient = createClient();
       const registered = waitForEvent<{ controllerId: string }>(capClient, 'registered');
-      capClient.emit('register', { key: capKey, hostname: 'cap-test-host', version: '1.0.0' });
+      capClient.emit('register', { key: capKey, hostname: 'cap-test-host', version: '2.0.0' });
       const regData = await registered;
       capControllerId = regData.controllerId;
     });
@@ -713,7 +713,7 @@ describe('Session GraphQL API', () => {
 
       refreshClient = createClient();
       const registered = waitForEvent<{ controllerId: string }>(refreshClient, 'registered');
-      refreshClient.emit('register', { key, hostname: 'refresh-test-host', version: '1.0.0' });
+      refreshClient.emit('register', { key, hostname: 'refresh-test-host', version: '2.0.0' });
       const regData = await registered;
       refreshControllerId = regData.controllerId;
     });
@@ -812,7 +812,7 @@ describe('Session GraphQL API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'cfgopt-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'cfgopt-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -922,7 +922,7 @@ describe('Session GraphQL API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'delhist-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'delhist-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1066,7 +1066,7 @@ describe('Session SSE API', () => {
 
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: freshRawKey, hostname: 'sse-modes-host', version: '1.0.0' });
+    client.emit('register', { key: freshRawKey, hostname: 'sse-modes-host', version: '2.0.0' });
     const regData = await registered;
     const freshControllerId = regData.controllerId;
 
@@ -1138,7 +1138,7 @@ describe('Session SSE API', () => {
 
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: freshRawKey, hostname: 'sse-order-host', version: '1.0.0' });
+    client.emit('register', { key: freshRawKey, hostname: 'sse-order-host', version: '2.0.0' });
     const regData = await registered;
     const freshControllerId = regData.controllerId;
 
@@ -1219,7 +1219,7 @@ describe('Session SSE API', () => {
 
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: freshRawKey, hostname: 'modes-both-host', version: '1.0.0' });
+    client.emit('register', { key: freshRawKey, hostname: 'modes-both-host', version: '2.0.0' });
     const regData = await registered;
     const freshControllerId = regData.controllerId;
 
@@ -1330,7 +1330,7 @@ describe('Session SSE API', () => {
   it('should handle acp:check result from controller', async () => {
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '2.0.0' });
     await registered;
 
     // Controller sends acp:check:result (simulating response to server's acp:check)
@@ -1346,7 +1346,7 @@ describe('Session SSE API', () => {
   it('should handle acp:check result with multiple servers from controller', async () => {
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '2.0.0' });
     await registered;
 
     client.emit('acp:check:result', {
@@ -1364,7 +1364,7 @@ describe('Session SSE API', () => {
   it('should handle acp:start and acp:stop flow', async () => {
     const client = createClient();
     const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'sess-test-host', version: '2.0.0' });
     await registered;
 
     // Listen for acp:start BEFORE creating session
@@ -1419,7 +1419,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'setmode-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'setmode-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1468,7 +1468,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'setmode-idle-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'setmode-idle-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1557,7 +1557,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'e2e-gc-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'e2e-gc-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1610,7 +1610,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'e2e-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'e2e-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1671,7 +1671,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'e2e-fail-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'e2e-fail-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1721,7 +1721,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'resume-e2e-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'resume-e2e-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1806,7 +1806,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'resume-fail-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'resume-fail-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1873,7 +1873,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'e2e-msg-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'e2e-msg-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -1982,7 +1982,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'wt-test-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'wt-test-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
 
@@ -2063,7 +2063,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'wt-custom-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'wt-custom-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
       const wsId = await createWorkspace(freshControllerId);
@@ -2112,7 +2112,7 @@ describe('Session SSE API', () => {
 
       const client = createClient();
       const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-      client.emit('register', { key: freshRawKey, hostname: 'wt-fail-host', version: '1.0.0' });
+      client.emit('register', { key: freshRawKey, hostname: 'wt-fail-host', version: '2.0.0' });
       const regData = await registered;
       const freshControllerId = regData.controllerId;
       const wsId = await createWorkspace(freshControllerId);
