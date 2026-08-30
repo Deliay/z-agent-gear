@@ -414,3 +414,22 @@ export const SET_MCP_SERVER_ENABLED = gql`
     }
   }
 `
+
+export const REGENERATE_CONTROLLER_KEY = gql`
+  mutation RegenerateControllerKey($input: RegenerateControllerKeyInput!) {
+    regenerateControllerKey(input: $input) {
+      key {
+        id
+        name
+        type
+        keyPrefix
+        status
+        rawKey
+        lastUsedAt
+        createdAt
+        updatedAt
+      }
+      rawKey
+    }
+  }
+`

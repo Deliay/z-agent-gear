@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { ControllerKey } from '../models/controller-key.js';
+import { Controller } from '../models/controller.js';
 import { cacheKey, evictKeyById, getRawKeyById } from './key-cache.js';
+import { commandService } from './command.js';
 
 const KEY_FORMAT_VERSION = 1;
 const BCRYPT_ROUNDS = 10;
@@ -75,6 +77,55 @@ export class ControllerKeyService {
       await evictKeyById(id);
     }
     return result !== null;
+  }
+
+  async regenerate(controllerId: string, userId: string): Promise<{ key: Record<string, unknown>; rawKey: string } | null> {
+    // Find the controller and verify ownership
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) return null;
+
+    const keyId = (controller.keyId as mongoose.Types.ObjectId).toString();
+
+    // Find the existing key
+    const existingKey = await ControllerKey.findOne({ _id: keyId, userId }).lean();
+    if (!existingKey) return null;
+
+    // Generate new key
+    const randomBytes = crypto.randomBytes(24);
+    const rawKey = `zag_k_${KEY_FORMAT_VERSION}_${randomBytes.toString('hex')}`;
+    const keyHash = await bcrypt.hash(rawKey, BCRYPT_ROUNDS);
+    const keyPrefix = rawKey.slice(0, 8);
+
+    // Update the key record
+    const updatedKey = await ControllerKey.findOneAndUpdate(
+      { _id: keyId, userId },
+      {
+        keyHash,
+        keyPrefix,
+        lastUsedAt: new Date(),
+      },
+      { new: true },
+    ).lean();
+
+    if (!updatedKey) return null;
+
+    // Evict old key from cache and cache new key
+    await evictKeyById(keyId);
+    await cacheKey(rawKey, {
+      keyId,
+      keyHash,
+      userId,
+      status: 'active',
+      type: existingKey.type,
+    });
+
+    // Send shutdown command to the controller using the old key
+    await commandService.sendShutdown(keyId);
+
+    return {
+      key: this.mapKey(updatedKey),
+      rawKey,
+    };
   }
 
   private mapKey(key: Record<string, unknown>, rawKey?: string | null): Record<string, unknown> {

@@ -53,6 +53,10 @@ export const controllerTypeDefs = `#graphql
     name: String!
   }
 
+  input RegenerateControllerKeyInput {
+    controllerId: ID!
+  }
+
   type CreateKeyPayload {
     key: ControllerKey!
     rawKey: String!
@@ -70,5 +74,6 @@ export const controllerTypeDefs = `#graphql
     renameController(input: RenameInput!): Controller!
     unbindController(id: ID!): Boolean!
     setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
+    regenerateControllerKey(input: RegenerateControllerKeyInput!): CreateKeyPayload!
   }
 `;

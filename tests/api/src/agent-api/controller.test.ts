@@ -82,6 +82,15 @@ const UNBIND_CONTROLLER = `
   }
 `;
 
+const REGENERATE_CONTROLLER_KEY = `
+  mutation RegenerateControllerKey($input: RegenerateControllerKeyInput!) {
+    regenerateControllerKey(input: $input) {
+      key { id name type keyPrefix status rawKey createdAt updatedAt }
+      rawKey
+    }
+  }
+`;
+
 function createWSClient(): ClientSocket {
   return SocketIOClient(CONTROLLER_API_URL, {
     transports: ['websocket'],
@@ -520,6 +529,61 @@ describe('Controller Online Status', () => {
       );
       const queryBody = await queryRes.json();
       expect(queryBody.data.controller.worktreeDir).toBe('/home/user/worktrees');
+
+      client.disconnect();
+    });
+  });
+
+  describe('regenerateControllerKey mutation', () => {
+    it('should reject mutation without auth', async () => {
+      const res = await gqlRequest(REGENERATE_CONTROLLER_KEY, {
+        input: { controllerId: '000000000000000000000000' },
+      });
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Not authenticated');
+    });
+
+    it('should reject mutation for non-existent controller', async () => {
+      const res = await gqlRequest(
+        REGENERATE_CONTROLLER_KEY,
+        { input: { controllerId: '000000000000000000000000' } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeDefined();
+      expect(body.errors[0].message).toBe('Controller not found');
+    });
+
+    it('should regenerate controller key', async () => {
+      // Create a key and register a controller
+      const createRes = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `regen-test-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const createBody = await createRes.json();
+      const testRawKey = createBody.data.createControllerKey.rawKey;
+
+      const client = createWSClient();
+      const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+      client.emit('register', { key: testRawKey, hostname: 'regen-host', version: '2.0.0' });
+      const regData = await registered;
+      const testControllerId = regData.controllerId;
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Regenerate key
+      const res = await gqlRequest(
+        REGENERATE_CONTROLLER_KEY,
+        { input: { controllerId: testControllerId } },
+        authToken,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.regenerateControllerKey.key.id).toBeDefined();
+      expect(body.data.regenerateControllerKey.rawKey).toMatch(/^zag_k_/);
+      expect(body.data.regenerateControllerKey.rawKey).not.toBe(testRawKey);
 
       client.disconnect();
     });

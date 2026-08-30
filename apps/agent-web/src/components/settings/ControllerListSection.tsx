@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
-import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation } from '@/graphql/types'
+import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation, RegenerateControllerKeyMutation } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -74,6 +74,25 @@ const RENAME_CONTROLLER = gql`
   }
 `
 
+const REGENERATE_CONTROLLER_KEY = gql`
+  mutation RegenerateControllerKey($input: RegenerateControllerKeyInput!) {
+    regenerateControllerKey(input: $input) {
+      key {
+        id
+        name
+        type
+        keyPrefix
+        status
+        rawKey
+        lastUsedAt
+        createdAt
+        updatedAt
+      }
+      rawKey
+    }
+  }
+`
+
 const POLL_INTERVAL = 15_000
 
 function autoKeyName(): string {
@@ -95,11 +114,14 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
   const [createKey] = useMutation<CreateControllerKeyMutation>(CREATE_KEY)
   const [unbindController] = useMutation(UNBIND_CONTROLLER)
   const [renameController] = useMutation(RENAME_CONTROLLER)
+  const [regenerateControllerKey] = useMutation<RegenerateControllerKeyMutation>(REGENERATE_CONTROLLER_KEY)
 
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmUnbind, setConfirmUnbind] = useState<{ id: string; name: string } | null>(null)
+  const [confirmRegenerate, setConfirmRegenerate] = useState<{ id: string; name: string } | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [regeneratedKey, setRegeneratedKey] = useState<{ controllerId: string; rawKey: string } | null>(null)
 
   const keys = keyData?.controllerKeys ?? []
   const controllers = controllerData?.controllers ?? []
@@ -135,6 +157,28 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
     refetchControllers()
     setRenameTarget(null)
     setRenameValue('')
+  }
+
+  const handleRegenerate = async () => {
+    if (!confirmRegenerate) return
+    const { data } = await regenerateControllerKey({
+      variables: { input: { controllerId: confirmRegenerate.id } },
+    })
+    if (data?.regenerateControllerKey) {
+      setRegeneratedKey({
+        controllerId: confirmRegenerate.id,
+        rawKey: data.regenerateControllerKey.rawKey,
+      })
+      await navigator.clipboard.writeText(data.regenerateControllerKey.rawKey)
+    }
+    refetchKeys()
+    refetchControllers()
+    setConfirmRegenerate(null)
+  }
+
+  const handleCopyRegeneratedKey = async () => {
+    if (!regeneratedKey) return
+    await navigator.clipboard.writeText(regeneratedKey.rawKey)
   }
 
   const loading = keysLoading || controllersLoading
@@ -218,6 +262,9 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                     <Button variant="ghost" size="sm" onClick={() => setRenameTarget({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       重命名
                     </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmRegenerate({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                      重新生成Key
+                    </Button>
                     <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                       解绑
                     </Button>
@@ -261,6 +308,42 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
             <Button variant="destructive" onClick={() => confirmUnbind && handleUnbind(confirmUnbind.id)}>
               确认
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!confirmRegenerate} onOpenChange={() => setConfirmRegenerate(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重新生成Key</DialogTitle>
+            <DialogDescription>
+              重新生成key后，旧key将立即失效，控制器需要使用新key重新连接。是否继续？
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            控制器: {confirmRegenerate?.name}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRegenerate(null)}>取消</Button>
+            <Button onClick={handleRegenerate}>确认</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!regeneratedKey} onOpenChange={() => setRegeneratedKey(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>新Key已生成</DialogTitle>
+            <DialogDescription>
+              新Key已生成并复制到剪贴板，请妥善保存。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border bg-muted p-3">
+            <code className="break-all font-mono text-sm">{regeneratedKey?.rawKey}</code>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRegeneratedKey(null)}>关闭</Button>
+            <Button onClick={handleCopyRegeneratedKey}>复制Key</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

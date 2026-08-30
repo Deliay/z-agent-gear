@@ -118,4 +118,20 @@ test.describe('Settings Controller E2E', () => {
     await page.locator('nav[aria-label="Settings navigation"]').getByRole('button', { name: '控制器管理' }).click();
     await expect(page.locator('#controller-section')).toBeVisible();
   });
+
+  test('should show regenerate key button for bound controllers', async ({ page }) => {
+    const { username } = await registerUser(page);
+    await loginViaUI(page, username);
+    await page.click('a[href="/settings"]');
+    await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
+    const section = page.locator('#controller-section');
+
+    // Generate a key first
+    await section.getByRole('button', { name: '生成 Key' }).click();
+    await expect(section.getByText('等待连接').first()).toBeVisible({ timeout: 10000 });
+
+    // The key should show "等待连接" status, not "重新生成Key" button
+    // because it's not bound to a controller yet
+    await expect(section.getByRole('button', { name: '重新生成Key' })).not.toBeVisible();
+  });
 });
