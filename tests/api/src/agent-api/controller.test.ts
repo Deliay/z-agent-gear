@@ -555,7 +555,7 @@ describe('Controller Online Status', () => {
       expect(body.errors[0].message).toBe('Controller not found');
     });
 
-    it('should regenerate controller key', async () => {
+    it('should regenerate controller key and return controller with unbound status', async () => {
       // Create a key and register a controller
       const createRes = await gqlRequest(
         CREATE_KEY,
@@ -573,6 +573,11 @@ describe('Controller Online Status', () => {
 
       await new Promise((r) => setTimeout(r, 200));
 
+      // Verify controller is online before regeneration
+      const beforeRes = await gqlRequest(CONTROLLER_QUERY, { id: testControllerId }, authToken);
+      const beforeBody = await beforeRes.json();
+      expect(beforeBody.data.controller.status).toBe('online');
+
       // Regenerate key
       const res = await gqlRequest(
         REGENERATE_CONTROLLER_KEY,
@@ -585,6 +590,88 @@ describe('Controller Online Status', () => {
       expect(body.data.regenerateControllerKey.rawKey).toMatch(/^zag_k_/);
       expect(body.data.regenerateControllerKey.rawKey).not.toBe(testRawKey);
 
+      // Verify controller status is now unbound
+      const afterRes = await gqlRequest(CONTROLLER_QUERY, { id: testControllerId }, authToken);
+      const afterBody = await afterRes.json();
+      expect(afterBody.data.controller).not.toBeNull();
+      expect(afterBody.data.controller.status).toBe('unbound');
+
+      // Verify controller is in the controllers list
+      const listRes = await gqlRequest(CONTROLLERS_QUERY, undefined, authToken);
+      const listBody = await listRes.json();
+      const found = listBody.data.controllers.find((c: { id: string }) => c.id === testControllerId);
+      expect(found).toBeDefined();
+      expect(found.status).toBe('unbound');
+
       client.disconnect();
+    });
+
+    it('should allow rebinding after regeneration and regenerate again', async () => {
+      // Step 1: Create a key and register a controller
+      const createRes1 = await gqlRequest(
+        CREATE_KEY,
+        { input: { name: `rebind-test-${Date.now()}`, type: 'local' } },
+        authToken,
+      );
+      const createBody1 = await createRes1.json();
+      const firstRawKey = createBody1.data.createControllerKey.rawKey;
+
+      const client1 = createWSClient();
+      const registered1 = waitForEvent<{ controllerId: string }>(client1, 'registered');
+      client1.emit('register', { key: firstRawKey, hostname: 'rebind-host', version: '2.0.0' });
+      const regData1 = await registered1;
+      const controllerId = regData1.controllerId;
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step 2: Regenerate key
+      const regenRes1 = await gqlRequest(
+        REGENERATE_CONTROLLER_KEY,
+        { input: { controllerId } },
+        authToken,
+      );
+      const regenBody1 = await regenRes1.json();
+      expect(regenBody1.errors).toBeUndefined();
+      const secondRawKey = regenBody1.data.regenerateControllerKey.rawKey;
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step 3: Verify controller is unbound
+      const checkRes1 = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+      const checkBody1 = await checkRes1.json();
+      expect(checkBody1.data.controller.status).toBe('unbound');
+
+      // Step 4: Rebind with the new key
+      const client2 = createWSClient();
+      const registered2 = waitForEvent<{ controllerId: string }>(client2, 'registered');
+      client2.emit('register', { key: secondRawKey, hostname: 'rebind-host', version: '2.0.0' });
+      const regData2 = await registered2;
+      expect(regData2.controllerId).toBe(controllerId);
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step 5: Verify controller is online again
+      const checkRes2 = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+      const checkBody2 = await checkRes2.json();
+      expect(checkBody2.data.controller.status).toBe('online');
+
+      // Step 6: Regenerate key again
+      const regenRes2 = await gqlRequest(
+        REGENERATE_CONTROLLER_KEY,
+        { input: { controllerId } },
+        authToken,
+      );
+      const regenBody2 = await regenRes2.json();
+      expect(regenBody2.errors).toBeUndefined();
+      expect(regenBody2.data.regenerateControllerKey.rawKey).toMatch(/^zag_k_/);
+      expect(regenBody2.data.regenerateControllerKey.rawKey).not.toBe(secondRawKey);
+
+      // Step 7: Verify controller is unbound again
+      const checkRes3 = await gqlRequest(CONTROLLER_QUERY, { id: controllerId }, authToken);
+      const checkBody3 = await checkRes3.json();
+      expect(checkBody3.data.controller.status).toBe('unbound');
+
+      client1.disconnect();
+      client2.disconnect();
     });
   });
