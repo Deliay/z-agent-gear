@@ -126,6 +126,7 @@ export class ControllerKeyService {
     });
 
     // Send shutdown command to the controller using the old key
+    // handleShutdown will check if controller is 'unbound' and won't delete it
     await commandService.sendShutdown(keyId);
 
     return {

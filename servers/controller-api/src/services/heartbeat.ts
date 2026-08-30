@@ -28,7 +28,7 @@ export class HeartbeatService {
 
       const offlineControllers = await Controller.find({
         lastHeartbeatAt: { $lt: threshold },
-        status: 'online',
+        status: { $in: ['online', 'offline'] },
       }).lean();
 
       if (offlineControllers.length === 0) return;
