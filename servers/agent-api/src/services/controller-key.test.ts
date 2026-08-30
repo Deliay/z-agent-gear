@@ -12,7 +12,9 @@ vi.mock('../models/controller-key.js', () => ({
 }));
 
 vi.mock('../models/controller.js', () => ({
-  Controller: {},
+  Controller: {
+    findOne: vi.fn(),
+  },
 }));
 
 vi.mock('../services/key-cache.js', () => ({
@@ -45,9 +47,17 @@ vi.mock('mongoose', () => ({
   },
 }));
 
+vi.mock('../services/command.js', () => ({
+  commandService: {
+    sendShutdown: vi.fn(),
+  },
+}));
+
 import { controllerKeyService } from '../services/controller-key.js';
 import { ControllerKey } from '../models/controller-key.js';
+import { Controller } from '../models/controller.js';
 import { evictKeyById, getRawKeyById } from '../services/key-cache.js';
+import { commandService } from '../services/command.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -179,6 +189,78 @@ describe('ControllerKeyService', () => {
       const result = await controllerKeyService.delete('key1', 'user1');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('regenerate', () => {
+    it('should regenerate a controller key', async () => {
+      const mockController = {
+        _id: { toString: () => 'ctrl1' },
+        keyId: { toString: () => 'key1' },
+        userId: 'user1',
+      };
+
+      const mockExistingKey = {
+        _id: { toString: () => 'key1' },
+        name: 'My Key',
+        type: 'local',
+        keyPrefix: 'zag_k_1',
+        status: 'active',
+        boundControllerId: 'ctrl1',
+        lastUsedAt: null,
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-01-01'),
+      };
+
+      const mockUpdatedKey = {
+        _id: { toString: () => 'key1' },
+        name: 'My Key',
+        type: 'local',
+        keyPrefix: 'zag_k_1_abc',
+        status: 'active',
+        boundControllerId: 'ctrl1',
+        lastUsedAt: new Date(),
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date(),
+      };
+
+      vi.mocked(Controller.findOne).mockResolvedValue(mockController as never);
+      vi.mocked(ControllerKey.findOne).mockResolvedValue(mockExistingKey as never);
+      vi.mocked(crypto.randomBytes).mockReturnValue(Buffer.from('a1b2c3d4e5f6') as never);
+      vi.mocked(bcrypt.hash).mockResolvedValue('hashed-key' as never);
+      vi.mocked(ControllerKey.findOneAndUpdate).mockResolvedValue(mockUpdatedKey as never);
+      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(commandService.sendShutdown).mockResolvedValue();
+
+      const result = await controllerKeyService.regenerate('ctrl1', 'user1');
+
+      expect(result).toBeDefined();
+      expect(result?.rawKey).toMatch(/^zag_k_1_/);
+      expect(evictKeyById).toHaveBeenCalledWith('key1');
+      expect(commandService.sendShutdown).toHaveBeenCalledWith('key1');
+    });
+
+    it('should return null when controller not found', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue(null as never);
+
+      const result = await controllerKeyService.regenerate('ctrl1', 'user1');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null when key not found', async () => {
+      const mockController = {
+        _id: { toString: () => 'ctrl1' },
+        keyId: { toString: () => 'key1' },
+        userId: 'user1',
+      };
+
+      vi.mocked(Controller.findOne).mockResolvedValue(mockController as never);
+      vi.mocked(ControllerKey.findOne).mockResolvedValue(null as never);
+
+      const result = await controllerKeyService.regenerate('ctrl1', 'user1');
+
+      expect(result).toBeNull();
     });
   });
 });

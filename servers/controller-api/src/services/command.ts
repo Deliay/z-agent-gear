@@ -46,9 +46,16 @@ export class CommandService {
       this.io.sockets.sockets.get(socketId)?.disconnect(true);
     }
 
-    await Controller.deleteOne({ keyId });
-    await ControllerKey.deleteOne({ _id: keyId });
-    await sessionService.cleanupKey(keyId);
+    // Check if controller is in 'unbound' status before deleting
+    const controller = await Controller.findOne({ keyId });
+    if (controller && controller.status !== 'unbound') {
+      await Controller.deleteOne({ keyId });
+      await ControllerKey.deleteOne({ _id: keyId });
+      await sessionService.cleanupKey(keyId);
+    } else if (controller) {
+      // Just cleanup session data for unbound controllers
+      await sessionService.cleanupKey(keyId);
+    }
   }
 }
 
