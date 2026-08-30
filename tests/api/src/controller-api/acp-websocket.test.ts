@@ -118,7 +118,7 @@ async function createFreshController(): Promise<{ rawKey: string; controllerId: 
 
   const client = createClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '1.0.0' });
+  client.emit('register', { key: rawKey, hostname: 'acp-test-host', version: '2.0.0' });
   const regData = await registered;
 
   return { rawKey, controllerId: regData.controllerId, client };
@@ -254,7 +254,7 @@ describe('Controller API ACP WebSocket', () => {
       const startEvent = waitForEvent<{
         requestId: string;
         sessionId: string;
-        mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+        mcpEndpoint?: { token: string; serverNames: string[] };
       }>(client, 'acp:start', 10000);
 
       const sessionRes = await gqlRequest(
@@ -271,7 +271,8 @@ describe('Controller API ACP WebSocket', () => {
       // MCP URLs; a missing field previously crashed the bridge with a raw
       // TypeError and no diagnostic output.
       expect(startData.mcpEndpoint).toBeDefined();
-      expect(startData.mcpEndpoint!.url).toContain(`/mcp/${sessionId}`);
+      // MCP 传递重构一期：mcpEndpoint 不再携带 url（回环地址由 controller 本机生成）
+      expect(startData.mcpEndpoint!.url).toBeUndefined();
       expect(startData.mcpEndpoint!.token).toBeTruthy();
       expect(startData.mcpEndpoint!.serverNames).toEqual([serverName]);
 

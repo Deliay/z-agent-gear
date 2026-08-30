@@ -9,7 +9,6 @@ import { getRedisClient } from '../middleware/redis.js';
 const SALT_ROUNDS = 10;
 
 export interface McpEndpointInfo {
-  url: string;
   token: string;
   serverNames: string[];
 }
@@ -67,7 +66,6 @@ export class McpEndpointService {
     }
 
     return {
-      url: `${config.gatewayUrl}/mcp/${sessionId}`,
       token,
       serverNames,
     };

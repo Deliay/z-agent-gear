@@ -78,7 +78,7 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-hs-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-hs-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 
@@ -153,7 +153,7 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-hs-multi-acp-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-hs-multi-acp-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 
@@ -270,7 +270,7 @@ test.describe('Settings History Session E2E', () => {
       });
       client.once('registered', (data: { controllerId: string }) => { clearTimeout(timer); resolve(data.controllerId); });
       client.once('error', (data) => { clearTimeout(timer); client.disconnect(); reject(new Error(data.message)); });
-      client.emit('register', { key: emptyRawKey, hostname: `e2e-empty-host-${Date.now()}`, version: '1.0.0' });
+      client.emit('register', { key: emptyRawKey, hostname: `e2e-empty-host-${Date.now()}`, version: '2.0.0' });
     });
     const ws2 = await createWorkspace(page, controllerId, '/home/user/empty', token);
 

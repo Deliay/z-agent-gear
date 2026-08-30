@@ -54,7 +54,7 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-cfg-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-cfg-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 
@@ -84,7 +84,7 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: `e2e-cfg-multi-host-${Date.now()}`, version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: `e2e-cfg-multi-host-${Date.now()}`, version: '2.0.0' });
   });
 }
 

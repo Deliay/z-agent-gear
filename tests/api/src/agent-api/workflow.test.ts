@@ -5,7 +5,6 @@ import Redis from 'ioredis';
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const MCP_BASE_URL = `${(process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '')}/mcp`;
 
 const redis = new Redis(REDIS_URL, { enableOfflineQueue: false, retryStrategy: () => null });
 
@@ -276,7 +275,7 @@ async function registerFakeController(
     client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_close' });
   });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '1.0.0', homeDir: FAKE_CONTROLLER_HOME, platform: 'linux' });
+  client.emit('register', { key: rawKey, hostname: `wf-${tag}-host`, version: '2.0.0', homeDir: FAKE_CONTROLLER_HOME, platform: 'linux' });
   const regData = await registered;
   return { client, controllerId: regData.controllerId, rawKey };
 }
@@ -429,19 +428,32 @@ function instantiateInput(
   };
 }
 
-/** 调用平台工作流 MCP 工具，返回 { httpStatus, body } */
+/** 模拟 agent-controller 经主 WebSocket relay 调用平台工作流 MCP 工具，返回 { httpStatus, body } */
 async function callWorkflowTool(
+  socket: ClientSocket,
   sessionId: string,
   token: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ httpStatus: number; body: Record<string, any> }> {
-  const res = await fetch(`${MCP_BASE_URL}/${sessionId}/agent-workflow-tools`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+  const requestId = `mcpreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`MCP relay timeout for ${name}`)), 15000);
+    const onResponse = (data: { requestId: string; status: number; body: Record<string, any> }) => {
+      if (data.requestId !== requestId) return;
+      clearTimeout(timer);
+      socket.off('mcp:response', onResponse);
+      resolve({ httpStatus: data.status, body: data.body });
+    };
+    socket.on('mcp:response', onResponse);
+    socket.emit('mcp:request', {
+      requestId,
+      sessionId,
+      serverName: 'agent-workflow-tools',
+      token,
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+    });
   });
-  return { httpStatus: res.status, body: await res.json() };
 }
 
 /** 解析 MCP tools/call 结果：{ isError, data }（data 为 content[0].text 的 JSON） */
@@ -836,7 +848,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
       requestId: string;
       sessionId: string;
       serverType: string;
-      mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+      mcpEndpoint?: { token: string; serverNames: string[] };
     }>(fake.client, 'acp:start', 10000);
 
     const res = await gqlRequest(
@@ -914,7 +926,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
 
   it('A15: getCurrentNodeId 节点 token 可用，普通会话 token 不可用', async () => {
     // 节点作用域 token → 返回当前节点 ID
-    const nodeRes = await callWorkflowTool(execSessionId, execMcpToken, 'getCurrentNodeId', {});
+    const nodeRes = await callWorkflowTool(fake.client, execSessionId, execMcpToken, 'getCurrentNodeId', {});
     expect(nodeRes.httpStatus).toBe(200);
     const nodeOut = parseToolResult(nodeRes.body);
     expect(nodeOut.isError).toBe(false);
@@ -931,7 +943,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
     const startEvent = waitForEvent<{
       requestId: string;
       sessionId: string;
-      mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+      mcpEndpoint?: { token: string; serverNames: string[] };
     }>(fake.client, 'acp:start', 10000);
     const createRes = await gqlRequest(
       CREATE_SESSION,
@@ -960,7 +972,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
       externalSessionId: `ext_normal_${Date.now()}`,
     });
 
-    const normalRes = await callWorkflowTool(normalSessionId, normalToken!, 'getCurrentNodeId', {});
+    const normalRes = await callWorkflowTool(fake.client, normalSessionId, normalToken!, 'getCurrentNodeId', {});
     expect(normalRes.httpStatus).toBe(200);
     const normalOut = parseToolResult(normalRes.body);
     expect(normalOut.isError).toBe(true);
@@ -968,7 +980,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
   }, 20_000);
 
   it('A17: removeBlackboardKey 后黑板无、垃圾桶有', async () => {
-    const res = await callWorkflowTool(execSessionId, execMcpToken, 'removeBlackboardKey', { key: artifactKey });
+    const res = await callWorkflowTool(fake.client, execSessionId, execMcpToken, 'removeBlackboardKey', { key: artifactKey });
     expect(res.httpStatus).toBe(200);
     const out = parseToolResult(res.body);
     expect(out.isError).toBe(false);
@@ -1012,7 +1024,7 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
 
   it('A16: 非 RUNNING 状态 completeCurrentNode 返回状态非法提示', async () => {
     // 上一用例后 exec 节点为 REJECT，其会话仍然存活（token 有效）
-    const res = await callWorkflowTool(execSessionId, execMcpToken, 'completeCurrentNode', {
+    const res = await callWorkflowTool(fake.client, execSessionId, execMcpToken, 'completeCurrentNode', {
       artifacts: [{ title: '执行结果', value: 'done' }],
     });
     expect(res.httpStatus).toBe(200);
@@ -1138,7 +1150,7 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
     const startEvent = waitForEvent<{
       requestId: string;
       sessionId: string;
-      mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+      mcpEndpoint?: { token: string; serverNames: string[] };
     }>(fake.client, 'acp:start', 10000);
     await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '做一个计算器' }, token);
     const startData = await startEvent;
@@ -1151,7 +1163,7 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
     await sleep(500);
 
     // exec 节点经 MCP 工具完成 → 下游 review 人类节点被引擎自动激活为 RUNNING
-    const completeRes = await callWorkflowTool(startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
+    const completeRes = await callWorkflowTool(fake.client, startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
       artifacts: [{ title: '执行结果', value: '计算器已完成' }],
     });
     const completeOut = parseToolResult(completeRes.body);
@@ -1243,7 +1255,7 @@ interface StartEventData {
   sessionId: string;
   serverType?: string;
   cwd?: string;
-  mcpEndpoint?: { url: string; token: string; serverNames: string[] };
+  mcpEndpoint?: { token: string; serverNames: string[] };
   modeId?: string;
   modelId?: string;
 }
@@ -1311,13 +1323,13 @@ describe('Workflow Node Failure (A22-A23)', () => {
     const { instanceId, sessionId, mcpToken } = await advanceToExecRunning('a22');
 
     // reason 必填
-    const noReason = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'failCurrentNode', {})).body);
+    const noReason = parseToolResult((await callWorkflowTool(fake.client, sessionId, mcpToken, 'failCurrentNode', {})).body);
     expect(noReason.isError).toBe(true);
     expect(noReason.data.code).toBe('INVALID_PARAMS');
 
     // LLM 主动标记失败 → FAILED + failInfo(LLM_REPORTED)，流程阻断
     const failed = parseToolResult(
-      (await callWorkflowTool(sessionId, mcpToken, 'failCurrentNode', { reason: '缺少需求细节，无法继续' })).body,
+      (await callWorkflowTool(fake.client, sessionId, mcpToken, 'failCurrentNode', { reason: '缺少需求细节，无法继续' })).body,
     );
     expect(failed.isError).toBe(false);
     expect(failed.data.status).toBe('FAILED');
@@ -1332,19 +1344,19 @@ describe('Workflow Node Failure (A22-A23)', () => {
     expect(inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'review').status).toBe('INITIALIZING');
 
     // 失败状态下 complete 非法
-    const completeWhileFailed = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'completeCurrentNode', {})).body);
+    const completeWhileFailed = parseToolResult((await callWorkflowTool(fake.client, sessionId, mcpToken, 'completeCurrentNode', {})).body);
     expect(completeWhileFailed.isError).toBe(true);
     expect(completeWhileFailed.data.code).toBe('INVALID_STATE');
 
     // 人类对话给出指示后 AI 恢复节点 → RUNNING，failInfo 清空，可正常完成
-    const resumed = parseToolResult((await callWorkflowTool(sessionId, mcpToken, 'resumeFailedNode', {})).body);
+    const resumed = parseToolResult((await callWorkflowTool(fake.client, sessionId, mcpToken, 'resumeFailedNode', {})).body);
     expect(resumed.isError).toBe(false);
     expect(resumed.data.status).toBe('RUNNING');
     const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
     expect(inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').failInfo).toBeNull();
 
     const done = parseToolResult(
-      (await callWorkflowTool(sessionId, mcpToken, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, sessionId, mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '完成' }],
       })).body,
     );
@@ -1476,7 +1488,7 @@ describe('Workflow Rework Reject (A24)', () => {
 
     // b（exec）完成 → DONE，c（review 人类节点）自动激活 RUNNING
     const done = parseToolResult(
-      (await callWorkflowTool(startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, startData.sessionId, startData.mcpEndpoint!.token, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '完成' }],
       })).body,
     );
@@ -1646,7 +1658,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
 
     const startBPromise = answerNextStart('a25b');
     const doneA = parseToolResult(
-      (await callWorkflowTool(sessA.sessionId, sessA.mcpToken, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, sessA.sessionId, sessA.mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: 'A产物', value: 'a 完成' }],
       })).body,
     );
@@ -1655,7 +1667,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
 
     const startCPromise = answerNextStart('a25c');
     const doneB = parseToolResult(
-      (await callWorkflowTool(sessB.sessionId, sessB.mcpToken, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, sessB.sessionId, sessB.mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: 'B产物', value: 'b 完成' }],
       })).body,
     );
@@ -1681,7 +1693,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
     // a 完成返工 → a DONE，下游 REJECT 的 b 复工（关闭旧会话 + 拉起全新会话）
     const bRestartPromise = answerNextStart('a25b2');
     const reworkA = parseToolResult(
-      (await callWorkflowTool(sessA.sessionId, resumeA.mcpEndpoint!.token, 'completeCurrentRework', {
+      (await callWorkflowTool(fake.client, sessA.sessionId, resumeA.mcpEndpoint!.token, 'completeCurrentRework', {
         artifacts: [{ title: 'A产物', value: 'a 修订' }],
       })).body,
     );
@@ -1695,7 +1707,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
 
     // b（RUNNING，新会话）完成：下游 c 仍为 REJECT——应 resume 复工而非 start（否则流程卡住）
     const doneB2 = parseToolResult(
-      (await callWorkflowTool(sessB2.sessionId, sessB2.mcpToken, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, sessB2.sessionId, sessB2.mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: 'B产物', value: 'b 修订完成' }],
       })).body,
     );
@@ -1805,7 +1817,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
 
     // AI（exec）打回人类提交：exec REJECT，input（HUMAN）进入 REWORK
     const rej = parseToolResult(
-      (await callWorkflowTool(execSess.sessionId, execSess.mcpToken, 'rejectCurrentNode', {
+      (await callWorkflowTool(fake.client, execSess.sessionId, execSess.mcpToken, 'rejectCurrentNode', {
         reason: '需求描述不清楚，请补充',
       })).body,
     );
@@ -1963,7 +1975,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
 
     // completeCurrentNode → lastNode = 自身 DONE
     const done = parseToolResult(
-      (await callWorkflowTool(execSess.sessionId, execSess.mcpToken, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, execSess.sessionId, execSess.mcpToken, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '计算器已完成' }],
       })).body,
     );
@@ -2262,7 +2274,7 @@ describe('Workflow Human Acceptance (A31-A32)', () => {
 
     // 2) exec 完成 → review 人类节点 RUNNING
     const done1 = parseToolResult(
-      (await callWorkflowTool(s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, s1.sessionId, s1.mcpEndpoint!.token, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '计算器代码 v1' }],
       })).body,
     );
@@ -2281,7 +2293,7 @@ describe('Workflow Human Acceptance (A31-A32)', () => {
 
     // 4) exec（b）打回 input（a）：exec REJECT，input REWORK
     const rejB = parseToolResult(
-      (await callWorkflowTool(s1.sessionId, bReworkToken, 'rejectCurrentNode', {
+      (await callWorkflowTool(fake.client, s1.sessionId, bReworkToken, 'rejectCurrentNode', {
         reason: '需求本身有问题，无法按现状执行',
       })).body,
     );
@@ -2301,7 +2313,7 @@ describe('Workflow Human Acceptance (A31-A32)', () => {
 
     // 6) exec（b）完成 → 下游 review（c）仍 REJECT → resume；人类节点复工 RUNNING（不应报「缺少 Agent 配置」）
     const done2 = parseToolResult(
-      (await callWorkflowTool(s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, s2.sessionId, s2.mcpEndpoint!.token, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '计算器代码 v2' }],
       })).body,
     );
@@ -2454,7 +2466,7 @@ describe('Workflow Node Restart (A33)', () => {
 
     // 节点标记失败（LLM_REPORTED）
     const failed = parseToolResult(
-      (await callWorkflowTool(s2.sessionId, s2.mcpEndpoint!.token, 'failCurrentNode', { reason: '会话卡住，无法继续' })).body,
+      (await callWorkflowTool(fake.client, s2.sessionId, s2.mcpEndpoint!.token, 'failCurrentNode', { reason: '会话卡住，无法继续' })).body,
     );
     expect(failed.isError).toBe(false);
     expect(failed.data.status).toBe('FAILED');
@@ -2481,7 +2493,7 @@ describe('Workflow Node Restart (A33)', () => {
 
     // 重启后节点可正常完成
     const done = parseToolResult(
-      (await callWorkflowTool(s3.sessionId, s3.mcpEndpoint!.token, 'completeCurrentNode', {
+      (await callWorkflowTool(fake.client, s3.sessionId, s3.mcpEndpoint!.token, 'completeCurrentNode', {
         artifacts: [{ title: '执行结果', value: '重启后完成' }],
       })).body,
     );

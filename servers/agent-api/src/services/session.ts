@@ -190,7 +190,7 @@ export class SessionService {
     });
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
-    let mcpEndpoint: { url: string; token: string; serverNames: string[] } | undefined;
+    let mcpEndpoint: { token: string; serverNames: string[] } | undefined;
     if (input.mcpServerIds && input.mcpServerIds.length > 0) {
       try {
         mcpEndpoint = await mcpEndpointService.createEndpoint(
@@ -327,7 +327,7 @@ export class SessionService {
     }
 
     // Re-issue a fresh MCP endpoint (do not reuse the revoked token)
-    let mcpEndpoint: { url: string; token: string; serverNames: string[] } | undefined;
+    let mcpEndpoint: { token: string; serverNames: string[] } | undefined;
     try {
       const reissued = await mcpEndpointService.reissueEndpoint(id, userId);
       if (reissued) mcpEndpoint = reissued;

@@ -78,7 +78,6 @@ services:
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
       FRONTEND_URL: "${FRONTEND_URL}"
       PORT: "8000"
-      GATEWAY_URL: "${GATEWAY_URL}"
     ports:
       - "8000:8000"
     networks:

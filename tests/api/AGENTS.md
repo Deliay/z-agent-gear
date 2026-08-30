@@ -325,7 +325,7 @@ npm test
 | A17 removeBlackboardKey | 移除后黑板无、blackboardTrash 有 |
 | A18 权限隔离 | 他人 workflowInstance 查询为 null、列表为空、mutation 报「不存在或无权限」 |
 
-> MCP 工具调用：`POST <agent-api>/mcp/<sessionId>/agent-workflow-tools`，Bearer 为会话 MCP endpoint token（从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取）。
+> MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
 
 ### ACP Permission Reminder API (`agent-api/permission.test.ts`)
 

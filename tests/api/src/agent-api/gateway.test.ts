@@ -111,7 +111,7 @@ async function registerController(nameSuffix: string): Promise<{ client: ClientS
 
   const client = createWSClient();
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
-  client.emit('register', { key: rawKey, hostname: `gw-host-${nameSuffix}`, version: '1.0.0' });
+  client.emit('register', { key: rawKey, hostname: `gw-host-${nameSuffix}`, version: '2.0.0' });
   const regData = await registered;
 
   await waitForControllerOnline(regData.controllerId, authToken);

@@ -17,8 +17,9 @@ import { fsMkdirService } from './fs-mkdir-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
+import { mcpRelayService } from './mcp-relay.js';
 
-const CURRENT_MAJOR_VERSION = '1';
+const CURRENT_MAJOR_VERSION = '2';
 
 interface RegisterPayload {
   key: string;
@@ -497,10 +498,22 @@ export function createSocketIOServer(io: SocketIOServer): void {
       gatewayRelayService.handleTunnelError(payload.tunnelId, payload.error);
     });
 
+    socket.on('mcp:request', (payload: {
+      requestId: string;
+      sessionId: string;
+      serverName: string;
+      token: string;
+      body: unknown;
+    }) => {
+      if (!authenticated || !socket.data.controllerId) return;
+      mcpRelayService.handleMcpRequest(socket, payload);
+    });
+
     socket.on('disconnect', async () => {
       console.log(`disconnecting ${socket.data.keyId} [${socket.id}]`);
       
       try {
+        mcpRelayService.handleSocketDisconnect(socket.id);
         acpSessionSyncService.cleanupSocket(socket);
         if (socket.data.keyId) {
           await Controller.updateOne(

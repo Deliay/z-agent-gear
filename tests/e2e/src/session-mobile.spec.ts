@@ -75,7 +75,7 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       client.disconnect();
       reject(new Error(`Register failed: ${data.message}`));
     });
-    client.emit('register', { key: rawKey, hostname: 'e2e-mobile-host', version: '1.0.0' });
+    client.emit('register', { key: rawKey, hostname: 'e2e-mobile-host', version: '2.0.0' });
   });
 }
 
