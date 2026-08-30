@@ -255,6 +255,13 @@ export interface CreateControllerKeyMutation {
   }
 }
 
+export interface RegenerateControllerKeyMutation {
+  regenerateControllerKey: {
+    key: ControllerKeyData
+    rawKey: string
+  }
+}
+
 export interface CreateWorkspaceMutation {
   createWorkspace: ControllerWorkspaceData
 }
