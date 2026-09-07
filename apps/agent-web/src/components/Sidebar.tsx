@@ -20,6 +20,9 @@ import TreeSection from './tree/TreeSection';
 import {
   Settings,
   Plus,
+  ChevronDown,
+  ChevronRight,
+  Archive,
 } from 'lucide-react';
 import {
   GET_WORKFLOW_INSTANCES,
@@ -413,20 +416,26 @@ function WorkflowSidebarGroupInline({
   workspaceName,
   onInstancesChange,
 }: WorkflowSidebarGroupInlineProps) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const { data } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
     variables: { workspaceId },
     pollInterval: 15000,
   });
+  const { data: archivedData } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
+    variables: { workspaceId, archived: true },
+    pollInterval: 15000,
+  });
 
   const instances = data?.workflowInstances ?? [];
+  const archivedInstances = archivedData?.workflowInstances ?? [];
 
-  // 上报实例数变化
+  // 上报实例数变化（包括归档实例）
   useEffect(() => {
-    onInstancesChange(controllerId, workspaceId, instances.length);
+    onInstancesChange(controllerId, workspaceId, instances.length + archivedInstances.length);
     return () => {
       onInstancesChange(controllerId, workspaceId, 0);
     };
-  }, [controllerId, workspaceId, instances.length, onInstancesChange]);
+  }, [controllerId, workspaceId, instances.length, archivedInstances.length, onInstancesChange]);
 
   return (
     <>
@@ -451,6 +460,45 @@ function WorkflowSidebarGroupInline({
           </NavLink>
         </li>
       ))}
+      {archivedInstances.length > 0 && (
+        <li>
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setArchivedOpen((prev) => !prev)}
+            aria-expanded={archivedOpen}
+          >
+            {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            <Archive className="size-3" />
+            已归档（{archivedInstances.length}）
+          </button>
+          {archivedOpen && (
+            <ul className="ml-4 space-y-1">
+              {archivedInstances.map((instance) => (
+                <li key={instance.id}>
+                  <NavLink
+                    to={`/workflows/${instance.id}`}
+                    className={({ isActive }) =>
+                      `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-sidebar-accent text-sidebar-foreground'
+                          : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                      }`
+                    }
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{instance.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {workspaceName} · {instanceStatusText(instance)}
+                      </div>
+                    </div>
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      )}
     </>
   );
 }

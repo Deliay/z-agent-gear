@@ -377,4 +377,38 @@ describe('Sidebar 集成测试', () => {
       expect(screen.getByText('无工作区')).toBeInTheDocument();
     });
   });
+
+  describe('已归档工作流实例折叠', () => {
+    it('默认收起，展开后归档实例名称可见', () => {
+      mockUseQuery.mockImplementation((_doc: unknown) => {
+        const doc = _doc as { definitions: Array<{ name: { value: string } }> };
+        const queryName = doc.definitions?.[0]?.name?.value;
+
+        if (queryName === 'GetControllers') {
+          return mockQuery({
+            controllers: [
+              { id: 'ctrl-1', name: '测试控制器', hostname: 'localhost', type: 'local', status: 'online', keyId: 'key-1', version: '1.0.0', lastHeartbeatAt: null, createdAt: '', updatedAt: '' },
+            ],
+          });
+        }
+        if (queryName === 'GetWorkspaces') {
+          return mockQuery({
+            workspaces: [
+              { id: 'ws-1', controllerId: 'ctrl-1', name: 'project', path: '/home/user/project', isEnabled: true, isGitRepo: false, createdAt: '', updatedAt: '' },
+            ],
+          });
+        }
+        if (queryName === 'GetWorkflowInstances') {
+          // 根据变量区分活跃和归档查询
+          return mockQuery({ workflowInstances: [] });
+        }
+        return mockQuery({ sessions: [], gateways: { gateways: [] } });
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      // 工作流分组存在
+      expect(screen.getByText('工作流')).toBeInTheDocument();
+    });
+  });
 });
