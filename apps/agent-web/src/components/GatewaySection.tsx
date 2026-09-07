@@ -4,8 +4,7 @@ import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
-import { buttonVariants } from './ui/button';
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, Plus } from 'lucide-react';
 
 interface GatewaySectionProps {
   controllerId: string;
@@ -43,9 +42,9 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
             e.stopPropagation();
             setShowDialog(true);
           }}
-          className={buttonVariants({ size: 'xs' })}
+          className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
         >
-          +
+          <Plus className="size-3" />
         </button>
       </div>
 

@@ -13,8 +13,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { DETECT_GIT_REPO, GET_ACP_CAPABILITIES } from '@/graphql/queries'
-import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery } from '@/graphql/types'
+import { DETECT_GIT_REPO, GET_ACP_CAPABILITIES, GET_WORKSPACES } from '@/graphql/queries'
+import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery, GetWorkspacesQuery } from '@/graphql/types'
 import {
   GET_WORKFLOW_TEMPLATES,
   GET_CONFIGURED_WORKFLOWS,
@@ -48,7 +48,7 @@ const SOURCES: { value: InstantiateSource; label: string; desc: string }[] = [
 interface InstantiateWorkflowDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  workspaceId: string
+  workspaceId?: string
   controllerId: string
 }
 
@@ -63,6 +63,7 @@ export default function InstantiateWorkflowDialog({
   const [source, setSource] = useState<InstantiateSource>('CONFIGURED')
   const [sourceId, setSourceId] = useState('')
   const [name, setName] = useState('')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>(workspaceId || '')
   // 步骤 2：实例化前配置界面
   const [step, setStep] = useState<1 | 2>(1)
   const [nodes, setNodes] = useState<EditableNode[]>([])
@@ -76,8 +77,10 @@ export default function InstantiateWorkflowDialog({
     { variables: { controllerId } },
   )
   const { data: templatesData } = useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES)
+  const { data: workspacesData } = useQuery<GetWorkspacesQuery>(GET_WORKSPACES)
   const { data: gitData } = useQuery<DetectGitRepoQuery>(DETECT_GIT_REPO, {
-    variables: { controllerId, workspaceId },
+    variables: { controllerId, workspaceId: selectedWorkspaceId },
+    skip: !selectedWorkspaceId,
   })
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
     variables: { controllerId },
@@ -87,6 +90,10 @@ export default function InstantiateWorkflowDialog({
 
   const configuredWorkflows = configuredData?.configuredWorkflows ?? []
   const templates = templatesData?.workflowTemplates ?? []
+  const allWorkspaces = workspacesData?.workspaces ?? []
+  const enabledWorkspaces = allWorkspaces.filter(
+    (w) => w.controllerId === controllerId && w.isEnabled
+  )
   const availableAcpTypes = (capabilitiesData?.acpCapabilities ?? [])
     .filter((c) => c.available && c.type)
     .map((c) => c.type)
@@ -105,6 +112,8 @@ export default function InstantiateWorkflowDialog({
     setSourceId('')
     setName('')
     setNodes([])
+    // 设置默认工作区：优先使用传入值，否则使用第一个 enabled 工作区
+    setSelectedWorkspaceId(workspaceId || enabledWorkspaces[0]?.id || '')
     // 若已检测到 Git 仓库且用户未手动操作，默认勾选 Worktree
     setCreateWorkflowWorktree(isGitRepo && !userTouchedWorktreeRef.current)
     userTouchedWorktreeRef.current = false
@@ -163,14 +172,14 @@ export default function InstantiateWorkflowDialog({
         configuredWorkflowId: source === 'CONFIGURED' ? sourceId : null,
         templateId: source === 'TEMPLATE' ? sourceId : null,
         controllerId,
-        workspaceId,
+        workspaceId: selectedWorkspaceId,
         name: name.trim(),
         nodes: nodes.map(toConfiguredNodeInput),
         createWorkflowWorktree: isGitRepo ? createWorkflowWorktree : false,
       }
       const { data } = await instantiateWorkflow({
         variables: { input },
-        refetchQueries: [{ query: GET_WORKFLOW_INSTANCES, variables: { workspaceId } }],
+        refetchQueries: [{ query: GET_WORKFLOW_INSTANCES, variables: { workspaceId: selectedWorkspaceId } }],
       })
       const instanceId = data?.instantiateWorkflow?.id
       toast.success('工作流实例已创建')
@@ -280,6 +289,26 @@ export default function InstantiateWorkflowDialog({
                   onChange={(e) => setName(e.target.value)}
                   placeholder="如: 用户登录功能开发"
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>工作区</Label>
+                <select
+                  aria-label="选择工作区"
+                  value={selectedWorkspaceId}
+                  onChange={(e) => setSelectedWorkspaceId(e.target.value)}
+                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                >
+                  {enabledWorkspaces.length === 0 ? (
+                    <option value="">无可用工作区</option>
+                  ) : (
+                    enabledWorkspaces.map((ws) => (
+                      <option key={ws.id} value={ws.id}>
+                        {ws.name}
+                      </option>
+                    ))
+                  )}
+                </select>
               </div>
 
               {error && (

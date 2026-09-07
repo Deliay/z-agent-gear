@@ -567,3 +567,10 @@ export interface DeleteWorktreeResultData {
 export interface DeleteWorktreeMutation {
   deleteWorktree: DeleteWorktreeResultData
 }
+
+export interface RegenerateControllerKeyMutation {
+  regenerateControllerKey: {
+    key: ControllerKeyData
+    rawKey: string
+  }
+}

@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import CommandTemplate from '@/components/common/CommandTemplate'
 const GET_CONTROLLER_KEYS = gql`
   query GetControllerKeys {
     controllerKeys {
@@ -236,6 +237,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         {copiedId === key.id ? '已复制' : '复制'}
                       </Button>
                     </div>
+                    {key.rawKey && <CommandTemplate keyValue={key.rawKey} />}
                   </div>
                 </div>
               ))}
@@ -375,6 +377,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
           <div className="rounded-lg border bg-muted p-3">
             <code className="break-all font-mono text-sm">{regeneratedKey?.rawKey}</code>
           </div>
+          {regeneratedKey?.rawKey && <CommandTemplate keyValue={regeneratedKey.rawKey} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegeneratedKey(null)}>关闭</Button>
             <Button onClick={handleCopyRegeneratedKey}>复制Key</Button>

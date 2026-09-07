@@ -166,14 +166,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">会话</h2>
-          <Button size="xs" onClick={() => setShowNewDialog(true)}>
-            <Plus className="size-3" />
-            新建
-          </Button>
-        </div>
-
         <ul className="space-y-1">
           {controllers.map((controller) => {
             const isExpanded = expandedControllers.has(controller.id);
@@ -354,6 +346,15 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           <div className="flex items-center gap-1">
             <TodoListPanel />
             <ThemeToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={() => setShowNewDialog(true)}
+              title="新建会话"
+            >
+              <Plus className="size-4" />
+            </Button>
             <NavLink
               to="/settings"
               aria-label="Settings"
