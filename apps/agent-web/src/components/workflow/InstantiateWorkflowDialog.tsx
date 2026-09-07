@@ -306,7 +306,11 @@ export default function InstantiateWorkflowDialog({
                   onValueChange={(value) => setSelectedWorkspaceId(value || '')}
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="选择工作区" />
+                    <SelectValue>
+                      {selectedWorkspaceId
+                        ? enabledWorkspaces.find((ws) => ws.id === selectedWorkspaceId)?.name || selectedWorkspaceId
+                        : '选择工作区'}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {enabledWorkspaces.length === 0 ? (

@@ -31,10 +31,18 @@ describe('InstantiateWorkflowDialog 工作区 Select', () => {
     vi.clearAllMocks();
   });
 
-  it('工作区下拉框存在', () => {
-    mockUseQuery.mockImplementation(() => ({
-      data: undefined,
-    }));
+  it('选中工作区后触发器显示名称', () => {
+    // 所有查询都返回包含工作区数据的响应
+    mockUseQuery.mockReturnValue({
+      data: {
+        workspaces: [
+          { id: 'ws-1', controllerId: 'ctrl-1', name: '研发工作区', path: '/home/user/dev', isEnabled: true, isGitRepo: false, createdAt: '', updatedAt: '' },
+        ],
+        configuredWorkflows: [],
+        workflowTemplates: [],
+        acpCapabilities: [],
+      },
+    });
 
     render(
       <InstantiateWorkflowDialog
@@ -45,7 +53,9 @@ describe('InstantiateWorkflowDialog 工作区 Select', () => {
       />
     );
 
-    // 检查工作区标签存在
-    expect(screen.getByText('工作区')).toBeInTheDocument();
+    // 检查 SelectValue 触发器中显示工作区名称
+    const trigger = screen.getByRole('combobox');
+    expect(trigger).toBeInTheDocument();
+    expect(trigger.textContent).toContain('研发工作区');
   });
 });

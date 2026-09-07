@@ -130,7 +130,6 @@ describe('Sidebar 集成测试', () => {
       // 检查弹窗存在
       const dialog = screen.getByTestId('gateway-dialog');
       expect(dialog).toBeInTheDocument();
-      
       // 检查弹窗不在带 hidden 类的容器内（createPortal 挂载到 document.body）
       expect(dialog.closest('.hidden')).toBeNull();
     });
