@@ -109,8 +109,27 @@ function buildControllerCommand(opts: {
 ```
 
 - 服务器地址：`global → https://zag-ctrl-api.fffdan.com`，`cn → https://ctrl.zag.cn.fffdan.com`。
-- npm/pnpm/bun：生成 `{npm: npx, pnpm: pnpm dlx, bun: bunx}[pm] agent-gear --key <key> --server <endpoint>`。
-- pm2：生成 `ZAG_CONTROLLER_KEY=<key> ZAG_SERVER_ENDPOINT=<endpoint> pm2 start agent-gear ...` 形式（通过环境变量传递，CLI `config.ts` 已支持该优先级）。
+- npm/pnpm/bun：生成 `{npm: npx, pnpm: pnpm dlx, bun: bunx}[pm] agent-gear --key <key> --server <endpoint>` 单行运行命令。
+- pm2：返回两部分内容——
+  1. 全局安装提示：`{npm: npm install -g, pnpm: pnpm add -g, bun: bun install -g}` 之外的包管理器选择仍独立生效，pm2 模式下安装提示固定展示当前选中包管理器的全局安装命令（默认 `npm install -g agent-gear`）；
+  2. pm2 应用配置 JSON 片段，供用户保存为配置文件后 `pm2 start` 启动，通过环境变量传递配置（CLI `config.ts` 已支持该优先级）：
+
+  ```json
+  {
+    "apps": [
+      {
+        "name": "agent-gear",
+        "script": "agent-gear",
+        "env": {
+          "ZAG_CONTROLLER_KEY": "<key>",
+          "ZAG_SERVER_ENDPOINT": "<endpoint>"
+        }
+      }
+    ]
+  }
+  ```
+
+  因此 `buildControllerCommand` 对 pm2 返回结构化结果（安装命令 + JSON 片段文本），而非单行命令。
 
 ## 4. 数据模型
 
@@ -158,7 +177,7 @@ sequenceDiagram
 #### 实现点 4: 启动命令模板（ControllerListSection.tsx / McpProxyKeySection.tsx）
 
 - 在 Key 生成成功的展示区域下方渲染 `CommandTemplate` 组件：两个 Select（包管理器 npm/pnpm/bun/pm2，默认 npm；服务器 国内/全球，默认国内）+ 命令文本 + 复制按钮。
-- 命令文本由 `buildControllerCommand` 纯函数生成，Key 自动填入。
+- 命令文本由 `buildControllerCommand` 纯函数生成，Key 自动填入；选择 pm2 时组件改为展示两行内容：第一行为全局安装提示（如 `npm install -g agent-gear`），第二行为 pm2 应用配置 JSON 代码片段（`{ "apps": [{ ... }] }`，env 内含 `ZAG_CONTROLLER_KEY`/`ZAG_SERVER_ENDPOINT`），两块内容各自带复制按钮。
 - 两处复用同一组件，仅 Key 来源不同（GraphQL rawKey / REST createdKey）。
 
 #### 实现点 5: 添加工作区即时 Git 发现（AddWorkspaceDialog.tsx / WorkspaceSection.tsx）
@@ -208,7 +227,7 @@ apps/agent-web/src/
 
 ### 8.1 测试覆盖要求
 
-- `buildControllerCommand` 纯函数：单元测试覆盖 4 种包管理器 × 2 种服务器共 8 组组合及 pm2 环境变量形式。
+- `buildControllerCommand` 纯函数：单元测试覆盖 4 种包管理器 × 2 种服务器共 8 组组合；pm2 场景额外断言返回的全局安装提示与 pm2 JSON 片段（env 含 `ZAG_CONTROLLER_KEY`/`ZAG_SERVER_ENDPOINT`）。
 - E2E：沿用 `tests/e2e` 现有 Playwright 体系。
 
 ### 8.2 测试类型
@@ -224,7 +243,7 @@ apps/agent-web/src/
 - [ ] 树结构为 控制器 → 工作流/统一网关/会话/工作区 四平级分组，整宽 Label 折叠 + 引导线窄缩进
 - [ ] 创建工作流对话框可选择工作区并正确归属
 - [ ] 侧边栏去「会话」标题、新建图标置底、栏体加宽、网关新增按钮样式与工作流一致
-- [ ] 新增控制器/MCP 代理 Key 时命令模板可选 npm/pnpm/bun/pm2 与全球/国内，默认 npm + 国内，pm2 走环境变量
+- [ ] 新增控制器/MCP 代理 Key 时命令模板可选 npm/pnpm/bun/pm2 与全球/国内，默认 npm + 国内；pm2 展示全局安装提示 + pm2 配置 JSON 片段（环境变量传参）
 - [ ] 添加工作区后无需进入即可见 Git 状态与分支信息
 - [ ] 单元测试与 E2E 测试通过
 

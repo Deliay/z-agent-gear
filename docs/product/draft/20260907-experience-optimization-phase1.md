@@ -98,13 +98,13 @@ type: Permanent
 
 #### 功能点 5: 控制器 / MCP 代理启动命令模板
 
-- **描述**: 新增控制器或 MCP 代理（生成 Key）时，界面同时展示一个启动命令模板。用户可自选包管理器（npm / pnpm / bun / pm2）与服务器区域（全球 / 国内），界面实时给出对应运行指令，例如 `npx agent-gear --key {对应的key} --server {serverEndpoint}`。服务器地址：全球 `https://zag-ctrl-api.fffdan.com`，国内 `https://ctrl.zag.cn.fffdan.com`。默认选中 npm + 国内服务器。选择 pm2 时，命令改为通过环境变量 `ZAG_CONTROLLER_KEY` 与 `ZAG_SERVER_ENDPOINT` 传递配置。
+- **描述**: 新增控制器或 MCP 代理（生成 Key）时，界面同时展示一个启动命令模板。用户可自选包管理器（npm / pnpm / bun / pm2）与服务器区域（全球 / 国内），界面实时给出对应运行指令，例如 `npx agent-gear --key {对应的key} --server {serverEndpoint}`。服务器地址：全球 `https://zag-ctrl-api.fffdan.com`，国内 `https://ctrl.zag.cn.fffdan.com`。默认选中 npm + 国内服务器。选择 pm2 时，界面改为先提示使用包管理工具全局安装（如 `npm install -g agent-gear`），随后给出一段 pm2 应用配置 JSON 代码片段（形如 `{ "apps": [{ ... }] }`），配置中通过环境变量 `ZAG_CONTROLLER_KEY` 与 `ZAG_SERVER_ENDPOINT` 传递 Key 与服务器地址，用户保存为配置文件后以 pm2 启动。
 - **用户价值**: 复制即用，无需查阅文档；覆盖常见进程托管方式（pm2）。
 - **验收标准**:
   - [ ] 新增控制器与新增 MCP 代理时均展示命令模板
   - [ ] 包管理器支持 npm / pnpm / bun / pm2 四种选项，默认 npm
   - [ ] 服务器支持全球 / 国内两个选项，默认国内，命令中的地址随选择变化
-  - [ ] 选择 pm2 时命令以 `ZAG_CONTROLLER_KEY`、`ZAG_SERVER_ENDPOINT` 环境变量方式传递配置
+  - [ ] 选择 pm2 时先展示全局安装提示（如 `npm install -g agent-gear`），随后展示 pm2 应用配置 JSON 片段（`{ "apps": [{ ... }] }`），其中通过 `ZAG_CONTROLLER_KEY`、`ZAG_SERVER_ENDPOINT` 环境变量传递配置
   - [ ] 命令中自动填入本次生成的 Key，支持一键复制
 
 #### 功能点 6: 工作区 Git 与分支默认发现
@@ -137,8 +137,8 @@ flowchart TD
     A[新增控制器/MCP代理] --> B[生成 Key]
     B --> C[界面展示命令模板]
     C --> D{选择包管理器}
-    D -->|npm/pnpm/bun| E[命令行参数形式 --key --server]
-    D -->|pm2| F[环境变量形式 ZAG_CONTROLLER_KEY/ZAG_SERVER_ENDPOINT]
+    D -->|npm/pnpm/bun| E[单行运行命令 --key --server]
+    D -->|pm2| F[提示全局安装 + pm2 配置 JSON 片段 ZAG_CONTROLLER_KEY/ZAG_SERVER_ENDPOINT]
     E --> G{选择服务器}
     F --> G
     G -->|国内 默认| H[命令指向国内端点]
