@@ -99,8 +99,8 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
 
+      // 检查四个分组标题（控制器默认展开）
       expect(screen.getByText('统一网关')).toBeInTheDocument();
       expect(screen.getByText('工作流')).toBeInTheDocument();
       expect(screen.getByText('会话')).toBeInTheDocument();
@@ -128,7 +128,6 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
 
       const plusButton = screen.getByTitle('新增网关');
       fireEvent.click(plusButton);
@@ -169,7 +168,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       // 应显示最深匹配的工作区名 project-sub
       expect(screen.getByText('深层会话')).toBeInTheDocument();
@@ -206,7 +205,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       expect(screen.getByText('孤立会话')).toBeInTheDocument();
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
@@ -240,7 +239,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       expect(screen.getByText('无工作流实例')).toBeInTheDocument();
     });
@@ -273,7 +272,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       const { rerender } = render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       // 初始空态
       expect(screen.getByText('无工作流实例')).toBeInTheDocument();
@@ -321,7 +320,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       // 确认无任何 React 报错
       expect(consoleSpy).not.toHaveBeenCalled();
@@ -350,7 +349,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       expect(screen.getByText('无会话')).toBeInTheDocument();
     });
@@ -374,7 +373,7 @@ describe('Sidebar 集成测试', () => {
       });
 
       render(<Sidebar username="testuser" />);
-      expandController();
+      
 
       expect(screen.getByText('无工作区')).toBeInTheDocument();
     });

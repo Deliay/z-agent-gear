@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@apollo/client/react';
 import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
@@ -55,11 +56,13 @@ export default function GatewaySection({ controllerId, inline, externalShowDialo
             controllerId={controllerId}
           />
         ))}
-        {showDialog && (
+        {/* 使用 createPortal 将对话框挂载到 document.body，避免被 hidden 父元素隐藏 */}
+        {showDialog && createPortal(
           <GatewayDialog
             controllerId={controllerId}
             onClose={handleCloseDialog}
-          />
+          />,
+          document.body
         )}
       </>
     );

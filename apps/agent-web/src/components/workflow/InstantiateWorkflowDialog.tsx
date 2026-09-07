@@ -19,6 +19,7 @@ import {
   SelectValue,
   SelectPopup,
   SelectItem,
+  SelectItemText,
 } from '@/components/ui/select'
 import { DETECT_GIT_REPO, GET_ACP_CAPABILITIES, GET_WORKSPACES } from '@/graphql/queries'
 import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery, GetWorkspacesQuery } from '@/graphql/types'
@@ -313,7 +314,7 @@ export default function InstantiateWorkflowDialog({
                     ) : (
                       enabledWorkspaces.map((ws) => (
                         <SelectItem key={ws.id} value={ws.id}>
-                          {ws.name}
+                          <SelectItemText>{ws.name}</SelectItemText>
                         </SelectItem>
                       ))
                     )}

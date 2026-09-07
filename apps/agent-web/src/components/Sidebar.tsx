@@ -17,7 +17,6 @@ import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
 import GatewaySection from './GatewaySection';
 import TreeSection from './tree/TreeSection';
-import { Button } from './ui/button';
 import {
   Settings,
   Plus,
@@ -36,8 +35,9 @@ interface SidebarProps {
 
 export default function Sidebar({ username, mobile }: SidebarProps) {
   const navigate = useNavigate();
-  const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
-  const [showNewDialog, setShowNewDialog] = useState(false);
+  // 改为追踪「已折叠」集合，默认全部展开
+  const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
+  const [showNewDialog, setShowNewDialog] = useState<{ controllerId?: string } | null>(null);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
 
@@ -122,7 +122,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       });
       if (data?.createSession?.session?.id) {
         navigate(`/sessions/${data.createSession.session.id}`);
-        setShowNewDialog(false);
+        setShowNewDialog(null);
       }
     } catch (error) {
       console.error('Failed to create session:', error);
@@ -130,7 +130,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   };
 
   const toggleController = (controllerId: string) => {
-    setExpandedControllers((prev) => {
+    setCollapsedControllers((prev) => {
       const next = new Set(prev);
       if (next.has(controllerId)) {
         next.delete(controllerId);
@@ -182,7 +182,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       <div className="flex-1 overflow-y-auto p-4">
         <ul className="space-y-1">
           {controllers.map((controller) => {
-            const isExpanded = expandedControllers.has(controller.id);
+            // 默认展开，除非在 collapsedControllers 中
+            const isExpanded = !collapsedControllers.has(controller.id);
             const isOffline = controller.status !== 'online';
             const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
             const controllerWorkspaces = allWorkspaces.filter(
@@ -282,6 +283,16 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       title="会话"
                       count={controllerSessions.length}
                       emptyMessage="无会话"
+                      actions={
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          title="新建会话"
+                          onClick={() => setShowNewDialog({ controllerId: controller.id })}
+                        >
+                          <Plus className="size-3" />
+                        </button>
+                      }
                     >
                       {controllerSessions.map((session) => {
                         const wsName = getWorkspaceNameForSession(session);
@@ -340,8 +351,9 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       {showNewDialog && (
         <NewSessionDialog
           controllers={controllers}
-          onClose={() => setShowNewDialog(false)}
+          onClose={() => setShowNewDialog(null)}
           onCreate={handleCreateSession}
+          existingControllerId={showNewDialog.controllerId}
         />
       )}
 
@@ -370,15 +382,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           <div className="flex items-center gap-1">
             <TodoListPanel />
             <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              onClick={() => setShowNewDialog(true)}
-              title="新建会话"
-            >
-              <Plus className="size-4" />
-            </Button>
             <NavLink
               to="/settings"
               aria-label="Settings"
