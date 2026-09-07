@@ -11,9 +11,10 @@ interface GatewaySectionProps {
   inline?: boolean;
   externalShowDialog?: boolean;
   onDialogClose?: () => void;
+  onGatewaysChange?: (controllerId: string, count: number) => void;
 }
 
-export default function GatewaySection({ controllerId, inline, externalShowDialog, onDialogClose }: GatewaySectionProps) {
+export default function GatewaySection({ controllerId, inline, externalShowDialog, onDialogClose, onGatewaysChange }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
 
@@ -23,6 +24,13 @@ export default function GatewaySection({ controllerId, inline, externalShowDialo
   });
 
   const gateways = data?.gateways?.gateways ?? [];
+
+  // 上报网关数变化
+  useEffect(() => {
+    if (inline && onGatewaysChange) {
+      onGatewaysChange(controllerId, gateways.length);
+    }
+  }, [inline, controllerId, gateways.length, onGatewaysChange]);
 
   // 外部控制对话框显示
   useEffect(() => {
@@ -40,17 +48,13 @@ export default function GatewaySection({ controllerId, inline, externalShowDialo
   if (inline) {
     return (
       <>
-        {gateways.length === 0 ? (
-          <li className="px-3 py-1 text-xs text-muted-foreground">无网关暴露</li>
-        ) : (
-          gateways.map((gw) => (
-            <GatewayItem
-              key={gw.id}
-              gateway={gw}
-              controllerId={controllerId}
-            />
-          ))
-        )}
+        {gateways.map((gw) => (
+          <GatewayItem
+            key={gw.id}
+            gateway={gw}
+            controllerId={controllerId}
+          />
+        ))}
         {showDialog && (
           <GatewayDialog
             controllerId={controllerId}

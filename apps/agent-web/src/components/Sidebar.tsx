@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
@@ -40,8 +40,14 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
-  // 跟踪各控制器是否有工作流实例
-  const [hasWorkflowInstances, setHasWorkflowInstances] = useState<Record<string, boolean>>({});
+
+  // 跟踪各控制器的工作区实例数
+  const workflowInstanceCountsRef = useRef<Map<string, Set<string>>>(new Map());
+  const [workflowInstanceCounts, setWorkflowInstanceCounts] = useState<Map<string, Set<string>>>(new Map());
+
+  // 跟踪各控制器的网关数
+  const gatewayCountsRef = useRef<Map<string, number>>(new Map());
+  const [gatewayCounts, setGatewayCounts] = useState<Map<string, number>>(new Map());
 
   const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
     pollInterval: 15000,
@@ -75,7 +81,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       let bestMatchLength = 0;
       for (const w of allWorkspaces) {
         if (w.controllerId !== session.controllerId || !w.isEnabled) continue;
-        // 确保精确匹配路径边界：cwd 以 w.path 开头，且后面是 / 或结束
         if (session.cwd!.startsWith(w.path)) {
           const rest = session.cwd!.slice(w.path.length);
           if (rest === '' || rest.startsWith('/')) {
@@ -134,6 +139,42 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       }
       return next;
     });
+  };
+
+  // 稳定的回调函数，用于 WorkflowSidebarGroupInline 上报实例数
+  const handleInstancesChange = useCallback((controllerId: string, workspaceId: string, count: number) => {
+    const prev = workflowInstanceCountsRef.current;
+    const controllerSet = prev.get(controllerId) || new Set<string>();
+
+    if (count > 0) {
+      controllerSet.add(workspaceId);
+    } else {
+      controllerSet.delete(workspaceId);
+    }
+
+    prev.set(controllerId, controllerSet);
+    setWorkflowInstanceCounts(new Map(prev));
+  }, []);
+
+  // 稳定的回调函数，用于 GatewaySection 上报网关数
+  const handleGatewaysChange = useCallback((controllerId: string, count: number) => {
+    const prev = gatewayCountsRef.current;
+    if (prev.get(controllerId) !== count) {
+      prev.set(controllerId, count);
+      setGatewayCounts(new Map(prev));
+    }
+  }, []);
+
+  // 判断控制器是否有工作流实例
+  const hasWorkflowInstances = (controllerId: string): boolean => {
+    const controllerSet = workflowInstanceCounts.get(controllerId);
+    return controllerSet !== undefined && controllerSet.size > 0;
+  };
+
+  // 判断控制器是否有网关
+  const hasGateways = (controllerId: string): boolean => {
+    const count = gatewayCounts.get(controllerId);
+    return count !== undefined && count > 0;
   };
 
   return (
@@ -199,12 +240,14 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           </button>
                         }
                         emptyMessage="无网关暴露"
+                        hasContent={hasGateways(controller.id)}
                       >
                         <GatewaySection
                           controllerId={controller.id}
                           inline
                           externalShowDialog={showGatewayDialog === controller.id}
                           onDialogClose={() => setShowGatewayDialog(null)}
+                          onGatewaysChange={handleGatewaysChange}
                         />
                       </TreeSection>
                     )}
@@ -222,7 +265,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         </button>
                       }
                       emptyMessage="无工作流实例"
-                      hasContent={hasWorkflowInstances[controller.id] || false}
+                      hasContent={hasWorkflowInstances(controller.id)}
                     >
                       {controllerWorkspaces.map((ws) => (
                         <WorkflowSidebarGroupInline
@@ -230,12 +273,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           workspaceId={ws.id}
                           controllerId={controller.id}
                           workspaceName={ws.name}
-                          onInstancesChange={(count) => {
-                            setHasWorkflowInstances((prev) => ({
-                              ...prev,
-                              [controller.id]: (prev[controller.id] || false) || count > 0,
-                            }));
-                          }}
+                          onInstancesChange={handleInstancesChange}
                         />
                       ))}
                     </TreeSection>
@@ -363,11 +401,12 @@ interface WorkflowSidebarGroupInlineProps {
   workspaceId: string;
   controllerId: string;
   workspaceName: string;
-  onInstancesChange?: (count: number) => void;
+  onInstancesChange: (controllerId: string, workspaceId: string, count: number) => void;
 }
 
 function WorkflowSidebarGroupInline({
   workspaceId,
+  controllerId,
   workspaceName,
   onInstancesChange,
 }: WorkflowSidebarGroupInlineProps) {
@@ -380,10 +419,12 @@ function WorkflowSidebarGroupInline({
 
   // 上报实例数变化
   useEffect(() => {
-    onInstancesChange?.(instances.length);
-  }, [instances.length, onInstancesChange]);
+    onInstancesChange(controllerId, workspaceId, instances.length);
+    return () => {
+      onInstancesChange(controllerId, workspaceId, 0);
+    };
+  }, [controllerId, workspaceId, instances.length, onInstancesChange]);
 
-  // 始终返回 wrapper div，以便 TreeSection 正确判断是否有内容
   return (
     <>
       {instances.map((instance) => (
