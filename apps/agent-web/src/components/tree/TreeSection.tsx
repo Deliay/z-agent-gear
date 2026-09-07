@@ -21,8 +21,12 @@ export default function TreeSection({
   hasContent,
 }: TreeSectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  // 如果 hasContent 显式传入，则使用；否则根据 children 数量判断
-  const hasChildren = hasContent !== undefined ? hasContent : React.Children.count(children) > 0;
+
+  // hasContent 三态：
+  // - undefined：尚未收到上报，照常渲染 children 让其挂载查询
+  // - true：有内容，渲染 children
+  // - false：无内容，渲染 emptyMessage（但仍挂载 children 以允许上报）
+  const showChildren = hasContent === undefined || hasContent === true;
 
   return (
     <div className="py-1">
@@ -46,7 +50,12 @@ export default function TreeSection({
       </div>
       {expanded && (
         <ul className="ml-2 border-l border-sidebar-border pl-2 space-y-0.5">
-          {hasChildren ? children : emptyMessage && (
+          {/* 始终挂载 children 以允许查询和上报 */}
+          <li className={showChildren ? '' : 'hidden'} data-tree-content>
+            {children}
+          </li>
+          {/* 空态提示：仅在 hasContent=false 时显示 */}
+          {hasContent === false && emptyMessage && (
             <li className="px-3 py-1.5 text-xs text-muted-foreground">{emptyMessage}</li>
           )}
         </ul>

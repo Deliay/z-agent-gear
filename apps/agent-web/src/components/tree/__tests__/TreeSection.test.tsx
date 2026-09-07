@@ -40,12 +40,32 @@ describe('TreeSection', () => {
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 
-  it('shows empty message when no children', () => {
+  it('shows empty message when hasContent is false', () => {
     render(
-      <TreeSection title="Test Section" emptyMessage="No items">
-        {null}
+      <TreeSection title="Test Section" emptyMessage="No items" hasContent={false}>
+        <div>Child content</div>
       </TreeSection>
     );
     expect(screen.getByText('No items')).toBeInTheDocument();
+    // children 仍然挂载但隐藏
+    expect(screen.getByText('Child content')).toBeInTheDocument();
+  });
+
+  it('shows children when hasContent is true', () => {
+    render(
+      <TreeSection title="Test Section" hasContent={true}>
+        <div>Child content</div>
+      </TreeSection>
+    );
+    expect(screen.getByText('Child content')).toBeInTheDocument();
+  });
+
+  it('shows children when hasContent is undefined', () => {
+    render(
+      <TreeSection title="Test Section">
+        <div>Child content</div>
+      </TreeSection>
+    );
+    expect(screen.getByText('Child content')).toBeInTheDocument();
   });
 });
