@@ -162,6 +162,7 @@ sequenceDiagram
 
 - **描述**: 树结构改为 控制器 → [工作流 | 统一网关 | 会话 | 工作区] 四个分组。工作区分组展开后为 worktree 列表；会话分组为会话列表（自 `Sidebar.tsx:275-318` 现有 NavLink 列表迁移）；工作流分组复用 `WorkflowSidebarGroup`；网关分组复用 `GatewaySection` 的列表能力。
 - **技术细节**: 控制器行整体渲染为整宽 button（占满侧边栏宽度），移除右侧 Chevron 下拉 icon，点击整行切换 `expandedControllers`。四个分组使用新的 `TreeSection` 容器：`ml-2` 级窄缩进 + `border-l` 引导线，组头为 Label 折叠。
+- **条目工作区辅助行**: 工作流与会话不再按工作区聚合，两类条目改为两行布局——第一行为条目名称（沿用现有样式），第二行为 muted 小字展示所属工作区名称。工作流条目按其 `workspaceId` 关联 `controllerWorkspaces` 取名称；会话条目按其所属工作区（现有会话数据中的工作区关联）取名称。工作区已删除/停用时辅助行显示「未知工作区」并置灰。
 - **风险点**: 现有「工作流挂在工作区下」逻辑（`Sidebar.tsx:259-264` 的 `workspace.isEnabled && 有配置记录` 渲染条件）迁移到控制器级分组后，需按控制器聚合其全部工作区的 configured workflows；空分组展示空态与新建入口。
 
 #### 实现点 2: 侧边栏优化（Sidebar.tsx / GatewaySection.tsx / MainLayout.tsx）
@@ -241,6 +242,7 @@ apps/agent-web/src/
 
 - [ ] 技术方案评审通过
 - [ ] 树结构为 控制器 → 工作流/统一网关/会话/工作区 四平级分组，整宽 Label 折叠 + 引导线窄缩进
+- [ ] 工作流与会话条目均展示所属工作区辅助行（工作区缺失时置灰提示）
 - [ ] 创建工作流对话框可选择工作区并正确归属
 - [ ] 侧边栏去「会话」标题、新建图标置底、栏体加宽、网关新增按钮样式与工作流一致
 - [ ] 新增控制器/MCP 代理 Key 时命令模板可选 npm/pnpm/bun/pm2 与全球/国内，默认 npm + 国内；pm2 展示全局安装提示 + pm2 配置 JSON 片段（环境变量传参）
