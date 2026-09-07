@@ -40,6 +40,15 @@ describe('TreeSection', () => {
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 
+  it('shows empty message when no children and hasContent not provided', () => {
+    render(
+      <TreeSection title="Test Section" emptyMessage="No items">
+        {null}
+      </TreeSection>
+    );
+    expect(screen.getByText('No items')).toBeInTheDocument();
+  });
+
   it('shows empty message when hasContent is false', () => {
     render(
       <TreeSection title="Test Section" emptyMessage="No items" hasContent={false}>
@@ -60,7 +69,7 @@ describe('TreeSection', () => {
     expect(screen.getByText('Child content')).toBeInTheDocument();
   });
 
-  it('shows children when hasContent is undefined', () => {
+  it('shows children when hasContent is undefined and children exist', () => {
     render(
       <TreeSection title="Test Section">
         <div>Child content</div>
