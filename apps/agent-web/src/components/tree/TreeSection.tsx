@@ -52,10 +52,10 @@ export default function TreeSection({
       </div>
       {expanded && (
         <ul className="ml-2 border-l border-sidebar-border pl-2 space-y-0.5">
-          {/* 始终挂载 children 以允许查询和上报 */}
-          <li className={hasActualContent ? '' : 'hidden'} data-tree-content>
+          {/* 始终挂载 children 以允许查询和上报，使用嵌套 ul 确保合法 DOM 结构 */}
+          <ul className={hasActualContent ? '' : 'hidden'} data-tree-content>
             {children}
-          </li>
+          </ul>
           {/* 空态提示：当没有内容时显示 */}
           {!hasActualContent && emptyMessage && (
             <li className="px-3 py-1.5 text-xs text-muted-foreground">{emptyMessage}</li>

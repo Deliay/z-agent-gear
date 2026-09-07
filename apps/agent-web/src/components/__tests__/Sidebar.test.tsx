@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import Sidebar from '../Sidebar';
-import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../../graphql/queries';
-import { GET_WORKFLOW_INSTANCES } from '../../graphql/workflow';
 
 // Mock Apollo Client
 const mockUseQuery = vi.fn();
@@ -15,7 +13,7 @@ vi.mock('@apollo/client/react', () => ({
 
 // Mock React Router
 vi.mock('react-router-dom', () => ({
-  NavLink: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string }) => (
+  NavLink: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string | ((state: { isActive: boolean; isPending: boolean }) => string) }) => (
     <a href={to} className={typeof className === 'function' ? className({ isActive: false, isPending: false }) : className}>
       {children}
     </a>
@@ -65,11 +63,6 @@ function mockQuery(data: Record<string, unknown>) {
 // Helper: 展开控制器
 function expandController() {
   fireEvent.click(screen.getByText('测试控制器'));
-}
-
-// Helper: 根据查询文档分发 mock
-function mockQueryByDoc(doc: unknown, data: Record<string, unknown>) {
-  return { data };
 }
 
 describe('Sidebar 集成测试', () => {
@@ -300,7 +293,7 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('⑤ 无限渲染循环回归', () => {
-    it('render 后正常完成，无 Maximum update depth 错误', () => {
+    it('render 后正常完成，无 React 报错', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       mockUseQuery.mockImplementation((_doc: unknown) => {
@@ -330,11 +323,8 @@ describe('Sidebar 集成测试', () => {
       render(<Sidebar username="testuser" />);
       expandController();
 
-      // 确认无 Maximum update depth 错误
-      const updateDepthErrors = consoleSpy.mock.calls.filter(
-        (call) => call[0]?.toString().includes('Maximum update depth')
-      );
-      expect(updateDepthErrors).toHaveLength(0);
+      // 确认无任何 React 报错
+      expect(consoleSpy).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
     });
