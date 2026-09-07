@@ -380,7 +380,7 @@ describe('Sidebar 集成测试', () => {
 
   describe('已归档工作流实例折叠', () => {
     it('默认收起，展开后归档实例名称可见', () => {
-      mockUseQuery.mockImplementation((_doc: unknown) => {
+      mockUseQuery.mockImplementation((_doc: unknown, options?: { variables?: Record<string, unknown> }) => {
         const doc = _doc as { definitions: Array<{ name: { value: string } }> };
         const queryName = doc.definitions?.[0]?.name?.value;
 
@@ -399,16 +399,41 @@ describe('Sidebar 集成测试', () => {
           });
         }
         if (queryName === 'GetWorkflowInstances') {
-          // 根据变量区分活跃和归档查询
-          return mockQuery({ workflowInstances: [] });
+          // 根据 variables.archived 区分活跃和归档查询
+          const isArchived = options?.variables?.archived === true;
+          if (isArchived) {
+            return mockQuery({
+              workflowInstances: [
+                { id: 'inst-archived', name: '已归档实例', currentNodeNames: [], lastNodeName: '完成', lastNodeStatus: 'DONE', archived: true, createdAt: '', updatedAt: '' },
+              ],
+            });
+          }
+          return mockQuery({
+            workflowInstances: [
+              { id: 'inst-active', name: '活跃实例', currentNodeNames: ['AI执行'], lastNodeName: null, lastNodeStatus: null, archived: false, createdAt: '', updatedAt: '' },
+            ],
+          });
         }
         return mockQuery({ sessions: [], gateways: { gateways: [] } });
       });
 
       render(<Sidebar username="testuser" />);
 
-      // 工作流分组存在
-      expect(screen.getByText('工作流')).toBeInTheDocument();
+      // 归档实例名称初始不可见
+      expect(screen.queryByText('已归档实例')).not.toBeInTheDocument();
+      // 活跃实例可见
+      expect(screen.getByText('活跃实例')).toBeInTheDocument();
+      // 归档按钮存在且 aria-expanded 为 false
+      const archiveButton = screen.getByText(/已归档/);
+      expect(archiveButton).toHaveAttribute('aria-expanded', 'false');
+
+      // 点击展开
+      fireEvent.click(archiveButton);
+
+      // 归档实例名称可见
+      expect(screen.getByText('已归档实例')).toBeInTheDocument();
+      // aria-expanded 为 true
+      expect(archiveButton).toHaveAttribute('aria-expanded', 'true');
     });
   });
 });
