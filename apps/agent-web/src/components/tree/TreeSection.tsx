@@ -8,6 +8,7 @@ interface TreeSectionProps {
   defaultExpanded?: boolean;
   children: React.ReactNode;
   emptyMessage?: string;
+  hasContent?: boolean;
 }
 
 export default function TreeSection({
@@ -17,9 +18,11 @@ export default function TreeSection({
   defaultExpanded = true,
   children,
   emptyMessage,
+  hasContent,
 }: TreeSectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const hasChildren = React.Children.count(children) > 0;
+  // 如果 hasContent 显式传入，则使用；否则根据 children 数量判断
+  const hasChildren = hasContent !== undefined ? hasContent : React.Children.count(children) > 0;
 
   return (
     <div className="py-1">

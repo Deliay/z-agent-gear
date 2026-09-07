@@ -39,6 +39,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
+  const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
 
   const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
     pollInterval: 15000,
@@ -57,6 +58,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const allWorkspaces = workspacesData?.workspaces ?? [];
 
   const getWorkspaceNameForSession = (session: SessionData): string => {
+    // 1. worktree 会话：从 worktreePath 推导
     if (session.worktreePath) {
       const parts = session.worktreePath.split('/').filter(Boolean);
       const wsName = parts[parts.length - 2];
@@ -64,6 +66,13 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
         (w) => w.name === wsName && w.controllerId === session.controllerId,
       );
       return ws?.name || wsName || '';
+    }
+    // 2. 普通会话：按 cwd 匹配已配置工作区
+    if (session.cwd && session.cwd.length > 0) {
+      const ws = allWorkspaces.find(
+        (w) => w.controllerId === session.controllerId && w.isEnabled && session.cwd!.startsWith(w.path),
+      );
+      return ws?.name || '';
     }
     return '';
   };
@@ -165,9 +174,24 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                     {controller.status === 'online' && (
                       <TreeSection
                         title="统一网关"
+                        actions={
+                          <button
+                            type="button"
+                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                            title="新增网关"
+                            onClick={() => setShowGatewayDialog(controller.id)}
+                          >
+                            <Plus className="size-3" />
+                          </button>
+                        }
                         emptyMessage="无网关暴露"
                       >
-                        <GatewaySection controllerId={controller.id} inline />
+                        <GatewaySection
+                          controllerId={controller.id}
+                          inline
+                          externalShowDialog={showGatewayDialog === controller.id}
+                          onDialogClose={() => setShowGatewayDialog(null)}
+                        />
                       </TreeSection>
                     )}
 
@@ -331,8 +355,7 @@ function WorkflowSidebarGroupInline({
 
   const instances = data?.workflowInstances ?? [];
 
-  if (instances.length === 0) return null;
-
+  // 始终返回 wrapper div，以便 TreeSection 正确判断是否有内容
   return (
     <>
       {instances.map((instance) => (

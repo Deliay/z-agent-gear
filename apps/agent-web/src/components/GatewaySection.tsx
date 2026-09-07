@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
@@ -9,9 +9,11 @@ import { ChevronDown, ChevronRight, ExternalLink, Plus } from 'lucide-react';
 interface GatewaySectionProps {
   controllerId: string;
   inline?: boolean;
+  externalShowDialog?: boolean;
+  onDialogClose?: () => void;
 }
 
-export default function GatewaySection({ controllerId, inline }: GatewaySectionProps) {
+export default function GatewaySection({ controllerId, inline, externalShowDialog, onDialogClose }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
 
@@ -21,6 +23,18 @@ export default function GatewaySection({ controllerId, inline }: GatewaySectionP
   });
 
   const gateways = data?.gateways?.gateways ?? [];
+
+  // 外部控制对话框显示
+  useEffect(() => {
+    if (externalShowDialog) {
+      setShowDialog(true);
+    }
+  }, [externalShowDialog]);
+
+  const handleCloseDialog = () => {
+    setShowDialog(false);
+    onDialogClose?.();
+  };
 
   // inline 模式：由 TreeSection 包裹，直接渲染列表
   if (inline) {
@@ -40,7 +54,7 @@ export default function GatewaySection({ controllerId, inline }: GatewaySectionP
         {showDialog && (
           <GatewayDialog
             controllerId={controllerId}
-            onClose={() => setShowDialog(false)}
+            onClose={handleCloseDialog}
           />
         )}
       </>
@@ -93,7 +107,7 @@ export default function GatewaySection({ controllerId, inline }: GatewaySectionP
       {showDialog && (
         <GatewayDialog
           controllerId={controllerId}
-          onClose={() => setShowDialog(false)}
+          onClose={handleCloseDialog}
         />
       )}
     </div>
