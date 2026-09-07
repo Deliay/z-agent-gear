@@ -60,11 +60,6 @@ function mockQuery(data: Record<string, unknown>) {
   return { data };
 }
 
-// Helper: 展开控制器
-function expandController() {
-  fireEvent.click(screen.getByText('测试控制器'));
-}
-
 describe('Sidebar 集成测试', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,7 +104,7 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('② 网关 Plus 打开 GatewayDialog', () => {
-    it('点击网关 Plus 按钮打开 GatewayDialog', () => {
+    it('无网关时点击 Plus 按钮打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
       mockUseQuery.mockImplementation((_doc: unknown) => {
         const doc = _doc as { definitions: Array<{ name: { value: string } }> };
         const queryName = doc.definitions?.[0]?.name?.value;
@@ -132,7 +127,12 @@ describe('Sidebar 集成测试', () => {
       const plusButton = screen.getByTitle('新增网关');
       fireEvent.click(plusButton);
 
-      expect(screen.getByTestId('gateway-dialog')).toBeInTheDocument();
+      // 检查弹窗存在
+      const dialog = screen.getByTestId('gateway-dialog');
+      expect(dialog).toBeInTheDocument();
+      
+      // 检查弹窗不在带 hidden 类的容器内（createPortal 挂载到 document.body）
+      expect(dialog.closest('.hidden')).toBeNull();
     });
   });
 
