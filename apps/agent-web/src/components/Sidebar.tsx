@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
@@ -40,6 +40,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
+  // 跟踪各控制器是否有工作流实例
+  const [hasWorkflowInstances, setHasWorkflowInstances] = useState<Record<string, boolean>>({});
 
   const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
     pollInterval: 15000,
@@ -67,12 +69,24 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       );
       return ws?.name || wsName || '';
     }
-    // 2. 普通会话：按 cwd 匹配已配置工作区
+    // 2. 普通会话：按 cwd 匹配已配置工作区（最长前缀匹配）
     if (session.cwd && session.cwd.length > 0) {
-      const ws = allWorkspaces.find(
-        (w) => w.controllerId === session.controllerId && w.isEnabled && session.cwd!.startsWith(w.path),
-      );
-      return ws?.name || '';
+      let bestMatch: string = '';
+      let bestMatchLength = 0;
+      for (const w of allWorkspaces) {
+        if (w.controllerId !== session.controllerId || !w.isEnabled) continue;
+        // 确保精确匹配路径边界：cwd 以 w.path 开头，且后面是 / 或结束
+        if (session.cwd!.startsWith(w.path)) {
+          const rest = session.cwd!.slice(w.path.length);
+          if (rest === '' || rest.startsWith('/')) {
+            if (w.path.length > bestMatchLength) {
+              bestMatchLength = w.path.length;
+              bestMatch = w.name;
+            }
+          }
+        }
+      }
+      return bestMatch || '';
     }
     return '';
   };
@@ -208,6 +222,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         </button>
                       }
                       emptyMessage="无工作流实例"
+                      hasContent={hasWorkflowInstances[controller.id] || false}
                     >
                       {controllerWorkspaces.map((ws) => (
                         <WorkflowSidebarGroupInline
@@ -215,6 +230,12 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           workspaceId={ws.id}
                           controllerId={controller.id}
                           workspaceName={ws.name}
+                          onInstancesChange={(count) => {
+                            setHasWorkflowInstances((prev) => ({
+                              ...prev,
+                              [controller.id]: (prev[controller.id] || false) || count > 0,
+                            }));
+                          }}
                         />
                       ))}
                     </TreeSection>
@@ -342,11 +363,13 @@ interface WorkflowSidebarGroupInlineProps {
   workspaceId: string;
   controllerId: string;
   workspaceName: string;
+  onInstancesChange?: (count: number) => void;
 }
 
 function WorkflowSidebarGroupInline({
   workspaceId,
   workspaceName,
+  onInstancesChange,
 }: WorkflowSidebarGroupInlineProps) {
   const { data } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
     variables: { workspaceId },
@@ -354,6 +377,11 @@ function WorkflowSidebarGroupInline({
   });
 
   const instances = data?.workflowInstances ?? [];
+
+  // 上报实例数变化
+  useEffect(() => {
+    onInstancesChange?.(instances.length);
+  }, [instances.length, onInstancesChange]);
 
   // 始终返回 wrapper div，以便 TreeSection 正确判断是否有内容
   return (
