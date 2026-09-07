@@ -8,18 +8,44 @@ import { ChevronDown, ChevronRight, ExternalLink, Plus } from 'lucide-react';
 
 interface GatewaySectionProps {
   controllerId: string;
+  inline?: boolean;
 }
 
-export default function GatewaySection({ controllerId }: GatewaySectionProps) {
+export default function GatewaySection({ controllerId, inline }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
 
   const { data } = useQuery<GetGatewaysQuery>(GET_GATEWAYS, {
     variables: { controllerId },
-    skip: !isExpanded,
+    skip: !isExpanded && !inline,
   });
 
   const gateways = data?.gateways?.gateways ?? [];
+
+  // inline 模式：由 TreeSection 包裹，直接渲染列表
+  if (inline) {
+    return (
+      <>
+        {gateways.length === 0 ? (
+          <li className="px-3 py-1 text-xs text-muted-foreground">无网关暴露</li>
+        ) : (
+          gateways.map((gw) => (
+            <GatewayItem
+              key={gw.id}
+              gateway={gw}
+              controllerId={controllerId}
+            />
+          ))
+        )}
+        {showDialog && (
+          <GatewayDialog
+            controllerId={controllerId}
+            onClose={() => setShowDialog(false)}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
     <div>

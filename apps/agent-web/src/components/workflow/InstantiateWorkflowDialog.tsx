@@ -13,6 +13,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectPopup,
+  SelectItem,
+} from '@/components/ui/select'
 import { DETECT_GIT_REPO, GET_ACP_CAPABILITIES, GET_WORKSPACES } from '@/graphql/queries'
 import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery, GetWorkspacesQuery } from '@/graphql/types'
 import {
@@ -293,22 +300,25 @@ export default function InstantiateWorkflowDialog({
 
               <div className="space-y-1.5">
                 <Label>工作区</Label>
-                <select
-                  aria-label="选择工作区"
+                <Select
                   value={selectedWorkspaceId}
-                  onChange={(e) => setSelectedWorkspaceId(e.target.value)}
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                  onValueChange={(value) => setSelectedWorkspaceId(value || '')}
                 >
-                  {enabledWorkspaces.length === 0 ? (
-                    <option value="">无可用工作区</option>
-                  ) : (
-                    enabledWorkspaces.map((ws) => (
-                      <option key={ws.id} value={ws.id}>
-                        {ws.name}
-                      </option>
-                    ))
-                  )}
-                </select>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="选择工作区" />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {enabledWorkspaces.length === 0 ? (
+                      <SelectItem value="" disabled>无可用工作区</SelectItem>
+                    ) : (
+                      enabledWorkspaces.map((ws) => (
+                        <SelectItem key={ws.id} value={ws.id}>
+                          {ws.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectPopup>
+                </Select>
               </div>
 
               {error && (
