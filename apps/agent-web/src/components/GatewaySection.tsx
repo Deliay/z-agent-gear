@@ -1,26 +1,72 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@apollo/client/react';
 import { GET_GATEWAYS } from '../graphql/queries';
 import type { GetGatewaysQuery } from '../graphql/types';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
-import { buttonVariants } from './ui/button';
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, Plus } from 'lucide-react';
 
 interface GatewaySectionProps {
   controllerId: string;
+  inline?: boolean;
+  externalShowDialog?: boolean;
+  onDialogClose?: () => void;
+  onGatewaysChange?: (controllerId: string, count: number) => void;
 }
 
-export default function GatewaySection({ controllerId }: GatewaySectionProps) {
+export default function GatewaySection({ controllerId, inline, externalShowDialog, onDialogClose, onGatewaysChange }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
 
   const { data } = useQuery<GetGatewaysQuery>(GET_GATEWAYS, {
     variables: { controllerId },
-    skip: !isExpanded,
+    skip: !isExpanded && !inline,
   });
 
   const gateways = data?.gateways?.gateways ?? [];
+
+  // 上报网关数变化
+  useEffect(() => {
+    if (inline && onGatewaysChange) {
+      onGatewaysChange(controllerId, gateways.length);
+    }
+  }, [inline, controllerId, gateways.length, onGatewaysChange]);
+
+  // 外部控制对话框显示
+  useEffect(() => {
+    if (externalShowDialog) {
+      setShowDialog(true);
+    }
+  }, [externalShowDialog]);
+
+  const handleCloseDialog = () => {
+    setShowDialog(false);
+    onDialogClose?.();
+  };
+
+  // inline 模式：由 TreeSection 包裹，直接渲染列表
+  if (inline) {
+    return (
+      <>
+        {gateways.map((gw) => (
+          <GatewayItem
+            key={gw.id}
+            gateway={gw}
+            controllerId={controllerId}
+          />
+        ))}
+        {/* 使用 createPortal 将对话框挂载到 document.body，避免被 hidden 父元素隐藏 */}
+        {showDialog && createPortal(
+          <GatewayDialog
+            controllerId={controllerId}
+            onClose={handleCloseDialog}
+          />,
+          document.body
+        )}
+      </>
+    );
+  }
 
   return (
     <div>
@@ -43,9 +89,9 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
             e.stopPropagation();
             setShowDialog(true);
           }}
-          className={buttonVariants({ size: 'xs' })}
+          className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
         >
-          +
+          <Plus className="size-3" />
         </button>
       </div>
 
@@ -68,7 +114,7 @@ export default function GatewaySection({ controllerId }: GatewaySectionProps) {
       {showDialog && (
         <GatewayDialog
           controllerId={controllerId}
-          onClose={() => setShowDialog(false)}
+          onClose={handleCloseDialog}
         />
       )}
     </div>

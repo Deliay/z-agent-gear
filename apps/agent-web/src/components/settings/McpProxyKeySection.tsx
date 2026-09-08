@@ -27,6 +27,7 @@ import {
   revokeMcpProxyKey,
   type McpProxyKey,
 } from '@/api/mcp-proxy';
+import CommandTemplate from '@/components/common/CommandTemplate';
 
 export default function McpProxyKeySection() {
   const { token } = useAuth();
@@ -106,6 +107,7 @@ export default function McpProxyKeySection() {
                   <p className="text-sm font-medium mb-2">Your new MCP proxy key:</p>
                   <code className="text-sm break-all">{createdKey}</code>
                 </div>
+                <CommandTemplate keyValue={createdKey} />
                 <p className="text-sm text-muted-foreground">
                   Copy this key now. You won't be able to see it again.
                 </p>

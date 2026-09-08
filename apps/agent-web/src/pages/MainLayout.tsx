@@ -20,7 +20,7 @@ export default function MainLayout() {
   // Desktop: keep existing two-column layout (zero changes)
   if (!isMobile) {
     return (
-      <div className="grid h-screen grid-cols-[240px_1fr]">
+      <div className="grid h-screen grid-cols-[280px_1fr]">
         <Sidebar username={user?.username ?? ''} />
         <main className="overflow-auto">
           <Outlet />

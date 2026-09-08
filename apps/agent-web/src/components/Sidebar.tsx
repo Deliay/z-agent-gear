@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { NavLink, useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
@@ -12,20 +12,24 @@ import type {
 } from '../graphql/types';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
-import WorkflowSidebarGroup from './workflow/WorkflowSidebarGroup';
 import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
 import GatewaySection from './GatewaySection';
-import { Button } from './ui/button';
+import TreeSection from './tree/TreeSection';
 import {
+  Settings,
+  Plus,
   ChevronDown,
   ChevronRight,
-  Settings,
-  GitFork,
-  FolderOpen,
-  Plus,
+  Archive,
 } from 'lucide-react';
+import {
+  GET_WORKFLOW_INSTANCES,
+  type GetWorkflowInstancesQuery,
+} from '../graphql/workflow';
+import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
+import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
 
 interface SidebarProps {
   username: string;
@@ -33,11 +37,20 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ username, mobile }: SidebarProps) {
-  const { id: activeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [expandedControllers, setExpandedControllers] = useState<Set<string>>(new Set());
-  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
-  const [showNewDialog, setShowNewDialog] = useState(false);
+  // 改为追踪「已折叠」集合，默认全部展开
+  const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
+  const [showNewDialog, setShowNewDialog] = useState<{ controllerId?: string } | null>(null);
+  const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
+  const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
+
+  // 跟踪各控制器的工作区实例数
+  const workflowInstanceCountsRef = useRef<Map<string, Set<string>>>(new Map());
+  const [workflowInstanceCounts, setWorkflowInstanceCounts] = useState<Map<string, Set<string>>>(new Map());
+
+  // 跟踪各控制器的网关数
+  const gatewayCountsRef = useRef<Map<string, number>>(new Map());
+  const [gatewayCounts, setGatewayCounts] = useState<Map<string, number>>(new Map());
 
   const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
     pollInterval: 15000,
@@ -55,31 +68,35 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const controllers = controllersData?.controllers ?? [];
   const allWorkspaces = workspacesData?.workspaces ?? [];
 
-  const getWorkspacePath = (session: SessionData): string => {
+  const getWorkspaceNameForSession = (session: SessionData): string => {
+    // 1. worktree 会话：从 worktreePath 推导
     if (session.worktreePath) {
       const parts = session.worktreePath.split('/').filter(Boolean);
       const wsName = parts[parts.length - 2];
       const ws = allWorkspaces.find(
         (w) => w.name === wsName && w.controllerId === session.controllerId,
       );
-      return ws?.path || wsName || session.cwd || '';
+      return ws?.name || wsName || '';
     }
-    return session.cwd || '';
-  };
-
-  const getWorkspacePaths = (controllerId: string) => {
-    const fromSessions = new Set(
-      sessions
-        .filter((s) => s.controllerId === controllerId)
-        .map((s) => getWorkspacePath(s))
-        .filter(Boolean),
-    );
-    const fromConfig = new Set(
-      allWorkspaces
-        .filter((w) => w.controllerId === controllerId && w.isEnabled)
-        .map((w) => w.path),
-    );
-    return new Set([...fromSessions, ...fromConfig]);
+    // 2. 普通会话：按 cwd 匹配已配置工作区（最长前缀匹配）
+    if (session.cwd && session.cwd.length > 0) {
+      let bestMatch: string = '';
+      let bestMatchLength = 0;
+      for (const w of allWorkspaces) {
+        if (w.controllerId !== session.controllerId || !w.isEnabled) continue;
+        if (session.cwd!.startsWith(w.path)) {
+          const rest = session.cwd!.slice(w.path.length);
+          if (rest === '' || rest.startsWith('/')) {
+            if (w.path.length > bestMatchLength) {
+              bestMatchLength = w.path.length;
+              bestMatch = w.name;
+            }
+          }
+        }
+      }
+      return bestMatch || '';
+    }
+    return '';
   };
 
   const handleCreateSession = async (
@@ -108,35 +125,15 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       });
       if (data?.createSession?.session?.id) {
         navigate(`/sessions/${data.createSession.session.id}`);
-        setShowNewDialog(false);
+        setShowNewDialog(null);
       }
     } catch (error) {
       console.error('Failed to create session:', error);
     }
   };
 
-  // Group sessions by controllerId + workspace path
-  const sessionsByController = new Map<string, typeof sessions>();
-  const sessionsByWorkspace = new Map<string, typeof sessions>();
-
-  for (const session of sessions) {
-    // Group by controller
-    const controllerSessions = sessionsByController.get(session.controllerId) || [];
-    controllerSessions.push(session);
-    sessionsByController.set(session.controllerId, controllerSessions);
-
-    // Group by workspace (resolve worktree sessions to original workspace)
-    const wsPath = getWorkspacePath(session);
-    if (wsPath) {
-      const workspaceKey = `${session.controllerId}:${wsPath}`;
-      const workspaceSessions = sessionsByWorkspace.get(workspaceKey) || [];
-      workspaceSessions.push(session);
-      sessionsByWorkspace.set(workspaceKey, workspaceSessions);
-    }
-  }
-
   const toggleController = (controllerId: string) => {
-    setExpandedControllers((prev) => {
+    setCollapsedControllers((prev) => {
       const next = new Set(prev);
       if (next.has(controllerId)) {
         next.delete(controllerId);
@@ -147,40 +144,54 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     });
   };
 
-  const toggleWorkspace = (workspaceKey: string) => {
-    setExpandedWorkspaces((prev) => {
-      const next = new Set(prev);
-      if (next.has(workspaceKey)) {
-        next.delete(workspaceKey);
-      } else {
-        next.add(workspaceKey);
-      }
-      return next;
-    });
+  // 稳定的回调函数，用于 WorkflowSidebarGroupInline 上报实例数
+  const handleInstancesChange = useCallback((controllerId: string, workspaceId: string, count: number) => {
+    const prev = workflowInstanceCountsRef.current;
+    const controllerSet = prev.get(controllerId) || new Set<string>();
+
+    if (count > 0) {
+      controllerSet.add(workspaceId);
+    } else {
+      controllerSet.delete(workspaceId);
+    }
+
+    prev.set(controllerId, controllerSet);
+    setWorkflowInstanceCounts(new Map(prev));
+  }, []);
+
+  // 稳定的回调函数，用于 GatewaySection 上报网关数
+  const handleGatewaysChange = useCallback((controllerId: string, count: number) => {
+    const prev = gatewayCountsRef.current;
+    if (prev.get(controllerId) !== count) {
+      prev.set(controllerId, count);
+      setGatewayCounts(new Map(prev));
+    }
+  }, []);
+
+  // 判断控制器是否有工作流实例
+  const hasWorkflowInstances = (controllerId: string): boolean => {
+    const controllerSet = workflowInstanceCounts.get(controllerId);
+    return controllerSet !== undefined && controllerSet.size > 0;
   };
 
-  const getWorkspaceName = (path: string) => {
-    return path.split('/').filter(Boolean).pop() || path;
+  // 判断控制器是否有网关
+  const hasGateways = (controllerId: string): boolean => {
+    const count = gatewayCounts.get(controllerId);
+    return count !== undefined && count > 0;
   };
 
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">会话</h2>
-          <Button size="xs" onClick={() => setShowNewDialog(true)}>
-            <Plus className="size-3" />
-            新建
-          </Button>
-        </div>
-
         <ul className="space-y-1">
           {controllers.map((controller) => {
-            const isExpanded = expandedControllers.has(controller.id);
+            // 默认展开，除非在 collapsedControllers 中
+            const isExpanded = !collapsedControllers.has(controller.id);
             const isOffline = controller.status !== 'online';
-
-            // Get unique workspace paths for this controller
-            const workspacePaths = getWorkspacePaths(controller.id);
+            const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
+            const controllerWorkspaces = allWorkspaces.filter(
+              (w) => w.controllerId === controller.id && w.isEnabled,
+            );
 
             return (
               <li key={controller.id}>
@@ -215,114 +226,134 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                   >
                     <Settings className="size-3.5" />
                   </span>
-                  <span className="text-xs text-muted-foreground">
-                    {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-                  </span>
                 </button>
 
                 {isExpanded && (
-                  <ul className="ml-4 space-y-1">
+                  <div className="mt-1 space-y-1">
                     {controller.status === 'online' && (
-                      <li>
-                        <GatewaySection controllerId={controller.id} />
-                      </li>
+                      <TreeSection
+                        title="统一网关"
+                        actions={
+                          <button
+                            type="button"
+                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                            title="新增网关"
+                            onClick={() => setShowGatewayDialog(controller.id)}
+                          >
+                            <Plus className="size-3" />
+                          </button>
+                        }
+                        emptyMessage="无网关暴露"
+                        hasContent={hasGateways(controller.id)}
+                      >
+                        <GatewaySection
+                          controllerId={controller.id}
+                          inline
+                          externalShowDialog={showGatewayDialog === controller.id}
+                          onDialogClose={() => setShowGatewayDialog(null)}
+                          onGatewaysChange={handleGatewaysChange}
+                        />
+                      </TreeSection>
                     )}
-                    {workspacePaths.size === 0 ? (
-                      <li className="px-3 py-1 text-xs text-muted-foreground">无工作区</li>
-                    ) : (
-                      Array.from(workspacePaths).map((workspacePath) => {
-                        const workspaceKey = `${controller.id}:${workspacePath}`;
-                        const isWsExpanded = expandedWorkspaces.has(workspaceKey);
-                        const wsSessions = sessionsByWorkspace.get(workspaceKey) || [];
-                        // 工作流实例直接挂 workspaceId，仅配置过的工作区展示「工作流」分组
-                        const workspace = allWorkspaces.find(
-                          (w) => w.controllerId === controller.id && w.path === workspacePath && w.isEnabled,
-                        );
 
+                    <TreeSection
+                      title="工作流"
+                      actions={
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          title="实例化工作流"
+                          onClick={() => setShowInstantiateDialog({ controllerId: controller.id })}
+                        >
+                          <Plus className="size-3" />
+                        </button>
+                      }
+                      emptyMessage="无工作流实例"
+                      hasContent={hasWorkflowInstances(controller.id)}
+                    >
+                      {controllerWorkspaces.map((ws) => (
+                        <WorkflowSidebarGroupInline
+                          key={ws.id}
+                          workspaceId={ws.id}
+                          controllerId={controller.id}
+                          workspaceName={ws.name}
+                          onInstancesChange={handleInstancesChange}
+                        />
+                      ))}
+                    </TreeSection>
+
+                    <TreeSection
+                      title="会话"
+                      count={controllerSessions.length}
+                      emptyMessage="无会话"
+                      actions={
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          title="新建会话"
+                          onClick={() => setShowNewDialog({ controllerId: controller.id })}
+                        >
+                          <Plus className="size-3" />
+                        </button>
+                      }
+                    >
+                      {controllerSessions.map((session) => {
+                        const wsName = getWorkspaceNameForSession(session);
                         return (
-                          <li key={workspaceKey}>
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
-                              onClick={() => toggleWorkspace(workspaceKey)}
+                          <li key={session.id}>
+                            <NavLink
+                              to={`/sessions/${session.id}`}
+                              className={({ isActive }) =>
+                                `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                                  isActive
+                                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                                    : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                                }`
+                              }
                             >
-                              <span className="text-xs text-muted-foreground">
-                                {isWsExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-                              </span>
-                              <span className="flex-1 truncate text-left text-sidebar-foreground">
-                                <FolderOpen className="size-3.5 inline" /> {getWorkspaceName(workspacePath)}
-                              </span>
-                            </button>
-
-                            {isWsExpanded && (
-                              <ul className="ml-4 space-y-1">
-                                {workspace && (
-                                  <WorkflowSidebarGroup
-                                    workspaceId={workspace.id}
-                                    controllerId={controller.id}
-                                  />
-                                )}
-                                {workspace?.isGitRepo && (
-                                  <WorktreeSidebarGroup
-                                    workspaceId={workspace.id}
-                                    controllerId={controller.id}
-                                    workspaceName={getWorkspaceName(workspacePath)}
-                                    controllers={controllers}
-                                    fallbackSessions={wsSessions.filter((session) => session.worktreePath)}
-                                    onCreate={handleCreateSession}
-                                  />
-                                )}
-                                {wsSessions
-                                  .filter((session) => !session.worktreePath)
-                                  .map((session) => (
-                                    <li key={session.id}>
-                                      <NavLink
-                                        to={`/sessions/${session.id}`}
-                                        className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                                          activeId === session.id
-                                            ? 'bg-sidebar-accent text-sidebar-foreground'
-                                            : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
-                                        }`}
-                                      >
-                                        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-                                        <div className="min-w-0 flex-1">
-                                          <div className="truncate">
-                                            {session.title || 'New Session'}
-                                          </div>
-                                        </div>
-                                      </NavLink>
-                                    </li>
-                                  ))}
-                                {!workspace?.isGitRepo &&
-                                  wsSessions
-                                    .filter((session) => session.worktreePath)
-                                    .map((session) => (
-                                      <li key={session.id}>
-                                        <NavLink
-                                          to={`/sessions/${session.id}`}
-                                          className={`flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                                            activeId === session.id
-                                              ? 'bg-sidebar-accent text-sidebar-foreground'
-                                              : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
-                                          }`}
-                                        >
-                                          <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-                                          <GitFork className="size-3 shrink-0 text-info" />
-                                          <div className="min-w-0 flex-1">
-                                            <div className="truncate">
-                                              {session.title || 'New Session'}
-                                            </div>
-                                          </div>
-                                        </NavLink>
-                                      </li>
-                                    ))}
-                              </ul>
-                            )}
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate">{session.title || 'New Session'}</div>
+                                <div className="truncate text-xs text-muted-foreground">
+                                  {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
+                                </div>
+                              </div>
+                            </NavLink>
                           </li>
                         );
-                      })
-                    )}
-                  </ul>
+                      })}
+                    </TreeSection>
+
+                    <TreeSection
+                      title="工作区"
+                      count={controllerWorkspaces.length}
+                      emptyMessage="无工作区"
+                    >
+                      {controllerWorkspaces.map((ws) => (
+                        <WorktreeSidebarGroup
+                          key={ws.id}
+                          workspaceId={ws.id}
+                          controllerId={controller.id}
+                          workspaceName={ws.name}
+                          controllers={controllers}
+                          fallbackSessions={controllerSessions.filter(
+                            (s) => {
+                              // worktree 会话：匹配工作区名
+                              if (s.worktreePath && getWorkspaceNameForSession(s) === ws.name) {
+                                return true;
+                              }
+                              // 落在工作区根目录的会话：cwd 等于工作区路径
+                              if (s.cwd && s.cwd === ws.path) {
+                                return true;
+                              }
+                              return false;
+                            },
+                          )}
+                          onCreate={handleCreateSession}
+                        />
+                      ))}
+                    </TreeSection>
+                  </div>
                 )}
               </li>
             );
@@ -333,8 +364,18 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       {showNewDialog && (
         <NewSessionDialog
           controllers={controllers}
-          onClose={() => setShowNewDialog(false)}
+          onClose={() => setShowNewDialog(null)}
           onCreate={handleCreateSession}
+          existingControllerId={showNewDialog.controllerId}
+        />
+      )}
+
+      {showInstantiateDialog && (
+        <InstantiateWorkflowDialog
+          open={true}
+          onOpenChange={() => setShowInstantiateDialog(null)}
+          controllerId={showInstantiateDialog.controllerId}
+          workspaceId={showInstantiateDialog.workspaceId}
         />
       )}
 
@@ -369,5 +410,105 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
         </div>
       </div>
     </nav>
+  );
+}
+
+interface WorkflowSidebarGroupInlineProps {
+  workspaceId: string;
+  controllerId: string;
+  workspaceName: string;
+  onInstancesChange: (controllerId: string, workspaceId: string, count: number) => void;
+}
+
+function WorkflowSidebarGroupInline({
+  workspaceId,
+  controllerId,
+  workspaceName,
+  onInstancesChange,
+}: WorkflowSidebarGroupInlineProps) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const { data } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
+    variables: { workspaceId },
+    pollInterval: 15000,
+  });
+  const { data: archivedData } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
+    variables: { workspaceId, archived: true },
+    pollInterval: 15000,
+  });
+
+  const instances = data?.workflowInstances ?? [];
+  const archivedInstances = archivedData?.workflowInstances ?? [];
+
+  // 上报实例数变化（包括归档实例）
+  useEffect(() => {
+    onInstancesChange(controllerId, workspaceId, instances.length + archivedInstances.length);
+    return () => {
+      onInstancesChange(controllerId, workspaceId, 0);
+    };
+  }, [controllerId, workspaceId, instances.length, archivedInstances.length, onInstancesChange]);
+
+  return (
+    <>
+      {instances.map((instance) => (
+        <li key={instance.id}>
+          <NavLink
+            to={`/workflows/${instance.id}`}
+            className={({ isActive }) =>
+              `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                isActive
+                  ? 'bg-sidebar-accent text-sidebar-foreground'
+                  : 'text-sidebar-foreground hover:bg-sidebar-accent'
+              }`
+            }
+          >
+            <div className="min-w-0 flex-1">
+              <div className="truncate">{instance.name}</div>
+              <div className="truncate text-xs text-muted-foreground">
+                {workspaceName} · {instanceStatusText(instance)}
+              </div>
+            </div>
+          </NavLink>
+        </li>
+      ))}
+      {archivedInstances.length > 0 && (
+        <li>
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setArchivedOpen((prev) => !prev)}
+            aria-expanded={archivedOpen}
+          >
+            {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            <Archive className="size-3" />
+            已归档（{archivedInstances.length}）
+          </button>
+          {archivedOpen && (
+            <ul className="ml-4 space-y-1">
+              {archivedInstances.map((instance) => (
+                <li key={instance.id}>
+                  <NavLink
+                    to={`/workflows/${instance.id}`}
+                    className={({ isActive }) =>
+                      `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-sidebar-accent text-sidebar-foreground'
+                          : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                      }`
+                    }
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{instance.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {workspaceName} · {instanceStatusText(instance)}
+                      </div>
+                    </div>
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      )}
+    </>
   );
 }
