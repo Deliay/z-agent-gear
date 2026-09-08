@@ -169,13 +169,17 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   }, []);
 
   // 判断控制器是否有工作流实例
-  const hasWorkflowInstances = (controllerId: string): boolean => {
+  const hasWorkflowInstances = (controllerId: string): boolean | undefined => {
     const controllerSet = workflowInstanceCounts.get(controllerId);
+    // Map 中没有该 key 表示尚未收到上报，返回 undefined
+    if (!workflowInstanceCounts.has(controllerId)) return undefined;
     return controllerSet !== undefined && controllerSet.size > 0;
   };
 
   // 判断控制器是否有网关
-  const hasGateways = (controllerId: string): boolean => {
+  const hasGateways = (controllerId: string): boolean | undefined => {
+    // Map 中没有该 key 表示尚未收到上报，返回 undefined
+    if (!gatewayCounts.has(controllerId)) return undefined;
     const count = gatewayCounts.get(controllerId);
     return count !== undefined && count > 0;
   };
@@ -395,6 +399,15 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           <div className="flex items-center gap-1">
             <TodoListPanel />
             <ThemeToggle />
+            <button
+              type="button"
+              className="rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring text-muted-foreground hover:text-sidebar-foreground"
+              title="新建会话"
+              onClick={() => setShowNewDialog({})}
+              aria-label="新建会话"
+            >
+              <Plus className="size-4" />
+            </button>
             <NavLink
               to="/settings"
               aria-label="Settings"

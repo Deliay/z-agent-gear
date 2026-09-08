@@ -116,7 +116,10 @@ export class ControllerKeyService {
     );
 
     // Evict old key from cache and cache new key
-    await evictKeyById(keyId);
+    const evicted = await evictKeyById(keyId);
+    if (!evicted) {
+      throw new Error('Failed to revoke old key from cache. The key may still be usable until cache expires.');
+    }
     await cacheKey(rawKey, {
       keyId,
       keyHash,

@@ -14,6 +14,7 @@ vi.mock('../models/controller-key.js', () => ({
 vi.mock('../models/controller.js', () => ({
   Controller: {
     findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 
@@ -225,11 +226,16 @@ describe('ControllerKeyService', () => {
       };
 
       vi.mocked(Controller.findOne).mockResolvedValue(mockController as never);
-      vi.mocked(ControllerKey.findOne).mockResolvedValue(mockExistingKey as never);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(ControllerKey.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockExistingKey),
+      } as never);
       vi.mocked(crypto.randomBytes).mockReturnValue(Buffer.from('a1b2c3d4e5f6') as never);
       vi.mocked(bcrypt.hash).mockResolvedValue('hashed-key' as never);
-      vi.mocked(ControllerKey.findOneAndUpdate).mockResolvedValue(mockUpdatedKey as never);
-      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(ControllerKey.findOneAndUpdate).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockUpdatedKey),
+      } as never);
+      vi.mocked(evictKeyById).mockResolvedValue(true);
       vi.mocked(commandService.sendShutdown).mockResolvedValue();
 
       const result = await controllerKeyService.regenerate('ctrl1', 'user1');
@@ -256,7 +262,9 @@ describe('ControllerKeyService', () => {
       };
 
       vi.mocked(Controller.findOne).mockResolvedValue(mockController as never);
-      vi.mocked(ControllerKey.findOne).mockResolvedValue(null as never);
+      vi.mocked(ControllerKey.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
 
       const result = await controllerKeyService.regenerate('ctrl1', 'user1');
 

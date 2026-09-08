@@ -64,12 +64,14 @@ export class LocalMcpServer {
       return;
     }
 
-    let bodyStr = '';
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
     let tooLarge = false;
-    req.on('data', (chunk) => {
+    req.on('data', (chunk: Buffer) => {
       if (tooLarge) return;
-      bodyStr += chunk;
-      if (Buffer.byteLength(bodyStr) > MAX_BODY_BYTES) {
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
         tooLarge = true;
         // 立即断流并响应 502，避免继续累加超限请求体 / 挂起等待 'end'
         res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -79,6 +81,7 @@ export class LocalMcpServer {
     });
     req.on('end', async () => {
       if (tooLarge) return;
+      const bodyStr = Buffer.concat(chunks).toString('utf8');
       let body: unknown;
       try {
         body = JSON.parse(bodyStr || '{}');

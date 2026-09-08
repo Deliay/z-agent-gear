@@ -6,6 +6,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 vi.mock('../models/controller.js', () => ({
   Controller: {
+    findOne: vi.fn(),
     deleteOne: vi.fn(),
   },
 }));
@@ -80,7 +81,7 @@ describe('CommandService', () => {
     expect(mockRedis.subscribe).toHaveBeenCalledWith('controller:command', expect.any(Function));
   });
 
-  it('should handle shutdown command', async () => {
+  it('should handle shutdown command for online controller', async () => {
     const mockRedis = createMockRedis();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
 
@@ -89,6 +90,7 @@ describe('CommandService', () => {
     mockIO.sockets.sockets.set('socket-123', mockSocket as never);
 
     vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
+    vi.mocked(Controller.findOne).mockResolvedValue({ keyId: 'key123', status: 'online' } as never);
     vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
     vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();
@@ -103,8 +105,34 @@ describe('CommandService', () => {
       expect(mockIO.to).toHaveBeenCalledWith('socket-123');
       expect(mockIO.emit).toHaveBeenCalledWith('shutdown', { reason: 'key_revoked' });
       expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
+      expect(Controller.findOne).toHaveBeenCalledWith({ keyId: 'key123' });
       expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
       expect(ControllerKey.deleteOne).toHaveBeenCalledWith({ _id: 'key123' });
+      expect(sessionService.cleanupKey).toHaveBeenCalledWith('key123');
+    });
+  });
+
+  it('should handle shutdown command for unbound controller', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const mockSocket = createMockSocket();
+    const mockIO = createMockIO();
+    mockIO.sockets.sockets.set('socket-123', mockSocket as never);
+
+    vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
+    vi.mocked(Controller.findOne).mockResolvedValue({ keyId: 'key123', status: 'unbound' } as never);
+    vi.mocked(sessionService.cleanupKey).mockResolvedValue();
+
+    const commandService = new CommandService();
+    commandService.start(mockIO as never);
+
+    mockRedis._emitMessage('controller:command', JSON.stringify({ type: 'shutdown', keyId: 'key123' }));
+
+    await vi.waitFor(() => {
+      expect(Controller.findOne).toHaveBeenCalledWith({ keyId: 'key123' });
+      expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(ControllerKey.deleteOne).not.toHaveBeenCalled();
       expect(sessionService.cleanupKey).toHaveBeenCalledWith('key123');
     });
   });
@@ -160,6 +188,7 @@ describe('CommandService', () => {
 
     const mockIO = createMockIO();
     vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
+    vi.mocked(Controller.findOne).mockResolvedValue({ keyId: 'key123', status: 'online' } as never);
     vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
     vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();
@@ -172,7 +201,29 @@ describe('CommandService', () => {
     await vi.waitFor(() => {
       expect(sessionService.getSocketId).toHaveBeenCalledWith('key123');
       expect(mockIO.to).not.toHaveBeenCalled();
+      expect(Controller.findOne).toHaveBeenCalledWith({ keyId: 'key123' });
       expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
+    });
+  });
+
+  it('should handle shutdown when controller not found', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const mockIO = createMockIO();
+    vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
+    vi.mocked(Controller.findOne).mockResolvedValue(null as never);
+
+    const commandService = new CommandService();
+    commandService.start(mockIO as never);
+
+    mockRedis._emitMessage('controller:command', JSON.stringify({ type: 'shutdown', keyId: 'key123' }));
+
+    await vi.waitFor(() => {
+      expect(Controller.findOne).toHaveBeenCalledWith({ keyId: 'key123' });
+      expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(ControllerKey.deleteOne).not.toHaveBeenCalled();
+      expect(sessionService.cleanupKey).not.toHaveBeenCalled();
     });
   });
 });

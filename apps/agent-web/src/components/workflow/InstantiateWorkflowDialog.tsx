@@ -129,6 +129,13 @@ export default function InstantiateWorkflowDialog({
     setSubmitting(false)
   }, [open])
 
+  // enabledWorkspaces 查询延迟返回时，补充设置默认工作区
+  useEffect(() => {
+    if (open && !selectedWorkspaceId && enabledWorkspaces.length > 0) {
+      setSelectedWorkspaceId(enabledWorkspaces[0].id)
+    }
+  }, [open, selectedWorkspaceId, enabledWorkspaces])
+
   // isGitRepo 查询延迟返回时，补充设置默认值
   useEffect(() => {
     if (isGitRepo && !userTouchedWorktreeRef.current && open) {
@@ -154,6 +161,7 @@ export default function InstantiateWorkflowDialog({
   const goToConfig = () => {
     const nextErrors: string[] = []
     if (!name.trim()) nextErrors.push('实例名称不能为空')
+    if (!selectedWorkspaceId) nextErrors.push('请选择一个工作区')
     if (source === 'CONFIGURED' && !sourceId) nextErrors.push('请选择一个已配置工作流')
     if (source === 'TEMPLATE' && !sourceId) nextErrors.push('请选择一个模板')
     if (nextErrors.length > 0) {
