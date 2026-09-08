@@ -37,12 +37,12 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
   };
 }
 
-function renderGroup(fallbackSessions: SessionData[] = []) {
+function renderGroup(fallbackSessions: SessionData[] = [], workspaceName = 'my-repo') {
   return render(
     <WorktreeSidebarGroup
       workspaceId="ws-1"
       controllerId="ctrl-1"
-      workspaceName="my-repo"
+      workspaceName={workspaceName}
       controllers={[]}
       onCreate={vi.fn()}
       fallbackSessions={fallbackSessions}
@@ -55,24 +55,13 @@ describe('WorktreeSidebarGroup', () => {
     vi.clearAllMocks();
   });
 
-  it('workspaceWorktrees 查询失败时回退为平铺展示 worktree 会话并告警', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('workspaceWorktrees 查询失败时回退为平铺展示 worktree 会话', () => {
     mockUseQuery.mockReturnValue({ data: undefined, error: new Error('network error') });
 
     renderGroup([makeSession()]);
 
     expect(screen.getByText('会话A')).toBeDefined();
     expect(screen.getByRole('link').getAttribute('href')).toBe('/sessions/sess-1');
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
-  });
-
-  it('查询成功但无 worktree 归组数据时仍平铺展示存量 worktree 会话', () => {
-    mockUseQuery.mockReturnValue({ data: { workspaceWorktrees: [] } });
-
-    renderGroup([makeSession()]);
-
-    expect(screen.getByText('会话A')).toBeDefined();
   });
 
   it('查询成功且有 worktree 时按分组展示', () => {
@@ -96,11 +85,26 @@ describe('WorktreeSidebarGroup', () => {
     expect(screen.getByText('feat-a')).toBeDefined();
   });
 
-  it('无 worktree 且无 worktree 会话时不渲染内容', () => {
+  it('无 worktree 且无会话时渲染默认工作区条目且无删除入口', () => {
     mockUseQuery.mockReturnValue({ data: { workspaceWorktrees: [] } });
 
-    const { container } = renderGroup([]);
+    renderGroup([], 'project');
 
-    expect(container.innerHTML).toBe('');
+    // 渲染默认工作区条目
+    expect(screen.getByText('project（默认）')).toBeDefined();
+    // 无删除按钮
+    expect(screen.queryByRole('button', { name: '删除 Worktree' })).not.toBeInTheDocument();
+  });
+
+  it('无 worktree 但有根目录会话时，会话聚合在默认工作区条目下', () => {
+    mockUseQuery.mockReturnValue({ data: { workspaceWorktrees: [] } });
+
+    const rootSession = makeSession({ id: 'sess-root', title: '根目录会话', worktreePath: null, cwd: '/home/user/project' });
+    renderGroup([rootSession], 'project');
+
+    // 渲染默认工作区条目
+    expect(screen.getByText('project（默认）')).toBeDefined();
+    // 会话聚合在默认工作区下
+    expect(screen.getByText('根目录会话')).toBeDefined();
   });
 });
