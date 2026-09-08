@@ -4,10 +4,12 @@ const PROBE_TIMEOUT_MS = 2000;
 
 let cachedResult: string | null = null;
 
-function probeCandidate(origin: string, controller: AbortController): Promise<string | null> {
-  return fetch(`${origin}/health`, { signal: controller.signal })
-    .then((res) => (res.ok ? origin : null))
-    .catch(() => null);
+function probeCandidate(origin: string, signal: AbortSignal): Promise<string> {
+  return fetch(`${origin}/health`, { signal })
+    .then((res) => {
+      if (!res.ok) throw new Error(`${res.status}`);
+      return origin;
+    });
 }
 
 export async function resolveApiBase(): Promise<string> {
@@ -22,29 +24,20 @@ export async function resolveApiBase(): Promise<string> {
   const stored = sessionStorage.getItem(CACHE_KEY);
   if (stored) {
     cachedResult = stored;
-    return cachedResult;
+    return stored;
   }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    const results = await Promise.allSettled(
-      API_CANDIDATES.map((origin) => probeCandidate(origin, controller)),
+    const winner = await Promise.any(
+      API_CANDIDATES.map((origin) => probeCandidate(origin, controller.signal)),
     );
-
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) {
-        cachedResult = r.value;
-        controller.abort();
-        clearTimeout(timeoutId);
-        sessionStorage.setItem(CACHE_KEY, cachedResult);
-        return cachedResult;
-      }
-    }
-
-    cachedResult = API_CANDIDATES[0];
+    cachedResult = winner;
+    controller.abort();
     clearTimeout(timeoutId);
+    sessionStorage.setItem(CACHE_KEY, cachedResult);
     return cachedResult;
   } catch {
     clearTimeout(timeoutId);
