@@ -112,8 +112,55 @@ export default function WorktreeSidebarGroup({
     )
   }
 
-  if (worktrees.length === 0) {
-    return null
+  if (worktrees.length === 0 && fallbackSessions.length === 0) {
+    // 显示默认工作区条目（无 worktree、无会话）
+    return (
+      <li>
+        <div className="flex items-center gap-2 rounded px-3 py-1.5 text-sm">
+          <GitFork className="size-3 shrink-0 text-muted-foreground" />
+          <span className="truncate text-left text-muted-foreground">
+            {workspaceName}（默认）
+          </span>
+        </div>
+      </li>
+    )
+  }
+
+  if (worktrees.length === 0 && fallbackSessions.length > 0) {
+    // 显示默认工作区条目和会话
+    return (
+      <>
+        <li>
+          <div className="flex items-center gap-2 rounded px-3 py-1.5 text-sm">
+            <GitFork className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate text-left text-muted-foreground">
+              {workspaceName}（默认）
+            </span>
+          </div>
+        </li>
+        {fallbackSessions.map((session) => (
+          <li key={session.id} className="ml-4">
+            <NavLink
+              to={`/sessions/${session.id}`}
+              className={({ isActive }) =>
+                `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                  isActive
+                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                }`
+              }
+            >
+              <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate">
+                  {session.title || 'New Session'}
+                </div>
+              </div>
+            </NavLink>
+          </li>
+        ))}
+      </>
+    )
   }
 
   return (

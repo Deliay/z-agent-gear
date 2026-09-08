@@ -337,7 +337,17 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           workspaceName={ws.name}
                           controllers={controllers}
                           fallbackSessions={controllerSessions.filter(
-                            (s) => s.worktreePath && getWorkspaceNameForSession(s) === ws.name,
+                            (s) => {
+                              // worktree 会话：匹配工作区名
+                              if (s.worktreePath && getWorkspaceNameForSession(s) === ws.name) {
+                                return true;
+                              }
+                              // 落在工作区根目录的会话：cwd 等于工作区路径
+                              if (s.cwd && s.cwd === ws.path) {
+                                return true;
+                              }
+                              return false;
+                            },
                           )}
                           onCreate={handleCreateSession}
                         />
