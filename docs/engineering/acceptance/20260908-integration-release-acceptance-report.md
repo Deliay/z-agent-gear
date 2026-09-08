@@ -5,7 +5,24 @@ type: Permanent
 
 # integration→release 验收报告（2026-09-08）
 
-> **状态**: 🟡 第四轮返工完成（2026-09-08）—— 问题 33 已修复（tsc --noEmit exit 0），四包单测全绿（596/216/285/385），修复已提交推送 integration。待 AI Review 第四轮复核。
+> **状态**: ✅ 验收通过（2026-09-08，AI Review 第四轮复核）—— 问题 33 修复核验属实，四包单测全绿（596/216/285/385）、四包类型检查全通过（tsc exit 0），integration HEAD = `9461c52` 已推送。阻断项全部清零，可合入 release；延期项（4/6/9/10/15）与建议项（17~32、34、35）按决策记录跟踪。
+
+## 第四轮复核（AI Review，2026-09-08）
+
+**结论：通过，不再打回。**
+
+**逐项核验**：
+
+- **问题 33（第三轮唯一阻断项）已修复** ✅：`controller-key.test.ts:110,178` 与 `controller.test.ts:108` 三处 `mockResolvedValue()` 已改为 `mockResolvedValue(true)`（commit `9461c52`），全仓 grep 确认无 `mocked(evictKeyById).mockResolvedValue()` 无参调用残留。
+- **硬阻断前置条件满足** ✅：integration HEAD = `9461c52` = `origin/integration`，工作区干净。
+- **类型检查本轮实测全通过** ✅：agent-api / controller-api / agent-controller `tsc --noEmit` exit 0，agent-web `tsc -b` exit 0。
+- **四包单测本轮实测全绿** ✅：agent-api **596 passed / 42 文件**、controller-api **216 passed / 19 文件**、agent-controller **285 passed / 22 文件**、agent-web **385 passed / 47 文件**。
+- **修复提交无副作用** ✅：`9461c52` 仅改动 2 个测试文件的 3 行 mock 与验收报告，未触碰实现代码，无新问题引入。
+
+**遗留跟踪（不阻断合入）**：
+
+- 延期项 4/6/9/10/15 已记录于「延期/降级决策记录」表，其中 10（操作日志裁剪）与 15（轮询压力）的**接受人仍为空**，建议合入后由产品/负责人显式签字闭环。
+- 建议项 34（底部新建按钮组件测试）、35（upsert 显式 `$set`/`$setOnInsert` 写法 + delete/create 路径 evict 失败处理）及 17~32 维持建议级别，后续迭代处理。
 
 ## 第三轮复核（AI Review，2026-09-08）
 
@@ -249,12 +266,9 @@ agent-api 全量：**2 failed | 594 passed**。
 | 14 | 空 workspaceId 可提交 | 缺校验 + effect 依赖不全 | ✅ 已修复 | fix: goToConfig validation + enabledWorkspaces backfill effect |
 | 15 | 轮询请求量放大 | 默认全展开 + 始终挂载 | 🟡 待确认 | 需确认后端压力可接受 |
 | 16 | 空态加载期闪烁 | 缺 loading 三态 | ✅ 已修复 | fix: hasContent undefined 表示未知 |
-| 33 | tsc --noEmit 失败（evictKeyById 签名变更） | mockResolvedValue() 无参类型不匹配 | ✅ 已修复 | fix: mockResolvedValue(true) × 3 |
+| 33 | tsc --noEmit 失败（evictKeyById 签名变更） | mockResolvedValue() 无参类型不匹配 | ✅ 已修复（第四轮核验） | 9461c52 fix: mockResolvedValue(true) × 3 |
 | 34 | 底部新建会话按钮组件测试缺位 | 测试未落地 | 💡 建议 | 建议后续补充 |
-| 35 | register upsert 写法脆弱 | $setOnInsert 混写依赖 Mongoose 规范化 | 💡 建议 | 建议改为显式 $set/$setOnInsert 兄弟写法 |
-| 33 | agent-api tsc --noEmit 3 个 TS2554 | evictKeyById 签名变更未同步 mock 类型 | ❌ 第三轮打回 | 待修复：3 处 mockResolvedValue(true) |
-| 34 | 底部新建按钮无组件测试 | 修复方案承诺未落地 | 💡 建议 | - |
-| 35 | upsert 混合写法脆弱 / delete、create 忽略 evict 失败 | 依赖 Mongoose 宽容行为 | 💡 建议 | - |
+| 35 | register upsert 写法脆弱 / delete、create 忽略 evict 失败 | $setOnInsert 混写依赖 Mongoose 规范化 | 💡 建议 | 建议改为显式 $set/$setOnInsert 兄弟写法 |
 | 17~32 | 建议项（见上表） | - | 💡 建议 | - |
 
 ## 最终验证
