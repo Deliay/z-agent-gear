@@ -229,7 +229,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                 </button>
 
                 {isExpanded && (
-                  <div className="ml-2 mt-1 space-y-1 border-l border-sidebar-border pl-2">
+                  <div className="mt-1 space-y-1">
                     {controller.status === 'online' && (
                       <TreeSection
                         title="统一网关"
