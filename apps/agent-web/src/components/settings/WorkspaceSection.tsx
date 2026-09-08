@@ -3,6 +3,7 @@ import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES, GET_ACP_CAPABILITIES } from '../../graphql/queries';
 import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR } from '../../graphql/mutations';
 import type { GetControllerWorkspacesQuery, GetAcpCapabilitiesQuery, ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
+import { getApiBase } from '../../lib/api-base';
 import { Button } from '@/components/ui/button';
 import HistorySessionDialog from './HistorySessionDialog';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
@@ -56,7 +57,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
 
   const refetchWorktreeDir = async () => {
     try {
-      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+      const apiBase = getApiBase();
       const token = localStorage.getItem('auth_token');
       const result = await fetch(`${apiBase}/graphql`, {
         method: 'POST',
@@ -154,7 +155,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   };
 
   const refetchGitState = async (wsId: string) => {
-    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const apiBase = getApiBase();
     const token = localStorage.getItem('auth_token');
     const result = await fetch(`${apiBase}/graphql`, {
       method: 'POST',

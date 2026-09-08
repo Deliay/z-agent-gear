@@ -39,7 +39,6 @@ jobs:
           touch dist/.nojekyll
         working-directory: apps/agent-web
         env:
-          VITE_API_URL: https://zag-agent-api.fffdan.com
           VITE_CONTROLLER_API_URL: https://zag-ctrl-api.fffdan.com
           VITE_BASE_URL: /
 
