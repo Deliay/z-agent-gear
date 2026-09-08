@@ -115,6 +115,7 @@ flowchart LR
 - [[draft/20260817-session-lifecycle-and-worktree-management.md]] — 会话生命周期与 Worktree 管理
 - [[draft/20260821-workflow-optimization.md]] — 工作流优化 0821
 - [[draft/20260829-workflow-worktree-session-start.md]] — 工作流 Worktree 节点会话启动失败修复
+- [[draft/20260907-experience-optimization-phase1.md]] — 综合体验优化一期
 
 ### 已发布文档（`released/`）
 

@@ -38,16 +38,18 @@ export async function getRawKeyById(keyId: string): Promise<string | null> {
   }
 }
 
-export async function evictKeyById(keyId: string): Promise<void> {
+export async function evictKeyById(keyId: string): Promise<boolean> {
   try {
     const redis = getRedisClient();
     const rawKey = await redis.get(`${KEYID_PREFIX}${keyId}`);
-    if (!rawKey) return;
+    if (!rawKey) return true;
     const pipeline = redis.pipeline();
     pipeline.del(`${RAWKEY_PREFIX}${rawKey}`);
     pipeline.del(`${KEYID_PREFIX}${keyId}`);
     await pipeline.exec();
-  } catch {
-    // Redis not available, skip eviction
+    return true;
+  } catch (err) {
+    console.error(`Failed to evict key ${keyId} from cache:`, err);
+    return false;
   }
 }

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES, GET_ACP_CAPABILITIES } from '../../graphql/queries';
 import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR } from '../../graphql/mutations';
-import type { GetControllerWorkspacesQuery, GetAcpCapabilitiesQuery, ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
+import type { GetControllerWorkspacesQuery, GetAcpCapabilitiesQuery, ControllerWorkspaceData, GitRepoInfoData, CreateWorkspaceMutation } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
 import HistorySessionDialog from './HistorySessionDialog';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
@@ -46,7 +46,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   });
   const availableAcpServers = (acpCapData?.acpCapabilities?.filter((c) => c.available) ?? []).map((c) => ({ type: c.type, version: c.version ?? undefined }));
 
-  const [createWorkspace] = useMutation(CREATE_WORKSPACE);
+  const [createWorkspace] = useMutation<CreateWorkspaceMutation>(CREATE_WORKSPACE);
   const [deleteWorkspace] = useMutation(DELETE_WORKSPACE);
   const [clearWorkspaces] = useMutation(CLEAR_WORKSPACES);
   const [toggleWorkspace] = useMutation(TOGGLE_WORKSPACE);
@@ -95,12 +95,31 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const refetchWorkspaces = () => ({ query: GET_WORKSPACES });
 
   const handleAdd = async (path: string) => {
-    await createWorkspace({
+    const { data } = await createWorkspace({
       variables: { input: { controllerId, path } },
       refetchQueries: [refetchSessions(), refetchWorkspaces()],
     });
     await refetch();
     setShowAddDialog(false);
+
+    // 即时 Git 发现：创建成功后立即触发 detectGitRepo
+    const newWorkspaceId = data?.createWorkspace?.id;
+    if (newWorkspaceId) {
+      setGitStates((prev) => ({ ...prev, [newWorkspaceId]: { loading: true } }));
+      try {
+        const gitData = await refetchGitState(newWorkspaceId);
+        setGitStates((prev) => ({
+          ...prev,
+          [newWorkspaceId]: { loading: false, data: gitData },
+        }));
+      } catch (err) {
+        // 发现失败不阻塞添加，条目维持「未发现」状态，展开时按现有逻辑可重试
+        setGitStates((prev) => ({
+          ...prev,
+          [newWorkspaceId]: { loading: false, error: (err as Error).message },
+        }));
+      }
+    }
   };
 
   const handleDelete = async (id: string) => {

@@ -105,7 +105,7 @@ describe('ControllerService', () => {
         keyId: { toString: () => 'key1' },
       } as never);
       vi.mocked(commandService.sendShutdown).mockResolvedValue();
-      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(evictKeyById).mockResolvedValue(true);
       vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
       vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
 
