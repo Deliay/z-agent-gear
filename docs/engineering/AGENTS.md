@@ -205,3 +205,4 @@ flowchart LR
 - [[plan/20260817-feat-session-lifecycle-and-worktree-management.md]] — 会话生命周期与 Worktree 管理增强实现计划
 - [[plan/20260821-feat-workflow-optimization.md]] — 工作流优化 0821 实现计划
 - [[plan/20260829-fix-workflow-worktree-session-start.md]] — 工作流 Worktree 节点会话启动失败修复实现计划
+- [[plan/20260908-feat-frontend-auto-select-server.md]] — 前端支持服务器自动选择实现计划
