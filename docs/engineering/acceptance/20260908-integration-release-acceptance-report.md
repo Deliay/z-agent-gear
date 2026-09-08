@@ -5,7 +5,29 @@ type: Permanent
 
 # integration→release 验收报告（2026-09-08）
 
-> **状态**: 🟡 第三轮返工完成（2026-09-08）—— 四包单测实测全绿（agent-api 596 / controller-api 216 / agent-controller 285 / agent-web 385 passed）；修复已提交推送 integration；问题 13/14 已修复，问题 12 已降级，问题 4/6/9/10/15 延期决策已记录。待 AI Review 第三轮复核。
+> **状态**: 🟡 第四轮返工完成（2026-09-08）—— 问题 33 已修复（tsc --noEmit exit 0），四包单测全绿（596/216/285/385），修复已提交推送 integration。待 AI Review 第四轮复核。
+
+## 第三轮复核（AI Review，2026-09-08）
+
+**第二轮硬阻断已解除**：integration HEAD = `42f4e83` = `origin/integration`，工作区干净 ✅
+
+**逐项核验属实的修复**（对照 commit `42f4e83` diff + 实测）：
+
+- 问题 1/2：mock 修复核验属实；四包单测本轮实测 **agent-api 596 / controller-api 216 / agent-controller 285 / agent-web 385 全 passed** ✅
+- 问题 3：`evictKeyById` 返回 boolean + `console.error`，regenerate 在 evict 失败时抛错 ✅
+- 问题 5：底部 sticky 栏 Plus 新建会话按钮已实现 ✅（但承诺的组件测试未落地，见问题 34）
+- 问题 7：`local-server.ts` 改 `Buffer[]` + `Buffer.concat` ✅
+- 问题 8：`mcp:request` payload 校验（400）+ `.catch`（500 回包）✅；已确认 tests/api、tests/e2e 全部 `mcp:request` 调用方均带齐 `requestId/sessionId/serverName`，不会被新校验误伤 ✅
+- 问题 11：unbound 区块「重新生成Key」入口 ✅
+- 问题 13：**功能正确但写法脆弱**——`$setOnInsert` 与普通字段混写在同一更新文档中，原生驱动拒绝（实测 MongoDB 7 报 `Update document requires atomic operators`），仅因 Mongoose 9.6.2 宽容规范化（普通字段自动包入 `$set`）才能工作。已用真实 MongoDB 7 + mongoose 9.6.2 实测：insert 写入 `name=hostname`，rebind 保留自定义名 ✅（健壮性建议见问题 35）
+- 问题 14：`goToConfig` 非空校验 + `enabledWorkspaces` 回填 effect ✅
+- 问题 16：三态上报 + `TreeSection` undefined 回退 ✅
+
+**本轮打回原因**：
+
+1. **问题 33（新增，阻断）**：修复提交本身导致 agent-api `tsc --noEmit` 失败（实测 exit 2），3 个 TS2554 错误——`evictKeyById` 签名改为 `Promise<boolean>` 后，`controller-key.test.ts:110,178` 与 `controller.test.ts:108` 的 `mockResolvedValue()` 无参调用类型不匹配。运行时不受影响（vitest/esbuild 不做类型检查）、CI 未跑 tsc，但本报告「最终验证」将「三包 tsc --noEmit 通过」列为验收项，修复提交破坏了该标准。修复简单：三处改为 `mockResolvedValue(true)`。
+
+**非阻断建议**：问题 34（问题 5 修复方案承诺的组件测试未落地）、问题 35（register upsert 改显式 `$set`/`$setOnInsert` 兄弟写法；`ControllerKeyService.delete`/`create` 路径仍忽略 evict 失败，同类吊销可靠性缺口）。
 
 ## 第二轮复核（AI Review，2026-09-08）
 
@@ -187,6 +209,9 @@ agent-api 全量：**2 failed | 594 passed**。
 
 | # | 问题 | 位置 |
 |---|------|------|
+| 33 | **（第三轮新增·阻断）** 修复提交导致 agent-api `tsc --noEmit` 失败：`evictKeyById` 改返回 `Promise<boolean>` 后 3 处 `mockResolvedValue()` 无参调用 TS2554（实测 exit 2）。修复：三处改 `mockResolvedValue(true)` | controller-key.test.ts:110,178、controller.test.ts:108 |
+| 34 | 问题 5 修复方案承诺的底部新建会话按钮组件测试未落地 | apps/agent-web Sidebar 测试 |
+| 35 | register upsert 混合写法依赖 Mongoose 宽容规范化，建议改显式 `$set`/`$setOnInsert` 兄弟写法；`ControllerKeyService.delete`/`create` 路径仍忽略 evict 失败（同类吊销缺口，限删除/重建场景） | socketio.ts:71-86、controller-key.ts:21,77 |
 | 17 | 新增真实链路测试 `acp-real-admin-tools.test.ts` 缺 `commandExists('opencode')` 跳过守卫；直接覆写用户真实 `~/.zag/config.toml`（SIGKILL 留脏）；`cleanupPidFile()` 可能误删真实 controller pid | tests/api/src/controller-api/acp-real-admin-tools.test.ts:269,297 |
 | 18 | relay token 实现（注册时快照）优于契约描述（请求头透传），契约措辞应改为「controller 按会话快照填充」 | packages/agent-controller/src/mcp/relay.ts:71 vs contracts/agent-session-websocket.md 2.12.1 |
 | 19 | 会话结束后新请求状态码：实现 404/401，提案/契约预期 410，需统一 | local-server.ts:48-53、mcp-dispatch.ts:58-61 |
@@ -224,17 +249,25 @@ agent-api 全量：**2 failed | 594 passed**。
 | 14 | 空 workspaceId 可提交 | 缺校验 + effect 依赖不全 | ✅ 已修复 | fix: goToConfig validation + enabledWorkspaces backfill effect |
 | 15 | 轮询请求量放大 | 默认全展开 + 始终挂载 | 🟡 待确认 | 需确认后端压力可接受 |
 | 16 | 空态加载期闪烁 | 缺 loading 三态 | ✅ 已修复 | fix: hasContent undefined 表示未知 |
+| 33 | tsc --noEmit 失败（evictKeyById 签名变更） | mockResolvedValue() 无参类型不匹配 | ✅ 已修复 | fix: mockResolvedValue(true) × 3 |
+| 34 | 底部新建会话按钮组件测试缺位 | 测试未落地 | 💡 建议 | 建议后续补充 |
+| 35 | register upsert 写法脆弱 | $setOnInsert 混写依赖 Mongoose 规范化 | 💡 建议 | 建议改为显式 $set/$setOnInsert 兄弟写法 |
+| 33 | agent-api tsc --noEmit 3 个 TS2554 | evictKeyById 签名变更未同步 mock 类型 | ❌ 第三轮打回 | 待修复：3 处 mockResolvedValue(true) |
+| 34 | 底部新建按钮无组件测试 | 修复方案承诺未落地 | 💡 建议 | - |
+| 35 | upsert 混合写法脆弱 / delete、create 忽略 evict 失败 | 依赖 Mongoose 宽容行为 | 💡 建议 | - |
 | 17~32 | 建议项（见上表） | - | 💡 建议 | - |
 
 ## 最终验证
 
 | 项 | 结果 |
 |----|------|
-| agent-api 单测 | ✅ 596 passed / 42 文件 |
-| controller-api 单测 | ✅ 216 passed / 19 文件 |
-| agent-controller 单测 | ✅ 285 passed / 22 文件 |
-| agent-web 单测 | ✅ 385 passed / 47 文件 |
-| agent-web 类型检查（tsc -b） | ✅ 通过 |
+| agent-api 单测 | ✅ 596 passed / 42 文件（第四轮实测） |
+| controller-api 单测 | ✅ 216 passed / 19 文件（第四轮实测） |
+| agent-controller 单测 | ✅ 285 passed / 22 文件（第四轮实测） |
+| agent-web 单测 | ✅ 385 passed / 47 文件（第四轮实测） |
+| agent-web 类型检查（tsc -b） | ✅ 通过（第四轮实测） |
+| agent-api 类型检查（tsc --noEmit） | ✅ 通过（第四轮实测 exit 0） |
+| controller-api / agent-controller 类型检查（tsc --noEmit） | ✅ 通过（第四轮实测） |
 | API 集成测试（tests/api） | ⚠️ 本轮未执行（需 Aspire 编排环境） |
 | E2E 测试（tests/e2e） | ⚠️ 本轮未执行（问题 6 待补充） |
 

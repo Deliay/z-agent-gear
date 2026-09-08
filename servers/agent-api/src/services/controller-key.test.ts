@@ -107,7 +107,7 @@ describe('ControllerKeyService', () => {
       };
 
       vi.mocked(ControllerKey.findOne).mockResolvedValue(existingUnboundKey as never);
-      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(evictKeyById).mockResolvedValue(true);
       vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
 
       const mockKeyDoc = {
@@ -175,7 +175,7 @@ describe('ControllerKeyService', () => {
   describe('delete', () => {
     it('should delete a key and evict from cache', async () => {
       vi.mocked(ControllerKey.findOneAndDelete).mockResolvedValue({} as never);
-      vi.mocked(evictKeyById).mockResolvedValue();
+      vi.mocked(evictKeyById).mockResolvedValue(true);
 
       const result = await controllerKeyService.delete('key1', 'user1');
 
