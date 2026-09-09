@@ -29,6 +29,7 @@ import type {
   AgentModelInfoData,
   SessionConfigOptionData,
 } from '../../graphql/types';
+import { getApiBase } from '../../lib/api-base';
 import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
@@ -156,7 +157,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   useEffect(() => {
     if (!id) return;
 
-    const apiBase = import.meta.env.VITE_API_URL || '';
+    const apiBase = getApiBase();
     const token = localStorage.getItem('auth_token') || '';
     setSseLoading(true);
     setSseError(false);

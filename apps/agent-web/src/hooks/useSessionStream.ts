@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getApiBase } from '../lib/api-base';
 
 interface SSEMessage {
   type: string;
@@ -32,7 +33,7 @@ export function useSessionStream({
 
     errorCountRef.current = 0;
 
-    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    const apiBase = getApiBase();
     const token = localStorage.getItem('auth_token') || '';
     const eventSource = new EventSource(`${apiBase}/api/session/${sessionId}/stream?token=${encodeURIComponent(token)}`);
     eventSourceRef.current = eventSource;
