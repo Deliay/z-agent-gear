@@ -5,7 +5,7 @@ type: Permanent
 
 # 前端 API 自动选择与国内加速 集成验收报告
 
-> **状态**: 🔴 返工中 —— 第一轮 AI Review 发现 4 个问题（1 个阻塞、2 个建议、1 个可选），已修复（commit `5922eb0`）并经第二轮复核核实；但第二轮复核新发现 1 个阻塞问题（问题 5：探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 返回值不一致），已再次打回返工，待修复后重新提交 Review。详见 [七、第二轮 AI Review 复核](#七第二轮-ai-review-复核2026-10-08修复后)。
+> **状态**: 🟢 已闭环 —— 第一轮 4 项问题（1 阻塞、2 建议、1 可选）已修复（commit `5922eb0`）并经第二轮复核核实属实；第二轮新发现 1 项阻塞问题（问题 5：探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 返回值不一致）已修复（commit `7f6ed80`）。全量单测 421/421、lint 0 error、build 通过。
 
 ## 关联文档
 
@@ -83,6 +83,7 @@ type: Permanent
 | 2 | 探测失败后内存固化 fallback | 失败态复用 `state.cached` | ✅ 已修复（建议） | `5922eb0` |
 | 3 | bootstrap 无异常兜底/加载态 | 缺少降级路径 | ✅ 已修复（建议） | `5922eb0` |
 | 4 | 并发 resolve 重复探测 | 未去重 in-flight Promise | ✅ 已实现（可选） | `5922eb0` |
+| 5 | 探测失败回落时同步/异步入口返回值分叉 | 失败不写 `cached` 破坏「渲染前已置值」不变量 | ✅ 已修复（第二轮阻塞） | `7f6ed80` |
 | 5 | 探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 不一致，SSE/工作区请求打到静态站点来源 | 问题 2 修复后失败态不再写 `state.cached`，同步消费点失去回落值 | ❌ 待修复（阻塞，第二轮新增） | — |
 
 ## 四、本轮已核实通过项
@@ -97,7 +98,7 @@ type: Permanent
 
 | 项目 | 结果 | 说明 |
 |------|------|------|
-| 单元测试 | ✅ 419/419 通过（49 个文件） | 含本轮新增 9 项：DEV 回落、失败重探、并发去重、沙箱 sessionStorage 兜底；`api-base.test.ts` 共 28 项 |
+| 单元测试 | ✅ 421/421 通过（49 个文件） | 含第一轮新增 9 项（DEV 回落、失败重探、并发去重、沙箱 sessionStorage 兜底）与第二轮新增 2 项（同步入口回落一致性 T-B17 / T-C13）；`api-base.test.ts` 共 30 项 |
 | Lint | ✅ 0 error / 6 warning | 6 个 warning 均位于本次未改动文件（TodoListPanel、NewSessionDialog、HistorySessionDialog、InstantiateWorkflowDialog），为存量问题 |
 | Build（tsc -b + vite build） | ✅ 通过 | chunk 体积告警为存量问题 |
 | E2E | ⏳ 未执行 | 前端纯客户端变更；修复后建议随集成环境回归 |
@@ -152,11 +153,17 @@ type: Permanent
 - controller 侧同样覆盖同步/异步入口一致性；
 - 按新契约调整 T-C9 现有 `''` 断言。
 
-**当前状态**：❌ 待修复（本轮打回）。
+**当前状态**：✅ 已修复（commit `7f6ed80`）。`ResolverState` 增加 `lastResolved`：成功与回落均写入（回落仍不写 `cached`、不写 sessionStorage，保持可重探）；`getApiBase()` 改为 `cached ?? lastResolved ?? env ?? (DEV ? local : '')`，解析完成后（无论成功或回落）与 `resolveApiBase()` 返回值一致。新增 T-B17（全部失败后 `getApiBase()` 返回候选首项、重探成功后更新）、T-C13（controller 回落一致且与 agent 同步入口相互独立），并按新契约补充 T-C9 说明（解析前仍为保守 `''`，controller 无同步入口故无分叉）。
 
 ### 7.3 本轮复核结论
 
-除问题 5 外，`integration..release` 全量差异未发现其他新问题：`mcp-proxy.ts` 惰性解析与 `mcp-proxy.test.ts`（6 项）、`command-template.ts` cn 端点修正（旧域名 NXDOMAIN）、`deploy-agent-web.yml` 移除 env 注入、文档与实现一致性均合格。**本轮结论：打回返工**——请按 7.2 修复问题 5 后重新提交 Review（预计修复面极小：`api-base.ts` + `api-base.test.ts` 即可闭环）。
+除问题 5 外，`integration..release` 全量差异未发现其他新问题：`mcp-proxy.ts` 惰性解析与 `mcp-proxy.test.ts`（6 项）、`command-template.ts` cn 端点修正（旧域名 NXDOMAIN）、`deploy-agent-web.yml` 移除 env 注入、文档与实现一致性均合格。
+
+### 7.4 问题 5 返工修复与验证（2026-10-08）
+
+- **修复 commit**：`7f6ed80`（`api-base.ts` + `api-base.test.ts` + 技术方案 20260908 v1.2 / 20261008 v1.3）。
+- **修复方式**：采纳 7.2 推荐方案①（`lastResolved`），未采用②（同步入口硬编码候选首项会引入隐性契约）与③（context/props 改造面大）。回落语义完整保留：`cached`/sessionStorage 仍不写，T-B11/T-C11 可重探断言继续通过；`lastResolved` 仅服务同步入口一致性。
+- **验证**：`npm test` **421/421 通过**（49 文件，`api-base.test.ts` 30 项）、`npm run lint` **0 error / 6 warning**（存量）、`npm run build` 通过。新增 T-B17 / T-C13 覆盖「同步入口与异步回落一致 + 重探更新 + 双服务独立性」。
 
 ## 相关文档
 
