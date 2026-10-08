@@ -21,10 +21,6 @@ const errorLink = onError(({ error }) => {
   }
 });
 
-const httpLink = new HttpLink({
-  uri: `${import.meta.env.VITE_API_URL || ''}/graphql`,
-});
-
 const authLink = new ApolloLink((operation, forward) => {
   const token = localStorage.getItem('auth_token');
   operation.setContext(({ headers = {} }: { headers?: Record<string, string> }) => ({
@@ -36,7 +32,12 @@ const authLink = new ApolloLink((operation, forward) => {
   return forward(operation);
 });
 
-export const client = new ApolloClient({
-  link: from([errorLink, authLink, httpLink]),
-  cache: new InMemoryCache(),
-});
+export function createApolloClient(apiBase: string): ApolloClient {
+  const httpLink = new HttpLink({
+    uri: `${apiBase}/graphql`,
+  });
+  return new ApolloClient({
+    link: from([errorLink, authLink, httpLink]),
+    cache: new InMemoryCache(),
+  });
+}

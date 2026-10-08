@@ -1,4 +1,4 @@
-const CONTROLLER_API_URL = import.meta.env.VITE_CONTROLLER_API_URL || 'http://localhost:4001';
+import { resolveControllerApiBase } from '../lib/api-base';
 
 export interface McpProxyKey {
   id: string;
@@ -27,7 +27,8 @@ export async function fetchMcpProxyKeys(token: string): Promise<McpProxyKey[]> {
   const userId = getUserIdFromToken(token);
   if (!userId) throw new Error('Invalid token');
 
-  const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
+  const base = await resolveControllerApiBase();
+  const response = await fetch(`${base}/api/mcp-proxy-keys`, {
     headers: {
       'x-user-id': userId,
     },
@@ -42,7 +43,8 @@ export async function createMcpProxyKey(token: string, name: string): Promise<Cr
   const userId = getUserIdFromToken(token);
   if (!userId) throw new Error('Invalid token');
 
-  const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
+  const base = await resolveControllerApiBase();
+  const response = await fetch(`${base}/api/mcp-proxy-keys`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -60,7 +62,8 @@ export async function revokeMcpProxyKey(token: string, id: string): Promise<void
   const userId = getUserIdFromToken(token);
   if (!userId) throw new Error('Invalid token');
 
-  const response = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys/${id}/revoke`, {
+  const base = await resolveControllerApiBase();
+  const response = await fetch(`${base}/api/mcp-proxy-keys/${id}/revoke`, {
     method: 'POST',
     headers: {
       'x-user-id': userId,
