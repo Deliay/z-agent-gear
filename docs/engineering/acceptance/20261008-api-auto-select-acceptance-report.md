@@ -5,7 +5,7 @@ type: Permanent
 
 # 前端 API 自动选择与国内加速 集成验收报告
 
-> **状态**: 🟢 已闭环 —— 第一轮 4 项问题（1 阻塞、2 建议、1 可选）修复（`5922eb0`）、第二轮阻塞问题 5 修复（`7f6ed80`）均已通过后续轮次核验；第三轮发现的问题 6-8（docs-only 文档一致性：问题状态表重复行、技术方案版本头、报告元数据）已随本轮文档修正提交修复（见 [8.4](#84-文档问题返工修复2026-10-08)）。代码层独立复跑单测 421/421、lint 0 error、build 通过。
+> **状态**: 🟢 已闭环 —— 第一轮 4 项问题（1 阻塞、2 建议、1 可选）修复（`5922eb0`）、第二轮阻塞问题 5 修复（`7f6ed80`）均经后续轮次核验属实；第三轮问题 6-8（docs-only 文档一致性）修复（`b228ec9`，见 [8.4](#84-文档问题返工修复2026-10-08)）已经第四轮复核逐项核验通过（见 [九、第四轮 AI Review 复核](#九第四轮-ai-review-复核2026-10-08)）。全量代码差异无遗留问题，代码层独立复跑单测 421/421（49 文件）、lint 0 error / 6 warning（存量）、build 通过。
 
 ## 关联文档
 
@@ -14,7 +14,7 @@ type: Permanent
 - 实现计划：[20260908-feat-frontend-auto-select-server.md](../plan/20260908-feat-frontend-auto-select-server.md)、[20261008-feat-domestic-api-acceleration.md](../plan/20261008-feat-domestic-api-acceleration.md)
 - 关联分支：`integration` → `release`（PR #199：<https://github.com/Deliay/z-agent-gear/pull/199>）
 - 验收日期：2026-10-08
-- 验收范围：`integration..release` 差异（第三轮复核时点：17 个 commit、21 个文件、+2053 / -33；首次验收时点为 11 个 commit、19 个文件、+1582 / -32）
+- 验收范围：`integration..release` 差异（`6908db4`..`integration`；第四轮复核时点：19 个 commit、21 个文件、+2123 / -33；第三轮复核时点 17 个 commit、21 个文件、+2053 / -33；首次验收时点 11 个 commit、19 个文件、+1582 / -32）
 
 ## 一、需求概述
 
@@ -88,8 +88,8 @@ type: Permanent
 ## 四、本轮已核实通过项
 
 - 实现与技术方案/实现计划一致：`resolveBase` 参数化、`Promise.any` 竞速首个 2xx 胜出、2s 超时 abort、胜出后 abort 其余探测、sessionStorage 会话级缓存、`getApiBase()` 保守回落（含 T-C9 覆盖）均为方案明确设计；本轮返工新增「DEV 回落本地、失败不固化、在途去重、bootstrap 降级」已回填方案 v1.2。
-- `command-template.ts` cn 端点由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com` 属正确修复（实现计划记录旧域名实测 NXDOMAIN），测试同步更新，仓库无旧域名残留。
-- `deploy-agent-web.yml` 移除 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 与方案 v1.1 一致；`grep` 确认 `apps/agent-web/src` 仅 `api-base.ts` 直读这两个变量。
+- `command-template.ts` cn 端点由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com` 属正确修复（实现计划记录旧域名实测 NXDOMAIN），测试同步更新，代码与测试中无旧域名残留（文档中的变更记录与修复说明按需引用旧域名，属正常记录，第四轮复核时点校准表述）。
+- `deploy-agent-web.yml` 移除 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 与方案 v1.1 一致（仅保留 `VITE_BASE_URL`）；`grep` 确认 `apps/agent-web/src` 仅 `api-base.ts`（解析逻辑）与 `main.tsx` bootstrap 降级分支（`5922eb0` 新增）读取这两个变量（第四轮复核时点校准表述）。
 - 探测端点均有 `/health` 路由（`servers/agent-api/src/index.ts:52`、`servers/controller-api/src/index.ts:32`）。
 - 文档完整：2 份技术方案、2 份实现计划、1 份 PRD，`docs/engineering/AGENTS.md` 索引同步更新；方案修订与最终实现对齐。
 
@@ -108,6 +108,7 @@ type: Permanent
 - 移除旧 fallback（`http://localhost:4000` / `http://localhost:4001`）属于隐式行为变更；单测按新设计编写无法暴露该回归，评审需逐点对照变更前默认值。
 - 「不写缓存」的验收断言应同时覆盖内存态与持久态，避免失败结果被模块级变量等效缓存。
 - 「失败不写缓存」类修复必须同步审视全部消费点：异步 resolve 入口与同步 `getApiBase()` 入口的返回值契约需要显式保持一致，否则一个入口的修复会把故障转移到另一个入口。
+- 验收报告自述的验证断言（如「仓库无 XX 残留」「仅 A 读取 X」）会随后续修复而过期：每轮复核都应重新 `grep` 核对现状，报告与仓库状态必须同步校准（见 9.3）。
 
 ## 七、第二轮 AI Review 复核（2026-10-08，修复后）
 
@@ -234,6 +235,46 @@ type: Permanent
 | 问题 8 | 「关联文档」技术方案版本标注更新为 v1.2 / v1.3；「验收范围」更新为第三轮复核时点并附首次时点 | 本报告「关联文档」 |
 
 本轮无代码/单测改动；代码层验证沿用第三轮独立复跑结论（`npm test` 421/421、`npm run lint` 0 error / 6 warning、`npm run build` 通过）。
+
+## 九、第四轮 AI Review 复核（2026-10-08）
+
+**复核对象**：第三轮问题 6-8 修复 commit `b228ec9`（docs-only，3 个文档文件，与上游「修复说明」一致）；差异范围 `integration..release`（merge-base `6908db4`..`integration` `b228ec9`，19 个 commit、21 个文件、+2123 / -33）。
+
+### 9.1 第三轮问题 6 / 7 / 8 修复核验（✅ 全部属实）
+
+| 上轮问题 | 核验结论 | 证据 |
+|---|---|---|
+| 问题 6（建议）修复总览问题 5 重复行自相矛盾 | ✅ 已修复 | `git show b228ec9` 显示旧行「❌ 待修复（阻塞，第二轮新增）\| —」已删除，[三、修复总览](#三修复总览) 问题 5 仅剩单行「✅ 已修复（第二轮阻塞）\| `7f6ed80`」，与状态行、7.2「当前状态：✅ 已修复」、7.4 一致 |
+| 问题 7（可选）技术方案版本头未同步 | ✅ 已修复 | `20260908-feat-frontend-auto-select-server.md:10` = `v1.2`、`20261008-feat-domestic-api-acceleration.md:10` = `v1.3`，与各自「版本变更」最新条目（v1.2 / v1.3，2026-10-08）逐字一致 |
+| 问题 8（可选）报告元数据引用过期 | ✅ 已修复 | 「关联文档」技术方案版本标注更新为 20260908 v1.2 / 20261008 v1.3（均含 review 修订）；「验收范围」更新为第三轮复核时点并附首次验收时点数据，与实际差异统计相符 |
+| 修复范围（docs-only） | ✅ 属实 | `b228ec9` 仅改动本报告 + 2 份技术方案头部，无代码/单测变更；8.4 记录与实际改动一致 |
+
+### 9.2 代码层复核与独立复跑（✅ 无新问题）
+
+代码差异与第三轮完全一致（`b228ec9` 为 docs-only），本轮仍全量独立复跑并对关键不变量再次确认：
+
+| 复核项 | 结论 | 证据 |
+|---|---|---|
+| 全量代码差异 | ✅ 无新问题 | 逐文件复核 `api-base.ts`、`main.tsx`、`apollo.ts`、`mcp-proxy.ts`、`useSessionStream.ts`、`SessionView.tsx`、`WorkspaceSection.tsx`、`command-template.ts`、`deploy-agent-web.yml` 及全部测试：`createApolloClient(apiBase)` 注入、SSE/工作区消费点统一 `getApiBase()`、`mcp-proxy.ts` 三个函数惰性 `resolveControllerApiBase()` 均正确 |
+| 同步/异步入口一致性 | ✅ 保持 | `api-base.ts:56-100` 五条解析路径均写 `lastResolved`，`getApiBase()`（:122-130）为 `cached ?? lastResolved ?? env ?? (DEV ? local : '')`；失败回落仍不写 `cached`/sessionStorage（:95-100） |
+| 探测端点可用性 | ✅ 通过 | `servers/agent-api/src/index.ts:52`、`servers/controller-api/src/index.ts:32` 均注册 `/health` |
+| CI 构建注入 | ✅ 通过 | `deploy-agent-web.yml` 仅剩 `VITE_BASE_URL: /`，无 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 注入 |
+| 单元测试 | ✅ 421/421 通过（49 个文件） | 独立复跑 `npm test`；`api-base.test.ts` 30 项（T-B1~T-B17、T-C1~T-C13，含 T-B17 / T-C13 / T-C9）与报告所述一致 |
+| Lint | ✅ 0 error / 6 warning | 6 个 warning 全部位于本次未改动文件（TodoListPanel、NewSessionDialog、HistorySessionDialog、InstantiateWorkflowDialog），为存量问题 |
+| Build | ✅ 通过 | `npm run build`（tsc -b + vite build）通过；chunk 体积告警为存量问题 |
+
+### 9.3 本报告表述自校正（docs-only，随本轮更新直接修正）
+
+第四轮复核时逐句校对本报告历史表述，发现 2 处精度问题（均属本报告（AI Review 交付物）自身的历史表述，不涉及被评审代码，故随本轮报告更新直接修正，不计入打回）：
+
+| 位置 | 问题 | 修正 |
+|---|---|---|
+| §四「已核实通过项」 | 「仓库无旧域名残留」表述过宽——`ctrl.zag.cn.fffdan.com` 在文档的变更记录/修复说明中仍有 6 处正常引用 | 精确化为「代码与测试中无旧域名残留」，并注明文档引用属正常记录 |
+| §四「已核实通过项」 | 「`apps/agent-web/src` 仅 `api-base.ts` 直读这两个变量」在 `5922eb0` 之后已不成立（`main.tsx:32` bootstrap 降级分支也读取 `VITE_API_URL`，属问题 3 修复方案明确设计） | 更新为「`api-base.ts`（解析逻辑）与 `main.tsx` bootstrap 降级分支读取」 |
+
+### 9.4 本轮复核结论
+
+**通过，无需返工**：第三轮问题 6/7/8 修复逐项核验属实且与上游「修复说明」「验证结果」一致；代码层全量差异无新问题，独立复跑（`npm test` 421/421、`npm run lint` 0 error / 6 warning、`npm run build` 通过）与上游验证结论一致；第一、二轮 5 项问题修复均无回归。PR #199 integration 集成验收闭环，移交人类最终 Review。
 
 ## 相关文档
 
