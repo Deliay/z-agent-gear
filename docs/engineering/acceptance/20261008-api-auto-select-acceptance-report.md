@@ -5,7 +5,7 @@ type: Permanent
 
 # 前端 API 自动选择与国内加速 集成验收报告
 
-> **状态**: 🔴 返工中 —— AI Review 轮次共发现 4 个问题（1 个阻塞、2 个建议、1 个可选），整体未通过，已打回返工；修复 commit 待回填。
+> **状态**: 🟢 已闭环 —— AI Review 轮次共发现 4 个问题（1 个阻塞、2 个建议、1 个可选），均已修复并验证；修复 commit `5922eb0`。
 
 ## 关联文档
 
@@ -43,7 +43,7 @@ type: Permanent
 2. 同步更新 `apps/agent-web/src/lib/api-base.test.ts`：为 no-env 场景增加 DEV 分支覆盖（T-B* / T-C* 断言调整）。
 3. `README.md`「手动启动」补充说明本地默认地址行为。
 
-**验证结果**：⏳ 待返工修复后验证。要求：单测覆盖「DEV + 无 env → localhost、不发起探测」，且全量 `npm test`（当前 410 项）/ `npm run lint` / `npm run build` 通过。
+**验证结果**：✅ 已修复（commit `5922eb0`）。`api-base.ts` 增加 `import.meta.env.DEV` 短路：DEV 且 `envUrl` 为空时跳过探测与 sessionStorage，直接回落本地地址（agent `http://localhost:4000`、controller `http://localhost:4001`）；`getApiBase()` 同步 DEV 回落。新增 T-B12（DEV 无 env → localhost、不探测、不写缓存）、T-B13（DEV + env → env 优先）、T-B16、T-C10 覆盖；全量 `npm test` 419/419、`npm run lint` 0 error、`npm run build` 通过。
 
 ### 问题 2（🟡 建议）探测全部失败后 fallback 被内存固化，页面生命周期内不再重试
 
@@ -53,7 +53,7 @@ type: Permanent
 
 **修复方案**：catch 分支不写 `state.cached`（保持可重探），或为失败态记录时间戳做有限次数重试；补充「失败后再次调用可重探」单测。
 
-**验证结果**：⏳ 待返工修复后验证。
+**验证结果**：✅ 已修复（commit `5922eb0`）。catch 分支不再写 `state.cached`，失败回落仅作用于本次返回值，内存态与持久态均不固化；新增 T-B11 / T-C11 断言「首次全失败后二次调用重新探测」（fetch 调用数 2→4，二次成功后写入 sessionStorage）。
 
 ### 问题 3（🟡 建议）bootstrap() 无异常兜底与加载反馈
 
@@ -63,7 +63,7 @@ type: Permanent
 
 **修复方案**：`bootstrap()` 内 `try/catch`，异常时以 `import.meta.env.VITE_API_URL || ''` 降级渲染；可选在解析期间渲染 loading 占位。
 
-**验证结果**：⏳ 待返工修复后验证。
+**验证结果**：✅ 已修复（commit `5922eb0`）。`bootstrap()` 以 `try/catch` 包裹解析并以 `VITE_API_URL || ''` 降级，启动期渲染「加载中…」占位；`api-base.ts` 的 `sessionStorage` 读写以 `try/catch` 保护，T-B15 覆盖「沙箱下 `getItem`/`setItem` 抛 `SecurityError` 仍可正常探测解析」。
 
 ### 问题 4（🟢 可选）并发调用无在途去重，重复探测
 
@@ -73,33 +73,33 @@ type: Permanent
 
 **修复方案**：以模块级 `pending: Promise<string> | null` 去重，`finally` 中清理。
 
-**验证结果**：⏳ 可选优化，不阻塞本轮返工。
+**验证结果**：✅ 已实现（commit `5922eb0`）。模块级 `pending: Promise<string> | null` 在途去重，`finally` 清理；T-B14 / T-C12 断言并发两次 `resolve*` 仅触发一轮探测（fetch 2 次），返回同一结果。
 
 ## 三、修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|------|------|------|-------------|
-| 1 | 本地无 env 时探测并直连生产 API | 未区分 DEV，本地回落被移除 | 🔴 待修复（阻塞） | 待回填 |
-| 2 | 探测失败后内存固化 fallback | 失败态复用 `state.cached` | 🟡 待修复（建议） | 待回填 |
-| 3 | bootstrap 无异常兜底/加载态 | 缺少降级路径 | 🟡 待修复（建议） | 待回填 |
-| 4 | 并发 resolve 重复探测 | 未去重 in-flight Promise | 🟢 可选 | 待回填 |
+| 1 | 本地无 env 时探测并直连生产 API | 未区分 DEV，本地回落被移除 | ✅ 已修复（阻塞） | `5922eb0` |
+| 2 | 探测失败后内存固化 fallback | 失败态复用 `state.cached` | ✅ 已修复（建议） | `5922eb0` |
+| 3 | bootstrap 无异常兜底/加载态 | 缺少降级路径 | ✅ 已修复（建议） | `5922eb0` |
+| 4 | 并发 resolve 重复探测 | 未去重 in-flight Promise | ✅ 已实现（可选） | `5922eb0` |
 
 ## 四、本轮已核实通过项
 
-- 实现与技术方案/实现计划一致：`resolveBase` 参数化、`Promise.any` 竞速首个 2xx 胜出、2s 超时 abort、胜出后 abort 其余探测、sessionStorage 会话级缓存、失败不写 sessionStorage、`getApiBase()` 保守回落（含 T-C9 覆盖）均为方案明确设计。
+- 实现与技术方案/实现计划一致：`resolveBase` 参数化、`Promise.any` 竞速首个 2xx 胜出、2s 超时 abort、胜出后 abort 其余探测、sessionStorage 会话级缓存、`getApiBase()` 保守回落（含 T-C9 覆盖）均为方案明确设计；本轮返工新增「DEV 回落本地、失败不固化、在途去重、bootstrap 降级」已回填方案 v1.2。
 - `command-template.ts` cn 端点由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com` 属正确修复（实现计划记录旧域名实测 NXDOMAIN），测试同步更新，仓库无旧域名残留。
 - `deploy-agent-web.yml` 移除 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 与方案 v1.1 一致；`grep` 确认 `apps/agent-web/src` 仅 `api-base.ts` 直读这两个变量。
 - 探测端点均有 `/health` 路由（`servers/agent-api/src/index.ts:52`、`servers/controller-api/src/index.ts:32`）。
-- 文档完整：2 份技术方案、2 份实现计划、1 份 PRD，`docs/engineering/AGENTS.md` 索引同步更新；方案 v1.1 修订与最终实现对齐。
+- 文档完整：2 份技术方案、2 份实现计划、1 份 PRD，`docs/engineering/AGENTS.md` 索引同步更新；方案修订与最终实现对齐。
 
 ## 五、最终验证
 
 | 项目 | 结果 | 说明 |
 |------|------|------|
-| 单元测试 | ✅ 410/410 通过（49 个文件） | 含新增 `api-base.test.ts` 19 项、`mcp-proxy.test.ts` 6 项 |
+| 单元测试 | ✅ 419/419 通过（49 个文件） | 含本轮新增 9 项：DEV 回落、失败重探、并发去重、沙箱 sessionStorage 兜底；`api-base.test.ts` 共 28 项 |
 | Lint | ✅ 0 error / 6 warning | 6 个 warning 均位于本次未改动文件（TodoListPanel、NewSessionDialog、HistorySessionDialog、InstantiateWorkflowDialog），为存量问题 |
 | Build（tsc -b + vite build） | ✅ 通过 | chunk 体积告警为存量问题 |
-| E2E | ⏳ 未执行 | 本轮为 `integration..release` 代码评审；前端纯客户端变更，E2E 建议在问题 1 修复后随集成环境回归 |
+| E2E | ⏳ 未执行 | 前端纯客户端变更；修复后建议随集成环境回归 |
 
 ## 六、经验总结
 
