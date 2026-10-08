@@ -8,6 +8,9 @@ const PROBE_TIMEOUT_MS = 2000;
 
 interface ResolverState {
   cached: string | null;
+  // 最近一次解析结果（成功或回落均写入），仅用于同步入口 getApiBase() 与异步入口保持一致；
+  // 与 cached 的区别：cached 会短路后续解析并写 sessionStorage，lastResolved 不会。
+  lastResolved: string | null;
   pending: Promise<string> | null;
 }
 
@@ -20,8 +23,8 @@ interface ResolveOptions {
   state: ResolverState;
 }
 
-const agentState: ResolverState = { cached: null, pending: null };
-const controllerState: ResolverState = { cached: null, pending: null };
+const agentState: ResolverState = { cached: null, lastResolved: null, pending: null };
+const controllerState: ResolverState = { cached: null, lastResolved: null, pending: null };
 
 function readCache(key: string): string | null {
   try {
@@ -54,6 +57,7 @@ async function resolveBase(options: ResolveOptions): Promise<string> {
 
   if (envUrl) {
     state.cached = envUrl;
+    state.lastResolved = envUrl;
     return envUrl;
   }
 
@@ -61,12 +65,14 @@ async function resolveBase(options: ResolveOptions): Promise<string> {
   // 避免 `npm run dev` 手动启动时误读写生产数据，并保证离线/内网可用。
   if (import.meta.env.DEV) {
     state.cached = devFallback;
+    state.lastResolved = devFallback;
     return devFallback;
   }
 
   const stored = readCache(cacheKey);
   if (stored) {
     state.cached = stored;
+    state.lastResolved = stored;
     return stored;
   }
 
@@ -83,11 +89,14 @@ async function resolveBase(options: ResolveOptions): Promise<string> {
       );
       controller.abort();
       state.cached = winner;
+      state.lastResolved = winner;
       writeCache(cacheKey, winner);
       return winner;
     } catch {
-      // 全部失败：回落候选首项，但内存态与持久态均不写入，
-      // 保证后续调用可重新探测，而非整个页面生命周期内锁死 fallback。
+      // 全部失败：回落候选首项。不写 cached、不写 sessionStorage，保证后续调用可重探；
+      // 但写入 lastResolved，使同步入口 getApiBase() 与本异步返回值保持一致，
+      // 避免生产环境（无 env）同步入口兜底 '' 导致 SSE/工作区请求打到静态站点来源。
+      state.lastResolved = fallback;
       return fallback;
     } finally {
       clearTimeout(timeoutId);
@@ -111,7 +120,10 @@ export async function resolveApiBase(): Promise<string> {
 }
 
 export function getApiBase(): string {
+  // 解析完成后（成功或回落）以 lastResolved 与 resolveApiBase() 保持一致；
+  // 解析前才退回 env / DEV localhost / '' 保守值。
   if (agentState.cached) return agentState.cached;
+  if (agentState.lastResolved) return agentState.lastResolved;
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
   if (import.meta.env.DEV) return AGENT_LOCAL_FALLBACK;
   return '';

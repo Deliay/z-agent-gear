@@ -308,6 +308,33 @@ describe('api-base', () => {
 
       expect(getApiBase()).toBe(AGENT_LOCAL_FALLBACK);
     });
+
+    it('T-B17: all fail → getApiBase() matches resolve fallback; re-probe success updates it', async () => {
+      let call = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        const round = Math.floor(call / 2);
+        call += 1;
+        if (round === 0) return Promise.reject(new Error('network down'));
+        // 第二轮：仅候选 2 可用，用于验证 getApiBase() 会随重探结果更新。
+        if (String(url).startsWith(AGENT_CANDIDATE_1)) {
+          return Promise.reject(new Error('still down'));
+        }
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveApiBase, getApiBase } = await freshModule();
+
+      expect(await resolveApiBase()).toBe(AGENT_CANDIDATE_1);
+      expect(getApiBase()).toBe(AGENT_CANDIDATE_1);
+      expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBeNull();
+
+      // 回落未固化：再次调用重新探测，成功后同步入口随之更新。
+      expect(await resolveApiBase()).toBe(AGENT_CANDIDATE_2);
+      expect(getApiBase()).toBe(AGENT_CANDIDATE_2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBe(AGENT_CANDIDATE_2);
+    });
   });
 
   describe('controller-api', () => {
@@ -484,8 +511,43 @@ describe('api-base', () => {
       vi.stubGlobal('fetch', fetchSpy);
 
       const mod = await freshModule();
+      // 解析前（生产、无 env）保守返回 ''；此时宿主尚未渲染，SSE/工作区消费点不会读取。
       expect(mod.getApiBase()).toBe('');
+      // controller 侧不提供同步入口，消费点统一 await，不存在同步/异步返回值分叉。
       expect('getControllerApiBase' in mod).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('T-C13: controller fallback is consistent and independent from agent sync getter', async () => {
+      const attempts: Record<string, number> = {};
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        const u = String(url);
+        attempts[u] = (attempts[u] ?? 0) + 1;
+        // 首轮：所有候选失败，迫使两个入口各自回落。
+        if (attempts[u] === 1) return Promise.reject(new Error('network down'));
+        // 第二轮：仅 controller 候选 2 恢复，其余仍失败。
+        if (u.startsWith(CONTROLLER_CANDIDATE_2)) {
+          return Promise.resolve({ ok: true, status: 200 });
+        }
+        return Promise.reject(new Error('still down'));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveControllerApiBase, resolveApiBase, getApiBase } = await freshModule();
+
+      // 两端点同时失败：各自回落候选首项，互不影响。
+      const [agent, controller] = await Promise.all([
+        resolveApiBase(),
+        resolveControllerApiBase(),
+      ]);
+      expect(agent).toBe(AGENT_CANDIDATE_1);
+      expect(controller).toBe(CONTROLLER_CANDIDATE_1);
+      expect(getApiBase()).toBe(AGENT_CANDIDATE_1);
+
+      // controller 重探成功后返回可用入口；agent 同步入口仍保持自身回落值。
+      expect(await resolveControllerApiBase()).toBe(CONTROLLER_CANDIDATE_2);
+      expect(getApiBase()).toBe(AGENT_CANDIDATE_1);
+      expect(sessionStorage.getItem(CONTROLLER_CACHE_KEY)).toBe(CONTROLLER_CANDIDATE_2);
     });
   });
 });

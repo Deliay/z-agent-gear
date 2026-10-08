@@ -14,6 +14,7 @@ type: Permanent
 
 ## 版本变更
 
+- **v1.3（2026-10-08）**：按第二轮评审修复——`ResolverState` 增加 `lastResolved`：解析成功与回落均写入，但回落不写 `cached`/sessionStorage（保持可重探）；`getApiBase()` 返回 `cached ?? lastResolved ?? env ?? (DEV ? local : '')`，使同步入口与 `resolveApiBase()` 在同一页面生命周期内返回值一致，修复「探测全部失败时同步入口兜底 `''`、SSE 与工作区请求打到静态站点来源 404」的阻塞问题。
 - **v1.2（2026-10-08）**：按集成评审意见修复——①本地手动开发（`npm run dev`，无显式 env）在 `import.meta.env.DEV` 下**跳过线上探测并回落 localhost**（agent `http://localhost:4000` / controller `http://localhost:4001`），杜绝误连生产；②探测全部失败时**不再把 fallback 写入内存态缓存**，允许后续重新探测；③以在途 Promise 去重并发探测；④`main.tsx` 增加 `try/catch` 降级与启动加载态。
 - **v1.1（2026-10-08）**：按 review 意见——确认 `VITE_CONTROLLER_API_URL` 设计本意为「本地 Aspire 注入本地地址」，CI 注入移除并补充影响评估；controller 解析改为**首次使用惰性触发**（`mcp-proxy.ts` 内 `await`），不再启动期 `Promise.all` 阻塞，`main.tsx` 不改动。
 - **v1.0（2026-10-08）**：初稿。
@@ -167,8 +168,8 @@ sequenceDiagram
 - **描述**: 抽出参数化的 `resolveBase({ candidates, envUrl, cacheKey, fallback, state })`，由两个薄封装导出：
   - `resolveApiBase(): Promise<string>` / `getApiBase(): string` —— 候选 `['https://api.zag.fffdan.com', 'https://zag-agent-api.fffdan.com']`，缓存 key `zag:api-base`，行为与现状完全一致。
   - `resolveControllerApiBase(): Promise<string>` —— 候选 `['https://ctrl.zag.fffdan.com', 'https://zag-ctrl-api.fffdan.com']`，缓存 key `zag:controller-api-base`，回落候选首项。
-- **技术细节**: 每组持有独立的模块级状态（`cached` + 在途 `pending`），互不干扰。解析优先级：① `import.meta.env.VITE_*_URL` 非空 → 直接返回且不探测；② `import.meta.env.DEV` 为真（Vite 开发模式，未显式注入 env）→ **直接回落本地地址且不探测**（agent `http://localhost:4000` / controller `http://localhost:4001`），与变更前手动启动行为一致；③ `sessionStorage` 命中 → 返回缓存；④ 否则并发 `fetch(`${origin}/health`, { signal })`（`AbortController` + 2000ms 超时），首个 `res.ok` 者胜出并 `abort` 其余、写入 sessionStorage；全部失败/超时回落候选首项，且**不写 sessionStorage、不写内存缓存**（下次调用可重探）。在途探测以模块级 `pending` Promise 去重，并发消费点共享同一轮请求。`sessionStorage` 读写均以 `try/catch` 包裹，隐私模式/沙箱下抛 `SecurityError` 时降级为无缓存。
-- **兼容性**: `getApiBase()` 未解析时按「`VITE_API_URL` →（DEV 则 `localhost:4000`，否则 `''`）」保守回落（见实现点 5）。controller 侧不提供同步 getter，消费点统一 `await resolveControllerApiBase()`，从根本上消除「未解析值」分支。
+- **技术细节**: 每组持有独立的模块级状态（`cached` + `lastResolved` + 在途 `pending`），互不干扰。解析优先级：① `import.meta.env.VITE_*_URL` 非空 → 直接返回且不探测；② `import.meta.env.DEV` 为真（Vite 开发模式，未显式注入 env）→ **直接回落本地地址且不探测**（agent `http://localhost:4000` / controller `http://localhost:4001`），与变更前手动启动行为一致；③ `sessionStorage` 命中 → 返回缓存；④ 否则并发 `fetch(`${origin}/health`, { signal })`（`AbortController` + 2000ms 超时），首个 `res.ok` 者胜出并 `abort` 其余、写入 sessionStorage；全部失败/超时回落候选首项，且**不写 sessionStorage、不写 `cached`**（下次调用可重探）。所有成功与回落路径均写入 `lastResolved`（仅内存、不短路重探），供同步入口 `getApiBase()` 与异步入口保持一致。在途探测以模块级 `pending` Promise 去重，并发消费点共享同一轮请求。`sessionStorage` 读写均以 `try/catch` 包裹，隐私模式/沙箱下抛 `SecurityError` 时降级为无缓存。
+- **兼容性**: `getApiBase()` 返回 `agentState.cached ?? agentState.lastResolved ?? VITE_API_URL ?? (DEV ? http://localhost:4000 : '')`。解析完成后（无论成功或回落）必返回与 `resolveApiBase()` 相同的值，消除「GraphQL 可用而 SSE/工作区 404」的双 base 分叉；仅在宿主渲染前的极短窗口返回保守值，而 `main.tsx` 在 `await resolveApiBase()` 之后才渲染，该窗口无消费点生效。controller 侧不提供同步 getter，消费点统一 `await resolveControllerApiBase()`，从根本上消除「未解析值」分支。
 - **风险点**: 首次进入设置页时可能等一次探测（最坏 2000ms），有加载态兜底；不影响首屏。
 
 #### 实现点 2：controller 惰性解析接入
@@ -287,6 +288,7 @@ apps/agent-web/src/
 - [ ] 命令模板「国内」生成的启动命令指向可用的 `https://ctrl.zag.fffdan.com`
 - [ ] 本地手动开发（`npm run dev`，无显式 env）回落 `http://localhost:4000` / `http://localhost:4001`，不发起任何线上探测
 - [ ] 探测全部失败后再次调用可重新探测（fallback 不被内存固化）
+- [ ] 探测全部失败时 `getApiBase()` 与 `resolveApiBase()` 返回一致（均回落候选首项），SSE / 工作区请求不再落到静态站点同源相对路径
 - [ ] agent-api 既有自动选择行为无回归
 
 ## 11. 相关文档
