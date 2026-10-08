@@ -7,10 +7,15 @@ type: Permanent
 
 **功能名称**: Web 国内加速 API 接入（Controller API 自动选择）
 **关联 PRD**: 无（工程优化需求，由需求方直接下达）
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-08
 **作者**: DeepSeek
 **feat-branch**: `feat/domestic-api-acceleration`
+
+## 版本变更
+
+- **v1.1（2026-10-08）**：按 review 意见——确认 `VITE_CONTROLLER_API_URL` 设计本意为「本地 Aspire 注入本地地址」，CI 注入移除并补充影响评估；controller 解析改为**首次使用惰性触发**（`mcp-proxy.ts` 内 `await`），不再启动期 `Promise.all` 阻塞，`main.tsx` 不改动。
+- **v1.0（2026-10-08）**：初稿。
 
 ## 1. 概述
 
@@ -64,6 +69,7 @@ controller-api 两个入口均允许任意 origin 跨域读取 `/health`，浏�
 
 - Web 端 controller-api 基址同样进入「两个候选 + `/health` 测速选快」路径，选用对当前用户最快的可用入口。
 - 复用既有解析模型：显式设置环境变量时直接使用、会话级缓存、全部失败回落候选首项。
+- controller-api 解析采用**首次使用惰性触发**，不阻塞首屏；`VITE_CONTROLLER_API_URL` 仅承担「本地开发（Aspire）注入本地地址」职责，线上不再注入。
 - 修复命令模板国内地址指向不可用域名的问题。
 - 不改变本地开发（Aspire / 显式注入）行为，不引入新依赖，不改后端与 contracts。
 
@@ -71,8 +77,8 @@ controller-api 两个入口均允许任意 origin 跨域读取 `/health`，浏�
 
 | 范围 | 内容 |
 |------|------|
-| 做 | 泛化 `api-base.ts` 支持多服务基址解析并新增 controller 解析；`mcp-proxy.ts` 改走解析入口；`main.tsx` 并行解析两者；命令模板国内地址修正；线上构建移除 controller API 固定注入 |
-| 不做 | 后端与 contracts 变更；agent-api 候选列表与竞速策略调整；会话中途动态切换与手动切换 UI；`VITE_CONTROLLER_API_URL` 在本地开发/Aspire 的注入路径 |
+| 做 | 泛化 `api-base.ts` 支持多服务基址解析并新增 controller 解析；`mcp-proxy.ts` 改为首次使用时 `await` 解析；命令模板国内地址修正；线上构建移除 controller API 固定注入 |
+| 不做 | 后端与 contracts 变更；agent-api 候选列表与竞速策略调整；会话中途动态切换与手动切换 UI；首屏阻塞式并行解析 controller；`VITE_CONTROLLER_API_URL` 在本地开发/Aspire 的注入路径 |
 
 ## 2. 技术架构
 
@@ -80,15 +86,14 @@ controller-api 两个入口均允许任意 origin 跨域读取 `/health`，浏�
 
 ```mermaid
 flowchart TD
-    A[main.tsx 启动] --> B[并行解析两个基址]
-    B --> C[resolveApiBase<br/>agent-api]
-    B --> D[resolveControllerApiBase<br/>controller-api]
-    C --> E[Apollo Client / SSE / fetch]
-    D --> F[mcp-proxy.ts<br/>MCP 代理键管理]
-    E --> G{各服务候选}
-    F --> G
-    G --> H[国内加速入口<br/>api / ctrl .zag.fffdan.com]
-    G --> I[全球入口<br/>zag-*-api.fffdan.com]
+    A[main.tsx 启动] --> B[resolveApiBase<br/>agent-api（启动期 await）]
+    B --> C[Apollo Client / SSE / fetch]
+    C --> D[各服务候选]
+    A -. 首屏后进入设置页 .-> E[mcp-proxy.ts 首次调用]
+    E --> F[resolveControllerApiBase<br/>controller-api（惰性 await）]
+    F --> D
+    D --> G[国内加速入口<br/>api / ctrl .zag.fffdan.com]
+    D --> H[全球入口<br/>zag-*-api.fffdan.com]
 ```
 
 ### 2.2 技术栈
@@ -103,10 +108,11 @@ flowchart TD
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
 | `apps/agent-web/src/lib/api-base.ts`（修改） | 泛化为可复用的基址解析器，导出 agent / controller 两组 API | 参数化候选列表 / 环境变量 / 缓存 key / 回落值；每组独立模块级缓存 |
-| `apps/agent-web/src/main.tsx`（修改） | 启动时并行解析两个基址后再渲染 | `Promise.all`，避免串行叠加探测时延 |
-| `apps/agent-web/src/api/mcp-proxy.ts`（修改） | controller 请求改走 `getControllerApiBase()` | 调用点读取，避免模块加载期取到未解析值 |
+| `apps/agent-web/src/api/mcp-proxy.ts`（修改） | 三个请求函数首次调用时 `await resolveControllerApiBase()` 再拼接基址 | 惰性解析，不阻塞首屏；模块级缓存保证只探测一次 |
 | `apps/agent-web/src/lib/command-template.ts`（修改） | 修正国内服务端点 | 常量替换为可用域名 |
 | `.github/workflows/deploy-agent-web.yml`（修改） | 移除 controller API 固定注入，进入自动选择路径 | 与 agent-api 处理保持一致 |
+
+> 说明：`main.tsx` 保持现状（启动期只 `await resolveApiBase()` 解析 agent-api），不为 controller-api 增加首屏阻塞；`VITE_CONTROLLER_API_URL` 仅由本地 Aspire 编排注入，线上不再注入。
 
 ## 3. API 设计
 
@@ -127,27 +133,29 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant M as main.tsx
+    participant U as 用户
+    participant P as mcp-proxy.ts
     participant R as api-base.ts
     participant H1 as ctrl.zag.fffdan.com/health
     participant H2 as zag-ctrl-api.fffdan.com/health
 
-    M->>R: Promise.all([resolveApiBase(), resolveControllerApiBase()])
-    alt VITE_CONTROLLER_API_URL 已设置（本地开发）
-        R-->>M: 直接返回该地址，不探测
+    U->>P: 进入设置页 / 加载 MCP 代理键
+    P->>R: await resolveControllerApiBase()
+    alt VITE_CONTROLLER_API_URL 已设置（本地 Aspire 注入）
+        R-->>P: 直接返回本地地址，不探测
     else sessionStorage 命中
-        R-->>M: 返回缓存入口
+        R-->>P: 返回缓存入口
     else
-        par 并发探测
-            R->>H1: GET /health（2s 超时）
-            R->>H2: GET /health（2s 超时）
+        par 并发探测（2s 超时）
+            R->>H1: GET /health
+            R->>H2: GET /health
         end
         H1-->>R: 200（~0.22s）
         H2-->>R: 200（~1.4s）
         R->>R: 首个 2xx 胜出，写入 sessionStorage
-        R-->>M: 返回 https://ctrl.zag.fffdan.com
+        R-->>P: 返回 https://ctrl.zag.fffdan.com
     end
-    M->>M: 创建 Apollo Client 并渲染
+    P->>H1: 请求 /api/mcp-proxy-keys（用解析后的基址）
 ```
 
 ### 5.2 关键实现点
@@ -156,29 +164,37 @@ sequenceDiagram
 
 - **描述**: 抽出参数化的 `resolveBase({ candidates, envUrl, cacheKey, fallback, state })`，由两个薄封装导出：
   - `resolveApiBase(): Promise<string>` / `getApiBase(): string` —— 候选 `['https://api.zag.fffdan.com', 'https://zag-agent-api.fffdan.com']`，缓存 key `zag:api-base`，行为与现状完全一致。
-  - `resolveControllerApiBase(): Promise<string>` / `getControllerApiBase(): string` —— 候选 `['https://ctrl.zag.fffdan.com', 'https://zag-ctrl-api.fffdan.com']`，缓存 key `zag:controller-api-base`，回落候选首项。
-- **技术细节**: 每组持有独立的模块级 `cached` 状态，互不干扰。解析优先级：`import.meta.env.VITE_*_URL` 非空 → 直接返回且不探测；`sessionStorage` 命中 → 返回缓存；否则并发 `fetch(`${origin}/health`, { signal })`（`AbortController` + 2000ms 超时），首个 `res.ok` 者胜出并 `abort` 其余、写入 sessionStorage；全部失败/超时回落候选首项且不写 sessionStorage。
-- **兼容性**: `getApiBase()` 未解析时回落 `VITE_API_URL || ''`（维持现状）；`getControllerApiBase()` 未解析时回落 `VITE_CONTROLLER_API_URL || 'http://localhost:4001'`（维持 `mcp-proxy.ts` 现状，本地裸 dev 语义不变）。
-- **风险点**: 生产构建移除 `VITE_CONTROLLER_API_URL` 后，若渲染早于解析完成，`getControllerApiBase()` 会短暂返回 `http://localhost:4001`。运行路径中 controller 调用均发生在用户进入设置页之后、且 `main.tsx` 已 `await` 解析完成，不触及该分支；实现时保证解析失败也不 reject。
+  - `resolveControllerApiBase(): Promise<string>` —— 候选 `['https://ctrl.zag.fffdan.com', 'https://zag-ctrl-api.fffdan.com']`，缓存 key `zag:controller-api-base`，回落候选首项。
+- **技术细节**: 每组持有独立的模块级 `cached` 状态，互不干扰。解析优先级：`import.meta.env.VITE_*_URL` 非空 → 直接返回且不探测；`sessionStorage` 命中 → 返回缓存；否则并发 `fetch(`${origin}/health`, { signal })`（`AbortController` + 2000ms 超时），首个 `res.ok` 者胜出并 `abort` 其余、写入 sessionStorage；全部失败/超时回落候选首项且不写 sessionStorage。模块级 `cached` 保证惰性路径也只探测一次。
+- **兼容性**: `getApiBase()` 未解析时回落 `VITE_API_URL || ''`（维持现状）。controller 侧不提供同步 getter，消费点统一 `await resolveControllerApiBase()`，从根本上消除「未解析值」分支。
+- **风险点**: 首次进入设置页时可能等一次探测（最坏 2000ms），有加载态兜底；不影响首屏。
 
-#### 实现点 2：启动引导并行解析
+#### 实现点 2：controller 惰性解析接入
 
-- **描述**: `main.tsx` 由 `await resolveApiBase()` 改为 `const [apiBase] = await Promise.all([resolveApiBase(), resolveControllerApiBase()])`，两者并行探测，不叠加时延；随后创建 Apollo Client 并渲染。
-- **技术细节**: controller 结果存入模块级缓存，`mcp-proxy.ts` 通过 `getControllerApiBase()` 同步读取，无需在启动期持有返回值。
-- **风险点**: 最坏启动时延为「单次探测超时上限」2000ms（两路并行、取最慢），与既有 agent 探测相同量级。
+- **描述**: `mcp-proxy.ts` 删除模块级 `CONTROLLER_API_URL` 常量，`fetchMcpProxyKeys` / `createMcpProxyKey` / `revokeMcpProxyKey` 三个函数内部先 `const base = await resolveControllerApiBase()` 再拼接请求 URL。`main.tsx` 不改动，首屏仍只解析 agent-api。
+- **技术细节**: 三个函数本就是 async；`resolveControllerApiBase()` 幂等（模块级缓存 + sessionStorage），首次探测后后续调用即时返回。本地 Aspire 注入 `VITE_CONTROLLER_API_URL` 时直接返回本地地址、零探测。
+- **风险点**: 探测期间设置页 MCP 区块呈加载态，属既有加载态表现；无首屏回归。
 
-#### 实现点 3：消费点与命令模板修正
+#### 实现点 3：命令模板修正
 
-- **描述**:
-  - `mcp-proxy.ts` 删除模块级 `CONTROLLER_API_URL` 常量，三个请求函数内部改用 `getControllerApiBase()`（调用点取值，避免模块加载期早于解析）。
-  - `command-template.ts` 的 `ENDPOINTS.cn` 由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com`（`global` 不变）。
+- **描述**: `command-template.ts` 的 `ENDPOINTS.cn` 由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com`（`global` 不变）。
 - **技术细节**: 命令模板是「用户本地 CLI 连接 controller 服务」的显式端点选择，保持 global/cn 两个静态选项，不在模板内做测速；仅修正失效域名。
 - **风险点**: `ctrl.zag.fffdan.com` 为国内加速域名，海外用户选「cn」时可能较慢——但这是用户的显式选择，且此前该地址本就不可用，属净改善。
 
-#### 实现点 4：部署配置调整
+#### 实现点 4：部署配置调整（含 `VITE_CONTROLLER_API_URL` 影响评估）
 
 - **描述**: `.github/workflows/deploy-agent-web.yml` 构建步骤移除 `VITE_CONTROLLER_API_URL: https://zag-ctrl-api.fffdan.com`（保留 `VITE_BASE_URL`），让线上产物进入 controller 自动选择路径。
-- **风险点**: 移除后线上不再有固定 controller 基址；解析失败时回落候选首项（国内加速入口），错误表现不劣于固定全球入口的现状。
+- **`VITE_CONTROLLER_API_URL` 设计本意与影响评估**: 该变量的设计本意是「本地开发由 Aspire 编排注入本地 controller 地址」（`AppHost.cs:85`），解析器遵循「env 优先」——env 一旦设置就直接返回并跳过探测。因此 CI 中把它当作生产固定地址注入，会**直接短路自动选速**，必须移除。移除后的影响面经全仓核查确认收敛：
+
+  | 读取方 | 类型 | 移除 CI 注入后 |
+  |--------|------|---------------|
+  | `aspire/AgentGear.AppHost/AppHost.cs:85` | 本地开发注入 | 保留，本地行为不变 |
+  | `.github/workflows/deploy-agent-web.yml:42` | 线上固定注入 | 移除（本次目标） |
+  | `apps/agent-web/src/api/mcp-proxy.ts:1` | 唯一前端消费点 | 改为 `await resolveControllerApiBase()` |
+  | `vite.config.ts` | — | 未使用该变量，无影响 |
+  | 后端 / `agent-controller` CLI | — | 使用 `ZAG_SERVER_ENDPOINT`，与该 Vite 注入变量无关 |
+
+- **风险点**: 移除后线上进入两候选探测；解析失败回落候选首项（国内加速入口），错误表现不劣于固定全球入口的现状。不存在「未解析值命中 localhost」的窗口——controller 解析改为首次使用惰性触发（实现点 2），消费点自身 `await`。
 
 ## 6. 技术决策
 
@@ -187,7 +203,7 @@ sequenceDiagram
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
 | 解析模型 | 泛化现有 `api-base.ts` 复用 | 新建独立 `controller-api-base.ts` | A | 两服务逻辑同构，参数化后仅候选/key 不同，避免复制粘贴形成第二套口径 |
-| 解析时机 | 启动时与 agent 并行解析 | 首次使用时惰性解析 | A | 与既有架构一致；探测并行不叠加时延；消费点保持同步读取 |
+| 解析时机 | 首次使用时惰性解析（`mcp-proxy` 内 `await`） | 启动时与 agent 并行解析（`main.tsx` `Promise.all`） | A | controller 非首屏关键路径；启动期阻塞会在「agent 快、controller 挂满 2s」时拖慢首屏；惰性路径从根本上消除未解析 fallback 分支 |
 | 缓存粒度 | sessionStorage（会话级） | localStorage（持久） | A | 与 `20260908` 决策一致，网络质量随地点/时间变化，避免固化过期结论 |
 | 竞速策略 | 首个 2xx 胜出 | 全部完成后比较耗时 | A | 与 `20260908` 决策一致，省去等待慢入口 |
 | 命令模板端点 | 保持 global/cn 静态选项 | 模板内测速选快 | A | 模板面向用户本地 CLI 的显式区域选择，非 Web 运行时请求；且需保持可预期 |
@@ -207,13 +223,12 @@ sequenceDiagram
 ```
 apps/agent-web/src/
 ├── lib/
-│   ├── api-base.ts          # 修改：泛化解析器，导出 agent / controller 两组 API
+│   ├── api-base.ts          # 修改：泛化解析器，导出 agent 双 API + resolveControllerApiBase
 │   ├── api-base.test.ts     # 修改：补充 controller 用例与两者独立性用例
 │   ├── command-template.ts  # 修改：修正国内端点
 │   └── command-template.test.ts  # 修改：同步断言
 ├── api/
-│   └── mcp-proxy.ts         # 修改：改走 getControllerApiBase()
-├── main.tsx                 # 修改：并行解析两个基址
+│   └── mcp-proxy.ts         # 修改：首次调用 await resolveControllerApiBase()
 └── ...
 
 .github/workflows/
@@ -257,7 +272,7 @@ apps/agent-web/src/
 - [ ] 代码实现完成，`api-base.ts` 两组解析器单元测试全部通过
 - [ ] `mcp-proxy.ts` 请求基址为解析后的 controller 入口
 - [ ] 本地 `VITE_CONTROLLER_API_URL` 指定地址时，无任何探测请求，controller 请求发往指定地址
-- [ ] 线上产物启动时对 controller 两个候选 `/health` 探测并选用最快可用者（DevTools 可观测）
+- [ ] 线上产物首次使用 MCP 代理键功能时对 controller 两个候选 `/health` 探测并选用最快可用者（DevTools 可观测），且该探测不阻塞首屏
 - [ ] 阻断一个 controller 入口后自动使用另一入口，MCP 代理键管理功能正常
 - [ ] 两个 controller 入口均不可达时回落国内加速入口，错误表现不劣于现状
 - [ ] 命令模板「国内」生成的启动命令指向可用的 `https://ctrl.zag.fffdan.com`
