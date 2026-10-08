@@ -6,6 +6,8 @@ const AGENT_CANDIDATE_1 = 'https://api.zag.fffdan.com';
 const AGENT_CANDIDATE_2 = 'https://zag-agent-api.fffdan.com';
 const CONTROLLER_CANDIDATE_1 = 'https://ctrl.zag.fffdan.com';
 const CONTROLLER_CANDIDATE_2 = 'https://zag-ctrl-api.fffdan.com';
+const AGENT_LOCAL_FALLBACK = 'http://localhost:4000';
+const CONTROLLER_LOCAL_FALLBACK = 'http://localhost:4001';
 
 interface ProbeCfg {
   ok: boolean;
@@ -59,13 +61,20 @@ function mockController(opts: { c1?: ProbeCfg; c2?: ProbeCfg }) {
   });
 }
 
+function setEnv(key: string, value: string | boolean) {
+  (import.meta.env as unknown as Record<string, string | boolean>)[key] = value;
+}
+
 describe('api-base', () => {
   const origEnv = { ...import.meta.env };
 
   beforeEach(() => {
     sessionStorage.clear();
-    (import.meta.env as Record<string, string>).VITE_API_URL = '';
-    (import.meta.env as Record<string, string>).VITE_CONTROLLER_API_URL = '';
+    setEnv('VITE_API_URL', '');
+    setEnv('VITE_CONTROLLER_API_URL', '');
+    // 默认模拟线上生产构建：DEV=false，走真实探测路径。
+    // 本地开发行为用单独用例把 DEV 置为 true 覆盖。
+    setEnv('DEV', false);
   });
 
   afterEach(() => {
@@ -215,6 +224,90 @@ describe('api-base', () => {
       expect(result).toBe(AGENT_CANDIDATE_2);
       expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBe(AGENT_CANDIDATE_2);
     });
+
+    it('T-B11: both fail → fallback NOT cached in memory → next call re-probes', async () => {
+      let call = 0;
+      const fetchMock = vi.fn().mockImplementation(() => {
+        const round = Math.floor(call / 2);
+        call += 1;
+        if (round === 0) return Promise.reject(new Error('network down'));
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveApiBase } = await freshModule();
+      const first = await resolveApiBase();
+
+      expect(first).toBe(AGENT_CANDIDATE_1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBeNull();
+
+      const second = await resolveApiBase();
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(second).toBe(AGENT_CANDIDATE_1);
+      expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBe(AGENT_CANDIDATE_1);
+    });
+
+    it('T-B12: DEV + no env → localhost fallback, no probe, no sessionStorage', async () => {
+      setEnv('DEV', true);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const { resolveApiBase } = await freshModule();
+      const result = await resolveApiBase();
+
+      expect(result).toBe(AGENT_LOCAL_FALLBACK);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem(AGENT_CACHE_KEY)).toBeNull();
+    });
+
+    it('T-B13: DEV + explicit env → env wins over localhost fallback', async () => {
+      setEnv('DEV', true);
+      setEnv('VITE_API_URL', 'http://127.0.0.1:9000');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const { resolveApiBase } = await freshModule();
+
+      expect(await resolveApiBase()).toBe('http://127.0.0.1:9000');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('T-B14: concurrent resolve calls share a single probe round', async () => {
+      const fetchMock = mockAgent({
+        c1: { ok: true, status: 200 },
+        c2: { ok: true, status: 200 },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveApiBase } = await freshModule();
+      const [r1, r2] = await Promise.all([resolveApiBase(), resolveApiBase()]);
+
+      expect(r1).toBe(r2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('T-B15: sessionStorage throws (sandbox) → resolve still succeeds via probe', async () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new DOMException('denied', 'SecurityError');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new DOMException('denied', 'SecurityError');
+      });
+      vi.stubGlobal('fetch', mockAgent({ c1: { ok: true, status: 200 }, c2: { ok: false, status: 500 } }));
+
+      const { resolveApiBase } = await freshModule();
+
+      expect(await resolveApiBase()).toBe(AGENT_CANDIDATE_1);
+    });
+
+    it('T-B16: getApiBase() in DEV without env → localhost fallback', async () => {
+      setEnv('DEV', true);
+      const { getApiBase } = await freshModule();
+
+      expect(getApiBase()).toBe(AGENT_LOCAL_FALLBACK);
+    });
   });
 
   describe('controller-api', () => {
@@ -334,6 +427,56 @@ describe('api-base', () => {
       expect(r1).toBe(r2);
       expect(callsAfterFirst).toBe(2);
       expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it('T-C10: DEV + no env → controller localhost fallback, no probe', async () => {
+      setEnv('DEV', true);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const { resolveControllerApiBase } = await freshModule();
+      const result = await resolveControllerApiBase();
+
+      expect(result).toBe(CONTROLLER_LOCAL_FALLBACK);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('T-C11: both fail → fallback NOT cached in memory → next call re-probes', async () => {
+      let call = 0;
+      const fetchMock = vi.fn().mockImplementation(() => {
+        const round = Math.floor(call / 2);
+        call += 1;
+        if (round === 0) return Promise.reject(new Error('network down'));
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveControllerApiBase } = await freshModule();
+
+      expect(await resolveControllerApiBase()).toBe(CONTROLLER_CANDIDATE_1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(sessionStorage.getItem(CONTROLLER_CACHE_KEY)).toBeNull();
+
+      expect(await resolveControllerApiBase()).toBe(CONTROLLER_CANDIDATE_1);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(sessionStorage.getItem(CONTROLLER_CACHE_KEY)).toBe(CONTROLLER_CANDIDATE_1);
+    });
+
+    it('T-C12: concurrent controller resolve calls share a single probe round', async () => {
+      const fetchMock = mockController({
+        c1: { ok: true, status: 200 },
+        c2: { ok: true, status: 200 },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { resolveControllerApiBase } = await freshModule();
+      const [r1, r2] = await Promise.all([
+        resolveControllerApiBase(),
+        resolveControllerApiBase(),
+      ]);
+
+      expect(r1).toBe(r2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it('T-C9: getApiBase() does not resolve controller-api', async () => {

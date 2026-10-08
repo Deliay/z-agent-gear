@@ -66,3 +66,5 @@ cd servers/agent-api && npm run dev
 cd servers/controller-api && npm run dev
 cd apps/agent-web && npm run dev
 ```
+
+> **本地地址说明**：手动启动（`npm run dev`，未注入任何 `VITE_API_URL` / `VITE_CONTROLLER_API_URL`）时，前端处于 Vite 开发模式，会**跳过线上入口探测**并直接使用本地默认地址：agent-api `http://localhost:4000`、controller-api `http://localhost:4001`，请求全程留在本地，不会误连生产环境。如需指向其他地址（如 Aspire 编排注入），显式设置 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 即可覆盖默认值。
