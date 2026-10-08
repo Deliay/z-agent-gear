@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 前端支持服务器自动选择
 **关联 PRD**: docs/product/draft/20260908-frontend-auto-select-server.md
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-09-08
 **作者**: Kimi
 **feat-branch**: `prd/frontend-auto-select-server`

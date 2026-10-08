@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: Web 国内加速 API 接入（Controller API 自动选择）
 **关联 PRD**: 无（工程优化需求，由需求方直接下达）
-**技术提案版本**: v1.2
+**技术提案版本**: v1.3
 **创建日期**: 2026-10-08
 **作者**: DeepSeek
 **feat-branch**: `feat/domestic-api-acceleration`
