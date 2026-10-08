@@ -15,7 +15,7 @@ describe('buildControllerCommand', () => {
     it('cn region', () => {
       const result = buildControllerCommand({ pm: 'npm', region: 'cn', key: testKey });
       expect(result).toBe(
-        `npx agent-gear --key ${testKey} --server https://ctrl.zag.cn.fffdan.com`
+        `npx agent-gear --key ${testKey} --server https://ctrl.zag.fffdan.com`
       );
     });
   });
@@ -31,7 +31,7 @@ describe('buildControllerCommand', () => {
     it('cn region', () => {
       const result = buildControllerCommand({ pm: 'pnpm', region: 'cn', key: testKey });
       expect(result).toBe(
-        `pnpm dlx agent-gear --key ${testKey} --server https://ctrl.zag.cn.fffdan.com`
+        `pnpm dlx agent-gear --key ${testKey} --server https://ctrl.zag.fffdan.com`
       );
     });
   });
@@ -47,7 +47,7 @@ describe('buildControllerCommand', () => {
     it('cn region', () => {
       const result = buildControllerCommand({ pm: 'bun', region: 'cn', key: testKey });
       expect(result).toBe(
-        `bunx agent-gear --key ${testKey} --server https://ctrl.zag.cn.fffdan.com`
+        `bunx agent-gear --key ${testKey} --server https://ctrl.zag.fffdan.com`
       );
     });
   });
@@ -88,7 +88,7 @@ describe('buildControllerCommand', () => {
             script: 'agent-gear',
             env: {
               ZAG_CONTROLLER_KEY: testKey,
-              ZAG_SERVER_ENDPOINT: 'https://ctrl.zag.cn.fffdan.com',
+              ZAG_SERVER_ENDPOINT: 'https://ctrl.zag.fffdan.com',
             },
           },
         ],

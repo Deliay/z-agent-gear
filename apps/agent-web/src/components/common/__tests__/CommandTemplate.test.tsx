@@ -20,7 +20,7 @@ describe('CommandTemplate', () => {
 
   it('displays correct endpoint for cn region', () => {
     render(<CommandTemplate keyValue={testKey} />);
-    expect(screen.getByText(/https:\/\/ctrl\.zag\.cn\.fffdan\.com/)).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/ctrl\.zag\.fffdan\.com/)).toBeInTheDocument();
   });
 
   it('shows copy button', () => {
