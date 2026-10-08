@@ -5,7 +5,7 @@ type: Permanent
 
 # 前端 API 自动选择与国内加速 集成验收报告
 
-> **状态**: 🟢 已闭环 —— AI Review 轮次共发现 4 个问题（1 个阻塞、2 个建议、1 个可选），均已修复并验证；修复 commit `5922eb0`。
+> **状态**: 🔴 返工中 —— 第一轮 AI Review 发现 4 个问题（1 个阻塞、2 个建议、1 个可选），已修复（commit `5922eb0`）并经第二轮复核核实；但第二轮复核新发现 1 个阻塞问题（问题 5：探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 返回值不一致），已再次打回返工，待修复后重新提交 Review。详见 [七、第二轮 AI Review 复核](#七第二轮-ai-review-复核2026-10-08修复后)。
 
 ## 关联文档
 
@@ -83,6 +83,7 @@ type: Permanent
 | 2 | 探测失败后内存固化 fallback | 失败态复用 `state.cached` | ✅ 已修复（建议） | `5922eb0` |
 | 3 | bootstrap 无异常兜底/加载态 | 缺少降级路径 | ✅ 已修复（建议） | `5922eb0` |
 | 4 | 并发 resolve 重复探测 | 未去重 in-flight Promise | ✅ 已实现（可选） | `5922eb0` |
+| 5 | 探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 不一致，SSE/工作区请求打到静态站点来源 | 问题 2 修复后失败态不再写 `state.cached`，同步消费点失去回落值 | ❌ 待修复（阻塞，第二轮新增） | — |
 
 ## 四、本轮已核实通过项
 
@@ -106,6 +107,56 @@ type: Permanent
 - 「未配置环境变量」在本地与线上含义相反：本地是常态、线上是异常。环境相关回退分支必须显式区分 `import.meta.env.DEV` / `MODE`，不能仅按「env 是否为空」推断运行环境。
 - 移除旧 fallback（`http://localhost:4000` / `http://localhost:4001`）属于隐式行为变更；单测按新设计编写无法暴露该回归，评审需逐点对照变更前默认值。
 - 「不写缓存」的验收断言应同时覆盖内存态与持久态，避免失败结果被模块级变量等效缓存。
+- 「失败不写缓存」类修复必须同步审视全部消费点：异步 resolve 入口与同步 `getApiBase()` 入口的返回值契约需要显式保持一致，否则一个入口的修复会把故障转移到另一个入口。
+
+## 七、第二轮 AI Review 复核（2026-10-08，修复后）
+
+**复核对象**：修复 commit `5922eb0`、文档回填 `4ca31b6`；差异范围 `integration..release`（merge-base `6908db4`..`integration` `4ca31b6`，15 个 commit、21 个文件、+1918 / -33）。
+
+### 7.1 上轮 4 项问题修复核验（全部属实）
+
+| 上轮问题 | 核验结论 | 证据 |
+|---|---|---|
+| 问题 1（阻塞）本地无 env 直连生产 | ✅ 已修复 | `api-base.ts:64-69`：`import.meta.env.DEV` 且无显式 env 时短路回落 agent `http://localhost:4000` / controller `http://localhost:4001`，跳过线上探测与 sessionStorage；`getApiBase()`（`api-base.ts:113-118`）同步 DEV 回落；T-B12 / T-B13 / T-B16 / T-C10 覆盖 |
+| 问题 2（建议）失败固化 fallback | ✅ 已修复 | `api-base.ts:88-91`：catch 分支不写 `state.cached`、不写 sessionStorage；T-B11 / T-C11 断言失败后二次调用重新探测（fetch 2→4，二次成功后才写缓存） |
+| 问题 3（建议）bootstrap 无兜底/加载态 | ✅ 已修复 | `main.tsx:22-35`：`bootstrap()` try/catch 降级 `VITE_API_URL \|\| ''` + 「加载中…」启动占位；`api-base.ts:27-43` sessionStorage 读写 try/catch（沙箱/隐私模式）；T-B15 覆盖 |
+| 问题 4（可选）并发重复探测 | ✅ 已实现 | `api-base.ts:74,98` 模块级 `state.pending` 在途去重 + `finally` 清理（`api-base.ts:92-95`）；T-B14 / T-C12 断言并发两次调用仅一轮探测（fetch 2 次） |
+
+本轮独立复跑验证：`npm test` **419/419 通过**（49 个文件，`api-base.test.ts` 28 项）、`npm run lint` **0 error / 6 warning**（均为未改动文件存量 warning）、`npm run build`（tsc -b + vite build）**通过**，与上游「验证结果」一致。README「手动启动」本地地址说明、技术方案 20260908 v1.1 / 20261008 v1.2 修订、验收报告回填均已核对无误。
+
+### 7.2 本轮新发现问题
+
+#### 问题 5（🔴 阻塞）探测失败回落时 `getApiBase()` 与 `resolveApiBase()` 返回值不一致，SSE 与工作区请求打到静态站点来源
+
+**问题描述**：探测全部失败时，`resolveApiBase()` 按设计回落候选首项（`api-base.ts:88-91` `return fallback`），`main.tsx:28-34` 以该值创建 Apollo client；但同一页面生命周期内，`getApiBase()`（`api-base.ts:113-118`）因问题 2 修复后 `state.cached` 不再写入、生产构建又无 `VITE_API_URL`，最终兜底返回 `''`。`''` 意味着「同源相对路径」，而生产前端部署于 GitHub Pages（`.github/workflows/deploy-agent-web.yml`，静态站点来源并非任何 API 候选来源），导致以下消费点全部 404：
+
+- `useSessionStream.ts:36`：EventSource `''/api/session/{id}/stream` → **会话 SSE 流完全不可用**；
+- `SessionView.tsx:160`：同类 SSE 建连失败；
+- `WorkspaceSection.tsx:60,177`：`''/graphql` fetch 失败。
+
+即同一页面出现两套 API base（Apollo 走候选首项、SSE/工作区走静态站点来源），呈「GraphQL 可用、会话流 404」的部分故障，比整体不可用更难排查。
+
+**触发场景**：启动时两个候选 `/health` 在 2s 内（`api-base.ts:78` `PROBE_TIMEOUT_MS`）全部失败或超时。本需求的核心目标场景即国内慢网络，2s 竞速超时并不罕见；一旦命中，`/graphql` 仍有回落（Apollo 可用），但会话流与工作区操作直至用户刷新页面前持续不可用，且刷新前无任何提示指向根因。
+
+**根因分析**：问题 2 的修复（失败不写 `state.cached`）破坏了「渲染前 `state.cached` 必已置值、`getApiBase()` 必与 resolve 结果一致」这一隐含不变量。`getApiBase()` 的最终兜底 `''` 是为 vite dev 代理（`vite.config.ts` `/graphql`、`/api` proxy）准备的相对路径，在生产构建中从不是合法 API base。结果是「全部失败回落 `fallback`」的契约只对异步消费点（`main.tsx` Apollo、`mcp-proxy.ts`）成立，对同步消费点（SSE、工作区 fetch）不成立——问题 4 修复中把 fallback 从「固化」改为「仅本次生效」时，未同步为同步入口保留回落值。
+
+**修复方案**（任选其一，要求两个入口返回值在同一页面生命周期内保持一致）：
+
+1. **推荐**：`ResolverState` 增加 `lastResolved: string | null`，成功与回落均写 `lastResolved`（回落仍不写 `state.cached`、不写 sessionStorage，保持可重探）；`getApiBase()` 改为 `state.cached ?? state.lastResolved ?? env ?? (DEV ? local : '')`。
+2. 或：`getApiBase()` 生产兜底返回 `AGENT_CANDIDATES[0]` 而非 `''`，使同步消费点与 `fallback` 一致；
+3. 或：bootstrap 将解析结果经 context/props 注入消费点，废弃 `getApiBase()` 对环境的猜测。
+
+补充单测：
+
+- 探测全部失败后 `getApiBase()` 返回 `AGENT_CANDIDATES[0]`（而非 `''`），且再次 `resolveApiBase()` 仍可重探、重探成功后更新返回值（不因回落固化，回归问题 2 语义）；
+- controller 侧同样覆盖同步/异步入口一致性；
+- 按新契约调整 T-C9 现有 `''` 断言。
+
+**当前状态**：❌ 待修复（本轮打回）。
+
+### 7.3 本轮复核结论
+
+除问题 5 外，`integration..release` 全量差异未发现其他新问题：`mcp-proxy.ts` 惰性解析与 `mcp-proxy.test.ts`（6 项）、`command-template.ts` cn 端点修正（旧域名 NXDOMAIN）、`deploy-agent-web.yml` 移除 env 注入、文档与实现一致性均合格。**本轮结论：打回返工**——请按 7.2 修复问题 5 后重新提交 Review（预计修复面极小：`api-base.ts` + `api-base.test.ts` 即可闭环）。
 
 ## 相关文档
 
