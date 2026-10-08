@@ -174,7 +174,9 @@ flowchart LR
 - [[proposals/20260803-feat-acp-v1-completion.md]] — ACP v1 协议补全与展示优化
 - [[proposals/20260829-fix-workflow-worktree-session-start.md]] — 工作流 Worktree 节点会话启动失败修复
 - [[proposals/20260907-feat-experience-optimization-phase1.md]] — 综合体验优化一期
+- [[proposals/20260908-feat-frontend-auto-select-server.md]] — 前端支持服务器自动选择
 - [[proposals/20260829-refactor-mcp-controller-proxy.md]] — MCP 传递重构一期（控制器代理 MCP 访问）
+- [[proposals/20261008-feat-domestic-api-acceleration.md]] — Web 国内加速 API 接入（Controller API 自动选择）
 
 ### 实现计划（`plan/`）
 
@@ -210,3 +212,4 @@ flowchart LR
 - [[plan/20260829-refactor-mcp-controller-proxy.md]] — MCP 传递重构一期（控制器代理 MCP 访问）实现计划
 - [[plan/20260907-feat-experience-optimization-phase1.md]] — 综合体验优化一期实现计划
 - [[plan/20260908-feat-frontend-auto-select-server.md]] — 前端支持服务器自动选择实现计划
+- [[plan/20261008-feat-domestic-api-acceleration.md]] — Web 国内加速 API 接入（Controller API 自动选择）实现计划
