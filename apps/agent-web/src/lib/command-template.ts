@@ -3,7 +3,7 @@ type ServerRegion = 'global' | 'cn';
 
 const ENDPOINTS: Record<ServerRegion, string> = {
   global: 'https://zag-ctrl-api.fffdan.com',
-  cn: 'https://ctrl.zag.cn.fffdan.com',
+  cn: 'https://ctrl.zag.fffdan.com',
 };
 
 const PACKAGE_RUNNERS: Record<Exclude<PackageManager, 'pm2'>, string> = {

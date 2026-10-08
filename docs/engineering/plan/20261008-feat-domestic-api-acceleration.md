@@ -120,6 +120,7 @@ cd apps/agent-web && npm run build && npm run lint && npm run test
 |------|------|------|
 | `apps/agent-web/src/lib/command-template.ts` | 修改 | `ENDPOINTS.cn` 由 `https://ctrl.zag.cn.fffdan.com` 改为 `https://ctrl.zag.fffdan.com`；`global` 不变 |
 | `apps/agent-web/src/lib/command-template.test.ts` | 修改 | npm / pnpm / bun / pm2 四组 cn 用例断言中的域名同步替换 |
+| `apps/agent-web/src/components/common/__tests__/CommandTemplate.test.tsx` | 修改 | cn 端点断言同步替换（实现期发现的存量断言） |
 
 ### 命令参考
 
