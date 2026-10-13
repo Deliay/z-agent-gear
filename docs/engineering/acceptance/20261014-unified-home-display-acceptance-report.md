@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告——首页展示优化（PR #202）AI Review 轮次，记录代码审查结论、发现的问题、合并冲突解决指引与验证结果
+description: integration→release 集成验收报告——首页展示优化（PR #202）AI Review 轮次（含第二轮返工复核），记录代码审查结论、发现的问题、合并冲突解决指引与验证结果
 type: Permanent
 ---
 
 # 首页展示优化 integration 验收报告（2026-10-14）
 
-> **状态**: 🔴 打回返工（docs-only）——代码正确性审查通过、全部测试绿（单测 608+414、API 集成 339/339、E2E 164 passed 且 26 项失败经基线对照证实为存量问题、本特性 E2E 5/5、试验合并通过），但发现 2 项文档/契约一致性问题（问题 1：`contracts/home.graphql` 契约注释与 `Controller.gateways` 实现不符；问题 2：实现计划对 MainLayout 加载态的描述与实现不符），需修复后重新提交 Review。另有 1 项**合并冲突解决指引**（问题 A）必须在合并节点遵守，否则合并后单测必挂；4 项建议（问题 3-6）不阻塞。
+> **状态**: 🔴 **第二轮打回返工（docs-only）**——返工 `ff79b22` 核验：问题 2（plan 对 MainLayout 加载态的描述）✅ 修复通过；问题 1（`Controller.gateways` 语义口径）⚠️ **修复不完整**：contracts/plan/`servers/agent-api/AGENTS.md` 已修正，但同一错误口径仍残留在 `schemas/home.ts:23`、`resolvers/home.ts:108`、`apps/agent-web/src/graphql/types.ts:584` 3 处注释（问题 7，阻塞），需补齐后重新提交 Review。代码正确性与全部测试结论不变（单测 608+414、API 集成 339/339、E2E 无新增失败、试验合并通过）。另有 2 项建议（问题 8、9）不阻塞；首轮 4 项建议（问题 3-6）与**合并冲突解决指引**（问题 A）继续有效。详见「六、第二轮复核」。
 
 ## 关联文档
 
@@ -66,6 +66,8 @@ PR #202 与 release 存在 2 处文本冲突（上游产物已注明留待合并
 
 **修复要求**：修正 `contracts/home.graphql` 头注释（与 `servers/agent-api/AGENTS.md`）：明确 `gateways` 为 DB 查询、不随在线状态降级；`worktrees` 为 Redis relay 扇出、离线/失败降级为空列表。docs-only。
 
+> **第二轮核验（`ff79b22`）**：⚠️ 部分修复——`contracts/home.graphql`（头注释 + `extend type Controller` 注释）、`servers/agent-api/AGENTS.md:48`、plan 同步处均已改为「`gateways` 纯 DB 查询、不随在线状态降级」，与实现一致；但同 diff 内 3 处同源注释漏改（见问题 7），本问题**未完全闭环**。
+
 ### 问题 2（🟡 一般·文档一致性）实现计划对 MainLayout 加载态的描述与实现不符
 
 **问题描述**：`docs/engineering/plan/20261013-feat-unified-home-display.md:201` 写 MainLayout「以 props/context 下传 `HomePage` 与 `Sidebar`（含 **`loading && !data` 加载态**与整体错误 + 重试入口）」，但实现（`apps/agent-web/src/pages/MainLayout.tsx`）有意采用了「首屏不阻塞布局外壳」策略（commit `4fd78a4`、`9d275a8`）：**不存在任何 `loading && !data` 加载分支**，聚合数据未就绪时以空数据渲染外壳、数据到达后同批填充。该偏离已写入 `apps/agent-web/AGENTS.md`「首页数据流」小节，但实现计划未同步，两份文档对同一行为描述不一致。
@@ -101,8 +103,80 @@ GraphQL 需全部所选字段就绪才返回响应：`workspaces.worktrees` 任�
 
 > 备注：本轮首轮执行曾出现 89 项 API 失败 + 48 项 E2E 失败，经排查为**测试环境问题**（本机并存两个 Aspire 会话，`agent-api` 固定端口 10001 被另一会话占用，测试打到另一会话的 agent-api + 本会话 controller-api，跨 Redis 导致注册 `INVALID_KEY`；另 `VITE_API_URL` 需为 origin 形态、不带 `/graphql` 后缀，否则 SSE 消息流 404）。环境修正后 API 339/339 全绿、E2E 恢复上述结果。记录备查。
 
-## 五、结论
+## 五、结论（第一轮，历史记录）
 
 **打回返工（docs-only）**——问题 1、2 均为文档/契约一致性问题，改动限于 `contracts/home.graphql`、`servers/agent-api/AGENTS.md`、`docs/engineering/plan/20261013-feat-unified-home-display.md` 数行注释/描述，**无需改动任何代码与单测**；代码层面无遗留问题（单测 608+414、API 集成 339/339、E2E 无新增失败——26 项失败为存量问题且基线 1:1 复现、本特性 E2E 5/5、试验合并复跑通过）。修复后重新提交 Review，预期下一轮直接闭环。
 
 合并节点执行 PR #202 合并时，必须按「问题 A」指引解决两处冲突（尤其 `controller-key.test.ts` 的 `evictKeyById → mockResolvedValue(true)`），合并后请复跑 `servers/agent-api` 与 `apps/agent-web` 单测确认。
+
+---
+
+## 六、第二轮复核（2026-10-14，返工 `ff79b22` 核验）
+
+### 6.1 核验范围与方法
+
+- 代码差距：`origin/release...integration`（17 commits，61 文件，+3037/-657；较首轮新增 2 个 docs commit：`53dcbe8` 首轮验收报告、`ff79b22` 返工修复）。
+- 核验方法：
+  1. 逐条比对返工说明与 `ff79b22` 实际 diff（`git show ff79b22`）；
+  2. 以**实现为基准**复核注释/文档口径：`gatewayService.findAllByController`（`services/gateway.ts:9`，`Gateway.find` 纯 DB）、`worktreeService.list` + `withTimeout`（`resolvers/home.ts:123-136`，Redis relay 扇出）、`MainLayout.tsx`（仅 auth `loading` 整页 spinner + `error && !data` 重试，home 数据无加载分支）；
+  3. 全仓 grep 扫描「扇出/离线/降级/relay + gateways」同源表述，排查旧口径残留；
+  4. 定向单测复跑。
+- 自首轮（`56b4d6f`）以来**代码/测试零变更**（`ff79b22` 为 docs-only，3 文件 15+/13-），首轮全量测试结论（后端单测 608、前端单测 414 + `tsc -b`、API 集成 339/339、E2E 164 passed 且 26 项失败经 merge-base 基线 1:1 复现证实为存量、本特性 E2E 5/5、试验合并复跑通过）继续有效，本轮未重复全量执行。
+
+### 6.2 返工修复核验
+
+| # | 问题 | 核验结果 | 说明 |
+|---|---|---|---|
+| 1 | `Controller.gateways` 契约/文档口径 | ⚠️ 部分修复 | `contracts/home.graphql` 头注释与 `extend type Controller` 注释、`servers/agent-api/AGENTS.md`、plan（关键约束/Phase1 契约表/Phase4 resolver 表/T-H2/T-H3/checklist）均已改为「`gateways` 纯 DB 查询、不随在线状态降级；仅 `worktrees` Redis relay 扇出、离线/失败/超时降级为空列表」，与实现逐条一致 ✅；但同一错误口径在 3 处注释残留（问题 7），未达「注释与实现一致」的修复目标 |
+| 2 | plan 对 MainLayout 加载态的描述 | ✅ 修复通过 | plan `:201` 已改为「首屏不阻塞布局外壳、无独立加载分支…整体错误 `error && !data` + 重试入口」，T-F2 措辞同步；与 `apps/agent-web/src/pages/MainLayout.tsx` 实现逐条一致（无 `loading && !data` home 加载分支，仅 auth `loading` 与 `error && !data`） |
+
+返工 commit 与说明一致：`git show ff79b22 --stat` = `contracts/home.graphql`、`docs/engineering/plan/20261013-feat-unified-home-display.md`、`servers/agent-api/AGENTS.md` 3 文件 15+/13-，确为 docs-only。
+
+### 6.3 问题 7（🟡 一般·文档/契约一致性，阻塞）问题 1 修复不完整——`gateways` 旧口径注释残留 3 处
+
+**问题描述**：`ff79b22` 修正了 contracts/plan/`servers/agent-api/AGENTS.md` 的 `Controller.gateways` 口径，但本 diff 引入的以下 3 处注释仍保留「按控制器扇出 / 离线降级为空列表」的旧口径，与实现（`services/gateway.ts:9` `Gateway.find` 纯 DB 查询，**离线控制器仍返回其网关配置行**）以及已修正的契约相互矛盾：
+
+1. `servers/agent-api/src/graphql/schemas/home.ts:23`（SDL 注释）：「嵌套惰性解析：仅查询语句选择时按控制器扇出网关；离线或失败返回空列表」——「按控制器扇出网关」「离线…返回空列表」均不实。
+2. `servers/agent-api/src/graphql/resolvers/home.ts:108`（resolver 注释）：「嵌套惰性解析：仅查询语句选择 gateways 时执行；离线或失败降级为空列表」——「失败降级为空列表」属实（`degrade`），但「离线…降级」不实。
+3. `apps/agent-web/src/graphql/types.ts:584`（`HomeOverviewControllerData.gateways` JSDoc）：「嵌套惰性字段：离线或扇出失败为空列表」——`gateways` 无扇出、离线不降级（仅异常降级）。
+
+**根因分析**：首轮问题 1 的修复要求点名了 `contracts/home.graphql` 与 `servers/agent-api/AGENTS.md`（plan 为返工自行扩展），返工按清单逐点修改，未对同类表述做全仓扫描，导致同一 diff 内 3 处同源注释漏改。这 3 处恰是开发者读代码时最先看到的位置（schema 注释、resolver 注释、前端类型 JSDoc），误导风险不低于首轮点名的两处。
+
+**修复要求**（docs-only，仅注释，无代码/测试改动）：按已修正的契约口径统一上述 3 处措辞——`gateways` 为「仅查询语句选择时执行的纯 DB 查询，不随控制器在线状态降级（异常时 `degrade` 空列表）」，不得套用「扇出 / 离线降级」；`types.ts:589`（`worktrees`）如需对齐可补「超时」字样（可选）。修改后全仓 grep「扇出/离线/降级 + gateways」确认零残留（当前已知残留即上述 3 处）。
+
+**验证结果**：（待下一轮回填）
+
+### 6.4 问题 8、9（🟢 建议，不阻塞）
+
+**问题 8**：plan T-H 用例表与 API 测试用例 ID 不对应——plan 列 T-H1~T-H6（其中 T-H2「未选择不触发嵌套解析（mock/计数断言）」、T-H3「含 `controllers.gateways`…不随在线状态降级」），实际 `tests/api/src/agent-api/home.test.ts` 为 T-H0~T-H3 + T-W*/T-S*，无同 ID 对应用例，plan 验收 checklist「T-H1 ~ T-H6 全部通过」无法字面核销。建议：按实际用例重排 plan T-H 表，或补一条「离线控制器仍返回网关配置行」断言，把新口径固化为测试（TDD 取向推荐后者）。
+
+**问题 9**：锁定的技术方案 `docs/engineering/proposals/20261013-feat-unified-home-display.md:169,235` 仍为「`gateways`/`worktrees` 经 Redis relay…离线返回空列表」的旧设计表述。按 `docs/engineering/AGENTS.md`「proposals 评审后锁定」惯例可不改；如需消除歧义，建议加一行「实现偏离记录：`gateways` 最终为纯 DB 查询、不随在线状态降级」。
+
+### 6.5 修复总览（第二轮）
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 1 | `Controller.gateways` 契约/文档口径 | 注释描述与实现不符 | ⚠️ 部分修复（残留见问题 7） | `ff79b22` |
+| 2 | plan 对 MainLayout 加载态的描述 | 实现有意偏离、plan 未同步 | ✅ 已修复 | `ff79b22` |
+| 7 | `gateways` 旧口径注释残留 3 处 | 返工未做全仓同源表述扫描 | ⏳ 待修复（本轮打回项） | （待回填） |
+| 8 | plan T-H 用例表与测试 ID 不对应 | 计划期用例表与实施期命名漂移 | 🟢 建议（不阻塞） | — |
+| 9 | 锁定 proposal 保留旧设计表述 | proposals 锁定惯例 | 🟢 建议（不阻塞） | — |
+
+### 6.6 最终验证（第二轮）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 返工 diff 审查 | ✅ | `ff79b22` 3 文件 15+/13-，与返工说明逐条一致，确为 docs-only |
+| 定向单测复跑 | ✅ | `servers/agent-api` `src/graphql/resolvers/home.test.ts` **5 passed**；`apps/agent-web` `src/pages/__tests__/MainLayout.test.tsx` **3 passed** |
+| 首轮全量测试结论 | ✅ 继续有效 | 自 `56b4d6f` 后仅新增 docs commit（`53dcbe8`、`ff79b22`），代码/测试零变更 |
+| 合并冲突指引（问题 A） | ⏳ 留待合并节点 | 内容不变，继续有效 |
+
+### 6.7 结论（第二轮）
+
+**打回返工（docs-only）**——问题 2 修复通过；问题 1 修复不完整，`gateways` 旧口径注释残留 3 处（问题 7），与已修正契约及实现矛盾，属首轮问题 1 的同一缺陷类别，按同一标准继续阻塞。修复范围明确：**仅 3 处注释措辞**（`schemas/home.ts:23`、`resolvers/home.ts:108`、`graphql/types.ts:584`），无代码与测试改动；修复后重新提交 Review，预期下一轮直接闭环。问题 8、9 为建议，不阻塞；问题 A 合并指引不变。
+
+### 6.8 经验总结
+
+- 文档/注释口径修复必须做**全仓同源表述扫描**（关键词组合 grep），而非只改问题描述点名的文件。
+- 同一语义的四处描述（contracts 注释、schema SDL 注释、resolver 注释、前端类型 JSDoc）应一次性对齐，避免修复碎片化。
+- 「文档描述与实现不符」类问题的验收标准应为「全仓零残留」，修复说明中应附扫描证据（grep 命令与结果）。
