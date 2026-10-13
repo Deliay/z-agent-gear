@@ -33,8 +33,8 @@ Phase 1: 契约变更（contracts/ 三份，契约先行）
 - **resolver 合并清单登记**：新增 Query 级与类型级字段 resolver 必须登记进 `servers/agent-api/src/graphql/resolvers/index.ts`（`backend-rules.md` 显性陷阱：漏登记时单测直引 resolver 对象不报错，但线上不生效）。
 - **前端 GraphQL 类型全手写**：契约变更同步 `apps/agent-web/src/graphql/types.ts`、`graphql/workflow.ts`（无 codegen）。
 - **向后兼容**：`workflowInstances` 旧调用（`workspaceId` 必传）语义零变化；`sessions` 旧调用不受影响；设置页等仍在用的查询（`GetWorkspaces` / `GetControllerWorkspaces` 等）保留不动。
-- **薄 resolver**：`homeOverview` 只用 `Promise.all` 组合既有 service，不新增 service 层；`Controller.gateways` / `ControllerWorkspace.worktrees` 为嵌套字段，仅查询语句选择时才按控制器/工作区扇出 Redis relay。
-- **降级语义**：离线控制器的 `gateways`/`worktrees` 扇出失败降级为空列表；聚合查询单分支失败按 GraphQL 部分数据语义返回（字段置 null + errors），前端各区块独立判空，不拖垮整次查询。
+- **薄 resolver**：`homeOverview` 只用 `Promise.all` 组合既有 service，不新增 service 层；`Controller.gateways` / `ControllerWorkspace.worktrees` 为嵌套字段，仅查询语句选择时才执行（`gateways` 为纯 DB 查询，`worktrees` 经 Redis relay 扇出）。
+- **降级语义**：`ControllerWorkspace.worktrees` 离线或扇出失败/超时降级为空列表（`Controller.gateways` 为纯 DB 查询、不随在线状态降级）；聚合查询单分支失败按 GraphQL 部分数据语义返回（字段置 null + errors），前端各区块独立判空，不拖垮整次查询。
 - **加载态写法**：`loading && !data`（`frontend-rules.md` Apollo v4 轮询陷阱：`if (loading) return <Spinner/>` 会在 15s 轮询时卸载整页）。
 - **不动的范围**：controller-api、agent-controller CLI、工作流详情页查询（`GET_WORKFLOW_INSTANCE`）、网关/Worktree 变更类操作。
 - **索引随启动自动建立**：`WorkflowInstance` 新增复合索引靠 Mongoose `autoIndex`，无迁移脚本。
@@ -59,7 +59,7 @@ Phase 1: 契约变更（contracts/ 三份，契约先行）
 |------|------|------|
 | `contracts/workflow.graphql` | 修改 | Query（~L273）`workflowInstances(workspaceId: ID!, archived: Boolean)` 改为 `workflowInstances(workspaceId: ID, controllerId: ID, archived: Boolean)`，注释说明「二者可同传取交集；都不传 = 当前用户全部实例」；`WorkflowInstance` 类型（~L156）增加 `workspace: ControllerWorkspace`、`controller: Controller` 可空归属字段，注释「归属对象可能已被删除，消费方须判空」 |
 | `contracts/agent-session.graphql` | 修改 | Query（~L327）`sessions(includeWorkflowSessions: Boolean)` 改为 `sessions(controllerId: ID, includeWorkflowSessions: Boolean)`，注释「`controllerId` 可选，按控制器过滤」 |
-| `contracts/home.graphql` | 新增 | `homeOverview: HomeOverview!` 聚合查询；`HomeOverview { controllers: [Controller!]!, sessions: [Session!]!, sessionTotalCount: Int!, workspaces: [ControllerWorkspace!]!, workflowInstances: [WorkflowInstance!]!, archivedWorkflowInstances: [WorkflowInstance!]!, todos: [TodoItem!]!, unreadTodoCount: Int! }`；`extend type Controller { gateways: GatewayList! }`、`extend type ControllerWorkspace { worktrees: [WorkspaceWorktree!]! }`，注释「嵌套惰性解析：仅查询语句选择时按控制器/工作区扇出；离线或扇出失败返回空列表」 |
+| `contracts/home.graphql` | 新增 | `homeOverview: HomeOverview!` 聚合查询；`HomeOverview { controllers: [Controller!]!, sessions: [Session!]!, sessionTotalCount: Int!, workspaces: [ControllerWorkspace!]!, workflowInstances: [WorkflowInstance!]!, archivedWorkflowInstances: [WorkflowInstance!]!, todos: [TodoItem!]!, unreadTodoCount: Int! }`；`extend type Controller { gateways: GatewayList! }`、`extend type ControllerWorkspace { worktrees: [WorkspaceWorktree!]! }`，注释「嵌套惰性解析：仅查询语句选择时展开；`gateways` 纯 DB 查询不降级，`worktrees` Redis relay 扇出、离线或扇出失败返回空列表」 |
 
 ### 验收 checklist
 
@@ -158,7 +158,7 @@ TDD 顺序：先写 `tests/api/src/agent-api/home.test.ts`（RED，全字段 + �
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/agent-api/src/graphql/schemas/home.ts` | 新增 | `homeOverview: HomeOverview!` 与 `HomeOverview` 类型定义（对齐 `contracts/home.graphql`） |
-| `servers/agent-api/src/graphql/resolvers/home.ts` | 新增 | `homeOverview` 用 `Promise.all` 并行调用既有 service：`controllerService.findAllByUser`、`sessionService.findAllByUser`（`sessionTotalCount` 同口径计数）、`controllerWorkspaceService.findAllByUser`、`workflowInstanceService.list`（archived false / true 两路）、`getTodoList` / `getUnreadTodoCount` 既有 todo 链路；嵌套字段 `Controller.gateways`（按控制器调 gateway service，Redis relay）与 `ControllerWorkspace.worktrees`（复用 `workspaceWorktrees` 服务链路）惰性解析，单路失败降级空列表 |
+| `servers/agent-api/src/graphql/resolvers/home.ts` | 新增 | `homeOverview` 用 `Promise.all` 并行调用既有 service：`controllerService.findAllByUser`、`sessionService.findAllByUser`（`sessionTotalCount` 同口径计数）、`controllerWorkspaceService.findAllByUser`、`workflowInstanceService.list`（archived false / true 两路）、`getTodoList` / `getUnreadTodoCount` 既有 todo 链路；嵌套字段 `Controller.gateways`（按控制器调 gateway service，纯 DB 查询）与 `ControllerWorkspace.worktrees`（复用 `workspaceWorktrees` 服务链路，经 Redis relay 扇出）惰性解析，单路失败降级空列表 |
 | `servers/agent-api/src/graphql/resolvers/index.ts` | 修改 | 登记 `homeResolvers.Query`、`Controller.gateways`、`ControllerWorkspace.worktrees` |
 | `servers/agent-api/src/graphql/resolvers/home.test.ts` | 新增 | resolver 单测：组合逻辑、单分支失败降级（Promise.allSettled 或 try/catch 归一） |
 | `tests/api/src/agent-api/home.test.ts` | 新增 | API 测试 T-H* |
@@ -168,8 +168,8 @@ TDD 顺序：先写 `tests/api/src/agent-api/home.test.ts`（RED，全字段 + �
 | # | 用例 | 预期 |
 |---|------|------|
 | T-H1 | `homeOverview` 全字段 | 各字段与对应既有查询结果一致（同数据集交叉断言） |
-| T-H2 | 查询语句不含 `gateways`/`worktrees` | 不发生 Redis relay 扇出（mock/计数断言） |
-| T-H3 | 查询语句含 `controllers.gateways` | 在线控制器返回网关列表；离线控制器返回空列表且 `status` 可判 |
+| T-H2 | 查询语句不含 `gateways`/`worktrees` | 不触发嵌套字段解析（mock/计数断言；`worktrees` 不发生 Redis relay 扇出） |
+| T-H3 | 查询语句含 `controllers.gateways` | 返回该控制器的网关列表（纯 DB 查询，不随控制器在线状态降级） |
 | T-H4 | 查询语句含 `workspaces.worktrees` | 各工作区返回其 Worktree 列表；单个工作区扇出失败 → 空列表，其余字段正常 |
 | T-H5 | 某一分支数据为空（如无工作流） | 对应字段空数组/0，其余字段正常 |
 | T-H6 | 跨用户隔离 | 全部字段仅含当前用户数据 |
@@ -184,7 +184,7 @@ cd tests/api && API_URL=http://localhost:10001/graphql CONTROLLER_API_URL=http:/
 ### 验收 checklist
 
 - [ ] T-H1 ~ T-H6 全部通过
-- [ ] `homeOverview` 无新增 service 层；`gateways`/`worktrees` 未选择时不扇出
+- [ ] `homeOverview` 无新增 service 层；`gateways`/`worktrees` 未选择时不解析（`worktrees` 不发生 Redis relay 扇出）
 - [ ] 三个新/改 resolver 均已登记 `resolvers/index.ts`
 
 ---
@@ -198,7 +198,7 @@ cd tests/api && API_URL=http://localhost:10001/graphql CONTROLLER_API_URL=http:/
 | `apps/agent-web/src/graphql/home.ts` | 新增 | `HOME_OVERVIEW` 查询（命名 `HomeOverview`，与 `Get*` 前缀区分聚合查询）与手写类型；查询语句包含 `controllers { ... gateways { ... } }`、`workspaces { ... worktrees { ... } }`、`workflowInstances` / `archivedWorkflowInstances`（含 `workspace`/`controller` 归属）、`sessions`、`sessionTotalCount`、`todos`、`unreadTodoCount`，与 `contracts/home.graphql` 人工对齐 |
 | `apps/agent-web/src/graphql/types.ts` | 修改 | 增加 `HomeOverview` 等手写类型；`WorkflowInstanceSummaryData` 补 `workspace` / `controller` 可空归属（`graphql/workflow.ts` 内联定义处同步） |
 | `apps/agent-web/src/graphql/workflow.ts` | 修改 | `GetWorkflowInstances` 变量类型放宽：`$workspaceId: ID!` → `$workspaceId: ID`（L285），类型声明同步 |
-| `apps/agent-web/src/pages/MainLayout.tsx` | 修改 | 挂载 `useQuery(HOME_OVERVIEW, { pollInterval: 15000 })`（单一查询、单一轮询）；以 props/context 下传 `HomePage` 与 `Sidebar`（含 `loading && !data` 加载态与整体错误 + 重试入口） |
+| `apps/agent-web/src/pages/MainLayout.tsx` | 修改 | 挂载 `useQuery(HOME_OVERVIEW, { pollInterval: 15000 })`（单一查询、单一轮询）；以 props/context 下传 `HomePage` 与 `Sidebar`（**首屏不阻塞布局外壳、无独立加载分支**：聚合数据未就绪时以空数据渲染外壳、数据到达后各区块同批填充；整体错误 `error && !data` + 重试入口） |
 
 ### 行为变化说明（实现与验证时确认）
 
@@ -210,7 +210,7 @@ cd tests/api && API_URL=http://localhost:10001/graphql CONTROLLER_API_URL=http:/
 | # | 用例 | 预期 |
 |---|------|------|
 | T-F1 | MainLayout 挂载 | 仅发起一次 `HomeOverview` 查询，`pollInterval` 为 15000 |
-| T-F2 | 轮询期间 `loading` 为真 | 不卸载子页面（`loading && !data` 分支断言，含焦点/IME 不丢的等价断言） |
+| T-F2 | 轮询期间 `loading` 为真 | 不卸载子页面（`loading=true` 且已有数据时仍渲染 outlet/sidebar、不出现整页 spinner，含焦点/IME 不丢的等价断言） |
 | T-F3 | 查询失败 | 整体错误提示 + 重试入口，重试发一次请求 |
 
 ### 命令参考
