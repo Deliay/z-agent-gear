@@ -1,7 +1,7 @@
 import { useMutation } from '@apollo/client/react';
 import { useState } from 'react';
 import { DELETE_GATEWAY } from '../graphql/mutations';
-import { GET_GATEWAYS } from '../graphql/queries';
+import { HOME_OVERVIEW } from '../graphql/home';
 import type { DeleteGatewayMutation, GatewayData } from '../graphql/types';
 import { Copy, Trash2, Check } from 'lucide-react';
 
@@ -12,7 +12,7 @@ interface GatewayItemProps {
 
 export default function GatewayItem({ gateway, controllerId }: GatewayItemProps) {
   const [deleteGateway] = useMutation<DeleteGatewayMutation>(DELETE_GATEWAY, {
-    refetchQueries: [{ query: GET_GATEWAYS, variables: { controllerId } }],
+    refetchQueries: [{ query: HOME_OVERVIEW }],
   });
   const [copied, setCopied] = useState(false);
 

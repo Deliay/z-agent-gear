@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { useQuery } from '@apollo/client/react'
-import { WORKSPACE_WORKTREES } from '@/graphql/queries'
-import type { GetWorkspaceWorktreesQuery, WorkspaceWorktreeData, ControllerData, SessionData } from '@/graphql/types'
+import type { WorkspaceWorktreeData, ControllerData, SessionData } from '@/graphql/types'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -26,7 +24,9 @@ interface WorktreeSidebarGroupProps {
   controllerId: string
   workspaceName: string
   controllers: ControllerData[]
-  /** worktree 会话平铺展示的回退数据（归组查询失败/无数据时使用） */
+  /** 由 homeOverview.workspaces.worktrees 下传的 Worktree 列表（纯展示，不再独立查询） */
+  worktrees: WorkspaceWorktreeData[]
+  /** worktree 会话平铺展示的回退数据（无 worktree 时使用） */
   fallbackSessions: SessionData[]
   onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void
 }
@@ -36,6 +36,7 @@ export default function WorktreeSidebarGroup({
   controllerId,
   workspaceName,
   controllers,
+  worktrees,
   fallbackSessions,
   onCreate,
 }: WorktreeSidebarGroupProps) {
@@ -44,13 +45,6 @@ export default function WorktreeSidebarGroup({
   const [showNewSession, setShowNewSession] = useState(false)
   const [showInstantiateWorkflow, setShowInstantiateWorkflow] = useState(false)
   const [newSessionWorktreePath, setNewSessionWorktreePath] = useState<string | undefined>()
-
-  const { data, error } = useQuery<GetWorkspaceWorktreesQuery>(WORKSPACE_WORKTREES, {
-    variables: { controllerId, workspaceId },
-    pollInterval: 15000,
-  })
-
-  const worktrees: WorkspaceWorktreeData[] = data?.workspaceWorktrees ?? []
 
   const toggleWorktree = (path: string) => {
     setExpandedWorktrees((prev) => {
@@ -73,40 +67,7 @@ export default function WorktreeSidebarGroup({
     return wt.branch || wt.path.split('/').filter(Boolean).pop() || 'unknown'
   }
 
-  // 场景 1：查询失败 - 平铺展示回退会话
-  if (error) {
-    if (fallbackSessions.length === 0) {
-      return null
-    }
-    return (
-      <>
-        {fallbackSessions.map((session) => (
-          <li key={session.id}>
-            <NavLink
-              to={`/sessions/${session.id}`}
-              className={({ isActive }) =>
-                `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                  isActive
-                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent'
-                }`
-              }
-            >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-              <GitFork className="size-3 shrink-0 text-info" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate">
-                  {session.title || 'New Session'}
-                </div>
-              </div>
-            </NavLink>
-          </li>
-        ))}
-      </>
-    )
-  }
-
-  // 场景 2：查询成功且有 worktree - 正常渲染 worktree 列表
+  // 场景 1：存在 worktree - 正常渲染 worktree 列表
   if (worktrees.length > 0) {
     return (
       <>
@@ -231,7 +192,7 @@ export default function WorktreeSidebarGroup({
     )
   }
 
-  // 场景 3：查询成功且无 worktree - 显示默认工作区条目
+  // 场景 2：无 worktree - 显示默认工作区条目
   return (
     <>
       <li>

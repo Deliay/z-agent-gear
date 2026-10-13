@@ -2,6 +2,8 @@ import { GraphQLError } from 'graphql';
 import { workflowTemplateService } from '../../services/workflow/template.js';
 import { configuredWorkflowService } from '../../services/workflow/configured.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
+import { controllerService } from '../../services/controller.js';
+import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -121,7 +123,7 @@ function mapBlackboardEntries(map: unknown, updatedAtMap: unknown) {
   }));
 }
 
-function mapInstance(doc: Doc) {
+export function mapInstance(doc: Doc) {
   return {
     id: toId(doc._id),
     configuredWorkflowId: toId(doc.configuredWorkflowId),
@@ -185,9 +187,17 @@ export const workflowResolvers = {
       const doc = await configuredWorkflowService.findById(args.id, userId);
       return doc ? mapConfigured(doc as unknown as Doc) : null;
     },
-    workflowInstances: async (_parent: unknown, args: { workspaceId: string; archived?: boolean }, context: AuthContext) => {
+    workflowInstances: async (
+      _parent: unknown,
+      args: { workspaceId?: string; controllerId?: string; archived?: boolean },
+      context: AuthContext,
+    ) => {
       const userId = requireUser(context);
-      const docs = await workflowInstanceService.listForWorkspace(userId, args.workspaceId, args.archived ?? false);
+      const docs = await workflowInstanceService.list(userId, {
+        workspaceId: args.workspaceId,
+        controllerId: args.controllerId,
+        archived: args.archived ?? false,
+      });
       return docs.map((doc) => mapInstance(doc as unknown as Doc));
     },
     workflowInstance: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
@@ -314,6 +324,19 @@ export const workflowResolvers = {
     archiveWorkflowInstance: async (_parent: unknown, args: { id: string; archived: boolean }, context: AuthContext) => {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.setArchived(userId, args.id, args.archived));
+    },
+  },
+  WorkflowInstance: {
+    // 归属字段（惰性解析）：仅查询语句选择时执行；工作区/控制器可能已被删除，返回 null
+    workspace: async (parent: Doc, _args: unknown, context: AuthContext) => {
+      const userId = context.currentUser?.id;
+      if (!userId || !parent.workspaceId) return null;
+      return controllerWorkspaceService.findById(String(parent.workspaceId), userId);
+    },
+    controller: async (parent: Doc, _args: unknown, context: AuthContext) => {
+      const userId = context.currentUser?.id;
+      if (!userId || !parent.controllerId) return null;
+      return controllerService.findById(String(parent.controllerId), userId);
     },
   },
 };

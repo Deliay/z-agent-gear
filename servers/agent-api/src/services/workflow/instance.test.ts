@@ -616,6 +616,73 @@ describe('WorkflowInstanceService 查询排除已删除实例', () => {
   });
 });
 
+describe('WorkflowInstanceService.list 过滤条件组装', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockFind() {
+    const lean = vi.fn().mockResolvedValue([]);
+    const sort = vi.fn().mockReturnValue({ lean });
+    vi.mocked(WorkflowInstance.find).mockReturnValue({ sort } as never);
+  }
+
+  it('无参数：恒有 userId + deletedAt:null + archivedAt:null', async () => {
+    mockFind();
+    await workflowInstanceService.list('user-1');
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deletedAt: null,
+      archivedAt: null,
+    });
+  });
+
+  it('仅 workspaceId', async () => {
+    mockFind();
+    await workflowInstanceService.list('user-1', { workspaceId: 'ws-1' });
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deletedAt: null,
+      archivedAt: null,
+      workspaceId: 'ws-1',
+    });
+  });
+
+  it('仅 controllerId', async () => {
+    mockFind();
+    await workflowInstanceService.list('user-1', { controllerId: 'ctrl-1' });
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deletedAt: null,
+      archivedAt: null,
+      controllerId: 'ctrl-1',
+    });
+  });
+
+  it('workspaceId + controllerId 同传取交集', async () => {
+    mockFind();
+    await workflowInstanceService.list('user-1', { workspaceId: 'ws-1', controllerId: 'ctrl-1' });
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deletedAt: null,
+      archivedAt: null,
+      workspaceId: 'ws-1',
+      controllerId: 'ctrl-1',
+    });
+  });
+
+  it('archived=true 仅归档（archivedAt $ne null）', async () => {
+    mockFind();
+    await workflowInstanceService.list('user-1', { archived: true, controllerId: 'ctrl-1' });
+    expect(WorkflowInstance.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      deletedAt: null,
+      archivedAt: { $ne: null },
+      controllerId: 'ctrl-1',
+    });
+  });
+});
+
 describe('WorkflowInstanceService.deleteInstance', () => {
   beforeEach(() => {
     vi.clearAllMocks();

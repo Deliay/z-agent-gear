@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import { CREATE_GATEWAY } from '../graphql/mutations';
-import { GET_GATEWAYS } from '../graphql/queries';
+import { HOME_OVERVIEW } from '../graphql/home';
 import type { CreateGatewayMutation } from '../graphql/types';
 
 interface GatewayDialogProps {
@@ -17,7 +17,7 @@ export default function GatewayDialog({ controllerId, onClose }: GatewayDialogPr
   const [createGateway, { loading }] = useMutation<CreateGatewayMutation>(
     CREATE_GATEWAY,
     {
-      refetchQueries: [{ query: GET_GATEWAYS, variables: { controllerId } }],
+      refetchQueries: [{ query: HOME_OVERVIEW }],
       onCompleted: () => onClose(),
       onError: (err) => setError(err.message),
     },

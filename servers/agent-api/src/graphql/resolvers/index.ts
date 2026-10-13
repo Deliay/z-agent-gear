@@ -10,6 +10,7 @@ import { todoResolvers } from './todo.js';
 import { mcpServerResolvers } from './mcp-server.js';
 import { githubResolvers } from './github.js';
 import { workflowResolvers } from './workflow.js';
+import { homeResolvers } from './home.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -25,6 +26,7 @@ export const resolvers = {
     ...mcpServerResolvers.Query,
     ...githubResolvers.Query,
     ...workflowResolvers.Query,
+    ...homeResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -50,5 +52,14 @@ export const resolvers = {
   },
   PermissionRequestData: {
     ...todoResolvers.PermissionRequestData,
+  },
+  WorkflowInstance: {
+    ...workflowResolvers.WorkflowInstance,
+  },
+  Controller: {
+    ...homeResolvers.Controller,
+  },
+  ControllerWorkspace: {
+    ...homeResolvers.ControllerWorkspace,
   },
 };

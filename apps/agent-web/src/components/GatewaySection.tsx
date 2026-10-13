@@ -1,37 +1,22 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@apollo/client/react';
-import { GET_GATEWAYS } from '../graphql/queries';
-import type { GetGatewaysQuery } from '../graphql/types';
+import type { GatewayData } from '../graphql/types';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
 import { ChevronDown, ChevronRight, ExternalLink, Plus } from 'lucide-react';
 
 interface GatewaySectionProps {
   controllerId: string;
+  /** 由 homeOverview.controllers.gateways 下传的网关列表（纯展示，不再独立查询） */
+  gateways: GatewayData[];
   inline?: boolean;
   externalShowDialog?: boolean;
   onDialogClose?: () => void;
-  onGatewaysChange?: (controllerId: string, count: number) => void;
 }
 
-export default function GatewaySection({ controllerId, inline, externalShowDialog, onDialogClose, onGatewaysChange }: GatewaySectionProps) {
+export default function GatewaySection({ controllerId, gateways, inline, externalShowDialog, onDialogClose }: GatewaySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
-
-  const { data } = useQuery<GetGatewaysQuery>(GET_GATEWAYS, {
-    variables: { controllerId },
-    skip: !isExpanded && !inline,
-  });
-
-  const gateways = data?.gateways?.gateways ?? [];
-
-  // 上报网关数变化
-  useEffect(() => {
-    if (inline && onGatewaysChange) {
-      onGatewaysChange(controllerId, gateways.length);
-    }
-  }, [inline, controllerId, gateways.length, onGatewaysChange]);
 
   // 外部控制对话框显示
   useEffect(() => {

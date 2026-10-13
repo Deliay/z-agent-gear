@@ -43,6 +43,12 @@ npm run start   # Start production server
 
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
 
+## 首页聚合查询
+
+`homeOverview`（`graphql/schemas/home.ts` + `graphql/resolvers/home.ts`）为薄聚合 resolver：用 `Promise.all` 并行组合既有 service，**不新增 service 层**；单分支失败降级为空值（数组/0），不拖垮整次查询。`Controller.gateways` / `ControllerWorkspace.worktrees` 为嵌套惰性字段，仅查询语句选择时才按控制器/工作区扇出（Redis relay），离线或失败降级为空列表。
+
+新增 Query/类型级 resolver（含 `WorkflowInstance.workspace` / `controller`）必须登记 `graphql/resolvers/index.ts`，否则线上不生效。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
