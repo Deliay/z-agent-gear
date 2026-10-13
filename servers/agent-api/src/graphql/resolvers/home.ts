@@ -21,6 +21,25 @@ async function degrade<T>(branch: () => Promise<T>, fallback: T, label: string):
   }
 }
 
+const WORKTREE_FANOUT_TIMEOUT_MS = 5000;
+
+/** 为可能长时间等待 Redis relay 的扇出加超时兜底，避免拖垮首页首屏 */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 export const homeResolvers = {
   Query: {
     // 薄聚合 resolver：并行组合既有 service，不新增 service 层
@@ -107,7 +126,12 @@ export const homeResolvers = {
         return [];
       }
       return degrade(
-        () => worktreeService.list(String(parent.controllerId), String(parent.id), userId),
+        () =>
+          withTimeout(
+            worktreeService.list(String(parent.controllerId), String(parent.id), userId),
+            WORKTREE_FANOUT_TIMEOUT_MS,
+            [],
+          ),
         [],
         `ControllerWorkspace(${String(parent.id)}).worktrees`,
       );
