@@ -11,8 +11,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { WORKSPACE_WORKTREES } from '@/graphql/queries'
 import { DELETE_WORKTREE } from '@/graphql/mutations'
+import { HOME_OVERVIEW } from '@/graphql/home'
 import type { DeleteWorktreeMutation } from '@/graphql/types'
 
 interface DeleteWorktreeConfirmDialogProps {
@@ -47,7 +47,7 @@ export default function DeleteWorktreeConfirmDialog({
     try {
       const { data } = await deleteWorktree({
         variables: { controllerId, workspaceId, worktreePath },
-        refetchQueries: [{ query: WORKSPACE_WORKTREES, variables: { controllerId, workspaceId } }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
 
       const result = data?.deleteWorktree

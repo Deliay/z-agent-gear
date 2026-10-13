@@ -58,6 +58,8 @@ function makeInstance(nodes: WorkflowNodeData[]): WorkflowInstanceData {
     lastNodeName: null,
     lastNodeStatus: null,
     archived: false,
+    workspace: null,
+    controller: null,
     workflowWorktreePath: null,
     workflowWorktreeBranch: null,
     nodes,

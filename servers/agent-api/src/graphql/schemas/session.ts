@@ -198,7 +198,8 @@ export const sessionTypeDefs = `#graphql
   }
 
   extend type Query {
-    sessions(includeWorkflowSessions: Boolean): [Session!]!
+    # controllerId 可选：按控制器过滤
+    sessions(controllerId: ID, includeWorkflowSessions: Boolean): [Session!]!
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!

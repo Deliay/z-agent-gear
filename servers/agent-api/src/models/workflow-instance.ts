@@ -101,6 +101,10 @@ const workflowInstanceSchema = new mongoose.Schema(
 
 workflowInstanceSchema.index({ userId: 1, workspaceId: 1, createdAt: -1 });
 workflowInstanceSchema.index({ configuredWorkflowId: 1 });
+// 跨工作区全量列表（活跃/归档分开查）
+workflowInstanceSchema.index({ userId: 1, archivedAt: 1, createdAt: -1 });
+// 按控制器过滤（controllerId 当前未单独建索引）
+workflowInstanceSchema.index({ userId: 1, controllerId: 1, archivedAt: 1, createdAt: -1 });
 
 export const WorkflowInstance = mongoose.model('WorkflowInstance', workflowInstanceSchema);
 export type IWorkflowInstance = mongoose.InferSchemaType<typeof workflowInstanceSchema>;

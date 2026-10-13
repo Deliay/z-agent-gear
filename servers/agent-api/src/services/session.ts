@@ -42,11 +42,17 @@ export class SessionService {
     await this.sessionIdledCallback?.(sessionId);
   }
 
-  async findAllByUser(userId: string, options: { includeWorkflowSessions?: boolean } = {}): Promise<Record<string, unknown>[]> {
+  async findAllByUser(
+    userId: string,
+    options: { includeWorkflowSessions?: boolean; controllerId?: string } = {},
+  ): Promise<Record<string, unknown>[]> {
     // 默认排除工作流节点会话（workflowInstanceId != null）
     const filter: Record<string, unknown> = options.includeWorkflowSessions
       ? { userId }
       : { userId, workflowInstanceId: null };
+    if (options.controllerId) {
+      filter.controllerId = options.controllerId;
+    }
     const sessions = await Session.find(filter).sort({ createdAt: -1 }).lean();
     return sessions.map(this.mapSession.bind(this));
   }

@@ -51,6 +51,10 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
     });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout registering controller')); }, 10000);
 
+    client.on("git:worktree:list", (data: { requestId: string }) => {
+      client.emit("git:worktree:list:result", { requestId: data.requestId, success: true, worktrees: [] });
+    });
+
     client.on('acp:check', (data: { requestId: string }) => {
       client.emit('acp:check:result', {
         requestId: data.requestId,

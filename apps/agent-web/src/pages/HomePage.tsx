@@ -1,7 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@apollo/client/react';
-import { GET_SESSIONS, GET_CONTROLLERS } from '../graphql/queries';
-import type { GetSessionsQuery, GetControllersQuery } from '../graphql/types';
+import { useHomeOverview } from '../stores/homeOverview';
 import { getStatusDotColor, STATUS_LABELS } from '../components/session/status-colors';
 import { Button } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
@@ -9,15 +7,12 @@ import { MessageSquarePlus, Activity, Server } from 'lucide-react';
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
-    pollInterval: 15000,
-  });
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
-    pollInterval: 15000,
-  });
+  // 首屏数据由 MainLayout 的 HOME_OVERVIEW 统一下传，此处不再独立查询
+  const { data } = useHomeOverview();
 
-  const sessions = sessionsData?.sessions ?? [];
-  const controllers = controllersData?.controllers ?? [];
+  const sessions = data?.sessions ?? [];
+  const controllers = data?.controllers ?? [];
+  const sessionTotalCount = data?.sessionTotalCount ?? sessions.length;
   const onlineControllers = controllers.filter((c) => c.status === 'online');
 
   const recentSessions = [...sessions]
@@ -44,7 +39,7 @@ export default function HomePage() {
             <MessageSquarePlus className="size-4" />
             会话总数
           </div>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{sessions.length}</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{sessionTotalCount}</p>
         </div>
         <div className="rounded-lg border bg-card p-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
