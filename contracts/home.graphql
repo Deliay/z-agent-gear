@@ -1,0 +1,40 @@
+# 首页聚合查询契约（首页展示优化）
+#
+# `homeOverview` 将首页与侧边栏的全部信息流整合为一次 GraphQL 请求：
+# 各字段组合既有查询能力（薄 resolver），不引入新的业务实体。
+# `Controller.gateways` 与 `ControllerWorkspace.worktrees` 为嵌套惰性字段：
+# 仅当查询语句选择时才按控制器/工作区扇出（经 Redis relay 调用在线控制器），
+# 离线或扇出失败时降级为空列表，控制器 `status` 供前端标记离线。
+
+type HomeOverview {
+  # 控制器概览（首页卡片 + 侧边栏顶层分组）
+  controllers: [Controller!]!
+  # 最近会话列表（含工作流节点会话的排除口径与既有 sessions 查询一致）
+  sessions: [Session!]!
+  # 会话总数（与 sessions 同口径计数）
+  sessionTotalCount: Int!
+  # 工作区（侧边栏工作区分组）
+  workspaces: [ControllerWorkspace!]!
+  # 全部活跃工作流实例（跨工作区）
+  workflowInstances: [WorkflowInstance!]!
+  # 已归档工作流实例（侧边栏折叠展示）
+  archivedWorkflowInstances: [WorkflowInstance!]!
+  # 待办列表
+  todos: [TodoItem!]!
+  # 未读待办数
+  unreadTodoCount: Int!
+}
+
+extend type Controller {
+  # 嵌套惰性解析：仅查询语句选择时按控制器扇出网关；离线或失败返回空列表
+  gateways: GatewayList!
+}
+
+extend type ControllerWorkspace {
+  # 嵌套惰性解析：仅查询语句选择时按工作区扇出 Worktree；离线或失败返回空列表
+  worktrees: [WorkspaceWorktree!]!
+}
+
+extend type Query {
+  homeOverview: HomeOverview!
+}
