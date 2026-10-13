@@ -54,6 +54,18 @@ const ARCHIVE_INSTANCE = `
   }
 `;
 
+const DELETE_WORKSPACE = `
+  mutation DeleteWorkspace($id: ID!) {
+    deleteWorkspace(id: $id)
+  }
+`;
+
+const CREATE_SESSION = `
+  mutation CreateSession($input: CreateSessionInput!) {
+    createSession(input: $input) { session { id controllerId } }
+  }
+`;
+
 const WORKFLOW_INSTANCES = `
   query WorkflowInstances($workspaceId: ID, $controllerId: ID, $archived: Boolean) {
     workflowInstances(workspaceId: $workspaceId, controllerId: $controllerId, archived: $archived) {
@@ -121,6 +133,15 @@ function registerFakeController(rawKey: string, hostname: string): Promise<FakeC
         requestId: data.requestId,
         success: true,
         worktrees: [{ path: '/tmp/fake-worktree', branch: 'feature-a' }],
+      });
+    });
+
+    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      client.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${data.sessionId}`,
       });
     });
 
@@ -223,6 +244,17 @@ async function gqlData<T>(query: string, variables: Record<string, unknown> | un
   return body.data as T;
 }
 
+async function createSession(token: string, controllerId: string, workspaceId: string): Promise<string> {
+  const res = await gqlRequest(
+    CREATE_SESSION,
+    { input: { controllerId, acpServerType: 'opencode', workspaceId } },
+    token,
+  );
+  const body = await res.json();
+  if (body.errors) throw new Error(JSON.stringify(body.errors));
+  return body.data.createSession.session.id;
+}
+
 // ---------------------------------------------------------------------------
 
 describe('首页聚合与按控制器索引 API', () => {
@@ -249,6 +281,9 @@ describe('首页聚合与按控制器索引 API', () => {
 
     const cfgId = await configureWorkflow(token, controllerId, 'home-main-cfg');
     instanceId = await instantiate(token, cfgId, controllerId, workspaceId, '集中列表实例');
+
+    // 普通会话（用于 sessions(controllerId) 过滤与隔离断言）
+    await createSession(token, controllerId, workspaceId);
 
     // 另一用户也创建一个实例（用于隔离断言）
     const otherWs = await createWorkspace(otherToken, otherControllerId, '/tmp/home-other-ws');
@@ -396,6 +431,66 @@ describe('首页聚合与按控制器索引 API', () => {
       { controllerId },
       token,
     );
+    expect(byController.sessions.length).toBeGreaterThan(0);
     expect(byController.sessions.every((s) => s.controllerId === controllerId)).toBe(true);
   });
+
+  it('T-S3 sessions(controllerId) 与 includeWorkflowSessions 组合过滤正确叠加', async () => {
+    const withWorkflow = await gqlData<{
+      sessions: Array<{ controllerId: string; workflowInstanceId: string | null }>;
+    }>(SESSIONS, { controllerId, includeWorkflowSessions: true }, token);
+    const withoutWorkflow = await gqlData<{
+      sessions: Array<{ controllerId: string; workflowInstanceId: string | null }>;
+    }>(SESSIONS, { controllerId, includeWorkflowSessions: false }, token);
+
+    // controllerId 过滤在两种口径下均生效
+    expect(withWorkflow.sessions.every((s) => s.controllerId === controllerId)).toBe(true);
+    expect(withoutWorkflow.sessions.every((s) => s.controllerId === controllerId)).toBe(true);
+    // includeWorkflowSessions=true 是 false 的超集，且默认口径不含工作流节点会话
+    expect(withWorkflow.sessions.length).toBeGreaterThanOrEqual(withoutWorkflow.sessions.length);
+    expect(withoutWorkflow.sessions.every((s) => s.workflowInstanceId === null)).toBe(true);
+  });
+
+  it('T-S4 sessions 跨用户隔离（他人会话不可见）', async () => {
+    const otherByMainController = await gqlData<{ sessions: Array<{ id: string }> }>(
+      SESSIONS,
+      { controllerId },
+      otherToken,
+    );
+    expect(otherByMainController.sessions).toHaveLength(0);
+
+    const otherOwn = await gqlData<{ sessions: Array<{ controllerId: string }> }>(
+      SESSIONS,
+      {},
+      otherToken,
+    );
+    expect(otherOwn.sessions.every((s) => s.controllerId !== controllerId)).toBe(true);
+  });
+
+  it('T-W7 实例的 workspace 已删除时 workspace 为 null，controller 正常返回', async () => {
+    // 独立工作区 + 实例，删除工作区后断言归属字段降级语义
+    const ws = await createWorkspace(token, controllerId, `/tmp/home-t-w7-${Date.now()}`);
+    const cfg = await configureWorkflow(token, controllerId, `home-t-w7-cfg-${Date.now()}`);
+    const inst = await instantiate(token, cfg, controllerId, ws, '待删工作区实例');
+
+    const delRes = await gqlRequest(DELETE_WORKSPACE, { id: ws }, token);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeUndefined();
+    expect(delBody.data.deleteWorkspace).toBe(true);
+
+    const list = await gqlData<{
+      workflowInstances: Array<{
+        id: string;
+        workspace: { id: string } | null;
+        controller: { id: string } | null;
+      }>;
+    }>(WORKFLOW_INSTANCES, { controllerId }, token);
+
+    const target = list.workflowInstances.find((i) => i.id === inst);
+    expect(target).toBeDefined();
+    expect(target!.workspace).toBeNull();
+    expect(target!.controller?.id).toBe(controllerId);
+  });
+
+  // 注：T-W8「旧调用方式（workspaceId 必传）语义零变化」由 T-W2 的 workspaceId 过滤断言锚定。
 });

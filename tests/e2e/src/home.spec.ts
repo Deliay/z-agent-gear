@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
-import { registerUser, createControllerKey, loginViaUI, createWorkspace, gqlRequest } from './helpers';
+import { registerUser, createControllerKey, loginViaUI, createWorkspace, createSession, gqlRequest } from './helpers';
 
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 const sidebarSel = 'nav[aria-label="Sidebar"]';
@@ -38,6 +38,14 @@ function registerFakeController(rawKey: string, hostname: string): Promise<FakeC
         requestId: data.requestId,
         success: true,
         worktrees: [],
+      });
+    });
+    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+      client.emit('acp:start:result', {
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
       });
     });
 
@@ -173,12 +181,31 @@ test.describe('首页展示优化 E2E', () => {
     const item = sidebar.getByText('集中展示实例');
     await expect(item).toBeVisible({ timeout: 15000 });
 
-    // 条目标注所属工作区（工作区名以 "home-e3-ws" 结尾，状态分隔符 "·" 区分于工作区默认条目）
-    await expect(sidebar.getByText(/home-e3-ws · /)).toBeVisible();
+    // 条目标注所属工作区与所属控制器（工作区名以 "home-e3-ws" 结尾，状态分隔符 "·" 区分于工作区默认条目）
+    await expect(sidebar.getByText(/home-e3-ws · home-e3-host · /)).toBeVisible();
 
     // 点击直达详情
     await item.click();
     await expect(page).toHaveURL(new RegExp(`/workflows/${instanceId}`), { timeout: 15000 });
+    disconnect();
+  });
+
+  test('T-E4 按控制器浏览其下工作区/会话/工作流', async ({ page }) => {
+    test.setTimeout(60000);
+    const { token, username, controllerId, workspaceId, disconnect } = await setupUserWithController(page, 'e4');
+    await createInstance(page, token, controllerId, workspaceId, '控制器实例');
+    await createSession(page, controllerId, token, workspaceId);
+
+    await loginViaUI(page, username);
+    const sidebar = page.locator(sidebarSel);
+
+    // 控制器分组默认展开，其下工作区列表可见
+    await expect(sidebar.getByRole('button', { name: /home-e4-host/ })).toBeVisible({ timeout: 15000 });
+    await expect(sidebar.getByText(/home-e4-ws（默认）/)).toBeVisible();
+    // 其下工作流列表可见
+    await expect(sidebar.getByText('控制器实例')).toBeVisible();
+    // 其下会话列表可见（会话可能同时出现在「会话」与工作区根目录回退分组中）
+    await expect(sidebar.locator('a[href^="/sessions/"]').first()).toBeVisible();
     disconnect();
   });
 
