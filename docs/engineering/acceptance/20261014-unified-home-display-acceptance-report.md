@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告——首页展示优化（PR #202）AI Review 轮次（含第二轮返工复核），记录代码审查结论、发现的问题、合并冲突解决指引与验证结果
+description: integration→release 集成验收报告——首页展示优化（PR #202）AI Review 轮次（含第二、三轮返工复核，第三轮复核通过），记录代码审查结论、发现的问题、合并冲突解决指引与验证结果
 type: Permanent
 ---
 
 # 首页展示优化 integration 验收报告（2026-10-14）
 
-> **状态**: 🔴 **第二轮打回返工（docs-only）**——返工 `ff79b22` 核验：问题 2（plan 对 MainLayout 加载态的描述）✅ 修复通过；问题 1（`Controller.gateways` 语义口径）⚠️ **修复不完整**：contracts/plan/`servers/agent-api/AGENTS.md` 已修正，但同一错误口径仍残留在 `schemas/home.ts:23`、`resolvers/home.ts:108`、`apps/agent-web/src/graphql/types.ts:584` 3 处注释（问题 7，阻塞），需补齐后重新提交 Review。代码正确性与全部测试结论不变（单测 608+414、API 集成 339/339、E2E 无新增失败、试验合并通过）。另有 2 项建议（问题 8、9）不阻塞；首轮 4 项建议（问题 3-6）与**合并冲突解决指引**（问题 A）继续有效。详见「六、第二轮复核」。
+> **状态**: 🟢 **第三轮复核通过（AI Review 闭环）**——第二轮打回项（问题 7：`gateways` 旧口径注释残留 3 处）返工 `f3d367e` **全部修复并经全仓扫描确认零残留**（含追加修复的同缺陷类第 4 处 `apps/agent-web/AGENTS.md:38`）；建议项问题 8 已落实（plan T-H 表重排为 T-H0~T-H3 并与实际用例 ID 对齐），问题 9 按 proposals 锁定惯例保留。代码正确性与全部测试结论不变（单测 608+414、API 集成 339/339、E2E 无新增失败、试验合并通过），自 `56b4d6f` 起代码/测试零变更。遗留：**合并冲突解决指引（问题 A）留待合并节点执行**；建议项问题 3-6、9、10 不阻塞。详见「七、第三轮复核」。
 
 ## 关联文档
 
@@ -67,6 +67,8 @@ PR #202 与 release 存在 2 处文本冲突（上游产物已注明留待合并
 **修复要求**：修正 `contracts/home.graphql` 头注释（与 `servers/agent-api/AGENTS.md`）：明确 `gateways` 为 DB 查询、不随在线状态降级；`worktrees` 为 Redis relay 扇出、离线/失败降级为空列表。docs-only。
 
 > **第二轮核验（`ff79b22`）**：⚠️ 部分修复——`contracts/home.graphql`（头注释 + `extend type Controller` 注释）、`servers/agent-api/AGENTS.md:48`、plan 同步处均已改为「`gateways` 纯 DB 查询、不随在线状态降级」，与实现一致；但同 diff 内 3 处同源注释漏改（见问题 7），本问题**未完全闭环**。
+>
+> **第三轮核验（`f3d367e`）**：✅ **完全闭环**——3 处残留注释全部修正（并追加修复同缺陷类第 4 处 `apps/agent-web/AGENTS.md:38`），全仓扫描零错误口径残留（见「七、第三轮复核」）。
 
 ### 问题 2（🟡 一般·文档一致性）实现计划对 MainLayout 加载态的描述与实现不符
 
@@ -144,7 +146,7 @@ GraphQL 需全部所选字段就绪才返回响应：`workspaces.worktrees` 任�
 
 **修复要求**（docs-only，仅注释，无代码/测试改动）：按已修正的契约口径统一上述 3 处措辞——`gateways` 为「仅查询语句选择时执行的纯 DB 查询，不随控制器在线状态降级（异常时 `degrade` 空列表）」，不得套用「扇出 / 离线降级」；`types.ts:589`（`worktrees`）如需对齐可补「超时」字样（可选）。修改后全仓 grep「扇出/离线/降级 + gateways」确认零残留（当前已知残留即上述 3 处）。
 
-**验证结果**：（待下一轮回填）
+**验证结果**：✅ **第三轮（`f3d367e`）修复通过**——4 处注释（3 处点名 + `apps/agent-web/AGENTS.md:38` 同缺陷类残留）全部改为「`gateways` 纯 DB 查询、不随控制器在线状态降级；仅 `worktrees` 经 Redis relay 扇出、离线/失败/超时降级为空列表」口径，与实现逐条一致；全仓 grep 扫描（命令与结果见「七、第三轮复核」）零错误口径残留；`git show f3d367e --stat` 5 文件 12+/12- 确为 docs/comment-only。
 
 ### 6.4 问题 8、9（🟢 建议，不阻塞）
 
@@ -158,7 +160,7 @@ GraphQL 需全部所选字段就绪才返回响应：`workspaces.worktrees` 任�
 |---|---|---|---|---|
 | 1 | `Controller.gateways` 契约/文档口径 | 注释描述与实现不符 | ⚠️ 部分修复（残留见问题 7） | `ff79b22` |
 | 2 | plan 对 MainLayout 加载态的描述 | 实现有意偏离、plan 未同步 | ✅ 已修复 | `ff79b22` |
-| 7 | `gateways` 旧口径注释残留 3 处 | 返工未做全仓同源表述扫描 | ⏳ 待修复（本轮打回项） | （待回填） |
+| 7 | `gateways` 旧口径注释残留 3 处 | 返工未做全仓同源表述扫描 | ✅ 已修复（第三轮核验通过，另追加修复同类残留 1 处） | `f3d367e` |
 | 8 | plan T-H 用例表与测试 ID 不对应 | 计划期用例表与实施期命名漂移 | 🟢 建议（不阻塞） | — |
 | 9 | 锁定 proposal 保留旧设计表述 | proposals 锁定惯例 | 🟢 建议（不阻塞） | — |
 
@@ -180,3 +182,78 @@ GraphQL 需全部所选字段就绪才返回响应：`workspaces.worktrees` 任�
 - 文档/注释口径修复必须做**全仓同源表述扫描**（关键词组合 grep），而非只改问题描述点名的文件。
 - 同一语义的四处描述（contracts 注释、schema SDL 注释、resolver 注释、前端类型 JSDoc）应一次性对齐，避免修复碎片化。
 - 「文档描述与实现不符」类问题的验收标准应为「全仓零残留」，修复说明中应附扫描证据（grep 命令与结果）。
+
+---
+
+## 七、第三轮复核（2026-10-14，返工 `f3d367e` 核验）
+
+### 7.1 核验范围与方法
+
+- 代码差距：`origin/release...integration`（19 commits，61 文件，+3111/-657；较第二轮新增 2 个 docs commit：`65038bf` 第二轮验收报告、`f3d367e` 返工修复）。
+- 核验方法：
+  1. 逐条比对返工说明与 `f3d367e` 实际 diff（`git show f3d367e`）；
+  2. 以**实现为基准**复核 4 处注释口径：`GatewayService.findAllByController`（`servers/agent-api/src/services/gateway.ts:8-15`，`Gateway.find` 纯 DB 查询、无在线状态检查）→ `Controller.gateways` resolver（`resolvers/home.ts:108-118`，仅 `degrade` 异常降级）；`ControllerWorkspace.worktrees` resolver（`resolvers/home.ts:120-136`，`worktreeService.list` + `withTimeout` Redis relay 扇出、离线/失败/超时降级）；
+  3. 全仓 grep 扫描「扇出/离线/降级 + gateways/网关」同源表述（含中文「网关」变体），排查错误口径残留；
+  4. 核对 plan T-H 用例表与 `tests/api/src/agent-api/home.test.ts` 实际用例 ID 一一对应；
+  5. 定向单测复跑。
+- 自 `56b4d6f` 以来**代码/测试零变更**：`56b4d6f..HEAD` 全部 diff（8 文件）中仅 `types.ts`/`schemas/home.ts`/`resolvers/home.ts` 3 处为源文件，逐行为注释/JSDoc/SDL 注释改动，无任何逻辑变化；`origin/release` 自 `bb06f51`（2026-10-08）未移动，试验合并结论继续有效。首轮全量测试结论（后端单测 608、前端单测 414 + `tsc -b`、API 集成 339/339、E2E 164 passed 且 26 项失败经 merge-base 基线 1:1 复现证实为存量、本特性 E2E 5/5、试验合并复跑通过）继续有效，本轮未重复全量执行。
+
+### 7.2 返工修复核验（问题 7，✅ 全部通过）
+
+| # | 修复点（返工清单） | 核验结果 | 说明 |
+|---|---|---|---|
+| 1 | `servers/agent-api/src/graphql/schemas/home.ts:23` SDL 注释 | ✅ | 已改为「仅查询语句选择时执行（纯 DB 查询，不随控制器在线状态降级；异常时降级空列表）」，与 `gateway.ts:9` 纯 DB 查询实现一致 |
+| 2 | `servers/agent-api/src/graphql/resolvers/home.ts:108` resolver 注释 | ✅ | 已去掉「离线」：「（纯 DB 查询，不随控制器在线状态降级）；失败降级为空列表」，与 `degrade` 行为一致 |
+| 3 | `apps/agent-web/src/graphql/types.ts:584/589` JSDoc | ✅ | `gateways` 改为「纯 DB 查询，不随控制器在线状态降级；失败为空列表」；`worktrees` 补「经 Redis relay 扇出，离线或失败/超时为空列表」（含可选的「超时」字样） |
+| 4 | `apps/agent-web/AGENTS.md:38`（同缺陷类追加修复） | ✅ | 中文「网关」表述的同类残留（英文关键字 grep 未覆盖），返工方主动发现并修复，口径与契约一致 |
+
+**建议项处理核验**：
+
+- 问题 8（plan T-H 用例表）：✅ 已按 `tests/api/src/agent-api/home.test.ts` 实际用例 ID 重排为 T-H0~T-H3（实际用例位置逐一核对：`:299` T-H0 未认证、`:305` T-H1 全字段+跨用户隔离、`:332` T-H2 嵌套 gateways、`:340` T-H3 嵌套 worktrees），并加注实际用例位置；验收 checklist 同步「T-H0 ~ T-H3 全部通过」。T-H2 表述保留「在线控制器」限定，离线语义由契约注释与 resolver 单测（`home.test.ts:127`）覆盖——可接受。
+- 问题 9（锁定 proposal）：按 `docs/engineering/AGENTS.md` proposals 锁定惯例保留不改，与第二轮判定一致，可接受。
+
+### 7.3 全仓扫描证据复核（零错误口径残留）
+
+复跑返工方提供的扫描命令（排除 acceptance 历史记录与锁定 proposal）：
+
+```bash
+grep -rn --include='*.ts' --include='*.tsx' --include='*.graphql' --include='*.md' \
+  -E '(gateways|网关).*(扇出|离线|降级)|(扇出|离线|降级).*(gateways|网关)|按控制器扇出网关|离线或扇出失败|离线或失败返回空列表' . \
+  | grep -v acceptance | grep -v proposals/20261013
+```
+
+独立复核结果：全部命中行均为**正确口径**——`servers/agent-api/AGENTS.md:48`、`contracts/home.graphql:7-8`、`resolvers/home.ts:108`、plan `:36-37,62,172,175` 均明确「`gateways` 纯 DB 查询、不随在线状态降级；仅 `worktrees` Redis relay 扇出、离线/失败/超时降级」；`schemas/home.ts:28`、`contracts/home.graphql:36`、`resolvers/home.test.ts:127` 的命中均为 `worktrees`（扇出+降级属实）或 `gateways` 失败降级（属实）的正确描述。**无一处**将 `gateways` 描述为扇出或离线降级。与返工方扫描证据一致。
+
+### 7.4 问题 10（🟢 建议，不阻塞）`worktrees` 注释未列「超时」降级
+
+`schemas/home.ts:28` 与 `contracts/home.graphql:36` 的 `worktrees` 注释为「离线或失败返回空列表」，未列「超时」（实现含 5s `withTimeout` 超时降级；`types.ts:589` 已含「超时」）。表述不错误（超时可归入「失败」），仅列举不完备、三处措辞略不一致。建议后续顺手统一为「离线或失败/超时返回空列表」，不阻塞闭环。
+
+### 7.5 修复总览（第三轮）
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 7 | `gateways` 旧口径注释残留 3 处 | 返工未做全仓同源表述扫描 | ✅ 已修复（含追加修复同类残留 1 处，第三轮核验通过） | `f3d367e` |
+| 8 | plan T-H 用例表与测试 ID 不对应 | 计划期用例表与实施期命名漂移 | ✅ 建议已落实（重排 T-H0~T-H3 并加注） | `f3d367e` |
+| 9 | 锁定 proposal 保留旧设计表述 | proposals 锁定惯例 | 🟢 按惯例保留（闭环） | — |
+| 10 | `worktrees` 注释未列「超时」降级 | 列举不完备 | 🟢 建议（不阻塞，留待后续顺手统一） | — |
+
+### 7.6 最终验证（第三轮）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 返工 diff 审查 | ✅ | `f3d367e` 5 文件 12+/12-，与返工说明逐条一致，确为 docs/comment-only（含 plan T-H 表重排），无逻辑、无测试改动 |
+| 注释/实现一致性 | ✅ | 4 处修复点逐一对照 `gateway.ts:8-15`（纯 DB）、`resolvers/home.ts:108-136`（gateways 仅异常降级 / worktrees 扇出降级）核实一致 |
+| 全仓残留扫描 | ✅ 零残留 | 见「7.3」，命中行均为正确口径 |
+| 定向单测复跑 | ✅ | `servers/agent-api` `src/graphql/resolvers/home.test.ts` **5 passed**；`apps/agent-web` `tsc -b` 通过 + `src/pages/__tests__/MainLayout.test.tsx` **3 passed**（本轮独立复跑核实） |
+| 首轮全量测试结论 | ✅ 继续有效 | 自 `56b4d6f` 后仅新增 docs/注释 commit（`53dcbe8`、`ff79b22`、`65038bf`、`f3d367e`），代码/测试零变更；`origin/release` 未移动 |
+| 合并冲突指引（问题 A） | ⏳ 留待合并节点 | 内容不变，继续有效：`controller-key.test.ts` 保留 release 侧 `evictKeyById → mockResolvedValue(true)`；`Sidebar.tsx` 取 integration 侧 |
+
+### 7.7 结论（第三轮）
+
+**✅ 复核通过，AI Review 闭环**——第二轮打回项（问题 7）返工 `f3d367e` 全部修复，4 处注释（3 处点名 + 1 处同缺陷类追加）与实现及契约口径逐条一致，全仓扫描零错误口径残留；建议项问题 8 已落实、问题 9 按锁定惯例闭环。代码正确性与测试结论自首轮起零变更（单测 608+414、API 集成 339/339、E2E 无新增失败、试验合并通过），integration 分支（@ `f3d367e`）**准予进入合并节点**。合并时必须按「问题 A」指引解决两处冲突（尤其 `controller-key.test.ts` 的 `evictKeyById → mockResolvedValue(true)`），合并后复跑 `servers/agent-api` 与 `apps/agent-web` 单测确认。建议项问题 3-6、9、10 留档不阻塞，可另立维护任务。
+
+### 7.8 经验总结
+
+- 返工修复「文档口径」类问题时，除英文关键词外需覆盖**中文同义词**（如「网关」vs `gateways`）的扫描变体；本轮返工方主动发现并修复中文残留，是全仓扫描应成为返工标准动作的正面例证。
+- 多轮 Review 闭环中，每轮应核验「代码/测试零变更」与「上游分支未移动」两个前提，前提成立则历史全量测试结论可继承，避免重复全量执行。
+- 计划期用例表与实施期用例 ID 漂移（问题 8）应在实现合入前对齐，避免验收 checklist 无法字面核销。
