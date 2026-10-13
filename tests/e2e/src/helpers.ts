@@ -51,6 +51,15 @@ export function registerController(rawKey: string): Promise<FakeController> {
       });
     });
 
+    // Handle git:worktree:list - 首页聚合查询会按工作区扇出 Worktree 列表，需即时应答避免阻塞首屏
+    client.on('git:worktree:list', (data: { requestId: string }) => {
+      client.emit('git:worktree:list:result', {
+        requestId: data.requestId,
+        success: true,
+        worktrees: [],
+      });
+    });
+
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
       resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), socket: client });

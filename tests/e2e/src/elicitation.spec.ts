@@ -44,6 +44,10 @@ function registerController(rawKey: string): Promise<FakeController> {
     const client = SocketIOClient(CONTROLLER_API_URL, { transports: ['websocket'], reconnection: false, forceNew: true });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
 
+    client.on("git:worktree:list", (data: { requestId: string }) => {
+      client.emit("git:worktree:list:result", { requestId: data.requestId, success: true, worktrees: [] });
+    });
+
     client.on('acp:check', (data: { requestId: string }) => {
       client.emit('acp:check:result', {
         requestId: data.requestId,
@@ -125,6 +129,9 @@ async function setupSession(page: import('@playwright/test').Page): Promise<{ so
 }
 
 test.describe('ACP Elicitation E2E', () => {
+  // 待办并入 homeOverview 后统一 15s 轮询，放宽单测超时
+  test.setTimeout(60000);
+
   test('should auto-popup form elicitation dialog and submit values', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
@@ -144,7 +151,7 @@ test.describe('ACP Elicitation E2E', () => {
 
     // Wait for auto-popup dialog (immediate priority todo)
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
     await expect(dialog.getByText('Agent请求输入：重构策略')).toBeVisible();
     await expect(dialog.getByText('How should I approach this refactoring?')).toBeVisible();
 
@@ -184,7 +191,7 @@ test.describe('ACP Elicitation E2E', () => {
     });
 
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
 
     await dialog.getByRole('button', { name: '拒绝' }).click();
 
@@ -215,7 +222,7 @@ test.describe('ACP Elicitation E2E', () => {
     });
 
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
 
     await dialog.getByRole('button', { name: '取消' }).click();
 
@@ -255,7 +262,7 @@ test.describe('ACP Elicitation E2E', () => {
     });
 
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
     await expect(dialog.getByText('Agent请求输入：打开链接授权')).toBeVisible();
     await expect(dialog.getByText('Please authorize access to your repositories.')).toBeVisible();
     // Full URL is displayed (host highlighted) before asking for consent

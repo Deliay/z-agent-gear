@@ -52,6 +52,10 @@ function registerFakeController(rawKey: string): Promise<{ controllerId: string;
     const client = SocketIOClient(CONTROLLER_API_URL, { transports: ['websocket'], reconnection: false, forceNew: true });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
 
+    client.on("git:worktree:list", (data: { requestId: string }) => {
+      client.emit("git:worktree:list:result", { requestId: data.requestId, success: true, worktrees: [] });
+    });
+
     client.on('acp:check', (data: { requestId: string }) => {
       client.emit('acp:check:result', {
         requestId: data.requestId,
