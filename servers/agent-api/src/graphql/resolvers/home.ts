@@ -105,7 +105,7 @@ export const homeResolvers = {
     },
   },
   Controller: {
-    // 嵌套惰性解析：仅查询语句选择 gateways 时执行；离线或失败降级为空列表
+    // 嵌套惰性解析：仅查询语句选择 gateways 时执行（纯 DB 查询，不随控制器在线状态降级）；失败降级为空列表
     gateways: async (parent: Doc, _args: unknown, context: AuthContext) => {
       const userId = context.currentUser?.id;
       if (!userId) {

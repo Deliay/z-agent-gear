@@ -20,7 +20,7 @@ export const homeTypeDefs = `#graphql
   }
 
   extend type Controller {
-    # 嵌套惰性解析：仅查询语句选择时按控制器扇出网关；离线或失败返回空列表
+    # 嵌套惰性解析：仅查询语句选择时执行（纯 DB 查询，不随控制器在线状态降级；异常时降级空列表）
     gateways: GatewayList!
   }
 

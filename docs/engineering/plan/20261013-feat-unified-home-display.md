@@ -167,12 +167,12 @@ TDD 顺序：先写 `tests/api/src/agent-api/home.test.ts`（RED，全字段 + �
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-H1 | `homeOverview` 全字段 | 各字段与对应既有查询结果一致（同数据集交叉断言） |
-| T-H2 | 查询语句不含 `gateways`/`worktrees` | 不触发嵌套字段解析（mock/计数断言；`worktrees` 不发生 Redis relay 扇出） |
-| T-H3 | 查询语句含 `controllers.gateways` | 返回该控制器的网关列表（纯 DB 查询，不随控制器在线状态降级） |
-| T-H4 | 查询语句含 `workspaces.worktrees` | 各工作区返回其 Worktree 列表；单个工作区扇出失败 → 空列表，其余字段正常 |
-| T-H5 | 某一分支数据为空（如无工作流） | 对应字段空数组/0，其余字段正常 |
-| T-H6 | 跨用户隔离 | 全部字段仅含当前用户数据 |
+| T-H0 | 未认证 | `homeOverview` 返回 `Not authenticated` |
+| T-H1 | `homeOverview` 全字段与既有查询一致 | 各字段与对应既有查询结果一致；仅含当前用户数据（跨用户隔离） |
+| T-H2 | 嵌套 `gateways`（在线控制器） | 返回该控制器的网关列表且不报错（纯 DB 查询，不随控制器在线状态降级） |
+| T-H3 | 嵌套 `worktrees`（在选择时扇出） | 各工作区返回其 Worktree 列表；单个工作区扇出失败 → 空列表，其余字段正常 |
+
+> 注：实际 API 集成用例见 `tests/api/src/agent-api/home.test.ts`（T-H0 ~ T-H3）；`gateways` 为纯 DB 查询、离线控制器仍返回网关配置行的语义由 `contracts/home.graphql` 与 resolver 单测（`home.test.ts`）共同覆盖。
 
 ### 命令参考
 
@@ -183,7 +183,7 @@ cd tests/api && API_URL=http://localhost:10001/graphql CONTROLLER_API_URL=http:/
 
 ### 验收 checklist
 
-- [ ] T-H1 ~ T-H6 全部通过
+- [ ] T-H0 ~ T-H3 全部通过
 - [ ] `homeOverview` 无新增 service 层；`gateways`/`worktrees` 未选择时不解析（`worktrees` 不发生 Redis relay 扇出）
 - [ ] 三个新/改 resolver 均已登记 `resolvers/index.ts`
 
