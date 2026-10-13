@@ -240,8 +240,8 @@ describe('Sidebar 集成测试', () => {
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('实例一')).toBeInTheDocument();
       expect(screen.getByText('实例二')).toBeInTheDocument();
-      // 归属工作区标注：project（所属）与「未知工作区」（工作区已删除）
-      expect(screen.getByText(/^project · /)).toBeInTheDocument();
+      // 归属工作区/控制器标注（工作区已删除显示「未知工作区」）
+      expect(screen.getByText(/^project · 测试控制器 · /)).toBeInTheDocument();
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
       // 点击直达详情
       expect(screen.getByText('实例一').closest('a')?.getAttribute('href')).toBe('/workflows/inst-1');

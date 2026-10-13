@@ -113,7 +113,6 @@ describe('TodoListPanel', () => {
     fireEvent.click(screen.getByText('全部已读'));
     await waitFor(() => {
       expect(mockMarkAllTodoRead).toHaveBeenCalled();
-      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 

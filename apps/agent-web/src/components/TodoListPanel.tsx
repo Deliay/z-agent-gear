@@ -47,8 +47,8 @@ export function TodoListPanel() {
   }, [todos, selectedTodo, immediateTodo]);
 
   const handleMarkAllRead = async () => {
+    // mutation 已带 refetchQueries: HOME_OVERVIEW，避免二次全量刷新
     await markAllTodoRead();
-    refetchOverview();
   };
 
   const handleTodoClick = (todo: TodoItemData) => {

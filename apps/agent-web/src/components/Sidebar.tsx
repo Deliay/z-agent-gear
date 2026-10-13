@@ -360,9 +360,10 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   );
 }
 
-/** 单个工作流条目：展示名称 + 所属工作区（未知工作区置灰）· 状态 */
+/** 单个工作流条目：展示名称 + 所属工作区/控制器（未知归属置灰）· 状态 */
 function WorkflowInstanceItem({ instance }: { instance: WorkflowInstanceSummaryData }) {
   const workspaceName = instance.workspace?.name;
+  const controllerName = instance.controller?.name;
   return (
     <li>
       <NavLink
@@ -379,6 +380,8 @@ function WorkflowInstanceItem({ instance }: { instance: WorkflowInstanceSummaryD
           <div className="truncate">{instance.name}</div>
           <div className="truncate text-xs text-muted-foreground">
             {workspaceName ?? <span className="text-muted-foreground/50">未知工作区</span>}
+            {' · '}
+            {controllerName ?? <span className="text-muted-foreground/50">未知控制器</span>}
             {' · '}
             {instanceStatusText(instance)}
           </div>
