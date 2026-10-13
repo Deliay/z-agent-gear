@@ -37,12 +37,6 @@ export default function MainLayout() {
     return <FullPageSpinner />;
   }
 
-  // 首屏加载态：仅在无数据时占位，轮询期间不卸载子页面
-  // （frontend-rules：Apollo v4 若写成 if (loading) 会在每次轮询卸载整页）
-  if (homeLoading && !data) {
-    return <FullPageSpinner />;
-  }
-
   // 整体加载失败：展示全局错误与重试入口，重试仍是一次请求
   if (error && !data) {
     return (
@@ -54,6 +48,8 @@ export default function MainLayout() {
     );
   }
 
+  // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
+  // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
   const homeData = data?.homeOverview ?? null;
 
   let layout: ReactNode;
