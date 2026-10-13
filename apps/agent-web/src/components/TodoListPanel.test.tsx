@@ -1,12 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { useQuery } from '@apollo/client/react';
 import { TodoListPanel } from './TodoListPanel';
-
-const mockUseQuery = useQuery as unknown as ReturnType<typeof vi.fn>;
 
 const mockRefetch = vi.fn();
 const mockMarkAllTodoRead = vi.fn().mockResolvedValue({});
+const mockUseHomeOverview = vi.fn();
 
 const defaultTodos = [
   {
@@ -38,22 +36,30 @@ const defaultTodos = [
   },
 ];
 
-vi.mock('@apollo/client/react', () => ({
-  useQuery: vi.fn(() => ({
-    data: { getUnreadTodoCount: 3, getTodoList: defaultTodos },
+function mockOverview(todos: unknown[], unreadTodoCount = 3) {
+  mockUseHomeOverview.mockReturnValue({
+    data: { todos, unreadTodoCount },
+    loading: false,
+    error: undefined,
     refetch: mockRefetch,
-  })),
+  });
+}
+
+vi.mock('@apollo/client/react', () => ({
   useMutation: vi.fn(() => [mockMarkAllTodoRead]),
+  // PermissionDialog 内部仍使用 useQuery；给出空实现即可
+  useQuery: vi.fn(() => ({ data: undefined, loading: false, refetch: vi.fn() })),
+}));
+
+vi.mock('../stores/homeOverview', () => ({
+  useHomeOverview: () => mockUseHomeOverview(),
 }));
 
 describe('TodoListPanel', () => {
   beforeEach(() => {
     mockMarkAllTodoRead.mockClear();
     mockRefetch.mockClear();
-    mockUseQuery.mockImplementation(() => ({
-      data: { getUnreadTodoCount: 3, getTodoList: defaultTodos },
-      refetch: mockRefetch,
-    }));
+    mockOverview(defaultTodos);
   });
 
   it('should render bell icon button', () => {
@@ -107,6 +113,7 @@ describe('TodoListPanel', () => {
     fireEvent.click(screen.getByText('全部已读'));
     await waitFor(() => {
       expect(mockMarkAllTodoRead).toHaveBeenCalled();
+      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 
@@ -136,15 +143,8 @@ describe('TodoListPanel', () => {
       createdAt: '2026-05-28T11:00:00.000Z',
     };
 
-    const mockWithElicitation = (todos: unknown[]) => {
-      mockUseQuery.mockImplementation(() => ({
-        data: { getUnreadTodoCount: todos.length, getTodoList: todos },
-        refetch: mockRefetch,
-      }));
-    };
-
     it('should auto-open ElicitationDialog for immediate unread elicitation_request todo', async () => {
-      mockWithElicitation([elicitationTodo]);
+      mockOverview([elicitationTodo]);
       render(<TodoListPanel />);
       await waitFor(() => {
         expect(screen.getByText('请确认发布配置')).toBeDefined();
@@ -153,7 +153,7 @@ describe('TodoListPanel', () => {
     });
 
     it('should show type badge for elicitation_request todo in popover', () => {
-      mockWithElicitation([elicitationTodo]);
+      mockOverview([elicitationTodo]);
       render(<TodoListPanel />);
       fireEvent.click(screen.getByLabelText('待办事项'));
       expect(screen.getByText('信息请求')).toBeDefined();
@@ -161,7 +161,7 @@ describe('TodoListPanel', () => {
 
     it('should open ElicitationDialog when clicking an elicitation_request todo', async () => {
       const nonImmediate = { ...elicitationTodo, id: 'todo-e2', priority: 'urgent' };
-      mockWithElicitation([nonImmediate]);
+      mockOverview([nonImmediate]);
       render(<TodoListPanel />);
       fireEvent.click(screen.getByLabelText('待办事项'));
       fireEvent.click(screen.getByText('Agent请求补充信息'));

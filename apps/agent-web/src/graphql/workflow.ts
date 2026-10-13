@@ -120,6 +120,9 @@ export interface WorkflowInstanceSummaryData {
   lastNodeName: string | null
   lastNodeStatus: WorkflowNodeStatus | null
   archived: boolean
+  // 归属对象（集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
+  workspace: { id: string; name: string } | null
+  controller: { id: string; name: string } | null
   createdAt: string
   updatedAt: string
 }
@@ -282,8 +285,8 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
 `
 
 export const GET_WORKFLOW_INSTANCES = gql`
-  query GetWorkflowInstances($workspaceId: ID!, $archived: Boolean) {
-    workflowInstances(workspaceId: $workspaceId, archived: $archived) {
+  query GetWorkflowInstances($workspaceId: ID, $controllerId: ID, $archived: Boolean) {
+    workflowInstances(workspaceId: $workspaceId, controllerId: $controllerId, archived: $archived) {
       id
       configuredWorkflowId
       controllerId
@@ -293,6 +296,8 @@ export const GET_WORKFLOW_INSTANCES = gql`
       lastNodeName
       lastNodeStatus
       archived
+      workspace { id name }
+      controller { id name }
       createdAt
       updatedAt
     }
@@ -311,6 +316,8 @@ export const GET_WORKFLOW_INSTANCE = gql`
       lastNodeName
       lastNodeStatus
       archived
+      workspace { id name }
+      controller { id name }
       workflowWorktreePath
       workflowWorktreeBranch
       nodes {

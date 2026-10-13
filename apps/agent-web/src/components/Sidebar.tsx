@@ -1,15 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_SESSIONS, GET_CONTROLLERS, GET_WORKSPACES } from '../graphql/queries';
+import { useMutation } from '@apollo/client/react';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type {
-  GetSessionsQuery,
-  GetControllersQuery,
-  GetWorkspacesQuery,
-  CreateSessionMutation,
-  SessionData,
-} from '../graphql/types';
+import type { CreateSessionMutation, SessionData } from '../graphql/types';
+import type { WorkflowInstanceSummaryData } from '../graphql/workflow';
 import NewSessionDialog from './session/NewSessionDialog';
 import { getStatusDotColor } from './session/status-colors';
 import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
@@ -24,12 +18,10 @@ import {
   ChevronRight,
   Archive,
 } from 'lucide-react';
-import {
-  GET_WORKFLOW_INSTANCES,
-  type GetWorkflowInstancesQuery,
-} from '../graphql/workflow';
 import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
+import { HOME_OVERVIEW } from '../graphql/home';
+import { useHomeOverview } from '../stores/homeOverview';
 
 interface SidebarProps {
   username: string;
@@ -44,29 +36,16 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
 
-  // 跟踪各控制器的工作区实例数
-  const workflowInstanceCountsRef = useRef<Map<string, Set<string>>>(new Map());
-  const [workflowInstanceCounts, setWorkflowInstanceCounts] = useState<Map<string, Set<string>>>(new Map());
-
-  // 跟踪各控制器的网关数
-  const gatewayCountsRef = useRef<Map<string, number>>(new Map());
-  const [gatewayCounts, setGatewayCounts] = useState<Map<string, number>>(new Map());
-
-  const { data: sessionsData } = useQuery<GetSessionsQuery>(GET_SESSIONS, {
-    pollInterval: 15000,
-  });
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
-    pollInterval: 15000,
-  });
-  const { data: workspacesData } = useQuery<GetWorkspacesQuery>(GET_WORKSPACES, {
-    pollInterval: 15000,
-  });
+  // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
+  const { data } = useHomeOverview();
 
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
-  const sessions = sessionsData?.sessions ?? [];
-  const controllers = controllersData?.controllers ?? [];
-  const allWorkspaces = workspacesData?.workspaces ?? [];
+  const sessions = data?.sessions ?? [];
+  const controllers = data?.controllers ?? [];
+  const allWorkspaces = data?.workspaces ?? [];
+  const workflowInstances = data?.workflowInstances ?? [];
+  const archivedWorkflowInstances = data?.archivedWorkflowInstances ?? [];
 
   const getWorkspaceNameForSession = (session: SessionData): string => {
     // 1. worktree 会话：从 worktreePath 推导
@@ -109,7 +88,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     existingWorktreePath?: string,
   ) => {
     try {
-      const { data } = await createSession({
+      const { data: result } = await createSession({
         variables: {
           input: {
             controllerId,
@@ -121,10 +100,10 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             existingWorktreePath: existingWorktreePath || null,
           },
         },
-        refetchQueries: [{ query: GET_SESSIONS }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       });
-      if (data?.createSession?.session?.id) {
-        navigate(`/sessions/${data.createSession.session.id}`);
+      if (result?.createSession?.session?.id) {
+        navigate(`/sessions/${result.createSession.session.id}`);
         setShowNewDialog(null);
       }
     } catch (error) {
@@ -144,42 +123,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     });
   };
 
-  // 稳定的回调函数，用于 WorkflowSidebarGroupInline 上报实例数
-  const handleInstancesChange = useCallback((controllerId: string, workspaceId: string, count: number) => {
-    const prev = workflowInstanceCountsRef.current;
-    const controllerSet = prev.get(controllerId) || new Set<string>();
-
-    if (count > 0) {
-      controllerSet.add(workspaceId);
-    } else {
-      controllerSet.delete(workspaceId);
-    }
-
-    prev.set(controllerId, controllerSet);
-    setWorkflowInstanceCounts(new Map(prev));
-  }, []);
-
-  // 稳定的回调函数，用于 GatewaySection 上报网关数
-  const handleGatewaysChange = useCallback((controllerId: string, count: number) => {
-    const prev = gatewayCountsRef.current;
-    if (prev.get(controllerId) !== count) {
-      prev.set(controllerId, count);
-      setGatewayCounts(new Map(prev));
-    }
-  }, []);
-
-  // 判断控制器是否有工作流实例
-  const hasWorkflowInstances = (controllerId: string): boolean => {
-    const controllerSet = workflowInstanceCounts.get(controllerId);
-    return controllerSet !== undefined && controllerSet.size > 0;
-  };
-
-  // 判断控制器是否有网关
-  const hasGateways = (controllerId: string): boolean => {
-    const count = gatewayCounts.get(controllerId);
-    return count !== undefined && count > 0;
-  };
-
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
@@ -192,6 +135,14 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             const controllerWorkspaces = allWorkspaces.filter(
               (w) => w.controllerId === controller.id && w.isEnabled,
             );
+            // 工作流集中列表：按控制器平铺全部实例（不再按工作区拆分组）
+            const controllerInstances = workflowInstances.filter((i) => i.controllerId === controller.id);
+            const controllerArchivedInstances = archivedWorkflowInstances.filter(
+              (i) => i.controllerId === controller.id,
+            );
+            const gateways = controller.gateways?.gateways ?? [];
+            const hasWorkflowInstances =
+              controllerInstances.length + controllerArchivedInstances.length > 0;
 
             return (
               <li key={controller.id}>
@@ -244,14 +195,14 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           </button>
                         }
                         emptyMessage="无网关暴露"
-                        hasContent={hasGateways(controller.id)}
+                        hasContent={gateways.length > 0}
                       >
                         <GatewaySection
                           controllerId={controller.id}
+                          gateways={gateways}
                           inline
                           externalShowDialog={showGatewayDialog === controller.id}
                           onDialogClose={() => setShowGatewayDialog(null)}
-                          onGatewaysChange={handleGatewaysChange}
                         />
                       </TreeSection>
                     )}
@@ -269,17 +220,12 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                         </button>
                       }
                       emptyMessage="无工作流实例"
-                      hasContent={hasWorkflowInstances(controller.id)}
+                      hasContent={hasWorkflowInstances}
                     >
-                      {controllerWorkspaces.map((ws) => (
-                        <WorkflowSidebarGroupInline
-                          key={ws.id}
-                          workspaceId={ws.id}
-                          controllerId={controller.id}
-                          workspaceName={ws.name}
-                          onInstancesChange={handleInstancesChange}
-                        />
-                      ))}
+                      <ControllerWorkflows
+                        instances={controllerInstances}
+                        archivedInstances={controllerArchivedInstances}
+                      />
                     </TreeSection>
 
                     <TreeSection
@@ -336,6 +282,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                           controllerId={controller.id}
                           workspaceName={ws.name}
                           controllers={controllers}
+                          worktrees={ws.worktrees ?? []}
                           fallbackSessions={controllerSessions.filter(
                             (s) => {
                               // worktree 会话：匹配工作区名
@@ -413,62 +360,48 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   );
 }
 
-interface WorkflowSidebarGroupInlineProps {
-  workspaceId: string;
-  controllerId: string;
-  workspaceName: string;
-  onInstancesChange: (controllerId: string, workspaceId: string, count: number) => void;
+/** 单个工作流条目：展示名称 + 所属工作区（未知工作区置灰）· 状态 */
+function WorkflowInstanceItem({ instance }: { instance: WorkflowInstanceSummaryData }) {
+  const workspaceName = instance.workspace?.name;
+  return (
+    <li>
+      <NavLink
+        to={`/workflows/${instance.id}`}
+        className={({ isActive }) =>
+          `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+            isActive
+              ? 'bg-sidebar-accent text-sidebar-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-accent'
+          }`
+        }
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate">{instance.name}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {workspaceName ?? <span className="text-muted-foreground/50">未知工作区</span>}
+            {' · '}
+            {instanceStatusText(instance)}
+          </div>
+        </div>
+      </NavLink>
+    </li>
+  );
 }
 
-function WorkflowSidebarGroupInline({
-  workspaceId,
-  controllerId,
-  workspaceName,
-  onInstancesChange,
-}: WorkflowSidebarGroupInlineProps) {
+/** 控制器工作流集中列表：活跃实例平铺 + 归档实例折叠 */
+function ControllerWorkflows({
+  instances,
+  archivedInstances,
+}: {
+  instances: WorkflowInstanceSummaryData[];
+  archivedInstances: WorkflowInstanceSummaryData[];
+}) {
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const { data } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
-    variables: { workspaceId },
-    pollInterval: 15000,
-  });
-  const { data: archivedData } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
-    variables: { workspaceId, archived: true },
-    pollInterval: 15000,
-  });
-
-  const instances = data?.workflowInstances ?? [];
-  const archivedInstances = archivedData?.workflowInstances ?? [];
-
-  // 上报实例数变化（包括归档实例）
-  useEffect(() => {
-    onInstancesChange(controllerId, workspaceId, instances.length + archivedInstances.length);
-    return () => {
-      onInstancesChange(controllerId, workspaceId, 0);
-    };
-  }, [controllerId, workspaceId, instances.length, archivedInstances.length, onInstancesChange]);
 
   return (
     <>
       {instances.map((instance) => (
-        <li key={instance.id}>
-          <NavLink
-            to={`/workflows/${instance.id}`}
-            className={({ isActive }) =>
-              `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent'
-              }`
-            }
-          >
-            <div className="min-w-0 flex-1">
-              <div className="truncate">{instance.name}</div>
-              <div className="truncate text-xs text-muted-foreground">
-                {workspaceName} · {instanceStatusText(instance)}
-              </div>
-            </div>
-          </NavLink>
-        </li>
+        <WorkflowInstanceItem key={instance.id} instance={instance} />
       ))}
       {archivedInstances.length > 0 && (
         <li>
@@ -485,25 +418,7 @@ function WorkflowSidebarGroupInline({
           {archivedOpen && (
             <ul className="ml-4 space-y-1">
               {archivedInstances.map((instance) => (
-                <li key={instance.id}>
-                  <NavLink
-                    to={`/workflows/${instance.id}`}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                        isActive
-                          ? 'bg-sidebar-accent text-sidebar-foreground'
-                          : 'text-sidebar-foreground hover:bg-sidebar-accent'
-                      }`
-                    }
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate">{instance.name}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {workspaceName} · {instanceStatusText(instance)}
-                      </div>
-                    </div>
-                  </NavLink>
-                </li>
+                <WorkflowInstanceItem key={instance.id} instance={instance} />
               ))}
             </ul>
           )}

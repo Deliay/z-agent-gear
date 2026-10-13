@@ -1,3 +1,5 @@
+import type { WorkflowInstanceSummaryData } from './workflow'
+
 export interface ControllerKeyData {
   id: string
   name: string
@@ -31,6 +33,7 @@ export interface ControllerWorkspaceData {
   path: string
   isEnabled: boolean
   isGitRepo?: boolean | null
+  defaultBranch?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -573,4 +576,31 @@ export interface RegenerateControllerKeyMutation {
     key: ControllerKeyData
     rawKey: string
   }
+}
+
+// ---------- 首页聚合查询（HOME_OVERVIEW，对齐 contracts/home.graphql） ----------
+
+export interface HomeOverviewControllerData extends ControllerData {
+  /** 嵌套惰性字段：离线或扇出失败为空列表 */
+  gateways: GatewayListData
+}
+
+export interface HomeOverviewWorkspaceData extends ControllerWorkspaceData {
+  /** 嵌套惰性字段：离线或扇出失败为空列表 */
+  worktrees: WorkspaceWorktreeData[]
+}
+
+export interface HomeOverviewData {
+  controllers: HomeOverviewControllerData[]
+  sessions: SessionData[]
+  sessionTotalCount: number
+  workspaces: HomeOverviewWorkspaceData[]
+  workflowInstances: WorkflowInstanceSummaryData[]
+  archivedWorkflowInstances: WorkflowInstanceSummaryData[]
+  todos: TodoItemData[]
+  unreadTodoCount: number
+}
+
+export interface HomeOverviewQuery {
+  homeOverview: HomeOverviewData
 }
