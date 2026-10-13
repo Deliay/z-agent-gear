@@ -22,6 +22,7 @@ vi.mock('../../services/workflow/configured.js', () => ({
 
 vi.mock('../../services/workflow/instance.js', () => ({
   workflowInstanceService: {
+    list: vi.fn(),
     listForWorkspace: vi.fn(),
     findById: vi.fn(),
     instantiate: vi.fn(),
@@ -30,10 +31,24 @@ vi.mock('../../services/workflow/instance.js', () => ({
   },
 }));
 
+vi.mock('../../services/controller.js', () => ({
+  controllerService: {
+    findById: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/controller-workspace.js', () => ({
+  controllerWorkspaceService: {
+    findById: vi.fn(),
+  },
+}));
+
 import { workflowResolvers } from './workflow.js';
 import { workflowTemplateService } from '../../services/workflow/template.js';
 import { configuredWorkflowService } from '../../services/workflow/configured.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
+import { controllerService } from '../../services/controller.js';
+import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 
 const ctx = { currentUser: { id: 'user-1', username: 'u' } } as never;
 const emptyCtx = { currentUser: null } as never;
@@ -179,11 +194,15 @@ describe('workflow resolvers', () => {
     });
 
     it('workflowInstances 按 workspaceId 列出，黑板映射为 entry 数组', async () => {
-      vi.mocked(workflowInstanceService.listForWorkspace).mockResolvedValue([instanceDoc] as never);
+      vi.mocked(workflowInstanceService.list).mockResolvedValue([instanceDoc] as never);
 
       const result = await workflowResolvers.Query.workflowInstances({}, { workspaceId: 'ws-1' }, ctx);
 
-      expect(workflowInstanceService.listForWorkspace).toHaveBeenCalledWith('user-1', 'ws-1', false);
+      expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', {
+        workspaceId: 'ws-1',
+        controllerId: undefined,
+        archived: false,
+      });
       const inst = result[0];
       expect(inst).toMatchObject({ id: 'inst-1', currentNodeNames: ['技术方案'] });
       expect(inst.blackboard).toEqual([
@@ -193,6 +212,52 @@ describe('workflow resolvers', () => {
       // rejectInfo 空对象归一化为 null
       expect(inst.nodes[0].rejectInfo).toBeNull();
       expect(inst.nodes[0]).toMatchObject({ id: 'n1', status: 'DONE', reworkCount: 0 });
+    });
+
+    it('workflowInstances 支持 controllerId / 无参全量与 archived 透传', async () => {
+      vi.mocked(workflowInstanceService.list).mockResolvedValue([] as never);
+
+      await workflowResolvers.Query.workflowInstances({}, {}, ctx);
+      expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', {
+        workspaceId: undefined,
+        controllerId: undefined,
+        archived: false,
+      });
+
+      await workflowResolvers.Query.workflowInstances({}, { controllerId: 'ctrl-1', archived: true }, ctx);
+      expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', {
+        workspaceId: undefined,
+        controllerId: 'ctrl-1',
+        archived: true,
+      });
+    });
+
+    it('WorkflowInstance.workspace / controller 惰性解析归属（已删除返回 null）', async () => {
+      vi.mocked(controllerWorkspaceService.findById).mockResolvedValue({ id: 'ws-1', name: 'project' } as never);
+      vi.mocked(controllerService.findById).mockResolvedValue({ id: 'ctrl-1', name: '控制器' } as never);
+
+      const workspace = await workflowResolvers.WorkflowInstance.workspace(
+        { workspaceId: 'ws-1' },
+        {},
+        ctx,
+      );
+      const controller = await workflowResolvers.WorkflowInstance.controller(
+        { controllerId: 'ctrl-1' },
+        {},
+        ctx,
+      );
+      expect(workspace).toMatchObject({ id: 'ws-1' });
+      expect(controller).toMatchObject({ id: 'ctrl-1' });
+      expect(controllerWorkspaceService.findById).toHaveBeenCalledWith('ws-1', 'user-1');
+      expect(controllerService.findById).toHaveBeenCalledWith('ctrl-1', 'user-1');
+
+      // 未认证 / 无归属 id → null，不查库
+      await expect(
+        workflowResolvers.WorkflowInstance.workspace({ workspaceId: 'ws-1' }, {}, emptyCtx),
+      ).resolves.toBeNull();
+      await expect(
+        workflowResolvers.WorkflowInstance.controller({ controllerId: 'ctrl-1' }, {}, emptyCtx),
+      ).resolves.toBeNull();
     });
 
     it('workflowInstance 不存在返回 null', async () => {

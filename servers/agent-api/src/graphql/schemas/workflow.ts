@@ -154,6 +154,9 @@ export const workflowTypeDefs = `#graphql
     nodes: [WorkflowNode!]!
     blackboard: [BlackboardEntry!]!
     blackboardTrash: [BlackboardEntry!]!
+    # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
+    workspace: ControllerWorkspace
+    controller: Controller
     createdAt: String!
     updatedAt: String!
   }
@@ -243,7 +246,8 @@ export const workflowTypeDefs = `#graphql
     workflowTemplate(id: ID!): WorkflowTemplate
     configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
     configuredWorkflow(id: ID!): ConfiguredWorkflow
-    workflowInstances(workspaceId: ID!, archived: Boolean): [WorkflowInstance!]!
+    # workspaceId / controllerId 均可选：都不传 = 当前用户全部实例；二者同传取交集
+    workflowInstances(workspaceId: ID, controllerId: ID, archived: Boolean): [WorkflowInstance!]!
     workflowInstance(id: ID!): WorkflowInstance
   }
 
