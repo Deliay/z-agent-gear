@@ -1,5 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
-import { adminGqlRequest, adminLoginApi, adminLoginViaUI } from './helpers.js';
+import { ADMIN_WEB_URL, adminGqlRequest, adminLoginApi, adminLoginViaUI } from './helpers.js';
+
+// 计划用例覆盖说明（Phase 8）：
+// - T-E1 启动 idle 容器、T-E3 强制销毁：本文件 UI 覆盖。
+// - T-E2 未带/伪 token 被拒：见 tests/api/src/cloud-controller/worker-handshake.test.ts。
+// - T-E5 非管理员/未登录访问拒绝：本文件覆盖（ProtectedRoute 重定向）。
+// - T-E4 异常退出/超时保留 exitReason 且可强制销毁、T-E6 列表与 Job 实际状态对账：
+//   K8S_ENABLED=false 下无真实 Job 可对账，改由 cloud-controller 单测锚定
+//   （status-sync.test.ts T-Y1/T-Y3/T-Y5 + reconcile；container-service.test.ts T-S4/T-S4b）。
+//   真实集群链路按计划列为部署侧手工验收。
 
 interface ContainerNode {
   id: string;
@@ -88,5 +97,10 @@ test.describe('Admin Cloud Container E2E', () => {
 
     // 兜底清理
     await destroyViaApi(page, token, created!.id);
+  });
+
+  test('T-E5: unauthenticated access to /cloud-containers is redirected to login', async ({ page }) => {
+    await page.goto(`${ADMIN_WEB_URL}/cloud-containers`);
+    await expect(page).toHaveURL(/\/login/);
   });
 });
