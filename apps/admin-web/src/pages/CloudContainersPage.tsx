@@ -22,7 +22,7 @@ import { CONTAINER_PURPOSE_LABELS } from '@/components/cloud-containers/labels';
 
 export default function CloudContainersPage() {
   // 10s 轮询（Apollo v4：加载分支必须 `loading && !data`，否则每次轮询卸载整页）
-  const { data, loading, error } = useQuery<GetAdminCloudContainersQuery>(ADMIN_CLOUD_CONTAINERS, {
+  const { data, loading } = useQuery<GetAdminCloudContainersQuery>(ADMIN_CLOUD_CONTAINERS, {
     pollInterval: 10000,
   });
   const [startContainer] = useMutation(ADMIN_START_CLOUD_CONTAINER);
@@ -33,6 +33,8 @@ export default function CloudContainersPage() {
   const [destroyBusy, setDestroyBusy] = useState(false);
 
   const containers = data?.adminCloudContainers ?? [];
+  // 降级提示由契约字段承载（控制面在线标记），而非依赖 Apollo error
+  const controlPlaneOffline = data?.adminCloudContainerControlPlane?.online === false;
 
   const handleStart = async (purpose: CloudContainerPurpose) => {
     await startContainer({
@@ -66,9 +68,9 @@ export default function CloudContainersPage() {
         </Button>
       </div>
 
-      {error && data && (
+      {controlPlaneOffline && (
         <div role="status" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          控制面离线，展示最近一次落库状态。
+          {data?.adminCloudContainerControlPlane?.message || '控制面离线'}，展示最近一次落库状态。
         </div>
       )}
 

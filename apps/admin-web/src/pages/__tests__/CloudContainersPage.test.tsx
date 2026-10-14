@@ -37,8 +37,16 @@ function container(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setupContainers(containers: unknown[], extra: Record<string, unknown> = {}) {
-  mocks.useQuery.mockReturnValue({ data: { adminCloudContainers: containers }, loading: false, ...extra });
+function setupContainers(
+  containers: unknown[],
+  controlPlane: Record<string, unknown> = { online: true, message: null },
+  extra: Record<string, unknown> = {},
+) {
+  mocks.useQuery.mockReturnValue({
+    data: { adminCloudContainers: containers, adminCloudContainerControlPlane: controlPlane },
+    loading: false,
+    ...extra,
+  });
 }
 
 describe('CloudContainersPage', () => {
@@ -138,8 +146,8 @@ describe('CloudContainersPage', () => {
     expect(screen.getAllByText('-').length).toBeGreaterThan(0);
   });
 
-  it('T-W5: shows a control-plane offline banner while keeping degraded data', () => {
-    setupContainers([container()], { error: new Error('控制面离线') });
+  it('T-W5: shows a control-plane offline banner (via contract field) while keeping degraded data', () => {
+    setupContainers([container()], { online: false, message: '控制面离线' });
     render(<CloudContainersPage />);
 
     expect(screen.getByText(/控制面离线/)).toBeDefined();

@@ -149,8 +149,14 @@ export interface CloudContainerData {
   exitReason: string | null;
 }
 
+export interface CloudContainerControlPlaneData {
+  online: boolean;
+  message: string | null;
+}
+
 export interface GetAdminCloudContainersQuery {
   adminCloudContainers: CloudContainerData[];
+  adminCloudContainerControlPlane: CloudContainerControlPlaneData;
 }
 
 export interface AdminStartCloudContainerMutation {

@@ -114,5 +114,9 @@ export const ADMIN_CLOUD_CONTAINERS = gql`
       exitedAt
       exitReason
     }
+    adminCloudContainerControlPlane {
+      online
+      message
+    }
   }
 `
