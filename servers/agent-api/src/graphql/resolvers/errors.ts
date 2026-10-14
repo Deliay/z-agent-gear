@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
+import { GLOBAL_WRITE_FORBIDDEN } from '../../services/constants.js';
 
-export const GLOBAL_WRITE_FORBIDDEN = '全局配置请在管理后台修改';
+export { GLOBAL_WRITE_FORBIDDEN };
 
 /**
  * 将 service 层抛出的错误转换为 GraphQLError，保证可读消息透传到客户端。

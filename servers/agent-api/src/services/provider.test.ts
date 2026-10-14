@@ -322,25 +322,50 @@ describe('ProviderService', () => {
   });
 
   describe('batch operations scope guard', () => {
-    it('should restrict batch operations to user-scope providers', async () => {
+    it('keeps user-scope filters and cascades when no global provider is targeted', async () => {
+      (Provider.findOne as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+      });
       (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 0 });
       (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 0 });
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
 
       const userFilter = {
-        _id: { $in: ['a', 'g'] },
+        _id: { $in: ['a', 'b'] },
         $or: [{ scope: 'user' }, { scope: { $exists: false } }],
       };
 
-      await providerService.batchEnable(['a', 'g']);
+      await providerService.batchEnable(['a', 'b']);
       expect(Provider.updateMany).toHaveBeenCalledWith(userFilter, { isEnabled: true });
 
-      await providerService.batchDisable(['a', 'g']);
+      await providerService.batchDisable(['a', 'b']);
       expect(Provider.updateMany).toHaveBeenCalledWith(userFilter, { isEnabled: false });
 
-      await providerService.batchDelete(['a', 'g']);
+      await providerService.batchDelete(['a', 'b']);
       expect(Provider.deleteMany).toHaveBeenCalledWith(userFilter);
+      expect(Model.updateMany).toHaveBeenCalledWith(
+        { providerId: { $in: ['a', 'b'] }, scope: { $ne: 'global' } },
+        expect.any(Object),
+      );
+    });
+
+    it('rejects batch operations that target a global provider (no silent skip)', async () => {
+      (Provider.findOne as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'g' }) }),
+      });
+      (Provider.updateMany as any) = vi.fn();
+      (Provider.deleteMany as any) = vi.fn();
+      (Model.updateMany as any) = vi.fn();
+      (Model.deleteMany as any) = vi.fn();
+
+      await expect(providerService.batchEnable(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
+      await expect(providerService.batchDisable(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
+      await expect(providerService.batchDelete(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
+
+      expect(Provider.updateMany).not.toHaveBeenCalled();
+      expect(Provider.deleteMany).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

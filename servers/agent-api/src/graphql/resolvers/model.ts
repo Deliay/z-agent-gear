@@ -37,6 +37,7 @@ export const modelResolvers = {
       } catch (err) {
         rethrowAsGraphQLError(err, [
           ['E11000', 'Model name already exists for this provider'],
+          ['Provider not found', 'Provider not found'],
         ]);
       }
     },

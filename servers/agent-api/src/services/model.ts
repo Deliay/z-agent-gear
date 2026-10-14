@@ -1,7 +1,7 @@
 import { Model, type IModel } from '../models/model.js';
+import { Provider } from '../models/provider.js';
+import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
 import mongoose from 'mongoose';
-
-const GLOBAL_WRITE_FORBIDDEN = '全局配置请在管理后台修改';
 
 // 用户可用模型：scope=user 全量（兼容无 scope 字段的存量数据）∪ scope=global 且启用的全局模型
 const AVAILABLE_MODELS_FILTER: mongoose.QueryFilter<IModel> = {
@@ -32,6 +32,18 @@ export class ModelService {
   }
 
   async createCustom(input: { providerId: string; name: string }) {
+    // 校验目标供应商存在且为用户自己的（scope=user）配置，防止向全局供应商挂模型
+    if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
+      throw new Error('Provider not found');
+    }
+    const provider = await Provider.findOne({ _id: input.providerId }).select('scope').lean() as { scope?: string } | null;
+    if (!provider) {
+      throw new Error('Provider not found');
+    }
+    if (normalizeScope(provider.scope) !== 'user') {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
+
     const maxSort = await Model.findOne({ providerId: input.providerId })
       .sort({ sortOrder: -1 })
       .select('sortOrder')
@@ -72,7 +84,7 @@ export class ModelService {
       throw new Error(GLOBAL_WRITE_FORBIDDEN);
     }
 
-    const provider = await mongoose.model('Provider').findById(model.providerId).lean() as { isEnabled: boolean } | null;
+    const provider = await Provider.findOne({ _id: model.providerId }).lean() as { isEnabled: boolean } | null;
     if (!provider || !provider.isEnabled) {
       return null;
     }
@@ -84,7 +96,17 @@ export class ModelService {
   }
 
   async updateSortOrder(ids: string[]) {
-    // 仅排序用户自己的模型（scope != global，兼容无 scope 字段的存量数据），不触碰全局模型
+    // 若包含全局模型，明确拒绝（与单条写路径文案一致），不再静默跳过
+    if (ids.length > 0) {
+      const global = await Model.findOne({ _id: { $in: ids }, scope: 'global' })
+        .select('_id')
+        .lean();
+      if (global) {
+        throw new Error(GLOBAL_WRITE_FORBIDDEN);
+      }
+    }
+
+    // 仅排序用户自己的模型（scope != global，兼容无 scope 字段的存量数据）
     const userOnly: mongoose.QueryFilter<IModel> = { scope: { $ne: 'global' } };
     const updates = ids.map((id, index) => ({
       updateOne: {

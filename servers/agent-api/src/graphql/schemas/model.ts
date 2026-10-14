@@ -17,10 +17,6 @@ export const modelTypeDefs = `#graphql
     name: String!
   }
 
-  type ModelBatchPayload {
-    successCount: Int!
-  }
-
   extend type Query {
     models: [Model!]!
     modelsByProvider(providerId: ID!): [Model!]!

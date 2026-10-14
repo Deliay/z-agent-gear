@@ -2,9 +2,8 @@ import { Provider, type IProvider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { encrypt, decrypt } from './crypto.js';
 import { llmApiService, ProviderType } from './llm-api.js';
+import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
 import mongoose from 'mongoose';
-
-const GLOBAL_WRITE_FORBIDDEN = '全局配置请在管理后台修改';
 
 // 查询条件：仅 user scope，兼容无 scope 字段的存量数据
 const USER_SCOPE_FILTER: mongoose.QueryFilter<IProvider> = {
@@ -158,6 +157,8 @@ export class ProviderService {
   }
 
   async batchEnable(ids: string[]) {
+    await this.assertNoGlobalProviders(ids);
+
     const result = await Provider.updateMany(
       { _id: { $in: ids }, ...USER_SCOPE_FILTER },
       { isEnabled: true },
@@ -172,6 +173,8 @@ export class ProviderService {
   }
 
   async batchDisable(ids: string[]) {
+    await this.assertNoGlobalProviders(ids);
+
     const result = await Provider.updateMany(
       { _id: { $in: ids }, ...USER_SCOPE_FILTER },
       { isEnabled: false },
@@ -186,9 +189,22 @@ export class ProviderService {
   }
 
   async batchDelete(ids: string[]) {
+    await this.assertNoGlobalProviders(ids);
+
     await Model.deleteMany({ providerId: { $in: ids }, scope: { $ne: 'global' } });
     const result = await Provider.deleteMany({ _id: { $in: ids }, ...USER_SCOPE_FILTER });
     return { successCount: result.deletedCount };
+  }
+
+  /** 批量写路径若包含全局供应商，明确拒绝（与单条 update/delete/toggle 行为一致） */
+  private async assertNoGlobalProviders(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const global = await Provider.findOne({ _id: { $in: ids }, scope: 'global' })
+      .select('_id')
+      .lean();
+    if (global) {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
   }
 
   private mapProvider(provider: Record<string, unknown>) {
@@ -212,9 +228,9 @@ export class ProviderService {
   }
 
   private maskCredential(value: string): string {
-    if (value.length <= 7) {
-      return value.slice(0, 3) + '****' + value.slice(-4);
-    }
+    if (!value) return '';
+    // 短凭据整体掩码，避免 first3+last4 泄露（近似）完整原值
+    if (value.length <= 8) return '****';
     return value.slice(0, 3) + '****' + value.slice(-4);
   }
 }
