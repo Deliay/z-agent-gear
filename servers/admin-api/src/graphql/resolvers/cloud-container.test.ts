@@ -6,7 +6,7 @@ vi.mock('../../services/cloud-controller-client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/cloud-controller-client.js')>();
   return {
     ...actual,
-    cloudControllerClient: { list: vi.fn(), start: vi.fn(), destroy: vi.fn() },
+    cloudControllerClient: { list: vi.fn(), start: vi.fn(), destroy: vi.fn(), checkHealth: vi.fn() },
   };
 });
 
@@ -119,6 +119,30 @@ describe('cloudContainerResolvers', () => {
       (cloudControllerClient.list as any).mockRejectedValue(new Error('bad gateway'));
       await expect(Query.adminCloudContainers({}, {}, good)).rejects.toThrow('bad gateway');
       expect(findStoredCloudContainers).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('adminCloudContainerControlPlane (P0-2 降级提示)', () => {
+    it('returns online=true on a healthy control plane', async () => {
+      (cloudControllerClient.checkHealth as any).mockResolvedValue(true);
+      await expect(Query.adminCloudContainerControlPlane({}, {}, good)).resolves.toEqual({
+        online: true,
+        message: null,
+      });
+    });
+
+    it('returns online=false with the offline hint when unreachable (real degradation path)', async () => {
+      (cloudControllerClient.checkHealth as any).mockRejectedValue(
+        new ControlPlaneUnavailableError('down'),
+      );
+      await expect(Query.adminCloudContainerControlPlane({}, {}, good)).resolves.toEqual({
+        online: false,
+        message: '控制面离线',
+      });
+    });
+
+    it('rejects anonymous access', async () => {
+      await expect(Query.adminCloudContainerControlPlane({}, {}, anon)).rejects.toThrow('Not authenticated');
     });
   });
 

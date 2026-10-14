@@ -19,7 +19,8 @@ const cloudContainerSchema = new mongoose.Schema(
       enum: ['idle', 'admin-task', 'workflow', 'session'],
     },
     refId: { type: String },
-    userId: { type: mongoose.Schema.Types.ObjectId },
+    // 与 cloud-controller schema 对齐（userId 为 String，避免同一集合 schema 漂移）
+    userId: { type: String },
     image: { type: String },
     connectedAt: { type: Date },
     exitedAt: { type: Date },

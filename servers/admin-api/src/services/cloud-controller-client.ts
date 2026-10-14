@@ -27,6 +27,11 @@ export class ControlPlaneUnavailableError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
+/**
+ * 强制销毁专用超时：在线容器需下发 shutdown 并等待宽限期（cloud-controller 约 10s）
+ * 与删除 Job 重试，默认超时必须显著大于宽限期，避免「服务端已销毁但客户端超时误报」。
+ */
+const DEFAULT_DESTROY_TIMEOUT_MS = 30000;
 
 /** 内部 API 的小写状态 → GraphQL 大写枚举 */
 const STATUS_TO_GQL: Record<string, string> = {
@@ -91,6 +96,8 @@ export interface CloudControllerClientOptions {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  /** 强制销毁专用超时（默认 30s，需大于 cloud-controller 的 shutdown 宽限期 + 删 Job 重试） */
+  destroyTimeoutMs?: number;
 }
 
 async function extractErrorMessage(res: Response, fallback: string): Promise<string> {
@@ -106,11 +113,13 @@ export class CloudControllerClient {
   private readonly baseUrlOverride?: string;
   private readonly tokenOverride?: string;
   private readonly timeoutMs: number;
+  private readonly destroyTimeoutMs: number;
 
   constructor(options: CloudControllerClientOptions = {}) {
     this.baseUrlOverride = options.baseUrl;
     this.tokenOverride = options.token;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.destroyTimeoutMs = options.destroyTimeoutMs ?? DEFAULT_DESTROY_TIMEOUT_MS;
   }
 
   /** 内部 API 列表（含 K8s 实时状态合并） */
@@ -138,12 +147,34 @@ export class CloudControllerClient {
 
   /** 强制销毁容器；404（不存在）返回 false，终态容器幂等返回 true */
   async destroy(id: string): Promise<boolean> {
-    const res = await this.request(`/internal/containers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(
+      `/internal/containers/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      this.destroyTimeoutMs,
+    );
     if (res.status === 404) return false;
     if (!res.ok) {
       throw new Error(await extractErrorMessage(res, `cloud-controller destroy failed: ${res.status}`));
     }
     return true;
+  }
+
+  /** 控制面健康探针（GET /health，无鉴权），用于降级提示；不可达抛 ControlPlaneUnavailableError。 */
+  async checkHealth(): Promise<boolean> {
+    const baseUrl = this.resolveBaseUrl();
+    if (!baseUrl) {
+      throw new ControlPlaneUnavailableError('CLOUD_CONTROLLER_URL 未配置');
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+      return res.ok;
+    } catch (err) {
+      throw new ControlPlaneUnavailableError(`cloud-controller 不可达: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private resolveBaseUrl(): string {
@@ -154,7 +185,7 @@ export class CloudControllerClient {
     return this.tokenOverride || config.internalApiToken || '';
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, timeoutMs: number = this.timeoutMs): Promise<Response> {
     const baseUrl = this.resolveBaseUrl();
     const token = this.resolveToken();
     if (!baseUrl) {
@@ -165,7 +196,7 @@ export class CloudControllerClient {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(`${baseUrl}${path}`, {
         ...init,

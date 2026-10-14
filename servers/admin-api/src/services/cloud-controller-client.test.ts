@@ -172,6 +172,54 @@ describe('CloudControllerClient', () => {
       const client = new CloudControllerClient(OPTS);
       await expect(client.destroy('c1')).rejects.toMatchObject({ code: CONTROL_PLANE_UNAVAILABLE });
     });
+
+    it('P0-1: uses a dedicated timeout longer than the list timeout (covers shutdown grace)', async () => {
+      let aborted = false;
+      fetchMock.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const timer = setTimeout(() => resolve(jsonResponse({ success: true })), 25);
+            init.signal?.addEventListener('abort', () => {
+              aborted = true;
+              clearTimeout(timer);
+              reject(new Error('aborted'));
+            });
+          }),
+      );
+      // 通用超时 5ms 会中断，销毁专用超时 100ms 覆盖 25ms 的宽限响应
+      const client = new CloudControllerClient({ ...OPTS, timeoutMs: 5, destroyTimeoutMs: 100 });
+      await expect(client.destroy('c1')).resolves.toBe(true);
+      expect(aborted).toBe(false);
+    });
+
+    it('P0-1: aborts destroy when it exceeds destroyTimeoutMs', async () => {
+      fetchMock.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          }),
+      );
+      const client = new CloudControllerClient({ ...OPTS, timeoutMs: 5, destroyTimeoutMs: 10 });
+      await expect(client.destroy('c1')).rejects.toMatchObject({ code: CONTROL_PLANE_UNAVAILABLE });
+    });
+  });
+
+  describe('checkHealth', () => {
+    it('GETs /health without bearer and returns true on 200', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ status: 'ok' }));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.checkHealth()).resolves.toBe(true);
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://cloud-controller:4003/health');
+      expect(authHeader(init)).toBeUndefined();
+    });
+
+    it('throws CONTROL_PLANE_UNAVAILABLE when the control plane is unreachable', async () => {
+      fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.checkHealth()).rejects.toMatchObject({ code: CONTROL_PLANE_UNAVAILABLE });
+    });
   });
 
   describe('mapCloudContainer', () => {

@@ -13,6 +13,11 @@ export const cloudContainerTypeDefs = `#graphql
     exitReason: String
   }
 
+  type CloudContainerControlPlane {
+    online: Boolean!
+    message: String
+  }
+
   enum CloudContainerStatus {
     CREATING
     CONNECTING
@@ -31,6 +36,7 @@ export const cloudContainerTypeDefs = `#graphql
 
   extend type Query {
     adminCloudContainers: [CloudContainer!]!
+    adminCloudContainerControlPlane: CloudContainerControlPlane!
   }
 
   extend type Mutation {

@@ -43,6 +43,23 @@ export const cloudContainerResolvers = {
         return docs.map((doc) => mapCloudContainer(doc));
       }
     },
+    adminCloudContainerControlPlane: async (
+      _parent: unknown,
+      _args: unknown,
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      try {
+        const online = await cloudControllerClient.checkHealth();
+        return { online, message: online ? null : CONTROL_PLANE_OFFLINE_HINT };
+      } catch (err) {
+        // 健康探针失败即视为控制面离线，携带提示（前端据此展示横幅）
+        if (isControlPlaneUnavailable(err)) {
+          return { online: false, message: CONTROL_PLANE_OFFLINE_HINT };
+        }
+        throw toGraphQLError(err);
+      }
+    },
   },
   Mutation: {
     adminStartCloudContainer: async (
