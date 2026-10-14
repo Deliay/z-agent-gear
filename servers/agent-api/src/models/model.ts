@@ -1,3 +1,4 @@
+// 本 schema 与 servers/admin-api/src/models/model.ts 同步演进
 import mongoose from 'mongoose';
 
 const modelSchema = new mongoose.Schema({
@@ -6,6 +7,7 @@ const modelSchema = new mongoose.Schema({
   isCustom: { type: Boolean, default: false },
   isEnabled: { type: Boolean, default: true },
   sortOrder: { type: Number, default: 0 },
+  scope: { type: String, enum: ['user', 'global'], default: 'user', index: true },
 }, { timestamps: true });
 
 modelSchema.index({ providerId: 1, name: 1 }, { unique: true });

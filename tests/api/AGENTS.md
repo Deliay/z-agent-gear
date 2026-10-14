@@ -40,9 +40,12 @@ aspire describe controller-api
 
 ```bash
 API_URL=http://localhost:10001/graphql \
+ADMIN_API_URL=http://localhost:10003/graphql \
 CONTROLLER_API_URL=http://localhost:33237 \
 npm test
 ```
+
+> admin 套件（`src/admin-api/**`）与 agent-api scope 回归需要 admin-api 就绪：`aspire start && aspire wait admin-api agent-api && aspire wait controller-api`。
 
 ### 4. 重新运行测试
 
@@ -63,7 +66,11 @@ npm test
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
+| `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
+
+> 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 
 ## TDD Workflow
 
@@ -347,3 +354,51 @@ npm test
 | 待办管理 - 全部已读 | markAllTodoRead → 验证 unreadCount=0 |
 | 超时设置 - 全局设置 | updateGlobalPermissionTimeout → 验证保存成功 |
 | 超时设置 - Session 设置 | updatePermissionTimeout → 验证 session.permissionTimeoutAction |
+
+### Admin Auth API (`admin-api/auth.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 归一化管理员登录态 | ensureAdminLogin → adminMe username=admin、mustChangePassword=false |
+| adminMe 无 token | 返回 null（不报错） |
+| 伪造/user 侧 token | 返回 null（admin/user token 不可互认，T-A6） |
+| 密码错误登录 | 返回「Invalid username or password」（T-A3） |
+| 归一化密码登录 | 返回 token，mustChangePassword=false |
+| 新密码过短 | 拒绝（T-A5） |
+| 旧密码错误 | 拒绝 |
+| 改密流程 | 改密成功、旧密码失效、新密码可登录、返回新 token（T-A4） |
+| 无注册 mutation | introspection 无 signup/register，含 adminlogin |
+| 业务 mutation 无 token | 「Not authenticated」 |
+
+### Admin Global LLM API (`admin-api/llm.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| adminProviders 无 auth | 「Not authenticated」 |
+| 业务 mutation 无 auth | 「Not authenticated」 |
+| 连通性失败不落库 | T-P1 |
+| 创建全局供应商 | scope=global、凭据脱敏、同步 scope=global 模型（T-P2） |
+| 全局同名冲突 | 「Provider name already exists」（T-P7） |
+| 更新留空保留凭据 | T-P3 |
+| 启停级联 + 删除级联 | T-P5 / T-P4 |
+| 批量操作空列表 | successCount=0 |
+| 全局自定义模型 | 添加/列表/仅自定义可删/禁用供应商下 toggle 拒绝（T-M1~T-M3） |
+| 全局模型排序 | T-M4 |
+
+### Admin Base Image API (`admin-api/base-image.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 无 auth | baseImages / createBaseImage 均「Not authenticated」 |
+| CRUD | Dockerfile 原样存取（T-B1） |
+| 同名冲突 | 「Base image name already exists」（T-B2） |
+
+### Agent API scope 回归 (`agent-api/llm.test.ts` T-SC*)
+
+| 测试 | 描述 |
+|------|------|
+| 全局启用模型对用户可见 | models 查询包含 scope=global 且启用模型（T-SC1） |
+| 全局供应商不在用户 providers | T-SC5 |
+| 跨 scope 同名可并存 | T-SC7 |
+| 用户写全局模型/供应商 | 返回「全局配置请在管理后台修改」（T-SC3/T-SC4） |
+| 管理员禁用全局供应商后 | 用户 models 不再返回（T-SC1 反向） |
