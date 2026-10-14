@@ -7,8 +7,9 @@
 # 说明：
 # - 状态语义见 contracts/cloud-controller-websocket.md 附录 A.4。
 # - 本期 `adminStartCloudContainer` 仅接受 `IDLE`；其余用途服务端返回明确错误文案「该任务类型暂未开放」。
-# - 控制面（cloud-controller）不可达时：列表降级只读落库状态；`adminCloudContainerControlPlane.online`
-#   随之为 false 并携带「控制面离线」提示；写操作不降级。
+# - 控制面（cloud-controller）不可达时：列表降级只读落库状态；同一次查询内
+#   `adminCloudContainerControlPlane.online` 为 false 并携带「控制面离线」提示（与列表降级事件同源硬耦合）；
+#   写操作不降级。
 
 type CloudContainer {
   id: ID!

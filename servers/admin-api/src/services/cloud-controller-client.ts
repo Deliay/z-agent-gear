@@ -159,24 +159,6 @@ export class CloudControllerClient {
     return true;
   }
 
-  /** 控制面健康探针（GET /health，无鉴权），用于降级提示；不可达抛 ControlPlaneUnavailableError。 */
-  async checkHealth(): Promise<boolean> {
-    const baseUrl = this.resolveBaseUrl();
-    if (!baseUrl) {
-      throw new ControlPlaneUnavailableError('CLOUD_CONTROLLER_URL 未配置');
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const res = await fetch(`${baseUrl}/health`, { signal: controller.signal });
-      return res.ok;
-    } catch (err) {
-      throw new ControlPlaneUnavailableError(`cloud-controller 不可达: ${(err as Error).message}`);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   private resolveBaseUrl(): string {
     return (this.baseUrlOverride || config.cloudControllerUrl || '').replace(/\/+$/, '');
   }

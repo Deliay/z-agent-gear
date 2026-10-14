@@ -204,24 +204,6 @@ describe('CloudControllerClient', () => {
     });
   });
 
-  describe('checkHealth', () => {
-    it('GETs /health without bearer and returns true on 200', async () => {
-      fetchMock.mockResolvedValue(jsonResponse({ status: 'ok' }));
-      const client = new CloudControllerClient(OPTS);
-      await expect(client.checkHealth()).resolves.toBe(true);
-
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://cloud-controller:4003/health');
-      expect(authHeader(init)).toBeUndefined();
-    });
-
-    it('throws CONTROL_PLANE_UNAVAILABLE when the control plane is unreachable', async () => {
-      fetchMock.mockRejectedValue(new TypeError('fetch failed'));
-      const client = new CloudControllerClient(OPTS);
-      await expect(client.checkHealth()).rejects.toMatchObject({ code: CONTROL_PLANE_UNAVAILABLE });
-    });
-  });
-
   describe('mapCloudContainer', () => {
     it('maps a stored Mongo document (Date timestamps + _id)', () => {
       const mapped = mapCloudContainer({
