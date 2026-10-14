@@ -216,3 +216,4 @@ flowchart LR
 - [[plan/20260908-feat-frontend-auto-select-server.md]] — 前端支持服务器自动选择实现计划
 - [[plan/20261008-feat-domestic-api-acceleration.md]] — Web 国内加速 API 接入（Controller API 自动选择）实现计划
 - [[plan/20261013-feat-unified-home-display.md]] — 首页展示优化实现计划
+- [[plan/20261014-feat-admin-console.md]] — 云控制器管理后台一期实现计划
