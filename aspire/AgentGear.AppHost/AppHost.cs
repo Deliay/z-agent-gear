@@ -125,8 +125,11 @@ else
         .WithHttpEndpoint(port: 8002, env: "PORT")
         .WithExternalHttpEndpoints();
 
-    builder.AddContainer("admin-web", "zero-tools/admin-web")
+    // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + nginx 托管），
+    // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
+    builder.AddDockerfile("admin-web", "../../apps/admin-web")
         .WithHttpEndpoint(port: 80, targetPort: 80)
+        .WithExternalHttpEndpoints()
         .PublishAsDockerComposeService((resource, service) =>
         {
             service.Name = "admin-web";
