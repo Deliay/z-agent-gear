@@ -218,3 +218,4 @@ flowchart LR
 - [[plan/20261008-feat-domestic-api-acceleration.md]] — Web 国内加速 API 接入（Controller API 自动选择）实现计划
 - [[plan/20261013-feat-unified-home-display.md]] — 首页展示优化实现计划
 - [[plan/20261014-feat-admin-console.md]] — 云控制器管理后台一期实现计划
+- [[plan/20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）实现计划
