@@ -65,6 +65,7 @@ npx playwright test
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
+| `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
 
 > admin 套件涉及共享管理员（admin）口令轮换与强制改密重置，**必须以 `--workers=1`（默认即单 worker，禁止显式并发）串行执行**，否则用例互相污染：
 
@@ -274,3 +275,12 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 页面与空状态 | 「基础镜像」页空状态 |
 | CRUD + 删除确认 | UI 新建 → 列表展示 → 删除二次确认（T-W4/T-E5） |
 | 同名拒绝 | API 同名创建报错 `Base image name already exists`（T-E5） |
+
+### Admin Cloud Container E2E (`admin-cloud-container.spec.ts`)
+
+> 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行（无真实工作容器回连，容器停在 CREATING/CONNECTING）。
+
+| 测试 | 描述 |
+|------|------|
+| 页面与启动对话框 | 「云端容器」页可见；启动对话框仅 idle（T-E1/PRD 3.4） |
+| 启动 + 强制销毁 | UI 启动 idle → 列表出现 `zag-worker-*` → 强制销毁二次确认 → 状态收敛为已退出（T-E1/T-E3） |

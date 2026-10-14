@@ -69,6 +69,8 @@ npm test
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
+| `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
+| `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token（与 Aspire 注入的 `internal-api-token` 一致） | `dev-internal-token-change-in-production` |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 
@@ -402,3 +404,32 @@ npm test
 | 跨 scope 同名可并存 | T-SC7 |
 | 用户写全局模型/供应商 | 返回「全局配置请在管理后台修改」（T-SC3/T-SC4） |
 | 管理员禁用全局供应商后 | 用户 models 不再返回（T-SC1 反向） |
+
+### Cloud Controller 内部 API (`cloud-controller/internal-api.test.ts` T-IC*)
+
+> 需要 cloud-controller 就绪：`aspire start && aspire wait cloud-controller`；服务以 `K8S_ENABLED=false`（InMemoryK8sClient）运行。
+
+| 测试 | 描述 |
+|------|------|
+| T-IC2 鉴权 | 缺失/错误 Bearer 返回 401 |
+| T-IC3 非 idle | POST `{purpose: workflow}` 返回 400「该任务类型暂未开放」 |
+| T-IC1 全生命周期 | GET 列表 / POST idle（201）/ DELETE（200）符合契约附录 A |
+| T-IC4 幂等 | DELETE 不存在返回 404；终态容器重复 DELETE 返回 200 |
+
+### Cloud Controller Worker 握手 (`cloud-controller/worker-handshake.test.ts` T-IW*)
+
+| 测试 | 描述 |
+|------|------|
+| T-IW1 缺失 token | 连接 `/worker` 无 token → `connect_error`（INVALID_TOKEN） |
+| T-IW1 伪造 token | 携带伪 token → `connect_error`（INVALID_TOKEN） |
+
+> 合法 token 的完整握手/注册/销毁由 cloud-controller 单测（真实 socket.io-client）与部署侧真实集群验收覆盖（合法 token 仅在进程内签发，外部不可取得）。
+
+### Admin 云端容器 API (`admin-api/cloud-container.test.ts` T-IA*)
+
+| 测试 | 描述 |
+|------|------|
+| T-IA5 未认证 | 匿名 list/start/destroy 均返回「Not authenticated」 |
+| T-IA1 列表 | `adminCloudContainers` 经控制面代理返回数组 |
+| T-IA6 非 idle | `adminStartCloudContainer(WORKFLOW)` 返回「该任务类型暂未开放」 |
+| T-IA3/T-IA4 启停 | start idle → 列表可见 → destroy 返回 true 且状态收敛为 EXITED |
