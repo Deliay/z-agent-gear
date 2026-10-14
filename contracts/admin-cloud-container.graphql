@@ -1,0 +1,49 @@
+# 云端容器契约（云Agent二期）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+# 该域数据由 cloud-controller 持有（单一事实源），admin-api 经内部 HTTP API 代理取数。
+#
+# 说明：
+# - 状态语义见 contracts/cloud-controller-websocket.md 附录 A.4。
+# - 本期 `adminStartCloudContainer` 仅接受 `IDLE`；其余用途服务端返回明确错误文案「该任务类型暂未开放」。
+# - 控制面（cloud-controller）不可达时：列表降级只读落库状态并提示「控制面离线」；写操作不降级。
+
+type CloudContainer {
+  id: ID!
+  name: String!                # K8s Job 名
+  status: CloudContainerStatus!
+  purpose: CloudContainerPurpose!
+  refId: String                # 关联对象 ID（idle 为 null）
+  createdAt: String!
+  connectedAt: String          # 回连上线时间
+  exitedAt: String             # 退出时间
+  exitReason: String           # 退出/失败原因
+}
+
+enum CloudContainerStatus {
+  CREATING
+  CONNECTING
+  ONLINE
+  EXITED
+  DESTROYING
+  FAILED
+}
+
+enum CloudContainerPurpose {
+  IDLE
+  ADMIN_TASK
+  WORKFLOW
+  SESSION
+}
+
+type Query {
+  adminCloudContainers: [CloudContainer!]!
+}
+
+type Mutation {
+  # 启动一个工作容器；本期 purpose 仅支持 IDLE
+  adminStartCloudContainer(purpose: CloudContainerPurpose!): CloudContainer!
+  # 强制销毁容器（幂等：终态容器重复调用返回 true）
+  adminDestroyCloudContainer(id: ID!): Boolean!
+}
