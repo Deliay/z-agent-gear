@@ -178,6 +178,7 @@ flowchart LR
 - [[proposals/20260829-refactor-mcp-controller-proxy.md]] — MCP 传递重构一期（控制器代理 MCP 访问）
 - [[proposals/20261008-feat-domestic-api-acceleration.md]] — Web 国内加速 API 接入（Controller API 自动选择）
 - [[proposals/20261013-feat-unified-home-display.md]] — 首页展示优化
+- [[proposals/20261014-feat-admin-console.md]] — 云控制器管理后台一期
 
 ### 实现计划（`plan/`）
 
