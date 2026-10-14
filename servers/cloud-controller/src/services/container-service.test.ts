@@ -108,10 +108,33 @@ describe('ContainerService', () => {
     const result = await service.destroy(created.id);
 
     expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(false);
     const policies = client.deleteCalls.map((c) => c.options?.propagationPolicy);
     expect(policies.filter((p) => p === 'Foreground')).toHaveLength(3);
     expect(policies.filter((p) => p === 'Background')).toHaveLength(3);
-    expect((await repo.findById(created.id))?.status).toBe('exited');
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    // Job 删除失败时显式告警，便于运维清理残留 Job
+    expect(stored?.exitReason).toContain('需人工清理');
+  });
+
+  it('T-S4b: destroy(online) with a real grace period completes and reports EXITED', async () => {
+    const { repo, service } = setup({ shutdownGraceMs: 60 });
+    const created = await service.start('idle');
+    await service.markOnline(created.id);
+    service.onShutdown(() => {});
+
+    const startedAt = Date.now();
+    const result = await service.destroy(created.id);
+    const elapsed = Date.now() - startedAt;
+
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    // 宽限期被真实等待（>0），admin-api 侧需用更长超时覆盖该窗口
+    expect(elapsed).toBeGreaterThanOrEqual(55);
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toBe('强制销毁');
   });
 
   it('T-S5: destroy(terminal) is idempotent and does not delete the job again', async () => {

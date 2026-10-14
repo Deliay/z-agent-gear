@@ -207,10 +207,12 @@ export class ContainerService {
       this.logger.error?.(`Failed to delete job ${container.name}`, err);
     }
 
+    // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
+    const exitReason = deletedJob ? '强制销毁' : '强制销毁（Job 删除失败，需人工清理）';
     await this.repo.update(containerId, {
       status: 'exited',
       exitedAt: new Date(),
-      exitReason: '强制销毁',
+      exitReason,
       tokenHash: null,
     });
 
