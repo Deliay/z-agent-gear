@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startMockServer, type MockServer } from '../mock-server.js';
+import { adminGql, ensureAdminLogin } from '../admin-api/helpers.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -40,8 +42,8 @@ const PROVIDERS_QUERY = `
 const MODELS_QUERY = `
   query Models {
     models {
-      id providerId provider { id name type isEnabled }
-      name isCustom isEnabled sortOrder createdAt updatedAt
+      id providerId provider { id name type isEnabled scope }
+      name isCustom isEnabled sortOrder scope createdAt updatedAt
     }
   }
 `;
@@ -450,5 +452,135 @@ describe('LLM Provider & Model API', () => {
       );
       expect(remaining.length).toBe(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-SC*: agent-api scope 回归 —— 管理后台全局配置对用户生效、用户不可写全局数据
+// ---------------------------------------------------------------------------
+describe('Agent API scope regression (global config from admin backend)', () => {
+  let mock: MockServer;
+  let authToken = '';
+  let adminToken = '';
+  let globalProviderId = '';
+  let globalModelId = '';
+
+  const CREATE_GLOBAL_PROVIDER = `
+    mutation CreateGlobalProvider($input: ProviderInput!) {
+      createGlobalProvider(input: $input) {
+        id scope
+        models { id name scope isEnabled }
+      }
+    }
+  `;
+  const DELETE_GLOBAL_PROVIDER = `mutation($id: ID!) { deleteGlobalProvider(id: $id) }`;
+  const TOGGLE_GLOBAL_PROVIDER = `mutation($id: ID!) { toggleGlobalProvider(id: $id) { id isEnabled } }`;
+
+  beforeAll(async () => {
+    mock = await startMockServer();
+
+    const uid = `scope_${Date.now()}`;
+    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+    const body = await res.json();
+    authToken = body.data?.signup?.token ?? '';
+    expect(authToken).toBeTruthy();
+
+    adminToken = await ensureAdminLogin();
+
+    const created = await adminGql<{ createGlobalProvider: { id: string; scope: string; models: Array<{ id: string; scope: string; isEnabled: boolean }> } }>(
+      CREATE_GLOBAL_PROVIDER,
+      {
+        input: {
+          name: `agent-scope-global-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      },
+      adminToken,
+    );
+    expect(created.errors).toBeUndefined();
+    globalProviderId = created.data!.createGlobalProvider.id;
+    globalModelId = created.data!.createGlobalProvider.models[0].id;
+  });
+
+  afterAll(async () => {
+    if (globalProviderId) {
+      await adminGql(DELETE_GLOBAL_PROVIDER, { id: globalProviderId }, adminToken);
+    }
+    await mock?.close();
+  });
+
+  it('should include enabled global models in the user models query (T-SC1)', async () => {
+    const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const found = body.data.models.find((m: { id: string }) => m.id === globalModelId);
+    expect(found).toBeDefined();
+    expect(found.scope).toBe('global');
+  });
+
+  it('should not expose global providers in the user providers query (T-SC5)', async () => {
+    const res = await gqlRequest(PROVIDERS_QUERY, undefined, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.providers.some((p: { id: string }) => p.id === globalProviderId)).toBe(false);
+  });
+
+  it('should allow same provider name across user and global scopes (T-SC7)', async () => {
+    // 读取全局供应商名称，用同名创建用户侧供应商
+    const gql = await fetch(ADMIN_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ query: `query { adminProviders { id name } }` }),
+    });
+    const gqlBody = await gql.json();
+    const globalName = gqlBody.data.adminProviders.find((p: { id: string }) => p.id === globalProviderId).name;
+
+    const res = await gqlRequest(CREATE_PROVIDER, {
+      input: {
+        name: globalName,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+
+    await gqlRequest(DELETE_PROVIDER, { id: body.data.createProvider.id }, authToken);
+  });
+
+  it('should reject user writes to a global model (T-SC3)', async () => {
+    const res = await gqlRequest(TOGGLE_MODEL, { id: globalModelId }, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('全局配置请在管理后台修改');
+  });
+
+  it('should reject user writes to a global provider (T-SC4)', async () => {
+    const toggleRes = await gqlRequest(TOGGLE_PROVIDER, { id: globalProviderId }, authToken);
+    const toggleBody = await toggleRes.json();
+    expect(toggleBody.errors).toBeDefined();
+    expect(toggleBody.errors[0].message).toContain('全局配置请在管理后台修改');
+
+    const delRes = await gqlRequest(DELETE_PROVIDER, { id: globalProviderId }, authToken);
+    const delBody = await delRes.json();
+    expect(delBody.errors).toBeDefined();
+    expect(delBody.errors[0].message).toContain('全局配置请在管理后台修改');
+  });
+
+  it('should stop returning a global model once the admin disables it (T-SC1)', async () => {
+    // 通过 admin 禁用整个全局供应商（级联禁用其模型）
+    await adminGql(TOGGLE_GLOBAL_PROVIDER, { id: globalProviderId }, adminToken);
+
+    const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
+    const body = await res.json();
+    expect(body.data.models.some((m: { id: string }) => m.id === globalModelId)).toBe(false);
+
+    // 恢复启用，避免影响后续（afterAll 会删除）
+    await adminGql(TOGGLE_GLOBAL_PROVIDER, { id: globalProviderId }, adminToken);
   });
 });
