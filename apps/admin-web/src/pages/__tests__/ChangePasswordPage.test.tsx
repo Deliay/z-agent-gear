@@ -23,6 +23,7 @@ function renderPage() {
         <Routes>
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route path="/models" element={<div>models page</div>} />
+          <Route path="/login" element={<div>login page</div>} />
         </Routes>
       </AuthProvider>
     </MemoryRouter>,
@@ -38,11 +39,20 @@ function fill(oldPw: string, newPw: string, confirm: string) {
 describe('ChangePasswordPage', () => {
   beforeEach(() => {
     localStorage.clear();
+    // 改密页要求已登录（未登录应重定向 /login）
+    localStorage.setItem('admin_token', 'initial-token');
+    localStorage.setItem('admin_user', JSON.stringify({ id: '1', username: 'admin', mustChangePassword: true }));
     vi.clearAllMocks();
     mocks.useMutation.mockImplementation((_doc: unknown, options: unknown) => {
       mocks.capturedOptions.current = options as typeof mocks.capturedOptions.current;
       return [mocks.mutate, { loading: false }];
     });
+  });
+
+  it('redirects to /login when not authenticated', () => {
+    localStorage.clear();
+    renderPage();
+    expect(screen.getByText('login page')).toBeDefined();
   });
 
   it('T-F5: rejects a new password shorter than 10 characters', () => {

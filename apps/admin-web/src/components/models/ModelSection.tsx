@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
+import { toast } from 'sonner'
 import {
   DndContext,
   closestCenter,
@@ -41,17 +42,25 @@ export default function ModelSection() {
   )
 
   const handleDelete = useCallback(async (id: string) => {
-    await deleteCustomModel({
-      variables: { id },
-      refetchQueries: [ADMIN_MODELS],
-    })
+    try {
+      await deleteCustomModel({
+        variables: { id },
+        refetchQueries: [ADMIN_MODELS],
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试')
+    }
   }, [deleteCustomModel])
 
   const handleToggle = async (id: string) => {
-    await toggleModel({
-      variables: { id },
-      refetchQueries: [ADMIN_MODELS],
-    })
+    try {
+      await toggleModel({
+        variables: { id },
+        refetchQueries: [ADMIN_MODELS],
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '切换失败，请重试')
+    }
   }
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -67,10 +76,14 @@ export default function ModelSection() {
     reordered.splice(newIndex, 0, removed)
 
     const ids = reordered.map((m) => m.id)
-    await updateSortOrder({
-      variables: { ids },
-      refetchQueries: [ADMIN_MODELS],
-    })
+    try {
+      await updateSortOrder({
+        variables: { ids },
+        refetchQueries: [ADMIN_MODELS],
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '排序保存失败，请重试')
+    }
   }
 
   const handleCustomSave = async (providerId: string, name: string) => {

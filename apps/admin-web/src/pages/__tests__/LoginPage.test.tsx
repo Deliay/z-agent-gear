@@ -26,6 +26,7 @@ vi.mock('sonner', () => ({
 vi.mock('@/lib/api-base', () => ({
   setAdminApiBase: mocks.setAdminApiBase,
   clearAdminApiBase: mocks.clearAdminApiBase,
+  getAdminApiBase: vi.fn(() => ''),
 }));
 vi.mock('@/lib/runtime', () => ({ reloadApp: mocks.reloadApp }));
 

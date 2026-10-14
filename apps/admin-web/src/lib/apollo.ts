@@ -10,8 +10,10 @@ let isPasswordRedirecting = false;
 const errorLink = onError(({ error }) => {
   if (!CombinedGraphQLErrors.is(error)) return;
   const messages = error.errors.map((e) => e.message);
+  // 优先按 extensions.code 匹配（后端已写入），message 作为兼容兜底
+  const codes = error.errors.map((e) => (e.extensions?.code as string | undefined));
 
-  if (messages.includes('Not authenticated')) {
+  if (messages.includes('Not authenticated') || codes.includes('UNAUTHENTICATED')) {
     if (isAuthRedirecting) return;
     isAuthRedirecting = true;
     localStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -21,7 +23,7 @@ const errorLink = onError(({ error }) => {
     return;
   }
 
-  if (messages.includes('MUST_CHANGE_PASSWORD')) {
+  if (messages.includes('MUST_CHANGE_PASSWORD') || codes.includes('MUST_CHANGE_PASSWORD')) {
     if (isPasswordRedirecting) return;
     isPasswordRedirecting = true;
     window.location.href = '/change-password';

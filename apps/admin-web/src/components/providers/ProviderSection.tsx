@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
+import { toast } from 'sonner'
 import { ADMIN_PROVIDERS, ADMIN_MODELS } from '@/graphql/queries'
 import {
   CREATE_GLOBAL_PROVIDER,
@@ -81,17 +82,25 @@ export default function ProviderSection() {
   }
 
   const handleToggle = async (id: string) => {
-    await toggleProvider({
-      variables: { id },
-      refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
-    })
+    try {
+      await toggleProvider({
+        variables: { id },
+        refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '操作失败，请重试')
+    }
   }
 
   const handleDelete = async (id: string) => {
-    await deleteProvider({
-      variables: { id },
-      refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
-    })
+    try {
+      await deleteProvider({
+        variables: { id },
+        refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试')
+    }
   }
 
   const handleSelect = (id: string) => {
@@ -116,27 +125,39 @@ export default function ProviderSection() {
   }
 
   const handleBatchEnable = async () => {
-    await batchEnable({
-      variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
-    })
-    handleCancelMulti()
+    try {
+      await batchEnable({
+        variables: { ids: Array.from(selectedIds) },
+        refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
+      })
+      handleCancelMulti()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '批量操作失败，请重试')
+    }
   }
 
   const handleBatchDisable = async () => {
-    await batchDisable({
-      variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
-    })
-    handleCancelMulti()
+    try {
+      await batchDisable({
+        variables: { ids: Array.from(selectedIds) },
+        refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
+      })
+      handleCancelMulti()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '批量操作失败，请重试')
+    }
   }
 
   const handleBatchDelete = async () => {
-    await batchDelete({
-      variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
-    })
-    handleCancelMulti()
+    try {
+      await batchDelete({
+        variables: { ids: Array.from(selectedIds) },
+        refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
+      })
+      handleCancelMulti()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '批量删除失败，请重试')
+    }
   }
 
   const handleDeleteWithConfirm = (id: string) => {

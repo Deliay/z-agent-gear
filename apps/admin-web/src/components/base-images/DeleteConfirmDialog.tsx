@@ -36,7 +36,14 @@ export default function DeleteConfirmDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button variant="destructive" onClick={() => void onConfirm()} disabled={loading}>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              // 父组件负责错误提示；此处兜底吞掉未处理的 rejection
+              Promise.resolve(onConfirm()).catch(() => {})
+            }}
+            disabled={loading}
+          >
             {loading ? '删除中...' : '删除'}
           </Button>
         </DialogFooter>

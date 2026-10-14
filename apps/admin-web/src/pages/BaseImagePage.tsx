@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
+import { toast } from 'sonner'
 import { BASE_IMAGES } from '@/graphql/queries'
 import {
   CREATE_BASE_IMAGE,
@@ -59,6 +60,8 @@ export default function BaseImagePage() {
         refetchQueries: [BASE_IMAGES],
       })
       setDeleting(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试')
     } finally {
       setDeletingBusy(false)
     }

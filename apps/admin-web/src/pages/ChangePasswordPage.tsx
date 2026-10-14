@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation } from '@apollo/client/react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { CHANGE_ADMIN_PASSWORD } from '@/graphql/mutations'
 import type { ChangeAdminPasswordMutation } from '@/graphql/types'
 import { useAuth } from '@/stores/auth'
@@ -17,7 +17,7 @@ export default function ChangePasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
-  const { login } = useAuth()
+  const { token, login } = useAuth()
 
   const [changePassword, { loading }] = useMutation<ChangeAdminPasswordMutation>(
     CHANGE_ADMIN_PASSWORD,
@@ -45,6 +45,10 @@ export default function ChangePasswordPage() {
       return
     }
     changePassword({ variables: { oldPassword, newPassword } })
+  }
+
+  if (!token) {
+    return <Navigate to="/login" replace />
   }
 
   return (
