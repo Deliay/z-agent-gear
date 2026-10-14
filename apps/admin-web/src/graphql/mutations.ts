@@ -178,3 +178,29 @@ export const DELETE_BASE_IMAGE = gql`
     deleteBaseImage(id: $id)
   }
 `
+
+const CLOUD_CONTAINER_FIELDS = `
+  id
+  name
+  status
+  purpose
+  refId
+  createdAt
+  connectedAt
+  exitedAt
+  exitReason
+`
+
+export const ADMIN_START_CLOUD_CONTAINER = gql`
+  mutation AdminStartCloudContainer($purpose: CloudContainerPurpose!) {
+    adminStartCloudContainer(purpose: $purpose) {
+      ${CLOUD_CONTAINER_FIELDS}
+    }
+  }
+`
+
+export const ADMIN_DESTROY_CLOUD_CONTAINER = gql`
+  mutation AdminDestroyCloudContainer($id: ID!) {
+    adminDestroyCloudContainer(id: $id)
+  }
+`

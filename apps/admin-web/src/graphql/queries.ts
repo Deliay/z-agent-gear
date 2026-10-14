@@ -100,3 +100,19 @@ export const BASE_IMAGE = gql`
     }
   }
 `
+
+export const ADMIN_CLOUD_CONTAINERS = gql`
+  query AdminCloudContainers {
+    adminCloudContainers {
+      id
+      name
+      status
+      purpose
+      refId
+      createdAt
+      connectedAt
+      exitedAt
+      exitReason
+    }
+  }
+`

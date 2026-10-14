@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import ModelConfigPage from './pages/ModelConfigPage'
 import BaseImagePage from './pages/BaseImagePage'
+import CloudContainersPage from './pages/CloudContainersPage'
 import AdminLayout from './components/AdminLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 
@@ -23,6 +24,7 @@ function App() {
               <Route index element={<Navigate to="/models" replace />} />
               <Route path="models" element={<ModelConfigPage />} />
               <Route path="base-images" element={<BaseImagePage />} />
+              <Route path="cloud-containers" element={<CloudContainersPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/models" replace />} />

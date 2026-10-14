@@ -124,3 +124,39 @@ export interface GetBaseImagesQuery {
 export interface GetBaseImageQuery {
   baseImage: BaseImageData | null;
 }
+
+// ---------- 云端容器（contracts/admin-cloud-container.graphql） ----------
+
+export type CloudContainerStatus =
+  | 'CREATING'
+  | 'CONNECTING'
+  | 'ONLINE'
+  | 'DESTROYING'
+  | 'EXITED'
+  | 'FAILED';
+
+export type CloudContainerPurpose = 'IDLE' | 'ADMIN_TASK' | 'WORKFLOW' | 'SESSION';
+
+export interface CloudContainerData {
+  id: string;
+  name: string;
+  status: CloudContainerStatus;
+  purpose: CloudContainerPurpose;
+  refId: string | null;
+  createdAt: string;
+  connectedAt: string | null;
+  exitedAt: string | null;
+  exitReason: string | null;
+}
+
+export interface GetAdminCloudContainersQuery {
+  adminCloudContainers: CloudContainerData[];
+}
+
+export interface AdminStartCloudContainerMutation {
+  adminStartCloudContainer: CloudContainerData;
+}
+
+export interface AdminDestroyCloudContainerMutation {
+  adminDestroyCloudContainer: boolean;
+}
