@@ -44,11 +44,20 @@ test.describe('Admin Base Image E2E', () => {
 
     await expect(page.getByRole('cell', { name, exact: true })).toBeVisible();
 
+    // 编辑：改名后保存
+    const renamed = `${name}-v2`;
+    await page.getByRole('button', { name: `编辑 ${name}` }).click();
+    const editDialog = page.getByRole('dialog');
+    await expect(editDialog).toBeVisible();
+    await editDialog.locator('#base-image-name').fill(renamed);
+    await editDialog.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByRole('cell', { name: renamed, exact: true })).toBeVisible();
+
     // 删除二次确认
-    await page.getByRole('button', { name: `删除 ${name}` }).click();
+    await page.getByRole('button', { name: `删除 ${renamed}` }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     await page.getByRole('button', { name: '删除', exact: true }).click();
-    await expect(page.getByRole('cell', { name, exact: true })).not.toBeVisible();
+    await expect(page.getByRole('cell', { name: renamed, exact: true })).not.toBeVisible();
   });
 
   test('should reject a duplicate base image name (T-E5)', async ({ page }) => {

@@ -63,7 +63,15 @@ npx playwright test
 | `ADMIN_WEB_URL` | admin-web 地址（admin 套件使用） | 回落到 `BASE_URL` |
 | `API_URL` | agent-api GraphQL 地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
+
+> admin 套件涉及共享管理员（admin）口令轮换与强制改密重置，**必须以 `--workers=1`（默认即单 worker，禁止显式并发）串行执行**，否则用例互相污染：
+
+```bash
+ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \
+  npx playwright test admin-*.spec.ts --workers=1
+```
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
 

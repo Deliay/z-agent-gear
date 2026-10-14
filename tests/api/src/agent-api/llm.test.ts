@@ -32,8 +32,8 @@ const SIGNUP = `
 const PROVIDERS_QUERY = `
   query Providers {
     providers {
-      id name type endpoint credentialType credentialValue isEnabled
-      models { id name isEnabled sortOrder }
+      id name type endpoint credentialType credentialValue isEnabled scope
+      models { id name isEnabled sortOrder scope }
       createdAt updatedAt
     }
   }
@@ -167,28 +167,35 @@ describe('LLM Provider & Model API', () => {
   });
 
   describe('queries with auth', () => {
-    it('should return empty providers list', async () => {
+    it('should return only user-scope providers', async () => {
       const res = await gqlRequest(PROVIDERS_QUERY, undefined, authToken);
       const body = await res.json();
       expect(body.errors).toBeUndefined();
-      expect(body.data.providers).toEqual([]);
+      expect(Array.isArray(body.data.providers)).toBe(true);
+      // 全局（scope=global）供应商不展示在用户侧
+      expect(body.data.providers.every((p: { scope: string }) => p.scope === 'user')).toBe(true);
     });
 
-    it('should return empty models list', async () => {
+    it('should return a models array (user models + enabled global models)', async () => {
       const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
       const body = await res.json();
       expect(body.errors).toBeUndefined();
-      expect(body.data.models).toEqual([]);
+      expect(Array.isArray(body.data.models)).toBe(true);
+      // 全局模型必须处于启用态才会出现在用户侧
+      expect(
+        body.data.models.every((m: { scope: string; isEnabled: boolean }) => m.scope !== 'global' || m.isEnabled),
+      ).toBe(true);
     });
   });
 
   describe('createProvider', () => {
     it('should reject invalid endpoint (connectivity test fails)', async () => {
+      const name = `test-provider-${Date.now()}`;
       const res = await gqlRequest(
         CREATE_PROVIDER,
         {
           input: {
-            name: `test-provider-${Date.now()}`,
+            name,
             type: 'OpenAI',
             endpoint: 'http://127.0.0.1:1/v1',
             credentialType: 'api_key',
@@ -202,7 +209,7 @@ describe('LLM Provider & Model API', () => {
       expect(body.errors[0].message).toBeTruthy();
       const providersRes = await gqlRequest(PROVIDERS_QUERY, undefined, authToken);
       const providersBody = await providersRes.json();
-      expect(providersBody.data.providers).toEqual([]);
+      expect(providersBody.data.providers.some((p: { name: string }) => p.name === name)).toBe(false);
     });
 
     it('should reject empty name', async () => {

@@ -4,6 +4,8 @@ import {
   adminGqlRequest,
   ADMIN_TEST_PASSWORD,
   ensureAdminLogin,
+  setAdminMustChangePassword,
+  signupUserToken,
 } from './helpers.js';
 
 const ADMIN_ME = `
@@ -60,6 +62,57 @@ describe('Admin Auth API', () => {
   it('should reject a forged / user-side token (T-A6)', async () => {
     const body = await adminGql<{ adminMe: unknown }>(ADMIN_ME, undefined, 'not-a-valid-admin-token');
     expect(body.data?.adminMe ?? null).toBeNull();
+  });
+
+  it('T-A6: rejects a real user-side JWT and reports UNAUTHENTICATED (separate secret)', async () => {
+    const userToken = await signupUserToken();
+
+    const me = await adminGql<{ adminMe: unknown }>(ADMIN_ME, undefined, userToken);
+    expect(me.data?.adminMe ?? null).toBeNull();
+
+    const res = await adminGql(
+      `mutation { createGlobalCustomModel(input: { providerId: "507f1f77bcf86cd799439011", name: "x" }) { id } }`,
+      undefined,
+      userToken,
+    );
+    expect(res.errors).toBeDefined();
+    expect(res.errors![0].message).toBe('Not authenticated');
+    expect(res.errors![0].extensions?.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('T-A7: blocks business queries/mutations while mustChangePassword=true (MUST_CHANGE_PASSWORD)', async () => {
+    await ensureAdminLogin();
+    const supported = await setAdminMustChangePassword(true);
+    if (!supported) {
+      // 无 MONGODB_URI（未提供共享 Mongo）时跳过；守卫亦由单元测试覆盖
+      return;
+    }
+
+    try {
+      const login = await adminGql<{ adminLogin: { token: string; admin: { mustChangePassword: boolean } } }>(
+        LOGIN,
+        { username: 'admin', password: ADMIN_TEST_PASSWORD },
+      );
+      expect(login.errors).toBeUndefined();
+      expect(login.data!.adminLogin.admin.mustChangePassword).toBe(true);
+      const token = login.data!.adminLogin.token;
+
+      // 白名单放行
+      const me = await adminGql<{ adminMe: { mustChangePassword: boolean } }>(ADMIN_ME, undefined, token);
+      expect(me.data!.adminMe.mustChangePassword).toBe(true);
+
+      // 业务查询被拦截
+      const blocked = await adminGql(
+        `query { adminProviders { id } }`,
+        undefined,
+        token,
+      );
+      expect(blocked.errors).toBeDefined();
+      expect(blocked.errors![0].message).toBe('MUST_CHANGE_PASSWORD');
+      expect(blocked.errors![0].extensions?.code).toBe('MUST_CHANGE_PASSWORD');
+    } finally {
+      await setAdminMustChangePassword(false);
+    }
   });
 
   it('should reject wrong password without leaking account existence (T-A3)', async () => {

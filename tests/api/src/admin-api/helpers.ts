@@ -8,14 +8,17 @@
 //   - 并发/前次执行导致中间态：带重试收敛。
 // 返回的 token 对应 mustChangePassword=false 的管理员，可直接调用业务 mutation。
 
+import mongoose from 'mongoose';
+
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 export const ADMIN_TEST_PASSWORD = 'AdminTestPass123';
 const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
 
 export interface GqlResult<T = Record<string, unknown>> {
   data?: T;
-  errors?: Array<{ message: string }>;
+  errors?: Array<{ message: string; extensions?: { code?: string } }>;
 }
 
 export function adminGqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
@@ -109,3 +112,40 @@ export async function ensureAdminLogin(): Promise<string> {
 
   throw new Error(`ensureAdminLogin failed: ${lastError}`);
 }
+
+/**
+ * 真实用户侧 JWT（agent-api 签发，JWT_SECRET）——用于验证 admin/user token 互不认（T-A6）。
+ */
+export async function signupUserToken(): Promise<string> {
+  const username = `as${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 5)}`;
+  const res = await fetch(AGENT_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: 'mutation($u:String!,$p:String!){signup(username:$u,password:$p){token}}',
+      variables: { u: username, p: 'testpass123' },
+    }),
+  });
+  const body = (await res.json()) as { data?: { signup?: { token?: string } } };
+  const token = body.data?.signup?.token;
+  if (!token) throw new Error('failed to signup a user for token isolation test');
+  return token;
+}
+
+/**
+ * 直接修改 admin_users.mustChangePassword（用于 T-A7 强制改密守卫集成测试）。
+ * 需要 MONGODB_URI（aspire 注入的共享 Mongo）；缺失时返回 false，调用方跳过。
+ */
+export async function setAdminMustChangePassword(value: boolean): Promise<boolean> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return false;
+
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(uri);
+  }
+  const db = mongoose.connection.db;
+  if (!db) return false;
+  await db.collection('admin_users').updateOne({ username: 'admin' }, { $set: { mustChangePassword: value } });
+  return true;
+}
+

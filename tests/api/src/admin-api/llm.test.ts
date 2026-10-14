@@ -107,6 +107,8 @@ describe('Admin Global LLM API', () => {
       },
     }, token);
     expect(body.errors).toBeDefined();
+    // 真实失败形态（连接被拒）必须归一化为连通性文案，而非原始 SDK 报错
+    expect(body.errors![0].message).toBe('供应商连通性测试失败，请检查 API 地址和凭据是否正确');
 
     const providers = await adminGql<{ adminProviders: Array<{ name: string }> }>(PROVIDERS, undefined, token);
     expect(providers.data!.adminProviders.some((p) => p.name === name)).toBe(false);
@@ -134,6 +136,9 @@ describe('Admin Global LLM API', () => {
     expect(provider.credentialValue).not.toBe('sk-test-fake-key');
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models.every((m) => m.scope === 'global')).toBe(true);
+
+    // 清理，避免污染其它套件（用户侧 models 空断言）
+    await adminGql(DELETE_PROVIDER, { id: provider.id }, token);
   });
 
   it('should reject duplicate provider name within global scope (T-P7)', async () => {
@@ -296,5 +301,64 @@ describe('Admin Global LLM API', () => {
     expect(ordered[0].id).toBe(reversed[0]);
 
     await adminGql(DELETE_PROVIDER, { id: created.data!.createGlobalProvider.id }, token);
+  });
+
+  it('scope isolation: admin never sees user-scope providers/models (T-SC5 反向)', async () => {
+    const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+    const username = `iso${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 5)}`;
+
+    const signup = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'mutation($u:String!,$p:String!){signup(username:$u,password:$p){token}}',
+        variables: { u: username, p: 'testpass123' },
+      }),
+    }).then((r) => r.json() as Promise<{ data?: { signup?: { token?: string } } }>);
+    const userToken = signup.data!.signup!.token!;
+
+    const userProviderName = `user-iso-${Date.now()}`;
+    const created = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({
+        query: `mutation($input: ProviderInput!) {
+          createProvider(input: $input) { id name models { id } }
+        }`,
+        variables: {
+          input: {
+            name: userProviderName,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: 'sk-user-key',
+          },
+        },
+      }),
+    }).then((r) => r.json() as Promise<{ data?: { createProvider?: { id: string; models: Array<{ id: string }> } } }>);
+    const userProviderId = created.data!.createProvider!.id;
+    const userModelId = created.data!.createProvider!.models[0]?.id;
+
+    try {
+      const providers = await adminGql<{ adminProviders: Array<{ id: string; name: string }> }>(PROVIDERS, undefined, token);
+      expect(providers.data!.adminProviders.some((p) => p.id === userProviderId || p.name === userProviderName)).toBe(false);
+
+      const models = await adminGql<{ adminModels: Array<{ id: string; providerId: string }> }>(MODELS, undefined, token);
+      expect(models.data!.adminModels.some((m) => m.providerId === userProviderId)).toBe(false);
+      if (userModelId) {
+        expect(models.data!.adminModels.some((m) => m.id === userModelId)).toBe(false);
+      }
+
+      // admin 的删除受 scope 过滤，删不掉用户侧供应商
+      const denied = await adminGql<{ deleteGlobalProvider: boolean }>(DELETE_PROVIDER, { id: userProviderId }, token);
+      expect(denied.data?.deleteGlobalProvider).toBe(false);
+    } finally {
+      // 用户自清（无论断言成败都执行）
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ query: 'mutation($id:ID!){deleteProvider(id:$id)}', variables: { id: userProviderId } }),
+      });
+    }
   });
 });

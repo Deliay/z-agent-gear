@@ -1,5 +1,43 @@
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
 import { createServer } from 'node:http';
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+
+export const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
+
+/**
+ * 将内置管理员重置为「默认密码 + 首次强制改密」（T-E1 真实首登链路）。
+ * 需要 MONGODB_URI（aspire 注入的共享 Mongo）；缺失时返回 false，调用方跳过。
+ */
+export async function resetAdminToDefaultPassword(): Promise<boolean> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return false;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  const db = mongoose.connection.db;
+  if (!db) return false;
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
+  await db.collection('admin_users').updateOne(
+    { username: 'admin' },
+    { $set: { passwordHash, mustChangePassword: true } },
+    { upsert: true },
+  );
+  return true;
+}
+
+/** 直接把管理员密码设为指定值并解除强制改密（用于测试后恢复）。 */
+export async function forceAdminPassword(password: string): Promise<boolean> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return false;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  const db = mongoose.connection.db;
+  if (!db) return false;
+  const passwordHash = await bcrypt.hash(password, 10);
+  await db.collection('admin_users').updateOne(
+    { username: 'admin' },
+    { $set: { passwordHash, mustChangePassword: false } },
+  );
+  return true;
+}
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
@@ -7,7 +45,6 @@ const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4
 
 export const ADMIN_TEST_PASSWORD = 'AdminTestPass123';
 export const ADMIN_WEB_URL = process.env.ADMIN_WEB_URL || process.env.BASE_URL || 'http://localhost:35273';
-const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
 
 export function adminGqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
