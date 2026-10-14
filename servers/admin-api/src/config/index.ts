@@ -10,6 +10,10 @@ export const config = {
   credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '',
   corsOrigin: process.env.CORS_ORIGIN || '*',
   nodeEnv: process.env.NODE_ENV || 'development',
+  // cloud-controller 内部管理 API（单一事实源在 cloud-controller，admin-api 仅经此代理，见裁决 12）。
+  // 缺失时不在启动期 fail-fast；调用写操作会因不可达返回明确错误（CONTROL_PLANE_UNAVAILABLE）。
+  cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',
+  internalApiToken: process.env.INTERNAL_API_TOKEN || '',
 };
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;

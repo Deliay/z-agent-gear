@@ -203,3 +203,27 @@ Controller 重连注册成功后，Server 立即下发此事件。
 2. 对 `pendingKillSessionIds` 中的每个 sessionId：按注册表 PID 强制 kill 进程组，然后注销
 3. 对注册表中存在但不在 `activeSessionIds` 中的条目（孤儿进程）：kill 进程组并注销
 4. 对注册表中存在且在 `activeSessionIds` 中的条目：保留（正常运行）
+
+---
+
+## 4. cloud-controller 接入场景（向后兼容说明）
+
+`agent-gear` 同时被用作 K8s 云端工作容器（详见 [`cloud-controller-websocket.md`](./cloud-controller-websocket.md)）。为支持该场景，客户端对 **controller endpoint** 的解析扩展为可携带 path/query，但**对本文档上文的 controller-api 旧行为零变化**。
+
+### 4.1 endpoint 形态
+
+| 场景 | endpoint 示例 | 解析结果 |
+|------|--------------|----------|
+| controller-api（既有） | `http://host:4001` | Socket.IO 默认 namespace `/`，无握手 query |
+| cloud-controller（新增） | `wss://<cloud-controller-host>/worker?token=<one-time-token>` | namespace `/worker`，握手 query 携带 `token` |
+
+- URL pathname 映射为 Socket.IO namespace（如 `/worker`）；URL search 映射为握手 query。
+- 该解析由 `socket.io-client` v4 原生完成，客户端对两种 endpoint 透传同一连接逻辑；客户端另提供纯函数 `parseEndpoint(endpoint)` 用于测试锚定该口径。
+
+### 4.2 兼容性约定
+
+- **握手鉴权**：cloud-controller 场景下，鉴权 token 由握手 query（`?token=`）承载并在连接建立阶段校验，失败时服务端在握手阶段返回 `connect_error`（`INVALID_TOKEN`），不会进入 `register`。
+- **`key` 字段被服务端忽略**：本文档 §2.2 的 `register.key` 为 controller-api 场景的必填项；cloud-controller 侧不读取、不校验该字段（token 由握手 query 替代）。`agent-gear` 现有参数体系仍照常发送 `key`，**不破坏既有握手**。
+- `register`/`heartbeat`/`unregister`/`shutdown` 事件面与上文字段完全一致，无需为 cloud-controller 场景新增事件。
+- 断线自动重连使用同一 endpoint（含同一 token）；token 在容器存活期内可重复握手，容器进入终态即作废。
+

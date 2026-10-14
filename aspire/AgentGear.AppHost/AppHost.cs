@@ -74,6 +74,26 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
         service.Restart = "unless-stopped";
     });
 
+var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: "dev-internal-token-change-in-production");
+var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
+var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
+
+var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/cloud-controller", "src/index.ts")
+    .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+    .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
+    .WithEnvironment("WORKER_IMAGE", workerImage)
+    .WithEnvironment("PUBLIC_WS_ENDPOINT", publicWsEndpoint)
+    // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
+    .WithEnvironment("K8S_ENABLED", "false")
+    .WithReference(mongodb)
+    .WithExternalHttpEndpoints()
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "cloud-controller";
+        service.Restart = "unless-stopped";
+    });
+
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
@@ -86,6 +106,8 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
     .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
+    .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
+    .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
     .WithReference(mongodb)
     .WithExternalHttpEndpoints()
     .PublishAsDockerComposeService((resource, service) =>
@@ -108,6 +130,7 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithHttpEndpoint(port: 10001, env: "PORT");
 
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
+    cloudController.WithHttpEndpoint(port: 10004, env: "PORT");
     var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
         .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"));
 }
@@ -123,6 +146,11 @@ else
 
     adminApi
         .WithHttpEndpoint(port: 8002, env: "PORT")
+        .WithExternalHttpEndpoints();
+
+    cloudController
+        .WithEnvironment("K8S_ENABLED", "true")
+        .WithHttpEndpoint(port: 8003, env: "PORT")
         .WithExternalHttpEndpoints();
 
     // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + nginx 托管），

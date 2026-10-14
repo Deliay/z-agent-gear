@@ -7,3 +7,13 @@ window.matchMedia = window.matchMedia || (() => ({
 }));
 
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || (() => {});
+
+// base-ui 浮层组件（Select/Dialog）在 jsdom 下依赖 ResizeObserver
+if (!('ResizeObserver' in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+}
