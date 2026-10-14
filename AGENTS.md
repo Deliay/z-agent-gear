@@ -7,8 +7,10 @@
 ```
 z-agent-gear/
 ├── apps/
+│   ├── admin-web/           # React + TypeScript + Vite 管理后台前端
 │   └── agent-web/           # React + TypeScript + Vite 前端
 ├── servers/
+│   ├── admin-api/           # Node.js + Express + GraphQL + Mongoose 管理后台后端
 │   ├── agent-api/           # Node.js + Express + GraphQL + Mongoose 后端
 │   └── controller-api/      # Node.js + Express + Socket.IO 后端
 ├── packages/
@@ -33,7 +35,7 @@ z-agent-gear/
 
 ```bash
 # 方式一：Aspire（默认）
-aspire start    # 启动全部服务（agent-api + controller-api + agent-web + MongoDB + Redis）
+aspire start    # 启动全部服务（agent-api + admin-api + controller-api + agent-web + admin-web + MongoDB + Redis）
 
 # 方式二：Docker Compose
 aspire publish -o aspire/manifest    # 生成 docker-compose.yaml
