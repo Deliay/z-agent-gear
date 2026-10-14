@@ -7,10 +7,12 @@ type: Permanent
 
 **功能名称**: 云控制器管理后台
 **关联 PRD**: `docs/product/draft/20261014-admin-console.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-14
 **作者**: Kimi
 **feat-branch**: `feat/admin-console`
+
+> 变更记录：v1.1 补充 admin-api 服务镜像 Dockerfile、admin-web nginx 容器镜像 Dockerfile 及对应的 GitHub CI 镜像构建流水线设计（见 §7 项目结构与 §9 部署方案）。
 
 ## 1. 概述
 
@@ -28,8 +30,8 @@ type: Permanent
 
 ### 1.3 范围
 
-- 包含：`admin-api` 与 `admin-web` 项目搭建、管理员登录与强制改密、全局供应商/模型 CRUD 与启停排序、基础镜像 CRUD、agent-api 可用模型查询纳入全局模型、Aspire 编排接入、API 测试与 E2E 测试
-- 不包含：镜像构建与推送、多管理员/角色权限体系、管理员操作审计日志、移动端适配、云上控制器本体
+- 包含：`admin-api` 与 `admin-web` 项目搭建、管理员登录与强制改密、全局供应商/模型 CRUD 与启停排序、基础镜像 CRUD、agent-api 可用模型查询纳入全局模型、Aspire 编排接入、**admin-api / admin-web 容器镜像 Dockerfile 与 GitHub CI 镜像构建流水线**、API 测试与 E2E 测试
+- 不包含：基础镜像的构建与推送（指 PRD 中管理的基础镜像业务数据，本期仅 CRUD）、多管理员/角色权限体系、管理员操作审计日志、移动端适配、云上控制器本体
 
 ## 2. 技术架构
 
@@ -362,7 +364,13 @@ sequenceDiagram
 #### 实现点 5: Aspire 编排接入
 
 - **描述**: `aspire/AgentGear.AppHost/AppHost.cs` 注册 admin-api 与 admin-web
-- **技术细节**: admin-api `AddNodeApp` 引用 mongodb、注入 `ADMIN_JWT_SECRET`、`CREDENTIAL_ENCRYPTION_KEY`，dev 端口 10003 / publish 8002；dev 模式 `AddViteApp("admin-web")` 注入 `VITE_ADMIN_API_URL`；admin-web vite dev 代理 `/graphql` → admin-api
+- **技术细节**: admin-api `AddNodeApp` 引用 mongodb、注入 `ADMIN_JWT_SECRET`、`CREDENTIAL_ENCRYPTION_KEY`，dev 端口 10003 / publish 8002；dev 模式 `AddViteApp("admin-web")` 注入 `VITE_ADMIN_API_URL`；admin-web vite dev 代理 `/graphql` → admin-api；publish 模式下 admin-api 与 admin-web 均使用各自 Dockerfile 构建的容器镜像（见 §9）
+
+#### 实现点 6: 容器镜像与 CI 流水线
+
+- **描述**: admin-api 提供多阶段 Node 镜像 Dockerfile；admin-web 提供「Node 构建 + nginx 托管」的多阶段 Dockerfile；两者各配一条 GitHub Actions 镜像构建推送流水线
+- **技术细节**: 见 §9.2 / §9.3，完全对齐现有 `servers/agent-api/Dockerfile` 与 `.github/workflows/build-agent-api-image.yml` 的模式
+- **风险点**: admin-web 为 SPA，nginx 需配置 history 路由 fallback（`try_files ... /index.html`）；`/graphql` 由部署侧反向代理到 admin-api，nginx 容器内不做硬编码上游
 
 ## 6. 技术决策
 
@@ -376,6 +384,7 @@ sequenceDiagram
 | 管理员体系 | 独立 admin_users 集合 | 复用 users 加 role 字段 | 独立集合 | 后台与用户体系完全分离，无注册、无角色蔓延；后续多管理员再扩展 |
 | 认证密钥 | 独立 `ADMIN_JWT_SECRET` | 复用 `JWT_SECRET` | 独立密钥 | 用户 token 与管理员 token 不可互认，泄露面隔离 |
 | 前端组件库 | shadcn + Tailwind（对齐 agent-web） | 引入 Ant Design | shadcn | 与现有前端同栈，降低维护成本，PRD 允许自选 |
+| admin-web 部署形态 | nginx 容器镜像 | GitHub Pages（agent-web 现状） | nginx 容器 | 后台需与 admin-api 同栈内网部署，且 PRD 要求独立后台服务；CI 构建镜像推送 registry |
 | Dockerfile 编辑 | 等宽字体 textarea | 引入 Monaco Editor | textarea | 本期仅 CRUD 纯文本，不引入重型编辑器依赖 |
 
 ### 6.2 依赖与约束
@@ -399,6 +408,7 @@ sequenceDiagram
 servers/admin-api/
 ├── package.json                # name: admin-api，对齐 agent-api 依赖版本
 ├── tsconfig.json
+├── Dockerfile                  # 新增：服务镜像（多阶段 node:22-alpine，见 §9.2）
 ├── src/
 │   ├── index.ts                # Express + yoga /graphql + /health + 管理员种子
 │   ├── config/index.ts         # PORT(默认4002) / MONGODB_URI / ADMIN_JWT_SECRET / CREDENTIAL_ENCRYPTION_KEY / CORS_ORIGIN
@@ -425,6 +435,8 @@ servers/admin-api/
 apps/admin-web/
 ├── package.json                # name: admin-web
 ├── vite.config.ts              # dev 代理 /graphql → admin-api
+├── Dockerfile                  # 新增：Node 构建 + nginx 托管（见 §9.3）
+├── nginx.conf                  # 新增：SPA fallback + 静态资源缓存
 ├── src/
 │   ├── main.tsx / App.tsx
 │   ├── pages/
@@ -456,8 +468,12 @@ contracts/
 ├── admin-llm.graphql           # 新增
 └── admin-base-image.graphql    # 新增
 
+.github/workflows/
+├── build-admin-api-image.yml   # 新增：admin-api 镜像构建推送（见 §9.4）
+└── build-admin-web-image.yml   # 新增：admin-web 镜像构建推送（见 §9.4）
+
 aspire/AgentGear.AppHost/
-└── AppHost.cs                  # 注册 admin-api（10003/8002）与 admin-web（ViteApp）
+└── AppHost.cs                  # 注册 admin-api（10003/8002）与 admin-web（ViteApp / 容器镜像）
 
 tests/
 ├── api/src/admin-api/          # 新增：auth / provider / model / base-image 套件
@@ -486,9 +502,134 @@ tests/
 | 环境 | 用途 | 部署方式 |
 |------|------|---------|
 | 本地开发 | 日常开发 | `aspire start` 统一拉起（admin-api: 10003，admin-web: Vite dev） |
-| 容器部署 | 类生产验证 | `aspire publish` 生成 docker-compose（admin-api: 8002 + admin-web 静态托管） |
+| 容器部署 | 类生产验证 | `aspire publish` 生成 docker-compose：admin-api（8002）与 admin-web（nginx 容器）均使用各自 Dockerfile 构建镜像 |
 
-### 9.2 配置管理
+### 9.2 admin-api 服务镜像 Dockerfile
+
+`servers/admin-api/Dockerfile`，与 `servers/agent-api/Dockerfile` 同模式（多阶段 `node:22-alpine`，`npm ci` 挂载缓存，非 root `node` 用户运行）：
+
+```dockerfile
+FROM node:22-alpine AS build
+
+WORKDIR /app
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+
+FROM node:22-alpine AS runtime
+
+WORKDIR /app
+COPY --from=build /app /app
+
+ENV NODE_ENV=production
+
+USER node
+
+ENTRYPOINT ["node", "src/index.ts"]
+```
+
+### 9.3 admin-web nginx 容器镜像 Dockerfile
+
+`apps/admin-web/Dockerfile`：第一阶段用 Node 构建 Vite 产物，第二阶段用 nginx 托管静态文件：
+
+```dockerfile
+FROM node:24-alpine AS build
+
+WORKDIR /app
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:1.27-alpine AS runtime
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+```
+
+`apps/admin-web/nginx.conf` 要点：SPA history 路由 fallback 与静态资源缓存：
+
+```nginx
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /assets/ {
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+    }
+}
+```
+
+说明：`VITE_ADMIN_API_URL` 为构建期变量，通过 CI `build-args` 注入；`/graphql` 等 API 流量由部署侧（docker-compose / 网关）反向代理至 admin-api，nginx 配置不含硬编码上游。
+
+### 9.4 GitHub CI 镜像构建流水线
+
+新增两条工作流，触发条件、registry 登录、buildx 构建推送方式与现有 `.github/workflows/build-agent-api-image.yml` 完全一致（`release` / `release/**` 分支 + 路径过滤 + `workflow_dispatch`，推送 `${{ secrets.DOCKER_ENDPOINT }}/zero-tools/<name>:<sha>` 与 `:latest` 双标签）。
+
+`.github/workflows/build-admin-api-image.yml`：
+
+```yaml
+name: Build admin-api Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'release'
+      - 'release/**'
+    paths:
+      - 'servers/admin-api/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_ENDPOINT }}
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: servers/admin-api
+          file: servers/admin-api/Dockerfile
+          tags: |
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-api:${{ github.sha }}
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-api:latest
+          push: true
+          provenance: false
+          sbom: false
+```
+
+`.github/workflows/build-admin-web-image.yml`：结构同上，差异为 `paths: 'apps/admin-web/**'`、`context/file: apps/admin-web`、镜像名 `admin-web`，并增加构建参数注入：
+
+```yaml
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/admin-web
+          file: apps/admin-web/Dockerfile
+          build-args: |
+            VITE_ADMIN_API_URL=${{ vars.ADMIN_API_URL }}
+          tags: |
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-web:${{ github.sha }}
+            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-web:latest
+          push: true
+          provenance: false
+          sbom: false
+```
+
+对应的 `apps/admin-web/Dockerfile` 构建阶段需声明 `ARG VITE_ADMIN_API_URL` 并 `ENV` 透传给 `npm run build`。
+
+### 9.5 配置管理
 
 | 配置项 | 说明 | 是否必填 |
 |--------|------|---------|
@@ -497,13 +638,16 @@ tests/
 | `ADMIN_JWT_SECRET` | 管理员 JWT 签名密钥 | 是 |
 | `CREDENTIAL_ENCRYPTION_KEY` | 供应商凭据 AES-256 密钥（32 字节 hex） | 是 |
 | `CORS_ORIGIN` | admin-web 来源 | 是 |
-| `VITE_ADMIN_API_URL` | admin-web 指向的 admin-api 地址 | 是（前端） |
+| `VITE_ADMIN_API_URL` | admin-web 指向的 admin-api 地址（构建期注入） | 是（前端） |
+| `ADMIN_API_URL` | GitHub Actions 变量（`vars`），CI 构建 admin-web 镜像时注入为 `VITE_ADMIN_API_URL` | 是（CI） |
 
 ## 10. 验收标准
 
 - [ ] 技术方案评审通过
 - [ ] Contract（admin-auth / admin-llm / admin-base-image）评审通过
 - [ ] 代码实现完成（admin-api + admin-web + agent-api scope 改造 + Aspire 编排）
+- [ ] admin-api 与 admin-web Dockerfile 可本地构建出可用镜像（admin-web 为 nginx 容器，SPA 路由刷新不 404）
+- [ ] GitHub CI 流水线 build-admin-api-image / build-admin-web-image 在 release 分支推送后成功构建并推送镜像
 - [ ] 单元测试覆盖达标（>= 80%）
 - [ ] API 测试通过（含 agent-api 回归）
 - [ ] E2E 测试通过（首次改密、模型配置全局生效、基础镜像 CRUD）
