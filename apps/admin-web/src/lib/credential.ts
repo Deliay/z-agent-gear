@@ -1,0 +1,7 @@
+export function maskCredential(value: string): string {
+  if (!value || value.length <= 7) {
+    const masked = value.slice(0, 3) + '****' + value.slice(-4)
+    return masked || ''
+  }
+  return value.slice(0, 3) + '****' + value.slice(-4)
+}
