@@ -8,13 +8,14 @@ export const sessionResolvers = {
   Query: {
     sessions: async (
       _parent: unknown,
-      args: { includeWorkflowSessions?: boolean },
+      args: { controllerId?: string; includeWorkflowSessions?: boolean },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
       return sessionService.findAllByUser(context.currentUser.id, {
+        controllerId: args.controllerId,
         includeWorkflowSessions: args.includeWorkflowSessions,
       });
     },

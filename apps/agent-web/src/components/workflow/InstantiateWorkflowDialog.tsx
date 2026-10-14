@@ -26,12 +26,12 @@ import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery, GetWorkspacesQuery } 
 import {
   GET_WORKFLOW_TEMPLATES,
   GET_CONFIGURED_WORKFLOWS,
-  GET_WORKFLOW_INSTANCES,
   INSTANTIATE_WORKFLOW,
   type GetWorkflowTemplatesQuery,
   type GetConfiguredWorkflowsQuery,
   type InstantiateSource,
 } from '@/graphql/workflow'
+import { HOME_OVERVIEW } from '@/graphql/home'
 import {
   configuredNodeToEditable,
   templateNodeToEditable,
@@ -195,7 +195,8 @@ export default function InstantiateWorkflowDialog({
       }
       const { data } = await instantiateWorkflow({
         variables: { input },
-        refetchQueries: [{ query: GET_WORKFLOW_INSTANCES, variables: { workspaceId: selectedWorkspaceId } }],
+        // 实例化后刷新首页聚合数据（侧边栏工作流集中列表随之更新）
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
       const instanceId = data?.instantiateWorkflow?.id
       toast.success('工作流实例已创建')

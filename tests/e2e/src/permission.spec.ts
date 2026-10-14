@@ -51,6 +51,15 @@ function registerController(rawKey: string): Promise<FakeController> {
       });
     });
 
+    // 首页聚合查询会按工作区扇出 Worktree 列表，需即时应答避免阻塞首屏
+    client.on('git:worktree:list', (data: { requestId: string }) => {
+      client.emit('git:worktree:list:result', {
+        requestId: data.requestId,
+        success: true,
+        worktrees: [],
+      });
+    });
+
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
       resolve({ controllerId: data.controllerId, socket: client, disconnect: () => client.disconnect() });
@@ -93,6 +102,9 @@ async function createSession(page: import('@playwright/test').Page, controllerId
 }
 
 test.describe('ACP Permission Reminder E2E', () => {
+  // 待办并入 homeOverview 后统一 15s 轮询，放宽单测超时
+  test.setTimeout(60000);
+
   test('should show todo bell icon in sidebar', async ({ page }) => {
     const { token, username } = await registerUser(page);
     await loginViaUI(page, username);
@@ -174,7 +186,8 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(5000);
 
     // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15000 });
+    // （待办并入 homeOverview 后轮询周期为 15s，等待窗口相应放宽）
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
     await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
 
     disconnect();
@@ -218,7 +231,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(3000);
 
     // Permission dialog should auto-popup for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
     await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Reject' })).toBeVisible();
@@ -269,7 +282,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(3000);
 
     // Permission dialog should auto-popup for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
 
     // Click Allow once
     await page.getByRole('button', { name: 'Allow once' }).click();
@@ -325,7 +338,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(3000);
 
     // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
     await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
 
     disconnect();
@@ -374,7 +387,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(3000);
 
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
     // Tool call details should be rendered directly: title, kind badge, command, location
     await expect(dialog.getByText('Bash: npm run danger', { exact: true })).toBeVisible();
     await expect(dialog.getByText('execute')).toBeVisible();
@@ -420,7 +433,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await page.waitForTimeout(3000);
 
     // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
 
     // Respond to permission request
     await page.getByRole('button', { name: 'Allow once' }).click();

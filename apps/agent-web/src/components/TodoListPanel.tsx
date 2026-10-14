@@ -1,15 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation } from '@apollo/client/react';
+import { useMutation } from '@apollo/client/react';
 import { Bell, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
-import { GET_TODO_LIST, GET_UNREAD_TODO_COUNT } from '../graphql/queries';
+import { HOME_OVERVIEW } from '../graphql/home';
 import { MARK_ALL_TODO_READ } from '../graphql/mutations';
 import { PermissionDialog } from './PermissionDialog';
 import { ElicitationDialog } from './ElicitationDialog';
-import type { TodoItemData, GetTodoListQuery, GetUnreadTodoCountQuery } from '../graphql/types';
+import { useHomeOverview } from '../stores/homeOverview';
+import type { TodoItemData } from '../graphql/types';
 
 // 可交互弹窗的待办类型
 function isActionable(todo: TodoItemData): boolean {
@@ -23,17 +24,15 @@ export function TodoListPanel() {
   const [selectedTodo, setSelectedTodo] = useState<TodoItemData | null>(null);
   const [immediateTodo, setImmediateTodo] = useState<TodoItemData | null>(null);
   const processedImmediateRef = useRef<Set<string>>(new Set());
-  
-  const { data: todoData, refetch: refetchTodos } = useQuery<GetTodoListQuery>(GET_TODO_LIST, {
-    pollInterval: 5000,
-  });
-  const { data: countData } = useQuery<GetUnreadTodoCountQuery>(GET_UNREAD_TODO_COUNT, {
-    pollInterval: 5000,
-  });
-  const [markAllTodoRead] = useMutation(MARK_ALL_TODO_READ);
 
-  const todos: TodoItemData[] = todoData?.getTodoList ?? [];
-  const unreadCount = countData?.getUnreadTodoCount ?? 0;
+  // 待办随首页聚合查询统一下发（轮询周期与首页一致：15s）
+  const { data, refetch: refetchOverview } = useHomeOverview();
+  const [markAllTodoRead] = useMutation(MARK_ALL_TODO_READ, {
+    refetchQueries: [{ query: HOME_OVERVIEW }],
+  });
+
+  const todos: TodoItemData[] = data?.todos ?? [];
+  const unreadCount = data?.unreadTodoCount ?? 0;
 
   // 检测立即优先级的待办，自动弹出全局弹窗（与手动打开的弹窗互斥）
   useEffect(() => {
@@ -48,8 +47,8 @@ export function TodoListPanel() {
   }, [todos, selectedTodo, immediateTodo]);
 
   const handleMarkAllRead = async () => {
+    // mutation 已带 refetchQueries: HOME_OVERVIEW，避免二次全量刷新
     await markAllTodoRead();
-    refetchTodos();
   };
 
   const handleTodoClick = (todo: TodoItemData) => {
@@ -145,7 +144,7 @@ export function TodoListPanel() {
           open={!!activeTodo}
           onOpenChange={handleDialogOpenChange}
           todo={activeTodo}
-          onResponded={() => refetchTodos()}
+          onResponded={() => refetchOverview()}
         />
       )}
 

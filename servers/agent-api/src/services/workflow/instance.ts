@@ -46,16 +46,29 @@ export interface InstantiateWorkflowInput {
 
 /** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
 class WorkflowInstanceService {
-  /** 实例列表：默认仅活跃（未归档）；archived=true 仅已归档 */
-  async listForWorkspace(userId: string, workspaceId: string, archived = false) {
-    return WorkflowInstance.find({
+  /**
+   * 实例列表：workspaceId / controllerId 均可选，二者同传取交集，都不传 = 当前用户全部实例；
+   * 默认仅活跃（未归档）；archived=true 仅已归档。
+   */
+  async list(
+    userId: string,
+    options: { workspaceId?: string | null; controllerId?: string | null; archived?: boolean } = {},
+  ) {
+    const filter: Record<string, unknown> = {
       userId,
-      workspaceId,
       deletedAt: null,
-      archivedAt: archived ? { $ne: null } : null,
-    })
+      archivedAt: options.archived ? { $ne: null } : null,
+    };
+    if (options.workspaceId) filter.workspaceId = options.workspaceId;
+    if (options.controllerId) filter.controllerId = options.controllerId;
+    return WorkflowInstance.find(filter)
       .sort({ createdAt: -1 })
       .lean();
+  }
+
+  /** 兼容旧调用：按工作区列举（委托 list，语义不变） */
+  async listForWorkspace(userId: string, workspaceId: string, archived = false) {
+    return this.list(userId, { workspaceId, archived });
   }
 
   async findById(id: string, userId: string) {

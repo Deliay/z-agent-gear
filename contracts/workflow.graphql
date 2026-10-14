@@ -174,6 +174,9 @@ type WorkflowInstance {
   nodes: [WorkflowNode!]!
   blackboard: [BlackboardEntry!]!
   blackboardTrash: [BlackboardEntry!]!
+  # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
+  workspace: ControllerWorkspace
+  controller: Controller
   createdAt: String!
   updatedAt: String!
 }
@@ -269,8 +272,9 @@ type Query {
   workflowTemplate(id: ID!): WorkflowTemplate
   configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
   configuredWorkflow(id: ID!): ConfiguredWorkflow
+  # workspaceId / controllerId 均可选：都不传 = 当前用户全部实例；二者同传取交集
   # archived 缺省/false 返回活跃实例（未归档）；true 返回已归档实例
-  workflowInstances(workspaceId: ID!, archived: Boolean): [WorkflowInstance!]!
+  workflowInstances(workspaceId: ID, controllerId: ID, archived: Boolean): [WorkflowInstance!]!
   workflowInstance(id: ID!): WorkflowInstance
 }
 

@@ -42,6 +42,10 @@ function registerWorkflowController(
     const stops: string[] = [];
     const messages: ControllerMessage[] = [];
 
+    client.on("git:worktree:list", (data: { requestId: string }) => {
+      client.emit("git:worktree:list:result", { requestId: data.requestId, success: true, worktrees: [] });
+    });
+
     client.on('acp:check', (data: { requestId: string }) => {
       const servers = opts.acpServers ?? [{ type: 'opencode', available: true, version: '1.0.0' }];
       client.emit('acp:check:result', {
