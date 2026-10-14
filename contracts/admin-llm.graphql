@@ -1,0 +1,89 @@
+# 全局供应商与模型契约（云控制器管理后台一期）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+#
+# 本契约复用 `llm.graphql` 的 Provider/Model/ProviderInput/CustomModelInput/
+# ProviderBatchPayload 语义，差异是所有操作作用于 `scope = 'global'` 的数据：
+#   - 保存供应商前先调供应商 API 校验连通性（失败不保存）
+#   - 凭据 AES-256-GCM 加密存储、脱敏返回（前 3 后 4）
+#   - 删除供应商级联删除其模型，禁用供应商级联禁用其模型
+#   - `name` 在同 scope 内唯一
+
+enum ProviderType {
+  OpenAI
+  Anthropic
+}
+
+enum CredentialType {
+  api_key
+}
+
+enum ConfigScope {
+  user
+  global
+}
+
+type Provider {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType!
+  credentialValue: String!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+  models: [Model!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Model {
+  id: ID!
+  providerId: ID!
+  provider: Provider!
+  name: String!
+  isCustom: Boolean!
+  isEnabled: Boolean!
+  sortOrder: Int!
+  scope: ConfigScope!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ProviderInput {
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType! = api_key
+  credentialValue: String!
+}
+
+input CustomModelInput {
+  providerId: ID!
+  name: String!
+}
+
+type ProviderBatchPayload {
+  successCount: Int!
+}
+
+type Query {
+  adminProviders: [Provider!]! # 仅 scope=global
+  adminModels: [Model!]! # 仅 scope=global
+  adminModelsByProvider(providerId: ID!): [Model!]!
+}
+
+type Mutation {
+  createGlobalProvider(input: ProviderInput!): Provider!
+  updateGlobalProvider(id: ID!, input: ProviderInput!): Provider!
+  deleteGlobalProvider(id: ID!): Boolean!
+  toggleGlobalProvider(id: ID!): Provider!
+  batchEnableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDisableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDeleteGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  createGlobalCustomModel(input: CustomModelInput!): Model!
+  deleteGlobalCustomModel(id: ID!): Model!
+  toggleGlobalModel(id: ID!): Model!
+  updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
+}

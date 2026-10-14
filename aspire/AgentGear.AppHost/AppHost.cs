@@ -33,6 +33,8 @@ var redis = builder.AddRedis("redis")
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
 var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
+var adminJwtSecret = builder.AddParameter("admin-jwt-secret", secret: true, value: "dev-admin-secret-change-in-production");
+var credentialEncryptionKey = builder.AddParameter("credential-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
@@ -79,6 +81,19 @@ var agentController = builder.AddNodeApp("agent-controller", "../../packages/age
     .WaitFor(controllerApi)
     .ExcludeFromManifest();
 
+var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/index.ts")
+    .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
+    .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
+    .WithEnvironment("CORS_ORIGIN", corsOrigin)
+    .WithReference(mongodb)
+    .WithExternalHttpEndpoints()
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "admin-api";
+        service.Restart = "unless-stopped";
+    });
+
 if (!builder.ExecutionContext.IsPublishMode)
 {
     var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
@@ -91,6 +106,10 @@ if (!builder.ExecutionContext.IsPublishMode)
         });
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
         .WithHttpEndpoint(port: 10001, env: "PORT");
+
+    adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
+    var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
+        .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"));
 }
 else
 {
@@ -101,6 +120,21 @@ else
     controllerApi
         .WithHttpEndpoint(port: 8001, env: "PORT")
         .WithExternalHttpEndpoints();
+
+    adminApi
+        .WithHttpEndpoint(port: 8002, env: "PORT")
+        .WithExternalHttpEndpoints();
+
+    // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + nginx 托管），
+    // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
+    builder.AddDockerfile("admin-web", "../../apps/admin-web")
+        .WithHttpEndpoint(port: 80, targetPort: 80)
+        .WithExternalHttpEndpoints()
+        .PublishAsDockerComposeService((resource, service) =>
+        {
+            service.Name = "admin-web";
+            service.Restart = "unless-stopped";
+        });
 }
 
 builder.Build().Run();

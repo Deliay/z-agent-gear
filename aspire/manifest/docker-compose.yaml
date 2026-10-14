@@ -83,6 +83,35 @@ services:
     networks:
       - "aspire"
     restart: "unless-stopped"
+  admin-api:
+    image: "${ADMIN_API_IMAGE}"
+    environment:
+      NODE_ENV: "production"
+      NODE_OPTIONS: "--import tsx"
+      ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET}"
+      CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
+      CORS_ORIGIN: "${CORS_ORIGIN}"
+      ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      MONGODB_HOST: "mongodb"
+      MONGODB_PORT: "27017"
+      MONGODB_USERNAME: "admin"
+      MONGODB_PASSWORD: "${MONGODB_PASSWORD}"
+      MONGODB_AUTHENTICATIONDATABASE: "admin"
+      MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
+      MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      PORT: "8002"
+    ports:
+      - "8002:8002"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  admin-web:
+    image: "${ADMIN_WEB_IMAGE}"
+    ports:
+      - "80:80"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
 networks:
   aspire:
     driver: "bridge"

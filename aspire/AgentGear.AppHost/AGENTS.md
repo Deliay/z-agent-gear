@@ -13,9 +13,14 @@
 |-----------------|------------|-----------------|
 | agent-api       | Node.js    | agent-api       |
 | agent-web       | Node.js    | (dev only)      |
+| admin-api       | Node.js    | admin-api       |
+| admin-web       | Node.js    | admin-web       |
 | controller-api  | Node.js    | controller-api  |
 | mongodb         | Container  | mongodb         |
 | redis           | Container  | redis           |
+
+> `admin-api` 注入 `ADMIN_JWT_SECRET` / `CREDENTIAL_ENCRYPTION_KEY` / `CORS_ORIGIN`，引用 `mongodb`，dev 端口 10003、publish 端口 8002。
+> `admin-web` dev 模式为 Vite dev server（`AddViteApp`，注入 `VITE_ADMIN_API_URL`）；publish 模式注册为 nginx 容器（`zero-tools/admin-web`，端口 80，SPA history fallback）。
 
 ## Dev Commands
 

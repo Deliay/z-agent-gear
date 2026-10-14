@@ -7,6 +7,7 @@ export const modelTypeDefs = `#graphql
     isCustom: Boolean!
     isEnabled: Boolean!
     sortOrder: Int!
+    scope: ConfigScope!
     createdAt: String!
     updatedAt: String!
   }
@@ -14,10 +15,6 @@ export const modelTypeDefs = `#graphql
   input CustomModelInput {
     providerId: ID!
     name: String!
-  }
-
-  type ModelBatchPayload {
-    successCount: Int!
   }
 
   extend type Query {

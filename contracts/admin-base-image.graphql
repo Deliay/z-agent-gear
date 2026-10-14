@@ -1,0 +1,31 @@
+# 基础镜像契约（云控制器管理后台一期）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+# `name` 集合内唯一，重名创建/更新报错 `Base image name already exists`。
+
+type BaseImage {
+  id: ID!
+  name: String!
+  description: String
+  dockerfile: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input BaseImageInput {
+  name: String!
+  description: String
+  dockerfile: String!
+}
+
+type Query {
+  baseImages: [BaseImage!]!
+  baseImage(id: ID!): BaseImage
+}
+
+type Mutation {
+  createBaseImage(input: BaseImageInput!): BaseImage! # name 唯一，重名报错
+  updateBaseImage(id: ID!, input: BaseImageInput!): BaseImage!
+  deleteBaseImage(id: ID!): Boolean!
+}
