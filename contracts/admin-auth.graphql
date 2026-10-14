@@ -1,0 +1,29 @@
+# 管理员认证契约（云控制器管理后台一期）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+# 本契约不提供任何注册 mutation（仅内置 admin 种子帐号）。
+
+type AdminUser {
+  id: ID!
+  username: String!
+  mustChangePassword: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AdminAuthPayload {
+  token: String!
+  admin: AdminUser!
+}
+
+type Query {
+  adminMe: AdminUser
+}
+
+type Mutation {
+  # 登录；不存在注册 mutation
+  adminLogin(username: String!, password: String!): AdminAuthPayload!
+  # 修改密码（需已登录）；成功后 mustChangePassword=false 并签发新 token
+  changeAdminPassword(oldPassword: String!, newPassword: String!): AdminAuthPayload!
+}
