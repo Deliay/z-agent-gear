@@ -7,7 +7,8 @@
 # 说明：
 # - 状态语义见 contracts/cloud-controller-websocket.md 附录 A.4。
 # - 本期 `adminStartCloudContainer` 仅接受 `IDLE`；其余用途服务端返回明确错误文案「该任务类型暂未开放」。
-# - 控制面（cloud-controller）不可达时：列表降级只读落库状态并提示「控制面离线」；写操作不降级。
+# - 控制面（cloud-controller）不可达时：列表降级只读落库状态；`adminCloudContainerControlPlane.online`
+#   随之为 false 并携带「控制面离线」提示；写操作不降级。
 
 type CloudContainer {
   id: ID!
@@ -19,6 +20,12 @@ type CloudContainer {
   connectedAt: String          # 回连上线时间
   exitedAt: String             # 退出时间
   exitReason: String           # 退出/失败原因
+}
+
+# 控制面健康标记（降级提示的承载字段）：online=false 时前端展示「控制面离线」横幅。
+type CloudContainerControlPlane {
+  online: Boolean!
+  message: String
 }
 
 enum CloudContainerStatus {
@@ -38,12 +45,16 @@ enum CloudContainerPurpose {
 }
 
 type Query {
+  # 控制面不可达时降级为落库只读数据（data 照常返回）
   adminCloudContainers: [CloudContainer!]!
+  # 控制面健康标记；与 adminCloudContainers 同一次轮询一起查询
+  adminCloudContainerControlPlane: CloudContainerControlPlane!
 }
 
 type Mutation {
   # 启动一个工作容器；本期 purpose 仅支持 IDLE
   adminStartCloudContainer(purpose: CloudContainerPurpose!): CloudContainer!
-  # 强制销毁容器（幂等：终态容器重复调用返回 true）
+  # 强制销毁容器（幂等：终态容器重复调用返回 true）。
+  # 注意：在线容器需下发 shutdown 并等待宽限期（约 10s）后才完成，调用方应使用大于宽限期的超时。
   adminDestroyCloudContainer(id: ID!): Boolean!
 }
