@@ -19,7 +19,7 @@ import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
 
-const CONTROLLER_VERSION = '2.0.0';
+const CONTROLLER_VERSION = '2.1.0';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
@@ -203,6 +203,41 @@ interface GitCommitPayload {
   message: string;
 }
 
+export interface ParsedEndpoint {
+  /** 服务源（协议 + host + port），不含 path/query，例如 `wss://cloud.example.com`。 */
+  origin: string;
+  /** Socket.IO namespace：旧 endpoint 为 `/`，带 pathname 的 endpoint 取其路径（如 `/worker`）。 */
+  namespace: string;
+  /** 握手 query 参数（如 `?token=xxx`）；旧 endpoint 为空对象。 */
+  query: Record<string, string>;
+}
+
+/**
+ * 解析 controller endpoint，区分「旧 controller-api endpoint」与「带 path/query 的 cloud-controller endpoint」。
+ *
+ * - `http://host:4001`          → namespace `/`、无 query（对 controller-api 旧行为零变化）
+ * - `wss://host/worker?token=x` → namespace `/worker`、query `{ token: 'x' }`
+ *
+ * socket.io-client v4 原生即按此规则解析 URL（pathname→namespace、search→handshake query），
+ * 因此 `connectToServer` 仍直接把 endpoint 透传给 `io()`。本函数用于单测锚定该解析口径，
+ * 并为日志输出提供不含凭据的连接目标。
+ */
+export function parseEndpoint(endpoint: string): ParsedEndpoint {
+  const result: ParsedEndpoint = { origin: endpoint, namespace: '/', query: {} };
+  try {
+    const url = new URL(endpoint);
+    result.origin = url.origin;
+    const pathname = url.pathname.replace(/\/+$/, '');
+    result.namespace = pathname === '' ? '/' : pathname;
+    for (const [name, value] of url.searchParams) {
+      result.query[name] = value;
+    }
+  } catch {
+    // 非法 URL：保持透传（origin=原始字符串、默认 namespace、无 query），与既有行为一致
+  }
+  return result;
+}
+
 export function connectToServer(
   endpoint: string,
   key: string,
@@ -234,7 +269,9 @@ export function connectToServer(
   }
 
   socket.on('connect', () => {
-    console.log(`Connected to ${endpoint}`);
+    // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
+    const { origin, namespace } = parseEndpoint(endpoint);
+    console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
     const resumeToken = getResumeTokenFromConfig();
     socket.emit('register', {
       key,
