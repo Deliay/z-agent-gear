@@ -1,5 +1,5 @@
 import { GraphQLError } from 'graphql';
-import { providerService } from '../../services/provider.js';
+import { providerService, PROVIDER_CONNECTIVITY_ERROR } from '../../services/provider.js';
 import { modelService } from '../../services/model.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
@@ -9,8 +9,8 @@ function mapProviderError(err: unknown): never {
   if (message.includes('E11000')) {
     throw new GraphQLError('Provider name already exists');
   }
-  if (message.includes('connect') || message.includes('ECONN')) {
-    throw new GraphQLError('供应商连通性测试失败，请检查 API 地址和凭据是否正确');
+  if (message === PROVIDER_CONNECTIVITY_ERROR) {
+    throw new GraphQLError(PROVIDER_CONNECTIVITY_ERROR);
   }
   throw new GraphQLError(message);
 }

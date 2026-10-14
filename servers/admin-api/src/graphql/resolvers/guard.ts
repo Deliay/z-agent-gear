@@ -10,9 +10,9 @@ import type { AdminAuthContext } from './auth.js';
  */
 export function assertAdmin(context: AdminAuthContext): void {
   if (!context.currentAdmin) {
-    throw new GraphQLError('Not authenticated');
+    throw new GraphQLError('Not authenticated', { extensions: { code: 'UNAUTHENTICATED' } });
   }
   if (context.currentAdmin.mustChangePassword) {
-    throw new GraphQLError('MUST_CHANGE_PASSWORD');
+    throw new GraphQLError('MUST_CHANGE_PASSWORD', { extensions: { code: 'MUST_CHANGE_PASSWORD' } });
   }
 }

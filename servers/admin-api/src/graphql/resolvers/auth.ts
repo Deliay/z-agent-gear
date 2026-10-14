@@ -55,7 +55,7 @@ export const authResolvers = {
       context: AdminAuthContext,
     ) => {
       if (!context.currentAdmin) {
-        throw new GraphQLError('Not authenticated');
+        throw new GraphQLError('Not authenticated', { extensions: { code: 'UNAUTHENTICATED' } });
       }
       try {
         const admin = await changePassword(context.currentAdmin.id, args.oldPassword, args.newPassword);

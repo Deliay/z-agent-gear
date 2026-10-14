@@ -7,6 +7,13 @@ import mongoose from 'mongoose';
 /** admin-api 全链路强制操作全局（scope=global）配置 */
 const GLOBAL_SCOPE = 'global';
 
+/**
+ * 供应商连通性校验失败对外统一文案。
+ * openai/@anthropic SDK 的失败形态多样（"Connection error."、"Request timed out."、401 等），
+ * 因此不做错误串匹配，任何 fetchModels 抛错都归一化为本文案（PRD 3.5）。
+ */
+export const PROVIDER_CONNECTIVITY_ERROR = '供应商连通性测试失败，请检查 API 地址和凭据是否正确';
+
 export class ProviderService {
   async findAll() {
     const providers = await Provider.find({ scope: GLOBAL_SCOPE }).sort({ createdAt: -1 }).lean();
@@ -30,10 +37,15 @@ export class ProviderService {
       throw new Error('Provider name is required');
     }
 
-    const encrypted = encrypt(input.credentialValue);
+    // 连通性校验：任何失败（地址/凭据/超时/网络）统一归一化，失败则不落库
+    let models: string[] = [];
+    try {
+      models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
+    } catch {
+      throw new Error(PROVIDER_CONNECTIVITY_ERROR);
+    }
 
-    // 连通性校验：失败则抛出异常，不落库
-    const models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
+    const encrypted = encrypt(input.credentialValue);
 
     const provider = await Provider.create({
       name: input.name,
@@ -83,25 +95,19 @@ export class ProviderService {
     const credentialChanged = hasNewCredential;
     const typeChanged = input.type !== existingProvider.type;
     const endpointChanged = input.endpoint !== existingProvider.endpoint;
+    const needsResync = credentialChanged || typeChanged || endpointChanged;
 
-    if (credentialChanged || typeChanged || endpointChanged) {
-      const models = await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
-
-      await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE });
-
-      if (models.length > 0) {
-        const modelDocs = models.map((name, i) => ({
-          providerId: new mongoose.Types.ObjectId(id),
-          name,
-          isCustom: false,
-          isEnabled: true,
-          sortOrder: i,
-          scope: GLOBAL_SCOPE,
-        }));
-        await Model.insertMany(modelDocs);
+    // 连通性校验先于任何写入，失败则整体不落库
+    let models: string[] = [];
+    if (needsResync) {
+      try {
+        models = await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
+      } catch {
+        throw new Error(PROVIDER_CONNECTIVITY_ERROR);
       }
     }
 
+    // 先更新供应商：唯一索引冲突（改名撞名）在此抛出，此时模型尚未改动，状态保持一致
     const provider = await Provider.findOneAndUpdate(
       { _id: id, scope: GLOBAL_SCOPE },
       {
@@ -114,6 +120,22 @@ export class ProviderService {
       { new: true, lean: true },
     );
     if (!provider) return null;
+
+    // 再级联重同步模型
+    if (needsResync) {
+      await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE });
+      if (models.length > 0) {
+        const modelDocs = models.map((name, i) => ({
+          providerId: new mongoose.Types.ObjectId(id),
+          name,
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: i,
+          scope: GLOBAL_SCOPE,
+        }));
+        await Model.insertMany(modelDocs);
+      }
+    }
 
     return this.mapProvider(provider);
   }
@@ -194,9 +216,9 @@ export class ProviderService {
   }
 
   private maskCredential(value: string): string {
-    if (value.length <= 7) {
-      return value.slice(0, 3) + '****' + value.slice(-4);
-    }
+    if (!value) return '';
+    // 短凭据直接整体掩码，避免 first3+last4 拼出（近似）完整原值
+    if (value.length <= 8) return '****';
     return value.slice(0, 3) + '****' + value.slice(-4);
   }
 }

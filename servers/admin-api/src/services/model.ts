@@ -1,4 +1,5 @@
 import { Model } from '../models/model.js';
+import { Provider } from '../models/provider.js';
 import mongoose from 'mongoose';
 
 /** admin-api 全链路强制操作全局（scope=global）配置 */
@@ -18,6 +19,15 @@ export class ModelService {
   }
 
   async createCustom(input: { providerId: string; name: string }) {
+    // 校验目标供应商存在且为全局 scope，防止把 global 模型挂到 user 供应商或悬空 providerId
+    if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
+      throw new Error('Provider not found');
+    }
+    const provider = await Provider.findOne({ _id: input.providerId, scope: GLOBAL_SCOPE }).lean();
+    if (!provider) {
+      throw new Error('Provider not found');
+    }
+
     const maxSort = await Model.findOne({ providerId: input.providerId, scope: GLOBAL_SCOPE })
       .sort({ sortOrder: -1 })
       .select('sortOrder')
@@ -51,7 +61,7 @@ export class ModelService {
     if (!model) return null;
     if (model.scope !== GLOBAL_SCOPE) return null;
 
-    const provider = await mongoose.model('Provider').findById(model.providerId).lean() as { isEnabled: boolean } | null;
+    const provider = await Provider.findOne({ _id: model.providerId, scope: GLOBAL_SCOPE }).lean() as { isEnabled: boolean } | null;
     if (!provider || !provider.isEnabled) {
       return null;
     }

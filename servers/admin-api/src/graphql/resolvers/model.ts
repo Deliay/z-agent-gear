@@ -29,10 +29,14 @@ export const modelResolvers = {
       try {
         return await modelService.createCustom(args.input);
       } catch (err) {
-        if ((err as Error).message.includes('E11000')) {
+        const message = (err as Error).message;
+        if (message.includes('E11000')) {
           throw new GraphQLError('Model name already exists for this provider');
         }
-        throw new GraphQLError((err as Error).message);
+        if (message === 'Provider not found') {
+          throw new GraphQLError('Provider not found');
+        }
+        throw new GraphQLError(message);
       }
     },
     deleteGlobalCustomModel: async (

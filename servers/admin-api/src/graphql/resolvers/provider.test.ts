@@ -3,6 +3,7 @@ import { GraphQLError } from 'graphql';
 import { providerResolvers } from './provider';
 
 vi.mock('../../services/provider.js', () => ({
+  PROVIDER_CONNECTIVITY_ERROR: '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
   providerService: {
     findAll: vi.fn(),
     create: vi.fn(),
@@ -67,15 +68,8 @@ describe('providerResolvers', () => {
       );
     });
 
-    it('T-P1: maps connectivity failure to Chinese message', async () => {
-      (providerService.create as any).mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:9'));
-      await expect(Mutation.createGlobalProvider({}, { input }, good)).rejects.toThrow(
-        '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
-      );
-    });
-
-    it('maps ECONN errors too', async () => {
-      (providerService.create as any).mockRejectedValue(new Error('ECONNRESET'));
+    it('T-P1: maps the service connectivity marker to the Chinese message', async () => {
+      (providerService.create as any).mockRejectedValue(new Error('供应商连通性测试失败，请检查 API 地址和凭据是否正确'));
       await expect(Mutation.createGlobalProvider({}, { input }, good)).rejects.toThrow(
         '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
       );

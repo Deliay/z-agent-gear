@@ -1,21 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  providerFindById: vi.fn(),
-}));
-
-// 仅 services/model.ts 使用 mongoose（Types.ObjectId + mongoose.model('Provider')）
+// services/model.ts 使用 mongoose.Types.ObjectId（构造 + isValid）
 vi.mock('mongoose', () => ({
   default: {
     Types: {
-      ObjectId: class {
-        constructor(private value: string) {}
-        toString() {
-          return this.value;
-        }
-      },
+      ObjectId: Object.assign(
+        class {
+          constructor(private value: string) {}
+          toString() {
+            return this.value;
+          }
+        },
+        { isValid: (v: unknown) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) },
+      ),
     },
-    model: vi.fn(() => ({ findById: mocks.providerFindById })),
   },
 }));
 
@@ -31,13 +29,22 @@ vi.mock('../models/model.js', () => ({
   },
 }));
 
+vi.mock('../models/provider.js', () => ({
+  Provider: {
+    findOne: vi.fn(),
+  },
+}));
+
 import { Model } from '../models/model.js';
+import { Provider } from '../models/provider.js';
 import { modelService } from './model';
+
+const VALID_OID = '507f1f77bcf86cd799439011';
 
 function makeModelDoc(overrides: Record<string, unknown> = {}) {
   return {
     _id: { toString: () => 'model-1' },
-    providerId: { toString: () => 'provider-1' },
+    providerId: { toString: () => VALID_OID },
     name: 'gpt-4o',
     isCustom: false,
     isEnabled: true,
@@ -52,6 +59,8 @@ function makeModelDoc(overrides: Record<string, unknown> = {}) {
 describe('ModelService (admin / global scope)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 默认：目标供应商存在且为 global
+    (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: VALID_OID, scope: 'global' }) });
   });
 
   describe('findAll', () => {
@@ -71,9 +80,9 @@ describe('ModelService (admin / global scope)', () => {
       const lean = vi.fn().mockResolvedValue([makeModelDoc()]);
       (Model.find as any).mockReturnValue({ sort: vi.fn().mockReturnValue({ lean }) });
 
-      await modelService.findByProviderId('provider-1');
+      await modelService.findByProviderId(VALID_OID);
 
-      expect(Model.find).toHaveBeenCalledWith({ providerId: 'provider-1', scope: 'global' });
+      expect(Model.find).toHaveBeenCalledWith({ providerId: VALID_OID, scope: 'global' });
     });
   });
 
@@ -91,9 +100,10 @@ describe('ModelService (admin / global scope)', () => {
       const create = vi.fn().mockResolvedValue({ ...custom, toObject: () => custom });
       (Model.create as any) = create;
 
-      const result = await modelService.createCustom({ providerId: 'provider-1', name: 'custom-model' });
+      const result = await modelService.createCustom({ providerId: VALID_OID, name: 'custom-model' });
 
-      expect(Model.findOne).toHaveBeenCalledWith({ providerId: 'provider-1', scope: 'global' });
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: VALID_OID, scope: 'global' });
+      expect(Model.findOne).toHaveBeenCalledWith({ providerId: VALID_OID, scope: 'global' });
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'custom-model', isCustom: true, sortOrder: 3, scope: 'global' }),
       );
@@ -102,10 +112,22 @@ describe('ModelService (admin / global scope)', () => {
       expect(result.scope).toBe('global');
     });
 
-    it('T-M1: surfaces duplicate model name error (E11000)', async () => {
+    it('T-M1: rejects duplicate model name error (E11000)', async () => {
       (Model.create as any) = vi.fn().mockRejectedValue(new Error('E11000 duplicate key error'));
 
-      await expect(modelService.createCustom({ providerId: 'provider-1', name: 'dup' })).rejects.toThrow('E11000');
+      await expect(modelService.createCustom({ providerId: VALID_OID, name: 'dup' })).rejects.toThrow('E11000');
+    });
+
+    it('cross-scope guard: rejects when target provider is missing', async () => {
+      (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+
+      await expect(modelService.createCustom({ providerId: VALID_OID, name: 'x' })).rejects.toThrow('Provider not found');
+      expect(Model.create).not.toHaveBeenCalled();
+    });
+
+    it('cross-scope guard: rejects a malformed providerId', async () => {
+      await expect(modelService.createCustom({ providerId: 'user-provider', name: 'x' })).rejects.toThrow('Provider not found');
+      expect(Model.create).not.toHaveBeenCalled();
     });
   });
 
@@ -150,26 +172,26 @@ describe('ModelService (admin / global scope)', () => {
         toObject: () => makeModelDoc({ isEnabled: true }),
       };
       (Model.findById as any).mockResolvedValue(doc);
-      mocks.providerFindById.mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: true }) });
+      (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: true }) });
 
       const result = await modelService.toggle('model-1');
 
       expect(result).not.toBeNull();
       expect(doc.isEnabled).toBe(true);
       expect(doc.save).toHaveBeenCalledTimes(1);
-      expect(mocks.providerFindById).toHaveBeenCalledWith(doc.providerId);
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: doc.providerId, scope: 'global' });
     });
 
     it('T-M3: refuses to toggle when provider is disabled', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc());
-      mocks.providerFindById.mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: false }) });
+      (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: false }) });
 
       expect(await modelService.toggle('model-1')).toBeNull();
     });
 
     it('T-M3: refuses to toggle when provider is missing', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc());
-      mocks.providerFindById.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+      (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
       expect(await modelService.toggle('model-1')).toBeNull();
     });

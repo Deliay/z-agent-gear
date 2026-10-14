@@ -80,14 +80,27 @@ describe('ProviderService (admin / global scope)', () => {
   });
 
   describe('create', () => {
-    it('T-P1: aborts without persisting when connectivity check fails', async () => {
+    it('T-P1: aborts without persisting when connectivity check fails (realistic SDK error)', async () => {
       const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockRejectedValueOnce(new Error('connect ECONNREFUSED 127.0.0.1:9'));
+      // 贴近 openai/@anthropic SDK 的真实失败形态，而非从未出现的 'connect ECONNREFUSED'
+      (llmApiService.fetchModels as any).mockRejectedValueOnce(new Error('Connection error.'));
 
-      await expect(providerService.create(validInput)).rejects.toThrow('connect');
+      await expect(providerService.create(validInput)).rejects.toThrow(
+        '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+      );
 
       expect(Provider.create).not.toHaveBeenCalled();
       expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('T-P1: also normalizes credential (401) failures to the connectivity message', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockRejectedValueOnce(new Error('401 Incorrect API key provided'));
+
+      await expect(providerService.create(validInput)).rejects.toThrow(
+        '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+      );
+      expect(Provider.create).not.toHaveBeenCalled();
     });
 
     it('T-P2: creates provider and syncs models with scope=global', async () => {
