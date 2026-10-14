@@ -19,6 +19,7 @@ describe('ModelService', () => {
           isCustom: false,
           isEnabled: true,
           sortOrder: 0,
+          scope: 'user',
           createdAt: new Date(),
           updatedAt: new Date(),
         },
@@ -31,6 +32,65 @@ describe('ModelService', () => {
       const result = await modelService.findAll();
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('gpt-4o');
+      expect(result[0].scope).toBe('user');
+    });
+
+    it('should query user models plus enabled global models', async () => {
+      const findSpy = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      });
+      (Model.find as any) = findSpy;
+
+      await modelService.findAll();
+
+      expect(findSpy).toHaveBeenCalledWith({
+        $or: [
+          { scope: 'user' },
+          { scope: { $exists: false } },
+          { scope: 'global', isEnabled: true },
+        ],
+      });
+    });
+
+    it('should default scope to user when field is absent (legacy data)', async () => {
+      const leanFn = vi.fn().mockResolvedValue([
+        {
+          _id: { toString: () => 'legacy' },
+          providerId: { toString: () => 'provider-1' },
+          name: 'legacy-model',
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ]);
+      (Model.find as any).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: leanFn }),
+      });
+
+      const result = await modelService.findAll();
+      expect(result[0].scope).toBe('user');
+    });
+  });
+
+  describe('findByProviderId', () => {
+    it('should combine providerId with the scope union filter', async () => {
+      const findSpy = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      });
+      (Model.find as any) = findSpy;
+
+      await modelService.findByProviderId('provider-1');
+
+      expect(findSpy).toHaveBeenCalledWith({
+        providerId: 'provider-1',
+        $or: [
+          { scope: 'user' },
+          { scope: { $exists: false } },
+          { scope: 'global', isEnabled: true },
+        ],
+      });
     });
   });
 
@@ -74,6 +134,9 @@ describe('ModelService', () => {
       expect(result.name).toBe('custom-model');
       expect(result.isCustom).toBe(true);
       expect(result.sortOrder).toBe(6);
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'user', isCustom: true }),
+      );
     });
   });
 
@@ -98,7 +161,19 @@ describe('ModelService', () => {
 
       const result = await modelService.updateSortOrder(['model-2', 'model-1']);
       expect(result).toHaveLength(1);
-      expect(Model.bulkWrite).toHaveBeenCalled();
+      expect(Model.bulkWrite).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            updateOne: expect.objectContaining({
+              filter: { _id: 'model-2', scope: { $ne: 'global' } },
+            }),
+          }),
+        ]),
+      );
+      expect(Model.find).toHaveBeenCalledWith({
+        _id: { $in: ['model-2', 'model-1'] },
+        scope: { $ne: 'global' },
+      });
     });
   });
 
@@ -159,6 +234,19 @@ describe('ModelService', () => {
       expect(result).toBeNull();
       expect(Model.deleteOne).not.toHaveBeenCalled();
     });
+
+    it('should throw when deleting a global model', async () => {
+      (Model.findById as any) = vi.fn().mockResolvedValue({
+        _id: 'global-model',
+        providerId: { toString: () => 'provider-g' },
+        isCustom: true,
+        scope: 'global',
+      });
+      (Model.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      await expect(modelService.delete('global-model')).rejects.toThrow('全局配置请在管理后台修改');
+      expect(Model.deleteOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('toggle', () => {
@@ -209,6 +297,18 @@ describe('ModelService', () => {
 
       const result = await modelService.toggle('model-1');
       expect(result).toBeNull();
+    });
+
+    it('should throw when toggling a global model', async () => {
+      (Model.findById as any) = vi.fn().mockResolvedValue({
+        _id: 'global-model',
+        providerId: { toString: () => 'provider-g' },
+        isEnabled: false,
+        scope: 'global',
+        save: vi.fn(),
+      });
+
+      await expect(modelService.toggle('global-model')).rejects.toThrow('全局配置请在管理后台修改');
     });
   });
 });

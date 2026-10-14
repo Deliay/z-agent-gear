@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { modelService } from '../../services/model.js';
 import { providerService } from '../../services/provider.js';
+import { rethrowAsGraphQLError } from './errors.js';
 import type { AuthContext } from './auth.js';
 
 export const modelResolvers = {
@@ -34,10 +35,9 @@ export const modelResolvers = {
       try {
         return await modelService.createCustom(args.input);
       } catch (err) {
-        if ((err as Error).message.includes('E11000')) {
-          throw new GraphQLError('Model name already exists for this provider');
-        }
-        throw new GraphQLError((err as Error).message);
+        rethrowAsGraphQLError(err, [
+          ['E11000', 'Model name already exists for this provider'],
+        ]);
       }
     },
     deleteCustomModel: async (
@@ -48,11 +48,15 @@ export const modelResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const result = await modelService.delete(args.id);
-      if (!result) {
-        throw new GraphQLError('Model not found or is not a custom model');
+      try {
+        const result = await modelService.delete(args.id);
+        if (!result) {
+          throw new GraphQLError('Model not found or is not a custom model');
+        }
+        return result;
+      } catch (err) {
+        rethrowAsGraphQLError(err);
       }
-      return result;
     },
     toggleModel: async (
       _parent: unknown,
@@ -62,11 +66,15 @@ export const modelResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const result = await modelService.toggle(args.id);
-      if (!result) {
-        throw new GraphQLError('Model not found or its provider is disabled');
+      try {
+        const result = await modelService.toggle(args.id);
+        if (!result) {
+          throw new GraphQLError('Model not found or its provider is disabled');
+        }
+        return result;
+      } catch (err) {
+        rethrowAsGraphQLError(err);
       }
-      return result;
     },
     updateModelSortOrder: async (
       _parent: unknown,
@@ -76,7 +84,11 @@ export const modelResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return modelService.updateSortOrder(args.ids);
+      try {
+        return await modelService.updateSortOrder(args.ids);
+      } catch (err) {
+        rethrowAsGraphQLError(err);
+      }
     },
   },
   Model: {

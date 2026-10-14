@@ -7,6 +7,7 @@ export const modelTypeDefs = `#graphql
     isCustom: Boolean!
     isEnabled: Boolean!
     sortOrder: Int!
+    scope: ConfigScope!
     createdAt: String!
     updatedAt: String!
   }

@@ -1,12 +1,23 @@
-import { Provider } from '../models/provider.js';
+import { Provider, type IProvider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { encrypt, decrypt } from './crypto.js';
 import { llmApiService, ProviderType } from './llm-api.js';
 import mongoose from 'mongoose';
 
+const GLOBAL_WRITE_FORBIDDEN = '全局配置请在管理后台修改';
+
+// 查询条件：仅 user scope，兼容无 scope 字段的存量数据
+const USER_SCOPE_FILTER: mongoose.QueryFilter<IProvider> = {
+  $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+};
+
+function normalizeScope(value: unknown): 'user' | 'global' {
+  return value === 'global' ? 'global' : 'user';
+}
+
 export class ProviderService {
   async findAll() {
-    const providers = await Provider.find().sort({ createdAt: -1 }).lean();
+    const providers = await Provider.find(USER_SCOPE_FILTER).sort({ createdAt: -1 }).lean();
     return providers.map(this.mapProvider.bind(this));
   }
 
@@ -37,6 +48,7 @@ export class ProviderService {
       endpoint: input.endpoint,
       credentialType: (input.credentialType || 'api_key') as 'api_key',
       encryptedCredential: encrypted,
+      scope: 'user',
     });
 
     if (models.length > 0) {
@@ -46,6 +58,7 @@ export class ProviderService {
         isCustom: false,
         isEnabled: true,
         sortOrder: i,
+        scope: 'user',
       }));
       await Model.insertMany(modelDocs);
     }
@@ -60,8 +73,13 @@ export class ProviderService {
     credentialType: string;
     credentialValue: string;
   }) {
-    const existingProvider = await Provider.findById(id).lean() as { encryptedCredential: { iv: string; ciphertext: string; tag: string }; type: string; endpoint: string } | null;
+    const existingProvider = await Provider.findById(id).lean() as { encryptedCredential: { iv: string; ciphertext: string; tag: string }; type: string; endpoint: string; scope?: string } | null;
     if (!existingProvider) return null;
+
+    // 用户侧只允许修改自己的（user scope）配置，全局配置需在管理后台修改
+    if (normalizeScope(existingProvider.scope) !== 'user') {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
 
     const hasNewCredential = input.credentialValue.trim().length > 0;
     const encrypted = hasNewCredential
@@ -86,6 +104,7 @@ export class ProviderService {
           isCustom: false,
           isEnabled: true,
           sortOrder: i,
+          scope: 'user',
         }));
         await Model.insertMany(modelDocs);
       }
@@ -108,6 +127,12 @@ export class ProviderService {
   }
 
   async delete(id: string) {
+    const existing = await Provider.findById(id).lean() as { scope?: string } | null;
+    if (!existing) return false;
+    if (normalizeScope(existing.scope) !== 'user') {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
+
     await Model.deleteMany({ providerId: id });
     const result = await Provider.deleteOne({ _id: id });
     return result.deletedCount > 0;
@@ -116,6 +141,10 @@ export class ProviderService {
   async toggle(id: string) {
     const provider = await Provider.findById(id);
     if (!provider) return null;
+
+    if (normalizeScope((provider as { scope?: string }).scope) !== 'user') {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
 
     provider.isEnabled = !provider.isEnabled;
     await provider.save();
@@ -130,12 +159,12 @@ export class ProviderService {
 
   async batchEnable(ids: string[]) {
     const result = await Provider.updateMany(
-      { _id: { $in: ids } },
+      { _id: { $in: ids }, ...USER_SCOPE_FILTER },
       { isEnabled: true },
     );
 
     await Model.updateMany(
-      { providerId: { $in: ids } },
+      { providerId: { $in: ids }, scope: { $ne: 'global' } },
       { isEnabled: true },
     );
 
@@ -144,12 +173,12 @@ export class ProviderService {
 
   async batchDisable(ids: string[]) {
     const result = await Provider.updateMany(
-      { _id: { $in: ids } },
+      { _id: { $in: ids }, ...USER_SCOPE_FILTER },
       { isEnabled: false },
     );
 
     await Model.updateMany(
-      { providerId: { $in: ids } },
+      { providerId: { $in: ids }, scope: { $ne: 'global' } },
       { isEnabled: false },
     );
 
@@ -157,8 +186,8 @@ export class ProviderService {
   }
 
   async batchDelete(ids: string[]) {
-    await Model.deleteMany({ providerId: { $in: ids } });
-    const result = await Provider.deleteMany({ _id: { $in: ids } });
+    await Model.deleteMany({ providerId: { $in: ids }, scope: { $ne: 'global' } });
+    const result = await Provider.deleteMany({ _id: { $in: ids }, ...USER_SCOPE_FILTER });
     return { successCount: result.deletedCount };
   }
 
@@ -176,6 +205,7 @@ export class ProviderService {
       credentialType: provider.credentialType as string,
       credentialValue: masked,
       isEnabled: provider.isEnabled as boolean,
+      scope: normalizeScope(provider.scope),
       createdAt: (provider.createdAt as Date).toISOString(),
       updatedAt: (provider.updatedAt as Date).toISOString(),
     };
