@@ -7,12 +7,12 @@ type: Permanent
 
 **功能名称**: 云控制器管理后台
 **关联 PRD**: `docs/product/draft/20261014-admin-console.md`
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-14
 **作者**: Kimi
 **feat-branch**: `feat/admin-console`
 
-> 变更记录：v1.1 补充 admin-api 服务镜像 Dockerfile、admin-web nginx 容器镜像 Dockerfile 及对应的 GitHub CI 镜像构建流水线设计（见 §7 项目结构与 §9 部署方案）。
+> 变更记录：v1.1 补充 admin-api 服务镜像 Dockerfile、admin-web nginx 容器镜像 Dockerfile 及对应的 GitHub CI 镜像构建流水线设计（见 §7 项目结构与 §9 部署方案）。v1.2 admin-web 的 admin-api 接入地址改为可设置 endpoint（登录页可改 + 容器运行时注入 + 构建期默认值三级优先），线上预计域名 `https://admin.zag.fffdan.com`（见 §5.2 实现点 7 与 §9.3/§9.5）。
 
 ## 1. 概述
 
@@ -372,6 +372,16 @@ sequenceDiagram
 - **技术细节**: 见 §9.2 / §9.3，完全对齐现有 `servers/agent-api/Dockerfile` 与 `.github/workflows/build-agent-api-image.yml` 的模式
 - **风险点**: admin-web 为 SPA，nginx 需配置 history 路由 fallback（`try_files ... /index.html`）；`/graphql` 由部署侧反向代理到 admin-api，nginx 容器内不做硬编码上游
 
+#### 实现点 7: admin-api 接入地址可设置（endpoint 配置）
+
+- **描述**: admin-web 不将 admin-api 地址写死，提供可设置的 endpoint，线上预计域名为 `https://admin.zag.fffdan.com`
+- **技术细节**: 新增 `apps/admin-web/src/lib/api-base.ts`（模式参考 agent-web `lib/api-base.ts`），按优先级解析 API 地址：
+  1. **用户设置**：登录页提供「服务器地址」设置入口，填写后先 `fetch('<endpoint>/health')` 探测连通性，通过才保存到 `localStorage`（key `zag:admin-api-base`），之后所有 GraphQL 请求走该地址；设置错误时可随时改回或清除
+  2. **容器运行时配置**：nginx 容器启动时由 `/docker-entrypoint.d/` 脚本按环境变量 `ADMIN_API_URL` 生成 `config.js`（`window.__ADMIN_CONFIG__ = { apiUrl }`），无需重新构建镜像即可换地址
+  3. **构建期默认值**：`import.meta.env.VITE_ADMIN_API_URL`（本地开发由 Aspire 注入）
+  4. **兜底**：同源相对地址（空串），即线上 `https://admin.zag.fffdan.com` 由部署侧反向代理将 `/graphql` 转发至 admin-api
+- **风险点**: 跨域直连时 admin-api 的 `CORS_ORIGIN` 需包含 admin-web 来源（线上默认配置为 `https://admin.zag.fffdan.com`）；endpoint 变更后需重置 Apollo Client 链接
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -385,6 +395,7 @@ sequenceDiagram
 | 认证密钥 | 独立 `ADMIN_JWT_SECRET` | 复用 `JWT_SECRET` | 独立密钥 | 用户 token 与管理员 token 不可互认，泄露面隔离 |
 | 前端组件库 | shadcn + Tailwind（对齐 agent-web） | 引入 Ant Design | shadcn | 与现有前端同栈，降低维护成本，PRD 允许自选 |
 | admin-web 部署形态 | nginx 容器镜像 | GitHub Pages（agent-web 现状） | nginx 容器 | 后台需与 admin-api 同栈内网部署，且 PRD 要求独立后台服务；CI 构建镜像推送 registry |
+| admin-api 接入地址 | 可设置 endpoint（登录页设置 + 运行时 config.js + 构建期默认 + 同源兜底） | 构建期 VITE_ADMIN_API_URL 写死 | 可设置 endpoint | 打回修订要求；线上域名变更或迁移时无需重新构建镜像，与 agent-web `lib/api-base.ts` 模式一致 |
 | Dockerfile 编辑 | 等宽字体 textarea | 引入 Monaco Editor | textarea | 本期仅 CRUD 纯文本，不引入重型编辑器依赖 |
 
 ### 6.2 依赖与约束
@@ -453,7 +464,9 @@ apps/admin-web/
 │   │   └── ui/                     # shadcn 组件
 │   ├── graphql/                # queries.ts / mutations.ts
 │   ├── stores/auth.ts            # 管理员登录态（token + mustChangePassword）
-│   └── lib/apollo.ts
+│   └── lib/
+│       ├── apollo.ts
+│       └── api-base.ts           # 新增：admin-api endpoint 解析（用户设置 > 运行时 config.js > 构建期默认 > 同源兜底）
 └── index.html
 
 # 修改
@@ -567,7 +580,11 @@ server {
 }
 ```
 
-说明：`VITE_ADMIN_API_URL` 为构建期变量，通过 CI `build-args` 注入；`/graphql` 等 API 流量由部署侧（docker-compose / 网关）反向代理至 admin-api，nginx 配置不含硬编码上游。
+endpoint 运行时注入：利用 nginx 官方镜像的 `/docker-entrypoint.d/` 机制，新增启动脚本（如 `40-generate-config-js.sh`），容器启动时按环境变量 `ADMIN_API_URL` 生成 `/usr/share/nginx/html/config.js`（`window.__ADMIN_CONFIG__ = { apiUrl: "<ADMIN_API_URL>" }`），`index.html` 中 `<script src="/config.js"></script>` 引入；未设置 `ADMIN_API_URL` 时生成空配置，前端回落到构建期默认值或同源地址。镜像一次构建、多环境复用，无需为换域名重新构建。
+
+线上部署：admin-web 站点域名为 `https://admin.zag.fffdan.com`，默认按同源兜底工作——部署侧（网关/ingress）将 `https://admin.zag.fffdan.com/graphql` 反向代理至 admin-api；如需指向其他 admin-api 实例，通过容器环境变量 `ADMIN_API_URL` 或登录页「服务器地址」设置覆盖。跨域直连场景下 admin-api 的 `CORS_ORIGIN` 配置为 `https://admin.zag.fffdan.com`。
+
+说明：`VITE_ADMIN_API_URL` 为构建期变量，通过 CI `build-args` 注入，仅作为本地开发与兜底默认值；`/graphql` 等 API 流量由部署侧（docker-compose / 网关）反向代理至 admin-api，nginx 配置不含硬编码上游。
 
 ### 9.4 GitHub CI 镜像构建流水线
 
@@ -637,9 +654,10 @@ jobs:
 | `MONGODB_URI` | 共享 MongoDB 连接串 | 是 |
 | `ADMIN_JWT_SECRET` | 管理员 JWT 签名密钥 | 是 |
 | `CREDENTIAL_ENCRYPTION_KEY` | 供应商凭据 AES-256 密钥（32 字节 hex） | 是 |
-| `CORS_ORIGIN` | admin-web 来源 | 是 |
-| `VITE_ADMIN_API_URL` | admin-web 指向的 admin-api 地址（构建期注入） | 是（前端） |
-| `ADMIN_API_URL` | GitHub Actions 变量（`vars`），CI 构建 admin-web 镜像时注入为 `VITE_ADMIN_API_URL` | 是（CI） |
+| `CORS_ORIGIN` | admin-web 来源，线上为 `https://admin.zag.fffdan.com` | 是 |
+| `ADMIN_API_URL` | admin-web 容器运行时环境变量，启动脚本据此生成 `config.js` 注入 endpoint；不设置则回落构建期默认/同源 | 否 |
+| `VITE_ADMIN_API_URL` | admin-web 构建期默认 admin-api 地址（本地开发由 Aspire 注入） | 否（前端） |
+| `ADMIN_API_URL`（CI vars） | GitHub Actions 变量（`vars`），CI 构建 admin-web 镜像时注入为 `VITE_ADMIN_API_URL` 构建期默认值 | 否（CI） |
 
 ## 10. 验收标准
 
@@ -647,6 +665,7 @@ jobs:
 - [ ] Contract（admin-auth / admin-llm / admin-base-image）评审通过
 - [ ] 代码实现完成（admin-api + admin-web + agent-api scope 改造 + Aspire 编排）
 - [ ] admin-api 与 admin-web Dockerfile 可本地构建出可用镜像（admin-web 为 nginx 容器，SPA 路由刷新不 404）
+- [ ] admin-web 的 admin-api 接入地址可设置：登录页可修改并持久化、容器 `ADMIN_API_URL` 运行时注入生效、线上 `https://admin.zag.fffdan.com` 同源兜底可用
 - [ ] GitHub CI 流水线 build-admin-api-image / build-admin-web-image 在 release 分支推送后成功构建并推送镜像
 - [ ] 单元测试覆盖达标（>= 80%）
 - [ ] API 测试通过（含 agent-api 回归）
