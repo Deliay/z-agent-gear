@@ -12,9 +12,13 @@ z-agent-gear/
 ├── servers/
 │   ├── admin-api/           # Node.js + Express + GraphQL + Mongoose 管理后台后端
 │   ├── agent-api/           # Node.js + Express + GraphQL + Mongoose 后端
+│   ├── cloud-controller/    # Node.js + Express + Socket.IO + K8s 云端工作容器控制器
 │   └── controller-api/      # Node.js + Express + Socket.IO 后端
 ├── packages/
 │   └── agent-controller/    # Node.js CLI 客户端
+├── deploy/                  # 部署产物
+│   ├── images/worker/       # 默认工作容器镜像（Dockerfile / entrypoint / BUILD.md）
+│   └── k8s/                 # cloud-controller K8s 部署 manifest
 ├── aspire/
 │   ├── manifest/            # Docker Compose 部署产物
 │   └── AgentGear.AppHost/   # .NET Aspire 服务编排
@@ -46,7 +50,7 @@ z-agent-gear/
 
 ```bash
 # 方式一：Aspire（默认）
-aspire start    # 启动全部服务（agent-api + admin-api + controller-api + agent-web + admin-web + MongoDB + Redis）
+aspire start    # 启动全部服务（agent-api + admin-api + controller-api + cloud-controller + agent-web + admin-web + MongoDB + Redis）
 
 # 方式二：Docker Compose
 aspire publish -o aspire/manifest    # 生成 docker-compose.yaml
@@ -62,6 +66,7 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 cd servers/agent-api && npm install
 cd servers/admin-api && npm install
 cd servers/controller-api && npm install
+cd servers/cloud-controller && npm install
 cd apps/agent-web && npm install
 cd apps/admin-web && npm install
 
@@ -69,6 +74,7 @@ cd apps/admin-web && npm install
 cd servers/agent-api && npm run dev
 cd servers/admin-api && npm run dev
 cd servers/controller-api && npm run dev
+cd servers/cloud-controller && npm run dev
 cd apps/agent-web && npm run dev
 cd apps/admin-web && npm run dev
 ```
