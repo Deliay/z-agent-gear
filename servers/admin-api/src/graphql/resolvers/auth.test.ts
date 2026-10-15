@@ -13,7 +13,7 @@ vi.mock('../../models/admin-user.js', () => ({
 
 import { login, changePassword, signToken } from '../../services/auth.js';
 import { AdminUser } from '../../models/admin-user.js';
-import { loginRateLimiter } from '../../services/login-rate-limiter.js';
+import { loginRateLimiter, usernameLoginRateLimiter } from '../../services/login-rate-limiter.js';
 import type { AdminAuthContext } from './auth.js';
 
 function adminDoc(overrides: Record<string, unknown> = {}) {
@@ -37,6 +37,7 @@ describe('authResolvers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loginRateLimiter.reset();
+    usernameLoginRateLimiter.reset();
   });
 
   describe('adminMe', () => {
@@ -116,6 +117,45 @@ describe('authResolvers', () => {
       const other: AdminAuthContext = { currentAdmin: null, clientIp: '203.0.113.7' };
       await expect(
         Mutation.adminLogin({}, { username: 'other', password: 'whatever' }, other),
+      ).resolves.toMatchObject({ token: 'signed-token' });
+    });
+
+    it('问题 49: a per-username global cap trips even when the attacker rotates client IPs', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+
+      for (let i = 0; i < 30; i += 1) {
+        const context: AdminAuthContext = { currentAdmin: null, clientIp: `198.51.100.${i}` };
+        await Mutation.adminLogin({}, { username: 'admin', password: 'bad' }, context).catch(() => {});
+      }
+
+      let captured: any;
+      try {
+        await Mutation.adminLogin(
+          {},
+          { username: 'admin', password: 'bad' },
+          { currentAdmin: null, clientIp: '198.51.100.250' },
+        );
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured?.extensions?.code).toBe('TOO_MANY_REQUESTS');
+    });
+
+    it('问题 49: a missing clientIp does not lock a shared `unknown` bucket for the real admin', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+
+      // 无 clientIp：跳过按 IP 限速，仅按 username 全局（阈值 30），不应在第 6 次就锁定
+      for (let i = 0; i < 6; i += 1) {
+        await Mutation.adminLogin(
+          {},
+          { username: 'admin', password: 'bad' },
+          { currentAdmin: null },
+        ).catch(() => {});
+      }
+
+      (login as any).mockResolvedValue(adminDoc());
+      await expect(
+        Mutation.adminLogin({}, { username: 'admin', password: 'good' }, { currentAdmin: null }),
       ).resolves.toMatchObject({ token: 'signed-token' });
     });
   });

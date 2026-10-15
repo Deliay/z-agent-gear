@@ -13,9 +13,8 @@ permissions:
   contents: read
 
 env:
-  # 统一镜像命名空间：必须与 deploy/k8s/cloud-controller.yaml 引用的仓库路径一致，
-  # 避免 CI 推送与部署引用两套路径需要人工搬运。
-  IMAGE_NAMESPACE: zag
+  # 统一镜像命名空间：全部服务使用同一仓库路径，且与 deploy/k8s/cloud-controller.yaml 引用一致。
+  IMAGE_NAMESPACE: zero-tools
 
 jobs:
   build:
@@ -69,7 +68,7 @@ jobs:
           done
           docker run -d --name smoke-cc --network host \
             -e MONGODB_URI=mongodb://localhost:27017/agent-gear \
-            -e INTERNAL_API_TOKEN=smoke-test-internal-token \
+            -e INTERNAL_API_TOKEN=smoke-test-internal-token-0123456789 \
             -e K8S_NAMESPACE=zag-cloud \
             -e WORKER_IMAGE=example.invalid/zag/worker:smoke \
             -e PUBLIC_WS_ENDPOINT=localhost:8003 \

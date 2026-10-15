@@ -10,6 +10,7 @@ interface ProviderItemProps {
   onEdit: (provider: ProviderInputData & { id: string }) => void
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  togglePending?: boolean
 }
 
 export default function ProviderItem({
@@ -19,6 +20,7 @@ export default function ProviderItem({
   onEdit,
   onToggle,
   onDelete,
+  togglePending = false,
 }: ProviderItemProps) {
   return (
     <div
@@ -48,6 +50,7 @@ export default function ProviderItem({
       </div>
       <ProviderActionMenu
         isEnabled={provider.isEnabled}
+        togglePending={togglePending}
         onEdit={() => onEdit(provider)}
         onToggle={() => onToggle(provider.id)}
         onDelete={() => onDelete(provider.id)}

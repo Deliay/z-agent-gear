@@ -15,9 +15,9 @@ const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graph
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 export const ADMIN_TEST_PASSWORD = 'AdminTestPass123';
-// 管理员初始密码不再硬编码（问题 4）：优先使用部署注入的 ADMIN_INITIAL_PASSWORD（种子口令来源），
-// 兼容仍种入旧默认口令的环境。
-const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || 'admin1234567';
+// 管理员初始密码不再硬编码（问题 4 / 问题 47）：只能来自部署注入的 ADMIN_INITIAL_PASSWORD。
+// 不再回落任何公开默认口令（`admin1234567` / `dev-admin-init-password` 均已被 admin-api 拒绝）。
+const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || '';
 
 export interface GqlResult<T = Record<string, unknown>> {
   data?: T;
@@ -84,8 +84,8 @@ export async function ensureAdminLogin(): Promise<string> {
     // 1) 先按归一化密码登录
     let payload = await tryLogin(ADMIN_TEST_PASSWORD);
 
-    // 2) 归一化密码不通，尝试默认密码
-    if (!payload) {
+    // 2) 归一化密码不通，尝试部署注入的初始密码（未注入时跳过，避免无意义失败计入限速）
+    if (!payload && DEFAULT_ADMIN_PASSWORD) {
       payload = await tryLogin(DEFAULT_ADMIN_PASSWORD);
     }
 

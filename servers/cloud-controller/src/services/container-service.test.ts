@@ -250,6 +250,84 @@ describe('ContainerService', () => {
     expect(list.find((c) => c.id === created.id)?.status).toBe('creating');
   });
 
+  it('T-S12: reclaimResidualJob migrates a stuck destroying record to exited', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitedAt).toBeInstanceOf(Date);
+    expect(stored?.tokenHash).toBeNull();
+  });
+
+  it('T-S13: reclaimResidualJob reclaims a residual Job left on an exited record', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await service.markExited(created.id, '容器正常退出');
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S14: reclaimResidualJob migrates destroying→exited even when the Job is already gone', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    await client.deleteJob(created.name);
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(false);
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S15: destroy CAS miss on the final exited write returns the current state without overwriting', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle');
+    await service.markOnline(created.id);
+
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'exited' && options?.fromStatuses?.includes('destroying')) {
+        // 模拟并发已将记录转移：CAS 未命中，返回 null 且不改写
+        return null;
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('destroying');
+    expect((await repo.findById(created.id))?.status).toBe('destroying');
+  });
+
+  it('T-S16: destroy on a stuck destroying record migrates it to exited (问题 50)', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitedAt).toBeInstanceOf(Date);
+  });
+
   it('rejects non-idle purposes with a clear message', async () => {
     const { service } = setup();
     await expect(service.start('workflow')).rejects.toBeInstanceOf(UnsupportedPurposeError);

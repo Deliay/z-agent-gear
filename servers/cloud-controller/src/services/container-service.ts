@@ -119,22 +119,27 @@ export class ContainerService {
     return this.repo.findById(containerId);
   }
 
-  /** 若 Job 仍存在则删除，返回是否真正执行了删除。 */
-  private async deleteJobIfExists(name: string): Promise<boolean> {
+  /**
+   * 若 Job 仍存在则删除；区分「Job 不存在（absent）」与「删除失败（failed）」：
+   * 卡死的 `destroying` 记录即便 Job 已不存在也需迁移 `exited`，故必须能区分二者。
+   */
+  private async deleteJobIfExistsDetailed(
+    name: string,
+  ): Promise<'deleted' | 'absent' | 'failed'> {
     let exists: boolean;
     try {
       exists = (await this.jobManager.getJob(name)) !== null;
     } catch (err) {
       this.logger.error?.(`Failed to check job ${name}`, err);
-      return false;
+      return 'failed';
     }
-    if (!exists) return false;
+    if (!exists) return 'absent';
     try {
       await this.jobManager.deleteJob(name);
-      return true;
+      return 'deleted';
     } catch (err) {
       this.logger.error?.(`Failed to delete residual job ${name}`, err);
-      return false;
+      return 'failed';
     }
   }
 
@@ -272,7 +277,33 @@ export class ContainerService {
 
     // 终态记录：不跳过清理，核实并删除残留 Job（幂等语义 = Job 不存在时不再重复删除）。
     if (isTerminalStatus(container.status)) {
-      const deletedJob = await this.deleteJobIfExists(container.name);
+      const deletion = await this.deleteJobIfExistsDetailed(container.name);
+      // 卡死的 destroying（销毁被 SIGTERM 打断）：Job 删除失败则保留待巡检重试；
+      // 否则迁移 exited，兑现契约 `destroying → exited`（问题 50）。
+      if (container.status === 'destroying') {
+        if (deletion === 'failed') {
+          return { success: true, id: containerId, status: 'destroying', deletedJob: false };
+        }
+        const exited = await this.repo.update(
+          containerId,
+          {
+            status: 'exited',
+            exitedAt: new Date(),
+            exitReason:
+              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+            tokenHash: null,
+          },
+          { fromStatuses: ['destroying'] },
+        );
+        const current = exited ?? (await this.repo.findById(containerId));
+        return {
+          success: true,
+          id: containerId,
+          status: current?.status ?? 'exited',
+          deletedJob: deletion === 'deleted',
+        };
+      }
+      const deletedJob = deletion === 'deleted';
       if (deletedJob) {
         await this.repo.update(containerId, { tokenHash: null });
       }
@@ -306,30 +337,74 @@ export class ContainerService {
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
     const exitReason = deletedJob ? '强制销毁' : '强制销毁（Job 删除失败，需人工清理）';
-    await this.repo.update(containerId, {
-      status: 'exited',
-      exitedAt: new Date(),
-      exitReason,
-      tokenHash: null,
-    });
+    // 终态写回同样带 CAS（问题 50）：仅从 destroying 迁移，避免扩副本/并发下用陈旧状态覆写。
+    const exited = await this.repo.update(
+      containerId,
+      {
+        status: 'exited',
+        exitedAt: new Date(),
+        exitReason,
+        tokenHash: null,
+      },
+      { fromStatuses: ['destroying'] },
+    );
+    if (!exited) {
+      // CAS 未命中（已被并发转移）：回读当前状态返回，绝不用陈旧值覆写。
+      const current = await this.repo.findById(containerId);
+      return {
+        success: true,
+        id: containerId,
+        status: current?.status ?? 'exited',
+        deletedJob,
+      };
+    }
 
     return { success: true, id: containerId, status: 'exited', deletedJob };
   }
 
   /**
-   * 终态回收兜底：对 `failed` / `destroying` 记录，若仍存在关联 Job 则删除。
-   * 供周期性巡检与 reconcile 调用，处理销毁流程被 SIGTERM 打断留下的卡死记录。
+   * 终态回收兜底：对 `failed` / `exited` / `destroying` 记录，若仍存在关联 Job 则删除
+   * （问题 50：`exited` 记录若 Job 删除曾失败也需重试回收，不再只扫 `failed`/`destroying`）。
+   * 卡死的 `destroying` 记录（销毁流程被 SIGTERM 打断）在 Job 回收后按契约迁移 `exited`
+   * （`destroying → exited`），避免永久停在 destroying。
+   * 供周期性巡检与 reconcile 调用。
    */
   async reclaimResidualJob(containerId: string): Promise<boolean> {
     return this.mutex.runExclusive(containerId, async () => {
       const record = await this.repo.findById(containerId);
       if (!record) return false;
-      if (record.status !== 'failed' && record.status !== 'destroying') return false;
-      const deleted = await this.deleteJobIfExists(record.name);
-      if (deleted) {
+      if (
+        record.status !== 'failed' &&
+        record.status !== 'destroying' &&
+        record.status !== 'exited'
+      ) {
+        return false;
+      }
+
+      const deletion = await this.deleteJobIfExistsDetailed(record.name);
+      if (deletion === 'failed') {
+        // Job 确实存在但删除失败：保留当前状态，等待下一次巡检重试（不谎报已回收）。
+        return false;
+      }
+
+      if (record.status === 'destroying') {
+        // 契约要求 destroying → exited：无论 Job 本次被删除还是已不存在，都迁移终态。
+        await this.repo.update(
+          containerId,
+          {
+            status: 'exited',
+            exitedAt: new Date(),
+            exitReason:
+              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+            tokenHash: null,
+          },
+          { fromStatuses: ['destroying'] },
+        );
+      } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });
       }
-      return deleted;
+
+      return deletion === 'deleted';
     });
   }
 

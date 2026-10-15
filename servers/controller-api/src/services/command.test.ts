@@ -6,6 +6,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 vi.mock('../models/controller.js', () => ({
   Controller: {
+    findOne: vi.fn(),
     deleteOne: vi.fn(),
   },
 }));
@@ -89,6 +90,7 @@ describe('CommandService', () => {
     mockIO.sockets.sockets.set('socket-123', mockSocket as never);
 
     vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
+    vi.mocked(Controller.findOne).mockResolvedValue({ status: 'online' } as never);
     vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
     vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();
@@ -160,6 +162,7 @@ describe('CommandService', () => {
 
     const mockIO = createMockIO();
     vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
+    vi.mocked(Controller.findOne).mockResolvedValue({ status: 'online' } as never);
     vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
     vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
     vi.mocked(sessionService.cleanupKey).mockResolvedValue();

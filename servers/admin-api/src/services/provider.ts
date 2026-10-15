@@ -213,28 +213,66 @@ export class ProviderService {
       );
       if (!provider) return null;
 
-      // 再级联重同步模型：仅替换 API 同步模型（isCustom=false），保留用户自定义模型（问题 5）
+      // 再级联重同步模型（问题 5 / 问题 48）：
+      // 1) 读取保留的自定义模型名；2) 跳过与自定义模型同名的 fetched 名（不覆盖自定义模型）；
+      // 3) 按 (providerId, name) upsert 同步模型（替代 delete+insert，避免唯一索引 E11000）；
+      // 4) 仅删除不在期望集合内的陈旧同步模型。
       if (needsResync) {
-        const syncedFilter = { providerId: id, scope: GLOBAL_SCOPE, isCustom: false } as const;
-        if (session) {
-          await Model.deleteMany(syncedFilter, { session });
-        } else {
-          await Model.deleteMany(syncedFilter);
-        }
-        if (models.length > 0) {
-          const modelDocs = models.map((name, i) => ({
-            providerId: new mongoose.Types.ObjectId(id),
-            name,
-            isCustom: false,
-            isEnabled: true,
-            sortOrder: i,
-            scope: GLOBAL_SCOPE,
+        const customDocs = session
+          ? await Model.find(
+            { providerId: id, scope: GLOBAL_SCOPE, isCustom: true },
+            'name',
+            { session },
+          ).lean()
+          : await Model.find(
+            { providerId: id, scope: GLOBAL_SCOPE, isCustom: true },
+            'name',
+          ).lean();
+        const customNames = new Set(customDocs.map((doc) => String((doc as { name?: unknown }).name)));
+
+        // 同名 fetched 名去重（保留首次出现的排序位置），并剔除与自定义模型冲突的名字
+        const desired: Array<{ name: string; sortOrder: number }> = [];
+        const seen = new Set<string>();
+        models.forEach((name) => {
+          if (seen.has(name) || customNames.has(name)) return;
+          seen.add(name);
+          desired.push({ name, sortOrder: desired.length });
+        });
+
+        if (desired.length > 0) {
+          const providerObjectId = new mongoose.Types.ObjectId(id);
+          const ops = desired.map(({ name, sortOrder }) => ({
+            updateOne: {
+              filter: { providerId: providerObjectId, name },
+              update: {
+                $set: {
+                  isCustom: false,
+                  scope: GLOBAL_SCOPE,
+                  sortOrder,
+                  isEnabled: true,
+                },
+              },
+              upsert: true,
+            },
           }));
           if (session) {
-            await Model.insertMany(modelDocs, { session });
+            await Model.bulkWrite(ops, { session });
           } else {
-            await Model.insertMany(modelDocs);
+            await Model.bulkWrite(ops);
           }
+        }
+
+        const desiredNames = desired.map((m) => m.name);
+        const staleFilter = {
+          providerId: id,
+          scope: GLOBAL_SCOPE,
+          isCustom: false,
+          name: { $nin: desiredNames },
+        } as const;
+        if (session) {
+          await Model.deleteMany(staleFilter, { session });
+        } else {
+          await Model.deleteMany(staleFilter);
         }
       }
 

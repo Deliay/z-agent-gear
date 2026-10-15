@@ -33,7 +33,7 @@ import CustomModelDialog from './CustomModelDialog'
 
 export default function ModelSection() {
   const { data, loading, error, refetch } = useQuery<GetAdminModelsQuery>(ADMIN_MODELS)
-  const { data: providersData } = useQuery<GetAdminProvidersQuery>(ADMIN_PROVIDERS)
+  const { data: providersData, error: providersError } = useQuery<GetAdminProvidersQuery>(ADMIN_PROVIDERS)
   const [toggleModel] = useMutation(TOGGLE_GLOBAL_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_GLOBAL_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_GLOBAL_CUSTOM_MODEL)
@@ -42,8 +42,25 @@ export default function ModelSection() {
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AdminModelData | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  // 单个 toggle 的在途集合：双击两次 toggle 会相互抵消，须忽略重复点击
+  const pendingToggleRef = useRef<Set<string>>(new Set())
+  const [pendingToggleIds, setPendingToggleIds] = useState<Set<string>>(new Set())
 
   const models = useMemo(() => data?.adminModels ?? [], [data])
+
+  // 初始加载失败走整页错误态；已有数据后的刷新失败不会替换内容，改用 toast 显式提示
+  useEffect(() => {
+    if (error && data) {
+      toast.error(error.message || '数据刷新失败')
+    }
+  }, [error, data])
+
+  // 供应商列表仅用于自定义模型对话框，失败不影响模型列表，但要显式暴露
+  useEffect(() => {
+    if (providersError) {
+      toast.error(providersError.message || '供应商列表加载失败')
+    }
+  }, [providersError])
 
   // 拖拽结束可能晚于一次 refetch 到达，用 ref 持有最新列表，避免发全量 ids 时用到旧闭包数据
   const modelsRef = useRef(models)
@@ -55,17 +72,27 @@ export default function ModelSection() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
-  const handleToggle = async (id: string) => {
-    try {
-      await toggleModel({
-        variables: { id },
-        refetchQueries: [ADMIN_MODELS],
-      })
-      toast.success('模型状态已更新')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '切换失败，请重试')
-    }
-  }
+  const handleToggle = useCallback(
+    async (id: string) => {
+      // 同一模型 toggle 在途时忽略重复点击，避免两次相反请求相互抵消
+      if (pendingToggleRef.current.has(id)) return
+      pendingToggleRef.current.add(id)
+      setPendingToggleIds(new Set(pendingToggleRef.current))
+      try {
+        await toggleModel({
+          variables: { id },
+          refetchQueries: [ADMIN_MODELS],
+        })
+        toast.success('模型状态已更新')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '切换失败，请重试')
+      } finally {
+        pendingToggleRef.current.delete(id)
+        setPendingToggleIds(new Set(pendingToggleRef.current))
+      }
+    },
+    [toggleModel],
+  )
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return
@@ -153,6 +180,7 @@ export default function ModelSection() {
                   key={model.id}
                   model={model}
                   onToggle={handleToggle}
+                  togglePending={pendingToggleIds.has(model.id)}
                   onDelete={(id) => {
                     const target = models.find((m) => m.id === id)
                     if (target) setDeleteTarget(target)

@@ -13,6 +13,9 @@ export const config = {
   // 生产环境不默认放开 `*`：未显式配置 CORS_ORIGIN 时回落到空串，index.ts 以 origin:false 只允许同源
   corsOrigin: process.env.CORS_ORIGIN || (nodeEnv === 'production' ? '' : '*'),
   nodeEnv,
+  // 是否信任上游反向代理（问题 49）：默认 false，登录限速取底层 socket 对端地址；
+  // 仅在显式开启时信任 `x-forwarded-for`/`x-real-ip`（取受信代理追加的末跳），避免伪造头绕过限速。
+  trustProxy: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
   // 首次种子的管理员初始密码（可选）。未配置时首次种子随机生成并一次性输出到启动日志。
   // 配置了弱口令/已知默认值会在 assertRuntimeConfig 中 fail-fast（CWE-798）。
   initialAdminPassword: process.env.ADMIN_INITIAL_PASSWORD || '',
@@ -36,6 +39,8 @@ export const ADMIN_USERNAME = 'admin';
  */
 const WEAK_ADMIN_PASSWORDS = new Set([
   'admin1234567',
+  // 问题 47：AppHost 曾以字面量默认值公开注入的 dev 初始口令，绝不允许再作为种子口令
+  'dev-admin-init-password',
   'admin123456',
   'admin12345',
   'admin1234',
@@ -60,6 +65,24 @@ const WEAK_ADMIN_PASSWORDS = new Set([
 ]);
 
 /**
+ * 已知公开默认 / 弱 `ADMIN_JWT_SECRET`（问题 47）：命中即拒绝启动。
+ * 历史编排层（AppHost 参数默认值）以字面量公开注入这些值，长度校验拦不住「足够长但公开」的默认值，
+ * 必须显式 deny-list。
+ */
+const WEAK_ADMIN_JWT_SECRETS = new Set([
+  'dev-admin-secret-change-in-production',
+  'dev-secret-change-in-production',
+  'dev-admin-secret',
+  'admin-secret-change-in-production',
+  'admin-secret',
+  'changeme',
+  'change-me-in-production',
+  'secret',
+  'jwt-secret',
+  'your-secret-key',
+]);
+
+/**
  * 管理员密码强度判定（用于初始密码 fail-fast 与改密策略）：
  * 长度不足、等于用户名、或命中已知弱口令集合均视为弱密码。
  */
@@ -73,13 +96,18 @@ export function isWeakAdminPassword(password: string): boolean {
 
 /**
  * 启动期配置校验（fail-fast，不静默降级）：
- * - ADMIN_JWT_SECRET 必填
+ * - ADMIN_JWT_SECRET 必填且不得为已知公开默认值（问题 47）
  * - CREDENTIAL_ENCRYPTION_KEY 必填且为 64 位 hex（32 字节 AES-256 密钥）
  * - ADMIN_INITIAL_PASSWORD 若显式配置，则必须为非弱口令（拒绝公开默认值与过短口令）
  */
 export function assertRuntimeConfig(): void {
   if (!config.adminJwtSecret) {
     throw new Error('ADMIN_JWT_SECRET is not configured');
+  }
+  if (WEAK_ADMIN_JWT_SECRETS.has(config.adminJwtSecret.trim().toLowerCase())) {
+    throw new Error(
+      'ADMIN_JWT_SECRET is a known default/weak secret; generate a strong random value (CWE-798)',
+    );
   }
   if (!HEX_64.test(config.credentialEncryptionKey)) {
     throw new Error('CREDENTIAL_ENCRYPTION_KEY must be a 64-character hex string (32 bytes)');

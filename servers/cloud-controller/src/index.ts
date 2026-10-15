@@ -12,7 +12,7 @@ import { K8sJobManager } from './services/k8s-job-manager.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
-import { registerWorkerGateway } from './services/socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
 
@@ -38,6 +38,9 @@ export function createCloudControllerApp(): CloudControllerApp {
 
   const httpServer = createServer(app);
   const io = new SocketIOServer(httpServer, {
+    // 显式声明 engine path：`/worker` 是 namespace 而非 URL 路径，握手实际落在 `/socket.io/`。
+    // Ingress/反向代理必须放行 `ENGINE_PATH`（问题 46）。
+    path: ENGINE_PATH,
     cors: { origin: '*' },
     transports: ['websocket'],
   });

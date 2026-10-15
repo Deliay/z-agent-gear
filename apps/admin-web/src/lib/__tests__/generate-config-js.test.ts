@@ -58,4 +58,16 @@ describe.skipIf(process.platform === 'win32')('40-generate-config-js.sh', () => 
     expect(runScript('https://evil.example.com\\natexit').status).not.toBe(0);
     expect(runScript('https://evil.example.com extra').status).not.toBe(0);
   });
+
+  it('rejects a value containing a script-closing / HTML-tag sequence', () => {
+    const closing = runScript('https://evil.example.com</script><script>alert(1)</script>');
+    expect(closing.status).not.toBe(0);
+    expect(closing.content).toBe('');
+
+    const comment = runScript('https://evil.example.com<!--x-->');
+    expect(comment.status).not.toBe(0);
+
+    const tag = runScript('https://evil.example.com"><img src=x>');
+    expect(tag.status).not.toBe(0);
+  });
 });

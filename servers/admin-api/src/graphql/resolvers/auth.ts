@@ -1,7 +1,11 @@
 import { GraphQLError } from 'graphql';
 import { AdminUser } from '../../models/admin-user.js';
 import { login, changePassword, signToken } from '../../services/auth.js';
-import { loginRateLimiter, LoginRateLimitError } from '../../services/login-rate-limiter.js';
+import {
+  loginRateLimiter,
+  usernameLoginRateLimiter,
+  LoginRateLimitError,
+} from '../../services/login-rate-limiter.js';
 
 export interface AdminAuthContext {
   currentAdmin: {
@@ -9,7 +13,7 @@ export interface AdminAuthContext {
     username: string;
     mustChangePassword: boolean;
   } | null;
-  /** 客户端 IP（经 x-forwarded-for / x-real-ip 提取）；用于登录失败限速 key。 */
+  /** 客户端 IP（默认取底层 socket 对端地址，TRUST_PROXY 时取受信代理末跳）；用于登录失败限速 key。 */
   clientIp?: string;
 }
 
@@ -49,10 +53,15 @@ export const authResolvers = {
       args: { username: string; password: string },
       context?: AdminAuthContext,
     ) => {
-      // 按 IP + 用户名限速，降低在线暴力破解风险（问题 7）
-      const rateLimitKey = `${context?.clientIp ?? 'unknown'}:${args.username}`;
+      // 问题 49：双重限速——按 `ip:username`（阈值低）+ 按 `username` 全局（阈值高，兜底换 IP 绕过）。
+      // clientIp 为空（无法确定对端）时跳过按 IP 限速，绝不使用共享 `unknown` 桶造成锁定 DoS。
+      const username = args.username;
+      const ip = context?.clientIp?.trim();
+      const ipKey = ip ? `${ip}:${username}` : null;
+      const usernameKey = `username:${username}`;
       try {
-        loginRateLimiter.assertAllowed(rateLimitKey);
+        if (ipKey) loginRateLimiter.assertAllowed(ipKey);
+        usernameLoginRateLimiter.assertAllowed(usernameKey);
       } catch (err) {
         if (err instanceof LoginRateLimitError) {
           throw new GraphQLError(err.message, { extensions: { code: err.code } });
@@ -61,13 +70,15 @@ export const authResolvers = {
       }
 
       try {
-        const admin = await login(args.username, args.password);
-        loginRateLimiter.recordSuccess(rateLimitKey);
+        const admin = await login(username, args.password);
+        if (ipKey) loginRateLimiter.recordSuccess(ipKey);
+        usernameLoginRateLimiter.recordSuccess(usernameKey);
         const record = admin as unknown as AdminRecord;
         const token = signToken(admin._id.toString(), record.passwordChangedAt ?? null);
         return { token, admin: mapAdmin(record) };
       } catch (err) {
-        loginRateLimiter.recordFailure(rateLimitKey);
+        if (ipKey) loginRateLimiter.recordFailure(ipKey);
+        usernameLoginRateLimiter.recordFailure(usernameKey);
         throw new GraphQLError((err as Error).message);
       }
     },

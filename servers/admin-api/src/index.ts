@@ -7,6 +7,7 @@ import { config, assertRuntimeConfig } from './config/index.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateAdmin } from './middleware/auth.js';
+import { clientIpFrom } from './middleware/client-ip.js';
 import { seedAdmin } from './services/auth.js';
 
 const app = express();
@@ -17,20 +18,12 @@ app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
-/** 提取客户端 IP 供登录限速使用（优先反代头，其次 x-real-ip）。 */
-function clientIpFrom(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) {
-    return forwarded.split(',')[0].trim() || 'unknown';
-  }
-  return request.headers.get('x-real-ip') || 'unknown';
-}
-
 const yoga = createYoga({
   schema,
-  context: async ({ request }) => ({
-    currentAdmin: await authenticateAdmin(request),
-    clientIp: clientIpFrom(request),
+  context: async (ctx) => ({
+    currentAdmin: await authenticateAdmin(ctx.request),
+    // 问题 49：默认取底层 socket 对端地址，仅 TRUST_PROXY 开启时才信任转发头（末跳）
+    clientIp: clientIpFrom(ctx.request, (ctx as { req?: unknown }).req),
   }),
   // 生产环境关闭 GraphiQL 交互式浏览器（问题 26）
   graphiql: config.nodeEnv !== 'production',

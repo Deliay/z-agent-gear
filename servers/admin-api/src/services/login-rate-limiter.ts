@@ -19,6 +19,11 @@ export interface LoginRateLimiterOptions {
   lockoutMs?: number;
   /** 可注入时钟（单测用） */
   now?: () => number;
+  /**
+   * 内存中保留的最大 entry 数（问题 49）。攻击者可轮换用户名制造大量 key，
+   * 超过上限时按最旧插入顺序驱逐一个，保证 Map 不无界增长。
+   */
+  maxEntries?: number;
 }
 
 interface Entry {
@@ -29,8 +34,11 @@ interface Entry {
 
 /**
  * 登录失败限速器（内存实现，问题 7）。
- * 以 `ip:username` 为 key：窗口内失败达阈值即锁定一段时间，成功登录重置计数。
- * 纯内存、无外部依赖，适合管理后台单实例部署；多实例需替换为共享存储。
+ * 以调用方给定的 key（如 `ip:username` 或 `username`）为维度：窗口内失败达阈值即锁定一段时间，
+ * 成功登录重置计数。纯内存、无外部依赖，适合管理后台单实例部署；多实例需替换为共享存储。
+ *
+ * 问题 49 加固：每次记录失败前清理已过期 entry，并设 `maxEntries` 上限兜底驱逐，
+ * 避免伪造/轮换 key 导致 Map 无界增长。
  */
 export class LoginRateLimiter {
   private readonly entries = new Map<string, Entry>();
@@ -38,12 +46,19 @@ export class LoginRateLimiter {
   private readonly windowMs: number;
   private readonly lockoutMs: number;
   private readonly now: () => number;
+  private readonly maxEntries: number;
 
   constructor(options: LoginRateLimiterOptions = {}) {
     this.maxAttempts = options.maxAttempts ?? 5;
     this.windowMs = options.windowMs ?? 15 * 60 * 1000;
     this.lockoutMs = options.lockoutMs ?? 15 * 60 * 1000;
     this.now = options.now ?? Date.now;
+    this.maxEntries = options.maxEntries ?? 10_000;
+  }
+
+  /** 当前保留的 entry 数（单测断言 Map 有界用）。 */
+  get size(): number {
+    return this.entries.size;
   }
 
   /** 被锁定则抛 LoginRateLimitError；否则放行。 */
@@ -63,6 +78,13 @@ export class LoginRateLimiter {
 
   recordFailure(key: string): void {
     const now = this.now();
+    this.prune(now);
+    // 上限兜底：驱逐最旧 entry，防止攻击者轮换 key 使 Map 无界增长
+    if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+
     const entry = this.entries.get(key);
     const withinWindow = entry !== undefined && now - entry.windowStart <= this.windowMs;
     const attempts = withinWindow ? entry!.attempts + 1 : 1;
@@ -79,6 +101,24 @@ export class LoginRateLimiter {
   reset(): void {
     this.entries.clear();
   }
+
+  /** 清理「窗口已过期且未处于锁定中」的 entry（问题 49）。 */
+  private prune(now: number): void {
+    for (const [key, entry] of this.entries) {
+      const windowExpired = now - entry.windowStart > this.windowMs;
+      const unlocked = entry.lockedUntil <= now;
+      if (windowExpired && unlocked) {
+        this.entries.delete(key);
+      }
+    }
+  }
 }
 
+/** 按 `ip:username` 限速的实例：窗口内 5 次失败即锁定（问题 7）。 */
 export const loginRateLimiter = new LoginRateLimiter();
+
+/**
+ * 按 `username` 全局限速的实例（问题 49）：阈值高于按 IP 的实例（30 次），
+ * 用于兜底「攻击者轮换来源 IP / 伪造转发头」的在线暴力破解。
+ */
+export const usernameLoginRateLimiter = new LoginRateLimiter({ maxAttempts: 30 });

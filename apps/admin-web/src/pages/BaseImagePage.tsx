@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { BASE_IMAGES } from '@/graphql/queries'
@@ -26,6 +26,13 @@ export default function BaseImagePage() {
   const [deletingBusy, setDeletingBusy] = useState(false)
 
   const images = data?.baseImages ?? []
+
+  // 初始加载失败走整页错误态；已有数据后的刷新失败不会替换内容，改用 toast 显式提示
+  useEffect(() => {
+    if (error && data) {
+      toast.error(error.message || '数据刷新失败')
+    }
+  }, [error, data])
 
   const handleCreate = () => {
     setEditing(null)

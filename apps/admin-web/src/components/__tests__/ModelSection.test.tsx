@@ -209,6 +209,68 @@ describe('ModelSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(mocks.refetch).toHaveBeenCalled();
   });
+
+  it('T-W1: surfaces a refresh failure via toast while keeping the loaded list', () => {
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      if (String(doc).includes('adminProviders')) {
+        return { data: { adminProviders: [] }, loading: false, error: undefined, refetch: mocks.refetch };
+      }
+      return {
+        data: { adminModels: [model('a')] },
+        loading: false,
+        error: new Error('adminModels refresh boom'),
+        refetch: mocks.refetch,
+      };
+    });
+    render(<ModelSection />);
+
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      expect.stringContaining('adminModels refresh boom'),
+    );
+    expect(screen.getByText('model-a')).toBeDefined();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('T-W1: consumes the providers query error', () => {
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      if (String(doc).includes('adminProviders')) {
+        return {
+          data: undefined,
+          loading: false,
+          error: new Error('providers boom'),
+          refetch: mocks.refetch,
+        };
+      }
+      return { data: { adminModels: [model('a')] }, loading: false, error: undefined, refetch: mocks.refetch };
+    });
+    render(<ModelSection />);
+
+    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining('providers boom'));
+  });
+
+  it('T-W1: ignores repeated switch toggles while in flight', async () => {
+    setupQueries([model('a')]);
+    let resolveToggle: (value: unknown) => void = () => {};
+    mocks.toggle.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveToggle = resolve;
+      }),
+    );
+
+    render(<ModelSection />);
+    const sw = screen.getByRole('switch', { name: '启用 model-a' });
+    fireEvent.click(sw);
+    await waitFor(() => expect(mocks.toggle).toHaveBeenCalledTimes(1));
+
+    // 在途：开关禁用，重复点击被忽略
+    expect(sw).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(sw);
+    expect(mocks.toggle).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveToggle({});
+    });
+  });
 });
 
 describe('CustomModelDialog', () => {

@@ -18,12 +18,17 @@ export interface StatusSyncOptions {
   heartbeatTracker: HeartbeatTracker;
   connectTimeoutMs: number;
   image: string;
+  /** watch 重连退避基准（ms），默认 5000；<=0 关闭退避等待（测试用）。 */
   reconnectDelayMs?: number;
+  /** watch 重连退避上限（ms），默认 60000。 */
+  reconnectMaxDelayMs?: number;
   logger?: Logger;
 }
 
 const SCAN_INTERVAL_MS = 15000;
 const MAX_WATCH_RETRY_EXPONENT = 5;
+const DEFAULT_RECONNECT_BASE_MS = 5000;
+const DEFAULT_RECONNECT_MAX_MS = 60000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,12 +81,23 @@ export class StatusSyncService {
     }
   }
 
-  private scheduleWatchRetry(): void {
-    if (this.stopped || this.watchRetryTimer) return;
-    const base = this.opts.reconnectDelayMs ?? 5000;
+  /**
+   * 计算下一次 watch 重连等待：指数退避（base × 2^attempt），带上限（建议 C）。
+   * `reconnectDelayMs <= 0` 时返回 0（不等待，测试用）；每次调用递增 attempt，
+   * watch 建立成功后由 `attemptStartWatch` 归零。
+   */
+  private nextReconnectDelay(): number {
+    const base = this.opts.reconnectDelayMs ?? DEFAULT_RECONNECT_BASE_MS;
     const exponent = Math.min(this.watchRetryAttempt, MAX_WATCH_RETRY_EXPONENT);
     this.watchRetryAttempt += 1;
-    const delayMs = Math.max(base, 1) * 2 ** exponent;
+    if (base <= 0) return 0;
+    const max = this.opts.reconnectMaxDelayMs ?? DEFAULT_RECONNECT_MAX_MS;
+    return Math.min(base * 2 ** exponent, max);
+  }
+
+  private scheduleWatchRetry(): void {
+    if (this.stopped || this.watchRetryTimer) return;
+    const delayMs = this.nextReconnectDelay();
     this.watchRetryTimer = setTimeout(() => {
       this.watchRetryTimer = null;
       void this.attemptStartWatch();
@@ -139,7 +155,8 @@ export class StatusSyncService {
       this.opts.logger?.error?.('[status-sync] reconcile after disconnect failed', err);
     }
     if (this.stopped) return;
-    const reconnectDelay = this.opts.reconnectDelayMs ?? 5000;
+    // 断线重连同样采用指数退避（建议 C），而非固定延迟，避免 apiserver 抖动时反复冲击。
+    const reconnectDelay = this.nextReconnectDelay();
     if (reconnectDelay > 0) await delay(reconnectDelay);
     if (!this.stopped) {
       await this.attemptStartWatch();
@@ -237,16 +254,34 @@ export class StatusSyncService {
   }
 
   /**
-   * 终态残留 Job 巡检：`failed` / `destroying` 记录若仍关联 Job（例如销毁流程被
-   * SIGTERM 打断卡在 destroying），删除 Job 回收节点资源。
-   * 返回本次被回收的 containerId 列表。
+   * 终态残留 Job 巡检（问题 50）：
+   * - `failed` / `exited` 记录若仍关联 Job（如销毁时 deleteJob 失败），删除 Job 回收节点资源；
+   * - 卡死的 `destroying` 记录（销毁流程被 SIGTERM 打断）：回收残留 Job 并迁移 `exited`
+   *   （契约 `destroying → exited`），即便 Job 已不存在也迁移。
+   *
+   * 使用一次 `listJobs()` 全量拉取后在内存索引匹配，避免逐记录 `getJob` 的 N+1。
+   * 返回本次真实回收了 Job 的 containerId 列表。
    */
   async sweepTerminalJobs(): Promise<string[]> {
+    const jobs = await this.opts.k8sClient.listJobs(WORKER_LABEL_SELECTOR);
+    const byContainerId = new Map<string, K8sJobEvent['job']>();
+    const byName = new Map<string, K8sJobEvent['job']>();
+    for (const job of jobs) {
+      byName.set(job.name, job);
+      if (job.containerId) byContainerId.set(job.containerId, job);
+    }
+
     const records = await this.opts.repo.findAll();
     const reclaimed: string[] = [];
     for (const record of records) {
-      if (record.status !== 'failed' && record.status !== 'destroying') continue;
-      const job = await this.opts.k8sClient.getJob(record.name);
+      // 卡死的 destroying：无论 Job 是否还在都需迁移终态，故不做 Job 存在性前置过滤。
+      if (record.status === 'destroying') {
+        const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
+        if (deleted) reclaimed.push(record.id);
+        continue;
+      }
+      if (record.status !== 'failed' && record.status !== 'exited') continue;
+      const job = byContainerId.get(record.id) ?? byName.get(record.name);
       if (!job) continue;
       const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
       if (deleted) reclaimed.push(record.id);

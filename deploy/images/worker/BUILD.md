@@ -7,17 +7,17 @@
 
 ```bash
 cd deploy/images/worker
-docker build -t core.harbor.internal.fffdan.com/zag/worker:dev .
+docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 
 # 内网地址变化时通过 --build-arg 覆盖
 docker build \
   --build-arg UBUNTU_MIRROR=https://nexus.internal.fffdan.com/repository/ubuntu-proxy/ \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   --build-arg DOCKER_APT_URL=https://download.docker.com/linux/ubuntu \
-  -t core.harbor.internal.fffdan.com/zag/worker:dev .
+  -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
 
-构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zag/worker:dev`（或推送后使用正式 tag）。
+构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
 
 ## 自验（PRD 功能点 3 验收标准）
 
@@ -25,7 +25,7 @@ docker build \
 docker run --rm -it --entrypoint bash \
   -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
   -e ZAG_CONTROLLER_KEY=dummy \
-  core.harbor.internal.fffdan.com/zag/worker:dev -lc '
+  core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
     node -v && git --version && gh --version && docker buildx version && \
     agent-gear --version && \
     claude-agent-acp --help >/dev/null 2>&1 || true && \

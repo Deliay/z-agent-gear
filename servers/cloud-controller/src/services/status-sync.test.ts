@@ -170,7 +170,7 @@ describe('StatusSyncService', () => {
     expect(stored?.tokenHash).toBeNull();
   });
 
-  it('T-Y7: a stuck destroying record is reclaimed by the terminal sweep', async () => {
+  it('T-Y7: a stuck destroying record is reclaimed by the terminal sweep and migrated to exited', async () => {
     const { repo, client, service, statusSync } = setup();
     const created = await service.start('idle');
     // 模拟销毁流程被 SIGTERM 打断：状态卡在 destroying，Job 仍在
@@ -181,7 +181,44 @@ describe('StatusSyncService', () => {
 
     expect(reclaimed).toContain(created.id);
     expect(await client.getJob(created.name)).toBeNull();
-    expect((await repo.findById(created.id))?.status).toBe('destroying');
+    // 问题 50：契约要求 destroying → exited，巡检后必须迁移终态而非停留在 destroying
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitedAt).toBeInstanceOf(Date);
+    expect(stored?.exitReason).toBeTruthy();
+    expect(stored?.tokenHash).toBeNull();
+  });
+
+  it('T-Y9: sweep reclaims a residual Job on an exited record (问题 50)', async () => {
+    const { repo, client, service, statusSync } = setup();
+    const created = await service.start('idle');
+    // Job succeeded → exited，但 Job 对象仍存在（ttl 尚未回收 / deleteJob 曾失败）
+    await service.markExited(created.id, '容器正常退出');
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const reclaimed = await statusSync.sweepTerminalJobs();
+
+    expect(reclaimed).toContain(created.id);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.tokenHash).toBeNull();
+  });
+
+  it('T-Y10: sweep migrates a stuck destroying record to exited even when its Job is already gone (问题 50)', async () => {
+    const { repo, client, service, statusSync } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    // Job 已被删除（例如 deleteJob 成功但进程在写回 exited 前崩溃）
+    await client.deleteJob(created.name);
+    expect(await client.getJob(created.name)).toBeNull();
+
+    const reclaimed = await statusSync.sweepTerminalJobs();
+
+    // 没有真实删除动作，故不计入 reclaimed；但状态必须迁移
+    expect(reclaimed).toEqual([]);
+    expect((await repo.findById(created.id))?.status).toBe('exited');
   });
 
   it('T-Y8: rejecting watch-start / rejecting scan never throws out of start()', async () => {

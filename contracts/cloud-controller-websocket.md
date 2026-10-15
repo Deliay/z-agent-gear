@@ -17,6 +17,8 @@
 
 - 协议：Socket.IO v4+
 - 传输：WebSocket（强制，不使用 HTTP 长轮询）
+- **engine 路径**：Socket.IO 引擎（engine.io）握手/升级的 HTTP 路径固定为引擎默认 **`/socket.io/`**（服务端 `src/services/socketio-gateway.ts` 导出 `ENGINE_PATH`，`index.ts` 显式传入）。**`/worker` 是 Socket.IO namespace，不是 URL 路径**；namespace 只存在于协议握手内，无法在入口层按 URL 路由。
+- **入口层路由**：反向代理 / Ingress 必须放行 `/socket.io/`（Prefix），否则握手请求 `GET /socket.io/?EIO=4&transport=websocket` 会被入口层 404，导致工作容器无法回连。`/internal`、`/health` 不对外暴露。
 - 命名空间：`/worker`（与本地 controller 连接的默认 namespace 隔离，互不影响）
 - 客户端自动重连：指数退避（初始 1s，最大 60s），重连后重新携带同一 token 握手
 
@@ -24,7 +26,7 @@
 
 | 差异点 | 说明 |
 |--------|------|
-| 连接地址 | `wss://<cloud-controller-host>/worker`；一次性 token 在 Socket.IO 握手阶段经 **`auth.token`** 承载（不放入 URL query，避免进入 ingress/中间层 access log） |
+| 连接地址 | `wss://<cloud-controller-host>/worker`——即 **namespace `/worker` 承载于 Socket.IO engine 默认路径 `/socket.io/`** 之上（实际握手/升级 HTTP 请求打到 `/socket.io/?EIO=4...`，入口层/Ingress 必须放行 `/socket.io/`，而非 `/worker`）；一次性 token 在 Socket.IO 握手阶段经 **`auth.token`** 承载（不放入 URL query，避免进入 ingress/中间层 access log） |
 | 鉴权方式 | 由握手 `auth.token`（遗留部署兼容 `handshake.query.token`）中的一次性 token 完成，`register` payload 的 `key` 字段**被忽略**（服务端不读取、不校验） |
 | namespace | 固定 `/worker` |
 | 握手失败 | 服务端拒绝连接并返回 `connect_error`，错误消息 `INVALID_TOKEN`；同时记录来源 IP 与原因日志（可追溯） |
@@ -159,6 +161,7 @@ Worker                              cloud-controller
 
 ### 3.1 握手鉴权
 
+- 传输路径：握手/升级请求走 engine 默认路径 **`/socket.io/`**（`ENGINE_PATH`），namespace `/worker`；入口层须放行 `/socket.io/`。鉴权发生在 Socket.IO 握手 middleware，token 经 `auth.token` 携带。
 - token 格式：`<containerId>.<secret>`，`secret` 为随机字节（base64url）。
 - 服务端 middleware 从 `handshake.auth.token` 读取 token（兼容遗留 `handshake.query.token`）：
   1. 按 `<containerId>` 定位 `cloudcontainers` 文档（**不做全表扫描**）；
@@ -231,7 +234,13 @@ Content-Type: application/json
 DELETE /internal/containers/:id
 ```
 
-**响应 200：** `{ "success": true }`。
+**响应 200：**
+
+```json
+{ "success": true, "deletedJob": true }
+```
+
+`deletedJob` 反映**本次调用是否真实执行了 Job 删除**（`false` 表示 Job 已不存在、未重复删除）。调用方据此观察残留 Job 清理是否发生。
 
 **语义：** 在线容器会先收到 `shutdown` 并等待宽限期（约 10s）后删除 Job，再返回；调用方（admin-api）应使用大于「宽限期 + 删除重试上界」的超时。终态容器幂等处理：**Job 已不存在时不再重复删除（仍会核实并清理残留 Job）**。
 
@@ -265,9 +274,14 @@ DELETE /internal/containers/:id
 | `creating` | 已落库，Job 创建中 |
 | `connecting` | Job 已创建，等待容器回连 |
 | `online` | 容器已回连注册 |
-| `destroying` | 销毁流程进行中 |
+| `destroying` | 销毁流程进行中（**瞬时态**，必然迁移到 `exited`） |
 | `exited` | 容器已退出、Job 已回收 |
 | `failed` | 启动失败或异常退出 |
+
+**终态与巡检约定：**
+
+- `destroying` 是瞬时态：销毁流程正常结束即写回 `exited`；若进程在销毁中途被 SIGTERM 打断而卡在 `destroying`，周期性巡检会回收残留 Job 并将记录迁移为 `exited`（`destroying → exited`，写入 `exitedAt`/`exitReason`），不会永久停留。
+- `exited` 表示 Job 已回收：若销毁时 `deleteJob` 失败（记录仍标注「需人工清理」），巡检会持续重试删除残留 Job；`failed`/`exited`/`destroying` 记录均纳入残留 Job 对账兜底。
 
 ### A.5 用途枚举
 

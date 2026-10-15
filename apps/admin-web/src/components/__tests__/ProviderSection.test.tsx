@@ -189,6 +189,65 @@ describe('ProviderSection', () => {
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
+  it('T-W1: does not report full success when successCount is missing', async () => {
+    setup([
+      provider(),
+      provider({ id: 'p2', name: 'Second' }),
+    ]);
+    mocks.mutate.mockResolvedValue({
+      data: { batchEnableGlobalProviders: {} },
+    });
+
+    render(<ProviderSection />);
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 My OpenAI' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 Second' }));
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+
+    await waitFor(() =>
+      expect(mocks.toastWarning).toHaveBeenCalledWith(expect.stringContaining('未确认')),
+    );
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('T-W1: surfaces a refresh failure via toast while keeping the loaded list', () => {
+    setup([provider()], { error: new Error('adminProviders refresh boom') });
+    render(<ProviderSection />);
+
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      expect.stringContaining('adminProviders refresh boom'),
+    );
+    // 数据已在：列表保留，不落整页错误态
+    expect(screen.getByText('My OpenAI')).toBeDefined();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('T-W1: ignores repeated single-toggle clicks while in flight', async () => {
+    setup();
+    let resolveMutate: (value: unknown) => void = () => {};
+    mocks.mutate.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveMutate = resolve;
+      }),
+    );
+
+    render(<ProviderSection />);
+
+    fireEvent.click(screen.getByRole('button', { name: '操作菜单' }));
+    fireEvent.click(screen.getByText('禁用'));
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(1));
+
+    // 在途期间菜单项被禁用；重复点击不再发出第二个 toggle
+    fireEvent.click(screen.getByRole('button', { name: '操作菜单' }));
+    const item = screen.getByText('禁用').closest('[role="menuitem"]');
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByText('禁用'));
+    expect(mocks.mutate).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveMutate({});
+    });
+  });
+
   it('T-W1: batch delete confirms in the custom dialog before mutating', async () => {
     setup([
       provider(),

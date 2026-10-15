@@ -1,5 +1,20 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
+// 敏感参数：优先使用配置注入（`Parameters:<name>` / 环境变量 `Parameters__<name>`），
+// 否则每次启动随机生成——绝不提交字面量默认值（问题 4/47，CWE-798）。
+string SecretOrDefault(string name, int bytes = 32)
+{
+    var configured = builder.Configuration[$"Parameters:{name}"];
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return configured;
+    }
+    return Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(bytes))
+        .Replace("+", string.Empty)
+        .Replace("/", string.Empty)
+        .Replace("=", string.Empty);
+}
+
 var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .WithProperties(env =>
     {
@@ -31,17 +46,17 @@ var redis = builder.AddRedis("redis")
     });
 
 var corsOrigin = builder.AddParameter("cors-origin");
-var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "default-dev-secret-key-for-testing");
-var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
-var adminJwtSecret = builder.AddParameter("admin-jwt-secret", secret: true, value: "dev-admin-secret-change-in-production");
+var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: SecretOrDefault("mcp-jwt-secret"));
+var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: SecretOrDefault("jwt-secret"));
+var adminJwtSecret = builder.AddParameter("admin-jwt-secret", secret: true, value: SecretOrDefault("admin-jwt-secret"));
 var credentialEncryptionKey = builder.AddParameter("credential-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
-// admin-api 首次种子管理员初始密码（问题 4）：仅 dev/本地提供已知默认值，便于 tests 登录；
-// 生产 publish 时 `.env` 留空则由 admin-api 随机生成并一次性打印，绝不回落到公开默认口令。
-var adminInitialPassword = builder.AddParameter("admin-initial-password", secret: true, value: "dev-admin-init-password");
+// admin-api 首次种子管理员初始密码（问题 4/47）：不再提交任何字面量默认值——
+// 每次启动随机生成（admin-api 首次种子时一次性打印到日志），或经配置 `Parameters:admin-initial-password` 注入。
+var adminInitialPassword = builder.AddParameter("admin-initial-password", secret: true, value: SecretOrDefault("admin-initial-password", 18));
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
-var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: SecretOrDefault("github-token-encryption-key"));
 var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
@@ -77,7 +92,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
         service.Restart = "unless-stopped";
     });
 
-var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: "dev-internal-token-change-in-production");
+var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
 var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
 // admin-web 运行在浏览器，需要一个可达的 admin-api 地址（容器运行时注入 config.js，见 40-generate-config-js.sh）

@@ -4,6 +4,16 @@ import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { TokenService } from './token-service.js';
 
 export const WORKER_NAMESPACE = '/worker';
+
+/**
+ * Socket.IO 引擎（engine.io）握手/升级的 HTTP 路径，固定为引擎默认 `/socket.io/`。
+ *
+ * 注意：`/worker` 是 Socket.IO **namespace**（存在于协议握手内），不是 URL 路径。
+ * 反向代理 / Ingress 必须放行本 engine path，否则握手请求打到 `/socket.io/?EIO=4...`
+ * 会被入口层 404（问题 46）。客户端与服务端必须使用同一 engine path。
+ */
+export const ENGINE_PATH = '/socket.io/';
+
 export const CURRENT_MAJOR_VERSION = '2';
 export const DEFAULT_HANDSHAKE_RATE_WINDOW_MS = 60000;
 export const DEFAULT_HANDSHAKE_RATE_MAX = 60;

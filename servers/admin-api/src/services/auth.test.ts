@@ -43,6 +43,7 @@ describe('AuthService', () => {
       (AdminUser.countDocuments as any).mockResolvedValue(0);
       const create = vi.fn().mockResolvedValue({});
       (AdminUser.create as any) = create;
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await seedAdmin();
 
@@ -54,6 +55,12 @@ describe('AuthService', () => {
       expect(await verifyPassword(STRONG_PASSWORD, arg.passwordHash)).toBe(true);
       // 硬编码默认口令已移除（问题 4）
       expect(await verifyPassword(LEGACY_DEFAULT_PASSWORD, arg.passwordHash)).toBe(false);
+
+      // 问题 47：来自 env 的初始口令也必须一次性输出，运维可获取
+      const banner = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(banner).toContain('初始密码');
+      expect(banner).toContain(STRONG_PASSWORD);
+      logSpy.mockRestore();
     });
 
     it('T-A1 (问题 4): generates a random password and prints it once when unset', async () => {

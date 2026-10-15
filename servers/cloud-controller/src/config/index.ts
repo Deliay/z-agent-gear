@@ -57,10 +57,21 @@ export const FORBIDDEN_INTERNAL_TOKENS: readonly string[] = [
   'change-me',
   'changeme',
   'internal-api-token',
+  'dev-internal-token-change-in-production',
+  'dev-internal-token',
   'secret',
   'token',
   'password',
 ];
+
+/**
+ * 归一化令牌用于 deny-list 比对：去除首尾空白 + 统一小写 + 去除内部空白，
+ * 使 `CHANGE-ME-INTERNAL-TOKEN`、` change-me-internal-token `、`change -me` 等
+ * 同源变体无法绕过弱令牌名单（建议 C）。
+ */
+function normalizeForDenylist(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '');
+}
 
 /**
  * Fail-fast 校验关键运行时配置，缺失即抛错，绝不静默兜底。
@@ -76,7 +87,11 @@ export function assertRuntimeConfig(cfg: AppConfig): void {
       `INTERNAL_API_TOKEN must be at least ${MIN_INTERNAL_TOKEN_LENGTH} characters`,
     );
   }
-  if (FORBIDDEN_INTERNAL_TOKENS.includes(cfg.internalApiToken.toLowerCase())) {
+  const normalizedToken = normalizeForDenylist(cfg.internalApiToken);
+  const isForbidden = FORBIDDEN_INTERNAL_TOKENS.some(
+    (forbidden) => normalizeForDenylist(forbidden) === normalizedToken,
+  );
+  if (isForbidden) {
     throw new Error('INTERNAL_API_TOKEN must not use a known example/default value');
   }
 }

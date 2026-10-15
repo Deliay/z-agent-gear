@@ -193,6 +193,13 @@ describe('ProviderService', () => {
       (Provider.findById as any) = vi.fn().mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockExisting),
       });
+      // 默认无自定义模型同名冲突（问题 48 去重前的既有行为）
+      (Model.find as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      });
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
     });
 
     it('should update provider with new credentialValue', async () => {
@@ -203,8 +210,6 @@ describe('ProviderService', () => {
         endpoint: 'https://api.anthropic.com',
       });
       (Provider.findByIdAndUpdate as any) = updateSpy;
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
       const { llmApiService } = await import('./llm-api');
 
       const result = await providerService.update(VALID_OID, {
@@ -221,12 +226,32 @@ describe('ProviderService', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'Anthropic', 'https://api.anthropic.com', 'sk-new-key',
       );
-      // 重同步只删自动同步模型（保留 isCustom），且带 scope 过滤保护全局模型
+      // 问题 48：重同步改为按 (providerId,name) upsert，不再 delete+insert
+      expect(Model.bulkWrite).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            updateOne: expect.objectContaining({
+              filter: expect.objectContaining({ name: 'gpt-4o' }),
+              update: expect.objectContaining({
+                $set: expect.objectContaining({ isCustom: false, isEnabled: true, scope: 'user' }),
+              }),
+              upsert: true,
+            }),
+          }),
+        ]),
+      );
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      // 只删除不在期望集合内的自动同步模型（保留自定义 / 全局）
       expect(Model.deleteMany).toHaveBeenCalledWith({
         providerId: VALID_OID,
         isCustom: false,
         scope: { $ne: 'global' },
+        name: { $nin: ['gpt-4o', 'gpt-4o-mini'] },
       });
+      // provider 写入先于模型同步（provider 写失败不打挂模型）
+      expect(updateSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        (Model.bulkWrite as any).mock.invocationCallOrder[0],
+      );
     });
 
     it('should preserve existing credential when credentialValue is empty (edit without changing key)', async () => {
@@ -236,8 +261,6 @@ describe('ProviderService', () => {
         endpoint: 'https://custom.openai.com/v1',
       });
       (Provider.findByIdAndUpdate as any) = updateSpy;
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
       const { llmApiService } = await import('./llm-api');
 
       const result = await providerService.update(VALID_OID, {
@@ -254,6 +277,81 @@ describe('ProviderService', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
       );
+    });
+
+    it('skips fetched API models colliding with a preserved custom model (no E11000, no data loss)', async () => {
+      (Provider.findByIdAndUpdate as any) = vi.fn().mockResolvedValue({
+        ...mockExisting,
+        name: 'Renamed Provider',
+        endpoint: 'https://custom.openai.com/v1',
+      });
+      const bulkWrite = vi.fn().mockResolvedValue({});
+      (Model.bulkWrite as any) = bulkWrite;
+      // provider 下存在与 API 模型同名的自定义模型 `gpt-4o`
+      const findLean = vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]);
+      (Model.find as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: findLean }),
+      });
+
+      const result = await providerService.update(VALID_OID, {
+        name: 'Renamed Provider',
+        type: 'OpenAI',
+        endpoint: 'https://custom.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      });
+
+      expect(result).not.toBeNull();
+      // 加载自定义模型名时带 scope 过滤，避免误读全局模型
+      expect(Model.find).toHaveBeenCalledWith({
+        providerId: VALID_OID,
+        isCustom: true,
+        scope: { $ne: 'global' },
+      });
+      // 同名 `gpt-4o` 被跳过，只 upsert 其余 API 模型
+      const ops = bulkWrite.mock.calls[0][0] as Array<{ updateOne: { filter: { name: string } } }>;
+      const names = ops.map((op) => op.updateOne.filter.name);
+      expect(names).toEqual(['gpt-4o-mini']);
+      expect(names).not.toContain('gpt-4o');
+      // 自定义模型不会被删除（deleteMany 仅作用于 isCustom:false）
+      expect(Model.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ isCustom: false }),
+      );
+      expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('writes the provider before syncing models so a failed provider write keeps models intact', async () => {
+      (Provider.findByIdAndUpdate as any) = vi.fn().mockResolvedValue(null);
+
+      const result = await providerService.update(VALID_OID, {
+        name: 'Renamed Provider',
+        type: 'OpenAI',
+        endpoint: 'https://custom.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      });
+
+      expect(result).toBeNull();
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: repeated resync upserts instead of rebuilding models', async () => {
+      (Provider.findByIdAndUpdate as any) = vi.fn().mockResolvedValue({ ...mockExisting });
+      const input = {
+        name: 'Existing Provider',
+        type: 'OpenAI' as const,
+        endpoint: 'https://custom.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      };
+
+      await providerService.update(VALID_OID, input);
+      await providerService.update(VALID_OID, input);
+
+      expect(Model.bulkWrite).toHaveBeenCalledTimes(2);
+      expect(Model.insertMany).not.toHaveBeenCalled();
     });
   });
 
@@ -375,6 +473,11 @@ describe('ProviderService', () => {
   });
 
   describe('batch operations scope guard', () => {
+    // 合法 24 位十六进制 ObjectId；'a'/'b' 之类非法 id 会被过滤（建议 E）
+    const ID_A = '507f1f77bcf86cd7994390aa';
+    const ID_B = '507f1f77bcf86cd7994390bb';
+    const ID_GLOBAL = '507f1f77bcf86cd7994390cc';
+
     it('keeps user-scope filters and cascades when no global provider is targeted', async () => {
       (Provider.findOne as any) = vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
@@ -385,40 +488,84 @@ describe('ProviderService', () => {
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
 
       const userFilter = {
-        _id: { $in: ['a', 'b'] },
+        _id: { $in: [ID_A, ID_B] },
         $or: [{ scope: 'user' }, { scope: { $exists: false } }],
       };
 
-      await providerService.batchEnable(['a', 'b']);
+      await providerService.batchEnable([ID_A, ID_B]);
       expect(Provider.updateMany).toHaveBeenCalledWith(userFilter, { isEnabled: true });
 
-      await providerService.batchDisable(['a', 'b']);
+      await providerService.batchDisable([ID_A, ID_B]);
       expect(Provider.updateMany).toHaveBeenCalledWith(userFilter, { isEnabled: false });
 
-      await providerService.batchDelete(['a', 'b']);
+      await providerService.batchDelete([ID_A, ID_B]);
       expect(Provider.deleteMany).toHaveBeenCalledWith(userFilter);
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: { $in: ['a', 'b'] }, scope: { $ne: 'global' } },
+        { providerId: { $in: [ID_A, ID_B] }, scope: { $ne: 'global' } },
         expect.any(Object),
       );
     });
 
     it('rejects batch operations that target a global provider (no silent skip)', async () => {
       (Provider.findOne as any) = vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: 'g' }) }),
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: ID_GLOBAL }) }),
       });
       (Provider.updateMany as any) = vi.fn();
       (Provider.deleteMany as any) = vi.fn();
       (Model.updateMany as any) = vi.fn();
       (Model.deleteMany as any) = vi.fn();
 
-      await expect(providerService.batchEnable(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
-      await expect(providerService.batchDisable(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
-      await expect(providerService.batchDelete(['a', 'g'])).rejects.toThrow('全局配置请在管理后台修改');
+      await expect(providerService.batchEnable([ID_A, ID_GLOBAL])).rejects.toThrow('全局配置请在管理后台修改');
+      await expect(providerService.batchDisable([ID_A, ID_GLOBAL])).rejects.toThrow('全局配置请在管理后台修改');
+      await expect(providerService.batchDelete([ID_A, ID_GLOBAL])).rejects.toThrow('全局配置请在管理后台修改');
 
       expect(Provider.updateMany).not.toHaveBeenCalled();
       expect(Provider.deleteMany).not.toHaveBeenCalled();
       expect(Model.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('filters invalid ObjectIds before hitting the DB (建议 E)', async () => {
+      (Provider.findOne as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+      });
+      (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+      (Model.updateMany as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+
+      await providerService.batchEnable([ID_A, 'not-an-object-id', '']);
+      expect(Provider.updateMany).toHaveBeenCalledWith(
+        { _id: { $in: [ID_A] }, $or: [{ scope: 'user' }, { scope: { $exists: false } }] },
+        { isEnabled: true },
+      );
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: { $in: [ID_A] }, scope: 'global' });
+
+      await providerService.batchDisable([ID_B, 'bad']);
+      expect(Provider.updateMany).toHaveBeenLastCalledWith(
+        { _id: { $in: [ID_B] }, $or: [{ scope: 'user' }, { scope: { $exists: false } }] },
+        { isEnabled: false },
+      );
+
+      await providerService.batchDelete([ID_A, 'bad']);
+      expect(Provider.deleteMany).toHaveBeenCalledWith(
+        { _id: { $in: [ID_A] }, $or: [{ scope: 'user' }, { scope: { $exists: false } }] },
+      );
+    });
+
+    it('returns successCount 0 for an all-invalid id list without touching the DB', async () => {
+      (Provider.findOne as any) = vi.fn();
+      (Provider.updateMany as any) = vi.fn();
+      (Provider.deleteMany as any) = vi.fn();
+      (Model.updateMany as any) = vi.fn();
+      (Model.deleteMany as any) = vi.fn();
+
+      await expect(providerService.batchEnable(['bad', 'worse'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDisable(['bad'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDelete(['bad'])).resolves.toEqual({ successCount: 0 });
+
+      expect(Provider.findOne).not.toHaveBeenCalled();
+      expect(Provider.updateMany).not.toHaveBeenCalled();
+      expect(Provider.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

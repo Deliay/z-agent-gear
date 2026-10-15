@@ -16,6 +16,11 @@
 #
 # 注意：INTERNAL_API_TOKEN 必须与 admin-api 侧配置一致；切勿使用示例值或弱令牌，
 # cloud-controller 启动会拒绝已知默认令牌。
+#
+# Socket.IO engine path（重要）：`/worker` 是 Socket.IO 的 **namespace**，不是 URL 路径。
+# 引擎握手/升级的实际 HTTP 路径固定为 `/socket.io/`（见 src/services/socketio-gateway.ts 的
+# ENGINE_PATH）。因此下方 Ingress 只放行 `/socket.io`（Prefix）；若误写成 `/worker`，worker
+# 握手会打到 `/socket.io/?EIO=4...` 而被入口层 404，导致云端容器全部回连失败（问题 46）。
 
 apiVersion: v1
 kind: ServiceAccount
@@ -67,7 +72,7 @@ spec:
       serviceAccountName: cloud-controller
       containers:
         - name: cloud-controller
-          image: core.harbor.internal.fffdan.com/zag/cloud-controller:latest
+          image: core.harbor.internal.fffdan.com/zero-tools/cloud-controller:latest
           ports:
             - containerPort: 8003
           env:
@@ -78,7 +83,7 @@ spec:
             - name: K8S_NAMESPACE
               value: 'zag-cloud'
             - name: WORKER_IMAGE
-              value: 'core.harbor.internal.fffdan.com/zag/worker:latest'
+              value: 'core.harbor.internal.fffdan.com/zero-tools/worker:latest'
             - name: PUBLIC_WS_ENDPOINT
               value: 'cloud-controller.example.internal'
             - name: RUNTIME_CLASS_NAME
@@ -119,8 +124,9 @@ spec:
       port: 8003
       targetPort: 8003
 ---
-# 对外暴露 wss：仅暴露 Worker 回连所需的 /worker（Socket.IO）。
-# 内部管理 REST（/internal/*）不对外暴露，仅集群内经上面的 ClusterIP Service 由 admin-api 访问。
+# 对外暴露 wss：仅放行 Socket.IO engine path `/socket.io`（Prefix），worker 的 namespace
+# `/worker` 存在于协议握手中、无需（也无法）在 Ingress 层路由。
+# 内部管理 REST（/internal/*）与 /health 不对外暴露，仅集群内经上面的 ClusterIP Service 访问。
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -136,7 +142,7 @@ spec:
     - host: cloud-controller.example.internal
       http:
         paths:
-          - path: /worker
+          - path: /socket.io
             pathType: Prefix
             backend:
               service:

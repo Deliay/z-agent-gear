@@ -10,7 +10,9 @@
 #     长度 ≤ 8 时整体掩码为 `****`（避免短凭据被拼出近似完整值）
 #   - 删除供应商级联删除其全部模型（含自定义模型）；禁用供应商级联禁用其模型
 #   - 更新供应商时若连通性参数（凭据 / type / endpoint）变化则重同步模型：
-#     仅删除并重建 API 同步模型（`isCustom = false`），保留用户自定义模型（`isCustom = true`）
+#     按 `(providerId, name)` upsert 重拉取的 API 同步模型（`isCustom = false`）并删除不再返回的
+#     陈旧同步模型，保留用户自定义模型（`isCustom = true`）；当自定义模型与重拉取模型同名时，
+#     保留自定义模型并跳过该同名 API 模型（不覆盖、不触发唯一索引冲突）
 #   - `name` 在同 scope 内唯一
 
 enum ProviderType {

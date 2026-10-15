@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { buildSchema, graphql, type GraphQLFieldResolver } from 'graphql';
 import { modelResolvers } from './model.js';
+import { modelTypeDefs } from '../schemas/model.js';
+import { providerTypeDefs } from '../schemas/provider.js';
 
 vi.mock('../../services/model.js', () => ({
   modelService: {
@@ -70,6 +73,61 @@ describe('modelResolvers', () => {
     it('returns null when the provider is missing', async () => {
       (providerService.findSummaryById as any).mockResolvedValue(null);
       await expect(Model.provider({ providerId: 'missing' })).resolves.toBeNull();
+    });
+
+    it('keeps the models query succeeding with provider: null for a dangling providerId (issue 51)', async () => {
+      (modelService.findAll as any).mockResolvedValue([
+        {
+          id: 'm-orphan',
+          providerId: '000000000000000000000000',
+          name: 'orphan-model',
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: 0,
+          scope: 'user',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]);
+      // providerId 悬空：供应商已不存在 → findSummaryById 返回 null
+      (providerService.findSummaryById as any).mockResolvedValue(null);
+
+      // 用真实 SDL 构建 schema：若 Model.provider 仍为非空，执行会返回
+      // "Cannot return null for non-nullable field Model.provider"。
+      const schema = buildSchema(
+        ['type Query', 'type Mutation', providerTypeDefs, modelTypeDefs].join('\n'),
+      );
+
+      const query = modelResolvers.Query as {
+        models: (parent: unknown, args: unknown, context: unknown) => unknown;
+      };
+      const fieldResolver: GraphQLFieldResolver<Record<string, unknown>, unknown> = (
+        source,
+        args,
+        context,
+        info,
+      ) => {
+        if (info.parentType.name === 'Query' && info.fieldName === 'models') {
+          return query.models(source, args, context);
+        }
+        if (info.parentType.name === 'Model' && info.fieldName === 'provider') {
+          return Model.provider(source as { providerId: string });
+        }
+        const value = source?.[info.fieldName];
+        return typeof value === 'function' ? value.call(source, args, context, info) : value;
+      };
+
+      const result = await graphql({
+        schema,
+        source: '{ models { id provider { id } } }',
+        contextValue: mockContext,
+        fieldResolver,
+      });
+
+      expect(result.errors).toBeUndefined();
+      const models = (result.data as { models: Array<{ id: string; provider: unknown }> }).models;
+      expect(models).toHaveLength(1);
+      expect(models[0].provider).toBeNull();
     });
   });
 

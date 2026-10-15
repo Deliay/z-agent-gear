@@ -9,7 +9,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
-import { registerWorkerGateway } from './socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway } from './socketio-gateway.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 
 let httpServer: HttpServer;
@@ -125,8 +125,14 @@ beforeAll(async () => {
     reconnectDelayMs: 0,
   });
 
-  httpServer = createServer();
-  io = new SocketIOServer(httpServer, { transports: ['websocket'] });
+  // 非 Socket.IO 路径返回 404，模拟 index.ts 中 express 的兜底行为（用于锚定 engine path）。
+  httpServer = createServer((_req, res) => {
+    res.statusCode = 404;
+    res.end('Not Found');
+  });
+  // 与 index.ts 一致使用显式 ENGINE_PATH；此测试服务器放开 polling 以便用一次
+  // engine 握手 HTTP 请求实证路径（生产仍强制 websocket 传输）。
+  io = new SocketIOServer(httpServer, { path: ENGINE_PATH });
   registerWorkerGateway(io, { tokenService, containerService: service, heartbeatTracker });
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const address = httpServer.address() as AddressInfo;
@@ -323,5 +329,24 @@ describe('worker Socket.IO gateway', () => {
       rateIo.close();
       await new Promise<void>((resolve) => rateServer.close(() => resolve()));
     }
+  });
+
+  it('T-G10: engine handshake lives at /socket.io/ — /worker is a namespace, not a URL path (问题 46)', async () => {
+    // engine path 必须是 Socket.IO 默认 `/socket.io/`（与 index.ts 传入的 ENGINE_PATH 一致）。
+    expect(ENGINE_PATH).toBe('/socket.io/');
+
+    // 真实 server 上：engine 握手 HTTP 请求命中 `/socket.io/` → 200（body 为 engine 包：
+    // 首字符为包类型 `0`，其后是 JSON handshake payload，含 sid）。
+    const handshake = await fetch(`${baseUrl}/socket.io/?EIO=4&transport=polling`);
+    expect(handshake.status).toBe(200);
+    const text = await handshake.text();
+    expect(text.startsWith('0')).toBe(true);
+    const payload = JSON.parse(text.slice(1)) as { sid?: string };
+    expect(typeof payload.sid).toBe('string');
+    expect(payload.sid).toBeTruthy();
+
+    // `/worker` 只是命名空间，作为 URL 路径不存在 → 404（回归问题 46 的 Ingress 误配置即命中此处）。
+    const wrongPath = await fetch(`${baseUrl}/worker?EIO=4&transport=polling`);
+    expect(wrongPath.status).toBe(404);
   });
 });

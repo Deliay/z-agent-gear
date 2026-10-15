@@ -68,10 +68,10 @@ npm test
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
-| `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码（须与 Aspire/部署注入一致；dev 默认 `dev-admin-init-password`）。未配置时服务随机生成，测试将无法登录种子管理员 | - |
+| `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
-| `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token（与 Aspire 注入的 `internal-api-token` 一致） | `dev-internal-token-change-in-production` |
+| `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致（`Parameters__internal-api-token` 注入）；未提供时 cloud-controller 内部 API 套件显式跳过 | - |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 

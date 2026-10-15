@@ -40,7 +40,9 @@ type Provider {
 type Model {
   id: ID!
   providerId: ID!
-  provider: ProviderSummary!
+  # provider 可为空：providerId 悬空（关联供应商已不存在）时返回 null，
+  # 避免非空违规导致整条 models 查询失败。
+  provider: ProviderSummary
   name: String!
   isCustom: Boolean!
   isEnabled: Boolean!

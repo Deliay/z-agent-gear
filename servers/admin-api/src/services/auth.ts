@@ -45,8 +45,9 @@ export function generateInitialAdminPassword(): string {
  * 幂等种子：admin_users 非空则跳过，否则插入管理员。
  * 初始密码来源（问题 4，已移除硬编码 `admin1234567`）：
  * - 配置了 `ADMIN_INITIAL_PASSWORD`：使用之（启动期 assertRuntimeConfig 已拒绝弱口令）；
- * - 未配置：生成强随机密码，并在启动日志中一次性输出（明确标记）。
- * 两种情况均保留 `mustChangePassword: true`，强制首次登录改密。
+ * - 未配置：生成强随机密码。
+ * 两种来源均保留 `mustChangePassword: true`，并**每次种子时**在启动日志一次性输出初始口令（问题 47），
+ * 便于编排层注入随机口令后运维仍可获取。
  */
 export async function seedAdmin(): Promise<void> {
   const count = await AdminUser.countDocuments();
@@ -64,14 +65,15 @@ export async function seedAdmin(): Promise<void> {
     passwordChangedAt: new Date(),
   });
 
-  if (generated) {
-    console.log('============================================================');
-    console.log('[admin-api] 未配置 ADMIN_INITIAL_PASSWORD，已生成随机管理员初始密码（仅本次显示）');
-    console.log(`[admin-api]   用户名: ${ADMIN_USERNAME}`);
-    console.log(`[admin-api]   初始密码: ${password}`);
-    console.log('[admin-api] 请立即登录并修改密码（首次登录强制改密）。');
-    console.log('============================================================');
-  }
+  console.log('============================================================');
+  console.log('[admin-api] 已种入管理员初始口令（仅本次显示，请立即登录并修改）');
+  console.log(`[admin-api]   用户名: ${ADMIN_USERNAME}`);
+  console.log(
+    `[admin-api]   来源: ${generated ? '随机生成（未配置 ADMIN_INITIAL_PASSWORD）' : 'ADMIN_INITIAL_PASSWORD 环境变量'}`,
+  );
+  console.log(`[admin-api]   初始密码: ${password}`);
+  console.log('[admin-api] 首次登录强制改密。');
+  console.log('============================================================');
 }
 
 export async function login(username: string, password: string) {
