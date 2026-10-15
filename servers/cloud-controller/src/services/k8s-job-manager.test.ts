@@ -118,4 +118,11 @@ describe('K8sJobManager', () => {
       'wss://cloud.example.com/worker',
     );
   });
+
+  it('T-K6: rejects a PUBLIC_WS_ENDPOINT that carries a non-canonical path (建议 F)', () => {
+    // `host/gateway` 会拼出 wss://host/gateway/worker，namespace 变 /gateway/worker
+    // 永远注册不上 → fail-fast，而非静默产出坏地址。
+    expect(() => buildServerEndpoint('cloud.example.com/gateway')).toThrow(/host\(:port\)/);
+    expect(() => setup('wss://cloud.example.com/gateway')).toThrow(/host\(:port\)/);
+  });
 });

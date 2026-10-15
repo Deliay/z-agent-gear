@@ -1,4 +1,4 @@
-import { config } from '../config/index.js';
+import { isTrustedProxy } from '../config/index.js';
 
 /** 可从 Fetch `Request` 或 Node `IncomingMessage` 上探测到的底层对端地址载体。 */
 interface PeerLike {
@@ -27,8 +27,8 @@ function socketPeer(source: unknown): string | undefined {
  *
  * 安全前提：`x-forwarded-for` / `x-real-ip` 可被客户端伪造，默认**不信任**：
  * 1. 优先取底层 socket 对端地址（Node 由 `@whatwg-node/server` 以 `req` 形式透传给 context）；
- * 2. 仅当显式开启 `TRUST_PROXY` 时，才信任转发头，且取 `x-forwarded-for` 的**末跳**
- *    （末跳由受信代理追加；首跳可被客户端伪造）。
+ * 2. **仅当对端命中受信代理列表**（`TRUST_PROXY`，问题 57）时，才信任转发头，且取
+ *    `x-forwarded-for` 的**末跳**（末跳由受信代理追加；首跳可被客户端伪造）。
  *
  * 无法确定对端时返回空串，调用方据此跳过按 IP 限速——绝不回落共享的 `unknown` 桶
  * （否则对单一管理员的失败即锁死全站）。
@@ -36,7 +36,7 @@ function socketPeer(source: unknown): string | undefined {
 export function clientIpFrom(request: Request, nodeRequest?: unknown): string {
   const peer = socketPeer(nodeRequest) ?? socketPeer(request);
 
-  if (config.trustProxy) {
+  if (peer && isTrustedProxy(peer)) {
     const forwarded = request.headers.get('x-forwarded-for');
     if (forwarded) {
       const hops = forwarded.split(',').map((h) => h.trim()).filter(Boolean);

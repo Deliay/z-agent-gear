@@ -200,9 +200,15 @@ export class ContainerService {
       );
       if (connecting) return connecting;
 
-      // 记录已被并发销毁或进入终态：回收刚创建的 Job，避免永久孤儿
-      await this.deleteResidualJob(name);
-      return (await this.repo.findById(created.id)) ?? created;
+      // CAS 未命中：除「记录被并发销毁/置终态」外，还可能是 worker 先注册
+      // （`markOnline` 允许 creating→online）。因此回读记录，仅当已进入终态
+      // （destroying/exited/failed）才回收 Job；online/connecting 的健康容器
+      // 不得被误删活 Job（问题 58）。
+      const current = await this.repo.findById(created.id);
+      if (current && isTerminalStatus(current.status)) {
+        await this.deleteResidualJob(name);
+      }
+      return current ?? created;
     });
   }
 
@@ -320,7 +326,10 @@ export class ContainerService {
       return this.destroyLocked(containerId);
     }
 
-    if (container.status === 'online') {
+    // 用 CAS 之后的状态决定是否优雅停机：`markOnline` 可能在 destroy 的初始快照之后、
+    // CAS 之前把记录置为 online（connectedAt 被写入且随 CAS 结果保留），此时不得跳过
+    // shutdown，否则会丢掉一次优雅停机机会（建议 G）。
+    if (destroying.connectedAt !== null) {
       await this.notifyShutdown(containerId);
       if (this.cfg.shutdownGraceMs > 0) {
         await delay(this.cfg.shutdownGraceMs);

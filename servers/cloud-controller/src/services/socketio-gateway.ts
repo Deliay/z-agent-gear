@@ -16,7 +16,10 @@ export const ENGINE_PATH = '/socket.io/';
 
 export const CURRENT_MAJOR_VERSION = '2';
 export const DEFAULT_HANDSHAKE_RATE_WINDOW_MS = 60000;
+/** 单个 token/container 在窗口内允许的握手次数（问题 59：按容器维度，避免共享 Ingress IP 全局限流）。 */
 export const DEFAULT_HANDSHAKE_RATE_MAX = 60;
+/** 单个来源 IP 的窗口内握手上限（兜底，高于 per-container 上限）。 */
+export const DEFAULT_HANDSHAKE_RATE_IP_MAX = 600;
 
 interface Logger {
   info?: (...args: unknown[]) => void;
@@ -35,8 +38,10 @@ interface RegisterPayload {
 export interface HandshakeRateLimitOptions {
   /** 滑动窗口时长（ms），默认 60000。 */
   windowMs?: number;
-  /** 单个来源 IP 在窗口内允许的握手次数，默认 60。 */
+  /** 单个 token/container 在窗口内允许的握手次数，默认 60。 */
   max?: number;
+  /** 单个来源 IP 在窗口内允许的握手次数（兜底），默认 600。 */
+  ipMax?: number;
 }
 
 export interface WorkerGatewayDeps {
@@ -48,7 +53,7 @@ export interface WorkerGatewayDeps {
 }
 
 /**
- * 轻量滑动窗口速率限制：按 key（来源 IP）统计窗口内握手次数。
+ * 轻量滑动窗口速率限制：按 key 统计窗口内握手次数。
  * 仅用于缓解握手阶段 bcrypt 校验带来的 CPU 消耗型攻击。
  */
 export class SlidingWindowRateLimiter {
@@ -84,9 +89,27 @@ function firstString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+/** 从握手读取一次性 token（auth 优先，兼容遗留 query）。 */
+function handshakeToken(socket: Socket): string | undefined {
+  return (
+    firstString(socket.handshake.auth?.token) ?? firstString(socket.handshake.query?.token)
+  );
+}
+
+/**
+ * 从原始 token 字符串（`<containerId>.<secret>`）解析 containerId 前缀，**不运行 bcrypt**。
+ * 用作限速键；token 缺失/格式非法时返回 undefined，调用方回退到 peer IP。
+ */
+function containerIdFromToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const separator = token.indexOf('.');
+  if (separator <= 0) return undefined;
+  return token.slice(0, separator);
+}
+
 /**
  * Socket.IO `/worker` namespace 接入网关。
- * 握手 middleware 校验一次性 token（含按源 IP 限速）；register 校验 hostname/版本后绑定
+ * 握手 middleware 校验一次性 token（含按 containerId 前缀 / 回退源 IP 的限速）；register 校验 hostname/版本后绑定
  * containerId → online；heartbeat 计时；shutdown 通知；同一 containerId 多连接时仅在
  * 最后一个 socket 断开后才判定离线。
  */
@@ -96,25 +119,34 @@ export function registerWorkerGateway(
 ): void {
   const logger = deps.logger ?? console;
   const nsp = io.of(WORKER_NAMESPACE);
-  const rateLimiter = new SlidingWindowRateLimiter(
-    deps.handshakeRateLimit?.windowMs ?? DEFAULT_HANDSHAKE_RATE_WINDOW_MS,
+  const windowMs = deps.handshakeRateLimit?.windowMs ?? DEFAULT_HANDSHAKE_RATE_WINDOW_MS;
+  // 主桶按 containerId（token 前缀）计数，回退 peer IP；IP 桶为更高上限的兜底。
+  const keyLimiter = new SlidingWindowRateLimiter(
+    windowMs,
     deps.handshakeRateLimit?.max ?? DEFAULT_HANDSHAKE_RATE_MAX,
+  );
+  const ipLimiter = new SlidingWindowRateLimiter(
+    windowMs,
+    deps.handshakeRateLimit?.ipMax ?? DEFAULT_HANDSHAKE_RATE_IP_MAX,
   );
   /** containerId → 当前活跃 socketId 集合（支持重连/多连接）。 */
   const activeSockets = new Map<string, Set<string>>();
 
   nsp.use((socket: Socket, next) => {
+    // 问题 59：部署形态下 worker 经 nginx Ingress 回连，TCP 对端是所有 worker 共享的
+    // Ingress 控制器 IP。故主限速键取一次性 token 的 containerId 前缀（无需 bcrypt），
+    // 仅当无 token 时回退 peer IP；另保留一个更高上限的 per-IP 桶作为兜底。
+    const token = handshakeToken(socket);
     const sourceIp = socket.handshake.address;
-    if (!rateLimiter.allow(sourceIp)) {
-      logger.warn?.(`[worker] handshake rate limited from ${sourceIp}`);
+    const containerId = containerIdFromToken(token);
+    const key = containerId ? `container:${containerId}` : `ip:${sourceIp}`;
+    if (!keyLimiter.allow(key) || !ipLimiter.allow(`ip:${sourceIp}`)) {
+      logger.warn?.(`[worker] handshake rate limited key=${key} from ${sourceIp}`);
       next(new Error('RATE_LIMITED'));
       return;
     }
 
-    // 优先从 Socket.IO 握手 auth 读取一次性 token（问题 11：避免 token 进 URL/access log）；
-    // 兼容遗留 query token。
-    const token =
-      firstString(socket.handshake.auth?.token) ?? firstString(socket.handshake.query?.token);
+    // 一次性 token 优先取自握手 auth（问题 11：token 不放入 URL/access log），兼容遗留 query。
     void deps.tokenService
       .verify(token)
       .then((container) => {

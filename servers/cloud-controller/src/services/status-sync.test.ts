@@ -221,6 +221,91 @@ describe('StatusSyncService', () => {
     expect((await repo.findById(created.id))?.status).toBe('exited');
   });
 
+  it('T-Y11: reconcile does not fail an in-flight creating record whose Job is not created yet (问题 58)', async () => {
+    const { repo, statusSync } = setup();
+    const created = await repo.create({
+      name: 'zag-worker-inflight',
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'creating',
+    });
+
+    await statusSync.reconcile();
+
+    // start() 已落库 creating、createJob 尚未完成：不得误判「Job 已回收」。
+    expect((await repo.findById(created.id))?.status).toBe('creating');
+  });
+
+  it('T-Y12: scanTimeouts fails a stale creating record (orphan backstop, 建议 G)', async () => {
+    const { repo, statusSync } = setup();
+    const now = Date.now();
+    const created = await repo.create({
+      name: 'zag-worker-stale-creating',
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'creating',
+      updatedAt: new Date(now - CONNECT_TIMEOUT_MS - 1000),
+    });
+
+    const timedOut = await statusSync.scanTimeouts(now);
+
+    expect(timedOut).toContain(created.id);
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.exitReason).toBe('Job 创建超时');
+  });
+
+  it('T-Y13: stop() during startWatch aborts the newly created watch (建议 G)', async () => {
+    const repo = new InMemoryContainerRepository();
+    const tokenService = new TokenService(repo);
+    const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const service = new ContainerService(repo, tokenService, jobManager, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: CONNECT_TIMEOUT_MS,
+      shutdownGraceMs: 0,
+    });
+
+    let releaseWatch: ((unwatch: () => void) => void) | null = null;
+    let aborted = 0;
+    const pendingClient: K8sClient = {
+      createJob: async () => {},
+      getJob: async () => null,
+      listJobs: async () => [],
+      deleteJob: async () => {},
+      watchJobs: () =>
+        new Promise<() => void>((resolve) => {
+          releaseWatch = (unwatch) => resolve(unwatch);
+        }),
+    };
+    const statusSync = new StatusSyncService({
+      repo,
+      k8sClient: pendingClient,
+      containerService: service,
+      heartbeatTracker: new HeartbeatTracker(),
+      connectTimeoutMs: CONNECT_TIMEOUT_MS,
+      image: 'zero-tools/zag-worker:latest',
+      reconnectDelayMs: 0,
+    });
+
+    const startPromise = statusSync.start();
+    expect(releaseWatch).not.toBeNull();
+    // stop() 落在 `await watchJobs` 期间：新 watch 建立后必须立即 abort。
+    statusSync.stop();
+    releaseWatch!(() => {
+      aborted += 1;
+    });
+    await startPromise;
+
+    expect(aborted).toBe(1);
+  });
+
   it('T-Y8: rejecting watch-start / rejecting scan never throws out of start()', async () => {
     vi.useFakeTimers();
     try {

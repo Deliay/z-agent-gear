@@ -63,16 +63,24 @@ export class ProviderService {
       scope: 'user',
     });
 
-    if (models.length > 0) {
-      const modelDocs = models.map((name, i) => ({
-        providerId: provider._id,
-        name,
-        isCustom: false,
-        isEnabled: true,
-        sortOrder: i,
-        scope: 'user',
-      }));
-      await Model.insertMany(modelDocs);
+    // 问题 54：与 update/resync 共用同一套 upsert/skip-custom 逻辑，对上游模型名去重（跳过空名），
+    // 避免重复名触发 (providerId,name) 唯一索引 E11000 留下孤儿供应商。
+    try {
+      await this.syncSyncedModels(String(provider._id), models);
+    } catch (err) {
+      // 尽力回滚：standalone Mongo 无事务，模型写入失败时清理已写入的模型并删除刚创建的供应商，
+      // 避免留下孤儿供应商 / 孤儿模型（回滚本身失败不掩盖原始错误）。
+      try {
+        await Model.deleteMany({ providerId: provider._id, scope: { $ne: 'global' } });
+      } catch {
+        // 忽略清理失败
+      }
+      try {
+        await Provider.deleteOne({ _id: provider._id });
+      } catch {
+        // 忽略清理失败
+      }
+      throw err;
     }
 
     return this.mapProvider(provider.toObject());
@@ -85,6 +93,11 @@ export class ProviderService {
     credentialType: string;
     credentialValue: string;
   }) {
+    // 与 create 及 admin-api 对齐校验名称（建议 I），避免写入空名供应商
+    if (!input.name || input.name.trim().length === 0) {
+      throw new Error('Provider name is required');
+    }
+
     const existingProvider = await Provider.findById(id).lean() as { encryptedCredential: { iv: string; ciphertext: string; tag: string }; type: string; endpoint: string; scope?: string } | null;
     if (!existingProvider) return null;
 
@@ -149,14 +162,18 @@ export class ProviderService {
       .lean();
     const customNames = new Set(customModels.map((m) => (m as { name: string }).name));
 
-    // 去重：同名重复会让同一 bulkWrite 批次产生冲突的 upsert
-    const desired = [...new Set(fetchedNames)].filter((name) => !customNames.has(name));
+    // 去重并跳过空名：同名重复会让同一 bulkWrite 批次产生冲突的 upsert（问题 54）
+    const desired = [...new Set(fetchedNames)]
+      .filter((name) => typeof name === 'string' && name.trim().length > 0)
+      .filter((name) => !customNames.has(name));
     const objectId = new mongoose.Types.ObjectId(providerId);
 
     if (desired.length > 0) {
       const ops = desired.map((name, sortOrder) => ({
         updateOne: {
-          filter: { providerId: objectId, name },
+          // 建议 I：`isCustom: { $ne: true }` 关闭「读自定义模型 → upsert」之间的 TOCTOU 窗口，
+          // 并发插入的同名自定义模型不会被 upsert 命中并改写为同步模型。
+          filter: { providerId: objectId, name, isCustom: { $ne: true } },
           update: {
             $set: { isCustom: false, isEnabled: true, sortOrder, scope: 'user' as const },
           },

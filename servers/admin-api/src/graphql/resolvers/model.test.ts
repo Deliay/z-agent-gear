@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { buildSchema, graphql, type GraphQLFieldResolver } from 'graphql';
 import { modelResolvers } from './model';
+import { modelTypeDefs } from '../schemas/model.js';
+import { providerTypeDefs } from '../schemas/provider.js';
 
 vi.mock('../../services/model.js', () => ({
   modelService: {
@@ -104,6 +107,56 @@ describe('modelResolvers', () => {
       (providerService.findById as any).mockResolvedValue({ id: 'p1' });
       await expect(Model.provider({ providerId: 'p1' })).resolves.toEqual({ id: 'p1' });
       expect(providerService.findById).toHaveBeenCalledWith('p1');
+    });
+
+    it('keeps adminModels succeeding with provider: null for a dangling providerId (问题 53)', async () => {
+      (modelService.findAll as any).mockResolvedValue([
+        {
+          id: 'm-orphan',
+          providerId: '000000000000000000000000',
+          name: 'orphan-model',
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: 0,
+          scope: 'global',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]);
+      // providerId 悬空：供应商已不存在 → findById 返回 null
+      (providerService.findById as any).mockResolvedValue(null);
+
+      // 用真实 SDL 构建 schema：若 Model.provider 仍为非空，执行会返回
+      // "Cannot return null for non-nullable field Model.provider"。
+      const schema = buildSchema(
+        ['type Query', 'type Mutation', providerTypeDefs, modelTypeDefs].join('\n'),
+      );
+      const fieldResolver: GraphQLFieldResolver<Record<string, unknown>, unknown> = (
+        source,
+        args,
+        context,
+        info,
+      ) => {
+        if (info.parentType.name === 'Query' && info.fieldName === 'adminModels') {
+          return (modelResolvers.Query as any).adminModels(source, args, context);
+        }
+        if (info.parentType.name === 'Model' && info.fieldName === 'provider') {
+          return Model.provider(source as { providerId: string });
+        }
+        const value = source?.[info.fieldName];
+        return typeof value === 'function' ? value.call(source, args, context, info) : value;
+      };
+      const result = await graphql({
+        schema,
+        source: '{ adminModels { id provider { id } } }',
+        contextValue: good,
+        fieldResolver,
+      });
+
+      expect(result.errors).toBeUndefined();
+      const models = (result.data as { adminModels: Array<{ id: string; provider: unknown }> }).adminModels;
+      expect(models).toHaveLength(1);
+      expect(models[0].provider).toBeNull();
     });
   });
 });

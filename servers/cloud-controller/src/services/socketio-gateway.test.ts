@@ -130,9 +130,9 @@ beforeAll(async () => {
     res.statusCode = 404;
     res.end('Not Found');
   });
-  // 与 index.ts 一致使用显式 ENGINE_PATH；此测试服务器放开 polling 以便用一次
-  // engine 握手 HTTP 请求实证路径（生产仍强制 websocket 传输）。
-  io = new SocketIOServer(httpServer, { path: ENGINE_PATH });
+  // 与 index.ts 保持一致：显式 ENGINE_PATH + 强制 websocket 传输（建议 H）。
+  // T-G10 通过「engine path 上 polling 被拒(400) vs /worker 路径不存在(404)」锚定路径。
+  io = new SocketIOServer(httpServer, { path: ENGINE_PATH, transports: ['websocket'] });
   registerWorkerGateway(io, { tokenService, containerService: service, heartbeatTracker });
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const address = httpServer.address() as AddressInfo;
@@ -335,18 +335,92 @@ describe('worker Socket.IO gateway', () => {
     // engine path 必须是 Socket.IO 默认 `/socket.io/`（与 index.ts 传入的 ENGINE_PATH 一致）。
     expect(ENGINE_PATH).toBe('/socket.io/');
 
-    // 真实 server 上：engine 握手 HTTP 请求命中 `/socket.io/` → 200（body 为 engine 包：
-    // 首字符为包类型 `0`，其后是 JSON handshake payload，含 sid）。
-    const handshake = await fetch(`${baseUrl}/socket.io/?EIO=4&transport=polling`);
-    expect(handshake.status).toBe(200);
-    const text = await handshake.text();
-    expect(text.startsWith('0')).toBe(true);
-    const payload = JSON.parse(text.slice(1)) as { sid?: string };
-    expect(typeof payload.sid).toBe('string');
-    expect(payload.sid).toBeTruthy();
+    // 生产配置强制 websocket 传输：engine path 上发起 polling 握手会被引擎接管但拒绝（400），
+    // 证明该 URL 路径确实由 Socket.IO 引擎处理（而非落到 express 的 404 兜底）。
+    const wrongTransport = await fetch(`${baseUrl}/socket.io/?EIO=4&transport=polling`);
+    expect(wrongTransport.status).toBe(400);
 
     // `/worker` 只是命名空间，作为 URL 路径不存在 → 404（回归问题 46 的 Ingress 误配置即命中此处）。
     const wrongPath = await fetch(`${baseUrl}/worker?EIO=4&transport=polling`);
     expect(wrongPath.status).toBe(404);
+  });
+
+  it('T-G11: per-container rate limiting lets distinct containers reconnect from one shared Ingress IP (问题 59)', async () => {
+    const rateRepo = new InMemoryContainerRepository();
+    const rateToken = new TokenService(rateRepo);
+    const rateClient = new InMemoryK8sClient();
+    const rateJobManager = new K8sJobManager(rateClient, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const rateService = new ContainerService(rateRepo, rateToken, rateJobManager, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    });
+
+    const rateServer = createServer();
+    const rateIo = new SocketIOServer(rateServer, { transports: ['websocket'] });
+    registerWorkerGateway(rateIo, {
+      tokenService: rateToken,
+      containerService: rateService,
+      heartbeatTracker: new HeartbeatTracker(),
+      // per-container 上限 2；per-IP 上限放宽（模拟共享 Ingress IP 下多容器重连）。
+      handshakeRateLimit: { windowMs: 60000, max: 2, ipMax: 50 },
+    });
+    await new Promise<void>((resolve) => rateServer.listen(0, resolve));
+    const port = (rateServer.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const mintToken = async (): Promise<string> => {
+      const container = await rateRepo.create({
+        name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'connecting',
+      });
+      return rateToken.issue(container.id);
+    };
+
+    const attempt = (token: string): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        const socket = ioClient(`${url}/worker`, {
+          auth: { token },
+          transports: ['websocket'],
+          reconnection: false,
+          forceNew: true,
+        });
+        const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+        socket.once('connect_error', (err) => {
+          clearTimeout(timer);
+          const message = err.message;
+          socket.close();
+          resolve(message);
+        });
+        socket.once('connect', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve('CONNECTED');
+        });
+      });
+
+    try {
+      // 同一 peer IP（Ingress 控制器）下的多个不同容器：各自独立计数，不应被限流。
+      for (let i = 0; i < 5; i += 1) {
+        expect(await attempt(await mintToken())).toBe('CONNECTED');
+      }
+
+      // 同一个容器重复握手超过 per-container 上限：被限流。
+      const sameToken = await mintToken();
+      expect(await attempt(sameToken)).toBe('CONNECTED');
+      expect(await attempt(sameToken)).toBe('CONNECTED');
+      expect(await attempt(sameToken)).toBe('RATE_LIMITED');
+    } finally {
+      rateIo.close();
+      await new Promise<void>((resolve) => rateServer.close(() => resolve()));
+    }
   });
 });

@@ -79,10 +79,13 @@ export class LoginRateLimiter {
   recordFailure(key: string): void {
     const now = this.now();
     this.prune(now);
-    // 上限兜底：驱逐最旧 entry，防止攻击者轮换 key 使 Map 无界增长
+    // 上限兜底（问题 56）：驱逐最旧的「未锁定」entry，防止攻击者轮换 key 使 Map 无界增长，
+    // 同时绝不逐出仍在锁定期内的 entry（否则灌满垃圾用户名即可重置管理员的锁定）。
     if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) this.entries.delete(oldest);
+      if (!this.evictOldestUnlocked(now)) {
+        // 全部 entry 均在锁定中：拒绝为新 key 建账（宁可丢弃该次计数，也不牺牲锁定保护）
+        return;
+      }
     }
 
     const entry = this.entries.get(key);
@@ -111,6 +114,21 @@ export class LoginRateLimiter {
         this.entries.delete(key);
       }
     }
+  }
+
+  /**
+   * 按插入序驱逐最旧的「未锁定」entry（问题 56）。
+   * 锁定中的 entry 必须保留，否则攻击者可用大量垃圾 key 逐出管理员的锁定记录。
+   * @returns 是否成功驱逐（全为锁定态时返回 false）
+   */
+  private evictOldestUnlocked(now: number): boolean {
+    for (const [key, entry] of this.entries) {
+      if (entry.lockedUntil <= now) {
+        this.entries.delete(key);
+        return true;
+      }
+    }
+    return false;
   }
 }
 

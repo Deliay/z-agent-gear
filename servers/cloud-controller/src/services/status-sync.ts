@@ -22,6 +22,11 @@ export interface StatusSyncOptions {
   reconnectDelayMs?: number;
   /** watch 重连退避上限（ms），默认 60000。 */
   reconnectMaxDelayMs?: number;
+  /**
+   * `creating` 记录的宽限期（ms），默认 30000。对账时早于该窗口的 `creating` 记录
+   * 视为「启动进行中」跳过，避免与 in-flight `start()` 竞态误判（问题 58）。
+   */
+  creatingGraceMs?: number;
   logger?: Logger;
 }
 
@@ -29,6 +34,7 @@ const SCAN_INTERVAL_MS = 15000;
 const MAX_WATCH_RETRY_EXPONENT = 5;
 const DEFAULT_RECONNECT_BASE_MS = 5000;
 const DEFAULT_RECONNECT_MAX_MS = 60000;
+const DEFAULT_CREATING_GRACE_MS = 30000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -44,13 +50,18 @@ export class StatusSyncService {
   private watchRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private watchRetryAttempt = 0;
   private stopped = true;
+  private readonly creatingGraceMs: number;
 
-  constructor(private readonly opts: StatusSyncOptions) {}
+  constructor(private readonly opts: StatusSyncOptions) {
+    this.creatingGraceMs = opts.creatingGraceMs ?? DEFAULT_CREATING_GRACE_MS;
+  }
 
   async start(): Promise<void> {
     if (!this.stopped) return;
     this.stopped = false;
     await this.attemptStartWatch();
+    // stop() 可能在 watch 建立期间被调用：此时不得再创建巡检定时器。
+    if (this.stopped) return;
     this.timer = setInterval(() => {
       void this.scanTimeouts().catch((err) => {
         this.opts.logger?.error?.('[status-sync] scanTimeouts failed', err);
@@ -106,7 +117,7 @@ export class StatusSyncService {
   }
 
   async startWatch(): Promise<void> {
-    this.unwatch = await this.opts.k8sClient.watchJobs(
+    const unwatch = await this.opts.k8sClient.watchJobs(
       WORKER_LABEL_SELECTOR,
       (event) => {
         void this.handleJobEvent(event).catch((err) => {
@@ -119,6 +130,17 @@ export class StatusSyncService {
         });
       },
     );
+    // stop() 可能落在 `await watchJobs` 期间：此时立即 abort 刚建立的 watch，
+    // 避免泄漏一个永不被 abort 的 watch（建议 G）。
+    if (this.stopped) {
+      try {
+        unwatch();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.unwatch = unwatch;
   }
 
   stop(): void {
@@ -209,8 +231,11 @@ export class StatusSyncService {
   /**
    * 全量对账：用 K8s 实际 Job 列表比对落库记录，回写状态并识别无主 Job；
    * 末尾回收终态记录残留的 Job（资源泄漏兜底）。
+   *
+   * `creating` 记录在 `creatingGraceMs` 宽限期内跳过（与 `list()` 口径对齐，问题 58）：
+   * `start()` 已落库但 `createJob` 尚未完成时恰逢 watch 断连对账，不得误判「Job 已回收」。
    */
-  async reconcile(): Promise<string[]> {
+  async reconcile(now: number = Date.now()): Promise<string[]> {
     const jobs = await this.opts.k8sClient.listJobs(WORKER_LABEL_SELECTOR);
     const byContainerId = new Map<string, K8sJobEvent['job']>();
     for (const job of jobs) {
@@ -221,6 +246,7 @@ export class StatusSyncService {
 
     for (const record of records) {
       if (record.status === 'destroying' || isTerminalStatus(record.status)) continue;
+      if (record.status === 'creating' && !this.isCreatingExpired(record, now)) continue;
       const job = byContainerId.get(record.id) ?? (await this.opts.k8sClient.getJob(record.name));
       if (!job) {
         await this.opts.containerService.markFailed(record.id, 'Job 已回收');
@@ -289,17 +315,30 @@ export class StatusSyncService {
     return reclaimed;
   }
 
+  /** `creating` 记录是否已超过宽限期（可用于对账回收兜底）。 */
+  private isCreatingExpired(
+    record: { updatedAt: Date },
+    now: number,
+  ): boolean {
+    return now - record.updatedAt.getTime() >= this.creatingGraceMs;
+  }
+
   /**
    * connecting 超时巡检：超过 CONNECT_TIMEOUT_MS 未回连 → failed + exitReason「回连超时」，
    * 不立即删除 Job（等待管理员强制销毁或终态巡检兜底回收）。
+   * 另对超过同一阈值的 `creating` 孤儿记录兜底（问题 58/建议 G）：进程在落库 creating 后、
+   * `createJob` 前崩溃时无 Job 也不会有 watch 事件，靠本巡检迁移 failed。
    */
   async scanTimeouts(now: number = Date.now()): Promise<string[]> {
     const records = await this.opts.repo.findAll();
     const timedOut: string[] = [];
     for (const record of records) {
-      if (record.status !== 'connecting') continue;
+      if (record.status !== 'connecting' && record.status !== 'creating') continue;
       if (now - record.updatedAt.getTime() >= this.opts.connectTimeoutMs) {
-        await this.opts.containerService.markFailed(record.id, '回连超时');
+        await this.opts.containerService.markFailed(
+          record.id,
+          record.status === 'creating' ? 'Job 创建超时' : '回连超时',
+        );
         timedOut.push(record.id);
       }
     }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 import { Provider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { providerService } from './provider';
@@ -127,9 +128,11 @@ describe('ProviderService', () => {
   });
 
   describe('create', () => {
-    it('should create a provider and models', async () => {
-      const createSpy = vi.fn().mockResolvedValue({
-        _id: { toString: () => 'new-provider' },
+    const NEW_OID = new mongoose.Types.ObjectId('507f1f77bcf86cd799439099');
+
+    function mockProviderCreated() {
+      const doc = {
+        _id: NEW_OID,
         name: 'Test Provider',
         type: 'OpenAI',
         endpoint: 'https://api.openai.com/v1',
@@ -138,21 +141,32 @@ describe('ProviderService', () => {
         isEnabled: true,
         createdAt: new Date(),
         updatedAt: new Date(),
-        toObject: vi.fn().mockReturnValue({
-          _id: { toString: () => 'new-provider' },
-          name: 'Test Provider',
-          type: 'OpenAI',
-          endpoint: 'https://api.openai.com/v1',
-          credentialType: 'api_key',
-          encryptedCredential: { iv: 'iv', ciphertext: 'enc', tag: 'tag' },
-          isEnabled: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }),
+      };
+      (Provider.create as any) = vi.fn().mockResolvedValue({
+        ...doc,
+        toObject: vi.fn().mockReturnValue(doc),
       });
-      (Provider.create as any) = createSpy;
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+    }
 
+    beforeEach(() => {
+      mockProviderCreated();
+      (Model.find as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      });
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    });
+
+    function bulkNames(): string[] {
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{
+        updateOne: { filter: { name: string } };
+      }>;
+      return ops.map((op) => op.updateOne.filter.name);
+    }
+
+    it('should create a provider and sync models via upsert (shared with resync)', async () => {
       const result = await providerService.create({
         name: 'Test Provider',
         type: 'OpenAI',
@@ -166,12 +180,87 @@ describe('ProviderService', () => {
       expect(Provider.create).toHaveBeenCalledWith(
         expect.objectContaining({ scope: 'user' }),
       );
-      expect(Model.insertMany).toHaveBeenCalledWith(
+      // 问题 54：create 与 resync 共用同一套 upsert/skip-custom 逻辑，不再 insertMany
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(bulkNames()).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(Model.bulkWrite).toHaveBeenCalledWith(
         expect.arrayContaining([
-          expect.objectContaining({ name: 'gpt-4o', isCustom: false, scope: 'user' }),
-          expect.objectContaining({ name: 'gpt-4o-mini', isCustom: false, scope: 'user' }),
+          expect.objectContaining({
+            updateOne: expect.objectContaining({
+              update: expect.objectContaining({
+                $set: expect.objectContaining({ isCustom: false, isEnabled: true, scope: 'user' }),
+              }),
+              upsert: true,
+            }),
+          }),
         ]),
       );
+    });
+
+    it('dedupes duplicate upstream model names so insert cannot hit the unique index (issue 54)', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce([
+        'gpt-4o',
+        'gpt-4o',
+        'gpt-4o-mini',
+        'gpt-4o',
+        'gpt-4o-mini',
+      ]);
+
+      const result = await providerService.create({
+        name: 'Test Provider',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-key',
+      });
+
+      expect(result.name).toBe('Test Provider');
+      const names = bulkNames();
+      // 每个名字只 upsert 一次，重复名不再触发 (providerId,name) 唯一索引 E11000
+      expect(names).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(new Set(names).size).toBe(names.length);
+      // provider 未被回滚删除
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('skips empty upstream model names before syncing', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce([
+        'gpt-4o',
+        '',
+        '   ',
+        'gpt-4o-mini',
+      ]);
+
+      await providerService.create({
+        name: 'Test Provider',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-key',
+      });
+
+      expect(bulkNames()).toEqual(['gpt-4o', 'gpt-4o-mini']);
+    });
+
+    it('rolls back the created provider when model sync fails (no orphan, best effort)', async () => {
+      (Model.bulkWrite as any) = vi.fn().mockRejectedValue(new Error('write failed'));
+
+      await expect(providerService.create({
+        name: 'Test Provider',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-key',
+      })).rejects.toThrow('write failed');
+
+      // 清理已写入的模型 + 删除刚创建的供应商，避免孤儿记录
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: NEW_OID,
+        scope: { $ne: 'global' },
+      });
+      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: NEW_OID });
     });
   });
 
@@ -352,6 +441,42 @@ describe('ProviderService', () => {
 
       expect(Model.bulkWrite).toHaveBeenCalledTimes(2);
       expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('scopes resync upserts to non-custom models (isCustom:{$ne:true}) to close the TOCTOU window (建议 I)', async () => {
+      (Provider.findByIdAndUpdate as any) = vi.fn().mockResolvedValue({ ...mockExisting });
+      const bulkWrite = vi.fn().mockResolvedValue({});
+      (Model.bulkWrite as any) = bulkWrite;
+
+      await providerService.update(VALID_OID, {
+        name: 'Existing Provider',
+        type: 'OpenAI' as const,
+        endpoint: 'https://custom.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      });
+
+      const ops = bulkWrite.mock.calls[0][0] as Array<{
+        updateOne: { filter: Record<string, unknown> };
+      }>;
+      expect(ops.length).toBeGreaterThan(0);
+      for (const op of ops) {
+        // 即便读自定义模型后、upsert 前被并发插入同名自定义模型，也不会被覆盖为同步模型
+        expect(op.updateOne.filter.isCustom).toEqual({ $ne: true });
+      }
+    });
+
+    it('rejects an empty or whitespace name before any DB write (建议 I)', async () => {
+      await expect(providerService.update(VALID_OID, {
+        name: '   ',
+        type: 'OpenAI' as const,
+        endpoint: 'https://api.openai.com/v1',
+        credentialType: 'api_key',
+        credentialValue: 'sk-x',
+      })).rejects.toThrow('Provider name is required');
+
+      expect(Provider.findById).not.toHaveBeenCalled();
+      expect(Provider.findByIdAndUpdate).not.toHaveBeenCalled();
     });
   });
 

@@ -20,6 +20,32 @@ function isValidObjectId(id: string): boolean {
 }
 
 /**
+ * 过滤批量写 id 中的非法 ObjectId（问题 55，与 agent-api `validObjectIds` 对齐）。
+ * 合法但不存在的 id 由 Mongo 自然匹配为空，无需额外处理。
+ */
+function validObjectIds(ids: string[]): string[] {
+  return ids.filter((id) => isValidObjectId(id));
+}
+
+/**
+ * 规范化上游返回的模型名（问题 54）：
+ * - 剔除空串/纯空白名（唯一索引下写入空名同样会污染数据）；
+ * - 用 Set 去重（上游网关/代理可能返回重复名，直接 `insertMany` 会 E11000）。
+ * 保留首次出现的顺序，供 sortOrder 使用。
+ */
+function dedupeModelNames(models: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of models) {
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    result.push(name);
+  }
+  return result;
+}
+
+/**
  * 探测当前连接是否为支持事务的部署（副本集/分片集群）。
  * 单节点 mongod（含 Aspire 本地 Mongo 容器）不支持事务，直接走非事务路径，
  * 避免 `withTransaction` 触发 "does not support retryable writes" 报错。
@@ -136,8 +162,9 @@ export class ProviderService {
           scope: GLOBAL_SCOPE,
         });
 
-      if (models.length > 0) {
-        const modelDocs = models.map((name, i) => ({
+      const names = dedupeModelNames(models);
+      if (names.length > 0) {
+        const modelDocs = names.map((name, i) => ({
           providerId: provider._id,
           name,
           isCustom: false,
@@ -145,10 +172,20 @@ export class ProviderService {
           sortOrder: i,
           scope: GLOBAL_SCOPE,
         }));
-        if (session) {
-          await Model.insertMany(modelDocs, { session });
-        } else {
-          await Model.insertMany(modelDocs);
+        try {
+          if (session) {
+            await Model.insertMany(modelDocs, { session });
+          } else {
+            await Model.insertMany(modelDocs);
+          }
+        } catch (err) {
+          // 问题 54：非事务路径下供应商已先落库，模型同步失败会留下孤儿供应商。
+          // 尽力清理该供应商及其模型后重抛，避免「供应商存在但无模型/创建报错」的中间态。
+          if (!session) {
+            await Model.deleteMany({ providerId: provider._id, scope: GLOBAL_SCOPE }).catch(() => {});
+            await Provider.deleteOne({ _id: provider._id, scope: GLOBAL_SCOPE }).catch(() => {});
+          }
+          throw err;
         }
       }
 
@@ -243,7 +280,9 @@ export class ProviderService {
           const providerObjectId = new mongoose.Types.ObjectId(id);
           const ops = desired.map(({ name, sortOrder }) => ({
             updateOne: {
-              filter: { providerId: providerObjectId, name },
+              // `isCustom: { $ne: true }` 收紧 upsert 目标，关闭「读取自定义名 → 并发插入同名自定义模型」
+              // 的 TOCTOU 窄窗口（建议 I）：命中不了自定义模型时不会误改它。
+              filter: { providerId: providerObjectId, name, isCustom: { $ne: true } },
               update: {
                 $set: {
                   isCustom: false,
@@ -312,13 +351,16 @@ export class ProviderService {
   }
 
   async batchEnable(ids: string[]) {
+    const validIds = validObjectIds(ids);
+    if (validIds.length === 0) return { successCount: 0 };
+
     const result = await Provider.updateMany(
-      { _id: { $in: ids }, scope: GLOBAL_SCOPE },
+      { _id: { $in: validIds }, scope: GLOBAL_SCOPE },
       { isEnabled: true },
     );
 
     await Model.updateMany(
-      { providerId: { $in: ids }, scope: GLOBAL_SCOPE },
+      { providerId: { $in: validIds }, scope: GLOBAL_SCOPE },
       { isEnabled: true },
     );
 
@@ -326,13 +368,16 @@ export class ProviderService {
   }
 
   async batchDisable(ids: string[]) {
+    const validIds = validObjectIds(ids);
+    if (validIds.length === 0) return { successCount: 0 };
+
     const result = await Provider.updateMany(
-      { _id: { $in: ids }, scope: GLOBAL_SCOPE },
+      { _id: { $in: validIds }, scope: GLOBAL_SCOPE },
       { isEnabled: false },
     );
 
     await Model.updateMany(
-      { providerId: { $in: ids }, scope: GLOBAL_SCOPE },
+      { providerId: { $in: validIds }, scope: GLOBAL_SCOPE },
       { isEnabled: false },
     );
 
@@ -340,8 +385,11 @@ export class ProviderService {
   }
 
   async batchDelete(ids: string[]) {
-    await Model.deleteMany({ providerId: { $in: ids }, scope: GLOBAL_SCOPE });
-    const result = await Provider.deleteMany({ _id: { $in: ids }, scope: GLOBAL_SCOPE });
+    const validIds = validObjectIds(ids);
+    if (validIds.length === 0) return { successCount: 0 };
+
+    await Model.deleteMany({ providerId: { $in: validIds }, scope: GLOBAL_SCOPE });
+    const result = await Provider.deleteMany({ _id: { $in: validIds }, scope: GLOBAL_SCOPE });
     return { successCount: result.deletedCount };
   }
 

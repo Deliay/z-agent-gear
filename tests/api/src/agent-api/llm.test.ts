@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createServer } from 'node:http';
 import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
 import { adminGql, ensureAdminLogin } from '../admin-api/helpers.js';
@@ -775,6 +776,82 @@ describe('LLM resync & dangling provider regressions', () => {
       } finally {
         await models.deleteOne({ _id: modelOid });
         await gqlRequest(DELETE_PROVIDER, { id: pid }, token);
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 回归：create 对上游重复模型名去重（问题 54）
+// 需真实 Mongo 验证 (providerId,name) 唯一索引不再被重复名触发；缺失时显式跳过。
+// ---------------------------------------------------------------------------
+describe('LLM create dedupe regression (issue 54)', () => {
+  let token = '';
+
+  beforeAll(async () => {
+    const uid = `ld_${Date.now().toString(36)}`;
+    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+    const body = await res.json();
+    token = body.data?.signup?.token ?? '';
+    expect(token).toBeTruthy();
+  });
+
+  it.skipIf(!process.env.MONGODB_URI)(
+    'creates a provider and dedupes duplicate upstream model names (no E11000)',
+    async () => {
+      // 上游（网关/代理）返回重复模型名：修复前 create 直接 insertMany → (providerId,name)
+      // 唯一索引 E11000，供应商已落库成为孤儿且请求报错。
+      const dupServer = createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            object: 'list',
+            data: ['dup-model-a', 'dup-model-a', 'dup-model-b', 'dup-model-a'].map((id) => ({
+              id,
+              object: 'model',
+              created: 0,
+              owned_by: 'mock',
+            })),
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => dupServer.listen(0, '127.0.0.1', resolve));
+      const addr = dupServer.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+      let pid = '';
+      try {
+        const name = `dup-provider-${Date.now()}`;
+        const created = await (
+          await gqlRequest(
+            CREATE_PROVIDER,
+            {
+              input: {
+                name,
+                type: 'OpenAI',
+                endpoint: `http://127.0.0.1:${port}/v1`,
+                credentialType: 'api_key',
+                credentialValue: 'sk-test-fake-key',
+              },
+            },
+            token,
+          )
+        ).json();
+        expect(created.errors).toBeUndefined();
+        pid = created.data.createProvider.id as string;
+        expect(pid).toBeTruthy();
+
+        const list = await (
+          await gqlRequest(MODELS_BY_PROVIDER, { providerId: pid }, token)
+        ).json();
+        expect(list.errors).toBeUndefined();
+        const names = (list.data.modelsByProvider as Array<{ name: string }>).map((m) => m.name);
+        // 去重且保留首次出现顺序
+        expect(names).toEqual(['dup-model-a', 'dup-model-b']);
+        expect(new Set(names).size).toBe(names.length);
+      } finally {
+        if (pid) await gqlRequest(DELETE_PROVIDER, { id: pid }, token);
+        await new Promise<void>((resolve) => dupServer.close(() => resolve()));
       }
     },
   );

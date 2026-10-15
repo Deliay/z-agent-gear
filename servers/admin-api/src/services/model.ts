@@ -24,6 +24,11 @@ export class ModelService {
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
     }
+    // 名称 trim + 拒空（建议 I，与 agent 侧校验对齐）：避免写入空名自定义模型
+    const name = (input.name ?? '').trim();
+    if (name.length === 0) {
+      throw new Error('Model name is required');
+    }
     const provider = await Provider.findOne({ _id: input.providerId, scope: GLOBAL_SCOPE }).lean();
     if (!provider) {
       throw new Error('Provider not found');
@@ -36,7 +41,7 @@ export class ModelService {
 
     const model = await Model.create({
       providerId: new mongoose.Types.ObjectId(input.providerId),
-      name: input.name,
+      name,
       isCustom: true,
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,

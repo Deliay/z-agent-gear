@@ -13,9 +13,10 @@ export const config = {
   // 生产环境不默认放开 `*`：未显式配置 CORS_ORIGIN 时回落到空串，index.ts 以 origin:false 只允许同源
   corsOrigin: process.env.CORS_ORIGIN || (nodeEnv === 'production' ? '' : '*'),
   nodeEnv,
-  // 是否信任上游反向代理（问题 49）：默认 false，登录限速取底层 socket 对端地址；
-  // 仅在显式开启时信任 `x-forwarded-for`/`x-real-ip`（取受信代理追加的末跳），避免伪造头绕过限速。
-  trustProxy: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
+  // 受信反向代理（问题 49/57）：逗号分隔的 IP/CIDR 列表，**仅当底层 socket 对端命中列表时**才信任
+  // `x-forwarded-for`/`x-real-ip`（取受信代理追加的末跳）。默认空串=不信任，登录限速取 socket 对端。
+  // 兼容历史 `TRUST_PROXY=true|1`：等价于「仅信任回环」。
+  trustedProxies: normalizeTrustProxy(process.env.TRUST_PROXY),
   // 首次种子的管理员初始密码（可选）。未配置时首次种子随机生成并一次性输出到启动日志。
   // 配置了弱口令/已知默认值会在 assertRuntimeConfig 中 fail-fast（CWE-798）。
   initialAdminPassword: process.env.ADMIN_INITIAL_PASSWORD || '',
@@ -26,6 +27,66 @@ export const config = {
 };
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
+
+/** 规范化 TRUST_PROXY：空/false/0 → 不信任；true/1 → 仅信任回环；其余按逗号列表原样使用。 */
+export function normalizeTrustProxy(value: string | undefined): string {
+  if (!value) return '';
+  const v = value.trim();
+  if (v === '' || v.toLowerCase() === 'false' || v === '0') return '';
+  if (v.toLowerCase() === 'true' || v === '1') return '127.0.0.1/8,::1/128';
+  return v;
+}
+
+function normalizeIp(ip: string): string {
+  const trimmed = ip.trim();
+  return trimmed.startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
+}
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    const b = Number(part);
+    if (!Number.isInteger(b) || b < 0 || b > 255) return null;
+    n = n * 256 + b;
+  }
+  return n >>> 0;
+}
+
+/** IP 是否命中某个 IP/CIDR 表达式（IPv4 支持 CIDR；IPv6 支持精确匹配或 /128）。 */
+export function ipMatchesCidr(ip: string, cidr: string): boolean {
+  const normalizedIp = normalizeIp(ip);
+  const [baseRaw = '', lenRaw] = cidr.split('/');
+  const base = normalizeIp(baseRaw);
+  if (!base) return false;
+
+  const ipInt = ipv4ToInt(normalizedIp);
+  const baseInt = ipv4ToInt(base);
+  if (ipInt !== null && baseInt !== null) {
+    const len = lenRaw === undefined || lenRaw === '' ? 32 : Number(lenRaw);
+    if (!Number.isInteger(len) || len < 0 || len > 32) return false;
+    if (len === 0) return true;
+    const mask = len === 32 ? 0xffffffff : (~(0xffffffff >>> len)) >>> 0;
+    return (ipInt & mask) === (baseInt & mask);
+  }
+
+  if (lenRaw !== undefined && lenRaw !== '' && Number(lenRaw) !== 128) return false;
+  return normalizedIp === base;
+}
+
+/**
+ * 判断对端 IP 是否为受信代理（问题 57）。仅当对端命中 `trustedProxies` 时才允许采纳转发头，
+ * 避免端口直连时攻击者伪造 `x-forwarded-for` 末跳绕过 IP 维度限速。
+ */
+export function isTrustedProxy(ip: string | undefined | null, list = config.trustedProxies): boolean {
+  if (!ip || !list) return false;
+  return list
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .some((entry) => ipMatchesCidr(ip, entry));
+}
 
 /** 管理员初始密码最短长度（与 auth 服务的改密策略一致） */
 export const MIN_PASSWORD_LENGTH = 10;

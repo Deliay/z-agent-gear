@@ -48,6 +48,10 @@ export function generateInitialAdminPassword(): string {
  * - 未配置：生成强随机密码。
  * 两种来源均保留 `mustChangePassword: true`，并**每次种子时**在启动日志一次性输出初始口令（问题 47），
  * 便于编排层注入随机口令后运维仍可获取。
+ *
+ * ⚠️ 安全提示（建议 J）：以下 stdout 输出包含明文初始口令，属于有意的权衡（首次登录强制改密）。
+ * 日志聚合 / 采集系统（ELK、Loki、云日志等）**不得**将该输出持久化为可检索日志；请对 admin-api
+ * 的 stdout 做脱敏/直连终端处理，或仅在需要时临时查看容器启动日志。
  */
 export async function seedAdmin(): Promise<void> {
   const count = await AdminUser.countDocuments();

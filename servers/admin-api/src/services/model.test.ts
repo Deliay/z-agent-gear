@@ -135,6 +135,21 @@ describe('ModelService (admin / global scope)', () => {
       await expect(modelService.createCustom({ providerId: 'user-provider', name: 'x' })).rejects.toThrow('Provider not found');
       expect(Model.create).not.toHaveBeenCalled();
     });
+
+    it('建议 I: trims the name and rejects an empty/whitespace name', async () => {
+      const custom = makeModelDoc({ _id: { toString: () => 'model-new' }, name: 'custom-model', isCustom: true, sortOrder: 3 });
+      const create = vi.fn().mockResolvedValue({ ...custom, toObject: () => custom });
+      (Model.create as any) = create;
+
+      await modelService.createCustom({ providerId: VALID_OID, name: '  custom-model  ' });
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'custom-model' }));
+
+      create.mockClear();
+      await expect(
+        modelService.createCustom({ providerId: VALID_OID, name: '   ' }),
+      ).rejects.toThrow('Model name is required');
+      expect(create).not.toHaveBeenCalled();
+    });
   });
 
   describe('delete', () => {

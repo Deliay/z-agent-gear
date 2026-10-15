@@ -149,6 +149,50 @@ describe('ProviderService (admin / global scope)', () => {
       await expect(providerService.create(validInput)).rejects.toThrow('E11000');
       expect(Model.insertMany).not.toHaveBeenCalled();
     });
+
+    it('问题 54: dedupes/drops upstream model names so duplicate names cannot E11000', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce(['gpt-4o', 'gpt-4o', '', '   ', 'gpt-4o-mini']);
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      await providerService.create(validInput);
+
+      const docs = (Model.insertMany as any).mock.calls[0][0] as Array<{ name: string; sortOrder: number }>;
+      expect(docs.map((d) => d.name)).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(docs.map((d) => d.sortOrder)).toEqual([0, 1]);
+      // 去重后不再触发唯一索引冲突，也就不需要清理供应商
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('问题 54: deletes the provider when model sync fails in the non-transaction path (no orphan)', async () => {
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockRejectedValue(new Error('E11000 duplicate key error'));
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      await expect(providerService.create(validInput)).rejects.toThrow('E11000');
+
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: doc._id, scope: 'global' });
+      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: doc._id, scope: 'global' });
+    });
+
+    it('问题 54: skips model insert entirely when the upstream list is empty after normalization', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce(['', '  ']);
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+
+      await providerService.create(validInput);
+
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -384,19 +428,22 @@ describe('ProviderService (admin / global scope)', () => {
   });
 
   describe('batch operations', () => {
+    const SECOND_OID = '507f1f77bcf86cd799439012';
+    const THIRD_OID = '507f1f77bcf86cd799439013';
+
     it('T-P6: batchEnable filters by global scope and cascades to models', async () => {
       (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 2 });
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.batchEnable(['p1', 'p2']);
+      const result = await providerService.batchEnable([PROVIDER_OID, OTHER_OID]);
 
       expect(result).toEqual({ successCount: 2 });
       expect(Provider.updateMany).toHaveBeenCalledWith(
-        { _id: { $in: ['p1', 'p2'] }, scope: 'global' },
+        { _id: { $in: [PROVIDER_OID, OTHER_OID] }, scope: 'global' },
         { isEnabled: true },
       );
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: { $in: ['p1', 'p2'] }, scope: 'global' },
+        { providerId: { $in: [PROVIDER_OID, OTHER_OID] }, scope: 'global' },
         { isEnabled: true },
       );
     });
@@ -405,15 +452,15 @@ describe('ProviderService (admin / global scope)', () => {
       (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 1 });
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.batchDisable(['p1']);
+      const result = await providerService.batchDisable([PROVIDER_OID]);
 
       expect(result).toEqual({ successCount: 1 });
       expect(Provider.updateMany).toHaveBeenCalledWith(
-        { _id: { $in: ['p1'] }, scope: 'global' },
+        { _id: { $in: [PROVIDER_OID] }, scope: 'global' },
         { isEnabled: false },
       );
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: { $in: ['p1'] }, scope: 'global' },
+        { providerId: { $in: [PROVIDER_OID] }, scope: 'global' },
         { isEnabled: false },
       );
     });
@@ -422,11 +469,51 @@ describe('ProviderService (admin / global scope)', () => {
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
       (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 3 });
 
-      const result = await providerService.batchDelete(['p1', 'p2', 'p3']);
+      const result = await providerService.batchDelete([PROVIDER_OID, OTHER_OID, SECOND_OID]);
 
       expect(result).toEqual({ successCount: 3 });
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: ['p1', 'p2', 'p3'] }, scope: 'global' });
-      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: ['p1', 'p2', 'p3'] }, scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: [PROVIDER_OID, OTHER_OID, SECOND_OID] }, scope: 'global' });
+      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: [PROVIDER_OID, OTHER_OID, SECOND_OID] }, scope: 'global' });
+    });
+
+    it('问题 55: batchEnable/Disable/Delete drop invalid ObjectIds instead of raising CastError', async () => {
+      (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      (Model.updateMany as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      // 混合合法/非法 id：非法项被过滤，仅合法 id 进入 $in
+      await providerService.batchEnable([PROVIDER_OID, 'not-an-object-id', SECOND_OID]);
+      expect(Provider.updateMany).toHaveBeenCalledWith(
+        { _id: { $in: [PROVIDER_OID, SECOND_OID] }, scope: 'global' },
+        { isEnabled: true },
+      );
+
+      await providerService.batchDisable([OTHER_OID, 'also-bad']);
+      expect(Provider.updateMany).toHaveBeenLastCalledWith(
+        { _id: { $in: [OTHER_OID] }, scope: 'global' },
+        { isEnabled: false },
+      );
+
+      await providerService.batchDelete([THIRD_OID, 'nope']);
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: [THIRD_OID] }, scope: 'global' });
+      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: [THIRD_OID] }, scope: 'global' });
+    });
+
+    it('问题 55: batch operations short-circuit to successCount 0 when no id is a valid ObjectId', async () => {
+      (Provider.updateMany as any) = vi.fn();
+      (Model.updateMany as any) = vi.fn();
+      (Model.deleteMany as any) = vi.fn();
+      (Provider.deleteMany as any) = vi.fn();
+
+      await expect(providerService.batchEnable(['bad', 'worse'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDisable(['bad'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDelete(['bad', 'worse'])).resolves.toEqual({ successCount: 0 });
+
+      expect(Provider.updateMany).not.toHaveBeenCalled();
+      expect(Model.updateMany).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Provider.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

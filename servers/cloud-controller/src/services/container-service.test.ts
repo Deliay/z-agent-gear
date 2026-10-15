@@ -328,6 +328,50 @@ describe('ContainerService', () => {
     expect(stored?.exitedAt).toBeInstanceOf(Date);
   });
 
+  it('T-S17: start() CAS miss after a concurrent register must not delete the live Job (问题 58)', async () => {
+    const { repo, client, service } = setup();
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'connecting') {
+        // 模拟 worker 先注册：markOnline 允许 creating→online，随后 start() 的
+        // creating→connecting CAS 未命中。
+        await originalUpdate(id, { status: 'online', connectedAt: new Date() });
+        return null;
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    const created = await service.start('idle');
+
+    expect(created.status).toBe('online');
+    // 已注册的健康容器 Job 不得被 CAS-miss 兜底删除。
+    expect(await client.getJob(created.name)).not.toBeNull();
+    expect(client.deleteCalls).toHaveLength(0);
+  });
+
+  it('T-S18: destroy decides graceful shutdown from the post-CAS state, not the stale snapshot (建议 G)', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle'); // snapshot status = connecting
+    const shutdowns: string[] = [];
+    service.onShutdown((id) => {
+      shutdowns.push(id);
+    });
+
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'destroying') {
+        // 并发 markOnline 在 destroy 的 CAS 之前把记录置为 online。
+        await originalUpdate(id, { status: 'online', connectedAt: new Date() });
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    await service.destroy(created.id);
+
+    // 即便 destroy 起始快照是 connecting，也要向实际已注册的容器发送 shutdown。
+    expect(shutdowns).toEqual([created.id]);
+  });
+
   it('rejects non-idle purposes with a clear message', async () => {
     const { service } = setup();
     await expect(service.start('workflow')).rejects.toBeInstanceOf(UnsupportedPurposeError);

@@ -85,4 +85,47 @@ describe('LoginRateLimiter (问题 7)', () => {
     }
     expect(limiter.size).toBeLessThanOrEqual(100);
   });
+
+  it('问题 56: maxEntries eviction skips locked entries so a locked admin survives a username flood', () => {
+    const now = 0;
+    const limiter = new LoginRateLimiter({
+      maxAttempts: 3,
+      windowMs: 60 * 60 * 1000,
+      lockoutMs: 60 * 60 * 1000,
+      maxEntries: 50,
+      now: () => now,
+    });
+
+    // 锁定管理员（达到阈值）
+    for (let i = 0; i < 3; i += 1) limiter.recordFailure('username:admin');
+    expect(() => limiter.assertAllowed('username:admin')).toThrow(LoginRateLimitError);
+
+    // 攻击者用大量垃圾用户名灌满 Map（未达阈值，均为未锁定态）
+    for (let i = 0; i < 1000; i += 1) limiter.recordFailure(`username:junk-${i}`);
+
+    // 锁定中的管理员 entry 必须存活；驱逐只针对未锁定项，Map 仍有界
+    expect(() => limiter.assertAllowed('username:admin')).toThrow(LoginRateLimitError);
+    expect(limiter.size).toBeLessThanOrEqual(50);
+  });
+
+  it('问题 56: refuses to add new keys when every retained entry is locked', () => {
+    const now = 0;
+    const limiter = new LoginRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60 * 60 * 1000,
+      lockoutMs: 60 * 60 * 1000,
+      maxEntries: 3,
+      now: () => now,
+    });
+    // maxAttempts=1：每个 key 记录一次即锁定
+    for (let i = 0; i < 3; i += 1) limiter.recordFailure(`locked-${i}`);
+    expect(limiter.size).toBe(3);
+
+    // 全为锁定态：新 key 不再入 Map（不驱逐任何锁定项）
+    limiter.recordFailure('late-key');
+    expect(limiter.size).toBe(3);
+    for (let i = 0; i < 3; i += 1) {
+      expect(() => limiter.assertAllowed(`locked-${i}`)).toThrow(LoginRateLimitError);
+    }
+  });
 });

@@ -22,7 +22,7 @@ const yoga = createYoga({
   schema,
   context: async (ctx) => ({
     currentAdmin: await authenticateAdmin(ctx.request),
-    // 问题 49：默认取底层 socket 对端地址，仅 TRUST_PROXY 开启时才信任转发头（末跳）
+    // 问题 49/57：默认取底层 socket 对端地址；仅当对端命中 TRUST_PROXY 受信代理列表时才采纳转发头末跳
     clientIp: clientIpFrom(ctx.request, (ctx as { req?: unknown }).req),
   }),
   // 生产环境关闭 GraphiQL 交互式浏览器（问题 26）

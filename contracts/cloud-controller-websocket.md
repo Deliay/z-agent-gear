@@ -97,7 +97,7 @@
 | `VERSION_MISMATCH` | `agent-gear` major 版本不兼容；客户端输出升级指引后退出 |
 | `INVALID_PAYLOAD` | `register` payload 缺少必填字段（如 `hostname`） |
 | `INVALID_TOKEN` | 握手 token 校验失败（仅在 `connect_error` 中返回，不会进入 `register` 阶段） |
-| `RATE_LIMITED` | 握手频率超限（按来源 IP 滑动窗口限速，仅在 `connect_error` 中返回） |
+| `RATE_LIMITED` | 握手频率超限（按一次性 token 的 `containerId` 前缀滑动窗口限速，无 token 时回退来源 IP；另有更高上限的 per-IP 兜底桶，仅在 `connect_error` 中返回） |
 
 > `INVALID_KEY` / `KEY_ALREADY_ONLINE` 为本地 controller 场景错误码，本契约不使用。
 
@@ -168,7 +168,7 @@ Worker                              cloud-controller
   2. `bcrypt.compare(secret, tokenHash)` 比对；
   3. 文档不存在、`tokenHash` 为空、或容器已处于终态（`exited`/`destroying`/`failed`）→ 拒绝；
   4. 校验失败：`socket.emit('connect_error', 'INVALID_TOKEN')`，记录来源 IP 与原因日志后断开。
-- 握手前先按来源 IP 滑动窗口限速，超限返回 `connect_error('RATE_LIMITED')`（缓解 bcrypt CPU 消耗型攻击）。
+- 握手前先按一次性 token 的 `containerId` 前缀（`token` 中首个 `.` 之前的部分，**不运行 bcrypt**）做滑动窗口限速；无 token 时回退来源 IP。另保留一个更高上限的 per-IP 兜底桶，避免 worker 经共享 Ingress IP 回连时被全局限流（缓解 bcrypt CPU 消耗型攻击的同时不误伤批量重连）。
 - 校验通过：将 `containerId` 写入 `socket.data`，供后续 `register`/`heartbeat`/`disconnect` 使用。
 
 ### 3.2 心跳超时检测
@@ -282,6 +282,7 @@ DELETE /internal/containers/:id
 
 - `destroying` 是瞬时态：销毁流程正常结束即写回 `exited`；若进程在销毁中途被 SIGTERM 打断而卡在 `destroying`，周期性巡检会回收残留 Job 并将记录迁移为 `exited`（`destroying → exited`，写入 `exitedAt`/`exitReason`），不会永久停留。
 - `exited` 表示 Job 已回收：若销毁时 `deleteJob` 失败（记录仍标注「需人工清理」），巡检会持续重试删除残留 Job；`failed`/`exited`/`destroying` 记录均纳入残留 Job 对账兜底。
+- `creating` 记录进行中（`start()` 已落库、`createJob` 尚未完成）时，watch 断连对账在宽限期内跳过不判定失败；若长时间（超过回连超时阈值）仍未推进，超时巡检会兜底迁移 `failed`（`exitReason「Job 创建超时」`），避免进程在落库后崩溃留下永久 `creating` 孤儿。
 
 ### A.5 用途枚举
 

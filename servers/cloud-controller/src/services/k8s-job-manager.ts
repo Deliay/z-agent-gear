@@ -30,7 +30,9 @@ export const JOB_RESOURCES = {
 
 /**
  * 将 PUBLIC_WS_ENDPOINT 规范化为 `wss://<host>/worker`。
- * PUBLIC_WS_ENDPOINT 可能已含协议（wss/https/http）或不含，可能带尾部斜杠或路径。
+ * PUBLIC_WS_ENDPOINT **只允许 host(:port)**（协议可选、尾部斜杠可省、`/worker` 可显式给出）；
+ * 若携带其它路径（如 `host/gateway`）会拼出 `wss://host/gateway/worker`，namespace 变成
+ * `/gateway/worker` 永远注册不上，故 fail-fast 抛错（建议 F）。
  * 一次性 token **不放入 URL**（避免进入 ingress/中间层 access log，问题 11），
  * 改由 worker 经 Socket.IO 握手 `auth.token` 携带（见 agent-controller connectToServer）。
  */
@@ -55,10 +57,13 @@ export function buildServerEndpoint(publicWsEndpoint: string): string {
   const trimmedPath = url.pathname.replace(/\/+$/, '');
   if (!trimmedPath) {
     url.pathname = '/worker';
-  } else if (trimmedPath.endsWith('/worker')) {
+  } else if (trimmedPath === '/worker') {
     url.pathname = trimmedPath;
   } else {
-    url.pathname = `${trimmedPath}/worker`;
+    throw new Error(
+      `PUBLIC_WS_ENDPOINT must be a host(:port) without a path ` +
+        `(got path "${trimmedPath}"); the "/worker" namespace is appended automatically`,
+    );
   }
 
   return url.toString();
@@ -78,17 +83,22 @@ export interface CreateJobInput {
 }
 
 export class K8sJobManager {
+  /** 规范化后的 worker 对外地址；构造时即校验，非法 PUBLIC_WS_ENDPOINT fail-fast（建议 F）。 */
+  private readonly serverEndpoint: string;
+
   constructor(
     private readonly client: K8sClient,
     private readonly cfg: JobManagerConfig,
-  ) {}
+  ) {
+    this.serverEndpoint = buildServerEndpoint(cfg.publicWsEndpoint);
+  }
 
   buildManifest(input: CreateJobInput): K8sJobManifest {
     const labels: Record<string, string> = {
       [WORKER_LABEL_KEY]: WORKER_LABEL_VALUE,
       [CONTAINER_ID_LABEL]: input.containerId,
     };
-    const serverEndpoint = buildServerEndpoint(this.cfg.publicWsEndpoint);
+    const serverEndpoint = this.serverEndpoint;
 
     const spec: K8sJobManifest['spec'] = {
       backoffLimit: 0,

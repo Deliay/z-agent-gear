@@ -64,6 +64,9 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 > 安全（问题 4/47）：`admin-jwt-secret`、`internal-api-token`、`admin-initial-password` 等敏感参数**没有任何提交进仓库的默认值**——
 > Aspire 每次启动随机生成；管理员初始密码会在 admin-api 首次种子时一次性打印到启动日志。
 > 如需固定值（例如跑测试），通过配置注入：`Parameters__admin-initial-password=... Parameters__internal-api-token=... Parameters__admin-jwt-secret=... aspire start`。
+>
+> ⚠️ 该一次性初始口令为明文 stdout 输出（建议 J）：日志聚合 / 采集系统**不得**采集、索引或长期保留 admin-api 的启动日志；
+> 请将启动日志直连终端或做脱敏处理，并在首次登录后立即改密。
 
 ### 手动启动
 

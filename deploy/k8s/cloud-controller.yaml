@@ -84,6 +84,8 @@ spec:
               value: 'zag-cloud'
             - name: WORKER_IMAGE
               value: 'core.harbor.internal.fffdan.com/zero-tools/worker:latest'
+            # PUBLIC_WS_ENDPOINT 只允许 host(:port)，不得带路径；服务端会自动追加
+            # namespace `/worker`（带路径会在启动时 fail-fast）。
             - name: PUBLIC_WS_ENDPOINT
               value: 'cloud-controller.example.internal'
             - name: RUNTIME_CLASS_NAME
