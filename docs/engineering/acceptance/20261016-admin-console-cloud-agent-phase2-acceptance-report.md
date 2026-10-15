@@ -1,15 +1,17 @@
 ---
-description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 轮次，记录代码审查结论、4 项严重问题与 16 项一般问题的根因与修复要求
+description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 各轮次结论：首轮 4 严重 + 16 一般问题与修复回填、第二轮复验 2 严重 + 5 一般新问题（含 2 项修复回归）与打回返工要求
 type: Permanent
 ---
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: ✅ 返工完成（待重启 AI Review 复验）——本轮 4 项严重问题与 16 项一般问题**全部修复**（修复提交 `5159589`），21-45 项建议择要处理。复验证据：四套后端单测 + admin-web 单测 + agent-controller 单测全绿，`tsc`/lint 干净，`tests/api` 386 通过，admin 套件 E2E 20 通过，镜像 `dist` 入口冒烟通过。
+> **状态**: 🔴 第二轮 AI Review 复验（2026-10-16）**打回返工**——首轮 4 项严重 + 16 项一般问题经逐项复核**确认已修复**（`5159589`，属实无虚假修复）；但复验发现 **2 项严重 + 5 项一般**新问题，其中 2 项是修复本身引入的回归（问题 46：Ingress 路径收紧破坏 Socket.IO worker 回连，云端工作容器在 K8s 部署路径不可用；问题 47：AppHost 默认口令 `dev-admin-init-password` 重建问题 4 的接管窗口）。验收不通过，详见第七节。
 >
-> <details><summary>首轮验收结论（历史）</summary>
+> <details><summary>历史轮次（返工 / 首轮 Review）</summary>
 >
-> 🔴 打回返工——AI 代码评审（diff `origin/release...origin/integration`，34 commits，225 文件 +35045/-145；不含锁文件 219 文件 +18322/-143）+ 四套单测实测，发现 **4 项严重问题（合入前必须修复）**、**16 项一般问题**、24 项建议。严重问题集中在：① cloud-controller / admin-api 镜像入口不可用（CI 构建的镜像部署即崩溃）；② Docker Compose 部署产物缺整个 cloud-controller 服务与接线；③ 终态容器 Job 无清理路径（资源泄漏且与契约矛盾）；④ 硬编码默认管理员口令可被接管。**已打回「修复Review意见」节点返工。**
+> ✅ 返工完成（2026-10-16）：首轮 4 项严重问题与 16 项一般问题全部修复（修复提交 `5159589`，回填 `10d673f`），21-45 项建议择要处理。复验证据：五套单测全绿、`tsc`/lint 干净、`tests/api` 386 通过、admin 套件 E2E 20 通过、镜像 `dist` 入口冒烟通过。
+>
+> 🔴 首轮验收结论（2026-10-16）：打回返工——AI 代码评审（diff `origin/release...origin/integration`，34 commits，225 文件 +35045/-145；不含锁文件 219 文件 +18322/-143）+ 四套单测实测，发现 **4 项严重问题（合入前必须修复）**、**16 项一般问题**、24 项建议。严重问题集中在：① cloud-controller / admin-api 镜像入口不可用（CI 构建的镜像部署即崩溃）；② Docker Compose 部署产物缺整个 cloud-controller 服务与接线；③ 终态容器 Job 无清理路径（资源泄漏且与契约矛盾）；④ 硬编码默认管理员口令可被接管。**已打回「修复Review意见」节点返工。**
 >
 > </details>
 
@@ -259,6 +261,140 @@ type: Permanent
 
 > 首轮结论（历史）——**打回返工**：问题 1-4 为严重问题，问题 5-20 为一般问题，必须全部修复并附验证证据后重新提交 Review。
 
+## 七、第二轮 AI Review（复验轮，2026-10-16）
+
+### 7.1 复验范围与方法
+
+复验对象：`origin/release...origin/integration` @ `10d673f`（PR #207，返工修复提交 `5159589` + 报告回填 `10d673f`）。方法：按 cloud-controller / admin-api+agent-api / admin-web+tests+CI 三路并行逐项复核首轮问题 1-20 的修复真实性（不采信 commit message，全部落到代码实证），再排查修复引入的回归；五套单测由本轮独立重跑核对。首轮问题 1-20 的修复**逐项确认属实**（问题 1/4/6/9/13/14/15/16/17/20 完整闭环，3/5/7/8/10/11/12/18/19 实质修复但有残留或回归，见下）。
+
+### 7.2 首轮问题修复复核结论
+
+| 首轮问题 | 复核结论 | 残留/回归 |
+|---|---|---|
+| 1 镜像入口 | ✅ 确认修复 | Dockerfile `node:24` + `npm run build` + `ENTRYPOINT node dist/index.js` + 运行时 `npm ci --omit=dev`，CI 增加容器 `/health` 冒烟 |
+| 2 compose 编排 | ✅ 确认修复 | cloud-controller 服务与 admin-api/admin-web 接线、`.env` 占位齐全 |
+| 3 终态 Job 泄漏 | ✅ 实质修复 | 残留见问题 50（`exited` 停摆 Job 不被巡检、`destroying` 卡死、`deletedJob` 丢字段、一处终态写回无 CAS） |
+| 4 硬编码口令 | ✅ 源码层确认修复 | 回归见问题 47（AppHost 默认口令重建接管窗口） |
+| 5 重同步删自定义模型 | ✅ 实质修复 | 回归见问题 48（同名冲突导致同步模型丢失、重同步永久失败） |
+| 6 改密旧 JWT | ✅ 确认修复 | `pwdAt` 签发/校验链路完整，tests/api 实证旧 token 失效 |
+| 7 登录限速 | ✅ 实质修复 | 残留见问题 49（XFF 伪造绕过、锁定 DoS、Map 无界增长） |
+| 8 状态 CAS | ✅ 实质修复 | `destroyLocked` 终态写回无 `fromStatuses`（并入问题 50）；`markX` 未持锁仅靠 CAS（可接受） |
+| 9 status-sync rejection | ✅ 确认修复 | 全部 `void` 链带 `.catch`，watch 建立失败指数退避 |
+| 10 k8s 令牌/Ingress | ⚠️ 部分修复 | 令牌/Secret/`assertRuntimeConfig` 修复到位；**Ingress 收紧引入新回归（问题 46）** |
+| 11 token 进日志 | ✅ 实质修复 | 握手 `auth.token` 承载、URL/日志无 token；Job env 明文注入残留（建议 B） |
+| 12 CI 门禁 | ⚠️ 部分修复 | 3 条流水线加固到位；agent-api/controller-api 缺门禁、命名空间仍两套（问题 52） |
+| 13 ProviderSummary | ✅ 确认修复 | 非空契约 vs 可空解析器残留（问题 51） |
+| 14 级联 scope 过滤 | ✅ 确认修复 | update/delete/toggle/batch* 全部对齐 |
+| 15 静默 skip | ✅ 确认修复 | 显式 `it.skipIf` + 兜底销毁已启动容器 |
+| 16 E2E workers | ✅ 确认修复 | `workers: 1` + `fullyParallel: false` 写死并修正文档 |
+| 17 空洞断言 | ✅ 确认修复 | 先造数再断言非空 + 成员断言 |
+| 18 列表 error 态 | ✅ 确认修复 | 4 个面消费 `error` + `QueryError` 重试；`error && !data` 门残留（建议 A） |
+| 19 批量 in-flight | ✅ 确认修复 | 批量路径防抖 + toast + `successCount`；单个 toggle 无防护（建议 A） |
+| 20 config.js 转义 | ✅ 确认修复 | 字符集白名单 + 换行拒绝 + sed 兜底，注入向量逐一验证被拦 |
+
+### 7.3 验收问题清单（第二轮新增，编号接续）
+
+### 🔴 严重（合入前必须修复）
+
+#### 问题 46（🔴 严重·功能阻断·修复回归）Ingress `path: /worker` 与 Socket.IO 传输路径不匹配，K8s 部署路径下 worker 无法回连
+
+**问题描述**：
+
+- `deploy/k8s/cloud-controller.yaml:139` Ingress 仅路由 `path: /worker`（Prefix），注释意图是「只暴露 Worker 回连、不暴露 /internal」。但 Socket.IO 的 `/worker` 是**命名空间（namespace）而不是 URL 路径**：客户端 `packages/agent-controller/src/socketio-client.ts:274-280` `io()` 只传 `auth`、**未设置 `path` 选项**（该文件 :221-222 自己的注释写明「pathname→namespace」的解析口径）；服务端 `servers/cloud-controller/src/index.ts:40-44` `new SocketIOServer(httpServer, { cors, transports })` 同样未设置 `path`。因此握手 HTTP 请求实际打到 **`/socket.io/?EIO=4&transport=websocket`**（engine 默认 path），Ingress 无此路由 → 404。
+- 生效后果：`k8s-job-manager.ts:37-65` 由 `PUBLIC_WS_ENDPOINT`（`cloud-controller.yaml:82-83`，值为 `wss://cloud-controller.example.internal/worker`，即 Ingress 主机）生成的连接地址下发给每个 Job 的 worker——**所有经部署 manifest 拉起的云端工作容器都无法回连**，握手永不完成、容器进入 `connecting` 超时 `failed`，云端工作容器核心链路在目标 K8s 环境不可用。本地测试直连 Service（不经 Ingress）故五套单测/E2E 全绿无法发现。
+- 这是问题 10 修复引入的**新回归**：把 `path: /` 收紧为 `path: /worker` 时把「命名空间」误当作「URL 路径」。Ingress 注解中也无任何 rewrite 可以弥合。
+
+**根因**：Socket.IO 两层路径概念（engine `path` 默认 `/socket.io/` vs namespace `/worker`）被混为一谈；暴露面收紧缺少入口层连通性验证。
+
+**修复要求**（二选一 + 验证）：
+
+1. 方案 A（推荐）：Ingress 改为 `path: /socket.io`（Prefix）——engine 握手/升级请求放行，`/internal`、`/health` 继续不对外暴露；
+2. 方案 B：服务端 `new SocketIOServer(..., { path: '/worker' })` 与客户端 `io(url, { path: '/worker' })` 显式把 engine path 设为 `/worker`，命名空间回归 `/`，并同步契约 `cloud-controller-websocket.md` 的连接地址说明；
+3. 验证：至少补「client/server engine path 一致」的单测锚定 + 部署文档/冒烟步骤中明确经 Ingress 的 wss 连通性检查（如 kind + nginx-ingress 演练），避免同类回归再次靠代码评审兜底。
+
+#### 问题 47（🔴 严重·安全·修复回归）Aspire 默认编排仍注入公开已知的初始口令与内部令牌，问题 4 的接管窗口在 Aspire 路径重现（CWE-798）
+
+**问题描述**：
+
+- `aspire/AgentGear.AppHost/AppHost.cs:40` `admin-initial-password` 参数带字面量默认值 `"dev-admin-init-password"`（该字面量正是问题 4 修复提交 `5159589` 引入，`git log -S` 可证）；同文件 `:36` `admin-jwt-secret` 默认 `"dev-admin-secret-change-in-production"`、`:80` `internal-api-token` 默认 `"dev-internal-token-change-in-production"`。
+- `dev-admin-init-password` 不在 `servers/admin-api/src/config/index.ts:38-62` `WEAK_ADMIN_PASSWORDS` 名单中，且满足「长度 ≥ 10」，`isWeakAdminPassword` 放行 → `assertRuntimeConfig` 不拦截。而该值在 `tests/api/AGENTS.md:71`、`tests/e2e/AGENTS.md:67` **公开成文**。按 README「方式一：Aspire」默认启动（admin-api 对外暴露）的任何环境，任何读过仓库/文档的人均可 `admin / dev-admin-init-password` 登录并在强制改密态 `changeAdminPassword` **永久接管管理后台**——与首轮问题 4 的漏洞等价，仅换了取值位置。
+- 同理 `dev-internal-token-change-in-production` 是 `tests/api/src/cloud-controller/internal-api.test.ts:5` 的兜底默认值，可直接以 Bearer 调用 cloud-controller 内部 API 任意拉起/销毁云端容器（`assertRuntimeConfig` 弱令牌名单不含它，长度 33 通过）。
+
+**根因**：问题 4 只治理了 admin-api 源码硬编码，编排层（AppHost 参数默认值）、文档、测试注入链路没有一起治理；「弱口令」防线只看长度与小写精确匹配 deny-list，拦不住「足够长但公开」的默认值。
+
+**修复要求**：
+
+1. AppHost 中 `admin-initial-password` / `internal-api-token` / `admin-jwt-secret` 等敏感参数去掉字面量默认值（无默认 + 启动缺失即失败，或每次启动随机生成并一次性输出）；
+2. `isWeakAdminPassword` 与 cloud-controller `assertRuntimeConfig` 的拒绝名单纳入已公开的 dev 默认值（`dev-admin-init-password`、`dev-internal-token-change-in-production`、`dev-admin-secret-change-in-production` 等）；
+3. 测试改由环境注入取值（`tests/api`/`tests/e2e` helper 已支持 env），文档删除「默认值」记载，`tests/e2e/AGENTS.md:67` 的「回落 admin1234567」表述一并修正。
+
+### 🟡 一般（应修复，返工一并处理）
+
+#### 问题 48（🟡 一般·数据丢失·修复回归）重同步保留自定义模型后与 API 模型同名冲突：`deleteMany` 已提交、`insertMany` E11000，同步模型丢失且重同步永久失败
+
+`servers/admin-api/src/services/provider.ts:218-238`：问题 5 的修复改为 `Model.deleteMany({ providerId, scope: GLOBAL_SCOPE, isCustom: false })` 后按 fetch 结果 `insertMany` 全量模型名。唯一索引 `(providerId, name)`（`servers/admin-api/src/models/model.ts:13`）**不含 `isCustom` 维度**：当保留的自定义模型与 API 返回模型同名（如自定义 `gpt-4o`），`insertMany` 抛 E11000。compose/Aspire 默认 Mongo 为 standalone（无副本集），`runWithOptionalTransaction`（`provider.ts:56-84`）自动降级为无事务直写——`deleteMany` 已生效且不回滚 → **所有同步模型被删、供应商更新报错、此后每次重同步都撞名永久失败**（修复前 `deleteMany` 全删反而不会撞唯一键，属修复引入的新故障模式）。agent-api 侧更早暴露：`servers/agent-api/src/services/provider.ts:99-116` 模型同步在 provider 写入**之前**且完全无事务，同样冲突即丢失。修复要求：重拉取模型名与存活自定义模型去重（跳过/合并同名）或改 upsert 语义替代 delete+insert；admin-api/agent-api 两侧统一；补「自定义模型与 API 模型同名」的重同步单测与 tests/api 用例。
+
+#### 问题 49（🟡 一般·安全）登录限速可被伪造 `X-Forwarded-For` 绕过，并存在锁定 DoS 与 Map 无界增长
+
+`servers/admin-api/src/index.ts:20-27` `clientIpFrom` 无受信代理限制地取 XFF 首项 / `x-real-ip`；`graphql/resolvers/auth.ts:53` 限速键为 `ip:username`。① 轮换 XFF 头即每个请求换新键，限速永不触发，在线暴力破解依旧可行；② 每次失败留存 Map entry（`login-rate-limiter.ts:72`），仅成功或锁定过期才清除，伪造键可无限堆积内存；③ 无转发头时键退化为 `unknown:admin` 全站共享，5 次失败即锁死唯一管理员账号（锁定 DoS）。修复要求：IP 取 socket remote address 或受信代理末跳；增加每用户名全局失败上限；定期清理过期 entry；补伪造头对抗性单测。
+
+#### 问题 50（🟡 一般·可靠性/契约）问题 3 修复残留：Job 删除失败的 `exited` 记录永不被巡检重试，`destroying` 卡死不迁移 `exited`
+
+- `servers/cloud-controller/src/services/container-service.ts:299-314`：destroy 时 `deleteJob` 失败仍写 `status: 'exited'`（exitReason 标注「需人工清理」），但 `sweepTerminalJobs`（`status-sync.ts:248`）与 `reclaimResidualJob`（`container-service.ts:327`）**只扫 `failed`/`destroying`**——该 Job 不再有任何自动回收路径，只剩 `activeDeadlineSeconds: 86400`（24h）兜底，且与契约 A.4「exited = Job 已回收」矛盾，等于首轮问题 3 的一条残留泄漏路径。
+- destroy 中途进程重启留下的 `destroying` 记录：`destroy()` 终态分支（`container-service.ts:274-280`）与巡检都只删 Job 不写状态（`status-sync.test.ts:184` 还把「停留在 destroying」锁进断言），记录永远停在 `destroying`，违反契约 `destroying → exited` 状态机。
+- `DELETE /internal/containers/:id`（`internal-api.ts:87`）丢弃契约 A.2.3 承诺的 `deletedJob` 字段，调用方无法观察清理是否真实发生。
+- `destroyLocked` 最终 `exited` 写回无 `fromStatuses` CAS（`container-service.ts:309-314`），是全部状态转移中唯一裸写，`replicas: 1` 时安全，扩副本后 CAS 保证失效。
+
+修复要求：巡检覆盖 `exited`（发现残留 Job 即重删）；`destroying` 兜底迁移 `exited`；DELETE 响应透出 `deletedJob`；终态写回补 `fromStatuses: ['destroying']`；契约 A.2.3/A.4 同步修订并补单测。
+
+#### 问题 51（🟡 一般·契约/可用性）agent-api `Model.provider: ProviderSummary!` 非空契约 vs 可空解析器，悬空 providerId 打挂整条查询
+
+`servers/agent-api/src/graphql/schemas/model.ts:5` 声明 `ProviderSummary!`（非空），但 `graphql/resolvers/model.ts:95-99` 走 `findSummaryById`（`services/provider.ts:28-32`）对缺失/悬空 provider 返回 `null`（`graphql/resolvers/model.test.ts:70-73` 还把 `null` 行为锁进断言）——GraphQL 非空违规会使整个 `models`/`modelsByProvider` 查询失败。悬空 `providerId` 可达：模型级联删除带 `scope: { $ne: 'global' }` 过滤（问题 14 修复），存在「global 模型挂在 user 供应商、供应商被删而模型孤儿」的组合产生悬空引用。修复要求：字段改可空或行级容错降级（占位 summary），补悬空引用测试。
+
+#### 问题 52（🟡 一般·发布）CI 加固不完整：agent-api / controller-api 流水线无测试门禁与最小权限，镜像命名空间仍两套
+
+问题 12 只修了 3 条流水线：`.github/workflows/build-agent-api-image.yml`、`build-controller-api-image.yml` 仍无 `npm ci && npm test` 门禁、无 `permissions: contents: read`、命名空间硬编码 `zero-tools`；而 cloud-controller 用 `zag`（`build-cloud-controller-image.yml:18`，`deploy/k8s/cloud-controller.yaml:70` 引 `core.harbor.internal.fffdan.com/zag/...`），admin-api/admin-web 也仍是 `zero-tools`——「统一镜像命名空间」未达成，带红测试仍可推 `agent-api`/`controller-api` 的 `latest`。修复要求：全部 `build-*-image.yml` 统一加测试门禁 + `permissions: contents: read` + `IMAGE_NAMESPACE` 参数化，命名空间与部署引用对齐（或文档固化搬运步骤）。
+
+### 🟢 建议（本轮新增，不阻塞，可随返工择要处理）
+
+| # | 模块 | 建议 |
+|---|---|---|
+| A | admin-web | 单个 `handleToggle` 无 in-flight 防护、开关不禁用（`ProviderSection.tsx:103-113`、`ModelSection.tsx:58-68`），双击两次 toggle 相互抵消；`runBatch` 的 `?? ids.length` 在 `successCount` 缺失时报全成功（`ProviderSection.tsx:164`）；`error && !data` 门使数据加载后的刷新失败静默（ModelSection/ProviderSection/BaseImagePage），`ModelSection` 的 `ADMIN_PROVIDERS` 查询完全不读 `error` |
+| B | cloud-controller | worker token 仍明文写入 Job env（`k8s-job-manager.ts:107` `value: input.token`），`get/list jobs` 权限即可读取；`register` 事件载荷仍携带 `key`（`socketio-client.ts:305-312`）。建议改 K8s Secret 引用注入 |
+| C | cloud-controller | `start()` CAS 未命中即删 Job 的兜底（`container-service.ts:196-200`）在极端 `markOnline` 竞态下会误删活 Job；watch 断线重连为固定延迟而非指数退避（`status-sync.ts:142-145`）；禁令牌名单为小写精确匹配（`config/index.ts:79`），同源变体可绕过 |
+| D | 测试/CI | `k8s-client.ts` `RealK8sClient` 零覆盖（`c8 ignore`）；admin-web `/assets/` 双 `Cache-Control` 头（`nginx.conf:31-38`）；admin-web 冒烟只查 `/config.js` 可达不校验内容（`build-admin-web-image.yml:61-74`）；`generate-config-js.test.ts` 缺 `</script>` 拒绝用例 |
+| E | agent-api | `batchEnable/Disable/Delete` 原始 id 直入 `$in` 未做 `ObjectId.isValid`（`services/provider.ts:167-205`），CastError 冒泡为通用错误，与 admin-api 问题 27 的处理不一致 |
+
+### 7.4 第二轮问题总览
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 46 | Ingress `path: /worker` 破坏 Socket.IO 回连，K8s 路径 worker 不可用 | namespace 与 engine path 概念混用（问题 10 修复回归） | ⏳ 待修复（🔴 严重） | - |
+| 47 | AppHost 公开默认口令/令牌重建接管窗口 | 问题 4 只修源码层，编排/文档/测试链路未治理（修复回归） | ⏳ 待修复（🔴 严重） | - |
+| 48 | 重同步同名冲突致同步模型丢失、重同步永久失败 | 唯一键不含 `isCustom`，delete+insert 无去重（问题 5 修复回归） | ⏳ 待修复（🟡） | - |
+| 49 | 登录限速可被伪造 XFF 绕过 + 锁定 DoS + Map 无界 | 限速键取自不可信请求头 | ⏳ 待修复（🟡） | - |
+| 50 | 终态 Job 清理残留路径 + `destroying` 卡死 + 契约缝隙 | 巡检未覆盖 `exited`、终态分支不迁移状态 | ⏳ 待修复（🟡） | - |
+| 51 | `ProviderSummary!` 非空契约 vs 可空解析器 | 悬空 providerId 触发非空违规 | ⏳ 待修复（🟡） | - |
+| 52 | CI 加固不完整（两条流水线缺门禁、命名空间两套） | 问题 12 修复范围不完整 | ⏳ 待修复（🟡） | - |
+
+### 7.5 第二轮验证（复验实测，2026-10-16）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 admin-api | ✅ 193 passed / 17 文件 | 本轮独立重跑 `npx vitest run` |
+| 单测 cloud-controller | ✅ 57 passed / 10 文件 | 本轮独立重跑 |
+| 单测 agent-api | ✅ 642 passed / 45 文件 | 本轮独立重跑 |
+| 单测 admin-web | ✅ 111 passed / 19 文件 | 本轮独立重跑 |
+| 单测 agent-controller | ✅ 292 passed / 23 文件 | 本轮独立重跑（握手 auth 变更回归） |
+| 首轮问题 1-20 修复复核 | ✅ 全部属实 | 逐项代码实证，无虚假修复；残留/回归见 7.2 表 |
+| Ingress → worker wss 连通性 | ❌ 不可用 | 静态实证：`/socket.io/` 无路由（问题 46），单测/E2E 不经 Ingress 故未暴露 |
+| Aspire 默认凭据 | ❌ 不安全 | `dev-admin-init-password` 通过弱口令校验且文档公开（问题 47） |
+| tests/api / tests/e2e | ⚠️ 未重跑 | 需 Aspire 编排环境，采信返工证据（386 / 20 passed）；不阻塞本轮结论 |
+
+### 7.6 第二轮结论
+
+🔴 **打回返工**——首轮 1-20 修复确认属实，但问题 46、47 为严重问题（均为修复引入的回归：部署路径核心链路不可用 / 默认凭据接管窗口重现），问题 48-52 为一般问题（含数据丢失回归），按「有问题即打回」的验收准则不予通过。请按 7.3 修复要求逐项修复（46/47 合入前必须闭环），回填修复 commit 与验证结果后重新提交 AI Review；建议项 A-E 择要处理。
+
 ## 经验总结
 
 - **发布产物必须冒烟**：Dockerfile/manifest 属于交付物，「本地能跑」不等于「镜像能跑」；CI 构建流水线应加镜像启动冒烟与 `npm test` 门禁，`aspire publish` 产物需随 AppHost 变更强制再生成。
@@ -266,3 +402,7 @@ type: Permanent
 - **默认凭据零容忍**：种子口令应环境注入 + fail-fast，与加密密钥同等对待；改密必须使旧 token 失效。
 - **测试绿灯要真**：静默 `return` 与空数组 `every()` 都会让套件虚假全绿，环境缺失用显式 skip 报告。
 - **前端错误态不可省**：查询失败渲染成空态会误导操作决策，`useQuery` 的 `error` 必须被消费。
+- **修复回归要单列检查**：「收紧暴露面」这类改动（Ingress 路径、过滤条件、白名单）必须连带验证主链路可用性——本轮问题 46/47/48 全部是修复本身引入的新故障。
+- **Socket.IO namespace ≠ URL path**：入口层路由按 engine path（默认 `/socket.io/`）放行，命名空间只存在于协议握手里；本地直连测试覆盖不到 Ingress，需入口层冒烟。
+- **默认凭据零容忍要覆盖全链路**：源码、编排默认值（AppHost 参数）、文档、测试兜底值都在泄漏面上，deny-list + 长度校验拦不住「足够长但公开」的默认值。
+- **保留数据的重建要注意唯一键**：delete+insert 式重建必须把「被保留的集合」纳入去重，否则唯一索引冲突会在无事务路径下放大成数据丢失。
