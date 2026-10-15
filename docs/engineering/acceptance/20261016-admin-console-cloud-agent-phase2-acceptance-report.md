@@ -580,6 +580,84 @@ type: Permanent
 
 ✅ **返工完成**——问题 53-59 已全部修复（`028436c`），建议 F-K 择要处理；复验证据见 8.7。请重启 AI Review 复核。
 
+## 九、第四轮 AI Review（复验轮，2026-10-16）
+
+### 9.1 复验范围与方法
+
+复验对象：`origin/release...origin/integration` @ `406456f`（PR #207，第三轮返工修复提交 `028436c` + 报告回填 `406456f`）。方法：逐项复核问题 53-59 与建议 F-K 的修复真实性（全部落到代码实证，不采信 commit message 与回填结论），专项排查 `028436c` 修复引入的回归（契约可空化的前端消费面、`PUBLIC_WS_ENDPOINT` fail-fast 的既有配置面、限速器/状态机新逻辑的对抗建模），并**独立复跑四套单测与 tsc**（与上游复验证据逐数比对）。**问题 53-59 修复全部确认属实，建议 F-K 六项全部落地（超出「择要」）**；但问题 59 的修复引入一项新的加固缺口（问题 60），另有 2 项 🟢 残留建议。本轮无 🔴 严重问题。
+
+### 9.2 第三轮问题修复复核结论
+
+| 第三轮问题 | 复核结论 | 证据 / 残留 |
+|---|---|---|
+| 53 admin-api `Model.provider` 非空契约 | ✅ 确认修复 | `contracts/admin-llm.graphql:49` 与 `servers/admin-api/src/graphql/schemas/model.ts:5` 均改 `provider: Provider`（可空）并注释缘由；**真实 SDL 执行测试**（`resolvers/model.test.ts` 用 `buildSchema`+`graphql()` 执行 `{ adminModels { id provider { id } } }`，悬空 providerId 断言 `errors` 为空且 `provider === null`）；tests/api 补 `skipIf(!MONGODB_URI)` 悬空用例（显式跳过、断言真实）。回归面核查：`admin-web/src/graphql/types.ts:69` `provider?: AdminModelProviderData` 可选 + `ModelItem.tsx:30,69` 判空消费，前端无非空假设 |
+| 54 create() 不去重 E11000 孤儿供应商 | ✅ 确认修复（两侧、全路径） | admin-api `provider.ts` `dedupeModelNames`（trim+跳空+Set 去重）替换裸 `insertMany`；非事务路径失败回滚（`Model.deleteMany` + `Provider.deleteOne`，回滚失败不掩盖原始错误）；agent-api `create()` 复用 `syncSyncedModels` upsert + 同款回滚。单测「问题 54: dedupes/drops upstream model names」「rolls back the created provider when model sync fails」+ tests/api 真实 Mongo 回归（`(providerId,name)` 唯一索引不再被重复名触发）。新建供应商 `(_id, name)` 无既有行，去重后 E11000 不可达 |
+| 55 admin-api batch* 无 ObjectId 校验 | ✅ 确认修复 | `validObjectIds` 过滤 + 空集短路覆盖 `batchEnable/batchDisable/batchDelete` 三个方法（`provider.ts:351-396`），与 agent-api 口径一致（混合入参静默剔除非法 id、全非法返回 `successCount:0`） |
+| 56 限速 Map 驱逐不跳过锁定 entry | ✅ 确认修复 | `evictOldestUnlocked` 按插入序仅驱逐 `lockedUntil <= now`；全部锁定时拒绝为新 key 建账（宁可丢弃计数，不牺牲锁定保护）。单测「maxEntries eviction skips locked entries」「refuses to add new keys when every retained entry is locked」双场景覆盖。残留权衡见 9.3 🟢 |
+| 57 TRUST_PROXY 无条件信任转发头 | ✅ 确认修复 | `TRUST_PROXY` 语义升级为受信代理 IP/CIDR 列表：`normalizeTrustProxy`（空/false/0=不信任，**true/1=仅信任回环**，其余逗号列表）、`ipMatchesCidr`（IPv4 CIDR 掩码运算、IPv6 精确或 /128、`::ffff:` 归一）、`isTrustedProxy`；`clientIpFrom` 仅当 **socket 对端命中受信列表** 才采纳 XFF 末跳，否则用对端。config 8 项 + client-ip 7 项测试（含「不可信对端不采纳伪造转发头」「可信对端仅取末跳」）。全仓无 `config.trustProxy` 残留引用 |
+| 58 reconcile 缺 creating 守卫 + CAS-miss 删活 Job | ✅ 确认修复 | reconcile 对 `creating` 记录按 `isCreatingExpired`（默认 `creatingGraceMs=30s`）宽限跳过，超限才走「Job 已回收」；`start()` CAS-miss 后回读 `current`，**仅 `isTerminalStatus(current.status)` 才 `deleteResidualJob`**（online/connecting 不动活 Job）。竞态测试 T-S17（并发 register 后 CAS-miss 断言 `deleteCalls` 为空、Job 存活）、T-Y11/T-Y12（creating 宽限跳过 / 孤儿超时兜底）；`markFailed` 经 `updateGuarded`（`fromStatuses` 含 `creating`）可达，scanTimeouts 的 creating→failed 兜底路径成立；repo 无硬删除路径，`current ?? created` 的 null 分支纯防御 |
+| 59 握手限速共享 Ingress IP 令牌桶 | ✅ 确认修复（**引入问题 60**） | 主限速键 `container:<token 前缀>`（`containerIdFromToken` 取首个 `.` 前缀，**免 bcrypt**），无 token 回退 `ip:<peer>`；per-IP 兜底桶 `ipMax=600/60s`；T-G11 多容器共享 IP 批量重连全放行、单 key 超限拒绝；契约 §3.1/RATE_LIMITED 表述同步。**但新限速器 Map 无界（问题 60）** |
+| 建议 F（endpoint 路径陷阱） | ✅ 已处理 | `buildServerEndpoint` 非 `/worker` 路径直接抛错，且移入 `K8sJobManager` 构造器 fail-fast；T-K6 锚定；`deploy/k8s/cloud-controller.yaml` 注释 + `cloud-controller/AGENTS.md` 限定 host(:port)。既有配置面核查：AppHost 默认 `localhost:10004`、CI 冒烟 `localhost:8003` 均无路径，不受影响 |
+| 建议 G（destroy 快照/startWatch 竞态/creating 超时） | ✅ 全部处理 | destroy 改用 CAS 后 `destroying.connectedAt !== null` 决定优雅停机（T-S18 断言 shutdown 恰发一次）；`startWatch` 局部持有 unwatch、`stopped` 时立即 abort（T-Y13）；`scanTimeouts` 纳入 creating 孤儿 → `Job 创建超时`（T-Y12） |
+| 建议 H（夹具 transports） | ✅ 已处理 | 测试夹具统一 `transports: ['websocket']` 对齐生产 |
+| 建议 I（trim/空名 + upsert isCustom） | ✅ 已处理 | admin `createCustom` trim + 拒空名（补测）、agent `update` name 校验、两侧 upsert filter 加 `isCustom: { $ne: true }` |
+| 建议 J（口令日志脱敏标注） | ✅ 已处理 | `auth.ts` seedAdmin JSDoc ⚠️ 注 + README 安全注（日志聚合不得采集/索引启动日志） |
+| 建议 K（历史文档标注） | ✅ 已处理 | plan/proposals 顶部均加「`admin1234567` 为历史设计，现实现为随机初始口令」注 |
+
+### 9.3 验收问题清单（第四轮新增，编号接续）
+
+### 🟡 一般（应修复，返工一并处理；本轮无 🔴 严重问题）
+
+#### 问题 60（🟡 一般·安全加固·问题 59 修复引入）握手限速器 Map 无界且限速键直接取自未校验的 token 前缀，可被随机 token 洪水灌爆 cloud-controller 内存
+
+`servers/cloud-controller/src/services/socketio-gateway.ts:59-78` 的 `SlidingWindowRateLimiter` 只有 `hits = Map<string, number[]>`，`allow()` 仅在 key **内部**过滤过期时间戳，**从不删除 key、无 `maxEntries`/`prune`**（对照 admin-api `LoginRateLimiter`：问题 49 已加 `prune()+maxEntries=10000`，问题 56 再补驱逐策略）。问题 59 的修复把主限速键换成 `container:<token 前缀>`，而前缀经 `containerIdFromToken`（:100-108）从**未经校验的握手 token** 里取「首个 `.` 之前的任意字符串」，形状与长度均不校验——限速键从此由未认证对端任意铸造：
+
+1. **无界增长**：攻击者用随机 `<uuid>.x` token 洪水握手，每个唯一前缀在 `keyLimiter` 落一条永久 entry；
+2. **per-IP 兜底桶挡不住写入**：`if (!keyLimiter.allow(key) || !ipLimiter.allow(...))`（:130-135）中 `keyLimiter.allow` 恒先执行且**无条件写 Map**，IP 桶超限只影响放行/拒绝，不影响写入——被 IP 桶拒绝的请求同样各留一条 entry，100 req/s 单机持续数小时即可占用数百 MB~GB 内存（V8 不回收 Map 持有的引用）；
+3. **次级放大**：key 前缀长度无上限（超长字符串直接入 Map key）；`container:<id>`/`ip:<addr>` 条目永不清理（容器销毁后仍永久驻留，慢性泄漏）；`ipLimiter` 同样无 prune/上限（键面为 IP，风险较低但同款）。
+
+这与问题 56 是**完全同款攻击面**（限速 Map + 轮换/伪造 key 灌满），问题 49 的修复要求明确「避免伪造/轮换 key 导致 Map 无界增长」——59 新造的限速器没有继承这一既有加固基线，「修复必须覆盖同一故障模式的全部路径」的教训在加固组件自身上重演。触发面：cloud-controller 握手端口可达即**无需认证**，属 DoS/可用性，无数据泄露。
+
+修复要求：`SlidingWindowRateLimiter` 增加有界性——惰性/定期 prune 整窗过期 key + `maxEntries` 上限（满员驱逐过期优先、次选最旧），并对 containerId 前缀做形状/长度校验（如 `^[A-Za-z0-9._-]{1,64}$`，不合形状直接按无 token 回退 IP 键）后再用作键；`ipLimiter` 同样加界；补「随机 token 前缀洪水下 Map 大小有界」测试。
+
+### 🟢 建议（本轮新增残留，不阻塞）
+
+| # | 模块 | 建议 |
+|---|---|---|
+| L | admin-api | `LoginRateLimiter` 全锁定时「拒绝新增 key」= 新 key 的失败计数被丢弃，Map 满员且全锁定的窗口内（需 5 万~30 万次失败灌满两个实例）全新用户名失去计数保护、可无限试错；建议预留少量新 key 配额（如 5% 空间供新 key 计数）或在文档标注该权衡（现状保护了「锁定记录被逐出」的主攻击面，属可接受权衡） |
+| M | cloud-controller | per-container 桶可被知悉 containerId 的对端定向消耗（伪造同前缀垃圾 token 即可拖垮目标容器 60/min 握手预算）；containerId 为 UUID 不可猜测、攻击面小，可考虑对前缀做 keyed hash 后再入键 |
+
+### 9.4 第四轮问题总览
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 60 | 握手限速器 Map 无界 + 键取自未校验 token 前缀，随机 token 洪水可灌爆内存 | 问题 59 修复新造限速器未继承问题 49/56 的有界性加固基线 | ⏳ 待修复（打回返工） | — |
+
+### 9.5 第四轮验证（实测，2026-10-16）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 admin-api | ✅ 242 passed / 18 文件 | 本轮独立复跑，与上游证据逐数吻合 |
+| 单测 cloud-controller | ✅ 73 passed / 10 文件 | 本轮独立复跑；含 T-S17/T-S18/T-Y11-13 竞态与限速新用例 |
+| 单测 agent-api | ✅ 653 passed / 45 文件 | 本轮独立复跑，逐数吻合 |
+| 单测 admin-web | ✅ 119 passed / 19 文件 | 本轮独立复跑，逐数吻合 |
+| `tsc --noEmit` | ✅ admin-api / cloud-controller 干净 | 本轮独立复跑 |
+| tests/api | ⚠️ 未重跑 | 需 Aspire 编排 + 共享 Mongo，本轮环境未起服务；采信上游 390 passed / 23 文件（四套单测逐数吻合佐证证据链可信），53/54 的 tests/api 用例已静态审阅为真实断言 + 显式 skipIf |
+| tests/e2e admin 套件 | ⚠️ 未重跑 | 需浏览器编排；采信上游 20 passed |
+| 修复回归专项 | ✅ | 契约可空化的 admin-web 消费面判空、`PUBLIC_WS_ENDPOINT` fail-fast 与既有配置（AppHost/CI/manifest）兼容、全仓无 `trustProxy` 旧引用残留 |
+
+### 9.6 第四轮结论
+
+🔴 **打回返工**——问题 53-59 修复逐项代码实证**全部确认属实**，建议 F-K 六项全部落地（超出「择要」），四套单测独立复跑全绿；但问题 59 的修复引入新的加固缺口（问题 60：握手限速器 Map 无界 + 限速键由未认证对端任意铸造，可内存灌爆 cloud-controller），属问题 49/56 同款攻击面、且是「修复引入新问题」的连续第三轮复发。按「有问题即打回」的验收准则不予通过。
+
+**返工要求（范围已收敛，仅此一项）**：
+
+1. **问题 60 必修**：`SlidingWindowRateLimiter` 加 prune + `maxEntries` 有界驱逐，containerId 前缀做形状/长度校验后入键，`ipLimiter` 同样加界；补「随机 token 前缀洪水下 Map 有界」测试；
+2. 🟢 建议 L/M 择要处理，不阻塞；
+3. 回填修复 commit 与验证后重新提交 AI Review。
+
+> 收敛提示：本项为单一组件的加固补齐（参照 admin-api `LoginRateLimiter` 的 prune/maxEntries 移植即可），无核心链路改动。建议返工时把「新建任何按 key 计数的内存结构必须自带有界性」作为自查清单，避免第五轮再出同款。
+
 ## 经验总结
 
 - **发布产物必须冒烟**：Dockerfile/manifest 属于交付物，「本地能跑」不等于「镜像能跑」；CI 构建流水线应加镜像启动冒烟与 `npm test` 门禁，`aspire publish` 产物需随 AppHost 变更强制再生成。
@@ -593,3 +671,4 @@ type: Permanent
 - **保留数据的重建要注意唯一键**：delete+insert 式重建必须把「被保留的集合」纳入去重，否则唯一索引冲突会在无事务路径下放大成数据丢失。
 - **修复必须覆盖同一故障模式的全部路径**：改了 update/resync 忘 create、改了 agent-api 忘 admin-api，等于没修——每条修复应列出该故障模式的全部入口逐一核对（第三轮问题 53/54/55 均为「修一半」）。
 - **加固策略自身要对抗建模**：限速驱逐、受信代理、按 IP 限流这类防护，要假设攻击者知道规则（灌满 Map 逐出锁定项、伪造转发头、共享 Ingress IP），否则防护只对老实人有效。
+- **新造防护组件要继承既有加固基线**：项目里已经为「按 key 计数的内存结构」确立过基线（prune + maxEntries + 键可控性评估，问题 49/56），新增限速器/缓存必须逐条对照自查——59 的修复新造限速器却把键交给未认证对端铸造，同款攻击面在加固组件自身上重演（问题 60）。
