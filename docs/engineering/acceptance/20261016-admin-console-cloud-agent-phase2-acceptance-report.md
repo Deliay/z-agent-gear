@@ -1,14 +1,15 @@
 ---
-description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 各轮次结论：首轮 4 严重 + 16 一般问题与修复回填、第二轮复验 2 严重 + 5 一般新问题（含 2 项修复回归）与打回返工要求、第三轮复验问题 46-52 修复确认但 51 修复不完整并新增 6 项一般问题（53-58）再次打回
+description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 各轮次结论：首轮 4 严重 + 16 一般问题与修复回填、第二轮复验 2 严重 + 5 一般新问题（含 2 项修复回归）与打回返工要求、第三轮复验问题 46-52 修复确认但 51 修复不完整并新增 6 项一般问题（53-58）再次打回、第四轮复验 53-59 确认但新增问题 60（握手限速器无界）打回、第五轮复验问题 60 修复确认属实并验收通过
 type: Permanent
 ---
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: ✅ 第四轮返工完成（待重启 AI Review 复验）——第四轮问题 60 **已修复**（修复提交 `66a3376`）。复验证据：cloud-controller 75 单测通过（含 1000 随机 key 洪水有界性 + 键形状校验），`tsc` 干净；admin-api 242 / agent-api 653 / admin-web 119 回归确认。详见第九节 9.7。
+> **状态**: ✅ **验收通过**（第五轮 AI Review 复验，2026-10-16）——问题 60 修复逐子项代码实证**确认属实**（限速器 `maxEntries` 有界驱逐 + 键形状/长度校验回退 + per-IP 桶短路），同故障模式全路径扫描无残留，四套单测独立复跑全绿（cloud-controller 75 / admin-api 242 / agent-api 653 / admin-web 119），`tsc` 干净。残留 3 项 🟢 建议（N/O/P）不阻塞。详见第十节。PR #207 准予进入下一环节。
 >
-> <details><summary>历史轮次（第四轮复验 / 第三轮返工 / 第三轮复验 / 第二轮返工 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+> <details><summary>历史轮次（第五轮复验 / 第四轮返工 / 第四轮复验 / 第三轮返工 / 第三轮复验 / 第二轮返工 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
 >
+> ✅ 第四轮返工完成（2026-10-16）：问题 60 已修复（修复提交 `66a3376`，回填 `20ee0d1`），建议 L/M 记录为可接受权衡。
 > 🔴 第四轮复验（2026-10-16）：打回返工——53-59 与建议 F-K 确认属实，但问题 59 修复引入问题 60（握手限速器 Map 无界 + 键取自未校验 token 前缀，可内存 DoS）。
 >
 > ✅ 第三轮返工完成（2026-10-16）：问题 53-59 全部修复（修复提交 `028436c`），建议 F-K 择要处理。
@@ -690,6 +691,86 @@ type: Permanent
 
 ✅ **返工完成**——问题 60 已修复（`66a3376`）：限速器有界（过期优先/次选最旧驱逐）+ 限速键形状校验回退 + per-IP 桶短路；建议 L/M 记录为可接受权衡。复验证据见 9.7。请重启 AI Review 复核。
 
+## 十、第五轮 AI Review（复验轮，2026-10-16）
+
+### 10.1 复验范围与方法
+
+复验对象：`origin/release...origin/integration` @ `20ee0d1`（第四轮返工修复提交 `66a3376` + 报告回填 `20ee0d1`；较上次已评审状态仅此两个提交，其余 diff 已由第一至四轮覆盖）。方法：**问题 60 逐子项代码实证**（不采信 commit message 与回填结论）；**同故障模式全路径扫描**——按第四轮收敛提示「新建任何按 key 计数的内存结构必须自带有界性」自查 cloud-controller 全部内存 Map 的键来源与清理路径，并对照 admin-api `LoginRateLimiter`（问题 49/56）加固基线逐项核对；对修复新逻辑做对抗推演（驱逐策略、短路顺序、键校验边角、构造兼容性）；**独立复跑四套单测与 tsc**，与上游复验证据逐数比对。**问题 60 修复确认属实，无新增 🔴/🟡 问题**，残留 3 项 🟢 建议（N/O/P，不阻塞）。
+
+### 10.2 问题 60 修复复核结论（逐子项代码实证）
+
+| 问题 60 子项 | 复核结论 | 证据 |
+|---|---|---|
+| Map 无界增长 | ✅ 确认修复 | `SlidingWindowRateLimiter`（`socketio-gateway.ts:69-119`）增加 `maxEntries`（默认 `DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES = 10_000`，:24）；`allow()` 对**新 key 先 `evict` 再落条目**，`size >= maxEntries` 时驱逐一条后插入，`size ≤ maxEntries` 不变量成立；既有 key 仍惰性过滤过期时间戳。T-G12（`socketio-gateway.test.ts:427`）以 `maxEntries=100` 洪水 1000 个唯一 key 断言 `size ≤ 100`，独立复跑通过 |
+| 限速键可控 | ✅ 确认修复 | `containerIdFromToken`（:143-151）对前缀做形状/长度校验（`CONTAINER_ID_PREFIX_PATTERN = /^[A-Za-z0-9._-]{1,64}$/`，:26），无分隔符 / 空前缀 / 非法字符 / 超长（>64）均返回 `undefined` 回退 `ip:<peer>` 键；T-G13（:439）8 组断言覆盖全部边角（含 `undefined` 入参）；正则为简单字符类，无 ReDoS 面 |
+| 被拒请求铸造条目 | ✅ 确认修复 | middleware 改为 `!ipLimiter.allow(ip) \|\| !keyLimiter.allow(key)`（:189）——**IP 桶先判、超限短路**，被 IP 桶拒绝的请求不再调用 `keyLimiter`，不再为未认证对端铸造新条目；`ipLimiter` 键面为 `socket.handshake.address`（服务端观测的 TCP 对端，非对端可控） |
+| ipLimiter 无界 | ✅ 确认修复 | 与 keyLimiter 共用 `maxEntries`（:174-183），同样有界 |
+| 可配置性 | ✅ 确认修复 | `HandshakeRateLimitOptions.maxEntries`（两桶共用，便于测试）；构造器第三参带默认值，既有两参调用向后兼容 |
+| 「条目不再永久驻留」次级项 | ✅ 实质修复（表述偏乐观，见 🟢 N） | 满员时 `evict`（:110-118）**过期优先**（末次命中 ≤ cutoff 者先删）、次选最旧（插入序首个）；洪水遗留条目在后续新 key 压力下被逐出，内存占用恒有界 |
+
+### 10.3 同故障模式全路径扫描（「按 key 计数的内存结构必须自带有界性」自查）
+
+| 内存结构 | 键来源 | 清理/有界 | 结论 |
+|---|---|---|---|
+| `SlidingWindowRateLimiter.hits` | **对端可控**（token 前缀，形状校验后）/ IP | `maxEntries` 有界驱逐 | ✅ 本次修复 |
+| `activeSockets`（socketio-gateway.ts:177） | 认证后真实 `container.id` | `disconnect` 时删除（:270-277），有连接即有断开 | ✅ 有界 |
+| `HeartbeatTracker.lastSeen` | 认证后真实 containerId | `disconnect` → `remove()`；containerId 非对端可铸造 | ✅ 有界 |
+| `KeyedMutex.chains` | 内部生命周期操作 key | 任务结束自清理（tail 回调 delete） | ✅ 自清 |
+| `status-sync` `byContainerId`/`byName` | 函数内局部瞬态 Map | 函数返回即释放 | ✅ 无风险 |
+| `k8s-client` `jobs` / `container-repository` `store` | InMemory 测试替身/开发实现 | 实体级，键为真实容器 | ✅ 无风险 |
+| admin-api `LoginRateLimiter.entries`（对照基线） | 用户名（对端可控） | `prune()` + `maxEntries` + `evictOldestUnlocked`（问题 49/56） | ✅ 基线保持；新限速器缺 prune 见 🟢 N |
+
+结论：问题 59/60 的攻击面（对端可控键 + 无界 Map）**全部路径已覆盖**，无第二处同款残留。
+
+### 10.4 验收问题清单（第五轮残留，🟢 建议，编号接续，不阻塞）
+
+本轮**无 🔴 严重 / 🟡 一般问题**。以下为 🟢 建议，可随后续迭代处理：
+
+| # | 模块 | 建议 |
+|---|---|---|
+| N | cloud-controller | 修复要求中的「prune（惰性清理整窗过期 key）」未单独实现：现由 `evict` 的「过期优先」在满员时才清理，`allow()` 仅对既有 key 惰性过滤时间戳。安全目标（内存有界）已达成，但「条目不再永久驻留」表述偏乐观——洪水遗留的过期条目（≤ `maxEntries`）会驻留至下次新 key 压力或进程重启。建议补 `prune()` 整窗 sweep（对照 `LoginRateLimiter.prune` 基线） |
+| O | cloud-controller | 驱逐「次选最旧」按**插入序**而非最近使用序：`Map.set` 对既有 key 不更新插入位，持续新 key 洪水下活跃容器的条目可能先于死条目被逐出（后果仅为计数重置、不影响可用性，per-IP 桶仍兜底）。可改为 touch（`delete`+`set`）或按最后命中时间取最旧 |
+| P | cloud-controller | 测试/整洁缺口：T-G12 固定 `now` 仅覆盖「满员→次选最旧」路径，「过期优先」驱逐与「IP 超限短路不铸造 key 条目」两行为无断言锚定（后者为本次修复的关键行为，建议补一条「IP 限速洪水后 keyLimiter.size 为 0」断言）；另 `evict(now, cutoff)` 的 `now` 形参未使用（可删） |
+
+### 10.5 第五轮问题总览
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 60 | 握手限速器 Map 无界 + 键取自未校验 token 前缀，随机 token 洪水可灌爆内存 | 问题 59 修复新造限速器未继承问题 49/56 的有界性加固基线 | ✅ 已修复并复核确认（maxEntries 有界驱逐 + 键形状校验回退 + IP 桶短路） | `66a3376` |
+
+> 建议 L/M（第四轮遗留）：维持「可接受权衡」结论，未改动；与本轮 N/O/P 一并随后续迭代处理。
+
+### 10.6 第五轮验证（独立复跑，2026-10-16）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 cloud-controller | ✅ 75 passed / 10 文件 | 独立复跑，与上游证据逐数吻合（基线 73，+2 = T-G12/T-G13） |
+| 单测 admin-api | ✅ 242 passed / 18 文件 | 独立复跑，逐数吻合 |
+| 单测 agent-api | ✅ 653 passed / 45 文件 | 独立复跑，逐数吻合 |
+| 单测 admin-web | ✅ 119 passed / 19 文件 | 独立复跑，逐数吻合 |
+| `tsc --noEmit` | ✅ 干净 | cloud-controller 独立复跑 |
+| tests/api | ⚠️ 未重跑 | 本轮仅 cloud-controller 限速器内部改动，不经编排即可由新单测锚定；沿历轮口径采信上游 390 passed / 23 文件（四套单测逐数吻合佐证证据链可信） |
+| tests/e2e admin 套件 | ⚠️ 未重跑 | 需浏览器编排；沿历轮口径采信上游 20 passed |
+| 修复回归专项 | ✅ | 构造器向后兼容（两参调用不受影响）；短路顺序变更不影响 T-G8/T-G11 既有行为（独立复跑通过）；`containerIdFromToken` 导出面扩大无消费方回归 |
+
+### 10.7 第五轮结论
+
+✅ **验收通过**——问题 60 修复逐子项代码实证**全部确认属实**：限速器 `maxEntries` 有界驱逐（过期优先、次选最旧）、限速键形状/长度校验后回退 IP、per-IP 兜底桶先判短路（被拒请求不再铸造条目），`ipLimiter` 同步加界；T-G12/T-G13 真实断言锚定有界性与键校验；同故障模式全路径扫描（cloud-controller 全部内存 Map + LoginRateLimiter 基线对照）无残留；四套单测独立复跑全绿且与上游复验证据逐数吻合，`tsc` 干净。残留 3 项 🟢 建议（N：补 prune 整窗清理；O：驱逐改最近使用序；P：补两行为测试断言 + 删未用形参）**不阻塞发布**，可随后续迭代处理（连同 L/M）。
+
+**结论：PR #207（integration → release）准予进入下一环节。**
+
+```mermaid
+flowchart LR
+    A[问题 60 打回] --> B[66a3376 修复<br/>有界驱逐 + 键校验 + IP 短路]
+    B --> C{第五轮复验}
+    C -->|逐子项代码实证| D[确认属实]
+    C -->|同故障模式扫描| E[无残留]
+    C -->|四套单测独立复跑| F[全绿逐数吻合]
+    D --> G[✅ 验收通过]
+    E --> G
+    F --> G
+```
+
 ## 经验总结
 
 - **发布产物必须冒烟**：Dockerfile/manifest 属于交付物，「本地能跑」不等于「镜像能跑」；CI 构建流水线应加镜像启动冒烟与 `npm test` 门禁，`aspire publish` 产物需随 AppHost 变更强制再生成。
@@ -698,6 +779,7 @@ type: Permanent
 - **测试绿灯要真**：静默 `return` 与空数组 `every()` 都会让套件虚假全绿，环境缺失用显式 skip 报告。
 - **前端错误态不可省**：查询失败渲染成空态会误导操作决策，`useQuery` 的 `error` 必须被消费。
 - **修复回归要单列检查**：「收紧暴露面」这类改动（Ingress 路径、过滤条件、白名单）必须连带验证主链路可用性——本轮问题 46/47/48 全部是修复本身引入的新故障。
+- **加固要横向铺开并自带有界性**：新建任何按 key 计数/缓存的内存结构，必须对照既有加固基线（如 `LoginRateLimiter` 的 prune/maxEntries/驱逐策略）逐项核对，且键来源凡经未认证对端输入必须先校验形状/长度——问题 59 新造限速器漏继承基线直接导致问题 60，「修复必须覆盖同一故障模式全部路径」连续三轮复发（54/55/58→60）后才以同故障模式全路径扫描收口。
 - **Socket.IO namespace ≠ URL path**：入口层路由按 engine path（默认 `/socket.io/`）放行，命名空间只存在于协议握手里；本地直连测试覆盖不到 Ingress，需入口层冒烟。
 - **默认凭据零容忍要覆盖全链路**：源码、编排默认值（AppHost 参数）、文档、测试兜底值都在泄漏面上，deny-list + 长度校验拦不住「足够长但公开」的默认值。
 - **保留数据的重建要注意唯一键**：delete+insert 式重建必须把「被保留的集合」纳入去重，否则唯一索引冲突会在无事务路径下放大成数据丢失。
