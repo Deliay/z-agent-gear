@@ -7,10 +7,13 @@ const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => v
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
+  refetch: vi.fn(),
   toggle: vi.fn(),
   sort: vi.fn(),
   create: vi.fn(),
   remove: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock('@apollo/client', () => ({
@@ -27,6 +30,10 @@ vi.mock('@apollo/client/react', () => ({
     if (source.includes('DeleteGlobalCustomModel')) return [mocks.remove, { loading: false }];
     return [vi.fn(), { loading: false }];
   },
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: mocks.toastSuccess, error: mocks.toastError, warning: vi.fn() },
 }));
 
 vi.mock('@dnd-kit/core', async () => {
@@ -89,9 +96,9 @@ function model(id: string, overrides: Record<string, unknown> = {}) {
 function setupQueries(models: unknown[], providers: unknown[] = []) {
   mocks.useQuery.mockImplementation((doc: unknown) => {
     if (String(doc).includes('adminProviders')) {
-      return { data: { adminProviders: providers }, loading: false };
+      return { data: { adminProviders: providers }, loading: false, error: undefined, refetch: mocks.refetch };
     }
-    return { data: { adminModels: models }, loading: false };
+    return { data: { adminModels: models }, loading: false, error: undefined, refetch: mocks.refetch };
   });
 }
 
@@ -113,6 +120,31 @@ describe('ModelSection', () => {
     );
   });
 
+  it('T-W2: recomputes ids from the latest list at send time (no stale closure)', async () => {
+    let currentModels = [model('a'), model('b'), model('c')];
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      if (String(doc).includes('adminProviders')) {
+        return { data: { adminProviders: [] }, loading: false, error: undefined, refetch: mocks.refetch };
+      }
+      return { data: { adminModels: currentModels }, loading: false, error: undefined, refetch: mocks.refetch };
+    });
+
+    const { rerender } = render(<ModelSection />);
+    // 保存拖拽开始前注册的旧回调，模拟 refetch 后事件仍持有旧闭包
+    const staleHandler = dnd.onDragEnd;
+
+    currentModels = [model('a'), model('b'), model('c'), model('d')];
+    rerender(<ModelSection />);
+
+    await act(async () => {
+      staleHandler?.({ active: { id: 'c' }, over: { id: 'a' } });
+    });
+
+    expect(mocks.sort).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { ids: ['c', 'a', 'b', 'd'] } }),
+    );
+  });
+
   it('T-W3: only custom models expose a delete button', () => {
     setupQueries([
       model('a'),
@@ -124,15 +156,22 @@ describe('ModelSection', () => {
     expect(screen.getByText('my-custom')).toBeDefined();
   });
 
-  it('T-W3: deleting a custom model confirms and calls the delete mutation', () => {
+  it('T-W3: deleting a custom model confirms in a dialog then calls the delete mutation', async () => {
     setupQueries([model('b', { isCustom: true, name: 'my-custom' })]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mocks.remove.mockResolvedValue({});
     render(<ModelSection />);
 
     fireEvent.click(screen.getByTitle('删除自定义模型'));
 
-    expect(mocks.remove).toHaveBeenCalledWith(
-      expect.objectContaining({ variables: { id: 'b' } }),
+    expect(screen.getByText('删除自定义模型')).toBeDefined();
+    expect(mocks.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    await waitFor(() =>
+      expect(mocks.remove).toHaveBeenCalledWith(
+        expect.objectContaining({ variables: { id: 'b' } }),
+      ),
     );
   });
 
@@ -153,6 +192,22 @@ describe('ModelSection', () => {
     setupQueries([]);
     render(<ModelSection />);
     expect(screen.getByText('暂无可用模型，添加供应商后自动拉取')).toBeDefined();
+  });
+
+  it('T-W5: renders an error state with retry when the models query fails', () => {
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      if (String(doc).includes('adminProviders')) {
+        return { data: { adminProviders: [] }, loading: false, error: undefined, refetch: mocks.refetch };
+      }
+      return { data: undefined, loading: false, error: new Error('adminModels boom'), refetch: mocks.refetch };
+    });
+    render(<ModelSection />);
+
+    expect(screen.getByRole('alert').textContent).toContain('adminModels boom');
+    expect(screen.queryByText('暂无可用模型，添加供应商后自动拉取')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(mocks.refetch).toHaveBeenCalled();
   });
 });
 

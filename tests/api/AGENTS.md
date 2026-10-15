@@ -55,8 +55,8 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行 8 个常规测试文件（并行，不含 `acp-real-*`） |
-| `npm run test:real` | 仅运行 `acp-real-*` 测试（串行，超时 30s） |
+| `npm test` | 运行全部常规测试文件（23 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm run test:real` | 仅运行 `acp-real-*` 测试（5 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
@@ -68,6 +68,7 @@ npm test
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
+| `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码（须与 Aspire/部署注入一致；dev 默认 `dev-admin-init-password`）。未配置时服务随机生成，测试将无法登录种子管理员 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token（与 Aspire 注入的 `internal-api-token` 一致） | `dev-internal-token-change-in-production` |

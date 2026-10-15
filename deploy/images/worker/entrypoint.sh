@@ -2,8 +2,8 @@
 # 默认工作容器入口：启动容器内 dockerd，装配镜像引用规范化 shim，然后 exec agent-gear 回连 cloud-controller。
 #
 # 连接参数来自注入的环境变量：
-#   ZAG_SERVER_ENDPOINT  形如 wss://<cloud-controller>/worker?token=<one-time-token>
-#   ZAG_CONTROLLER_KEY   同一 token（agent-gear 参数体系兜底）
+#   ZAG_SERVER_ENDPOINT  形如 wss://<cloud-controller>/worker（不含 token）
+#   ZAG_CONTROLLER_KEY   一次性容器 token（agent-gear 连接时经 Socket.IO 握手 auth.token 携带，不进 URL）
 set -euo pipefail
 
 HARBOR_PROXY="core.harbor.internal.fffdan.com"

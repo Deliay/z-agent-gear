@@ -127,4 +127,38 @@ describe('LoginPage', () => {
     });
     expect(screen.getByText('models page')).toBeDefined();
   });
+
+  it('submits the entered username and password through the mutation', () => {
+    renderLogin();
+
+    fireEvent.change(screen.getByLabelText('用户名'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'hunter2' } });
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(mocks.mutate).toHaveBeenCalledWith({
+      variables: { username: 'admin', password: 'hunter2' },
+    });
+  });
+
+  it('shows a business error message without opening the server settings', () => {
+    renderLogin();
+
+    act(() => {
+      mocks.capturedOptions.current?.onError?.(new Error('用户名或密码错误'));
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain('用户名或密码错误');
+    expect(screen.queryByLabelText('服务器地址')).toBeNull();
+  });
+
+  it('treats a network failure as unreachable and opens the server settings', () => {
+    renderLogin();
+
+    act(() => {
+      mocks.capturedOptions.current?.onError?.(new Error('Failed to fetch'));
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain('无法连接服务器');
+    expect(screen.getByLabelText('服务器地址')).toBeDefined();
+  });
 });

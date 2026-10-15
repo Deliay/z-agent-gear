@@ -35,9 +35,9 @@ src/
 ## 关键约束
 
 - **单一事实源**：容器状态/生命周期全部由本服务持有；`admin-api` 不直连 K8s、不双写 Mongo（降级只读除外）。
-- **鉴权**：容器经握手 query 的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
-- **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`。
-- **env 双通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker?token=<token>` 与 `ZAG_CONTROLLER_KEY=<token>`。
+- **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
+- **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 requests/limits 与 `activeDeadlineSeconds` 兜底。
+- **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
 - **本期 purpose 仅 idle**：服务端对非 idle 启动请求返回明确错误「该任务类型暂未开放」。
 - 契约：`contracts/cloud-controller-websocket.md`（含内部 HTTP API 附录 A）。

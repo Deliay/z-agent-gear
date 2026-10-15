@@ -86,6 +86,46 @@ describe('ProviderService', () => {
     });
   });
 
+  describe('findSummaryById (Model.provider projection)', () => {
+    it('selects away encryptedCredential and omits endpoint/credential fields', async () => {
+      const selectSpy = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => 'p-summary' },
+          name: 'Global OpenAI',
+          type: 'OpenAI',
+          endpoint: 'https://internal.example.com/v1',
+          credentialType: 'api_key',
+          isEnabled: true,
+          scope: 'global',
+        }),
+      });
+      (Provider.findById as any) = vi.fn().mockReturnValue({ select: selectSpy });
+
+      const result = await providerService.findSummaryById('p-summary');
+
+      expect(Provider.findById).toHaveBeenCalledWith('p-summary');
+      expect(selectSpy).toHaveBeenCalledWith('-encryptedCredential');
+      expect(result).toEqual({
+        id: 'p-summary',
+        name: 'Global OpenAI',
+        type: 'OpenAI',
+        isEnabled: true,
+        scope: 'global',
+      });
+      expect(result).not.toHaveProperty('endpoint');
+      expect(result).not.toHaveProperty('credentialType');
+      expect(result).not.toHaveProperty('credentialValue');
+    });
+
+    it('returns null when the provider does not exist', async () => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+      });
+
+      await expect(providerService.findSummaryById('missing')).resolves.toBeNull();
+    });
+  });
+
   describe('create', () => {
     it('should create a provider and models', async () => {
       const createSpy = vi.fn().mockResolvedValue({
@@ -181,6 +221,12 @@ describe('ProviderService', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'Anthropic', 'https://api.anthropic.com', 'sk-new-key',
       );
+      // 重同步只删自动同步模型（保留 isCustom），且带 scope 过滤保护全局模型
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: VALID_OID,
+        isCustom: false,
+        scope: { $ne: 'global' },
+      });
     });
 
     it('should preserve existing credential when credentialValue is empty (edit without changing key)', async () => {
@@ -253,6 +299,10 @@ describe('ProviderService', () => {
       const result = await providerService.toggle('provider-1');
       expect(result).not.toBeNull();
       expect(mockProvider.save).toHaveBeenCalled();
+      expect(Model.updateMany).toHaveBeenCalledWith(
+        { providerId: 'provider-1', scope: { $ne: 'global' } },
+        { isEnabled: true },
+      );
     });
 
     it('should return null if provider not found', async () => {
@@ -283,7 +333,10 @@ describe('ProviderService', () => {
 
       const result = await providerService.delete('provider-1');
       expect(result).toBe(true);
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: 'provider-1' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: 'provider-1',
+        scope: { $ne: 'global' },
+      });
     });
 
     it('should treat legacy providers without scope as user and delete them', async () => {

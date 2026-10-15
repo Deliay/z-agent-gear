@@ -135,6 +135,7 @@ const UPDATE_MODEL_SORT = `
 
 describe('LLM Provider & Model API', () => {
   let mock: MockServer;
+  let seededProviderId = '';
 
   beforeAll(async () => {
     mock = await startMockServer();
@@ -144,6 +145,25 @@ describe('LLM Provider & Model API', () => {
     const body = await res.json();
     authToken = body.data?.signup?.token ?? '';
     expect(authToken).toBeDefined();
+
+    // 保证后续 providers/models 列表非空：先创建一个用户侧供应商（mock 会同步出模型）。
+    // 若断言仅用 every(...) 且数组为空，则恒真、失去回归检测力（见验收问题 17）。
+    const createRes = await gqlRequest(
+      CREATE_PROVIDER,
+      {
+        input: {
+          name: `scope-seed-provider-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      },
+      authToken,
+    );
+    const created = await createRes.json();
+    seededProviderId = created.data?.createProvider?.id ?? '';
+    expect(seededProviderId).toBeTruthy();
   });
 
   afterAll(async () => {
@@ -167,20 +187,28 @@ describe('LLM Provider & Model API', () => {
   });
 
   describe('queries with auth', () => {
-    it('should return only user-scope providers', async () => {
+    it('should return only user-scope providers (non-empty)', async () => {
       const res = await gqlRequest(PROVIDERS_QUERY, undefined, authToken);
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(Array.isArray(body.data.providers)).toBe(true);
+      // 先断言非空（beforeAll 已创建用户侧供应商），再验证过滤条件，避免空数组 every(...) 恒真
+      expect(body.data.providers.length).toBeGreaterThan(0);
+      expect(body.data.providers.some((p: { id: string }) => p.id === seededProviderId)).toBe(true);
       // 全局（scope=global）供应商不展示在用户侧
       expect(body.data.providers.every((p: { scope: string }) => p.scope === 'user')).toBe(true);
     });
 
-    it('should return a models array (user models + enabled global models)', async () => {
+    it('should return a non-empty models array (user models + enabled global models)', async () => {
       const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(Array.isArray(body.data.models)).toBe(true);
+      // 先断言非空（用户侧供应商已同步出模型），再验证过滤条件
+      expect(body.data.models.length).toBeGreaterThan(0);
+      expect(
+        body.data.models.some((m: { providerId: string }) => m.providerId === seededProviderId),
+      ).toBe(true);
       // 全局模型必须处于启用态才会出现在用户侧
       expect(
         body.data.models.every((m: { scope: string; isEnabled: boolean }) => m.scope !== 'global' || m.isEnabled),
@@ -533,6 +561,29 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     const body = await res.json();
     expect(body.errors).toBeUndefined();
     expect(body.data.providers.some((p: { id: string }) => p.id === globalProviderId)).toBe(false);
+  });
+
+  it('should expose only a credential-free provider summary via Model.provider (T-SC5)', async () => {
+    const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const found = body.data.models.find((m: { id: string }) => m.id === globalModelId);
+    expect(found).toBeDefined();
+    expect(found.provider).toBeDefined();
+    expect(found.provider.scope).toBe('global');
+    // 摘要仅暴露非敏感字段，不含 endpoint / credentialType / credentialValue
+    expect(Object.keys(found.provider).sort()).toEqual(['id', 'isEnabled', 'name', 'scope', 'type']);
+  });
+
+  it('should reject queries for provider endpoint/credential via Model.provider (T-SC5)', async () => {
+    const res = await gqlRequest(
+      `query { models { id provider { id endpoint credentialValue } } }`,
+      undefined,
+      authToken,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeDefined();
+    expect(body.errors[0].message).toContain('endpoint');
   });
 
   it('should allow same provider name across user and global scopes (T-SC7)', async () => {

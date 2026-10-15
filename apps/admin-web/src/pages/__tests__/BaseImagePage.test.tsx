@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   remove: vi.fn(),
+  refetch: vi.fn(),
 }));
 
 vi.mock('@apollo/client', () => ({
@@ -37,7 +38,12 @@ function image(overrides: Record<string, unknown> = {}) {
 }
 
 function setupImages(images: unknown[]) {
-  mocks.useQuery.mockReturnValue({ data: { baseImages: images }, loading: false });
+  mocks.useQuery.mockReturnValue({
+    data: { baseImages: images },
+    loading: false,
+    error: undefined,
+    refetch: mocks.refetch,
+  });
 }
 
 describe('BaseImagePage', () => {
@@ -50,6 +56,22 @@ describe('BaseImagePage', () => {
     render(<BaseImagePage />);
     expect(screen.getByText('暂无基础镜像')).toBeDefined();
     expect(screen.getByRole('button', { name: '新建基础镜像' })).toBeDefined();
+  });
+
+  it('T-W5: renders an error state with retry instead of the empty state', () => {
+    mocks.useQuery.mockReturnValue({
+      data: undefined,
+      loading: false,
+      error: new Error('baseImages boom'),
+      refetch: mocks.refetch,
+    });
+    render(<BaseImagePage />);
+
+    expect(screen.getByRole('alert').textContent).toContain('baseImages boom');
+    expect(screen.queryByText('暂无基础镜像')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(mocks.refetch).toHaveBeenCalled();
   });
 
   it('T-W4: lists name, description and updated time', () => {

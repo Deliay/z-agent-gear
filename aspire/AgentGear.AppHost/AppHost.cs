@@ -35,6 +35,9 @@ var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: "
 var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: "dev-jwt-secret-for-testing");
 var adminJwtSecret = builder.AddParameter("admin-jwt-secret", secret: true, value: "dev-admin-secret-change-in-production");
 var credentialEncryptionKey = builder.AddParameter("credential-encryption-key", secret: true, value: "0000000000000000000000000000000000000000000000000000000000000000");
+// admin-api 首次种子管理员初始密码（问题 4）：仅 dev/本地提供已知默认值，便于 tests 登录；
+// 生产 publish 时 `.env` 留空则由 admin-api 随机生成并一次性打印，绝不回落到公开默认口令。
+var adminInitialPassword = builder.AddParameter("admin-initial-password", secret: true, value: "dev-admin-init-password");
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
@@ -77,9 +80,12 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: "dev-internal-token-change-in-production");
 var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
+// admin-web 运行在浏览器，需要一个可达的 admin-api 地址（容器运行时注入 config.js，见 40-generate-config-js.sh）
+var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost:8002");
 
+// cloud-controller / admin-api 的发布镜像已构建为 dist（见各自 Dockerfile），
+// 运行时不依赖 tsx；NODE_OPTIONS=--import tsx 仅在本地 dev（直跑 TS 源码）时注入。
 var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/cloud-controller", "src/index.ts")
-    .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
     .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
     .WithEnvironment("WORKER_IMAGE", workerImage)
@@ -102,9 +108,9 @@ var agentController = builder.AddNodeApp("agent-controller", "../../packages/age
     .ExcludeFromManifest();
 
 var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/index.ts")
-    .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
     .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
+    .WithEnvironment("ADMIN_INITIAL_PASSWORD", adminInitialPassword)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
@@ -118,6 +124,10 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
 
 if (!builder.ExecutionContext.IsPublishMode)
 {
+    // 本地 dev 直跑 TS 源码，需要 tsx 加载器
+    cloudController.WithEnvironment("NODE_OPTIONS", "--import tsx");
+    adminApi.WithEnvironment("NODE_OPTIONS", "--import tsx");
+
     var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
         .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
         .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
@@ -156,6 +166,7 @@ else
     // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + nginx 托管），
     // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
     builder.AddDockerfile("admin-web", "../../apps/admin-web")
+        .WithEnvironment("ADMIN_API_URL", adminApiUrl)
         .WithHttpEndpoint(port: 80, targetPort: 80)
         .WithExternalHttpEndpoints()
         .PublishAsDockerComposeService((resource, service) =>

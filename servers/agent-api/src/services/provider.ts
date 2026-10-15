@@ -20,10 +20,15 @@ export class ProviderService {
     return providers.map(this.mapProvider.bind(this));
   }
 
-  async findById(id: string) {
-    const provider = await Provider.findById(id).lean();
+  /**
+   * `Model.provider` 专用：返回不含凭据/内部地址的供应商摘要。
+   * 通过 `select('-encryptedCredential')` 避免密文进入内存；返回结构不含
+   * endpoint / credentialType / credentialValue，用户侧不可见全局供应商内部细节。
+   */
+  async findSummaryById(id: string) {
+    const provider = await Provider.findById(id).select('-encryptedCredential').lean();
     if (!provider) return null;
-    return this.mapProvider(provider);
+    return this.mapProviderSummary(provider);
   }
 
   async create(input: {
@@ -94,7 +99,9 @@ export class ProviderService {
     if (credentialChanged || typeChanged || endpointChanged) {
       const models = await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
 
-      await Model.deleteMany({ providerId: id });
+      // 重同步仅重建 API 自动同步的模型，保留用户自定义模型（isCustom: true）；
+      // scope 过滤与 batch* 对齐，避免误删全局模型。
+      await Model.deleteMany({ providerId: id, isCustom: false, scope: { $ne: 'global' } });
 
       if (models.length > 0) {
         const modelDocs = models.map((name, i) => ({
@@ -132,7 +139,8 @@ export class ProviderService {
       throw new Error(GLOBAL_WRITE_FORBIDDEN);
     }
 
-    await Model.deleteMany({ providerId: id });
+    // 级联删除用户模型；scope 过滤与 batch* 对齐，避免误删全局模型。
+    await Model.deleteMany({ providerId: id, scope: { $ne: 'global' } });
     const result = await Provider.deleteOne({ _id: id });
     return result.deletedCount > 0;
   }
@@ -149,7 +157,7 @@ export class ProviderService {
     await provider.save();
 
     await Model.updateMany(
-      { providerId: id },
+      { providerId: id, scope: { $ne: 'global' } },
       { isEnabled: provider.isEnabled },
     );
 
@@ -224,6 +232,16 @@ export class ProviderService {
       scope: normalizeScope(provider.scope),
       createdAt: (provider.createdAt as Date).toISOString(),
       updatedAt: (provider.updatedAt as Date).toISOString(),
+    };
+  }
+
+  private mapProviderSummary(provider: Record<string, unknown>) {
+    return {
+      id: (provider._id as mongoose.Types.ObjectId).toString(),
+      name: provider.name as string,
+      type: provider.type as string,
+      isEnabled: provider.isEnabled as boolean,
+      scope: normalizeScope(provider.scope),
     };
   }
 

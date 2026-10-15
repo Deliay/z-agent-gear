@@ -23,7 +23,7 @@ docker build \
 
 ```bash
 docker run --rm -it --entrypoint bash \
-  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker?token=dummy \
+  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
   -e ZAG_CONTROLLER_KEY=dummy \
   core.harbor.internal.fffdan.com/zag/worker:dev -lc '
     node -v && git --version && gh --version && docker buildx version && \

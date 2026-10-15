@@ -9,11 +9,28 @@ on:
     paths:
       - 'apps/admin-web/**'
 
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAMESPACE: zero-tools
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/admin-web/package-lock.json
+
+      # 测试门禁：构建前跑 lint + 单测，避免带红测试推成 latest
+      - name: Install, lint and test
+        working-directory: apps/admin-web
+        run: npm ci && npm run lint && npx vitest run
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -32,9 +49,26 @@ jobs:
           file: apps/admin-web/Dockerfile
           build-args: |
             VITE_ADMIN_API_URL=${{ vars.ADMIN_API_URL }}
-          tags: |
-            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-web:${{ github.sha }}
-            ${{ secrets.DOCKER_ENDPOINT }}/zero-tools/admin-web:latest
+          load: true
           push: true
+          tags: |
+            ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/admin-web:${{ github.sha }}
+            ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/admin-web:latest
           provenance: false
           sbom: false
+
+      # 镜像启动冒烟：验证 nginx 起来且运行时 config.js 可生成
+      - name: Smoke test image
+        run: |
+          set -e
+          IMAGE="${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/admin-web:${{ github.sha }}"
+          docker run -d --name smoke-admin-web -p 8080:80 \
+            -e ADMIN_API_URL=https://admin-api.example.com \
+            "$IMAGE"
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/config.js; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs smoke-admin-web || true
+          if [ "$ok" != "1" ]; then echo "smoke test failed: config.js not reachable"; exit 1; fi

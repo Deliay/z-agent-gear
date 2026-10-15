@@ -1,12 +1,17 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { config } from '../config/index.js';
+import { config, ADMIN_USERNAME, MIN_PASSWORD_LENGTH, isWeakAdminPassword } from '../config/index.js';
 import { AdminUser } from '../models/admin-user.js';
 
 const SALT_ROUNDS = 10;
-const DEFAULT_ADMIN_USERNAME = 'admin';
-const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
-const MIN_PASSWORD_LENGTH = 10;
+
+/**
+ * 帐号不存在时的恒定时间对照哈希（问题 7）。
+ * `login()` 对不存在的用户也执行一次 `bcrypt.compare(password, DUMMY_PASSWORD_HASH)`，
+ * 抹平「帐号存在（走真实 bcrypt.compare）vs 不存在（立即抛错）」的百毫秒级计时侧信道。
+ */
+export const DUMMY_PASSWORD_HASH = '$2b$10$JJ0AlZ0meqiqL1CAA7X3uumt9SC7wtHYZO1Kiu5ZFs/JSW3jl0sBa';
 
 export function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, SALT_ROUNDS);
@@ -16,33 +21,64 @@ export function verifyPassword(password: string, hash: string): Promise<boolean>
   return bcrypt.compare(password, hash);
 }
 
-export function signToken(adminId: string): string {
-  return jwt.sign({ adminId }, config.adminJwtSecret, { expiresIn: '7d' });
+export interface AdminTokenPayload {
+  adminId: string;
+  /** 签发时刻管理员的 passwordChangedAt（ms epoch）；0 表示从未改密。用于改密后使旧 token 失效。 */
+  pwdAt: number;
 }
 
-export function verifyToken(token: string): { adminId: string } {
-  return jwt.verify(token, config.adminJwtSecret) as { adminId: string };
+export function signToken(adminId: string, passwordChangedAt: Date | null = null): string {
+  const pwdAt = passwordChangedAt ? new Date(passwordChangedAt).getTime() : 0;
+  return jwt.sign({ adminId, pwdAt }, config.adminJwtSecret, { expiresIn: '7d' });
+}
+
+export function verifyToken(token: string): AdminTokenPayload {
+  return jwt.verify(token, config.adminJwtSecret) as AdminTokenPayload;
+}
+
+/** 生成强随机初始密码（CSPRNG，base64url 约 24 字符） */
+export function generateInitialAdminPassword(): string {
+  return crypto.randomBytes(18).toString('base64url');
 }
 
 /**
- * 幂等种子：admin_users 非空则跳过，否则插入默认管理员。
+ * 幂等种子：admin_users 非空则跳过，否则插入管理员。
+ * 初始密码来源（问题 4，已移除硬编码 `admin1234567`）：
+ * - 配置了 `ADMIN_INITIAL_PASSWORD`：使用之（启动期 assertRuntimeConfig 已拒绝弱口令）；
+ * - 未配置：生成强随机密码，并在启动日志中一次性输出（明确标记）。
+ * 两种情况均保留 `mustChangePassword: true`，强制首次登录改密。
  */
 export async function seedAdmin(): Promise<void> {
   const count = await AdminUser.countDocuments();
   if (count > 0) return;
 
-  const passwordHash = await hashPassword(DEFAULT_ADMIN_PASSWORD);
+  const configured = config.initialAdminPassword.trim();
+  const generated = configured.length === 0;
+  const password = generated ? generateInitialAdminPassword() : configured;
+
+  const passwordHash = await hashPassword(password);
   await AdminUser.create({
-    username: DEFAULT_ADMIN_USERNAME,
+    username: ADMIN_USERNAME,
     passwordHash,
     mustChangePassword: true,
+    passwordChangedAt: new Date(),
   });
+
+  if (generated) {
+    console.log('============================================================');
+    console.log('[admin-api] 未配置 ADMIN_INITIAL_PASSWORD，已生成随机管理员初始密码（仅本次显示）');
+    console.log(`[admin-api]   用户名: ${ADMIN_USERNAME}`);
+    console.log(`[admin-api]   初始密码: ${password}`);
+    console.log('[admin-api] 请立即登录并修改密码（首次登录强制改密）。');
+    console.log('============================================================');
+  }
 }
 
 export async function login(username: string, password: string) {
   const admin = await AdminUser.findOne({ username });
-  // 不区分「帐号不存在」与「密码错误」，避免泄露帐号存在性
+  // 不区分「帐号不存在」与「密码错误」，且对不存在帐号也执行一次 bcrypt.compare 恒定时间（问题 7）
   if (!admin) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
     throw new Error('Invalid username or password');
   }
 
@@ -58,6 +94,9 @@ export async function changePassword(adminId: string, oldPassword: string, newPa
   if (newPassword.length < MIN_PASSWORD_LENGTH) {
     throw new Error('Password must be at least 10 characters');
   }
+  if (isWeakAdminPassword(newPassword)) {
+    throw new Error('Password is too weak');
+  }
 
   const admin = await AdminUser.findById(adminId);
   if (!admin) {
@@ -69,8 +108,14 @@ export async function changePassword(adminId: string, oldPassword: string, newPa
     throw new Error('Invalid old password');
   }
 
+  if (oldPassword === newPassword) {
+    throw new Error('New password must be different from the old password');
+  }
+
   admin.passwordHash = await hashPassword(newPassword);
   admin.mustChangePassword = false;
+  // 记录改密时间：签发时间早于该值的旧 token 将在 authenticateAdmin 中被拒绝（问题 6）
+  admin.passwordChangedAt = new Date();
   await admin.save();
 
   return admin;

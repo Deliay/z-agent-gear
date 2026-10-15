@@ -2,7 +2,7 @@ export const modelTypeDefs = `#graphql
   type Model {
     id: ID!
     providerId: ID!
-    provider: Provider!
+    provider: ProviderSummary!
     name: String!
     isCustom: Boolean!
     isEnabled: Boolean!

@@ -169,6 +169,41 @@ describe('ModelService', () => {
       ).rejects.toThrow('Provider not found');
       expect(Model.create).not.toHaveBeenCalled();
     });
+
+    it('rejects an empty name', async () => {
+      await expect(
+        modelService.createCustom({ providerId: USER_PROVIDER_OID, name: '' }),
+      ).rejects.toThrow('Model name is required');
+      expect(Model.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a whitespace-only name', async () => {
+      await expect(
+        modelService.createCustom({ providerId: USER_PROVIDER_OID, name: '   ' }),
+      ).rejects.toThrow('Model name is required');
+      expect(Model.create).not.toHaveBeenCalled();
+    });
+
+    it('trims the model name before persisting', async () => {
+      const doc = {
+        _id: { toString: () => 'model-trim' },
+        providerId: { toString: () => USER_PROVIDER_OID },
+        name: 'trimmed-model',
+        isCustom: true,
+        isEnabled: true,
+        sortOrder: 6,
+        scope: 'user',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      (Model.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+
+      await modelService.createCustom({ providerId: USER_PROVIDER_OID, name: '  trimmed-model  ' });
+
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'trimmed-model' }),
+      );
+    });
   });
 
   describe('updateSortOrder', () => {
@@ -177,7 +212,9 @@ describe('ModelService', () => {
         select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
       });
       (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      const leanFn2 = vi.fn().mockResolvedValue([
+
+      const existenceLean = vi.fn().mockResolvedValue([{ _id: 'model-2' }, { _id: 'model-1' }]);
+      const finalLean = vi.fn().mockResolvedValue([
         {
           _id: { toString: () => 'model-2' },
           providerId: { toString: () => 'provider-1' },
@@ -189,9 +226,9 @@ describe('ModelService', () => {
           updatedAt: new Date(),
         },
       ]);
-      (Model.find as any).mockReturnValue({
-        sort: vi.fn().mockReturnValue({ lean: leanFn2 }),
-      });
+      (Model.find as any) = vi.fn()
+        .mockReturnValueOnce({ select: vi.fn().mockReturnValue({ lean: existenceLean }) })
+        .mockReturnValueOnce({ sort: vi.fn().mockReturnValue({ lean: finalLean }) });
 
       const result = await modelService.updateSortOrder(['model-2', 'model-1']);
       expect(result).toHaveLength(1);
@@ -208,6 +245,44 @@ describe('ModelService', () => {
         _id: { $in: ['model-2', 'model-1'] },
         scope: { $ne: 'global' },
       });
+    });
+
+    it('returns an empty array for an empty id list without touching the DB', async () => {
+      (Model.findOne as any) = vi.fn();
+      (Model.find as any) = vi.fn();
+      (Model.bulkWrite as any) = vi.fn();
+
+      await expect(modelService.updateSortOrder([])).resolves.toEqual([]);
+      expect(Model.findOne).not.toHaveBeenCalled();
+      expect(Model.find).not.toHaveBeenCalled();
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+    });
+
+    it('rejects duplicate ids', async () => {
+      (Model.findOne as any) = vi.fn();
+      (Model.find as any) = vi.fn();
+      (Model.bulkWrite as any) = vi.fn();
+
+      await expect(modelService.updateSortOrder(['model-1', 'model-1'])).rejects.toThrow(
+        'Duplicate model ids in sort order',
+      );
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+    });
+
+    it('rejects when one or more ids do not exist', async () => {
+      (Model.findOne as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+      });
+      const existenceLean = vi.fn().mockResolvedValue([{ _id: 'model-1' }]);
+      (Model.find as any) = vi.fn().mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({ lean: existenceLean }),
+      });
+      (Model.bulkWrite as any) = vi.fn();
+
+      await expect(modelService.updateSortOrder(['model-1', 'model-missing'])).rejects.toThrow(
+        'One or more models not found',
+      );
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
     });
 
     it('rejects when the list contains a global model', async () => {

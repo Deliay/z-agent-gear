@@ -24,8 +24,8 @@
 
 | 差异点 | 说明 |
 |--------|------|
-| 连接地址 | `wss://<cloud-controller-host>/worker?token=<one-time-token>`；token 在 Socket.IO 握手阶段（handshake query）校验 |
-| 鉴权方式 | 由握手 query 中的一次性 token 完成，`register` payload 的 `key` 字段**被忽略**（服务端不读取、不校验） |
+| 连接地址 | `wss://<cloud-controller-host>/worker`；一次性 token 在 Socket.IO 握手阶段经 **`auth.token`** 承载（不放入 URL query，避免进入 ingress/中间层 access log） |
+| 鉴权方式 | 由握手 `auth.token`（遗留部署兼容 `handshake.query.token`）中的一次性 token 完成，`register` payload 的 `key` 字段**被忽略**（服务端不读取、不校验） |
 | namespace | 固定 `/worker` |
 | 握手失败 | 服务端拒绝连接并返回 `connect_error`，错误消息 `INVALID_TOKEN`；同时记录来源 IP 与原因日志（可追溯） |
 | token 生命周期 | token 随容器签发，容器进入终态（`exited`/`destroying`/`failed`）即作废；同一容器在存活期间允许重复握手（覆盖断线自动重连） |
@@ -93,7 +93,9 @@
 | 值 | 含义 |
 |----|------|
 | `VERSION_MISMATCH` | `agent-gear` major 版本不兼容；客户端输出升级指引后退出 |
+| `INVALID_PAYLOAD` | `register` payload 缺少必填字段（如 `hostname`） |
 | `INVALID_TOKEN` | 握手 token 校验失败（仅在 `connect_error` 中返回，不会进入 `register` 阶段） |
+| `RATE_LIMITED` | 握手频率超限（按来源 IP 滑动窗口限速，仅在 `connect_error` 中返回） |
 
 > `INVALID_KEY` / `KEY_ALREADY_ONLINE` 为本地 controller 场景错误码，本契约不使用。
 
@@ -138,7 +140,7 @@ cloud-controller 在强制销毁流程中通知容器退出。
 ```
 Worker                              cloud-controller
   │                                      │
-  │──Socket.IO connect /worker?token=x───│
+  │──Socket.IO connect /worker (auth.token=x)──│
   │                                      ├──校验握手 token（containerId + bcrypt secret）
   │                                      ├──失败 → connect_error(INVALID_TOKEN) + 日志
   │                                      │
@@ -158,11 +160,12 @@ Worker                              cloud-controller
 ### 3.1 握手鉴权
 
 - token 格式：`<containerId>.<secret>`，`secret` 为随机字节（base64url）。
-- 服务端 middleware 读取 `handshake.query.token`：
+- 服务端 middleware 从 `handshake.auth.token` 读取 token（兼容遗留 `handshake.query.token`）：
   1. 按 `<containerId>` 定位 `cloudcontainers` 文档（**不做全表扫描**）；
   2. `bcrypt.compare(secret, tokenHash)` 比对；
   3. 文档不存在、`tokenHash` 为空、或容器已处于终态（`exited`/`destroying`/`failed`）→ 拒绝；
   4. 校验失败：`socket.emit('connect_error', 'INVALID_TOKEN')`，记录来源 IP 与原因日志后断开。
+- 握手前先按来源 IP 滑动窗口限速，超限返回 `connect_error('RATE_LIMITED')`（缓解 bcrypt CPU 消耗型攻击）。
 - 校验通过：将 `containerId` 写入 `socket.data`，供后续 `register`/`heartbeat`/`disconnect` 使用。
 
 ### 3.2 心跳超时检测
@@ -230,11 +233,11 @@ DELETE /internal/containers/:id
 
 **响应 200：** `{ "success": true }`。
 
-**语义：** 在线容器会先收到 `shutdown` 并等待宽限期（约 10s）后删除 Job，再返回；调用方（admin-api）应使用大于「宽限期 + 删除重试上界」的超时。终态容器幂等返回成功，不重复删除 Job。
+**语义：** 在线容器会先收到 `shutdown` 并等待宽限期（约 10s）后删除 Job，再返回；调用方（admin-api）应使用大于「宽限期 + 删除重试上界」的超时。终态容器幂等处理：**Job 已不存在时不再重复删除（仍会核实并清理残留 Job）**。
 
 **错误：**
 - `404` —— 容器不存在。
-- `200`（幂等）—— 对终态容器重复销毁仍返回成功、不重复删除 Job。
+- `200`（幂等）—— 对终态容器重复销毁仍返回成功；`deletedJob` 语义上反映本次是否真实删除了残留 Job。
 
 ### A.3 CloudContainer JSON 结构
 

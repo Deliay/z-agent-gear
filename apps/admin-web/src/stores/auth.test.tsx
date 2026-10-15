@@ -56,6 +56,27 @@ describe('useAuth', () => {
     expect(result.current.admin).toEqual(admin);
   });
 
+  it('should ignore a stored admin with an invalid shape', () => {
+    localStorage.setItem('admin_token', 'stored-token');
+    localStorage.setItem('admin_user', JSON.stringify({ id: 1, username: 'admin' }));
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    expect(result.current.admin).toBeNull();
+    expect(result.current.mustChangePassword).toBe(false);
+  });
+
+  it('should ignore a corrupted admin JSON payload', () => {
+    localStorage.setItem('admin_token', 'stored-token');
+    localStorage.setItem('admin_user', '{not-json');
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    expect(result.current.admin).toBeNull();
+  });
+
+  it('should ignore a blank stored token', () => {
+    localStorage.setItem('admin_token', '   ');
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    expect(result.current.token).toBeNull();
+  });
+
   it('should throw when used outside AuthProvider', () => {
     expect(() => renderHook(() => useAuth())).toThrow('useAuth must be used within an AuthProvider');
   });

@@ -6,8 +6,11 @@
 # 本契约复用 `llm.graphql` 的 Provider/Model/ProviderInput/CustomModelInput/
 # ProviderBatchPayload 语义，差异是所有操作作用于 `scope = 'global'` 的数据：
 #   - 保存供应商前先调供应商 API 校验连通性（失败不保存）
-#   - 凭据 AES-256-GCM 加密存储、脱敏返回（前 3 后 4）
-#   - 删除供应商级联删除其模型，禁用供应商级联禁用其模型
+#   - 凭据 AES-256-GCM 加密存储、脱敏返回：长度 > 8 时为「前 3 后 4」，
+#     长度 ≤ 8 时整体掩码为 `****`（避免短凭据被拼出近似完整值）
+#   - 删除供应商级联删除其全部模型（含自定义模型）；禁用供应商级联禁用其模型
+#   - 更新供应商时若连通性参数（凭据 / type / endpoint）变化则重同步模型：
+#     仅删除并重建 API 同步模型（`isCustom = false`），保留用户自定义模型（`isCustom = true`）
 #   - `name` 在同 scope 内唯一
 
 enum ProviderType {

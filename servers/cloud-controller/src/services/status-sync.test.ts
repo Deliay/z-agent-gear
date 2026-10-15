@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ContainerService } from './container-service.js';
 import { HeartbeatTracker } from './heartbeat-tracker.js';
-import { InMemoryK8sClient, type K8sJobEvent } from './k8s-client.js';
+import { InMemoryK8sClient, type K8sClient, type K8sJobEvent } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
@@ -154,5 +154,91 @@ describe('StatusSyncService', () => {
     const orphan = await repo.findByName('zag-worker-orphan');
     expect(orphan?.status).toBe('failed');
     expect(orphan?.exitReason).toBe('孤儿 Job');
+  });
+
+  it('T-Y6: reconcile reclaims a failed record that still has a Job', async () => {
+    const { repo, client, service, statusSync } = setup();
+    const created = await service.start('idle');
+    await service.markFailed(created.id, '回连超时');
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    await statusSync.reconcile();
+
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.tokenHash).toBeNull();
+  });
+
+  it('T-Y7: a stuck destroying record is reclaimed by the terminal sweep', async () => {
+    const { repo, client, service, statusSync } = setup();
+    const created = await service.start('idle');
+    // 模拟销毁流程被 SIGTERM 打断：状态卡在 destroying，Job 仍在
+    await repo.update(created.id, { status: 'destroying' });
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const reclaimed = await statusSync.sweepTerminalJobs();
+
+    expect(reclaimed).toContain(created.id);
+    expect(await client.getJob(created.name)).toBeNull();
+    expect((await repo.findById(created.id))?.status).toBe('destroying');
+  });
+
+  it('T-Y8: rejecting watch-start / rejecting scan never throws out of start()', async () => {
+    vi.useFakeTimers();
+    try {
+      const repo = new InMemoryContainerRepository();
+      const tokenService = new TokenService(repo);
+      const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        publicWsEndpoint: 'cloud.example.com:4003',
+      });
+      const service = new ContainerService(repo, tokenService, jobManager, {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        connectTimeoutMs: CONNECT_TIMEOUT_MS,
+        shutdownGraceMs: 0,
+      });
+      const failingClient: K8sClient = {
+        createJob: async () => {},
+        getJob: async () => null,
+        listJobs: async () => [],
+        deleteJob: async () => {},
+        watchJobs: async () => {
+          throw new Error('apiserver unreachable');
+        },
+      };
+      const logged: unknown[] = [];
+      const statusSync = new StatusSyncService({
+        repo,
+        k8sClient: failingClient,
+        containerService: service,
+        heartbeatTracker: new HeartbeatTracker(),
+        connectTimeoutMs: CONNECT_TIMEOUT_MS,
+        image: 'zero-tools/zag-worker:latest',
+        reconnectDelayMs: 0,
+        logger: {
+          info: (...args: unknown[]) => logged.push(args),
+          warn: (...args: unknown[]) => logged.push(args),
+          error: (...args: unknown[]) => logged.push(args),
+        },
+      });
+
+      // watch 建立失败不应把 rejection 抛出 start()
+      await expect(statusSync.start()).resolves.toBeUndefined();
+      expect(logged.length).toBeGreaterThan(0);
+
+      // 周期巡检中的异步 rejection 也不应打挂进程
+      repo.findAll = async () => {
+        throw new Error('mongo down');
+      };
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(logged.length).toBeGreaterThan(0);
+
+      statusSync.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

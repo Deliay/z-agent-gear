@@ -94,7 +94,7 @@ export const modelResolvers = {
   },
   Model: {
     provider: async (parent: { providerId: string }) => {
-      return providerService.findById(parent.providerId);
+      return providerService.findSummaryById(parent.providerId);
     },
   },
 };

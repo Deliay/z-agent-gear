@@ -80,40 +80,40 @@ describe('Admin Auth API', () => {
     expect(res.errors![0].extensions?.code).toBe('UNAUTHENTICATED');
   });
 
-  it('T-A7: blocks business queries/mutations while mustChangePassword=true (MUST_CHANGE_PASSWORD)', async () => {
-    await ensureAdminLogin();
-    const supported = await setAdminMustChangePassword(true);
-    if (!supported) {
-      // 无 MONGODB_URI（未提供共享 Mongo）时跳过；守卫亦由单元测试覆盖
-      return;
-    }
+  it.skipIf(!process.env.MONGODB_URI)(
+    'T-A7: blocks business queries/mutations while mustChangePassword=true (MUST_CHANGE_PASSWORD)',
+    async () => {
+      await ensureAdminLogin();
+      const supported = await setAdminMustChangePassword(true);
+      expect(supported).toBe(true);
 
-    try {
-      const login = await adminGql<{ adminLogin: { token: string; admin: { mustChangePassword: boolean } } }>(
-        LOGIN,
-        { username: 'admin', password: ADMIN_TEST_PASSWORD },
-      );
-      expect(login.errors).toBeUndefined();
-      expect(login.data!.adminLogin.admin.mustChangePassword).toBe(true);
-      const token = login.data!.adminLogin.token;
+      try {
+        const login = await adminGql<{ adminLogin: { token: string; admin: { mustChangePassword: boolean } } }>(
+          LOGIN,
+          { username: 'admin', password: ADMIN_TEST_PASSWORD },
+        );
+        expect(login.errors).toBeUndefined();
+        expect(login.data!.adminLogin.admin.mustChangePassword).toBe(true);
+        const token = login.data!.adminLogin.token;
 
-      // 白名单放行
-      const me = await adminGql<{ adminMe: { mustChangePassword: boolean } }>(ADMIN_ME, undefined, token);
-      expect(me.data!.adminMe.mustChangePassword).toBe(true);
+        // 白名单放行
+        const me = await adminGql<{ adminMe: { mustChangePassword: boolean } }>(ADMIN_ME, undefined, token);
+        expect(me.data!.adminMe.mustChangePassword).toBe(true);
 
-      // 业务查询被拦截
-      const blocked = await adminGql(
-        `query { adminProviders { id } }`,
-        undefined,
-        token,
-      );
-      expect(blocked.errors).toBeDefined();
-      expect(blocked.errors![0].message).toBe('MUST_CHANGE_PASSWORD');
-      expect(blocked.errors![0].extensions?.code).toBe('MUST_CHANGE_PASSWORD');
-    } finally {
-      await setAdminMustChangePassword(false);
-    }
-  });
+        // 业务查询被拦截
+        const blocked = await adminGql(
+          `query { adminProviders { id } }`,
+          undefined,
+          token,
+        );
+        expect(blocked.errors).toBeDefined();
+        expect(blocked.errors![0].message).toBe('MUST_CHANGE_PASSWORD');
+        expect(blocked.errors![0].extensions?.code).toBe('MUST_CHANGE_PASSWORD');
+      } finally {
+        await setAdminMustChangePassword(false);
+      }
+    },
+  );
 
   it('should reject wrong password without leaking account existence (T-A3)', async () => {
     const body = await adminGql(LOGIN, { username: 'admin', password: 'definitely-wrong-password' });
@@ -149,7 +149,7 @@ describe('Admin Auth API', () => {
     expect(body.errors).toBeDefined();
   });
 
-  it('should change password, invalidate the old one, and sign a new token (T-A4)', async () => {
+  it('should change password, invalidate the old password and old token, and sign a new token (T-A4 / 问题 6)', async () => {
     const token = await ensureAdminLogin();
     const newPassword = 'RotatedStrongPass123';
 
@@ -169,6 +169,19 @@ describe('Admin Auth API', () => {
     // 新密码可登录
     const newLogin = await adminGql(LOGIN, { username: 'admin', password: newPassword });
     expect(newLogin.errors).toBeUndefined();
+
+    // 旧 token 立即失效（问题 6）：改密前签发的 token 不再通过认证
+    const staleMe = await adminGql(ADMIN_ME, undefined, token);
+    expect(staleMe.data?.adminMe ?? null).toBeNull();
+
+    // 改密返回的新 token 仍有效
+    const freshMe = await adminGql<{ adminMe: { username: string } }>(
+      ADMIN_ME,
+      undefined,
+      changed.data!.changeAdminPassword.token,
+    );
+    expect(freshMe.errors).toBeUndefined();
+    expect(freshMe.data!.adminMe.username).toBe('admin');
 
     // 还原，避免影响其它套件
     const restore = await adminGql(CHANGE_PASSWORD, {

@@ -12,6 +12,7 @@ export class ModelService {
   }
 
   async findByProviderId(providerId: string) {
+    if (!mongoose.Types.ObjectId.isValid(providerId)) return [];
     const models = await Model.find({ providerId, scope: GLOBAL_SCOPE })
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
@@ -46,6 +47,7 @@ export class ModelService {
   }
 
   async delete(id: string) {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
     const model = await Model.findById(id);
     if (!model) return null;
     if (model.scope !== GLOBAL_SCOPE) return null;
@@ -57,6 +59,7 @@ export class ModelService {
   }
 
   async toggle(id: string) {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
     const model = await Model.findById(id);
     if (!model) return null;
     if (model.scope !== GLOBAL_SCOPE) return null;
@@ -73,16 +76,20 @@ export class ModelService {
   }
 
   async updateSortOrder(ids: string[]) {
-    const updates = ids.map((id, index) => ({
+    // 非法 ObjectId 直接剔除，避免 bulkWrite CastError（问题 27）
+    const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const updates = validIds.map((id, index) => ({
       updateOne: {
         filter: { _id: id, scope: GLOBAL_SCOPE },
         update: { sortOrder: index },
       },
     }));
 
-    await Model.bulkWrite(updates);
+    if (updates.length > 0) {
+      await Model.bulkWrite(updates);
+    }
 
-    const models = await Model.find({ _id: { $in: ids }, scope: GLOBAL_SCOPE })
+    const models = await Model.find({ _id: { $in: validIds }, scope: GLOBAL_SCOPE })
       .sort({ sortOrder: 1 })
       .lean();
 

@@ -40,6 +40,11 @@ const validInput = {
   credentialValue: 'sk-test-key',
 };
 
+// 合法 24 位 hex ObjectId（问题 27：非法 ObjectId 视为不存在）
+const PROVIDER_OID = '507f1f77bcf86cd799439011';
+const OTHER_OID = '507f191e810c19729de860ea';
+const MISSING_OID = '000000000000000000000000';
+
 describe('ProviderService (admin / global scope)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,19 +68,26 @@ describe('ProviderService (admin / global scope)', () => {
     it('adds scope=global to the lookup and maps result', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(makeProviderDoc()) });
 
-      const result = await providerService.findById('provider-1');
+      const result = await providerService.findById(PROVIDER_OID);
 
-      expect(Provider.findOne).toHaveBeenCalledWith({ _id: 'provider-1', scope: 'global' });
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
       expect(result!.id).toBe('provider-1');
     });
 
     it('returns null when the provider is not global', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
-      const result = await providerService.findById('user-provider');
+      const result = await providerService.findById(PROVIDER_OID);
 
-      expect(Provider.findOne).toHaveBeenCalledWith({ _id: 'user-provider', scope: 'global' });
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
       expect(result).toBeNull();
+    });
+
+    it('returns null for a malformed ObjectId without touching the DB (问题 27)', async () => {
+      const result = await providerService.findById('not-an-object-id');
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
     });
   });
 
@@ -172,7 +184,7 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
       );
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global', isCustom: false });
       expect(Model.insertMany).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ isCustom: false, scope: 'global' })]),
       );
@@ -208,13 +220,38 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://api.openai.com/v1', 'sk-test-key',
       );
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global', isCustom: false });
+    });
+
+    it('T-P8: keeps custom models across a resync (deleteMany filter excludes isCustom=true)', async () => {
+      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+
+      await providerService.update(OID, validInput);
+
+      // 只删除 API 同步模型，用户自定义模型（isCustom=true）不被级联删除（问题 5）
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global', isCustom: false });
+      expect(Model.deleteMany).not.toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
+    });
+
+    it('rejects an empty name like create (问题 21)', async () => {
+      await expect(providerService.update(OID, { ...validInput, name: '  ' })).rejects.toThrow('Provider name is required');
+      expect(Provider.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('returns null for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.update('not-an-object-id', validInput);
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
+      expect(Provider.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
     it('returns null when the provider is not global', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
-      const result = await providerService.update('missing', validInput);
+      const result = await providerService.update(OTHER_OID, validInput);
 
       expect(result).toBeNull();
     });
@@ -225,11 +262,19 @@ describe('ProviderService (admin / global scope)', () => {
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
       (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
 
-      const result = await providerService.delete('provider-1');
+      const result = await providerService.delete(PROVIDER_OID);
 
       expect(result).toBe(true);
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: 'provider-1', scope: 'global' });
-      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: 'provider-1', scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: PROVIDER_OID, scope: 'global' });
+      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
+    });
+
+    it('returns false for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.delete('not-an-object-id');
+
+      expect(result).toBe(false);
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
     });
   });
 
@@ -243,13 +288,13 @@ describe('ProviderService (admin / global scope)', () => {
       (Provider.findOne as any).mockResolvedValue(doc);
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.toggle('provider-1');
+      const result = await providerService.toggle(PROVIDER_OID);
 
       expect(result).not.toBeNull();
       expect(doc.isEnabled).toBe(true);
       expect(doc.save).toHaveBeenCalledTimes(1);
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: 'provider-1', scope: 'global' },
+        { providerId: PROVIDER_OID, scope: 'global' },
         { isEnabled: true },
       );
     });
@@ -257,7 +302,14 @@ describe('ProviderService (admin / global scope)', () => {
     it('returns null when provider is not found in global scope', async () => {
       (Provider.findOne as any).mockResolvedValue(null);
 
-      expect(await providerService.toggle('missing')).toBeNull();
+      expect(await providerService.toggle(MISSING_OID)).toBeNull();
+    });
+
+    it('returns null for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.toggle('not-an-object-id');
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
     });
   });
 

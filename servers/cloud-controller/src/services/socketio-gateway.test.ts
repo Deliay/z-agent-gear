@@ -34,7 +34,7 @@ function waitFor<T = unknown>(socket: ClientSocket, event: string, timeout = 300
 
 async function connectWith(token?: string): Promise<ClientSocket> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    query: token ? { token } : {},
+    auth: token ? { token } : {},
     transports: ['websocket'],
     reconnection: false,
   });
@@ -54,7 +54,7 @@ async function connectWith(token?: string): Promise<ClientSocket> {
 
 async function connectError(token?: string): Promise<string> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    query: token ? { token } : {},
+    auth: token ? { token } : {},
     transports: ['websocket'],
     reconnection: false,
   });
@@ -84,6 +84,18 @@ async function newContainer() {
   });
   const token = await tokenService.issue(container.id);
   return { container, token };
+}
+
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  timeout = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('condition not met in time');
 }
 
 beforeAll(async () => {
@@ -134,6 +146,30 @@ describe('worker Socket.IO gateway', () => {
     const { container, token } = await newContainer();
     await service.destroy(container.id); // 终态 → token 作废
     expect(await connectError(token)).toBe('INVALID_TOKEN');
+  });
+
+  it('T-G9: legacy query token is still accepted (handshake auth preferred)', async () => {
+    const { container, token } = await newContainer();
+    const socket = ioClient(`${baseUrl}/worker`, {
+      query: { token },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+      socket.once('connect', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once('connect_error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    socket.emit('register', { hostname: 'worker-legacy', version: '2.0.0' });
+    await waitFor(socket, 'registered');
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    socket.close();
   });
 
   it('T-G2: valid handshake + register → registered, online with connectedAt', async () => {
@@ -194,5 +230,98 @@ describe('worker Socket.IO gateway', () => {
     expect((await repo.findById(container.id))?.status).toBe('connecting');
 
     socket.close();
+  });
+
+  it('T-G6: register without hostname is rejected with INVALID_PAYLOAD', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+
+    const errorPromise = waitFor<{ code: string }>(socket, 'error');
+    socket.emit('register', { version: '2.0.0' });
+    const error = await errorPromise;
+
+    expect(error.code).toBe('INVALID_PAYLOAD');
+    expect((await repo.findById(container.id))?.status).toBe('connecting');
+    socket.close();
+  });
+
+  it('T-G7: same container with two sockets stays online until the last disconnects', async () => {
+    const { container, token } = await newContainer();
+    const first = await connectWith(token);
+    first.emit('register', { hostname: 'worker-a', version: '2.0.0' });
+    await waitFor(first, 'registered');
+
+    const second = await connectWith(token);
+    second.emit('register', { hostname: 'worker-b', version: '2.0.0' });
+    await waitFor(second, 'registered');
+
+    first.close();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    expect(heartbeatTracker.has(container.id)).toBe(true);
+
+    second.close();
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'connecting');
+    expect(heartbeatTracker.has(container.id)).toBe(false);
+  });
+
+  it('T-G8: handshake attempts from one source IP are rate limited', async () => {
+    const rateRepo = new InMemoryContainerRepository();
+    const rateToken = new TokenService(rateRepo);
+    const rateClient = new InMemoryK8sClient();
+    const rateJobManager = new K8sJobManager(rateClient, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const rateService = new ContainerService(rateRepo, rateToken, rateJobManager, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    });
+
+    const rateServer = createServer();
+    const rateIo = new SocketIOServer(rateServer, { transports: ['websocket'] });
+    registerWorkerGateway(rateIo, {
+      tokenService: rateToken,
+      containerService: rateService,
+      heartbeatTracker: new HeartbeatTracker(),
+      handshakeRateLimit: { windowMs: 60000, max: 2 },
+    });
+    await new Promise<void>((resolve) => rateServer.listen(0, resolve));
+    const port = (rateServer.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const attempt = (token?: string): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        const socket = ioClient(`${url}/worker`, {
+          auth: token ? { token } : {},
+          transports: ['websocket'],
+          reconnection: false,
+          forceNew: true,
+        });
+        const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+        socket.once('connect_error', (err) => {
+          clearTimeout(timer);
+          const message = err.message;
+          socket.close();
+          resolve(message);
+        });
+        socket.once('connect', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve('CONNECTED');
+        });
+      });
+
+    try {
+      expect(await attempt()).toBe('INVALID_TOKEN');
+      expect(await attempt()).toBe('INVALID_TOKEN');
+      expect(await attempt()).toBe('RATE_LIMITED');
+    } finally {
+      rateIo.close();
+      await new Promise<void>((resolve) => rateServer.close(() => resolve()));
+    }
   });
 });

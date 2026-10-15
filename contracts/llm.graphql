@@ -14,6 +14,15 @@ enum ConfigScope {
   global
 }
 
+# Model.provider 摘要：不含 endpoint / 凭据等敏感字段，用户侧可见。
+type ProviderSummary {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+}
+
 type Provider {
   id: ID!
   name: String!
@@ -31,7 +40,7 @@ type Provider {
 type Model {
   id: ID!
   providerId: ID!
-  provider: Provider!
+  provider: ProviderSummary!
   name: String!
   isCustom: Boolean!
   isEnabled: Boolean!

@@ -22,16 +22,22 @@ export interface StatusSyncOptions {
   logger?: Logger;
 }
 
+const SCAN_INTERVAL_MS = 15000;
+const MAX_WATCH_RETRY_EXPONENT = 5;
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Job 状态同步：watch 实时事件 + 断线重连全量对账 + connecting 超时巡检 + 心跳离线巡检。
+ * Job 状态同步：watch 实时事件 + 断线重连全量对账 + connecting 超时巡检 + 心跳离线巡检
+ * + 终态残留 Job 回收兜底。
  */
 export class StatusSyncService {
   private unwatch: (() => void) | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private watchRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchRetryAttempt = 0;
   private stopped = true;
 
   constructor(private readonly opts: StatusSyncOptions) {}
@@ -39,22 +45,62 @@ export class StatusSyncService {
   async start(): Promise<void> {
     if (!this.stopped) return;
     this.stopped = false;
-    await this.startWatch();
+    await this.attemptStartWatch();
     this.timer = setInterval(() => {
-      void this.scanTimeouts();
-      void this.scanHeartbeats();
-    }, 15000);
+      void this.scanTimeouts().catch((err) => {
+        this.opts.logger?.error?.('[status-sync] scanTimeouts failed', err);
+      });
+      void this.scanHeartbeats().catch((err) => {
+        this.opts.logger?.error?.('[status-sync] scanHeartbeats failed', err);
+      });
+      void this.sweepTerminalJobs().catch((err) => {
+        this.opts.logger?.error?.('[status-sync] terminal sweep failed', err);
+      });
+    }, SCAN_INTERVAL_MS);
     this.timer.unref?.();
+  }
+
+  /** 尝试建立 watch；失败时记录并安排指数退避重试（不向外抛错，避免打挂进程/watch 断链）。 */
+  private async attemptStartWatch(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await this.startWatch();
+      this.watchRetryAttempt = 0;
+      if (this.watchRetryTimer) {
+        clearTimeout(this.watchRetryTimer);
+        this.watchRetryTimer = null;
+      }
+    } catch (err) {
+      this.opts.logger?.error?.('[status-sync] failed to establish watch, will retry', err);
+      this.scheduleWatchRetry();
+    }
+  }
+
+  private scheduleWatchRetry(): void {
+    if (this.stopped || this.watchRetryTimer) return;
+    const base = this.opts.reconnectDelayMs ?? 5000;
+    const exponent = Math.min(this.watchRetryAttempt, MAX_WATCH_RETRY_EXPONENT);
+    this.watchRetryAttempt += 1;
+    const delayMs = Math.max(base, 1) * 2 ** exponent;
+    this.watchRetryTimer = setTimeout(() => {
+      this.watchRetryTimer = null;
+      void this.attemptStartWatch();
+    }, delayMs);
+    this.watchRetryTimer.unref?.();
   }
 
   async startWatch(): Promise<void> {
     this.unwatch = await this.opts.k8sClient.watchJobs(
       WORKER_LABEL_SELECTOR,
       (event) => {
-        void this.handleJobEvent(event);
+        void this.handleJobEvent(event).catch((err) => {
+          this.opts.logger?.error?.('[status-sync] handleJobEvent failed', err);
+        });
       },
       (error) => {
-        void this.handleWatchDisconnect(error);
+        void this.handleWatchDisconnect(error).catch((err) => {
+          this.opts.logger?.error?.('[status-sync] handleWatchDisconnect failed', err);
+        });
       },
     );
   }
@@ -65,6 +111,11 @@ export class StatusSyncService {
       clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.watchRetryTimer) {
+      clearTimeout(this.watchRetryTimer);
+      this.watchRetryTimer = null;
+    }
+    this.watchRetryAttempt = 0;
     try {
       this.unwatch?.();
     } catch {
@@ -73,7 +124,7 @@ export class StatusSyncService {
     this.unwatch = null;
   }
 
-  /** watch 断开：记录 → 全量对账 → 自动重连。 */
+  /** watch 断开：记录 → 全量对账 → 自动重连（失败则退避重试）。 */
   async handleWatchDisconnect(error?: unknown): Promise<void> {
     this.opts.logger?.warn?.('[status-sync] watch disconnected, reconciling', error);
     try {
@@ -82,12 +133,16 @@ export class StatusSyncService {
       /* ignore */
     }
     this.unwatch = null;
-    await this.reconcile();
+    try {
+      await this.reconcile();
+    } catch (err) {
+      this.opts.logger?.error?.('[status-sync] reconcile after disconnect failed', err);
+    }
     if (this.stopped) return;
     const reconnectDelay = this.opts.reconnectDelayMs ?? 5000;
     if (reconnectDelay > 0) await delay(reconnectDelay);
     if (!this.stopped) {
-      await this.startWatch();
+      await this.attemptStartWatch();
     }
   }
 
@@ -135,7 +190,8 @@ export class StatusSyncService {
   }
 
   /**
-   * 全量对账：用 K8s 实际 Job 列表比对落库记录，回写状态并识别无主 Job。
+   * 全量对账：用 K8s 实际 Job 列表比对落库记录，回写状态并识别无主 Job；
+   * 末尾回收终态记录残留的 Job（资源泄漏兜底）。
    */
   async reconcile(): Promise<string[]> {
     const jobs = await this.opts.k8sClient.listJobs(WORKER_LABEL_SELECTOR);
@@ -175,12 +231,32 @@ export class StatusSyncService {
       });
       this.opts.logger?.warn?.(`[status-sync] orphan job detected during reconcile: ${job.name}`);
     }
+
+    await this.sweepTerminalJobs();
     return orphans;
   }
 
   /**
+   * 终态残留 Job 巡检：`failed` / `destroying` 记录若仍关联 Job（例如销毁流程被
+   * SIGTERM 打断卡在 destroying），删除 Job 回收节点资源。
+   * 返回本次被回收的 containerId 列表。
+   */
+  async sweepTerminalJobs(): Promise<string[]> {
+    const records = await this.opts.repo.findAll();
+    const reclaimed: string[] = [];
+    for (const record of records) {
+      if (record.status !== 'failed' && record.status !== 'destroying') continue;
+      const job = await this.opts.k8sClient.getJob(record.name);
+      if (!job) continue;
+      const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
+      if (deleted) reclaimed.push(record.id);
+    }
+    return reclaimed;
+  }
+
+  /**
    * connecting 超时巡检：超过 CONNECT_TIMEOUT_MS 未回连 → failed + exitReason「回连超时」，
-   * 不自动删除 Job（等待管理员强制销毁）。
+   * 不立即删除 Job（等待管理员强制销毁或终态巡检兜底回收）。
    */
   async scanTimeouts(now: number = Date.now()): Promise<string[]> {
     const records = await this.opts.repo.findAll();

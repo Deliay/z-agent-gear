@@ -55,6 +55,8 @@ aspire start    # 启动全部服务（agent-api + admin-api + controller-api + 
 # 方式二：Docker Compose
 aspire publish -o aspire/manifest    # 生成 docker-compose.yaml
 rm -f aspire/manifest/*.Dockerfile   # 清理不需要的 Dockerfile
+# 编辑 aspire/manifest/.env，填入各镜像地址与环境参数（含 cloud-controller 的
+# ADMIN_API_URL / INTERNAL_API_TOKEN / WORKER_IMAGE / PUBLIC_WS_ENDPOINT）
 docker compose -f aspire/manifest/docker-compose.yaml up -d
 docker compose -f aspire/manifest/docker-compose.yaml down
 ```

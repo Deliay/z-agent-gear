@@ -47,12 +47,24 @@ export type UpdateContainerInput = Partial<
   Omit<CloudContainerEntity, 'id' | 'createdAt'>
 >;
 
+/**
+ * 条件更新选项（乐观并发/CAS）：仅当当前状态落在 `fromStatuses` 内才执行写入，
+ * 否则返回 `null`。调用方在失败时应重新读取记录，避免用陈旧状态覆写。
+ */
+export interface UpdateContainerOptions {
+  fromStatuses?: CloudContainerStatus[];
+}
+
 export interface ContainerRepository {
   create(input: CreateContainerInput): Promise<CloudContainerEntity>;
   findById(id: string): Promise<CloudContainerEntity | null>;
   findByName(name: string): Promise<CloudContainerEntity | null>;
   findAll(): Promise<CloudContainerEntity[]>;
-  update(id: string, patch: UpdateContainerInput): Promise<CloudContainerEntity | null>;
+  update(
+    id: string,
+    patch: UpdateContainerInput,
+    options?: UpdateContainerOptions,
+  ): Promise<CloudContainerEntity | null>;
 }
 
 interface RawDoc {
@@ -128,10 +140,15 @@ export class MongoContainerRepository implements ContainerRepository {
   async update(
     id: string,
     patch: UpdateContainerInput,
+    options?: UpdateContainerOptions,
   ): Promise<CloudContainerEntity | null> {
     if (!mongoose.isValidObjectId(id)) return null;
-    const doc = await CloudContainer.findByIdAndUpdate(
-      id,
+    const filter: Record<string, unknown> = { _id: id };
+    if (options?.fromStatuses && options.fromStatuses.length > 0) {
+      filter.status = { $in: options.fromStatuses };
+    }
+    const doc = await CloudContainer.findOneAndUpdate(
+      filter,
       { $set: patch },
       { new: true },
     ).lean<RawDoc | null>();
@@ -192,9 +209,13 @@ export class InMemoryContainerRepository implements ContainerRepository {
   async update(
     id: string,
     patch: UpdateContainerInput,
+    options?: UpdateContainerOptions,
   ): Promise<CloudContainerEntity | null> {
     const found = this.store.get(id);
     if (!found) return null;
+    if (options?.fromStatuses && !options.fromStatuses.includes(found.status)) {
+      return null;
+    }
     const updated: CloudContainerEntity = {
       ...found,
       ...patch,

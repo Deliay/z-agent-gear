@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { AdminUser } from '../models/admin-user.js';
+import { config } from '../config/index.js';
 import {
   seedAdmin,
   login,
@@ -9,9 +11,13 @@ import {
   verifyToken,
   hashPassword,
   verifyPassword,
+  generateInitialAdminPassword,
 } from './auth';
 
 vi.mock('../models/admin-user.js');
+
+const LEGACY_DEFAULT_PASSWORD = 'admin1234567';
+const STRONG_PASSWORD = 'ConfiguredStrongPass123';
 
 describe('AuthService', () => {
   beforeEach(() => {
@@ -19,6 +25,11 @@ describe('AuthService', () => {
   });
 
   describe('seedAdmin', () => {
+    const originalInitialPassword = config.initialAdminPassword;
+    afterEach(() => {
+      config.initialAdminPassword = originalInitialPassword;
+    });
+
     it('T-A1: is idempotent and skips seeding when admin_users is not empty', async () => {
       (AdminUser.countDocuments as any).mockResolvedValue(3);
 
@@ -27,7 +38,8 @@ describe('AuthService', () => {
       expect(AdminUser.create).not.toHaveBeenCalled();
     });
 
-    it('T-A1: creates default admin with hashed password and mustChangePassword=true when empty', async () => {
+    it('T-A1: creates admin from the configured password, never the public default', async () => {
+      config.initialAdminPassword = STRONG_PASSWORD;
       (AdminUser.countDocuments as any).mockResolvedValue(0);
       const create = vi.fn().mockResolvedValue({});
       (AdminUser.create as any) = create;
@@ -38,8 +50,39 @@ describe('AuthService', () => {
       const arg = create.mock.calls[0][0];
       expect(arg.username).toBe('admin');
       expect(arg.mustChangePassword).toBe(true);
-      expect(arg.passwordHash).not.toBe('admin1234567');
-      expect(await verifyPassword('admin1234567', arg.passwordHash)).toBe(true);
+      expect(arg.passwordChangedAt).toBeInstanceOf(Date);
+      expect(await verifyPassword(STRONG_PASSWORD, arg.passwordHash)).toBe(true);
+      // 硬编码默认口令已移除（问题 4）
+      expect(await verifyPassword(LEGACY_DEFAULT_PASSWORD, arg.passwordHash)).toBe(false);
+    });
+
+    it('T-A1 (问题 4): generates a random password and prints it once when unset', async () => {
+      config.initialAdminPassword = '';
+      (AdminUser.countDocuments as any).mockResolvedValue(0);
+      const create = vi.fn().mockResolvedValue({});
+      (AdminUser.create as any) = create;
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await seedAdmin();
+
+      const arg = create.mock.calls[0][0];
+      expect(arg.mustChangePassword).toBe(true);
+      expect(await verifyPassword(LEGACY_DEFAULT_PASSWORD, arg.passwordHash)).toBe(false);
+
+      const banner = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(banner).toContain('ADMIN_INITIAL_PASSWORD');
+      expect(banner).toContain('初始密码');
+      logSpy.mockRestore();
+    });
+  });
+
+  describe('password generation', () => {
+    it('generates a strong random password (enough entropy, not the legacy default)', () => {
+      const a = generateInitialAdminPassword();
+      const b = generateInitialAdminPassword();
+      expect(a).not.toBe(b);
+      expect(a.length).toBeGreaterThanOrEqual(20);
+      expect(a).not.toBe(LEGACY_DEFAULT_PASSWORD);
     });
   });
 
@@ -65,6 +108,17 @@ describe('AuthService', () => {
       await expect(login('ghost', 'whatever')).rejects.toThrow('Invalid username or password');
     });
 
+    it('T-A3 (问题 7): still runs a bcrypt compare for unknown users to equalize timing', async () => {
+      (AdminUser.findOne as any).mockResolvedValue(null);
+      const compareSpy = vi.spyOn(bcrypt, 'compare');
+
+      await expect(login('ghost', 'whatever')).rejects.toThrow('Invalid username or password');
+
+      // 帐号不存在也必须执行一次 compare，抹平计时侧信道
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      compareSpy.mockRestore();
+    });
+
     it('T-A3: rejects wrong password with the same message', async () => {
       const passwordHash = await hashPassword('admin1234567');
       (AdminUser.findOne as any).mockResolvedValue({
@@ -85,6 +139,18 @@ describe('AuthService', () => {
       );
     });
 
+    it('rejects a known weak/default new password (问题 26)', async () => {
+      const oldHash = await hashPassword(STRONG_PASSWORD);
+      (AdminUser.findById as any).mockResolvedValue({
+        _id: { toString: () => 'admin-1' },
+        passwordHash: oldHash,
+        mustChangePassword: false,
+        save: vi.fn(),
+      });
+
+      await expect(changePassword('admin-1', STRONG_PASSWORD, 'admin1234567')).rejects.toThrow('Password is too weak');
+    });
+
     it('T-A5: rejects invalid old password and does not save', async () => {
       const passwordHash = await hashPassword('admin1234567');
       const doc = {
@@ -101,13 +167,30 @@ describe('AuthService', () => {
       expect(doc.save).not.toHaveBeenCalled();
     });
 
-    it('T-A4: updates password, clears mustChangePassword and returns document', async () => {
+    it('rejects a new password identical to the old one (问题 26)', async () => {
+      const oldHash = await hashPassword(STRONG_PASSWORD);
+      const doc = {
+        _id: { toString: () => 'admin-1' },
+        passwordHash: oldHash,
+        mustChangePassword: true,
+        save: vi.fn(),
+      };
+      (AdminUser.findById as any).mockResolvedValue(doc);
+
+      await expect(changePassword('admin-1', STRONG_PASSWORD, STRONG_PASSWORD)).rejects.toThrow(
+        'New password must be different from the old password',
+      );
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('T-A4 (问题 6): updates password, stamps passwordChangedAt and returns document', async () => {
       const oldHash = await hashPassword('admin1234567');
       const doc = {
         _id: { toString: () => 'admin-1' },
         username: 'admin',
         passwordHash: oldHash,
         mustChangePassword: true,
+        passwordChangedAt: null as Date | null,
         save: vi.fn().mockResolvedValue(undefined),
       };
       (AdminUser.findById as any).mockResolvedValue(doc);
@@ -117,6 +200,7 @@ describe('AuthService', () => {
       expect(result.mustChangePassword).toBe(false);
       expect(doc.passwordHash).not.toBe(oldHash);
       expect(await verifyPassword('newpassword123', doc.passwordHash)).toBe(true);
+      expect(doc.passwordChangedAt).toBeInstanceOf(Date);
       expect(doc.save).toHaveBeenCalledTimes(1);
     });
 
@@ -130,6 +214,12 @@ describe('AuthService', () => {
     it('T-A2/T-A4: signs and verifies an admin token', () => {
       const token = signToken('admin-1');
       expect(verifyToken(token)).toMatchObject({ adminId: 'admin-1' });
+    });
+
+    it('T-A4 (问题 6): embeds passwordChangedAt so post-change tokens can be told apart', () => {
+      const changedAt = new Date('2026-01-02T03:04:05.000Z');
+      const token = signToken('admin-1', changedAt);
+      expect(verifyToken(token)).toMatchObject({ adminId: 'admin-1', pwdAt: changedAt.getTime() });
     });
 
     it('T-A6: rejects a user-side token signed with the user secret', () => {

@@ -14,6 +14,75 @@ const GLOBAL_SCOPE = 'global';
  */
 export const PROVIDER_CONNECTIVITY_ERROR = '供应商连通性测试失败，请检查 API 地址和凭据是否正确';
 
+/** 非法 ObjectId 视为不存在，避免 CastError 透出 GraphQL（问题 27）。 */
+function isValidObjectId(id: string): boolean {
+  return mongoose.Types.ObjectId.isValid(id);
+}
+
+/**
+ * 探测当前连接是否为支持事务的部署（副本集/分片集群）。
+ * 单节点 mongod（含 Aspire 本地 Mongo 容器）不支持事务，直接走非事务路径，
+ * 避免 `withTransaction` 触发 "does not support retryable writes" 报错。
+ */
+async function supportsTransactions(): Promise<boolean> {
+  if (mongoose.connection.readyState !== 1) return false;
+  const db = mongoose.connection.db;
+  if (!db) return false;
+  try {
+    const hello = (await db.admin().command({ hello: 1 })) as {
+      setName?: string;
+      msg?: string;
+    };
+    return Boolean(hello.setName) || hello.msg === 'isdbgrid';
+  } catch {
+    return false;
+  }
+}
+
+/** 单节点 mongod 不支持事务时驱动抛出的错误形态 */
+function isTransactionUnsupportedError(err: unknown): boolean {
+  const message = (err as Error)?.message ?? '';
+  return /Transaction numbers are only allowed|replica set member or mongos|does not support transactions|transactions are not supported|does not support retryable writes|retryWrites=false|IllegalOperation/i.test(
+    message,
+  );
+}
+
+/**
+ * 尽力而为的事务包裹（问题 5）：多步写（供应商 + 模型）在同一事务内提交，失败整体回滚。
+ * - 未连接 Mongo（单测）：直接非事务执行；
+ * - 事务不可用（单节点 mongod / 无副本集）：降级为非事务执行，行为与旧实现一致；
+ * - 事务可用：以 `mongoose.startSession().withTransaction` 原子提交。
+ */
+async function runWithOptionalTransaction<T>(
+  fn: (session: mongoose.ClientSession | undefined) => Promise<T>,
+): Promise<T> {
+  if (!(await supportsTransactions())) {
+    return fn(undefined);
+  }
+
+  let session: mongoose.ClientSession | undefined;
+  try {
+    session = await mongoose.startSession();
+  } catch {
+    return fn(undefined);
+  }
+
+  try {
+    let result!: T;
+    await session.withTransaction(async () => {
+      result = await fn(session);
+    });
+    return result;
+  } catch (err) {
+    if (isTransactionUnsupportedError(err)) {
+      return fn(undefined);
+    }
+    throw err;
+  } finally {
+    await session.endSession();
+  }
+}
+
 export class ProviderService {
   async findAll() {
     const providers = await Provider.find({ scope: GLOBAL_SCOPE }).sort({ createdAt: -1 }).lean();
@@ -21,6 +90,7 @@ export class ProviderService {
   }
 
   async findById(id: string) {
+    if (!isValidObjectId(id)) return null;
     const provider = await Provider.findOne({ _id: id, scope: GLOBAL_SCOPE }).lean();
     if (!provider) return null;
     return this.mapProvider(provider);
@@ -47,28 +117,43 @@ export class ProviderService {
 
     const encrypted = encrypt(input.credentialValue);
 
-    const provider = await Provider.create({
-      name: input.name,
-      type: input.type,
-      endpoint: input.endpoint,
-      credentialType: (input.credentialType || 'api_key') as 'api_key',
-      encryptedCredential: encrypted,
-      scope: GLOBAL_SCOPE,
+    return runWithOptionalTransaction(async (session) => {
+      const provider = session
+        ? (await Provider.create([{
+          name: input.name,
+          type: input.type,
+          endpoint: input.endpoint,
+          credentialType: (input.credentialType || 'api_key') as 'api_key',
+          encryptedCredential: encrypted,
+          scope: GLOBAL_SCOPE,
+        }], { session }))[0]
+        : await Provider.create({
+          name: input.name,
+          type: input.type,
+          endpoint: input.endpoint,
+          credentialType: (input.credentialType || 'api_key') as 'api_key',
+          encryptedCredential: encrypted,
+          scope: GLOBAL_SCOPE,
+        });
+
+      if (models.length > 0) {
+        const modelDocs = models.map((name, i) => ({
+          providerId: provider._id,
+          name,
+          isCustom: false,
+          isEnabled: true,
+          sortOrder: i,
+          scope: GLOBAL_SCOPE,
+        }));
+        if (session) {
+          await Model.insertMany(modelDocs, { session });
+        } else {
+          await Model.insertMany(modelDocs);
+        }
+      }
+
+      return this.mapProvider(provider.toObject());
     });
-
-    if (models.length > 0) {
-      const modelDocs = models.map((name, i) => ({
-        providerId: provider._id,
-        name,
-        isCustom: false,
-        isEnabled: true,
-        sortOrder: i,
-        scope: GLOBAL_SCOPE,
-      }));
-      await Model.insertMany(modelDocs);
-    }
-
-    return this.mapProvider(provider.toObject());
   }
 
   async update(id: string, input: {
@@ -78,6 +163,12 @@ export class ProviderService {
     credentialType: string;
     credentialValue: string;
   }) {
+    // 与 create 一致校验名称（问题 21），避免写入空名供应商
+    if (!input.name || input.name.trim().length === 0) {
+      throw new Error('Provider name is required');
+    }
+    if (!isValidObjectId(id)) return null;
+
     const existingProvider = await Provider.findOne({ _id: id, scope: GLOBAL_SCOPE }).lean() as {
       encryptedCredential: { iv: string; ciphertext: string; tag: string };
       type: string;
@@ -107,46 +198,67 @@ export class ProviderService {
       }
     }
 
-    // 先更新供应商：唯一索引冲突（改名撞名）在此抛出，此时模型尚未改动，状态保持一致
-    const provider = await Provider.findOneAndUpdate(
-      { _id: id, scope: GLOBAL_SCOPE },
-      {
-        name: input.name,
-        type: input.type,
-        endpoint: input.endpoint,
-        credentialType: (input.credentialType || 'api_key') as 'api_key',
-        encryptedCredential: encrypted,
-      },
-      { new: true, lean: true },
-    );
-    if (!provider) return null;
+    return runWithOptionalTransaction(async (session) => {
+      // 先更新供应商：唯一索引冲突（改名撞名）在此抛出，此时模型尚未改动，状态保持一致
+      const provider = await Provider.findOneAndUpdate(
+        { _id: id, scope: GLOBAL_SCOPE },
+        {
+          name: input.name,
+          type: input.type,
+          endpoint: input.endpoint,
+          credentialType: (input.credentialType || 'api_key') as 'api_key',
+          encryptedCredential: encrypted,
+        },
+        session ? { new: true, lean: true, session } : { new: true, lean: true },
+      );
+      if (!provider) return null;
 
-    // 再级联重同步模型
-    if (needsResync) {
-      await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE });
-      if (models.length > 0) {
-        const modelDocs = models.map((name, i) => ({
-          providerId: new mongoose.Types.ObjectId(id),
-          name,
-          isCustom: false,
-          isEnabled: true,
-          sortOrder: i,
-          scope: GLOBAL_SCOPE,
-        }));
-        await Model.insertMany(modelDocs);
+      // 再级联重同步模型：仅替换 API 同步模型（isCustom=false），保留用户自定义模型（问题 5）
+      if (needsResync) {
+        const syncedFilter = { providerId: id, scope: GLOBAL_SCOPE, isCustom: false } as const;
+        if (session) {
+          await Model.deleteMany(syncedFilter, { session });
+        } else {
+          await Model.deleteMany(syncedFilter);
+        }
+        if (models.length > 0) {
+          const modelDocs = models.map((name, i) => ({
+            providerId: new mongoose.Types.ObjectId(id),
+            name,
+            isCustom: false,
+            isEnabled: true,
+            sortOrder: i,
+            scope: GLOBAL_SCOPE,
+          }));
+          if (session) {
+            await Model.insertMany(modelDocs, { session });
+          } else {
+            await Model.insertMany(modelDocs);
+          }
+        }
       }
-    }
 
-    return this.mapProvider(provider);
+      return this.mapProvider(provider);
+    });
   }
 
   async delete(id: string) {
-    await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE });
-    const result = await Provider.deleteOne({ _id: id, scope: GLOBAL_SCOPE });
-    return result.deletedCount > 0;
+    if (!isValidObjectId(id)) return false;
+    return runWithOptionalTransaction(async (session) => {
+      if (session) {
+        await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE }, { session });
+      } else {
+        await Model.deleteMany({ providerId: id, scope: GLOBAL_SCOPE });
+      }
+      const result = session
+        ? await Provider.deleteOne({ _id: id, scope: GLOBAL_SCOPE }, { session })
+        : await Provider.deleteOne({ _id: id, scope: GLOBAL_SCOPE });
+      return result.deletedCount > 0;
+    });
   }
 
   async toggle(id: string) {
+    if (!isValidObjectId(id)) return null;
     const provider = await Provider.findOne({ _id: id, scope: GLOBAL_SCOPE });
     if (!provider) return null;
 

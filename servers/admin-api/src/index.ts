@@ -11,17 +11,29 @@ import { seedAdmin } from './services/auth.js';
 
 const app = express();
 
-app.use(cors({ origin: config.corsOrigin }));
+// 生产环境未显式配置 CORS_ORIGIN 时 config.corsOrigin 为空串：origin:false 仅允许同源，不再默认放开 `*`
+app.use(cors({ origin: config.corsOrigin || false }));
 app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
+
+/** 提取客户端 IP 供登录限速使用（优先反代头，其次 x-real-ip）。 */
+function clientIpFrom(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) {
+    return forwarded.split(',')[0].trim() || 'unknown';
+  }
+  return request.headers.get('x-real-ip') || 'unknown';
+}
 
 const yoga = createYoga({
   schema,
   context: async ({ request }) => ({
     currentAdmin: await authenticateAdmin(request),
+    clientIp: clientIpFrom(request),
   }),
-  graphiql: true,
+  // 生产环境关闭 GraphiQL 交互式浏览器（问题 26）
+  graphiql: config.nodeEnv !== 'production',
 });
 
 app.use('/graphql', yoga);

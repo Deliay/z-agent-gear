@@ -100,6 +100,18 @@ export interface BatchPayloadData {
   successCount: number;
 }
 
+export interface BatchEnableGlobalProvidersMutation {
+  batchEnableGlobalProviders: BatchPayloadData;
+}
+
+export interface BatchDisableGlobalProvidersMutation {
+  batchDisableGlobalProviders: BatchPayloadData;
+}
+
+export interface BatchDeleteGlobalProvidersMutation {
+  batchDeleteGlobalProviders: BatchPayloadData;
+}
+
 // ---------- 基础镜像（contracts/admin-base-image.graphql） ----------
 
 export interface BaseImageData {

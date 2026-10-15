@@ -214,6 +214,7 @@ describe('SocketIO Client', () => {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 60000,
+        auth: { token: 'zag_k_1_abc123' },
       });
     });
 

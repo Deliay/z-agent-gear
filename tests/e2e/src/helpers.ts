@@ -3,7 +3,9 @@ import { createServer } from 'node:http';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-export const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
+// 与 admin-api 种子口令来源对齐（问题 4：不再硬编码 admin1234567）。
+// 测试直接改写 Mongo 中的口令哈希，因此值本身不敏感；优先沿用部署注入的 ADMIN_INITIAL_PASSWORD。
+export const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || 'admin1234567';
 
 /**
  * 将内置管理员重置为「默认密码 + 首次强制改密」（T-E1 真实首登链路）。

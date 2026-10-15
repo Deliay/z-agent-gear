@@ -40,6 +40,7 @@ import { Provider } from '../models/provider.js';
 import { modelService } from './model';
 
 const VALID_OID = '507f1f77bcf86cd799439011';
+const VALID_OID_2 = '507f191e810c19729de860ea';
 
 function makeModelDoc(overrides: Record<string, unknown> = {}) {
   return {
@@ -83,6 +84,11 @@ describe('ModelService (admin / global scope)', () => {
       await modelService.findByProviderId(VALID_OID);
 
       expect(Model.find).toHaveBeenCalledWith({ providerId: VALID_OID, scope: 'global' });
+    });
+
+    it('returns [] for a malformed providerId without touching the DB (问题 27)', async () => {
+      await expect(modelService.findByProviderId('not-an-object-id')).resolves.toEqual([]);
+      expect(Model.find).not.toHaveBeenCalled();
     });
   });
 
@@ -137,30 +143,35 @@ describe('ModelService (admin / global scope)', () => {
       (Model.findById as any).mockResolvedValue({ ...doc, toObject: () => doc });
       (Model.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
 
-      const result = await modelService.delete('model-1');
+      const result = await modelService.delete(VALID_OID);
 
       expect(result).not.toBeNull();
       expect(result!.isCustom).toBe(true);
-      expect(Model.deleteOne).toHaveBeenCalledWith({ _id: 'model-1' });
+      expect(Model.deleteOne).toHaveBeenCalledWith({ _id: VALID_OID });
     });
 
     it('T-M2: refuses to delete a synced (non-custom) model', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc({ isCustom: false }));
 
-      expect(await modelService.delete('model-1')).toBeNull();
+      expect(await modelService.delete(VALID_OID)).toBeNull();
       expect(Model.deleteOne).not.toHaveBeenCalled();
     });
 
     it('T-M2: refuses to delete a user-scope model', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc({ scope: 'user', isCustom: true }));
 
-      expect(await modelService.delete('model-1')).toBeNull();
+      expect(await modelService.delete(VALID_OID)).toBeNull();
       expect(Model.deleteOne).not.toHaveBeenCalled();
     });
 
     it('returns null when model does not exist', async () => {
       (Model.findById as any).mockResolvedValue(null);
-      expect(await modelService.delete('missing')).toBeNull();
+      expect(await modelService.delete(VALID_OID)).toBeNull();
+    });
+
+    it('returns null for a malformed ObjectId without touching the DB (问题 27)', async () => {
+      expect(await modelService.delete('not-an-object-id')).toBeNull();
+      expect(Model.findById).not.toHaveBeenCalled();
     });
   });
 
@@ -174,7 +185,7 @@ describe('ModelService (admin / global scope)', () => {
       (Model.findById as any).mockResolvedValue(doc);
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: true }) });
 
-      const result = await modelService.toggle('model-1');
+      const result = await modelService.toggle(VALID_OID);
 
       expect(result).not.toBeNull();
       expect(doc.isEnabled).toBe(true);
@@ -186,25 +197,30 @@ describe('ModelService (admin / global scope)', () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc());
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ isEnabled: false }) });
 
-      expect(await modelService.toggle('model-1')).toBeNull();
+      expect(await modelService.toggle(VALID_OID)).toBeNull();
     });
 
     it('T-M3: refuses to toggle when provider is missing', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc());
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
-      expect(await modelService.toggle('model-1')).toBeNull();
+      expect(await modelService.toggle(VALID_OID)).toBeNull();
     });
 
     it('T-M3: refuses to toggle a user-scope model', async () => {
       (Model.findById as any).mockResolvedValue(makeModelDoc({ scope: 'user' }));
 
-      expect(await modelService.toggle('model-1')).toBeNull();
+      expect(await modelService.toggle(VALID_OID)).toBeNull();
     });
 
     it('returns null when model does not exist', async () => {
       (Model.findById as any).mockResolvedValue(null);
-      expect(await modelService.toggle('missing')).toBeNull();
+      expect(await modelService.toggle(VALID_OID)).toBeNull();
+    });
+
+    it('returns null for a malformed ObjectId without touching the DB (问题 27)', async () => {
+      expect(await modelService.toggle('not-an-object-id')).toBeNull();
+      expect(Model.findById).not.toHaveBeenCalled();
     });
   });
 
@@ -214,14 +230,26 @@ describe('ModelService (admin / global scope)', () => {
       const lean = vi.fn().mockResolvedValue([makeModelDoc()]);
       (Model.find as any).mockReturnValue({ sort: vi.fn().mockReturnValue({ lean }) });
 
-      const result = await modelService.updateSortOrder(['model-2', 'model-1']);
+      const result = await modelService.updateSortOrder([VALID_OID_2, VALID_OID]);
 
       expect(Model.bulkWrite).toHaveBeenCalledWith([
-        { updateOne: { filter: { _id: 'model-2', scope: 'global' }, update: { sortOrder: 0 } } },
-        { updateOne: { filter: { _id: 'model-1', scope: 'global' }, update: { sortOrder: 1 } } },
+        { updateOne: { filter: { _id: VALID_OID_2, scope: 'global' }, update: { sortOrder: 0 } } },
+        { updateOne: { filter: { _id: VALID_OID, scope: 'global' }, update: { sortOrder: 1 } } },
       ]);
-      expect(Model.find).toHaveBeenCalledWith({ _id: { $in: ['model-2', 'model-1'] }, scope: 'global' });
+      expect(Model.find).toHaveBeenCalledWith({ _id: { $in: [VALID_OID_2, VALID_OID] }, scope: 'global' });
       expect(result).toHaveLength(1);
+    });
+
+    it('drops malformed ids instead of throwing CastError (问题 27)', async () => {
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      const lean = vi.fn().mockResolvedValue([]);
+      (Model.find as any).mockReturnValue({ sort: vi.fn().mockReturnValue({ lean }) });
+
+      await modelService.updateSortOrder(['bad-id', VALID_OID]);
+
+      expect(Model.bulkWrite).toHaveBeenCalledWith([
+        { updateOne: { filter: { _id: VALID_OID, scope: 'global' }, update: { sortOrder: 0 } } },
+      ]);
     });
   });
 });

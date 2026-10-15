@@ -1,9 +1,10 @@
 // 管理后台 API 测试共享 helper。
 //
-// admin-api 只有一个内置管理员（种子 `admin` / `admin1234567`，首次登录强制改密），
-// 因此各 admin 套件需要共享同一管理员登录态。此 helper 把管理员密码「归一化」到
-// 固定测试密码 `AdminTestPass123`，使测试可重复执行：
-//   - 若仍为默认密码且 mustChangePassword=true：登录后立即改密为 AdminTestPass123；
+// admin-api 只有一个内置管理员（种子 `admin` / 部署注入的 `ADMIN_INITIAL_PASSWORD`；
+// 未注入时服务会生成随机初始密码，此时需通过 `ADMIN_INITIAL_PASSWORD` 环境变量告知测试），
+// 首次登录强制改密。因此各 admin 套件需要共享同一管理员登录态。此 helper 把管理员密码
+// 「归一化」到固定测试密码 `AdminTestPass123`，使测试可重复执行：
+//   - 若仍为初始密码且 mustChangePassword=true：登录后立即改密为 AdminTestPass123；
 //   - 若已是 AdminTestPass123：直接登录；
 //   - 并发/前次执行导致中间态：带重试收敛。
 // 返回的 token 对应 mustChangePassword=false 的管理员，可直接调用业务 mutation。
@@ -14,7 +15,9 @@ const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graph
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 export const ADMIN_TEST_PASSWORD = 'AdminTestPass123';
-const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
+// 管理员初始密码不再硬编码（问题 4）：优先使用部署注入的 ADMIN_INITIAL_PASSWORD（种子口令来源），
+// 兼容仍种入旧默认口令的环境。
+const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || 'admin1234567';
 
 export interface GqlResult<T = Record<string, unknown>> {
   data?: T;
