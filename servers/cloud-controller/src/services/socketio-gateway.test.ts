@@ -9,7 +9,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
-import { ENGINE_PATH, registerWorkerGateway } from './socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken } from './socketio-gateway.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 
 let httpServer: HttpServer;
@@ -422,5 +422,29 @@ describe('worker Socket.IO gateway', () => {
       rateIo.close();
       await new Promise<void>((resolve) => rateServer.close(() => resolve()));
     }
+  });
+
+  it('T-G12: SlidingWindowRateLimiter 在随机 key 洪水下 Map 有界（问题 60）', () => {
+    const limiter = new SlidingWindowRateLimiter(60_000, 60, 100);
+    const now = 1_700_000_000_000;
+
+    // 1000 个唯一 key（模拟未认证对端用随机 token 前缀铸造限速键）
+    for (let i = 0; i < 1000; i += 1) {
+      limiter.allow(`container:flood-${i}`, now);
+    }
+
+    expect(limiter.size).toBeLessThanOrEqual(100);
+  });
+
+  it('T-G13: containerIdFromToken 仅接受合法形状前缀，否则回退（问题 60）', () => {
+    expect(containerIdFromToken('507f1f77bcf86cd799439011.secret')).toBe('507f1f77bcf86cd799439011');
+    expect(containerIdFromToken('c-1.a.b')).toBe('c-1');
+    // 无分隔符 / 空前缀 / 非法字符 / 超长 → undefined（回退 IP 键）
+    expect(containerIdFromToken('no-dot')).toBeUndefined();
+    expect(containerIdFromToken('.secret')).toBeUndefined();
+    expect(containerIdFromToken('bad prefix.secret')).toBeUndefined();
+    expect(containerIdFromToken('bad/prefix.secret')).toBeUndefined();
+    expect(containerIdFromToken(`${'a'.repeat(65)}.secret`)).toBeUndefined();
+    expect(containerIdFromToken(undefined)).toBeUndefined();
   });
 });

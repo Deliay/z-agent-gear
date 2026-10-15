@@ -20,6 +20,10 @@ export const DEFAULT_HANDSHAKE_RATE_WINDOW_MS = 60000;
 export const DEFAULT_HANDSHAKE_RATE_MAX = 60;
 /** 单个来源 IP 的窗口内握手上限（兜底，高于 per-container 上限）。 */
 export const DEFAULT_HANDSHAKE_RATE_IP_MAX = 600;
+/** 限速 Map 内存中保留的最大 key 数（问题 60：与 admin-api LoginRateLimiter 同款有界基线）。 */
+export const DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES = 10_000;
+/** containerId 前缀允许的形状（问题 60：限速键由未认证对端任意铸造，须先校验形状/长度）。 */
+export const CONTAINER_ID_PREFIX_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 interface Logger {
   info?: (...args: unknown[]) => void;
@@ -42,6 +46,8 @@ export interface HandshakeRateLimitOptions {
   max?: number;
   /** 单个来源 IP 在窗口内允许的握手次数（兜底），默认 600。 */
   ipMax?: number;
+  /** 限速 Map 保留的最大 key 数（问题 60），默认 10000。 */
+  maxEntries?: number;
 }
 
 export interface WorkerGatewayDeps {
@@ -55,6 +61,10 @@ export interface WorkerGatewayDeps {
 /**
  * 轻量滑动窗口速率限制：按 key 统计窗口内握手次数。
  * 仅用于缓解握手阶段 bcrypt 校验带来的 CPU 消耗型攻击。
+ *
+ * 问题 60（有界性，与 admin-api LoginRateLimiter 同款基线）：限速键可被未认证对端任意铸造，
+ * 因此必须 `maxEntries` 有界——新增 key 超上限时**过期优先、次选最旧**驱逐一条，
+ * 保证随机 key 洪水下 Map 不会无界增长。
  */
 export class SlidingWindowRateLimiter {
   private readonly hits = new Map<string, number[]>();
@@ -62,11 +72,27 @@ export class SlidingWindowRateLimiter {
   constructor(
     private readonly windowMs: number,
     private readonly max: number,
+    private readonly maxEntries: number = DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES,
   ) {}
+
+  /** 当前保留的 key 数（单测断言有界性用）。 */
+  get size(): number {
+    return this.hits.size;
+  }
 
   allow(key: string, now: number = Date.now()): boolean {
     const cutoff = now - this.windowMs;
-    const recent = (this.hits.get(key) ?? []).filter((t) => t > cutoff);
+    let recent = this.hits.get(key);
+    if (recent) {
+      recent = recent.filter((t) => t > cutoff);
+    } else {
+      // 新 key：先做有界驱逐，再落条目（问题 60）
+      if (this.hits.size >= this.maxEntries) {
+        this.evict(now, cutoff);
+      }
+      recent = [];
+    }
+
     if (recent.length >= this.max) {
       this.hits.set(key, recent);
       return false;
@@ -78,6 +104,19 @@ export class SlidingWindowRateLimiter {
 
   reset(): void {
     this.hits.clear();
+  }
+
+  /** 过期优先（窗口内无命中），次选最旧（插入序首个）。 */
+  private evict(now: number, cutoff: number): void {
+    for (const [key, times] of this.hits) {
+      const last = times.length > 0 ? times[times.length - 1]! : 0;
+      if (last <= cutoff) {
+        this.hits.delete(key);
+        return;
+      }
+    }
+    const oldest = this.hits.keys().next().value;
+    if (oldest !== undefined) this.hits.delete(oldest);
   }
 }
 
@@ -98,13 +137,16 @@ function handshakeToken(socket: Socket): string | undefined {
 
 /**
  * 从原始 token 字符串（`<containerId>.<secret>`）解析 containerId 前缀，**不运行 bcrypt**。
- * 用作限速键；token 缺失/格式非法时返回 undefined，调用方回退到 peer IP。
+ * 用作限速键；token 缺失 / 分隔符位置非法 / 前缀不符合 `CONTAINER_ID_PREFIX_PATTERN` 时返回
+ * undefined，调用方回退到 peer IP（问题 60：避免未认证对端用任意字符串铸造限速键）。
  */
-function containerIdFromToken(token: string | undefined): string | undefined {
+export function containerIdFromToken(token: string | undefined): string | undefined {
   if (!token) return undefined;
   const separator = token.indexOf('.');
   if (separator <= 0) return undefined;
-  return token.slice(0, separator);
+  const prefix = token.slice(0, separator);
+  if (!CONTAINER_ID_PREFIX_PATTERN.test(prefix)) return undefined;
+  return prefix;
 }
 
 /**
@@ -124,10 +166,12 @@ export function registerWorkerGateway(
   const keyLimiter = new SlidingWindowRateLimiter(
     windowMs,
     deps.handshakeRateLimit?.max ?? DEFAULT_HANDSHAKE_RATE_MAX,
+    deps.handshakeRateLimit?.maxEntries ?? DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES,
   );
   const ipLimiter = new SlidingWindowRateLimiter(
     windowMs,
     deps.handshakeRateLimit?.ipMax ?? DEFAULT_HANDSHAKE_RATE_IP_MAX,
+    deps.handshakeRateLimit?.maxEntries ?? DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES,
   );
   /** containerId → 当前活跃 socketId 集合（支持重连/多连接）。 */
   const activeSockets = new Map<string, Set<string>>();
@@ -140,7 +184,9 @@ export function registerWorkerGateway(
     const sourceIp = socket.handshake.address;
     const containerId = containerIdFromToken(token);
     const key = containerId ? `container:${containerId}` : `ip:${sourceIp}`;
-    if (!keyLimiter.allow(key) || !ipLimiter.allow(`ip:${sourceIp}`)) {
+    // 问题 60：先判 per-IP 兜底桶（其键空间亦为有界），IP 超限时直接拒绝，
+    // 不再调用 keyLimiter（避免被拒请求为未认证对端铸造新的 key 条目）。
+    if (!ipLimiter.allow(`ip:${sourceIp}`) || !keyLimiter.allow(key)) {
       logger.warn?.(`[worker] handshake rate limited key=${key} from ${sourceIp}`);
       next(new Error('RATE_LIMITED'));
       return;
