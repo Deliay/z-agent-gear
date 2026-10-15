@@ -5,9 +5,11 @@ type: Permanent
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: 🔴 第三轮复验（2026-10-16）：打回返工——第二轮问题 46/47（严重）与 48/49/50/52 的修复**逐项确认属实**（含 Ingress/engine path 端到端握手追踪、AppHost 随机凭据、CI 五流水线门禁实证），但 **问题 51 只修了一半**（agent-api 侧已改可空，admin-api 侧 `Model.provider: Provider!` 仍非空且解析器可返回 null，原故障模式在管理侧复现），且复验新发现 **6 项一般问题（53-58）**，按「有问题即打回」准则不予通过。详见第八节。
+> **状态**: ✅ 第三轮返工完成（待重启 AI Review 复验）——第三轮问题 53-59 **全部修复**（修复提交 `028436c`），建议 F-K 择要处理。复验证据：admin-api 242、cloud-controller 73、agent-api 653、admin-web 119 单测通过，`tsc`/lint 干净，`tests/api` 390 通过，admin 套件 E2E 20 通过。详见第八节 8.7。
 >
-> <details><summary>历史轮次（第三轮 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+> <details><summary>历史轮次（第三轮复验 / 第二轮返工 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+>
+> 🔴 第三轮复验（2026-10-16）：打回返工——第二轮 46/47 与 48/49/50/52 修复确认属实，但问题 51 只修一半（admin-api 侧非空契约残留）＋新发现 53-58 六项一般问题。
 >
 > ✅ 第二轮返工完成（2026-10-16）：问题 46/47（严重回归）与 48-52（一般）全部修复（修复提交 `25e7c89`），建议项 A/C/D/E 择要处理。复验证据：六套单测全绿、`tsc`/lint 干净、`tests/api` 388 通过、admin 套件 E2E 20 通过。详见第七节 7.7。
 >
@@ -510,15 +512,17 @@ type: Permanent
 
 ### 8.4 第三轮问题总览
 
+> 修复提交：`028436c`。7 项问题全部修复，验证见 8.7。
+
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 53 | admin-api `Model.provider` 非空 vs 可空解析器，悬空打挂 `adminModels` | 问题 51 修复范围只覆盖 agent-api | 🔴 待修复 | （待回填） |
-| 54 | `create()` 模型名不去重 `insertMany`，重复名 E11000 → 孤儿供应商 | 问题 48 修复只覆盖 update/resync 路径 | 🔴 待修复 | （待回填） |
-| 55 | admin-api `batch*` 无 ObjectId 校验，CastError 透传 | 建议 E 修复只覆盖 agent-api | 🔴 待修复 | （待回填） |
-| 56 | 限速 Map 驱逐不跳过锁定 entry，可重置管理员锁定 | 问题 49 加固的驱逐策略未区分锁定态 | 🔴 待修复 | （待回填） |
-| 57 | `TRUST_PROXY` 无条件信任转发头 | 受信代理边界未校验 | 🔴 待修复 | （待回填） |
-| 58 | `reconcile()` 缺 `creating` 守卫 + CAS-miss 无条件删 Job，可误杀活容器 | 问题 50/建议 C 残留竞态 | 🔴 待修复 | （待回填） |
-| 59 | 握手限速共享 Ingress IP 令牌桶，批量重连被误限 | 限速维度与部署拓扑不匹配 | 🔴 待修复 | （待回填） |
+| 53 | admin-api `Model.provider` 非空 vs 可空解析器，悬空打挂 `adminModels` | 问题 51 修复范围只覆盖 agent-api | ✅ 已修复（改可空 + 悬空测试） | `028436c` |
+| 54 | `create()` 模型名不去重 `insertMany`，重复名 E11000 → 孤儿供应商 | 问题 48 修复只覆盖 update/resync 路径 | ✅ 已修复（create 去重 + 回滚，两侧统一） | `028436c` |
+| 55 | admin-api `batch*` 无 ObjectId 校验，CastError 透传 | 建议 E 修复只覆盖 agent-api | ✅ 已修复（validObjectIds 过滤） | `028436c` |
+| 56 | 限速 Map 驱逐不跳过锁定 entry，可重置管理员锁定 | 问题 49 加固的驱逐策略未区分锁定态 | ✅ 已修复（仅驱逐未锁定 entry） | `028436c` |
+| 57 | `TRUST_PROXY` 无条件信任转发头 | 受信代理边界未校验 | ✅ 已修复（受信代理 IP/CIDR 列表 + 对端校验） | `028436c` |
+| 58 | `reconcile()` 缺 `creating` 守卫 + CAS-miss 无条件删 Job，可误杀活容器 | 问题 50/建议 C 残留竞态 | ✅ 已修复（reconcile 宽限守卫 + CAS-miss 回读判定） | `028436c` |
+| 59 | 握手限速共享 Ingress IP 令牌桶，批量重连被误限 | 限速维度与部署拓扑不匹配 | ✅ 已修复（按 containerId 限速 + per-IP 高上限兜底） | `028436c` |
 
 ### 8.5 第三轮验证（复验实测，2026-10-16）
 
@@ -543,6 +547,38 @@ type: Permanent
 4. 回填修复 commit 与验证结果至 8.4/8.5 后重新提交 AI Review。
 
 > 收敛提示：本轮问题全部为加固/边界类，无核心链路阻断。建议返工时优先保证 53/54 闭环，55-59 可一次性小步修复，避免再次触发「修复引入新问题」的循环（本轮 54/55/58 均属「修复只覆盖一半路径」）。
+
+### 8.7 第三轮问题修复与复验（返工轮，修复提交 `028436c`）
+
+**修复要点**
+
+| # | 修复 | 关键文件 |
+|---|---|---|
+| 53 | `Model.provider` 改可空（`Provider`），补真实 SDL 悬空 providerId 执行测试与 tests/api 用例 | `contracts/admin-llm.graphql`、`servers/admin-api/src/graphql/{schemas/model.ts,resolvers/model.test.ts}`、`tests/api/src/admin-api/llm.test.ts` |
+| 54 | create 复用去重 upsert（`dedupeModelNames` / `syncSyncedModels`），跳过空名；非事务路径失败回滚刚建供应商 | `servers/{admin-api,agent-api}/src/services/provider.ts` |
+| 55 | 新增 `validObjectIds` 过滤 + 空集短路 | `servers/admin-api/src/services/provider.ts` |
+| 56 | `evictOldestUnlocked`：仅驱逐未锁定 entry；全部锁定时拒绝新增 key | `servers/admin-api/src/services/login-rate-limiter.ts` |
+| 57 | `TRUST_PROXY` 改为受信代理 IP/CIDR 列表（`normalizeTrustProxy`/`ipMatchesCidr`/`isTrustedProxy`），仅当 socket 对端命中才采纳转发头 | `servers/admin-api/src/{config/index.ts,middleware/client-ip.ts}` |
+| 58 | reconcile 跳过宽限期内 `creating`；start CAS-miss 回读后仅终态才回收 Job | `servers/cloud-controller/src/services/{status-sync.ts,container-service.ts}` |
+| 59 | 限速主键改为一次性 token 的 containerId 前缀（免 bcrypt），回退 peer IP + per-IP 高上限兜底 | `servers/cloud-controller/src/services/socketio-gateway.ts` |
+
+建议项 F/G/H/I/J/K 择要处理：`buildServerEndpoint` 带路径 fail-fast；`destroy` 用 CAS 后状态判定优雅停机、`startWatch` 竞态中止、`creating` 超时兜底；测试夹具 websocket 传输对齐生产；admin `createCustom` trim/空名校验 + upsert `isCustom` 过滤；`seedAdmin` 明文口令日志脱敏标注（README）；历史设计文档（plan/proposal）标注旧种子口令已被随机初始口令取代。
+
+**复验实测（本轮）**
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 admin-api | ✅ 242 passed / 18 文件 | `npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 cloud-controller | ✅ 73 passed / 10 文件 | `npx vitest run`；含 per-container 限速、CAS 竞态、reconcile creating 守卫测试 |
+| 单测 agent-api | ✅ 653 passed / 45 文件 | `npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 admin-web | ✅ 119 passed / 19 文件 | `npx vitest run` |
+| tests/api | ✅ 390 passed / 23 文件 | Aspire 编排 + 共享 Mongo（干净 DB + 服务重启重建索引） |
+| tests/e2e admin 套件 | ✅ 20 passed | admin-auth / base-image / cloud-container / model-config |
+| 镜像/CI | ✅ | 五条流水线门禁与命名空间（前一轮）；本轮无 CI 改动 |
+
+### 8.6-补 第三轮结论（返工后）
+
+✅ **返工完成**——问题 53-59 已全部修复（`028436c`），建议 F-K 择要处理；复验证据见 8.7。请重启 AI Review 复核。
 
 ## 经验总结
 
