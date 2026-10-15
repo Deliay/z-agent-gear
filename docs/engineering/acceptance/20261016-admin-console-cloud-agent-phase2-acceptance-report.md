@@ -5,11 +5,13 @@ type: Permanent
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: 🔴 第二轮 AI Review 复验（2026-10-16）**打回返工**——首轮 4 项严重 + 16 项一般问题经逐项复核**确认已修复**（`5159589`，属实无虚假修复）；但复验发现 **2 项严重 + 5 项一般**新问题，其中 2 项是修复本身引入的回归（问题 46：Ingress 路径收紧破坏 Socket.IO worker 回连，云端工作容器在 K8s 部署路径不可用；问题 47：AppHost 默认口令 `dev-admin-init-password` 重建问题 4 的接管窗口）。验收不通过，详见第七节。
+> **状态**: ✅ 第二轮返工完成（待重启 AI Review 复验）——第二轮问题 46/47（严重回归）与 48-52（一般）**全部修复**（修复提交 `25e7c89`），建议项 A/C/D/E 择要处理。复验证据：五套单测 + controller-api 全绿、`tsc`/lint 干净、`tests/api` 388 通过、admin 套件 E2E 20 通过；AppHost 默认凭据已去除、Ingress 改路由 Socket.IO engine path。详见第七节 7.7。
 >
-> <details><summary>历史轮次（返工 / 首轮 Review）</summary>
+> <details><summary>历史轮次（第二轮复验 / 首轮返工 / 首轮 Review）</summary>
 >
-> ✅ 返工完成（2026-10-16）：首轮 4 项严重问题与 16 项一般问题全部修复（修复提交 `5159589`，回填 `10d673f`），21-45 项建议择要处理。复验证据：五套单测全绿、`tsc`/lint 干净、`tests/api` 386 通过、admin 套件 E2E 20 通过、镜像 `dist` 入口冒烟通过。
+> 🔴 第二轮复验（2026-10-16）：打回返工——首轮 1-20 修复确认属实，但发现 2 项严重 + 5 项一般新问题（问题 46：Ingress `path: /worker` 破坏 Socket.IO worker 回连；问题 47：AppHost 默认口令 `dev-admin-init-password` 重建问题 4 接管窗口；48-52 见第七节）。
+>
+> ✅ 返工完成（2026-10-16）：首轮 4 项严重问题与 16 项一般问题全部修复（修复提交 `5159589`，回填 `10d673f`）。
 >
 > 🔴 首轮验收结论（2026-10-16）：打回返工——AI 代码评审（diff `origin/release...origin/integration`，34 commits，225 文件 +35045/-145；不含锁文件 219 文件 +18322/-143）+ 四套单测实测，发现 **4 项严重问题（合入前必须修复）**、**16 项一般问题**、24 项建议。严重问题集中在：① cloud-controller / admin-api 镜像入口不可用（CI 构建的镜像部署即崩溃）；② Docker Compose 部署产物缺整个 cloud-controller 服务与接线；③ 终态容器 Job 无清理路径（资源泄漏且与契约矛盾）；④ 硬编码默认管理员口令可被接管。**已打回「修复Review意见」节点返工。**
 >
@@ -367,15 +369,17 @@ type: Permanent
 
 ### 7.4 第二轮问题总览
 
+> 修复提交：`25e7c89`。7 项问题全部修复，验证见 7.7。
+
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 46 | Ingress `path: /worker` 破坏 Socket.IO 回连，K8s 路径 worker 不可用 | namespace 与 engine path 概念混用（问题 10 修复回归） | ⏳ 待修复（🔴 严重） | - |
-| 47 | AppHost 公开默认口令/令牌重建接管窗口 | 问题 4 只修源码层，编排/文档/测试链路未治理（修复回归） | ⏳ 待修复（🔴 严重） | - |
-| 48 | 重同步同名冲突致同步模型丢失、重同步永久失败 | 唯一键不含 `isCustom`，delete+insert 无去重（问题 5 修复回归） | ⏳ 待修复（🟡） | - |
-| 49 | 登录限速可被伪造 XFF 绕过 + 锁定 DoS + Map 无界 | 限速键取自不可信请求头 | ⏳ 待修复（🟡） | - |
-| 50 | 终态 Job 清理残留路径 + `destroying` 卡死 + 契约缝隙 | 巡检未覆盖 `exited`、终态分支不迁移状态 | ⏳ 待修复（🟡） | - |
-| 51 | `ProviderSummary!` 非空契约 vs 可空解析器 | 悬空 providerId 触发非空违规 | ⏳ 待修复（🟡） | - |
-| 52 | CI 加固不完整（两条流水线缺门禁、命名空间两套） | 问题 12 修复范围不完整 | ⏳ 待修复（🟡） | - |
+| 46 | Ingress `path: /worker` 破坏 Socket.IO 回连，K8s 路径 worker 不可用 | namespace 与 engine path 概念混用（问题 10 修复回归） | ✅ 已修复（Ingress 改 `/socket.io` + 服务端显式 engine path + 握手锚定测试） | `25e7c89` |
+| 47 | AppHost 公开默认口令/令牌重建接管窗口 | 问题 4 只修源码层，编排/文档/测试链路未治理（修复回归） | ✅ 已修复（去字面量默认 + 随机/配置注入 + deny-list + 一次性日志） | `25e7c89` |
+| 48 | 重同步同名冲突致同步模型丢失、重同步永久失败 | 唯一键不含 `isCustom`，delete+insert 无去重（问题 5 修复回归） | ✅ 已修复（upsert 语义 + 同名跳过，admin/agent 两侧统一） | `25e7c89` |
+| 49 | 登录限速可被伪造 XFF 绕过 + 锁定 DoS + Map 无界 | 限速键取自不可信请求头 | ✅ 已修复（远端地址/受信末跳 + per-username 上限 + prune） | `25e7c89` |
+| 50 | 终态 Job 清理残留路径 + `destroying` 卡死 + 契约缝隙 | 巡检未覆盖 `exited`、终态分支不迁移状态 | ✅ 已修复（巡检覆盖 exited、destroying→exited、deletedJob、CAS） | `25e7c89` |
+| 51 | `ProviderSummary!` 非空契约 vs 可空解析器 | 悬空 providerId 触发非空违规 | ✅ 已修复（改可空 + 悬空引用测试） | `25e7c89` |
+| 52 | CI 加固不完整（两条流水线缺门禁、命名空间两套） | 问题 12 修复范围不完整 | ✅ 已修复（五条流水线统一门禁/最小权限/命名空间） | `25e7c89` |
 
 ### 7.5 第二轮验证（复验实测，2026-10-16）
 
@@ -394,6 +398,42 @@ type: Permanent
 ### 7.6 第二轮结论
 
 🔴 **打回返工**——首轮 1-20 修复确认属实，但问题 46、47 为严重问题（均为修复引入的回归：部署路径核心链路不可用 / 默认凭据接管窗口重现），问题 48-52 为一般问题（含数据丢失回归），按「有问题即打回」的验收准则不予通过。请按 7.3 修复要求逐项修复（46/47 合入前必须闭环），回填修复 commit 与验证结果后重新提交 AI Review；建议项 A-E 择要处理。
+
+### 7.7 第二轮问题修复与复验（返工轮，修复提交 `25e7c89`）
+
+**修复要点（逐项对应 7.3）**
+
+| # | 修复 | 关键文件 |
+|---|---|---|
+| 46 | 采用方案 A：Ingress 由 `/worker` 改为 `/socket.io`（Prefix）；服务端显式 `path = ENGINE_PATH('/socket.io/')`；新增真实握手锚定测试（`/socket.io/?EIO=4&transport=polling`→200、`/worker?...`→404）；契约 §1.2/§1.3/§3.1 同步 | `deploy/k8s/cloud-controller.yaml`、`servers/cloud-controller/src/{index.ts,services/socketio-gateway.ts}`、`contracts/cloud-controller-websocket.md` |
+| 47 | AppHost 敏感参数（admin-initial-password / internal-api-token / admin-jwt-secret / jwt-secret / mcp-jwt-secret）去除字面量默认值 → 配置注入或每次启动随机生成；admin-api 拒绝 `dev-admin-init-password`/`dev-admin-secret-change-in-production`；cloud-controller 拒绝 `dev-internal-token-change-in-production`（大小写/空白变体归一化）；`seedAdmin` 首次种子一次性打印初始口令（标注来源）；测试/文档改为环境注入 | `aspire/AgentGear.AppHost/AppHost.cs`、`servers/admin-api/src/{config,services/auth.ts}`、`servers/cloud-controller/src/config/index.ts`、`README.md`、`tests/*/AGENTS.md` |
+| 48 | admin-api/agent-api 重同步统一为 upsert 语义：与存活自定义模型同名则跳过，其余按 `(providerId,name)` upsert，仅删除过期 API 同步模型；agent-api 将模型同步移到 provider 写之后 | `servers/{admin-api,agent-api}/src/services/provider.ts` |
+| 49 | IP 取 socket 远端地址/受信代理末跳（新增 `middleware/client-ip.ts` + `TRUST_PROXY`）；增加 per-username 全局失败上限；限速 Map `prune()` + `maxEntries` 上限；补伪造头对抗性单测 | `servers/admin-api/src/{index.ts,middleware/client-ip.ts,services/login-rate-limiter.ts,graphql/resolvers/auth.ts}` |
+| 50 | 巡检覆盖 `exited` 残留 Job（单次 `listJobs` 索引）、`destroying` 卡死兜底迁移 `exited`；`DELETE /internal/containers/:id` 透出 `deletedJob`；`destroyLocked` 终态写回补 CAS；契约 A.2.3/A.4 同步 | `servers/cloud-controller/src/{services/container-service.ts,services/status-sync.ts,routes/internal-api.ts}`、`contracts/cloud-controller-websocket.md` |
+| 51 | `Model.provider` 由 `ProviderSummary!` 改为可空 `ProviderSummary`；补悬空 `providerId` 的真实 SDL 执行测试 | `servers/agent-api/src/graphql/schemas/model.ts`、`contracts/llm.graphql` |
+| 52 | 五条 `build-*-image.yml` 统一 `permissions: contents: read` + `npm ci && npm test` 门禁 + `IMAGE_NAMESPACE=zero-tools`；`deploy/k8s` 与 worker BUILD.md 命名空间对齐 | `.github/workflows/*`、`deploy/k8s/cloud-controller.yaml`、`deploy/images/worker/BUILD.md` |
+
+建议项：A（admin-web 单 toggle in-flight/error 提示/`successCount` 缺失）、C（cloud-controller watch 指数退避、deny-list 归一化）、D（nginx 单 Cache-Control、config.js `</script>` 用例）已处理；B（worker token 进 Job env 改 Secret）保留为后续项。
+
+**复验实测（本轮）**
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 admin-api | ✅ 210 passed / 18 文件 | `npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 cloud-controller | ✅ 66 passed / 10 文件 | `npx vitest run`；含 engine path 握手锚定测试 |
+| 单测 agent-api | ✅ 648 passed / 45 文件 | `npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 admin-web | ✅ 119 passed / 19 文件 | `npx vitest run`；lint 零告警 |
+| 单测 controller-api | ✅ 214 passed / 19 文件 | 顺带修正 `command.test.ts` 两个既有失败（mock `Controller.findOne`），使 CI 门禁可行 |
+| 单测 agent-controller | ✅ 292 passed / 23 文件 | 本轮未改，回归确认 |
+| tests/api | ✅ 388 passed / 23 文件 | Aspire 编排 + 共享 Mongo；`INTERNAL_API_TOKEN` 环境注入、`ADMIN_INITIAL_PASSWORD` 注入 |
+| tests/e2e admin 套件 | ✅ 20 passed | admin-auth / base-image / cloud-container / model-config |
+| AppHost 默认凭据 | ✅ 已去除 | 敏感参数随机/注入；admin-api 首次种子一次性打印初始口令 |
+
+> 说明：问题 46 的入口层连通性由「client/server engine path 一致」单测锚定（`/socket.io/` 200、`/worker` 404）；真实 Ingress 演练仍建议在部署环境按 `deploy/k8s` 补一次 wss 冒烟（本地无 ingress 控制器）。
+
+### 7.6-补 第二轮结论（返工后）
+
+✅ **返工完成**——问题 46/47（严重）与 48-52（一般）已全部修复（`25e7c89`），建议项 A/C/D/E 择要处理；复验证据见 7.7。请重启 AI Review 复核。
 
 ## 经验总结
 
