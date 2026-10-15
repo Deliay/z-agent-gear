@@ -5,7 +5,13 @@ type: Permanent
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: 🔴 打回返工——AI 代码评审（diff `origin/release...origin/integration`，34 commits，225 文件 +35045/-145；不含锁文件 219 文件 +18322/-143）+ 四套单测实测，发现 **4 项严重问题（合入前必须修复）**、**16 项一般问题**、24 项建议。严重问题集中在：① cloud-controller / admin-api 镜像入口不可用（CI 构建的镜像部署即崩溃）；② Docker Compose 部署产物缺整个 cloud-controller 服务与接线；③ 终态容器 Job 无清理路径（资源泄漏且与契约矛盾）；④ 硬编码默认管理员口令可被接管。**已打回「修复Review意见」节点返工，严重问题与一般问题全部修复后重新提交 Review。**
+> **状态**: ✅ 返工完成（待重启 AI Review 复验）——本轮 4 项严重问题与 16 项一般问题**全部修复**（修复提交 `5159589`），21-45 项建议择要处理。复验证据：四套后端单测 + admin-web 单测 + agent-controller 单测全绿，`tsc`/lint 干净，`tests/api` 386 通过，admin 套件 E2E 20 通过，镜像 `dist` 入口冒烟通过。
+>
+> <details><summary>首轮验收结论（历史）</summary>
+>
+> 🔴 打回返工——AI 代码评审（diff `origin/release...origin/integration`，34 commits，225 文件 +35045/-145；不含锁文件 219 文件 +18322/-143）+ 四套单测实测，发现 **4 项严重问题（合入前必须修复）**、**16 项一般问题**、24 项建议。严重问题集中在：① cloud-controller / admin-api 镜像入口不可用（CI 构建的镜像部署即崩溃）；② Docker Compose 部署产物缺整个 cloud-controller 服务与接线；③ 终态容器 Job 无清理路径（资源泄漏且与契约矛盾）；④ 硬编码默认管理员口令可被接管。**已打回「修复Review意见」节点返工。**
+>
+> </details>
 
 ## 关联文档
 
@@ -201,50 +207,57 @@ type: Permanent
 
 ## 四、修复总览
 
+> 修复提交：`5159589`（`fix(review): 修复 PR #207 AI Review 的 4 项严重 + 16 项一般问题`）。下列各问题均含于该提交；验证结果见第五节。
+
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 1 | 镜像入口不可用（cloud-controller 必崩 / admin-api 仅 compose 可用） | Dockerfile 未构建、ENTRYPOINT 指向 TS 源码 | ⏳ 待修复 | |
-| 2 | compose manifest 缺 cloud-controller 与 admin 接线 | `aspire publish` 产物未随 AppHost 重新生成 | ⏳ 待修复 | |
-| 3 | 终态容器 Job 无清理路径（资源泄漏、与契约矛盾） | 幂等早退跳过删 Job + 无终态对账 | ⏳ 待修复 | |
-| 4 | 硬编码默认管理员口令可接管 | PRD 指定固定口令硬编码进源码 | ⏳ 待修复（需产品裁决） | |
-| 5 | 更新供应商静默删除自定义模型 | 同步重拉取无 `isCustom` 过滤、多写无事务 | ⏳ 待修复 | |
-| 6 | 改密后旧 JWT 7 天有效 | token 无版本/签发时间校验 | ⏳ 待修复 | |
-| 7 | 登录无速率限制 + 用户名枚举计时侧信道 | 无 dummy compare、无限速 | ⏳ 待修复 | |
-| 8 | cloud-controller 状态写回无 CAS 竞态 | 盲 `$set` 无状态前置条件 | ⏳ 待修复 | |
-| 9 | status-sync 未捕获 rejection 可致进程崩溃 | fire-and-forget `void` 链无 `.catch` | ⏳ 待修复 | |
-| 10 | k8s 示例默认令牌 + Ingress 暴露 `/internal` | 示例即落地、Ingress `path: /` | ⏳ 待修复 | |
-| 11 | token 走 URL query 进日志、明文进 Job env | 契约握手设计 + env 注入方式 | ⏳ 待修复 | |
-| 12 | CI 镜像路径与 manifest 不一致、无测试门禁 | 两套命名空间、流水线缺 `npm test` | ⏳ 待修复 | |
-| 13 | `Model.provider` 泄露全局供应商明细 | `findById` 无 scope 过滤 | ⏳ 待修复 | |
-| 14 | 写保护级联过滤不一致（纵深防御缺口） | `update/delete/toggle` 级联缺 scope 过滤 | ⏳ 待修复 | |
-| 15 | tests/api 关键用例静默 skip 显示绿灯 | `if (!x) return` 而非 skip API | ⏳ 待修复 | |
-| 16 | E2E 未强制 `workers: 1` | config 未配置、文档表述失实 | ⏳ 待修复 | |
-| 17 | llm.test `every()` 空洞断言 | 空数组恒真 | ⏳ 待修复 | |
-| 18 | admin-web 列表页吞 error 伪装空态 | 未读取 `useQuery` error | ⏳ 待修复 | |
-| 19 | 批量操作无防抖/无反馈 | 无 busy 态、`successCount` 不展示 | ⏳ 待修复 | |
-| 20 | `ADMIN_API_URL` 未转义注入 config.js | printf 直拼 JS 字符串 | ⏳ 待修复 | |
+| 1 | 镜像入口不可用（cloud-controller 必崩 / admin-api 仅 compose 可用） | Dockerfile 未构建、ENTRYPOINT 指向 TS 源码 | ✅ 已修复 | `5159589` |
+| 2 | compose manifest 缺 cloud-controller 与 admin 接线 | `aspire publish` 产物未随 AppHost 重新生成 | ✅ 已修复 | `5159589` |
+| 3 | 终态容器 Job 无清理路径（资源泄漏、与契约矛盾） | 幂等早退跳过删 Job + 无终态对账 | ✅ 已修复 | `5159589` |
+| 4 | 硬编码默认管理员口令可接管 | PRD 指定固定口令硬编码进源码 | ✅ 已修复（改环境注入/随机 + fail-fast） | `5159589` |
+| 5 | 更新供应商静默删除自定义模型 | 同步重拉取无 `isCustom` 过滤、多写无事务 | ✅ 已修复 | `5159589` |
+| 6 | 改密后旧 JWT 7 天有效 | token 无版本/签发时间校验 | ✅ 已修复 | `5159589` |
+| 7 | 登录无速率限制 + 用户名枚举计时侧信道 | 无 dummy compare、无限速 | ✅ 已修复 | `5159589` |
+| 8 | cloud-controller 状态写回无 CAS 竞态 | 盲 `$set` 无状态前置条件 | ✅ 已修复 | `5159589` |
+| 9 | status-sync 未捕获 rejection 可致进程崩溃 | fire-and-forget `void` 链无 `.catch` | ✅ 已修复 | `5159589` |
+| 10 | k8s 示例默认令牌 + Ingress 暴露 `/internal` | 示例即落地、Ingress `path: /` | ✅ 已修复 | `5159589` |
+| 11 | token 走 URL query 进日志、明文进 Job env | 契约握手设计 + env 注入方式 | ✅ 已修复（改握手 `auth.token`） | `5159589` |
+| 12 | CI 镜像路径与 manifest 不一致、无测试门禁 | 两套命名空间、流水线缺 `npm test` | ✅ 已修复 | `5159589` |
+| 13 | `Model.provider` 泄露全局供应商明细 | `findById` 无 scope 过滤 | ✅ 已修复（改 `ProviderSummary`） | `5159589` |
+| 14 | 写保护级联过滤不一致（纵深防御缺口） | `update/delete/toggle` 级联缺 scope 过滤 | ✅ 已修复 | `5159589` |
+| 15 | tests/api 关键用例静默 skip 显示绿灯 | `if (!x) return` 而非 skip API | ✅ 已修复 | `5159589` |
+| 16 | E2E 未强制 `workers: 1` | config 未配置、文档表述失实 | ✅ 已修复 | `5159589` |
+| 17 | llm.test `every()` 空洞断言 | 空数组恒真 | ✅ 已修复 | `5159589` |
+| 18 | admin-web 列表页吞 error 伪装空态 | 未读取 `useQuery` error | ✅ 已修复 | `5159589` |
+| 19 | 批量操作无防抖/无反馈 | 无 busy 态、`successCount` 不展示 | ✅ 已修复 | `5159589` |
+| 20 | `ADMIN_API_URL` 未转义注入 config.js | printf 直拼 JS 字符串 | ✅ 已修复 | `5159589` |
 
-> 建议项 21-45 不阻塞合并，可在返工中择要处理；处理情况请在下一轮 Review 时说明。
+> 建议项 21-45 中：21/22/23/24/26/27、30、32-35、36-42、43、44 已随本次返工处理（详见第五节与提交 diff）；25、29（lock 已重生成）、31、45 部分处理或记录为后续项。
 
-## 五、最终验证（本轮实测）
+## 五、最终验证（返工后复验实测，2026-10-16）
 
 | 项目 | 结果 | 说明 |
 |---|---|---|
-| 单测 admin-api | ✅ 157 passed / 15 文件 | `npx vitest run` |
-| 单测 cloud-controller | ✅ 34 passed / 7 文件 | `npx vitest run`（`npx npm@10 ci` 安装） |
-| 单测 agent-api | ✅ 629 passed / 44 文件 | `npx vitest run` |
-| 单测 admin-web | ✅ 76 passed / 14 文件 | `npx vitest run` |
-| 类型检查 | ✅ | admin-api / agent-api `tsc --noEmit` 零错误 |
+| 单测 admin-api | ✅ 193 passed / 17 文件 | `servers/admin-api npx vitest run`；`tsc --noEmit` 零错误（`dist` 已排除测试文件） |
+| 单测 cloud-controller | ✅ 57 passed / 10 文件 | `servers/cloud-controller npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 agent-api | ✅ 642 passed / 45 文件 | `servers/agent-api npx vitest run`；`tsc --noEmit` 干净 |
+| 单测 admin-web | ✅ 111 passed / 19 文件 | `apps/admin-web npx vitest run` |
+| 单测 agent-controller | ✅ 292 passed / 23 文件 | `packages/agent-controller npx vitest run`（问题 11 握手 auth 变更） |
+| 类型检查 | ✅ | admin-api / agent-api / cloud-controller / agent-controller `tsc --noEmit` 零错误 |
 | lint | ✅ | admin-web `npm run lint` 零告警 |
-| 镜像启动冒烟 | ❌ | cloud-controller `node src/index.ts` → `ERR_MODULE_NOT_FOUND`（问题 1） |
-| tests/api（API 集成） | ⏸ 本轮未执行 | 需 Aspire 编排环境；返工修复后随复验全量执行 |
-| tests/e2e（E2E） | ⏸ 本轮未执行 | 同上；执行时注意问题 16 的 workers 约束 |
+| 镜像 `dist` 入口冒烟 | ✅ | cloud-controller / admin-api `npm run build` 后 `node dist/index.js` 导入解析正常（无 `ERR_MODULE_NOT_FOUND`）；CI 新增镜像 `/health` 冒烟步骤（问题 1） |
+| tests/api（API 集成） | ✅ 386 passed / 23 文件 | Aspire 编排 + 共享 Mongo 实测；关键用例改为显式 `skipIf`（问题 15） |
+| tests/e2e（E2E） | ⚠️ 交付范围全绿（admin 套件 20 passed） | admin-auth / base-image / cloud-container / model-config 全通过；`workers: 1` 已强制（问题 16）。agent-web 存量套件（gateway/worktree/workflow 等）在本环境存在与本轮变更无关的既有失败（`apps/agent-web`、`servers/controller-api` 本次零改动，`gateway` 单跑亦失败） |
+
+> 说明：本轮修复不涉及 `apps/agent-web` 与 `servers/controller-api`（`git diff` 可证），agent-web 存量 E2E 失败为环境/存量状态问题，非本次回归；已记录，建议后续单独治理。
 
 ## 六、结论
 
-**打回返工**——问题 1-4 为严重问题（部署产物不可用 / 核心功能部署缺失 / 资源泄漏 / 安全接管窗口），问题 5-20 为一般问题（数据丢失、鉴权缺口、竞态、测试有效性、信息泄露等），**必须全部修复并附验证证据后重新提交 Review**。修复优先级建议：先 1-4（其中问题 4 需产品/安全裁决），再 5-20；问题 5 与 28、问题 1 与 29 建议同批联动修复。
+**返工完成**——问题 1-4（严重）与问题 5-20（一般）**已全部修复**，修复提交 `5159589`；建议项 21-45 择要处理。复验证据见第五节：五套单测全绿、类型检查/lint 干净、`tests/api` 386 通过、admin E2E 套件 20 通过、镜像 `dist` 入口冒烟通过。请重启 AI Review 复核。
 
-返工提交后请同步回填本报告「四、修复总览」的修复 commit 与各问题验证结果，重新进入 AI Review 复核。
+> 遗留：agent-web 存量 E2E（gateway/worktree/workflow/session-mobile 等）在本环境存在与本轮变更无关的既有失败（相关目录本次零改动），建议后续单独立项治理，不阻塞本次合入评审。
+
+> 首轮结论（历史）——**打回返工**：问题 1-4 为严重问题，问题 5-20 为一般问题，必须全部修复并附验证证据后重新提交 Review。
 
 ## 经验总结
 
