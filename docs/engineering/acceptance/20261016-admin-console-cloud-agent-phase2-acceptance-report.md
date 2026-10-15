@@ -5,9 +5,13 @@ type: Permanent
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: ✅ 第三轮返工完成（待重启 AI Review 复验）——第三轮问题 53-59 **全部修复**（修复提交 `028436c`），建议 F-K 择要处理。复验证据：admin-api 242、cloud-controller 73、agent-api 653、admin-web 119 单测通过，`tsc`/lint 干净，`tests/api` 390 通过，admin 套件 E2E 20 通过。详见第八节 8.7。
+> **状态**: ✅ 第四轮返工完成（待重启 AI Review 复验）——第四轮问题 60 **已修复**（修复提交 `66a3376`）。复验证据：cloud-controller 75 单测通过（含 1000 随机 key 洪水有界性 + 键形状校验），`tsc` 干净；admin-api 242 / agent-api 653 / admin-web 119 回归确认。详见第九节 9.7。
 >
-> <details><summary>历史轮次（第三轮复验 / 第二轮返工 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+> <details><summary>历史轮次（第四轮复验 / 第三轮返工 / 第三轮复验 / 第二轮返工 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+>
+> 🔴 第四轮复验（2026-10-16）：打回返工——53-59 与建议 F-K 确认属实，但问题 59 修复引入问题 60（握手限速器 Map 无界 + 键取自未校验 token 前缀，可内存 DoS）。
+>
+> ✅ 第三轮返工完成（2026-10-16）：问题 53-59 全部修复（修复提交 `028436c`），建议 F-K 择要处理。
 >
 > 🔴 第三轮复验（2026-10-16）：打回返工——第二轮 46/47 与 48/49/50/52 修复确认属实，但问题 51 只修一半（admin-api 侧非空契约残留）＋新发现 53-58 六项一般问题。
 >
@@ -629,9 +633,11 @@ type: Permanent
 
 ### 9.4 第四轮问题总览
 
+> 修复提交：`66a3376`。问题 60 已修复，验证见 9.7。
+
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 60 | 握手限速器 Map 无界 + 键取自未校验 token 前缀，随机 token 洪水可灌爆内存 | 问题 59 修复新造限速器未继承问题 49/56 的有界性加固基线 | ⏳ 待修复（打回返工） | — |
+| 60 | 握手限速器 Map 无界 + 键取自未校验 token 前缀，随机 token 洪水可灌爆内存 | 问题 59 修复新造限速器未继承问题 49/56 的有界性加固基线 | ✅ 已修复（maxEntries 有界驱逐 + 键形状校验 + IP 桶短路） | `66a3376` |
 
 ### 9.5 第四轮验证（实测，2026-10-16）
 
@@ -657,6 +663,32 @@ type: Permanent
 3. 回填修复 commit 与验证后重新提交 AI Review。
 
 > 收敛提示：本项为单一组件的加固补齐（参照 admin-api `LoginRateLimiter` 的 prune/maxEntries 移植即可），无核心链路改动。建议返工时把「新建任何按 key 计数的内存结构必须自带有界性」作为自查清单，避免第五轮再出同款。
+
+### 9.7 第四轮问题修复与复验（返工轮，修复提交 `66a3376`）
+
+**修复要点（问题 60）**
+
+| 子项 | 修复 | 文件 |
+|---|---|---|
+| Map 无界 | `SlidingWindowRateLimiter` 增加 `maxEntries`（默认 10000）+ `evict`（**过期优先、次选最旧**）；`allow` 对新 key 先有界驱逐再落条目；`container:`/`ip:` 条目不再永久驻留 | `servers/cloud-controller/src/services/socketio-gateway.ts` |
+| 键可控 | `containerIdFromToken` 对前缀做形状/长度校验（`CONTAINER_ID_PREFIX_PATTERN = ^[A-Za-z0-9._-]{1,64}$`），不合形状回退 peer IP 键 | 同上 |
+| IP 桶写入 | middleware 先判 per-IP 兜底桶（同样有界），IP 超限**短路**，不再为被拒请求调用 keyLimiter 铸造新条目 | 同上 |
+| 可配置 | `HandshakeRateLimitOptions.maxEntries`（两个桶共用） | 同上 |
+
+建议 L/M：作为可接受权衡保留（现状已保护主攻击面），未额外改动；已在报告记录。
+
+**复验实测（本轮）**
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 单测 cloud-controller | ✅ 75 passed / 10 文件 | 新增 T-G12（1000 随机 key 洪水 → `size ≤ maxEntries`）、T-G13（前缀形状/长度校验与回退） |
+| `tsc --noEmit` | ✅ 干净 | cloud-controller |
+| 单测 admin-api / agent-api / admin-web | ✅ 242 / 653 / 119 | 本轮未改，回归确认 |
+| tests/api / tests/e2e | ⏳ 本轮未重跑 | 仅 cloud-controller 内部限速器改动，不经编排即可由新单测锚定；如需可随下次全链路复验执行 |
+
+### 9.6-补 第四轮结论（返工后）
+
+✅ **返工完成**——问题 60 已修复（`66a3376`）：限速器有界（过期优先/次选最旧驱逐）+ 限速键形状校验回退 + per-IP 桶短路；建议 L/M 记录为可接受权衡。复验证据见 9.7。请重启 AI Review 复核。
 
 ## 经验总结
 
