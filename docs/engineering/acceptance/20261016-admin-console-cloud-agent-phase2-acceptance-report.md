@@ -1,13 +1,15 @@
 ---
-description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 各轮次结论：首轮 4 严重 + 16 一般问题与修复回填、第二轮复验 2 严重 + 5 一般新问题（含 2 项修复回归）与打回返工要求
+description: integration→release 集成验收报告——管理后台（admin console）+ 云 Agent 二期（cloud-controller 云端工作容器）（PR #207）AI Review 各轮次结论：首轮 4 严重 + 16 一般问题与修复回填、第二轮复验 2 严重 + 5 一般新问题（含 2 项修复回归）与打回返工要求、第三轮复验问题 46-52 修复确认但 51 修复不完整并新增 6 项一般问题（53-58）再次打回
 type: Permanent
 ---
 
 # 管理后台 + 云 Agent 二期 integration 验收报告（2026-10-16）
 
-> **状态**: ✅ 第二轮返工完成（待重启 AI Review 复验）——第二轮问题 46/47（严重回归）与 48-52（一般）**全部修复**（修复提交 `25e7c89`），建议项 A/C/D/E 择要处理。复验证据：五套单测 + controller-api 全绿、`tsc`/lint 干净、`tests/api` 388 通过、admin 套件 E2E 20 通过；AppHost 默认凭据已去除、Ingress 改路由 Socket.IO engine path。详见第七节 7.7。
+> **状态**: 🔴 第三轮复验（2026-10-16）：打回返工——第二轮问题 46/47（严重）与 48/49/50/52 的修复**逐项确认属实**（含 Ingress/engine path 端到端握手追踪、AppHost 随机凭据、CI 五流水线门禁实证），但 **问题 51 只修了一半**（agent-api 侧已改可空，admin-api 侧 `Model.provider: Provider!` 仍非空且解析器可返回 null，原故障模式在管理侧复现），且复验新发现 **6 项一般问题（53-58）**，按「有问题即打回」准则不予通过。详见第八节。
 >
-> <details><summary>历史轮次（第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+> <details><summary>历史轮次（第三轮 / 第二轮复验 / 首轮返工 / 首轮 Review）</summary>
+>
+> ✅ 第二轮返工完成（2026-10-16）：问题 46/47（严重回归）与 48-52（一般）全部修复（修复提交 `25e7c89`），建议项 A/C/D/E 择要处理。复验证据：六套单测全绿、`tsc`/lint 干净、`tests/api` 388 通过、admin 套件 E2E 20 通过。详见第七节 7.7。
 >
 > 🔴 第二轮复验（2026-10-16）：打回返工——首轮 1-20 修复确认属实，但发现 2 项严重 + 5 项一般新问题（问题 46：Ingress `path: /worker` 破坏 Socket.IO worker 回连；问题 47：AppHost 默认口令 `dev-admin-init-password` 重建问题 4 接管窗口；48-52 见第七节）。
 >
@@ -435,6 +437,113 @@ type: Permanent
 
 ✅ **返工完成**——问题 46/47（严重）与 48-52（一般）已全部修复（`25e7c89`），建议项 A/C/D/E 择要处理；复验证据见 7.7。请重启 AI Review 复核。
 
+## 八、第三轮 AI Review（复验轮，2026-10-16）
+
+### 8.1 复验范围与方法
+
+复验对象：`origin/release...origin/integration` @ `260b54e`（PR #207，第二轮返工修复提交 `25e7c89` + 报告回填 `260b54e`）。方法：三路并行逐项复核问题 46-52 的修复真实性（全部落到代码实证，不采信 commit message），并专项排查 `25e7c89` 修复引入的回归；问题 46 的 Ingress/engine path 修复按「Ingress → 服务端 → 客户端 → worker 入口」四层做了端到端握手追踪（socket.io/engine.io 路径归一化语义对照上游源码确认）；AppHost / CI 五条流水线逐行核对。**问题 46、47、48、49、50、52 修复确认属实**；**问题 51 仅修复 agent-api 一半**；新发现 6 项一般问题（53-58）与 8 项建议。本轮无 🔴 严重问题。
+
+### 8.2 第二轮问题修复复核结论
+
+| 第二轮问题 | 复核结论 | 证据 / 残留 |
+|---|---|---|
+| 46 Ingress `/worker` 破坏握手 | ✅ 确认修复 | Ingress `path: /socket.io`（Prefix）（`deploy/k8s/cloud-controller.yaml:145-146`）；服务端显式 `ENGINE_PATH='/socket.io/'`（`socketio-gateway.ts:15`、`index.ts:40-46`）；客户端 `io()` 未显式传 `path` 但库默认 `/socket.io` 归一化后与服务端收敛一致（engine.io-client `addTrailingSlash`、engine 服务端 `_computePath` 均落 `/socket.io/`）；worker 连接 URL 中的 `/worker` 仅为 namespace（`io.of('/worker')`），握手打 `/socket.io/` 可过 Ingress；锚定测试 T-G10（`/socket.io/`→200、`/worker`→404）；契约 §1.2/§1.3/§3.1 已同步。残留：客户端未显式钉死 `path`（依赖库默认值）；`buildServerEndpoint` 对带路径 `PUBLIC_WS_ENDPOINT` 的「支持」是陷阱（见 58 建议项） |
+| 47 AppHost 公开默认凭据 | ✅ 确认修复 | `AppHost.cs:5-12` `SecretOrDefault` 用 `RandomNumberGenerator.GetBytes` 每次启动随机或 `Parameters:*` 配置注入，全部敏感参数（admin-initial-password / internal-api-token / admin-jwt-secret / jwt-secret / mcp-jwt-secret / github-token-encryption-key）无字面量默认；`seedAdmin`（`admin-api/services/auth.ts:52-77`）仅首次种子、`crypto.randomBytes(18)` 生成、一次性打印；deny-list 含 `dev-admin-init-password`/`dev-admin-secret-change-in-production`（trim+lowercase 归一）与 `dev-internal-token-change-in-production`（含大小写/内部空白变体）；`tests/*/AGENTS.md` 已删默认值记载。残留：`docs/engineering/plan/20261014-feat-admin-console.md` 等历史设计文档仍记载 `admin1234567` 种子行为（见建议项） |
+| 48 重同步同名冲突数据丢失 | ✅ 确认修复（update 路径） | admin-api `provider.ts:220-276`：先取存活自定义模型名→fetched 名去重剔除同名→按 `(providerId,name)` upsert（恰为唯一索引键，不可能 E11000）→**之后**才删陈旧（filter 带 `isCustom:false + $nin`，不误删自定义）；无事务路径无「先删后失败丢数据」窗口；agent-api 同语义且模型同步移到 provider 写之后（`provider.ts:114-130,142-175`）；测试 T-P8/T-P9 真实断言。**残留：`create()` 路径未修（问题 54）** |
+| 49 登录限速绕过 | ✅ 确认修复 | `middleware/client-ip.ts` 默认只取 socket 对端、`TRUST_PROXY` 严格 opt-in（`'true'/'1'`）后取 XFF **末跳**；限速键 `usernameKey` 恒执行、IP 维度可选，无 `unknown` 共享桶（消除锁死 DoS）；`prune()` + `maxEntries=10000` 有界；对抗测试覆盖伪造头/换 IP/换用户名。加固缺口见 56、57 |
+| 50 终态 Job 清理残留 | ✅ 确认修复 | `reclaimResidualJob` 纳入 `exited`（`container-service.ts:372-409`）、`sweepTerminalJobs` 对 `failed/exited` 存活 Job 回收、`destroying` 卡死兜底迁移 `exited`（不做存在性前置过滤）；DELETE 透出 `deletedJob`（`internal-api.ts:84-89`）且契约 A.2.3 同步；`destroyLocked` 终态写回 `fromStatuses:['destroying']` CAS；全状态机转移已带 CAS，无死循环。残留见 58 |
+| 51 `Model.provider` 非空契约 | ⚠️ **仅修复一半** | agent-api 侧完整：`contracts/llm.graphql:45` 与 `schemas/model.ts:7` 均改可空、resolver null 安全、真实 SDL 悬空测试、前端判空消费。**admin-api 侧未改**：`contracts/admin-llm.graphql:49`、`servers/admin-api/src/graphql/schemas/model.ts:5` 仍 `provider: Provider!`，而 `resolvers/model.ts:76-77` 走 `findById`（`services/provider.ts:92-96`）可返回 `null`——悬空 providerId 时整条 `adminModels` 打挂，原故障模式在管理侧复现（问题 53） |
+| 52 CI 加固不完整 | ✅ 确认修复 | 五条 `build-*-image.yml` 全部具备 `permissions: contents: read`（:12-13）+ `npm ci && npm test` 门禁（:33，admin-web 为 `npm run lint && npx vitest run`）+ `IMAGE_NAMESPACE: zero-tools`（:16-17）；`deploy/k8s/cloud-controller.yaml` 与 `deploy/images/worker/BUILD.md` 命名空间已对齐，无 `zag` 残留 |
+| 建议 A（admin-web） | ✅ 已处理 | 单 toggle in-flight 防护 + error 提示 + `successCount` 兜底、`error && !data` 门放开 |
+| 建议 B（worker token 进 Job env） | ⏸ 保留 | `k8s-job-manager.ts:107` 仍明文 env 注入一次性 token，按约定留作后续项 |
+| 建议 C | ⚠️ 部分处理 | watch 指数退避（`status-sync.ts:89-106`）、deny-list 归一化（`config/index.ts:72-74,90-93`）✅；**`start()` CAS-miss 无条件删 Job 的误杀风险未修（并入 58）** |
+| 建议 D | ✅ 处理 | nginx 单 Cache-Control、`config.js` `</script>` 拒绝用例补齐 |
+| 建议 E | ⚠️ 部分处理 | agent-api `batch*` 已做 `ObjectId` 校验；**admin-api 同名路径未修（问题 55）** |
+
+### 8.3 验收问题清单（第三轮新增，编号接续）
+
+### 🟡 一般（应修复，返工一并处理；本轮无 🔴 严重问题）
+
+#### 问题 53（🟡 一般·契约/可用性·问题 51 修复不完整）admin-api `Model.provider: Provider!` 非空契约 vs 可空解析器，悬空 providerId 打挂整条 `adminModels` 查询
+
+问题 51 的修复只覆盖 agent-api：`contracts/admin-llm.graphql:49` 与 `servers/admin-api/src/graphql/schemas/model.ts:5` 仍是 `provider: Provider!`，而 `graphql/resolvers/model.ts:76-77` 调 `providerService.findById`（`services/provider.ts:92-96`，非法 id / 不存在均返回 `null`）。悬空 providerId 在 admin 侧可达：`createCustom`（`services/model.ts`）「存在性检查→创建」无事务，与供应商删除并发即产生孤儿；旧数据/手工改库同理。一旦出现，GraphQL 非空违规使 `adminModels: [Model!]!` **整体报错**——与问题 51 原始故障模式完全相同，仅换了服务。admin 侧无任何悬空测试。修复要求：与 agent 侧对齐改可空（`ProviderSummary`/`Provider` 可空）或行级容错降级（占位 summary），补 admin 侧悬空引用测试，契约 `admin-llm.graphql` 同步。
+
+#### 问题 54（🟡 一般·数据丢失·问题 48 同类残留）`create()` 对上游模型名不去重直接 `insertMany`，重复名 E11000 → 孤儿供应商 + 创建报错
+
+`services/provider.ts:139-152`（admin-api）：`create()` 将 `fetchModels` 结果直接 `Model.insertMany(modelDocs)`，**未做 `Set` 去重**（update/resync 路径已修，create 路径漏网）；agent-api `create()` 同类（`servers/agent-api/src/services/provider.ts`）。上游（网关/代理）返回重复模型名即 E11000；admin-api 非事务路径下供应商已创建、请求报错 → 孤儿供应商，且此后每次创建同名供应商都失败。修复要求：create 与 resync 统一走 `[...new Set(names)]` 去重（或复用 upsert 逻辑），两侧同步，补「上游返回重复模型名」测试。
+
+#### 问题 55（🟡 一般·一致性）admin-api `batchEnable/Disable/Delete` 未做 `ObjectId` 校验，非法 id 抛 CastError 透传 GraphQL
+
+`servers/admin-api/src/services/provider.ts:314-346` 把原始 `ids` 直入 `$in`，非法 ObjectId 抛原始 CastError；同文件 `findById/update/delete/toggle` 均已按「非法 id 视为不存在」处理（问题 27 口径），且 agent-api `batch*` 已修（建议 E）。修复要求：照搬 agent-api `validObjectIds` 过滤 + 空集短路，补测试。
+
+#### 问题 56（🟡 一般·安全加固）限速 Map 满员驱逐不跳过锁定中 entry，可被轮换用户名灌满逐出管理员锁定记录
+
+`servers/admin-api/src/services/login-rate-limiter.ts:83-86`：`maxEntries` 兜底驱逐按插入序取 `oldest`，**不区分 entry 是否仍在锁定期**。攻击者用 1 万个垃圾用户名灌满 Map，即可逐出 `username:admin` 的锁定/计数 entry，把全局上限从「30 次失败」重置为「约 1 万请求换 30 次新猜测」。修复要求：驱逐时跳过 `lockedUntil > now`（或对已达 `maxAttempts` 的 key 永不驱逐），补「锁定 entry 不被驱逐」测试。
+
+#### 问题 57（🟡 一般·安全加固）`TRUST_PROXY=true` 无条件信任转发头，未校验 socket 对端是否为受信代理
+
+`servers/admin-api/src/middleware/client-ip.ts:39-48`：开启 `TRUST_PROXY` 后无条件取 XFF 末跳，未校验 TCP 对端是否属于受信代理。若 admin-api 端口直连可达（部署误配/端口暴露），攻击者直接带 `X-Forwarded-For: x, <任意>` 自选末跳、轮换 IP 维度限速 key（仅剩用户名上限兜底，即问题 56 的 30 次）。修复要求：仅当对端属于受信代理列表（`TRUST_PROXY` 支持 CIDR/列表）时才采纳转发头；至少在文档显著标注「必须保证仅代理可达」。
+
+#### 问题 58（🟡 一般·可靠性·问题 50/C 残留）cloud-controller `reconcile()` 缺 `creating` 守卫 + `start()` CAS-miss 无条件删 Job：健康启动可被误判失败并删活 Job
+
+两个相邻缺口叠加（`servers/cloud-controller/src/`）：
+
+1. `services/status-sync.ts:222-227` `reconcile()` 对非终态记录「Job 不存在 → `markFailed('Job 已回收')`」，**缺少 `list()` 已有的 `creating` 跳过守卫**（T-S11 锚定了 list 侧）。`start()` 进行中（记录已落库、`createJob` 未完成）恰逢 watch 断连触发 reconcile，即被误判失败。
+2. `services/container-service.ts:196-205` `start()` 的 `creating→connecting` CAS 未命中时**无条件** `deleteResidualJob(name)`。CAS 未命中除「记录被并发销毁/终态」外还有第三种可能：`markOnline` 允许 `creating→online`（网关 register 即调用），worker 先注册、`start()` 后写 `connecting` 时 CAS 失败 → 兜底**删掉一个已注册健康容器的存活 Job**，而 `start()` 仍返回 201。
+
+修复要求：reconcile 与 `list()` 口径对齐（跳过 `creating` 或按 `updatedAt` 年龄阈值）；CAS-miss 后回读记录，仅当状态 ∈ {destroying, exited, failed} 才回收 Job；补「creating 记录 + 并发 register」竞态测试。
+
+#### 问题 59（🟡 一般·可用性）握手限速按 `socket.handshake.address` 计数，经 Ingress 后全部 worker 共享一个令牌桶
+
+`servers/cloud-controller/src/services/socketio-gateway.ts:106-112` 按 TCP 对端计数（60 次/60s）。部署形态是 worker 经 nginx Ingress 回连（`deploy/k8s/cloud-controller.yaml:130-151`），TCP 对端是 Ingress controller IP——**所有 worker 共享同一个桶**，退化为全局限流；cloud-controller 重启后 worker 全量重连或批量 Job 重建时，合法 worker 会被 `RATE_LIMITED` 拒绝。单 IP 防护对真实攻击者（同样走 Ingress）也形同虚设。修复要求：按 containerId/token 前缀限流或取可信转发头首跳，并上调/分级 `max`；补批量重连场景测试。
+
+### 🟢 建议（本轮新增，不阻塞，可随返工择要处理）
+
+| # | 模块 | 建议 |
+|---|---|---|
+| F | cloud-controller | `buildServerEndpoint`（`k8s-job-manager.ts:55-62`）对带路径的 `PUBLIC_WS_ENDPOINT`（如 `host/gateway`）会拼出 `wss://host/gateway/worker`，namespace 变 `/gateway/worker` 永远注册不上且静默失败——「支持已有路径」分支是陷阱，建议 fail-fast 或文档限定 host(:port) |
+| G | cloud-controller | `destroy()` 用 CAS 前快照判断 `online`（`container-service.ts:323`）决定是否发 shutdown，与 `markOnline` 并发时会跳过优雅停机；`startWatch()` 在 `await watchJobs` 后才赋值 `unwatch`（`status-sync.ts:108-122`），`stop()` 落在 await 期间时新 watch 不被 abort；`scanTimeouts` 只扫 `connecting`，`creating` 孤儿无超时兜底（`status-sync.ts:296-307`） |
+| H | cloud-controller | 握手限速/测试夹具与生产传输配置不一致：`socketio-gateway.test.ts:135` 建服务端时未加 `transports:['websocket']`，T-G10 的 polling 200 在生产配置下是 400（不影响路径锚定结论） |
+| I | admin-api/agent-api | resync upsert `$set isEnabled:true` 会把管理员手动禁用的同步模型重新启用（旧行为相同，非回归，可顺手保留）；upsert filter 可加 `isCustom:{$ne:true}` 防御 TOCTOU 窄窗口；名称校验策略两侧不对称（admin `createCustom` 不 trim/拒空名，agent `update` 不校验 name 非空） |
+| J | admin-api | `seedAdmin` 一次性打印明文初始口令进 stdout（有意权衡，`mustChangePassword` 强制改密），如日志被采集即入持久日志，可在文档标注日志脱敏要求 |
+| K | 文档 | `docs/engineering/plan/20261014-feat-admin-console.md:95,106,366` 与 `proposals/20261014-feat-admin-console.md:258,303` 仍记载 `admin/admin1234567` 种子行为，与现实现（随机生成+一次性打印）不符，建议加注「已被随机初始口令取代」 |
+
+### 8.4 第三轮问题总览
+
+| # | 问题 | 根因 | 状态 | 修复 commit |
+|---|---|---|---|---|
+| 53 | admin-api `Model.provider` 非空 vs 可空解析器，悬空打挂 `adminModels` | 问题 51 修复范围只覆盖 agent-api | 🔴 待修复 | （待回填） |
+| 54 | `create()` 模型名不去重 `insertMany`，重复名 E11000 → 孤儿供应商 | 问题 48 修复只覆盖 update/resync 路径 | 🔴 待修复 | （待回填） |
+| 55 | admin-api `batch*` 无 ObjectId 校验，CastError 透传 | 建议 E 修复只覆盖 agent-api | 🔴 待修复 | （待回填） |
+| 56 | 限速 Map 驱逐不跳过锁定 entry，可重置管理员锁定 | 问题 49 加固的驱逐策略未区分锁定态 | 🔴 待修复 | （待回填） |
+| 57 | `TRUST_PROXY` 无条件信任转发头 | 受信代理边界未校验 | 🔴 待修复 | （待回填） |
+| 58 | `reconcile()` 缺 `creating` 守卫 + CAS-miss 无条件删 Job，可误杀活容器 | 问题 50/建议 C 残留竞态 | 🔴 待修复 | （待回填） |
+| 59 | 握手限速共享 Ingress IP 令牌桶，批量重连被误限 | 限速维度与部署拓扑不匹配 | 🔴 待修复 | （待回填） |
+
+### 8.5 第三轮验证（复验实测，2026-10-16）
+
+| 项目 | 结果 | 说明 |
+|---|---|---|
+| 问题 46 端到端握手追踪 | ✅ 可用 | Ingress `/socket.io`（Prefix）→ 服务端 `ENGINE_PATH` → 客户端默认 path 归一化收敛 → worker URL `/worker` 仅作 namespace，逐层实证 |
+| 问题 47 AppHost 凭据 | ✅ 已去除 | `SecretOrDefault` = 配置注入或 `RandomNumberGenerator` 每次启动随机；`seedAdmin` 首次种子一次性打印；deny-list 归一化含变体 |
+| 问题 52 CI 五流水线 | ✅ 全部加固 | `permissions: contents: read` + `npm ci && npm test` 门禁 + `IMAGE_NAMESPACE=zero-tools`，部署引用对齐 |
+| 问题 51 契约一致性 | ❌ 不一致 | `llm.graphql:45` 可空 vs `admin-llm.graphql:49` 非空，admin 侧解析器可返回 null（问题 53） |
+| 问题 48 create 路径 | ❌ 残留 | `provider.ts:139-152` `insertMany` 无去重（问题 54） |
+| 单测/CI 复跑 | ⚠️ 未重跑 | 本轮执行环境 shell 受限，采信上游复验证据（六套单测全绿、`tsc`/lint 干净、tests/api 388、admin E2E 20）；结论基于静态代码实证，不受影响 |
+
+### 8.6 第三轮结论
+
+🔴 **打回返工**——第二轮问题 46/47（严重）与 48/49/50/52 修复逐项确认属实，本轮无新增严重问题；但问题 51 修复不完整（admin-api 侧非空契约 vs 可空解析器原样复现，问题 53），且新发现 6 项一般问题（53-58，其中 54 为问题 48 同类数据丢失残留、58 可误杀健康容器）。按「有问题即打回」的验收准则不予通过。
+
+**返工要求**（范围已收敛，逐项修复后即可重新提交）：
+
+1. **53、54 必修**：契约一致性与数据完整性（与已修问题同类，不得再残留半边）；
+2. **55、56、57、58、59 一并修复**：均为小改动（校验/驱逐策略/受信代理边界/两个守卫/限速维度），每项补对应测试；
+3. 🟢 建议 F-K 择要处理，不阻塞；
+4. 回填修复 commit 与验证结果至 8.4/8.5 后重新提交 AI Review。
+
+> 收敛提示：本轮问题全部为加固/边界类，无核心链路阻断。建议返工时优先保证 53/54 闭环，55-59 可一次性小步修复，避免再次触发「修复引入新问题」的循环（本轮 54/55/58 均属「修复只覆盖一半路径」）。
+
 ## 经验总结
 
 - **发布产物必须冒烟**：Dockerfile/manifest 属于交付物，「本地能跑」不等于「镜像能跑」；CI 构建流水线应加镜像启动冒烟与 `npm test` 门禁，`aspire publish` 产物需随 AppHost 变更强制再生成。
@@ -446,3 +555,5 @@ type: Permanent
 - **Socket.IO namespace ≠ URL path**：入口层路由按 engine path（默认 `/socket.io/`）放行，命名空间只存在于协议握手里；本地直连测试覆盖不到 Ingress，需入口层冒烟。
 - **默认凭据零容忍要覆盖全链路**：源码、编排默认值（AppHost 参数）、文档、测试兜底值都在泄漏面上，deny-list + 长度校验拦不住「足够长但公开」的默认值。
 - **保留数据的重建要注意唯一键**：delete+insert 式重建必须把「被保留的集合」纳入去重，否则唯一索引冲突会在无事务路径下放大成数据丢失。
+- **修复必须覆盖同一故障模式的全部路径**：改了 update/resync 忘 create、改了 agent-api 忘 admin-api，等于没修——每条修复应列出该故障模式的全部入口逐一核对（第三轮问题 53/54/55 均为「修一半」）。
+- **加固策略自身要对抗建模**：限速驱逐、受信代理、按 IP 限流这类防护，要假设攻击者知道规则（灌满 Map 逐出锁定项、伪造转发头、共享 Ingress IP），否则防护只对老实人有效。
