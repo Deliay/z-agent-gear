@@ -1,7 +1,8 @@
 # 默认工作容器镜像构建与自验（内网环境）
 
-> 该镜像依赖内网 Nexus（Ubuntu/npm 代理）与 Harbor 镜像代理，**不在 GitHub CI 构建**（runner 不可达内网）。
-> 请在可访问内网的机器上执行构建与自验。
+> 该镜像依赖内网 Nexus（Ubuntu / GitHub raw / Node.js 发行包 / npm 代理）与 Harbor 镜像代理，
+> **不在 GitHub CI 构建**（runner 不可达内网）。请在可访问内网的机器上执行构建与自验。
+> 构建过程**不回退公网**：Node.js 与 npm 由 nvm 安装，nvm 及其发行包全部取自内网代理。
 
 ## 构建
 
@@ -12,12 +13,37 @@ docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 # 内网地址变化时通过 --build-arg 覆盖
 docker build \
   --build-arg UBUNTU_MIRROR=https://nexus.internal.fffdan.com/repository/ubuntu-proxy/ \
+  --build-arg GITHUB_RAW_PROXY=https://nexus.internal.fffdan.com/repository/github-raw-proxy \
+  --build-arg NVM_VERSION=v0.40.8 \
+  --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
+  --build-arg NODE_VERSION=22 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   --build-arg DOCKER_APT_URL=https://download.docker.com/linux/ubuntu \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
 
 构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
+
+## 前置条件（nvm 走内网代理）
+
+镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供，且 nvm 安装脚本、nvm 脚本本体、
+Node.js 发行包均只取自内网代理。构建前请确认以下地址可访问（应返回 200）：
+
+```bash
+BASE=https://nexus.internal.fffdan.com/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8
+for f in install.sh nvm.sh nvm-exec bash_completion; do
+  printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$BASE/$f")" "$f"
+done
+curl -s -o /dev/null -m 20 -w 'node-proxy/index.tab: %{http_code}\n' \
+  https://nexus.internal.fffdan.com/repository/node-proxy/index.tab
+```
+
+其中 `install.sh`（nvm 安装脚本）与 `nvm.sh`/`nvm-exec`/`bash_completion`（脚本内容）由 `GITHUB_RAW_PROXY`
+提供，Node.js 的 `index.tab`/`SHASUMS256.txt`/`node-*.tar.xz` 由 `NODEJS_DIST_MIRROR` 提供。
+
+> 若上述地址返回 404 / 提示 `Remote Auto Blocked`，说明 Nexus 侧到上游（raw.githubusercontent.com）
+> 的通道不可用，需先恢复该代理仓库或预热缓存后再构建（Dockerfile 已用 `. "$NVM_DIR/nvm.sh"` 断言，
+> nvm 脚本缺失会直接构建失败，不会静默产出残缺镜像）。
 
 ## 自验（PRD 功能点 3 验收标准）
 
@@ -26,7 +52,9 @@ docker run --rm -it --entrypoint bash \
   -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
   -e ZAG_CONTROLLER_KEY=dummy \
   core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
-    node -v && git --version && gh --version && docker buildx version && \
+    nvm --version && nvm ls && \
+    which node npm && node -v && npm -v && npm config get registry && \
+    git --version && gh --version && docker buildx version && \
     agent-gear --version && \
     claude-agent-acp --help >/dev/null 2>&1 || true && \
     opencode --version || true && codex --version || true && \
@@ -36,7 +64,9 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `node`、`git`、`gh`、`docker buildx` 可用
+- [ ] `node`、`git`、`gh`、`docker buildx` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
+- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
+- [ ] `npm config get registry` 为内网 npm 代理地址
 - [ ] 7 个 npm 全局包已安装：`agent-gear` `@agentclientprotocol/claude-agent-acp` `@agentclientprotocol/codex-acp` `@opencode/cli` `@openai/codex` `@anthropic-ai/claude-code` `@google/gemini-cli`
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
