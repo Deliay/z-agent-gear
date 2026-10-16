@@ -13,6 +13,7 @@ vi.mock('../../models/admin-user.js', () => ({
 
 import { login, changePassword, signToken } from '../../services/auth.js';
 import { AdminUser } from '../../models/admin-user.js';
+import { loginRateLimiter, usernameLoginRateLimiter } from '../../services/login-rate-limiter.js';
 import type { AdminAuthContext } from './auth.js';
 
 function adminDoc(overrides: Record<string, unknown> = {}) {
@@ -35,6 +36,8 @@ const Mutation = authResolvers.Mutation as any;
 describe('authResolvers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    loginRateLimiter.reset();
+    usernameLoginRateLimiter.reset();
   });
 
   describe('adminMe', () => {
@@ -69,7 +72,7 @@ describe('authResolvers', () => {
       const result = await Mutation.adminLogin({}, { username: 'admin', password: 'admin1234567' });
 
       expect(login).toHaveBeenCalledWith('admin', 'admin1234567');
-      expect(signToken).toHaveBeenCalledWith('admin-1');
+      expect(signToken).toHaveBeenCalledWith('admin-1', null);
       expect(result.token).toBe('signed-token');
       expect(result.admin.mustChangePassword).toBe(true);
     });
@@ -79,6 +82,81 @@ describe('authResolvers', () => {
       await expect(Mutation.adminLogin({}, { username: 'admin', password: 'bad' })).rejects.toThrow(
         'Invalid username or password',
       );
+    });
+
+    it('T-A7 (问题 7): rejects with TOO_MANY_REQUESTS after repeated failures from the same ip+username', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+      const context: AdminAuthContext = { currentAdmin: null, clientIp: '203.0.113.7' };
+
+      // 默认阈值 5 次失败后锁定
+      for (let i = 0; i < 5; i += 1) {
+        await expect(
+          Mutation.adminLogin({}, { username: 'admin', password: 'bad' }, context),
+        ).rejects.toThrow('Invalid username or password');
+      }
+
+      let captured: any;
+      try {
+        await Mutation.adminLogin({}, { username: 'admin', password: 'bad' }, context);
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured?.extensions?.code).toBe('TOO_MANY_REQUESTS');
+      // 被限速后不再调用 login（避免继续做 bcrypt 消耗）
+      expect(login).toHaveBeenCalledTimes(5);
+    });
+
+    it('T-A7 (问题 7): a different username is not affected by another username lockout', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+      const locked: AdminAuthContext = { currentAdmin: null, clientIp: '203.0.113.7' };
+      for (let i = 0; i < 6; i += 1) {
+        await Mutation.adminLogin({}, { username: 'admin', password: 'bad' }, locked).catch(() => {});
+      }
+
+      (login as any).mockResolvedValue(adminDoc());
+      const other: AdminAuthContext = { currentAdmin: null, clientIp: '203.0.113.7' };
+      await expect(
+        Mutation.adminLogin({}, { username: 'other', password: 'whatever' }, other),
+      ).resolves.toMatchObject({ token: 'signed-token' });
+    });
+
+    it('问题 49: a per-username global cap trips even when the attacker rotates client IPs', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+
+      for (let i = 0; i < 30; i += 1) {
+        const context: AdminAuthContext = { currentAdmin: null, clientIp: `198.51.100.${i}` };
+        await Mutation.adminLogin({}, { username: 'admin', password: 'bad' }, context).catch(() => {});
+      }
+
+      let captured: any;
+      try {
+        await Mutation.adminLogin(
+          {},
+          { username: 'admin', password: 'bad' },
+          { currentAdmin: null, clientIp: '198.51.100.250' },
+        );
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured?.extensions?.code).toBe('TOO_MANY_REQUESTS');
+    });
+
+    it('问题 49: a missing clientIp does not lock a shared `unknown` bucket for the real admin', async () => {
+      (login as any).mockRejectedValue(new Error('Invalid username or password'));
+
+      // 无 clientIp：跳过按 IP 限速，仅按 username 全局（阈值 30），不应在第 6 次就锁定
+      for (let i = 0; i < 6; i += 1) {
+        await Mutation.adminLogin(
+          {},
+          { username: 'admin', password: 'bad' },
+          { currentAdmin: null },
+        ).catch(() => {});
+      }
+
+      (login as any).mockResolvedValue(adminDoc());
+      await expect(
+        Mutation.adminLogin({}, { username: 'admin', password: 'good' }, { currentAdmin: null }),
+      ).resolves.toMatchObject({ token: 'signed-token' });
     });
   });
 

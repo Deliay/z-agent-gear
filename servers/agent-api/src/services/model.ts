@@ -32,6 +32,12 @@ export class ModelService {
   }
 
   async createCustom(input: { providerId: string; name: string }) {
+    // 名称必须非空（trim 后），避免写入纯空白模型名
+    const name = (input.name ?? '').trim();
+    if (!name) {
+      throw new Error('Model name is required');
+    }
+
     // 校验目标供应商存在且为用户自己的（scope=user）配置，防止向全局供应商挂模型
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
@@ -51,7 +57,7 @@ export class ModelService {
 
     const model = await Model.create({
       providerId: new mongoose.Types.ObjectId(input.providerId),
-      name: input.name,
+      name,
       isCustom: true,
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,
@@ -96,18 +102,30 @@ export class ModelService {
   }
 
   async updateSortOrder(ids: string[]) {
-    // 若包含全局模型，明确拒绝（与单条写路径文案一致），不再静默跳过
-    if (ids.length > 0) {
-      const global = await Model.findOne({ _id: { $in: ids }, scope: 'global' })
-        .select('_id')
-        .lean();
-      if (global) {
-        throw new Error(GLOBAL_WRITE_FORBIDDEN);
-      }
+    if (ids.length === 0) return [];
+
+    // 拒绝重复 id：重复会让 bulkWrite 的最终 sortOrder 依赖写入顺序，产生歧义
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('Duplicate model ids in sort order');
     }
 
-    // 仅排序用户自己的模型（scope != global，兼容无 scope 字段的存量数据）
+    // 若包含全局模型，明确拒绝（与单条写路径文案一致），不再静默跳过
+    const global = await Model.findOne({ _id: { $in: ids }, scope: 'global' })
+      .select('_id')
+      .lean();
+    if (global) {
+      throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
+
+    // 所有 id 必须存在且为用户模型，避免对不存在 id 静默跳过造成排序错乱
     const userOnly: mongoose.QueryFilter<IModel> = { scope: { $ne: 'global' } };
+    const existing = await Model.find({ _id: { $in: ids }, ...userOnly })
+      .select('_id')
+      .lean();
+    if (existing.length !== ids.length) {
+      throw new Error('One or more models not found');
+    }
+
     const updates = ids.map((id, index) => ({
       updateOne: {
         filter: { _id: id, ...userOnly },

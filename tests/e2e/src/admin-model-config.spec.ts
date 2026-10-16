@@ -86,10 +86,12 @@ test.describe('Admin Model Config E2E', () => {
     // 凭据脱敏展示
     await expect(page.getByText(/sk-\*\*\*\*/).first()).toBeVisible();
 
-    // 删除（window.confirm 级联提示）
-    page.once('dialog', (d) => d.accept());
+    // 删除（自绘二次确认对话框，见问题 39：统一 Dialog 替代 window.confirm）
     await page.getByRole('button', { name: '操作菜单' }).first().click();
     await page.getByRole('menuitem', { name: '删除' }).click();
+    const confirm = page.getByRole('dialog');
+    await expect(confirm.getByRole('heading', { name: '删除供应商' })).toBeVisible();
+    await confirm.getByRole('button', { name: '删除' }).click();
     await expect(page.getByText(name)).toHaveCount(0, { timeout: 10000 });
   });
 
@@ -112,9 +114,11 @@ test.describe('Admin Model Config E2E', () => {
     await expect(page.getByText(customName).first()).toBeVisible();
     await expect(page.getByText('自定义').first()).toBeVisible();
 
-    // 删除自定义模型（window.confirm）
-    page.once('dialog', (d) => d.accept());
+    // 删除自定义模型（自绘二次确认对话框，见问题 39）
     await page.locator('div', { hasText: customName }).getByTitle('删除自定义模型').first().click();
+    const confirm = page.getByRole('dialog');
+    await expect(confirm.getByRole('heading', { name: '删除自定义模型' })).toBeVisible();
+    await confirm.getByRole('button', { name: '删除' }).click();
     await expect(page.getByText(customName)).toHaveCount(0, { timeout: 10000 });
 
     await cleanupProviders(page, token);

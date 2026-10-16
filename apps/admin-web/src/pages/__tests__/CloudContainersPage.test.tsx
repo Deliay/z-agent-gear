@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   start: vi.fn(),
   destroy: vi.fn(),
+  refetch: vi.fn(),
 }));
 
 vi.mock('@apollo/client', () => ({
@@ -45,6 +46,8 @@ function setupContainers(
   mocks.useQuery.mockReturnValue({
     data: { adminCloudContainers: containers, adminCloudContainerControlPlane: controlPlane },
     loading: false,
+    error: undefined,
+    refetch: mocks.refetch,
     ...extra,
   });
 }
@@ -160,5 +163,37 @@ describe('CloudContainersPage', () => {
 
     expect(screen.getByText('暂无云端容器')).toBeDefined();
     expect(screen.getByRole('button', { name: '启动' })).toBeDefined();
+  });
+
+  it('T-W6: renders an error state with retry instead of the empty state', () => {
+    mocks.useQuery.mockReturnValue({
+      data: undefined,
+      loading: false,
+      error: new Error('cloudContainers boom'),
+      refetch: mocks.refetch,
+    });
+    render(<CloudContainersPage />);
+
+    expect(screen.getByRole('alert').textContent).toContain('cloudContainers boom');
+    expect(screen.queryByText('暂无云端容器')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(mocks.refetch).toHaveBeenCalled();
+  });
+
+  it('T-W6: keeps degraded data (no full-page error) when a poll fails after data loaded', () => {
+    mocks.useQuery.mockReturnValue({
+      data: {
+        adminCloudContainers: [container()],
+        adminCloudContainerControlPlane: { online: true, message: null },
+      },
+      loading: false,
+      error: new Error('poll failed'),
+      refetch: mocks.refetch,
+    });
+    render(<CloudContainersPage />);
+
+    expect(screen.getByText('zag-worker-abc123')).toBeDefined();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

@@ -40,6 +40,11 @@ const validInput = {
   credentialValue: 'sk-test-key',
 };
 
+// 合法 24 位 hex ObjectId（问题 27：非法 ObjectId 视为不存在）
+const PROVIDER_OID = '507f1f77bcf86cd799439011';
+const OTHER_OID = '507f191e810c19729de860ea';
+const MISSING_OID = '000000000000000000000000';
+
 describe('ProviderService (admin / global scope)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,19 +68,26 @@ describe('ProviderService (admin / global scope)', () => {
     it('adds scope=global to the lookup and maps result', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(makeProviderDoc()) });
 
-      const result = await providerService.findById('provider-1');
+      const result = await providerService.findById(PROVIDER_OID);
 
-      expect(Provider.findOne).toHaveBeenCalledWith({ _id: 'provider-1', scope: 'global' });
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
       expect(result!.id).toBe('provider-1');
     });
 
     it('returns null when the provider is not global', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
-      const result = await providerService.findById('user-provider');
+      const result = await providerService.findById(PROVIDER_OID);
 
-      expect(Provider.findOne).toHaveBeenCalledWith({ _id: 'user-provider', scope: 'global' });
+      expect(Provider.findOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
       expect(result).toBeNull();
+    });
+
+    it('returns null for a malformed ObjectId without touching the DB (问题 27)', async () => {
+      const result = await providerService.findById('not-an-object-id');
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
     });
   });
 
@@ -137,6 +149,50 @@ describe('ProviderService (admin / global scope)', () => {
       await expect(providerService.create(validInput)).rejects.toThrow('E11000');
       expect(Model.insertMany).not.toHaveBeenCalled();
     });
+
+    it('问题 54: dedupes/drops upstream model names so duplicate names cannot E11000', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce(['gpt-4o', 'gpt-4o', '', '   ', 'gpt-4o-mini']);
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      await providerService.create(validInput);
+
+      const docs = (Model.insertMany as any).mock.calls[0][0] as Array<{ name: string; sortOrder: number }>;
+      expect(docs.map((d) => d.name)).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(docs.map((d) => d.sortOrder)).toEqual([0, 1]);
+      // 去重后不再触发唯一索引冲突，也就不需要清理供应商
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('问题 54: deletes the provider when model sync fails in the non-transaction path (no orphan)', async () => {
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockRejectedValue(new Error('E11000 duplicate key error'));
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      await expect(providerService.create(validInput)).rejects.toThrow('E11000');
+
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: doc._id, scope: 'global' });
+      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: doc._id, scope: 'global' });
+    });
+
+    it('问题 54: skips model insert entirely when the upstream list is empty after normalization', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce(['', '  ']);
+      const doc = makeProviderDoc();
+      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
+
+      await providerService.create(validInput);
+
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -150,14 +206,16 @@ describe('ProviderService (admin / global scope)', () => {
 
     beforeEach(() => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(existing) });
+      // 问题 48：重同步前读取保留的自定义模型名。默认无自定义模型。
+      (Model.find as any) = vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
     });
 
     it('T-P3: preserves credential and resyncs models when endpoint changes', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(
         makeProviderDoc({ endpoint: 'https://custom.openai.com/v1' }),
       );
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
       const { llmApiService } = await import('./llm-api');
 
       const result = await providerService.update(OID, {
@@ -172,10 +230,18 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
       );
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
-      expect(Model.insertMany).toHaveBeenCalledWith(
-        expect.arrayContaining([expect.objectContaining({ isCustom: false, scope: 'global' })]),
-      );
+      // 问题 48：upsert 同步模型 + 仅删除陈旧同步模型（不再 delete+insert）
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string }; update: { $set: Record<string, unknown> }; upsert: boolean } }>;
+      expect(ops.map((op) => op.updateOne.filter.name).sort()).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(ops[0].updateOne.upsert).toBe(true);
+      expect(ops[0].updateOne.update.$set).toMatchObject({ isCustom: false, scope: 'global', isEnabled: true });
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: OID,
+        scope: 'global',
+        isCustom: false,
+        name: { $nin: ['gpt-4o', 'gpt-4o-mini'] },
+      });
       expect(Provider.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: OID, scope: 'global' },
         expect.objectContaining({ endpoint: 'https://custom.openai.com/v1' }),
@@ -185,21 +251,22 @@ describe('ProviderService (admin / global scope)', () => {
 
     it('T-P3: skips resync when only name changed and credential stays empty', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc({ name: 'Renamed' }));
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
       const { llmApiService } = await import('./llm-api');
 
       await providerService.update(OID, { ...validInput, name: 'Renamed', credentialValue: '' });
 
       expect(llmApiService.fetchModels).not.toHaveBeenCalled();
       expect(Model.deleteMany).not.toHaveBeenCalled();
-      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+      expect(Model.find).not.toHaveBeenCalled();
     });
 
     it('T-P3: encrypts a new credential and resyncs models', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
       const { llmApiService } = await import('./llm-api');
 
       await providerService.update(OID, validInput);
@@ -208,13 +275,97 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://api.openai.com/v1', 'sk-test-key',
       );
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
+      expect(Model.bulkWrite).toHaveBeenCalled();
+    });
+
+    it('T-P8: keeps custom models across a resync (deleteMany filter excludes isCustom=true)', async () => {
+      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+
+      await providerService.update(OID, validInput);
+
+      // 只删除 API 同步模型，用户自定义模型（isCustom=true）不被级联删除（问题 5）
+      expect(Model.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ isCustom: false }),
+      );
+      expect(Model.deleteMany).not.toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
+    });
+
+    it('T-P9 (问题 48): a custom model with the same name as an API model survives resync', async () => {
+      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.find as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]),
+      });
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+
+      await expect(providerService.update(OID, validInput)).resolves.not.toBeNull();
+
+      // 同名的 fetched 名被跳过（不覆盖自定义模型），只 upsert 余下名字
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string } } }>;
+      expect(ops.map((op) => op.updateOne.filter.name)).toEqual(['gpt-4o-mini']);
+
+      // 陈旧同步模型删除集合也不包含该同名（其 isCustom=true 本就受 isCustom:false 过滤保护）
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: OID,
+        scope: 'global',
+        isCustom: false,
+        name: { $nin: ['gpt-4o-mini'] },
+      });
+      // 不再走 delete+insert（避免唯一索引 E11000）
+      expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('T-P9 (问题 48): upserts existing synced models and dedupes fetched names', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce(['gpt-4o', 'gpt-4o', 'gpt-4o-mini']);
+      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+
+      await providerService.update(OID, validInput);
+
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string } } }>;
+      expect(ops.map((op) => op.updateOne.filter.name)).toEqual(['gpt-4o', 'gpt-4o-mini']);
+      expect(Model.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('T-P9 (问题 48): deletes all stale synced models when the API returns none', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModels as any).mockResolvedValueOnce([]);
+      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+
+      await providerService.update(OID, validInput);
+
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: OID,
+        scope: 'global',
+        isCustom: false,
+        name: { $nin: [] },
+      });
+    });
+
+    it('rejects an empty name like create (问题 21)', async () => {
+      await expect(providerService.update(OID, { ...validInput, name: '  ' })).rejects.toThrow('Provider name is required');
+      expect(Provider.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('returns null for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.update('not-an-object-id', validInput);
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
+      expect(Provider.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
     it('returns null when the provider is not global', async () => {
       (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
 
-      const result = await providerService.update('missing', validInput);
+      const result = await providerService.update(OTHER_OID, validInput);
 
       expect(result).toBeNull();
     });
@@ -225,11 +376,19 @@ describe('ProviderService (admin / global scope)', () => {
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
       (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
 
-      const result = await providerService.delete('provider-1');
+      const result = await providerService.delete(PROVIDER_OID);
 
       expect(result).toBe(true);
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: 'provider-1', scope: 'global' });
-      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: 'provider-1', scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: PROVIDER_OID, scope: 'global' });
+      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: PROVIDER_OID, scope: 'global' });
+    });
+
+    it('returns false for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.delete('not-an-object-id');
+
+      expect(result).toBe(false);
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Provider.deleteOne).not.toHaveBeenCalled();
     });
   });
 
@@ -243,13 +402,13 @@ describe('ProviderService (admin / global scope)', () => {
       (Provider.findOne as any).mockResolvedValue(doc);
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.toggle('provider-1');
+      const result = await providerService.toggle(PROVIDER_OID);
 
       expect(result).not.toBeNull();
       expect(doc.isEnabled).toBe(true);
       expect(doc.save).toHaveBeenCalledTimes(1);
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: 'provider-1', scope: 'global' },
+        { providerId: PROVIDER_OID, scope: 'global' },
         { isEnabled: true },
       );
     });
@@ -257,24 +416,34 @@ describe('ProviderService (admin / global scope)', () => {
     it('returns null when provider is not found in global scope', async () => {
       (Provider.findOne as any).mockResolvedValue(null);
 
-      expect(await providerService.toggle('missing')).toBeNull();
+      expect(await providerService.toggle(MISSING_OID)).toBeNull();
+    });
+
+    it('returns null for a malformed id without touching the DB (问题 27)', async () => {
+      const result = await providerService.toggle('not-an-object-id');
+
+      expect(result).toBeNull();
+      expect(Provider.findOne).not.toHaveBeenCalled();
     });
   });
 
   describe('batch operations', () => {
+    const SECOND_OID = '507f1f77bcf86cd799439012';
+    const THIRD_OID = '507f1f77bcf86cd799439013';
+
     it('T-P6: batchEnable filters by global scope and cascades to models', async () => {
       (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 2 });
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.batchEnable(['p1', 'p2']);
+      const result = await providerService.batchEnable([PROVIDER_OID, OTHER_OID]);
 
       expect(result).toEqual({ successCount: 2 });
       expect(Provider.updateMany).toHaveBeenCalledWith(
-        { _id: { $in: ['p1', 'p2'] }, scope: 'global' },
+        { _id: { $in: [PROVIDER_OID, OTHER_OID] }, scope: 'global' },
         { isEnabled: true },
       );
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: { $in: ['p1', 'p2'] }, scope: 'global' },
+        { providerId: { $in: [PROVIDER_OID, OTHER_OID] }, scope: 'global' },
         { isEnabled: true },
       );
     });
@@ -283,15 +452,15 @@ describe('ProviderService (admin / global scope)', () => {
       (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 1 });
       (Model.updateMany as any) = vi.fn().mockResolvedValue({});
 
-      const result = await providerService.batchDisable(['p1']);
+      const result = await providerService.batchDisable([PROVIDER_OID]);
 
       expect(result).toEqual({ successCount: 1 });
       expect(Provider.updateMany).toHaveBeenCalledWith(
-        { _id: { $in: ['p1'] }, scope: 'global' },
+        { _id: { $in: [PROVIDER_OID] }, scope: 'global' },
         { isEnabled: false },
       );
       expect(Model.updateMany).toHaveBeenCalledWith(
-        { providerId: { $in: ['p1'] }, scope: 'global' },
+        { providerId: { $in: [PROVIDER_OID] }, scope: 'global' },
         { isEnabled: false },
       );
     });
@@ -300,11 +469,51 @@ describe('ProviderService (admin / global scope)', () => {
       (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
       (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 3 });
 
-      const result = await providerService.batchDelete(['p1', 'p2', 'p3']);
+      const result = await providerService.batchDelete([PROVIDER_OID, OTHER_OID, SECOND_OID]);
 
       expect(result).toEqual({ successCount: 3 });
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: ['p1', 'p2', 'p3'] }, scope: 'global' });
-      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: ['p1', 'p2', 'p3'] }, scope: 'global' });
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: [PROVIDER_OID, OTHER_OID, SECOND_OID] }, scope: 'global' });
+      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: [PROVIDER_OID, OTHER_OID, SECOND_OID] }, scope: 'global' });
+    });
+
+    it('问题 55: batchEnable/Disable/Delete drop invalid ObjectIds instead of raising CastError', async () => {
+      (Provider.updateMany as any) = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      (Model.updateMany as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      (Provider.deleteMany as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+      // 混合合法/非法 id：非法项被过滤，仅合法 id 进入 $in
+      await providerService.batchEnable([PROVIDER_OID, 'not-an-object-id', SECOND_OID]);
+      expect(Provider.updateMany).toHaveBeenCalledWith(
+        { _id: { $in: [PROVIDER_OID, SECOND_OID] }, scope: 'global' },
+        { isEnabled: true },
+      );
+
+      await providerService.batchDisable([OTHER_OID, 'also-bad']);
+      expect(Provider.updateMany).toHaveBeenLastCalledWith(
+        { _id: { $in: [OTHER_OID] }, scope: 'global' },
+        { isEnabled: false },
+      );
+
+      await providerService.batchDelete([THIRD_OID, 'nope']);
+      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: { $in: [THIRD_OID] }, scope: 'global' });
+      expect(Provider.deleteMany).toHaveBeenCalledWith({ _id: { $in: [THIRD_OID] }, scope: 'global' });
+    });
+
+    it('问题 55: batch operations short-circuit to successCount 0 when no id is a valid ObjectId', async () => {
+      (Provider.updateMany as any) = vi.fn();
+      (Model.updateMany as any) = vi.fn();
+      (Model.deleteMany as any) = vi.fn();
+      (Provider.deleteMany as any) = vi.fn();
+
+      await expect(providerService.batchEnable(['bad', 'worse'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDisable(['bad'])).resolves.toEqual({ successCount: 0 });
+      await expect(providerService.batchDelete(['bad', 'worse'])).resolves.toEqual({ successCount: 0 });
+
+      expect(Provider.updateMany).not.toHaveBeenCalled();
+      expect(Model.updateMany).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Provider.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

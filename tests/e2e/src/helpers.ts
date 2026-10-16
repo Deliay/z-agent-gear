@@ -3,7 +3,10 @@ import { createServer } from 'node:http';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-export const DEFAULT_ADMIN_PASSWORD = 'admin1234567';
+// 种子管理员口令不再有公开默认值（问题 4/47）：E2E 直接改写 Mongo 中的口令哈希，
+// 因此这里的取值仅是本测试进程自用的随机口令（可用 ADMIN_INITIAL_PASSWORD 覆盖便于排查）。
+const RANDOM_ADMIN_PASSWORD = `E2e-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+export const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || RANDOM_ADMIN_PASSWORD;
 
 /**
  * 将内置管理员重置为「默认密码 + 首次强制改密」（T-E1 真实首登链路）。
@@ -68,9 +71,15 @@ async function adminLoginWithPassword(page: import('@playwright/test').Page, pas
 
 /**
  * 归一化管理员密码到 ADMIN_TEST_PASSWORD 并返回可用 token（mustChangePassword=false）。
- * 与 tests/api 的 ensureAdminLogin 行为一致，使 E2E 可重复执行。
+ * 有 MONGODB_URI 时直接改写 Mongo 中的口令哈希（不依赖任何种子/默认口令，问题 4/47）；
+ * 否则回落到「试已知口令 + 改密」的兼容路径，使 E2E 可重复执行。
  */
 export async function adminLoginApi(page: import('@playwright/test').Page): Promise<string> {
+  if (await forceAdminPassword(ADMIN_TEST_PASSWORD)) {
+    const payload = await adminLoginWithPassword(page, ADMIN_TEST_PASSWORD);
+    if (payload && !payload.admin.mustChangePassword) return payload.token;
+  }
+
   for (let attempt = 0; attempt < 5; attempt += 1) {
     let payload = await adminLoginWithPassword(page, ADMIN_TEST_PASSWORD);
     if (!payload) payload = await adminLoginWithPassword(page, DEFAULT_ADMIN_PASSWORD);

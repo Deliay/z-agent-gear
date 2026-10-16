@@ -14,11 +14,29 @@ export const TTL_SECONDS_AFTER_FINISHED = 600;
 export const DELETE_MAX_ATTEMPTS = 3;
 
 /**
- * 将 PUBLIC_WS_ENDPOINT 规范化并拼接 `/worker?token=<encoded>`。
- * PUBLIC_WS_ENDPOINT 可能已含协议（wss/https/http）或不含，可能带尾部斜杠或路径。
- * 输出保证 `wss://<host>/worker?token=<url-encoded token>`。
+ * Job 级硬性截止（秒）：防止异常工作容器无限期占用节点资源（24h 兜底）。
+ * 注意 `ttlSecondsAfterFinished` 只对已完成的 Job 生效，无法回收 active 状态的 Job。
  */
-export function buildServerEndpoint(publicWsEndpoint: string, token: string): string {
+export const JOB_ACTIVE_DEADLINE_SECONDS = 86400;
+
+/**
+ * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
+ * request 保证调度可落地，limit 为资源耗尽时的硬上限。
+ */
+export const JOB_RESOURCES = {
+  requests: { cpu: '250m', memory: '1Gi' },
+  limits: { cpu: '2', memory: '4Gi' },
+} as const;
+
+/**
+ * 将 PUBLIC_WS_ENDPOINT 规范化为 `wss://<host>/worker`。
+ * PUBLIC_WS_ENDPOINT **只允许 host(:port)**（协议可选、尾部斜杠可省、`/worker` 可显式给出）；
+ * 若携带其它路径（如 `host/gateway`）会拼出 `wss://host/gateway/worker`，namespace 变成
+ * `/gateway/worker` 永远注册不上，故 fail-fast 抛错（建议 F）。
+ * 一次性 token **不放入 URL**（避免进入 ingress/中间层 access log，问题 11），
+ * 改由 worker 经 Socket.IO 握手 `auth.token` 携带（见 agent-controller connectToServer）。
+ */
+export function buildServerEndpoint(publicWsEndpoint: string): string {
   const raw = (publicWsEndpoint ?? '').trim();
   const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `wss://${raw}`;
 
@@ -39,13 +57,15 @@ export function buildServerEndpoint(publicWsEndpoint: string, token: string): st
   const trimmedPath = url.pathname.replace(/\/+$/, '');
   if (!trimmedPath) {
     url.pathname = '/worker';
-  } else if (trimmedPath.endsWith('/worker')) {
+  } else if (trimmedPath === '/worker') {
     url.pathname = trimmedPath;
   } else {
-    url.pathname = `${trimmedPath}/worker`;
+    throw new Error(
+      `PUBLIC_WS_ENDPOINT must be a host(:port) without a path ` +
+        `(got path "${trimmedPath}"); the "/worker" namespace is appended automatically`,
+    );
   }
 
-  url.searchParams.set('token', token);
   return url.toString();
 }
 
@@ -63,20 +83,26 @@ export interface CreateJobInput {
 }
 
 export class K8sJobManager {
+  /** 规范化后的 worker 对外地址；构造时即校验，非法 PUBLIC_WS_ENDPOINT fail-fast（建议 F）。 */
+  private readonly serverEndpoint: string;
+
   constructor(
     private readonly client: K8sClient,
     private readonly cfg: JobManagerConfig,
-  ) {}
+  ) {
+    this.serverEndpoint = buildServerEndpoint(cfg.publicWsEndpoint);
+  }
 
   buildManifest(input: CreateJobInput): K8sJobManifest {
     const labels: Record<string, string> = {
       [WORKER_LABEL_KEY]: WORKER_LABEL_VALUE,
       [CONTAINER_ID_LABEL]: input.containerId,
     };
-    const serverEndpoint = buildServerEndpoint(this.cfg.publicWsEndpoint, input.token);
+    const serverEndpoint = this.serverEndpoint;
 
     const spec: K8sJobManifest['spec'] = {
       backoffLimit: 0,
+      activeDeadlineSeconds: JOB_ACTIVE_DEADLINE_SECONDS,
       ttlSecondsAfterFinished: TTL_SECONDS_AFTER_FINISHED,
       template: {
         metadata: { labels },
@@ -90,6 +116,10 @@ export class K8sJobManager {
                 { name: 'ZAG_SERVER_ENDPOINT', value: serverEndpoint },
                 { name: 'ZAG_CONTROLLER_KEY', value: input.token },
               ],
+              resources: {
+                requests: { ...JOB_RESOURCES.requests },
+                limits: { ...JOB_RESOURCES.limits },
+              },
             },
           ],
         },

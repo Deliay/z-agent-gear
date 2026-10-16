@@ -89,7 +89,8 @@ describe('internal management API', () => {
       headers: authHeaders(),
     });
     expect(destroyed.status).toBe(200);
-    expect(await destroyed.json()).toEqual({ success: true });
+    // 契约 A.2.3：响应透出 deletedJob（问题 50）
+    expect(await destroyed.json()).toEqual({ success: true, deletedJob: true });
   });
 
   it('T-R2: missing or invalid bearer token -> 401', async () => {
@@ -131,13 +132,14 @@ describe('internal management API', () => {
       method: 'DELETE',
       headers: authHeaders(),
     });
-    expect(await first.json()).toEqual({ success: true });
+    expect(await first.json()).toEqual({ success: true, deletedJob: true });
 
     const second = await fetch(`${baseUrl}/internal/containers/${id}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
     expect(second.status).toBe(200);
-    expect(await second.json()).toEqual({ success: true });
+    // 幂等：Job 已不存在，deletedJob 反映本次未真实删除
+    expect(await second.json()).toEqual({ success: true, deletedJob: false });
   });
 });

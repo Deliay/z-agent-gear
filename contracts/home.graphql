@@ -3,8 +3,10 @@
 # `homeOverview` 将首页与侧边栏的全部信息流整合为一次 GraphQL 请求：
 # 各字段组合既有查询能力（薄 resolver），不引入新的业务实体。
 # `Controller.gateways` 与 `ControllerWorkspace.worktrees` 为嵌套惰性字段：
-# 仅当查询语句选择时才按控制器/工作区扇出（经 Redis relay 调用在线控制器），
-# 离线或扇出失败时降级为空列表，控制器 `status` 供前端标记离线。
+# 仅当查询语句选择时才展开。`Controller.gateways` 为纯 DB 查询（`gatewayService.findAllByController`），
+# 不依赖控制器在线状态、离线不降级（离线控制器仍返回其网关配置行）；仅
+# `ControllerWorkspace.worktrees` 经 Redis relay 调用在线控制器扇出，离线或扇出失败/超时降级为空列表；
+# 控制器 `status` 供前端标记离线。
 
 type HomeOverview {
   # 控制器概览（首页卡片 + 侧边栏顶层分组）
@@ -26,7 +28,7 @@ type HomeOverview {
 }
 
 extend type Controller {
-  # 嵌套惰性解析：仅查询语句选择时按控制器扇出网关；离线或失败返回空列表
+  # 嵌套惰性解析：仅查询语句选择时执行（纯 DB 查询，不随控制器在线状态降级）
   gateways: GatewayList!
 }
 

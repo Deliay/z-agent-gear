@@ -14,8 +14,13 @@ export async function authenticateAdmin(request: Request) {
 
   try {
     const payload = verifyToken(token);
-    const admin = await AdminUser.findById(payload.adminId).select('username mustChangePassword');
+    const admin = await AdminUser.findById(payload.adminId).select('username mustChangePassword passwordChangedAt');
     if (!admin) {
+      return null;
+    }
+    // 改密后旧 token 失效：token 携带的 pwdAt 必须与当前 passwordChangedAt 一致（问题 6）
+    const currentPwdAt = admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0;
+    if ((payload.pwdAt ?? 0) !== currentPwdAt) {
       return null;
     }
     return {

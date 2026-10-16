@@ -14,6 +14,15 @@ enum ConfigScope {
   global
 }
 
+# Model.provider 摘要：不含 endpoint / 凭据等敏感字段，用户侧可见。
+type ProviderSummary {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+}
+
 type Provider {
   id: ID!
   name: String!
@@ -31,7 +40,9 @@ type Provider {
 type Model {
   id: ID!
   providerId: ID!
-  provider: Provider!
+  # provider 可为空：providerId 悬空（关联供应商已不存在）时返回 null，
+  # 避免非空违规导致整条 models 查询失败。
+  provider: ProviderSummary
   name: String!
   isCustom: Boolean!
   isEnabled: Boolean!

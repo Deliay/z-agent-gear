@@ -94,7 +94,9 @@ export const modelResolvers = {
   },
   Model: {
     provider: async (parent: { providerId: string }) => {
-      return providerService.findById(parent.providerId);
+      // providerId 可能悬空（关联供应商已删除）→ 返回 null；
+      // 契约已将该字段声明为可空（ProviderSummary），避免非空违规打挂整条 models 查询（问题 51）。
+      return providerService.findSummaryById(parent.providerId);
     },
   },
 };

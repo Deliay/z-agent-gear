@@ -9,7 +9,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
-import { registerWorkerGateway } from './socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken } from './socketio-gateway.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 
 let httpServer: HttpServer;
@@ -34,7 +34,7 @@ function waitFor<T = unknown>(socket: ClientSocket, event: string, timeout = 300
 
 async function connectWith(token?: string): Promise<ClientSocket> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    query: token ? { token } : {},
+    auth: token ? { token } : {},
     transports: ['websocket'],
     reconnection: false,
   });
@@ -54,7 +54,7 @@ async function connectWith(token?: string): Promise<ClientSocket> {
 
 async function connectError(token?: string): Promise<string> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    query: token ? { token } : {},
+    auth: token ? { token } : {},
     transports: ['websocket'],
     reconnection: false,
   });
@@ -86,6 +86,18 @@ async function newContainer() {
   return { container, token };
 }
 
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  timeout = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('condition not met in time');
+}
+
 beforeAll(async () => {
   repo = new InMemoryContainerRepository();
   client = new InMemoryK8sClient();
@@ -113,8 +125,14 @@ beforeAll(async () => {
     reconnectDelayMs: 0,
   });
 
-  httpServer = createServer();
-  io = new SocketIOServer(httpServer, { transports: ['websocket'] });
+  // 非 Socket.IO 路径返回 404，模拟 index.ts 中 express 的兜底行为（用于锚定 engine path）。
+  httpServer = createServer((_req, res) => {
+    res.statusCode = 404;
+    res.end('Not Found');
+  });
+  // 与 index.ts 保持一致：显式 ENGINE_PATH + 强制 websocket 传输（建议 H）。
+  // T-G10 通过「engine path 上 polling 被拒(400) vs /worker 路径不存在(404)」锚定路径。
+  io = new SocketIOServer(httpServer, { path: ENGINE_PATH, transports: ['websocket'] });
   registerWorkerGateway(io, { tokenService, containerService: service, heartbeatTracker });
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const address = httpServer.address() as AddressInfo;
@@ -134,6 +152,30 @@ describe('worker Socket.IO gateway', () => {
     const { container, token } = await newContainer();
     await service.destroy(container.id); // 终态 → token 作废
     expect(await connectError(token)).toBe('INVALID_TOKEN');
+  });
+
+  it('T-G9: legacy query token is still accepted (handshake auth preferred)', async () => {
+    const { container, token } = await newContainer();
+    const socket = ioClient(`${baseUrl}/worker`, {
+      query: { token },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+      socket.once('connect', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once('connect_error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    socket.emit('register', { hostname: 'worker-legacy', version: '2.0.0' });
+    await waitFor(socket, 'registered');
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    socket.close();
   });
 
   it('T-G2: valid handshake + register → registered, online with connectedAt', async () => {
@@ -194,5 +236,215 @@ describe('worker Socket.IO gateway', () => {
     expect((await repo.findById(container.id))?.status).toBe('connecting');
 
     socket.close();
+  });
+
+  it('T-G6: register without hostname is rejected with INVALID_PAYLOAD', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+
+    const errorPromise = waitFor<{ code: string }>(socket, 'error');
+    socket.emit('register', { version: '2.0.0' });
+    const error = await errorPromise;
+
+    expect(error.code).toBe('INVALID_PAYLOAD');
+    expect((await repo.findById(container.id))?.status).toBe('connecting');
+    socket.close();
+  });
+
+  it('T-G7: same container with two sockets stays online until the last disconnects', async () => {
+    const { container, token } = await newContainer();
+    const first = await connectWith(token);
+    first.emit('register', { hostname: 'worker-a', version: '2.0.0' });
+    await waitFor(first, 'registered');
+
+    const second = await connectWith(token);
+    second.emit('register', { hostname: 'worker-b', version: '2.0.0' });
+    await waitFor(second, 'registered');
+
+    first.close();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    expect(heartbeatTracker.has(container.id)).toBe(true);
+
+    second.close();
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'connecting');
+    expect(heartbeatTracker.has(container.id)).toBe(false);
+  });
+
+  it('T-G8: handshake attempts from one source IP are rate limited', async () => {
+    const rateRepo = new InMemoryContainerRepository();
+    const rateToken = new TokenService(rateRepo);
+    const rateClient = new InMemoryK8sClient();
+    const rateJobManager = new K8sJobManager(rateClient, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const rateService = new ContainerService(rateRepo, rateToken, rateJobManager, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    });
+
+    const rateServer = createServer();
+    const rateIo = new SocketIOServer(rateServer, { transports: ['websocket'] });
+    registerWorkerGateway(rateIo, {
+      tokenService: rateToken,
+      containerService: rateService,
+      heartbeatTracker: new HeartbeatTracker(),
+      handshakeRateLimit: { windowMs: 60000, max: 2 },
+    });
+    await new Promise<void>((resolve) => rateServer.listen(0, resolve));
+    const port = (rateServer.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const attempt = (token?: string): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        const socket = ioClient(`${url}/worker`, {
+          auth: token ? { token } : {},
+          transports: ['websocket'],
+          reconnection: false,
+          forceNew: true,
+        });
+        const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+        socket.once('connect_error', (err) => {
+          clearTimeout(timer);
+          const message = err.message;
+          socket.close();
+          resolve(message);
+        });
+        socket.once('connect', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve('CONNECTED');
+        });
+      });
+
+    try {
+      expect(await attempt()).toBe('INVALID_TOKEN');
+      expect(await attempt()).toBe('INVALID_TOKEN');
+      expect(await attempt()).toBe('RATE_LIMITED');
+    } finally {
+      rateIo.close();
+      await new Promise<void>((resolve) => rateServer.close(() => resolve()));
+    }
+  });
+
+  it('T-G10: engine handshake lives at /socket.io/ — /worker is a namespace, not a URL path (问题 46)', async () => {
+    // engine path 必须是 Socket.IO 默认 `/socket.io/`（与 index.ts 传入的 ENGINE_PATH 一致）。
+    expect(ENGINE_PATH).toBe('/socket.io/');
+
+    // 生产配置强制 websocket 传输：engine path 上发起 polling 握手会被引擎接管但拒绝（400），
+    // 证明该 URL 路径确实由 Socket.IO 引擎处理（而非落到 express 的 404 兜底）。
+    const wrongTransport = await fetch(`${baseUrl}/socket.io/?EIO=4&transport=polling`);
+    expect(wrongTransport.status).toBe(400);
+
+    // `/worker` 只是命名空间，作为 URL 路径不存在 → 404（回归问题 46 的 Ingress 误配置即命中此处）。
+    const wrongPath = await fetch(`${baseUrl}/worker?EIO=4&transport=polling`);
+    expect(wrongPath.status).toBe(404);
+  });
+
+  it('T-G11: per-container rate limiting lets distinct containers reconnect from one shared Ingress IP (问题 59)', async () => {
+    const rateRepo = new InMemoryContainerRepository();
+    const rateToken = new TokenService(rateRepo);
+    const rateClient = new InMemoryK8sClient();
+    const rateJobManager = new K8sJobManager(rateClient, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const rateService = new ContainerService(rateRepo, rateToken, rateJobManager, {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    });
+
+    const rateServer = createServer();
+    const rateIo = new SocketIOServer(rateServer, { transports: ['websocket'] });
+    registerWorkerGateway(rateIo, {
+      tokenService: rateToken,
+      containerService: rateService,
+      heartbeatTracker: new HeartbeatTracker(),
+      // per-container 上限 2；per-IP 上限放宽（模拟共享 Ingress IP 下多容器重连）。
+      handshakeRateLimit: { windowMs: 60000, max: 2, ipMax: 50 },
+    });
+    await new Promise<void>((resolve) => rateServer.listen(0, resolve));
+    const port = (rateServer.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const mintToken = async (): Promise<string> => {
+      const container = await rateRepo.create({
+        name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'connecting',
+      });
+      return rateToken.issue(container.id);
+    };
+
+    const attempt = (token: string): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        const socket = ioClient(`${url}/worker`, {
+          auth: { token },
+          transports: ['websocket'],
+          reconnection: false,
+          forceNew: true,
+        });
+        const timer = setTimeout(() => reject(new Error('connect timeout')), 3000);
+        socket.once('connect_error', (err) => {
+          clearTimeout(timer);
+          const message = err.message;
+          socket.close();
+          resolve(message);
+        });
+        socket.once('connect', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve('CONNECTED');
+        });
+      });
+
+    try {
+      // 同一 peer IP（Ingress 控制器）下的多个不同容器：各自独立计数，不应被限流。
+      for (let i = 0; i < 5; i += 1) {
+        expect(await attempt(await mintToken())).toBe('CONNECTED');
+      }
+
+      // 同一个容器重复握手超过 per-container 上限：被限流。
+      const sameToken = await mintToken();
+      expect(await attempt(sameToken)).toBe('CONNECTED');
+      expect(await attempt(sameToken)).toBe('CONNECTED');
+      expect(await attempt(sameToken)).toBe('RATE_LIMITED');
+    } finally {
+      rateIo.close();
+      await new Promise<void>((resolve) => rateServer.close(() => resolve()));
+    }
+  });
+
+  it('T-G12: SlidingWindowRateLimiter 在随机 key 洪水下 Map 有界（问题 60）', () => {
+    const limiter = new SlidingWindowRateLimiter(60_000, 60, 100);
+    const now = 1_700_000_000_000;
+
+    // 1000 个唯一 key（模拟未认证对端用随机 token 前缀铸造限速键）
+    for (let i = 0; i < 1000; i += 1) {
+      limiter.allow(`container:flood-${i}`, now);
+    }
+
+    expect(limiter.size).toBeLessThanOrEqual(100);
+  });
+
+  it('T-G13: containerIdFromToken 仅接受合法形状前缀，否则回退（问题 60）', () => {
+    expect(containerIdFromToken('507f1f77bcf86cd799439011.secret')).toBe('507f1f77bcf86cd799439011');
+    expect(containerIdFromToken('c-1.a.b')).toBe('c-1');
+    // 无分隔符 / 空前缀 / 非法字符 / 超长 → undefined（回退 IP 键）
+    expect(containerIdFromToken('no-dot')).toBeUndefined();
+    expect(containerIdFromToken('.secret')).toBeUndefined();
+    expect(containerIdFromToken('bad prefix.secret')).toBeUndefined();
+    expect(containerIdFromToken('bad/prefix.secret')).toBeUndefined();
+    expect(containerIdFromToken(`${'a'.repeat(65)}.secret`)).toBeUndefined();
+    expect(containerIdFromToken(undefined)).toBeUndefined();
   });
 });

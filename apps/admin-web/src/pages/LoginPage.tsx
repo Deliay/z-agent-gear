@@ -6,6 +6,7 @@ import { ADMIN_LOGIN } from '@/graphql/mutations'
 import type { AdminLoginMutation } from '@/graphql/types'
 import { useAuth } from '@/stores/auth'
 import { setAdminApiBase, clearAdminApiBase, getAdminApiBase } from '@/lib/api-base'
+import { isNetworkAuthError } from '@/lib/auth-error'
 import { reloadApp } from '@/lib/runtime'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,17 +34,13 @@ export default function LoginPage() {
       }
     },
     onError: (err: Error) => {
-      const message = err.message ?? ''
       // 网络不可达（地址错误/服务未启动）：给出可操作的提示并展开服务器地址设置
-      const isNetworkError =
-        !message ||
-        /failed to fetch|network|fetch|load failed|timeout/i.test(message)
-      if (isNetworkError) {
+      if (isNetworkAuthError(err)) {
         setError('无法连接服务器，请检查下方「服务器地址」设置是否正确')
         setEndpointInput(getAdminApiBase())
         setServerOpen(true)
       } else {
-        setError(message)
+        setError(err.message)
       }
     },
   })

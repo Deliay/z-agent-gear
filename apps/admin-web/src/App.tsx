@@ -8,8 +8,9 @@ import BaseImagePage from './pages/BaseImagePage'
 import CloudContainersPage from './pages/CloudContainersPage'
 import AdminLayout from './components/AdminLayout'
 import ProtectedRoute from './components/ProtectedRoute'
+import { getBasePath } from './lib/base-path'
 
-const basename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+const basename = getBasePath()
 
 function App() {
   return (

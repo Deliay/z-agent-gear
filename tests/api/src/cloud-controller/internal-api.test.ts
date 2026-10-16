@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
 // cloud-controller 内部管理 REST（契约附录 A）。由 Aspire 以 K8S_ENABLED=false 启动。
+// INTERNAL_API_TOKEN 已无公开默认值（问题 47）：须经环境注入，未提供时显式跳过而非静默假绿。
 const BASE = process.env.CLOUD_CONTROLLER_URL || 'http://localhost:10004';
-const TOKEN = process.env.CLOUD_CONTROLLER_INTERNAL_TOKEN || 'dev-internal-token-change-in-production';
+const TOKEN = process.env.CLOUD_CONTROLLER_INTERNAL_TOKEN;
 
 function req(path: string, init: RequestInit = {}, withAuth = true): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init.headers as Record<string, string> | undefined) };
@@ -10,7 +11,7 @@ function req(path: string, init: RequestInit = {}, withAuth = true): Promise<Res
   return fetch(`${BASE}${path}`, { ...init, headers });
 }
 
-describe('cloud-controller internal API', () => {
+describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
   it('T-IC2: rejects missing / wrong bearer with 401', async () => {
     const missing = await req('/internal/containers', {}, false);
     expect(missing.status).toBe(401);
@@ -40,7 +41,8 @@ describe('cloud-controller internal API', () => {
 
     const delRes = await req(`/internal/containers/${created.id}`, { method: 'DELETE' });
     expect(delRes.status).toBe(200);
-    await expect(delRes.json()).resolves.toEqual({ success: true });
+    // 问题 50：DELETE 透出契约承诺的 deletedJob
+    await expect(delRes.json()).resolves.toMatchObject({ success: true, deletedJob: true });
   });
 
   it('T-IC4: DELETE 404 for unknown; idempotent for terminal container', async () => {

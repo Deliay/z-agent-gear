@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
 import { adminGql, ensureAdminLogin } from './helpers.js';
 
@@ -302,6 +303,56 @@ describe('Admin Global LLM API', () => {
 
     await adminGql(DELETE_PROVIDER, { id: created.data!.createGlobalProvider.id }, token);
   });
+
+  it.skipIf(!process.env.MONGODB_URI)(
+    'problem 53: adminModels succeeds with provider=null for a dangling providerId',
+    async () => {
+      const uri = process.env.MONGODB_URI!;
+      const name = `global-orphan-${Date.now()}`;
+      const created = await adminGql<{ createGlobalProvider: { id: string; models: Array<{ id: string }> } }>(
+        CREATE_PROVIDER,
+        {
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: 'sk-test-fake-key',
+          },
+        },
+        token,
+      );
+      expect(created.errors).toBeUndefined();
+      const providerId = created.data!.createGlobalProvider.id;
+      const modelId = created.data!.createGlobalProvider.models[0]?.id;
+      expect(modelId).toBeTruthy();
+
+      if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+      const db = mongoose.connection.db!;
+      // 悬空 providerId：指向一个不存在的供应商，复现问题 53
+      await db.collection('models').updateOne(
+        { _id: new mongoose.Types.ObjectId(modelId!) },
+        { $set: { providerId: new mongoose.Types.ObjectId('000000000000000000000000') } },
+      );
+
+      try {
+        const models = await adminGql<{ adminModels: Array<{ id: string; provider: unknown }> }>(
+          MODELS,
+          undefined,
+          token,
+        );
+        // 修复后：非空违规消除，整条查询成功，悬空模型 provider 为 null
+        expect(models.errors).toBeUndefined();
+        const orphan = models.data!.adminModels.find((m) => m.id === modelId);
+        expect(orphan).toBeDefined();
+        expect(orphan!.provider).toBeNull();
+      } finally {
+        // 直接清理悬空模型 + 级联删除供应商（providerId 已改，级联删不到该模型）
+        await db.collection('models').deleteOne({ _id: new mongoose.Types.ObjectId(modelId!) });
+        await adminGql(DELETE_PROVIDER, { id: providerId }, token);
+      }
+    },
+  );
 
   it('scope isolation: admin never sees user-scope providers/models (T-SC5 反向)', async () => {
     const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';

@@ -64,10 +64,11 @@ npx playwright test
 | `API_URL` | agent-api GraphQL 地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
 
-> admin 套件涉及共享管理员（admin）口令轮换与强制改密重置，**必须以 `--workers=1`（默认即单 worker，禁止显式并发）串行执行**，否则用例互相污染：
+> 所有套件共享同一套服务与 Mongo：admin 套件会轮换共享管理员（admin）口令、清理全局供应商，因此**必须在 `playwright.config.ts` 中强制 `workers: 1`、`fullyParallel: false` 串行执行**（已写死，勿覆盖为并发），否则用例互相污染：
 
 ```bash
 ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \

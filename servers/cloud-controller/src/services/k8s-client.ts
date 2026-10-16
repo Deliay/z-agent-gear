@@ -9,6 +9,16 @@ export interface K8sEnvVar {
   value: string;
 }
 
+export interface K8sResourceList {
+  cpu: string;
+  memory: string;
+}
+
+export interface K8sResourceRequirements {
+  requests: K8sResourceList;
+  limits: K8sResourceList;
+}
+
 export interface K8sJobManifest {
   apiVersion: 'batch/v1';
   kind: 'Job';
@@ -19,6 +29,7 @@ export interface K8sJobManifest {
   };
   spec: {
     backoffLimit: number;
+    activeDeadlineSeconds: number;
     ttlSecondsAfterFinished: number;
     template: {
       metadata: { labels: Record<string, string> };
@@ -29,6 +40,7 @@ export interface K8sJobManifest {
           name: string;
           image: string;
           env: K8sEnvVar[];
+          resources: K8sResourceRequirements;
         }>;
       };
     };
@@ -181,7 +193,29 @@ export class InMemoryK8sClient implements K8sClient {
   }
 }
 
-/* c8 ignore start */
+/**
+ * watch 结束回调归一化：@kubernetes/client-node 的 done 回调在不同版本/异常路径下
+ * 可能传入 Error（异常）或不传参数（正常关闭），历史上还曾传入 done 函数。
+ * 抽出为纯函数以便在不依赖真实集群的情况下单测该分支。
+ */
+export function notifyWatchDone(
+  err: unknown,
+  onClose?: (error?: unknown) => void,
+): void {
+  if (typeof err === 'function') {
+    (err as () => void)();
+    onClose?.();
+  } else {
+    onClose?.(err);
+  }
+}
+
+/*
+ * c8 ignore start —— RealK8sClient 的其它方法直接调用 @kubernetes/client-node 的
+ * 集群 API（ensureInitialized / createJob / listJobs / deleteJob），需要真实集群或
+ * 完整 SDK mock 才能执行，单测由 InMemoryK8sClient 覆盖同一接口契约、部署侧由镜像
+ * 冒烟与 tests/api 覆盖；watch done 回调分支已通过上方 notifyWatchDone 单测覆盖。
+ */
 export class RealK8sClient implements K8sClient {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   private initialized = false;
@@ -277,12 +311,7 @@ export class RealK8sClient implements K8sClient {
         onEvent({ type, job: this.toInfo(apiObj) });
       },
       (err: unknown) => {
-        if (typeof err === 'function') {
-          (err as () => void)();
-          onClose?.();
-        } else {
-          onClose?.(err);
-        }
+        notifyWatchDone(err, onClose);
       },
     );
     return () => req.abort();

@@ -7,10 +7,16 @@ type: Permanent
 
 **功能名称**: 前端支持服务器自动选择
 **关联 PRD**: docs/product/draft/20260908-frontend-auto-select-server.md
-**技术提案版本**: v1.0
+**技术提案版本**: v1.2
 **创建日期**: 2026-09-08
 **作者**: Kimi
 **feat-branch**: `prd/frontend-auto-select-server`
+
+## 版本变更
+
+- **v1.2（2026-10-08）**：按第二轮评审修复——`ResolverState` 增加 `lastResolved`（成功/回落均写，回落不短路重探）；`getApiBase()` 返回 `cached ?? lastResolved ?? env ?? (DEV ? local : '')`，保证同步入口与 `resolveApiBase()` 一致，修复全部失败时同步入口兜底 `''` 导致 SSE/工作区 404 的问题。
+- **v1.1（2026-10-08）**：按集成评审意见修订——未显式注入 env 且 `import.meta.env.DEV` 为真（本地手动 `npm run dev`）时，跳过线上探测并回落 `http://localhost:4000`，避免误连生产；探测全部失败不再写内存缓存（可重探）；并发探测以在途 Promise 去重；`main.tsx` 增加 `try/catch` 降级与加载态。详见 [[20261008-feat-domestic-api-acceleration]] v1.3。
+- **v1.0（2026-09-08）**：初稿。
 
 ## 1. 概述
 
@@ -56,16 +62,19 @@ flowchart TD
     A[main.tsx 启动] --> B[resolveApiBase]
     B --> C{VITE_API_URL 已显式设置?}
     C -- 是 --> D[直接使用该地址<br/>本地开发/Aspire]
-    C -- 否 --> E{sessionStorage 有缓存?}
-    E -- 有 --> F[使用缓存入口]
-    E -- 无 --> G[并发 GET 两个候选 /health<br/>超时 2000ms]
-    G --> H{有可用入口?}
-    H -- 是 --> I[选最快者并写入 sessionStorage]
-    H -- 否 --> J[回落候选列表第一项]
-    D --> K[Apollo Client / SSE / fetch]
-    F --> K
-    I --> K
-    J --> K
+    C -- 否 --> E{import.meta.env.DEV?}
+    E -- 是 --> L[回落 http://localhost:4000<br/>不探测]
+    E -- 否 --> F{sessionStorage 有缓存?}
+    F -- 有 --> G[使用缓存入口]
+    F -- 无 --> H[并发 GET 两个候选 /health<br/>超时 2000ms]
+    H --> I{有可用入口?}
+    I -- 是 --> J[选最快者并写入 sessionStorage]
+    I -- 否 --> K[回落候选列表第一项<br/>不写 cached/持久缓存，可重探<br/>写 lastResolved 使同步入口 getApiBase 同值]
+    D --> M[Apollo Client / SSE / fetch]
+    L --> M
+    G --> M
+    J --> M
+    K --> M
 ```
 
 ### 2.2 技术栈
@@ -128,14 +137,14 @@ sequenceDiagram
 
 #### 实现点 1：统一基址解析 `api-base.ts`
 
-- **描述**: 导出 `resolveApiBase(): Promise<string>` 与同步读取的 `getApiBase()`。解析优先级：`import.meta.env.VITE_API_URL` 非空 → 直接使用并跳过探测；否则查 `sessionStorage`；否则并发探测候选列表；全部失败回落 `API_CANDIDATES[0]`。
-- **技术细节**: 候选列表为模块内常量 `['https://api.zag.fffdan.com', 'https://zag-agent-api.fffdan.com']`。探测用 `fetch(`${origin}/health`, { signal })`，`AbortController` 实现 2000ms 超时；以「首个返回 2xx 的 Promise」胜出（其余请求 abort），等价于最快可用者。结果写入 `sessionStorage`，失败（全部超时/非 2xx）不缓存、返回回落值。
+- **描述**: 导出 `resolveApiBase(): Promise<string>` 与同步读取的 `getApiBase()`。解析优先级：`import.meta.env.VITE_API_URL` 非空 → 直接使用并跳过探测；否则 `import.meta.env.DEV` 为真 → 回落 `http://localhost:4000` 且不探测；否则查 `sessionStorage`；否则并发探测候选列表；全部失败回落 `API_CANDIDATES[0]`。
+- **技术细节**: 候选列表为模块内常量 `['https://api.zag.fffdan.com', 'https://zag-agent-api.fffdan.com']`。探测用 `fetch(`${origin}/health`, { signal })`，`AbortController` 实现 2000ms 超时；以「首个返回 2xx 的 Promise」胜出（其余请求 abort），等价于最快可用者。结果写入 `sessionStorage`，失败（全部超时/非 2xx）不写 `cached`、不写 sessionStorage（后续调用可重探）、返回回落值。成功与回落均写入 `lastResolved`（仅内存、不短路重探），供同步入口 `getApiBase()` 与异步入口保持一致。在途探测以模块级 Promise 去重。`sessionStorage` 读写以 `try/catch` 包裹以兼容沙箱/隐私模式。
 - **风险点**: `/health` 若未配置 CORS，浏览器会拦截跨域探测——需在实现阶段验证两个入口的 `/health` 允许跨域读取；若不允许，备选方案为后端补充 CORS 头（改动极小，但仍属范围外事项，届时升级决策）。
 
 #### 实现点 2：启动引导与消费点收敛
 
 - **描述**: `main.tsx` 中 `await resolveApiBase()` 后再创建 Apollo Client（`apollo.ts` 改为接受解析后基址或导出工厂函数）并 `render`。`useSessionStream.ts`、`SessionView.tsx`、`WorkspaceSection.tsx` 三处基址直读全部改为 `getApiBase()`，统一 fallback 口径。
-- **技术细节**: `getApiBase()` 在解析完成前返回 `VITE_API_URL || ''` 的保守值；由于渲染发生在 `await` 之后，正常运行路径不会命中未完成状态。SSE 的 EventSource 构造发生在组件挂载后，天然晚于解析完成。
+- **技术细节**: `getApiBase()` 返回 `agentState.cached ?? agentState.lastResolved ?? (VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:4000' : ''))`；解析完成后（无论成功或回落）必与 `await resolveApiBase()` 同值，避免全部失败时同步入口落到同源相对路径；仅在宿主渲染前的短窗口返回保守值，而渲染发生在 `await` 之后，正常运行路径不会命中未完成状态。SSE 的 EventSource 构造发生在组件挂载后，天然晚于解析完成。
 - **风险点**: 探测最坏增加 2s 启动耗时（全部不可达时）。可接受——该场景现状同样是不可用；且本地开发不经过此路径。
 
 #### 实现点 3：部署配置调整
@@ -197,7 +206,8 @@ apps/agent-web/src/
 
 | 环境 | API 基址来源 | 说明 |
 |------|-------------|------|
-| 本地开发（vite dev / Aspire） | `VITE_API_URL` 环境变量 | 行为不变 |
+| 本地开发（Aspire，注入 env） | `VITE_API_URL` 环境变量 | 行为不变 |
+| 本地手动开发（`npm run dev`，无 env） | `import.meta.env.DEV` → `http://localhost:4000` | 不探测，行为与变更前一致 |
 | 线上（GitHub Pages） | 自动测速选择 | deploy workflow 移除 `VITE_API_URL` 注入 |
 
 ### 9.2 配置管理

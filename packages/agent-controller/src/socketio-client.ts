@@ -238,16 +238,45 @@ export function parseEndpoint(endpoint: string): ParsedEndpoint {
   return result;
 }
 
+export function extractHandshakeToken(endpoint: string): string | undefined {
+  try {
+    return new URL(endpoint).searchParams.get('token') ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 从 endpoint 移除一次性 token query（问题 11：token 不进 URL/access log，改由 Socket.IO
+ * 握手 `auth.token` 承载）。无 token 时原样返回。
+ */
+export function stripTokenFromEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (!url.searchParams.has('token')) return endpoint;
+    url.searchParams.delete('token');
+    return url.toString();
+  } catch {
+    return endpoint;
+  }
+}
+
 export function connectToServer(
   endpoint: string,
   key: string,
   options?: { serverName?: string },
 ): Socket {
-  const socket = createSocketIOClient(endpoint, {
+  // 一次性 token 优先取 endpoint query（兼容旧注入），否则用 key（cloud-controller 场景 key=token）。
+  // token 不再放进 URL，改经 Socket.IO 握手 auth 传递，避免进入 ingress/中间层访问日志。
+  const handshakeToken = extractHandshakeToken(endpoint) ?? (key || undefined);
+  const connectEndpoint = stripTokenFromEndpoint(endpoint);
+
+  const socket = createSocketIOClient(connectEndpoint, {
     transports: ['websocket'],
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 60000,
+    auth: handshakeToken ? { token: handshakeToken } : {},
   });
 
   const heartbeat = new Heartbeat();
@@ -270,7 +299,7 @@ export function connectToServer(
 
   socket.on('connect', () => {
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
-    const { origin, namespace } = parseEndpoint(endpoint);
+    const { origin, namespace } = parseEndpoint(connectEndpoint);
     console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
     const resumeToken = getResumeTokenFromConfig();
     socket.emit('register', {

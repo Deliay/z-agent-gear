@@ -5,6 +5,8 @@ type: Permanent
 
 # 云控制器管理后台一期 - 实现计划
 
+> 注（PR #207 返工更新）：文中 `admin` / `admin1234567` 种子口令为**历史设计**，现实现已改为 `ADMIN_INITIAL_PASSWORD` 环境注入或随机生成 + 首次种子一次性打印，并拒绝已知弱口令；相关条目仅作当时设计留痕。
+
 **关联 Proposal**: `proposals/20261014-feat-admin-console.md`（v1.2）
 **关联 PRD**: `docs/product/draft/20261014-admin-console.md`（v1.1）
 **feat-branch**: `feat/admin-console`

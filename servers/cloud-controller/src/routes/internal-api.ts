@@ -84,7 +84,8 @@ export function createInternalRouter(containerService: ContainerService): Router
   router.delete('/containers/:id', async (req: Request, res: Response) => {
     try {
       const result = await containerService.destroy(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
-      res.json({ success: result.success });
+      // 契约 A.2.3：透出 deletedJob，调用方可观察本次是否真实回收了残留 Job（问题 50）。
+      res.json({ success: result.success, deletedJob: result.deletedJob });
     } catch (err) {
       if (err instanceof ContainerNotFoundError) {
         res.status(404).json({ error: 'NOT_FOUND', message: err.message });

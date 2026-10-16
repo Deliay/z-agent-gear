@@ -258,6 +258,13 @@ export interface CreateControllerKeyMutation {
   }
 }
 
+export interface RegenerateControllerKeyMutation {
+  regenerateControllerKey: {
+    key: ControllerKeyData
+    rawKey: string
+  }
+}
+
 export interface CreateWorkspaceMutation {
   createWorkspace: ControllerWorkspaceData
 }
@@ -581,12 +588,12 @@ export interface RegenerateControllerKeyMutation {
 // ---------- 首页聚合查询（HOME_OVERVIEW，对齐 contracts/home.graphql） ----------
 
 export interface HomeOverviewControllerData extends ControllerData {
-  /** 嵌套惰性字段：离线或扇出失败为空列表 */
+  /** 嵌套惰性字段：纯 DB 查询，不随控制器在线状态降级；失败为空列表 */
   gateways: GatewayListData
 }
 
 export interface HomeOverviewWorkspaceData extends ControllerWorkspaceData {
-  /** 嵌套惰性字段：离线或扇出失败为空列表 */
+  /** 嵌套惰性字段：经 Redis relay 扇出，离线或失败/超时为空列表 */
   worktrees: WorkspaceWorktreeData[]
 }
 

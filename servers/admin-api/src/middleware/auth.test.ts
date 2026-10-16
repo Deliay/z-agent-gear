@@ -45,6 +45,7 @@ describe('authenticateAdmin', () => {
       _id: { toString: () => 'admin-1' },
       username: 'admin',
       mustChangePassword: false,
+      passwordChangedAt: null,
     });
     (AdminUser.findById as any).mockReturnValue({ select });
 
@@ -52,7 +53,7 @@ describe('authenticateAdmin', () => {
 
     expect(verifyToken).toHaveBeenCalledWith('valid');
     expect(AdminUser.findById).toHaveBeenCalledWith('admin-1');
-    expect(select).toHaveBeenCalledWith('username mustChangePassword');
+    expect(select).toHaveBeenCalledWith('username mustChangePassword passwordChangedAt');
     expect(result).toEqual({ id: 'admin-1', username: 'admin', mustChangePassword: false });
   });
 
@@ -61,5 +62,37 @@ describe('authenticateAdmin', () => {
     (AdminUser.findById as any).mockReturnValue({ select: vi.fn().mockResolvedValue(null) });
 
     expect(await authenticateAdmin(requestWith('Bearer valid'))).toBeNull();
+  });
+
+  it('T-A4 (问题 6): accepts a token whose pwdAt matches the current passwordChangedAt', async () => {
+    const changedAt = new Date('2026-02-01T00:00:00.000Z');
+    (verifyToken as any).mockReturnValue({ adminId: 'admin-1', pwdAt: changedAt.getTime() });
+    (AdminUser.findById as any).mockReturnValue({
+      select: vi.fn().mockResolvedValue({
+        _id: { toString: () => 'admin-1' },
+        username: 'admin',
+        mustChangePassword: false,
+        passwordChangedAt: changedAt,
+      }),
+    });
+
+    const result = await authenticateAdmin(requestWith('Bearer fresh'));
+
+    expect(result).toEqual({ id: 'admin-1', username: 'admin', mustChangePassword: false });
+  });
+
+  it('T-A4 (问题 6): rejects a token issued before the last password change', async () => {
+    // token 签发时从未改密（pwdAt=0），但管理员此后改过密码
+    (verifyToken as any).mockReturnValue({ adminId: 'admin-1', pwdAt: 0 });
+    (AdminUser.findById as any).mockReturnValue({
+      select: vi.fn().mockResolvedValue({
+        _id: { toString: () => 'admin-1' },
+        username: 'admin',
+        mustChangePassword: false,
+        passwordChangedAt: new Date('2026-02-01T00:00:00.000Z'),
+      }),
+    });
+
+    expect(await authenticateAdmin(requestWith('Bearer stale'))).toBeNull();
   });
 });

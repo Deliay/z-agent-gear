@@ -9,9 +9,10 @@ interface ModelItemProps {
   model: AdminModelData
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  togglePending?: boolean
 }
 
-export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps) {
+export default function ModelItem({ model, onToggle, onDelete, togglePending = false }: ModelItemProps) {
   const {
     attributes,
     listeners,
@@ -74,11 +75,7 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
           variant="ghost"
           size="icon"
           className="size-7 text-muted-foreground hover:text-destructive"
-          onClick={() => {
-            if (window.confirm(`确定要删除自定义模型「${model.name}」吗？`)) {
-              onDelete(model.id)
-            }
-          }}
+          onClick={() => onDelete(model.id)}
           title="删除自定义模型"
         >
           <Trash2Icon className="size-4" />
@@ -86,8 +83,10 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
       )}
       <Switch
         checked={model.isEnabled && canToggle}
-        onCheckedChange={() => canToggle && onToggle(model.id)}
-        disabled={!canToggle}
+        onCheckedChange={() => {
+          if (canToggle && !togglePending) onToggle(model.id)
+        }}
+        disabled={!canToggle || togglePending}
         aria-label={`启用 ${model.name}`}
       />
     </div>

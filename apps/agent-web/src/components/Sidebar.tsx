@@ -342,6 +342,15 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           <div className="flex items-center gap-1">
             <TodoListPanel />
             <ThemeToggle />
+            <button
+              type="button"
+              className="rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring text-muted-foreground hover:text-sidebar-foreground"
+              title="新建会话"
+              onClick={() => setShowNewDialog({})}
+              aria-label="新建会话"
+            >
+              <Plus className="size-4" />
+            </button>
             <NavLink
               to="/settings"
               aria-label="Settings"

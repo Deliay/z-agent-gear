@@ -82,8 +82,10 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
   return {
     id: rawId === undefined || rawId === null ? '' : String(rawId),
     name: (raw.name as string | undefined) ?? '',
-    status: status ? (STATUS_TO_GQL[status] ?? status.toUpperCase().replace(/-/g, '_')) : 'FAILED',
-    purpose: purpose ? (PURPOSE_TO_GQL[purpose] ?? purpose.toUpperCase().replace(/-/g, '_')) : 'IDLE',
+    // 未知状态回落 FAILED（问题 23）：避免映射出非法 GraphQL 枚举值打挂整条查询
+    status: status ? (STATUS_TO_GQL[status] ?? 'FAILED') : 'FAILED',
+    // 未知用途同样回落到安全值 IDLE，避免非法枚举
+    purpose: purpose ? (PURPOSE_TO_GQL[purpose] ?? 'IDLE') : 'IDLE',
     refId: (raw.refId as string | null | undefined) ?? null,
     createdAt: toIso(raw.createdAt) ?? new Date(0).toISOString(),
     connectedAt: toIso(raw.connectedAt),
@@ -103,7 +105,12 @@ export interface CloudControllerClientOptions {
 async function extractErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const body = (await res.json()) as { error?: string; message?: string };
-    return body.error || body.message || fallback;
+    const detail = body.error || body.message;
+    // 同时保留 error 与 message 细节（问题 22），避免丢弃 body.message 的真实排障信息
+    if (body.error && body.message && body.error !== body.message) {
+      return `${body.error}: ${body.message}`;
+    }
+    return detail || fallback;
   } catch {
     return fallback;
   }

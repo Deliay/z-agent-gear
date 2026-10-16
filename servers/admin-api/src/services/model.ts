@@ -12,6 +12,7 @@ export class ModelService {
   }
 
   async findByProviderId(providerId: string) {
+    if (!mongoose.Types.ObjectId.isValid(providerId)) return [];
     const models = await Model.find({ providerId, scope: GLOBAL_SCOPE })
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
@@ -22,6 +23,11 @@ export class ModelService {
     // 校验目标供应商存在且为全局 scope，防止把 global 模型挂到 user 供应商或悬空 providerId
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
+    }
+    // 名称 trim + 拒空（建议 I，与 agent 侧校验对齐）：避免写入空名自定义模型
+    const name = (input.name ?? '').trim();
+    if (name.length === 0) {
+      throw new Error('Model name is required');
     }
     const provider = await Provider.findOne({ _id: input.providerId, scope: GLOBAL_SCOPE }).lean();
     if (!provider) {
@@ -35,7 +41,7 @@ export class ModelService {
 
     const model = await Model.create({
       providerId: new mongoose.Types.ObjectId(input.providerId),
-      name: input.name,
+      name,
       isCustom: true,
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,
@@ -46,6 +52,7 @@ export class ModelService {
   }
 
   async delete(id: string) {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
     const model = await Model.findById(id);
     if (!model) return null;
     if (model.scope !== GLOBAL_SCOPE) return null;
@@ -57,6 +64,7 @@ export class ModelService {
   }
 
   async toggle(id: string) {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
     const model = await Model.findById(id);
     if (!model) return null;
     if (model.scope !== GLOBAL_SCOPE) return null;
@@ -73,16 +81,20 @@ export class ModelService {
   }
 
   async updateSortOrder(ids: string[]) {
-    const updates = ids.map((id, index) => ({
+    // 非法 ObjectId 直接剔除，避免 bulkWrite CastError（问题 27）
+    const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const updates = validIds.map((id, index) => ({
       updateOne: {
         filter: { _id: id, scope: GLOBAL_SCOPE },
         update: { sortOrder: index },
       },
     }));
 
-    await Model.bulkWrite(updates);
+    if (updates.length > 0) {
+      await Model.bulkWrite(updates);
+    }
 
-    const models = await Model.find({ _id: { $in: ids }, scope: GLOBAL_SCOPE })
+    const models = await Model.find({ _id: { $in: validIds }, scope: GLOBAL_SCOPE })
       .sort({ sortOrder: 1 })
       .lean();
 

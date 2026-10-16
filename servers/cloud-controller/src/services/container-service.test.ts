@@ -30,12 +30,8 @@ function setup(overrides: Partial<ContainerServiceConfig> = {}) {
   return { repo, client, tokenService, jobManager, service };
 }
 
-function tokenOfEndpoint(endpoint: string): string {
-  return decodeURIComponent(new URL(endpoint).searchParams.get('token') ?? '');
-}
-
 describe('ContainerService', () => {
-  it('T-S1: start(idle) persists creating→connecting and injects token via both channels', async () => {
+  it('T-S1: start(idle) persists creating→connecting; token only via ZAG_CONTROLLER_KEY', async () => {
     const { repo, client, service } = setup();
 
     const created = await service.start('idle');
@@ -51,7 +47,8 @@ describe('ContainerService', () => {
     const env = client.getEnv(created.name);
     const token = env.ZAG_CONTROLLER_KEY!;
     expect(token).toBeTruthy();
-    expect(tokenOfEndpoint(env.ZAG_SERVER_ENDPOINT!)).toBe(token);
+    // 问题 11：握手 token 不再进入 URL，endpoint 只含 wss://.../worker
+    expect(new URL(env.ZAG_SERVER_ENDPOINT!).search).toBe('');
   });
 
   it('T-S2: createJob failure marks the record failed and keeps it for forced cleanup', async () => {
@@ -150,6 +147,229 @@ describe('ContainerService', () => {
     expect(second.deletedJob).toBe(false);
     expect(client.deleteCalls).toHaveLength(1);
     expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S6: destroy(terminal failed with a残留 Job) still deletes the Job', async () => {
+    const { repo, client, tokenService, service } = setup();
+    const created = await service.start('idle'); // Job 已创建
+    const token = client.getEnv(created.name).ZAG_CONTROLLER_KEY!;
+
+    // 回连超时 → failed，但 Job 仍 active（ttl 只回收已完成 Job）
+    await service.markFailed(created.id, '回连超时');
+    expect((await repo.findById(created.id))?.status).toBe('failed');
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    expect(client.deleteCalls).toHaveLength(1);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('failed'); // 保留终态记录
+    expect(stored?.tokenHash).toBeNull();
+    expect(await tokenService.verify(token)).toBeNull();
+  });
+
+  it('T-S7: markFailed clears tokenHash (defence in depth)', async () => {
+    const { repo, client, tokenService, service } = setup();
+    const created = await service.start('idle');
+    const token = client.getEnv(created.name).ZAG_CONTROLLER_KEY!;
+    expect(await tokenService.verify(token)).not.toBeNull();
+
+    await service.markFailed(created.id, '回连超时');
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.tokenHash).toBeNull();
+    expect(await tokenService.verify(token)).toBeNull();
+  });
+
+  it('T-S8: stale markOnline after a terminal transition is rejected (CAS)', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle');
+    await service.markOnline(created.id);
+    await service.destroy(created.id); // → exited
+
+    const after = await service.markOnline(created.id);
+
+    expect(after?.status).toBe('exited');
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S9: concurrent start() + destroy() leaves no orphan Job', async () => {
+    const { repo, client, service } = setup();
+    const originalCreate = client.createJob.bind(client);
+    let destroyPromise: Promise<unknown> = Promise.resolve();
+
+    client.createJob = async (manifest) => {
+      await originalCreate(manifest);
+      const containerId = manifest.metadata.labels['zag.cloud/container-id']!;
+      // 与 start() 并发触发销毁（受 per-container 串行锁约束）
+      destroyPromise = service.destroy(containerId);
+    };
+
+    const created = await service.start('idle');
+    await destroyPromise;
+
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+  });
+
+  it('T-S10: start() reclaims the new Job if the record is concurrently terminal', async () => {
+    const { repo, client, service } = setup();
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'connecting') {
+        // 模拟并发销毁已把记录置为终态：条件写入 creating→connecting 失败
+        await originalUpdate(id, { status: 'exited', tokenHash: null });
+        return null;
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    const created = await service.start('idle');
+
+    expect(created.status).toBe('exited');
+    expect(await client.getJob(created.name)).toBeNull();
+  });
+
+  it('T-S11: list() does not fail a creating record whose Job is not created yet', async () => {
+    const { repo, service } = setup();
+    const created = await repo.create({
+      name: 'zag-worker-pending',
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'creating',
+    });
+
+    const list = await service.list();
+
+    expect(list.find((c) => c.id === created.id)?.status).toBe('creating');
+  });
+
+  it('T-S12: reclaimResidualJob migrates a stuck destroying record to exited', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitedAt).toBeInstanceOf(Date);
+    expect(stored?.tokenHash).toBeNull();
+  });
+
+  it('T-S13: reclaimResidualJob reclaims a residual Job left on an exited record', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await service.markExited(created.id, '容器正常退出');
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S14: reclaimResidualJob migrates destroying→exited even when the Job is already gone', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    await client.deleteJob(created.name);
+
+    const deleted = await service.reclaimResidualJob(created.id);
+
+    expect(deleted).toBe(false);
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-S15: destroy CAS miss on the final exited write returns the current state without overwriting', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle');
+    await service.markOnline(created.id);
+
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'exited' && options?.fromStatuses?.includes('destroying')) {
+        // 模拟并发已将记录转移：CAS 未命中，返回 null 且不改写
+        return null;
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('destroying');
+    expect((await repo.findById(created.id))?.status).toBe('destroying');
+  });
+
+  it('T-S16: destroy on a stuck destroying record migrates it to exited (问题 50)', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await repo.update(created.id, { status: 'destroying' });
+    expect(await client.getJob(created.name)).not.toBeNull();
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitedAt).toBeInstanceOf(Date);
+  });
+
+  it('T-S17: start() CAS miss after a concurrent register must not delete the live Job (问题 58)', async () => {
+    const { repo, client, service } = setup();
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'connecting') {
+        // 模拟 worker 先注册：markOnline 允许 creating→online，随后 start() 的
+        // creating→connecting CAS 未命中。
+        await originalUpdate(id, { status: 'online', connectedAt: new Date() });
+        return null;
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    const created = await service.start('idle');
+
+    expect(created.status).toBe('online');
+    // 已注册的健康容器 Job 不得被 CAS-miss 兜底删除。
+    expect(await client.getJob(created.name)).not.toBeNull();
+    expect(client.deleteCalls).toHaveLength(0);
+  });
+
+  it('T-S18: destroy decides graceful shutdown from the post-CAS state, not the stale snapshot (建议 G)', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle'); // snapshot status = connecting
+    const shutdowns: string[] = [];
+    service.onShutdown((id) => {
+      shutdowns.push(id);
+    });
+
+    const originalUpdate = repo.update.bind(repo);
+    repo.update = async (id, patch, options) => {
+      if (patch.status === 'destroying') {
+        // 并发 markOnline 在 destroy 的 CAS 之前把记录置为 online。
+        await originalUpdate(id, { status: 'online', connectedAt: new Date() });
+      }
+      return originalUpdate(id, patch, options);
+    };
+
+    await service.destroy(created.id);
+
+    // 即便 destroy 起始快照是 connecting，也要向实际已注册的容器发送 shutdown。
+    expect(shutdowns).toEqual([created.id]);
   });
 
   it('rejects non-idle purposes with a clear message', async () => {

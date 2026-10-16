@@ -7,21 +7,26 @@ import { config, assertRuntimeConfig } from './config/index.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateAdmin } from './middleware/auth.js';
+import { clientIpFrom } from './middleware/client-ip.js';
 import { seedAdmin } from './services/auth.js';
 
 const app = express();
 
-app.use(cors({ origin: config.corsOrigin }));
+// 生产环境未显式配置 CORS_ORIGIN 时 config.corsOrigin 为空串：origin:false 仅允许同源，不再默认放开 `*`
+app.use(cors({ origin: config.corsOrigin || false }));
 app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
 const yoga = createYoga({
   schema,
-  context: async ({ request }) => ({
-    currentAdmin: await authenticateAdmin(request),
+  context: async (ctx) => ({
+    currentAdmin: await authenticateAdmin(ctx.request),
+    // 问题 49/57：默认取底层 socket 对端地址；仅当对端命中 TRUST_PROXY 受信代理列表时才采纳转发头末跳
+    clientIp: clientIpFrom(ctx.request, (ctx as { req?: unknown }).req),
   }),
-  graphiql: true,
+  // 生产环境关闭 GraphiQL 交互式浏览器（问题 26）
+  graphiql: config.nodeEnv !== 'production',
 });
 
 app.use('/graphql', yoga);

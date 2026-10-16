@@ -14,6 +14,7 @@ import type {
 } from '@/graphql/types';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { QueryError } from '@/components/ui/query-error';
 import { formatDateTime, formatOnlineDuration } from '@/lib/format';
 import ContainerStatusBadge from '@/components/cloud-containers/ContainerStatusBadge';
 import StartContainerDialog from '@/components/cloud-containers/StartContainerDialog';
@@ -22,7 +23,7 @@ import { CONTAINER_PURPOSE_LABELS } from '@/components/cloud-containers/labels';
 
 export default function CloudContainersPage() {
   // 10s 轮询（Apollo v4：加载分支必须 `loading && !data`，否则每次轮询卸载整页）
-  const { data, loading } = useQuery<GetAdminCloudContainersQuery>(ADMIN_CLOUD_CONTAINERS, {
+  const { data, loading, error, refetch } = useQuery<GetAdminCloudContainersQuery>(ADMIN_CLOUD_CONTAINERS, {
     pollInterval: 10000,
   });
   const [startContainer] = useMutation(ADMIN_START_CLOUD_CONTAINER);
@@ -76,6 +77,8 @@ export default function CloudContainersPage() {
 
       {loading && !data ? (
         <div className="text-sm text-muted-foreground">加载中...</div>
+      ) : error && !data ? (
+        <QueryError message={error.message} onRetry={() => refetch()} />
       ) : containers.length === 0 ? (
         <div className="rounded-lg border border-dashed">
           <EmptyState

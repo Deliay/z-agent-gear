@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
@@ -20,58 +20,108 @@ import {
   CREATE_GLOBAL_CUSTOM_MODEL,
   DELETE_GLOBAL_CUSTOM_MODEL,
 } from '@/graphql/mutations'
-import type { GetAdminModelsQuery, GetAdminProvidersQuery } from '@/graphql/types'
+import type {
+  AdminModelData,
+  GetAdminModelsQuery,
+  GetAdminProvidersQuery,
+} from '@/graphql/types'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { QueryError } from '@/components/ui/query-error'
 import ModelItem from './ModelItem'
 import CustomModelDialog from './CustomModelDialog'
 
 export default function ModelSection() {
-  const { data, loading } = useQuery<GetAdminModelsQuery>(ADMIN_MODELS)
-  const { data: providersData } = useQuery<GetAdminProvidersQuery>(ADMIN_PROVIDERS)
+  const { data, loading, error, refetch } = useQuery<GetAdminModelsQuery>(ADMIN_MODELS)
+  const { data: providersData, error: providersError } = useQuery<GetAdminProvidersQuery>(ADMIN_PROVIDERS)
   const [toggleModel] = useMutation(TOGGLE_GLOBAL_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_GLOBAL_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_GLOBAL_CUSTOM_MODEL)
   const [deleteCustomModel] = useMutation(DELETE_GLOBAL_CUSTOM_MODEL)
 
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<AdminModelData | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  // 单个 toggle 的在途集合：双击两次 toggle 会相互抵消，须忽略重复点击
+  const pendingToggleRef = useRef<Set<string>>(new Set())
+  const [pendingToggleIds, setPendingToggleIds] = useState<Set<string>>(new Set())
 
   const models = useMemo(() => data?.adminModels ?? [], [data])
+
+  // 初始加载失败走整页错误态；已有数据后的刷新失败不会替换内容，改用 toast 显式提示
+  useEffect(() => {
+    if (error && data) {
+      toast.error(error.message || '数据刷新失败')
+    }
+  }, [error, data])
+
+  // 供应商列表仅用于自定义模型对话框，失败不影响模型列表，但要显式暴露
+  useEffect(() => {
+    if (providersError) {
+      toast.error(providersError.message || '供应商列表加载失败')
+    }
+  }, [providersError])
+
+  // 拖拽结束可能晚于一次 refetch 到达，用 ref 持有最新列表，避免发全量 ids 时用到旧闭包数据
+  const modelsRef = useRef(models)
+  useEffect(() => {
+    modelsRef.current = models
+  }, [models])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
-  const handleDelete = useCallback(async (id: string) => {
+  const handleToggle = useCallback(
+    async (id: string) => {
+      // 同一模型 toggle 在途时忽略重复点击，避免两次相反请求相互抵消
+      if (pendingToggleRef.current.has(id)) return
+      pendingToggleRef.current.add(id)
+      setPendingToggleIds(new Set(pendingToggleRef.current))
+      try {
+        await toggleModel({
+          variables: { id },
+          refetchQueries: [ADMIN_MODELS],
+        })
+        toast.success('模型状态已更新')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '切换失败，请重试')
+      } finally {
+        pendingToggleRef.current.delete(id)
+        setPendingToggleIds(new Set(pendingToggleRef.current))
+      }
+    },
+    [toggleModel],
+  )
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
     try {
       await deleteCustomModel({
-        variables: { id },
+        variables: { id: deleteTarget.id },
         refetchQueries: [ADMIN_MODELS],
       })
+      toast.success('自定义模型已删除')
+      setDeleteTarget(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败，请重试')
+    } finally {
+      setDeleteBusy(false)
     }
-  }, [deleteCustomModel])
-
-  const handleToggle = async (id: string) => {
-    try {
-      await toggleModel({
-        variables: { id },
-        refetchQueries: [ADMIN_MODELS],
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '切换失败，请重试')
-    }
-  }
+  }, [deleteCustomModel, deleteTarget])
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const oldIndex = models.findIndex((m) => m.id === active.id)
-    const newIndex = models.findIndex((m) => m.id === over.id)
+    // 以发送时刻的最新列表计算顺序（而非渲染期闭包）
+    const current = modelsRef.current
+    const oldIndex = current.findIndex((m) => m.id === active.id)
+    const newIndex = current.findIndex((m) => m.id === over.id)
     if (oldIndex === -1 || newIndex === -1) return
 
-    const reordered = [...models]
+    const reordered = [...current]
     const [removed] = reordered.splice(oldIndex, 1)
     reordered.splice(newIndex, 0, removed)
 
@@ -108,6 +158,8 @@ export default function ModelSection() {
 
       {loading && !data ? (
         <div className="text-sm text-muted-foreground">加载中...</div>
+      ) : error && !data ? (
+        <QueryError message={error.message} onRetry={() => refetch()} />
       ) : models.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           暂无可用模型，添加供应商后自动拉取
@@ -128,13 +180,28 @@ export default function ModelSection() {
                   key={model.id}
                   model={model}
                   onToggle={handleToggle}
-                  onDelete={handleDelete}
+                  togglePending={pendingToggleIds.has(model.id)}
+                  onDelete={(id) => {
+                    const target = models.find((m) => m.id === id)
+                    if (target) setDeleteTarget(target)
+                  }}
                 />
               ))}
             </div>
           </SortableContext>
         </DndContext>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteBusy) setDeleteTarget(null)
+        }}
+        title="删除自定义模型"
+        description={`确定要删除自定义模型「${deleteTarget?.name ?? ''}」吗？`}
+        loading={deleteBusy}
+        onConfirm={handleDeleteConfirm}
+      />
 
       <CustomModelDialog
         open={customDialogOpen}

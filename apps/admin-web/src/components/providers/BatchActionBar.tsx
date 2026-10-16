@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 
 interface BatchActionBarProps {
   selectedCount: number
+  busy?: boolean
   onEnable: () => void
   onDisable: () => void
   onDelete: () => void
@@ -10,6 +11,7 @@ interface BatchActionBarProps {
 
 export default function BatchActionBar({
   selectedCount,
+  busy = false,
   onEnable,
   onDisable,
   onDelete,
@@ -23,17 +25,23 @@ export default function BatchActionBar({
         已选 {selectedCount} 项
       </span>
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={onEnable}>
+        <Button size="sm" variant="secondary" onClick={onEnable} disabled={busy}>
           启用
         </Button>
-        <Button size="sm" variant="secondary" onClick={onDisable}>
+        <Button size="sm" variant="secondary" onClick={onDisable} disabled={busy}>
           禁用
         </Button>
-        <Button size="sm" variant="destructive" onClick={onDelete}>
+        <Button size="sm" variant="destructive" onClick={onDelete} disabled={busy}>
           删除
         </Button>
       </div>
-      <Button size="sm" variant="ghost" onClick={onCancel} className="ml-auto">
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onCancel}
+        disabled={busy}
+        className="ml-auto"
+      >
         取消
       </Button>
     </div>

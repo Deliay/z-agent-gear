@@ -27,12 +27,13 @@ vi.mock('../src/config.js', () => ({
   clearResumeTokenFromConfig: vi.fn(),
 }));
 
-import { connectToServer, parseEndpoint } from '../src/socketio-client.js';
+import { connectToServer, parseEndpoint, extractHandshakeToken, stripTokenFromEndpoint } from '../src/socketio-client.js';
 import type { Socket } from 'socket.io-client';
 
 interface Harness {
   port: number;
   handshakes: Array<Record<string, string>>;
+  auths: Array<Record<string, unknown>>;
   registerPayloads: unknown[];
   url: (path?: string) => string;
   close: () => Promise<void>;
@@ -44,12 +45,14 @@ async function startServer(): Promise<Harness> {
   const httpServer: HttpServer = createServer();
   const ioServer = new IOServer(httpServer);
   const handshakes: Array<Record<string, string>> = [];
+  const auths: Array<Record<string, unknown>> = [];
   const registerPayloads: unknown[] = [];
 
   const attach = (nspName: string) => {
     const nsp = ioServer.of(nspName);
     nsp.use((socket, next) => {
       handshakes.push(socket.handshake.query as Record<string, string>);
+      auths.push(socket.handshake.auth as Record<string, unknown>);
       next();
     });
     nsp.on('connection', (socket: ServerSocket) => {
@@ -70,6 +73,7 @@ async function startServer(): Promise<Harness> {
   return {
     port,
     handshakes,
+    auths,
     registerPayloads,
     url: (path = '') => `http://127.0.0.1:${port}${path}`,
     close: async () => {
@@ -105,6 +109,15 @@ describe('parseEndpoint', () => {
     expect(parsed.namespace).toBe('/worker');
     expect(parsed.query).toEqual({ token: 'a.b', x: '1' });
   });
+
+  it('extractHandshakeToken 取 query token；stripTokenFromEndpoint 移除之而保留其他参数', () => {
+    expect(extractHandshakeToken('wss://h/worker?token=a.b')).toBe('a.b');
+    expect(extractHandshakeToken('wss://h/worker')).toBeUndefined();
+    expect(extractHandshakeToken('not-a-url')).toBeUndefined();
+
+    expect(stripTokenFromEndpoint('wss://h/worker?token=a.b&x=1')).toBe('wss://h/worker?x=1');
+    expect(stripTokenFromEndpoint('wss://h/worker')).toBe('wss://h/worker');
+  });
 });
 
 describe('connectToServer endpoint 兼容（真实 socket.io 服务端）', () => {
@@ -130,7 +143,7 @@ describe('connectToServer endpoint 兼容（真实 socket.io 服务端）', () =
     }
   });
 
-  it('T-P2：新 endpoint（`/worker?token=abc`）握手成功且 token 到达服务端', async () => {
+  it('T-P2：新 endpoint（`/worker?token=abc`）握手成功，token 经 auth 传递且不进 URL', async () => {
     const server = await startServer();
     try {
       const socket = connectToServer(server.url('/worker?token=abc'), 'ignored-by-cloud');
@@ -143,13 +156,35 @@ describe('connectToServer endpoint 兼容（真实 socket.io 服务端）', () =
       });
 
       expect(socket.nsp).toBe('/worker');
-      const handshake = server.handshakes.at(-1);
-      expect(handshake?.token).toBe('abc');
+      const auth = server.auths.at(-1);
+      expect(auth?.token).toBe('abc');
+      // token 不再经 handshake query / URL 传递
+      expect(server.handshakes.at(-1)?.token).toBeUndefined();
 
       // register 仍照常发送（cloud-controller 侧忽略 key，保持握手兼容）
       await vi.waitFor(() => {
         expect(server.registerPayloads.length).toBeGreaterThan(0);
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('T-P3：无 query token 的新 endpoint 用 key 作为握手 auth token（cloud-controller 场景）', async () => {
+    const server = await startServer();
+    try {
+      const socket = connectToServer(server.url('/worker'), 'container-1.secret');
+      openSockets.push(socket);
+
+      await new Promise<void>((resolve, reject) => {
+        socket.on('connect', () => resolve());
+        socket.on('connect_error', (err) => reject(err));
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+
+      expect(socket.nsp).toBe('/worker');
+      expect(server.auths.at(-1)?.token).toBe('container-1.secret');
+      expect(server.handshakes.at(-1)?.token).toBeUndefined();
     } finally {
       await server.close();
     }

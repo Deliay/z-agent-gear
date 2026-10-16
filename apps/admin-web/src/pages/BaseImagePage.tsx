@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { BASE_IMAGES } from '@/graphql/queries'
@@ -9,12 +9,13 @@ import {
 } from '@/graphql/mutations'
 import type { BaseImageData, BaseImageInputData, GetBaseImagesQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
+import { QueryError } from '@/components/ui/query-error'
 import BaseImageTable from '@/components/base-images/BaseImageTable'
 import BaseImageFormDialog from '@/components/base-images/BaseImageFormDialog'
 import DeleteConfirmDialog from '@/components/base-images/DeleteConfirmDialog'
 
 export default function BaseImagePage() {
-  const { data, loading } = useQuery<GetBaseImagesQuery>(BASE_IMAGES)
+  const { data, loading, error, refetch } = useQuery<GetBaseImagesQuery>(BASE_IMAGES)
   const [createBaseImage] = useMutation(CREATE_BASE_IMAGE)
   const [updateBaseImage] = useMutation(UPDATE_BASE_IMAGE)
   const [deleteBaseImage] = useMutation(DELETE_BASE_IMAGE)
@@ -25,6 +26,13 @@ export default function BaseImagePage() {
   const [deletingBusy, setDeletingBusy] = useState(false)
 
   const images = data?.baseImages ?? []
+
+  // 初始加载失败走整页错误态；已有数据后的刷新失败不会替换内容，改用 toast 显式提示
+  useEffect(() => {
+    if (error && data) {
+      toast.error(error.message || '数据刷新失败')
+    }
+  }, [error, data])
 
   const handleCreate = () => {
     setEditing(null)
@@ -78,6 +86,8 @@ export default function BaseImagePage() {
 
       {loading && !data ? (
         <div className="text-sm text-muted-foreground">加载中...</div>
+      ) : error && !data ? (
+        <QueryError message={error.message} onRetry={() => refetch()} />
       ) : (
         <BaseImageTable
           images={images}

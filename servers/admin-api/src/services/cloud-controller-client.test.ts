@@ -142,6 +142,20 @@ describe('CloudControllerClient', () => {
       await expect(client.start('WORKFLOW')).rejects.toThrow('该任务类型暂未开放');
     });
 
+    it('includes both error and message detail on a non-2xx response (问题 22)', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ error: 'JOB_CREATE_FAILED', message: 'quota exceeded for namespace' }, 400, 'Bad Request'),
+      );
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.start('IDLE')).rejects.toThrow('JOB_CREATE_FAILED: quota exceeded for namespace');
+    });
+
+    it('falls back to body.message when body.error is absent (问题 22)', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ message: 'only message' }, 500, 'Internal Server Error'));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.start('IDLE')).rejects.toThrow('only message');
+    });
+
     it('throws CONTROL_PLANE_UNAVAILABLE when unreachable', async () => {
       fetchMock.mockRejectedValue(new TypeError('fetch failed'));
       const client = new CloudControllerClient(OPTS);
@@ -229,6 +243,19 @@ describe('CloudControllerClient', () => {
         exitedAt: '2026-10-13T00:05:00.000Z',
         exitReason: '回连超时',
       });
+    });
+
+    it('falls back unknown status/purpose to safe enums instead of crashing the query (问题 23)', () => {
+      const mapped = mapCloudContainer({
+        id: 'c-unknown',
+        name: 'zag-worker-new',
+        status: 'reconciling',
+        purpose: 'future-purpose',
+        createdAt: '2026-10-14T00:00:00.000Z',
+      });
+
+      expect(mapped.status).toBe('FAILED');
+      expect(mapped.purpose).toBe('IDLE');
     });
   });
 });

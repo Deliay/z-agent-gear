@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryK8sClient } from './k8s-client.js';
-import { buildServerEndpoint, K8sJobManager } from './k8s-job-manager.js';
+import {
+  buildServerEndpoint,
+  JOB_ACTIVE_DEADLINE_SECONDS,
+  K8sJobManager,
+} from './k8s-job-manager.js';
 
 function setup(publicWsEndpoint = 'cloud.example.com:4003') {
   const client = new InMemoryK8sClient();
@@ -39,7 +43,22 @@ describe('K8sJobManager', () => {
     );
   });
 
-  it('T-K2: env double-channel is injected with a correctly encoded endpoint', () => {
+  it('T-K5: manifest declares resource constraints and activeDeadlineSeconds', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-abc123',
+      containerId: 'container-1',
+      token: 'container-1.secret',
+    });
+
+    expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
+    expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThan(0);
+    const resources = manifest.spec.template.spec.containers[0]!.resources;
+    expect(resources.requests).toEqual({ cpu: '250m', memory: '1Gi' });
+    expect(resources.limits).toEqual({ cpu: '2', memory: '4Gi' });
+  });
+
+  it('T-K2: env injects token via ZAG_CONTROLLER_KEY and a token-free endpoint', () => {
     const { manager } = setup('wss://cloud.example.com');
     const token = 'container-1.a+b/c=d';
     const manifest = manager.buildManifest({
@@ -56,7 +75,8 @@ describe('K8sJobManager', () => {
     expect(url.protocol).toBe('wss:');
     expect(url.host).toBe('cloud.example.com');
     expect(url.pathname).toBe('/worker');
-    expect(url.searchParams.get('token')).toBe(token);
+    // 问题 11：token 不再进入 URL query（改由握手 auth 携带）
+    expect(url.search).toBe('');
   });
 
   it('T-K3: createJob failure propagates', async () => {
@@ -87,15 +107,22 @@ describe('K8sJobManager', () => {
     expect(await client.getJob('zag-worker-del')).toBeNull();
   });
 
-  it('buildServerEndpoint normalises bare hosts and existing paths', () => {
-    expect(buildServerEndpoint('cloud.example.com:4003', 't')).toBe(
-      'wss://cloud.example.com:4003/worker?token=t',
+  it('buildServerEndpoint normalises bare hosts and existing paths (token-free)', () => {
+    expect(buildServerEndpoint('cloud.example.com:4003')).toBe(
+      'wss://cloud.example.com:4003/worker',
     );
-    expect(buildServerEndpoint('wss://cloud.example.com/worker', 't')).toBe(
-      'wss://cloud.example.com/worker?token=t',
+    expect(buildServerEndpoint('wss://cloud.example.com/worker')).toBe(
+      'wss://cloud.example.com/worker',
     );
-    expect(buildServerEndpoint('https://cloud.example.com', 't')).toBe(
-      'wss://cloud.example.com/worker?token=t',
+    expect(buildServerEndpoint('https://cloud.example.com')).toBe(
+      'wss://cloud.example.com/worker',
     );
+  });
+
+  it('T-K6: rejects a PUBLIC_WS_ENDPOINT that carries a non-canonical path (建议 F)', () => {
+    // `host/gateway` 会拼出 wss://host/gateway/worker，namespace 变 /gateway/worker
+    // 永远注册不上 → fail-fast，而非静默产出坏地址。
+    expect(() => buildServerEndpoint('cloud.example.com/gateway')).toThrow(/host\(:port\)/);
+    expect(() => setup('wss://cloud.example.com/gateway')).toThrow(/host\(:port\)/);
   });
 });

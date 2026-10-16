@@ -47,11 +47,49 @@ describe('cloud-controller config', () => {
     expect(() => assertRuntimeConfig(missing)).toThrow(/INTERNAL_API_TOKEN/);
 
     const ok = loadConfig({
-      INTERNAL_API_TOKEN: 'tok',
+      INTERNAL_API_TOKEN: 'a-strong-internal-token-0123456789',
       K8S_NAMESPACE: 'zag-cloud',
       WORKER_IMAGE: 'worker:1',
       PUBLIC_WS_ENDPOINT: 'cc.example.com',
     } as NodeJS.ProcessEnv);
     expect(() => assertRuntimeConfig(ok)).not.toThrow();
+  });
+
+  it('assertRuntimeConfig rejects short and known-example internal tokens (问题 10)', () => {
+    const base = {
+      K8S_NAMESPACE: 'zag-cloud',
+      WORKER_IMAGE: 'worker:1',
+      PUBLIC_WS_ENDPOINT: 'cc.example.com',
+    } as NodeJS.ProcessEnv;
+
+    const short = loadConfig({ ...base, INTERNAL_API_TOKEN: 'short' } as NodeJS.ProcessEnv);
+    expect(() => assertRuntimeConfig(short)).toThrow(/at least/);
+
+    const example = loadConfig({
+      ...base,
+      INTERNAL_API_TOKEN: 'change-me-internal-token',
+    } as NodeJS.ProcessEnv);
+    expect(() => assertRuntimeConfig(example)).toThrow(/example\/default/);
+  });
+
+  it('assertRuntimeConfig rejects case/whitespace variants of known-example tokens (建议 C)', () => {
+    const base = {
+      K8S_NAMESPACE: 'zag-cloud',
+      WORKER_IMAGE: 'worker:1',
+      PUBLIC_WS_ENDPOINT: 'cc.example.com',
+    } as NodeJS.ProcessEnv;
+
+    const variants = [
+      'CHANGE-ME-INTERNAL-TOKEN',
+      '  change-me-internal-token  ',
+      'Change-Me-Internal-Token',
+      'change -me-internal-token',
+    ];
+    for (const token of variants) {
+      const cfg = loadConfig({ ...base, INTERNAL_API_TOKEN: token } as NodeJS.ProcessEnv);
+      expect(() => assertRuntimeConfig(cfg), `token=${JSON.stringify(token)}`).toThrow(
+        /example\/default/,
+      );
+    }
   });
 });

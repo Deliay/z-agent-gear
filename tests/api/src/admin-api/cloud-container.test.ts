@@ -67,6 +67,7 @@ async function forceContainerOnline(id: string): Promise<boolean> {
 
 describe('Admin Cloud Container API', () => {
   let token = '';
+  const hasMongo = Boolean(process.env.MONGODB_URI);
 
   beforeAll(async () => {
     token = await ensureAdminLogin();
@@ -123,28 +124,36 @@ describe('Admin Cloud Container API', () => {
     expect(row?.status).toBe('EXITED');
   });
 
-  it(
+  it.skipIf(!hasMongo)(
     'P0-1: online container destroy survives the shutdown grace without a false timeout',
     async () => {
       const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(START, { purpose: 'IDLE' }, token);
+      expect(started.errors).toBeUndefined();
       const id = started.data!.adminStartCloudContainer.id;
 
-      const forced = await forceContainerOnline(id);
-      if (!forced) {
-        console.warn('skip P0-1: MONGODB_URI unavailable');
-        return;
+      let destroyed = false;
+      try {
+        const forced = await forceContainerOnline(id);
+        // 显式断言，避免 MONGODB_URI 存在但连接/写入失败时静默通过
+        expect(forced).toBe(true);
+
+        const startedAt = Date.now();
+        const result = await adminGql<{ adminDestroyCloudContainer: boolean }>(DESTROY, { id }, token);
+        const elapsed = Date.now() - startedAt;
+        destroyed = true;
+
+        expect(result.errors).toBeUndefined();
+        expect(result.data!.adminDestroyCloudContainer).toBe(true);
+        // cloud-controller 对在线容器等待 shutdown 宽限期（约 10s）后才响应
+        expect(elapsed).toBeGreaterThanOrEqual(9000);
+        // admin-api 销毁专用超时（30s）内完成，未误报 CONTROL_PLANE_UNAVAILABLE
+        expect(elapsed).toBeLessThan(29000);
+      } finally {
+        // 任何早退/断言失败路径都必须兜底销毁已启动的容器，避免残留污染后续列表断言
+        if (!destroyed) {
+          await adminGql(DESTROY, { id }, token).catch(() => {});
+        }
       }
-
-      const startedAt = Date.now();
-      const destroyed = await adminGql<{ adminDestroyCloudContainer: boolean }>(DESTROY, { id }, token);
-      const elapsed = Date.now() - startedAt;
-
-      expect(destroyed.errors).toBeUndefined();
-      expect(destroyed.data!.adminDestroyCloudContainer).toBe(true);
-      // cloud-controller 对在线容器等待 shutdown 宽限期（约 10s）后才响应
-      expect(elapsed).toBeGreaterThanOrEqual(9000);
-      // admin-api 销毁专用超时（30s）内完成，未误报 CONTROL_PLANE_UNAVAILABLE
-      expect(elapsed).toBeLessThan(29000);
     },
     40000,
   );

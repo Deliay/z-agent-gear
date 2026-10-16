@@ -81,7 +81,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
             platform: payload.platform,
             lastIp: socket.handshake.address,
             lastHeartbeatAt: new Date(),
-            name: hostname,
+            $setOnInsert: { name: hostname },
           },
           { upsert: true, new: true },
         );
@@ -506,7 +506,15 @@ export function createSocketIOServer(io: SocketIOServer): void {
       body: unknown;
     }) => {
       if (!authenticated || !socket.data.controllerId) return;
-      mcpRelayService.handleMcpRequest(socket, payload);
+      if (!payload || !payload.requestId || !payload.sessionId || !payload.serverName) {
+        console.error('Invalid mcp:request payload');
+        socket.emit('mcp:response', { requestId: payload?.requestId ?? 'unknown', status: 400, body: { error: 'Invalid payload' } });
+        return;
+      }
+      mcpRelayService.handleMcpRequest(socket, payload).catch((err) => {
+        console.error(`mcp:request handler error for ${payload.requestId}:`, err);
+        socket.emit('mcp:response', { requestId: payload.requestId, status: 500, body: { error: 'Internal server error' } });
+      });
     });
 
     socket.on('disconnect', async () => {
