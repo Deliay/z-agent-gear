@@ -1,6 +1,6 @@
 {
   "name": "agent-gear",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "repository": {
     "type": "git",
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^25.8.0",
     "@vitest/coverage-v8": "^4.1.6",
+    "socket.io": "^4.8.4",
     "tsx": "^4.22.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"

@@ -83,6 +83,62 @@ services:
     networks:
       - "aspire"
     restart: "unless-stopped"
+  cloud-controller:
+    image: "${CLOUD_CONTROLLER_IMAGE}"
+    environment:
+      NODE_ENV: "production"
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      K8S_NAMESPACE: "zag-cloud"
+      WORKER_IMAGE: "${WORKER_IMAGE}"
+      PUBLIC_WS_ENDPOINT: "${PUBLIC_WS_ENDPOINT}"
+      K8S_ENABLED: "true"
+      ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      MONGODB_HOST: "mongodb"
+      MONGODB_PORT: "27017"
+      MONGODB_USERNAME: "admin"
+      MONGODB_PASSWORD: "${MONGODB_PASSWORD}"
+      MONGODB_AUTHENTICATIONDATABASE: "admin"
+      MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
+      MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      PORT: "8003"
+    ports:
+      - "8003:8003"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  admin-api:
+    image: "${ADMIN_API_IMAGE}"
+    environment:
+      NODE_ENV: "production"
+      ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET}"
+      CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
+      ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD}"
+      CORS_ORIGIN: "${CORS_ORIGIN}"
+      CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      MONGODB_HOST: "mongodb"
+      MONGODB_PORT: "27017"
+      MONGODB_USERNAME: "admin"
+      MONGODB_PASSWORD: "${MONGODB_PASSWORD}"
+      MONGODB_AUTHENTICATIONDATABASE: "admin"
+      MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
+      MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      PORT: "8002"
+    ports:
+      - "8002:8002"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  admin-web:
+    image: "${ADMIN_WEB_IMAGE}"
+    environment:
+      ADMIN_API_URL: "${ADMIN_API_URL}"
+    ports:
+      - "80:80"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
 networks:
   aspire:
     driver: "bridge"

@@ -17,6 +17,7 @@ import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
 import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
+import * as migration004 from './migrations/004-provider-scope-name-index.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
@@ -67,7 +68,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001, migration002, migration003]);
+    await runMigrations([migration001, migration002, migration003, migration004]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }

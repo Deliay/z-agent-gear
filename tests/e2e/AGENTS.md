@@ -42,10 +42,14 @@ aspire describe controller-api
 
 ```bash
 BASE_URL=http://localhost:35615 \
+ADMIN_API_URL=http://localhost:10003/graphql \
+ADMIN_WEB_URL=http://localhost:<admin-web-port> \
 API_URL=http://localhost:10001/graphql \
 CONTROLLER_API_URL=http://localhost:33237 \
 npx playwright test
 ```
+
+> admin 套件（`admin-*.spec.ts`）需要 admin-web 与 admin-api：`aspire start && aspire wait admin-web admin-api agent-api`。
 
 ### 4. 重新运行测试
 
@@ -56,8 +60,20 @@ npx playwright test
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `BASE_URL` | 前端应用地址 | `http://localhost:35273` |
+| `ADMIN_WEB_URL` | admin-web 地址（admin 套件使用） | 回落到 `BASE_URL` |
 | `API_URL` | agent-api GraphQL 地址 | `http://localhost:4000/graphql` |
+| `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
+| `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
+
+> 所有套件共享同一套服务与 Mongo：admin 套件会轮换共享管理员（admin）口令、清理全局供应商，因此**必须在 `playwright.config.ts` 中强制 `workers: 1`、`fullyParallel: false` 串行执行**（已写死，勿覆盖为并发），否则用例互相污染：
+
+```bash
+ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \
+  npx playwright test admin-*.spec.ts --workers=1
+```
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
 
@@ -230,3 +246,45 @@ npx playwright test
 | 审批后返回结果给controller | 点击「Allow once」→ controller收到acp:permission:response |
 | 立即优先级待办触发全局弹窗 | 权限请求 → 页面显示全局通知弹窗 |
 | 审批后待办标记为已读 | 响应权限请求 → badge消失 |
+
+### Admin Auth E2E (`admin-auth.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 未登录重定向 | 访问 `/models` → `/login`（T-F3） |
+| 无注册入口 | 登录页无「注册」元素（T-F7） |
+| 登录进入后台 | 归一化密码登录 → `/models`，侧边栏可见（T-E1） |
+| 强制改密守卫 | mustChangePassword 时访问 `/base-images` → `/change-password`（T-F4/T-E2） |
+| 改密表单校验 | 长度不足/两次不一致给出提示（T-F5） |
+| 侧边栏导航/高亮 | 点击「基础镜像」「模型配置」切换（T-E6） |
+| 退出登录 | 回 `/login`（T-F6） |
+| 改密后旧密码失效 | 新密码可登录、旧密码报错（T-E3） |
+
+### Admin Model Config E2E (`admin-model-config.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 区块与空状态 | 供应商设置 / 可用模型 空状态（T-W5） |
+| 表单校验 | 空表单保存禁用（T-W1） |
+| 供应商全流程 | UI 新增全局供应商 → 同步模型 → 凭据脱敏展示 → 删除级联（T-E4/T-W1） |
+| 自定义模型 | UI 新增/删除全局自定义模型（T-W3） |
+
+### Admin Base Image E2E (`admin-base-image.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| 页面与空状态 | 「基础镜像」页空状态 |
+| CRUD + 删除确认 | UI 新建 → 列表展示 → 删除二次确认（T-W4/T-E5） |
+| 同名拒绝 | API 同名创建报错 `Base image name already exists`（T-E5） |
+
+### Admin Cloud Container E2E (`admin-cloud-container.spec.ts`)
+
+> 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行（无真实工作容器回连，容器停在 CREATING/CONNECTING）。
+
+| 测试 | 描述 |
+|------|------|
+| 页面与启动对话框 | 「云端容器」页可见；启动对话框仅 idle（T-E1/PRD 3.4） |
+| 启动 + 强制销毁 | UI 启动 idle → 列表出现 `zag-worker-*` → 强制销毁二次确认 → 状态收敛为已退出（T-E1/T-E3） |
+| T-E5 非管理员访问 | 未登录访问 `/cloud-containers` 重定向 `/login` |
+
+> 覆盖裁剪：T-E2（token 拒绝）由 `tests/api/src/cloud-controller/worker-handshake.test.ts` 覆盖；T-E4（异常退出/超时保留 `exitReason`、可强制销毁）与 T-E6（列表与 Job 对账）在 `K8S_ENABLED=false` 下无真实 Job 可对账，由 cloud-controller 单测锚定（`status-sync.test.ts` T-Y1/T-Y3/T-Y5 + reconcile、`container-service.test.ts` T-S4/T-S4b）；真实集群链路列为部署侧手工验收。

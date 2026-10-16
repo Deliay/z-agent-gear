@@ -1,0 +1,153 @@
+# cloud-controller K8s 部署示例（云Agent二期）
+#
+# 前置条件：
+#   1. 集群节点已预装 sysbox（runtimeClass `sysbox-runc`），否则工作容器 Pod 无法调度；
+#      未启用时可删除 Deployment 的 RUNTIME_CLASS_NAME 或改为可用 runtime。
+#   2. 内网 Harbor 可拉取 cloud-controller 镜像；内网 Nexus/Harbor mirror 可达。
+#   3. 已创建命名空间（下例为 zag-cloud）与 Secret（INTERNAL_API_TOKEN / MONGODB_URI）。
+#   4. RBAC 收敛：cloud-controller 仅对本命名空间的 Job 具备 get/list/watch/create/delete。
+#
+# 应用（必须先建 Secret，再 apply；manifest 不再内置任何默认令牌）：
+#   kubectl create namespace zag-cloud --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n zag-cloud create secret generic cloud-controller-secrets \
+#     --from-literal=INTERNAL_API_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=MONGODB_URI='mongodb://mongodb:27017/agent-gear'
+#   kubectl apply -f deploy/k8s/cloud-controller.yaml
+#
+# 注意：INTERNAL_API_TOKEN 必须与 admin-api 侧配置一致；切勿使用示例值或弱令牌，
+# cloud-controller 启动会拒绝已知默认令牌。
+#
+# Socket.IO engine path（重要）：`/worker` 是 Socket.IO 的 **namespace**，不是 URL 路径。
+# 引擎握手/升级的实际 HTTP 路径固定为 `/socket.io/`（见 src/services/socketio-gateway.ts 的
+# ENGINE_PATH）。因此下方 Ingress 只放行 `/socket.io`（Prefix）；若误写成 `/worker`，worker
+# 握手会打到 `/socket.io/?EIO=4...` 而被入口层 404，导致云端容器全部回连失败（问题 46）。
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloud-controller
+  namespace: zag-cloud
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloud-controller-jobs
+  namespace: zag-cloud
+rules:
+  - apiGroups: ['batch']
+    resources: ['jobs']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloud-controller-jobs
+  namespace: zag-cloud
+subjects:
+  - kind: ServiceAccount
+    name: cloud-controller
+    namespace: zag-cloud
+roleRef:
+  kind: Role
+  name: cloud-controller-jobs
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-controller
+  namespace: zag-cloud
+  labels:
+    app: cloud-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloud-controller
+  template:
+    metadata:
+      labels:
+        app: cloud-controller
+    spec:
+      serviceAccountName: cloud-controller
+      containers:
+        - name: cloud-controller
+          image: core.harbor.internal.fffdan.com/zero-tools/cloud-controller:latest
+          ports:
+            - containerPort: 8003
+          env:
+            - name: PORT
+              value: '8003'
+            - name: K8S_ENABLED
+              value: 'true'
+            - name: K8S_NAMESPACE
+              value: 'zag-cloud'
+            - name: WORKER_IMAGE
+              value: 'core.harbor.internal.fffdan.com/zero-tools/worker:latest'
+            # PUBLIC_WS_ENDPOINT 只允许 host(:port)，不得带路径；服务端会自动追加
+            # namespace `/worker`（带路径会在启动时 fail-fast）。
+            - name: PUBLIC_WS_ENDPOINT
+              value: 'cloud-controller.example.internal'
+            - name: RUNTIME_CLASS_NAME
+              value: 'sysbox-runc'
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: cloud-controller-secrets
+                  key: MONGODB_URI
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloud-controller-secrets
+                  key: INTERNAL_API_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud-controller
+  namespace: zag-cloud
+spec:
+  selector:
+    app: cloud-controller
+  ports:
+    - name: http
+      port: 8003
+      targetPort: 8003
+---
+# 对外暴露 wss：仅放行 Socket.IO engine path `/socket.io`（Prefix），worker 的 namespace
+# `/worker` 存在于协议握手中、无需（也无法）在 Ingress 层路由。
+# 内部管理 REST（/internal/*）与 /health 不对外暴露，仅集群内经上面的 ClusterIP Service 访问。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cloud-controller
+  namespace: zag-cloud
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '3600'
+    nginx.ingress.kubernetes.io/websocket-services: cloud-controller
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cloud-controller.example.internal
+      http:
+        paths:
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: cloud-controller
+                port:
+                  number: 8003

@@ -7,6 +7,22 @@ enum CredentialType {
   api_key
 }
 
+# 配置归属：user 为用户侧配置，global 为管理后台全局配置。
+# global 且 isEnabled 的模型对所有用户可用。
+enum ConfigScope {
+  user
+  global
+}
+
+# Model.provider 摘要：不含 endpoint / 凭据等敏感字段，用户侧可见。
+type ProviderSummary {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+}
+
 type Provider {
   id: ID!
   name: String!
@@ -15,6 +31,7 @@ type Provider {
   credentialType: CredentialType!
   credentialValue: String!
   isEnabled: Boolean!
+  scope: ConfigScope!
   models: [Model!]!
   createdAt: String!
   updatedAt: String!
@@ -23,11 +40,14 @@ type Provider {
 type Model {
   id: ID!
   providerId: ID!
-  provider: Provider!
+  # provider 可为空：providerId 悬空（关联供应商已不存在）时返回 null，
+  # 避免非空违规导致整条 models 查询失败。
+  provider: ProviderSummary
   name: String!
   isCustom: Boolean!
   isEnabled: Boolean!
   sortOrder: Int!
+  scope: ConfigScope!
   createdAt: String!
   updatedAt: String!
 }

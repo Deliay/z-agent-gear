@@ -8,6 +8,22 @@ export const providerTypeDefs = `#graphql
     api_key
   }
 
+  # 配置归属：user 为用户侧配置，global 为管理后台全局配置。
+  # global 且 isEnabled 的模型对所有用户可用。
+  enum ConfigScope {
+    user
+    global
+  }
+
+  # Model.provider 摘要：不含 endpoint / 凭据等敏感字段，用户侧可见。
+  type ProviderSummary {
+    id: ID!
+    name: String!
+    type: ProviderType!
+    isEnabled: Boolean!
+    scope: ConfigScope!
+  }
+
   type Provider {
     id: ID!
     name: String!
@@ -16,6 +32,7 @@ export const providerTypeDefs = `#graphql
     credentialType: CredentialType!
     credentialValue: String!
     isEnabled: Boolean!
+    scope: ConfigScope!
     models: [Model!]!
     createdAt: String!
     updatedAt: String!

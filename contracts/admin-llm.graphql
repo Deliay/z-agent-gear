@@ -1,0 +1,96 @@
+# 全局供应商与模型契约（云控制器管理后台一期）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+#
+# 本契约复用 `llm.graphql` 的 Provider/Model/ProviderInput/CustomModelInput/
+# ProviderBatchPayload 语义，差异是所有操作作用于 `scope = 'global'` 的数据：
+#   - 保存供应商前先调供应商 API 校验连通性（失败不保存）
+#   - 凭据 AES-256-GCM 加密存储、脱敏返回：长度 > 8 时为「前 3 后 4」，
+#     长度 ≤ 8 时整体掩码为 `****`（避免短凭据被拼出近似完整值）
+#   - 删除供应商级联删除其全部模型（含自定义模型）；禁用供应商级联禁用其模型
+#   - 更新供应商时若连通性参数（凭据 / type / endpoint）变化则重同步模型：
+#     按 `(providerId, name)` upsert 重拉取的 API 同步模型（`isCustom = false`）并删除不再返回的
+#     陈旧同步模型，保留用户自定义模型（`isCustom = true`）；当自定义模型与重拉取模型同名时，
+#     保留自定义模型并跳过该同名 API 模型（不覆盖、不触发唯一索引冲突）
+#   - `name` 在同 scope 内唯一
+
+enum ProviderType {
+  OpenAI
+  Anthropic
+}
+
+enum CredentialType {
+  api_key
+}
+
+enum ConfigScope {
+  user
+  global
+}
+
+type Provider {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType!
+  credentialValue: String!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+  models: [Model!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Model {
+  id: ID!
+  providerId: ID!
+  # provider 可为空：providerId 悬空（关联供应商已不存在）时返回 null，
+  # 避免非空违规导致整条 adminModels 查询失败（与 llm.graphql 的 Model.provider 对齐）。
+  provider: Provider
+  name: String!
+  isCustom: Boolean!
+  isEnabled: Boolean!
+  sortOrder: Int!
+  scope: ConfigScope!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ProviderInput {
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType! = api_key
+  credentialValue: String!
+}
+
+input CustomModelInput {
+  providerId: ID!
+  name: String!
+}
+
+type ProviderBatchPayload {
+  successCount: Int!
+}
+
+type Query {
+  adminProviders: [Provider!]! # 仅 scope=global
+  adminModels: [Model!]! # 仅 scope=global
+  adminModelsByProvider(providerId: ID!): [Model!]!
+}
+
+type Mutation {
+  createGlobalProvider(input: ProviderInput!): Provider!
+  updateGlobalProvider(id: ID!, input: ProviderInput!): Provider!
+  deleteGlobalProvider(id: ID!): Boolean!
+  toggleGlobalProvider(id: ID!): Provider!
+  batchEnableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDisableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  batchDeleteGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
+  createGlobalCustomModel(input: CustomModelInput!): Model!
+  deleteGlobalCustomModel(id: ID!): Model!
+  toggleGlobalModel(id: ID!): Model!
+  updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
+}
