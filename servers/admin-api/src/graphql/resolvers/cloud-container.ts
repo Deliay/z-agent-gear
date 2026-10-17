@@ -8,6 +8,7 @@ import {
 } from '../../services/cloud-controller-client.js';
 import { findStoredCloudContainers } from '../../models/cloud-container.js';
 import { cloudWorkloadService, type CloudWorkloadDTO } from '../../services/cloud-workload.js';
+import { resolveWorkloadPlan } from '../../services/workload-plan.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
 
@@ -111,7 +112,11 @@ export const cloudContainerResolvers = {
   Mutation: {
     adminStartCloudContainer: async (
       _parent: unknown,
-      args: { purpose: string; workloadIds?: string[] },
+      args: {
+        purpose: string;
+        workloadIds?: string[];
+        workloads?: Array<{ workloadId: string; params?: unknown }>;
+      },
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
@@ -119,9 +124,47 @@ export const cloudContainerResolvers = {
       if (args.purpose !== 'IDLE') {
         throw new GraphQLError('该任务类型暂未开放');
       }
+
+      const workloadIds = args.workloadIds ?? [];
+      const workloads = args.workloads ?? [];
+      // workloadIds 与 workloads 二选一（裁决 13）
+      if (workloadIds.length > 0 && workloads.length > 0) {
+        throw new GraphQLError('workloadIds and workloads cannot both be provided');
+      }
+
       try {
-        // 缺省/空数组行为与现状完全一致（裁决 20）；透传选择顺序，由 cloud-controller 校验存在性/≤10
-        return await cloudControllerClient.start(args.purpose, args.workloadIds ?? []);
+        if (workloads.length > 0) {
+          const selectedIds = workloads.map((selection) => String(selection.workloadId));
+          const seen = new Set<string>();
+          for (const id of selectedIds) {
+            if (seen.has(id)) throw new GraphQLError('duplicate workload selection');
+            seen.add(id);
+          }
+
+          // 一次批量查询全部定义快照（含依赖链目标）→ 纯函数展开
+          // （显式参数优先、隐式依赖用默认值、去重、拓扑排序）
+          const definitions = await cloudWorkloadService.list();
+          const plan = resolveWorkloadPlan(
+            workloads.map((selection) => ({
+              workloadId: String(selection.workloadId),
+              params:
+                selection.params && typeof selection.params === 'object' && !Array.isArray(selection.params)
+                  ? (selection.params as Record<string, unknown>)
+                  : {},
+            })),
+            definitions.map((definition) => ({
+              id: definition.id,
+              paramSchema: definition.paramSchema,
+              dependsOnWorkloadIds: definition.dependsOnWorkloadIds,
+            })),
+          );
+          const derivedIds = plan.map((item) => item.workloadId);
+          return await cloudControllerClient.start(args.purpose, plan, derivedIds);
+        }
+
+        // 兼容旧调用：仅传 workloadIds，不携带 workloadPlan，由 cloud-controller 兜底展开；
+        // 缺省/空数组行为与现状完全一致（裁决 20）
+        return await cloudControllerClient.start(args.purpose, undefined, workloadIds);
       } catch (err) {
         throw toGraphQLError(err);
       }

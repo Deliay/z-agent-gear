@@ -280,6 +280,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 ### Admin Cloud Container E2E (`admin-cloud-container.spec.ts`)
 
 > 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行（无真实工作容器回连，容器停在 CREATING/CONNECTING）。
+> T-E15 通过直写共享 Mongo（`cloudworkloadlogs`）构造参数快照，需要 `MONGODB_URI`（缺省时 `test.skip` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
@@ -287,6 +288,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 启动 + 强制销毁 | UI 启动 idle → 列表出现 `zag-worker-*` → 强制销毁二次确认 → 状态收敛为已退出（T-E1/T-E3） |
 | 工作负载列与日志空态 | 启动未挂载容器 → 「工作负载」列表头可见且行为 `-` → 打开「工作负载日志」展现「暂无执行记录」空态 |
 | T-E5 非管理员访问 | 未登录访问 `/cloud-containers` 重定向 `/login` |
+| T-E14 启动参数与依赖提示 | 选中带参数工作负载 → 参数表单预填默认值；未显式选择依赖时提示「将自动初始化 XXX（默认参数）」；初始化顺序预览（隐式依赖带「隐式」标记）；提交后容器行展示展开后的挂载顺序 |
+| T-E15 日志参数快照 | 直写 `cloudworkloadlogs.params` → 打开日志对话框展示「参数快照」（`version: 20` / `package_manager: ["pnpm"]`） |
 
 > 覆盖裁剪：T-E2（token 拒绝）由 `tests/api/src/cloud-controller/worker-handshake.test.ts` 覆盖；T-E4（异常退出/超时保留 `exitReason`、可强制销毁）与 T-E6（列表与 Job 对账）在 `K8S_ENABLED=false` 下无真实 Job 可对账，由 cloud-controller 单测锚定（`status-sync.test.ts` T-Y1/T-Y3/T-Y5 + reconcile、`container-service.test.ts` T-S4/T-S4b）；真实集群链路列为部署侧手工验收。
 
@@ -294,7 +297,6 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 > 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行。
 > T-E9/T-E10 通过直写共享 Mongo（`cloudcontainers` / `cloudworkloadlogs`）构造 `INITIALIZING`/`currentWorkloadName` 与执行记录，需要 `MONGODB_URI`（缺省时 `test.skip` 跳过）。
-
 | 测试 | 描述 |
 |------|------|
 | T-E7 CRUD | 「工作负载」页新建（init+post）→ 编辑改名 → 删除二次确认后列表移除 |
@@ -303,5 +305,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E9 初始化中 | 直写 Mongo 置 `INITIALIZING` + `currentWorkloadName` → 页面展示「初始化中」徽章 + 当前脚本名 |
 | T-E10 日志视图 | 直写 `cloudworkloadlogs` → 打开日志对话框展示阶段（初始化/清理）、状态（成功/失败）、脚本快照与输出，切换记录同步更新 |
 | T-E11 非管理员 | 未登录访问 `/cloud-workloads` 重定向 `/login` |
+| T-E12 参数配置全流程 | 新建工作负载配置四种参数类型（下拉单选/下拉多选/文本/布尔）与默认值 → 保存 → 列表展示参数数量（4）→ 编辑回显类型/默认值 |
+| T-E12 非法值拦截 | 非法 key（数字开头）与下拉类型无可选项时给出提示且「保存」禁用 |
+| T-E13 多依赖 | 勾选多个依赖 → 展示「已选依赖（按初始化顺序）」→ 列表展示依赖名称；依赖环 → 「检测到依赖环」提示且「保存」禁用 |
+| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire 与「预制」徽章（恰 4 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
 
 > 覆盖裁剪（计划裁决 17）：Aspire 以 `K8S_ENABLED=false` 启动、无真实工作容器回连，`INITIALIZING` 与脚本执行链路改由 cloud-controller/agent-controller 单测与 tests/api（直写 Mongo + 内部 API/GraphQL 查询）覆盖；E2E 只覆盖 CRUD、启动多选、状态/日志展示。真实集群链路（init/post 下发执行、超时保护、旧 worker 兼容、镜像重建）列部署侧手工验收。

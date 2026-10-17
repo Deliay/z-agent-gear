@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { adminGql, ensureAdminLogin } from './helpers.js';
 
@@ -63,6 +63,74 @@ const CREATE_WORKLOAD = `
 `;
 const DELETE_WORKLOAD = `mutation($id: ID!) { adminDeleteCloudWorkload(id: $id) }`;
 
+// 工作负载一期：`workloads` 选择入参（含参数、隐式依赖展开）
+const START_SELECTION = `
+  mutation AdminStartCloudContainerSelection($purpose: CloudContainerPurpose!, $workloads: [CloudWorkloadSelectionInput!]) {
+    adminStartCloudContainer(purpose: $purpose, workloads: $workloads) {
+      id
+      name
+      status
+      purpose
+      workloads { id name }
+      currentWorkloadName
+    }
+  }
+`;
+
+const START_BOTH = `
+  mutation AdminStartCloudContainerBoth($purpose: CloudContainerPurpose!, $workloadIds: [ID!], $workloads: [CloudWorkloadSelectionInput!]) {
+    adminStartCloudContainer(purpose: $purpose, workloadIds: $workloadIds, workloads: $workloads) {
+      id
+    }
+  }
+`;
+
+const LOGS = `
+  query AdminCloudContainerWorkloadLogs($containerId: ID!) {
+    adminCloudContainerWorkloadLogs(containerId: $containerId) {
+      id
+      workloadName
+      params
+    }
+  }
+`;
+
+interface StoredPlanEntry {
+  workloadId: string;
+  params: Record<string, unknown>;
+  implicit: boolean;
+}
+
+/**
+ * 直读 `cloudcontainers` 落库文档，返回派生 `workloadIds` 与 `workloadPlan`（含参数/隐式标记）。
+ * 需要 MONGODB_URI；缺省返回 null，调用方 skipIf 跳过。
+ */
+async function readStoredPlan(
+  containerId: string,
+): Promise<{ workloadIds: string[]; plan: StoredPlanEntry[] } | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  const db = mongoose.connection.db;
+  if (!db) return null;
+  const doc = await db
+    .collection('cloudcontainers')
+    .findOne({ _id: new mongoose.Types.ObjectId(containerId) });
+  const plan = (doc?.workloadPlan ?? []) as Array<{
+    workloadId: unknown;
+    params?: Record<string, unknown>;
+    implicit?: unknown;
+  }>;
+  return {
+    workloadIds: ((doc?.workloadIds ?? []) as unknown[]).map(String),
+    plan: plan.map((entry) => ({
+      workloadId: String(entry.workloadId),
+      params: entry.params ?? {},
+      implicit: entry.implicit === true,
+    })),
+  };
+}
+
 // 说明：控制面（cloud-controller）由 Aspire 以 K8S_ENABLED=false 启动（InMemoryK8sClient）。
 // 因此 start 后容器处于 CREATING/CONNECTING（无真实工作容器回连），destroy 幂等返回 true。
 
@@ -86,6 +154,51 @@ describe('Admin Cloud Container API', () => {
   beforeAll(async () => {
     token = await ensureAdminLogin();
   });
+
+  const cleanupWorkloadIds: string[] = [];
+  const cleanupContainerIds: string[] = [];
+
+  afterEach(async () => {
+    while (cleanupContainerIds.length > 0) {
+      await adminGql(DESTROY, { id: cleanupContainerIds.pop()! }, token).catch(() => {});
+    }
+    while (cleanupWorkloadIds.length > 0) {
+      await adminGql(DELETE_WORKLOAD, { id: cleanupWorkloadIds.pop()! }, token).catch(() => {});
+    }
+  });
+
+  function uniqueName(prefix: string): string {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  }
+
+  interface CreatedWorkload {
+    id: string;
+    name: string;
+  }
+
+  async function createWorkload(input: {
+    name: string;
+    initScript?: string | null;
+    postScript?: string | null;
+    paramSchema?: Array<{
+      key: string;
+      label: string;
+      type: string;
+      options?: string[];
+      defaultValue: unknown;
+    }>;
+    dependsOnWorkloadIds?: string[];
+  }): Promise<CreatedWorkload> {
+    const res = await adminGql<{ adminCreateCloudWorkload: CreatedWorkload }>(
+      CREATE_WORKLOAD,
+      { input },
+      token,
+    );
+    expect(res.errors, JSON.stringify(res.errors)).toBeUndefined();
+    const workload = res.data!.adminCreateCloudWorkload;
+    cleanupWorkloadIds.push(workload.id);
+    return workload;
+  }
 
   it('T-IA5: rejects anonymous list / start / destroy', async () => {
     const list = await adminGql(LIST);
@@ -231,5 +344,225 @@ describe('Admin Cloud Container API', () => {
       }
     },
     40000,
+  );
+
+  // -------------------------------------------------------------------------
+  // 工作负载一期：adminStartCloudContainer(workloads)（T-WP1~T-WP7 / T-W12）
+  // -------------------------------------------------------------------------
+
+  it.skipIf(!hasMongo)(
+    'T-IA10: expands implicit dependencies in topological order with default params',
+    async () => {
+      const dep = await createWorkload({
+        name: uniqueName('sel-dep'),
+        initScript: 'echo dep',
+        paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+      });
+      const parent = await createWorkload({
+        name: uniqueName('sel-parent'),
+        initScript: 'echo parent',
+        dependsOnWorkloadIds: [dep.id],
+      });
+
+      const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(
+        START_SELECTION,
+        { purpose: 'IDLE', workloads: [{ workloadId: parent.id }] },
+        token,
+      );
+      expect(started.errors, JSON.stringify(started.errors)).toBeUndefined();
+      const container = started.data!.adminStartCloudContainer;
+      cleanupContainerIds.push(container.id);
+
+      // 依赖先于依赖方（后序 DFS），且隐式依赖只出现一次
+      expect(container.workloads?.map((w) => w.id)).toEqual([dep.id, parent.id]);
+
+      const stored = await readStoredPlan(container.id);
+      expect(stored).not.toBeNull();
+      expect(stored!.workloadIds).toEqual([dep.id, parent.id]);
+      expect(stored!.plan).toEqual([
+        { workloadId: dep.id, params: { version: '22' }, implicit: true },
+        { workloadId: parent.id, params: {}, implicit: false },
+      ]);
+    },
+  );
+
+  it.skipIf(!hasMongo)(
+    'T-IA11: explicit selection overrides implicit defaults (dedupe, single occurrence)',
+    async () => {
+      const dep = await createWorkload({
+        name: uniqueName('sel-ov-dep'),
+        initScript: 'echo dep',
+        paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+      });
+      const parent = await createWorkload({
+        name: uniqueName('sel-ov-parent'),
+        initScript: 'echo parent',
+        dependsOnWorkloadIds: [dep.id],
+      });
+
+      // 同时显式选择依赖方与依赖：依赖只执行一次，且使用显式参数（覆盖默认值）
+      const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(
+        START_SELECTION,
+        {
+          purpose: 'IDLE',
+          workloads: [{ workloadId: parent.id }, { workloadId: dep.id, params: { version: '20' } }],
+        },
+        token,
+      );
+      expect(started.errors, JSON.stringify(started.errors)).toBeUndefined();
+      const container = started.data!.adminStartCloudContainer;
+      cleanupContainerIds.push(container.id);
+
+      expect(container.workloads?.map((w) => w.id)).toEqual([dep.id, parent.id]);
+
+      const stored = await readStoredPlan(container.id);
+      expect(stored!.plan).toEqual([
+        { workloadId: dep.id, params: { version: '20' }, implicit: false },
+        { workloadId: parent.id, params: {}, implicit: false },
+      ]);
+    },
+  );
+
+  it('T-IA12: rejects an expanded plan exceeding 10 workloads', async () => {
+    // 链式依赖 c1 <- c2 <- ... <- c11，仅显式选择尾节点，展开后为 11 条（> 10）
+    let previous: CreatedWorkload | null = null;
+    let tail: CreatedWorkload | null = null;
+    for (let i = 0; i < 11; i += 1) {
+      const workload = await createWorkload({
+        name: uniqueName(`sel-chain-${i}`),
+        initScript: 'echo chain',
+        dependsOnWorkloadIds: previous ? [previous.id] : [],
+      });
+      previous = workload;
+      tail = workload;
+    }
+
+    const started = await adminGql(START_SELECTION, { purpose: 'IDLE', workloads: [{ workloadId: tail!.id }] }, token);
+    expect(started.errors).toBeDefined();
+    expect(started.errors![0].message).toContain('expanded workloads exceed 10');
+  });
+
+  it('T-IA13: rejects unknown parameter and invalid parameter value', async () => {
+    const text = await createWorkload({
+      name: uniqueName('sel-text'),
+      initScript: 'echo',
+      paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+    });
+    const unknown = await adminGql(
+      START_SELECTION,
+      { purpose: 'IDLE', workloads: [{ workloadId: text.id, params: { nope: 'x' } }] },
+      token,
+    );
+    expect(unknown.errors?.[0].message).toBe('unknown parameter: nope');
+
+    const select = await createWorkload({
+      name: uniqueName('sel-select'),
+      initScript: 'echo',
+      paramSchema: [{ key: 'mode', label: '模式', type: 'SELECT', options: ['a', 'b'], defaultValue: 'a' }],
+    });
+    const invalid = await adminGql(
+      START_SELECTION,
+      { purpose: 'IDLE', workloads: [{ workloadId: select.id, params: { mode: 'c' } }] },
+      token,
+    );
+    expect(invalid.errors?.[0].message).toBe('invalid value for parameter mode');
+  });
+
+  it('T-IA14: rejects duplicate workload selection', async () => {
+    const workload = await createWorkload({ name: uniqueName('sel-dup'), initScript: 'echo' });
+    const started = await adminGql(
+      START_SELECTION,
+      { purpose: 'IDLE', workloads: [{ workloadId: workload.id }, { workloadId: workload.id }] },
+      token,
+    );
+    expect(started.errors?.[0].message).toBe('duplicate workload selection');
+  });
+
+  it('T-IA15: rejects providing workloadIds and workloads together', async () => {
+    const workload = await createWorkload({ name: uniqueName('sel-both'), initScript: 'echo' });
+    const started = await adminGql(
+      START_BOTH,
+      { purpose: 'IDLE', workloadIds: [workload.id], workloads: [{ workloadId: workload.id }] },
+      token,
+    );
+    expect(started.errors?.[0].message).toBe('workloadIds and workloads cannot both be provided');
+  });
+
+  it('T-IA16: rejects an unknown explicit workload selection', async () => {
+    const unknownId = new mongoose.Types.ObjectId().toString();
+    const started = await adminGql(
+      START_SELECTION,
+      { purpose: 'IDLE', workloads: [{ workloadId: unknownId }] },
+      token,
+    );
+    expect(started.errors?.[0].message).toBe('workload not found');
+  });
+
+  it('T-IA17: rejects a dependency removed after it was configured', async () => {
+    const dep = await createWorkload({ name: uniqueName('sel-gone-dep'), initScript: 'echo' });
+    const parent = await createWorkload({
+      name: uniqueName('sel-gone-parent'),
+      initScript: 'echo',
+      dependsOnWorkloadIds: [dep.id],
+    });
+
+    // 删除依赖后启动：定义快照不再包含依赖 → 运行时兜底报依赖不存在
+    await adminGql(DELETE_WORKLOAD, { id: dep.id }, token);
+
+    const started = await adminGql(
+      START_SELECTION,
+      { purpose: 'IDLE', workloads: [{ workloadId: parent.id }] },
+      token,
+    );
+    expect(started.errors?.[0].message).toContain('dependency workload not found');
+  });
+
+  it.skipIf(!hasMongo)(
+    'T-IA18: returns the parameter snapshot in workload logs',
+    async () => {
+      const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(
+        START,
+        { purpose: 'IDLE' },
+        token,
+      );
+      expect(started.errors).toBeUndefined();
+      const container = started.data!.adminStartCloudContainer;
+      cleanupContainerIds.push(container.id);
+
+      const uri = process.env.MONGODB_URI!;
+      if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+      const db = mongoose.connection.db!;
+      const containerId = new mongoose.Types.ObjectId(container.id);
+      const workloadId = new mongoose.Types.ObjectId();
+      const now = new Date();
+      await db.collection('cloudworkloadlogs').insertOne({
+        containerId,
+        workloadId,
+        workloadName: 'with-params',
+        phase: 'init',
+        status: 'success',
+        script: 'echo params',
+        params: { version: '20', package_manager: ['pnpm'] },
+        exitCode: 0,
+        log: '',
+        startedAt: now,
+        finishedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      try {
+        const logs = await adminGql<{
+          adminCloudContainerWorkloadLogs: Array<{ workloadName: string; params: Record<string, unknown> }>;
+        }>(LOGS, { containerId: container.id }, token);
+        expect(logs.errors, JSON.stringify(logs.errors)).toBeUndefined();
+        expect(logs.data!.adminCloudContainerWorkloadLogs[0].params).toEqual({
+          version: '20',
+          package_manager: ['pnpm'],
+        });
+      } finally {
+        await db.collection('cloudworkloadlogs').deleteMany({ containerId });
+      }
+    },
   );
 });

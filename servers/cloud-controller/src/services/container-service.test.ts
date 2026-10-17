@@ -419,6 +419,74 @@ describe('ContainerService workload state machine', () => {
     expect((await repo.findById(plain.id))?.workloadIds).toEqual([]);
   });
 
+  it('T-CC1: start 携带 workloadPlan → 落库 plan 且 workloadIds 由 plan 派生保序', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start('idle', null, [], [
+      { workloadId: 'dep', params: {}, implicit: true },
+      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false },
+    ]);
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.workloadPlan).toEqual([
+      { workloadId: 'dep', params: {}, implicit: true },
+      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false },
+    ]);
+    // workloadIds 由 plan 派生（保序），兼容旧版读取
+    expect(stored?.workloadIds).toEqual(['dep', 'app']);
+    expect(created.status).toBe('connecting');
+  });
+
+  it('T-CC1b: plan 与 workloadIds 同时下发时以 plan 为准；plan 派生时去重', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start('idle', null, ['legacy'], [
+      { workloadId: 'a', params: {}, implicit: false },
+      { workloadId: 'a', params: {}, implicit: false },
+      { workloadId: 'b', params: {}, implicit: true },
+    ]);
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.workloadIds).toEqual(['a', 'b']);
+    expect(stored?.workloadPlan).toHaveLength(3);
+  });
+
+  it('T-CC2: start 仅携带 workloadIds → 行为与现状一致（去重保序，plan 为空）', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start('idle', null, ['b', 'a', 'b']);
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.workloadIds).toEqual(['b', 'a']);
+    expect(stored?.workloadPlan).toEqual([]);
+
+    const plain = await service.start('idle');
+    expect((await repo.findById(plain.id))?.workloadPlan).toEqual([]);
+  });
+
+  it('T-CC2b: deriveWorkloadIdsFromPlan=false → workloadIds 按选择顺序，plan 仅用于执行', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start(
+      'idle',
+      null,
+      ['legacy'],
+      [
+        { workloadId: 'dep', params: {}, implicit: true },
+        { workloadId: 'legacy', params: {}, implicit: false },
+      ],
+      { deriveWorkloadIdsFromPlan: false },
+    );
+
+    const stored = await repo.findById(created.id);
+    // 契约 A.2.2：仅 workloadIds 的旧版请求按选择顺序落库（不含隐式依赖）
+    expect(stored?.workloadIds).toEqual(['legacy']);
+    expect(stored?.workloadPlan).toEqual([
+      { workloadId: 'dep', params: {}, implicit: true },
+      { workloadId: 'legacy', params: {}, implicit: false },
+    ]);
+  });
+
   it('T-CS2: markInitializing 写 currentWorkloadName，markOnline/markConnecting 清空', async () => {
     const { repo, service } = setup();
     const created = await service.start('idle');

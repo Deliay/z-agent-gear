@@ -9,6 +9,8 @@ import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateAdmin } from './middleware/auth.js';
 import { clientIpFrom } from './middleware/client-ip.js';
 import { seedAdmin } from './services/auth.js';
+import { runMigrations } from './migrations/runner.js';
+import * as migration001 from './migrations/001-preset-workloads.js';
 
 const app = express();
 
@@ -59,6 +61,13 @@ async function start() {
   assertRuntimeConfig();
 
   await connectWithRetry();
+
+  // 一次性预制工作负载（admin_migrations 账本）：失败只记录日志、不阻断启动，下次启动按未完成重试
+  try {
+    await runMigrations([migration001]);
+  } catch (err) {
+    console.error('[admin-api] runMigrations failed (non-fatal):', err);
+  }
 
   // 管理员种子失败必须让启动失败：否则服务「健康」但无法登录，且不会再补种
   await seedAdmin();

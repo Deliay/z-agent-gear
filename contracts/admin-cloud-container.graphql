@@ -61,10 +61,19 @@ type Query {
 
 type Mutation {
   # 启动一个工作容器；本期 purpose 仅支持 IDLE。
-  # workloadIds 可选：缺省或空数组行为与现状完全一致（不挂载工作负载，回连后直接 ONLINE）；
-  # 传入时按数组顺序挂载，服务端校验存在/数组长度（去重前）≤10/去重保序，非法返回错误
-  # （内部 API 400 INVALID_WORKLOAD）。
-  adminStartCloudContainer(purpose: CloudContainerPurpose!, workloadIds: [ID!]): CloudContainer!
+  # workloadIds 与 workloads 二选一，同时非空返回错误
+  # `workloadIds and workloads cannot both be provided`：
+  # - workloadIds（兼容旧调用）：缺省或空数组行为与现状完全一致（不挂载工作负载，回连后直接 ONLINE）；
+  #   传入时按数组顺序挂载，去重保序，等价于所有工作负载使用默认参数；服务端校验存在/数组长度
+  #   （去重前）≤10，非法返回错误（内部 API 400 INVALID_WORKLOAD）。
+  # - workloads（新调用）：每项携带 `params`（缺省字段使用默认值）；服务端展开隐式依赖、去重、
+  #   按拓扑序排序并归一参数后下发；展开后超过 10 个返回 `expanded workloads exceed 10`；
+  #   重复 `workloadId` 返回 `duplicate workload selection`；依赖不存在返回 `dependency workload not found`。
+  adminStartCloudContainer(
+    purpose: CloudContainerPurpose!
+    workloadIds: [ID!]
+    workloads: [CloudWorkloadSelectionInput!]
+  ): CloudContainer!
   # 强制销毁容器（幂等：终态容器重复调用返回 true）。
   # 注意：在线容器需下发 shutdown 并等待宽限期（无清理脚本约 10s；有清理脚本时还需先执行 post 批次，
   # 默认预算 90s + 10s 宽限）后才完成，调用方应使用大于宽限期的超时（默认 180s）。

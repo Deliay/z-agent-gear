@@ -45,7 +45,18 @@ export const cloudContainerTypeDefs = `#graphql
   }
 
   extend type Mutation {
-    adminStartCloudContainer(purpose: CloudContainerPurpose!, workloadIds: [ID!]): CloudContainer!
+    # 启动一个工作容器；本期 purpose 仅支持 IDLE。
+    # workloadIds 与 workloads 二选一，同时非空返回错误
+    # "workloadIds and workloads cannot both be provided"：
+    # - workloadIds（兼容旧调用）：等价于所有工作负载使用默认参数；
+    # - workloads（新调用）：每项携带 params（缺省字段使用默认值），服务端展开隐式依赖、
+    #   去重、按拓扑序排序并归一参数后下发（展开后 >10 → "expanded workloads exceed 10"，
+    #   重复 → "duplicate workload selection"，依赖不存在 → "dependency workload not found"）。
+    adminStartCloudContainer(
+      purpose: CloudContainerPurpose!
+      workloadIds: [ID!]
+      workloads: [CloudWorkloadSelectionInput!]
+    ): CloudContainer!
     adminDestroyCloudContainer(id: ID!): Boolean!
   }
 `;

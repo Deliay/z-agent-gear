@@ -15,7 +15,7 @@ vi.mock('../../models/cloud-container.js', () => ({
 }));
 
 vi.mock('../../services/cloud-workload.js', () => ({
-  cloudWorkloadService: { getByIds: vi.fn() },
+  cloudWorkloadService: { getByIds: vi.fn(), list: vi.fn() },
 }));
 
 import {
@@ -195,15 +195,15 @@ describe('cloudContainerResolvers', () => {
       (cloudControllerClient.start as any).mockResolvedValue(container);
 
       await expect(Mutation.adminStartCloudContainer({}, { purpose: 'IDLE' }, good())).resolves.toEqual(container);
-      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', []);
+      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, []);
     });
 
-    it('T-W7: passes the selected workloadIds through to the internal API', async () => {
+    it('T-W7: passes the selected workloadIds through to the internal API (no plan)', async () => {
       (cloudControllerClient.start as any).mockResolvedValue(container);
 
       await Mutation.adminStartCloudContainer({}, { purpose: 'IDLE', workloadIds: ['w2', 'w1'] }, good());
 
-      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', ['w2', 'w1']);
+      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, ['w2', 'w1']);
     });
 
     it('rejects non-IDLE purposes with a clear message and never calls the control plane', async () => {
@@ -232,6 +232,86 @@ describe('cloudContainerResolvers', () => {
     it('propagates other start errors verbatim', async () => {
       (cloudControllerClient.start as any).mockRejectedValue(new Error('创建 Job 失败'));
       await expect(Mutation.adminStartCloudContainer({}, { purpose: 'IDLE' }, good())).rejects.toThrow('创建 Job 失败');
+    });
+
+    it('T-W11: resolves workloads into a plan + derived workloadIds', async () => {
+      (cloudControllerClient.start as any).mockResolvedValue(container);
+      (cloudWorkloadService.list as any).mockResolvedValue([
+        {
+          id: 'w2',
+          paramSchema: [
+            { key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' },
+          ],
+          dependsOnWorkloadIds: [],
+        },
+      ]);
+
+      await Mutation.adminStartCloudContainer(
+        {},
+        { purpose: 'IDLE', workloads: [{ workloadId: 'w2', params: { version: '20' } }] },
+        good(),
+      );
+
+      expect(cloudControllerClient.start).toHaveBeenCalledWith(
+        'IDLE',
+        [{ workloadId: 'w2', params: { version: '20' }, implicit: false }],
+        ['w2'],
+      );
+    });
+
+    it('T-W11: expands implicit dependencies (Aspire → Docker → .NET) in topological order', async () => {
+      (cloudControllerClient.start as any).mockResolvedValue(container);
+      (cloudWorkloadService.list as any).mockResolvedValue([
+        { id: 'docker', paramSchema: [], dependsOnWorkloadIds: [] },
+        { id: 'dotnet', paramSchema: [], dependsOnWorkloadIds: [] },
+        { id: 'aspire', paramSchema: [], dependsOnWorkloadIds: ['docker', 'dotnet'] },
+      ]);
+
+      await Mutation.adminStartCloudContainer(
+        {},
+        { purpose: 'IDLE', workloads: [{ workloadId: 'aspire' }] },
+        good(),
+      );
+
+      expect(cloudControllerClient.start).toHaveBeenCalledWith(
+        'IDLE',
+        [
+          { workloadId: 'docker', params: {}, implicit: true },
+          { workloadId: 'dotnet', params: {}, implicit: true },
+          { workloadId: 'aspire', params: {}, implicit: false },
+        ],
+        ['docker', 'dotnet', 'aspire'],
+      );
+    });
+
+    it('T-W12: rejects providing both workloadIds and workloads', async () => {
+      await expect(
+        Mutation.adminStartCloudContainer(
+          {},
+          { purpose: 'IDLE', workloadIds: ['w1'], workloads: [{ workloadId: 'w2' }] },
+          good(),
+        ),
+      ).rejects.toThrow('workloadIds and workloads cannot both be provided');
+      expect(cloudControllerClient.start).not.toHaveBeenCalled();
+    });
+
+    it('rejects duplicate workload selections', async () => {
+      await expect(
+        Mutation.adminStartCloudContainer(
+          {},
+          { purpose: 'IDLE', workloads: [{ workloadId: 'w2' }, { workloadId: 'w2' }] },
+          good(),
+        ),
+      ).rejects.toThrow('duplicate workload selection');
+      expect(cloudWorkloadService.list).not.toHaveBeenCalled();
+    });
+
+    it('maps missing workload definitions to a clear error', async () => {
+      (cloudWorkloadService.list as any).mockResolvedValue([]);
+      await expect(
+        Mutation.adminStartCloudContainer({}, { purpose: 'IDLE', workloads: [{ workloadId: 'ghost' }] }, good()),
+      ).rejects.toThrow('workload not found');
+      expect(cloudControllerClient.start).not.toHaveBeenCalled();
     });
   });
 

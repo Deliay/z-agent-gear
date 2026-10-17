@@ -36,6 +36,9 @@ function workload(overrides: Record<string, unknown> = {}) {
     name: 'setup-node',
     initScript: 'git clone repo && npm install',
     postScript: null,
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    isPreset: false,
     createdAt: '2026-10-01T00:00:00Z',
     updatedAt: '2026-10-02T00:00:00Z',
     ...overrides,
@@ -117,7 +120,13 @@ describe('CloudWorkloadsPage', () => {
       expect(mocks.create).toHaveBeenCalledWith(
         expect.objectContaining({
           variables: {
-            input: { name: 'init-env', initScript: 'echo init', postScript: null },
+            input: {
+              name: 'init-env',
+              initScript: 'echo init',
+              postScript: null,
+              paramSchema: [],
+              dependsOnWorkloadIds: [],
+            },
           },
         }),
       ),
@@ -188,6 +197,8 @@ describe('CloudWorkloadsPage', () => {
               name: 'setup-node-v2',
               initScript: 'git clone repo && npm install',
               postScript: null,
+              paramSchema: [],
+              dependsOnWorkloadIds: [],
             },
           },
         }),
@@ -236,5 +247,131 @@ describe('CloudWorkloadsPage', () => {
         expect.objectContaining({ variables: { id: 'w1' } }),
       ),
     );
+  });
+
+  it('T-FP8: shows the preset badge, param count and dependency names', () => {
+    setupWorkloads([
+      workload({
+        id: 'w1',
+        name: 'Aspire',
+        isPreset: true,
+        paramSchema: [
+          { key: 'a', label: 'A', type: 'TEXT', options: [], defaultValue: '' },
+          { key: 'b', label: 'B', type: 'BOOLEAN', options: [], defaultValue: false },
+        ],
+        dependsOnWorkloadIds: ['w2'],
+      }),
+      workload({ id: 'w2', name: 'Docker', initScript: null, postScript: 'echo clean' }),
+    ]);
+    render(<CloudWorkloadsPage />);
+
+    expect(screen.getByText('预制')).toBeDefined();
+    expect(screen.getByText('2')).toBeDefined();
+    // 依赖名称按 ID 映射列表：Aspire 行展示 Docker（名称列 + 依赖标签）
+    expect(screen.getAllByText('Docker').length).toBeGreaterThanOrEqual(2);
+    // 无参数/依赖的行展示「-」
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0);
+  });
+
+  it('T-FP4: dependency multi-select excludes self, preserves order and submits ids', async () => {
+    setupWorkloads([
+      workload({ id: 'w1', name: 'setup-node' }),
+      workload({ id: 'w2', name: 'dep-a' }),
+      workload({ id: 'w3', name: 'dep-b' }),
+    ]);
+    mocks.update.mockResolvedValue({});
+    render(<CloudWorkloadsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 setup-node' }));
+    // 排除自身
+    expect(screen.queryByRole('checkbox', { name: 'setup-node' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'dep-b' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'dep-a' }));
+    expect(screen.getByText(/dep-b → dep-a/)).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: expect.objectContaining({
+            id: 'w1',
+            input: expect.objectContaining({ dependsOnWorkloadIds: ['w3', 'w2'] }),
+          }),
+        }),
+      ),
+    );
+  });
+
+  it('T-FP4: blocks save and hints when a dependency cycle is introduced', () => {
+    setupWorkloads([
+      workload({ id: 'w1', name: 'A' }),
+      workload({ id: 'w2', name: 'B', dependsOnWorkloadIds: ['w1'] }),
+    ]);
+    render(<CloudWorkloadsPage />);
+
+    // 让 A 依赖 B，而 B 已依赖 A => 环
+    fireEvent.click(screen.getByRole('button', { name: '编辑 A' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'B' }));
+
+    expect(screen.getByText(/检测到依赖环/)).toBeDefined();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('T-FP2: saves a configured param schema (normalized) with the workload', async () => {
+    setupWorkloads([]);
+    mocks.create.mockResolvedValue({});
+    render(<CloudWorkloadsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '新建工作负载' }));
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'with-params' } });
+    fireEvent.change(screen.getByLabelText('初始化脚本'), { target: { value: 'echo ok' } });
+    fireEvent.click(screen.getByRole('button', { name: /添加参数/ }));
+    fireEvent.change(screen.getByLabelText('参数标识'), { target: { value: 'mode' } });
+    fireEvent.change(screen.getByLabelText('显示名称'), { target: { value: '模式' } });
+    fireEvent.change(screen.getByLabelText('字段类型'), { target: { value: 'SELECT' } });
+    fireEvent.change(screen.getByLabelText('可选项'), { target: { value: 'dev\nprod' } });
+    fireEvent.change(screen.getByLabelText('默认值'), { target: { value: 'dev' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: {
+            input: {
+              name: 'with-params',
+              initScript: 'echo ok',
+              postScript: null,
+              paramSchema: [
+                {
+                  key: 'mode',
+                  label: '模式',
+                  type: 'SELECT',
+                  options: ['dev', 'prod'],
+                  defaultValue: 'dev',
+                },
+              ],
+              dependsOnWorkloadIds: [],
+            },
+          },
+        }),
+      ),
+    );
+  });
+
+  it('T-FP3: blocks save and locates param errors', () => {
+    setupWorkloads([]);
+    render(<CloudWorkloadsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '新建工作负载' }));
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText('初始化脚本'), { target: { value: 'echo' } });
+    fireEvent.click(screen.getByRole('button', { name: /添加参数/ }));
+
+    expect(screen.getByText('参数标识必填')).toBeDefined();
+    expect(screen.getByText('显示名称必填')).toBeDefined();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
   });
 });

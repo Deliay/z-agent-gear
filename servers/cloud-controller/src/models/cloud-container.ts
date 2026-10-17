@@ -29,6 +29,25 @@ export function isTerminalStatus(status: CloudContainerStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+/**
+ * 本次启动最终执行计划的一条：数组顺序即执行顺序（契约 A.2.2 / 提案 §4.1）。
+ * `params` 为已归一（含默认值）的参数快照，`implicit` 标识该条是否为隐式依赖。
+ */
+export interface WorkloadPlanEntry {
+  workloadId: string;
+  params: Record<string, unknown>;
+  implicit: boolean;
+}
+
+const workloadPlanEntrySchema = new mongoose.Schema(
+  {
+    workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    params: { type: mongoose.Schema.Types.Mixed, default: {} },
+    implicit: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
 const cloudContainerSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, unique: true },
@@ -48,6 +67,7 @@ const cloudContainerSchema = new mongoose.Schema(
     exitedAt: { type: Date, default: null },
     exitReason: { type: String, default: null },
     workloadIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+    workloadPlan: { type: [workloadPlanEntrySchema], default: [] },
     currentWorkloadName: { type: String, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },

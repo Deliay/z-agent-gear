@@ -133,6 +133,15 @@ export const ADMIN_CLOUD_WORKLOADS = gql`
       name
       initScript
       postScript
+      paramSchema {
+        key
+        label
+        type
+        options
+        defaultValue
+      }
+      dependsOnWorkloadIds
+      isPreset
       createdAt
       updatedAt
     }
@@ -149,6 +158,7 @@ export const ADMIN_CLOUD_WORKLOAD_LOGS = gql`
       phase
       status
       script
+      params
       exitCode
       log
       startedAt

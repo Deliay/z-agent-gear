@@ -197,8 +197,12 @@ const CLOUD_CONTAINER_FIELDS = `
 `
 
 export const ADMIN_START_CLOUD_CONTAINER = gql`
-  mutation AdminStartCloudContainer($purpose: CloudContainerPurpose!, $workloadIds: [ID!]) {
-    adminStartCloudContainer(purpose: $purpose, workloadIds: $workloadIds) {
+  mutation AdminStartCloudContainer(
+    $purpose: CloudContainerPurpose!
+    $workloadIds: [ID!]
+    $workloads: [CloudWorkloadSelectionInput!]
+  ) {
+    adminStartCloudContainer(purpose: $purpose, workloadIds: $workloadIds, workloads: $workloads) {
       ${CLOUD_CONTAINER_FIELDS}
     }
   }
@@ -210,15 +214,28 @@ export const ADMIN_DESTROY_CLOUD_CONTAINER = gql`
   }
 `
 
+const CLOUD_WORKLOAD_FIELDS = `
+  id
+  name
+  initScript
+  postScript
+  paramSchema {
+    key
+    label
+    type
+    options
+    defaultValue
+  }
+  dependsOnWorkloadIds
+  isPreset
+  createdAt
+  updatedAt
+`
+
 export const CREATE_CLOUD_WORKLOAD = gql`
   mutation AdminCreateCloudWorkload($input: CreateCloudWorkloadInput!) {
     adminCreateCloudWorkload(input: $input) {
-      id
-      name
-      initScript
-      postScript
-      createdAt
-      updatedAt
+      ${CLOUD_WORKLOAD_FIELDS}
     }
   }
 `
@@ -226,12 +243,7 @@ export const CREATE_CLOUD_WORKLOAD = gql`
 export const UPDATE_CLOUD_WORKLOAD = gql`
   mutation AdminUpdateCloudWorkload($id: ID!, $input: UpdateCloudWorkloadInput!) {
     adminUpdateCloudWorkload(id: $id, input: $input) {
-      id
-      name
-      initScript
-      postScript
-      createdAt
-      updatedAt
+      ${CLOUD_WORKLOAD_FIELDS}
     }
   }
 `
