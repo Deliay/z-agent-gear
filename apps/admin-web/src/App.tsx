@@ -6,6 +6,7 @@ import ChangePasswordPage from './pages/ChangePasswordPage'
 import ModelConfigPage from './pages/ModelConfigPage'
 import BaseImagePage from './pages/BaseImagePage'
 import CloudContainersPage from './pages/CloudContainersPage'
+import CloudWorkloadsPage from './pages/CloudWorkloadsPage'
 import AdminLayout from './components/AdminLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { getBasePath } from './lib/base-path'
@@ -26,6 +27,7 @@ function App() {
               <Route path="models" element={<ModelConfigPage />} />
               <Route path="base-images" element={<BaseImagePage />} />
               <Route path="cloud-containers" element={<CloudContainersPage />} />
+              <Route path="cloud-workloads" element={<CloudWorkloadsPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/models" replace />} />

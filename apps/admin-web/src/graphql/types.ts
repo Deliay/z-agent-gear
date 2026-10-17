@@ -137,11 +137,69 @@ export interface GetBaseImageQuery {
   baseImage: BaseImageData | null;
 }
 
+// ---------- 工作负载（contracts/admin-cloud-workload.graphql） ----------
+
+export interface CloudWorkloadData {
+  id: string;
+  name: string;
+  initScript: string | null;
+  postScript: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CloudWorkloadInputData {
+  name: string;
+  initScript: string | null;
+  postScript: string | null;
+}
+
+export type CloudWorkloadLogPhase = 'INIT' | 'POST';
+
+export type CloudWorkloadLogStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TIMEOUT';
+
+export interface CloudWorkloadLogData {
+  id: string;
+  containerId: string;
+  workloadId: string;
+  /** 名称快照：工作负载被编辑/删除后记录仍可读 */
+  workloadName: string;
+  phase: CloudWorkloadLogPhase;
+  status: CloudWorkloadLogStatus;
+  /** 当时实际执行的脚本内容快照（留档） */
+  script: string;
+  exitCode: number | null;
+  log: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface GetAdminCloudWorkloadsQuery {
+  adminCloudWorkloads: CloudWorkloadData[];
+}
+
+export interface GetAdminCloudContainerWorkloadLogsQuery {
+  adminCloudContainerWorkloadLogs: CloudWorkloadLogData[];
+}
+
+export interface AdminCreateCloudWorkloadMutation {
+  adminCreateCloudWorkload: CloudWorkloadData;
+}
+
+export interface AdminUpdateCloudWorkloadMutation {
+  adminUpdateCloudWorkload: CloudWorkloadData;
+}
+
+export interface AdminDeleteCloudWorkloadMutation {
+  adminDeleteCloudWorkload: boolean;
+}
+
 // ---------- 云端容器（contracts/admin-cloud-container.graphql） ----------
 
 export type CloudContainerStatus =
   | 'CREATING'
   | 'CONNECTING'
+  | 'INITIALIZING'
   | 'ONLINE'
   | 'DESTROYING'
   | 'EXITED'
@@ -159,6 +217,10 @@ export interface CloudContainerData {
   connectedAt: string | null;
   exitedAt: string | null;
   exitReason: string | null;
+  /** 容器启动时挂载的工作负载，按选择顺序返回；已删除项会被省略 */
+  workloads: CloudWorkloadData[];
+  /** 初始化中当前执行的工作负载名称；非初始化中为 null */
+  currentWorkloadName: string | null;
 }
 
 export interface CloudContainerControlPlaneData {

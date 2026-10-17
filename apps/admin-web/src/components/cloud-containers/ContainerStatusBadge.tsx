@@ -7,6 +7,7 @@ type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 const STATUS_VARIANTS: Record<CloudContainerStatus, BadgeVariant> = {
   CREATING: 'secondary',
   CONNECTING: 'secondary',
+  INITIALIZING: 'secondary',
   ONLINE: 'default',
   DESTROYING: 'secondary',
   EXITED: 'outline',
