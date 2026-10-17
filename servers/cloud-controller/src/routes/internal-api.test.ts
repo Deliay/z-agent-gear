@@ -17,6 +17,7 @@ const INTERNAL_TOKEN = 'test-internal-token';
 let httpServer: HttpServer;
 let baseUrl: string;
 let workloadLogRepository: InMemoryWorkloadLogRepository;
+let workloadRepository: InMemoryWorkloadRepository;
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${INTERNAL_TOKEN}`, ...extra };
@@ -47,7 +48,7 @@ beforeAll(async () => {
     shutdownGraceMs: 0,
   });
 
-  const workloadRepository = new InMemoryWorkloadRepository();
+  workloadRepository = new InMemoryWorkloadRepository();
   for (const id of ['wl-a', 'wl-b', 'wl-c']) {
     workloadRepository.add({
       id,
@@ -58,6 +59,61 @@ beforeAll(async () => {
       updatedAt: new Date(),
     });
   }
+  // 依赖展开兜底用例的夹具：wl-dep 依赖 wl-base 且带默认参数。
+  workloadRepository.add({
+    id: 'wl-base',
+    name: 'workload-wl-base',
+    initScript: 'echo base',
+    postScript: null,
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  workloadRepository.add({
+    id: 'wl-dep',
+    name: 'workload-wl-dep',
+    initScript: 'echo dep',
+    postScript: null,
+    paramSchema: [
+      { key: 'version', label: '版本', type: 'text', options: [], defaultValue: '22' },
+    ],
+    dependsOnWorkloadIds: ['wl-base'],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  // 兜底展开失败用例：依赖环 / 依赖缺失 / 展开超 10 / 非法默认值。
+  const addWorkload = (id: string, dependsOnWorkloadIds: string[] = []) =>
+    workloadRepository.add({
+      id,
+      name: `workload-${id}`,
+      initScript: `echo ${id}`,
+      postScript: null,
+      paramSchema: [],
+      dependsOnWorkloadIds,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  addWorkload('wl-cyc-a', ['wl-cyc-b']);
+  addWorkload('wl-cyc-b', ['wl-cyc-a']);
+  addWorkload('wl-orphan', ['wl-ghost']);
+  const bigDeps = Array.from({ length: 10 }, (_, i) => `wl-big-dep-${i}`);
+  bigDeps.forEach((id) => addWorkload(id));
+  addWorkload('wl-big', bigDeps);
+  workloadRepository.add({
+    id: 'wl-bad-default',
+    name: 'workload-wl-bad-default',
+    initScript: 'echo bad',
+    postScript: null,
+    paramSchema: [
+      { key: 'mode', label: '模式', type: 'select', options: ['a'], defaultValue: 'z' },
+    ],
+    dependsOnWorkloadIds: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
   workloadLogRepository = new InMemoryWorkloadLogRepository();
 
   const app = express();
@@ -101,12 +157,14 @@ describe('internal management API', () => {
         'status',
         'userId',
         'workloadIds',
+        'workloadPlan',
       ].sort(),
     );
     expect(body.status).toBe('connecting');
     expect(body.purpose).toBe('idle');
     expect(body.refId).toBeNull();
     expect(body.workloadIds).toEqual([]);
+    expect(body.workloadPlan).toEqual([]);
     expect(body.currentWorkloadName).toBeNull();
 
     const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
@@ -248,5 +306,138 @@ describe('internal management API', () => {
       headers: authHeaders(),
     });
     expect(missing.status).toBe(404);
+  });
+
+  it('T-ICC1/T-CCS1: POST { workloadPlan } 合法 → 201 回显 plan；日志含 params 快照', async () => {
+    const res = await createContainer({
+      purpose: 'idle',
+      workloadPlan: [
+        { workloadId: 'wl-a', params: { version: '22' }, implicit: false },
+        { workloadId: 'wl-base', params: {}, implicit: true },
+      ],
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      id: string;
+      workloadIds: string[];
+      workloadPlan: unknown;
+    };
+    expect(body.workloadPlan).toEqual([
+      { workloadId: 'wl-a', params: { version: '22' }, implicit: false },
+      { workloadId: 'wl-base', params: {}, implicit: true },
+    ]);
+    expect(body.workloadIds).toEqual(['wl-a', 'wl-base']);
+
+    await workloadLogRepository.createMany([
+      {
+        containerId: body.id,
+        workloadId: 'wl-a',
+        workloadName: 'workload-wl-a',
+        phase: 'init',
+        status: 'success',
+        script: 'echo a',
+        params: { version: '22' },
+      },
+    ]);
+    const logsRes = await fetch(`${baseUrl}/internal/containers/${body.id}/workload-logs`, {
+      headers: authHeaders(),
+    });
+    const logs = (await logsRes.json()) as Array<Record<string, unknown>>;
+    expect(logs[0]!.params).toEqual({ version: '22' });
+  });
+
+  it('T-ICC2: workloadPlan 非法 → 400 INVALID_WORKLOAD', async () => {
+    const cases: Array<[string, unknown]> = [
+      ['not an array', { workloadId: 'wl-a' }],
+      ['unknown id', [{ workloadId: 'wl-missing', params: {}, implicit: false }]],
+      [
+        'duplicate workloadId',
+        [
+          { workloadId: 'wl-a', params: {}, implicit: false },
+          { workloadId: 'wl-a', params: {}, implicit: true },
+        ],
+      ],
+      ['params not an object', [{ workloadId: 'wl-a', params: 'x', implicit: false }]],
+      ['implicit not boolean', [{ workloadId: 'wl-a', params: {}, implicit: 'no' }]],
+      [
+        'too many',
+        Array.from({ length: 11 }, () => ({ workloadId: 'wl-a', params: {}, implicit: false })),
+      ],
+    ];
+    for (const [label, workloadPlan] of cases) {
+      const res = await createContainer({ purpose: 'idle', workloadPlan });
+      expect(res.status, label).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error, label).toBe('INVALID_WORKLOAD');
+    }
+  });
+
+  it('T-ICC3: 仅 workloadIds（旧客户端）→ 兜底展开执行，workloadIds 按选择顺序落库', async () => {
+    const res = await createContainer({ purpose: 'idle', workloadIds: ['wl-dep'] });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      workloadIds: string[];
+      workloadPlan: Array<{ workloadId: string; params: unknown; implicit: boolean }>;
+    };
+
+    // plan 用于执行：依赖先于依赖方、隐式依赖取默认参数
+    expect(body.workloadPlan).toEqual([
+      { workloadId: 'wl-base', params: {}, implicit: true },
+      { workloadId: 'wl-dep', params: { version: '22' }, implicit: false },
+    ]);
+    // 契约 A.2.2：workloadIds 按选择顺序落库（不含隐式依赖）
+    expect(body.workloadIds).toEqual(['wl-dep']);
+  });
+
+  it('T-ICC9: plan 条目缺省 params/implicit → 归一为 {}/false（不报错）', async () => {
+    const res = await createContainer({
+      purpose: 'idle',
+      workloadPlan: [{ workloadId: 'wl-a' }, { workloadId: 'wl-b', params: { version: '22' } }],
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { workloadPlan: unknown };
+    expect(body.workloadPlan).toEqual([
+      { workloadId: 'wl-a', params: {}, implicit: false },
+      { workloadId: 'wl-b', params: { version: '22' }, implicit: false },
+    ]);
+  });
+
+  it('T-ICC10: 兜底展开失败（环 / 依赖缺失 / 超 10 / 非法默认值）→ 400 INVALID_WORKLOAD', async () => {
+    const cases: Array<[string, string[]]> = [
+      ['dependency cycle', ['wl-cyc-a']],
+      ['missing dependency', ['wl-orphan']],
+      ['expanded > 10', ['wl-big']],
+      ['invalid default', ['wl-bad-default']],
+    ];
+    for (const [label, workloadIds] of cases) {
+      const res = await createContainer({ purpose: 'idle', workloadIds });
+      expect(res.status, label).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error, label).toBe('INVALID_WORKLOAD');
+    }
+  });
+
+  it('T-ICC11: 兜底展开错误文案与 admin-api 同口径（环仅含环路径、缺失无 id）', async () => {
+    const cycle = await createContainer({ purpose: 'idle', workloadIds: ['wl-cyc-a'] });
+    const cycleBody = (await cycle.json()) as { message: string };
+    expect(cycleBody.message).toBe(
+      'dependency cycle detected: wl-cyc-a -> wl-cyc-b -> wl-cyc-a',
+    );
+
+    const missing = await createContainer({ purpose: 'idle', workloadIds: ['wl-orphan'] });
+    const missingBody = (await missing.json()) as { message: string };
+    expect(missingBody.message).toBe('dependency workload not found: wl-ghost');
+  });
+
+  it('T-ICC4: workloadPlan 与 workloadIds 同时下发 → 以 plan 为准', async () => {
+    const res = await createContainer({
+      purpose: 'idle',
+      workloadIds: ['wl-b'],
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false }],
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { workloadIds: string[]; workloadPlan: unknown };
+    expect(body.workloadIds).toEqual(['wl-a']);
+    expect(body.workloadPlan).toEqual([{ workloadId: 'wl-a', params: {}, implicit: false }]);
   });
 });

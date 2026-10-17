@@ -49,6 +49,7 @@ const internalLog = {
   phase: 'init',
   status: 'success',
   script: 'echo init',
+  params: { version: '20' },
   exitCode: 0,
   log: 'init done',
   startedAt: '2026-10-17T00:00:00.000Z',
@@ -63,6 +64,7 @@ const mappedLog = {
   phase: 'INIT',
   status: 'SUCCESS',
   script: 'echo init',
+  params: { version: '20' },
   exitCode: 0,
   log: 'init done',
   startedAt: '2026-10-17T00:00:00.000Z',
@@ -134,6 +136,39 @@ describe('cloudWorkloadResolvers', () => {
       await expect(Mutation.adminCreateCloudWorkload({}, { input: createInput }, good)).rejects.toThrow(
         'at least one script is required',
       );
+    });
+
+    it('T-W9: passes paramSchema/dependsOnWorkloadIds through and maps param errors to GraphQL errors', async () => {
+      const input = {
+        name: 'setup',
+        initScript: 'a',
+        paramSchema: [{ key: 'mode', label: '模式', type: 'SELECT', options: ['a'], defaultValue: 'a' }],
+        dependsOnWorkloadIds: ['w2'],
+      };
+      (cloudWorkloadService.create as any).mockResolvedValue({ id: 'w1' });
+      await Mutation.adminCreateCloudWorkload({}, { input }, good);
+      expect(cloudWorkloadService.create).toHaveBeenCalledWith(input);
+
+      (cloudWorkloadService.create as any).mockRejectedValue(
+        new Error('paramSchema[0].defaultValue is invalid'),
+      );
+      let captured: GraphQLError | undefined;
+      try {
+        await Mutation.adminCreateCloudWorkload({}, { input }, good);
+      } catch (err) {
+        captured = err as GraphQLError;
+      }
+      expect(captured).toBeInstanceOf(GraphQLError);
+      expect(captured?.message).toBe('paramSchema[0].defaultValue is invalid');
+    });
+
+    it('T-W10: maps dependency cycle errors to GraphQL errors (update)', async () => {
+      (cloudWorkloadService.update as any).mockRejectedValue(
+        new Error('dependency cycle detected: w1 -> w2 -> w1'),
+      );
+      await expect(
+        Mutation.adminUpdateCloudWorkload({}, { id: 'w1', input: { dependsOnWorkloadIds: ['w2'] } }, good),
+      ).rejects.toThrow('dependency cycle detected');
     });
 
     it('adminUpdateCloudWorkload delegates to the service', async () => {

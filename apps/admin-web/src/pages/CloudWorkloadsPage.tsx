@@ -105,6 +105,7 @@ export default function CloudWorkloadsPage() {
         onOpenChange={setFormOpen}
         initialData={editing}
         onSave={handleSave}
+        dependencyCandidates={workloads}
       />
 
       <DeleteWorkloadDialog

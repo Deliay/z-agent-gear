@@ -12,12 +12,26 @@
 
 ```
 src/
-├── index.ts              # Entry point: CLI parsing + daemon startup
+├── index.ts              # Entry point: CLI parsing + daemon startup（`--version` 取自 package.json）
 ├── config.ts             # Key/endpoint reading with priority chain
-├── socketio-client.ts    # Socket.IO client connection + event handling
+├── socketio-client.ts    # Socket.IO client connection + event handling（register 上报完整版本）
 ├── heartbeat.ts          # Heartbeat sender (30s interval)
+├── workload-executor.ts  # 工作负载脚本串行执行（超时/截断/重连重放）+ 参数注入
 └── daemon.ts             # Daemon management (PID file, signal handling)
 ```
+
+## 工作负载参数注入
+
+`workload:run` 的每个 item 可携带 `workloadId` 与 `params`；`workload-executor` 对每个 item 以 `process.env` 为基础注入后执行 `bash -c <script>`（不修改脚本文本）：
+
+| 环境变量 | 值 |
+|---------|----|
+| `WORKLOAD_PARAMS` | 完整参数 JSON 字符串（无参数为 `{}`） |
+| `WORKLOAD_PARAM_<KEY_UPPER>` | 单个参数值：字符串原样、布尔 `"true"`/`"false"`、多选为 JSON 数组字符串（如 `["pnpm"]`） |
+
+- 参数 env 仅对当前 item 生效，不污染后续脚本；`params` 缺省 `{}` 时行为与旧版一致。
+- 参数只作为脚本入参，不改变执行边界、超时与权限。
+- 版本：包版本 `2.3.0`（major 保持 2）；worker 镜像内 agent-gear 需 `>=2.3.0` 才有参数注入能力（cloud-controller `MIN_WORKER_VERSION` 仍为 `2.2.0`）。
 
 ## Dev Commands
 

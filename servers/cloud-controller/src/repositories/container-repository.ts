@@ -4,6 +4,7 @@ import {
   CloudContainer,
   type CloudContainerPurpose,
   type CloudContainerStatus,
+  type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
 
 /**
@@ -24,6 +25,8 @@ export interface CloudContainerEntity {
   exitReason: string | null;
   /** 启动时挂载的工作负载 ID（按选择顺序，去重）。 */
   workloadIds: string[];
+  /** 本次启动最终执行计划（顺序即执行顺序）；历史容器为 []。 */
+  workloadPlan: WorkloadPlanEntry[];
   /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null。 */
   currentWorkloadName: string | null;
   createdAt: Date;
@@ -43,6 +46,7 @@ export interface CreateContainerInput {
   exitedAt?: Date | null;
   exitReason?: string | null;
   workloadIds?: string[];
+  workloadPlan?: WorkloadPlanEntry[];
   currentWorkloadName?: string | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
@@ -87,9 +91,33 @@ interface RawDoc {
   exitedAt?: Date | null;
   exitReason?: string | null;
   workloadIds?: unknown[] | null;
+  workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown }> | null;
   currentWorkloadName?: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** 归一化计划条目：`workloadId` 转字符串、`params` 缺省 `{}`、`implicit` 缺省 false。 */
+function normalizePlanEntry(entry: {
+  workloadId: unknown;
+  params?: unknown;
+  implicit?: unknown;
+}): WorkloadPlanEntry {
+  return {
+    workloadId: String(entry.workloadId),
+    params:
+      entry.params && typeof entry.params === 'object' && !Array.isArray(entry.params)
+        ? ({ ...(entry.params as Record<string, unknown>) })
+        : {},
+    implicit: entry.implicit === true,
+  };
+}
+
+/** 深拷贝计划，避免内存仓储的调用方共享同一数组/对象引用。 */
+function clonePlan(
+  plan: readonly { workloadId: unknown; params?: unknown; implicit?: unknown }[] | undefined,
+): WorkloadPlanEntry[] {
+  return (plan ?? []).map((entry) => normalizePlanEntry(entry));
 }
 
 function toEntity(doc: RawDoc): CloudContainerEntity {
@@ -107,6 +135,7 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     exitedAt: doc.exitedAt ?? null,
     exitReason: doc.exitReason ?? null,
     workloadIds: (doc.workloadIds ?? []).map((value) => String(value)),
+    workloadPlan: clonePlan(doc.workloadPlan ?? []),
     currentWorkloadName: doc.currentWorkloadName ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -128,6 +157,7 @@ export class MongoContainerRepository implements ContainerRepository {
       exitedAt: input.exitedAt ?? null,
       exitReason: input.exitReason ?? null,
       workloadIds: input.workloadIds ?? [],
+      workloadPlan: clonePlan(input.workloadPlan),
       currentWorkloadName: input.currentWorkloadName ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
@@ -193,23 +223,26 @@ export class InMemoryContainerRepository implements ContainerRepository {
       exitedAt: input.exitedAt ?? null,
       exitReason: input.exitReason ?? null,
       workloadIds: [...(input.workloadIds ?? [])],
+      workloadPlan: clonePlan(input.workloadPlan),
       currentWorkloadName: input.currentWorkloadName ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     };
     this.store.set(entity.id, entity);
     this.operations.push(`create:${entity.status}`);
-    return { ...entity };
+    return { ...entity, workloadPlan: clonePlan(entity.workloadPlan) };
   }
 
   async findById(id: string): Promise<CloudContainerEntity | null> {
     const found = this.store.get(id);
-    return found ? { ...found } : null;
+    return found ? { ...found, workloadPlan: clonePlan(found.workloadPlan) } : null;
   }
 
   async findByName(name: string): Promise<CloudContainerEntity | null> {
     for (const entity of this.store.values()) {
-      if (entity.name === name) return { ...entity };
+      if (entity.name === name) {
+        return { ...entity, workloadPlan: clonePlan(entity.workloadPlan) };
+      }
     }
     return null;
   }
@@ -217,7 +250,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
   async findAll(): Promise<CloudContainerEntity[]> {
     return [...this.store.values()]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .map((e) => ({ ...e }));
+      .map((e) => ({ ...e, workloadPlan: clonePlan(e.workloadPlan) }));
   }
 
   async update(
@@ -234,10 +267,11 @@ export class InMemoryContainerRepository implements ContainerRepository {
       ...found,
       ...patch,
       id: found.id,
+      workloadPlan: patch.workloadPlan ? clonePlan(patch.workloadPlan) : clonePlan(found.workloadPlan),
       updatedAt: patch.updatedAt ?? new Date(),
     };
     this.store.set(id, updated);
     this.operations.push(`update:${updated.status}`);
-    return { ...updated };
+    return { ...updated, workloadPlan: clonePlan(updated.workloadPlan) };
   }
 }

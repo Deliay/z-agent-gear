@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import mongoose from 'mongoose';
 import { ADMIN_WEB_URL, adminGqlRequest, adminLoginApi, adminLoginViaUI } from './helpers.js';
 
 // 计划用例覆盖说明（Phase 8）：
@@ -9,6 +10,8 @@ import { ADMIN_WEB_URL, adminGqlRequest, adminLoginApi, adminLoginViaUI } from '
 //   K8S_ENABLED=false 下无真实 Job 可对账，改由 cloud-controller 单测锚定
 //   （status-sync.test.ts T-Y1/T-Y3/T-Y5 + reconcile；container-service.test.ts T-S4/T-S4b）。
 //   真实集群链路按计划列为部署侧手工验收。
+// - T-E14 启动对话框参数表单默认值/隐式依赖提示/初始化顺序预览：本文件 UI 覆盖。
+// - T-E15 日志对话框参数快照：直写 cloudworkloadlogs 构造（需要 MONGODB_URI）。
 
 interface ContainerNode {
   id: string;
@@ -29,6 +32,66 @@ async function listContainers(page: Page, token: string): Promise<ContainerNode[
 
 async function destroyViaApi(page: Page, token: string, id: string) {
   await adminGqlRequest(page, `mutation($id: ID!) { adminDestroyCloudContainer(id: $id) }`, { id }, token);
+}
+
+interface CreatedWorkload {
+  id: string;
+  name: string;
+}
+
+/** 经 API 创建工作负载（含可选参数/依赖），用于启动对话框用例的前置数据。 */
+async function createWorkload(
+  page: Page,
+  token: string,
+  input: {
+    name: string;
+    initScript?: string;
+    paramSchema?: Array<{
+      key: string;
+      label: string;
+      type: string;
+      options?: string[];
+      defaultValue: unknown;
+    }>;
+    dependsOnWorkloadIds?: string[];
+  },
+): Promise<CreatedWorkload> {
+  const res = await adminGqlRequest(
+    page,
+    `mutation($input: CreateCloudWorkloadInput!) { adminCreateCloudWorkload(input: $input) { id name } }`,
+    { input },
+    token,
+  );
+  const body = await res.json();
+  expect(body.errors, JSON.stringify(body.errors)).toBeUndefined();
+  return body.data.adminCreateCloudWorkload as CreatedWorkload;
+}
+
+async function deleteWorkload(page: Page, token: string, id: string): Promise<void> {
+  await adminGqlRequest(page, `mutation($id: ID!) { adminDeleteCloudWorkload(id: $id) }`, { id }, token).catch(
+    () => {},
+  );
+}
+
+async function startContainer(page: Page, token: string): Promise<ContainerNode> {
+  const res = await adminGqlRequest(
+    page,
+    `mutation($purpose: CloudContainerPurpose!) {
+      adminStartCloudContainer(purpose: $purpose) { id name status workloads { id name } currentWorkloadName }
+    }`,
+    { purpose: 'IDLE' },
+    token,
+  );
+  const body = await res.json();
+  expect(body.errors, JSON.stringify(body.errors)).toBeUndefined();
+  return body.data.adminStartCloudContainer as ContainerNode;
+}
+
+async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  return mongoose.connection.db ?? null;
 }
 
 test.describe('Admin Cloud Container E2E', () => {
@@ -150,5 +213,118 @@ test.describe('Admin Cloud Container E2E', () => {
   test('T-E5: unauthenticated access to /cloud-containers is redirected to login', async ({ page }) => {
     await page.goto(`${ADMIN_WEB_URL}/cloud-containers`);
     await expect(page).toHaveURL(/\/login/);
+  });
+
+  test('T-E14: start dialog shows param defaults, implicit dependency hint and init order preview', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    const suffix = Date.now().toString(36);
+    const dep = await createWorkload(page, token, {
+      name: `e2e-wlc-dep-${suffix}`,
+      initScript: 'echo dep',
+      paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+    });
+    const parent = await createWorkload(page, token, {
+      name: `e2e-wlc-parent-${suffix}`,
+      initScript: 'echo parent',
+      paramSchema: [
+        { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'fast' },
+      ],
+      dependsOnWorkloadIds: [dep.id],
+    });
+
+    let containerId: string | null = null;
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      await expect(page.getByRole('heading', { name: '云端容器' })).toBeVisible();
+
+      await page.getByRole('button', { name: '启动', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+
+      // 选中依赖方 → 展开参数表单
+      await dialog.getByRole('checkbox', { name: parent.name }).click();
+
+      // 参数表单默认值预填（SELECT 默认 fast）
+      await expect(dialog.locator(`#param-${parent.id}-mode`)).toHaveValue('fast');
+
+      // 隐式依赖提示（未显式勾选 dep）
+      await expect(dialog.getByText(new RegExp(`将自动初始化 ${dep.name}`))).toBeVisible();
+
+      // 初始化顺序预览：dep（隐式）→ parent
+      await expect(dialog.getByText('初始化顺序预览')).toBeVisible();
+      const previewItems = dialog.locator('ol li');
+      await expect(previewItems.first()).toContainText(dep.name);
+      await expect(previewItems.nth(1)).toContainText(parent.name);
+      await expect(dialog.getByText('隐式', { exact: true })).toBeVisible();
+
+      await dialog.getByRole('button', { name: '确认启动' }).click();
+      await expect(dialog).not.toBeVisible();
+
+      // 轮询找到容器并核对挂载顺序 = 服务端展开的依赖顺序 dep → parent
+      let created: ContainerNode | undefined;
+      for (let i = 0; i < 20 && !created; i += 1) {
+        const now = await listContainers(page, token);
+        created = now.find((c) => c.workloads?.some((w) => w.id === parent.id));
+        if (!created) await page.waitForTimeout(500);
+      }
+      expect(created, 'newly started container should mount parent + implicit dependency').toBeTruthy();
+      containerId = created!.id;
+      expect(created!.workloads?.map((w) => w.id)).toEqual([dep.id, parent.id]);
+
+      // 容器行展示挂载名称
+      const row = page.locator('tr', { hasText: created!.name }).first();
+      await expect(row.getByText(dep.name)).toBeVisible();
+      await expect(row.getByText(parent.name)).toBeVisible();
+    } finally {
+      if (containerId) await destroyViaApi(page, token, containerId);
+      await deleteWorkload(page, token, dep.id);
+      await deleteWorkload(page, token, parent.id);
+    }
+  });
+
+  test('T-E15: logs dialog shows the parameter snapshot (direct Mongo)', async ({ page }) => {
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未提供，跳过直写 cloudworkloadlogs');
+
+    const token = await adminLoginApi(page);
+    const container = await startContainer(page, token);
+
+    const db = await mongoDb();
+    expect(db).not.toBeNull();
+    const containerId = new mongoose.Types.ObjectId(container.id);
+    const workloadId = new mongoose.Types.ObjectId();
+    const now = new Date();
+    await db!.collection('cloudworkloadlogs').insertOne({
+      containerId,
+      workloadId,
+      workloadName: 'param-job',
+      phase: 'init',
+      status: 'success',
+      script: 'echo params',
+      params: { version: '20', package_manager: ['pnpm'] },
+      exitCode: 0,
+      log: '',
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      const row = page.locator('tr', { hasText: container.name }).first();
+      await expect(row).toBeVisible();
+      await row.getByRole('button', { name: `工作负载日志 ${container.name}` }).click();
+
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByText('参数快照')).toBeVisible();
+      // formatParams：`version: 20` / `package_manager: ["pnpm"]`
+      await expect(dialog.getByText(/version: 20/)).toBeVisible();
+      await expect(dialog.getByText(/package_manager: \["pnpm"\]/)).toBeVisible();
+    } finally {
+      await db!.collection('cloudworkloadlogs').deleteMany({ containerId });
+      await destroyViaApi(page, token, container.id);
+    }
   });
 });

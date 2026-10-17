@@ -19,8 +19,20 @@ import {
   SelectItem,
   SelectItemText,
 } from '@/components/ui/select';
-import type { CloudContainerPurpose, CloudWorkloadData } from '@/graphql/types';
+import type {
+  CloudContainerPurpose,
+  CloudWorkloadData,
+  CloudWorkloadSelectionData,
+} from '@/graphql/types';
 import { CONTAINER_PURPOSE_LABELS } from './labels';
+import WorkloadParamsForm from './WorkloadParamsForm';
+import {
+  buildDefaultParams,
+  validateParamValues,
+  type ParamValueError,
+  type WorkloadParamValues,
+} from '@/lib/workload-params';
+import { MAX_PLAN_ITEMS, previewWorkloadPlan, type WorkloadPlanDefinition } from '@/lib/workload-plan';
 
 // 本期仅提供 idle 任务（裁决 10 / PRD 3.4）
 const PURPOSE_OPTIONS: CloudContainerPurpose[] = ['IDLE'];
@@ -29,7 +41,7 @@ interface StartContainerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workloads: CloudWorkloadData[];
-  onStart: (purpose: CloudContainerPurpose, workloadIds: string[]) => Promise<void>;
+  onStart: (purpose: CloudContainerPurpose, workloads: CloudWorkloadSelectionData[]) => Promise<void>;
   /** 工作负载列表是否处于首次加载中（`loading && !data`）。 */
   workloadsLoading?: boolean;
   /** 工作负载列表首次加载失败的文案（有缓存数据时不透传，避免误导）。 */
@@ -38,7 +50,7 @@ interface StartContainerDialogProps {
   onRetryWorkloads?: () => void;
 }
 
-/** 单次启动可挂载的工作负载上限（契约裁决 12）。 */
+/** 单次启动可显式勾选的工作负载上限（契约裁决 12）。 */
 export const MAX_WORKLOADS_PER_START = 10;
 
 export default function StartContainerDialog({
@@ -53,6 +65,7 @@ export default function StartContainerDialog({
   const [purpose, setPurpose] = useState<CloudContainerPurpose>('IDLE');
   // 保持勾选顺序：数组顺序即提交顺序
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [paramsByWorkload, setParamsByWorkload] = useState<Record<string, WorkloadParamValues>>({});
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,9 +73,24 @@ export default function StartContainerDialog({
     if (open) {
       setPurpose('IDLE');
       setSelectedIds([]);
+      setParamsByWorkload({});
       setError(null);
     }
   }, [open]);
+
+  const workloadById = new Map(workloads.map((workload) => [workload.id, workload]));
+  const selectedWorkloads = selectedIds
+    .map((id) => workloadById.get(id))
+    .filter((workload): workload is CloudWorkloadData => Boolean(workload));
+
+  const definitions: WorkloadPlanDefinition[] = workloads.map((workload) => ({
+    id: workload.id,
+    name: workload.name,
+    dependsOnWorkloadIds: workload.dependsOnWorkloadIds ?? [],
+  }));
+  // 顺序预览与隐式依赖（前端镜像，最终以服务端计划为准）
+  const preview = previewWorkloadPlan(selectedIds, definitions);
+  const overLimit = preview.items.length > MAX_PLAN_ITEMS;
 
   const toggleWorkload = (id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -74,15 +102,41 @@ export default function StartContainerDialog({
       }
       return prev.filter((value) => value !== id);
     });
+    setParamsByWorkload((prev) => {
+      if (checked) {
+        const workload = workloadById.get(id);
+        return { ...prev, [id]: buildDefaultParams(workload?.paramSchema ?? []) };
+      }
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const atLimit = selectedIds.length >= MAX_WORKLOADS_PER_START;
 
+  // 参数预校验：按工作负载定位（服务端仍强制）
+  const paramErrorsByWorkload: Record<string, ParamValueError[]> = {};
+  for (const workload of selectedWorkloads) {
+    const errors = validateParamValues(workload.paramSchema ?? [], paramsByWorkload[workload.id] ?? {});
+    if (errors.length > 0) paramErrorsByWorkload[workload.id] = errors;
+  }
+  const hasParamErrors = Object.keys(paramErrorsByWorkload).length > 0;
+  // 依赖环 / 依赖不存在时服务端必然拒绝，前端先行拦截（避免提交后必然失败）。
+  const hasCycle = preview.cycle !== null;
+  const hasMissingDeps = preview.missingDependencyIds.length > 0;
+  const canStart = !overLimit && !hasParamErrors && !hasCycle && !hasMissingDeps;
+
   const handleConfirm = async () => {
+    if (!canStart) return;
     setStarting(true);
     setError(null);
     try {
-      await onStart(purpose, selectedIds);
+      const selections: CloudWorkloadSelectionData[] = selectedIds.map((id) => ({
+        workloadId: id,
+        params: paramsByWorkload[id] ?? {},
+      }));
+      await onStart(purpose, selections);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : '启动失败，请重试');
@@ -93,11 +147,11 @@ export default function StartContainerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="min-w-0 max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>启动容器</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="space-y-2">
             <Label>任务类型</Label>
             <Select
@@ -157,6 +211,70 @@ export default function StartContainerDialog({
               可多选，按勾选顺序依次执行；最多 {MAX_WORKLOADS_PER_START} 个。
             </p>
           </div>
+
+          {selectedWorkloads.length > 0 && (
+            <div className="min-w-0 space-y-3 rounded-lg border p-3">
+              <p className="text-sm font-medium text-foreground">参数</p>
+              {selectedWorkloads.map((workload) => {
+                // 仅提示「存在但未勾选」的依赖；不存在的依赖由下方统一报错拦截。
+                const missingDeps = (workload.dependsOnWorkloadIds ?? [])
+                  .filter((depId) => !selectedIds.includes(depId) && workloadById.has(depId))
+                  .map((depId) => workloadById.get(depId)?.name ?? depId);
+                return (
+                  <div key={workload.id} className="min-w-0 space-y-2 rounded-md border p-3">
+                    <p className="truncate text-sm font-medium text-foreground">{workload.name}</p>
+                    {missingDeps.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        将自动初始化 {missingDeps.join('、')}（默认参数）
+                      </p>
+                    )}
+                    <WorkloadParamsForm
+                      workload={workload}
+                      values={paramsByWorkload[workload.id] ?? {}}
+                      errors={paramErrorsByWorkload[workload.id] ?? []}
+                      onChange={(next) =>
+                        setParamsByWorkload((prev) => ({ ...prev, [workload.id]: next }))
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {selectedIds.length > 0 && (
+            <div className="min-w-0 space-y-2 rounded-lg border p-3">
+              <p className="text-sm font-medium text-foreground">初始化顺序预览</p>
+              {preview.cycle ? (
+                <p role="alert" className="text-xs text-destructive">
+                  检测到依赖环：{preview.cycle.join(' → ')} → {preview.cycle[0]}
+                </p>
+              ) : (
+                <ol className="min-w-0 space-y-1">
+                  {preview.items.map((item) => (
+                    <li key={item.workloadId} className="flex min-w-0 items-center gap-2 text-sm">
+                      <span className="min-w-0 truncate text-foreground">{item.name}</span>
+                      {item.implicit && (
+                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                          隐式
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {preview.missingDependencyIds.length > 0 && (
+                <p role="alert" className="text-xs text-destructive">
+                  依赖的工作负载不存在：{preview.missingDependencyIds.join('、')}，无法启动。
+                </p>
+              )}
+              {overLimit && (
+                <p role="alert" className="text-xs text-destructive">
+                  展开依赖后超过单次挂载上限（{MAX_PLAN_ITEMS} 个），无法启动。
+                </p>
+              )}
+            </div>
+          )}
         </div>
         {error && (
           <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
@@ -167,7 +285,7 @@ export default function StartContainerDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button onClick={handleConfirm} disabled={starting}>
+          <Button onClick={handleConfirm} disabled={starting || !canStart}>
             {starting ? '启动中...' : '确认启动'}
           </Button>
         </DialogFooter>

@@ -10,6 +10,7 @@ import {
 import type {
   CloudContainerData,
   CloudContainerPurpose,
+  CloudWorkloadSelectionData,
   GetAdminCloudContainersQuery,
   GetAdminCloudWorkloadsQuery,
 } from '@/graphql/types';
@@ -48,9 +49,12 @@ export default function CloudContainersPage() {
   // 降级提示由契约字段承载（控制面在线标记），而非依赖 Apollo error
   const controlPlaneOffline = data?.adminCloudContainerControlPlane?.online === false;
 
-  const handleStart = async (purpose: CloudContainerPurpose, workloadIds: string[]) => {
+  const handleStart = async (
+    purpose: CloudContainerPurpose,
+    workloadsSelection: CloudWorkloadSelectionData[],
+  ) => {
     await startContainer({
-      variables: { purpose, workloadIds },
+      variables: { purpose, workloads: workloadsSelection },
       refetchQueries: [ADMIN_CLOUD_CONTAINERS],
     });
   };
