@@ -73,7 +73,7 @@ docker run --rm -it --entrypoint bash \
 
 ## 默认启动
 
-容器默认 `ENTRYPOINT` 为 `entrypoint.sh`：启动容器内 `dockerd` → 装配镜像代理 shim → `exec agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`），无需额外参数即回连 cloud-controller。
+容器默认 `ENTRYPOINT` 为 `entrypoint.sh`：启动容器内 `dockerd` → 装配镜像代理 shim → 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）→ `exec agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`），无需额外参数即回连 cloud-controller。
 
 ## 已知限制
 

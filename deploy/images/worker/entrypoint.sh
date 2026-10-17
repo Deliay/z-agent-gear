@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 默认工作容器入口：启动容器内 dockerd，装配镜像引用规范化 shim，然后 exec agent-gear 回连 cloud-controller。
+# 默认工作容器入口：启动容器内 dockerd，装配镜像引用规范化 shim，更新 agent-gear，
+# 然后 exec agent-gear 回连 cloud-controller。
 #
 # 连接参数来自注入的环境变量：
 #   ZAG_SERVER_ENDPOINT  形如 wss://<cloud-controller>/worker（不含 token）
 #   ZAG_CONTROLLER_KEY   一次性容器 token（agent-gear 连接时经 Socket.IO 握手 auth.token 携带，不进 URL）
+# 可选开关：
+#   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过启动时的 `npm install -g agent-gear`（离线/排障）
 set -euo pipefail
 
 HARBOR_PROXY="core.harbor.internal.fffdan.com"
@@ -69,6 +72,24 @@ start_dockerd() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# 更新 agent-gear：启动时执行 `npm install -g agent-gear`（走镜像内置的内网 npm 代理）。
+# 失败**不阻断**启动：镜像内已预装可用的 agent-gear，避免代理抖动/离线时容器起不来。
+# 设 ZAG_SKIP_AGENT_GEAR_UPDATE=1 可跳过（离线或排障时）。
+# ---------------------------------------------------------------------------
+update_agent_gear() {
+  if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
+    log "skipping agent-gear update (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
+    return 0
+  fi
+  log "updating agent-gear via npm (registry=$(npm config get registry 2>/dev/null || echo unknown))"
+  if npm install -g agent-gear --no-fund --no-audit; then
+    log "agent-gear updated: $(agent-gear --version 2>/dev/null || echo 'version unknown')"
+  else
+    log "WARN: agent-gear update failed; continuing with the pre-installed version ($(agent-gear --version 2>/dev/null || echo 'version unknown'))"
+  fi
+}
+
 shutdown() {
   log "shutdown requested, exiting"
   exit 0
@@ -77,6 +98,7 @@ trap shutdown SIGTERM SIGINT
 
 install_docker_shim
 start_dockerd
+update_agent_gear
 
 if [ -z "${ZAG_SERVER_ENDPOINT:-}" ]; then
   log "ZAG_SERVER_ENDPOINT is not set; cannot connect to cloud-controller"
