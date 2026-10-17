@@ -18,8 +18,13 @@ import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
+import { WorkloadExecutor, type WorkloadRunPayload } from './workload-executor.js';
 
-const CONTROLLER_VERSION = '2.1.1';
+const CONTROLLER_VERSION = '2.2.0';
+// 进程内全局单实例：工作负载批次严格串行（新批次打断旧批次，见 workload-executor）。
+const workloadExecutor = new WorkloadExecutor();
+// shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
+const SHUTDOWN_WORKLOAD_WAIT_MS = 5000;
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
@@ -330,6 +335,8 @@ export function connectToServer(
       homeDir: homedir(),
       platform: platform(),
     });
+    // 重连重放：将未确认的工作负载执行结果重新上报；服务端按终态幂等忽略（契约 §2.9）。
+    workloadExecutor.replayPendingResults((result) => socket.emit('workload:result', result));
   });
 
   socket.on('registered', (data: RegisteredPayload) => {
@@ -371,10 +378,32 @@ export function connectToServer(
 
   socket.on('shutdown', (data: ShutdownPayload) => {
     console.log(`Shutdown requested: ${data.reason}`);
-    heartbeat.stop();
-    clearConfigKey();
-    socket.close();
-    process.exit(0);
+    const finishShutdown = (): void => {
+      heartbeat.stop();
+      clearConfigKey();
+      socket.close();
+      process.exit(0);
+    };
+    // post 批次仍在执行时，等待其结束（≤5s）后再退出，避免清理脚本被中途打断。
+    // 无批次在跑时保持同步退出，行为与现状完全一致。
+    if (workloadExecutor.isRunning()) {
+      workloadExecutor.waitForIdle(SHUTDOWN_WORKLOAD_WAIT_MS).then(finishShutdown);
+    } else {
+      finishShutdown();
+    }
+  });
+
+  // Workload events
+  socket.on('workload:run', (data: WorkloadRunPayload) => {
+    if (!data || !Array.isArray(data.items)) {
+      console.warn(`[Workload] workload:run ignored: invalid payload ${JSON.stringify(data)}`);
+      return;
+    }
+    const budget = typeof data.budgetMs === 'number' ? ` budgetMs=${data.budgetMs}` : '';
+    console.log(`[Workload] workload:run received: phase=${data.phase} items=${data.items.length}${budget}`);
+    workloadExecutor.runBatch(data, (result) => socket.emit('workload:result', result)).catch((error: Error) => {
+      console.error(`[Workload] batch execution failed: ${error.message}`);
+    });
   });
 
   // ACP events

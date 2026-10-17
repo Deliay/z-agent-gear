@@ -10,7 +10,10 @@ import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
 import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken } from './socketio-gateway.js';
+import { WorkloadDispatcher } from './workload-dispatcher.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { InMemoryWorkloadRepository, type CloudWorkloadEntity } from '../repositories/workload-repository.js';
+import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
 
 let httpServer: HttpServer;
 let io: SocketIOServer;
@@ -21,6 +24,24 @@ let tokenService: TokenService;
 let service: ContainerService;
 let heartbeatTracker: HeartbeatTracker;
 let statusSync: StatusSyncService;
+let workloadRepository: InMemoryWorkloadRepository;
+let workloadLogRepository: InMemoryWorkloadLogRepository;
+let dispatcher: WorkloadDispatcher;
+
+function mkWorkload(
+  id: string,
+  name: string,
+  opts: { initScript?: string | null; postScript?: string | null } = {},
+): CloudWorkloadEntity {
+  return {
+    id,
+    name,
+    initScript: opts.initScript ?? null,
+    postScript: opts.postScript ?? null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
 
 function waitFor<T = unknown>(socket: ClientSocket, event: string, timeout = 3000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -74,13 +95,14 @@ async function connectError(token?: string): Promise<string> {
   });
 }
 
-async function newContainer() {
+async function newContainer(workloadIds: string[] = []) {
   const container = await repo.create({
     name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
     namespace: 'zag-workers',
     purpose: 'idle',
     image: 'zero-tools/zag-worker:latest',
     status: 'connecting',
+    workloadIds,
   });
   const token = await tokenService.issue(container.id);
   return { container, token };
@@ -133,7 +155,35 @@ beforeAll(async () => {
   // 与 index.ts 保持一致：显式 ENGINE_PATH + 强制 websocket 传输（建议 H）。
   // T-G10 通过「engine path 上 polling 被拒(400) vs /worker 路径不存在(404)」锚定路径。
   io = new SocketIOServer(httpServer, { path: ENGINE_PATH, transports: ['websocket'] });
-  registerWorkerGateway(io, { tokenService, containerService: service, heartbeatTracker });
+
+  workloadRepository = new InMemoryWorkloadRepository();
+  workloadLogRepository = new InMemoryWorkloadLogRepository();
+  const gatewayBridge: {
+    emitToContainer: (containerId: string, event: string, payload: unknown) => void;
+    isConnected: (containerId: string) => boolean;
+  } = { emitToContainer: () => {}, isConnected: () => false };
+  dispatcher = new WorkloadDispatcher({
+    containerRepository: repo,
+    containerService: service,
+    workloadRepository,
+    workloadLogRepository,
+    emitToContainer: (containerId, event, payload) =>
+      gatewayBridge.emitToContainer(containerId, event, payload),
+    isConnected: (containerId) => gatewayBridge.isConnected(containerId),
+    initTimeoutMs: 1000,
+    postBudgetMs: 5000,
+    logMaxBytes: 262144,
+  });
+
+  const gateway = registerWorkerGateway(io, {
+    tokenService,
+    containerService: service,
+    heartbeatTracker,
+    workloadDispatcher: dispatcher,
+  });
+  gatewayBridge.emitToContainer = gateway.emitToContainer;
+  gatewayBridge.isConnected = gateway.isConnected;
+
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const address = httpServer.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -446,5 +496,117 @@ describe('worker Socket.IO gateway', () => {
     expect(containerIdFromToken('bad/prefix.secret')).toBeUndefined();
     expect(containerIdFromToken(`${'a'.repeat(65)}.secret`)).toBeUndefined();
     expect(containerIdFromToken(undefined)).toBeUndefined();
+  });
+
+  it('T-WG1: register 挂载 init 脚本 → 下发 workload:run、置 initializing，结果回报后 online', async () => {
+    workloadRepository.add(mkWorkload('gw-init', 'gw-init-script', { initScript: 'echo hi' }));
+    const { container, token } = await newContainer(['gw-init']);
+    const socket = await connectWith(token);
+
+    const registered = waitFor(socket, 'registered');
+    const runPromise = waitFor<{ phase: string; items: Array<{ logId: string; workloadName: string }> }>(
+      socket,
+      'workload:run',
+    );
+    socket.emit('register', { hostname: 'worker-init', version: '2.2.0' });
+    await registered;
+
+    const run = await runPromise;
+    expect(run.phase).toBe('init');
+    expect(run.items.map((item) => item.workloadName)).toEqual(['gw-init-script']);
+
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'initializing');
+    expect((await repo.findById(container.id))?.currentWorkloadName).toBe('gw-init-script');
+
+    socket.emit('workload:result', {
+      logId: run.items[0]!.logId,
+      status: 'success',
+      exitCode: 0,
+      log: 'hi',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
+    expect((await repo.findById(container.id))?.currentWorkloadName).toBeNull();
+    socket.close();
+  });
+
+  it('T-WG1b: 无 init 脚本容器 register → 直接 online 且不下发 workload:run（存量回归）', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    let runReceived = false;
+    socket.on('workload:run', () => {
+      runReceived = true;
+    });
+
+    socket.emit('register', { hostname: 'worker-plain', version: '2.2.0' });
+    await waitFor(socket, 'registered');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(runReceived).toBe(false);
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    socket.close();
+  });
+
+  it('T-WG1c: 挂载项全部已删除 → 留档 FAILED 且容器仍 online', async () => {
+    const { container, token } = await newContainer(['gw-missing']);
+    const socket = await connectWith(token);
+
+    socket.emit('register', { hostname: 'worker-deleted', version: '2.2.0' });
+    await waitFor(socket, 'registered');
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.status).toBe('failed');
+    expect(logs[0]!.log).toContain('已删除');
+    socket.close();
+  });
+
+  it('T-WG2: 有 post 脚本的 destroy → 先 post 批次、收到结果后再 shutdown', async () => {
+    workloadRepository.add(mkWorkload('gw-post', 'gw-post-script', { postScript: 'echo bye' }));
+    const { container, token } = await newContainer(['gw-post']);
+    const socket = await connectWith(token);
+
+    const registered = waitFor(socket, 'registered');
+    socket.emit('register', { hostname: 'worker-post', version: '2.2.0' });
+    await registered;
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
+
+    const runPromise = waitFor<{ phase: string; items: Array<{ logId: string }> }>(
+      socket,
+      'workload:run',
+    );
+    const shutdownPromise = waitFor<{ reason: string }>(socket, 'shutdown');
+    const destroyPromise = service.destroy(container.id);
+
+    const run = await runPromise;
+    expect(run.phase).toBe('post');
+
+    let shutdownReceived = false;
+    void shutdownPromise.then(() => {
+      shutdownReceived = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(shutdownReceived).toBe(false);
+
+    socket.emit('workload:result', {
+      logId: run.items[0]!.logId,
+      status: 'success',
+      exitCode: 0,
+      log: 'bye',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+
+    const shutdown = await shutdownPromise;
+    expect(shutdown.reason).toBe('强制销毁');
+    await destroyPromise;
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+    const postLog = (await workloadLogRepository.findByContainer(container.id)).find(
+      (log) => log.phase === 'post',
+    );
+    expect(postLog?.status).toBe('success');
+    socket.close();
   });
 });

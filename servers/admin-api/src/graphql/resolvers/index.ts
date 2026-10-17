@@ -3,8 +3,9 @@ import { providerResolvers } from './provider.js';
 import { modelResolvers } from './model.js';
 import { baseImageResolvers } from './base-image.js';
 import { cloudContainerResolvers } from './cloud-container.js';
+import { cloudWorkloadResolvers } from './cloud-workload.js';
 
-// 类型级 resolver（Provider.models / Model.provider）必须显式登记，否则线上不生效
+// 类型级 resolver（Provider.models / Model.provider / CloudContainer.workloads）必须显式登记，否则线上不生效
 export const resolvers = {
   Query: {
     ...authResolvers.Query,
@@ -12,6 +13,7 @@ export const resolvers = {
     ...modelResolvers.Query,
     ...baseImageResolvers.Query,
     ...cloudContainerResolvers.Query,
+    ...cloudWorkloadResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -19,11 +21,15 @@ export const resolvers = {
     ...modelResolvers.Mutation,
     ...baseImageResolvers.Mutation,
     ...cloudContainerResolvers.Mutation,
+    ...cloudWorkloadResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,
   },
   Model: {
     ...modelResolvers.Model,
+  },
+  CloudContainer: {
+    ...cloudContainerResolvers.CloudContainer,
   },
 };

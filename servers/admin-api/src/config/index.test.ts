@@ -6,6 +6,7 @@ import {
   normalizeTrustProxy,
   isTrustedProxy,
   ipMatchesCidr,
+  parsePositiveInt,
 } from './index';
 
 describe('config (问题 4 / 问题 26 / 问题 47)', () => {
@@ -78,6 +79,21 @@ describe('config (问题 4 / 问题 26 / 问题 47)', () => {
     it('accepts a strong ADMIN_JWT_SECRET', () => {
       config.adminJwtSecret = 'a'.repeat(48);
       expect(() => assertRuntimeConfig()).not.toThrow();
+    });
+  });
+
+  describe('load-workload destroy timeout config (裁决 9)', () => {
+    it('defaults cloudControllerDestroyTimeoutMs to 180000', () => {
+      expect(config.cloudControllerDestroyTimeoutMs).toBe(180000);
+    });
+
+    it('parsePositiveInt falls back for missing/invalid/non-positive values', () => {
+      expect(parsePositiveInt(undefined, 180000)).toBe(180000);
+      expect(parsePositiveInt('', 180000)).toBe(180000);
+      expect(parsePositiveInt('abc', 180000)).toBe(180000);
+      expect(parsePositiveInt('0', 180000)).toBe(180000);
+      expect(parsePositiveInt('-5', 180000)).toBe(180000);
+      expect(parsePositiveInt('250000', 180000)).toBe(250000);
     });
   });
 

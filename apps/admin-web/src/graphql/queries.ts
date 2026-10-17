@@ -113,10 +113,46 @@ export const ADMIN_CLOUD_CONTAINERS = gql`
       connectedAt
       exitedAt
       exitReason
+      workloads {
+        id
+        name
+      }
+      currentWorkloadName
     }
     adminCloudContainerControlPlane {
       online
       message
+    }
+  }
+`
+
+export const ADMIN_CLOUD_WORKLOADS = gql`
+  query AdminCloudWorkloads {
+    adminCloudWorkloads {
+      id
+      name
+      initScript
+      postScript
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const ADMIN_CLOUD_WORKLOAD_LOGS = gql`
+  query AdminCloudContainerWorkloadLogs($containerId: ID!) {
+    adminCloudContainerWorkloadLogs(containerId: $containerId) {
+      id
+      containerId
+      workloadId
+      workloadName
+      phase
+      status
+      script
+      exitCode
+      log
+      startedAt
+      finishedAt
     }
   }
 `

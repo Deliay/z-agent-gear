@@ -1,0 +1,82 @@
+# 工作负载契约（云控制器工作负载功能）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+#
+# 数据归属：
+# - `cloudworkloads`：工作负载定义，由 admin-api 直写（CRUD），cloud-controller 只读。
+# - `cloudworkloadlogs`：执行记录，由 cloud-controller 写入（单一事实源），admin-api 只读。
+#   `adminCloudContainerWorkloadLogs` 优先经 cloud-controller 内部 API 查询，
+#   控制面不可达时降级直读 Mongo 只读模型（与容器列表降级模式一致）。
+#
+# 校验规则（服务端强制，契约级）：
+# - `name` 必填，trim 后 1~64 字符且 `cloudworkloads` 内唯一；
+# - `initScript` / `postScript` 各自 ≤ 16 KiB（16384 字节，UTF-8），且至少其一非空（trim 后）；
+# - 单次启动挂载 `workloadIds` ≤ 10 个，去重且保持选择顺序，必须全部存在。
+#
+# 错误文案：
+# - 名称重复 → `Workload name already exists`
+# - 校验失败 → 明确字段错误信息（如 `name is required` / `at least one script is required`）
+
+type CloudWorkload {
+  id: ID!
+  name: String!
+  initScript: String
+  postScript: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input CreateCloudWorkloadInput {
+  name: String!
+  initScript: String
+  postScript: String
+}
+
+input UpdateCloudWorkloadInput {
+  name: String
+  initScript: String
+  postScript: String
+}
+
+enum CloudWorkloadLogPhase {
+  INIT
+  POST
+}
+
+enum CloudWorkloadLogStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+# 单条工作负载脚本执行记录（含当时实际执行脚本的内容快照）
+type CloudWorkloadLog {
+  id: ID!
+  containerId: ID!
+  workloadId: ID!
+  workloadName: String! # 名称快照：工作负载被编辑/删除后记录仍可读
+  phase: CloudWorkloadLogPhase!
+  status: CloudWorkloadLogStatus!
+  script: String! # 当时实际执行的脚本内容快照（留档）
+  exitCode: Int
+  log: String!
+  startedAt: String
+  finishedAt: String
+}
+
+type Query {
+  # 全部工作负载（按创建时间倒序，最新在前）
+  adminCloudWorkloads: [CloudWorkload!]!
+  # 指定容器的工作负载执行记录（按创建顺序升序 = 执行顺序；控制面不可达时降级直读 Mongo）
+  adminCloudContainerWorkloadLogs(containerId: ID!): [CloudWorkloadLog!]!
+}
+
+type Mutation {
+  adminCreateCloudWorkload(input: CreateCloudWorkloadInput!): CloudWorkload!
+  adminUpdateCloudWorkload(id: ID!, input: UpdateCloudWorkloadInput!): CloudWorkload!
+  # 删除工作负载；已产生的执行记录（含脚本/名称快照）不受影响，仅影响后续启动选择
+  adminDeleteCloudWorkload(id: ID!): Boolean!
+}

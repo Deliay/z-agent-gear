@@ -13,6 +13,12 @@ export interface AppConfig {
   connectTimeoutMs: number;
   k8sEnabled: boolean;
   runtimeClassName: string;
+  /** 单条 init 脚本超时（`WORKLOAD_INIT_TIMEOUT_MS`，默认 300000），随 `workload:run` 下发。 */
+  workloadInitTimeoutMs: number;
+  /** post 批次共享总预算（`WORKLOAD_POST_BUDGET_MS`，默认 90000）。 */
+  workloadPostBudgetMs: number;
+  /** 单条日志存储上限（`WORKLOAD_LOG_MAX_BYTES`，默认 262144，截断保留尾部）。 */
+  workloadLogMaxBytes: number;
   /** 日志级别（`LOG_LEVEL`，默认 info；排查回连时设 debug）。 */
   logLevel: LogLevel;
 }
@@ -20,6 +26,19 @@ export interface AppConfig {
 function toInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/**
+ * 读取正整数配置：缺省取 fallback；显式提供但非法（非数字/<=0）时 fail-fast，
+ * 避免错误的宽限/预算在运行期静默放大或截断执行链路。
+ */
+function toPositiveIntStrict(value: string | undefined, envName: string, fallback: number): number {
+  if (value === undefined || value.trim() === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${envName}: expected a positive integer, got "${value}"`);
+  }
+  return parsed;
 }
 
 function toBool(value: string | undefined, fallback: boolean): boolean {
@@ -41,6 +60,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     connectTimeoutMs: toInt(env.CONNECT_TIMEOUT_MS, 300000),
     k8sEnabled: toBool(env.K8S_ENABLED, true),
     runtimeClassName: env.RUNTIME_CLASS_NAME || 'sysbox-runc',
+    workloadInitTimeoutMs: toPositiveIntStrict(
+      env.WORKLOAD_INIT_TIMEOUT_MS,
+      'WORKLOAD_INIT_TIMEOUT_MS',
+      300000,
+    ),
+    workloadPostBudgetMs: toPositiveIntStrict(
+      env.WORKLOAD_POST_BUDGET_MS,
+      'WORKLOAD_POST_BUDGET_MS',
+      90000,
+    ),
+    workloadLogMaxBytes: toPositiveIntStrict(
+      env.WORKLOAD_LOG_MAX_BYTES,
+      'WORKLOAD_LOG_MAX_BYTES',
+      262144,
+    ),
     logLevel: parseLogLevel(env.LOG_LEVEL),
   };
 }

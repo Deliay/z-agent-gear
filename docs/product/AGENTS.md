@@ -118,6 +118,7 @@ flowchart LR
 - [[draft/20260907-experience-optimization-phase1.md]] — 综合体验优化一期
 - [[draft/20261014-admin-console.md]] — 云控制器管理后台一期
 - [[draft/20261014-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
+- [[draft/20261017-cloud-controller-workload.md]] — 云控制器工作负载功能
 
 ### 已发布文档（`released/`）
 

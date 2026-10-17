@@ -15,9 +15,11 @@ interface ContainerNode {
   name: string;
   status: string;
   purpose: string;
+  workloads?: Array<{ id: string; name: string }>;
+  currentWorkloadName?: string | null;
 }
 
-const LIST = `query { adminCloudContainers { id name status purpose } }`;
+const LIST = `query { adminCloudContainers { id name status purpose workloads { id name } currentWorkloadName } }`;
 
 async function listContainers(page: Page, token: string): Promise<ContainerNode[]> {
   const res = await adminGqlRequest(page, LIST, undefined, token);
@@ -39,12 +41,16 @@ test.describe('Admin Cloud Container E2E', () => {
     await expect(page.getByRole('heading', { name: '云端容器' })).toBeVisible();
     await expect(page.getByRole('button', { name: '启动', exact: true })).toBeVisible();
 
-    // 启动对话框：本期仅 idle（T-E1/PRD 3.4）
+    // 启动对话框：本期仅 idle（T-E1/PRD 3.4）+ 工作负载多选入口
     await page.getByRole('button', { name: '启动', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('启动容器')).toBeVisible();
     await expect(dialog.getByText(/本期仅支持 idle/)).toBeVisible();
+    await expect(dialog.getByText('工作负载', { exact: true })).toBeVisible();
+    // 多选提示含契约上限（裁决 12）
+    await expect(dialog.getByText(/可多选，按勾选顺序依次执行/)).toBeVisible();
+    await expect(dialog.getByText(/最多 10 个/)).toBeVisible();
     await dialog.getByRole('button', { name: '取消' }).click();
     await expect(dialog).not.toBeVisible();
   });
@@ -94,6 +100,48 @@ test.describe('Admin Cloud Container E2E', () => {
       await page.waitForTimeout(500);
     }
     expect(status).toBe('EXITED');
+
+    // 兜底清理
+    await destroyViaApi(page, token, created!.id);
+  });
+
+  test('T-E: shows the workload column and opens the logs dialog with an empty state', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    const before = await listContainers(page, token);
+    const beforeIds = new Set(before.map((c) => c.id));
+
+    await adminLoginViaUI(page);
+    await page.getByRole('link', { name: /云端容器/ }).click();
+    await expect(page.getByRole('heading', { name: '云端容器' })).toBeVisible();
+
+    // 启动一个不挂载工作负载的容器
+    await page.getByRole('button', { name: '启动', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: '确认启动' }).click();
+    await expect(dialog).not.toBeVisible();
+
+    let created: ContainerNode | undefined;
+    for (let i = 0; i < 20 && !created; i += 1) {
+      const now = await listContainers(page, token);
+      created = now.find((c) => !beforeIds.has(c.id));
+      if (!created) await page.waitForTimeout(500);
+    }
+    expect(created, 'newly started container should be listed').toBeTruthy();
+    expect(created!.workloads ?? []).toEqual([]);
+
+    const row = page.locator('tr', { hasText: created!.name }).first();
+    await expect(row).toBeVisible();
+    // 「工作负载」列存在且无挂载时展示占位符（按列定位，避免命中名称中的连字符造成恒真断言）
+    await expect(page.getByRole('columnheader', { name: '工作负载' })).toBeVisible();
+    await expect(row.locator('td').nth(4)).toHaveText('-');
+
+    // 日志入口可打开（无记录空态）
+    await row.getByRole('button', { name: `工作负载日志 ${created!.name}` }).click();
+    const logsDialog = page.getByRole('dialog');
+    await expect(logsDialog.getByRole('heading', { name: '工作负载执行日志' })).toBeVisible();
+    await expect(logsDialog.getByText('暂无执行记录')).toBeVisible();
+    await logsDialog.getByRole('button', { name: 'Close' }).click();
+    await expect(logsDialog).not.toBeVisible();
 
     // 兜底清理
     await destroyViaApi(page, token, created!.id);
