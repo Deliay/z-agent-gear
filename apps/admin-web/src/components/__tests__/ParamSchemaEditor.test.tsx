@@ -5,6 +5,7 @@ import ParamSchemaEditor from '@/components/cloud-workloads/ParamSchemaEditor';
 import {
   validateParamSchema,
   normalizeParamSchema,
+  MAX_PARAMS,
   type ParamSchemaError,
 } from '@/lib/workload-params';
 import type { CloudWorkloadParamFieldInputData } from '@/graphql/types';
@@ -18,6 +19,18 @@ function param(
 function Harness({ initial }: { initial: CloudWorkloadParamFieldInputData[] }) {
   const [value, setValue] = useState(initial);
   return <ParamSchemaEditor value={value} onChange={setValue} />;
+}
+
+/** 受控 Harness，并把最新 schema 暴露给测试断言。 */
+function renderCapturing(initial: CloudWorkloadParamFieldInputData[]) {
+  const captured: { value: CloudWorkloadParamFieldInputData[] } = { value: initial };
+  function Capture() {
+    const [value, setValue] = useState(initial);
+    captured.value = value;
+    return <ParamSchemaEditor value={value} onChange={setValue} />;
+  }
+  render(<Capture />);
+  return captured;
 }
 
 describe('validateParamSchema (T-FP3, pre-validation only)', () => {
@@ -161,5 +174,79 @@ describe('ParamSchemaEditor (T-FP2)', () => {
     ];
     render(<ParamSchemaEditor value={[param({ key: '' })]} onChange={vi.fn()} errors={errors} />);
     expect(screen.getByText('参数标识必填')).toBeDefined();
+  });
+
+  it('T-FP2b: types two options character-by-character without losing newlines', () => {
+    renderCapturing([param({ type: 'SELECT', options: [], defaultValue: '' })]);
+    const textarea = screen.getByLabelText('可选项') as HTMLTextAreaElement;
+    // 逐字符键入（含回车），模拟真实输入；旧实现会把换行归一掉、拼成 "ab"。
+    const typeChunk = (chunk: string) => {
+      fireEvent.change(textarea, { target: { value: textarea.value + chunk } });
+    };
+    typeChunk('a');
+    typeChunk('\n');
+    typeChunk('b');
+
+    expect(textarea.value).toBe('a\nb');
+    const defaultSelect = screen.getByLabelText('默认值') as HTMLSelectElement;
+    expect(Array.from(defaultSelect.options).map((option) => option.value)).toEqual([
+      '',
+      'a',
+      'b',
+    ]);
+  });
+
+  it('T-FP2b: preserves an in-line space while typing an option', () => {
+    renderCapturing([param({ type: 'SELECT', options: [], defaultValue: '' })]);
+    const textarea = screen.getByLabelText('可选项') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'hello world' } });
+    expect(textarea.value).toBe('hello world');
+  });
+
+  it('T-FP2c: prunes an invalid MULTI_SELECT default when its option is removed (no deadlock)', () => {
+    const captured = renderCapturing([
+      param({
+        key: 'pm',
+        label: '包管理器',
+        type: 'MULTI_SELECT',
+        options: ['a', 'b'],
+        defaultValue: ['b'],
+      }),
+    ]);
+    expect(screen.getByRole('checkbox', { name: 'b' })).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('可选项'), { target: { value: 'a' } });
+
+    expect(captured.value[0].defaultValue).toEqual([]);
+    expect(screen.queryByRole('checkbox', { name: 'b' })).toBeNull();
+    expect(validateParamSchema(captured.value)).toEqual([]);
+  });
+
+  it('T-FP2c: resets an invalid SELECT default when its option is removed', () => {
+    const captured = renderCapturing([
+      param({ type: 'SELECT', options: ['a', 'b'], defaultValue: 'b' }),
+    ]);
+
+    fireEvent.change(screen.getByLabelText('可选项'), { target: { value: 'a' } });
+
+    expect(captured.value[0].defaultValue).toBe('');
+    expect(validateParamSchema(captured.value)).toContainEqual(
+      expect.objectContaining({ index: 0, field: 'defaultValue' }),
+    );
+  });
+
+  it('T-FP2d: caps parameters at MAX_PARAMS', () => {
+    const many = Array.from({ length: MAX_PARAMS }, (_, i) =>
+      param({ key: `k${i}`, label: `标签${i}` }),
+    );
+    render(<Harness initial={many} />);
+    expect(screen.getByRole('button', { name: /添加参数/ })).toBeDisabled();
+
+    const over = Array.from({ length: MAX_PARAMS + 1 }, (_, i) =>
+      param({ key: `k${i}`, label: `标签${i}` }),
+    );
+    expect(validateParamSchema(over)).toContainEqual(
+      expect.objectContaining({ index: -1, message: `参数最多 ${MAX_PARAMS} 个` }),
+    );
   });
 });

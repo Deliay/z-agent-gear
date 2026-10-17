@@ -122,7 +122,10 @@ export default function StartContainerDialog({
     if (errors.length > 0) paramErrorsByWorkload[workload.id] = errors;
   }
   const hasParamErrors = Object.keys(paramErrorsByWorkload).length > 0;
-  const canStart = !overLimit && !hasParamErrors;
+  // 依赖环 / 依赖不存在时服务端必然拒绝，前端先行拦截（避免提交后必然失败）。
+  const hasCycle = preview.cycle !== null;
+  const hasMissingDeps = preview.missingDependencyIds.length > 0;
+  const canStart = !overLimit && !hasParamErrors && !hasCycle && !hasMissingDeps;
 
   const handleConfirm = async () => {
     if (!canStart) return;
@@ -213,8 +216,9 @@ export default function StartContainerDialog({
             <div className="min-w-0 space-y-3 rounded-lg border p-3">
               <p className="text-sm font-medium text-foreground">参数</p>
               {selectedWorkloads.map((workload) => {
+                // 仅提示「存在但未勾选」的依赖；不存在的依赖由下方统一报错拦截。
                 const missingDeps = (workload.dependsOnWorkloadIds ?? [])
-                  .filter((depId) => !selectedIds.includes(depId))
+                  .filter((depId) => !selectedIds.includes(depId) && workloadById.has(depId))
                   .map((depId) => workloadById.get(depId)?.name ?? depId);
                 return (
                   <div key={workload.id} className="min-w-0 space-y-2 rounded-md border p-3">
@@ -258,6 +262,11 @@ export default function StartContainerDialog({
                     </li>
                   ))}
                 </ol>
+              )}
+              {preview.missingDependencyIds.length > 0 && (
+                <p role="alert" className="text-xs text-destructive">
+                  依赖的工作负载不存在：{preview.missingDependencyIds.join('、')}，无法启动。
+                </p>
               )}
               {overLimit && (
                 <p role="alert" className="text-xs text-destructive">

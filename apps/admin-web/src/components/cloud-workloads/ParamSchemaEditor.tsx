@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +35,64 @@ function parseOptions(text: string): string[] {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+interface OptionsTextareaProps {
+  id: string;
+  options: string[];
+  disabled: boolean;
+  onChange: (next: string[]) => void;
+}
+
+/**
+ * 可选项输入框：**本地保留原始草稿文本**，避免受控组件把换行/行内空格吃掉。
+ *
+ * 直接把 `parseOptions(value)` 回写为 `value` 会让「输入 "a" 回车」被归一成 `"a"`
+ * （换行丢失），用户无法逐字符键入第二个选项。这里以草稿文本为准，仅在外部
+ * 主动变更 options（切换类型/加载已有值）且与草稿解析结果不一致时回填。
+ */
+function OptionsTextarea({ id, options, disabled, onChange }: OptionsTextareaProps) {
+  const [text, setText] = useState(() => optionText(options));
+
+  useEffect(() => {
+    // 本控件输入产生的 options 与草稿解析结果一致，不打断输入；仅外部变更时回填。
+    if (parseOptions(text).join('\n') !== options.join('\n')) {
+      setText(optionText(options));
+    }
+  }, [options, text]);
+
+  return (
+    <textarea
+      id={id}
+      aria-label="可选项"
+      value={text}
+      disabled={disabled}
+      rows={3}
+      spellCheck={false}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parseOptions(e.target.value));
+      }}
+      className="w-full min-w-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm whitespace-pre-wrap break-all outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+    />
+  );
+}
+
+/** 可选项变化时把默认值裁剪到当前可选项集合，避免失效默认值造成无法自救的校验死锁。 */
+function pruneDefaultValue(
+  field: CloudWorkloadParamFieldInputData,
+  options: string[],
+): CloudWorkloadParamFieldInputData['defaultValue'] {
+  if (field.type === 'SELECT') {
+    return typeof field.defaultValue === 'string' && options.includes(field.defaultValue)
+      ? field.defaultValue
+      : '';
+  }
+  if (field.type === 'MULTI_SELECT') {
+    const value = Array.isArray(field.defaultValue) ? field.defaultValue : [];
+    return value.filter((item) => options.includes(item));
+  }
+  return field.defaultValue;
 }
 
 function fieldError(
@@ -77,6 +136,13 @@ export default function ParamSchemaEditor({
       type,
       options: type === 'SELECT' || type === 'MULTI_SELECT' ? value[index].options ?? [] : [],
       defaultValue: defaultValueForType(type),
+    });
+  };
+
+  const handleOptionsChange = (index: number, options: string[]): void => {
+    updateField(index, {
+      options,
+      defaultValue: pruneDefaultValue(value[index], options),
     });
   };
 
@@ -192,15 +258,11 @@ export default function ParamSchemaEditor({
                 {isSelect && (
                   <div className="min-w-0 space-y-1">
                     <Label htmlFor={`param-options-${index}`}>可选项（每行一个）</Label>
-                    <textarea
+                    <OptionsTextarea
                       id={`param-options-${index}`}
-                      aria-label="可选项"
-                      value={optionText(options)}
+                      options={options}
                       disabled={disabled}
-                      rows={3}
-                      spellCheck={false}
-                      onChange={(e) => updateField(index, { options: parseOptions(e.target.value) })}
-                      className="w-full min-w-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm whitespace-pre-wrap break-all outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      onChange={(next) => handleOptionsChange(index, next)}
                     />
                     {fieldError(errors, index, 'options') && (
                       <p className="text-xs text-destructive">

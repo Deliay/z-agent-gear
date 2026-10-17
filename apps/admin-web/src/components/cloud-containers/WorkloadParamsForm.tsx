@@ -78,14 +78,19 @@ export default function WorkloadParamsForm({
                         aria-label={option}
                         disabled={disabled}
                         checked={selected.includes(option)}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          // 归一为「可选项顺序」，使同一逻辑值产生稳定的 params 快照（日志留档稳定）。
+                          const next = new Set(selected);
+                          if (e.target.checked) {
+                            next.add(option);
+                          } else {
+                            next.delete(option);
+                          }
                           setValue(
                             field.key,
-                            e.target.checked
-                              ? [...selected, option]
-                              : selected.filter((item) => item !== option),
-                          )
-                        }
+                            (field.options ?? []).filter((candidate) => next.has(candidate)),
+                          );
+                        }}
                       />
                       {option}
                     </label>

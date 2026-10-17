@@ -131,4 +131,108 @@ describe('StartContainerDialog (T-FP5/T-FP6/T-FP7)', () => {
     ).toBeDefined();
     expect(screen.getByRole('button', { name: '确认启动' })).toBeDisabled();
   });
+
+  it('T-FP7: submits a BOOLEAN false default through the whole start flow (key presence)', async () => {
+    const flag = workload({
+      id: 'd6',
+      name: 'Flag',
+      paramSchema: [{ key: 'enabled', label: '启用', type: 'BOOLEAN', options: [], defaultValue: false }],
+    });
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    render(
+      <StartContainerDialog open onOpenChange={() => {}} workloads={[flag]} onStart={onStart} />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Flag' }));
+    expect(screen.getByRole('switch')).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '确认启动' }));
+
+    await waitFor(() =>
+      expect(onStart).toHaveBeenCalledWith('IDLE', [
+        { workloadId: 'd6', params: { enabled: false } },
+      ]),
+    );
+  });
+
+  it('T-FP7: keeps same-named params of different workloads independent', async () => {
+    const first = workload({
+      id: 'd7',
+      name: 'First',
+      paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '18' }],
+    });
+    const second = workload({
+      id: 'd8',
+      name: 'Second',
+      paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+    });
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    render(
+      <StartContainerDialog
+        open
+        onOpenChange={() => {}}
+        workloads={[first, second]}
+        onStart={onStart}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'First' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Second' }));
+
+    const versionInputs = screen.getAllByLabelText('版本') as HTMLInputElement[];
+    fireEvent.change(versionInputs[0], { target: { value: '20' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '确认启动' }));
+
+    await waitFor(() =>
+      expect(onStart).toHaveBeenCalledWith('IDLE', [
+        { workloadId: 'd7', params: { version: '20' } },
+        { workloadId: 'd8', params: { version: '22' } },
+      ]),
+    );
+  });
+
+  it('T-FP7: normalizes MULTI_SELECT params to option order for a stable snapshot', async () => {
+    const onStart = renderDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Node.js' }));
+    // 取消默认 npm；先勾 yarn 再勾 bun（可选项顺序为 npm,pnpm,bun,yarn）
+    fireEvent.click(screen.getByRole('checkbox', { name: 'npm' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'yarn' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'bun' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '确认启动' }));
+
+    await waitFor(() =>
+      expect(onStart).toHaveBeenCalledWith('IDLE', [
+        { workloadId: 'd4', params: { version: '22', package_manager: ['bun', 'yarn'] } },
+      ]),
+    );
+  });
+
+  it('T-FP6: blocks starting on a dependency cycle', () => {
+    const a = workload({ id: 'c1', name: 'Cyc-A', dependsOnWorkloadIds: ['c2'] });
+    const b = workload({ id: 'c2', name: 'Cyc-B', dependsOnWorkloadIds: ['c1'] });
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    render(
+      <StartContainerDialog open onOpenChange={() => {}} workloads={[a, b]} onStart={onStart} />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Cyc-A' }));
+
+    expect(screen.getByText(/检测到依赖环/)).toBeDefined();
+    expect(screen.getByRole('button', { name: '确认启动' })).toBeDisabled();
+  });
+
+  it('T-FP6: blocks starting when a dependency no longer exists', () => {
+    const orphan = workload({ id: 'o1', name: 'Orphan', dependsOnWorkloadIds: ['gone'] });
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    render(
+      <StartContainerDialog open onOpenChange={() => {}} workloads={[orphan]} onStart={onStart} />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Orphan' }));
+
+    expect(screen.getByText(/依赖的工作负载不存在：gone/)).toBeDefined();
+    expect(screen.getByRole('button', { name: '确认启动' })).toBeDisabled();
+  });
 });
