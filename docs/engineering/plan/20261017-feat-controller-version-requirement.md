@@ -12,6 +12,23 @@ type: Permanent
 **创建日期**: 2026-10-17
 **计划版本**: v1.0
 
+## 实现进度
+
+| Phase | 状态 | 说明 |
+|------|------|------|
+| Phase 1 契约 | ✅ 完成 | `docs(contracts): 约定 worker 最低版本门禁与 VERSION_MISMATCH 载荷`（独立提交，先于实现） |
+| Phase 2 版本门禁 | ✅ 完成 | `services/worker-version.ts` + T-V0~V5、T-GV1~GV5；存量网关用例统一 `OK_VERSION = '2.2.0'` |
+| Phase 3 销毁锚定 | ✅ 完成 | T-S19（`connectedAt=null` 不发 shutdown / 不等待宽限 / 删 Job）；T-S18 保持通过 |
+| Phase 4 entrypoint | ✅ 完成 | 受监督运行 + 单次自升级 + stderr 流式扫描 + 信号转发；`entrypoint.test.sh` T-EP1~EP8 全绿 |
+| Phase 5 文档收口 | ✅ 完成 | 契约/AGENTS/BUILD 同步；全量回归与 PR |
+
+**实现期补充口径**：
+
+- `start_dockerd` 的就绪探测由 `/usr/bin/docker info` 改为 `docker info`（经 PATH）：生产环境 shim 安装后同样委托 `/usr/bin/docker`，行为不变；测试可用 PATH stub 确定性跳过真实 dockerd。
+- `entrypoint.test.sh` 的 npm 调用计数区分「启动更新」与「恢复升级」（`agent_starts` 是否已存在），因此 T-EP1 总安装 2 次 = 启动更新失败 1 次 + 恢复升级 1 次。
+- T-EP7(INT)：非交互 shell 的后台作业默认忽略 SIGINT，测试在启动入口前 `set -m` 开启作业控制，确保 SIGINT 能到达入口 trap；入口统一向子进程转发 SIGTERM。
+- 运行目录 `$TMPDIR/zag-worker.XXXXXX` 仅在进程生命周期使用，stderr FIFO 用后删除，mismatch 标记为 0 字节文件，不落盘完整日志。
+
 ## 实现顺序
 
 ```
