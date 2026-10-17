@@ -5,6 +5,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import { Server as SocketIOServer } from 'socket.io';
 import { assertRuntimeConfig, config } from './config/index.js';
+import { createLogger } from './logger.js';
 import { MongoContainerRepository } from './repositories/container-repository.js';
 import { TokenService } from './services/token-service.js';
 import { createK8sClient } from './services/k8s-client.js';
@@ -13,6 +14,7 @@ import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
+import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
 
@@ -27,6 +29,7 @@ export interface CloudControllerApp {
 
 export function createCloudControllerApp(): CloudControllerApp {
   assertRuntimeConfig(config);
+  const logger = createLogger(config.logLevel);
 
   const app = express();
   app.use(cors());
@@ -45,6 +48,9 @@ export function createCloudControllerApp(): CloudControllerApp {
     transports: ['websocket'],
   });
 
+  // 传输层诊断：记录每个 WS upgrade / engine 错误 / 误配路径（worker 经 Ingress 回连排查用）。
+  wireSocketDiagnostics({ httpServer, io, logger, enginePath: ENGINE_PATH });
+
   const repo = new MongoContainerRepository();
   const tokenService = new TokenService(repo);
   const k8sClient = createK8sClient(config);
@@ -54,12 +60,18 @@ export function createCloudControllerApp(): CloudControllerApp {
     runtimeClassName: config.runtimeClassName,
     publicWsEndpoint: config.publicWsEndpoint,
   });
-  const containerService = new ContainerService(repo, tokenService, jobManager, {
-    namespace: config.k8sNamespace,
-    image: config.workerImage,
-    connectTimeoutMs: config.connectTimeoutMs,
-    shutdownGraceMs: 10000,
-  });
+  const containerService = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: config.k8sNamespace,
+      image: config.workerImage,
+      connectTimeoutMs: config.connectTimeoutMs,
+      shutdownGraceMs: 10000,
+    },
+    logger,
+  );
   const heartbeatTracker = new HeartbeatTracker();
   const statusSync = new StatusSyncService({
     repo,
@@ -68,9 +80,10 @@ export function createCloudControllerApp(): CloudControllerApp {
     heartbeatTracker,
     connectTimeoutMs: config.connectTimeoutMs,
     image: config.workerImage,
+    logger,
   });
 
-  registerWorkerGateway(io, { tokenService, containerService, heartbeatTracker });
+  registerWorkerGateway(io, { tokenService, containerService, heartbeatTracker, logger });
 
   app.use(
     '/internal',
@@ -88,7 +101,14 @@ export function createCloudControllerApp(): CloudControllerApp {
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, resolve);
     });
-    console.log(`cloud-controller listening on :${config.port}`);
+    logger.info(
+      `cloud-controller listening on :${config.port} ` +
+        `(engine path ${ENGINE_PATH}, log level ${config.logLevel})`,
+    );
+    logger.info(
+      `[ws] worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker；握手实际打到 ${ENGINE_PATH}，` +
+        `Ingress 必须放行该路径（PUBLIC_WS_ENDPOINT=${config.publicWsEndpoint || '-'}）。`,
+    );
   }
 
   async function stop(): Promise<void> {

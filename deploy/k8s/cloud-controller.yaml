@@ -92,6 +92,9 @@ spec:
             # hostUsers: false——sysbox 要求停用宿主 user namespace，否则 sandbox 创建失败。
             - name: RUNTIME_CLASS_NAME
               value: 'sysbox-runc'
+            # 排查 worker 回连（握手/engine path/Ingress 路径）时改为 'debug' 看逐请求日志。
+            - name: LOG_LEVEL
+              value: 'info'
             - name: MONGODB_URI
               valueFrom:
                 secretKeyRef:
