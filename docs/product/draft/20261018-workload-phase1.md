@@ -6,9 +6,11 @@ type: Permanent
 # 工作负载一期：参数、依赖与预制工作负载
 
 **功能名称**: 工作负载参数化、隐式依赖与预制工作负载
-**PRD 版本**: v1.0
+**PRD 版本**: v1.1
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
+
+> v1.1 变更（返工）：Aspire 预制工作负载改为通过官方安装脚本 `curl -sSL https://aspire.dev/install.sh | bash` 安装 **Aspire CLI**，并以 `aspire --version` 校验；不再使用 `dotnet workload install aspire`（该 workload 不会提供 `aspire` CLI）。
 
 ## 背景与目标
 
@@ -142,7 +144,7 @@ type: Permanent
   | Docker | 无 | 无 | 启动容器内 Docker 守护进程（dockerd），就绪后初始化完成 |
   | Node.js | 版本（文本，默认 22）；包管理器（多选，可选 npm/pnpm/bun/yarn，默认 npm） | 无 | 用 nvm 安装指定版本并设为默认；安装所选包管理器；配置内部 npm registry |
   | .NET | 无 | 无 | 安装最新 LTS 版本 .NET SDK，并使其在容器内可用 |
-  | Aspire | 无 | .NET | 在 .NET 就绪后安装/初始化 .NET Aspire 环境 |
+  | Aspire | 无 | .NET | 在 .NET 就绪后通过官方安装脚本安装 Aspire CLI，并用 `aspire --version` 校验 |
 
   - 预制工作负载初始化后与普通工作负载一样可查看、编辑、删除；系统不会在后续启动时覆盖管理员的修改。
   - 预制工作负载只在首次引入时写入；已初始化的不会重复写入。
@@ -157,7 +159,7 @@ type: Permanent
   - [ ] 选择 Docker 后容器内 docker 命令可用；不选择时容器正常上线但无 dockerd
   - [ ] Node.js 按填写的版本安装并设为默认；所选包管理器可用；registry 指向内部地址
   - [ ] .NET 安装最新 LTS 后 `dotnet` 可用
-  - [ ] Aspire 在 .NET 完成后初始化，且 .NET 只初始化一次
+  - [ ] Aspire 在 .NET 完成后初始化，`aspire --version` 可正常输出版本号，且 .NET 只初始化一次
 
 #### 功能点 6: 工作负载与执行记录展示增强
 
@@ -272,7 +274,7 @@ flowchart TD
 | Node.js 版本安装失败 | 该工作负载记录失败并保留日志；容器仍可继续后续工作负载并上线 |
 | Node.js 包管理器安装失败 | 记录失败；已成功的项保持；后续项继续执行 |
 | .NET 下载/安装失败 | 记录失败；Aspire 仍会尝试执行并留下失败日志；容器可上线 |
-| Aspire 初始化失败（如内部源不可达） | 记录失败；容器可上线，管理员可查看日志 |
+| Aspire CLI 安装失败（如内部源不可达） | 记录失败；容器可上线，管理员可查看日志 |
 | Docker 守护进程启动失败 | 记录失败与 dockerd 日志尾部；容器可上线但 Docker 不可用 |
 | 预制迁移执行失败 | 记录错误，不阻断服务启动；下次启动时按未完成的迁移重试 |
 | 迁移已记录完成但预制项被删除 | 不重新写入（符合「初始化过不再初始化」） |
@@ -308,7 +310,7 @@ flowchart TD
 - 已上线的云控制器管理后台与「工作负载」能力（CRUD、启动挂载、初始化/清理批次、执行日志）。
 - 云端工作容器镜像可更新（容器内 Agent 需支持参数注入与预制脚本所需的命令）。
 - Node.js 预制项依赖内部 nvm/GitHub raw/Node.js 发行包/npm registry 代理。
-- .NET/Aspire 预制项依赖外网或内部代理可访问 .NET 安装脚本与 NuGet 源。
+- .NET/Aspire 预制项依赖外网或内部代理可访问 .NET 安装脚本、Aspire CLI 安装脚本与 NuGet 源。
 - Docker 预制项依赖工作容器具备启动 dockerd 的运行权限（sysbox 等运行时）。
 
 ### 5.2 约束
@@ -319,7 +321,7 @@ flowchart TD
 - 预制工作负载采用「一次性迁移」语义：已初始化过的不再自动初始化；后续新增预制项必须通过新的迁移批次。
 - 工作负载初始化失败不阻断容器上线（沿用现有策略），失败信息通过执行记录呈现。
 - Docker 守护进程改为按需启动后，未挂载 Docker 工作负载的容器不保证 docker 命令可用。
-- Aspire 预制项本期无参数，仅提供「依赖 .NET + 初始化 Aspire 环境」的最小能力。
+- Aspire 预制项本期无参数，仅提供「依赖 .NET + 安装 Aspire CLI 并用 `aspire --version` 校验」的最小能力。
 
 ## 六、相关文档
 

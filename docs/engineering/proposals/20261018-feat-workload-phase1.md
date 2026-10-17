@@ -7,10 +7,12 @@ type: Permanent
 
 **功能名称**: 工作负载参数化、隐式依赖与预制工作负载
 **关联 PRD**: docs/product/draft/20261018-workload-phase1.md
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
 **feat-branch**: `feat/workload-phase1`
+
+> v1.1 变更（返工）：Aspire 预制工作负载改为通过官方安装脚本 `curl -sSL https://aspire.dev/install.sh | bash` 安装 **Aspire CLI**，并强制执行 `aspire --version` 校验；移除 `dotnet workload install aspire`。
 
 ## 1. 概述
 
@@ -457,8 +459,21 @@ flowchart LR
 
 #### 实现点 8: Node.js/.NET/Aspire 预制脚本
 
-- **描述**: 脚本见 §5.3。Node.js 使用 nvm 安装/切换版本，更新 `$NVM_DIR/current` 软链，配置 npm registry 后安装所选包管理器；.NET 使用官方 `dotnet-install.sh` 安装 LTS 到 `/usr/local/dotnet` 并写入 PATH；Aspire 在 .NET 就绪后执行 `dotnet workload install aspire`。
-- **技术细节**: `NPM_REGISTRY`、`DOTNET_INSTALL_URL`、`DOTNET_INSTALL_DIR` 支持环境变量覆盖，默认指向现有内网 npm 代理与官方 .NET 安装脚本；脚本均幂等（已安装则跳过）。
+- **描述**: 脚本见 §5.3。Node.js 使用 nvm 安装/切换版本，更新 `$NVM_DIR/current` 软链，配置 npm registry 后安装所选包管理器；.NET 使用官方 `dotnet-install.sh` 安装 LTS 到 `/usr/local/dotnet` 并写入 PATH；Aspire 在 .NET 就绪后通过官方安装脚本安装 CLI，并执行 `aspire --version` 校验。
+- **技术细节**: `NPM_REGISTRY`、`DOTNET_INSTALL_URL`、`DOTNET_INSTALL_DIR`、`ASPIRE_INSTALL_URL` 支持环境变量覆盖，默认指向现有内网 npm 代理与官方安装脚本；脚本均幂等（已安装则跳过）。
+- **验证结论（2026-10-18）**: 在 .NET SDK `10.0.112` 环境实测：`dotnet workload list` 未安装 aspire workload，`dotnet workload search aspire` 无结果，而 `aspire --version` 返回 `13.5.4+9c1b401...`；CLI 位于 `~/.aspire/bin/aspire`，由 aspire.dev 安装脚本安装。由此确认 `dotnet workload install aspire` **不会**提供 `aspire` CLI，不能作为本预制项的安装方式。
+
+  ```text
+  $ dotnet workload list       # 已安装工作负载列表：无 aspire
+  $ dotnet workload search aspire
+  Workload ID      Description
+  -------------    ------------
+  # 无结果
+  $ aspire --version
+  13.5.4+9c1b401dd67746739044f68959cbf4d3d7af93a6
+  ```
+
+  因此 Aspire 预制脚本必须执行 `curl -sSL https://aspire.dev/install.sh | bash` 安装 CLI，并以 `aspire --version` 作为成功判据。
 - **风险点**: `.NET`/Aspire 依赖外网或内部代理可用性；失败会记录日志但不阻断容器上线（沿用现有失败策略）。
 
 #### 实现点 9: admin-web 参数与依赖交互
@@ -588,12 +603,32 @@ command -v dotnet >/dev/null 2>&1 || {
   exit 1
 }
 
-if dotnet workload list 2>/dev/null | grep -qi aspire; then
-  echo "Aspire workload 已安装"
+# 已安装过（PATH 或安装脚本默认目录）则跳过下载，直接校验版本
+if ! command -v aspire >/dev/null 2>&1 && [ -x "$HOME/.aspire/bin/aspire" ]; then
+  ln -sfn "$HOME/.aspire/bin/aspire" /usr/local/bin/aspire
+fi
+if command -v aspire >/dev/null 2>&1; then
+  aspire --version
   exit 0
 fi
 
-dotnet workload install aspire
+INSTALL_URL="${ASPIRE_INSTALL_URL:-https://aspire.dev/install.sh}"
+curl -sSL "$INSTALL_URL" | bash
+
+ASPIRE_BIN="$HOME/.aspire/bin/aspire"
+[ -x "$ASPIRE_BIN" ] || {
+  echo "Aspire CLI 安装后未找到 $ASPIRE_BIN" >&2
+  exit 1
+}
+
+# 让非登录 shell / 后续工作负载也能直接使用 aspire
+ln -sfn "$ASPIRE_BIN" /usr/local/bin/aspire
+printf '%s\n' 'export PATH="$HOME/.aspire/bin:$PATH"' > /etc/profile.d/aspire.sh
+chmod +x /etc/profile.d/aspire.sh
+export PATH="$HOME/.aspire/bin:$PATH"
+
+# 必须校验成功，避免“安装脚本返回 0 但实际不可用”
+aspire --version
 ```
 
 ## 6. 技术决策
@@ -610,7 +645,7 @@ dotnet workload install aspire
 | 显式/隐式重复 | 报错 | **去重，只执行一次** | 去重 | 需求明确「依赖只会初始化一次」；显式参数优先 |
 | 预制初始化 | 每次启动 upsert | **一次性 migration** | migration | 需求明确「初始化过不再初始化」，且不覆盖管理员修改 |
 | Docker 启动 | 保留 entrypoint | **迁移到 Docker 工作负载** | 迁移 | 需求明确；让 Docker 成为可选能力 |
-| Aspire 初始化 | 仅依赖 .NET，不装 | **依赖 .NET + 安装 Aspire workload** | 安装 | 否则选中 Aspire 无实际效果；按最小可用实现 |
+| Aspire 初始化 | 仅依赖 .NET，不装 | **依赖 .NET + 安装 Aspire CLI 并校验版本** | 安装 CLI | `dotnet workload install aspire` 不提供 `aspire` CLI；必须用 aspire.dev 安装脚本 |
 | 旧请求兼容 | 直接破坏 | **保留 workloadIds 并双写** | 兼容 | 滚动升级期间新旧 admin-api/cloud-controller 可共存 |
 
 ### 6.2 依赖与约束
@@ -621,7 +656,7 @@ dotnet workload install aspire
 | 依赖 | 共享 MongoDB | admin-api/cloud-controller 读写同一库；`admin_migrations` 独立集合 |
 | 依赖 | worker 镜像更新 | agent-gear 需升级到支持参数注入的版本（建议 ≥2.3.0，major 仍为 2） |
 | 依赖 | 内网 npm 代理 / nvm 源 | Node.js 预制脚本依赖镜像内已有配置 |
-| 依赖 | .NET 安装源 / NuGet | .NET 与 Aspire 脚本依赖外网或内部代理 |
+| 依赖 | .NET 安装源 / Aspire CLI 安装脚本 / NuGet | .NET 与 Aspire 脚本依赖外网或内部代理 |
 | 约束 | 单次挂载 ≤10 | 展开后数量也受此限制 |
 | 约束 | 参数不含敏感信息 | 参数会进入执行记录，禁止存放密码/Token |
 | 约束 | 初始化失败不阻断上线 | 沿用既有工作负载失败策略 |
@@ -712,7 +747,7 @@ deploy/images/worker/
 | 单元测试 | vitest | `workload-plan` 纯函数全分支；工作负载参数/依赖校验；migration 幂等；dispatcher 计划读取与 params 落库；executor env 注入 |
 | API 测试 | tests/api | GraphQL CRUD、启动传参、依赖展开、日志 params、迁移结果 |
 | E2E 测试 | tests/e2e | 启动对话框参数表单、依赖提示、初始化顺序、日志展示 |
-| 手工验证 | K8s 环境 | Docker/Node.js/.NET/Aspire 真实脚本执行、超时、镜像重建、内部源可达性 |
+| 手工验证 | K8s 环境 | Docker/Node.js/.NET/Aspire 真实脚本执行（含 `aspire --version`）、超时、镜像重建、内部源可达性 |
 
 开发遵循 TDD 红-绿-重构循环。
 
@@ -732,6 +767,7 @@ deploy/images/worker/
 | `NPM_REGISTRY` | worker 镜像/脚本 | 内网 npm 代理 | Node.js 脚本设置 npm registry |
 | `DOTNET_INSTALL_URL` | worker 脚本 | `https://dot.net/v1/dotnet-install.sh` | 可替换为内部代理 |
 | `DOTNET_INSTALL_DIR` | worker 脚本 | `/usr/local/dotnet` | .NET 安装目录 |
+| `ASPIRE_INSTALL_URL` | worker 脚本 | `https://aspire.dev/install.sh` | Aspire CLI 安装脚本地址，可替换为内部代理 |
 | `WORKLOAD_INIT_TIMEOUT_MS` | cloud-controller | 300000 | 单条脚本超时（沿用） |
 | `WORKLOAD_POST_BUDGET_MS` | cloud-controller | 90000 | 清理批次预算（沿用） |
 | `WORKLOAD_LOG_MAX_BYTES` | cloud-controller | 262144 | 日志截断（沿用） |
@@ -760,7 +796,7 @@ deploy/images/worker/
 - [ ] Docker/Node.js/.NET/Aspire 四个预制项一次性写入，修改/删除后不被覆盖
 - [ ] Docker 工作负载可启动 dockerd；未选择时容器不启动 dockerd
 - [ ] Node.js 版本/包管理器/内部 registry 生效
-- [ ] .NET LTS 可用；Aspire 在 .NET 之后初始化
+- [ ] .NET LTS 可用；Aspire 在 .NET 之后初始化，`aspire --version` 输出版本号
 - [ ] 旧版 `workloadIds` 请求与历史容器行为兼容
 
 ## 11. 相关文档
