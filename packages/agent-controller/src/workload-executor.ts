@@ -89,7 +89,13 @@ class TailBuffer {
   }
 
   toString(): string {
-    return Buffer.concat(this.chunks).toString('utf8');
+    const buffer = Buffer.concat(this.chunks);
+    // 截断保留尾部时，起始处可能落在多字节 UTF-8 字符的续字节上（0b10xxxxxx），
+    // 直接解码会在日志首字符产生乱码（U+FFFD）；跳过续字节到字符边界再解码
+    // （与服务端 `truncateLogTail` 同一口径）。
+    let start = 0;
+    while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1;
+    return buffer.subarray(start).toString('utf8');
   }
 }
 

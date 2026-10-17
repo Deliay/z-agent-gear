@@ -287,7 +287,7 @@ Content-Type: application/json
 { "purpose": "idle", "workloadIds": ["<objectId>", "..."] }
 ```
 
-`workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：数组、≤ 10 个、去重且保持顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
+`workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 
 **响应 201：** 新建的 `CloudContainer`。
 

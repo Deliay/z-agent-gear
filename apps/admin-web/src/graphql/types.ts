@@ -154,6 +154,12 @@ export interface CloudWorkloadInputData {
   postScript: string | null;
 }
 
+/**
+ * 容器挂载工作负载的精简形态：`ADMIN_CLOUD_CONTAINERS` 只查询 `{ id name }`
+ * （`CloudContainer.workloads` 仅用于展示名称），据此收窄类型避免类型撒谎。
+ */
+export type CloudContainerWorkloadData = Pick<CloudWorkloadData, 'id' | 'name'>;
+
 export type CloudWorkloadLogPhase = 'INIT' | 'POST';
 
 export type CloudWorkloadLogStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TIMEOUT';
@@ -217,8 +223,8 @@ export interface CloudContainerData {
   connectedAt: string | null;
   exitedAt: string | null;
   exitReason: string | null;
-  /** 容器启动时挂载的工作负载，按选择顺序返回；已删除项会被省略 */
-  workloads: CloudWorkloadData[];
+  /** 容器启动时挂载的工作负载（仅 id/name），按选择顺序返回；已删除项会被省略 */
+  workloads: CloudContainerWorkloadData[];
   /** 初始化中当前执行的工作负载名称；非初始化中为 null */
   currentWorkloadName: string | null;
 }

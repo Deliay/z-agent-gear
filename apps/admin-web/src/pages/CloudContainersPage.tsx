@@ -29,7 +29,12 @@ export default function CloudContainersPage() {
     pollInterval: 10000,
   });
   // 启动对话框可选的工作负载；独立查询，不影响容器轮询
-  const { data: workloadsData } = useQuery<GetAdminCloudWorkloadsQuery>(ADMIN_CLOUD_WORKLOADS);
+  const {
+    data: workloadsData,
+    loading: workloadsLoading,
+    error: workloadsError,
+    refetch: refetchWorkloads,
+  } = useQuery<GetAdminCloudWorkloadsQuery>(ADMIN_CLOUD_WORKLOADS);
   const [startContainer] = useMutation(ADMIN_START_CLOUD_CONTAINER);
   const [destroyContainer] = useMutation(ADMIN_DESTROY_CLOUD_CONTAINER);
 
@@ -185,6 +190,9 @@ export default function CloudContainersPage() {
         open={startOpen}
         onOpenChange={setStartOpen}
         workloads={workloads}
+        workloadsLoading={workloadsLoading && !workloadsData}
+        workloadsError={workloadsError && !workloadsData ? workloadsError.message : null}
+        onRetryWorkloads={() => refetchWorkloads()}
         onStart={handleStart}
       />
 

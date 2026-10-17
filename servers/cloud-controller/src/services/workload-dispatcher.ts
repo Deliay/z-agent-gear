@@ -65,15 +65,11 @@ const INIT_WATCHDOG_EXTRA_MS = 120000;
 
 const DELETED_WORKLOAD_NAME = '(已删除)';
 const DELETED_WORKLOAD_LOG = '工作负载已删除，跳过执行';
+const DELETED_WORKLOAD_POST_LOG = '工作负载已删除，未执行清理';
 const DISCONNECTED_LOG = '容器未连接，未执行';
 const DESTROY_INTERRUPT_LOG = '容器销毁中断';
 const POST_BUDGET_EXCEEDED_LOG = '清理脚本超时';
 const INIT_TIMEOUT_LOG = '初始化超时';
-
-interface PostBatchPreparation {
-  done: boolean;
-  logIds: string[];
-}
 
 /** 截断保留尾部 ≤ maxBytes（UTF-8 安全：丢弃起始处的半个多字节字符）。 */
 export function truncateLogTail(text: string, maxBytes: number): string {
@@ -322,21 +318,28 @@ export class WorkloadDispatcher {
   /**
    * 销毁流程的 post 批次：打断未完成的 init → 创建 post 日志 → emit → 等待完成/预算耗尽。
    * 无 post 脚本或无活跃连接时立即返回（调用方随后 emit shutdown）。
+   *
+   * waiter 在持有容器互斥锁期间注册（建议 11），避免 `preparePostBatch` 释锁后、注册前
+   * 全部结果先收口，导致销毁白等一个预算周期。
    */
   async runPostBatch(containerId: string): Promise<void> {
-    const prepared = await this.mutex.runExclusive(containerId, () =>
+    // 注意：`preparePostBatch` 返回的 waiter promise 必须包在对象里——`KeyedMutex.runExclusive`
+    // 会 await 回调的返回值，直接返回 promise 会在持锁期间等待它（而结果回调需要同一把锁）造成死锁。
+    const prep = await this.mutex.runExclusive(containerId, () =>
       this.preparePostBatch(containerId),
     );
-    if (!prepared || prepared.done) return;
-    await this.waitForPostCompletion(containerId, this.deps.postBudgetMs);
+    if (prep?.wait) await prep.wait;
   }
 
-  private async preparePostBatch(containerId: string): Promise<PostBatchPreparation | null> {
+  /** 返回需等待的 waiter（已完成/无需等待时为 `null`）。全程在调用方的互斥锁内执行。 */
+  private async preparePostBatch(
+    containerId: string,
+  ): Promise<{ wait: Promise<void> } | null> {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container) return null;
 
     const existing = await this.deps.workloadLogRepository.findByContainer(containerId);
-    if (existing.some((log) => log.phase === 'post')) return { done: true, logIds: [] };
+    if (existing.some((log) => log.phase === 'post')) return null;
 
     const now = new Date(this.now());
     // 裁决 7：销毁时 init 尚未结束 → 先把非终态 init 记录标 TIMEOUT，再进入 post。
@@ -350,36 +353,61 @@ export class WorkloadDispatcher {
     }
 
     const workloadIds = container.workloadIds ?? [];
-    if (workloadIds.length === 0) return { done: true, logIds: [] };
+    if (workloadIds.length === 0) return null;
 
     const workloads = await this.deps.workloadRepository.findByIds(workloadIds);
     const byId = new Map(workloads.map((workload) => [workload.id, workload]));
-    const entries = workloadIds
+
+    // 建议 7：已删除工作负载也留一条 FAILED 占位（清理阶段未执行），与 init 阶段
+    // （裁决 3）口径一致，避免静默丢失留档。
+    const deletedIds = workloadIds.filter((id) => !byId.has(id));
+    const runEntries = workloadIds
       .map((id) => byId.get(id))
       .filter((workload): workload is CloudWorkloadEntity => {
         return workload !== undefined && (workload.postScript ?? '').trim().length > 0;
       });
-    if (entries.length === 0) return { done: true, logIds: [] };
+
+    if (deletedIds.length === 0 && runEntries.length === 0) return null;
+
+    const placeholders: CreateWorkloadLogInput[] = deletedIds.map((id) => ({
+      containerId,
+      workloadId: id,
+      workloadName: DELETED_WORKLOAD_NAME,
+      phase: 'post',
+      status: 'failed',
+      script: '',
+      log: DELETED_WORKLOAD_POST_LOG,
+      exitCode: null,
+      startedAt: null,
+      finishedAt: now,
+    }));
 
     // 裁决 8：无活跃连接不等待预算，直接如实记录「未执行」。
     if (!this.deps.isConnected(containerId)) {
-      const inputs: CreateWorkloadLogInput[] = entries.map((workload) => ({
-        containerId,
-        workloadId: workload.id,
-        workloadName: workload.name,
-        phase: 'post',
-        status: 'timeout',
-        script: workload.postScript ?? '',
-        log: DISCONNECTED_LOG,
-        exitCode: null,
-        startedAt: null,
-        finishedAt: now,
-      }));
-      await this.deps.workloadLogRepository.createMany(inputs);
-      return { done: true, logIds: [] };
+      await this.deps.workloadLogRepository.createMany(placeholders);
+      if (runEntries.length > 0) {
+        const inputs: CreateWorkloadLogInput[] = runEntries.map((workload) => ({
+          containerId,
+          workloadId: workload.id,
+          workloadName: workload.name,
+          phase: 'post',
+          status: 'timeout',
+          script: workload.postScript ?? '',
+          log: DISCONNECTED_LOG,
+          exitCode: null,
+          startedAt: null,
+          finishedAt: now,
+        }));
+        await this.deps.workloadLogRepository.createMany(inputs);
+      }
+      return null;
     }
 
-    const inputs: CreateWorkloadLogInput[] = entries.map((workload, index) => ({
+    await this.deps.workloadLogRepository.createMany(placeholders);
+
+    if (runEntries.length === 0) return null;
+
+    const inputs: CreateWorkloadLogInput[] = runEntries.map((workload, index) => ({
       containerId,
       workloadId: workload.id,
       workloadName: workload.name,
@@ -392,11 +420,14 @@ export class WorkloadDispatcher {
       finishedAt: null,
     }));
     const logs = await this.deps.workloadLogRepository.createMany(inputs);
+    // 仍持有容器互斥锁：先注册 waiter 再 emit，杜绝「结果先到、waiter 未注册」的窗口。
+    const wait = this.createWaiter(containerId, this.deps.postBudgetMs);
     this.emitRun(containerId, 'post', logs);
-    return { done: false, logIds: logs.map((log) => log.id) };
+    return { wait };
   }
 
-  private waitForPostCompletion(containerId: string, budgetMs: number): Promise<void> {
+  /** 创建并注册 post 等待者（注册与预算定时器均在本方法内同步建立）。 */
+  private createWaiter(containerId: string, budgetMs: number): Promise<void> {
     return new Promise<void>((resolve) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -407,11 +438,11 @@ export class WorkloadDispatcher {
         this.removeWaiter(containerId, waiter);
         resolve();
       };
+      this.addWaiter(containerId, waiter);
       timer = setTimeout(() => {
         void this.expirePostBatch(containerId).finally(waiter);
       }, Math.max(budgetMs, 0));
       timer.unref?.();
-      this.addWaiter(containerId, waiter);
     });
   }
 
