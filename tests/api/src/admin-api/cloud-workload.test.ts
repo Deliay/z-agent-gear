@@ -13,25 +13,35 @@ import { adminGql, ensureAdminLogin } from './helpers.js';
 //     servers/admin-api/src/graphql/resolvers/cloud-workload.test.ts 的单测锚定
 //     （E2E/Aspire 环境无法在运行期摘掉 cloud-controller）
 //   - adminStartCloudContainer 携带 workloadIds（合法挂载顺序 / 未知 id 报错 / 缺省不挂载）
+//   - 工作负载一期：paramSchema CRUD（四种类型/默认值/可选项/非法值）、依赖保存
+//     （正常/自依赖/环/不存在/超 5）、预制项存在性与幂等（重复查询稳定）、日志 params
 //
 // 说明：cloud-controller 由 Aspire 以 K8S_ENABLED=false 启动（InMemoryK8sClient），start 后容器
 // 无真实工作容器回连，故不会自动产生执行日志——日志用例在直写 Mongo 后经控制面内部 API 读回。
 
+// 契约 CloudWorkload 的公共选择集：既有 CRUD 字段 + 参数/依赖/预制（工作负载一期）。
+const WORKLOAD_FIELDS = `
+  id name initScript postScript createdAt updatedAt
+  paramSchema { key label type options defaultValue }
+  dependsOnWorkloadIds
+  isPreset
+`;
+
 const LIST = `
   query AdminCloudWorkloads {
-    adminCloudWorkloads { id name initScript postScript createdAt updatedAt }
+    adminCloudWorkloads { ${WORKLOAD_FIELDS} }
   }
 `;
 
 const CREATE = `
   mutation AdminCreateCloudWorkload($input: CreateCloudWorkloadInput!) {
-    adminCreateCloudWorkload(input: $input) { id name initScript postScript createdAt updatedAt }
+    adminCreateCloudWorkload(input: $input) { ${WORKLOAD_FIELDS} }
   }
 `;
 
 const UPDATE = `
   mutation AdminUpdateCloudWorkload($id: ID!, $input: UpdateCloudWorkloadInput!) {
-    adminUpdateCloudWorkload(id: $id, input: $input) { id name initScript postScript createdAt updatedAt }
+    adminUpdateCloudWorkload(id: $id, input: $input) { ${WORKLOAD_FIELDS} }
   }
 `;
 
@@ -40,7 +50,7 @@ const DELETE = `mutation AdminDeleteCloudWorkload($id: ID!) { adminDeleteCloudWo
 const LOGS = `
   query AdminCloudContainerWorkloadLogs($containerId: ID!) {
     adminCloudContainerWorkloadLogs(containerId: $containerId) {
-      id containerId workloadId workloadName phase status script exitCode log startedAt finishedAt
+      id containerId workloadId workloadName phase status script params exitCode log startedAt finishedAt
     }
   }
 `;
@@ -58,11 +68,30 @@ const DESTROY = `mutation AdminDestroyCloudContainer($id: ID!) { adminDestroyClo
 /** 16 KiB（UTF-8）单脚本上限（裁决 12）；+1 字节即越界。 */
 const SCRIPT_MAX_BYTES = 16 * 1024;
 
+interface ParamFieldNode {
+  key: string;
+  label: string;
+  type: string;
+  options: string[];
+  defaultValue: unknown;
+}
+
 interface WorkloadNode {
   id: string;
   name: string;
   initScript: string | null;
   postScript: string | null;
+  paramSchema?: ParamFieldNode[];
+  dependsOnWorkloadIds?: string[];
+  isPreset?: boolean;
+}
+
+interface ParamFieldInput {
+  key: string;
+  label: string;
+  type: string;
+  options?: string[];
+  defaultValue: unknown;
 }
 
 interface ContainerNode {
@@ -114,6 +143,8 @@ describe('Admin Cloud Workload API', () => {
     name: string;
     initScript?: string | null;
     postScript?: string | null;
+    paramSchema?: ParamFieldInput[];
+    dependsOnWorkloadIds?: string[];
   }): Promise<WorkloadNode> {
     const res = await adminGql<{ adminCreateCloudWorkload: WorkloadNode }>(CREATE, { input }, token);
     expect(res.errors, JSON.stringify(res.errors)).toBeUndefined();
@@ -295,6 +326,7 @@ describe('Admin Cloud Workload API', () => {
           phase: 'init',
           status: 'success',
           script: 'echo "hello init"',
+          params: { version: '20', package_manager: ['pnpm'] },
           exitCode: 0,
           log: 'hello init\n',
           startedAt: new Date(base),
@@ -326,6 +358,7 @@ describe('Admin Cloud Workload API', () => {
           phase: string;
           status: string;
           script: string;
+          params: Record<string, unknown>;
           exitCode: number | null;
           log: string;
           startedAt: string | null;
@@ -344,6 +377,9 @@ describe('Admin Cloud Workload API', () => {
       // 脚本内容快照留档
       expect(records[0].script).toBe('echo "hello init"');
       expect(records[1].script).toBe('echo "cleanup"');
+      // 参数快照留档（含默认值）；历史记录无 params 归一为 {}
+      expect(records[0].params).toEqual({ version: '20', package_manager: ['pnpm'] });
+      expect(records[1].params).toEqual({});
       expect(records[0].containerId).toBe(container.id);
       expect(records[0].workloadId).toBe(workloadId.toString());
       expect(records[0].exitCode).toBe(0);
@@ -390,5 +426,266 @@ describe('Admin Cloud Workload API', () => {
     startedContainers.push(container.id);
     expect(container.workloads).toEqual([]);
     expect(container.currentWorkloadName).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // 工作负载一期：paramSchema CRUD（T-W8/T-W9）
+  // -------------------------------------------------------------------------
+
+  it('T-IA: saves and echoes a paramSchema with all four field types', async () => {
+    const workload = await createWorkload({
+      name: uniqueName('wl-params'),
+      initScript: 'echo params',
+      paramSchema: [
+        { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'fast' },
+        { key: 'features', label: '特性', type: 'MULTI_SELECT', options: ['x1', 'x2', 'x3'], defaultValue: ['x1', 'x3'] },
+        // 非下拉类型即使传了 options 也应归一为 []
+        { key: 'version', label: '版本', type: 'TEXT', options: ['ignored'], defaultValue: '22' },
+        { key: 'verbose', label: '详细', type: 'BOOLEAN', options: ['ignored'], defaultValue: false },
+      ],
+    });
+
+    expect(workload.paramSchema).toEqual([
+      { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'fast' },
+      { key: 'features', label: '特性', type: 'MULTI_SELECT', options: ['x1', 'x2', 'x3'], defaultValue: ['x1', 'x3'] },
+      { key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' },
+      { key: 'verbose', label: '详细', type: 'BOOLEAN', options: [], defaultValue: false },
+    ]);
+    expect(workload.isPreset).toBe(false);
+    expect(workload.dependsOnWorkloadIds).toEqual([]);
+  });
+
+  it('T-IA: updates paramSchema defaults and can clear it (empty form)', async () => {
+    const workload = await createWorkload({
+      name: uniqueName('wl-param-update'),
+      initScript: 'echo',
+      paramSchema: [
+        { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'fast' },
+      ],
+    });
+
+    const updated = await adminGql<{ adminUpdateCloudWorkload: WorkloadNode }>(
+      UPDATE,
+      {
+        id: workload.id,
+        input: {
+          paramSchema: [
+            { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'slow' },
+            { key: 'verbose', label: '详细', type: 'BOOLEAN', defaultValue: true },
+          ],
+        },
+      },
+      token,
+    );
+    expect(updated.errors, JSON.stringify(updated.errors)).toBeUndefined();
+    expect(updated.data!.adminUpdateCloudWorkload.paramSchema).toEqual([
+      { key: 'mode', label: '模式', type: 'SELECT', options: ['fast', 'slow'], defaultValue: 'slow' },
+      { key: 'verbose', label: '详细', type: 'BOOLEAN', options: [], defaultValue: true },
+    ]);
+
+    // 空表单 → 无参数配置
+    const cleared = await adminGql<{ adminUpdateCloudWorkload: WorkloadNode }>(
+      UPDATE,
+      { id: workload.id, input: { paramSchema: [] } },
+      token,
+    );
+    expect(cleared.errors).toBeUndefined();
+    expect(cleared.data!.adminUpdateCloudWorkload.paramSchema).toEqual([]);
+  });
+
+  it('T-IA: rejects illegal paramSchema entries with field-path errors', async () => {
+    const cases: Array<{ label: string; paramSchema: ParamFieldInput[]; message: string }> = [
+      {
+        label: 'key 非法',
+        paramSchema: [{ key: '1bad', label: 'L', type: 'TEXT', defaultValue: 'x' }],
+        message: 'paramSchema[0].key is invalid',
+      },
+      {
+        label: 'label 为空',
+        paramSchema: [{ key: 'ok', label: '', type: 'TEXT', defaultValue: 'x' }],
+        message: 'paramSchema[0].label is invalid',
+      },
+      {
+        label: 'label 超长',
+        paramSchema: [{ key: 'ok', label: 'L'.repeat(65), type: 'TEXT', defaultValue: 'x' }],
+        message: 'paramSchema[0].label is invalid',
+      },
+      {
+        label: 'options 为空',
+        paramSchema: [{ key: 'ok', label: 'L', type: 'SELECT', options: [], defaultValue: 'a' }],
+        message: 'paramSchema[0].options is invalid',
+      },
+      {
+        label: 'options 重复',
+        paramSchema: [{ key: 'ok', label: 'L', type: 'SELECT', options: ['a', 'a'], defaultValue: 'a' }],
+        message: 'paramSchema[0].options is invalid',
+      },
+      {
+        label: 'options 超限',
+        paramSchema: [
+          {
+            key: 'ok',
+            label: 'L',
+            type: 'SELECT',
+            options: Array.from({ length: 51 }, (_, i) => `o${i}`),
+            defaultValue: 'o0',
+          },
+        ],
+        message: 'paramSchema[0].options is invalid',
+      },
+      {
+        label: 'SELECT 默认值不在可选项内',
+        paramSchema: [{ key: 'ok', label: 'L', type: 'SELECT', options: ['a'], defaultValue: 'b' }],
+        message: 'paramSchema[0].defaultValue is invalid',
+      },
+      {
+        label: 'MULTI_SELECT 默认值非数组',
+        paramSchema: [{ key: 'ok', label: 'L', type: 'MULTI_SELECT', options: ['a'], defaultValue: 'a' }],
+        message: 'paramSchema[0].defaultValue is invalid',
+      },
+      {
+        label: 'BOOLEAN 默认值类型不符',
+        paramSchema: [{ key: 'ok', label: 'L', type: 'BOOLEAN', defaultValue: 'true' }],
+        message: 'paramSchema[0].defaultValue is invalid',
+      },
+      {
+        label: 'key 重复',
+        paramSchema: [
+          { key: 'ok', label: 'L', type: 'TEXT', defaultValue: 'x' },
+          { key: 'ok', label: 'L2', type: 'TEXT', defaultValue: 'y' },
+        ],
+        message: 'paramSchema[1].key is duplicated',
+      },
+      {
+        label: '参数数量超限',
+        paramSchema: Array.from({ length: 21 }, (_, i) => ({
+          key: `p${i}`,
+          label: 'L',
+          type: 'TEXT',
+          defaultValue: 'x',
+        })),
+        message: 'too many parameters',
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const res = await adminGql(
+        CREATE,
+        {
+          input: {
+            name: uniqueName(`wl-bad-param-${index}`),
+            initScript: 'echo',
+            paramSchema: testCase.paramSchema,
+          },
+        },
+        token,
+      );
+      expect(res.errors?.[0].message, testCase.label).toBe(testCase.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // 工作负载一期：依赖保存（T-W10）
+  // -------------------------------------------------------------------------
+
+  it('T-IA: saves dependencies in configuration order and dedupes them', async () => {
+    const depA = await createWorkload({ name: uniqueName('wl-dep-a'), initScript: 'echo a' });
+    const depB = await createWorkload({ name: uniqueName('wl-dep-b'), initScript: 'echo b' });
+    const parent = await createWorkload({
+      name: uniqueName('wl-dep-parent'),
+      initScript: 'echo parent',
+      dependsOnWorkloadIds: [depA.id, depB.id, depA.id],
+    });
+    expect(parent.dependsOnWorkloadIds).toEqual([depA.id, depB.id]);
+  });
+
+  it('T-IA: rejects self dependency', async () => {
+    const workload = await createWorkload({ name: uniqueName('wl-self'), initScript: 'echo' });
+    const res = await adminGql(UPDATE, { id: workload.id, input: { dependsOnWorkloadIds: [workload.id] } }, token);
+    expect(res.errors?.[0].message).toBe('workload cannot depend on itself');
+  });
+
+  it('T-IA: rejects a dependency cycle', async () => {
+    const a = await createWorkload({ name: uniqueName('wl-cyc-a'), initScript: 'echo a' });
+    // b 依赖 a
+    const b = await createWorkload({
+      name: uniqueName('wl-cyc-b'),
+      initScript: 'echo b',
+      dependsOnWorkloadIds: [a.id],
+    });
+    // 再把 a 指向 b → 成环，应被拒绝并返回环路径
+    const cyclic = await adminGql(UPDATE, { id: a.id, input: { dependsOnWorkloadIds: [b.id] } }, token);
+    expect(cyclic.errors?.[0].message).toContain('dependency cycle detected');
+  });
+
+  it('T-IA: rejects missing and too many dependencies', async () => {
+    const missing = await adminGql(
+      CREATE,
+      {
+        input: {
+          name: uniqueName('wl-missing-dep'),
+          initScript: 'echo',
+          dependsOnWorkloadIds: [new mongoose.Types.ObjectId().toString()],
+        },
+      },
+      token,
+    );
+    expect(missing.errors?.[0].message).toBe('dependency workload not found');
+
+    const many = await adminGql(
+      CREATE,
+      {
+        input: {
+          name: uniqueName('wl-many-dep'),
+          initScript: 'echo',
+          dependsOnWorkloadIds: Array.from({ length: 6 }, () =>
+            new mongoose.Types.ObjectId().toString(),
+          ),
+        },
+      },
+      token,
+    );
+    expect(many.errors?.[0].message).toBe('too many dependencies');
+  });
+
+  // -------------------------------------------------------------------------
+  // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
+  // -------------------------------------------------------------------------
+
+  it('T-IA: exposes the four preset workloads with stable ids (idempotent)', async () => {
+    const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
+    expect(first.errors).toBeUndefined();
+    const all = first.data!.adminCloudWorkloads;
+    const byName = new Map(all.map((workload) => [workload.name, workload]));
+
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire']) {
+      const preset = byName.get(name);
+      expect(preset, `preset ${name} should exist`).toBeTruthy();
+      expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
+      // 迁移只补缺不覆盖：同名预制项只应存在一个
+      expect(all.filter((workload) => workload.name === name)).toHaveLength(1);
+    }
+
+    const docker = byName.get('Docker')!;
+    const dotnet = byName.get('.NET')!;
+    const aspire = byName.get('Aspire')!;
+    // Aspire 依赖 Docker → .NET（顺序即初始化顺序）
+    expect(aspire.dependsOnWorkloadIds).toEqual([docker.id, dotnet.id]);
+
+    const nodejs = byName.get('Node.js')!;
+    expect(nodejs.paramSchema?.map((field) => field.key)).toEqual(['version', 'package_manager']);
+    expect(nodejs.paramSchema?.[0]).toMatchObject({ type: 'TEXT', defaultValue: '22' });
+    expect(nodejs.paramSchema?.[1]).toMatchObject({
+      type: 'MULTI_SELECT',
+      options: ['npm', 'pnpm', 'bun', 'yarn'],
+      defaultValue: ['npm'],
+    });
+
+    // 重复查询稳定：预制项 ID 集合不变（迁移不会重复写入/重建）
+    const second = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
+    const presetIds = (list: WorkloadNode[]) =>
+      list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
+    expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
+    expect(presetIds(all)).toHaveLength(4);
   });
 });
