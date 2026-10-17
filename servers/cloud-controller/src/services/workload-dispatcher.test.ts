@@ -4,7 +4,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
 import { WorkloadDispatcher, truncateLogTail } from './workload-dispatcher.js';
-import type { CloudContainerStatus } from '../models/cloud-container.js';
+import type { CloudContainerStatus, WorkloadPlanEntry } from '../models/cloud-container.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
@@ -50,7 +50,14 @@ function waitForCondition(predicate: () => boolean, timeout = 2000): Promise<voi
 
 interface RunPayload {
   phase: 'init' | 'post';
-  items: Array<{ logId: string; workloadName: string; script: string; timeoutMs: number }>;
+  items: Array<{
+    logId: string;
+    workloadId?: string;
+    workloadName: string;
+    script: string;
+    params?: Record<string, unknown>;
+    timeoutMs: number;
+  }>;
   budgetMs?: number;
 }
 
@@ -97,6 +104,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
   const createContainer = async (
     workloadIds: string[],
     status: CloudContainerStatus = 'connecting',
+    workloadPlan: WorkloadPlanEntry[] = [],
   ) =>
     repo.create({
       name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
@@ -105,6 +113,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
       image: 'zero-tools/zag-worker:latest',
       status,
       workloadIds,
+      workloadPlan,
       connectedAt: status === 'online' ? new Date(NOW_BASE) : null,
     });
 
@@ -659,5 +668,102 @@ describe('WorkloadDispatcher - 重连不重发', () => {
     expect(truncateLogTail('abc', 10)).toBe('abc');
     expect(truncateLogTail('', 10)).toBe('');
     expect(truncateLogTail('中文内容', 5)).toBe('容');
+  });
+});
+
+describe('WorkloadDispatcher - 执行计划与参数（workloadPlan/params）', () => {
+  it('T-WD11: init 按 plan 下发，items 携带 workloadId/params，日志写入 params 快照', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    workloadRepository.add(mkWorkload('w2', 'init-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: { version: '22', pm: ['pnpm'] }, implicit: false },
+      { workloadId: 'w2', params: {}, implicit: true },
+    ]);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started).toBe(true);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.map((log) => log.workloadId)).toEqual(['w1', 'w2']);
+    expect(logs[0]!.params).toEqual({ version: '22', pm: ['pnpm'] });
+    expect(logs[1]!.params).toEqual({});
+
+    const items = runs('init')[0]!.payload.items;
+    expect(items.map((item) => item.workloadId)).toEqual(['w1', 'w2']);
+    expect(items[0]!.params).toEqual({ version: '22', pm: ['pnpm'] });
+    expect(items[1]!.params).toEqual({});
+  });
+
+  it('T-WD12: 隐式依赖按 plan 顺序下发，隐式条目参数为默认值快照', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup();
+    workloadRepository.add(mkWorkload('dep', 'base', { initScript: 'echo dep' }));
+    workloadRepository.add(mkWorkload('app', 'app', { initScript: 'echo app' }));
+    const container = await createContainer(['dep', 'app'], 'connecting', [
+      { workloadId: 'dep', params: { version: '22' }, implicit: true },
+      { workloadId: 'app', params: { pm: ['npm'] }, implicit: false },
+    ]);
+
+    await dispatcher.startInit(container.id);
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.map((log) => log.workloadId)).toEqual(['dep', 'app']);
+    expect(logs.map((log) => log.params)).toEqual([{ version: '22' }, { pm: ['npm'] }]);
+    expect(runs('init')[0]!.payload.items.map((item) => item.workloadId)).toEqual(['dep', 'app']);
+  });
+
+  it('T-WD13: 历史容器无 plan → 回退 workloadIds + 空 params，行为与现状一致', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    const container = await createContainer(['w1']);
+
+    await dispatcher.startInit(container.id);
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs[0]!.params).toEqual({});
+    const items = runs('init')[0]!.payload.items;
+    expect(items[0]!.workloadId).toBe('w1');
+    expect(items[0]!.params).toEqual({});
+  });
+
+  it('T-WD14: post 批次写入 params 快照；已删除占位记录 params 为 {}', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup();
+    workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'echo bye' }));
+    const container = await createContainer(['w1', 'missing'], 'destroying', [
+      { workloadId: 'w1', params: { keep: true }, implicit: false },
+      { workloadId: 'missing', params: {}, implicit: true },
+    ]);
+
+    const done = dispatcher.runPostBatch(container.id);
+    await waitForCondition(() => runs('post').length === 1);
+
+    const items = runs('post')[0]!.payload.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.workloadId).toBe('w1');
+    expect(items[0]!.params).toEqual({ keep: true });
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.find((log) => log.workloadId === 'w1')!.params).toEqual({ keep: true });
+    expect(logs.find((log) => log.workloadId === 'missing')!.params).toEqual({});
+
+    await dispatcher.handleResult(container.id, { logId: items[0]!.logId, status: 'success' });
+    await done;
+  });
+
+  it('T-WD14b: 无活跃连接时 post 未执行项也写入 params 快照', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup({
+      connected: false,
+    });
+    workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'rm -rf /tmp/a' }));
+    const container = await createContainer(['w1'], 'destroying', [
+      { workloadId: 'w1', params: { keep: true }, implicit: false },
+    ]);
+
+    await dispatcher.runPostBatch(container.id);
+
+    expect(runs('post')).toHaveLength(0);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs[0]!.status).toBe('timeout');
+    expect(logs[0]!.params).toEqual({ keep: true });
   });
 });

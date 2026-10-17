@@ -18,6 +18,7 @@ export interface CloudWorkloadLogEntity {
   phase: WorkloadLogPhase;
   status: WorkloadLogStatus;
   script: string;
+  params: Record<string, unknown>;
   exitCode: number | null;
   log: string;
   startedAt: Date | null;
@@ -33,6 +34,7 @@ export interface CreateWorkloadLogInput {
   phase: WorkloadLogPhase;
   status: WorkloadLogStatus;
   script?: string;
+  params?: Record<string, unknown>;
   exitCode?: number | null;
   log?: string;
   startedAt?: Date | null;
@@ -51,12 +53,21 @@ interface RawDoc {
   phase: WorkloadLogPhase;
   status: WorkloadLogStatus;
   script?: string | null;
+  params?: Record<string, unknown> | null;
   exitCode?: number | null;
   log?: string | null;
   startedAt?: Date | null;
   finishedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** 参数快照归一：非对象/缺省一律 `{}`（历史记录兼容，契约 A.6）。 */
+function normalizeParams(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return { ...(value as Record<string, unknown>) };
+  }
+  return {};
 }
 
 function toEntity(doc: RawDoc): CloudWorkloadLogEntity {
@@ -68,6 +79,7 @@ function toEntity(doc: RawDoc): CloudWorkloadLogEntity {
     phase: doc.phase,
     status: doc.status,
     script: doc.script ?? '',
+    params: normalizeParams(doc.params),
     exitCode: doc.exitCode ?? null,
     log: doc.log ?? '',
     startedAt: doc.startedAt ?? null,
@@ -108,6 +120,7 @@ export class MongoWorkloadLogRepository implements WorkloadLogRepository {
         phase: input.phase,
         status: input.status,
         script: input.script ?? '',
+        params: normalizeParams(input.params),
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,
@@ -181,6 +194,7 @@ export class InMemoryWorkloadLogRepository implements WorkloadLogRepository {
         phase: input.phase,
         status: input.status,
         script: input.script ?? '',
+        params: normalizeParams(input.params),
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,

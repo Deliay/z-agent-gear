@@ -17,9 +17,9 @@
 src/
 ├── config/                     # 环境配置 + assertRuntimeConfig（fail-fast）
 ├── models/
-│   ├── cloud-container.ts      # CloudContainer schema（集合 cloudcontainers，状态含 initializing）
-│   ├── cloud-workload.ts       # 工作负载只读模型（集合 cloudworkloads，供 dispatcher 读脚本）
-│   └── cloud-workload-log.ts   # 执行记录模型（集合 cloudworkloadlogs，含 script 快照）
+│   ├── cloud-container.ts      # CloudContainer schema（集合 cloudcontainers，状态含 initializing，含 workloadPlan）
+│   ├── cloud-workload.ts       # 工作负载只读模型（集合 cloudworkloads，含 paramSchema/dependsOnWorkloadIds，供兜底展开与脚本读取）
+│   └── cloud-workload-log.ts   # 执行记录模型（集合 cloudworkloadlogs，含 script 快照与 params 快照）
 ├── repositories/
 │   ├── container-repository.ts # ContainerRepository 接口 + Mongo/InMemory 实现
 │   ├── workload-repository.ts  # WorkloadRepository（findByIds/findById）+ Mongo/InMemory
@@ -28,14 +28,15 @@ src/
 │   ├── token-service.ts        # 一次性 token 签发/校验（bcrypt，tokenHash）
 │   ├── k8s-client.ts           # K8sClient 接口 + Real/InMemory 实现 + 工厂
 │   ├── k8s-job-manager.ts      # Job manifest + CRUD + Foreground→Background 回退
-│   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed）
-│   ├── workload-dispatcher.ts  # 工作负载编排：脚本下发/结果落库/当前脚本/看门狗/post 批次
+│   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed），落库 workloadPlan 并由 plan 派生 workloadIds
+│   ├── workload-dispatcher.ts  # 工作负载编排：按 workloadPlan（无 plan 回退 workloadIds）下发脚本与参数/结果落库/当前脚本/看门狗/post 批次
+│   ├── workload-plan.ts        # 兜底展开纯函数（仅无 workloadPlan 时用 workloadIds + 只读定义做后序 DFS + 默认参数归一）
 │   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检 + 工作负载看门狗
 │   ├── heartbeat-tracker.ts    # 心跳计时（30s × 3 次判离线）
 │   ├── worker-version.ts       # worker 版本解析/最低版本门禁（纯函数，MIN_WORKER_VERSION/SUPPORTED_MAJOR）
 │   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含注册版本门禁、workload:run/result）
 ├── middleware/internal-auth.ts # Bearer INTERNAL_API_TOKEN
-├── routes/internal-api.ts      # /internal/containers*（含 workload-logs）
+├── routes/internal-api.ts      # /internal/containers*（启动接收/校验 workloadPlan、含 workload-logs）
 └── index.ts                    # createCloudControllerApp + 入口
 ```
 
@@ -44,7 +45,8 @@ src/
 - **单一事实源**：容器状态/生命周期全部由本服务持有；`admin-api` 不直连 K8s、不双写 Mongo（降级只读除外）。
 - **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；握手限速按 token 的 `containerId` 前缀（无 token 回退 peer IP），另有更高上限的 per-IP 兜底桶——worker 经共享 Ingress IP 回连时不共享同一令牌桶；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
 - **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 requests/limits 与 `activeDeadlineSeconds` 兜底。
-- **工作负载脚本经 Socket.IO 下发（不经 K8s env / manifest 注入）**：`cloudworkloads` 由 admin-api 管理、本服务只读；容器 register 后由 `workload-dispatcher` 按挂载顺序下发 `workload:run{phase:"init"}`（同时建 `cloudworkloadlogs` 记录并写入脚本快照、CAS 置 `initializing`、写 `currentWorkloadName`），逐条 `workload:result` 推进，全部终态后收口 `online`（有活跃 socket）或 `connecting`。销毁时先下发 `workload:run{phase:"post"}` 并等待结果/预算耗尽，再发 `shutdown`。旧 worker 忽略新事件，由看门狗标 `TIMEOUT` 兜底。
+- **工作负载脚本经 Socket.IO 下发（不经 K8s env / manifest 注入）**：`cloudworkloads` 由 admin-api 管理、本服务只读；启动请求可携带已展开的 `workloadPlan:[{workloadId,params,implicit}]`（落库到容器并由 plan 派生 `workloadIds`），无 plan 时以只读定义对 `workloadIds` 做兜底展开（依赖先于依赖方、去重、参数取默认值）。容器 register 后由 `workload-dispatcher` 按计划顺序下发 `workload:run{phase:"init"}`（items 携带 `workloadId`/`params`，同时建 `cloudworkloadlogs` 记录并写入脚本与参数快照、CAS 置 `initializing`、写 `currentWorkloadName`），逐条 `workload:result` 推进，全部终态后收口 `online`（有活跃 socket）或 `connecting`。销毁时先下发 `workload:run{phase:"post"}` 并等待结果/预算耗尽，再发 `shutdown`。旧 worker 忽略新事件，由看门狗标 `TIMEOUT` 兜底；旧容器无 plan 时回退 `workloadIds → {workloadId,params:{},implicit:false}`。
+- **worker 参数注入版本要求**：`MIN_WORKER_VERSION` 保持 `2.2.0`（2.2.0 worker 仍可执行不带参数的脚本）；参数注入（`WORKLOAD_PARAMS`/`WORKLOAD_PARAM_*`）需 worker 镜像内 agent-gear `>=2.3.0`。
 - **worker 注册版本门禁**：`register.version` 必须是严格三段数字且 `>=2.2.0`、major 为 `2`（代码常量 `MIN_WORKER_VERSION`/`SUPPORTED_MAJOR`，见 `services/worker-version.ts`，不通过环境变量配置）。校验必须位于**全部注册副作用之前**：拒绝路径只 `emit('error', { code: 'VERSION_MISMATCH', currentVersion, minimumVersion, supportedMajor })` + `disconnect(true)`，不写 `socket.data.registered`、不 `heartbeatTracker.record`、不 `hasInitScripts`/`startInit`、不 `markOnline`/`markInitializing`，也不写 `connectedAt`。因此版本被拒的容器销毁时走「未完成兼容注册」路径：不发送 shutdown、不等待宽限，直接删除 Job。版本串写日志前须经 `sanitizeVersionForLog`（去控制字符、截断 64）。
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
