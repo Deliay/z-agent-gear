@@ -372,6 +372,34 @@ describe('ContainerService', () => {
     expect(shutdowns).toEqual([created.id]);
   });
 
+  it('T-S19: 从未兼容注册（connectedAt=null）的容器 destroy 不发 shutdown、不等待宽限，仍删 Job 并收口', async () => {
+    const { repo, client, service } = setup({ shutdownGraceMs: 120 });
+    const created = await service.start('idle'); // 版本被拒的容器停在 connecting，从未写 connectedAt
+    expect(created.status).toBe('connecting');
+    expect((await repo.findById(created.id))?.connectedAt).toBeNull();
+
+    const shutdowns: string[] = [];
+    service.onShutdown((id) => {
+      shutdowns.push(id);
+    });
+
+    const startedAt = Date.now();
+    const result = await service.destroy(created.id);
+    const elapsed = Date.now() - startedAt;
+
+    // 未完成兼容注册：不发 shutdown、不等待 shutdownGraceMs（120ms），直接删 Job。
+    expect(shutdowns).toEqual([]);
+    expect(elapsed).toBeLessThan(100);
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    expect(await client.getJob(created.name)).toBeNull();
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toBe('强制销毁');
+    expect(stored?.tokenHash).toBeNull();
+  });
+
   it('rejects non-idle purposes with a clear message', async () => {
     const { service } = setup();
     await expect(service.start('workflow')).rejects.toBeInstanceOf(UnsupportedPurposeError);
