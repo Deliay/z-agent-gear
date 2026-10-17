@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import type { GraphQLObjectType } from 'graphql';
+import type { GraphQLObjectType, GraphQLEnumType } from 'graphql';
 import { typeDefs } from './schemas/index.js';
 import { resolvers } from './resolvers/index.js';
 
@@ -22,6 +22,8 @@ describe('GraphQL schema', () => {
         'adminModelsByProvider',
         'baseImages',
         'baseImage',
+        'adminCloudWorkloads',
+        'adminCloudContainerWorkloadLogs',
       ]),
     );
   });
@@ -46,6 +48,9 @@ describe('GraphQL schema', () => {
         'createBaseImage',
         'updateBaseImage',
         'deleteBaseImage',
+        'adminCreateCloudWorkload',
+        'adminUpdateCloudWorkload',
+        'adminDeleteCloudWorkload',
       ]),
     );
   });
@@ -67,6 +72,19 @@ describe('GraphQL schema', () => {
   it('registers type-level Provider.models and Model.provider resolvers', () => {
     expect(resolvers.Provider.models).toBeTypeOf('function');
     expect(resolvers.Model.provider).toBeTypeOf('function');
+  });
+
+  it('registers the type-level CloudContainer.workloads resolver (backend-rules 显性陷阱)', () => {
+    expect(resolvers.CloudContainer.workloads).toBeTypeOf('function');
+  });
+
+  it('exposes the INITIALIZING status and workload fields on CloudContainer', () => {
+    const cloudContainer = schema.getType('CloudContainer') as GraphQLObjectType;
+    expect(Object.keys(cloudContainer.getFields())).toEqual(
+      expect.arrayContaining(['workloads', 'currentWorkloadName']),
+    );
+    const statusEnum = schema.getType('CloudContainerStatus') as GraphQLEnumType;
+    expect(statusEnum.getValues().map((value) => value.name)).toContain('INITIALIZING');
   });
 
   it('registers every Query/Mutation resolver declared in the schema', () => {

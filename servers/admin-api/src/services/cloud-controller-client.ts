@@ -11,6 +11,10 @@ export interface CloudContainerDTO {
   connectedAt: string | null;
   exitedAt: string | null;
   exitReason: string | null;
+  /** 启动时挂载的工作负载 ID，按选择顺序（缺省为 []） */
+  workloadIds: string[];
+  /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null */
+  currentWorkloadName: string | null;
 }
 
 /** 控制面（cloud-controller）不可达时对外统一错误码（裁决 12） */
@@ -28,15 +32,17 @@ export class ControlPlaneUnavailableError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 /**
- * 强制销毁专用超时：在线容器需下发 shutdown 并等待宽限期（cloud-controller 约 10s）
- * 与删除 Job 重试，默认超时必须显著大于宽限期，避免「服务端已销毁但客户端超时误报」。
+ * 强制销毁专用超时兜底（裁决 9）：默认 180s，显著大于 cloud-controller 的
+ * post 预算（90s）+ shutdown 宽限（10s）+ 删 Job 重试，避免「服务端已销毁但客户端超时误报」。
+ * 实际取值优先 `CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS`，再回落到本常量。
  */
-const DEFAULT_DESTROY_TIMEOUT_MS = 30000;
+const DEFAULT_DESTROY_TIMEOUT_MS = 180000;
 
-/** 内部 API 的小写状态 → GraphQL 大写枚举 */
+/** 内部 API 的小写状态 → GraphQL 大写枚举（裁决 18：initializing ↔ INITIALIZING） */
 const STATUS_TO_GQL: Record<string, string> = {
   creating: 'CREATING',
   connecting: 'CONNECTING',
+  initializing: 'INITIALIZING',
   online: 'ONLINE',
   destroying: 'DESTROYING',
   exited: 'EXITED',
@@ -65,6 +71,12 @@ function toIso(value: unknown): string | null {
   return String(value);
 }
 
+/** 归一 `workloadIds`：非数组/缺失 → []，元素一律转字符串 */
+function normalizeWorkloadIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((id) => String(id));
+}
+
 /** GraphQL 用途枚举 → 内部 API 小写字符串（未知值原样小写透传，交由 cloud-controller 校验） */
 export function toInternalPurpose(purpose: string): string {
   return GQL_TO_PURPOSE[purpose] ?? purpose.toLowerCase();
@@ -91,6 +103,8 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
     connectedAt: toIso(raw.connectedAt),
     exitedAt: toIso(raw.exitedAt),
     exitReason: (raw.exitReason as string | null | undefined) ?? null,
+    workloadIds: normalizeWorkloadIds(raw.workloadIds),
+    currentWorkloadName: (raw.currentWorkloadName as string | null | undefined) ?? null,
   };
 }
 
@@ -98,7 +112,7 @@ export interface CloudControllerClientOptions {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  /** 强制销毁专用超时（默认 30s，需大于 cloud-controller 的 shutdown 宽限期 + 删 Job 重试） */
+  /** 强制销毁专用超时（默认取 `CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS`，180s，需大于 post 预算 + shutdown 宽限 + 删 Job 重试） */
   destroyTimeoutMs?: number;
 }
 
@@ -126,7 +140,8 @@ export class CloudControllerClient {
     this.baseUrlOverride = options.baseUrl;
     this.tokenOverride = options.token;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.destroyTimeoutMs = options.destroyTimeoutMs ?? DEFAULT_DESTROY_TIMEOUT_MS;
+    this.destroyTimeoutMs =
+      options.destroyTimeoutMs ?? config.cloudControllerDestroyTimeoutMs ?? DEFAULT_DESTROY_TIMEOUT_MS;
   }
 
   /** 内部 API 列表（含 K8s 实时状态合并） */
@@ -140,16 +155,34 @@ export class CloudControllerClient {
     return items.map((item) => mapCloudContainer(item as Record<string, unknown>));
   }
 
-  /** 启动容器（purpose 为 GraphQL 大写枚举，转换为内部小写） */
-  async start(purpose: string): Promise<CloudContainerDTO> {
+  /** 启动容器（purpose 为 GraphQL 大写枚举，转换为内部小写）；workloadIds 缺省为 []（裁决 20） */
+  async start(purpose: string, workloadIds: string[] = []): Promise<CloudContainerDTO> {
     const res = await this.request('/internal/containers', {
       method: 'POST',
-      body: JSON.stringify({ purpose: toInternalPurpose(purpose) }),
+      body: JSON.stringify({ purpose: toInternalPurpose(purpose), workloadIds: workloadIds ?? [] }),
     });
     if (!res.ok) {
       throw new Error(await extractErrorMessage(res, `cloud-controller start failed: ${res.status}`));
     }
     return mapCloudContainer((await res.json()) as Record<string, unknown>);
+  }
+
+  /**
+   * 查询某容器的工作负载执行记录（内部 API，按执行顺序升序）。
+   * 返回原始 JSON 记录（枚举小写、时间 ISO 字符串），由调用方经 `mapWorkloadLog` 归一。
+   * 控制面不可达时抛 `ControlPlaneUnavailableError`，供上层降级直读 Mongo。
+   */
+  async listWorkloadLogs(containerId: string): Promise<Array<Record<string, unknown>>> {
+    const res = await this.request(
+      `/internal/containers/${encodeURIComponent(containerId)}/workload-logs`,
+    );
+    if (!res.ok) {
+      throw new Error(
+        await extractErrorMessage(res, `cloud-controller workload logs failed: ${res.status}`),
+      );
+    }
+    const data = (await res.json()) as unknown;
+    return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
   }
 
   /** 强制销毁容器；404（不存在）返回 false，终态容器幂等返回 true */

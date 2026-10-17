@@ -7,6 +7,7 @@ import {
   type CloudContainerDTO,
 } from '../../services/cloud-controller-client.js';
 import { findStoredCloudContainers } from '../../models/cloud-container.js';
+import { cloudWorkloadService, type CloudWorkloadDTO } from '../../services/cloud-workload.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
 
@@ -33,12 +34,15 @@ function toGraphQLError(err: unknown): GraphQLError {
 /**
  * 一次查询共享的列表加载结果。`degraded=true` 表示本次列表确因控制面不可达降级读落库数据。
  */
-interface ContainersLoad {
+export interface ContainersLoad {
   containers: CloudContainerDTO[];
   degraded: boolean;
 }
 
-type CloudContainerContext = AdminAuthContext & { __containersLoad?: Promise<ContainersLoad> };
+export type CloudContainerContext = AdminAuthContext & {
+  __containersLoad?: Promise<ContainersLoad>;
+  __workloadsLoad?: Promise<Map<string, CloudWorkloadDTO>>;
+};
 
 /**
  * 请求级共享加载：`adminCloudContainers` 与 `adminCloudContainerControlPlane` 复用同一 Promise，
@@ -64,6 +68,29 @@ function loadContainers(context: CloudContainerContext): Promise<ContainersLoad>
   return load;
 }
 
+/**
+ * 请求级共享加载：一次查询内所有 `CloudContainer.workloads` 字段共用同一 Promise，
+ * 收集本批容器的全部 `workloadIds` 后**只查一次** `cloudworkloads`（裁决 13，避免 N+1）。
+ * 已删除的工作负载不在 Map 中，由字段 resolver 按 `workloadIds` 顺序过滤省略。
+ */
+function loadWorkloads(context: CloudContainerContext): Promise<Map<string, CloudWorkloadDTO>> {
+  if (context.__workloadsLoad) return context.__workloadsLoad;
+
+  const load = (async (): Promise<Map<string, CloudWorkloadDTO>> => {
+    const { containers } = await loadContainers(context);
+    const ids = new Set<string>();
+    for (const container of containers) {
+      for (const id of container.workloadIds ?? []) ids.add(id);
+    }
+    if (ids.size === 0) return new Map();
+    const workloads = await cloudWorkloadService.getByIds([...ids]);
+    return new Map(workloads.map((workload) => [workload.id, workload]));
+  })();
+
+  context.__workloadsLoad = load;
+  return load;
+}
+
 export const cloudContainerResolvers = {
   Query: {
     adminCloudContainers: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
@@ -84,7 +111,7 @@ export const cloudContainerResolvers = {
   Mutation: {
     adminStartCloudContainer: async (
       _parent: unknown,
-      args: { purpose: string },
+      args: { purpose: string; workloadIds?: string[] },
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
@@ -93,7 +120,8 @@ export const cloudContainerResolvers = {
         throw new GraphQLError('该任务类型暂未开放');
       }
       try {
-        return await cloudControllerClient.start(args.purpose);
+        // 缺省/空数组行为与现状完全一致（裁决 20）；透传选择顺序，由 cloud-controller 校验存在性/≤10
+        return await cloudControllerClient.start(args.purpose, args.workloadIds ?? []);
       } catch (err) {
         throw toGraphQLError(err);
       }
@@ -109,6 +137,21 @@ export const cloudContainerResolvers = {
       } catch (err) {
         throw toGraphQLError(err);
       }
+    },
+  },
+  CloudContainer: {
+    // 批量按 `workloadIds` 顺序解析（请求级只查一次库）；已删除的工作负载省略
+    workloads: async (
+      parent: CloudContainerDTO,
+      _args: unknown,
+      context: CloudContainerContext,
+    ): Promise<CloudWorkloadDTO[]> => {
+      const ids = parent.workloadIds ?? [];
+      if (ids.length === 0) return [];
+      const byId = await loadWorkloads(context);
+      return ids
+        .map((id) => byId.get(id))
+        .filter((workload): workload is CloudWorkloadDTO => workload !== undefined);
     },
   },
 };
