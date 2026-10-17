@@ -464,6 +464,29 @@ describe('ContainerService workload state machine', () => {
     expect((await repo.findById(plain.id))?.workloadPlan).toEqual([]);
   });
 
+  it('T-CC2b: deriveWorkloadIdsFromPlan=false → workloadIds 按选择顺序，plan 仅用于执行', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start(
+      'idle',
+      null,
+      ['legacy'],
+      [
+        { workloadId: 'dep', params: {}, implicit: true },
+        { workloadId: 'legacy', params: {}, implicit: false },
+      ],
+      { deriveWorkloadIdsFromPlan: false },
+    );
+
+    const stored = await repo.findById(created.id);
+    // 契约 A.2.2：仅 workloadIds 的旧版请求按选择顺序落库（不含隐式依赖）
+    expect(stored?.workloadIds).toEqual(['legacy']);
+    expect(stored?.workloadPlan).toEqual([
+      { workloadId: 'dep', params: {}, implicit: true },
+      { workloadId: 'legacy', params: {}, implicit: false },
+    ]);
+  });
+
   it('T-CS2: markInitializing 写 currentWorkloadName，markOnline/markConnecting 清空', async () => {
     const { repo, service } = setup();
     const created = await service.start('idle');

@@ -105,6 +105,45 @@ describe('resolveFallbackWorkloadPlan - 参数归一', () => {
 
     expect(params).toEqual({ mode: 'b', pm: ['pnpm'], flag: false, version: '22' });
   });
+
+  it('T-WP12: 非法默认值抛错（与 admin-api 同口径，不静默强转）', () => {
+    expect(() =>
+      normalizeDefaultParams([
+        { key: 'flag', label: '开关', type: 'boolean', options: [], defaultValue: 'false' },
+      ]),
+    ).toThrow('invalid value for parameter flag');
+
+    expect(() =>
+      normalizeDefaultParams([
+        { key: 'mode', label: '模式', type: 'select', options: ['a'], defaultValue: 'z' },
+      ]),
+    ).toThrow('invalid value for parameter mode');
+
+    expect(() =>
+      normalizeDefaultParams([
+        { key: 'pm', label: '包管理器', type: 'multi_select', options: ['a'], defaultValue: 'a' },
+      ]),
+    ).toThrow('invalid value for parameter pm');
+
+    expect(() =>
+      normalizeDefaultParams([
+        { key: 'version', label: '版本', type: 'text', options: [], defaultValue: 22 },
+      ]),
+    ).toThrow('invalid value for parameter version');
+
+    expect(() =>
+      normalizeDefaultParams([
+        { key: 'weird', label: '未知', type: 'unknown' as never, options: [], defaultValue: 'x' },
+      ]),
+    ).toThrow('invalid value for parameter weird');
+  });
+
+  it('T-WP13: 类型大小写不敏感（与 admin-api 一致）', () => {
+    const params = normalizeDefaultParams([
+      { key: 'flag', label: '开关', type: 'BOOLEAN' as never, options: [], defaultValue: false },
+    ]);
+    expect(params).toEqual({ flag: false });
+  });
 });
 
 describe('resolveFallbackWorkloadPlan - 校验与兜底', () => {
@@ -131,6 +170,21 @@ describe('resolveFallbackWorkloadPlan - 校验与兜底', () => {
     expect(() => resolveFallbackWorkloadPlan(['a'], [def('a', { deps: ['ghost'] })])).toThrow(
       /dependency workload not found/,
     );
+  });
+
+  it('T-WP8b: 环文案仅含环路径（与 admin-api 同口径）', () => {
+    expect(() =>
+      resolveFallbackWorkloadPlan(['a'], [def('a', { deps: ['b'] }), def('b', { deps: ['a'] })]),
+    ).toThrow('dependency cycle detected: a -> b -> a');
+  });
+
+  it('T-WP10b: 显式缺失文案为 "workload not found"（无 id，与 admin-api 一致）', () => {
+    try {
+      resolveFallbackWorkloadPlan(['missing'], []);
+      throw new Error('expected to throw');
+    } catch (err) {
+      expect((err as Error).message).toBe('workload not found');
+    }
   });
 });
 

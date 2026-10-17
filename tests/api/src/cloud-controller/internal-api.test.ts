@@ -374,7 +374,9 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
           workloadPlan: Array<{ workloadId: string; params: Record<string, unknown>; implicit: boolean }>;
         };
         containerId = created.id;
-        expect(created.workloadIds).toEqual([depId.toString(), parentId.toString()]);
+        // 契约 A.2.2：仅 workloadIds 的旧版请求按选择顺序落库（不含隐式依赖）
+        expect(created.workloadIds).toEqual([parentId.toString()]);
+        // 兜底展开得到的 plan 仅用于执行（依赖先于依赖方、隐式项取默认参数且多选去重）
         expect(created.workloadPlan).toEqual([
           { workloadId: depId.toString(), params: { version: '22', pm: ['npm'] }, implicit: true },
           { workloadId: parentId.toString(), params: {}, implicit: false },
@@ -418,4 +420,75 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       await db!.collection('cloudworkloads').deleteMany({ _id: { $in: [planId, otherId] } });
     }
   });
+
+  it.skipIf(!HAS_MONGO)('T-ICC5: normalizes plan entries missing params/implicit', async () => {
+    const db = await mongoDb();
+    expect(db).not.toBeNull();
+
+    const workloadId = await insertWorkload(db!);
+    let containerId: string | null = null;
+    try {
+      const res = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({
+          purpose: 'idle',
+          workloadPlan: [{ workloadId: workloadId.toString() }],
+        }),
+      });
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        id: string;
+        workloadPlan: Array<{ workloadId: string; params: Record<string, unknown>; implicit: boolean }>;
+      };
+      containerId = created.id;
+      expect(created.workloadPlan).toEqual([
+        { workloadId: workloadId.toString(), params: {}, implicit: false },
+      ]);
+    } finally {
+      if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
+      await db!.collection('cloudworkloads').deleteOne({ _id: workloadId });
+    }
+  });
+
+  it.skipIf(!HAS_MONGO)(
+    'T-ICC6: maps fallback expansion failures (cycle / missing dep / >10) to 400 INVALID_WORKLOAD',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
+
+      // 环：a ↔ b
+      const cycA = await insertWorkload(db!);
+      const cycB = await insertWorkload(db!, { dependsOnWorkloadIds: [cycA] });
+      await db!
+        .collection('cloudworkloads')
+        .updateOne({ _id: cycA }, { $set: { dependsOnWorkloadIds: [cycB] } });
+      // 依赖缺失：指向不存在的 ID
+      const orphan = await insertWorkload(db!, {
+        dependsOnWorkloadIds: [new mongoose.Types.ObjectId()],
+      });
+      // 展开超 10：父依赖 10 个子项 + 自身 = 11
+      const children: mongoose.Types.ObjectId[] = [];
+      for (let i = 0; i < 10; i += 1) children.push(await insertWorkload(db!));
+      const big = await insertWorkload(db!, { dependsOnWorkloadIds: children });
+
+      const allIds = [cycA, cycB, orphan, big, ...children];
+      try {
+        const cases: Array<[string, mongoose.Types.ObjectId]> = [
+          ['dependency cycle', cycA],
+          ['missing dependency', orphan],
+          ['expanded > 10', big],
+        ];
+        for (const [label, workloadId] of cases) {
+          const res = await req('/internal/containers', {
+            method: 'POST',
+            body: JSON.stringify({ purpose: 'idle', workloadIds: [workloadId.toString()] }),
+          });
+          expect(res.status, label).toBe(400);
+          await expect(res.json(), label).resolves.toMatchObject({ error: 'INVALID_WORKLOAD' });
+        }
+      } finally {
+        await db!.collection('cloudworkloads').deleteMany({ _id: { $in: allIds } });
+      }
+    },
+  );
 });

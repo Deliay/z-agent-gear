@@ -409,7 +409,7 @@ npm test
 ### Cloud Controller 内部 API (`cloud-controller/internal-api.test.ts` T-IC*)
 
 > 需要 cloud-controller 就绪：`aspire start && aspire wait cloud-controller`；服务以 `K8S_ENABLED=false`（InMemoryK8sClient）运行。
-> `T-IC5`（合法 workloadIds 回显）、`T-IC6`（按执行顺序返回日志 + params）与 `T-ICC1~T-ICC4`（`workloadPlan` 校验/落库/兜底展开）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
+> `T-IC5`（合法 workloadIds 回显）、`T-IC6`（按执行顺序返回日志 + params）与 `T-ICC1~T-ICC6`（`workloadPlan` 校验/落库/兜底展开/失败映射）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
@@ -422,8 +422,10 @@ npm test
 | T-IC7 鉴权回归 | 新增 logs 端点缺失 Bearer → 401 |
 | T-ICC1 workloadPlan 合法 | POST 携带 `workloadPlan` → 201，JSON 回显 `workloadPlan`，`workloadIds` 由 plan 派生 |
 | T-ICC2 workloadPlan 非法 | 非数组 / 超 10 条 / 未知 `workloadId` / `params` 非对象 / `implicit` 非布尔 / 条目非对象 / `workloadId` 缺失或重复 → 400 `INVALID_WORKLOAD` |
-| T-ICC3 仅 workloadIds 兜底展开 | 旧客户端仅传 `workloadIds` → 按只读定义后序 DFS 展开（依赖先于依赖方、`implicit=true`、参数取默认值且多选去重） |
+| T-ICC3 仅 workloadIds 兜底展开 | 旧客户端仅传 `workloadIds` → 按只读定义后序 DFS 展开（依赖先于依赖方、`implicit=true`、参数取默认值且多选去重）；容器 `workloadIds` 按选择顺序落库（不含隐式依赖），plan 仅用于执行 |
 | T-ICC4 plan 优先 | `workloadPlan` 与 `workloadIds` 同时下发 → 以 plan 派生的 `workloadIds` 为准 |
+| T-ICC5 plan 条目缺省归一 | `workloadPlan` 条目缺省 `params`/`implicit` → 归一为 `{}`/`false`（201，不报错） |
+| T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params` 后按记录返回参数快照；历史无 `params` 归一为 `{}` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
