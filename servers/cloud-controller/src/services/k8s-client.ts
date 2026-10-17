@@ -36,6 +36,12 @@ export interface K8sJobManifest {
       spec: {
         restartPolicy: string;
         runtimeClassName?: string;
+        /**
+         * 使用 sysbox 等用户态容器 runtime 时必须为 false：否则 Pod 仍共享宿主 user
+         * namespace，容器 init 写 `net.ipv4.ip_unprivileged_port_start` 会被内核拒绝
+         * （FailedCreatePodSandBox / permission denied）。
+         */
+        hostUsers?: boolean;
         containers: Array<{
           name: string;
           image: string;

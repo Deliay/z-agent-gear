@@ -127,6 +127,9 @@ export class K8sJobManager {
     };
     if (this.cfg.runtimeClassName) {
       spec.template.spec.runtimeClassName = this.cfg.runtimeClassName;
+      // sysbox 要求 Pod 停用 host user namespace，否则 sandbox 创建失败
+      // （见 K8sJobManifest.spec.template.spec.hostUsers 注释）。
+      spec.template.spec.hostUsers = false;
     }
 
     return {
