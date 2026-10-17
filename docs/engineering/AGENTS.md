@@ -181,6 +181,7 @@ flowchart LR
 - [[proposals/20261014-feat-admin-console.md]] — 云控制器管理后台一期
 - [[proposals/20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
 - [[proposals/20261017-feat-cloud-controller-workload.md]] — 云控制器工作负载功能
+- [[proposals/20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本门禁与自升级
 
 ### 实现计划（`plan/`）
 
