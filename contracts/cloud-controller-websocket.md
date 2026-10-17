@@ -170,10 +170,23 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 | `phase` | `"init" \| "post"` | 是 | `init`：容器回连注册后下发的初始化批次；`post`：销毁流程中下发的清理批次 |
 | `items` | `WorkloadItem[]` | 是 | 按执行顺序排列的脚本条目；`init`/`post` 各自最多 10 条 |
 | `items[].logId` | `string` | 是 | 服务端预创建的执行记录 ID，回报 `workload:result` 时回填 |
+| `items[].workloadId` | `string` | 是 | 工作负载 ID（便于排查/扩展） |
 | `items[].workloadName` | `string` | 是 | 工作负载名称（仅用于日志/展示） |
 | `items[].script` | `string` | 是 | 待执行的脚本内容（可能为空字符串，表示该条为已删除工作负载的占位记录） |
+| `items[].params` | `object` | 是 | 本次执行参数，键为参数标识；值类型见下方「参数注入约定」（缺省为 `{}`） |
 | `items[].timeoutMs` | `number` | 是 | 单条脚本超时（init 默认 `WORKLOAD_INIT_TIMEOUT_MS=300000`） |
 | `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
+
+**参数注入约定：** worker 对每个 item 以 `process.env` 为基础注入参数环境变量后执行 `bash -c <script>`：
+
+| 环境变量 | 值 |
+|---------|----|
+| `WORKLOAD_PARAMS` | 完整参数 JSON 字符串（如 `{"version":"22","package_manager":["pnpm"]}`；无参数为 `{}`） |
+| `WORKLOAD_PARAM_<KEY_UPPER>` | 单个参数值：字符串原样；布尔为 `"true"`/`"false"`；多选为 JSON 数组字符串（如 `["pnpm"]`） |
+
+- 其中 `KEY_UPPER = key.toUpperCase()`；参数 env 仅对当前 item 生效，不污染后续脚本；
+- 不修改脚本文本、不做字符串替换（避免注入）；参数不得改变执行边界、超时与权限；
+- `params` 缺省为 `{}` 时行为与旧版一致（仅注入 `WORKLOAD_PARAMS={}`）。
 
 **服务端行为：** 在 emit 之前已于 `cloudworkloadlogs` 批量创建记录（首条 `running`、其余 `pending`，并写入当时脚本快照）；`init` 批次下发同时将容器 CAS 置 `initializing` 并写 `currentWorkloadName`。
 
@@ -307,16 +320,26 @@ GET /internal/containers
 POST /internal/containers
 Content-Type: application/json
 
-{ "purpose": "idle", "workloadIds": ["<objectId>", "..."] }
+{
+  "purpose": "idle",
+  "workloadIds": ["<objectId>", "..."],
+  "workloadPlan": [
+    { "workloadId": "<objectId>", "params": { "version": "22" }, "implicit": false },
+    { "workloadId": "<objectId>", "params": {}, "implicit": true }
+  ]
+}
 ```
 
-`workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
+- `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
+- `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象、`implicit` 为布尔；非法返回 `400` `INVALID_WORKLOAD`。
+- 新版 cloud-controller 优先使用 `workloadPlan`：落库到容器 `workloadPlan`，并由 plan 派生出 `workloadIds`（保序），`workloadIds` 字段与 plan 同时下发时为滚动升级兼容。
+- 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以只读定义做依赖展开与默认参数归一兜底，行为与新 admin-api 一致（依赖先于依赖方、去重、参数取默认值）。
 
 **响应 201：** 新建的 `CloudContainer`。
 
 **错误：**
 - `400` —— `purpose` 非法（本期仅接受 `idle`；其余用途返回明确错误文案「该任务类型暂未开放」）。
-- `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID。
+- `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
 #### A.2.3 强制销毁
@@ -367,6 +390,7 @@ GET /internal/containers/:id/workload-logs
 | `exitedAt` | `string \| null` | 退出时间 |
 | `exitReason` | `string \| null` | 退出/失败原因 |
 | `workloadIds` | `string[]` | 启动时挂载的工作负载 ID，按选择顺序（缺省为 `[]`） |
+| `workloadPlan` | `object[]` | 本次启动最终执行计划，顺序即执行顺序；每项 `{ workloadId, params, implicit }`（缺省为 `[]`） |
 | `currentWorkloadName` | `string \| null` | 初始化中当前正在执行的工作负载脚本名称；非初始化中为 `null` |
 
 ### A.4 状态枚举
@@ -411,6 +435,7 @@ GET /internal/containers/:id/workload-logs
 | `phase` | `string` | `init` \| `post` |
 | `status` | `string` | `pending` \| `running` \| `success` \| `failed` \| `timeout` |
 | `script` | `string` | 当时实际执行的脚本内容快照（留档） |
+| `params` | `object` | 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 `{}` |
 | `exitCode` | `number \| null` | 进程退出码 |
 | `log` | `string` | 合并捕获的输出（尾部 ≤ 256 KiB） |
 | `startedAt` | `string \| null` | 开始时间（ISO） |
