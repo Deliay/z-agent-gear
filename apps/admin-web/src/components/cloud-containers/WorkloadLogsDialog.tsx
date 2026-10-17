@@ -18,6 +18,7 @@ import type {
   GetAdminCloudContainerWorkloadLogsQuery,
 } from '@/graphql/types';
 import { formatDateTime } from '@/lib/format';
+import { formatParams } from '@/lib/workload-params';
 import { WORKLOAD_LOG_PHASE_LABELS, WORKLOAD_LOG_STATUS_LABELS } from './labels';
 
 interface WorkloadLogsDialogProps {
@@ -70,7 +71,7 @@ export default function WorkloadLogsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="min-w-0 sm:max-w-3xl">
+      <DialogContent className="min-w-0 max-h-[85vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>工作负载执行日志</DialogTitle>
           <DialogDescription className="min-w-0 truncate">{containerName}</DialogDescription>
@@ -136,6 +137,12 @@ export default function WorkloadLogsDialog({
                   <p className="text-xs font-medium text-muted-foreground">脚本快照</p>
                   <pre className="max-h-40 min-w-0 overflow-auto rounded-md border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">
                     {selected.script}
+                  </pre>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">参数快照</p>
+                  <pre className="max-h-32 min-w-0 overflow-auto rounded-md border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                    {formatParams(selected.params)}
                   </pre>
                 </div>
                 <div className="min-w-0 space-y-1">

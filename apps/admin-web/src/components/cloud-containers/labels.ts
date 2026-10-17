@@ -3,6 +3,7 @@ import type {
   CloudContainerStatus,
   CloudWorkloadLogPhase,
   CloudWorkloadLogStatus,
+  CloudWorkloadParamType,
 } from '@/graphql/types';
 
 // 状态展示映射（裁决 18：内部 initializing ↔ GraphQL INITIALIZING ↔ 前端「初始化中」）
@@ -37,4 +38,12 @@ export const WORKLOAD_LOG_STATUS_LABELS: Record<CloudWorkloadLogStatus, string> 
   SUCCESS: '成功',
   FAILED: '失败',
   TIMEOUT: '超时',
+};
+
+// 参数类型映射（功能点 1：下拉单选/下拉多选/文本/布尔）
+export const PARAM_TYPE_LABELS: Record<CloudWorkloadParamType, string> = {
+  SELECT: '下拉单选',
+  MULTI_SELECT: '下拉多选',
+  TEXT: '文本',
+  BOOLEAN: '布尔',
 };
