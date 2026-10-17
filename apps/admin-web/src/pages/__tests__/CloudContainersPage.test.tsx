@@ -73,6 +73,10 @@ interface SetupOptions {
   controlPlane?: { online: boolean; message: string | null };
   workloads?: unknown[];
   logs?: unknown[];
+  /** 工作负载查询首次加载失败文案（模拟控制面不可达等）。 */
+  workloadsError?: string;
+  /** 工作负载查询首次加载中。 */
+  workloadsLoading?: boolean;
 }
 
 // 按查询文档分派响应（页面同时发起容器/工作负载/日志三类查询）
@@ -84,10 +88,31 @@ function setupData(opts: SetupOptions = {}) {
   mocks.useQuery.mockImplementation((doc: unknown) => {
     const source = String(doc);
     if (source.includes('AdminCloudContainerWorkloadLogs')) {
-      return { data: { adminCloudContainerWorkloadLogs: logs }, loading: false, error: undefined };
+      return {
+        data: { adminCloudContainerWorkloadLogs: logs },
+        loading: false,
+        error: undefined,
+        refetch: mocks.refetch,
+      };
     }
     if (source.includes('AdminCloudWorkloads')) {
-      return { data: { adminCloudWorkloads: workloads }, loading: false, error: undefined };
+      if (opts.workloadsLoading) {
+        return { data: undefined, loading: true, error: undefined, refetch: mocks.refetch };
+      }
+      if (opts.workloadsError) {
+        return {
+          data: undefined,
+          loading: false,
+          error: new Error(opts.workloadsError),
+          refetch: mocks.refetch,
+        };
+      }
+      return {
+        data: { adminCloudWorkloads: workloads },
+        loading: false,
+        error: undefined,
+        refetch: mocks.refetch,
+      };
     }
     return {
       data: { adminCloudContainers: containers, adminCloudContainerControlPlane: controlPlane },
@@ -147,7 +172,8 @@ describe('CloudContainersPage', () => {
 
     expect(screen.getByText('zag-worker-abc123')).toBeDefined();
     expect(screen.getByText('启动容器')).toBeDefined();
-    expect(screen.queryByText('加载中...')).toBeNull();
+    // 页面级加载分支未被触发（列表仍在，未回落到空态）
+    expect(screen.queryByText('暂无云端容器')).toBeNull();
   });
 
   it('T-W2: start dialog defaults to idle and emits adminStartCloudContainer(IDLE)', async () => {
@@ -306,6 +332,49 @@ describe('CloudContainersPage', () => {
     expect(screen.getByText('暂无可用工作负载')).toBeDefined();
   });
 
+  it('T-FW4: surfaces a workloads load error with retry instead of an empty hint', () => {
+    setupData({ containers: [], workloadsError: 'workloads boom' });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    // 查询失败必须提示错误，而不是伪装成「暂无可用工作负载」（否则管理员会漏挂载）
+    expect(screen.getByRole('alert').textContent).toContain('workloads boom');
+    expect(screen.queryByText('暂无可用工作负载')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(mocks.refetch).toHaveBeenCalled();
+  });
+
+  it('T-FW4: shows a loading hint while the workloads query is in flight', () => {
+    setupData({ containers: [], workloadsLoading: true });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    expect(screen.getByText('加载中...')).toBeDefined();
+    expect(screen.queryByText('暂无可用工作负载')).toBeNull();
+  });
+
+  it('T-FW4: caps workload selection at the contract limit (10)', () => {
+    const many = Array.from({ length: 12 }, (_, i) => workload(`w${i}`, `load-${i}`));
+    setupData({ containers: [], workloads: many });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.click(screen.getByRole('checkbox', { name: `load-${i}` }));
+    }
+
+    // 已达上限：未选项禁用且点击不生效，已选项仍可取消
+    const extra = screen.getByRole('checkbox', { name: 'load-10' });
+    expect(extra).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(extra);
+    expect(extra).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'load-0' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
   it('T-FW5: shows the initializing badge with the current workload name', () => {
     setupData({
       containers: [
@@ -355,6 +424,44 @@ describe('CloudContainersPage', () => {
     expect(script.className).toContain('break-all');
     expect(script.scrollWidth - script.clientWidth).toBeLessThanOrEqual(1);
     expect(screen.getByText('hello')).toBeDefined();
+  });
+
+  it('T-FW7b: polls workload logs and shows a running record advancing to its terminal status', () => {
+    setupData({
+      containers: [container()],
+      logs: [workloadLog({ id: 'l1', status: 'RUNNING', log: '', finishedAt: null })],
+    });
+    const { rerender } = render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '工作负载日志 zag-worker-abc123' }));
+    expect(screen.getByText('执行中')).toBeDefined();
+    // 执行记录查询带轮询间隔（PRD 功能点 5：执行中记录实时可刷新）
+    expect(mocks.useQuery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ pollInterval: 5000 }),
+    );
+
+    // 模拟下一次轮询返回终态：状态由「执行中」推进为「成功」，选中项不变
+    setupData({
+      containers: [container()],
+      logs: [workloadLog({ id: 'l1', status: 'SUCCESS', log: 'done\n' })],
+    });
+    rerender(<CloudContainersPage />);
+
+    expect(screen.getByText('成功')).toBeDefined();
+    expect(screen.queryByText('执行中')).toBeNull();
+    expect(screen.getByText('done')).toBeDefined();
+  });
+
+  it('T-FW7c: a refresh button refetches workload logs', () => {
+    setupData({ containers: [container()], logs: [workloadLog()] });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '工作负载日志 zag-worker-abc123' }));
+    mocks.refetch.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新工作负载日志' }));
+    expect(mocks.refetch).toHaveBeenCalled();
   });
 
   it('T-FW8: keeps the open logs dialog across a 10s polling refresh', () => {

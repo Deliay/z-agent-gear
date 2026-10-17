@@ -430,7 +430,7 @@ npm test
 |------|------|
 | T-IA 未认证 | 匿名 list/create/update/delete/logs 均「Not authenticated」 |
 | T-IA CRUD | 仅 init / 仅 post / 两者创建；列表；编辑（`initScript: null` 清空）；删除；DTO 时间 ISO |
-| T-IA 校验边界 | 空名 → `name is required`；超 64 字 → `name must be at most 64 characters`；双空脚本 → `at least one script is required`；脚本 >16 KiB → `initScript/postScript must be at most 16 KiB` |
+| T-IA 校验边界 | 空名 → `name is required`；超 64 字 → `name must be at most 64 characters`；双空脚本 → `at least one script is required`；脚本 >16 KiB → `initScript/postScript must be at most 16 KiB`；**接受侧**：恰好 64 字符名称 + 恰好 16 KiB 脚本可创建（防 `<`/`≤` 回归） |
 | T-IA 重名/不存在 | 创建/改名重名 → `Workload name already exists`；更新不存在 id → `Workload not found`；删除不存在 id → `false` |
 | T-IA 日志（控制面可用） | 无记录返回 `[]`；直写 `cloudworkloadlogs` 后按执行顺序返回大写枚举 + 脚本快照 + 输出 |
 | T-IA 启动携带 workloadIds | 合法 ID 按选择顺序返回 `workloads`；未知 ID → 错误含 `INVALID_WORKLOAD`；缺省不挂载（`workloads: []`） |

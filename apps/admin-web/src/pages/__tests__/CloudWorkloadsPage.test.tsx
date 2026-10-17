@@ -144,6 +144,30 @@ describe('CloudWorkloadsPage', () => {
     expect(save).not.toBeDisabled();
   });
 
+  it('T-FW2: blocks save when name exceeds 64 chars or a script exceeds 16 KiB', () => {
+    setupWorkloads([]);
+    render(<CloudWorkloadsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '新建工作负载' }));
+    const save = screen.getByRole('button', { name: '保存' });
+
+    // 名称超长（65 字符）
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'n'.repeat(65) } });
+    fireEvent.change(screen.getByLabelText('初始化脚本'), { target: { value: 'echo ok' } });
+    expect(save).toBeDisabled();
+    expect(screen.getByText(/名称最多 64 个字符/)).toBeDefined();
+
+    // 名称合法但脚本超过 16 KiB
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'ok-name' } });
+    fireEvent.change(screen.getByLabelText('初始化脚本'), { target: { value: 'x'.repeat(16 * 1024 + 1) } });
+    expect(save).toBeDisabled();
+    expect(screen.getByText(/脚本超过 16 KiB 上限/)).toBeDefined();
+
+    // 恰好 16 KiB 允许保存
+    fireEvent.change(screen.getByLabelText('初始化脚本'), { target: { value: 'x'.repeat(16 * 1024) } });
+    expect(save).not.toBeDisabled();
+  });
+
   it('T-FW2: edits an existing workload and submits its id', async () => {
     setupWorkloads([workload()]);
     mocks.update.mockResolvedValue({});

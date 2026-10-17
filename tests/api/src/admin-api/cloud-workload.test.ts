@@ -219,6 +219,18 @@ describe('Admin Cloud Workload API', () => {
     expect(postTooBig.errors?.[0].message).toBe('postScript must be at most 16 KiB');
   });
 
+  it('T-IA: accepts boundary values (exactly 64-char name and exactly 16 KiB script)', async () => {
+    // 恰好 64 字符且唯一
+    const name = `b${Date.now().toString(36)}`.padEnd(64, 'x').slice(0, 64);
+    expect(name).toHaveLength(64);
+    const script = 'a'.repeat(SCRIPT_MAX_BYTES);
+    expect(Buffer.byteLength(script, 'utf8')).toBe(SCRIPT_MAX_BYTES);
+
+    const workload = await createWorkload({ name, initScript: script });
+    expect(workload.name).toBe(name);
+    expect(workload.initScript).toHaveLength(SCRIPT_MAX_BYTES);
+  });
+
   it('T-IA: maps duplicate names to a friendly error on create and rename', async () => {
     const name = uniqueName('wl-dup');
     await createWorkload({ name, initScript: 'echo ok' });

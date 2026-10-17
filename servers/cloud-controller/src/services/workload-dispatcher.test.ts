@@ -425,6 +425,41 @@ describe('WorkloadDispatcher - post 批次', () => {
     expect(runs('post')).toHaveLength(0);
   });
 
+  it('T-WD7b: post 阶段已删除工作负载生成 FAILED 占位记录（未执行清理）', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup({
+      connected: false,
+    });
+    workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'rm -rf /tmp/a' }));
+    const container = await createContainer(['w1', 'missing'], 'destroying');
+
+    await dispatcher.runPostBatch(container.id);
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs).toHaveLength(2);
+    const deleted = logs.find((log) => log.workloadId === 'missing')!;
+    expect(deleted.phase).toBe('post');
+    expect(deleted.status).toBe('failed');
+    expect(deleted.script).toBe('');
+    expect(deleted.log).toContain('已删除');
+    expect(deleted.log).toContain('未执行清理');
+    // 无连接 → 有 post 脚本的项如实标 timeout
+    expect(logs.find((log) => log.workloadId === 'w1')!.status).toBe('timeout');
+    expect(runs('post')).toHaveLength(0);
+  });
+
+  it('T-WD7c: post 阶段全部工作负载已删除时仅留档、不下发批次', async () => {
+    const { dispatcher, workloadLogRepository, createContainer, runs } = setup();
+    const container = await createContainer(['missing-a', 'missing-b'], 'destroying');
+
+    await dispatcher.runPostBatch(container.id);
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs).toHaveLength(2);
+    expect(logs.every((log) => log.status === 'failed')).toBe(true);
+    expect(logs.every((log) => log.log.includes('未执行清理'))).toBe(true);
+    expect(runs('post')).toHaveLength(0);
+  });
+
   it('T-WD8: 有 post 脚本的 destroy → emit 批次并等待结果', async () => {
     const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup();
     workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'echo bye' }));
@@ -448,6 +483,30 @@ describe('WorkloadDispatcher - post 批次', () => {
     await done;
 
     expect((await workloadLogRepository.findById(logs[0]!.id))?.status).toBe('success');
+  });
+
+  it('T-WD8c: 已删除项留档但不进入下发批次，结果收口后 runPostBatch 立即返回', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup({
+      postBudgetMs: 60000,
+    });
+    workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'echo bye' }));
+    const container = await createContainer(['w1', 'missing'], 'destroying');
+
+    const done = dispatcher.runPostBatch(container.id);
+    await waitForCondition(() => runs('post').length === 1);
+
+    const items = runs('post')[0]!.payload.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.workloadName).toBe('clean-a');
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.find((log) => log.workloadId === 'missing')!.log).toContain('未执行清理');
+
+    await dispatcher.handleResult(container.id, { logId: items[0]!.logId, status: 'success' });
+    const start = Date.now();
+    await done;
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect((await workloadLogRepository.findById(items[0]!.logId))?.status).toBe('success');
   });
 
   it('T-WD8b: post 预算耗尽 → 剩余记录标 TIMEOUT', async () => {

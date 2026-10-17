@@ -48,7 +48,9 @@ test.describe('Admin Cloud Container E2E', () => {
     await expect(dialog.getByText('启动容器')).toBeVisible();
     await expect(dialog.getByText(/本期仅支持 idle/)).toBeVisible();
     await expect(dialog.getByText('工作负载', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('可多选，按勾选顺序依次执行。')).toBeVisible();
+    // 多选提示含契约上限（裁决 12）
+    await expect(dialog.getByText(/可多选，按勾选顺序依次执行/)).toBeVisible();
+    await expect(dialog.getByText(/最多 10 个/)).toBeVisible();
     await dialog.getByRole('button', { name: '取消' }).click();
     await expect(dialog).not.toBeVisible();
   });
@@ -129,9 +131,9 @@ test.describe('Admin Cloud Container E2E', () => {
 
     const row = page.locator('tr', { hasText: created!.name }).first();
     await expect(row).toBeVisible();
-    // 「工作负载」列存在且无挂载时展示占位符
+    // 「工作负载」列存在且无挂载时展示占位符（按列定位，避免命中名称中的连字符造成恒真断言）
     await expect(page.getByRole('columnheader', { name: '工作负载' })).toBeVisible();
-    await expect(row).toContainText('-');
+    await expect(row.locator('td').nth(4)).toHaveText('-');
 
     // 日志入口可打开（无记录空态）
     await row.getByRole('button', { name: `工作负载日志 ${created!.name}` }).click();

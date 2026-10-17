@@ -130,6 +130,34 @@ describe('WorkloadExecutor', () => {
     expect(results[0].log.endsWith('ENDMARK')).toBe(true);
   }, 15000);
 
+  it('T-WE4b: skips a leading split UTF-8 continuation byte when truncating the tail', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    // 总长 262145 字节（3 字节「中」+ 262142 个 A），尾部保留 262144 字节 => 起点落在
+    // 「中」的第 2 个字节（续字节）上；截断后必须跳过续字节到字符边界，首字符不得是乱码。
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          {
+            logId: 'utf8',
+            workloadName: 'Utf8',
+            script: "printf '中'; head -c 262142 /dev/zero | tr '\\0' 'A'",
+            timeoutMs: 10000,
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results).toHaveLength(1);
+    const log = results[0].log;
+    expect(log.includes('\uFFFD')).toBe(false);
+    expect(log).toBe('A'.repeat(262142));
+    expect(Buffer.byteLength(log, 'utf8')).toBeLessThanOrEqual(MAX_OUTPUT_BYTES);
+  }, 15000);
+
   it('T-WE5 shares the post budget and reports timeout without starting later items', async () => {
     const executor = new WorkloadExecutor();
     const { results, sink } = collect();
