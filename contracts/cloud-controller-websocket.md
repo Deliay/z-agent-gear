@@ -331,9 +331,9 @@ Content-Type: application/json
 ```
 
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
-- `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象、`implicit` 为布尔；非法返回 `400` `INVALID_WORKLOAD`。
+- `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）；非法返回 `400` `INVALID_WORKLOAD`。
 - 新版 cloud-controller 优先使用 `workloadPlan`：落库到容器 `workloadPlan`，并由 plan 派生出 `workloadIds`（保序），`workloadIds` 字段与 plan 同时下发时为滚动升级兼容。
-- 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以只读定义做依赖展开与默认参数归一兜底，行为与新 admin-api 一致（依赖先于依赖方、去重、参数取默认值）。
+- 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以只读定义做依赖展开与默认参数归一兜底（含隐式依赖），行为与新 admin-api 一致（依赖先于依赖方、去重、参数取默认值；非法默认值返回 `400` `INVALID_WORKLOAD`）。此时容器 `workloadIds` **按选择顺序落库**（不含隐式依赖），兜底展开得到的 `workloadPlan` 仅用于执行——旧版调用方读回 `workloadIds` 时不会看到选择之外的 ID。
 
 **响应 201：** 新建的 `CloudContainer`。
 

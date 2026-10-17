@@ -114,6 +114,9 @@ async function resolveWorkloadIds(
  * 解析并校验 `workloadPlan`（契约 A.2.2）：数组、≤10、`workloadId` 去重且全部存在、
  * `params` 为对象、`implicit` 为布尔。返回 `null` 表示非法（调用方 400 `INVALID_WORKLOAD`）；
  * 未携带（`undefined`/`null`）返回空数组表示「无计划」。
+ *
+ * 缺省的 `params`/`implicit` 归一为 `{}` / `false`（与模型默认值及各读取层一致，
+ * 避免「写入层宽松、读取层有默认、路由层却必填」的口径分裂）；类型错误仍 400。
  */
 async function resolveWorkloadPlan(
   raw: unknown,
@@ -130,13 +133,15 @@ async function resolveWorkloadPlan(
     const { workloadId, params, implicit } = item as Record<string, unknown>;
     if (typeof workloadId !== 'string' || workloadId.length === 0) return null;
     if (seen.has(workloadId)) return null;
-    if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
-    if (typeof implicit !== 'boolean') return null;
+    if (params !== undefined && params !== null) {
+      if (typeof params !== 'object' || Array.isArray(params)) return null;
+    }
+    if (implicit !== undefined && typeof implicit !== 'boolean') return null;
     seen.add(workloadId);
     entries.push({
       workloadId,
-      params: { ...(params as Record<string, unknown>) },
-      implicit,
+      params: params ? { ...(params as Record<string, unknown>) } : {},
+      implicit: implicit === true,
     });
   }
 
@@ -210,6 +215,7 @@ export function createInternalRouter(
     }
 
     // 优先使用请求下发的 plan；无 plan 且仅有 workloadIds（旧版 admin-api）时按只读定义兜底展开。
+    const hadExplicitPlan = plan.length > 0;
     let effectivePlan: WorkloadPlanEntry[] = plan;
     if (effectivePlan.length === 0 && workloadIds.length > 0) {
       try {
@@ -231,7 +237,11 @@ export function createInternalRouter(
     }
 
     try {
-      const created = await containerService.start('idle', refId, workloadIds, effectivePlan);
+      // 契约 A.2.2：显式下发 plan 时由 plan 派生 workloadIds；仅 workloadIds 的旧版请求
+      // 按选择顺序落库 workloadIds（兜底展开的 plan 仅用于执行），二者不产生静默偏差。
+      const created = await containerService.start('idle', refId, workloadIds, effectivePlan, {
+        deriveWorkloadIdsFromPlan: hadExplicitPlan,
+      });
       res.status(201).json(toCloudContainerJson(created));
     } catch (err) {
       if (err instanceof UnsupportedPurposeError) {

@@ -20,6 +20,9 @@ import type { WorkloadPlanEntry } from '../models/cloud-container.js';
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 5）。 */
 export const MAX_WORKLOAD_PLAN_ENTRIES = 10;
 
+/** TEXT 参数值最大字符数（与 admin-api 同口径，裁决 6）。 */
+export const MAX_PARAM_TEXT_LENGTH = 1024;
+
 /** 兜底展开/校验失败：调用方映射为 400 `INVALID_WORKLOAD`。 */
 export class WorkloadPlanError extends Error {
   constructor(message: string) {
@@ -48,37 +51,55 @@ function dedupePreservingOrder(ids: readonly string[]): string[] {
 }
 
 /**
- * 按 `paramSchema` 归一默认参数：每个字段取 `defaultValue`，并按类型做轻量归一
- * （`multi_select` 去重为字符串数组、`boolean` 保证布尔、其余保证字符串）。
+ * 按 `paramSchema` 归一单个默认参数值——**镜像 admin-api `normalizeParamValue`**，
+ * 类型大小写不敏感，非法默认值抛错（调用方映射 400 `INVALID_WORKLOAD`），
+ * 避免兜底路径出现「`"false"` 变 `true`」「非数组静默变 `[]`」「select 不校验归属」
+ * 等与 admin-api 不一致的行为（契约 A.2.2「行为与新 admin-api 一致」）。
+ */
+export function normalizeDefaultParamValue(field: WorkloadParamField): string | string[] | boolean {
+  const type = String(field.type).toLowerCase();
+  const options = field.options ?? [];
+  const value = field.defaultValue;
+  switch (type) {
+    case 'select':
+      if (typeof value !== 'string' || !options.includes(value)) {
+        throw new WorkloadPlanError(`invalid value for parameter ${field.key}`);
+      }
+      return value;
+    case 'multi_select':
+      if (
+        !Array.isArray(value) ||
+        !value.every((item) => typeof item === 'string' && options.includes(item))
+      ) {
+        throw new WorkloadPlanError(`invalid value for parameter ${field.key}`);
+      }
+      // 去重（保留首次出现顺序）；空数组合法
+      return [...new Set(value as string[])];
+    case 'text':
+      if (typeof value !== 'string' || value.length > MAX_PARAM_TEXT_LENGTH) {
+        throw new WorkloadPlanError(`invalid value for parameter ${field.key}`);
+      }
+      return value;
+    case 'boolean':
+      if (typeof value !== 'boolean') {
+        throw new WorkloadPlanError(`invalid value for parameter ${field.key}`);
+      }
+      return value;
+    default:
+      throw new WorkloadPlanError(`invalid value for parameter ${field.key}`);
+  }
+}
+
+/**
+ * 按 `paramSchema` 归一默认参数：每个字段取 `defaultValue` 并按类型校验归一
+ * （与 admin-api 同口径；非法默认值抛 `WorkloadPlanError`）。
  */
 export function normalizeDefaultParams(
   paramSchema: readonly WorkloadParamField[] | undefined,
 ): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   for (const field of paramSchema ?? []) {
-    switch (field.type) {
-      case 'multi_select': {
-        const value = Array.isArray(field.defaultValue)
-          ? field.defaultValue.filter((item): item is string => typeof item === 'string')
-          : [];
-        params[field.key] = [...new Set(value)];
-        break;
-      }
-      case 'boolean':
-        params[field.key] =
-          typeof field.defaultValue === 'boolean'
-            ? field.defaultValue
-            : Boolean(field.defaultValue);
-        break;
-      default:
-        params[field.key] =
-          typeof field.defaultValue === 'string'
-            ? field.defaultValue
-            : field.defaultValue === undefined || field.defaultValue === null
-              ? ''
-              : String(field.defaultValue);
-        break;
-    }
+    params[field.key] = normalizeDefaultParamValue(field);
   }
   return params;
 }
@@ -104,11 +125,13 @@ export function resolveFallbackWorkloadPlan(
     const color = state.get(id);
     if (color === 'done') return;
     if (color === 'visiting') {
-      throw new WorkloadPlanError(`dependency cycle detected: ${[...path, id].join(' -> ')}`);
+      // 与 admin-api 同口径：仅输出环路径（含环起点），不输出整条 DFS 路径。
+      const cycle = [...path.slice(path.indexOf(id)), id];
+      throw new WorkloadPlanError(`dependency cycle detected: ${cycle.join(' -> ')}`);
     }
     const definition = byId.get(id);
     if (!definition) {
-      if (explicitSet.has(id)) throw new WorkloadPlanError(`workload not found: ${id}`);
+      if (explicitSet.has(id)) throw new WorkloadPlanError('workload not found');
       throw new WorkloadPlanError(`dependency workload not found: ${id}`);
     }
 

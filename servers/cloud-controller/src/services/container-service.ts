@@ -109,6 +109,17 @@ export interface DestroyResult {
   deletedJob: boolean;
 }
 
+export interface StartOptions {
+  /**
+   * 是否由 `workloadPlan` 派生容器 `workloadIds`（契约 A.2.2）。
+   *
+   * - `true`（默认）：请求显式下发 plan 时由 plan 派生（保序）；
+   * - `false`：仅 `workloadIds` 的旧版请求，`workloadIds` 按选择顺序落库，
+   *   `plan`（含兜底展开的隐式依赖）仅用于执行，避免与契约文字产生静默偏差。
+   */
+  deriveWorkloadIdsFromPlan?: boolean;
+}
+
 /**
  * 容器生命周期状态机编排：
  * creating → connecting → online → destroying → exited（失败终态 failed）。
@@ -189,22 +200,27 @@ export class ContainerService {
    * 全程持有该容器的串行锁，且在 creating→connecting 时做状态前置校验：若记录已被并发
    * 销毁/置终态，则回收刚创建的 Job，避免孤儿资源。
    *
-   * 执行计划（契约 A.2.2 / 裁决 5）：携带非空 `workloadPlan` 时优先落库该计划，并由其
-   * 派生 `workloadIds`（保序）；无 plan 时沿用 `workloadIds` 去重保序的旧行为。
+   * 执行计划（契约 A.2.2 / 裁决 5）：携带非空 `workloadPlan` 时优先落库该计划；当
+   * `deriveWorkloadIdsFromPlan` 为 true（请求显式下发 plan）时由 plan 派生 `workloadIds`
+   * （保序），否则（仅 `workloadIds` 的旧版请求）按选择顺序落库 `workloadIds`、plan 仅用于执行。
    */
   async start(
     purpose: CloudContainerPurpose,
     refId: string | null = null,
     workloadIds: readonly string[] = [],
     workloadPlan: readonly WorkloadPlanEntry[] | null = null,
+    options: StartOptions = {},
   ): Promise<CloudContainerEntity> {
     if (purpose !== 'idle') {
       throw new UnsupportedPurposeError();
     }
 
     const plan = normalizeWorkloadPlan(workloadPlan);
+    const deriveFromPlan = options.deriveWorkloadIdsFromPlan ?? true;
     const effectiveWorkloadIds =
-      plan.length > 0 ? dedupeWorkloadIds(plan.map((entry) => entry.workloadId)) : dedupeWorkloadIds(workloadIds);
+      deriveFromPlan && plan.length > 0
+        ? dedupeWorkloadIds(plan.map((entry) => entry.workloadId))
+        : dedupeWorkloadIds(workloadIds);
 
     const name = `zag-worker-${randomSuffix(6)}`;
     const created = await this.repo.create({
