@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, type Socket } from 'socket.io';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
 import { ContainerService } from './container-service.js';
 import { HeartbeatTracker } from './heartbeat-tracker.js';
@@ -14,6 +14,9 @@ import { WorkloadDispatcher } from './workload-dispatcher.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 import { InMemoryWorkloadRepository, type CloudWorkloadEntity } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
+
+/** 兼容版本基线：版本门禁上线后，存量注册用例统一使用该版本。 */
+const OK_VERSION = '2.2.0';
 
 let httpServer: HttpServer;
 let io: SocketIOServer;
@@ -222,7 +225,7 @@ describe('worker Socket.IO gateway', () => {
         reject(err);
       });
     });
-    socket.emit('register', { hostname: 'worker-legacy', version: '2.0.0' });
+    socket.emit('register', { hostname: 'worker-legacy', version: OK_VERSION });
     await waitFor(socket, 'registered');
     expect((await repo.findById(container.id))?.status).toBe('online');
     socket.close();
@@ -232,7 +235,7 @@ describe('worker Socket.IO gateway', () => {
     const { container, token } = await newContainer();
     const socket = await connectWith(token);
 
-    socket.emit('register', { hostname: 'worker-1', version: '2.1.0', platform: 'linux' });
+    socket.emit('register', { hostname: 'worker-1', version: OK_VERSION, platform: 'linux' });
     const registered = await waitFor<{ controllerId: string }>(socket, 'registered');
     expect(registered.controllerId).toBe(container.id);
 
@@ -250,7 +253,7 @@ describe('worker Socket.IO gateway', () => {
     socket.emit('register', {
       key: 'legacy-controller-key',
       hostname: 'worker-2',
-      version: '2.0.5',
+      version: OK_VERSION,
       platform: 'linux',
     });
     await waitFor(socket, 'registered');
@@ -262,7 +265,7 @@ describe('worker Socket.IO gateway', () => {
   it('T-G4: destroy emits shutdown to the connected worker', async () => {
     const { container, token } = await newContainer();
     const socket = await connectWith(token);
-    socket.emit('register', { hostname: 'worker-3', version: '2.0.0' });
+    socket.emit('register', { hostname: 'worker-3', version: OK_VERSION });
     await waitFor(socket, 'registered');
 
     const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
@@ -275,7 +278,7 @@ describe('worker Socket.IO gateway', () => {
   it('T-G5: three missed heartbeats mark the worker offline (connecting)', async () => {
     const { container, token } = await newContainer();
     const socket = await connectWith(token);
-    socket.emit('register', { hostname: 'worker-4', version: '2.0.0' });
+    socket.emit('register', { hostname: 'worker-4', version: OK_VERSION });
     await waitFor(socket, 'registered');
 
     const now = Date.now();
@@ -293,7 +296,7 @@ describe('worker Socket.IO gateway', () => {
     const socket = await connectWith(token);
 
     const errorPromise = waitFor<{ code: string }>(socket, 'error');
-    socket.emit('register', { version: '2.0.0' });
+    socket.emit('register', { version: OK_VERSION });
     const error = await errorPromise;
 
     expect(error.code).toBe('INVALID_PAYLOAD');
@@ -301,14 +304,138 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
+  it('T-GV1: register 2.1.0 → VERSION_MISMATCH（当前/最低/major）并断开', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    const disconnected = new Promise<void>((resolve) => {
+      socket.once('disconnect', () => resolve());
+    });
+
+    const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+    socket.emit('register', { hostname: 'worker-old', version: '2.1.0' });
+    const error = await errorPromise;
+
+    expect(error.code).toBe('VERSION_MISMATCH');
+    expect(error.currentVersion).toBe('2.1.0');
+    expect(error.minimumVersion).toBe('2.2.0');
+    expect(error.supportedMajor).toBe(2);
+    expect(String(error.message)).toContain('2.1.0');
+    expect(String(error.message)).toContain('2.2.0');
+
+    await disconnected;
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('connecting');
+    expect(stored?.connectedAt).toBeNull();
+  });
+
+  it('T-GV2: 版本拒绝零副作用（心跳/在线/初始化/注册标记均不生效）', async () => {
+    const markOnline = vi.spyOn(service, 'markOnline');
+    const markInitializing = vi.spyOn(service, 'markInitializing');
+    const hasInitScripts = vi.spyOn(dispatcher, 'hasInitScripts');
+    const startInit = vi.spyOn(dispatcher, 'startInit');
+    const record = vi.spyOn(heartbeatTracker, 'record');
+    const serverSockets: Socket[] = [];
+    const onConnection = (serverSocket: Socket): void => {
+      serverSockets.push(serverSocket);
+    };
+    io.of('/worker').on('connection', onConnection);
+
+    try {
+      const { container, token } = await newContainer();
+      const socket = await connectWith(token);
+      const disconnected = new Promise<void>((resolve) => {
+        socket.once('disconnect', () => resolve());
+      });
+      const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+      socket.emit('register', { hostname: 'worker-old', version: '2.1.0' });
+      await errorPromise;
+      await disconnected;
+
+      expect(markOnline).not.toHaveBeenCalled();
+      expect(markInitializing).not.toHaveBeenCalled();
+      expect(hasInitScripts).not.toHaveBeenCalled();
+      expect(startInit).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+      expect(serverSockets).toHaveLength(1);
+      expect(serverSockets[0]!.data.registered).not.toBe(true);
+
+      const stored = await repo.findById(container.id);
+      expect(stored?.status).toBe('connecting');
+      expect(stored?.connectedAt).toBeNull();
+    } finally {
+      io.of('/worker').off('connection', onConnection);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('T-GV3: 2.2.0 / 2.10.0 直接注册成功（回归）', async () => {
+    for (const version of ['2.2.0', '2.10.0']) {
+      const { container, token } = await newContainer();
+      const socket = await connectWith(token);
+      socket.emit('register', { hostname: `worker-${version}`, version });
+      const registered = await waitFor<{ controllerId: string }>(socket, 'registered');
+      expect(registered.controllerId).toBe(container.id);
+      expect((await repo.findById(container.id))?.status).toBe('online');
+      socket.close();
+    }
+  });
+
+  it('T-GV4: 版本缺失 / 非法 / 错误 major 均拒绝，currentVersion 为原始值或 unknown', async () => {
+    const cases: Array<{ payload: Record<string, unknown>; currentVersion: string }> = [
+      { payload: { hostname: 'worker-missing' }, currentVersion: 'unknown' },
+      { payload: { hostname: 'worker-bad', version: 'x.y.z' }, currentVersion: 'x.y.z' },
+      { payload: { hostname: 'worker-future', version: '3.0.0' }, currentVersion: '3.0.0' },
+      { payload: { hostname: 'worker-number', version: 220 }, currentVersion: 'unknown' },
+    ];
+
+    for (const { payload, currentVersion } of cases) {
+      const { container, token } = await newContainer();
+      const socket = await connectWith(token);
+      const disconnected = new Promise<void>((resolve) => {
+        socket.once('disconnect', () => resolve());
+      });
+      const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+      socket.emit('register', payload);
+      const error = await errorPromise;
+
+      expect(error.code).toBe('VERSION_MISMATCH');
+      expect(error.currentVersion).toBe(currentVersion);
+      expect(error.minimumVersion).toBe('2.2.0');
+      expect(error.supportedMajor).toBe(2);
+      await disconnected;
+      expect((await repo.findById(container.id))?.connectedAt).toBeNull();
+    }
+  });
+
+  it('T-GV5: 拒绝后的断开不改变容器状态（不 markConnecting）', async () => {
+    const markConnecting = vi.spyOn(service, 'markConnecting');
+    try {
+      const { container, token } = await newContainer();
+      const socket = await connectWith(token);
+      const disconnected = new Promise<void>((resolve) => {
+        socket.once('disconnect', () => resolve());
+      });
+      const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+      socket.emit('register', { hostname: 'worker-old', version: '2.1.0' });
+      await errorPromise;
+      await disconnected;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(markConnecting).not.toHaveBeenCalled();
+      expect((await repo.findById(container.id))?.status).toBe('connecting');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('T-G7: same container with two sockets stays online until the last disconnects', async () => {
     const { container, token } = await newContainer();
     const first = await connectWith(token);
-    first.emit('register', { hostname: 'worker-a', version: '2.0.0' });
+    first.emit('register', { hostname: 'worker-a', version: OK_VERSION });
     await waitFor(first, 'registered');
 
     const second = await connectWith(token);
-    second.emit('register', { hostname: 'worker-b', version: '2.0.0' });
+    second.emit('register', { hostname: 'worker-b', version: OK_VERSION });
     await waitFor(second, 'registered');
 
     first.close();
@@ -508,7 +635,7 @@ describe('worker Socket.IO gateway', () => {
       socket,
       'workload:run',
     );
-    socket.emit('register', { hostname: 'worker-init', version: '2.2.0' });
+    socket.emit('register', { hostname: 'worker-init', version: OK_VERSION });
     await registered;
 
     const run = await runPromise;
@@ -539,7 +666,7 @@ describe('worker Socket.IO gateway', () => {
       runReceived = true;
     });
 
-    socket.emit('register', { hostname: 'worker-plain', version: '2.2.0' });
+    socket.emit('register', { hostname: 'worker-plain', version: OK_VERSION });
     await waitFor(socket, 'registered');
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -552,7 +679,7 @@ describe('worker Socket.IO gateway', () => {
     const { container, token } = await newContainer(['gw-missing']);
     const socket = await connectWith(token);
 
-    socket.emit('register', { hostname: 'worker-deleted', version: '2.2.0' });
+    socket.emit('register', { hostname: 'worker-deleted', version: OK_VERSION });
     await waitFor(socket, 'registered');
     await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
 
@@ -569,7 +696,7 @@ describe('worker Socket.IO gateway', () => {
     const socket = await connectWith(token);
 
     const registered = waitFor(socket, 'registered');
-    socket.emit('register', { hostname: 'worker-post', version: '2.2.0' });
+    socket.emit('register', { hostname: 'worker-post', version: OK_VERSION });
     await registered;
     await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
 
