@@ -1,6 +1,19 @@
 import mongoose from 'mongoose';
 
 /**
+ * 本次启动最终执行计划子文档（提案 §4.1）：`workloadId`/`params`/`implicit`。
+ * 与 cloud-controller 的 `cloudcontainers.workloadPlan` 严格对齐（只读模型）。
+ */
+const workloadPlanItemSchema = new mongoose.Schema(
+  {
+    workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    params: { type: mongoose.Schema.Types.Mixed, default: {} },
+    implicit: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
+/**
  * 降级只读模型（裁决 12）：集合名与 cloud-controller 的 `cloudcontainers` 严格对齐。
  * admin-api 单一事实源在 cloud-controller——本模型**仅用于 find**（控制面不可达时列表降级），
  * 不创建、不更新、不删除，避免双写不一致。
@@ -27,6 +40,8 @@ const cloudContainerSchema = new mongoose.Schema(
     exitReason: { type: String },
     // 启动时挂载的工作负载，按选择顺序保存；与 cloud-controller schema 对齐
     workloadIds: { type: [String], default: [] },
+    // 本次启动最终执行计划，顺序即执行顺序；与 cloud-controller schema 对齐
+    workloadPlan: { type: [workloadPlanItemSchema], default: [] },
     // 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null
     currentWorkloadName: { type: String, default: null },
   },

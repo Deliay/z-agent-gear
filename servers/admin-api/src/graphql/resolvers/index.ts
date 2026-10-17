@@ -1,3 +1,4 @@
+import GraphQLJSON from 'graphql-type-json';
 import { authResolvers } from './auth.js';
 import { providerResolvers } from './provider.js';
 import { modelResolvers } from './model.js';
@@ -7,6 +8,8 @@ import { cloudWorkloadResolvers } from './cloud-workload.js';
 
 // 类型级 resolver（Provider.models / Model.provider / CloudContainer.workloads）必须显式登记，否则线上不生效
 export const resolvers = {
+  // JSON scalar（paramSchema.defaultValue / params / selection.params）运行时由 graphql-type-json 处理
+  JSON: GraphQLJSON,
   Query: {
     ...authResolvers.Query,
     ...providerResolvers.Query,

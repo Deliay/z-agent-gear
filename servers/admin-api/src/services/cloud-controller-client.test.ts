@@ -135,9 +135,27 @@ describe('CloudControllerClient', () => {
         jsonResponse({ id: 'c4', name: 'n', status: 'creating', purpose: 'idle', createdAt: 'x' }, 201, 'Created'),
       );
       const client = new CloudControllerClient(OPTS);
-      await client.start('IDLE', ['w2', 'w1']);
+      await client.start('IDLE', undefined, ['w2', 'w1']);
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(JSON.parse(init.body as string)).toEqual({ purpose: 'idle', workloadIds: ['w2', 'w1'] });
+    });
+
+    it('T-W11: posts both the workloadPlan and the derived workloadIds', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ id: 'c5', name: 'n', status: 'creating', purpose: 'idle', createdAt: 'x' }, 201, 'Created'),
+      );
+      const client = new CloudControllerClient(OPTS);
+      const plan = [
+        { workloadId: 'w2', params: { version: '20' }, implicit: false },
+        { workloadId: 'w1', params: {}, implicit: true },
+      ];
+      await client.start('IDLE', plan, ['w2', 'w1']);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toEqual({
+        purpose: 'idle',
+        workloadIds: ['w2', 'w1'],
+        workloadPlan: plan,
+      });
     });
 
     it('maps ADMIN_TASK to the hyphenated internal purpose', async () => {

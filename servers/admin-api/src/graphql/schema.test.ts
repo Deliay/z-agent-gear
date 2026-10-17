@@ -78,6 +78,39 @@ describe('GraphQL schema', () => {
     expect(resolvers.CloudContainer.workloads).toBeTypeOf('function');
   });
 
+  it('declares the JSON scalar exactly once and registers its resolver', () => {
+    expect(schema.getType('JSON')).toBeTruthy();
+    expect(resolvers.JSON).toBeTruthy();
+  });
+
+  it('exposes the workload param/dependency fields and the log params snapshot', () => {
+    const cloudWorkload = schema.getType('CloudWorkload') as GraphQLObjectType;
+    expect(Object.keys(cloudWorkload.getFields())).toEqual(
+      expect.arrayContaining(['paramSchema', 'dependsOnWorkloadIds', 'isPreset']),
+    );
+    const paramField = schema.getType('CloudWorkloadParamField') as GraphQLObjectType;
+    expect(Object.keys(paramField.getFields())).toEqual(
+      expect.arrayContaining(['key', 'label', 'type', 'options', 'defaultValue']),
+    );
+    const paramType = schema.getType('CloudWorkloadParamType') as GraphQLEnumType;
+    expect(paramType.getValues().map((value) => value.name)).toEqual([
+      'SELECT',
+      'MULTI_SELECT',
+      'TEXT',
+      'BOOLEAN',
+    ]);
+    const log = schema.getType('CloudWorkloadLog') as GraphQLObjectType;
+    expect(Object.keys(log.getFields())).toContain('params');
+  });
+
+  it('extends adminStartCloudContainer with the workloads selection input', () => {
+    const mutation = schema.getMutationType()!;
+    const start = mutation.getFields().adminStartCloudContainer;
+    const argNames = start.args.map((arg) => arg.name);
+    expect(argNames).toEqual(expect.arrayContaining(['purpose', 'workloadIds', 'workloads']));
+    expect(schema.getType('CloudWorkloadSelectionInput')).toBeTruthy();
+  });
+
   it('exposes the INITIALIZING status and workload fields on CloudContainer', () => {
     const cloudContainer = schema.getType('CloudContainer') as GraphQLObjectType;
     expect(Object.keys(cloudContainer.getFields())).toEqual(
