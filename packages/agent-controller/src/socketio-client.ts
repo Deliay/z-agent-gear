@@ -19,7 +19,7 @@ import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
 
-const CONTROLLER_VERSION = '2.1.0';
+const CONTROLLER_VERSION = '2.1.1';
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
