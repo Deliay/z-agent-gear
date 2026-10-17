@@ -37,6 +37,7 @@ src/
 - **单一事实源**：容器状态/生命周期全部由本服务持有；`admin-api` 不直连 K8s、不双写 Mongo（降级只读除外）。
 - **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；握手限速按 token 的 `containerId` 前缀（无 token 回退 peer IP），另有更高上限的 per-IP 兜底桶——worker 经共享 Ingress IP 回连时不共享同一令牌桶；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
 - **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 requests/limits 与 `activeDeadlineSeconds` 兜底。
+- **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
 - **本期 purpose 仅 idle**：服务端对非 idle 启动请求返回明确错误「该任务类型暂未开放」。
@@ -55,6 +56,22 @@ src/
 | `CONNECT_TIMEOUT_MS` | 回连超时（默认 300000） |
 | `K8S_ENABLED` | 是否使用真实 K8s 客户端（默认 `true`；本地/测试设 `false`） |
 | `RUNTIME_CLASS_NAME` | 容器 runtimeClass（默认 `sysbox-runc`） |
+| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。排查 worker 回连时设 `debug` 看逐请求日志 |
+
+## 回连失败排查（worker 连不上 cloud-controller）
+
+worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）：
+
+1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印 `cloud-controller listening on :<port> (engine path /socket.io/ ...)` 与一条 worker 回连提示；若这条都没有，说明看错了 Pod/容器，或服务未启动。
+2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时会打印
+   `[ws] upgrade accepted path=/socket.io/ ... host=... xfp=... xff=...`。
+   - 完全没有该行 → 请求没到 Pod，问题在入口层（Ingress 路径/TLS/host/DNS/Service）。看 Ingress 控制器日志：`kubectl -n <ingress-ns> logs <ingress-pod>`。
+   - 出现 `[ws] upgrade path mismatch: got "/worker", expected "/socket.io/"` → Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。
+   - 出现 `[ws] engine connection_error code=... message=...` → 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
+3. **握手鉴权是否通过**：到达后依次打印 `[worker] handshake attempt ... token=present|MISSING` → `handshake accepted/rejected (INVALID_TOKEN)` → `connected` → `registered`。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）。
+4. **worker 侧细节**：`Connection error: websocket error` 现在会追加 `(type=... description=... context=...)`，其中 `context` 常含真实 HTTP 状态（如 `unexpected server response (404)`），据此判断是入口层 404 还是 TLS 问题。
+
+> 说明：`/worker` 是 Socket.IO **namespace**，握手实际打 engine path `/socket.io/`；`ZAG_SERVER_ENDPOINT=wss://<host>/worker` 是本仓库既定约定，**不是**让 Ingress 暴露 `/worker`（见契约 `contracts/cloud-controller-websocket.md` §1.2）。
 
 ## Dev Commands
 

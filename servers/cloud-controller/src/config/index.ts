@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { parseLogLevel, type LogLevel } from '../logger.js';
 
 dotenv.config();
 
@@ -12,6 +13,8 @@ export interface AppConfig {
   connectTimeoutMs: number;
   k8sEnabled: boolean;
   runtimeClassName: string;
+  /** 日志级别（`LOG_LEVEL`，默认 info；排查回连时设 debug）。 */
+  logLevel: LogLevel;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -38,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     connectTimeoutMs: toInt(env.CONNECT_TIMEOUT_MS, 300000),
     k8sEnabled: toBool(env.K8S_ENABLED, true),
     runtimeClassName: env.RUNTIME_CLASS_NAME || 'sysbox-runc',
+    logLevel: parseLogLevel(env.LOG_LEVEL),
   };
 }
 
