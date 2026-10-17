@@ -105,6 +105,10 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
     .WithEnvironment("WORKER_IMAGE", workerImage)
     .WithEnvironment("PUBLIC_WS_ENDPOINT", publicWsEndpoint)
+    // 工作负载（可选，代码内已有默认值，此处显式声明便于本地调参）
+    .WithEnvironment("WORKLOAD_INIT_TIMEOUT_MS", "300000")
+    .WithEnvironment("WORKLOAD_POST_BUDGET_MS", "90000")
+    .WithEnvironment("WORKLOAD_LOG_MAX_BYTES", "262144")
     // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
     .WithEnvironment("K8S_ENABLED", "false")
     .WithReference(mongodb)
@@ -129,6 +133,8 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+    // 销毁容器超时（工作负载清理脚本批次需 > post 预算 90s + 宽限 10s + 删 Job 重试）
+    .WithEnvironment("CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS", "180000")
     .WithReference(mongodb)
     .WithExternalHttpEndpoints()
     .PublishAsDockerComposeService((resource, service) =>

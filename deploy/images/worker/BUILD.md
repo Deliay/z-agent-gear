@@ -71,6 +71,29 @@ docker run --rm -it --entrypoint bash \
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
 
+## 工作负载执行自验（PRD 功能点 3/5）
+
+镜像内 `agent-gear` 需支持「工作负载」协议（`workload:run` / `workload:result`，见 `contracts/cloud-controller-websocket.md` §2.9/§2.10）。构建后核对：
+
+```bash
+docker run --rm -it --entrypoint bash \
+  core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
+    agent-gear --version && \
+    bash -c "echo workload-ok" && \
+    bash -c "echo out; echo err 1>&2; exit 7" ; echo "exit=$?"
+  '
+```
+
+逐项核对：
+
+- [ ] `agent-gear --version` ≥ `2.2.0`（支持工作负载执行协议；major 仍为 `2`，握手版本校验不受影响）
+- [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
+- [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
+- [ ] 单条输出超过 256 KiB 时按尾部截断
+
+> 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
+> 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的 `npm install -g agent-gear` 更新逻辑不变）。
+
 ## 默认启动
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`：启动容器内 `dockerd` → 装配镜像代理 shim → 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）→ `exec agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`），无需额外参数即回连 cloud-controller。
