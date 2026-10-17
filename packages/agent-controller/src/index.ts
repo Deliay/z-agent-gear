@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createRequire } from 'node:module';
 import { hostname, platform } from 'os';
 import { resolveKey, resolveEndpoint, saveKeyToConfig, saveEndpointToConfig } from './config.js';
 import { connectToServer } from './socketio-client.js';
@@ -8,12 +9,17 @@ import { startMcpRegistration } from './commands/mcp-proxy.js';
 import { startMcpProxy } from './commands/mcp.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 
+// 版本号唯一事实源为 package.json（`--version` 与 npm 发布版本保持一致，避免手工同步漂移）。
+const { version: CLI_VERSION } = createRequire(import.meta.url)('../package.json') as {
+  version: string;
+};
+
 const program = new Command();
 
 program
   .name('agent-gear')
   .description('Agent Controller - manages connection to controller-api')
-  .version('1.0.0')
+  .version(CLI_VERSION)
   .option('-k, --key <key>', 'Controller key')
   .option('-s, --server <endpoint>', 'Server endpoint URL')
   .option('-n, --name <name>', 'Controller name')
