@@ -7,6 +7,8 @@ import { InMemoryK8sClient } from '../services/k8s-client.js';
 import { K8sJobManager } from '../services/k8s-job-manager.js';
 import { TokenService } from '../services/token-service.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
+import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
 import { internalAuth } from '../middleware/internal-auth.js';
 import { createInternalRouter } from './internal-api.js';
 
@@ -14,9 +16,18 @@ const INTERNAL_TOKEN = 'test-internal-token';
 
 let httpServer: HttpServer;
 let baseUrl: string;
+let workloadLogRepository: InMemoryWorkloadLogRepository;
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${INTERNAL_TOKEN}`, ...extra };
+}
+
+async function createContainer(body: Record<string, unknown>): Promise<Response> {
+  return fetch(`${baseUrl}/internal/containers`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
 }
 
 beforeAll(async () => {
@@ -36,9 +47,26 @@ beforeAll(async () => {
     shutdownGraceMs: 0,
   });
 
+  const workloadRepository = new InMemoryWorkloadRepository();
+  for (const id of ['wl-a', 'wl-b', 'wl-c']) {
+    workloadRepository.add({
+      id,
+      name: `workload-${id}`,
+      initScript: `echo ${id}`,
+      postScript: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  }
+  workloadLogRepository = new InMemoryWorkloadLogRepository();
+
   const app = express();
   app.use(express.json());
-  app.use('/internal', internalAuth(INTERNAL_TOKEN), createInternalRouter(service));
+  app.use(
+    '/internal',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(service, { workloadRepository, workloadLogRepository }),
+  );
   httpServer = createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
@@ -54,17 +82,14 @@ describe('internal management API', () => {
     expect(empty.status).toBe(200);
     expect(await empty.json()).toEqual([]);
 
-    const created = await fetch(`${baseUrl}/internal/containers`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ purpose: 'idle' }),
-    });
+    const created = await createContainer({ purpose: 'idle' });
     expect(created.status).toBe(201);
     const body = (await created.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
       [
         'connectedAt',
         'createdAt',
+        'currentWorkloadName',
         'exitReason',
         'exitedAt',
         'id',
@@ -75,14 +100,18 @@ describe('internal management API', () => {
         'refId',
         'status',
         'userId',
+        'workloadIds',
       ].sort(),
     );
     expect(body.status).toBe('connecting');
     expect(body.purpose).toBe('idle');
     expect(body.refId).toBeNull();
+    expect(body.workloadIds).toEqual([]);
+    expect(body.currentWorkloadName).toBeNull();
 
     const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
-    expect((await list.json()).length).toBeGreaterThanOrEqual(1);
+    const listBody = (await list.json()) as unknown[];
+    expect(listBody.length).toBeGreaterThanOrEqual(1);
 
     const destroyed = await fetch(`${baseUrl}/internal/containers/${body.id}`, {
       method: 'DELETE',
@@ -93,7 +122,7 @@ describe('internal management API', () => {
     expect(await destroyed.json()).toEqual({ success: true, deletedJob: true });
   });
 
-  it('T-R2: missing or invalid bearer token -> 401', async () => {
+  it('T-R2/T-IC7: missing or invalid bearer token -> 401 (含 workload-logs)', async () => {
     const missing = await fetch(`${baseUrl}/internal/containers`);
     expect(missing.status).toBe(401);
 
@@ -101,14 +130,13 @@ describe('internal management API', () => {
       headers: { Authorization: 'Bearer wrong-token' },
     });
     expect(wrong.status).toBe(401);
+
+    const logsMissing = await fetch(`${baseUrl}/internal/containers/whatever/workload-logs`);
+    expect(logsMissing.status).toBe(401);
   });
 
   it('T-R3: non-idle purpose is rejected with a clear message', async () => {
-    const res = await fetch(`${baseUrl}/internal/containers`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ purpose: 'workflow' }),
-    });
+    const res = await createContainer({ purpose: 'workflow' });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { message: string };
     expect(body.message).toBe('该任务类型暂未开放');
@@ -121,11 +149,7 @@ describe('internal management API', () => {
     });
     expect(unknown.status).toBe(404);
 
-    const created = await fetch(`${baseUrl}/internal/containers`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ purpose: 'idle' }),
-    });
+    const created = await createContainer({ purpose: 'idle' });
     const { id } = (await created.json()) as { id: string };
 
     const first = await fetch(`${baseUrl}/internal/containers/${id}`, {
@@ -141,5 +165,88 @@ describe('internal management API', () => {
     expect(second.status).toBe(200);
     // 幂等：Job 已不存在，deletedJob 反映本次未真实删除
     expect(await second.json()).toEqual({ success: true, deletedJob: false });
+  });
+
+  it('T-IC5: workloadIds 合法时落库并回显（去重保序）', async () => {
+    const res = await createContainer({ purpose: 'idle', workloadIds: ['wl-b', 'wl-a', 'wl-b'] });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { workloadIds: string[] };
+    expect(body.workloadIds).toEqual(['wl-b', 'wl-a']);
+  });
+
+  it('T-IC5b: workloadIds 非法 → 400 INVALID_WORKLOAD', async () => {
+    const cases: Array<[string, unknown]> = [
+      ['unknown id', ['wl-missing']],
+      ['not an array', 'wl-a'],
+      ['non-string element', [123]],
+      ['empty string element', ['']],
+      ['too many', Array.from({ length: 11 }, () => 'wl-a')],
+    ];
+    for (const [label, workloadIds] of cases) {
+      const res = await createContainer({ purpose: 'idle', workloadIds });
+      expect(res.status, label).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error, label).toBe('INVALID_WORKLOAD');
+    }
+  });
+
+  it('T-IC6: GET workload-logs 按执行顺序返回；不存在容器 404；无记录 []', async () => {
+    const created = await createContainer({ purpose: 'idle' });
+    const { id } = (await created.json()) as { id: string };
+
+    const before = await fetch(`${baseUrl}/internal/containers/${id}/workload-logs`, {
+      headers: authHeaders(),
+    });
+    expect(before.status).toBe(200);
+    expect(await before.json()).toEqual([]);
+
+    await workloadLogRepository.createMany([
+      {
+        containerId: id,
+        workloadId: 'wl-a',
+        workloadName: 'workload-wl-a',
+        phase: 'init',
+        status: 'success',
+        script: 'echo a',
+        exitCode: 0,
+        log: 'a',
+        startedAt: new Date('2026-01-01T00:00:00.000Z'),
+        finishedAt: new Date('2026-01-01T00:00:01.000Z'),
+      },
+      {
+        containerId: id,
+        workloadId: 'wl-b',
+        workloadName: 'workload-wl-b',
+        phase: 'post',
+        status: 'timeout',
+        script: 'echo b',
+        log: 'b',
+      },
+    ]);
+
+    const res = await fetch(`${baseUrl}/internal/containers/${id}/workload-logs`, {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const logs = (await res.json()) as Array<Record<string, unknown>>;
+    expect(logs).toHaveLength(2);
+    expect(logs.map((log) => log.workloadId)).toEqual(['wl-a', 'wl-b']);
+    expect(logs[0]).toMatchObject({
+      containerId: id,
+      phase: 'init',
+      status: 'success',
+      script: 'echo a',
+      exitCode: 0,
+      log: 'a',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      finishedAt: '2026-01-01T00:00:01.000Z',
+    });
+    expect(logs[1]!.startedAt).toBeNull();
+    expect(typeof logs[0]!.createdAt).toBe('string');
+
+    const missing = await fetch(`${baseUrl}/internal/containers/not-a-container/workload-logs`, {
+      headers: authHeaders(),
+    });
+    expect(missing.status).toBe(404);
   });
 });

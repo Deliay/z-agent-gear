@@ -24,7 +24,19 @@ export const config = {
   // 缺失时不在启动期 fail-fast；调用写操作会因不可达返回明确错误（CONTROL_PLANE_UNAVAILABLE）。
   cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
+  // 强制销毁专用超时（裁决 9）：需大于 cloud-controller 的 post 预算（默认 90s）+ shutdown 宽限（10s）+ 删 Job 重试，
+  // 默认 180000（180s）。非法/缺省回落默认值，避免 NaN 让 AbortController 立即中断。
+  cloudControllerDestroyTimeoutMs: parsePositiveInt(
+    process.env.CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS,
+    180000,
+  ),
 };
+
+/** 解析正整数环境变量；缺失/非法（NaN/≤0）均回落默认值。 */
+export function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 

@@ -363,4 +363,100 @@ describe('StatusSyncService', () => {
       vi.useRealTimers();
     }
   });
+
+  it('T-CS4: initializing 不受回连超时巡检影响（裁决 10）', async () => {
+    const { repo, statusSync } = setup();
+    const now = Date.now();
+    const created = await repo.create({
+      name: 'zag-worker-initializing',
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'initializing',
+      updatedAt: new Date(now - CONNECT_TIMEOUT_MS - 60000),
+    });
+
+    const timedOut = await statusSync.scanTimeouts(now);
+
+    expect(timedOut).toEqual([]);
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('initializing');
+  });
+
+  it('T-Y15: initializing 容器的 Job 成功/失败事件仍可迁移终态', async () => {
+    const { repo, service, statusSync } = setup();
+    const succeeded = await service.start('idle');
+    await service.markInitializing(succeeded.id, 'wl-1');
+
+    await statusSync.handleJobEvent({
+      type: 'MODIFIED',
+      job: {
+        name: succeeded.name,
+        namespace: 'zag-workers',
+        labels: {},
+        phase: 'succeeded',
+        containerId: succeeded.id,
+      },
+    });
+    expect((await repo.findById(succeeded.id))?.status).toBe('exited');
+
+    const failed = await service.start('idle');
+    await service.markInitializing(failed.id, 'wl-2');
+    await statusSync.handleJobEvent({
+      type: 'MODIFIED',
+      job: {
+        name: failed.name,
+        namespace: 'zag-workers',
+        labels: {},
+        phase: 'failed',
+        containerId: failed.id,
+        message: 'OOMKilled',
+      },
+    });
+    const stored = await repo.findById(failed.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.exitReason).toBe('OOMKilled');
+  });
+
+  it('T-Y16: 15s 巡检会驱动工作负载看门狗（裁决 10）', async () => {
+    vi.useFakeTimers();
+    try {
+      const repo = new InMemoryContainerRepository();
+      const tokenService = new TokenService(repo);
+      const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        publicWsEndpoint: 'cloud.example.com:4003',
+      });
+      const service = new ContainerService(repo, tokenService, jobManager, {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        connectTimeoutMs: CONNECT_TIMEOUT_MS,
+        shutdownGraceMs: 0,
+      });
+      let watchdogCalls = 0;
+      const statusSync = new StatusSyncService({
+        repo,
+        k8sClient: new InMemoryK8sClient(),
+        containerService: service,
+        heartbeatTracker: new HeartbeatTracker(),
+        connectTimeoutMs: CONNECT_TIMEOUT_MS,
+        image: 'zero-tools/zag-worker:latest',
+        reconnectDelayMs: 0,
+        dispatcher: {
+          onWatchdog: async () => {
+            watchdogCalls += 1;
+          },
+        },
+      });
+
+      await statusSync.start();
+      await vi.advanceTimersByTimeAsync(15000);
+      statusSync.stop();
+
+      expect(watchdogCalls).toBeGreaterThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

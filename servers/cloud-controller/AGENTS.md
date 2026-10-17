@@ -16,19 +16,25 @@
 ```
 src/
 ├── config/                     # 环境配置 + assertRuntimeConfig（fail-fast）
-├── models/cloud-container.ts   # CloudContainer schema（集合 cloudcontainers）
+├── models/
+│   ├── cloud-container.ts      # CloudContainer schema（集合 cloudcontainers，状态含 initializing）
+│   ├── cloud-workload.ts       # 工作负载只读模型（集合 cloudworkloads，供 dispatcher 读脚本）
+│   └── cloud-workload-log.ts   # 执行记录模型（集合 cloudworkloadlogs，含 script 快照）
 ├── repositories/
-│   └── container-repository.ts # ContainerRepository 接口 + Mongo/InMemory 实现
+│   ├── container-repository.ts # ContainerRepository 接口 + Mongo/InMemory 实现
+│   ├── workload-repository.ts  # WorkloadRepository（findByIds/findById）+ Mongo/InMemory
+│   └── workload-log-repository.ts # WorkloadLogRepository（createMany/updateById/findByContainer/findActiveByContainer）
 ├── services/
 │   ├── token-service.ts        # 一次性 token 签发/校验（bcrypt，tokenHash）
 │   ├── k8s-client.ts           # K8sClient 接口 + Real/InMemory 实现 + 工厂
 │   ├── k8s-job-manager.ts      # Job manifest + CRUD + Foreground→Background 回退
-│   ├── container-service.ts    # 生命周期状态机（creating→connecting→online→destroying→exited/failed）
-│   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检
+│   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed）
+│   ├── workload-dispatcher.ts  # 工作负载编排：脚本下发/结果落库/当前脚本/看门狗/post 批次
+│   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检 + 工作负载看门狗
 │   ├── heartbeat-tracker.ts    # 心跳计时（30s × 3 次判离线）
-│   └── socketio-gateway.ts     # /worker namespace 接入与鉴权
+│   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含 workload:run/result）
 ├── middleware/internal-auth.ts # Bearer INTERNAL_API_TOKEN
-├── routes/internal-api.ts      # /internal/containers*
+├── routes/internal-api.ts      # /internal/containers*（含 workload-logs）
 └── index.ts                    # createCloudControllerApp + 入口
 ```
 
@@ -37,6 +43,7 @@ src/
 - **单一事实源**：容器状态/生命周期全部由本服务持有；`admin-api` 不直连 K8s、不双写 Mongo（降级只读除外）。
 - **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；握手限速按 token 的 `containerId` 前缀（无 token 回退 peer IP），另有更高上限的 per-IP 兜底桶——worker 经共享 Ingress IP 回连时不共享同一令牌桶；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
 - **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 requests/limits 与 `activeDeadlineSeconds` 兜底。
+- **工作负载脚本经 Socket.IO 下发（不经 K8s env / manifest 注入）**：`cloudworkloads` 由 admin-api 管理、本服务只读；容器 register 后由 `workload-dispatcher` 按挂载顺序下发 `workload:run{phase:"init"}`（同时建 `cloudworkloadlogs` 记录并写入脚本快照、CAS 置 `initializing`、写 `currentWorkloadName`），逐条 `workload:result` 推进，全部终态后收口 `online`（有活跃 socket）或 `connecting`。销毁时先下发 `workload:run{phase:"post"}` 并等待结果/预算耗尽，再发 `shutdown`。旧 worker 忽略新事件，由看门狗标 `TIMEOUT` 兜底。
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
@@ -54,6 +61,9 @@ src/
 | `WORKER_IMAGE` | 默认工作容器镜像地址（必填） |
 | `PUBLIC_WS_ENDPOINT` | 注入容器的对外 wss 地址（必填，**仅 host(:port)**，不得带路径；`/worker` namespace 自动追加，带路径启动即 fail-fast） |
 | `CONNECT_TIMEOUT_MS` | 回连超时（默认 300000） |
+| `WORKLOAD_INIT_TIMEOUT_MS` | 单条初始化脚本超时（默认 300000，随 `workload:run` 下发，同时作看门狗基准） |
+| `WORKLOAD_POST_BUDGET_MS` | 清理脚本批次总预算（默认 90000；预算内执行完再发 shutdown，随后沿用 10s 宽限） |
+| `WORKLOAD_LOG_MAX_BYTES` | 单条执行日志存储上限（默认 262144，写入前尾部截断） |
 | `K8S_ENABLED` | 是否使用真实 K8s 客户端（默认 `true`；本地/测试设 `false`） |
 | `RUNTIME_CLASS_NAME` | 容器 runtimeClass（默认 `sysbox-runc`） |
 | `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。排查 worker 回连时设 `debug` 看逐请求日志 |

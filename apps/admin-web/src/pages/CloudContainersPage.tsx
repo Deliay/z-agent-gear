@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { Cloud } from 'lucide-react';
-import { ADMIN_CLOUD_CONTAINERS } from '@/graphql/queries';
+import { ADMIN_CLOUD_CONTAINERS, ADMIN_CLOUD_WORKLOADS } from '@/graphql/queries';
 import {
   ADMIN_START_CLOUD_CONTAINER,
   ADMIN_DESTROY_CLOUD_CONTAINER,
@@ -11,6 +11,7 @@ import type {
   CloudContainerData,
   CloudContainerPurpose,
   GetAdminCloudContainersQuery,
+  GetAdminCloudWorkloadsQuery,
 } from '@/graphql/types';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -19,6 +20,7 @@ import { formatDateTime, formatOnlineDuration } from '@/lib/format';
 import ContainerStatusBadge from '@/components/cloud-containers/ContainerStatusBadge';
 import StartContainerDialog from '@/components/cloud-containers/StartContainerDialog';
 import DestroyConfirmDialog from '@/components/cloud-containers/DestroyConfirmDialog';
+import WorkloadLogsDialog from '@/components/cloud-containers/WorkloadLogsDialog';
 import { CONTAINER_PURPOSE_LABELS } from '@/components/cloud-containers/labels';
 
 export default function CloudContainersPage() {
@@ -26,20 +28,29 @@ export default function CloudContainersPage() {
   const { data, loading, error, refetch } = useQuery<GetAdminCloudContainersQuery>(ADMIN_CLOUD_CONTAINERS, {
     pollInterval: 10000,
   });
+  // 启动对话框可选的工作负载；独立查询，不影响容器轮询
+  const {
+    data: workloadsData,
+    loading: workloadsLoading,
+    error: workloadsError,
+    refetch: refetchWorkloads,
+  } = useQuery<GetAdminCloudWorkloadsQuery>(ADMIN_CLOUD_WORKLOADS);
   const [startContainer] = useMutation(ADMIN_START_CLOUD_CONTAINER);
   const [destroyContainer] = useMutation(ADMIN_DESTROY_CLOUD_CONTAINER);
 
   const [startOpen, setStartOpen] = useState(false);
   const [destroying, setDestroying] = useState<CloudContainerData | null>(null);
   const [destroyBusy, setDestroyBusy] = useState(false);
+  const [logsFor, setLogsFor] = useState<CloudContainerData | null>(null);
 
   const containers = data?.adminCloudContainers ?? [];
+  const workloads = workloadsData?.adminCloudWorkloads ?? [];
   // 降级提示由契约字段承载（控制面在线标记），而非依赖 Apollo error
   const controlPlaneOffline = data?.adminCloudContainerControlPlane?.online === false;
 
-  const handleStart = async (purpose: CloudContainerPurpose) => {
+  const handleStart = async (purpose: CloudContainerPurpose, workloadIds: string[]) => {
     await startContainer({
-      variables: { purpose },
+      variables: { purpose, workloadIds },
       refetchQueries: [ADMIN_CLOUD_CONTAINERS],
     });
   };
@@ -101,6 +112,7 @@ export default function CloudContainersPage() {
                 <th className="px-4 py-2 font-medium">状态</th>
                 <th className="px-4 py-2 font-medium">用途</th>
                 <th className="px-4 py-2 font-medium">关联对象</th>
+                <th className="px-4 py-2 font-medium">工作负载</th>
                 <th className="px-4 py-2 font-medium">创建时间</th>
                 <th className="px-4 py-2 font-medium">在线时长</th>
                 <th className="px-4 py-2 text-right font-medium">操作</th>
@@ -112,11 +124,32 @@ export default function CloudContainersPage() {
                   <td className="px-4 py-3 font-medium text-foreground">{container.name}</td>
                   <td className="px-4 py-3">
                     <ContainerStatusBadge status={container.status} />
+                    {container.status === 'INITIALIZING' && container.currentWorkloadName ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {container.currentWorkloadName}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {CONTAINER_PURPOSE_LABELS[container.purpose]}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{container.refId ?? '-'}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {container.workloads?.length ? (
+                      <span className="flex flex-wrap gap-1">
+                        {container.workloads.map((workload) => (
+                          <span
+                            key={workload.id}
+                            className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground"
+                          >
+                            {workload.name}
+                          </span>
+                        ))}
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {formatDateTime(container.createdAt)}
                   </td>
@@ -127,7 +160,15 @@ export default function CloudContainersPage() {
                     ) : null}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`工作负载日志 ${container.name}`}
+                        onClick={() => setLogsFor(container)}
+                      >
+                        工作负载日志
+                      </Button>
                       <Button
                         variant="ghost-danger"
                         size="sm"
@@ -145,7 +186,15 @@ export default function CloudContainersPage() {
         </div>
       )}
 
-      <StartContainerDialog open={startOpen} onOpenChange={setStartOpen} onStart={handleStart} />
+      <StartContainerDialog
+        open={startOpen}
+        onOpenChange={setStartOpen}
+        workloads={workloads}
+        workloadsLoading={workloadsLoading && !workloadsData}
+        workloadsError={workloadsError && !workloadsData ? workloadsError.message : null}
+        onRetryWorkloads={() => refetchWorkloads()}
+        onStart={handleStart}
+      />
 
       <DestroyConfirmDialog
         open={destroying !== null}
@@ -155,6 +204,15 @@ export default function CloudContainersPage() {
         containerName={destroying?.name ?? ''}
         onConfirm={handleDestroyConfirm}
         loading={destroyBusy}
+      />
+
+      <WorkloadLogsDialog
+        open={logsFor !== null}
+        onOpenChange={(open) => {
+          if (!open) setLogsFor(null);
+        }}
+        containerId={logsFor?.id ?? ''}
+        containerName={logsFor?.name ?? ''}
       />
     </div>
   );

@@ -11,6 +11,10 @@ export const cloudContainerTypeDefs = `#graphql
     connectedAt: String
     exitedAt: String
     exitReason: String
+    # 容器启动时挂载的工作负载，按选择顺序返回；已删除的工作负载会被省略（不返回空占位）
+    workloads: [CloudWorkload!]!
+    # 初始化中（INITIALIZING）当前正在执行的工作负载脚本名称；非初始化中为 null
+    currentWorkloadName: String
   }
 
   type CloudContainerControlPlane {
@@ -21,6 +25,7 @@ export const cloudContainerTypeDefs = `#graphql
   enum CloudContainerStatus {
     CREATING
     CONNECTING
+    INITIALIZING
     ONLINE
     EXITED
     DESTROYING
@@ -40,7 +45,7 @@ export const cloudContainerTypeDefs = `#graphql
   }
 
   extend type Mutation {
-    adminStartCloudContainer(purpose: CloudContainerPurpose!): CloudContainer!
+    adminStartCloudContainer(purpose: CloudContainerPurpose!, workloadIds: [ID!]): CloudContainer!
     adminDestroyCloudContainer(id: ID!): Boolean!
   }
 `;

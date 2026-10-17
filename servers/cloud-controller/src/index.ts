@@ -7,6 +7,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { assertRuntimeConfig, config } from './config/index.js';
 import { createLogger } from './logger.js';
 import { MongoContainerRepository } from './repositories/container-repository.js';
+import { MongoWorkloadRepository } from './repositories/workload-repository.js';
+import { MongoWorkloadLogRepository } from './repositories/workload-log-repository.js';
 import { TokenService } from './services/token-service.js';
 import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
@@ -14,6 +16,7 @@ import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
+import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
@@ -52,6 +55,8 @@ export function createCloudControllerApp(): CloudControllerApp {
   wireSocketDiagnostics({ httpServer, io, logger, enginePath: ENGINE_PATH });
 
   const repo = new MongoContainerRepository();
+  const workloadRepository = new MongoWorkloadRepository();
+  const workloadLogRepository = new MongoWorkloadLogRepository();
   const tokenService = new TokenService(repo);
   const k8sClient = createK8sClient(config);
   const jobManager = new K8sJobManager(k8sClient, {
@@ -73,6 +78,30 @@ export function createCloudControllerApp(): CloudControllerApp {
     logger,
   );
   const heartbeatTracker = new HeartbeatTracker();
+
+  // gateway ↔ dispatcher 的桥接：dispatcher 先构造并注入回调，gateway 注册后再回填句柄
+  // （避免二者构造期循环依赖）。
+  const gatewayBridge: {
+    emitToContainer: (containerId: string, event: string, payload: unknown) => void;
+    isConnected: (containerId: string) => boolean;
+  } = {
+    emitToContainer: () => {},
+    isConnected: () => false,
+  };
+  const dispatcher = new WorkloadDispatcher({
+    containerRepository: repo,
+    containerService,
+    workloadRepository,
+    workloadLogRepository,
+    emitToContainer: (containerId, event, payload) =>
+      gatewayBridge.emitToContainer(containerId, event, payload),
+    isConnected: (containerId) => gatewayBridge.isConnected(containerId),
+    initTimeoutMs: config.workloadInitTimeoutMs,
+    postBudgetMs: config.workloadPostBudgetMs,
+    logMaxBytes: config.workloadLogMaxBytes,
+    logger,
+  });
+
   const statusSync = new StatusSyncService({
     repo,
     k8sClient,
@@ -80,15 +109,24 @@ export function createCloudControllerApp(): CloudControllerApp {
     heartbeatTracker,
     connectTimeoutMs: config.connectTimeoutMs,
     image: config.workerImage,
+    dispatcher,
     logger,
   });
 
-  registerWorkerGateway(io, { tokenService, containerService, heartbeatTracker, logger });
+  const gateway = registerWorkerGateway(io, {
+    tokenService,
+    containerService,
+    heartbeatTracker,
+    workloadDispatcher: dispatcher,
+    logger,
+  });
+  gatewayBridge.emitToContainer = gateway.emitToContainer;
+  gatewayBridge.isConnected = gateway.isConnected;
 
   app.use(
     '/internal',
     internalAuth(config.internalApiToken),
-    createInternalRouter(containerService),
+    createInternalRouter(containerService, { workloadRepository, workloadLogRepository }),
   );
 
   let started = false;

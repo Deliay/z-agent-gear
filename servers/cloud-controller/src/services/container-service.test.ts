@@ -378,3 +378,68 @@ describe('ContainerService', () => {
     await expect(service.start('workflow')).rejects.toThrow('该任务类型暂未开放');
   });
 });
+
+describe('ContainerService workload state machine', () => {
+  it('T-CS1: start(idle, null, workloadIds) 去重保序落库，缺省为 []', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start('idle', null, ['a', 'b', 'a']);
+    expect((await repo.findById(created.id))?.workloadIds).toEqual(['a', 'b']);
+    expect(created.status).toBe('connecting');
+
+    const plain = await service.start('idle');
+    expect((await repo.findById(plain.id))?.workloadIds).toEqual([]);
+  });
+
+  it('T-CS2: markInitializing 写 currentWorkloadName，markOnline/markConnecting 清空', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('idle');
+
+    const initializing = await service.markInitializing(created.id, 'wl-1');
+    expect(initializing?.status).toBe('initializing');
+    expect(initializing?.currentWorkloadName).toBe('wl-1');
+    expect(initializing?.connectedAt).toBeInstanceOf(Date);
+
+    const online = await service.markOnline(created.id);
+    expect(online?.status).toBe('online');
+    expect(online?.currentWorkloadName).toBeNull();
+
+    await service.markInitializing(created.id, 'wl-2');
+    const connecting = await service.markConnecting(created.id);
+    expect(connecting?.status).toBe('connecting');
+    expect(connecting?.currentWorkloadName).toBeNull();
+  });
+
+  it('T-CS2b: markExited/markFailed 清空 currentWorkloadName', async () => {
+    const { service } = setup();
+    const first = await service.start('idle');
+    await service.markInitializing(first.id, 'wl-1');
+    const exited = await service.markExited(first.id, '容器正常退出');
+    expect(exited?.currentWorkloadName).toBeNull();
+
+    const second = await service.start('idle');
+    await service.markInitializing(second.id, 'wl-2');
+    const failed = await service.markFailed(second.id, '回连超时');
+    expect(failed?.currentWorkloadName).toBeNull();
+  });
+
+  it('T-CS3: initializing 容器可被销毁（ACTIVE 集合包含 initializing）', async () => {
+    const { repo, client, service } = setup();
+    const created = await service.start('idle');
+    await service.markInitializing(created.id, 'wl-1');
+    const shutdowns: string[] = [];
+    service.onShutdown((id) => {
+      shutdowns.push(id);
+    });
+
+    const result = await service.destroy(created.id);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedJob).toBe(true);
+    expect(shutdowns).toEqual([created.id]);
+    expect(await client.getJob(created.name)).toBeNull();
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.currentWorkloadName).toBeNull();
+  });
+});
