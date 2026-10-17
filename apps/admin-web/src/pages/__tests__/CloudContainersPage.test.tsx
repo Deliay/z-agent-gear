@@ -40,14 +40,18 @@ function container(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function workload(id: string, name: string) {
+function workload(id: string, name: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     name,
     initScript: `echo ${name}`,
     postScript: null,
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    isPreset: false,
     createdAt: '2026-10-01T00:00:00Z',
     updatedAt: '2026-10-01T00:00:00Z',
+    ...overrides,
   };
 }
 
@@ -60,6 +64,7 @@ function workloadLog(overrides: Record<string, unknown> = {}) {
     phase: 'INIT',
     status: 'SUCCESS',
     script: 'echo "hello"',
+    params: {},
     exitCode: 0,
     log: 'hello\n',
     startedAt: '2026-10-14T10:00:35Z',
@@ -188,7 +193,7 @@ describe('CloudContainersPage', () => {
 
     await waitFor(() =>
       expect(mocks.start).toHaveBeenCalledWith(
-        expect.objectContaining({ variables: { purpose: 'IDLE', workloadIds: [] } }),
+        expect.objectContaining({ variables: { purpose: 'IDLE', workloads: [] } }),
       ),
     );
   });
@@ -308,7 +313,15 @@ describe('CloudContainersPage', () => {
 
     await waitFor(() =>
       expect(mocks.start).toHaveBeenCalledWith(
-        expect.objectContaining({ variables: { purpose: 'IDLE', workloadIds: ['w2', 'w1'] } }),
+        expect.objectContaining({
+          variables: {
+            purpose: 'IDLE',
+            workloads: [
+              { workloadId: 'w2', params: {} },
+              { workloadId: 'w1', params: {} },
+            ],
+          },
+        }),
       ),
     );
   });
@@ -490,5 +503,100 @@ describe('CloudContainersPage', () => {
 
     expect(screen.getByText('工作负载执行日志')).toBeDefined();
     expect(screen.getAllByText('zag-worker-abc123').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('T-FP5: expands the param form with defaults and submits params in workloads[]', async () => {
+    setupData({
+      containers: [],
+      workloads: [
+        workload('w1', 'node-env', {
+          paramSchema: [
+            { key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' },
+            {
+              key: 'package_manager',
+              label: '包管理器',
+              type: 'MULTI_SELECT',
+              options: ['npm', 'pnpm'],
+              defaultValue: ['npm'],
+            },
+          ],
+        }),
+      ],
+    });
+    mocks.start.mockResolvedValue({});
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'node-env' }));
+
+    expect((screen.getByLabelText('版本') as HTMLInputElement).value).toBe('22');
+    expect(screen.getByRole('checkbox', { name: 'npm' })).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('版本'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认启动' }));
+
+    await waitFor(() =>
+      expect(mocks.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: {
+            purpose: 'IDLE',
+            workloads: [
+              {
+                workloadId: 'w1',
+                params: { version: '20', package_manager: ['npm'] },
+              },
+            ],
+          },
+        }),
+      ),
+    );
+  });
+
+  it('T-FP6: hints implicit dependencies and previews the init order', () => {
+    setupData({
+      containers: [],
+      workloads: [
+        workload('d1', 'Docker'),
+        workload('d2', '.NET'),
+        workload('d3', 'Aspire', { dependsOnWorkloadIds: ['d1', 'd2'] }),
+      ],
+    });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Aspire' }));
+
+    expect(screen.getByText('将自动初始化 Docker、.NET（默认参数）')).toBeDefined();
+    expect(screen.getByText('初始化顺序预览')).toBeDefined();
+  });
+
+  it('T-FP10: keeps the open start dialog and its param input across a 10s poll', () => {
+    const workloads = [
+      workload('w1', 'node-env', {
+        paramSchema: [{ key: 'version', label: '版本', type: 'TEXT', options: [], defaultValue: '22' }],
+      }),
+    ];
+    setupData({ containers: [], workloads });
+    const { rerender } = render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'node-env' }));
+    fireEvent.change(screen.getByLabelText('版本'), { target: { value: '20' } });
+
+    // 容器轮询刷新（loading=true 且已有 data）；工作负载查询不轮询，缓存仍在
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      const source = String(doc);
+      if (source.includes('AdminCloudContainerWorkloadLogs')) {
+        return { data: undefined, loading: true };
+      }
+      if (source.includes('AdminCloudWorkloads')) {
+        return { data: { adminCloudWorkloads: workloads }, loading: true };
+      }
+      return { data: { adminCloudContainers: [], adminCloudContainerControlPlane: { online: true, message: null } }, loading: true };
+    });
+    rerender(<CloudContainersPage />);
+
+    expect(screen.getByText('启动容器')).toBeDefined();
+    expect((screen.getByLabelText('版本') as HTMLInputElement).value).toBe('20');
   });
 });

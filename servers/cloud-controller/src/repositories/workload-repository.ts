@@ -1,14 +1,20 @@
 import mongoose from 'mongoose';
-import { CloudWorkload } from '../models/cloud-workload.js';
+import {
+  CloudWorkload,
+  type WorkloadParamField,
+} from '../models/cloud-workload.js';
 
 /**
- * 与持久化解耦的工作负载实体（供 dispatcher 读取脚本）。
+ * 与持久化解耦的工作负载实体（供 dispatcher 读取脚本、供兜底展开读取参数/依赖）。
+ * `paramSchema`/`dependsOnWorkloadIds` 为可选：历史记录/旧测试夹具可能缺省，读取方按空处理。
  */
 export interface CloudWorkloadEntity {
   id: string;
   name: string;
   initScript: string | null;
   postScript: string | null;
+  paramSchema?: WorkloadParamField[];
+  dependsOnWorkloadIds?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,6 +24,8 @@ interface RawDoc {
   name: string;
   initScript?: string | null;
   postScript?: string | null;
+  paramSchema?: WorkloadParamField[] | null;
+  dependsOnWorkloadIds?: unknown[] | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,6 +36,14 @@ function toEntity(doc: RawDoc): CloudWorkloadEntity {
     name: doc.name,
     initScript: doc.initScript ?? null,
     postScript: doc.postScript ?? null,
+    paramSchema: (doc.paramSchema ?? []).map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type,
+      options: [...(field.options ?? [])],
+      defaultValue: field.defaultValue,
+    })),
+    dependsOnWorkloadIds: (doc.dependsOnWorkloadIds ?? []).map((value) => String(value)),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

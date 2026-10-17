@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import type { WorkloadPlanEntry } from '../models/cloud-container.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
 import {
   InMemoryWorkloadLogRepository,
@@ -15,6 +16,11 @@ import {
   dedupeWorkloadIds,
   type ContainerService,
 } from '../services/container-service.js';
+import {
+  WorkloadPlanError,
+  collectWorkloadDefinitions,
+  resolveFallbackWorkloadPlan,
+} from '../services/workload-plan.js';
 
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 12）。 */
 export const MAX_WORKLOAD_IDS = 10;
@@ -33,6 +39,7 @@ export interface CloudContainerJson {
   exitedAt: string | null;
   exitReason: string | null;
   workloadIds: string[];
+  workloadPlan: WorkloadPlanEntry[];
   currentWorkloadName: string | null;
 }
 
@@ -52,6 +59,11 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     exitedAt: entity.exitedAt ? entity.exitedAt.toISOString() : null,
     exitReason: entity.exitReason ?? null,
     workloadIds: entity.workloadIds ?? [],
+    workloadPlan: (entity.workloadPlan ?? []).map((entry) => ({
+      workloadId: entry.workloadId,
+      params: entry.params ?? {},
+      implicit: entry.implicit === true,
+    })),
     currentWorkloadName: entity.currentWorkloadName ?? null,
   };
 }
@@ -66,6 +78,7 @@ export function toCloudWorkloadLogJson(entity: CloudWorkloadLogEntity): Record<s
     phase: entity.phase,
     status: entity.status,
     script: entity.script,
+    params: entity.params ?? {},
     exitCode: entity.exitCode ?? null,
     log: entity.log,
     startedAt: entity.startedAt ? entity.startedAt.toISOString() : null,
@@ -95,6 +108,48 @@ async function resolveWorkloadIds(
   const found = await workloadRepository.findByIds(deduped);
   if (found.length !== deduped.length) return null;
   return deduped;
+}
+
+/**
+ * 解析并校验 `workloadPlan`（契约 A.2.2）：数组、≤10、`workloadId` 去重且全部存在、
+ * `params` 为对象、`implicit` 为布尔。返回 `null` 表示非法（调用方 400 `INVALID_WORKLOAD`）；
+ * 未携带（`undefined`/`null`）返回空数组表示「无计划」。
+ *
+ * 缺省的 `params`/`implicit` 归一为 `{}` / `false`（与模型默认值及各读取层一致，
+ * 避免「写入层宽松、读取层有默认、路由层却必填」的口径分裂）；类型错误仍 400。
+ */
+async function resolveWorkloadPlan(
+  raw: unknown,
+  workloadRepository: WorkloadRepository,
+): Promise<WorkloadPlanEntry[] | null> {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return null;
+  if (raw.length > MAX_WORKLOAD_IDS) return null;
+
+  const entries: WorkloadPlanEntry[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const { workloadId, params, implicit } = item as Record<string, unknown>;
+    if (typeof workloadId !== 'string' || workloadId.length === 0) return null;
+    if (seen.has(workloadId)) return null;
+    if (params !== undefined && params !== null) {
+      if (typeof params !== 'object' || Array.isArray(params)) return null;
+    }
+    if (implicit !== undefined && typeof implicit !== 'boolean') return null;
+    seen.add(workloadId);
+    entries.push({
+      workloadId,
+      params: params ? { ...(params as Record<string, unknown>) } : {},
+      implicit: implicit === true,
+    });
+  }
+
+  if (entries.length > 0) {
+    const found = await workloadRepository.findByIds(entries.map((entry) => entry.workloadId));
+    if (found.length !== entries.length) return null;
+  }
+  return entries;
 }
 
 export function createInternalRouter(
@@ -130,6 +185,7 @@ export function createInternalRouter(
     }
 
     let workloadIds: string[];
+    let plan: WorkloadPlanEntry[];
     try {
       const resolved = await resolveWorkloadIds(req.body?.workloadIds, workloadRepository);
       if (resolved === null) {
@@ -140,6 +196,16 @@ export function createInternalRouter(
         return;
       }
       workloadIds = resolved;
+
+      const resolvedPlan = await resolveWorkloadPlan(req.body?.workloadPlan, workloadRepository);
+      if (resolvedPlan === null) {
+        res.status(400).json({
+          error: 'INVALID_WORKLOAD',
+          message: `workloadPlan 非法（须为已展开、去重且不超过 ${MAX_WORKLOAD_IDS} 个条目的数组）`,
+        });
+        return;
+      }
+      plan = resolvedPlan;
     } catch (err) {
       res.status(500).json({
         error: 'INTERNAL_ERROR',
@@ -148,8 +214,34 @@ export function createInternalRouter(
       return;
     }
 
+    // 优先使用请求下发的 plan；无 plan 且仅有 workloadIds（旧版 admin-api）时按只读定义兜底展开。
+    const hadExplicitPlan = plan.length > 0;
+    let effectivePlan: WorkloadPlanEntry[] = plan;
+    if (effectivePlan.length === 0 && workloadIds.length > 0) {
+      try {
+        const definitions = await collectWorkloadDefinitions(workloadIds, (ids) =>
+          workloadRepository.findByIds(ids),
+        );
+        effectivePlan = resolveFallbackWorkloadPlan(workloadIds, definitions);
+      } catch (err) {
+        if (err instanceof WorkloadPlanError) {
+          res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
+          return;
+        }
+        res.status(500).json({
+          error: 'INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+    }
+
     try {
-      const created = await containerService.start('idle', refId, workloadIds);
+      // 契约 A.2.2：显式下发 plan 时由 plan 派生 workloadIds；仅 workloadIds 的旧版请求
+      // 按选择顺序落库 workloadIds（兜底展开的 plan 仅用于执行），二者不产生静默偏差。
+      const created = await containerService.start('idle', refId, workloadIds, effectivePlan, {
+        deriveWorkloadIdsFromPlan: hadExplicitPlan,
+      });
       res.status(201).json(toCloudContainerJson(created));
     } catch (err) {
       if (err instanceof UnsupportedPurposeError) {

@@ -409,7 +409,7 @@ npm test
 ### Cloud Controller 内部 API (`cloud-controller/internal-api.test.ts` T-IC*)
 
 > 需要 cloud-controller 就绪：`aspire start && aspire wait cloud-controller`；服务以 `K8S_ENABLED=false`（InMemoryK8sClient）运行。
-> `T-IC5`（合法 workloadIds 回显）与 `T-IC6`（按执行顺序返回日志）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
+> `T-IC5`（合法 workloadIds 回显）、`T-IC6`（按执行顺序返回日志 + params）与 `T-ICC1~T-ICC6`（`workloadPlan` 校验/落库/兜底展开/失败映射）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
@@ -420,6 +420,13 @@ npm test
 | T-IC5 workloadIds 校验 | 非数组 / 未知 ID / 超 10 个 → 400 `INVALID_WORKLOAD`；合法已存在 ID → 201 且去重保序回显 |
 | T-IC6 工作负载日志 | `GET /internal/containers/:id/workload-logs`：未知容器 404 `NOT_FOUND`；无记录返回 `[]`；直写 Mongo 后按 `createdAt` 升序返回 A.6 字段 |
 | T-IC7 鉴权回归 | 新增 logs 端点缺失 Bearer → 401 |
+| T-ICC1 workloadPlan 合法 | POST 携带 `workloadPlan` → 201，JSON 回显 `workloadPlan`，`workloadIds` 由 plan 派生 |
+| T-ICC2 workloadPlan 非法 | 非数组 / 超 10 条 / 未知 `workloadId` / `params` 非对象 / `implicit` 非布尔 / 条目非对象 / `workloadId` 缺失或重复 → 400 `INVALID_WORKLOAD` |
+| T-ICC3 仅 workloadIds 兜底展开 | 旧客户端仅传 `workloadIds` → 按只读定义后序 DFS 展开（依赖先于依赖方、`implicit=true`、参数取默认值且多选去重）；容器 `workloadIds` 按选择顺序落库（不含隐式依赖），plan 仅用于执行 |
+| T-ICC4 plan 优先 | `workloadPlan` 与 `workloadIds` 同时下发 → 以 plan 派生的 `workloadIds` 为准 |
+| T-ICC5 plan 条目缺省归一 | `workloadPlan` 条目缺省 `params`/`implicit` → 归一为 `{}`/`false`（201，不报错） |
+| T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
+| T-IC6 日志 params | 直写 `cloudworkloadlogs.params` 后按记录返回参数快照；历史无 `params` 归一为 `{}` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
 
@@ -434,6 +441,11 @@ npm test
 | T-IA 重名/不存在 | 创建/改名重名 → `Workload name already exists`；更新不存在 id → `Workload not found`；删除不存在 id → `false` |
 | T-IA 日志（控制面可用） | 无记录返回 `[]`；直写 `cloudworkloadlogs` 后按执行顺序返回大写枚举 + 脚本快照 + 输出 |
 | T-IA 启动携带 workloadIds | 合法 ID 按选择顺序返回 `workloads`；未知 ID → 错误含 `INVALID_WORKLOAD`；缺省不挂载（`workloads: []`） |
+| T-IA paramSchema CRUD | 四种类型（SELECT/MULTI_SELECT/TEXT/BOOLEAN）保存与回显；非下拉类型 `options` 归一为 `[]`；编辑改默认值；`paramSchema: []` 清空（空表单无配置） |
+| T-IA paramSchema 校验边界 | key 非法/重复、label 空/超长、options 空/重复/超限、默认值不在 options/类型不符 → 字段路径错误（`paramSchema[i].xxx is invalid`）；参数 >20 → `too many parameters` |
+| T-IA 依赖保存 | 正常（按配置顺序、去重）、自依赖 `workload cannot depend on itself`、依赖环 `dependency cycle detected`、依赖不存在 `dependency workload not found`、超 5 `too many dependencies` |
+| T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire 存在且 `isPreset=true`；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；重复查询 ID 集合稳定（迁移不重复写入） |
+| T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
 ### Cloud Controller Worker 握手 (`cloud-controller/worker-handshake.test.ts` T-IW*)
 
@@ -455,3 +467,12 @@ npm test
 | T-IA7 workloadIds | start 携带 `workloadIds` → `workloads` 按提交顺序返回；列表同样返回 `workloads`/`currentWorkloadName` |
 | T-IA8 未知 workloadId | start 携带不存在 ID → 错误含 `INVALID_WORKLOAD` |
 | T-IA9 缺省不挂载 | start 不传 `workloadIds` → `workloads: []`、`currentWorkloadName: null` |
+| T-IA10 隐式依赖展开 | 仅选依赖方 → `workloads` 依赖在前（后序 DFS）；落库 `workloadPlan` 隐式项取默认参数（`implicit=true`）、`workloadIds` 由 plan 派生 |
+| T-IA11 显式参数优先 | 同时显式选择依赖与依赖方 → 依赖只出现一次且使用显式参数（`implicit=false`） |
+| T-IA12 展开超限 | 链式依赖展开为 11 条 → 错误 `expanded workloads exceed 10` |
+| T-IA13 非法参数 | 未知参数 → `unknown parameter: <key>`；类型/取值非法 → `invalid value for parameter <key>` |
+| T-IA14 重复选择 | 同一 `workloadId` 重复 → `duplicate workload selection` |
+| T-IA15 二选一 | `workloadIds` 与 `workloads` 同时非空 → `workloadIds and workloads cannot both be provided` |
+| T-IA16 未知显式选择 | `workloads` 含不存在 ID → `workload not found` |
+| T-IA17 依赖被删 | 依赖在配置后被删除 → 启动报 `dependency workload not found` |
+| T-IA18 日志 params | 直写 `cloudworkloadlogs.params` 后经 `adminCloudContainerWorkloadLogs` 返回参数快照 |

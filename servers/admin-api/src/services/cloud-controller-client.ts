@@ -108,6 +108,13 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
   };
 }
 
+/** 下发给 cloud-controller 的执行计划条目（契约 §3.2.1） */
+export interface WorkloadPlanItemDTO {
+  workloadId: string;
+  params: Record<string, unknown>;
+  implicit: boolean;
+}
+
 export interface CloudControllerClientOptions {
   baseUrl?: string;
   token?: string;
@@ -155,11 +162,26 @@ export class CloudControllerClient {
     return items.map((item) => mapCloudContainer(item as Record<string, unknown>));
   }
 
-  /** 启动容器（purpose 为 GraphQL 大写枚举，转换为内部小写）；workloadIds 缺省为 []（裁决 20） */
-  async start(purpose: string, workloadIds: string[] = []): Promise<CloudContainerDTO> {
+  /**
+   * 启动容器（purpose 为 GraphQL 大写枚举，转换为内部小写）。
+   * - `workloadPlan`：已展开、已排序、已去重的最终执行计划（含参数），随请求下发；
+   *   与派生的 `workloadIds` 同时携带，保持旧版 cloud-controller 可用（滚动升级兼容）。
+   * - `workloadIds`：兼容旧调用；缺省为 []。仅走 `workloadIds` 时不携带 `workloadPlan`，
+   *   由 cloud-controller 以只读定义兜底展开（行为与现状一致）。
+   */
+  async start(
+    purpose: string,
+    workloadPlan?: WorkloadPlanItemDTO[],
+    workloadIds: string[] = [],
+  ): Promise<CloudContainerDTO> {
+    const body: Record<string, unknown> = {
+      purpose: toInternalPurpose(purpose),
+      workloadIds: workloadIds ?? [],
+    };
+    if (workloadPlan) body.workloadPlan = workloadPlan;
     const res = await this.request('/internal/containers', {
       method: 'POST',
-      body: JSON.stringify({ purpose: toInternalPurpose(purpose), workloadIds: workloadIds ?? [] }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       throw new Error(await extractErrorMessage(res, `cloud-controller start failed: ${res.status}`));

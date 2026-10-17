@@ -15,10 +15,14 @@ export const EMPTY_SCRIPT_MESSAGE = '工作负载脚本为空，跳过执行';
 export interface WorkloadItem {
   /** 服务端预创建的执行记录 ID，回报时原样回填（防串号）。 */
   logId: string;
+  /** 工作负载 ID，仅用于日志/排查，不影响执行顺序与结果结构。 */
+  workloadId?: string;
   /** 工作负载名称，仅用于日志/展示。 */
   workloadName: string;
   /** 待执行脚本内容；空字符串表示该条为已删除工作负载的占位记录。 */
   script: string;
+  /** 本次执行参数，键为参数标识；缺省 `{}`（等价旧行为）。 */
+  params?: Record<string, unknown>;
   /** 单条脚本超时（毫秒）。 */
   timeoutMs: number;
 }
@@ -103,10 +107,42 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** 单个参数值 → 环境变量字符串（契约 §2.9「参数注入约定」）。 */
+function encodeParamValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  if (value === null || value === undefined) return '';
+  // MULTI_SELECT 等复合值：JSON 数组字符串（脚本自行解析）
+  return JSON.stringify(value);
+}
+
+/**
+ * 由 `process.env` 派生单条 item 的执行环境：
+ * - `WORKLOAD_PARAMS`：完整参数 JSON 字符串（缺省 `{}`）；
+ * - `WORKLOAD_PARAM_<KEY_UPPER>`：单值编码（字符串原样、布尔 `"true"`/`"false"`、多选 JSON 数组字符串）。
+ *
+ * 每次 spawn 都从当前 `process.env` 重新派生，参数 env 仅对当前 item 生效、不污染后续脚本；
+ * 不修改脚本文本、不做字符串替换（避免注入）。
+ */
+function buildWorkloadEnv(params: Record<string, unknown> | undefined): NodeJS.ProcessEnv {
+  const normalized = params && typeof params === 'object' && !Array.isArray(params) ? params : {};
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    WORKLOAD_PARAMS: JSON.stringify(normalized),
+  };
+  for (const [key, value] of Object.entries(normalized)) {
+    if (!key || value === null || value === undefined) continue;
+    env[`WORKLOAD_PARAM_${key.toUpperCase()}`] = encodeParamValue(value);
+  }
+  return env;
+}
+
 /**
  * 工作负载脚本执行器（agent-gear 侧）。
  *
- * - 按 `items` 顺序**串行**执行 `bash -c <script>`（`cwd=os.homedir()`，继承进程环境，stdout/stderr 合并捕获）；
+ * - 按 `items` 顺序**串行**执行 `bash -c <script>`（`cwd=os.homedir()`，继承进程环境并按 item 注入
+ *   `WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*`，stdout/stderr 合并捕获）；
  * - 单条超时或收到新批次时终止整个进程组（`detached: true` + `kill(-pid)`）；
  * - 非零退出回报 `failed` + `exitCode`，不影响后续条目；
  * - `post` 批次共享 `budgetMs`：剩余预算耗尽时后续条目直接回报 `timeout`（不启动进程）；
@@ -243,7 +279,7 @@ export class WorkloadExecutor {
         child = spawn('bash', ['-c', item.script], {
           cwd: homedir(),
           detached: true,
-          env: process.env,
+          env: buildWorkloadEnv(item.params),
         });
       } catch (error) {
         resolve({

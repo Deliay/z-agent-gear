@@ -2,7 +2,8 @@
 # worker entrypoint 恢复/失败/信号测试：纯 Bash + 临时 PATH stub，不依赖 Bats、不启动真实 dockerd、
 # 不访问真实 npm 网络。
 #
-# 覆盖（对应实现计划 T-EP1 ~ T-EP8）：
+# 覆盖（对应实现计划 T-EP0 ~ T-EP8）：
+#   T-EP0 入口装配 docker shim，且**不再**自动启动 dockerd（dockerd 由「Docker」工作负载负责）
 #   T-EP1 版本不匹配 → 一次升级 → 重启成功
 #   T-EP2 升级安装失败 → 非零退出，无循环
 #   T-EP3 升级后仍不匹配 → 非零退出，不再升级
@@ -52,13 +53,17 @@ count_lines() {
 write_stubs() {
   mkdir -p "$STUB_DIR"
 
+  # docker / dockerd stub 仅用于**哨兵**：入口不再启动 dockerd，一旦被调用即写入标记文件，
+  # T-EP0 断言标记不存在（stub 不依赖真实 dockerd / docker.sock）。
   cat > "$STUB_DIR/docker" <<'STUB'
 #!/usr/bin/env bash
+echo "docker $*" >> "$STUB_DIR/docker_invocations"
 exit 0
 STUB
 
   cat > "$STUB_DIR/dockerd" <<'STUB'
 #!/usr/bin/env bash
+echo "dockerd $*" >> "$STUB_DIR/dockerd_invocations"
 exit 0
 STUB
 
@@ -183,6 +188,26 @@ if bash -n "$ENTRYPOINT"; then
 else
   fail "entrypoint.sh 语法检查"
 fi
+
+# ---------------------------------------------------------------------------
+echo "== T-EP0: 装配 docker shim，不自动启动 dockerd =="
+setup_env 2.2.0
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP0 入口正常退出"
+if [ -f "$ZAG_DOCKER_SHIM_PATH" ] && [ -x "$ZAG_DOCKER_SHIM_PATH" ]; then
+  pass "T-EP0 docker shim 已写入且可执行"
+else
+  fail "T-EP0 docker shim 未写入或不可执行 ($ZAG_DOCKER_SHIM_PATH)"
+fi
+assert_contains "$ZAG_DOCKER_SHIM_PATH" "normalize_image" "T-EP0 shim 含镜像引用规范化逻辑"
+assert_eq 0 "$(count_lines "$STUB_DIR/dockerd_invocations")" "T-EP0 入口不启动 dockerd"
+assert_eq 0 "$(count_lines "$STUB_DIR/docker_invocations")" "T-EP0 入口不调用 docker"
+if grep -qF "start_dockerd" "$ENTRYPOINT"; then
+  fail "T-EP0 entrypoint.sh 仍包含 start_dockerd"
+else
+  pass "T-EP0 entrypoint.sh 已移除 start_dockerd"
+fi
+teardown_env
 
 # ---------------------------------------------------------------------------
 echo "== T-EP1: 版本不匹配 → 一次升级 → 重启成功 =="

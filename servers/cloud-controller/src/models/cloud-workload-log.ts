@@ -41,6 +41,7 @@ const cloudWorkloadLogSchema = new mongoose.Schema(
     phase: { type: String, enum: WORKLOAD_LOG_PHASES, required: true },
     status: { type: String, enum: WORKLOAD_LOG_STATUSES, required: true },
     script: { type: String, default: '' },
+    params: { type: mongoose.Schema.Types.Mixed, default: {} },
     exitCode: { type: Number, default: null },
     log: { type: String, default: '' },
     startedAt: { type: Date, default: null },

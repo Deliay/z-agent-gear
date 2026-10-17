@@ -229,7 +229,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '2.2.0',
+        version: '2.3.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -247,7 +247,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '2.2.0',
+        version: '2.3.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',

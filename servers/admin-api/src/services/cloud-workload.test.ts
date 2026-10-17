@@ -27,10 +27,18 @@ function makeWorkload(overrides: Record<string, unknown> = {}) {
     name: 'setup',
     initScript: 'echo init',
     postScript: null,
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    isPreset: false,
     createdAt: new Date('2026-10-17T00:00:00.000Z'),
     updatedAt: new Date('2026-10-17T01:00:00.000Z'),
     ...overrides,
   };
+}
+
+/** findById mock helper */
+function mockFindById(doc: unknown) {
+  (CloudWorkload.findById as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(doc) });
 }
 
 describe('CloudWorkloadService', () => {
@@ -51,12 +59,17 @@ describe('CloudWorkloadService', () => {
         name: 'setup',
         initScript: 'echo init',
         postScript: null,
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
       });
       expect(result).toEqual({
         id: 'w1',
         name: 'setup',
         initScript: 'echo init',
         postScript: null,
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: false,
         createdAt: '2026-10-17T00:00:00.000Z',
         updatedAt: '2026-10-17T01:00:00.000Z',
       });
@@ -82,6 +95,8 @@ describe('CloudWorkloadService', () => {
         name: 'both',
         initScript: 'a',
         postScript: 'b',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
       });
     });
 
@@ -132,9 +147,267 @@ describe('CloudWorkloadService', () => {
     });
   });
 
+  describe('paramSchema (T-W8/T-W9)', () => {
+    it('T-W8: normalizes the four param types and uppercases the type on output', async () => {
+      const doc = makeWorkload({
+        paramSchema: [
+          { key: 'mode', label: '模式', type: 'select', options: ['a', 'b'], defaultValue: 'a' },
+          {
+            key: 'managers',
+            label: '管理器',
+            type: 'multi_select',
+            options: ['npm', 'pnpm'],
+            defaultValue: ['npm'],
+          },
+          { key: 'note', label: '备注', type: 'text', options: [], defaultValue: 'x' },
+          { key: 'enabled', label: '启用', type: 'boolean', options: [], defaultValue: true },
+        ],
+      });
+      (CloudWorkload.create as any).mockResolvedValue({ ...doc, toObject: () => doc });
+
+      const result = await service.create({
+        name: 'setup',
+        initScript: 'a',
+        paramSchema: [
+          { key: 'mode', label: '模式', type: 'SELECT', options: ['a', 'b'], defaultValue: 'a' },
+          {
+            key: 'managers',
+            label: '管理器',
+            type: 'MULTI_SELECT',
+            options: ['npm', 'pnpm'],
+            defaultValue: ['npm'],
+          },
+          { key: 'note', label: '备注', type: 'TEXT', options: null, defaultValue: 'x' },
+          { key: 'enabled', label: '启用', type: 'BOOLEAN', defaultValue: true },
+        ],
+      });
+
+      // 存储为小写类型；非下拉类型的 options 归一为 []
+      expect(CloudWorkload.create).toHaveBeenCalledWith({
+        name: 'setup',
+        initScript: 'a',
+        postScript: null,
+        paramSchema: [
+          { key: 'mode', label: '模式', type: 'select', options: ['a', 'b'], defaultValue: 'a' },
+          {
+            key: 'managers',
+            label: '管理器',
+            type: 'multi_select',
+            options: ['npm', 'pnpm'],
+            defaultValue: ['npm'],
+          },
+          { key: 'note', label: '备注', type: 'text', options: [], defaultValue: 'x' },
+          { key: 'enabled', label: '启用', type: 'boolean', options: [], defaultValue: true },
+        ],
+        dependsOnWorkloadIds: [],
+      });
+
+      // 输出为 GraphQL 大写枚举
+      expect(result.paramSchema.map((field) => field.type)).toEqual([
+        'SELECT',
+        'MULTI_SELECT',
+        'TEXT',
+        'BOOLEAN',
+      ]);
+    });
+
+    it('T-W8: an empty/omitted paramSchema means no configuration', async () => {
+      const doc = makeWorkload();
+      (CloudWorkload.create as any).mockResolvedValue({ ...doc, toObject: () => doc });
+
+      await service.create({ name: 'setup', initScript: 'a', paramSchema: [] });
+
+      expect((CloudWorkload.create as any).mock.calls[0][0].paramSchema).toEqual([]);
+    });
+
+    it('T-W9: rejects more than 20 parameters', async () => {
+      const paramSchema = Array.from({ length: 21 }, (_v, i) => ({
+        key: `p${i}`,
+        label: 'p',
+        type: 'TEXT',
+        defaultValue: 'x',
+      }));
+      await expect(service.create({ name: 'setup', initScript: 'a', paramSchema })).rejects.toThrow(
+        'too many parameters',
+      );
+    });
+
+    it('T-W9: rejects an invalid key', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'BadKey', label: 'x', type: 'TEXT', defaultValue: 'x' }],
+        }),
+      ).rejects.toThrow('paramSchema[0].key is invalid');
+    });
+
+    it('T-W9: rejects a duplicate key with the field path', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [
+            { key: 'mode', label: 'x', type: 'TEXT', defaultValue: 'x' },
+            { key: 'mode', label: 'y', type: 'TEXT', defaultValue: 'y' },
+          ],
+        }),
+      ).rejects.toThrow('paramSchema[1].key is duplicated');
+    });
+
+    it('T-W9: rejects an over-long label', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'mode', label: 'x'.repeat(65), type: 'TEXT', defaultValue: 'x' }],
+        }),
+      ).rejects.toThrow('paramSchema[0].label is invalid');
+    });
+
+    it('T-W9: rejects empty / duplicate / over-limit options', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'mode', label: 'x', type: 'SELECT', options: [], defaultValue: 'a' }],
+        }),
+      ).rejects.toThrow('paramSchema[0].options is invalid');
+
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [
+            { key: 'mode', label: 'x', type: 'SELECT', options: ['a', 'a'], defaultValue: 'a' },
+          ],
+        }),
+      ).rejects.toThrow('paramSchema[0].options is invalid');
+
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [
+            {
+              key: 'mode',
+              label: 'x',
+              type: 'SELECT',
+              options: Array.from({ length: 51 }, (_v, i) => `o${i}`),
+              defaultValue: 'o0',
+            },
+          ],
+        }),
+      ).rejects.toThrow('paramSchema[0].options is invalid');
+    });
+
+    it('T-W9: rejects a default value outside options / with the wrong type', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'mode', label: 'x', type: 'SELECT', options: ['a'], defaultValue: 'b' }],
+        }),
+      ).rejects.toThrow('paramSchema[0].defaultValue is invalid');
+
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'enabled', label: 'x', type: 'BOOLEAN', defaultValue: 'yes' }],
+        }),
+      ).rejects.toThrow('paramSchema[0].defaultValue is invalid');
+    });
+
+    it('T-W9: rejects a missing default value', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          paramSchema: [{ key: 'note', label: 'x', type: 'TEXT', defaultValue: null }],
+        }),
+      ).rejects.toThrow('paramSchema[0].defaultValue is invalid');
+    });
+  });
+
+  describe('dependsOnWorkloadIds (T-W10)', () => {
+    it('T-W10: accepts valid dependencies (existence check)', async () => {
+      (CloudWorkload.find as any).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ _id: 'w2' }, { _id: 'w3' }]),
+      });
+      const doc = makeWorkload({ dependsOnWorkloadIds: ['w2', 'w3'] });
+      (CloudWorkload.create as any).mockResolvedValue({ ...doc, toObject: () => doc });
+
+      const result = await service.create({
+        name: 'setup',
+        initScript: 'a',
+        dependsOnWorkloadIds: ['w2', 'w3'],
+      });
+
+      expect(CloudWorkload.find).toHaveBeenCalledWith({ _id: { $in: ['w2', 'w3'] } });
+      expect(result.dependsOnWorkloadIds).toEqual(['w2', 'w3']);
+    });
+
+    it('T-W10: dedupes dependencies while preserving order', async () => {
+      (CloudWorkload.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([{ _id: 'w2' }]) });
+      const doc = makeWorkload({ dependsOnWorkloadIds: ['w2'] });
+      (CloudWorkload.create as any).mockResolvedValue({ ...doc, toObject: () => doc });
+
+      await service.create({ name: 'setup', initScript: 'a', dependsOnWorkloadIds: ['w2', 'w2'] });
+
+      expect((CloudWorkload.create as any).mock.calls[0][0].dependsOnWorkloadIds).toEqual(['w2']);
+    });
+
+    it('T-W10: rejects more than 5 dependencies', async () => {
+      await expect(
+        service.create({
+          name: 'setup',
+          initScript: 'a',
+          dependsOnWorkloadIds: ['w1', 'w2', 'w3', 'w4', 'w5', 'w6'],
+        }),
+      ).rejects.toThrow('too many dependencies');
+      expect(CloudWorkload.find).not.toHaveBeenCalled();
+    });
+
+    it('T-W10: rejects a self dependency on update', async () => {
+      mockFindById(makeWorkload());
+      await expect(
+        service.update('w1', { dependsOnWorkloadIds: ['w1'] }),
+      ).rejects.toThrow('workload cannot depend on itself');
+    });
+
+    it('T-W10: rejects a missing dependency', async () => {
+      (CloudWorkload.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+      await expect(
+        service.create({ name: 'setup', initScript: 'a', dependsOnWorkloadIds: ['ghost'] }),
+      ).rejects.toThrow('dependency workload not found');
+    });
+
+    it('T-W10: rejects a dependency cycle with the cycle path', async () => {
+      mockFindById(makeWorkload());
+      (CloudWorkload.find as any).mockImplementation((filter: Record<string, unknown>) => {
+        if (filter && filter._id) {
+          return { lean: vi.fn().mockResolvedValue([{ _id: 'w2' }]) };
+        }
+        // 全量依赖图：w1 → w2 → w1
+        return {
+          lean: vi.fn().mockResolvedValue([
+            { _id: 'w1', dependsOnWorkloadIds: [] },
+            { _id: 'w2', dependsOnWorkloadIds: ['w1'] },
+          ]),
+        };
+      });
+
+      await expect(service.update('w1', { dependsOnWorkloadIds: ['w2'] })).rejects.toThrow(
+        'dependency cycle detected',
+      );
+      expect(CloudWorkload.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('update (T-W3/T-W4)', () => {
     it('T-W4: returns null when the workload does not exist', async () => {
-      (CloudWorkload.findById as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+      mockFindById(null);
 
       expect(await service.update('missing', { name: 'x' })).toBeNull();
       expect(CloudWorkload.findByIdAndUpdate).not.toHaveBeenCalled();
@@ -142,7 +415,7 @@ describe('CloudWorkloadService', () => {
 
     it('updates the name while keeping existing scripts', async () => {
       const existing = makeWorkload({ initScript: 'echo init', postScript: null });
-      (CloudWorkload.findById as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(existing) });
+      mockFindById(existing);
       const updated = makeWorkload({ name: 'renamed', initScript: 'echo init', postScript: null });
       (CloudWorkload.findByIdAndUpdate as any).mockResolvedValue(updated);
 
@@ -150,15 +423,20 @@ describe('CloudWorkloadService', () => {
 
       expect(CloudWorkload.findByIdAndUpdate).toHaveBeenCalledWith(
         'w1',
-        { name: 'renamed', initScript: 'echo init', postScript: null },
+        {
+          name: 'renamed',
+          initScript: 'echo init',
+          postScript: null,
+          paramSchema: [],
+          dependsOnWorkloadIds: [],
+        },
         { new: true, lean: true },
       );
       expect(result!.name).toBe('renamed');
     });
 
     it('T-W2: rejects clearing the only remaining script (merged final state)', async () => {
-      const existing = makeWorkload({ initScript: 'echo init', postScript: null });
-      (CloudWorkload.findById as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(existing) });
+      mockFindById(makeWorkload({ initScript: 'echo init', postScript: null }));
 
       await expect(service.update('w1', { initScript: '' })).rejects.toThrow(
         'at least one script is required',
@@ -167,8 +445,7 @@ describe('CloudWorkloadService', () => {
     });
 
     it('T-W3: propagates the E11000 duplicate key error on rename', async () => {
-      const existing = makeWorkload();
-      (CloudWorkload.findById as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(existing) });
+      mockFindById(makeWorkload());
       (CloudWorkload.findByIdAndUpdate as any).mockRejectedValue(new Error('E11000 duplicate key error'));
 
       await expect(service.update('w1', { name: 'taken' })).rejects.toThrow('E11000');
@@ -229,6 +506,7 @@ describe('CloudWorkloadService', () => {
         phase: 'init',
         status: 'success',
         script: 'echo init',
+        params: { version: '20' },
         exitCode: 0,
         log: 'init done',
         startedAt: new Date('2026-10-17T00:00:00.000Z'),
@@ -243,6 +521,7 @@ describe('CloudWorkloadService', () => {
         phase: 'INIT',
         status: 'SUCCESS',
         script: 'echo init',
+        params: { version: '20' },
         exitCode: 0,
         log: 'init done',
         startedAt: '2026-10-17T00:00:00.000Z',
@@ -254,14 +533,20 @@ describe('CloudWorkloadService', () => {
       const mapped = mapWorkloadLog({ id: 'l2', phase: 'post', status: 'failed' });
       expect(mapped.phase).toBe('POST');
       expect(mapped.status).toBe('FAILED');
+      expect(mapped.params).toEqual({});
       expect(mapped.exitCode).toBeNull();
       expect(mapped.startedAt).toBeNull();
       expect(mapped.finishedAt).toBeNull();
       expect(mapped.log).toBe('');
     });
 
+    it('normalizes a non-object params snapshot to {}', () => {
+      expect(mapWorkloadLog({ id: 'l3', params: 'not-an-object' }).params).toEqual({});
+      expect(mapWorkloadLog({ id: 'l4', params: ['x'] }).params).toEqual({});
+    });
+
     it('falls back unknown enums to safe values instead of crashing the query', () => {
-      const mapped = mapWorkloadLog({ id: 'l3', phase: 'weird', status: 'unknown' });
+      const mapped = mapWorkloadLog({ id: 'l5', phase: 'weird', status: 'unknown' });
       expect(mapped.phase).toBe('INIT');
       expect(mapped.status).toBe('FAILED');
     });
@@ -278,6 +563,7 @@ describe('CloudWorkloadService', () => {
           phase: 'init',
           status: 'running',
           script: 'echo init',
+          params: {},
           exitCode: null,
           log: '',
           startedAt: null,
@@ -297,6 +583,7 @@ describe('CloudWorkloadService', () => {
           phase: 'INIT',
           status: 'RUNNING',
           script: 'echo init',
+          params: {},
           exitCode: null,
           log: '',
           startedAt: null,

@@ -2,6 +2,7 @@ import {
   isTerminalStatus,
   type CloudContainerPurpose,
   type CloudContainerStatus,
+  type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
 import type {
   CloudContainerEntity,
@@ -69,6 +70,25 @@ export function dedupeWorkloadIds(ids: readonly string[] | undefined): string[] 
   return result;
 }
 
+/**
+ * 归一化执行计划条目：`params` 缺省 `{}`、`implicit` 缺省 false，并去掉空/非法 ID。
+ * 数组顺序即执行顺序（由调用方/上游保证已展开、已排序）。
+ */
+export function normalizeWorkloadPlan(
+  plan: readonly WorkloadPlanEntry[] | undefined | null,
+): WorkloadPlanEntry[] {
+  const result: WorkloadPlanEntry[] = [];
+  for (const entry of plan ?? []) {
+    if (!entry || typeof entry.workloadId !== 'string' || entry.workloadId.length === 0) continue;
+    const params =
+      entry.params && typeof entry.params === 'object' && !Array.isArray(entry.params)
+        ? { ...(entry.params as Record<string, unknown>) }
+        : {};
+    result.push({ workloadId: entry.workloadId, params, implicit: entry.implicit === true });
+  }
+  return result;
+}
+
 function randomSuffix(length: number): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';
@@ -87,6 +107,17 @@ export interface DestroyResult {
   id: string;
   status: string;
   deletedJob: boolean;
+}
+
+export interface StartOptions {
+  /**
+   * 是否由 `workloadPlan` 派生容器 `workloadIds`（契约 A.2.2）。
+   *
+   * - `true`（默认）：请求显式下发 plan 时由 plan 派生（保序）；
+   * - `false`：仅 `workloadIds` 的旧版请求，`workloadIds` 按选择顺序落库，
+   *   `plan`（含兜底展开的隐式依赖）仅用于执行，避免与契约文字产生静默偏差。
+   */
+  deriveWorkloadIdsFromPlan?: boolean;
 }
 
 /**
@@ -168,15 +199,28 @@ export class ContainerService {
    * 启动容器：① 落库 creating → ② 签发 token → ③ 创建 Job → ④ 成功 connecting / 失败 failed。
    * 全程持有该容器的串行锁，且在 creating→connecting 时做状态前置校验：若记录已被并发
    * 销毁/置终态，则回收刚创建的 Job，避免孤儿资源。
+   *
+   * 执行计划（契约 A.2.2 / 裁决 5）：携带非空 `workloadPlan` 时优先落库该计划；当
+   * `deriveWorkloadIdsFromPlan` 为 true（请求显式下发 plan）时由 plan 派生 `workloadIds`
+   * （保序），否则（仅 `workloadIds` 的旧版请求）按选择顺序落库 `workloadIds`、plan 仅用于执行。
    */
   async start(
     purpose: CloudContainerPurpose,
     refId: string | null = null,
     workloadIds: readonly string[] = [],
+    workloadPlan: readonly WorkloadPlanEntry[] | null = null,
+    options: StartOptions = {},
   ): Promise<CloudContainerEntity> {
     if (purpose !== 'idle') {
       throw new UnsupportedPurposeError();
     }
+
+    const plan = normalizeWorkloadPlan(workloadPlan);
+    const deriveFromPlan = options.deriveWorkloadIdsFromPlan ?? true;
+    const effectiveWorkloadIds =
+      deriveFromPlan && plan.length > 0
+        ? dedupeWorkloadIds(plan.map((entry) => entry.workloadId))
+        : dedupeWorkloadIds(workloadIds);
 
     const name = `zag-worker-${randomSuffix(6)}`;
     const created = await this.repo.create({
@@ -186,7 +230,8 @@ export class ContainerService {
       image: this.cfg.image,
       refId: refId ?? null,
       status: 'creating',
-      workloadIds: dedupeWorkloadIds(workloadIds),
+      workloadIds: effectiveWorkloadIds,
+      workloadPlan: plan,
     });
 
     return this.mutex.runExclusive(created.id, async () => {

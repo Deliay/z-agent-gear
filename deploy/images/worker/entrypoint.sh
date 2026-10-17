@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# 默认工作容器入口：启动容器内 dockerd，装配镜像引用规范化 shim，更新 agent-gear，
+# 默认工作容器入口：装配镜像引用规范化 shim，更新 agent-gear，
 # 然后以「受监督」方式运行 agent-gear 回连 cloud-controller。
+#
+# 注意：容器内 **不再** 自动启动 dockerd。Docker 运行时由「Docker」工作负载的初始化脚本
+# 按需启动（`nohup dockerd >/var/log/dockerd.log 2>&1 &`，见 docs/engineering/proposals/
+# 20261018-feat-workload-phase1.md §5.3）；未选择该工作负载时容器内没有 dockerd。
+# 入口仍负责装配镜像代理 shim（docker 包装器），供后续工作负载脚本使用。
 #
 # 监督职责（见 docs/engineering/plan/20261017-feat-controller-version-requirement.md）：
 # - stdout/stderr 实时透传；stderr 流式扫描，只记录是否出现稳定错误码 VERSION_MISMATCH；
@@ -70,20 +75,6 @@ case "$cmd" in
 esac
 SHIM
   chmod +x "$DOCKER_SHIM_PATH"
-}
-
-# ---------------------------------------------------------------------------
-# 启动容器内 dockerd（sysbox 环境下运行 Docker；无 sysbox 的普通环境亦可 dind）
-# ---------------------------------------------------------------------------
-start_dockerd() {
-  if [ ! -S /var/run/docker.sock ]; then
-    log "starting dockerd"
-    dockerd >/var/log/dockerd.log 2>&1 &
-    for _ in $(seq 1 30); do
-      docker info >/dev/null 2>&1 && break
-      sleep 1
-    done
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -250,7 +241,6 @@ main() {
   trap 'shutdown SIGINT' SIGINT
 
   install_docker_shim
-  start_dockerd
   update_agent_gear
 
   if [ -z "${ZAG_SERVER_ENDPOINT:-}" ]; then

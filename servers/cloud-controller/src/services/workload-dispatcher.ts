@@ -1,4 +1,5 @@
-import type { ContainerRepository } from '../repositories/container-repository.js';
+import type { CloudContainerEntity, ContainerRepository } from '../repositories/container-repository.js';
+import type { WorkloadPlanEntry } from '../models/cloud-container.js';
 import type { CloudWorkloadEntity, WorkloadRepository } from '../repositories/workload-repository.js';
 import type {
   CloudWorkloadLogEntity,
@@ -93,6 +94,28 @@ function normalizeResultStatus(value: unknown): WorkloadLogStatus {
 }
 
 /**
+ * 读取容器的有序执行计划：优先 `workloadPlan`；历史容器无 plan 时回退
+ * `workloadIds → { workloadId, params: {}, implicit: false }`（裁决 13）。
+ */
+export function resolveContainerPlan(
+  container: Pick<CloudContainerEntity, 'workloadIds' | 'workloadPlan'>,
+): WorkloadPlanEntry[] {
+  const plan = container.workloadPlan ?? [];
+  if (plan.length > 0) {
+    return plan.map((entry) => ({
+      workloadId: entry.workloadId,
+      params: entry.params ?? {},
+      implicit: entry.implicit === true,
+    }));
+  }
+  return (container.workloadIds ?? []).map((id) => ({
+    workloadId: id,
+    params: {},
+    implicit: false,
+  }));
+}
+
+/**
  * 工作负载编排器：脚本下发、结果落库、当前脚本跟踪、看门狗与销毁清理批次。
  *
  * - init：容器 register 后读取挂载工作负载的 `initScript`，批量创建执行日志（首条
@@ -131,35 +154,45 @@ export class WorkloadDispatcher {
     // 仅 creating/connecting（回连注册路径）触发初始化；online 重连不重跑。
     if (container.status !== 'connecting' && container.status !== 'creating') return false;
 
-    const workloadIds = container.workloadIds ?? [];
-    if (workloadIds.length === 0) return false;
+    const plan = resolveContainerPlan(container);
+    if (plan.length === 0) return false;
 
-    const workloads = await this.deps.workloadRepository.findByIds(workloadIds);
+    const workloads = await this.deps.workloadRepository.findByIds(
+      plan.map((entry) => entry.workloadId),
+    );
     const byId = new Map(workloads.map((workload) => [workload.id, workload]));
 
     interface Entry {
       workloadId: string;
       workloadName: string;
       script: string;
+      params: Record<string, unknown>;
       deleted: boolean;
     }
 
     const entries: Entry[] = [];
-    for (const id of workloadIds) {
-      const workload = byId.get(id);
+    for (const item of plan) {
+      const workload = byId.get(item.workloadId);
       if (!workload) {
         // 裁决 3：执行前被删除 → 生成 FAILED 占位记录，不阻断上线。
         entries.push({
-          workloadId: id,
+          workloadId: item.workloadId,
           workloadName: DELETED_WORKLOAD_NAME,
           script: '',
+          params: {},
           deleted: true,
         });
         continue;
       }
       const script = workload.initScript ?? '';
       if (script.trim().length === 0) continue;
-      entries.push({ workloadId: id, workloadName: workload.name, script, deleted: false });
+      entries.push({
+        workloadId: item.workloadId,
+        workloadName: workload.name,
+        script,
+        params: item.params ?? {},
+        deleted: false,
+      });
     }
 
     if (entries.length === 0) return false;
@@ -175,6 +208,7 @@ export class WorkloadDispatcher {
           phase: 'init',
           status: 'failed',
           script: '',
+          params: {},
           log: DELETED_WORKLOAD_LOG,
           exitCode: null,
           startedAt: now,
@@ -189,6 +223,7 @@ export class WorkloadDispatcher {
         phase: 'init',
         status: isFirst ? 'running' : 'pending',
         script: entry.script,
+        params: entry.params,
         log: '',
         exitCode: null,
         startedAt: isFirst ? now : null,
@@ -218,11 +253,13 @@ export class WorkloadDispatcher {
     if (!container) return false;
     if (container.status === 'initializing') return true;
     if (container.status !== 'connecting' && container.status !== 'creating') return false;
-    const workloadIds = container.workloadIds ?? [];
-    if (workloadIds.length === 0) return false;
-    const workloads = await this.deps.workloadRepository.findByIds(workloadIds);
+    const plan = resolveContainerPlan(container);
+    if (plan.length === 0) return false;
+    const workloads = await this.deps.workloadRepository.findByIds(
+      plan.map((entry) => entry.workloadId),
+    );
     // 有已删除项：仍需走初始化流程以生成 FAILED 留档记录（裁决 3）。
-    if (workloads.length < workloadIds.length) return true;
+    if (workloads.length < plan.length) return true;
     return workloads.some((workload) => (workload.initScript ?? '').trim().length > 0);
   }
 
@@ -310,8 +347,12 @@ export class WorkloadDispatcher {
   /** 是否存在带 `postScript` 的挂载工作负载（容器尚存时）。 */
   async hasPostScripts(containerId: string): Promise<boolean> {
     const container = await this.deps.containerRepository.findById(containerId);
-    if (!container || (container.workloadIds ?? []).length === 0) return false;
-    const workloads = await this.deps.workloadRepository.findByIds(container.workloadIds);
+    if (!container) return false;
+    const plan = resolveContainerPlan(container);
+    if (plan.length === 0) return false;
+    const workloads = await this.deps.workloadRepository.findByIds(
+      plan.map((entry) => entry.workloadId),
+    );
     return workloads.some((workload) => (workload.postScript ?? '').trim().length > 0);
   }
 
@@ -352,20 +393,25 @@ export class WorkloadDispatcher {
       });
     }
 
-    const workloadIds = container.workloadIds ?? [];
-    if (workloadIds.length === 0) return null;
+    const plan = resolveContainerPlan(container);
+    if (plan.length === 0) return null;
 
-    const workloads = await this.deps.workloadRepository.findByIds(workloadIds);
+    const workloads = await this.deps.workloadRepository.findByIds(
+      plan.map((entry) => entry.workloadId),
+    );
     const byId = new Map(workloads.map((workload) => [workload.id, workload]));
 
     // 建议 7：已删除工作负载也留一条 FAILED 占位（清理阶段未执行），与 init 阶段
-    // （裁决 3）口径一致，避免静默丢失留档。
-    const deletedIds = workloadIds.filter((id) => !byId.has(id));
-    const runEntries = workloadIds
-      .map((id) => byId.get(id))
-      .filter((workload): workload is CloudWorkloadEntity => {
-        return workload !== undefined && (workload.postScript ?? '').trim().length > 0;
-      });
+    // （裁决 3）口径一致，避免静默丢失留档。占位记录 params 为 `{}`（无参数快照）。
+    const deletedIds = plan
+      .filter((entry) => !byId.has(entry.workloadId))
+      .map((entry) => entry.workloadId);
+    const runEntries = plan
+      .map((entry) => ({ entry, workload: byId.get(entry.workloadId) }))
+      .filter(
+        (item): item is { entry: WorkloadPlanEntry; workload: CloudWorkloadEntity } =>
+          item.workload !== undefined && (item.workload.postScript ?? '').trim().length > 0,
+      );
 
     if (deletedIds.length === 0 && runEntries.length === 0) return null;
 
@@ -376,6 +422,7 @@ export class WorkloadDispatcher {
       phase: 'post',
       status: 'failed',
       script: '',
+      params: {},
       log: DELETED_WORKLOAD_POST_LOG,
       exitCode: null,
       startedAt: null,
@@ -386,13 +433,14 @@ export class WorkloadDispatcher {
     if (!this.deps.isConnected(containerId)) {
       await this.deps.workloadLogRepository.createMany(placeholders);
       if (runEntries.length > 0) {
-        const inputs: CreateWorkloadLogInput[] = runEntries.map((workload) => ({
+        const inputs: CreateWorkloadLogInput[] = runEntries.map((item) => ({
           containerId,
-          workloadId: workload.id,
-          workloadName: workload.name,
+          workloadId: item.workload.id,
+          workloadName: item.workload.name,
           phase: 'post',
           status: 'timeout',
-          script: workload.postScript ?? '',
+          script: item.workload.postScript ?? '',
+          params: item.entry.params ?? {},
           log: DISCONNECTED_LOG,
           exitCode: null,
           startedAt: null,
@@ -407,13 +455,14 @@ export class WorkloadDispatcher {
 
     if (runEntries.length === 0) return null;
 
-    const inputs: CreateWorkloadLogInput[] = runEntries.map((workload, index) => ({
+    const inputs: CreateWorkloadLogInput[] = runEntries.map((item, index) => ({
       containerId,
-      workloadId: workload.id,
-      workloadName: workload.name,
+      workloadId: item.workload.id,
+      workloadName: item.workload.name,
       phase: 'post',
       status: index === 0 ? 'running' : 'pending',
-      script: workload.postScript ?? '',
+      script: item.workload.postScript ?? '',
+      params: item.entry.params ?? {},
       log: '',
       exitCode: null,
       startedAt: index === 0 ? now : null,
@@ -536,8 +585,10 @@ export class WorkloadDispatcher {
       phase,
       items: logs.map((log) => ({
         logId: log.id,
+        workloadId: log.workloadId,
         workloadName: log.workloadName,
         script: log.script,
+        params: log.params ?? {},
         timeoutMs: phase === 'init' ? this.deps.initTimeoutMs : this.deps.postBudgetMs,
       })),
     };

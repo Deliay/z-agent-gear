@@ -11,7 +11,7 @@
 #   NVM_INSTALL_URL     nvm 安装脚本地址（默认即 GITHUB_RAW_PROXY/nvm-sh/nvm/v0.40.8/install.sh）
 #   NODEJS_DIST_MIRROR  Node.js 发行包代理源（nvm 的 index.tab/SHASUMS/tarball 均取自此处）
 #   NODE_VERSION        由 nvm 安装的 Node.js 主版本
-#   NPM_REGISTRY        npm 代理源
+#   NPM_REGISTRY        npm 代理源（构建期用于安装全局包，并以 ENV 固化到运行时供 Node.js 工作负载脚本读取）
 #   DOCKER_APT_URL      Docker CE apt 源（含 buildx/containerd 包）
 
 FROM ubuntu:24.04
@@ -27,6 +27,15 @@ ARG NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/
 ARG DOCKER_APT_URL=https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# 运行时环境变量：ARG 仅构建期可见，这里把 npm 源固化进镜像运行时，
+# 供「Node.js」预制工作负载脚本（`REGISTRY="${NPM_REGISTRY:-...}"`）读取。
+ENV NPM_REGISTRY=${NPM_REGISTRY}
+
+# 可选：.NET / Aspire 预制脚本的安装脚本地址。缺省走官方地址（dot.net / aspire.dev），
+# 内网无法直连时取消注释并指向内网代理（脚本内同样支持同名环境变量覆盖）。
+# ENV DOTNET_INSTALL_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/dotnet-install.sh
+# ENV ASPIRE_INSTALL_URL=https://nexus.internal.fffdan.com/repository/aspire-proxy/install.sh
 
 # 1) 切换 Ubuntu 软件源到内网 mirror（24.04 为 deb822 格式）
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list \
@@ -88,9 +97,11 @@ RUN install -m 0755 -d /etc/apt/keyrings \
  && ln -sf /usr/libexec/docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-buildx 2>/dev/null || true
 
 # 5) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
+#    agent-gear 固定 2.3.x：工作负载参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
+#    避免构建期取到不支持参数的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear \
+      agent-gear@2.3.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force

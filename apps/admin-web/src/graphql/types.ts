@@ -139,11 +139,47 @@ export interface GetBaseImageQuery {
 
 // ---------- 工作负载（contracts/admin-cloud-workload.graphql） ----------
 
+/** 参数字段类型（契约 CloudWorkloadParamType）。 */
+export type CloudWorkloadParamType = 'SELECT' | 'MULTI_SELECT' | 'TEXT' | 'BOOLEAN';
+
+/**
+ * 参数值/默认值（JSON scalar）：字符串（TEXT/SELECT）、字符串数组（MULTI_SELECT）或布尔（BOOLEAN）。
+ * 服务端为唯一事实源，前端仅做预校验。
+ */
+export type CloudWorkloadParamValue = string | string[] | boolean;
+
+/** 单个参数定义（契约 CloudWorkloadParamField）。 */
+export interface CloudWorkloadParamFieldData {
+  /** 参数标识，工作负载内唯一，脚本中以 WORKLOAD_PARAM_<KEY_UPPER> 引用 */
+  key: string;
+  label: string;
+  type: CloudWorkloadParamType;
+  /** SELECT/MULTI_SELECT 的可选项；其他类型为 [] */
+  options: string[];
+  /** 必填：string | string[] | boolean */
+  defaultValue: CloudWorkloadParamValue;
+}
+
+/** 参数定义入参（契约 CloudWorkloadParamFieldInput）。 */
+export interface CloudWorkloadParamFieldInputData {
+  key: string;
+  label: string;
+  type: CloudWorkloadParamType;
+  options?: string[] | null;
+  defaultValue: CloudWorkloadParamValue;
+}
+
 export interface CloudWorkloadData {
   id: string;
   name: string;
   initScript: string | null;
   postScript: string | null;
+  /** 参数定义；空数组表示无参数配置 */
+  paramSchema: CloudWorkloadParamFieldData[];
+  /** 依赖的工作负载，按配置顺序初始化；一期最多 5 个 */
+  dependsOnWorkloadIds: string[];
+  /** 是否为预制工作负载（仅展示用） */
+  isPreset: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -152,6 +188,15 @@ export interface CloudWorkloadInputData {
   name: string;
   initScript: string | null;
   postScript: string | null;
+  paramSchema: CloudWorkloadParamFieldInputData[];
+  dependsOnWorkloadIds: string[];
+}
+
+/** 启动容器时对单个工作负载的选择与参数值（契约 CloudWorkloadSelectionInput）。 */
+export interface CloudWorkloadSelectionData {
+  workloadId: string;
+  /** 缺省/缺字段 = 使用该字段默认值 */
+  params?: Record<string, CloudWorkloadParamValue>;
 }
 
 /**
@@ -174,6 +219,8 @@ export interface CloudWorkloadLogData {
   status: CloudWorkloadLogStatus;
   /** 当时实际执行的脚本内容快照（留档） */
   script: string;
+  /** 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {} */
+  params: Record<string, unknown>;
   exitCode: number | null;
   log: string;
   startedAt: string | null;
