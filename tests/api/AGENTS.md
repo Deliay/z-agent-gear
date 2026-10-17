@@ -55,7 +55,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（23 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（24 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（5 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -409,13 +409,31 @@ npm test
 ### Cloud Controller 内部 API (`cloud-controller/internal-api.test.ts` T-IC*)
 
 > 需要 cloud-controller 就绪：`aspire start && aspire wait cloud-controller`；服务以 `K8S_ENABLED=false`（InMemoryK8sClient）运行。
+> `T-IC5`（合法 workloadIds 回显）与 `T-IC6`（按执行顺序返回日志）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
 | T-IC2 鉴权 | 缺失/错误 Bearer 返回 401 |
 | T-IC3 非 idle | POST `{purpose: workflow}` 返回 400「该任务类型暂未开放」 |
-| T-IC1 全生命周期 | GET 列表 / POST idle（201）/ DELETE（200）符合契约附录 A |
+| T-IC1 全生命周期 | GET 列表 / POST idle（201，`workloadIds: []`、`currentWorkloadName: null`）/ DELETE（200）符合契约附录 A |
 | T-IC4 幂等 | DELETE 不存在返回 404；终态容器重复 DELETE 返回 200 |
+| T-IC5 workloadIds 校验 | 非数组 / 未知 ID / 超 10 个 → 400 `INVALID_WORKLOAD`；合法已存在 ID → 201 且去重保序回显 |
+| T-IC6 工作负载日志 | `GET /internal/containers/:id/workload-logs`：未知容器 404 `NOT_FOUND`；无记录返回 `[]`；直写 Mongo 后按 `createdAt` 升序返回 A.6 字段 |
+| T-IC7 鉴权回归 | 新增 logs 端点缺失 Bearer → 401 |
+
+### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
+
+> 需要 admin-api + cloud-controller 就绪：`aspire start && aspire wait admin-api cloud-controller`。
+> 日志用例直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）；控制面不可达的降级分支由 admin-api 单测 `graphql/resolvers/cloud-workload.test.ts` 锚定。
+
+| 测试 | 描述 |
+|------|------|
+| T-IA 未认证 | 匿名 list/create/update/delete/logs 均「Not authenticated」 |
+| T-IA CRUD | 仅 init / 仅 post / 两者创建；列表；编辑（`initScript: null` 清空）；删除；DTO 时间 ISO |
+| T-IA 校验边界 | 空名 → `name is required`；超 64 字 → `name must be at most 64 characters`；双空脚本 → `at least one script is required`；脚本 >16 KiB → `initScript/postScript must be at most 16 KiB` |
+| T-IA 重名/不存在 | 创建/改名重名 → `Workload name already exists`；更新不存在 id → `Workload not found`；删除不存在 id → `false` |
+| T-IA 日志（控制面可用） | 无记录返回 `[]`；直写 `cloudworkloadlogs` 后按执行顺序返回大写枚举 + 脚本快照 + 输出 |
+| T-IA 启动携带 workloadIds | 合法 ID 按选择顺序返回 `workloads`；未知 ID → 错误含 `INVALID_WORKLOAD`；缺省不挂载（`workloads: []`） |
 
 ### Cloud Controller Worker 握手 (`cloud-controller/worker-handshake.test.ts` T-IW*)
 
@@ -434,3 +452,6 @@ npm test
 | T-IA1 列表 | `adminCloudContainers` 经控制面代理返回数组 |
 | T-IA6 非 idle | `adminStartCloudContainer(WORKFLOW)` 返回「该任务类型暂未开放」 |
 | T-IA3/T-IA4 启停 | start idle → 列表可见 → destroy 返回 true 且状态收敛为 EXITED |
+| T-IA7 workloadIds | start 携带 `workloadIds` → `workloads` 按提交顺序返回；列表同样返回 `workloads`/`currentWorkloadName` |
+| T-IA8 未知 workloadId | start 携带不存在 ID → 错误含 `INVALID_WORKLOAD` |
+| T-IA9 缺省不挂载 | start 不传 `workloadIds` → `workloads: []`、`currentWorkloadName: null` |
