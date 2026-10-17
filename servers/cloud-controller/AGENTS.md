@@ -32,7 +32,8 @@ src/
 │   ├── workload-dispatcher.ts  # 工作负载编排：脚本下发/结果落库/当前脚本/看门狗/post 批次
 │   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检 + 工作负载看门狗
 │   ├── heartbeat-tracker.ts    # 心跳计时（30s × 3 次判离线）
-│   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含 workload:run/result）
+│   ├── worker-version.ts       # worker 版本解析/最低版本门禁（纯函数，MIN_WORKER_VERSION/SUPPORTED_MAJOR）
+│   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含注册版本门禁、workload:run/result）
 ├── middleware/internal-auth.ts # Bearer INTERNAL_API_TOKEN
 ├── routes/internal-api.ts      # /internal/containers*（含 workload-logs）
 └── index.ts                    # createCloudControllerApp + 入口
@@ -44,6 +45,7 @@ src/
 - **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；握手限速按 token 的 `containerId` 前缀（无 token 回退 peer IP），另有更高上限的 per-IP 兜底桶——worker 经共享 Ingress IP 回连时不共享同一令牌桶；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
 - **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 requests/limits 与 `activeDeadlineSeconds` 兜底。
 - **工作负载脚本经 Socket.IO 下发（不经 K8s env / manifest 注入）**：`cloudworkloads` 由 admin-api 管理、本服务只读；容器 register 后由 `workload-dispatcher` 按挂载顺序下发 `workload:run{phase:"init"}`（同时建 `cloudworkloadlogs` 记录并写入脚本快照、CAS 置 `initializing`、写 `currentWorkloadName`），逐条 `workload:result` 推进，全部终态后收口 `online`（有活跃 socket）或 `connecting`。销毁时先下发 `workload:run{phase:"post"}` 并等待结果/预算耗尽，再发 `shutdown`。旧 worker 忽略新事件，由看门狗标 `TIMEOUT` 兜底。
+- **worker 注册版本门禁**：`register.version` 必须是严格三段数字且 `>=2.2.0`、major 为 `2`（代码常量 `MIN_WORKER_VERSION`/`SUPPORTED_MAJOR`，见 `services/worker-version.ts`，不通过环境变量配置）。校验必须位于**全部注册副作用之前**：拒绝路径只 `emit('error', { code: 'VERSION_MISMATCH', currentVersion, minimumVersion, supportedMajor })` + `disconnect(true)`，不写 `socket.data.registered`、不 `heartbeatTracker.record`、不 `hasInitScripts`/`startInit`、不 `markOnline`/`markInitializing`，也不写 `connectedAt`。因此版本被拒的容器销毁时走「未完成兼容注册」路径：不发送 shutdown、不等待宽限，直接删除 Job。版本串写日志前须经 `sanitizeVersionForLog`（去控制字符、截断 64）。
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。

@@ -119,6 +119,7 @@ flowchart LR
 - [[draft/20261014-admin-console.md]] — 云控制器管理后台一期
 - [[draft/20261014-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
 - [[draft/20261017-cloud-controller-workload.md]] — 云控制器工作负载功能
+- [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
 
 ### 已发布文档（`released/`）
 
