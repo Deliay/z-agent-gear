@@ -261,6 +261,26 @@ export function stripTokenFromEndpoint(endpoint: string): string {
   }
 }
 
+/**
+ * 展开 Socket.IO 连接错误的底层细节。engine.io 的 TransportError 会携带
+ * `type`/`description`/`context`（例如服务端返回非 101 状态、TLS 失败、协议错误），
+ * 而 `message` 常常只有 "websocket error"，不足以定位问题。
+ */
+export function describeConnectError(err: Error): string {
+  const detail = err as Error & { type?: string; description?: string; context?: unknown };
+  const parts: string[] = [];
+  if (detail.type) parts.push(`type=${detail.type}`);
+  if (detail.description) parts.push(`description=${detail.description}`);
+  if (detail.context !== undefined) {
+    try {
+      parts.push(`context=${JSON.stringify(detail.context)}`);
+    } catch {
+      parts.push('context=<unserializable>');
+    }
+  }
+  return parts.length > 0 ? ` (${parts.join(' ')})` : '';
+}
+
 export function connectToServer(
   endpoint: string,
   key: string,
@@ -1144,7 +1164,9 @@ export function connectToServer(
   });
 
   socket.on('connect_error', (err) => {
-    console.error(`Connection error: ${err.message}`);
+    // 传输层失败时 err.message 往往只有笼统的 "websocket error"，真实原因在 description/context
+    // （如 HTTP 404/502、TLS 失败、协议错误）里——一并打印，避免"看不出为何连不上"。
+    console.error(`Connection error: ${err.message}${describeConnectError(err)}`);
   });
 
   return socket;

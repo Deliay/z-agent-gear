@@ -184,6 +184,10 @@ export function registerWorkerGateway(
     const sourceIp = socket.handshake.address;
     const containerId = containerIdFromToken(token);
     const key = containerId ? `container:${containerId}` : `ip:${sourceIp}`;
+    logger.info?.(
+      `[worker] handshake attempt id=${socket.id} namespace=${nsp.name} ` +
+        `transport=${socket.conn.transport.name} from=${sourceIp} token=${token ? 'present' : 'MISSING'}`,
+    );
     // 问题 60：先判 per-IP 兜底桶（其键空间亦为有界），IP 超限时直接拒绝，
     // 不再调用 keyLimiter（避免被拒请求为未认证对端铸造新的 key 条目）。
     if (!ipLimiter.allow(`ip:${sourceIp}`) || !keyLimiter.allow(key)) {
@@ -198,11 +202,15 @@ export function registerWorkerGateway(
       .then((container) => {
         if (!container) {
           logger.warn?.(
-            `[worker] handshake rejected from ${socket.handshake.address}: INVALID_TOKEN`,
+            `[worker] handshake rejected from ${socket.handshake.address}: INVALID_TOKEN ` +
+              `(token ${token ? 'present but invalid/expired' : 'missing'})`,
           );
           next(new Error('INVALID_TOKEN'));
           return;
         }
+        logger.info?.(
+          `[worker] handshake accepted id=${socket.id} containerId=${container.id} from=${sourceIp}`,
+        );
         socket.data.containerId = container.id;
         next();
       })
@@ -223,11 +231,19 @@ export function registerWorkerGateway(
     const sockets = activeSockets.get(containerId) ?? new Set<string>();
     sockets.add(socket.id);
     activeSockets.set(containerId, sockets);
+    logger.info?.(
+      `[worker] connected id=${socket.id} containerId=${containerId} ` +
+        `transport=${socket.conn.transport.name} from=${socket.handshake.address}`,
+    );
 
     socket.on('register', async (payload: RegisterPayload = {}) => {
       // key 字段被忽略（由握手 token 替代）。
       const major = typeof payload?.version === 'string' ? payload.version.split('.')[0] : undefined;
       if (major !== CURRENT_MAJOR_VERSION) {
+        logger.warn?.(
+          `[worker] register rejected containerId=${containerId}: VERSION_MISMATCH ` +
+            `(agent-gear version=${payload?.version ?? 'unknown'}, required major=${CURRENT_MAJOR_VERSION})`,
+        );
         socket.emit('error', {
           code: 'VERSION_MISMATCH',
           message: 'agent-gear 版本不兼容，请升级到 major 2 后重试',
@@ -239,6 +255,9 @@ export function registerWorkerGateway(
       // 契约 §2.2：hostname 为必填字段。
       const hostname = typeof payload?.hostname === 'string' ? payload.hostname.trim() : '';
       if (!hostname) {
+        logger.warn?.(
+          `[worker] register rejected containerId=${containerId}: INVALID_PAYLOAD (missing hostname)`,
+        );
         socket.emit('error', {
           code: 'INVALID_PAYLOAD',
           message: '缺少必填字段 hostname',
@@ -252,6 +271,10 @@ export function registerWorkerGateway(
         socket.data.hostname = hostname;
         deps.heartbeatTracker.record(containerId);
         await deps.containerService.markOnline(containerId);
+        logger.info?.(
+          `[worker] registered containerId=${containerId} hostname=${hostname} ` +
+            `version=${payload?.version ?? 'unknown'} platform=${payload?.platform ?? 'unknown'}`,
+        );
         socket.emit('registered', { controllerId: containerId });
       } catch (err) {
         logger.error?.('[worker] register error', err);
@@ -270,10 +293,14 @@ export function registerWorkerGateway(
       socket.disconnect(true);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason: string) => {
       const set = activeSockets.get(containerId);
       set?.delete(socket.id);
       const remaining = set?.size ?? 0;
+      logger.info?.(
+        `[worker] disconnected id=${socket.id} containerId=${containerId} reason=${reason} ` +
+          `registered=${socket.data.registered === true} remainingSockets=${remaining}`,
+      );
       // 同一 containerId 仍有活跃 socket（多连接/重连窗口）时不判定离线。
       if (remaining > 0) return;
       activeSockets.delete(containerId);
