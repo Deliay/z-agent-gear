@@ -9,6 +9,41 @@ describe('cloud-controller config', () => {
     expect(cfg.connectTimeoutMs).toBe(300000);
     expect(cfg.k8sEnabled).toBe(true);
     expect(cfg.runtimeClassName).toBe('sysbox-runc');
+    expect(cfg.workloadInitTimeoutMs).toBe(300000);
+    expect(cfg.workloadPostBudgetMs).toBe(90000);
+    expect(cfg.workloadLogMaxBytes).toBe(262144);
+  });
+
+  it('reads workload overrides from env', () => {
+    const cfg = loadConfig({
+      WORKLOAD_INIT_TIMEOUT_MS: '1000',
+      WORKLOAD_POST_BUDGET_MS: '2000',
+      WORKLOAD_LOG_MAX_BYTES: '4096',
+    } as NodeJS.ProcessEnv);
+    expect(cfg.workloadInitTimeoutMs).toBe(1000);
+    expect(cfg.workloadPostBudgetMs).toBe(2000);
+    expect(cfg.workloadLogMaxBytes).toBe(4096);
+  });
+
+  it('fails fast on invalid workload numeric config (裁决 15)', () => {
+    const invalid = ['not-a-number', '0', '-1', '1.5', ''];
+    for (const value of invalid) {
+      // 空字符串视为未提供（取默认），其余非法值 fail-fast
+      if (value === '') {
+        expect(loadConfig({ WORKLOAD_INIT_TIMEOUT_MS: value } as NodeJS.ProcessEnv).workloadInitTimeoutMs).toBe(300000);
+        continue;
+      }
+      expect(
+        () => loadConfig({ WORKLOAD_INIT_TIMEOUT_MS: value } as NodeJS.ProcessEnv),
+        `WORKLOAD_INIT_TIMEOUT_MS=${value}`,
+      ).toThrow(/WORKLOAD_INIT_TIMEOUT_MS/);
+    }
+    expect(() =>
+      loadConfig({ WORKLOAD_POST_BUDGET_MS: 'abc' } as NodeJS.ProcessEnv),
+    ).toThrow(/WORKLOAD_POST_BUDGET_MS/);
+    expect(() => loadConfig({ WORKLOAD_LOG_MAX_BYTES: '0' } as NodeJS.ProcessEnv)).toThrow(
+      /WORKLOAD_LOG_MAX_BYTES/,
+    );
   });
 
   it('reads overrides from env', () => {

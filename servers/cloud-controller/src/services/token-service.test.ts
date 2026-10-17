@@ -1,10 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { TokenService } from './token-service.js';
-import {
-  InMemoryContainerRepository,
-  type CloudContainerStatus,
-} from '../repositories/container-repository.js';
+import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import type { CloudContainerStatus } from '../models/cloud-container.js';
 
 async function seed(
   repo: InMemoryContainerRepository,

@@ -50,7 +50,24 @@ interface Logger {
 }
 
 /** 允许被生命周期转移覆写的状态（非终态）。 */
-const ACTIVE_STATUSES: readonly CloudContainerStatus[] = ['creating', 'connecting', 'online'];
+const ACTIVE_STATUSES: readonly CloudContainerStatus[] = [
+  'creating',
+  'connecting',
+  'initializing',
+  'online',
+];
+
+/** 去重且保持选择顺序（契约：启动 `workloadIds` 去重、保序、≤10）。 */
+export function dedupeWorkloadIds(ids: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids ?? []) {
+    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
 
 function randomSuffix(length: number): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -97,6 +114,10 @@ export class ContainerService {
     return () => this.shutdownHandlers.delete(handler);
   }
 
+  /**
+   * 依次执行销毁通知处理器（串行 await）：网关在 handler 内先下发并等待 post 脚本批次，
+   * 再 emit shutdown（契约 §2.8）。单个 handler 失败只告警，不阻断后续删除 Job 流程。
+   */
   private async notifyShutdown(containerId: string): Promise<void> {
     for (const handler of this.shutdownHandlers) {
       try {
@@ -151,6 +172,7 @@ export class ContainerService {
   async start(
     purpose: CloudContainerPurpose,
     refId: string | null = null,
+    workloadIds: readonly string[] = [],
   ): Promise<CloudContainerEntity> {
     if (purpose !== 'idle') {
       throw new UnsupportedPurposeError();
@@ -164,6 +186,7 @@ export class ContainerService {
       image: this.cfg.image,
       refId: refId ?? null,
       status: 'creating',
+      workloadIds: dedupeWorkloadIds(workloadIds),
     });
 
     return this.mutex.runExclusive(created.id, async () => {
@@ -221,7 +244,26 @@ export class ContainerService {
   }
 
   async markConnecting(containerId: string): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, { status: 'connecting' });
+    return this.updateGuarded(containerId, {
+      status: 'connecting',
+      currentWorkloadName: null,
+    });
+  }
+
+  /**
+   * 容器回连并开始执行初始化脚本：置 `initializing` 并写入当前执行的工作负载名称。
+   * 注册即视为已连接，写入 `connectedAt`（销毁流程据此决定是否需要发送 shutdown）。
+   */
+  async markInitializing(
+    containerId: string,
+    currentWorkloadName: string,
+  ): Promise<CloudContainerEntity | null> {
+    return this.updateGuarded(containerId, {
+      status: 'initializing',
+      currentWorkloadName,
+      connectedAt: new Date(),
+      exitReason: null,
+    });
   }
 
   async markOnline(containerId: string): Promise<CloudContainerEntity | null> {
@@ -229,6 +271,7 @@ export class ContainerService {
       status: 'online',
       connectedAt: new Date(),
       exitReason: null,
+      currentWorkloadName: null,
     });
   }
 
@@ -242,6 +285,7 @@ export class ContainerService {
       exitedAt: at,
       exitReason,
       tokenHash: null,
+      currentWorkloadName: null,
     });
   }
 
@@ -255,6 +299,7 @@ export class ContainerService {
       exitedAt: at,
       exitReason,
       tokenHash: null,
+      currentWorkloadName: null,
     });
   }
 
@@ -298,6 +343,7 @@ export class ContainerService {
             exitReason:
               deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
             tokenHash: null,
+            currentWorkloadName: null,
           },
           { fromStatuses: ['destroying'] },
         );
@@ -318,7 +364,7 @@ export class ContainerService {
 
     const destroying = await this.repo.update(
       containerId,
-      { status: 'destroying' },
+      { status: 'destroying', currentWorkloadName: null },
       { fromStatuses: [...ACTIVE_STATUSES] },
     );
     if (!destroying) {
@@ -354,6 +400,7 @@ export class ContainerService {
         exitedAt: new Date(),
         exitReason,
         tokenHash: null,
+        currentWorkloadName: null,
       },
       { fromStatuses: ['destroying'] },
     );
@@ -406,6 +453,7 @@ export class ContainerService {
             exitReason:
               deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
             tokenHash: null,
+            currentWorkloadName: null,
           },
           { fromStatuses: ['destroying'] },
         );

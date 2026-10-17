@@ -27,6 +27,8 @@ export interface StatusSyncOptions {
    * 视为「启动进行中」跳过，避免与 in-flight `start()` 竞态误判（问题 58）。
    */
   creatingGraceMs?: number;
+  /** 工作负载看门狗（并入 15s 巡检，裁决 10）：推进超时/卡死的 init 记录。 */
+  dispatcher?: { onWatchdog(now?: number): Promise<void> };
   logger?: Logger;
 }
 
@@ -72,6 +74,12 @@ export class StatusSyncService {
       void this.sweepTerminalJobs().catch((err) => {
         this.opts.logger?.error?.('[status-sync] terminal sweep failed', err);
       });
+      const dispatcher = this.opts.dispatcher;
+      if (dispatcher) {
+        void dispatcher.onWatchdog().catch((err) => {
+          this.opts.logger?.error?.('[status-sync] workload watchdog failed', err);
+        });
+      }
     }, SCAN_INTERVAL_MS);
     this.timer.unref?.();
   }
@@ -328,6 +336,9 @@ export class StatusSyncService {
    * 不立即删除 Job（等待管理员强制销毁或终态巡检兜底回收）。
    * 另对超过同一阈值的 `creating` 孤儿记录兜底（问题 58/建议 G）：进程在落库 creating 后、
    * `createJob` 前崩溃时无 Job 也不会有 watch 事件，靠本巡检迁移 failed。
+   *
+   * `initializing`（执行初始化脚本）**不在此巡检范围**：长脚本可能超过回连超时，
+   * 由 workload-dispatcher 看门狗按「单条超时 + 容差」收口（裁决 10 / 契约 §3.2）。
    */
   async scanTimeouts(now: number = Date.now()): Promise<string[]> {
     const records = await this.opts.repo.findAll();
