@@ -43,6 +43,35 @@ describe('K8sJobManager', () => {
     );
   });
 
+  it('T-K7: sysbox runtimeClassName requires hostUsers: false', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-abc123',
+      containerId: 'container-1',
+      token: 'container-1.secret',
+    });
+
+    // sysbox 要求 Pod 停用 host user namespace（否则写入 net.ipv4.ip_unprivileged_port_start 被拒）
+    expect(manifest.spec.template.spec.hostUsers).toBe(false);
+  });
+
+  it('T-K8: no runtimeClassName leaves hostUsers unset', () => {
+    const client = new InMemoryK8sClient();
+    const manager = new K8sJobManager(client, {
+      namespace: 'zag-workers',
+      image: 'core.harbor.internal.fffdan.com/zero-tools/zag-worker:1.0.0',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-abc123',
+      containerId: 'container-1',
+      token: 'container-1.secret',
+    });
+
+    expect(manifest.spec.template.spec.runtimeClassName).toBeUndefined();
+    expect(manifest.spec.template.spec.hostUsers).toBeUndefined();
+  });
+
   it('T-K5: manifest declares resource constraints and activeDeadlineSeconds', () => {
     const { manager } = setup();
     const manifest = manager.buildManifest({
