@@ -279,6 +279,151 @@ describe('WorkloadExecutor', () => {
     expect(empty.results).toHaveLength(0);
   });
 
+  it('T-WE10 injects TEXT/BOOLEAN params as WORKLOAD_PARAM_* and the full JSON as WORKLOAD_PARAMS', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          {
+            logId: 'params',
+            workloadName: 'Params',
+            script: `printf 'P=%s\\n' "$WORKLOAD_PARAMS"; printf 'V=%s\\n' "$WORKLOAD_PARAM_VERSION"; printf 'D=%s\\n' "$WORKLOAD_PARAM_DEBUG"; printf 'E=%s\\n' "$WORKLOAD_PARAM_ENABLED"`,
+            timeoutMs: 5000,
+            workloadId: 'w-text',
+            params: { version: '22', debug: true, enabled: false },
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('success');
+    expect(results[0].log).toContain('P={"version":"22","debug":true,"enabled":false}');
+    expect(results[0].log).toContain('V=22');
+    expect(results[0].log).toContain('D=true');
+    expect(results[0].log).toContain('E=false');
+  });
+
+  it('T-WE11 injects MULTI_SELECT params as a JSON array string that scripts can parse', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          {
+            logId: 'multi',
+            workloadName: 'Multi',
+            script: `printf 'PM=%s\\n' "$WORKLOAD_PARAM_PACKAGE_MANAGER"; node -e 'const v = JSON.parse(process.argv[1] || "[]"); process.stdout.write("parsed=" + v.join(","))' "$WORKLOAD_PARAM_PACKAGE_MANAGER"`,
+            timeoutMs: 10000,
+            workloadId: 'w-multi',
+            params: { package_manager: ['pnpm', 'bun'] },
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('success');
+    expect(results[0].log).toContain('PM=["pnpm","bun"]');
+    expect(results[0].log).toContain('parsed=pnpm,bun');
+  }, 15000);
+
+  it('T-WE12 keeps legacy behavior for empty params (only WORKLOAD_PARAMS={}, host env inherited)', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    process.env.ZAG_WORKLOAD_TEST_INHERITED = 'inherited';
+    try {
+      await executor.runBatch(
+        {
+          phase: 'init',
+          items: [
+            {
+              logId: 'empty-params',
+              workloadName: 'EmptyParams',
+              script: `printf 'P=%s\\n' "$WORKLOAD_PARAMS"; printf 'FOO=%s\\n' "\${WORKLOAD_PARAM_FOO-unset}"; printf 'INHERIT=%s\\n' "\${ZAG_WORKLOAD_TEST_INHERITED-unset}"`,
+              timeoutMs: 5000,
+              workloadId: 'w-empty',
+            },
+          ],
+        },
+        sink,
+      );
+    } finally {
+      delete process.env.ZAG_WORKLOAD_TEST_INHERITED;
+    }
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('success');
+    expect(results[0].log).toContain('P={}');
+    expect(results[0].log).toContain('FOO=unset');
+    expect(results[0].log).toContain('INHERIT=inherited');
+  });
+
+  it('T-WE13 scopes params to the current item and does not leak them to later items', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          {
+            logId: 'first',
+            workloadName: 'First',
+            script: `printf 'P=%s\\n' "$WORKLOAD_PARAMS"`,
+            timeoutMs: 5000,
+            workloadId: 'w-first',
+            params: { version: '22', package_manager: ['pnpm'] },
+          },
+          {
+            logId: 'second',
+            workloadName: 'Second',
+            script: `printf 'P=%s\\n' "$WORKLOAD_PARAMS"; printf 'V=%s\\n' "\${WORKLOAD_PARAM_VERSION-unset}"; printf 'PM=%s\\n' "\${WORKLOAD_PARAM_PACKAGE_MANAGER-unset}"`,
+            timeoutMs: 5000,
+            workloadId: 'w-second',
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['first', 'second']);
+    expect(results[0].log).toContain('P={"version":"22","package_manager":["pnpm"]}');
+    expect(results[1].log).toContain('P={}');
+    expect(results[1].log).toContain('V=unset');
+    expect(results[1].log).toContain('PM=unset');
+  });
+
+  it('T-WE14 treats workloadId as log-only: order and result shape are unchanged', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'one', workloadName: 'One', workloadId: 'w-1', script: 'echo one', timeoutMs: 5000, params: { a: 'x' } },
+          { logId: 'two', workloadName: 'Two', workloadId: 'w-2', script: 'echo two', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['one', 'two']);
+    expect(results.map((r) => r.status)).toEqual(['success', 'success']);
+    expect(Object.keys(results[0]).sort()).toEqual(
+      ['exitCode', 'finishedAt', 'log', 'logId', 'startedAt', 'status'].sort(),
+    );
+  });
+
   it('T-WE9 exposes running state and waitForIdle resolves after the batch completes', async () => {
     const executor = new WorkloadExecutor();
     expect(executor.isRunning()).toBe(false);
