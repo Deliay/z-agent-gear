@@ -3,6 +3,12 @@ import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { TokenService } from './token-service.js';
 import type { WorkloadDispatcher } from './workload-dispatcher.js';
+import {
+  MIN_WORKER_VERSION,
+  SUPPORTED_MAJOR,
+  isSupportedWorkerVersion,
+  sanitizeVersionForLog,
+} from './worker-version.js';
 
 export const WORKER_NAMESPACE = '/worker';
 
@@ -15,7 +21,6 @@ export const WORKER_NAMESPACE = '/worker';
  */
 export const ENGINE_PATH = '/socket.io/';
 
-export const CURRENT_MAJOR_VERSION = '2';
 export const DEFAULT_HANDSHAKE_RATE_WINDOW_MS = 60000;
 /** 单个 token/container 在窗口内允许的握手次数（问题 59：按容器维度，避免共享 Ingress IP 全局限流）。 */
 export const DEFAULT_HANDSHAKE_RATE_MAX = 60;
@@ -255,15 +260,24 @@ export function registerWorkerGateway(
 
     socket.on('register', async (payload: RegisterPayload = {}) => {
       // key 字段被忽略（由握手 token 替代）。
-      const major = typeof payload?.version === 'string' ? payload.version.split('.')[0] : undefined;
-      if (major !== CURRENT_MAJOR_VERSION) {
+      // 版本门禁必须先于全部注册副作用（心跳计时 / 初始化查询下发 / online / connectedAt）：
+      // 完整版本校验见 worker-version.ts（>=MIN_WORKER_VERSION 且 major 为 SUPPORTED_MAJOR）。
+      const versionSupport = isSupportedWorkerVersion(payload?.version);
+      if (!versionSupport.supported) {
+        const currentVersion = sanitizeVersionForLog(payload?.version);
         logger.warn?.(
           `[worker] register rejected containerId=${containerId}: VERSION_MISMATCH ` +
-            `(agent-gear version=${payload?.version ?? 'unknown'}, required major=${CURRENT_MAJOR_VERSION})`,
+            `(agent-gear version=${currentVersion}, minimum=${MIN_WORKER_VERSION}, ` +
+            `supported major=${SUPPORTED_MAJOR}) reason=${versionSupport.reason}`,
         );
         socket.emit('error', {
           code: 'VERSION_MISMATCH',
-          message: 'agent-gear 版本不兼容，请升级到 major 2 后重试',
+          message:
+            `agent-gear 版本不兼容，当前版本 ${currentVersion}，最低版本 ${MIN_WORKER_VERSION}` +
+            `（supported major: ${SUPPORTED_MAJOR}）`,
+          currentVersion,
+          minimumVersion: MIN_WORKER_VERSION,
+          supportedMajor: SUPPORTED_MAJOR,
         });
         socket.disconnect(true);
         return;

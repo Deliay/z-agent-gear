@@ -1,0 +1,114 @@
+/**
+ * worker（`agent-gear`）注册版本门禁：严格三段数字解析 + 数字段比较。
+ *
+ * 设计约束（见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
+ * - 最低版本与 supported major 是与服务端协议能力绑定的**代码常量**，不新增环境变量；
+ * - 不引入 semver 依赖：只接受 `major.minor.patch` 三段数字（每段 1~9 位、无前导零），
+ *   按数字比较而非字典序（`2.10.0 > 2.2.0`）；
+ * - 纯函数、零 IO，供 `socketio-gateway` 在注册副作用之前调用。
+ */
+
+/** 本期最低兼容的 worker 版本（工作负载能力自 2.2.0 起提供）。 */
+export const MIN_WORKER_VERSION = '2.2.0';
+
+/** 本期支持的 worker major 版本。 */
+export const SUPPORTED_MAJOR = 2;
+
+/** 版本串长度上限：超长直接拒绝，避免日志污染与无谓解析。 */
+const MAX_VERSION_LENGTH = 64;
+
+/** 严格三段数字：每段 1~9 位、无前导零（`0` 本身允许）。 */
+const VERSION_PATTERN = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
+
+export interface ParsedWorkerVersion {
+  ok: true;
+  major: number;
+  minor: number;
+  patch: number;
+  raw: string;
+}
+
+export interface InvalidWorkerVersion {
+  ok: false;
+  reason: 'missing' | 'malformed';
+  raw: unknown;
+}
+
+export type WorkerVersionParseResult = ParsedWorkerVersion | InvalidWorkerVersion;
+
+export type UnsupportedWorkerVersionReason =
+  | 'missing'
+  | 'malformed'
+  | 'unsupported-major'
+  | 'below-minimum';
+
+export interface WorkerVersionSupport {
+  supported: boolean;
+  reason: 'supported' | UnsupportedWorkerVersionReason;
+  parsed?: WorkerVersionParseResult;
+}
+
+/**
+ * 解析 worker 上报版本。
+ * 缺失（`undefined` / `null` / 空串）归为 `missing`，其余非法形态归为 `malformed`。
+ */
+export function parseWorkerVersion(raw: unknown): WorkerVersionParseResult {
+  if (raw === undefined || raw === null || raw === '') {
+    return { ok: false, reason: 'missing', raw };
+  }
+  if (typeof raw !== 'string' || raw.length > MAX_VERSION_LENGTH) {
+    return { ok: false, reason: 'malformed', raw };
+  }
+  const match = VERSION_PATTERN.exec(raw);
+  if (!match) {
+    return { ok: false, reason: 'malformed', raw };
+  }
+  return {
+    ok: true,
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    raw,
+  };
+}
+
+function compareVersions(
+  a: { major: number; minor: number; patch: number },
+  b: { major: number; minor: number; patch: number },
+): number {
+  return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+}
+
+/**
+ * 判定 worker 上报版本是否在兼容范围：可解析 → major 匹配 → `>= minimum`。
+ * `minimum` / `supportedMajor` 仅供测试显式覆盖，生产调用使用默认常量。
+ */
+export function isSupportedWorkerVersion(
+  raw: unknown,
+  minimum: string = MIN_WORKER_VERSION,
+  supportedMajor: number = SUPPORTED_MAJOR,
+): WorkerVersionSupport {
+  const parsed = parseWorkerVersion(raw);
+  if (!parsed.ok) {
+    return { supported: false, reason: parsed.reason, parsed };
+  }
+  if (parsed.major !== supportedMajor) {
+    return { supported: false, reason: 'unsupported-major', parsed };
+  }
+  const min = parseWorkerVersion(minimum);
+  if (!min.ok || compareVersions(parsed, min) < 0) {
+    return { supported: false, reason: 'below-minimum', parsed };
+  }
+  return { supported: true, reason: 'supported', parsed };
+}
+
+/**
+ * 日志脱敏：移除控制字符、截断到 64 字符；非字符串或清洗后为空时回退 `unknown`。
+ * 仅用于日志/错误文案，不参与版本判定。
+ */
+export function sanitizeVersionForLog(raw: unknown): string {
+  if (typeof raw !== 'string') return 'unknown';
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, MAX_VERSION_LENGTH);
+  return cleaned.length > 0 ? cleaned : 'unknown';
+}

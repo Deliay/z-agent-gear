@@ -86,17 +86,52 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.2.0`（支持工作负载执行协议；major 仍为 `2`，握手版本校验不受影响）
+- [ ] `agent-gear --version` ≥ `2.2.0`（支持工作负载执行协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
 - [ ] 单条输出超过 256 KiB 时按尾部截断
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
-> 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的 `npm install -g agent-gear` 更新逻辑不变）。
+> 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
 
 ## 默认启动
 
-容器默认 `ENTRYPOINT` 为 `entrypoint.sh`：启动容器内 `dockerd` → 装配镜像代理 shim → 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）→ `exec agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`），无需额外参数即回连 cloud-controller。
+容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
+
+1. 启动容器内 `dockerd` → 装配镜像代理 shim；
+2. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
+3. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
+
+受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
+
+- `cloud-controller` 要求 worker 版本 `>=2.2.0` 且 major 为 `2`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
+- 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
+- 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
+- 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
+- 启动更新与版本不匹配恢复都受 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 控制（离线/排障出口）。
+
+## 版本门禁与自升级自验
+
+不需要真实 npm 网络或 dockerd 的静态/自动化自验：
+
+```bash
+cd deploy/images/worker
+bash -n entrypoint.sh
+bash entrypoint.test.sh
+```
+
+自动化用例覆盖：首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`）与 `ZAG_DOCKER_SHIM_PATH`，不会启动真实 dockerd、不访问网络。
+
+内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
+
+1. 构建并推送包含新 `entrypoint.sh` 的 worker 镜像，将新工作容器 `WORKER_IMAGE` 指向该镜像；
+2. 部署带版本门禁的 `cloud-controller` 后，启动一个挂载初始化脚本的容器，确认日志出现 `VERSION_MISMATCH`（含当前/最低版本）→ `upgrading agent-gear after VERSION_MISMATCH` → `agent-gear upgraded: <version>` → 重连后初始化脚本被执行；
+3. 对该容器执行强制销毁，确认即时完成（版本被拒期间从未写 `connectedAt`，不等待 post/shutdown 宽限）；
+4. 用受控旧版 `agent-gear 2.1.0`（镜像内预装旧版且启动更新失败）验证一次自升级重连；再次模拟升级源不可用时确认容器非零退出且可强制销毁；
+5. 核对日志不含 `ZAG_CONTROLLER_KEY`、token 或带凭据 URL。
+
+> 已运行中的旧入口容器无法远程获得新恢复逻辑，需在门禁上线后**强制销毁重建一次**。
+
 
 ## 已知限制
 
