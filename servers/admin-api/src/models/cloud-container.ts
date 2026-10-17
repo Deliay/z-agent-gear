@@ -11,7 +11,7 @@ const cloudContainerSchema = new mongoose.Schema(
     namespace: { type: String },
     status: {
       type: String,
-      enum: ['creating', 'connecting', 'online', 'destroying', 'exited', 'failed'],
+      enum: ['creating', 'connecting', 'initializing', 'online', 'destroying', 'exited', 'failed'],
       default: 'creating',
     },
     purpose: {
@@ -25,6 +25,10 @@ const cloudContainerSchema = new mongoose.Schema(
     connectedAt: { type: Date },
     exitedAt: { type: Date },
     exitReason: { type: String },
+    // 启动时挂载的工作负载，按选择顺序保存；与 cloud-controller schema 对齐
+    workloadIds: { type: [String], default: [] },
+    // 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null
+    currentWorkloadName: { type: String, default: null },
   },
   { collection: 'cloudcontainers', timestamps: true },
 );

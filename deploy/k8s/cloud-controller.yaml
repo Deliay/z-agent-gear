@@ -95,6 +95,16 @@ spec:
             # 排查 worker 回连（握手/engine path/Ingress 路径）时改为 'debug' 看逐请求日志。
             - name: LOG_LEVEL
               value: 'info'
+            # 工作负载（可选，缺省使用内置默认值；RBAC 与 Job manifest 不变）：
+            # - WORKLOAD_INIT_TIMEOUT_MS：单条初始化脚本超时（默认 300000）
+            # - WORKLOAD_POST_BUDGET_MS：清理脚本批次总预算（默认 90000）
+            # - WORKLOAD_LOG_MAX_BYTES：单条执行日志存储上限，截断保留尾部（默认 262144）
+            - name: WORKLOAD_INIT_TIMEOUT_MS
+              value: '300000'
+            - name: WORKLOAD_POST_BUDGET_MS
+              value: '90000'
+            - name: WORKLOAD_LOG_MAX_BYTES
+              value: '262144'
             - name: MONGODB_URI
               valueFrom:
                 secretKeyRef:

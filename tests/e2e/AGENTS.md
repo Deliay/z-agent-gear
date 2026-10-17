@@ -283,8 +283,25 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| 页面与启动对话框 | 「云端容器」页可见；启动对话框仅 idle（T-E1/PRD 3.4） |
+| 页面与启动对话框 | 「云端容器」页可见；启动对话框仅 idle（T-E1/PRD 3.4）+ 工作负载多选入口与上限提示（最多 10 个） |
 | 启动 + 强制销毁 | UI 启动 idle → 列表出现 `zag-worker-*` → 强制销毁二次确认 → 状态收敛为已退出（T-E1/T-E3） |
+| 工作负载列与日志空态 | 启动未挂载容器 → 「工作负载」列表头可见且行为 `-` → 打开「工作负载日志」展现「暂无执行记录」空态 |
 | T-E5 非管理员访问 | 未登录访问 `/cloud-containers` 重定向 `/login` |
 
 > 覆盖裁剪：T-E2（token 拒绝）由 `tests/api/src/cloud-controller/worker-handshake.test.ts` 覆盖；T-E4（异常退出/超时保留 `exitReason`、可强制销毁）与 T-E6（列表与 Job 对账）在 `K8S_ENABLED=false` 下无真实 Job 可对账，由 cloud-controller 单测锚定（`status-sync.test.ts` T-Y1/T-Y3/T-Y5 + reconcile、`container-service.test.ts` T-S4/T-S4b）；真实集群链路列为部署侧手工验收。
+
+### Admin Cloud Workload E2E (`admin-cloud-workload.spec.ts`)
+
+> 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行。
+> T-E9/T-E10 通过直写共享 Mongo（`cloudcontainers` / `cloudworkloadlogs`）构造 `INITIALIZING`/`currentWorkloadName` 与执行记录，需要 `MONGODB_URI`（缺省时 `test.skip` 跳过）。
+
+| 测试 | 描述 |
+|------|------|
+| T-E7 CRUD | 「工作负载」页新建（init+post）→ 编辑改名 → 删除二次确认后列表移除 |
+| T-E7/T-E8 删除后消失 | 工作负载出现在启动选择列表 → 删除 → 启动选择列表不再出现 |
+| T-E8 启动多选 | 启动对话框默认不选、按勾选顺序多选 → 容器列表行展示挂载的工作负载名称（顺序 = 勾选顺序） |
+| T-E9 初始化中 | 直写 Mongo 置 `INITIALIZING` + `currentWorkloadName` → 页面展示「初始化中」徽章 + 当前脚本名 |
+| T-E10 日志视图 | 直写 `cloudworkloadlogs` → 打开日志对话框展示阶段（初始化/清理）、状态（成功/失败）、脚本快照与输出，切换记录同步更新 |
+| T-E11 非管理员 | 未登录访问 `/cloud-workloads` 重定向 `/login` |
+
+> 覆盖裁剪（计划裁决 17）：Aspire 以 `K8S_ENABLED=false` 启动、无真实工作容器回连，`INITIALIZING` 与脚本执行链路改由 cloud-controller/agent-controller 单测与 tests/api（直写 Mongo + 内部 API/GraphQL 查询）覆盖；E2E 只覆盖 CRUD、启动多选、状态/日志展示。真实集群链路（init/post 下发执行、超时保护、旧 worker 兼容、镜像重建）列部署侧手工验收。

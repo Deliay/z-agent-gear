@@ -2,6 +2,7 @@ import type { Server as SocketIOServer, Socket } from 'socket.io';
 import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { TokenService } from './token-service.js';
+import type { WorkloadDispatcher } from './workload-dispatcher.js';
 
 export const WORKER_NAMESPACE = '/worker';
 
@@ -55,7 +56,15 @@ export interface WorkerGatewayDeps {
   containerService: ContainerService;
   heartbeatTracker: HeartbeatTracker;
   handshakeRateLimit?: HandshakeRateLimitOptions;
+  /** 工作负载编排器（缺省时退化为既有行为：register → online）。 */
+  workloadDispatcher?: WorkloadDispatcher;
   logger?: Logger;
+}
+
+/** 网关对外暴露的桥接句柄：供 dispatcher 注入 emitToContainer/isConnected（避免循环依赖）。 */
+export interface WorkerGatewayHandle {
+  emitToContainer: (containerId: string, event: string, payload: unknown) => void;
+  isConnected: (containerId: string) => boolean;
 }
 
 /**
@@ -158,7 +167,7 @@ export function containerIdFromToken(token: string | undefined): string | undefi
 export function registerWorkerGateway(
   io: SocketIOServer,
   deps: WorkerGatewayDeps,
-): void {
+): WorkerGatewayHandle {
   const logger = deps.logger ?? console;
   const nsp = io.of(WORKER_NAMESPACE);
   const windowMs = deps.handshakeRateLimit?.windowMs ?? DEFAULT_HANDSHAKE_RATE_WINDOW_MS;
@@ -175,6 +184,11 @@ export function registerWorkerGateway(
   );
   /** containerId → 当前活跃 socketId 集合（支持重连/多连接）。 */
   const activeSockets = new Map<string, Set<string>>();
+
+  const emitToContainer = (containerId: string, event: string, payload: unknown): void => {
+    nsp.to(containerId).emit(event, payload);
+  };
+  const isConnected = (containerId: string): boolean => (activeSockets.get(containerId)?.size ?? 0) > 0;
 
   nsp.use((socket: Socket, next) => {
     // 问题 59：部署形态下 worker 经 nginx Ingress 回连，TCP 对端是所有 worker 共享的
@@ -220,8 +234,11 @@ export function registerWorkerGateway(
       });
   });
 
-  // 销毁流程：向绑定到 containerId room 的在线容器发送 shutdown。
-  deps.containerService.onShutdown((containerId) => {
+  // 销毁流程：先下发并等待 post 脚本批次（若有），再向绑定到 containerId room 的在线容器发送 shutdown。
+  deps.containerService.onShutdown(async (containerId) => {
+    if (deps.workloadDispatcher) {
+      await deps.workloadDispatcher.runPostBatch(containerId);
+    }
     nsp.to(containerId).emit('shutdown', { reason: '强制销毁' });
   });
 
@@ -270,12 +287,27 @@ export function registerWorkerGateway(
         socket.data.registered = true;
         socket.data.hostname = hostname;
         deps.heartbeatTracker.record(containerId);
-        await deps.containerService.markOnline(containerId);
+
+        // 有初始化脚本 → 先回 registered，再由 dispatcher 下发 workload:run（契约 §3 生命周期）；
+        // 无初始化脚本 → 维持现状（register 接受即 online）。
+        const willInitialize = deps.workloadDispatcher
+          ? await deps.workloadDispatcher.hasInitScripts(containerId)
+          : false;
+        if (!willInitialize) {
+          await deps.containerService.markOnline(containerId);
+        }
+        socket.emit('registered', { controllerId: containerId });
+        if (willInitialize && deps.workloadDispatcher) {
+          const started = await deps.workloadDispatcher.startInit(containerId);
+          // 仅有占位/已删除项时 startInit 返回 false：仍须按现状上线。
+          if (!started) await deps.containerService.markOnline(containerId);
+        }
+
         logger.info?.(
           `[worker] registered containerId=${containerId} hostname=${hostname} ` +
-            `version=${payload?.version ?? 'unknown'} platform=${payload?.platform ?? 'unknown'}`,
+            `version=${payload?.version ?? 'unknown'} platform=${payload?.platform ?? 'unknown'} ` +
+            `initializing=${willInitialize}`,
         );
-        socket.emit('registered', { controllerId: containerId });
       } catch (err) {
         logger.error?.('[worker] register error', err);
         socket.emit('error', { code: 'REGISTER_FAILED', message: '注册失败' });
@@ -286,6 +318,15 @@ export function registerWorkerGateway(
     socket.on('heartbeat', () => {
       if (!socket.data.registered) return;
       deps.heartbeatTracker.record(containerId);
+    });
+
+    socket.on('workload:result', (payload: unknown) => {
+      if (!socket.data.registered || !deps.workloadDispatcher) return;
+      void deps.workloadDispatcher
+        .handleResult(containerId, payload as Record<string, unknown>)
+        .catch((err) => {
+          logger.error?.('[worker] workload:result handling error', err);
+        });
     });
 
     socket.on('unregister', () => {
@@ -310,6 +351,7 @@ export function registerWorkerGateway(
       void deps.containerService
         .getById(containerId)
         .then((record) => {
+          // initializing 期间掉线保持状态等待重连（不退回 connecting，由看门狗收口）。
           if (record && record.status === 'online') {
             return deps.containerService.markConnecting(containerId);
           }
@@ -320,4 +362,6 @@ export function registerWorkerGateway(
         });
     });
   });
+
+  return { emitToContainer, isConnected };
 }

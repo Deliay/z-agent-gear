@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 export const CONTAINER_STATUSES = [
   'creating',
   'connecting',
+  'initializing',
   'online',
   'exited',
   'destroying',
@@ -46,6 +47,8 @@ const cloudContainerSchema = new mongoose.Schema(
     connectedAt: { type: Date, default: null },
     exitedAt: { type: Date, default: null },
     exitReason: { type: String, default: null },
+    workloadIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+    currentWorkloadName: { type: String, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },
 );

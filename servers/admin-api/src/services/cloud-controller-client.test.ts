@@ -46,6 +46,8 @@ describe('CloudControllerClient', () => {
             connectedAt: '2026-10-14T00:01:00.000Z',
             exitedAt: null,
             exitReason: null,
+            workloadIds: ['w1', 'w2'],
+            currentWorkloadName: null,
           },
         ]),
       );
@@ -70,6 +72,8 @@ describe('CloudControllerClient', () => {
           connectedAt: '2026-10-14T00:01:00.000Z',
           exitedAt: null,
           exitReason: null,
+          workloadIds: ['w1', 'w2'],
+          currentWorkloadName: null,
         },
       ]);
     });
@@ -121,9 +125,19 @@ describe('CloudControllerClient', () => {
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe('http://cloud-controller:4003/internal/containers');
       expect(init.method).toBe('POST');
-      expect(JSON.parse(init.body as string)).toEqual({ purpose: 'idle' });
+      expect(JSON.parse(init.body as string)).toEqual({ purpose: 'idle', workloadIds: [] });
       expect(created.status).toBe('CREATING');
       expect(created.purpose).toBe('IDLE');
+    });
+
+    it('T-W7: forwards the selected workloadIds in order (defaults to [])', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ id: 'c4', name: 'n', status: 'creating', purpose: 'idle', createdAt: 'x' }, 201, 'Created'),
+      );
+      const client = new CloudControllerClient(OPTS);
+      await client.start('IDLE', ['w2', 'w1']);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toEqual({ purpose: 'idle', workloadIds: ['w2', 'w1'] });
     });
 
     it('maps ADMIN_TASK to the hyphenated internal purpose', async () => {
@@ -133,7 +147,7 @@ describe('CloudControllerClient', () => {
       const client = new CloudControllerClient(OPTS);
       await client.start('ADMIN_TASK');
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(JSON.parse(init.body as string)).toEqual({ purpose: 'admin-task' });
+      expect(JSON.parse(init.body as string)).toEqual({ purpose: 'admin-task', workloadIds: [] });
     });
 
     it('propagates the internal error message on a non-2xx response', async () => {
@@ -230,6 +244,8 @@ describe('CloudControllerClient', () => {
         connectedAt: null,
         exitedAt: new Date('2026-10-13T00:05:00.000Z'),
         exitReason: '回连超时',
+        workloadIds: ['w1', 'w2'],
+        currentWorkloadName: null,
       });
 
       expect(mapped).toEqual({
@@ -242,7 +258,38 @@ describe('CloudControllerClient', () => {
         connectedAt: null,
         exitedAt: '2026-10-13T00:05:00.000Z',
         exitReason: '回连超时',
+        workloadIds: ['w1', 'w2'],
+        currentWorkloadName: null,
       });
+    });
+
+    it('maps the initializing status and current workload name (裁决 18)', () => {
+      const mapped = mapCloudContainer({
+        id: 'c-init',
+        name: 'zag-worker-wl',
+        status: 'initializing',
+        purpose: 'idle',
+        createdAt: '2026-10-17T00:00:00.000Z',
+        workloadIds: ['w1'],
+        currentWorkloadName: 'setup',
+      });
+
+      expect(mapped.status).toBe('INITIALIZING');
+      expect(mapped.currentWorkloadName).toBe('setup');
+      expect(mapped.workloadIds).toEqual(['w1']);
+    });
+
+    it('normalizes missing workload fields to []/null (legacy containers)', () => {
+      const mapped = mapCloudContainer({
+        id: 'c-legacy',
+        name: 'zag-worker-legacy',
+        status: 'online',
+        purpose: 'idle',
+        createdAt: '2026-10-14T00:00:00.000Z',
+      });
+
+      expect(mapped.workloadIds).toEqual([]);
+      expect(mapped.currentWorkloadName).toBeNull();
     });
 
     it('falls back unknown status/purpose to safe enums instead of crashing the query (问题 23)', () => {
@@ -256,6 +303,51 @@ describe('CloudControllerClient', () => {
 
       expect(mapped.status).toBe('FAILED');
       expect(mapped.purpose).toBe('IDLE');
+    });
+  });
+
+  describe('listWorkloadLogs (T-W8)', () => {
+    it('GETs the workload-logs endpoint and returns the raw records in order', async () => {
+      const records = [
+        { id: 'l1', containerId: 'c1', workloadId: 'w1', workloadName: 'a', phase: 'init', status: 'success' },
+        { id: 'l2', containerId: 'c1', workloadId: 'w2', workloadName: 'b', phase: 'init', status: 'failed' },
+      ];
+      fetchMock.mockResolvedValue(jsonResponse(records));
+
+      const client = new CloudControllerClient(OPTS);
+      const result = await client.listWorkloadLogs('c1');
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://cloud-controller:4003/internal/containers/c1/workload-logs');
+      expect(init.method ?? 'GET').toBe('GET');
+      expect(authHeader(init)).toBe('Bearer internal-secret');
+      expect(result).toEqual(records);
+    });
+
+    it('encodes the container id in the path', async () => {
+      fetchMock.mockResolvedValue(jsonResponse([]));
+      const client = new CloudControllerClient(OPTS);
+      await client.listWorkloadLogs('c 1/2');
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://cloud-controller:4003/internal/containers/c%201%2F2/workload-logs');
+    });
+
+    it('returns [] when the body is not an array', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ unexpected: true }));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.listWorkloadLogs('c1')).resolves.toEqual([]);
+    });
+
+    it('surfaces non-2xx responses instead of degrading (e.g. 404 NOT_FOUND)', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ error: 'NOT_FOUND' }, 404, 'Not Found'));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.listWorkloadLogs('missing')).rejects.toThrow('NOT_FOUND');
+    });
+
+    it('throws CONTROL_PLANE_UNAVAILABLE when unreachable (for the Mongo degrade path)', async () => {
+      fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+      const client = new CloudControllerClient(OPTS);
+      await expect(client.listWorkloadLogs('c1')).rejects.toMatchObject({ code: CONTROL_PLANE_UNAVAILABLE });
     });
   });
 });

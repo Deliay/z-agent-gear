@@ -10,6 +10,8 @@
 # - 控制面（cloud-controller）不可达时：列表降级只读落库状态；同一次查询内
 #   `adminCloudContainerControlPlane.online` 为 false 并携带「控制面离线」提示（与列表降级事件同源硬耦合）；
 #   写操作不降级。
+# - 工作负载字段（`workloads` / `currentWorkloadName` / 启动参数 `workloadIds`）的完整语义见
+#   contracts/admin-cloud-workload.graphql 与 contracts/cloud-controller-websocket.md §2.9/§2.10。
 
 type CloudContainer {
   id: ID!
@@ -21,6 +23,10 @@ type CloudContainer {
   connectedAt: String          # 回连上线时间
   exitedAt: String             # 退出时间
   exitReason: String           # 退出/失败原因
+  # 容器启动时挂载的工作负载，按选择顺序返回；已删除的工作负载会被省略（不返回空占位）
+  workloads: [CloudWorkload!]!
+  # 初始化中（INITIALIZING）当前正在执行的工作负载脚本名称；非初始化中为 null
+  currentWorkloadName: String
 }
 
 # 控制面健康标记（降级提示的承载字段）：online=false 时前端展示「控制面离线」横幅。
@@ -32,6 +38,7 @@ type CloudContainerControlPlane {
 enum CloudContainerStatus {
   CREATING
   CONNECTING
+  INITIALIZING   # 回连后正在按序执行挂载工作负载的初始化脚本
   ONLINE
   EXITED
   DESTROYING
@@ -53,9 +60,13 @@ type Query {
 }
 
 type Mutation {
-  # 启动一个工作容器；本期 purpose 仅支持 IDLE
-  adminStartCloudContainer(purpose: CloudContainerPurpose!): CloudContainer!
+  # 启动一个工作容器；本期 purpose 仅支持 IDLE。
+  # workloadIds 可选：缺省或空数组行为与现状完全一致（不挂载工作负载，回连后直接 ONLINE）；
+  # 传入时按数组顺序挂载，服务端校验存在/数组长度（去重前）≤10/去重保序，非法返回错误
+  # （内部 API 400 INVALID_WORKLOAD）。
+  adminStartCloudContainer(purpose: CloudContainerPurpose!, workloadIds: [ID!]): CloudContainer!
   # 强制销毁容器（幂等：终态容器重复调用返回 true）。
-  # 注意：在线容器需下发 shutdown 并等待宽限期（约 10s）后才完成，调用方应使用大于宽限期的超时。
+  # 注意：在线容器需下发 shutdown 并等待宽限期（无清理脚本约 10s；有清理脚本时还需先执行 post 批次，
+  # 默认预算 90s + 10s 宽限）后才完成，调用方应使用大于宽限期的超时（默认 180s）。
   adminDestroyCloudContainer(id: ID!): Boolean!
 }

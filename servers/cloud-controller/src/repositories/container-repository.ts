@@ -22,6 +22,10 @@ export interface CloudContainerEntity {
   connectedAt: Date | null;
   exitedAt: Date | null;
   exitReason: string | null;
+  /** 启动时挂载的工作负载 ID（按选择顺序，去重）。 */
+  workloadIds: string[];
+  /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null。 */
+  currentWorkloadName: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +42,8 @@ export interface CreateContainerInput {
   connectedAt?: Date | null;
   exitedAt?: Date | null;
   exitReason?: string | null;
+  workloadIds?: string[];
+  currentWorkloadName?: string | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
   updatedAt?: Date;
@@ -80,6 +86,8 @@ interface RawDoc {
   connectedAt?: Date | null;
   exitedAt?: Date | null;
   exitReason?: string | null;
+  workloadIds?: unknown[] | null;
+  currentWorkloadName?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -98,6 +106,8 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     connectedAt: doc.connectedAt ?? null,
     exitedAt: doc.exitedAt ?? null,
     exitReason: doc.exitReason ?? null,
+    workloadIds: (doc.workloadIds ?? []).map((value) => String(value)),
+    currentWorkloadName: doc.currentWorkloadName ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -117,6 +127,8 @@ export class MongoContainerRepository implements ContainerRepository {
       connectedAt: input.connectedAt ?? null,
       exitedAt: input.exitedAt ?? null,
       exitReason: input.exitReason ?? null,
+      workloadIds: input.workloadIds ?? [],
+      currentWorkloadName: input.currentWorkloadName ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
   }
@@ -180,6 +192,8 @@ export class InMemoryContainerRepository implements ContainerRepository {
       connectedAt: input.connectedAt ?? null,
       exitedAt: input.exitedAt ?? null,
       exitReason: input.exitReason ?? null,
+      workloadIds: [...(input.workloadIds ?? [])],
+      currentWorkloadName: input.currentWorkloadName ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     };
