@@ -48,7 +48,9 @@
 | Worker → Server | `heartbeat` | 每 30s 发送一次，维持在线状态 |
 | Worker → Server | `unregister` | 容器主动注销（清理退出） |
 | Server → Worker | `unregistered` | 注销成功确认 |
-| Server → Worker | `shutdown` | cloud-controller 通知容器退出；容器清理并退出进程 |
+| Server → Worker | `workload:run` | 下发工作负载脚本批次（初始化 / 清理）；见 §2.9 |
+| Worker → Server | `workload:result` | 回报单条脚本执行结果；见 §2.10 |
+| Server → Worker | `shutdown` | cloud-controller 通知容器退出；容器清理并退出进程（有清理脚本时在 post 批次完成后发送，见 §2.8） |
 
 ### 2.2 `register`（Worker → Server）
 
@@ -132,8 +134,65 @@ cloud-controller 在强制销毁流程中通知容器退出。
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `reason` | `string` | 是 | 退出原因（如 `强制销毁`） |
+| `graceMs` | `number` | 否 | 客户端退出前可用的宽限时间（仅追加提示，缺省行为与现状一致） |
 
 **客户端行为：** 停止心跳、清理并退出进程。服务端发送后宽限 10s 等待断开，随后删除 K8s Job。
+
+**发送时序（工作负载清理脚本）：** 若容器挂载了带 `postScript` 的工作负载，cloud-controller 在销毁流程中**先**通过 `workload:run { phase: "post" }` 下发清理脚本批次并等待全部结果（或 post 预算耗尽），**再**发送 `shutdown`。无 post 脚本时，`shutdown` 的发送时机与载荷与现状完全一致（向后兼容）。
+
+---
+
+### 2.9 `workload:run`（Server → Worker）
+
+cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依次执行。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `phase` | `"init" \| "post"` | 是 | `init`：容器回连注册后下发的初始化批次；`post`：销毁流程中下发的清理批次 |
+| `items` | `WorkloadItem[]` | 是 | 按执行顺序排列的脚本条目；`init`/`post` 各自最多 10 条 |
+| `items[].logId` | `string` | 是 | 服务端预创建的执行记录 ID，回报 `workload:result` 时回填 |
+| `items[].workloadName` | `string` | 是 | 工作负载名称（仅用于日志/展示） |
+| `items[].script` | `string` | 是 | 待执行的脚本内容（可能为空字符串，表示该条为已删除工作负载的占位记录） |
+| `items[].timeoutMs` | `number` | 是 | 单条脚本超时（init 默认 `WORKLOAD_INIT_TIMEOUT_MS=300000`） |
+| `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
+
+**服务端行为：** 在 emit 之前已于 `cloudworkloadlogs` 批量创建记录（首条 `running`、其余 `pending`，并写入当时脚本快照）；`init` 批次下发同时将容器 CAS 置 `initializing` 并写 `currentWorkloadName`。
+
+**客户端行为：**
+- 按 `items` 顺序**串行**执行，每执行完一条立即 emit 一条 `workload:result`；
+- 执行方式 `bash -c <script>`（stdout/stderr 合并捕获）；
+- 单条超过 `timeoutMs` 时终止整个进程组并回报 `timeout`；
+- `post` 批次共享 `budgetMs`：剩余预算耗尽时后续条目直接回报 `timeout`（不启动进程）；
+- 单条输出按尾部 ≤ 256 KiB 截断后回报；
+- 失败的脚本（非零退出）回报 `failed` 并继续后续条目，不中断批次；
+- 收到 `post` 批次时若仍有 `init` 子进程在运行，先终止该进程组再执行 `post`；
+- 执行期间心跳照常发送；
+- **旧版 worker**：不认识 `workload:run` 时直接忽略（无回报），由服务端看门狗兜底将记录标 `timeout`。
+
+**重连重放：** worker 将未被服务端确认的结果保存在内存（上限 50 条），在 Socket 重新 `connect` 后重新 emit；服务端对已进入终态的记录按幂等忽略。
+
+### 2.10 `workload:result`（Worker → Server）
+
+容器回报单条脚本的执行结果。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `logId` | `string` | 是 | 对应 `workload:run` 中 `items[].logId` |
+| `status` | `"success" \| "failed" \| "timeout"` | 是 | 执行结果 |
+| `exitCode` | `number` | 否 | 进程退出码（`timeout` 时可为 `null`） |
+| `log` | `string` | 是 | 合并捕获的 stdout+stderr（尾部 ≤ 256 KiB） |
+| `startedAt` | `string` | 是 | 客户端记录的开始时间（ISO；仅并入日志文本，服务端时间戳为准） |
+| `finishedAt` | `string` | 是 | 客户端记录的结束时间 |
+
+**服务端行为：**
+1. 校验 `logId` 属于该 socket 绑定的容器（防串号），否则拒绝并告警；
+2. 记录已进入终态则忽略（幂等）；
+3. 更新该记录（`status`/`exitCode`/`log`/`finishedAt`），并将下一条 `pending` 置 `running`、更新容器 `currentWorkloadName`；
+4. `init` 批次全部终态后：若容器仍有活跃 socket → CAS 置 `online` 并清空 `currentWorkloadName`；否则置 `connecting`。
 
 ---
 
@@ -148,15 +207,20 @@ Worker                              cloud-controller
   │                                      │
   │──emit("register")───────────────────│  （key 字段被忽略）
   │                                      ├──校验 version major
-  │                                      ├──绑定 containerId → 状态 online + connectedAt
+  │                                      ├──无 init 脚本 → 绑定 containerId → 状态 online + connectedAt
+  │                                      ├──有 init 脚本 → 建执行记录 + 状态 initializing + currentWorkloadName
   │  ←──emit("registered")──────────────│
-  │                                      │
+  │  ←──emit("workload:run"{phase:init})│
+  │  ──emit("workload:result")──────────→│  逐条执行并回报
+  │                                      ├──推进下一条 / 全部结束 → online（或掉线 → connecting）
   │  ──emit("heartbeat")──────────────→ │  每 30s（连续 3 次丢失判离线 → connecting）
   │                                      │
   │  ──emit("unregister")─────────────→ │  容器主动清理退出
   │  ←──emit("unregistered")───────────│
   │                                      │
-  │  ←──emit("shutdown")───────────────│  强制销毁：容器退出 → 服务端删除 Job
+  │  ←──emit("workload:run"{phase:post})│  强制销毁（有 post 脚本）：先下发清理批次
+  │  ──emit("workload:result")──────────→│  逐条执行并回报（共享 budgetMs）
+  │  ←──emit("shutdown")───────────────│  post 完成/预算耗尽后：容器退出 → 服务端删除 Job
 ```
 
 ### 3.1 握手鉴权
@@ -176,6 +240,7 @@ Worker                              cloud-controller
 - 容器每 30s 发送 `heartbeat`。
 - 服务端计时：连续 3 次（>60s + 缓冲）未收到心跳 → 判定离线，状态退回 `connecting`。
 - 离线不自动删除 Job；管理员可通过强制销毁清理（见 PRD 3.5）。
+- **`initializing` 例外**：初始化脚本执行期间不受回连超时巡检影响（避免长脚本被误判失败），由工作负载看门狗按「单条超时 + 容差」收口；状态停留在 `initializing` 时也不因心跳缺口直接退回 `connecting`（结果由看门狗推进）。
 
 ### 3.3 重连
 
@@ -219,13 +284,16 @@ GET /internal/containers
 POST /internal/containers
 Content-Type: application/json
 
-{ "purpose": "idle" }
+{ "purpose": "idle", "workloadIds": ["<objectId>", "..."] }
 ```
+
+`workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：数组、≤ 10 个、去重且保持顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 
 **响应 201：** 新建的 `CloudContainer`。
 
 **错误：**
 - `400` —— `purpose` 非法（本期仅接受 `idle`；其余用途返回明确错误文案「该任务类型暂未开放」）。
+- `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
 #### A.2.3 强制销毁
@@ -248,6 +316,17 @@ DELETE /internal/containers/:id
 - `404` —— 容器不存在。
 - `200`（幂等）—— 对终态容器重复销毁仍返回成功；`deletedJob` 语义上反映本次是否真实删除了残留 Job。
 
+#### A.2.4 工作负载执行日志
+
+```
+GET /internal/containers/:id/workload-logs
+```
+
+**响应 200：** `CloudWorkloadLog[]`（JSON 字段见 A.6，按 `createdAt` 升序 = 执行顺序）。
+
+**错误：**
+- `404` `NOT_FOUND` —— 容器不存在（容器存在但无记录时返回空数组 `[]`）。
+
 ### A.3 CloudContainer JSON 结构
 
 | 字段 | 类型 | 说明 |
@@ -264,16 +343,19 @@ DELETE /internal/containers/:id
 | `connectedAt` | `string \| null` | 回连上线时间 |
 | `exitedAt` | `string \| null` | 退出时间 |
 | `exitReason` | `string \| null` | 退出/失败原因 |
+| `workloadIds` | `string[]` | 启动时挂载的工作负载 ID，按选择顺序（缺省为 `[]`） |
+| `currentWorkloadName` | `string \| null` | 初始化中当前正在执行的工作负载脚本名称；非初始化中为 `null` |
 
 ### A.4 状态枚举
 
-`creating` → `connecting` → `online` → `destroying` → `exited`，失败终态 `failed`。
+`creating` → `connecting` →（有初始化脚本则 `initializing`）→ `online` → `destroying` → `exited`，失败终态 `failed`。
 
 | 值 | 说明 |
 |----|------|
 | `creating` | 已落库，Job 创建中 |
 | `connecting` | Job 已创建，等待容器回连 |
-| `online` | 容器已回连注册 |
+| `initializing` | 容器已回连，正在按序执行挂载工作负载的初始化脚本（`currentWorkloadName` 为当前脚本名） |
+| `online` | 容器已回连注册（初始化已完成或未挂载初始化脚本） |
 | `destroying` | 销毁流程进行中（**瞬时态**，必然迁移到 `exited`） |
 | `exited` | 容器已退出、Job 已回收 |
 | `failed` | 启动失败或异常退出 |
@@ -292,3 +374,22 @@ DELETE /internal/containers/:id
 | `admin-task` | 管理后台任务（构建等，预留） |
 | `workflow` | 用户工作流（预留） |
 | `session` | 独立会话（预留） |
+
+### A.6 CloudWorkloadLog JSON 结构
+
+`GET /internal/containers/:id/workload-logs` 返回的每条记录结构（与 `contracts/admin-cloud-workload.graphql` 的 `CloudWorkloadLog` 对齐；枚举值小写）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 记录 ID |
+| `containerId` | `string` | 所属容器 ID |
+| `workloadId` | `string` | 工作负载 ID |
+| `workloadName` | `string` | 名称快照（工作负载被编辑/删除后仍可读） |
+| `phase` | `string` | `init` \| `post` |
+| `status` | `string` | `pending` \| `running` \| `success` \| `failed` \| `timeout` |
+| `script` | `string` | 当时实际执行的脚本内容快照（留档） |
+| `exitCode` | `number \| null` | 进程退出码 |
+| `log` | `string` | 合并捕获的输出（尾部 ≤ 256 KiB） |
+| `startedAt` | `string \| null` | 开始时间（ISO） |
+| `finishedAt` | `string \| null` | 结束时间（ISO） |
+| `createdAt` | `string` | 记录创建时间（ISO，用于排序） |
