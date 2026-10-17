@@ -7,12 +7,14 @@ type: Permanent
 
 **功能名称**: 工作负载参数化、隐式依赖与预制工作负载
 **关联 PRD**: docs/product/draft/20261018-workload-phase1.md
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
 **feat-branch**: `feat/workload-phase1`
 
 > v1.1 变更（返工）：Aspire 预制工作负载改为通过官方安装脚本 `curl -sSL https://aspire.dev/install.sh | bash` 安装 **Aspire CLI**，并强制执行 `aspire --version` 校验；移除 `dotnet workload install aspire`。
+>
+> v1.2 变更（返工）：工作负载依赖由「单个」调整为「多个」；`dependsOnWorkloadId` 改为 `dependsOnWorkloadIds: [ID!]!`；Aspire 预制项依赖 Docker 与 .NET（顺序 Docker → .NET → Aspire）。
 
 ## 1. 概述
 
@@ -23,13 +25,13 @@ type: Permanent
 本期在既有链路上增加：
 
 1. 工作负载参数表单（下拉单选、下拉多选、文本、布尔），参数在启动容器时填写并注入脚本执行环境。
-2. 工作负载声明一个隐式依赖；选择依赖方时后端自动展开依赖、去重、排序，显式选择优先使用用户参数。
+2. 工作负载声明一个或多个隐式依赖；选择依赖方时后端自动展开全部依赖、去重、排序，显式选择优先使用用户参数。
 3. Docker、Node.js、.NET、Aspire 四个预制工作负载，通过一次性 migration 写入，之后不再重复初始化。
 4. dockerd 启动从 entrypoint 迁移到 Docker 预制工作负载。
 
 ### 1.2 目标
 
-- admin-api 扩展工作负载模型/契约：`paramSchema`、`dependsOnWorkloadId`、`isPreset`；服务层强制参数与依赖校验。
+- admin-api 扩展工作负载模型/契约：`paramSchema`、`dependsOnWorkloadIds`、`isPreset`；服务层强制参数与依赖校验。
 - admin-web 支持参数表单设计器、依赖选择器；启动对话框按工作负载填写参数、提示隐式依赖、预览初始化顺序。
 - admin-api 在启动容器时完成「显式选择 + 隐式依赖」的展开、去重、拓扑排序与参数归一，将最终执行计划下发给 cloud-controller。
 - cloud-controller 持久化执行计划，下发 `workload:run` 时携带每个工作负载的参数；worker 注入 `WORKLOAD_PARAM_*` 环境变量；执行记录保存参数快照。
@@ -42,7 +44,7 @@ type: Permanent
 
 - 工作负载参数模型、GraphQL CRUD 扩展、参数校验与默认值归一。
 - 参数值经内部 API → 容器执行计划 → Socket.IO → worker 环境变量的全链路透传。
-- 单依赖的隐式依赖配置、前端提示、后端展开（依赖优先、去重、只执行一次、显式参数优先）。
+- 多依赖的隐式依赖配置、前端提示、后端展开（依赖优先、去重、只执行一次、显式参数优先）。
 - 预制工作负载 migration 与 Docker/Node.js/.NET/Aspire 脚本。
 - entrypoint 移除 dockerd 启动，Docker 工作负载接管。
 - 工作负载列表/编辑/启动/日志相关 UI。
@@ -50,7 +52,7 @@ type: Permanent
 
 **不做**：
 
-- 多依赖、依赖参数的条件覆盖、依赖版本范围。
+- 多依赖的条件覆盖、依赖版本范围（一期支持多个直接依赖，但依赖之间不能带条件）。
 - 参数间联动、条件显示、敏感参数/密钥管理、参数在线修改。
 - 工作流/会话等非 `idle` 任务类型挂载工作负载（沿用现有约束）。
 - 预制工作负载的自动升级/回滚（预制项一旦写入即归管理员所有）。
@@ -162,7 +164,7 @@ type CloudWorkload {
   initScript: String
   postScript: String
   paramSchema: [CloudWorkloadParamField!]!
-  dependsOnWorkloadId: ID      # 最多一个依赖；null 表示无依赖
+  dependsOnWorkloadIds: [ID!]!  # 依赖的工作负载，按配置顺序初始化；一期最多 5 个
   isPreset: Boolean!           # 是否为预制工作负载（仅展示用）
   createdAt: String!
   updatedAt: String!
@@ -173,7 +175,7 @@ input CreateCloudWorkloadInput {
   initScript: String
   postScript: String
   paramSchema: [CloudWorkloadParamFieldInput!]
-  dependsOnWorkloadId: ID
+  dependsOnWorkloadIds: [ID!]
 }
 
 input UpdateCloudWorkloadInput {
@@ -181,7 +183,7 @@ input UpdateCloudWorkloadInput {
   initScript: String
   postScript: String
   paramSchema: [CloudWorkloadParamFieldInput!]
-  dependsOnWorkloadId: ID
+  dependsOnWorkloadIds: [ID!]
 }
 ```
 
@@ -208,6 +210,7 @@ type Mutation {
 - `workloads` 中重复 `workloadId` 返回 `duplicate workload selection`（旧 `workloadIds` 保持去重保序语义）。
 - 展开前或展开后超过 10 个返回 `expanded workloads exceed 10`。
 - 依赖不存在返回 `dependency workload not found`；参数非法返回 `invalid value for parameter <key>`；未知参数返回 `unknown parameter: <key>`。
+- 保存工作负载时依赖数量 >5 返回 `too many dependencies`；自依赖返回 `workload cannot depend on itself`；依赖环返回 `dependency cycle detected`。
 
 #### 3.1.4 执行记录参数快照
 
@@ -246,7 +249,7 @@ type CloudWorkloadLog {
 - `workloadPlan` 为**已展开、已排序、已去重**的最终计划，数组顺序即执行顺序。
 - `workloadIds` 同时下发，保持旧版 cloud-controller 可用（滚动升级兼容）；新版 cloud-controller 优先使用 `workloadPlan`。
 - 新 cloud-controller 校验：数组、≤10、`workloadId` 去重、全部存在、`params` 为对象、`implicit` 为布尔；非法返回 400 `INVALID_WORKLOAD`。
-- 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以默认参数 + 依赖展开兜底（读取 `dependsOn` 与 `paramSchema`），行为与新 admin-api 一致。
+- 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以默认参数 + 依赖展开兜底（读取 `dependsOnWorkloadIds` 与 `paramSchema`），行为与新 admin-api 一致。
 
 `GET /internal/containers/:id/workload-logs` 返回记录增加 `params`。
 
@@ -283,7 +286,7 @@ worker 行为：
 | `paramSchema[].type` | enum(`select`/`multi_select`/`text`/`boolean`) | 字段类型 |
 | `paramSchema[].options` | [String], default [] | 仅下拉类型使用；1~50 项、唯一、单项 1~100 字符 |
 | `paramSchema[].defaultValue` | Mixed, required | 必填；类型由 `type` 决定 |
-| `dependsOn` | ObjectId, default null, index | 最多一个依赖；禁止自依赖/环 |
+| `dependsOnWorkloadIds` | [ObjectId], default [], index | 依赖的工作负载，按配置顺序初始化；最多 5 个；禁止自依赖/环 |
 | `presetKey` | String, default null, unique sparse | 预制项稳定标识：`docker`/`nodejs`/`dotnet`/`aspire` |
 | `isPreset` | Boolean, default false | 展示用 |
 | timestamps | createdAt / updatedAt | 沿用 |
@@ -405,19 +408,19 @@ flowchart LR
 - **描述**: 新增纯函数 `resolveWorkloadPlan(explicitSelections)`：
   1. 校验显式选择非空、ID 存在、单次显式选择不重复；读取全部工作负载（一次批量查询）。
   2. 建立 `explicitById`（含用户参数）。按显式选择顺序 DFS：
-     - 先访问 `dependsOn`；访问完成后把当前工作负载加入结果（后序，保证依赖在前）。
-     - 访问到已访问节点直接跳过（去重，天然实现「只初始化一次」）。
+     - 依次访问 `dependsOnWorkloadIds` 中的每个依赖（按配置顺序）；全部访问完成后把当前工作负载加入结果（后序，保证依赖在前）。
+     - 访问到已访问节点直接跳过（去重，天然实现「只初始化一次」，也覆盖多条依赖路径指向同一节点）。
      - DFS 栈出现重复即视为环（保存时已阻止，运行时兜底）。
   3. 参数归一：显式选择使用用户参数，缺省字段填默认值；隐式依赖使用其默认参数；未知参数/类型不符直接报错。
   4. 结果 ≤10；返回 `{workloadId, params, implicit}` 有序数组。
-- **技术细节**: 纯函数不依赖 Mongoose，输入为定义快照，便于单测覆盖「显式依赖在前/在后」「显式+隐式重复」「依赖环」「超上限」。显式依赖参数优先于隐式默认值；位置由拓扑序决定，而非用户勾选顺序。
+- **技术细节**: 纯函数不依赖 Mongoose，输入为定义快照，便于单测覆盖「显式依赖在前/在后」「多依赖顺序」「显式+隐式重复」「多条路径去重」「依赖环」「超上限」。显式依赖参数优先于隐式默认值；位置由拓扑序决定，而非用户勾选顺序。例如 Aspire 的依赖配置为 `[Docker, .NET]`，仅选 Aspire 时输出顺序为 Docker → .NET → Aspire。
 - **风险点**: 保存时校验过依赖环不代表运行时数据一定无环（并发编辑/历史数据），DFS 需再次兜底。
 
 #### 实现点 3: 依赖配置与环检测（admin-api）
 
-- **描述**: `dependsOnWorkloadId` 只允许一个；保存时校验依赖存在、非自身；从依赖向上遍历 `dependsOn`，若回到当前工作负载则拒绝，并返回环路径。
-- **技术细节**: 工作负载更新时以「更新后的依赖」为准；删除工作负载不级联删除依赖方，运行时启动校验依赖存在并返回明确错误。
-- **风险点**: 依赖链最多 10 层由展开上限兜底；历史数据可能已存在环，启动时 DFS 报错。
+- **描述**: `dependsOnWorkloadIds` 最多 5 个；保存时校验依赖存在、非自身、数组内去重；从每个依赖向上遍历 `dependsOnWorkloadIds`，若回到当前工作负载则拒绝，并返回环路径。
+- **技术细节**: 工作负载更新时以「更新后的依赖列表」为准；删除工作负载不级联删除依赖方，运行时启动校验依赖存在并返回明确错误。
+- **风险点**: 依赖图可能较深；展开后总上限 10 由计划展开兜底。历史数据可能已存在环，启动时 DFS 报错。
 
 #### 实现点 4: 执行计划持久化与下发（cloud-controller）
 
@@ -443,8 +446,8 @@ flowchart LR
   1. Docker：`presetKey=docker`，无参数、无依赖，初始化脚本启动 dockerd。
   2. Node.js：`presetKey=nodejs`，参数 `version`（TEXT，默认 `22`）、`package_manager`（MULTI_SELECT，options `npm/pnpm/bun/yarn`，默认 `["npm"]`）。
   3. .NET：`presetKey=dotnet`，无参数、无依赖，安装 LTS。
-  4. Aspire：`presetKey=aspire`，无参数，`dependsOn` 指向 .NET。
-- **技术细节**: 每项先按 `presetKey` 查，再按精确 `name` 查；已存在则跳过并打日志，不覆盖管理员数据。Aspire 的依赖目标取「本次插入的 .NET」或「同名已存在 .NET」。迁移完成写 `admin_migrations`；后续新增预制项使用新的 `002-...` migration 并注册到 `runMigrations` 数组。
+  4. Aspire：`presetKey=aspire`，无参数，`dependsOnWorkloadIds=[Docker, .NET]`（按 Docker → .NET 顺序初始化）。
+- **技术细节**: 每项先按 `presetKey` 查，再按精确 `name` 查；已存在则跳过并打日志，不覆盖管理员数据。Aspire 的依赖目标分别取「本次插入的同名预制项」或「同名已存在项」；任一依赖缺失时记录告警并保留已有依赖关系。迁移完成写 `admin_migrations`；后续新增预制项使用新的 `002-...` migration 并注册到 `runMigrations` 数组。
 - **风险点**: 迁移锁未释放会导致本次启动跳过；沿用 agent-api 的锁结构与日志，失败不阻断服务启动，下次启动重试。
 
 #### 实现点 7: Docker 预制脚本与 entrypoint 改造
@@ -459,7 +462,7 @@ flowchart LR
 
 #### 实现点 8: Node.js/.NET/Aspire 预制脚本
 
-- **描述**: 脚本见 §5.3。Node.js 使用 nvm 安装/切换版本，更新 `$NVM_DIR/current` 软链，配置 npm registry 后安装所选包管理器；.NET 使用官方 `dotnet-install.sh` 安装 LTS 到 `/usr/local/dotnet` 并写入 PATH；Aspire 在 .NET 就绪后通过官方安装脚本安装 CLI，并执行 `aspire --version` 校验。
+- **描述**: 脚本见 §5.3。Node.js 使用 nvm 安装/切换版本，更新 `$NVM_DIR/current` 软链，配置 npm registry 后安装所选包管理器；.NET 使用官方 `dotnet-install.sh` 安装 LTS 到 `/usr/local/dotnet` 并写入 PATH；Aspire 依赖 Docker 与 .NET，在前置依赖完成后通过官方安装脚本安装 CLI，并执行 `aspire --version` 校验。
 - **技术细节**: `NPM_REGISTRY`、`DOTNET_INSTALL_URL`、`DOTNET_INSTALL_DIR`、`ASPIRE_INSTALL_URL` 支持环境变量覆盖，默认指向现有内网 npm 代理与官方安装脚本；脚本均幂等（已安装则跳过）。
 - **验证结论（2026-10-18）**: 在 .NET SDK `10.0.112` 环境实测：`dotnet workload list` 未安装 aspire workload，`dotnet workload search aspire` 无结果，而 `aspire --version` 返回 `13.5.4+9c1b401...`；CLI 位于 `~/.aspire/bin/aspire`，由 aspire.dev 安装脚本安装。由此确认 `dotnet workload install aspire` **不会**提供 `aspire` CLI，不能作为本预制项的安装方式。
 
@@ -603,6 +606,11 @@ command -v dotnet >/dev/null 2>&1 || {
   exit 1
 }
 
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "Docker 未就绪，Aspire 无法初始化" >&2
+  exit 1
+fi
+
 # 已安装过（PATH 或安装脚本默认目录）则跳过下载，直接校验版本
 if ! command -v aspire >/dev/null 2>&1 && [ -x "$HOME/.aspire/bin/aspire" ]; then
   ln -sfn "$HOME/.aspire/bin/aspire" /usr/local/bin/aspire
@@ -641,11 +649,12 @@ aspire --version
 | 参数传递方式 | 字符串替换脚本 | **环境变量注入** | 环境变量 | 不修改脚本、不引入注入风险；多选用 JSON |
 | 参数默认值 | 可选 | **必填** | 必填 | PRD 要求「有表单必须有默认配置」，保证不填也能启动 |
 | 依赖展开位置 | cloud-controller | **admin-api（cloud-controller 兜底）** | admin-api | 定义与校验都在 admin-api；cloud-controller 只执行计划 |
-| 依赖数量 | 多依赖 | **单依赖** | 单依赖 | 与本期需求一致；多依赖留待后续 |
+| 依赖数量 | **多依赖（≤5）** | 单依赖 | 多依赖 | Aspire 需要 Docker 与 .NET 两个依赖；单依赖无法表达 |
+| 依赖顺序 | 无序集合 | **按配置顺序** | 按配置顺序 | 初始化顺序确定、可解释（Aspire：Docker → .NET → Aspire） |
 | 显式/隐式重复 | 报错 | **去重，只执行一次** | 去重 | 需求明确「依赖只会初始化一次」；显式参数优先 |
 | 预制初始化 | 每次启动 upsert | **一次性 migration** | migration | 需求明确「初始化过不再初始化」，且不覆盖管理员修改 |
 | Docker 启动 | 保留 entrypoint | **迁移到 Docker 工作负载** | 迁移 | 需求明确；让 Docker 成为可选能力 |
-| Aspire 初始化 | 仅依赖 .NET，不装 | **依赖 .NET + 安装 Aspire CLI 并校验版本** | 安装 CLI | `dotnet workload install aspire` 不提供 `aspire` CLI；必须用 aspire.dev 安装脚本 |
+| Aspire 初始化 | 仅依赖 .NET、不安装 CLI | **依赖 Docker + .NET + 安装 Aspire CLI 并校验版本** | CLI | Aspire 需要 Docker 与 .NET 两个依赖；`dotnet workload install aspire` 不提供 `aspire` CLI，必须用 aspire.dev 安装脚本 |
 | 旧请求兼容 | 直接破坏 | **保留 workloadIds 并双写** | 兼容 | 滚动升级期间新旧 admin-api/cloud-controller 可共存 |
 
 ### 6.2 依赖与约束
@@ -666,7 +675,7 @@ aspire --version
 
 ```text
 contracts/
-├── admin-cloud-workload.graphql                  # 扩展：JSON scalar、paramSchema、dependsOn、params
+├── admin-cloud-workload.graphql                  # 扩展：JSON scalar、paramSchema、dependsOnWorkloadIds、params
 ├── admin-cloud-container.graphql                 # 扩展：workloads 启动入参说明
 └── cloud-controller-websocket.md                 # 扩展：workload:run items[].params 与环境变量约定
 
@@ -679,7 +688,7 @@ servers/admin-api/
     │       ├── cloud-container.ts                # 扩展启动入参/计划下发
     │       └── index.ts                          # 注册 JSON scalar
     ├── models/
-    │   ├── cloud-workload.ts                     # paramSchema/dependsOn/presetKey/isPreset
+    │   ├── cloud-workload.ts                     # paramSchema/dependsOnWorkloadIds/presetKey/isPreset
     │   └── cloud-container.ts                    # workloadPlan 只读对齐
     ├── services/
     │   ├── cloud-workload.ts                     # 参数/依赖校验
@@ -695,7 +704,7 @@ servers/cloud-controller/
 └── src/
     ├── models/
     │   ├── cloud-container.ts                    # workloadPlan 子文档
-    │   ├── cloud-workload.ts                     # 只读 paramSchema/dependsOn
+    │   ├── cloud-workload.ts                     # 只读 paramSchema/dependsOnWorkloadIds
     │   └── cloud-workload-log.ts                 # params
     ├── repositories/
     │   ├── container-repository.ts               # plan 映射
@@ -796,7 +805,7 @@ deploy/images/worker/
 - [ ] Docker/Node.js/.NET/Aspire 四个预制项一次性写入，修改/删除后不被覆盖
 - [ ] Docker 工作负载可启动 dockerd；未选择时容器不启动 dockerd
 - [ ] Node.js 版本/包管理器/内部 registry 生效
-- [ ] .NET LTS 可用；Aspire 在 .NET 之后初始化，`aspire --version` 输出版本号
+- [ ] .NET LTS 可用；Aspire 在 Docker 与 .NET 之后初始化，`aspire --version` 输出版本号
 - [ ] 旧版 `workloadIds` 请求与历史容器行为兼容
 
 ## 11. 相关文档
