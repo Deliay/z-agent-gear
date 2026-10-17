@@ -1,5 +1,5 @@
 ---
-description: 云控制器工作负载功能技术提案：工作负载 CRUD、容器挂载工作负载、脚本注入与执行、执行日志存储与查看
+description: 云控制器工作负载功能技术提案：工作负载 CRUD、控制器下发脚本、容器初始化中状态、执行日志与脚本留档
 type: Permanent
 ---
 
@@ -7,31 +7,35 @@ type: Permanent
 
 **功能名称**: 云控制器工作负载管理
 **关联 PRD**: docs/product/draft/20261017-cloud-controller-workload.md
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-17
 **作者**: ZeroAsh
 **feat-branch**: `feat/cloud-controller-workload`
+
+> v1.1 变更（评审意见修订）：
+> 1. 工作负载脚本改为**由 cloud-controller 通过 Socket.IO 下发**（不再使用环境变量注入）；每次执行的脚本内容随执行记录**写入数据库留档**。
+> 2. 工作容器新增 **INITIALIZING（初始化中）** 状态，容器记录携带当前正在执行的工作负载脚本名称供后台展示。
 
 ## 1. 概述
 
 ### 1.1 背景
 
-云Agent二期已上线 cloud-controller 与云端工作容器管理链路（Job 拉起、token 回连、强制销毁）。本期在其上增加「工作负载」能力：管理员在后台维护工作负载（名称 + 初始化脚本 + 清理脚本），启动容器时多选挂载，容器拉起/关闭时自动执行对应脚本，执行日志持久化并可在后台查看。
+云Agent二期已上线 cloud-controller 与云端工作容器管理链路（Job 拉起、token 回连、强制销毁）。本期在其上增加「工作负载」能力：管理员在后台维护工作负载（名称 + 初始化脚本 + 清理脚本），启动容器时多选挂载；容器回连后由 cloud-controller 经既有 Socket.IO 通道下发初始化脚本，容器执行并逐条回报结果；销毁时下发清理脚本，执行完毕后容器退出。每次执行的脚本内容与输出日志落库留档，后台可按容器查看；容器执行初始化脚本期间呈现「初始化中」状态并展示当前执行的脚本。
 
 ### 1.2 目标
 
 - admin-api 提供工作负载 CRUD GraphQL 接口，admin-web 新增工作负载管理页面。
-- 启动容器链路支持携带 `workloadIds`，cloud-controller 将脚本注入工作容器。
-- 工作容器 entrypoint 执行初始化/清理脚本并回传执行日志。
-- cloud-controller 存储工作负载执行日志，admin-web 可按容器查看。
+- 启动容器链路支持携带 `workloadIds`；脚本由 cloud-controller 在容器回连后通过 Socket.IO 下发，不经 K8s env 注入。
+- 容器状态机新增 `initializing`，容器文档维护 `currentWorkloadName` 供列表实时展示。
+- 执行记录（含脚本内容快照）持久化于 `cloudworkloadlogs`，admin-web 可按容器查看。
 
 ### 1.3 范围
 
 **做**：
 - 工作负载 CRUD（admin-api + admin-web）。
-- 启动容器多选工作负载，初始化脚本注入与执行。
-- 销毁时清理脚本执行（带超时保护）。
-- 工作负载执行日志的存储与后台查看。
+- 启动容器多选工作负载；cloud-controller 经 Socket.IO 下发 init/post 脚本。
+- 容器 `initializing` 状态与当前执行脚本展示。
+- 工作负载执行日志（含脚本内容留档）的存储与后台查看。
 
 **不做**：
 - 工作流/会话等任务类型挂载工作负载（后续迭代）。
@@ -49,9 +53,8 @@ graph TD
     AA -->|内部 HTTP + Bearer| CC[cloud-controller]
     CC -->|K8s API Job CRUD| K8S[(K8s API)]
     CC -->|读写| M
-    K8S -->|拉起| W[工作容器 Pod]
-    W -->|Socket.IO /worker 回连| CC
-    W -->|HTTP 回传工作负载日志<br/>携带容器 token| CC
+    K8S -->|拉起| W[工作容器 Pod<br/>agent-gear]
+    W <-->|Socket.IO /worker<br/>register / workload:run / workload:result / shutdown| CC
 ```
 
 ### 2.2 技术栈
@@ -59,9 +62,9 @@ graph TD
 | 层级 | 技术选型 | 说明 |
 |------|---------|------|
 | 前端 | React + TypeScript + Vite + Apollo Client | admin-web，复用 base-image CRUD 页面模式 |
-| 后端 | Node.js + Express + GraphQL + Mongoose | admin-api（CRUD/查询）、cloud-controller（注入/日志接收） |
+| 后端 | Node.js + Express + GraphQL + Mongoose | admin-api（CRUD/查询）、cloud-controller（下发/状态机/日志落库） |
+| Worker | Node.js（agent-gear CLI）| packages/agent-controller 增加工作负载脚本执行器 |
 | 数据库 | MongoDB | admin-api 与 cloud-controller 共享同一实例（沿用既有降级直读模式） |
-| 容器 | K8s Job + 工作容器镜像 entrypoint.sh | 脚本注入执行 |
 
 ### 2.3 模块划分
 
@@ -69,20 +72,19 @@ graph TD
 graph LR
     A[admin-api<br/>cloud-workload CRUD] --> B[(MongoDB cloudworkloads)]
     C[admin-api<br/>cloud-container 扩展] --> D[cloud-controller<br/>internal API]
-    D --> E[k8s-job-manager<br/>脚本注入]
-    D --> F[container-service<br/>宽限期/日志]
-    G[worker entrypoint] -->|执行脚本 + 回传日志| D
-    D --> H[(MongoDB cloudworkloadlogs)]
+    D --> E[container-service<br/>状态机 + 宽限期]
+    D --> F[workload-dispatcher<br/>脚本下发/结果落库]
+    F --> G[(MongoDB cloudworkloadlogs)]
+    F <-->|Socket.IO| H[agent-gear<br/>workload-executor]
 ```
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
 | admin-api cloud-workload | 工作负载 CRUD、容器日志查询 | Mongoose 直读写，复用 base-image resolver 模式 |
-| cloud-controller container-service | 启动携带工作负载、销毁宽限期调整 | 读取 cloudworkloads，按 post 脚本调整 shutdownGraceMs |
-| cloud-controller k8s-job-manager | Job manifest 注入工作负载脚本 | env 注入 base64 JSON |
-| cloud-controller workload-log 接口 | 接收容器回传的执行日志 | 容器 token 鉴权，落库 cloudworkloadlogs |
-| worker entrypoint.sh | 执行 init/post 脚本并回传日志 | 超时控制、逐条回传 |
-| admin-web | 工作负载页、启动对话框多选、日志查看 | 复用 base-image 页面组件模式 |
+| cloud-controller workload-dispatcher | 脚本下发、结果接收、日志落库、当前脚本跟踪 | Socket.IO 事件编排，按序推进，看门狗超时 |
+| cloud-controller container-service | 状态机扩展（initializing）、销毁宽限期调整 | CAS 状态流转、shutdown 携带 post 脚本 |
+| agent-gear workload-executor | 接收脚本、bash 执行、输出捕获、超时控制、结果回报 | child_process spawn，逐条回报 |
+| admin-web | 工作负载页、启动对话框多选、初始化进度展示、日志查看 | 复用 base-image 页面组件模式 |
 
 ## 3. API 设计
 
@@ -127,11 +129,11 @@ extend type Mutation {
 }
 ```
 
-#### 工作负载执行日志
+#### 工作负载执行日志（含脚本留档）
 
 ```graphql
 enum CloudWorkloadLogPhase { INIT, POST }
-enum CloudWorkloadLogStatus { RUNNING, SUCCESS, FAILED, TIMEOUT }
+enum CloudWorkloadLogStatus { PENDING, RUNNING, SUCCESS, FAILED, TIMEOUT }
 
 type CloudWorkloadLog {
   id: ID!
@@ -140,22 +142,34 @@ type CloudWorkloadLog {
   workloadName: String!
   phase: CloudWorkloadLogPhase!
   status: CloudWorkloadLogStatus!
+  script: String!        # 当时实际执行的脚本内容快照（留档）
   exitCode: Int
   log: String!
-  startedAt: String!
+  startedAt: String
   finishedAt: String
 }
 ```
 
-`CloudContainer` 增加字段：
+#### 容器状态与字段扩展
 
 ```graphql
+enum CloudContainerStatus {
+  CREATING
+  CONNECTING
+  INITIALIZING   # 新增：回连后正在执行初始化脚本
+  ONLINE
+  EXITED
+  DESTROYING
+  FAILED
+}
+
 extend type CloudContainer {
   workloads: [CloudWorkload!]!
+  currentWorkloadName: String   # 初始化中：当前正在执行的工作负载脚本名称
 }
 ```
 
-- 校验规则：`name` 必填且去重；`initScript` 与 `postScript` 至少其一非空；单脚本长度上限 16 KiB。
+- 校验规则：`name` 必填且去重；`initScript` 与 `postScript` 至少其一非空；单脚本长度上限 16 KiB；单次启动挂载数量上限 10 个。
 - 所有接口仅管理员可访问（沿用 `assertAdmin`）。
 - `adminCloudContainerWorkloadLogs` 优先经 cloud-controller 内部 API 查询，控制面不可达时降级直读 Mongo（与容器列表降级模式一致）。
 
@@ -164,13 +178,25 @@ extend type CloudContainer {
 | 接口 | 说明 |
 |------|------|
 | `POST /internal/containers` | 请求体增加可选 `workloadIds: string[]`；校验存在性，不存在返回 400 |
-| `GET /internal/containers/:id/workload-logs` | 返回该容器全部工作负载执行日志（按 startedAt 升序） |
-| `POST /internal/containers/:id/workload-logs` | **容器回传通道**：鉴权改用容器一次性 token（`TokenService.verify`），请求体 `{ workloadId, phase, status, exitCode?, log, startedAt, finishedAt? }` |
+| `GET /internal/containers/:id/workload-logs` | 返回该容器全部工作负载执行日志（按创建顺序升序） |
 
 ### 3.2 内部接口
 
-- admin-api → cloud-controller：`CloudControllerClient` 增加 `start(purpose, workloadIds)` 与 `listWorkloadLogs(containerId)`。
-- admin-api `CloudContainer.workloads` 字段 resolver：按容器 `workloadIds` 直读 Mongo 的 cloudworkloads 集合。
+#### Worker ↔ cloud-controller Socket.IO 协议扩展（`/worker` namespace）
+
+在既有 `register` / `heartbeat` / `shutdown` / `unregister` 之上新增以下事件（协议文档同步更新到 `contracts/agent-controller-websocket.md` 或新增 worker 协议章节）：
+
+| 方向 | 事件 | 载荷 | 说明 |
+|------|------|------|------|
+| server → worker | `workload:run` | `{ phase: "init"\|"post", items: [{ logId, workloadName, script, timeoutMs }] }` | 下发脚本批次；init 在 register 接受后下发，post 随销毁下发 |
+| worker → server | `workload:result` | `{ logId, status: "success"\|"failed"\|"timeout", exitCode?, log, startedAt, finishedAt }` | 每条脚本执行完毕即回报；worker 按 items 顺序执行 |
+
+- `shutdown` 事件载荷扩展为 `{ graceMs, items?: [...] }`，无清理脚本时载荷与现状兼容。
+- 未升级的旧版 worker 不认识 `workload:run`：server 端看门狗在超时后将对应记录标记 `TIMEOUT` 并按失败继续推进，容器仍可上线（见 5.2 实现点 4）。
+
+#### admin-api → cloud-controller
+
+`CloudControllerClient` 增加 `start(purpose, workloadIds)` 与 `listWorkloadLogs(containerId)`；`CloudContainer.workloads` 字段 resolver 按 `workloadIds` 直读 Mongo 的 cloudworkloads 集合。
 
 ## 4. 数据模型
 
@@ -189,7 +215,9 @@ extend type CloudContainer {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
+| status | enum 增加 `initializing` | 回连后正在执行初始化脚本 |
 | workloadIds | [ObjectId], default [] | 启动时挂载的工作负载，按选择顺序保存 |
+| currentWorkloadName | String, default null | 当前正在执行的工作负载脚本名称；转 online/终态时清空 |
 
 #### 集合: cloudworkloadlogs（cloud-controller 写入，admin-api 只读）
 
@@ -199,11 +227,14 @@ extend type CloudContainer {
 | workloadId | ObjectId, required | 工作负载 |
 | workloadName | String, required | 冗余名称，删除工作负载后日志仍可读 |
 | phase | enum(init/post), required | 执行阶段 |
-| status | enum(running/success/failed/timeout), required | 执行状态 |
+| status | enum(pending/running/success/failed/timeout), required | 执行状态 |
+| script | String, required | **当时实际执行的脚本内容快照（留档）** |
 | exitCode | Number, default null | 脚本退出码 |
 | log | String, default '' | 输出日志，超长截断保留尾部（上限 256 KiB） |
-| startedAt | Date, required | 开始时间 |
+| startedAt | Date, default null | 开始时间（进入 running 时写入） |
 | finishedAt | Date, default null | 结束时间 |
+
+记录由 cloud-controller 在下发时批量创建（首条 `running`、其余 `pending`），收到 `workload:result` 后更新为终态并推进下一条。
 
 ### 4.2 缓存设计
 
@@ -222,20 +253,29 @@ sequenceDiagram
     participant G as admin-api
     participant C as cloud-controller
     participant K as K8s
-    participant P as 工作容器
+    participant P as 工作容器(agent-gear)
 
     A->>W: 启动对话框多选工作负载
     W->>G: adminStartCloudContainer(purpose, workloadIds)
     G->>C: POST /internal/containers {purpose, workloadIds}
-    C->>C: 校验工作负载存在，读取脚本
-    C->>C: 落库(creating, workloadIds) + 签发 token
-    C->>K: createJob（env 注入 ZAG_WORKLOADS_INIT / ZAG_WORKLOADS_POST）
+    C->>C: 校验工作负载存在，落库(creating, workloadIds) + 签发 token
+    C->>K: createJob（无脚本注入，与现状一致）
     K->>P: 拉起容器
-    P->>P: entrypoint 依次执行 init 脚本（每条限时）
-    P->>C: POST workload-logs（逐条回传，容器 token 鉴权）
-    P->>C: Socket.IO register → online
+    P->>C: Socket.IO register（token 鉴权）
+    alt 挂载了初始化脚本
+        C->>C: 读取脚本，批量创建执行记录（首条 running）<br/>CAS 置 initializing，currentWorkloadName=首条名称
+        C->>P: emit workload:run { phase: "init", items }
+        loop 每条脚本
+            P->>P: bash 执行（超时控制、输出捕获）
+            P->>C: emit workload:result
+            C->>C: 更新记录（含脚本快照已在创建时留档）<br/>推进下一条 running + 更新 currentWorkloadName
+        end
+        C->>C: 全部结束 → CAS 置 online，清空 currentWorkloadName
+    else 无初始化脚本
+        C->>C: register 接受 → markOnline（与现状一致）
+    end
     C-->>G: 容器信息
-    G-->>W: 展示
+    G-->>W: 列表展示 INITIALIZING + 当前脚本 → ONLINE
 ```
 
 #### 销毁容器（执行清理脚本）
@@ -243,54 +283,56 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant C as cloud-controller
-    participant P as 工作容器
+    participant P as 工作容器(agent-gear)
     participant K as K8s
 
-    C->>P: Socket.IO emit shutdown
-    P->>P: trap 捕获，依次执行 post 脚本（总时长受上限约束）
-    P->>C: POST workload-logs（逐条回传）
-    P->>P: 脚本完毕/超时后退出
-    C->>C: 宽限期（挂载 post 脚本时延长）到期
+    C->>C: destroy：置 destroying，计算宽限期<br/>（有 post 脚本 → 120s，否则 10s）
+    C->>P: emit shutdown { graceMs, items: [post 脚本] }
+    loop 每条清理脚本
+        P->>P: bash 执行（共享总预算，超时截断）
+        P->>C: emit workload:result
+        C->>C: 更新执行记录
+    end
+    P->>P: 全部完毕/预算耗尽后主动退出
+    C->>C: 宽限期到期（或已退出）
     C->>K: deleteJob（Foreground→Background 回退）
-    C->>C: CAS 置 exited
+    C->>C: CAS 置 exited；未完成记录由看门狗标记 TIMEOUT
 ```
 
 ### 5.2 关键实现点
 
-#### 实现点 1: 脚本注入（env + base64 JSON）
+#### 实现点 1: 脚本下发与执行记录留档（workload-dispatcher）
 
-- **描述**: `K8sJobManager.buildManifest()` 扩展入参 `workloads`，将 init/post 脚本分别序列化为 JSON 数组（`[{id, name, script}]`，保持选择顺序），base64 编码后注入两个环境变量 `ZAG_WORKLOADS_INIT` / `ZAG_WORKLOADS_POST`；无工作负载时不注入，保持现状行为。
-- **技术细节**: env 值总量受 K8s/etcd 限制，结合单脚本 16 KiB 上限与挂载数量上限（建议 ≤ 10 个，启动接口校验），总量远低于限制。
-- **风险点**: 超长脚本被接口层校验拦截；base64 避免特殊字符问题。
+- **描述**: 新增 `services/workload-dispatcher.ts`。register 接受后查询 `workloadIds` 对应的有 `initScript` 的工作负载，按下发顺序在 `cloudworkloadlogs` 批量创建记录（**创建时即写入脚本内容快照**），首条置 `running`，随后 emit `workload:run`。收到 `workload:result` 后按 `logId` 更新记录并推进下一条（置 `running` + 更新容器 `currentWorkloadName`），init 全部结束后将容器 CAS 置 `online` 并清空 `currentWorkloadName`。
+- **技术细节**: 全程经 `KeyedMutex` 按容器串行化，与既有 destroy/status-sync 不竞争；`workload:result` 校验 `logId` 属于该 socket 对应容器，防止串号。
+- **风险点**: 脚本内容在下发时才读取并留档，启动后对工作负载的编辑不影响本容器（PRD 边界情况已约定）。
 
-#### 实现点 2: worker entrypoint 执行与日志回传
+#### 实现点 2: worker 端脚本执行器（agent-gear workload-executor）
 
-- **描述**: `deploy/images/worker/entrypoint.sh` 增加两个阶段：
-  - init 阶段（`exec agent-gear` 之前）：解码 `ZAG_WORKLOADS_INIT`，逐条以 `bash -c` 执行，每条独立超时（默认 300s，可通过 env 覆盖），输出 tee 到临时文件，执行完毕即通过 HTTP POST 回传日志到 cloud-controller；脚本失败仅记录，不阻断后续脚本与容器上线。
-  - post 阶段：trap SIGTERM/SIGINT 时解码 `ZAG_WORKLOADS_POST` 逐条执行（共享总预算，默认 90s），逐条回传日志后退出。
-- **技术细节**: 回传地址由 `ZAG_SERVER_ENDPOINT` 推导（`wss://host/worker` → `https://host/internal/containers/<id>/workload-logs`，containerId 从 `ZAG_CONTROLLER_KEY` 的 `<containerId>.<secret>` 前缀解析）；鉴权头携带完整 token。回传失败重试 2 次后放弃（不阻断主流程）。
-- **风险点**: 回传依赖网络可达 cloud-controller；init 阶段在 register 之前执行，token 在容器终态前有效，可满足。
+- **描述**: `packages/agent-controller` 新增 `workload-executor.ts`：监听 `workload:run`，按 `items` 顺序以 `bash -c` 执行（spawn，捕获 stdout/stderr 合并），单条受 `timeoutMs` 约束（超时 kill 并回报 `timeout`），逐条 emit `workload:result`；post 批次共享总预算（预算耗尽跳过后续并回报）。执行期间心跳照常发送。
+- **技术细节**: 输出在 worker 侧按条缓存，单条回报上限 256 KiB（超出截断保留尾部，与落库上限一致）；脚本失败（非零退出）回报 `failed` 并继续后续条目。
+- **风险点**: 执行器与 agent-gear 主进程同生命周期；执行中进程被杀（OOM 等）时对应记录停留 `running`，由 server 看门狗兜底标记。
 
-#### 实现点 3: 销毁宽限期调整
+#### 实现点 3: 容器状态机扩展（initializing）
 
-- **描述**: `ContainerService.destroyLocked()` 目前固定 `shutdownGraceMs=10000`。容器挂载含 post 脚本的工作负载时，宽限期调整为 `max(10000, 配置的 postGraceMs)`（默认 120000ms），保证清理脚本有时间执行并回传日志。
-- **风险点**: 宽限期拉长会推迟 Job 删除；由 `StatusSyncService` 兜底巡检回收，无泄漏风险。
+- **描述**: `ContainerService` 状态机扩展：`connecting` →（register 且有 init 脚本）→ `initializing` →（init 全部结束）→ `online`；无 init 脚本维持 register → `online` 现状。`initializing` 不属于终态；回连超时巡检覆盖 `connecting` 的逻辑同样覆盖 `initializing`（初始化为空转超过上限视为异常）。
+- **技术细节**: `initializing` 期间容器照常参与心跳检测；`destroy` 对 `initializing` 容器直接走销毁流程（当前 init 批次未完成的记录由看门狗标记 TIMEOUT）。
+- **风险点**: 状态枚举新增值需同步 GraphQL schema、admin-api 枚举映射与前端状态徽章三处。
 
-#### 实现点 4: 日志接收接口鉴权
+#### 实现点 4: 超时与兜底
 
-- **描述**: `POST /internal/containers/:id/workload-logs` 复用 `TokenService.verify()` 校验容器一次性 token（与 Socket.IO 握手同一套），校验通过且容器非终态才接受写入；`log` 字段超限截断保留尾部。
-- **风险点**: 与 `/internal/*` 的 Bearer internal-auth 不同，该路由需单独挂载 token 校验中间件，注意路由顺序与鉴权隔离。
-
-## 6. 技术决策
+- **描述**: 每条脚本下发时携带 `timeoutMs`（init 默认 300s，post 共享预算默认 90s）；server 侧看门狗（并入 `StatusSyncService` 15s 巡检）对停留 `running` 超过 `timeoutMs + 30s` 容差的记录标记 `TIMEOUT` 并推进下一条，兼容旧版 worker 不响应 `workload:run` 的场景；销毁宽限期在有 post 脚本时调整为 `max(10000, WORKLOAD_POST_GRACE_MS=120000)`。
+- **风险点**: 宽限期拉长推迟 Job 删除；由既有终态残留巡检兜底回收，无泄漏风险。
 
 ### 6.1 决策列表
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
 | 工作负载数据归属 | admin-api 本地集合 | cloud-controller 持有 | admin-api 本地集合 | 复用 base-image CRUD 模式；cloud-controller 共享 Mongo 只读即可 |
-| 脚本注入方式 | env 注入 base64 JSON | 为每容器创建 ConfigMap | env 注入 | KISS：无额外 K8s 资源与权限；脚本体量小 |
-| 日志采集方式 | K8s Pod Logs API 拉取 | 容器内主动 HTTP 回传 | 容器内回传 | 无需扩大 RBAC（当前无 pods/logs 权限）；shutdown 阶段 Pod 被删后仍可收到日志；逐条回传即时可见 |
-| 清理脚本执行保障 | 延长 shutdown 宽限期 | init 容器/PreStop hook | 延长宽限期 | 现有 trap + 宽限机制可覆盖，改动最小 |
+| 脚本下发方式 | K8s env 注入 | **Socket.IO 由控制器下发** | Socket.IO 下发 | 评审意见：下发过程可控、可跟踪当前执行项；脚本内容不经 K8s manifest 落盘；worker 版本能力可协商 |
+| 脚本留档 | 只存输出日志 | **执行记录含脚本内容快照** | 含脚本快照 | 评审意见：留档便于调查问题；工作负载被改/删后仍可还原现场 |
+| 日志传输 | 容器 HTTP 回传 | **复用 Socket.IO `workload:result`** | Socket.IO | 同一鉴权通道，无需新增 HTTP 端点与额外鉴权 |
+| 初始化状态 | 复用 connecting | **新增 initializing + currentWorkloadName** | 新增状态 | 评审意见：后台需区分「等待回连」与「正在跑初始化脚本」，并展示当前脚本 |
 | init 失败策略 | 阻断容器上线 | 记录后继续 | 记录后继续 | 裸容器仍可使用，日志可定位问题（PRD 约定） |
 
 ### 6.2 依赖与约束
@@ -298,15 +340,17 @@ sequenceDiagram
 | 类型 | 内容 | 说明 |
 |------|------|------|
 | 依赖 | admin-api 与 cloud-controller 共享 MongoDB | 沿用容器列表降级直读的既有事实 |
-| 依赖 | 工作容器镜像重新构建发布 | entrypoint.sh 需支持新阶段 |
-| 约束 | cloud-controller RBAC 不变 | 不新增 pods/logs 权限 |
-| 约束 | 不改动 Socket.IO 协议 | register/heartbeat/shutdown 事件保持不变 |
+| 依赖 | 工作容器镜像重新构建发布 | 预装支持 workload 协议的新版 agent-gear |
+| 约束 | cloud-controller RBAC 不变 | 不新增 pods/logs 权限，Job manifest 不变 |
+| 约束 | 既有 Socket.IO 事件向后兼容 | register/heartbeat/shutdown/unregister 语义不变；旧 worker 忽略新事件时由看门狗兜底 |
 
 ## 7. 项目结构
 
 ```
 contracts/
-└── admin-cloud-workload.graphql              # 新增：工作负载与日志契约
+├── admin-cloud-workload.graphql              # 新增：工作负载与日志契约
+├── admin-cloud-container.graphql             # 扩展：INITIALIZING 状态、workloads/currentWorkloadName
+└── agent-controller-websocket.md             # 扩展：workload:run / workload:result 协议
 servers/admin-api/
 └── src/
     ├── models/cloud-workload.ts              # 新增：CloudWorkload 模型
@@ -317,20 +361,22 @@ servers/admin-api/
 servers/cloud-controller/
 └── src/
     ├── models/cloud-workload.ts              # 新增：只读模型（共享集合）
-    ├── models/cloud-workload-log.ts          # 新增：日志模型
-    ├── repositories/                         # 扩展：workload-log 仓储
-    ├── routes/internal-api.ts                # 扩展：workload-logs 路由（token 鉴权）
-    ├── services/k8s-job-manager.ts           # 扩展：脚本 env 注入
-    └── services/container-service.ts         # 扩展：workloadIds、销毁宽限期调整
+    ├── models/cloud-workload-log.ts          # 新增：日志模型（含 script 快照）
+    ├── services/workload-dispatcher.ts       # 新增：脚本下发、结果落库、看门狗
+    ├── services/socketio-gateway.ts          # 扩展：workload:result 事件接入
+    └── services/container-service.ts         # 扩展：initializing 状态机、workloadIds、宽限期调整
+packages/agent-controller/
+└── src/
+    └── workload-executor.ts                  # 新增：脚本执行与结果回报
 apps/admin-web/
 └── src/
     ├── pages/CloudWorkloadsPage.tsx          # 新增：工作负载管理页
-    ├── pages/CloudContainersPage.tsx         # 扩展：日志查看入口
+    ├── pages/CloudContainersPage.tsx         # 扩展：初始化进度与日志查看入口
     ├── components/cloud-workloads/           # 新增：表格/表单对话框/删除确认
-    ├── components/cloud-containers/          # 扩展：启动对话框多选、日志抽屉
+    ├── components/cloud-containers/          # 扩展：启动对话框多选、状态徽章、日志抽屉
     └── graphql/                              # 扩展：queries/mutations/types
 deploy/images/worker/
-└── entrypoint.sh                             # 扩展：init/post 阶段执行与日志回传
+└── Dockerfile                                # 扩展：预装新版 agent-gear（entrypoint 不变）
 ```
 
 ## 8. 测试策略
@@ -344,10 +390,10 @@ deploy/images/worker/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | vitest | 脚本注入 manifest 构建、日志截断、token 鉴权、宽限期计算、resolver 校验 |
+| 单元测试 | vitest | dispatcher 下发/推进/看门狗、状态机流转（initializing）、日志截断、executor 超时与结果回报、resolver 校验 |
 | API 测试 | tests/api | 工作负载 CRUD、启动携带工作负载、日志查询（含降级路径） |
-| E2E 测试 | tests/e2e | 后台新建工作负载 → 启动容器挂载 → 查看执行日志 |
-| 手工验证 | K8s 环境 | init/post 脚本真实执行、超时保护、镜像构建 |
+| E2E 测试 | tests/e2e | 后台新建工作负载 → 启动容器挂载 → 观察初始化中状态与当前脚本 → 查看执行日志 |
+| 手工验证 | K8s 环境 | init/post 脚本真实下发执行、超时保护、旧 worker 兼容、镜像构建 |
 
 开发遵循 TDD 红-绿-重构循环。
 
@@ -364,8 +410,8 @@ deploy/images/worker/
 
 | 配置项 | 服务 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `WORKLOAD_INIT_TIMEOUT_MS` | worker（env 注入） | 300000 | 单条 init 脚本超时 |
-| `WORKLOAD_POST_BUDGET_MS` | worker（env 注入） | 90000 | post 脚本总预算 |
+| `WORKLOAD_INIT_TIMEOUT_MS` | cloud-controller | 300000 | 单条 init 脚本超时（随 `workload:run` 下发） |
+| `WORKLOAD_POST_BUDGET_MS` | cloud-controller | 90000 | post 脚本总预算（随 shutdown 下发） |
 | `WORKLOAD_POST_GRACE_MS` | cloud-controller | 120000 | 挂载 post 脚本时的销毁宽限期 |
 | `WORKLOAD_LOG_MAX_BYTES` | cloud-controller | 262144 | 单条日志存储上限（截断保留尾部） |
 
@@ -378,12 +424,13 @@ deploy/images/worker/
 - [ ] API 测试通过
 - [ ] E2E 测试通过
 - [ ] 工作负载 CRUD 在后台可用，启动容器可多选挂载
-- [ ] init/post 脚本真实执行且日志可在后台查看
+- [ ] 脚本由控制器下发执行，容器初始化中状态与当前脚本在后台可见
+- [ ] 每次执行的脚本内容与输出日志落库留档，后台可查看
 - [ ] 不挂载工作负载的容器行为与现状一致
 
 ## 11. 相关文档
 
 - PRD：`docs/product/draft/20261017-cloud-controller-workload.md`
 - 既有提案：`docs/engineering/proposals/20261014-feat-cloud-agent-phase2.md`、`docs/engineering/proposals/20261014-feat-admin-console.md`
-- 既有契约：`contracts/admin-cloud-container.graphql`
+- 既有契约：`contracts/admin-cloud-container.graphql`、`contracts/agent-controller-websocket.md`
 - 开发规范：`docs/engineering/backend-rules.md`、`docs/engineering/frontend-rules.md`
