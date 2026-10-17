@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号（major 需为 `2`，见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号，须为三段数字且 `>=2.2.0`、major 为 `2`（见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,7 +69,7 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 校验 `version` major（`2`），不匹配返回 `error`（`VERSION_MISMATCH`）并断开。
+2. 校验 `version` 完整版本（三段数字、`>=2.2.0` 且 major 为 `2`，见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
 3. 将 socket 绑定到 `containerId`，容器状态置 `online` 并写入 `connectedAt`。
 4. 回复 `registered`。
 
@@ -91,12 +91,29 @@
 |------|------|------|------|
 | `code` | `ErrorCode` | 是 | 错误码 |
 | `message` | `string` | 是 | 错误描述 |
+| `currentVersion` | `string` | 否 | 客户端上报的 `version` 原始值；缺失/非法时为原始值或 `unknown`，不含凭据（仅 `VERSION_MISMATCH`） |
+| `minimumVersion` | `string` | 否 | 服务端最低兼容版本（本期 `2.2.0`，仅 `VERSION_MISMATCH`） |
+| `supportedMajor` | `number` | 否 | 服务端支持的 major（本期 `2`，仅 `VERSION_MISMATCH`） |
+
+**`VERSION_MISMATCH` 示例：**
+
+```json
+{
+  "code": "VERSION_MISMATCH",
+  "message": "agent-gear 版本不兼容，当前版本 2.1.0，最低版本 2.2.0（supported major: 2）",
+  "currentVersion": "2.1.0",
+  "minimumVersion": "2.2.0",
+  "supportedMajor": 2
+}
+```
+
+> 旧客户端忽略新增字段，按既有路径打印错误并退出；worker 入口只依赖稳定错误码 `VERSION_MISMATCH` 触发一次自动升级（不解析本地化 `message`）。
 
 **ErrorCode（本场景）：**
 
 | 值 | 含义 |
 |----|------|
-| `VERSION_MISMATCH` | `agent-gear` major 版本不兼容；客户端输出升级指引后退出 |
+| `VERSION_MISMATCH` | `agent-gear` 版本不在兼容范围（低于最低版本或 major 不符，含版本缺失/格式非法）；客户端输出升级指引后退出 |
 | `INVALID_PAYLOAD` | `register` payload 缺少必填字段（如 `hostname`） |
 | `INVALID_TOKEN` | 握手 token 校验失败（仅在 `connect_error` 中返回，不会进入 `register` 阶段） |
 | `RATE_LIMITED` | 握手频率超限（按一次性 token 的 `containerId` 前缀滑动窗口限速，无 token 时回退来源 IP；另有更高上限的 per-IP 兜底桶，仅在 `connect_error` 中返回） |
@@ -206,7 +223,7 @@ Worker                              cloud-controller
   │                                      ├──失败 → connect_error(INVALID_TOKEN) + 日志
   │                                      │
   │──emit("register")───────────────────│  （key 字段被忽略）
-  │                                      ├──校验 version major
+  │                                      ├──校验 version（>=2.2.0 且 major=2）
   │                                      ├──无 init 脚本 → 绑定 containerId → 状态 online + connectedAt
   │                                      ├──有 init 脚本 → 建执行记录 + 状态 initializing + currentWorkloadName
   │  ←──emit("registered")──────────────│
@@ -249,8 +266,14 @@ Worker                              cloud-controller
 
 ### 3.4 版本兼容
 
-- 服务端校验 `version` major 字段；不一致返回 `VERSION_MISMATCH`。
-- 本期要求 major 为 `2`（与 `agent-controller-websocket.md` 一致）。
+- 服务端在 `register` 阶段校验完整 `version`（parse → major → 最低版本）：
+  1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
+  2. **major**：须等于当前支持的 major（本期 `2`）。
+  3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- 任一条件不满足返回 `VERSION_MISMATCH`（§2.4，含 `currentVersion`/`minimumVersion`/`supportedMajor`）并 `disconnect(true)`。
+- **拒绝副作用约束**：版本校验必须位于所有注册副作用之前——不设置 `socket.data.registered`，不调用心跳计时、初始化脚本查询/下发、`online`/`initializing` 状态迁移，不写入 `connectedAt`，不下发 `workload:run`。因此被拒绝的容器销毁时按「从未完成兼容注册」处理：不发送 shutdown、不等待宽限，直接删除 Job。
+- 兼容 worker（`>=2.2.0` 且 major 为 `2`）的注册、心跳、工作负载、重连与销毁协议不变。
 
 ---
 
