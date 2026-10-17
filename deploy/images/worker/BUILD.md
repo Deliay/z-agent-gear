@@ -66,8 +66,9 @@ docker run --rm -it --entrypoint bash \
 
 - [ ] `node`、`git`、`gh`、`docker buildx` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
-- [ ] `npm config get registry` 为内网 npm 代理地址
+- [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
 - [ ] 7 个 npm 全局包已安装：`agent-gear` `@agentclientprotocol/claude-agent-acp` `@agentclientprotocol/codex-acp` `@opencode/cli` `@openai/codex` `@anthropic-ai/claude-code` `@google/gemini-cli`
+- [ ] `agent-gear --version` ≥ `2.3.0`（工作负载参数注入能力；见下方「工作负载执行自验」）
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
 
@@ -86,10 +87,64 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.2.0`（支持工作负载执行协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
+- [ ] `agent-gear --version` ≥ `2.3.0`（支持工作负载**参数注入**协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
 - [ ] 单条输出超过 256 KiB 时按尾部截断
+
+### 参数注入自验（`WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*`）
+
+参数由 cloud-controller 经 `workload:run` 下发，worker 以 `process.env` 为基础按 item 注入环境变量后执行
+`bash -c <script>`（契约 §2.9「参数注入约定」）。镜像内可脱离服务端直接模拟注入语义：
+
+```bash
+docker run --rm --entrypoint bash \
+  -e WORKLOAD_PARAMS='{"version":"22","package_manager":["pnpm"],"debug":true}' \
+  -e WORKLOAD_PARAM_VERSION=22 \
+  -e WORKLOAD_PARAM_PACKAGE_MANAGER='["pnpm"]' \
+  -e WORKLOAD_PARAM_DEBUG=true \
+  core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
+    echo "params=$WORKLOAD_PARAMS"
+    echo "version=$WORKLOAD_PARAM_VERSION"
+    echo "debug=$WORKLOAD_PARAM_DEBUG"
+    node -e "const v = JSON.parse(process.env.WORKLOAD_PARAM_PACKAGE_MANAGER || \"[]\"); console.log(\"package_manager=\" + v.join(\",\"))"
+  '
+```
+
+逐项核对：
+
+- [ ] `WORKLOAD_PARAMS` 为完整参数 JSON（无参数时为 `{}`）
+- [ ] `WORKLOAD_PARAM_<KEY_UPPER>` 单值编码正确：字符串原样、布尔 `"true"`/`"false"`、多选为 JSON 数组字符串（如 `["pnpm"]`）
+- [ ] 多选参数可由脚本自行 `JSON.parse`（预制 Node.js 脚本用容器内 Node 解析）
+- [ ] 未选择任何参数时行为与旧版一致（仅注入 `WORKLOAD_PARAMS={}`）
+
+### 预制工作负载脚本手工验收（真实集群）
+
+在挂载了「Docker」/「Node.js」/「.NET」/「Aspire」工作负载的容器内，按初始化顺序逐项核对脚本产物：
+
+```bash
+# Docker（首个执行；未选择时容器内不应存在 dockerd 进程）
+docker info            # 脚本执行后 dockerd 已就绪；未选择 Docker 时此命令应失败
+pgrep -a dockerd       # 仅在选择「Docker」工作负载后才有输出
+
+# Node.js（参数 version / package_manager）
+nvm ls && node -v && npm -v && npm config get registry
+node -e 'console.log(JSON.parse(process.env.WORKLOAD_PARAM_PACKAGE_MANAGER || "[]"))'   # 多选参数可解析
+
+# .NET（LTS）
+dotnet --info
+dotnet --list-sdks
+
+# Aspire（依赖 Docker + .NET，最后执行；成功判据为 CLI 可执行）
+aspire --version
+```
+
+逐项核对：
+
+- [ ] 未选择「Docker」工作负载时容器内**没有** dockerd（入口不再自动启动，由 Docker 脚本负责）；选择后 `docker info` 可用
+- [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
+- [ ] .NET 脚本安装 LTS SDK，`dotnet --list-sdks` 非空
+- [ ] Aspire 脚本在前置依赖就绪后安装 CLI，`aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
@@ -98,7 +153,7 @@ docker run --rm -it --entrypoint bash \
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
 
-1. 启动容器内 `dockerd` → 装配镜像代理 shim；
+1. 装配镜像代理 shim（`/usr/local/bin/docker` 包装器）；**不再启动 dockerd** —— Docker 运行时由「Docker」工作负载的初始化脚本按需启动；
 2. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
 3. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
@@ -120,7 +175,9 @@ bash -n entrypoint.sh
 bash entrypoint.test.sh
 ```
 
-自动化用例覆盖：首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`）与 `ZAG_DOCKER_SHIM_PATH`，不会启动真实 dockerd、不访问网络。
+自动化用例覆盖：入口装配 shim 且不自动启动 dockerd（T-EP0）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`）与 `ZAG_DOCKER_SHIM_PATH`，其中 `docker`/`dockerd` stub 仅作哨兵（被调用即落标记），因此不会启动真实 dockerd、不访问网络。
+
+> **镜像升级要求**：工作负载参数注入依赖 `agent-gear` ≥ `2.3.0`。`cloud-controller` 的门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本），但只有重建为 ≥ `2.3.0` 的 worker 镜像才具备 `WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*` 注入能力。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 
