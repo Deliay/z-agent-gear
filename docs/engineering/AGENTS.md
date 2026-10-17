@@ -180,6 +180,7 @@ flowchart LR
 - [[proposals/20261013-feat-unified-home-display.md]] — 首页展示优化
 - [[proposals/20261014-feat-admin-console.md]] — 云控制器管理后台一期
 - [[proposals/20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
+- [[proposals/20261017-feat-cloud-controller-workload.md]] — 云控制器工作负载功能
 
 ### 实现计划（`plan/`）
 
