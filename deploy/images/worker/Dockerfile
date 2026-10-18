@@ -25,6 +25,11 @@ ARG NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy
 ARG NODE_VERSION=22
 ARG NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/
 ARG DOCKER_APT_URL=https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/
+# .NET 由工作负载脚本经 apt 安装（不再依赖 dotnet-install.sh）。默认包名 dotnet10、默认执行 apt-get upgrade，
+# 可在运行时用同名环境变量覆盖；如内网 Ubuntu 源不含 .NET 10，可用 DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL
+# 在构建期注入内部 Microsoft feed 代理（见下方「.NET apt 源」）。
+ARG DOTNET_APT_PACKAGE=dotnet10
+ARG DOTNET_APT_UPGRADE=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -32,10 +37,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 供「Node.js」预制工作负载脚本（`REGISTRY="${NPM_REGISTRY:-...}"`）读取。
 ENV NPM_REGISTRY=${NPM_REGISTRY}
 
-# 可选：.NET / Aspire 预制脚本的安装脚本地址。缺省走官方地址（dot.net / aspire.dev），
-# 内网无法直连时取消注释并指向内网代理（脚本内同样支持同名环境变量覆盖）。
-# ENV DOTNET_INSTALL_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/dotnet-install.sh
+# 运行时环境变量：.NET 预制工作负载脚本（apt 版）读取；默认 dotnet10 / 执行 apt-get upgrade。
+# 可按内网源覆盖包名（DOTNET_APT_PACKAGE）或排障/提速时关闭 upgrade（DOTNET_APT_UPGRADE=0）。
+ENV DOTNET_APT_PACKAGE=${DOTNET_APT_PACKAGE} \
+    DOTNET_APT_UPGRADE=${DOTNET_APT_UPGRADE}
+
+# 可选：Aspire 预制脚本的安装脚本地址。.NET 已改由 apt 安装（见下），不再使用 DOTNET_INSTALL_URL。
+# 缺省走官方地址（aspire.dev），内网无法直连时取消注释并指向内网代理（脚本内同样支持同名环境变量覆盖）。
 # ENV ASPIRE_INSTALL_URL=https://nexus.internal.fffdan.com/repository/aspire-proxy/install.sh
+
+# .NET apt 源（可选）：若内网 Ubuntu 源不含 .NET 10 包，用 build-arg 注入内部 Microsoft feed 代理：
+#   --build-arg DOTNET_APT_SOURCE=https://nexus.internal.fffdan.com/repository/dotnet-proxy/ubuntu/24.04/prod
+#   --build-arg DOTNET_APT_KEY_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/microsoft.asc
+# 二者同时提供时追加到 apt 源列表；未提供则仅使用上方配置的内网 Ubuntu 源。
+ARG DOTNET_APT_SOURCE=
+ARG DOTNET_APT_KEY_URL=
 
 # 1) 切换 Ubuntu 软件源到内网 mirror（24.04 为 deb822 格式）
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list \
@@ -49,6 +65,20 @@ RUN apt-get update \
       iptables iproute2 procps sudo \
       fuse-overlayfs libseccomp2 conntrack \
  && rm -rf /var/lib/apt/lists/*
+
+# 2.1) 可选：注入 .NET 10 的 Microsoft feed 代理源（仅当内网 Ubuntu 源不含 dotnet10 包时）。
+#      需要同时提供 DOTNET_APT_SOURCE 与 DOTNET_APT_KEY_URL，否则跳过（不阻断构建）。
+#      放在基础工具安装之后：此处才有 curl/ca-certificates/gnupg。
+RUN if [ -n "$DOTNET_APT_SOURCE" ] && [ -n "$DOTNET_APT_KEY_URL" ]; then \
+      install -m 0755 -d /etc/apt/keyrings \
+      && curl -fsSL "$DOTNET_APT_KEY_URL" -o /etc/apt/keyrings/microsoft.asc \
+      && chmod a+r /etc/apt/keyrings/microsoft.asc \
+      && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/microsoft.asc] %s noble main\n' \
+           "$(dpkg --print-architecture)" "$DOTNET_APT_SOURCE" \
+           > /etc/apt/sources.list.d/dotnet.list; \
+    else \
+      echo "DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL not set; using the configured Ubuntu mirror for dotnet10"; \
+    fi
 
 # 3) 用 nvm 安装 Node.js / npm（替代系统包管理器提供的 node/npm）
 #    - 安装脚本取自内网 GitHub raw 代理；脚本内硬编码的 raw.githubusercontent.com
@@ -97,11 +127,12 @@ RUN install -m 0755 -d /etc/apt/keyrings \
  && ln -sf /usr/libexec/docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-buildx 2>/dev/null || true
 
 # 5) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
-#    agent-gear 固定 2.3.x：工作负载参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
-#    避免构建期取到不支持参数的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
+#    agent-gear 固定 2.4.x：工作负载「必须」短路（items[].required）自 2.4.0 起提供，
+#    参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
+#    避免构建期取到不支持这些能力的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.3.x \
+      agent-gear@2.4.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force
