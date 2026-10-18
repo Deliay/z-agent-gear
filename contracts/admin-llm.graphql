@@ -54,8 +54,26 @@ type Model {
   isEnabled: Boolean!
   sortOrder: Int!
   scope: ConfigScope!
+  # 费用中心模型定价（便捷编辑视图）；价目真相在 productprices。
+  # 与 llm.graphql 的 ModelPricing 逐字一致（双侧 schema 同步演进）。
+  pricing: ModelPricing
   createdAt: String!
   updatedAt: String!
+}
+
+# credits / 百万 token（边界以 credits 展示，持久层为整数分）
+type ModelPricing {
+  inputPerMillion: Float!
+  cachedInputPerMillion: Float!
+  outputPerMillion: Float!
+  isBillable: Boolean!
+}
+
+input ModelPricingInput {
+  inputPerMillion: Float!
+  cachedInputPerMillion: Float!
+  outputPerMillion: Float!
+  isBillable: Boolean! = true
 }
 
 input ProviderInput {

@@ -334,6 +334,7 @@ Content-Type: application/json
 
 {
   "purpose": "idle",
+  "billingAccountId": "<billingAccountId>",
   "workloadIds": ["<objectId>", "..."],
   "workloadPlan": [
     { "workloadId": "<objectId>", "params": { "version": "22" }, "implicit": false, "required": true },
@@ -342,6 +343,7 @@ Content-Type: application/json
 }
 ```
 
+- `billingAccountId` 可选（费用中心）：非空时容器参与计费，`markOnline` 首次就绪写入 `billingStartedAt` 并经 outbox 投递 `container.ready`；为空表示不计费（存量/未接入计费调用方），不投递计费事件。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 - `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。
 - `workloadPlan[].required`（可选）语义：本次启动该条是否为「必须」；缺省/`null` 归一 `false`，仅 `true` 生效；仅对含初始化脚本的工作负载产生硬失败语义（见 §2.9「必须失败语义」）。
@@ -358,7 +360,7 @@ Content-Type: application/json
 #### A.2.3 强制销毁
 
 ```
-DELETE /internal/containers/:id
+DELETE /internal/containers/:id?reason=<url-encoded reason>
 ```
 
 **响应 200：**
@@ -366,6 +368,8 @@ DELETE /internal/containers/:id
 ```json
 { "success": true, "deletedJob": true }
 ```
+
+`reason`（可选，费用中心强拆）：可直接作为 query 参数，或在 JSON body 中提供 `{ "reason": "..." }`（body 优先）。缺省为「强制销毁」；强拆 reason 固定为「余额不足超过 10 分钟，强制销毁」，写入容器 `exitReason` 可审计。
 
 `deletedJob` 反映**本次调用是否真实执行了 Job 删除**（`false` 表示 Job 已不存在、未重复删除）。调用方据此观察残留 Job 清理是否发生。
 
@@ -405,6 +409,33 @@ GET /internal/containers/:id/workload-logs
 | `workloadIds` | `string[]` | 启动时挂载的工作负载 ID，按选择顺序（缺省为 `[]`） |
 | `workloadPlan` | `object[]` | 本次启动最终执行计划，顺序即执行顺序；每项 `{ workloadId, params, implicit, required }`（缺省为 `[]`） |
 | `currentWorkloadName` | `string \| null` | 初始化中当前正在执行的工作负载脚本名称；非初始化中为 `null` |
+| `billingAccountId` | `string \| null` | 计费账户 ID；`null` 表示不计费（存量/未接入计费） |
+| `billingStartedAt` | `string \| null` | 就绪计费起点（首次 `markOnline` 的时刻，ISO 时间戳）；`null` 表示未就绪/不计费 |
+
+### A.3.1 容器生命周期计费事件（outbox → RabbitMQ）
+
+cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 admin-api 共享，`producer = "cloud-controller"`），
+由进程内 relay 经 RabbitMQ publisher confirm 发布到 `zag.billing.events`（topic）；发布失败保留
+`published=false` 由下一轮重试，不阻塞生命周期（事件丢失由资源/计量对账兜底）。
+
+| 事件 | routing key | 触发条件 | payload |
+|------|-------------|----------|---------|
+| 就绪 | `container.ready` | 首次进入 `online`（含初始化完成与无脚本 register 直通两条路径） | `{ billingStartedAt }` |
+| 销毁 | `container.destroyed` | `destroying → exited` 成功，且 `billingAccountId` 与 `billingStartedAt` 均非空 | `{ billingStartedAt, exitedAt, minutes? }` |
+
+消息体（与 `contracts/billing-events.asyncapi.yaml` 一致）：
+
+```jsonc
+{ "eventId": "container.ready:<containerId>", "eventType": "container.ready",
+  "occurredAt": "<billingStartedAt ISO>", "accountId": "<billingAccountId>",
+  "resourceId": "<containerId>", "payload": { "billingStartedAt": "<ISO>" } }
+
+{ "eventId": "container.destroyed:<containerId>", "eventType": "container.destroyed",
+  "occurredAt": "<exitedAt ISO>", "accountId": "<billingAccountId>",
+  "resourceId": "<containerId>", "payload": { "billingStartedAt": "<ISO>", "exitedAt": "<ISO>" } }
+```
+
+重复 `markOnline` 不重置 `billingStartedAt`、不重复投递；未就绪即销毁不投递 `container.destroyed`。
 
 ### A.4 状态枚举
 

@@ -1,0 +1,128 @@
+# 前台「我的费用」契约（agent-api）
+#
+# 鉴权要求：所有 Query/Mutation 需要前台用户登录态（与既有 agent-api 鉴权一致）；
+# 未认证返回 `UNAUTHENTICATED`。
+#
+# 数据归属：计费写路径全部在 admin-api；agent-api 仅经 `/internal/billing/*`
+# 做只读查询与 API Key 管理转发，不直接写计费库。
+#
+# 前台账户仅支持预付费（creditLimit 恒 0），不提供任何自助充值 mutation。
+
+enum BillingOwnerType {
+  front_user
+  admin_user
+}
+
+enum BillingLedgerType {
+  charge
+  recharge
+  adjust
+}
+
+enum BillingCategory {
+  container
+  model
+  manual
+}
+
+enum BillingRollupGranularity {
+  minute
+  hour
+  day
+}
+
+type BillingAccount {
+  id: ID!
+  ownerType: BillingOwnerType!
+  ownerId: ID!
+  ownerName: String!
+  cashBalance: Float!
+  giftBalance: Float!
+  creditLimit: Float!
+  frozenAmount: Float!
+  availableBalance: Float! # = cash + gift + creditLimit - frozen
+  status: String!
+  insufficientSince: String
+  ledgerCount: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type BillingInvoice {
+  id: ID!
+  accountId: ID!
+  seq: Int!
+  type: BillingLedgerType!
+  category: BillingCategory!
+  amount: Float!
+  balanceAfter: Float!
+  refType: String
+  refId: String
+  description: String!
+  items: [InvoiceItem!]!
+  receiptId: ID
+  createdAt: String!
+}
+
+type InvoiceItem {
+  productId: String!
+  quantity: Float!
+  unitPrice: Float!
+  amount: Float!
+  meteringRef: ID
+}
+
+type BillingReceipt {
+  id: ID!
+  receiptNo: String!
+  invoiceId: ID!
+  accountId: ID!
+  amount: Float!
+  balanceAfter: Float!
+  issuedAt: String!
+}
+
+type BillingRollup {
+  bucketStart: String!
+  chargeTotal: Float!
+  rechargeTotal: Float!
+  chargeCount: Int!
+}
+
+type BillingApiKey {
+  id: ID!
+  name: String!
+  keyPrefix: String!
+  status: String!
+  lastUsedAt: String
+  createdAt: String!
+}
+
+type BillingApiKeyPayload {
+  apiKey: BillingApiKey!
+  secret: String! # 仅生成时返回一次
+}
+
+type Query {
+  myBillingAccount: BillingAccount!
+  myBillingInvoices(
+    from: String
+    to: String
+    type: BillingLedgerType
+    category: BillingCategory
+    page: Int
+    pageSize: Int
+  ): [BillingInvoice!]!
+  myBillingReceipts(page: Int, pageSize: Int): [BillingReceipt!]!
+  myBillingRollups(
+    granularity: BillingRollupGranularity!
+    from: String!
+    to: String!
+  ): [BillingRollup!]!
+  myBillingApiKeys: [BillingApiKey!]!
+}
+
+type Mutation {
+  createMyBillingApiKey(name: String!): BillingApiKeyPayload!
+  revokeMyBillingApiKey(id: ID!): BillingApiKey!
+}

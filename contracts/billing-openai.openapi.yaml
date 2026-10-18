@@ -1,0 +1,225 @@
+openapi: 3.0.3
+info:
+  title: Agent Gear 计费网关（OpenAI 兼容）
+  version: 1.0.0
+  description: |
+    平台对外提供的独立模型调用入口，兼容 OpenAI 风格的请求/响应与错误格式。
+
+    - 鉴权：`Authorization: Bearer zag_sk_<32 hex>`（API Key 仅生成时完整可见）。
+    - 计费：调用前统一预扣费检查（余额不足且无授信返回 402，不产生账单）；
+      调用完成后按输入 / 缓存输入 / 输出三段 token 出账并生成收据；
+      中断调用按已产生用量出账（标注中断），用量缺失按兜底规则估算（标注估算）。
+    - 事件：调用完成后网关只写本地 outbox 即返回，异步经 RabbitMQ 进入计量管线。
+servers:
+  - url: http://localhost:4002
+    description: admin-api（本地）
+security:
+  - bearerAuth: []
+paths:
+  /v1/models:
+    get:
+      summary: 列出可用模型
+      description: 仅返回 `isEnabled && pricing.isBillable` 且定价完整的全局模型。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 模型列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object:
+                    type: string
+                    enum: [list]
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Model'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/chat/completions:
+    post:
+      summary: 聊天补全（计费）
+      description: |
+        普通返回或 SSE 流式返回。流式请求自动注入 `stream_options.include_usage=true`
+        以便采集用量。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: OpenAI 标准 `chat.completion` 或 SSE `chat.completion.chunk` 流
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletion'
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: 模型未定价 / 请求非法（`model_not_priced`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: 余额不足且无授信（`insufficient_quota`，不产生账单）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 模型不存在（`model_not_found`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: zag_sk_<hex>
+  responses:
+    Unauthorized:
+      description: API Key 无效或已吊销
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: 触发限速
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Model:
+      type: object
+      required: [id, object, owned_by, created]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [model]
+        owned_by:
+          type: string
+        created:
+          type: integer
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+        name:
+          type: string
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        stream:
+          type: boolean
+          default: false
+        max_tokens:
+          type: integer
+          minimum: 1
+        temperature:
+          type: number
+        top_p:
+          type: number
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        stream_options:
+          type: object
+          properties:
+            include_usage:
+              type: boolean
+    ChatCompletion:
+      type: object
+      required: [id, object, created, model, choices]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [chat.completion]
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+            prompt_tokens_details:
+              type: object
+              properties:
+                cached_tokens:
+                  type: integer
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+              enum:
+                - invalid_request_error
+                - invalid_api_key
+                - insufficient_quota
+                - rate_limit_exceeded
+            code:
+              type: string
+              enum:
+                - invalid_api_key
+                - insufficient_quota
+                - model_not_found
+                - model_not_priced
+                - rate_limit_exceeded
