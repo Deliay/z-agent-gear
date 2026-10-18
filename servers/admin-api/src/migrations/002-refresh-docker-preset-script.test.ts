@@ -107,12 +107,22 @@ describe('migration 002-refresh-docker-preset-script', () => {
     expect(console.warn).toHaveBeenCalled();
   });
 
-  it('T-MIG10: DOCKER_SCRIPT_V2 is valid bash and installs, starts dockerd and verifies', () => {
+  it('T-MIG10: DOCKER_SCRIPT_V2 is valid bash, installs dockerd, starts it and verifies', () => {
     const script = migration.DOCKER_SCRIPT_V2;
 
-    expect(script).toContain('apt-get install');
+    // 安装包列表必须包含提供 dockerd 的 docker-ce（docker-ce-cli 仅客户端，不含守护进程）
+    expect(script).toContain(
+      'apt-get install -y --no-install-recommends docker-ce docker-ce-cli docker-buildx-plugin containerd.io',
+    );
+    // 幂等锚点同时覆盖 CLI 与 dockerd，收敛半安装状态
+    expect(script).toContain('[ ! -x /usr/bin/dockerd ]');
     expect(script).toContain('nohup dockerd');
     expect(script).toContain('docker buildx version');
+
+    // 默认安装来源走内网 Nexus 代理，不回退公网
+    expect(script).toContain('nexus.internal.fffdan.com/repository/docker-ce-proxy');
+    expect(script).not.toContain('mirrors.ustc.edu.cn');
+    expect(script).not.toContain('download.docker.com');
 
     const dir = mkdtempSync(join(tmpdir(), 'zag-mig002-'));
     const file = join(dir, 'docker-v2.sh');

@@ -19,19 +19,26 @@ const DOCKER_PRESET_KEY = 'docker';
 const DOCKER_PRESET_NAME = 'Docker';
 
 /**
- * Docker 预制工作负载脚本 v2（自包含）：安装 Docker CE CLI + buildx + containerd 及运行时依赖 →
- * 装配镜像代理 shim → 启动并就绪 dockerd → 校验。幂等：以 `/usr/bin/docker` 判定安装、
- * `docker info` 判定就绪。安装源 `DOCKER_APT_URL` 与 shim 路径 `ZAG_DOCKER_SHIM_PATH` 均可经环境覆盖。
+ * Docker 预制工作负载脚本 v2（自包含）：安装 Docker CE（docker-ce/docker-ce-cli）+
+ * docker-buildx-plugin + containerd.io 及运行时依赖 →
+ * 装配镜像代理 shim → 启动并就绪 dockerd → 校验。幂等：以 `/usr/bin/docker` 与 `/usr/bin/dockerd`
+ * 是否同时存在判定安装、`docker info` 判定就绪。安装源 `DOCKER_APT_URL` 与 shim 路径
+ * `ZAG_DOCKER_SHIM_PATH` 均可经环境覆盖。
+ *
+ * 安装来源默认走内网 Nexus docker-ce 代理（`nexus.internal.fffdan.com/repository/docker-ce-proxy/...`，
+ * 与镜像内其它内网源写法一致），运行期可用同名环境变量覆盖；不回退公网。
  */
 export const DOCKER_SCRIPT_V2 = `#!/usr/bin/env bash
 set -euo pipefail
 
 # Docker 工作负载初始化脚本 v2（自包含）：apt 安装 → 装配镜像代理 shim → 启动并就绪 dockerd → 校验。
-DOCKER_APT_URL="\${DOCKER_APT_URL:-https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/}"
+DOCKER_APT_URL="\${DOCKER_APT_URL:-https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/}"
 SHIM_PATH="\${ZAG_DOCKER_SHIM_PATH:-/usr/local/bin/docker}"
 
-# 1) 安装 Docker CE CLI + buildx + containerd 及运行时依赖（已安装则跳过，幂等）
-if [ ! -x /usr/bin/docker ]; then
+# 1) 安装 Docker CE（含 dockerd/docker-proxy）+ CLI + buildx + containerd 及运行时依赖
+#    幂等锚点：CLI 与 dockerd 任一缺失都执行安装，收敛半安装状态（裁决 11）。
+#    注意：docker-ce 包提供 /usr/bin/dockerd，docker-ce-cli 仅提供客户端，二者都必须安装。
+if [ ! -x /usr/bin/docker ] || [ ! -x /usr/bin/dockerd ]; then
   apt-get update
   apt-get install -y --no-install-recommends \\
     iptables iproute2 fuse-overlayfs libseccomp2 conntrack
@@ -42,7 +49,7 @@ if [ ! -x /usr/bin/docker ]; then
     "\$(dpkg --print-architecture)" "\$DOCKER_APT_URL" \\
     "\$(. /etc/os-release && echo "\$VERSION_CODENAME")" > /etc/apt/sources.list.d/docker.list
   apt-get update
-  apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin containerd.io
+  apt-get install -y --no-install-recommends docker-ce docker-ce-cli docker-buildx-plugin containerd.io
   rm -rf /var/lib/apt/lists/*
   mkdir -p /usr/local/lib/docker/cli-plugins
   ln -sf /usr/libexec/docker/cli-plugins/docker-buildx \\
