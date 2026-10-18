@@ -22,6 +22,26 @@ docker build \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
 
+### .NET（apt）相关构建参数
+
+`.NET` 预制工作负载改由**系统包管理器 apt** 安装（不再下载 `dotnet-install.sh`）：
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `DOTNET_APT_PACKAGE` | build-arg + 运行时 ENV | `dotnet10` | apt 包名；内网源包名不同时覆盖 |
+| `DOTNET_APT_UPGRADE` | build-arg + 运行时 ENV | `1` | 是否执行 `apt-get -y upgrade`（排障/提速可置 `0`） |
+| `DOTNET_APT_SOURCE` | build-arg（可选） | 空 | 内网 Ubuntu 源不含 `dotnet10` 时的 Microsoft feed 代理源 |
+| `DOTNET_APT_KEY_URL` | build-arg（可选） | 空 | 与 `DOTNET_APT_SOURCE` 配套的签名密钥地址 |
+
+`DOTNET_APT_SOURCE` 与 `DOTNET_APT_KEY_URL` 同时提供时，构建期会追加 `/etc/apt/sources.list.d/dotnet.list`；未提供则仅使用内网 Ubuntu 源（不阻断构建）。例如：
+
+```bash
+docker build \
+  --build-arg DOTNET_APT_SOURCE=https://nexus.internal.fffdan.com/repository/dotnet-proxy/ubuntu/24.04/prod \
+  --build-arg DOTNET_APT_KEY_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/microsoft.asc \
+  -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
+```
+
 构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
 
 ## 前置条件（nvm 走内网代理）
@@ -68,7 +88,7 @@ docker run --rm -it --entrypoint bash \
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
 - [ ] 7 个 npm 全局包已安装：`agent-gear` `@agentclientprotocol/claude-agent-acp` `@agentclientprotocol/codex-acp` `@opencode/cli` `@openai/codex` `@anthropic-ai/claude-code` `@google/gemini-cli`
-- [ ] `agent-gear --version` ≥ `2.3.0`（工作负载参数注入能力；见下方「工作负载执行自验」）
+- [ ] `agent-gear --version` ≥ `2.4.0`（工作负载「必须」短路 `items[].required` 能力；参数注入需 ≥ `2.3.0`；见下方「工作负载执行自验」）
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
 
@@ -87,7 +107,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.3.0`（支持工作负载**参数注入**协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
+- [ ] `agent-gear --version` ≥ `2.4.0`（支持工作负载**参数注入**与**必须项短路**协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
 - [ ] 单条输出超过 256 KiB 时按尾部截断
@@ -131,9 +151,10 @@ pgrep -a dockerd       # 仅在选择「Docker」工作负载后才有输出
 nvm ls && node -v && npm -v && npm config get registry
 node -e 'console.log(JSON.parse(process.env.WORKLOAD_PARAM_PACKAGE_MANAGER || "[]"))'   # 多选参数可解析
 
-# .NET（LTS）
-dotnet --info
-dotnet --list-sdks
+# .NET（apt 安装；幂等：已装 .NET 10 再次执行直接成功）
+dotnet --list-sdks                 # 应显示 10.x（apt 提供 /usr/bin/dotnet，不依赖 dotnet-install.sh）
+command -v dotnet                  # 命中 /usr/bin/dotnet
+bash -c 'test ! -e /tmp/dotnet-install.sh'   # 不再下载 dotnet-install.sh
 
 # Aspire（依赖 Docker + .NET，最后执行；成功判据为 CLI 可执行）
 aspire --version
@@ -143,11 +164,31 @@ aspire --version
 
 - [ ] 未选择「Docker」工作负载时容器内**没有** dockerd（入口不再自动启动，由 Docker 脚本负责）；选择后 `docker info` 可用
 - [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
-- [ ] .NET 脚本安装 LTS SDK，`dotnet --list-sdks` 非空
-- [ ] Aspire 脚本在前置依赖就绪后安装 CLI，`aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
+- [ ] .NET 脚本经 **apt** 安装 .NET 10：`dotnet --list-sdks` 显示 `10.x`、`command -v dotnet` 命中 `/usr/bin/dotnet`、**不依赖 `dotnet-install.sh`**；重复执行幂等（已装 .NET 10 直接成功）
+- [ ] `DOTNET_APT_PACKAGE`（默认 `dotnet10`）/`DOTNET_APT_UPGRADE`（默认 `1`）在运行时生效；`DOTNET_APT_UPGRADE=0` 时跳过 `apt-get upgrade`
+- [ ] Aspire 脚本前置检查（`command -v dotnet`）通过，安装 CLI 后 `aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
+
+### 必须工作负载失败强制注销手工验收（真实集群）
+
+前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`。
+
+内网 K8s 受控验收步骤：
+
+1. 在管理后台「云端容器」启动对话框为一个含初始化脚本的工作负载勾选「必须」，并让该脚本**必然失败**（例如 `exit 1`），确认顺序预览出现「必须」标识；
+2. 启动后观察 cloud-controller 日志：出现「必须工作负载初始化失败」相关记录，容器被强制注销；
+3. 核对容器列表/详情：容器状态最终为「已退出」，**退出原因包含该工作负载名称**（`必须工作负载「<name>」初始化失败`），且**未上线**；
+4. 核对「工作负载日志」：该必须项为「失败」、后续被中断条目为「超时」并带「必须工作负载初始化失败，已中断」说明，必须项有「必须」标识；
+5. 核对凭据失效：容器的一次性 token 在其宽限期内已失效（`destroying` 终态），worker 无法回连成功；容器内不存在残留 K8s Job（已回收/显式标注需人工清理）；
+6. 反例：将同一工作负载取消「必须」后启动，脚本失败时容器仍可上线（行为与现状一致）。
+
+逐项核对：
+
+- [ ] 必须项失败 → 中断剩余初始化 + 强制注销 + 退出原因含负载名，容器不上线
+- [ ] 不重试、不退避（无 backoff 循环）；凭据在宽限前失效、K8s Job 被回收
+- [ ] 非必须项失败维持现状（容器可上线）
 
 ## 默认启动
 
@@ -177,7 +218,7 @@ bash entrypoint.test.sh
 
 自动化用例覆盖：入口装配 shim 且不自动启动 dockerd（T-EP0）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`）与 `ZAG_DOCKER_SHIM_PATH`，其中 `docker`/`dockerd` stub 仅作哨兵（被调用即落标记），因此不会启动真实 dockerd、不访问网络。
 
-> **镜像升级要求**：工作负载参数注入依赖 `agent-gear` ≥ `2.3.0`。`cloud-controller` 的门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本），但只有重建为 ≥ `2.3.0` 的 worker 镜像才具备 `WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*` 注入能力。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
+> **镜像升级要求**：工作负载「必须」短路依赖 `agent-gear` ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。`cloud-controller` 的门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.4.0` 的 worker 镜像才具备 `items[].required` 短路优化。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 

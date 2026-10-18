@@ -21,7 +21,7 @@ import { LocalMcpServer } from './mcp/local-server.js';
 import { WorkloadExecutor, type WorkloadRunPayload } from './workload-executor.js';
 
 // 与 package.json 版本保持一致（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
-const CONTROLLER_VERSION = '2.3.0';
+const CONTROLLER_VERSION = '2.4.0';
 // 进程内全局单实例：工作负载批次严格串行（新批次打断旧批次，见 workload-executor）。
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。

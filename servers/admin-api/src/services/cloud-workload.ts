@@ -33,6 +33,8 @@ export interface CloudWorkloadLogDTO {
   status: string;
   script: string;
   params: Record<string, unknown>;
+  /** 本次启动该项是否为「必须」；历史记录缺省 false。 */
+  required: boolean;
   exitCode: number | null;
   log: string;
   startedAt: string | null;
@@ -347,6 +349,7 @@ export function mapWorkloadLog(raw: Record<string, unknown>): CloudWorkloadLogDT
     status: raw.status ? (LOG_STATUS_TO_GQL[raw.status as string] ?? 'FAILED') : 'FAILED',
     script: (raw.script as string | undefined) ?? '',
     params: normalizeParamsObject(raw.params),
+    required: raw.required === true,
     exitCode: typeof raw.exitCode === 'number' ? raw.exitCode : null,
     log: (raw.log as string | undefined) ?? '',
     startedAt: toIso(raw.startedAt),

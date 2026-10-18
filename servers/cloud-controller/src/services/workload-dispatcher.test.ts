@@ -56,6 +56,7 @@ interface RunPayload {
     workloadName: string;
     script: string;
     params?: Record<string, unknown>;
+    required?: boolean;
     timeoutMs: number;
   }>;
   budgetMs?: number;
@@ -79,8 +80,16 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
   const workloadLogRepository = new InMemoryWorkloadLogRepository();
   const emitted: Array<{ containerId: string; event: string; payload: RunPayload }> = [];
   const warnings: unknown[][] = [];
+  const forceDestroyCalls: Array<{ containerId: string; reason: string }> = [];
   const connection = { connected: options.connected ?? true };
   let nowMs = NOW_BASE;
+
+  const forceDestroyImpl: { fn: (containerId: string, reason: string) => Promise<unknown> } = {
+    fn: async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      return containerService.destroy(containerId, { reason });
+    },
+  };
 
   const dispatcher = new WorkloadDispatcher({
     containerRepository: repo,
@@ -93,6 +102,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
     initTimeoutMs: INIT_TIMEOUT_MS,
     postBudgetMs: options.postBudgetMs ?? 5000,
     logMaxBytes: options.logMaxBytes ?? 64,
+    forceDestroy: (containerId, reason) => forceDestroyImpl.fn(containerId, reason),
     now: () => nowMs,
     logger: {
       info: () => {},
@@ -129,6 +139,8 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
     emitted,
     warnings,
     connection,
+    forceDestroyCalls,
+    forceDestroyImpl,
     createContainer,
     runs,
     setNow: (value: number) => {
@@ -152,7 +164,7 @@ describe('WorkloadDispatcher - init 批次', () => {
 
     const started = await dispatcher.startInit(container.id);
 
-    expect(started).toBe(true);
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
     const logs = await workloadLogRepository.findByContainer(container.id);
     expect(logs.map((log) => log.workloadId)).toEqual(['w1', 'w3']);
     expect(logs[0]!.status).toBe('running');
@@ -229,7 +241,7 @@ describe('WorkloadDispatcher - init 批次', () => {
 
     const started = await dispatcher.startInit(container.id);
 
-    expect(started).toBe(true);
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
     const logs = await workloadLogRepository.findByContainer(container.id);
     expect(logs[0]!.workloadId).toBe('missing');
     expect(logs[0]!.status).toBe('failed');
@@ -250,7 +262,7 @@ describe('WorkloadDispatcher - init 批次', () => {
 
     const started = await dispatcher.startInit(container.id);
 
-    expect(started).toBe(false);
+    expect(started).toEqual({ initializing: false, requiredFailure: null });
     expect(runs('init')).toHaveLength(0);
     const logs = await workloadLogRepository.findByContainer(container.id);
     expect(logs).toHaveLength(1);
@@ -603,7 +615,7 @@ describe('WorkloadDispatcher - 重连不重发', () => {
 
     const started = await dispatcher.startInit(container.id);
 
-    expect(started).toBe(true);
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
     expect(runs('init')).toHaveLength(1);
   });
 
@@ -683,7 +695,7 @@ describe('WorkloadDispatcher - 执行计划与参数（workloadPlan/params）', 
 
     const started = await dispatcher.startInit(container.id);
 
-    expect(started).toBe(true);
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
     const logs = await workloadLogRepository.findByContainer(container.id);
     expect(logs.map((log) => log.workloadId)).toEqual(['w1', 'w2']);
     expect(logs[0]!.params).toEqual({ version: '22', pm: ['pnpm'] });
@@ -765,5 +777,323 @@ describe('WorkloadDispatcher - 执行计划与参数（workloadPlan/params）', 
     const logs = await workloadLogRepository.findByContainer(container.id);
     expect(logs[0]!.status).toBe('timeout');
     expect(logs[0]!.params).toEqual({ keep: true });
+  });
+});
+
+describe('WorkloadDispatcher - 必须失败（required）', () => {
+  it('T-WD16: 必须项 failed → 不 advance、剩余 init 标 timeout、锁外 forceDestroy', async () => {
+    const {
+      dispatcher,
+      workloadRepository,
+      workloadLogRepository,
+      createContainer,
+      repo,
+      forceDestroyCalls,
+      runs,
+    } = setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+
+    const after = await workloadLogRepository.findByContainer(container.id);
+    expect(after[0]!.status).toBe('failed');
+    expect(after[1]!.status).toBe('timeout');
+    expect(after[1]!.log).toContain('必须工作负载初始化失败，已中断');
+
+    // 锁外注销：exitReason 含必须负载名
+    expect(forceDestroyCalls).toEqual([
+      { containerId: container.id, reason: '必须工作负载「must-a」初始化失败' },
+    ]);
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toBe('必须工作负载「must-a」初始化失败');
+    // 未下发后续条目
+    expect(runs('init')).toHaveLength(1);
+  });
+
+  it('T-WD17: 必须项 timeout → 同样触发中断与注销', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'sleep 9' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'timeout' });
+
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+    expect(forceDestroyCalls).toHaveLength(1);
+    expect(forceDestroyCalls[0]!.reason).toContain('must-a');
+  });
+
+  it('T-WD18: 非必须项 failed → 维持现状（继续推进/收口），不触发 forceDestroy', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'opt-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: false },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+    let logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+    logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs[1]!.status).toBe('running');
+    await dispatcher.handleResult(container.id, { logId: logs[1]!.id, status: 'success' });
+
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    expect(forceDestroyCalls).toHaveLength(0);
+  });
+
+  it('T-WD19: 必须项为最后一条且失败 → 仍触发注销', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'opt-a', { initScript: 'echo a' }));
+    workloadRepository.add(mkWorkload('w2', 'must-b', { initScript: 'exit 1' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: false },
+      { workloadId: 'w2', params: {}, implicit: false, required: true },
+    ]);
+    await dispatcher.startInit(container.id);
+    let logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'success' });
+    logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs[1]!.status).toBe('running');
+    await dispatcher.handleResult(container.id, { logId: logs[1]!.id, status: 'failed', exitCode: 1 });
+
+    expect(forceDestroyCalls).toHaveLength(1);
+    expect(forceDestroyCalls[0]!.reason).toContain('must-b');
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+  });
+
+  it('T-WD20: 必须项执行前被删除（占位）→ 不下发批次、非终态 init 标 timeout、锁外注销', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, forceDestroyCalls, runs } =
+      setup();
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['missing', 'w2'], 'connecting', [
+      { workloadId: 'missing', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started.initializing).toBe(false);
+    expect(started.requiredFailure).toEqual({ workloadName: '(已删除)' });
+    expect(runs('init')).toHaveLength(0);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.find((log) => log.workloadId === 'missing')!.status).toBe('failed');
+    expect(logs.find((log) => log.workloadId === 'w2')!.status).toBe('timeout');
+    expect(logs.find((log) => log.workloadId === 'w2')!.log).toContain('必须工作负载初始化失败，已中断');
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+    expect(forceDestroyCalls[0]!.reason).toContain('(已删除)');
+  });
+
+  it('T-WD21: 看门狗必须项单条超时 → 标 timeout 并锁外注销', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, advanceTime, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'sleep 9' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+
+    advanceTime(INIT_TIMEOUT_MS + 31000);
+    await dispatcher.onWatchdog();
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs[0]!.status).toBe('timeout');
+    // 不 advance：剩余条目保持 pending（容器已被注销，不再执行）
+    expect(logs[1]!.status).toBe('pending');
+    expect(forceDestroyCalls).toHaveLength(1);
+    expect(forceDestroyCalls[0]!.reason).toContain('must-a');
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+  });
+
+  it('T-WD22: 看门狗批次超时含必须项 → 标终态后返回信号并注销（不 finishInit）', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo, advanceTime, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    workloadRepository.add(mkWorkload('w2', 'must-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: false },
+      { workloadId: 'w2', params: {}, implicit: false, required: true },
+    ]);
+    await dispatcher.startInit(container.id);
+
+    advanceTime(2 * INIT_TIMEOUT_MS + 120000 + 1);
+    await dispatcher.onWatchdog(); // w1 超时 → 推进到 w2（running）
+    await dispatcher.onWatchdog(); // 批次预算耗尽 → w2 timeout 且为必须项 → 注销
+
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    expect(logs.map((log) => log.status)).toEqual(['timeout', 'timeout']);
+    expect(forceDestroyCalls).toHaveLength(1);
+    expect(forceDestroyCalls[0]!.reason).toContain('must-b');
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+  });
+
+  it('T-WD23: 防自锁回归 —— forceDestroy 在容器互斥锁外调用（可重入 runPostBatch）', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, forceDestroyImpl, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    // 注入可重入的 forceDestroy：内部调用同一容器的 runPostBatch（需要同一把 KeyedMutex）。
+    // 若 dispatcher 在互斥锁内调用 forceDestroy，这里会死锁。
+    forceDestroyImpl.fn = async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      await dispatcher.runPostBatch(containerId);
+    };
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+
+    expect(forceDestroyCalls).toHaveLength(1);
+  }, 5000);
+
+  it('T-WD24: post 批次日志/items 的 required 固定 false（不参与必须判定）', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, runs } = setup({
+      postBudgetMs: 30,
+    });
+    workloadRepository.add(mkWorkload('w1', 'clean-a', { postScript: 'echo bye' }));
+    const container = await createContainer(['w1'], 'destroying', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+    ]);
+
+    await dispatcher.runPostBatch(container.id);
+
+    const items = runs('post')[0]!.payload.items;
+    expect(items.every((item) => item.required === false)).toBe(true);
+    const postLogs = (await workloadLogRepository.findByContainer(container.id)).filter(
+      (log) => log.phase === 'post',
+    );
+    expect(postLogs.length).toBeGreaterThan(0);
+    expect(postLogs.every((log) => log.required === false)).toBe(true);
+  });
+
+  it('T-WD25: 注销后不收口 —— 迟到结果按终态幂等忽略，容器保持 exited', async () => {
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, repo } = setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+    const logs = await workloadLogRepository.findByContainer(container.id);
+
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+
+    // 迟到结果（w2 已被中断标 timeout）按终态幂等忽略，不会把容器置回 online
+    await dispatcher.handleResult(container.id, { logId: logs[1]!.id, status: 'success' });
+    expect((await repo.findById(container.id))?.status).toBe('exited');
+  });
+});
+
+describe('WorkloadDispatcher - forceDestroy 失败兜底（缺陷修复）', () => {
+  it('T-WD26: handleResult 路径 forceDestroy 拒绝 → 容器置终态 failed，后续看门狗 tick 不置 online', async () => {
+    const {
+      dispatcher,
+      workloadRepository,
+      workloadLogRepository,
+      createContainer,
+      repo,
+      forceDestroyImpl,
+      forceDestroyCalls,
+      advanceTime,
+    } = setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+
+    // 注入销毁失败（模拟瞬时 Mongo/网络故障）
+    forceDestroyImpl.fn = async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      throw new Error('mongo down');
+    };
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.status).not.toBe('online');
+    expect(stored?.mustFailure).toBe(true);
+    expect(stored?.exitReason).toContain('must-a');
+
+    // 后续看门狗 tick 不得把残缺容器收口为 online/connecting
+    advanceTime(300000);
+    await dispatcher.onWatchdog();
+    const after = await repo.findById(container.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.exitReason).toContain('must-a');
+  });
+
+  it('T-WD27: startInit 路径（必须项执行前被删除）forceDestroy 拒绝 → 容器置终态 failed', async () => {
+    const { dispatcher, workloadRepository, createContainer, repo, forceDestroyImpl, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    forceDestroyImpl.fn = async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      throw new Error('destroy backend unavailable');
+    };
+    const container = await createContainer(['missing', 'w2'], 'connecting', [
+      { workloadId: 'missing', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started.initializing).toBe(false);
+    expect(started.requiredFailure).toEqual({ workloadName: '(已删除)' });
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.mustFailure).toBe(true);
+    expect(stored?.exitReason).toContain('(已删除)');
+  });
+
+  it('T-WD28: 看门狗重试未完成的必须失败注销（mustFailure 标记已置位）', async () => {
+    const { dispatcher, createContainer, repo, forceDestroyCalls } = setup();
+    const container = await createContainer(['w1'], 'initializing', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+    ]);
+    // 模拟上一轮必须失败已落标记、但 forceDestroy 未完成（容器仍 initializing，无活跃 init 记录）
+    await repo.update(container.id, {
+      mustFailure: true,
+      exitReason: '必须工作负载「must-a」初始化失败',
+    });
+
+    await dispatcher.onWatchdog();
+
+    // 看门狗应重试注销而非 finishInit（默认 forceDestroy 走真实 destroy）
+    expect(forceDestroyCalls).toEqual([
+      { containerId: container.id, reason: '必须工作负载「must-a」初始化失败' },
+    ]);
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toContain('must-a');
   });
 });

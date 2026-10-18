@@ -23,6 +23,11 @@ export interface WorkloadItem {
   script: string;
   /** 本次执行参数，键为参数标识；缺省 `{}`（等价旧行为）。 */
   params?: Record<string, unknown>;
+  /**
+   * 本次启动该条是否为「必须」项（仅 `phase=init` 有意义，缺省/非 true 按非必须）。
+   * 服务端为唯一裁决；worker 仅在该项失败/超时后省去后续无谓执行。
+   */
+  required?: boolean;
   /** 单条脚本超时（毫秒）。 */
   timeoutMs: number;
 }
@@ -144,7 +149,8 @@ function buildWorkloadEnv(params: Record<string, unknown> | undefined): NodeJS.P
  * - 按 `items` 顺序**串行**执行 `bash -c <script>`（`cwd=os.homedir()`，继承进程环境并按 item 注入
  *   `WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*`，stdout/stderr 合并捕获）；
  * - 单条超时或收到新批次时终止整个进程组（`detached: true` + `kill(-pid)`）；
- * - 非零退出回报 `failed` + `exitCode`，不影响后续条目；
+ * - 非零退出回报 `failed` + `exitCode`，不影响后续条目；**例外**：`init` 阶段的必须项
+ *   （`item.required === true`）失败/超时后不再启动后续条目（服务端仍会中断剩余记录并注销容器）；
  * - `post` 批次共享 `budgetMs`：剩余预算耗尽时后续条目直接回报 `timeout`（不启动进程）；
  * - 未被服务端确认的结果保存在内存（上限 50 条）供重连重放。
  *
@@ -227,29 +233,38 @@ export class WorkloadExecutor {
 
     const budgetMs = typeof payload.budgetMs === 'number' && payload.budgetMs > 0 ? payload.budgetMs : null;
     const batchStart = Date.now();
+    const phase = payload.phase;
 
     for (const item of items) {
       if (run.cancelled) return;
+
+      // 必须项短路（省时优化，服务端仍为唯一裁决）：init 阶段的必须项失败/超时后，
+      // 上报本条结果即结束本批，不再启动后续条目。post 批次不参与必须判定。
+      const shortCircuitOnFailure = phase === 'init' && item.required === true;
+      const reportThenMaybeStop = (result: WorkloadResult): boolean => {
+        this.report(onResult, result);
+        return shortCircuitOnFailure && (result.status === 'failed' || result.status === 'timeout');
+      };
 
       let effectiveTimeoutMs = item.timeoutMs;
       if (budgetMs !== null) {
         const remaining = budgetMs - (Date.now() - batchStart);
         if (remaining <= 0) {
           // 预算耗尽：后续条目不再启动进程，直接回报 timeout
-          this.report(onResult, this.emptyResult(item.logId, 'timeout', ''));
+          if (reportThenMaybeStop(this.emptyResult(item.logId, 'timeout', ''))) return;
           continue;
         }
         effectiveTimeoutMs = Math.min(item.timeoutMs, remaining);
       }
 
       if (!item.script || item.script.trim().length === 0) {
-        this.report(onResult, this.emptyResult(item.logId, 'failed', EMPTY_SCRIPT_MESSAGE));
+        if (reportThenMaybeStop(this.emptyResult(item.logId, 'failed', EMPTY_SCRIPT_MESSAGE))) return;
         continue;
       }
 
       const outcome = await this.executeItem(item, effectiveTimeoutMs, run);
       if (outcome.cancelled) return;
-      if (outcome.result) this.report(onResult, outcome.result);
+      if (outcome.result && reportThenMaybeStop(outcome.result)) return;
     }
   }
 

@@ -197,6 +197,11 @@ export interface CloudWorkloadSelectionData {
   workloadId: string;
   /** 缺省/缺字段 = 使用该字段默认值 */
   params?: Record<string, CloudWorkloadParamValue>;
+  /**
+   * 本次启动是否将该项标记为「必须」（缺省非必须，仅 true 生效且仅作用于初始化阶段）：
+   * 其初始化失败/超时会中断剩余初始化并强制注销容器。前端只做展示与提交，不做本地硬失败预判。
+   */
+  required?: boolean;
 }
 
 /**
@@ -221,6 +226,8 @@ export interface CloudWorkloadLogData {
   script: string;
   /** 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {} */
   params: Record<string, unknown>;
+  /** 本次启动该项是否为「必须」（快照）；历史记录缺省 false */
+  required: boolean;
   exitCode: number | null;
   log: string;
   startedAt: string | null;

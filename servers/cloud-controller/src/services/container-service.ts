@@ -84,7 +84,12 @@ export function normalizeWorkloadPlan(
       entry.params && typeof entry.params === 'object' && !Array.isArray(entry.params)
         ? { ...(entry.params as Record<string, unknown>) }
         : {};
-    result.push({ workloadId: entry.workloadId, params, implicit: entry.implicit === true });
+    result.push({
+      workloadId: entry.workloadId,
+      params,
+      implicit: entry.implicit === true,
+      required: entry.required === true,
+    });
   }
   return result;
 }
@@ -353,19 +358,31 @@ export class ContainerService {
   }
 
   /**
+   * 必须工作负载失败时的强制注销（工作负载三期，spi `WorkloadContainerStatePort.forceDestroy`）：
+   * 复用既有 `destroy` 链路（CAS `destroying` → 清理批次 + `shutdown` → 删除 Job → `exited`），
+   * `reason` 写入 `exitReason`（缺省「强制销毁」）。不新增独立删除路径。
+   */
+  async forceDestroy(containerId: string, reason: string): Promise<DestroyResult> {
+    return this.destroy(containerId, { reason });
+  }
+
+  /**
    * 强制销毁：在线先 emit shutdown 宽限 → deleteJob → destroying → exited（清空 tokenHash）。
    * 对终态记录仍会核实 Job 是否存在并清理残留（幂等体现在响应上，`deletedJob` 反映真实动作）。
    * 全程持有该容器的串行锁，避免与 `start()` 交错产生孤儿 Job。
    */
-  async destroy(containerId: string): Promise<DestroyResult> {
+  async destroy(containerId: string, options?: { reason?: string }): Promise<DestroyResult> {
     const container = await this.repo.findById(containerId);
     if (!container) {
       throw new ContainerNotFoundError(containerId);
     }
-    return this.mutex.runExclusive(containerId, () => this.destroyLocked(containerId));
+    return this.mutex.runExclusive(containerId, () => this.destroyLocked(containerId, options));
   }
 
-  private async destroyLocked(containerId: string): Promise<DestroyResult> {
+  private async destroyLocked(
+    containerId: string,
+    options?: { reason?: string },
+  ): Promise<DestroyResult> {
     const container = await this.repo.findById(containerId);
     if (!container) {
       throw new ContainerNotFoundError(containerId);
@@ -414,7 +431,7 @@ export class ContainerService {
     );
     if (!destroying) {
       // 并发操作已将其置为终态，按终态路径幂等清理。
-      return this.destroyLocked(containerId);
+      return this.destroyLocked(containerId, options);
     }
 
     // 用 CAS 之后的状态决定是否优雅停机：`markOnline` 可能在 destroy 的初始快照之后、
@@ -436,7 +453,8 @@ export class ContainerService {
     }
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
-    const exitReason = deletedJob ? '强制销毁' : '强制销毁（Job 删除失败，需人工清理）';
+    const baseReason = options?.reason ?? '强制销毁';
+    const exitReason = deletedJob ? baseReason : `${baseReason}（Job 删除失败，需人工清理）`;
     // 终态写回同样带 CAS（问题 50）：仅从 destroying 迁移，避免扩副本/并发下用陈旧状态覆写。
     const exited = await this.repo.update(
       containerId,

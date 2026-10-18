@@ -9,6 +9,7 @@ const workloadPlanItemSchema = new mongoose.Schema(
     workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     implicit: { type: Boolean, default: false },
+    required: { type: Boolean, default: false },
   },
   { _id: false },
 );

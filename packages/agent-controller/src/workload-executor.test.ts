@@ -439,3 +439,120 @@ describe('WorkloadExecutor', () => {
     await batch;
   }, 10000);
 });
+
+describe('WorkloadExecutor required short-circuit (T-WE-REQ)', () => {
+  it('T-WE-REQ14: a required init item that fails stops subsequent items', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'req', workloadName: 'Req', script: 'exit 3', timeoutMs: 5000, required: true },
+          { logId: 'after', workloadName: 'After', script: 'echo should-not-run', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['req']);
+    expect(results[0].status).toBe('failed');
+    expect(results[0].exitCode).toBe(3);
+  });
+
+  it('T-WE-REQ15: a required item as the last item failing ends the batch normally', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'ok', workloadName: 'Ok', script: 'echo ok', timeoutMs: 5000 },
+          { logId: 'req', workloadName: 'Req', script: 'exit 1', timeoutMs: 5000, required: true },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['ok', 'req']);
+    expect(results.map((r) => r.status)).toEqual(['success', 'failed']);
+  });
+
+  it('T-WE-REQ16: a non-required failure continues subsequent items', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'bad', workloadName: 'Bad', script: 'exit 2', timeoutMs: 5000, required: false },
+          { logId: 'good', workloadName: 'Good', script: 'echo good', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['bad', 'good']);
+    expect(results.map((r) => r.status)).toEqual(['failed', 'success']);
+  });
+
+  it('T-WE-REQ17: missing required field behaves exactly like the legacy executor', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'bad', workloadName: 'Bad', script: 'exit 1', timeoutMs: 5000 },
+          { logId: 'good', workloadName: 'Good', script: 'echo good', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['bad', 'good']);
+    expect(results.map((r) => r.status)).toEqual(['failed', 'success']);
+  });
+
+  it('T-WE-REQ18: a required post item failure does not short-circuit (post is never must)', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'post',
+        items: [
+          { logId: 'bad', workloadName: 'Bad', script: 'exit 1', timeoutMs: 5000, required: true },
+          { logId: 'good', workloadName: 'Good', script: 'echo cleaned', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['bad', 'good']);
+    expect(results.map((r) => r.status)).toEqual(['failed', 'success']);
+  });
+
+  it('T-WE-REQ14: a required init item timing out stops subsequent items', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          { logId: 'req', workloadName: 'Req', script: 'sleep 5', timeoutMs: 300, required: true },
+          { logId: 'after', workloadName: 'After', script: 'echo should-not-run', timeoutMs: 5000 },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['req']);
+    expect(results[0].status).toBe('timeout');
+  }, 10000);
+});

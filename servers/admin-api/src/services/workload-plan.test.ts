@@ -46,9 +46,9 @@ describe('resolveWorkloadPlan', () => {
     const plan = resolveWorkloadPlan([{ workloadId: 'aspire' }], [docker, dotnet, aspire]);
 
     expect(plan).toEqual([
-      { workloadId: 'docker', params: {}, implicit: true },
-      { workloadId: 'dotnet', params: {}, implicit: true },
-      { workloadId: 'aspire', params: {}, implicit: false },
+      { workloadId: 'docker', params: {}, implicit: true, required: false },
+      { workloadId: 'dotnet', params: {}, implicit: true, required: false },
+      { workloadId: 'aspire', params: {}, implicit: false, required: false },
     ]);
   });
 
@@ -67,8 +67,8 @@ describe('resolveWorkloadPlan', () => {
     );
 
     expect(plan).toEqual([
-      { workloadId: 'dep', params: { mode: 'b' }, implicit: false },
-      { workloadId: 'main', params: {}, implicit: false },
+      { workloadId: 'dep', params: { mode: 'b' }, implicit: false, required: false },
+      { workloadId: 'main', params: {}, implicit: false, required: false },
     ]);
     // 只出现一次
     expect(plan.filter((item) => item.workloadId === 'dep')).toHaveLength(1);
@@ -147,6 +147,7 @@ describe('resolveWorkloadPlan', () => {
         workloadId: 'node',
         params: { version: '20', package_manager: ['npm'] },
         implicit: false,
+        required: false,
       },
     ]);
   });
@@ -174,6 +175,53 @@ describe('resolveWorkloadPlan', () => {
   it('T-WP7: allows an empty multi-select array', () => {
     const plan = resolveWorkloadPlan([{ workloadId: 'node', params: { package_manager: [] } }], [node]);
     expect(plan[0].params.package_manager).toEqual([]);
+  });
+
+  it('T-WP-REQ1: explicit required=true is passed through, others default false', () => {
+    const plan = resolveWorkloadPlan(
+      [
+        { workloadId: 'aspire', required: true },
+        { workloadId: 'node' },
+      ],
+      [docker, dotnet, aspire, node],
+    );
+
+    const byId = new Map(plan.map((item) => [item.workloadId, item]));
+    expect(byId.get('aspire')?.required).toBe(true);
+    expect(byId.get('node')?.required).toBe(false);
+    expect(byId.get('docker')?.required).toBe(false);
+    expect(byId.get('dotnet')?.required).toBe(false);
+  });
+
+  it('T-WP-REQ2: implicit dependencies are always required=false even if the dependant is required', () => {
+    const plan = resolveWorkloadPlan([{ workloadId: 'aspire', required: true }], [docker, dotnet, aspire]);
+
+    expect(plan).toEqual([
+      { workloadId: 'docker', params: {}, implicit: true, required: false },
+      { workloadId: 'dotnet', params: {}, implicit: true, required: false },
+      { workloadId: 'aspire', params: {}, implicit: false, required: true },
+    ]);
+  });
+
+  it('T-WP-REQ3: missing / undefined / null / non-boolean required normalize to false', () => {
+    const plan = resolveWorkloadPlan(
+      [
+        { workloadId: 'docker', required: undefined },
+        { workloadId: 'node', required: null as unknown as boolean },
+        { workloadId: 'dotnet', required: 'true' as unknown as boolean },
+      ],
+      [docker, dotnet, node],
+    );
+
+    expect(plan.every((item) => item.required === false)).toBe(true);
+  });
+
+  it('T-WP-REQ4: required is kept even when the definition has no initScript', () => {
+    // docker 无 initScript 快照信息（本纯函数不感知脚本），required 原样透传
+    const plan = resolveWorkloadPlan([{ workloadId: 'docker', required: true }], [docker]);
+    expect(plan).toEqual([
+      { workloadId: 'docker', params: {}, implicit: false, required: true },
+    ]);
   });
 });
 

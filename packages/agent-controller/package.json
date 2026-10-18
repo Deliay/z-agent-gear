@@ -1,6 +1,6 @@
 {
   "name": "agent-gear",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "repository": {
     "type": "git",
