@@ -172,6 +172,13 @@ aspire --version
 - [ ] .NET 脚本安装 LTS SDK，`dotnet --list-sdks` 非空
 - [ ] Aspire 脚本在前置依赖就绪后安装 CLI，`aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
 
+> 「Docker」工作负载脚本运行期默认经**内网 Nexus docker-ce 代理**安装
+> （`DOCKER_APT_URL` 默认 `https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/`，
+> 与镜像内其它内网源同一套 Nexus 代理；可用同名环境变量覆盖，**不回退公网**）。
+> 安装包列表为 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`：其中 `docker-ce` 提供
+> `dockerd`（守护进程），`docker-ce-cli` 仅提供客户端，四者缺一不可。若内网实际仓库名不同，
+> 请在容器环境或脚本内覆盖 `DOCKER_APT_URL`。
+
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
 

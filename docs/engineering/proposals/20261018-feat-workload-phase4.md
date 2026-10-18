@@ -7,10 +7,11 @@ type: Permanent
 
 **功能名称**: 工作容器基础环境瘦身（Docker/.NET 能力下沉工作负载）
 **关联 PRD**: `docs/product/draft/20261018-workload-phase4.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
 **feat-branch**: `feat/workload-phase4`
+**版本说明**: v1.1（2026-10-18，实现评审返工）修正 §5.2 Docker 脚本 v2：安装包列表补充 `docker-ce`（提供 `dockerd`）、默认安装源改为内网 Nexus docker-ce 代理（不回退公网）、幂等锚点改为 `docker` 与 `dockerd` 同时存在。
 
 ## 1. 概述
 
@@ -60,7 +61,7 @@ graph TD
     C -->|workload:run 下发脚本+参数| W[worker 容器]
     W --> D[entrypoint.sh<br/>仅 shim 无关的 agent-gear 监督]
     W --> E[bash -c 工作负载脚本]
-    E -->|Docker v2| F[apt 安装 docker-ce-cli/buildx/containerd<br/>→ 装配 shim → 启动 dockerd → 校验]
+    E -->|Docker v2| F[apt 安装 docker-ce/docker-ce-cli/buildx/containerd<br/>→ 装配 shim → 启动 dockerd → 校验]
     E -->|.NET| G[dotnet-install.sh 自包含安装]
 ```
 
@@ -88,7 +89,7 @@ graph LR
 | `deploy/images/worker/Dockerfile` | 只保留通用基础能力 | 删除 docker-ce apt 源与包、dockerd 依赖、.NET ENV 残留 |
 | `deploy/images/worker/entrypoint.sh` | agent-gear 监督与版本自恢复 | 删除 `install_docker_shim` 及调用 |
 | `servers/admin-api/src/migrations/002-*.ts` | Docker 预制脚本升级 | 与 001 初版常量比对，未定制才覆盖 |
-| Docker 脚本 v2 | Docker 环境全生命周期 | apt 安装幂等、shim 装配、dockerd 就绪等待、buildx 校验 |
+| Docker 脚本 v2 | Docker 环境全生命周期 | apt 安装（docker-ce/docker-ce-cli/buildx/containerd）幂等、shim 装配、dockerd 就绪等待、buildx 校验 |
 
 ## 3. API 设计
 
@@ -129,7 +130,7 @@ sequenceDiagram
     C->>W: 拉起 Pod（瘦身镜像，无 docker 组件）
     W->>W: entrypoint：更新 agent-gear → 受监督运行（不再装配 shim）
     C->>W: workload:run（Docker 脚本 v2）
-    W->>W: apt 安装 docker-ce-cli/buildx/containerd（幂等）
+    W->>W: apt 安装 docker-ce/docker-ce-cli/buildx/containerd（幂等）
     W->>W: 装配镜像代理 shim（/usr/local/bin/docker）
     W->>W: nohup dockerd 并就绪等待
     W->>C: workload:result（docker info / buildx 校验输出）
@@ -156,12 +157,13 @@ sequenceDiagram
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOCKER_APT_URL="${DOCKER_APT_URL:-https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/}"
+DOCKER_APT_URL="${DOCKER_APT_URL:-https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/}"
 SHIM_PATH="${ZAG_DOCKER_SHIM_PATH:-/usr/local/bin/docker}"
 HARBOR_PROXY="${HARBOR_PROXY:-core.harbor.internal.fffdan.com}"
 
-# 1) 安装 Docker CE CLI + buildx + containerd 及运行时依赖（已安装则跳过，幂等）
-if [ ! -x /usr/bin/docker ]; then
+# 1) 安装 Docker CE（含 dockerd/docker-proxy）+ CLI + buildx + containerd 及运行时依赖（幂等）
+#    幂等锚点同时校验 CLI 与 dockerd，收敛半安装状态；docker-ce 包提供 dockerd，cli 包仅提供客户端。
+if [ ! -x /usr/bin/docker ] || [ ! -x /usr/bin/dockerd ]; then
   apt-get update
   apt-get install -y --no-install-recommends \
     iptables iproute2 fuse-overlayfs libseccomp2 conntrack
@@ -172,7 +174,7 @@ if [ ! -x /usr/bin/docker ]; then
     "$(dpkg --print-architecture)" "$DOCKER_APT_URL" \
     "$(. /etc/os-release && echo "$VERSION_CODENAME")" > /etc/apt/sources.list.d/docker.list
   apt-get update
-  apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin containerd.io
+  apt-get install -y --no-install-recommends docker-ce docker-ce-cli docker-buildx-plugin containerd.io
   rm -rf /var/lib/apt/lists/*
   mkdir -p /usr/local/lib/docker/cli-plugins
   ln -sf /usr/libexec/docker/cli-plugins/docker-buildx \
@@ -243,8 +245,8 @@ docker version
 docker buildx version
 ```
 
-- **幂等**：以 `/usr/bin/docker` 是否存在判安装、`docker info` 判就绪，重复执行收敛；
-- **风险点**：运行期 apt 安装依赖内网 Ubuntu 源与 `DOCKER_APT_URL` 可达；不可达时脚本失败但容器仍上线（沿用一期失败策略）。
+- **幂等**：以 `/usr/bin/docker` 与 `/usr/bin/dockerd` 是否同时存在判安装（任一缺失即重装，收敛半安装状态）、`docker info` 判就绪，重复执行收敛；
+- **风险点**：运行期 apt 安装依赖内网 Ubuntu 源与内网 `DOCKER_APT_URL`（docker-ce 代理）可达；不可达时脚本失败但容器仍上线（沿用一期失败策略）。
 
 #### 实现点 4: migration 002 刷新逻辑
 
@@ -345,7 +347,7 @@ servers/admin-api/src/
 
 ### 9.2 配置管理
 
-- `DOCKER_APT_URL` 从镜像构建参数迁移为 Docker 脚本内环境变量（默认 `https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/`），管理员可直接编辑预制脚本调整；
+- `DOCKER_APT_URL` 从镜像构建参数迁移为 Docker 脚本内环境变量（默认 `https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/`，内网 Nexus docker-ce 代理），管理员可直接编辑预制脚本调整，或以同名环境变量覆盖；不回退公网；
 - `ZAG_DOCKER_SHIM_PATH` 语义保留在 Docker 脚本内（默认 `/usr/local/bin/docker`），entrypoint 不再消费。
 
 ### 9.3 发布顺序

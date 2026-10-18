@@ -5,12 +5,13 @@ type: Permanent
 
 # 工作负载四期（工作容器基础环境瘦身）- 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261018-feat-workload-phase4.md`（v1.0）
+**关联 Proposal**: `docs/engineering/proposals/20261018-feat-workload-phase4.md`（v1.1）
 **关联 PRD**: `docs/product/draft/20261018-workload-phase4.md`（v1.0）
 **需求总分支（feat-branch）**: `feat/workload-phase4`（基于 `main`，需求总 PR #227）
-**开发分支**: `servers/workload-phase4`（admin-api migration）、`deploy/workload-phase4`（worker 镜像），均基于 `feat/workload-phase4`，完成后各自提 PR 回需求总分支
+**实现分支**: `feat/workload-phase4-impl`（基于 `feat/workload-phase4`，实现 PR #228）
 **创建日期**: 2026-10-18
-**计划版本**: v1.0
+**计划版本**: v1.1
+**版本说明**: v1.1（2026-10-18，实现评审返工）修正 Docker 脚本 v2 的安装包列表（补充 `docker-ce` 以提供 `dockerd`）、默认安装源改为内网 Nexus docker-ce 代理、幂等锚点改为 `docker` 与 `dockerd` 同时存在。
 
 ## 实现顺序
 
@@ -52,8 +53,8 @@ flowchart TD
 7. **entrypoint T-EP0 改写**：入口不再写 shim、不调用 docker、不启动 dockerd；断言 `ZAG_DOCKER_SHIM_PATH` 指向文件**不存在**，`docker`/`dockerd` stub 调用标记文件为 0 行。保留 stub 作为哨兵（被调用即失败）。移除 `ZAG_DOCKER_SHIM_PATH` 环境布置与相关说明。
 8. **脚本 `bash -n` 校验归属**：Docker 脚本 v2 的语法校验放在 vitest（002 测试）内——将 `DOCKER_SCRIPT_V2` 写入临时文件后调用 `bash -n`；`entrypoint.test.sh` 不同步读取 TS 常量，避免跨语言耦合。
 9. **镜像静态校验**：Dockerfile/entrypoint 的「无 docker 残留」除单测外，另在 BUILD.md 自验清单中以静态 `grep` 断言（`docker-ce`、`DOCKER_APT_URL`、`install_docker_shim`、`dockerd` 不出现），并在 Phase 5 手工核对。
-10. **安装源默认值**：`DOCKER_APT_URL` 默认 `https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/`（与提案 §5.2 一致），运行期可用同名环境变量覆盖；`ZAG_DOCKER_SHIM_PATH` 语义保留在脚本内（默认 `/usr/local/bin/docker`）。
-11. **幂等锚点**：安装以 `/usr/bin/docker` 是否存在判定，就绪以 `/usr/bin/docker info` 判定；重复执行收敛、不重复安装/不重复启动。
+10. **安装源默认值**：`DOCKER_APT_URL` 默认 `https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/`（内网 Nexus docker-ce 代理，与镜像内其它内网源写法一致；不回退公网），运行期可用同名环境变量覆盖；`ZAG_DOCKER_SHIM_PATH` 语义保留在脚本内（默认 `/usr/local/bin/docker`）。
+11. **幂等锚点**：安装以 `/usr/bin/docker` 与 `/usr/bin/dockerd` **是否同时存在**判定（任一缺失即重装，收敛半安装状态）；就绪以 `/usr/bin/docker info` 判定；重复执行收敛、不重复安装/不重复启动。注意 `docker-ce` 包提供 `dockerd`，`docker-ce-cli` 仅提供客户端，安装列表两者必须都在。
 12. **失败不阻断上线**：脚本失败仅使该工作负载记录失败并保留日志，容器继续后续初始化并上线（沿用一期失败策略），不改动 cloud-controller 侧逻辑。
 13. **无新增配置项**：admin-api / cloud-controller 不新增环境变量；迁移随启动自动执行，失败不阻断（沿用 `admin_migrations` runner 语义）。
 
@@ -125,7 +126,7 @@ bash entrypoint.test.sh
 |------|------|------|
 | `servers/admin-api/src/migrations/001-preset-workloads.ts` | 修改 | 按裁决 1，将 `DOCKER_SCRIPT` 导出更名为 `DOCKER_SCRIPT_V1`（内容逐字不变），`PRESETS` 引用同步；其余脚本与写库逻辑不变 |
 | `servers/admin-api/src/migrations/001-preset-workloads.test.ts` | 修改 | 断言锚点同步（若引用常量名；`expect(args[0].initScript).toContain('nohup dockerd')` 可保留或改为引用 `DOCKER_SCRIPT_V1`）；其余用例保持 |
-| `servers/admin-api/src/migrations/002-refresh-docker-preset-script.ts` | 新增 | `export const name = '002-refresh-docker-preset-script'`；`export const DOCKER_SCRIPT_V2`（提案 §5.2 实现点 3：apt 安装 docker-ce-cli/buildx/containerd + 运行时依赖 → 装配 shim → 启动并就绪 dockerd → 校验 `docker version` / `docker buildx version`）；`run()` 按裁决 3/4 实现刷新与防御逻辑 |
+| `servers/admin-api/src/migrations/002-refresh-docker-preset-script.ts` | 新增 | `export const name = '002-refresh-docker-preset-script'`；`export const DOCKER_SCRIPT_V2`（提案 §5.2 实现点 3：apt 安装 docker-ce/docker-ce-cli/docker-buildx-plugin/containerd.io + 运行时依赖 → 装配 shim → 启动并就绪 dockerd → 校验 `docker version` / `docker buildx version`；默认安装源为内网 Nexus docker-ce 代理）；`run()` 按裁决 3/4 实现刷新与防御逻辑 |
 | `servers/admin-api/src/migrations/002-refresh-docker-preset-script.test.ts` | 新增 | 覆盖创建/刷新/幂等/定制跳过/同名防御五条路径 + `bash -n` 语法校验（裁决 8） |
 | `servers/admin-api/src/index.ts` | 修改 | `runMigrations([migration001, migration002])`，导入 `* as migration002` |
 
@@ -158,7 +159,7 @@ async function run(): Promise<void> {
 | T-MIG7 | 管理员定制脚本（既非 v1 也非 v2） | 不覆盖，`console.warn` |
 | T-MIG8 | `presetKey='docker'` 不存在、精确 `name='Docker'` 存在 | 告警跳过，**不创建**重名项 |
 | T-MIG9 | `presetKey` 与 `name` 均不存在（防御） | 按 v2 创建，字段与 001 口径一致（`postScript:null`、`isPreset:true`） |
-| T-MIG10 | `bash -n` 校验 | `DOCKER_SCRIPT_V2` 写入临时文件后 `bash -n` 退出 0；含 `apt-get install`、`nohup dockerd`、`docker buildx version` |
+| T-MIG10 | 脚本内容 + `bash -n` 校验 | `DOCKER_SCRIPT_V2` 写入临时文件后 `bash -n` 退出 0；安装行精确含 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`（锚定提供 dockerd 的 `docker-ce`）；幂等锚点含 `/usr/bin/dockerd`；含 `nohup dockerd`、`docker buildx version`；默认源为内网 Nexus docker-ce 代理且不含公网源 |
 
 ### 命令参考
 
