@@ -45,6 +45,14 @@ var redis = builder.AddRedis("redis")
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
 
+// 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
+var rabbitmq = builder.AddRabbitMQ("rabbitmq")
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "rabbitmq";
+        service.Image = "rabbitmq:3-management";
+    });
+
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: SecretOrDefault("mcp-jwt-secret"));
 var jwtSecret = builder.AddParameter("jwt-secret", secret: true, value: SecretOrDefault("jwt-secret"));
@@ -118,6 +126,7 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
         service.Name = "cloud-controller";
         service.Restart = "unless-stopped";
     });
+cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -142,6 +151,7 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
         service.Name = "admin-api";
         service.Restart = "unless-stopped";
     });
+adminApi.WithReference(rabbitmq);
 
 if (!builder.ExecutionContext.IsPublishMode)
 {
@@ -158,6 +168,8 @@ if (!builder.ExecutionContext.IsPublishMode)
             service.Name = "agent-web";
         });
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+        .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
+        .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithHttpEndpoint(port: 10001, env: "PORT");
 
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
@@ -168,6 +180,8 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
+        .WithEnvironment("ADMIN_API_URL", adminApiUrl)
+        .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithHttpEndpoint(port: 8000, env: "PORT")
         .WithExternalHttpEndpoints();
 

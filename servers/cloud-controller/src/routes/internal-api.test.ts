@@ -143,6 +143,8 @@ describe('internal management API', () => {
     const body = (await created.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
       [
+        'billingAccountId',
+        'billingStartedAt',
         'connectedAt',
         'createdAt',
         'currentWorkloadName',

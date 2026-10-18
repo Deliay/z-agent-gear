@@ -34,6 +34,10 @@ export interface CloudContainerEntity {
   mustFailure: boolean;
   /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null。 */
   currentWorkloadName: string | null;
+  /** 计费账户 ID；null 表示不计费（费用中心）。 */
+  billingAccountId: string | null;
+  /** 就绪计费起点（首次进入 online）；null 表示未就绪/不计费。 */
+  billingStartedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -54,6 +58,8 @@ export interface CreateContainerInput {
   workloadPlan?: WorkloadPlanEntry[];
   mustFailure?: boolean;
   currentWorkloadName?: string | null;
+  billingAccountId?: string | null;
+  billingStartedAt?: Date | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
   updatedAt?: Date;
@@ -100,6 +106,8 @@ interface RawDoc {
   workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }> | null;
   mustFailure?: boolean | null;
   currentWorkloadName?: string | null;
+  billingAccountId?: string | null;
+  billingStartedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -149,6 +157,8 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     workloadPlan: clonePlan(doc.workloadPlan ?? []),
     mustFailure: doc.mustFailure === true,
     currentWorkloadName: doc.currentWorkloadName ?? null,
+    billingAccountId: doc.billingAccountId ?? null,
+    billingStartedAt: doc.billingStartedAt ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -172,6 +182,8 @@ export class MongoContainerRepository implements ContainerRepository {
       workloadPlan: clonePlan(input.workloadPlan),
       mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
+      billingAccountId: input.billingAccountId ?? null,
+      billingStartedAt: input.billingStartedAt ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
   }
@@ -239,6 +251,8 @@ export class InMemoryContainerRepository implements ContainerRepository {
       workloadPlan: clonePlan(input.workloadPlan),
       mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
+      billingAccountId: input.billingAccountId ?? null,
+      billingStartedAt: input.billingStartedAt ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     };
