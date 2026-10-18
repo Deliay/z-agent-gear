@@ -119,10 +119,13 @@ describe('migration 002-refresh-docker-preset-script', () => {
     expect(script).toContain('nohup dockerd');
     expect(script).toContain('docker buildx version');
 
-    // 默认安装来源走内网 Nexus 代理，不回退公网
-    expect(script).toContain('nexus.internal.fffdan.com/repository/docker-ce-proxy');
+    // 安装来源必须由环境注入，不设未经证实的默认值；且不硬编码任何具体内网/公网仓库地址
+    expect(script).toContain('DOCKER_APT_URL="${DOCKER_APT_URL:-}"');
+    expect(script).toContain('[ -z "$DOCKER_APT_URL" ]');
+    expect(script).toContain('DOCKER_APT_URL 未设置');
     expect(script).not.toContain('mirrors.ustc.edu.cn');
     expect(script).not.toContain('download.docker.com');
+    expect(script).not.toContain('docker-ce-proxy');
 
     const dir = mkdtempSync(join(tmpdir(), 'zag-mig002-'));
     const file = join(dir, 'docker-v2.sh');
