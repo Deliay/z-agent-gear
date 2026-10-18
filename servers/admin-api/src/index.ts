@@ -11,6 +11,7 @@ import { clientIpFrom } from './middleware/client-ip.js';
 import { seedAdmin } from './services/auth.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-preset-workloads.js';
+import * as migration002 from './migrations/002-preset-dotnet-apt.js';
 
 const app = express();
 
@@ -64,7 +65,7 @@ async function start() {
 
   // 一次性预制工作负载（admin_migrations 账本）：失败只记录日志、不阻断启动，下次启动按未完成重试
   try {
-    await runMigrations([migration001]);
+    await runMigrations([migration001, migration002]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
   }

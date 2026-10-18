@@ -47,3 +47,8 @@ export const PARAM_TYPE_LABELS: Record<CloudWorkloadParamType, string> = {
   TEXT: '文本',
   BOOLEAN: '布尔',
 };
+
+// 「必须」工作负载标识（工作负载三期，功能点 4）：启动选择/顺序预览/执行日志共用
+export const REQUIRED_LABEL = '必须';
+// 启动对话框「必须」开关的一行说明（PRD §3.4）
+export const REQUIRED_HINT = '标记为必须的工作负载初始化失败将导致容器被强制注销。';

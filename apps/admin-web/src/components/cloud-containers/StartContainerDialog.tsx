@@ -24,7 +24,7 @@ import type {
   CloudWorkloadData,
   CloudWorkloadSelectionData,
 } from '@/graphql/types';
-import { CONTAINER_PURPOSE_LABELS } from './labels';
+import { CONTAINER_PURPOSE_LABELS, REQUIRED_HINT, REQUIRED_LABEL } from './labels';
 import WorkloadParamsForm from './WorkloadParamsForm';
 import {
   buildDefaultParams,
@@ -66,6 +66,8 @@ export default function StartContainerDialog({
   // 保持勾选顺序：数组顺序即提交顺序
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [paramsByWorkload, setParamsByWorkload] = useState<Record<string, WorkloadParamValues>>({});
+  // 本次启动标记为「必须」的工作负载（缺省空 = 全部非必须）
+  const [requiredByWorkload, setRequiredByWorkload] = useState<Record<string, boolean>>({});
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +76,7 @@ export default function StartContainerDialog({
       setPurpose('IDLE');
       setSelectedIds([]);
       setParamsByWorkload({});
+      setRequiredByWorkload({});
       setError(null);
     }
   }, [open]);
@@ -111,6 +114,27 @@ export default function StartContainerDialog({
       delete next[id];
       return next;
     });
+    // 取消勾选时清除其「必须」设置（重新勾选回到默认非必须）
+    setRequiredByWorkload((prev) => {
+      if (checked || !prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+
+  /** 仅含初始化脚本（trim 后非空）的工作负载可标记「必须」，避免「设置了却无效」的误导。 */
+  const canBeRequired = (workload: CloudWorkloadData): boolean =>
+    (workload.initScript ?? '').trim().length > 0;
+
+  const toggleRequired = (id: string, checked: boolean) => {
+    setRequiredByWorkload((prev) => {
+      if (checked) return { ...prev, [id]: true };
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const atLimit = selectedIds.length >= MAX_WORKLOADS_PER_START;
@@ -132,10 +156,15 @@ export default function StartContainerDialog({
     setStarting(true);
     setError(null);
     try {
-      const selections: CloudWorkloadSelectionData[] = selectedIds.map((id) => ({
-        workloadId: id,
-        params: paramsByWorkload[id] ?? {},
-      }));
+      const selections: CloudWorkloadSelectionData[] = selectedIds.map((id) => {
+        const selection: CloudWorkloadSelectionData = {
+          workloadId: id,
+          params: paramsByWorkload[id] ?? {},
+        };
+        // 仅「必须」项携带 required=true；非必须项省略（缺省 false）
+        if (requiredByWorkload[id]) selection.required = true;
+        return selection;
+      });
       await onStart(purpose, selections);
       onOpenChange(false);
     } catch (err) {
@@ -191,25 +220,39 @@ export default function StartContainerDialog({
             ) : (
               <ScrollArea className="max-h-48 rounded-md border p-2">
                 <ul className="space-y-1">
-                  {workloads.map((workload) => (
-                    <li key={workload.id} className="flex min-w-0 items-center gap-2">
-                      <Checkbox
-                        aria-label={workload.name}
-                        checked={selectedIds.includes(workload.id)}
-                        disabled={atLimit && !selectedIds.includes(workload.id)}
-                        onCheckedChange={(checked) => toggleWorkload(workload.id, checked)}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                        {workload.name}
-                      </span>
-                    </li>
-                  ))}
+                  {workloads.map((workload) => {
+                    const selected = selectedIds.includes(workload.id);
+                    return (
+                      <li key={workload.id} className="flex min-w-0 items-center gap-2">
+                        <Checkbox
+                          aria-label={workload.name}
+                          checked={selected}
+                          disabled={atLimit && !selected}
+                          onCheckedChange={(checked) => toggleWorkload(workload.id, checked)}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                          {workload.name}
+                        </span>
+                        {selected && canBeRequired(workload) && (
+                          <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                            <Checkbox
+                              aria-label={`${workload.name} ${REQUIRED_LABEL}`}
+                              checked={requiredByWorkload[workload.id] === true}
+                              onCheckedChange={(checked) => toggleRequired(workload.id, checked)}
+                            />
+                            {REQUIRED_LABEL}
+                          </label>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </ScrollArea>
             )}
             <p className="text-xs text-muted-foreground">
               可多选，按勾选顺序依次执行；最多 {MAX_WORKLOADS_PER_START} 个。
             </p>
+            <p className="text-xs text-muted-foreground">{REQUIRED_HINT}</p>
           </div>
 
           {selectedWorkloads.length > 0 && (
@@ -254,6 +297,11 @@ export default function StartContainerDialog({
                   {preview.items.map((item) => (
                     <li key={item.workloadId} className="flex min-w-0 items-center gap-2 text-sm">
                       <span className="min-w-0 truncate text-foreground">{item.name}</span>
+                      {!item.implicit && requiredByWorkload[item.workloadId] && (
+                        <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                          {REQUIRED_LABEL}
+                        </span>
+                      )}
                       {item.implicit && (
                         <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                           隐式

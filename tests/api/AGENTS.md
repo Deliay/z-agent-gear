@@ -409,7 +409,7 @@ npm test
 ### Cloud Controller 内部 API (`cloud-controller/internal-api.test.ts` T-IC*)
 
 > 需要 cloud-controller 就绪：`aspire start && aspire wait cloud-controller`；服务以 `K8S_ENABLED=false`（InMemoryK8sClient）运行。
-> `T-IC5`（合法 workloadIds 回显）、`T-IC6`（按执行顺序返回日志 + params）与 `T-ICC1~T-ICC6`（`workloadPlan` 校验/落库/兜底展开/失败映射）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
+> `T-IC5`（合法 workloadIds 回显）、`T-IC6`（按执行顺序返回日志 + params/required）与 `T-ICC1~T-ICC8`（`workloadPlan` 校验/落库/兜底展开/失败映射/required 归一）直写共享 Mongo，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
@@ -418,15 +418,17 @@ npm test
 | T-IC1 全生命周期 | GET 列表 / POST idle（201，`workloadIds: []`、`currentWorkloadName: null`）/ DELETE（200）符合契约附录 A |
 | T-IC4 幂等 | DELETE 不存在返回 404；终态容器重复 DELETE 返回 200 |
 | T-IC5 workloadIds 校验 | 非数组 / 未知 ID / 超 10 个 → 400 `INVALID_WORKLOAD`；合法已存在 ID → 201 且去重保序回显 |
-| T-IC6 工作负载日志 | `GET /internal/containers/:id/workload-logs`：未知容器 404 `NOT_FOUND`；无记录返回 `[]`；直写 Mongo 后按 `createdAt` 升序返回 A.6 字段 |
+| T-IC6 工作负载日志 | `GET /internal/containers/:id/workload-logs`：未知容器 404 `NOT_FOUND`；无记录返回 `[]`；直写 Mongo 后按 `createdAt` 升序返回 A.6 字段（含 `required`，历史缺省 `false`） |
 | T-IC7 鉴权回归 | 新增 logs 端点缺失 Bearer → 401 |
-| T-ICC1 workloadPlan 合法 | POST 携带 `workloadPlan` → 201，JSON 回显 `workloadPlan`，`workloadIds` 由 plan 派生 |
-| T-ICC2 workloadPlan 非法 | 非数组 / 超 10 条 / 未知 `workloadId` / `params` 非对象 / `implicit` 非布尔 / 条目非对象 / `workloadId` 缺失或重复 → 400 `INVALID_WORKLOAD` |
-| T-ICC3 仅 workloadIds 兜底展开 | 旧客户端仅传 `workloadIds` → 按只读定义后序 DFS 展开（依赖先于依赖方、`implicit=true`、参数取默认值且多选去重）；容器 `workloadIds` 按选择顺序落库（不含隐式依赖），plan 仅用于执行 |
+| T-ICC1 workloadPlan 合法 | POST 携带 `workloadPlan`（含 `required`）→ 201，JSON 回显 `workloadPlan`，`workloadIds` 由 plan 派生 |
+| T-ICC2 workloadPlan 非法 | 非数组 / 超 10 条 / 未知 `workloadId` / `params` 非对象 / `implicit` 非布尔 / `required` 非布尔 / 条目非对象 / `workloadId` 缺失或重复 → 400 `INVALID_WORKLOAD` |
+| T-ICC3 仅 workloadIds 兜底展开 | 旧客户端仅传 `workloadIds` → 按只读定义后序 DFS 展开（依赖先于依赖方、`implicit=true`、参数取默认值且多选去重、`required=false`）；容器 `workloadIds` 按选择顺序落库（不含隐式依赖），plan 仅用于执行 |
 | T-ICC4 plan 优先 | `workloadPlan` 与 `workloadIds` 同时下发 → 以 plan 派生的 `workloadIds` 为准 |
-| T-ICC5 plan 条目缺省归一 | `workloadPlan` 条目缺省 `params`/`implicit` → 归一为 `{}`/`false`（201，不报错） |
+| T-ICC5 plan 条目缺省归一 | `workloadPlan` 条目缺省 `params`/`implicit`/`required` → 归一为 `{}`/`false`/`false`（201，不报错） |
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
-| T-IC6 日志 params | 直写 `cloudworkloadlogs.params` 后按记录返回参数快照；历史无 `params` 归一为 `{}` |
+| T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
+| T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
+| T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
 
@@ -476,3 +478,6 @@ npm test
 | T-IA16 未知显式选择 | `workloads` 含不存在 ID → `workload not found` |
 | T-IA17 依赖被删 | 依赖在配置后被删除 → 启动报 `dependency workload not found` |
 | T-IA18 日志 params | 直写 `cloudworkloadlogs.params` 后经 `adminCloudContainerWorkloadLogs` 返回参数快照 |
+| T-IA 预制 .NET apt | 预制 `.NET` 的 `initScript` 为 apt 版（含 `apt-get install`/`dotnet10`，不含 `dotnet-install.sh`；迁移 002 升级结果） |
+| T-IA 日志 required | 直写 `cloudworkloadlogs.required` 后经 `adminCloudContainerWorkloadLogs` 返回必须标记；历史缺省 `false` |
+| T-IA-REQ 启动 required 透传 | `adminStartCloudContainer(workloads[].required)` 透传并落库（缺省 `false`、非布尔容错）；仅 `workloadIds` 兼容路径 `required` 一律 `false` |

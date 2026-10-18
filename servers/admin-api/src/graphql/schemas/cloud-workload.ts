@@ -66,6 +66,9 @@ export const cloudWorkloadTypeDefs = `#graphql
   input CloudWorkloadSelectionInput {
     workloadId: ID!
     params: JSON # 缺省/缺字段 = 使用该字段默认值
+    # 本次启动是否将该项视为「必须」：缺省 false；仅 true 生效；
+    # 仅对含初始化脚本的工作负载产生硬失败语义；其失败/超时会中断初始化并强制注销容器。
+    required: Boolean
   }
 
   enum CloudWorkloadLogPhase {
@@ -90,6 +93,7 @@ export const cloudWorkloadTypeDefs = `#graphql
     status: CloudWorkloadLogStatus!
     script: String!
     params: JSON! # 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {}
+    required: Boolean! # 本次启动该项是否为「必须」；历史记录缺省 false
     exitCode: Int
     log: String!
     startedAt: String

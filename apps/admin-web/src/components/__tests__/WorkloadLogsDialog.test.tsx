@@ -26,6 +26,7 @@ function log(overrides: Record<string, unknown> = {}) {
     status: 'SUCCESS',
     script: 'echo "hello"',
     params: {},
+    required: false,
     exitCode: 0,
     log: 'hello\n',
     startedAt: '2026-10-14T10:00:35Z',
@@ -78,5 +79,21 @@ describe('WorkloadLogsDialog (T-FP9)', () => {
     expect(formatParams({})).toBe('-');
     expect(formatParams(null)).toBe('-');
     expect(formatParams({ a: 'x' })).toBe('a: x');
+  });
+
+  it('T-FP15: shows a 必须 marker only for required=true records (history stays unmarked)', () => {
+    setup([log({ id: 'must', workloadName: 'must-a', required: true })]);
+    const { unmount } = render(
+      <WorkloadLogsDialog open onOpenChange={() => {}} containerId="c1" containerName="zag-worker" />,
+    );
+    // 列表项 + 详情各一处标识
+    expect(screen.getAllByText('必须').length).toBeGreaterThanOrEqual(1);
+    unmount();
+
+    setup([log({ id: 'hist', workloadName: 'legacy', required: false })]);
+    render(
+      <WorkloadLogsDialog open onOpenChange={() => {}} containerId="c1" containerName="zag-worker" />,
+    );
+    expect(screen.queryByText('必须')).toBeNull();
   });
 });

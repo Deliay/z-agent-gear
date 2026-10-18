@@ -49,9 +49,12 @@ export const cloudContainerTypeDefs = `#graphql
     # workloadIds 与 workloads 二选一，同时非空返回错误
     # "workloadIds and workloads cannot both be provided"：
     # - workloadIds（兼容旧调用）：等价于所有工作负载使用默认参数；
-    # - workloads（新调用）：每项携带 params（缺省字段使用默认值），服务端展开隐式依赖、
+    # - workloads（新调用）：每项携带 params（缺省字段使用默认值）与可选的 required
+    #   （本次启动是否将该项标记为「必须」）；服务端展开隐式依赖、
     #   去重、按拓扑序排序并归一参数后下发（展开后 >10 → "expanded workloads exceed 10"，
     #   重复 → "duplicate workload selection"，依赖不存在 → "dependency workload not found"）。
+    #   required 缺省 false，仅 === true 生效且仅作用于初始化阶段；隐式依赖永远 false；
+    #   必须项初始化失败/超时会中断剩余初始化并强制注销容器（见 cloud-controller-websocket.md §2.9）。
     adminStartCloudContainer(
       purpose: CloudContainerPurpose!
       workloadIds: [ID!]
