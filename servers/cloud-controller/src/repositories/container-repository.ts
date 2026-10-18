@@ -27,6 +27,11 @@ export interface CloudContainerEntity {
   workloadIds: string[];
   /** 本次启动最终执行计划（顺序即执行顺序）；历史容器为 []。 */
   workloadPlan: WorkloadPlanEntry[];
+  /**
+   * 必须工作负载失败标记（工作负载三期）：置位后容器不得被收口为 online/connecting；
+   * 注销未完成时由看门狗重试强制注销。
+   */
+  mustFailure: boolean;
   /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null。 */
   currentWorkloadName: string | null;
   createdAt: Date;
@@ -47,6 +52,7 @@ export interface CreateContainerInput {
   exitReason?: string | null;
   workloadIds?: string[];
   workloadPlan?: WorkloadPlanEntry[];
+  mustFailure?: boolean;
   currentWorkloadName?: string | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
@@ -91,17 +97,19 @@ interface RawDoc {
   exitedAt?: Date | null;
   exitReason?: string | null;
   workloadIds?: unknown[] | null;
-  workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown }> | null;
+  workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }> | null;
+  mustFailure?: boolean | null;
   currentWorkloadName?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-/** 归一化计划条目：`workloadId` 转字符串、`params` 缺省 `{}`、`implicit` 缺省 false。 */
+/** 归一化计划条目：`workloadId` 转字符串、`params` 缺省 `{}`、`implicit`/`required` 缺省 false。 */
 function normalizePlanEntry(entry: {
   workloadId: unknown;
   params?: unknown;
   implicit?: unknown;
+  required?: unknown;
 }): WorkloadPlanEntry {
   return {
     workloadId: String(entry.workloadId),
@@ -110,12 +118,15 @@ function normalizePlanEntry(entry: {
         ? ({ ...(entry.params as Record<string, unknown>) })
         : {},
     implicit: entry.implicit === true,
+    required: entry.required === true,
   };
 }
 
 /** 深拷贝计划，避免内存仓储的调用方共享同一数组/对象引用。 */
 function clonePlan(
-  plan: readonly { workloadId: unknown; params?: unknown; implicit?: unknown }[] | undefined,
+  plan:
+    | readonly { workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }[]
+    | undefined,
 ): WorkloadPlanEntry[] {
   return (plan ?? []).map((entry) => normalizePlanEntry(entry));
 }
@@ -136,6 +147,7 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     exitReason: doc.exitReason ?? null,
     workloadIds: (doc.workloadIds ?? []).map((value) => String(value)),
     workloadPlan: clonePlan(doc.workloadPlan ?? []),
+    mustFailure: doc.mustFailure === true,
     currentWorkloadName: doc.currentWorkloadName ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -158,6 +170,7 @@ export class MongoContainerRepository implements ContainerRepository {
       exitReason: input.exitReason ?? null,
       workloadIds: input.workloadIds ?? [],
       workloadPlan: clonePlan(input.workloadPlan),
+      mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
@@ -224,6 +237,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
       exitReason: input.exitReason ?? null,
       workloadIds: [...(input.workloadIds ?? [])],
       workloadPlan: clonePlan(input.workloadPlan),
+      mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,

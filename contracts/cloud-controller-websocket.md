@@ -174,8 +174,18 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 | `items[].workloadName` | `string` | 是 | 工作负载名称（仅用于日志/展示） |
 | `items[].script` | `string` | 是 | 待执行的脚本内容（可能为空字符串，表示该条为已删除工作负载的占位记录） |
 | `items[].params` | `object` | 是 | 本次执行参数，键为参数标识；值类型见下方「参数注入约定」（缺省为 `{}`） |
+| `items[].required` | `boolean` | 否 | 该项是否为本次初始化的「必须」项；缺省 `false`（兼容旧服务端/旧服务端配置） |
 | `items[].timeoutMs` | `number` | 是 | 单条脚本超时（init 默认 `WORKLOAD_INIT_TIMEOUT_MS=300000`） |
 | `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
+
+**必须失败语义（`required`，本期新增）：**
+
+- `required=true` 仅取自**显式选择**的条目；隐式依赖永远为 `false`。等价地，`post` 批次的 `required` 固定为 `false`（清理阶段不参与必须判定）。
+- **裁决权在服务端**：`required` 项的失败判定与容器注销由 cloud-controller 独占。worker 只做省时短路（`phase=init` 且 `item.required === true` 且本条结果为 `failed`/`timeout` 时，上报后不再启动后续条目）；旧 worker 忽略该字段不影响正确性。
+- **服务端裁决**：`init` 记录 `required=true` 且结果为 `failed`/`timeout`（含看门狗判定、执行前被删除的 `failed` 占位）时，服务端**不推进**后续初始化，并把该容器剩余非终态 `init` 记录标 `timeout` 并追加中断说明，随后复用既有销毁链路**强制注销**容器（先 CAS `destroying` 使一次性 token 失效 → 清理批次 → `shutdown` → 删除 Job → `exited`）；**不重试、不退避**。`exitReason` 记为 `必须工作负载「<workloadName>」初始化失败`。
+- 容器一旦被注销不会因迟到的 `workload:result` 回到 `online`（终态幂等忽略 + `finishInit` 对非 `initializing` 直接返回）。
+- **注销失败兜底**：服务端在判定必须失败时即持久化 `mustFailure` 标记（容器收口路径据此拒绝置 `online`/`connecting`）；若强制注销调用失败（瞬时故障），容器会被置为终态 `failed`（保留必须失败 `exitReason`，残留 Job 由巡检回收），或由看门狗重试注销——决不把残缺容器置为可用。
+- `.NET` 等预制脚本不含 `required`：未标记的失败行为与现状一致（容器仍可上线）。
 
 **参数注入约定：** worker 对每个 item 以 `process.env` 为基础注入参数环境变量后执行 `bash -c <script>`：
 
@@ -196,7 +206,7 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 - 单条超过 `timeoutMs` 时终止整个进程组并回报 `timeout`；
 - `post` 批次共享 `budgetMs`：剩余预算耗尽时后续条目直接回报 `timeout`（不启动进程）；
 - 单条输出按尾部 ≤ 256 KiB 截断后回报；
-- 失败的脚本（非零退出）回报 `failed` 并继续后续条目，不中断批次；
+- 失败的脚本（非零退出）回报 `failed` 并继续后续条目，不中断批次；**例外**：`phase=init` 且该条 `required === true` 时，回报 `failed`/`timeout` 后不再启动后续条目（服务端仍会中断剩余记录并注销容器）。
 - 收到 `post` 批次时若仍有 `init` 子进程在运行，先终止该进程组再执行 `post`；
 - 执行期间心跳照常发送；
 - **旧版 worker**：不认识 `workload:run` 时直接忽略（无回报），由服务端看门狗兜底将记录标 `timeout`。
@@ -252,6 +262,8 @@ Worker                              cloud-controller
   │  ──emit("workload:result")──────────→│  逐条执行并回报（共享 budgetMs）
   │  ←──emit("shutdown")───────────────│  post 完成/预算耗尽后：容器退出 → 服务端删除 Job
 ```
+
+> **必须项失败分支（本期新增）：** 上述 `init` 批次中，若某条 `required=true` 且结果为 `failed`/`timeout`（含执行前被删除的占位失败、看门狗判定超时），服务端**不推进**剩余 `init`（把剩余非终态记录标 `timeout`），改为走既有销毁链路强制注销容器：CAS `destroying`（token 立即失效）→ 有 post 脚本则下发 `post` 批次 → `shutdown` → 删除 Job → `exited`，`exitReason` 记为 `必须工作负载「<workloadName>」初始化失败`。
 
 ### 3.1 握手鉴权
 
@@ -324,14 +336,15 @@ Content-Type: application/json
   "purpose": "idle",
   "workloadIds": ["<objectId>", "..."],
   "workloadPlan": [
-    { "workloadId": "<objectId>", "params": { "version": "22" }, "implicit": false },
-    { "workloadId": "<objectId>", "params": {}, "implicit": true }
+    { "workloadId": "<objectId>", "params": { "version": "22" }, "implicit": false, "required": true },
+    { "workloadId": "<objectId>", "params": {}, "implicit": true, "required": false }
   ]
 }
 ```
 
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
-- `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）；非法返回 `400` `INVALID_WORKLOAD`。
+- `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。
+- `workloadPlan[].required`（可选）语义：本次启动该条是否为「必须」；缺省/`null` 归一 `false`，仅 `true` 生效；仅对含初始化脚本的工作负载产生硬失败语义（见 §2.9「必须失败语义」）。
 - 新版 cloud-controller 优先使用 `workloadPlan`：落库到容器 `workloadPlan`，并由 plan 派生出 `workloadIds`（保序），`workloadIds` 字段与 plan 同时下发时为滚动升级兼容。
 - 若请求只有 `workloadIds`（旧版 admin-api），cloud-controller 以只读定义做依赖展开与默认参数归一兜底（含隐式依赖），行为与新 admin-api 一致（依赖先于依赖方、去重、参数取默认值；非法默认值返回 `400` `INVALID_WORKLOAD`）。此时容器 `workloadIds` **按选择顺序落库**（不含隐式依赖），兜底展开得到的 `workloadPlan` 仅用于执行——旧版调用方读回 `workloadIds` 时不会看到选择之外的 ID。
 
@@ -339,7 +352,7 @@ Content-Type: application/json
 
 **错误：**
 - `400` —— `purpose` 非法（本期仅接受 `idle`；其余用途返回明确错误文案「该任务类型暂未开放」）。
-- `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔。
+- `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔 / `required` 非布尔。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
 #### A.2.3 强制销毁
@@ -390,7 +403,7 @@ GET /internal/containers/:id/workload-logs
 | `exitedAt` | `string \| null` | 退出时间 |
 | `exitReason` | `string \| null` | 退出/失败原因 |
 | `workloadIds` | `string[]` | 启动时挂载的工作负载 ID，按选择顺序（缺省为 `[]`） |
-| `workloadPlan` | `object[]` | 本次启动最终执行计划，顺序即执行顺序；每项 `{ workloadId, params, implicit }`（缺省为 `[]`） |
+| `workloadPlan` | `object[]` | 本次启动最终执行计划，顺序即执行顺序；每项 `{ workloadId, params, implicit, required }`（缺省为 `[]`） |
 | `currentWorkloadName` | `string \| null` | 初始化中当前正在执行的工作负载脚本名称；非初始化中为 `null` |
 
 ### A.4 状态枚举
@@ -436,6 +449,7 @@ GET /internal/containers/:id/workload-logs
 | `status` | `string` | `pending` \| `running` \| `success` \| `failed` \| `timeout` |
 | `script` | `string` | 当时实际执行的脚本内容快照（留档） |
 | `params` | `object` | 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 `{}` |
+| `required` | `boolean` | 本次启动该项是否为「必须」（快照）；历史记录缺省为 `false` |
 | `exitCode` | `number \| null` | 进程退出码 |
 | `log` | `string` | 合并捕获的输出（尾部 ≤ 256 KiB） |
 | `startedAt` | `string \| null` | 开始时间（ISO） |

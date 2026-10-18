@@ -46,6 +46,7 @@ async function createWorkload(
   input: {
     name: string;
     initScript?: string;
+    postScript?: string;
     paramSchema?: Array<{
       key: string;
       label: string;
@@ -324,6 +325,204 @@ test.describe('Admin Cloud Container E2E', () => {
       await expect(dialog.getByText(/package_manager: \["pnpm"\]/)).toBeVisible();
     } finally {
       await db!.collection('cloudworkloadlogs').deleteMany({ containerId });
+      await destroyViaApi(page, token, container.id);
+    }
+  });
+
+  test('T-E17: the 必须 switch is shown only for selected workloads with an initScript', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    const suffix = Date.now().toString(36);
+    const withInit = await createWorkload(page, token, {
+      name: `e2e-req-init-${suffix}`,
+      initScript: 'echo init',
+    });
+    // 仅 postScript：无可标记的初始化脚本
+    const postOnly = await createWorkload(page, token, {
+      name: `e2e-req-post-${suffix}`,
+      postScript: 'echo cleanup',
+    });
+
+    let containerId: string | null = null;
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      await page.getByRole('button', { name: '启动', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText(/标记为必须的工作负载初始化失败将导致容器被强制注销/)).toBeVisible();
+
+      // 未勾选：无开关
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).toHaveCount(0);
+      await dialog.getByRole('checkbox', { name: postOnly.name }).click();
+      // 仅 postScript：不展示开关
+      await expect(dialog.getByRole('checkbox', { name: `${postOnly.name} 必须` })).toHaveCount(0);
+
+      await dialog.getByRole('checkbox', { name: withInit.name }).click();
+      const requiredSwitch = dialog.getByRole('checkbox', { name: `${withInit.name} 必须` });
+      await expect(requiredSwitch).toBeVisible();
+      await expect(requiredSwitch).not.toBeChecked();
+      await requiredSwitch.click();
+      await expect(requiredSwitch).toBeChecked();
+
+      // 取消勾选 → 开关消失；重新勾选 → 回到默认（非必须）
+      await dialog.getByRole('checkbox', { name: withInit.name }).click();
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).toHaveCount(0);
+      await dialog.getByRole('checkbox', { name: withInit.name }).click();
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).not.toBeChecked();
+
+      // 提交并核对落库 required=true
+      await requiredSwitch.click();
+      await dialog.getByRole('button', { name: '确认启动' }).click();
+      await expect(dialog).not.toBeVisible();
+
+      let created: ContainerNode | undefined;
+      for (let i = 0; i < 20 && !created; i += 1) {
+        const now = await listContainers(page, token);
+        created = now.find((c) => c.workloads?.some((w) => w.id === withInit.id));
+        if (!created) await page.waitForTimeout(500);
+      }
+      expect(created, 'container should mount the required workload').toBeTruthy();
+      containerId = created!.id;
+
+      const db = await mongoDb();
+      if (db) {
+        const doc = await db
+          .collection('cloudcontainers')
+          .findOne({ _id: new mongoose.Types.ObjectId(containerId) });
+        const plan = (doc?.workloadPlan ?? []) as Array<{ workloadId: unknown; required?: unknown }>;
+        const entry = plan.find((item) => String(item.workloadId) === withInit.id);
+        expect(entry?.required).toBe(true);
+      }
+    } finally {
+      if (containerId) await destroyViaApi(page, token, containerId);
+      await deleteWorkload(page, token, withInit.id);
+      await deleteWorkload(page, token, postOnly.id);
+    }
+  });
+
+  test('T-E18: the order preview marks required items (implicit deps unaffected)', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    const suffix = Date.now().toString(36);
+    const dep = await createWorkload(page, token, {
+      name: `e2e-req-dep-${suffix}`,
+      initScript: 'echo dep',
+    });
+    const parent = await createWorkload(page, token, {
+      name: `e2e-req-parent-${suffix}`,
+      initScript: 'echo parent',
+      dependsOnWorkloadIds: [dep.id],
+    });
+
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      await page.getByRole('button', { name: '启动', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+
+      await dialog.getByRole('checkbox', { name: parent.name }).click();
+      await dialog.getByRole('checkbox', { name: `${parent.name} 必须` }).click();
+
+      const previewItems = dialog.locator('ol li');
+      await expect(previewItems.first()).toContainText(dep.name);
+      await expect(previewItems.first()).toContainText('隐式');
+      await expect(previewItems.nth(1)).toContainText(parent.name);
+      await expect(previewItems.nth(1)).toContainText('必须');
+
+      await dialog.getByRole('button', { name: '取消' }).click();
+    } finally {
+      await deleteWorkload(page, token, dep.id);
+      await deleteWorkload(page, token, parent.id);
+    }
+  });
+
+  test('T-E19: logs dialog marks required records and leaves history unmarked (direct Mongo)', async ({ page }) => {
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未提供，跳过直写 cloudworkloadlogs');
+
+    const token = await adminLoginApi(page);
+    const container = await startContainer(page, token);
+
+    const db = await mongoDb();
+    expect(db).not.toBeNull();
+    const containerId = new mongoose.Types.ObjectId(container.id);
+    const now = new Date();
+    await db!.collection('cloudworkloadlogs').insertMany([
+      {
+        containerId,
+        workloadId: new mongoose.Types.ObjectId(),
+        workloadName: 'must-setup',
+        phase: 'init',
+        status: 'failed',
+        script: 'exit 1',
+        params: {},
+        required: true,
+        exitCode: 1,
+        log: 'boom\n',
+        startedAt: now,
+        finishedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        containerId,
+        workloadId: new mongoose.Types.ObjectId(),
+        workloadName: 'legacy-setup',
+        phase: 'init',
+        status: 'success',
+        script: 'echo ok',
+        params: {},
+        exitCode: 0,
+        log: '',
+        startedAt: now,
+        finishedAt: now,
+        createdAt: new Date(now.getTime() + 1),
+        updatedAt: now,
+      },
+    ]);
+
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      const row = page.locator('tr', { hasText: container.name }).first();
+      await expect(row).toBeVisible();
+      await row.getByRole('button', { name: `工作负载日志 ${container.name}` }).click();
+
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: '工作负载执行日志' })).toBeVisible();
+      // 必须项记录出现「必须」标识；历史记录不误标（默认选中首条 = must-setup）
+      await expect(dialog.getByText('必须', { exact: true })).toBeVisible();
+      // 切到历史记录：无「必须」标识
+      await dialog.getByRole('button', { name: /查看 legacy-setup/ }).click();
+      await expect(dialog.getByText('必须', { exact: true })).toHaveCount(0);
+    } finally {
+      await db!.collection('cloudworkloadlogs').deleteMany({ containerId });
+      await destroyViaApi(page, token, container.id);
+    }
+  });
+
+  test('T-E20: container list shows the must-failure exit reason (direct Mongo)', async ({ page }) => {
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未提供，跳过直写 cloudcontainers');
+
+    const token = await adminLoginApi(page);
+    const container = await startContainer(page, token);
+
+    const db = await mongoDb();
+    expect(db).not.toBeNull();
+    const reason = `必须工作负载「must-a」初始化失败`;
+    await db!
+      .collection('cloudcontainers')
+      .updateOne(
+        { _id: new mongoose.Types.ObjectId(container.id) },
+        { $set: { status: 'exited', exitedAt: new Date(), exitReason: reason } },
+      );
+
+    try {
+      await adminLoginViaUI(page);
+      await page.getByRole('link', { name: /云端容器/ }).click();
+      const row = page.locator('tr', { hasText: container.name }).first();
+      await expect(row).toBeVisible();
+      await expect(row.getByText(/必须工作负载「must-a」初始化失败/)).toBeVisible();
+    } finally {
       await destroyViaApi(page, token, container.id);
     }
   });

@@ -113,6 +113,8 @@ export interface WorkloadPlanItemDTO {
   workloadId: string;
   params: Record<string, unknown>;
   implicit: boolean;
+  /** 本次启动该条是否为「必须」；隐式依赖与旧调用一律 false（裁决 1）。 */
+  required: boolean;
 }
 
 export interface CloudControllerClientOptions {

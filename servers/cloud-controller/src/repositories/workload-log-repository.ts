@@ -19,6 +19,8 @@ export interface CloudWorkloadLogEntity {
   status: WorkloadLogStatus;
   script: string;
   params: Record<string, unknown>;
+  /** 本次启动该项是否为「必须」；历史记录缺省 false。 */
+  required: boolean;
   exitCode: number | null;
   log: string;
   startedAt: Date | null;
@@ -35,6 +37,8 @@ export interface CreateWorkloadLogInput {
   status: WorkloadLogStatus;
   script?: string;
   params?: Record<string, unknown>;
+  /** 本次启动该项是否为「必须」；缺省 false。 */
+  required?: boolean;
   exitCode?: number | null;
   log?: string;
   startedAt?: Date | null;
@@ -54,6 +58,7 @@ interface RawDoc {
   status: WorkloadLogStatus;
   script?: string | null;
   params?: Record<string, unknown> | null;
+  required?: boolean | null;
   exitCode?: number | null;
   log?: string | null;
   startedAt?: Date | null;
@@ -80,6 +85,7 @@ function toEntity(doc: RawDoc): CloudWorkloadLogEntity {
     status: doc.status,
     script: doc.script ?? '',
     params: normalizeParams(doc.params),
+    required: doc.required === true,
     exitCode: doc.exitCode ?? null,
     log: doc.log ?? '',
     startedAt: doc.startedAt ?? null,
@@ -121,6 +127,7 @@ export class MongoWorkloadLogRepository implements WorkloadLogRepository {
         status: input.status,
         script: input.script ?? '',
         params: normalizeParams(input.params),
+        required: input.required === true,
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,
@@ -195,6 +202,7 @@ export class InMemoryWorkloadLogRepository implements WorkloadLogRepository {
         status: input.status,
         script: input.script ?? '',
         params: normalizeParams(input.params),
+        required: input.required === true,
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,

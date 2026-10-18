@@ -20,6 +20,8 @@ const cloudWorkloadLogSchema = new mongoose.Schema(
     script: { type: String, required: true },
     // 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {}
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // 本次启动该项是否为「必须」；历史记录缺省 false（与 cloud-controller 写入结构对齐）
+    required: { type: Boolean, default: false },
     exitCode: { type: Number, default: null },
     log: { type: String, default: '' },
     startedAt: { type: Date, default: null },

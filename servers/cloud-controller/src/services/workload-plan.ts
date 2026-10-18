@@ -144,6 +144,8 @@ export function resolveFallbackWorkloadPlan(
       workloadId: id,
       params: normalizeDefaultParams(definition.paramSchema),
       implicit: !explicitSet.has(id),
+      // 兜底展开（仅 workloadIds 的旧请求）无 required 语义，一律 false（裁决 2）。
+      required: false,
     });
   };
 

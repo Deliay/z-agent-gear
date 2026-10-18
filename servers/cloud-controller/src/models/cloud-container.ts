@@ -37,6 +37,8 @@ export interface WorkloadPlanEntry {
   workloadId: string;
   params: Record<string, unknown>;
   implicit: boolean;
+  /** 本次启动该条是否为「必须」；缺省 false（历史记录/旧调用）。 */
+  required: boolean;
 }
 
 const workloadPlanEntrySchema = new mongoose.Schema(
@@ -44,6 +46,7 @@ const workloadPlanEntrySchema = new mongoose.Schema(
     workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     implicit: { type: Boolean, default: false },
+    required: { type: Boolean, default: false },
   },
   { _id: false },
 );
@@ -68,6 +71,9 @@ const cloudContainerSchema = new mongoose.Schema(
     exitReason: { type: String, default: null },
     workloadIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
     workloadPlan: { type: [workloadPlanEntrySchema], default: [] },
+    // 必须工作负载失败标记（工作负载三期）：置位后容器不得被收口为 online/connecting，
+    // 且在注销未完成（forceDestroy 失败/在途）时由看门狗重试强制注销。
+    mustFailure: { type: Boolean, default: false },
     currentWorkloadName: { type: String, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },

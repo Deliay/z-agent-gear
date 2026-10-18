@@ -30,12 +30,16 @@ export interface WorkloadDefinitionSnapshot {
 export interface WorkloadSelection {
   workloadId: string;
   params?: Record<string, unknown> | null;
+  /** 本次启动该显式选择是否为「必须」；缺省/非布尔一律按 false（裁决 1）。 */
+  required?: boolean;
 }
 
 export interface WorkloadPlanItem {
   workloadId: string;
   params: Record<string, unknown>;
   implicit: boolean;
+  /** 本次启动该条是否为「必须」；隐式依赖永远 false（裁决 1）。 */
+  required: boolean;
 }
 
 /** 展开后工作负载条数上限（提案 §6.2 约束「单次挂载 ≤10」） */
@@ -149,7 +153,13 @@ export function resolveWorkloadPlan(
     // 显式选择优先：无论经何路径访问到，只要在显式集合中即用用户参数且 implicit=false
     const explicit = explicitById.get(id);
     const params = normalizeWorkloadParams(definition, explicit?.params ?? {});
-    plan.push({ workloadId: id, params, implicit: !explicit });
+    // required 唯一语义（裁决 1）：显式选择取 `=== true`，隐式依赖与缺省一律 false。
+    plan.push({
+      workloadId: id,
+      params,
+      implicit: !explicit,
+      required: explicit?.required === true,
+    });
   };
 
   for (const selection of explicitSelections) visit(String(selection.workloadId));

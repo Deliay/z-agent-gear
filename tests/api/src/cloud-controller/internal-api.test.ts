@@ -200,6 +200,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
           status: 'success',
           script: 'echo init',
           params: { version: '20', package_manager: ['pnpm'] },
+          required: true,
           exitCode: 0,
           log: 'init\n',
           startedAt: new Date(base),
@@ -234,6 +235,9 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         // 参数快照随记录返回（A.6）；历史无 params 归一为 {}
         expect(logs[0].params).toEqual({ version: '20', package_manager: ['pnpm'] });
         expect(logs[1].params).toEqual({});
+        // required 快照随记录返回（A.6）；历史缺省 false
+        expect(logs[0].required).toBe(true);
+        expect(logs[1].required).toBe(false);
         expect(logs[0].exitCode).toBe(0);
         expect(logs[1].exitCode).toBeNull();
         expect(logs[0].containerId).toBe(created.id);
@@ -261,18 +265,18 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         method: 'POST',
         body: JSON.stringify({
           purpose: 'idle',
-          workloadPlan: [{ workloadId: workloadId.toString(), params: { version: '20' }, implicit: false }],
+          workloadPlan: [{ workloadId: workloadId.toString(), params: { version: '20' }, implicit: false, required: true }],
         }),
       });
       expect(res.status).toBe(201);
       const created = (await res.json()) as {
         id: string;
         workloadIds: string[];
-        workloadPlan: Array<{ workloadId: string; params: Record<string, unknown>; implicit: boolean }>;
+        workloadPlan: Array<{ workloadId: string; params: Record<string, unknown>; implicit: boolean; required: boolean }>;
       };
       containerId = created.id;
       expect(created.workloadPlan).toEqual([
-        { workloadId: workloadId.toString(), params: { version: '20' }, implicit: false },
+        { workloadId: workloadId.toString(), params: { version: '20' }, implicit: false, required: true },
       ]);
       // workloadIds 由 plan 派生
       expect(created.workloadIds).toEqual([workloadId.toString()]);
@@ -312,6 +316,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       },
       { label: 'params 非对象', body: { purpose: 'idle', workloadPlan: [{ workloadId: valid, params: 'x', implicit: false }] } },
       { label: 'implicit 非布尔', body: { purpose: 'idle', workloadPlan: [{ workloadId: valid, params: {}, implicit: 'yes' }] } },
+      { label: 'required 非布尔', body: { purpose: 'idle', workloadPlan: [{ workloadId: valid, params: {}, implicit: false, required: 'yes' }] } },
       { label: 'workloadId 缺失', body: { purpose: 'idle', workloadPlan: [{ params: {}, implicit: false }] } },
       { label: '条目非对象', body: { purpose: 'idle', workloadPlan: ['x'] } },
       {
@@ -376,10 +381,11 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         containerId = created.id;
         // 契约 A.2.2：仅 workloadIds 的旧版请求按选择顺序落库（不含隐式依赖）
         expect(created.workloadIds).toEqual([parentId.toString()]);
-        // 兜底展开得到的 plan 仅用于执行（依赖先于依赖方、隐式项取默认参数且多选去重）
+        // 兜底展开得到的 plan 仅用于执行（依赖先于依赖方、隐式项取默认参数且多选去重；
+        // required 一律 false —— 旧请求无必须语义）
         expect(created.workloadPlan).toEqual([
-          { workloadId: depId.toString(), params: { version: '22', pm: ['npm'] }, implicit: true },
-          { workloadId: parentId.toString(), params: {}, implicit: false },
+          { workloadId: depId.toString(), params: { version: '22', pm: ['npm'] }, implicit: true, required: false },
+          { workloadId: parentId.toString(), params: {}, implicit: false, required: false },
         ]);
       } finally {
         if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
@@ -442,7 +448,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       };
       containerId = created.id;
       expect(created.workloadPlan).toEqual([
-        { workloadId: workloadId.toString(), params: {}, implicit: false },
+        { workloadId: workloadId.toString(), params: {}, implicit: false, required: false },
       ]);
     } finally {
       if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
@@ -491,4 +497,81 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       }
     },
   );
+
+  it.skipIf(!HAS_MONGO)(
+    'T-ICC7: normalizes plan.required (missing/null→false, true preserved) and rejects non-boolean',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
+
+      const mustId = await insertWorkload(db!);
+      const optId = await insertWorkload(db!);
+      let containerId: string | null = null;
+      try {
+        const res = await req('/internal/containers', {
+          method: 'POST',
+          body: JSON.stringify({
+            purpose: 'idle',
+            workloadPlan: [
+              { workloadId: mustId.toString(), params: {}, implicit: false, required: true },
+              { workloadId: optId.toString(), params: {}, implicit: false },
+            ],
+          }),
+        });
+        expect(res.status).toBe(201);
+        const created = (await res.json()) as {
+          id: string;
+          workloadPlan: Array<{ workloadId: string; required: boolean }>;
+        };
+        containerId = created.id;
+        expect(created.workloadPlan).toEqual([
+          { workloadId: mustId.toString(), params: {}, implicit: false, required: true },
+          { workloadId: optId.toString(), params: {}, implicit: false, required: false },
+        ]);
+
+        // required: null 归一 false
+        const nullRes = await req('/internal/containers', {
+          method: 'POST',
+          body: JSON.stringify({
+            purpose: 'idle',
+            workloadPlan: [{ workloadId: optId.toString(), params: {}, implicit: false, required: null }],
+          }),
+        });
+        expect(nullRes.status).toBe(201);
+        const nullCreated = (await nullRes.json()) as {
+          id: string;
+          workloadPlan: Array<{ required: boolean }>;
+        };
+        expect(nullCreated.workloadPlan[0]!.required).toBe(false);
+        await req(`/internal/containers/${nullCreated.id}`, { method: 'DELETE' });
+      } finally {
+        if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
+        await db!.collection('cloudworkloads').deleteMany({ _id: { $in: [mustId, optId] } });
+      }
+    },
+  );
+
+  it.skipIf(!HAS_MONGO)('T-ICC8: workloadIds-only fallback expansion sets required=false', async () => {
+    const db = await mongoDb();
+    expect(db).not.toBeNull();
+
+    const workloadId = await insertWorkload(db!);
+    let containerId: string | null = null;
+    try {
+      const res = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({ purpose: 'idle', workloadIds: [workloadId.toString()] }),
+      });
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        id: string;
+        workloadPlan: Array<{ required: boolean }>;
+      };
+      containerId = created.id;
+      expect(created.workloadPlan.every((entry) => entry.required === false)).toBe(true);
+    } finally {
+      if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
+      await db!.collection('cloudworkloads').deleteOne({ _id: workloadId });
+    }
+  });
 });

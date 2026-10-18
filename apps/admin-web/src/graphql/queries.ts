@@ -159,6 +159,7 @@ export const ADMIN_CLOUD_WORKLOAD_LOGS = gql`
       status
       script
       params
+      required
       exitCode
       log
       startedAt

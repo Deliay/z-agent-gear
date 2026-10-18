@@ -96,6 +96,38 @@ describe('ContainerService', () => {
     expect(result.deletedJob).toBe(true);
   });
 
+  it('T-WD15: destroy(id, { reason }) overrides exitReason; no reason stays 强制销毁; delete failure keeps suffix', async () => {
+    const { repo, service } = setup();
+
+    // 活跃路径：自定义 reason 覆盖 exitReason
+    const a = await service.start('idle');
+    await service.markOnline(a.id);
+    await service.destroy(a.id, { reason: '必须工作负载「X」初始化失败' });
+    expect((await repo.findById(a.id))?.exitReason).toBe('必须工作负载「X」初始化失败');
+
+    // 不传 reason：行为与现状一致
+    const b = await service.start('idle');
+    await service.markOnline(b.id);
+    await service.destroy(b.id);
+    expect((await repo.findById(b.id))?.exitReason).toBe('强制销毁');
+
+    // Job 删除失败：保留后缀
+    const { repo: repo2, client: client2, service: service2 } = setup();
+    const c = await service2.start('idle');
+    await service2.markOnline(c.id);
+    client2.failDeleteTimes = 100;
+    await service2.destroy(c.id, { reason: '必须工作负载「Y」初始化失败' });
+    expect((await repo2.findById(c.id))?.exitReason).toBe(
+      '必须工作负载「Y」初始化失败（Job 删除失败，需人工清理）',
+    );
+
+    // forceDestroy 为 destroy(id, { reason }) 的语义等价封装
+    const d = await service.start('idle');
+    await service.markOnline(d.id);
+    await service.forceDestroy(d.id, '必须工作负载「Z」初始化失败');
+    expect((await repo.findById(d.id))?.exitReason).toBe('必须工作负载「Z」初始化失败');
+  });
+
   it('T-S4: destroy(no response) still force-deletes the job and recycles resources', async () => {
     const { repo, client, service } = setup();
     const created = await service.start('idle');
@@ -423,18 +455,33 @@ describe('ContainerService workload state machine', () => {
     const { repo, service } = setup();
 
     const created = await service.start('idle', null, [], [
-      { workloadId: 'dep', params: {}, implicit: true },
-      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false },
+      { workloadId: 'dep', params: {}, implicit: true, required: false },
+      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false, required: false },
     ]);
 
     const stored = await repo.findById(created.id);
     expect(stored?.workloadPlan).toEqual([
-      { workloadId: 'dep', params: {}, implicit: true },
-      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false },
+      { workloadId: 'dep', params: {}, implicit: true, required: false },
+      { workloadId: 'app', params: { version: '22', pm: ['pnpm'] }, implicit: false, required: false },
     ]);
     // workloadIds 由 plan 派生（保序），兼容旧版读取
     expect(stored?.workloadIds).toEqual(['dep', 'app']);
     expect(created.status).toBe('connecting');
+  });
+
+  it('T-CC1-REQ: workloadPlan.required 落库（缺省归一 false，显式 true 保留）', async () => {
+    const { repo, service } = setup();
+
+    const created = await service.start('idle', null, [], [
+      { workloadId: 'must', params: {}, implicit: false, required: true },
+      { workloadId: 'opt', params: {}, implicit: false },
+    ]);
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.workloadPlan).toEqual([
+      { workloadId: 'must', params: {}, implicit: false, required: true },
+      { workloadId: 'opt', params: {}, implicit: false, required: false },
+    ]);
   });
 
   it('T-CC1b: plan 与 workloadIds 同时下发时以 plan 为准；plan 派生时去重', async () => {
@@ -482,8 +529,8 @@ describe('ContainerService workload state machine', () => {
     // 契约 A.2.2：仅 workloadIds 的旧版请求按选择顺序落库（不含隐式依赖）
     expect(stored?.workloadIds).toEqual(['legacy']);
     expect(stored?.workloadPlan).toEqual([
-      { workloadId: 'dep', params: {}, implicit: true },
-      { workloadId: 'legacy', params: {}, implicit: false },
+      { workloadId: 'dep', params: {}, implicit: true, required: false },
+      { workloadId: 'legacy', params: {}, implicit: false, required: false },
     ]);
   });
 

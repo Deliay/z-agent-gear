@@ -31,7 +31,19 @@ src/
 
 - 参数 env 仅对当前 item 生效，不污染后续脚本；`params` 缺省 `{}` 时行为与旧版一致。
 - 参数只作为脚本入参，不改变执行边界、超时与权限。
-- 版本：包版本 `2.3.0`（major 保持 2）；worker 镜像内 agent-gear 需 `>=2.3.0` 才有参数注入能力（cloud-controller `MIN_WORKER_VERSION` 仍为 `2.2.0`）。
+
+## 工作负载「必须」短路（工作负载三期）
+
+- `workload:run` 的 `items[]` 可携带 `required: boolean`（缺省 `false`）。仅当 `phase=init` 且
+  `item.required === true` 时，该条结果为 `failed`/`timeout` 后**不再启动后续条目**（上报本条结果即结束本批）。
+- 该短路仅是**省时优化**：必须项的失败裁决、剩余初始化中断与容器强制注销均由 cloud-controller
+  `workload-dispatcher` 独占；旧 worker 忽略 `required` 不影响正确性。
+- `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
+- 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
+
+- 版本：包版本 `2.4.0`（major 保持 2；标记 `items[].required` 短路能力）；worker 镜像内 agent-gear 需
+  `>=2.4.0` 才具备短路优化。参数注入需 `>=2.3.0`。cloud-controller `MIN_WORKER_VERSION` 仍为 `2.2.0`
+  （服务端为唯一裁决，旧 worker 忽略 `required` 仍正确）。
 
 ## Dev Commands
 
