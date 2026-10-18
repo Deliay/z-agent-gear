@@ -487,4 +487,42 @@ describe('internal management API', () => {
     expect(logs[0]!.required).toBe(true);
     expect(logs[1]!.required).toBe(false);
   });
+
+  it('T-CC-B8: POST 透传 billingAccountId 并在 A.3 JSON 暴露', async () => {
+    const res = await createContainer({ purpose: 'idle', billingAccountId: 'acct-1' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      id: string;
+      billingAccountId: string | null;
+      billingStartedAt: string | null;
+    };
+    expect(body.billingAccountId).toBe('acct-1');
+    expect(body.billingStartedAt).toBeNull();
+
+    const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
+    const items = (await list.json()) as Array<{ id: string; billingAccountId: string | null }>;
+    expect(items.find((item) => item.id === body.id)?.billingAccountId).toBe('acct-1');
+  });
+
+  it('T-CC-B8: 非法 billingAccountId 返回 400', async () => {
+    const res = await createContainer({ purpose: 'idle', billingAccountId: 123 });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe('INVALID_BILLING_ACCOUNT');
+  });
+
+  it('T-CC-B7: DELETE reason 写入 exitReason（query/body 均支持）', async () => {
+    const created = await createContainer({ purpose: 'idle' });
+    const body = (await created.json()) as { id: string };
+    const reason = '余额不足超过 10 分钟，强制销毁';
+    const deleted = await fetch(
+      `${baseUrl}/internal/containers/${body.id}?reason=${encodeURIComponent(reason)}`,
+      { method: 'DELETE', headers: authHeaders() },
+    );
+    expect(deleted.status).toBe(200);
+
+    const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
+    const items = (await list.json()) as Array<{ id: string; exitReason: string | null }>;
+    expect(items.find((item) => item.id === body.id)?.exitReason).toBe(reason);
+  });
 });

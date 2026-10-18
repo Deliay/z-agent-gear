@@ -357,10 +357,14 @@ export class ContainerService {
       return this.updateGuarded(containerId, basePatch);
     }
 
+    // 首次 online：原子条件写入（filter billingStartedAt=null），并发 markOnline 只有一次生效
     const firstOnline = await this.repo.update(
       containerId,
       { ...basePatch, billingStartedAt: now },
-      { fromStatuses: [...ACTIVE_STATUSES] },
+      {
+        fromStatuses: [...ACTIVE_STATUSES],
+        requireNullFields: ['billingStartedAt'],
+      },
     );
     if (firstOnline) {
       if (firstOnline.billingAccountId && firstOnline.billingStartedAt) {
@@ -378,13 +382,16 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, {
+    const updated = await this.updateGuarded(containerId, {
       status: 'exited',
       exitedAt: at,
       exitReason,
       tokenHash: null,
       currentWorkloadName: null,
     });
+    // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
+    if (updated) this.emitDestroyedIfBilled(updated);
+    return updated;
   }
 
   async markFailed(
@@ -392,13 +399,15 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, {
+    const updated = await this.updateGuarded(containerId, {
       status: 'failed',
       exitedAt: at,
       exitReason,
       tokenHash: null,
       currentWorkloadName: null,
     });
+    if (updated) this.emitDestroyedIfBilled(updated);
+    return updated;
   }
 
   async getById(containerId: string): Promise<CloudContainerEntity | null> {
@@ -570,7 +579,7 @@ export class ContainerService {
 
       if (record.status === 'destroying') {
         // 契约要求 destroying → exited：无论 Job 本次被删除还是已不存在，都迁移终态。
-        await this.repo.update(
+        const exited = await this.repo.update(
           containerId,
           {
             status: 'exited',
@@ -582,6 +591,7 @@ export class ContainerService {
           },
           { fromStatuses: ['destroying'] },
         );
+        if (exited) this.emitDestroyedIfBilled(exited);
       } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });
       }

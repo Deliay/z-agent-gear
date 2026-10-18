@@ -132,4 +132,34 @@ describe('cloud-controller 计费源头', () => {
     const stored = await repo.findById(created.id);
     expect(stored?.exitReason).toBe('余额不足超过 10 分钟，强制销毁');
   });
+
+  it('T-CC-B9: 计费钩子抛错不阻断 markOnline/destroy 生命周期', async () => {
+    const { repo, service } = setupService({
+      onReady: () => {
+        throw new Error('outbox unavailable');
+      },
+      onDestroyed: () => {
+        throw new Error('outbox unavailable');
+      },
+    });
+    const created = await service.start('idle', null, [], null, { billingAccountId: 'acct-1' });
+    const online = await service.markOnline(created.id);
+    expect(online?.status).toBe('online');
+    expect(online?.billingStartedAt).toBeInstanceOf(Date);
+
+    const result = await service.destroy(created.id);
+    expect(result.success).toBe(true);
+    expect((await repo.findById(created.id))?.status).toBe('exited');
+  });
+
+  it('T-CC-B3: 无脚本 register 直通路径（connecting→online）同样写入计费起点并投递', async () => {
+    const ready: CloudContainerEntity[] = [];
+    const { service } = setupService({ onReady: (container) => ready.push(container) });
+    const created = await service.start('idle', null, [], null, { billingAccountId: 'acct-2' });
+    // 无初始化脚本：worker register 接受即 online（不经过 initializing）
+    const online = await service.markOnline(created.id);
+    expect(online?.status).toBe('online');
+    expect(online?.billingStartedAt).toBeInstanceOf(Date);
+    expect(ready).toHaveLength(1);
+  });
 });

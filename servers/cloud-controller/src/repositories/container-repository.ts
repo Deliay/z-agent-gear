@@ -75,6 +75,8 @@ export type UpdateContainerInput = Partial<
  */
 export interface UpdateContainerOptions {
   fromStatuses?: CloudContainerStatus[];
+  /** 仅当这些字段当前为 null/缺失时才更新（原子「首次写入」语义）。 */
+  requireNullFields?: string[];
 }
 
 export interface ContainerRepository {
@@ -214,6 +216,9 @@ export class MongoContainerRepository implements ContainerRepository {
     if (options?.fromStatuses && options.fromStatuses.length > 0) {
       filter.status = { $in: options.fromStatuses };
     }
+    for (const field of options?.requireNullFields ?? []) {
+      filter[field] = null;
+    }
     const doc = await CloudContainer.findOneAndUpdate(
       filter,
       { $set: patch },
@@ -290,6 +295,10 @@ export class InMemoryContainerRepository implements ContainerRepository {
     if (!found) return null;
     if (options?.fromStatuses && !options.fromStatuses.includes(found.status)) {
       return null;
+    }
+    for (const field of options?.requireNullFields ?? []) {
+      const value = (found as unknown as Record<string, unknown>)[field];
+      if (value !== null && value !== undefined) return null;
     }
     const updated: CloudContainerEntity = {
       ...found,
