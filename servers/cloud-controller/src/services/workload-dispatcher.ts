@@ -26,6 +26,19 @@ export interface WorkloadContainerStatePort {
   markInitializing(containerId: string, currentWorkloadName: string): Promise<unknown>;
   markOnline(containerId: string): Promise<unknown>;
   markConnecting(containerId: string): Promise<unknown>;
+  /** 必须失败：锁外强制注销（复用既有 destroy 链路，`reason` 写入 `exitReason`）。 */
+  forceDestroy(containerId: string, reason: string): Promise<unknown>;
+}
+
+/** 必须项失败信号（裁决 4）：仅携带可读负载名，供锁外注销文案使用。 */
+export interface RequiredFailure {
+  workloadName: string;
+}
+
+/** `startInit` 结果（裁决 10）：`initializing` 表示容器现在处于/进入初始化；`requiredFailure` 时不得 markOnline。 */
+export interface StartInitResult {
+  initializing: boolean;
+  requiredFailure: RequiredFailure | null;
 }
 
 export interface WorkloadResultPayload {
@@ -52,6 +65,8 @@ export interface WorkloadDispatcherDeps {
   postBudgetMs: number;
   /** 单条日志存储上限（写入前尾部截断）。 */
   logMaxBytes: number;
+  /** 必须失败：锁外强制注销容器（注入 `containerService.destroy(id, { reason })`，裁决 7）。 */
+  forceDestroy: (containerId: string, reason: string) => Promise<unknown>;
   /** 可注入的时钟（测试确定性用），默认 `Date.now`。 */
   now?: () => number;
   logger?: Logger;
@@ -71,6 +86,8 @@ const DISCONNECTED_LOG = '容器未连接，未执行';
 const DESTROY_INTERRUPT_LOG = '容器销毁中断';
 const POST_BUDGET_EXCEEDED_LOG = '清理脚本超时';
 const INIT_TIMEOUT_LOG = '初始化超时';
+/** 必须项失败后，对剩余非终态 init 记录追加的中断说明（裁决 5）。 */
+const REQUIRED_FAILURE_INTERRUPT_LOG = '必须工作负载初始化失败，已中断';
 
 /** 截断保留尾部 ≤ maxBytes（UTF-8 安全：丢弃起始处的半个多字节字符）。 */
 export function truncateLogTail(text: string, maxBytes: number): string {
@@ -106,12 +123,14 @@ export function resolveContainerPlan(
       workloadId: entry.workloadId,
       params: entry.params ?? {},
       implicit: entry.implicit === true,
+      required: entry.required === true,
     }));
   }
   return (container.workloadIds ?? []).map((id) => ({
     workloadId: id,
     params: {},
     implicit: false,
+    required: false,
   }));
 }
 
@@ -139,23 +158,30 @@ export class WorkloadDispatcher {
   /**
    * 容器 register 后的初始化入口。
    *
-   * 返回 `true` 表示容器现在处于/进入 `initializing`（调用方不要再 markOnline）；
-   * 返回 `false` 表示无初始化脚本（或纯占位记录）→ 调用方按现状 markOnline。
+   * 返回 `initializing=true` 表示容器现在处于/进入 `initializing`（调用方不要再 markOnline）；
+   * `requiredFailure` 非空表示「必须项失败」，**已在锁外完成强制注销**，调用方不得 markOnline。
    * 重连（已是 `initializing`）不重发批次（裁决 6）。
    */
-  async startInit(containerId: string): Promise<boolean> {
-    return this.mutex.runExclusive(containerId, () => this.startInitLocked(containerId));
+  async startInit(containerId: string): Promise<StartInitResult> {
+    const result = await this.mutex.runExclusive(containerId, () =>
+      this.startInitLocked(containerId),
+    );
+    if (result.requiredFailure) {
+      await this.forceDestroy(containerId, result.requiredFailure);
+    }
+    return result;
   }
 
-  private async startInitLocked(containerId: string): Promise<boolean> {
+  private async startInitLocked(containerId: string): Promise<StartInitResult> {
+    const noInit: StartInitResult = { initializing: false, requiredFailure: null };
     const container = await this.deps.containerRepository.findById(containerId);
-    if (!container) return false;
-    if (container.status === 'initializing') return true;
+    if (!container) return noInit;
+    if (container.status === 'initializing') return { initializing: true, requiredFailure: null };
     // 仅 creating/connecting（回连注册路径）触发初始化；online 重连不重跑。
-    if (container.status !== 'connecting' && container.status !== 'creating') return false;
+    if (container.status !== 'connecting' && container.status !== 'creating') return noInit;
 
     const plan = resolveContainerPlan(container);
-    if (plan.length === 0) return false;
+    if (plan.length === 0) return noInit;
 
     const workloads = await this.deps.workloadRepository.findByIds(
       plan.map((entry) => entry.workloadId),
@@ -168,19 +194,22 @@ export class WorkloadDispatcher {
       script: string;
       params: Record<string, unknown>;
       deleted: boolean;
+      required: boolean;
     }
 
     const entries: Entry[] = [];
     for (const item of plan) {
+      const required = item.required === true;
       const workload = byId.get(item.workloadId);
       if (!workload) {
-        // 裁决 3：执行前被删除 → 生成 FAILED 占位记录，不阻断上线。
+        // 裁决 3：执行前被删除 → 生成 FAILED 占位记录（留档）；若为必须项则触发必须失败（裁决 9）。
         entries.push({
           workloadId: item.workloadId,
           workloadName: DELETED_WORKLOAD_NAME,
           script: '',
           params: {},
           deleted: true,
+          required,
         });
         continue;
       }
@@ -192,11 +221,13 @@ export class WorkloadDispatcher {
         script,
         params: item.params ?? {},
         deleted: false,
+        required,
       });
     }
 
-    if (entries.length === 0) return false;
+    if (entries.length === 0) return noInit;
 
+    const requiredDeleted = entries.find((entry) => entry.deleted && entry.required);
     const firstRunIndex = entries.findIndex((entry) => !entry.deleted);
     const now = new Date(this.now());
     const inputs: CreateWorkloadLogInput[] = entries.map((entry, index) => {
@@ -209,6 +240,7 @@ export class WorkloadDispatcher {
           status: 'failed',
           script: '',
           params: {},
+          required: entry.required,
           log: DELETED_WORKLOAD_LOG,
           exitCode: null,
           startedAt: now,
@@ -224,6 +256,7 @@ export class WorkloadDispatcher {
         status: isFirst ? 'running' : 'pending',
         script: entry.script,
         params: entry.params,
+        required: entry.required,
         log: '',
         exitCode: null,
         startedAt: isFirst ? now : null,
@@ -232,15 +265,55 @@ export class WorkloadDispatcher {
     });
 
     const logs = await this.deps.workloadLogRepository.createMany(inputs);
+
+    // 裁决 9：计划中存在「必须且执行前被删除」的条目 → 留档后中断剩余非终态 init，
+    // 不下发批次、不进入 initializing，返回信号由调用方锁外注销。
+    if (requiredDeleted) {
+      await this.markRemainingInitTimeout(containerId, now, REQUIRED_FAILURE_INTERRUPT_LOG);
+      return {
+        initializing: false,
+        requiredFailure: { workloadName: requiredDeleted.workloadName },
+      };
+    }
+
     const runLogs = logs.filter((log) => !isTerminalWorkloadLogStatus(log.status));
     if (runLogs.length === 0) {
       // 全部为已删除占位记录：不进入 initializing。
-      return false;
+      return noInit;
     }
 
     await this.deps.containerService.markInitializing(containerId, runLogs[0]!.workloadName);
     this.emitRun(containerId, 'init', runLogs);
-    return true;
+    return { initializing: true, requiredFailure: null };
+  }
+
+  /** 把该容器剩余非终态 init 记录标 `timeout` 并追加中断说明（裁决 5）。 */
+  private async markRemainingInitTimeout(
+    containerId: string,
+    now: Date,
+    extraLog: string,
+  ): Promise<void> {
+    const active = await this.deps.workloadLogRepository.findActiveByContainer(containerId, 'init');
+    for (const log of active) {
+      await this.deps.workloadLogRepository.updateById(log.id, {
+        status: 'timeout',
+        log: appendLog(log.log, extraLog),
+        finishedAt: now,
+      });
+    }
+  }
+
+  /** 锁外强制注销（裁决 4/7）：`exitReason` 含必须负载名，不重试、不退避。 */
+  private async forceDestroy(containerId: string, failure: RequiredFailure): Promise<void> {
+    const reason = `必须工作负载「${failure.workloadName}」初始化失败`;
+    try {
+      await this.deps.forceDestroy(containerId, reason);
+    } catch (err) {
+      this.deps.logger?.error?.(
+        `[workload] forceDestroy failed containerId=${containerId} reason=${reason}`,
+        err,
+      );
+    }
   }
 
   /**
@@ -263,35 +336,40 @@ export class WorkloadDispatcher {
     return workloads.some((workload) => (workload.initScript ?? '').trim().length > 0);
   }
 
-  /** 处理单条 `workload:result`（校验归属、终态幂等、推进下一条/收口）。 */
+  /** 处理单条 `workload:result`（校验归属、终态幂等、推进下一条/收口）。必须失败时锁外注销。 */
   async handleResult(containerId: string, payload: WorkloadResultPayload): Promise<void> {
-    await this.mutex.runExclusive(containerId, () => this.handleResultLocked(containerId, payload));
+    const failure = await this.mutex.runExclusive(containerId, () =>
+      this.handleResultLocked(containerId, payload),
+    );
+    if (failure) {
+      await this.forceDestroy(containerId, failure);
+    }
   }
 
   private async handleResultLocked(
     containerId: string,
     payload: WorkloadResultPayload,
-  ): Promise<void> {
+  ): Promise<RequiredFailure | null> {
     const logId = typeof payload?.logId === 'string' ? payload.logId : '';
     if (!logId) {
       this.deps.logger?.warn?.(`[workload] result missing logId containerId=${containerId}`);
-      return;
+      return null;
     }
     const record = await this.deps.workloadLogRepository.findById(logId);
     if (!record) {
       this.deps.logger?.warn?.(
         `[workload] result for unknown logId=${logId} containerId=${containerId}`,
       );
-      return;
+      return null;
     }
     if (record.containerId !== containerId) {
       this.deps.logger?.warn?.(
         `[workload] result logId=${logId} does not belong to containerId=${containerId} ` +
           `(actual=${record.containerId})`,
       );
-      return;
+      return null;
     }
-    if (isTerminalWorkloadLogStatus(record.status)) return; // 幂等：终态忽略迟到/重放结果
+    if (isTerminalWorkloadLogStatus(record.status)) return null; // 幂等：终态忽略迟到/重放结果
 
     const status = normalizeResultStatus(payload.status);
     const exitCode =
@@ -302,13 +380,22 @@ export class WorkloadDispatcher {
       typeof payload.log === 'string' ? payload.log : '',
       this.deps.logMaxBytes,
     );
+    const now = new Date(this.now());
     await this.deps.workloadLogRepository.updateById(logId, {
       status,
       exitCode,
       log,
-      finishedAt: new Date(this.now()),
+      finishedAt: now,
     });
+
+    // 必须失败裁决（裁决 4/5）：init 阶段的必须项 failed/timeout → 不推进，中断剩余 init，返回信号。
+    if (record.phase === 'init' && record.required && (status === 'failed' || status === 'timeout')) {
+      await this.markRemainingInitTimeout(containerId, now, REQUIRED_FAILURE_INTERRUPT_LOG);
+      return { workloadName: record.workloadName };
+    }
+
     await this.advance(containerId, record.phase);
+    return null;
   }
 
   /** 推到下一条 pending（RUNNING）或收口本阶段。 */
@@ -423,6 +510,7 @@ export class WorkloadDispatcher {
       status: 'failed',
       script: '',
       params: {},
+      required: false,
       log: DELETED_WORKLOAD_POST_LOG,
       exitCode: null,
       startedAt: null,
@@ -441,6 +529,7 @@ export class WorkloadDispatcher {
           status: 'timeout',
           script: item.workload.postScript ?? '',
           params: item.entry.params ?? {},
+          required: false,
           log: DISCONNECTED_LOG,
           exitCode: null,
           startedAt: null,
@@ -463,6 +552,7 @@ export class WorkloadDispatcher {
       status: index === 0 ? 'running' : 'pending',
       script: item.workload.postScript ?? '',
       params: item.entry.params ?? {},
+      required: false,
       log: '',
       exitCode: null,
       startedAt: index === 0 ? now : null,
@@ -519,13 +609,21 @@ export class WorkloadDispatcher {
     const records = await this.deps.containerRepository.findAll();
     for (const record of records) {
       if (record.status !== 'initializing') continue;
-      await this.mutex.runExclusive(record.id, () => this.watchdogInitializing(record.id, now));
+      const failure = await this.mutex.runExclusive(record.id, () =>
+        this.watchdogInitializing(record.id, now),
+      );
+      if (failure) {
+        await this.forceDestroy(record.id, failure);
+      }
     }
   }
 
-  private async watchdogInitializing(containerId: string, now: number): Promise<void> {
+  private async watchdogInitializing(
+    containerId: string,
+    now: number,
+  ): Promise<RequiredFailure | null> {
     const container = await this.deps.containerRepository.findById(containerId);
-    if (!container || container.status !== 'initializing') return;
+    if (!container || container.status !== 'initializing') return null;
 
     const initLogs = (await this.deps.workloadLogRepository.findByContainer(containerId)).filter(
       (log) => log.phase === 'init',
@@ -533,7 +631,7 @@ export class WorkloadDispatcher {
     const activeInit = initLogs.filter((log) => !isTerminalWorkloadLogStatus(log.status));
     if (activeInit.length === 0) {
       await this.finishInit(containerId);
-      return;
+      return null;
     }
 
     const running = activeInit.find((log) => log.status === 'running');
@@ -545,8 +643,10 @@ export class WorkloadDispatcher {
           log: appendLog(running.log, INIT_TIMEOUT_LOG),
           finishedAt: new Date(now),
         });
+        // 裁决 8：单条 RUNNING 必须项超时 → 标 timeout 并返回信号（不 advance）。
+        if (running.required) return { workloadName: running.workloadName };
         await this.advance(containerId, 'init');
-        return;
+        return null;
       }
     } else {
       const pending = activeInit.find((log) => log.status === 'pending');
@@ -556,7 +656,7 @@ export class WorkloadDispatcher {
           startedAt: new Date(now),
         });
         await this.deps.containerService.markInitializing(containerId, pending.workloadName);
-        return;
+        return null;
       }
     }
 
@@ -572,8 +672,12 @@ export class WorkloadDispatcher {
           finishedAt: new Date(now),
         });
       }
+      // 裁决 8：批次超时且剩余 activeInit 含必须项 → 返回信号（不 finishInit）。
+      const requiredActive = activeInit.find((log) => log.required);
+      if (requiredActive) return { workloadName: requiredActive.workloadName };
       await this.finishInit(containerId);
     }
+    return null;
   }
 
   private emitRun(
@@ -589,6 +693,8 @@ export class WorkloadDispatcher {
         workloadName: log.workloadName,
         script: log.script,
         params: log.params ?? {},
+        // post 阶段不参与必须判定，固定 false（裁决 1）；init 沿用计划快照。
+        required: phase === 'init' ? log.required === true : false,
         timeoutMs: phase === 'init' ? this.deps.initTimeoutMs : this.deps.postBudgetMs,
       })),
     };

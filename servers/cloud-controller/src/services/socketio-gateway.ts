@@ -312,9 +312,12 @@ export function registerWorkerGateway(
         }
         socket.emit('registered', { controllerId: containerId });
         if (willInitialize && deps.workloadDispatcher) {
-          const started = await deps.workloadDispatcher.startInit(containerId);
-          // 仅有占位/已删除项时 startInit 返回 false：仍须按现状上线。
-          if (!started) await deps.containerService.markOnline(containerId);
+          const result = await deps.workloadDispatcher.startInit(containerId);
+          // 仅有占位/已删除项时 startInit 返回 initializing=false：仍须按现状上线。
+          // 必须失败（requiredFailure）时容器已被强制注销，**不得** markOnline（裁决 10）。
+          if (!result.initializing && !result.requiredFailure) {
+            await deps.containerService.markOnline(containerId);
+          }
         }
 
         logger.info?.(

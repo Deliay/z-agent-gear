@@ -37,6 +37,8 @@ export interface WorkloadPlanEntry {
   workloadId: string;
   params: Record<string, unknown>;
   implicit: boolean;
+  /** 本次启动该条是否为「必须」；缺省 false（历史记录/旧调用）。 */
+  required: boolean;
 }
 
 const workloadPlanEntrySchema = new mongoose.Schema(
@@ -44,6 +46,7 @@ const workloadPlanEntrySchema = new mongoose.Schema(
     workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     implicit: { type: Boolean, default: false },
+    required: { type: Boolean, default: false },
   },
   { _id: false },
 );

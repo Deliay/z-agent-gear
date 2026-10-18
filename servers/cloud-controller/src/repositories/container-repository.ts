@@ -91,17 +91,18 @@ interface RawDoc {
   exitedAt?: Date | null;
   exitReason?: string | null;
   workloadIds?: unknown[] | null;
-  workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown }> | null;
+  workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }> | null;
   currentWorkloadName?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-/** 归一化计划条目：`workloadId` 转字符串、`params` 缺省 `{}`、`implicit` 缺省 false。 */
+/** 归一化计划条目：`workloadId` 转字符串、`params` 缺省 `{}`、`implicit`/`required` 缺省 false。 */
 function normalizePlanEntry(entry: {
   workloadId: unknown;
   params?: unknown;
   implicit?: unknown;
+  required?: unknown;
 }): WorkloadPlanEntry {
   return {
     workloadId: String(entry.workloadId),
@@ -110,12 +111,15 @@ function normalizePlanEntry(entry: {
         ? ({ ...(entry.params as Record<string, unknown>) })
         : {},
     implicit: entry.implicit === true,
+    required: entry.required === true,
   };
 }
 
 /** 深拷贝计划，避免内存仓储的调用方共享同一数组/对象引用。 */
 function clonePlan(
-  plan: readonly { workloadId: unknown; params?: unknown; implicit?: unknown }[] | undefined,
+  plan:
+    | readonly { workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }[]
+    | undefined,
 ): WorkloadPlanEntry[] {
   return (plan ?? []).map((entry) => normalizePlanEntry(entry));
 }
