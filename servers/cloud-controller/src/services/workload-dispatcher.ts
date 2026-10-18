@@ -167,7 +167,10 @@ export class WorkloadDispatcher {
       this.startInitLocked(containerId),
     );
     if (result.requiredFailure) {
-      await this.forceDestroy(containerId, result.requiredFailure);
+      await this.forceDestroy(
+        containerId,
+        this.requiredFailureReason(result.requiredFailure.workloadName),
+      );
     }
     return result;
   }
@@ -270,6 +273,10 @@ export class WorkloadDispatcher {
     // 不下发批次、不进入 initializing，返回信号由调用方锁外注销。
     if (requiredDeleted) {
       await this.markRemainingInitTimeout(containerId, now, REQUIRED_FAILURE_INTERRUPT_LOG);
+      await this.markMustFailure(
+        containerId,
+        this.requiredFailureReason(requiredDeleted.workloadName),
+      );
       return {
         initializing: false,
         requiredFailure: { workloadName: requiredDeleted.workloadName },
@@ -303,9 +310,32 @@ export class WorkloadDispatcher {
     }
   }
 
-  /** 锁外强制注销（裁决 4/7）：`exitReason` 含必须负载名，不重试、不退避。 */
-  private async forceDestroy(containerId: string, failure: RequiredFailure): Promise<void> {
-    const reason = `必须工作负载「${failure.workloadName}」初始化失败`;
+  /** 必须失败的 `exitReason` 文案（裁决 6）：包含可读负载名。 */
+  private requiredFailureReason(workloadName: string): string {
+    return `必须工作负载「${workloadName}」初始化失败`;
+  }
+
+  /**
+   * 在容器互斥锁内持久化「必须失败」标记（裁决 4/5，缺陷修复）：
+   * - `mustFailure=true` 使 `finishInit` 拒绝收口为 online/connecting（关闭锁外销毁前的收口竞态）；
+   * - 同步写入 `exitReason`（必须失败原因），供注销失败时看门狗重试与终态兜底使用。
+   */
+  private async markMustFailure(containerId: string, reason: string): Promise<void> {
+    await this.deps.containerRepository.update(containerId, {
+      mustFailure: true,
+      exitReason: reason,
+    });
+  }
+
+  /**
+   * 锁外强制注销（裁决 4/7）：`exitReason` 含必须负载名，不重试、不退避。
+   *
+   * 失败兜底（缺陷修复）：`deps.forceDestroy` 抛出（如瞬时 Mongo/网络故障）时，容器不能停留在
+   * `initializing`（否则看门狗会把它收口为 online）。此时把容器 CAS 为终态 `failed` 并保留必须失败
+   * `exitReason`；`mustFailure` 标记已置位，看门狗亦不会将其收口为 online，残留 Job 交由既有巡检回收。
+   * 注销失败重试的是「销毁」而非「初始化」，不违背「不 backoff」。
+   */
+  private async forceDestroy(containerId: string, reason: string): Promise<void> {
     try {
       await this.deps.forceDestroy(containerId, reason);
     } catch (err) {
@@ -313,6 +343,24 @@ export class WorkloadDispatcher {
         `[workload] forceDestroy failed containerId=${containerId} reason=${reason}`,
         err,
       );
+      try {
+        await this.deps.containerRepository.update(
+          containerId,
+          {
+            status: 'failed',
+            exitedAt: new Date(this.now()),
+            exitReason: reason,
+            tokenHash: null,
+            currentWorkloadName: null,
+          },
+          { fromStatuses: ['creating', 'connecting', 'initializing', 'online'] },
+        );
+      } catch (fallbackErr) {
+        this.deps.logger?.error?.(
+          `[workload] mustFailure fallback mark failed failed containerId=${containerId}`,
+          fallbackErr,
+        );
+      }
     }
   }
 
@@ -342,7 +390,7 @@ export class WorkloadDispatcher {
       this.handleResultLocked(containerId, payload),
     );
     if (failure) {
-      await this.forceDestroy(containerId, failure);
+      await this.forceDestroy(containerId, this.requiredFailureReason(failure.workloadName));
     }
   }
 
@@ -391,6 +439,11 @@ export class WorkloadDispatcher {
     // 必须失败裁决（裁决 4/5）：init 阶段的必须项 failed/timeout → 不推进，中断剩余 init，返回信号。
     if (record.phase === 'init' && record.required && (status === 'failed' || status === 'timeout')) {
       await this.markRemainingInitTimeout(containerId, now, REQUIRED_FAILURE_INTERRUPT_LOG);
+      // 锁内先落 must-failure 标记（缺陷修复：关闭锁外销毁前的收口竞态）。
+      await this.markMustFailure(
+        containerId,
+        this.requiredFailureReason(record.workloadName),
+      );
       return { workloadName: record.workloadName };
     }
 
@@ -424,6 +477,8 @@ export class WorkloadDispatcher {
   private async finishInit(containerId: string): Promise<void> {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container || container.status !== 'initializing') return;
+    // 必须失败：绝不收口为 online/connecting（缺陷修复）——由 forceDestroy/看门狗负责注销。
+    if (container.mustFailure) return;
     if (this.deps.isConnected(containerId)) {
       await this.deps.containerService.markOnline(containerId);
     } else {
@@ -609,21 +664,27 @@ export class WorkloadDispatcher {
     const records = await this.deps.containerRepository.findAll();
     for (const record of records) {
       if (record.status !== 'initializing') continue;
-      const failure = await this.mutex.runExclusive(record.id, () =>
+      const reason = await this.mutex.runExclusive(record.id, () =>
         this.watchdogInitializing(record.id, now),
       );
-      if (failure) {
-        await this.forceDestroy(record.id, failure);
+      if (reason) {
+        await this.forceDestroy(record.id, reason);
       }
     }
   }
 
+  /** 返回必须失败的 `exitReason`（需锁外 `forceDestroy`）；无必须失败返回 `null`。 */
   private async watchdogInitializing(
     containerId: string,
     now: number,
-  ): Promise<RequiredFailure | null> {
+  ): Promise<string | null> {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container || container.status !== 'initializing') return null;
+
+    // 缺陷修复：上一轮必须失败的注销尚未完成（forceDestroy 失败/在途）→ 重试销毁，绝不收口为 online。
+    if (container.mustFailure) {
+      return container.exitReason ?? this.requiredFailureReason('(未知)');
+    }
 
     const initLogs = (await this.deps.workloadLogRepository.findByContainer(containerId)).filter(
       (log) => log.phase === 'init',
@@ -644,7 +705,11 @@ export class WorkloadDispatcher {
           finishedAt: new Date(now),
         });
         // 裁决 8：单条 RUNNING 必须项超时 → 标 timeout 并返回信号（不 advance）。
-        if (running.required) return { workloadName: running.workloadName };
+        if (running.required) {
+          const reason = this.requiredFailureReason(running.workloadName);
+          await this.markMustFailure(containerId, reason);
+          return reason;
+        }
         await this.advance(containerId, 'init');
         return null;
       }
@@ -674,7 +739,11 @@ export class WorkloadDispatcher {
       }
       // 裁决 8：批次超时且剩余 activeInit 含必须项 → 返回信号（不 finishInit）。
       const requiredActive = activeInit.find((log) => log.required);
-      if (requiredActive) return { workloadName: requiredActive.workloadName };
+      if (requiredActive) {
+        const reason = this.requiredFailureReason(requiredActive.workloadName);
+        await this.markMustFailure(containerId, reason);
+        return reason;
+      }
       await this.finishInit(containerId);
     }
     return null;

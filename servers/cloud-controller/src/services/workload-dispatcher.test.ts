@@ -1009,3 +1009,91 @@ describe('WorkloadDispatcher - 必须失败（required）', () => {
     expect((await repo.findById(container.id))?.status).toBe('exited');
   });
 });
+
+describe('WorkloadDispatcher - forceDestroy 失败兜底（缺陷修复）', () => {
+  it('T-WD26: handleResult 路径 forceDestroy 拒绝 → 容器置终态 failed，后续看门狗 tick 不置 online', async () => {
+    const {
+      dispatcher,
+      workloadRepository,
+      workloadLogRepository,
+      createContainer,
+      repo,
+      forceDestroyImpl,
+      forceDestroyCalls,
+      advanceTime,
+    } = setup();
+    workloadRepository.add(mkWorkload('w1', 'must-a', { initScript: 'exit 1' }));
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    const container = await createContainer(['w1', 'w2'], 'connecting', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+    await dispatcher.startInit(container.id);
+
+    // 注入销毁失败（模拟瞬时 Mongo/网络故障）
+    forceDestroyImpl.fn = async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      throw new Error('mongo down');
+    };
+    const logs = await workloadLogRepository.findByContainer(container.id);
+    await dispatcher.handleResult(container.id, { logId: logs[0]!.id, status: 'failed', exitCode: 1 });
+
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.status).not.toBe('online');
+    expect(stored?.mustFailure).toBe(true);
+    expect(stored?.exitReason).toContain('must-a');
+
+    // 后续看门狗 tick 不得把残缺容器收口为 online/connecting
+    advanceTime(300000);
+    await dispatcher.onWatchdog();
+    const after = await repo.findById(container.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.exitReason).toContain('must-a');
+  });
+
+  it('T-WD27: startInit 路径（必须项执行前被删除）forceDestroy 拒绝 → 容器置终态 failed', async () => {
+    const { dispatcher, workloadRepository, createContainer, repo, forceDestroyImpl, forceDestroyCalls } =
+      setup();
+    workloadRepository.add(mkWorkload('w2', 'opt-b', { initScript: 'echo b' }));
+    forceDestroyImpl.fn = async (containerId, reason) => {
+      forceDestroyCalls.push({ containerId, reason });
+      throw new Error('destroy backend unavailable');
+    };
+    const container = await createContainer(['missing', 'w2'], 'connecting', [
+      { workloadId: 'missing', params: {}, implicit: false, required: true },
+      { workloadId: 'w2', params: {}, implicit: false, required: false },
+    ]);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started.initializing).toBe(false);
+    expect(started.requiredFailure).toEqual({ workloadName: '(已删除)' });
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.mustFailure).toBe(true);
+    expect(stored?.exitReason).toContain('(已删除)');
+  });
+
+  it('T-WD28: 看门狗重试未完成的必须失败注销（mustFailure 标记已置位）', async () => {
+    const { dispatcher, createContainer, repo, forceDestroyCalls } = setup();
+    const container = await createContainer(['w1'], 'initializing', [
+      { workloadId: 'w1', params: {}, implicit: false, required: true },
+    ]);
+    // 模拟上一轮必须失败已落标记、但 forceDestroy 未完成（容器仍 initializing，无活跃 init 记录）
+    await repo.update(container.id, {
+      mustFailure: true,
+      exitReason: '必须工作负载「must-a」初始化失败',
+    });
+
+    await dispatcher.onWatchdog();
+
+    // 看门狗应重试注销而非 finishInit（默认 forceDestroy 走真实 destroy）
+    expect(forceDestroyCalls).toEqual([
+      { containerId: container.id, reason: '必须工作负载「must-a」初始化失败' },
+    ]);
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toContain('must-a');
+  });
+});
