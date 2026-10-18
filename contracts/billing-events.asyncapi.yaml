@@ -217,6 +217,14 @@ components:
                 estimated:
                   type: boolean
                   description: 用量缺失时按兜底规则估算
+                estimatedInputTokens:
+                  type: integer
+                  minimum: 0
+                  description: 兜底估算的输入 token（网关计量缺失时提供）
+                estimatedOutputTokens:
+                  type: integer
+                  minimum: 0
+                  description: 兜底估算的输出 token（网关计量缺失时提供）
                 reason:
                   type: string
                   description: 中断原因（aborted）
@@ -242,6 +250,10 @@ components:
           type: integer
         estimated:
           type: boolean
+        estimatedInputTokens:
+          type: integer
+        estimatedOutputTokens:
+          type: integer
         reason:
           type: string
     SettlementCycleMessage:

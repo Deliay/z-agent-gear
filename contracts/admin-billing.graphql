@@ -135,6 +135,16 @@ type ReconciliationReport {
   errors: [JSON!]!
 }
 
+type BillingDeadLetter {
+  id: ID!
+  queue: String!
+  routingKey: String!
+  eventId: String
+  error: String
+  attempts: Int!
+  createdAt: String!
+}
+
 type Query {
   adminBillingAccounts(
     keyword: String
@@ -162,6 +172,7 @@ type Query {
   adminBillingReservations(accountId: ID, status: ReservationStatus): [BillingReservation!]!
   adminReconciliationReports(line: String): [ReconciliationReport!]!
   adminBillingApiKeys: [BillingApiKey!]!
+  adminBillingDeadLetters(limit: Int): [BillingDeadLetter!]!
 }
 
 type Mutation {

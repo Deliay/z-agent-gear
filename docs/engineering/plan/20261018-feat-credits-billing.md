@@ -587,20 +587,32 @@ aspire start
 - [ ] PRD §1.3 成功标准逐条演示通过（账单序号从 0 连续、任一笔可完整回溯、快照余额与精确核算一致）
 - [ ] 实现分支 PR 合并回 `feat/credits-billing`，需求总 PR #229 自动更新；实现计划文档保留在需求总分支
 
-## 实现记录（2026-10-18）
+## 实现记录（2026-10-18，返工后 v1.1）
 
 - **实现分支**: `impl/credits-billing`（基于需求总分支 `feat/credits-billing`）。
-- **已完成**:
-  - Phase 1 契约：新增 `contracts/admin-billing.graphql` / `billing.graphql` / `billing-openai.openapi.yaml` / `billing-events.asyncapi.yaml`；扩展 `admin-llm.graphql`、`llm.graphql`（`Model.pricing`）、`admin-cloud-container.graphql`（`billingAccountId` / `billingStartedAt`）、`cloud-controller-websocket.md` 附录 A（字段 + 生命周期事件）。
-  - Phase 2 编排与依赖：Aspire 新增 `rabbitmq` 资源并引用到 `admin-api` / `cloud-controller`；两侧新增 `amqplib`；新增 MQ/计费配置项（`rabbitmqUrl` 支持 `ConnectionStrings__rabbitmq`）。
-  - Phase 3 cloud-controller 计费源头：`billingAccountId` / `billingStartedAt`、`billingoutbox` 模型、`BillingEventPublisher`（outbox + publisher confirm + relay）、首次 `markOnline` 写计费起点并投递 `container.ready`、销毁投递 `container.destroyed`、`DELETE ?reason` 透传。
-  - Phase 4 admin-api 计费域核心：13 个计费集合模型（含唯一索引与追加式不可变钩子）、`money`（整数分）、`credit-check`（唯一预扣费检查 + 预检凭证）、`account-service`（get-or-create/授信/精确核算）、`event-ingest`、`metering`、`pricing`（单价快照）、`invoicing`（seq 原子分配 + rollup）、`payment`（拆池 + ledger 幂等 + 原子钱包）、`receipt`、`rollup-service`、`reservation`（保证金 + 周期实扣 + 状态机）。
-  - Phase 5 消息骨干：RabbitMQ 连接/拓扑（重试 TTL + DLQ + 结算延迟队列）、admin outbox relay、计量/结算消费者（手动 ack + 退避重试 + DLQ）、`settlement-tick` 扫描兜底与欠费宽限强拆、三线对账、`BillingScheduler`。
-  - Phase 6 对外接口：`/v1/models`、`/v1/chat/completions`（OpenAI 兼容，含流式/中断/估算/402/404/400/429；只写 outbox 即返回）、`/internal/billing/*`、后台费用中心 GraphQL；`updateModelPricing` 同步 `Model.pricing` + `productprices`。
-  - Phase 7 agent-api 前台费用：`billing-client` 内部 REST 客户端 + `myBilling*` GraphQL（只读 + Key 管理，无充值入口）。
-  - Phase 8/9 前端：admin-web 费用中心（账户/充值/账单/收据/汇总/授信/核算/API Key/模型定价）与对账中心；agent-web「我的费用」（余额/欠费提示/账单/收据/汇总/API Key）。
-  - Phase 10 测试：billing 服务层单测（money/credit-check/metering/pricing）、cloud-controller 计费事件单测、前端费用组件测试、`tests/api/src/admin-api/billing.test.ts` 与 `tests/api/src/agent-api/billing.test.ts`。
-- **未完成/留待后续**: E2E（`tests/e2e/src/billing.spec.ts`）需真实 K8s/RabbitMQ 环境，本次未编写；`aspire publish` 生成的 docker-compose manifest 由编排层流水线刷新（AppHost 已声明 `rabbitmq`）。
+- **返工修复（代码审核打回项）**:
+  1. **预检凭证 ref 统一**：`handleContainerReady` / `ReservationService.start` / `payment.freeze` 统一以 `resourceId` 作为 `ref.id`，ready→freeze 全链路集成测试通过。
+  2. **金额单位统一**：`toBillingAccountWire` 等契约边界统一 `分 → credits`；删除零调用死代码 `toBillingAccount`；前台/后台账户接口口径一致。
+  3. **结算步骤级幂等**：周期记录改为资金动作完成后的结果标记；账单增加 `idempotentKey` 唯一稀疏索引与确定性 `invoiceId`；final settle 尾结/释放均以幂等键重入，崩溃重跑不重复扣费/开票；`KeyedMutex` 按 reservation 串行。
+  4. **冻结账户可继续记账**：`accrue-and-track` 在账户冻结/缺失时同样返回预检凭证（不再 `preCheck!` 抛错进入 DLQ）。
+  5. **rollup 与出账解耦**：仅在 `BillingInvoice.create` 发生 E11000 时重试；rollup 失败仅告警（后补）。
+  6. **预留唯一性**：`billingreservations.resourceId` 唯一索引兜底并发 start；`lastCycleSeq` 初始 `-1`，首期（seq 0）丢消息可由扫描兜底；`expectedEndAt` 随周期推进写入。
+  7. **无冻结不解冻**：仅当对应 `freeze` 流水存在时才解冻；预留累计口径改为以 ledger 聚合重算。
+  8. **对账防误伤**：资源对账在控制面列表失败时中止本线，不再批量结算 ACTIVE 预留；资金对账分页遍历全部账户。
+  9. **MQ 可靠性**：消费者运行时自动重连/重订阅；重试改为 per-message `expiration` 指数退避（5s→5min）；超次死信落 `billingdeadletters` 并新增 `adminBillingDeadLetters` 查询；结算消息补齐 `accountId`；优雅关闭（SIGTERM/SIGINT → scheduler/MQ/Mongo）。
+  10. **拆池支付**：现金 → 赠送金 → 授信（透支为负现金），ledger `allocations` + payment `pools` 留存拆池明细。
+  11. **网关口径**：上游报错/超时按中断（aborted）计费并标注；用量缺失兜底按已收内容或请求输出上限估算（不低估），payload 增加 `estimatedInputTokens/estimatedOutputTokens`。
+  12. **cloud-controller 终态补投**：`markExited/markFailed/reclaimResidualJob` 等非 destroy 终态同样投递 `container.destroyed`；`markOnline` 以条件更新原子写入 `billingStartedAt`。
+  13. **前端**：agent-web 增加 `loading && !data` 守卫与错误展示；吊销 Key/授信调整/账户冻结均二次确认；分页；模型定价移入 `ModelConfigPage`（计划口径）。
+  14. **编排**：`aspire/manifest/docker-compose.yaml` 已手工补齐 `rabbitmq` 服务、`RABBITMQ_URL`/`ConnectionStrings__rabbitmq` 与 agent-api `ADMIN_API_URL`/`INTERNAL_API_TOKEN`（`aspire publish` 在本环境 NuGet restore 不可达，manifest 与 AppHost 声明保持一致）。
+- **测试（返工后）**:
+  - `servers/admin-api/src/services/billing` 行覆盖率 **94.77%**（语句 89.54% / 函数 90.62%），覆盖 T-B1~T-B21 与 MQ 拓扑/消费/发布/重连。
+  - cloud-controller 计费事件 T-CC-B1~B9、internal API 计费字段/强拆 reason。
+  - 前端费用组件/页面交互：后台账户列表、充值校验、汇总、模型定价、前台欠费提示/Key 一次性展示/吊销确认。
+  - `tests/api/src/admin-api/billing.test.ts`、`billing-gateway.test.ts`、`tests/api/src/agent-api/billing.test.ts`、`tests/api/src/cloud-controller/billing-events.test.ts`。
+  - `tests/e2e/src/admin-billing.spec.ts`、`tests/e2e/src/billing.spec.ts`。
+  - `RABBITMQ_TEST_URL` 条件链路测试：`src/services/billing/mq/rabbitmq.integration.test.ts`（未配置 broker 时 skip，裁决 15）。
+- **仍留待真实环境演示**: 容器分钟计费→欠费强拆、网关流式/中断真实供应商调用、RabbitMQ 全链路在 CI broker 下执行（代码与条件测试已就位）。
 
 ## 风险与回滚
 
