@@ -185,6 +185,7 @@ flowchart LR
 - [[proposals/20261018-feat-workload-phase3.md]] — 工作负载三期（必须工作负载硬失败与 .NET 安装优化）
 - [[proposals/20261018-feat-workload-phase4.md]] — 工作负载四期（worker 基础镜像瘦身）
 - [[proposals/20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本门禁与自升级
+- [[proposals/20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）
 
 ### 实现计划（`plan/`）
 
