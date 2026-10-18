@@ -45,6 +45,9 @@ const cloudContainerSchema = new mongoose.Schema(
     workloadPlan: { type: [workloadPlanItemSchema], default: [] },
     // 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null
     currentWorkloadName: { type: String, default: null },
+    // 计费归属（费用中心）：与 cloud-controller schema 对齐（只读模型）
+    billingAccountId: { type: String, default: null },
+    billingStartedAt: { type: Date, default: null },
   },
   { collection: 'cloudcontainers', timestamps: true },
 );

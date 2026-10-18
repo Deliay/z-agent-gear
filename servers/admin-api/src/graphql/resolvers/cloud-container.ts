@@ -9,6 +9,7 @@ import {
 import { findStoredCloudContainers } from '../../models/cloud-container.js';
 import { cloudWorkloadService, type CloudWorkloadDTO } from '../../services/cloud-workload.js';
 import { resolveWorkloadPlan } from '../../services/workload-plan.js';
+import { accountService } from '../../services/billing/account-service.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
 
@@ -116,6 +117,7 @@ export const cloudContainerResolvers = {
         purpose: string;
         workloadIds?: string[];
         workloads?: Array<{ workloadId: string; params?: unknown; required?: boolean }>;
+        billingAccountId?: string;
       },
       context: AdminAuthContext,
     ) => {
@@ -123,6 +125,20 @@ export const cloudContainerResolvers = {
       // 本期仅支持 IDLE（裁决 10）；契约字段保留供后续迭代
       if (args.purpose !== 'IDLE') {
         throw new GraphQLError('该任务类型暂未开放');
+      }
+
+      // 计费归属（裁决 8）：未显式传入时缺省为当前管理员账户（get-or-create）
+      const admin = context.currentAdmin!;
+      const defaultAccount = await accountService.getOrCreate(
+        'admin_user',
+        admin.id,
+        admin.username,
+      );
+      let billingAccountId = defaultAccount.id;
+      if (args.billingAccountId) {
+        const explicit = await accountService.getById(args.billingAccountId);
+        if (!explicit) throw new GraphQLError('计费账户不存在');
+        billingAccountId = explicit.id;
       }
 
       const workloadIds = args.workloadIds ?? [];
@@ -161,12 +177,17 @@ export const cloudContainerResolvers = {
             })),
           );
           const derivedIds = plan.map((item) => item.workloadId);
-          return await cloudControllerClient.start(args.purpose, plan, derivedIds);
+          return await cloudControllerClient.start(args.purpose, plan, derivedIds, billingAccountId);
         }
 
         // 兼容旧调用：仅传 workloadIds，不携带 workloadPlan，由 cloud-controller 兜底展开；
         // 缺省/空数组行为与现状完全一致（裁决 20）
-        return await cloudControllerClient.start(args.purpose, undefined, workloadIds);
+        return await cloudControllerClient.start(
+          args.purpose,
+          undefined,
+          workloadIds,
+          billingAccountId,
+        );
       } catch (err) {
         throw toGraphQLError(err);
       }

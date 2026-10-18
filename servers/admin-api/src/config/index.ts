@@ -30,6 +30,22 @@ export const config = {
     process.env.CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS,
     180000,
   ),
+  // ===== 费用中心（Credits 计费）=====
+  // RabbitMQ 事件骨干
+  rabbitmqUrl: process.env.RABBITMQ_URL || process.env.ConnectionStrings__rabbitmq || 'amqp://guest:guest@localhost:5672',
+  rabbitmqPrefetch: parsePositiveInt(process.env.RABBITMQ_PREFETCH, 10),
+  rabbitmqRetryMax: parsePositiveInt(process.env.RABBITMQ_RETRY_MAX, 5),
+  outboxRelayIntervalMs: parsePositiveInt(process.env.OUTBOX_RELAY_INTERVAL_MS, 2000),
+  // 容器计费：周期（秒，默认 60）、保证金（credits，默认 5）
+  billingCycleSeconds: parsePositiveInt(process.env.BILLING_CYCLE_SECONDS, 60),
+  containerDepositCredits: parsePositiveInt(process.env.CONTAINER_DEPOSIT_CREDITS, 5),
+  // 欠费宽限（毫秒，默认 10 分钟）
+  billingArrearsGraceMs: parsePositiveInt(process.env.BILLING_ARREARS_GRACE_MS, 600000),
+  // 计量缺失兜底：输出 token 估算上限
+  modelDefaultMaxOutputTokens: parsePositiveInt(process.env.MODEL_DEFAULT_MAX_OUTPUT_TOKENS, 1024),
+  // 三线对账 cron（HH:MM，UTC）与僵尸预留阈值（毫秒）
+  billingReconCron: process.env.BILLING_RECON_CRON || '03:00',
+  reservationStaleMs: parsePositiveInt(process.env.RESERVATION_STALE_MS, 15 * 60 * 1000),
 };
 
 /** 解析正整数环境变量；缺失/非法（NaN/≤0）均回落默认值。 */

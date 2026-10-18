@@ -13,6 +13,37 @@ import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-preset-workloads.js';
 import * as migration002DotnetApt from './migrations/002-preset-dotnet-apt.js';
 import * as migration002RefreshDocker from './migrations/002-refresh-docker-preset-script.js';
+import { createInternalBillingRouter } from './routes/internal-billing.js';
+import { createBillingOpenAiRouter } from './routes/billing-openai.js';
+import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
+import { MqConnection } from './services/billing/mq/connection.js';
+import {
+  declareBillingTopology,
+  publishSettlementCycle,
+} from './services/billing/mq/topology.js';
+import {
+  startMeteringConsumer,
+  startSettlementConsumer,
+} from './services/billing/mq/consumers.js';
+import { SettlementTickService } from './services/billing/settlement-tick.js';
+import { BillingScheduler } from './services/billing/scheduler.js';
+import { billingRuntime, reconciliationRuntime } from './services/billing/instances.js';
+import { reservationService } from './services/billing/reservation.js';
+import { pricingService } from './services/billing/pricing.js';
+import { eventIngestService } from './services/billing/event-ingest.js';
+import { BillingAccount } from './models/billing-account.js';
+import { BillingLedger } from './models/billing-ledger.js';
+import { BillingEvent } from './models/billing-event.js';
+import { MeteringRecord } from './models/metering-record.js';
+import { ProductPrice } from './models/product-price.js';
+import { BillingInvoice } from './models/billing-invoice.js';
+import { BillingPayment } from './models/billing-payment.js';
+import { BillingReceipt } from './models/billing-receipt.js';
+import { BillingReservation, BillingReservationCycle } from './models/billing-reservation.js';
+import { BillingRollup } from './models/billing-rollup.js';
+import { BillingApiKey } from './models/billing-api-key.js';
+import { BillingApiCall } from './models/billing-api-call.js';
+import { BillingOutbox } from './models/billing-outbox.js';
 
 const app = express();
 
@@ -34,6 +65,15 @@ const yoga = createYoga({
 });
 
 app.use('/graphql', yoga);
+
+// 费用中心：OpenAI 兼容计费网关（API Key 鉴权）与 agent-api 内部 REST
+const outboxPublisher = new AdminOutboxPublisher(
+  config.rabbitmqUrl,
+  console,
+  config.outboxRelayIntervalMs,
+);
+app.use('/v1', createBillingOpenAiRouter({ publisher: outboxPublisher }));
+app.use('/internal/billing', createInternalBillingRouter());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -77,6 +117,66 @@ async function start() {
   // 管理员种子失败必须让启动失败：否则服务「健康」但无法登录，且不会再补种
   await seedAdmin();
   console.log('Admin seed ensured');
+
+  // ===== 费用中心初始化 =====
+  const billingModels = [
+    BillingAccount,
+    BillingLedger,
+    BillingEvent,
+    MeteringRecord,
+    ProductPrice,
+    BillingInvoice,
+    BillingPayment,
+    BillingReceipt,
+    BillingReservation,
+    BillingReservationCycle,
+    BillingRollup,
+    BillingApiKey,
+    BillingApiCall,
+    BillingOutbox,
+  ];
+  try {
+    await Promise.all(billingModels.map((model) => model.syncIndexes()));
+  } catch (err) {
+    console.warn('[admin-api] billing syncIndexes failed (non-fatal):', (err as Error).message);
+  }
+  try {
+    await pricingService.ensureDefaultPrices();
+  } catch (err) {
+    console.warn('[admin-api] ensureDefaultPrices failed (non-fatal):', (err as Error).message);
+  }
+
+  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投）
+  try {
+    const mqConnection = new MqConnection(config.rabbitmqUrl, console);
+    const channel = await mqConnection.createChannel();
+    await declareBillingTopology(channel);
+    const publishSettlement = async (reservationId: string, cycleSeq: number): Promise<void> => {
+      await publishSettlementCycle(channel, { reservationId, cycleSeq });
+    };
+    await startMeteringConsumer(channel, {
+      billing: billingRuntime,
+      ingest: eventIngestService,
+      publishSettlement,
+      logger: console,
+    });
+    await startSettlementConsumer(channel, {
+      billing: billingRuntime,
+      publishSettlement,
+      logger: console,
+    });
+    console.log('Billing MQ consumers started');
+  } catch (err) {
+    console.warn('[admin-api] billing MQ init failed (non-fatal):', (err as Error).message);
+  }
+
+  const scheduler = new BillingScheduler({
+    publisher: outboxPublisher,
+    settlementTick: new SettlementTickService(billingRuntime, reservationService),
+    reconciliation: reconciliationRuntime,
+    logger: console,
+  });
+  scheduler.start();
 
   app.listen(config.port, () => {
     console.log(`Admin API running at http://localhost:${config.port}/graphql`);

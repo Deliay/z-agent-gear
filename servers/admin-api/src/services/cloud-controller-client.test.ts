@@ -74,6 +74,8 @@ describe('CloudControllerClient', () => {
           exitReason: null,
           workloadIds: ['w1', 'w2'],
           currentWorkloadName: null,
+          billingAccountId: null,
+          billingStartedAt: null,
         },
       ]);
     });
@@ -264,6 +266,8 @@ describe('CloudControllerClient', () => {
         exitReason: '回连超时',
         workloadIds: ['w1', 'w2'],
         currentWorkloadName: null,
+        billingAccountId: null,
+        billingStartedAt: null,
       });
 
       expect(mapped).toEqual({
@@ -278,6 +282,8 @@ describe('CloudControllerClient', () => {
         exitReason: '回连超时',
         workloadIds: ['w1', 'w2'],
         currentWorkloadName: null,
+        billingAccountId: null,
+        billingStartedAt: null,
       });
     });
 

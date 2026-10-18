@@ -1,0 +1,125 @@
+import type { IBillingAccount } from '../../models/billing-account.js';
+import type { IBillingInvoice } from '../../models/billing-invoice.js';
+import type { IBillingReceipt } from '../../models/billing-receipt.js';
+import type { IBillingReservation } from '../../models/billing-reservation.js';
+import { centsToCredits } from './money.js';
+import { documentId } from './id.js';
+
+/** 计费域内部 DTO → 契约形态（金额分 → credits Float）。 */
+
+export function toBillingAccount(doc: IBillingAccount & Record<string, unknown>) {  const cash = doc.cashBalance ?? 0;
+  const gift = doc.giftBalance ?? 0;
+  const credit = doc.creditLimit ?? 0;
+  const frozen = doc.frozenAmount ?? 0;
+  return {
+    id: documentId(doc),
+    ownerType: doc.ownerType,
+    ownerId: doc.ownerId,
+    ownerName: doc.ownerName || doc.ownerId,
+    cashBalance: centsToCredits(cash),
+    giftBalance: centsToCredits(gift),
+    creditLimit: centsToCredits(credit),
+    frozenAmount: centsToCredits(frozen),
+    availableBalance: centsToCredits(cash + gift + credit - frozen),
+    status: doc.status ?? 'active',
+    insufficientSince: doc.insufficientSince ? new Date(doc.insufficientSince).toISOString() : null,
+    invoiceSeq: doc.invoiceSeq ?? 0,
+    ledgerCount: Number((doc as { ledgerCount?: number }).ledgerCount ?? 0),
+    createdAt: new Date(doc.createdAt as Date).toISOString(),
+    updatedAt: new Date(doc.updatedAt as Date).toISOString(),
+  };
+}
+
+export function toBillingInvoice(doc: IBillingInvoice & Record<string, unknown>) {  return {
+    id: documentId(doc),
+    accountId: String(doc.accountId),
+    seq: doc.seq,
+    type: doc.type,
+    category: doc.category,
+    amount: centsToCredits(doc.amount),
+    balanceAfter: centsToCredits(doc.balanceAfter),
+    refType: doc.refType ?? null,
+    refId: doc.refId ?? null,
+    description: doc.description ?? '',
+    items: (doc.items ?? []).map((item: { productId: string; quantity: number; unitPrice: number; amount: number; meteringRef?: string | null }) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: centsToCredits(item.unitPrice),
+      amount: centsToCredits(item.amount),
+      meteringRef: item.meteringRef ?? null,
+    })),
+    receiptId: doc.receiptId ? String(doc.receiptId) : null,
+    createdAt: new Date(doc.createdAt as Date).toISOString(),
+  };
+}
+
+export function toBillingReceipt(doc: IBillingReceipt & Record<string, unknown>) {
+  return {
+    id: documentId(doc),
+    receiptNo: doc.receiptNo,
+    invoiceId: String(doc.invoiceId),
+    accountId: String(doc.accountId),
+    amount: centsToCredits(doc.amount),
+    balanceAfter: centsToCredits(doc.balanceAfter),
+    issuedAt: new Date(doc.issuedAt as Date).toISOString(),
+  };
+}
+
+export function toBillingRollup(doc: Record<string, unknown>) {
+  return {
+    bucketStart: new Date(doc.bucketStart as Date).toISOString(),
+    chargeTotal: centsToCredits(Number(doc.chargeTotal ?? 0)),
+    rechargeTotal: centsToCredits(Number(doc.rechargeTotal ?? 0)),
+    chargeCount: Number(doc.chargeCount ?? 0),
+  };
+}
+
+export function toBillingReservation(doc: IBillingReservation & Record<string, unknown>) {
+  return {
+    id: documentId(doc),
+    accountId: String(doc.accountId),
+    resourceId: doc.resourceId,
+    status: doc.status,
+    reservedTotal: centsToCredits(doc.reservedTotal ?? 0),
+    settledTotal: centsToCredits(doc.settledTotal ?? 0),
+    releasedTotal: centsToCredits(doc.releasedTotal ?? 0),
+    startedAt: new Date(doc.startedAt as Date).toISOString(),
+    lastSettleAt: doc.lastSettleAt ? new Date(doc.lastSettleAt as Date).toISOString() : null,
+  };
+}
+
+/** AccountService DTO（已换算 credits）→ 契约 wire 形态（时间 ISO）。 */
+export function toBillingAccountWire(dto: {
+  id: string;
+  ownerType: string;
+  ownerId: string;
+  ownerName: string;
+  cashBalance: number;
+  giftBalance: number;
+  creditLimit: number;
+  frozenAmount: number;
+  availableBalance: number;
+  status: string;
+  insufficientSince: Date | null;
+  invoiceSeq?: number;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: dto.id,
+    ownerType: dto.ownerType,
+    ownerId: dto.ownerId,
+    ownerName: dto.ownerName,
+    cashBalance: dto.cashBalance,
+    giftBalance: dto.giftBalance,
+    creditLimit: dto.creditLimit,
+    frozenAmount: dto.frozenAmount,
+    availableBalance: dto.availableBalance,
+    status: dto.status,
+    insufficientSince: dto.insufficientSince ? dto.insufficientSince.toISOString() : null,
+    invoiceSeq: dto.invoiceSeq ?? 0,
+    ledgerCount: 0,
+    createdAt: dto.createdAt.toISOString(),
+    updatedAt: dto.updatedAt.toISOString(),
+  };
+}
