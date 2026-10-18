@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# 默认工作容器入口：装配镜像引用规范化 shim，更新 agent-gear，
-# 然后以「受监督」方式运行 agent-gear 回连 cloud-controller。
+# 默认工作容器入口：更新 agent-gear，然后以「受监督」方式运行 agent-gear 回连 cloud-controller。
 #
-# 注意：容器内 **不再** 自动启动 dockerd。Docker 运行时由「Docker」工作负载的初始化脚本
-# 按需启动（`nohup dockerd >/var/log/dockerd.log 2>&1 &`，见 docs/engineering/proposals/
-# 20261018-feat-workload-phase1.md §5.3）；未选择该工作负载时容器内没有 dockerd。
-# 入口仍负责装配镜像代理 shim（docker 包装器），供后续工作负载脚本使用。
+# 容器内 docker 能力（命令行、镜像代理包装器、Docker 守护进程）全部由「Docker」工作负载的初始化
+# 脚本提供：入口不装配包装器、不调用 docker、也不拉起守护进程；未选择该工作负载时容器内没有 docker。
+# Docker 脚本见 servers/admin-api/src/migrations/002-refresh-docker-preset-script.ts（v2）。
 #
 # 监督职责（见 docs/engineering/plan/20261017-feat-controller-version-requirement.md）：
 # - stdout/stderr 实时透传；stderr 流式扫描，只记录是否出现稳定错误码 VERSION_MISMATCH；
@@ -18,11 +16,7 @@
 #   ZAG_CONTROLLER_KEY   一次性容器 token（agent-gear 连接时经 Socket.IO 握手 auth.token 携带，不进 URL）
 # 可选开关：
 #   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过启动更新与版本不匹配后的自动升级
-#   ZAG_DOCKER_SHIM_PATH          docker shim 写入路径（默认 /usr/local/bin/docker）
 set -euo pipefail
-
-HARBOR_PROXY="core.harbor.internal.fffdan.com"
-DOCKER_SHIM_PATH=${ZAG_DOCKER_SHIM_PATH:-/usr/local/bin/docker}
 
 # 当前正在运行的子进程（agent-gear 或 npm）：PID 1 收到信号时转发给它。
 CHILD_PID=""
@@ -31,51 +25,6 @@ SCAN_PID=""
 shutting_down=0
 
 log() { echo "[worker] $*"; }
-
-# ---------------------------------------------------------------------------
-# 镜像引用规范化 shim：ubuntu:latest → docker-hub-proxy/ubuntu:latest；
-# ghcr.io/x → ghcr/x；其余含 registry host 的原样。写为 docker 包装器（默认 /usr/local/bin/docker）。
-# ---------------------------------------------------------------------------
-install_docker_shim() {
-  cat > "$DOCKER_SHIM_PATH" <<'SHIM'
-#!/usr/bin/env bash
-HARBOR_PROXY="core.harbor.internal.fffdan.com"
-
-normalize_image() {
-  local img="$1"
-  case "$img" in
-    ghcr.io/*) echo "${HARBOR_PROXY}/ghcr/${img#ghcr.io/}" ;;
-    lscr.io/*) echo "${HARBOR_PROXY}/docker-hub-proxy/${img#lscr.io/}" ;;
-    docker.io/*) echo "${HARBOR_PROXY}/docker-hub-proxy/${img#docker.io/}" ;;
-    registry-1.docker.io/*) echo "${HARBOR_PROXY}/docker-hub-proxy/${img#registry-1.docker.io/}" ;;
-    "${HARBOR_PROXY}"/*) echo "$img" ;;
-    */*)
-      local first="${img%%/*}"
-      case "$first" in
-        *.*|*:*|localhost) echo "$img" ;;
-        *) echo "${HARBOR_PROXY}/docker-hub-proxy/${img}" ;;
-      esac ;;
-    *) echo "${HARBOR_PROXY}/docker-hub-proxy/${img}" ;;
-  esac
-}
-
-cmd="${1:-}"
-case "$cmd" in
-  pull|run|create)
-    args=("$cmd"); shift; normalized=0
-    for a in "$@"; do
-      if [ "$normalized" -eq 0 ] && [ "${a#-}" = "$a" ]; then
-        args+=("$(normalize_image "$a")"); normalized=1
-      else
-        args+=("$a")
-      fi
-    done
-    exec /usr/bin/docker "${args[@]}" ;;
-  *) exec /usr/bin/docker "$@" ;;
-esac
-SHIM
-  chmod +x "$DOCKER_SHIM_PATH"
-}
 
 # ---------------------------------------------------------------------------
 # 启动更新：`npm install -g agent-gear`（走镜像内置的内网 npm 代理）。
@@ -240,7 +189,6 @@ main() {
   trap 'shutdown SIGTERM' SIGTERM
   trap 'shutdown SIGINT' SIGINT
 
-  install_docker_shim
   update_agent_gear
 
   if [ -z "${ZAG_SERVER_ENDPOINT:-}" ]; then

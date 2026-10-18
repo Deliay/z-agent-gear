@@ -1,8 +1,13 @@
 # 默认工作容器镜像（云Agent二期）
 #
-# 面向内网环境构建：Ubuntu 源 / nvm 安装脚本 / Node.js 发行包 / npm 源 / docker 镜像拉取
-# 全部走内网 Nexus/Harbor 代理，**不回退公网**（nodejs.org、raw.githubusercontent.com、github.com 均不可达）。
+# 面向内网环境构建：Ubuntu 源 / nvm 安装脚本 / Node.js 发行包 / npm 源
+# 全部走内网 Nexus 代理，**不回退公网**（nodejs.org、raw.githubusercontent.com、github.com 均不可达）。
 # 构建与自验命令见同目录 `BUILD.md`（内网环境执行）。
+#
+# 瘦身口径（工作负载四期）：镜像只保留所有容器都需要的通用能力。Docker（CLI / 镜像代理 shim /
+# dockerd 及其运行时依赖）与 .NET / Aspire 的安装均**不再预装**，全部下沉到对应的预制工作负载脚本
+# 按需提供（见 docs/engineering/proposals/20261018-feat-workload-phase4.md）。Node.js 保留——它是
+# 容器内 agent-gear 的运行基础。
 #
 # 构建期可覆盖的参数（均为内网地址，如不可达请通过 --build-arg 替换）：
 #   UBUNTU_MIRROR       Ubuntu apt 代理源
@@ -12,7 +17,6 @@
 #   NODEJS_DIST_MIRROR  Node.js 发行包代理源（nvm 的 index.tab/SHASUMS/tarball 均取自此处）
 #   NODE_VERSION        由 nvm 安装的 Node.js 主版本
 #   NPM_REGISTRY        npm 代理源（构建期用于安装全局包，并以 ENV 固化到运行时供 Node.js 工作负载脚本读取）
-#   DOCKER_APT_URL      Docker CE apt 源（含 buildx/containerd 包）
 
 FROM ubuntu:24.04
 
@@ -24,7 +28,6 @@ ARG NVM_INSTALL_URL=https://nexus.internal.fffdan.com/repository/github-raw-prox
 ARG NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy
 ARG NODE_VERSION=22
 ARG NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/
-ARG DOCKER_APT_URL=https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/
 # .NET 由工作负载脚本经 apt 安装（不再依赖 dotnet-install.sh）。默认包名 dotnet10、默认执行 apt-get upgrade，
 # 可在运行时用同名环境变量覆盖；如内网 Ubuntu 源不含 .NET 10，可用 DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL
 # 在构建期注入内部 Microsoft feed 代理（见下方「.NET apt 源」）。
@@ -42,10 +45,6 @@ ENV NPM_REGISTRY=${NPM_REGISTRY}
 ENV DOTNET_APT_PACKAGE=${DOTNET_APT_PACKAGE} \
     DOTNET_APT_UPGRADE=${DOTNET_APT_UPGRADE}
 
-# 可选：Aspire 预制脚本的安装脚本地址。.NET 已改由 apt 安装（见下），不再使用 DOTNET_INSTALL_URL。
-# 缺省走官方地址（aspire.dev），内网无法直连时取消注释并指向内网代理（脚本内同样支持同名环境变量覆盖）。
-# ENV ASPIRE_INSTALL_URL=https://nexus.internal.fffdan.com/repository/aspire-proxy/install.sh
-
 # .NET apt 源（可选）：若内网 Ubuntu 源不含 .NET 10 包，用 build-arg 注入内部 Microsoft feed 代理：
 #   --build-arg DOTNET_APT_SOURCE=https://nexus.internal.fffdan.com/repository/dotnet-proxy/ubuntu/24.04/prod
 #   --build-arg DOTNET_APT_KEY_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/microsoft.asc
@@ -57,13 +56,11 @@ ARG DOTNET_APT_KEY_URL=
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list \
  && printf 'Types: deb\nURIs: %s\nSuites: noble noble-updates noble-backports\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\nTypes: deb\nURIs: %s\nSuites: noble-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' "$UBUNTU_MIRROR" "$UBUNTU_MIRROR" > /etc/apt/sources.list.d/ubuntu.sources
 
-# 2) 基础工具链 + GitHub CLI + git + 容器内 Docker 运行时依赖
+# 2) 基础工具链 + GitHub CLI + git（通用能力，不含任何 dockerd 运行时依赖）
 #    注意：这里**不装** nodejs/npm，Node.js 与 npm 统一由 nvm 提供
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg git gh \
-      iptables iproute2 procps sudo \
-      fuse-overlayfs libseccomp2 conntrack \
+      ca-certificates curl gnupg git gh procps sudo \
  && rm -rf /var/lib/apt/lists/*
 
 # 2.1) 可选：注入 .NET 10 的 Microsoft feed 代理源（仅当内网 Ubuntu 源不含 dotnet10 包时）。
@@ -114,19 +111,7 @@ RUN printf '%s\n' \
       '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
       > /etc/profile.d/nvm.sh
 
-# 4) Docker CE CLI + buildx + containerd（供容器内构建镜像）
-RUN install -m 0755 -d /etc/apt/keyrings \
- && curl -fsSL "$DOCKER_APT_URL/gpg" -o /etc/apt/keyrings/docker.asc \
- && chmod a+r /etc/apt/keyrings/docker.asc \
- && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] %s %s stable\n' "$(dpkg --print-architecture)" "$DOCKER_APT_URL" "$(. /etc/os-release && echo "$VERSION_CODENAME")" > /etc/apt/sources.list.d/docker.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends \
-      docker-ce-cli docker-buildx-plugin containerd.io \
- && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /usr/local/lib/docker/cli-plugins \
- && ln -sf /usr/libexec/docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-buildx 2>/dev/null || true
-
-# 5) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
+# 4) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
 #    agent-gear 固定 2.4.x：工作负载「必须」短路（items[].required）自 2.4.0 起提供，
 #    参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
 #    避免构建期取到不支持这些能力的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
@@ -140,5 +125,5 @@ RUN npm config set registry "$NPM_REGISTRY" \
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 6) 默认启动命令即回连 cloud-controller（参数取自注入的环境变量）
+# 5) 默认启动命令即回连 cloud-controller（参数取自注入的环境变量）
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

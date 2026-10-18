@@ -11,7 +11,8 @@ import { CloudWorkload } from '../models/cloud-workload.js';
 export const name = '001-preset-workloads';
 
 // 脚本为初始版本，写库后归管理员所有、后台可编辑（提案 §5.3）。
-const DOCKER_SCRIPT = `#!/usr/bin/env bash
+// 导出为 `DOCKER_SCRIPT_V1`：内容逐字不变，供 002 迁移做「未定制」比对（工作负载四期 裁决 1）。
+export const DOCKER_SCRIPT_V1 = `#!/usr/bin/env bash
 set -euo pipefail
 
 if /usr/bin/docker info >/dev/null 2>&1; then
@@ -169,7 +170,7 @@ const PRESETS: PresetDefinition[] = [
   {
     presetKey: 'docker',
     name: 'Docker',
-    initScript: DOCKER_SCRIPT,
+    initScript: DOCKER_SCRIPT_V1,
     paramSchema: [],
     dependsOnNames: [],
   },
