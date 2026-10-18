@@ -587,6 +587,21 @@ aspire start
 - [ ] PRD §1.3 成功标准逐条演示通过（账单序号从 0 连续、任一笔可完整回溯、快照余额与精确核算一致）
 - [ ] 实现分支 PR 合并回 `feat/credits-billing`，需求总 PR #229 自动更新；实现计划文档保留在需求总分支
 
+## 实现记录（2026-10-18）
+
+- **实现分支**: `impl/credits-billing`（基于需求总分支 `feat/credits-billing`）。
+- **已完成**:
+  - Phase 1 契约：新增 `contracts/admin-billing.graphql` / `billing.graphql` / `billing-openai.openapi.yaml` / `billing-events.asyncapi.yaml`；扩展 `admin-llm.graphql`、`llm.graphql`（`Model.pricing`）、`admin-cloud-container.graphql`（`billingAccountId` / `billingStartedAt`）、`cloud-controller-websocket.md` 附录 A（字段 + 生命周期事件）。
+  - Phase 2 编排与依赖：Aspire 新增 `rabbitmq` 资源并引用到 `admin-api` / `cloud-controller`；两侧新增 `amqplib`；新增 MQ/计费配置项（`rabbitmqUrl` 支持 `ConnectionStrings__rabbitmq`）。
+  - Phase 3 cloud-controller 计费源头：`billingAccountId` / `billingStartedAt`、`billingoutbox` 模型、`BillingEventPublisher`（outbox + publisher confirm + relay）、首次 `markOnline` 写计费起点并投递 `container.ready`、销毁投递 `container.destroyed`、`DELETE ?reason` 透传。
+  - Phase 4 admin-api 计费域核心：13 个计费集合模型（含唯一索引与追加式不可变钩子）、`money`（整数分）、`credit-check`（唯一预扣费检查 + 预检凭证）、`account-service`（get-or-create/授信/精确核算）、`event-ingest`、`metering`、`pricing`（单价快照）、`invoicing`（seq 原子分配 + rollup）、`payment`（拆池 + ledger 幂等 + 原子钱包）、`receipt`、`rollup-service`、`reservation`（保证金 + 周期实扣 + 状态机）。
+  - Phase 5 消息骨干：RabbitMQ 连接/拓扑（重试 TTL + DLQ + 结算延迟队列）、admin outbox relay、计量/结算消费者（手动 ack + 退避重试 + DLQ）、`settlement-tick` 扫描兜底与欠费宽限强拆、三线对账、`BillingScheduler`。
+  - Phase 6 对外接口：`/v1/models`、`/v1/chat/completions`（OpenAI 兼容，含流式/中断/估算/402/404/400/429；只写 outbox 即返回）、`/internal/billing/*`、后台费用中心 GraphQL；`updateModelPricing` 同步 `Model.pricing` + `productprices`。
+  - Phase 7 agent-api 前台费用：`billing-client` 内部 REST 客户端 + `myBilling*` GraphQL（只读 + Key 管理，无充值入口）。
+  - Phase 8/9 前端：admin-web 费用中心（账户/充值/账单/收据/汇总/授信/核算/API Key/模型定价）与对账中心；agent-web「我的费用」（余额/欠费提示/账单/收据/汇总/API Key）。
+  - Phase 10 测试：billing 服务层单测（money/credit-check/metering/pricing）、cloud-controller 计费事件单测、前端费用组件测试、`tests/api/src/admin-api/billing.test.ts` 与 `tests/api/src/agent-api/billing.test.ts`。
+- **未完成/留待后续**: E2E（`tests/e2e/src/billing.spec.ts`）需真实 K8s/RabbitMQ 环境，本次未编写；`aspire publish` 生成的 docker-compose manifest 由编排层流水线刷新（AppHost 已声明 `rabbitmq`）。
+
 ## 风险与回滚
 
 | 风险 | 缓解 |
