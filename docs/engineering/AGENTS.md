@@ -230,3 +230,4 @@ flowchart LR
 - [[plan/20261018-feat-workload-phase1.md]] — 工作负载一期（参数、依赖与预制工作负载）实现计划
 - [[plan/20261018-feat-workload-phase3.md]] — 工作负载三期（必须工作负载硬失败与 .NET 安装优化）实现计划
 - [[plan/20261018-feat-workload-phase4.md]] — 工作负载四期（工作容器基础环境瘦身）实现计划
+- [[plan/20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）实现计划
