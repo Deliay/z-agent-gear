@@ -181,10 +181,14 @@ export class BillingClient {
 
   /** 按账单直查收据：避免前端依赖收据列表分页而误报「无收据」。 */
   async getReceiptByInvoice(accountId: string, invoiceId: string): Promise<BillingReceiptWire | null> {
+    // 输入自卫：空串/非 ObjectId 形态直接返回 null（不发请求，杜绝退化为「最新一张收据」而错配归属）
+    if (!/^[0-9a-fA-F]{24}$/.test(invoiceId)) return null;
     const list = await this.request<BillingReceiptWire[]>(
       `/internal/billing/receipts?${this.params({ accountId, invoiceId, pageSize: 1 })}`,
     );
-    return list[0] ?? null;
+    const receipt = list[0] ?? null;
+    // 归属校验：命中项必须是同一 invoiceId，否则视为无收据
+    return receipt && receipt.invoiceId === invoiceId ? receipt : null;
   }
 
   async listRollups(

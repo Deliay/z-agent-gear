@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import mongoose from 'mongoose';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 
@@ -68,6 +69,26 @@ const REVOKE_KEY = `
     expect(account.data.myBillingAccount.ownerType).toBe('front_user');
     expect(typeof account.data.myBillingAccount.availableBalance).toBe('number');
 
+    // 注入一张收据（若可直连 Mongo），用于验证空串 invoiceId 不会退化为「返回该账户最新收据」
+    let seededInvoiceId = '';
+    let db: mongoose.mongo.Db | null = null;
+    if (process.env.MONGODB_URI) {
+      if (mongoose.connection.readyState === 0) await mongoose.connect(process.env.MONGODB_URI);
+      db = mongoose.connection.db ?? null;
+      if (db) {
+        seededInvoiceId = new mongoose.Types.ObjectId().toString();
+        await db.collection('billingreceipts').insertOne({
+          receiptNo: `R-A-${Date.now()}`,
+          invoiceId: new mongoose.Types.ObjectId(seededInvoiceId),
+          paymentId: null,
+          accountId: new mongoose.Types.ObjectId(account.data.myBillingAccount.id as string),
+          amount: -1,
+          balanceAfter: -1,
+          issuedAt: new Date(),
+        });
+      }
+    }
+
     const created = await gqlRequest(CREATE_KEY, { name: 'my-key' }, token).then((res) => res.json());
     expect(created.errors).toBeUndefined();
     expect(created.data.createMyBillingApiKey.secret).toMatch(/^zag_sk_[0-9a-f]+$/);
@@ -89,6 +110,25 @@ const REVOKE_KEY = `
     );
     expect(invalidReceipt.errors).toBeUndefined();
     expect(invalidReceipt.data.myBillingReceipt).toBeNull();
+
+    // 空串同样不得退化为「最新一张收据」（归属错配）
+    const emptyReceipt = await gqlRequest(MY_RECEIPT, { invoiceId: '' }, token).then(
+      (res) => res.json(),
+    );
+    expect(emptyReceipt.errors).toBeUndefined();
+    expect(emptyReceipt.data.myBillingReceipt).toBeNull();
+
+    if (seededInvoiceId) {
+      // 对照组：合法 oid 正常命中该收据
+      const hit = await gqlRequest(MY_RECEIPT, { invoiceId: seededInvoiceId }, token).then(
+        (res) => res.json(),
+      );
+      expect(hit.errors).toBeUndefined();
+      expect(hit.data.myBillingReceipt.invoiceId).toBe(seededInvoiceId);
+      await db!.collection('billingreceipts').deleteOne({
+        invoiceId: new mongoose.Types.ObjectId(seededInvoiceId),
+      });
+    }
 
     const keys = await gqlRequest(MY_KEYS, undefined, token).then((res) => res.json());
     expect(keys.data.myBillingApiKeys.some((key: { id: string }) => key.id === keyId)).toBe(true);

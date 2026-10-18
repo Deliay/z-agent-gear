@@ -653,6 +653,14 @@ aspire start
   - `tests/api` 计费四件套（含新增 T-B25、T-B24）：**12 passed**（真实 admin-api/agent-api/cloud-controller + 共享 Mongo）。
   - `tests/e2e/src/admin-billing.spec.ts` **2 passed**、`tests/e2e/src/billing.spec.ts` **1 passed**（Aspire 托管真实前后端）。
 
+## 实现记录（2026-10-19，返工 v1.5）
+
+- **返工修复（代码审核第五轮打回项）**:
+  1. **中-1 invoiceId 守卫纵深补全（空串/数组绕过）**：`internal-billing` 改为「`invoiceId` 一旦传入就必须是合法 ObjectId」——空串/数组/非法串一律按「无匹配收据」返回 `200 []`，不再落到「无过滤」分支而返回账户最新收据（归属错配）。agent-api `getReceiptByInvoice` 增加输入自卫：非 24 位 hex 直接返回 `null`（不发请求），并对返回项做 `receipt.invoiceId === invoiceId` 归属校验。新增断言：`tests/api` T-B25 扩展（注入一张收据后，空串/数组/非法串均 `[]`，合法 oid 对照组正常命中），agent 套件 `myBillingReceipt("")` → `null` 且合法 oid 对照组命中。
+- **真实验证（本机 Aspire 全栈重启加载本轮代码）**:
+  - `servers/admin-api` build + **465 passed / 1 skipped**；`servers/agent-api` build + **653 passed**。
+  - `tests/api` 计费四件套（T-B25 扩展、T-B24 等）：**12 passed**（真实服务 + 共享 Mongo，含注入收据的归属回归）。
+
 ## 风险与回滚
 
 | 风险 | 缓解 |

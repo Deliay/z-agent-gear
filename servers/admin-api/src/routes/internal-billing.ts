@@ -95,13 +95,15 @@ export function createInternalBillingRouter(): Router {
     const page = Math.max(1, Number(req.query.page ?? 1) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
     const filter: Record<string, unknown> = { accountId };
-    if (typeof req.query.invoiceId === 'string' && req.query.invoiceId) {
-      // 非法 ObjectId 视为「无匹配收据」而非抛 CastError（保持对外 200 + []，避免 500/堆栈泄露）
-      if (!mongoose.isValidObjectId(req.query.invoiceId)) {
+    const rawInvoiceId = req.query.invoiceId;
+    if (rawInvoiceId !== undefined) {
+      // 一旦传入 invoiceId 就必须是合法 ObjectId（空串/数组/非法串均按「无匹配收据」处理，
+      // 保持对外 200 + []，避免 mongoose CastError 500/堆栈泄露，也避免退化为「未过滤」而错配归属）
+      if (typeof rawInvoiceId !== 'string' || !mongoose.isValidObjectId(rawInvoiceId)) {
         res.json([]);
         return;
       }
-      filter.invoiceId = req.query.invoiceId;
+      filter.invoiceId = rawInvoiceId;
     }
     const docs = await BillingReceipt.find(filter)
       .sort({ issuedAt: -1 })

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import mongoose from 'mongoose';
 import { adminGql, ensureAdminLogin } from './helpers.js';
 
 const ADMIN_HTTP = (process.env.ADMIN_API_URL || 'http://localhost:10003/graphql').replace(
@@ -181,12 +182,61 @@ describe('Admin Billing API', () => {
       );
       const accountId = accounts.data!.adminBillingAccounts[0]!.id;
 
+      // 注入一张收据（若可直连 Mongo），确保空串/数组入参不会退化为「返回账户最新收据」
+      let seededInvoiceId: string | null = null;
+      let db: mongoose.mongo.Db | null = null;
+      if (process.env.MONGODB_URI) {
+        if (mongoose.connection.readyState === 0) await mongoose.connect(process.env.MONGODB_URI);
+        db = mongoose.connection.db ?? null;
+        if (db) {
+          seededInvoiceId = new mongoose.Types.ObjectId().toString();
+          await db.collection('billingreceipts').insertOne({
+            receiptNo: `R-PROBE-${Date.now()}`,
+            invoiceId: new mongoose.Types.ObjectId(seededInvoiceId),
+            paymentId: null,
+            accountId: new mongoose.Types.ObjectId(accountId),
+            amount: -1,
+            balanceAfter: -1,
+            issuedAt: new Date(),
+          });
+        }
+      }
+
       const res = await fetch(
         `${ADMIN_HTTP}/internal/billing/receipts?accountId=${accountId}&invoiceId=not-an-oid`,
         { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
       );
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual([]);
+
+      const empty = await fetch(
+        `${ADMIN_HTTP}/internal/billing/receipts?accountId=${accountId}&invoiceId=`,
+        { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
+      );
+      expect(empty.status).toBe(200);
+      expect(await empty.json()).toEqual([]);
+
+      const arrayParam = await fetch(
+        `${ADMIN_HTTP}/internal/billing/receipts?accountId=${accountId}&invoiceId=a&invoiceId=b`,
+        { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
+      );
+      expect(arrayParam.status).toBe(200);
+      expect(await arrayParam.json()).toEqual([]);
+
+      if (seededInvoiceId) {
+        // 对照组：合法 oid 正常命中该收据
+        const hit = await fetch(
+          `${ADMIN_HTTP}/internal/billing/receipts?accountId=${accountId}&invoiceId=${seededInvoiceId}`,
+          { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
+        );
+        expect(hit.status).toBe(200);
+        const rows = (await hit.json()) as Array<{ invoiceId: string }>;
+        expect(rows.length).toBe(1);
+        expect(rows[0]!.invoiceId).toBe(seededInvoiceId);
+        await db!.collection('billingreceipts').deleteOne({
+          invoiceId: new mongoose.Types.ObjectId(seededInvoiceId),
+        });
+      }
     },
   );
 });
