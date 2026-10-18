@@ -1,5 +1,5 @@
 ---
-description: 费用中心技术提案 v2.0：业务事件→计量→定价→账单→支付→收据六段计费管线，含预留状态机（保证金+周期实扣）、不可变 ledger、幂等可重放结算与三线对账
+description: 费用中心技术提案 v2.1：业务事件→计量→定价→账单→支付→收据六段计费管线，以 RabbitMQ 为事件骨干（outbox 可靠投递/重试/死信/幂等消费），含预留状态机（保证金+周期实扣）、不可变 ledger、可重放结算与三线对账
 type: Permanent
 ---
 
@@ -7,16 +7,17 @@ type: Permanent
 
 **功能名称**: 后台费用中心与 Credits 计费体系
 **关联 PRD**: `docs/product/draft/20261018-credits-billing.md`（v2.0）
-**技术提案版本**: v2.0
+**技术提案版本**: v2.1
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
 **feat-branch**: `feat/credits-billing`
-**版本说明**: v2.0（2026-10-18，返工重设计）按「业务事件 → 计量(Metering) → 定价(Pricing) → 账单(Invoice) → 支付(Payment) → 收据(Receipt)」重构计费架构：
-- 职责分层——业务侧只发事件（不发扣费指令），计量是「事实」且可重放，扣费是「解释」；调价只影响新消费（单价快照入账单）。
-- 资金模型——钱包拆出现金/赠送金/授信额度/冻结额，`available = cash + gift + creditLimit - frozen`；金额整数最小单位运算；ledger 不可变流水为唯一真相。
-- 预扣策略——容器采用「保证金 + 周期实扣」（预留 reservation + 按周期 cycle 结算/重冻），预扣敞口最多一个周期；模型调用走「调用前额度校验 + 调用后结算」。
-- 一致性——原子条件更新防超卖、三类幂等键、结算器可重入可重放；对账三线（资金/计量/资源）+ 僵尸预留扫描兜底。
-- 同步 §2/§3/§4/§5/§6/§8/§9 与 PRD v2.0 口径。
+**版本说明**:
+- v2.0（2026-10-18，返工重设计）按「业务事件 → 计量(Metering) → 定价(Pricing) → 账单(Invoice) → 支付(Payment) → 收据(Receipt)」重构计费架构：
+  - 职责分层——业务侧只发事件（不发扣费指令），计量是「事实」且可重放，扣费是「解释」；调价只影响新消费（单价快照入账单）。
+  - 资金模型——钱包拆出现金/赠送金/授信额度/冻结额，`available = cash + gift + creditLimit - frozen`；金额整数最小单位运算；ledger 不可变流水为唯一真相。
+  - 预扣策略——容器采用「保证金 + 周期实扣」（预留 reservation + 按周期 cycle 结算/重冻），预扣敞口最多一个周期；模型调用走「调用前额度校验 + 调用后结算」。
+  - 一致性——原子条件更新防超卖、三类幂等键、结算器可重入可重放；对账三线（资金/计量/资源）+ 僵尸预留扫描兜底。
+- v2.1（2026-10-18，返工修订）**引入 RabbitMQ 作为计费事件骨干**：业务侧与计费域经 RabbitMQ 异步解耦（topic exchange + 按域分队列 + 死信/重试拓扑），可靠投递采用「本地 outbox + publisher confirm + 消费幂等 + DLQ」组合，周期结算消息化（延迟队列驱动）；同步 §1.2/§1.3/§2/§3.2/§4.3/§5/§6/§7/§8/§9 与 PRD v2.1 口径。
 
 ## 1. 概述
 
@@ -27,7 +28,7 @@ type: Permanent
 1. **云端工作容器**（`servers/cloud-controller`）：容器生命周期已完备（`creating → connecting → initializing → online → exited/destroying/failed`），初始化工作负载完成的收口点是 `WorkloadDispatcher.finishInit → ContainerService.markOnline`（`servers/cloud-controller/src/services/workload-dispatcher.ts:477` / `container-service.ts:319`；无 init 脚本的容器在 `socketio-gateway.ts:311` register 直通 `markOnline`）。`cloudcontainers.userId` 字段已预留但**无任何写入路径**，容器与账户的归属关系缺失。
 2. **模型调用**：`servers/admin-api` / `servers/agent-api` 只用 `services/llm-api.ts` 做 `models.list()` 连通性校验，**不存在任何 OpenAI 兼容的对外调用入口**，也没有 token 用量采集。
 
-本提案按 PRD v2.0 落地六段计费管线：
+本提案按 PRD v2.1 落地六段计费管线（事件骨干为 RabbitMQ）：
 
 ```mermaid
 flowchart LR
@@ -43,6 +44,7 @@ flowchart LR
 ### 1.2 目标
 
 - **管线分层**：事件 → 计量 → 定价 → 账单 → 支付 → 收据，每层单一职责、可独立核对、可重放；业务侧绝不发「扣费指令」，计费侧绝不回查业务库（规格、单价、时长都在事件里带够）。
+- **事件骨干 RabbitMQ**：业务侧（cloud-controller、调用网关）与计费域经 RabbitMQ 异步解耦——topic exchange 统一接入业务事件，按域分队列消费，配死信/重试拓扑；可靠投递 = 本地 outbox + publisher confirm + 消费幂等 + DLQ，保证事件不丢失、可补发、可重放，积压不影响业务功能（PRD §4.4）。
 - **资金模型健全**：钱包（现金/赠送金/授信/冻结）+ 不可变 ledger；`available = cash + gift + creditLimit - frozen`；金额整数最小单位（0.01 credits）运算；账本是真相、钱包是缓存。
 - **预扣敞口最小**：容器用「保证金 + 周期实扣」——预扣额始终只有「最多一个周期 + 保证金」的风险敞口；模型调用只做调用前额度校验（拒绝式），不做长时间冻结。
 - **统一预扣费检查**：`CreditCheckService` 是唯一的额度判定入口与计费链路唯一同步卡点（快、可降级、快速失败），容器开通/续期与模型调用都走它。
@@ -54,12 +56,13 @@ flowchart LR
 
 **做**：
 
-- admin-api：`services/billing/*` 计费域（事件接入、计量、定价、账单、支付、收据、预留、额度校验、对账）、`BillingTickService` 周期结算与欠费强拆、`/internal/billing/*` 内部 REST、`/v1/*` OpenAI 兼容计费网关、费用中心 GraphQL（`admin-billing.graphql`）。
+- RabbitMQ 事件骨干：topic exchange（`zag.billing.events`）、计费域消费队列（计量/结算）、重试与死信拓扑（DLX/DLQ）、消息契约（AsyncAPI）；Aspire/docker-compose 编排新增 RabbitMQ 资源。
+- admin-api：`services/billing/*` 计费域（事件接入、计量、定价、账单、支付、收据、预留、额度校验、对账）、RabbitMQ 消费者与 outbox 投递器、`BillingTickService` 周期结算消息调度与欠费强拆、`/internal/billing/*` 内部 REST、`/v1/*` OpenAI 兼容计费网关、费用中心 GraphQL（`admin-billing.graphql`）。
 - agent-api：前台「我的费用」/收据/API Key GraphQL（`billing.graphql`），经 admin-api 内部 REST 转发（计费写路径不落在 agent-api）。
-- cloud-controller：`cloudcontainers` 新增 `billingAccountId` / `billingStartedAt` 写入链路（`markOnline` 写计费起点）；内部 API 透出新字段；`POST /internal/containers` 接受 `billingAccountId`；容器生命周期事件（就绪/销毁）作为业务事件投递。
+- cloud-controller：`cloudcontainers` 新增 `billingAccountId` / `billingStartedAt` 写入链路（`markOnline` 写计费起点）；内部 API 透出新字段；`POST /internal/containers` 接受 `billingAccountId`；容器生命周期事件经 outbox + RabbitMQ 投递（就绪/销毁）。
 - admin-web：费用中心（账户列表/账单与收据/充值/汇总/API Key/对账中心）、模型定价设置。
 - agent-web：我的费用（余额/冻结/账单/收据）与 API Key 管理。
-- contracts：新增 `admin-billing.graphql`、`billing.graphql`、`billing-openai.openapi.yaml`；扩展 `admin-cloud-container.graphql`、`admin-llm.graphql`、`llm.graphql`、`cloud-controller-websocket.md` 附录 A。
+- contracts：新增 `admin-billing.graphql`、`billing.graphql`、`billing-openai.openapi.yaml`、`billing-events.asyncapi.yaml`（RabbitMQ 事件消息契约）；扩展 `admin-cloud-container.graphql`、`admin-llm.graphql`、`llm.graphql`、`cloud-controller-websocket.md` 附录 A。
 
 **不做**：
 
@@ -80,8 +83,14 @@ graph TD
         CC[cloud-controller<br/>容器就绪/销毁事件]
         GW["admin-api /v1 网关<br/>调用开始/完成/中断事件"]
     end
+    subgraph RabbitMQ 事件骨干
+        EX["topic exchange<br/>zag.billing.events"]
+        Q1[billing.metering.q]
+        Q2[billing.settlement.q]
+        DLQ[DLX + 重试/死信队列]
+    end
     subgraph 计费域 admin-api
-        EI[事件接入<br/>billing_events] --> ME[计量<br/>metering_records]
+        EI[事件接入<br/>billingevents 幂等] --> ME[计量<br/>metering_records]
         ME --> PR[定价<br/>product_prices<br/>单价快照]
         PR --> IN[账单<br/>invoices<br/>seq 从 0 递增]
         IN --> PA[支付<br/>payments]
@@ -90,14 +99,20 @@ graph TD
         PA --> RE[收据 receipts]
         CK[CreditCheckService<br/>统一预扣费检查<br/>唯一同步卡点]
         RS[预留 reservations<br/>+ reservation_cycles]
-        TK[BillingTickService<br/>周期结算器]
+        TK[结算调度<br/>延迟消息驱动]
         RC[对账<br/>资金/计量/资源 + 僵尸预留]
     end
+    CC -->|outbox + confirm| EX
+    GW -->|outbox + confirm| EX
+    EX --> Q1
+    EX --> Q2
+    Q1 -->|consume 幂等| EI
+    Q2 -->|consume 幂等| TK
+    Q1 -.nack.-> DLQ
+    Q2 -.nack.-> DLQ
     WA -.缓存.-> LE
     RS --> TK
     TK --> PR
-    CC -->|事件| EI
-    GW -->|事件| EI
     CK -.放行/拒绝.-> RS
     CK -.放行/拒绝.-> GW
     TK -->|强拆 欠费10min| CC
@@ -128,8 +143,9 @@ graph TD
 | 数据库 | MongoDB（Mongoose 9），复用现有 `mongodb://localhost:27017/agent-gear` 实例 | 计费集合与现有集合同库，无新增部署资源 |
 | 计费网关 | admin-api Express 路由 + `openai` / `@anthropic-ai/sdk`（已依赖） | `/v1/*` 直连供应商，流式透传，事件化计量 |
 | 资金一致性 | Mongo 原子条件更新（CAS / `findOneAndUpdate` 条件 + `$inc`） | 防超卖、防丢失更新；唯一索引兜底幂等 |
+| 事件骨干 | RabbitMQ（topic exchange + durable 队列 + DLX/死信 + TTL 重试队列） | 业务侧与计费域异步解耦；可靠投递、削峰、可横向扩展消费者 |
 | 前端 | React + TypeScript + Vite（admin-web / agent-web） | 复用现有页面/组件风格 |
-| 调度 | admin-api 进程内 `setInterval`（结算 tick + 每日对账） | 与 cloud-controller `StatusSyncService` 15s tick 同模式 |
+| 调度 | 结算调度消息化（RabbitMQ 延迟队列）+ `setInterval`（每日对账、outbox 补投） | 周期结算由消息驱动，可横向扩展；与 cloud-controller `StatusSyncService` tick 同模式 |
 | 测试 | Vitest（单测/集成）+ 现有 E2E 套件 | TDD 红-绿-重构 |
 
 ### 2.3 模块划分
@@ -150,7 +166,9 @@ graph LR
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
-| `services/billing/event-ingest.ts` | 业务事件接入与去重 | `eventId` 唯一索引；事件只带事实（资源、规格、时段、用量），不带金额 |
+| `services/billing/event-publisher.ts`（业务侧：cloud-controller / 网关） | 事件可靠投递 | 本地 outbox 落库 + RabbitMQ publisher confirm + 失败补投 |
+| `services/billing/mq-consumers.ts` | RabbitMQ 消费者（计量/结算队列） | 手动 ack、幂等消费、重试退避、死信；prefetch 限流 |
+| `services/billing/event-ingest.ts` | 事件接入与去重 | `eventId` 唯一索引；事件只带事实（资源、规格、时段、用量），不带金额 |
 | `services/billing/metering.ts` | 事件 → 用量事实 | 独立管道、可重放；计量缺失兜底（按规格/上限估算并标注） |
 | `services/billing/pricing.ts` | 用量 × 价目 → 费用 | 价目带生效时间；账单存**单价快照**；金额整数分单位运算 |
 | `services/billing/invoicing.ts` | 出账 | 逐笔账单，`{accountId, seq}` 唯一（seq 从 0 递增）；rollup 三粒度累计 |
@@ -158,7 +176,7 @@ graph LR
 | `services/billing/receipt.ts` | 收据 | 支付成功后出具，含用量、单价快照、金额、余额 |
 | `services/billing/credit-check.ts` | **统一预扣费检查**（唯一同步卡点） | 原子条件更新；`reject`/`accrue` 双策略 |
 | `services/billing/reservation.ts` | 预留/保证金/周期 | 状态机 `PENDING→ACTIVE→SETTLING→SETTLED`（+`RELEASE_PENDING`）；`(reservationId, cycleSeq)` 唯一 |
-| `services/billing/settlement-tick.ts` | 周期结算器 + 欠费强拆 | 无状态可重入，按 `reservationId` 串行；欠费 10min 强拆 + 释放预留 |
+| `services/billing/settlement-tick.ts` | 周期结算器 + 欠费强拆 | 结算消息驱动、无状态可重入，按 `reservationId` 串行；欠费 10min 强拆 + 释放预留 |
 | `services/billing/reconciliation.ts` | 三线对账 + 僵尸预留扫描 | 资金/计量/资源；差错记录与自动校准 |
 | `routes/billing-openai.ts` | OpenAI 兼容计费网关 | Key 鉴权、事件化计量（含中断）、流式透传 |
 | `graphql/{schemas,resolvers}/billing.ts` | 费用中心 GraphQL | 命名沿用 `admin*` 前缀 |
@@ -379,12 +397,24 @@ type Mutation {
 
 ### 3.2 内部接口
 
-##### 业务事件接口（计费域唯一入口，`Authorization: Bearer <INTERNAL_API_TOKEN>`）
+##### 业务事件消息契约（RabbitMQ，`contracts/billing-events.asyncapi.yaml`）
+
+拓扑：
+
+| 项 | 值 | 说明 |
+|----|-----|------|
+| Exchange | `zag.billing.events`（topic，durable） | 业务事件统一入口 |
+| Routing keys | `container.ready` / `container.destroyed` / `model_call.completed` / `model_call.aborted` | 按事件类型路由 |
+| Queue | `billing.metering.q`（durable，binding `container.*`/`model_call.*`） | 计量消费者 |
+| Queue | `billing.settlement.q`（durable） | 周期结算消费者（`billing.settlement.cycle` 消息由调度器发布，经 `zag.billing.internal` exchange） |
+| Retry | `billing.*.retry.q`（`x-message-ttl` + DLX 回主队列） | 指数退避重试 |
+| Dead letter | `zag.billing.dlx` → `billing.*.dlq`（durable，保留 7 天） | 多次失败进死信，人工/对账处置 |
+
+消息体（JSON，`content-type: application/json`，headers 带 `x-event-id`/`x-retry-count`）：
 
 ```jsonc
-// POST /internal/billing/events  （cloud-controller 容器事件 / 网关调用事件统一投递）
 {
-  "eventId": "uuid",              // 幂等键，唯一索引，重复投递无副作用
+  "eventId": "uuid",              // 幂等键，唯一索引，重复投递/重复消费无副作用
   "eventType": "container.ready | container.destroyed | model_call.completed | model_call.aborted",
   "occurredAt": "ISO 时间",
   "accountId": "...",
@@ -397,6 +427,8 @@ type Mutation {
   }
 }
 ```
+
+投递语义：**at-least-once**（可靠投递 = 本地 outbox + publisher confirm + 消费幂等 + DLQ，见 §5.2 实现点 8）；乱序安全（`occurredAt` 归位）；消费侧手动 ack，处理成功才 ack。
 
 ##### admin-api `/internal/billing/*`（供 agent-api 调用）
 
@@ -428,7 +460,7 @@ creditCheck(input: {
 - A.2.2 `POST /internal/containers`：body 增加 `billingAccountId?: string`（为空表示不计费）；
 - A.3 `GET /internal/containers`：每个容器增加 `billingAccountId`、`billingStartedAt`（`markOnline` 时刻，null=未就绪/不计费）；
 - 强拆复用 A.2.3 `DELETE /internal/containers/:id`，`exitReason: '余额不足超过 10 分钟，强制销毁'`；
-- 容器生命周期事件由 cloud-controller 在 `markOnline` / `destroyLocked` 处投递 `container.ready` / `container.destroyed`（投递失败仅告警，**以对账兜底**，不阻塞生命周期）。
+- 容器生命周期事件由 cloud-controller 在 `markOnline` / `destroyLocked` 处经 **outbox + RabbitMQ** 投递 `container.ready` / `container.destroyed`（投递失败落 outbox 补投并告警，**以对账兜底**，不阻塞生命周期）。
 
 ## 4. 数据模型
 
@@ -576,6 +608,14 @@ stateDiagram-v2
 - **API Key 校验缓存**（Redis，可选）：`billing:apikey:<keyHash>` → `accountId`，TTL 1h，吊销主动删除（沿用 `services/key-cache.ts` 模式）。
 - 不做「余额放 Redis」：避免第三份真相。
 
+### 4.3 消息队列拓扑（RabbitMQ）
+
+- Exchange：`zag.billing.events`（topic，durable）+ `zag.billing.internal`（direct，durable，调度消息）；
+- Queue：`billing.metering.q`、`billing.settlement.q`（均 durable + `x-dead-letter-exchange: zag.billing.dlx`）；重试队列 `billing.*.retry.q`（`x-message-ttl` 退避后 DLX 回主队列）；死信 `billing.*.dlq`（保留 7 天，费用中心可查）；
+- 消息持久化（delivery mode 2）+ publisher confirm；消费手动 ack、prefetch 限流（默认 32）；
+- 调度消息 `billing.settlement.cycle`：`{reservationId, cycleSeq, windowStart/End}`，经延迟队列（TTL + DLX 实现定时）驱动周期结算，天然幂等键 `(reservationId, cycleSeq)`；
+- 消息契约：`contracts/billing-events.asyncapi.yaml`（事件与调度消息统一定义）。
+
 ## 5. 技术实现方案
 
 ### 5.1 核心流程
@@ -584,14 +624,17 @@ stateDiagram-v2
 
 ```mermaid
 sequenceDiagram
-    participant TK as 结算器 tick(每周期)
     participant CC as cloud-controller
+    participant MQ as RabbitMQ
+    participant TK as 结算消费者
     participant CK as CreditCheck
     participant ST as 结算(定价/账单/支付)
     participant LG as ledger / wallet
     participant RS as Reservation
 
-    Note over TK: 开通（container.ready 事件）
+    Note over CC,TK: 开通（container.ready 事件经 outbox→confirm→consume）
+    CC->>MQ: container.ready
+    MQ->>TK: consume（幂等）
     TK->>CK: creditCheck(estimated=保证金, policy=reject)
     alt 额度不足且无授信
         CK-->>TK: allowed=false
@@ -616,7 +659,9 @@ sequenceDiagram
             TK->>RS: RELEASE_PENDING → 最终结算+释放冻结 → SETTLED
         end
     end
-    Note over TK: container.destroyed 事件 / 资源对账兜底
+    Note over CC,TK: container.destroyed 事件（outbox→MQ）/ 资源对账兜底
+    CC->>MQ: container.destroyed
+    MQ->>TK: consume
     TK->>RS: 最终结算尾分钟 + 释放剩余冻结 → SETTLED
 ```
 
@@ -628,7 +673,8 @@ sequenceDiagram
     participant W as /v1 网关
     participant CK as CreditCheck
     participant P as 模型供应商
-    participant B as 计费管线
+    participant MQ as RabbitMQ
+    participant B as 计费管线消费者
 
     U->>W: POST /v1/chat/completions (Bearer zag_sk_*)
     W->>W: 校验 API Key → accountId；model → 价目
@@ -640,7 +686,8 @@ sequenceDiagram
         W->>P: 转发（流式/非流式，携带供应商凭据）
         P-->>W: usage（流式 include_usage / message_delta 采集）
         Note over W: 断开/上游中断 → aborted；usage 缺失按兜底规则估算(estimated=true)
-        W->>B: 事件 model_call.completed/aborted（eventId 幂等）
+        W->>MQ: outbox → publish 事件 model_call.completed/aborted（eventId 幂等）
+        MQ->>B: consume（手动 ack，重复安全）
         B->>B: 计量(token 三段) → 定价(单价快照) → 账单(seq) → 支付(拆池扣款) → 收据
         W-->>U: 200 响应（流式透传）
     end
@@ -657,7 +704,7 @@ sequenceDiagram
 
 #### 实现点 2: 事件与计量的幂等可重放（PRD 功能点 2）
 
-- 事件接入按 `eventId` 唯一索引去重，重复投递直接返回成功；
+- 事件经 RabbitMQ **at-least-once** 投递；消费侧按 `eventId` 唯一索引去重，重复投递/重复消费直接返回成功；
 - 计量按 `eventId` 一一映射（一事件一计量记录），`metered/invoiced` 游标可重置重扫；
 - **计量是事实、扣费是解释**：重放「事件 → 计量 → 定价」得到的金额与历史一致（定价取 `windowFrom` 时点生效价档）；出账/支付按 `idempotentKey` 幂等，重跑结果一致（决策 D-4）；
 - 计量缺失兜底：模型 usage 缺失按请求上限/已收文本估算（`estimated=true`）；容器心跳丢失按最后已知时段计量——保证「拔网线」不逃费。
@@ -698,6 +745,16 @@ sequenceDiagram
 - admin-web：`pages/BillingPage.tsx`（账户列表 + 详情抽屉：余额/冻结卡、账单表、收据查看、汇总图、充值）、`pages/ReconciliationPage.tsx`（对账中心）、`components/billing/{AccountTable,RechargeDialog,InvoiceTable,ReceiptDrawer,RollupChart,MyApiKeyManager}.tsx`；`ModelConfigPage` 增加定价编辑列（落价目档）；`src/graphql/billing.ts`。
 - agent-web：`pages/BillingPage.tsx`（余额/冻结/欠费提示/账单/收据/汇总/API Key），入口并入主导航；`src/graphql/billing.ts`。
 
+#### 实现点 8: 事件可靠投递与消费（RabbitMQ，PRD §4.4）
+
+- **可靠投递 = 本地 outbox + publisher confirm + 消费幂等 + DLQ**：
+  - 业务侧（cloud-controller / 网关）先把事件写入本地 outbox（与业务状态同库同批），后台 relay 批量发布到 `zag.billing.events` 并等待 **publisher confirm**，确认后标记 `published`；失败留在 outbox 由补投循环（`setInterval`）重发——业务进程崩溃也不丢事件；
+  - 消费者手动 ack：完成「事件落库（`eventId` 幂等）→ 计量」才 ack；异常 nack 进重试队列（TTL 指数退避），超过重试次数进 DLQ（保留 7 天）；
+  - DLQ 消息在费用中心可见（对账报告「计量对账」线联动补算）；任何事件最终不丢：outbox 补投 + DLQ 处置 + 资源/计量对账三重兜底。
+- **削峰与解耦**：计费消费慢只形成队列积压，业务功能（启动容器/调用模型）不被阻塞（PRD §4.1/§4.4）；消费者可横向扩展（多实例竞争消费），结算消息以 `(reservationId, cycleSeq)` 幂等 + `version` CAS 保证并发安全。
+- **乱序安全**：消息不保证顺序，计量按 `occurredAt` 归位（`windowFrom/To` 切分），重复与乱序均不产生重复/错误计费。
+- **配置**：prefetch=32、重试 5 次（1s/4s/16s/64s/256s）、DLQ 保留 7 天；连接自动重连（amqplib + 心跳 30s）。
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -716,6 +773,9 @@ sequenceDiagram
 | D-10 | 计量缺失兜底 | 按规格/上限估算入账（`estimated=true`） | 不计费 | A | 「拔网线」不逃费；明细标注可审计 |
 | D-11 | 价目版本 | 价目带 `effectiveFrom`，旧档保留 | 覆盖式改价 | A | 单价快照+价目历史才能对账历史账单；调价只影响新消费 |
 | D-12 | 资金池 | `cash/gift/credit` 三池 + 冻结 | 单一余额 | A | 优先级拆账清晰；gift 本期不运营但模型预留，避免二次重构 |
+| D-13 | 事件骨干 | RabbitMQ（topic exchange + 分域队列 + DLX） | 直接 HTTP 事件接口 / Mongo outbox 直连 / Redis pub-sub | A | 按返工要求引入；持久化、at-least-once、重试/死信、削峰、消费者可扩展；Redis pub-sub 不持久化、HTTP 直连不缓冲，均不满足「事件不丢失」 |
+| D-14 | 可靠投递组合 | 本地 outbox + publisher confirm + 消费幂等 + DLQ | 仅 confirm / 仅事务发消息 | A | 四层组合覆盖「生产者崩溃/网络失败/消费者失败/毒消息」四类丢失面；outbox 与业务状态同批写，业务崩溃不丢事件 |
+| D-15 | 周期结算驱动 | RabbitMQ 延迟消息（`billing.settlement.cycle`） | 进程内 `setInterval` 扫描 | A（主）+ 扫描兜底 | 消息驱动可横向扩展、天然按 `(reservationId,cycleSeq)` 幂等；保留低频扫描兜底调度消息丢失 |
 
 ### 6.2 依赖与约束
 
@@ -723,7 +783,7 @@ sequenceDiagram
 |------|------|------|
 | 依赖 | cloud-controller 内部 REST（A.2.2/A.2.3/A.3）扩展 + 生命周期事件投递 | `billingAccountId`/`billingStartedAt`；事件投递失败仅告警，以对账兜底 |
 | 依赖 | `openai` / `@anthropic-ai/sdk`、`bcryptjs`、Redis（可选缓存） | 均已存在，无需新增 |
-| 约束 | 无新增部署资源 | 复用现有 MongoDB / Redis / Aspire 编排 |
+| 约束 | 新增 RabbitMQ 部署资源 | Aspire AppHost 与 docker-compose manifest 新增 `rabbitmq` 服务；MongoDB / Redis 复用现有 |
 | 约束 | 计费侧绝不回查业务库 | 规格/单价/时长全部由事件携带 |
 | 约束 | `models`/`providers` schema 在 admin-api 与 agent-api 同步演进 | 既有约定，加注释 |
 | 约束 | ledger/invoice/receipt 追加式不可变 | schema 钩子拦截 update/delete |
@@ -746,6 +806,11 @@ servers/admin-api/src/
 │   ├── billing-api-key.ts / billing-api-call.ts
 │   └── model.ts                    # + pricing 子文档（同步演进）
 ├── services/billing/
+│   ├── mq/                         # RabbitMQ 连接/拓扑/发布/消费
+│   │   ├── connection.ts           # amqplib 连接 + 自动重连 + confirm channel
+│   │   ├── topology.ts             # exchange/queue/DLX 声明
+│   │   ├── publisher.ts            # outbox → publish(confirm) → 标记 published
+│   │   └── consumers.ts            # billing.metering.q / billing.settlement.q（手动 ack）
 │   ├── event-ingest.ts             # 事件接入与去重（eventId 幂等）
 │   ├── metering.ts                 # 事件→计量（可重放、缺失兜底）
 │   ├── pricing.ts                  # 用量×价目（单价快照、金额整数化）
@@ -770,7 +835,9 @@ servers/agent-api/src/
 
 servers/cloud-controller/src/
 ├── models/cloud-container.ts       # + billingAccountId / billingStartedAt
-├── services/container-service.ts   # markOnline 写 billingStartedAt + 事件；destroy 发事件
+├── models/billing-outbox.ts        # 本地 outbox（事件可靠投递）
+├── services/container-service.ts   # markOnline 写 billingStartedAt + 事件入 outbox；destroy 发事件
+├── services/billing-event-publisher.ts  # outbox relay → RabbitMQ(confirm)
 └── routes/internal-api.ts          # A.2.2/A.3 字段扩展
 
 apps/admin-web/src/
@@ -784,9 +851,14 @@ contracts/
 ├── admin-billing.graphql           # 新增
 ├── billing.graphql                 # 新增
 ├── billing-openai.openapi.yaml     # 新增
+├── billing-events.asyncapi.yaml    # 新增（RabbitMQ 事件/调度消息契约）
 ├── admin-cloud-container.graphql   # + billingAccountId/billingStartedAt
 ├── admin-llm.graphql / llm.graphql # + Model.pricing
 └── cloud-controller-websocket.md   # 附录 A 字段 + 生命周期事件
+
+aspire/
+├── AgentGear.AppHost/             # 新增 rabbitmq 资源（+ 环境变量注入）
+└── manifest/docker-compose.yaml   # 重新生成（新增 rabbitmq 服务）
 ```
 
 ## 8. 测试策略
@@ -794,13 +866,14 @@ contracts/
 ### 8.1 测试覆盖要求
 
 - 单元测试覆盖率：`services/billing/*` ≥ 90%（资金相关标准高于全局）。
-- API 测试覆盖端点：`/v1/models`、`/v1/chat/completions`（流式/非流式/中断/402/401/404）、`admin-billing` 全部 Query/Mutation、`billing` 全部 Query/Mutation、`/internal/billing/events` 与 `/*`、`POST /internal/containers`（billingAccountId）。
+- API 测试覆盖端点：`/v1/models`、`/v1/chat/completions`（流式/非流式/中断/402/401/404）、`admin-billing` 全部 Query/Mutation、`billing` 全部 Query/Mutation、`/internal/billing/*`、`POST /internal/containers`（billingAccountId）；消息契约 `billing-events.asyncapi.yaml` 按消息链路测试覆盖。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
 | 单元测试（TDD 红-绿-重构） | Vitest + InMemory 仓储 | ① 事件/计量/资金三层幂等（重复 eventId、重复 cycle、重复 idempotentKey 均无副作用）；② 结算器可重入重放（同账期重复跑结果一致）；③ 预留状态机全迁移 + 并发（`version` CAS、`(reservationId,cycleSeq)` 并发唯一）；④ `creditCheck` 判定矩阵（creditLimit=0/>0、冻结额、冻结账户）；⑤ 拆池优先级与 ledger/wallet 一致性；⑥ 欠费计时与强拆边界（9'59"/10'00"、充值清零）；⑦ 金额整数化与向上取整；⑧ 计量缺失兜底估算 |
+| 消息链路测试 | Vitest + RabbitMQ（testcontainers / 测试实例） | outbox→publish(confirm)→consume 全链路；消费者崩溃重投（at-least-once 不丢）；重复消费幂等；重试退避与 DLQ 落信；乱序消息按 `occurredAt` 归位；调度消息丢失后扫描兜底 |
 | 集成测试 | Vitest + MongoMemoryServer | 全管线事件→收据链路；价目调价后新旧消费的单价快照；资金/计量/资源三线对账的差错注入与自动校准；僵尸预留扫描；API Key 生成/校验/吊销 |
 | API 测试 | 现有 tests/api 约定 | admin-billing / billing GraphQL 契约一致性；事件接口与 internal REST 鉴权（401） |
 | E2E | 现有 tests/e2e 约定 | 充值→启动容器（含工作负载初始化）→保证金冻结→分钟账单/收据→欠费 10min 强拆+释放；建 Key→调模型→账单/收据→余额不足 402→充值→恢复调用；事件丢失场景（不发销毁事件）下资源对账兜底释放 |
@@ -825,16 +898,21 @@ contracts/
 | `BILLING_RECON_CRON` | 每日 03:00 | 三线对账调度 |
 | `RESERVATION_STALE_MS` | 900000 | 僵尸预留扫描阈值（lastSettleAt 超时） |
 | `ADMIN_API_URL` | — | agent-api → admin-api `/internal/billing/*` |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672` | RabbitMQ 连接（Aspire 注入） |
+| `RABBITMQ_PREFETCH` | 32 | 消费者预取 |
+| `RABBITMQ_RETRY_MAX` | 5 | 重试次数（1s/4s/16s/64s/256s 退避后进 DLQ） |
+| `OUTBOX_RELAY_INTERVAL_MS` | 5000 | outbox 补投循环 |
 | `INTERNAL_API_TOKEN` | — | 复用现有内部鉴权 token |
 | `BILLING_CACHE_TTL_MS` | 3600000 | API Key Redis 缓存 TTL（可选） |
 
-无新增 K8s/Aspire 资源；关键唯一索引（`idempotentKey`、`{accountId,seq}`、`{reservationId,cycleSeq}`、`eventId`）启动时 `syncIndexes` 建立。
+**新增部署资源**：RabbitMQ（Aspire AppHost 新增 `rabbitmq` 资源并注入 `RABBITMQ_URL`，docker-compose manifest 重新生成；本地开发可用 `rabbitmq:3-management` 单容器）。其余无新增 K8s/Aspire 资源；关键唯一索引（`idempotentKey`、`{accountId,seq}`、`{reservationId,cycleSeq}`、`eventId`）启动时 `syncIndexes` 建立；RabbitMQ 拓扑（exchange/queue/DLX）由消费者启动时幂等声明。
 
 ## 10. 验收标准
 
 - [ ] 技术方案评审通过（含 D-7 / D-9 两个评审点裁决）
 - [ ] Contract 评审通过（admin-billing / billing / billing-openai / 存量契约变更）
-- [ ] 代码实现完成（六段管线、预留/结算、计费网关、两侧 GraphQL、两侧界面、cloud-controller 事件与字段链路）
+- [ ] 代码实现完成（六段管线、RabbitMQ 事件骨干与 outbox、预留/结算、计费网关、两侧 GraphQL、两侧界面、cloud-controller 事件与字段链路）
+- [ ] 消息链路验收通过（outbox 补投、confirm、DLQ 处置、积压不阻塞业务、乱序/重复安全）
 - [ ] 单元测试覆盖达标（billing ≥ 90%，含幂等/重放/状态机用例）
 - [ ] API 测试通过
 - [ ] E2E 测试通过（充值→保证金→周期结算→欠费强拆+释放；API Key 调用→402→充值恢复；事件丢失→对账兜底）
@@ -843,7 +921,7 @@ contracts/
 
 ## 11. 相关文档
 
-- [[../../product/draft/20261018-credits-billing.md]] — 关联 PRD（v2.0）
+- [[../../product/draft/20261018-credits-billing.md]] — 关联 PRD（v2.1）
 - [[20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（容器生命周期来源）
 - [[20261017-feat-cloud-controller-workload.md]] — 工作负载（初始化完成语义来源）
 - [[../common-rules.md]] / [[../backend-rules.md]] / [[../frontend-rules.md]] — 开发规范
