@@ -231,15 +231,19 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     let outputText = '';
     let finalized = false;
     let aborted = false;
+    let abortReason = '';
+    let estimatedTokens = false;
 
     const finalize = async (status: 'completed' | 'aborted'): Promise<void> => {
       if (finalized) return;
       finalized = true;
-      let estimated = false;
+      let estimated = estimatedTokens;
       if (usage.inputTokens + usage.outputTokens === 0) {
         estimated = true;
+        estimatedTokens = true;
         usage.inputTokens = promptTokens || 1;
-        usage.outputTokens = estimateTokens(outputText) || Math.min(maxOutputTokens, 1);
+        // 兜底不低估：优先按已产生内容估算；完全无内容时按请求输出上限估算（PRD §3.5）
+        usage.outputTokens = estimateTokens(outputText) || maxOutputTokens;
       }
       const cost = billable
         ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
@@ -273,7 +277,9 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
             cachedInputTokens: usage.cachedInputTokens,
             outputTokens: usage.outputTokens,
             estimated,
-            ...(status === 'aborted' ? { reason: 'client_aborted' } : {}),
+            estimatedInputTokens: usage.inputTokens,
+            estimatedOutputTokens: usage.outputTokens,
+            ...(status === 'aborted' ? { reason: abortReason || 'client_aborted' } : {}),
           },
         });
       }
@@ -291,6 +297,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     req.on('close', () => {
       if (res.writableEnded) return;
       aborted = true;
+      abortReason = 'client_aborted';
       abortController.abort();
     });
 
@@ -394,7 +401,11 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         return;
       }
       logger.warn?.(`[billing-gateway] upstream call failed: ${(err as Error).message}`);
-      await finalize('completed');
+      // 上游报错/超时同样按「中断」计费并标注，不得伪装成 completed
+      aborted = true;
+      abortReason = 'upstream_error';
+      estimatedTokens = true;
+      await finalize('aborted');
       if (!res.headersSent) {
         toApiError(res, 502, 'server_error', 'upstream_error', '模型服务暂时不可用');
       } else if (!res.writableEnded) {

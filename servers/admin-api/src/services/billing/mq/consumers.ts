@@ -1,5 +1,6 @@
 import type { Channel, ConsumeMessage } from 'amqplib';
 import { config } from '../../../config/index.js';
+import { BillingDeadLetter } from '../../../models/billing-dead-letter.js';
 import type { BillingService } from '../billing-service.js';
 import type { EventIngestService } from '../event-ingest.js';
 import type { BillingEventMessage } from './publisher.js';
@@ -10,6 +11,7 @@ import {
   METERING_QUEUE,
   SETTLEMENT_DLQ,
   SETTLEMENT_QUEUE,
+  retryBackoffMs,
   type SettlementMessage,
 } from './topology.js';
 
@@ -17,7 +19,7 @@ export interface MeteringConsumerDeps {
   billing: BillingService;
   ingest: EventIngestService;
   /** 发布下一期结算延迟消息。 */
-  publishSettlement: (reservationId: string, cycleSeq: number) => Promise<void>;
+  publishSettlement: (reservationId: string, accountId: string, cycleSeq: number) => Promise<void>;
   logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
 }
 
@@ -31,12 +33,36 @@ function headersWithRetry(msg: ConsumeMessage, retry: number): Record<string, un
   return { ...(msg.properties.headers ?? {}), 'x-retry-count': retry };
 }
 
-/** 手动 ack：成功才 ack；失败按 TTL 退避重试，超次进 DLQ。 */
-async function consumeWithRetry(
+async function recordDeadLetter(
+  msg: ConsumeMessage,
+  queue: string,
+  error: string,
+  attempts: number,
+): Promise<void> {
+  try {
+    const payload = JSON.parse(msg.content.toString()) as Record<string, unknown>;
+    await BillingDeadLetter.create({
+      queue,
+      routingKey: msg.fields.routingKey,
+      eventId:
+        (msg.properties.headers?.['x-event-id'] as string | undefined) ??
+        (typeof payload.eventId === 'string' ? payload.eventId : null),
+      payload,
+      error: error.slice(0, 2000),
+      attempts,
+    });
+  } catch {
+    // 留档失败不影响 DLQ 投递
+  }
+}
+
+/** 手动 ack：成功才 ack；失败按指数退避重试，超次落死信（DLQ + Mongo 留档）。 */
+export async function consumeWithRetry(
   channel: Channel,
   msg: ConsumeMessage,
   options: {
     routingKey: string;
+    retryQueue: string;
     dlq: string;
     logger: NonNullable<MeteringConsumerDeps['logger']>;
     handler: () => Promise<void>;
@@ -50,6 +76,7 @@ async function consumeWithRetry(
     const message = err instanceof Error ? err.message : String(err);
     if (retry > config.rabbitmqRetryMax) {
       options.logger.warn?.(`[billing-mq] ${options.routingKey} exceeded retries (${message}) → DLQ`);
+      await recordDeadLetter(msg, options.retryQueue, message, retry);
       channel.publish(BILLING_DLX, options.dlq, msg.content, {
         persistent: true,
         contentType: 'application/json',
@@ -61,9 +88,11 @@ async function consumeWithRetry(
     options.logger.warn?.(
       `[billing-mq] ${options.routingKey} failed (retry ${retry}/${config.rabbitmqRetryMax}): ${message}`,
     );
+    // per-message expiration 实现指数退避（队列本身不设 TTL）
     channel.publish(BILLING_RETRY_EXCHANGE, options.routingKey, msg.content, {
       persistent: true,
       contentType: 'application/json',
+      expiration: String(retryBackoffMs(retry)),
       headers: headersWithRetry(msg, retry),
     });
     channel.ack(msg);
@@ -81,6 +110,7 @@ export async function startMeteringConsumer(
     const routingKey = msg.fields.routingKey;
     void consumeWithRetry(channel, msg, {
       routingKey,
+      retryQueue: METERING_QUEUE,
       dlq: METERING_DLQ,
       logger,
       handler: async () => {
@@ -102,7 +132,7 @@ export async function startMeteringConsumer(
             resourceId: event.resourceId,
             occurredAt: startedAt,
           });
-          await deps.publishSettlement(result.reservationId, result.nextCycleSeq);
+          await deps.publishSettlement(result.reservationId, event.accountId, result.nextCycleSeq);
           return;
         }
         await deps.billing.handleEvent({
@@ -120,7 +150,7 @@ export async function startMeteringConsumer(
 
 export interface SettlementConsumerDeps {
   billing: BillingService;
-  publishSettlement: (reservationId: string, cycleSeq: number) => Promise<void>;
+  publishSettlement: (reservationId: string, accountId: string, cycleSeq: number) => Promise<void>;
   logger?: MeteringConsumerDeps['logger'];
 }
 
@@ -134,6 +164,7 @@ export async function startSettlementConsumer(
     if (!msg) return;
     void consumeWithRetry(channel, msg, {
       routingKey: msg.fields.routingKey,
+      retryQueue: SETTLEMENT_QUEUE,
       dlq: SETTLEMENT_DLQ,
       logger,
       handler: async () => {
@@ -143,7 +174,11 @@ export async function startSettlementConsumer(
           message.cycleSeq,
         );
         if (!result.shouldDestroy && result.settled) {
-          await deps.publishSettlement(message.reservationId, result.nextCycleSeq);
+          await deps.publishSettlement(
+            message.reservationId,
+            message.accountId,
+            result.nextCycleSeq,
+          );
         }
       },
     });

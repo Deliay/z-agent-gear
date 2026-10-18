@@ -58,13 +58,19 @@ export class ReconciliationService {
   }
 
   private async reconcileFunds(): Promise<ReconciliationReport> {
-    const accounts = await this.accounts.list({ page: 1, pageSize: 1000 });
     const errors: Array<Record<string, unknown>> = [];
-    for (const account of accounts) {
-      const result = await this.accounts.reconcileAccount(account.id);
-      if (result.error) errors.push(result.error);
+    let checked = 0;
+    for (let page = 1; page <= 1000; page += 1) {
+      const accounts = await this.accounts.list({ page, pageSize: 200 });
+      if (accounts.length === 0) break;
+      for (const account of accounts) {
+        const result = await this.accounts.reconcileAccount(account.id);
+        if (result.error) errors.push(result.error);
+        checked += 1;
+      }
+      if (accounts.length < 200) break;
     }
-    return this.report('funds', accounts.length, errors);
+    return this.report('funds', checked, errors);
   }
 
   private async reconcileMetering(): Promise<ReconciliationReport> {
@@ -87,11 +93,17 @@ export class ReconciliationService {
 
   private async reconcileResources(): Promise<ReconciliationReport> {
     const active = await this.reservations.list({ status: 'ACTIVE' });
-    let containers: Array<{ id: string; status: string }> = [];
+    let containers: Array<{ id: string; status: string }>;
     try {
       containers = await this.options.listContainers();
     } catch (err) {
-      this.logger.warn?.(`[billing-recon] listContainers failed: ${(err as Error).message}`);
+      // 控制面抖动 ≠ 容器全部消失：资源对账线本次中止，绝不对 ACTIVE 预留批量结算/释放。
+      this.logger.warn?.(
+        `[billing-recon] listContainers failed, abort resources line: ${(err as Error).message}`,
+      );
+      return this.report('resources', 0, [
+        { error: 'list_containers_failed', message: (err as Error).message },
+      ]);
     }
     const byId = new Map(containers.map((container) => [container.id, container]));
     const errors: Array<Record<string, unknown>> = [];

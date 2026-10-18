@@ -35,9 +35,10 @@ export class SettlementTickService {
     for (const reservation of active) {
       const now = this.now();
       const startedAt = reservation.startedAt.getTime();
-      const dueSeq = Math.floor((now - startedAt) / this.cycleMs);
-      const lastSeq = reservation.lastCycleSeq ?? 0;
-      // 只补一期，避免同一 tick 内连续扣费；后续周期由下一 tick / 延迟消息推进。
+      // 周期 seq 从 0 起：seq n 的窗口是 [start+n*cycle, start+(n+1)*cycle)。
+      // 因此「已到期的最后窗口」= floor(elapsed/cycle) - 1（初始 lastCycleSeq=-1）。
+      const dueSeq = Math.floor((now - startedAt) / this.cycleMs) - 1;
+      const lastSeq = reservation.lastCycleSeq ?? -1;
       if (dueSeq > lastSeq) {
         try {
           const result = await this.billing.handleSettlementCycle(

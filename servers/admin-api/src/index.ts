@@ -16,11 +16,6 @@ import * as migration002RefreshDocker from './migrations/002-refresh-docker-pres
 import { createInternalBillingRouter } from './routes/internal-billing.js';
 import { createBillingOpenAiRouter } from './routes/billing-openai.js';
 import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
-import { MqConnection } from './services/billing/mq/connection.js';
-import {
-  declareBillingTopology,
-  publishSettlementCycle,
-} from './services/billing/mq/topology.js';
 import {
   startMeteringConsumer,
   startSettlementConsumer,
@@ -31,6 +26,7 @@ import { billingRuntime, reconciliationRuntime } from './services/billing/instan
 import { reservationService } from './services/billing/reservation.js';
 import { pricingService } from './services/billing/pricing.js';
 import { eventIngestService } from './services/billing/event-ingest.js';
+import { BillingMqRuntime } from './services/billing/mq/runtime.js';
 import { BillingAccount } from './models/billing-account.js';
 import { BillingLedger } from './models/billing-ledger.js';
 import { BillingEvent } from './models/billing-event.js';
@@ -44,6 +40,7 @@ import { BillingRollup } from './models/billing-rollup.js';
 import { BillingApiKey } from './models/billing-api-key.js';
 import { BillingApiCall } from './models/billing-api-call.js';
 import { BillingOutbox } from './models/billing-outbox.js';
+import { BillingDeadLetter } from './models/billing-dead-letter.js';
 
 const app = express();
 
@@ -134,6 +131,7 @@ async function start() {
     BillingApiKey,
     BillingApiCall,
     BillingOutbox,
+    BillingDeadLetter,
   ];
   try {
     await Promise.all(billingModels.map((model) => model.syncIndexes()));
@@ -146,29 +144,14 @@ async function start() {
     console.warn('[admin-api] ensureDefaultPrices failed (non-fatal):', (err as Error).message);
   }
 
-  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投）
-  try {
-    const mqConnection = new MqConnection(config.rabbitmqUrl, console);
-    const channel = await mqConnection.createChannel();
-    await declareBillingTopology(channel);
-    const publishSettlement = async (reservationId: string, cycleSeq: number): Promise<void> => {
-      await publishSettlementCycle(channel, { reservationId, cycleSeq });
-    };
-    await startMeteringConsumer(channel, {
-      billing: billingRuntime,
-      ingest: eventIngestService,
-      publishSettlement,
-      logger: console,
-    });
-    await startSettlementConsumer(channel, {
-      billing: billingRuntime,
-      publishSettlement,
-      logger: console,
-    });
-    console.log('Billing MQ consumers started');
-  } catch (err) {
-    console.warn('[admin-api] billing MQ init failed (non-fatal):', (err as Error).message);
-  }
+  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投；运行时自动重连）
+  const mqRuntime = new BillingMqRuntime({
+    url: config.rabbitmqUrl,
+    billing: billingRuntime,
+    ingest: eventIngestService,
+    logger: console,
+  });
+  await mqRuntime.start();
 
   const scheduler = new BillingScheduler({
     publisher: outboxPublisher,
@@ -178,9 +161,23 @@ async function start() {
   });
   scheduler.start();
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log(`Admin API running at http://localhost:${config.port}/graphql`);
   });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[admin-api] ${signal} received, shutting down...`);
+    server.close();
+    await scheduler.stop();
+    await mqRuntime.stop();
+    await mongoose.disconnect();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 start().catch((err) => {
