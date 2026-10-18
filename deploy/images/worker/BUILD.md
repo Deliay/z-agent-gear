@@ -167,17 +167,19 @@ aspire --version
 - [ ] 选择「Docker」后 `docker version`、`docker buildx version` 均成功；重复执行 Docker 脚本幂等收敛（不重复安装/不重复启动）
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
-- [ ] Docker 安装源不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] **安装来源已注入且可达**：为容器/脚本提供 `DOCKER_APT_URL`（内网 Docker CE apt 代理地址，形如 `https://<nexus-host>/repository/<docker-ce-apt-proxy>/linux/ubuntu/`），并核对 `curl -fsS "$DOCKER_APT_URL/gpg"` 返回 200
+- [ ] 未注入 `DOCKER_APT_URL` 且组件尚未安装时：该工作负载**快速失败**并在执行记录中给出明确指引（容器仍继续后续初始化并上线）
+- [ ] 安装来源不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
 - [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
 - [ ] .NET 脚本安装 LTS SDK，`dotnet --list-sdks` 非空
 - [ ] Aspire 脚本在前置依赖就绪后安装 CLI，`aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
 
-> 「Docker」工作负载脚本运行期默认经**内网 Nexus docker-ce 代理**安装
-> （`DOCKER_APT_URL` 默认 `https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/`，
-> 与镜像内其它内网源同一套 Nexus 代理；可用同名环境变量覆盖，**不回退公网**）。
-> 安装包列表为 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`：其中 `docker-ce` 提供
-> `dockerd`（守护进程），`docker-ce-cli` 仅提供客户端，四者缺一不可。若内网实际仓库名不同，
-> 请在容器环境或脚本内覆盖 `DOCKER_APT_URL`。
+> **安装来源（重要）**：「Docker」工作负载脚本**不设默认安装来源**——运行环境**未提供**内网 docker-ce apt 代理
+> （实测内网 Nexus 13 个仓库中不存在 docker-ce apt 代理，参见提案 §9.3 发布前置），因此脚本要求显式注入
+> `DOCKER_APT_URL`；未注入且需安装时快速失败、打印指引并不影响容器其余初始化。
+> 运维创建/确认内网代理后，将其可达地址注入（容器环境变量或预制脚本），即可恢复开箱可用（届时可将该地址设为脚本默认值）。
+> 安装包列表为 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`：其中 `docker-ce` 提供 `dockerd`
+> （守护进程），`docker-ce-cli` 仅提供客户端，四者缺一不可；**默认不指向公网**。
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
@@ -229,4 +231,4 @@ bash entrypoint.test.sh
 
 - sysbox 为**节点级** runtime（`sysbox-runc`），集群节点需预装 sysbox，否则带 `runtimeClassName: sysbox-runc` 的 Pod 无法调度。集群未启用 sysbox 时可将 `RUNTIME_CLASS_NAME` 置空/改用其他 runtime。
 - 镜像代理 shim 由「Docker」工作负载脚本在安装 CLI 后装配（`/usr/local/bin/docker`），采用「首个非选项参数即镜像引用」的启发式改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。未选择「Docker」工作负载时容器内不存在该 shim。
-- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源（`DOCKER_APT_URL` / `DOTNET_INSTALL_URL` 等）在内网不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
+- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源由运行环境提供：Docker 的 `DOCKER_APT_URL` **无默认值、必须注入**（内网未提供 docker-ce apt 代理，未注入时快速失败并给出指引）；.NET / Aspire 脚本默认走各自官方地址，内网覆盖由管理员编辑对应工作负载脚本。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。

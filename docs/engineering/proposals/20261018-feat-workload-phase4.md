@@ -7,11 +7,13 @@ type: Permanent
 
 **功能名称**: 工作容器基础环境瘦身（Docker/.NET 能力下沉工作负载）
 **关联 PRD**: `docs/product/draft/20261018-workload-phase4.md`
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-18
 **作者**: ZeroAsh
 **feat-branch**: `feat/workload-phase4`
-**版本说明**: v1.1（2026-10-18，实现评审返工）修正 §5.2 Docker 脚本 v2：安装包列表补充 `docker-ce`（提供 `dockerd`）、默认安装源改为内网 Nexus docker-ce 代理（不回退公网）、幂等锚点改为 `docker` 与 `dockerd` 同时存在。
+**版本说明**:
+- v1.1（2026-10-18，实现评审返工）修正 §5.2 Docker 脚本 v2：安装包列表补充 `docker-ce`（提供 `dockerd`）、幂等锚点改为 `docker` 与 `dockerd` 同时存在。
+- v1.2（2026-10-18，实现评审返工第二轮）安装来源改为**必须由环境注入**（`DOCKER_APT_URL` 无默认值，未注入时快速失败）——实测内网 Nexus 不存在 docker-ce apt 代理仓库；同步 §5.2/§6.1/§6.2/§9.2/§9.3/§10 与 PRD v1.1 口径。
 
 ## 1. 概述
 
@@ -157,13 +159,18 @@ sequenceDiagram
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOCKER_APT_URL="${DOCKER_APT_URL:-https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/}"
+DOCKER_APT_URL="${DOCKER_APT_URL:-}"
 SHIM_PATH="${ZAG_DOCKER_SHIM_PATH:-/usr/local/bin/docker}"
 HARBOR_PROXY="${HARBOR_PROXY:-core.harbor.internal.fffdan.com}"
 
 # 1) 安装 Docker CE（含 dockerd/docker-proxy）+ CLI + buildx + containerd 及运行时依赖（幂等）
 #    幂等锚点同时校验 CLI 与 dockerd，收敛半安装状态；docker-ce 包提供 dockerd，cli 包仅提供客户端。
+#    安装来源必须由环境注入（内网 docker-ce apt 代理），不设未经证实的默认值；缺失时快速失败。
 if [ ! -x /usr/bin/docker ] || [ ! -x /usr/bin/dockerd ]; then
+  if [ -z "$DOCKER_APT_URL" ]; then
+    echo "DOCKER_APT_URL 未设置：请配置内网 Docker CE apt 代理地址后重试" >&2
+    exit 2
+  fi
   apt-get update
   apt-get install -y --no-install-recommends \
     iptables iproute2 fuse-overlayfs libseccomp2 conntrack
@@ -245,8 +252,9 @@ docker version
 docker buildx version
 ```
 
-- **幂等**：以 `/usr/bin/docker` 与 `/usr/bin/dockerd` 是否同时存在判安装（任一缺失即重装，收敛半安装状态）、`docker info` 判就绪，重复执行收敛；
-- **风险点**：运行期 apt 安装依赖内网 Ubuntu 源与内网 `DOCKER_APT_URL`（docker-ce 代理）可达；不可达时脚本失败但容器仍上线（沿用一期失败策略）。
+- **安装来源**：`DOCKER_APT_URL` **无默认值**，必须由运行环境注入内网 docker-ce apt 代理地址；未注入且需安装时快速失败（exit 2）并打印指引。当前内网 Nexus 未提供该代理仓库（已实测 404），待运维提供后可将真实可达地址设为默认（见 §9.3 发布前置）。
+- **幂等**：以 `/usr/bin/docker` 与 `/usr/bin/dockerd` 是否同时存在判安装（任一缺失即重装，收敛半安装状态）、`docker info` 判就绪，重复执行收敛；已安装完成时不再校验 `DOCKER_APT_URL`。
+- **风险点**：运行期 apt 安装依赖内网 Ubuntu 源与注入的 `DOCKER_APT_URL`（docker-ce 代理）可达；未注入或不可达时脚本失败但容器仍上线（沿用一期失败策略）。
 
 #### 实现点 4: migration 002 刷新逻辑
 
@@ -287,7 +295,7 @@ async function run(): Promise<void> {
 |------|--------|--------|---------|------|
 | docker shim 归属 | 留在 entrypoint | 移入 Docker 脚本 | B | 未选 Docker 的容器内不应存在任何 docker 相关物；shim exec `/usr/bin/docker`，CLI 不存在时无意义 |
 | 存量脚本升级策略 | 无条件覆盖 | 与 001 初版比对，未定制才覆盖 | B | 一期承诺「管理员修改不被覆盖」；初版常量比对可精确识别未定制 |
-| Docker 安装源配置 | 保留镜像构建参数 | 脚本内环境变量（默认内网 mirror） | B | 镜像不再有 Docker 概念；脚本可经后台编辑或 ENV 覆盖 |
+| Docker 安装源配置 | 保留镜像构建参数 | 脚本内环境变量（必须由环境注入，不设未经证实的默认值） | B | 镜像不再有 Docker 概念；当前内网未提供 docker-ce apt 代理，注入式配置避免「默认指向不存在仓库」；脚本可经后台编辑或 ENV 覆盖 |
 | dockerd apt 依赖 | 留在镜像第 2 步 | 随 Docker 脚本安装 | B | 这些包仅服务 dockerd/containerd，通用容器不需要 |
 | .NET 脚本 | 一并重写 | 保持不变，仅清镜像 ENV 残留 | B | 脚本已自包含（dotnet-install.sh + 默认官方地址）；内网覆盖改由管理员编辑脚本 |
 
@@ -296,7 +304,7 @@ async function run(): Promise<void> {
 | 类型 | 内容 | 说明 |
 |------|------|------|
 | 依赖 | 一期预制工作负载与迁移机制 | 002 复用 `admin_migrations` 账本与 runner |
-| 依赖 | 内网 Ubuntu 源 / Docker CE apt 代理 | Docker 脚本运行期安装，来源不可达则该工作负载失败（容器仍上线） |
+| 依赖 | 内网 Ubuntu 源 / Docker CE apt 代理 | Docker 脚本运行期安装；`DOCKER_APT_URL`（内网 docker-ce 代理）需由部署提供并注入；当前内网 Nexus 未提供该仓库（实测 404），未注入或不可达则该工作负载失败（容器仍上线） |
 | 约束 | 镜像 Node.js 保留 | agent-gear 运行基础，不瘦身 |
 | 约束 | 契约不变 | `workload:run` 协议、参数注入语义不动 |
 | 约束 | 禁止 rebase/squash | 遵循 z-git 规范 |
@@ -347,20 +355,22 @@ servers/admin-api/src/
 
 ### 9.2 配置管理
 
-- `DOCKER_APT_URL` 从镜像构建参数迁移为 Docker 脚本内环境变量（默认 `https://nexus.internal.fffdan.com/repository/docker-ce-proxy/linux/ubuntu/`，内网 Nexus docker-ce 代理），管理员可直接编辑预制脚本调整，或以同名环境变量覆盖；不回退公网；
+- `DOCKER_APT_URL` 从镜像构建参数迁移为 Docker 脚本内环境变量，**无默认值**：需由运行环境注入内网 docker-ce apt 代理地址（形如 `https://<nexus-host>/repository/<docker-ce-apt-proxy>/linux/ubuntu/`），管理员可编辑预制脚本或经环境变量提供；未注入且需安装时脚本快速失败并给出指引，**默认不指向公网、也不指向未经证实的地址**。当前内网 Nexus 未提供该代理仓库（已实测不存在），需运维先创建/确认（见 §9.3）；
 - `ZAG_DOCKER_SHIM_PATH` 语义保留在 Docker 脚本内（默认 `/usr/local/bin/docker`），entrypoint 不再消费。
 
 ### 9.3 发布顺序
 
 ```mermaid
 flowchart LR
-    A[合并 feat 分支] --> B[构建并推送瘦身 worker 镜像]
+    A0[运维创建/确认内网 docker-ce apt 代理<br/>并注入 DOCKER_APT_URL] --> A[合并 feat 分支]
+    A --> B[构建并推送瘦身 worker 镜像]
     B --> C[部署 admin-api：migration 002 刷新 Docker 脚本]
     C --> D[WORKER_IMAGE 指向新镜像]
     D --> E[新建容器使用瘦身镜像]
     E --> F[运行中旧容器按需强制销毁重建]
 ```
 
+- **前置（新增）**：运维在内网 Nexus 创建/确认 docker-ce apt 代理仓库（参照既有约定，如 `ubuntu-proxy → mirrors.ustc.edu.cn/ubuntu/`；建议 name 与 format 按运维既定规范），并将可达地址注入为 `DOCKER_APT_URL`（镜像/容器环境或工作负载脚本）。当前内网无该仓库，未完成前置则「Docker」工作负载初始化会快速失败；
 - 运行中的旧容器不受影响（仍为旧镜像，Docker 组件仍在）；重建后才进入瘦身口径；
 - 若存量 Docker 脚本被管理员定制过，002 不覆盖，需在发布说明中提示管理员参照 v2 手工更新。
 
@@ -370,7 +380,8 @@ flowchart LR
 - [ ] 瘦身镜像构建成功，`docker` / `dockerd` / `containerd` / `dotnet` 均不存在，通用能力（node/git/gh/agent-gear）可用
 - [ ] migration 002 单测四条路径通过；001 既有测试通过
 - [ ] `entrypoint.test.sh` 全部用例通过，T-EP0 断言入口不再装配 shim
-- [ ] 瘦身镜像上选择「Docker」工作负载：`docker info`、`docker buildx version`、代理拉取 `docker pull ubuntu:24.04` 均成功
+- [ ] 瘦身镜像上选择「Docker」工作负载（已注入内网安装来源）：`docker info`、`docker buildx version`、代理拉取 `docker pull ubuntu:24.04` 均成功
+- [ ] 未注入安装来源时「Docker」工作负载初始化快速失败并给出明确指引（容器仍上线）
 - [ ] 未选「Docker」时容器无 dockerd、无 docker CLI，其余功能正常上线
 - [ ] 「.NET」「Aspire」工作负载在瘦身镜像上行为与一期一致
 - [ ] 存量环境升级：未定制 Docker 脚本被刷新为 v2；定制脚本不覆盖且有告警日志
