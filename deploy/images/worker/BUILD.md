@@ -18,7 +18,6 @@ docker build \
   --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
   --build-arg NODE_VERSION=22 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
-  --build-arg DOCKER_APT_URL=https://download.docker.com/linux/ubuntu \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
 
@@ -45,7 +44,7 @@ curl -s -o /dev/null -m 20 -w 'node-proxy/index.tab: %{http_code}\n' \
 > 的通道不可用，需先恢复该代理仓库或预热缓存后再构建（Dockerfile 已用 `. "$NVM_DIR/nvm.sh"` 断言，
 > nvm 脚本缺失会直接构建失败，不会静默产出残缺镜像）。
 
-## 自验（PRD 功能点 3 验收标准）
+## 自验（PRD 功能点 1 验收标准：瘦身后通用能力可用）
 
 ```bash
 docker run --rm -it --entrypoint bash \
@@ -54,7 +53,7 @@ docker run --rm -it --entrypoint bash \
   core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
     nvm --version && nvm ls && \
     which node npm && node -v && npm -v && npm config get registry && \
-    git --version && gh --version && docker buildx version && \
+    git --version && gh --version && \
     agent-gear --version && \
     claude-agent-acp --help >/dev/null 2>&1 || true && \
     opencode --version || true && codex --version || true && \
@@ -64,13 +63,32 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `node`、`git`、`gh`、`docker buildx` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
+- [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
 - [ ] 7 个 npm 全局包已安装：`agent-gear` `@agentclientprotocol/claude-agent-acp` `@agentclientprotocol/codex-acp` `@opencode/cli` `@openai/codex` `@anthropic-ai/claude-code` `@google/gemini-cli`
 - [ ] `agent-gear --version` ≥ `2.3.0`（工作负载参数注入能力；见下方「工作负载执行自验」）
-- [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
-- [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
+- [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
+- [ ] **未选择「.NET」/「Aspire」时容器内不存在 .NET 能力**：`command -v dotnet` 无输出
+
+> Docker（`docker buildx`、镜像代理拉取）与 .NET / Aspire 能力属工作负载范畴，验收见下方
+> 「预制工作负载脚本手工验收（真实集群）」。
+
+### 镜像瘦身静态校验（工作负载四期）
+
+Dockerfile / entrypoint 中不得再出现 Docker 预装或 shim 装配的残留（对应实现计划 裁决 9）：
+
+```bash
+cd deploy/images/worker
+grep -nE 'docker-ce|docker-buildx|containerd\.io|DOCKER_APT_URL|docker\.asc|docker\.list' Dockerfile && exit 1 || true
+grep -nE 'iptables|iproute2|fuse-overlayfs|libseccomp2|conntrack' Dockerfile && exit 1 || true
+grep -nE 'DOTNET_|ASPIRE_' Dockerfile && exit 1 || true
+grep -nE 'install_docker_shim|DOCKER_SHIM_PATH|HARBOR_PROXY|dockerd' entrypoint.sh && exit 1 || true
+echo "静态校验通过：镜像不含 Docker/.NET 预装与 shim 残留"
+```
+
+- [ ] 上述 `grep` 均无命中（无 `docker-ce` / `DOCKER_APT_URL` / `install_docker_shim` / `dockerd` 等残留）
+- [ ] 镜像构建日志中不再出现 `docker-ce-cli` / `docker-buildx-plugin` / `containerd.io` 安装层
 
 ## 工作负载执行自验（PRD 功能点 3/5）
 
@@ -123,9 +141,13 @@ docker run --rm --entrypoint bash \
 在挂载了「Docker」/「Node.js」/「.NET」/「Aspire」工作负载的容器内，按初始化顺序逐项核对脚本产物：
 
 ```bash
-# Docker（首个执行；未选择时容器内不应存在 dockerd 进程）
-docker info            # 脚本执行后 dockerd 已就绪；未选择 Docker 时此命令应失败
-pgrep -a dockerd       # 仅在选择「Docker」工作负载后才有输出
+# Docker（首个执行；未选择时容器内不应存在 docker/dockerd）
+docker info                          # 脚本执行后 dockerd 已就绪；未选择 Docker 时此命令应失败
+pgrep -a dockerd                     # 仅在选择「Docker」工作负载后才有输出
+docker version                       # CLI 可用
+docker buildx version                # 镜像构建能力可用
+docker pull ubuntu:24.04             # 拉取 Docker Hub 镜像走代理
+docker pull ghcr.io/<owner>/<image>  # 拉取 ghcr 镜像走代理
 
 # Node.js（参数 version / package_manager）
 nvm ls && node -v && npm -v && npm config get registry
@@ -141,7 +163,11 @@ aspire --version
 
 逐项核对：
 
-- [ ] 未选择「Docker」工作负载时容器内**没有** dockerd（入口不再自动启动，由 Docker 脚本负责）；选择后 `docker info` 可用
+- [ ] 未选择「Docker」工作负载时容器内**没有** docker/dockerd（入口不装配 shim、不启动 dockerd，全部由 Docker 脚本负责）；选择后 `docker info` 可用
+- [ ] 选择「Docker」后 `docker version`、`docker buildx version` 均成功；重复执行 Docker 脚本幂等收敛（不重复安装/不重复启动）
+- [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
+- [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
+- [ ] Docker 安装源不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
 - [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
 - [ ] .NET 脚本安装 LTS SDK，`dotnet --list-sdks` 非空
 - [ ] Aspire 脚本在前置依赖就绪后安装 CLI，`aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
@@ -153,9 +179,11 @@ aspire --version
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
 
-1. 装配镜像代理 shim（`/usr/local/bin/docker` 包装器）；**不再启动 dockerd** —— Docker 运行时由「Docker」工作负载的初始化脚本按需启动；
-2. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
-3. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
+1. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
+2. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
+
+> 入口**不**装配任何 docker shim、**不**调用 docker、也**不**启动 dockerd —— 容器内 docker 能力
+> （CLI、镜像代理 shim、dockerd）全部由「Docker」工作负载的初始化脚本按需提供（工作负载四期）。
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
@@ -175,7 +203,7 @@ bash -n entrypoint.sh
 bash entrypoint.test.sh
 ```
 
-自动化用例覆盖：入口装配 shim 且不自动启动 dockerd（T-EP0）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`）与 `ZAG_DOCKER_SHIM_PATH`，其中 `docker`/`dockerd` stub 仅作哨兵（被调用即落标记），因此不会启动真实 dockerd、不访问网络。
+自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），因此不会启动真实 dockerd、不访问网络。
 
 > **镜像升级要求**：工作负载参数注入依赖 `agent-gear` ≥ `2.3.0`。`cloud-controller` 的门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本），但只有重建为 ≥ `2.3.0` 的 worker 镜像才具备 `WORKLOAD_PARAMS` / `WORKLOAD_PARAM_*` 注入能力。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
@@ -193,4 +221,5 @@ bash entrypoint.test.sh
 ## 已知限制
 
 - sysbox 为**节点级** runtime（`sysbox-runc`），集群节点需预装 sysbox，否则带 `runtimeClassName: sysbox-runc` 的 Pod 无法调度。集群未启用 sysbox 时可将 `RUNTIME_CLASS_NAME` 置空/改用其他 runtime。
-- 镜像代理 shim 采用「首个非选项参数即镜像引用」的启发式改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。
+- 镜像代理 shim 由「Docker」工作负载脚本在安装 CLI 后装配（`/usr/local/bin/docker`），采用「首个非选项参数即镜像引用」的启发式改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。未选择「Docker」工作负载时容器内不存在该 shim。
+- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源（`DOCKER_APT_URL` / `DOTNET_INSTALL_URL` 等）在内网不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
