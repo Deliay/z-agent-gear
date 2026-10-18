@@ -19,7 +19,7 @@ import type {
 } from '@/graphql/types';
 import { formatDateTime } from '@/lib/format';
 import { formatParams } from '@/lib/workload-params';
-import { WORKLOAD_LOG_PHASE_LABELS, WORKLOAD_LOG_STATUS_LABELS } from './labels';
+import { REQUIRED_LABEL, WORKLOAD_LOG_PHASE_LABELS, WORKLOAD_LOG_STATUS_LABELS } from './labels';
 
 interface WorkloadLogsDialogProps {
   open: boolean;
@@ -117,6 +117,11 @@ export default function WorkloadLogsDialog({
                         </span>
                         <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span>{WORKLOAD_LOG_PHASE_LABELS[item.phase]}</span>
+                          {item.required && (
+                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                              {REQUIRED_LABEL}
+                            </span>
+                          )}
                           <Badge variant={STATUS_VARIANTS[item.status]}>
                             {WORKLOAD_LOG_STATUS_LABELS[item.status]}
                           </Badge>
@@ -133,6 +138,11 @@ export default function WorkloadLogsDialog({
 
             {selected && (
               <div className="min-w-0 flex-1 space-y-3">
+                {selected.required && (
+                  <span className="inline-block rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                    {REQUIRED_LABEL}
+                  </span>
+                )}
                 <div className="min-w-0 space-y-1">
                   <p className="text-xs font-medium text-muted-foreground">脚本快照</p>
                   <pre className="max-h-40 min-w-0 overflow-auto rounded-md border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">

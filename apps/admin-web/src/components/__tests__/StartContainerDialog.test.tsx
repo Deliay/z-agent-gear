@@ -235,4 +235,76 @@ describe('StartContainerDialog (T-FP5/T-FP6/T-FP7)', () => {
     expect(screen.getByText(/依赖的工作负载不存在：gone/)).toBeDefined();
     expect(screen.getByRole('button', { name: '确认启动' })).toBeDisabled();
   });
+
+  it('T-FP11: the 必须 switch appears only for selected workloads with an initScript', () => {
+    const noScript = workload({ id: 'ns', name: 'NoScript', initScript: null });
+    render(
+      <StartContainerDialog
+        open
+        onOpenChange={() => {}}
+        workloads={[docker, noScript]}
+        onStart={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    // 未勾选：无开关
+    expect(screen.queryByRole('checkbox', { name: 'Docker 必须' })).toBeNull();
+    // 勾选但无 initScript：不展示开关
+    fireEvent.click(screen.getByRole('checkbox', { name: 'NoScript' }));
+    expect(screen.queryByRole('checkbox', { name: 'NoScript 必须' })).toBeNull();
+    // 勾选且有 initScript：展示开关（默认关）
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+    expect(screen.getByRole('checkbox', { name: 'Docker 必须' })).not.toBeChecked();
+  });
+
+  it('T-FP12: 必须 is set independently; unchecking clears it and re-checking resets to default', () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '.NET' }));
+
+    const dockerReq = screen.getByRole('checkbox', { name: 'Docker 必须' });
+    const dotnetReq = screen.getByRole('checkbox', { name: '.NET 必须' });
+    fireEvent.click(dockerReq);
+    fireEvent.click(dotnetReq);
+    expect(dockerReq).toBeChecked();
+    expect(dotnetReq).toBeChecked();
+
+    // 取消勾选 → 清除必须设置（开关随行消失）
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+    expect(screen.queryByRole('checkbox', { name: 'Docker 必须' })).toBeNull();
+
+    // 重新勾选 → 回到默认（非必须）
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+    expect(screen.getByRole('checkbox', { name: 'Docker 必须' })).not.toBeChecked();
+  });
+
+  it('T-FP13: the order preview marks required items (implicit deps unaffected)', () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Aspire' }));
+    // Aspire 依赖 Docker/.NET（隐式），先标记 Docker 必须需要显式勾选
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker 必须' }));
+
+    const previewSection = screen.getByText('初始化顺序预览').closest('div') as HTMLElement;
+    const order = within(previewSection)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent);
+    expect(order).toEqual(['Docker必须', '.NET隐式', 'Aspire']);
+  });
+
+  it('T-FP14: submits required=true only for marked workloads', async () => {
+    const onStart = renderDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Node.js' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Node.js 必须' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '确认启动' }));
+
+    await waitFor(() =>
+      expect(onStart).toHaveBeenCalledWith('IDLE', [
+        { workloadId: 'd4', params: { version: '22', package_manager: ['npm'] }, required: true },
+        { workloadId: 'd1', params: {} },
+      ]),
+    );
+  });
 });
