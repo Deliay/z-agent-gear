@@ -13,6 +13,7 @@ import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-preset-workloads.js';
 import * as migration002DotnetApt from './migrations/002-preset-dotnet-apt.js';
 import * as migration002RefreshDocker from './migrations/002-refresh-docker-preset-script.js';
+import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
 
 const app = express();
 
@@ -67,9 +68,15 @@ async function start() {
   // 一次性预制工作负载（admin_migrations 账本）：失败只记录日志、不阻断启动，下次启动按未完成重试
   // 两个 002 迁移按各自 name 记账、均在 001 之后执行：
   // 002-preset-dotnet-apt——存量 .NET 预制脚本保守升级为 apt 版（三期）；
-  // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）
+  // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）；
+  // 003-docker-apt-source——把未定制过的「Docker」脚本刷新为 v3 并补齐 docker_apt_url 参数（本期）
   try {
-    await runMigrations([migration001, migration002DotnetApt, migration002RefreshDocker]);
+    await runMigrations([
+      migration001,
+      migration002DotnetApt,
+      migration002RefreshDocker,
+      migration003DockerAptSource,
+    ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
   }
