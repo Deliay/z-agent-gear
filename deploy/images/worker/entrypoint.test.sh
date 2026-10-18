@@ -3,7 +3,8 @@
 # 不访问真实 npm 网络。
 #
 # 覆盖（对应实现计划 T-EP0 ~ T-EP8）：
-#   T-EP0 入口装配 docker shim，且**不再**自动启动 dockerd（dockerd 由「Docker」工作负载负责）
+#   T-EP0 入口不装配 docker shim、不调用 docker/dockerd（docker 能力全部由「Docker」工作负载脚本提供）
+#   T-EP0a 入口源码静态断言：不含 install_docker_shim / DOCKER_SHIM_PATH / HARBOR_PROXY
 #   T-EP1 版本不匹配 → 一次升级 → 重启成功
 #   T-EP2 升级安装失败 → 非零退出，无循环
 #   T-EP3 升级后仍不匹配 → 非零退出，不再升级
@@ -53,8 +54,8 @@ count_lines() {
 write_stubs() {
   mkdir -p "$STUB_DIR"
 
-  # docker / dockerd stub 仅用于**哨兵**：入口不再启动 dockerd，一旦被调用即写入标记文件，
-  # T-EP0 断言标记不存在（stub 不依赖真实 dockerd / docker.sock）。
+  # docker / dockerd stub 仅用于**哨兵**：入口不再调用 docker/dockerd（能力由「Docker」工作负载脚本提供），
+  # 一旦被调用即写入标记文件，T-EP0 断言标记不存在（stub 不依赖真实 dockerd / docker.sock）。
   cat > "$STUB_DIR/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "docker $*" >> "$STUB_DIR/docker_invocations"
@@ -161,11 +162,11 @@ setup_env() {
   export PATH="$STUB_DIR:$ORIGINAL_PATH"
   export TMPDIR="$RUN_TMP"
   export ZAG_SERVER_ENDPOINT="wss://cloud.example.invalid/worker"
-  export ZAG_DOCKER_SHIM_PATH="$TEST_DIR/docker-shim"
   export STUB_AGENT_MODE="normal"
   export STUB_NPM_MODE="ok"
   export STUB_RUN_FOREVER=0
   unset ZAG_SKIP_AGENT_GEAR_UPDATE
+  unset ZAG_DOCKER_SHIM_PATH
 }
 
 teardown_env() {
@@ -190,16 +191,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "== T-EP0: 装配 docker shim，不自动启动 dockerd =="
+echo "== T-EP0: 入口不装配 docker shim、不调用 docker/dockerd =="
 setup_env 2.2.0
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP0 入口正常退出"
-if [ -f "$ZAG_DOCKER_SHIM_PATH" ] && [ -x "$ZAG_DOCKER_SHIM_PATH" ]; then
-  pass "T-EP0 docker shim 已写入且可执行"
+if [ -e "$TEST_DIR/docker-shim" ]; then
+  fail "T-EP0 入口不应写入 docker shim ($TEST_DIR/docker-shim)"
 else
-  fail "T-EP0 docker shim 未写入或不可执行 ($ZAG_DOCKER_SHIM_PATH)"
+  pass "T-EP0 入口未写入 docker shim"
 fi
-assert_contains "$ZAG_DOCKER_SHIM_PATH" "normalize_image" "T-EP0 shim 含镜像引用规范化逻辑"
 assert_eq 0 "$(count_lines "$STUB_DIR/dockerd_invocations")" "T-EP0 入口不启动 dockerd"
 assert_eq 0 "$(count_lines "$STUB_DIR/docker_invocations")" "T-EP0 入口不调用 docker"
 if grep -qF "start_dockerd" "$ENTRYPOINT"; then
@@ -208,6 +208,16 @@ else
   pass "T-EP0 entrypoint.sh 已移除 start_dockerd"
 fi
 teardown_env
+
+# ---------------------------------------------------------------------------
+echo "== T-EP0a: entrypoint.sh 不含 docker shim 残留 =="
+for needle in install_docker_shim DOCKER_SHIM_PATH HARBOR_PROXY; do
+  if grep -qF -- "$needle" "$ENTRYPOINT"; then
+    fail "T-EP0a entrypoint.sh 仍包含 $needle"
+  else
+    pass "T-EP0a entrypoint.sh 已移除 $needle"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 echo "== T-EP1: 版本不匹配 → 一次升级 → 重启成功 =="
