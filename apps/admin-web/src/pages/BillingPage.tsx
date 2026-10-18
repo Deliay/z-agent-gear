@@ -25,13 +25,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { QueryError } from '@/components/ui/query-error'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import AccountTable from '@/components/billing/AccountTable'
 import RechargeDialog from '@/components/billing/RechargeDialog'
 import InvoiceTable from '@/components/billing/InvoiceTable'
 import ReceiptDrawer from '@/components/billing/ReceiptDrawer'
 import RollupChart from '@/components/billing/RollupChart'
 import MyApiKeyManager from '@/components/billing/MyApiKeyManager'
-import ModelPricingSection from '@/components/billing/ModelPricingSection'
 
 function defaultRange(): { from: string; to: string } {
   const to = new Date()
@@ -47,16 +47,20 @@ export default function BillingPage() {
   const [range] = useState(defaultRange)
   const [creditLimit, setCreditLimit] = useState('')
   const [receiptInvoice, setReceiptInvoice] = useState<BillingInvoiceData | null>(null)
+  const [page, setPage] = useState(1)
+  const [invoicePage, setInvoicePage] = useState(1)
+  const [confirmAction, setConfirmAction] = useState<'limit' | 'status' | null>(null)
+  const pageSize = 20
 
   const accountsQuery = useQuery<GetAdminBillingAccountsQuery>(ADMIN_BILLING_ACCOUNTS, {
-    variables: { keyword: keyword || null, page: 1, pageSize: 100 },
+    variables: { keyword: keyword || null, page, pageSize },
   })
   const invoicesQuery = useQuery<GetAdminBillingInvoicesQuery>(ADMIN_BILLING_INVOICES, {
-    variables: { accountId: selected?.id ?? '', page: 1, pageSize: 100 },
+    variables: { accountId: selected?.id ?? '', page: invoicePage, pageSize },
     skip: !selected,
   })
   const receiptsQuery = useQuery<GetAdminBillingReceiptsQuery>(ADMIN_BILLING_RECEIPTS, {
-    variables: { accountId: selected?.id ?? '', page: 1, pageSize: 100 },
+    variables: { accountId: selected?.id ?? '', page: invoicePage, pageSize },
     skip: !selected,
   })
   const rollupsQuery = useQuery<GetAdminBillingRollupsQuery>(ADMIN_BILLING_ROLLUPS, {
@@ -82,9 +86,11 @@ export default function BillingPage() {
   const selectAccount = (account: BillingAccountData) => {
     setSelected(account)
     setCreditLimit(String(account.creditLimit))
+    setInvoicePage(1)
   }
 
   const applyCreditLimit = async () => {
+    setConfirmAction(null)
     if (!selected) return
     const value = Number(creditLimit)
     if (!Number.isFinite(value) || value < 0) {
@@ -101,6 +107,7 @@ export default function BillingPage() {
   }
 
   const toggleStatus = async () => {
+    setConfirmAction(null)
     if (!selected) return
     const next = selected.status === 'frozen' ? 'active' : 'frozen'
     try {
@@ -147,12 +154,23 @@ export default function BillingPage() {
           {accountsQuery.loading && !accountsQuery.data ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : (
-            <AccountTable
-              accounts={accounts}
-              selectedId={selected?.id ?? null}
-              onSelect={selectAccount}
-              onRecharge={(account) => setRechargeTarget(account)}
-            />
+            <>
+              <AccountTable
+                accounts={accounts}
+                selectedId={selected?.id ?? null}
+                onSelect={selectAccount}
+                onRecharge={(account) => setRechargeTarget(account)}
+              />
+              <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+                <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                  上一页
+                </Button>
+                <span className="text-muted-foreground">第 {page} 页</span>
+                <Button size="sm" variant="outline" disabled={accounts.length < pageSize} onClick={() => setPage((p) => p + 1)}>
+                  下一页
+                </Button>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -169,7 +187,7 @@ export default function BillingPage() {
                 <Button size="sm" variant="outline" onClick={runReconcile}>
                   精确核算
                 </Button>
-                <Button size="sm" variant="outline" onClick={toggleStatus}>
+                <Button size="sm" variant="outline" onClick={() => setConfirmAction('status')}>
                   {selected.status === 'frozen' ? '恢复账户' : '冻结账户'}
                 </Button>
               </div>
@@ -208,7 +226,7 @@ export default function BillingPage() {
                     placeholder="例如 100.00"
                   />
                 </label>
-                <Button size="sm" onClick={applyCreditLimit}>
+                <Button size="sm" onClick={() => setConfirmAction('limit')}>
                   保存
                 </Button>
               </div>
@@ -223,7 +241,18 @@ export default function BillingPage() {
               {invoicesQuery.loading && !invoicesQuery.data ? (
                 <p className="text-sm text-muted-foreground">加载中…</p>
               ) : (
-                <InvoiceTable invoices={invoices} onViewReceipt={setReceiptInvoice} />
+                <>
+                  <InvoiceTable invoices={invoices} onViewReceipt={setReceiptInvoice} />
+                  <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+                    <Button size="sm" variant="outline" disabled={invoicePage <= 1} onClick={() => setInvoicePage((p) => Math.max(1, p - 1))}>
+                      上一页
+                    </Button>
+                    <span className="text-muted-foreground">第 {invoicePage} 页</span>
+                    <Button size="sm" variant="outline" disabled={invoices.length < pageSize} onClick={() => setInvoicePage((p) => p + 1)}>
+                      下一页
+                    </Button>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -260,8 +289,6 @@ export default function BillingPage() {
         </CardContent>
       </Card>
 
-      <ModelPricingSection />
-
       <RechargeDialog
         account={rechargeTarget}
         open={rechargeTarget !== null}
@@ -272,6 +299,18 @@ export default function BillingPage() {
         receipt={receipt}
         open={receiptInvoice !== null}
         onClose={() => setReceiptInvoice(null)}
+      />
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+        title={confirmAction === 'status' ? '变更账户状态' : '调整授信额度'}
+        description={
+          confirmAction === 'status'
+            ? `确认${selected?.status === 'frozen' ? '恢复' : '冻结'}账户「${selected?.ownerName ?? ''}」？`
+            : `确认把账户「${selected?.ownerName ?? ''}」的授信额度调整为 ${creditLimit || 0} credits？`
+        }
+        confirmLabel="确认"
+        onConfirm={confirmAction === 'status' ? toggleStatus : applyCreditLimit}
       />
     </div>
   )

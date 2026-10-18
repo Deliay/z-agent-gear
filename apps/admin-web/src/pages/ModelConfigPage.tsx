@@ -1,5 +1,6 @@
 import ProviderSection from '@/components/providers/ProviderSection'
 import ModelSection from '@/components/models/ModelSection'
+import ModelPricingSection from '@/components/billing/ModelPricingSection'
 
 export default function ModelConfigPage() {
   return (
@@ -7,6 +8,7 @@ export default function ModelConfigPage() {
       <h1 className="font-heading text-xl font-medium text-foreground">模型配置</h1>
       <ProviderSection />
       <ModelSection />
+      <ModelPricingSection />
     </div>
   )
 }

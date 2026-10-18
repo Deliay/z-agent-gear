@@ -6,6 +6,7 @@ import { ADMIN_BILLING_API_KEYS } from '@/graphql/queries'
 import type { GetAdminBillingApiKeysQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { formatDateTime } from '@/lib/format'
 
 export default function MyApiKeyManager() {
@@ -14,6 +15,7 @@ export default function MyApiKeyManager() {
   const [revokeKey] = useMutation(REVOKE_BILLING_API_KEY)
   const [name, setName] = useState('')
   const [secret, setSecret] = useState<string | null>(null)
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
 
   const create = async () => {
     if (!name.trim()) {
@@ -33,7 +35,10 @@ export default function MyApiKeyManager() {
     }
   }
 
-  const revoke = async (id: string) => {
+  const revoke = async () => {
+    const id = revokeTarget
+    setRevokeTarget(null)
+    if (!id) return
     try {
       await revokeKey({ variables: { id } })
       await refetch()
@@ -79,7 +84,7 @@ export default function MyApiKeyManager() {
               <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDateTime(key.lastUsedAt)}</td>
               <td className="py-2">
                 {key.status === 'active' && (
-                  <Button size="sm" variant="outline" onClick={() => revoke(key.id)}>
+                  <Button size="sm" variant="outline" onClick={() => setRevokeTarget(key.id)}>
                     吊销
                   </Button>
                 )}
@@ -88,6 +93,14 @@ export default function MyApiKeyManager() {
           ))}
         </tbody>
       </table>
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => !open && setRevokeTarget(null)}
+        title="吊销 API Key"
+        description="吊销后立即失效且不可恢复，确认继续？"
+        confirmLabel="吊销"
+        onConfirm={revoke}
+      />
     </div>
   )
 }

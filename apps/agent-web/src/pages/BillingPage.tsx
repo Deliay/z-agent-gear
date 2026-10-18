@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { formatDateTime } from '@/lib/format'
 
 export default function BillingPage() {
@@ -49,6 +50,7 @@ export default function BillingPage() {
   const [name, setName] = useState('')
   const [secret, setSecret] = useState<string | null>(null)
   const [receiptInvoice, setReceiptInvoice] = useState<MyBillingInvoiceData | null>(null)
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
 
   const account = accountQuery.data?.myBillingAccount
   const invoices = invoicesQuery.data?.myBillingInvoices ?? []
@@ -76,7 +78,10 @@ export default function BillingPage() {
     }
   }
 
-  const revoke = async (id: string) => {
+  const revoke = async () => {
+    const id = revokeTarget
+    setRevokeTarget(null)
+    if (!id) return
     try {
       await revokeKey({ variables: { id } })
       await keysQuery.refetch()
@@ -86,18 +91,26 @@ export default function BillingPage() {
     }
   }
 
+  if (accountQuery.loading && !account) {
+    return (
+      <div className="container mx-auto max-w-4xl p-6">
+        <p className="text-sm text-muted-foreground">费用数据加载中…</p>
+      </div>
+    )
+  }
+
   return (
     <div className="container mx-auto max-w-4xl space-y-6 p-6">
       <h1 className="font-heading text-xl font-medium">我的费用</h1>
 
-      {accountQuery.error && !account ? (
+      {accountQuery.error && (
         <Card>
           <CardContent className="py-6 text-sm text-destructive">
             费用数据加载失败：{accountQuery.error.message}
           </CardContent>
         </Card>
-      ) : (
-        account && (
+      )}
+      {account && (
           <Card>
             <CardHeader>
               <CardTitle>账户</CardTitle>
@@ -134,7 +147,6 @@ export default function BillingPage() {
               </p>
             </CardContent>
           </Card>
-        )
       )}
 
       <Card>
@@ -265,7 +277,7 @@ export default function BillingPage() {
                       {key.status === 'active' ? '有效' : '已吊销'}
                     </span>
                     {key.status === 'active' && (
-                      <Button size="sm" variant="outline" onClick={() => revoke(key.id)}>
+                      <Button size="sm" variant="outline" onClick={() => setRevokeTarget(key.id)}>
                         吊销
                       </Button>
                     )}
@@ -276,6 +288,15 @@ export default function BillingPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => !open && setRevokeTarget(null)}
+        title="吊销 API Key"
+        description="吊销后立即失效且不可恢复，确认继续？"
+        confirmLabel="吊销"
+        onConfirm={revoke}
+      />
 
       <Dialog open={receiptInvoice !== null} onOpenChange={(next) => !next && setReceiptInvoice(null)}>
         <DialogContent>
