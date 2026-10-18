@@ -4,6 +4,7 @@ import { MockedProvider } from '@apollo/client/testing/react';
 import BillingPage from '../BillingPage';
 import {
   MY_BILLING_ACCOUNT,
+  MY_BILLING_API_CALLS,
   MY_BILLING_API_KEYS,
   MY_BILLING_INVOICES,
   MY_BILLING_RECEIPTS,
@@ -35,7 +36,7 @@ function mocks() {
       result: { data: { myBillingAccount: account } },
     },
     {
-      request: { query: MY_BILLING_INVOICES, variables: { page: 1, pageSize: 100 } },
+      request: { query: MY_BILLING_INVOICES, variables: { page: 1, pageSize: 20 } },
       result: {
         data: {
           myBillingInvoices: [
@@ -69,8 +70,34 @@ function mocks() {
       },
     },
     {
-      request: { query: MY_BILLING_RECEIPTS, variables: { page: 1, pageSize: 100 } },
+      request: { query: MY_BILLING_RECEIPTS, variables: { page: 1, pageSize: 20 } },
       result: { data: { myBillingReceipts: [] } },
+    },
+    {
+      request: { query: MY_BILLING_API_CALLS, variables: { page: 1, pageSize: 20 } },
+      result: {
+        data: {
+          myBillingApiCalls: [
+            {
+              __typename: 'BillingApiCall',
+              id: 'c1',
+              requestId: 'req-1',
+              accountId: 'a1',
+              modelId: 'm1',
+              modelName: 'gpt-5',
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              outputTokens: 5,
+              cost: 0.1,
+              status: 'aborted',
+              estimated: false,
+              invoiceSeq: 0,
+              startedAt: '2026-10-18T00:00:00.000Z',
+              finishedAt: '2026-10-18T00:00:01.000Z',
+            },
+          ],
+        },
+      },
     },
     {
       request: { query: MY_BILLING_API_KEYS },
@@ -145,6 +172,10 @@ describe('前台我的费用', () => {
     expect(await screen.findByText('容器周期结算')).toBeDefined();
     expect(screen.queryByRole('button', { name: '充值' })).toBeNull();
     expect(screen.getByText('仅支持后台充值，本页面不提供自助充值入口。')).toBeDefined();
+    // T-B26 可见性：中断调用在「模型调用记录」中标注
+    expect(await screen.findByText('中断调用')).toBeDefined();
+    // 分页控件
+    expect(screen.getAllByText(/第 1 页/).length).toBeGreaterThan(0);
   });
 
   it('T-AW9: 生成 Key 一次性展示、吊销二次确认', async () => {

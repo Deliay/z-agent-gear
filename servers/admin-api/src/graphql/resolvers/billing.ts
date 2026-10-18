@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { BillingAccount } from '../../models/billing-account.js';
+import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingDeadLetter } from '../../models/billing-dead-letter.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
@@ -13,6 +14,7 @@ import { billingRuntime } from '../../services/billing/instances.js';
 import { reconciliationRuntime } from '../../services/billing/instances.js';
 import {
   toBillingAccountWire,
+  toBillingApiCall,
   toBillingInvoice,
   toBillingReceipt,
   toBillingReservation,
@@ -165,6 +167,23 @@ export const billingResolvers = {
       assertAdmin(context);
       const keys = await apiKeyService.list('admin_user', context.currentAdmin!.id);
       return keys.map(toApiKeyWire);
+    },
+    adminBillingApiCalls: async (
+      _parent: unknown,
+      args: { accountId: string; status?: string; page?: number; pageSize?: number },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      const filter: Record<string, unknown> = { accountId: args.accountId };
+      if (args.status) filter.status = args.status;
+      const page = Math.max(1, args.page ?? 1);
+      const pageSize = Math.min(200, Math.max(1, args.pageSize ?? 50));
+      const docs = await BillingApiCall.find(filter)
+        .sort({ startedAt: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean();
+      return docs.map((doc) => toBillingApiCall(doc as never));
     },
     adminBillingDeadLetters: async (
       _parent: unknown,

@@ -17,12 +17,13 @@ export function toBillingInvoice(doc: IBillingInvoice & Record<string, unknown>)
     refType: doc.refType ?? null,
     refId: doc.refId ?? null,
     description: doc.description ?? '',
-    items: (doc.items ?? []).map((item: { productId: string; quantity: number; unitPrice: number; amount: number; meteringRef?: string | null }) => ({
+    items: (doc.items ?? []).map((item: { productId: string; quantity: number; unitPrice: number; amount: number; meteringRef?: string | null; segment?: string | null }) => ({
       productId: item.productId,
       quantity: item.quantity,
       unitPrice: centsToCredits(item.unitPrice),
       amount: centsToCredits(item.amount),
       meteringRef: item.meteringRef ?? null,
+      segment: item.segment ?? null,
     })),
     receiptId: doc.receiptId ? String(doc.receiptId) : null,
     createdAt: new Date(doc.createdAt as Date).toISOString(),
@@ -50,6 +51,25 @@ export function toBillingRollup(doc: Record<string, unknown>) {
   };
 }
 
+export function toBillingApiCall(doc: Record<string, unknown>) {
+  return {
+    id: documentId(doc),
+    requestId: String(doc.requestId ?? ''),
+    accountId: String(doc.accountId ?? ''),
+    modelId: String(doc.modelId ?? ''),
+    modelName: String(doc.modelName ?? ''),
+    inputTokens: Number(doc.inputTokens ?? 0),
+    cachedInputTokens: Number(doc.cachedInputTokens ?? 0),
+    outputTokens: Number(doc.outputTokens ?? 0),
+    cost: centsToCredits(Number(doc.cost ?? 0)),
+    status: String(doc.status ?? 'completed'),
+    estimated: doc.estimated === true,
+    invoiceSeq: doc.invoiceSeq === null || doc.invoiceSeq === undefined ? null : Number(doc.invoiceSeq),
+    startedAt: new Date(doc.startedAt as Date).toISOString(),
+    finishedAt: doc.finishedAt ? new Date(doc.finishedAt as Date).toISOString() : null,
+  };
+}
+
 export function toBillingReservation(doc: IBillingReservation & Record<string, unknown>) {
   return {
     id: documentId(doc),
@@ -64,7 +84,7 @@ export function toBillingReservation(doc: IBillingReservation & Record<string, u
   };
 }
 
-/** AccountService DTO（已换算 credits）→ 契约 wire 形态（时间 ISO）。 */
+/** AccountService DTO（整数分）→ 契约 wire 形态（金额换算为 credits，时间 ISO）。 */
 export function toBillingAccountWire(dto: {
   id: string;
   ownerType: string;

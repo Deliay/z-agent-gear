@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   toBillingAccountWire,
+  toBillingApiCall,
   toBillingInvoice,
   toBillingReceipt,
   toBillingReservation,
@@ -87,5 +88,25 @@ describe('mappers（契约边界：分 → credits）', () => {
     } as never);
     expect(reservation.reservedTotal).toBe(6);
     expect(reservation.status).toBe('ACTIVE');
+
+    const call = toBillingApiCall({
+      _id: 'c1',
+      requestId: 'r1',
+      accountId: 'a1',
+      modelId: 'm1',
+      modelName: 'gpt-5',
+      inputTokens: 10,
+      cachedInputTokens: 2,
+      outputTokens: 5,
+      cost: 123,
+      status: 'aborted',
+      estimated: true,
+      invoiceSeq: 2,
+      startedAt: new Date('2026-10-01T00:00:00Z'),
+      finishedAt: new Date('2026-10-01T00:00:01Z'),
+    });
+    expect(call.cost).toBe(1.23);
+    expect(call.status).toBe('aborted');
+    expect(call.finishedAt).toBe('2026-10-01T00:00:01.000Z');
   });
 });

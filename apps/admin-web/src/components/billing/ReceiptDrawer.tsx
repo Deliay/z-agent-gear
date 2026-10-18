@@ -54,7 +54,12 @@ export default function ReceiptDrawer({ invoice, receipt, open, onClose }: Props
                   <tbody>
                     {invoice.items.map((item, index) => (
                       <tr key={`${item.productId}-${index}`}>
-                        <td className="py-1">{item.productId}</td>
+                        <td className="py-1">
+                          {item.productId}
+                          {item.segment
+                            ? `（${item.segment.includes('aborted') ? '中断' : item.segment}）`
+                            : ''}
+                        </td>
                         <td className="py-1 text-right tabular-nums">{item.quantity}</td>
                         <td className="py-1 text-right tabular-nums">{item.unitPrice.toFixed(4)}</td>
                         <td className="py-1 text-right tabular-nums">{item.amount.toFixed(2)}</td>

@@ -70,6 +70,7 @@ export const billingTypeDefs = `#graphql
     unitPrice: Float!
     amount: Float!
     meteringRef: ID
+    segment: String
   }
 
   type BillingReceipt {
@@ -123,6 +124,23 @@ export const billingTypeDefs = `#graphql
     errors: [JSON!]!
   }
 
+  type BillingApiCall {
+    id: ID!
+    requestId: String!
+    accountId: ID!
+    modelId: String!
+    modelName: String!
+    inputTokens: Int!
+    cachedInputTokens: Int!
+    outputTokens: Int!
+    cost: Float!
+    status: String!
+    estimated: Boolean!
+    invoiceSeq: Int
+    startedAt: String!
+    finishedAt: String
+  }
+
   type BillingDeadLetter {
     id: ID!
     queue: String!
@@ -161,6 +179,12 @@ export const billingTypeDefs = `#graphql
     adminReconciliationReports(line: String): [ReconciliationReport!]!
     adminBillingApiKeys: [BillingApiKey!]!
     adminBillingDeadLetters(limit: Int): [BillingDeadLetter!]!
+    adminBillingApiCalls(
+      accountId: ID!
+      status: String
+      page: Int
+      pageSize: Int
+    ): [BillingApiCall!]!
   }
 
   extend type Mutation {

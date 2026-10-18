@@ -182,6 +182,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       return;
     }
 
+    const requestId = crypto.randomUUID();
     const promptText = messages.map((message) => contentText((message as { content?: unknown }).content)).join('\n');
     const promptTokens = estimateTokens(promptText);
     const maxOutputTokens = Math.max(
@@ -195,21 +196,22 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         accountId: billing.accountId,
         estimatedCredits: estimate,
         policy: 'reject-on-insufficient',
-        ref: { type: 'model_call', id: `precheck:${crypto.randomUUID()}` },
+        // 与异步扣费 ref 口径一致（requestId），保证预检凭证可回溯同一调用
+        ref: { type: 'model_call', id: requestId },
       });
       if (!check.allowed) {
+        const frozen = check.reason === 'ACCOUNT_FROZEN';
         toApiError(
           res,
           402,
-          'insufficient_quota',
-          'insufficient_quota',
-          '余额不足，请联系管理员充值',
+          frozen ? 'account_frozen' : 'insufficient_quota',
+          frozen ? 'account_frozen' : 'insufficient_quota',
+          frozen ? '账户已冻结，请联系管理员处理' : '余额不足，请联系管理员充值',
         );
         return;
       }
     }
 
-    const requestId = crypto.randomUUID();
     const startedAt = new Date();
     await BillingApiCall.create({
       requestId,

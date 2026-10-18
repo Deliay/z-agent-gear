@@ -67,6 +67,14 @@ const SET_CREDIT_LIMIT = `
   }
 `;
 
+const API_CALLS = `
+  query ApiCalls($id: ID!) {
+    adminBillingApiCalls(accountId: $id, page: 1, pageSize: 5) {
+      id requestId modelId status estimated cost invoiceSeq startedAt
+    }
+  }
+`;
+
 const RECONCILE = `
   mutation Reconcile($id: ID!) {
     reconcileBillingAccount(accountId: $id) { id cashBalance frozenAmount availableBalance }
@@ -136,6 +144,9 @@ describe('Admin Billing API', () => {
 
     const reconciled = await adminGql(RECONCILE, { id: accountId }, token);
     expect(reconciled.errors).toBeUndefined();
+
+    const calls = await adminGql(API_CALLS, { id: accountId }, token);
+    expect(calls.errors).toBeUndefined();
 
     const revoked = await adminGql<{ revokeBillingApiKey: { status: string } }>(
       REVOKE_KEY,

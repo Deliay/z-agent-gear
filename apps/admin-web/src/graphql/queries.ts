@@ -204,7 +204,7 @@ const BILLING_INVOICE_FIELDS = `
   refType
   refId
   description
-  items { productId quantity unitPrice amount meteringRef }
+  items { productId quantity unitPrice amount meteringRef segment }
   receiptId
   createdAt
 `
@@ -299,6 +299,26 @@ export const ADMIN_BILLING_API_KEYS = gql`
       status
       lastUsedAt
       createdAt
+    }
+  }
+`
+
+export const ADMIN_BILLING_API_CALLS = gql`
+  query AdminBillingApiCalls($accountId: ID!, $status: String, $page: Int, $pageSize: Int) {
+    adminBillingApiCalls(accountId: $accountId, status: $status, page: $page, pageSize: $pageSize) {
+      id
+      requestId
+      modelId
+      modelName
+      inputTokens
+      cachedInputTokens
+      outputTokens
+      cost
+      status
+      estimated
+      invoiceSeq
+      startedAt
+      finishedAt
     }
   }
 `

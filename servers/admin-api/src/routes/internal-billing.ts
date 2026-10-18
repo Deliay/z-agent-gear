@@ -3,10 +3,12 @@ import mongoose from 'mongoose';
 import { config } from '../config/index.js';
 import { BillingInvoice } from '../models/billing-invoice.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
+import { BillingApiCall } from '../models/billing-api-call.js';
 import { accountService } from '../services/billing/account-service.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
 import {
   toBillingAccountWire,
+  toBillingApiCall,
   toBillingInvoice,
   toBillingReceipt,
   toBillingRollup,
@@ -98,6 +100,24 @@ export function createInternalBillingRouter(): Router {
       .limit(pageSize)
       .lean();
     res.json(docs.map((doc) => toBillingReceipt(doc as never)));
+  });
+
+  router.get('/api-calls', async (req: Request, res: Response) => {
+    const accountId = String(req.query.accountId ?? '');
+    if (!mongoose.isValidObjectId(accountId)) {
+      res.status(400).json({ error: 'INVALID_ACCOUNT' });
+      return;
+    }
+    const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
+    const filter: Record<string, unknown> = { accountId };
+    if (typeof req.query.status === 'string' && req.query.status) filter.status = req.query.status;
+    const docs = await BillingApiCall.find(filter)
+      .sort({ startedAt: -1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .lean();
+    res.json(docs.map((doc) => toBillingApiCall(doc as never)));
   });
 
   router.get('/rollups', async (req: Request, res: Response) => {

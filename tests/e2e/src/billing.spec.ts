@@ -51,9 +51,9 @@ test.describe('Frontend Billing E2E', () => {
     // 生成 API Key：完整 secret 仅显示一次
     await page.getByPlaceholder('Key 名称').fill(`e2e-key-${Date.now()}`);
     await page.getByRole('button', { name: '生成' }).click();
-    await expect(page.getByText(/^zag_sk_/)).toBeVisible();
+    await expect(page.getByText('完整 Key 仅显示一次，请立即保存：')).toBeVisible();
     await page.getByRole('button', { name: '我已保存' }).click();
-    await expect(page.getByText(/^zag_sk_/)).toHaveCount(0);
+    await expect(page.getByText('完整 Key 仅显示一次，请立即保存：')).toHaveCount(0);
 
     // 吊销需二次确认
     await page.getByRole('button', { name: '吊销' }).first().click();

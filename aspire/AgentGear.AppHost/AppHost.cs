@@ -46,12 +46,19 @@ var redis = builder.AddRedis("redis")
     });
 
 // 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
-var rabbitmq = builder.AddRabbitMQ("rabbitmq")
-    .PublishAsDockerComposeService((resource, service) =>
-    {
-        service.Name = "rabbitmq";
-        service.Image = "rabbitmq:3-management";
-    });
+// 仅当显式 RABBITMQ_DISABLED=true 时跳过（无镜像的受限环境跑其余服务；MQ 客户端会自行重试并降级）。
+var rabbitmqDisabled = string.Equals(
+    builder.Configuration["RABBITMQ_DISABLED"], "true", StringComparison.OrdinalIgnoreCase);
+IResourceBuilder<RabbitMQServerResource>? rabbitmq = null;
+if (!rabbitmqDisabled)
+{
+    rabbitmq = builder.AddRabbitMQ("rabbitmq")
+        .PublishAsDockerComposeService((resource, service) =>
+        {
+            service.Name = "rabbitmq";
+            service.Image = "rabbitmq:3-management";
+        });
+}
 
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: SecretOrDefault("mcp-jwt-secret"));
@@ -126,7 +133,7 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
         service.Name = "cloud-controller";
         service.Restart = "unless-stopped";
     });
-cloudController.WithReference(rabbitmq);
+if (rabbitmq is not null) cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -151,7 +158,7 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
         service.Name = "admin-api";
         service.Restart = "unless-stopped";
     });
-adminApi.WithReference(rabbitmq);
+if (rabbitmq is not null) adminApi.WithReference(rabbitmq);
 
 if (!builder.ExecutionContext.IsPublishMode)
 {

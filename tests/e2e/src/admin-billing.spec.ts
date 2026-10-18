@@ -40,10 +40,11 @@ test.describe('Admin Billing E2E', () => {
     await page.getByRole('link', { name: /费用中心/ }).click();
     await expect(page).toHaveURL(/\/billing/);
     await expect(page.getByRole('heading', { name: '费用中心' })).toBeVisible();
-    await expect(page.getByText('账单明细')).toBeVisible();
+    await expect(page.getByText('账户', { exact: true }).first()).toBeVisible();
 
-    // 选择账户后可见充值账单
+    // 选择账户后展示账单/收据/汇总
     await page.getByRole('row', { name: /admin/ }).first().click();
+    await expect(page.getByText('账单明细')).toBeVisible();
     await expect(page.getByText(/后台充值/).first()).toBeVisible();
     await expect(page.getByText('汇总（近 7 天）')).toBeVisible();
   });

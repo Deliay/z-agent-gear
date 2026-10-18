@@ -57,6 +57,23 @@ export interface BillingRollupWire {
   chargeCount: number;
 }
 
+export interface BillingApiCallWire {
+  id: string;
+  requestId: string;
+  accountId: string;
+  modelId: string;
+  modelName: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  cost: number;
+  status: string;
+  estimated: boolean;
+  invoiceSeq: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface BillingApiKeyWire {
   id: string;
   name: string;
@@ -169,6 +186,15 @@ export class BillingClient {
   ): Promise<BillingRollupWire[]> {
     return this.request<BillingRollupWire[]>(
       `/internal/billing/rollups?${this.params({ accountId, granularity, from, to })}`,
+    );
+  }
+
+  async listApiCalls(
+    accountId: string,
+    query: { status?: string; page?: number; pageSize?: number } = {},
+  ): Promise<BillingApiCallWire[]> {
+    return this.request<BillingApiCallWire[]>(
+      `/internal/billing/api-calls?${this.params({ accountId, ...query })}`,
     );
   }
 

@@ -310,7 +310,13 @@ export class BillingService {
         outputTokens: Number(dims?.dims?.outputTokens ?? 0),
       };
       const estimated = dims?.estimated === true;
+      const aborted = event.eventType === 'model_call.aborted';
+      const abortReason =
+        typeof payload.reason === 'string' && payload.reason.length > 0 ? payload.reason : '调用中断';
       const priced = await this.prices.priceModel(modelId, usage, event.occurredAt);
+      const description = aborted
+        ? `模型调用（中断：${abortReason}${estimated ? '，估算' : ''}） ${modelId}`
+        : `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`;
 
       let invoice: InvoiceResult | null = null;
       if (priced.amountCents > 0) {
@@ -328,8 +334,12 @@ export class BillingService {
           category: 'model',
           refType: 'model_call',
           refId: event.resourceId,
-          description: `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`,
-          items: priced.items.map((item) => ({ ...item, meteringRef: documentId(dims) })),
+          description,
+          items: priced.items.map((item) => ({
+            ...item,
+            meteringRef: documentId(dims),
+            segment: aborted ? `${item.segment ?? 'output'}:aborted` : item.segment,
+          })),
           idempotentKey: `charge:model:${event.resourceId}`,
           invoiceKey: `invoice:model:${event.resourceId}`,
           meteringIds: dims ? [documentId(dims)] : [],

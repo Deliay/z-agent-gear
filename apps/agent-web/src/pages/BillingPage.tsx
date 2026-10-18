@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
   MY_BILLING_ACCOUNT,
+  MY_BILLING_API_CALLS,
   MY_BILLING_API_KEYS,
   MY_BILLING_INVOICES,
   MY_BILLING_RECEIPTS,
@@ -11,6 +12,7 @@ import {
 import { CREATE_MY_BILLING_API_KEY, REVOKE_MY_BILLING_API_KEY } from '@/graphql/mutations'
 import type {
   GetMyBillingAccountQuery,
+  GetMyBillingApiCallsQuery,
   GetMyBillingApiKeysQuery,
   GetMyBillingInvoicesQuery,
   GetMyBillingReceiptsQuery,
@@ -33,12 +35,20 @@ export default function BillingPage() {
     return { from: from.toISOString(), to: to.toISOString() }
   }, [granularity])
 
+  const [invoicePage, setInvoicePage] = useState(1)
+  const [receiptPage, setReceiptPage] = useState(1)
+  const [callPage, setCallPage] = useState(1)
+  const pageSize = 20
+
   const accountQuery = useQuery<GetMyBillingAccountQuery>(MY_BILLING_ACCOUNT)
   const invoicesQuery = useQuery<GetMyBillingInvoicesQuery>(MY_BILLING_INVOICES, {
-    variables: { page: 1, pageSize: 100 },
+    variables: { page: invoicePage, pageSize },
   })
   const receiptsQuery = useQuery<GetMyBillingReceiptsQuery>(MY_BILLING_RECEIPTS, {
-    variables: { page: 1, pageSize: 100 },
+    variables: { page: receiptPage, pageSize },
+  })
+  const callsQuery = useQuery<GetMyBillingApiCallsQuery>(MY_BILLING_API_CALLS, {
+    variables: { page: callPage, pageSize },
   })
   const rollupsQuery = useQuery<GetMyBillingRollupsQuery>(MY_BILLING_ROLLUPS, {
     variables: { granularity, from: range.from, to: range.to },
@@ -57,6 +67,7 @@ export default function BillingPage() {
   const receipts = receiptsQuery.data?.myBillingReceipts ?? []
   const rollups = rollupsQuery.data?.myBillingRollups ?? []
   const keys = keysQuery.data?.myBillingApiKeys ?? []
+  const calls = callsQuery.data?.myBillingApiCalls ?? []
   const receipt = receipts.find((item) => item.invoiceId === receiptInvoice?.id) ?? null
   const maxRollup = Math.max(...rollups.map((item) => item.chargeTotal), 1)
 
@@ -204,6 +215,77 @@ export default function BillingPage() {
               </table>
             </div>
           )}
+          <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+            <Button size="sm" variant="outline" disabled={invoicePage <= 1} onClick={() => setInvoicePage((p) => Math.max(1, p - 1))}>
+              上一页
+            </Button>
+            <span className="text-muted-foreground">第 {invoicePage} 页</span>
+            <Button size="sm" variant="outline" disabled={invoices.length < pageSize} onClick={() => setInvoicePage((p) => p + 1)}>
+              下一页
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>模型调用记录</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {calls.length === 0 ? (
+            <p className="text-sm text-muted-foreground">暂无调用记录</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">时间</th>
+                    <th className="py-2 pr-3 font-medium">模型</th>
+                    <th className="py-2 pr-3 text-right font-medium">输入/缓存/输出</th>
+                    <th className="py-2 pr-3 text-right font-medium">费用</th>
+                    <th className="py-2 font-medium">状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {calls.map((call) => (
+                    <tr key={call.id} className="border-b last:border-0">
+                      <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDateTime(call.startedAt)}</td>
+                      <td className="py-2 pr-3">{call.modelName || call.modelId}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {call.inputTokens}/{call.cachedInputTokens}/{call.outputTokens}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{call.cost.toFixed(2)}</td>
+                      <td className="py-2">
+                        <Badge variant={call.status === 'aborted' ? 'destructive' : 'outline'}>
+                          {call.status === 'aborted' ? '中断调用' : call.status === 'failed' ? '失败' : '完成'}
+                          {call.estimated ? '（估算）' : ''}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+            <Button size="sm" variant="outline" disabled={callPage <= 1} onClick={() => setCallPage((p) => Math.max(1, p - 1))}>
+              上一页
+            </Button>
+            <span className="text-muted-foreground">第 {callPage} 页</span>
+            <Button size="sm" variant="outline" disabled={calls.length < pageSize} onClick={() => setCallPage((p) => p + 1)}>
+              下一页
+            </Button>
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-2 text-xs text-muted-foreground">
+            <span>收据</span>
+            <Button size="sm" variant="ghost" disabled={receiptPage <= 1} onClick={() => setReceiptPage((p) => Math.max(1, p - 1))}>
+              上一页
+            </Button>
+            <span>第 {receiptPage} 页</span>
+            <Button size="sm" variant="ghost" disabled={receipts.length < pageSize} onClick={() => setReceiptPage((p) => p + 1)}>
+              下一页
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -317,7 +399,10 @@ export default function BillingPage() {
               <div className="space-y-1 border-t pt-2">
                 {receiptInvoice.items.map((item, index) => (
                   <div key={`${item.productId}-${index}`} className="flex justify-between text-xs">
-                    <span>{item.productId}</span>
+                    <span>
+                      {item.productId}
+                      {item.segment ? `（${item.segment.includes('aborted') ? '中断' : item.segment}）` : ''}
+                    </span>
                     <span className="tabular-nums">
                       {item.quantity} × {item.unitPrice.toFixed(4)} = {item.amount.toFixed(2)}
                     </span>

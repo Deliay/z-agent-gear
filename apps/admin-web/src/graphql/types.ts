@@ -340,6 +340,7 @@ export interface InvoiceItemData {
   unitPrice: number;
   amount: number;
   meteringRef: string | null;
+  segment?: string | null;
 }
 
 export interface BillingInvoiceData {
@@ -439,4 +440,24 @@ export interface GetAdminReconciliationReportsQuery {
 
 export interface GetAdminBillingApiKeysQuery {
   adminBillingApiKeys: BillingApiKeyData[];
+}
+
+export interface BillingApiCallData {
+  id: string;
+  requestId: string;
+  modelId: string;
+  modelName: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  cost: number;
+  status: string;
+  estimated: boolean;
+  invoiceSeq: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface GetAdminBillingApiCallsQuery {
+  adminBillingApiCalls: BillingApiCallData[];
 }

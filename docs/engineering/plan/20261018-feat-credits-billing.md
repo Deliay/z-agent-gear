@@ -614,6 +614,22 @@ aspire start
   - `RABBITMQ_TEST_URL` 条件链路测试：`src/services/billing/mq/rabbitmq.integration.test.ts`（未配置 broker 时 skip，裁决 15）。
 - **仍留待真实环境演示**: 容器分钟计费→欠费强拆、网关流式/中断真实供应商调用、RabbitMQ 全链路在 CI broker 下执行（代码与条件测试已就位）。
 
+## 实现记录（2026-10-19，返工 v1.2）
+
+- **实现分支**: `impl/credits-billing`（基于需求总分支 `feat/credits-billing`）。
+- **返工修复（代码审核第二轮打回项）**:
+  1. **中-1 中断调用标注落到计费明细并可查（T-B26 彻底修复）**：`handleModelCallEvent` 对 `model_call.aborted` 生成明细描述「模型调用（中断：<reason>[，估算]） <model>」；账单 item 新增 `segment` 并以 `:aborted` 后缀标注（如 `output:aborted`）；`InvoiceItem.segment` 同步进 admin/前台契约与后台收据/前台收据展示。新增 `BillingApiCall` 出口：后台 `adminBillingApiCalls(accountId,status,page,pageSize)`、前台 `myBillingApiCalls`、内部 `GET /internal/billing/api-calls`，后台费用中心与前台「我的费用」新增「模型调用记录」表（完成/中断调用/失败 + 估算标注）。单测断言描述含「中断/<reason>」且 segment 含 `aborted`；agent-web 页面测试断言「中断调用」可见。
+  2. **中-2 冻结账户拒绝启动新容器（PRD §3.5）**：`adminStartCloudContainer` 解析计费账户后校验 `status !== 'frozen'`，冻结则抛 `ACCOUNT_FROZEN`「账户已冻结，无法启动容器；请先充值或联系管理员处理」；已运行容器仍按欠费记账→宽限强拆。resolver 单测新增冻结拒绝断言。
+  3. **低-3 agent-web 分页对齐**：账单、收据、调用记录均改 `pageSize=20` 并提供上/下一页（与 admin-web 一致）。
+  4. **低-4 冻结提示口径**：网关 402 按 `check.reason` 区分——`ACCOUNT_FROZEN` → `account_frozen`/「账户已冻结，请联系管理员处理」，否则 `insufficient_quota`/「余额不足，请联系管理员充值」。
+  5. **低-5 mappers 注释更正**：`mappers.ts` 注释改为「AccountService DTO（整数分）→ 契约 wire（金额换算为 credits）」，消除「已换算 credits」的二次换算隐患。
+  6. **低-6 预检 ref 唯一化**：网关预检 `ref.id` 改为 `requestId`，与 `handleModelCallEvent` 扣费 ref 完全一致。
+- **真实验证（本机 Aspire 全栈，`aspire start`，RabbitMQ 实容器）**:
+  - `tests/api` 计费四件套（admin billing / billing-gateway / agent billing / cloud-controller billing-events）**10 passed**（注入 `INTERNAL_API_TOKEN`，真实服务端口 10003/10001/10004）。
+  - `tests/e2e/src/admin-billing.spec.ts`（后台费用中心+对账）**2 passed**、`tests/e2e/src/billing.spec.ts`（前台我的费用+Key 一次性）**1 passed**，均跑在 AppHost 起的真实前后端（admin-web/agent-web 由 Aspire 托管）。
+  - `aspire/AgentGear.AppHost` RabbitMQ 依赖以 NuGet 离线恢复（`NUGET_CERT_REVOCATION_MODE=offline`）后编译通过；镜像经内网 Harbor docker-hub 代理补齐本地 `rabbitmq:3-management`。
+- **环境注记**: 全量 `tests/api` 中非计费套件（controller-api websocket / 会话等）依赖的端口与外部集成在共享环境存在既有不稳定，计费相关套件与 E2E 已在本机真实服务下全绿；其余待 CI 复核。
+
 ## 风险与回滚
 
 | 风险 | 缓解 |

@@ -482,7 +482,7 @@ export const MY_BILLING_INVOICES = gql`
       refType
       refId
       description
-      items { productId quantity unitPrice amount meteringRef }
+      items { productId quantity unitPrice amount meteringRef segment }
       receiptId
       createdAt
     }
@@ -523,6 +523,26 @@ export const MY_BILLING_API_KEYS = gql`
       status
       lastUsedAt
       createdAt
+    }
+  }
+`
+
+export const MY_BILLING_API_CALLS = gql`
+  query MyBillingApiCalls($status: String, $page: Int, $pageSize: Int) {
+    myBillingApiCalls(status: $status, page: $page, pageSize: $pageSize) {
+      id
+      requestId
+      modelId
+      modelName
+      inputTokens
+      cachedInputTokens
+      outputTokens
+      cost
+      status
+      estimated
+      invoiceSeq
+      startedAt
+      finishedAt
     }
   }
 `

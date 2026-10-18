@@ -35,6 +35,10 @@ const MY_KEYS = `
   }
 `;
 
+const MY_CALLS = `
+  query { myBillingApiCalls(page: 1, pageSize: 5) { id requestId status estimated cost } }
+`;
+
 const CREATE_KEY = `
   mutation CreateMyBillingApiKey($name: String!) {
     createMyBillingApiKey(name: $name) { apiKey { id keyPrefix status } secret }
@@ -50,7 +54,7 @@ const REVOKE_KEY = `
 (hasBillingBackend ? describe : describe.skip)('Agent Billing API', () => {
   it('T-A1/A3/A4/A5: 前台账户 get-or-create、Key 一次性 secret、无自助充值', async () => {
     const signup = await gqlRequest(SIGNUP, {
-      username: `billing_${Date.now()}`,
+      username: `b${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
       password: 'password123',
     }).then((res) => res.json() as Promise<{ data: { signup: { token: string } } }>);
     const token = signup.data.signup.token;
@@ -64,6 +68,9 @@ const REVOKE_KEY = `
     expect(created.errors).toBeUndefined();
     expect(created.data.createMyBillingApiKey.secret).toMatch(/^zag_sk_[0-9a-f]+$/);
     const keyId = created.data.createMyBillingApiKey.apiKey.id;
+
+    const calls = await gqlRequest(MY_CALLS, undefined, token).then((res) => res.json());
+    expect(calls.errors).toBeUndefined();
 
     const keys = await gqlRequest(MY_KEYS, undefined, token).then((res) => res.json());
     expect(keys.data.myBillingApiKeys.some((key: { id: string }) => key.id === keyId)).toBe(true);

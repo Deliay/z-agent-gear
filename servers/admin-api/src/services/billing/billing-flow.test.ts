@@ -424,9 +424,18 @@ describe('计费域核心（真实 Mongo 集成）', () => {
       payload: { modelId: 'm1', inputTokens: 10, outputTokens: 10, estimated: false },
     };
     await eventIngestService.ingest(aborted);
-    await billing.handleModelCallEvent(aborted);
+    const abortedInvoice = await billing.handleModelCallEvent({
+      ...aborted,
+      payload: { ...aborted.payload, reason: 'upstream_error' },
+    });
     const call = await BillingApiCall.findOne({ requestId: 'req-2' });
     expect(call?.status).toBe('aborted');
+    // T-B26: 中断标注必须落到计费明细（描述 + segment）
+    const abortedRecord = await BillingInvoice.findOne({ idempotentKey: 'invoice:model:req-2' });
+    expect(abortedRecord?.description).toContain('中断');
+    expect(abortedRecord?.description).toContain('upstream_error');
+    expect(abortedRecord?.items.some((item) => (item.segment ?? '').includes('aborted'))).toBe(true);
+    expect(abortedInvoice?.amount).toBeGreaterThan(0);
   });
 
   it('T-B3: 调价后新消费取新档，历史账单单价快照不变', async () => {

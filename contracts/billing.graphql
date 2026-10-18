@@ -70,6 +70,7 @@ type InvoiceItem {
   unitPrice: Float!
   amount: Float!
   meteringRef: ID
+  segment: String # input | cached_input | output（中断调用带 :aborted 后缀）
 }
 
 type BillingReceipt {
@@ -87,6 +88,23 @@ type BillingRollup {
   chargeTotal: Float!
   rechargeTotal: Float!
   chargeCount: Int!
+}
+
+type BillingApiCall {
+  id: ID!
+  requestId: String!
+  accountId: ID!
+  modelId: String!
+  modelName: String!
+  inputTokens: Int!
+  cachedInputTokens: Int!
+  outputTokens: Int!
+  cost: Float!
+  status: String! # completed | aborted | failed
+  estimated: Boolean!
+  invoiceSeq: Int
+  startedAt: String!
+  finishedAt: String
 }
 
 type BillingApiKey {
@@ -120,6 +138,7 @@ type Query {
     to: String!
   ): [BillingRollup!]!
   myBillingApiKeys: [BillingApiKey!]!
+  myBillingApiCalls(status: String, page: Int, pageSize: Int): [BillingApiCall!]!
 }
 
 type Mutation {

@@ -135,6 +135,23 @@ type ReconciliationReport {
   errors: [JSON!]!
 }
 
+type BillingApiCall {
+  id: ID!
+  requestId: String!
+  accountId: ID!
+  modelId: String!
+  modelName: String!
+  inputTokens: Int!
+  cachedInputTokens: Int!
+  outputTokens: Int!
+  cost: Float!
+  status: String! # completed | aborted | failed
+  estimated: Boolean!
+  invoiceSeq: Int
+  startedAt: String!
+  finishedAt: String
+}
+
 type BillingDeadLetter {
   id: ID!
   queue: String!
@@ -173,6 +190,12 @@ type Query {
   adminReconciliationReports(line: String): [ReconciliationReport!]!
   adminBillingApiKeys: [BillingApiKey!]!
   adminBillingDeadLetters(limit: Int): [BillingDeadLetter!]!
+  adminBillingApiCalls(
+    accountId: ID!
+    status: String
+    page: Int
+    pageSize: Int
+  ): [BillingApiCall!]!
 }
 
 type Mutation {

@@ -135,10 +135,18 @@ export const cloudContainerResolvers = {
         admin.username,
       );
       let billingAccountId = defaultAccount.id;
+      let billingStatus = defaultAccount.status;
       if (args.billingAccountId) {
         const explicit = await accountService.getById(args.billingAccountId);
         if (!explicit) throw new GraphQLError('计费账户不存在');
         billingAccountId = explicit.id;
+        billingStatus = explicit.status;
+      }
+      // PRD §3.5：账户被冻结 → 拒绝新的容器启动（已运行容器按欠费规则处理）
+      if (billingStatus === 'frozen') {
+        throw new GraphQLError('账户已冻结，无法启动容器；请先充值或联系管理员处理', {
+          extensions: { code: 'ACCOUNT_FROZEN' },
+        });
       }
 
       const workloadIds = args.workloadIds ?? [];

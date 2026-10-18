@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
   ADMIN_BILLING_ACCOUNTS,
+  ADMIN_BILLING_API_CALLS,
   ADMIN_BILLING_INVOICES,
   ADMIN_BILLING_RECEIPTS,
   ADMIN_BILLING_ROLLUPS,
@@ -17,10 +18,12 @@ import type {
   BillingInvoiceData,
   BillingRollupGranularity,
   GetAdminBillingAccountsQuery,
+  GetAdminBillingApiCallsQuery,
   GetAdminBillingInvoicesQuery,
   GetAdminBillingReceiptsQuery,
   GetAdminBillingRollupsQuery,
 } from '@/graphql/types'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -32,6 +35,7 @@ import InvoiceTable from '@/components/billing/InvoiceTable'
 import ReceiptDrawer from '@/components/billing/ReceiptDrawer'
 import RollupChart from '@/components/billing/RollupChart'
 import MyApiKeyManager from '@/components/billing/MyApiKeyManager'
+import { formatDateTime } from '@/lib/format'
 
 function defaultRange(): { from: string; to: string } {
   const to = new Date()
@@ -49,6 +53,7 @@ export default function BillingPage() {
   const [receiptInvoice, setReceiptInvoice] = useState<BillingInvoiceData | null>(null)
   const [page, setPage] = useState(1)
   const [invoicePage, setInvoicePage] = useState(1)
+  const [callPage, setCallPage] = useState(1)
   const [confirmAction, setConfirmAction] = useState<'limit' | 'status' | null>(null)
   const pageSize = 20
 
@@ -61,6 +66,10 @@ export default function BillingPage() {
   })
   const receiptsQuery = useQuery<GetAdminBillingReceiptsQuery>(ADMIN_BILLING_RECEIPTS, {
     variables: { accountId: selected?.id ?? '', page: invoicePage, pageSize },
+    skip: !selected,
+  })
+  const callsQuery = useQuery<GetAdminBillingApiCallsQuery>(ADMIN_BILLING_API_CALLS, {
+    variables: { accountId: selected?.id ?? '', page: callPage, pageSize },
     skip: !selected,
   })
   const rollupsQuery = useQuery<GetAdminBillingRollupsQuery>(ADMIN_BILLING_ROLLUPS, {
@@ -81,12 +90,14 @@ export default function BillingPage() {
   const invoices = useMemo(() => invoicesQuery.data?.adminBillingInvoices ?? [], [invoicesQuery.data])
   const receipts = useMemo(() => receiptsQuery.data?.adminBillingReceipts ?? [], [receiptsQuery.data])
   const rollups = useMemo(() => rollupsQuery.data?.adminBillingRollups ?? [], [rollupsQuery.data])
+  const calls = useMemo(() => callsQuery.data?.adminBillingApiCalls ?? [], [callsQuery.data])
   const receipt = receipts.find((item) => item.invoiceId === receiptInvoice?.id) ?? null
 
   const selectAccount = (account: BillingAccountData) => {
     setSelected(account)
     setCreditLimit(String(account.creditLimit))
     setInvoicePage(1)
+    setCallPage(1)
   }
 
   const applyCreditLimit = async () => {
@@ -254,6 +265,62 @@ export default function BillingPage() {
                   </div>
                 </>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>模型调用记录</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {calls.length === 0 ? (
+                <p className="text-sm text-muted-foreground">暂无调用记录</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="py-2 pr-3 font-medium">时间</th>
+                        <th className="py-2 pr-3 font-medium">模型</th>
+                        <th className="py-2 pr-3 font-medium">Request</th>
+                        <th className="py-2 pr-3 text-right font-medium">输入/缓存/输出</th>
+                        <th className="py-2 pr-3 text-right font-medium">费用</th>
+                        <th className="py-2 font-medium">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {calls.map((call) => (
+                        <tr key={call.id} className="border-b last:border-0">
+                          <td className="py-2 pr-3 text-xs text-muted-foreground">
+                            {formatDateTime(call.startedAt)}
+                          </td>
+                          <td className="py-2 pr-3">{call.modelName || call.modelId}</td>
+                          <td className="py-2 pr-3 font-mono text-xs">{call.requestId.slice(0, 8)}…</td>
+                          <td className="py-2 pr-3 text-right tabular-nums">
+                            {call.inputTokens}/{call.cachedInputTokens}/{call.outputTokens}
+                          </td>
+                          <td className="py-2 pr-3 text-right tabular-nums">{call.cost.toFixed(2)}</td>
+                          <td className="py-2">
+                            <Badge variant={call.status === 'aborted' ? 'destructive' : 'outline'}>
+                              {call.status === 'aborted' ? '中断调用' : call.status === 'failed' ? '失败' : '完成'}
+                              {call.estimated ? '（估算）' : ''}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+                <Button size="sm" variant="outline" disabled={callPage <= 1} onClick={() => setCallPage((p) => Math.max(1, p - 1))}>
+                  上一页
+                </Button>
+                <span className="text-muted-foreground">第 {callPage} 页</span>
+                <Button size="sm" variant="outline" disabled={calls.length < pageSize} onClick={() => setCallPage((p) => p + 1)}>
+                  下一页
+                </Button>
+              </div>
             </CardContent>
           </Card>
 

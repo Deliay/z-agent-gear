@@ -32,6 +32,7 @@ import {
 } from '../../services/cloud-controller-client.js';
 import { findStoredCloudContainers } from '../../models/cloud-container.js';
 import { cloudWorkloadService } from '../../services/cloud-workload.js';
+import { accountService } from '../../services/billing/account-service.js';
 import type { AdminAuthContext } from './auth.js';
 
 // 每次调用返回全新 context：loadContainers 在 context 上做请求级 memo，
@@ -214,6 +215,17 @@ describe('cloudContainerResolvers', () => {
       await Mutation.adminStartCloudContainer({}, { purpose: 'IDLE', workloadIds: ['w2', 'w1'] }, good());
 
       expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, ['w2', 'w1'], 'acct-1');
+    });
+
+    it('PRD §3.5: 冻结账户拒绝启动容器并给出明确提示', async () => {
+      (accountService.getOrCreate as any).mockResolvedValueOnce({
+        id: 'acct-1',
+        status: 'frozen',
+      });
+      await expect(
+        Mutation.adminStartCloudContainer({}, { purpose: 'IDLE' }, good()),
+      ).rejects.toThrow(/账户已冻结/);
+      expect(cloudControllerClient.start).not.toHaveBeenCalled();
     });
 
     it('rejects non-IDLE purposes with a clear message and never calls the control plane', async () => {

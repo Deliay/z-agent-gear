@@ -60,6 +60,14 @@ export const billingResolvers = {
       const user = requireUser(context);
       return billingClient.listApiKeys('front_user', user.id);
     },
+    myBillingApiCalls: async (
+      _parent: unknown,
+      args: { status?: string; page?: number; pageSize?: number },
+      context: AuthContext,
+    ) => {
+      const account = await myAccount(context);
+      return billingClient.listApiCalls(account.id, args);
+    },
   },
   Mutation: {
     createMyBillingApiKey: async (

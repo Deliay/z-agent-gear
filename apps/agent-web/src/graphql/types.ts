@@ -639,6 +639,7 @@ export interface MyInvoiceItemData {
   unitPrice: number
   amount: number
   meteringRef: string | null
+  segment?: string | null
 }
 
 export interface MyBillingInvoiceData {
@@ -701,4 +702,24 @@ export interface GetMyBillingRollupsQuery {
 
 export interface GetMyBillingApiKeysQuery {
   myBillingApiKeys: MyBillingApiKeyData[]
+}
+
+export interface MyBillingApiCallData {
+  id: string
+  requestId: string
+  modelId: string
+  modelName: string
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  cost: number
+  status: string
+  estimated: boolean
+  invoiceSeq: number | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+export interface GetMyBillingApiCallsQuery {
+  myBillingApiCalls: MyBillingApiCallData[]
 }
