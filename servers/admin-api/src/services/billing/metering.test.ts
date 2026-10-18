@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../models/billing-event.js', () => ({
-  BillingEvent: { updateOne: vi.fn() },
+  BillingEvent: { updateOne: vi.fn(), updateMany: vi.fn() },
 }));
 vi.mock('../../models/metering-record.js', () => ({
   MeteringRecord: { create: vi.fn(), findOne: vi.fn() },
@@ -96,5 +96,40 @@ describe('MeteringService（事件 → 计量事实）', () => {
     );
     expect(result).toBeNull();
     expect(MeteringRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('模型事件缺 modelId 不计费；未知事件类型跳过；重放游标可重置', async () => {
+    (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (BillingEvent.updateOne as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ updated: 3 });
+    const service = new MeteringService();
+    expect(
+      await service.meterEvent(event({ payload: { inputTokens: 10 } }) as never),
+    ).toBeNull();
+    expect(await service.meterEvent(event({ eventType: 'unknown' }) as never)).toBeNull();
+
+    (BillingEvent.updateMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modifiedCount: 3,
+    });
+    expect(await service.resetCursor({ metered: true })).toBe(3);
+  });
+
+  it('estimated 兜底使用 payload 提供的估算 token', async () => {
+    (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (BillingEvent.updateOne as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const service = new MeteringService();
+    await service.meterEvent(
+      event({
+        eventType: 'model_call.aborted',
+        payload: {
+          modelId: 'gpt-5',
+          estimated: true,
+          estimatedInputTokens: 12,
+          estimatedOutputTokens: 34,
+        },
+      }) as never,
+    );
+    const created = (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(created.dims).toMatchObject({ inputTokens: 12, outputTokens: 34 });
+    expect(created.estimated).toBe(true);
   });
 });
