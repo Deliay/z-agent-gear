@@ -72,32 +72,35 @@ npm -v
 npm config get registry
 `;
 
-const DOTNET_SCRIPT = `#!/usr/bin/env bash
+/**
+ * .NET 预制脚本（apt 版，裁决 13）：用系统包管理器安装 .NET 10。
+ * 由 `002-preset-dotnet-apt` 复用于存量保守升级，故导出。
+ */
+export const DOTNET_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 
-if command -v dotnet >/dev/null 2>&1 && dotnet --list-sdks | grep -q .; then
-  echo ".NET SDK 已安装"
+export DEBIAN_FRONTEND=noninteractive
+PACKAGE="\${DOTNET_APT_PACKAGE:-dotnet10}"
+UPGRADE="\${DOTNET_APT_UPGRADE:-1}"
+
+if command -v dotnet >/dev/null 2>&1 && dotnet --list-sdks | grep -q '^10\\.'; then
+  echo ".NET 10 SDK 已安装"
+  dotnet --list-sdks
   exit 0
 fi
 
-INSTALL_URL="\${DOTNET_INSTALL_URL:-https://dot.net/v1/dotnet-install.sh}"
-INSTALL_DIR="\${DOTNET_INSTALL_DIR:-/usr/local/dotnet}"
+apt-get update
+if [ "$UPGRADE" = "1" ]; then
+  apt-get -y upgrade
+fi
+apt-get install -y --no-install-recommends "$PACKAGE"
 
-curl -sSL "$INSTALL_URL" -o /tmp/dotnet-install.sh
-bash /tmp/dotnet-install.sh --channel LTS --install-dir "$INSTALL_DIR"
-
-ln -sfn "$INSTALL_DIR/dotnet" /usr/local/bin/dotnet
-printf '%s\\n' \\
-  'export DOTNET_ROOT=/usr/local/dotnet' \\
-  'export PATH=$DOTNET_ROOT:$PATH' \\
-  'export DOTNET_CLI_TELEMETRY_OPTOUT=1' \\
-  > /etc/profile.d/dotnet.sh
-chmod +x /etc/profile.d/dotnet.sh
-
-export DOTNET_ROOT="$INSTALL_DIR"
-export PATH="$INSTALL_DIR:$PATH"
+command -v dotnet >/dev/null 2>&1 || {
+  echo "dotnet 未安装成功（包：$PACKAGE）" >&2
+  exit 1
+}
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
-dotnet --info
+dotnet --list-sdks
 `;
 
 const ASPIRE_SCRIPT = `#!/usr/bin/env bash

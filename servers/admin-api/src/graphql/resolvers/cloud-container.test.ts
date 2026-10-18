@@ -254,7 +254,7 @@ describe('cloudContainerResolvers', () => {
 
       expect(cloudControllerClient.start).toHaveBeenCalledWith(
         'IDLE',
-        [{ workloadId: 'w2', params: { version: '20' }, implicit: false }],
+        [{ workloadId: 'w2', params: { version: '20' }, implicit: false, required: false }],
         ['w2'],
       );
     });
@@ -276,11 +276,58 @@ describe('cloudContainerResolvers', () => {
       expect(cloudControllerClient.start).toHaveBeenCalledWith(
         'IDLE',
         [
-          { workloadId: 'docker', params: {}, implicit: true },
-          { workloadId: 'dotnet', params: {}, implicit: true },
-          { workloadId: 'aspire', params: {}, implicit: false },
+          { workloadId: 'docker', params: {}, implicit: true, required: false },
+          { workloadId: 'dotnet', params: {}, implicit: true, required: false },
+          { workloadId: 'aspire', params: {}, implicit: false, required: false },
         ],
         ['docker', 'dotnet', 'aspire'],
+      );
+    });
+
+    it('T-CCL1: passes explicit required through and defaults others to false', async () => {
+      (cloudControllerClient.start as any).mockResolvedValue(container);
+      (cloudWorkloadService.list as any).mockResolvedValue([
+        { id: 'docker', paramSchema: [], dependsOnWorkloadIds: [] },
+        { id: 'dotnet', paramSchema: [], dependsOnWorkloadIds: [] },
+        { id: 'aspire', paramSchema: [], dependsOnWorkloadIds: ['docker', 'dotnet'] },
+      ]);
+
+      await Mutation.adminStartCloudContainer(
+        {},
+        {
+          purpose: 'IDLE',
+          workloads: [{ workloadId: 'aspire', required: true }, { workloadId: 'dotnet' }],
+        },
+        good(),
+      );
+
+      expect(cloudControllerClient.start).toHaveBeenCalledWith(
+        'IDLE',
+        [
+          { workloadId: 'docker', params: {}, implicit: true, required: false },
+          { workloadId: 'dotnet', params: {}, implicit: false, required: false },
+          { workloadId: 'aspire', params: {}, implicit: false, required: true },
+        ],
+        ['docker', 'dotnet', 'aspire'],
+      );
+    });
+
+    it('T-CCL1: treats a non-boolean required as false (only === true wins)', async () => {
+      (cloudControllerClient.start as any).mockResolvedValue(container);
+      (cloudWorkloadService.list as any).mockResolvedValue([
+        { id: 'w1', paramSchema: [], dependsOnWorkloadIds: [] },
+      ]);
+
+      await Mutation.adminStartCloudContainer(
+        {},
+        { purpose: 'IDLE', workloads: [{ workloadId: 'w1', required: 'yes' as unknown as boolean }] },
+        good(),
+      );
+
+      expect(cloudControllerClient.start).toHaveBeenCalledWith(
+        'IDLE',
+        [{ workloadId: 'w1', params: {}, implicit: false, required: false }],
+        ['w1'],
       );
     });
 

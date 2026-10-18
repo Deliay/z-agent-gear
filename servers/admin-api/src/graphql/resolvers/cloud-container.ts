@@ -115,7 +115,7 @@ export const cloudContainerResolvers = {
       args: {
         purpose: string;
         workloadIds?: string[];
-        workloads?: Array<{ workloadId: string; params?: unknown }>;
+        workloads?: Array<{ workloadId: string; params?: unknown; required?: boolean }>;
       },
       context: AdminAuthContext,
     ) => {
@@ -151,6 +151,8 @@ export const cloudContainerResolvers = {
                 selection.params && typeof selection.params === 'object' && !Array.isArray(selection.params)
                   ? (selection.params as Record<string, unknown>)
                   : {},
+              // required 唯一语义（裁决 1）：仅显式 `=== true` 生效，非布尔/缺省按 false。
+              required: selection.required === true,
             })),
             definitions.map((definition) => ({
               id: definition.id,

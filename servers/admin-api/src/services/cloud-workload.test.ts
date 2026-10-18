@@ -522,11 +522,21 @@ describe('CloudWorkloadService', () => {
         status: 'SUCCESS',
         script: 'echo init',
         params: { version: '20' },
+        required: false,
         exitCode: 0,
         log: 'init done',
         startedAt: '2026-10-17T00:00:00.000Z',
         finishedAt: '2026-10-17T00:00:05.000Z',
       });
+    });
+
+    it('T-MLOG1: maps required true/false and defaults a missing value to false', () => {
+      expect(mapWorkloadLog({ id: 'l6', required: true }).required).toBe(true);
+      expect(mapWorkloadLog({ id: 'l7', required: false }).required).toBe(false);
+      // 历史记录缺省 false
+      expect(mapWorkloadLog({ id: 'l8' }).required).toBe(false);
+      // 非布尔按缺省 false
+      expect(mapWorkloadLog({ id: 'l9', required: 'true' }).required).toBe(false);
     });
 
     it('maps post/failed and normalizes missing optional fields', () => {
@@ -584,6 +594,7 @@ describe('CloudWorkloadService', () => {
           status: 'RUNNING',
           script: 'echo init',
           params: {},
+          required: false,
           exitCode: null,
           log: '',
           startedAt: null,
