@@ -182,6 +182,7 @@ flowchart LR
 - [[proposals/20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
 - [[proposals/20261017-feat-cloud-controller-workload.md]] — 云控制器工作负载功能
 - [[proposals/20261018-feat-workload-phase1.md]] — 工作负载一期（参数、依赖与预制工作负载）
+- [[proposals/20261018-feat-workload-phase4.md]] — 工作负载四期（worker 基础镜像瘦身）
 - [[proposals/20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本门禁与自升级
 
 ### 实现计划（`plan/`）
