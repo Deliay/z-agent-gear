@@ -65,6 +65,7 @@ const mappedLog = {
   status: 'SUCCESS',
   script: 'echo init',
   params: { version: '20' },
+  required: false,
   exitCode: 0,
   log: 'init done',
   startedAt: '2026-10-17T00:00:00.000Z',

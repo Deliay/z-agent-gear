@@ -42,6 +42,8 @@ const cloudWorkloadLogSchema = new mongoose.Schema(
     status: { type: String, enum: WORKLOAD_LOG_STATUSES, required: true },
     script: { type: String, default: '' },
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // 本次启动该项是否为「必须」；缺省 false（历史记录按非必须展示）
+    required: { type: Boolean, default: false },
     exitCode: { type: Number, default: null },
     log: { type: String, default: '' },
     startedAt: { type: Date, default: null },

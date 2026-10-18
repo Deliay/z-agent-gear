@@ -28,9 +28,9 @@ describe('resolveFallbackWorkloadPlan - 展开顺序', () => {
     );
 
     expect(plan).toEqual([
-      { workloadId: 'a', params: {}, implicit: false },
-      { workloadId: 'b', params: {}, implicit: false },
-      { workloadId: 'c', params: {}, implicit: false },
+      { workloadId: 'a', params: {}, implicit: false, required: false },
+      { workloadId: 'b', params: {}, implicit: false, required: false },
+      { workloadId: 'c', params: {}, implicit: false, required: false },
     ]);
   });
 

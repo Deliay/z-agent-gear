@@ -11,7 +11,8 @@ import { clientIpFrom } from './middleware/client-ip.js';
 import { seedAdmin } from './services/auth.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-preset-workloads.js';
-import * as migration002 from './migrations/002-refresh-docker-preset-script.js';
+import * as migration002DotnetApt from './migrations/002-preset-dotnet-apt.js';
+import * as migration002RefreshDocker from './migrations/002-refresh-docker-preset-script.js';
 
 const app = express();
 
@@ -64,9 +65,11 @@ async function start() {
   await connectWithRetry();
 
   // 一次性预制工作负载（admin_migrations 账本）：失败只记录日志、不阻断启动，下次启动按未完成重试
-  // 002 在 001 之后执行：把未定制过的「Docker」预制脚本刷新为自包含 v2（工作负载四期）
+  // 两个 002 迁移按各自 name 记账、均在 001 之后执行：
+  // 002-preset-dotnet-apt——存量 .NET 预制脚本保守升级为 apt 版（三期）；
+  // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）
   try {
-    await runMigrations([migration001, migration002]);
+    await runMigrations([migration001, migration002DotnetApt, migration002RefreshDocker]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
   }

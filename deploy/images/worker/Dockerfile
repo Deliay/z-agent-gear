@@ -28,12 +28,29 @@ ARG NVM_INSTALL_URL=https://nexus.internal.fffdan.com/repository/github-raw-prox
 ARG NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy
 ARG NODE_VERSION=22
 ARG NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/
+# .NET 由工作负载脚本经 apt 安装（不再依赖 dotnet-install.sh）。默认包名 dotnet10、默认执行 apt-get upgrade，
+# 可在运行时用同名环境变量覆盖；如内网 Ubuntu 源不含 .NET 10，可用 DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL
+# 在构建期注入内部 Microsoft feed 代理（见下方「.NET apt 源」）。
+ARG DOTNET_APT_PACKAGE=dotnet10
+ARG DOTNET_APT_UPGRADE=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 运行时环境变量：ARG 仅构建期可见，这里把 npm 源固化进镜像运行时，
 # 供「Node.js」预制工作负载脚本（`REGISTRY="${NPM_REGISTRY:-...}"`）读取。
 ENV NPM_REGISTRY=${NPM_REGISTRY}
+
+# 运行时环境变量：.NET 预制工作负载脚本（apt 版）读取；默认 dotnet10 / 执行 apt-get upgrade。
+# 可按内网源覆盖包名（DOTNET_APT_PACKAGE）或排障/提速时关闭 upgrade（DOTNET_APT_UPGRADE=0）。
+ENV DOTNET_APT_PACKAGE=${DOTNET_APT_PACKAGE} \
+    DOTNET_APT_UPGRADE=${DOTNET_APT_UPGRADE}
+
+# .NET apt 源（可选）：若内网 Ubuntu 源不含 .NET 10 包，用 build-arg 注入内部 Microsoft feed 代理：
+#   --build-arg DOTNET_APT_SOURCE=https://nexus.internal.fffdan.com/repository/dotnet-proxy/ubuntu/24.04/prod
+#   --build-arg DOTNET_APT_KEY_URL=https://nexus.internal.fffdan.com/repository/dotnet-proxy/microsoft.asc
+# 二者同时提供时追加到 apt 源列表；未提供则仅使用上方配置的内网 Ubuntu 源。
+ARG DOTNET_APT_SOURCE=
+ARG DOTNET_APT_KEY_URL=
 
 # 1) 切换 Ubuntu 软件源到内网 mirror（24.04 为 deb822 格式）
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list \
@@ -45,6 +62,20 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg git gh procps sudo \
  && rm -rf /var/lib/apt/lists/*
+
+# 2.1) 可选：注入 .NET 10 的 Microsoft feed 代理源（仅当内网 Ubuntu 源不含 dotnet10 包时）。
+#      需要同时提供 DOTNET_APT_SOURCE 与 DOTNET_APT_KEY_URL，否则跳过（不阻断构建）。
+#      放在基础工具安装之后：此处才有 curl/ca-certificates/gnupg。
+RUN if [ -n "$DOTNET_APT_SOURCE" ] && [ -n "$DOTNET_APT_KEY_URL" ]; then \
+      install -m 0755 -d /etc/apt/keyrings \
+      && curl -fsSL "$DOTNET_APT_KEY_URL" -o /etc/apt/keyrings/microsoft.asc \
+      && chmod a+r /etc/apt/keyrings/microsoft.asc \
+      && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/microsoft.asc] %s noble main\n' \
+           "$(dpkg --print-architecture)" "$DOTNET_APT_SOURCE" \
+           > /etc/apt/sources.list.d/dotnet.list; \
+    else \
+      echo "DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL not set; using the configured Ubuntu mirror for dotnet10"; \
+    fi
 
 # 3) 用 nvm 安装 Node.js / npm（替代系统包管理器提供的 node/npm）
 #    - 安装脚本取自内网 GitHub raw 代理；脚本内硬编码的 raw.githubusercontent.com
@@ -81,11 +112,12 @@ RUN printf '%s\n' \
       > /etc/profile.d/nvm.sh
 
 # 4) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
-#    agent-gear 固定 2.3.x：工作负载参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
-#    避免构建期取到不支持参数的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
+#    agent-gear 固定 2.4.x：工作负载「必须」短路（items[].required）自 2.4.0 起提供，
+#    参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
+#    避免构建期取到不支持这些能力的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.3.x \
+      agent-gear@2.4.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force

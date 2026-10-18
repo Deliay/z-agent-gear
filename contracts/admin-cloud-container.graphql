@@ -66,9 +66,14 @@ type Mutation {
   # - workloadIds（兼容旧调用）：缺省或空数组行为与现状完全一致（不挂载工作负载，回连后直接 ONLINE）；
   #   传入时按数组顺序挂载，去重保序，等价于所有工作负载使用默认参数；服务端校验存在/数组长度
   #   （去重前）≤10，非法返回错误（内部 API 400 INVALID_WORKLOAD）。
-  # - workloads（新调用）：每项携带 `params`（缺省字段使用默认值）；服务端展开隐式依赖、去重、
+  # - workloads（新调用）：每项携带 `params`（缺省字段使用默认值）与可选的 `required`
+  #   （本次启动是否将该项标记为「必须」）；服务端展开隐式依赖、去重、
   #   按拓扑序排序并归一参数后下发；展开后超过 10 个返回 `expanded workloads exceed 10`；
   #   重复 `workloadId` 返回 `duplicate workload selection`；依赖不存在返回 `dependency workload not found`。
+  #   `required` 语义：缺省 false；仅 `=== true`（显式选择）生效且仅作用于初始化阶段，
+  #   隐式依赖永远按 false 处理；被标记为「必须」的工作负载初始化失败/超时/执行前被删除时，
+  #   服务端会中断剩余初始化并强制注销容器（不重试、不退避），详见 contracts/cloud-controller-websocket.md §2.9。
+  # - workloadIds（兼容旧调用）等价于全部 `required=false`。
   adminStartCloudContainer(
     purpose: CloudContainerPurpose!
     workloadIds: [ID!]

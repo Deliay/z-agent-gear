@@ -63,6 +63,7 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
       workloadId: entry.workloadId,
       params: entry.params ?? {},
       implicit: entry.implicit === true,
+      required: entry.required === true,
     })),
     currentWorkloadName: entity.currentWorkloadName ?? null,
   };
@@ -79,6 +80,7 @@ export function toCloudWorkloadLogJson(entity: CloudWorkloadLogEntity): Record<s
     status: entity.status,
     script: entity.script,
     params: entity.params ?? {},
+    required: entity.required === true,
     exitCode: entity.exitCode ?? null,
     log: entity.log,
     startedAt: entity.startedAt ? entity.startedAt.toISOString() : null,
@@ -130,18 +132,21 @@ async function resolveWorkloadPlan(
   const seen = new Set<string>();
   for (const item of raw) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    const { workloadId, params, implicit } = item as Record<string, unknown>;
+    const { workloadId, params, implicit, required } = item as Record<string, unknown>;
     if (typeof workloadId !== 'string' || workloadId.length === 0) return null;
     if (seen.has(workloadId)) return null;
     if (params !== undefined && params !== null) {
       if (typeof params !== 'object' || Array.isArray(params)) return null;
     }
     if (implicit !== undefined && typeof implicit !== 'boolean') return null;
+    // required：缺省/null 归一 false；非布尔 400（与 implicit 同口径，裁决 2）。
+    if (required !== undefined && required !== null && typeof required !== 'boolean') return null;
     seen.add(workloadId);
     entries.push({
       workloadId,
       params: params ? { ...(params as Record<string, unknown>) } : {},
       implicit: implicit === true,
+      required: required === true,
     });
   }
 

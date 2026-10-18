@@ -99,6 +99,8 @@ export function createCloudControllerApp(): CloudControllerApp {
     initTimeoutMs: config.workloadInitTimeoutMs,
     postBudgetMs: config.workloadPostBudgetMs,
     logMaxBytes: config.workloadLogMaxBytes,
+    // 必须失败通知：锁外强制注销（复用既有 destroy，reason 写入 exitReason；裁决 7）。
+    forceDestroy: (containerId, reason) => containerService.destroy(containerId, { reason }),
     logger,
   });
 

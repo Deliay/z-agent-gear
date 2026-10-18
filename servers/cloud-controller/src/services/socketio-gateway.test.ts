@@ -176,6 +176,7 @@ beforeAll(async () => {
     initTimeoutMs: 1000,
     postBudgetMs: 5000,
     logMaxBytes: 262144,
+    forceDestroy: async () => {},
   });
 
   const gateway = registerWorkerGateway(io, {
@@ -734,6 +735,37 @@ describe('worker Socket.IO gateway', () => {
       (log) => log.phase === 'post',
     );
     expect(postLog?.status).toBe('success');
+    socket.close();
+  });
+
+  it('T-G-REQ: 必须项执行前被删除 → register 不下发批次且不 markOnline（不进入 online）', async () => {
+    const container = await repo.create({
+      name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'connecting',
+      workloadIds: ['gw-missing'],
+      workloadPlan: [
+        { workloadId: 'gw-missing', params: {}, implicit: false, required: true },
+      ],
+    });
+    const token = await tokenService.issue(container.id);
+    const socket = await connectWith(token);
+    const runs: Array<{ phase: string }> = [];
+    socket.on('workload:run', (payload: { phase: string }) => runs.push(payload));
+
+    const registered = waitFor(socket, 'registered');
+    socket.emit('register', { hostname: 'worker-req', version: OK_VERSION });
+    await registered;
+
+    // 等占位记录落库（说明 startInit 已执行完）
+    await waitForCondition(
+      async () => (await workloadLogRepository.findByContainer(container.id)).length > 0,
+    );
+    // 必须失败 → 不下发 workload:run，且未被 markOnline
+    expect(runs).toHaveLength(0);
+    expect((await repo.findById(container.id))?.status).toBe('connecting');
     socket.close();
   });
 });

@@ -280,7 +280,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 ### Admin Cloud Container E2E (`admin-cloud-container.spec.ts`)
 
 > 需要 admin-web / admin-api / cloud-controller 就绪：`aspire start && aspire wait admin-web admin-api cloud-controller`；cloud-controller 以 `K8S_ENABLED=false` 运行（无真实工作容器回连，容器停在 CREATING/CONNECTING）。
-> T-E15 通过直写共享 Mongo（`cloudworkloadlogs`）构造参数快照，需要 `MONGODB_URI`（缺省时 `test.skip` 跳过）。
+> T-E15 通过直写共享 Mongo（`cloudworkloadlogs`）构造参数快照，T-E19（日志必须标识）与 T-E20（退出原因）分别直写 `cloudworkloadlogs.required`/`cloudcontainers.exitReason`，均需要 `MONGODB_URI`（缺省时 `test.skip` 跳过）。
 
 | 测试 | 描述 |
 |------|------|
@@ -290,6 +290,10 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E5 非管理员访问 | 未登录访问 `/cloud-containers` 重定向 `/login` |
 | T-E14 启动参数与依赖提示 | 选中带参数工作负载 → 参数表单预填默认值；未显式选择依赖时提示「将自动初始化 XXX（默认参数）」；初始化顺序预览（隐式依赖带「隐式」标记）；提交后容器行展示展开后的挂载顺序 |
 | T-E15 日志参数快照 | 直写 `cloudworkloadlogs.params` → 打开日志对话框展示「参数快照」（`version: 20` / `package_manager: ["pnpm"]`） |
+| T-E17 必须开关配置 | 仅「已勾选且含 `initScript`」的工作负载出现「必须」开关（默认关）；仅 `postScript` 的不出现；取消勾选清除、重新勾选回到默认；提交后落库 `workloadPlan[].required=true` |
+| T-E18 顺序预览必须标识 | 必须项在预览有「必须」标识；隐式依赖仍带「隐式」标识且不受影响 |
+| T-E19 日志必须标识 | 直写 `cloudworkloadlogs.required=true/false` 后对话框按记录展示「必须」标识；历史缺省不误标 |
+| T-E20 退出原因展示 | 直写必须失败容器的 `exitReason`（含负载名）后列表可见 `必须工作负载「must-a」初始化失败` |
 
 > 覆盖裁剪：T-E2（token 拒绝）由 `tests/api/src/cloud-controller/worker-handshake.test.ts` 覆盖；T-E4（异常退出/超时保留 `exitReason`、可强制销毁）与 T-E6（列表与 Job 对账）在 `K8S_ENABLED=false` 下无真实 Job 可对账，由 cloud-controller 单测锚定（`status-sync.test.ts` T-Y1/T-Y3/T-Y5 + reconcile、`container-service.test.ts` T-S4/T-S4b）；真实集群链路列为部署侧手工验收。
 
