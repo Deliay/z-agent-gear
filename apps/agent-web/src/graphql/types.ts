@@ -611,3 +611,94 @@ export interface HomeOverviewData {
 export interface HomeOverviewQuery {
   homeOverview: HomeOverviewData
 }
+
+// ---------- 我的费用（contracts/billing.graphql） ----------
+
+export type BillingRollupGranularity = 'minute' | 'hour' | 'day'
+
+export interface MyBillingAccountData {
+  id: string
+  ownerType: 'front_user' | 'admin_user'
+  ownerId: string
+  ownerName: string
+  cashBalance: number
+  giftBalance: number
+  creditLimit: number
+  frozenAmount: number
+  availableBalance: number
+  status: string
+  insufficientSince: string | null
+  ledgerCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MyInvoiceItemData {
+  productId: string
+  quantity: number
+  unitPrice: number
+  amount: number
+  meteringRef: string | null
+}
+
+export interface MyBillingInvoiceData {
+  id: string
+  accountId: string
+  seq: number
+  type: 'charge' | 'recharge' | 'adjust'
+  category: 'container' | 'model' | 'manual'
+  amount: number
+  balanceAfter: number
+  refType: string | null
+  refId: string | null
+  description: string
+  items: MyInvoiceItemData[]
+  receiptId: string | null
+  createdAt: string
+}
+
+export interface MyBillingReceiptData {
+  id: string
+  receiptNo: string
+  invoiceId: string
+  accountId: string
+  amount: number
+  balanceAfter: number
+  issuedAt: string
+}
+
+export interface MyBillingRollupData {
+  bucketStart: string
+  chargeTotal: number
+  rechargeTotal: number
+  chargeCount: number
+}
+
+export interface MyBillingApiKeyData {
+  id: string
+  name: string
+  keyPrefix: string
+  status: string
+  lastUsedAt: string | null
+  createdAt: string
+}
+
+export interface GetMyBillingAccountQuery {
+  myBillingAccount: MyBillingAccountData
+}
+
+export interface GetMyBillingInvoicesQuery {
+  myBillingInvoices: MyBillingInvoiceData[]
+}
+
+export interface GetMyBillingReceiptsQuery {
+  myBillingReceipts: MyBillingReceiptData[]
+}
+
+export interface GetMyBillingRollupsQuery {
+  myBillingRollups: MyBillingRollupData[]
+}
+
+export interface GetMyBillingApiKeysQuery {
+  myBillingApiKeys: MyBillingApiKeyData[]
+}

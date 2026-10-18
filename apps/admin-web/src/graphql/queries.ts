@@ -55,6 +55,12 @@ export const ADMIN_MODELS = gql`
       isEnabled
       sortOrder
       scope
+      pricing {
+        inputPerMillion
+        cachedInputPerMillion
+        outputPerMillion
+        isBillable
+      }
       createdAt
       updatedAt
     }
@@ -164,6 +170,135 @@ export const ADMIN_CLOUD_WORKLOAD_LOGS = gql`
       log
       startedAt
       finishedAt
+    }
+  }
+`
+
+// ---------- 费用中心（contracts/admin-billing.graphql） ----------
+
+const BILLING_ACCOUNT_FIELDS = `
+  id
+  ownerType
+  ownerId
+  ownerName
+  cashBalance
+  giftBalance
+  creditLimit
+  frozenAmount
+  availableBalance
+  status
+  insufficientSince
+  ledgerCount
+  createdAt
+  updatedAt
+`
+
+const BILLING_INVOICE_FIELDS = `
+  id
+  accountId
+  seq
+  type
+  category
+  amount
+  balanceAfter
+  refType
+  refId
+  description
+  items { productId quantity unitPrice amount meteringRef }
+  receiptId
+  createdAt
+`
+
+const BILLING_RECEIPT_FIELDS = `
+  id
+  receiptNo
+  invoiceId
+  accountId
+  amount
+  balanceAfter
+  issuedAt
+`
+
+export const ADMIN_BILLING_ACCOUNTS = gql`
+  query AdminBillingAccounts($keyword: String, $ownerType: BillingOwnerType, $page: Int, $pageSize: Int) {
+    adminBillingAccounts(keyword: $keyword, ownerType: $ownerType, page: $page, pageSize: $pageSize) {
+      ${BILLING_ACCOUNT_FIELDS}
+    }
+  }
+`
+
+export const ADMIN_BILLING_ACCOUNT = gql`
+  query AdminBillingAccount($id: ID!) {
+    adminBillingAccount(id: $id) {
+      ${BILLING_ACCOUNT_FIELDS}
+    }
+  }
+`
+
+export const ADMIN_BILLING_INVOICES = gql`
+  query AdminBillingInvoices($accountId: ID!, $from: String, $to: String, $type: BillingLedgerType, $category: BillingCategory, $page: Int, $pageSize: Int) {
+    adminBillingInvoices(accountId: $accountId, from: $from, to: $to, type: $type, category: $category, page: $page, pageSize: $pageSize) {
+      ${BILLING_INVOICE_FIELDS}
+    }
+  }
+`
+
+export const ADMIN_BILLING_RECEIPTS = gql`
+  query AdminBillingReceipts($accountId: ID!, $page: Int, $pageSize: Int) {
+    adminBillingReceipts(accountId: $accountId, page: $page, pageSize: $pageSize) {
+      ${BILLING_RECEIPT_FIELDS}
+    }
+  }
+`
+
+export const ADMIN_BILLING_ROLLUPS = gql`
+  query AdminBillingRollups($accountId: ID!, $granularity: BillingRollupGranularity!, $from: String!, $to: String!) {
+    adminBillingRollups(accountId: $accountId, granularity: $granularity, from: $from, to: $to) {
+      bucketStart
+      chargeTotal
+      rechargeTotal
+      chargeCount
+    }
+  }
+`
+
+export const ADMIN_BILLING_RESERVATIONS = gql`
+  query AdminBillingReservations($accountId: ID, $status: ReservationStatus) {
+    adminBillingReservations(accountId: $accountId, status: $status) {
+      id
+      accountId
+      resourceId
+      status
+      reservedTotal
+      settledTotal
+      releasedTotal
+      startedAt
+      lastSettleAt
+    }
+  }
+`
+
+export const ADMIN_RECONCILIATION_REPORTS = gql`
+  query AdminReconciliationReports($line: String) {
+    adminReconciliationReports(line: $line) {
+      line
+      ranAt
+      checkedCount
+      errorCount
+      errors
+    }
+  }
+`
+
+export const ADMIN_BILLING_API_KEYS = gql`
+  query AdminBillingApiKeys {
+    adminBillingApiKeys {
+      id
+      name
+      keyPrefix
+      status
+      lastUsedAt
+      createdAt
     }
   }
 `

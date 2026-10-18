@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Boxes, Cloud, LogOut, Package, Server } from 'lucide-react'
+import { Boxes, Cloud, CreditCard, LogOut, Package, Scale, Server } from 'lucide-react'
 import { useAuth } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
 
@@ -8,6 +8,8 @@ const NAV_ITEMS = [
   { to: '/base-images', label: '基础镜像', icon: Boxes },
   { to: '/cloud-containers', label: '云端容器', icon: Cloud },
   { to: '/cloud-workloads', label: '工作负载', icon: Package },
+  { to: '/billing', label: '费用中心', icon: CreditCard },
+  { to: '/reconciliation', label: '对账中心', icon: Scale },
 ]
 
 export default function AdminLayout() {

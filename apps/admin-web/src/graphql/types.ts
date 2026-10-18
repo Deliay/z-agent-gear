@@ -72,8 +72,16 @@ export interface AdminModelData {
   isEnabled: boolean;
   sortOrder: number;
   scope: ConfigScope;
+  pricing?: ModelPricingData | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ModelPricingData {
+  inputPerMillion: number;
+  cachedInputPerMillion: number;
+  outputPerMillion: number;
+  isBillable: boolean;
 }
 
 export interface ProviderInputData {
@@ -299,4 +307,136 @@ export interface AdminStartCloudContainerMutation {
 
 export interface AdminDestroyCloudContainerMutation {
   adminDestroyCloudContainer: boolean;
+}
+
+// ---------- 费用中心（contracts/admin-billing.graphql） ----------
+
+export type BillingOwnerType = 'front_user' | 'admin_user';
+export type BillingLedgerType = 'charge' | 'recharge' | 'adjust';
+export type BillingCategory = 'container' | 'model' | 'manual';
+export type BillingRollupGranularity = 'minute' | 'hour' | 'day';
+export type ReservationStatus = 'PENDING' | 'ACTIVE' | 'SETTLING' | 'SETTLED' | 'RELEASE_PENDING';
+
+export interface BillingAccountData {
+  id: string;
+  ownerType: BillingOwnerType;
+  ownerId: string;
+  ownerName: string;
+  cashBalance: number;
+  giftBalance: number;
+  creditLimit: number;
+  frozenAmount: number;
+  availableBalance: number;
+  status: string;
+  insufficientSince: string | null;
+  ledgerCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceItemData {
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  meteringRef: string | null;
+}
+
+export interface BillingInvoiceData {
+  id: string;
+  accountId: string;
+  seq: number;
+  type: BillingLedgerType;
+  category: BillingCategory;
+  amount: number;
+  balanceAfter: number;
+  refType: string | null;
+  refId: string | null;
+  description: string;
+  items: InvoiceItemData[];
+  receiptId: string | null;
+  createdAt: string;
+}
+
+export interface BillingReceiptData {
+  id: string;
+  receiptNo: string;
+  invoiceId: string;
+  accountId: string;
+  amount: number;
+  balanceAfter: number;
+  issuedAt: string;
+}
+
+export interface BillingRollupData {
+  bucketStart: string;
+  chargeTotal: number;
+  rechargeTotal: number;
+  chargeCount: number;
+}
+
+export interface BillingReservationData {
+  id: string;
+  accountId: string;
+  resourceId: string;
+  status: ReservationStatus;
+  reservedTotal: number;
+  settledTotal: number;
+  releasedTotal: number;
+  startedAt: string;
+  lastSettleAt: string | null;
+}
+
+export interface BillingApiKeyData {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  status: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export interface BillingApiKeyPayloadData {
+  apiKey: BillingApiKeyData;
+  secret: string;
+}
+
+export interface ReconciliationReportData {
+  line: string;
+  ranAt: string;
+  checkedCount: number;
+  errorCount: number;
+  errors: Array<Record<string, unknown>>;
+}
+
+export interface GetAdminBillingAccountsQuery {
+  adminBillingAccounts: BillingAccountData[];
+}
+
+export interface GetAdminBillingAccountQuery {
+  adminBillingAccount: BillingAccountData;
+}
+
+export interface GetAdminBillingInvoicesQuery {
+  adminBillingInvoices: BillingInvoiceData[];
+}
+
+export interface GetAdminBillingReceiptsQuery {
+  adminBillingReceipts: BillingReceiptData[];
+}
+
+export interface GetAdminBillingRollupsQuery {
+  adminBillingRollups: BillingRollupData[];
+}
+
+export interface GetAdminBillingReservationsQuery {
+  adminBillingReservations: BillingReservationData[];
+}
+
+export interface GetAdminReconciliationReportsQuery {
+  adminReconciliationReports: ReconciliationReportData[];
+}
+
+export interface GetAdminBillingApiKeysQuery {
+  adminBillingApiKeys: BillingApiKeyData[];
 }
