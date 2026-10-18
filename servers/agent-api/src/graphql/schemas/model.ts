@@ -10,8 +10,18 @@ export const modelTypeDefs = `#graphql
     isEnabled: Boolean!
     sortOrder: Int!
     scope: ConfigScope!
+    # 模型定价（只读展示）；与 admin-llm.graphql 逐字一致。
+    pricing: ModelPricing
     createdAt: String!
     updatedAt: String!
+  }
+
+  # credits / 百万 token（边界展示为 credits，持久层整数分）
+  type ModelPricing {
+    inputPerMillion: Float!
+    cachedInputPerMillion: Float!
+    outputPerMillion: Float!
+    isBillable: Boolean!
   }
 
   input CustomModelInput {
