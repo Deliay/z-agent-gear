@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import mongoose from 'mongoose';
 import { adminGql, ensureAdminLogin } from './helpers.js';
 
 const HTTP = (process.env.ADMIN_API_URL || 'http://localhost:10003/graphql').replace(
@@ -65,5 +66,97 @@ describe('OpenAI 兼容计费网关', () => {
     });
     expect(unknown.status).toBe(404);
     expect(openAiError(await unknown.json())?.code).toBe('model_not_found');
+  });
+});
+
+const ADMIN_ACCOUNTS = `
+  query Accounts {
+    adminBillingAccounts(ownerType: admin_user, keyword: "admin", page: 1, pageSize: 5) {
+      id
+      ownerType
+      ownerName
+      status
+    }
+  }
+`;
+
+const SET_STATUS = `
+  mutation SetStatus($accountId: ID!, $status: String!) {
+    setBillingAccountStatus(accountId: $accountId, status: $status) { id status }
+  }
+`;
+
+async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  return mongoose.connection.db ?? null;
+}
+
+/**
+ * PRD §3.5：账户被冻结 → 拒绝新的模型调用，且不限于「已开启计费」的模型。
+ * 直写一个 isBillable=false 的全局模型（无真实上游），断言冻结账户调用被 402 拒绝。
+ */
+describe.skipIf(!process.env.MONGODB_URI)('冻结账户网关口径（含未开启计费模型）', () => {
+  it('T-B24: frozen 账户调用非计费模型同样 402 account_frozen', async () => {
+    const db = await mongoDb();
+    if (!db) return;
+    const token = await ensureAdminLogin();
+
+    const accounts = await adminGql<{
+      adminBillingAccounts: Array<{ id: string; ownerType: string; ownerName: string }>;
+    }>(ADMIN_ACCOUNTS, {}, token);
+    const account = accounts.data!.adminBillingAccounts.find((item) => item.ownerType === 'admin_user');
+    expect(account).toBeTruthy();
+
+    const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
+      CREATE_KEY,
+      { name: `frozen-free-${Date.now()}` },
+      token,
+    );
+    const key = created.data!.createBillingApiKey.secret;
+
+    const providerId = new mongoose.Types.ObjectId();
+    const modelName = `frozen-free-${Date.now()}`;
+    const now = new Date();
+    await db.collection('providers').insertOne({
+      _id: providerId,
+      name: `frozen-free-provider-${Date.now()}`,
+      type: 'OpenAI',
+      endpoint: 'http://127.0.0.1:1',
+      credentialType: 'api_key',
+      encryptedCredential: { iv: 'a', ciphertext: 'b', tag: 'c' },
+      isEnabled: true,
+      scope: 'global',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection('models').insertOne({
+      providerId,
+      name: modelName,
+      isCustom: false,
+      isEnabled: true,
+      sortOrder: 0,
+      scope: 'global',
+      pricing: { inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0, isBillable: false },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      await adminGql(SET_STATUS, { accountId: account!.id, status: 'frozen' }, token);
+      const res = await fetch(`${HTTP}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: modelName, messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      expect(res.status).toBe(402);
+      expect(openAiError(await res.json())?.code).toBe('account_frozen');
+    } finally {
+      await adminGql(SET_STATUS, { accountId: account!.id, status: 'active' }, token);
+      await db.collection('models').deleteOne({ name: modelName });
+      await db.collection('providers').deleteOne({ _id: providerId });
+      await mongoose.disconnect();
+    }
   });
 });

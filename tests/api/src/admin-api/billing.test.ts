@@ -40,7 +40,7 @@ const RECHARGE = `
 const INVOICES = `
   query Invoices($id: ID!) {
     adminBillingInvoices(accountId: $id, page: 1, pageSize: 20) {
-      id seq type amount balanceAfter items { productId quantity unitPrice amount }
+      id seq type amount balanceAfter items { productId quantity unitPrice amount meteringRef segment }
     }
   }
 `;

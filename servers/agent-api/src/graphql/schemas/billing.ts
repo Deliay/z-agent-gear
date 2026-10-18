@@ -124,6 +124,7 @@ export const billingTypeDefs = `#graphql
       pageSize: Int
     ): [BillingInvoice!]!
     myBillingReceipts(page: Int, pageSize: Int): [BillingReceipt!]!
+    myBillingReceipt(invoiceId: ID!): BillingReceipt
     myBillingRollups(
       granularity: BillingRollupGranularity!
       from: String!

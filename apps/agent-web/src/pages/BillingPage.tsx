@@ -6,7 +6,7 @@ import {
   MY_BILLING_API_CALLS,
   MY_BILLING_API_KEYS,
   MY_BILLING_INVOICES,
-  MY_BILLING_RECEIPTS,
+  MY_BILLING_RECEIPT,
   MY_BILLING_ROLLUPS,
 } from '@/graphql/queries'
 import { CREATE_MY_BILLING_API_KEY, REVOKE_MY_BILLING_API_KEY } from '@/graphql/mutations'
@@ -15,7 +15,7 @@ import type {
   GetMyBillingApiCallsQuery,
   GetMyBillingApiKeysQuery,
   GetMyBillingInvoicesQuery,
-  GetMyBillingReceiptsQuery,
+  GetMyBillingReceiptQuery,
   GetMyBillingRollupsQuery,
   MyBillingInvoiceData,
 } from '@/graphql/types'
@@ -36,16 +36,17 @@ export default function BillingPage() {
   }, [granularity])
 
   const [invoicePage, setInvoicePage] = useState(1)
-  const [receiptPage, setReceiptPage] = useState(1)
   const [callPage, setCallPage] = useState(1)
+  const [receiptInvoice, setReceiptInvoice] = useState<MyBillingInvoiceData | null>(null)
   const pageSize = 20
 
   const accountQuery = useQuery<GetMyBillingAccountQuery>(MY_BILLING_ACCOUNT)
   const invoicesQuery = useQuery<GetMyBillingInvoicesQuery>(MY_BILLING_INVOICES, {
     variables: { page: invoicePage, pageSize },
   })
-  const receiptsQuery = useQuery<GetMyBillingReceiptsQuery>(MY_BILLING_RECEIPTS, {
-    variables: { page: receiptPage, pageSize },
+  const receiptsQuery = useQuery<GetMyBillingReceiptQuery>(MY_BILLING_RECEIPT, {
+    variables: { invoiceId: receiptInvoice?.id ?? '' },
+    skip: !receiptInvoice,
   })
   const callsQuery = useQuery<GetMyBillingApiCallsQuery>(MY_BILLING_API_CALLS, {
     variables: { page: callPage, pageSize },
@@ -59,16 +60,14 @@ export default function BillingPage() {
 
   const [name, setName] = useState('')
   const [secret, setSecret] = useState<string | null>(null)
-  const [receiptInvoice, setReceiptInvoice] = useState<MyBillingInvoiceData | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
 
   const account = accountQuery.data?.myBillingAccount
   const invoices = invoicesQuery.data?.myBillingInvoices ?? []
-  const receipts = receiptsQuery.data?.myBillingReceipts ?? []
+  const receipt = receiptsQuery.data?.myBillingReceipt ?? null
   const rollups = rollupsQuery.data?.myBillingRollups ?? []
   const keys = keysQuery.data?.myBillingApiKeys ?? []
   const calls = callsQuery.data?.myBillingApiCalls ?? []
-  const receipt = receipts.find((item) => item.invoiceId === receiptInvoice?.id) ?? null
   const maxRollup = Math.max(...rollups.map((item) => item.chargeTotal), 1)
 
   const create = async () => {
@@ -276,16 +275,6 @@ export default function BillingPage() {
               下一页
             </Button>
           </div>
-          <div className="mt-2 flex items-center justify-end gap-2 text-xs text-muted-foreground">
-            <span>收据</span>
-            <Button size="sm" variant="ghost" disabled={receiptPage <= 1} onClick={() => setReceiptPage((p) => Math.max(1, p - 1))}>
-              上一页
-            </Button>
-            <span>第 {receiptPage} 页</span>
-            <Button size="sm" variant="ghost" disabled={receipts.length < pageSize} onClick={() => setReceiptPage((p) => p + 1)}>
-              下一页
-            </Button>
-          </div>
         </CardContent>
       </Card>
 
@@ -384,7 +373,13 @@ export default function BillingPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>收据</DialogTitle>
-            <DialogDescription>{receipt ? `收据号 ${receipt.receiptNo}` : '该账单暂无收据'}</DialogDescription>
+            <DialogDescription>
+              {receipt
+                ? `收据号 ${receipt.receiptNo}`
+                : receiptsQuery.loading
+                  ? '收据加载中…'
+                  : '该账单暂无收据'}
+            </DialogDescription>
           </DialogHeader>
           {receiptInvoice && (
             <div className="space-y-2 text-sm">

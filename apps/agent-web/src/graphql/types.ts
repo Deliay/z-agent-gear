@@ -696,6 +696,10 @@ export interface GetMyBillingReceiptsQuery {
   myBillingReceipts: MyBillingReceiptData[]
 }
 
+export interface GetMyBillingReceiptQuery {
+  myBillingReceipt: MyBillingReceiptData | null
+}
+
 export interface GetMyBillingRollupsQuery {
   myBillingRollups: MyBillingRollupData[]
 }

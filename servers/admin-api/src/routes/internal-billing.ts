@@ -94,7 +94,11 @@ export function createInternalBillingRouter(): Router {
     }
     const page = Math.max(1, Number(req.query.page ?? 1) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
-    const docs = await BillingReceipt.find({ accountId })
+    const filter: Record<string, unknown> = { accountId };
+    if (typeof req.query.invoiceId === 'string' && req.query.invoiceId) {
+      filter.invoiceId = req.query.invoiceId;
+    }
+    const docs = await BillingReceipt.find(filter)
       .sort({ issuedAt: -1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)

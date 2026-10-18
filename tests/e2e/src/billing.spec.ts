@@ -52,8 +52,10 @@ test.describe('Frontend Billing E2E', () => {
     await page.getByPlaceholder('Key 名称').fill(`e2e-key-${Date.now()}`);
     await page.getByRole('button', { name: '生成' }).click();
     await expect(page.getByText('完整 Key 仅显示一次，请立即保存：')).toBeVisible();
+    await expect(page.locator('code')).toHaveText(/^zag_sk_/);
     await page.getByRole('button', { name: '我已保存' }).click();
     await expect(page.getByText('完整 Key 仅显示一次，请立即保存：')).toHaveCount(0);
+    await expect(page.locator('code')).toHaveCount(0);
 
     // 吊销需二次确认
     await page.getByRole('button', { name: '吊销' }).first().click();

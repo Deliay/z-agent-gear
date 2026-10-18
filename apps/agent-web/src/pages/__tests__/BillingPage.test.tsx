@@ -7,7 +7,7 @@ import {
   MY_BILLING_API_CALLS,
   MY_BILLING_API_KEYS,
   MY_BILLING_INVOICES,
-  MY_BILLING_RECEIPTS,
+  MY_BILLING_RECEIPT,
 } from '@/graphql/queries';
 import { CREATE_MY_BILLING_API_KEY, REVOKE_MY_BILLING_API_KEY } from '@/graphql/mutations';
 
@@ -39,39 +39,86 @@ function mocks() {
       request: { query: MY_BILLING_INVOICES, variables: { page: 1, pageSize: 20 } },
       result: {
         data: {
+          myBillingInvoices: Array.from({ length: 20 }, (_, index) => ({
+            __typename: 'BillingInvoice',
+            id: index === 0 ? 'i1' : `i1-${index}`,
+            accountId: 'a1',
+            seq: index,
+            type: 'charge',
+            category: 'container',
+            amount: -1,
+            balanceAfter: -3,
+            refType: 'container',
+            refId: `c${index}`,
+            description: index === 0 ? '容器周期结算' : `容器周期结算 ${index}`,
+            items: [
+              {
+                __typename: 'InvoiceItem',
+                productId: 'container.minute',
+                quantity: 1,
+                unitPrice: 1,
+                amount: 1,
+                meteringRef: null,
+                segment: null,
+              },
+            ],
+            receiptId: null,
+            createdAt: '2026-10-18T00:00:00.000Z',
+          })),
+        },
+      },
+    },
+    {
+      request: { query: MY_BILLING_INVOICES, variables: { page: 2, pageSize: 20 } },
+      result: {
+        data: {
           myBillingInvoices: [
             {
               __typename: 'BillingInvoice',
-              id: 'i1',
+              id: 'i2',
               accountId: 'a1',
-              seq: 0,
+              seq: 21,
               type: 'charge',
-              category: 'container',
-              amount: -1,
-              balanceAfter: -3,
-              refType: 'container',
-              refId: 'c1',
-              description: '容器周期结算',
+              category: 'model',
+              amount: -2,
+              balanceAfter: -5,
+              refType: 'model_call',
+              refId: 'r2',
+              description: '模型调用 m1',
               items: [
                 {
                   __typename: 'InvoiceItem',
-                  productId: 'container.minute',
-                  quantity: 1,
+                  productId: 'model.m1.output',
+                  quantity: 2,
                   unitPrice: 1,
-                  amount: 1,
+                  amount: 2,
                   meteringRef: null,
+                  segment: 'output',
                 },
               ],
               receiptId: null,
-              createdAt: '2026-10-18T00:00:00.000Z',
+              createdAt: '2026-10-17T00:00:00.000Z',
             },
           ],
         },
       },
     },
     {
-      request: { query: MY_BILLING_RECEIPTS, variables: { page: 1, pageSize: 20 } },
-      result: { data: { myBillingReceipts: [] } },
+      request: { query: MY_BILLING_RECEIPT, variables: { invoiceId: 'i2' } },
+      result: {
+        data: {
+          myBillingReceipt: {
+            __typename: 'BillingReceipt',
+            id: 'r2',
+            receiptNo: 'R-0002',
+            invoiceId: 'i2',
+            accountId: 'a1',
+            amount: -2,
+            balanceAfter: -5,
+            issuedAt: '2026-10-17T00:00:01.000Z',
+          },
+        },
+      },
     },
     {
       request: { query: MY_BILLING_API_CALLS, variables: { page: 1, pageSize: 20 } },
@@ -176,6 +223,19 @@ describe('前台我的费用', () => {
     expect(await screen.findByText('中断调用')).toBeDefined();
     // 分页控件
     expect(screen.getAllByText(/第 1 页/).length).toBeGreaterThan(0);
+  });
+
+  it('T-AW10: 账单翻页后查看收据仍显示正确收据号（不误报无收据）', async () => {
+    renderPage();
+    await screen.findByText('容器周期结算');
+
+    // 账单卡片是页面上第一个分页控件
+    fireEvent.click(screen.getAllByRole('button', { name: '下一页' })[0]);
+    expect(await screen.findByText('模型调用 m1')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: '查看' }));
+    expect(await screen.findByText('收据号 R-0002')).toBeDefined();
+    expect(screen.queryByText('该账单暂无收据')).toBeNull();
   });
 
   it('T-AW9: 生成 Key 一次性展示、吊销二次确认', async () => {

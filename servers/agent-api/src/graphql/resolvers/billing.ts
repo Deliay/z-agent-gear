@@ -48,6 +48,14 @@ export const billingResolvers = {
       const account = await myAccount(context);
       return billingClient.listReceipts(account.id, args);
     },
+    myBillingReceipt: async (
+      _parent: unknown,
+      args: { invoiceId: string },
+      context: AuthContext,
+    ) => {
+      const account = await myAccount(context);
+      return billingClient.getReceiptByInvoice(account.id, args.invoiceId);
+    },
     myBillingRollups: async (
       _parent: unknown,
       args: { granularity: 'minute' | 'hour' | 'day'; from: string; to: string },

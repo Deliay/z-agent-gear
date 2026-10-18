@@ -190,6 +190,20 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       Number(body.max_tokens ?? config.modelDefaultMaxOutputTokens) ||
         config.modelDefaultMaxOutputTokens,
     );
+    // PRD §3.5：账户被冻结时拒绝新的模型调用（不区分是否计费模型）。
+    // 未开启计费的模型不参与余额预检，但冻结闸门同样适用（余额检查仍仅对 billable 执行）。
+    if (!billable) {
+      const statusCheck = await creditCheckService.check({
+        accountId: billing.accountId,
+        estimatedCredits: 0,
+        policy: 'reject-on-insufficient',
+        ref: { type: 'model_call', id: requestId },
+      });
+      if (!statusCheck.allowed && statusCheck.reason === 'ACCOUNT_FROZEN') {
+        toApiError(res, 402, 'account_frozen', 'account_frozen', '账户已冻结，请联系管理员处理');
+        return;
+      }
+    }
     if (billable) {
       const estimate = Math.max(1, estimateCost(pricing, promptTokens, maxOutputTokens));
       const check = await creditCheckService.check({

@@ -82,6 +82,7 @@ type InvoiceItem {
   unitPrice: Float! # 计价时点单价快照（credits / 单位，已换算展示单位）
   amount: Float!
   meteringRef: ID # 回溯计量事实
+  segment: String # input | cached_input | output（中断调用带 :aborted 后缀）
 }
 
 type BillingReceipt {

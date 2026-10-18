@@ -503,6 +503,20 @@ export const MY_BILLING_RECEIPTS = gql`
   }
 `
 
+export const MY_BILLING_RECEIPT = gql`
+  query MyBillingReceipt($invoiceId: ID!) {
+    myBillingReceipt(invoiceId: $invoiceId) {
+      id
+      receiptNo
+      invoiceId
+      accountId
+      amount
+      balanceAfter
+      issuedAt
+    }
+  }
+`
+
 export const MY_BILLING_ROLLUPS = gql`
   query MyBillingRollups($granularity: BillingRollupGranularity!, $from: String!, $to: String!) {
     myBillingRollups(granularity: $granularity, from: $from, to: $to) {

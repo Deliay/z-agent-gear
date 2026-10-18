@@ -178,6 +178,14 @@ export class BillingClient {
     );
   }
 
+  /** 按账单直查收据：避免前端依赖收据列表分页而误报「无收据」。 */
+  async getReceiptByInvoice(accountId: string, invoiceId: string): Promise<BillingReceiptWire | null> {
+    const list = await this.request<BillingReceiptWire[]>(
+      `/internal/billing/receipts?${this.params({ accountId, invoiceId, pageSize: 1 })}`,
+    );
+    return list[0] ?? null;
+  }
+
   async listRollups(
     accountId: string,
     granularity: 'minute' | 'hour' | 'day',

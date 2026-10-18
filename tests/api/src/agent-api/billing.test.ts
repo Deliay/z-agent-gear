@@ -39,6 +39,10 @@ const MY_CALLS = `
   query { myBillingApiCalls(page: 1, pageSize: 5) { id requestId status estimated cost } }
 `;
 
+const MY_RECEIPT = `
+  query Receipt($invoiceId: ID!) { myBillingReceipt(invoiceId: $invoiceId) { id receiptNo invoiceId } }
+`;
+
 const CREATE_KEY = `
   mutation CreateMyBillingApiKey($name: String!) {
     createMyBillingApiKey(name: $name) { apiKey { id keyPrefix status } secret }
@@ -71,6 +75,13 @@ const REVOKE_KEY = `
 
     const calls = await gqlRequest(MY_CALLS, undefined, token).then((res) => res.json());
     expect(calls.errors).toBeUndefined();
+
+    // 收据按 invoiceId 直查（弹窗不再依赖列表分页）：无对应收据时返回 null 而非报错
+    const receipt = await gqlRequest(MY_RECEIPT, { invoiceId: '000000000000000000000000' }, token).then(
+      (res) => res.json(),
+    );
+    expect(receipt.errors).toBeUndefined();
+    expect(receipt.data.myBillingReceipt).toBeNull();
 
     const keys = await gqlRequest(MY_KEYS, undefined, token).then((res) => res.json());
     expect(keys.data.myBillingApiKeys.some((key: { id: string }) => key.id === keyId)).toBe(true);
