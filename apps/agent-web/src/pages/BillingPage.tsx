@@ -374,11 +374,13 @@ export default function BillingPage() {
           <DialogHeader>
             <DialogTitle>收据</DialogTitle>
             <DialogDescription>
-              {receipt
-                ? `收据号 ${receipt.receiptNo}`
-                : receiptsQuery.loading
-                  ? '收据加载中…'
-                  : '该账单暂无收据'}
+              {receiptsQuery.error
+                ? '收据加载失败，请稍后重试'
+                : receipt
+                  ? `收据号 ${receipt.receiptNo}`
+                  : receiptsQuery.loading
+                    ? '收据加载中…'
+                    : '该账单暂无收据'}
             </DialogDescription>
           </DialogHeader>
           {receiptInvoice && (

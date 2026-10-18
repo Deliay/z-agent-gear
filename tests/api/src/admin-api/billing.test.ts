@@ -170,4 +170,23 @@ describe('Admin Billing API', () => {
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('invalid_api_key');
   });
+
+  it.skipIf(!process.env.INTERNAL_API_TOKEN)(
+    'T-B25: internal /receipts 非法 invoiceId 不 500（按无匹配收据处理）',
+    async () => {
+      const accounts = await adminGql<{ adminBillingAccounts: Array<{ id: string }> }>(
+        ACCOUNTS,
+        { keyword: null },
+        token,
+      );
+      const accountId = accounts.data!.adminBillingAccounts[0]!.id;
+
+      const res = await fetch(
+        `${ADMIN_HTTP}/internal/billing/receipts?accountId=${accountId}&invoiceId=not-an-oid`,
+        { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual([]);
+    },
+  );
 });

@@ -83,6 +83,13 @@ const REVOKE_KEY = `
     expect(receipt.errors).toBeUndefined();
     expect(receipt.data.myBillingReceipt).toBeNull();
 
+    // 非法 invoiceId 不得抛 INTERNAL_SERVER_ERROR（内部接口按「无匹配收据」处理）
+    const invalidReceipt = await gqlRequest(MY_RECEIPT, { invoiceId: 'junk' }, token).then(
+      (res) => res.json(),
+    );
+    expect(invalidReceipt.errors).toBeUndefined();
+    expect(invalidReceipt.data.myBillingReceipt).toBeNull();
+
     const keys = await gqlRequest(MY_KEYS, undefined, token).then((res) => res.json());
     expect(keys.data.myBillingApiKeys.some((key: { id: string }) => key.id === keyId)).toBe(true);
 

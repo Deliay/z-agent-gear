@@ -642,6 +642,17 @@ aspire start
   - `tests/api` 计费四件套含新增 T-B24：**11 passed**（真实 admin-api/agent-api/cloud-controller + 共享 Mongo）。
   - `tests/e2e/src/admin-billing.spec.ts` **2 passed**、`tests/e2e/src/billing.spec.ts` **1 passed**（含恢复后的 secret 断言），跑在 Aspire 托管的真实 admin-web/agent-web。
 
+## 实现记录（2026-10-19，返工 v1.4）
+
+- **返工修复（代码审核第四轮打回项）**:
+  1. **中-1 internal /receipts invoiceId 校验（防 500 与堆栈泄露）**：`GET /internal/billing/receipts` 对 `invoiceId` 沿用 `mongoose.isValidObjectId` 守卫；非法值按「无匹配收据」返回 `200 []`（避免 mongoose CastError 500 与堆栈外泄），合法但不存在的仍返回 `[]`。前台 `myBillingReceipt(invoiceId:"junk")` 因此返回 `null` 而非 `INTERNAL_SERVER_ERROR`。新增断言：`tests/api` T-B25（非法 invoiceId 200+[]）与 agent 套件非法 invoiceId 返回 null/无 errors。
+  2. **低-2 收据弹窗错误态**：agent-web 收据弹窗区分 `receiptsQuery.error`，失败时显示「收据加载失败，请稍后重试」而非误报「该账单暂无收据」；新增组件测试 T-AW11（mock error → 不出现「该账单暂无收据」）。
+  3. **低-3 wire 类型补 segment**：`servers/agent-api/src/services/billing-client.ts` 的 `BillingInvoiceWire.items` 补 `segment?: string | null`，与契约/两侧 schema/前端查询一致。
+- **真实验证（本机 Aspire 全栈重启加载本轮代码）**:
+  - `servers/admin-api` build + **465 passed / 1 skipped**；`servers/agent-api` build + **653 passed**；`apps/agent-web` build + 组件测试 **4 passed**。
+  - `tests/api` 计费四件套（含新增 T-B25、T-B24）：**12 passed**（真实 admin-api/agent-api/cloud-controller + 共享 Mongo）。
+  - `tests/e2e/src/admin-billing.spec.ts` **2 passed**、`tests/e2e/src/billing.spec.ts` **1 passed**（Aspire 托管真实前后端）。
+
 ## 风险与回滚
 
 | 风险 | 缓解 |

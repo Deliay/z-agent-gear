@@ -35,6 +35,7 @@ export interface BillingInvoiceWire {
     unitPrice: number;
     amount: number;
     meteringRef: string | null;
+    segment?: string | null;
   }>;
   receiptId: string | null;
   createdAt: string;

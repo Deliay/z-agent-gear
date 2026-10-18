@@ -96,6 +96,11 @@ export function createInternalBillingRouter(): Router {
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
     const filter: Record<string, unknown> = { accountId };
     if (typeof req.query.invoiceId === 'string' && req.query.invoiceId) {
+      // 非法 ObjectId 视为「无匹配收据」而非抛 CastError（保持对外 200 + []，避免 500/堆栈泄露）
+      if (!mongoose.isValidObjectId(req.query.invoiceId)) {
+        res.json([]);
+        return;
+      }
       filter.invoiceId = req.query.invoiceId;
     }
     const docs = await BillingReceipt.find(filter)

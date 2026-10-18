@@ -29,7 +29,7 @@ const account = {
   updatedAt: '2026-10-01T00:00:00.000Z',
 };
 
-function mocks() {
+function mocks(options: { receiptError?: boolean } = {}) {
   return [
     {
       request: { query: MY_BILLING_ACCOUNT },
@@ -105,20 +105,24 @@ function mocks() {
     },
     {
       request: { query: MY_BILLING_RECEIPT, variables: { invoiceId: 'i2' } },
-      result: {
-        data: {
-          myBillingReceipt: {
-            __typename: 'BillingReceipt',
-            id: 'r2',
-            receiptNo: 'R-0002',
-            invoiceId: 'i2',
-            accountId: 'a1',
-            amount: -2,
-            balanceAfter: -5,
-            issuedAt: '2026-10-17T00:00:01.000Z',
-          },
-        },
-      },
+      ...(options.receiptError
+        ? { error: new Error('receipt query failed') }
+        : {
+            result: {
+              data: {
+                myBillingReceipt: {
+                  __typename: 'BillingReceipt',
+                  id: 'r2',
+                  receiptNo: 'R-0002',
+                  invoiceId: 'i2',
+                  accountId: 'a1',
+                  amount: -2,
+                  balanceAfter: -5,
+                  issuedAt: '2026-10-17T00:00:01.000Z',
+                },
+              },
+            },
+          }),
     },
     {
       request: { query: MY_BILLING_API_CALLS, variables: { page: 1, pageSize: 20 } },
@@ -203,9 +207,9 @@ function mocks() {
   ];
 }
 
-function renderPage() {
+function renderPage(options: { receiptError?: boolean } = {}) {
   return render(
-    <MockedProvider mocks={mocks()}>
+    <MockedProvider mocks={mocks(options)}>
       <BillingPage />
     </MockedProvider>,
   );
@@ -235,6 +239,17 @@ describe('前台我的费用', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '查看' }));
     expect(await screen.findByText('收据号 R-0002')).toBeDefined();
+    expect(screen.queryByText('该账单暂无收据')).toBeNull();
+  });
+
+  it('T-AW11: 收据查询失败展示错误态而非误报「暂无收据」', async () => {
+    renderPage({ receiptError: true });
+    await screen.findByText('容器周期结算');
+    fireEvent.click(screen.getAllByRole('button', { name: '下一页' })[0]);
+    expect(await screen.findByText('模型调用 m1')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: '查看' }));
+    expect(await screen.findByText('收据加载失败，请稍后重试')).toBeDefined();
     expect(screen.queryByText('该账单暂无收据')).toBeNull();
   });
 
