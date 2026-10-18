@@ -120,6 +120,7 @@ flowchart LR
 - [[draft/20261014-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
 - [[draft/20261017-cloud-controller-workload.md]] — 云控制器工作负载功能
 - [[draft/20261018-workload-phase1.md]] — 工作负载一期（参数、依赖与预制工作负载）
+- [[draft/20261018-workload-phase3.md]] — 工作负载三期（必须工作负载硬失败与 .NET 安装优化）
 - [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
 
 ### 已发布文档（`released/`）
