@@ -65,14 +65,38 @@ describe('CreditCheckService（统一预扣费检查）', () => {
     expect(denied.allowed).toBe(false);
 
     const frozen = serviceWithAccount({ cashBalance: 10_000, status: 'frozen' });
-    const result = await frozen.check({
+    const rejected = await frozen.check({
+      accountId: 'acct-1',
+      estimatedCredits: 1,
+      policy: 'reject-on-insufficient',
+      ref: { type: 'model_call', id: 'm' },
+    });
+    expect(rejected.allowed).toBe(false);
+    expect(rejected.reason).toBe('ACCOUNT_FROZEN');
+
+    // accrue-and-track：冻结账户继续记账，但仍返回可用凭证（否则周期结算会进 DLQ）
+    const accrued = await frozen.check({
       accountId: 'acct-1',
       estimatedCredits: 1,
       policy: 'accrue-and-track',
       ref: { type: 'container_reservation', id: 'c1' },
     });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toBe('ACCOUNT_FROZEN');
+    expect(accrued.allowed).toBe(true);
+    expect(accrued.insufficient).toBe(true);
+    expect(accrued.preCheck).toBeDefined();
+
+    const missing = new CreditCheckService({
+      findAccount: async () => null,
+      now: () => 1_000_000,
+    });
+    const missingAccrued = await missing.check({
+      accountId: 'ghost',
+      estimatedCredits: 1,
+      policy: 'accrue-and-track',
+      ref: { type: 'container_reservation', id: 'c2' },
+    });
+    expect(missingAccrued.allowed).toBe(true);
+    expect(missingAccrued.preCheck).toBeDefined();
   });
 
   it('T-B5: accrue-and-track 永远放行但回传 insufficient', async () => {
@@ -106,5 +130,6 @@ describe('CreditCheckService（统一预扣费检查）', () => {
       }),
     ).toThrow(/ref mismatch/);
     expect(() => account.verify('missing', { accountId: 'acct-1' })).toThrow(/required/);
+    expect(account.size()).toBeGreaterThan(0);
   });
 });

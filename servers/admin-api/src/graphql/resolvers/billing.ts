@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { BillingAccount } from '../../models/billing-account.js';
+import { BillingDeadLetter } from '../../models/billing-dead-letter.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingReceipt } from '../../models/billing-receipt.js';
@@ -18,6 +19,7 @@ import {
   toBillingRollup,
 } from '../../services/billing/mappers.js';
 import { creditsToCents } from '../../services/billing/money.js';
+import { documentId } from '../../services/billing/id.js';
 import { reservationService } from '../../services/billing/reservation.js';
 import { rollupService, type RollupGranularity } from '../../services/billing/rollup-service.js';
 import { assertAdmin } from './guard.js';
@@ -163,6 +165,24 @@ export const billingResolvers = {
       assertAdmin(context);
       const keys = await apiKeyService.list('admin_user', context.currentAdmin!.id);
       return keys.map(toApiKeyWire);
+    },
+    adminBillingDeadLetters: async (
+      _parent: unknown,
+      args: { limit?: number },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      const limit = Math.min(200, Math.max(1, args.limit ?? 100));
+      const docs = await BillingDeadLetter.find().sort({ createdAt: -1 }).limit(limit).lean();
+      return docs.map((doc) => ({
+        id: documentId(doc),
+        queue: doc.queue,
+        routingKey: doc.routingKey,
+        eventId: doc.eventId ?? null,
+        error: doc.error ?? '',
+        attempts: doc.attempts ?? 0,
+        createdAt: new Date(doc.createdAt as Date).toISOString(),
+      }));
     },
   },
   Mutation: {

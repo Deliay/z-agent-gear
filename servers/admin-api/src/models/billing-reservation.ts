@@ -11,7 +11,7 @@ export const RESERVATION_STATUSES = [
 const billingReservationSchema = new mongoose.Schema(
   {
     accountId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
-    resourceId: { type: String, required: true, index: true },
+    resourceId: { type: String, required: true },
     resourceType: { type: String, enum: ['container'], default: 'container' },
     productId: { type: String, default: 'container.minute' },
     status: { type: String, enum: RESERVATION_STATUSES, default: 'PENDING', index: true },
@@ -24,13 +24,17 @@ const billingReservationSchema = new mongoose.Schema(
     releasedTotal: { type: Number, default: 0 },
     /** 已结算到的窗口起点。 */
     lastSettleAt: { type: Date, required: true },
-    lastCycleSeq: { type: Number, default: 0 },
+    /** 已结算的最后一个周期序号；初始 -1 表示首期（seq 0）尚未结算。 */
+    lastCycleSeq: { type: Number, default: -1 },
     startedAt: { type: Date, required: true },
     expectedEndAt: { type: Date, default: null },
     version: { type: Number, default: 0 },
   },
   { collection: 'billingreservations', timestamps: true },
 );
+
+// 一个资源最多一条预留（容器 ID 全局唯一）：并发 start 由唯一索引兜底，避免双冻双结算
+billingReservationSchema.index({ resourceId: 1 }, { unique: true });
 
 export const BillingReservation = mongoose.model('BillingReservation', billingReservationSchema);
 export type IBillingReservation = mongoose.InferSchemaType<typeof billingReservationSchema>;

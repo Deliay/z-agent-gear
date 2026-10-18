@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
 export const BILLING_LEDGER_POOLS = ['cash', 'gift', 'credit'] as const;
+export const BILLING_LEDGER_ALLOCATION_POOLS = ['cash', 'gift', 'credit'] as const;
 export const BILLING_LEDGER_BIZ_TYPES = [
   'recharge',
   'charge',
@@ -18,6 +19,19 @@ const billingLedgerSchema = new mongoose.Schema(
     bizType: { type: String, enum: BILLING_LEDGER_BIZ_TYPES, required: true },
     deltaBalance: { type: Number, default: 0 },
     deltaFrozen: { type: Number, default: 0 },
+    // 拆池明细（现金/赠送/授信）；deltaBalance 为各池合计，保证对账口径一致
+    allocations: {
+      type: [
+        new mongoose.Schema(
+          {
+            pool: { type: String, enum: BILLING_LEDGER_POOLS, required: true },
+            amount: { type: Number, required: true },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
     bizId: { type: String, default: null },
     idempotentKey: { type: String, required: true, unique: true },
     createdAt: { type: Date, default: Date.now },

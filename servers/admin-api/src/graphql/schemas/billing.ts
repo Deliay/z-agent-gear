@@ -123,6 +123,16 @@ export const billingTypeDefs = `#graphql
     errors: [JSON!]!
   }
 
+  type BillingDeadLetter {
+    id: ID!
+    queue: String!
+    routingKey: String!
+    eventId: String
+    error: String
+    attempts: Int!
+    createdAt: String!
+  }
+
   extend type Query {
     adminBillingAccounts(
       keyword: String
@@ -150,6 +160,7 @@ export const billingTypeDefs = `#graphql
     adminBillingReservations(accountId: ID, status: ReservationStatus): [BillingReservation!]!
     adminReconciliationReports(line: String): [ReconciliationReport!]!
     adminBillingApiKeys: [BillingApiKey!]!
+    adminBillingDeadLetters(limit: Int): [BillingDeadLetter!]!
   }
 
   extend type Mutation {

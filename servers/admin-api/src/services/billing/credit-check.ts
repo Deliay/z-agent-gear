@@ -82,28 +82,55 @@ export class CreditCheckService {
 
   async check(input: CreditCheckInput): Promise<CreditCheckResult> {
     const account = await this.findAccount(input.accountId);
+    const now = this.now();
+    const makePreCheck = (available: number, insufficient: boolean): PreCheck => {
+      const preCheck: PreCheck = {
+        checkId: crypto.randomUUID(),
+        accountId: input.accountId,
+        estimated: input.estimatedCredits,
+        ref: input.ref,
+        createdAt: now,
+        expiresAt: now + this.ttlMs,
+        policy: input.policy,
+        insufficient,
+      };
+      this.checks.set(preCheck.checkId, preCheck);
+      this.prune(now);
+      return preCheck;
+    };
+
     if (!account) {
+      // accrue-and-track 是「持续记账」策略：账户缺失/冻结也要给出凭证，
+      // 由 payment 记录欠费（否则周期结算/尾结/模型出账全部进 DLQ）。
+      if (input.policy === 'accrue-and-track') {
+        const preCheck = makePreCheck(0, true);
+        return {
+          allowed: true,
+          reason: 'NOT_FOUND',
+          available: 0,
+          insufficient: true,
+          preCheck,
+        };
+      }
       return { allowed: false, reason: 'NOT_FOUND', available: 0, insufficient: true };
     }
     const available = availableCents(account);
+    const insufficient = available - input.estimatedCredits < 0;
     if (account.status === 'frozen') {
+      if (input.policy === 'accrue-and-track') {
+        const preCheck = makePreCheck(available, true);
+        return {
+          allowed: true,
+          reason: 'ACCOUNT_FROZEN',
+          available,
+          insufficient: true,
+          preCheck,
+        };
+      }
       return { allowed: false, reason: 'ACCOUNT_FROZEN', available, insufficient: true };
     }
-    const insufficient = available - input.estimatedCredits < 0;
     const allowed = input.policy === 'accrue-and-track' ? true : !insufficient;
-    const now = this.now();
-    const preCheck: PreCheck = {
-      checkId: crypto.randomUUID(),
-      accountId: input.accountId,
-      estimated: input.estimatedCredits,
-      ref: input.ref,
-      createdAt: now,
-      expiresAt: now + this.ttlMs,
-      policy: input.policy,
-      insufficient,
-    };
-    this.checks.set(preCheck.checkId, preCheck);
-    this.prune(now);
+    const preCheck = makePreCheck(available, insufficient);
     return {
       allowed,
       available,

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
 import { BillingAccount } from '../../models/billing-account.js';
@@ -6,10 +7,16 @@ import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { MeteringRecord, type IMeteringRecord } from '../../models/metering-record.js';
 import { accountService, type AccountService } from './account-service.js';
-import { creditCheckService, type CreditCheckRef, type CreditCheckService, type PreCheck } from './credit-check.js';
+import {
+  creditCheckService,
+  type CreditCheckRef,
+  type CreditCheckService,
+  type PreCheck,
+} from './credit-check.js';
+import { billingMutex } from './keyed-mutex.js';
 import { InvoicingService, invoicingService } from './invoicing.js';
-import { availableCents, ceilMinutes, parseRechargeCents } from './money.js';
 import { documentId } from './id.js';
+import { availableCents, ceilMinutes, parseRechargeCents } from './money.js';
 import { MeteringService, meteringService } from './metering.js';
 import { PaymentService, paymentService } from './payment.js';
 import { PricingService, pricingService } from './pricing.js';
@@ -42,9 +49,14 @@ export interface BillingServiceOptions {
   destroyContainer?: DestroyContainer;
 }
 
+/** 由业务键派生确定性 ObjectId：重放/并发写入同一账单，唯一索引兜底。 */
+export function deterministicObjectId(seed: string): string {
+  return crypto.createHash('md5').update(seed).digest('hex').slice(0, 24);
+}
+
 /**
  * 计费管线编排（事件 → 计量 → 定价 → 账单 → 支付 → 收据）。
- * 业务事件由 MQ 消费者驱动，所有资金动作经 CreditCheckService + PaymentService。
+ * 所有 reservation 级入口经 billingMutex 串行；资金/账单均带幂等键，可重入。
  */
 export class BillingService {
   private readonly accounts: AccountService;
@@ -71,47 +83,47 @@ export class BillingService {
     this.destroyContainer = options.destroyContainer;
   }
 
-  /** 容器就绪：统一预扣费检查 → 建预留（保证金+首期）→ 由消费者发布首期结算消息。 */
+  /** 容器就绪：统一预扣费检查 → 建预留（保证金+首期）。 */
   async handleContainerReady(event: {
     accountId: string;
     resourceId: string;
     occurredAt: Date;
   }): Promise<{ reservationId: string; insufficient: boolean; nextCycleSeq: number }> {
-    const account = await this.accounts.getById(event.accountId);
-    if (!account) throw new Error(`billing account not found: ${event.accountId}`);
+    return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
+      const account = await this.accounts.getById(event.accountId);
+      if (!account) throw new Error(`billing account not found: ${event.accountId}`);
 
-    const depositCents = config.containerDepositCredits * 100;
-    const cycleEstimateCents = Math.max(
-      1,
-      Math.ceil(config.billingCycleSeconds / 60) * 100,
-    );
-    const check = await this.checks.check({
-      accountId: event.accountId,
-      estimatedCredits: depositCents + cycleEstimateCents,
-      policy: 'accrue-and-track',
-      ref: { type: 'container_reservation', id: event.resourceId },
+      const depositCents = config.containerDepositCredits * 100;
+      const cycleEstimateCents = Math.max(1, Math.ceil(config.billingCycleSeconds / 60) * 100);
+      const check = await this.checks.check({
+        accountId: event.accountId,
+        estimatedCredits: depositCents + cycleEstimateCents,
+        policy: 'accrue-and-track',
+        // 与 ReservationService.start / payment.freeze 使用同一 ref（resourceId），避免凭证 ref 不匹配
+        ref: { type: 'container_reservation', id: event.resourceId },
+      });
+
+      const reservation = await this.reservations.start({
+        accountId: event.accountId,
+        resourceId: event.resourceId,
+        startedAt: event.occurredAt,
+        depositCents: check.insufficient ? 0 : depositCents,
+        cycleEstimateCents: check.insufficient ? 0 : cycleEstimateCents,
+        preCheck: check.preCheck!,
+      });
+
+      if (check.insufficient) {
+        await this.accounts.markInsufficient(event.accountId, new Date(this.now()));
+      }
+      return {
+        reservationId: documentId(reservation),
+        insufficient: check.insufficient,
+        nextCycleSeq: 0,
+      };
     });
-
-    const reservation = await this.reservations.start({
-      accountId: event.accountId,
-      resourceId: event.resourceId,
-      startedAt: event.occurredAt,
-      depositCents: check.insufficient ? 0 : depositCents,
-      cycleEstimateCents: check.insufficient ? 0 : cycleEstimateCents,
-      preCheck: check.preCheck!,
-    });
-
-    if (check.insufficient) {
-      await this.accounts.markInsufficient(event.accountId, new Date(this.now()));
-    }
-    return {
-      reservationId: documentId(reservation),
-      insufficient: check.insufficient,
-      nextCycleSeq: 0,
-    };
   }
 
-  /** 容器销毁：最终结算尾部分钟 + 释放冻结。 */
+  /** 容器销毁：最终结算尾部分钟 + 释放冻结（幂等，可并发安全）。 */
   async handleContainerDestroyed(event: {
     accountId: string;
     resourceId: string;
@@ -120,96 +132,130 @@ export class BillingService {
   }): Promise<InvoiceResult | null> {
     const reservation = await this.reservations.findByResource(event.resourceId);
     if (!reservation) {
-      // 兜底（预留丢失/存量事件）：按事件时长直接出账，保证不漏计。
-      return this.billLegacyContainer(event);
+      return billingMutex.runExclusive(`container:${event.resourceId}`, () =>
+        this.billLegacyContainer(event),
+      );
     }
-
     const reservationId = documentId(reservation);
-    const result = await this.reservations.finalSettle(reservationId, event.occurredAt);
-    if (result.minutes <= 0 || result.amount <= 0) return null;
+    return billingMutex.runExclusive(`reservation:${reservationId}`, async () => {
+      const result = await this.reservations.finalSettle(reservationId, event.occurredAt);
+      if (result.minutes <= 0 || result.amount <= 0) return null;
 
-    const priced = await this.prices.priceContainer(result.minutes, result.windowFrom);
-    const metering = await this.ensureMetering({
-      eventId: `container:${reservationId}:final`,
-      accountId: event.accountId,
-      resourceType: 'container',
-      resourceId: event.resourceId,
-      productId: 'container.minute',
-      quantity: result.minutes,
-      dims: { minutes: result.minutes, final: true },
-      windowFrom: result.windowFrom,
-      windowTo: event.occurredAt,
-    });
+      const priced = await this.prices.priceContainer(result.minutes, result.windowFrom);
+      const metering = await this.ensureMetering({
+        eventId: `container:${reservationId}:final`,
+        accountId: event.accountId,
+        resourceType: 'container',
+        resourceId: event.resourceId,
+        productId: 'container.minute',
+        quantity: result.minutes,
+        dims: { minutes: result.minutes, final: true },
+        windowFrom: result.windowFrom,
+        windowTo: event.occurredAt,
+      });
 
-    return this.invoiceExistingCharge({
-      accountId: event.accountId,
-      amount: result.amount,
-      balanceAfter: result.cashBalance,
-      category: 'container',
-      refType: 'container',
-      refId: event.resourceId,
-      description: `容器最终结算 ${result.minutes} 分钟`,
-      items: priced.items.map((item) => ({ ...item, meteringRef: documentId(metering) })),
-      periodFrom: result.windowFrom,
-      periodTo: event.occurredAt,
-      meteringIds: [documentId(metering)],
+      return this.invoiceExistingCharge({
+        accountId: event.accountId,
+        amount: result.amount,
+        balanceAfter: result.cashBalance,
+        category: 'container',
+        refType: 'container',
+        refId: event.resourceId,
+        description: `容器最终结算 ${result.minutes} 分钟`,
+        items: priced.items.map((item) => ({ ...item, meteringRef: String(metering._id) })),
+        periodFrom: result.windowFrom,
+        periodTo: event.occurredAt,
+        meteringIds: [String(metering._id)],
+        idempotentKey: `invoice:container-final:${reservationId}`,
+        invoiceId: deterministicObjectId(`invoice:container-final:${reservationId}`),
+      });
     });
   }
 
-  /** 周期结算：本周期已由 ReservationService 解冻/扣费，这里补计量事实 + 账单 + 收据 + 换冻下期。 */
+  /** 周期结算：补计量事实 + 账单 + 收据 + 换冻下期（账单幂等键保证重放不重复开票）。 */
   async handleSettlementCycle(
     reservationId: string,
     cycleSeq: number,
-  ): Promise<{ settled: boolean; nextCycleSeq: number; shouldDestroy: boolean; invoice: InvoiceResult | null }> {
-    const settlement = await this.reservations.settleCycle(reservationId, cycleSeq);
-    if (!settlement.settled) {
-      return { settled: false, nextCycleSeq: cycleSeq + 1, shouldDestroy: false, invoice: null };
-    }
-    const reservation = await this.reservations.findById(reservationId);
-    if (!reservation) throw new Error('预留不存在');
-    const accountId = String(reservation.accountId);
+  ): Promise<{
+    settled: boolean;
+    nextCycleSeq: number;
+    shouldDestroy: boolean;
+    invoice: InvoiceResult | null;
+  }> {
+    const outcome = await billingMutex.runExclusive(`reservation:${reservationId}`, async () => {
+      const settlement = await this.reservations.settleCycle(reservationId, cycleSeq);
+      if (!settlement.settled) {
+        return {
+          settled: false,
+          nextCycleSeq: cycleSeq + 1,
+          shouldDestroy: false,
+          invoice: null,
+          accountId: null as string | null,
+        };
+      }
+      const reservation = await this.reservations.findById(reservationId);
+      if (!reservation) throw new Error('预留不存在');
+      const accountId = String(reservation.accountId);
 
-    const priced = await this.prices.priceContainer(settlement.minutes, settlement.windowFrom);
-    const metering = await this.ensureMetering({
-      eventId: `container:${reservationId}:cycle:${cycleSeq}`,
-      accountId,
-      resourceType: 'container',
-      resourceId: reservation.resourceId,
-      productId: 'container.minute',
-      quantity: settlement.minutes,
-      dims: { minutes: settlement.minutes, cycleSeq },
-      windowFrom: settlement.windowFrom,
-      windowTo: settlement.windowTo,
+      const priced = await this.prices.priceContainer(settlement.minutes, settlement.windowFrom);
+      const metering = await this.ensureMetering({
+        eventId: `container:${reservationId}:cycle:${cycleSeq}`,
+        accountId,
+        resourceType: 'container',
+        resourceId: reservation.resourceId,
+        productId: 'container.minute',
+        quantity: settlement.minutes,
+        dims: { minutes: settlement.minutes, cycleSeq },
+        windowFrom: settlement.windowFrom,
+        windowTo: settlement.windowTo,
+      });
+      const invoice =
+        settlement.amount > 0
+          ? await this.invoiceExistingCharge({
+              accountId,
+              amount: settlement.amount,
+              balanceAfter: settlement.cashBalance,
+              category: 'container',
+              refType: 'container',
+              refId: reservation.resourceId,
+              description: `容器周期结算（第 ${cycleSeq + 1} 期，${settlement.minutes} 分钟）`,
+              items: priced.items.map((item) => ({ ...item, meteringRef: String(metering._id) })),
+              periodFrom: settlement.windowFrom,
+              periodTo: settlement.windowTo,
+              meteringIds: [String(metering._id)],
+              idempotentKey: `invoice:container-cycle:${reservationId}:${cycleSeq}`,
+              invoiceId: deterministicObjectId(
+                `invoice:container-cycle:${reservationId}:${cycleSeq}`,
+              ),
+            })
+          : null;
+
+      await this.reservations.prepareNextCycle(reservationId, cycleSeq + 1);
+
+      const account = await this.accounts.getById(accountId);
+      const insufficientSince = account?.insufficientSince;
+      const shouldDestroy =
+        !!insufficientSince &&
+        this.now() - new Date(insufficientSince).getTime() >= config.billingArrearsGraceMs;
+      return {
+        settled: true,
+        nextCycleSeq: cycleSeq + 1,
+        shouldDestroy,
+        invoice,
+        accountId,
+      };
     });
-    const invoice =
-      settlement.amount > 0
-        ? await this.invoiceExistingCharge({
-            accountId,
-            amount: settlement.amount,
-            balanceAfter: settlement.cashBalance,
-            category: 'container',
-            refType: 'container',
-            refId: reservation.resourceId,
-            description: `容器周期结算（第 ${cycleSeq + 1} 期，${settlement.minutes} 分钟）`,
-            items: priced.items.map((item) => ({ ...item, meteringRef: documentId(metering) })),
-            periodFrom: settlement.windowFrom,
-            periodTo: settlement.windowTo,
-            meteringIds: [documentId(metering)],
-          })
-        : null;
 
-    await this.reservations.prepareNextCycle(reservationId, cycleSeq + 1);
-
-    // 欠费宽限：连续不足 ≥ 10 分钟 → 强拆该账户全部容器（由调用方执行/本服务回调）。
-    const account = await this.accounts.getById(accountId);
-    const insufficientSince = account?.insufficientSince;
-    const shouldDestroy =
-      !!insufficientSince &&
-      this.now() - new Date(insufficientSince).getTime() >= config.billingArrearsGraceMs;
-    if (shouldDestroy) {
-      await this.forceDestroyAccountContainers(accountId);
+    // 强拆在锁外执行：forceDestroy 内部会对同一预留再次加锁（KeyedMutex 不可重入）
+    if (outcome.shouldDestroy && outcome.accountId) {
+      await this.forceDestroyAccountContainers(outcome.accountId);
     }
-    return { settled: true, nextCycleSeq: cycleSeq + 1, shouldDestroy, invoice };
+    return {
+      settled: outcome.settled,
+      nextCycleSeq: outcome.nextCycleSeq,
+      shouldDestroy: outcome.shouldDestroy,
+      invoice: outcome.invoice,
+    };
   }
 
   /** 强拆账户下全部容器：先最终结算释放冻结，再调用控制面销毁（释放不被余额阻塞）。 */
@@ -234,7 +280,6 @@ export class BillingService {
         }
       }
     }
-    // 计时重置：销毁后从下一个不足周期重新计时
     await BillingAccount.updateOne({ _id: accountId }, { $set: { insufficientSince: null } });
     return destroyed;
   }
@@ -248,63 +293,66 @@ export class BillingService {
     occurredAt: Date;
     payload?: Record<string, unknown>;
   }): Promise<InvoiceResult | null> {
-    const billingEvent = await BillingEvent.findOne({ eventId: event.eventId });
-    if (!billingEvent) throw new Error(`billing event not found: ${event.eventId}`);
-    const metered = await this.meterings.meterEvent(billingEvent);
-    if (!metered || !metered.productId) return null;
+    return billingMutex.runExclusive(`model:${event.resourceId}`, async () => {
+      const billingEvent = await BillingEvent.findOne({ eventId: event.eventId });
+      if (!billingEvent) throw new Error(`billing event not found: ${event.eventId}`);
+      const metered = await this.meterings.meterEvent(billingEvent);
+      if (!metered || !metered.productId) return null;
 
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const modelId = String(payload.modelId ?? '');
-    const dims = (await MeteringRecord.findOne({ eventId: event.eventId }).lean()) as
-      | IMeteringRecord
-      | null;
-    const usage = {
-      inputTokens: Number(dims?.dims?.inputTokens ?? 0),
-      cachedInputTokens: Number(dims?.dims?.cachedInputTokens ?? 0),
-      outputTokens: Number(dims?.dims?.outputTokens ?? 0),
-    };
-    const estimated = dims?.estimated === true;
-    const priced = await this.prices.priceModel(modelId, usage, event.occurredAt);
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      const modelId = String(payload.modelId ?? '');
+      const dims = (await MeteringRecord.findOne({ eventId: event.eventId }).lean()) as
+        | IMeteringRecord
+        | null;
+      const usage = {
+        inputTokens: Number(dims?.dims?.inputTokens ?? 0),
+        cachedInputTokens: Number(dims?.dims?.cachedInputTokens ?? 0),
+        outputTokens: Number(dims?.dims?.outputTokens ?? 0),
+      };
+      const estimated = dims?.estimated === true;
+      const priced = await this.prices.priceModel(modelId, usage, event.occurredAt);
 
-    let invoice: InvoiceResult | null = null;
-    if (priced.amountCents > 0) {
-      const preCheck = await this.checks.check({
-        accountId: event.accountId,
-        estimatedCredits: priced.amountCents,
-        policy: 'accrue-and-track',
-        ref: { type: 'model_call', id: event.resourceId },
-      });
-      invoice = await this.chargeAndInvoice({
-        accountId: event.accountId,
-        amount: priced.amountCents,
-        preCheck: preCheck.preCheck!,
-        ref: { type: 'model_call', id: event.resourceId },
-        category: 'model',
-        refType: 'model_call',
-        refId: event.resourceId,
-        description: `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`,
-        items: priced.items.map((item) => ({ ...item, meteringRef: documentId(dims) })),
-        idempotentKey: `charge:model:${event.resourceId}`,
-        meteringIds: dims ? [documentId(dims)] : [],
-      });
-    }
+      let invoice: InvoiceResult | null = null;
+      if (priced.amountCents > 0) {
+        const preCheck = await this.checks.check({
+          accountId: event.accountId,
+          estimatedCredits: priced.amountCents,
+          policy: 'accrue-and-track',
+          ref: { type: 'model_call', id: event.resourceId },
+        });
+        invoice = await this.chargeAndInvoice({
+          accountId: event.accountId,
+          amount: priced.amountCents,
+          preCheck: preCheck.preCheck!,
+          ref: { type: 'model_call', id: event.resourceId },
+          category: 'model',
+          refType: 'model_call',
+          refId: event.resourceId,
+          description: `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`,
+          items: priced.items.map((item) => ({ ...item, meteringRef: documentId(dims) })),
+          idempotentKey: `charge:model:${event.resourceId}`,
+          invoiceKey: `invoice:model:${event.resourceId}`,
+          meteringIds: dims ? [documentId(dims)] : [],
+        });
+      }
 
-    await BillingApiCall.updateOne(
-      { requestId: event.resourceId },
-      {
-        $set: {
-          inputTokens: usage.inputTokens,
-          cachedInputTokens: usage.cachedInputTokens,
-          outputTokens: usage.outputTokens,
-          cost: priced.amountCents,
-          status: event.eventType === 'model_call.aborted' ? 'aborted' : 'completed',
-          estimated,
-          invoiceSeq: invoice?.seq ?? null,
-          finishedAt: event.occurredAt,
+      await BillingApiCall.updateOne(
+        { requestId: event.resourceId },
+        {
+          $set: {
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            outputTokens: usage.outputTokens,
+            cost: priced.amountCents,
+            status: event.eventType === 'model_call.aborted' ? 'aborted' : 'completed',
+            estimated,
+            invoiceSeq: invoice?.seq ?? null,
+            finishedAt: event.occurredAt,
+          },
         },
-      },
-    );
-    return invoice;
+      );
+      return invoice;
+    });
   }
 
   /** 后台充值：入现金池 → 账单 + 收据；充值精度 0.01 credits。 */
@@ -331,6 +379,7 @@ export class BillingService {
     const operator = input.operator ? `（操作人：${input.operator}）` : '';
     const invoice = await this.invoicings.createInvoice({
       invoiceId: invoiceId.toHexString(),
+      idempotentKey: `invoice:${idempotentKey}`,
       accountId: input.accountId,
       type: 'recharge',
       category: 'manual',
@@ -359,7 +408,6 @@ export class BillingService {
     };
   }
 
-  /** 事件入口（MQ 消费者调用）。 */
   async handleEvent(event: {
     eventId: string;
     eventType: string;
@@ -420,11 +468,12 @@ export class BillingService {
       refType: 'container',
       refId: event.resourceId,
       description: `容器计费 ${minutes} 分钟`,
-      items: priced.items.map((item) => ({ ...item, meteringRef: documentId(metering) })),
+      items: priced.items.map((item) => ({ ...item, meteringRef: String(metering._id) })),
       idempotentKey: `charge:container:${event.resourceId}:final`,
+      invoiceKey: `invoice:container:${event.resourceId}:final`,
       periodFrom: startedAt,
       periodTo: event.occurredAt,
-      meteringIds: [documentId(metering)],
+      meteringIds: [String(metering._id)],
     });
   }
 
@@ -472,45 +521,29 @@ export class BillingService {
       segment?: string | null;
     }>;
     idempotentKey: string;
+    invoiceKey: string;
     releaseFrozenCents?: number;
     periodFrom?: Date | null;
     periodTo?: Date | null;
     meteringIds?: string[];
   }): Promise<InvoiceResult> {
-    const invoiceId = new mongoose.Types.ObjectId();
-    const receiptId = new mongoose.Types.ObjectId();
+    const invoiceId = deterministicObjectId(input.invoiceKey);
+    const receiptId = deterministicObjectId(`receipt:${input.invoiceKey}`);
     const payment = await this.payments.charge({
       accountId: input.accountId,
       amountCents: input.amount,
       idempotentKey: input.idempotentKey,
-      bizId: invoiceId.toHexString(),
-      invoiceId: invoiceId.toHexString(),
+      bizId: invoiceId,
+      invoiceId,
       releaseFrozenCents: input.releaseFrozenCents,
       preCheck: input.preCheck,
       ref: input.ref,
       pool: await this.resolvePool(input.accountId, input.amount),
     });
 
-    // 幂等重放：返回已存在的账单
-    if (!payment.applied) {
-      const existing = await BillingInvoice.findOne({
-        accountId: input.accountId,
-        refId: input.refId,
-        description: input.description,
-      }).sort({ createdAt: -1 });
-      if (existing) {
-        return {
-          invoiceId: documentId(existing),
-          seq: existing.seq,
-          receiptNo: '',
-          balanceAfter: existing.balanceAfter,
-          amount: input.amount,
-        };
-      }
-    }
-
     const invoice = await this.invoicings.createInvoice({
-      invoiceId: invoiceId.toHexString(),
+      invoiceId,
+      idempotentKey: input.invoiceKey,
       accountId: input.accountId,
       type: 'charge',
       category: input.category,
@@ -520,13 +553,13 @@ export class BillingService {
       refId: input.refId,
       description: input.description,
       items: input.items,
-      receiptId: receiptId.toHexString(),
+      receiptId,
       periodFrom: input.periodFrom ?? null,
       periodTo: input.periodTo ?? null,
     });
     const receipt = await this.receipts.issueReceipt({
-      receiptId: receiptId.toHexString(),
-      invoiceId: invoiceId.toHexString(),
+      receiptId,
+      invoiceId,
       accountId: input.accountId,
       amount: input.amount,
       balanceAfter: payment.cashBalance,
@@ -539,7 +572,7 @@ export class BillingService {
       );
     }
     return {
-      invoiceId: invoiceId.toHexString(),
+      invoiceId,
       seq: invoice.seq,
       receiptNo: receipt.receiptNo,
       balanceAfter: payment.cashBalance,
@@ -547,6 +580,7 @@ export class BillingService {
     };
   }
 
+  /** 结算阶段已完成扣费，仅补账单 + 收据（两者均幂等）。 */
   private async invoiceExistingCharge(input: {
     accountId: string;
     amount: number;
@@ -566,11 +600,13 @@ export class BillingService {
     periodFrom?: Date | null;
     periodTo?: Date | null;
     meteringIds?: string[];
+    idempotentKey: string;
+    invoiceId: string;
   }): Promise<InvoiceResult> {
-    const invoiceId = new mongoose.Types.ObjectId();
-    const receiptId = new mongoose.Types.ObjectId();
+    const receiptId = deterministicObjectId(`receipt:${input.idempotentKey}`);
     const invoice = await this.invoicings.createInvoice({
-      invoiceId: invoiceId.toHexString(),
+      invoiceId: input.invoiceId,
+      idempotentKey: input.idempotentKey,
       accountId: input.accountId,
       type: 'charge',
       category: input.category,
@@ -580,13 +616,13 @@ export class BillingService {
       refId: input.refId,
       description: input.description,
       items: input.items,
-      receiptId: receiptId.toHexString(),
+      receiptId,
       periodFrom: input.periodFrom ?? null,
       periodTo: input.periodTo ?? null,
     });
     const receipt = await this.receipts.issueReceipt({
-      receiptId: receiptId.toHexString(),
-      invoiceId: invoiceId.toHexString(),
+      receiptId,
+      invoiceId: input.invoiceId,
       accountId: input.accountId,
       amount: input.amount,
       balanceAfter: input.balanceAfter,
@@ -599,7 +635,7 @@ export class BillingService {
       );
     }
     return {
-      invoiceId: invoiceId.toHexString(),
+      invoiceId: input.invoiceId,
       seq: invoice.seq,
       receiptNo: receipt.receiptNo,
       balanceAfter: input.balanceAfter,
@@ -611,9 +647,9 @@ export class BillingService {
     if (!mongoose.isValidObjectId(accountId)) return 'cash';
     const account = await BillingAccount.findById(accountId).lean();
     if (!account) return 'cash';
+    if ((account.giftBalance ?? 0) > 0 && availableCents(account) - amount < 0) return 'gift';
     if (availableCents(account) - amount >= 0) return 'cash';
-    if ((account.creditLimit ?? 0) > 0) return 'credit';
-    return 'cash';
+    return (account.creditLimit ?? 0) > 0 ? 'credit' : 'cash';
   }
 }
 

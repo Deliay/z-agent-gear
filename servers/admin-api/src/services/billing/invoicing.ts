@@ -30,9 +30,14 @@ export interface CreateInvoiceInput {
   periodFrom?: Date | null;
   periodTo?: Date | null;
   invoiceId?: string;
+  /** 幂等键：重放/并发不重复出账（唯一索引兜底）。 */
+  idempotentKey?: string | null;
 }
 
-/** 出账：`$inc invoiceSeq` 原子分配 seq（从 0 连续），`{accountId,seq}` 唯一兜底重试。 */
+/**
+ * 出账：`$inc invoiceSeq` 原子分配 seq（从 0 连续），`{accountId,seq}` 唯一兜底重试。
+ * 幂等：先按 `idempotentKey` 查已存在账单（不额外分配 seq）；创建冲突时回读。
+ */
 export class InvoicingService {
   constructor(private readonly rollups: RollupService = rollupService) {}
 
@@ -48,6 +53,17 @@ export class InvoicingService {
   }
 
   async createInvoice(input: CreateInvoiceInput): Promise<IBillingInvoice> {
+    if (input.idempotentKey) {
+      const existing = await BillingInvoice.findOne({
+        idempotentKey: input.idempotentKey,
+      }).lean<IBillingInvoice | null>();
+      if (existing) return existing as IBillingInvoice;
+    }
+    if (input.invoiceId && mongoose.isValidObjectId(input.invoiceId)) {
+      const existing = await BillingInvoice.findById(input.invoiceId).lean<IBillingInvoice | null>();
+      if (existing) return existing as IBillingInvoice;
+    }
+
     let lastError: unknown;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const seq = await this.allocateSeq(input.accountId);
@@ -62,6 +78,7 @@ export class InvoicingService {
           balanceAfter: Math.round(input.balanceAfter),
           refType: input.refType ?? null,
           refId: input.refId ?? null,
+          idempotentKey: input.idempotentKey ?? null,
           description: input.description,
           items: (input.items ?? []).map((item) => ({
             productId: item.productId,
@@ -76,12 +93,27 @@ export class InvoicingService {
           periodTo: input.periodTo ?? null,
           createdAt: new Date(),
         });
-        await this.rollups.recordInvoice(input.accountId, doc);
+        // 汇总为派生缓存：失败不影响出账（对账/重算可后补）
+        try {
+          await this.rollups.recordInvoice(input.accountId, doc);
+        } catch (err) {
+          console.warn(`[billing] rollup update failed (non-fatal): ${(err as Error).message}`);
+        }
         return doc;
       } catch (err) {
         lastError = err;
         if ((err as { code?: number }).code !== 11000) throw err;
-        // seq 竞争：重试分配（唯一索引兜底）
+        // 幂等键/seq 竞争：先回读幂等键账单；否则重试分配 seq
+        if (input.idempotentKey) {
+          const existing = await BillingInvoice.findOne({
+            idempotentKey: input.idempotentKey,
+          }).lean<IBillingInvoice | null>();
+          if (existing) return existing as IBillingInvoice;
+        }
+        if (input.invoiceId) {
+          const existing = await BillingInvoice.findById(input.invoiceId).lean<IBillingInvoice | null>();
+          if (existing) return existing as IBillingInvoice;
+        }
       }
     }
     throw lastError instanceof Error ? lastError : new Error('invoice seq allocation failed');

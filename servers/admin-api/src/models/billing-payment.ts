@@ -15,6 +15,7 @@ const billingPaymentSchema = new mongoose.Schema(
     accountId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
     amount: { type: Number, required: true },
     pools: { type: [poolAllocationSchema], default: [] },
+    releasedFrozen: { type: Number, default: 0 },
     status: { type: String, enum: ['succeeded', 'failed'], default: 'succeeded' },
     idempotentKey: { type: String, required: true, unique: true },
     createdAt: { type: Date, default: Date.now },

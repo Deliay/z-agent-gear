@@ -30,6 +30,8 @@ const billingInvoiceSchema = new mongoose.Schema(
     balanceAfter: { type: Number, required: true },
     refType: { type: String, default: null },
     refId: { type: String, default: null },
+    // 出账幂等键（唯一稀疏索引）：重放/并发不会重复开票
+    idempotentKey: { type: String, default: null, unique: true, sparse: true },
     description: { type: String, default: '' },
     items: { type: [invoiceItemSchema], default: [] },
     receiptId: { type: mongoose.Schema.Types.ObjectId, default: null },
