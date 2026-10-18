@@ -99,6 +99,7 @@ interface StoredPlanEntry {
   workloadId: string;
   params: Record<string, unknown>;
   implicit: boolean;
+  required: boolean;
 }
 
 /**
@@ -120,6 +121,7 @@ async function readStoredPlan(
     workloadId: unknown;
     params?: Record<string, unknown>;
     implicit?: unknown;
+    required?: unknown;
   }>;
   return {
     workloadIds: ((doc?.workloadIds ?? []) as unknown[]).map(String),
@@ -127,6 +129,7 @@ async function readStoredPlan(
       workloadId: String(entry.workloadId),
       params: entry.params ?? {},
       implicit: entry.implicit === true,
+      required: entry.required === true,
     })),
   };
 }
@@ -380,8 +383,8 @@ describe('Admin Cloud Container API', () => {
       expect(stored).not.toBeNull();
       expect(stored!.workloadIds).toEqual([dep.id, parent.id]);
       expect(stored!.plan).toEqual([
-        { workloadId: dep.id, params: { version: '22' }, implicit: true },
-        { workloadId: parent.id, params: {}, implicit: false },
+        { workloadId: dep.id, params: { version: '22' }, implicit: true, required: false },
+        { workloadId: parent.id, params: {}, implicit: false, required: false },
       ]);
     },
   );
@@ -417,9 +420,58 @@ describe('Admin Cloud Container API', () => {
 
       const stored = await readStoredPlan(container.id);
       expect(stored!.plan).toEqual([
-        { workloadId: dep.id, params: { version: '20' }, implicit: false },
-        { workloadId: parent.id, params: {}, implicit: false },
+        { workloadId: dep.id, params: { version: '20' }, implicit: false, required: false },
+        { workloadId: parent.id, params: {}, implicit: false, required: false },
       ]);
+    },
+  );
+
+  it.skipIf(!hasMongo)(
+    'T-IA-REQ: passes workloads[].required through to the stored plan (default false, non-boolean tolerated)',
+    async () => {
+      const must = await createWorkload({ name: uniqueName('req-must'), initScript: 'echo must' });
+      const opt = await createWorkload({ name: uniqueName('req-opt'), initScript: 'echo opt' });
+
+      const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(
+        START_SELECTION,
+        {
+          purpose: 'IDLE',
+          workloads: [
+            { workloadId: must.id, required: true },
+            { workloadId: opt.id },
+          ],
+        },
+        token,
+      );
+      expect(started.errors, JSON.stringify(started.errors)).toBeUndefined();
+      const container = started.data!.adminStartCloudContainer;
+      cleanupContainerIds.push(container.id);
+
+      const stored = await readStoredPlan(container.id);
+      expect(stored).not.toBeNull();
+      expect(stored!.plan).toEqual([
+        { workloadId: must.id, params: {}, implicit: false, required: true },
+        { workloadId: opt.id, params: {}, implicit: false, required: false },
+      ]);
+    },
+  );
+
+  it.skipIf(!hasMongo)(
+    'T-IA-REQ: workloadIds-only compatibility path stores required=false (no must semantics)',
+    async () => {
+      const workload = await createWorkload({ name: uniqueName('req-legacy'), initScript: 'echo x' });
+      const started = await adminGql<{ adminStartCloudContainer: ContainerNode }>(
+        START,
+        { purpose: 'IDLE', workloadIds: [workload.id] },
+        token,
+      );
+      expect(started.errors, JSON.stringify(started.errors)).toBeUndefined();
+      const container = started.data!.adminStartCloudContainer;
+      cleanupContainerIds.push(container.id);
+
+      const stored = await readStoredPlan(container.id);
+      expect(stored).not.toBeNull();
+      expect(stored!.plan.every((entry) => entry.required === false)).toBe(true);
     },
   );
 

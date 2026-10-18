@@ -50,7 +50,7 @@ const DELETE = `mutation AdminDeleteCloudWorkload($id: ID!) { adminDeleteCloudWo
 const LOGS = `
   query AdminCloudContainerWorkloadLogs($containerId: ID!) {
     adminCloudContainerWorkloadLogs(containerId: $containerId) {
-      id containerId workloadId workloadName phase status script params exitCode log startedAt finishedAt
+      id containerId workloadId workloadName phase status script params required exitCode log startedAt finishedAt
     }
   }
 `;
@@ -327,6 +327,7 @@ describe('Admin Cloud Workload API', () => {
           status: 'success',
           script: 'echo "hello init"',
           params: { version: '20', package_manager: ['pnpm'] },
+          required: true,
           exitCode: 0,
           log: 'hello init\n',
           startedAt: new Date(base),
@@ -359,6 +360,7 @@ describe('Admin Cloud Workload API', () => {
           status: string;
           script: string;
           params: Record<string, unknown>;
+          required: boolean;
           exitCode: number | null;
           log: string;
           startedAt: string | null;
@@ -380,6 +382,9 @@ describe('Admin Cloud Workload API', () => {
       // 参数快照留档（含默认值）；历史记录无 params 归一为 {}
       expect(records[0].params).toEqual({ version: '20', package_manager: ['pnpm'] });
       expect(records[1].params).toEqual({});
+      // required 快照留档（历史缺省 false）
+      expect(records[0].required).toBe(true);
+      expect(records[1].required).toBe(false);
       expect(records[0].containerId).toBe(container.id);
       expect(records[0].workloadId).toBe(workloadId.toString());
       expect(records[0].exitCode).toBe(0);
@@ -687,5 +692,17 @@ describe('Admin Cloud Workload API', () => {
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
     expect(presetIds(all)).toHaveLength(4);
+  });
+
+  it('T-IA: preset .NET uses the apt-based init script (migration 002 upgrade)', async () => {
+    const res = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
+    expect(res.errors).toBeUndefined();
+    const dotnet = res.data!.adminCloudWorkloads.find((workload) => workload.name === '.NET');
+    expect(dotnet, 'preset .NET should exist').toBeTruthy();
+    const script = dotnet!.initScript ?? '';
+    // apt 版：apt-get install + 默认包名，且不再依赖 dotnet-install.sh
+    expect(script).toContain('apt-get install');
+    expect(script).toContain('dotnet10');
+    expect(script).not.toContain('dotnet-install.sh');
   });
 });
