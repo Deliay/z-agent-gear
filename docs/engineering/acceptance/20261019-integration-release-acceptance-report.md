@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review 首轮：3 项阻断（事件乱序重复计费 / 回滚无守卫蚕食他人冻结额 / 水位淘汰后重放二次记账）+ 13 项重要（丢失兜底残缺、双定价源免费消费、stale 误终结、错误映射缺失、测试假绿、前端财务展示与状态缺陷、RabbitMQ 镜像源等），实机复跑 1989 单测 + 448 API 集成 + 3 E2E 全绿，逐条列明问题、根因与修复要求，结论打回返工
+description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review：首轮 3 阻断 + 13 重要打回；第二轮复核（返工 70990a9）确认 3 阻断真修复、独立复跑 1999 单测 + 453 API + 3 E2E 全绿，但发现 O-1 反向对账对隔离行/DLQ 不补投的静默漏计费盲区（🟠）+ 修复声明与实现多处不符（🟠）+ A-4/O1/T-2 修复要求子项缺失（🟠），再次打回
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-19，AI Review）
 
-> **状态**: ❌ **首轮 AI Review 打回（REJECT）**——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，本轮**打回返工**。
+> **状态**: ❌ **首轮 AI Review 打回（REJECT）**（后续进展见 [第八节·第二轮复核](#八第二轮-ai-review-复核2026-10-19ai-review-节点打回)）——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，首轮**打回返工**；返工（`70990a9`）后第二轮复核**再次打回**（见第八节）。
 
 ## 关联文档
 
@@ -222,3 +222,117 @@ flowchart LR
 10. **回滚路径要与正向路径同守卫**：`settleCycle` 有 `freezeExists` 守卫（注释自陈「避免蚕食保证金」），`start` 的失败回滚却没有——**异常分支是资金账最容易破的地方，回滚金额必须以「已实际发生」为准**，不能以「本应发生」为准。
 11. **幂等标记不能被截断**：用账户内数组做「已应用水位」时，`$slice: -1000` 让幂等性有了有效期；一旦系统自带重放工具（resetCursor / DLQ 重放 / at-least-once 重投），**幂等标记的有效期必须 ≥ 重放的最大时间跨度**，否则修复工具本身会变成重复记账器。
 12. **「免费跑」比「多收钱」更容易被漏掉**：双定价源不一致（预检看 `model.pricing`、扣费看 `productprices`）、stale 误终结后活容器继续跑，都是**漏计费**方向的缺陷；评审要对「amountCents===0 只 warn」「SETTLED 早退」这类静默分支保持和「多扣钱」同等的警觉。
+
+---
+
+## 八、第二轮 AI Review 复核（2026-10-19，AI Review 节点·打回）
+
+> **状态**: ❌ **第二轮复核打回（REJECT）**。复核对象：返工提交 `70990a9`（基线 `integration` @ `9cea3c8`）。3 项阻断全部真修复 ✅，但复核发现：**1 项 🟠 重要级兜底盲区**（O-1 反向对账被隔离行/DLQ 逃逸 → 静默漏计费，与原 O-1 同性质缺陷换了面孔回来）+ **4 项 🟠 重要级「修复要求子项缺失/声明失实」**（A-4 对账线缺失、O1 错误映射收尾缺失、T-2 名实不符本体未修、多处修复声明 > 实现）。按红线「🟠 重要 → 打回」，本轮打回。
+
+### 8.1 复核方法与独立验证（不采信自报）
+
+1. **修复声明 ↔ 实现逐条对账**：对 `20261019-integration-release-review-fixes.md` 全部对账行（3 阻断 + 13 重要 + 随修）逐条回读源码核验（`git diff 9cea3c8..70990a9` 为返工增量），4 域并行深度评审 + 主评审对阻断项逐行人工复核。
+2. **独立实机验证**（本机实跑，全部与自报一致）：
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ 514 passed / 1 skipped，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测 | `npx vitest run` | ✅ 658 passed |
+| admin-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error / 207 passed |
+| agent-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error（6 存量 warning）/ 429 passed |
+| tests/api（Aspire 全栈干净实例 + 注入已知凭据） | `npx vitest run` | ✅ 453 passed / 1 skipped |
+| billing-events 假绿复核 | 单独复跑 `cloud-controller/billing-events.test.ts` | ✅ 3/3 实际执行（含 T-CC-B11 outbox 断言）——T-1 核心假绿属实已修 |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+
+3. **安全扫描**：返工增量无硬编码凭据、无 `dangerouslySetInnerHTML`/`innerHTML`、无敏感信息日志 ✅。
+4. **PR 健康度**：PR #238 `OPEN / MERGEABLE / CLEAN` ✅。
+
+### 8.2 复核确认属实（✅ 真修复，不再构成打回）
+
+| 项 | 结论 | 关键证据 |
+|---|---|---|
+| R-1 事件乱序重复计费 | ✅ 真修复 | `billing-service.ts:100-135` 门控在 `container:{rid}` 锁内（`destroyed` 事件存在或 `charge:container:<rid>:final` 落账 → 迟到 ready `skipped:true` 不建预留）；`:178-186` destroyed 锁内重读预留；两份 outbox `relayOnce` 失败即停本轮 + 释放认领（`billing-event-publisher.ts:420-422`、`mq/publisher.ts:181-182`）；`mq/consumers.ts:202-208` `!skipped && (created||retry>0)` 才投结算链；`billing-flow.test.ts:79-133` 真实断言乱序下 `charge` 恒 1 笔、不建预留 |
+| A-1 回滚蚕食冻结额 | ✅ 真修复 | `reservation.ts:179-211` `rollbackFreeze` 按 `{accountId, idempotentKey}` 查 freeze 落账、仅解冻 `min(deltaFrozen, amount)`、未落账零解冻；`settleCycle` `:276` 同口径补 accountId；回归断言「仅解冻落账额」「并存预留 B 不受影响」真实 |
+| A-2 水位淘汰二次记账 | ✅ 真修复 | 新增 `billingappliedledgers` `{accountId,ledgerId}` 唯一、不淘汰（`billing-applied-ledger.ts:24`）；`payment.ts:108-148` 状态机（applied→no-op / in-flight→不重复 / stale→`healWalletFromLedger` 绝对校准）；标记先行于钱包更新，崩溃窗口可自愈；灌 1001 条重放回归真实 |
+| A-3 stale 误终结 | ✅ 真修复 | `settlement-tick.ts:45-85` 回读最新 `expectedEndAt` + `isAlive` 存活跳过 finalize；`reconciliation.ts:149-162` 存活只上报；`reservation.ts:504-568` SETTLED 后 `settleTailAfterSettled` 补结缺额（`charge:final-gap:<rid>:<from>`） |
+| A-6 跨账户纵深防御 | ✅ 真修复 | `payment.ts:84-93` `loadLedger` 归属不符即抛 + `:112-116` `applyLedgerDelta` 双重断言 |
+| D-1~D-5 前端/编排 | ✅ 真修复 | `adminBillingReceipt(invoiceId)` 直查 + 三态（`resolvers/billing.ts:192-201`）；`selected` 派生态消除方向翻转（`BillingPage.tsx:50,94-97,150`）；`billing-format.ts` 单位标注与自洽等式、双前端副本零漂移；三态空态修复 + 充值刷新；RabbitMQ 内网镜像 + healthcheck + depends_on + AGENTS 同步 |
+| token 整单 ceil | ✅ 真修复 | `money.ts:76-100` 最大余数法（和==整单 ceil、无负数、零段不分成），测试锚定 |
+| A10 / 迁移锁 / #15 / #16 / 对账白名单 / #19 / #21 | ✅ 真修复 | 三模型 `pre('save')` 守卫覆盖 load→save；`deleteMany` 过期清理 + `owner` 归属释放；finalize 按已产生文本估算输出；两份 publisher 携带真实 `x-retry-count`；`RECONCILIATION_LINES` 白名单双层拦截；搜索重置页码/空输入校验/空页提示；secret `fetchPolicy:'no-cache'` |
+
+**R-1 补投攻防复核**：反向对账补投与 R-1 门控交互安全（补投 ready 命中 `legacyCharged`/destroyed 门控即跳过），双丢/乱序/legacy 先行三条路径均不会双重计费 ✅。
+
+### 8.3 复核发现问题（❌ 打回项）
+
+#### R2-1（🟠 重要·资金正确性兜底残缺）O-1 反向对账对「隔离行/DLQ」不补投 → 静默漏计费盲区
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `servers/admin-api/src/services/billing/reconciliation.ts:302-307`（`eventRecorded` 只判 `BillingEvent`/`BillingOutbox` 行存在）；对照 `cloud-controller/src/services/billing-event-publisher.ts:156-166`（`attempts≥maxAttempts` 置 `failed:true` 隔离后行仍存）、`repairEvent:310-337`（撞 eventId 唯一索引只 11000 返回 false） |
+| 问题 | outbox 毒消息被隔离（`failed:true`）或消费失败进 DLQ 后，事件**永不投递**，但 `eventRecorded` 见行存在即判「已记录」→ events 线不补投；`resources` 线只扫 ACTIVE/PENDING 预留，ready 未消费则无预留 → **完全无发现、静默漏计费** |
+| 复现路径 | broker 长时间不可用：R-1 修复后 relay 失败即停本轮，队头行逐轮烧 `attempts` 至上限隔离，随后下一行成为队头继续烧——**一次长故障可顺序隔离整窗事件**（每 ~maxAttempts 轮隔离一条）；broker 恢复后被隔离行永不重发。ready+destroyed 双双隔离的容器：无预留、无 legacy 键、`eventRecorded` 判已记录 → 三条对账线全盲，容器已计费起点（`billingStartedAt`）却永不计费。DLQ 同理（消费重试耗尽进死信，outbox 行 `published:true`） |
+| 为什么是问题 | 与原 O-1「两者都丢则完全无发现、静默漏计费」是**同一失败类**，只是入口从「进程内丢事件」换成「broker 侧隔离/死信」；本轮修复声明「长期丢失由 admin-api 反向对账线补投」对该场景不成立，兜底承诺未兑现。反向对账正是为此而建，却在最需要它的长故障场景失效 |
+| 修复要求 | `eventRecorded` 不得把 `failed:true` 隔离行/死信视为已投递：补投需可执行（`repairEvent` 撞 eventId 时提供代偿路径，如重置隔离行重新入列、或以 `…:repair:<ts>` 新 eventId 补投并依赖消费端业务幂等）；补回归（ready+destroyed 双双隔离 → 对账后各补投一次且**不重复计费**） |
+| 复核标注 | 主评审已回读 `reconciliation.ts:302-337` 与 `billing-event-publisher.ts:156-166` 确认盲区属实 ✅ |
+
+#### R2-2（🟠 重要·对账纪律）多处「修复声明 > 实现」，违反「修复声明 ↔ 实现逐条对账」硬性要求
+
+| 声明 | 实际 | 位置 |
+|---|---|---|
+| O-1「失败记 **error** 日志」 | 实为 `logger.warn`，且与同文件注释「记 error 日志」自相矛盾 | `container-service.ts:186` vs `:164` |
+| O-1「重试 3 次（200/500/1000ms）」（注释与契约同步该口径） | 实为 `delays=[0,100,250]` 共 3 次尝试 = 2 次重试 | `container-service.ts:175`、`contracts/cloud-controller-websocket.md:420` |
+| T-1「去重并补真实事件链路断言」 | 被指重复的两条用例（`billing-events.test.ts` T-CC-B4/B8、T-CC-B7）**原样保留**，`internal-api.test.ts` 零改动 | `git diff 9cea3c8..70990a9` |
+| O1「与 cloud-container `toGraphQLError` 同口径」 | cloud-container 未知错误透传原文无 code，billing 掩码 + `INTERNAL_SERVER_ERROR`；agent-api 用 `BAD_REQUEST` 而 admin 用 `INVALID_ARGUMENT`，跨应用仍不一致 | `cloud-container.ts:26-34` vs `billing.ts:39-55` |
+| T-2「T-B22 断言语义；T-B23 补 `model_not_priced`」 | 被点名「名实不符」的**本体原样保留**（旧 T-B22 仍只断言形状、旧 T-B23 标题仍含「未定价模型 400」但无对应断言），另起新测试补覆盖；文件内出现 2 个 T-B22、3 个 T-B23 重复 ID | `billing-gateway.test.ts:33,54` vs `:163,182` |
+
+**为什么是问题**：首轮返工要求明文「给出『修复声明 ↔ 实现』逐条对账」，对账表必须可信；声明与实现不符会让复核失去事实基础，且「名实不符测试」「未做的去重」正是 T-1/T-2 原问题本体。
+**修复要求**：逐条要么补实现、要么在对账表如实标注「未完成/部分完成」；旧 T-B22/T-B23 处置（改标题/补断言/删除）并消除重复测试 ID；O-1 日志级别与重试参数统一声明、注释、契约、实现四者口径。
+
+#### R2-3（🟠 重要·原修复要求未落实）A-4 对账线缺失
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `reconciliation.ts:32`（五线 `funds/metering/resources/events/rollups`，无比对 `BillingApiCall` 的线） |
+| 问题 | A-4 修复要求三件套：① 价源回落 ② 告警/拒绝 ③ **对账线「`BillingApiCall.cost>0` 但无对应 invoice」**——①② 已做（`pricing.ts:81-107` 回落属实、与预检同单位同 `isBillable` 口径），③ 未实现，「13/13 重要项闭环」入账失实 |
+| 为什么是问题 | 回落只覆盖「productprices 缺档」；零费率价目档、网关外事件等残余免费路径（`billing-service.ts:402-407` 仍 `amountCents===0` 仅 warn）没有任何发现机制，正是 A-4 担心的「静默免费」残留 |
+| 修复要求 | 补对账线（`BillingApiCall.cost>0` 且无对应 invoice → 报告差异）；顺带覆盖「productprices 存在全 0 档时不回落也不告警」的静默免费（`pricing.ts:138-142` 只在缺档回落） |
+
+#### R2-4（🟠 重要·原修复要求未落实）O1 错误映射收尾缺失
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `resolvers/billing.ts:77,83,140,212,214,301,312,371,385`（9 处裸 `GraphQLError` 无 `extensions.code`，`toBillingGraphQLError` 对 `instanceof GraphQLError` 直接放行 `:40`）；全仓无错误映射断言测试 |
+| 问题 | 修复要求「校验类错误补 `extensions.code`；补错误映射断言测试」两件均未落实；启发式正则也不覆盖「已存在」「余额不足」类消息 → 被掩码为 `INTERNAL_SERVER_ERROR`，可预期校验错误降级 500 语义 |
+| 修复要求 | 9 处补稳定 `extensions.code`（建议直接构造时即带 code）；补错误映射断言测试（MoneyError/ApiKeyNotFoundError/业务消息/未知错误四类各至少一断言） |
+
+#### R2-5（🟠 重要·测试可信度延续）T-2 名实不符本体未修
+
+见 R2-2 表末行。旧 T-B22/T-B23 仍以误导性标题通过空断言（可被空实现骗过），重复 ID 使报告引用无法唯一定位。修复要求：处置旧用例 + 消除 ID 重复 + POST 侧补「全 0 价目」400 `model_not_priced` 断言（现仅覆盖 `pricing:null` 一半）。
+
+### 8.4 🟡 建议（随返工一并收口，不单独构成打回）
+
+1. `reconciliation.ts:253` rollup 校准线窗口与小时桶错位：`bucketStart >= from` 排除 `floor_hour(from)` 桶，每次运行最多误报 1 小时漂移；`count` 计算未参与比对。
+2. `reservation.ts:437-446` `charge:final` 幂等键窗口无关 + `!claimed` 回退穿行：崩溃后以更晚 `endedAt` 重试可致缺额永不收取、ledger/账单金额不一致（窄窗口）；`settleTailAfterSettled:534-536` CAS 失败静默丢尾差。
+3. A-5 余项：`{reservationId:1}` 索引/结构化字段未做（`bizId` `$regex` 已收窄到账户内 + 转义，符合「或至少 escapeRegExp」底线，性能形态留待优化）；`heldFrozen` 的 `accountId` 参数建议改必填。
+4. `reconciliation.ts:210` `billingStartedAt=null` 的容器不在补投范围——若 CAS 写本身失败，容器视作未计费（设计语义可接受，建议在契约 A.3.1 明示该边界）。
+5. resources 线 legacy 计费与 events 线补投 destroyed 各建一条 MeteringRecord：资金不重复（幂等键兜底）但用量统计双计。
+6. 网关侧估算 `billing-openai.ts:290-294` 仍逐段 ceil（仅中间展示值，最终账实一致）。
+7. 测试缺口：A10 `pre('save')` 守卫、#15 输出兜底、`deleteMany` 过期清理、发布头 `x-retry-count` 均无锚定；`adminBillingReceipt` 无 API 测试；admin `BillingPage` 无页面级测试；`reconciliation.test.ts:91`「不重复补投」为空断言。
+8. `apps/admin-web/src/pages/BillingPage.tsx:176-179` `receiptQuery.refetch()` 无 `receiptInvoice` 守卫（空 `invoiceId` 必败请求）；`toggleStatus` refetch 失败把「mutation 已成功」误报为「更新失败」且方向翻转窗口在故障模式下仍在。
+9. `aspire/manifest/docker-compose.yaml` 的 rabbitmq healthcheck/`service_healthy` 疑为生成物手工补丁，`AppHost.cs` 未固化 → 下次 `aspire publish` 可能漂移。
+10. 沿用首轮 5.3 未收口 🟡（per-message TTL 队头阻塞、UTC 桶本地时区展示、契约 500/502 文档化、死代码清理等）。
+
+### 8.5 返工要求（第二轮打回理由）
+
+1. **必须修复**：R2-1（隔离行/DLQ 补投盲区 + 双隔离回归）、R2-2（声明↔实现对账失实逐条纠正）、R2-3（A-4 对账线 + 零费率档告警）、R2-4（9 处 `extensions.code` + 映射断言测试）、R2-5（旧 T-B22/T-B23 处置 + ID 去重 + 全 0 档 POST 断言）。
+2. **复核口径**：继续不采信自报数据；修复声明 ↔ 实现必须逐条一致，**未做的子项如实标注「部分修复」**，不得以「13/13」整单入账。
+3. 🟡 清单（8.4）随返工一并收口优先项 1/2/7/8。
+
+### 8.6 经验总结（第二轮新增）
+
+1. **兜底机制的覆盖面要按「行的状态」而非「行的存在」判定**：outbox 隔离行/死信在库里「存在」但永不投递，`eventRecorded` 这类存在性检查会把死信当成已投递——**对账兜底必须对「未完成投递」状态敏感**。
+2. **长故障会把 fail-stop 变成顺序清障**：relay「失败即停」保住了顺序性，却让队头行逐轮烧 attempts 直至隔离，长 broker 故障 = 按队列顺序批量丢事件；fail-stop 必须配「隔离行可恢复重投」才算闭环。
+3. **修复声明本身是交付物**：对账表里一句「失败记 error」（实为 warn）、「去重」（实为未做）都会让复核失去锚点；**声明、注释、契约、实现四者口径一致**应作为返工的 Definition of Done。
+4. **「另起新测试」不等于「修掉被点名的测试」**：旧的名实不符用例原样保留、新增测试并列存在，绿灯数量涨了但误导源还在，且重复测试 ID 让追溯失效——被点名的用例必须处置（改名/补断言/删除）。
+5. **「13/13 闭环」不能整单入账**：A-4 三件套只做两件、A-5 索引未做（好在要求含「或至少」兜底），复核必须按修复要求的**子项清单**逐条打勾，而不是按问题编号打勾。
