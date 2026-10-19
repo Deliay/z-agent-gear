@@ -104,7 +104,8 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1
 dotnet --list-sdks
 `;
 
-const ASPIRE_SCRIPT = `#!/usr/bin/env bash
+// 导出为 `ASPIRE_SCRIPT_V1`：内容逐字不变，供 004 迁移做「未定制」比对（Aspire 工作负载下载代理 裁决 3）。
+export const ASPIRE_SCRIPT_V1 = `#!/usr/bin/env bash
 set -euo pipefail
 
 export DOTNET_ROOT="\${DOTNET_ROOT:-/usr/local/dotnet}"
@@ -206,7 +207,7 @@ const PRESETS: PresetDefinition[] = [
   {
     presetKey: 'aspire',
     name: 'Aspire',
-    initScript: ASPIRE_SCRIPT,
+    initScript: ASPIRE_SCRIPT_V1,
     paramSchema: [],
     dependsOnNames: ['Docker', '.NET'],
   },

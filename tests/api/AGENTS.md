@@ -447,6 +447,7 @@ npm test
 | T-IA paramSchema 校验边界 | key 非法/重复、label 空/超长、options 空/重复/超限、默认值不在 options/类型不符 → 字段路径错误（`paramSchema[i].xxx is invalid`）；参数 >20 → `too many parameters` |
 | T-IA 依赖保存 | 正常（按配置顺序、去重）、自依赖 `workload cannot depend on itself`、依赖环 `dependency cycle detected`、依赖不存在 `dependency workload not found`、超 5 `too many dependencies` |
 | T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire 存在且 `isPreset=true`；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；重复查询 ID 集合稳定（迁移不重复写入） |
+| T-IA 预制 Aspire 代理下载 | 预制「Aspire」`paramSchema` 含 `aspire_cli_url`（TEXT 默认 = 内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`）；`initScript` 含 `curl -fsSL`/`tar -xzf` 直连下载解压，**不含** `install.sh`/`aspire.dev`/`aka.ms`/`ASPIRE_INSTALL_URL`（迁移 004 升级结果，脚本内不内置默认地址）；重复查询预制项 ID 集合稳定 |
 | T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
 ### Cloud Controller Worker 握手 (`cloud-controller/worker-handshake.test.ts` T-IW*)

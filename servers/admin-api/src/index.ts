@@ -42,6 +42,7 @@ import { BillingApiCall } from './models/billing-api-call.js';
 import { BillingOutbox } from './models/billing-outbox.js';
 import { BillingDeadLetter } from './models/billing-dead-letter.js';
 import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
+import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
 
 const app = express();
 
@@ -107,12 +108,14 @@ async function start() {
   // 002-preset-dotnet-apt——存量 .NET 预制脚本保守升级为 apt 版（三期）；
   // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）；
   // 003-docker-apt-source——把未定制过的「Docker」脚本刷新为 v3 并补齐 docker_apt_url 参数（本期）
+  // 004-aspire-cli-source——把未定制过的「Aspire」脚本刷新为 v2 并补齐 aspire_cli_url 参数（本期）
   try {
     await runMigrations([
       migration001,
       migration002DotnetApt,
       migration002RefreshDocker,
       migration003DockerAptSource,
+      migration004AspireCliSource,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
