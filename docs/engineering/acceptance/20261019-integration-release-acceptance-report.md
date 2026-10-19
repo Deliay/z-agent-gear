@@ -749,3 +749,73 @@ R6-1①~⑤ 全部属实（13.1）；探针回退签名与返工声明逐字一�
 2. **「覆盖即跳过」的判据要以凭证对为单位**：`isCovered` 只认账单就整窗跳过，等于把收据补建判了死刑——覆盖判定的最小单位是「账单+收据齐备」，缺一半就要进入补建分支。
 3. **对照组探针做「同标准」验收**：两条修复线声称同标准，就用同一中间态各打一发（P-A 红 / P-B 绿）——行为差异一跑便知，比读代码可靠。
 4. **瞬时失败与崩溃等价建模**：`issueReceipt` 只吞 11000，其余异常上抛后重放走同一早退链——「可恢复」结论必须同时覆盖 crash 与 transient error 两种触发源。
+
+---
+
+## 十四、第八轮 AI Review 复核（2026-10-20，AI Review 节点·打回）
+
+> 复核对象：返工提交 `385da92`（基线 `d4b4e64`，增量 5 文件：`billing-service.ts` / `reconciliation.ts` / `billing-flow.test.ts` / `reconciliation.test.ts` / `review-fixes.md`）。
+> 复核口径不变：**不采信自报**；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；残余表必须**如实**（声明的每个发现/兜底机制都要能指出它真实存在）。
+
+### 14.1 R7-1 返工核验（✅ 真修复，探针实证，不再打回）
+
+| 子项 | 状态 | 实现 / 证据（本轮独立核验） |
+|---|---|---|
+| ① 容器修复线补「账单在、收据缺」 | ✅ | `reconcileContainerInvoices` 不再「账单覆盖即整窗跳过」：`isCovered` 降级为**只决定是否建账单**；对 `invoices`（本预留 `final`/`final-gap`）**逐张**按 `BillingReceipt.invoiceId` 校验，缺失即重放 `invoiceExistingCharge`（`createInvoice` 幂等返回既有账单 + `issueReceipt` 确定性 `_id` 补建），与 `repairCycleInvoice` 同为「无条件重放」语义。收据 `amount`/`balanceAfter` 取**账单本身**（`Math.abs(invoice.amount)` / `invoice.balanceAfter`），合并账单（final+gap）不被单窗口金额污染 ✅ |
+| ② `issueReceipt` 瞬时失败可恢复 | ✅ | `issueReceipt` 失败仍上抛（触发事件重试）；`finalizeReservation` 在 `finalSettle` 后**无条件**调用 `reconcileContainerInvoices`，重放即进入逐张收据校验分支。本轮崩溃点构造实证见 14.2 ✅ |
+| ③ 发现线补 `invoice↔receipt` | ✅ | `containerInvoices` 线由 `charge↔invoice` 扩展为 `charge↔invoice↔receipt`：近 24h `invoice:container-(final\|final-gap\|cycle):*` 逐张校验 `BillingReceipt`，缺失报 `invoice_without_receipt`（仅报告，不自动改账，对齐 R2-4 口径）；`reconciliation.test.ts` 正反用例（final 线：无收据报 1 → 补收据后 0；cycle 线：独立正例）✅ |
+| ④ 区分性回归（修复前红） | ✅ | `billing-flow.test.ts`「R7-1a」以 `vi.spyOn(ReceiptService.prototype,'issueReceipt').mockRejectedValueOnce` 构造**真实中间态**（账单已落库、收据未落库，账单带确定性 `receiptId` 指向不存在的收据）→ 重放断言收据恰好 1 条且 `amount=100`、二次重放 `BillingInvoice`/`BillingReceipt` 计数不增 ✅ |
+| ④ 探针结论（本轮独立实跑） | ✅ | 回退 `billing-service.ts` 至 `b1b66db`（其余不动）：R7-1a 🔴 `AssertionError: expected +0 to be 1`（`billing-flow.test.ts:651`）——与返工声明、与第七轮复核 P-A **逐字一致**；同一次回退下 billing 目录全量仅 R7-1a 一条红（132 passed / 1 failed / 1 skipped），回归**可证伪且精确**、非空转。周期线对照组（`repairCycleInvoice`）本就可补，与 P-B 一致 ✅ |
+| ⑤ 声明精确化 + 残余枚举 | ⚠️ **部分未达标** | JSDoc「账单覆盖判定只决定是否建账单、收据逐张校验」与实现相符 ✅；§11.4 已枚举 7 个崩溃子窗口 ✅。**但其中 #3（及 §11.5）的「可发现」声明不实，#2 的残余未枚举**——即本轮 R8-1 |
+
+R7-1 的**实质**（收据缺失可自愈、两线同标准、发现线补齐、回归可证伪）已由本轮探针与七层独立复跑证实，**不再打回**。R5-1/R5-2、R4-2/R4-1、R3-1~R3-7、R6-1①~⑤ 均未被 `385da92` 触碰（增量仅 5 文件），保持上一轮确认状态 ✅。
+
+### 14.2 独立复跑（本机实跑，不采信自报；Aspire 干净实例 `aspire stop && aspire start` 后注入 `INTERNAL_API_TOKEN` / `CLOUD_CONTROLLER_INTERNAL_TOKEN` / `MONGODB_URI` / `ADMIN_INITIAL_PASSWORD`）
+
+| 层 | 命令 | 本轮实跑 |
+|---|---|---|
+| admin-api 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ **542 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc --noEmit` / `vitest run` | ✅ 0 / 207 passed |
+| agent-web | `tsc --noEmit` / `vitest run` | ✅ 0 / 429 passed |
+| tests/api（28 文件，干净实例） | `npx vitest run` | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | `playwright test billing.spec.ts admin-billing.spec.ts --workers=1` | ✅ 3 passed |
+
+与返工自报**逐项一致**（542/1、197、658、207、429、454/0、3）✅。
+
+### 14.3 本轮必须修复（🟢 轻微 1 项）
+
+#### R8-1（🟢 轻微·残余声明不实 + 残余未枚举）§11.4/§11.5 声称 `reconcileMetering` 能发现 `MeteringRecord.invoiced` 残留标记——该发现机制**不存在**；且 R7-1 修复线自身的同型残留未枚举
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `docs/engineering/acceptance/20261019-integration-release-review-fixes.md` §11.4 子窗口 #3、§11.5 第 1 条；`billing-service.ts` `reconcileContainerInvoices` 收据补建分支（`meteringIds: []`）；对照 `repairCycleInvoice`（`meteringIds: [String(metering._id)]`） |
+| 问题 | ① **声明不实（主因）**：§11.4 #3 称「派生标记残留…`reconcileMetering` 可发现」、§11.5 称「不涉及资金与凭证，且 `reconcileMetering` 覆盖」。实测 `reconcileMetering`（`reconciliation.ts:119-135`）判定的是 **`BillingEvent.metered: false`**，与 `MeteringRecord.invoiced` 无关；全仓检索 `invoiced`（排除 node_modules/dist）显示该字段**只写不读**——写入点仅 `models/metering-record.ts:18`（schema 默认 false）、`billing-service.ts:919`/`metering.ts:125`（create 时 false）、`billing-service.ts:995`/`1058`（`$set: invoiced:true`），**无任何查询/读取/GraphQL 暴露**。即残余表声明了一个**不存在的兜底网**（属「修复声明 > 实现」同型，R2-3 / R5-1④ / R6-1③ / R7-1⑤ 同一缺陷模式，连续第 5 轮）。② **残余未枚举**：R7-1 收据补建分支以 `meteringIds: []` 调 `invoiceExistingCharge`，故子窗口 #2（`createInvoice` 已落、`issueReceipt` 未落）经补建后 `MeteringRecord.invoiced` 同样**永久停在 false**——§11.4 #2 却只写「✅ 可恢复」，未列该残留（#3 才列）。③ **两线再度不同标准**：`repairCycleInvoice` 传 `meteringIds` 并会重置标记，容器收据补建线不传——「与 `repairCycleInvoice` 同标准」在**收据**上成立（`receiptId`/`receiptNo` 口径确实一致），在**派生标记**上不成立 |
+| 证据（本轮实跑） | ① 全仓 `grep -rn "invoiced"`（排除 node_modules/dist）命中 12 行代码，其中 `reconciliation.ts:471/474` 与 `billing-service.ts:209/222/379/381` 是**同名局部变量** `invoicedIds`/`invoiced`（与该字段无关），其余全部为写入/类型声明——**零读取**。② `reconcileMetering` 源码逐行核对：`BillingEvent.find({ metered: false, receivedAt: { $lte: threshold } })`。③ `billing-service.ts:384-399` 补建调用 `meteringIds: []` vs `repairCycleInvoice:636` `meteringIds: [String(metering._id)]` |
+| 为什么是问题 | 严重性**仅 🟢 轻微**（不涉及资金/凭证/账实：`MeteringRecord.invoiced` 为死字段，不参与任何计费、开票、收据、对账判定，用户不可见）。但残余表是**运维的风险登记册**：声称「有发现线兜底」而实际没有，会让运维误判该残留可被巡检捕获而不追——与第七轮 R7-1⑤「JSDoc/对账表声称『补建 BillingInvoice+BillingReceipt』而该分支收据补建不可达」是**同一类证据不实**，而证据诚实性正是 R7-1⑤ 明列的修复要求、复核口径要求「未做子项如实标注」。故按既定口径判为不通过，但**明确不升级**为 🟠 |
+| 修复要求（范围刻意收窄，勿扩大） | ① **如实改写残余表**：§11.4 #3 与 §11.5 不得再声称 `reconcileMetering` 能发现 `MeteringRecord.invoiced`；如实写明「该字段当前**只写不读**、全仓无读取点，故残留**无发现线、无兜底**，仅随 `recharge`/`chargeAndInvoice`/补建路径的写入而存在」。② **补全 #2 残余**：§11.4 #2 除「收据可恢复 ✅」外，如实标注「补建分支 `meteringIds:[]` 不重置 `invoiced`，同 #3」。③ **二选一**：（a）让容器收据补建线也传 `meteringIds`（与 `repairCycleInvoice` 真正同标准，`ensureMetering` 已幂等、`MeteringRecord.eventId` 唯一，可安全重放）；或（b）保持现状但把「两线同标准」限定为「收据口径同标准，派生标记口径不同」并在 JSDoc 写明。**推荐 (a)**，改动量小。④ 若选择保留该字段，注明它**不是**可用的「出账游标」（`20261018-feat-credits-billing.md:521/708` 称其为「出账游标…可重置重扫」，但 `MeteringService.resetCursor` 只重置 `BillingEvent.metered`，无 `invoiced` 重置路径）；若判定无用可直接删除该字段并同步文档。⑤ **不要**借此重构计费/开票/收据主路径，不要触碰 R7-1 已修复逻辑、R6-1/R5-1/R5-2/R4-2/R4-1/R3-1~R3-7 |
+| 不要求 | 无需新增回归用例（该字段无读取面，无可断言的业务事实）；无需为此重启 Aspire 全量复跑（若按 ③(a) 改代码，则补一条「补建后 `invoiced=true`」的单测即可，并复跑 admin-api 单测 + tsc） |
+
+### 14.4 本轮确认真修复（探针实跑，不再打回）
+
+R7-1①~④ 全部属实（14.1）；探针签名 `expected +0 to be 1` 与第七轮 P-A 逐字一致、且在回退下单测精确红 1 条（14.2）；R6-1①~⑤、R5-1/R5-2、R4-2/R4-1、R3-1~R3-7 未被本增量触碰，保持属实 ✅。
+
+### 14.5 未做/残余（本轮如实标注）
+
+- §11.4 子窗口 #4~#7（周期扣费后开票、周期账单后收据、`prepareNextCycle`、尾结缺口）经核对与实现相符，本轮不再打回。
+- §11.4 #1（扣费后凭证全缺）经 P-C 对照确认 R6-1a 修复有效。
+- 补建收据的 `issuedAt` 取补建时点 `new Date()`，故 `receiptNo` 的 `R<YYYYMMDD>` 段反映**补建日期**而非原始交易日期（`receipt.ts:24-33` 用 `issuedAt` 派生日期段）。派生规则本身与主路径同口径（`R<date><accountHash 8><seq 6>`，`seq` 取自账单，账户内唯一），仅日期段含义有偏差——**展示级瑕疵**，若 14.3③ 选择 (a) 可顺手注释说明；不单独作为打回项。
+- 8.4/9.5 前几轮未做项本轮未动，保持如实标注。
+
+### 14.6 返工要求（第八轮打回理由）
+
+1. **必须修复（🟢 轻微）**：R8-1——①②③（推荐 (a)）④⑤ 全部落实；范围严格限于残余表/注释/`meteringIds` 传参（或删字段），**不得**改动 R7-1 已验证的收据补建与 `invoice_without_receipt` 逻辑。
+2. **复核口径不变**：不采信自报；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；残余表**每个**「可发现/可兜底」声明都要指出对应的真实代码路径，否则如实写「无」。
+3. **明确不重开**：R7-1 实质已修复并经探针实证，本轮**不再**就该项打回；R6-1/R5-1/R5-2/R4-2/R4-1/R3-1~R3-7 保持既定结论。
+
+### 14.7 经验总结（第八轮新增）
+
+1. **残余表里的每个「可发现」都要指得出代码路径**：写「`X` 可发现」之前先 `grep` 出 `X` 真正的查询点——本轮 `MeteringRecord.invoiced` 全仓零读取，声明的兜底网并不存在。经验判据：**残余行必须能附一条 grep 命中行号**，否则写「无发现线」。
+2. **「同标准」要按字段级而非函数级核对**：两条线都调 `invoiceExistingCharge` 不等于同标准——本轮收据口径一致、`meteringIds` 口径不一致。核对法：把两条线的**入参逐字段**列出来比对。
+3. **只写不读的字段是残余声明的高发区**：`MeteringRecord.invoiced` 被设计文档称为「出账游标…可重置重扫」，但 `resetCursor` 只管 `BillingEvent.metered`——设计意图与实现脱节，且因为无读取面，任何测试都测不出来。新增派生标记时，先证明它有读取方，否则不要进 schema。
