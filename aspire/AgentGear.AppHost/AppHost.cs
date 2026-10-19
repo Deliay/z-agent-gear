@@ -53,6 +53,7 @@ IResourceBuilder<RabbitMQServerResource>? rabbitmq = null;
 if (!rabbitmqDisabled)
 {
     rabbitmq = builder.AddRabbitMQ("rabbitmq")
+        .WithDataVolume()
         .PublishAsDockerComposeService((resource, service) =>
         {
             service.Name = "rabbitmq";
@@ -187,7 +188,9 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
-        .WithEnvironment("ADMIN_API_URL", adminApiUrl)
+        // D9：server-side 调用必须指向 admin-api 容器 DNS，而不是浏览器可达的 localhost:8002
+        // （`admin-api-url` 仅供 admin-web 注入 config.js）。
+        .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
         .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithHttpEndpoint(port: 8000, env: "PORT")
         .WithExternalHttpEndpoints();

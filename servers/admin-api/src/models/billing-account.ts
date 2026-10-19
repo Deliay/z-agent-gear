@@ -19,6 +19,13 @@ const billingAccountSchema = new mongoose.Schema(
     giftBalance: { type: Number, default: 0 },
     creditLimit: { type: Number, default: 0 },
     frozenAmount: { type: Number, default: 0 },
+    /**
+     * 已应用到钱包的 ledger 行 ID 集合（R1：与余额在同一账户文档上原子推进的「水位」）。
+     * 资金同步以 `{_id, appliedLedgerIds: {$ne: ledgerId}}` 为过滤做单条原子更新，
+     * 保证「ledger 已落账但钱包可能未更新」的崩溃场景下，重放能补做且恰好一次。
+     * 仅保留最近 N 条（更早的重放由对账兜底）。
+     */
+    appliedLedgerIds: { type: [String], default: [] },
     invoiceSeq: { type: Number, default: 0 },
     status: { type: String, enum: BILLING_ACCOUNT_STATUSES, default: 'active' },
     insufficientSince: { type: Date, default: null },

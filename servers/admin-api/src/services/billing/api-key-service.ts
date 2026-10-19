@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import mongoose from 'mongoose';
 import { BillingApiKey } from '../../models/billing-api-key.js';
 import { documentId } from './id.js';
 
@@ -22,6 +23,14 @@ export interface VerifiedApiKey {
   ownerType: 'front_user' | 'admin_user';
   ownerId: string;
   name: string;
+}
+
+/** API Key 不存在或无权操作（P3：类型化错误，供上层稳定映射 404，不靠中文串匹配）。 */
+export class ApiKeyNotFoundError extends Error {
+  constructor() {
+    super('API Key 不存在或无权操作');
+    this.name = 'ApiKeyNotFoundError';
+  }
 }
 
 function toDTO(doc: unknown): BillingApiKeyDTO {
@@ -99,12 +108,14 @@ export class ApiKeyService {
     id: string,
     owner: { ownerType: 'front_user' | 'admin_user'; ownerId: string },
   ): Promise<BillingApiKeyDTO> {
+    // A12：非法 ObjectId 直接按「不存在」处理，避免 CastError 500。
+    if (!mongoose.isValidObjectId(id)) throw new ApiKeyNotFoundError();
     const doc = await BillingApiKey.findOneAndUpdate(
       { _id: id, ownerType: owner.ownerType, ownerId: owner.ownerId },
       { $set: { status: 'revoked' } },
       { new: true },
     );
-    if (!doc) throw new Error('API Key 不存在或无权操作');
+    if (!doc) throw new ApiKeyNotFoundError();
     return toDTO(doc);
   }
 }

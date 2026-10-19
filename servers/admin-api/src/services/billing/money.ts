@@ -16,13 +16,20 @@ export class MoneyError extends Error {
 /** credits → 分（仅边界使用；四舍五入到整数分）。 */
 export function creditsToCents(credits: number): number {
   if (!Number.isFinite(credits)) throw new MoneyError(`invalid credits value: ${credits}`);
-  return Math.round(credits * CENTS_PER_CREDIT);
+  const scaled = credits * CENTS_PER_CREDIT;
+  // A7：极大有限 Float 乘 100 会溢出为 Infinity，必须乘后校验并限制安全整数上界。
+  if (!Number.isFinite(scaled) || !Number.isSafeInteger(Math.round(scaled))) {
+    throw new MoneyError(`credits value out of range: ${credits}`);
+  }
+  return Math.round(scaled);
 }
 
 /** 分 → credits（仅边界展示使用）。 */
 export function centsToCredits(cents: number): number {
   if (!Number.isFinite(cents)) throw new MoneyError(`invalid cents value: ${cents}`);
-  return Math.round(cents) / CENTS_PER_CREDIT;
+  const rounded = Math.round(cents);
+  if (!Number.isSafeInteger(rounded)) throw new MoneyError(`cents value out of range: ${cents}`);
+  return rounded / CENTS_PER_CREDIT;
 }
 
 /** 充值金额校验：必须为正、最多 2 位小数（0.01 credits 精度）。 */
@@ -31,11 +38,14 @@ export function parseRechargeCents(credits: number): number {
     throw new MoneyError('充值金额必须为正数');
   }
   const scaled = credits * CENTS_PER_CREDIT;
+  if (!Number.isFinite(scaled)) {
+    throw new MoneyError('充值金额超出允许范围');
+  }
   if (Math.abs(scaled - Math.round(scaled)) > 1e-6) {
     throw new MoneyError('充值金额最多支持 0.01 credits 精度');
   }
   const cents = Math.round(scaled);
-  if (cents <= 0) throw new MoneyError('充值金额必须为正数');
+  if (!Number.isSafeInteger(cents) || cents <= 0) throw new MoneyError('充值金额必须为正数');
   return cents;
 }
 
@@ -44,14 +54,28 @@ export function parseRechargeCents(credits: number): number {
  * 输入为整数，避免浮点误差。
  */
 export function tokenCostCents(tokens: number, ratePerMillionCents: number): number {
+  if (!Number.isFinite(tokens) || !Number.isFinite(ratePerMillionCents)) {
+    throw new MoneyError('token 计费参数非法');
+  }
   if (tokens <= 0 || ratePerMillionCents <= 0) return 0;
-  return Math.ceil((tokens * ratePerMillionCents) / TOKENS_PER_MILLION);
+  const cost = Math.ceil((tokens * ratePerMillionCents) / TOKENS_PER_MILLION);
+  if (!Number.isFinite(cost) || !Number.isSafeInteger(cost)) {
+    throw new MoneyError('token 计费金额超出安全范围');
+  }
+  return cost;
 }
 
 /** 容器分钟计费：分钟数 × 分/分钟（分钟数已由计量层向上取整）。 */
 export function unitCostCents(quantity: number, unitPriceCents: number): number {
+  if (!Number.isFinite(quantity) || !Number.isFinite(unitPriceCents)) {
+    throw new MoneyError('单价计费参数非法');
+  }
   if (quantity <= 0 || unitPriceCents <= 0) return 0;
-  return Math.ceil(quantity * unitPriceCents);
+  const cost = Math.ceil(quantity * unitPriceCents);
+  if (!Number.isFinite(cost) || !Number.isSafeInteger(cost)) {
+    throw new MoneyError('单价计费金额超出安全范围');
+  }
+  return cost;
 }
 
 /** 向上取整到分钟（不足 1 分钟按 1 分钟）。 */

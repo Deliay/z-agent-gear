@@ -34,6 +34,12 @@ const billingLedgerSchema = new mongoose.Schema(
     },
     bizId: { type: String, default: null },
     idempotentKey: { type: String, required: true, unique: true },
+    /**
+     * 可观测性标记（非正确性来源）：钱包同步由账户文档的 `appliedLedgerIds` 水位原子推进保证
+     * 恰好一次（见 `payment.applyLedgerDelta`）。本字段仅在该行同步成功后由 best-effort 写入，
+     * 供排查使用；**不得**据此判断是否需要补做钱包更新。
+     */
+    walletApplied: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },
   },
   { collection: 'billingledgers' },
@@ -41,25 +47,28 @@ const billingLedgerSchema = new mongoose.Schema(
 
 billingLedgerSchema.index({ accountId: 1, createdAt: -1 });
 
-/** 追加式不可变：任何 update/delete 一律拒绝（更正只能新增 adjust 条目）。 */
-function rejectMutation(next: (err?: Error) => void): void {
-  next(new Error('billingledgers is append-only; update/delete is forbidden'));
+/** 追加式不可变：任何 update/delete/replace/bulkWrite 一律拒绝（更正只能新增 adjust 条目）。 */
+const APPEND_ONLY_MESSAGE = 'billingledgers is append-only; update/delete is forbidden';
+type AppendOnlySchema = {
+  pre: (method: string, fn: (this: unknown, next: (err?: Error) => void) => void) => unknown;
+};
+const appendOnlySchema = billingLedgerSchema as unknown as AppendOnlySchema;
+function blockMutation(this: unknown, next: (err?: Error) => void): void {
+  next(new Error(APPEND_ONLY_MESSAGE));
 }
-billingLedgerSchema.pre('updateOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingLedgerSchema.pre('updateMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingLedgerSchema.pre('findOneAndUpdate', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingLedgerSchema.pre('deleteOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingLedgerSchema.pre('deleteMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
+for (const method of [
+  'updateOne',
+  'updateMany',
+  'findOneAndUpdate',
+  'replaceOne',
+  'findOneAndReplace',
+  'deleteOne',
+  'deleteMany',
+  'findOneAndDelete',
+  'bulkWrite',
+]) {
+  appendOnlySchema.pre(method, blockMutation);
+}
 
 export const BillingLedger = mongoose.model('BillingLedger', billingLedgerSchema);
 export type IBillingLedger = mongoose.InferSchemaType<typeof billingLedgerSchema>;

@@ -188,7 +188,7 @@ export const billingTypeDefs = `#graphql
   }
 
   extend type Mutation {
-    rechargeBillingAccount(accountId: ID!, amount: Float!, note: String): BillingInvoice!
+    rechargeBillingAccount(accountId: ID!, amount: Float!, note: String, idempotencyKey: String): BillingInvoice!
     setBillingAccountCreditLimit(accountId: ID!, creditLimit: Float!): BillingAccount!
     setBillingAccountStatus(accountId: ID!, status: String!): BillingAccount!
     reconcileBillingAccount(accountId: ID!): BillingAccount!

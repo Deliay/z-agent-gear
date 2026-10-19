@@ -274,15 +274,8 @@ export class ContainerService {
         });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        const failed = await this.repo.update(
-          created.id,
-          {
-            status: 'failed',
-            exitReason: `Job 创建失败: ${reason}`,
-            tokenHash: null,
-          },
-          { fromStatuses: [...ACTIVE_STATUSES] },
-        );
+        // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
+        const failed = await this.markFailed(created.id, `Job 创建失败: ${reason}`);
         throw new JobCreationError(
           created.id,
           reason,
@@ -382,16 +375,25 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    const updated = await this.updateGuarded(containerId, {
-      status: 'exited',
-      exitedAt: at,
-      exitReason,
-      tokenHash: null,
-      currentWorkloadName: null,
-    });
-    // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
-    if (updated) this.emitDestroyedIfBilled(updated);
-    return updated;
+    // 阻断项 4a：仅当 CAS **真的发生转移**时才投递 destroyed。CAS 未命中（记录已被并发
+    // 转移/处于 destroying）时不得回读后投递——否则会用提前的 exitedAt 顶替精确事件（少计费）。
+    const updated = await this.repo.update(
+      containerId,
+      {
+        status: 'exited',
+        exitedAt: at,
+        exitReason,
+        tokenHash: null,
+        currentWorkloadName: null,
+      },
+      { fromStatuses: [...ACTIVE_STATUSES] },
+    );
+    if (updated) {
+      // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
+      this.emitDestroyedIfBilled(updated);
+    }
+    // CAS 未命中仅回读用于返回值，绝不据此投递事件。
+    return updated ?? this.repo.findById(containerId);
   }
 
   async markFailed(
@@ -399,15 +401,20 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    const updated = await this.updateGuarded(containerId, {
-      status: 'failed',
-      exitedAt: at,
-      exitReason,
-      tokenHash: null,
-      currentWorkloadName: null,
-    });
+    // 阻断项 4a：同 markExited，仅 CAS 命中才投递。
+    const updated = await this.repo.update(
+      containerId,
+      {
+        status: 'failed',
+        exitedAt: at,
+        exitReason,
+        tokenHash: null,
+        currentWorkloadName: null,
+      },
+      { fromStatuses: [...ACTIVE_STATUSES] },
+    );
     if (updated) this.emitDestroyedIfBilled(updated);
-    return updated;
+    return updated ?? this.repo.findById(containerId);
   }
 
   async getById(containerId: string): Promise<CloudContainerEntity | null> {
@@ -459,8 +466,13 @@ export class ContainerService {
           {
             status: 'exited',
             exitedAt: new Date(),
+            // D2：保留调用方传入的强拆原因（如「余额不足…」），仅在为空时回退默认文案。
             exitReason:
-              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+              container.exitReason && container.exitReason.length > 0
+                ? container.exitReason
+                : deletion === 'deleted'
+                  ? '强制销毁'
+                  : '强制销毁（Job 已不存在）',
             tokenHash: null,
             currentWorkloadName: null,
           },
@@ -513,7 +525,8 @@ export class ContainerService {
     }
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
-    const baseReason = options?.reason ?? '强制销毁';
+    // R7：未显式传 reason 时保留既有 exitReason（如必须失败原因），不无条件覆写。
+    const baseReason = options?.reason ?? container.exitReason ?? '强制销毁';
     const exitReason = deletedJob ? baseReason : `${baseReason}（Job 删除失败，需人工清理）`;
     // 终态写回同样带 CAS（问题 50）：仅从 destroying 迁移，避免扩副本/并发下用陈旧状态覆写。
     const exited = await this.repo.update(
@@ -584,8 +597,13 @@ export class ContainerService {
           {
             status: 'exited',
             exitedAt: new Date(),
+            // D2：保留既有强拆原因，仅在为空时回退默认文案。
             exitReason:
-              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+              record.exitReason && record.exitReason.length > 0
+                ? record.exitReason
+                : deletion === 'deleted'
+                  ? '强制销毁'
+                  : '强制销毁（Job 已不存在）',
             tokenHash: null,
             currentWorkloadName: null,
           },

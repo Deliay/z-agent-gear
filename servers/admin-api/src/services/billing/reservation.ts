@@ -105,31 +105,64 @@ export class ReservationService {
     } catch (err) {
       if ((err as { code?: number }).code !== 11000) throw err;
       const existing = await this.findByResource(input.resourceId);
-      if (existing) return existing;
-      throw err;
+      if (!existing) throw err;
+      // 可重入（A1）：若上次 start 中途失败停在 PENDING，复用同一预留继续驱动冻结+激活；
+      // 已 ACTIVE 的重复就绪直接返回（幂等）。
+      if (existing.status !== 'PENDING') return existing;
+      reservation = existing;
     }
 
     const reservationId = documentId(reservation);
     const ref = { type: 'container_reservation' as const, id: input.resourceId };
-    if (input.depositCents > 0) {
-      await this.payments.freeze({
-        accountId: input.accountId,
-        amountCents: input.depositCents,
-        bizId: `${reservationBizPrefix(reservationId)}deposit`,
-        idempotentKey: `freeze:deposit:${reservationId}`,
-        preCheck: input.preCheck,
-        ref,
-      });
-    }
-    if (input.cycleEstimateCents > 0) {
-      await this.payments.freeze({
-        accountId: input.accountId,
-        amountCents: input.cycleEstimateCents,
-        bizId: `${reservationBizPrefix(reservationId)}cycle:0`,
-        idempotentKey: `freeze:cycle:${reservationId}:0`,
-        preCheck: input.preCheck,
-        ref,
-      });
+    try {
+      if (input.depositCents > 0) {
+        await this.payments.freeze({
+          accountId: input.accountId,
+          amountCents: input.depositCents,
+          bizId: `${reservationBizPrefix(reservationId)}deposit`,
+          idempotentKey: `freeze:deposit:${reservationId}`,
+          preCheck: input.preCheck,
+          ref,
+        });
+      }
+      if (input.cycleEstimateCents > 0) {
+        await this.payments.freeze({
+          accountId: input.accountId,
+          amountCents: input.cycleEstimateCents,
+          bizId: `${reservationBizPrefix(reservationId)}cycle:0`,
+          idempotentKey: `freeze:cycle:${reservationId}:0`,
+          preCheck: input.preCheck,
+          ref,
+        });
+      }
+    } catch (err) {
+      // 失败回滚（A1）：冻结中途失败不得卡死 PENDING（否则整生命周期无周期计费）。
+      // 释放已冻结部分并置 FAILED，交由资源对账/人工收口，避免僵尸预留。
+      if (input.depositCents > 0) {
+        await this.payments
+          .unfreeze({
+            accountId: input.accountId,
+            amountCents: input.depositCents,
+            bizId: `${reservationBizPrefix(reservationId)}deposit-rollback`,
+            idempotentKey: `unfreeze:deposit-rollback:${reservationId}`,
+          })
+          .catch(() => undefined);
+      }
+      if (input.cycleEstimateCents > 0) {
+        await this.payments
+          .unfreeze({
+            accountId: input.accountId,
+            amountCents: input.cycleEstimateCents,
+            bizId: `${reservationBizPrefix(reservationId)}cycle:0-rollback`,
+            idempotentKey: `unfreeze:cycle-rollback:${reservationId}:0`,
+          })
+          .catch(() => undefined);
+      }
+      await BillingReservation.updateOne(
+        { _id: reservationId, status: 'PENDING' },
+        { $set: { status: 'FAILED' }, $inc: { version: 1 } },
+      );
+      throw err;
     }
     await this.recomputeTotals(reservationId, input.accountId);
     const activated = await BillingReservation.findOneAndUpdate(
@@ -148,6 +181,25 @@ export class ReservationService {
     const reservation = await this.findById(reservationId);
     if (!reservation) throw new Error('预留不存在');
     if (reservation.status !== 'ACTIVE') {
+      return {
+        settled: false,
+        cycleSeq,
+        minutes: 0,
+        amount: 0,
+        windowFrom: reservation.startedAt,
+        windowTo: reservation.startedAt,
+        cashBalance: 0,
+      };
+    }
+
+    // 去重门（阻断项 3）：该 cycle 已结算过则直接返回「未结算」，不再执行副作用。
+    // at-least-once 下重复投递是常态；消费端据此不再投递下一期，断开指数放大链。
+    const alreadySettled = await BillingReservationCycle.exists({
+      reservationId: new mongoose.Types.ObjectId(reservationId),
+      cycleSeq,
+      status: 'settled',
+    });
+    if (alreadySettled) {
       return {
         settled: false,
         cycleSeq,
@@ -225,7 +277,7 @@ export class ReservationService {
     );
 
     await BillingReservation.updateOne(
-      { _id: reservationId },
+      { _id: reservationId, status: 'ACTIVE' },
       [
         {
           $set: {
@@ -235,8 +287,15 @@ export class ReservationService {
             lastCycleSeq: {
               $max: [{ $ifNull: ['$lastCycleSeq', -1] }, cycleSeq],
             },
-            expectedEndAt: new Date(settleTo.getTime() + 2 * this.cycleMs),
-            status: 'ACTIVE',
+            // A2：expectedEndAt 用 $max 守卫，旧 cycle 重放不得回拨到期时间（否则被误判 stale 提前 finalize）。
+            expectedEndAt: {
+              $max: [
+                { $ifNull: ['$expectedEndAt', new Date(0)] },
+                new Date(settleTo.getTime() + 2 * this.cycleMs),
+              ],
+            },
+            // A2：仅当仍为 ACTIVE 时保持 ACTIVE，绝不复活已 SETTLED/SETTLING 的预留。
+            status: { $cond: [{ $eq: ['$status', 'ACTIVE'] }, 'ACTIVE', '$status'] },
             version: { $add: [{ $ifNull: ['$version', 0] }, 1] },
           },
         },

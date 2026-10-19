@@ -98,6 +98,7 @@ export function toBillingAccountWire(dto: {
   status: string;
   insufficientSince: Date | null;
   invoiceSeq?: number;
+  ledgerCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -114,7 +115,7 @@ export function toBillingAccountWire(dto: {
     status: dto.status,
     insufficientSince: dto.insufficientSince ? dto.insufficientSince.toISOString() : null,
     invoiceSeq: dto.invoiceSeq ?? 0,
-    ledgerCount: 0,
+    ledgerCount: dto.ledgerCount ?? 0,
     createdAt: dto.createdAt.toISOString(),
     updatedAt: dto.updatedAt.toISOString(),
   };

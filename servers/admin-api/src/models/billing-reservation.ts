@@ -6,6 +6,7 @@ export const RESERVATION_STATUSES = [
   'SETTLING',
   'SETTLED',
   'RELEASE_PENDING',
+  'FAILED',
 ] as const;
 
 const billingReservationSchema = new mongoose.Schema(

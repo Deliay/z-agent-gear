@@ -16,10 +16,6 @@ import * as migration002RefreshDocker from './migrations/002-refresh-docker-pres
 import { createInternalBillingRouter } from './routes/internal-billing.js';
 import { createBillingOpenAiRouter } from './routes/billing-openai.js';
 import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
-import {
-  startMeteringConsumer,
-  startSettlementConsumer,
-} from './services/billing/mq/consumers.js';
 import { SettlementTickService } from './services/billing/settlement-tick.js';
 import { BillingScheduler } from './services/billing/scheduler.js';
 import { billingRuntime, reconciliationRuntime } from './services/billing/instances.js';

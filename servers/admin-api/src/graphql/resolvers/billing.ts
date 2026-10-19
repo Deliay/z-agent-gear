@@ -34,6 +34,17 @@ function toDate(value: unknown, field: string): Date | undefined {
   return date;
 }
 
+/** C4：GraphQL 入参 ObjectId 校验，避免 CastError 500。 */
+function assertObjectId(value: string, field: string): void {
+  if (!mongoose.isValidObjectId(value)) throw new GraphQLError(`${field} 非法`);
+}
+
+/** C4：分页参数整数校验 + 上界。 */
+function toPage(value: unknown, fallback: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
+  return Math.min(max, Math.max(1, value));
+}
+
 function toApiKeyWire(key: BillingApiKeyDTO) {
   return {
     ...key,
@@ -64,7 +75,12 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const accounts = await accountService.list(args);
+      // P1/C4：该查询此前未走 toPage，`page=2^31` 会退化为超大 skip 慢查询；统一做整数校验 + 上界。
+      const accounts = await accountService.list({
+        ...args,
+        page: toPage(args.page, 1, 100_000),
+        pageSize: toPage(args.pageSize, 50, 200),
+      });
       const counts = await ledgerCounts(accounts.map((account) => account.id));
       return accounts.map((account) => ({
         ...toBillingAccountWire(account),
@@ -96,6 +112,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const filter: Record<string, unknown> = { accountId: args.accountId };
       if (args.type) filter.type = args.type;
       if (args.category) filter.category = args.category;
@@ -104,8 +121,8 @@ export const billingResolvers = {
       if (from || to) {
         filter.createdAt = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
       }
-      const page = Math.max(1, args.page ?? 1);
-      const pageSize = Math.min(200, Math.max(1, args.pageSize ?? 50));
+      const page = toPage(args.page, 1, 100_000);
+      const pageSize = toPage(args.pageSize, 50, 200);
       const docs = await BillingInvoice.find(filter)
         .sort({ seq: -1 })
         .skip((page - 1) * pageSize)
@@ -119,8 +136,9 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const page = Math.max(1, args.page ?? 1);
-      const pageSize = Math.min(200, Math.max(1, args.pageSize ?? 50));
+      assertObjectId(args.accountId, 'accountId');
+      const page = toPage(args.page, 1, 100_000);
+      const pageSize = toPage(args.pageSize, 50, 200);
       const docs = await BillingReceipt.find({ accountId: args.accountId })
         .sort({ issuedAt: -1 })
         .skip((page - 1) * pageSize)
@@ -134,9 +152,13 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const from = toDate(args.from, 'from');
       const to = toDate(args.to, 'to');
       if (!from || !to) throw new GraphQLError('from/to 必填');
+      if (from.getTime() >= to.getTime() || to.getTime() - from.getTime() > 366 * 24 * 60 * 60 * 1000) {
+        throw new GraphQLError('rollup 时间范围非法');
+      }
       const buckets = await rollupService.query(args.accountId, args.granularity, from, to);
       return buckets.map((bucket) => toBillingRollup(bucket as never));
     },
@@ -146,6 +168,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      if (args.accountId) assertObjectId(args.accountId, 'accountId');
       const docs = await reservationService.list(args);
       return docs.map((doc) => toBillingReservation(doc as never));
     },
@@ -174,10 +197,11 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const filter: Record<string, unknown> = { accountId: args.accountId };
       if (args.status) filter.status = args.status;
-      const page = Math.max(1, args.page ?? 1);
-      const pageSize = Math.min(200, Math.max(1, args.pageSize ?? 50));
+      const page = toPage(args.page, 1, 100_000);
+      const pageSize = toPage(args.pageSize, 50, 200);
       const docs = await BillingApiCall.find(filter)
         .sort({ startedAt: -1 })
         .skip((page - 1) * pageSize)
@@ -207,15 +231,17 @@ export const billingResolvers = {
   Mutation: {
     rechargeBillingAccount: async (
       _parent: unknown,
-      args: { accountId: string; amount: number; note?: string },
+      args: { accountId: string; amount: number; note?: string; idempotencyKey?: string },
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const result = await billingRuntime.recharge({
         accountId: args.accountId,
         amountCredits: args.amount,
         note: args.note,
         operator: context.currentAdmin!.username,
+        idempotencyKey: args.idempotencyKey,
       });
       const invoice = await BillingInvoice.findById(result.invoiceId).lean();
       if (!invoice) throw new GraphQLError('充值账单生成失败');
@@ -227,6 +253,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const cents = creditsToCents(args.creditLimit);
       if (cents < 0) throw new GraphQLError('授信额度不能为负数');
       const account = await accountService.setCreditLimit(args.accountId, cents);
@@ -238,6 +265,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const account = await accountService.setStatus(args.accountId, args.status);
       return toBillingAccountWire(account);
     },
@@ -247,6 +275,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.accountId, 'accountId');
       const result = await accountService.reconcileAccount(args.accountId);
       return toBillingAccountWire(result.account);
     },
@@ -279,6 +308,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.modelId, 'modelId');
       const model = await Model.findById(args.modelId);
       if (!model) throw new GraphQLError('模型不存在');
       const rates = {
@@ -346,6 +376,7 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      assertObjectId(args.id, 'id');
       const key = await apiKeyService.revoke(args.id, {
         ownerType: 'admin_user',
         ownerId: context.currentAdmin!.id,

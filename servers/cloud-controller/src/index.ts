@@ -175,11 +175,13 @@ export function createCloudControllerApp(): CloudControllerApp {
     if (started) return;
     started = true;
     await mongoose.connect(config.mongodbUri);
-    // 计费集合索引（eventId 唯一 / {producer,published,createdAt}）随启动建立（裁决 16）
+    // 计费集合索引（eventId 唯一 / {producer,published,createdAt}）随启动建立。
+    // D3：enqueue 去重完全依赖 eventId 唯一索引，索引缺失会导致重复事件——必须 fail-fast。
     try {
       await BillingOutbox.syncIndexes();
     } catch (err) {
-      logger.warn?.(`[billing] syncIndexes failed (non-fatal): ${(err as Error).message}`);
+      logger.warn?.(`[billing] syncIndexes failed (fatal): ${(err as Error).message}`);
+      throw err;
     }
     billingPublisher.start();
     await statusSync.start();

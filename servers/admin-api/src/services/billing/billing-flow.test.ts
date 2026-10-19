@@ -133,7 +133,8 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     const chargeCount = await BillingLedger.countDocuments({ bizType: 'charge' });
 
     const replay = await billing.handleSettlementCycle(ready.reservationId, 0);
-    expect(replay.settled).toBe(true);
+    // 去重门（阻断项 3）：已结算的 cycle 重放返回「未结算」，断开增量副作用（不再投下一期）
+    expect(replay.settled).toBe(false);
     expect(await BillingInvoice.countDocuments({ accountId: account.id })).toBe(invoiceCount);
     expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(chargeCount);
 

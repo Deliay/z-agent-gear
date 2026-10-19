@@ -34,6 +34,11 @@ services:
     expose:
       - "5672"
       - "15672"
+    volumes:
+      - type: "volume"
+        target: "/var/lib/rabbitmq"
+        source: "agentgear.apphost-795ff385e1-rabbitmq-data"
+        read_only: false
     networks:
       - "aspire"
     restart: "unless-stopped"
@@ -161,4 +166,6 @@ networks:
     driver: "bridge"
 volumes:
   agentgear.apphost-795ff385e1-mongodb-data:
+    driver: "local"
+  agentgear.apphost-795ff385e1-rabbitmq-data:
     driver: "local"

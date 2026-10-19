@@ -71,6 +71,22 @@ describe('计费 MQ 拓扑', () => {
     expect(body).toMatchObject({ reservationId: 'r1', accountId: 'a1', cycleSeq: 2 });
   });
 
+  it('B1：重试队列按业务流绑定路由键（不再用 `#` 复制到两队列）', async () => {
+    const channel = fakeChannel();
+    await declareBillingTopology(channel as never);
+    const bindCalls = (channel.bindQueue as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const meteringBindings = bindCalls
+      .filter((call) => call[0] === METERING_RETRY_QUEUE)
+      .map((call) => call[2]);
+    const settlementBindings = bindCalls
+      .filter((call) => call[0] === 'billing.settlement.retry.q')
+      .map((call) => call[2]);
+    expect(meteringBindings).toEqual(expect.arrayContaining(['container.*', 'model_call.*']));
+    expect(meteringBindings).not.toContain('#');
+    expect(settlementBindings).toEqual(['billing.settlement.cycle']);
+    expect(settlementBindings).not.toContain('#');
+  });
+
   it('指数退避上限 5 分钟', () => {
     expect(retryBackoffMs(1)).toBe(5000);
     expect(retryBackoffMs(2)).toBe(10_000);

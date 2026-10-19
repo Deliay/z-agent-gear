@@ -94,10 +94,23 @@ const TIMEOUT_MS = 10_000;
 export class BillingServiceUnavailableError extends Error {
   readonly code = 'BILLING_SERVICE_UNAVAILABLE';
 
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** 上游 HTTP 状态码（如有），供上层区分「参数错误」与「服务不可用」。 */
+    readonly httpStatus?: number,
+  ) {
     super(message);
     this.name = 'BillingServiceUnavailableError';
   }
+}
+
+/** C2：按 HTTP 状态码映射稳定、脱敏的错误文案，绝不回传服务端内部 message。 */
+function stableErrorMessage(status: number): string {
+  if (status === 400) return '费用请求参数不合法';
+  if (status === 404) return '费用记录不存在';
+  if (status === 401 || status === 403) return '费用服务鉴权失败';
+  if (status >= 500) return '费用服务暂时不可用，请稍后重试';
+  return '费用服务请求失败';
 }
 
 /**
@@ -131,24 +144,21 @@ export class BillingClient {
         },
         signal: controller.signal,
       });
-    } catch (err) {
-      throw new BillingServiceUnavailableError(
-        `费用服务不可达：${(err as Error).message}`,
-      );
+    } catch {
+      // C2：不回传底层网络错误详情（可能含内部主机/端口信息）。
+      throw new BillingServiceUnavailableError('费用服务不可达，请稍后重试');
     } finally {
       clearTimeout(timer);
     }
     if (!response.ok) {
-      let detail = `费用服务返回 ${response.status}`;
-      try {
-        const body = (await response.json()) as { error?: string; message?: string };
-        detail = body.message || body.error || detail;
-      } catch {
-        // ignore
-      }
-      throw new BillingServiceUnavailableError(detail);
+      throw new BillingServiceUnavailableError(stableErrorMessage(response.status), response.status);
     }
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch {
+      // C2：响应体非法（非 JSON）时抛稳定错误，不透传解析异常。
+      throw new BillingServiceUnavailableError('费用服务响应异常', response.status);
+    }
   }
 
   async getAccount(
@@ -182,13 +192,14 @@ export class BillingClient {
   /** 按账单直查收据：避免前端依赖收据列表分页而误报「无收据」。 */
   async getReceiptByInvoice(accountId: string, invoiceId: string): Promise<BillingReceiptWire | null> {
     // 输入自卫：空串/非 ObjectId 形态直接返回 null（不发请求，杜绝退化为「最新一张收据」而错配归属）
-    if (!/^[0-9a-fA-F]{24}$/.test(invoiceId)) return null;
+    const normalized = invoiceId.toLowerCase();
+    if (!/^[0-9a-f]{24}$/.test(normalized)) return null;
     const list = await this.request<BillingReceiptWire[]>(
-      `/internal/billing/receipts?${this.params({ accountId, invoiceId, pageSize: 1 })}`,
+      `/internal/billing/receipts?${this.params({ accountId, invoiceId: normalized, pageSize: 1 })}`,
     );
     const receipt = list[0] ?? null;
-    // 归属校验：命中项必须是同一 invoiceId，否则视为无收据
-    return receipt && receipt.invoiceId === invoiceId ? receipt : null;
+    // 归属校验 + 大小写归一（C6）：命中项必须是同一 invoiceId，否则视为无收据
+    return receipt && receipt.invoiceId.toLowerCase() === normalized ? receipt : null;
   }
 
   async listRollups(

@@ -162,4 +162,102 @@ describe('cloud-controller 计费源头', () => {
     expect(online?.billingStartedAt).toBeInstanceOf(Date);
     expect(ready).toHaveLength(1);
   });
+
+  it('T-D2: 卡死 destroying 恢复保留既有 exitReason（不覆写强拆原因）', async () => {
+    const { repo, service } = setupService({});
+    const created = await service.start('idle');
+    await repo.update(
+      created.id,
+      { status: 'destroying', exitReason: '必须工作负载「setup」初始化失败' },
+      { fromStatuses: ['creating', 'connecting'] },
+    );
+    await service.reclaimResidualJob(created.id);
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.exitReason).toBe('必须工作负载「setup」初始化失败');
+  });
+
+  it('T-R2/B4: outbox 原子认领 + 租约 + attempts 封顶隔离（cloud-controller relay）', async () => {
+    const repo = new InMemoryOutboxRepository('cloud-controller');
+    await repo.enqueue({
+      eventId: 'container.ready:r1',
+      eventType: 'container.ready',
+      occurredAt: new Date().toISOString(),
+      accountId: 'acct-1',
+      resourceId: 'r1',
+      payload: {},
+    });
+
+    // 同一租约窗口内，第二个认领者拿不到。
+    const first = await repo.claim('cloud-controller', 10, 'p1', 30000);
+    const second = await repo.claim('cloud-controller', 10, 'p2', 30000);
+    expect(first.map((r) => r.eventId)).toEqual(['container.ready:r1']);
+    expect(second).toHaveLength(0);
+
+    // 租约过期（leaseMs=0）后可被再次认领。
+    const afterLease = await repo.claim('cloud-controller', 10, 'p2', 0);
+    expect(afterLease.map((r) => r.eventId)).toEqual(['container.ready:r1']);
+
+    // attempts 达上限 → failed 隔离，不再被认领。
+    await repo.markFailed('container.ready:r1', 'boom', 3);
+    await repo.markFailed('container.ready:r1', 'boom', 3);
+    await repo.markFailed('container.ready:r1', 'boom', 3);
+    expect(repo.pending()[0]?.failed).toBe(true);
+    expect(await repo.claim('cloud-controller', 10, 'p3', 0)).toHaveLength(0);
+  });
+
+  it('T-R2/B4: 两个 relay 共享 outbox 时同一事件只发布一次（不双发）', async () => {
+    const repo = new InMemoryOutboxRepository('cloud-controller');
+    const published: string[] = [];
+    const transport = {
+      publish: async (_routingKey: string, message: BillingEventMessage) => {
+        published.push(message.eventId);
+      },
+      close: async () => {},
+    };
+    const p1 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    const p2 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    await p1.enqueue({
+      eventId: 'container.destroyed:c1',
+      eventType: 'container.destroyed',
+      occurredAt: new Date().toISOString(),
+      accountId: 'acct-1',
+      resourceId: 'c1',
+      payload: {},
+    });
+    const results = await Promise.all([p1.relayOnce(), p2.relayOnce()]);
+    expect(results.reduce((a, b) => a + b, 0)).toBe(1);
+    expect(published).toEqual(['container.destroyed:c1']);
+  });
+
+  it('T-CC-B10（阻断项 4a）: markExited/markFailed 仅在 CAS 命中时投递 destroyed', async () => {
+    const destroyed: CloudContainerEntity[] = [];
+    const { repo, service } = setupService({
+      onDestroyed: (container) => destroyed.push(container),
+    });
+
+    const exitedContainer = await service.start('idle', null, [], null, {
+      billingAccountId: 'acct-3',
+    });
+    await service.markOnline(exitedContainer.id);
+    const exited = await service.markExited(exitedContainer.id, 'Job 已回收');
+    expect(exited?.status).toBe('exited');
+    expect(destroyed).toHaveLength(1);
+    const exitedAt = exited?.exitedAt?.getTime();
+
+    // 重复 markExited：CAS 未命中，不得再次投递（更不得用提前时刻顶替）
+    await service.markExited(exitedContainer.id, 'Job 已回收');
+    expect(destroyed).toHaveLength(1);
+    expect(destroyed[0]!.exitedAt?.getTime()).toBe(exitedAt);
+
+    // 处于 destroying 的记录被陈旧扫描 markFailed：CAS 未命中 → 不提前投递
+    const destroying = await service.start('idle', null, [], null, {
+      billingAccountId: 'acct-4',
+    });
+    await service.markOnline(destroying.id);
+    await repo.update(destroying.id, { status: 'destroying' }, { fromStatuses: ['online'] });
+    const failed = await service.markFailed(destroying.id, '陈旧扫描');
+    expect(failed?.status).toBe('destroying');
+    expect(destroyed).toHaveLength(1);
+  });
 });

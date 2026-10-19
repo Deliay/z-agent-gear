@@ -6,7 +6,13 @@ export interface Migration {
 }
 
 async function acquireLock(): Promise<boolean> {
+  // D11：清理崩溃遗留的过期锁（此前 expiresAt 从不生效 → 永久锁死未来迁移）。
+  await Migrations.deleteOne({
+    _lock: 'migration_lock',
+    expiresAt: { $lt: new Date() },
+  }).catch(() => undefined);
   try {
+    // `_lock` 唯一索引保证并发双跑只有一个进程能拿到锁。
     await Migrations.create({
       _lock: 'migration_lock',
       acquired: new Date(),

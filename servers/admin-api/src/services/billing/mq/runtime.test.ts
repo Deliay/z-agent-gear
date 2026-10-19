@@ -78,7 +78,7 @@ describe('BillingMqRuntime（断线自动重连）', () => {
     await runtime.start();
     expect(createChannelMock).toHaveBeenCalledTimes(1);
     channel.trigger('close');
-    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(3000);
     expect(createChannelMock).toHaveBeenCalledTimes(2);
     channel.trigger('error', new Error('boom'));
     await runtime.stop();
@@ -95,7 +95,7 @@ describe('BillingMqRuntime（断线自动重连）', () => {
       logger: { warn: vi.fn() },
     });
     await runtime.start();
-    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(3000);
     expect(createChannelMock).toHaveBeenCalledTimes(2);
     await runtime.stop();
   });

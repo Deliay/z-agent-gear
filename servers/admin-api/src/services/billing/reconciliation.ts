@@ -92,7 +92,18 @@ export class ReconciliationService {
   }
 
   private async reconcileResources(): Promise<ReconciliationReport> {
-    const active = await this.reservations.list({ status: 'ACTIVE' });
+    // A1：把 PENDING（start 中断可能残留）也纳入资源对账，避免僵尸预留长期占用资源与额度。
+    const scanned = [
+      ...(await this.reservations.list({ status: 'ACTIVE' })),
+      ...(await this.reservations.list({ status: 'PENDING' })),
+    ];
+    const seen = new Set<string>();
+    const active = scanned.filter((reservation) => {
+      const id = documentId(reservation);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
     let containers: Array<{ id: string; status: string }>;
     try {
       containers = await this.options.listContainers();
