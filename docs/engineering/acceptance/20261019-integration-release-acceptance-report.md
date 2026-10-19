@@ -533,3 +533,87 @@ flowchart LR
 3. **幂等键的「粒度」必须等于业务事实的粒度**：`charge:final-gap:<rid>:<起点>` 把「区间」折叠成「起点」，同一区间的第二次表达（更宽窗口）会被当成重复而丢弃——**窗口型幂等键必须编码窗口两端**，或在应用侧推导已覆盖区间再补差。
 4. **「修复要求」的验收以原文为准**：R3-3 要求是「不得把 `lastSettleAt` 推过未收费窗口」，实现给出的「gap 补收」只是**等价手段**，当手段在双崩溃窗口失效时，原文要求即未达成——复核要把「要求原文」与「实现手段」分开核对，声明「✅」时以原文为准。
 5. **残余风险清单要按「新机制的失效模式」列，而不是按「旧数据的兼容性」列**：7.8 只列了历史行兼容，却漏了新 gap 机制自身的失效模式（同起点撞键）——引入新幂等键时，把「什么情况下这个键会误命中」写进残余风险，是声明完整性的最低线。
+
+---
+
+## 十一、第五轮 AI Review 复核（2026-10-20，AI Review 节点·打回）
+
+> 复核对象：返工提交 `3829c65`（基线 `integration` @ `ab1a3b7`），返工对账见 `20261019-integration-release-review-fixes.md` §八。
+> 结论：**不通过，打回返工**。🔴 R4-2 经 Probe D 实证**已达成**（断言业务事实化、修复前必红）；🟠 R4-1 主路径修复属实（区间两端编码 + `settledCoverage` + 游标按覆盖终点推进，两项回归经探针红于声明值）；§7.5/§7.8 的过度声明已如实更正。但本轮新发现 **🟠 R5-1**：`finalSettle` 在「`endedAt` 早于 `lastSettleAt`」（迟到的早于游标的 destroyed 事实）时把游标**回退**进已收费区间——本轮声明「游标仅在补收生效时推进到 `endedAt`，否则停在已覆盖终点」「游标只推进到已收费终点」在该路径**不成立**（声明过度再现），且随后的 A-3「更晚 `endedAt`」尾结按回退游标补收 → **重复计费**（复现实测 900，应收 700）；另有 🟡 R5-2：零价尾段不落流水，「覆盖终点」与游标口径分裂。
+
+### 11.1 复核方法与独立验证（不采信自报）
+
+**探针回退验证（固定复核手段，本机实跑）**：
+
+| 探针 | 范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| Probe D | `reconciliation.ts` 回退至 `c982ed4` | 「FAILED 预留与零计费窗口…（R3-2/R4-2 收敛护栏）」 | 🔴 变红：`AssertionError: expected 2 to be +0`（修复前确实补投 2 条朴素 destroyed 行，新断言可捕获）→ R4-2 destroyed 断言**可区分** ✅ |
+| Probe D（同上） | 同上 | 「已发布未生效（DLQ）→ 代偿 eventId 重新入列；连续两轮 repair 行数收敛」 | 🔴 变红：`AssertionError: expected 2 to be 1`（`repairOf` 护栏可区分）✅ |
+| R4-1 Probe | `reservation.ts` 回退至 `2a95c4a` | `billing-flow.test.ts`「R4-1: 二次崩溃恢复…」 | 🔴 变红：`AssertionError: expected 1000 to be 2000`（与对账表 8.3 声明一致，独立复现 ✅） |
+| R4-1 Probe（同上） | 同上 | `billing-flow.test.ts`「R3-3: 最终结算崩溃恢复…」 | 🔴 变红：`AssertionError: expected 1000 to be 1500`（独立复现 ✅） |
+| R5-P1（本轮新发现，见 R5-1） | 不回退，正向构造「周期已推进游标 + 迟到的早于游标的 destroyed」 | 临时复现（`finalSettle` 游标语义） | 🔴 缺陷复现：`lastSettleAt=T3`（`expected …000 to be …100000`，即 T5）——**游标回退进已收费区间** |
+| R5-P2（本轮新发现，见 R5-1） | 同上 + A-3「更晚 `endedAt`」尾结 | 临时复现 | 🔴 缺陷复现：Σcharge `expected 900 to be 700`（尾结按回退游标收 `[T3,T7]=400`，`[T3,T5]` 与 cycle 行**重复计费 200**）；gap 键为 `charge:final-gap:<rid>:T3:T7`（应为 `…:T5:T7`） |
+
+**独立实跑（本机，不采信自报；Aspire 全栈干净实例 `aspire stop && aspire start` 后注入 `INTERNAL_API_TOKEN`/`MONGODB_URI`/`REDIS_URL`）**：
+
+| 层 | 命令 | 结果 | 与自报对照 |
+|---|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ **534 passed / 1 skipped**，tsc 0 | 一致 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 | 一致 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 | 一致 |
+| admin-web | `tsc -b` / `vitest run` | ✅ 0 / 207 passed | 一致 |
+| agent-web | `tsc -b` / `vitest run` | ✅ 0 / 429 passed | 一致 |
+| tests/api（干净实例，按 `tests/api/AGENTS.md` 注入 `INTERNAL_API_TOKEN`/`MONGODB_URI`/`REDIS_URL`/`ADMIN_INITIAL_PASSWORD`） | `npx vitest run` | ✅ **454 passed / 0 skipped**（28 文件） | 一致（第四轮承诺本轮实跑核对，已兑现） |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ **3 passed**（admin-billing 2 + billing 1，干净实例 BASE_URL=agent-web / ADMIN_WEB_URL=admin-web） | 一致（第四轮承诺本轮实跑核对，已兑现） |
+
+安全扫描：返工增量（4 文件 298 行）无硬编码凭据、无 `dangerouslySetInnerHTML`/`innerHTML`/`eval`、无敏感信息日志 ✅。探针/复现对源码的临时回退已全部还原；临时复现用例（`r5-review-repro.test.ts`）为评审证据，不随交付提交。
+
+### 11.2 复核确认属实（✅ 真修复，不再构成打回）
+
+| 项 | 核实结论 |
+|---|---|
+| R4-2 destroyed 断言业务事实化 | ✅ `countDocuments({eventId: /^container\.destroyed:/}) === 0`——以事件 entity 为单位（正则同时覆盖朴素行与 `:repair:` 行），Probe D 下红于 `expected 2 to be +0`，断言可捕获修复前的朴素补投行，空转已消除 |
+| R4-2 ready 有界性 `repairOf` 锚定 | ✅ 预置 DLQ ready 行 → 两轮后 `^container.ready:c-zero` 恒 2、`repairOf==='container.ready:c-zero'` 恒 1；Probe D 下该文件 DLQ 用例红于 `expected 2 to be 1`（`repairOf` 护栏可区分） |
+| R4-2 对账表更正 | ✅ §7.4 已标注上一轮 `/destroyed.*repair/` 空转与 ready「11000→in-flight 兜底」伪锚定并更正 |
+| R4-1 幂等键/`bizId` 区间两端编码 | ✅ `charge:final` 的 `bizId=…:final:<from>:<to>`、`charge:final-gap` 的 `idempotentKey`/`bizId` 均 `…:<from>:<to>`（与对账表 8.2 一致；注意 `charge:final` 的**幂等键**仍为 `charge:final:<rid>`，仅 `bizId` 编码区间——对账表表述准确，但 `finalSettle` JSDoc「幂等键…均编码区间两端」表述过度，见 R5-1 修复要求 ④） |
+| R4-1 按 ledger 已覆盖终点补差 | ✅ `settledCoverage` 汇总 `final`/`final-gap` 的 `bizId` 端点取 `max(to)`，恢复分支只补 `[coveredEnd, endedAt]`；R4-1 用例（二次崩溃）断言合计 2000、新增 `final-gap[T2,T3]=500`，Probe 红于 `expected 1000 to be 2000` ✅ |
+| R4-1 单崩溃路径 | ✅ 「R3-3」断言 gap `[T1,T2]=500`、`amount=1500`，Probe 红于 `expected 1000 to be 1500` ✅ |
+| R4-1 `settleTailAfterSettled` 同口径 | ✅ 改为覆盖终点驱动 + 先扣费后 `$max` 推进游标（旧「CAS 先推进游标、后扣费」的漏收窗口已消除）；串行前提（`billingMutex`）已在方法注释声明（§7.8 如实标注） |
+| §7.5/§7.8 声明更正 | ✅ §7.5 已撤回上一轮「不推过未收费窗口」的过度声明并改写；§7.8 残余风险改为「历史无编码 `final` 行 + `settleTailAfterSettled` 串行前提」——但**游标回退路径未被覆盖，见 R5-1** |
+| R3-1~R3-7（上轮已确认项） | ✅ 保持属实：`3829c65` 仅改 `reservation.ts` + 两处测试 + 对账文档，未触碰其实现（`reconciliation.ts`/`payment.ts`/`pricing.ts` 等零改动） |
+
+### 11.3 复核发现问题（❌ 打回项）
+
+#### R5-1（🟠 重要·声明与实现不符 + 重复计费敞口）`finalSettle` 游标回退进已收费区间——「游标只推进到已收费终点」声明在 `endedAt < lastSettleAt` 路径不成立
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `servers/admin-api/src/services/billing/reservation.ts` `finalSettle`：`let cursor = endedAt;`（无条件初始化）后，游标钳位 `cursor = new Date(Math.max(billedThrough, from.getTime()))` **只在 `if (minutes > 0)` 块内执行**；`minutes <= 0`（即 `endedAt <= from = lastSettleAt`）时整块跳过，收尾 `$set: { lastSettleAt: cursor, expectedEndAt: endedAt }` 把游标**写回 `endedAt`**，低于已收费终点 `from` |
+| 问题 | 本轮声明「游标 cursor 仅在补收生效时推进到 `endedAt`，否则停在已覆盖终点」「游标只推进到已收费终点，绝不越过未收费窗口」（对账表 §8.2/§7.5 与 `finalSettle` JSDoc）在该路径**不成立**：① 游标没有「停在已覆盖终点」而是推进到 `endedAt`（什么都未收）；② `endedAt` 低于已收费终点时游标**回退进已收费区间**（`lastSettleAt`/`expectedEndAt` 同时回退）。此后任何 A-3 尾结（「SETTLED 之后…更晚的 `endedAt`」）经 `settleTailAfterSettled` 以 `gapFrom = coverage.coveredEnd ?? lastSettleAt` 起算——`settledCoverage` 只认 `final*` 流水、不含 `cycle` 流水，回退后的游标成为补收起点 → **与 cycle 已收费区间重复计费** |
+| 复现（R5-P1/P2，本机实跑） | ① 预留 `ACTIVE`，周期结算已按 `[T0,T5]` 收费（`cycle:0` 行 500）并把 `lastSettleAt` 推进到 T5；② 迟到 destroyed（`occurredAt=T3 < T5`）调 `finalSettle(T3)` → 游标回退为 T3（R5-P1 红：`expected 1790812980000 to be 1790813100000`）；③ A-3 尾结 `finalSettle(T7)` → 应只收 `[T5,T7]=200`（合计 700），实测 `charge:final-gap:<rid>:T3:T7=400`、Σcharge **900**（R5-P2 红：`expected 900 to be 700`）——`[T3,T5]` 被 cycle 与 final-gap 各收一次 |
+| 可达性 | 回退本身**现实可达**：destroyed 事实晚于周期结算被消费即可（DLQ 重试/指数退避、admin-api 停机截断——O-1 注释自证的丢事件面、outbox 乱序——R-1 家族既有乱序面）；周期结算按「中断计费」模型照常推进（`settleCycle` 只看窗口 ≤ now，不看容器存活），`lastSettleAt` 越过真实 `exitedAt` 后迟到事实即触发。后半段（更晚 `endedAt` 的尾结）是 A-3 JSDoc 自证的场景（「控制面误判 stale 提前终结，后续真实的 destroyed 事件携带更晚的 `endedAt`」）；当前事件源组合（同容器 `container.destroyed:<id>` eventId 唯一 + enqueue 首写胜出、`repairOf` 至多补投一条、resources 线只扫 ACTIVE/PENDING）恰好挡住自动化路径，属**偶然围栏**而非设计护栏——R5-P2 经 `finalSettle` 直调（A-3 语义的合法入口）即复现，任何事件源演进（`exitedAt` 变更后补投、人工补事件、resources 线口径调整）都会落成实际错账 |
+| 为什么是问题 | 资金方向为「重复计费」（客户侧损失），属 R-1「计费事件乱序 → 同一会话重复计费」阻断家族的残余面；且本轮声明「游标只推进到已收费终点/停在已覆盖终点」直接被该路径证伪——与 R4-1（声明过度）、R2-3（声明↔实现失实）同一缺陷类，违反「声明的状态机/守卫须给出可自证的回归」红线（现有 R3-3/R4-1 回归只覆盖正向路径，`minutes<=0` 路径无任何锚点） |
+| 修复要求 | ① 游标绝不回退：`lastSettleAt` 只允许推进（如收尾统一 `Math.max(cursor, from)` 钳位，或 `minutes <= 0` 时保持原游标不动），`expectedEndAt` 同口径不回退；② 补区分性回归（即 R5-P1/P2 场景）：断言「周期已推进 T5 + 迟到 destroyed(T3)」后游标仍为 T5（业务事实：游标 = 已收费终点），再断言随后 `endedAt=T7` 尾结只收 `[T5,T7]=200`、Σcharge=700；按固定口径跑探针（去掉钳位确认变红）并在对账表注明；③ `settleTailAfterSettled` 的 `gapFrom` 起点与「已收费终点」口径统一（见 R5-2），至少在注释/残余风险中声明 `coveredEnd` 不含 `cycle` 流水、依赖游标不回退的前提；④ 声明精确化：`finalSettle` JSDoc「所有最终结算流水的幂等键与 `bizId` 均编码区间两端」与实现不符（`charge:final` 幂等键为 `charge:final:<rid>`，仅 `bizId` 编码区间），如实改写 |
+
+#### R5-2（🟡 建议·随 R5-1 一并收口）零价尾段不落流水 → 「覆盖终点」与游标口径分裂
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `finalSettle` gap 块与 `settleTailAfterSettled` 的零价分支：`priced.amountCents <= 0` 时 `billedThrough = endedAt` **不写任何 ledger 行**，游标推进但 `settledCoverage.coveredEnd` 停留 |
+| 问题 | 覆盖口径（`bizId` 端点）与游标口径（`lastSettleAt`）在零价尾段后分裂：后续尾结 `gapFrom = coveredEnd ?? lastSettleAt` 会从**更早的覆盖终点**重新定价整个区间。零费率档稳定时无害（仍定价为 0），但若价格表在两次尾结之间从 0 调为正价（后台可改价），此前免费窗口会被**回溯计费** |
+| 修复要求 | 零价尾段同样落一行 0 元流水（`charge` 对 0 元会落 `deltaBalance:0` 行，`finalSettle` 主路径已如此）或在 `settledCoverage` 推进语义上与游标一致；如不修，如实声明残余风险 |
+
+### 11.4 返工要求（第五轮打回理由）
+
+1. **必须修复（重要）**：R5-1——游标绝不回退进已收费区间（含 `expectedEndAt`），补 R5-P1/P2 区分性回归并探针自证，`settleTailAfterSettled` 起点口径统一/声明，JSDoc 声明精确化；对账表如实标注本轮「游标只推进到已收费终点/停在已覆盖终点」曾过度。
+2. **随修（建议）**：R5-2——零价尾段落 0 元流水或统一覆盖/游标口径（不修则声明残余风险）。
+3. **复核口径不变并升级**：不采信自报；每条守卫/状态机声明配可自证回归（断言修复前失败）；探针回退验证为固定复核手段；对账表按修复要求子项逐条打勾、未做子项如实标注；**断言与游标类不变量须覆盖「逆向/边界输入」（如 `endedAt < lastSettleAt`），不得只测正向路径**。
+4. 上轮遗留承诺已兑现：tests/api 与费用 E2E 本轮已实跑核对（见 11.1）。
+
+### 11.5 经验总结（第五轮新增）
+
+1. **「只推进」类不变量必须同时约束「不回退」**：`Math.max(billedThrough, from)` 只护住了 `minutes > 0` 路径，`minutes <= 0` 路径原样写 `endedAt`——游标类断言要按「区间夹逼」写（≥ 已收费终点且 ≤ 已覆盖/已收终点），并为「输入早于当前游标」的逆向场景补回归。
+2. **覆盖口径与游标口径必须同源**：`settledCoverage` 只认 `final*` 流水、游标却承载「cycle + final」的已收费终点——两个「终点」语义不同，靠「游标不回退」这一外部前提才一致。口径分离的不变量要把前提写成显式断言，否则任何回退都会静默变成重复计费。
+3. **偶然围栏不是护栏**：R5-1 后半段目前被「eventId 唯一 + repairOf + 状态门」这些**与资金正确性无关**的围栏挡住，属可演化面；判定缺陷时以「合法入口直调是否可复现」为准（R5-P2 一条直调即红），不以「当前事件流碰巧绕不开」为准。
+4. **声明的「否则」分支要逐一核对**：「仅当 X 才推进到 endedAt，否则停在已覆盖终点」——复核时把「否则」的每条路径（无流水、零价、`minutes<=0`、历史行）各自走一遍，声明才可验收；本轮 R4-1 的「否则」只覆盖了 `billedThrough === null` 与补收未生效，漏了「整块未进入」。
+5. **每次打回的「下轮将实跑核对」必须当场兑现**：上轮欠下的 tests/api/E2E 实跑本轮补齐并记入 11.1——验证欠账滚存会让「自报」重新变成事实来源。
