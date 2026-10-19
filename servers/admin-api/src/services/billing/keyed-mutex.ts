@@ -1,4 +1,11 @@
-/** 按 key 串行化异步操作（同一 key 的并发调用排队执行）。 */
+/**
+ * 按 key 串行化异步操作（同一 key 的并发调用排队执行）。
+ *
+ * ⚠️ A11 单实例硬约束：本锁是**进程内** `Map`，不是分布式原语。多副本/多消费者部署下，
+ * 同 key（如同一账户 `account:{id}`、同一预留 `reservation:{id}`）的并发不会被跨进程串行化。
+ * 因此 admin-api 的计费消费者与 scheduler **必须以单实例运行**（或改用 Mongo 级别的账户锁
+ * / 预检令牌落库）。当前部署假设单副本；扩容前必须先落库化互斥与预检。
+ */
 export class KeyedMutex {
   private readonly tails = new Map<string, Promise<unknown>>();
 

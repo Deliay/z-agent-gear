@@ -26,6 +26,8 @@ export interface WorkloadContainerStatePort {
   markInitializing(containerId: string, currentWorkloadName: string): Promise<unknown>;
   markOnline(containerId: string): Promise<unknown>;
   markConnecting(containerId: string): Promise<unknown>;
+  /** 必须失败兜底：把容器 CAS 为终态 `failed`（含 destroyed 补投，避免计费会话悬空）。 */
+  markFailed(containerId: string, reason: string): Promise<unknown>;
   /** 必须失败：锁外强制注销（复用既有 destroy 链路，`reason` 写入 `exitReason`）。 */
   forceDestroy(containerId: string, reason: string): Promise<unknown>;
 }
@@ -344,17 +346,9 @@ export class WorkloadDispatcher {
         err,
       );
       try {
-        await this.deps.containerRepository.update(
-          containerId,
-          {
-            status: 'failed',
-            exitedAt: new Date(this.now()),
-            exitReason: reason,
-            tokenHash: null,
-            currentWorkloadName: null,
-          },
-          { fromStatuses: ['creating', 'connecting', 'initializing', 'online'] },
-        );
+        // 阻断项 4b：兜底改走 `markFailed`（统一终态钩子，CAS 命中时补投 destroyed），
+        // 不再用裸 `repo.update` 写终态，避免 `billingStartedAt` 非空却漏投 destroyed 导致计费悬空。
+        await this.deps.containerService.markFailed(containerId, reason);
       } catch (fallbackErr) {
         this.deps.logger?.error?.(
           `[workload] mustFailure fallback mark failed failed containerId=${containerId}`,

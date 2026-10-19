@@ -14,24 +14,27 @@ const billingReceiptSchema = new mongoose.Schema(
   { collection: 'billingreceipts' },
 );
 
-function rejectMutation(next: (err?: Error) => void): void {
+/** 追加式不可变：任何 update/delete/replace/bulkWrite 一律拒绝。 */
+type AppendOnlyReceiptSchema = {
+  pre: (method: string, fn: (this: unknown, next: (err?: Error) => void) => void) => unknown;
+};
+const appendOnlyReceiptSchema = billingReceiptSchema as unknown as AppendOnlyReceiptSchema;
+function blockReceiptMutation(this: unknown, next: (err?: Error) => void): void {
   next(new Error('billingreceipts is append-only; update/delete is forbidden'));
 }
-billingReceiptSchema.pre('updateOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingReceiptSchema.pre('updateMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingReceiptSchema.pre('findOneAndUpdate', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingReceiptSchema.pre('deleteOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingReceiptSchema.pre('deleteMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
+for (const method of [
+  'updateOne',
+  'updateMany',
+  'findOneAndUpdate',
+  'replaceOne',
+  'findOneAndReplace',
+  'deleteOne',
+  'deleteMany',
+  'findOneAndDelete',
+  'bulkWrite',
+]) {
+  appendOnlyReceiptSchema.pre(method, blockReceiptMutation);
+}
 
 export const BillingReceipt = mongoose.model('BillingReceipt', billingReceiptSchema);
 export type IBillingReceipt = mongoose.InferSchemaType<typeof billingReceiptSchema>;

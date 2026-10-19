@@ -12,7 +12,11 @@ const billingApiCallSchema = new mongoose.Schema(
     cachedInputTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
     cost: { type: Number, default: 0 },
-    status: { type: String, enum: ['completed', 'aborted', 'failed'], default: 'completed' },
+    status: {
+      type: String,
+      enum: ['started', 'completed', 'aborted', 'failed'],
+      default: 'started',
+    },
     invoiceSeq: { type: Number, default: null },
     estimated: { type: Boolean, default: false },
     startedAt: { type: Date, default: Date.now },

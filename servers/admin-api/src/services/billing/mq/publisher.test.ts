@@ -34,6 +34,12 @@ describe('AdminOutboxPublisher', () => {
     await clearTestDb();
     vi.clearAllMocks();
     fakeChannel.publish.mockReset();
+    // 默认：publish 立即以成功回调确认（publisher 使用 per-message confirm 回调）。
+    fakeChannel.publish.mockImplementation((...args: unknown[]) => {
+      const callback = args[args.length - 1];
+      if (typeof callback === 'function') (callback as (err: Error | null) => void)(null);
+      return true;
+    });
     fakeChannel.waitForConfirms.mockReset();
     fakeChannel.waitForConfirms.mockResolvedValue(undefined);
   });
@@ -58,6 +64,7 @@ describe('AdminOutboxPublisher', () => {
       'model_call.completed',
       expect.any(Buffer),
       expect.objectContaining({ messageId: event.eventId }),
+      expect.any(Function),
     );
     const stored = await BillingOutbox.findOne({ eventId: event.eventId });
     expect(stored?.published).toBe(true);

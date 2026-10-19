@@ -30,8 +30,9 @@ const billingInvoiceSchema = new mongoose.Schema(
     balanceAfter: { type: Number, required: true },
     refType: { type: String, default: null },
     refId: { type: String, default: null },
-    // 出账幂等键（唯一稀疏索引）：重放/并发不会重复开票
-    idempotentKey: { type: String, default: null, unique: true, sparse: true },
+    // 出账幂等键（唯一部分索引，仅索引字符串值）：重放/并发不会重复开票。
+    // A6：不能用 `sparse + 显式写 null`——null 会被索引，导致第二张无键发票撞 E11000。
+    idempotentKey: { type: String, default: null },
     description: { type: String, default: '' },
     items: { type: [invoiceItemSchema], default: [] },
     receiptId: { type: mongoose.Schema.Types.ObjectId, default: null },
@@ -43,25 +44,32 @@ const billingInvoiceSchema = new mongoose.Schema(
 );
 
 billingInvoiceSchema.index({ accountId: 1, seq: 1 }, { unique: true });
+billingInvoiceSchema.index(
+  { idempotentKey: 1 },
+  { unique: true, partialFilterExpression: { idempotentKey: { $type: 'string' } } },
+);
 
-function rejectMutation(next: (err?: Error) => void): void {
+/** 追加式不可变：任何 update/delete/replace/bulkWrite 一律拒绝。 */
+type AppendOnlyInvoiceSchema = {
+  pre: (method: string, fn: (this: unknown, next: (err?: Error) => void) => void) => unknown;
+};
+const appendOnlyInvoiceSchema = billingInvoiceSchema as unknown as AppendOnlyInvoiceSchema;
+function blockInvoiceMutation(this: unknown, next: (err?: Error) => void): void {
   next(new Error('billinginvoices is append-only; update/delete is forbidden'));
 }
-billingInvoiceSchema.pre('updateOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingInvoiceSchema.pre('updateMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingInvoiceSchema.pre('findOneAndUpdate', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingInvoiceSchema.pre('deleteOne', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
-billingInvoiceSchema.pre('deleteMany', function (this: unknown, next: any) {
-  next(new Error('append-only; update/delete is forbidden'));
-});
+for (const method of [
+  'updateOne',
+  'updateMany',
+  'findOneAndUpdate',
+  'replaceOne',
+  'findOneAndReplace',
+  'deleteOne',
+  'deleteMany',
+  'findOneAndDelete',
+  'bulkWrite',
+]) {
+  appendOnlyInvoiceSchema.pre(method, blockInvoiceMutation);
+}
 
 export const BillingInvoice = mongoose.model('BillingInvoice', billingInvoiceSchema);
 export type IBillingInvoice = mongoose.InferSchemaType<typeof billingInvoiceSchema>;

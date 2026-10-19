@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { BillingReceipt } from '../../models/billing-receipt.js';
 
@@ -14,7 +15,7 @@ export interface IssueReceiptInput {
   seq?: number;
 }
 
-/** 收据出具：`R<YYYYMMDD><账户尾 4 位><seq 6 位>`，唯一。 */
+/** 收据出具：`R<YYYYMMDD><账户哈希 8 位><seq 6 位>`，唯一。 */
 export class ReceiptService {
   async issueReceipt(input: IssueReceiptInput): Promise<{
     id: string;
@@ -22,9 +23,14 @@ export class ReceiptService {
   }> {
     const issuedAt = input.issuedAt ?? new Date();
     const datePart = issuedAt.toISOString().slice(0, 10).replace(/-/g, '');
-    const accountTail = input.accountId.slice(-4);
+    // A12：原「账户后 4 位 hex」在多账户间易碰撞；改用账户 ID 的哈希前缀，保证跨账户唯一。
+    const accountHash = crypto
+      .createHash('sha256')
+      .update(input.accountId)
+      .digest('hex')
+      .slice(0, 8);
     const seqPart = String(input.seq ?? 0).padStart(6, '0');
-    const receiptNo = `R${datePart}${accountTail}${seqPart}`;
+    const receiptNo = `R${datePart}${accountHash}${seqPart}`;
     const _id = input.receiptId
       ? new mongoose.Types.ObjectId(input.receiptId)
       : new mongoose.Types.ObjectId();

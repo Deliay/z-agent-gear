@@ -1,11 +1,13 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
 import { BillingInvoice } from '../models/billing-invoice.js';
+import { BillingLedger } from '../models/billing-ledger.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
 import { accountService } from '../services/billing/account-service.js';
-import { apiKeyService } from '../services/billing/api-key-service.js';
+import { apiKeyService, ApiKeyNotFoundError } from '../services/billing/api-key-service.js';
 import {
   toBillingAccountWire,
   toBillingApiCall,
@@ -18,7 +20,18 @@ import { rollupService, type RollupGranularity } from '../services/billing/rollu
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
   const header = req.headers.authorization;
-  return header === `Bearer ${config.internalApiToken}`;
+  if (typeof header !== 'string') return false;
+  const expected = Buffer.from(`Bearer ${config.internalApiToken}`);
+  const actual = Buffer.from(header);
+  // C5：内部 token 比较使用恒定时间，避免时序侧信道。
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+/** C4：分页参数必须是整数并限定上界，阻止 `page=Infinity`/超大 skip 慢查询 DoS。 */
+function parsePage(value: unknown, fallback: number, max: number): number {
+  const n = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN;
+  if (!Number.isInteger(n)) return fallback;
+  return Math.min(max, Math.max(1, n));
 }
 
 function toDate(value: unknown): Date | undefined {
@@ -56,9 +69,13 @@ export function createInternalBillingRouter(): Router {
         ownerId,
         typeof req.query.ownerName === 'string' ? req.query.ownerName : undefined,
       );
-      res.json(toBillingAccountWire(account));
+      // C3：内部 REST `/account` 返回真实 ledger 计数（此前被 mappers 硬编码为 0）。
+      const ledgerCount = await BillingLedger.countDocuments({ accountId: account.id });
+      res.json({ ...toBillingAccountWire(account), ledgerCount });
     } catch (err) {
-      res.status(500).json({ error: 'INTERNAL_ERROR', message: (err as Error).message });
+      // C2：内部错误详情只记服务端日志，绝不把 Mongo/驱动信息原样吐给调用方/终端用户。
+      console.error('[internal-billing] GET /account failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
 
@@ -68,8 +85,8 @@ export function createInternalBillingRouter(): Router {
       res.status(400).json({ error: 'INVALID_ACCOUNT' });
       return;
     }
-    const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
+    const page = parsePage(req.query.page, 1, 100_000);
+    const pageSize = parsePage(req.query.pageSize, 50, 200);
     const filter: Record<string, unknown> = { accountId };
     if (typeof req.query.type === 'string') filter.type = req.query.type;
     if (typeof req.query.category === 'string') filter.category = req.query.category;
@@ -92,8 +109,8 @@ export function createInternalBillingRouter(): Router {
       res.status(400).json({ error: 'INVALID_ACCOUNT' });
       return;
     }
-    const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
+    const page = parsePage(req.query.page, 1, 100_000);
+    const pageSize = parsePage(req.query.pageSize, 50, 200);
     const filter: Record<string, unknown> = { accountId };
     const rawInvoiceId = req.query.invoiceId;
     if (rawInvoiceId !== undefined) {
@@ -119,8 +136,8 @@ export function createInternalBillingRouter(): Router {
       res.status(400).json({ error: 'INVALID_ACCOUNT' });
       return;
     }
-    const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50) || 50));
+    const page = parsePage(req.query.page, 1, 100_000);
+    const pageSize = parsePage(req.query.pageSize, 50, 200);
     const filter: Record<string, unknown> = { accountId };
     if (typeof req.query.status === 'string' && req.query.status) filter.status = req.query.status;
     const docs = await BillingApiCall.find(filter)
@@ -142,6 +159,11 @@ export function createInternalBillingRouter(): Router {
       !from ||
       !to
     ) {
+      res.status(400).json({ error: 'INVALID_QUERY' });
+      return;
+    }
+    // C4：rollup 必须 from < to 且限制查询跨度，避免无界聚合。
+    if (from.getTime() >= to.getTime() || to.getTime() - from.getTime() > 366 * 24 * 60 * 60 * 1000) {
       res.status(400).json({ error: 'INVALID_QUERY' });
       return;
     }
@@ -169,11 +191,13 @@ export function createInternalBillingRouter(): Router {
     );
   });
 
-  router.post('/api-keys', async (req: Request, res: Response) => {    const { ownerType, ownerId, name } = req.body ?? {};
+  router.post('/api-keys', async (req: Request, res: Response) => {
+    const { ownerType, ownerId, name } = req.body ?? {};
     if (
       (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
       typeof ownerId !== 'string' ||
-      typeof name !== 'string'
+      typeof name !== 'string' ||
+      !name.trim()
     ) {
       res.status(400).json({ error: 'INVALID_BODY' });
       return;
@@ -195,7 +219,14 @@ export function createInternalBillingRouter(): Router {
         secret: created.secret,
       });
     } catch (err) {
-      res.status(400).json({ error: 'CREATE_FAILED', message: (err as Error).message });
+      // P3：校验类失败 400，其余（Mongo/驱动等）500——基建故障不误报为请求错误。
+      const message = (err as Error).message;
+      if (message === 'API Key 名称不能为空') {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      console.error('[internal-billing] POST /api-keys failed', message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
 
@@ -209,12 +240,34 @@ export function createInternalBillingRouter(): Router {
       res.status(400).json({ error: 'INVALID_OWNER' });
       return;
     }
+    // C6：非 ObjectId 按参数错误 400（而非 404）；仅「不存在/无权」映射 404，其余内部错误 500。
+    if (!mongoose.isValidObjectId(String(req.params.id))) {
+      res.status(400).json({ error: 'INVALID_ID' });
+      return;
+    }
     try {
       const revoked = await apiKeyService.revoke(String(req.params.id), { ownerType, ownerId });
       res.json({ success: true, apiKey: revoked });
     } catch (err) {
-      res.status(404).json({ error: 'NOT_FOUND', message: (err as Error).message });
+      if (err instanceof ApiKeyNotFoundError) {
+        res.status(404).json({ error: 'NOT_FOUND' });
+        return;
+      }
+      console.error('[internal-billing] DELETE /api-keys failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
+  });
+
+  // C2：兜底错误处理——任何端点未捕获异常（Express 5 自动转发 rejected promise）统一返回
+  // 通用 INTERNAL_ERROR，绝不把 err.message/堆栈回给调用方。
+  router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    console.error('[internal-billing] unhandled error', (err as Error)?.message);
+    // P3：响应头已发出时不能再写 body，转交 Express 默认处理器关闭连接，避免悬挂 socket。
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
   });
 
   return router;

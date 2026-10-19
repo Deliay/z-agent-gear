@@ -66,17 +66,23 @@ export async function declareBillingTopology(channel: Channel): Promise<void> {
   });
   await channel.bindQueue(SETTLEMENT_QUEUE, BILLING_INTERNAL_EXCHANGE, SETTLEMENT_ROUTING_KEY);
 
-  // 重试队列：不设队列级 TTL（由消息 expiration 控制指数退避）；TTL 到期死信回原 exchange（保留 routing key）
+  // 重试队列：不设队列级 TTL（由消息 expiration 控制指数退避）；TTL 到期死信回原 exchange（保留 routing key）。
+  // B1：按业务流分别绑定路由键，避免 `#` 让同一条重试消息复制进两个队列（其中一份死信后静默丢弃）。
   await channel.assertQueue(METERING_RETRY_QUEUE, {
     durable: true,
     arguments: { 'x-dead-letter-exchange': BILLING_EVENTS_EXCHANGE },
   });
-  await channel.bindQueue(METERING_RETRY_QUEUE, BILLING_RETRY_EXCHANGE, '#');
+  await channel.bindQueue(METERING_RETRY_QUEUE, BILLING_RETRY_EXCHANGE, 'container.*');
+  await channel.bindQueue(METERING_RETRY_QUEUE, BILLING_RETRY_EXCHANGE, 'model_call.*');
   await channel.assertQueue(SETTLEMENT_RETRY_QUEUE, {
     durable: true,
     arguments: { 'x-dead-letter-exchange': BILLING_INTERNAL_EXCHANGE },
   });
-  await channel.bindQueue(SETTLEMENT_RETRY_QUEUE, BILLING_RETRY_EXCHANGE, '#');
+  await channel.bindQueue(
+    SETTLEMENT_RETRY_QUEUE,
+    BILLING_RETRY_EXCHANGE,
+    SETTLEMENT_ROUTING_KEY,
+  );
 
   // 结算延迟队列：TTL 到期死信回内部 exchange 的 settlement routing key
   await channel.assertQueue(SETTLEMENT_DELAY_QUEUE, {

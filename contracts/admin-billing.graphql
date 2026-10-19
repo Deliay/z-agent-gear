@@ -200,7 +200,7 @@ type Query {
 }
 
 type Mutation {
-  rechargeBillingAccount(accountId: ID!, amount: Float!, note: String): BillingInvoice!
+  rechargeBillingAccount(accountId: ID!, amount: Float!, note: String, idempotencyKey: String): BillingInvoice!
   setBillingAccountCreditLimit(accountId: ID!, creditLimit: Float!): BillingAccount!
   setBillingAccountStatus(accountId: ID!, status: String!): BillingAccount!
   # 资金对账：sum(ledger) 校准钱包，返回校准后的账户

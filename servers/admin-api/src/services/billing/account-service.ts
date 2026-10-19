@@ -76,6 +76,68 @@ export interface AccountServiceOptions {
   now?: () => number;
 }
 
+/** 由 ledger 派生的分池钱包快照（资金真相在 ledger，wallet 只是缓存）。 */
+export interface DerivedWallet {
+  ledgerTotal: number;
+  ledgerGift: number;
+  ledgerFrozen: number;
+  cashBalance: number;
+  giftBalance: number;
+  frozenAmount: number;
+}
+
+/**
+ * 从 ledger 聚合派生钱包分池金额（纯函数依赖已提交流水）：
+ * - `ledgerTotal = Σ deltaBalance`（各池合计，含授信占用为负现金）；
+ * - `ledgerGift` 由 `allocations` 的赠送池派生（充值 +、扣费 -）；
+ * - 现金 = 合计 - 赠送，绝不把赠送/授信折叠进现金；
+ * - 冻结 = `Σ deltaFrozen`（下限 0）。
+ *
+ * 因为只依赖「已提交的 ledger 行」，该派生天然幂等且崩溃可恢复：即便某次 `applyWallet`
+ * 中途失败，下一次任意资金操作或对账都会把钱包校准到 ledger 真值（A4）。
+ */
+export async function deriveWalletFromLedger(accountId: string): Promise<DerivedWallet> {
+  const [totals] = (await BillingLedger.aggregate([
+    { $match: { accountId: new mongoose.Types.ObjectId(accountId) } },
+    {
+      $group: {
+        _id: null,
+        balance: { $sum: '$deltaBalance' },
+        frozen: { $sum: '$deltaFrozen' },
+      },
+    },
+  ])) as Array<{ balance: number; frozen: number }>;
+
+  const poolRows = (await BillingLedger.aggregate([
+    { $match: { accountId: new mongoose.Types.ObjectId(accountId) } },
+    { $unwind: { path: '$allocations', preserveNullAndEmptyArrays: false } },
+    {
+      $group: {
+        _id: '$allocations.pool',
+        charged: {
+          $sum: { $cond: [{ $eq: ['$bizType', 'charge'] }, '$allocations.amount', 0] },
+        },
+        recharged: {
+          $sum: { $cond: [{ $eq: ['$bizType', 'recharge'] }, '$allocations.amount', 0] },
+        },
+      },
+    },
+  ])) as Array<{ _id: string; charged: number; recharged: number }>;
+
+  const giftPool = poolRows.find((row) => row._id === 'gift');
+  const ledgerGift = Math.round((giftPool?.recharged ?? 0) - (giftPool?.charged ?? 0));
+  const ledgerTotal = Math.round(totals?.balance ?? 0);
+  const ledgerFrozen = Math.max(0, Math.round(totals?.frozen ?? 0));
+  return {
+    ledgerTotal,
+    ledgerGift,
+    ledgerFrozen,
+    cashBalance: ledgerTotal - ledgerGift,
+    giftBalance: ledgerGift,
+    frozenAmount: ledgerFrozen,
+  };
+}
+
 /** 账户服务：get-or-create、查询、状态/授信调整、精确核算。 */
 export class AccountService {
   private readonly now: () => number;
@@ -120,8 +182,12 @@ export class AccountService {
         { ownerId: { $regex: escaped, $options: 'i' } },
       ];
     }
-    const page = Math.max(1, options.page ?? 1);
-    const pageSize = Math.min(200, Math.max(1, options.pageSize ?? 50));
+    // P1：page 同时限定整数与上界（防 `page=2^31` 的 skip≈4.5e10 慢查询）；pageSize 同理。
+    const page = Math.min(100_000, Math.max(1, Number.isInteger(options.page) ? (options.page as number) : 1));
+    const pageSize = Math.min(
+      200,
+      Math.max(1, Number.isInteger(options.pageSize) ? (options.pageSize as number) : 50),
+    );
     const docs = await BillingAccount.find(filter)
       .sort({ createdAt: -1 })
       .skip((page - 1) * pageSize)
@@ -166,8 +232,10 @@ export class AccountService {
   }
 
   /**
-   * 精确核算：以 ledger 累加为准校准 wallet 快照；发现差异时写 adjust 流水（delta=0）留痕。
-   * 返回校准后的账户与差错（null 表示一致）。
+   * 精确核算：以 ledger 累加为准校准 wallet 快照。**按池对账**，绝不把赠送/授信折叠进现金：
+   * 不变式为 `Σ deltaBalance == cashBalance + giftBalance`（授信占用体现为现金负值），
+   * 赠送池由 ledger 的 `allocations`（赠送/授信拆池明细）单独派生。发现差异时写 adjust 流水
+   * （delta=0）留痕，并以 ledger 派生的分池金额回写钱包。
    */
   async reconcileAccount(accountId: string): Promise<{
     account: BillingAccountDTO;
@@ -175,6 +243,8 @@ export class AccountService {
       accountId: string;
       walletCash: number;
       ledgerCash: number;
+      walletGift: number;
+      ledgerGift: number;
       walletFrozen: number;
       ledgerFrozen: number;
     } | null;
@@ -183,22 +253,26 @@ export class AccountService {
     const account = await BillingAccount.findById(accountId).lean<IBillingAccount | null>();
     if (!account) throw new Error('账户不存在');
 
-    const rows = (await BillingLedger.aggregate([
-      { $match: { accountId: new mongoose.Types.ObjectId(accountId) } },
-      {
-        $group: {
-          _id: null,
-          balance: { $sum: '$deltaBalance' },
-          frozen: { $sum: '$deltaFrozen' },
-        },
-      },
-    ])) as Array<{ balance: number; frozen: number }>;
-    const ledgerCash = Math.round(rows[0]?.balance ?? 0);
-    const ledgerFrozen = Math.max(0, Math.round(rows[0]?.frozen ?? 0));
+    const derived = await deriveWalletFromLedger(accountId);
+    const ledgerCash = derived.cashBalance;
+    const ledgerGift = derived.giftBalance;
+    const ledgerFrozen = derived.frozenAmount;
+
     const walletCash = Math.round(account.cashBalance ?? 0);
+    const walletGift = Math.round(account.giftBalance ?? 0);
     const walletFrozen = Math.round(account.frozenAmount ?? 0);
 
-    const mismatch = walletCash !== ledgerCash || walletFrozen !== ledgerFrozen;
+    const mismatch =
+      walletCash !== ledgerCash || walletGift !== ledgerGift || walletFrozen !== ledgerFrozen;
+    // R1：无论是否有漂移，都把最近 ledger 行同步进「已应用水位」——防止「钱包已等于 ledger 真值
+    // 但水位缺失」（如历史数据/对账后）时重放二次扣减。有漂移时同时按 ledger 真值回写分池余额。
+    const recent = (
+      await BillingLedger.find({ accountId: new mongoose.Types.ObjectId(accountId) })
+        .sort({ createdAt: -1 })
+        .limit(1000)
+        .select({ _id: 1 })
+        .lean<Array<{ _id: mongoose.Types.ObjectId }>>()
+    ).map((row) => String(row._id));
     if (mismatch) {
       const stamp = `reconcile:${accountId}:${this.now()}:${Math.random().toString(16).slice(2, 8)}`;
       await BillingLedger.create({
@@ -207,6 +281,7 @@ export class AccountService {
         bizType: 'adjust',
         deltaBalance: 0,
         deltaFrozen: 0,
+        allocations: [],
         bizId: stamp,
         idempotentKey: stamp,
       }).catch((err: { code?: number }) => {
@@ -214,7 +289,19 @@ export class AccountService {
       });
       await BillingAccount.updateOne(
         { _id: accountId },
-        { $set: { cashBalance: ledgerCash, frozenAmount: ledgerFrozen } },
+        {
+          $set: {
+            cashBalance: ledgerCash,
+            giftBalance: ledgerGift,
+            frozenAmount: ledgerFrozen,
+            appliedLedgerIds: recent,
+          },
+        },
+      );
+    } else {
+      await BillingAccount.updateOne(
+        { _id: accountId },
+        { $set: { appliedLedgerIds: recent } },
       );
     }
 
@@ -224,7 +311,15 @@ export class AccountService {
     return {
       account: toAccountDTO(updated as IBillingAccount & { _id: unknown }),
       error: mismatch
-        ? { accountId, walletCash, ledgerCash, walletFrozen, ledgerFrozen }
+        ? {
+            accountId,
+            walletCash,
+            ledgerCash,
+            walletGift,
+            ledgerGift,
+            walletFrozen,
+            ledgerFrozen,
+          }
         : null,
     };
   }

@@ -27,13 +27,24 @@ export interface OutboxRecord {
   routingKey: string;
   payload: BillingEventMessage;
   attempts: number;
+  claimedAt?: Date | null;
+  claimedBy?: string | null;
+  failed?: boolean;
 }
 
 export interface OutboxRepository {
   enqueue(event: BillingEventMessage, producer: string): Promise<void>;
+  /** 原子认领一批待发布行（R2）：仅认领成功者发布，租约到期后可被再次认领。 */
+  claim(
+    producer: OutboxProducer,
+    limit: number,
+    claimant: string,
+    leaseMs: number,
+  ): Promise<OutboxRecord[]>;
   findUnpublished(producer: OutboxProducer, limit: number): Promise<OutboxRecord[]>;
   markPublished(eventId: string): Promise<void>;
-  markFailed(eventId: string, error: string): Promise<void>;
+  /** 记录一次失败；`attempts` 达到上限时置 `failed` 隔离（不再无限重投）。 */
+  markFailed(eventId: string, error: string, maxAttempts: number): Promise<void>;
 }
 
 export type OutboxProducer = 'cloud-controller' | 'admin-api';
@@ -66,7 +77,7 @@ export class MongoOutboxRepository implements OutboxRepository {
   }
 
   async findUnpublished(producer: OutboxProducer, limit: number): Promise<OutboxRecord[]> {
-    const docs = (await BillingOutbox.find({ producer, published: false })
+    const docs = (await BillingOutbox.find({ producer, published: false, failed: { $ne: true } })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean()) as unknown as Array<{
@@ -87,18 +98,71 @@ export class MongoOutboxRepository implements OutboxRepository {
     }));
   }
 
+  async claim(
+    producer: OutboxProducer,
+    limit: number,
+    claimant: string,
+    leaseMs: number,
+  ): Promise<OutboxRecord[]> {
+    const now = new Date();
+    const leaseCutoff = new Date(now.getTime() - leaseMs);
+    const claimed: OutboxRecord[] = [];
+    for (let i = 0; i < limit; i += 1) {
+      const doc = await BillingOutbox.findOneAndUpdate(
+        {
+          producer,
+          published: false,
+          failed: { $ne: true },
+          $or: [{ claimedAt: null }, { claimedAt: { $lte: leaseCutoff } }],
+        },
+        { $set: { claimedAt: now, claimedBy: claimant } },
+        { new: true, sort: { createdAt: 1 } },
+      ).lean<{
+        eventId: string;
+        producer: OutboxProducer;
+        eventType: string;
+        routingKey: string;
+        payload: BillingEventMessage;
+        attempts?: number;
+        claimedAt?: Date | null;
+        claimedBy?: string | null;
+        failed?: boolean;
+      } | null>();
+      if (!doc) break;
+      claimed.push({
+        eventId: doc.eventId,
+        producer: doc.producer,
+        eventType: doc.eventType,
+        routingKey: doc.routingKey,
+        payload: doc.payload as BillingEventMessage,
+        attempts: doc.attempts ?? 0,
+        claimedAt: doc.claimedAt ?? null,
+        claimedBy: doc.claimedBy ?? null,
+        failed: doc.failed === true,
+      });
+    }
+    return claimed;
+  }
+
   async markPublished(eventId: string): Promise<void> {
     await BillingOutbox.updateOne(
       { eventId },
-      { $set: { published: true, publishedAt: new Date(), lastError: null } },
+      { $set: { published: true, publishedAt: new Date(), lastError: null, claimedAt: null, claimedBy: null } },
     );
   }
 
-  async markFailed(eventId: string, error: string): Promise<void> {
-    await BillingOutbox.updateOne(
+  async markFailed(eventId: string, error: string, maxAttempts: number): Promise<void> {
+    const doc = await BillingOutbox.findOneAndUpdate(
       { eventId },
-      { $inc: { attempts: 1 }, $set: { lastError: error.slice(0, 1000) } },
-    );
+      {
+        $inc: { attempts: 1 },
+        $set: { lastError: error.slice(0, 1000), claimedAt: null, claimedBy: null },
+      },
+      { new: true },
+    ).lean<{ attempts?: number } | null>();
+    if (doc && (doc.attempts ?? 0) >= maxAttempts) {
+      await BillingOutbox.updateOne({ eventId }, { $set: { failed: true } });
+    }
   }
 }
 
@@ -119,14 +183,37 @@ export class InMemoryOutboxRepository implements OutboxRepository {
       routingKey: event.eventType,
       payload: event,
       attempts: 0,
+      claimedAt: null,
+      claimedBy: null,
+      failed: false,
     });
   }
 
   async findUnpublished(producer: OutboxProducer, limit: number): Promise<OutboxRecord[]> {
     return [...this.store.values()]
-      .filter((record) => record.producer === producer)
+      .filter((record) => record.producer === producer && record.failed !== true)
       .slice(0, limit)
       .map((record) => ({ ...record }));
+  }
+
+  async claim(
+    producer: OutboxProducer,
+    limit: number,
+    claimant: string,
+    leaseMs: number,
+  ): Promise<OutboxRecord[]> {
+    const now = Date.now();
+    const claimed: OutboxRecord[] = [];
+    for (const record of this.store.values()) {
+      if (claimed.length >= limit) break;
+      if (record.producer !== producer || record.failed === true) continue;
+      const claimedAt = record.claimedAt ? new Date(record.claimedAt).getTime() : null;
+      if (claimedAt !== null && claimedAt > now - leaseMs) continue;
+      record.claimedAt = new Date(now);
+      record.claimedBy = claimant;
+      claimed.push({ ...record });
+    }
+    return claimed;
   }
 
   async markPublished(eventId: string): Promise<void> {
@@ -134,11 +221,14 @@ export class InMemoryOutboxRepository implements OutboxRepository {
     this.store.delete(eventId);
   }
 
-  async markFailed(eventId: string, error: string): Promise<void> {
+  async markFailed(eventId: string, error: string, maxAttempts: number): Promise<void> {
     const record = this.store.get(eventId);
     if (record) {
       record.attempts += 1;
+      record.claimedAt = null;
+      record.claimedBy = null;
       record.payload = { ...record.payload, payload: { ...record.payload.payload, lastError: error } };
+      if (record.attempts >= maxAttempts) record.failed = true;
     }
   }
 
@@ -166,20 +256,37 @@ export class RabbitMqTransport implements EventTransport {
     this.connecting = (async () => {
       const connection = await amqp.connect(this.url, { heartbeat: 30 });
       connection.on('close', () => {
-        this.connection = null;
-        this.channel = null;
+        // R5：仅当仍是「当前连接」时才清空引用；替换路径先赋新引用再关闭旧连接，
+        // 旧连接的 close 事件不得把刚建立的新连接/新 channel 引用一并清空。
+        if (this.connection === connection) {
+          this.connection = null;
+          this.channel = null;
+        }
       });
       connection.on('error', (err) => {
         this.logger.warn?.('[billing-outbox] rabbitmq connection error', err.message);
       });
       const channel = await connection.createConfirmChannel();
       channel.on('close', () => {
-        this.channel = null;
+        if (this.channel === channel) this.channel = null;
+      });
+      // D1：channel 级 error 若不消费会被 amqplib 升级为 frameError 撕裂整条连接；此处仅告警。
+      channel.on('error', (err) => {
+        this.logger.warn?.('[billing-outbox] rabbitmq channel error', err.message);
       });
       await channel.assertExchange(BILLING_EXCHANGE, 'topic', { durable: true });
       await channel.assertExchange(BILLING_INTERNAL_EXCHANGE, 'direct', { durable: true });
+      // D1：替换连接前关闭旧连接，避免 channel-only 关闭时泄漏。
+      const previous = this.connection;
       this.connection = connection;
       this.channel = channel;
+      if (previous && previous !== connection) {
+        try {
+          await previous.close();
+        } catch {
+          // ignore
+        }
+      }
       return channel;
     })();
 
@@ -240,6 +347,9 @@ export class BillingEventPublisher {
   private readonly logger: NonNullable<BillingEventPublisherOptions['logger']>;
   private timer: NodeJS.Timeout | null = null;
   private relaying = false;
+  private readonly instanceId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+  private readonly maxAttempts = 20;
+  private readonly leaseMs = 30_000;
 
   constructor(options: BillingEventPublisherOptions = {}) {
     this.producer = options.producer ?? 'cloud-controller';
@@ -261,8 +371,18 @@ export class BillingEventPublisher {
     this.relaying = true;
     let published = 0;
     try {
-      const records = await this.repository.findUnpublished(this.producer, 50);
+      // R2：按行原子认领 + 租约；`attempts` 达上限的行已被隔离（failed=true）不再被认领。
+      const records = await this.repository.claim(
+        this.producer,
+        50,
+        this.instanceId,
+        this.leaseMs,
+      );
       for (const record of records) {
+        if (record.attempts >= this.maxAttempts) {
+          await this.repository.markFailed(record.eventId, 'exceeded max attempts', this.maxAttempts);
+          continue;
+        }
         try {
           await this.transport.publish(record.routingKey, record.payload);
           await this.repository.markPublished(record.eventId);
@@ -270,7 +390,7 @@ export class BillingEventPublisher {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn?.(`[billing-outbox] publish failed for ${record.eventId}: ${message}`);
-          await this.repository.markFailed(record.eventId, message);
+          await this.repository.markFailed(record.eventId, message, this.maxAttempts);
         }
       }
     } finally {

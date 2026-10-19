@@ -39,6 +39,12 @@ const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
 function allowRequest(keyId: string): boolean {
   const now = Date.now();
+  // C5：定期清理过期桶，避免 Map 无限增长。
+  if (rateBuckets.size > 10_000) {
+    for (const [key, value] of rateBuckets) {
+      if (value.resetAt <= now) rateBuckets.delete(key);
+    }
+  }
   const bucket = rateBuckets.get(keyId);
   if (!bucket || bucket.resetAt <= now) {
     rateBuckets.set(keyId, { count: 1, resetAt: now + 60_000 });
@@ -116,7 +122,13 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   const router = Router();
   const logger = deps.logger ?? console;
 
-  router.get('/models', billingKeyAuth, async (_req: Request, res: Response) => {
+  router.get('/models', billingKeyAuth, async (req: Request, res: Response) => {
+    const billing = (req as BillingRequest).billing!;
+    // C5：契约声明 /v1/models 也受限流约束（429）。
+    if (!allowRequest(billing.id)) {
+      toApiError(res, 429, 'rate_limit_exceeded', 'rate_limit_exceeded', '请求过于频繁，请稍后重试');
+      return;
+    }
     const models = await Model.find({ scope: 'global', isEnabled: true }).lean();
     const data = models
       .filter((model) => {
@@ -203,6 +215,11 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         toApiError(res, 402, 'account_frozen', 'account_frozen', '账户已冻结，请联系管理员处理');
         return;
       }
+      if (!statusCheck.allowed && statusCheck.reason === 'NOT_FOUND') {
+        // C6：非计费模型同样不得「忽略 NOT_FOUND」而放行到不存在的账户。
+        toApiError(res, 402, 'account_not_found', 'account_not_found', '计费账户不存在，请联系管理员');
+        return;
+      }
     }
     if (billable) {
       const estimate = Math.max(1, estimateCost(pricing, promptTokens, maxOutputTokens));
@@ -214,14 +231,15 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         ref: { type: 'model_call', id: requestId },
       });
       if (!check.allowed) {
-        const frozen = check.reason === 'ACCOUNT_FROZEN';
-        toApiError(
-          res,
-          402,
-          frozen ? 'account_frozen' : 'insufficient_quota',
-          frozen ? 'account_frozen' : 'insufficient_quota',
-          frozen ? '账户已冻结，请联系管理员处理' : '余额不足，请联系管理员充值',
-        );
+        const reason = check.reason;
+        if (reason === 'ACCOUNT_FROZEN') {
+          toApiError(res, 402, 'account_frozen', 'account_frozen', '账户已冻结，请联系管理员处理');
+        } else if (reason === 'NOT_FOUND') {
+          // C6：账户缺失不得误报为「余额不足」。
+          toApiError(res, 402, 'account_not_found', 'account_not_found', '计费账户不存在，请联系管理员');
+        } else {
+          toApiError(res, 402, 'insufficient_quota', 'insufficient_quota', '余额不足，请联系管理员充值');
+        }
         return;
       }
     }
@@ -237,7 +255,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       cachedInputTokens: 0,
       outputTokens: 0,
       cost: 0,
-      status: 'completed',
+      status: 'started',
       estimated: false,
       startedAt,
     });
@@ -266,38 +284,61 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
           tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
           tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
         : 0;
-      await BillingApiCall.updateOne(
-        { requestId },
-        {
-          $set: {
-            inputTokens: usage.inputTokens,
-            cachedInputTokens: usage.cachedInputTokens,
-            outputTokens: usage.outputTokens,
-            cost,
-            status: status === 'aborted' ? 'aborted' : 'completed',
-            estimated,
-            finishedAt: new Date(),
+      // R3：finalize 只负责「落事实」，绝不抛出——落库失败不得被外层 catch 当成 upstream_error
+      // 而把正常完成的调用翻转为 aborted、换 eventType 重投双事实。此处原地重试 + 告警。
+      const writeFinalize = async (): Promise<void> => {
+        if (billable) {
+          await deps.publisher.enqueue({
+            eventId: `model_call.${status === 'aborted' ? 'aborted' : 'completed'}:${requestId}`,
+            eventType: status === 'aborted' ? 'model_call.aborted' : 'model_call.completed',
+            occurredAt: new Date().toISOString(),
+            accountId: billing.accountId,
+            resourceId: requestId,
+            payload: {
+              modelId: String(model._id),
+              inputTokens: usage.inputTokens,
+              cachedInputTokens: usage.cachedInputTokens,
+              outputTokens: usage.outputTokens,
+              estimated,
+              estimatedInputTokens: usage.inputTokens,
+              estimatedOutputTokens: usage.outputTokens,
+              ...(status === 'aborted' ? { reason: abortReason || 'client_aborted' } : {}),
+            },
+          });
+        }
+        await BillingApiCall.updateOne(
+          { requestId },
+          {
+            $set: {
+              inputTokens: usage.inputTokens,
+              cachedInputTokens: usage.cachedInputTokens,
+              outputTokens: usage.outputTokens,
+              cost,
+              status: status === 'aborted' ? 'aborted' : 'completed',
+              estimated,
+              finishedAt: new Date(),
+            },
           },
-        },
-      );
-      if (billable) {
-        await deps.publisher.enqueue({
-          eventId: `model_call.${status === 'aborted' ? 'aborted' : 'completed'}:${requestId}`,
-          eventType: status === 'aborted' ? 'model_call.aborted' : 'model_call.completed',
-          occurredAt: new Date().toISOString(),
-          accountId: billing.accountId,
-          resourceId: requestId,
-          payload: {
-            modelId: String(model._id),
-            inputTokens: usage.inputTokens,
-            cachedInputTokens: usage.cachedInputTokens,
-            outputTokens: usage.outputTokens,
-            estimated,
-            estimatedInputTokens: usage.inputTokens,
-            estimatedOutputTokens: usage.outputTokens,
-            ...(status === 'aborted' ? { reason: abortReason || 'client_aborted' } : {}),
-          },
-        });
+        );
+      };
+      try {
+        await writeFinalize();
+      } catch (err) {
+        logger.warn?.(`[billing-gateway] finalize failed (retrying): ${(err as Error).message}`);
+        try {
+          await writeFinalize();
+        } catch (retryErr) {
+          // 不翻转状态、不换 eventType 重投；仅告警，由对账/重放兜底。
+          logger.warn?.(
+            `[billing-gateway] finalize retry failed for ${requestId}: ${(retryErr as Error).message}`,
+          );
+          // P3-④：落账彻底失败的兜底——best-effort 标记 `failed`（区别于 completed/aborted），
+          // 避免记录永久停留 `started`；该尝试失败则放弃（对账可见）。
+          await BillingApiCall.updateOne(
+            { requestId },
+            { $set: { status: 'failed', finishedAt: new Date() } },
+          ).catch(() => undefined);
+        }
       }
     };
 
@@ -305,17 +346,27 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     try {
       apiKey = decrypt(provider.encryptedCredential);
     } catch (err) {
-      toApiError(res, 500, 'server_error', 'provider_credential_error', (err as Error).message);
+      // C2：供应商凭据解密失败只记服务端日志，对外固定文案，避免内部错误信息泄漏。
+      logger.warn?.(`[billing-gateway] provider credential error: ${(err as Error).message}`);
+      toApiError(res, 500, 'server_error', 'provider_credential_error', '模型服务配置异常，请联系管理员');
       return;
     }
 
     const abortController = new AbortController();
-    req.on('close', () => {
+    // C1：Node 16+ 的 `req.on('close')` 在请求消息完成时即触发（非连接断开），会误判/漏判；
+    // 正确检测客户端中断应为 `res.on('close')` 且响应尚未写完（`!res.writableEnded`）。
+    res.on('close', () => {
       if (res.writableEnded) return;
       aborted = true;
       abortReason = 'client_aborted';
       abortController.abort();
     });
+    // R6：注册监听前的若干 DB 往返窗口内若已断开，`close` 事件不会重放，这里以 `res.destroyed` 兜底。
+    if (res.destroyed) {
+      aborted = true;
+      abortReason = 'client_aborted';
+      abortController.abort();
+    }
 
     const basePayload = {
       ...body,
@@ -472,7 +523,9 @@ async function forwardAnthropic(input: {
   const created = Math.floor(Date.now() / 1000);
 
   if (!input.stream) {
-    const response = (await client.messages.create(request)) as unknown as {
+    const response = (await client.messages.create(request as never, {
+      signal: input.signal,
+    })) as unknown as {
       content?: Array<{ type: string; text?: string }>;
       stop_reason?: string;
       usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
@@ -511,10 +564,9 @@ async function forwardAnthropic(input: {
   input.res.setHeader('Connection', 'keep-alive');
   input.res.flushHeaders?.();
 
-  const stream = (await client.messages.create({
-    ...request,
-    stream: true,
-  } as never)) as unknown as AsyncIterable<Record<string, unknown>>;
+  const stream = (await client.messages.create({ ...request, stream: true } as never, {
+    signal: input.signal,
+  })) as unknown as AsyncIterable<Record<string, unknown>>;
 
   for await (const event of stream) {
     const type = event.type as string;

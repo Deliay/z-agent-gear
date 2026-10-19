@@ -215,6 +215,8 @@ components:
                 - invalid_api_key
                 - insufficient_quota
                 - rate_limit_exceeded
+                - account_frozen
+                - server_error
             code:
               type: string
               enum:
@@ -223,3 +225,8 @@ components:
                 - model_not_found
                 - model_not_priced
                 - rate_limit_exceeded
+                - invalid_request
+                - account_frozen
+                - account_not_found
+                - provider_credential_error
+                - upstream_error

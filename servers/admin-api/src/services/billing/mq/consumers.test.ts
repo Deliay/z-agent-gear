@@ -104,10 +104,10 @@ describe('计费消费者', () => {
   it('container.ready 消费：事件接入 + 预留 + 发布首期结算', async () => {
     const channel = fakeChannel();
     const billing = {
-      handleContainerReady: vi.fn(async () => ({ reservationId: 'r1', nextCycleSeq: 0 })),
+      handleContainerReady: vi.fn(async () => ({ reservationId: 'r1', nextCycleSeq: 0, created: true })),
       handleEvent: vi.fn(),
     };
-    const ingest = { ingest: vi.fn(async () => ({})) };
+    const ingest = { ingest: vi.fn(async () => ({ created: true })) };
     const publishSettlement = vi.fn(async () => undefined);
     await startMeteringConsumer(channel as never, {
       billing: billing as never,
@@ -144,7 +144,7 @@ describe('计费消费者', () => {
         shouldDestroy: false,
       })),
     };
-    const ingest = { ingest: vi.fn(async () => ({})) };
+    const ingest = { ingest: vi.fn(async () => ({ created: true })) };
     const publishSettlement = vi.fn(async () => undefined);
     await startMeteringConsumer(channel as never, {
       billing: billing as never,
@@ -186,5 +186,59 @@ describe('计费消费者', () => {
     expect(billing.handleSettlementCycle).toHaveBeenCalledWith('r1', 2);
     expect(publishSettlement).toHaveBeenCalledWith('r1', 'a1', 3);
     expect(settlementChannel.ack).toHaveBeenCalled();
+  });
+
+  it('R7：结算重试消息（retry>0）即使本次未结算也补投下一期（缺链兜底）', async () => {
+    const channel = fakeChannel();
+    const billing = {
+      handleEvent: vi.fn(async () => null),
+      handleSettlementCycle: vi.fn(async () => ({
+        settled: false,
+        nextCycleSeq: 4,
+        shouldDestroy: false,
+      })),
+    };
+    const publishSettlement = vi.fn(async () => undefined);
+    await startSettlementConsumer(channel as never, {
+      billing: billing as never,
+      publishSettlement,
+      logger,
+    });
+    await channel.invoke(
+      message({ reservationId: 'r1', accountId: 'a1', cycleSeq: 3 }, 1, 'billing.settlement.cycle'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishSettlement).toHaveBeenCalledWith('r1', 'a1', 4);
+  });
+
+  it('R7：container.ready 重试消息（retry>0, created=false）补投首期结算', async () => {
+    const channel = fakeChannel();
+    const billing = {
+      handleContainerReady: vi.fn(async () => ({ reservationId: 'r1', nextCycleSeq: 0, created: false })),
+      handleEvent: vi.fn(),
+    };
+    const ingest = { ingest: vi.fn(async () => ({ created: false })) };
+    const publishSettlement = vi.fn(async () => undefined);
+    await startMeteringConsumer(channel as never, {
+      billing: billing as never,
+      ingest: ingest as never,
+      publishSettlement,
+      logger,
+    });
+    await channel.invoke(
+      message(
+        {
+          eventId: 'container.ready:c1',
+          eventType: 'container.ready',
+          occurredAt: new Date().toISOString(),
+          accountId: 'a1',
+          resourceId: 'c1',
+          payload: { billingStartedAt: new Date().toISOString() },
+        },
+        1,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishSettlement).toHaveBeenCalledWith('r1', 'a1', 0);
   });
 });

@@ -88,13 +88,20 @@ export class BillingService {
     accountId: string;
     resourceId: string;
     occurredAt: Date;
-  }): Promise<{ reservationId: string; insufficient: boolean; nextCycleSeq: number }> {
+  }): Promise<{ reservationId: string; insufficient: boolean; nextCycleSeq: number; created: boolean }> {
     return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
       const account = await this.accounts.getById(event.accountId);
       if (!account) throw new Error(`billing account not found: ${event.accountId}`);
 
+      // 门控重复投递（阻断项 3）：同一 resourceId 已有预留行时为重复就绪事件，
+      // `created=false` 时消费端不再重复投递首期延迟消息，避免结算链放大。
+      const existing = await this.reservations.findByResource(event.resourceId);
+
       const depositCents = config.containerDepositCredits * 100;
-      const cycleEstimateCents = Math.max(1, Math.ceil(config.billingCycleSeconds / 60) * 100);
+      // A9：周期冻结估算按价格表实际单价计算，而非硬编码 1 credit/分钟（避免定价更高时冻结不足）。
+      const cycleMinutes = Math.max(1, Math.ceil(config.billingCycleSeconds / 60));
+      const cyclePriced = await this.prices.priceContainer(cycleMinutes, event.occurredAt);
+      const cycleEstimateCents = Math.max(1, cyclePriced.amountCents);
       const check = await this.checks.check({
         accountId: event.accountId,
         estimatedCredits: depositCents + cycleEstimateCents,
@@ -119,6 +126,7 @@ export class BillingService {
         reservationId: documentId(reservation),
         insufficient: check.insufficient,
         nextCycleSeq: 0,
+        created: !existing,
       };
     });
   }
@@ -319,6 +327,12 @@ export class BillingService {
         : `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`;
 
       let invoice: InvoiceResult | null = null;
+      if (priced.amountCents === 0 && !priced.snapshot) {
+        // A8：模型无生效价目会导致 amountCents=0、消费免费消失；显式告警以便补价。
+        console.warn(
+          `[billing] model ${modelId} has no effective price row; charge skipped (eventId=${event.eventId})`,
+        );
+      }
       if (priced.amountCents > 0) {
         const preCheck = await this.checks.check({
           accountId: event.accountId,
@@ -371,24 +385,34 @@ export class BillingService {
     amountCredits: number;
     note?: string;
     operator?: string;
+    /** A5：调用方幂等键（重试/双击使用同一键则不重复加钱）。 */
+    idempotencyKey?: string;
   }): Promise<InvoiceResult> {
     const account = await this.accounts.getById(input.accountId);
     if (!account) throw new Error('账户不存在');
     const amountCents = parseRechargeCents(input.amountCredits);
-    const invoiceId = new mongoose.Types.ObjectId();
-    const receiptId = new mongoose.Types.ObjectId();
-    const idempotentKey = `recharge:${input.accountId}:${invoiceId.toHexString()}`;
+    // A5：提供幂等键时由业务键派生确定性账单/收据 ID，重放返回同一结果；未提供时退化为唯一 ID。
+    const opKey = input.idempotencyKey?.trim();
+    const invoiceHex = opKey
+      ? deterministicObjectId(`recharge-invoice:${input.accountId}:${opKey}`)
+      : new mongoose.Types.ObjectId().toHexString();
+    const receiptHex = opKey
+      ? deterministicObjectId(`recharge-receipt:${input.accountId}:${opKey}`)
+      : new mongoose.Types.ObjectId().toHexString();
+    const idempotentKey = opKey
+      ? `recharge:${input.accountId}:${opKey}`
+      : `recharge:${input.accountId}:${invoiceHex}`;
 
     const payment = await this.payments.recharge({
       accountId: input.accountId,
       amountCents,
       idempotentKey,
-      bizId: `recharge:${invoiceId.toHexString()}`,
+      bizId: `recharge:${invoiceHex}`,
     });
     const note = input.note ? `（${input.note}）` : '';
     const operator = input.operator ? `（操作人：${input.operator}）` : '';
     const invoice = await this.invoicings.createInvoice({
-      invoiceId: invoiceId.toHexString(),
+      invoiceId: invoiceHex,
       idempotentKey: `invoice:${idempotentKey}`,
       accountId: input.accountId,
       type: 'recharge',
@@ -399,18 +423,18 @@ export class BillingService {
       refId: null,
       description: `后台充值${note}${operator}`,
       items: [],
-      receiptId: receiptId.toHexString(),
+      receiptId: receiptHex,
     });
     const receipt = await this.receipts.issueReceipt({
-      receiptId: receiptId.toHexString(),
-      invoiceId: invoiceId.toHexString(),
+      receiptId: receiptHex,
+      invoiceId: invoiceHex,
       accountId: input.accountId,
       amount: amountCents,
       balanceAfter: payment.cashBalance,
       seq: invoice.seq,
     });
     return {
-      invoiceId: invoiceId.toHexString(),
+      invoiceId: invoiceHex,
       seq: invoice.seq,
       receiptNo: receipt.receiptNo,
       balanceAfter: payment.cashBalance,

@@ -14,6 +14,11 @@ const billingOutboxSchema = new mongoose.Schema(
     published: { type: Boolean, default: false, index: true },
     attempts: { type: Number, default: 0 },
     lastError: { type: String, default: null },
+    /** 原子认领租约（B4）：多副本 relay 只有认领成功者发布，避免双发。 */
+    claimedAt: { type: Date, default: null, index: true },
+    claimedBy: { type: String, default: null },
+    /** 超过重试上限的毒消息隔离标记（不再无限重投）。 */
+    failed: { type: Boolean, default: false, index: true },
     createdAt: { type: Date, default: Date.now },
     publishedAt: { type: Date, default: null },
   },
