@@ -474,6 +474,141 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(Math.abs(rows[0].charged)).toBe(200); // 100 + 0 + 100
   });
 
+  it('R6-1a: 最终结算已扣费、开票前崩溃 → 重放补建账单+收据（幂等）', async () => {
+    const nowValue = { value: T0 };
+    const { reservations, billing } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-invoice-crash-main';
+    const endedAt = new Date(T0 + 60_000);
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'ACTIVE',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 0,
+    });
+    const rid = String(reservation._id);
+    const mainKey = `invoice:container-final:${rid}`;
+
+    // 崩溃点：结算层已完成扣费并终结预留，但 BillingService 的开票尚未发生。
+    nowValue.value = endedAt.getTime();
+    const settled = await reservations.finalSettle(rid, endedAt);
+    expect(settled.amount).toBe(100);
+    expect(await BillingInvoice.countDocuments({ idempotentKey: mainKey })).toBe(0);
+    expect(await BillingReceipt.countDocuments({})).toBe(0);
+
+    // 重放 destroyed（outbox/DLQ 重投）：窗口已覆盖 → 结算层早退，但必须补建凭证。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: endedAt,
+    });
+    const invoice = await BillingInvoice.findOne({ idempotentKey: mainKey }).lean();
+    expect(invoice).not.toBeNull();
+    expect(invoice!.amount).toBe(-100);
+    expect(await BillingReceipt.countDocuments({ invoiceId: String(invoice!._id) })).toBe(1);
+
+    // 再次重放：不重复出账。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: endedAt,
+    });
+    expect(await BillingInvoice.countDocuments({ idempotentKey: mainKey })).toBe(1);
+    expect(await BillingReceipt.countDocuments({})).toBe(1);
+  });
+
+  it('R6-1b: 缺额补结已扣费、开票前崩溃 → 重放补建缺口账单', async () => {
+    const nowValue = { value: T0 };
+    const { reservations, billing } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-invoice-crash-tail';
+    const T1 = T0 + 60_000;
+    const T2 = T0 + 120_000;
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'ACTIVE',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 0,
+    });
+    const rid = String(reservation._id);
+
+    nowValue.value = T1;
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T1),
+    });
+    expect(
+      await BillingInvoice.countDocuments({ idempotentKey: `invoice:container-final:${rid}` }),
+    ).toBe(1);
+
+    // A-3 缺额窗口：结算层已扣费 [T1,T2]，开票前崩溃。
+    nowValue.value = T2;
+    const tail = await reservations.finalSettle(rid, new Date(T2));
+    expect(tail.tail).toBe(true);
+    expect(tail.amount).toBe(100);
+    const gapKey = `invoice:container-final-gap:${rid}:${T1}`;
+    expect(await BillingInvoice.countDocuments({ idempotentKey: gapKey })).toBe(0);
+
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T2),
+    });
+    const gap = await BillingInvoice.findOne({ idempotentKey: gapKey }).lean();
+    expect(gap).not.toBeNull();
+    expect(gap!.amount).toBe(-100);
+    expect(await BillingInvoice.countDocuments({})).toBe(2);
+  });
+
+  it('R6-1c: 周期结算已扣费、开票前崩溃 → handleSettlementCycle 重放补建周期账单', async () => {
+    const nowValue = { value: T0 };
+    const { reservations, billing } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-invoice-crash-cycle';
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'ACTIVE',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      expectedEndAt: null,
+      version: 0,
+    });
+    const rid = String(reservation._id);
+    const key = `invoice:container-cycle:${rid}:0`;
+
+    // 崩溃点：settleCycle 已扣费并写周期记录，BillingService 尚未开票。
+    nowValue.value = T0 + 2 * 60_000;
+    const settlement = await reservations.settleCycle(rid, 0);
+    expect(settlement.settled).toBe(true);
+    expect(settlement.amount).toBe(100);
+    expect(await BillingInvoice.countDocuments({ idempotentKey: key })).toBe(0);
+
+    // 重放周期消息：settleCycle 命中 alreadySettled 早退，必须补建凭证。
+    const replay = await billing.handleSettlementCycle(rid, 0);
+    expect(replay.settled).toBe(false);
+    const invoice = await BillingInvoice.findOne({ idempotentKey: key }).lean();
+    expect(invoice).not.toBeNull();
+    expect(invoice!.amount).toBe(-100);
+    expect(await BillingReceipt.countDocuments({ invoiceId: String(invoice!._id) })).toBe(1);
+
+    // 再次重放：不重复出账。
+    await billing.handleSettlementCycle(rid, 0);
+    expect(await BillingInvoice.countDocuments({ idempotentKey: key })).toBe(1);
+    expect(await BillingReceipt.countDocuments({})).toBe(1);
+  });
+
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);

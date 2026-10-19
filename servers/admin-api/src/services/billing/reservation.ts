@@ -37,7 +37,11 @@ export interface ReservationServiceOptions {
   now?: () => number;
 }
 
-function reservationBizPrefix(reservationId: string): string {
+/**
+ * 预留资金流水的 `bizId` 前缀。R6-1：`BillingService` 需要按该前缀从 ledger 扣费行反查
+ * 窗口（补建缺失账单），故导出。
+ */
+export function reservationBizPrefix(reservationId: string): string {
   return `reservation:${reservationId}:`;
 }
 
@@ -625,7 +629,9 @@ export class ReservationService {
         ref: { type: 'container_reservation', id: reservationId },
       });
       cashBalance = payment.cashBalance;
-      // 幂等键编码区间两端：`applied=false` 表示同窗口已收费；仍回填金额以便补建幂等账单。
+      // 幂等键编码区间两端：`applied=false` 表示同窗口已收费（金额已计入 `coveredAmount`，不重复计费）。
+      // 注意：串行前提下本分支不会先于「窗口已覆盖」早退到达；「已扣费但账单缺失」由
+      // `BillingService.reconcileContainerInvoices` 以 ledger 扣费行驱动补建（R6-1），不依赖此回填。
       amount = priced.amountCents;
       billedThrough = endedAt.getTime();
     }

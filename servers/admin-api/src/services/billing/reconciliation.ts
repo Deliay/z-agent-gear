@@ -38,6 +38,7 @@ export const RECONCILIATION_LINES = [
   'events',
   'rollups',
   'apiCalls',
+  'containerInvoices',
 ] as const;
 export type ReconciliationLine = (typeof RECONCILIATION_LINES)[number];
 
@@ -82,6 +83,8 @@ export class ReconciliationService {
       else if (item === 'events') reports.push(await this.reconcileEvents());
       else if (item === 'rollups') reports.push(await this.reconcileRollups());
       else if (item === 'apiCalls') reports.push(await this.reconcileApiCalls());
+      else if (item === 'containerInvoices')
+        reports.push(await this.reconcileContainerInvoices());
     }
     this.lastReports = reports;
     return reports;
@@ -371,6 +374,80 @@ export class ReconciliationService {
       reason: 'cost_without_invoice',
     }));
     return this.report('apiCalls', calls.length, errors);
+  }
+
+  /**
+   * R6-1（对齐 R2-4 `apiCalls` 线）：容器 **charge 流水 ↔ 账单** 存在性对账。
+   *
+   * 结算层「先扣费、后开票」非原子，进程在中间崩溃会留下「ledger 有扣费、账单缺失」的凭证空洞。
+   * 正常重放已能自愈（`BillingService.reconcileContainerInvoices`），但若事件不再重投（outbox 清理、
+   * 对账兜底场景），需要一条独立的发现线。仅报告，不自动改账。
+   *
+   * 覆盖三类容器流水：
+   * - `…:final:<from>:<to>` → 账单 `invoice:container-final:<rid>` 且 `[periodFrom,periodTo]` 覆盖窗口；
+   * - `…:final-gap:<from>:<to>` → 账单 `invoice:container-final-gap:<rid>:<from>` 覆盖窗口；
+   * - `…:cycle:<seq>` → 账单 `invoice:container-cycle:<rid>:<seq>`。
+   * 零额流水（零价窗口）无需出账，跳过。
+   */
+  private async reconcileContainerInvoices(): Promise<ReconciliationReport> {
+    const since = new Date(this.now() - 24 * 60 * 60 * 1000);
+    const rows = await BillingLedger.find({
+      bizType: 'charge',
+      createdAt: { $gte: since },
+      bizId: { $regex: '^reservation:[^:]+:(final|final-gap|cycle):' },
+    })
+      .select({ accountId: 1, deltaBalance: 1, bizId: 1 })
+      .lean<Array<{ accountId: unknown; deltaBalance?: number; bizId?: string | null }>>();
+
+    const errors: Array<Record<string, unknown>> = [];
+    let checked = 0;
+    for (const row of rows) {
+      const bizId = row.bizId ?? '';
+      const match = /^reservation:([^:]+):(final|final-gap|cycle):(.+)$/.exec(bizId);
+      if (!match) continue;
+      const [, reservationId, kind, rest] = match;
+      const amount = Math.abs(Math.round(row.deltaBalance ?? 0));
+      if (amount <= 0) continue;
+      checked += 1;
+
+      const mainKey = `invoice:container-final:${reservationId}`;
+      let invoiceKeys: string[];
+      let window: { from: number; to: number } | null = null;
+      if (kind === 'cycle') {
+        invoiceKeys = [`invoice:container-cycle:${reservationId}:${rest}`];
+      } else {
+        const parsed = /^(\d+):(\d+)$/.exec(rest);
+        if (!parsed) continue;
+        window = { from: Number(parsed[1]), to: Number(parsed[2]) };
+        // 主路径的一张主账单会覆盖 `final` + 当次 `final-gap`，故缺口行需同时看主账单。
+        invoiceKeys =
+          kind === 'final'
+            ? [mainKey]
+            : [`invoice:container-final-gap:${reservationId}:${window.from}`, mainKey];
+      }
+
+      const invoices = await BillingInvoice.find({ idempotentKey: { $in: invoiceKeys } })
+        .select({ periodFrom: 1, periodTo: 1 })
+        .lean<Array<{ periodFrom?: Date | null; periodTo?: Date | null }>>();
+      const covered = invoices.some((invoice) =>
+        window && invoice.periodFrom && invoice.periodTo
+          ? new Date(invoice.periodFrom).getTime() <= window.from &&
+            new Date(invoice.periodTo).getTime() >= window.to
+          : true,
+      );
+      if (!covered) {
+        errors.push({
+          accountId: String(row.accountId),
+          reservationId,
+          kind,
+          bizId,
+          amount,
+          invoiceKey: invoiceKeys[0],
+          reason: 'charge_without_invoice',
+        });
+      }
+    }
+    return this.report('containerInvoices', checked, errors);
   }
 
   /**

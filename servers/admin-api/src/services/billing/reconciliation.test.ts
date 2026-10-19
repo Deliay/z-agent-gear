@@ -398,6 +398,56 @@ describe('ReconciliationService（三线对账）', () => {
     expect(report.errors[0]).toMatchObject({ requestId: 'req-drift', reason: 'cost_without_invoice' });
   });
 
+  it('containerInvoices: charge>0 但无对应账单的容器流水被报告（R6-1 发现线）', async () => {
+    const { BillingInvoice } = await import('../../models/billing-invoice.js');
+    const account = await accountService.getOrCreate(
+      'front_user',
+      new mongoose.Types.ObjectId().toString(),
+      'container-invoice-user',
+    );
+    const reservationId = new mongoose.Types.ObjectId().toString();
+    const from = Date.now() - 120_000;
+    const to = Date.now() - 60_000;
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -100,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 100 }],
+      bizId: `reservation:${reservationId}:final:${from}:${to}`,
+      idempotentKey: `charge:final:${reservationId}`,
+      walletApplied: true,
+    });
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('containerInvoices');
+    expect(report.line).toBe('containerInvoices');
+    expect(report.errorCount).toBe(1);
+    expect(report.errors[0]).toMatchObject({
+      reservationId,
+      kind: 'final',
+      reason: 'charge_without_invoice',
+    });
+
+    await BillingInvoice.create({
+      accountId: account.id,
+      seq: 0,
+      type: 'charge',
+      category: 'container',
+      amount: -100,
+      balanceAfter: 0,
+      idempotentKey: `invoice:container-final:${reservationId}`,
+      periodFrom: new Date(from),
+      periodTo: new Date(to),
+    });
+    const [coveredReport] = await recon.run('containerInvoices');
+    expect(coveredReport.errorCount).toBe(0);
+  });
+
   it('resources: 容器缺失/超期 → 最终结算；列表失败 → 中止', async () => {
     const billing = { handleContainerDestroyed: vi.fn().mockResolvedValue(null) };
     const reservations = {

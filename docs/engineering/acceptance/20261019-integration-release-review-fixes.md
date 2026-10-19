@@ -379,3 +379,49 @@ type: Permanent
 ### 9.6 已复核确认项（本轮未触碰）
 
 R4-2 destroyed 业务事实断言 + ready `repairOf` 锚定、R4-1 区间两端编码 + `settledCoverage` + 只补未覆盖尾段、`settleTailAfterSettled` 去 CAS 先推进窗口、R3-1~R3-7 实现均保持上一轮确认状态。
+
+---
+
+## 十、第六轮复核返工对账（2026-10-20，针对 R6-1）
+
+> 基线：`integration` @ `bc7cc3f`（复核对象 §十二）。复核口径：崩溃点构造/探针回退为固定手段；
+> 断言以业务事实（`BillingInvoice` / `BillingReceipt` 是否存在与金额）为单位；「仅当 X 才…否则…」逐分支回归。
+
+### 10.1 R6-1（🟠 重要：扣费与开票之间的崩溃窗口 → 已扣费永久无凭证、重放不可补建）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| ① 重放必须能补建幂等账单 | ✅ | 新增 `BillingService.reconcileContainerInvoices`（**按 ledger 扣费行驱动**）：扫描 `charge:final` / `charge:final-gap` 流水，凡「无账单 `[periodFrom,periodTo]` 覆盖该窗口」即补建 `BillingInvoice`+`BillingReceipt`；`finalizeReservation` 在 `finalSettle` 之后**无条件**调用（正常路径刚开票时为空操作，重放时补建）。主账单缺失→合并全部未覆盖流水为一张主账单（复刻主路径 final+gap 合一语义）；主账单已存在→逐条补缺口账单 |
+| ② `handleSettlementCycle` 同标准 | ✅ | `settleCycle` 返回 `settled:false` 时调用新增 `repairCycleInvoice`：按 `BillingReservationCycle`（窗口/分钟/金额）补建 `invoice:container-cycle:<rid>:<seq>` + 收据；并补 `prepareNextCycle(seq+1)`（覆盖「开票后、换冻前」崩溃，幂等） |
+| ③ 注释与实现口径一致 | ✅ | `settleTailAfterSettled` 删除「`applied=false` 仍回填金额以便补建幂等账单」的误导表述，如实写明该分支在串行前提下不可达、补建由 `reconcileContainerInvoices` 负责；`finalizeReservation` 增加 R6-1 说明 |
+| ④ 区分性回归（修复前红） | ✅ | `billing-flow.test.ts` 新增 R6-1a（主路径：`finalSettle` 直调完成扣费、开票前中断 → `handleContainerDestroyed` 重放补建账单+收据，二次重放不重复）、R6-1b（缺口路径：尾结扣费后崩溃 → 重放补建 `invoice:container-final-gap:<rid>:<from>`）、R6-1c（周期：`settleCycle` 直调扣费后崩溃 → `handleSettlementCycle` 重放补建 `invoice:container-cycle:<rid>:0`） |
+| ④ 探针结论 | ✅ | 回退 `billing-service.ts` 至 `9d33472`：R6-1a/b/c **三条全红**，均为 `AssertionError: expected null not to be null`（账单缺失），与复核「BillingInvoice 均为 0（期望 1）」一致 |
+| ⑤（可选）容器 charge↔invoice 对账线 | ✅ | 新增对账线 `containerInvoices`：扫描近 24h `final`/`final-gap`/`cycle` 扣费流水，缺账单者报 `charge_without_invoice`（对齐 R2-4 `apiCalls` 的「仅报告」口径）；`reconciliation.test.ts` 覆盖「无账单→报 1 / 补账单→报 0」 |
+
+### 10.2 探针回退验证（本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R6 Probe | `billing-service.ts` → `9d33472` | R6-1a / R6-1b / R6-1c | 🔴 三条均 `expected null not to be null`（重放后账单仍缺失） |
+
+对照：修复后同一用例断言 `BillingInvoice` 金额 `-100`、`BillingReceipt` 恰好 1 条、二次重放不新增。
+
+### 10.3 独立复跑（本机实跑，Aspire 干净实例 `aspire stop && aspire start`，注入 `INTERNAL_API_TOKEN`）
+
+| 层 | 结果 |
+|---|---|
+| admin-api 单测 / `tsc --noEmit` | ✅ **540 passed / 1 skipped**，tsc 0 |
+| cloud-controller | ✅ 197 passed，tsc 0 |
+| agent-api | ✅ 658 passed，tsc 0 |
+| admin-web | ✅ tsc 0 / 207 passed |
+| agent-web | ✅ tsc 0 / 429 passed |
+| tests/api（28 文件） | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | ✅ 3 passed |
+
+### 10.4 未做/残余（如实标注）
+
+- 补建账单的 `balanceAfter` 取**补建时点**的可用余额（非原始扣费时点），仅影响展示；金额/窗口/收据均与 ledger 扣费行一致。
+- 自愈依赖「事件重放」（outbox 重投 / DLQ / `settlement-tick` 对账补投）。若事件永不重放，`containerInvoices` 线**仅报告**不自动改账（与 R2-4 `apiCalls` 一致）。
+- `repairCycleInvoice` 仅在周期记录 `amount > 0` 时出账（与正常路径 `settlement.amount > 0` 才出账一致）；零额周期不产生账单。
+- `settleTailAfterSettled` 的 `applied=false` 回填分支在串行前提下仍不可达（本轮已如实注释，不再作为补建机制）。
+- 前几轮 8.4/9.5 未做项保持如实标注，未在本轮扩大范围。
