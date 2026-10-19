@@ -179,7 +179,9 @@ dotnet --list-sdks                 # 应显示 10.x（apt 提供 /usr/bin/dotnet
 command -v dotnet                  # 命中 /usr/bin/dotnet
 bash -c 'test ! -e /tmp/dotnet-install.sh'   # 不再下载 dotnet-install.sh
 
-# Aspire（依赖 Docker + .NET，最后执行；成功判据为 CLI 可执行）
+# Aspire（依赖 Docker + .NET，最后执行；成功判据为 CLI 可执行；下载来源为「Aspire」工作负载参数
+# `aspire_cli_url`——迁移 004 默认填入内网缓存代理安装包直链，启动时可按次调整，运行时
+# `ASPIRE_CLI_URL` 环境变量可覆盖且优先；脚本本身不内置默认值）
 aspire --version
 ```
 
@@ -195,7 +197,10 @@ aspire --version
 - [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
 - [ ] .NET 脚本经 **apt** 安装 .NET 10：`dotnet --list-sdks` 显示 `10.x`、`command -v dotnet` 命中 `/usr/bin/dotnet`、**不依赖 `dotnet-install.sh`**；重复执行幂等（已装 .NET 10 直接成功）
 - [ ] `DOTNET_APT_PACKAGE`（默认 `dotnet10`）/`DOTNET_APT_UPGRADE`（默认 `1`）在运行时生效；`DOTNET_APT_UPGRADE=0` 时跳过 `apt-get upgrade`
-- [ ] Aspire 脚本前置检查（`command -v dotnet`）通过，安装 CLI 后 `aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
+- [ ] Aspire 脚本前置检查（`command -v dotnet`）通过，下载安装 CLI 后 `aspire --version` 输出非空（不能仅以下载/安装步骤返回 0 判成功）
+- [ ] **下载来源默认已填且可达**：「Aspire」工作负载参数 `aspire_cli_url` 默认已填内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`；核对 `curl -fsS "<地址>"` 返回 200（`content-type: application/x-gzip`）
+- [ ] 清空 `aspire_cli_url` 参数（且未提供 `ASPIRE_CLI_URL`）且 Aspire 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
+- [ ] 下载地址不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
 
 > **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网
 > Docker CE apt 代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`（实测该仓库根即 apt 源根，
@@ -203,6 +208,12 @@ aspire --version
 > 运行时 `DOCKER_APT_URL` 环境变量可覆盖且优先。清空参数且需安装时快速失败、打印指引并不影响容器其余初始化。
 > 安装包列表为 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`：其中 `docker-ce` 提供 `dockerd`
 > （守护进程），`docker-ce-cli` 仅提供客户端，四者缺一不可；**默认不指向公网**。
+>
+> **Aspire 安装来源**：默认来源由「Aspire」工作负载参数 `aspire_cli_url` 提供——迁移 004 默认填入内网缓存代理
+> 安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`（实测
+> `application/x-gzip`），启动时可按环境调整；脚本本身**不内置默认值**，运行时 `ASPIRE_CLI_URL` 环境变量可覆盖
+> 且优先。脚本直接下载安装包并解压到 `~/.aspire/bin` 后校验，**不再执行官方安装脚本**（`ASPIRE_INSTALL_URL`
+> 随官方安装脚本退役）。清空参数且需安装时快速失败、打印含地址形态的指引并不影响容器其余初始化。
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。
@@ -273,4 +284,4 @@ bash entrypoint.test.sh
 
 - sysbox 为**节点级** runtime（`sysbox-runc`），集群节点需预装 sysbox，否则带 `runtimeClassName: sysbox-runc` 的 Pod 无法调度。集群未启用 sysbox 时可将 `RUNTIME_CLASS_NAME` 置空/改用其他 runtime。
 - 镜像代理 shim 由「Docker」工作负载脚本在安装 CLI 后装配（`/usr/local/bin/docker`），采用「首个非选项参数即镜像引用」的启发式改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。未选择「Docker」工作负载时容器内不存在该 shim。
-- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源：Docker 由工作负载参数 `docker_apt_url` 提供（迁移 003 默认填入内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`，可启动时按次调整；`DOCKER_APT_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空参数且需安装时快速失败并给出指引；.NET / Aspire 脚本默认走各自官方地址，内网覆盖由管理员编辑对应工作负载脚本。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
+- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源：Docker 由工作负载参数 `docker_apt_url` 提供（迁移 003 默认填入内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`，可启动时按次调整；`DOCKER_APT_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空参数且需安装时快速失败并给出指引；.NET 脚本经 **apt** 安装（内网 Ubuntu 源，必要时经 `DOTNET_APT_SOURCE`/`DOTNET_APT_KEY_URL` 追加 Microsoft feed 代理源，见上文「.NET（apt）相关构建参数」）；Aspire 由工作负载参数 `aspire_cli_url` 提供内网缓存代理安装包直链（迁移 004 默认填入 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`，可启动时按次调整；`ASPIRE_CLI_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空且未安装时快速失败并给出指引。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
