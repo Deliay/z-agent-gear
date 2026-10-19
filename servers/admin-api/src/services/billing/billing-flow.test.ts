@@ -5,6 +5,7 @@ import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingReservation } from '../../models/billing-reservation.js';
+import { MeteringRecord } from '../../models/metering-record.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
 import { ProductPrice } from '../../models/product-price.js';
 import { BillingEvent } from '../../models/billing-event.js';
@@ -651,6 +652,9 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(await BillingReceipt.countDocuments({ invoiceId: String(invoice!._id) })).toBe(1);
     const receipt = await BillingReceipt.findOne({ invoiceId: String(invoice!._id) }).lean();
     expect(receipt!.amount).toBe(100);
+    // R8-1：补收据线同时重置计量记录的 `invoiced` 标记（与 repairCycleInvoice 同标准）。
+    const metering = await MeteringRecord.findOne({ eventId: `container:${rid}:final` }).lean();
+    expect(metering!.invoiced).toBe(true);
 
     // 二次重放：不重复出账/出收据。
     await billing.handleContainerDestroyed({

@@ -518,7 +518,7 @@ creditCheck(input: {
 | quantity | Number | 分钟数 或 token 数 |
 | dims | Mixed | token 三段：`{input, cachedInput, output}`；`estimated: true` = 兜底计量 |
 | windowFrom / windowTo | Date | 用量时段（跨期按时间切分） |
-| invoiced | Boolean | 出账游标 |
+| invoiced | Boolean | 派生标记（**只写不读**，非出账游标；见 R8-1 注） |
 
 #### 定价：集合 `productprices`（`ProductPrice`，价目）
 
@@ -705,7 +705,7 @@ sequenceDiagram
 #### 实现点 2: 事件与计量的幂等可重放（PRD 功能点 2）
 
 - 事件经 RabbitMQ **at-least-once** 投递；消费侧按 `eventId` 唯一索引去重，重复投递/重复消费直接返回成功；
-- 计量按 `eventId` 一一映射（一事件一计量记录），`metered/invoiced` 游标可重置重扫；
+- 计量按 `eventId` 一一映射（一事件一计量记录）；`metered` 可重置重扫（`MeteringService.resetCursor`），`invoiced` 仅为派生标记、**当前无读取点与重置路径**（R8-1 更正）；
 - **计量是事实、扣费是解释**：重放「事件 → 计量 → 定价」得到的金额与历史一致（定价取 `windowFrom` 时点生效价档）；出账/支付按 `idempotentKey` 幂等，重跑结果一致（决策 D-4）；
 - 计量缺失兜底：模型 usage 缺失按请求上限/已收文本估算（`estimated=true`）；容器心跳丢失按最后已知时段计量——保证「拔网线」不逃费。
 

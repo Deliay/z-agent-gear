@@ -381,6 +381,30 @@ export class BillingService {
       if (invoicedIds.has(String(invoice._id))) continue;
       const key = invoice.idempotentKey;
       if (!key) continue;
+      // R8-1：与 `repairCycleInvoice` 真正同标准——补收据同时把对应计量记录置 `invoiced:true`
+      // （`ensureMetering` 按唯一 `eventId` 幂等，重放安全）。历史账单无 period 元数据时退回不传。
+      const gapKeyPrefix = `invoice:container-final-gap:${reservationId}:`;
+      const isGapInvoice = key.startsWith(gapKeyPrefix);
+      let meteringIdsForRepair: string[] = [];
+      if (invoice.periodFrom && invoice.periodTo) {
+        const from = new Date(invoice.periodFrom);
+        const to = new Date(invoice.periodTo);
+        const minutes = Math.max(1, ceilMinutes(to.getTime() - from.getTime()));
+        const metering = await this.ensureMetering({
+          eventId: isGapInvoice
+            ? `container:${reservationId}:final-gap:${key.slice(gapKeyPrefix.length)}`
+            : `container:${reservationId}:final`,
+          accountId,
+          resourceType: 'container',
+          resourceId,
+          productId: 'container.minute',
+          quantity: minutes,
+          dims: { minutes, final: true, ...(isGapInvoice ? { gap: true } : {}), repaired: true },
+          windowFrom: from,
+          windowTo: to,
+        });
+        meteringIdsForRepair = [String(metering._id)];
+      }
       const result = await this.invoiceExistingCharge({
         accountId,
         // 收据必须与账单同额（合并账单覆盖 final+gap 时，不能用单窗口金额）。
@@ -393,7 +417,7 @@ export class BillingService {
         items: [],
         periodFrom: invoice.periodFrom ?? null,
         periodTo: invoice.periodTo ?? null,
-        meteringIds: [],
+        meteringIds: meteringIdsForRepair,
         idempotentKey: key,
         invoiceId: String(invoice._id),
       });

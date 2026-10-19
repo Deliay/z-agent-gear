@@ -469,8 +469,8 @@ R4-2 destroyed 业务事实断言 + ready `repairOf` 锚定、R4-1 区间两端�
 | # | 崩溃点（写序列） | 重放后 | 结论 |
 |---|---|---|---|
 | 1 | `finalSettle` 扣费已落、`finalizeReservation` 开票未落 | `reconcileContainerInvoices` 按 ledger 建账单+收据 | ✅ 可恢复（R6-1a） |
-| 2 | `createInvoice` 已落、`issueReceipt` 未落 | 对每张账单校验收据缺失 → 重放 `invoiceExistingCharge` | ✅ 可恢复（R7-1a） |
-| 3 | `issueReceipt` 已落、`MeteringRecord.invoiced` 未置位 | 补收据分支 `meteringIds:[]` 不重跑标记 | ⚠️ 派生标记残留（非资金/凭证），`reconcileMetering` 可发现 |
+| 2 | `createInvoice` 已落、`issueReceipt` 未落 | 对每张账单校验收据缺失 → 重放 `invoiceExistingCharge`；R8-1 起补建分支同时 `ensureMetering` + 传 `meteringIds` | ✅ 收据可恢复（R7-1a）；对应 `MeteringRecord.invoiced` 在同一次重放中被置 `true`（R8-1 单测断言） |
+| 3 | `issueReceipt` 已落、`MeteringRecord.invoiced` 未置位 | **无重放路径**：收据已存在 → 补收据分支跳过，不会重跑 `updateMany` | ⚠️ 无发现线、无兜底：该字段**只写不读**（全仓无读取/查询/GraphQL 暴露），`reconcileMetering` 判定的是 `BillingEvent.metered:false`，与本字段无关。非资金/凭证，且不参与任何计费/开票/收据/对账判定 |
 | 4 | `settleCycle` 扣费已落、周期账单未落 | `repairCycleInvoice` 按周期记录建账单+收据 | ✅ 可恢复（R6-1c） |
 | 5 | 周期账单已落、收据未落 | `repairCycleInvoice` 无条件重放 `invoiceExistingCharge` | ✅ 可恢复（R6-1b 对照线 / P-B） |
 | 6 | 周期收据已落、`prepareNextCycle` 未执行 | 修复路径补 `prepareNextCycle(seq+1)`（幂等） | ✅ 可恢复 |
@@ -478,7 +478,45 @@ R4-2 destroyed 业务事实断言 + ready `repairOf` 锚定、R4-1 区间两端�
 
 ### 11.5 未做/残余（如实标注）
 
-- 子窗口 #3（`metering.invoiced` 派生标记）未纳入本次补建；不涉及资金与凭证，且 `reconcileMetering` 覆盖。
+- 子窗口 #3（`issueReceipt` 已落、`MeteringRecord.invoiced` 未置位）：**无发现线、无兜底**。该字段只写不读——写入点为 `models/metering-record.ts`（schema 默认）、`metering.ts`（创建 false）、`billing-service.ts`（开票成功后 `$set invoiced:true`），全仓**零读取/零查询/零 GraphQL 暴露**；`reconcileMetering` 判定的是 `BillingEvent.metered:false`，与本字段无关。它**不是**可用的「出账游标」：`MeteringService.resetCursor` 只重置 `BillingEvent.metered`，没有 `invoiced` 的重置/重扫路径（提案文档 `20261018-feat-credits-billing.md` §521/§708 已同步更正）。不涉及资金/凭证/账实，本轮保留该字段、不纳入补建。
 - 自愈依赖「事件重放」；若事件永不重投，`containerInvoices` 仅报告 `charge_without_invoice` / `invoice_without_receipt`，不自动改账（与 R2-4 一致）。
 - 补建账单的 `balanceAfter` 取补建时点余额；补建收据的 `amount/balanceAfter` 取账单本身（与账单一致）。
 - `repairCycleInvoice` 仅在周期记录 `amount > 0` 时出账（与正常路径一致）。
+
+---
+
+## 十二、第八轮复核返工对账（2026-10-20，针对 R8-1）
+
+> 基线：`integration` @ `9257f14`（复核对象 §十四）。范围按复核要求刻意收窄：仅残余声明与
+> `MeteringRecord.invoiced` 派生标记，不触碰计费/开票/收据主路径与 R7-1 已修复逻辑。
+
+### 12.1 R8-1（🟢 轻微：残余声明不实 + 残余未枚举）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| ① §11.4 #3 / §11.5 不再声称 `reconcileMetering` 可发现 | ✅ | 已改写：明确该字段**只写不读**、全仓无读取/查询/GraphQL 暴露；`reconcileMetering` 判定的是 `BillingEvent.metered:false`，与本字段无关；结论改为「无发现线、无兜底」 |
+| ② 补全 §11.4 #2 残余 | ✅ | 改为「收据可恢复；R8-1 起补建分支同时 `ensureMetering` + 传 `meteringIds`，同次重放置 `invoiced:true`」，并补单测断言 |
+| ③ 两线同标准（选 (a)） | ✅ | `reconcileContainerInvoices` 收据补建分支现按账单键推导 `eventId`（`container:<rid>:final` / `container:<rid>:final-gap:<from>`），`ensureMetering`（`eventId` 唯一、幂等）后传 `meteringIds`，与 `repairCycleInvoice` 一致 |
+| ④ 字段定位更正 | ✅ | `metering-record.ts` schema 注释 + 提案文档 `20261018-feat-credits-billing.md` §521/§708 同步更正：`invoiced` 是派生标记，**不是**可用的「出账游标」；`resetCursor` 只重置 `BillingEvent.metered`，无 `invoiced` 重置路径 |
+| ⑤ 不扩大范围 | ✅ | 未改计费/开票/收据主路径；未触碰 R7-1 / R6-1 / R5-1 / R5-2 / R4-2 / R4-1 / R3-1~R3-7 |
+| 展示级瑕疵注释 | ✅ | `receipt.ts` 增加注释：补建收据的 `issuedAt` 取补建时点，`receiptNo` 的 `R<YYYYMMDD>` 段反映补建日期（`seq` 仍取自账单，规则同主路径） |
+
+### 12.2 探针回退验证（本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R8 Probe | `billing-service.ts` → `385da92`（第七轮，`meteringIds:[]`） | R7-1a（新增 `invoiced` 断言） | 🔴 `AssertionError: expected false to be true`（`billing-flow.test.ts:657`） |
+
+修复后：`MeteringRecord.findOne({ eventId: 'container:<rid>:final' }).invoiced === true`。
+
+### 12.3 复跑（按复核要求：仅 admin-api 单测 + tsc）
+
+| 层 | 结果 |
+|---|---|
+| admin-api 单测 | ✅ **542 passed / 1 skipped** |
+| admin-api `tsc --noEmit` | ✅ 0 |
+| billing-flow + reconciliation 定向 | ✅ 46 passed |
+
+### 12.4 残余（如实标注，更新 §11.4 #3）
+
+- 子窗口 #3（`issueReceipt` 已落、`invoiced` 未置位）**仍无重放/发现路径**：收据已存在时补收据分支跳过，不会重跑 `updateMany`；该字段只写不读，`reconcileMetering` 不覆盖。不涉及资金/凭证/账实，字段不参与任何计费/开票/收据/对账判定，本轮保留字段并如实登记为「无发现线、无兜底」。
