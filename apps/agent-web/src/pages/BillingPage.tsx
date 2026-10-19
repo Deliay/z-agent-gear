@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { formatDateTime } from '@/lib/format'
+import { itemFormula, segmentLabel, unitLabel } from '@/lib/billing-format'
 
 export default function BillingPage() {
   const [granularity, setGranularity] = useState<'hour' | 'day'>('day')
@@ -55,7 +56,10 @@ export default function BillingPage() {
     variables: { granularity, from: range.from, to: range.to },
   })
   const keysQuery = useQuery<GetMyBillingApiKeysQuery>(MY_BILLING_API_KEYS)
-  const [createKey, { loading: creating }] = useMutation(CREATE_MY_BILLING_API_KEY)
+  // 建议 21：secret 不入 Apollo 规范化缓存（仅显示一次的语义不能只在组件 state 层成立）。
+  const [createKey, { loading: creating }] = useMutation(CREATE_MY_BILLING_API_KEY, {
+    fetchPolicy: 'no-cache',
+  })
   const [revokeKey] = useMutation(REVOKE_MY_BILLING_API_KEY)
 
   const [name, setName] = useState('')
@@ -164,8 +168,19 @@ export default function BillingPage() {
           <CardTitle>账单明细</CardTitle>
         </CardHeader>
         <CardContent>
-          {invoices.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无账单</p>
+          {invoicesQuery.loading && !invoicesQuery.data ? (
+            <p className="text-sm text-muted-foreground">加载中…</p>
+          ) : invoicesQuery.error ? (
+            <div className="space-y-2 text-sm text-destructive">
+              <p>账单加载失败：{invoicesQuery.error.message}</p>
+              <Button size="sm" variant="outline" onClick={() => void invoicesQuery.refetch()}>
+                重试
+              </Button>
+            </div>
+          ) : invoices.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              暂无账单{invoicePage > 1 ? '（本页为空，可返回上一页）' : ''}
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
@@ -231,8 +246,19 @@ export default function BillingPage() {
           <CardTitle>模型调用记录</CardTitle>
         </CardHeader>
         <CardContent>
-          {calls.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无调用记录</p>
+          {callsQuery.loading && !callsQuery.data ? (
+            <p className="text-sm text-muted-foreground">加载中…</p>
+          ) : callsQuery.error ? (
+            <div className="space-y-2 text-sm text-destructive">
+              <p>调用记录加载失败：{callsQuery.error.message}</p>
+              <Button size="sm" variant="outline" onClick={() => void callsQuery.refetch()}>
+                重试
+              </Button>
+            </div>
+          ) : calls.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              暂无调用记录{callPage > 1 ? '（本页为空，可返回上一页）' : ''}
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
@@ -291,7 +317,16 @@ export default function BillingPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-2">
-          {rollups.length === 0 ? (
+          {rollupsQuery.error ? (
+            <div className="space-y-2 text-sm text-destructive">
+              <p>汇总加载失败：{rollupsQuery.error.message}</p>
+              <Button size="sm" variant="outline" onClick={() => void rollupsQuery.refetch()}>
+                重试
+              </Button>
+            </div>
+          ) : rollupsQuery.loading && !rollupsQuery.data ? (
+            <p className="text-sm text-muted-foreground">加载中…</p>
+          ) : rollups.length === 0 ? (
             <p className="text-sm text-muted-foreground">暂无汇总数据</p>
           ) : (
             rollups.map((item) => (
@@ -395,14 +430,13 @@ export default function BillingPage() {
               </div>
               <div className="space-y-1 border-t pt-2">
                 {receiptInvoice.items.map((item, index) => (
-                  <div key={`${item.productId}-${index}`} className="flex justify-between text-xs">
+                  <div key={`${item.productId}-${index}`} className="flex justify-between gap-2 text-xs">
                     <span>
                       {item.productId}
-                      {item.segment ? `（${item.segment.includes('aborted') ? '中断' : item.segment}）` : ''}
+                      {item.segment ? `（${segmentLabel(item.segment)}）` : ''}
+                      <span className="text-muted-foreground"> · {unitLabel(item)}</span>
                     </span>
-                    <span className="tabular-nums">
-                      {item.quantity} × {item.unitPrice.toFixed(4)} = {item.amount.toFixed(2)}
-                    </span>
+                    <span className="tabular-nums text-muted-foreground">{itemFormula(item)}</span>
                   </div>
                 ))}
               </div>

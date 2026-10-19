@@ -76,6 +76,102 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     await pricingService.ensureDefaultPrices();
   });
 
+  it('R-1: destroyed 先于 ready 被消费时同一资源只产生一笔计费（乱序门控）', async () => {
+    const nowValue = { value: T0 };
+    const { billing } = setup(nowValue);
+    const account = await createAccount(100);
+    const startedAt = new Date(T0);
+    const destroyedAt = new Date(T0 + 120_000);
+    const resourceId = 'container-ord-1';
+
+    // 模拟消费端顺序：destroyed 先 ingest + 处理（outbox 顺序翻转场景）。
+    await eventIngestService.ingest({
+      eventId: `container.destroyed:${resourceId}`,
+      eventType: 'container.destroyed',
+      occurredAt: destroyedAt,
+      accountId: account.id,
+      resourceId,
+      payload: { billingStartedAt: startedAt.toISOString(), exitedAt: destroyedAt.toISOString() },
+    });
+    const legacy = await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: destroyedAt,
+      payload: { billingStartedAt: startedAt.toISOString() },
+    });
+    expect(legacy).not.toBeNull();
+    expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(1);
+
+    // 迟到的 ready：不得建预留、不得启动结算链。
+    await eventIngestService.ingest({
+      eventId: `container.ready:${resourceId}`,
+      eventType: 'container.ready',
+      occurredAt: startedAt,
+      accountId: account.id,
+      resourceId,
+      payload: { billingStartedAt: startedAt.toISOString() },
+    });
+    const ready = await billing.handleContainerReady({
+      accountId: account.id,
+      resourceId,
+      occurredAt: startedAt,
+    });
+    expect(ready.skipped).toBe(true);
+    expect(ready.created).toBe(false);
+    expect(await BillingReservation.countDocuments({ resourceId })).toBe(0);
+
+    // 重放 destroyed：幂等键同族，仍只有一笔。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: destroyedAt,
+      payload: { billingStartedAt: startedAt.toISOString() },
+    });
+    expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(1);
+    expect(
+      await BillingLedger.countDocuments({ idempotentKey: `charge:container:${resourceId}:final` }),
+    ).toBe(1);
+  });
+
+  it('A-3: stale 终结后迟到 destroyed 补结缺额（不会永久免费运行）', async () => {
+    const nowValue = { value: T0 };
+    const { billing } = setup(nowValue);
+    const account = await createAccount(100);
+    const resourceId = 'container-stale-1';
+    const ready = await billing.handleContainerReady({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T0),
+    });
+    nowValue.value = T0 + 10 * 60_000;
+    // 首次最终结算（模拟提前 stale 终结）。
+    const first = await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T0 + 10 * 60_000),
+    });
+    expect(first).not.toBeNull();
+    expect((await BillingReservation.findById(ready.reservationId))!.status).toBe('SETTLED');
+    const chargeAfterFirst = await BillingLedger.countDocuments({ bizType: 'charge' });
+
+    // 容器实际又跑了 5 分钟才真正销毁 → 补结缺额。
+    nowValue.value = T0 + 15 * 60_000;
+    const gap = await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T0 + 15 * 60_000),
+    });
+    expect(gap).not.toBeNull();
+    expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(chargeAfterFirst + 1);
+    // 同一 destroyed 事件重放不再重复补结。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: new Date(T0 + 15 * 60_000),
+    });
+    expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(chargeAfterFirst + 1);
+  });
+
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);

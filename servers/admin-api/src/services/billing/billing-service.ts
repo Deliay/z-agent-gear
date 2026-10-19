@@ -5,6 +5,7 @@ import { BillingAccount } from '../../models/billing-account.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
+import { BillingLedger } from '../../models/billing-ledger.js';
 import { MeteringRecord, type IMeteringRecord } from '../../models/metering-record.js';
 import { accountService, type AccountService } from './account-service.js';
 import {
@@ -88,14 +89,50 @@ export class BillingService {
     accountId: string;
     resourceId: string;
     occurredAt: Date;
-  }): Promise<{ reservationId: string; insufficient: boolean; nextCycleSeq: number; created: boolean }> {
+  }): Promise<{
+    reservationId: string;
+    insufficient: boolean;
+    nextCycleSeq: number;
+    created: boolean;
+    /** R-1：乱序门控命中（该资源已有终结事实/legacy 计费），本次就绪不建预留、不启动结算链。 */
+    skipped?: boolean;
+  }> {
     return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
       const account = await this.accounts.getById(event.accountId);
       if (!account) throw new Error(`billing account not found: ${event.accountId}`);
 
-      // 门控重复投递（阻断项 3）：同一 resourceId 已有预留行时为重复就绪事件，
+      // 门控重复投递（阻塞项 3）：同一 resourceId 已有预留行时为重复就绪事件，
       // `created=false` 时消费端不再重复投递首期延迟消息，避免结算链放大。
       const existing = await this.reservations.findByResource(event.resourceId);
+
+      // R-1（乱序安全）：destroyed 可能先于 ready 被消费（outbox 单条失败后重连翻转顺序、
+      // 多副本认领租约过期等）。一旦该资源已摄入 destroyed 事实或已按 legacy 全额开票，
+      // 迟到的 ready **绝不能再建预留**（否则 legacy 全额 + 周期结算 + 最终结算三族幂等键
+      // 互不去重，同一会话被计 2~3 次）。
+      if (existing && existing.status !== 'PENDING') {
+        return {
+          reservationId: documentId(existing),
+          insufficient: false,
+          nextCycleSeq: 0,
+          created: false,
+        };
+      }
+      const destroyed = await BillingEvent.exists({
+        resourceId: event.resourceId,
+        eventType: 'container.destroyed',
+      });
+      const legacyCharged = await BillingLedger.exists({
+        idempotentKey: `charge:container:${event.resourceId}:final`,
+      });
+      if (destroyed || legacyCharged) {
+        return {
+          reservationId: existing ? documentId(existing) : '',
+          insufficient: false,
+          nextCycleSeq: 0,
+          created: false,
+          skipped: true,
+        };
+      }
 
       const depositCents = config.containerDepositCredits * 100;
       // A9：周期冻结估算按价格表实际单价计算，而非硬编码 1 credit/分钟（避免定价更高时冻结不足）。
@@ -138,26 +175,47 @@ export class BillingService {
     occurredAt: Date;
     payload?: Record<string, unknown>;
   }): Promise<InvoiceResult | null> {
-    const reservation = await this.reservations.findByResource(event.resourceId);
-    if (!reservation) {
-      return billingMutex.runExclusive(`container:${event.resourceId}`, () =>
-        this.billLegacyContainer(event),
-      );
-    }
+    // R-1：ready/destroyed 用同一把 `container:{resourceId}` 锁串行化，并在锁内**重新读取**预留。
+    // 若只在锁外读一次，会出现「ready 正在建预留、destroyed 读到空 → legacy 全额开票」的竞态。
+    return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
+      const reservation = await this.reservations.findByResource(event.resourceId);
+      if (!reservation) {
+        return this.billLegacyContainer(event);
+      }
+      return this.finalizeReservation(reservation, event);
+    });
+  }
+
+  /** 预留维度终结（与周期结算共用 `reservation:{id}` 锁）。 */
+  private async finalizeReservation(
+    reservation: NonNullable<Awaited<ReturnType<ReservationService['findByResource']>>>,
+    event: {
+      accountId: string;
+      resourceId: string;
+      occurredAt: Date;
+      payload?: Record<string, unknown>;
+    },
+  ): Promise<InvoiceResult | null> {
     const reservationId = documentId(reservation);
     return billingMutex.runExclusive(`reservation:${reservationId}`, async () => {
       const result = await this.reservations.finalSettle(reservationId, event.occurredAt);
       if (result.minutes <= 0 || result.amount <= 0) return null;
 
       const priced = await this.prices.priceContainer(result.minutes, result.windowFrom);
+      const billKey = result.tail
+        ? `invoice:container-final-gap:${reservationId}:${result.windowFrom.getTime()}`
+        : `invoice:container-final:${reservationId}`;
+      const eventKey = result.tail
+        ? `container:${reservationId}:final-gap:${result.windowFrom.getTime()}`
+        : `container:${reservationId}:final`;
       const metering = await this.ensureMetering({
-        eventId: `container:${reservationId}:final`,
+        eventId: eventKey,
         accountId: event.accountId,
         resourceType: 'container',
         resourceId: event.resourceId,
         productId: 'container.minute',
         quantity: result.minutes,
-        dims: { minutes: result.minutes, final: true },
+        dims: { minutes: result.minutes, final: true, ...(result.tail ? { gap: true } : {}) },
         windowFrom: result.windowFrom,
         windowTo: event.occurredAt,
       });
@@ -169,13 +227,15 @@ export class BillingService {
         category: 'container',
         refType: 'container',
         refId: event.resourceId,
-        description: `容器最终结算 ${result.minutes} 分钟`,
+        description: result.tail
+          ? `容器缺额补结 ${result.minutes} 分钟（最终结算后仍有运行）`
+          : `容器最终结算 ${result.minutes} 分钟`,
         items: priced.items.map((item) => ({ ...item, meteringRef: String(metering._id) })),
         periodFrom: result.windowFrom,
         periodTo: event.occurredAt,
         meteringIds: [String(metering._id)],
-        idempotentKey: `invoice:container-final:${reservationId}`,
-        invoiceId: deterministicObjectId(`invoice:container-final:${reservationId}`),
+        idempotentKey: billKey,
+        invoiceId: deterministicObjectId(billKey),
       });
     });
   }
@@ -191,6 +251,18 @@ export class BillingService {
     invoice: InvoiceResult | null;
   }> {
     const outcome = await billingMutex.runExclusive(`reservation:${reservationId}`, async () => {
+      // R-1：destroyed 先到且已走 legacy 计费的资源没有预留；迟到的结算消息直接 no-op，
+      // 不再抛错触发 MQ 重试/DLQ 噪声。
+      const reservationBefore = await this.reservations.findById(reservationId);
+      if (!reservationBefore) {
+        return {
+          settled: false,
+          nextCycleSeq: cycleSeq + 1,
+          shouldDestroy: false,
+          invoice: null,
+          accountId: null as string | null,
+        };
+      }
       const settlement = await this.reservations.settleCycle(reservationId, cycleSeq);
       if (!settlement.settled) {
         return {

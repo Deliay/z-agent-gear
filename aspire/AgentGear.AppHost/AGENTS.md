@@ -27,6 +27,11 @@
 > `admin-web` dev 模式为 Vite dev server（`AddViteApp`，注入 `VITE_ADMIN_API_URL`）；publish 模式注册为 nginx 容器（`${ADMIN_WEB_IMAGE}`，端口 80，SPA history fallback），并注入 `ADMIN_API_URL`（容器运行时生成 `config.js`）。
 >
 > 安全（问题 4/47）：`admin-jwt-secret` / `internal-api-token` / `admin-initial-password` 等敏感参数**不提交任何字面量默认值**，每次启动随机生成（或经配置 `Parameters:<name>` / 环境变量 `Parameters__<name>` 注入）；admin-api 首次种子时会把管理员初始密码一次性打印到日志。
+>
+> RabbitMQ 镜像与逃生门（问题 23/D-5）：`rabbitmq` 默认走内网镜像源
+> `registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management`，可用环境变量 `RABBITMQ_IMAGE` 覆盖；
+> 受限环境无镜像时可设 `RABBITMQ_DISABLED=true` 跳过 RabbitMQ 资源（其余服务照常启动，MQ 客户端自行重试并降级，
+> 计费事件保留在 outbox 待恢复后补投）。compose 部署需在 `.env` 提供 `RABBITMQ_PASSWORD`。
 
 ## Dev Commands
 

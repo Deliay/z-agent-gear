@@ -11,7 +11,10 @@ import { formatDateTime } from '@/lib/format'
 
 export default function MyApiKeyManager() {
   const { data, refetch } = useQuery<GetAdminBillingApiKeysQuery>(ADMIN_BILLING_API_KEYS)
-  const [createKey, { loading: creating }] = useMutation(CREATE_BILLING_API_KEY)
+  // 建议 21：secret 不入 Apollo 规范化缓存（「仅显示一次」不能只在 React state 层成立）。
+  const [createKey, { loading: creating }] = useMutation(CREATE_BILLING_API_KEY, {
+    fetchPolicy: 'no-cache',
+  })
   const [revokeKey] = useMutation(REVOKE_BILLING_API_KEY)
   const [name, setName] = useState('')
   const [secret, setSecret] = useState<string | null>(null)

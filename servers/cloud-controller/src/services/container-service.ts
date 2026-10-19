@@ -153,18 +153,54 @@ export class ContainerService {
     private readonly hooks: ContainerServiceHooks = {},
   ) {}
 
-  /** 触发计费生命周期钩子：失败只告警，绝不阻断生命周期（裁决 2）。 */
+  /** 在途计费钩子（O-1：停机前必须排空，避免 outbox 写入被 SIGTERM 截断）。 */
+  private readonly billingHookTasks = new Set<Promise<void>>();
+
+  /**
+   * 触发计费生命周期钩子：失败只告警，绝不阻断生命周期（裁决 2）。
+   *
+   * O-1：不再「fire-and-forget 后丢失」——
+   * - 同步调用钩子（不退化为微任务，缩小 CAS 写成功→outbox 写入之间的窗口）；
+   * - 失败重试 3 次（200/500/1000ms），仍失败记 error 日志；
+   * - 在途任务登记到 `billingHookTasks`，`drainBillingHooks()` 供 SIGTERM 前排空；
+   * - 长期丢失由 admin-api 反向对账线（扫描 billingStartedAt≠null 且无事件的容器）补投。
+   */
   private emitHook(
     name: 'onReady' | 'onDestroyed',
     container: CloudContainerEntity,
   ): void {
     const hook = this.hooks[name];
     if (!hook) return;
-    void Promise.resolve()
-      .then(() => hook(container))
-      .catch((err) => {
-        this.logger.warn?.(`[billing] ${name} hook failed for ${container.id}`, err);
-      });
+    const task = (async () => {
+      const delays = [0, 100, 250];
+      let lastError: unknown;
+      for (const delay of delays) {
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+          await hook(container);
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      this.logger.warn?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
+    })();
+    this.billingHookTasks.add(task);
+    void task.finally(() => this.billingHookTasks.delete(task));
+  }
+
+  /** O-1：排空在途计费钩子（SIGTERM / 单测）。超时后放弃并告警，交给反向对账兜底。 */
+  async drainBillingHooks(timeoutMs = 5000): Promise<void> {
+    if (this.billingHookTasks.size === 0) return;
+    const pending = [...this.billingHookTasks];
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.logger.warn?.(`[billing] drain hooks timeout with ${this.billingHookTasks.size} pending`);
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    await Promise.race([Promise.allSettled(pending).then(() => undefined), timeout]);
   }
 
   /** 注册销毁通知（由 Socket.IO 网关接入，用于向在线容器 emit shutdown）。 */

@@ -415,8 +415,20 @@ GET /internal/containers/:id/workload-logs
 ### A.3.1 容器生命周期计费事件（outbox → RabbitMQ）
 
 cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 admin-api 共享，`producer = "cloud-controller"`），
-由进程内 relay 经 RabbitMQ publisher confirm 发布到 `zag.billing.events`（topic）；发布失败保留
-`published=false` 由下一轮重试，不阻塞生命周期（事件丢失由资源/计量对账兜底）。
+由进程内 relay 经 RabbitMQ publisher confirm 发布到 `zag.billing.events`（topic）。事件写入为
+「CAS 状态写成功 → 同步调用 outbox 写入」两步（非同一事务），失败时钩子按 200/500/1000ms 重试 3 次，
+SIGTERM 前由 `drainBillingHooks()` 排空在途写入；发布失败的 outbox 行保留 `published=false` 由下一轮按
+`createdAt` 顺序重试（**失败即停止本轮**，避免 broker 抖动翻转 ready/destroyed 顺序）。
+
+**事件丢失的兜底覆盖（与实现口径一致）**：
+- `container.ready` 单丢：admin-api 反向对账线 `events` 扫描 `billingStartedAt≠null` 且无
+  `container.ready` 事件/outbox 的容器补投（消费端按 `eventId` 去重）；即便未补投，`container.destroyed`
+  仍可按 `billingStartedAt` 走 legacy 全额计费。
+- `container.destroyed` 单丢：`resources` 资源对账线以「ACTIVE 预留 × 存活容器」兜底最终结算（终点推迟一个
+  对账间隔）；`events` 线同时扫描终态容器补投 destroyed。
+- 两者都丢：`events` 线同时命中（补投 ready + destroyed），不会静默漏计费。
+- 消费端按 `resourceId` 做时序门控：`destroyed` 先到且无预留时按 legacy 计费，迟到的 `ready` 不再建预留，
+  保证同一会话只产生一笔计费。
 
 | 事件 | routing key | 触发条件 | payload |
 |------|-------------|----------|---------|

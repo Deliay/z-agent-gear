@@ -9,9 +9,12 @@ import { BillingReceipt } from '../../models/billing-receipt.js';
 import { Model } from '../../models/model.js';
 import { ProductPrice } from '../../models/product-price.js';
 import { accountService } from '../../services/billing/account-service.js';
-import { apiKeyService, type BillingApiKeyDTO } from '../../services/billing/api-key-service.js';
-import { billingRuntime } from '../../services/billing/instances.js';
-import { reconciliationRuntime } from '../../services/billing/instances.js';
+import {
+  apiKeyService,
+  ApiKeyNotFoundError,
+  type BillingApiKeyDTO,
+} from '../../services/billing/api-key-service.js';
+import { billingRuntime, reconciliationRuntime } from '../../services/billing/instances.js';
 import {
   toBillingAccountWire,
   toBillingApiCall,
@@ -20,12 +23,53 @@ import {
   toBillingReservation,
   toBillingRollup,
 } from '../../services/billing/mappers.js';
-import { creditsToCents } from '../../services/billing/money.js';
+import { creditsToCents, MoneyError } from '../../services/billing/money.js';
 import { documentId } from '../../services/billing/id.js';
 import { reservationService } from '../../services/billing/reservation.js';
+import { isReconciliationLine } from '../../services/billing/reconciliation.js';
 import { rollupService, type RollupGranularity } from '../../services/billing/rollup-service.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
+
+/**
+ * O1：统一 GraphQL 错误映射（与 cloud-container 的 `toGraphQLError` 同口径）。
+ * 非 `GraphQLError` 在 Yoga 生产掩码下会退化成 `Unexpected error.`，前端无法分支；
+ * 这里把已知业务错误映射为稳定 `extensions.code`，未知错误统一收敛为 INTERNAL_ERROR。
+ */
+export function toBillingGraphQLError(err: unknown): GraphQLError {
+  if (err instanceof GraphQLError) return err;
+  if (err instanceof MoneyError) {
+    return new GraphQLError(err.message, { extensions: { code: 'INVALID_ARGUMENT' } });
+  }
+  if (err instanceof ApiKeyNotFoundError) {
+    return new GraphQLError(err.message, { extensions: { code: 'NOT_FOUND' } });
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  const notFound = /不存在|not found|无权操作/i.test(message);
+  const invalid = /不能|非法|必须|超出|不支持|精度|至少|最多/.test(message);
+  if (notFound) return new GraphQLError(message, { extensions: { code: 'NOT_FOUND' } });
+  if (invalid) return new GraphQLError(message, { extensions: { code: 'INVALID_ARGUMENT' } });
+  return new GraphQLError('服务内部错误，请稍后重试', {
+    extensions: { code: 'INTERNAL_SERVER_ERROR' },
+  });
+}
+
+type ResolverFn = (...args: never[]) => unknown;
+
+/** 把一组 resolver 的同步/异步异常统一映射为可对外的 GraphQLError。 */
+function mapResolvers<T extends Record<string, ResolverFn>>(group: T): T {
+  const wrapped: Record<string, ResolverFn> = {};
+  for (const [name, fn] of Object.entries(group)) {
+    wrapped[name] = (async (...args: unknown[]) => {
+      try {
+        return await (fn as unknown as (...a: unknown[]) => unknown)(...args);
+      } catch (err) {
+        throw toBillingGraphQLError(err);
+      }
+    }) as unknown as ResolverFn;
+  }
+  return wrapped as T;
+}
 
 function toDate(value: unknown, field: string): Date | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -62,9 +106,8 @@ async function ledgerCounts(accountIds: string[]): Promise<Map<string, number>> 
   return new Map(rows.map((row) => [String(row._id), row.count]));
 }
 
-export const billingResolvers = {
-  Query: {
-    adminBillingAccounts: async (
+const rawBillingResolvers = {
+  Query: {    adminBillingAccounts: async (
       _parent: unknown,
       args: {
         keyword?: string;
@@ -145,6 +188,17 @@ export const billingResolvers = {
         .limit(pageSize)
         .lean();
       return docs.map((doc) => toBillingReceipt(doc as never));
+    },
+    adminBillingReceipt: async (
+      _parent: unknown,
+      args: { invoiceId: string },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      assertObjectId(args.invoiceId, 'invoiceId');
+      // D-1：按账单直查收据（不再依赖「收据分页 rank 与账单分页一致」这一脆弱假设）。
+      const doc = await BillingReceipt.findOne({ invoiceId: args.invoiceId }).lean();
+      return doc ? toBillingReceipt(doc as never) : null;
     },
     adminBillingRollups: async (
       _parent: unknown,
@@ -285,6 +339,10 @@ export const billingResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // 建议 3：line 白名单校验，避免任意串透传到服务层。
+      if (args.line && !isReconciliationLine(args.line)) {
+        throw new GraphQLError('非法对账线', { extensions: { code: 'INVALID_ARGUMENT' } });
+      }
       const reports = await reconciliationRuntime.run(args.line);
       return reports.map((report) => ({
         line: report.line,
@@ -311,6 +369,13 @@ export const billingResolvers = {
       assertObjectId(args.modelId, 'modelId');
       const model = await Model.findById(args.modelId);
       if (!model) throw new GraphQLError('模型不存在');
+      // 建议 1：模型定价只能作用于全局模型（价目表 `model.<id>.token` 是全局真相；
+      // 用户私有模型定价会污染全局价目）。
+      if (model.scope !== 'global') {
+        throw new GraphQLError('仅支持为全局模型配置计费价目', {
+          extensions: { code: 'INVALID_ARGUMENT' },
+        });
+      }
       const rates = {
         inputPerMillion: creditsToCents(args.pricing.inputPerMillion),
         cachedInputPerMillion: creditsToCents(args.pricing.cachedInputPerMillion),
@@ -322,8 +387,10 @@ export const billingResolvers = {
       const pricing = { ...rates, isBillable: args.pricing.isBillable !== false };
       model.set('pricing', pricing);
       await model.save();
+      // 建议 1：按 `productId` upsert 单档（`effectiveFrom` 仅在首次插入时确定），
+      // 避免「每次调用必插新档」导致价目行无限累积（历史档由迁移/显式接口维护）。
       await ProductPrice.updateOne(
-        { productId: `model.${args.modelId}.token`, effectiveFrom: new Date() },
+        { productId: `model.${args.modelId}.token` },
         {
           $set: {
             productId: `model.${args.modelId}.token`,
@@ -333,6 +400,7 @@ export const billingResolvers = {
             rates,
             isBillable: pricing.isBillable,
           },
+          $setOnInsert: { effectiveFrom: new Date(0) },
         },
         { upsert: true },
       );
@@ -384,6 +452,12 @@ export const billingResolvers = {
       return toApiKeyWire(key);
     },
   },
+};
+
+// O1：全部 Query/Mutation 统一错误映射，业务错误带稳定 extensions.code（与 cloud-container 同口径）。
+export const billingResolvers = {
+  Query: mapResolvers(rawBillingResolvers.Query),
+  Mutation: mapResolvers(rawBillingResolvers.Mutation),
 };
 
 // 保证账户模型在首次使用时已注册（BillingAccount 用于 ledgerCounts 之外的查询路径）

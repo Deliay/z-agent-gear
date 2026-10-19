@@ -482,3 +482,36 @@ npm test
 | T-IA 预制 .NET apt | 预制 `.NET` 的 `initScript` 为 apt 版（含 `apt-get install`/`dotnet10`，不含 `dotnet-install.sh`；迁移 002 升级结果） |
 | T-IA 日志 required | 直写 `cloudworkloadlogs.required` 后经 `adminCloudContainerWorkloadLogs` 返回必须标记；历史缺省 `false` |
 | T-IA-REQ 启动 required 透传 | `adminStartCloudContainer(workloads[].required)` 透传并落库（缺省 `false`、非布尔容错）；仅 `workloadIds` 兼容路径 `required` 一律 `false` |
+
+### Billing 计费 API（费用中心）
+
+> 计费事件骨干经 RabbitMQ；`billing-events` 直断言 `billingoutbox`，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
+> 网关/前台计费套件需要 admin-api / agent-api / cloud-controller 就绪：`aspire start && aspire wait admin-api agent-api cloud-controller`。
+
+#### Cloud Controller 计费事件 (`cloud-controller/billing-events.test.ts` T-CC-B*)
+
+| 测试 | 描述 |
+|------|------|
+| T-CC-B4/B8 | 创建容器携带 `billingAccountId`，列表/详情 A.3 计费字段透出 |
+| T-CC-B7 | DELETE 带 `reason` 写入 `exitReason` |
+| T-CC-B11 | 已计费容器销毁后 `billingoutbox` 落一条 `container.destroyed`（需 `MONGODB_URI`） |
+
+#### Admin 计费网关 (`admin-api/billing-gateway.test.ts` T-B2*)
+
+| 测试 | 描述 |
+|------|------|
+| T-B22 | GET `/v1/models` 仅返回**计费且定价完整**的全局模型（过滤逻辑被断言，需 `MONGODB_URI` 直写模型） |
+| T-B23 | 无效 Key 401；缺参数 400；未知模型 404；未定价模型 400 `model_not_priced` |
+| T-B24 | 冻结账户调用非计费模型同样 402 `account_frozen` |
+
+#### Admin 计费 GraphQL+内部 REST (`admin-api/billing.test.ts` T-B*)
+
+| 测试 | 描述 |
+|------|------|
+| T-B* | 账户/账单/收据/充值/ApiKey 全链路与鉴权、幂等、错误映射 |
+
+#### Agent 前台计费 (`agent-api/billing.test.ts` T-MB*)
+
+| 测试 | 描述 |
+|------|------|
+| T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |

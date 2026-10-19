@@ -57,7 +57,10 @@ if (!rabbitmqDisabled)
         .PublishAsDockerComposeService((resource, service) =>
         {
             service.Name = "rabbitmq";
-            service.Image = "rabbitmq:3-management";
+            // D-5：与 mongo/redis 同口径走内网镜像源（受限网络直接拉 Docker Hub 会失败，
+            // 计费事件骨干将整体空转）。可用 RABBITMQ_IMAGE 覆盖。
+            service.Image = builder.Configuration["RABBITMQ_IMAGE"]
+                ?? "registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management";
         });
 }
 

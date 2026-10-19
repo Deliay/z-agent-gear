@@ -70,5 +70,13 @@ for (const method of [
   appendOnlySchema.pre(method, blockMutation);
 }
 
+// A10：query 级 pre hook 覆盖不到 `load → save` 路径，这里显式拦截对已存在文档的 save。
+type SaveGuardSchema = {
+  pre: (method: string, fn: (this: { isNew: boolean }) => void) => unknown;
+};
+(billingLedgerSchema as unknown as SaveGuardSchema).pre('save', function () {
+  if (!this.isNew) throw new Error(APPEND_ONLY_MESSAGE);
+});
+
 export const BillingLedger = mongoose.model('BillingLedger', billingLedgerSchema);
 export type IBillingLedger = mongoose.InferSchemaType<typeof billingLedgerSchema>;

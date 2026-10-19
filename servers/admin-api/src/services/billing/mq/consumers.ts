@@ -199,7 +199,12 @@ export async function startMeteringConsumer(
           // 门控副作用（阻断项 3）：仅「本次真正建了预留/首期」才投递下一期延迟消息，
           // 避免重复投递的 container.ready 反复投 settlement 造成链路放大。
           // R7：若上次投递延迟消息失败（重试消息 retry>0），补投以恢复结算链（缺链兜底）。
-          if (result.created || retry > 0) {
+          // R-1：乱序门控命中（该资源已 destroyed/已 legacy 计费）时绝不投递结算链。
+          if (
+            !result.skipped &&
+            result.reservationId &&
+            (result.created || retry > 0)
+          ) {
             await deps.publishSettlement(result.reservationId, event.accountId, result.nextCycleSeq);
           }
           return;

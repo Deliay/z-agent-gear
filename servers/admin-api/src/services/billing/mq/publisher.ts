@@ -118,6 +118,14 @@ export class AdminOutboxPublisher {
     }
   }
 
+  private async releaseClaims(eventIds: string[]): Promise<void> {
+    if (eventIds.length === 0) return;
+    await BillingOutbox.updateMany(
+      { eventId: { $in: eventIds } },
+      { $set: { claimedAt: null, claimedBy: null } },
+    ).catch(() => undefined);
+  }
+
   async relayOnce(): Promise<number> {
     if (this.relaying) return 0;
     this.relaying = true;
@@ -129,7 +137,8 @@ export class AdminOutboxPublisher {
 
       channel = await this.connection.createConfirmChannel();
       await declareBillingTopology(channel);
-      for (const doc of docs) {
+      for (let index = 0; index < docs.length; index += 1) {
+        const doc = docs[index]!;
         if (doc.attempts >= this.maxAttempts) {
           await this.markFailure(doc.eventId, 'exceeded max attempts', doc.attempts - 1);
           continue;
@@ -144,7 +153,8 @@ export class AdminOutboxPublisher {
                 persistent: true,
                 contentType: 'application/json',
                 messageId: doc.eventId,
-                headers: { 'x-event-id': doc.eventId, 'x-retry-count': 0 },
+                // 问题 16：发布头携带真实重试计数，broker 重投后消费端仍能据此补投结算链。
+                headers: { 'x-event-id': doc.eventId, 'x-retry-count': doc.attempts },
               },
               (err) => (err ? reject(err) : resolve()),
             );
@@ -166,6 +176,10 @@ export class AdminOutboxPublisher {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn?.(`[billing-outbox] publish failed for ${doc.eventId}: ${message}`);
           await this.markFailure(doc.eventId, message, doc.attempts);
+          // R-1：失败后停止本轮（不再 continue）。否则 broker 恢复后「后一条先发」，
+          // 造成同类因果事件顺序翻转；剩余认领释放，下一轮按 createdAt 顺序重试。
+          await this.releaseClaims(docs.slice(index + 1).map((item) => item.eventId));
+          break;
         }
       }
     } finally {
@@ -193,6 +207,11 @@ export class AdminOutboxPublisher {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    // O-1：停机前排空在途 relay，避免已认领未发布的行长时间滞留。
+    const deadline = Date.now() + this.leaseMs;
+    while (this.relaying && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await this.connection.close();
   }

@@ -200,7 +200,7 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect(updated!.giftBalance).toBe(0);
   });
 
-  it('A1：start 中途冻结失败回滚并置 FAILED（不卡死 PENDING）', async () => {
+  it('A-1：start 回滚仅解冻「确实落账」的冻结额（freeze 未落账不得解冻）', async () => {
     const account = await seedAccount(1000);
     const checks = new CreditCheckService();
     const preCheck = (await checks.check({
@@ -210,16 +210,27 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
       ref: { type: 'container_reservation', id: 'res-fail' },
     })).preCheck!;
 
-    let unfreezeCalled = 0;
+    const unfreezeCalls: Array<{ amountCents: number; idempotentKey: string }> = [];
     let freezeCalls = 0;
+    // 第一次 freeze 真实落账（模拟成功），第二次抛错且**未落账**。
     const failingPayments = {
-      async freeze() {
+      async freeze(input: { accountId: string; amountCents: number; bizId: string; idempotentKey: string }) {
         freezeCalls += 1;
         if (freezeCalls >= 2) throw new Error('freeze boom');
-        return { applied: true, cashBalance: 0, frozenAmount: 100, ledgerId: null, allocations: [] };
+        await BillingLedger.create({
+          accountId: input.accountId,
+          pool: 'cash',
+          bizType: 'freeze',
+          deltaBalance: 0,
+          deltaFrozen: input.amountCents,
+          allocations: [],
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+        });
+        return { applied: true, cashBalance: 0, frozenAmount: input.amountCents, ledgerId: null, allocations: [] };
       },
-      async unfreeze() {
-        unfreezeCalled += 1;
+      async unfreeze(input: { amountCents: number; idempotentKey: string }) {
+        unfreezeCalls.push({ amountCents: input.amountCents, idempotentKey: input.idempotentKey });
         return { applied: true, cashBalance: 0, frozenAmount: 0, ledgerId: null, allocations: [] };
       },
       async charge() {
@@ -249,9 +260,223 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
       }),
     ).rejects.toThrow('freeze boom');
 
-    expect(unfreezeCalled).toBeGreaterThanOrEqual(1);
+    // 仅解冻已落账的 deposit；未落账的 cycle（100）不得解冻（否则蚕食他人冻结额）。
+    expect(unfreezeCalls).toHaveLength(1);
+    expect(unfreezeCalls[0]!.idempotentKey.startsWith('unfreeze:deposit-rollback:')).toBe(true);
+    expect(unfreezeCalls[0]!.amountCents).toBe(500);
     const reservation = await BillingReservation.findOne({ resourceId: 'res-fail' });
     expect(reservation?.status).toBe('FAILED');
+
+    // 无任何 freeze 落账时，回滚不得产生 unfreeze 流水。
+    unfreezeCalls.length = 0;
+    freezeCalls = 100;
+    await expect(
+      reservations.start({
+        accountId: account.id,
+        resourceId: 'res-fail-2',
+        startedAt: new Date(T0),
+        depositCents: 500,
+        cycleEstimateCents: 100,
+        preCheck,
+      }),
+    ).rejects.toThrow('freeze boom');
+    expect(unfreezeCalls).toHaveLength(0);
+  });
+
+  it('A-1：A 预留回滚不得蚕食同账户并存预留 B 的冻结额', async () => {
+    const account = await seedAccount(5000);
+    const checks = new CreditCheckService({ now: () => T0 });
+    const payments = new PaymentService(checks, () => T0);
+    const preCheck = (await checks.check({
+      accountId: account.id,
+      estimatedCredits: 1000,
+      policy: 'accrue-and-track',
+      ref: { type: 'container_reservation', id: 'res-B' },
+    })).preCheck!;
+
+    const reservations = new ReservationService(payments, pricingService, checks, accountService, {
+      cycleMs: 60_000,
+      now: () => T0,
+    });
+
+    // 预留 B 正常冻结 500。
+    await reservations.start({
+      accountId: account.id,
+      resourceId: 'res-B',
+      startedAt: new Date(T0),
+      depositCents: 500,
+      cycleEstimateCents: 0,
+      preCheck,
+    });
+    const frozenAfterB = (await accountService.getById(account.id))!.frozenAmount;
+    expect(frozenAfterB).toBe(500);
+
+    // 预留 A：freeze 第一次成功、第二次抛错且未落账 → 只解冻 A 的 500，B 不受影响。
+    let calls = 0;
+    const preCheckA = (await checks.check({
+      accountId: account.id,
+      estimatedCredits: 600,
+      policy: 'accrue-and-track',
+      ref: { type: 'container_reservation', id: 'res-A' },
+    })).preCheck!;
+    const flaky = {
+      freeze: async (input: { accountId: string; amountCents: number; bizId: string; idempotentKey: string }) => {
+        calls += 1;
+        if (calls === 2) throw new Error('freeze boom');
+        return payments.freeze({
+          accountId: input.accountId,
+          amountCents: input.amountCents,
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+          preCheck: preCheckA,
+          ref: { type: 'container_reservation', id: 'res-A' },
+        });
+      },
+      unfreeze: (input: { accountId: string; amountCents: number; bizId: string; idempotentKey: string }) =>
+        payments.unfreeze(input),
+      charge: payments.charge.bind(payments),
+      recharge: payments.recharge.bind(payments),
+    } as unknown as PaymentServiceType;
+    const flakyReservations = new ReservationService(
+      flaky,
+      pricingService,
+      checks,
+      accountService,
+      { cycleMs: 60_000, now: () => T0 },
+    );
+    await expect(
+      flakyReservations.start({
+        accountId: account.id,
+        resourceId: 'res-A',
+        startedAt: new Date(T0),
+        depositCents: 500,
+        cycleEstimateCents: 100,
+        preCheck,
+      }),
+    ).rejects.toThrow('freeze boom');
+
+    // A 的回滚不得改变 B 的冻结额与账户 frozenAmount。
+    expect((await accountService.getById(account.id))!.frozenAmount).toBe(frozenAfterB);
+    const rollbackRows = await BillingLedger.countDocuments({
+      idempotentKey: /^unfreeze:.*rollback/,
+    });
+    expect(rollbackRows).toBe(1); // 仅 A 的 deposit 回滚
+  });
+
+  it('A-2：水位淘汰（>1000 条）后重放旧幂等键不再二次记账', async () => {
+    const account = await seedAccount(100000);
+    const checks = new CreditCheckService();
+    const payments = new PaymentService(checks);
+    const preCheck = (await checks.check({
+      accountId: account.id,
+      estimatedCredits: 100,
+      policy: 'accrue-and-track',
+      ref: { type: 'model_call', id: 'r-watermark' },
+    })).preCheck!;
+
+    const first = await payments.charge({
+      accountId: account.id,
+      amountCents: 100,
+      idempotentKey: 'wm-key',
+      bizId: 'wm-biz',
+      preCheck,
+      ref: { type: 'model_call', id: 'r-watermark' },
+    });
+    expect(first.applied).toBe(true);
+    const balanceAfterFirst = (await accountService.getById(account.id))!.cashBalance;
+
+    // 灌 1001 条其他流水，把水位 `$slice` 挤出该键。
+    for (let i = 0; i < 1001; i += 1) {
+      await BillingLedger.create({
+        accountId: account.id,
+        pool: 'cash',
+        bizType: 'adjust',
+        deltaBalance: 0,
+        deltaFrozen: 0,
+        allocations: [],
+        idempotentKey: `filler-${i}`,
+      });
+    }
+
+    // 重放旧键：幂等标记（不淘汰）兜底 → 不再变动余额。
+    const replay = await payments.charge({
+      accountId: account.id,
+      amountCents: 100,
+      idempotentKey: 'wm-key',
+      bizId: 'wm-biz',
+      preCheck,
+      ref: { type: 'model_call', id: 'r-watermark' },
+    });
+    expect(replay.applied).toBe(false);
+    expect((await accountService.getById(account.id))!.cashBalance).toBe(balanceAfterFirst);
+  });
+
+  it('A-5: heldFrozen 过滤账户且转义正则（reservationId=.* 不跨预留求和）', async () => {
+    const account = await seedAccount(1000);
+    const other = await seedAccount(1000);
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'freeze',
+      deltaBalance: 0,
+      deltaFrozen: 300,
+      bizId: 'reservation:res-1:deposit',
+      idempotentKey: 'hf-1',
+    });
+    await BillingLedger.create({
+      accountId: other.id,
+      pool: 'cash',
+      bizType: 'freeze',
+      deltaBalance: 0,
+      deltaFrozen: 700,
+      bizId: 'reservation:res-2:deposit',
+      idempotentKey: 'hf-2',
+    });
+    const checks = new CreditCheckService();
+    const reservations = new ReservationService(
+      new PaymentService(checks),
+      pricingService,
+      checks,
+      accountService,
+      { cycleMs: 60_000, now: () => T0 },
+    );
+    expect(await reservations.heldFrozen('res-1', account.id)).toBe(300);
+    // 正则转义：'.*' 作为字面量前缀匹配不到任何预留（未转义时会跨预留求和 = 1000）。
+    expect(await reservations.heldFrozen('.*', account.id)).toBe(0);
+  });
+
+  it('A-6：同幂等键但归属另一账户时拒绝应用（不跨账户造钱/销账）', async () => {
+    const accountA = await seedAccount(1000);
+    const accountB = await seedAccount(1000);
+    await BillingLedger.create({
+      accountId: accountA.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -100,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 100 }],
+      idempotentKey: 'cross-key',
+    });
+    const checks = new CreditCheckService();
+    const payments = new PaymentService(checks);
+    const preCheck = (await checks.check({
+      accountId: accountB.id,
+      estimatedCredits: 100,
+      policy: 'accrue-and-track',
+      ref: { type: 'model_call', id: 'r-cross' },
+    })).preCheck!;
+
+    await expect(
+      payments.charge({
+        accountId: accountB.id,
+        amountCents: 100,
+        idempotentKey: 'cross-key',
+        bizId: 'cross-biz',
+        preCheck,
+        ref: { type: 'model_call', id: 'r-cross' },
+      }),
+    ).rejects.toThrow(/another account/);
+    expect((await accountService.getById(accountB.id))!.cashBalance).toBe(1000);
   });
 
   it('A5：recharge 携带同一幂等键重复提交不重复加钱', async () => {

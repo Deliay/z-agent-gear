@@ -4,6 +4,7 @@ import {
   type BillingOwnerType,
   type IBillingAccount,
 } from '../../models/billing-account.js';
+import { BillingAppliedLedger } from '../../models/billing-applied-ledger.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { AdminUser } from '../../models/admin-user.js';
 import { availableCents } from './money.js';
@@ -264,7 +265,7 @@ export class AccountService {
 
     const mismatch =
       walletCash !== ledgerCash || walletGift !== ledgerGift || walletFrozen !== ledgerFrozen;
-    // R1：无论是否有漂移，都把最近 ledger 行同步进「已应用水位」——防止「钱包已等于 ledger 真值
+    // R1/A-2：无论是否有漂移，都把最近 ledger 行同步进「已应用水位」——防止「钱包已等于 ledger 真值
     // 但水位缺失」（如历史数据/对账后）时重放二次扣减。有漂移时同时按 ledger 真值回写分池余额。
     const recent = (
       await BillingLedger.find({ accountId: new mongoose.Types.ObjectId(accountId) })
@@ -273,6 +274,9 @@ export class AccountService {
         .select({ _id: 1 })
         .lean<Array<{ _id: mongoose.Types.ObjectId }>>()
     ).map((row) => String(row._id));
+    // A-2：对账完成时钱包已被校准到 ledger 真值 ⇒ **全部** ledger 行都视为已应用。
+    // 幂等标记集合（不淘汰）必须同步补齐，否则水位淘汰后的重放会二次记账。
+    await this.markAllLedgerApplied(accountId);
     if (mismatch) {
       const stamp = `reconcile:${accountId}:${this.now()}:${Math.random().toString(16).slice(2, 8)}`;
       await BillingLedger.create({
@@ -322,6 +326,40 @@ export class AccountService {
           }
         : null,
     };
+  }
+
+  /**
+   * A-2：把该账户**全部** ledger 行登记为「已应用到钱包」。
+   *
+   * 仅在对账把钱包校准到 ledger 真值之后调用——此刻钱包 = Σledger，所有历史行在语义上
+   * 都已生效，登记全部行才能让「水位淘汰后的重放」保持幂等（幂等标记不淘汰）。
+   * 使用 `bulkWrite` + `upsert` 幂等；失败只告警（对账下一次会重试）。
+   */
+  async markAllLedgerApplied(accountId: string): Promise<void> {
+    if (!mongoose.isValidObjectId(accountId)) return;
+    const objectId = new mongoose.Types.ObjectId(accountId);
+    const rows = await BillingLedger.find({ accountId: objectId })
+      .select({ _id: 1 })
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    if (rows.length === 0) return;
+    const now = new Date(this.now());
+    const chunkSize = 500;
+    for (let start = 0; start < rows.length; start += chunkSize) {
+      const chunk = rows.slice(start, start + chunkSize);
+      await BillingAppliedLedger.bulkWrite(
+        chunk.map((row) => ({
+          updateOne: {
+            filter: { accountId: objectId, ledgerId: String(row._id) },
+            update: {
+              $set: { walletApplied: true, appliedAt: now, claimedAt: null },
+              $setOnInsert: { accountId: objectId, ledgerId: String(row._id) },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      ).catch(() => undefined);
+    }
   }
 }
 

@@ -41,6 +41,11 @@ function reservationBizPrefix(reservationId: string): string {
   return `reservation:${reservationId}:`;
 }
 
+/** A-5：`bizId` 前缀匹配的正则转义——`reservationId` 来自消息体，未转义时 `.*` 可跨预留求和。 */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * 预留状态机 `PENDING→ACTIVE→SETTLING→SETTLED`（+`RELEASE_PENDING`）：
  * 保证金 + 周期实扣。资金动作全部用支付层幂等键，因此结算器可重入、故障恢复 = 重跑；
@@ -136,28 +141,26 @@ export class ReservationService {
         });
       }
     } catch (err) {
-      // 失败回滚（A1）：冻结中途失败不得卡死 PENDING（否则整生命周期无周期计费）。
-      // 释放已冻结部分并置 FAILED，交由资源对账/人工收口，避免僵尸预留。
-      if (input.depositCents > 0) {
-        await this.payments
-          .unfreeze({
-            accountId: input.accountId,
-            amountCents: input.depositCents,
-            bizId: `${reservationBizPrefix(reservationId)}deposit-rollback`,
-            idempotentKey: `unfreeze:deposit-rollback:${reservationId}`,
-          })
-          .catch(() => undefined);
-      }
-      if (input.cycleEstimateCents > 0) {
-        await this.payments
-          .unfreeze({
-            accountId: input.accountId,
-            amountCents: input.cycleEstimateCents,
-            bizId: `${reservationBizPrefix(reservationId)}cycle:0-rollback`,
-            idempotentKey: `unfreeze:cycle-rollback:${reservationId}:0`,
-          })
-          .catch(() => undefined);
-      }
+      // 失败回滚（A1/A-1）：冻结中途失败不得卡死 PENDING（否则整生命周期无周期计费）。
+      // **仅解冻确实落账的冻结额**：freeze 若在写 ledger 前就抛错（瞬时 DB 故障），对应键不存在，
+      // 无条件解冻会释放同账户其他预留的冻结额并污染 append-only ledger（对账会把污染当真值）。
+      // 与 `settleCycle` 的 freezeExists 守卫保持同一口径。
+      await this.rollbackFreeze({
+        accountId: input.accountId,
+        reservationId,
+        idempotentKey: `freeze:deposit:${reservationId}`,
+        amountCents: input.depositCents,
+        bizId: `${reservationBizPrefix(reservationId)}deposit-rollback`,
+        rollbackKey: `unfreeze:deposit-rollback:${reservationId}`,
+      });
+      await this.rollbackFreeze({
+        accountId: input.accountId,
+        reservationId,
+        idempotentKey: `freeze:cycle:${reservationId}:0`,
+        amountCents: input.cycleEstimateCents,
+        bizId: `${reservationBizPrefix(reservationId)}cycle:0-rollback`,
+        rollbackKey: `unfreeze:cycle-rollback:${reservationId}:0`,
+      });
       await BillingReservation.updateOne(
         { _id: reservationId, status: 'PENDING' },
         { $set: { status: 'FAILED' }, $inc: { version: 1 } },
@@ -171,6 +174,40 @@ export class ReservationService {
       { new: true },
     );
     return activated ?? (await BillingReservation.findById(reservationId))!;
+  }
+
+  /** A-1：回滚冻结——仅当对应 freeze 流水确实落账时，按**实际冻结额**解冻。 */
+  private async rollbackFreeze(input: {
+    accountId: string;
+    reservationId: string;
+    idempotentKey: string;
+    amountCents: number;
+    bizId: string;
+    rollbackKey: string;
+  }): Promise<void> {
+    if (input.amountCents <= 0) return;
+    try {
+      const freeze = await BillingLedger.findOne({
+        accountId: new mongoose.Types.ObjectId(input.accountId),
+        idempotentKey: input.idempotentKey,
+      })
+        .select({ deltaFrozen: 1 })
+        .lean<{ deltaFrozen?: number } | null>();
+      if (!freeze) return; // 未落账：不得解冻（否则蚕食同账户其他预留的冻结额）
+      const frozen = Math.min(
+        Math.max(0, Math.round(freeze.deltaFrozen ?? 0)),
+        Math.round(input.amountCents),
+      );
+      if (frozen <= 0) return;
+      await this.payments.unfreeze({
+        accountId: input.accountId,
+        amountCents: frozen,
+        bizId: input.bizId,
+        idempotentKey: input.rollbackKey,
+      });
+    } catch {
+      // 回滚失败不掩盖原始错误：预留仍置 FAILED，由资源对账/人工收口。
+    }
   }
 
   /**
@@ -236,7 +273,7 @@ export class ReservationService {
 
     // 仅当该周期确实冻结过才解冻，避免欠费周期无冻结却释放、蚕食保证金
     const freezeKey = `freeze:cycle:${reservationId}:${cycleSeq}`;
-    const freezeExists = await BillingLedger.exists({ idempotentKey: freezeKey });
+    const freezeExists = await BillingLedger.exists({ idempotentKey: freezeKey, accountId });
     if (freezeExists && reservation.cycleEstimateCents > 0) {
       await this.payments.unfreeze({
         accountId,
@@ -359,16 +396,33 @@ export class ReservationService {
     return { frozen: true, insufficient: false };
   }
 
-  /** 最终结算：结清尾部分钟 + 释放全部剩余冻结（不阻塞资源释放）。 */
+  /**
+   * 最终结算：结清尾部分钟 + 释放全部剩余冻结（不阻塞资源释放）。
+   *
+   * A-3：若预留已 `SETTLED`（例如控制面误判 stale 提前终结），后续真实的 destroyed 事件
+   * 携带更晚的 `endedAt` 时，必须识别并补结「SETTLED 之后到真正销毁之间」的缺额，
+   * 而不是静默返回 0 让容器免费跑。缺额使用独立幂等键
+   * `charge:final-gap:${reservationId}:${lastSettleAt.getTime()}`（同窗口重复事件幂等）。
+   */
   async finalSettle(
     reservationId: string,
     endedAt: Date,
-  ): Promise<{ minutes: number; amount: number; cashBalance: number; windowFrom: Date }> {
+  ): Promise<{
+    minutes: number;
+    amount: number;
+    cashBalance: number;
+    windowFrom: Date;
+    /** 本次是否为「SETTLED 之后的缺额补结」。 */
+    tail?: boolean;
+  }> {
     const reservation = await this.findById(reservationId);
     if (!reservation) {
       return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: endedAt };
     }
     const accountId = String(reservation.accountId);
+    if (reservation.status === 'SETTLED') {
+      return this.settleTailAfterSettled(reservation, accountId, endedAt);
+    }
     const from = reservation.lastSettleAt ?? reservation.startedAt;
     const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
     let amount = 0;
@@ -382,8 +436,12 @@ export class ReservationService {
     );
     if (!claimed) {
       const latest = await this.findById(reservationId);
-      if (!latest || latest.status === 'SETTLED') {
+      if (!latest) {
         return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+      }
+      if (latest.status === 'SETTLED') {
+        // A-3：并发下已被另一路径终结（可能基于更早的 expectedEndAt）；识别并补结缺额。
+        return this.settleTailAfterSettled(latest, accountId, endedAt);
       }
     }
 
@@ -408,7 +466,7 @@ export class ReservationService {
     }
 
     // 当前仍被该预留占用的冻结额（以 ledger 为准，重复执行时自然为 0）
-    const held = await this.heldFrozen(reservationId);
+    const held = await this.heldFrozen(reservationId, accountId);
     await BillingReservation.updateOne(
       { _id: reservationId },
       { $set: { status: 'RELEASE_PENDING' }, $inc: { version: 1 } },
@@ -443,14 +501,83 @@ export class ReservationService {
     return { minutes, amount, cashBalance, windowFrom: from };
   }
 
-  /** 预留当前占用的冻结额（ledger 合计）。 */
-  async heldFrozen(reservationId: string): Promise<number> {
-    const rows = (await BillingLedger.aggregate([
+  /**
+   * A-3：补结「预留已 SETTLED，但真实销毁事件更晚」的缺额窗口。
+   * 幂等键带窗口起点，同一 destroyed 事件重放不会重复扣费；不同 endedAt 各补各的缺口。
+   * 只补结、不改变预留终态（已释放的冻结不会被重新冻结）。
+   */
+  private async settleTailAfterSettled(
+    reservation: IBillingReservation,
+    accountId: string,
+    endedAt: Date,
+  ): Promise<{
+    minutes: number;
+    amount: number;
+    cashBalance: number;
+    windowFrom: Date;
+    tail?: boolean;
+  }> {
+    const from = reservation.lastSettleAt ?? reservation.startedAt;
+    if (endedAt.getTime() <= from.getTime()) {
+      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+    }
+    // 先 CAS 推进 lastSettleAt，保证同一窗口只有一个请求补结。
+    const claimed = await BillingReservation.findOneAndUpdate(
       {
-        $match: {
-          bizId: { $regex: `^reservation:${reservationId}:` },
-        },
+        _id: documentId(reservation),
+        status: 'SETTLED',
+        lastSettleAt: reservation.lastSettleAt,
       },
+      { $set: { lastSettleAt: endedAt }, $inc: { version: 1 } },
+      { new: true },
+    );
+    if (!claimed) {
+      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+    }
+    const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
+    if (minutes <= 0) {
+      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from, tail: true };
+    }
+    const priced = await this.prices.priceContainer(minutes, from);
+    const preCheck = await this.checks.check({
+      accountId,
+      estimatedCredits: priced.amountCents,
+      policy: 'accrue-and-track',
+      ref: { type: 'container_reservation', id: documentId(reservation) },
+    });
+    const payment = await this.payments.charge({
+      accountId,
+      amountCents: priced.amountCents,
+      idempotentKey: `charge:final-gap:${documentId(reservation)}:${from.getTime()}`,
+      bizId: `${reservationBizPrefix(documentId(reservation))}final-gap`,
+      preCheck: preCheck.preCheck!,
+      ref: { type: 'container_reservation', id: documentId(reservation) },
+    });
+    await this.recomputeTotals(documentId(reservation), accountId);
+    const account = await this.accounts.getById(accountId);
+    if (!account || account.availableBalance < 0) {
+      await this.accounts.markInsufficient(accountId, new Date(this.now()));
+    }
+    return {
+      minutes,
+      amount: priced.amountCents,
+      cashBalance: payment.cashBalance,
+      windowFrom: from,
+      tail: true,
+    };
+  }
+
+  /**
+   * 预留当前占用的冻结额（ledger 合计）。
+   * A-5：必须过滤 `accountId`（避免全表扫 + 跨账户误算），并对 `bizId` 正则转义。
+   */
+  async heldFrozen(reservationId: string, accountId?: string): Promise<number> {
+    const match: Record<string, unknown> = {
+      bizId: { $regex: `^${escapeRegExp(reservationBizPrefix(reservationId))}` },
+    };
+    if (accountId) match.accountId = new mongoose.Types.ObjectId(accountId);
+    const rows = (await BillingLedger.aggregate([
+      { $match: match },
       { $group: { _id: null, frozen: { $sum: '$deltaFrozen' } } },
     ])) as Array<{ frozen: number }>;
     return Math.max(0, Math.round(rows[0]?.frozen ?? 0));
@@ -459,7 +586,12 @@ export class ReservationService {
   /** 预留累计口径以 ledger 为准重算（幂等，供展示与对账）。 */
   async recomputeTotals(reservationId: string, accountId: string): Promise<void> {
     const rows = (await BillingLedger.aggregate([
-      { $match: { accountId: new mongoose.Types.ObjectId(accountId), bizId: { $regex: `^reservation:${reservationId}:` } } },
+      {
+        $match: {
+          accountId: new mongoose.Types.ObjectId(accountId),
+          bizId: { $regex: `^${escapeRegExp(reservationBizPrefix(reservationId))}` },
+        },
+      },
       {
         $group: {
           _id: null,

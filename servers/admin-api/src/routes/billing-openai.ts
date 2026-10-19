@@ -278,6 +278,14 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         usage.inputTokens = promptTokens || 1;
         // 兜底不低估：优先按已产生内容估算；完全无内容时按请求输出上限估算（PRD §3.5）
         usage.outputTokens = estimateTokens(outputText) || maxOutputTokens;
+      } else if (usage.outputTokens === 0 && outputText.length > 0) {
+        // 建议 15：中断时 input 有值、output 为 0 而已经产生文本 → 输出不能计 0（少计）。
+        estimated = true;
+        usage.outputTokens = estimateTokens(outputText);
+      }
+      if (usage.inputTokens === 0) {
+        estimated = true;
+        usage.inputTokens = promptTokens || 1;
       }
       const cost = billable
         ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +

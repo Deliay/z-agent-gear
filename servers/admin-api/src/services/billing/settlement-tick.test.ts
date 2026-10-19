@@ -54,6 +54,52 @@ describe('SettlementTickService（扫描兜底）', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it('A-3: 刚补结算推进 expectedEndAt 的预留不被同一 tick finalize', async () => {
+    const nowMs = new Date('2026-10-01T00:20:00Z').getTime();
+    const billing = {
+      handleSettlementCycle: vi.fn().mockResolvedValue({ settled: true }),
+      handleContainerDestroyed: vi.fn(),
+    };
+    const freshReservation = reservation({
+      lastCycleSeq: 5,
+      expectedEndAt: new Date(nowMs + 10 * 60_000),
+    });
+    const reservations = {
+      list: vi.fn().mockResolvedValue([
+        reservation({ lastCycleSeq: 5, expectedEndAt: new Date('2026-10-01T00:00:00Z') }),
+      ]),
+      findById: vi.fn().mockResolvedValue(freshReservation),
+    };
+    const tick = new SettlementTickService(billing as never, reservations as never, {
+      cycleMs: 60_000,
+      now: () => nowMs,
+    });
+    await tick.tick();
+    expect(billing.handleContainerDestroyed).not.toHaveBeenCalled();
+  });
+
+  it('A-3: 容器仍存活时超期预留不 finalize（避免活容器免费跑）', async () => {
+    const billing = {
+      handleSettlementCycle: vi.fn().mockResolvedValue({ settled: false }),
+      handleContainerDestroyed: vi.fn(),
+    };
+    const reservations = {
+      list: vi.fn().mockResolvedValue([
+        reservation({ lastCycleSeq: 10, expectedEndAt: new Date('2026-10-01T00:00:00Z') }),
+      ]),
+    };
+    const warn = vi.fn();
+    const tick = new SettlementTickService(billing as never, reservations as never, {
+      cycleMs: 60_000,
+      now: () => new Date('2026-10-01T00:20:00Z').getTime(),
+      isAlive: async () => true,
+      logger: { warn },
+    });
+    await tick.tick();
+    expect(billing.handleContainerDestroyed).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('超期预留自动最终结算（不依赖销毁事件）', async () => {
     const billing = {
       handleSettlementCycle: vi.fn().mockResolvedValue({ settled: false }),

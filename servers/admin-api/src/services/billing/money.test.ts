@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  allocateTokenCostCents,
   availableCents,
   ceilMinutes,
   centsToCredits,
@@ -22,6 +23,17 @@ describe('money（整数分运算）', () => {
     expect(tokenCostCents(1_000_000, 250)).toBe(250);
     expect(tokenCostCents(1_000_001, 100)).toBe(101);
     expect(tokenCostCents(0, 100)).toBe(0);
+  });
+
+  it('整单 token 计费：先求和再 ceil，各段分配之和等于整单', () => {
+    // 60000 + 20000 + 800000 = 880000 分子 / 1e6 → 1 分（旧实现每段各自 ceil = 3 分）
+    const amounts = allocateTokenCostCents([60000, 20000, 800000]);
+    expect(amounts.reduce((a, b) => a + b, 0)).toBe(1);
+    expect(amounts).toEqual([0, 0, 1]);
+    expect(allocateTokenCostCents([0, 0, 0])).toEqual([0, 0, 0]);
+    // 1+1 token 各 100 分/百万 → 合计 0.0002 分 → 1 分
+    const two = allocateTokenCostCents([100, 100]);
+    expect(two.reduce((a, b) => a + b, 0)).toBe(1);
   });
 
   it('容器分钟计费：不足 1 分钟按 1 分钟', () => {

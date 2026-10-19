@@ -27,10 +27,16 @@ services:
     networks:
       - "aspire"
   rabbitmq:
-    image: "rabbitmq:3-management"
+    image: "${RABBITMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management}"
     environment:
       RABBITMQ_DEFAULT_USER: "zag"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD}"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     expose:
       - "5672"
       - "15672"
@@ -121,6 +127,11 @@ services:
       MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
       MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       PORT: "8003"
+    depends_on:
+      rabbitmq:
+        condition: "service_healthy"
+      mongodb:
+        condition: "service_started"
     ports:
       - "8003:8003"
     networks:
@@ -147,6 +158,11 @@ services:
       MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
       MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       PORT: "8002"
+    depends_on:
+      rabbitmq:
+        condition: "service_healthy"
+      mongodb:
+        condition: "service_started"
     ports:
       - "8002:8002"
     networks:

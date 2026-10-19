@@ -18,7 +18,7 @@ import { createBillingOpenAiRouter } from './routes/billing-openai.js';
 import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
 import { SettlementTickService } from './services/billing/settlement-tick.js';
 import { BillingScheduler } from './services/billing/scheduler.js';
-import { billingRuntime, reconciliationRuntime } from './services/billing/instances.js';
+import { billingRuntime, reconciliationRuntime, isCloudContainerAlive } from './services/billing/instances.js';
 import { reservationService } from './services/billing/reservation.js';
 import { pricingService } from './services/billing/pricing.js';
 import { eventIngestService } from './services/billing/event-ingest.js';
@@ -37,6 +37,7 @@ import { BillingApiKey } from './models/billing-api-key.js';
 import { BillingApiCall } from './models/billing-api-call.js';
 import { BillingOutbox } from './models/billing-outbox.js';
 import { BillingDeadLetter } from './models/billing-dead-letter.js';
+import { BillingAppliedLedger } from './models/billing-applied-ledger.js';
 import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
 import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
 
@@ -138,6 +139,7 @@ async function start() {
     BillingApiCall,
     BillingOutbox,
     BillingDeadLetter,
+    BillingAppliedLedger,
   ];
   try {
     await Promise.all(billingModels.map((model) => model.syncIndexes()));
@@ -161,7 +163,10 @@ async function start() {
 
   const scheduler = new BillingScheduler({
     publisher: outboxPublisher,
-    settlementTick: new SettlementTickService(billingRuntime, reservationService),
+    settlementTick: new SettlementTickService(billingRuntime, reservationService, {
+      // A-3：stale 终结前复核控制面存活，活容器只补结算不置 SETTLED。
+      isAlive: isCloudContainerAlive,
+    }),
     reconciliation: reconciliationRuntime,
     logger: console,
   });
