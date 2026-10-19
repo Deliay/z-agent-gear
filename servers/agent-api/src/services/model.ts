@@ -151,6 +151,15 @@ export class ModelService {
       isEnabled: model.isEnabled as boolean,
       sortOrder: model.sortOrder as number,
       scope: normalizeScope(model.scope),
+      pricing: model.pricing
+        ? {
+            inputPerMillion: Number((model.pricing as Record<string, unknown>).inputPerMillion ?? 0) / 100,
+            cachedInputPerMillion:
+              Number((model.pricing as Record<string, unknown>).cachedInputPerMillion ?? 0) / 100,
+            outputPerMillion: Number((model.pricing as Record<string, unknown>).outputPerMillion ?? 0) / 100,
+            isBillable: (model.pricing as Record<string, unknown>).isBillable !== false,
+          }
+        : null,
       createdAt: (model.createdAt as Date).toISOString(),
       updatedAt: (model.updatedAt as Date).toISOString(),
     };

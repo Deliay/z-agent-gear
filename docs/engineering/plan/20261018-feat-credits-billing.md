@@ -587,6 +587,80 @@ aspire start
 - [ ] PRD §1.3 成功标准逐条演示通过（账单序号从 0 连续、任一笔可完整回溯、快照余额与精确核算一致）
 - [ ] 实现分支 PR 合并回 `feat/credits-billing`，需求总 PR #229 自动更新；实现计划文档保留在需求总分支
 
+## 实现记录（2026-10-18，返工后 v1.1）
+
+- **实现分支**: `impl/credits-billing`（基于需求总分支 `feat/credits-billing`）。
+- **返工修复（代码审核打回项）**:
+  1. **预检凭证 ref 统一**：`handleContainerReady` / `ReservationService.start` / `payment.freeze` 统一以 `resourceId` 作为 `ref.id`，ready→freeze 全链路集成测试通过。
+  2. **金额单位统一**：`toBillingAccountWire` 等契约边界统一 `分 → credits`；删除零调用死代码 `toBillingAccount`；前台/后台账户接口口径一致。
+  3. **结算步骤级幂等**：周期记录改为资金动作完成后的结果标记；账单增加 `idempotentKey` 唯一稀疏索引与确定性 `invoiceId`；final settle 尾结/释放均以幂等键重入，崩溃重跑不重复扣费/开票；`KeyedMutex` 按 reservation 串行。
+  4. **冻结账户可继续记账**：`accrue-and-track` 在账户冻结/缺失时同样返回预检凭证（不再 `preCheck!` 抛错进入 DLQ）。
+  5. **rollup 与出账解耦**：仅在 `BillingInvoice.create` 发生 E11000 时重试；rollup 失败仅告警（后补）。
+  6. **预留唯一性**：`billingreservations.resourceId` 唯一索引兜底并发 start；`lastCycleSeq` 初始 `-1`，首期（seq 0）丢消息可由扫描兜底；`expectedEndAt` 随周期推进写入。
+  7. **无冻结不解冻**：仅当对应 `freeze` 流水存在时才解冻；预留累计口径改为以 ledger 聚合重算。
+  8. **对账防误伤**：资源对账在控制面列表失败时中止本线，不再批量结算 ACTIVE 预留；资金对账分页遍历全部账户。
+  9. **MQ 可靠性**：消费者运行时自动重连/重订阅；重试改为 per-message `expiration` 指数退避（5s→5min）；超次死信落 `billingdeadletters` 并新增 `adminBillingDeadLetters` 查询；结算消息补齐 `accountId`；优雅关闭（SIGTERM/SIGINT → scheduler/MQ/Mongo）。
+  10. **拆池支付**：现金 → 赠送金 → 授信（透支为负现金），ledger `allocations` + payment `pools` 留存拆池明细。
+  11. **网关口径**：上游报错/超时按中断（aborted）计费并标注；用量缺失兜底按已收内容或请求输出上限估算（不低估），payload 增加 `estimatedInputTokens/estimatedOutputTokens`。
+  12. **cloud-controller 终态补投**：`markExited/markFailed/reclaimResidualJob` 等非 destroy 终态同样投递 `container.destroyed`；`markOnline` 以条件更新原子写入 `billingStartedAt`。
+  13. **前端**：agent-web 增加 `loading && !data` 守卫与错误展示；吊销 Key/授信调整/账户冻结均二次确认；分页；模型定价移入 `ModelConfigPage`（计划口径）。
+  14. **编排**：`aspire/manifest/docker-compose.yaml` 已手工补齐 `rabbitmq` 服务、`RABBITMQ_URL`/`ConnectionStrings__rabbitmq` 与 agent-api `ADMIN_API_URL`/`INTERNAL_API_TOKEN`（`aspire publish` 在本环境 NuGet restore 不可达，manifest 与 AppHost 声明保持一致）。
+- **测试（返工后）**:
+  - `servers/admin-api/src/services/billing` 行覆盖率 **94.77%**（语句 89.54% / 函数 90.62%），覆盖 T-B1~T-B21 与 MQ 拓扑/消费/发布/重连。
+  - cloud-controller 计费事件 T-CC-B1~B9、internal API 计费字段/强拆 reason。
+  - 前端费用组件/页面交互：后台账户列表、充值校验、汇总、模型定价、前台欠费提示/Key 一次性展示/吊销确认。
+  - `tests/api/src/admin-api/billing.test.ts`、`billing-gateway.test.ts`、`tests/api/src/agent-api/billing.test.ts`、`tests/api/src/cloud-controller/billing-events.test.ts`。
+  - `tests/e2e/src/admin-billing.spec.ts`、`tests/e2e/src/billing.spec.ts`。
+  - `RABBITMQ_TEST_URL` 条件链路测试：`src/services/billing/mq/rabbitmq.integration.test.ts`（未配置 broker 时 skip，裁决 15）。
+- **仍留待真实环境演示**: 容器分钟计费→欠费强拆、网关流式/中断真实供应商调用、RabbitMQ 全链路在 CI broker 下执行（代码与条件测试已就位）。
+
+## 实现记录（2026-10-19，返工 v1.2）
+
+- **实现分支**: `impl/credits-billing`（基于需求总分支 `feat/credits-billing`）。
+- **返工修复（代码审核第二轮打回项）**:
+  1. **中-1 中断调用标注落到计费明细并可查（T-B26 彻底修复）**：`handleModelCallEvent` 对 `model_call.aborted` 生成明细描述「模型调用（中断：<reason>[，估算]） <model>」；账单 item 新增 `segment` 并以 `:aborted` 后缀标注（如 `output:aborted`）；`InvoiceItem.segment` 同步进 admin/前台契约与后台收据/前台收据展示。新增 `BillingApiCall` 出口：后台 `adminBillingApiCalls(accountId,status,page,pageSize)`、前台 `myBillingApiCalls`、内部 `GET /internal/billing/api-calls`，后台费用中心与前台「我的费用」新增「模型调用记录」表（完成/中断调用/失败 + 估算标注）。单测断言描述含「中断/<reason>」且 segment 含 `aborted`；agent-web 页面测试断言「中断调用」可见。
+  2. **中-2 冻结账户拒绝启动新容器（PRD §3.5）**：`adminStartCloudContainer` 解析计费账户后校验 `status !== 'frozen'`，冻结则抛 `ACCOUNT_FROZEN`「账户已冻结，无法启动容器；请先充值或联系管理员处理」；已运行容器仍按欠费记账→宽限强拆。resolver 单测新增冻结拒绝断言。
+  3. **低-3 agent-web 分页对齐**：账单、收据、调用记录均改 `pageSize=20` 并提供上/下一页（与 admin-web 一致）。
+  4. **低-4 冻结提示口径**：网关 402 按 `check.reason` 区分——`ACCOUNT_FROZEN` → `account_frozen`/「账户已冻结，请联系管理员处理」，否则 `insufficient_quota`/「余额不足，请联系管理员充值」。
+  5. **低-5 mappers 注释更正**：`mappers.ts` 注释改为「AccountService DTO（整数分）→ 契约 wire（金额换算为 credits）」，消除「已换算 credits」的二次换算隐患。
+  6. **低-6 预检 ref 唯一化**：网关预检 `ref.id` 改为 `requestId`，与 `handleModelCallEvent` 扣费 ref 完全一致。
+- **真实验证（本机 Aspire 全栈，`aspire start`，RabbitMQ 实容器）**:
+  - `tests/api` 计费四件套（admin billing / billing-gateway / agent billing / cloud-controller billing-events）**10 passed**（注入 `INTERNAL_API_TOKEN`，真实服务端口 10003/10001/10004）。
+  - `tests/e2e/src/admin-billing.spec.ts`（后台费用中心+对账）**2 passed**、`tests/e2e/src/billing.spec.ts`（前台我的费用+Key 一次性）**1 passed**，均跑在 AppHost 起的真实前后端（admin-web/agent-web 由 Aspire 托管）。
+  - `aspire/AgentGear.AppHost` RabbitMQ 依赖以 NuGet 离线恢复（`NUGET_CERT_REVOCATION_MODE=offline`）后编译通过；镜像经内网 Harbor docker-hub 代理补齐本地 `rabbitmq:3-management`。
+- **环境注记**: 全量 `tests/api` 中非计费套件（controller-api websocket / 会话等）依赖的端口与外部集成在共享环境存在既有不稳定，计费相关套件与 E2E 已在本机真实服务下全绿；其余待 CI 复核。
+
+## 实现记录（2026-10-19，返工 v1.3）
+
+- **返工修复（代码审核第三轮打回项）**:
+  1. **中-1 收据误报「无收据」修复（选项②：按 invoiceId 直查）**：`internal-billing` 的 `GET /internal/billing/receipts` 支持 `invoiceId` 过滤；agent-api 新增 `myBillingReceipt(invoiceId)`（`billing-client.getReceiptByInvoice`）与契约字段；agent-web 弹窗改为按当前账单 `invoiceId` 直查收据（`MY_BILLING_RECEIPT`），不再依赖收据列表分页，删除误置于「模型调用记录」卡片的收据分页控件；对话框增加「收据加载中…」态。新增回归测试 T-AW10：账单翻到第 2 页点「查看」仍显示正确收据号且不出现「该账单暂无收据」。
+  2. **低-2 契约同步**：`contracts/admin-billing.graphql` 的 `InvoiceItem` 补 `segment` 字段，与 `billing.graphql`、admin-api schema、前端查询三处一致；`tests/api` 账单查询断言 `segment` 字段可取。
+  3. **低-3 冻结口径补齐**：网关「账户冻结」闸门提到 `billable` 之外——未开启计费的模型同样拒绝 `status='frozen'` 账户调用（402 `account_frozen`），余额预检仍仅对 `billable` 执行（PRD §3.5 不限定计费模型）。新增 API 断言 T-B24（直写 `isBillable=false` 全局模型 + 冻结账户 → 402）。
+  4. **低-4 E2E secret 断言恢复**：`tests/e2e/src/billing.spec.ts` 恢复对一次性 API Key 完整 secret 的渲染断言（`page.locator('code')` 匹配 `/^zag_sk_/`，保存后 `toHaveCount(0)`），不再只断言提示文案。
+- **真实验证（本机 Aspire 全栈，`aspire start`，RabbitMQ 实容器，重启加载本轮代码）**:
+  - `servers/admin-api` build + **465 passed / 1 skipped**；`servers/agent-api` build + **653 passed**；`servers/cloud-controller` build + **191 passed**；`apps/admin-web` build + **207 passed** + lint；`apps/agent-web` build + **428 passed** + lint（0 error）。
+  - `tests/api` 计费四件套含新增 T-B24：**11 passed**（真实 admin-api/agent-api/cloud-controller + 共享 Mongo）。
+  - `tests/e2e/src/admin-billing.spec.ts` **2 passed**、`tests/e2e/src/billing.spec.ts` **1 passed**（含恢复后的 secret 断言），跑在 Aspire 托管的真实 admin-web/agent-web。
+
+## 实现记录（2026-10-19，返工 v1.4）
+
+- **返工修复（代码审核第四轮打回项）**:
+  1. **中-1 internal /receipts invoiceId 校验（防 500 与堆栈泄露）**：`GET /internal/billing/receipts` 对 `invoiceId` 沿用 `mongoose.isValidObjectId` 守卫；非法值按「无匹配收据」返回 `200 []`（避免 mongoose CastError 500 与堆栈外泄），合法但不存在的仍返回 `[]`。前台 `myBillingReceipt(invoiceId:"junk")` 因此返回 `null` 而非 `INTERNAL_SERVER_ERROR`。新增断言：`tests/api` T-B25（非法 invoiceId 200+[]）与 agent 套件非法 invoiceId 返回 null/无 errors。
+  2. **低-2 收据弹窗错误态**：agent-web 收据弹窗区分 `receiptsQuery.error`，失败时显示「收据加载失败，请稍后重试」而非误报「该账单暂无收据」；新增组件测试 T-AW11（mock error → 不出现「该账单暂无收据」）。
+  3. **低-3 wire 类型补 segment**：`servers/agent-api/src/services/billing-client.ts` 的 `BillingInvoiceWire.items` 补 `segment?: string | null`，与契约/两侧 schema/前端查询一致。
+- **真实验证（本机 Aspire 全栈重启加载本轮代码）**:
+  - `servers/admin-api` build + **465 passed / 1 skipped**；`servers/agent-api` build + **653 passed**；`apps/agent-web` build + 组件测试 **4 passed**。
+  - `tests/api` 计费四件套（含新增 T-B25、T-B24）：**12 passed**（真实 admin-api/agent-api/cloud-controller + 共享 Mongo）。
+  - `tests/e2e/src/admin-billing.spec.ts` **2 passed**、`tests/e2e/src/billing.spec.ts` **1 passed**（Aspire 托管真实前后端）。
+
+## 实现记录（2026-10-19，返工 v1.5）
+
+- **返工修复（代码审核第五轮打回项）**:
+  1. **中-1 invoiceId 守卫纵深补全（空串/数组绕过）**：`internal-billing` 改为「`invoiceId` 一旦传入就必须是合法 ObjectId」——空串/数组/非法串一律按「无匹配收据」返回 `200 []`，不再落到「无过滤」分支而返回账户最新收据（归属错配）。agent-api `getReceiptByInvoice` 增加输入自卫：非 24 位 hex 直接返回 `null`（不发请求），并对返回项做 `receipt.invoiceId === invoiceId` 归属校验。新增断言：`tests/api` T-B25 扩展（注入一张收据后，空串/数组/非法串均 `[]`，合法 oid 对照组正常命中），agent 套件 `myBillingReceipt("")` → `null` 且合法 oid 对照组命中。
+- **真实验证（本机 Aspire 全栈重启加载本轮代码）**:
+  - `servers/admin-api` build + **465 passed / 1 skipped**；`servers/agent-api` build + **653 passed**。
+  - `tests/api` 计费四件套（T-B25 扩展、T-B24 等）：**12 passed**（真实服务 + 共享 Mongo，含注入收据的归属回归）。
+
 ## 风险与回滚
 
 | 风险 | 缓解 |

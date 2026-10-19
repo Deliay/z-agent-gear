@@ -5,6 +5,7 @@ import { modelResolvers } from './model.js';
 import { baseImageResolvers } from './base-image.js';
 import { cloudContainerResolvers } from './cloud-container.js';
 import { cloudWorkloadResolvers } from './cloud-workload.js';
+import { billingResolvers } from './billing.js';
 
 // 类型级 resolver（Provider.models / Model.provider / CloudContainer.workloads）必须显式登记，否则线上不生效
 export const resolvers = {
@@ -17,6 +18,7 @@ export const resolvers = {
     ...baseImageResolvers.Query,
     ...cloudContainerResolvers.Query,
     ...cloudWorkloadResolvers.Query,
+    ...billingResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -25,6 +27,7 @@ export const resolvers = {
     ...baseImageResolvers.Mutation,
     ...cloudContainerResolvers.Mutation,
     ...cloudWorkloadResolvers.Mutation,
+    ...billingResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

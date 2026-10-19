@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   Archive,
+  CreditCard,
 } from 'lucide-react';
 import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
@@ -327,13 +328,22 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       )}
 
       {mobile && (
-        <NavLink
-          to="/settings"
-          className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
-        >
-          <Settings className="size-4" />
-          <span>设置</span>
-        </NavLink>
+        <>
+          <NavLink
+            to="/billing"
+            className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
+          >
+            <CreditCard className="size-4" />
+            <span>我的费用</span>
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
+          >
+            <Settings className="size-4" />
+            <span>设置</span>
+          </NavLink>
+        </>
       )}
 
       <div className="sticky bottom-0 border-t border-sidebar-border p-4">
@@ -351,6 +361,17 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             >
               <Plus className="size-4" />
             </button>
+            <NavLink
+              to="/billing"
+              aria-label="我的费用"
+              className={({ isActive }) =>
+                `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+                  isActive ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:text-sidebar-foreground'
+                }`
+              }
+            >
+              <CreditCard className="size-4" />
+            </NavLink>
             <NavLink
               to="/settings"
               aria-label="Settings"

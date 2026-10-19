@@ -41,6 +41,8 @@ export interface CloudContainerJson {
   workloadIds: string[];
   workloadPlan: WorkloadPlanEntry[];
   currentWorkloadName: string | null;
+  billingAccountId: string | null;
+  billingStartedAt: string | null;
 }
 
 /** 严格对齐契约附录 A.3 的 JSON 结构。 */
@@ -66,6 +68,8 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
       required: entry.required === true,
     })),
     currentWorkloadName: entity.currentWorkloadName ?? null,
+    billingAccountId: entity.billingAccountId ?? null,
+    billingStartedAt: entity.billingStartedAt ? entity.billingStartedAt.toISOString() : null,
   };
 }
 
@@ -180,6 +184,20 @@ export function createInternalRouter(
   router.post('/containers', async (req: Request, res: Response) => {
     const purpose = req.body?.purpose;
     const refId = typeof req.body?.refId === 'string' ? req.body.refId : null;
+    const rawBillingAccountId = req.body?.billingAccountId;
+    if (
+      rawBillingAccountId !== undefined &&
+      rawBillingAccountId !== null &&
+      (typeof rawBillingAccountId !== 'string' || rawBillingAccountId.length === 0)
+    ) {
+      res.status(400).json({
+        error: 'INVALID_BILLING_ACCOUNT',
+        message: 'billingAccountId 非法（须为非空字符串）',
+      });
+      return;
+    }
+    const billingAccountId =
+      typeof rawBillingAccountId === 'string' ? rawBillingAccountId : null;
 
     if (purpose !== 'idle') {
       res.status(400).json({
@@ -246,6 +264,7 @@ export function createInternalRouter(
       // 按选择顺序落库 workloadIds（兜底展开的 plan 仅用于执行），二者不产生静默偏差。
       const created = await containerService.start('idle', refId, workloadIds, effectivePlan, {
         deriveWorkloadIdsFromPlan: hadExplicitPlan,
+        billingAccountId,
       });
       res.status(201).json(toCloudContainerJson(created));
     } catch (err) {
@@ -280,7 +299,17 @@ export function createInternalRouter(
 
   router.delete('/containers/:id', async (req: Request, res: Response) => {
     try {
-      const result = await containerService.destroy(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const bodyReason = req.body?.reason;
+      const queryReason = Array.isArray(req.query.reason) ? req.query.reason[0] : req.query.reason;
+      const rawReason = typeof bodyReason === 'string' ? bodyReason : queryReason;
+      const reason =
+        typeof rawReason === 'string' && rawReason.trim().length > 0
+          ? rawReason.trim()
+          : undefined;
+      const result = await containerService.destroy(
+        Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
+        reason ? { reason } : undefined,
+      );
       // 契约 A.2.3：透出 deletedJob，调用方可观察本次是否真实回收了残留 Job（问题 50）。
       res.json({ success: result.success, deletedJob: result.deletedJob });
     } catch (err) {
