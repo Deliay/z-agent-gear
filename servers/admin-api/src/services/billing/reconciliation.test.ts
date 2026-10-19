@@ -158,6 +158,47 @@ describe('ReconciliationService（三线对账）', () => {
     expect(report.errors[0]).toMatchObject({ accountId: account.id, invoiceCharge: 100 });
   });
 
+  it('rollups: 小时桶边界对齐（floor_hour(from) 桶不再被误排除）— R3-7/8.4#1', async () => {
+    const { BillingInvoice } = await import('../../models/billing-invoice.js');
+    const { BillingRollup } = await import('../../models/billing-rollup.js');
+    const account = await accountService.getOrCreate(
+      'front_user',
+      new mongoose.Types.ObjectId().toString(),
+      'rollup-boundary-user',
+    );
+    // now 落在小时中段：from = now-24h 也落在小时中段，floor_hour(from) 桶起点 < from。
+    const now = new Date('2026-10-02T12:34:56Z');
+    const bucketStart = new Date('2026-10-01T12:00:00Z'); // floor_hour(now-24h)
+    // 账单落在 [floor_hour(from), from] 之后的同一小时桶内 → 修复前 rollup 桶被排除、账单被计入 → 误报漂移。
+    await BillingInvoice.create({
+      accountId: account.id,
+      seq: 0,
+      type: 'charge',
+      category: 'model',
+      amount: -100,
+      balanceAfter: 0,
+      description: 'boundary',
+      createdAt: new Date('2026-10-01T12:40:00Z'),
+    });
+    await BillingRollup.create({
+      accountId: account.id,
+      granularity: 'hour',
+      bucketStart,
+      chargeTotal: 100,
+      rechargeTotal: 0,
+      chargeCount: 1,
+    });
+    const recon = new ReconciliationService(
+      {} as never,
+      { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() } as never,
+      { now: () => now.getTime(), listContainers: async () => [] },
+    );
+    const [report] = await recon.run('rollups');
+    expect(report.line).toBe('rollups');
+    // 对齐后 rollup 与账单都被纳入同一窗口 → 一致，无漂移（修复前会误报 1 条）。
+    expect(report.errorCount).toBe(0);
+  });
+
   it('events: 隔离行(failed:true) 必须补投（重置为 pending）而非视为已投递', async () => {
     const { BillingOutbox } = await import('../../models/billing-outbox.js');
     const startedAt = new Date('2026-10-01T00:00:00Z').toISOString();
@@ -203,7 +244,7 @@ describe('ReconciliationService（三线对账）', () => {
     }
   });
 
-  it('events: 已发布未生效（DLQ）→ 以上限代偿 eventId 重新入列', async () => {
+  it('events: 已发布未生效（DLQ）→ 代偿 eventId 重新入列；连续两轮 repair 行数收敛', async () => {
     const { BillingOutbox } = await import('../../models/billing-outbox.js');
     const startedAt = new Date('2026-10-01T00:00:00Z').toISOString();
     const exitedAt = new Date('2026-10-01T00:10:00Z').toISOString();
@@ -227,19 +268,64 @@ describe('ReconciliationService（三线对账）', () => {
     });
 
     const reservations = { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() };
-    const recon = new ReconciliationService({} as never, reservations as never, {
-      now: () => 1234567890,
-      listContainers: async () => [
-        { id: 'c-dlq', status: 'exited', billingAccountId: 'a1', billingStartedAt: startedAt, exitedAt },
-      ],
-    });
-    await recon.run('events');
-    expect(
-      await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-dlq:repair:/ }),
-    ).toBe(1);
+    const nowValue = { value: 1234567890 };
+    const make = () =>
+      new ReconciliationService({} as never, reservations as never, {
+        now: () => nowValue.value,
+        listContainers: async () => [
+          { id: 'c-dlq', status: 'exited', billingAccountId: 'a1', billingStartedAt: startedAt, exitedAt },
+        ],
+      });
+    await make().run('events');
+    expect(await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-dlq:repair:/ })).toBe(1);
     expect(
       await BillingOutbox.countDocuments({ eventId: /^container\.destroyed:c-dlq:repair:/ }),
     ).toBe(1);
+
+    // R3-2：第二轮（now 前进 → repair eventId 会不同）不得再新增——`repairOf` 护栏保证每个源事件至多补投一次。
+    nowValue.value += 5_000;
+    await make().run('events');
+    expect(await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-dlq:repair:/ })).toBe(1);
+    expect(
+      await BillingOutbox.countDocuments({ eventId: /^container\.destroyed:c-dlq:repair:/ }),
+    ).toBe(1);
+    expect(await BillingOutbox.countDocuments({ repairOf: { $ne: null } })).toBe(2);
+  });
+
+  it('events: FAILED 预留与零计费窗口的 destroyed 判终态不补投（R3-2 收敛护栏）', async () => {
+    const { BillingOutbox } = await import('../../models/billing-outbox.js');
+    const reservations = {
+      findByResource: vi.fn(async (rid: string) => (rid === 'c-failed' ? { status: 'FAILED' } : null)),
+      list: vi.fn(),
+    };
+    const nowValue = { value: 1000 };
+    const make = () =>
+      new ReconciliationService({} as never, reservations as never, {
+        now: () => nowValue.value,
+        listContainers: async () => [
+          {
+            id: 'c-failed',
+            status: 'exited',
+            billingAccountId: 'a1',
+            billingStartedAt: '2026-10-01T00:00:00Z',
+            exitedAt: '2026-10-01T00:10:00Z',
+          },
+          {
+            id: 'c-zero',
+            status: 'exited',
+            billingAccountId: 'a1',
+            billingStartedAt: '2026-10-01T00:10:00Z',
+            exitedAt: '2026-10-01T00:10:00Z',
+          },
+        ],
+      });
+    await make().run('events');
+    nowValue.value += 5_000;
+    await make().run('events');
+    // 两类 destroyed 都判终态：不产生任何 destroyed 补投行。
+    expect(await BillingOutbox.countDocuments({ eventId: /destroyed.*repair/ })).toBe(0);
+    // 零窗容器的 ready 只补投一次（有界），第二轮不新增。
+    expect(await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-zero/ })).toBe(1);
   });
 
   it('events: 在途(published:false, failed:false) 不重复补投', async () => {

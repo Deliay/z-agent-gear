@@ -197,10 +197,12 @@ export class ReconciliationService {
 
   /**
    * O-1：事件反向对账线。正向对账只能发现「已入事件但未计量」；本线扫描**已计费起点
-   * 但事实事件缺失**的容器并补投（覆盖 fire-and-forget 丢事件、停机截断、Mongo 瞬时故障）：
-   * - `billingStartedAt!=null` 且无 `container.ready:<id>` 事件/outbox → 补投 ready；
-   * - 终态（exited/failed）且无 `container.destroyed:<id>` → 补投 destroyed。
-   * 补投写入共享 `billingoutbox`（producer=admin-api），由 admin relay 发布；消费端按 eventId 去重。
+   * 但事实事件未生效**的容器并补投（覆盖 fire-and-forget 丢事件、停机截断、Mongo 瞬时故障）：
+   * - ready：按「业务态」（已建预留 / legacy 全额计费键 / destroyed 已摄入）判是否已生效；
+   * - destroyed：按「预留终态 / legacy 全额计费键 / 零计费窗口」判是否已生效。
+   * 隔离行（`failed:true`）与已发布未生效行（DLQ/消费失败）都**不算已投递**，必须补投；
+   * 补投写入共享 `billingoutbox`（producer=admin-api），由 admin relay 发布，且每个原始事件至多补投一次
+   * （`repairOf` 护栏）避免无限放大。消费端按业务幂等键保证无重复计费。
    */
   private async reconcileEvents(): Promise<ReconciliationReport> {
     let containers: Array<{
@@ -225,9 +227,12 @@ export class ReconciliationService {
       checked += 1;
       const startedAt = container.billingStartedAt;
       const readyId = `container.ready:${container.id}`;
-      const recordedReady = await this.containerEventDelivered('container.ready', container.id, readyId);
+      const recordedReady = await this.containerEventDelivered('container.ready', container.id, readyId, {
+        startedAt,
+        exitedAt: container.exitedAt ?? null,
+      });
       if (!recordedReady) {
-        const repaired = await this.repairEvent({
+        const action = await this.repairEvent({
           eventId: readyId,
           eventType: 'container.ready',
           occurredAt: startedAt,
@@ -235,7 +240,7 @@ export class ReconciliationService {
           resourceId: container.id,
           payload: { billingStartedAt: startedAt },
         });
-        errors.push({ resourceId: container.id, eventType: 'container.ready', repaired });
+        errors.push({ resourceId: container.id, eventType: 'container.ready', action });
       }
       if (!terminal.has(container.status) || !container.exitedAt) continue;
       const destroyedId = `container.destroyed:${container.id}`;
@@ -243,9 +248,10 @@ export class ReconciliationService {
         'container.destroyed',
         container.id,
         destroyedId,
+        { startedAt, exitedAt: container.exitedAt },
       );
       if (!recordedDestroyed) {
-        const repaired = await this.repairEvent({
+        const action = await this.repairEvent({
           eventId: destroyedId,
           eventType: 'container.destroyed',
           occurredAt: container.exitedAt,
@@ -253,7 +259,7 @@ export class ReconciliationService {
           resourceId: container.id,
           payload: { billingStartedAt: startedAt, exitedAt: container.exitedAt },
         });
-        errors.push({ resourceId: container.id, eventType: 'container.destroyed', repaired });
+        errors.push({ resourceId: container.id, eventType: 'container.destroyed', action });
       }
     }
     return this.report('events', checked, errors);
@@ -368,18 +374,20 @@ export class ReconciliationService {
   }
 
   /**
-   * R2-2：容器事件是否**已投递并生效**——按「业务态 + 投递状态」判定，绝不把行存在当已投递。
+   * R2-2/R3-2：容器事件是否**已投递并生效**——按「业务态 + 投递状态」判定，绝不把行存在当已投递。
    *
    * - outbox 被隔离（`failed:true`）→ 永不投递 → 未完成（补投）。
    * - outbox 已发布但消费失败进 DLQ（业务态未达成）→ 未完成（补投）。
    * - outbox 未发布（在途）→ 交由 relay，视为在途已完成（不补投）。
    * - 业务态优先：ready 命中已建预留/legacy 全额计费键/destroyed 事件（门控跳过）；destroyed 命中
-   *   预留终态（SETTLED/SETTLING/RELEASE_PENDING）或 legacy 全额计费键。
+   *   预留**终态**（SETTLED/SETTLING/RELEASE_PENDING/FAILED）或 legacy 全额计费键，**或计费窗口为零**
+   *   （起止相同 → 无论补投多少次都不会产生费用，视为已收敛，避免无限补投）。
    */
   private async containerEventDelivered(
     eventType: 'container.ready' | 'container.destroyed',
     resourceId: string,
     eventId: string,
+    window: { startedAt: string; exitedAt?: string | null },
   ): Promise<boolean> {
     const reservation = await this.reservations.findByResource(resourceId);
     const legacyCharged = await BillingLedger.exists({
@@ -391,10 +399,22 @@ export class ReconciliationService {
       return this.deliveryInFlight(eventId);
     }
     if (reservation) {
-      return ['SETTLED', 'SETTLING', 'RELEASE_PENDING'].includes(reservation.status);
+      // R3-2：FAILED 为终态（冻结/建预留中途失败，`finalSettle` 的 CAS 只匹配 ACTIVE/PENDING，
+      // 永不再收敛）。把它判为「已收敛」而非反复补投，避免每轮对账新增一条 `…:repair:` 无上限。
+      return ['SETTLED', 'SETTLING', 'RELEASE_PENDING', 'FAILED'].includes(reservation.status);
     }
     if (legacyCharged) return true;
+    if (this.isZeroBillingWindow(window)) return true;
     return this.deliveryInFlight(eventId);
+  }
+
+  /** 计费窗口为零（起止相同或更早）：补投也不会产生任何费用，视为已收敛。 */
+  private isZeroBillingWindow(window: { startedAt: string; exitedAt?: string | null }): boolean {
+    if (!window.exitedAt) return false;
+    const from = new Date(window.startedAt).getTime();
+    const to = new Date(window.exitedAt).getTime();
+    if (Number.isNaN(from) || Number.isNaN(to)) return false;
+    return to <= from;
   }
 
   /** 仅「未发布且未被隔离」的 outbox 行才算在途（隔离/已发布未生效都必须补投）。 */
@@ -409,10 +429,12 @@ export class ReconciliationService {
   }
 
   /**
-   * R2-2：补投必须**可执行**。撞 eventId 唯一索引时按行状态分派：
+   * R2-2/R3-2：补投必须**可执行**且**有界**。撞 eventId 唯一索引时按行状态分派：
    * - 隔离行（`failed:true`）→ 重置为待发布（重新入列，保留原 eventId，消费端按业务幂等）；
    * - 已发布却未生效（DLQ/消费失败）→ 以 `…:repair:<ts>` 代偿 eventId 重新入列（`eventId` 只用于
-   *   事实去重，资金正确性由业务幂等键保证）。
+   *   事实去重，资金正确性由业务幂等键保证），并写 `repairOf` 标记；**每个原始事件至多补投一次**。
+   *
+   * 返回补投动作（`injected`/`requeued`/`bounded`/`in-flight`/`failed`），供对账报告如实呈现。
    */
   private async repairEvent(event: {
     eventId: string;
@@ -421,8 +443,8 @@ export class ReconciliationService {
     accountId: string;
     resourceId: string;
     payload: Record<string, unknown>;
-  }): Promise<boolean> {
-    const insert = async (eventId: string) => {
+  }): Promise<'injected' | 'requeued' | 'bounded' | 'in-flight' | 'failed'> {
+    const insert = async (eventId: string, repairOf: string | null) => {
       await BillingOutbox.create({
         eventId,
         producer: 'admin-api',
@@ -431,25 +453,28 @@ export class ReconciliationService {
         payload: { ...event, eventId },
         published: false,
         attempts: 0,
+        repairOf,
       });
     };
+    // 已补投过（同源事件存在代偿行）→ 不再补投（收敛护栏）。
+    if (await BillingOutbox.exists({ repairOf: event.eventId })) return 'bounded';
     try {
-      await insert(event.eventId);
+      await insert(event.eventId, null);
       this.logger.warn?.(`[billing-recon] repaired missing billing event ${event.eventId}`);
-      return true;
+      return 'injected';
     } catch (err) {
       if ((err as { code?: number }).code !== 11000) {
         this.logger.warn?.(
           `[billing-recon] repair event ${event.eventId} failed: ${(err as Error).message}`,
         );
-        return false;
+        return 'failed';
       }
     }
     const existing = await BillingOutbox.findOne({ eventId: event.eventId }).lean<{
       published?: boolean;
       failed?: boolean;
     } | null>();
-    if (!existing) return false;
+    if (!existing) return 'failed';
     if (existing.failed) {
       await BillingOutbox.updateOne(
         { eventId: event.eventId },
@@ -466,33 +491,34 @@ export class ReconciliationService {
         },
       );
       this.logger.warn?.(`[billing-recon] re-queued quarantined billing event ${event.eventId}`);
-      return true;
+      return 'requeued';
     }
     if (existing.published) {
       const repairedId = `${event.eventId}:repair:${this.now()}`;
       try {
-        await insert(repairedId);
+        await insert(repairedId, event.eventId);
         this.logger.warn?.(
           `[billing-recon] re-injected published-but-incomplete event as ${repairedId}`,
         );
-        return true;
+        return 'injected';
       } catch (err) {
-        if ((err as { code?: number }).code === 11000) return true;
+        if ((err as { code?: number }).code === 11000) return 'bounded';
         this.logger.warn?.(
           `[billing-recon] repair event ${repairedId} failed: ${(err as Error).message}`,
         );
-        return false;
+        return 'failed';
       }
     }
-    // 未发布的在途行：交由 relay。
-    return true;
+    // 未发布的在途行：交由 relay（语义为「无动作」，不再谎报已补投）。
+    return 'in-flight';
   }
 
   private report(
     line: string,
     checkedCount: number,
     errors: Array<Record<string, unknown>>,
-  ): ReconciliationReport {    return {
+  ): ReconciliationReport {
+    return {
       line,
       ranAt: new Date(this.now()).toISOString(),
       checkedCount,

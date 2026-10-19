@@ -400,17 +400,27 @@ export class BillingService {
 
       let invoice: InvoiceResult | null = null;
       if (priced.amountCents === 0) {
-        // A8/R2-4：无生效价目或**价目档全 0** 都会让 amountCents=0、消费免费消失；
-        // 显式区分告警以便补价（对账线 apiCalls 亦会兜底报告 cost/invoice 不一致）。
+        // A8/R2-4/R3-4：**仅**对「应计费但未产出费用」告警，避免误报：
+        // - 显式非计费档（`isBillable:false`）→ 本就不该扣费，不告警；
+        // - 零用量调用（input+output 皆 0）→ 无可计费量，不告警。
         const rates = priced.snapshot?.rates;
         const zeroRates =
           !!rates &&
           rates.inputPerMillion === 0 &&
           rates.cachedInputPerMillion === 0 &&
           rates.outputPerMillion === 0;
-        console.warn(
-          `[billing] model ${modelId} ${zeroRates ? 'has all-zero effective price row' : 'has no effective price row'}; charge skipped (eventId=${event.eventId})`,
-        );
+        const billable = priced.snapshot?.isBillable !== false;
+        const hasUsage = usage.inputTokens + usage.outputTokens > 0;
+        if (billable && hasUsage) {
+          const reason = priced.snapshot
+            ? zeroRates
+              ? 'has all-zero effective price row'
+              : 'priced to zero'
+            : 'has no effective price row';
+          console.warn(
+            `[billing] model ${modelId} ${reason}; charge skipped (eventId=${event.eventId})`,
+          );
+        }
       }
       if (priced.amountCents > 0) {
         const preCheck = await this.checks.check({

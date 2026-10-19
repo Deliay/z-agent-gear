@@ -41,6 +41,18 @@ function reservationBizPrefix(reservationId: string): string {
   return `reservation:${reservationId}:`;
 }
 
+/**
+ * R3-3：从最终结算流水的 `bizId`（`…:final:<epochMs>`）解析**已实际收费的窗口终点**。
+ * 崩溃恢复时据此补收 [已收费终点, 新 endedAt] 的尾段；无法解析（历史行）返回 null。
+ */
+function parseFinalWindowEnd(bizId: string | null | undefined): number | null {
+  if (!bizId) return null;
+  const match = /:final:(\d+)$/.exec(bizId);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
 /** A-5：`bizId` 前缀匹配的正则转义——`reservationId` 来自消息体，未转义时 `.*` 可跨预留求和。 */
 export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -470,21 +482,53 @@ export class ReservationService {
         accountId,
         amountCents: amount,
         idempotentKey: `charge:final:${reservationId}`,
-        bizId: `${reservationBizPrefix(reservationId)}final`,
+        bizId: `${reservationBizPrefix(reservationId)}final:${endedAt.getTime()}`,
         preCheck: preCheck.preCheck!,
         ref: { type: 'container_reservation', id: reservationId },
       });
       cashBalance = payment.cashBalance;
       if (!payment.applied) {
-        // 🟡2：上一轮已扣过（同一幂等键）时以 **ledger 实际入账额** 为准回填，避免
-        // 「重算窗口更晚 → 账单金额 ≠ ledger 金额」的账实不符。
+        // 🟡2/R3-3：崩溃恢复——`charge:final` 上一轮已扣（窗口可能与本次不同）。以 **ledger 实际入账额**
+        // 回填，并按该行 `bizId` 记录的**已收费窗口终点**补收尾段 [已收费终点, endedAt]（独立幂等键
+        // `charge:final-gap:${rid}:${chargedTo}`）。绝不把 lastSettleAt 推过未收费窗口（否则尾段永久漏收）。
         const existing = await BillingLedger.findOne({
           accountId: new mongoose.Types.ObjectId(accountId),
           idempotentKey: `charge:final:${reservationId}`,
         })
-          .select({ deltaBalance: 1 })
-          .lean<{ deltaBalance?: number } | null>();
+          .select({ deltaBalance: 1, bizId: 1 })
+          .lean<{ deltaBalance?: number; bizId?: string | null } | null>();
         if (existing) amount = Math.abs(Math.round(existing.deltaBalance ?? 0));
+        const chargedTo = parseFinalWindowEnd(existing?.bizId ?? null);
+        if (chargedTo === null) {
+          // 兼容本机制上线前的历史 final 行（bizId 无窗口终点）：无法判定尾段，保守告警（残余风险）。
+          console.warn(
+            `[billing] reservation ${reservationId} final charge lacks window end; tail gap unverifiable`,
+          );
+        } else if (chargedTo < endedAt.getTime()) {
+          const tailFrom = new Date(chargedTo);
+          const tailMinutes = ceilMinutes(endedAt.getTime() - chargedTo);
+          if (tailMinutes > 0) {
+            const tailPriced = await this.prices.priceContainer(tailMinutes, tailFrom);
+            if (tailPriced.amountCents > 0) {
+              const tailCheck = await this.checks.check({
+                accountId,
+                estimatedCredits: tailPriced.amountCents,
+                policy: 'accrue-and-track',
+                ref: { type: 'container_reservation', id: reservationId },
+              });
+              const tailPayment = await this.payments.charge({
+                accountId,
+                amountCents: tailPriced.amountCents,
+                idempotentKey: `charge:final-gap:${reservationId}:${chargedTo}`,
+                bizId: `${reservationBizPrefix(reservationId)}final-gap:${chargedTo}`,
+                preCheck: tailCheck.preCheck!,
+                ref: { type: 'container_reservation', id: reservationId },
+              });
+              cashBalance = tailPayment.cashBalance;
+              if (tailPayment.applied) amount += tailPriced.amountCents;
+            }
+          }
+        }
       }
     }
 

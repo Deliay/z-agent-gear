@@ -57,7 +57,7 @@ type: Permanent
 | A-4 | 双定价源一致：`priceModel` 缺 productprices 档时回落 `models.pricing`；`isBillable=false` 不扣费 | `pricing.ts` `modelPricingFallback` + `priceModel`；测试 `pricing.test.ts`「A-4: productprices 缺档时回落 models.pricing」 |
 | A-5 | `heldFrozen` 加 `accountId` 过滤 + `bizId` 正则转义；`recomputeTotals` 同 | `reservation.ts` `escapeRegExp` / `heldFrozen(reservationId, accountId)` / `recomputeTotals`；回归 `review-fixes.test.ts`「A-5: heldFrozen 过滤账户且转义正则」 |
 | A-6 | `loadLedger` 按账户回读；`applyLedgerDelta` 断言归属不符即抛 | `payment.ts` `loadLedger(idempotentKey, accountId)`、`applyLedgerDelta` 首段校验；回归 `review-fixes.test.ts`「A-6：同幂等键但归属另一账户时拒绝应用」 |
-| O-1 | ① 钩子同步调用 + 3 次重试（失败记 error），容器文档（`billingStartedAt/exitedAt`）为持久补偿源；② SIGTERM 前 `drainBillingHooks()`；③ 反向对账线 `events` 补投 ready/destroyed；④ 契约 A.3.1 措辞修正 | `cloud-controller/src/services/container-service.ts`（`emitHook`/`drainBillingHooks`）；`cloud-controller/src/index.ts` stop 顺序；`admin-api/src/services/billing/reconciliation.ts` `reconcileEvents`/`repairEvent`；`contracts/cloud-controller-websocket.md` A.3.1 |
+| O-1 | ① 钩子同步调用 + 共 **3 次尝试**（首次 + 100ms/250ms 两次退避，仍失败记 error），容器文档（`billingStartedAt/exitedAt`）为持久补偿源；② SIGTERM 前 `drainBillingHooks()`；③ 反向对账线 `events` 补投 ready/destroyed；④ 契约 A.3.1 措辞修正 | `cloud-controller/src/services/container-service.ts`（`emitHook`/`drainBillingHooks`）；`cloud-controller/src/index.ts` stop 顺序；`admin-api/src/services/billing/reconciliation.ts` `reconcileEvents`/`repairEvent`；`contracts/cloud-controller-websocket.md` A.3.1 |
 | O1 | admin 计费 resolver 统一 GraphQL 错误映射（稳定 `extensions.code`） | `admin-api/src/graphql/resolvers/billing.ts` `toBillingGraphQLError` + `mapResolvers` 包裹全部 Query/Mutation（与 cloud-container `toGraphQLError` 同口径） |
 | T-1 | 环境变量改为 `CLOUD_CONTROLLER_INTERNAL_TOKEN`；去重并补真实事件链路断言；AGENTS 清单补齐 | `tests/api/src/cloud-controller/billing-events.test.ts`（T-CC-B11 断言 outbox `container.destroyed`）；`tests/api/AGENTS.md` 新增 Billing 计费 API 章节 |
 | T-2 | T-B22 断言语义（排除未定价/非计费）；T-B23 补 `model_not_priced` | `tests/api/src/admin-api/billing-gateway.test.ts` 新增「计费网关分支覆盖（直写模型）」 |
@@ -177,7 +177,93 @@ type: Permanent
 ### 6.9 8.4 其余 🟡（未列优先，如实标注）
 
 - 11（settleCycle 解冻额口径）：✅ `settleCycle` 改按 freeze 流水 `deltaFrozen` 解冻（与 `rollbackFreeze` 同口径）。
-- 12（注记/A-2 余项）：✅ `billing-ledger.ts` 水位注释改为「辅助水位、幂等由 `billingappliedledgers` 保证」；`markLedgerApplied` 不再吞错。历史无标记流水的极窄重放窗口仍存在（至下一次对账），已在实现注释标注。
+- 12（注记/A-2 余项）：✅ `billing-ledger.ts` 水位注释改为「辅助水位、幂等由 `billingappliedledgers` 保证」；`markLedgerApplied` 不再吞错。历史无标记流水的重放窗口（`claimLedgerApplication` 的 legacy 信号「宁可漏补不重复扣」）已在 `claimLedgerApplication` 注释标注（R3-7 补充：`billing-ledger.ts` 同时说明 `walletApplied` 作为 legacy 信号只会漏判不会误判）。
 - 9（RabbitMQ 固化）：✅ 改为在 `AppHost.cs ConfigureComposeFile` 固化 healthcheck + `depends_on` + 内网镜像，`aspire publish` 实跑验证不再漂移。
 - 13（单实例前提入契约）：✅ 契约 A.3.1 显式标注 `billingMutex` 为进程内锁、多副本前必须落库化互斥；`billingStartedAt=null` 边界亦在契约明示（🟡4）。
 - 未做：3（`{reservationId}` 结构化索引，保留转义兜底）、5（legacy/events 双计 MeteringRecord 用量统计）、6（网关估算逐段 ceil 展示值）、10（per-message TTL 队头阻塞、UTC 桶本地时区、契约 500/502、死代码清理）。
+
+---
+
+## 七、第三轮复核返工对账（2026-10-20，针对 R3-1~R3-7）
+
+> 基线：`integration` @ `c982ed4`。三方复核报告：`20261019-integration-release-acceptance-report.md` §九。
+> **对账纪律**：按修复要求子项逐条打勾；未做/部分子项显式标注。本轮起对「声明的状态机/守卫」执行
+> **探针回退验证**（回退实现确认用例变红），结论见 7.1。
+
+### 7.1 探针回退验证（本轮新增固定复核手段，本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| Probe A | 仅 `billing-applied-ledger.ts`（删 `claimedAt`） | `review-fixes.test.ts`「A-2/R2-1」 | 🔴 变红：`AssertionError: expected 100701 to be 100801`（余额被二次 `$inc`） |
+| Probe B | `payment.ts` + `account-service.ts` + `keyed-mutex.ts` + `billing-applied-ledger.ts` 全回退至 `d512678` | 同上 | 🔴 变红：同断言（`expected 100701 to be 100801`） |
+
+结论：R2-1 回归**不再是空转**——崩溃残留改由**正常代码路径**构造（注入 `markLedgerApplied` 抛错：`claimLedgerApplication` 先写入 `claimedAt`、`incWalletByLedger` 已 `$inc`，随后标记无法转 `applied`），
+不再用原生驱动直写 `claimedAt`（撤回上一轮「CAS 恒命中→再 `$inc`」的空转自证）。断言顺序改为**先校验重放不二扣**（探针两配置均在此变红），
+末尾再自证 `claimedAt` 经正常路径真实落库（schema 缺字段即红）。
+
+### 7.2 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ **533 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error / 207 passed |
+| agent-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error（6 存量 warning）/ 429 passed |
+| tests/api（Aspire 全栈干净实例，注入 `INTERNAL_API_TOKEN`） | `npx vitest run` | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+
+### 7.3 R3-1（🔴 阻断，回归空转）— 子项
+
+| 子项 | 状态 | 实现/证据 |
+|---|---|---|
+| 崩溃残留经正常路径构造 | ✅ | 注入 `markLedgerApplied` 抛错（现上抛）→ 标记停在 `pending`、`claimedAt` 由 `claimLedgerApplication` 写入、`$inc` 已落账 |
+| raw 读回断言 `claimedAt` 经正常路径落库 | ✅ | 末尾 `expect(claimedAtCaptured).toBeInstanceOf(Date)`；Probe A 变红 |
+| 租约过期后重放断言余额不变且走自愈 | ✅ | `nowValue += 5min` + 经 `payments.recharge`×1001 真实挤出水位；`expect(balance).toBe(balanceBefore)`；Probe A/B 均在此变红 |
+| 两种回退配置下均失败 | ✅ | 见 7.1（两探针均红） |
+| 撤回不实声明 | ✅ | 本节取代上一轮「修复前：CAS 恒命中→claimed→再 `$inc`」的空转自证；上一轮该表述已在此更正 |
+
+### 7.4 R3-2（🟠 无限补投放大环）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| 收敛护栏 | ✅ | ① `billing-outbox.ts`（admin+cloud-controller 两份）新增 `repairOf` 索引；`repairEvent` 补投前 `BillingOutbox.exists({repairOf: eventId})`，**每个源事件至多补投一次**（`bounded`）；② destroyed 分支把 `FAILED` 预留判终态；③ 零计费窗口（`exitedAt<=startedAt`）判终态不补投 |
+| 连续两轮 repair 行数收敛回归 | ✅ | `reconciliation.test.ts`：DLQ 用例连续两轮（`now` 前进使 repair eventId 变化）断言 `repair` 行数恒为 2；新增「FAILED 预留 + 零计费窗口」两轮断言 `destroyed` 补投行为 0、ready 补投有界 |
+| 修正 `repaired` 语义 | ✅ | `repairEvent` 返回 `'injected'|'requeued'|'bounded'|'in-flight'|'failed'`；在途分支不再谎报 `repaired:true`，对账报告如实记录 `action` |
+
+### 7.5 R3-3（🟠 finalSettle 永久少收未声明）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| 不把 `lastSettleAt` 推过未收费窗口 | ✅ | 最终结算 `bizId` 编码已收费窗口终点（`…:final:<epochMs>`）；`applied===false` 时解析该终点，用 `charge:final-gap:${rid}:${chargedTo}` 补收 [终点, endedAt] 尾段后才推进 `lastSettleAt` |
+| 至少一条区分性回归 | ✅ | `billing-flow.test.ts`「R3-3」：构造 SETTLING + 已收费 `[T0,T1]` ledger，`finalSettle(T2)` 断言新增 gap 流水 500、`amount=1500`、`lastSettleAt=T2`（修复前尾段漏收、无 gap 流水） |
+| 残余风险如实声明 | ✅ | 历史 `final` 行（`bizId` 无窗口终点）无法判定尾段 → `console.warn` 告警；`minutes`（全窗口）与 `amount`（回填+补收）在历史行场景可能轻微不一致（仅报告值，无资金泄漏） |
+
+### 7.6 R3-4（🟠 零费率档无锚点 + 告警误报）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| 全 0 档回落区分性回归 | ✅ | `pricing.test.ts`「R3-4: productprices 存在全 0 价目档时回落 models.pricing」：全 0 档 + `models.pricing` 有价 → 断言 `amountCents=100` 且调用 `Model.findOne`（修复前 amount=0） |
+| 显式非计费档不回落 | ✅ | 同文件「显式非计费档（`isBillable:false`）」：断言 `Model.findOne` 未被调用、`amountCents=0`、`items=[]` |
+| 告警排除非计费/零用量 + 文案修正 | ✅ | `billing-service.ts`：仅 `billable && hasUsage` 时告警；文案按快照区分 `all-zero effective price row` / `priced to zero` / `no effective price row`，不再对非计费档输出「has no effective price row」 |
+
+### 7.7 R3-5 / R3-6 / R3-7（🟡 随修）
+
+| # | 子项 | 状态 | 实现 |
+|---|---|---|---|
+| R3-5 | T-B25 跨文件重号 | ✅ | `billing-gateway.test.ts` 的 `T-B25` → `T-B29`；`tests/api/AGENTS.md` 同步；文件内/跨文件 `T-B2*` ID 唯一 |
+| R3-5 | 旧注释引用 T-B22/T-B23 | ✅ | `billing-gateway.test.ts:73` 改为 `T-B27/T-B28` |
+| R3-6 | review-fixes.md「3 次重试」自相矛盾 | ✅ | §五 O-1 行改为「共 **3 次尝试**（首次 + 100ms/250ms 两次退避）」，与代码 `[0,100,250]`/契约一致 |
+| R3-6 | agent-api 注释残留 BAD_REQUEST | ✅ | `agent-api/src/graphql/resolvers/billing.ts` 注释改为 `INVALID_ARGUMENT/NOT_FOUND/BILLING_UNAVAILABLE` |
+| R3-6 | reconciliation 注释旧语义 / 格式损伤 | ✅ | `reconcileEvents` 注释重写为「业务态 + 投递态」；`report()` 修复 `{ return {` 粘连格式 |
+| R3-6 | 契约交叉引用错误（§A.1 部署约束） | ✅ | 改为「**单实例部署前提**」（原引用的 A.1 实为鉴权章） |
+| R3-7 | `walletApplied` 注释与实现矛盾 | ✅ | `billing-ledger.ts` 注释说明该字段作为 **legacy 信号**只会漏判（false-negative）不会误判（false-positive），与 `claimLedgerApplication` 一致 |
+| R3-7 | 「重放窗口已标注」无对应注释 | ✅ | `account-service.ts markAllLedgerApplied` 新增「残余风险（已显式标注）」段（登记失败 → 下次对账前的水位淘汰重放窗口） |
+| R3-7 | 8.4#1 无区分性测试 | ✅ | `reconciliation.test.ts`「rollups: 小时桶边界对齐」：`floor_hour(from)` 桶 + 同桶账单，断言 0 漂移（修复前误报 1） |
+| R3-7 | `markLedgerApplied` 上抛后失败面无注入回归 | ✅ | 7.1 的 R3-1 用例即注入 `markLedgerApplied` 失败并断言调用链失败面（charge 抛错 + 重放自愈） |
+
+### 7.8 未做/部分（如实标注）
+
+- R3-6：`reconciliation.ts:198-204` 注释已重写；无其它遗留。
+- R3-3：`charge:final` 未做「全量窗口化」，采用「窗口终点编码 + gap 补收」方案（等效满足「不得推过未收费窗口」）；历史无编码行的尾段不可追回（已告警）。
+- 前两轮 8.4 未做项（3/5/6/10）本轮未动，保持如实标注。

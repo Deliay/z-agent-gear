@@ -215,6 +215,54 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(await BillingLedger.countDocuments({ bizType: 'charge' })).toBe(chargeAfterFirst + 1);
   });
 
+  it('R3-3: 最终结算崩溃恢复按「已收费窗口终点」补结尾段（不永久漏收）', async () => {
+    const nowValue = { value: T0 };
+    const { reservations } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-final-crash-1';
+    const T1 = T0 + 10 * 60_000;
+    const T2 = T0 + 15 * 60_000;
+
+    // 预留停在 SETTLING（模拟上一轮最终结算在「推进 lastSettleAt / 置 SETTLED」前崩溃）。
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'SETTLING',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 1,
+    });
+    const rid = String(reservation._id);
+    // 上一轮已按 [T0, T1] 收费的 ledger（bizId 记录已收费窗口终点），钱包标记 applied。
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -1000,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 1000 }],
+      bizId: `reservation:${rid}:final:${T1}`,
+      idempotentKey: `charge:final:${rid}`,
+      walletApplied: true,
+      createdAt: new Date(T1),
+    });
+
+    nowValue.value = T2;
+    const result = await reservations.finalSettle(rid, new Date(T2));
+    // 首扣 1000（10 分钟）+ 尾段 500（[T1, T2] 5 分钟）= 1500；修复前尾段永久漏收（仅回填 1000）。
+    expect(result.amount).toBe(1500);
+    const gap = await BillingLedger.findOne({
+      idempotentKey: `charge:final-gap:${rid}:${T1}`,
+    }).lean();
+    expect(gap).not.toBeNull();
+    expect(Math.abs(gap!.deltaBalance)).toBe(500);
+    const after = await BillingReservation.findById(rid);
+    expect(after!.status).toBe('SETTLED');
+    expect(after!.lastSettleAt!.getTime()).toBe(T2);
+  });
+
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);

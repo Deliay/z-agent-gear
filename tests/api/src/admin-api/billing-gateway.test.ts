@@ -43,7 +43,7 @@ describe('OpenAI 兼容计费网关', () => {
     }
   });
 
-  it('T-B25: 无效 Key 401 invalid_api_key', async () => {
+  it('T-B29: 无效 Key 401 invalid_api_key', async () => {
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: 'Bearer zag_sk_deadbeef' },
     });
@@ -70,7 +70,7 @@ describe('OpenAI 兼容计费网关', () => {
 });
 
 /**
- * T-2：T-B22/T-B23 名实相符——`/v1/models` 过滤逻辑与 `model_not_priced` 分支必须被真实断言，
+ * T-2/R3-5：T-B27/T-B28 名实相符——`/v1/models` 过滤逻辑与 `model_not_priced` 分支必须被真实断言，
  * 而不是「删掉过滤逻辑也照样通过」。直写 `models`（需 MONGODB_URI）。
  */
 describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模型）', () => {

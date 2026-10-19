@@ -436,7 +436,7 @@ cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 a
   保证同一会话只产生一笔计费。
 - **边界**：`billingStartedAt=null` 的容器视为未计费（CAS 写失败即未进入计费），不在 `events` 线补投范围；
   `events`/`resources` 线的补投与 legacy 计费依赖 admin-api 的**账户/机型互斥与单实例部署**（`billingMutex`
-  为进程内锁，见 §A.1 部署约束与前序 A11 红线）——多副本前必须落库化互斥。
+  为进程内锁，**单实例部署前提**；多副本前必须落库化互斥）。
 
 | 事件 | routing key | 触发条件 | payload |
 |------|-------------|----------|---------|

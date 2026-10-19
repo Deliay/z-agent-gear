@@ -24,7 +24,7 @@ function toGraphQLError(err: unknown): GraphQLError {
   return new GraphQLError(message, { extensions: { code } });
 }
 
-/** P2：统一包裹 resolver —— 所有上游调用错误都经 `toGraphQLError` 稳定映射（含 BAD_REQUEST/NOT_FOUND）。 */
+/** P2：统一包裹 resolver —— 所有上游调用错误都经 `toGraphQLError` 稳定映射（含 INVALID_ARGUMENT/NOT_FOUND/BILLING_UNAVAILABLE）。 */
 async function run<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await task();

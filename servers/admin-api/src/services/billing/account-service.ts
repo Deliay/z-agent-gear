@@ -356,6 +356,11 @@ export class AccountService {
    * 都已生效，登记全部行才能让「水位淘汰后的重放」保持幂等（幂等标记不淘汰）。
    * 使用 `bulkWrite` + `upsert` 幂等；**失败向上抛**（R2-1：吞错会让「已校准但未登记」静默
    * 留下重放窗口，由调用方按对账失败上报，下一次对账重试）。
+   *
+   * **残余风险（已显式标注）**：若「钱包校准回写成功、本登记失败」后，在下一次对账成功登记前
+   * 恰好重放了一条已被水位（`appliedLedgerIds`）淘汰的历史 ledger，则该行会按「未应用」再 `$inc`
+   * 一次（重复记账）。窗口 = 登记失败到下一次对账；`markLedgerApplied` 走单行 upsert 因此实际
+   * 只有批量路径可能出现。此窗口无法在不引入跨账户快照版本的前提下彻底关闭，接受并依赖对账重试。
    */
   async markAllLedgerApplied(accountId: string): Promise<void> {
     if (!mongoose.isValidObjectId(accountId)) return;

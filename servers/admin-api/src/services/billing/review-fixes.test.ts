@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { BillingAccount } from '../../models/billing-account.js';
 import { BillingAppliedLedger } from '../../models/billing-applied-ledger.js';
@@ -89,6 +89,9 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
   });
   beforeEach(async () => {
     await clearTestDb();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('阻断项 1：含赠送余额的账户对账不得放大可用余额（gift 不被折叠进现金）', async () => {
@@ -364,10 +367,11 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect(rollbackRows).toBe(1); // 仅 A 的 deposit 回滚
   });
 
-  it('A-2/R2-1：真实挤出水位后重放不二扣 + 崩溃残留（pending+租约过期）走自愈不二扣', async () => {
+  it('A-2/R2-1：崩溃残留经正常路径构造（claimedAt 由 claim 写入）+ 真实挤出水位后重放不二扣', async () => {
     const account = await seedAccount(100000);
-    const checks = new CreditCheckService();
-    const payments = new PaymentService(checks);
+    const nowValue = { value: T0 };
+    const checks = new CreditCheckService({ now: () => nowValue.value });
+    const payments = new PaymentService(checks, () => nowValue.value);
     const ref = { type: 'model_call' as const, id: 'r-watermark' };
     const preCheck = (await checks.check({
       accountId: account.id,
@@ -376,7 +380,7 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
       ref,
     })).preCheck!;
 
-    // 1) 正常扣费一条（写入不淘汰幂等标记）
+    // 1) 正常扣费一条（写入不淘汰幂等标记，标记终态 applied）
     const first = await payments.charge({
       accountId: account.id,
       amountCents: 100,
@@ -387,29 +391,36 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     });
     expect(first.applied).toBe(true);
 
-    // 2) 模拟「钱包已应用但同步标记写失败」（崩溃残留）：把 crash-key 的标记改成 pending + 租约过期。
-    const second = await payments.charge({
-      accountId: account.id,
-      amountCents: 100,
-      idempotentKey: 'crash-key',
-      bizId: 'crash-biz',
-      preCheck,
-      ref,
-    });
-    expect(second.applied).toBe(true);
+    // 2) 「钱包已 $inc、标记写失败」的崩溃残留——**经正常代码路径构造**（不再用原生驱动直写 claimedAt）。
+    //    注入 `markLedgerApplied` 抛错：claimLedgerApplication 已把 claimedAt 写入 marker，随后标记无法转 applied。
+    const proto = PaymentService.prototype as unknown as {
+      markLedgerApplied: (accountId: string, ledgerId: string) => Promise<void>;
+    };
+    const spy = vi.spyOn(proto, 'markLedgerApplied');
+    spy.mockRejectedValueOnce(new Error('injected: crash after wallet apply'));
+    await expect(
+      payments.charge({
+        accountId: account.id,
+        amountCents: 100,
+        idempotentKey: 'crash-key',
+        bizId: 'crash-biz',
+        preCheck,
+        ref,
+      }),
+    ).rejects.toThrow(/injected/);
+    spy.mockRestore();
+
     const crashLedger = await BillingLedger.findOne({ idempotentKey: 'crash-key' }).lean();
-    await BillingAppliedLedger.collection.updateOne(
-      { accountId: new mongoose.Types.ObjectId(account.id), ledgerId: String(crashLedger!._id) },
-      { $set: { walletApplied: false, claimedAt: new Date(Date.now() - 5 * 60_000) } },
-    );
-    // 自证：claimedAt 必须真实落库（schema 缺字段会让整条租约/自愈状态机变死代码）。
     const rawMarker = await BillingAppliedLedger.collection.findOne({
       accountId: new mongoose.Types.ObjectId(account.id),
       ledgerId: String(crashLedger!._id),
     });
-    expect(rawMarker?.claimedAt).toBeInstanceOf(Date);
+    // 残留自证：标记停在 pending；claimedAt 由 claim 正常写入（值在此捕获，末尾再断言它确实落库）。
+    expect(rawMarker?.walletApplied).toBe(false);
+    const claimedAtCaptured = rawMarker?.claimedAt;
 
-    // 3) 经 payments 真实灌 >1000 笔，把两条键挤出 `appliedLedgerIds` 水位（修复前的空转测试不触发该前置条件）。
+    // 3) 租约过期 + 经 payments 真实灌 >1000 笔，把两条键挤出 `appliedLedgerIds` 水位。
+    nowValue.value = T0 + 5 * 60_000;
     for (let i = 0; i < 1001; i += 1) {
       await payments.recharge({
         accountId: account.id,
@@ -426,7 +437,7 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect((accountAfterFill.appliedLedgerIds ?? []).includes(String(wmLedger!._id))).toBe(false);
     expect((accountAfterFill.appliedLedgerIds ?? []).includes(String(crashLedger!._id))).toBe(false);
 
-    // 4) 重放旧键（标记 applied）→ no-op，余额不变。
+    // 4) 重放已完成键（标记 applied）→ no-op，余额不变。
     const balanceBeforeReplay = (await accountService.getById(account.id))!.cashBalance;
     const replay = await payments.charge({
       accountId: account.id,
@@ -440,7 +451,8 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect((await accountService.getById(account.id))!.cashBalance).toBe(balanceBeforeReplay);
 
     // 5) 重放崩溃残留键（pending + 租约过期）→ 走「按 ledger 真值绝对校准」自愈，**不重复 `$inc`**。
-    //    修复前（claimedAt 未落库 → CAS 恒命中 → claimed）此处会再扣 100。
+    //    Probe B（回退 payment/account-service/keyed-mutex/billing-applied-ledger）：claimedAt 未落库 →
+    //    tryClaim 恒命中 → claimed → 水位已淘汰 → 再扣 100 → 余额断言变红。
     const balanceBeforeCrashReplay = (await accountService.getById(account.id))!.cashBalance;
     const crashReplay = await payments.charge({
       accountId: account.id,
@@ -457,6 +469,10 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
       ledgerId: String(crashLedger!._id),
     });
     expect(healed?.walletApplied).toBe(true);
+    expect(healed?.claimedAt ?? null).toBeNull();
+    // 自证：claimedAt 由 claim 经正常路径写入并**真实落库**。
+    // Probe A（回退 billing-applied-ledger.ts 移除 claimedAt）：严格模式剥离 `$set:{claimedAt}` → 此断言变红。
+    expect(claimedAtCaptured).toBeInstanceOf(Date);
   });
 
   it('A-5: heldFrozen 过滤账户且转义正则（reservationId=.* 不跨预留求和）', async () => {
