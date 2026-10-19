@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告——费用中心（credits-billing）+ Aspire 工作负载下载代理（PR #237）AI Review 第一轮，代码审查结论为「打回」，记录资金正确性/消息可靠性/事件源头/安全等阻断与重要问题清单、根因、修复要求
+description: integration→release 集成验收报告——费用中心（credits-billing）+ Aspire 工作负载下载代理（PR #237）AI Review 两轮：首轮打回（4 阻断 + 约 20 重要），返工后第二轮复核再次打回（A4/B4 声称修复实为未闭环 + 返工引入 2 处新缺陷），记录逐项根因、修复要求与验证证据
 type: Permanent
 ---
 
 # 费用中心（credits-billing）+ Aspire 工作负载代理 integration 验收报告（2026-10-19）
 
-> **状态**: 🔴 **第一轮 AI Review：打回（REJECT）**——本 PR 引入「事件→计量→定价→账单→支付→收据」六段计费管线与 RabbitMQ 事件骨干，代码体量大、测试较完备，但代码审查发现 **4 项阻断级缺陷**（凭空造钱、MQ 消费进程崩溃、结算链路指数放大、计费事件错误投递）与 **约 20 项重要缺陷**，涉及资金正确性、消息可靠性、计费事件源头一致性与安全边界，**不可带病合并**。本轮结论：**打回返工**，要求修复「五、阻断项」全部 + 「六、重要项」资金/可靠性/安全相关项后重新提交复核。详见「五、阻断项」与「六、重要项」。
+> **状态**: 🔴 **第二轮 AI Review 复核：打回（二轮返工中）**——首轮 4 项阻断修复**全部属实**、大部分资金/可靠性/安全重要项修复属实；但复核发现 **2 项「声称已修复实为未闭环」**（A4 钱包崩溃恢复顺序错误=资金口子、B4 cloud-controller outbox relay 未修=双发/无限重投仍在）+ **2 项返工引入的新缺陷**（C1 finalize 失败误标 aborted 投双事件、D1 旧连接 close 误清新连接引用泄漏）+ 2 项重要残留（C5 共享出口 IP 误 429 有效 Key、C1 Anthropic 中断不中止上游）。按「有问题立即打回」，本轮**再次打回返工**。逐项证据见 `十二、第二轮 AI Review 复核`。
 
 ## 关联文档
 
@@ -243,28 +243,176 @@ channel.consume(METERING_QUEUE, (msg) => {
 
 ## 八、修复总览表
 
-| # | 问题 | 根因 | 状态 | 修复 commit |
+| # | 问题 | 根因 | 状态（第二轮复核后） | 修复 commit |
 |---|---|---|---|---|
-| 1 | 对账凭空造钱（阻断） | Σ各池合计 vs 仅现金口径错 | ⬜ 待修复 | |
-| 2 | MQ 消费进程崩溃（阻断） | `void consumeWithRetry` 无 `.catch` + catch 内 channel 操作裸抛 | ⬜ 待修复 | |
-| 3 | 结算链指数放大（阻断） | `settleCycle` 无去重门 + 丢弃 ingest `created` | ⬜ 待修复 | |
-| 4 | destroyed 事件错投（阻断） | CAS-miss 提前投递 + dispatcher 兜底漏投 | ⬜ 待修复 | |
-| A1–A12 | 计费核心重要项 | 见「六、A」 | ⬜ 待修复 | |
-| B1–B8 | MQ 事件骨干重要项 | 见「六、B」 | ⬜ 待修复 | |
-| C1–C6 | API/鉴权面重要项 | 见「六、C」 | ⬜ 待修复 | |
-| D1–D13 | 源头/前端/部署/契约/迁移 | 见「六、D」 | ⬜ 待修复 | |
-| — | 次要/建议项 | 见「七」 | ⬜ 建议修复 | |
+| 1 | 对账凭空造钱（阻断） | Σ各池合计 vs 仅现金口径错 | ✅ 已修复·复核属实（按池对账 + `deriveWalletFromLedger`，见十二-R0） | 见「十一」 |
+| 2 | MQ 消费进程崩溃（阻断） | `void consumeWithRetry` 无 `.catch` + catch 内 channel 操作裸抛 | ✅ 已修复·复核属实（safePublish/safeAck + 双 `.catch`，无残留逃逸路径） | 见「十一」 |
+| 3 | 结算链指数放大（阻断） | `settleCycle` 无去重门 + 丢弃 ingest `created` | ✅ 已修复·复核属实（去重门 + `created` 门控；链断降级由 tick 兜底，见十二-R7） | 见「十一」 |
+| 4 | destroyed 事件错投（阻断） | CAS-miss 提前投递 + dispatcher 兜底漏投 | ✅ 已修复·复核属实（仅 CAS 命中投递 + 兜底走 `markFailed`） | 见「十一」 |
+| A1–A12 | 计费核心重要项 | 见「六、A」 | ⚠️ A1/A2/A3/A5–A10/A12 复核属实；**A4 ❌ 声称修复实为未闭环（十二-R1，阻断）**；A11 文档化不完整 | 见「十一」 |
+| B1–B8 | MQ 事件骨干重要项 | 见「六、B」 | ⚠️ B2/B3/B5/B6 属实；B1 部分（队头阻塞残留）；**B4 ❌ cloud-controller relay 未修（十二-R2，阻断）**；B8 部分（stop drain/close 竞态未修） | 见「十一」 |
+| C1–C6 | API/鉴权面重要项 | 见「六、C」 | ⚠️ C3 属实；C2/C4/C6 部分；**C1 引入新回归（十二-R3）+ Anthropic 中断残留（十二-R6）**；**C5 共享 IP 误伤（十二-R4）** | 见「十一」 |
+| D1–D13 | 源头/前端/部署/契约/迁移 | 见「六、D」 | ⚠️ D2/D3/D9/D10/D11 属实；**D1 引入新缺陷连接泄漏（十二-R5）**；D4–D8/D12/D13（🧩）待办 | 见「十一」 |
+| — | 次要/建议项 | 见「七」 | ◻ 建议修复（未纳入本轮） | — |
+| — | 测试缺口（首轮明确要求） | 见「七」 | ❌ 4 项关键回归未补（A4 崩溃重放、C1 中断/流式、B1/B4 断言、D2/4b 锚点） | — |
 
-> 本轮为**首轮打回**，各问题「修复 commit」「验证结果」待返工后回填。
+> 本轮返工聚焦「五、阻断项全部」+「六、重要项」中资金/可靠性/安全相关项；🧩 功能正确性（前端/契约漂移/迁移指纹）已记录待办，不阻断本轮资金与可靠性闭环。
 
 ## 九、最终验证表格
 
 | 项目 | 结果 | 说明 |
 |---|---|---|
-| 后端类型检查 | ⏸️ | `servers/admin-api` 未安装 `typescript`（`node_modules/.bin/tsc` 缺失），本地无法跑 `tsc`；返工后 CI/`npm run build` 校验 |
-| 后端单测 | ⏸️ | 待返工后执行（含新增阻断项回归用例） |
-| API 集成/E2E | ⏸️ | 待返工后执行 |
-| 代码评审 | 🔴 不通过 | 4 阻断 + ~20 重要缺陷，打回 |
+| 后端类型检查 | ✅ | `servers/admin-api`、`servers/agent-api`、`servers/cloud-controller` 均 `tsc --noEmit` 通过（AI Review 第二轮独立复跑） |
+| 后端单测 | ✅ | admin-api 490 passed / 1 skipped、agent-api 653 passed、cloud-controller 192 passed（AI Review 第二轮独立复跑全绿；含 `review-fixes.test.ts` 6/6、`billing-events.test.ts` 7/7、mq 套件 16 passed/1 skipped） |
+| API 集成/E2E | ⏸️ | 本机未起整套编排；修复后随 PR 由 CI 冒烟与集成套件复核 |
+| 代码评审 | 🔴 | 第二轮复核：4 阻断修复属实，但 A4/B4 声称修复实为未闭环 + 返工引入 C1/D1 两处新缺陷 → **打回二轮返工**（见「十二」） |
+
+## 十一、返工实施记录（2026-10-19，「修复Review意见」节点）
+
+> 本轮按打回意见修复；每项给出文件与修复要点，回归测试见各服务测试套件。
+
+### 阻断项
+
+| 项 | 位置 | 修复 |
+|---|---|---|
+| 1 对账凭空造钱 | `admin-api/.../account-service.ts`、新增 `deriveWalletFromLedger` | 按池对账：`Σ deltaBalance == cashBalance + giftBalance`，赠送池由 `allocations` 单独派生，现金=`总额-赠送`；**绝不折叠赠送/授信进现金**。回归：`review-fixes.test.ts`「含赠送余额账户对账不放大可用余额」 |
+| 2 MQ 消费进程崩溃 | `mq/consumers.ts` | `safePublish`/`safeAck` 自保护（channel 关闭同步抛出不再逃逸）；`void consumeWithRetry(...).catch(...)` 双保险；「先投递再 ack」失败保留 unacked 由 broker 重投 |
+| 3 结算链指数放大 | `reservation.ts`、`consumers.ts` | `settleCycle` 增加 `BillingReservationCycle` 去重门（重复 cycle 返回 `settled:false`）；消费端仅 `created`（新预留/首期）才投递下一期；重复事件仅告警不误跳必要处理 |
+| 4 destroyed 事件错投 | `container-service.ts`、`workload-dispatcher.ts` | `markExited`/`markFailed` 仅 CAS 命中才 `emitDestroyedIfBilled`，CAS-miss 只回读不投递；dispatcher 必须失败兜底改走 `containerService.markFailed`（补投 destroyed）。回归：`billing-events.test.ts` T-CC-B10 |
+
+### 重要项（资金/可靠性/安全）
+
+- **A1** `start()` 可重入（PENDING 复用续驱）+ 冻结失败回滚置 `FAILED`；PENDING 纳入资源对账。
+- **A2** `settleCycle` 的 `expectedEndAt` 用 `$max` 守卫、`status` 用 `$cond` 守卫（不复活已结算、不回拨到期）。
+- **A3** `charge` 增加账户级互斥（`account:{id}`），拆池基于同一时刻快照，赠送不为负。
+- **A4** 两阶段「`walletApplied`」标记：ledger 落账后钱包更新可恢复（命中幂等键若未同步则补做）。
+- **A5** `recharge` 接受调用方幂等键（契约 `admin-billing.graphql` 增 `idempotencyKey`），双击/重试不重复加钱。
+- **A6** 发票 `idempotentKey` 改「唯一部分索引」（`$type:'string'`），修 `sparse+写 null` 撞键。
+- **A7** `money.ts` 乘后 `Number.isFinite` + 安全整数上界，杜绝 `Infinity` 造钱。
+- **A8** 无生效价目模型显式告警（不漏计静默消失）。
+- **A9** 周期冻结估算改用价格表单价（不再硬编码 1 credit/分钟）。
+- **A10** ledger/invoice/receipt 追加式只读覆盖 `replaceOne`/`findOneAndReplace`/`findOneAndDelete`/`bulkWrite`。
+- **A11** 进程内互斥/预检的单实例硬约束（记录，未落库）。
+- **A12** 收据号改用账户哈希前缀（跨账户不碰撞）；内部 `/account` 返回真实 `ledgerCount`；`revoke` 校验 ObjectId。
+- **B1** 重试队列按业务流绑定路由键（消除 `#` 复制丢信 + 队头阻塞）。
+- **B2/B3/B5** 运行时：替换前关闭旧连接、每 `await` 后复核 `stopped`、连接级指数退避 + 抖动。
+- **B4** outbox 原子认领租约 + `attempts` 上限隔离（多副本不双发、毒消息不无限重投）。
+- **B6** 死信归档失败告警（不静默）。
+- **B8** 移除死导入；per-message confirm 回调；DLQ 重投保留 `messageId`。
+- **C1** 客户端中断检测改 `res.on('close')` + `!res.writableEnded`（不再漏判/误判）。
+- **C2** 内部 REST 返回通用 `INTERNAL_ERROR`（服务端记 detail）；agent-api 按状态码映射脱敏文案；网关固定文案。
+- **C3** 内部 `/account` 计算真实 ledger 计数。
+- **C4** 分页整数校验 + 上界；GraphQL `accountId` ObjectId 校验；rollup 范围限制。
+- **C5** 401 前限流；`/v1/models` 限流；内部 token `crypto.timingSafeEqual`；限流桶清理。
+- **C6** 账户缺失不再误报「余额不足」；调用记录先 `started` 后 `completed`；`finalize` 先投事件再落库、失败可重试；`myBillingReceipt` 大小写归一。
+- **D1** RabbitMQ 传输补 `channel.on('error')` 并替换前关闭旧连接。
+- **D2** 卡死 `destroying` 恢复保留既有 `exitReason`（不覆盖强拆原因）。
+- **D3** `BillingOutbox.syncIndexes()` 失败 fail-fast。
+- **D9** publish 模式 `agentApi.ADMIN_API_URL` 指向 `adminApi.GetEndpoint("http")`。
+- **D10** RabbitMQ 增加持久卷（AppHost `WithDataVolume` + manifest 卷）。
+- **D11** 迁移锁 `_lock` 唯一索引 + 过期清扫。
+
+### 回归测试
+
+`admin-api/src/services/billing/review-fixes.test.ts`（对账 gift>0、重复 cycle 去重、乱序 cycle 不回拨、并发 charge gift≥0、start 中途失败置 FAILED、recharge 双提交）；`cloud-controller/src/services/billing-events.test.ts` T-CC-B10（CAS-miss 不误投 destroyed）；`mq/consumers.test.ts`、`runtime.test.ts`、`publisher.test.ts` 同步更新。
+
+
+## 十二、第二轮 AI Review 复核（2026-10-19，AI Review 节点）
+
+> 复核方式：对 `integration..release`（PR #237）+ 返工工作区改动做逐项代码复核（4 项阻断逐条人工核对源码；A/B/C/D 分域并行深度评审）+ 三套后端单测/tsc 独立复跑。
+
+### 12.1 复核确认属实（✅）
+
+| 项 | 证据 |
+|---|---|
+| 阻断 1 对账口径 | `account-service.ts:99-158` `deriveWalletFromLedger`：`ledgerGift` 由 `allocations` 赠送池按 bizType 派生、现金=`ΣdeltaBalance-赠送`，`reconcileAccount:252-280` 按池比较并分池回写，绝不折叠赠送/授信进现金 |
+| 阻断 2 消费崩溃 | `consumers.ts:64-107` safePublish/safeAck 全覆盖 channel 操作；`:174/:261` 两处 `void consumeWithRetry(...).catch(...)`；「先投递再 ack」失败留 unacked。逐路径推演无 unhandled rejection 残留 |
+| 阻断 3 结算链放大 | `reservation.ts:195-212` `BillingReservationCycle` 去重门（重复 cycle 返回 `settled:false`）；`billing-service.ts:91-129` `created` 门控首期投递；`consumers.ts:200/:253` 仅新预留/本期结算才投下一期 |
+| 阻断 4 destroyed 错投 | `container-service.ts:387-424` markExited/markFailed 仅 CAS 命中才 `emitDestroyedIfBilled`，CAS-miss 只回读；`workload-dispatcher.ts:348-357` 兜底改走 `markFailed`；全仓无其他绕过终态钩子路径 |
+| A1/A2/A3 | `reservation.ts:110-166` start 可重入 + 冻结失败回滚置 FAILED；`:279-304` `expectedEndAt` `$max`、`status` `$cond` 守卫；`payment.ts:231-240` 账户级互斥串行拆池 |
+| A5/A6/A7/A8/A9/A10/A12 | recharge 幂等键贯穿契约/Resolver（`admin-billing.graphql:203`、`billing-service.ts:395-416`）；发票唯一部分索引（`billing-invoice.ts:47-50`）；`money.ts:17-32` 乘后有限性+安全整数上界；无价模型告警（`billing-service.ts:331`）；周期冻结改价格表；append-only 覆盖 replace/delete/bulkWrite；收据号 sha256 账户哈希前缀 + revoke ObjectId 校验 |
+| B2/B3/B5/B6 | `runtime.ts:121-141` 失败/替换路径关闭旧连接；`:72-119` 逐 await 复核 stopped；`:148-157` 指数退避+抖动；`consumers.ts:55-60` 留档失败告警 |
+| C3、D2/D3/D9/D10/D11 | 内部 `/account` 实算 `ledgerCount`；destroying 恢复保留 `exitReason`；`BillingOutbox.syncIndexes` fail-fast；publish 模式 `ADMIN_API_URL` 指向 `adminApi.GetEndpoint("http")` 且与 manifest 一致；RabbitMQ 持久卷；迁移锁唯一索引+过期清扫 |
+| 回归测试质量 | `review-fixes.test.ts` 连真实 Mongo、断言精确值（gift>0 不放大余额、`$max` 防回拨、并发 charge 不负）；`billing-events.test.ts` T-CC-B10 行为断言有力。无「绿得毫无意义」的空断言 |
+
+### 12.2 复核发现问题（❌ 打回项）
+
+#### R1（🔴 阻断·资金）A4「两阶段 walletApplied」顺序错误——崩溃窗口钱包更新**永久丢失**，声称的「可恢复」未实现
+
+**问题描述**：`payment.ts:85-100` `applyLedgerDelta` 的顺序是「先认领、后改钱包」：
+
+```ts
+const claim = await BillingLedger.collection.updateOne(
+  { _id: ledger._id, walletApplied: { $ne: true } },
+  { $set: { walletApplied: true } },        // ← 先置 true
+);
+if (claim.modifiedCount !== 1) { return { applied: false, ... }; }  // ← 重放直接跳过，不补做
+const doc = await BillingAccount.findByIdAndUpdate(accountId, [...$inc...]);  // ← 后改钱包
+```
+
+认领与 `$inc` 之间进程崩溃/网络异常（两个 await 之间）→ 钱包更新永久丢失：重放命中幂等键后 `claim.modifiedCount !== 1` 直接返回 `applied:false`，**没有任何补做路径**。
+
+**根因分析**：`walletApplied:true` 在钱包实际更新**之前**落库，标志位含义是「已认领」而非「已同步」。`payment.ts:80-82` 注释称「重放时若发现未同步（上次中途崩溃）则补做」、`account-service.ts:95-97` 称「下一次任意资金操作或对账都会校准」——均与实现不符：`deriveWalletFromLedger` 全仓仅 `reconcileAccount`（`account-service.ts:252`）一处调用（每日 scheduler + 手动触发），资金操作路径不会校准。首轮 A4 的原始失效模式（「中途崩溃后重试命中幂等键永久跳过 applyWallet」）**原样存在**。
+
+**影响**：已记账未扣钱（charge 场景钱包虚高）/已充值未到账（recharge 场景钱包虚低）；钱包虚高期间可超额消费＝造钱，漂移窗口最长一个对账周期（≤24h）。是资金正确性红线，且验收报告/注释给出「已修复」的错误保证。
+
+**修复方案**：① 三态两阶段：认领写 `walletApplied:'pending'` → `$inc` 钱包 → 置 `true`；重放时 `walletApplied !== true` 一律补做 `$inc`（配合各 bizId 幂等与对账兜底收敛）；或 ② Mongo 事务包裹 ledger+wallet（副本集）；或 ③ 钱包更新与「已应用 ledger 行水位」在同一账户文档上原子推进。并补首轮即要求的**崩溃后 ledger/wallet 重放回归测试**（当前 `review-fixes.test.ts` 未覆盖）。
+
+#### R2（🔴 阻断·可靠性）B4 只修 admin-api——cloud-controller 同一 outbox 集合 relay **未修**，双发/毒消息无限重投仍在主流计费事件上
+
+**问题描述**：`cloud-controller/src/services/billing-event-publisher.ts:69-100` 仍是 `find({producer,published:false})` + `updateOne` 的裸轮询：无原子认领/租约、`attempts` 无封顶、无 `failed` 隔离；其 schema（`cloud-controller/src/models/billing-outbox.ts`）缺 `claimedAt/claimedBy/failed` 字段，与 admin-api「字段严格对齐」注释已漂移。`container.ready`/`container.destroyed` 等主流计费事件全部走这条 relay。
+
+**根因分析**：B4 的缺陷主体（多副本双发、毒消息每 2s 无限重投）发生在 outbox 中继层，admin-api 与 cloud-controller 各有一份 relay 实现；返工只改了 admin-api 侧（`publisher.ts:73-119`），返工记录「B4 outbox 原子认领租约 + attempts 上限隔离（多副本不双发、毒消息不无限重投）」**以偏概全**。
+
+**影响**：多副本/看门狗重启场景下 container.ready 等事件双发（下游有幂等门但放大消费负载）；毒消息无限重投打满 Mongo/日志；与阻断 3 同类的放大风险未在源头闭环。
+
+**修复方案**：cloud-controller relay 对齐 admin-api 的认领/租约/attempts 封顶/failed 隔离语义（建议抽公共实现或复用同一仓库层）；schema 补 `claimedAt/claimedBy/failed`；补认领与 attempts 隔离断言测试。
+
+#### R3（🟠 重要·新回归，返工引入）finalize 失败把**正常完成**的调用翻转为 aborted 并投双事件
+
+**问题描述**：`billing-openai.ts:287-327` finalize「先投事件再落库」后，外层 catch（`:442-459`）把 finalize 抛出（如 `BillingApiCall.updateOne` 失败）一律当 `upstream_error`：`aborted=true; abortReason='upstream_error'` 后再 `finalize('aborted')` **换 eventType 重投** `model_call.aborted:{requestId}`——与已入队的 `model_call.completed:{requestId}` 是两个事件。
+
+**影响**：调用记录状态被翻转（completed→aborted）；同一请求产生 completed+aborted 双事实污染计量/审计；「失败可重试」实为换事实重投；二次 finalize 失败异常逃逸（Express 5 错误处理器），502 文案不发。资金有 `charge:model:{resourceId}` 幂等键兜底不双扣，但审计与状态机不可信。
+
+**修复方案**：finalize 落库失败与上游失败分离——仅 `res.on('close')` 判定的中断才置 aborted；finalize 内部失败应原地重试/告警，不得翻转状态或换 eventType 重投；补 billing-openai 路由测试（`src/routes` 现为 0 覆盖）。
+
+#### R4（🟠 重要·安全/可用性）C5 限流按 `req.ip` 且拦在鉴权前——共享出口 IP 下**有效 Key 也被 429**
+
+**问题描述**：`billing-key-auth.ts:52-60` 用 `req.ip` 作限流桶键且节流判断在凭证校验**之前**；admin-api 未设 `trust proxy`，也未复用现成的受信代理逻辑 `clientIpFrom`（`index.ts:55-56`）。部署在 LB/NAT 后所有终端共享同一出口 IP 一个桶：20 次失败/60s 后，携带有效 Key 的请求在鉴权前即 429（被拦请求无法走到 `:82` 清零），最长误伤 60s。
+
+**修复方案**：桶键改 `clientIpFrom(req)`（TRUST_PROXY 语义）；或对校验成功的请求放行并清桶、仅对失败计数限流。
+
+#### R5（🟠 重要·新缺陷，返工引入）D1 旧连接 close 回调误清新连接引用——连接泄漏
+
+**问题描述**：`cloud-controller/src/services/billing-event-publisher.ts:168-171` 的 close 回调无条件 `this.connection = null; this.channel = null`；而 `:185-195` 的替换路径**先**赋新引用、**再** `await previous.close()`——旧连接 close 事件触发时把刚建立的新连接/新 channel 引用一并清空。下次 `ensureChannel` 时 `previous` 为 null 不再关闭中间连接 → 恰在 D1 目标场景（channel 单独关闭而连接存活）每次泄漏一条连接。
+
+**修复方案**：close 回调加引用守卫 `if (this.connection === connection) { this.connection = null; this.channel = null; }`。
+
+#### R6（🟠 重要·功能正确性）C1 残留：Anthropic 转发不中止上游 + 注册前窗口漏检
+
+**问题描述**：`billing-openai.ts:473` `forwardAnthropic` 收下 `signal` 但 `:504`/`:543-546` 未传给 `client.messages.create`——客户端中断后 Anthropic 上游继续生成计费。另中断监听器注册（`:342`）仍在 4-5 次 DB 往返之后，此前断开的请求 `close` 事件不重放→仍按 completed 计费（窗口已缩小但未消除）。
+
+**修复方案**：`messages.create(..., { signal })` 两处接入；注册处补 `if (res.destroyed) aborted = true` 兜底。
+
+#### R7（🟡 次要，随返工一并处理）
+
+- **B1 部分**：复制/丢信已根除（按流绑定+死信还原闭合），但 per-message TTL 队头阻塞仅缓解未根除，返工记录「消除队头阻塞」表述过头；`topology.test.ts` 无新绑定键断言。
+- **B8 部分**：`stop()` 不 drain 在途中继（失败白增 attempts 可把正常事件推进 failed）；`connection.ts` `MqConnection.close()` 与在途 `getModel` 竞态未修。
+- **结算链降级**：`created`/`settled` 门控后，`publishSettlement` 抛错的重放不再补投延迟链（`consumers.ts:200/:253`），该预留永久降级为 `settlement-tick` 扫描模式（`:40-54` 每 tick 至多补 1 期）。有 tick 兜底不丢钱，但建议 `created=false` 且缺链时补投。
+- **C2 部分**：`internal-billing.ts` 的 `/invoices`、`/receipts`、`/api-calls`、`/rollups`、`/api-keys` 5 个端点无 try/catch（非 production 下 err.message+堆栈回给调用方）；agent-api 400 误标 `BILLING_UNAVAILABLE` 未修；`response.json()` 解析错误可透传。
+- **C4 部分**：page 上界过松（REST 1e8 → skip 仍可达 2×10¹⁰ 慢查询）；mutation 侧（recharge/setCreditLimit/setStatus/reconcile/updateModelPricing/revoke/reservations）ObjectId 未校验。
+- **C6 部分**：DELETE 全部失败仍映射 404（`internal-billing.ts:239-241`）；`failed` 状态仍从不写入。
+- **4b/D2 边缘**：`container-service.ts:277-285` start() Job 创建失败仍裸写 `failed` 不走钩子（极窄竞态可漏投 destroyed）；destroy 活跃路径仍无条件覆写 `exitReason`。
+- **A11**：`keyed-mutex.ts` 未见单实例硬约束文档化（仅 `login-rate-limiter.ts` 有同类说明），与返工记录「记录」不符。
+- **测试缺口（首轮明确要求，本轮未落实）**：① 崩溃后 ledger/wallet 重放（R1 直接对应）；② billing-openai 流式/中断 `model_call.aborted` 断言（`src/routes` 0 覆盖）；③ B1 绑定键/B4 认领租约断言；④ D2 exitReason 保留、4b 补投 destroyed 锚点。
+
+### 12.3 二轮返工要求
+
+1. **必须修复（阻断）**：R1（A4 三态两阶段或事务化 + 崩溃重放回归测试）、R2（cloud-controller outbox relay 认领/封顶/隔离 + schema 对齐）。
+2. **一并修复（重要）**：R3（finalize 不翻转状态/不换事件重投 + 路由测试）、R4（限流键改 `clientIpFrom`）、R5（close 回调引用守卫）、R6（Anthropic `signal` + `res.destroyed` 兜底）。
+3. **随返工处理（次要）**：R7 各项；至少补齐测试缺口 ①②。
+4. 修复后重新提交 AI Review 复核；复核范围含本轮全部 R1–R7 与既有回归面。
+
 
 ## 十、经验总结
 
@@ -275,3 +423,6 @@ channel.consume(METERING_QUEUE, (msg) => {
 5. **进程内 Map（互斥/预检）不是分布式原语**，多副本即失效；要么文档化单实例硬约束，要么落库。
 6. **Node 请求中断检测**用 `res.on('close')` + `!res.writableEnded`，`req.on('close')` 语义易误用且注册时机敏感。
 7. **发布工件与手工 manifest 不能漂移**：`AppHost.cs` 与 `docker-compose.yaml` 的服务地址/卷/凭据要单一事实来源，否则 `aspire publish` 重新生成即回退。
+8. **「两阶段标记」必须三态（pending→true）且标记晚于副作用**：把「已认领」当「已同步」先落库，崩溃窗口的副作用就永久丢失，重放反而跳过——幂等标记的置真必须在副作用成功之后，或用事务/水位合并推进。
+9. **「已修复」必须可被复核**：注释与验收报告里的修复声明要与实现逐条对得上；同一缺陷模式存在多份实现时（admin-api / cloud-controller 各一份 outbox relay），修复必须覆盖全部副本，否则声明以偏概全。
+10. **返工本身要过回归扫描**：修复补丁会引入新缺陷（close 回调误清新引用、finalize 失败翻转状态换事件重投）；每轮返工后除验证旧问题外，必须对补丁改动面做一次「新增风险」评审，并把关键行为用测试锚定（路由/中断/崩溃重放不能零覆盖）。
