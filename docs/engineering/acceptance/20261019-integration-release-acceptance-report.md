@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review：首轮 3 阻断 + 13 重要打回；第二轮复核（返工 70990a9）发现 A-2 租约状态机死代码等再打回；第三轮复核（返工 d96d3ee）确认 R2-1~R2-6 实现侧多数真修复但探针实证 R2-1 回归仍空转（🔴）等打回；第四轮复核（返工 2a95c4a）以双探针实证 R3-1 回归已可证伪（Probe A/B 双红）、R3-2/R3-3/R3-4 实现为真、R3-5~R3-7 收口属实，但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证仍空转（修复前照过，空转回归模式连续第三轮）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，双崩溃恢复尾段永久漏收且 lastSettleAt 仍推过未收费窗口（声明过度、残余风险未声明），第四轮打回
+description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review：首轮 3 阻断 + 13 重要打回；第二轮复核（返工 70990a9）发现 A-2 租约状态机死代码等再打回；第三轮复核（返工 d96d3ee）确认 R2-1~R2-6 实现侧多数真修复但探针实证 R2-1 回归仍空转（🔴）等打回；第四轮复核（返工 2a95c4a）以双探针实证 R3-1 回归已可证伪（Probe A/B 双红）、R3-2/R3-3/R3-4 实现为真、R3-5~R3-7 收口属实，但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证仍空转（修复前照过，空转回归模式连续第三轮）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，双崩溃恢复尾段永久漏收且 lastSettleAt 仍推过未收费窗口（声明过度、残余风险未声明），第四轮打回；第九轮复核（返工 489925a）R8-1 五项全部落实、探针实证回归可证伪、残余声明如实化，验收通过（ACCEPT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-19，AI Review）
 
-> **状态**: ❌ **AI Review 六轮均打回（REJECT）**（**第六轮见 [第十二节](#十二第六轮-ai-review-复核2026-10-20ai-review-节点打回)**：返工 `9d33472` 的 R5-1 游标绝不回退与 R5-2 零价尾段落 0 元流水**已真修复**——两个区分性回归经本轮独立探针实证可证伪（回退至 `3829c65` 红于 `expected 1790812980000 to be 1790813100000` 与 `expected null not to be null`），七层独立复跑全绿（536/197/658/207/429 + tests/api 454/0 + E2E 3）与自报逐项一致；但本轮新发现 🟠 **R6-1**：「扣费完成 → 开票前」崩溃窗口下**已扣费永久无账单/收据**、重放无法补建（tail/main 两路径探针实证账单数 0，SETTLING 恢复路径对照为绿），且 `9d33472` 新增注释「仍回填金额以便补建幂等账单」所述补建机制在串行前提下**不可达**（声明与实现不符，同 R2-3/R5-1④ 缺陷模式）、容器「charge 无 invoice」无任何对账线（R2-4 只补了 API 调用侧））；第二轮见 [第八节](#八第二轮-ai-review-复核2026-10-19ai-review-节点打回)，第三轮见 [第九节](#九第三轮-ai-review-复核2026-10-19ai-review-节点打回)，**第四轮见 [第十节](#十第四轮-ai-review-复核2026-10-19ai-review-节点打回)**：返工 `2a95c4a` 的 R3-1 崩溃残留回归经双探针回退实证**已可证伪**（Probe A/B 均红于 `expected 100701 to be 100801`）、R3-2 收敛护栏/R3-3 尾段补收/R3-4 零费率回归实现为真、R3-5~R3-7 收口属实，五套单测本机复跑全绿（533/197/658/207/429），但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证**仍空转**（该用例在修复前 `reconciliation.ts` 上照常通过，空转回归模式连续第三轮发生）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，**双崩溃恢复**尾段 `[T2,T3]` 永久漏收且 `lastSettleAt` 仍推过未收费窗口（「不推过未收费窗口 ✅」声明过度，残余风险未声明））——首轮——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，首轮**打回返工**；返工（`70990a9`）后第二轮复核**再次打回**（见第八节）。
+> **状态**: ✅ **第九轮 AI Review 复核通过（ACCEPT）**——R8-1 返工 `489925a` 五项全部落实（残余声明如实化：`MeteringRecord.invoiced` 只写不读、无发现线、无兜底；容器收据补建线按账单键推导 `eventId` 传 `meteringIds`，与 `repairCycleInvoice` 逐字段同标准；提案文档「出账游标」表述更正），经本轮独立探针实证（回退 `385da92` 红于 `billing-flow.test.ts:657 expected false to be true`）与 admin-api 全量独立复跑（542 passed / 1 skipped、tsc 0）确认真修复，残余表已无任何虚指兜底，**integration 集成验收通过**，详见 [第十五节](#十五第九轮-ai-review-复核2026-10-20ai-review-节点通过)。历史结论存档：第一~八轮均打回（REJECT）（**第六轮见 [第十二节](#十二第六轮-ai-review-复核2026-10-20ai-review-节点打回)**：返工 `9d33472` 的 R5-1 游标绝不回退与 R5-2 零价尾段落 0 元流水**已真修复**——两个区分性回归经本轮独立探针实证可证伪（回退至 `3829c65` 红于 `expected 1790812980000 to be 1790813100000` 与 `expected null not to be null`），七层独立复跑全绿（536/197/658/207/429 + tests/api 454/0 + E2E 3）与自报逐项一致；但本轮新发现 🟠 **R6-1**：「扣费完成 → 开票前」崩溃窗口下**已扣费永久无账单/收据**、重放无法补建（tail/main 两路径探针实证账单数 0，SETTLING 恢复路径对照为绿），且 `9d33472` 新增注释「仍回填金额以便补建幂等账单」所述补建机制在串行前提下**不可达**（声明与实现不符，同 R2-3/R5-1④ 缺陷模式）、容器「charge 无 invoice」无任何对账线（R2-4 只补了 API 调用侧））；第二轮见 [第八节](#八第二轮-ai-review-复核2026-10-19ai-review-节点打回)，第三轮见 [第九节](#九第三轮-ai-review-复核2026-10-19ai-review-节点打回)，**第四轮见 [第十节](#十第四轮-ai-review-复核2026-10-19ai-review-节点打回)**：返工 `2a95c4a` 的 R3-1 崩溃残留回归经双探针回退实证**已可证伪**（Probe A/B 均红于 `expected 100701 to be 100801`）、R3-2 收敛护栏/R3-3 尾段补收/R3-4 零费率回归实现为真、R3-5~R3-7 收口属实，五套单测本机复跑全绿（533/197/658/207/429），但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证**仍空转**（该用例在修复前 `reconciliation.ts` 上照常通过，空转回归模式连续第三轮发生）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，**双崩溃恢复**尾段 `[T2,T3]` 永久漏收且 `lastSettleAt` 仍推过未收费窗口（「不推过未收费窗口 ✅」声明过度，残余风险未声明））——首轮——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，首轮**打回返工**；返工（`70990a9`）后第二轮复核**再次打回**（见第八节）。
 
 ## 关联文档
 
@@ -819,3 +819,49 @@ R7-1①~④ 全部属实（14.1）；探针签名 `expected +0 to be 1` 与第�
 1. **残余表里的每个「可发现」都要指得出代码路径**：写「`X` 可发现」之前先 `grep` 出 `X` 真正的查询点——本轮 `MeteringRecord.invoiced` 全仓零读取，声明的兜底网并不存在。经验判据：**残余行必须能附一条 grep 命中行号**，否则写「无发现线」。
 2. **「同标准」要按字段级而非函数级核对**：两条线都调 `invoiceExistingCharge` 不等于同标准——本轮收据口径一致、`meteringIds` 口径不一致。核对法：把两条线的**入参逐字段**列出来比对。
 3. **只写不读的字段是残余声明的高发区**：`MeteringRecord.invoiced` 被设计文档称为「出账游标…可重置重扫」，但 `resetCursor` 只管 `BillingEvent.metered`——设计意图与实现脱节，且因为无读取面，任何测试都测不出来。新增派生标记时，先证明它有读取方，否则不要进 schema。
+
+## 十五、第九轮 AI Review 复核（2026-10-20，AI Review 节点·通过）
+
+> 复核对象：返工提交 `489925a`（基线 `9257f14`，增量 6 文件：`20261019-integration-release-review-fixes.md` / `20261018-feat-credits-billing.md` / `models/metering-record.ts` / `billing-flow.test.ts` / `billing-service.ts` / `receipt.ts`）。
+> 复核口径不变：**不采信自报**；探针回退为固定复核手段；断言以业务事实为单位；残余声明逐条对照真实代码路径（grep 命中行号）。
+
+### 15.1 R8-1 返工核验（✅ 五项全部达标，逐条独立核验）
+
+| 子项 | 状态 | 实现 / 证据（本轮独立核验） |
+|---|---|---|
+| ① 残余声明如实化（不再声称 `reconcileMetering` 可发现） | ✅ | §11.4 #3 / §11.5 已改写为「**无发现线、无兜底**」。本轮全仓 `grep "invoiced"`（排除 node_modules/dist）复核：写入点仅 `metering-record.ts:22`（schema 默认）、`billing-service.ts:943`（create false）、`billing-service.ts:1019/1082`（`$set true`）、`metering.ts:125`（create false）；**零业务读取**（`reconciliation.ts:471/474`、`billing-service.ts:209/222/379/381` 为同名局部变量；`billing-flow.test.ts:657` 为本轮新增测试断言，非业务读取面）。`reconcileMetering`（`reconciliation.ts:119-135`）判定的是 `BillingEvent.metered:false`——本轮逐行核对属实 ✅ |
+| ② §11.4 #2 残余补全 | ✅ | 改为「✅ 收据可恢复（R7-1a）；对应 `MeteringRecord.invoiced` 在同一次重放中被置 `true`（R8-1 单测断言）」，并随 ③ 的代码修复一并消除 `meteringIds:[]` 残留 ✅ |
+| ③ 两线同标准（选 (a)） | ✅ | 补建分支（`billing-service.ts:384-406`）按账单键推导 `eventId`（`invoice:container-final-gap:<rid>:<from>` → `container:<rid>:final-gap:<from>`，否则 `container:<rid>:final`），`ensureMetering` 后传 `meteringIds`。**eventId 三处推导闭合**：主路径 `:238-243`（键后缀与 eventId 后缀同为 `windowFrom.getTime()`）、合并补建 `:447-455`、收据补建 `:386-396`（键切片 = 窗口起点）一致；`ensureMetering`（`:928-951`）按唯一 `eventId` 幂等（11000 → 回读既有），重放安全；`invoiceExistingCharge`（`:1079-1083`）置 `invoiced:true`。与 `repairCycleInvoice`（`:629-660`，`meteringIds: [String(metering._id)]`）**逐字段同标准** ✅ |
+| ④ 字段定位更正 | ✅ | `metering-record.ts:18-21` schema 注释 + 提案 `20261018-feat-credits-billing.md` §521/§708 更正为「派生标记、只写不读、非出账游标」。本轮核对 `MeteringService.resetCursor`（`metering.ts:70-73`）只 `$set { metered: false }`，确无 `invoiced` 重置路径 ✅ |
+| ⑤ 不扩大范围 | ✅ | `billing-service.ts` 唯一改动块为收据补建分支（`:384-406`）；计费/开票/收据主路径与 R7-1/R6-1/R5-1/R5-2/R4-2/R4-1/R3-1~R3-7 未被触碰，全量单测保持全绿 ✅ |
+| 展示级瑕疵注释 | ✅ | `receipt.ts:24-33` 已注释：补建收据 `issuedAt` 取补建时点，`receiptNo` 日期段反映补建日期（`seq` 取自账单，规则同主路径）✅ |
+
+### 15.2 探针验证（本轮独立实跑，不采信自报）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R9 Probe | `billing-service.ts` → `385da92`（`meteringIds:[]`，其余不动） | R7-1a（新增 `invoiced` 断言） | 🔴 `AssertionError: expected false to be true`（`billing-flow.test.ts:657:32`）——与返工声明、§12.2 **逐字一致**；恢复修复版后绿。回归**可证伪**、非空转 ✅ |
+
+### 15.3 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 本轮实跑 |
+|---|---|---|
+| admin-api 单测 | `npx vitest run` | ✅ **542 passed / 1 skipped**（55 文件） |
+| admin-api `tsc --noEmit` | `npx tsc --noEmit` | ✅ 0 |
+
+与返工自报逐项一致 ✅。**复跑范围说明**：`489925a` 增量仅触及 `servers/admin-api` 与 `docs`，cloud-controller / agent-api / admin-web / agent-web / tests 均未触碰，第十四轮七层复跑（542/1、197、658、207、429、tests/api 454/0、E2E 3）在其余各层仍然有效；按 14.3「不要求」约定，本轮不重开 Aspire 全量复跑。
+
+### 15.4 本轮如实登记的观察项（🟢 均不构成打回）
+
+1. **历史账单无 period 元数据的回退限定**：`billing-service.ts:389` `if (invoice.periodFrom && invoice.periodTo)`——无 period 元数据时不传 `meteringIds`（代码注释已披露「历史账单无 period 元数据时退回不传」），§12.1③「与 `repairCycleInvoice` 一致」未在文档表内复述该限定。当前全部开票路径均写入 `periodFrom/periodTo`（`:267-268`/`:485-486`/`:658-659`），仅存量老数据可能命中；机制真实、断言真实，属**限定未复述**而非声明不实，登记收口。
+2. **双崩溃合并补建的孤儿计量记录**：主账单缺失且 gap 计量已建未开票（需两次独立崩溃）时，合并补建（`:434-436`/`:452-455`）只引用/置位 `container:<rid>:final` 一条计量，早前 `container:<rid>:final-gap:<from>` 记录 `invoiced` 永久停在 false。该情形落入 §11.5 已声明的「`invoiced` 残留**无发现线、无兜底**」同一类别（死字段、零读取、不参与计费/开票/收据/对账判定），且源自 R6-1 合并补建设计（**非 `489925a` 引入**）。非资金/凭证/账实，登记入残余册。
+3. 展示级瑕疵（补建收据 `issuedAt`/`receiptNo` 日期段取补建时点）已在 `receipt.ts` 注释说明，与 §14.5 一致 ✅。
+
+### 15.5 验收结论
+
+✅ **通过（ACCEPT）**。
+
+- **R8-1①~⑤ 全部落实**并经本轮独立探针（回退红于 `billing-flow.test.ts:657`）与 admin-api 全量复跑（542 passed / 1 skipped、tsc 0）实证；残余表已**如实**——不再存在任何「声称有兜底而实际没有」的虚指，`MeteringRecord.invoiced` 全线登记为「只写不读、无发现线、无兜底」。
+- **R7-1（收据缺失自愈）、R6-1（扣费/开票崩溃窗口）、R5-1/R5-2、R4-2/R4-1、R3-1~R3-7** 保持既定「真修复」结论，本增量未触碰。
+- 15.4 观察项均为死字段/展示级/文档限定说明，低于判定红线（🔴 阻断 / 🟠 重要 → 打回；🟡 建议 → 记录收口），随本报告登记收口，**不构成打回**。
+- 综上：`integration..release` 范围（费用中心 credits-billing + Aspire 工作负载下载代理，PR #238）经九轮集成级 AI Review（首轮 3 阻断 + 13 重要 → 逐轮返工实证收敛至 0），**integration 集成验收通过**，可进入 release 合并流程。
