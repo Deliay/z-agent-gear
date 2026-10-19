@@ -1,5 +1,5 @@
 ---
-description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review：首轮 3 阻断 + 13 重要打回；第二轮复核（返工 70990a9）确认 3 阻断真修复、独立复跑 1999 单测 + 453 API + 3 E2E 全绿，但发现 O-1 反向对账对隔离行/DLQ 不补投的静默漏计费盲区（🟠）+ 修复声明与实现多处不符（🟠）+ A-4/O1/T-2 修复要求子项缺失（🟠），再次打回
+description: integration→release 集成验收报告（PR #238）——费用中心（credits-billing）+ Aspire 工作负载下载代理集成级 AI Review：首轮 3 阻断 + 13 重要打回；第二轮复核（返工 70990a9）确认 R-1/A-1 真修复、独立复跑 1999 单测 + 453 API + 3 E2E 全绿，但发现 A-2 因 schema 缺 claimedAt 使租约自愈状态机成死代码（🔴 阻断级修复不完整，探针实证）+ O-1 反向对账对隔离行/DLQ 不补投的静默漏计费盲区（🟠）+ 修复声明与实现多处不符（🟠）+ A-4/O1/T-2 修复要求子项缺失（🟠），再次打回
 type: Permanent
 ---
 
@@ -227,7 +227,7 @@ flowchart LR
 
 ## 八、第二轮 AI Review 复核（2026-10-19，AI Review 节点·打回）
 
-> **状态**: ❌ **第二轮复核打回（REJECT）**。复核对象：返工提交 `70990a9`（基线 `integration` @ `9cea3c8`）。3 项阻断全部真修复 ✅，但复核发现：**1 项 🟠 重要级兜底盲区**（O-1 反向对账被隔离行/DLQ 逃逸 → 静默漏计费，与原 O-1 同性质缺陷换了面孔回来）+ **4 项 🟠 重要级「修复要求子项缺失/声明失实」**（A-4 对账线缺失、O1 错误映射收尾缺失、T-2 名实不符本体未修、多处修复声明 > 实现）。按红线「🟠 重要 → 打回」，本轮打回。
+> **状态**: ❌ **第二轮复核打回（REJECT）**。复核对象：返工提交 `70990a9`（基线 `integration` @ `9cea3c8`）。R-1/A-1 真修复 ✅，但复核发现 **1 项 🔴 阻断级修复不完整**（R2-1：A-2 `claimedAt` 缺失使租约/自愈状态机成死代码，崩溃窗口二次记账仍可复现，且回归测试空转——已本机探针实证）+ **5 项 🟠 重要**（R2-2 O-1 反向对账被隔离行/DLQ 逃逸致静默漏计费、R2-3 修复声明与实现多处不符、R2-4 A-4 对账线缺失、R2-5 O1 错误映射收尾缺失、R2-6 T-2 名实不符本体未修）。按红线「🔴/🟠 → 打回」，本轮再次打回。
 
 ### 8.1 复核方法与独立验证（不采信自报）
 
@@ -254,7 +254,7 @@ flowchart LR
 |---|---|---|
 | R-1 事件乱序重复计费 | ✅ 真修复 | `billing-service.ts:100-135` 门控在 `container:{rid}` 锁内（`destroyed` 事件存在或 `charge:container:<rid>:final` 落账 → 迟到 ready `skipped:true` 不建预留）；`:178-186` destroyed 锁内重读预留；两份 outbox `relayOnce` 失败即停本轮 + 释放认领（`billing-event-publisher.ts:420-422`、`mq/publisher.ts:181-182`）；`mq/consumers.ts:202-208` `!skipped && (created||retry>0)` 才投结算链；`billing-flow.test.ts:79-133` 真实断言乱序下 `charge` 恒 1 笔、不建预留 |
 | A-1 回滚蚕食冻结额 | ✅ 真修复 | `reservation.ts:179-211` `rollbackFreeze` 按 `{accountId, idempotentKey}` 查 freeze 落账、仅解冻 `min(deltaFrozen, amount)`、未落账零解冻；`settleCycle` `:276` 同口径补 accountId；回归断言「仅解冻落账额」「并存预留 B 不受影响」真实 |
-| A-2 水位淘汰二次记账 | ✅ 真修复 | 新增 `billingappliedledgers` `{accountId,ledgerId}` 唯一、不淘汰（`billing-applied-ledger.ts:24`）；`payment.ts:108-148` 状态机（applied→no-op / in-flight→不重复 / stale→`healWalletFromLedger` 绝对校准）；标记先行于钱包更新，崩溃窗口可自愈；灌 1001 条重放回归真实 |
+| A-2 水位淘汰二次记账 | ⚠️ 部分修复（**阻断级残留，见 R2-1**） | 不淘汰幂等集合 `{accountId,ledgerId}` 唯一索引属实（`billing-applied-ledger.ts:24`），覆盖新流水重放；但声明的租约/自愈状态机因 schema 缺 `claimedAt` **整体失效**（实证见 R2-1），回归测试空转 |
 | A-3 stale 误终结 | ✅ 真修复 | `settlement-tick.ts:45-85` 回读最新 `expectedEndAt` + `isAlive` 存活跳过 finalize；`reconciliation.ts:149-162` 存活只上报；`reservation.ts:504-568` SETTLED 后 `settleTailAfterSettled` 补结缺额（`charge:final-gap:<rid>:<from>`） |
 | A-6 跨账户纵深防御 | ✅ 真修复 | `payment.ts:84-93` `loadLedger` 归属不符即抛 + `:112-116` `applyLedgerDelta` 双重断言 |
 | D-1~D-5 前端/编排 | ✅ 真修复 | `adminBillingReceipt(invoiceId)` 直查 + 三态（`resolvers/billing.ts:192-201`）；`selected` 派生态消除方向翻转（`BillingPage.tsx:50,94-97,150`）；`billing-format.ts` 单位标注与自洽等式、双前端副本零漂移；三态空态修复 + 充值刷新；RabbitMQ 内网镜像 + healthcheck + depends_on + AGENTS 同步 |
@@ -265,7 +265,18 @@ flowchart LR
 
 ### 8.3 复核发现问题（❌ 打回项）
 
-#### R2-1（🟠 重要·资金正确性兜底残缺）O-1 反向对账对「隔离行/DLQ」不补投 → 静默漏计费盲区
+#### R2-1（🔴 阻断·A-2 修复不完整且声明失实）`claimedAt` 缺失使租约状态机成死代码，崩溃窗口二次记账仍可复现
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `servers/admin-api/src/models/billing-applied-ledger.ts:14-22`（schema 仅 `accountId/ledgerId/walletApplied/appliedAt`，**无 `claimedAt`**）；对照 `payment.ts:165-212`（`claimLedgerApplication` 以 `claimedAt` 做 CAS/租约过滤与接管） |
+| 问题 | mongoose 严格模式把非 schema 字段从 update 中剥离：`$set:{claimedAt}` **不落库**，filter `claimedAt:null` 恒真 → `tryClaim` 每次都拿到「claimed」，`in-flight`（`:204-205`）与 `stale`（`:206-212`）分支**不可达**，`healWalletFromLedger`（`:227-248`）永不执行，`LEDGER_APPLY_LEASE_MS=60s` 无效。修复声明「pending 在途→不重复；pending 租约过期→按 ledger 真值绝对校准自愈」**不成立** |
+| 实证 | 本评审以 mongodb-memory-server + 同构 schema 探针复现（`MONGOMS_SYSTEM_BINARY=/usr/bin/mongod`）：`tryClaim #1 → CLAIMED`；原始文档 `{...walletApplied:false, appliedAt:null, __v:0}` **无 claimedAt**（`claimedAt persisted? false`）；`tryClaim #2 → CLAIMED AGAIN`（租约失效） |
+| 后果 | `incWalletByLedger`（`:145`）与 `markLedgerApplied`（`:146`）之间崩溃、或 `markLedgerApplied` 吞 DB 错误（`:220` `.catch(()=>undefined)`）→ 标记永停 pending → 重放重新 claimed → 仅靠 `appliedLedgerIds` 水位（`$slice:-1000`）防重；同账户其后 >1000 笔钱包更新把该行挤出水位后重放**再次 `$inc`** → 幻影扣费 → `markInsufficient` → 10 分钟误强拆——**A-2 原后果类在崩溃窗口重现，而声明的兜底正是为堵这个窗口** |
+| 回归空转 | `review-fixes.test.ts:366-412`「水位淘汰（>1000 条）后重放」的 1001 条灌入是裸 `BillingLedger.create`（`:390-398`，`deltaBalance:0`），**从不经过 `applyLedgerDelta`**，水位（只含 `wm-key` 一条）从未被淘汰——返工前代码同样通过该测试，**测不出 A-2 缺陷也锚不住修复** |
+| 修复要求 | ① `claimedAt` 纳入 schema（或删去租约/自愈声明并明示仅靠水位+日对账、接受窗口风险）；② 回归改为真实挤出水位（经 `payments.charge/freeze` 灌 >1000 笔或直接构造被挤出的账户态），断言该测试**在修复前失败**；③ `markAllLedgerApplied` 移至钱包校准回写**之后**（现调用点 `account-service.ts:279` 在校准前，违反其自身不变量 `:333-335`），并考虑与 `accountMutex` 互斥 |
+
+#### R2-2（🟠 重要·资金正确性兜底残缺）O-1 反向对账对「隔离行/DLQ」不补投 → 静默漏计费盲区
 
 | 项 | 内容 |
 |---|---|
@@ -276,7 +287,7 @@ flowchart LR
 | 修复要求 | `eventRecorded` 不得把 `failed:true` 隔离行/死信视为已投递：补投需可执行（`repairEvent` 撞 eventId 时提供代偿路径，如重置隔离行重新入列、或以 `…:repair:<ts>` 新 eventId 补投并依赖消费端业务幂等）；补回归（ready+destroyed 双双隔离 → 对账后各补投一次且**不重复计费**） |
 | 复核标注 | 主评审已回读 `reconciliation.ts:302-337` 与 `billing-event-publisher.ts:156-166` 确认盲区属实 ✅ |
 
-#### R2-2（🟠 重要·对账纪律）多处「修复声明 > 实现」，违反「修复声明 ↔ 实现逐条对账」硬性要求
+#### R2-3（🟠 重要·对账纪律）多处「修复声明 > 实现」，违反「修复声明 ↔ 实现逐条对账」硬性要求
 
 | 声明 | 实际 | 位置 |
 |---|---|---|
@@ -289,7 +300,7 @@ flowchart LR
 **为什么是问题**：首轮返工要求明文「给出『修复声明 ↔ 实现』逐条对账」，对账表必须可信；声明与实现不符会让复核失去事实基础，且「名实不符测试」「未做的去重」正是 T-1/T-2 原问题本体。
 **修复要求**：逐条要么补实现、要么在对账表如实标注「未完成/部分完成」；旧 T-B22/T-B23 处置（改标题/补断言/删除）并消除重复测试 ID；O-1 日志级别与重试参数统一声明、注释、契约、实现四者口径。
 
-#### R2-3（🟠 重要·原修复要求未落实）A-4 对账线缺失
+#### R2-4（🟠 重要·原修复要求未落实）A-4 对账线缺失
 
 | 项 | 内容 |
 |---|---|
@@ -298,7 +309,7 @@ flowchart LR
 | 为什么是问题 | 回落只覆盖「productprices 缺档」；零费率价目档、网关外事件等残余免费路径（`billing-service.ts:402-407` 仍 `amountCents===0` 仅 warn）没有任何发现机制，正是 A-4 担心的「静默免费」残留 |
 | 修复要求 | 补对账线（`BillingApiCall.cost>0` 且无对应 invoice → 报告差异）；顺带覆盖「productprices 存在全 0 档时不回落也不告警」的静默免费（`pricing.ts:138-142` 只在缺档回落） |
 
-#### R2-4（🟠 重要·原修复要求未落实）O1 错误映射收尾缺失
+#### R2-5（🟠 重要·原修复要求未落实）O1 错误映射收尾缺失
 
 | 项 | 内容 |
 |---|---|
@@ -306,9 +317,9 @@ flowchart LR
 | 问题 | 修复要求「校验类错误补 `extensions.code`；补错误映射断言测试」两件均未落实；启发式正则也不覆盖「已存在」「余额不足」类消息 → 被掩码为 `INTERNAL_SERVER_ERROR`，可预期校验错误降级 500 语义 |
 | 修复要求 | 9 处补稳定 `extensions.code`（建议直接构造时即带 code）；补错误映射断言测试（MoneyError/ApiKeyNotFoundError/业务消息/未知错误四类各至少一断言） |
 
-#### R2-5（🟠 重要·测试可信度延续）T-2 名实不符本体未修
+#### R2-6（🟠 重要·测试可信度延续）T-2 名实不符本体未修
 
-见 R2-2 表末行。旧 T-B22/T-B23 仍以误导性标题通过空断言（可被空实现骗过），重复 ID 使报告引用无法唯一定位。修复要求：处置旧用例 + 消除 ID 重复 + POST 侧补「全 0 价目」400 `model_not_priced` 断言（现仅覆盖 `pricing:null` 一半）。
+见 R2-3 表末行。旧 T-B22/T-B23 仍以误导性标题通过空断言（可被空实现骗过），重复 ID 使报告引用无法唯一定位。修复要求：处置旧用例 + 消除 ID 重复 + POST 侧补「全 0 价目」400 `model_not_priced` 断言（现仅覆盖 `pricing:null` 一半）。
 
 ### 8.4 🟡 建议（随返工一并收口，不单独构成打回）
 
@@ -322,12 +333,16 @@ flowchart LR
 8. `apps/admin-web/src/pages/BillingPage.tsx:176-179` `receiptQuery.refetch()` 无 `receiptInvoice` 守卫（空 `invoiceId` 必败请求）；`toggleStatus` refetch 失败把「mutation 已成功」误报为「更新失败」且方向翻转窗口在故障模式下仍在。
 9. `aspire/manifest/docker-compose.yaml` 的 rabbitmq healthcheck/`service_healthy` 疑为生成物手工补丁，`AppHost.cs` 未固化 → 下次 `aspire publish` 可能漂移。
 10. 沿用首轮 5.3 未收口 🟡（per-message TTL 队头阻塞、UTC 桶本地时区展示、契约 500/502 文档化、死代码清理等）。
+11. A-1 余项：`settleCycle` 解冻额取 `reservation.cycleEstimateCents`（`reservation.ts:280`）而非 ledger 实际 `deltaFrozen`，与 `rollbackFreeze` 口径不一致，偏差时会超解冻；`rollbackFreeze` 全量吞错（`:208-210`）仅靠对账收口；「仅解冻实际冻结额」缺 `deltaFrozen ≠ amountCents` 的独立锚定用例。
+12. A-2 余项（R2-1 之外）：`markLedgerApplied` 全量吞错（`payment.ts:220`）；历史行缺口（上线前无标记流水被挤出水位后按未应用处理 → 二次 `$inc`，窗口至日对账）；`billing-ledger.ts:38` 注释仍称水位原子推进，与新机制不符。
+13. R-1 正确性依赖**单实例部署**：`billingMutex` 为进程内锁（`keyed-mutex.ts:4-7` 自陈「必须单实例运行」），多副本下 ready/destroyed 并发仍可绕过门控双计费（既有 A11 部署红线而非新引入）；修复声明与契约应显式标注该前提。outbox 认领按 `createdAt` 排序，同毫秒并列不保证 ready 先于 destroyed（消费端门控兜底，无资金风险）。
 
 ### 8.5 返工要求（第二轮打回理由）
 
-1. **必须修复**：R2-1（隔离行/DLQ 补投盲区 + 双隔离回归）、R2-2（声明↔实现对账失实逐条纠正）、R2-3（A-4 对账线 + 零费率档告警）、R2-4（9 处 `extensions.code` + 映射断言测试）、R2-5（旧 T-B22/T-B23 处置 + ID 去重 + 全 0 档 POST 断言）。
-2. **复核口径**：继续不采信自报数据；修复声明 ↔ 实现必须逐条一致，**未做的子项如实标注「部分修复」**，不得以「13/13」整单入账。
-3. 🟡 清单（8.4）随返工一并收口优先项 1/2/7/8。
+1. **必须修复（阻断）**：R2-1——`claimedAt` 入 schema（或删去租约声明并明示残余风险）+ 回归测试改为真实挤出水位（须在修复前失败）+ `markAllLedgerApplied` 移至校准回写之后。
+2. **必须修复（重要）**：R2-2（隔离行/DLQ 补投盲区 + 双隔离回归）、R2-3（声明↔实现对账失实逐条纠正，未做子项如实标注「部分修复」，不得以「13/13」整单入账）、R2-4（A-4 对账线 + 零费率档告警）、R2-5（9 处 `extensions.code` + 映射断言测试）、R2-6（旧 T-B22/T-B23 处置 + ID 去重 + 全 0 档 POST 断言）。
+3. **复核口径**：继续不采信自报数据；**声明的状态机/守卫必须给出可自证的回归**（测试须能区分修复前后），对账表逐子项打勾。
+4. 🟡 清单（8.4）随返工一并收口优先项 1/2/7/8。
 
 ### 8.6 经验总结（第二轮新增）
 
@@ -336,3 +351,5 @@ flowchart LR
 3. **修复声明本身是交付物**：对账表里一句「失败记 error」（实为 warn）、「去重」（实为未做）都会让复核失去锚点；**声明、注释、契约、实现四者口径一致**应作为返工的 Definition of Done。
 4. **「另起新测试」不等于「修掉被点名的测试」**：旧的名实不符用例原样保留、新增测试并列存在，绿灯数量涨了但误导源还在，且重复测试 ID 让追溯失效——被点名的用例必须处置（改名/补断言/删除）。
 5. **「13/13 闭环」不能整单入账**：A-4 三件套只做两件、A-5 索引未做（好在要求含「或至少」兜底），复核必须按修复要求的**子项清单**逐条打勾，而不是按问题编号打勾。
+6. **schema 字段就是状态机的一部分**：`claimedAt` 不在 schema 里，围绕它的 CAS/租约/接管分支就是永不执行的死代码，声明的「崩溃自愈」整个失效——复核状态机类修复必须核对**每个被读写的字段都真实落库**（一条 raw 文档探针即可证伪）。
+7. **回归测试必须能证明「修复前失败」**：A-2 的「灌 1001 条」测试根本没触发水位淘汰，返工前照样通过——构造出缺陷的**前置条件**（挤出水位、崩溃窗口、隔离行）是回归的一部分；空转的回归比没有回归更危险，它给了「已修」的错觉。
