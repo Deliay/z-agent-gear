@@ -189,18 +189,18 @@ aspire --version
 - [ ] 选择「Docker」后 `docker version`、`docker buildx version` 均成功；重复执行 Docker 脚本幂等收敛（不重复安装/不重复启动）
 - [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
 - [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
-- [ ] **安装来源已注入且可达**：为容器/脚本提供 `DOCKER_APT_URL`（内网 Docker CE apt 代理地址，形如 `https://<nexus-host>/repository/<docker-ce-apt-proxy>/linux/ubuntu/`），并核对 `curl -fsS "$DOCKER_APT_URL/gpg"` 返回 200
-- [ ] 未注入 `DOCKER_APT_URL` 且组件尚未安装时：该工作负载**快速失败**并在执行记录中给出明确指引（容器仍继续后续初始化并上线）
+- [ ] **安装来源默认已填且可达**：「Docker」工作负载参数 `docker_apt_url` 默认已填内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`（实测该仓库根即 apt 源根，地址形态为 `https://<nexus-host>/repository/<docker-ce-apt>/`），并核对 `curl -fsS "<地址>/gpg"` 返回 200
+- [ ] 清空 `docker_apt_url` 参数（且未提供 `DOCKER_APT_URL`）且组件尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 安装来源不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
 - [ ] Node.js 脚本按 `version` 参数安装/切换版本、按 `package_manager` 多选安装包管理器，`npm config get registry` 为内网代理
 - [ ] .NET 脚本经 **apt** 安装 .NET 10：`dotnet --list-sdks` 显示 `10.x`、`command -v dotnet` 命中 `/usr/bin/dotnet`、**不依赖 `dotnet-install.sh`**；重复执行幂等（已装 .NET 10 直接成功）
 - [ ] `DOTNET_APT_PACKAGE`（默认 `dotnet10`）/`DOTNET_APT_UPGRADE`（默认 `1`）在运行时生效；`DOTNET_APT_UPGRADE=0` 时跳过 `apt-get upgrade`
 - [ ] Aspire 脚本前置检查（`command -v dotnet`）通过，安装 CLI 后 `aspire --version` 输出非空（不能仅以安装脚本返回 0 判成功）
 
-> **安装来源（重要）**：「Docker」工作负载脚本**不设默认安装来源**——运行环境**未提供**内网 docker-ce apt 代理
-> （实测内网 Nexus 13 个仓库中不存在 docker-ce apt 代理，参见提案 §9.3 发布前置），因此脚本要求显式注入
-> `DOCKER_APT_URL`；未注入且需安装时快速失败、打印指引并不影响容器其余初始化。
-> 运维创建/确认内网代理后，将其可达地址注入（容器环境变量或预制脚本），即可恢复开箱可用（届时可将该地址设为脚本默认值）。
+> **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网
+> Docker CE apt 代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`（实测该仓库根即 apt 源根，
+> 地址形态 `https://<nexus-host>/repository/<docker-ce-apt>/`），启动时可按环境调整；脚本本身**不内置默认值**，
+> 运行时 `DOCKER_APT_URL` 环境变量可覆盖且优先。清空参数且需安装时快速失败、打印指引并不影响容器其余初始化。
 > 安装包列表为 `docker-ce docker-ce-cli docker-buildx-plugin containerd.io`：其中 `docker-ce` 提供 `dockerd`
 > （守护进程），`docker-ce-cli` 仅提供客户端，四者缺一不可；**默认不指向公网**。
 
@@ -273,4 +273,4 @@ bash entrypoint.test.sh
 
 - sysbox 为**节点级** runtime（`sysbox-runc`），集群节点需预装 sysbox，否则带 `runtimeClassName: sysbox-runc` 的 Pod 无法调度。集群未启用 sysbox 时可将 `RUNTIME_CLASS_NAME` 置空/改用其他 runtime。
 - 镜像代理 shim 由「Docker」工作负载脚本在安装 CLI 后装配（`/usr/local/bin/docker`），采用「首个非选项参数即镜像引用」的启发式改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。未选择「Docker」工作负载时容器内不存在该 shim。
-- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源由运行环境提供：Docker 的 `DOCKER_APT_URL` **无默认值、必须注入**（内网未提供 docker-ce apt 代理，未注入时快速失败并给出指引）；.NET / Aspire 脚本默认走各自官方地址，内网覆盖由管理员编辑对应工作负载脚本。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
+- 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源：Docker 由工作负载参数 `docker_apt_url` 提供（迁移 003 默认填入内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`，可启动时按次调整；`DOCKER_APT_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空参数且需安装时快速失败并给出指引；.NET / Aspire 脚本默认走各自官方地址，内网覆盖由管理员编辑对应工作负载脚本。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
