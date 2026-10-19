@@ -292,12 +292,29 @@ describe('ReconciliationService（三线对账）', () => {
     expect(await BillingOutbox.countDocuments({ repairOf: { $ne: null } })).toBe(2);
   });
 
-  it('events: FAILED 预留与零计费窗口的 destroyed 判终态不补投（R3-2 收敛护栏）', async () => {
+  it('events: FAILED 预留与零计费窗口的 destroyed 判终态不补投（R3-2/R4-2 收敛护栏）', async () => {
     const { BillingOutbox } = await import('../../models/billing-outbox.js');
     const reservations = {
       findByResource: vi.fn(async (rid: string) => (rid === 'c-failed' ? { status: 'FAILED' } : null)),
       list: vi.fn(),
     };
+    // 零窗容器预置一条「已发布未生效」（DLQ）的 ready 行：若无 `repairOf` 护栏，第二轮会再插一条代偿行。
+    await BillingOutbox.create({
+      eventId: 'container.ready:c-zero',
+      producer: 'cloud-controller',
+      eventType: 'container.ready',
+      routingKey: 'container.ready',
+      payload: {
+        eventId: 'container.ready:c-zero',
+        eventType: 'container.ready',
+        occurredAt: '2026-10-01T00:10:00Z',
+        accountId: 'a1',
+        resourceId: 'c-zero',
+        payload: {},
+      },
+      published: true,
+      failed: false,
+    });
     const nowValue = { value: 1000 };
     const make = () =>
       new ReconciliationService({} as never, reservations as never, {
@@ -322,10 +339,12 @@ describe('ReconciliationService（三线对账）', () => {
     await make().run('events');
     nowValue.value += 5_000;
     await make().run('events');
-    // 两类 destroyed 都判终态：不产生任何 destroyed 补投行。
-    expect(await BillingOutbox.countDocuments({ eventId: /destroyed.*repair/ })).toBe(0);
-    // 零窗容器的 ready 只补投一次（有界），第二轮不新增。
-    expect(await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-zero/ })).toBe(1);
+    // 业务事实：两个资源都不应产生**任何** destroyed 补投行（FAILED 终态 / 零计费窗口判终态）。
+    // 断言以事件 entity 为准（`^container.destroyed:`），修复前会补投 2 条朴素行 → 变红。
+    expect(await BillingOutbox.countDocuments({ eventId: /^container\.destroyed:/ })).toBe(0);
+    // ready 有界性由 `repairOf` 护栏锚定：原行 + 至多一条代偿行，第二轮不再新增（修复前第二轮新增第三条）。
+    expect(await BillingOutbox.countDocuments({ eventId: /^container\.ready:c-zero/ })).toBe(2);
+    expect(await BillingOutbox.countDocuments({ repairOf: 'container.ready:c-zero' })).toBe(1);
   });
 
   it('events: 在途(published:false, failed:false) 不重复补投', async () => {

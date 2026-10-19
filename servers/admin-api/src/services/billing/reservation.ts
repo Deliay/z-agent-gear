@@ -42,14 +42,16 @@ function reservationBizPrefix(reservationId: string): string {
 }
 
 /**
- * R3-3：从最终结算流水的 `bizId`（`…:final:<epochMs>`）解析**已实际收费的窗口终点**。
- * 崩溃恢复时据此补收 [已收费终点, 新 endedAt] 的尾段；无法解析（历史行）返回 null。
+ * R4-1：解析最终结算流水 `bizId`（`…:final:<from>[:<to>]` / `…:final-gap:<from>:<to>`）**末尾的
+ * 窗口终点**（最后一个数字段）。崩溃恢复时据此只补未覆盖尾段 [已收费终点, 新 endedAt]；
+ * 无编码的历史行（`…:final`）返回 null。
  */
-function parseFinalWindowEnd(bizId: string | null | undefined): number | null {
+function parseWindowEnd(bizId: string | null | undefined): number | null {
   if (!bizId) return null;
-  const match = /:final:(\d+)$/.exec(bizId);
+  const match = /:(\d+(?::\d+)*)$/.exec(bizId);
   if (!match) return null;
-  const value = Number(match[1]);
+  const parts = match[1].split(':');
+  const value = Number(parts[parts.length - 1]);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -420,8 +422,11 @@ export class ReservationService {
    *
    * A-3：若预留已 `SETTLED`（例如控制面误判 stale 提前终结），后续真实的 destroyed 事件
    * 携带更晚的 `endedAt` 时，必须识别并补结「SETTLED 之后到真正销毁之间」的缺额，
-   * 而不是静默返回 0 让容器免费跑。缺额使用独立幂等键
-   * `charge:final-gap:${reservationId}:${lastSettleAt.getTime()}`（同窗口重复事件幂等）。
+   * 而不是静默返回 0 让容器免费跑。
+   *
+   * R4-1：所有最终结算流水（`charge:final` / `charge:final-gap`）的幂等键与 `bizId` 均**编码窗口区间
+   * 两端**（`…:<from>:<to>`），恢复时以 ledger 已覆盖终点为准只补未覆盖尾段；`lastSettleAt` 游标只推进到
+   * 已收费终点，绝不越过未收费窗口（详见 `settledCoverage`）。
    */
   async finalSettle(
     reservationId: string,
@@ -446,6 +451,8 @@ export class ReservationService {
     const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
     let amount = 0;
     let cashBalance = 0;
+    // R4-1：`lastSettleAt` 游标只允许推进到「已实际收费的窗口终点」，绝不越过未收费窗口。
+    let cursor = endedAt;
 
     // 版本 CAS 抢占最终结算（SETTLING）；并发/重放时仅一个请求执行扣费，其余按幂等键 no-op。
     const claimed = await BillingReservation.findOneAndUpdate(
@@ -482,53 +489,56 @@ export class ReservationService {
         accountId,
         amountCents: amount,
         idempotentKey: `charge:final:${reservationId}`,
-        bizId: `${reservationBizPrefix(reservationId)}final:${endedAt.getTime()}`,
+        bizId: `${reservationBizPrefix(reservationId)}final:${from.getTime()}:${endedAt.getTime()}`,
         preCheck: preCheck.preCheck!,
         ref: { type: 'container_reservation', id: reservationId },
       });
       cashBalance = payment.cashBalance;
-      if (!payment.applied) {
-        // 🟡2/R3-3：崩溃恢复——`charge:final` 上一轮已扣（窗口可能与本次不同）。以 **ledger 实际入账额**
-        // 回填，并按该行 `bizId` 记录的**已收费窗口终点**补收尾段 [已收费终点, endedAt]（独立幂等键
-        // `charge:final-gap:${rid}:${chargedTo}`）。绝不把 lastSettleAt 推过未收费窗口（否则尾段永久漏收）。
-        const existing = await BillingLedger.findOne({
-          accountId: new mongoose.Types.ObjectId(accountId),
-          idempotentKey: `charge:final:${reservationId}`,
-        })
-          .select({ deltaBalance: 1, bizId: 1 })
-          .lean<{ deltaBalance?: number; bizId?: string | null } | null>();
-        if (existing) amount = Math.abs(Math.round(existing.deltaBalance ?? 0));
-        const chargedTo = parseFinalWindowEnd(existing?.bizId ?? null);
-        if (chargedTo === null) {
-          // 兼容本机制上线前的历史 final 行（bizId 无窗口终点）：无法判定尾段，保守告警（残余风险）。
-          console.warn(
-            `[billing] reservation ${reservationId} final charge lacks window end; tail gap unverifiable`,
-          );
-        } else if (chargedTo < endedAt.getTime()) {
-          const tailFrom = new Date(chargedTo);
-          const tailMinutes = ceilMinutes(endedAt.getTime() - chargedTo);
-          if (tailMinutes > 0) {
-            const tailPriced = await this.prices.priceContainer(tailMinutes, tailFrom);
-            if (tailPriced.amountCents > 0) {
-              const tailCheck = await this.checks.check({
-                accountId,
-                estimatedCredits: tailPriced.amountCents,
-                policy: 'accrue-and-track',
-                ref: { type: 'container_reservation', id: reservationId },
-              });
-              const tailPayment = await this.payments.charge({
-                accountId,
-                amountCents: tailPriced.amountCents,
-                idempotentKey: `charge:final-gap:${reservationId}:${chargedTo}`,
-                bizId: `${reservationBizPrefix(reservationId)}final-gap:${chargedTo}`,
-                preCheck: tailCheck.preCheck!,
-                ref: { type: 'container_reservation', id: reservationId },
-              });
-              cashBalance = tailPayment.cashBalance;
-              if (tailPayment.applied) amount += tailPriced.amountCents;
+      // R4-1：以 ledger **已实际覆盖**为准回填金额（含历次崩溃恢复的 final/final-gap 流水，`bizId`
+      // 编码区间两端），解析**已收费窗口终点**；只补未覆盖尾段 [已收费终点, endedAt]。幂等键/`bizId`
+      // 均编码区间两端，故同一 (from,to) 重放幂等、不同 endedAt 各补各的缺口（不会撞键后静默漏收）。
+      const coverage = await this.settledCoverage(accountId, reservationId);
+      amount = coverage.coveredAmount;
+      let billedThrough = coverage.coveredEnd;
+      if (billedThrough === null) {
+        // 兼容本机制上线前的历史 final 行（`bizId` 未编码窗口终点）：无法判定已覆盖终点，保守告警（残余风险）。
+        console.warn(
+          `[billing] reservation ${reservationId} final charge lacks window end; tail gap unverifiable`,
+        );
+      } else if (billedThrough < endedAt.getTime()) {
+        const gapFrom = billedThrough;
+        const gapMinutes = ceilMinutes(endedAt.getTime() - gapFrom);
+        if (gapMinutes > 0) {
+          const gapPriced = await this.prices.priceContainer(gapMinutes, new Date(gapFrom));
+          if (gapPriced.amountCents > 0) {
+            const gapCheck = await this.checks.check({
+              accountId,
+              estimatedCredits: gapPriced.amountCents,
+              policy: 'accrue-and-track',
+              ref: { type: 'container_reservation', id: reservationId },
+            });
+            const gapPayment = await this.payments.charge({
+              accountId,
+              amountCents: gapPriced.amountCents,
+              idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+              bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+              preCheck: gapCheck.preCheck!,
+              ref: { type: 'container_reservation', id: reservationId },
+            });
+            cashBalance = gapPayment.cashBalance;
+            if (gapPayment.applied) {
+              amount += gapPriced.amountCents;
+              billedThrough = endedAt.getTime();
             }
+          } else {
+            // 零价尾段：无金额可收，视为已覆盖，游标可推进。
+            billedThrough = endedAt.getTime();
           }
         }
+      }
+      if (billedThrough !== null) {
+        // 只推进到「已收费终点」；尾段补收未生效（撞键/失败）时停在原覆盖终点，不越过未收费窗口。
+        cursor = new Date(Math.max(billedThrough, from.getTime()));
       }
     }
 
@@ -551,7 +561,7 @@ export class ReservationService {
       {
         $set: {
           status: 'SETTLED',
-          lastSettleAt: endedAt,
+          lastSettleAt: cursor,
           expectedEndAt: endedAt,
         },
         $inc: { version: 1 },
@@ -569,9 +579,11 @@ export class ReservationService {
   }
 
   /**
-   * A-3：补结「预留已 SETTLED，但真实销毁事件更晚」的缺额窗口。
-   * 幂等键带窗口起点，同一 destroyed 事件重放不会重复扣费；不同 endedAt 各补各的缺口。
-   * 只补结、不改变预留终态（已释放的冻结不会被重新冻结）。
+   * A-3/R4-1：补结「预留已 SETTLED，但真实销毁事件更晚」的缺额窗口。
+   * 以 ledger **已实际覆盖终点**为准只补未覆盖尾段（幂等键/`bizId` 编码区间两端），游标 `lastSettleAt`
+   * 只向前推进到已收费终点（`$max`）——即使上一次「推进游标后、扣费前」崩溃，也会按覆盖终点重新补收，
+   * 不会因游标已推进而永久漏收。只补结、不改变预留终态（已释放的冻结不会被重新冻结）。
+   * 序列化由调用方 `billingMutex.runExclusive('reservation:${id}')` 提供。
    */
   private async settleTailAfterSettled(
     reservation: IBillingReservation,
@@ -584,67 +596,91 @@ export class ReservationService {
     windowFrom: Date;
     tail?: boolean;
   }> {
-    let from = reservation.lastSettleAt ?? reservation.startedAt;
-    if (endedAt.getTime() <= from.getTime()) {
-      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+    const reservationId = documentId(reservation);
+    const fallbackFrom = reservation.lastSettleAt ?? reservation.startedAt;
+    // 以 ledger 已覆盖终点为准（可能低于 lastSettleAt——上一次推进游标后崩溃未扣费的情形）。
+    const coverage = await this.settledCoverage(accountId, reservationId);
+    const gapFrom = coverage.coveredEnd ?? fallbackFrom.getTime();
+    if (endedAt.getTime() <= gapFrom) {
+      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: new Date(gapFrom) };
     }
-    // 先 CAS 推进 lastSettleAt，保证同一窗口只有一个请求补结；失败则重读重试一次
-    // （🟡2：CAS 失败不得静默丢尾差）。
-    let claimed: unknown = null;
-    let latest = reservation;
-    for (let attempt = 0; attempt < 2 && !claimed; attempt += 1) {
-      claimed = await BillingReservation.findOneAndUpdate(
-        {
-          _id: documentId(latest),
-          status: 'SETTLED',
-          lastSettleAt: latest.lastSettleAt,
-        },
-        { $set: { lastSettleAt: endedAt }, $inc: { version: 1 } },
-        { new: true },
-      );
-      if (claimed) break;
-      const reread = await this.findById(documentId(reservation));
-      if (!reread || reread.status !== 'SETTLED') break;
-      from = reread.lastSettleAt ?? reread.startedAt;
-      if (endedAt.getTime() <= from.getTime()) {
-        return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+    const minutes = ceilMinutes(endedAt.getTime() - gapFrom);
+    let amount = 0;
+    let cashBalance = 0;
+    let billedThrough = gapFrom;
+    if (minutes > 0) {
+      const priced = await this.prices.priceContainer(minutes, new Date(gapFrom));
+      if (priced.amountCents > 0) {
+        const preCheck = await this.checks.check({
+          accountId,
+          estimatedCredits: priced.amountCents,
+          policy: 'accrue-and-track',
+          ref: { type: 'container_reservation', id: reservationId },
+        });
+        const payment = await this.payments.charge({
+          accountId,
+          amountCents: priced.amountCents,
+          idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+          bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+          preCheck: preCheck.preCheck!,
+          ref: { type: 'container_reservation', id: reservationId },
+        });
+        cashBalance = payment.cashBalance;
+        if (payment.applied) {
+          amount = priced.amountCents;
+          billedThrough = endedAt.getTime();
+        }
+      } else {
+        billedThrough = endedAt.getTime();
       }
-      latest = reread;
     }
-    if (!claimed) {
-      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
-    }
-    const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
-    if (minutes <= 0) {
-      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from, tail: true };
-    }
-    const priced = await this.prices.priceContainer(minutes, from);
-    const preCheck = await this.checks.check({
-      accountId,
-      estimatedCredits: priced.amountCents,
-      policy: 'accrue-and-track',
-      ref: { type: 'container_reservation', id: documentId(reservation) },
-    });
-    const payment = await this.payments.charge({
-      accountId,
-      amountCents: priced.amountCents,
-      idempotentKey: `charge:final-gap:${documentId(reservation)}:${from.getTime()}`,
-      bizId: `${reservationBizPrefix(documentId(reservation))}final-gap`,
-      preCheck: preCheck.preCheck!,
-      ref: { type: 'container_reservation', id: documentId(reservation) },
-    });
-    await this.recomputeTotals(documentId(reservation), accountId);
+    // 游标只向前推进到已收费终点（`$max` 防回退），不改预留终态。
+    await BillingReservation.updateOne(
+      { _id: reservationId, status: 'SETTLED' },
+      { $max: { lastSettleAt: new Date(billedThrough) }, $inc: { version: 1 } },
+    );
+    await this.recomputeTotals(reservationId, accountId);
     const account = await this.accounts.getById(accountId);
     if (!account || account.availableBalance < 0) {
       await this.accounts.markInsufficient(accountId, new Date(this.now()));
     }
+    if (amount <= 0) {
+      return { minutes: 0, amount: 0, cashBalance, windowFrom: new Date(gapFrom) };
+    }
     return {
       minutes,
-      amount: priced.amountCents,
-      cashBalance: payment.cashBalance,
-      windowFrom: from,
+      amount,
+      cashBalance,
+      windowFrom: new Date(gapFrom),
       tail: true,
     };
+  }
+
+  /**
+   * R4-1：该预留最终结算流水（`charge:final` + 全部 `charge:final-gap`）的**已实际收费覆盖**。
+   * 每条 `bizId` 编码区间两端（`…:final:<from>:<to>` / `…:final-gap:<from>:<to>`），取所有 `to` 的
+   * 最大值为 `coveredEnd`（已收费窗口终点），并汇总金额。用于「只补未覆盖尾段 + 游标不越过未收费窗口」。
+   */
+  private async settledCoverage(
+    accountId: string,
+    reservationId: string,
+  ): Promise<{ coveredEnd: number | null; coveredAmount: number }> {
+    const prefix = reservationBizPrefix(reservationId);
+    const rows = await BillingLedger.find({
+      accountId: new mongoose.Types.ObjectId(accountId),
+      bizType: 'charge',
+      bizId: { $regex: `^${escapeRegExp(prefix)}(final|final-gap):` },
+    })
+      .select({ deltaBalance: 1, bizId: 1 })
+      .lean<Array<{ deltaBalance?: number; bizId?: string | null }>>();
+    let coveredEnd: number | null = null;
+    let coveredAmount = 0;
+    for (const row of rows) {
+      coveredAmount += Math.abs(Math.round(row.deltaBalance ?? 0));
+      const end = parseWindowEnd(row.bizId);
+      if (end !== null && (coveredEnd === null || end > coveredEnd)) coveredEnd = end;
+    }
+    return { coveredEnd, coveredAmount };
   }
 
   /**

@@ -228,16 +228,18 @@ type: Permanent
 | 子项 | 状态 | 实现 |
 |---|---|---|
 | 收敛护栏 | ✅ | ① `billing-outbox.ts`（admin+cloud-controller 两份）新增 `repairOf` 索引；`repairEvent` 补投前 `BillingOutbox.exists({repairOf: eventId})`，**每个源事件至多补投一次**（`bounded`）；② destroyed 分支把 `FAILED` 预留判终态；③ 零计费窗口（`exitedAt<=startedAt`）判终态不补投 |
-| 连续两轮 repair 行数收敛回归 | ✅ | `reconciliation.test.ts`：DLQ 用例连续两轮（`now` 前进使 repair eventId 变化）断言 `repair` 行数恒为 2；新增「FAILED 预留 + 零计费窗口」两轮断言 `destroyed` 补投行为 0、ready 补投有界 |
+| 连续两轮 repair 行数收敛回归 | ✅（R4-2 修正后） | DLQ 用例：连续两轮（`now` 前进使代偿 eventId 变化）断言代偿行恒为 1/源事件（Probe D 下红于 `expected 2 to be 1`）。「FAILED 预留 + 零计费窗口」用例：destroyed 断言改为**业务事实** `countDocuments({eventId:/^container\.destroyed:/})===0`（Probe D 下红于 `expected 2 to be +0`）；ready 有界性改由 `repairOf` 计数锚定（预置 DLQ ready 行 → 两轮后 `^container.ready:c-zero` 恒为 2、`repairOf` 恒为 1；Probe D 下红）。⚠️ 上一轮该用例的 `/destroyed.*repair/` 断言为**空转**（修复前补投的是朴素 `container.destroyed:c-*` 行、不含 `repair` 字样），已在 R4-2 更正并标注。 |
 | 修正 `repaired` 语义 | ✅ | `repairEvent` 返回 `'injected'|'requeued'|'bounded'|'in-flight'|'failed'`；在途分支不再谎报 `repaired:true`，对账报告如实记录 `action` |
 
 ### 7.5 R3-3（🟠 finalSettle 永久少收未声明）— 子项
 
+> **R4-1 更正**：本节上一轮的「✅ 不推过未收费窗口」属**声明过度**——gap 幂等键仅编码窗口**起点**，二次崩溃（同一 `chargedTo`、更晚 `endedAt`）撞键 no-op 却仍无条件把游标推到新 `endedAt` → 尾段仍永久漏收。已在 R4-1 彻底修正（§8.1）。
+
 | 子项 | 状态 | 实现 |
 |---|---|---|
-| 不把 `lastSettleAt` 推过未收费窗口 | ✅ | 最终结算 `bizId` 编码已收费窗口终点（`…:final:<epochMs>`）；`applied===false` 时解析该终点，用 `charge:final-gap:${rid}:${chargedTo}` 补收 [终点, endedAt] 尾段后才推进 `lastSettleAt` |
-| 至少一条区分性回归 | ✅ | `billing-flow.test.ts`「R3-3」：构造 SETTLING + 已收费 `[T0,T1]` ledger，`finalSettle(T2)` 断言新增 gap 流水 500、`amount=1500`、`lastSettleAt=T2`（修复前尾段漏收、无 gap 流水） |
-| 残余风险如实声明 | ✅ | 历史 `final` 行（`bizId` 无窗口终点）无法判定尾段 → `console.warn` 告警；`minutes`（全窗口）与 `amount`（回填+补收）在历史行场景可能轻微不一致（仅报告值，无资金泄漏） |
+| 不把 `lastSettleAt` 推过未收费窗口 | ✅（R4-1 修正后） | 幂等键/`bizId` **编码区间两端**（`…:final:<from>:<to>` / `…:final-gap:<from>:<to>`）；恢复时以 `settledCoverage` 取 **ledger 已覆盖终点**，只补未覆盖尾段 [终点, `endedAt`]；游标仅在补收生效时推进到 `endedAt`，否则停在已覆盖终点（`cursor`） |
+| 至少一条区分性回归 | ✅ | `billing-flow.test.ts`「R3-3」（单崩溃：断言 gap 500、`amount=1500`、游标=T2）+「R4-1」（二次崩溃：断言合计 2000、游标=T3）。回退 `reservation.ts` 至 `2a95c4a`：两者分别红于 `expected 1000 to be 1500` / `expected 1000 to be 2000` |
+| 残余风险如实声明 | ✅（R4-1 修正后） | 仅剩「历史无编码 `final` 行（`bizId` 无窗口终点，本机制上线前的构建，未发布）」；`settleTailAfterSettled` 改为同一「覆盖终点」口径（不再有「CAS 先推进游标、后扣费」的漏收窗口，见 §7.8） |
 
 ### 7.6 R3-4（🟠 零费率档无锚点 + 告警误报）— 子项
 
@@ -264,6 +266,59 @@ type: Permanent
 
 ### 7.8 未做/部分（如实标注）
 
-- R3-6：`reconciliation.ts:198-204` 注释已重写；无其它遗留。
-- R3-3：`charge:final` 未做「全量窗口化」，采用「窗口终点编码 + gap 补收」方案（等效满足「不得推过未收费窗口」）；历史无编码行的尾段不可追回（已告警）。
+- R3-6：`reconciliation.ts` 注释已重写；无其它遗留。
+- R3-3/R4-1：**历史无编码 `final` 行**（`bizId` 形如 `…:final`，仅存在于本机制上线前的构建、且该构建从未发布）无法判定已覆盖终点 → `console.warn` 并保守推进游标（残余风险）；该历史行场景下 `minutes`（全窗口）与 `amount`（回填+补收）可能轻微不一致（仅报告值，无资金泄漏）。
+- R4-1：`settleTailAfterSettled` 的并发安全依赖调用方 `billingMutex.runExclusive('reservation:${id}')`（唯一调用方 `billing-service.finalizeReservation` 已满足）；若未来旁路该锁直接调用，尾部补收的幂等键可能重叠——已在方法注释标注「序列化由调用方提供」前提。
 - 前两轮 8.4 未做项（3/5/6/10）本轮未动，保持如实标注。
+
+---
+
+## 八、第四轮复核返工对账（2026-10-20，针对 R4-1 / R4-2）
+
+> 基线：`integration` @ `ab1a3b7`（复核对象 §十）。复核口径升级：**断言以业务事实为单位、探针回退为固定手段**。
+> 本轮两个问题同属「回归空转 / 声明过度」，已按新口径重做并以探针实证（见 8.3）。
+
+### 8.1 R4-2（🔴 阻断：R3-2 守卫回归仍空转）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| destroyed 断言改为「该资源无任何补投行」 | ✅ | `reconciliation.test.ts`「FAILED 预留与零计费窗口」：`countDocuments({ eventId: /^container\.destroyed:/ }) === 0`（以事件 entity 为单位，不再用 `/destroyed.*repair/` 这一修复实现命名特征）。**Probe D**（`reconciliation.ts` 回退至 `c982ed4`）下红于 `expected 2 to be +0`——实证修复前确实补投 2 条朴素 `container.destroyed:c-*` 行 |
+| ready 有界性用 `repairOf` 计数锚定 | ✅ | 用例预置一条「已发布未生效」（DLQ）的 `container.ready:c-zero` → 首轮注入 `…:repair:<ts>`（`repairOf` 落库），第二轮被 `repairOf` 护栏判 `bounded` 不再新增；断言 `^container.ready:c-zero` 恒为 2、`repairOf==='container.ready:c-zero'` 恒为 1。**Probe D** 下第二轮新增第三条 → 红 |
+| 修正空转回归 + 对账表注明探针结论 | ✅ | 已在 §7.4 更正上一轮 `/destroyed.*repair/` 空转与 ready「11000→in-flight 兜底（非 `repairOf` 护栏）」的伪锚定 |
+| `repairOf` 护栏本身（①） | ✅（复核已确认） | Probe D 下 DLQ 用例红于 `expected 2 to be 1` |
+
+### 8.2 R4-1（🟠 重要：R3-3 修复不完整 + 声明过度）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| gap 幂等键 / `bizId` 编码区间两端 | ✅ | `charge:final` → `bizId=…:final:<from>:<to>`；`charge:final-gap` → `idempotentKey=charge:final-gap:<rid>:<from>:<to>`、`bizId=…:final-gap:<from>:<to>`（`reservation.ts`）。同 (from,to) 重放幂等；不同 `endedAt` 不再撞键静默漏收 |
+| 按 ledger 已覆盖终点只补未覆盖尾段 | ✅ | 新增 `settledCoverage(accountId,rid)`：汇总 `charge:final` + 全部 `charge:final-gap` 的 `bizId` 区间端点，取 `max(to)` 为 `coveredEnd`。`finalSettle` 恢复分支以 `coveredEnd` 为 tail 起点（不再只看 `final` 的 `chargedTo`） |
+| 推进游标前核对「已收费终点 ≥ 新 endedAt」 | ✅ | 新增 `cursor`：仅当尾段补收**生效**（或零价尾段）才推进到 `endedAt`，否则停在 `bizId` 已证实的覆盖终点；`lastSettleAt` 写入改用 `cursor`。`settleTailAfterSettled` 同口径改造（去掉「CAS 先推进游标、后扣费」的漏收窗口，改为覆盖终点驱动 + `$max` 推进） |
+| Probe G 场景区分性回归 | ✅ | `billing-flow.test.ts`「R4-1」：`final[T0,T1]=1000` + 首次崩溃恢复 `final-gap[T1,T2]=500`，以 `endedAt=T3` 重放 → 断言**业务事实**合计 `ΣdeltaBalance=2000`、新增 `final-gap[T2,T3]=500`、`result.amount=2000`、游标=T3。**Probe**（回退 `reservation.ts` 至 `2a95c4a`）下红于 `expected 1000 to be 2000` |
+| 单崩溃路径仍可区分（Probe C 复核） | ✅ | 同文件「R3-3」断言 gap `[T1,T2]=500`、`amount=1500`；回退至 `2a95c4a` 红于 `expected 1000 to be 1500` |
+| 7.5/7.8 声明与残余风险如实改写 | ✅ | §7.5 标注上一轮「✅ 不推过未收费窗口」为声明过度并更正；§7.8 改为「仅剩历史无编码 `final` 行 + `settleTailAfterSettled` 的串行前提」 |
+
+### 8.3 探针回退验证（本轮固定复核手段，本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R4-2 Probe D | `reconciliation.ts` → `c982ed4` | 「FAILED 预留与零计费窗口…」 | 🔴 `AssertionError: expected 2 to be +0`（destroyed 补投 2 条） |
+| R4-1 Probe | `reservation.ts` → `2a95c4a` | 「R4-1: 二次崩溃恢复…」 | 🔴 `AssertionError: expected 1000 to be 2000` |
+| R4-1 Probe | `reservation.ts` → `2a95c4a` | 「R3-3: 最终结算崩溃恢复…」 | 🔴 `AssertionError: expected 1000 to be 1500` |
+
+### 8.4 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ **534 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error / 207 passed |
+| agent-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error（6 存量 warning）/ 429 passed |
+| tests/api（Aspire 全栈干净实例，注入 `INTERNAL_API_TOKEN`） | `npx vitest run` | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+
+### 8.5 未做/部分（如实标注）
+
+- R4-1：历史无编码 `final` 行仍无法判定覆盖终点（未发布构建产物，实际应无）——`console.warn` + 保守推进游标并声明（见 §7.8）。
+- R4-1：`settleTailAfterSettled` 串行前提依赖 `billingMutex`（已在方法注释标注）；未引入跨账户快照版本以彻底去除该前提（超出本节点范围）。

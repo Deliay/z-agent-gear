@@ -235,7 +235,7 @@ describe('计费域核心（真实 Mongo 集成）', () => {
       version: 1,
     });
     const rid = String(reservation._id);
-    // 上一轮已按 [T0, T1] 收费的 ledger（bizId 记录已收费窗口终点），钱包标记 applied。
+    // 上一轮已按 [T0, T1] 收费的 ledger（`bizId` 编码区间两端），钱包标记 applied。
     await BillingLedger.create({
       accountId: account.id,
       pool: 'cash',
@@ -243,7 +243,7 @@ describe('计费域核心（真实 Mongo 集成）', () => {
       deltaBalance: -1000,
       deltaFrozen: 0,
       allocations: [{ pool: 'cash', amount: 1000 }],
-      bizId: `reservation:${rid}:final:${T1}`,
+      bizId: `reservation:${rid}:final:${T0}:${T1}`,
       idempotentKey: `charge:final:${rid}`,
       walletApplied: true,
       createdAt: new Date(T1),
@@ -254,13 +254,86 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     // 首扣 1000（10 分钟）+ 尾段 500（[T1, T2] 5 分钟）= 1500；修复前尾段永久漏收（仅回填 1000）。
     expect(result.amount).toBe(1500);
     const gap = await BillingLedger.findOne({
-      idempotentKey: `charge:final-gap:${rid}:${T1}`,
+      idempotentKey: `charge:final-gap:${rid}:${T1}:${T2}`,
     }).lean();
     expect(gap).not.toBeNull();
     expect(Math.abs(gap!.deltaBalance)).toBe(500);
     const after = await BillingReservation.findById(rid);
     expect(after!.status).toBe('SETTLED');
     expect(after!.lastSettleAt!.getTime()).toBe(T2);
+  });
+
+  it('R4-1: 二次崩溃恢复只补未覆盖尾段（区间两端编码；游标不越过已收费终点）', async () => {
+    const nowValue = { value: T0 };
+    const { reservations } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-final-crash-2';
+    const T1 = T0 + 10 * 60_000;
+    const T2 = T0 + 15 * 60_000;
+    const T3 = T0 + 20 * 60_000;
+
+    // 预留停在 SETTLING（上一轮最终结算在推进游标前崩溃）。
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'SETTLING',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 1,
+    });
+    const rid = String(reservation._id);
+    // 第一次崩溃：已按 [T0, T1] 收费的 final（1000）。
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -1000,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 1000 }],
+      bizId: `reservation:${rid}:final:${T0}:${T1}`,
+      idempotentKey: `charge:final:${rid}`,
+      walletApplied: true,
+      createdAt: new Date(T1),
+    });
+    // 第一次崩溃恢复：已补 [T1, T2] 的尾段（500），bizId/key 编码区间两端。
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -500,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 500 }],
+      bizId: `reservation:${rid}:final-gap:${T1}:${T2}`,
+      idempotentKey: `charge:final-gap:${rid}:${T1}:${T2}`,
+      walletApplied: true,
+      createdAt: new Date(T2),
+    });
+
+    nowValue.value = T3;
+    const result = await reservations.finalSettle(rid, new Date(T3));
+    // 只补未覆盖的 [T2, T3]（500），合计 1000+500+500=2000；修复前以 final 的 chargedTo=T1 撞键 no-op → 合计 1500。
+    expect(result.amount).toBe(2000);
+    const chargeRows = await BillingLedger.aggregate([
+      {
+        $match: {
+          accountId: new mongoose.Types.ObjectId(account.id),
+          bizId: { $regex: `^reservation:${rid}:` },
+        },
+      },
+      { $group: { _id: null, charged: { $sum: '$deltaBalance' } } },
+    ]);
+    expect(Math.abs(chargeRows[0].charged)).toBe(2000);
+    const gap = await BillingLedger.findOne({
+      idempotentKey: `charge:final-gap:${rid}:${T2}:${T3}`,
+    }).lean();
+    expect(gap).not.toBeNull();
+    expect(Math.abs(gap!.deltaBalance)).toBe(500);
+    const after = await BillingReservation.findById(rid);
+    expect(after!.status).toBe('SETTLED');
+    // 游标只推进到已实际收费的终点（此处已补到 T3），不越过未收费窗口。
+    expect(after!.lastSettleAt!.getTime()).toBe(T3);
   });
 
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
