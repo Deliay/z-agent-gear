@@ -18,12 +18,21 @@ vi.mock('../../services/cloud-workload.js', () => ({
   cloudWorkloadService: { getByIds: vi.fn(), list: vi.fn() },
 }));
 
+// 费用中心：默认账户由 account-service 提供（测试固定为 acct-1）
+vi.mock('../../services/billing/account-service.js', () => ({
+  accountService: {
+    getOrCreate: vi.fn(async () => ({ id: 'acct-1' })),
+    getById: vi.fn(async () => ({ id: 'acct-1' })),
+  },
+}));
+
 import {
   cloudControllerClient,
   ControlPlaneUnavailableError,
 } from '../../services/cloud-controller-client.js';
 import { findStoredCloudContainers } from '../../models/cloud-container.js';
 import { cloudWorkloadService } from '../../services/cloud-workload.js';
+import { accountService } from '../../services/billing/account-service.js';
 import type { AdminAuthContext } from './auth.js';
 
 // 每次调用返回全新 context：loadContainers 在 context 上做请求级 memo，
@@ -125,6 +134,8 @@ describe('cloudContainerResolvers', () => {
           exitReason: null,
           workloadIds: [],
           currentWorkloadName: null,
+          billingAccountId: null,
+          billingStartedAt: null,
         },
       ]);
       expect(warn).toHaveBeenCalled();
@@ -195,7 +206,7 @@ describe('cloudContainerResolvers', () => {
       (cloudControllerClient.start as any).mockResolvedValue(container);
 
       await expect(Mutation.adminStartCloudContainer({}, { purpose: 'IDLE' }, good())).resolves.toEqual(container);
-      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, []);
+      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, [], 'acct-1');
     });
 
     it('T-W7: passes the selected workloadIds through to the internal API (no plan)', async () => {
@@ -203,7 +214,18 @@ describe('cloudContainerResolvers', () => {
 
       await Mutation.adminStartCloudContainer({}, { purpose: 'IDLE', workloadIds: ['w2', 'w1'] }, good());
 
-      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, ['w2', 'w1']);
+      expect(cloudControllerClient.start).toHaveBeenCalledWith('IDLE', undefined, ['w2', 'w1'], 'acct-1');
+    });
+
+    it('PRD §3.5: 冻结账户拒绝启动容器并给出明确提示', async () => {
+      (accountService.getOrCreate as any).mockResolvedValueOnce({
+        id: 'acct-1',
+        status: 'frozen',
+      });
+      await expect(
+        Mutation.adminStartCloudContainer({}, { purpose: 'IDLE' }, good()),
+      ).rejects.toThrow(/账户已冻结/);
+      expect(cloudControllerClient.start).not.toHaveBeenCalled();
     });
 
     it('rejects non-IDLE purposes with a clear message and never calls the control plane', async () => {
@@ -256,6 +278,7 @@ describe('cloudContainerResolvers', () => {
         'IDLE',
         [{ workloadId: 'w2', params: { version: '20' }, implicit: false, required: false }],
         ['w2'],
+        'acct-1',
       );
     });
 
@@ -281,6 +304,7 @@ describe('cloudContainerResolvers', () => {
           { workloadId: 'aspire', params: {}, implicit: false, required: false },
         ],
         ['docker', 'dotnet', 'aspire'],
+        'acct-1',
       );
     });
 
@@ -309,6 +333,7 @@ describe('cloudContainerResolvers', () => {
           { workloadId: 'aspire', params: {}, implicit: false, required: true },
         ],
         ['docker', 'dotnet', 'aspire'],
+        'acct-1',
       );
     });
 
@@ -328,6 +353,7 @@ describe('cloudContainerResolvers', () => {
         'IDLE',
         [{ workloadId: 'w1', params: {}, implicit: false, required: false }],
         ['w1'],
+        'acct-1',
       );
     });
 

@@ -15,6 +15,10 @@ export const cloudContainerTypeDefs = `#graphql
     workloads: [CloudWorkload!]!
     # 初始化中（INITIALIZING）当前正在执行的工作负载脚本名称；非初始化中为 null
     currentWorkloadName: String
+    # 计费账户 ID（创建时指定；缺省为当前管理员账户）；未指定/存量容器为 null（不计费）
+    billingAccountId: ID
+    # 就绪计费起点（首次进入 ONLINE 的时刻）；null=未就绪/不计费
+    billingStartedAt: String
   }
 
   type CloudContainerControlPlane {
@@ -59,6 +63,7 @@ export const cloudContainerTypeDefs = `#graphql
       purpose: CloudContainerPurpose!
       workloadIds: [ID!]
       workloads: [CloudWorkloadSelectionInput!]
+      billingAccountId: ID
     ): CloudContainer!
     adminDestroyCloudContainer(id: ID!): Boolean!
   }

@@ -433,3 +433,27 @@ export const REGENERATE_CONTROLLER_KEY = gql`
     }
   }
 `
+
+// ---------- 我的费用（contracts/billing.graphql） ----------
+
+export const CREATE_MY_BILLING_API_KEY = gql`
+  mutation CreateMyBillingApiKey($name: String!) {
+    createMyBillingApiKey(name: $name) {
+      apiKey { id name keyPrefix status lastUsedAt createdAt }
+      secret
+    }
+  }
+`
+
+export const REVOKE_MY_BILLING_API_KEY = gql`
+  mutation RevokeMyBillingApiKey($id: ID!) {
+    revokeMyBillingApiKey(id: $id) {
+      id
+      name
+      keyPrefix
+      status
+      lastUsedAt
+      createdAt
+    }
+  }
+`

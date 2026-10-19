@@ -124,6 +124,7 @@ flowchart LR
 - [[draft/20261018-workload-phase4.md]] — 工作负载四期（工作容器基础环境瘦身）
 - [[draft/20261018-docker-ce-apt-source.md]] — Docker CE 软件源地址补齐（修复 Docker 工作负载初始化必然失败）
 - [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
+- [[draft/20261018-credits-billing.md]] — 费用中心（Credits 计费）
 
 ### 已发布文档（`released/`）
 

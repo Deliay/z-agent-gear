@@ -445,3 +445,118 @@ export const GET_MCP_SERVER = gql`
     }
   }
 `
+
+// ---------- 我的费用（contracts/billing.graphql） ----------
+
+export const MY_BILLING_ACCOUNT = gql`
+  query MyBillingAccount {
+    myBillingAccount {
+      id
+      ownerType
+      ownerId
+      ownerName
+      cashBalance
+      giftBalance
+      creditLimit
+      frozenAmount
+      availableBalance
+      status
+      insufficientSince
+      ledgerCount
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const MY_BILLING_INVOICES = gql`
+  query MyBillingInvoices($from: String, $to: String, $type: BillingLedgerType, $category: BillingCategory, $page: Int, $pageSize: Int) {
+    myBillingInvoices(from: $from, to: $to, type: $type, category: $category, page: $page, pageSize: $pageSize) {
+      id
+      accountId
+      seq
+      type
+      category
+      amount
+      balanceAfter
+      refType
+      refId
+      description
+      items { productId quantity unitPrice amount meteringRef segment }
+      receiptId
+      createdAt
+    }
+  }
+`
+
+export const MY_BILLING_RECEIPTS = gql`
+  query MyBillingReceipts($page: Int, $pageSize: Int) {
+    myBillingReceipts(page: $page, pageSize: $pageSize) {
+      id
+      receiptNo
+      invoiceId
+      accountId
+      amount
+      balanceAfter
+      issuedAt
+    }
+  }
+`
+
+export const MY_BILLING_RECEIPT = gql`
+  query MyBillingReceipt($invoiceId: ID!) {
+    myBillingReceipt(invoiceId: $invoiceId) {
+      id
+      receiptNo
+      invoiceId
+      accountId
+      amount
+      balanceAfter
+      issuedAt
+    }
+  }
+`
+
+export const MY_BILLING_ROLLUPS = gql`
+  query MyBillingRollups($granularity: BillingRollupGranularity!, $from: String!, $to: String!) {
+    myBillingRollups(granularity: $granularity, from: $from, to: $to) {
+      bucketStart
+      chargeTotal
+      rechargeTotal
+      chargeCount
+    }
+  }
+`
+
+export const MY_BILLING_API_KEYS = gql`
+  query MyBillingApiKeys {
+    myBillingApiKeys {
+      id
+      name
+      keyPrefix
+      status
+      lastUsedAt
+      createdAt
+    }
+  }
+`
+
+export const MY_BILLING_API_CALLS = gql`
+  query MyBillingApiCalls($status: String, $page: Int, $pageSize: Int) {
+    myBillingApiCalls(status: $status, page: $page, pageSize: $pageSize) {
+      id
+      requestId
+      modelId
+      modelName
+      inputTokens
+      cachedInputTokens
+      outputTokens
+      cost
+      status
+      estimated
+      invoiceSeq
+      startedAt
+      finishedAt
+    }
+  }
+`

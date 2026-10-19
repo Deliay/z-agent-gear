@@ -74,6 +74,11 @@ const cloudContainerSchema = new mongoose.Schema(
     // 必须工作负载失败标记（工作负载三期）：置位后容器不得被收口为 online/connecting，
     // 且在注销未完成（forceDestroy 失败/在途）时由看门狗重试强制注销。
     mustFailure: { type: Boolean, default: false },
+    // 计费归属（费用中心）：为空表示不计费（存量/未接入计费调用方）
+    billingAccountId: { type: String, default: null },
+    // 就绪计费起点：首次 markOnline 写入；重复 markOnline 不重置
+    billingStartedAt: { type: Date, default: null },
+    // 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null
     currentWorkloadName: { type: String, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },

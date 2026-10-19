@@ -27,6 +27,10 @@ type CloudContainer {
   workloads: [CloudWorkload!]!
   # 初始化中（INITIALIZING）当前正在执行的工作负载脚本名称；非初始化中为 null
   currentWorkloadName: String
+  # 计费账户 ID（创建时指定；缺省为当前管理员账户）；未指定/存量容器为 null（不计费）
+  billingAccountId: ID
+  # 就绪计费起点（首次进入 ONLINE 的时刻）；null=未就绪/不计费
+  billingStartedAt: String
 }
 
 # 控制面健康标记（降级提示的承载字段）：online=false 时前端展示「控制面离线」横幅。
@@ -74,10 +78,12 @@ type Mutation {
   #   隐式依赖永远按 false 处理；被标记为「必须」的工作负载初始化失败/超时/执行前被删除时，
   #   服务端会中断剩余初始化并强制注销容器（不重试、不退避），详见 contracts/cloud-controller-websocket.md §2.9。
   # - workloadIds（兼容旧调用）等价于全部 `required=false`。
+  # billingAccountId（可选）：容器计费归属账户；缺省为当前管理员账户（get-or-create）。
   adminStartCloudContainer(
     purpose: CloudContainerPurpose!
     workloadIds: [ID!]
     workloads: [CloudWorkloadSelectionInput!]
+    billingAccountId: ID
   ): CloudContainer!
   # 强制销毁容器（幂等：终态容器重复调用返回 true）。
   # 注意：在线容器需下发 shutdown 并等待宽限期（无清理脚本约 10s；有清理脚本时还需先执行 post 批次，

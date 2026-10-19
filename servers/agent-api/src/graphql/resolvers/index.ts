@@ -11,6 +11,7 @@ import { mcpServerResolvers } from './mcp-server.js';
 import { githubResolvers } from './github.js';
 import { workflowResolvers } from './workflow.js';
 import { homeResolvers } from './home.js';
+import { billingResolvers } from './billing.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -27,6 +28,7 @@ export const resolvers = {
     ...githubResolvers.Query,
     ...workflowResolvers.Query,
     ...homeResolvers.Query,
+    ...billingResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -40,6 +42,7 @@ export const resolvers = {
     ...mcpServerResolvers.Mutation,
     ...githubResolvers.Mutation,
     ...workflowResolvers.Mutation,
+    ...billingResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

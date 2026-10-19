@@ -7,6 +7,8 @@ import ModelConfigPage from './pages/ModelConfigPage'
 import BaseImagePage from './pages/BaseImagePage'
 import CloudContainersPage from './pages/CloudContainersPage'
 import CloudWorkloadsPage from './pages/CloudWorkloadsPage'
+import BillingPage from './pages/BillingPage'
+import ReconciliationPage from './pages/ReconciliationPage'
 import AdminLayout from './components/AdminLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { getBasePath } from './lib/base-path'
@@ -28,6 +30,8 @@ function App() {
               <Route path="base-images" element={<BaseImagePage />} />
               <Route path="cloud-containers" element={<CloudContainersPage />} />
               <Route path="cloud-workloads" element={<CloudWorkloadsPage />} />
+              <Route path="billing" element={<BillingPage />} />
+              <Route path="reconciliation" element={<ReconciliationPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/models" replace />} />

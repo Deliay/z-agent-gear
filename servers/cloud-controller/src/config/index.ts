@@ -21,6 +21,14 @@ export interface AppConfig {
   workloadLogMaxBytes: number;
   /** 日志级别（`LOG_LEVEL`，默认 info；排查回连时设 debug）。 */
   logLevel: LogLevel;
+  /** RabbitMQ 连接串（`RABBITMQ_URL`，默认本地单容器 `amqp://guest:guest@localhost:5672`）。 */
+  rabbitmqUrl: string;
+  /** 消费者预取条数（`RABBITMQ_PREFETCH`，默认 10）。 */
+  rabbitmqPrefetch: number;
+  /** 消费失败最大重试次数（`RABBITMQ_RETRY_MAX`，默认 5），超次进入 DLQ。 */
+  rabbitmqRetryMax: number;
+  /** outbox relay 轮询间隔（`OUTBOX_RELAY_INTERVAL_MS`，默认 2000）。 */
+  outboxRelayIntervalMs: number;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -76,6 +84,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       262144,
     ),
     logLevel: parseLogLevel(env.LOG_LEVEL),
+    rabbitmqUrl:
+      env.RABBITMQ_URL ||
+      env.ConnectionStrings__rabbitmq ||
+      'amqp://guest:guest@localhost:5672',
+    rabbitmqPrefetch: toPositiveIntStrict(env.RABBITMQ_PREFETCH, 'RABBITMQ_PREFETCH', 10),
+    rabbitmqRetryMax: toPositiveIntStrict(env.RABBITMQ_RETRY_MAX, 'RABBITMQ_RETRY_MAX', 5),
+    outboxRelayIntervalMs: toPositiveIntStrict(
+      env.OUTBOX_RELAY_INTERVAL_MS,
+      'OUTBOX_RELAY_INTERVAL_MS',
+      2000,
+    ),
   };
 }
 

@@ -26,6 +26,17 @@ services:
       - "6379"
     networks:
       - "aspire"
+  rabbitmq:
+    image: "rabbitmq:3-management"
+    environment:
+      RABBITMQ_DEFAULT_USER: "zag"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD}"
+    expose:
+      - "5672"
+      - "15672"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
   controller-api:
     image: "${CONTROLLER_API_IMAGE}"
     environment:
@@ -77,6 +88,8 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
       FRONTEND_URL: "${FRONTEND_URL}"
+      ADMIN_API_URL: "http://admin-api:8002"
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
       PORT: "8000"
     ports:
       - "8000:8000"
@@ -92,6 +105,8 @@ services:
       WORKER_IMAGE: "${WORKER_IMAGE}"
       PUBLIC_WS_ENDPOINT: "${PUBLIC_WS_ENDPOINT}"
       K8S_ENABLED: "true"
+      RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
       MONGODB_PORT: "27017"
@@ -116,6 +131,8 @@ services:
       CORS_ORIGIN: "${CORS_ORIGIN}"
       CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
       MONGODB_PORT: "27017"

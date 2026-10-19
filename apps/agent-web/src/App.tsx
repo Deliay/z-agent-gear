@@ -9,6 +9,7 @@ import SettingsPage from './pages/SettingsPage'
 import SessionPage from './pages/SessionPage'
 import WorkflowInstancePage from './pages/WorkflowInstancePage'
 import HomePage from './pages/HomePage'
+import BillingPage from './pages/BillingPage'
 import ProtectedRoute from './components/ProtectedRoute'
 
 const basename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
@@ -37,6 +38,7 @@ function App() {
                 <Route path="sessions/:id" element={<SessionPageRoute />} />
                 <Route path="workflows/:id" element={<WorkflowInstancePage />} />
                 <Route path="settings" element={<SettingsPage />} />
+                <Route path="billing" element={<BillingPage />} />
               </Route>
             </Route>
           </Routes>

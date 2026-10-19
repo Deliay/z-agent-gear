@@ -19,4 +19,7 @@ export const config = {
   githubSetupUrl: process.env.GITHUB_SETUP_URL || 'http://localhost:4000/api/github/setup',
   githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+  // 费用中心：agent-api 不直写计费库，经 admin-api `/internal/billing/*` 转发（缺失时不 fail-fast）
+  adminApiUrl: process.env.ADMIN_API_URL || '',
+  internalApiToken: process.env.INTERNAL_API_TOKEN || '',
 };
