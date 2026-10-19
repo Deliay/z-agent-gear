@@ -6,6 +6,7 @@ import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
+import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingReservationCycle } from '../../models/billing-reservation.js';
 import { MeteringRecord, type IMeteringRecord } from '../../models/metering-record.js';
 import { accountService, type AccountService } from './account-service.js';
@@ -272,11 +273,17 @@ export class BillingService {
   }
 
   /**
-   * R6-1：以 **ledger 扣费行**为准补建缺失的容器最终结算账单/收据（崩溃窗口自愈线）。
+   * R6-1/R7-1：以 **ledger 扣费行 + 账单** 为准补建缺失的容器最终结算凭证（崩溃窗口自愈线）。
    *
-   * 覆盖场景：`finalSettle` 已写 `charge:final` / `charge:final-gap` 流水（ledger 已扣、钱包已减），
-   * 但 `BillingService` 尚未创建 `BillingInvoice`/`BillingReceipt` 时进程崩溃。重放时结算层因
-   * 「窗口已覆盖」早退（返回 0），不会再开票——只能由扣费行反推窗口与金额补建。
+   * 覆盖两个独立子窗口（都在 `finalSettle` 扣费与记账之后）：
+   * 1. **有扣费、无账单**：`charge:final` / `charge:final-gap` 流水已落，但 `BillingInvoice` 未落；
+   * 2. **有账单、无收据**：`createInvoice` 已落账单，但 `issueReceipt` 未落（崩溃或瞬时失败）。
+   *
+   * 重放时结算层因「窗口已覆盖」早退（返回 0），不会再走开票；若本方法只按「账单是否覆盖窗口」
+   * 判定，则第 2 类窗口会被整窗跳过、收据永久缺失（R7-1）。故：
+   * - 账单覆盖判定只用于决定**是否要建账单**；
+   * - **每张**本预留的最终结算账单都单独校验收据，缺失即重放 `invoiceExistingCharge`（幂等）补建，
+   *   与周期线 `repairCycleInvoice` 同标准。
    *
    * 归属规则（与主路径语义一致）：
    * - 命中判据：存在 container 最终结算账单，其 `[periodFrom, periodTo]` **覆盖**该流水窗口
@@ -284,8 +291,9 @@ export class BillingService {
    * - 主账单 `invoice:container-final:<rid>` 缺失 → 把**全部未覆盖流水**合并成一张主账单。
    * - 主账单已存在 → 逐条补建缺口账单 `invoice:container-final-gap:<rid>:<from>`。
    *
-   * 幂等：账单键/账单 `_id`/收据 `_id` 均确定性派生，重复重放不重复出账；`balanceAfter` 取当前
-   * 可用余额（补建账单的时间点余额，非原始扣费时点，仅影响展示）。
+   * 幂等：账单键/账单 `_id`/收据 `_id` 均确定性派生，重复重放不重复出账；补建账单的
+   * `balanceAfter` 取当前可用余额（补建时点，非原始扣费时点，仅影响展示）；补建收据的
+   * `amount/balanceAfter` 取**账单本身**，避免用单窗口金额污染合并账单的收据。
    */
   private async reconcileContainerInvoices(input: {
     accountId: string;
@@ -326,9 +334,25 @@ export class BillingService {
         $regex: `^invoice:container-(final|final-gap):${reservationKeyPattern}(:|$)`,
       },
     })
-      .select({ idempotentKey: 1, periodFrom: 1, periodTo: 1 })
+      .select({
+        _id: 1,
+        idempotentKey: 1,
+        periodFrom: 1,
+        periodTo: 1,
+        amount: 1,
+        balanceAfter: 1,
+        description: 1,
+      })
       .lean<
-        Array<{ idempotentKey?: string | null; periodFrom?: Date | null; periodTo?: Date | null }>
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          idempotentKey?: string | null;
+          periodFrom?: Date | null;
+          periodTo?: Date | null;
+          amount?: number;
+          balanceAfter?: number;
+          description?: string;
+        }>
       >();
 
     const isCovered = (window: ChargeWindow): boolean =>
@@ -342,8 +366,42 @@ export class BillingService {
           : invoice.idempotentKey === `invoice:container-final-gap:${reservationId}:${window.from}`;
       });
 
+    let repaired: InvoiceResult | null = null;
+    // R7-1：账单覆盖 ≠ 凭证齐全。`createInvoice` 与 `issueReceipt` 是两次独立写，中间崩溃/瞬时失败
+    // 会留下「账单在、收据缺」的窗口；此时 `isCovered` 为真，若只看它就会整窗跳过、收据永不可补。
+    // 故对**每条**本预留最终结算账单单独校验收据，缺失即重放 `invoiceExistingCharge`（幂等）补建。
+    const invoiceIds = invoices.map((invoice) => invoice._id);
+    const receiptRows = invoiceIds.length
+      ? await BillingReceipt.find({ invoiceId: { $in: invoiceIds } })
+          .select({ invoiceId: 1 })
+          .lean<Array<{ invoiceId: unknown }>>()
+      : [];
+    const invoicedIds = new Set(receiptRows.map((row) => String(row.invoiceId)));
+    for (const invoice of invoices) {
+      if (invoicedIds.has(String(invoice._id))) continue;
+      const key = invoice.idempotentKey;
+      if (!key) continue;
+      const result = await this.invoiceExistingCharge({
+        accountId,
+        // 收据必须与账单同额（合并账单覆盖 final+gap 时，不能用单窗口金额）。
+        amount: Math.abs(Math.round(invoice.amount ?? 0)),
+        balanceAfter: Math.round(invoice.balanceAfter ?? 0),
+        category: 'container',
+        refType: 'container',
+        refId: resourceId,
+        description: invoice.description || '容器结算（补建收据）',
+        items: [],
+        periodFrom: invoice.periodFrom ?? null,
+        periodTo: invoice.periodTo ?? null,
+        meteringIds: [],
+        idempotentKey: key,
+        invoiceId: String(invoice._id),
+      });
+      if (!repaired) repaired = result;
+    }
+
     const uncovered = windows.filter((window) => !isCovered(window));
-    if (uncovered.length === 0) return null;
+    if (uncovered.length === 0) return repaired;
 
     const mainKey = `invoice:container-final:${reservationId}`;
     const hasMainInvoice = invoices.some((invoice) => invoice.idempotentKey === mainKey);
@@ -356,7 +414,6 @@ export class BillingService {
 
     const account = await this.accounts.getById(accountId);
     const balanceAfter = account?.availableBalance ?? 0;
-    let repaired: InvoiceResult | null = null;
     for (const group of groups) {
       const from = Math.min(...group.map((window) => window.from));
       const to = Math.max(...group.map((window) => window.to));

@@ -609,6 +609,59 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(await BillingReceipt.countDocuments({})).toBe(1);
   });
 
+  it('R7-1a: 建账单后、开收据前崩溃 → 重放补建收据（幂等）', async () => {
+    const nowValue = { value: T0 };
+    const { billing } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-receipt-crash-main';
+    const endedAt = new Date(T0 + 60_000);
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'ACTIVE',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 0,
+    });
+    const rid = String(reservation._id);
+    const mainKey = `invoice:container-final:${rid}`;
+
+    // 崩溃点：账单已落库，收据未落库（issueReceipt 瞬时失败/进程中断）。
+    nowValue.value = endedAt.getTime();
+    const issue = vi
+      .spyOn(ReceiptService.prototype, 'issueReceipt')
+      .mockRejectedValueOnce(new Error('crash before receipt'));
+    await expect(
+      billing.handleContainerDestroyed({ accountId: account.id, resourceId, occurredAt: endedAt }),
+    ).rejects.toThrow('crash before receipt');
+    issue.mockRestore();
+
+    const invoice = await BillingInvoice.findOne({ idempotentKey: mainKey }).lean();
+    expect(invoice).not.toBeNull();
+    expect(await BillingReceipt.countDocuments({ invoiceId: String(invoice!._id) })).toBe(0);
+
+    // 重放：扣费与账单都已存在（结算层早退），但收据必须补建。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: endedAt,
+    });
+    expect(await BillingReceipt.countDocuments({ invoiceId: String(invoice!._id) })).toBe(1);
+    const receipt = await BillingReceipt.findOne({ invoiceId: String(invoice!._id) }).lean();
+    expect(receipt!.amount).toBe(100);
+
+    // 二次重放：不重复出账/出收据。
+    await billing.handleContainerDestroyed({
+      accountId: account.id,
+      resourceId,
+      occurredAt: endedAt,
+    });
+    expect(await BillingInvoice.countDocuments({ idempotentKey: mainKey })).toBe(1);
+    expect(await BillingReceipt.countDocuments({})).toBe(1);
+  });
+
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);

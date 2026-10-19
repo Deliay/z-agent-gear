@@ -1,9 +1,11 @@
+import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingOutbox } from '../../models/billing-outbox.js';
+import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingRollup } from '../../models/billing-rollup.js';
 import { accountService, type AccountService } from './account-service.js';
 import type { BillingService } from './billing-service.js';
@@ -377,16 +379,18 @@ export class ReconciliationService {
   }
 
   /**
-   * R6-1（对齐 R2-4 `apiCalls` 线）：容器 **charge 流水 ↔ 账单** 存在性对账。
+   * R6-1（对齐 R2-4 `apiCalls` 线）：容器 **charge 流水 ↔ 账单 ↔ 收据** 存在性对账。
    *
-   * 结算层「先扣费、后开票」非原子，进程在中间崩溃会留下「ledger 有扣费、账单缺失」的凭证空洞。
-   * 正常重放已能自愈（`BillingService.reconcileContainerInvoices`），但若事件不再重投（outbox 清理、
-   * 对账兜底场景），需要一条独立的发现线。仅报告，不自动改账。
+   * 结算层「先扣费、后开票」非原子，进程在中间崩溃会留下「ledger 有扣费、账单缺失」的凭证空洞；
+   * 开票内部「先建账单、后开收据」同样非原子（R7-1），会留下「账单在、收据缺」的子窗口。
+   * 正常重放已能自愈（`BillingService.reconcileContainerInvoices` / `repairCycleInvoice`），但若事件
+   * 不再重投（outbox 清理、对账兜底场景），需要一条独立的发现线。**仅报告，不自动改账**。
    *
-   * 覆盖三类容器流水：
+   * 覆盖：
    * - `…:final:<from>:<to>` → 账单 `invoice:container-final:<rid>` 且 `[periodFrom,periodTo]` 覆盖窗口；
    * - `…:final-gap:<from>:<to>` → 账单 `invoice:container-final-gap:<rid>:<from>` 覆盖窗口；
-   * - `…:cycle:<seq>` → 账单 `invoice:container-cycle:<rid>:<seq>`。
+   * - `…:cycle:<seq>` → 账单 `invoice:container-cycle:<rid>:<seq>`；
+   * - 任一上述账单缺对应 `BillingReceipt`（按 `invoiceId`）→ `invoice_without_receipt`。
    * 零额流水（零价窗口）无需出账，跳过。
    */
   private async reconcileContainerInvoices(): Promise<ReconciliationReport> {
@@ -446,6 +450,34 @@ export class ReconciliationService {
           reason: 'charge_without_invoice',
         });
       }
+    }
+    // R7-1：invoice ↔ receipt 存在性。`createInvoice` 与 `issueReceipt` 是两次独立写，
+    // 中间崩溃/瞬时失败会留下「账单在、收据缺」的凭证空洞（不属于 charge↔invoice 盲区）。
+    const invoiceRows = await BillingInvoice.find({
+      category: 'container',
+      createdAt: { $gte: since },
+      idempotentKey: { $regex: '^invoice:container-(final|final-gap|cycle):' },
+    })
+      .select({ _id: 1, idempotentKey: 1, amount: 1 })
+      .lean<
+        Array<{ _id: mongoose.Types.ObjectId; idempotentKey?: string | null; amount?: number }>
+      >();
+    const invoiceIds = invoiceRows.map((invoice) => invoice._id);
+    const receiptRows = invoiceIds.length
+      ? await BillingReceipt.find({ invoiceId: { $in: invoiceIds } })
+          .select({ invoiceId: 1 })
+          .lean<Array<{ invoiceId: unknown }>>()
+      : [];
+    const invoicedIds = new Set(receiptRows.map((row) => String(row.invoiceId)));
+    for (const invoice of invoiceRows) {
+      checked += 1;
+      if (invoicedIds.has(String(invoice._id))) continue;
+      errors.push({
+        invoiceId: String(invoice._id),
+        idempotentKey: invoice.idempotentKey ?? null,
+        amount: Math.abs(Math.round(invoice.amount ?? 0)),
+        reason: 'invoice_without_receipt',
+      });
     }
     return this.report('containerInvoices', checked, errors);
   }

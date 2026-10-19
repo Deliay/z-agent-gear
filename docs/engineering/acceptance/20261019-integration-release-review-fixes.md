@@ -425,3 +425,60 @@ R4-2 destroyed 业务事实断言 + ready `repairOf` 锚定、R4-1 区间两端�
 - `repairCycleInvoice` 仅在周期记录 `amount > 0` 时出账（与正常路径 `settlement.amount > 0` 才出账一致）；零额周期不产生账单。
 - `settleTailAfterSettled` 的 `applied=false` 回填分支在串行前提下仍不可达（本轮已如实注释，不再作为补建机制）。
 - 前几轮 8.4/9.5 未做项保持如实标注，未在本轮扩大范围。
+
+---
+
+## 十一、第七轮复核返工对账（2026-10-20，针对 R7-1）
+
+> 基线：`integration` @ `d4b4e64`（复核对象 §十三）。复核口径：崩溃点构造/探针回退为固定手段；
+> 断言以业务事实（账单/收据存在性与金额）为单位；写序列逐窗口给「可恢复」结论。
+
+### 11.1 R7-1（🟠 重要：`invoiceExistingCharge` 建账单后、开收据前 → 收据永久缺失且不可自愈）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| ① 容器修复线补「账单在、收据缺」 | ✅ | `reconcileContainerInvoices` 不再「账单覆盖即整窗跳过」：**每张**本预留最终结算账单单独按 `BillingReceipt.invoiceId` 校验收据，缺失即重放 `invoiceExistingCharge`（幂等）补建；与 `repairCycleInvoice` 同标准。收据金额/余额取**账单本身**（`amount/balanceAfter`），避免合并账单（final+gap）被单窗口金额污染 |
+| ② `issueReceipt` 瞬时失败可恢复 | ✅ | `issueReceipt` 失败仍抛出（触发事件重试），但重放路径已能补：`finalizeReservation` 无条件调用 `reconcileContainerInvoices`；逐窗口结论见 §11.4 |
+| ③ 发现线补 invoice↔receipt | ✅ | `containerInvoices` 由「charge↔invoice」扩展为「charge↔invoice↔receipt」：近 24h `invoice:container-(final|final-gap|cycle):*` 逐张校验 `BillingReceipt`，缺失报 `invoice_without_receipt`（仅报告，不自动改账） |
+| ④ 区分性回归（修复前红） | ✅ | `billing-flow.test.ts`「R7-1a」：`vi.spyOn(ReceiptService.prototype,'issueReceipt').mockRejectedValueOnce` 构造「账单已落、收据未落」中间态 → 重放 `handleContainerDestroyed` 断言收据补建（金额 100）、二次重放不重复；`reconciliation.test.ts` 新增 / 更新正反用例（final 与 cycle 两条线、补收据后 errorCount=0） |
+| ④ 探针结论 | ✅ | 回退 `billing-service.ts` 至 `b1b66db`：R7-1a 🔴 `AssertionError: expected +0 to be 1`（与复核 P-A 一致）；周期线对照组（`repairCycleInvoice`）本就可补，与复核 P-B 一致 |
+| ⑤ 声明精确化 + 残余枚举 | ✅ | JSDoc 明确「账单覆盖判定只决定是否建账单；收据逐张单独校验」；§11.4 逐窗口列「可恢复/残余」 |
+
+### 11.2 探针回退验证（本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R7 Probe | `billing-service.ts` → `b1b66db` | R7-1a | 🔴 `expected +0 to be 1`（重放后收据仍缺失） |
+
+修复后同一用例：收据恰好 1 条、金额 100，二次重放不新增。
+
+### 11.3 独立复跑（本机实跑，Aspire 干净实例 `aspire stop && aspire start`，注入 `INTERNAL_API_TOKEN`）
+
+| 层 | 结果 |
+|---|---|
+| admin-api 单测 / `tsc --noEmit` | ✅ **542 passed / 1 skipped**，tsc 0 |
+| cloud-controller | ✅ 197 passed，tsc 0 |
+| agent-api | ✅ 658 passed，tsc 0 |
+| admin-web | ✅ tsc 0 / 207 passed |
+| agent-web | ✅ tsc 0 / 429 passed |
+| tests/api（28 文件） | ✅ **454 passed / 0 skipped**（连续两次完整复跑；Aspire 重启后首跑有 1 例失败，未保留用例名、随后两次均未复现） |
+| 费用 E2E | ✅ 3 passed |
+
+### 11.4 新机制各崩溃子窗口的「可恢复」结论
+
+| # | 崩溃点（写序列） | 重放后 | 结论 |
+|---|---|---|---|
+| 1 | `finalSettle` 扣费已落、`finalizeReservation` 开票未落 | `reconcileContainerInvoices` 按 ledger 建账单+收据 | ✅ 可恢复（R6-1a） |
+| 2 | `createInvoice` 已落、`issueReceipt` 未落 | 对每张账单校验收据缺失 → 重放 `invoiceExistingCharge` | ✅ 可恢复（R7-1a） |
+| 3 | `issueReceipt` 已落、`MeteringRecord.invoiced` 未置位 | 补收据分支 `meteringIds:[]` 不重跑标记 | ⚠️ 派生标记残留（非资金/凭证），`reconcileMetering` 可发现 |
+| 4 | `settleCycle` 扣费已落、周期账单未落 | `repairCycleInvoice` 按周期记录建账单+收据 | ✅ 可恢复（R6-1c） |
+| 5 | 周期账单已落、收据未落 | `repairCycleInvoice` 无条件重放 `invoiceExistingCharge` | ✅ 可恢复（R6-1b 对照线 / P-B） |
+| 6 | 周期收据已落、`prepareNextCycle` 未执行 | 修复路径补 `prepareNextCycle(seq+1)`（幂等） | ✅ 可恢复 |
+| 7 | 缺口尾结扣费已落、开票未落 | `reconcileContainerInvoices` 逐缺口建账单+收据 | ✅ 可恢复（R6-1b） |
+
+### 11.5 未做/残余（如实标注）
+
+- 子窗口 #3（`metering.invoiced` 派生标记）未纳入本次补建；不涉及资金与凭证，且 `reconcileMetering` 覆盖。
+- 自愈依赖「事件重放」；若事件永不重投，`containerInvoices` 仅报告 `charge_without_invoice` / `invoice_without_receipt`，不自动改账（与 R2-4 一致）。
+- 补建账单的 `balanceAfter` 取补建时点余额；补建收据的 `amount/balanceAfter` 取账单本身（与账单一致）。
+- `repairCycleInvoice` 仅在周期记录 `amount > 0` 时出账（与正常路径一致）。

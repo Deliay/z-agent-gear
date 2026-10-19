@@ -434,6 +434,7 @@ describe('ReconciliationService（三线对账）', () => {
     });
 
     await BillingInvoice.create({
+      _id: new mongoose.Types.ObjectId(),
       accountId: account.id,
       seq: 0,
       type: 'charge',
@@ -441,11 +442,65 @@ describe('ReconciliationService（三线对账）', () => {
       amount: -100,
       balanceAfter: 0,
       idempotentKey: `invoice:container-final:${reservationId}`,
+      receiptId: new mongoose.Types.ObjectId(),
       periodFrom: new Date(from),
       periodTo: new Date(to),
     });
+    const [invoiceOnlyReport] = await recon.run('containerInvoices');
+    // R7-1：账单已存在但收据缺失 → 仍应报告（不再只看 charge↔invoice）。
+    expect(invoiceOnlyReport.errorCount).toBe(1);
+    expect(invoiceOnlyReport.errors[0]).toMatchObject({ reason: 'invoice_without_receipt' });
+
+    const { BillingReceipt } = await import('../../models/billing-receipt.js');
+    const invoice = await BillingInvoice.findOne({
+      idempotentKey: `invoice:container-final:${reservationId}`,
+    }).lean();
+    await BillingReceipt.create({
+      receiptNo: 'R20261020TEST0001',
+      invoiceId: invoice!._id,
+      accountId: account.id,
+      amount: 100,
+      balanceAfter: 0,
+    });
     const [coveredReport] = await recon.run('containerInvoices');
     expect(coveredReport.errorCount).toBe(0);
+  });
+
+  it('containerInvoices: 周期账单缺收据同样被报告（R7-1 覆盖 cycle 线）', async () => {
+    const { BillingInvoice } = await import('../../models/billing-invoice.js');
+    const account = await accountService.getOrCreate(
+      'front_user',
+      new mongoose.Types.ObjectId().toString(),
+      'container-cycle-receipt-user',
+    );
+    const reservationId = new mongoose.Types.ObjectId().toString();
+    const invoiceId = new mongoose.Types.ObjectId();
+    await BillingInvoice.create({
+      _id: invoiceId,
+      accountId: account.id,
+      seq: 0,
+      type: 'charge',
+      category: 'container',
+      amount: -100,
+      balanceAfter: 0,
+      idempotentKey: `invoice:container-cycle:${reservationId}:0`,
+      receiptId: new mongoose.Types.ObjectId(),
+      periodFrom: new Date(Date.now() - 120_000),
+      periodTo: new Date(Date.now() - 60_000),
+    });
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('containerInvoices');
+    expect(report.errors).toContainEqual(
+      expect.objectContaining({
+        invoiceId: String(invoiceId),
+        idempotentKey: `invoice:container-cycle:${reservationId}:0`,
+        reason: 'invoice_without_receipt',
+      }),
+    );
   });
 
   it('resources: 容器缺失/超期 → 最终结算；列表失败 → 中止', async () => {
