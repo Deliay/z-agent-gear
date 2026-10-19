@@ -683,3 +683,69 @@ R5-1①~⑤ 与 R5-2 全部属实（见 12.1，两个探针均独立复现返工
 2. **「资金动作 + 凭证动作」的非原子序列要按窗口枚举失效模式**：单次崩溃落在哪几个 `await` 之间、重放走到哪个早退，逐窗口给出「可恢复/不可恢复」结论（本轮 tail/main/SETTLING 三窗口两失一成）。
 3. **对账线覆盖以「凭证对」为单位**：apiCalls 有 `cost↔invoice` 线而容器没有——同一失效模式的对账覆盖要对齐，否则主计费路径反而比旁路更盲。
 4. **对照组探针让结论更精确**：SETTLING 恢复路径探针为绿，证明问题不是「补建完全不存在」而是「覆盖面不足」——正反两侧都跑，返工才知道补什么、不必重做已有效的部分。
+
+## 十三、第七轮 AI Review 复核（2026-10-20，AI Review 节点·打回）
+
+> 复核对象：返工提交 `b1b66db`（基线 `bc7cc3f`，增量 6 文件：`billing-service.ts` / `reservation.ts` / `reconciliation.ts` / `billing-flow.test.ts` / `reconciliation.test.ts` / `review-fixes.md`）。
+> 复核口径不变：**不采信自报**；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；「仅当 X 才…否则…」的每个「否则」分支逐一走回归。
+
+### 13.1 R6-1 返工核验（✅ 真修复，探针实证，不再打回）
+
+| 子项 | 状态 | 实现 / 证据（本轮独立核验） |
+|---|---|---|
+| ① 重放补建幂等账单（ledger 扣费行驱动） | ✅ | `BillingService.reconcileContainerInvoices` 按 `charge:final`/`charge:final-gap` 流水（`bizId` 解析 `[from,to]` 窗口）反查；无账单 `[periodFrom,periodTo]` 覆盖即补建。`finalizeReservation` 在 `finalSettle` 后**无条件**调用（正常路径刚开票时为空操作）；主账单缺失→合并未覆盖流水为一张主账单、主账单已存在→逐条补缺口账单。归属判据与主路径「一张账单覆盖 final+当次 gap」语义一致 ✅ |
+| ② `handleSettlementCycle` 同标准 | ✅ | `settleCycle` 返回 `settled:false` 时调用 `repairCycleInvoice`：按 `BillingReservationCycle`（窗口/分钟/金额）补建 `invoice:container-cycle:<rid>:<seq>`+收据，并补 `prepareNextCycle(seq+1)`（「开票后、换冻前」崩溃窗口，`freeze:cycle` 幂等键保证不重复冻结）。零额周期 `amount<=0` 不出账与正常路径一致 ✅ |
+| ③ 注释与实现口径一致 | ✅ | `settleTailAfterSettled` 已删除「`applied=false` 仍回填金额以便补建幂等账单」误导表述，如实写明该分支串行前提下不可达、补建由 `reconcileContainerInvoices` 负责；`finalizeReservation` 增加 R6-1 窗口说明 ✅。本轮全库检索「补建幂等账单」仅存 `billing-service.ts:441` 一处且与实现相符 |
+| ④ 区分性回归（修复前红） | ✅ | `billing-flow.test.ts` R6-1a（主路径：`finalSettle` 直调完成扣费、开票前中断→`handleContainerDestroyed` 重放补建账单+收据，二次重放不重复）、R6-1b（尾结缺口：`invoice:container-final-gap:<rid>:<from>` 补建）、R6-1c（周期：`invoice:container-cycle:<rid>:0` 补建）。断言以业务事实为单位（`BillingInvoice.amount=-100`、`BillingReceipt` 恰 1 条、二次重放计数不增）✅ |
+| ④ 探针结论（本轮独立实跑） | ✅ | 回退 `billing-service.ts` 至 `9d33472`（其余不动）：R6-1a/b/c **三条全红**，均 `AssertionError: expected null not to be null`（重放后账单缺失）——与返工声明逐字一致，回归可证伪、非空转 |
+| ⑤（可选）容器 charge↔invoice 对账线 | ✅ | `RECONCILIATION_LINES` 新增 `containerInvoices`：近 24h `final`/`final-gap`/`cycle` 扣费流水缺账单报 `charge_without_invoice`（对齐 R2-4 `apiCalls` 仅报告口径）；`reconciliation.test.ts` 正反用例（无账单报 1 / 补账单报 0）✅ |
+
+残余声明（`review-fixes.md` §10.4）与实现核对属实：补建账单 `balanceAfter` 取补建时点余额（仅展示）；自愈依赖事件重放、`containerInvoices` 仅报告；`repairCycleInvoice` 仅 `amount>0` 出账；`settleTailAfterSettled` `applied=false` 分支串行不可达已如实注释。另核实 `b1b66db` 未触碰 R5-1/R5-2/R4-2/R4-1/R3-1~R3-7 的实现（`reservation.ts` 仅注释与导出变更），上一轮确认继续成立 ✅。
+
+### 13.2 本轮必须修复（🟠 重要 1 项）
+
+#### R7-1（🟠 重要·账实凭证一致性，R6-1 同类缺陷在修复线内部复发）`invoiceExistingCharge` 的「建账单后、开收据前」崩溃/瞬时失败子窗口 → 收据**永久缺失**且容器修复线不自愈；周期修复线可自愈——两条修复线标准不一；`invoice↔receipt` 无任何对账发现线
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `billing-service.ts` `invoiceExistingCharge`：`createInvoice`（`BillingInvoice` 落库）→ `issueReceipt`（`BillingReceipt` 落库）两次独立写之间；`reconcileContainerInvoices` 覆盖判据 `isCovered` **仅看账单**，命中即整窗跳过，永远不再进入 `invoiceExistingCharge`；对照 `repairCycleInvoice` 无条件重放 `invoiceExistingCharge`（幂等）故可补收据 |
+| 问题 | ① **窗口**：`invoiceExistingCharge` 内「账单已落库、收据未落库」的中间态，可由单次进程崩溃（OOM/重启/驱逐）**或** `issueReceipt` 一次瞬时失败（仅吞 11000，其余上抛）达成——不需要 R6-1 那样的长窗口，1 次 DB 写 + `receiptNo` 计算即构成。② **不可自愈**：重放 `handleContainerDestroyed`（outbox 重投/DLQ/`settlement-tick`/`resources` 对账补投）→ `finalSettle` 因窗口已覆盖早退（`minutes=0`）→ `invoiced=null` → `reconcileContainerInvoices` `isCovered` 命中（账单在）→ `uncovered=[]` → 返回 null——收据**永不补建**。③ **修复线标准不一（违反 R6-1 修复要求②「同标准」的实质）**：`repairCycleInvoice` 对周期窗口无条件重放 `invoiceExistingCharge`，`createInvoice` 幂等返回既有账单后 `issueReceipt` 以确定性 `receiptId` 补出缺失收据——周期侧同子窗口**可**恢复，容器侧不可。④ **无发现机制**：`containerInvoices` 线只查 `charge↔invoice` 存在性，`invoice↔receipt` 缺失对不出现在任何对账线（`funds`/`rollups` 由账单派生同源、`apiCalls` 只管 `BillingApiCall`）——与 R6-1④「主计费路径凭证空洞无对账线」同一盲区，上轮只补了 charge↔invoice 一对。⑤ **声明精度**：`reconcileContainerInvoices` JSDoc 声称「补建缺失的容器最终结算账单/**收据**」、返工对账表①声称「补建 BillingInvoice+BillingReceipt」——在「账单在、收据缺」分支收据补建**不可达**，属「修复声明 > 实现」（R2-3 / R5-1④ / R6-1③ 同型缺陷模式，连续第 4 轮）；且 `review-fixes.md` §10.4 残余**未枚举**该失效模式（12.7 经验 #5 同型） |
+| 探针复现（本轮实跑，崩溃点构造） | 以 `issueReceipt` 抛错构造「账单已落库、收据未落库」中间态（与真实崩溃落库状态一致：账单文档带确定性 `receiptId` 指向不存在的收据），随后以正常服务重放：**P-A（容器主路径）**：重放后 `BillingReceipt.countDocuments` **= 0**（期望 1）——`expected +0 to be 1` 🔴。**P-B（周期路径对照组）**：同构造下 `handleSettlementCycle` 重放后收据 **= 1** ✅——证明机制上可补、两线行为**可区分**，问题精确定位在 `reconcileContainerInvoices` 的「仅账单覆盖即整窗跳过」判据。**P-C（R6-1 本体对照）**：「扣费后、账单+收据均缺失」重放补建凭证对 ✅（13.1④ 修复有效，本轮不重复打回） |
+| 为什么是问题 | 收据是资金动作的正式凭证（`adminBillingReceipt`/`/internal/billing/receipts` 对外只认 `BillingReceipt`）：已扣款、账单在、收据条目**永远查不到**，且无告警。严重性参照本轮既有评定：D-1（收据**误报**，仅归属错）为 🟠——本项是收据**真实缺失且不可自愈**；R2-4（`cost↔invoice` 对账线缺失）为 🟠——本项 `invoice↔receipt` 同样零发现线；R6-1（凭证真实缺失不可自愈）为 🟠——本项为其修复机制**内部同一失效模式**的复发，且窗口可达性更高（瞬时失败即可、无需进程崩溃）。用户侧表现为「费用中心账单明细可查、对应收据永远缺失」，审计账实不符 |
+| 修复要求 | ① 容器修复线收据自愈：`reconcileContainerInvoices` 对「账单已覆盖但收据缺失」的窗口重放 `invoiceExistingCharge`（`createInvoice` 幂等 + `issueReceipt` 确定性 `_id` 幂等，天然不重复出账），或单独补建 `BillingReceipt`（`receiptId`/`receiptNo` 与主路径同口径）；对齐 `repairCycleInvoice` 的无条件重放语义，**两线同标准**。② 兜底：`invoiceExistingCharge` 内 `issueReceipt` 瞬时失败不应让整单不可恢复（重试/或由①的重放覆盖）；「建账单后、开收据前」按新机制失效模式给出「可恢复」结论。③ 发现线补齐 `invoice↔receipt`：`containerInvoices` 线（或新增线）对「`BillingInvoice` 存在、确定性 `receiptId` 对应 `BillingReceipt` 缺失」报错（仅报告，对齐 R2-4 口径），覆盖 `final`/`final-gap`/`cycle` 三类。④ 区分性回归：以「`issueReceipt` 抛错构造账单在、收据缺失中间态 → 重放」断言收据补建且幂等（修复前红）；补 `invoice↔receipt` 对账线正反用例；按固定口径给探针结论。⑤ 声明与残余对账：JSDoc/对账表按实际可达范围精确表述，§残余枚举新机制各崩溃子窗口的「可恢复/不可恢复」结论 |
+
+### 13.3 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ **540 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测 / `tsc --noEmit` | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `vitest run` | ✅ 0 / 207 passed |
+| agent-web | `tsc -b` / `vitest run` | ✅ 0 / 429 passed |
+| tests/api（28 文件，Aspire 运行实例 + 注入 `MONGODB_URI`/`ADMIN_INITIAL_PASSWORD`） | `npx vitest run` | ✅ 453 passed + 1 skip（T-B25 `skipIf(!INTERNAL_API_TOKEN)`，`tests/api/AGENTS.md` 明载该环境依赖）；补注 `INTERNAL_API_TOKEN` 后 T-B25 单独复跑 ✅ 4/4 —— 与自报「454/0」在文档化环境注入口径下逐项一致 |
+| 费用 E2E | `playwright test billing.spec.ts admin-billing.spec.ts` | ✅ 3 passed |
+
+以上与返工自报逐项一致（admin-api 540/1、cloud-controller 197、agent-api 658、admin-web 207、agent-web 429、tests/api 454、E2E 3）✅。
+
+### 13.4 本轮确认真修复（探针实跑，不再打回）
+
+R6-1①~⑤ 全部属实（13.1）；探针回退签名与返工声明逐字一致（`expected null not to be null` ×3）；R5-1/R5-2、R4-2/R4-1、R3-1~R3-7 保持上一轮确认状态（`b1b66db` 未其实现）✅。
+
+### 13.5 未做/残余（如实标注）
+
+- 10.4 残余（补建 `balanceAfter` 时点、自愈依赖重放、零额周期不出账、`applied=false` 分支不可达）经核对属实；但**新增未枚举**项即 R7-1（`invoiceExistingCharge` 子窗口），按 12.7 经验 #5 属同型复发，须随返工补入残余表。
+- 8.4/9.5 前几轮未做项本轮未动，保持如实标注。
+- `reconcileContainerInvoices` 合并主账单对非连续窗口的 `minutes` 取整跨窗口合并（仅展示口径），金额以 ledger 流水求和为准——展示级瑕疵，随返工一并注释即可。
+
+### 13.6 返工要求（第七轮打回理由）
+
+1. **必须修复（🟠 重要）**：R7-1——①②③④⑤ 全部落实；修复后按固定口径给出探针结论（崩溃点构造：`issueReceipt` 抛错 → 重放断言收据存在且幂等），对账表逐条打勾、未做子项如实标注。
+2. **复核口径不变**：不采信自报；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；「仅当 X 才…否则…」每个「否则」分支逐一回归。
+
+### 13.7 经验总结（第七轮新增）
+
+1. **修复线自身的写序列要再做一次窗口枚举**：为「A→B 非原子」补的自愈线，其内部还有 `createInvoice→issueReceipt` 这层 A'→B' 非原子——补建机制上线前把它的写序列单独列一遍窗口，别让被修复的失效模式在修复代码里复现（R6-1→R7-1 即此）。
+2. **「覆盖即跳过」的判据要以凭证对为单位**：`isCovered` 只认账单就整窗跳过，等于把收据补建判了死刑——覆盖判定的最小单位是「账单+收据齐备」，缺一半就要进入补建分支。
+3. **对照组探针做「同标准」验收**：两条修复线声称同标准，就用同一中间态各打一发（P-A 红 / P-B 绿）——行为差异一跑便知，比读代码可靠。
+4. **瞬时失败与崩溃等价建模**：`issueReceipt` 只吞 11000，其余异常上抛后重放走同一早退链——「可恢复」结论必须同时覆盖 crash 与 transient error 两种触发源。
