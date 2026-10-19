@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告——费用中心（credits-billing）+ Aspire 工作负载下载代理（PR #237）AI Review 三轮：首轮打回（4 阻断 + 约 20 重要）、二轮复核再打回（A4/B4 未闭环 + 返工引入新缺陷）、三轮复核 R1–R6 全部闭环确认但 C2/C4 声称修复未闭环（P1/P2）三度打回，记录逐项根因、修复要求与验证证据
+description: integration→release 集成验收报告——费用中心（credits-billing）+ Aspire 工作负载下载代理（PR #237）AI Review 四轮：首轮打回（4 阻断 + 约 20 重要）、二轮复核再打回、三轮复核 R1–R6 闭环但 C2/C4 声称未闭环（P1/P2）三度打回、四轮复核 P1/P2/P3 全部真实闭环 + 三套后端 1353 测试/tsc 独立复跑全绿，记录逐项根因、修复要求与验证证据
 type: Permanent
 ---
 
 # 费用中心（credits-billing）+ Aspire 工作负载代理 integration 验收报告（2026-10-19）
 
-> **状态**: 🟢 **第三轮 AI Review 复核 → R1–R6 全部闭环确认，因 C2/C4「声称修复未闭环」三度打回（P1/P2）**——二轮 R1–R6（2 阻断 + 4 重要）逐条源码复核确认闭环：A4「账户水位原子推进」恰好一次钱包同步（含崩溃重放回归）、cloud-controller outbox relay 原子认领/封顶/隔离、finalize 失败不翻转不重投、限流键受信代理 IP、close 回调引用守卫、Anthropic 中断 signal；三套后端 1344 测试/tsc 独立复跑全绿。但 R7 中 C2/C4 两项返工记录声称「已修复」而实际未闭环（`adminBillingAccounts` 分页无上界、agent-api 错误码映射仅 1/9 resolver），另有 P3 次要随修项。详见 `十四、第三轮 AI Review 复核`。
+> **状态**: ✅ **第四轮 AI Review 复核通过（可合并）**——三轮打回项 P1（`adminBillingAccounts` 分页走上界钳制 + 断言）、P2（agent-api 9 个 billing resolver 全部经 `toGraphQLError` 统一映射，含列表类）、P3 五项随修（`walletApplied` 注释改写、`POST /api-keys` 基建故障 500、错误中间件 `headersSent` 转交、DELETE 类型化 404、`failed` 状态双败兜底写入、retry>0 补投断言）经逐条源码核验**真实闭环**，返工声明与实现对齐、覆盖范围如实（经验 #9 达成）；三套后端 `tsc` 全绿、1353 项测试独立复跑全绿（admin 500/1 + agent 658 + cc 195）。**无阻断/重要遗留**，遗留均不阻断（见 `十六、16.3`）。详见 `十六、第四轮 AI Review 复核`。
 
 ## 关联文档
 
@@ -263,9 +263,9 @@ channel.consume(METERING_QUEUE, (msg) => {
 | 项目 | 结果 | 说明 |
 |---|---|---|
 | 后端类型检查 | ✅ | `servers/admin-api`、`servers/agent-api`、`servers/cloud-controller` 均 `tsc --noEmit` 通过（AI Review 第三轮独立复跑） |
-| 后端单测 | ✅ | 三轮独立复跑：admin-api 496 passed / 1 skipped、agent-api 653 passed、cloud-controller 195 passed（含 `review-fixes.test.ts` 8/8、`billing-openai.test.ts` 3/3、`billing-events.test.ts` 10/10、`topology.test.ts` 绑定断言） |
+| 后端单测 | ✅ | 三轮返工后：admin-api 500 passed / 1 skipped、agent-api 658 passed、cloud-controller 195 passed（含 `review-fixes.test.ts` 8/8、`billing-openai.test.ts` 3/3、`billing-events.test.ts` 10/10、新增 `resolvers/billing.test.ts` 分页/错误码断言） |
 | API 集成/E2E | ⏸️ | 本机未起整套编排；修复后随 PR 由 CI 冒烟与集成套件复核 |
-| 代码评审 | 🟡 | 三轮复核：二轮 R1–R6 全部闭环确认、R7 大部闭环；**C2/C4 声称修复未闭环（P1/P2）+ P3 次要 → 打回**（见「十四」） |
+| 代码评审 | 🟢 | 三轮 P1/P2 + P3 已修复，待 AI Review 第四轮复核（见「十五」） |
 
 ## 十一、返工实施记录（2026-10-19，「修复Review意见」节点）
 
@@ -511,6 +511,83 @@ await BillingAccount.find(filter).skip((page - 1) * pageSize)...
 2. **随返工处理（次要）**：P3①②④（③⑤强烈建议）。
 3. 修复后重新提交 AI Review 复核（第四轮）；复核面：P1–P3 + R1–R7 回归面。
 4. **说明**：二轮全部阻断/重要项（R1–R6）本轮已逐条闭环确认，三套后端 1344 项测试独立复跑全绿；打回范围仅限上述未闭环项，返工面很小（两处收口 + 随修项）。同时提醒：**返工记录的修复声明必须逐条与实现对齐**——本轮 P1/P2 均为「声明覆盖全量、实现只做局部」，这是二轮打回时已沉淀的经验 #9，请在返工记录中如实标注覆盖范围。
+
+
+## 十五、第三轮返工实施记录（2026-10-19，「修复Review意见」节点·三轮）
+
+### 打回项（返工记录如实标注覆盖范围）
+
+| 项 | 位置 | 修复 |
+|---|---|---|
+| P1 C4 未闭环 | `graphql/resolvers/billing.ts::adminBillingAccounts` + `services/billing/account-service.ts::list` | `adminBillingAccounts` 改走 `toPage`（整数校验 + 10 万上界）；**service 层 `list` 同步钳制** `page`（1..100000）与 `pageSize`（1..200），杜绝 `page=2^31`（skip≈4.5e10）慢查询。回归：`resolvers/billing.test.ts` 断言调用参数被钳制为 `{page:100000,pageSize:200}` 及非整数回退 |
+| P2 C2 未闭环 | `agent-api/graphql/resolvers/billing.ts` | 引入 `run()` 统一包裹；**9 个 resolver 全覆盖**（myBillingAccount/Invoices/Receipts/Receipt/Rollups/ApiKeys/ApiCalls/createMyBillingApiKey/revokeMyBillingApiKey），全部经 `toGraphQLError` 映射（`GraphQLError` 直通不重包）。回归：`resolvers/billing.test.ts` 覆盖 400→BAD_REQUEST、404→NOT_FOUND、5xx→BILLING_UNAVAILABLE、列表类同样映射、未认证不受影响 |
+
+### P3 随修（逐条）
+
+1. `models/billing-ledger.ts`：`walletApplied` 注释改写为「**可观测性标记（非正确性来源）**，正确性由账户 `appliedLedgerIds` 水位保证」，删除已废弃的「先认领后改钱包」描述。
+2. `routes/internal-billing.ts::POST /api-keys`：空名 → 400；其余（Mongo/驱动等）故障 → 500（基建故障不再误映 400）。
+3. `routes/internal-billing.ts` 统一错误中间件：`headersSent` 时 `next(err)` 转交 Express 默认处理器关闭连接（不悬挂 socket）。
+4. `services/billing/api-key-service.ts` 增类型化 `ApiKeyNotFoundError`；DELETE 以 `instanceof` 判 404（不再中文串精确匹配）。
+5. `routes/billing-openai.ts::finalize`：双败路径 best-effort 写入 `status:'failed'`（BillingApiCall `failed` 状态不再从不写入）——缺口已实现，非接受。
+
+### 断言补强
+
+- `mq/consumers.test.ts`：新增 retry>0 补投断言（① 结算未结算也补投下一期；② `container.ready created=false` 也补投首期）。
+
+### 验证（返工后）
+
+admin-api tsc ✅ + **500 passed / 1 skipped**；agent-api tsc ✅ + **658 passed**；cloud-controller tsc ✅ + **195 passed**。
+
+> 维持待办（不阻断，与「十四」一致）：前端 D4/D5/D13、契约 D7/D8、迁移 D12、B8 stop drain + `MqConnection.close` 竞态、B1 队头阻塞残留、结算 publish 无 confirm、R4 节流前置权衡、reconcile 水位替换毫秒级竞态。
+
+
+## 十六、第四轮 AI Review 复核（2026-10-19，AI Review 节点·四轮·通过）
+
+> 复核方式：对三轮返工的 P1/P2/P3 逐条**独立核验源码**（不采信返工自报，经验 #9——修复声明必须逐条与实现对得上、覆盖范围如实），并对三套后端 `tsc --noEmit` + 单测**独立复跑**核对返工声称的数字。
+> 结论：**三轮打回项 P1/P2（2 重要）+ P3（5 次要随修）全部真实闭环**，修复声明与实现逐条对齐、覆盖范围如实；三套后端 tsc 全绿、1353 项测试独立复跑全绿（admin 500/1 + agent 658 + cc 195）。按验收红线，本轮**无阻断/重要遗留项，验收通过（✅ 可合并）**。
+
+### 16.1 三轮打回项逐条核验（✅ 真实闭环，非「声称」）
+
+| 项 | 返工声称 | 源码核验证据（file:line） | 回归测试 | 结论 |
+|---|---|---|---|---|
+| **P1** C4 分页上界 | `adminBillingAccounts` 走 `toPage` + service 钳制 | `graphql/resolvers/billing.ts:78-83` 调 `accountService.list({ page: toPage(args.page,1,100_000), pageSize: toPage(args.pageSize,50,200) })`；`account-service.ts:185-190` service 层再钳 `page = min(100000, max(1, int))`、`pageSize = min(200, max(1, int))`——**整数校验 + 上界双收口**，`page=2^31`→`skip≤(1e5-1)*200`（有界），C4 慢查询 DoS 形态在该端点消除 | `resolvers/billing.test.ts:15-36`：`page/pageSize=2^31` 断言 `list` 收到 `{page:100000,pageSize:200}`；非整数回退 `{1,50}` | ✅ |
+| **P2** C2 错误码 9 resolver | `run()` 统一包裹全量 | `agent-api/graphql/resolvers/billing.ts:26-32` `run()`→`toGraphQLError`（`:17-23` 400→`BAD_REQUEST`/404→`NOT_FOUND`/其余→`BILLING_UNAVAILABLE`，`GraphQLError` 直通不重包）；**9/9 全接**：Query 7（myBillingAccount 经 `myAccount:36`、Invoices `:56`、Receipts `:65`、Receipt `:74`、Rollups `:83`、ApiKeys `:88`、ApiCalls `:97`）+ Mutation 2（create `:108`、revoke `:117`）；内层 `myAccount` 抛 `GraphQLError` 由外层直通不重包、`requireUser` 的 `UNAUTHENTICATED` 保留 | `resolvers/billing.test.ts:54-87`：400→`BAD_REQUEST`、404→`NOT_FOUND`、5xx→`BILLING_UNAVAILABLE`、列表类同映射、未认证 `UNAUTHENTICATED` 不受影响 | ✅ |
+| **P3①** `walletApplied` 注释 | 改水位语义 | `models/billing-ledger.ts:37-42` 改写为「可观测性标记（非正确性来源），正确性由账户 `appliedLedgerIds` 水位保证，不得据此补做钱包更新」，旧「先认领后改钱包」描述已删 | — | ✅ |
+| **P3②** POST `/api-keys` 400/500 | 空名 400、其余 500 | `internal-billing.ts:196-204` 前置校验空名→400；`:221-229` catch 仅校验类→400、Mongo/驱动等→500（基建故障不再误映 400） | — | ✅ |
+| **P3③** 错误中间件 `headersSent` | `next(err)` 不悬挂 | `internal-billing.ts:263-271` `headersSent`→`next(err)` 转交 Express 默认处理器关闭连接 | — | ✅ |
+| **P3④** DELETE 类型化 404 | `ApiKeyNotFoundError` | `api-key-service.ts:29-32,112,118` 类型化错误；`internal-billing.ts:252-254` 以 `instanceof` 判 404（不再中文串匹配），非 ObjectId→400（`:244-246`） | — | ✅ |
+| **P3⑤** finalize 双败写 `failed` | C6 缺口已实现 | `billing-openai.ts:324-341` 双次 `writeFinalize` 皆败后 best-effort `$set status:'failed'`（`.catch(()=>undefined)` 不抛），**仅落双败路径**、不覆盖 completed/aborted（`finalize` 幂等 `finalized`）；C6「`failed` 从不写入」闭合 | — | ✅ |
+| 补断言 retry>0 | 两分支补投 | `consumers.ts:202`（metering `created‖retry>0`）、`:257`（settlement `!shouldDestroy&&(settled‖retry>0)`）；`consumers.test.ts:191-212`（结算未结算也补投 `cycleSeq=4`）、`:214-243`（`container.ready created=false` 补投首期 `cycleSeq=0`），断言与实现精确对上 | ✅ 2 例 | ✅ |
+
+### 16.2 独立验证（三套后端，本机复跑，不采信返工自报）
+
+| 服务 | `tsc --noEmit` | 单测 | 与返工声称 |
+|---|---|---|---|
+| admin-api | ✅ | **500 passed / 1 skipped** | 一致 |
+| agent-api | ✅ | **658 passed** | 一致 |
+| cloud-controller | ✅ | **195 passed** | 一致 |
+
+本轮返工记录的修复声明**逐条与实现对齐、覆盖范围如实**（P1/P2 均为「声明局部、实现局部」，不再以偏概全）——经验 #9（「已修复」必须可被复核）在本轮达成。
+
+### 16.3 遗留问题（🟡 不阻断，建议后续处理，与前几轮口径一致）
+
+**随修项的小瑕疵（非阻断，记录）**：
+- P3② `internal-billing.ts:223-227` catch 判 400 仍用中文串 `message === 'API Key 名称不能为空'`（与 P3④ 类型化风格不一致）；因空名已由前置校验（`:200`）拦截，该分支近乎不可达且语义正确（空名→400、其余→500），行为无误，仅风格不统一。
+- P3⑤ `billing-openai.ts:335` 注释标号 `P3-④`（实为本轮 P3⑤），纯注释笔误，行为正确。
+
+**既有待办（沿用前几轮不阻断判定）**：
+- 前端 D4/D5/D13；契约 D7/D8；迁移 D12 checksum。
+- B8 `stop()` drain 与 `MqConnection.close` 竞态；B1 per-message TTL 队头阻塞残留。
+- 结算 publish 无 publisher confirm（依赖 `settlement-tick` 兜底）。
+- R4 节流仍拦在凭证校验前（防 bcrypt-DoS 的既定权衡：共享出口 IP 失败桶满后有效 Key 最长 60s 受限且无法走到成功清桶）。
+- `reconcileAccount` 水位 `$set` 整组替换与在途 `applyLedgerDelta` 毫秒级竞态（极端时序可丢一条水位→重放重复应用，由每日对账收敛）。
+- `clientIpFromNode`/失败节流无单测。
+
+### 16.4 总体结论
+
+四轮 AI Review 收敛：首轮 4 阻断 + 约 20 重要 → 二轮阻断/重要闭环、返工引入新缺陷 → 三轮 R1–R6 闭环、C2/C4「声称修复未闭环」（P1/P2）→ **本轮 P1/P2/P3 全部真实闭环，返工声明与实现对齐**。三套后端 tsc 全绿、1353 测试全绿。**无阻断/重要遗留，验收通过（✅ 可合并）**；遗留均为不阻断的次要/待办项（见 16.3）。
+
+> **合并前须知**：本轮返工代码（工作树改动）与本验收报告已随本次「验收完成」一并提交入 `integration`（PR #237 → release）。合并前请确认 PR #237 已包含本轮回退项修复（P1/P2/P3），勿以「仅含验收文档」的旧快照合并。
 
 
 ## 十、经验总结
