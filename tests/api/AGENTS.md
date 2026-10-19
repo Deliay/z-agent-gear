@@ -500,8 +500,11 @@ npm test
 
 | 测试 | 描述 |
 |------|------|
-| T-B22 | GET `/v1/models` 仅返回**计费且定价完整**的全局模型（过滤逻辑被断言，需 `MONGODB_URI` 直写模型） |
-| T-B23 | 无效 Key 401；缺参数 400；未知模型 404；未定价模型 400 `model_not_priced` |
+| T-B21 | GET `/v1/models` 返回 OpenAI list 信封（形状） |
+| T-B25 | 无效 Key 401 `invalid_api_key` |
+| T-B26 | 缺参数 400、未知模型 404 |
+| T-B27 | GET `/v1/models` 仅返回**计费且定价完整**的全局模型（过滤逻辑被断言，需 `MONGODB_URI` 直写模型） |
+| T-B28 | 未定价（`pricing:null` 与全 0 档）模型 400 `model_not_priced`（需 `MONGODB_URI`） |
 | T-B24 | 冻结账户调用非计费模型同样 402 `account_frozen` |
 
 #### Admin 计费 GraphQL+内部 REST (`admin-api/billing.test.ts` T-B*)

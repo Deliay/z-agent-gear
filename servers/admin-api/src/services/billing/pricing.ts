@@ -136,9 +136,16 @@ export class PricingService {
     at: Date,
   ): Promise<PricedUsage> {
     let snapshot = await this.getPrice(`model.${modelId}.token`, at);
-    if (!snapshot) {
-      // A-4：productprices 无档时回落 models.pricing，避免「只写 model.pricing」时消费免费。
-      snapshot = await this.modelPricingFallback(modelId, at);
+    const hasRate = (value: PricedUsage['snapshot']): boolean =>
+      !!value &&
+      (value.rates.inputPerMillion > 0 ||
+        value.rates.cachedInputPerMillion > 0 ||
+        value.rates.outputPerMillion > 0);
+    if (!snapshot || (!hasRate(snapshot) && snapshot.isBillable !== false)) {
+      // A-4/R2-4：productprices **无档**或**全 0 档**时回落 `models.pricing`，避免
+      // 「只写 model.pricing」或「价目档全 0」时静默免费；回落仍无有效费率时由调用方告警。
+      const fallback = await this.modelPricingFallback(modelId, at);
+      if (fallback) snapshot = fallback;
     }
     if (snapshot?.isBillable === false) {
       return { amountCents: 0, items: [], snapshot };

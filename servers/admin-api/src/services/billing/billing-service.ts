@@ -399,10 +399,17 @@ export class BillingService {
         : `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`;
 
       let invoice: InvoiceResult | null = null;
-      if (priced.amountCents === 0 && !priced.snapshot) {
-        // A8：模型无生效价目会导致 amountCents=0、消费免费消失；显式告警以便补价。
+      if (priced.amountCents === 0) {
+        // A8/R2-4：无生效价目或**价目档全 0** 都会让 amountCents=0、消费免费消失；
+        // 显式区分告警以便补价（对账线 apiCalls 亦会兜底报告 cost/invoice 不一致）。
+        const rates = priced.snapshot?.rates;
+        const zeroRates =
+          !!rates &&
+          rates.inputPerMillion === 0 &&
+          rates.cachedInputPerMillion === 0 &&
+          rates.outputPerMillion === 0;
         console.warn(
-          `[billing] model ${modelId} has no effective price row; charge skipped (eventId=${event.eventId})`,
+          `[billing] model ${modelId} ${zeroRates ? 'has all-zero effective price row' : 'has no effective price row'}; charge skipped (eventId=${event.eventId})`,
         );
       }
       if (priced.amountCents > 0) {

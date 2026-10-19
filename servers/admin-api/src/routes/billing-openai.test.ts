@@ -11,7 +11,7 @@ import { accountService } from '../services/billing/account-service.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
 import { paymentService } from '../services/billing/payment.js';
 import { encrypt } from '../services/crypto.js';
-import { createBillingOpenAiRouter } from './billing-openai.js';
+import { createBillingOpenAiRouter, resolveUsageFallback } from './billing-openai.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
 
@@ -212,5 +212,37 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
       const call = await BillingApiCall.findOne({});
       expect(call?.status).toBe('aborted');
     });
+  });
+});
+
+/** 建议 15：缺失用量兜底（纯函数锚定）。 */
+describe('resolveUsageFallback（缺失用量兜底）', () => {
+  it('两段都为 0：input 用请求 prompt，output 用文本估算（无文本则用请求上限）', () => {
+    const a = resolveUsageFallback({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, 10, 100, '', false);
+    expect(a.estimated).toBe(true);
+    expect(a.usage.inputTokens).toBe(10);
+    expect(a.usage.outputTokens).toBe(100);
+    const b = resolveUsageFallback({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, 10, 100, 'abcdefgh', false);
+    expect(b.usage.outputTokens).toBe(2);
+  });
+
+  it('input 有值、output=0 且已产生文本 → 按文本估算 output（不再少计为 0）', () => {
+    const r = resolveUsageFallback({ inputTokens: 10, cachedInputTokens: 0, outputTokens: 0 }, 10, 100, 'abcdefgh', false);
+    expect(r.estimated).toBe(true);
+    expect(r.usage.inputTokens).toBe(10);
+    expect(r.usage.outputTokens).toBe(2);
+  });
+
+  it('input=0 但 output 有值 → 仅补 input', () => {
+    const r = resolveUsageFallback({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 5 }, 10, 100, '', false);
+    expect(r.estimated).toBe(true);
+    expect(r.usage.inputTokens).toBe(10);
+    expect(r.usage.outputTokens).toBe(5);
+  });
+
+  it('两段都有值 → 不估算', () => {
+    const r = resolveUsageFallback({ inputTokens: 8, cachedInputTokens: 0, outputTokens: 5 }, 10, 100, 'abcdefgh', false);
+    expect(r.estimated).toBe(false);
+    expect(r.usage).toMatchObject({ inputTokens: 8, outputTokens: 5 });
   });
 });

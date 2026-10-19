@@ -1,3 +1,6 @@
+using Aspire.Hosting.Docker.Resources.ComposeNodes;
+using Aspire.Hosting.Docker.Resources.ServiceNodes;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // 敏感参数：优先使用配置注入（`Parameters:<name>` / 环境变量 `Parameters__<name>`），
@@ -23,6 +26,25 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .ConfigureComposeFile(composeFile =>
     {
         composeFile.Services.Remove("agent-controller");
+        // 🟡9/D-5：把 RabbitMQ healthcheck 与依赖条件固化进 AppHost（发布时生成，不再依赖手工改
+        // manifest），避免下次 `aspire publish` 漂移回 `image: rabbitmq:3-management`/无健康检查。
+        if (composeFile.Services.TryGetValue("rabbitmq", out var rabbit))
+        {
+            rabbit.Healthcheck = new Healthcheck
+            {
+                Test = new List<string> { "CMD", "rabbitmq-diagnostics", "-q", "ping" },
+                Interval = "10s",
+                Timeout = "5s",
+                Retries = 10,
+                StartPeriod = "20s",
+            };
+        }
+        foreach (var name in new[] { "admin-api", "cloud-controller" })
+        {
+            if (!composeFile.Services.TryGetValue(name, out var service)) continue;
+            service.DependsOn["rabbitmq"] = new ServiceDependency { Condition = "service_healthy" };
+            service.DependsOn["mongodb"] = new ServiceDependency { Condition = "service_started" };
+        }
     });
 
 var mongodb = builder.AddMongoDB("mongodb")

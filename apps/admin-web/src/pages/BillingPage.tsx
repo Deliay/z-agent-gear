@@ -150,10 +150,16 @@ export default function BillingPage() {
     const next = selected.status === 'frozen' ? 'active' : 'frozen'
     try {
       await setStatus({ variables: { accountId: selected.id, status: next } })
-      await accountsQuery.refetch()
       toast.success(next === 'frozen' ? '账户已冻结' : '账户已恢复')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新失败')
+      return
+    }
+    // 🟡8：变更已成功，刷新失败不得反向误报为「更新失败」（否则用户会重试造成方向翻转）。
+    try {
+      await accountsQuery.refetch()
+    } catch {
+      toast.error('状态已更新，但列表刷新失败，请手动刷新')
     }
   }
 
@@ -175,7 +181,8 @@ export default function BillingPage() {
     void accountsQuery.refetch()
     if (selectedId) {
       void invoicesQuery.refetch()
-      void receiptQuery.refetch()
+      // 🟡8：收据查询用 `receiptInvoice?.id` 变量且 skip=!receiptInvoice，无选中时 refetch 会发空 invoiceId 必败请求。
+      if (receiptInvoice) void receiptQuery.refetch()
     }
   }
 

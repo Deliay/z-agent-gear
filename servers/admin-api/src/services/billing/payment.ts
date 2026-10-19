@@ -7,7 +7,7 @@ import { deriveWalletFromLedger } from './account-service.js';
 import { creditCheckService, type CreditCheckRef, type PreCheck } from './credit-check.js';
 import { availableCents } from './money.js';
 import { documentId } from './id.js';
-import { KeyedMutex } from './keyed-mutex.js';
+import { accountMutex } from './keyed-mutex.js';
 
 /** 钱包同步租约：超过该时长仍停在 pending 视为上次同步中途崩溃，走自愈而非重复累加。 */
 const LEDGER_APPLY_LEASE_MS = 60_000;
@@ -64,7 +64,7 @@ export function allocatePools(account: AccountSnapshot, amount: number): PoolAll
 /** 资金变动底层：ledger 幂等闸门 + 两阶段钱包同步（冻结额永不为负）。 */
 export class PaymentService {
   /** 账户级互斥：同账户并发扣费串行化拆池决策，避免赠送额被双重分配为负（A3）。 */
-  private readonly accountMutex = new KeyedMutex();
+  private readonly accountMutex = accountMutex;
 
   constructor(
     private readonly prechecks = creditCheckService,
@@ -213,11 +213,13 @@ export class PaymentService {
   }
 
   private async markLedgerApplied(accountId: string, ledgerId: string): Promise<void> {
+    // R2-1：**不得吞错**。写失败必须让调用方感知——否则标记永停 `pending`，
+    // 重放会被误判为 in-flight（租约内）或 stale（租约后自愈），把「已完成」错报为「未完成」。
     await BillingAppliedLedger.updateOne(
       { accountId, ledgerId },
       { $set: { walletApplied: true, appliedAt: new Date(this.now()), claimedAt: null } },
       { upsert: true },
-    ).catch(() => undefined);
+    );
   }
 
   /**
@@ -331,32 +333,34 @@ export class PaymentService {
     }
 
     let ledger: LedgerDoc | null = null;
-    try {
-      ledger = await BillingLedger.create({
-        accountId: input.accountId,
-        pool: 'cash',
-        bizType: 'freeze',
-        deltaBalance: 0,
-        deltaFrozen: input.amountCents,
-        allocations: [],
-        bizId: input.bizId,
-        idempotentKey: input.idempotentKey,
-        createdAt: new Date(this.now()),
-      });
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err;
-      ledger = await this.loadLedger(input.idempotentKey, input.accountId);
-    }
-    if (!ledger) throw new Error('freeze ledger not found after conflict');
+    return this.accountMutex.runExclusive(`account:${input.accountId}`, async () => {
+      try {
+        ledger = await BillingLedger.create({
+          accountId: input.accountId,
+          pool: 'cash',
+          bizType: 'freeze',
+          deltaBalance: 0,
+          deltaFrozen: input.amountCents,
+          allocations: [],
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+          createdAt: new Date(this.now()),
+        });
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        ledger = await this.loadLedger(input.idempotentKey, input.accountId);
+      }
+      if (!ledger) throw new Error('freeze ledger not found after conflict');
 
-    const wallet = await this.applyLedgerDelta(ledger, input.accountId);
-    return {
-      applied: wallet.applied,
-      cashBalance: wallet.cashBalance,
-      frozenAmount: wallet.frozenAmount,
-      ledgerId: documentId(ledger),
-      allocations: [],
-    };
+      const wallet = await this.applyLedgerDelta(ledger, input.accountId);
+      return {
+        applied: wallet.applied,
+        cashBalance: wallet.cashBalance,
+        frozenAmount: wallet.frozenAmount,
+        ledgerId: documentId(ledger),
+        allocations: [],
+      };
+    });
   }
 
   /** 解冻：写 unfreeze 流水并减少冻结额（下限 0）。幂等。 */
@@ -378,32 +382,34 @@ export class PaymentService {
     }
 
     let ledger: LedgerDoc | null = null;
-    try {
-      ledger = await BillingLedger.create({
-        accountId: input.accountId,
-        pool: 'cash',
-        bizType: 'unfreeze',
-        deltaBalance: 0,
-        deltaFrozen: -input.amountCents,
-        allocations: [],
-        bizId: input.bizId,
-        idempotentKey: input.idempotentKey,
-        createdAt: new Date(this.now()),
-      });
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err;
-      ledger = await this.loadLedger(input.idempotentKey, input.accountId);
-    }
-    if (!ledger) throw new Error('unfreeze ledger not found after conflict');
+    return this.accountMutex.runExclusive(`account:${input.accountId}`, async () => {
+      try {
+        ledger = await BillingLedger.create({
+          accountId: input.accountId,
+          pool: 'cash',
+          bizType: 'unfreeze',
+          deltaBalance: 0,
+          deltaFrozen: -input.amountCents,
+          allocations: [],
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+          createdAt: new Date(this.now()),
+        });
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        ledger = await this.loadLedger(input.idempotentKey, input.accountId);
+      }
+      if (!ledger) throw new Error('unfreeze ledger not found after conflict');
 
-    const wallet = await this.applyLedgerDelta(ledger, input.accountId);
-    return {
-      applied: wallet.applied,
-      cashBalance: wallet.cashBalance,
-      frozenAmount: wallet.frozenAmount,
-      ledgerId: documentId(ledger),
-      allocations: [],
-    };
+      const wallet = await this.applyLedgerDelta(ledger, input.accountId);
+      return {
+        applied: wallet.applied,
+        cashBalance: wallet.cashBalance,
+        frozenAmount: wallet.frozenAmount,
+        ledgerId: documentId(ledger),
+        allocations: [],
+      };
+    });
   }
 
   /**
@@ -491,41 +497,43 @@ export class PaymentService {
   }): Promise<WalletMutationResult> {
     if (input.amountCents <= 0) throw new Error('充值金额必须为正数');
     let ledger: LedgerDoc | null = null;
-    try {
-      ledger = await BillingLedger.create({
-        accountId: input.accountId,
-        pool: 'cash',
-        bizType: 'recharge',
-        deltaBalance: input.amountCents,
-        deltaFrozen: 0,
-        allocations: [{ pool: 'cash', amount: input.amountCents }],
-        bizId: input.bizId,
-        idempotentKey: input.idempotentKey,
-        createdAt: new Date(this.now()),
-      });
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err;
-      ledger = await this.loadLedger(input.idempotentKey, input.accountId);
-    }
-    if (!ledger) throw new Error('recharge ledger not found after conflict');
-
-    const wallet = await this.applyLedgerDelta(ledger, input.accountId);
-    if (wallet.applied) {
-      const updated = await this.loadAccount(input.accountId);
-      if (updated && availableCents(updated) >= 0) {
-        await BillingAccount.updateOne(
-          { _id: input.accountId },
-          { $set: { insufficientSince: null } },
-        );
+    return this.accountMutex.runExclusive(`account:${input.accountId}`, async () => {
+      try {
+        ledger = await BillingLedger.create({
+          accountId: input.accountId,
+          pool: 'cash',
+          bizType: 'recharge',
+          deltaBalance: input.amountCents,
+          deltaFrozen: 0,
+          allocations: [{ pool: 'cash', amount: input.amountCents }],
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+          createdAt: new Date(this.now()),
+        });
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        ledger = await this.loadLedger(input.idempotentKey, input.accountId);
       }
-    }
-    return {
-      applied: wallet.applied,
-      cashBalance: wallet.cashBalance,
-      frozenAmount: wallet.frozenAmount,
-      ledgerId: documentId(ledger),
-      allocations: [{ pool: 'cash', amount: input.amountCents }],
-    };
+      if (!ledger) throw new Error('recharge ledger not found after conflict');
+
+      const wallet = await this.applyLedgerDelta(ledger, input.accountId);
+      if (wallet.applied) {
+        const updated = await this.loadAccount(input.accountId);
+        if (updated && availableCents(updated) >= 0) {
+          await BillingAccount.updateOne(
+            { _id: input.accountId },
+            { $set: { insufficientSince: null } },
+          );
+        }
+      }
+      return {
+        applied: wallet.applied,
+        cashBalance: wallet.cashBalance,
+        frozenAmount: wallet.frozenAmount,
+        ledgerId: documentId(ledger),
+        allocations: [{ pool: 'cash', amount: input.amountCents }],
+      };
+    });
   }
 }
 

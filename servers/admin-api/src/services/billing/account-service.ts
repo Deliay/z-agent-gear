@@ -8,6 +8,7 @@ import { BillingAppliedLedger } from '../../models/billing-applied-ledger.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { AdminUser } from '../../models/admin-user.js';
 import { availableCents } from './money.js';
+import { accountMutex } from './keyed-mutex.js';
 import { documentId } from './id.js';
 
 export interface BillingAccountDTO {
@@ -251,6 +252,25 @@ export class AccountService {
     } | null;
   }> {
     if (!mongoose.isValidObjectId(accountId)) throw new Error('账户不存在');
+    // R2-1：与 PaymentService 的全部钱包写入共用同一把账户锁——否则「校准回写」与在途
+    // `$inc`/自愈交错，会把刚写入的增量覆盖掉（或反之）。
+    return accountMutex.runExclusive(`account:${accountId}`, () =>
+      this.reconcileAccountLocked(accountId),
+    );
+  }
+
+  private async reconcileAccountLocked(accountId: string): Promise<{
+    account: BillingAccountDTO;
+    error: {
+      accountId: string;
+      walletCash: number;
+      ledgerCash: number;
+      walletGift: number;
+      ledgerGift: number;
+      walletFrozen: number;
+      ledgerFrozen: number;
+    } | null;
+  }> {
     const account = await BillingAccount.findById(accountId).lean<IBillingAccount | null>();
     if (!account) throw new Error('账户不存在');
 
@@ -274,9 +294,6 @@ export class AccountService {
         .select({ _id: 1 })
         .lean<Array<{ _id: mongoose.Types.ObjectId }>>()
     ).map((row) => String(row._id));
-    // A-2：对账完成时钱包已被校准到 ledger 真值 ⇒ **全部** ledger 行都视为已应用。
-    // 幂等标记集合（不淘汰）必须同步补齐，否则水位淘汰后的重放会二次记账。
-    await this.markAllLedgerApplied(accountId);
     if (mismatch) {
       const stamp = `reconcile:${accountId}:${this.now()}:${Math.random().toString(16).slice(2, 8)}`;
       await BillingLedger.create({
@@ -308,6 +325,10 @@ export class AccountService {
         { $set: { appliedLedgerIds: recent } },
       );
     }
+    // A-2/R2-1：钱包此刻**已**被校准到 ledger 真值（有漂移已回写、无漂移本就相等），
+    // 才可把全部历史行登记为已应用——顺序必须在钱包回写**之后**，否则会先宣称「已应用」
+    // 而钱包尚未写，重放被跳过 → 账实不符（违反 `markAllLedgerApplied` 自身不变量）。
+    await this.markAllLedgerApplied(accountId);
 
     const updated = mismatch
       ? await BillingAccount.findById(accountId).lean<IBillingAccount | null>()
@@ -333,7 +354,8 @@ export class AccountService {
    *
    * 仅在对账把钱包校准到 ledger 真值之后调用——此刻钱包 = Σledger，所有历史行在语义上
    * 都已生效，登记全部行才能让「水位淘汰后的重放」保持幂等（幂等标记不淘汰）。
-   * 使用 `bulkWrite` + `upsert` 幂等；失败只告警（对账下一次会重试）。
+   * 使用 `bulkWrite` + `upsert` 幂等；**失败向上抛**（R2-1：吞错会让「已校准但未登记」静默
+   * 留下重放窗口，由调用方按对账失败上报，下一次对账重试）。
    */
   async markAllLedgerApplied(accountId: string): Promise<void> {
     if (!mongoose.isValidObjectId(accountId)) return;
@@ -358,7 +380,7 @@ export class AccountService {
           },
         })),
         { ordered: false },
-      ).catch(() => undefined);
+      );
     }
   }
 }

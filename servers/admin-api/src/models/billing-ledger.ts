@@ -35,9 +35,11 @@ const billingLedgerSchema = new mongoose.Schema(
     bizId: { type: String, default: null },
     idempotentKey: { type: String, required: true, unique: true },
     /**
-     * 可观测性标记（非正确性来源）：钱包同步由账户文档的 `appliedLedgerIds` 水位原子推进保证
-     * 恰好一次（见 `payment.applyLedgerDelta`）。本字段仅在该行同步成功后由 best-effort 写入，
-     * 供排查使用；**不得**据此判断是否需要补做钱包更新。
+     * 可观测性标记（非正确性来源）：钱包同步的恰好一次由独立幂等集合
+     * `billingappliedledgers`（`{accountId, ledgerId}` 唯一 + 租约，**不淘汰**）保证；
+     * 账户文档的 `appliedLedgerIds` 只是最近 1000 条的辅助水位（会被 `$slice` 淘汰），
+     * **不能**独立作为幂等依据（见 `payment.applyLedgerDelta`）。本字段仅在该行同步成功后由
+     * best-effort 写入，供排查使用；**不得**据此判断是否需要补做钱包更新。
      */
     walletApplied: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },

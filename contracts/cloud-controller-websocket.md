@@ -416,9 +416,11 @@ GET /internal/containers/:id/workload-logs
 
 cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 admin-api 共享，`producer = "cloud-controller"`），
 由进程内 relay 经 RabbitMQ publisher confirm 发布到 `zag.billing.events`（topic）。事件写入为
-「CAS 状态写成功 → 同步调用 outbox 写入」两步（非同一事务），失败时钩子按 200/500/1000ms 重试 3 次，
-SIGTERM 前由 `drainBillingHooks()` 排空在途写入；发布失败的 outbox 行保留 `published=false` 由下一轮按
-`createdAt` 顺序重试（**失败即停止本轮**，避免 broker 抖动翻转 ready/destroyed 顺序）。
+「CAS 状态写成功 → 同步调用 outbox 写入」两步（非同一事务），失败时钩子共 **3 次尝试**（首次 + 100ms/250ms
+两次退避），仍失败记 **error** 日志；SIGTERM 前由 `drainBillingHooks()` 排空在途写入。
+发布失败的 outbox 行保留 `published=false` 由下一轮按 `createdAt` 顺序重试（**失败即停止本轮**，
+避免 broker 抖动翻转 ready/destroyed 顺序）；`attempts` 达上限的行置 `failed=true` 隔离，
+由反向对账线重置（`failed→pending`）或以上限后的代偿 eventId 重新入列。
 
 **事件丢失的兜底覆盖（与实现口径一致）**：
 - `container.ready` 单丢：admin-api 反向对账线 `events` 扫描 `billingStartedAt≠null` 且无
@@ -426,9 +428,15 @@ SIGTERM 前由 `drainBillingHooks()` 排空在途写入；发布失败的 outbox
   仍可按 `billingStartedAt` 走 legacy 全额计费。
 - `container.destroyed` 单丢：`resources` 资源对账线以「ACTIVE 预留 × 存活容器」兜底最终结算（终点推迟一个
   对账间隔）；`events` 线同时扫描终态容器补投 destroyed。
+- **隔离/死信不算已投递（R2-2）**：outbox 行 `failed:true`（attempts 达上限隔离）或已发布但消费进 DLQ
+  （业务态未达成）时，`events` 线必须补投——隔离行重置为 `pending` 复用原 `eventId`，已发布未生效行以
+  `…:repair:<ts>` 代偿 `eventId` 重新入列（`eventId` 仅用于事实去重，资金正确性由业务幂等键保证）。
 - 两者都丢：`events` 线同时命中（补投 ready + destroyed），不会静默漏计费。
 - 消费端按 `resourceId` 做时序门控：`destroyed` 先到且无预留时按 legacy 计费，迟到的 `ready` 不再建预留，
   保证同一会话只产生一笔计费。
+- **边界**：`billingStartedAt=null` 的容器视为未计费（CAS 写失败即未进入计费），不在 `events` 线补投范围；
+  `events`/`resources` 线的补投与 legacy 计费依赖 admin-api 的**账户/机型互斥与单实例部署**（`billingMutex`
+  为进程内锁，见 §A.1 部署约束与前序 A11 红线）——多副本前必须落库化互斥。
 
 | 事件 | routing key | 触发条件 | payload |
 |------|-------------|----------|---------|

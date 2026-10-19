@@ -271,16 +271,23 @@ export class ReservationService {
     const priced = await this.prices.priceContainer(minutes, windowFrom);
     const accountId = String(reservation.accountId);
 
-    // 仅当该周期确实冻结过才解冻，避免欠费周期无冻结却释放、蚕食保证金
+    // 仅当该周期确实冻结过才解冻，避免欠费周期无冻结却释放、蚕食保证金。
+    // 🟡11：解冻额以 **freeze 流水实际 `deltaFrozen`** 为准（而非 `cycleEstimateCents`），
+    // 与 `rollbackFreeze` 同口径，避免估算与实冻偏差时超解冻。
     const freezeKey = `freeze:cycle:${reservationId}:${cycleSeq}`;
-    const freezeExists = await BillingLedger.exists({ idempotentKey: freezeKey, accountId });
-    if (freezeExists && reservation.cycleEstimateCents > 0) {
-      await this.payments.unfreeze({
-        accountId,
-        amountCents: reservation.cycleEstimateCents,
-        bizId: `${reservationBizPrefix(reservationId)}cycle:${cycleSeq}`,
-        idempotentKey: `unfreeze:cycle:${reservationId}:${cycleSeq}`,
-      });
+    const freezeRow = await BillingLedger.findOne({ idempotentKey: freezeKey, accountId })
+      .select({ deltaFrozen: 1 })
+      .lean<{ deltaFrozen?: number } | null>();
+    if (freezeRow) {
+      const frozen = Math.max(0, Math.round(freezeRow.deltaFrozen ?? 0));
+      if (frozen > 0) {
+        await this.payments.unfreeze({
+          accountId,
+          amountCents: frozen,
+          bizId: `${reservationBizPrefix(reservationId)}cycle:${cycleSeq}`,
+          idempotentKey: `unfreeze:cycle:${reservationId}:${cycleSeq}`,
+        });
+      }
     }
 
     const preCheck = await this.checks.check({
@@ -443,6 +450,11 @@ export class ReservationService {
         // A-3：并发下已被另一路径终结（可能基于更早的 expectedEndAt）；识别并补结缺额。
         return this.settleTailAfterSettled(latest, accountId, endedAt);
       }
+      if (latest.status !== 'SETTLING' && latest.status !== 'RELEASE_PENDING') {
+        // 🟡2：非「本次 CAS 的后续状态」时不得穿行扣费（避免在他人所有权下重复出账/金额错位）。
+        return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+      }
+      // SETTLING/RELEASE_PENDING：上一次最终结算中途崩溃的恢复路径，继续收敛（幂等键保证不重复扣）。
     }
 
     if (minutes > 0) {
@@ -463,6 +475,17 @@ export class ReservationService {
         ref: { type: 'container_reservation', id: reservationId },
       });
       cashBalance = payment.cashBalance;
+      if (!payment.applied) {
+        // 🟡2：上一轮已扣过（同一幂等键）时以 **ledger 实际入账额** 为准回填，避免
+        // 「重算窗口更晚 → 账单金额 ≠ ledger 金额」的账实不符。
+        const existing = await BillingLedger.findOne({
+          accountId: new mongoose.Types.ObjectId(accountId),
+          idempotentKey: `charge:final:${reservationId}`,
+        })
+          .select({ deltaBalance: 1 })
+          .lean<{ deltaBalance?: number } | null>();
+        if (existing) amount = Math.abs(Math.round(existing.deltaBalance ?? 0));
+      }
     }
 
     // 当前仍被该预留占用的冻结额（以 ledger 为准，重复执行时自然为 0）
@@ -517,20 +540,33 @@ export class ReservationService {
     windowFrom: Date;
     tail?: boolean;
   }> {
-    const from = reservation.lastSettleAt ?? reservation.startedAt;
+    let from = reservation.lastSettleAt ?? reservation.startedAt;
     if (endedAt.getTime() <= from.getTime()) {
       return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
     }
-    // 先 CAS 推进 lastSettleAt，保证同一窗口只有一个请求补结。
-    const claimed = await BillingReservation.findOneAndUpdate(
-      {
-        _id: documentId(reservation),
-        status: 'SETTLED',
-        lastSettleAt: reservation.lastSettleAt,
-      },
-      { $set: { lastSettleAt: endedAt }, $inc: { version: 1 } },
-      { new: true },
-    );
+    // 先 CAS 推进 lastSettleAt，保证同一窗口只有一个请求补结；失败则重读重试一次
+    // （🟡2：CAS 失败不得静默丢尾差）。
+    let claimed: unknown = null;
+    let latest = reservation;
+    for (let attempt = 0; attempt < 2 && !claimed; attempt += 1) {
+      claimed = await BillingReservation.findOneAndUpdate(
+        {
+          _id: documentId(latest),
+          status: 'SETTLED',
+          lastSettleAt: latest.lastSettleAt,
+        },
+        { $set: { lastSettleAt: endedAt }, $inc: { version: 1 } },
+        { new: true },
+      );
+      if (claimed) break;
+      const reread = await this.findById(documentId(reservation));
+      if (!reread || reread.status !== 'SETTLED') break;
+      from = reread.lastSettleAt ?? reread.startedAt;
+      if (endedAt.getTime() <= from.getTime()) {
+        return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+      }
+      latest = reread;
+    }
     if (!claimed) {
       return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
     }

@@ -57,6 +57,10 @@ describe('runMigrations', () => {
     await runMigrations([migration]);
 
     expect(migration.run).toHaveBeenCalledTimes(1);
+    // 🟡7：过期锁清理用 deleteMany（此前 deleteOne 无法清掉多条残留 `_lock` 文档）。
+    expect(Migrations.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ _lock: 'migration_lock', expiresAt: expect.any(Object) }),
+    );
     expect(Migrations.create).toHaveBeenCalledWith({
       name: '001-preset-workloads',
       executedAt: expect.any(Date),
@@ -79,8 +83,7 @@ describe('runMigrations', () => {
     expect(recorded).toEqual([{ name: '002', executedAt: expect.any(Date) }]);
   });
 
-  it('always releases the lock', async () => {
-    executedLean([]);
+  it('always releases the lock', async () => {    executedLean([]);
     await runMigrations([]);
     expect(Migrations.deleteOne).toHaveBeenCalledWith(
       expect.objectContaining({ _lock: 'migration_lock', owner: expect.any(String) }),

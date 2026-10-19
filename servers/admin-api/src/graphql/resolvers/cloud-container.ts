@@ -30,7 +30,11 @@ function toGraphQLError(err: unknown): GraphQLError {
       extensions: { code: CONTROL_PLANE_UNAVAILABLE },
     });
   }
-  return new GraphQLError((err as Error).message);
+  return new GraphQLError((err as Error).message, {
+    // R2-3：未知错误也给稳定 code（与 admin-api 计费 resolver 同口径），避免 Yoga 掩码成
+    // `Unexpected error.` 让前端无法分支。
+    extensions: { code: 'INTERNAL_SERVER_ERROR' },
+  });
 }
 
 /**

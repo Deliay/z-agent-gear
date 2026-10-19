@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { BillingAccount } from '../../models/billing-account.js';
+import { BillingAppliedLedger } from '../../models/billing-applied-ledger.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingReservation } from '../../models/billing-reservation.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
@@ -363,52 +364,99 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect(rollbackRows).toBe(1); // 仅 A 的 deposit 回滚
   });
 
-  it('A-2：水位淘汰（>1000 条）后重放旧幂等键不再二次记账', async () => {
+  it('A-2/R2-1：真实挤出水位后重放不二扣 + 崩溃残留（pending+租约过期）走自愈不二扣', async () => {
     const account = await seedAccount(100000);
     const checks = new CreditCheckService();
     const payments = new PaymentService(checks);
+    const ref = { type: 'model_call' as const, id: 'r-watermark' };
     const preCheck = (await checks.check({
       accountId: account.id,
       estimatedCredits: 100,
       policy: 'accrue-and-track',
-      ref: { type: 'model_call', id: 'r-watermark' },
+      ref,
     })).preCheck!;
 
+    // 1) 正常扣费一条（写入不淘汰幂等标记）
     const first = await payments.charge({
       accountId: account.id,
       amountCents: 100,
       idempotentKey: 'wm-key',
       bizId: 'wm-biz',
       preCheck,
-      ref: { type: 'model_call', id: 'r-watermark' },
+      ref,
     });
     expect(first.applied).toBe(true);
-    const balanceAfterFirst = (await accountService.getById(account.id))!.cashBalance;
 
-    // 灌 1001 条其他流水，把水位 `$slice` 挤出该键。
+    // 2) 模拟「钱包已应用但同步标记写失败」（崩溃残留）：把 crash-key 的标记改成 pending + 租约过期。
+    const second = await payments.charge({
+      accountId: account.id,
+      amountCents: 100,
+      idempotentKey: 'crash-key',
+      bizId: 'crash-biz',
+      preCheck,
+      ref,
+    });
+    expect(second.applied).toBe(true);
+    const crashLedger = await BillingLedger.findOne({ idempotentKey: 'crash-key' }).lean();
+    await BillingAppliedLedger.collection.updateOne(
+      { accountId: new mongoose.Types.ObjectId(account.id), ledgerId: String(crashLedger!._id) },
+      { $set: { walletApplied: false, claimedAt: new Date(Date.now() - 5 * 60_000) } },
+    );
+    // 自证：claimedAt 必须真实落库（schema 缺字段会让整条租约/自愈状态机变死代码）。
+    const rawMarker = await BillingAppliedLedger.collection.findOne({
+      accountId: new mongoose.Types.ObjectId(account.id),
+      ledgerId: String(crashLedger!._id),
+    });
+    expect(rawMarker?.claimedAt).toBeInstanceOf(Date);
+
+    // 3) 经 payments 真实灌 >1000 笔，把两条键挤出 `appliedLedgerIds` 水位（修复前的空转测试不触发该前置条件）。
     for (let i = 0; i < 1001; i += 1) {
-      await BillingLedger.create({
+      await payments.recharge({
         accountId: account.id,
-        pool: 'cash',
-        bizType: 'adjust',
-        deltaBalance: 0,
-        deltaFrozen: 0,
-        allocations: [],
-        idempotentKey: `filler-${i}`,
+        amountCents: 1,
+        idempotentKey: `fill-${i}`,
+        bizId: `fill-${i}`,
       });
     }
+    const wmLedger = await BillingLedger.findOne({ idempotentKey: 'wm-key' }).lean();
+    const accountAfterFill = (await BillingAccount.findById(account.id).lean()) as {
+      appliedLedgerIds?: string[];
+      cashBalance?: number;
+    };
+    expect((accountAfterFill.appliedLedgerIds ?? []).includes(String(wmLedger!._id))).toBe(false);
+    expect((accountAfterFill.appliedLedgerIds ?? []).includes(String(crashLedger!._id))).toBe(false);
 
-    // 重放旧键：幂等标记（不淘汰）兜底 → 不再变动余额。
+    // 4) 重放旧键（标记 applied）→ no-op，余额不变。
+    const balanceBeforeReplay = (await accountService.getById(account.id))!.cashBalance;
     const replay = await payments.charge({
       accountId: account.id,
       amountCents: 100,
       idempotentKey: 'wm-key',
       bizId: 'wm-biz',
       preCheck,
-      ref: { type: 'model_call', id: 'r-watermark' },
+      ref,
     });
     expect(replay.applied).toBe(false);
-    expect((await accountService.getById(account.id))!.cashBalance).toBe(balanceAfterFirst);
+    expect((await accountService.getById(account.id))!.cashBalance).toBe(balanceBeforeReplay);
+
+    // 5) 重放崩溃残留键（pending + 租约过期）→ 走「按 ledger 真值绝对校准」自愈，**不重复 `$inc`**。
+    //    修复前（claimedAt 未落库 → CAS 恒命中 → claimed）此处会再扣 100。
+    const balanceBeforeCrashReplay = (await accountService.getById(account.id))!.cashBalance;
+    const crashReplay = await payments.charge({
+      accountId: account.id,
+      amountCents: 100,
+      idempotentKey: 'crash-key',
+      bizId: 'crash-biz',
+      preCheck,
+      ref,
+    });
+    expect(crashReplay.applied).toBe(true);
+    expect((await accountService.getById(account.id))!.cashBalance).toBe(balanceBeforeCrashReplay);
+    const healed = await BillingAppliedLedger.collection.findOne({
+      accountId: new mongoose.Types.ObjectId(account.id),
+      ledgerId: String(crashLedger!._id),
+    });
+    expect(healed?.walletApplied).toBe(true);
   });
 
   it('A-5: heldFrozen 过滤账户且转义正则（reservationId=.* 不跨预留求和）', async () => {

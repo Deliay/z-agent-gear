@@ -90,3 +90,94 @@ type: Permanent
 - outbox/relay 顺序性与重试头：`cloud-controller` 与 `admin-api` **两份实现**均已修复。
 - 钱包幂等：`payment.applyLedgerDelta` 为唯一应用点（freeze/unfreeze/charge/recharge 共用），`reconcileAccount` 同步登记。
 - 预留时间线门控：`handleContainerReady`/`handleContainerDestroyed`/`settleCycle` 共用 `container:*`/`reservation:*` 键串行化。
+
+---
+
+## 六、第二轮复核返工对账（2026-10-20，针对 R2-1~R2-6 + 8.4 优先项）
+
+> 基线：`integration` @ `d512678`。二次复核报告：`20261019-integration-release-acceptance-report.md` §八。
+> **对账纪律**：按**修复要求子项**逐条打勾；未做子项显式标注「部分修复/未做」，不再以问题编号整单入账。
+
+### 6.1 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ 528 passed / 1 skipped，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error / 207 passed |
+| agent-web | `tsc -b` / `eslint src` / `vitest run` | ✅ 0 / 0 error（6 存量 warning）/ 429 passed |
+| tests/api（Aspire 全栈干净实例，注入 `INTERNAL_API_TOKEN`） | `npx vitest run` | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+| AppHost 编译 / `aspire publish` | `dotnet build` / `aspire publish -o <tmp>` | ✅ 0 error；生成 compose 含内网镜像 + healthcheck + `depends_on` |
+
+### 6.2 R2-1（🔴 阻断，A-2 修复不完整）— 子项逐条
+
+| 子项 | 状态 | 实现 | 回归（可区分修复前后） |
+|---|---|---|---|
+| ① `claimedAt` 入 schema | ✅ 已做 | `models/billing-applied-ledger.ts:26` 新增 `claimedAt:{type:Date,default:null,index:true}`（严格模式不再剥离 `$set:{claimedAt}` → 租约 CAS/接管真实生效） | `review-fixes.test.ts` 新增「A-2/R2-1」：直接置标记 `walletApplied:false, claimedAt=过期` 后 **raw 读回断言 `claimedAt` 为 `Date`**（自证字段落库） |
+| ① 崩溃窗口不再二次记账 | ✅ 已做 | `payment.ts claimLedgerApplication`：`claimedAt` 真实落库后，`in-flight`（租约内不重复）/`stale`（租约后接管→`healWalletFromLedger` 绝对校准）分支可达 | 同上：pending+过期租约 + **真实挤出水位** 后重放 `applied:true` 且**余额不变**（修复前：CAS 恒命中→`claimed`→再 `$inc`，余额 -100） |
+| ① `markLedgerApplied` 不再吞错 | ✅ 已做 | `payment.ts:1215`（原 `.catch(()=>undefined)`）改为向上抛 | 由上述重放路径 + 类型检查覆盖 |
+| ② 回归改为真实挤出水位 | ✅ 已做 | 测试用 `payments.recharge` ×1001（经 `applyLedgerDelta`）挤出 `appliedLedgerIds`，并断言两条键均**不在**水位 | 修复前该测试的 pending+过期租约段会二扣（见上） |
+| ③ `markAllLedgerApplied` 移至校准回写**之后** | ✅ 已做 | `account-service.ts`：`mismatch` 分支先 `BillingAccount.updateOne` 回写分池余额 → 其后才 `markAllLedgerApplied`（无漂移分支同理） | `billing-flow.test.ts` T-B12 全绿 |
+| ③ 与 `accountMutex` 互斥 | ✅ 已做 | `keyed-mutex.ts` 导出共享 `accountMutex`；`PaymentService`（charge/freeze/unfreeze/recharge 全部钱包写）+ `AccountService.reconcileAccount` 共用同一把账户锁 | admin-api 全量单测 + API 集成通过 |
+| ③ `markAllLedgerApplied` 吞错 | ✅ 已做 | 去掉 `.catch(()=>undefined)`，失败上抛并由 `reconcileFunds` 逐账户记入对账错误（不再静默留重放窗口） | 类型检查 + 对账测试通过 |
+
+### 6.3 R2-2（🟠 O-1 隔离行/DLQ 补投盲区）— 子项逐条
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| `eventRecorded` 不再把隔离行/DLQ 当已投递 | ✅ | `reconciliation.ts containerEventDelivered`：按**业务态**（预留终态/legacy 全额键/destroyed 事件）+**投递态**（`failed:true`→未完成；`published:false`→在途可视已完成；`published:true`→未达成则未完成）判定，替换原「行存在即已记录」 |
+| 补投可执行：撞 eventId 有代偿路径 | ✅ | `repairEvent`：`failed` 行→重置为 pending；`published` 未生效行→以 `…:repair:<ts>` 代偿 eventId 重新入列 |
+| 双隔离回归（补投且不重复计费） | ✅ | `reconciliation.test.ts` 新增 3 例：隔离行重置、DLQ 代偿重投、在途不重投；`billing-flow.test.ts` 新增「R2-2：补投后 ready+destroyed 各重放一次仍只产生一笔计费」 |
+
+### 6.4 R2-3（🟠 声明↔实现对账失实）— 逐条纠正
+
+| 原声明 | 处理 | 结果 |
+|---|---|---|
+| O-1「失败记 error」 | 补实现 | `container-service.ts:186` 改 `logger.error`；注释同为 error |
+| O-1「重试 3 次（200/500/1000ms）」 | 口径统一 | 注释/契约改为「共 **3 次尝试**（首次 + 100ms/250ms 两次退避）」；契约 `cloud-controller-websocket.md` A.3.1 同步 |
+| T-1「去重」 | **如实标注：未做（声明失误）** | 经核对 `T-CC-B4/B8`（billingAccountId 回显）与 `T-CC-B7`（exitReason）在 `internal-api.test.ts` **无重复覆盖**，故未删减；T-1 实际交付为「环境变量纠正 + billing-events 真实执行 + 新增 T-CC-B11」 |
+| O1「与 cloud-container 同口径」 | 补实现 | `cloud-container.ts toGraphQLError` 未知错误补 `INTERNAL_SERVER_ERROR` code；`agent-api` 400 由 `BAD_REQUEST` 改 `INVALID_ARGUMENT`（测试同步），跨应用词汇统一为 `NOT_FOUND/INVALID_ARGUMENT/INTERNAL_SERVER_ERROR` |
+| T-2「修旧 T-B22/T-B23」 | 补实现 | 见 6.6（旧用例改标题/去误导、ID 去重、补全 0 档断言） |
+
+### 6.5 R2-4（🟠 A-4 对账线 + 零费率告警）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| ① 价源回落 | ✅ | `pricing.ts priceModel`（首轮） |
+| ② 告警/拒绝 | ✅ | `priceModel` 对**全 0 档**也回落 `models.pricing`；`billing-service.handleModelCallEvent` 对 `amountCents===0` 区分「无档 / 全 0 档」显式告警 |
+| ③ 对账线 `cost>0 且无 invoice` | ✅ | 新增对账线 `apiCalls`（`BillingApiCall.cost>0 & invoiceSeq=null` → 报告）；含 `reconciliation.test.ts` 断言 |
+
+### 6.6 R2-5（🟠 O1 错误映射收尾）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| 9 处裸 `GraphQLError` 补 code | ✅ | `resolvers/billing.ts` 新增 `billingError(message, code)`；9 处（`:77,83,140,212,214,301,312,371,385`）全部带稳定 code |
+| 四类错误映射断言测试 | ✅ | 新增 `resolvers/billing-errors.test.ts`：MoneyError→INVALID_ARGUMENT、ApiKeyNotFoundError→NOT_FOUND、业务消息（不存在/已存在/余额不足/非法）→各稳定 code、未知→INTERNAL_SERVER_ERROR、GraphQLError 透传 |
+| 启发式覆盖「已存在/余额不足」 | ✅ | `toBillingGraphQLError` 增加 `CONFLICT`（已存在/重复）与 `INSUFFICIENT_FUNDS`（余额不足）分支 |
+
+### 6.7 R2-6（🟠 T-2 名实不符本体）— 子项
+
+| 子项 | 状态 | 实现 |
+|---|---|---|
+| 处置旧用例 | ✅ | 旧 T-B22（仅形状）→ 更名 `T-B21`（明示「形状」）；旧 T-B23（401）→ `T-B25`；旧 T-B23（缺参数/未知模型，标题含未断言的「未定价模型 400」）→ `T-B26` 且删去未断言文案 |
+| 消除重复 ID | ✅ | DB 块内 T-B22/T-B23 → `T-B27`/`T-B28`；文件内 T-B2* ID 现唯一（T-B21/B24/B25/B26/B27/B28） |
+| POST 侧补「全 0 档」400 | ✅ | `T-B28` 循环覆盖 `pricing:null`（`no-pricing-*`）与**全 0 档**（`unpriced-*`）两类，均断言 400 `model_not_priced` |
+
+### 6.8 8.4 🟡 优先项（1/2/7/8）
+
+| # | 状态 | 实现 |
+|---|---|---|
+| 1 rollup 校准线小时桶错位 | ✅ | `reconcileRollups` 窗口起点对齐 `floor_hour`（`bucketFrom`）；`count` 纳入比对 |
+| 2 finalSettle 崩溃窗口账实不符 | ✅ 部分 | `!claimed` 仅在 `SETTLING/RELEASE_PENDING`（崩溃恢复）继续收敛，其余不再穿行扣费；`applied:false` 时以 **ledger 实际 `deltaBalance`** 回填金额；`settleTailAfterSettled` CAS 失败重读重试一次。**未做**：把 `charge:final` 全量窗口化（窄窗口内仍依赖既有幂等键） |
+| 7 测试缺口 | ✅ 部分 | 补 A10 `pre('save')` 锚定（load→save）、#15 `resolveUsageFallback` 单测、`deleteMany` 过期清理断言；**未做**：`x-retry-count` 发布头、`adminBillingReceipt` API 级用例、admin `BillingPage` 页面级用例 |
+| 8 前端守卫 | ✅ | `receiptQuery.refetch` 仅在有 `receiptInvoice` 时触发；`toggleStatus` 先报「变更成功」再单独处理 refetch 失败，不反向误报方向翻转 |
+
+### 6.9 8.4 其余 🟡（未列优先，如实标注）
+
+- 11（settleCycle 解冻额口径）：✅ `settleCycle` 改按 freeze 流水 `deltaFrozen` 解冻（与 `rollbackFreeze` 同口径）。
+- 12（注记/A-2 余项）：✅ `billing-ledger.ts` 水位注释改为「辅助水位、幂等由 `billingappliedledgers` 保证」；`markLedgerApplied` 不再吞错。历史无标记流水的极窄重放窗口仍存在（至下一次对账），已在实现注释标注。
+- 9（RabbitMQ 固化）：✅ 改为在 `AppHost.cs ConfigureComposeFile` 固化 healthcheck + `depends_on` + 内网镜像，`aspire publish` 实跑验证不再漂移。
+- 13（单实例前提入契约）：✅ 契约 A.3.1 显式标注 `billingMutex` 为进程内锁、多副本前必须落库化互斥；`billingStartedAt=null` 边界亦在契约明示（🟡4）。
+- 未做：3（`{reservationId}` 结构化索引，保留转义兜底）、5（legacy/events 双计 MeteringRecord 用量统计）、6（网关估算逐段 ceil 展示值）、10（per-message TTL 队头阻塞、UTC 桶本地时区、契约 500/502、死代码清理）。

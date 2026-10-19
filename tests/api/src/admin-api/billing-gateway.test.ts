@@ -30,7 +30,7 @@ describe('OpenAI 兼容计费网关', () => {
     secret = created.data!.createBillingApiKey.secret;
   });
 
-  it('T-B22: GET /v1/models 返回 OpenAI 列表（仅计费且定价完整模型）', async () => {
+  it('T-B21: GET /v1/models 返回 OpenAI list 信封（形状）', async () => {
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: `Bearer ${secret}` },
     });
@@ -43,7 +43,7 @@ describe('OpenAI 兼容计费网关', () => {
     }
   });
 
-  it('T-B23: 无效 Key 401 invalid_api_key', async () => {
+  it('T-B25: 无效 Key 401 invalid_api_key', async () => {
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: 'Bearer zag_sk_deadbeef' },
     });
@@ -51,7 +51,7 @@ describe('OpenAI 兼容计费网关', () => {
     expect(openAiError(await res.json())?.code).toBe('invalid_api_key');
   });
 
-  it('T-B23: 缺参数 400、未知模型 404、未定价模型 400', async () => {
+  it('T-B26: 缺参数 400、未知模型 404', async () => {
     const missing = await fetch(`${HTTP}/v1/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
@@ -160,7 +160,7 @@ describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模�
     await mongoose.disconnect();
   });
 
-  it('T-B22: /v1/models 排除未定价 / 非计费模型', async () => {
+  it('T-B27: /v1/models 排除未定价 / 非计费（含全 0 价目档）模型', async () => {
     const db = await mongoDb();
     if (!db) return;
     const res = await fetch(`${HTTP}/v1/models`, {
@@ -179,21 +179,23 @@ describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模�
     }
   });
 
-  it('T-B23: 未定价模型 400 model_not_priced', async () => {
+  it('T-B28: 未定价（pricing:null 与全 0 档）模型 400 model_not_priced', async () => {
     const db = await mongoDb();
     if (!db) return;
-    const model = await db.collection('models').findOne({ name: { $regex: '^no-pricing-' } });
-    expect(model).toBeTruthy();
-    const res = await fetch(`${HTTP}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: (model as { name: string }).name,
-        messages: [{ role: 'user', content: 'hi' }],
-      }),
-    });
-    expect(res.status).toBe(400);
-    expect(openAiError(await res.json())?.code).toBe('model_not_priced');
+    for (const prefix of ['^no-pricing-', '^unpriced-']) {
+      const model = await db.collection('models').findOne({ name: { $regex: prefix } });
+      expect(model).toBeTruthy();
+      const res = await fetch(`${HTTP}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: (model as { name: string }).name,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(openAiError(await res.json())?.code).toBe('model_not_priced');
+    }
   });
 });
 

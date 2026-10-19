@@ -1,6 +1,8 @@
 import { config } from '../../config/index.js';
+import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
+import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingOutbox } from '../../models/billing-outbox.js';
 import { BillingRollup } from '../../models/billing-rollup.js';
 import { accountService, type AccountService } from './account-service.js';
@@ -29,7 +31,14 @@ export interface ContainerLister {
 }
 
 /** 默认对账线（也可经 GraphQL `runReconciliation(line)` 单线执行）。 */
-export const RECONCILIATION_LINES = ['funds', 'metering', 'resources', 'events', 'rollups'] as const;
+export const RECONCILIATION_LINES = [
+  'funds',
+  'metering',
+  'resources',
+  'events',
+  'rollups',
+  'apiCalls',
+] as const;
 export type ReconciliationLine = (typeof RECONCILIATION_LINES)[number];
 
 export function isReconciliationLine(value: string): value is ReconciliationLine {
@@ -72,6 +81,7 @@ export class ReconciliationService {
       else if (item === 'resources') reports.push(await this.reconcileResources());
       else if (item === 'events') reports.push(await this.reconcileEvents());
       else if (item === 'rollups') reports.push(await this.reconcileRollups());
+      else if (item === 'apiCalls') reports.push(await this.reconcileApiCalls());
     }
     this.lastReports = reports;
     return reports;
@@ -88,8 +98,12 @@ export class ReconciliationService {
       const accounts = await this.accounts.list({ page, pageSize: 200 });
       if (accounts.length === 0) break;
       for (const account of accounts) {
-        const result = await this.accounts.reconcileAccount(account.id);
-        if (result.error) errors.push(result.error);
+        try {
+          const result = await this.accounts.reconcileAccount(account.id);
+          if (result.error) errors.push(result.error);
+        } catch (err) {
+          errors.push({ accountId: account.id, error: (err as Error).message });
+        }
         checked += 1;
       }
       if (accounts.length < 200) break;
@@ -211,7 +225,7 @@ export class ReconciliationService {
       checked += 1;
       const startedAt = container.billingStartedAt;
       const readyId = `container.ready:${container.id}`;
-      const recordedReady = await this.eventRecorded(readyId);
+      const recordedReady = await this.containerEventDelivered('container.ready', container.id, readyId);
       if (!recordedReady) {
         const repaired = await this.repairEvent({
           eventId: readyId,
@@ -225,7 +239,11 @@ export class ReconciliationService {
       }
       if (!terminal.has(container.status) || !container.exitedAt) continue;
       const destroyedId = `container.destroyed:${container.id}`;
-      const recordedDestroyed = await this.eventRecorded(destroyedId);
+      const recordedDestroyed = await this.containerEventDelivered(
+        'container.destroyed',
+        container.id,
+        destroyedId,
+      );
       if (!recordedDestroyed) {
         const repaired = await this.repairEvent({
           eventId: destroyedId,
@@ -249,8 +267,14 @@ export class ReconciliationService {
   private async reconcileRollups(): Promise<ReconciliationReport> {
     const to = new Date(this.now());
     const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+    // R2-1/🟡1：小时桶起点必须与 rollup 的 UTC 桶对齐，否则 `floor_hour(from)` 桶被排除，
+    // 每次运行最多误报 1 小时漂移。
+    const bucketFrom = new Date(from.getTime());
+    bucketFrom.setUTCMilliseconds(0);
+    bucketFrom.setUTCSeconds(0);
+    bucketFrom.setUTCMinutes(0);
     const rollupRows = (await BillingRollup.aggregate([
-      { $match: { granularity: 'hour', bucketStart: { $gte: from, $lte: to } } },
+      { $match: { granularity: 'hour', bucketStart: { $gte: bucketFrom, $lte: to } } },
       {
         $group: {
           _id: '$accountId',
@@ -261,7 +285,7 @@ export class ReconciliationService {
       },
     ])) as Array<{ _id: unknown; charge: number; recharge: number; count: number }>;
     const invoiceRows = (await BillingInvoice.aggregate([
-      { $match: { createdAt: { $gte: from, $lte: to } } },
+      { $match: { createdAt: { $gte: bucketFrom, $lte: to } } },
       {
         $group: {
           _id: '$accountId',
@@ -286,27 +310,110 @@ export class ReconciliationService {
       const invoiceCharge = Math.round(invoice?.charge ?? 0);
       const rollupRecharge = Math.round(rollup?.recharge ?? 0);
       const invoiceRecharge = Math.round(invoice?.recharge ?? 0);
-      if (rollupCharge !== invoiceCharge || rollupRecharge !== invoiceRecharge) {
+      const rollupCount = Math.round(rollup?.count ?? 0);
+      const invoiceCount = Math.round(invoice?.count ?? 0);
+      if (
+        rollupCharge !== invoiceCharge ||
+        rollupRecharge !== invoiceRecharge ||
+        rollupCount !== invoiceCount
+      ) {
         errors.push({
           accountId,
           rollupCharge,
           invoiceCharge,
           rollupRecharge,
           invoiceRecharge,
+          rollupCount,
+          invoiceCount,
         });
       }
     }
     return this.report('rollups', accounts.size, errors);
   }
 
-  private async eventRecorded(eventId: string): Promise<boolean> {
-    const [event, outbox] = await Promise.all([
-      BillingEvent.exists({ eventId }),
-      BillingOutbox.exists({ eventId }),
-    ]);
-    return Boolean(event || outbox);
+  /**
+   * R2-4（A-4 子项三）：模型调用费用 ↔ 账单存在性对账线。
+   *
+   * `BillingApiCall.cost>0`（已完成/中断且已定价）但 `invoiceSeq=null` 说明扣费/开票链路中断
+   * （价源全 0 档、网关外事件、charge 失败等），是「静默免费」的残余发现机制。仅报告差异，
+   * 由运维经补价/重放事件收口。
+   */
+  private async reconcileApiCalls(): Promise<ReconciliationReport> {
+    const since = new Date(this.now() - 24 * 60 * 60 * 1000);
+    const calls = await BillingApiCall.find({
+      cost: { $gt: 0 },
+      status: { $in: ['completed', 'aborted'] },
+      invoiceSeq: null,
+      finishedAt: { $gte: since },
+    })
+      .select({ requestId: 1, accountId: 1, cost: 1, status: 1, modelId: 1 })
+      .lean<
+        Array<{
+          requestId: string;
+          accountId: unknown;
+          cost: number;
+          status: string;
+          modelId: string;
+        }>
+      >();
+    const errors = calls.map((call) => ({
+      requestId: call.requestId,
+      accountId: String(call.accountId),
+      cost: call.cost,
+      status: call.status,
+      modelId: call.modelId,
+      reason: 'cost_without_invoice',
+    }));
+    return this.report('apiCalls', calls.length, errors);
   }
 
+  /**
+   * R2-2：容器事件是否**已投递并生效**——按「业务态 + 投递状态」判定，绝不把行存在当已投递。
+   *
+   * - outbox 被隔离（`failed:true`）→ 永不投递 → 未完成（补投）。
+   * - outbox 已发布但消费失败进 DLQ（业务态未达成）→ 未完成（补投）。
+   * - outbox 未发布（在途）→ 交由 relay，视为在途已完成（不补投）。
+   * - 业务态优先：ready 命中已建预留/legacy 全额计费键/destroyed 事件（门控跳过）；destroyed 命中
+   *   预留终态（SETTLED/SETTLING/RELEASE_PENDING）或 legacy 全额计费键。
+   */
+  private async containerEventDelivered(
+    eventType: 'container.ready' | 'container.destroyed',
+    resourceId: string,
+    eventId: string,
+  ): Promise<boolean> {
+    const reservation = await this.reservations.findByResource(resourceId);
+    const legacyCharged = await BillingLedger.exists({
+      idempotentKey: `charge:container:${resourceId}:final`,
+    });
+    if (eventType === 'container.ready') {
+      if (reservation || legacyCharged) return true;
+      if (await BillingEvent.exists({ resourceId, eventType: 'container.destroyed' })) return true;
+      return this.deliveryInFlight(eventId);
+    }
+    if (reservation) {
+      return ['SETTLED', 'SETTLING', 'RELEASE_PENDING'].includes(reservation.status);
+    }
+    if (legacyCharged) return true;
+    return this.deliveryInFlight(eventId);
+  }
+
+  /** 仅「未发布且未被隔离」的 outbox 行才算在途（隔离/已发布未生效都必须补投）。 */
+  private async deliveryInFlight(eventId: string): Promise<boolean> {
+    const outbox = await BillingOutbox.findOne({ eventId }).lean<{
+      published?: boolean;
+      failed?: boolean;
+    } | null>();
+    if (!outbox) return false;
+    if (outbox.failed) return false;
+    return !outbox.published;
+  }
+
+  /**
+   * R2-2：补投必须**可执行**。撞 eventId 唯一索引时按行状态分派：
+   * - 隔离行（`failed:true`）→ 重置为待发布（重新入列，保留原 eventId，消费端按业务幂等）；
+   * - 已发布却未生效（DLQ/消费失败）→ 以 `…:repair:<ts>` 代偿 eventId 重新入列（`eventId` 只用于
+   *   事实去重，资金正确性由业务幂等键保证）。
+   */
   private async repairEvent(event: {
     eventId: string;
     eventType: string;
@@ -315,25 +422,70 @@ export class ReconciliationService {
     resourceId: string;
     payload: Record<string, unknown>;
   }): Promise<boolean> {
-    try {
+    const insert = async (eventId: string) => {
       await BillingOutbox.create({
-        eventId: event.eventId,
+        eventId,
         producer: 'admin-api',
         eventType: event.eventType,
         routingKey: event.eventType,
-        payload: event,
+        payload: { ...event, eventId },
         published: false,
         attempts: 0,
       });
+    };
+    try {
+      await insert(event.eventId);
       this.logger.warn?.(`[billing-recon] repaired missing billing event ${event.eventId}`);
       return true;
     } catch (err) {
-      if ((err as { code?: number }).code === 11000) return false;
-      this.logger.warn?.(
-        `[billing-recon] repair event ${event.eventId} failed: ${(err as Error).message}`,
-      );
-      return false;
+      if ((err as { code?: number }).code !== 11000) {
+        this.logger.warn?.(
+          `[billing-recon] repair event ${event.eventId} failed: ${(err as Error).message}`,
+        );
+        return false;
+      }
     }
+    const existing = await BillingOutbox.findOne({ eventId: event.eventId }).lean<{
+      published?: boolean;
+      failed?: boolean;
+    } | null>();
+    if (!existing) return false;
+    if (existing.failed) {
+      await BillingOutbox.updateOne(
+        { eventId: event.eventId },
+        {
+          $set: {
+            failed: false,
+            published: false,
+            publishedAt: null,
+            claimedAt: null,
+            claimedBy: null,
+            lastError: null,
+            attempts: 0,
+          },
+        },
+      );
+      this.logger.warn?.(`[billing-recon] re-queued quarantined billing event ${event.eventId}`);
+      return true;
+    }
+    if (existing.published) {
+      const repairedId = `${event.eventId}:repair:${this.now()}`;
+      try {
+        await insert(repairedId);
+        this.logger.warn?.(
+          `[billing-recon] re-injected published-but-incomplete event as ${repairedId}`,
+        );
+        return true;
+      } catch (err) {
+        if ((err as { code?: number }).code === 11000) return true;
+        this.logger.warn?.(
+          `[billing-recon] repair event ${repairedId} failed: ${(err as Error).message}`,
+        );
+        return false;
+      }
+    }
+    // 未发布的在途行：交由 relay。
+    return true;
   }
 
   private report(

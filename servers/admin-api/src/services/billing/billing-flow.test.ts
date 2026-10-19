@@ -133,6 +133,49 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     ).toBe(1);
   });
 
+  it('R2-2: 隔离行补投后 ready+destroyed 各重放一次仍只产生一笔计费', async () => {
+    const nowValue = { value: T0 };
+    const { billing } = setup(nowValue);
+    const account = await createAccount(100);
+    const startedAt = new Date(T0);
+    const destroyedAt = new Date(T0 + 120_000);
+    const resourceId = 'container-repair-1';
+
+    // 模拟反向对账把两条隔离事件补投后，消费端（正常顺序 + 重放）各处理一次。
+    for (let round = 0; round < 2; round += 1) {
+      await eventIngestService.ingest({
+        eventId: `container.ready:${resourceId}:repair:${round}`,
+        eventType: 'container.ready',
+        occurredAt: startedAt,
+        accountId: account.id,
+        resourceId,
+        payload: { billingStartedAt: startedAt.toISOString() },
+      });
+      await billing.handleContainerReady({
+        accountId: account.id,
+        resourceId,
+        occurredAt: startedAt,
+      });
+      await eventIngestService.ingest({
+        eventId: `container.destroyed:${resourceId}:repair:${round}`,
+        eventType: 'container.destroyed',
+        occurredAt: destroyedAt,
+        accountId: account.id,
+        resourceId,
+        payload: { billingStartedAt: startedAt.toISOString(), exitedAt: destroyedAt.toISOString() },
+      });
+      await billing.handleContainerDestroyed({
+        accountId: account.id,
+        resourceId,
+        occurredAt: destroyedAt,
+        payload: { billingStartedAt: startedAt.toISOString() },
+      });
+    }
+    const charges = await BillingLedger.countDocuments({ bizType: 'charge' });
+    expect(charges).toBe(1);
+    expect(await BillingReservation.countDocuments({ resourceId })).toBe(1);
+  });
+
   it('A-3: stale 终结后迟到 destroyed 补结缺额（不会永久免费运行）', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);
@@ -351,6 +394,17 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     await expect(BillingLedger.updateOne({}, { $set: { deltaBalance: 1 } })).rejects.toThrow();
     await expect(BillingInvoice.updateOne({}, { $set: { amount: 1 } })).rejects.toThrow();
     await expect(BillingReceipt.updateOne({}, { $set: { amount: 1 } })).rejects.toThrow();
+
+    // 🟡7：query 级 pre hook 覆盖不到 `load → save` 路径，pre('save') 守卫须单独锚定。
+    const ledgerDoc = await BillingLedger.findOne({});
+    ledgerDoc!.deltaBalance = 999;
+    await expect(ledgerDoc!.save()).rejects.toThrow(/append-only/);
+    const invoiceDoc = await BillingInvoice.findOne({});
+    invoiceDoc!.amount = 999;
+    await expect(invoiceDoc!.save()).rejects.toThrow(/append-only/);
+    const receiptDoc = await BillingReceipt.findOne({});
+    receiptDoc!.amount = 999;
+    await expect(receiptDoc!.save()).rejects.toThrow(/append-only/);
   });
 
   it('T-B11: payment 必须携带匹配的预检凭证', async () => {

@@ -161,9 +161,9 @@ export class ContainerService {
    *
    * O-1：不再「fire-and-forget 后丢失」——
    * - 同步调用钩子（不退化为微任务，缩小 CAS 写成功→outbox 写入之间的窗口）；
-   * - 失败重试 3 次（200/500/1000ms），仍失败记 error 日志；
+   * - 失败重试：共 **3 次尝试**（首次 + 100ms、250ms 两次退避重试），仍失败记 **error** 日志；
    * - 在途任务登记到 `billingHookTasks`，`drainBillingHooks()` 供 SIGTERM 前排空；
-   * - 长期丢失由 admin-api 反向对账线（扫描 billingStartedAt≠null 且无事件的容器）补投。
+   * - 长期丢失由 admin-api 反向对账线（扫描 billingStartedAt≠null 且未生效的容器）补投。
    */
   private emitHook(
     name: 'onReady' | 'onDestroyed',
@@ -183,7 +183,7 @@ export class ContainerService {
           lastError = err;
         }
       }
-      this.logger.warn?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
+      this.logger.error?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
     })();
     this.billingHookTasks.add(task);
     void task.finally(() => this.billingHookTasks.delete(task));

@@ -31,3 +31,10 @@ export class KeyedMutex {
 
 /** 计费域共享互斥：所有 reservation 级操作（就绪/周期/尾结/强拆）共用同一把锁。 */
 export const billingMutex = new KeyedMutex();
+
+/**
+ * 账户级共享互斥（A-2/R2-1）：钱包快照的所有读写（freeze/unfreeze/charge/recharge 与对账校准）
+ * 共用同一把锁，保证「认领标记 → `$inc`/绝对校准 → 标记 applied」不会与对账校准交错，
+ * 避免自愈写与在途增量互相覆盖。与 `billingMutex` 一样是进程内锁（A11 单实例前提）。
+ */
+export const accountMutex = new KeyedMutex();

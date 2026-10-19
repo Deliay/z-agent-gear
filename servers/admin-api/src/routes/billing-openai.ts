@@ -77,6 +77,42 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
+export interface UsageFallbackInput {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * 建议 15：缺失用量兜底。**逐段**补全，避免「input 有值、output=0 但已产生文本」被少计：
+ * - 两段都为 0：input 用请求 prompt、output 用已产生文本估算（无文本则用请求上限）；
+ * - 仅 output=0 且已有文本：按文本估算 output；
+ * - 仅 input=0：用请求 prompt。
+ * 返回 `estimated` 表示是否发生估算（调用方据此标记账单）。
+ */
+export function resolveUsageFallback(
+  usage: UsageFallbackInput,
+  promptTokens: number,
+  maxOutputTokens: number,
+  outputText: string,
+  estimatedTokens: boolean,
+): { usage: UsageFallbackInput; estimated: boolean } {
+  let estimated = estimatedTokens;
+  if (usage.inputTokens + usage.outputTokens === 0) {
+    estimated = true;
+    usage.inputTokens = promptTokens || 1;
+    usage.outputTokens = estimateTokens(outputText) || maxOutputTokens;
+  } else if (usage.outputTokens === 0 && outputText.length > 0) {
+    estimated = true;
+    usage.outputTokens = estimateTokens(outputText);
+  }
+  if (usage.inputTokens === 0) {
+    estimated = true;
+    usage.inputTokens = promptTokens || 1;
+  }
+  return { usage, estimated };
+}
+
 function pricingFromModel(pricing: unknown): ModelPricingCents | null {
   if (!pricing || typeof pricing !== 'object') return null;
   const p = pricing as Record<string, unknown>;
@@ -271,22 +307,9 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const finalize = async (status: 'completed' | 'aborted'): Promise<void> => {
       if (finalized) return;
       finalized = true;
-      let estimated = estimatedTokens;
-      if (usage.inputTokens + usage.outputTokens === 0) {
-        estimated = true;
-        estimatedTokens = true;
-        usage.inputTokens = promptTokens || 1;
-        // 兜底不低估：优先按已产生内容估算；完全无内容时按请求输出上限估算（PRD §3.5）
-        usage.outputTokens = estimateTokens(outputText) || maxOutputTokens;
-      } else if (usage.outputTokens === 0 && outputText.length > 0) {
-        // 建议 15：中断时 input 有值、output 为 0 而已经产生文本 → 输出不能计 0（少计）。
-        estimated = true;
-        usage.outputTokens = estimateTokens(outputText);
-      }
-      if (usage.inputTokens === 0) {
-        estimated = true;
-        usage.inputTokens = promptTokens || 1;
-      }
+      const resolved = resolveUsageFallback(usage, promptTokens, maxOutputTokens, outputText, estimatedTokens);
+      const estimated = resolved.estimated;
+      estimatedTokens = estimated;
       const cost = billable
         ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
           tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
