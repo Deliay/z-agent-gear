@@ -237,7 +237,7 @@ type: Permanent
 
 | 子项 | 状态 | 实现 |
 |---|---|---|
-| 不把 `lastSettleAt` 推过未收费窗口 | ✅（R4-1 修正后） | 幂等键/`bizId` **编码区间两端**（`…:final:<from>:<to>` / `…:final-gap:<from>:<to>`）；恢复时以 `settledCoverage` 取 **ledger 已覆盖终点**，只补未覆盖尾段 [终点, `endedAt`]；游标仅在补收生效时推进到 `endedAt`，否则停在已覆盖终点（`cursor`） |
+| 不把 `lastSettleAt` 推过未收费窗口 | ✅（R4-1 修正后；R5-1 再修正） | 幂等键/`bizId` **编码区间两端**（`…:final:<from>:<to>` / `…:final-gap:<from>:<to>`）；恢复时以 `settledCoverage` 取 **ledger 已覆盖终点**，只补未覆盖尾段 [终点, `endedAt`]；游标仅在补收生效时推进到 `endedAt`，否则停在已覆盖终点（`cursor`）。⚠️ **R5-1 更正**：上一轮该「游标只推进/停在覆盖终点」在**逆向输入**（`endedAt < lastSettleAt` 的迟到 destroyed）下不成立——`cursor` 仅在 `minutes>0` 块内钳位，`minutes<=0` 时收尾直接写回 `endedAt` → 游标回退进已收费区间。已改为初始 `max(endedAt,lastSettleAt)` + 落库 `$max` 钳位（§9.1） |
 | 至少一条区分性回归 | ✅ | `billing-flow.test.ts`「R3-3」（单崩溃：断言 gap 500、`amount=1500`、游标=T2）+「R4-1」（二次崩溃：断言合计 2000、游标=T3）。回退 `reservation.ts` 至 `2a95c4a`：两者分别红于 `expected 1000 to be 1500` / `expected 1000 to be 2000` |
 | 残余风险如实声明 | ✅（R4-1 修正后） | 仅剩「历史无编码 `final` 行（`bizId` 无窗口终点，本机制上线前的构建，未发布）」；`settleTailAfterSettled` 改为同一「覆盖终点」口径（不再有「CAS 先推进游标、后扣费」的漏收窗口，见 §7.8） |
 
@@ -293,7 +293,7 @@ type: Permanent
 |---|---|---|
 | gap 幂等键 / `bizId` 编码区间两端 | ✅ | `charge:final` → `bizId=…:final:<from>:<to>`；`charge:final-gap` → `idempotentKey=charge:final-gap:<rid>:<from>:<to>`、`bizId=…:final-gap:<from>:<to>`（`reservation.ts`）。同 (from,to) 重放幂等；不同 `endedAt` 不再撞键静默漏收 |
 | 按 ledger 已覆盖终点只补未覆盖尾段 | ✅ | 新增 `settledCoverage(accountId,rid)`：汇总 `charge:final` + 全部 `charge:final-gap` 的 `bizId` 区间端点，取 `max(to)` 为 `coveredEnd`。`finalSettle` 恢复分支以 `coveredEnd` 为 tail 起点（不再只看 `final` 的 `chargedTo`） |
-| 推进游标前核对「已收费终点 ≥ 新 endedAt」 | ✅ | 新增 `cursor`：仅当尾段补收**生效**（或零价尾段）才推进到 `endedAt`，否则停在 `bizId` 已证实的覆盖终点；`lastSettleAt` 写入改用 `cursor`。`settleTailAfterSettled` 同口径改造（去掉「CAS 先推进游标、后扣费」的漏收窗口，改为覆盖终点驱动 + `$max` 推进） |
+| 推进游标前核对「已收费终点 ≥ 新 endedAt」 | ✅（R5-1 再修正） | 新增 `cursor`：仅当尾段补收**生效**（或零价尾段）才推进到 `endedAt`，否则停在 `bizId` 已证实的覆盖终点；`lastSettleAt` 写入改用 `cursor`。`settleTailAfterSettled` 同口径改造（去掉「CAS 先推进游标、后扣费」的漏收窗口，改为覆盖终点驱动 + `$max` 推进）。⚠️ 上一轮该行**声明过度**：未覆盖 `endedAt < lastSettleAt` 的逆向输入（`minutes<=0` 时钳位块被跳过，游标回退）；R5-1 已补齐并补 R5-P1/P2 回归 |
 | Probe G 场景区分性回归 | ✅ | `billing-flow.test.ts`「R4-1」：`final[T0,T1]=1000` + 首次崩溃恢复 `final-gap[T1,T2]=500`，以 `endedAt=T3` 重放 → 断言**业务事实**合计 `ΣdeltaBalance=2000`、新增 `final-gap[T2,T3]=500`、`result.amount=2000`、游标=T3。**Probe**（回退 `reservation.ts` 至 `2a95c4a`）下红于 `expected 1000 to be 2000` |
 | 单崩溃路径仍可区分（Probe C 复核） | ✅ | 同文件「R3-3」断言 gap `[T1,T2]=500`、`amount=1500`；回退至 `2a95c4a` 红于 `expected 1000 to be 1500` |
 | 7.5/7.8 声明与残余风险如实改写 | ✅ | §7.5 标注上一轮「✅ 不推过未收费窗口」为声明过度并更正；§7.8 改为「仅剩历史无编码 `final` 行 + `settleTailAfterSettled` 的串行前提」 |
@@ -322,3 +322,60 @@ type: Permanent
 
 - R4-1：历史无编码 `final` 行仍无法判定覆盖终点（未发布构建产物，实际应无）——`console.warn` + 保守推进游标并声明（见 §7.8）。
 - R4-1：`settleTailAfterSettled` 串行前提依赖 `billingMutex`（已在方法注释标注）；未引入跨账户快照版本以彻底去除该前提（超出本节点范围）。
+
+---
+
+## 九、第五轮复核返工对账（2026-10-20，针对 R5-1 / R5-2）
+
+> 基线：`integration` @ `ea2aa73`（复核对象 §十一）。复核口径：游标/状态机不变量须覆盖**逆向与边界输入**；
+> 「仅当 X 才…否则…」的每个「否则」分支逐一回归；断言以业务事实为单位；探针回退为固定手段。
+
+### 9.1 R5-1（🟠 重要：finalSettle 游标回退进已收费区间）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| ① 游标绝不回退 | ✅ | `cursor` 初始化为 `new Date(Math.max(endedAt, from))`（`from=lastSettleAt??startedAt`）；`minutes<=0`（`endedAt<lastSettleAt` 的迟到 destroyed）时整块跳过也不会写回 `endedAt`。收尾改 `$max: { lastSettleAt: cursor, expectedEndAt: cursor }`（落库层再兜底），不再用 `$set` 直写 |
+| ① expectedEndAt 同口径 | ✅ | 与 `lastSettleAt` 同一 `$max` 钳位 |
+| ② R5-P1/P2 区分性回归 | ✅ | `billing-flow.test.ts`「R5-P1/P2」：cycle 已收 `[T0,T5]=500`、游标=T5 → `finalSettle(T3)` 后断言 `lastSettleAt=T5`、`expectedEndAt=T5`；随后 `finalSettle(T7)` 断言 `amount=200`、`windowFrom=T5`、gap `[T5,T7]=200`、不存在 `[T3,T7]` gap、**Σcharge=700**、游标=T7 |
+| ② 探针（回退后变红） | ✅ | 回退 `reservation.ts`+`payment.ts` 至 `3829c65`：R5-P1 红于 `expected 1790812980000 to be 1790813100000`（即 T3 vs T5，与复核复现一致）；R5-2 红于 `expected null not to be null` |
+| ③ `settleTailAfterSettled` 起点口径统一 | ✅ | `gapFrom = Math.max(coverage.coveredEnd ?? lastSettleAt, lastSettleAt)`；并在代码注释明确声明 **`settledCoverage` 不含 `cycle:*` 流水、依赖「游标不回退」前提**（`cycle` 已收费区间由游标承载） |
+| ④ 声明精确化 | ✅ | `finalSettle` JSDoc 改为：`bizId` 编码区间两端；但 `charge:final` 的幂等键仍是预留级单键 `charge:final:<rid>`（非区间编码），恢复时回读 `bizId` 判定覆盖终点 |
+| ⑤ §7.5/§8.2 标注过度声明 | ✅ | 两处均加「R5-1 更正」：上一轮「游标只推进/停在覆盖终点」在逆向输入下不成立 |
+
+### 9.2 R5-2（🟡 随修·建议：零价尾段不落流水 → 覆盖/游标口径分裂）— 子项
+
+| 子项 | 状态 | 实现 / 证据 |
+|---|---|---|
+| 零价尾段同落 0 元流水 | ✅ | `finalSettle` gap 分支与 `settleTailAfterSettled` 均**无条件** `payments.charge({ amountCents })`（含 0）；`charge(0)` 写 `deltaBalance:0` 的 ledger 行，使 `settledCoverage.coveredEnd` 与游标同步推进 |
+| 账实口径干净 | ✅ | `payment.ts` 将 `deltaBalance: -amount` 改为 `amount === 0 ? 0 : -amount`，避免零额流水落成 `-0`（`toBe(+0)` 断言失败） |
+| 区分性回归 | ✅ | `billing-flow.test.ts`「R5-2」：价格置 0 → `finalSettle(T2)` 断言 `charge:final-gap:<rid>:T1:T2` 存在且 `deltaBalance===0`、游标=T2；价格恢复 100 → `finalSettle(T3)` 只收 `[T2,T3]=100`、Σ=200（不回溯计费 `[T1,T2]`）。回退后红于 `expected null not to be null` |
+
+### 9.3 探针回退验证（本机实跑）
+
+| 探针 | 回退范围 | 目标用例 | 结果 |
+|---|---|---|---|
+| R5 Probe | `reservation.ts` + `payment.ts` → `3829c65` | 「R5-P1/P2」 | 🔴 `expected 1790812980000 to be 1790813100000`（游标回退 T5→T3） |
+| R5 Probe | 同上 | 「R5-2」 | 🔴 `expected null not to be null`（零价尾段未落流水） |
+
+### 9.4 独立复跑（本机实跑）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ **536 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `vitest run` | ✅ 0 / 207 passed |
+| agent-web | `tsc -b` / `vitest run` | ✅ 0 / 429 passed |
+| tests/api（Aspire 干净实例，注入 `INTERNAL_API_TOKEN`） | `npx vitest run` | ✅ **454 passed / 0 skipped** |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+
+### 9.5 未做/残余（如实标注）
+
+- `settledCoverage` 仅覆盖 `charge:final` / `charge:final-gap`，**不含 `cycle:*`**；将其纳入需要给 cycle 流水也编码窗口区间（本轮未改）。当前以「游标绝不回退 + `gapFrom=max(coveredEnd, lastSettleAt)`」保证不重复计费——该不变量已由 R5-P1/P2 回归锚定。
+- 历史无编码 `final` 行（本机制上线前构建、未发布）仍无法从流水判定覆盖终点，退回以游标为准并告警（残余风险）。
+- `settleTailAfterSettled` 的串行前提仍依赖调用方 `billingMutex.runExclusive('reservation:${id}')`（方法注释已标注）。
+- 前两轮 8.4 未做项（3/5/6/10）本轮未动，保持如实标注。
+
+### 9.6 已复核确认项（本轮未触碰）
+
+R4-2 destroyed 业务事实断言 + ready `repairOf` 锚定、R4-1 区间两端编码 + `settledCoverage` + 只补未覆盖尾段、`settleTailAfterSettled` 去 CAS 先推进窗口、R3-1~R3-7 实现均保持上一轮确认状态。

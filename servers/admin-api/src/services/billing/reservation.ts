@@ -424,9 +424,11 @@ export class ReservationService {
    * 携带更晚的 `endedAt` 时，必须识别并补结「SETTLED 之后到真正销毁之间」的缺额，
    * 而不是静默返回 0 让容器免费跑。
    *
-   * R4-1：所有最终结算流水（`charge:final` / `charge:final-gap`）的幂等键与 `bizId` 均**编码窗口区间
-   * 两端**（`…:<from>:<to>`），恢复时以 ledger 已覆盖终点为准只补未覆盖尾段；`lastSettleAt` 游标只推进到
-   * 已收费终点，绝不越过未收费窗口（详见 `settledCoverage`）。
+   * R4-1/R5-1：`bizId` 均编码窗口区间两端（`charge:final` → `…:final:<from>:<to>`；
+   * `charge:final-gap` → `…:final-gap:<from>:<to>`，其幂等键同样编码两端）。注意 `charge:final` 的幂等键
+   * 仍是预留级单键 `charge:final:<rid>`（**不是**区间编码），恢复时通过回读该行 `bizId` 判定覆盖终点。
+   * 恢复时以 ledger 已覆盖终点为准只补未覆盖尾段；`lastSettleAt`/`expectedEndAt` 游标只推进、**绝不回退**
+   * （迟到 destroyed 的 `endedAt < lastSettleAt` 亦不得写回已收费区间）。
    */
   async finalSettle(
     reservationId: string,
@@ -451,8 +453,9 @@ export class ReservationService {
     const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
     let amount = 0;
     let cashBalance = 0;
-    // R4-1：`lastSettleAt` 游标只允许推进到「已实际收费的窗口终点」，绝不越过未收费窗口。
-    let cursor = endedAt;
+    // R5-1：游标绝不回退——迟到的 destroyed（`endedAt < lastSettleAt`）不得把游标/expectedEndAt 写回
+    // 已收费区间，否则后续 A-3 尾结会与已有 cycle/final 收费区间重复计费。
+    let cursor = new Date(Math.max(endedAt.getTime(), from.getTime()));
 
     // 版本 CAS 抢占最终结算（SETTLING）；并发/重放时仅一个请求执行扣费，其余按幂等键 no-op。
     const claimed = await BillingReservation.findOneAndUpdate(
@@ -499,47 +502,44 @@ export class ReservationService {
       // 均编码区间两端，故同一 (from,to) 重放幂等、不同 endedAt 各补各的缺口（不会撞键后静默漏收）。
       const coverage = await this.settledCoverage(accountId, reservationId);
       amount = coverage.coveredAmount;
-      let billedThrough = coverage.coveredEnd;
-      if (billedThrough === null) {
-        // 兼容本机制上线前的历史 final 行（`bizId` 未编码窗口终点）：无法判定已覆盖终点，保守告警（残余风险）。
+      // R5-1③：已收费终点 = max(`final*` 覆盖终点, 游标 `lastSettleAt`)。`settledCoverage` **不含**
+      // `cycle:*` 流水，靠「游标不回退」保证 cycle 已收费区间不被 final-gap 重复计费。
+      let billedThrough = Math.max(coverage.coveredEnd ?? from.getTime(), from.getTime());
+      if (coverage.coveredEnd === null && !payment.applied) {
+        // 历史无编码 final 行（`bizId` 未编码窗口终点）：无法从流水分辨覆盖终点，退回以游标为准（残余风险）。
         console.warn(
-          `[billing] reservation ${reservationId} final charge lacks window end; tail gap unverifiable`,
+          `[billing] reservation ${reservationId} final charge lacks window end; falling back to cursor`,
         );
-      } else if (billedThrough < endedAt.getTime()) {
+      }
+      if (billedThrough < endedAt.getTime()) {
         const gapFrom = billedThrough;
         const gapMinutes = ceilMinutes(endedAt.getTime() - gapFrom);
         if (gapMinutes > 0) {
           const gapPriced = await this.prices.priceContainer(gapMinutes, new Date(gapFrom));
-          if (gapPriced.amountCents > 0) {
-            const gapCheck = await this.checks.check({
-              accountId,
-              estimatedCredits: gapPriced.amountCents,
-              policy: 'accrue-and-track',
-              ref: { type: 'container_reservation', id: reservationId },
-            });
-            const gapPayment = await this.payments.charge({
-              accountId,
-              amountCents: gapPriced.amountCents,
-              idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
-              bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
-              preCheck: gapCheck.preCheck!,
-              ref: { type: 'container_reservation', id: reservationId },
-            });
-            cashBalance = gapPayment.cashBalance;
-            if (gapPayment.applied) {
-              amount += gapPriced.amountCents;
-              billedThrough = endedAt.getTime();
-            }
-          } else {
-            // 零价尾段：无金额可收，视为已覆盖，游标可推进。
-            billedThrough = endedAt.getTime();
-          }
+          const gapCheck = await this.checks.check({
+            accountId,
+            estimatedCredits: gapPriced.amountCents,
+            policy: 'accrue-and-track',
+            ref: { type: 'container_reservation', id: reservationId },
+          });
+          // R5-2：零价尾段同样落 0 元流水（`charge(0)` 写 `deltaBalance:0` 行），避免「覆盖终点」
+          // 与游标口径分裂、价格表调正后回溯计费此前免费窗口。
+          const gapPayment = await this.payments.charge({
+            accountId,
+            amountCents: gapPriced.amountCents,
+            idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+            bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+            preCheck: gapCheck.preCheck!,
+            ref: { type: 'container_reservation', id: reservationId },
+          });
+          cashBalance = gapPayment.cashBalance;
+          if (gapPayment.applied) amount += gapPriced.amountCents;
+          // 幂等键编码区间两端：`applied=false` 表示同窗口已收费（已计入 coveredAmount），同样视为已覆盖。
+          billedThrough = endedAt.getTime();
         }
       }
-      if (billedThrough !== null) {
-        // 只推进到「已收费终点」；尾段补收未生效（撞键/失败）时停在原覆盖终点，不越过未收费窗口。
-        cursor = new Date(Math.max(billedThrough, from.getTime()));
-      }
+      // 游标只推进到已收费终点，且绝不低于窗口起点/既有游标。
+      cursor = new Date(Math.max(billedThrough, from.getTime(), cursor.getTime()));
     }
 
     // 当前仍被该预留占用的冻结额（以 ledger 为准，重复执行时自然为 0）
@@ -559,11 +559,9 @@ export class ReservationService {
     await BillingReservation.updateOne(
       { _id: reservationId },
       {
-        $set: {
-          status: 'SETTLED',
-          lastSettleAt: cursor,
-          expectedEndAt: endedAt,
-        },
+        $set: { status: 'SETTLED' },
+        // R5-1：`$max` 在落库层再次保证游标/expectedEndAt 只推进、不回退（防御并发与迟到事实）。
+        $max: { lastSettleAt: cursor, expectedEndAt: cursor },
         $inc: { version: 1 },
       },
     );
@@ -598,9 +596,10 @@ export class ReservationService {
   }> {
     const reservationId = documentId(reservation);
     const fallbackFrom = reservation.lastSettleAt ?? reservation.startedAt;
-    // 以 ledger 已覆盖终点为准（可能低于 lastSettleAt——上一次推进游标后崩溃未扣费的情形）。
+    // R5-1③：已收费终点 = max(`final*` 覆盖终点, 游标 `lastSettleAt`)；`settledCoverage` 不含 `cycle:*`
+    // 流水，依赖「游标不回退」前提（见 `finalSettle`）。游标可能高于 final* 覆盖（cycle 已收费区间）。
     const coverage = await this.settledCoverage(accountId, reservationId);
-    const gapFrom = coverage.coveredEnd ?? fallbackFrom.getTime();
+    const gapFrom = Math.max(coverage.coveredEnd ?? fallbackFrom.getTime(), fallbackFrom.getTime());
     if (endedAt.getTime() <= gapFrom) {
       return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: new Date(gapFrom) };
     }
@@ -610,29 +609,25 @@ export class ReservationService {
     let billedThrough = gapFrom;
     if (minutes > 0) {
       const priced = await this.prices.priceContainer(minutes, new Date(gapFrom));
-      if (priced.amountCents > 0) {
-        const preCheck = await this.checks.check({
-          accountId,
-          estimatedCredits: priced.amountCents,
-          policy: 'accrue-and-track',
-          ref: { type: 'container_reservation', id: reservationId },
-        });
-        const payment = await this.payments.charge({
-          accountId,
-          amountCents: priced.amountCents,
-          idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
-          bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
-          preCheck: preCheck.preCheck!,
-          ref: { type: 'container_reservation', id: reservationId },
-        });
-        cashBalance = payment.cashBalance;
-        if (payment.applied) {
-          amount = priced.amountCents;
-          billedThrough = endedAt.getTime();
-        }
-      } else {
-        billedThrough = endedAt.getTime();
-      }
+      const preCheck = await this.checks.check({
+        accountId,
+        estimatedCredits: priced.amountCents,
+        policy: 'accrue-and-track',
+        ref: { type: 'container_reservation', id: reservationId },
+      });
+      // R5-2：零价尾段同样落 0 元流水，保持「覆盖终点」与游标口径一致（避免价格调正后回溯计费）。
+      const payment = await this.payments.charge({
+        accountId,
+        amountCents: priced.amountCents,
+        idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+        bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+        preCheck: preCheck.preCheck!,
+        ref: { type: 'container_reservation', id: reservationId },
+      });
+      cashBalance = payment.cashBalance;
+      // 幂等键编码区间两端：`applied=false` 表示同窗口已收费；仍回填金额以便补建幂等账单。
+      amount = priced.amountCents;
+      billedThrough = endedAt.getTime();
     }
     // 游标只向前推进到已收费终点（`$max` 防回退），不改预留终态。
     await BillingReservation.updateOne(

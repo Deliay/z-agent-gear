@@ -336,6 +336,144 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(after!.lastSettleAt!.getTime()).toBe(T3);
   });
 
+  it('R5-P1/P2: 迟到 destroyed 不回退游标；随后尾结只补 [T5,T7]（不与 cycle 重复计费）', async () => {
+    const nowValue = { value: T0 };
+    const { reservations } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-late-destroyed-1';
+    const T3 = T0 + 3 * 60_000;
+    const T5 = T0 + 5 * 60_000;
+    const T7 = T0 + 7 * 60_000;
+
+    // 周期已按 [T0,T5] 收费（cycle:0=500），游标 lastSettleAt=T5。
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'ACTIVE',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T5),
+      version: 1,
+    });
+    const rid = String(reservation._id);
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -500,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 500 }],
+      bizId: `reservation:${rid}:cycle:0`,
+      idempotentKey: `charge:cycle:${rid}:0`,
+      walletApplied: true,
+      createdAt: new Date(T5),
+    });
+
+    // 迟到的 destroyed 事实早于游标：不得把 lastSettleAt/expectedEndAt 写回 T3（否则后续尾结与 cycle 重复计费）。
+    nowValue.value = T3;
+    await reservations.finalSettle(rid, new Date(T3));
+    const afterLate = await BillingReservation.findById(rid);
+    expect(afterLate!.status).toBe('SETTLED');
+    expect(afterLate!.lastSettleAt!.getTime()).toBe(T5);
+    expect(afterLate!.expectedEndAt!.getTime()).toBe(T5);
+
+    // A-3 尾结：只补 [T5,T7]=200；Σ=cycle 500 + gap 200 = 700。
+    nowValue.value = T7;
+    const tail = await reservations.finalSettle(rid, new Date(T7));
+    expect(tail.amount).toBe(200);
+    expect(tail.windowFrom.getTime()).toBe(T5);
+    const gap = await BillingLedger.findOne({
+      idempotentKey: `charge:final-gap:${rid}:${T5}:${T7}`,
+    }).lean();
+    expect(gap).not.toBeNull();
+    expect(Math.abs(gap!.deltaBalance)).toBe(200);
+    expect(
+      await BillingLedger.countDocuments({ idempotentKey: `charge:final-gap:${rid}:${T3}:${T7}` }),
+    ).toBe(0);
+    const rows = await BillingLedger.aggregate([
+      {
+        $match: {
+          accountId: new mongoose.Types.ObjectId(account.id),
+          bizId: { $regex: `^reservation:${rid}:` },
+        },
+      },
+      { $group: { _id: null, charged: { $sum: '$deltaBalance' } } },
+    ]);
+    expect(Math.abs(rows[0].charged)).toBe(700);
+    const afterTail = await BillingReservation.findById(rid);
+    expect(afterTail!.lastSettleAt!.getTime()).toBe(T7);
+  });
+
+  it('R5-2: 零价尾段落 0 元流水（覆盖终点/游标一致，价格调正后不回溯计费）', async () => {
+    const nowValue = { value: T0 };
+    const { reservations } = setup(nowValue);
+    const account = await createAccount(1000);
+    const resourceId = 'container-zero-price-1';
+    const T1 = T0 + 1 * 60_000;
+    const T2 = T0 + 2 * 60_000;
+    const T3 = T0 + 3 * 60_000;
+
+    const reservation = await BillingReservation.create({
+      accountId: account.id,
+      resourceId,
+      status: 'SETTLING',
+      depositCents: 0,
+      cycleEstimateCents: 0,
+      startedAt: new Date(T0),
+      lastSettleAt: new Date(T0),
+      version: 1,
+    });
+    const rid = String(reservation._id);
+    // 已按 100/min 收取 [T0,T1]=100。
+    await BillingLedger.create({
+      accountId: account.id,
+      pool: 'cash',
+      bizType: 'charge',
+      deltaBalance: -100,
+      deltaFrozen: 0,
+      allocations: [{ pool: 'cash', amount: 100 }],
+      bizId: `reservation:${rid}:final:${T0}:${T1}`,
+      idempotentKey: `charge:final:${rid}`,
+      walletApplied: true,
+      createdAt: new Date(T1),
+    });
+    // 价格改为 0：尾段 [T1,T2] 应落 0 元流水。
+    await ProductPrice.updateOne(
+      { productId: 'container.minute' },
+      { $set: { unitPrice: 0 } },
+      { upsert: true },
+    );
+
+    nowValue.value = T2;
+    const zero = await reservations.finalSettle(rid, new Date(T2));
+    const zeroRow = await BillingLedger.findOne({
+      idempotentKey: `charge:final-gap:${rid}:${T1}:${T2}`,
+    }).lean();
+    expect(zeroRow).not.toBeNull();
+    expect(zeroRow!.deltaBalance).toBe(0);
+    expect(zero.amount).toBe(100); // 已收取的 final 100 + 零价尾段 0
+    const afterZero = await BillingReservation.findById(rid);
+    expect(afterZero!.lastSettleAt!.getTime()).toBe(T2);
+
+    // 价格恢复到 100：后续尾段只收 [T2,T3]=100，不回溯计费 [T1,T2]。
+    await ProductPrice.updateOne({ productId: 'container.minute' }, { $set: { unitPrice: 100 } });
+    nowValue.value = T3;
+    const tail = await reservations.finalSettle(rid, new Date(T3));
+    expect(tail.amount).toBe(100);
+    expect(tail.windowFrom.getTime()).toBe(T2);
+    const rows = await BillingLedger.aggregate([
+      {
+        $match: {
+          accountId: new mongoose.Types.ObjectId(account.id),
+          bizId: { $regex: `^reservation:${rid}:` },
+        },
+      },
+      { $group: { _id: null, charged: { $sum: '$deltaBalance' } } },
+    ]);
+    expect(Math.abs(rows[0].charged)).toBe(200); // 100 + 0 + 100
+  });
+
   it('T-B7/B31: 充值 → 账单/收据，ledger 累加恒等于钱包', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);

@@ -445,7 +445,8 @@ export class PaymentService {
           accountId: input.accountId,
           pool: allocations.some((item) => item.pool === 'credit') ? 'credit' : 'cash',
           bizType: 'charge',
-          deltaBalance: -amount,
+          // R5-2：零价尾段也会落 0 元流水；显式写 `0`（避免 `-0`，保持账实与断言口径干净）。
+          deltaBalance: amount === 0 ? 0 : -amount,
           deltaFrozen: -release,
           allocations,
           bizId: input.bizId,
