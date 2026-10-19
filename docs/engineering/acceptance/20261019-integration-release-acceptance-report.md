@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-19，AI Review）
 
-> **状态**: ❌ **AI Review 四轮均打回（REJECT）**（第二轮见 [第八节](#八第二轮-ai-review-复核2026-10-19ai-review-节点打回)，第三轮见 [第九节](#九第三轮-ai-review-复核2026-10-19ai-review-节点打回)，**第四轮见 [第十节](#十第四轮-ai-review-复核2026-10-19ai-review-节点打回)**：返工 `2a95c4a` 的 R3-1 崩溃残留回归经双探针回退实证**已可证伪**（Probe A/B 均红于 `expected 100701 to be 100801`）、R3-2 收敛护栏/R3-3 尾段补收/R3-4 零费率回归实现为真、R3-5~R3-7 收口属实，五套单测本机复跑全绿（533/197/658/207/429），但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证**仍空转**（该用例在修复前 `reconciliation.ts` 上照常通过，空转回归模式连续第三轮发生）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，**双崩溃恢复**尾段 `[T2,T3]` 永久漏收且 `lastSettleAt` 仍推过未收费窗口（「不推过未收费窗口 ✅」声明过度，残余风险未声明））——首轮——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，首轮**打回返工**；返工（`70990a9`）后第二轮复核**再次打回**（见第八节）。
+> **状态**: ❌ **AI Review 六轮均打回（REJECT）**（**第六轮见 [第十二节](#十二第六轮-ai-review-复核2026-10-20ai-review-节点打回)**：返工 `9d33472` 的 R5-1 游标绝不回退与 R5-2 零价尾段落 0 元流水**已真修复**——两个区分性回归经本轮独立探针实证可证伪（回退至 `3829c65` 红于 `expected 1790812980000 to be 1790813100000` 与 `expected null not to be null`），七层独立复跑全绿（536/197/658/207/429 + tests/api 454/0 + E2E 3）与自报逐项一致；但本轮新发现 🟠 **R6-1**：「扣费完成 → 开票前」崩溃窗口下**已扣费永久无账单/收据**、重放无法补建（tail/main 两路径探针实证账单数 0，SETTLING 恢复路径对照为绿），且 `9d33472` 新增注释「仍回填金额以便补建幂等账单」所述补建机制在串行前提下**不可达**（声明与实现不符，同 R2-3/R5-1④ 缺陷模式）、容器「charge 无 invoice」无任何对账线（R2-4 只补了 API 调用侧））；第二轮见 [第八节](#八第二轮-ai-review-复核2026-10-19ai-review-节点打回)，第三轮见 [第九节](#九第三轮-ai-review-复核2026-10-19ai-review-节点打回)，**第四轮见 [第十节](#十第四轮-ai-review-复核2026-10-19ai-review-节点打回)**：返工 `2a95c4a` 的 R3-1 崩溃残留回归经双探针回退实证**已可证伪**（Probe A/B 均红于 `expected 100701 to be 100801`）、R3-2 收敛护栏/R3-3 尾段补收/R3-4 零费率回归实现为真、R3-5~R3-7 收口属实，五套单测本机复跑全绿（533/197/658/207/429），但 🔴 R4-2 R3-2「FAILED/零计费窗口判终态」守卫回归经探针实证**仍空转**（该用例在修复前 `reconciliation.ts` 上照常通过，空转回归模式连续第三轮发生）+ 🟠 R4-1 R3-3 gap 幂等键只编码窗口起点，**双崩溃恢复**尾段 `[T2,T3]` 永久漏收且 `lastSettleAt` 仍推过未收费窗口（「不推过未收费窗口 ✅」声明过度，残余风险未声明））——首轮——评审范围 `integration..release`（PR #238，35 提交 / 172 文件 / +20528 −70）。**3 项 🔴 阻断**（① 计费事件乱序 → 同一容器会话重复计费；② 预留回滚无「冻结是否发生」守卫 → 蚕食他人担保资金并污染 ledger 真值；③ `appliedLedgerIds` 水位只留 1000 条 → 重放二次记账（幻影扣费可致误强拆 / 幻影加钱成坏账））+ **13 项 🟠 重要**（计费事件丢失兜底残缺、双定价源漏计费、stale 误终结致活容器免费、heldFrozen 全表扫+正则注入、跨账户纵深防御缺失、admin 错误映射缺失、2 项测试假绿/名实不符、4 项前端财务展示与状态操作缺陷、RabbitMQ 镜像未走内网源）+ 40 项 🟡 建议。按验收红线「有阻断/重要问题立即打回并要求修复」，首轮**打回返工**；返工（`70990a9`）后第二轮复核**再次打回**（见第八节）。
 
 ## 关联文档
 
@@ -617,3 +617,69 @@ flowchart LR
 3. **偶然围栏不是护栏**：R5-1 后半段目前被「eventId 唯一 + repairOf + 状态门」这些**与资金正确性无关**的围栏挡住，属可演化面；判定缺陷时以「合法入口直调是否可复现」为准（R5-P2 一条直调即红），不以「当前事件流碰巧绕不开」为准。
 4. **声明的「否则」分支要逐一核对**：「仅当 X 才推进到 endedAt，否则停在已覆盖终点」——复核时把「否则」的每条路径（无流水、零价、`minutes<=0`、历史行）各自走一遍，声明才可验收；本轮 R4-1 的「否则」只覆盖了 `billedThrough === null` 与补收未生效，漏了「整块未进入」。
 5. **每次打回的「下轮将实跑核对」必须当场兑现**：上轮欠下的 tests/api/E2E 实跑本轮补齐并记入 11.1——验证欠账滚存会让「自报」重新变成事实来源。
+
+---
+
+## 十二、第六轮 AI Review 复核（2026-10-20，AI Review 节点·打回）
+
+> 复核对象：返工提交 `9d33472`（基线 `ea2aa73`，增量仅 4 文件：`reservation.ts` / `payment.ts` / `billing-flow.test.ts` / `review-fixes.md`）。
+> 复核口径不变：**不采信自报**；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；「仅当 X 才…否则…」的每个「否则」分支逐一走回归。
+
+### 12.1 R5-1 / R5-2 返工核验（✅ 真修复，探针实证）
+
+| 子项 | 状态 | 实现 / 证据（本轮独立核验） |
+|---|---|---|
+| R5-1① 游标绝不回退 | ✅ | `cursor` 初始化 `max(endedAt, from)`（`from=lastSettleAt??startedAt`）；收尾 `$max: { lastSettleAt: cursor, expectedEndAt: cursor }`（落库层兜底）；全部 `lastSettleAt` 写点非回退（`settleCycle` `$cond` max、`settleTailAfterSettled` `$max`）。迟到 destroyed（`endedAt < lastSettleAt`）整块跳过且不写回 ✅ |
+| R5-1② R5-P1/P2 区分性回归 | ✅ | `billing-flow.test.ts`「R5-P1/P2」断言业务事实：cycle 已收 `[T0,T5]=500` → `finalSettle(T3)` 后 `lastSettleAt=expectedEndAt=T5`；`finalSettle(T7)` 只补 `[T5,T7]=200`、**Σcharge=700**、无 `[T3,T7]` gap、游标=T7。**本轮独立探针**：回退 `reservation.ts`+`payment.ts` 至 `3829c65` 红于 `expected 1790812980000 to be 1790813100000`（T3 vs T5），与返工声明逐字一致 |
+| R5-1③ `settleTailAfterSettled` 起点口径统一 | ✅ | `gapFrom = Math.max(coveredEnd ?? lastSettleAt, lastSettleAt)`；注释明确声明 `settledCoverage` 不含 `cycle:*`、依赖「游标不回退」前提 ✅ |
+| R5-1④ 声明精确化 | ✅ | `finalSettle` JSDoc 已如实：`bizId` 编码区间两端，`charge:final` 幂等键仍是预留级单键 `charge:final:<rid>` ✅ |
+| R5-1⑤ §7.5/§8.2 标注过度声明 | ✅ | 两处均有「R4-1/R5-1 更正」标注，如实更正上一轮「游标只推进/停在覆盖终点」的过度声明 ✅ |
+| R5-2 零价尾段落 0 元流水 | ✅ | `finalSettle` gap 分支与 `settleTailAfterSettled` 均无条件 `charge(amountCents)`（含 0）；`payment.ts` `deltaBalance: amount === 0 ? 0 : -amount`（避免 `-0`）；区分性回归「R5-2」断言 0 元 gap 流水存在、价格恢复后不回溯。**本轮独立探针**：回退至 `3829c65` 红于 `expected null not to be null` ✅ |
+
+### 12.2 本轮必须修复（🟠 重要 1 项）
+
+#### R6-1（🟠 重要·账实凭证一致性）扣费与开票之间的崩溃窗口 → 已扣费**永久无账单/收据**，重放无法补建；新注释「补建幂等账单」与实现不符
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `billing-service.ts:201-203`（`if (result.minutes <= 0 \|\| result.amount <= 0) return null`）；`reservation.ts` `settleTailAfterSettled` 早退 `endedAt <= gapFrom → { minutes: 0, amount: 0 }`；`reservation.ts` tail 段新注释「`applied=false` 表示同窗口已收费；仍回填金额以便**补建幂等账单**」；同类窗口 `billing-service.ts handleSettlementCycle`（`settleCycle` 的 `alreadySettled` 去重门 → `invoice:container-cycle:<rid>:<seq>` 不补建） |
+| 问题 | ① `finalizeReservation` 中「扣费」（`finalSettle` 内 `payments.charge`，含尾段 gap 扣费）与「开票」（`invoiceExistingCharge` → `BillingInvoice`+`BillingReceipt`）非原子，之间横跨 `recomputeTotals`/`getById`/`markInsufficient`/`priceContainer`/`ensureMetering` 等 ≥5 次 DB 往返——进程在该窗口崩溃（部署重启/OOM/驱逐）后 ledger 已扣费、钱包已扣款，但账单/收据**永久缺失**。② 重放不可补建：destroyed 事件重投（at-least-once）或对账补投 → `handleContainerDestroyed` → `finalSettle` → 状态已 `SETTLED` → `settleTailAfterSettled`：`gapFrom = max(coveredEnd, lastSettleAt) = endedAt`（扣费行 `bizId` 已编码窗口终点）→ 早退 `{minutes:0, amount:0}` → `finalizeReservation` 返回 null → 账单永远不建。main 路径（`finalSettle` 完整执行后崩溃）同样经 tail 早退出局。③ 新注释声明的「补建幂等账单」机制**不可达**：tail 段 `amount = priced.amountCents`（`applied=false` 回填）要生效必须先到达 `payments.charge`，但「同窗口已扣费」⇒ `coveredEnd = endedAt` ⇒ 早退先于扣费执行——该分支在串行前提下不可达，注释描述的补建能力不存在（声明与实现不符，同 R2-3 / R5-1④ 缺陷模式）。④ 无发现机制：`reconcileRollups` 两侧同源（rollup 由 invoice 派生）对账不出缺失；`reconcileApiCalls` 仅覆盖 `BillingApiCall`；`reconcileMetering` 只报 unmetered 事件。容器「charge 有、invoice 无」没有任何对账线（R2-4 只补了 API 调用侧）。⑤ 同类：`handleSettlementCycle` 的 `alreadySettled` 命中即返回 `settled:false`，「settleCycle 扣费后、开票前崩溃」同样永久无周期账单 |
+| 探针复现（本轮实跑） | **tail 路径**：SETTLED 预留 + 直调 `finalSettle(T7)`（模拟「扣费完成、开票前崩溃」，账单数 0）→ `handleContainerDestroyed` 重放 → `BillingInvoice.countDocuments` **= 0**（期望 1）。**main 路径**：ACTIVE 预留 + `finalSettle(T3)` 完整执行后重放 → 账单 **= 0**。**对照组**：status 停在 `SETTLING`（中途崩溃）→ 重放**可**补建账单 1（`amount = coverage.coveredAmount` 回填路径有效）——证明补建机制只覆盖 SETTLING 恢复路径，注释把它当通用能力属**声明过度** |
+| 为什么是问题 | 账单/收据是资金动作的正式凭证：「已扣费无凭证」让用户看到余额减少却在费用中心查不到任何账单/收据条目，rollup 费用汇总同向少计，审计口径账实不符。与 D-1（收据**误报**，评定 🟠）相比本项是凭证**真实缺失**且不可自愈；与 R2-4（cost 无 invoice 对账线，评定 🟠）同构但覆盖的是容器主计费路径；可达性不低于 R4-1（双崩溃窗口即评为 🟠）——**单次**进程崩溃即可触发，窗口 ≥5 次 DB 往返 |
+| 修复要求 | ① 重放必须能补建幂等账单：「窗口已扣费但账单缺失」时，重放（destroyed 重投/对账补投）必须产出 `BillingInvoice`+`BillingReceipt`（幂等、不重复）。实现任选：早退分支识别「已覆盖但未开票」并回传可开票金额/窗口（让 `invoiceExistingCharge` 以既有幂等键补建）；或以 ledger 扣费行驱动开票（charge 行存在且对应 invoice 缺失即补建）。② `handleSettlementCycle` 同窗口同标准（`alreadySettled` 命中时 `invoice:container-cycle:<rid>:<seq>` 缺失需补建）。③ 注释与实现口径一致：实现「补建幂等账单」，或删除该表述并把失效模式**按新机制的失效模式**如实写入残余风险（经验 #5）。④ 区分性回归：以「`finalSettle` 完成、开票前崩溃」构造场景（直调结算层模拟崩溃点），重放后断言账单+收据存在且金额正确（修复前红），并按固定口径给出探针结论。⑤（可选加强）补「容器 charge 行无对应 invoice」对账线，对齐 R2-4 的 apiCalls 线 |
+
+### 12.3 本轮确认真修复（探针实跑，不再打回）
+
+R5-1①~⑤ 与 R5-2 全部属实（见 12.1，两个探针均独立复现返工声明的红字签名）；R4-2 业务事实断言 + `repairOf` 锚定、R4-1 区间两端编码 + `settledCoverage` + 只补未覆盖尾段、R3-1~R3-7 保持上一轮确认状态（`9d33472` 未触碰其实现）✅。
+
+### 12.4 独立复跑（本机实跑，不采信自报）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| admin-api 单测/tsc | `MONGOMS_SYSTEM_BINARY=/usr/bin/mongod npx vitest run` / `tsc --noEmit` | ✅ **536 passed / 1 skipped**，tsc 0 |
+| cloud-controller 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 197 passed，tsc 0 |
+| agent-api 单测/tsc | `npx vitest run` / `tsc --noEmit` | ✅ 658 passed，tsc 0 |
+| admin-web | `tsc -b` / `vitest run` | ✅ 0 / 207 passed |
+| agent-web | `tsc -b` / `vitest run` | ✅ 0 / 429 passed |
+| tests/api（Aspire 干净实例 `aspire stop && aspire start`，注入 `INTERNAL_API_TOKEN`/`MONGODB_URI`/`REDIS_URL`/`ADMIN_INITIAL_PASSWORD`） | `npx vitest run` | ✅ **454 passed / 0 skipped**（28 文件） |
+| 费用 E2E | `playwright test admin-billing.spec.ts billing.spec.ts` | ✅ 3 passed |
+
+以上与返工自报逐项一致 ✅（首跑曾因评审侧 `MONGODB_URI` 含 `&` 未加引号注入失败误报 26 skips/20 fails，修正注入后全绿——环境问题非产品问题，如实记录）。
+
+### 12.5 未做/残余（如实标注）
+
+- §9.5 残余（`settledCoverage` 不含 `cycle:*`、历史无编码 `final` 行、`settleTailAfterSettled` 串行前提依赖 `billingMutex`）继续成立，与返工声明一致。
+- 8.4 未做项（3/5/6/10）本轮未动，保持如实标注。
+- 本轮新增 R6-1 即为「新机制失效模式未列入残余」的又一实例（tail/main 两个「扣费完成→开票前」窗口从未被声明）。
+
+### 12.6 返工要求（第六轮打回理由）
+
+1. **必须修复（🟠 重要）**：R6-1——①②③④ 全部落实（⑤ 可选加强）；修复后按固定口径给出探针结论（构造崩溃点、重放断言账单+收据存在），对账表逐条打勾、未做子项如实标注。
+2. **复核口径不变**：不采信自报；探针回退/崩溃点构造为固定复核手段；断言以业务事实为单位；「仅当 X 才…否则…」每个「否则」分支逐一回归。
+
+### 12.7 经验总结（第六轮新增）
+
+1. **「幂等补建」类注释必须指明触发路径**：补建逻辑写在被早退挡住的分支上等于不存在——注释描述的能力要能被一次重放实验**证实或证伪**，写完注释先跑一遍崩溃重放。
+2. **「资金动作 + 凭证动作」的非原子序列要按窗口枚举失效模式**：单次崩溃落在哪几个 `await` 之间、重放走到哪个早退，逐窗口给出「可恢复/不可恢复」结论（本轮 tail/main/SETTLING 三窗口两失一成）。
+3. **对账线覆盖以「凭证对」为单位**：apiCalls 有 `cost↔invoice` 线而容器没有——同一失效模式的对账覆盖要对齐，否则主计费路径反而比旁路更盲。
+4. **对照组探针让结论更精确**：SETTLING 恢复路径探针为绿，证明问题不是「补建完全不存在」而是「覆盖面不足」——正反两侧都跑，返工才知道补什么、不必重做已有效的部分。
