@@ -394,7 +394,7 @@ describe('LLM Provider & Model API', () => {
 
   // #3: updateProvider with empty credentialValue should preserve existing key
   describe('updateProvider with empty credentialValue', () => {
-    it('T-SYNC2: should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+    it('T-UP1: should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
       const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `crud-provider-${Date.now()}`;
       const createRes = await gqlRequest(
@@ -436,6 +436,64 @@ describe('LLM Provider & Model API', () => {
       // Cleanup
       await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
     });
+  });
+
+  // T-SYNC2: 更新用户供应商（改 endpoint）会按新上游清单重同步模型（防止误删 syncSyncedModels）
+  it('T-SYNC2: re-syncs models against the new upstream list on endpoint change', async () => {
+    const alt = await startMockServer(['synced-new-a', 'synced-new-b']);
+    const name = `resync-provider-${Date.now()}`;
+
+    const createRes = await gqlRequest(
+      CREATE_PROVIDER,
+      {
+        input: {
+          name,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      },
+      authToken,
+    );
+    const created = await createRes.json();
+    expect(created.errors).toBeUndefined();
+    const pid = created.data.createProvider.id;
+    const initialNames: string[] = created.data.createProvider.models.map((m: { name: string }) => m.name);
+    expect(initialNames).toContain('gpt-4o');
+
+    try {
+      const updateRes = await gqlRequest(
+        UPDATE_PROVIDER,
+        {
+          id: pid,
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${alt.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: '',
+          },
+        },
+        authToken,
+      );
+      const updated = await updateRes.json();
+      expect(updated.errors).toBeUndefined();
+
+      const providersRes = await gqlRequest(
+        `query { providers { id models { name } } }`,
+        undefined,
+        authToken,
+      );
+      const providersBody = await providersRes.json();
+      const provider = providersBody.data.providers.find((p: { id: string }) => p.id === pid);
+      const resyncedNames: string[] = provider.models.map((m: { name: string }) => m.name);
+      expect(resyncedNames.sort()).toEqual(['synced-new-a', 'synced-new-b']);
+      expect(resyncedNames).not.toContain('gpt-4o');
+    } finally {
+      await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
+      await alt.close();
+    }
   });
 
   // #2: Models should be returned after provider creation

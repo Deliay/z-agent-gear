@@ -14,7 +14,8 @@ import type { AdminAuthContext } from './auth.js';
 function mapModelError(err: unknown): never {
   const message = (err as Error)?.message ?? 'Unknown error';
   if (message.includes('E11000')) {
-    throw new GraphQLError('Model name already exists for this provider');
+    // 并发兜底：唯一索引仅覆盖 scope=global，故重名语义为「全局（跨供应商）唯一」
+    throw new GraphQLError('Model name already exists');
   }
   if (
     message.startsWith('Model name already exists') ||

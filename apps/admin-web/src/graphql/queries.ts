@@ -67,7 +67,8 @@ export const ADMIN_MODELS = gql`
   }
 `
 
-export const ADMIN_MODELS_BY_PROVIDER = gql`  query AdminModelsByProvider($providerId: ID!) {
+export const ADMIN_MODELS_BY_PROVIDER = gql`
+  query AdminModelsByProvider($providerId: ID!) {
     adminModelsByProvider(providerId: $providerId) {
       id
       providerId

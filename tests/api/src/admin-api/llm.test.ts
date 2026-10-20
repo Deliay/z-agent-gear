@@ -330,7 +330,7 @@ describe('Admin Global LLM API', () => {
     await adminGql(DELETE_PROVIDER, { id }, token);
   });
 
-  it.skipIf(!process.env.MONGODB_URI)('T-MR1/T-MR2: the rename ledger matches actual renames and survives deletion', async () => {
+  it.skipIf(!process.env.MONGODB_URI)('T-MR1: the rename ledger matches actual renames one-to-one', async () => {
     const uri = process.env.MONGODB_URI!;
     if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
     const db = mongoose.connection.db!;
@@ -341,13 +341,69 @@ describe('Admin Global LLM API', () => {
     expect(records.errors).toBeUndefined();
     const list = records.data!.modelRenameRecords;
     expect(list.every((r) => r.batchId === '20261020-005')).toBe(true);
+    expect(new Set(list.map((r) => r.modelId)).size).toBe(list.length);
     for (const record of list) {
+      expect(record.oldName).not.toBe(record.newName);
+      expect(record.providerName.length).toBeGreaterThan(0);
+      expect(new Date(record.renamedAt).toString()).not.toBe('Invalid Date');
       const doc = await db.collection('models').findOne({ _id: new mongoose.Types.ObjectId(record.modelId) });
       if (doc) {
-        // 未删除的模型仍以 newName 存在
+        // 台账 newName 必须等于当前库内模型名（未被删除时）
         expect(doc.name).toBe(record.newName);
       }
-      expect(new Date(record.renamedAt).toString()).not.toBe('Invalid Date');
+    }
+  });
+
+  it.skipIf(!process.env.MONGODB_URI)('T-MR2: the rename ledger survives deletion of the renamed model', async () => {
+    const uri = process.env.MONGODB_URI!;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    const db = mongoose.connection.db!;
+
+    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+      input: {
+        name: `global-ledger-${Date.now()}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, token);
+    const providerId = created.data!.createGlobalProvider.id;
+
+    try {
+      const imported = await adminGql<{ importGlobalModels: Array<{ id: string; name: string }> }>(
+        IMPORT_MODELS, { providerId, names: ['gpt-4'] }, token,
+      );
+      const model = imported.data!.importGlobalModels[0];
+
+      // 直写一条台账（迁移已在启动时执行完毕，这里构造「被改名模型」场景）
+      const providerDoc = await db.collection('providers').findOne({ _id: new mongoose.Types.ObjectId(providerId) });
+      await db.collection('model_rename_records').insertOne({
+        modelId: new mongoose.Types.ObjectId(model.id),
+        providerId: new mongoose.Types.ObjectId(providerId),
+        providerName: providerDoc?.name ?? 'e2e-ledger-provider',
+        oldName: 'gpt-4-legacy',
+        newName: 'gpt-4',
+        batchId: '20261020-005',
+        renamedAt: new Date(),
+      });
+
+      const before = await adminGql<{ modelRenameRecords: Array<{ modelId: string }> }>(RENAME_RECORDS, undefined, token);
+      expect(before.data!.modelRenameRecords.some((r) => r.modelId === model.id)).toBe(true);
+
+      const deleted = await adminGql(DELETE_MODEL, { id: model.id }, token);
+      expect(deleted.errors).toBeUndefined();
+
+      const after = await adminGql<{ modelRenameRecords: Array<{ modelId: string; oldName: string; newName: string }> }>(
+        RENAME_RECORDS, undefined, token,
+      );
+      const kept = after.data!.modelRenameRecords.find((r) => r.modelId === model.id);
+      expect(kept).toBeDefined();
+      expect(kept!.oldName).toBe('gpt-4-legacy');
+      expect(kept!.newName).toBe('gpt-4');
+    } finally {
+      await db.collection('model_rename_records').deleteMany({ batchId: '20261020-005', oldName: 'gpt-4-legacy' });
+      await adminGql(DELETE_PROVIDER, { id: providerId }, token);
     }
   });
 
@@ -467,7 +523,49 @@ describe('Admin Global LLM API', () => {
     }
   });
 
-  it('T-MI5/T-MI6: normalizes connectivity failures and rejects blank names', async () => {
+  it.skipIf(!process.env.MONGODB_URI)('T-MU2: concurrent imports of the same name yield exactly one winner', async () => {
+    const uri = process.env.MONGODB_URI!;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    const db = mongoose.connection.db!;
+
+    const makeProvider = async (suffix: string) => {
+      const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+        input: {
+          name: `global-concurrent-${suffix}-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      }, token);
+      return created.data!.createGlobalProvider.id;
+    };
+
+    const a = await makeProvider('a');
+    const b = await makeProvider('b');
+    const raceName = `race-model-${Date.now()}`;
+
+    try {
+      const [first, second] = await Promise.all([
+        adminGql(IMPORT_MODELS, { providerId: a, names: [raceName] }, token),
+        adminGql(IMPORT_MODELS, { providerId: b, names: [raceName] }, token),
+      ]);
+      const outcomes = [first, second];
+      const succeeded = outcomes.filter((r) => !r.errors);
+      const failed = outcomes.filter((r) => r.errors);
+      expect(succeeded).toHaveLength(1);
+      expect(failed).toHaveLength(1);
+      expect(failed[0].errors![0].message).toMatch(/Model name already exists/);
+
+      const count = await db.collection('models').countDocuments({ scope: 'global', name: raceName });
+      expect(count).toBe(1);
+    } finally {
+      await adminGql(DELETE_PROVIDER, { id: a }, token);
+      await adminGql(DELETE_PROVIDER, { id: b }, token);
+    }
+  });
+
+  it('T-MI6: rejects blank names', async () => {
     const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
       input: {
         name: `global-import-bad-${Date.now()}`,
@@ -483,6 +581,46 @@ describe('Admin Global LLM API', () => {
       const invalid = await adminGql(IMPORT_MODELS, { providerId, names: ['  ', 'gpt-4o'] }, token);
       expect(invalid.errors).toBeDefined();
       expect(invalid.errors![0].message).toBe('Model name is invalid');
+    } finally {
+      await adminGql(DELETE_PROVIDER, { id: providerId }, token);
+    }
+  });
+
+  it.skipIf(!process.env.MONGODB_URI)('T-MI5: normalizes upstream failures for list/import and writes nothing', async () => {
+    const uri = process.env.MONGODB_URI!;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    const db = mongoose.connection.db!;
+
+    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+      input: {
+        name: `global-import-down-${Date.now()}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, token);
+    const providerId = created.data!.createGlobalProvider.id;
+
+    try {
+      // 直写端点模拟上游不可用（正常更新路径会先做连通性校验，无法构造失败态）
+      await db.collection('providers').updateOne(
+        { _id: new mongoose.Types.ObjectId(providerId) },
+        { $set: { endpoint: 'http://127.0.0.1:1/v1' } },
+      );
+
+      const listed = await adminGql(LIST_PROVIDER_MODELS, { providerId }, token);
+      expect(listed.errors).toBeDefined();
+      expect(listed.errors![0].message).toBe('供应商连通性测试失败，请检查 API 地址和凭据是否正确');
+
+      const imported = await adminGql(IMPORT_MODELS, { providerId, names: ['gpt-4o'] }, token);
+      expect(imported.errors).toBeDefined();
+      expect(imported.errors![0].message).toBe('供应商连通性测试失败，请检查 API 地址和凭据是否正确');
+
+      const models = await adminGql<{ adminModelsByProvider: Array<{ id: string }> }>(
+        MODELS_BY_PROVIDER, { providerId }, token,
+      );
+      expect(models.data!.adminModelsByProvider).toEqual([]);
     } finally {
       await adminGql(DELETE_PROVIDER, { id: providerId }, token);
     }
@@ -522,23 +660,6 @@ describe('Admin Global LLM API', () => {
       expect(reimported.data!.importGlobalModels.map((m) => m.name)).toEqual(['gpt-3.5-turbo']);
     } finally {
       await adminGql(DELETE_PROVIDER, { id: providerId }, token);
-    }
-  });
-
-  it('T-MR1/T-MR2: exposes the read-only rename ledger with the documented fields', async () => {
-    const body = await adminGql<{ modelRenameRecords: Array<Record<string, unknown>> }>(
-      RENAME_RECORDS, undefined, token,
-    );
-    expect(body.errors).toBeUndefined();
-    for (const record of body.data!.modelRenameRecords) {
-      expect(typeof record.id).toBe('string');
-      expect(typeof record.modelId).toBe('string');
-      expect(typeof record.providerId).toBe('string');
-      expect(typeof record.providerName).toBe('string');
-      expect(typeof record.oldName).toBe('string');
-      expect(typeof record.newName).toBe('string');
-      expect(typeof record.batchId).toBe('string');
-      expect(typeof record.renamedAt).toBe('string');
     }
   });
 

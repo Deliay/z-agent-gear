@@ -163,7 +163,9 @@ export class ModelService {
     }
 
     const names = (rawNames ?? []).map((raw) => (typeof raw === 'string' ? raw.trim() : ''));
-    if (names.length === 0 || names.some((name) => name.length === 0)) {
+    // 裁决 4：空数组等价「无待导入项」，直接返回 []，不报错也不访问上游
+    if (names.length === 0) return [];
+    if (names.some((name) => name.length === 0)) {
       throw new Error('Model name is invalid');
     }
 

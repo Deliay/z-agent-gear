@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { adminGqlRequest, adminLoginApi, startMockLlmServer } from './helpers.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const TEST_PASS = 'testpass123';
@@ -157,5 +158,62 @@ test.describe('Settings LLM Provider & Model E2E', () => {
 
     await page.getByRole('button', { name: '取消' }).click();
     await expect(page.getByRole('dialog')).not.toBeVisible();
+  });
+
+  test('T-E28: shows a read-only 系统内置 group without backend provider names', async ({ page }) => {
+    const mock = await startMockLlmServer();
+    const adminToken = await adminLoginApi(page);
+    const providerName = `e2e-system-${Date.now()}`;
+    const modelName = `e2e-system-model-${Date.now()}`;
+
+    const created = await adminGqlRequest(page, `
+      mutation($input: ProviderInput!) {
+        createGlobalProvider(input: $input) { id }
+      }
+    `, {
+      input: {
+        name: providerName,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-e2e-fake-key',
+      },
+    }, adminToken);
+    const providerId = (await created.json()).data.createGlobalProvider.id as string;
+
+    const imported = await adminGqlRequest(page, `
+      mutation($providerId: ID!, $names: [String!]!) {
+        importGlobalModels(providerId: $providerId, names: $names) { id name }
+      }
+    `, { providerId, names: [modelName] }, adminToken);
+    expect((await imported.json()).errors).toBeUndefined();
+
+    try {
+      const username = await registerUser(page);
+      await loginViaUI(page, username);
+      await page.click('a[href="/settings"]');
+      const section = page.locator('#model-section');
+
+      const systemHeader = section.getByRole('button', { name: /系统内置/ });
+      await expect(systemHeader).toBeVisible();
+      // 系统内置组默认折叠
+      await expect(systemHeader).toHaveAttribute('aria-expanded', 'false');
+
+      // 组头排首位（第一个带 aria-expanded 的按钮）
+      const firstHeader = section.locator('button[aria-expanded]').first();
+      await expect(firstHeader).toContainText('系统内置');
+
+      await systemHeader.click();
+      await expect(section.getByText(modelName, { exact: true }).first()).toBeVisible();
+      // 前台不泄露后台供应商名
+      await expect(section.getByText(providerName)).toHaveCount(0);
+      // 只读：开关禁用、无删除入口、无拖拽手柄
+      await expect(section.getByRole('switch', { name: `启用 ${modelName}` })).toHaveAttribute('aria-disabled', 'true');
+      await expect(section.getByTitle('删除自定义模型')).toHaveCount(0);
+      await expect(section.getByLabel('拖动排序')).toHaveCount(0);
+    } finally {
+      await adminGqlRequest(page, `mutation($id: ID!) { deleteGlobalProvider(id: $id) }`, { id: providerId }, adminToken);
+      await mock.close();
+    }
   });
 });

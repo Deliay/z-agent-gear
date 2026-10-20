@@ -418,4 +418,10 @@ describe('ModelService manual import / global name uniqueness', () => {
 
     await expect(modelService.importModels(VALID_OID, ['claude'])).rejects.toThrow('Provider not found');
   });
+
+  it('U-M12: importModels returns [] for an empty name list (裁决 4)', async () => {
+    await expect(modelService.importModels(VALID_OID, [])).resolves.toEqual([]);
+    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+    expect(Model.insertMany).not.toHaveBeenCalled();
+  });
 });

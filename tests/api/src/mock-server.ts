@@ -14,7 +14,7 @@ const FAKE_ANTHROPIC_MODELS = [
   'claude-3-5-sonnet-20241022',
 ];
 
-function handleRequest(req: IncomingMessage, res: ServerResponse) {
+function handleRequest(req: IncomingMessage, res: ServerResponse, models: string[]) {
   const url = req.url ?? '';
 
   // OpenAI: GET /v1/models or GET /models
@@ -23,7 +23,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse) {
     res.end(
       JSON.stringify({
         object: 'list',
-        data: FAKE_MODELS.map((id) => ({
+        data: models.map((id) => ({
           id,
           object: 'model',
           created: 1715368187,
@@ -59,9 +59,9 @@ export interface MockServer {
   close: () => Promise<void>;
 }
 
-export function startMockServer(): Promise<MockServer> {
+export function startMockServer(models: string[] = FAKE_MODELS): Promise<MockServer> {
   return new Promise((resolve) => {
-    const server = createServer(handleRequest);
+    const server = createServer((req, res) => handleRequest(req, res, models));
     server.listen(0, '127.0.0.1', () => {
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : 0;

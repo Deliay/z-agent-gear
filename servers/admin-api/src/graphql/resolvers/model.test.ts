@@ -93,7 +93,7 @@ describe('modelResolvers', () => {
       (modelService.createCustom as any).mockRejectedValue(new Error('E11000 duplicate key error'));
       await expect(
         Mutation.createGlobalCustomModel({}, { input: { providerId: 'p1', name: 'dup' } }, good),
-      ).rejects.toThrow('Model name already exists for this provider');
+      ).rejects.toThrow('Model name already exists');
     });
 
     it('R-M6: createGlobalCustomModel propagates the global duplicate-name message', async () => {

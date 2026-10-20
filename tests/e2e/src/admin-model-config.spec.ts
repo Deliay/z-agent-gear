@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import mongoose from 'mongoose';
 import {
   adminGqlRequest,
   adminLoginApi,
@@ -194,5 +195,78 @@ test.describe('Admin Model Config E2E', () => {
     await dialog.getByRole('button', { name: '取消' }).click();
 
     await cleanupProviders(page, token);
+  });
+
+  test('T-E23: flags a model already imported by another provider as 已存在 and disables it', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    await cleanupProviders(page, token);
+
+    const first = `${PROVIDER_PREFIX}dup-a-${Date.now()}`;
+    const second = `${PROVIDER_PREFIX}dup-b-${Date.now()}`;
+    const providerA = await createProviderViaApi(page, token, first, `http://127.0.0.1:${mock.port}/v1`);
+    await page.waitForTimeout(50);
+    await createProviderViaApi(page, token, second, `http://127.0.0.1:${mock.port}/v1`);
+
+    const imported = await adminGqlRequest(page, `
+      mutation($providerId: ID!, $names: [String!]!) {
+        importGlobalModels(providerId: $providerId, names: $names) { id name }
+      }
+    `, { providerId: providerA.id, names: ['gpt-4o'] }, token);
+    expect((await imported.json()).errors).toBeUndefined();
+
+    await adminLoginViaUI(page);
+    // 第二个供应商（列表按 createdAt desc，第一条是 second）
+    await page.getByRole('button', { name: '操作菜单' }).first().click();
+    await page.getByRole('menuitem', { name: '导入模型' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    const row = dialog.locator('label', { hasText: 'gpt-4o' }).first();
+    await expect(row.getByText('已存在')).toBeVisible();
+    await expect(row.getByRole('checkbox', { name: '选择 gpt-4o' })).toHaveAttribute('aria-disabled', 'true');
+
+    await dialog.getByRole('button', { name: '关闭' }).click();
+    await cleanupProviders(page, token);
+  });
+
+  test('T-E27: shows the rename ledger rows and its empty state', async ({ page }) => {
+    test.skip(!process.env.MONGODB_URI, 'requires MONGODB_URI for direct ledger setup');
+    const uri = process.env.MONGODB_URI!;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    const db = mongoose.connection.db!;
+
+    const oldName = `e2e-old-${Date.now()}`;
+    const newName = `e2e-new-${Date.now()}`;
+
+    await adminLoginApi(page);
+    await adminLoginViaUI(page);
+
+    const before = await db.collection('model_rename_records').countDocuments({});
+    if (before === 0) {
+      // 空环境：展开后显示空态
+      await page.getByRole('button', { name: /重名整理记录/ }).click();
+      await expect(page.getByText('暂无重名整理记录')).toBeVisible();
+      await page.getByRole('button', { name: /重名整理记录/ }).click();
+    }
+
+    await db.collection('model_rename_records').insertOne({
+      modelId: new mongoose.Types.ObjectId(),
+      providerId: new mongoose.Types.ObjectId(),
+      providerName: 'E2E Provider',
+      oldName,
+      newName,
+      batchId: '20261020-005',
+      renamedAt: new Date('2026-10-20T08:00:00.000Z'),
+    });
+
+    try {
+      await page.reload();
+      await page.getByRole('button', { name: /重名整理记录/ }).click();
+      await expect(page.getByText(oldName)).toBeVisible();
+      await expect(page.getByText(newName)).toBeVisible();
+      await expect(page.getByText('E2E Provider')).toBeVisible();
+    } finally {
+      await db.collection('model_rename_records').deleteMany({ oldName });
+    }
   });
 });

@@ -178,7 +178,7 @@ export class ProviderService {
     const credentialChanged = hasNewCredential;
     const typeChanged = input.type !== existingProvider.type;
     const endpointChanged = input.endpoint !== existingProvider.endpoint;
-    // 通知用名沿用 needsResync；语义已收敛为「是否需要连通性探测」，不再触发模型重同步
+    // needsConnectivityCheck 仅决定是否探测连通性；后台更新供应商不再触发模型重同步
     const needsConnectivityCheck = credentialChanged || typeChanged || endpointChanged;
 
     // 连通性校验先于任何写入，失败则整体不落库；探测结果丢弃（后台不再自动同步模型）

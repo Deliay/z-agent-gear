@@ -63,7 +63,8 @@ export interface AdminModelProviderData {
   scope: ConfigScope;
 }
 
-export interface AdminModelData {  id: string;
+export interface AdminModelData {
+  id: string;
   providerId: string;
   provider?: AdminModelProviderData;
   name: string;
