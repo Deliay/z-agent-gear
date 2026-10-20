@@ -119,6 +119,21 @@ describe('ModelSection', () => {
     vi.clearAllMocks()
   })
 
+  it('T-W24: refreshes provider model counts after creating a custom model (C-4)', async () => {
+    setupQueries([model('a')], [{ id: 'p1', name: 'My OpenAI', type: 'OpenAI', isEnabled: true, scope: 'global', models: [] }])
+    mocks.create.mockResolvedValue({})
+    render(<ModelSection />)
+
+    fireEvent.click(screen.getByRole('button', { name: '自定义模型' }))
+    fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'new-model' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled())
+    const options = mocks.create.mock.calls[0][0] as { refetchQueries: unknown[] }
+    expect(options.refetchQueries).toHaveLength(2)
+    expect(options.refetchQueries.map((doc) => String(doc)).join('\n')).toContain('adminProviders')
+  })
+
   it('T-W2: sends the reordered ids to updateGlobalModelSortOrder on drag end', async () => {
     setupQueries([model('a'), model('b'), model('c')])
     render(<ModelSection />)
@@ -132,8 +147,26 @@ describe('ModelSection', () => {
     )
   })
 
-  it('T-W9: recomputes ids from the latest list at send time (no stale closure)', async () => {
-    let currentModels = [model('a'), model('b'), model('c')]
+  it('T-W23: preserves other groups relative order when saving a reordered group (C-1)', async () => {
+    setupQueries([
+      model('a'),
+      model('x', { providerId: 'p2', provider: { id: 'p2', name: 'Other', type: 'OpenAI', isEnabled: true, scope: 'global' } }),
+      model('b'),
+      model('y', { providerId: 'p2', provider: { id: 'p2', name: 'Other', type: 'OpenAI', isEnabled: true, scope: 'global' } }),
+    ])
+    render(<ModelSection />)
+
+    await act(async () => {
+      dnd.onDragEnd?.({ active: { id: 'b' }, over: { id: 'a' } })
+    })
+
+    // 只替换 p1 组在全局顺序中的位置，p2 的 x/y 保持原位（不是按组拼接 [b,a,x,y]）
+    expect(mocks.sort).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { ids: ['b', 'x', 'a', 'y'] } }),
+    )
+  })
+
+  it('T-W9: recomputes ids from the latest list at send time (no stale closure)', async () => {    let currentModels = [model('a'), model('b'), model('c')]
     mocks.useQuery.mockImplementation((doc: unknown) => {
       if (String(doc).includes('adminProviders')) {
         return { data: { adminProviders: [] }, loading: false, error: undefined, refetch: mocks.refetch }

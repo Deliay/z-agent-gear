@@ -1,8 +1,11 @@
 export const modelTypeDefs = `#graphql
   type Model {
     id: ID!
-    providerId: ID!
-    # provider 可为空：providerId 悬空（关联供应商已不存在）时返回 null，
+    # 后台（scope=global）模型掩蔽来源 providerId（返回 null），避免按 id 反查后台供应商；
+    # user 模型仍返回自身 providerId。悬空 providerId 亦可能为 null。
+    providerId: ID
+    # provider 可为空：global 模型（系统内置）不暴露后台供应商摘要，固定返回 null；
+    # user 模型在 providerId 悬空（关联供应商已不存在）时返回 null，
     # 避免非空违规导致整条 models 查询失败。
     provider: ProviderSummary
     name: String!

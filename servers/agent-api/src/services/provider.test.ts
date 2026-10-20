@@ -92,12 +92,12 @@ describe('ProviderService', () => {
       const selectSpy = vi.fn().mockReturnValue({
         lean: vi.fn().mockResolvedValue({
           _id: { toString: () => 'p-summary' },
-          name: 'Global OpenAI',
+          name: 'User OpenAI',
           type: 'OpenAI',
           endpoint: 'https://internal.example.com/v1',
           credentialType: 'api_key',
           isEnabled: true,
-          scope: 'global',
+          scope: 'user',
         }),
       });
       (Provider.findById as any) = vi.fn().mockReturnValue({ select: selectSpy });
@@ -108,14 +108,30 @@ describe('ProviderService', () => {
       expect(selectSpy).toHaveBeenCalledWith('-encryptedCredential');
       expect(result).toEqual({
         id: 'p-summary',
-        name: 'Global OpenAI',
+        name: 'User OpenAI',
         type: 'OpenAI',
         isEnabled: true,
-        scope: 'global',
+        scope: 'user',
       });
       expect(result).not.toHaveProperty('endpoint');
       expect(result).not.toHaveProperty('credentialType');
       expect(result).not.toHaveProperty('credentialValue');
+    });
+
+    it('never returns a summary for a global (backend) provider', async () => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue({
+            _id: { toString: () => 'p-global' },
+            name: 'Backend OpenAI',
+            type: 'OpenAI',
+            isEnabled: true,
+            scope: 'global',
+          }),
+        }),
+      });
+
+      await expect(providerService.findSummaryById('p-global')).resolves.toBeNull();
     });
 
     it('returns null when the provider does not exist', async () => {

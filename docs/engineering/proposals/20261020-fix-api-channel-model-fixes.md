@@ -7,13 +7,14 @@ type: Permanent
 
 **功能名称**: 内建 API 渠道供应商与模型管理优化
 **关联 PRD**: `docs/product/draft/20261020-api-channel-model-fixes.md`
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-20
 **作者**: ZeroAsh
 **feat-branch**: `fix/api-channel-model-fixes`
 **版本说明**:
 - v1.0（2026-10-20）初版。
 - v1.1（2026-10-20，返工修订，对齐 PRD v1.1）① **agent-api 用户侧自动同步保留**：`syncSyncedModels` 不动，仅后台取消自动导入，§5.2 实现点 1 明确 admin/agent 两侧行为差异（对应打回项 1）；② **会话内「切换模型」分组移出范围**：核实 `packages/agent-controller/src/acp/bridge.ts` `extractConfigModels`（L168-178）与 `SessionConfigOptionData.options`（L33，仅 `{value, name}`）不产出 provider，探测链路无来源字段可透传，强行分组会退化为单组，改为保持现状并把「ACP 侧补来源字段」列为后续需求（对应打回项 2）；③ **重名整理记录持久化**：新增 `model_rename_records` 集合 + `modelRenameRecords` 后台查询 + 后台只读「重名整理记录」视图，作为改名对照的可查询核对载体（对应打回项 3）。
+- v1.2（2026-10-21，验收返工修订，对齐 PRD v1.2）① **前台供应商信息在数据层收口**：`agent-api` 的 `Model.provider` 对 `scope=global` 返回 null，`Model.providerId` 同步掩蔽，`findSummaryById` 增加 global 兜底，防止 UI 不渲染但 API 仍泄漏；② **导入取消语义如实收窄**：单次批量 mutation 不提供「未开始的不执行」，关闭弹窗不中止服务端写入，重开以服务端结果为准（PRD v1.2 同步修订）；③ **导入结果与 refetch 副作用分离异常通道**：refetch 失败不再误报导入失败，失败明细在弹窗内持久展示；④ **迁移 005 台账先写后改名**：`(modelId, batchId)` 幂等 upsert，消除「已改名无台账」崩溃窗口；⑤ **导入接口口径声明**：names 只做上游连通性门禁与全局重名校验，不按上游清单做白名单校验（契约/PRD 同步）。
 
 ## 1. 概述
 
@@ -359,12 +360,12 @@ flowchart TD
 #### 实现点 2: 导入模型弹窗与两条新链路
 
 - **描述**：`ModelService.listProviderModels(providerId)` 拉上游清单并标注 `isImported`（`(providerId, name)` 已存在）与 `isDuplicate`（`scope=global` 且 `name` 被其他供应商占用）；`importModels(providerId, names)` 幂等导入。
-- **技术细节**：`admin-web` 新增 `components/models/ImportModelsDialog.tsx`（清单 + 勾选 + 全选 + 关键字过滤 + 重试 + 结果反馈），入口在 `ProviderItem`/`ProviderActionMenu`；已导入与重名条目 `disabled` 并带「已导入」「已存在」标记；导入前服务端二次校验重名（防绕过 UI）。错误映射沿用 `resolvers/provider.ts:9-14` 的 E11000/连通性文案风格。
+- **技术细节**：`admin-web` 新增 `components/models/ImportModelsDialog.tsx`（清单 + 勾选 + 全选 + 关键字过滤 + 重试 + 结果反馈），入口在 `ProviderItem`/`ProviderActionMenu`；已导入与重名条目 `disabled` 并带「已导入」「已存在」标记；导入前服务端二次校验重名（防绕过 UI）。错误映射沿用 `resolvers/provider.ts:9-14` 的 E11000/连通性文案风格。导入结果在弹窗内持久展示成功数与失败明细；refetch 仅作副作用刷新，失败不覆盖导入结果（B-1/B-2/C-3）。
 - **风险点**：上游清单可能很大（数百条）→ 弹窗内关键字过滤 + 虚拟滚动兜底（沿用现有列表样式，必要时分批渲染）；重复点击导入 → 幂等跳过，不报错。
 
 #### 实现点 3: 模型分组折叠（admin-web / agent-web「可用模型」）
 
-- **描述**：两处「可用模型」列表统一「按供应商分组、默认折叠」。admin-web `ModelSection` 把平铺 `SortableContext` 改为按 `providerId` 分组渲染（新增 `ModelGroup`：组头 = 供应商名 + 数量 + 展开箭头，`defaultExpanded: false`）；`@dnd-kit` 排序收敛为**组内排序**，`UPDATE_GLOBAL_MODEL_SORT_ORDER` 仍提交全量有序 id（组间顺序按供应商创建顺序拼接，保证接口不变）。agent-web `settings/ModelSection` 同构改造，`scope === 'global'` 的模型统一归入「系统内置」组，`ModelItem.tsx:81-83` 的 `{model.provider.name}` 在该组内不再渲染（改为「系统内置」徽标，沿用 `McpRegistrySection.tsx:39-42`「平台内置」徽标样式）。
+- **描述**：两处「可用模型」列表统一「按供应商分组、默认折叠」。admin-web `ModelSection` 把平铺 `SortableContext` 改为按 `providerId` 分组渲染（新增 `ModelGroup`：组头 = 供应商名 + 数量 + 展开箭头，`defaultExpanded: false`）；`@dnd-kit` 排序收敛为**组内排序**，`UPDATE_GLOBAL_MODEL_SORT_ORDER` 仍提交全量有序 id（只替换被拖拽组在全局顺序中的原位置，保留其他组的相对顺序，C-1）。agent-web `settings/ModelSection` 同构改造，`scope === 'global'` 的模型统一归入「系统内置」组；同时 agent-api 在数据层把 global 模型的 `provider`/`providerId` 返回 null（A-1），`ModelItem` 不再有可渲染的后台供应商名。
 - **会话内「切换模型」列表不参与分组（结论与依据）**：
   - **分组键**：不存在可靠分组键。该列表数据来自 ACP 探测的 configOptions：`packages/agent-controller/src/acp/bridge.ts` `SessionConfigOptionData.options`（L33）仅 `{ value, name }`，`extractConfigModels`（L168-178）映射出的 `availableModels` 只有 `{id, name}`，`provider` 为可选且**上游从未产出**（`acp-options-prober.ts` / `acp-session-manager.ts` 全链路透传的 `provider?: string` 恒为空）。按空 `provider` 分组必然退化为单一分组，无法达成 PRD 分组意图。
   - **兜底组名**：不适用（不实现分组）。若强行以「系统内置」作为兜底组名，会把「Agent 自身探测到的模型」错误表述为「平台后台内置模型」，与 PRD「系统内置 = 后台来源模型」的口径冲突。
