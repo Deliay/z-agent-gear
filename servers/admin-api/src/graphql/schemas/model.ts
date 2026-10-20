@@ -36,14 +36,36 @@ export const modelTypeDefs = `#graphql
     name: String!
   }
 
+  # 上游模型清单条目（导入弹窗数据源）
+  type ProviderModelOption {
+    name: String! # 上游模型名（已 trim/去重，保持上游顺序）
+    isImported: Boolean! # 该供应商下已存在
+    isDuplicate: Boolean! # 已被其他供应商的 global 模型占用（全局唯一冲突）
+  }
+
+  # 历史重名整理台账（迁移 005 写入，只读）
+  type ModelRenameRecord {
+    id: ID!
+    modelId: ID!
+    providerId: ID!
+    providerName: String!
+    oldName: String!
+    newName: String!
+    batchId: String!
+    renamedAt: String!
+  }
+
   extend type Query {
     adminModels: [Model!]!
     adminModelsByProvider(providerId: ID!): [Model!]!
+    listGlobalProviderModels(providerId: ID!): [ProviderModelOption!]!
+    modelRenameRecords: [ModelRenameRecord!]!
   }
 
   extend type Mutation {
     createGlobalCustomModel(input: CustomModelInput!): Model!
-    deleteGlobalCustomModel(id: ID!): Model!
+    importGlobalModels(providerId: ID!, names: [String!]!): [Model!]!
+    deleteGlobalModel(id: ID!): Model!
     toggleGlobalModel(id: ID!): Model!
     updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
   }

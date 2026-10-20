@@ -1,8 +1,32 @@
 import { GraphQLError } from 'graphql';
 import { modelService } from '../../services/model.js';
-import { providerService } from '../../services/provider.js';
+import { modelRenameRecordService } from '../../services/model-rename-record.js';
+import { providerService, PROVIDER_CONNECTIVITY_ERROR } from '../../services/provider.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
+
+/**
+ * 模型服务错误 → GraphQL 错误（统一出口）：
+ * - 重名（含并发 E11000 兜底）→ `Model name already exists...`
+ * - 上游连通性失败 → 既有中文文案
+ * - 供应商不存在 / 非法模型名 → 原文
+ */
+function mapModelError(err: unknown): never {
+  const message = (err as Error)?.message ?? 'Unknown error';
+  if (message.includes('E11000')) {
+    // 并发兜底：唯一索引仅覆盖 scope=global，故重名语义为「全局（跨供应商）唯一」
+    throw new GraphQLError('Model name already exists');
+  }
+  if (
+    message.startsWith('Model name already exists') ||
+    message === PROVIDER_CONNECTIVITY_ERROR ||
+    message === 'Provider not found' ||
+    message === 'Model name is invalid'
+  ) {
+    throw new GraphQLError(message);
+  }
+  throw new GraphQLError(message);
+}
 
 export const modelResolvers = {
   Query: {
@@ -18,6 +42,22 @@ export const modelResolvers = {
       assertAdmin(context);
       return modelService.findByProviderId(args.providerId);
     },
+    listGlobalProviderModels: async (
+      _parent: unknown,
+      args: { providerId: string },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      try {
+        return await modelService.listProviderModels(args.providerId);
+      } catch (err) {
+        mapModelError(err);
+      }
+    },
+    modelRenameRecords: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
+      assertAdmin(context);
+      return modelRenameRecordService.findAll();
+    },
   },
   Mutation: {
     createGlobalCustomModel: async (
@@ -29,17 +69,22 @@ export const modelResolvers = {
       try {
         return await modelService.createCustom(args.input);
       } catch (err) {
-        const message = (err as Error).message;
-        if (message.includes('E11000')) {
-          throw new GraphQLError('Model name already exists for this provider');
-        }
-        if (message === 'Provider not found') {
-          throw new GraphQLError('Provider not found');
-        }
-        throw new GraphQLError(message);
+        mapModelError(err);
       }
     },
-    deleteGlobalCustomModel: async (
+    importGlobalModels: async (
+      _parent: unknown,
+      args: { providerId: string; names: string[] },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      try {
+        return await modelService.importModels(args.providerId, args.names);
+      } catch (err) {
+        mapModelError(err);
+      }
+    },
+    deleteGlobalModel: async (
       _parent: unknown,
       args: { id: string },
       context: AdminAuthContext,
@@ -47,7 +92,7 @@ export const modelResolvers = {
       assertAdmin(context);
       const result = await modelService.delete(args.id);
       if (!result) {
-        throw new GraphQLError('Model not found or is not a custom model');
+        throw new GraphQLError('Model not found');
       }
       return result;
     },

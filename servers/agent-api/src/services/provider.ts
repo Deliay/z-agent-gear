@@ -31,11 +31,15 @@ export class ProviderService {
   /**
    * `Model.provider` 专用：返回不含凭据/内部地址的供应商摘要。
    * 通过 `select('-encryptedCredential')` 避免密文进入内存；返回结构不含
-   * endpoint / credentialType / credentialValue，用户侧不可见全局供应商内部细节。
+   * endpoint / credentialType / credentialValue。
+   *
+   * 口径：仅 user 模型可见自身供应商摘要；global（后台/系统内置）模型一律返回 null，
+   * 从数据层避免后台供应商名称进入前台响应（PRD §1.3/§4.2）。
    */
   async findSummaryById(id: string) {
     const provider = await Provider.findById(id).select('-encryptedCredential').lean();
     if (!provider) return null;
+    if (normalizeScope((provider as { scope?: string }).scope) === 'global') return null;
     return this.mapProviderSummary(provider);
   }
 

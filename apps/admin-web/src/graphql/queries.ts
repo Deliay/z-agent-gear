@@ -81,6 +81,31 @@ export const ADMIN_MODELS_BY_PROVIDER = gql`
   }
 `
 
+export const LIST_GLOBAL_PROVIDER_MODELS = gql`
+  query ListGlobalProviderModels($providerId: ID!) {
+    listGlobalProviderModels(providerId: $providerId) {
+      name
+      isImported
+      isDuplicate
+    }
+  }
+`
+
+export const MODEL_RENAME_RECORDS = gql`
+  query ModelRenameRecords {
+    modelRenameRecords {
+      id
+      modelId
+      providerId
+      providerName
+      oldName
+      newName
+      batchId
+      renamedAt
+    }
+  }
+`
+
 export const BASE_IMAGES = gql`
   query BaseImages {
     baseImages {

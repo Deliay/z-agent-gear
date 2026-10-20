@@ -8,11 +8,15 @@
 #   - 保存供应商前先调供应商 API 校验连通性（失败不保存）
 #   - 凭据 AES-256-GCM 加密存储、脱敏返回：长度 > 8 时为「前 3 后 4」，
 #     长度 ≤ 8 时整体掩码为 `****`（避免短凭据被拼出近似完整值）
+#   - 创建/更新供应商**不再自动导入或重同步模型**：创建后模型列表为空，由管理员通过
+#     `listGlobalProviderModels` 拉取上游清单、`importGlobalModels` 手动勾选导入；
+#     更新供应商时仅做连通性校验，不写任何模型
 #   - 删除供应商级联删除其全部模型（含自定义模型）；禁用供应商级联禁用其模型
-#   - 更新供应商时若连通性参数（凭据 / type / endpoint）变化则重同步模型：
-#     按 `(providerId, name)` upsert 重拉取的 API 同步模型（`isCustom = false`）并删除不再返回的
-#     陈旧同步模型，保留用户自定义模型（`isCustom = true`）；当自定义模型与重拉取模型同名时，
-#     保留自定义模型并跳过该同名 API 模型（不覆盖、不触发唯一索引冲突）
+#   - `scope = 'global'` 内 `Model.name` **全局唯一（跨供应商）**：
+#     `createGlobalCustomModel` / `importGlobalModels` 冲突时返回
+#     `Model name already exists: <names>`；历史重名由迁移 005 一次性改名并写入
+#     `model_rename_records`（`modelRenameRecords` 只读查询）
+#   - `deleteGlobalModel` 可删除任意全局模型（导入模型与自定义模型），删除后前台不再展示
 #   - `name` 在同 scope 内唯一
 
 enum ProviderType {
@@ -93,10 +97,33 @@ type ProviderBatchPayload {
   successCount: Int!
 }
 
+# 上游模型清单条目（导入弹窗数据源）
+type ProviderModelOption {
+  name: String! # 上游模型名（已 trim/去重，保持上游顺序）
+  isImported: Boolean! # 该供应商下已存在（(providerId, name) 命中）
+  isDuplicate: Boolean! # 已被其他供应商的 global 模型占用（全局唯一冲突）
+}
+
+# 历史重名整理台账（迁移 005 写入，只读；不随模型删除而删除）
+type ModelRenameRecord {
+  id: ID!
+  modelId: ID! # 被改名的模型（现以 newName 存在）
+  providerId: ID!
+  providerName: String! # 冗余留档：供应商删除后仍可读
+  oldName: String!
+  newName: String!
+  batchId: String!
+  renamedAt: String! # ISO 8601
+}
+
 type Query {
   adminProviders: [Provider!]! # 仅 scope=global
   adminModels: [Model!]! # 仅 scope=global
   adminModelsByProvider(providerId: ID!): [Model!]!
+  # 拉取指定供应商的上游模型清单（连通性失败返回「供应商连通性测试失败…」）
+  listGlobalProviderModels(providerId: ID!): [ProviderModelOption!]!
+  # 历史重名整理记录（renamedAt desc）；空环境返回 []
+  modelRenameRecords: [ModelRenameRecord!]!
 }
 
 type Mutation {
@@ -108,7 +135,12 @@ type Mutation {
   batchDisableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
   batchDeleteGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
   createGlobalCustomModel(input: CustomModelInput!): Model!
-  deleteGlobalCustomModel(id: ID!): Model!
+  # 手动导入上游模型（幂等：已存在项跳过）；返回实际新建的模型。
+  # names 由调用方提交（前端仅提交清单中的勾选项）；服务端只做上游连通性门禁与全局重名校验，
+  # 不校验 names 是否属于当前上游清单（裁决 5，提案/PRD §3.5 如实声明）。
+  importGlobalModels(providerId: ID!, names: [String!]!): [Model!]!
+  # 删除任意全局模型（导入模型或自定义模型）
+  deleteGlobalModel(id: ID!): Model!
   toggleGlobalModel(id: ID!): Model!
   updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
 }

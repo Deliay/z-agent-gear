@@ -1,4 +1,9 @@
 // 本 schema 与 servers/admin-api/src/models/model.ts 同步演进
+//
+// 注意：`scope = 'global'` 内 `name` 全局唯一（跨供应商）由 admin-api 迁移
+// `005-model-name-unique-global` 以固定名 `scope_global_name_unique` 创建
+// （partialFilterExpression: { scope: 'global' }），本服务不声明该索引——
+// 用户侧（scope=user）不受影响，仍允许跨 scope 同名。
 import mongoose from 'mongoose';
 
 const modelPricingSchema = new mongoose.Schema(

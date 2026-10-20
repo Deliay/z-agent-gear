@@ -7,6 +7,7 @@ interface ProviderItemProps {
   provider: AdminProviderData
   selected: boolean
   onSelect: (id: string) => void
+  onImport: (provider: AdminProviderData) => void
   onEdit: (provider: ProviderInputData & { id: string }) => void
   onToggle: (id: string) => void
   onDelete: (id: string) => void
@@ -17,6 +18,7 @@ export default function ProviderItem({
   provider,
   selected,
   onSelect,
+  onImport,
   onEdit,
   onToggle,
   onDelete,
@@ -51,6 +53,7 @@ export default function ProviderItem({
       <ProviderActionMenu
         isEnabled={provider.isEnabled}
         togglePending={togglePending}
+        onImport={() => onImport(provider)}
         onEdit={() => onEdit(provider)}
         onToggle={() => onToggle(provider.id)}
         onDelete={() => onDelete(provider.id)}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Provider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { providerService } from './provider';
+import { llmApiService } from './llm-api';
 import * as cryptoModule from './crypto';
 
 vi.mock('../models/provider.js');
@@ -115,7 +116,7 @@ describe('ProviderService (admin / global scope)', () => {
       expect(Provider.create).not.toHaveBeenCalled();
     });
 
-    it('T-P2: creates provider and syncs models with scope=global', async () => {
+    it('U-P1/T-P2: creates a provider without importing any models', async () => {
       const doc = makeProviderDoc();
       (Provider.create as any) = vi.fn().mockResolvedValue({
         ...doc,
@@ -127,12 +128,11 @@ describe('ProviderService (admin / global scope)', () => {
 
       expect(cryptoModule.encrypt).toHaveBeenCalledWith('sk-test-key');
       expect(Provider.create).toHaveBeenCalledWith(expect.objectContaining({ scope: 'global' }));
-      expect(Model.insertMany).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.objectContaining({ name: 'gpt-4o', isCustom: false, sortOrder: 0, scope: 'global' }),
-          expect.objectContaining({ name: 'gpt-4o-mini', isCustom: false, sortOrder: 1, scope: 'global' }),
-        ]),
-      );
+      // 后台改为手动导入：创建供应商只做连通性校验，不写模型
+      expect(llmApiService.fetchModels).toHaveBeenCalledTimes(1);
+      expect(Model.insertMany).not.toHaveBeenCalled();
+      expect(Model.create).not.toHaveBeenCalled();
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
       expect(result.scope).toBe('global');
       expect(result.credentialValue).toContain('****');
     });
@@ -142,56 +142,12 @@ describe('ProviderService (admin / global scope)', () => {
       expect(Provider.create).not.toHaveBeenCalled();
     });
 
-    it('T-P7: propagates duplicate name error (E11000) without syncing models', async () => {
+    it('T-P7: propagates duplicate name error (E11000) without writing models', async () => {
       (Provider.create as any) = vi.fn().mockRejectedValue(new Error('E11000 duplicate key error'));
       (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
 
       await expect(providerService.create(validInput)).rejects.toThrow('E11000');
       expect(Model.insertMany).not.toHaveBeenCalled();
-    });
-
-    it('问题 54: dedupes/drops upstream model names so duplicate names cannot E11000', async () => {
-      const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce(['gpt-4o', 'gpt-4o', '', '   ', 'gpt-4o-mini']);
-      const doc = makeProviderDoc();
-      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
-      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
-
-      await providerService.create(validInput);
-
-      const docs = (Model.insertMany as any).mock.calls[0][0] as Array<{ name: string; sortOrder: number }>;
-      expect(docs.map((d) => d.name)).toEqual(['gpt-4o', 'gpt-4o-mini']);
-      expect(docs.map((d) => d.sortOrder)).toEqual([0, 1]);
-      // 去重后不再触发唯一索引冲突，也就不需要清理供应商
-      expect(Provider.deleteOne).not.toHaveBeenCalled();
-      expect(Model.deleteMany).not.toHaveBeenCalled();
-    });
-
-    it('问题 54: deletes the provider when model sync fails in the non-transaction path (no orphan)', async () => {
-      const doc = makeProviderDoc();
-      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
-      (Model.insertMany as any) = vi.fn().mockRejectedValue(new Error('E11000 duplicate key error'));
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      (Provider.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
-
-      await expect(providerService.create(validInput)).rejects.toThrow('E11000');
-
-      expect(Model.deleteMany).toHaveBeenCalledWith({ providerId: doc._id, scope: 'global' });
-      expect(Provider.deleteOne).toHaveBeenCalledWith({ _id: doc._id, scope: 'global' });
-    });
-
-    it('问题 54: skips model insert entirely when the upstream list is empty after normalization', async () => {
-      const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce(['', '  ']);
-      const doc = makeProviderDoc();
-      (Provider.create as any) = vi.fn().mockResolvedValue({ ...doc, toObject: () => doc });
-      (Model.insertMany as any) = vi.fn().mockResolvedValue([]);
-
-      await providerService.create(validInput);
-
-      expect(Model.insertMany).not.toHaveBeenCalled();
-      expect(Provider.deleteOne).not.toHaveBeenCalled();
     });
   });
 
@@ -210,7 +166,7 @@ describe('ProviderService (admin / global scope)', () => {
       (Model.find as any) = vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
     });
 
-    it('T-P3: preserves credential and resyncs models when endpoint changes', async () => {
+    it('U-P3/T-P3: preserves credential, validates connectivity but never resyncs models when endpoint changes', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(
         makeProviderDoc({ endpoint: 'https://custom.openai.com/v1' }),
       );
@@ -230,18 +186,11 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
       );
-      // 问题 48：upsert 同步模型 + 仅删除陈旧同步模型（不再 delete+insert）
-      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string }; update: { $set: Record<string, unknown> }; upsert: boolean } }>;
-      expect(ops.map((op) => op.updateOne.filter.name).sort()).toEqual(['gpt-4o', 'gpt-4o-mini']);
-      expect(ops[0].updateOne.upsert).toBe(true);
-      expect(ops[0].updateOne.update.$set).toMatchObject({ isCustom: false, scope: 'global', isEnabled: true });
+      // 后台取消自动重同步：只校验连通性，不写模型
+      expect(Model.bulkWrite).not.toHaveBeenCalled();
+      expect(Model.deleteMany).not.toHaveBeenCalled();
+      expect(Model.find).not.toHaveBeenCalled();
       expect(Model.insertMany).not.toHaveBeenCalled();
-      expect(Model.deleteMany).toHaveBeenCalledWith({
-        providerId: OID,
-        scope: 'global',
-        isCustom: false,
-        name: { $nin: ['gpt-4o', 'gpt-4o-mini'] },
-      });
       expect(Provider.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: OID, scope: 'global' },
         expect.objectContaining({ endpoint: 'https://custom.openai.com/v1' }),
@@ -249,10 +198,8 @@ describe('ProviderService (admin / global scope)', () => {
       );
     });
 
-    it('T-P3: skips resync when only name changed and credential stays empty', async () => {
+    it('U-P4/T-P3: skips the connectivity check when only the name changed', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc({ name: 'Renamed' }));
-      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
       const { llmApiService } = await import('./llm-api');
 
       await providerService.update(OID, { ...validInput, name: 'Renamed', credentialValue: '' });
@@ -263,11 +210,9 @@ describe('ProviderService (admin / global scope)', () => {
       expect(Model.find).not.toHaveBeenCalled();
     });
 
-    it('T-P3: encrypts a new credential and resyncs models', async () => {
+    it('U-P3: encrypts a new credential, validates connectivity and leaves models untouched', async () => {
       (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
       (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-      const { llmApiService } = await import('./llm-api');
 
       await providerService.update(OID, validInput);
 
@@ -275,78 +220,8 @@ describe('ProviderService (admin / global scope)', () => {
       expect(llmApiService.fetchModels).toHaveBeenCalledWith(
         'OpenAI', 'https://api.openai.com/v1', 'sk-test-key',
       );
-      expect(Model.bulkWrite).toHaveBeenCalled();
-    });
-
-    it('T-P8: keeps custom models across a resync (deleteMany filter excludes isCustom=true)', async () => {
-      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
-      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-
-      await providerService.update(OID, validInput);
-
-      // 只删除 API 同步模型，用户自定义模型（isCustom=true）不被级联删除（问题 5）
-      expect(Model.deleteMany).toHaveBeenCalledWith(
-        expect.objectContaining({ isCustom: false }),
-      );
-      expect(Model.deleteMany).not.toHaveBeenCalledWith({ providerId: OID, scope: 'global' });
-    });
-
-    it('T-P9 (问题 48): a custom model with the same name as an API model survives resync', async () => {
-      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
-      (Model.find as any) = vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]),
-      });
-      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-
-      await expect(providerService.update(OID, validInput)).resolves.not.toBeNull();
-
-      // 同名的 fetched 名被跳过（不覆盖自定义模型），只 upsert 余下名字
-      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string } } }>;
-      expect(ops.map((op) => op.updateOne.filter.name)).toEqual(['gpt-4o-mini']);
-
-      // 陈旧同步模型删除集合也不包含该同名（其 isCustom=true 本就受 isCustom:false 过滤保护）
-      expect(Model.deleteMany).toHaveBeenCalledWith({
-        providerId: OID,
-        scope: 'global',
-        isCustom: false,
-        name: { $nin: ['gpt-4o-mini'] },
-      });
-      // 不再走 delete+insert（避免唯一索引 E11000）
-      expect(Model.insertMany).not.toHaveBeenCalled();
-    });
-
-    it('T-P9 (问题 48): upserts existing synced models and dedupes fetched names', async () => {
-      const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce(['gpt-4o', 'gpt-4o', 'gpt-4o-mini']);
-      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
-      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-
-      await providerService.update(OID, validInput);
-
-      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{ updateOne: { filter: { name: string } } }>;
-      expect(ops.map((op) => op.updateOne.filter.name)).toEqual(['gpt-4o', 'gpt-4o-mini']);
-      expect(Model.insertMany).not.toHaveBeenCalled();
-    });
-
-    it('T-P9 (问题 48): deletes all stale synced models when the API returns none', async () => {
-      const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce([]);
-      (Provider.findOneAndUpdate as any) = vi.fn().mockResolvedValue(makeProviderDoc());
-      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
-      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
-
-      await providerService.update(OID, validInput);
-
       expect(Model.bulkWrite).not.toHaveBeenCalled();
-      expect(Model.deleteMany).toHaveBeenCalledWith({
-        providerId: OID,
-        scope: 'global',
-        isCustom: false,
-        name: { $nin: [] },
-      });
+      expect(Model.deleteMany).not.toHaveBeenCalled();
     });
 
     it('rejects an empty name like create (问题 21)', async () => {

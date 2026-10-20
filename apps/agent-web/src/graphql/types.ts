@@ -75,7 +75,8 @@ export interface ProviderData {
 
 export interface ModelData {
   id: string
-  providerId: string
+  /** global（系统内置）模型由服务端掩蔽为 null */
+  providerId: string | null
   provider?: {
     id: string
     name: string
@@ -86,6 +87,7 @@ export interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  scope: 'user' | 'global'
   createdAt: string
   updatedAt: string
 }
