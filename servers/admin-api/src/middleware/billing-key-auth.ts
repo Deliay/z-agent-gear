@@ -1,4 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
+import mongoose from 'mongoose';
+import { CloudHost } from '../models/cloud-host.js';
 import { apiKeyService, type VerifiedApiKey } from '../services/billing/api-key-service.js';
 import { clientIpFromNode } from './client-ip.js';
 
@@ -44,6 +46,31 @@ export function openAiError(
   res.status(status).json({ error });
 }
 
+function rejectInvalidApiKey(res: Response, source: string, message: string): void {
+  if (source) recordAuthFailure(source);
+  openAiError(res, 401, {
+    type: 'invalid_request_error',
+    code: 'invalid_api_key',
+    message,
+  });
+}
+
+/**
+ * B9/A16：`scope=cloud_host` 的 Key 必须同时满足：
+ * - 有 `cloudHostId` 且 `expiresAt` 未到期；
+ * - 云电脑存在、未软删除、状态为 `RUNNING`（STARTING 创建窗口也拒绝：初始化阶段不调模型网关）。
+ * 账号 Key 维持原行为（不做宿主校验）。
+ */
+async function isCloudHostKeyUsable(verified: VerifiedApiKey): Promise<boolean> {
+  if (verified.scope !== 'cloud_host') return true;
+  if (!verified.cloudHostId || !mongoose.isValidObjectId(verified.cloudHostId)) return false;
+  if (!verified.expiresAt || verified.expiresAt.getTime() <= Date.now()) return false;
+  const host = await CloudHost.findById(verified.cloudHostId)
+    .select({ status: 1, deletedAt: 1 })
+    .lean<{ status?: string; deletedAt?: Date | null } | null>();
+  return !!host && !host.deletedAt && host.status === 'RUNNING';
+}
+
 /** `Authorization: Bearer zag_sk_<hex>` → 校验 API Key 并注入 `billing`。 */
 export async function billingKeyAuth(
   req: Request,
@@ -63,23 +90,18 @@ export async function billingKeyAuth(
   }
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
-    if (source) recordAuthFailure(source);
-    openAiError(res, 401, {
-      type: 'invalid_request_error',
-      code: 'invalid_api_key',
-      message: '缺少 API Key',
-    });
+    rejectInvalidApiKey(res, source, '缺少 API Key');
     return;
   }
   const secret = header.slice(7).trim();
   const verified = await apiKeyService.verify(secret);
   if (!verified) {
-    if (source) recordAuthFailure(source);
-    openAiError(res, 401, {
-      type: 'invalid_request_error',
-      code: 'invalid_api_key',
-      message: 'API Key 无效或已吊销',
-    });
+    rejectInvalidApiKey(res, source, 'API Key 无效或已吊销');
+    return;
+  }
+  // B9：云电脑 Key 实时失效（过期 / 宿主不存在 / 已删除 / 非 RUNNING）。
+  if (!(await isCloudHostKeyUsable(verified))) {
+    rejectInvalidApiKey(res, source, 'API Key 无效或已失效');
     return;
   }
   if (source) clearAuthFailures(source);

@@ -312,6 +312,19 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E12 参数配置全流程 | 新建工作负载配置四种参数类型（下拉单选/下拉多选/文本/布尔）与默认值 → 保存 → 列表展示参数数量（4）→ 编辑回显类型/默认值 |
 | T-E12 非法值拦截 | 非法 key（数字开头）与下拉类型无可选项时给出提示且「保存」禁用 |
 | T-E13 多依赖 | 勾选多个依赖 → 展示「已选依赖（按初始化顺序）」→ 列表展示依赖名称；依赖环 → 「检测到依赖环」提示且「保存」禁用 |
-| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire 与「预制」徽章（恰 4 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
+| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire/OpenCode（Harness）与「预制」徽章（恰 5 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
 
 > 覆盖裁剪（计划裁决 17）：Aspire 以 `K8S_ENABLED=false` 启动、无真实工作容器回连，`INITIALIZING` 与脚本执行链路改由 cloud-controller/agent-controller 单测与 tests/api（直写 Mongo + 内部 API/GraphQL 查询）覆盖；E2E 只覆盖 CRUD、启动多选、状态/日志展示。真实集群链路（init/post 下发执行、超时保护、旧 worker 兼容、镜像重建）列部署侧手工验收。
+
+### 前台云电脑 E2E (`cloud-host.spec.ts` / `cloud-host-readonly.spec.ts`)
+
+> 需要 `HARNESS_ENABLED=true` 与 Aspire 全量服务；`K8S_ENABLED=false` 下容器只能停在 `STARTING`，E2E 覆盖到「启动中 → 停止 → 已销毁 → 删除」。
+> 只读回看由 `cloud-host-readonly.spec.ts` 直写 Mongo（`cloudhosts` + `sessions`）构造终态 fixture，需要 `MONGODB_URI`（缺省时 skip）。
+
+| 测试 | 描述 |
+|------|------|
+| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示自动建会话、提交后 Sidebar 云图标 + 启动中 |
+| T-AW6/T-AW7/T-AW9 | 配置页状态/工作区+Harness 两栏；无活动会话直接停止；已销毁无再次启动；终态可删除并移出列表 |
+| T-AW10 | 已销毁云电脑会话只读回看：无输入框/发送/继续，历史消息保留 |
+
+> RUNNING/默认会话/ACP 链路不在 E2E 断言（无真实 worker），由单测 + 真实集群手工验收覆盖。

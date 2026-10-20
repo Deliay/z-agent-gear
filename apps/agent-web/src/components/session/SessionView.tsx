@@ -34,6 +34,7 @@ import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
 import ResumeConfirmDialog from './ResumeConfirmDialog';
+import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
 
 interface AcpMessage {
@@ -414,6 +415,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     (c) => c.id === sessionData?.session?.controllerId,
   );
   const controllerOnline = sessionController?.status === 'online';
+  // 云电脑 STOPPED/FAILED/deletedAt：会话只读回看（服务端同样拒绝 resume/command）
+  const readOnlyCloudHost =
+    sessionController?.type === 'cloud' && isReadOnlyCloudHost(sessionController.cloudHost);
 
   if (sessionLoading) {
     return (
@@ -453,7 +457,13 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         closing={closing}
         deleting={deleting}
         controllerOnline={controllerOnline}
+        readOnly={readOnlyCloudHost}
       />
+      {readOnlyCloudHost && (
+        <div className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground" data-testid="cloud-host-readonly-notice">
+          云电脑已销毁，会话记录仅供只读回看。
+        </div>
+      )}
       <MessageList
         messages={messages}
         sseLoading={sseLoading}
@@ -462,24 +472,26 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         onLoadMore={handleLoadMore}
         loadingMore={loadingMore}
       />
-      <InputBox
-        sessionId={id}
-        onSend={handleSendMessage}
-        onStop={handleCancelGeneration}
-        disabled={status !== 'idling' && status !== 'running'}
-        sending={sending}
-        isWorking={isWorking}
-        modes={modes}
-        currentModeId={currentModeId}
-        onSetMode={handleSetMode}
-        status={status}
-        availableModels={availableModels}
-        currentModelId={currentModelId}
-        onSetModel={handleSetModel}
-        availableCommands={availableCommands}
-        configOptions={configOptions}
-        onSetConfigOption={handleSetConfigOption}
-      />
+      {!readOnlyCloudHost && (
+        <InputBox
+          sessionId={id}
+          onSend={handleSendMessage}
+          onStop={handleCancelGeneration}
+          disabled={status !== 'idling' && status !== 'running'}
+          sending={sending}
+          isWorking={isWorking}
+          modes={modes}
+          currentModeId={currentModeId}
+          onSetMode={handleSetMode}
+          status={status}
+          availableModels={availableModels}
+          currentModelId={currentModelId}
+          onSetModel={handleSetModel}
+          availableCommands={availableCommands}
+          configOptions={configOptions}
+          onSetConfigOption={handleSetConfigOption}
+        />
+      )}
       <ResumeConfirmDialog
         open={resumeConfirmOpen}
         onOpenChange={setResumeConfirmOpen}

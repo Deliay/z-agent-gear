@@ -39,6 +39,43 @@ export interface WorkloadRunPayload {
   items: WorkloadItem[];
   /** `post` 批次共享总预算（毫秒）；`init` 不携带。 */
   budgetMs?: number;
+  /**
+   * 容器级环境变量（仅 `purpose=harness` 下发，如 `ZAG_MODEL_*` / `ZAG_HOST_*`）。
+   * 对批次内所有 item 生效；`item.params` 派生的 `WORKLOAD_PARAM_*` 同名时优先。
+   */
+  env?: Record<string, string>;
+}
+
+/** 需要在日志/错误/脚本输出中脱敏的环境变量名（契约 §2.9「云电脑初始化 env」）。 */
+export const SECRET_ENV_KEYS = ['ZAG_MODEL_API_KEY', 'ZAG_HOST_KEY', 'ZAG_CONTROLLER_KEY'] as const;
+
+/** 脱敏占位符。 */
+export const REDACTED = '***';
+
+/**
+ * 收集需要脱敏的 secret 值（仅非空值；调用方可叠加批次 `env` 与 `process.env`）。
+ */
+export function collectSecretValues(...sources: Array<Record<string, string | undefined> | undefined>): string[] {
+  const values = new Set<string>();
+  for (const source of sources) {
+    if (!source) continue;
+    for (const key of SECRET_ENV_KEYS) {
+      const value = source[key];
+      if (typeof value === 'string' && value.length > 0) values.add(value);
+    }
+  }
+  // 长值优先替换，避免短 secret 是长 secret 的子串时留下残片。
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+/** 将文本中出现的 secret 值替换为 `***`（日志、错误与脚本输出统一口径）。 */
+export function redactSecrets(text: string, secrets: Iterable<string>): string {
+  let result = text;
+  for (const secret of secrets) {
+    if (!secret) continue;
+    result = result.split(secret).join(REDACTED);
+  }
+  return result;
 }
 
 export type WorkloadStatus = 'success' | 'failed' | 'timeout';
@@ -112,6 +149,20 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * 归一容器级 `env`：只接受字符串键值（服务端报文里 `ZAG_*` 均为字符串），
+ * 非对象/数组一律视为未下发（普通容器行为不变）。
+ */
+function normalizeContainerEnv(env: Record<string, string> | undefined): Record<string, string> {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return {};
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!key || typeof value !== 'string') continue;
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
 /** 单个参数值 → 环境变量字符串（契约 §2.9「参数注入约定」）。 */
 function encodeParamValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -123,17 +174,23 @@ function encodeParamValue(value: unknown): string {
 }
 
 /**
- * 由 `process.env` 派生单条 item 的执行环境：
+ * 由 `process.env` + 容器级 `env` 派生单条 item 的执行环境：
+ * - 容器级 `env`（harness 下发的 `ZAG_*`）先合并，对批次所有 item 生效；
  * - `WORKLOAD_PARAMS`：完整参数 JSON 字符串（缺省 `{}`）；
- * - `WORKLOAD_PARAM_<KEY_UPPER>`：单值编码（字符串原样、布尔 `"true"`/`"false"`、多选 JSON 数组字符串）。
+ * - `WORKLOAD_PARAM_<KEY_UPPER>`：单值编码（字符串原样、布尔 `"true"`/`"false"`、多选 JSON 数组字符串），
+ *   同名时**覆盖**容器 `env`（item 参数优先）。
  *
- * 每次 spawn 都从当前 `process.env` 重新派生，参数 env 仅对当前 item 生效、不污染后续脚本；
+ * 每次 spawn 都重新派生，参数 env 仅对当前 item 生效、不污染后续脚本；
  * 不修改脚本文本、不做字符串替换（避免注入）。
  */
-function buildWorkloadEnv(params: Record<string, unknown> | undefined): NodeJS.ProcessEnv {
+function buildWorkloadEnv(
+  params: Record<string, unknown> | undefined,
+  containerEnv: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
   const normalized = params && typeof params === 'object' && !Array.isArray(params) ? params : {};
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...normalizeContainerEnv(containerEnv),
     WORKLOAD_PARAMS: JSON.stringify(normalized),
   };
   for (const [key, value] of Object.entries(normalized)) {
@@ -234,6 +291,8 @@ export class WorkloadExecutor {
     const budgetMs = typeof payload.budgetMs === 'number' && payload.budgetMs > 0 ? payload.budgetMs : null;
     const batchStart = Date.now();
     const phase = payload.phase;
+    const containerEnv = normalizeContainerEnv(payload.env);
+    const secrets = collectSecretValues(process.env, containerEnv);
 
     for (const item of items) {
       if (run.cancelled) return;
@@ -242,7 +301,8 @@ export class WorkloadExecutor {
       // 上报本条结果即结束本批，不再启动后续条目。post 批次不参与必须判定。
       const shortCircuitOnFailure = phase === 'init' && item.required === true;
       const reportThenMaybeStop = (result: WorkloadResult): boolean => {
-        this.report(onResult, result);
+        const redactedLog = redactSecrets(result.log, secrets);
+        this.report(onResult, redactedLog === result.log ? result : { ...result, log: redactedLog });
         return shortCircuitOnFailure && (result.status === 'failed' || result.status === 'timeout');
       };
 
@@ -262,7 +322,7 @@ export class WorkloadExecutor {
         continue;
       }
 
-      const outcome = await this.executeItem(item, effectiveTimeoutMs, run);
+      const outcome = await this.executeItem(item, effectiveTimeoutMs, run, containerEnv);
       if (outcome.cancelled) return;
       if (outcome.result && reportThenMaybeStop(outcome.result)) return;
     }
@@ -281,7 +341,12 @@ export class WorkloadExecutor {
     return { logId, status, exitCode: null, log, startedAt: now, finishedAt: now };
   }
 
-  private executeItem(item: WorkloadItem, timeoutMs: number, run: ActiveRun): Promise<ItemOutcome> {
+  private executeItem(
+    item: WorkloadItem,
+    timeoutMs: number,
+    run: ActiveRun,
+    containerEnv: Record<string, string>,
+  ): Promise<ItemOutcome> {
     return new Promise<ItemOutcome>((resolve) => {
       if (run.cancelled) {
         resolve({ cancelled: true });
@@ -294,7 +359,7 @@ export class WorkloadExecutor {
         child = spawn('bash', ['-c', item.script], {
           cwd: homedir(),
           detached: true,
-          env: buildWorkloadEnv(item.params),
+          env: buildWorkloadEnv(item.params, containerEnv),
         });
       } catch (error) {
         resolve({

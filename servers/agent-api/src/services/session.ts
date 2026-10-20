@@ -4,6 +4,7 @@ import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
+import { CloudHost } from '../models/cloud-host.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
@@ -81,6 +82,16 @@ export class SessionService {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
+    }
+    if (controller.type === 'cloud') {
+      const host = await CloudHost.findOne({
+        controllerId: input.controllerId,
+        userId,
+        deletedAt: null,
+      }).lean();
+      if (!host || host.status !== 'RUNNING') {
+        throw new Error('cloud host is not running');
+      }
     }
 
     const workspace = await ControllerWorkspace.findOne({ _id: input.workspaceId, userId, controllerId: input.controllerId }).lean();
@@ -232,6 +243,15 @@ export class SessionService {
     return this.mapSession(session.toObject());
   }
 
+  /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */
+  async endByController(controllerId: string, userId: string): Promise<number> {
+    const result = await Session.updateMany(
+      { controllerId, userId, status: { $ne: 'ended' } },
+      { $set: { status: 'ended', endedAt: new Date() } },
+    );
+    return result.modifiedCount ?? 0;
+  }
+
   async updateStatus(id: string, userId: string, status: string, externalSessionId?: string): Promise<boolean> {
     const updateData: Record<string, unknown> = { status };
     if (externalSessionId) {
@@ -330,6 +350,22 @@ export class SessionService {
     // ended/disconnected 均可恢复（disconnected 为 Controller 临时断连，重连后可 resume）
     if (session.status !== 'ended' && session.status !== 'disconnected') {
       return { success: false, status: session.status, error: 'Session is not ended' };
+    }
+
+    // 云电脑终态后会话只读：历史消息保留，但不允许继续（不新增 Session 字段）。
+    const controller = await Controller.findOne({
+      _id: session.controllerId,
+      userId,
+    }).lean();
+    if (controller?.type === 'cloud') {
+      const host = await CloudHost.findOne({
+        controllerId: session.controllerId,
+        userId,
+        deletedAt: null,
+      }).lean();
+      if (!host || host.status === 'STOPPED' || host.status === 'FAILED') {
+        return { success: false, status: 'ended', error: 'session is ended' };
+      }
     }
 
     // Re-issue a fresh MCP endpoint (do not reuse the revoked token)

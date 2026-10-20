@@ -107,6 +107,10 @@ function toPage(value: unknown, fallback: number, max: number): number {
 function toApiKeyWire(key: BillingApiKeyDTO) {
   return {
     ...key,
+    // 契约枚举为 ACCOUNT/CLOUD_HOST（持久层为小写）
+    scope: key.scope === 'cloud_host' ? 'CLOUD_HOST' : 'ACCOUNT',
+    cloudHostId: key.cloudHostId ?? null,
+    expiresAt: key.expiresAt ? key.expiresAt.toISOString() : null,
     lastUsedAt: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
     createdAt: key.createdAt.toISOString(),
   };

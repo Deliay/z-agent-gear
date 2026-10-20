@@ -61,6 +61,43 @@ export class ControllerKeyService {
     return results;
   }
 
+  /**
+   * 为云电脑创建标准连接 Key（`type=cloud`，直接绑定预生成的 controllerId）。
+   *
+   * **不复用 `create`**：`create` 会删除用户现有的未绑定 Key，而云电脑创建不得影响
+   * 设置页的本地 Key；该 Key 已绑定控制器，不会出现在「未绑定 Key」列表。
+   */
+  async createForCloudHost(
+    userId: string,
+    controllerId: string,
+    name: string,
+  ): Promise<{ key: Record<string, unknown>; rawKey: string }> {
+    const randomBytes = crypto.randomBytes(24);
+    const rawKey = `zag_k_${KEY_FORMAT_VERSION}_${randomBytes.toString('hex')}`;
+    const keyHash = await bcrypt.hash(rawKey, BCRYPT_ROUNDS);
+    const keyPrefix = rawKey.slice(0, 8);
+
+    const keyDoc = await ControllerKey.create({
+      userId: new mongoose.Types.ObjectId(userId),
+      name: name || 'Cloud Host',
+      type: 'cloud',
+      keyHash,
+      keyPrefix,
+      status: 'active',
+      boundControllerId: new mongoose.Types.ObjectId(controllerId),
+    });
+
+    await cacheKey(rawKey, {
+      keyId: keyDoc._id.toString(),
+      keyHash,
+      userId,
+      status: 'active',
+      type: 'cloud',
+    });
+
+    return { key: this.mapKey(keyDoc.toObject()), rawKey };
+  }
+
   async rename(id: string, userId: string, name: string): Promise<Record<string, unknown> | null> {
     const key = await ControllerKey.findOneAndUpdate(
       { _id: id, userId },

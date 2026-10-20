@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useLazyQuery } from '@apollo/client/react';
 import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO, GET_MCP_SERVERS } from '../../graphql/queries';
-import type { ControllerWorkspaceData, GitRepoInfoData } from '../../graphql/types';
+import type { ControllerWorkspaceData, GitRepoInfoData, CloudHostData } from '../../graphql/types';
 import {
   Select as SelectRoot,
   SelectTrigger,
@@ -16,6 +16,9 @@ interface Controller {
   id: string;
   name: string;
   status: string;
+  /** cloud 类型主机携带云电脑；普通主机为 undefined/null */
+  type?: string;
+  cloudHost?: CloudHostData | null;
 }
 
 interface AcpCapability {
@@ -67,7 +70,20 @@ export default function NewSessionDialog({
     fetchPolicy: 'network-only',
   });
 
-  const onlineControllers = controllers.filter((c) => c.status === 'online');
+  const onlineControllers = controllers.filter(
+    (c) =>
+      c.status === 'online' &&
+      (c.type !== 'cloud' || (c.cloudHost?.status === 'RUNNING' && !c.cloudHost.deletedAt)),
+  );
+  // 云电脑仅 RUNNING 可创建会话：终态/启动/停止中给出提示且不可选
+  const unavailableCloudControllers = controllers.filter(
+    (c) => c.type === 'cloud' && !onlineControllers.some((online) => online.id === c.id),
+  );
+  const preselectedController = controllers.find((c) => c.id === existingControllerId);
+  const preselectedControllerUnavailable =
+    Boolean(preselectedController) &&
+    !onlineControllers.some((c) => c.id === preselectedController?.id);
+  const selectedControllerSelectable = onlineControllers.some((c) => c.id === selectedController);
 
   const { data: mcpData } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
 
@@ -179,6 +195,16 @@ export default function NewSessionDialog({
             </select>
             {onlineControllers.length === 0 && (
               <p className="mt-1 text-sm text-destructive">无在线控制器</p>
+            )}
+            {preselectedControllerUnavailable && (
+              <p className="mt-1 text-sm text-destructive" data-testid="cloud-host-unavailable-hint">
+                该云电脑未运行，无法创建会话
+              </p>
+            )}
+            {!preselectedControllerUnavailable && unavailableCloudControllers.length > 0 && (
+              <p className="mt-1 text-sm text-muted-foreground" data-testid="cloud-host-unavailable-hint">
+                云电脑未运行，暂不可创建会话
+              </p>
             )}
           </div>
 
@@ -359,7 +385,7 @@ export default function NewSessionDialog({
             </button>
             <button
               type="submit"
-              disabled={!selectedController || !selectedAcpServer || !selectedWorkspace}
+              disabled={!selectedController || !selectedAcpServer || !selectedWorkspace || !selectedControllerSelectable}
               className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               创建会话
