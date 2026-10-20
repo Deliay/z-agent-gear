@@ -101,6 +101,7 @@ test.describe('Admin Model Config E2E', () => {
   test('should import models via the dialog and show a collapsed group (T-E22/T-E23/T-E24/T-E25)', async ({ page }) => {
     const token = await adminLoginApi(page);
     await cleanupProviders(page, token);
+    try {
 
     const name = `${PROVIDER_PREFIX}import-${Date.now()}`;
     await createProviderViaApi(page, token, name, `http://127.0.0.1:${mock.port}/v1`);
@@ -114,8 +115,8 @@ test.describe('Admin Model Config E2E', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('gpt-4o').first()).toBeVisible();
 
-    await dialog.getByRole('checkbox', { name: '选择 gpt-4o' }).click();
-    await dialog.getByRole('checkbox', { name: '选择 gpt-4o-mini' }).click();
+    await dialog.getByRole('checkbox', { name: '选择 gpt-4o', exact: true }).click();
+    await dialog.getByRole('checkbox', { name: '选择 gpt-4o-mini', exact: true }).click();
     await dialog.getByRole('button', { name: /导入/ }).click();
     await expect(dialog.getByText(/成功导入 2 个模型/)).toBeVisible({ timeout: 15000 });
     await dialog.getByRole('button', { name: '关闭' }).click();
@@ -133,12 +134,16 @@ test.describe('Admin Model Config E2E', () => {
     await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click();
 
     // 删除导入模型（含影响说明）
-    await page.locator('div', { hasText: 'gpt-4o-mini' }).first().getByTitle('删除模型').click();
+    const modelRow = page
+      .locator('div.flex.items-center.gap-3.rounded-lg.border')
+      .filter({ has: page.getByText('gpt-4o-mini', { exact: true }) });
+    await modelRow.getByTitle('删除模型').click();
     const confirm = page.getByRole('dialog');
     await expect(confirm.getByText(/按该模型名调用将返回「模型不存在」/)).toBeVisible();
     await confirm.getByRole('button', { name: '删除' }).click();
-
-    await cleanupProviders(page, token);
+    } finally {
+      await cleanupProviders(page, token);
+    }
   });
 
   test('should add and delete a global custom model via the UI (T-W3)', async ({ page }) => {
@@ -265,6 +270,8 @@ test.describe('Admin Model Config E2E', () => {
       await expect(page.getByText(oldName)).toBeVisible();
       await expect(page.getByText(newName)).toBeVisible();
       await expect(page.getByText('E2E Provider')).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: '整理时间' })).toBeVisible();
+      await expect(page.getByText(/2026/)).toBeVisible();
     } finally {
       await db.collection('model_rename_records').deleteMany({ oldName });
     }

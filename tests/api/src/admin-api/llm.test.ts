@@ -295,6 +295,7 @@ describe('Admin Global LLM API', () => {
 
 
   it('T-P2b: updating a provider no longer resyncs models', async () => {
+    const alt = await startMockServer(['alt-model-a', 'alt-model-b']);
     const name = `global-upd-nosync-${Date.now()}`;
     const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
       input: {
@@ -316,7 +317,7 @@ describe('Admin Global LLM API', () => {
       input: {
         name: `${name}-renamed`,
         type: 'OpenAI',
-        endpoint: `http://127.0.0.1:${mock.port}/v1?changed=1`,
+        endpoint: `http://127.0.0.1:${alt.port}/v1`,
         credentialType: 'api_key',
         credentialValue: '',
       },
@@ -328,6 +329,7 @@ describe('Admin Global LLM API', () => {
     );
     expect(after.data!.adminModelsByProvider).toEqual([]);
     await adminGql(DELETE_PROVIDER, { id }, token);
+    await alt.close();
   });
 
   it.skipIf(!process.env.MONGODB_URI)('T-MR1: the rename ledger matches actual renames one-to-one', async () => {
@@ -683,7 +685,14 @@ describe('Admin Global LLM API', () => {
       );
       expect(created.errors).toBeUndefined();
       const providerId = created.data!.createGlobalProvider.id;
-      const modelId = created.data!.createGlobalProvider.models[0]?.id;
+      // 后台创建供应商不再自动导入模型，显式导入后再构造悬空 providerId
+      const imported = await adminGql<{ importGlobalModels: Array<{ id: string }> }>(
+        IMPORT_MODELS,
+        { providerId, names: [`global-orphan-model-${Date.now()}`] },
+        token,
+      );
+      expect(imported.errors).toBeUndefined();
+      const modelId = imported.data!.importGlobalModels[0]?.id;
       expect(modelId).toBeTruthy();
 
       if (mongoose.connection.readyState === 0) await mongoose.connect(uri);

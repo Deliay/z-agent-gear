@@ -169,6 +169,10 @@ describe('LLM Provider & Model API', () => {
   });
 
   afterAll(async () => {
+    // 清理种子供应商，避免污染 e2e 的「暂无供应商/暂无可用模型」空态断言
+    if (seededProviderId) {
+      await gqlRequest(DELETE_PROVIDER, { id: seededProviderId }, authToken);
+    }
     await mock?.close();
   });
 
@@ -597,7 +601,18 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     );
     expect(created.errors).toBeUndefined();
     globalProviderId = created.data!.createGlobalProvider.id;
-    globalModelId = created.data!.createGlobalProvider.models[0].id;
+
+    // 后台创建供应商不再自动导入模型，显式导入一个全局模型供 scope 回归使用
+    const imported = await adminGql<{ importGlobalModels: Array<{ id: string }> }>(
+      `mutation($providerId: ID!, $names: [String!]!) {
+        importGlobalModels(providerId: $providerId, names: $names) { id }
+      }`,
+      { providerId: globalProviderId, names: [`scope-global-model-${Date.now()}`] },
+      adminToken,
+    );
+    expect(imported.errors).toBeUndefined();
+    globalModelId = imported.data!.importGlobalModels[0]?.id ?? '';
+    expect(globalModelId).toBeTruthy();
   });
 
   afterAll(async () => {

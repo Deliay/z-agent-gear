@@ -385,7 +385,7 @@ npm test
 | 手动导入链路 | 拉取清单 / 勾选导入 / 已导入标记 / 幂等返回 [] / 跨供应商重名拒绝（T-MI4）/ 上游不可用连通性文案且不写库（T-MI5，需 MONGODB_URI） / 空名拒绝（T-MI6） |
 | 删除后重新导入 | 删除导入模型同名可重新导入（T-MD1）；自定义模型重名拒绝（T-MU1） |
 | 并发重名兜底 | 两供应商并发导入同名恰一成功一失败，库内仅 1 条（T-MU2，需 MONGODB_URI） |
-| 重名整理台账 | 条目与实际改名一一对应、字段完整（T-MR1）；删除被改名模型后台账仍可查（T-MR2）；均需 MONGODB_URI |
+| 重名整理台账 | 条目与实际改名一一对应、字段完整（T-MR1，需库内已有迁移 005 台账；全新库的空集由迁移单测 T-MIG33/T-MIG34 锁定）；删除被改名模型后台账仍可查（T-MR2）；均需 MONGODB_URI |
 | 全局同名冲突 | 「Provider name already exists」（T-P7） |
 | 更新留空保留凭据 | T-P3 |
 | 启停级联 + 删除级联 | T-P5 / T-P4 |
@@ -409,6 +409,7 @@ npm test
 |------|------|
 | T-SYNC1 | 创建用户供应商仍返回同步模型 |
 | T-SYNC2 | 更新用户供应商（改 endpoint）后模型按新上游清单重同步（新增 synced-*、清理 gpt-4o 等旧模型），锁定 syncSyncedModels 行为 |
+| T-UP1 | 更新用户供应商 credentialValue 留空时保留原凭据（不覆盖、不重置） |
 
 ### Agent API scope 回归 (`agent-api/llm.test.ts` T-SC*)
 
