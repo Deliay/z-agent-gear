@@ -1,65 +1,74 @@
 ---
-description: 容器启动任务支持 harness 类型实现计划：从提案拆解出的契约先行分阶段任务（purpose=harness 全链路、OpenCode 预制工作负载、容器作用域模型 Key/存储令牌、统一存储 S3+元数据+限额、agent-gear harness prepare/persist、admin-web harness 交互），含计划期裁决、精确文件清单、T-* 测试矩阵与发布顺序
+description: 容器启动任务支持 harness 类型实现计划（v3.0 范围裁剪）：前台 agent-web 新建/命名云主机、云主机以 Controller(type=cloud) 主机形态呈现（云图标、标准 ACP 会话）、purpose=harness 全链路、OpenCode 预制工作负载与容器作用域模型 Key；统一存储与会话存取二期
 type: Permanent
 ---
 
-# 容器启动任务支持 harness 类型（OpenCode 工作负载与统一存储）- 实现计划
+# 容器启动任务支持 harness 类型（OpenCode 云主机）- 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261020-feat-container-harness-support.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261020-container-harness-support.md`（v1.0）
+**关联 Proposal**: `docs/engineering/proposals/20261020-feat-container-harness-support.md`（v3.0）
+**关联 PRD**: `docs/product/draft/20261020-container-harness-support.md`（v3.0）
 **需求总分支（feat-branch）**: `feat/container-harness-support`（基于 `main`，需求总 PR #244）
 **计划提交分支**: `feat/container-harness-support`（本文件随需求总分支提交）
 **创建日期**: 2026-10-20
-**计划版本**: v1.0
-**版本说明**:
-- v1.0（2026-10-20）首版，与 PRD v1.0 / 提案 v1.0 对齐；对提案中与当前代码事实不符的 6 处描述做计划期修正（见 §计划期裁决 A）。
+**计划版本**: v2.0
 
-## 实现顺序
+**版本说明**:
+
+- v1.0（2026-10-20）首版，对应 PRD/提案 v1.0（后台启动 harness + 统一存储 + 会话导入导出）。
+- v2.0（2026-10-20）按 PRD/提案 v3.0 **整体重排**：交付面前台化、云主机复用 `Controller(type=cloud)` 主机模型、统一存储与会话存取整体移出本期、后台零改动；删除 v1.0 的存储/S3/MinIO/quota/会话导入导出全部阶段，新增 agent-api 云主机域、agent-web 云主机体验、agent-gear 双连接与 OpenCode 模型配置注入。v2.0 **不是** v1.0 的局部修补。
+
+## 0. v1.0 → v2.0 变更摘要
+
+| 维度 | v1.0（旧） | v2.0（本计划） |
+|------|-----------|---------------|
+| 交付面 | 后台 admin-web 启动对话框/容器列表/存储页 | **前台 agent-web** 新建云主机/云图标/标准会话；后台零改动 |
+| 产品模型 | 工作负载/容器为后台资源 | 云主机 = 既有 `Controller(type='cloud')`，左侧导航栏与普通主机同构 |
+| 会话 | 自定义 OpenCode 配置 + 会话导入导出 | 容器内 `agent-gear` 标准连接 controller-api，走既有标准「会话」/`acpmessages` |
+| 存储 | S3 + 元数据 + 限额 + 导入导出 | **整体二期**；本期不引入任何 S3/MinIO/存储契约/入口 |
+| 参数 | `storeSessions` / `restoreSessionIds` | 本期创建表单与工作负载 `paramSchema=[]`，无会话参数 |
+| 启动链路 | admin-api GraphQL → cloud-controller | **agent-api → cloud-controller 内部 HTTP**；`adminStartCloudContainer` 维持仅 `IDLE` |
+| 模型 Key | 存储令牌 + 模型 Key + 对账三线 | 仅容器作用域模型 Key；**网关按容器状态/有效期校验**，销毁显式撤销 |
+| 计划阶段 | 10 个 Phase（存储/后台为主） | 10 个 Phase（契约 → 计费 Key/网关 → 预置工作负载 → agent-api → cloud-controller → agent-gear → 镜像/Aspire → agent-web → tests → 文档） |
+
+## 1. 实现顺序
 
 ```mermaid
 flowchart TD
-    P1["Phase 1 契约先行<br/>admin-cloud-container / admin-cloud-workload /<br/>admin-unified-storage / unified-storage.openapi /<br/>admin-billing / billing-openai / cloud-controller-websocket"] --> P2
+    P1["Phase 1 契约先行<br/>cloud-host.graphql 新增<br/>agent-controller / cloud-controller-websocket /<br/>admin-billing / billing-openai 扩展"] --> P2
     P1 --> P3
-    P1 --> P5
     P1 --> P6
 
-    P2["Phase 2 admin-api 统一存储底座<br/>storageobjects / storageusages / storagetokens<br/>S3 client / quota-guard / REST / GraphQL"] --> P4
-    P2 --> P8
+    P2["Phase 2 admin-api<br/>容器作用域模型 Key<br/>网关模型范围/分流/失效"] --> P4
+    P3["Phase 3 admin-api<br/>cloudworkloads workloadKind/harnessType<br/>migration 005 OpenCode（Harness）"] --> P4
 
-    P3["Phase 3 容器作用域凭证<br/>billingapikeys scope/expiresAt<br/>网关模型范围 / 撤销 / 对账"] --> P4
-    P3 --> P5
+    P4["Phase 4 agent-api<br/>cloud-host 域 / Controller 预创建 /<br/>默认工作区 / 内部客户端 / 凭据回滚"] --> P5
+    P4 --> P8
 
-    P4["Phase 4 admin-api harness 域<br/>harness-service / workload-plan 追加<br/>migration 005 / purpose 放开"] --> P5
+    P5["Phase 5 cloud-controller<br/>purpose=harness / secrets / env /<br/>TTL / 版本门禁 / 注册初始化状态"] --> P7
 
-    P5["Phase 5 cloud-controller<br/>purpose=harness / secrets / env 注入<br/>TTL / 撤销 / 版本门禁"] --> P6
-
-    P6["Phase 6 agent-gear 2.5.0<br/>harness prepare/persist<br/>storage-client / opencode 配置"] --> P7
-
-    P7["Phase 7 worker 镜像 + Aspire MinIO<br/>@opencode/cli 固定版本 / BUILD.md / compose"] --> P8
-
-    P8["Phase 8 admin-web<br/>启动对话框 harness / 容器列表摘要 / 存储页"] --> P9
-
+    P6["Phase 6 agent-gear 2.5.0<br/>云主机双连接 / harness prepare<br/>opencode.jsonc 注入 / env 脱敏"] --> P7
+    P7["Phase 7 worker 镜像 + Aspire/K8s 编排<br/>agent-gear 2.5.x / BUILD.md / env"] --> P9
+    P8["Phase 8 agent-web<br/>云图标 / 新建云主机 / 销毁 /<br/>主机同构界面"] --> P9
     P9["Phase 9 tests/api + tests/e2e + 全量回归"] --> P10
-
     P10["Phase 10 文档收口 + 发布顺序 + 验收"]
 ```
 
 依赖说明：
 
-- **Phase 1 契约** 是全部实现的输入，独立提交（`docs(contracts): ...`）；契约未合入前不写实现代码。
-- **Phase 2（统一存储）**、**Phase 3（容器作用域凭证）**、**Phase 5（cloud-controller 骨架）**、**Phase 6（agent-gear）** 仅依赖 Phase 1，可并行开发；Phase 5 的 env 注入联调依赖 Phase 3 的 Key/令牌契约，但可先用固定测试值。
-- **Phase 4** 依赖 Phase 2（会话查询/存储对象）与 Phase 3（Key 铸造）；**Phase 5** 的撤销链路依赖 Phase 3 的内部撤销接口。
-- **Phase 7** 依赖 Phase 6 的 `agent-gear@2.5.0` 产物；**Phase 8** 依赖 Phase 2/4 的 GraphQL 契约；**Phase 9** 在各实现分支合并回需求总分支后切出；**Phase 10** 收口。
+- **Phase 1 契约**是全部实现的输入，独立提交（`docs(contracts): ...`）；契约未合入前不写实现代码。
+- **Phase 2（Key/网关）**与 **Phase 3（预置工作负载）**只依赖 Phase 1，可并行。
+- **Phase 4（agent-api）**依赖 Phase 2（Key 铸造）与 Phase 3（harness preset 读取）；**Phase 5（cloud-controller）**与 **Phase 6（agent-gear）**只依赖 Phase 1，可与 Phase 4 并行开发（联调在 Phase 7/9）。
+- **Phase 7** 依赖 Phase 5 的 env/门禁与 Phase 6 的 `agent-gear@2.5.0` 产物；**Phase 8** 依赖 Phase 4 的 GraphQL；**Phase 9** 在各实现分支合并回需求总分支后切出；**Phase 10** 收口。
 
 ### 开发分支与合并顺序
 
 | 分支 | 范围 | 基于 | 合并目标 |
 |------|------|------|---------|
 | `feat/container-harness-support` | PRD / 提案 / 本计划 | `main` | 需求总 PR #244 |
-| `contracts/harness-support` | `contracts/` 7 份 | 需求总分支 | 需求总分支 |
-| `servers/harness-support` | admin-api + cloud-controller | 需求总分支 | 需求总分支 |
-| `packages/harness-support` | agent-gear + worker 镜像 + Aspire | 需求总分支 | 需求总分支 |
-| `apps/harness-support` | admin-web | 需求总分支 | 需求总分支 |
+| `contracts/harness-support` | `contracts/` 6 份 | 需求总分支 | 需求总分支 |
+| `servers/harness-support` | admin-api + agent-api + cloud-controller | 需求总分支 | 需求总分支 |
+| `packages/harness-support` | agent-gear + worker 镜像 + Aspire/K8s | 需求总分支 | 需求总分支 |
+| `apps/harness-support` | agent-web | 需求总分支 | 需求总分支 |
 | `tests/harness-support` | tests/api + tests/e2e | 需求总分支（其余已合入） | 需求总分支 |
 
 合并顺序：契约 → servers → packages → apps → tests。**禁止 rebase/squash，只允许 merge**（z-git 规范）。
@@ -67,55 +76,72 @@ flowchart TD
 ### 开发模式与规范加载
 
 - 全部 Phase 采用 TDD（红-绿-重构）：先写测试（RED）→ 最小实现（GREEN）→ 重构。
-- 编码前加载：`docs/engineering/common-rules.md`、`docs/engineering/backend-rules.md`（后端）、`docs/engineering/frontend-rules.md`（admin-web）、`packages/agent-controller/AGENTS.md`、`servers/cloud-controller/AGENTS.md`、`apps/admin-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`、`aspire/AgentGear.AppHost/AGENTS.md`。
-- `servers/admin-api` 无独立 `AGENTS.md`，沿用根 `AGENTS.md` 与 engineering 规范。
+- 编码前加载：`docs/engineering/common-rules.md`、`docs/engineering/backend-rules.md`（后端）、`docs/engineering/frontend-rules.md`（agent-web）。
+- 目录级 `AGENTS.md`：`servers/agent-api/AGENTS.md`、`servers/controller-api/AGENTS.md`、`servers/cloud-controller/AGENTS.md`、`packages/agent-controller/AGENTS.md`、`apps/agent-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`、`aspire/AgentGear.AppHost/AGENTS.md`、`docs/engineering/plan/AGENTS.md`。
+- `servers/admin-api` 无独立 `AGENTS.md`，沿用根 `AGENTS.md` 与 engineering 规范；**admin-web 本期零改动**。
 
-## 命令参考
+## 2. 命令参考
 
 ```bash
 # 服务编排（根目录；测试服务只用 Aspire，禁止直接 docker 命令）
 aspire start
-aspire wait admin-api cloud-controller admin-web
-aspire describe admin-api
+aspire wait agent-api cloud-controller controller-api agent-web
+aspire describe agent-api
+aspire describe controller-api
 aspire stop
 
 # 单服务单测 / 构建
 cd servers/admin-api && npm ci && npm test && npm run build
+cd servers/agent-api && npm ci && npm test && npm run build
 cd servers/cloud-controller && npm ci && npm test && npm run build
+cd servers/controller-api && npm ci && npm test && npm run build
 cd packages/agent-controller && npm ci && npm test && npm run build
-cd apps/admin-web && npm ci && npm test && npm run build && npm run lint
+cd apps/agent-web && npm ci && npm test && npm run build && npm run lint
 
 # 跨服务 API 测试（先 aspire start；地址按 aspire describe 替换）
 cd tests/api
+API_URL=http://localhost:10001/graphql \
 ADMIN_API_URL=http://localhost:10003/graphql \
-ADMIN_INITIAL_PASSWORD=<与 Aspire 参数一致> \
+CONTROLLER_API_URL=http://localhost:<controller-api-port> \
 CLOUD_CONTROLLER_URL=http://localhost:10004 \
 CLOUD_CONTROLLER_INTERNAL_TOKEN=<与 internal-api-token 一致> \
+MONGODB_URI=<aspire describe mongodb> \
 npm test
 
-# E2E（串行）
-cd tests/e2e && npx playwright test
+# E2E（串行；地址按 aspire describe 替换）
+cd tests/e2e
+BASE_URL=http://localhost:<agent-web-port> \
+API_URL=http://localhost:10001/graphql \
+ADMIN_API_URL=http://localhost:10003/graphql \
+CONTROLLER_API_URL=http://localhost:<controller-api-port> \
+CLOUD_CONTROLLER_URL=http://localhost:10004 \
+MONGODB_URI=<aspire describe mongodb> \
+npx playwright test
 
-# worker 镜像（构建自验，不属于服务编排）
-docker build -f deploy/images/worker/Dockerfile -t zag-worker:harness-local deploy/images/worker
-docker run --rm --entrypoint bash zag-worker:harness-local -lc 'agent-gear --version && opencode --version && agent-gear harness --help'
+# worker 镜像（内网构建，不属于服务编排）
+cd deploy/images/worker
+docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:harness-local .
+docker run --rm --entrypoint bash \
+  core.harbor.internal.fffdan.com/zero-tools/worker:harness-local -lc \
+  'agent-gear --version && agent-gear harness --help'
 ```
 
-> `tests/api` 的 admin 套件依赖已启动的 admin-api；`HARNESS_ENABLED=true`、`STORAGE_ENABLED=true` 需在 Aspire 参数/环境变量中打开，否则 harness/存储用例按 `test.skip` 跳过并在验收报告登记。
+> `HARNESS_ENABLED` 在 Aspire dev 模式由 `AppHost.cs` 显式置 `true` 便于联调；publish 默认 `false`，验收/灰度时打开。API/E2E 用例在开关关闭时按 `test.skip` 跳过并在验收报告登记。
 
 ### 关键约束（提案 §1.3/§6，实现期不得回退）
 
-- **契约先行**：7 份契约先于实现独立提交；字段、错误文案、状态码与提案 §3 逐项对齐，本计划的修正项以 §计划期裁决 为准。
-- **单一事实源**：`cloudworkloads` 由 admin-api 写、cloud-controller 只读；`cloudcontainers`/`cloudworkloadlogs` 由 cloud-controller 写；`storageobjects`/`storageusages`/`storagetokens` 由 admin-api 写；S3 只是字节层，一切 list/usage/限额以 Mongo 元数据为准。
-- **secret 不落库、不进日志**：模型 Key 与存储令牌明文只在创建/补发响应中出现一次；cloud-controller 仅内存持有；worker 只在进程环境持有；日志统一脱敏。
-- **限额唯一卡点**：所有写入（含覆盖）必须经过 `quota-guard`；S3 桶策略不作为限额事实源。
-- **不上调全局 worker 门禁**：`MIN_WORKER_VERSION` 保持 `2.2.0`，harness 使用独立门禁 `MIN_HARNESS_WORKER_VERSION=2.5.0`（见裁决 A1）。
-- **既有 idle 行为不变**：`idle` 启动、工作负载参数/依赖/必须失败、计费全链路保持现状；新增字段对历史记录读取必须容忍缺失。
+- **契约先行**：6 份契约先于实现独立提交；字段、错误文案、状态码与提案 §3 对齐，偏差以 §4 计划期裁决为准。
+- **单一事实源**：`cloudworkloads` 由 admin-api 写；`cloudcontainers` 由 cloud-controller 写；agent-api/admin-api 只读（只读 Mongoose 模型/内部 API）；`controllers`/`controllerkeys` 由 agent-api 预创建、controller-api 注册时 upsert。
+- **secret 不落库、不进日志**：模型 Key 与控制器 Key 明文只在创建/补发响应中出现一次；cloud-controller 仅内存持有；worker 只在进程环境持有；日志统一脱敏。
+- **不上调全局 worker 门禁**：`MIN_WORKER_VERSION` 保持 `2.2.0`；harness 容器使用 `MIN_HARNESS_WORKER_VERSION=2.5.0` 按 purpose 分流。
+- **后台零改动**：`adminStartCloudContainer` 维持仅 `IDLE`；`contracts/admin-cloud-container.graphql`、`contracts/admin-cloud-workload.graphql`、admin-web 页面均不改。
+- **本期无存储**：不引入 S3/MinIO/`unified-storage`/`storage*`/`quota-guard`/会话导入导出任何代码、契约、依赖、入口。
+- **既有 idle 行为不变**：`idle` 启动、工作负载参数/依赖/必须失败、计费全链路、普通主机/标准会话保持现状；新增字段对历史记录读取必须容忍缺失。
 - **测试纪律**：新增代码单测覆盖率 ≥ 80%；API 与 E2E 串行执行；测试服务只用 Aspire 编排，禁止直接 `docker` 命令。
 
 ---
 
-## 计划期裁决（提案与代码事实偏差的落地口径）
+## 3. 计划期裁决（提案与代码事实偏差的落地口径）
 
 > 以下裁决以**当前代码事实**为准。提案中与代码不一致的描述在实现期按本节执行，不再回改提案；验收报告需逐条登记。
 
@@ -123,34 +149,42 @@ docker run --rm --entrypoint bash zag-worker:harness-local -lc 'agent-gear --ver
 
 | # | 提案描述 | 代码事实 | 本计划口径 |
 |---|---------|---------|-----------|
-| A1 | §3.2.3/§6.2：`MIN_WORKER_VERSION` 由 `2.2.0` 提升到 `2.3.0`；agent-gear 发版 2.3.0 | `cloud-controller/src/services/worker-version.ts:12` 为 `2.2.0`；`packages/agent-controller/package.json:3` 已是 `2.4.0`；`socketio-client.ts:24` 硬编码 `2.4.0` | agent-gear 升到 **`2.5.0`**；`MIN_WORKER_VERSION` **保持 `2.2.0`**；新增 **`MIN_HARNESS_WORKER_VERSION = '2.5.0'`**，在 `register` 时按**容器 purpose** 分流校验。普通容器不受影响，harness 容器低版本 worker 被拒绝。 |
-| A2 | §5.3/§6.2/§7：worker 镜像已预装 `@opencode/cli`，BUILD.md 校验清单保留 | `deploy/images/worker/Dockerfile:118-123` 只装 `agent-gear@2.4.x`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；`BUILD.md:89` 的「7 包」清单与 Dockerfile 不一致，`opencode --version || true` 为软校验 | Dockerfile 新增 **固定版本** `@opencode/cli@2.1.1`（build arg `OPENCODE_CLI_VERSION`，默认 `2.1.1`）；BUILD.md 修正为实际包清单，`opencode --version` 改为**硬校验**；init 脚本仅在命令缺失时按其固定版本兜底安装。 |
-| A3 | §5.1.4/§5.2-8：写 `~/.config/opencode/opencode.json`；`opencode session list` 用 `--json` | 本机 OpenCode v2.0.31：配置文档为 `~/.config/opencode/opencode.jsonc`；`session list` 的 JSON 开关是 `--format json`；`session import <file> --directory <dir>`；`session export <session>` 输出到 stdout，按 cwd 作用域 | 统一写/合并 **`~/.config/opencode/opencode.jsonc`**（已存在 `.json` 时优先合并该文件）；`session list --format json`；`session import <file> --directory "$HOME"`；所有 opencode 子命令 `cwd = os.homedir()`。 |
-| A4 | §8.2：tests/api 使用 `vitest + supertest` | 仓库无 `supertest` 依赖；`tests/api` 用 `fetch` 打真实 Aspire 服务；admin-api 路由测试用 Express + 原生 `fetch` | 继续使用 **vitest + fetch**；不引入 supertest。 |
-| A5 | §3.1.2/§4.1：`StoredOpencodeSession.size`、`StorageUsage.totalBytes/quotaBytes` 用 GraphQL `Int` | GraphQL `Int` 为 32 位有符号整数，存储字节数会溢出 | 契约改为 **`Float!` / `Float`**（JS Number 安全整数范围内足够），Mongo 存 Number。 |
-| A6 | §9.3：前端特性开关 `HARNESS_ENABLED`，默认关 | admin-web 无特性开关框架；`config.js` 只注入 `apiUrl` | 改为**后端开关**：admin-api `HARNESS_ENABLED`（默认 `false`）控制 `adminSupportedHarnesses` 返回空列表与启动拒绝；admin-web 依据查询结果渲染，不新增前端开关基础设施。 |
-| A7 | §5.2-4：网关按 Key 属主返回「前台用户个人模型列表 + 自定义模型」，自定义模型代转发不记账 | `Model`/`Provider` 只有 `scope: 'user'|'global'`，**无 ownerId/userId**；`/v1/models` 只查 `scope:'global'`；`/chat/completions` 已有 `pricing.isBillable=false` 不记账路径 | 一期容器 Key **只发给 `admin_user`**；网关模型列表对容器 Key 返回**全部启用的全局模型（含 `isBillable=false`/`isCustom=true`）**；自定义/不计费模型复用既有 `billable=false` 路径，不产生计量事件。**按用户归属的 `scope=user` 模型列表留二期**（需先补 owner 字段），PRD 已声明前台二期接入。 |
-| A8 | §5.2-3/§3.2.1：secrets 仅一次性下发、不持久化；Key 有效期取容器 `activeDeadlineSeconds` | 提案未定义 cloud-controller 重启后 secret 丢失的恢复路径；内部创建响应也不返回 `expiresAt` | ① admin-api 在创建时计算 `expiresAt` 并随请求下发，cloud-controller 用它设置 Job `activeDeadlineSeconds` 并落库；② secrets 仍不落库，cloud-controller 内存持有；③ 新增 **`POST /internal/containers/:id/secrets/reissue`**，控制器重启/内存丢失时重新铸造并撤销旧凭证，保证 init/post 可继续。 |
+| A1 | §3.2.3/§6.2：agent-gear 2.5.0；`MIN_WORKER_VERSION` 保持 2.2.0 + harness 专用门禁 | `packages/agent-controller/src/socketio-client.ts:24` 硬编码 `2.4.0`；`package.json:3` 为 `2.4.0`；`cloud-controller/src/services/worker-version.ts` 为 `2.2.0` | agent-gear 升 **`2.5.0`**；`MIN_WORKER_VERSION` **保持 `2.2.0`**；新增 **`MIN_HARNESS_WORKER_VERSION='2.5.0'`**，在 `register` 时按容器 `purpose` 分流校验。普通容器不受影响，harness 容器低版本 worker 被拒绝。 |
+| A2 | §5.3/§7：worker 镜像 **未预装** `@opencode/cli`，由 init 安装；BUILD.md 校验清单 | `deploy/images/worker/Dockerfile:118-123` 只装 `agent-gear@2.4.x`、`claude-agent-acp`、`codex-acp`；`BUILD.md:89` 的「7 包」清单与 Dockerfile 不一致，`opencode --version \|\| true` 为软校验 | worker 镜像**不预装** `@opencode/cli`；init 脚本用固定版本安装并 `opencode -v`/`opencode --version` 硬校验；BUILD.md 删除「7 包」错误清单，改为「镜像 3 包 + OpenCode 由 harness 工作负载安装」并给出手工自验命令。 |
+| A3 | §3.2.3：`ZAG_CONTROLLER_KEY` 承载 controller-api 的 ControllerKey | 现有 worker 的 `ZAG_CONTROLLER_KEY` 是 **cloud-controller 一次性 token**（`k8s-job-manager.ts:115-118`、`entrypoint.sh:16`）；agent-gear 也把它当作握手 token | 新增 **`ZAG_WORKER_TOKEN`** 承载 cloud-controller 一次性 token；harness 容器的 `ZAG_CONTROLLER_KEY` 专用于 controller-api 的 `zag_k_` 控制器 Key。**idle 容器保持 `ZAG_CONTROLLER_KEY=token` 不变**；agent-gear harness 模式优先读 `ZAG_WORKER_TOKEN`。 |
+| A4 | §3.1.3：容器 Key `/v1/models` 返回「Key 属主个人可用模型列表」；自定义模型代转发 | `Model`/`Provider` 只有 `scope: 'user' \| 'global'`，**无 `userId`/`ownerId`**；`agent-api` 的 `models` 查询口径是「`scope=user` 全量 ∪ `scope=global` 且启用」；`billing-openai.ts` 当前只查 `scope:'global'` | 本期「用户个人可用模型列表」= **agent-web 设置页中启用的模型集合**（`scope=user,isEnabled=true` ∪ `scope=global,isEnabled=true`；禁用模型不进入容器 Key 列表与 `ZAG_MODEL_IDS` 快照）；容器 Key 的 `/v1/models` 与 `chat/completions` 使用同一口径。自定义模型（`scope=user`）走网关代转发、不记账；**按用户 ownerId 隔离模型归属不在本期**（需先给 Provider/Model 补归属字段与迁移），在验收报告登记为二期遗留。 |
+| A5 | §5.1.4/§5.2-2：销毁后清理 `Controller + ControllerKey`，主机从列表移除、历史可追溯 | `homeOverview.controllers` 是 Sidebar 的来源；删除 `Controller` 会让该主机的历史会话在 Sidebar 失去归属（会话仍留在 `sessions`）；`controllerService.unbind` 会删 Controller+Key | 销毁 = ① cloud-controller 销毁容器；② 撤销模型 Key；③ **删除 `ControllerKey` 并 evict 缓存**（防重连）；④ `Controller.status='offline'` **保留 Controller 行**（历史会话/主机记录可追溯）；⑤ `cloudcontainers` 保留终态。`destroyCloudHost` 幂等。 |
+| A6 | §3.2.3：默认工作区 `ZAG_DEFAULT_WORKSPACE=/home/zag/workspace` | worker 镜像 `Dockerfile` 未设置 `USER`，容器以 root 运行，`os.homedir()='/root'`；`entrypoint.sh` 以 PID 1 运行 | 默认工作区改为 **`/root/workspace`**（agent-api 配置 `CLOUD_HOST_DEFAULT_WORKSPACE`，可覆盖）；`ZAG_DEFAULT_WORKSPACE` 随 Job env 与 `workload:run env` 下发，agent-gear 启动时 `mkdir -p`，init 脚本再次幂等创建；`ControllerWorkspace.path` 与之一致。 |
+| A7 | §4.1：`cloudcontainers` 扩展 `userId/controllerKeyId/harnessType/containerApiKeyId` | 现有模型**已有 `userId`**（`cloud-container.ts`），但无 `controllerId`/`controllerKeyId`/`harnessType`/`expiresAt`/`hostName`/`containerApiKeyId`；`refId` 语义为通用关联 | 新增 `controllerId`（云主机 ID，索引）、`controllerKeyId`、`containerApiKeyId`、`hostName`、`harnessType`、`expiresAt`；`refId` 继续存 `controllerKeyId`（兼容既有语义）。写入方仍只有 cloud-controller。 |
+| A8 | §5.1.2：agent-api 把预制「OpenCode（Harness）」加入 `workloadPlan` | agent-api 当前**没有** `cloudworkloads`/`cloudcontainers` 模型，也没有 cloud-controller 客户端 | agent-api 新增**只读** `CloudWorkload`/`CloudContainer` Mongoose 模型（共享 Mongo，不写）与 `cloud-controller-client`；按 `presetKey='harness-opencode'` 读取 preset 并构造 `workloadPlan=[{workloadId, params:{}, implicit:false, required:true}]`。写方仍为 admin-api/cloud-controller。 |
+| A9 | §5.1.1：worker 双连接、init 后才能建会话 | 现有 `registered` 事件只返回 `{controllerId}`；agent-gear 无法知道 init 批次何时结束，若立即连 controller-api 会在 OpenCode 安装完成前显示在线 | cloud-controller 的 `registered` 增加可选 **`initializing: boolean`**；agent-gear harness supervisor 在 `initializing=true` 时等待 `workload:run` 批次完成再建立 controller-api 标准连接；`false` 或无字段时立即连接（向后兼容）。 |
+| A10 | §3.1.3/§4.1：`BillingApiKey.containerId` 关联容器 | Key 必须在容器创建**之前**铸造（Job env 需要模型 Key），此时 `cloudcontainers._id` 尚不存在 | `BillingApiKey.containerId` 在本期存 **云主机 Controller ID**（创建前已知）；网关按 `cloudcontainers.controllerId` 查最新容器状态并校验终态。契约字段名保持 `containerId`，注释明确「云主机 ID」。 |
+| A11 | §8.1：API/E2E 覆盖云主机在线、标准会话、OpenCode ACP | Aspire dev 的 `K8S_ENABLED=false` 使用 `InMemoryK8sClient`，不会产生真实 worker；`createCloudHost` 返回的 ControllerKey 明文不通过 GraphQL 暴露 | **tests/api** 覆盖创建/能力/校验/列表/销毁/回滚；**tests/e2e** 覆盖新建对话框、云图标、启动中状态、销毁确认、主机同构页面；**在线 + OpenCode ACP + 标准会话**由 agent-gear/cloud-controller/agent-api 单测 + 真实集群手工验收覆盖（验收报告登记）。不引入测试专用后门。 |
+| A12 | §9.2：`HARNESS_ENABLED` 后端开关 | agent-web 无特性开关框架；`config.js` 只注入 `apiUrl` | agent-api 增加 `HARNESS_ENABLED`（默认 `false`）与 `cloudHostCapabilities` 查询；前端据此决定是否显示「新建云主机」。开关关闭时 **create 拒绝**，但 `myCloudHosts`/`destroyCloudHost` 仍可用（便于回滚后清理存量）。 |
+| A13 | §5.1.5：写 `opencode.jsonc`（custom provider） | `packages/agent-controller` 无 `jsonc-parser`；旧计划裁决 A3 已核实当前 OpenCode 配置为 `opencode.jsonc`（`.json` 亦兼容） | 新增 `jsonc-parser` 依赖；默认写 `~/.config/opencode/opencode.jsonc`，若同目录只存在 `opencode.json` 则合并该文件；保留注释与既有 provider，仅替换 `provider.zag`。 |
+| A14 | §5.3：`@opencode/cli@<pin>` | 内网 npm 代理可用版本在实施时确认；旧计划使用 `2.1.1` | 固定 `OPENCODE_CLI_VERSION`（默认 `2.1.1`，实施时以 `npm view @opencode/cli versions` 实测锁定并写入 BUILD.md）；init 脚本中硬编码默认值，可用同名 env 覆盖但**验收以固定版本为准**。 |
+| A15 | §3.2.1：`secrets.controllerEndpoint/modelApiKey` 由 agent-api 下发 | agent-api 无 controller-api 对外地址配置；worker 在 K8s 内需可达 controller-api 与计费网关 | agent-api 新增 `CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`、`CLOUD_HOST_DEFAULT_WORKSPACE` 配置；创建时校验非空，随内部请求下发（非 secret 的 baseURL 也放在 `secrets` 报文内，但不落库）。 |
+| A16 | §3.2.2：cloud-controller 终态撤销 + `container.destroyed` 兜底 + admin-api 对账三线 | admin-api 与 cloud-controller 共享 Mongo；admin-api 可直接读 `cloudcontainers`；cloud-controller 无 admin-api 客户端 | 本期简化为 **两条线**：① 网关鉴权时校验 Key `expiresAt` + 最新容器终态（读只读 `cloudcontainers`）；② `destroyCloudHost` 显式撤销 Key。模型 Key 不再依赖 `container.destroyed` 事件/对账任务；`container.destroyed` payload 不变。失效语义更强（容器一终态立即 401），实现更少。 |
+| A17 | §8.2：tests/api 使用 `vitest + supertest` | 仓库无 `supertest`；`tests/api` 用 `fetch` 打真实 Aspire 服务 | 继续 **vitest + fetch**；不引入 supertest。 |
+| A18 | §5.1.4：销毁后「主机从在线列表移除」 | 既有 `Controller.status` 只有 `online/offline/registering/unbound`；Sidebar 展示所有 Controller（离线置灰） | 云主机销毁后 `Controller.status='offline'`，Sidebar 显示「已结束」灰态；「在线列表移除」理解为不再为在线，历史记录/会话仍可追溯。普通主机的离线展示不变。 |
 
 ### B. 设计裁决（提案留白/含混处）
 
-1. **`optionsSource` 的校验语义**：`CloudWorkloadParamField.optionsSource` 缺省 `NONE`；仅 `MULTI_SELECT` 可设为 `OPENCODE_SESSIONS`，且必须 `options=[]`、`defaultValue=[]`。`optionsSource != NONE` 时 `workload-plan` 不再按静态 `options` 校验，改为「字符串数组、去重、≤20」；会话 ID 的属主/存在性由 `harness-service` 单独校验。静态 `multi_select` 仍要求 1~50 个 `options`（现状不变）。仅 `workloadKind='harness'` 的工作负载允许 `optionsSource != NONE`。
-2. **工作负载类型字段**：`cloudworkloads` 新增 `workloadKind: 'standard' | 'harness'`（默认 `standard`）与 `harnessType: 'opencode' | null`。`CloudWorkload` DTO/GraphQL 只读暴露这两个字段；CRUD 输入不接受（由 migration 写入），避免管理员误改。admin-web 启动对话框过滤 `workloadKind === 'HARNESS'` 的项。
-3. **harness 自动挂载顺序**：先按现有 `resolveWorkloadPlan` 展开用户显式选择（含 `workloadIds` 转默认参数），再把预制 harness 项**追加到末尾**，`required=true`，参数由 `harness` 输入归一。显式传入同名 harness 预设 → `duplicate workload selection`；若任一显式工作负载（直接/间接）依赖 harness 工作负载 → 返回 `harness workload cannot be a dependency of other workloads`（比提案的「warning + 仍置末位」更安全，避免依赖序被破坏）。追加后总条数 >10 → `expanded workloads exceed 10`。
-4. **恢复会话的标识与传递**：GraphQL `restoreSessionIds` 是**存储对象 ID**（`storageobjects._id`），不是 OpenCode sessionId。admin-api 校验后解析为 `{id, key, sessionId, label}`，随内部请求 `harness.restoreSessions` 下发；cloud-controller 以 `ZAG_RESTORE_SESSIONS`（JSON 数组）注入 worker。worker 按 `key` GET 会话包，`opencode session import` 使用 `sessionId`。参数快照 `restore_session_ids` 仍保存存储对象 ID，用于留档。
-5. **会话存储布局与元数据**：`{user-path}/opencode/{sourceContainerId}/{safeSessionId}-{hash8}.json`；`safeSessionId` 仅保留 `[A-Za-z0-9._-]`，`hash8 = sha256(sessionId)` 前 8 位，防截断/字符替换碰撞。PUT 头：`x-zag-kind: opencode_session`、`x-zag-session-id`、`x-zag-container-id`、`x-zag-session-label`（`encodeURIComponent`）。服务端仅在 key 落在 `{owner}/opencode/` 且 `kind` 合法时登记 `kind/sessionId/containerId/sessionLabel`，否则一律 `generic`。
-6. **会话导出范围**：容器为新实例，`opencode session list --format json` 返回的会话即为「本容器新建 + 恢复后继续」的集合；逐会话导出，单会话 ≤32 MiB、总数 ≤50，超限跳过并记录原因。`store_sessions=false` 时 post 脚本直接短路成功。
-7. **模型配置注入**：worker 用容器 Key 调 `GET {ZAG_MODEL_BASE_URL}/models` 获取可用模型快照，不依赖额外 `ZAG_MODEL_IDS`；写 `provider.zag`（`@ai-sdk/openai-compatible`，`baseURL` + `apiKey` + `models`）。合并既有配置时使用 `jsonc-parser`，保留注释与用户其它 provider；API Key 不写日志、不进错误消息。
-8. **存储令牌鉴权**：`/storage/v1` 支持两类令牌：① admin JWT（`Authorization: Bearer <admin JWT>`，解析为 `admin_user/{adminId}`）；② 容器作用域令牌 `stg_<random>`（bcrypt 哈希、`expiresAt`、`status`，解析为容器属主）。前台用户 JWT 一期不接入（返回 `401 FRONT_USER_TOKEN_NOT_SUPPORTED`），与 PRD「前台二期」一致。所有 key 必须落在 `/{ownerType}/{ownerId}/` 之下，穿越/跨用户一律 `403 FORBIDDEN`。
-9. **存储 REST 挂载顺序**：`/storage/v1` 必须在全局 `express.json()` **之前**挂载，PUT 使用 `express.raw({ type: () => true, limit: '256mb' })`，避免 JSON 会话包被 JSON parser 消费；GET 用 `stream/promises.pipeline` 代理 S3 流；Express 5 通配参数使用命名形式 `*key`。
-10. **限额与用量事务**：`quota-guard` 以 owner 为 key 走 `KeyedMutex`；覆盖同 key 先减旧 size 再校验/加新 size；先做用量预留（`$inc`）→ PutObject → 成功提交元数据并保留预留，失败回滚预留。删除同理先 S3 删除再回退用量；S3 与元数据不一致以元数据为准并告警。`KeyedMutex` 从 `services/billing/keyed-mutex.ts` 提取到 `services/keyed-mutex.ts`，billing 侧保留 re-export。
-11. **S3 配置与开关**：新增 `STORAGE_ENABLED`（默认 `false`）。为 `true` 时 `STORAGE_S3_ENDPOINT/REGION/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY` 必填并 fail-fast；`STORAGE_S3_FORCE_PATH_STYLE` 默认 `true`；`STORAGE_S3_AUTO_CREATE_BUCKET` 默认 `false`（Aspire/MinIO 置 `true`）。harness 启动要求 `STORAGE_ENABLED=true`，否则返回 `storage is not enabled`。
-12. **容器有效期**：admin-api `HARNESS_CONTAINER_TTL_SECONDS` 默认 `86400`；创建时 `expiresAt = now + TTL`，Key/令牌使用同一 `expiresAt`，另加 `HARNESS_KEY_EXPIRY_GRACE_SECONDS=60` 仅用于 Key 校验（避免时钟偏差导致容器存活期间 Key 先失效）；容器结束由撤销保证立即失效。cloud-controller 以 `max(60, floor((expiresAt-now)/1000))` 设 Job `activeDeadlineSeconds`。
-13. **撤销链路**：cloud-controller 在 `markExited`/`markFailed`/`destroy` 终态 CAS 成功后调用 admin-api 内部撤销（Key + 存储令牌，幂等）；`container.destroyed` 事件 payload 追加 `containerApiKeyId`/`storageTokenId`，admin-api 消费者兜底撤销；admin-api 另起 `ContainerCredentialReconciler`（默认 300s）扫描「已过期仍 active」与「容器已终态仍 active」的凭证。三条线都幂等。
-14. **post 预算**：新增 `HARNESS_POST_BUDGET_MS` 默认 `120000`；dispatcher 在 `purpose=harness` 时使用该值，其余仍用 `WORKLOAD_POST_BUDGET_MS`（90000）。超时按既有 post 语义记失败，不阻塞销毁。
-15. **容器展示**：admin-web 无容器详情页，本期不改路由；harness 摘要放在「云端容器」列表的**用途列 + 新增 Harness 列**，日志对话框头部补充 harness 元信息。PRD 的「容器详情」以列表 + 日志对话框承载。
-16. **存储后台页面**：新增 `/storage` 页面，包含「用量列表 + 指定用户对象列表 + 上传/下载/删除 + 配额编辑」。为此 GraphQL 增加 `adminStorageUsages` 与 `adminStorageObjects`（提案原契约只有单用户 `adminStorageUsage`）；对象字节上传/下载走 `/storage/v1` REST（admin JWT），不在 GraphQL 传输二进制。
-17. **测试与文档冲突**：以下既有断言必须随本期更新——`tests/api/src/admin-api/cloud-workload.test.ts:660-694`（预制 4→5）、`tests/e2e/src/admin-cloud-workload.spec.ts:568-593`（4→5 与名称）、`tests/e2e/src/admin-cloud-container.spec.ts:99-113`（「仅 idle」文案）、`apps/admin-web/src/components/__tests__/StartContainerDialog.test.tsx:96-108`、`apps/admin-web/src/pages/__tests__/CloudContainersPage.test.tsx:194-198,314-326`、`packages/agent-controller/tests/socketio-client.test.ts:232,250`（版本号）。
+1. **创建编排顺序**：按 `userId` 串行锁（防双击/并发超限）→ 校验开关/名称/harness/并发 → 取（或创建）前台计费账户 → **预生成 `controllerId = new mongoose.Types.ObjectId()`** → 创建 `ControllerKey(type=cloud, boundControllerId=controllerId)` → 以该 `_id` 预创建 `Controller(type=cloud,status=registering,name,hostname=name,version='0.0.0')` → 创建默认 `ControllerWorkspace` → 铸造容器作用域模型 Key → 读取 harness preset 构造 plan → `POST /internal/containers`。任一步失败按逆序回滚（撤销 Key、删工作区/Controller/ControllerKey 并 evict）；cloud-controller **成功返回后不再回滚**（后续异常由销毁/过期兜底）；cloud-controller 失败统一抛 `control plane unavailable`（写不降级）。
+2. **ControllerKey 创建**：**不得复用** `controllerKeyService.create`（它会删除用户现有的未绑定 Key）。新增 `createForCloudHost(userId, controllerId, name)`：不删除未绑定 Key、`boundControllerId` 直接写入预生成 `controllerId`，使该 Key 不出现在设置页「未绑定 Key」列表；注册时 controller-api 仍按 `keyId` upsert。
+3. **Controller 预创建字段**：`Controller` schema 的 `hostname`/`version` 为必填；预创建 `hostname=name`、`version='0.0.0'`。controller-api `register` 的 `findOneAndUpdate` 使用 `$setOnInsert: { name: hostname }`，已存在文档不覆盖用户命名。
+4. **状态映射**（`CloudHostStatus`）：`container.status=destroying` → `DESTROYING`；`failed` → `FAILED`；`exited` 或（`controller.status=offline` 且容器终态）→ `EXITED`；`controller.status=registering` 或容器 `creating/connecting/initializing` → `PROVISIONING`；`controller.status=online` → `ONLINE`；`controller.status=offline` 且容器非终态 → `OFFLINE`；容器缺失时按 Controller 状态降级。
+5. **`cloudHostCapabilities`**：返回 `{ enabled, supportedHarnesses }`；`enabled=true` 且预设存在时返回 `[OPENCODE]`；预设缺失时返回空列表，create 报 `harness workload preset not found: opencode`。
+6. **`Controller.cloudHost` 字段**：在 `cloud-host.graphql` 中 `extend type Controller { cloudHost: CloudHost }`，agent-api resolver 对 `type==='cloud'` 查只读 `cloudcontainers`（`controllerId` 倒序取最新）并映射；普通主机返回 `null`。`HOME_OVERVIEW` 与 `GET_CONTROLLERS` 均可选择该字段，Sidebar/配置页据此显示「启动中/已结束/失败」。
+7. **销毁语义**：`destroyCloudHost(id)` 的 `id=controllerId`。先查 CloudHost；不存在返回 `true`（幂等）。存在则：取最新容器 → 非终态调用 cloud-controller `DELETE /internal/containers/:id` → 撤销模型 Key（幂等，404 视为成功）→ 删除 ControllerKey + evict → `Controller.status='offline'`（保留行）→ 返回 `true`。控制面不可达时抛 `control plane unavailable`，不做半程降级。
+8. **模型 Key 失效**：admin-api `billingKeyAuth` 在 `apiKeyService.verify` 成功后追加：`scope=container` 时若 `expiresAt < now` 或关联云主机最新容器处于 `exited/failed/destroying` → `401 invalid_api_key`。容器尚未创建（创建窗口）时允许通过，Key 创建失败会回滚撤销。
+9. **自定义模型路由**：`/v1/chat/completions` 先查 `scope='global'`（系统模型，走既有计费）；未命中且 Key 为 container scope 时查 `scope='user'`（含缺失 scope 的存量）按 `sortOrder,createdAt` 取第一条。自定义模型不要求 pricing、不写计量/outbox，`BillingApiCall` 记 `billable=false,cost=0` 作为调用审计（不计费）。同名时系统模型优先。
+10. **模型列表快照**：agent-api 创建云主机时用 `modelService.findAll()` 过滤 `isEnabled` 生成 `modelIds`（去空、去重），以 JSON 数组字符串 `ZAG_MODEL_IDS` 下发；agent-gear `harness prepare` 不额外请求 `/v1/models`，避免初始化期多一次网络依赖。`/v1/models` 仍按容器 Key 口径（启用模型）返回，供 OpenCode 运行时使用。
+11. **secret 恢复**：cloud-controller `SecretStore` 只存内存；缺失时调用 agent-api `POST /internal/cloud-hosts/:controllerId/model-key/reissue` 重新铸造模型 Key（同 `expiresAt`/`containerId`），旧 Key 由 admin-api 按 `containerId` 幂等撤销。**控制器 Key 不补发**（worker 进程已持有；Redis 缓存丢失时无法恢复明文，只影响新容器，不影响已运行容器）。
+12. **初始化就绪门禁**：cloud-controller 在 `register` 时先判断 `hasInitScripts`；`registered` 携带 `initializing`。agent-gear 在 `initializing=true` 时等待首个 `workload:run` 批次结束（成功/失败）后再连 controller-api；等待超时（`HARNESS_INIT_WAIT_MS`，默认 10 分钟）则仍连接并由 cloud-controller 看门狗兜底。这样 Sidebar 不会在 OpenCode 装好前显示在线。
+13. **容器 TTL**：agent-api `HARNESS_CONTAINER_TTL_SECONDS`（默认 `86400`）；`expiresAt=now+TTL` 同时用于模型 Key 与 Job `activeDeadlineSeconds`。cloud-controller 以 `max(60, floor((expiresAt-now)/1000))` 设置，缺省沿用 `JOB_ACTIVE_DEADLINE_SECONDS=86400`。
+14. **测试边界**：Aspire dev 无真实 worker，E2E 不伪造 ControllerKey 明文；在线/ACP/会话能力以 `agent-controller` 单测（双连接/初始化等待）+ `cloud-controller` 单测（env/门禁）+ 真实集群手工验收覆盖，验收报告如实登记。
+15. **OpenCode 环境**：init 脚本顺序固定为「安装固定版本 → `opencode --version` 硬校验 → `mkdir -p $ZAG_DEFAULT_WORKSPACE` → `agent-gear harness prepare`」；任一失败非零退出，依赖 `required=true` 触发容器强制注销。
 
 ---
 
@@ -162,130 +196,88 @@ docker run --rm --entrypoint bash zag-worker:harness-local -lc 'agent-gear --ver
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `contracts/admin-cloud-container.graphql` | 修改 | `CloudContainerPurpose` 增 `HARNESS`；新增 `HarnessType { OPENCODE }`、`HarnessSelectionInput`、`CloudHarnessOptions`、`HarnessOption`；`CloudContainer` 增 `harness: CloudHarnessOptions`；`adminStartCloudContainer` 增 `harness: HarnessSelectionInput`；新增 `adminSupportedHarnesses: [HarnessOption!]!`；注释写清错误文案与「HARNESS 自动挂载、不得显式传 harness 预设」 |
-| `contracts/admin-cloud-workload.graphql` | 修改 | 新增 `CloudWorkloadKind { STANDARD HARNESS }`、`CloudWorkloadParamOptionsSource { NONE OPENCODE_SESSIONS }`；`CloudWorkloadParamField`/`Input` 增 `optionsSource`；`CloudWorkload` 增 `workloadKind`、`harnessType`；注释写清 `optionsSource` 仅 MULTI_SELECT、静态 options 为空、默认值空数组、≤20 |
-| `contracts/admin-unified-storage.graphql` | 新增 | `StorageOwnerType { FRONT_USER ADMIN_USER }`；`StoredOpencodeSession`（`size: Float!`）；`StorageUsage`（`totalBytes: Float!`、`quotaBytes: Float`）；`StorageObject`；Query `adminStoredOpencodeSessions`、`adminStorageUsage`、`adminStorageUsages`、`adminStorageObjects`；Mutation `adminSetStorageQuota`、`adminDeleteStorageObject` |
-| `contracts/unified-storage.openapi.yaml` | 新增 | Base `/storage/v1`；PUT/GET/HEAD/DELETE `/objects/{key}`、GET `/objects?prefix&limit&cursor`、GET `/usage`；Bearer 三类令牌口径（一期 admin JWT + 容器令牌）；错误 `QUOTA_EXCEEDED/FORBIDDEN/NOT_FOUND/PAYLOAD_TOO_LARGE/INVALID_PREFIX`；单对象 256 MiB；会话头 `x-zag-*` |
-| `contracts/admin-billing.graphql` | 修改 | `BillingApiKeyScope { ACCOUNT CONTAINER }`；`BillingApiKey` 增 `scope/containerId/expiresAt`；补 `BillingApiCall.containerId`（如未暴露则只在内部模型） |
-| `contracts/billing-openai.openapi.yaml` | 修改 | 容器 Key 的 `expiresAt`/容器终态 → `401 invalid api key`；`/v1/models` 对容器 Key 返回全部启用全局模型（含 `isBillable=false`）；`/v1/chat/completions` 的 `billable=false` 不产生计费；说明前台 `scope=user` 二期 |
-| `contracts/cloud-controller-websocket.md` | 修改 | 附录 A.2.2 `POST /internal/containers` 增 `purpose=harness`、`harness`、`ownerType/ownerId`、`expiresAt`、`secrets`；A.3 响应增 `harness/expiresAt/containerApiKeyId/storageTokenId`；A.5 用途表更新；§2.9 `workload:run` 增容器级 `env`（`ZAG_*`）与脱敏约定；新增 §2.10 `POST /internal/containers/:id/secrets/reissue` 与撤销接口；版本门禁改为「purpose 分流：普通 ≥2.2.0，harness ≥2.5.0」 |
+| `contracts/cloud-host.graphql` | 新增 | 前台云主机契约：`CloudHostHarnessType { OPENCODE }`、`CloudHostStatus { PROVISIONING ONLINE OFFLINE DESTROYING EXITED FAILED }`、`CloudHost`（`id/name/controllerId/containerId/status/harnessType/createdAt/readyAt/exitedAt/failureReason`）、`CloudHostCapabilities`、`CreateCloudHostInput { name, harnessType }`、Query `cloudHostCapabilities/myCloudHosts`、Mutation `createCloudHost/destroyCloudHost`、`extend type Controller { cloudHost: CloudHost }` |
+| `contracts/agent-controller.graphql` | 修改（注释/语义） | 明确 `ControllerType.cloud`：由 agent-api 预创建，`status=registering`，`name` 为用户命名，register upsert 不覆盖；云主机销毁后保留 Controller 行并置 `offline`；无字段新增 |
+| `contracts/agent-controller-websocket.md` | 修改 | 增补「云主机注册约定」：标准连接使用 `ControllerKey(type=cloud)`；**不发送 `unregister`**（本地卸载语义）；容器销毁由 agent-api 编排；`register.version` 上报 2.5.0；Controller 状态口径 |
+| `contracts/cloud-controller-websocket.md` | 修改 | 内部 API `purpose=idle\|harness`；请求增 `controllerId/controllerKeyId/containerApiKeyId/hostName/harness/expiresAt/agentGearMinVersion/secrets`；响应增 `controllerId/controllerKeyId/containerApiKeyId/hostName/harnessType/expiresAt`；`GET /internal/containers?userId=`；`registered` 增可选 `initializing`；`workload:run` 增容器级 `env`（`ZAG_*`）与脱敏；Job env 明确 `ZAG_WORKER_TOKEN`/`ZAG_CONTROLLER_ENDPOINT`/`ZAG_CONTROLLER_KEY`；版本门禁按 purpose 分流；新增 `POST /internal/cloud-hosts/:controllerId/model-key/reissue`（agent-api 内部） |
+| `contracts/admin-billing.graphql` | 修改 | `BillingApiKeyScope { ACCOUNT CONTAINER }`；`BillingApiKey` 增 `scope/containerId/expiresAt`（`containerId` 注释=云主机 ID）；`BillingApiCall` 增 `containerId/billable`（如未暴露则只落内部模型，GraphQL 至少保持字段一致） |
+| `contracts/billing-openai.openapi.yaml` | 修改 | 容器 Key：`expiresAt`/容器终态 → `401 invalid_api_key`；`/v1/models` 对容器 Key 返回系统启用模型 + 用户自定义模型；`/v1/chat/completions` 自定义模型代转发不记账（无计量/outbox），系统模型走既有计费 |
 
-### 统一存储 GraphQL 签名（计划期新增，供 admin-web 存储页使用）
+**不在本期改动**：`contracts/admin-cloud-container.graphql`（admin 启动维持仅 `IDLE`）、`contracts/admin-cloud-workload.graphql`、`contracts/home.graphql`（`Controller.cloudHost` 由 `cloud-host.graphql` 扩展）、`contracts/agent-session.graphql`（标准会话零改动）。
+**二期新增（本期不建）**：`contracts/unified-storage.openapi.yaml`、`contracts/admin-unified-storage.graphql`。
 
-```graphql
-type StorageObject {
-  id: ID!
-  key: String!
-  size: Float!
-  contentType: String!
-  etag: String
-  kind: String!
-  sessionId: String
-  containerId: ID
-  sessionLabel: String
-  updatedAt: String!
-}
-
-type StorageUsagePage { items: [StorageUsage!]! nextCursor: String }
-type StorageObjectPage { items: [StorageObject!]! nextCursor: String }
-
-type Query {
-  adminStoredOpencodeSessions(ownerId: ID, ownerType: StorageOwnerType): [StoredOpencodeSession!]!
-  adminStorageUsage(ownerType: StorageOwnerType!, ownerId: ID!): StorageUsage!
-  adminStorageUsages(ownerType: StorageOwnerType, limit: Int, cursor: String): StorageUsagePage!
-  adminStorageObjects(
-    ownerType: StorageOwnerType!
-    ownerId: ID!
-    prefix: String
-    limit: Int
-    cursor: String
-  ): StorageObjectPage!
-}
-```
-
-### 契约错误文案（服务端逐字）
+### 云主机错误文案（服务端逐字）
 
 | 条件 | 错误 |
 |------|------|
-| `purpose=HARNESS` 且 `harness` 为空 | `harness selection is required for HARNESS purpose` |
-| `purpose!=HARNESS` 且 `harness` 非空 | `harness selection is only allowed for HARNESS purpose` |
-| `HARNESS_ENABLED=false` | `harness is not enabled` |
-| `harnessType` 不在支持列表 | `unsupported harness type` |
-| harness 预制工作负载缺失 | `harness workload preset not found: opencode` |
-| 存储未启用 | `storage is not enabled` |
-| `restoreSessionIds` 含不存在/非属主会话 | `stored session not found: <id>` |
-| `restoreSessionIds` 去重后 >20 | `too many restore sessions` |
-| 显式传入 harness 预制项 | `duplicate workload selection` |
-| 显式工作负载依赖 harness | `harness workload cannot be a dependency of other workloads` |
-| 展开后 >10 | `expanded workloads exceed 10` |
+| `HARNESS_ENABLED=false` 且调用 `createCloudHost` | `harness feature is disabled` |
+| `name` trim 后为空 | `name is required` |
+| `name` 超 64 字符 | `name is too long` |
+| `harnessType` 不在白名单 | `unsupported harness type` |
+| 并发云主机超限（`CLOUD_HOST_MAX_PER_USER`，默认 3） | `too many cloud hosts` |
+| harness preset 缺失 | `harness workload preset not found: opencode` |
+| 控制面不可达（创建/销毁） | `control plane unavailable` |
+| 计费服务不可达（创建） | `billing service unavailable` |
+| 控制器/模型网关配置缺失 | `cloud host is not configured` |
+| 非属主访问/销毁 | `Cloud host not found`（不泄露存在性） |
 
 ### 验收 checklist
 
-- [ ] 7 份契约与提案 §3/§4 逐字段一致；本计划 §计划期裁决 的修正项已体现
-- [ ] `HARNESS` / `optionsSource` / `workloadKind` / `expiresAt` / `scope` 在所有相关契约中命名一致
-- [ ] 存储 REST 的 key 路径、令牌类型、错误码、会话头无歧义
-- [ ] `workload:run` 的 `env` 与 `ZAG_*` 变量清单、脱敏要求写明
+- [ ] 6 份契约与提案 §3/§4 逐字段一致；本计划 §3 的修正项已体现
+- [ ] `CloudHost`/`CloudHostStatus`/`CloudHostCapabilities` 与 agent-api/agent-web 命名一致
+- [ ] `Controller.cloudHost` 扩展与 `home.graphql` 选择集兼容
+- [ ] `purpose=harness` 内部请求/响应字段、secrets 字段、`env` 清单、`initializing` 写明
+- [ ] 容器 Key 的 `containerId` 语义（云主机 ID）在契约注释中明确
 - [ ] 契约变更独立提交，未夹带实现代码
 
 ---
 
-## Phase 2: admin-api 统一存储底座
+## Phase 2: admin-api 容器作用域模型 Key 与计费网关
 
-开发分支：`servers/harness-support`。TDD 顺序：先写 `storage/*.test.ts`、`routes/unified-storage.test.ts`、`graphql/resolvers/unified-storage.test.ts`（RED）→ 实现（GREEN）。
+开发分支：`servers/harness-support`。TDD 先写/扩展 `api-key-service.test.ts`、`billing-key-auth.test.ts`（新增）、`internal-billing.test.ts`（新增）、`billing-openai.test.ts`、`cloud-container-read-model.test.ts`（新增）→ RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/admin-api/package.json` | 修改 | 新增 `@aws-sdk/client-s3`（版本随 lockfile 固定） |
-| `servers/admin-api/src/config/index.ts` | 修改 | `STORAGE_ENABLED`、`STORAGE_S3_ENDPOINT/REGION/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY/FORCE_PATH_STYLE/AUTO_CREATE_BUCKET`、`STORAGE_DEFAULT_QUOTA_BYTES`、`STORAGE_MAX_OBJECT_BYTES`（默认 256 MiB）、`STORAGE_MAX_SESSION_BYTES`（32 MiB）；`assertRuntimeConfig` 在 `STORAGE_ENABLED=true` 时 fail-fast |
-| `servers/admin-api/src/models/storage-object.ts` | 新增 | `key` 唯一、`ownerType/ownerId` 复合索引、`prefix`、`size`、`contentType`、`etag`、`kind`、`sessionId`、`containerId`、`sessionLabel`、timestamps |
-| `servers/admin-api/src/models/storage-usage.ts` | 新增 | `{ownerType,ownerId}` 唯一复合索引、`totalBytes`、`objectCount`、`quotaBytes`（null=不限）、`updatedAt` |
-| `servers/admin-api/src/models/storage-token.ts` | 新增 | `tokenPrefix` 索引、`tokenHash`、`ownerType/ownerId`、`containerId` 索引、`expiresAt`、`status`、timestamps |
-| `servers/admin-api/src/services/keyed-mutex.ts` | 新增 | 从 `services/billing/keyed-mutex.ts` 提取 `KeyedMutex`；billing 文件保留 `export * from '../keyed-mutex.js'` 兼容 |
-| `servers/admin-api/src/services/storage/key-path.ts` | 新增 | `buildUserPath(ownerType,ownerId)`、`normalizeObjectKey`、`assertWithinOwner`、`sanitizeSessionSegment` |
-| `servers/admin-api/src/services/storage/s3-client.ts` | 新增 | `S3Client` 封装、`ensureBucket`、Put/Get/Head/Delete/List（仅调试用，不做业务 list） |
-| `servers/admin-api/src/services/storage/quota-guard.ts` | 新增 | 唯一写入卡点：per-owner mutex、预留/回滚、覆盖同 key 的 size 差量、quota 判定 |
-| `servers/admin-api/src/services/storage/object-service.ts` | 新增 | `putObject/getObject/headObject/deleteObject/listObjects`；PUT 支持 `x-zag-*` 元数据；list 走元数据游标分页 |
-| `servers/admin-api/src/services/storage/usage-service.ts` | 新增 | `getUsage`、`ensureUsage`、`setQuota`、`listUsages`；`$inc` 原子更新 |
-| `servers/admin-api/src/services/storage/token-service.ts` | 新增 | `createContainerToken`、`verify`、`revoke`（幂等）；`stg_` + random、bcrypt、前缀索引 |
-| `servers/admin-api/src/middleware/storage-auth.ts` | 新增 | admin JWT 与容器令牌解析；`req.storage = {ownerType,ownerId,containerId?,scope}`；跨用户/未认证错误 |
-| `servers/admin-api/src/routes/unified-storage.ts` | 新增 | `/storage/v1` REST；PUT raw、GET stream、HEAD、DELETE、LIST、usage；错误映射 |
-| `servers/admin-api/src/graphql/schemas/unified-storage.ts` | 新增 | 契约 GraphQL 类型与 Query/Mutation |
-| `servers/admin-api/src/graphql/resolvers/unified-storage.ts` | 新增 | 会话查询（`kind=opencode_session`、属主过滤、`storedAt` 倒序、上限 200）、用量、配额、对象列表/删除 |
-| `servers/admin-api/src/graphql/schemas/index.ts` | 修改 | 注册 `unifiedStorageTypeDefs` |
-| `servers/admin-api/src/graphql/resolvers/index.ts` | 修改 | 注册 `unifiedStorageResolvers` |
-| `servers/admin-api/src/index.ts` | 修改 | **在 `express.json()` 之前**挂载 `/storage/v1`；启动时 `ensureBucket`（storage enabled）；关闭时释放 S3 client |
-| `servers/admin-api/src/services/storage/*.test.ts` | 新增 | 见测试矩阵 |
-| `servers/admin-api/src/routes/unified-storage.test.ts` | 新增 | Express + 内存 Mongo + 假 S3（注入 client 接口） |
-| `servers/admin-api/src/graphql/resolvers/unified-storage.test.ts` | 新增 | resolver 直调 + mock service |
+| `servers/admin-api/src/models/billing-api-key.ts` | 修改 | 增 `scope: 'account'\|'container'`（默认 account）、`containerId`（index，云主机 ID）、`expiresAt`（Date/null） |
+| `servers/admin-api/src/models/billing-api-call.ts` | 修改 | 增 `containerId`（index）、`billable`（默认 true） |
+| `servers/admin-api/src/models/cloud-container.ts` | 新增 | **只读** `cloudcontainers` 模型：`controllerId/status/userId/exitReason`，`controllerId` 索引；只用于 Key 鉴权与审计，不写 |
+| `servers/admin-api/src/services/billing/api-key-service.ts` | 修改 | `create` 接受可选 `scope/containerId/expiresAt`；新增 `createContainerScopedKey`（同 containerId 先幂等撤销旧 active Key）；`verify` 检查过期并返回 `scope/containerId/expiresAt`；新增 `revokeById(id)`（内部幂等，不要求 owner）与 `revokeByContainerId` |
+| `servers/admin-api/src/middleware/billing-key-auth.ts` | 修改 | `scope=container` 时校验 `expiresAt` 与只读 `cloudcontainers` 最新状态（`exited/failed/destroying` → 401）；把 `scope/containerId` 放进 `req.billing` |
+| `servers/admin-api/src/routes/internal-billing.ts` | 修改 | `POST /api-keys` body 增 `scope/containerId/expiresAt`（container scope 必填/校验日期）；新增 `POST /api-keys/:id/revoke`（内部 token，幂等，未知 404）；保留既有 owner-scoped DELETE |
+| `servers/admin-api/src/routes/billing-openai.ts` | 修改 | `/models`：container scope 返回 `global enabled` ∪ `user enabled`（含无 pricing 的自定义模型），account scope 维持现状；`/chat/completions`：先查 global，container scope 未命中再查 user；自定义模型不要求 pricing、不写计量/outbox，`BillingApiCall.billable=false,cost=0`；系统模型写入 `containerId` |
+| `servers/admin-api/src/graphql/schemas/billing.ts` | 修改 | `BillingApiKeyScope`、`BillingApiKey.scope/containerId/expiresAt`、`BillingApiCall.containerId/billable`（与 `contracts/admin-billing.graphql` 对齐；admin-web 不消费新字段） |
+| `servers/admin-api/src/graphql/resolvers/billing.ts` | 修改 | `toApiKeyWire`/`BillingApiCall` 映射新字段；既有 create/revoke mutation 不变（容器 Key 不经 admin GraphQL 创建） |
+| `servers/admin-api/src/index.ts` | 修改 | `syncIndexes` 覆盖新字段/新只读模型（只读模型不建索引也可，保留读取） |
+| `servers/admin-api/src/services/billing/api-key-service.test.ts` | 修改 | 容器 Key 铸造/过期/撤销/幂等/同容器轮换 |
+| `servers/admin-api/src/middleware/billing-key-auth.test.ts` | 新增 | 过期/终态/正常/账号 Key 回归 |
+| `servers/admin-api/src/routes/internal-billing.test.ts` | 新增 | 内部鉴权、容器 Key 参数校验、撤销幂等/404 |
+| `servers/admin-api/src/routes/billing-openai.test.ts` | 修改 | 容器模型列表、系统模型计费、自定义模型不记账、`containerId` 归因 |
 
-### 核心语义
+### 关键语义
 
 ```mermaid
 sequenceDiagram
-    participant C as 调用者(admin JWT / stg_)
-    participant A as storage-auth
-    participant Q as quota-guard
+    participant AA as agent-api
+    participant AD as admin-api
     participant M as Mongo
-    participant S as S3
+    participant W as worker(OpenCode)
 
-    C->>A: PUT /storage/v1/objects/{key}
-    A->>A: 解析令牌 → ownerType/ownerId；key 必须落在 user-path
-    A->>Q: put(owner, key, size)
-    Q->>M: 读 usage + 旧对象 size（per-owner mutex）
-    alt 超限
-        Q-->>C: 403 QUOTA_EXCEEDED
-    else 允许
-        Q->>M: 预留 size 差量（$inc）
-        Q->>S: PutObject
-        alt S3 失败
-            Q->>M: 回滚预留
-            Q-->>C: 502 STORAGE_UNAVAILABLE
-        else 成功
-            Q->>M: upsert storageobjects + 确认 usage
-            Q-->>C: 201 {key,size,etag,updatedAt}
-        end
+    AA->>AD: POST /internal/billing/api-keys {scope:container, containerId:<controllerId>, expiresAt}
+    AD->>M: billingapikeys（哈希；明文仅响应一次）
+    AD-->>AA: {apiKey, secret}
+    W->>AD: POST /v1/chat/completions (zag_sk_)
+    AD->>AD: verify（前缀+bcrypt+expiresAt）
+    AD->>M: cloudcontainers 最新状态（controllerId）
+    alt 终态/过期
+        AD-->>W: 401 invalid_api_key
+    else 系统模型
+        AD->>AD: 既有定价/预检/计量/outbox
+        AD-->>W: 正常响应
+    else 自定义模型
+        AD->>AD: 服务端代转发（无 pricing/无计量/无 outbox）
+        AD-->>W: 正常响应
     end
 ```
 
@@ -293,211 +285,210 @@ sequenceDiagram
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-ST1 | `buildUserPath` / `normalizeObjectKey` | `admin_user/abc` → `/admin_user/abc/`；拒绝 `..`、`\`、NUL、绝对路径、空段、>1024 |
-| T-ST2 | 跨用户 key | `admin_user/a` 写 `/admin_user/b/x` → `403 FORBIDDEN` |
-| T-ST3 | 首次上传 | S3 Put + `storageobjects` + `storageusages` 增量正确 |
-| T-ST4 | 覆盖同 key | usage 只增加 `new-old`，不重复累计 |
-| T-ST5 | 覆盖为更小对象 | usage 回退，最小为 0 |
-| T-ST6 | 配额刚好等于 | 允许；超出 1 字节 → `403 QUOTA_EXCEEDED` |
-| T-ST7 | 配额 null（后台） | 永不拒绝 |
-| T-ST8 | S3 Put 失败 | 预留回滚、无元数据、返回 502 |
-| T-ST9 | 并发 PUT 同 owner 不同 key | mutex 串行，usage 最终准确 |
-| T-ST10 | 并发 PUT 同 key | 只有最后一次 size 计入，无负值 |
-| T-ST11 | DELETE 存在对象 | S3 删除、元数据删除、usage 回退 |
-| T-ST12 | DELETE 不存在 | 404，usage 不变 |
-| T-ST13 | HEAD 存在/不存在 | 元信息/404；不触发 S3 |
-| T-ST14 | GET 存在/不存在 | 流式返回/404 |
-| T-ST15 | LIST 前缀 + 游标 | 只返回本 owner 且 key 以 prefix 开头；`nextCursor` 稳定；limit 1~1000 |
-| T-ST16 | LIST 非法 prefix | `400 INVALID_PREFIX` |
-| T-ST17 | 会话元数据登记 | key 在 `/opencode/` + `x-zag-kind=opencode_session` → `kind/sessionId/containerId/sessionLabel` 落库 |
-| T-ST18 | 非 opencode 路径伪造 kind | 归一为 `generic`，不进入会话列表 |
-| T-ST19 | 单对象 >256 MiB | `413 PAYLOAD_TOO_LARGE`（或 Express 层 413 映射） |
-| T-ST20 | 会话包 >32 MiB | 服务端按 `kind=opencode_session` 拒绝（413） |
-| T-ST21 | 容器令牌校验 | 正确令牌通过；错误/过期/revoked → 401；owner 正确 |
-| T-ST22 | admin JWT 校验 | 合法 JWT 通过；过期/密码变更 → 401 |
-| T-ST23 | `adminStoredOpencodeSessions` | 只返回本 owner 的 `opencode_session`；`storedAt` 倒序；size/label/containerId 正确 |
-| T-ST24 | `adminStorageUsage` / `adminStorageUsages` | 单用户/列表数值与 usage 表一致；`quotaExceeded` 计算正确 |
-| T-ST25 | `adminSetStorageQuota` / `adminDeleteStorageObject` | 设置 null 取消限额；删除后列表消失 |
-| T-ST26 | `ensureBucket` | bucket 不存在且 `AUTO_CREATE=true` 创建；false 时 fail-fast |
-| T-ST27 | 历史数据兼容 | 无 `sessionLabel` 的旧对象返回空字符串/`-`，不报错 |
+| T-BK1 | 账号 Key 回归 | `scope=account`、`expiresAt=null`；既有列表/撤销测试全绿 |
+| T-BK2 | `createContainerScopedKey` | `scope=container`、`containerId/expiresAt` 落库；明文仅返回一次；哈希可验证 |
+| T-BK3 | 同容器重复铸造 | 旧 active Key 被撤销，只剩新 Key；旧明文 401 |
+| T-BK4 | `verify` 过期 | `expiresAt < now` → 401/抛错 |
+| T-BK5 | 容器终态 | 最新容器 `exited/failed/destroying` → 401；无容器（创建窗口）允许 |
+| T-BK6 | `revokeById` 幂等 | 重复撤销 200；未知 id 404；不要求 owner |
+| T-BK7 | 内部撤销鉴权 | 无/错误 `INTERNAL_API_TOKEN` → 401 |
+| T-BK8 | 容器 `/v1/models` | 含 global enabled + user enabled（含 `isCustom=true`）；不含禁用模型 |
+| T-BK9 | 账号 `/v1/models` 回归 | 仍只返回计费完整的 global 模型 |
+| T-BK10 | 系统模型调用 | 产生 `BillingApiCall` + 计量/outbox，`containerId` 落库，`billable=true` |
+| T-BK11 | 自定义模型调用 | 代转发成功、无计量/outbox、`BillingApiCall.billable=false,cost=0` |
+| T-BK12 | 自定义模型无 pricing | 正常转发（不因缺定价报 `model_not_priced`） |
+| T-BK13 | 同名系统/自定义模型 | 系统模型优先，走计费 |
+| T-BK14 | 禁用/不存在模型 | `404 model_not_found` |
+| T-BK15 | Key 明文不落库/不进日志 | Mongo 无明文；错误日志/响应脱敏 |
+| T-BK16 | 账号 Key 行为不受影响 | 既有 billing-flow/预留/账单回归全绿 |
 
 ### 验收 checklist
 
-- [ ] `STORAGE_ENABLED=false` 时服务正常启动、`/storage/v1` 返回 `503 STORAGE_DISABLED`
-- [ ] `STORAGE_ENABLED=true` 缺配置时启动 fail-fast，错误信息点名缺失项
-- [ ] CRUD+list+usage 全部方法通过 API 测试；跨用户 403、超限 403、只读/删除不受限
-- [ ] 用量在覆盖/删除/并发场景下与实际一致（含回滚）
-- [ ] `/storage/v1` 挂载在 `express.json()` 之前，JSON 与二进制上传均可用
+- [ ] 容器 Key 有效期=容器 TTL；容器终态立即 401；销毁显式撤销双保险
+- [ ] 系统模型计费、自定义模型不记账；账号 Key 行为不变
+- [ ] 内部铸造/撤销幂等、鉴权正确；明文不落库/不进日志
+- [ ] `/v1/models` 与 agent-web 设置页口径一致（`scope=user ∪ global enabled`）
 - [ ] 新增模块单测覆盖率 ≥80%
 
 ---
 
-## Phase 3: 容器作用域模型 Key 与计费网关
+## Phase 3: admin-api 预置「OpenCode（Harness）」工作负载
 
-开发分支：`servers/harness-support`。TDD 先写 `api-key-service.test.ts`、`billing-openai.test.ts`、`internal-billing.test.ts`、`credential-reconciler.test.ts`（RED）。
+开发分支：`servers/harness-support`。TDD 先写 `005-preset-harness-opencode.test.ts`（新增）→ RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/admin-api/src/models/billing-api-key.ts` | 修改 | 增 `scope: 'account'|'container'`（默认 account）、`containerId`（index）、`expiresAt`、`allowedModelIds`（默认 null） |
-| `servers/admin-api/src/models/billing-api-call.ts` | 修改 | 增 `containerId`（可选，index），用于容器调用归因 |
-| `servers/admin-api/src/services/billing/api-key-service.ts` | 修改 | 增 `createContainerScopedKey({accountId,ownerType,ownerId,containerId,expiresAt,name})`；`verify` 返回 `scope/containerId/expiresAt` 并检查过期；`revokeById(id)` 幂等（不要求 owner）；现有 `create/revoke` 语义不变 |
-| `servers/admin-api/src/middleware/billing-key-auth.ts` | 修改 | `scope=container` 且容器终态/过期 → 401 `invalid_api_key`；把 `scope/containerId` 放进 `req.billing` |
-| `servers/admin-api/src/routes/internal-billing.ts` | 修改 | 新增 `POST /api-keys/:id/revoke`（内部 token，幂等，200/404）；保留既有 DELETE |
-| `servers/admin-api/src/routes/billing-openai.ts` | 修改 | `/models`：容器 Key 返回全部启用全局模型（含 `isBillable=false`/`isCustom`），过滤 `allowedModelIds`；账号 Key 保持现状（仅计费完整模型）。`/chat/completions`：容器 Key 允许非计费模型走既有 `billable=false` 路径；`BillingApiCall` 写 `containerId` |
-| `servers/admin-api/src/services/billing/credential-reconciler.ts` | 新增 | 扫描过期/容器终态仍 active 的 Key 与存储令牌，批量撤销；幂等 |
-| `servers/admin-api/src/config/index.ts` | 修改 | `HARNESS_ENABLED`、`HARNESS_CONTAINER_TTL_SECONDS`、`HARNESS_KEY_EXPIRY_GRACE_SECONDS`、`CONTAINER_CREDENTIAL_RECONCILE_INTERVAL_MS` |
-| `servers/admin-api/src/index.ts` | 修改 | 启动/停止 reconciler；`syncIndexes` 覆盖新模型 |
-| `servers/admin-api/src/graphql/schemas/billing.ts` + `resolvers/billing.ts` | 修改 | `BillingApiKey` 暴露 `scope/containerId/expiresAt`；现有创建/撤销 mutation 不变（容器 Key 不经 GraphQL 创建） |
-| `servers/admin-api/src/services/billing/api-key-service.test.ts` | 修改 | 容器 Key 铸造/过期/撤销/幂等 |
-| `servers/admin-api/src/services/billing/credential-reconciler.test.ts` | 新增 | 过期/终态/批量撤销 |
-| `servers/admin-api/src/routes/internal-billing.test.ts` | 新增 | 内部撤销鉴权/幂等/404 |
-| `servers/admin-api/src/routes/billing-openai.test.ts` | 修改 | 容器 Key 模型列表/非计费模型/containerId 归因 |
+| `servers/admin-api/src/models/cloud-workload.ts` | 修改 | 增 `workloadKind: 'standard'\|'harness'`（默认 `standard`，index）、`harnessType: 'opencode'\|null`（默认 null）；不新增 `optionsSource`（会话参数二期） |
+| `servers/admin-api/src/migrations/005-preset-harness-opencode.ts` | 新增 | 写入 `name='OpenCode（Harness）'`、`presetKey='harness-opencode'`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[]`、仅 `initScript`、无 `dependsOnWorkloadIds`（Node/npm 已在镜像） |
+| `servers/admin-api/src/migrations/005-preset-harness-opencode.test.ts` | 新增 | 幂等、已存在不覆盖、字段完整、`bash -n`、脚本顺序 |
+| `servers/admin-api/src/index.ts` | 修改 | 注册 `005` 到迁移数组 |
+
+### init 脚本（migration 内置，示意）
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
+
+# 1) 固定版本安装（镜像未预装；仅命令缺失时安装，保证幂等）
+OPENCODE_CLI_VERSION="${OPENCODE_CLI_VERSION:-2.1.1}"
+if ! command -v opencode >/dev/null 2>&1; then
+  npm install -g "@opencode/cli@${OPENCODE_CLI_VERSION}"
+fi
+opencode --version   # 硬校验：安装返回 0 但不可用视为失败
+
+# 2) 默认工作区 + 模型配置注入（opencode.jsonc，custom provider）
+mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"
+agent-gear harness prepare
+```
+
+> 二期追加会话导入/导出时，在 `paramSchema` 与脚本尾部扩展；本期保持 `paramSchema=[]`，不引入 `optionsSource`/存储依赖。
 
 ### 测试用例（增量）
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-BK1 | `createContainerScopedKey` | `scope=container`、`containerId/expiresAt` 落库；返回明文一次；哈希可验证 |
-| T-BK2 | 账号 Key 兼容 | `scope=account`、`expiresAt=null`；现有列表/撤销测试全绿 |
-| T-BK3 | `verify` 过期 | `expiresAt < now` → 401/抛错 |
-| T-BK4 | `verify` 容器终态 | 容器 `exited/failed/destroying` → 401 |
-| T-BK5 | 撤销幂等 | 重复 revoke 均 200；未知 id 404 |
-| T-BK6 | 内部撤销鉴权 | 无/错误内部 token → 401 |
-| T-BK7 | `/v1/models` 容器 Key | 含 `isBillable=false`/`isCustom=true` 的启用模型；不返回未启用 |
-| T-BK8 | `/v1/models` 账号 Key 回归 | 仍只返回计费完整模型 |
-| T-BK9 | `/v1/chat/completions` 系统模型 | 产生 `BillingApiCall` + 计量事件，`containerId` 落库 |
-| T-BK10 | `/v1/chat/completions` 非计费/自定义模型 | 正常转发、不产生计量/outbox、`BillingApiCall.billable=false` |
-| T-BK11 | `allowedModelIds` | 列表只含白名单；非白名单 chat → `model_not_allowed` |
-| T-BK12 | 对账任务 | 过期 active Key/令牌被撤销；未过期/已撤销不动 |
-| T-BK13 | 容器终态对账 | 容器已 `exited` 但 Key active → 撤销 |
-| T-BK14 | 时钟偏差 grace | `expiresAt` 刚到但容器仍 online → 在 60s grace 内可用 |
+| T-MIG5-1 | 005 首次执行 | 写入第 5 个预制项；`workloadKind=harness`、`harnessType=opencode`、`paramSchema=[]`、无 post |
+| T-MIG5-2 | 005 二次执行 | 跳过，不覆盖管理员修改 |
+| T-MIG5-3 | presetKey/name 已存在 | 保留现有并打 warning，不重复创建 |
+| T-MIG5-4 | 脚本语法 | `bash -n` 通过；含固定版本安装、`opencode --version`、`agent-gear harness prepare` |
+| T-MIG5-5 | 存量工作负载兼容 | 无新字段的文档读取为 `standard/null`；admin 既有 4 个预制项不变 |
 
 ### 验收 checklist
 
-- [ ] 容器 Key 有效期 = 容器 `expiresAt`，容器结束立即失效（撤销 + 终态校验双保险）
-- [ ] Key 明文不落库、不进日志；内部撤销/对账幂等
-- [ ] 系统模型计费、全局非计费/自定义模型不记账；账号 Key 行为不变
-- [ ] 前台 `scope=user` 按属主模型列表明确列为二期（契约注释 + 验收报告登记）
+- [ ] `cloudworkloads` 新增字段对存量文档默认为 `standard/null`
+- [ ] migration 005 幂等、脚本可执行、无 post/参数
+- [ ] `admin-cloud-workload.graphql`/admin-web 零改动（本期不让后台展示/编辑 harness 字段）
+- [ ] 既有 4 个预制工作负载与工作负载 CRUD 回归全绿
 
 ---
 
-## Phase 4: admin-api harness 域（校验 / 计划 / migration）
+## Phase 4: agent-api 前台云主机域
 
-开发分支：`servers/harness-support`。TDD 先写 `harness-service.test.ts`、扩展 `workload-plan.test.ts`、`cloud-workload.test.ts`、`cloud-container.test.ts`、`005-preset-harness-opencode.test.ts`（RED）。
+开发分支：`servers/harness-support`。TDD 先写 `cloud-host-service.test.ts`、`cloud-controller-client.test.ts`、`cloud-host.resolver.test.ts`、`internal-cloud-host.test.ts`、扩展 `controller-key.test.ts`/`controller.test.ts`/`billing-client.test.ts` → RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/admin-api/src/models/cloud-workload.ts` | 修改 | 增 `workloadKind`（default `standard`，index）、`harnessType`（default null）；`paramSchema` 子文档增 `optionsSource`（default `NONE`） |
-| `servers/admin-api/src/services/cloud-workload.ts` | 修改 | DTO/映射增 `workloadKind/harnessType/optionsSource`；`normalizeParamField` 接受 `optionsSource` 并执行裁决 B1；`normalizeParamValue`/`resolveWorkloadPlan` 对 `optionsSource != NONE` 走动态数组校验；`list()` 支持按 `workloadKind` 过滤（可选） |
-| `servers/admin-api/src/services/workload-plan.ts` | 修改 | `WorkloadParamFieldSnapshot` 增 `optionsSource`；`normalizeParamValue` 动态分支（string[]、去重、≤20）；新增 `appendHarnessSelection(plan, harnessSelection)` 或 `resolveWorkloadPlan(..., {appendSelections})`，负责末位追加、`required=true`、重复/依赖检查、总数上限 |
-| `servers/admin-api/src/models/cloud-container.ts` | 修改 | 只读模型增 `purpose='harness'`、`harnessType`、`harnessOptions`（子文档）、`ownerType`、`ownerId`、`expiresAt`、`containerApiKeyId`、`storageTokenId` |
-| `servers/admin-api/src/services/harness-service.ts` | 新增 | `getSupportedHarnesses`、`resolveSelection`、`validateStoredSessions`、`buildHarnessParams`、`assertNoExplicitHarnessPreset` |
-| `servers/admin-api/src/services/cloud-controller-client.ts` | 修改 | `start(purpose, workloadPlan, workloadIds, billingAccountId, harness?, owner?, secrets?, expiresAt?)`；请求体增 `harness/ownerType/ownerId/secrets/expiresAt`；`PURPOSE_TO_GQL` 增 `harness→HARNESS`；DTO 增 harness/expiresAt/key ids |
-| `servers/admin-api/src/graphql/schemas/cloud-container.ts` | 修改 | 契约同步：HARNESS/HarnessType/HarnessSelectionInput/CloudHarnessOptions/HarnessOption；`adminStartCloudContainer` 增 `harness`；新增 `adminSupportedHarnesses` |
-| `servers/admin-api/src/graphql/schemas/cloud-workload.ts` | 修改 | 契约同步：`optionsSource/workloadKind/harnessType` |
-| `servers/admin-api/src/graphql/resolvers/cloud-container.ts` | 修改 | 放开 `IDLE|HARNESS`；HARNESS 校验 harness/存储/会话；构建计划并追加 harness；铸造 Key/令牌；失败回滚撤销；`adminSupportedHarnesses` resolver |
-| `servers/admin-api/src/graphql/resolvers/cloud-workload.ts` | 修改 | 透传 `optionsSource/workloadKind/harnessType`（只读字段拒绝用户修改） |
-| `servers/admin-api/src/routes/internal-container.ts` | 新增 | 内部 token 鉴权；`POST /internal/containers/:id/secrets/reissue`：按容器属主/harness 重新铸造 Key + 存储令牌，撤销旧 id（若记录），返回明文一次 |
-| `servers/admin-api/src/routes/internal-container.test.ts` | 新增 | 鉴权、幂等补发、旧凭证撤销、非 harness/未知容器 404 |
-| `servers/admin-api/src/migrations/005-preset-harness-opencode.ts` | 新增 | 写入 `name='OpenCode（Harness）'`、`presetKey='harness-opencode'`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[store_sessions(BOOLEAN,true), restore_session_ids(MULTI_SELECT, optionsSource=OPENCODE_SESSIONS, options=[], defaultValue=[])]`、`initScript`/`postScript`（§5.3） |
-| `servers/admin-api/src/migrations/005-preset-harness-opencode.test.ts` | 新增 | 幂等、已存在不覆盖、字段完整、脚本 `bash -n` |
-| `servers/admin-api/src/index.ts` | 修改 | 注册 `005` 到 migration 数组；挂载 `/internal/containers` 路由 |
+| `servers/agent-api/src/config/index.ts` | 修改 | `harnessEnabled`（`HARNESS_ENABLED`，`toBool`）、`cloudHostMaxPerUser`（3）、`harnessContainerTtlSeconds`（86400）、`controllerApiPublicEndpoint`、`cloudHostModelBaseUrl`、`cloudHostDefaultWorkspace`（`/root/workspace`） |
+| `servers/agent-api/src/models/cloud-container.ts` | 新增 | **只读** `cloudcontainers`：`controllerId/controllerKeyId/containerApiKeyId/userId/status/purpose/harnessType/expiresAt/hostName/exitReason/connectedAt/exitedAt/billingAccountId`；`controllerId` 索引 |
+| `servers/agent-api/src/models/cloud-workload.ts` | 新增 | **只读** `cloudworkloads`：`name/presetKey/workloadKind/harnessType/initScript/postScript/paramSchema/dependsOnWorkloadIds` |
+| `servers/agent-api/src/services/cloud-workload-reader.ts` | 新增 | `findHarnessPreset(type)`：按 `presetKey='harness-opencode'`、`workloadKind='harness'`、`harnessType` 精确匹配；缺失抛 `harness workload preset not found: opencode`；返回只读定义 |
+| `servers/agent-api/src/services/cloud-controller-client.ts` | 新增 | 原生 fetch + AbortController：`startHarness(input)`（`POST /internal/containers`）、`listContainers({userId})`（`GET /internal/containers?userId=`）、`destroyContainer(id)`（`DELETE /internal/containers/:id`）；Bearer `INTERNAL_API_TOKEN`；错误映射 `control plane unavailable` |
+| `servers/agent-api/src/services/cloud-host-service.ts` | 新增 | `getCapabilities`、`create`、`list`（仅 `purpose=harness`）、`destroy`、`mapCloudHost`、`assertFeature`；创建编排/回滚；状态映射（裁决 B4）；并发计数（只读 `cloudcontainers` 非终态） |
+| `servers/agent-api/src/services/keyed-mutex.ts` | 新增 | 极简 `KeyedMutex`（按 userId 串行 create/destroy）；可参考 admin-api 同名实现，避免新增依赖 |
+| `servers/agent-api/src/services/controller-key.ts` | 修改 | 新增 `createForCloudHost(userId, controllerId, name)`：**不删除**未绑定 Key；写入 `boundControllerId`；返回 `rawKey`；保留既有 `create/delete/regenerate` |
+| `servers/agent-api/src/services/controller.ts` | 修改 | 新增 `createCloudHostController`（`type=cloud/status=registering/hostname=name/version='0.0.0'`）、`findCloudHostsByUser`、`markCloudHostOffline`；保留 `unbind` 供本地主机使用 |
+| `servers/agent-api/src/services/controller-workspace.ts` | 修改 | 新增 `ensureCloudHostWorkspace(controllerId,userId,path)`：幂等 upsert（默认 `workspace`），不触发 10 个工作区上限 |
+| `servers/agent-api/src/services/billing-client.ts` | 修改 | 新增 `createContainerApiKey({accountId,ownerType,ownerId,name,containerId,expiresAt})`、`revokeApiKeyById(id)`；wire DTO 增 `scope/containerId/expiresAt` |
+| `servers/agent-api/src/graphql/schemas/cloud-host.ts` | 新增 | 严格对齐 `contracts/cloud-host.graphql`；注册 `cloudHostTypeDefs` |
+| `servers/agent-api/src/graphql/resolvers/cloud-host.ts` | 新增 | `Query.cloudHostCapabilities/myCloudHosts`、`Mutation.createCloudHost/destroyCloudHost`、`Controller.cloudHost` 子字段 |
+| `servers/agent-api/src/graphql/schemas/index.ts` / `resolvers/index.ts` | 修改 | 注册新 schema/resolver；`Controller` 合并 `cloudHost` |
+| `servers/agent-api/src/routes/internal-cloud-host.ts` | 新增 | `POST /internal/cloud-hosts/:controllerId/model-key/reissue`（Bearer `INTERNAL_API_TOKEN`）：按云主机取 billingAccountId/expiresAt，重新铸造模型 Key（同 containerId），返回 `{modelApiKey, expiresAt}`；非 harness/未知 host 404 |
+| `servers/agent-api/src/index.ts` | 修改 | 挂载 `/internal/cloud-hosts`（在 `express.json()` 之后即可，无二进制） |
+| `servers/agent-api/src/services/cloud-host-service.test.ts` | 新增 | 见测试矩阵 |
+| `servers/agent-api/src/services/cloud-controller-client.test.ts` | 新增 | 超时/非 2xx/错误映射/请求体 |
+| `servers/agent-api/src/graphql/resolvers/cloud-host.test.ts` | 新增 | resolver 鉴权/开关/映射 |
+| `servers/agent-api/src/routes/internal-cloud-host.test.ts` | 新增 | 鉴权/补发/撤销旧 Key/404 |
+| `servers/agent-api/src/services/controller-key.test.ts` | 修改 | `createForCloudHost` 不删除未绑定 Key、`boundControllerId` 正确 |
+| `servers/agent-api/src/services/billing-client.test.ts` | 修改 | 新方法 wire 字段/错误映射 |
 
-### harness 启动流程
+### 创建流程
 
 ```mermaid
 sequenceDiagram
-    participant W as admin-web
-    participant A as admin-api
-    participant ST as storage-service
-    participant K as api-key-service
+    participant AW as agent-web
+    participant AA as agent-api
+    participant AD as admin-api
     participant CC as cloud-controller
+    participant M as Mongo
 
-    W->>A: adminSupportedHarnesses
-    A-->>W: [{OPENCODE, available:true}]（HARNESS_ENABLED=false 时 []）
-    W->>A: adminStoredOpencodeSessions(owner=self)
-    A-->>W: 已存会话（kind=opencode_session）
-    W->>A: adminStartCloudContainer(HARNESS, harness{...}, workloads)
-    A->>A: 校验 purpose/harness/会话属主/storeSessions
-    A->>ST: 解析 restoreSessionIds → {id,key,sessionId,label}
-    A->>A: resolveWorkloadPlan(显式) + appendHarness(last, required=true)
-    A->>K: createContainerScopedKey(expiresAt)
-    A->>ST: createContainerToken(expiresAt)
-    A->>CC: POST /internal/containers {purpose,harness,owner,expiresAt,workloadPlan,secrets}
+    AW->>AA: createCloudHost{name, OPENCODE}
+    AA->>AA: HARNESS_ENABLED / name / harness / 并发校验
+    AA->>AA: 读 harness preset（cloudworkloads）
+    AA->>AD: getAccount(front_user, userId)
+    AA->>AA: createForCloudHost（ControllerKey type=cloud）
+    AA->>M: 预创建 Controller(type=cloud, registering, name)
+    AA->>M: ControllerWorkspace(workspace, /root/workspace)
+    AA->>AD: createContainerApiKey(scope=container, containerId=controllerId, expiresAt)
+    AA->>CC: POST /internal/containers {purpose:harness, controllerId, controllerKeyId, containerApiKeyId, hostName, harness, workloadPlan, billingAccountId, expiresAt, secrets, agentGearMinVersion:2.5.0}
     alt 失败
-        A->>K: revoke
-        A->>ST: revoke
-        A-->>W: GraphQLError
+        AA->>AD: revokeApiKeyById
+        AA->>M: 删除 workspace/Controller/ControllerKey + evict
+        AA-->>AW: GraphQLError（control plane unavailable 等）
     else 成功
-        A-->>W: CloudContainer(harness)
+        AA-->>AW: CloudHost(PROVISIONING)
     end
 ```
+
+- `containerApiKeyId`：模型 Key 铸造响应中的 `apiKey.id`（非 secret，cloud-controller 落库用于补发/撤销）。
+- `secrets`：`controllerEndpoint`（`CONTROLLER_API_PUBLIC_WS_ENDPOINT`）、`controllerKey`（raw `zag_k_1_...`）、`modelApiKey`（`zag_sk_...`）、`modelBaseUrl`（`CLOUD_HOST_MODEL_BASE_URL`）、`modelIds`（JSON 数组）；仅随创建请求存在。
+- `workloadPlan`：`[{workloadId: preset.id, params: {}, implicit: false, required: true}]`。
+- 失败回滚使用 `Promise.allSettled` 逐项 best-effort，但原始错误优先；回滚失败记日志（由过期/人工兜底）。
 
 ### 测试用例（增量）
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-HS1 | `adminSupportedHarnesses`（开关开） | 返回 OPENCODE/available=true；预制缺失时 available=false |
-| T-HS2 | `adminSupportedHarnesses`（开关关） | 返回 `[]` |
-| T-HS3 | HARNESS 缺 harness | `harness selection is required for HARNESS purpose` |
-| T-HS4 | IDLE 传 harness | `harness selection is only allowed for HARNESS purpose` |
-| T-HS5 | 不支持的 harnessType | `unsupported harness type` |
-| T-HS6 | 存储未启用 | `storage is not enabled`，且不铸造 Key/令牌 |
-| T-HS7 | 会话不存在/他人会话 | `stored session not found: <id>` |
-| T-HS8 | 会话去重 >20 | `too many restore sessions` |
-| T-HS9 | 显式选 harness 预设 | `duplicate workload selection` |
-| T-HS10 | 显式工作负载依赖 harness | `harness workload cannot be a dependency of other workloads` |
-| T-HS11 | 计划追加 | harness 项在末位、`required=true`、参数 `store_sessions/restore_session_ids` 正确 |
-| T-HS12 | 展开 >10 | `expanded workloads exceed 10` |
-| T-HS13 | Key/令牌铸造失败 | 不调用 cloud-controller；已铸造项回滚撤销 |
-| T-HS14 | cloud-controller 失败 | 撤销 Key/令牌，GraphQL 返回控制面错误 |
-| T-HS15 | `workloadIds` 路径 + HARNESS | 转为默认参数后追加 harness；与 `workloads` 二选一错误不变 |
-| T-HS16 | `optionsSource` 保存 | MULTI_SELECT + 空 options + 空默认值可保存；静态类型缺 options 仍拒绝 |
-| T-HS17 | `optionsSource` 参数归一 | 字符串数组去重、≤20；不做静态 options 子集校验 |
-| T-HS18 | 非 harness 工作负载设 optionsSource | 拒绝（`optionsSource is only allowed for harness workloads`） |
-| T-HS19 | `POST /internal/containers/:id/secrets/reissue` | 内部 token 校验；返回新 Key/令牌明文一次；旧 id 撤销；非 harness/未知容器 404；重复补发幂等 |
-| T-MIG5-1 | 005 首次执行 | 写入 5 个预制项之一；字段/脚本正确；`bash -n` 通过 |
-| T-MIG5-2 | 005 二次执行 | 跳过，不覆盖管理员修改 |
-| T-MIG5-3 | presetKey 存在但 name 不同 | 保留现有，打 warning |
-| T-MIG5-4 | 005 单项失败 | 记录错误不阻断启动 |
+| T-CH1 | `cloudHostCapabilities` 开关开+preset 存在 | `{enabled:true,supportedHarnesses:[OPENCODE]}` |
+| T-CH2 | 开关关 | `{enabled:false,supportedHarnesses:[]}`；create 抛 `harness feature is disabled` |
+| T-CH3 | 名称为空/空白/超长 | `name is required` / `name is too long`，不写任何记录 |
+| T-CH4 | 不支持的 harness | `unsupported harness type` |
+| T-CH5 | 并发超限 | 已有 3 个非终态 harness 容器 → `too many cloud hosts` |
+| T-CH6 | 创建成功 | Controller `type=cloud/status=registering/name=用户命名`；ControllerKey `type=cloud/boundControllerId=controllerId`；默认工作区路径正确；cloud-controller 请求体 `purpose=harness`、plan 末位/唯一项 `required=true`、`agentGearMinVersion=2.5.0`、secrets 齐全 |
+| T-CH7 | 模型 Key 铸造失败 | 不调用 cloud-controller；不留下 Controller/Key/工作区 |
+| T-CH8 | cloud-controller 失败 | 撤销模型 Key；删除 Controller/Key/工作区并 evict；GraphQL 报错 |
+| T-CH9 | `myCloudHosts` 映射 | PROVISIONING/ONLINE/OFFLINE/EXITED/FAILED 与裁决 B4 一致；`readyAt/exitedAt/failureReason` 正确 |
+| T-CH10 | 属主隔离 | 用户 B 的 `myCloudHosts` 不含用户 A；B 销毁 A → `Cloud host not found` |
+| T-CH11 | 销毁成功 | 调用 cloud-controller DELETE；撤销模型 Key；删除 ControllerKey+evict；Controller 置 offline 且保留；工作区/会话保留 |
+| T-CH12 | 销毁幂等 | Controller 已 offline/container 已终态 → 再次调用返回 true；不重复报错 |
+| T-CH13 | 销毁控制面不可达 | 抛 `control plane unavailable`；不提前删 Controller/Key |
+| T-CH14 | 列表降级 | 控制面不可达时 `myCloudHosts` 用只读 `cloudcontainers` 落库状态返回，不整单失败 |
+| T-CH15 | `Controller.cloudHost` | local 主机返回 null；cloud 主机返回最新容器映射；无容器时按 Controller 状态降级 |
+| T-CH16 | 内部补发 | 鉴权正确；新建 Key 同 containerId/expiresAt；旧 active Key 被撤销；未知/非 harness 404 |
+| T-CH17 | 不删除未绑定 Key | 用户已有未绑定 local Key，创建云主机后该 Key 仍存在 |
+| T-CH18 | 配置缺失 | 缺 `CONTROLLER_API_PUBLIC_WS_ENDPOINT`/`CLOUD_HOST_MODEL_BASE_URL` → `cloud host is not configured`，不写记录 |
+| T-CH19 | GraphQL 鉴权 | 未登录全部入口报 `Not authenticated` |
 
 ### 验收 checklist
 
-- [ ] `purpose=HARNESS` 全链路可用，`IDLE` 行为不变
-- [ ] harness 预制项幂等、脚本可执行、参数 `optionsSource` 正确
-- [ ] 恢复会话只允许属主对象，ID 解析为完整 key
-- [ ] 计划末位追加、`required=true`、上限/重复/依赖错误齐全
-- [ ] Key/令牌铸造失败或控制面失败时可回滚
+- [ ] 前台可命名创建云主机；名称/harness/开关/并发/配置错误文案齐全
+- [ ] Controller 预创建、用户命名不被 register 覆盖、Key 不出现在未绑定 Key 列表
+- [ ] 默认工作区随创建预置，路径与 worker `ZAG_DEFAULT_WORKSPACE` 一致
+- [ ] 创建失败全量回滚；销毁幂等且保留历史
+- [ ] `Controller.cloudHost` 与 `myCloudHosts` 状态一致
+- [ ] 新增模块单测覆盖率 ≥80%
 
 ---
 
-## Phase 5: cloud-controller（生命周期 / secrets / env / 撤销 / 门禁）
+## Phase 5: cloud-controller（purpose=harness / secrets / env / 门禁）
 
-开发分支：`servers/harness-support`。TDD 先写 `internal-api.test.ts`、`container-service.test.ts`、`workload-dispatcher.test.ts`、`worker-version.test.ts`、`socketio-gateway.test.ts`（RED）。
+开发分支：`servers/harness-support`。TDD 先写/扩展 `internal-api.test.ts`、`container-service.test.ts`、`workload-dispatcher.test.ts`、`worker-version.test.ts`、`socketio-gateway.test.ts`、`k8s-job-manager.test.ts`、`secret-store.test.ts`、`agent-api-client.test.ts` → RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/cloud-controller/src/models/cloud-container.ts` | 修改 | `CONTAINER_PURPOSES` 增 `harness`；主 schema 增 `harnessType`、`harnessOptions`、`ownerType`、`ownerId`、`expiresAt`、`containerApiKeyId`、`storageTokenId` |
-| `servers/cloud-controller/src/repositories/container-repository.ts` | 修改 | `CloudContainerEntity`/`CreateContainerInput`/`UpdateContainerInput`/`create()` 同步新字段 |
-| `servers/cloud-controller/src/config/index.ts` | 修改 | `ADMIN_API_URL`、`MIN_HARNESS_WORKER_VERSION`（默认 `2.5.0`）、`HARNESS_POST_BUDGET_MS`（默认 120000）、`ADMIN_API_TIMEOUT_MS` |
-| `servers/cloud-controller/src/routes/internal-api.ts` | 修改 | `purpose` 允许 `idle|harness`；解析/校验 `harness/ownerType/ownerId/expiresAt/secrets`；**把 `purpose` 变量传给 `containerService.start`（移除 `'idle'` 字面量）**；响应允许列表增 harness/expiresAt/key ids（补发由 `adminApiClient` 直接调用 admin-api，不在本路由暴露） |
-| `servers/cloud-controller/src/services/container-service.ts` | 修改 | `start` 接收 purpose/harness/owner/secrets；落库；`expiresAt` 传给 job manager；内存 secret store；终态撤销；`purpose` 类型放开 |
-| `servers/cloud-controller/src/services/secret-store.ts` | 新增 | `Map<containerId, ContainerSecrets>`；`put/get/delete`；测试可注入 |
-| `servers/cloud-controller/src/services/admin-api-client.ts` | 新增 | 内部 Bearer 调用：`revokeApiKey`、`revokeStorageToken`、`reissueSecrets`；超时/幂等/日志脱敏 |
-| `servers/cloud-controller/src/services/workload-dispatcher.ts` | 修改 | `workload:run` payload 增 `env`；`buildHarnessEnv(container, secrets)`；`purpose=harness` 用 `HARNESS_POST_BUDGET_MS`；secret 缺失时先 reissue；日志不打印 env 值 |
+| `servers/cloud-controller/src/models/cloud-container.ts` | 修改 | `CONTAINER_PURPOSES` 增 `harness`；schema 增 `controllerId/controllerKeyId/containerApiKeyId/hostName/harnessType/expiresAt` |
+| `servers/cloud-controller/src/repositories/container-repository.ts` | 修改 | `CloudContainerEntity`/`CreateContainerInput`/`UpdateContainerInput` 同步新字段；Mongo 映射 |
+| `servers/cloud-controller/src/config/index.ts` | 修改 | `MIN_HARNESS_WORKER_VERSION='2.5.0'`（代码常量）、`AGENT_API_URL`（补发用，可空）、`AGENT_API_TIMEOUT_MS` |
+| `servers/cloud-controller/src/routes/internal-api.ts` | 修改 | `purpose` 白名单 `idle\|harness`；harness 校验 `controllerId/controllerKeyId/containerApiKeyId/hostName/harness/expiresAt/agentGearMinVersion/secrets`；**把 `purpose` 变量传给 `containerService.start`（移除硬编码 `'idle'`）**；`GET /containers?userId=` 过滤；响应增新字段（不含 secrets） |
+| `servers/cloud-controller/src/services/container-service.ts` | 修改 | `start` 接收 `StartHarnessOptions`（controllerId/controllerKeyId/containerApiKeyId/hostName/harnessType/expiresAt/secrets）；落库；`expiresAt` 传给 job manager；secretStore 写入；终态删除 secret；`purpose` 类型放开 |
+| `servers/cloud-controller/src/services/secret-store.ts` | 新增 | `Map<containerId, HarnessSecrets>`：`put/get/delete`；测试可注入；不落库/不打日志 |
+| `servers/cloud-controller/src/services/agent-api-client.ts` | 新增 | `POST /internal/cloud-hosts/:controllerId/model-key/reissue`（Bearer `INTERNAL_API_TOKEN`）；超时/错误映射；日志不打印返回 secret |
+| `servers/cloud-controller/src/services/workload-dispatcher.ts` | 修改 | `workload:run` payload 增 `env`；`buildHarnessEnv(container)`（缺失时补发）→ 仅 harness 下发；日志不打印 env 值；idle 不携带 `env` |
+| `servers/cloud-controller/src/services/socketio-gateway.ts` | 修改 | `register` 读取容器 `purpose`，按 purpose 选择版本门禁；`registered` 增 `initializing`（`hasInitScripts` 结果）；拒绝路径先于全部副作用 |
 | `servers/cloud-controller/src/services/worker-version.ts` | 修改 | 保留 `MIN_WORKER_VERSION='2.2.0'`；新增 `MIN_HARNESS_WORKER_VERSION='2.5.0'`、`isSupportedHarnessWorkerVersion` |
-| `servers/cloud-controller/src/services/socketio-gateway.ts` | 修改 | `register` 时读取容器 purpose，按 purpose 选择门禁；低版本 harness worker 返回 `VERSION_MISMATCH` 并断开；成功日志用 `sanitizeVersionForLog` |
-| `servers/cloud-controller/src/services/k8s-job-manager.ts` | 修改 | `CreateJobInput` 增 `activeDeadlineSeconds?`；manifest 使用传入值（默认 86400） |
-| `servers/cloud-controller/src/index.ts` | 修改 | 注入 `adminApiClient`、`secretStore`、`MIN_HARNESS_WORKER_VERSION`；事件 payload 增 key ids；启动时读取 `ADMIN_API_URL` |
-| `servers/cloud-controller/AGENTS.md` | 修改 | 更新 purpose、env、版本门禁、secret、post 预算口径 |
+| `servers/cloud-controller/src/services/k8s-job-manager.ts` | 修改 | `CreateJobInput` 增 `activeDeadlineSeconds?`、`env?: Record<string,string>`、`workerTokenEnvName?`；harness 用 `ZAG_WORKER_TOKEN`，idle 保持 `ZAG_CONTROLLER_KEY=token`；manifest 合并额外 env |
+| `servers/cloud-controller/src/index.ts` | 修改 | 注入 `secretStore`/`agentApiClient`；dispatcher 注入 secret 读取；启动时读取 `AGENT_API_URL` |
+| `servers/cloud-controller/AGENTS.md` | 修改 | 更新 purpose、env、版本门禁、secret、初始化就绪口径 |
+| 对应 `*.test.ts` | 修改/新增 | 见测试矩阵 |
 
-### `workload:run` env 清单
+### `workload:run` env 清单（仅 harness）
 
 ```jsonc
 {
@@ -505,236 +496,245 @@ sequenceDiagram
   "env": {
     "ZAG_HARNESS_TYPE": "opencode",
     "ZAG_CONTAINER_ID": "…",
-    "ZAG_USER_TYPE": "admin_user",
-    "ZAG_USER_ID": "…",
-    "ZAG_USER_PATH": "/admin_user/66f…/",
-    "ZAG_STORE_SESSIONS": "true",
-    "ZAG_RESTORE_SESSIONS": "[{\"id\":\"…\",\"key\":\"/admin_user/…/opencode/…json\",\"sessionId\":\"ses_…\",\"label\":\"…\"}]",
+    "ZAG_HOST_NAME": "<用户命名>",
+    "ZAG_USER_ID": "<前台用户 ID>",
+    "ZAG_DEFAULT_WORKSPACE": "/root/workspace",
     "ZAG_MODEL_API_KEY": "zag_sk_…",
     "ZAG_MODEL_BASE_URL": "http://admin-api:8002/v1",
-    "ZAG_STORAGE_BASE_URL": "http://admin-api:8002/storage/v1",
-    "ZAG_STORAGE_TOKEN": "stg_…",
-    "ZAG_CONTAINER_STARTED_AT": "2026-10-20T…Z"
+    "ZAG_MODEL_IDS": "[\"model-a\",\"model-b\"]"
   },
-  "items": [/* 既有结构 */]
+  "items": [/* 既有结构；本期 harness preset 仅 1 条 */]
 }
 ```
 
-- env 仅随下发报文存在；worker 内存持有；`ZAG_MODEL_API_KEY`/`ZAG_STORAGE_TOKEN` 在 worker 日志与错误消息中脱敏为 `***`。
-- 普通容器不下发 `env`（字段缺省），行为不变。
+- env 仅随下发报文存在；worker 内存持有；`ZAG_MODEL_API_KEY`/`ZAG_CONTROLLER_KEY`/`ZAG_WORKER_TOKEN` 在 worker 日志与错误消息中脱敏为 `***`。
+- 普通容器 `env` 字段缺省，行为不变。
+
+### Job env（harness）
+
+```jsonc
+{
+  "ZAG_SERVER_ENDPOINT": "wss://<cloud-controller>/worker",
+  "ZAG_WORKER_TOKEN": "<一次性容器 token>",
+  "ZAG_CONTROLLER_ENDPOINT": "wss://<controller-api>",
+  "ZAG_CONTROLLER_KEY": "zag_k_1_…",
+  "ZAG_HOST_NAME": "<用户命名>",
+  "ZAG_HARNESS_TYPE": "opencode",
+  "ZAG_DEFAULT_WORKSPACE": "/root/workspace"
+}
+```
+
+> idle 保持 `{ZAG_SERVER_ENDPOINT, ZAG_CONTROLLER_KEY=<token>}` 不变。
 
 ### 测试用例（增量）
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-CC1 | `purpose=idle` 回归 | 行为不变；响应字段兼容 |
-| T-CC2 | `purpose=harness` 创建 | 落库 harness/owner/expiresAt；Job `activeDeadlineSeconds` 来自 `expiresAt` |
-| T-CC3 | `purpose` 字面量修复 | `start` 收到 `harness` 而非 `idle`（spy 断言） |
-| T-CC4 | 未开放 purpose | `workflow/session/admin-task` 仍 400 `UNSUPPORTED_PURPOSE` |
-| T-CC5 | harness 缺 secrets | 400 `INVALID_HARNESS` |
-| T-CC6 | secrets 不落库/不返回 | Mongo 文档无明文；响应无 secret 字段 |
-| T-CC7 | env 注入 | 初始化批次 `env` 含全部 `ZAG_*`；普通容器无 `env` |
-| T-CC8 | secret 缺失触发 reissue | dispatcher 调 `adminApiClient.reissueSecrets` 并更新内存 |
-| T-CC9 | 版本门禁 purpose 分流 | idle + 2.2.0 通过；harness + 2.4.0 拒绝 `VERSION_MISMATCH`；harness + 2.5.0 通过 |
-| T-CC10 | 门禁先于副作用 | 拒绝时未写 connectedAt/未启动 init |
-| T-CC11 | `markExited` 撤销 | CAS 成功后调用 revoke（Key + 令牌）；重复调用幂等 |
-| T-CC12 | `markFailed` 撤销 | 同上 |
-| T-CC13 | `destroy` 撤销 | 销毁完成后调用；Job 删除失败仍尝试撤销 |
-| T-CC14 | revoke 失败 | 记录日志、不改变容器终态；对账兜底 |
-| T-CC15 | `container.destroyed` payload | 含 `containerApiKeyId/storageTokenId` |
-| T-CC16 | post 预算 | harness 用 120s；普通用 90s |
-| T-CC17 | 响应映射 | `purpose=harness` 不再回落 `IDLE` |
-| T-CC18 | 历史容器兼容 | 无新字段的旧记录读取/销毁正常 |
+| T-CC1 | `purpose=idle` 回归 | 行为/响应字段兼容；Job env 仍为旧两项 |
+| T-CC2 | `purpose=harness` 创建 | 落库 `controllerId/controllerKeyId/containerApiKeyId/hostName/harnessType/expiresAt`；Job `activeDeadlineSeconds` 由 `expiresAt` 计算 |
+| T-CC3 | purpose 字面量修复 | `containerService.start` 收到 `harness` 而非 `idle`（spy 断言） |
+| T-CC4 | 未开放 purpose | `admin-task/workflow/session` 仍 400 `UNSUPPORTED_PURPOSE` |
+| T-CC5 | harness 缺字段/secrets | 400 `INVALID_HARNESS`；不创建 Job |
+| T-CC6 | secrets 不落库/不返回 | Mongo 文档/响应无明文；日志无明文 |
+| T-CC7 | harness Job env | 含 `ZAG_WORKER_TOKEN/ZAG_CONTROLLER_ENDPOINT/ZAG_CONTROLLER_KEY/ZAG_HOST_NAME/ZAG_HARNESS_TYPE/ZAG_DEFAULT_WORKSPACE`；不含模型 Key（模型 Key 走 workload env） |
+| T-CC8 | idle Job env | 仅 `ZAG_SERVER_ENDPOINT/ZAG_CONTROLLER_KEY`；无 `env` 扩展 |
+| T-CC9 | harness 版本门禁 | 2.4.0 拒绝 `VERSION_MISMATCH`；2.5.0/2.6.0 通过；idle 2.2.0 通过 |
+| T-CC10 | 门禁先于副作用 | 拒绝时未写 `registered/connectedAt`、未启动 init、未 markOnline |
+| T-CC11 | `registered.initializing` | 有 init → true；无 init → false/缺省 |
+| T-CC12 | workload env 注入 | init 批次 `env` 含全部 `ZAG_*`；普通容器无 `env` |
+| T-CC13 | secret 缺失补发 | dispatcher 调 `agentApiClient.reissueModelKey` 并更新内存；补发失败 → init 失败且不 online |
+| T-CC14 | 销毁 harness | 删除 Job、终态 exited、secretStore 清理；无 post 批次 |
+| T-CC15 | 列表按 userId | `GET /internal/containers?userId=` 只返回该用户；无参数保持全量（admin 兼容） |
+| T-CC16 | 响应字段 | 含 `controllerId/controllerKeyId/containerApiKeyId/hostName/harnessType/expiresAt`；不含 secret |
+| T-CC17 | 历史容器兼容 | 无新字段的旧记录读取/销毁正常；purpose 缺省按 idle |
+| T-CC18 | 普通容器门禁回归 | `MIN_WORKER_VERSION` 仍 2.2.0；2.2.0 worker 正常 |
 
 ### 验收 checklist
 
 - [ ] purpose=harness 全链路（创建 → 初始化 → 终态）单测覆盖
-- [ ] secrets 仅内存、不落库、不进日志；重启可 reissue
-- [ ] 版本门禁只影响 harness 容器，普通容器仍兼容 2.2.0+
-- [ ] 终态撤销 + 事件兜底 + 对账三线幂等
-- [ ] `workload:run` env 契约与 worker 实现一致
+- [ ] secrets 仅内存、不落库、不进日志；缺失可补发模型 Key
+- [ ] 版本门禁只影响 harness 容器；普通容器仍兼容 2.2.0+
+- [ ] Job env 与 contract/agent-gear 实现一致；idle 零变化
+- [ ] `registered.initializing` 使 agent-gear 可在 init 完成后再上线
+- [ ] 历史容器与 idle 回归全绿
 
 ---
 
-## Phase 6: agent-gear（harness prepare/persist + storage client）
+## Phase 6: agent-gear 2.5.0（云主机双连接 + harness prepare）
 
-开发分支：`packages/harness-support`。TDD 先写 `tests/commands/harness.test.ts`、`src/harness/*.test.ts`、`src/storage-client.test.ts`、扩展 `workload-executor.test.ts`（RED）。
+开发分支：`packages/harness-support`。TDD 先写 `cloud-host/supervisor.test.ts`、`harness/*.test.ts`、扩展 `socketio-client.test.ts`/`workload-executor.test.ts` → RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `packages/agent-controller/package.json` | 修改 | 版本 `2.5.0`；新增 `jsonc-parser` |
-| `packages/agent-controller/package-lock.json` / `pnpm-lock.yaml` | 修改 | 版本与依赖同步（以 `npm ci` 为准，修正 package-lock 根版本 2.3.0 漂移） |
-| `packages/agent-controller/src/index.ts` | 修改 | 注册 `harness` 命令组（`prepare`/`persist`）；改用 `program.parseAsync()` 并统一 catch → `process.exitCode=1` |
-| `packages/agent-controller/src/commands/harness.ts` | 新增 | 子命令参数解析、env 校验、错误输出（不含 secret） |
-| `packages/agent-controller/src/harness/types.ts` | 新增 | `HarnessEnv`、`RestoreSession`、`PersistSummary` |
-| `packages/agent-controller/src/harness/opencode-cli.ts` | 新增 | `opencode --version`、`session list --format json`、`session export <id>`、`session import <file> --directory <dir>`；cwd `homedir()`；超时/错误包装 |
-| `packages/agent-controller/src/harness/opencode-config.ts` | 新增 | 定位/合并 `opencode.jsonc`/`opencode.json`；写 `provider.zag`；`jsonc-parser` 保留注释；权限 0600 |
-| `packages/agent-controller/src/harness/prepare.ts` | 新增 | 取模型列表 → 写配置 → 逐会话 GET/导入 → 汇总；单会话失败跳过；配置失败非零 |
-| `packages/agent-controller/src/harness/persist.ts` | 新增 | `store_sessions` 短路 → list → 逐会话 export → PUT → 汇总；单会话失败不阻断 |
-| `packages/agent-controller/src/storage-client.ts` | 新增 | `getObject`、`putObject`、`listObjects`、`getUsage`；Bearer；超时；错误映射；二进制/流 |
-| `packages/agent-controller/src/workload-executor.ts` | 修改 | `WorkloadRunPayload` 增 `env`；`buildWorkloadEnv` 合并容器 env；`redactSecrets` 对 secret 值脱敏；测试覆盖 |
-| `packages/agent-controller/src/socketio-client.ts` | 修改 | `CONTROLLER_VERSION='2.5.0'`；`workload:run` 透传 `env`；注册版本与 package 一致 |
-| `packages/agent-controller/AGENTS.md` | 修改 | 版本 2.5.0、harness 命令、env 注入、脱敏、OpenCode 约定 |
+| `packages/agent-controller/package.json` / lock | 修改 | 版本 `2.5.0`；新增 `jsonc-parser` |
+| `packages/agent-controller/src/index.ts` | 修改 | 默认 action 检测云主机模式（`ZAG_CONTROLLER_ENDPOINT` + `ZAG_WORKER_TOKEN`）→ `startCloudHostSupervisor`；否则保持单连接旧路径；注册 `harness` 命令组 |
+| `packages/agent-controller/src/cloud-host/supervisor.ts` | 新增 | 双连接编排：先 `/worker`，`initializing=true` 时等待 init 批次完成再连 controller-api；`mkdir -p ZAG_DEFAULT_WORKSPACE`；任一端 `shutdown` 统一退出；**不发 `unregister`** |
+| `packages/agent-controller/src/socketio-client.ts` | 修改 | `CONTROLLER_VERSION='2.5.0'`；`connectToServer` 增 `options`：`handshakeToken?: string \| false`、`onRegistered?`、`onWorkloadBatchComplete?`、`skipLocalMcpStart?`；`workload:run` 完成后回调；日志脱敏 |
+| `packages/agent-controller/src/workload-executor.ts` | 修改 | `WorkloadRunPayload` 增 `env?: Record<string,string>`；`runBatch` 合并容器 env（item `WORKLOAD_PARAM_*` 优先）；`redactSecrets` 对 secret 值脱敏；批次完成回调 |
+| `packages/agent-controller/src/harness/env.ts` | 新增 | `readHarnessEnv()`：校验 `ZAG_MODEL_BASE_URL/ZAG_MODEL_API_KEY/ZAG_MODEL_IDS/ZAG_DEFAULT_WORKSPACE`；解析 JSON 数组；缺失项明确报错 |
+| `packages/agent-controller/src/harness/opencode-cli.ts` | 新增 | `opencode --version` 硬校验；`opencode -v` 兼容探测；错误包装 |
+| `packages/agent-controller/src/harness/opencode-config.ts` | 新增 | 定位/合并 `opencode.jsonc`（存在 `.json` 时合并 `.json`）；`jsonc-parser` 保留注释；写 `provider.zag`；权限 0600 |
+| `packages/agent-controller/src/harness/prepare.ts` | 新增 | 校验 env → `opencode --version` → 写配置 → 汇总；secret 不打印 |
+| `packages/agent-controller/src/commands/harness.ts` | 新增 | `agent-gear harness prepare` 子命令；错误非零退出；`--help` |
+| `packages/agent-controller/AGENTS.md` | 修改 | 版本 2.5.0、云主机模式、harness 命令、env 注入、脱敏、OpenCode 配置约定 |
+| 对应 `*.test.ts` | 新增/修改 | 见测试矩阵 |
 
-### prepare / persist 行为
+### 云主机模式状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> Worker连接: ① /worker（ZAG_WORKER_TOKEN）
+    Worker连接 --> 初始化: registered(initializing=true) → workload:run(init)
+    Worker连接 --> 标准连接: registered(initializing=false)
+    初始化 --> 标准连接: 批次完成（成功/失败）
+    初始化 --> 退出: shutdown（required 失败强制注销）
+    标准连接 --> 会话服务: register key=ZAG_CONTROLLER_KEY / heartbeat / acp:*
+    标准连接 --> 退出: shutdown / 进程信号
+    退出 --> [*]: 不发送 unregister
+```
+
+### prepare 行为
 
 ```mermaid
 flowchart TD
     A[agent-gear harness prepare] --> B{env 完整?}
     B -->|否| X[非零退出 + 明确缺失项]
     B -->|是| C[opencode --version 硬校验]
-    C --> D[GET /v1/models]
-    D --> E[写/合并 provider.zag]
-    E --> F{restore sessions?}
-    F -->|无| G[成功]
-    F -->|有| H[逐会话 GET → 临时文件 → session import]
-    H --> I[单会话失败记录并继续]
-    I --> G
-
-    J[agent-gear harness persist] --> K{store_sessions=true?}
-    K -->|否| L[短路成功]
-    K -->|是| M[session list --format json]
-    M --> N[逐会话 export → 临时文件 → PUT]
-    N --> O[单会话失败记录并继续]
-    O --> P[汇总输出；全部失败非零]
+    C --> D[解析 ZAG_MODEL_IDS JSON 数组]
+    D --> E[写/合并 opencode.jsonc 的 provider.zag]
+    E --> F[chmod 0600]
+    F --> G[输出汇总，不含 secret]
 ```
 
 ### 测试用例（增量）
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-AG1 | CLI 注册 | `agent-gear harness --help` 展示 prepare/persist；未知子命令非零 |
-| T-AG2 | env 缺失 | 明确缺失项，非零；不泄漏其它 env |
-| T-AG3 | `opencode --version` 失败 | 非零；错误含版本校验提示 |
-| T-AG4 | 配置新建 | 生成 `.jsonc`，`provider.zag` 含 baseURL/apiKey/models；权限 0600 |
-| T-AG5 | 配置合并 | 保留既有 provider/注释；只替换 `provider.zag` |
-| T-AG6 | 模型列表 | 用容器 Key 请求 `/v1/models`；空列表仍写 provider（models={}） |
-| T-AG7 | 恢复会话成功 | 逐个 GET + `session import --directory $HOME`；汇总成功数 |
-| T-AG8 | 恢复会话 404 | 跳过并记录 `stored session not found`；其余继续；退出 0 |
-| T-AG9 | 恢复会话导入失败 | 记录 stderr；其余继续；退出 0 |
-| T-AG10 | persist 关闭 | `ZAG_STORE_SESSIONS=false` 不调用 opencode/存储 |
-| T-AG11 | persist 正常 | list → export → PUT；key/headers/session 元数据正确 |
-| T-AG12 | persist 单会话超 32 MiB | 跳过并记录；其余继续 |
-| T-AG13 | persist 单会话 PUT 失败 | 记录；其余继续；汇总非零 |
-| T-AG14 | 会话 ID 路径安全 | 特殊字符被替换 + hash；元数据保留原始 sessionId |
-| T-AG15 | env 注入 | executor 合并 `ZAG_*`；参数 env 仍覆盖同名；普通容器行为不变 |
-| T-AG16 | secret 脱敏 | 脚本输出含 secret → 结果日志替换为 `***` |
-| T-AG17 | 版本注册 | `register.version='2.5.0'`；测试期望同步更新 |
+| T-AG1 | 版本注册 | `register.version='2.5.0'`；`package.json` 同步；既有版本断言更新 |
+| T-AG2 | 模式检测 | 同时有 `ZAG_CONTROLLER_ENDPOINT/ZAG_WORKER_TOKEN` → 云主机 supervisor；否则旧单连接 |
+| T-AG3 | 双连接启动顺序 | 先 worker；`initializing=false` 立即连 controller；`true` 等 init 批次 |
+| T-AG4 | init 等待 | 批次完成（成功/失败）后连接；等待超时仍连接并记录 |
+| T-AG5 | 不发 unregister | 进程退出/信号/`shutdown` 均不 emit `unregister` |
+| T-AG6 | 默认工作区 | 启动时创建 `ZAG_DEFAULT_WORKSPACE`；已存在幂等 |
+| T-AG7 | env 缺失 | 明确缺失项，非零；不泄漏其它 env |
+| T-AG8 | `opencode --version` 失败 | 非零；错误含版本校验提示 |
+| T-AG9 | 配置新建 | 生成 `.jsonc`，`provider.zag` 含 baseURL/apiKey/models；权限 0600 |
+| T-AG10 | 配置合并 | 保留既有 provider/注释；只替换 `provider.zag` |
+| T-AG11 | 模型列表 | JSON 数组去空/去重；空数组仍写 `models:{}` |
+| T-AG12 | 配置候选 | 仅有 `opencode.json` 时合并该文件而非另建 `.jsonc` |
+| T-AG13 | secret 脱敏 | 脚本输出/错误含 secret → 日志替换为 `***` |
+| T-AG14 | workload env 合并 | 容器 `ZAG_*` 注入所有 item；`WORKLOAD_PARAM_*` 同名优先；普通容器行为不变 |
+| T-AG15 | CLI 注册 | `agent-gear harness --help` 展示 prepare；未知子命令非零 |
+| T-AG16 | 标准连接握手 | controller-api 连接不把 Key 放进 URL/query；worker 连接使用 `auth.token=ZAG_WORKER_TOKEN` |
+| T-AG17 | 双端 shutdown | 任一 socket 收到 shutdown → 关闭两端并退出 0；post 批次等待逻辑保留 |
+| T-AG18 | 本地 MCP 单例 | 双连接只启动一个 local MCP server，不端口冲突 |
 
 ### 验收 checklist
 
-- [ ] `agent-gear@2.5.0` 构建通过；`harness prepare/persist` 在无 OpenCode 环境给出明确错误
-- [ ] 模型配置、会话导入/导出、存储 PUT 均有单测（mock 外部命令/HTTP）
-- [ ] 单会话失败不阻断其它会话；persist 失败不阻塞容器销毁
-- [ ] secret 不出现在日志/错误/测试快照中
+- [ ] `agent-gear@2.5.0` 构建通过；云主机模式与旧模式互不影响
+- [ ] 双连接/init 等待/不发 unregister 有单测
+- [ ] `harness prepare` 新建/合并不破坏用户配置，secret 不出现在日志/错误
+- [ ] 普通 agent-gear（本地控制器）回归全绿
 
 ---
 
-## Phase 7: worker 镜像与 Aspire 编排
+## Phase 7: worker 镜像与 Aspire/K8s 编排
 
-开发分支：`packages/harness-support`。TDD/自验：先改 `deploy/images/worker/BUILD.md` 的校验项，再改 Dockerfile，最后跑镜像自验。
+开发分支：`packages/harness-support`。先改 `BUILD.md` 校验项，再改 Dockerfile/编排，最后跑镜像自验。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `deploy/images/worker/Dockerfile` | 修改 | 新增 `ARG OPENCODE_CLI_VERSION=2.1.1`；全局安装 `agent-gear@2.5.x`、`@opencode/cli@${OPENCODE_CLI_VERSION}`；保留既有 ACP 包；注释修正「全量 7 包」 |
-| `deploy/images/worker/BUILD.md` | 修改 | 实际包清单；`opencode --version` 硬校验；新增 `agent-gear harness --help`、`opencode session --help` 自验；版本 ≥2.5.0 |
-| `deploy/images/worker/entrypoint.sh` | 检查/修改 | 运行时 `npm install -g agent-gear` 仍保留；启动日志打印版本；不打印 secret |
-| `aspire/AgentGear.AppHost/AppHost.cs` | 修改 | 新增 MinIO 容器（镜像参数化、数据卷、bucket 初始化）；admin-api 注入 `STORAGE_*`、`HARNESS_*`；cloud-controller 注入 `ADMIN_API_URL`、`HARNESS_POST_BUDGET_MS`、`MIN_HARNESS_WORKER_VERSION` |
-| `aspire/manifest/docker-compose.yaml` | 重新生成 | `aspire publish -o aspire/manifest`；追加 minio 服务与依赖；不手工编辑 |
-| `deploy/k8s/*` | 修改 | admin-api/cloud-controller env 示例（S3、ADMIN_API_URL、HARNESS_ENABLED）；worker 镜像 tag 说明 |
-| `aspire/AgentGear.AppHost/AGENTS.md` | 修改 | MinIO/存储 env 说明 |
+| `deploy/images/worker/Dockerfile` | 修改 | `agent-gear@2.5.x`（替代 2.4.x）；保留 ACP 两包；**不安装 `@opencode/cli`**；注释说明 OpenCode 由 harness 工作负载安装 |
+| `deploy/images/worker/BUILD.md` | 修改 | 删除「7 包」错误清单；实际包清单；`agent-gear --version >=2.5.0`、`agent-gear harness --help`；`opencode --version` 改为「harness 工作负载初始化后」自验；`OPENCODE_CLI_VERSION` 锁定说明 |
+| `deploy/images/worker/entrypoint.sh` | 修改（注释） | 说明 `ZAG_CONTROLLER_KEY` 在 idle 为一次性 token、在 harness 为 controller-api Key；harness 的 worker token 为 `ZAG_WORKER_TOKEN`；运行逻辑不变 |
+| `aspire/AgentGear.AppHost/AppHost.cs` | 修改 | agent-api 注入 `HARNESS_ENABLED`（dev true、publish 参数默认 false）、`CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`、`CLOUD_HOST_DEFAULT_WORKSPACE`；cloud-controller 注入 `AGENT_API_URL`、`AGENT_API_TIMEOUT_MS`；不新增容器资源 |
+| `aspire/manifest/docker-compose.yaml` | 重新生成 | `aspire publish -o aspire/manifest`；追加新 env；不手工编辑 |
+| `deploy/k8s/cloud-controller.yaml` | 修改 | 增 `AGENT_API_URL`（内部服务地址）、`AGENT_API_TIMEOUT_MS`；worker 镜像 tag 说明；不包含真实 secret |
+| `aspire/AgentGear.AppHost/AGENTS.md` | 修改 | 更新 env 清单 |
 
 ### 测试/自验
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-IMG1 | Dockerfile 静态检查 | 含 `@opencode/cli@2.1.1`、`agent-gear@2.5.x`；无硬编码公网 registry |
-| T-IMG2 | 镜像内 `opencode --version` | 成功且版本 = `OPENCODE_CLI_VERSION` |
-| T-IMG3 | 镜像内 `agent-gear --version` | ≥2.5.0 |
-| T-IMG4 | 镜像内 `agent-gear harness --help` | prepare/persist 可见 |
-| T-IMG5 | Aspire 本地 | MinIO healthy；admin-api `/health` 正常；bucket 存在 |
-| T-IMG6 | Compose 发布 | `docker compose config` 校验通过；minio 依赖顺序正确 |
+| T-IMG1 | Dockerfile 静态检查 | 含 `agent-gear@2.5.x`；不含 `@opencode/cli` 预装；无硬编码公网 registry |
+| T-IMG2 | 镜像内 `agent-gear --version` | ≥2.5.0 |
+| T-IMG3 | 镜像内 `agent-gear harness --help` | 可见 prepare |
+| T-IMG4 | 镜像自验 | `opencode --version` 在镜像内可失败（未安装）不阻断；BUILD.md 提供 harness 工作负载后的自验步骤 |
+| T-IMG5 | Aspire 本地 | agent-api `/health` 正常；cloud-controller 正常；无新增资源 |
+| T-IMG6 | Compose 发布 | `docker compose config` 通过；env 注入正确 |
+| T-IMG7 | K8s manifest | YAML 合法；`AGENT_API_URL` 指向可达内部服务 |
 
 ### 验收 checklist
 
-- [ ] worker 镜像可构建、OpenCode 可执行、agent-gear 版本满足 harness 门禁
-- [ ] BUILD.md 与实际 Dockerfile 一致，软校验改硬校验
-- [ ] Aspire/Compose 本地可启动 MinIO + admin-api + cloud-controller
-- [ ] 生产 K8s env 示例完整，不包含真实 secret
+- [ ] worker 镜像可构建、agent-gear 版本满足 harness 门禁
+- [ ] BUILD.md 与实际 Dockerfile 一致，软校验改硬校验（在 harness init 内）
+- [ ] Aspire/Compose 本地可启动；publish 默认关闭 harness
+- [ ] K8s env 示例完整，不含真实 secret
 
 ---
 
-## Phase 8: admin-web（harness 启动交互 / 容器摘要 / 存储页）
+## Phase 8: agent-web 云主机体验
 
-开发分支：`apps/harness-support`。TDD 先写/改 `StartContainerDialog.test.tsx`、`CloudContainersPage.test.tsx`、`StoragePage.test.tsx`（RED）。
+开发分支：`apps/harness-support`。TDD 先写/改 `Sidebar.test.tsx`、`ControllerConfigPage.test.tsx`、新增 `NewCloudHostDialog.test.tsx`、`DestroyCloudHostDialog.test.tsx` → RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `apps/admin-web/src/graphql/types.ts` | 修改 | `CloudContainerPurpose` 增 `HARNESS`；`CloudContainerData.harness`；`HarnessOptionData`、`HarnessSelectionData`；`CloudWorkloadParamFieldData.optionsSource`；`CloudWorkloadData.workloadKind/harnessType`；存储类型 |
-| `apps/admin-web/src/graphql/queries.ts` | 修改 | `ADMIN_CLOUD_CONTAINERS` 增 `harness { harnessType storeSessions restoreSessionIds }`；`ADMIN_CLOUD_WORKLOADS` 增 `optionsSource/workloadKind/harnessType`；新增 `ADMIN_SUPPORTED_HARNESSES`、`ADMIN_STORED_OPENCODE_SESSIONS`、`ADMIN_STORAGE_USAGES`、`ADMIN_STORAGE_OBJECTS`、`ADMIN_STORAGE_USAGE` |
-| `apps/admin-web/src/graphql/mutations.ts` | 修改 | `ADMIN_START_CLOUD_CONTAINER` 增 `$harness: HarnessSelectionInput`；新增 `ADMIN_SET_STORAGE_QUOTA`、`ADMIN_DELETE_STORAGE_OBJECT` |
-| `apps/admin-web/src/components/cloud-containers/labels.ts` | 修改 | `CONTAINER_PURPOSE_LABELS.HARNESS='Harness'`；harness 类型标签；存储用量格式化辅助 |
-| `apps/admin-web/src/components/cloud-containers/StartContainerDialog.tsx` | 修改 | `PURPOSE_OPTIONS` 动态：IDLE +（supported harnesses 非空时）HARNESS；harness 下拉；`storeSessions` Switch（默认 true）；`restoreSessionIds` 多选（数据源查询、空态/加载/失败/刷新、≤20）；过滤 harness 预制项；预览追加 harness 末位 + 必须标识；提交 `harness`（仅 HARNESS）；重置逻辑 |
-| `apps/admin-web/src/components/cloud-containers/WorkloadParamsForm.tsx` | 修改 | `optionsSource` 驱动：空 options 时不再过滤已选值；渲染动态选项/空态；多选上限 20（仅动态源） |
-| `apps/admin-web/src/lib/workload-params.ts` | 修改 | `validateParamSchema` 支持动态源（空 options 合法）；`validateParamValues` 动态源按「字符串数组、去重、≤20」，静态源仍按 options；`normalizeParamSchema` 保留 `optionsSource` |
-| `apps/admin-web/src/lib/workload-plan.ts` | 修改 | `previewWorkloadPlan` 支持末位追加 synthetic harness 项；计数/顺序/必须标识与服务端一致 |
-| `apps/admin-web/src/components/cloud-workloads/ParamSchemaEditor.tsx` | 修改 | 支持 `optionsSource` 选择/展示；动态源时隐藏静态 options 输入；默认值空数组 |
-| `apps/admin-web/src/components/cloud-workloads/WorkloadFormDialog.tsx` | 修改 | 保存时保留 `optionsSource`；harness 预设打开不报错 |
-| `apps/admin-web/src/pages/CloudContainersPage.tsx` | 修改 | 新增 Harness 摘要列（类型、存储会话、恢复数）；启动 mutation 传 harness；日志对话框传入 harness 元信息 |
-| `apps/admin-web/src/components/cloud-containers/WorkloadLogsDialog.tsx` | 修改 | 头部展示 harness 类型/参数摘要（无则隐藏） |
-| `apps/admin-web/src/pages/StoragePage.tsx` | 新增 | 用量列表、配额编辑、对象列表（prefix）、上传/下载/删除；REST 客户端 |
-| `apps/admin-web/src/lib/storage-client.ts` | 新增 | admin JWT + `/storage/v1` fetch；上传/下载/删除/列表；错误映射 |
-| `apps/admin-web/src/lib/format.ts` | 修改 | `formatBytes`（B/KiB/MiB/GiB） |
-| `apps/admin-web/src/App.tsx` | 修改 | 新增 `/storage` 受保护路由 |
-| `apps/admin-web/src/components/AdminLayout.tsx` | 修改 | 新增「存储」导航 |
-| `apps/admin-web/AGENTS.md` | 修改 | 更新路由、harness 交互、存储页、测试清单 |
+| `apps/agent-web/src/graphql/types.ts` | 修改 | `CloudHostHarnessType`、`CloudHostStatus`、`CloudHostData`、`CloudHostCapabilitiesData`、`CreateCloudHostMutation`、`DestroyCloudHostMutation`；`ControllerData` 增 `cloudHost?: CloudHostData \| null` |
+| `apps/agent-web/src/graphql/home.ts` | 修改 | `HOME_OVERVIEW.controllers` 增 `cloudHost { id status containerId failureReason }` |
+| `apps/agent-web/src/graphql/queries.ts` | 修改 | `GET_CONTROLLERS` 增 `type` 已有 + `cloudHost { ... }`；新增 `CLOUD_HOST_CAPABILITIES`、`MY_CLOUD_HOSTS` |
+| `apps/agent-web/src/graphql/mutations.ts` | 修改 | 新增 `CREATE_CLOUD_HOST`、`DESTROY_CLOUD_HOST` |
+| `apps/agent-web/src/components/Sidebar.tsx` | 修改 | 主机列表顶部新增「新建云主机」入口（capabilities.enabled 时显示）；`type==='cloud'` 渲染 `Cloud` 图标；`registering/cloudHost.status` 映射「启动中/在线/已结束/失败」；普通主机展示不变；新建成功后 `refetch` + 跳转 `/settings?controllerId=` |
+| `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx` | 新增 | 名称（必填，trim 1~64）、harness 下拉（一期仅 OpenCode）、提交/取消、错误映射；无参数区（无存储/会话） |
+| `apps/agent-web/src/components/cloud-host/DestroyCloudHostDialog.tsx` | 新增 | 二次确认「将结束该云主机」；确认调用 `destroyCloudHost(controllerId)`；错误提示 |
+| `apps/agent-web/src/pages/ControllerConfigPage.tsx` | 修改 | `type==='cloud'` 时展示云主机状态/失败原因/销毁按钮；工作区 + Harness 工具两栏与普通主机完全一致；普通主机不显示销毁 |
+| `apps/agent-web/src/components/__tests__/Sidebar.test.tsx` | 修改 | `makeController` 增 `cloudHost` 默认 null；新增云图标/新建入口/状态用例 |
+| `apps/agent-web/src/pages/__tests__/ControllerConfigPage.test.tsx` | 修改 | 云主机状态/销毁按钮；普通主机无销毁 |
+| `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx` | 新增 | 校验/提交变量/错误 |
+| `apps/agent-web/src/components/cloud-host/__tests__/DestroyCloudHostDialog.test.tsx` | 新增 | 确认/取消/错误 |
+| `apps/agent-web/AGENTS.md` | 修改 | 云主机入口、云图标、状态映射、测试清单 |
 
 ### 交互要点
 
-- 选择 `Harness` 后必须选 harness 类型；未选时「确认启动」禁用并提示。
-- `adminSupportedHarnesses` 为空时：不展示 Harness 选项（或展示但禁用 + 「联系管理员」），以 PRD 异常边界为准。
-- 「存储会话」默认开启；关闭后「恢复的会话」仍可选择（恢复不受存储开关影响）。
-- 「恢复的会话」选项展示 `label` + `sessionId` + `storedAt`；空态「暂无已存储会话，可正常启动」；加载失败「重试」。
-- 客户端校验：最多 20 个恢复会话；与 `storeSessions` 无关。
-- 预览：harness 项固定最后，带「必须」标识；用户选择的工作负载仍按依赖序；总数含 harness。
-- 容器列表：用途列 `Harness`；Harness 列显示 `OpenCode` + `存储: 开/关` + `恢复: N`；旧记录显示 `-`。
+- **入口**：Sidebar 主机列表标题行右侧 `Cloud +` 按钮，`aria-label="新建云主机"`；`cloudHostCapabilities.enabled=false` 时隐藏（回滚即关闭入口）。
+- **云图标**：`type==='cloud'` 时在主机名前渲染 `Cloud` 图标（`data-testid="cloud-host-icon"`）；普通主机保持现状。
+- **状态**：`controller.status==='registering'` →「启动中」；`cloudHost.status==='EXITED'` →「已结束」；`FAILED` →「失败」；`ONLINE` → 在线点；`OFFLINE` → 离线点。状态点颜色沿用 Sidebar 现有规则。
+- **主机界面**：点击齿轮进入 `/settings?controllerId=`，工作区/Harness 工具两栏与普通主机一致；云主机无额外差异（PRD「界面完全一致」）。
+- **销毁**：仅在云主机配置页显示；确认后调用 mutation，成功 `refetch` home + 返回设置页；失败保留对话框并显示错误。
+- **表单**：名称 trim 后 1~64；harness 未选/列表为空时禁用提交并提示；不含任何「存储会话/恢复的会话」控件（二期）。
+- **移动端**：新建按钮在 mobile Sidebar 同样可达；对话框不横向溢出（沿用现有 Dialog 宽度约束）。
 
 ### 测试用例（增量）
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-AW1 | 任务类型选项 | `adminSupportedHarnesses` 非空 → 出现 Harness；为空 → 不出现 |
-| T-AW2 | 未选 harness | 提交禁用 + 提示 |
-| T-AW3 | 选择 OpenCode | 展示「存储会话」「恢复的会话」 |
-| T-AW4 | 存储会话默认 | 默认 true；可切换 false |
-| T-AW5 | 会话选项 | 调用 `adminStoredOpencodeSessions`；展示 label/sessionId；空态提示 |
-| T-AW6 | 会话加载失败 | 错误 + 重试；不阻塞启动 |
-| T-AW7 | 多选/清空/上限 | 最多 20；清空后提交空数组 |
-| T-AW8 | 工作负载列表过滤 | harness 预制项不出现在启动选择列表 |
-| T-AW9 | 预览 | harness 项末位 + 必须；总数含 harness；>10 时前端拦截 |
-| T-AW10 | 提交 IDLE | mutation 变量不含 `harness`（兼容既有） |
-| T-AW11 | 提交 HARNESS | 变量含 `harness { harnessType, storeSessions, restoreSessionIds }` |
-| T-AW12 | 容器列表 | Harness 列/用途标签正确；旧记录 `-` |
-| T-AW13 | 日志对话框 | harness 元信息展示；普通容器隐藏 |
-| T-AW14 | 存储页用量 | 列表/字节格式化/配额状态正确 |
-| T-AW15 | 配额编辑 | 设置/取消（null）；刷新后生效 |
-| T-AW16 | 对象管理 | 列表/上传/下载/删除；错误提示 |
-| T-AW17 | 权限 | 未登录访问 `/storage` → `/login` |
-| T-AW18 | 动态参数编辑 | `optionsSource` 保存/回显；静态校验回归 |
+| T-AW1 | 云图标 | cloud 主机显示 `cloud-host-icon`；local 主机不显示 |
+| T-AW2 | 新建入口 | capabilities.enabled=true 显示；false 隐藏 |
+| T-AW3 | 对话框校验 | 名称为空/全空白禁用提交并提示；未选 harness 禁用 |
+| T-AW4 | 提交成功 | mutation 变量 `{name,harnessType:'OPENCODE'}`；关闭对话框；refetch + 跳转 |
+| T-AW5 | 提交失败 | 展示服务端文案（`name is too long`/`too many cloud hosts`/`harness feature is disabled`） |
+| T-AW6 | 启动中 | `registering` 主机显示「启动中」；不显示为离线 |
+| T-AW7 | 已结束/失败 | `cloudHost.status=EXITED/FAILED` 显示对应文案/失败原因 |
+| T-AW8 | 普通主机回归 | local 主机图标/分组/会话/工作区无变化 |
+| T-AW9 | 主机同构 | 云主机配置页显示「工作区」「可用 Harness 工具」两栏；切到 Harness 显示列表 |
+| T-AW10 | 销毁确认 | 取消不调用；确认调用 `destroyCloudHost(controllerId)`；成功后 refetch |
+| T-AW11 | 销毁失败 | 显示错误，主机仍在 |
+| T-AW12 | 无会话参数 | 对话框不出现「存储会话」「恢复的会话」 |
+| T-AW13 | 移动端 | 新建入口可见；对话框/配置页无横向溢出 |
+| T-AW14 | home 字段 | HOME_OVERVIEW 请求包含 `cloudHost`，轮询不卸载 Sidebar |
 
 ### 验收 checklist
 
-- [ ] 启动对话框 harness 全流程可用，空态/加载/失败/校验齐备
-- [ ] IDLE 提交变量与既有测试兼容（不传 harness）
-- [ ] 工作负载编辑器不会破坏 migration 写入的 `optionsSource`
-- [ ] 容器列表/日志对话框展示 harness 摘要
-- [ ] 存储页 CRUD + 用量 + 配额可用（后台 JWT）
+- [ ] 前台可命名新建云主机；名称/harness 必填校验、开关隐藏、错误文案齐全
+- [ ] 云主机在 Sidebar 使用云图标，状态与普通主机同口径
+- [ ] 云主机界面与普通主机一致（工作区 + Harness 工具列表）
+- [ ] 销毁二次确认、幂等、失败提示
+- [ ] 普通主机零视觉/行为变化；无存储/会话导入导出入口
 - [ ] `npm run build` / `npm run lint` / `npm test` 全绿
 
 ---
@@ -747,33 +747,38 @@ flowchart TD
 
 | 文件 | 操作 | 覆盖 |
 |------|------|------|
-| `tests/api/src/admin-api/cloud-container.test.ts` | 修改 | HARNESS 启动矩阵、错误文案、返回 harness、IDLE 回归、`workloadIds` 路径 |
-| `tests/api/src/admin-api/unified-storage.test.ts` | 新增 | admin JWT 的 PUT/GET/HEAD/DELETE/LIST/usage、跨用户 403、超限 403、会话查询 |
-| `tests/api/src/admin-api/cloud-workload.test.ts` | 修改 | 预制 5 项、`optionsSource` 回显、harness 预设字段 |
-| `tests/api/src/admin-api/billing-gateway.test.ts` | 修改 | 容器 Key 模型列表/过期 401/非计费模型 |
-| `tests/api/src/admin-api/billing.test.ts` | 修改 | 内部撤销、配额设置、用量查询 |
-| `tests/api/src/cloud-controller/internal-api.test.ts` | 修改 | purpose=harness 创建/响应/secret 不返回/未开放 purpose 回归 |
-| `tests/api/src/cloud-controller/worker-handshake.test.ts` | 修改 | 版本门禁 purpose 分流（如可构造） |
+| `tests/api/src/agent-api/cloud-host.test.ts` | 新增 | `cloudHostCapabilities` 开关；`createCloudHost` 名称/harness/并发/配置错误矩阵；创建成功（Controller type=cloud/registering、默认工作区、ControllerKey 不出现在 `controllerKeys`）；`myCloudHosts`；非属主销毁；销毁幂等；`Controller.cloudHost` local=null |
+| `tests/api/src/agent-api/billing.test.ts` | 修改 | 内部补发/撤销相关（如经 agent-api 入口） |
+| `tests/api/src/admin-api/billing-gateway.test.ts` | 修改 | 容器 Key 模型范围、过期/终态 401、自定义模型不记账、系统模型计费、`billable=false,cost=0` |
+| `tests/api/src/admin-api/billing.test.ts` | 修改 | 内部铸造容器 Key、撤销幂等、`expiresAt` 校验 |
+| `tests/api/src/admin-api/cloud-workload.test.ts` | 修改 | 预制 4→5（数量/名称）；`workloadKind=harness/harnessType=opencode/paramSchema=[]` 由 migration 单测或 `MONGODB_URI` 直读断言（admin GraphQL 本期不暴露新字段） |
+| `tests/api/src/cloud-controller/internal-api.test.ts` | 修改 | purpose=harness 创建/响应/secret 不回显/未开放 purpose 回归/`userId` 过滤 |
+| `tests/api/src/cloud-controller/worker-handshake.test.ts` | 修改 | 版本门禁 purpose 分流、`registered.initializing`（可构造） |
+| `tests/api/AGENTS.md` | 修改 | 新增 `HARNESS_ENABLED`/云主机套件说明 |
 
 ### tests/e2e
 
 | 文件 | 操作 | 覆盖 |
 |------|------|------|
-| `tests/e2e/src/admin-cloud-container.spec.ts` | 修改 | 移除「仅 idle」断言；新增 Harness 启动流程（supported harness、会话空态/选择、提交、列表摘要、销毁） |
-| `tests/e2e/src/admin-cloud-workload.spec.ts` | 修改 | 预制 4→5、名称含 `OpenCode（Harness）`；harness 预设不出现在启动选择列表 |
-| `tests/e2e/src/admin-storage.spec.ts` | 新增 | 存储页用量/配额/对象列表/上传下载删除（可用 API 造数） |
-| `tests/e2e/AGENTS.md` | 修改 | 更新「仅 idle」与测试清单 |
+| `tests/e2e/src/cloud-host.spec.ts` | 新增 | 新建云主机对话框（名称必填、harness 必选、无存储参数）→ 提交 → Sidebar 出现云图标 + 启动中 → 进入配置页（工作区/Harness 两栏）→ 销毁确认 → 主机已结束 |
+| `tests/e2e/src/admin-cloud-workload.spec.ts` | 修改 | 预制 4→5；预制徽章/名称集合加入 `OpenCode（Harness）`（admin-web 页面逻辑不变，仅断言随 migration 更新） |
+| `tests/e2e/src/settings-controller-config.spec.ts` | 修改 | 普通主机配置页不出现云主机销毁按钮；云主机配置页出现（如复用 helper） |
+| `tests/e2e/src/home.spec.ts` | 修改 | Sidebar 普通主机回归；如有云主机 fixture，断言云图标不影响普通主机 |
+| `tests/e2e/AGENTS.md` | 修改 | 新增云主机套件说明与「无真实 worker 时只覆盖到 PROVISIONING/销毁」边界 |
 
 ### 回归清单
 
 - [ ] `cd servers/admin-api && npm test` 全绿（含既有 billing 542+ 用例）
-- [ ] `cd servers/cloud-controller && npm test` 全绿
+- [ ] `cd servers/agent-api && npm test && npm run build` 全绿
+- [ ] `cd servers/cloud-controller && npm test && npm run build` 全绿
+- [ ] `cd servers/controller-api && npm test` 全绿
 - [ ] `cd packages/agent-controller && npm test && npm run build` 全绿
-- [ ] `cd apps/admin-web && npm test && npm run build && npm run lint` 全绿
+- [ ] `cd apps/agent-web && npm test && npm run build && npm run lint` 全绿
 - [ ] `cd tests/api && npm test` 全绿
 - [ ] `cd tests/e2e && npx playwright test` 全绿（串行）
-- [ ] `idle` 启动、工作负载参数/依赖/必须失败、计费全链路、既有容器展示回归通过
+- [ ] `idle` 启动、工作负载参数/依赖/必须失败、计费全链路、普通主机/标准会话回归通过
 - [ ] 历史容器（无 harness 字段）读取/展示/销毁不报错
+- [ ] 后台 admin-web/admin GraphQL 零改动（`adminStartCloudContainer` 仍仅 IDLE）
 - [ ] 新增模块覆盖率 ≥80%
 
 ---
@@ -784,43 +789,65 @@ flowchart TD
 
 | 文件 | 操作 |
 |------|------|
-| `docs/engineering/AGENTS.md` | 实现计划索引新增本文件 |
-| `docs/engineering/proposals/20261020-feat-container-harness-support.md` | 保持 v1.0；验收报告登记本计划 §计划期裁决 A 的修正项（不回改提案） |
+| `docs/engineering/AGENTS.md` | 实现计划索引更新为本计划 v2.0 简介 |
+| `docs/engineering/proposals/20261020-feat-container-harness-support.md` | 保持 v3.0；验收报告登记本计划 §3 的修正项（不回改提案） |
 | `docs/product/draft/20261020-container-harness-support.md` | 保持 draft，待验收后按 product 生命周期归档 |
-| `servers/cloud-controller/AGENTS.md` / `packages/agent-controller/AGENTS.md` / `apps/admin-web/AGENTS.md` / `tests/e2e/AGENTS.md` / `aspire/AgentGear.AppHost/AGENTS.md` | 更新本期能力与约束 |
+| `servers/agent-api/AGENTS.md` | 新增云主机域/只读模型/内部补发/开关说明 |
+| `servers/cloud-controller/AGENTS.md` | purpose/env/secret/门禁/初始化就绪说明 |
+| `servers/controller-api/AGENTS.md` | 增补云主机标准注册约定（无 `unregister`、用户命名保留） |
+| `packages/agent-controller/AGENTS.md` | 2.5.0 云主机模式/harness prepare/env 脱敏 |
+| `apps/agent-web/AGENTS.md` | 云主机入口/云图标/状态/测试清单 |
+| `tests/api/AGENTS.md` / `tests/e2e/AGENTS.md` | 新增套件/环境变量/边界 |
+| `aspire/AgentGear.AppHost/AGENTS.md` | 新增 env 清单 |
 | `deploy/images/worker/BUILD.md` | 版本/包清单/自验命令 |
-| `deploy/k8s/*` | S3/harness env 示例 |
-| `CHANGELOG.md`（agent-gear） | 2.5.0 条目（harness 命令、env 注入、脱敏） |
+| `deploy/k8s/cloud-controller.yaml` | `AGENT_API_URL` 等 env 示例 |
 
 ### 发布顺序
 
 ```mermaid
 flowchart LR
-    A[1 契约合入] --> B[2 admin-api<br/>存储 + Key + harness + migration 005]
-    B --> C[3 admin-web<br/>HARNESS_ENABLED=false 可先发布]
-    B --> D[4 cloud-controller<br/>purpose/secrets/env/撤销]
-    D --> E[5 agent-gear 2.5.0 发布]
-    E --> F[6 worker 镜像重建<br/>@opencode/cli + agent-gear 2.5]
-    F --> G[7 K8s/Aspire 配置<br/>S3 + ADMIN_API_URL + MinIO]
-    G --> H[8 打开 HARNESS_ENABLED<br/>灰度后台管理员]
-    H --> I[9 验收 + 归档]
+    A[1 契约合入] --> B[2 admin-api<br/>Key scope + 网关分流 + migration 005]
+    B --> C[3 cloud-controller<br/>purpose/secrets/env/门禁]
+    C --> D[4 agent-gear 2.5.0 发布]
+    D --> E[5 worker 镜像重建<br/>agent-gear 2.5.x]
+    E --> F[6 agent-api<br/>HARNESS_ENABLED=false 可先发布]
+    F --> G[7 agent-web<br/>入口由 capabilities 控制]
+    G --> H[8 K8s/Aspire 配置<br/>CONTROLLER_API_PUBLIC_WS_ENDPOINT / CLOUD_HOST_MODEL_BASE_URL / AGENT_API_URL]
+    H --> I[9 打开 HARNESS_ENABLED<br/>按用户灰度]
+    I --> J[10 验收 + 归档]
 ```
 
-- **回滚**：`HARNESS_ENABLED=false` 立即关闭新入口（后端拒绝 + UI 隐藏）；`STORAGE_ENABLED=false` 关闭存储（已有 harness 容器仍可走撤销/销毁，post 失败只记日志）；worker 镜像可回退到上一 tag（普通容器门禁仍 2.2.0）。
-- **配置清单**：`HARNESS_ENABLED`、`HARNESS_CONTAINER_TTL_SECONDS`、`HARNESS_KEY_EXPIRY_GRACE_SECONDS`、`HARNESS_POST_BUDGET_MS`、`STORAGE_ENABLED`、`STORAGE_S3_*`、`STORAGE_DEFAULT_QUOTA_BYTES`、`ADMIN_API_URL`（cloud-controller）、`MIN_HARNESS_WORKER_VERSION`、`CONTAINER_CREDENTIAL_RECONCILE_INTERVAL_MS`。
+- **回滚**：`HARNESS_ENABLED=false` 立即隐藏新建入口并拒绝 create；存量云主机仍可 `myCloudHosts`/`destroyCloudHost`；模型 Key 到期/容器终态自动失效；worker 镜像可回退（普通容器门禁仍 2.2.0）；migration 005 不删除（幂等、无破坏性）。
+- **配置清单**：`HARNESS_ENABLED`、`HARNESS_CONTAINER_TTL_SECONDS`、`CLOUD_HOST_MAX_PER_USER`、`CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`、`CLOUD_HOST_DEFAULT_WORKSPACE`、`AGENT_API_URL`/`AGENT_API_TIMEOUT_MS`（cloud-controller）、`MIN_HARNESS_WORKER_VERSION`（代码常量）、`OPENCODE_CLI_VERSION`（init 固定版本）。
+- **监控/排障**：云主机创建失败看 agent-api `cloud-host` 日志（回滚项）；worker 回连看 cloud-controller `/worker` 握手/`registered`；OpenCode 初始化看 `cloudworkloadlogs` 的 init 记录；Key 401 看 admin-api `billing-key-auth`（过期/容器终态）。
 
-### 最终验收 checklist
+### 最终验收 checklist（对应 PRD v3.0）
 
-- [ ] `purpose=HARNESS` 全链路可用，未开放类型文案不变
-- [ ] 受支持 harness 列表可查询；HARNESS_ENABLED=false 时入口关闭
-- [ ] OpenCode（Harness）预制工作负载幂等；参数（存储会话/恢复的会话）生效并留档
-- [ ] 恢复会话仅属主可见；导入成功/跳过/失败记录明确
-- [ ] 存储会话落 `{user-path}/opencode/<containerId>/<sessionId>.json`，下次可恢复
-- [ ] 容器作用域 Key：有效期=容器有效期、结束立即失效、明文不落库/不进日志
-- [ ] 系统模型计费、非计费/自定义模型不记账；账号 Key 行为不变
-- [ ] 统一存储 CRUD+list+usage 全通；跨用户 403、超限 403、覆盖/删除用量准确
-- [ ] 后台不限量；前台 quota=null（机制先行）；`adminSetStorageQuota` 可设置
-- [ ] admin-web harness 启动、列表摘要、存储页可用
-- [ ] 单测/API/E2E/回归全绿；覆盖率 ≥80%
-- [ ] 部署配置、worker 镜像自验、发布/回滚顺序文档完成
-- [ ] 验收报告登记 §计划期裁决 A 的 6 项事实修正与二期遗留（前台用户模型归属、预签名直传、存储对账自愈）
+- [ ] 前台「新建云主机」可用：名称必填、harness 必选（一期 OpenCode）、无存储/会话参数
+- [ ] 创建后左侧导航栏出现云主机（云图标、用户命名、启动中/在线/离线/已结束状态）
+- [ ] 云主机界面与普通主机一致：工作区 + 支持的 Harness 工具（ACP）列表（含 OpenCode）
+- [ ] 云主机上创建 OpenCode 会话即标准「会话」，对话/模式/模型/历史消息与普通主机一致，消息按 `acpmessages` 留档
+- [ ] OpenCode 环境开箱即用：固定版本安装 + `opencode --version` 硬校验 + `opencode.jsonc` 注入成功
+- [ ] 容器作用域 Key：有效期=容器 TTL、容器终态立即失效、销毁立即撤销、明文不落库/不进日志
+- [ ] 计费：系统模型计费入用户计费账户；自定义模型代转发不计费；可用模型=用户可见模型列表
+- [ ] 销毁：二次确认、幂等、销毁后主机不再在线、历史会话/容器记录可追溯、失败原因可见
+- [ ] 非属主无法查看/销毁；`HARNESS_ENABLED=false` 时入口关闭、create 拒绝、存量可清理
+- [ ] 后台零改动：admin-web 无新增入口，`adminStartCloudContainer` 仍仅 `IDLE`
+- [ ] 本期无任何统一存储/会话导入导出入口与依赖（无 S3/MinIO/存储契约）
+- [ ] 单元/API/E2E 全绿；既有 idle/工作负载/计费/普通主机/标准会话回归全绿
+- [ ] worker 镜像自验、发布顺序、灰度开关、回滚路径文档完成
+- [ ] 验收报告登记 §3 的 A4（模型归属二期）、A11（无真实 worker 的测试边界）、A16（两线失效）等裁决
+
+## 11. 相关文档
+
+- [[../../product/draft/20261020-container-harness-support.md]] — 本期 PRD（v3.0）
+- [[../proposals/20261020-feat-container-harness-support.md]] — 本期技术提案（v3.0）
+- [[20261017-feat-cloud-controller-workload.md]] — 云控制器工作负载功能
+- [[20261018-feat-workload-phase1.md]] — 工作负载一期（参数、依赖与预制工作负载）
+- [[20261018-feat-workload-phase3.md]] — 工作负载三期（必须工作负载硬失败）
+- [[20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）
+- [[20261014-feat-cloud-agent-phase2.md]] — 云Agent二期（K8s 云端工作容器）
+- [[20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
+- contracts/：`cloud-host.graphql`、`agent-controller.graphql`、`agent-controller-websocket.md`、`cloud-controller-websocket.md`、`admin-billing.graphql`、`billing-openai.openapi.yaml`
+- OpenCode custom provider：https://opencode.ai/v2/docs/providers/#custom
+- 开发规范：`docs/engineering/common-rules.md`、`docs/engineering/backend-rules.md`、`docs/engineering/frontend-rules.md`
