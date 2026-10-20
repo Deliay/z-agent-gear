@@ -11,7 +11,15 @@ import { accountService } from '../services/billing/account-service.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
 import { paymentService } from '../services/billing/payment.js';
 import { encrypt } from '../services/crypto.js';
-import { createBillingOpenAiRouter, resolveUsageFallback } from './billing-openai.js';
+import {
+  applyAnthropicUsage,
+  createBillingOpenAiRouter,
+  estimateCost,
+  estimatePromptTextTokens,
+  estimateRequestTokens,
+  resolveUsageFallback,
+} from './billing-openai.js';
+import { tokenCostCents } from '../services/billing/money.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
 
@@ -192,6 +200,22 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     });
   });
 
+  it('R10-14: stream 非布尔值 / 空 messages 直接 400，不打上游', async () => {
+    const badStream = await callGateway({
+      body: JSON.stringify({
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: 'true',
+      }),
+    });
+    expect(badStream.status).toBe(400);
+
+    const emptyMessages = await callGateway({
+      body: JSON.stringify({ model: 'test-model', messages: [] }),
+    });
+    expect(emptyMessages.status).toBe(400);
+  });
+
   it('R6：客户端中断 → 投递 model_call.aborted，调用记录 status=aborted', async () => {
     upstreamMode = 'hang';
     const controller = new AbortController();
@@ -244,5 +268,86 @@ describe('resolveUsageFallback（缺失用量兜底）', () => {
     const r = resolveUsageFallback({ inputTokens: 8, cachedInputTokens: 0, outputTokens: 5 }, 10, 100, 'abcdefgh', false);
     expect(r.estimated).toBe(false);
     expect(r.usage).toMatchObject({ inputTokens: 8, outputTokens: 5 });
+  });
+});
+
+/** R10-1：预检估算必须构成实际费用上界。 */
+describe('网关预检估算上界（R10-1）', () => {
+  const pricing = {
+    inputPerMillion: 100,
+    cachedInputPerMillion: 50,
+    outputPerMillion: 100,
+    isBillable: true,
+  };
+  const maxOutputTokens = 200;
+
+  function assertEstimateUpperBound(
+    messages: unknown[],
+    actualInputTokens: number,
+    actualOutputTokens: number,
+    actualCachedTokens = 0,
+    tools?: unknown,
+  ) {
+    const estimatedTokens = estimateRequestTokens(messages, tools);
+    expect(estimatedTokens).toBeGreaterThanOrEqual(actualInputTokens);
+    const estimated = estimateCost(pricing, estimatedTokens, maxOutputTokens);
+    const actual = tokenCostCents(
+      Math.max(0, actualInputTokens - actualCachedTokens),
+      pricing.inputPerMillion,
+    ) +
+      tokenCostCents(actualCachedTokens, pricing.cachedInputPerMillion) +
+      tokenCostCents(actualOutputTokens, pricing.outputPerMillion);
+    expect(estimated).toBeGreaterThanOrEqual(actual);
+  }
+
+  it('CJK 文本不再按 len/4 低估（默认 1 token/UTF-8 字节）', () => {
+    expect(estimatePromptTextTokens('中文')).toBe(6);
+    const messages = [{ role: 'user', content: '中'.repeat(2000) }];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(6000);
+    // 实际中文 usage 约 2000 input tokens，估算仍应 >= 实际。
+    assertEstimateUpperBound(messages, 2000, 100);
+  });
+
+  it('多模态（image/audio）非文本块估算不为 0，且 >= 实际用量', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '描述这张图' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+    ];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(4096);
+    assertEstimateUpperBound(messages, 1500, 200);
+  });
+
+  it('tool_calls 参数计入估算，且 >= 实际用量', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'lookup', arguments: JSON.stringify({ q: '中'.repeat(500) }) },
+          },
+        ],
+      },
+    ];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(1500);
+    assertEstimateUpperBound(messages, 1200, 50);
+  });
+
+  it('Anthropic usage 归一化：input 包含 cache read/creation，cached ⊆ input（R10-9）', () => {
+    const usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+    applyAnthropicUsage(usage, {
+      input_tokens: 200,
+      output_tokens: 30,
+      cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 50,
+    });
+    expect(usage).toEqual({ inputTokens: 1250, cachedInputTokens: 1000, outputTokens: 30 });
   });
 });

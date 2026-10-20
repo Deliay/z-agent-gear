@@ -343,21 +343,36 @@ export class ReconciliationService {
   }
 
   /**
-   * R2-4（A-4 子项三）：模型调用费用 ↔ 账单存在性对账线。
+   * R2-4（A-4 子项三）+ R10-3/R10-4：模型调用对账线。
    *
-   * `BillingApiCall.cost>0`（已完成/中断且已定价）但 `invoiceSeq=null` 说明扣费/开票链路中断
-   * （价源全 0 档、网关外事件、charge 失败等），是「静默免费」的残余发现机制。仅报告差异，
-   * 由运维经补价/重放事件收口。
+   * 1. **发现即补投**：`cost>0` 但 `invoiceSeq=null` 的 completed/aborted 调用，直接复用
+   *    `repairEvent` 补投 `model_call.*`（失败行复位、已发布未生效行走 `repairOf` 代偿护栏）；
+   * 2. **隔离复位**：`model_call.*` 的 `failed:true` outbox 行自动复位（此前只有容器事件有复位线，
+   *    模型调用隔离后无人补投）；
+   * 3. **孤儿发现**：`started/failed` 且超过阈值仍未收口的调用纳入报告（UI 不再显示为「完成」）。
    */
   private async reconcileApiCalls(): Promise<ReconciliationReport> {
     const since = new Date(this.now() - 24 * 60 * 60 * 1000);
+    const orphanBefore = new Date(this.now() - config.billingApiCallOrphanMs);
     const calls = await BillingApiCall.find({
       cost: { $gt: 0 },
       status: { $in: ['completed', 'aborted'] },
       invoiceSeq: null,
       finishedAt: { $gte: since },
     })
-      .select({ requestId: 1, accountId: 1, cost: 1, status: 1, modelId: 1 })
+      .select({
+        requestId: 1,
+        accountId: 1,
+        cost: 1,
+        status: 1,
+        modelId: 1,
+        inputTokens: 1,
+        cachedInputTokens: 1,
+        outputTokens: 1,
+        estimated: 1,
+        finishedAt: 1,
+        startedAt: 1,
+      })
       .lean<
         Array<{
           requestId: string;
@@ -365,17 +380,106 @@ export class ReconciliationService {
           cost: number;
           status: string;
           modelId: string;
+          inputTokens?: number;
+          cachedInputTokens?: number;
+          outputTokens?: number;
+          estimated?: boolean;
+          finishedAt?: Date | null;
+          startedAt?: Date | null;
         }>
       >();
-    const errors = calls.map((call) => ({
-      requestId: call.requestId,
-      accountId: String(call.accountId),
-      cost: call.cost,
-      status: call.status,
-      modelId: call.modelId,
-      reason: 'cost_without_invoice',
-    }));
-    return this.report('apiCalls', calls.length, errors);
+
+    const errors: Array<Record<string, unknown>> = [];
+    for (const call of calls) {
+      const eventType =
+        call.status === 'aborted' ? 'model_call.aborted' : 'model_call.completed';
+      const action = await this.repairEvent({
+        eventId: `${eventType}:${call.requestId}`,
+        eventType,
+        occurredAt: (call.finishedAt ?? call.startedAt ?? new Date(this.now())).toISOString(),
+        accountId: String(call.accountId),
+        resourceId: call.requestId,
+        payload: {
+          modelId: call.modelId,
+          inputTokens: call.inputTokens ?? 0,
+          cachedInputTokens: call.cachedInputTokens ?? 0,
+          outputTokens: call.outputTokens ?? 0,
+          estimated: call.estimated === true,
+          estimatedInputTokens: call.inputTokens ?? 0,
+          estimatedOutputTokens: call.outputTokens ?? 0,
+          ...(call.status === 'aborted' ? { reason: 'reconciled_aborted' } : {}),
+        },
+      });
+      errors.push({
+        requestId: call.requestId,
+        accountId: String(call.accountId),
+        cost: call.cost,
+        status: call.status,
+        modelId: call.modelId,
+        reason: 'cost_without_invoice',
+        repair: action,
+      });
+    }
+
+    // R10-3：模型调用 outbox 隔离行复位（与 events 线的容器事件复位同标准）。
+    const quarantined = await BillingOutbox.find({
+      producer: 'admin-api',
+      failed: true,
+      eventType: { $in: ['model_call.completed', 'model_call.aborted'] },
+    })
+      .select({ eventId: 1 })
+      .limit(200)
+      .lean<Array<{ eventId: string }>>();
+    for (const row of quarantined) {
+      await BillingOutbox.updateOne(
+        { eventId: row.eventId },
+        {
+          $set: {
+            failed: false,
+            published: false,
+            publishedAt: null,
+            claimedAt: null,
+            claimedBy: null,
+            lastError: null,
+            attempts: 0,
+          },
+        },
+      );
+      this.logger.warn?.(`[billing-recon] re-queued quarantined model call event ${row.eventId}`);
+      errors.push({ eventId: row.eventId, reason: 'quarantined_event_requeued' });
+    }
+
+    // R10-4：started/failed 孤儿调用（finish 前崩溃或落库失败）必须可发现。
+    const orphans = await BillingApiCall.find({
+      status: { $in: ['started', 'failed'] },
+      // 只看最近 24h 内、已超过孤儿阈值仍未收口的调用，避免历史失败记录每日重复报警。
+      startedAt: { $gte: since, $lte: orphanBefore },
+    })
+      .select({ requestId: 1, accountId: 1, status: 1, modelId: 1, startedAt: 1, finishedAt: 1 })
+      .limit(500)
+      .lean<
+        Array<{
+          requestId: string;
+          accountId: unknown;
+          status: string;
+          modelId: string;
+          startedAt?: Date | null;
+          finishedAt?: Date | null;
+        }>
+      >();
+    for (const call of orphans) {
+      errors.push({
+        requestId: call.requestId,
+        accountId: String(call.accountId),
+        modelId: call.modelId,
+        status: call.status,
+        startedAt: call.startedAt?.toISOString() ?? null,
+        finishedAt: call.finishedAt?.toISOString() ?? null,
+        reason: 'orphan_api_call',
+      });
+    }
+
+    return this.report('apiCalls', calls.length + quarantined.length + orphans.length, errors);
   }
 
   /**

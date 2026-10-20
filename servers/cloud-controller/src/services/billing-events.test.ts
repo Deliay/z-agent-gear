@@ -99,10 +99,35 @@ describe('cloud-controller 计费源头', () => {
     // 首条发布失败：本轮 0 条，且 destroyed **不得**先于 ready 发布。
     expect(await publisher.relayOnce()).toBe(0);
     expect(published).toEqual([]);
+    // R10-3：传输级失败不消耗 per-message attempts。
+    expect(repo.pending().find((row) => row.eventId === 'container.ready:ord')?.attempts).toBe(0);
 
     // 下一轮按 createdAt 顺序重试，先 ready 后 destroyed。
     expect(await publisher.relayOnce()).toBe(2);
     expect(published).toEqual(['container.ready:ord', 'container.destroyed:ord']);
+    await publisher.stop();
+  });
+
+  it('R10-3: 消息级被拒（AMQP replyCode）才消耗 attempts', async () => {
+    const repo = new InMemoryOutboxRepository('cloud-controller');
+    const transport: EventTransport = {
+      publish: async () => {
+        throw Object.assign(new Error('ACCESS_REFUSED'), { replyCode: 403 });
+      },
+      close: async () => {},
+    };
+    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    await publisher.enqueue({
+      eventId: 'container.ready:reject',
+      eventType: 'container.ready',
+      occurredAt: new Date().toISOString(),
+      accountId: 'acct-1',
+      resourceId: 'reject',
+      payload: {},
+    });
+    expect(await publisher.relayOnce()).toBe(0);
+    const row = repo.pending().find((item) => item.eventId === 'container.ready:reject');
+    expect(row?.attempts).toBe(1);
     await publisher.stop();
   });
 

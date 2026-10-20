@@ -21,7 +21,7 @@ export interface BillingOpenAiRouterDeps {
   logger?: { warn?: (...args: unknown[]) => void };
 }
 
-interface ModelPricingCents {
+export interface ModelPricingCents {
   inputPerMillion: number;
   cachedInputPerMillion: number;
   outputPerMillion: number;
@@ -72,9 +72,102 @@ function contentText(content: unknown): string {
   return '';
 }
 
+/** 缺失用量兜底用的文本估算（保持历史口径，仅用于 output 兜底）。 */
 function estimateTokens(text: string): number {
   if (!text) return 0;
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+/**
+ * R10-1：**预检**输入估算必须构成实际费用的上界。
+ *
+ * 采用 UTF-8 字节数 / 可配置倍率（默认 1 token/字节）：
+ * - 每个 token 至少消费 1 字节，因此字节数不会低于真实 token 数；
+ * - CJK 每字 3 字节，天然覆盖「1 字 ≈ 1 token」甚至更差的 tokenizer；
+ * - 倍率只允许调大（降低保守程度），默认不得低于 1。
+ */
+export function estimatePromptTextTokens(text: string): number {
+  if (!text) return 0;
+  const divisor = Math.max(1, config.modelTokenEstimateBytesPerToken);
+  return Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / divisor));
+}
+
+function conservativeJsonTokens(value: unknown, minimum = 0): number {
+  if (value === undefined || value === null) return minimum;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? '';
+  } catch {
+    serialized = String(value);
+  }
+  return Math.max(minimum, estimatePromptTextTokens(serialized));
+}
+
+/**
+ * 单条消息 content 的保守 token 上界。R10-1：
+ * - 文本按 UTF-8 字节估算；
+ * - image / audio / file 等非文本块按固定高估系数（≥ 数千 token）；
+ * - tool/function 参数与结果既计固定开销也计入序列化字节。
+ */
+export function estimateContentTokens(content: unknown): number {
+  if (typeof content === 'string') return estimatePromptTextTokens(content);
+  if (Array.isArray(content)) {
+    return content.reduce<number>((total, part) => total + estimateContentTokens(part), 0);
+  }
+  if (!content || typeof content !== 'object') return 0;
+
+  const record = content as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type === 'text' || typeof record.text === 'string') {
+    return estimatePromptTextTokens(String(record.text ?? ''));
+  }
+  if (type === 'image_url' || type === 'image') {
+    return config.modelEstimateImageTokens;
+  }
+  if (type === 'input_audio' || type === 'audio') {
+    return config.modelEstimateAudioTokens;
+  }
+  if (type === 'file' || type === 'document') {
+    return config.modelEstimateFileTokens;
+  }
+  if (type === 'tool_result' || type === 'tool_use' || type === 'function') {
+    return (
+      config.modelEstimateToolTokens +
+      estimateContentTokens(record.content) +
+      conservativeJsonTokens(record.input ?? record.arguments)
+    );
+  }
+  // 未知非文本块：按工具开销 + 序列化字节高估，绝不返回 0。
+  return Math.max(config.modelEstimateToolTokens, conservativeJsonTokens(record));
+}
+
+/**
+ * R10-1：整轮请求（messages + tools + tool_calls）的保守 token 上界。
+ * 作为 `creditCheck` 的同步预检额度，保证「估算 ≥ 实际」。
+ */
+export function estimateRequestTokens(
+  messages: unknown[],
+  tools?: unknown,
+): number {
+  let total = 0;
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue;
+    const record = message as Record<string, unknown>;
+    // role/分隔符等结构开销。
+    total += 4;
+    total += estimateContentTokens(record.content);
+    if (record.tool_calls !== undefined) {
+      total += conservativeJsonTokens(record.tool_calls, config.modelEstimateToolTokens);
+    }
+    if (record.function_call !== undefined) {
+      total += conservativeJsonTokens(record.function_call, config.modelEstimateToolTokens);
+    }
+    if (typeof record.name === 'string') total += estimatePromptTextTokens(record.name);
+  }
+  if (tools !== undefined) {
+    total += conservativeJsonTokens(tools, config.modelEstimateToolTokens);
+  }
+  return Math.max(1, total);
 }
 
 export interface UsageFallbackInput {
@@ -132,13 +225,18 @@ function isPricingComplete(pricing: ModelPricingCents): boolean {
   );
 }
 
-function estimateCost(
+/**
+ * R10-1：预检费用上界。输入按 `max(input, cachedInput)` 单价计算，避免缓存单价更高时低估；
+ * 输出受 `max_tokens` 硬上限约束，直接按上限计价。
+ */
+export function estimateCost(
   pricing: ModelPricingCents,
   promptTokens: number,
   maxOutputTokens: number,
 ): number {
+  const maxInputRate = Math.max(pricing.inputPerMillion, pricing.cachedInputPerMillion);
   return (
-    tokenCostCents(promptTokens, pricing.inputPerMillion) +
+    tokenCostCents(promptTokens, maxInputRate) +
     tokenCostCents(maxOutputTokens, pricing.outputPerMillion)
   );
 }
@@ -187,7 +285,19 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const body = (req.body ?? {}) as Record<string, unknown>;
     const modelName = typeof body.model === 'string' ? body.model : '';
     const messages = Array.isArray(body.messages) ? body.messages : null;
-    if (!modelName || !messages) {
+    // R10-14：严格校验请求体，避免 `stream:"true"` 字符串走非流分支、空 messages 打到上游。
+    if (body.stream !== undefined && typeof body.stream !== 'boolean') {
+      toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'stream 必须为布尔值');
+      return;
+    }
+    if (
+      body.max_tokens !== undefined &&
+      (!Number.isInteger(body.max_tokens) || Number(body.max_tokens) < 1)
+    ) {
+      toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'max_tokens 必须为正整数');
+      return;
+    }
+    if (!modelName || !messages || messages.length === 0) {
       toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'model 与 messages 为必填项');
       return;
     }
@@ -231,8 +341,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     }
 
     const requestId = crypto.randomUUID();
-    const promptText = messages.map((message) => contentText((message as { content?: unknown }).content)).join('\n');
-    const promptTokens = estimateTokens(promptText);
+    // R10-1：预检使用 messages/tools 全量保守估算（含多模态、CJK、工具参数），不再只取文本 len/4。
+    const promptTokens = estimateRequestTokens(messages, body.tools);
     const maxOutputTokens = Math.max(
       1,
       Number(body.max_tokens ?? config.modelDefaultMaxOutputTokens) ||
@@ -402,6 +512,9 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const basePayload = {
       ...body,
       model: model.name,
+      // R10-1：预检按 `maxOutputTokens` 计价，必须把它变成上游的硬上限；
+      // 缺省时注入默认值，避免上游按自身默认生成更长的输出击穿上界。
+      ...(body.max_tokens === undefined ? { max_tokens: maxOutputTokens } : {}),
       ...(stream ? { stream_options: { include_usage: true } } : {}),
     };
     delete (basePayload as Record<string, unknown>).stream_options;
@@ -423,7 +536,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
           },
         });
         if (!stream) {
-          res.json(result);
+          // R10-8：与 OpenAI 路径同标准，客户端中断后不得再写已销毁的响应。
+          if (!aborted && !res.writableEnded) res.json(result);
         }
         await finalize(aborted ? 'aborted' : 'completed');
         return;
@@ -449,7 +563,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         usage.cachedInputTokens = Number(completion.usage?.prompt_tokens_details?.cached_tokens ?? 0);
         usage.outputTokens = Number(completion.usage?.completion_tokens ?? 0);
         outputText = completion.choices?.[0]?.message?.content ?? '';
-        res.json(completion);
+        if (!aborted && !res.writableEnded) res.json(completion);
         await finalize(aborted ? 'aborted' : 'completed');
         return;
       }
@@ -515,6 +629,30 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   return router;
 }
 
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/**
+ * R10-9：Anthropic 的 `input_tokens` **不含**缓存 token，而本管线统一按 OpenAI 语义
+ * （`prompt_tokens` 包含 cached）处理。这里把缓存读写回加到 input，保证 `cached ⊆ input`，
+ * 避免未来支持 prompt caching 后系统性少计费。
+ */
+export function applyAnthropicUsage(target: Usage, usage?: AnthropicUsage): void {
+  if (!usage) return;
+  const cacheRead = Number(usage.cache_read_input_tokens ?? 0);
+  const cacheCreation = Number(usage.cache_creation_input_tokens ?? 0);
+  const uncachedInput = Number(usage.input_tokens ?? 0);
+  target.inputTokens = uncachedInput + cacheRead + cacheCreation;
+  target.cachedInputTokens = cacheRead;
+  if (usage.output_tokens !== undefined) {
+    target.outputTokens = Number(usage.output_tokens ?? 0);
+  }
+}
+
 /** Anthropic 形状转换：OpenAI messages → Anthropic messages，响应/流式 → OpenAI 形状。 */
 async function forwardAnthropic(input: {
   provider: { endpoint: string };
@@ -559,15 +697,13 @@ async function forwardAnthropic(input: {
     })) as unknown as {
       content?: Array<{ type: string; text?: string }>;
       stop_reason?: string;
-      usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+      usage?: AnthropicUsage;
     };
     const text = (response.content ?? [])
       .filter((part) => part.type === 'text')
       .map((part) => part.text ?? '')
       .join('');
-    input.usage.inputTokens = Number(response.usage?.input_tokens ?? 0);
-    input.usage.outputTokens = Number(response.usage?.output_tokens ?? 0);
-    input.usage.cachedInputTokens = Number(response.usage?.cache_read_input_tokens ?? 0);
+    applyAnthropicUsage(input.usage, response.usage);
     input.onText(text);
     return {
       id,
@@ -602,47 +738,47 @@ async function forwardAnthropic(input: {
   for await (const event of stream) {
     const type = event.type as string;
     if (type === 'message_start') {
-      const message = event.message as
-        | { usage?: { input_tokens?: number; cache_read_input_tokens?: number } }
-        | undefined;
-      input.usage.inputTokens = Number(message?.usage?.input_tokens ?? input.usage.inputTokens);
-      input.usage.cachedInputTokens = Number(
-        message?.usage?.cache_read_input_tokens ?? input.usage.cachedInputTokens,
-      );
+      const message = event.message as { usage?: AnthropicUsage } | undefined;
+      applyAnthropicUsage(input.usage, message?.usage);
     } else if (type === 'content_block_delta') {
       const delta = event.delta as { text?: string } | undefined;
       if (delta?.text) {
         input.onText(delta.text);
-        input.res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: 'chat.completion.chunk',
-            created,
-            model: input.modelName,
-            choices: [{ index: 0, delta: { content: delta.text } }],
-          })}\n\n`,
-        );
+        // R10-8：客户端中断后不再写已销毁的响应（与 OpenAI 流式路径一致）。
+        if (!input.signal.aborted && !input.res.writableEnded) {
+          input.res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model: input.modelName,
+              choices: [{ index: 0, delta: { content: delta.text } }],
+            })}\n\n`,
+          );
+        }
       }
     } else if (type === 'message_delta') {
       const deltaUsage = event.usage as { output_tokens?: number } | undefined;
       input.usage.outputTokens = Number(deltaUsage?.output_tokens ?? input.usage.outputTokens);
     }
   }
-  input.res.write(
-    `data: ${JSON.stringify({
-      id,
-      object: 'chat.completion.chunk',
-      created,
-      model: input.modelName,
-      choices: [],
-      usage: {
-        prompt_tokens: input.usage.inputTokens,
-        completion_tokens: input.usage.outputTokens,
-        total_tokens: input.usage.inputTokens + input.usage.outputTokens,
-      },
-    })}\n\n`,
-  );
-  input.res.write('data: [DONE]\n\n');
-  input.res.end();
+  if (!input.signal.aborted && !input.res.writableEnded) {
+    input.res.write(
+      `data: ${JSON.stringify({
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model: input.modelName,
+        choices: [],
+        usage: {
+          prompt_tokens: input.usage.inputTokens,
+          completion_tokens: input.usage.outputTokens,
+          total_tokens: input.usage.inputTokens + input.usage.outputTokens,
+        },
+      })}\n\n`,
+    );
+    input.res.write('data: [DONE]\n\n');
+    input.res.end();
+  }
   return null;
 }

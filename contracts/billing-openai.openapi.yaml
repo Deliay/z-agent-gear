@@ -75,7 +75,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '402':
-          description: 余额不足且无授信（`insufficient_quota`，不产生账单）
+          description: 余额不足且无授信（`insufficient_quota`）、账户冻结（`account_frozen`）或账户缺失（`account_not_found`）
           content:
             application/json:
               schema:
@@ -88,6 +88,18 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          description: 服务端配置异常（`provider_credential_error`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游模型服务不可用（`upstream_error`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     bearerAuth:
@@ -216,6 +228,7 @@ components:
                 - insufficient_quota
                 - rate_limit_exceeded
                 - account_frozen
+                - account_not_found
                 - server_error
             code:
               type: string

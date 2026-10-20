@@ -410,7 +410,7 @@ type Mutation {
 | Retry | `billing.*.retry.q`（`x-message-ttl` + DLX 回主队列） | 指数退避重试 |
 | Dead letter | `zag.billing.dlx` → `billing.*.dlq`（durable，保留 7 天） | 多次失败进死信，人工/对账处置 |
 
-消息体（JSON，`content-type: application/json`，headers 带 `x-event-id`/`x-retry-count`）：
+消息体（JSON，`content-type: application/json`，headers 带 `x-event-id`/`x-publish-attempts`；消费侧重投使用独立的 `x-consumer-retry`）：
 
 ```jsonc
 {
@@ -451,8 +451,9 @@ creditCheck(input: {
   ref: { type: 'container_reservation' | 'model_call'; id: string };
 }): Promise<{ allowed: boolean; reason?: 'INSUFFICIENT_BALANCE' | 'ACCOUNT_FROZEN' | 'NOT_FOUND';
               available: number; insufficient: boolean }>;
-// 判定：available - estimatedCredits >= -creditLimit（creditLimit=0 即预付费严格模式）
-// accrue-and-track：永远 allowed=true，回传 insufficient 供欠费宽限计时
+// 判定：available - estimatedCredits >= 0
+// 其中 available = cash + gift + creditLimit - frozen（已含授信，不得再次减 creditLimit）
+// creditLimit=0 即预付费严格模式；accrue-and-track：永远 allowed=true，回传 insufficient 供欠费宽限计时
 ```
 
 ##### cloud-controller 内部 REST 变更（`contracts/cloud-controller-websocket.md` 附录 A）
@@ -612,7 +613,7 @@ stateDiagram-v2
 
 - Exchange：`zag.billing.events`（topic，durable）+ `zag.billing.internal`（direct，durable，调度消息）；
 - Queue：`billing.metering.q`、`billing.settlement.q`（均 durable + `x-dead-letter-exchange: zag.billing.dlx`）；重试队列 `billing.*.retry.q`（`x-message-ttl` 退避后 DLX 回主队列）；死信 `billing.*.dlq`（保留 7 天，费用中心可查）；
-- 消息持久化（delivery mode 2）+ publisher confirm；消费手动 ack、prefetch 限流（默认 32）；
+- 消息持久化（delivery mode 2）+ publisher confirm；消费手动 ack、prefetch 限流（默认 10，见 `RABBITMQ_PREFETCH`）；
 - 调度消息 `billing.settlement.cycle`：`{reservationId, cycleSeq, windowStart/End}`，经延迟队列（TTL + DLX 实现定时）驱动周期结算，天然幂等键 `(reservationId, cycleSeq)`；
 - 消息契约：`contracts/billing-events.asyncapi.yaml`（事件与调度消息统一定义）。
 
@@ -697,8 +698,8 @@ sequenceDiagram
 
 #### 实现点 1: 统一预扣费检查（`CreditCheckService`，唯一同步卡点）
 
-- **唯一入口**：容器保证金冻结、周期重冻、模型调用准入全部经 `creditCheck()`；`payment`/`settle` 入参强制携带 `preCheck` 凭证（来源校验），绕过即抛错。
-- **判定公式**：`available - estimatedCredits >= -creditLimit`（`available = cash + gift + creditLimit - frozen`；前台 `creditLimit=0` 即严格预付费，后台 >0 允许透支到额度）。
+- **唯一入口**：容器保证金冻结、周期重冻、模型调用准入全部经 `creditCheck()`；`payment`/`settle` 入参强制携带 `preCheck` 凭证，绕过即抛错。当前凭证校验的是「存在、未过期、account/ref 一致」，**不能证明准入检查确实由调用方之外发生**（R10-12 如实限定）；结算路径的 `accrue-and-track` 凭证由扣费侧自行签发。
+- **判定公式**：`available - estimatedCredits >= 0`（`available = cash + gift + creditLimit - frozen`；前台 `creditLimit=0` 即严格预付费，后台 >0 允许透支到额度）。
 - **双策略**：`reject-on-insufficient`（模型调用）不足即拒绝，不产生任何账单；`accrue-and-track`（容器周期结算）永远放行但回传 `insufficient`，由结算器维护 `insufficientSince` 欠费宽限。
 - **快、可降级**：只读钱包单文档 + 条件更新，< 5ms；不允许在该路径上做任何远程调用（PRD §4.1）。
 
@@ -753,7 +754,7 @@ sequenceDiagram
   - DLQ 消息在费用中心可见（对账报告「计量对账」线联动补算）；任何事件最终不丢：outbox 补投 + DLQ 处置 + 资源/计量对账三重兜底。
 - **削峰与解耦**：计费消费慢只形成队列积压，业务功能（启动容器/调用模型）不被阻塞（PRD §4.1/§4.4）；消费者可横向扩展（多实例竞争消费），结算消息以 `(reservationId, cycleSeq)` 幂等 + `version` CAS 保证并发安全。
 - **乱序安全**：消息不保证顺序，计量按 `occurredAt` 归位（`windowFrom/To` 切分），重复与乱序均不产生重复/错误计费。
-- **配置**：prefetch=32、重试 5 次（1s/4s/16s/64s/256s）、DLQ 保留 7 天；连接自动重连（amqplib + 心跳 30s）。
+- **配置**：prefetch=10、消费侧重试 5 次（5s/10s/20s/40s/80s 指数退避后进 DLQ）、DLQ 保留 7 天；发布侧传输失败不消耗 per-message attempts，relay 失败按 2s→30s 退避；连接自动重连（amqplib + 心跳 30s）。
 
 ## 6. 技术决策
 
@@ -894,14 +895,20 @@ aspire/
 | `BILLING_CYCLE_SECONDS` | 60 | 容器计费周期（结算 tick 周期） |
 | `CONTAINER_DEPOSIT_CREDITS` | 10 | 容器保证金（冻结额，credits） |
 | `BILLING_ARREARS_GRACE_MS` | 600000 | 欠费宽限（10 分钟）后强拆 |
-| `MODEL_DEFAULT_MAX_OUTPUT_TOKENS` | 4096 | 预检估算的默认输出上限 |
-| `BILLING_RECON_CRON` | 每日 03:00 | 三线对账调度 |
+| `MODEL_DEFAULT_MAX_OUTPUT_TOKENS` | 1024 | 预检估算的默认输出上限 |
+| `MODEL_TOKEN_ESTIMATE_BYTES_PER_TOKEN` | 1 | 预检 token 估算（UTF-8 字节/倍率，默认 1 为保守上界） |
+| `MODEL_ESTIMATE_IMAGE_TOKENS` | 8192 | 单张图片的固定高估 token |
+| `MODEL_ESTIMATE_AUDIO_TOKENS` | 16384 | 单段音频的固定高估 token |
+| `MODEL_ESTIMATE_FILE_TOKENS` | 16384 | 单个文件的固定高估 token |
+| `MODEL_ESTIMATE_TOOL_TOKENS` | 4096 | 工具调用/结果的固定高估 token |
+| `BILLING_RECON_INTERVAL_MS` | 86400000 | 每日对账最大间隔（距上次成功 ≥ 24h 补跑） |
+| `BILLING_API_CALL_ORPHAN_MS` | 1800000 | `started/failed` 调用孤儿判定阈值 |
 | `RESERVATION_STALE_MS` | 900000 | 僵尸预留扫描阈值（lastSettleAt 超时） |
 | `ADMIN_API_URL` | — | agent-api → admin-api `/internal/billing/*` |
 | `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672` | RabbitMQ 连接（Aspire 注入） |
-| `RABBITMQ_PREFETCH` | 32 | 消费者预取 |
-| `RABBITMQ_RETRY_MAX` | 5 | 重试次数（1s/4s/16s/64s/256s 退避后进 DLQ） |
-| `OUTBOX_RELAY_INTERVAL_MS` | 5000 | outbox 补投循环 |
+| `RABBITMQ_PREFETCH` | 10 | 消费者预取 |
+| `RABBITMQ_RETRY_MAX` | 5 | 消费侧重试次数（5s/10s/20s/40s/80s 退避后进 DLQ） |
+| `OUTBOX_RELAY_INTERVAL_MS` | 2000 | outbox 补投循环（失败轮次 2s→30s 退避） |
 | `INTERNAL_API_TOKEN` | — | 复用现有内部鉴权 token |
 | `BILLING_CACHE_TTL_MS` | 3600000 | API Key Redis 缓存 TTL（可选） |
 

@@ -29,8 +29,19 @@ function headerNumber(msg: ConsumeMessage, key: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** R10-2：消费侧重试计数独立 header，发布侧 attempts 不再混入。 */
+const CONSUMER_RETRY_HEADER = 'x-consumer-retry';
+
 function headersWithRetry(msg: ConsumeMessage, retry: number): Record<string, unknown> {
-  return { ...(msg.properties.headers ?? {}), 'x-retry-count': retry };
+  return { ...(msg.properties.headers ?? {}), [CONSUMER_RETRY_HEADER]: retry };
+}
+
+/**
+ * R10-2：消费者视角的「重投」判定。只认消费侧计数或 broker 的 redelivered 标记；
+ * 发布侧 attempts（`x-publish-attempts`）与消费重试无关，绝不触发补投门。
+ */
+function wasRedelivered(msg: ConsumeMessage): boolean {
+  return headerNumber(msg, CONSUMER_RETRY_HEADER) > 0 || msg.fields.redelivered === true;
 }
 
 async function recordDeadLetter(
@@ -125,7 +136,7 @@ export async function consumeWithRetry(
     await options.handler();
     safeAck(channel, msg, options.logger);
   } catch (err) {
-    const retry = headerNumber(msg, 'x-retry-count') + 1;
+    const retry = headerNumber(msg, CONSUMER_RETRY_HEADER) + 1;
     const message = err instanceof Error ? err.message : String(err);
     if (retry > config.rabbitmqRetryMax) {
       options.logger.warn?.(`[billing-mq] ${options.routingKey} exceeded retries (${message}) → DLQ`);
@@ -178,7 +189,7 @@ export async function startMeteringConsumer(
       logger,
       handler: async () => {
         const event = JSON.parse(msg.content.toString()) as BillingEventMessage;
-        const retry = headerNumber(msg, 'x-retry-count');
+        const redelivered = wasRedelivered(msg);
         const { created } = await deps.ingest.ingest({
           eventId: event.eventId,
           eventType: event.eventType,
@@ -198,12 +209,13 @@ export async function startMeteringConsumer(
           });
           // 门控副作用（阻断项 3）：仅「本次真正建了预留/首期」才投递下一期延迟消息，
           // 避免重复投递的 container.ready 反复投 settlement 造成链路放大。
-          // R7：若上次投递延迟消息失败（重试消息 retry>0），补投以恢复结算链（缺链兜底）。
+          // R7：若上次投递延迟消息失败（消费侧重投），补投以恢复结算链（缺链兜底）。
+          // R10-2：只认消费侧重投/redelivered，发布侧 attempts 不再误触发。
           // R-1：乱序门控命中（该资源已 destroyed/已 legacy 计费）时绝不投递结算链。
           if (
             !result.skipped &&
             result.reservationId &&
-            (result.created || retry > 0)
+            (result.created || redelivered)
           ) {
             await deps.publishSettlement(result.reservationId, event.accountId, result.nextCycleSeq);
           }
@@ -251,15 +263,16 @@ export async function startSettlementConsumer(
       logger,
       handler: async () => {
         const message = JSON.parse(msg.content.toString()) as SettlementMessage;
-        const retry = headerNumber(msg, 'x-retry-count');
+        const redelivered = wasRedelivered(msg);
         const result = await deps.billing.handleSettlementCycle(
           message.reservationId,
           message.cycleSeq,
         );
         // 门控副作用（阻断项 3）：仅「本轮确实完成结算」才投递下一期。
         // 重复投递的 cycle 会被 `settleCycle` 去重门判为未结算（settled=false），不再投下一期。
-        // R7：重试消息（retry>0）补投下一期，恢复「上一轮投递失败」造成的结算链缺链。
-        if (!result.shouldDestroy && (result.settled || retry > 0)) {
+        // R7：消费侧重投消息补投下一期，恢复「上一轮投递失败」造成的结算链缺链。
+        // R10-2：发布侧 attempts 不再参与判定。
+        if (!result.shouldDestroy && (result.settled || redelivered)) {
           await deps.publishSettlement(
             message.reservationId,
             message.accountId,
