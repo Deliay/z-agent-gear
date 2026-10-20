@@ -367,6 +367,8 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     expect(rollbackRows).toBe(1); // 仅 A 的 deposit 回滚
   });
 
+  // 该用例经 payments 真实路径串行灌 1001 笔（>1000 条水位），CI 上 13 个 mongod 并行时
+  // 默认 5s 超时不够；单独放宽，避免环境抖动把正确性用例误判为失败。
   it('A-2/R2-1：崩溃残留经正常路径构造（claimedAt 由 claim 写入）+ 真实挤出水位后重放不二扣', async () => {
     const account = await seedAccount(100000);
     const nowValue = { value: T0 };
@@ -473,7 +475,7 @@ describe('Review 返工回归（阻断项 1/3/4 + A1/A3/A5）', () => {
     // 自证：claimedAt 由 claim 经正常路径写入并**真实落库**。
     // Probe A（回退 billing-applied-ledger.ts 移除 claimedAt）：严格模式剥离 `$set:{claimedAt}` → 此断言变红。
     expect(claimedAtCaptured).toBeInstanceOf(Date);
-  });
+  }, 60_000);
 
   it('A-5: heldFrozen 过滤账户且转义正则（reservationId=.* 不跨预留求和）', async () => {
     const account = await seedAccount(1000);
