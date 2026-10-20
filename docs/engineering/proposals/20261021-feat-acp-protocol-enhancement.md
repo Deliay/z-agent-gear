@@ -7,11 +7,16 @@ type: Permanent
 
 **功能名称**: ACP 协议能力透明化与模型来源分组
 **关联 PRD**: `docs/product/draft/20261021-acp-protocol-enhancement.md`
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-21
 **作者**: ZeroAsh
 **feat-branch**: `feat/acp-protocol-enhancement`
 
+> **v1.2 变更（下游评审返工·Elicitation）**：
+> 1. 新增 §5.7「Elicitation 弹窗『上线后未见弹出』专项核查」：逐层链路核查表 + 实测证据（OpenCode question 工具实测会发起 `elicitation/create`，能力列表并非漏传）+ 4 项候选根因；
+> 2. 能力清单全表显式收录 `elicitation.form` / `elicitation.url`（§9.2 实现点 1），快照示例与验收同步补全；
+> 3. 新增实现点 4「Elicitation 弹窗链路修复与能力门控」（P0）：`sync-bridge` 能力声明补齐、静默 cancel 可观测、弹窗条件放宽与兜底入口、能力门控、E2E 锁链路。
+>
 > **v1.1 变更（下游评审返工）**：
 > 1. **保留**：能力快照归一化（实现点 1）、模型来源三档推断（实现点 2）、前端能力门控与能力面板（实现点 3）；
 > 2. **移除**：agentgear 扩展通道（原实现点 2）、工作流上下文与产物闭环（原实现点 4）、OpenCode 差异能力接入（原实现点 6）——均移出本期范围，仅在 §3/§4 如实盘点；
@@ -402,7 +407,7 @@ OpenCode 经 ACP 回传给平台的内容形态（`session/update` 通知 + 请�
 | 未知 `sessionUpdate` | default 透传 | `text`（兜底）/ 原样 | `unknown` 兜底，可能为空白气泡 | ⚠️ 观察项 6 |
 | `session/prompt` 响应（stopReason/usage/`_meta`） | 不经 `acp:message`，走 `acp:prompt:complete` | 不落 `AcpMessage` | 回合结束状态 | ✅ |
 | `session/request_permission` | 专用事件 `acp:permission` | `PendingPermission` 记录 | `PermissionDialog`（含 diff 预览） | ✅ 链路完整 |
-| `elicitation/create`（form） | 专用事件 `acp:elicitation` | `PendingElicitation` 记录 | 表单弹窗 | ✅ 链路完整 |
+| `elicitation/create`（form） | 专用事件 `acp:elicitation` | `TodoItem(type:'elicitation_request')` | `TodoListPanel` 自动弹 `ElicitationDialog` | ⚠️ 链路代码完整、实测 Agent 会发起，但**上线后未见弹窗**——专项核查见 §5.7 |
 | `opencode/session/child_update`（自定义通知） | ⚠️ 未注册路由（且未用 `_` 前缀） | 不可达 | 不渲染 | ⚠️ 本期仅容错记录（观察项 7） |
 | `_meta` 键（retry/compaction/child-session 等） | 随原始 update 透传 | 保真于 `content` | 随所属 update 渲染（多数走 unknown） | ⚠️ 观察项 5/7 |
 
@@ -426,6 +431,46 @@ OpenCode 经 ACP 回传给平台的内容形态（`session/update` 通知 + 请�
 | 能力驱动 UI | 前端无统一能力依据，入口一刀切 | `Session.features` 为唯一事实源 + 门控 hook + 能力面板 | P0 |
 | 模型来源 | `SessionConfigOptionValue` 仅 `{value,name}`，无来源（PR #242 遗留） | 三档来源推断 + `source/provider/group` 暴露与分组展示 | P0 |
 | 回传形态口径 | 三层处理分散、无对照说明（§5.1-§5.5） | 对照矩阵随提案交付；缺口只登记不修改 | P1 |
+
+### 5.7 专项核查：Elicitation 弹窗「上线后未见弹出」
+
+> 打回疑问：**「是否忘记在能力列表中传入 Elicitation？」** 本节给出逐层核查结论。证据：`packages/agent-controller/src/acp/bridge.ts`、`servers/controller-api/src/services/{socketio,elicitation-manager}.ts`、`servers/agent-api/src/services/{elicitation-subscriber,todo-service}.ts`、`apps/agent-web/src/components/{TodoListPanel,ElicitationDialog}.tsx`、本机实测探针（`opencode acp` v2.0.31）。
+
+**结论 1：能力列表并未漏传**。`initialize` 的 `clientCapabilities` 已声明 Elicitation 双模式（`bridge.ts:520`：`elicitation: { form: {}, url: {} }`），符合 ACP 通告规则（非 null 的 `form`/`url` 即通告该模式）。
+
+**结论 2：Agent 侧确实会发起问询（实测）**。声明该能力后向 OpenCode 提问触发其 question 工具，实测收到：
+
+```json
+{ "method": "elicitation/create",
+  "params": { "mode": "form", "sessionId": "ses_...", "toolCallId": "call_...",
+    "message": "Questions",
+    "requestedSchema": { "type": "object", "properties": { "q0": {"type":"string","oneOf":[{"const":"red"},{"const":"blue"}]}, "q0_custom": {...} } } } }
+```
+
+即「Agent → Client」一跳正常，弹窗未出现的原因在平台侧链路或触发条件，而非能力列表漏传。
+
+**逐层链路核查**：
+
+| # | 环节 | 位置 | 状态 |
+|---|---|---|---|
+| 1 | `initialize` 能力声明 `elicitation.form/url` | `bridge.ts:520` | ✅ 已声明 |
+| 2 | SDK 回调 `unstable_createElicitation` | `bridge.ts`（`acp.Client` 实现） | ✅ 已实现；⚠️ **未知/自定义模式直接静默 `cancel` 且无日志**；65s 无响应自动 `cancel` |
+| 3 | `acp:elicitation` 事件 | `bridge.ts` → `socketio.ts:171` | ✅ 已接线 |
+| 4 | `ElicitationManager` → Redis `elicitation:request` | `elicitation-manager.ts` | ✅ 已实现（60s 超时） |
+| 5 | `elicitation-subscriber` → `TodoItem` | `elicitation-subscriber.ts:60`、`todo-service.ts:112` | ✅ `priority:'immediate'`、`expiresAt` 5 分钟 |
+| 6 | SSE 推送 + 待办列表 | `sessionSSEService.pushToUser`、`TodoListPanel` 轮询 | ✅ 已实现 |
+| 7 | 自动弹窗条件 | `TodoListPanel.tsx:40-41` | ⚠️ 仅当 `priority==='immediate' && !isRead && isActionable` 且面板已挂载；过期/已读不弹 |
+| 8 | `ElicitationDialog` 渲染与响应 | `ElicitationDialog.tsx` → `RESPOND_ELICITATION` | ✅ 已实现（form/url 双模式） |
+| 9 | 历史同步链路能力声明 | `sync-bridge.ts:53` `clientCapabilities: {}` | ❌ **未声明 elicitation**（该链路 Agent 发起问询必然失败/被忽略） |
+
+**「未见弹出」的候选根因（按可能性排序，均列入 §9.2 实现点 4 修复）**：
+
+1. **静默取消不可观测**：`bridge.ts` 对非 form/url 模式立即 `cancel`、超时亦自动 `cancel`，全程无日志/无事件 → 弹窗不出现且无痕迹（与"未见弹出"现象高度吻合）；
+2. **前端弹出条件过窄**：依赖 TodoListPanel 挂载 + 未读 + `immediate` + 未过期（5 分钟），任一不满足即只见待办条目不弹窗；
+3. **历史同步链路漏声明**：`sync-bridge.ts` `clientCapabilities: {}` 未含 elicitation；
+4. **Agent 侧触发条件**：OpenCode 仅 question 工具触发 form 模式、涉密/复杂表单直接取消（调研附录 §11），普通对话不会弹。
+
+**本期动作**：见 §9.2 实现点 4（Elicitation 弹窗链路修复与能力门控，P0）；能力快照显式收录 `elicitation.form` / `elicitation.url`（§9.2 实现点 1 能力清单全表），弹窗入口按能力门控。
 
 ## 6. 技术架构
 
@@ -479,7 +524,9 @@ graph LR
   "features": [
     { "id": "session.load", "status": "supported", "detail": "loadSession" },
     { "id": "prompt.audio", "status": "unsupported", "detail": "promptCapabilities.audio 未声明" },
-    { "id": "session.fork", "status": "supported", "detail": "sessionCapabilities.fork" }
+    { "id": "session.fork", "status": "supported", "detail": "sessionCapabilities.fork" },
+    { "id": "elicitation.form", "status": "supported", "detail": "clientCapabilities.elicitation.form 已通告" },
+    { "id": "elicitation.url", "status": "unsupported", "detail": "clientCapabilities.elicitation.url 未通告" }
   ],
   "raw": { "agentCapabilities": {}, "authMethods": [] }
 }
@@ -566,8 +613,22 @@ sequenceDiagram
 
 #### 实现点 1: 能力快照归一化（`capabilities.ts`）
 
-- **描述**: 将 `initialize` 结果（`agentCapabilities` 全量含 `_meta`、`authMethods`、`agentInfo`）映射为稳定的 FeatureId 三档清单，同时保留 `raw` 原始对象。
-- **技术细节**: FeatureId 映射表集中管理（`session.load/resume/close/list/delete/fork`、`prompt.image/audio/embeddedContext`、`auth.login/logout`、`mcp.http/sse`、`config.boolean`、`session.additionalDirectories`、`elicitation.form/url` 等）；缺失字段一律 `unsupported` 并记 `detail`（来源字段名）；未知 `_meta` 键（如 `opencode/child-session-updates`）原样保留进 `raw`，仅登记不消费。
+- **描述**: 将 `initialize` 结果（`agentCapabilities` 全量含 `_meta`、`authMethods`、`agentInfo`）映射为稳定的 FeatureId 三档清单，同时保留 `raw` 原始对象。**能力清单全集（FeatureId 映射表）**：
+
+| FeatureId | 来源字段 | 说明 |
+|---|---|---|
+| `session.load` | `loadSession` | 带历史重放的会话恢复 |
+| `session.resume` / `session.close` / `session.list` / `session.delete` / `session.fork` | `sessionCapabilities.resume/.close/.list/.delete/.fork` | 会话生命周期 |
+| `session.additionalDirectories` | `sessionCapabilities.additionalDirectories` | 附加工作区根 |
+| `prompt.image` / `prompt.audio` / `prompt.embeddedContext` | `promptCapabilities.image/.audio/.embeddedContext` | 多模态输入 |
+| `auth.login` / `auth.logout` | `authMethods[]` / `auth.logout` | 认证与登出 |
+| `mcp.http` / `mcp.sse` | `mcpCapabilities.http/.sse` | MCP 传输 |
+| `config.boolean` | `session.configOptions.boolean` | 布尔配置项 |
+| **`elicitation.form`** | `elicitation.form`（client 侧通告，见 §5.7） | **结构化问询·表单（弹窗）** |
+| **`elicitation.url`** | `elicitation.url`（client 侧通告，见 §5.7） | **结构化问询·链接授权** |
+| `ext.childSessionUpdates` 等 `_meta` 扩展 | `agentCapabilities._meta.*` | 扩展能力（仅登记进 `raw`，不消费） |
+
+- **技术细节**: 上表集中管理；缺失字段一律 `unsupported` 并记 `detail`（来源字段名）；未知 `_meta` 键（如 `opencode/child-session-updates`）原样保留进 `raw`，仅登记不消费；**Elicitation 为显式条目**（打回问题：不可遗漏）。
 - **风险点**: Agent 版本升级导致字段形态变化（如 `loadSession` 未来并入 `sessionCapabilities`）；对策：映射表集中管理 + `raw` 留档 + 探针回归（§12）。
 
 #### 实现点 2: 模型来源三档推断
@@ -584,6 +645,17 @@ sequenceDiagram
 - **描述**: `useAgentCapabilities(sessionId)` 提供三档能力判断；入口（附件、模型、模式、认证、会话恢复、历史管理）按能力显示/禁用/提示；能力面板逐项展示 `features[]`；模型弹层按来源分组并展示判定依据。
 - **技术细节**: 门控仅依赖 `Session.features`（唯一事实源），不在组件内散落能力判断；禁用态 tooltip 用 `detail` 文案；模型分组数据来自 `source/group`。
 - **风险点**: 能力与实际行为不一致（声明了但调用失败）；对策：调用失败统一错误提示 + 记录，能力面板展示 `detail` 便于排查。
+
+#### 实现点 4: Elicitation 弹窗链路修复与能力门控（P0，打回问题）
+
+- **描述**: 针对「上线后未见弹出」（§5.7 核查）修复弹窗链路并纳入能力门控：保证 Agent 发起 `elicitation/create` 后用户可见弹窗、可响应、响应回传 Agent，且全程可观测。
+- **技术细节**:
+  1. **能力列表显式化**：能力快照收录 `elicitation.form` / `elicitation.url`（实现点 1 全表）；`sync-bridge.ts:53` 的 `clientCapabilities: {}` 补齐 `elicitation` 声明（历史同步链路一并可用）；
+  2. **静默取消可观测**：`bridge.ts` 的 `unstable_createElicitation` 未知/自定义模式 `cancel` 与 65s 超时 `cancel` 均补日志并向上发 `acp:elicitation:resolved`（新增事件，`action:'cancel'`+原因），落 `TodoItem` 状态供排查；
+  3. **弹窗条件放宽与兜底**：`TodoListPanel` 自动弹出维持 `immediate` 优先，但增加兜底入口（会话内「待处理问询」提示条），5 分钟过期后展示「已过期」而非消失；
+  4. **能力门控**：Agent 不支持 elicitation 时，问询类入口隐藏/提示（与 F2 口径一致）；
+  5. **E2E 锁链路**：模拟 Agent 发起 `elicitation/create`（form/url）→ 弹窗 → 响应 → Agent 收到结果；并以 OpenCode question 工具实测一次端到端（§5.7 实测即用例原型）。
+- **风险点**: 各 Agent 触发问询的条件不同（OpenCode 仅 question 工具、涉密表单自取消）；对策：E2E 以「模拟 Agent 发起」为主用例，真实 Agent 用例作为集成验证，不作为唯一验收依据。
 
 ## 10. 技术决策
 
@@ -662,7 +734,8 @@ contracts/
 - [ ] 能力快照全链路可见：OpenCode 会话能力面板逐项展示且与实测能力广播一致
 - [ ] 能力门控生效：不支持能力的入口隐藏/禁用并有原因说明，操作不被静默丢弃
 - [ ] 模型来源分组可用：三档规则判定一致、兜底「来源未知」不遗漏、判定依据可查
-- [ ] §5 现状梳理随提案交付：对照矩阵覆盖全部回传形态，观察项逐条登记
+- [ ] **Elicitation 弹窗端到端可用**（打回问题闭环）：Agent 发起 `elicitation/create`（form/url）→ 弹窗可见 → 响应回传 → Agent 收到结果；静默取消有日志与事件可查；能力清单显式含 `elicitation.form/url` 且与实际行为一致
+- [ ] §5 现状梳理随提案交付：对照矩阵覆盖全部回传形态，观察项逐条登记；§5.7 Elicitation 核查结论与修复项落实
 - [ ] 旧 Agent（无能力广播）会话功能零退化（回归用例锁定）；既有消息链路零改动
 - [ ] 单元测试覆盖达标、API 测试通过、E2E 测试通过
 
