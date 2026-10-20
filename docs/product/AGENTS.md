@@ -126,7 +126,7 @@ flowchart LR
 - [[draft/20261019-aspire-workload-proxy.md]] — Aspire 工作负载下载代理（Aspire CLI 内网代理下载）
 - [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
 - [[draft/20261018-credits-billing.md]] — 费用中心（Credits 计费）
-- [[draft/20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 工作负载与统一存储）
+- [[draft/20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云主机与统一存储，v2.0 前台交付/主机模型重构）
 
 ### 已发布文档（`released/`）
 
