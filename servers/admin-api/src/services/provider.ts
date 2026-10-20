@@ -28,24 +28,6 @@ function validObjectIds(ids: string[]): string[] {
 }
 
 /**
- * 规范化上游返回的模型名（问题 54）：
- * - 剔除空串/纯空白名（唯一索引下写入空名同样会污染数据）；
- * - 用 Set 去重（上游网关/代理可能返回重复名，直接 `insertMany` 会 E11000）。
- * 保留首次出现的顺序，供 sortOrder 使用。
- */
-function dedupeModelNames(models: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const raw of models) {
-    const name = typeof raw === 'string' ? raw.trim() : '';
-    if (name.length === 0 || seen.has(name)) continue;
-    seen.add(name);
-    result.push(name);
-  }
-  return result;
-}
-
-/**
  * 探测当前连接是否为支持事务的部署（副本集/分片集群）。
  * 单节点 mongod（含 Aspire 本地 Mongo 容器）不支持事务，直接走非事务路径，
  * 避免 `withTransaction` 触发 "does not support retryable writes" 报错。
@@ -133,10 +115,10 @@ export class ProviderService {
       throw new Error('Provider name is required');
     }
 
-    // 连通性校验：任何失败（地址/凭据/超时/网络）统一归一化，失败则不落库
-    let models: string[] = [];
+    // 连通性校验：任何失败（地址/凭据/超时/网络）统一归一化，失败则不落库。
+    // 后台不再自动导入模型：探测结果丢弃，模型由管理员通过「导入模型」手动导入。
     try {
-      models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
+      await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
     } catch {
       throw new Error(PROVIDER_CONNECTIVITY_ERROR);
     }
@@ -161,33 +143,6 @@ export class ProviderService {
           encryptedCredential: encrypted,
           scope: GLOBAL_SCOPE,
         });
-
-      const names = dedupeModelNames(models);
-      if (names.length > 0) {
-        const modelDocs = names.map((name, i) => ({
-          providerId: provider._id,
-          name,
-          isCustom: false,
-          isEnabled: true,
-          sortOrder: i,
-          scope: GLOBAL_SCOPE,
-        }));
-        try {
-          if (session) {
-            await Model.insertMany(modelDocs, { session });
-          } else {
-            await Model.insertMany(modelDocs);
-          }
-        } catch (err) {
-          // 问题 54：非事务路径下供应商已先落库，模型同步失败会留下孤儿供应商。
-          // 尽力清理该供应商及其模型后重抛，避免「供应商存在但无模型/创建报错」的中间态。
-          if (!session) {
-            await Model.deleteMany({ providerId: provider._id, scope: GLOBAL_SCOPE }).catch(() => {});
-            await Provider.deleteOne({ _id: provider._id, scope: GLOBAL_SCOPE }).catch(() => {});
-          }
-          throw err;
-        }
-      }
 
       return this.mapProvider(provider.toObject());
     });
@@ -223,20 +178,19 @@ export class ProviderService {
     const credentialChanged = hasNewCredential;
     const typeChanged = input.type !== existingProvider.type;
     const endpointChanged = input.endpoint !== existingProvider.endpoint;
-    const needsResync = credentialChanged || typeChanged || endpointChanged;
+    // 通知用名沿用 needsResync；语义已收敛为「是否需要连通性探测」，不再触发模型重同步
+    const needsConnectivityCheck = credentialChanged || typeChanged || endpointChanged;
 
-    // 连通性校验先于任何写入，失败则整体不落库
-    let models: string[] = [];
-    if (needsResync) {
+    // 连通性校验先于任何写入，失败则整体不落库；探测结果丢弃（后台不再自动同步模型）
+    if (needsConnectivityCheck) {
       try {
-        models = await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
+        await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey);
       } catch {
         throw new Error(PROVIDER_CONNECTIVITY_ERROR);
       }
     }
 
     return runWithOptionalTransaction(async (session) => {
-      // 先更新供应商：唯一索引冲突（改名撞名）在此抛出，此时模型尚未改动，状态保持一致
       const provider = await Provider.findOneAndUpdate(
         { _id: id, scope: GLOBAL_SCOPE },
         {
@@ -250,73 +204,27 @@ export class ProviderService {
       );
       if (!provider) return null;
 
-      // 再级联重同步模型（问题 5 / 问题 48）：
-      // 1) 读取保留的自定义模型名；2) 跳过与自定义模型同名的 fetched 名（不覆盖自定义模型）；
-      // 3) 按 (providerId, name) upsert 同步模型（替代 delete+insert，避免唯一索引 E11000）；
-      // 4) 仅删除不在期望集合内的陈旧同步模型。
-      if (needsResync) {
-        const customDocs = session
-          ? await Model.find(
-            { providerId: id, scope: GLOBAL_SCOPE, isCustom: true },
-            'name',
-            { session },
-          ).lean()
-          : await Model.find(
-            { providerId: id, scope: GLOBAL_SCOPE, isCustom: true },
-            'name',
-          ).lean();
-        const customNames = new Set(customDocs.map((doc) => String((doc as { name?: unknown }).name)));
-
-        // 同名 fetched 名去重（保留首次出现的排序位置），并剔除与自定义模型冲突的名字
-        const desired: Array<{ name: string; sortOrder: number }> = [];
-        const seen = new Set<string>();
-        models.forEach((name) => {
-          if (seen.has(name) || customNames.has(name)) return;
-          seen.add(name);
-          desired.push({ name, sortOrder: desired.length });
-        });
-
-        if (desired.length > 0) {
-          const providerObjectId = new mongoose.Types.ObjectId(id);
-          const ops = desired.map(({ name, sortOrder }) => ({
-            updateOne: {
-              // `isCustom: { $ne: true }` 收紧 upsert 目标，关闭「读取自定义名 → 并发插入同名自定义模型」
-              // 的 TOCTOU 窄窗口（建议 I）：命中不了自定义模型时不会误改它。
-              filter: { providerId: providerObjectId, name, isCustom: { $ne: true } },
-              update: {
-                $set: {
-                  isCustom: false,
-                  scope: GLOBAL_SCOPE,
-                  sortOrder,
-                  isEnabled: true,
-                },
-              },
-              upsert: true,
-            },
-          }));
-          if (session) {
-            await Model.bulkWrite(ops, { session });
-          } else {
-            await Model.bulkWrite(ops);
-          }
-        }
-
-        const desiredNames = desired.map((m) => m.name);
-        const staleFilter = {
-          providerId: id,
-          scope: GLOBAL_SCOPE,
-          isCustom: false,
-          name: { $nin: desiredNames },
-        } as const;
-        if (session) {
-          await Model.deleteMany(staleFilter, { session });
-        } else {
-          await Model.deleteMany(staleFilter);
-        }
-      }
-
       return this.mapProvider(provider);
     });
+  }
+
+  /**
+   * 读取并解密全局供应商连接信息（导入/拉取上游模型清单时使用）。
+   * 供应商不存在或 scope 非 global 时返回 null。
+   */
+  async getDecryptedConnection(id: string) {
+    if (!isValidObjectId(id)) return null;
+    const provider = await Provider.findOne({ _id: id, scope: GLOBAL_SCOPE }).lean() as {
+      type: ProviderType;
+      endpoint: string;
+      encryptedCredential: { iv: string; ciphertext: string; tag: string };
+    } | null;
+    if (!provider) return null;
+    return {
+      type: provider.type,
+      endpoint: provider.endpoint,
+      apiKey: decrypt(provider.encryptedCredential),
+    };
   }
 
   async delete(id: string) {

@@ -67,8 +67,7 @@ export const ADMIN_MODELS = gql`
   }
 `
 
-export const ADMIN_MODELS_BY_PROVIDER = gql`
-  query AdminModelsByProvider($providerId: ID!) {
+export const ADMIN_MODELS_BY_PROVIDER = gql`  query AdminModelsByProvider($providerId: ID!) {
     adminModelsByProvider(providerId: $providerId) {
       id
       providerId
@@ -77,6 +76,31 @@ export const ADMIN_MODELS_BY_PROVIDER = gql`
       isEnabled
       sortOrder
       scope
+    }
+  }
+`
+
+export const LIST_GLOBAL_PROVIDER_MODELS = gql`
+  query ListGlobalProviderModels($providerId: ID!) {
+    listGlobalProviderModels(providerId: $providerId) {
+      name
+      isImported
+      isDuplicate
+    }
+  }
+`
+
+export const MODEL_RENAME_RECORDS = gql`
+  query ModelRenameRecords {
+    modelRenameRecords {
+      id
+      modelId
+      providerId
+      providerName
+      oldName
+      newName
+      batchId
+      renamedAt
     }
   }
 `

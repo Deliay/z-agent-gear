@@ -9,17 +9,25 @@ vi.mock('../../services/model.js', () => ({
     findAll: vi.fn(),
     findByProviderId: vi.fn(),
     createCustom: vi.fn(),
+    importModels: vi.fn(),
+    listProviderModels: vi.fn(),
     delete: vi.fn(),
     toggle: vi.fn(),
     updateSortOrder: vi.fn(),
   },
 }));
 
+vi.mock('../../services/model-rename-record.js', () => ({
+  modelRenameRecordService: { findAll: vi.fn() },
+}));
+
 vi.mock('../../services/provider.js', () => ({
+  PROVIDER_CONNECTIVITY_ERROR: '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
   providerService: { findById: vi.fn() },
 }));
 
 import { modelService } from '../../services/model.js';
+import { modelRenameRecordService } from '../../services/model-rename-record.js';
 import { providerService } from '../../services/provider.js';
 import type { AdminAuthContext } from './auth.js';
 
@@ -55,6 +63,29 @@ describe('modelResolvers', () => {
       await expect(Query.adminModelsByProvider({}, { providerId: 'p1' }, good)).resolves.toEqual([{ id: 'm1' }]);
       expect(modelService.findByProviderId).toHaveBeenCalledWith('p1');
     });
+
+    it('R-M1: new queries reject anonymous access', async () => {
+      await expect(Query.listGlobalProviderModels({}, { providerId: 'p1' }, anon)).rejects.toThrow(
+        'Not authenticated',
+      );
+      await expect(Query.modelRenameRecords({}, {}, anon)).rejects.toThrow('Not authenticated');
+    });
+
+    it('R-M2: listGlobalProviderModels delegates', async () => {
+      (modelService.listProviderModels as any).mockResolvedValue([
+        { name: 'gpt-4o', isImported: false, isDuplicate: false },
+      ]);
+
+      await expect(Query.listGlobalProviderModels({}, { providerId: 'p1' }, good)).resolves.toEqual([
+        { name: 'gpt-4o', isImported: false, isDuplicate: false },
+      ]);
+      expect(modelService.listProviderModels).toHaveBeenCalledWith('p1');
+    });
+
+    it('R-M7: modelRenameRecords delegates', async () => {
+      (modelRenameRecordService.findAll as any).mockResolvedValue([{ id: 'r1' }]);
+      await expect(Query.modelRenameRecords({}, {}, good)).resolves.toEqual([{ id: 'r1' }]);
+    });
   });
 
   describe('mutations', () => {
@@ -65,6 +96,13 @@ describe('modelResolvers', () => {
       ).rejects.toThrow('Model name already exists for this provider');
     });
 
+    it('R-M6: createGlobalCustomModel propagates the global duplicate-name message', async () => {
+      (modelService.createCustom as any).mockRejectedValue(new Error('Model name already exists: gpt-4o'));
+      await expect(
+        Mutation.createGlobalCustomModel({}, { input: { providerId: 'p1', name: 'gpt-4o' } }, good),
+      ).rejects.toThrow('Model name already exists: gpt-4o');
+    });
+
     it('createGlobalCustomModel returns the created model', async () => {
       (modelService.createCustom as any).mockResolvedValue({ id: 'm1', isCustom: true });
       await expect(
@@ -72,16 +110,44 @@ describe('modelResolvers', () => {
       ).resolves.toEqual({ id: 'm1', isCustom: true });
     });
 
-    it('T-M2: deleteGlobalCustomModel throws when not deletable', async () => {
-      (modelService.delete as any).mockResolvedValue(null);
-      await expect(Mutation.deleteGlobalCustomModel({}, { id: 'm1' }, good)).rejects.toThrow(
-        'Model not found or is not a custom model',
+    it('R-M3: importGlobalModels maps duplicate / connectivity / not-found errors verbatim', async () => {
+      (modelService.importModels as any).mockRejectedValueOnce(new Error('Model name already exists: gpt-4o'));
+      await expect(Mutation.importGlobalModels({}, { providerId: 'p1', names: ['gpt-4o'] }, good)).rejects.toThrow(
+        'Model name already exists: gpt-4o',
+      );
+
+      (modelService.importModels as any).mockRejectedValueOnce(
+        new Error('供应商连通性测试失败，请检查 API 地址和凭据是否正确'),
+      );
+      await expect(Mutation.importGlobalModels({}, { providerId: 'p1', names: ['gpt-4o'] }, good)).rejects.toThrow(
+        '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+      );
+
+      (modelService.importModels as any).mockRejectedValueOnce(new Error('Provider not found'));
+      await expect(Mutation.importGlobalModels({}, { providerId: 'p1', names: ['gpt-4o'] }, good)).rejects.toThrow(
+        'Provider not found',
       );
     });
 
-    it('deleteGlobalCustomModel returns the deleted model', async () => {
-      (modelService.delete as any).mockResolvedValue({ id: 'm1' });
-      await expect(Mutation.deleteGlobalCustomModel({}, { id: 'm1' }, good)).resolves.toEqual({ id: 'm1' });
+    it('importGlobalModels returns the created models', async () => {
+      (modelService.importModels as any).mockResolvedValue([{ id: 'm1' }]);
+      await expect(
+        Mutation.importGlobalModels({}, { providerId: 'p1', names: ['gpt-4o'] }, good),
+      ).resolves.toEqual([{ id: 'm1' }]);
+      expect(modelService.importModels).toHaveBeenCalledWith('p1', ['gpt-4o']);
+    });
+
+    it('R-M4: deleteGlobalModel throws Model not found when the service returns null', async () => {
+      (modelService.delete as any).mockResolvedValue(null);
+      await expect(Mutation.deleteGlobalModel({}, { id: 'm1' }, good)).rejects.toThrow('Model not found');
+    });
+
+    it('R-M5: deleteGlobalModel returns the deleted model', async () => {
+      (modelService.delete as any).mockResolvedValue({ id: 'm1', isCustom: false });
+      await expect(Mutation.deleteGlobalModel({}, { id: 'm1' }, good)).resolves.toEqual({
+        id: 'm1',
+        isCustom: false,
+      });
     });
 
     it('T-M3: toggleGlobalModel throws when provider disabled', async () => {

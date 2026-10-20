@@ -40,6 +40,7 @@ import { BillingDeadLetter } from './models/billing-dead-letter.js';
 import { BillingAppliedLedger } from './models/billing-applied-ledger.js';
 import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
 import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
+import * as migration005ModelNameUnique from './migrations/005-model-name-unique-global.js';
 
 const app = express();
 
@@ -106,6 +107,7 @@ async function start() {
   // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）；
   // 003-docker-apt-source——把未定制过的「Docker」脚本刷新为 v3 并补齐 docker_apt_url 参数（本期）
   // 004-aspire-cli-source——把未定制过的「Aspire」脚本刷新为 v2 并补齐 aspire_cli_url 参数（本期）
+  // 005-model-name-unique-global——整理 global 存量重名模型并建立 name 部分唯一索引（本期）
   try {
     await runMigrations([
       migration001,
@@ -113,6 +115,7 @@ async function start() {
       migration002RefreshDocker,
       migration003DockerAptSource,
       migration004AspireCliSource,
+      migration005ModelNameUnique,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);

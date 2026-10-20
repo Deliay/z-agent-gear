@@ -66,21 +66,16 @@ export default function ModelItem({ model, onToggle, onDelete, togglePending = f
             </span>
           )}
         </div>
-        {model.provider && (
-          <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
-        )}
       </div>
-      {model.isCustom && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-destructive"
-          onClick={() => onDelete(model.id)}
-          title="删除自定义模型"
-        >
-          <Trash2Icon className="size-4" />
-        </Button>
-      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground hover:text-destructive"
+        onClick={() => onDelete(model.id)}
+        title="删除模型"
+      >
+        <Trash2Icon className="size-4" />
+      </Button>
       <Switch
         checked={model.isEnabled && canToggle}
         onCheckedChange={() => {

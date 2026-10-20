@@ -394,7 +394,7 @@ describe('LLM Provider & Model API', () => {
 
   // #3: updateProvider with empty credentialValue should preserve existing key
   describe('updateProvider with empty credentialValue', () => {
-    it('should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+    it('T-SYNC2: should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
       const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `crud-provider-${Date.now()}`;
       const createRes = await gqlRequest(
@@ -442,7 +442,7 @@ describe('LLM Provider & Model API', () => {
   describe('model lifecycle after provider CRUD', () => {
     let pid = '';
 
-    it('should create provider and its models appear in models query', async () => {
+    it('T-SYNC1: should create provider and auto-sync its models (user-side behavior unchanged)', async () => {
       const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `lifecycle-provider-${Date.now()}`;
       const createRes = await gqlRequest(

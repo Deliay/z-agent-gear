@@ -380,12 +380,16 @@ npm test
 | adminProviders 无 auth | 「Not authenticated」 |
 | 业务 mutation 无 auth | 「Not authenticated」 |
 | 连通性失败不落库 | T-P1 |
-| 创建全局供应商 | scope=global、凭据脱敏、同步 scope=global 模型（T-P2） |
+| 创建全局供应商 | scope=global、凭据脱敏、**不自动导入模型**（T-P2） |
+| 更新供应商不重同步 | 改 endpoint 后模型不增不减（T-P2b） |
+| 手动导入链路 | 拉取清单 / 勾选导入 / 已导入标记 / 幂等返回 [] / 跨供应商重名拒绝 / 空名拒绝（T-MI1~T-MI6） |
+| 删除泛化 | 导入模型与自定义模型均可删，删除后同名可重导入（T-MD1/T-MU1） |
+| 重名整理台账 | `modelRenameRecords` 字段完整、batchId=20261020-005（T-MR1/T-MR2） |
 | 全局同名冲突 | 「Provider name already exists」（T-P7） |
 | 更新留空保留凭据 | T-P3 |
 | 启停级联 + 删除级联 | T-P5 / T-P4 |
 | 批量操作空列表 | successCount=0 |
-| 全局自定义模型 | 添加/列表/仅自定义可删/禁用供应商下 toggle 拒绝（T-M1~T-M3） |
+| 全局模型管理 | 自定义模型添加/列表；任意全局模型可删；禁用供应商下 toggle 拒绝；全局模型名唯一（T-M1~T-M3） |
 | 全局模型排序 | T-M4 |
 
 ### Admin Base Image API (`admin-api/base-image.test.ts`)
@@ -395,6 +399,15 @@ npm test
 | 无 auth | baseImages / createBaseImage 均「Not authenticated」 |
 | CRUD | Dockerfile 原样存取（T-B1） |
 | 同名冲突 | 「Base image name already exists」（T-B2） |
+
+### Agent API 自动同步回归 (`agent-api/llm.test.ts` T-SYNC*)
+
+> 用户侧 `syncSyncedModels` 行为保持不变（本期零改动）：创建/更新用户供应商仍自动同步模型；后台仅在 admin-api 取消自动导入。
+
+| 测试 | 描述 |
+|------|------|
+| T-SYNC1 | 创建用户供应商仍返回同步模型 |
+| T-SYNC2 | 更新用户供应商（改 endpoint）模型按新上游清单重同步 |
 
 ### Agent API scope 回归 (`agent-api/llm.test.ts` T-SC*)
 

@@ -25,6 +25,7 @@ import { QueryError } from '@/components/ui/query-error'
 import ProviderItem from './ProviderItem'
 import ProviderFormDialog from './ProviderFormDialog'
 import BatchActionBar from './BatchActionBar'
+import ImportModelsDialog from '@/components/models/ImportModelsDialog'
 
 export default function ProviderSection() {
   const { data, loading, error, refetch } = useQuery<GetAdminProvidersQuery>(ADMIN_PROVIDERS)
@@ -49,6 +50,8 @@ export default function ProviderSection() {
   const [multiMode, setMultiMode] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AdminProviderData | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  // 「导入模型」弹窗目标供应商
+  const [importTarget, setImportTarget] = useState<AdminProviderData | null>(null)
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   // 单个 toggle 的在途集合：双击两次 toggle 会相互抵消，须忽略重复点击
@@ -104,6 +107,7 @@ export default function ProviderSection() {
         variables: { input },
         refetchQueries: [ADMIN_PROVIDERS, ADMIN_MODELS],
       })
+      toast.success('供应商已添加，请通过「导入模型」手动导入模型')
     }
     setFormOpen(false)
     setEditingProvider(null)
@@ -263,6 +267,7 @@ export default function ProviderSection() {
               provider={provider}
               selected={selectedIds.has(provider.id)}
               onSelect={handleSelect}
+              onImport={(provider) => setImportTarget(provider)}
               onEdit={handleEdit}
               onToggle={handleToggle}
               onDelete={() => setDeleteTarget(provider)}
@@ -290,6 +295,15 @@ export default function ProviderSection() {
         description={`确定要删除选中的 ${selectedIds.size} 个供应商吗？关联的模型也将被删除。`}
         loading={batchBusy}
         onConfirm={handleBatchDeleteConfirm}
+      />
+
+      <ImportModelsDialog
+        open={importTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setImportTarget(null)
+        }}
+        providerId={importTarget?.id ?? null}
+        providerName={importTarget?.name ?? ''}
       />
 
       <ProviderFormDialog
