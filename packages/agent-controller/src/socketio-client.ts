@@ -60,8 +60,12 @@ interface RegisteredPayload {
 export interface WorkloadBatchSummary {
   phase: 'init' | 'post';
   itemCount: number;
-  /** 批次 promise 正常结束（含 required 短路/被新批次打断）时为 completed，异常为 failed。 */
-  status: 'completed' | 'failed';
+  /** 批次正常结束且无失败项为 completed；有失败/超时为 failed；被打断为 cancelled。 */
+  status: 'completed' | 'failed' | 'cancelled';
+  /** 失败/超时条目数。 */
+  failedCount?: number;
+  /** 批次是否被新批次/销毁流程打断（打断不得视为初始化完成）。 */
+  cancelled?: boolean;
   error?: string;
 }
 
@@ -88,6 +92,11 @@ export interface ConnectToServerOptions {
    * 不处理工作负载事件，避免结果被重放到非 cloud-controller 侧。
    */
   handleWorkload?: boolean;
+  /**
+   * 是否持久化本地配置（resumeToken/清除 Key）。云电脑模式必须为 false：
+   * 容器内不读写 `~/.zag/config.toml`，避免凭据落盘。
+   */
+  persistConfig?: boolean;
   /**
    * 自定义 `shutdown` 处理（云电脑双连接需同时关闭两端）。缺省保持既有行为：
    * 清理本地 Key、关闭 socket、退出进程。
@@ -366,6 +375,7 @@ export function connectToServer(
 
   const heartbeat = new Heartbeat();
   const controllerName = options?.serverName || hostname();
+  const persistConfig = options?.persistConfig !== false;
   const mcpRelay = new McpRelay((payload) => socket.emit('mcp:request', payload));
   const handleWorkload = options?.handleWorkload !== false;
   // 双连接（云电脑）只启动一个本地 MCP 回环服务：worker 连接传 skipLocalMcpStart=true，
@@ -389,7 +399,7 @@ export function connectToServer(
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
     const { origin, namespace } = parseEndpoint(connectEndpoint);
     console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
-    const resumeToken = getResumeTokenFromConfig();
+    const resumeToken = persistConfig ? getResumeTokenFromConfig() : undefined;
     socket.emit('register', {
       key,
       hostname: controllerName,
@@ -407,7 +417,7 @@ export function connectToServer(
 
   socket.on('registered', (data: RegisteredPayload) => {
     console.log(`Controller registered: ${data.controllerId}`);
-    if (data.resumeToken) {
+    if (data.resumeToken && persistConfig) {
       saveResumeTokenToConfig(data.resumeToken);
       console.log('Resume token saved to config');
     }
@@ -421,24 +431,36 @@ export function connectToServer(
       console.error('The agent-controller version is not supported by the server.');
       console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
       socket.disconnect();
+      if (options?.onShutdown) {
+        options.onShutdown({ reason: `version_mismatch: ${data.message}` });
+        return;
+      }
       process.exit(1);
       return;
     }
     if (data.code === 'KEY_ALREADY_ONLINE') {
       console.log('Clearing resume token and retrying connection...');
-      clearResumeTokenFromConfig();
+      if (persistConfig) clearResumeTokenFromConfig();
       // Don't exit, let the reconnection logic handle it
       socket.disconnect();
       return;
     }
     socket.disconnect();
+    if (options?.onShutdown) {
+      options.onShutdown({ reason: `error: ${data.code}` });
+      return;
+    }
     process.exit(1);
   });
 
   socket.on('unregistered', () => {
     console.log('Unregistered from server');
     heartbeat.stop();
-    clearConfigKey();
+    if (persistConfig) clearConfigKey();
+    if (options?.onShutdown) {
+      options.onShutdown({ reason: 'unregistered' });
+      return;
+    }
     socket.close();
     process.exit(0);
   });
@@ -452,7 +474,7 @@ export function connectToServer(
         options.onShutdown(data);
         return;
       }
-      clearConfigKey();
+      if (persistConfig) clearConfigKey();
       socket.close();
       process.exit(0);
     };
@@ -483,8 +505,18 @@ export function connectToServer(
     };
     workloadExecutor
       .runBatch(data, (result) => socket.emit('workload:result', result))
-      .then(() => {
-        options?.onWorkloadBatchComplete?.(summary);
+      .then((outcome) => {
+        const status: WorkloadBatchSummary['status'] = outcome.cancelled
+          ? 'cancelled'
+          : outcome.failedCount > 0
+            ? 'failed'
+            : 'completed';
+        options?.onWorkloadBatchComplete?.({
+          ...summary,
+          status,
+          cancelled: outcome.cancelled,
+          failedCount: outcome.failedCount,
+        });
       })
       .catch((error: Error) => {
         const secrets = collectSecretValues(process.env, data.env);

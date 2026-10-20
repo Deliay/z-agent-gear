@@ -560,7 +560,7 @@ describe('internal management API', () => {
       hostName: 'my-pc',
       harnessTypes: ['opencode'],
       expiresAt: expiresAt.toISOString(),
-      controllerKeyId: 'ck-api-1',
+      agentGearMinVersion: '2.5.0',
       containerApiKeyId: 'ak-api-1',
       secrets,
       workloadPlan: [
@@ -621,6 +621,7 @@ describe('internal management API', () => {
       hostName: 'pc',
       harnessTypes: ['opencode'],
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.5.0',
       secrets: {
         hostEndpoint: 'wss://controller.example.com',
         hostKey: 'zag_k_1_x',
@@ -641,6 +642,8 @@ describe('internal management API', () => {
       ['empty harnessTypes', { ...valid, harnessTypes: [] }],
       ['unsupported harness type', { ...valid, harnessTypes: ['unknown'] }],
       ['invalid expiresAt', { ...valid, expiresAt: 'not-a-date' }],
+      ['missing agentGearMinVersion', { ...valid, agentGearMinVersion: undefined }],
+      ['invalid agentGearMinVersion', { ...valid, agentGearMinVersion: '2.x' }],
       ['missing secrets', { ...valid, secrets: undefined }],
       ['incomplete secrets', { ...valid, secrets: { ...valid.secrets, hostKey: '' } }],
       ['missing workloadPlan', { ...valid, workloadPlan: undefined }],
@@ -669,6 +672,7 @@ describe('internal management API', () => {
         hostName: hostId,
         harnessTypes: ['opencode'],
         expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        agentGearMinVersion: '2.5.0',
         secrets: {
           hostEndpoint: 'wss://controller.example.com',
           hostKey: 'zag_k_1_filter',

@@ -2,6 +2,7 @@ import { config } from '../config/index.js';
 
 export interface StartHarnessInput {
   hostId: string;
+  /** 标准连接使用的 ControllerKey ID（作为内部请求 `refId` 下发）。 */
   controllerKeyId: string;
   containerApiKeyId: string;
   userId: string;
@@ -91,6 +92,7 @@ export class CloudControllerClient {
       expiresAt: input.expiresAt.toISOString(),
       billingAccountId: input.billingAccountId,
       agentGearMinVersion: input.agentGearMinVersion,
+      containerApiKeyId: input.containerApiKeyId,
       secrets: input.secrets,
       workloadPlan: input.workloadPlan,
     };

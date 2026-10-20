@@ -1823,6 +1823,17 @@ describe('SessionService', () => {
     });
   });
 
+  describe('onSessionIdled callback', () => {
+    it('notifySessionIdled should invoke registered callback', async () => {
+      const callback = vi.fn();
+      sessionService.onSessionIdled(callback);
+
+      await sessionService.notifySessionIdled('sess-1');
+
+      expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
+
   describe('cloud host guards', () => {
     it('rejects createSession on a non-RUNNING cloud host', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({

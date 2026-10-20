@@ -168,6 +168,7 @@ describe('startCloudHostSupervisor', () => {
       handshakeToken: BASE_ENV.ZAG_CONTROLLER_KEY,
       skipLocalMcpStart: true,
       handleWorkload: true,
+      persistConfig: false,
     });
     expect(handle.controllerSocket).toBeNull();
   });
@@ -187,6 +188,7 @@ describe('startCloudHostSupervisor', () => {
       handshakeToken: BASE_ENV.ZAG_HOST_KEY,
       skipLocalMcpStart: false,
       handleWorkload: false,
+      persistConfig: false,
     });
 
     // 重复 registered（重连）不应重复建连
@@ -221,6 +223,33 @@ describe('startCloudHostSupervisor', () => {
     expect(context.connect).toHaveBeenCalledTimes(2);
   });
 
+  it('T-AG4e: does not treat an interrupted (cancelled) init batch as complete', async () => {
+    const context = setup();
+    await startCloudHostSupervisor(context.deps);
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+
+    workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: true });
+    workerOptions.onWorkloadBatchComplete?.({
+      phase: 'init',
+      itemCount: 1,
+      status: 'cancelled',
+      cancelled: true,
+      failedCount: 0,
+    });
+
+    expect(context.connect).toHaveBeenCalledTimes(1);
+
+    // 重连重放后的真实 init 完成才建立标准连接
+    workerOptions.onWorkloadBatchComplete?.({
+      phase: 'init',
+      itemCount: 1,
+      status: 'completed',
+      cancelled: false,
+      failedCount: 0,
+    });
+    expect(context.connect).toHaveBeenCalledTimes(2);
+  });
+
   it('T-AG4c: connects after the init wait timeout', async () => {
     const context = setup({ env: { ...BASE_ENV, HARNESS_INIT_WAIT_MS: '20' } });
     await startCloudHostSupervisor(context.deps);
@@ -232,6 +261,10 @@ describe('startCloudHostSupervisor', () => {
     await vi.waitFor(() => {
       expect(context.connect).toHaveBeenCalledTimes(2);
     });
+
+    // 超时后迟到的 initializing registered 不得再次进入等待（不产生幽灵定时器/重复连接）
+    workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: true });
+    expect(context.connect).toHaveBeenCalledTimes(2);
     expect(context.logs.join('\n')).toContain('timed out');
   });
 

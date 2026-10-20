@@ -378,7 +378,8 @@ export class ContainerService {
         return current ?? created;
       });
     } catch (err) {
-      // 启动链路异常（如 token 签发失败）且容器未进入终态时清理内存 secret，避免泄漏。
+      // 启动链路异常（如 token 签发失败）：仅当容器已进入终态或记录不存在时清理内存 secret，
+      // 避免与仍在运行的 worker 初始化批次竞态；非终态由后续销毁/巡检路径清理。
       const current = await this.repo.findById(created.id);
       if (!current || isTerminalStatus(current.status)) {
         this.secretStore.delete(created.id);

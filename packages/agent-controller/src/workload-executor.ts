@@ -78,6 +78,15 @@ export function redactSecrets(text: string, secrets: Iterable<string>): string {
   return result;
 }
 
+export interface WorkloadBatchOutcome {
+  /** 批次是否被新批次/销毁流程打断（打断时不得视为初始化完成）。 */
+  cancelled: boolean;
+  /** 已上报的失败/超时条目数（含 required 短路前的当前条）。 */
+  failedCount: number;
+  /** 本批条目总数。 */
+  total: number;
+}
+
 export type WorkloadStatus = 'success' | 'failed' | 'timeout';
 
 export interface WorkloadResult {
@@ -215,7 +224,7 @@ function buildWorkloadEnv(
  */
 export class WorkloadExecutor {
   private active: ActiveRun | null = null;
-  private activePromise: Promise<void> | null = null;
+  private activePromise: Promise<WorkloadBatchOutcome> | null = null;
   private pendingResults: WorkloadResult[] = [];
 
   /** 当前是否有批次正在执行。 */
@@ -264,7 +273,7 @@ export class WorkloadExecutor {
   /**
    * 执行一个批次。若已有批次在跑，先终止其进程组并停止推进，再执行新批次。
    */
-  runBatch(payload: WorkloadRunPayload, onResult: WorkloadResultSink): Promise<void> {
+  runBatch(payload: WorkloadRunPayload, onResult: WorkloadResultSink): Promise<WorkloadBatchOutcome> {
     this.interruptActive();
 
     const run: ActiveRun = { cancelled: false, child: null };
@@ -284,9 +293,16 @@ export class WorkloadExecutor {
     payload: WorkloadRunPayload,
     onResult: WorkloadResultSink,
     run: ActiveRun,
-  ): Promise<void> {
+  ): Promise<WorkloadBatchOutcome> {
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    if (items.length === 0) return;
+    const total = items.length;
+    let failedCount = 0;
+    const outcome = (): WorkloadBatchOutcome => ({
+      cancelled: run.cancelled,
+      failedCount,
+      total,
+    });
+    if (items.length === 0) return outcome();
 
     const budgetMs = typeof payload.budgetMs === 'number' && payload.budgetMs > 0 ? payload.budgetMs : null;
     const batchStart = Date.now();
@@ -295,12 +311,13 @@ export class WorkloadExecutor {
     const secrets = collectSecretValues(process.env, containerEnv);
 
     for (const item of items) {
-      if (run.cancelled) return;
+      if (run.cancelled) return outcome();
 
       // 必须项短路（省时优化，服务端仍为唯一裁决）：init 阶段的必须项失败/超时后，
       // 上报本条结果即结束本批，不再启动后续条目。post 批次不参与必须判定。
       const shortCircuitOnFailure = phase === 'init' && item.required === true;
       const reportThenMaybeStop = (result: WorkloadResult): boolean => {
+        if (result.status !== 'success') failedCount += 1;
         const redactedLog = redactSecrets(result.log, secrets);
         this.report(onResult, redactedLog === result.log ? result : { ...result, log: redactedLog });
         return shortCircuitOnFailure && (result.status === 'failed' || result.status === 'timeout');
@@ -311,21 +328,22 @@ export class WorkloadExecutor {
         const remaining = budgetMs - (Date.now() - batchStart);
         if (remaining <= 0) {
           // 预算耗尽：后续条目不再启动进程，直接回报 timeout
-          if (reportThenMaybeStop(this.emptyResult(item.logId, 'timeout', ''))) return;
+          if (reportThenMaybeStop(this.emptyResult(item.logId, 'timeout', ''))) return outcome();
           continue;
         }
         effectiveTimeoutMs = Math.min(item.timeoutMs, remaining);
       }
 
       if (!item.script || item.script.trim().length === 0) {
-        if (reportThenMaybeStop(this.emptyResult(item.logId, 'failed', EMPTY_SCRIPT_MESSAGE))) return;
+        if (reportThenMaybeStop(this.emptyResult(item.logId, 'failed', EMPTY_SCRIPT_MESSAGE))) return outcome();
         continue;
       }
 
-      const outcome = await this.executeItem(item, effectiveTimeoutMs, run, containerEnv);
-      if (outcome.cancelled) return;
-      if (outcome.result && reportThenMaybeStop(outcome.result)) return;
+      const itemOutcome = await this.executeItem(item, effectiveTimeoutMs, run, containerEnv);
+      if (itemOutcome.cancelled) return outcome();
+      if (itemOutcome.result && reportThenMaybeStop(itemOutcome.result)) return outcome();
     }
+    return outcome();
   }
 
   private report(onResult: WorkloadResultSink, result: WorkloadResult): void {

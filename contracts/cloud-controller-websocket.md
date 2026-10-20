@@ -383,7 +383,7 @@ Content-Type: application/json
   "userId": "<前台用户 ID>",
   "hostName": "<用户命名>",
   "harnessTypes": ["opencode"],
-  "userId": "<userId>",
+  "containerApiKeyId": "<运行专用模型 Key ID>",
   "expiresAt": "2026-10-21T00:00:00.000Z",
   "agentGearMinVersion": "2.5.0",
   "secrets": {
@@ -398,7 +398,7 @@ Content-Type: application/json
 }
 ```
 
-- `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`secrets`/`workloadPlan` 为 harness 必填（`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
 - `expiresAt` 同时用于 Job `activeDeadlineSeconds = max(60, floor((expiresAt-now)/1000))`；缺省沿用 `JOB_ACTIVE_DEADLINE_SECONDS=86400`。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。

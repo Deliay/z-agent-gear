@@ -196,8 +196,7 @@ agentApi
     .WithEnvironment("CLOUD_HOST_MODEL_BASE_URL", $"{adminApi.GetEndpoint("http")}/v1")
     .WithEnvironment("CLOUD_HOST_DEFAULT_WORKSPACE", "/root/workspace")
     .WithEnvironment("CLOUD_HOST_MAX_PER_USER", "1")
-    .WithEnvironment("HARNESS_CONTAINER_TTL_SECONDS", "86400")
-    .WithEnvironment("HARNESS_ENABLED", builder.ExecutionContext.IsPublishMode ? "false" : "true");
+    .WithEnvironment("HARNESS_CONTAINER_TTL_SECONDS", "86400");
 
 // cloud-controller → agent-api ready/terminal 回调、→ admin-api 按宿主撤销模型 Key。
 cloudController
@@ -222,6 +221,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
         .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
         .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+        .WithEnvironment("HARNESS_ENABLED", "true")
         .WithHttpEndpoint(port: 10001, env: "PORT");
 
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");

@@ -417,7 +417,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const controllerOnline = sessionController?.status === 'online';
   // 云电脑 STOPPED/FAILED/deletedAt：会话只读回看（服务端同样拒绝 resume/command）
   const readOnlyCloudHost =
-    sessionController?.type === 'cloud' && isReadOnlyCloudHost(sessionController.cloudHost);
+    sessionController?.type === 'cloud' &&
+    (sessionController.cloudHost == null || isReadOnlyCloudHost(sessionController.cloudHost));
 
   if (sessionLoading) {
     return (

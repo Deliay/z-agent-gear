@@ -38,6 +38,35 @@ export interface CloudControllerApp {
   stop: () => Promise<void>;
 }
 
+/** 云电脑终态映射（契约 A19）：exited→stopped、failed→failed、其它→stopped。 */
+export function harnessTerminalStatus(status: string): 'stopped' | 'failed' {
+  return status === 'failed' ? 'failed' : 'stopped';
+}
+
+/** harness 生命周期回调重试（agent-api/admin-api 短暂不可达时退避；最终失败由外层钩子再重试并记 error）。 */
+export async function retryHarnessCallback(
+  label: string,
+  task: () => Promise<void>,
+  logger: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void } = console,
+  delays: readonly number[] = [0, 250, 1000, 3000],
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]! > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+    try {
+      await task();
+      return;
+    } catch (err) {
+      lastError = err;
+      logger.warn?.(`[harness] ${label} failed (attempt ${attempt + 1}/${delays.length})`, err);
+    }
+  }
+  logger.error?.(`[harness] ${label} failed after retries`, lastError);
+  throw lastError;
+}
+
 export function createCloudControllerApp(): CloudControllerApp {
   assertRuntimeConfig(config);
   const logger = createLogger(config.logLevel);
@@ -85,6 +114,22 @@ export function createCloudControllerApp(): CloudControllerApp {
     token: config.internalApiToken,
     timeoutMs: config.agentApiTimeoutMs,
   });
+  if (!agentApiClient.configured) {
+    logger.warn?.(
+      '[harness] AGENT_API_URL 未配置：云电脑 ready/terminal 回调将不会发送（云电脑可能停在 STARTING/RUNNING）',
+    );
+  }
+  if (!adminBillingClient.configured) {
+    logger.warn?.(
+      '[harness] ADMIN_API_URL 未配置：容器终态撤销运行专用模型 Key 将不会发送（依赖 Key 过期/对账兜底）',
+    );
+  }
+
+  /**
+   * harness 生命周期回调重试：agent-api 短暂不可达时自动退避重试。
+   * 最终仍失败由外层 ContainerService 钩子（3 次）再重试并记录 error 日志（降级：
+   * agent-api 侧仍可用过期/对账与容器状态兜底，不阻断容器回收）。
+   */
   const containerService = new ContainerService(
     repo,
     tokenService,
@@ -116,17 +161,20 @@ export function createCloudControllerApp(): CloudControllerApp {
         } catch (err) {
           billingError = err;
         }
+        let callbackError: unknown;
         if (container.purpose === 'harness' && container.hostId) {
           try {
-            await agentApiClient.notifyReady(container.hostId);
-          } catch (err) {
-            logger.warn?.(
-              `[harness] ready callback failed hostId=${container.hostId}`,
-              err,
+            await retryHarnessCallback(
+              `ready callback hostId=${container.hostId}`,
+              () => agentApiClient.notifyReady(container.hostId!),
+              logger,
             );
+          } catch (err) {
+            callbackError = err;
           }
         }
         if (billingError) throw billingError;
+        if (callbackError) throw callbackError;
       },
       onDestroyed: async (container) => {
         let billingError: unknown;
@@ -146,31 +194,36 @@ export function createCloudControllerApp(): CloudControllerApp {
         } catch (err) {
           billingError = err;
         }
+        let callbackError: unknown;
         if (container.purpose === 'harness' && container.hostId) {
           // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped。
-          const status = container.status === 'failed' ? 'failed' : 'stopped';
+          const status = harnessTerminalStatus(container.status);
           try {
-            await agentApiClient.notifyTerminal(
-              container.hostId,
-              status,
-              container.exitReason ?? undefined,
+            await retryHarnessCallback(
+              `terminal callback hostId=${container.hostId}`,
+              () =>
+                agentApiClient.notifyTerminal(
+                  container.hostId!,
+                  status,
+                  container.exitReason ?? undefined,
+                ),
+              logger,
             );
           } catch (err) {
-            logger.warn?.(
-              `[harness] terminal callback failed hostId=${container.hostId}`,
-              err,
-            );
+            callbackError = err;
           }
           try {
-            await adminBillingClient.revokeByHost(container.hostId);
-          } catch (err) {
-            logger.warn?.(
-              `[harness] revoke-by-host failed hostId=${container.hostId}`,
-              err,
+            await retryHarnessCallback(
+              `revoke-by-host hostId=${container.hostId}`,
+              () => adminBillingClient.revokeByHost(container.hostId!),
+              logger,
             );
+          } catch (err) {
+            callbackError = callbackError ?? err;
           }
         }
         if (billingError) throw billingError;
+        if (callbackError) throw callbackError;
       },
     },
     secretStore,

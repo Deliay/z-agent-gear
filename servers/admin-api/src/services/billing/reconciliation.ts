@@ -529,6 +529,7 @@ export class ReconciliationService {
       else if (!host) reason = 'cloud_host_missing';
       else if (host.deletedAt) reason = 'cloud_host_deleted';
       else if (host.status !== 'RUNNING') reason = 'cloud_host_not_running';
+      else if (!key.expiresAt) reason = 'missing_expiry';
       else if (expired) reason = 'expired';
       if (!reason) continue;
 

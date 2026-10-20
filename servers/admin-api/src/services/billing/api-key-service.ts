@@ -117,8 +117,8 @@ export class ApiKeyService {
 
   /**
    * 云电脑运行专用 Key：
-   * - 同宿主先撤销旧 active Key（幂等轮换，避免同一容器存在多枚有效明文）；
-   * - `expiresAt` 由调用方按容器 TTL 提供。
+   * - **先铸造成功再撤销同宿主旧 active Key**，避免铸造失败导致旧 Key 提前失效；
+   * - `expiresAt` 由调用方按容器 TTL 提供，必须为未来时间。
    */
   async createCloudHostScopedKey(input: {
     accountId: string;
@@ -130,17 +130,25 @@ export class ApiKeyService {
   }): Promise<{ apiKey: BillingApiKeyDTO; secret: string }> {
     if (!mongoose.isValidObjectId(input.cloudHostId)) throw new Error('云电脑 ID 非法');
     const expiresAt = new Date(input.expiresAt);
-    if (Number.isNaN(expiresAt.getTime())) throw new Error('API Key 有效期非法');
-    await BillingApiKey.updateMany(
-      { scope: 'cloud_host', cloudHostId: input.cloudHostId, status: 'active' },
-      { $set: { status: 'revoked' } },
-    );
-    return this.create({
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+      throw new Error('API Key 有效期非法');
+    }
+    const created = await this.create({
       ...input,
       scope: 'cloud_host',
       cloudHostId: input.cloudHostId,
       expiresAt,
     });
+    await BillingApiKey.updateMany(
+      {
+        scope: 'cloud_host',
+        cloudHostId: input.cloudHostId,
+        status: 'active',
+        _id: { $ne: new mongoose.Types.ObjectId(created.apiKey.id) },
+      },
+      { $set: { status: 'revoked' } },
+    );
+    return created;
   }
 
   /** 校验完整 Key：前缀索引定位 + bcrypt 比对；成功后更新 lastUsedAt。过期 Key 视为无效。 */

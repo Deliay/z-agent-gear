@@ -107,15 +107,25 @@ describe('SessionView 云电脑只读回看', () => {
   });
 
   it.each([
-    { status: 'STOPPED' as const, failureReason: null, deletedAt: null },
-    { status: 'FAILED' as const, failureReason: 'container exited', deletedAt: null },
-    { status: 'RUNNING' as const, failureReason: null, deletedAt: '2026-01-02T00:00:00Z' },
-  ])('T-AW10 云电脑终态($status)时隐藏输入/发送/继续，保留历史消息', ({ status, failureReason, deletedAt }) => {
+    { status: 'STOPPED' as const, failureReason: null },
+    { status: 'FAILED' as const, failureReason: 'container exited' },
+  ])('T-AW10 云电脑终态($status)时隐藏输入/发送/继续，保留历史消息', ({ status, failureReason }) => {
     mockQueries(makeSession(), [
       makeController({
-        cloudHost: makeCloudHost({ status, failureReason, deletedAt }),
+        cloudHost: makeCloudHost({ status, failureReason }),
       }),
     ]);
+
+    render(<SessionView sessionId="session-1" />);
+
+    expect(screen.getByTestId('message-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('input-box')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-readonly-notice')).toBeInTheDocument();
+  });
+
+  it('T-AW10 软删除云电脑（cloudHost=null）仍按只读渲染', () => {
+    mockQueries(makeSession(), [makeController({ cloudHost: null })]);
 
     render(<SessionView sessionId="session-1" />);
 

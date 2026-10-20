@@ -363,7 +363,12 @@ export class SessionService {
         userId,
         deletedAt: null,
       }).lean();
-      if (!host || host.status === 'STOPPED' || host.status === 'FAILED') {
+      if (
+        !host ||
+        host.status === 'STOPPING' ||
+        host.status === 'STOPPED' ||
+        host.status === 'FAILED'
+      ) {
         return { success: false, status: 'ended', error: 'session is ended' };
       }
     }

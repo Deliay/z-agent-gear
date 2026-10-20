@@ -187,6 +187,30 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
     expect(again.status).toBe(200);
   });
 
+  it('T-CH22: terminal failed drives FAILED with reason', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const userId = signup.data.signup.user.id as string;
+    const { hostId } = await seedHost(db, { userId, status: 'RUNNING' });
+
+    const terminal = await callback(`/internal/cloud-hosts/${hostId}/terminal`, {
+      status: 'failed',
+      reason: 'harness init failed',
+    });
+    expect(terminal.status).toBe(200);
+    expect(await terminal.json()).toMatchObject({
+      status: 'FAILED',
+      failureReason: 'harness init failed',
+    });
+    const host = await db.collection('cloudhosts').findOne({
+      _id: new mongoose.Types.ObjectId(hostId),
+    });
+    expect(host).toMatchObject({ status: 'FAILED', containerId: null });
+  });
+
   it('returns 404 for unknown host', async () => {
     const unknown = new mongoose.Types.ObjectId().toString();
     expect((await callback(`/internal/cloud-hosts/${unknown}/ready`)).status).toBe(404);

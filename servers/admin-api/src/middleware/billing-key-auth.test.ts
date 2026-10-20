@@ -31,7 +31,7 @@ async function seedCloudHost(input: {
   const _id = new mongoose.Types.ObjectId();
   await mongoose.connection.db!.collection('cloudhosts').insertOne({
     _id,
-    userId: new mongoose.Types.ObjectId(),
+    userId: 'probe-user',
     controllerId: new mongoose.Types.ObjectId(),
     status: input.status ?? 'RUNNING',
     deletedAt: input.deletedAt ?? null,
@@ -137,8 +137,12 @@ describe('billingKeyAuth（CLOUD_HOST Key 实时失效）', () => {
     const secret = await seedKey({
       scope: 'cloud_host',
       cloudHostId,
-      expiresAt: new Date(Date.now() - 1000),
+      expiresAt: new Date(Date.now() + 60_000),
     });
+    await mongoose.connection.db!.collection('billingapikeys').updateMany(
+      { scope: 'cloud_host' },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
     expect((await probe(secret)).status).toBe(401);
   });
 

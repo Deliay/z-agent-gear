@@ -102,11 +102,11 @@ async function seedAccountWithKey(): Promise<string> {
 }
 
 /** 只读模型口径：cloudhosts 由 agent-api 写入，网关测试用原生集合插入。 */
-async function seedCloudHost(input: { status?: string } = {}): Promise<string> {
+async function seedCloudHost(input: { status?: string; userId?: string } = {}): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await mongoose.connection.db!.collection('cloudhosts').insertOne({
     _id,
-    userId: new mongoose.Types.ObjectId(),
+    userId: input.userId ?? new mongoose.Types.ObjectId().toString(),
     controllerId: new mongoose.Types.ObjectId(),
     status: input.status ?? 'RUNNING',
     deletedAt: null,
@@ -121,10 +121,17 @@ async function seedCloudHostKey(
   cloudHostId?: string,
   expiresAt = new Date(Date.now() + 60 * 60 * 1000),
 ): Promise<{ secret: string; cloudHostId: string }> {
-  const hostId = cloudHostId ?? (await seedCloudHost());
+  const userId = new mongoose.Types.ObjectId().toString();
+  const hostId = cloudHostId ?? (await seedCloudHost({ userId }));
+  if (cloudHostId) {
+    await mongoose.connection.db!.collection('cloudhosts').updateOne(
+      { _id: new mongoose.Types.ObjectId(cloudHostId) },
+      { $set: { userId: new mongoose.Types.ObjectId(userId) } },
+    );
+  }
   const account = await accountService.getOrCreate(
     'front_user',
-    new mongoose.Types.ObjectId().toString(),
+    userId,
     'cloud-host-user',
   );
   await paymentService.recharge({
@@ -136,7 +143,7 @@ async function seedCloudHostKey(
   const created = await apiKeyService.createCloudHostScopedKey({
     accountId: account.id,
     ownerType: 'front_user',
-    ownerId: 'cloud-host-user',
+    ownerId: userId,
     name: 'host-key',
     cloudHostId: hostId,
     expiresAt,

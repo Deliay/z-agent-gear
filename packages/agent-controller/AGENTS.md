@@ -81,7 +81,10 @@ process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / W
 
 - 先连 `/worker`：`registered.initializing=true` 时等待首个 `workload:run` init 批次结束（成功/失败）后
   再连 controller-api；`false`/缺省立即连接；等待上限 `HARNESS_INIT_WAIT_MS`（默认 10 分钟）。
+  **被打断（cancelled）的批次不算完成**（重连重放时继续等待）；超时后迟到的 `registered` 不再次进入等待。
 - 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/root/workspace`，幂等）。
+- 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
+  本地单连接保持原行为，配置写入使用权限 `0600`。
 - 任一端 `shutdown` → 关闭两端并退出 0；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。

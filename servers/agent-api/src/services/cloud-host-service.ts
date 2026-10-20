@@ -6,7 +6,7 @@ import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Session } from '../models/session.js';
-import { billingClient } from './billing-client.js';
+import { billingClient, BillingServiceUnavailableError } from './billing-client.js';
 import {
   CloudControllerClient,
   CloudControllerUnavailableError,
@@ -169,8 +169,7 @@ export class CloudHostService {
       let account: { id: string };
       try {
         account = await billingClient.getAccount('front_user', userId);
-      } catch (err) {
-        if (err instanceof CloudControllerUnavailableError) throw err;
+      } catch {
         throw new Error('billing service unavailable');
       }
 
@@ -286,6 +285,9 @@ export class CloudHostService {
         if (err instanceof CloudControllerUnavailableError) {
           throw new Error('control plane unavailable');
         }
+        if (err instanceof BillingServiceUnavailableError) {
+          throw new Error('billing service unavailable');
+        }
         throw err;
       }
     });
@@ -396,8 +398,8 @@ export class CloudHostService {
         console.warn('[cloud-host] revoke model key on stop failed:', (err as Error).message);
       });
 
-      const stopped = await CloudHost.findByIdAndUpdate(
-        id,
+      const stopped = await CloudHost.findOneAndUpdate(
+        { _id: id, userId, status: 'STOPPING' },
         {
           $set: {
             status: 'STOPPED',
@@ -407,7 +409,8 @@ export class CloudHostService {
         },
         { new: true },
       ).lean();
-      return this.mapCloudHost(stopped ?? stopping, 0);
+      const latest = stopped ?? (await this.findOwnedHost(id, userId));
+      return this.mapCloudHost(latest, 0);
     });
   }
 
@@ -440,24 +443,32 @@ export class CloudHostService {
     });
   }
 
-  /** 内部 ready 回调：STARTING→RUNNING；单 harness 自动创建默认会话（幂等）。 */
+  /** 内部 ready 回调：STARTING→RUNNING；单 harness 自动创建默认会话（幂等，per-host 串行）。 */
   async handleReady(id: string): Promise<Doc | null> {
+    return this.hostMutex.runExclusive(`host:${id}`, () => this.handleReadyLocked(id));
+  }
+
+  private async handleReadyLocked(id: string): Promise<Doc | null> {
     const host = await this.findRawHost(id);
     if (!host) return null;
-    if (host.status === 'RUNNING') return this.mapCloudHost(host, await this.countActive(host));
     if (host.status === 'STOPPED' || host.status === 'FAILED' || host.status === 'STOPPING') {
       return this.mapCloudHost(host, await this.countActive(host));
     }
 
-    const updated = await CloudHost.findOneAndUpdate(
-      { _id: id, deletedAt: null, status: 'STARTING' },
-      { $set: { status: 'RUNNING', readyAt: new Date() } },
-      { new: true },
-    ).lean();
-    const current = updated ?? (await this.findRawHost(id));
-    if (!current) return null;
-    if (current.status !== 'RUNNING') {
-      return this.mapCloudHost(current, await this.countActive(current));
+    let current = host;
+    if (host.status !== 'RUNNING') {
+      const updated = await CloudHost.findOneAndUpdate(
+        { _id: id, deletedAt: null, status: 'STARTING' },
+        { $set: { status: 'RUNNING', readyAt: new Date() } },
+        { new: true },
+      ).lean();
+      const fetched = updated ?? (await this.findRawHost(id));
+      if (!fetched) return null;
+      // CAS 未命中且已被并发终止（STOPPING/STOPPED/FAILED）：不得创建默认会话
+      if (fetched.status !== 'RUNNING') {
+        return this.mapCloudHost(fetched, await this.countActive(fetched));
+      }
+      current = fetched;
     }
 
     const harnessTypes = (current.harnessTypes ?? []) as HarnessType[];
@@ -500,6 +511,7 @@ export class CloudHostService {
         $set: {
           status: target,
           stoppedAt: new Date(),
+          containerId: null,
           failureReason: target === 'FAILED' ? input.reason ?? 'cloud host failed' : null,
         },
       },

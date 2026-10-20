@@ -182,8 +182,13 @@ describe('ApiKeyService', () => {
       ownerId: 'u-expired',
       name: 'expired-key',
       cloudHostId: new mongoose.Types.ObjectId().toString(),
-      expiresAt: new Date(Date.now() - 1000),
+      expiresAt: new Date(Date.now() + 60_000),
     });
+    const { BillingApiKey } = await import('../../models/billing-api-key.js');
+    await BillingApiKey.updateMany(
+      { scope: 'cloud_host', ownerId: 'u-expired' },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
     expect(await apiKeyService.verify(secret)).toBeNull();
   });
 

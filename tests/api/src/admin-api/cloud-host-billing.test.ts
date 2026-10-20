@@ -97,6 +97,25 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     expect(revoked.status).toBe(200);
     expect((await models(payload.secret)).status).toBe(401);
 
+    // 过期 Key 即使宿主 RUNNING 也 401
+    const second = await internal('/internal/billing/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({
+        ownerType: 'front_user',
+        ownerId: userId,
+        name: 'cloud-key-2',
+        scope: 'cloud_host',
+        cloudHostId,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    });
+    const secondPayload = (await second.json()) as { secret: string };
+    await db.collection('billingapikeys').updateMany(
+      { cloudHostId: new mongoose.Types.ObjectId(cloudHostId), status: 'active' },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
+    expect((await models(secondPayload.secret)).status).toBe(401);
+
     // 幂等
     expect(
       (

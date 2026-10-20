@@ -81,7 +81,7 @@ export default function NewSessionDialog({
   );
   const preselectedController = controllers.find((c) => c.id === existingControllerId);
   const preselectedControllerUnavailable =
-    Boolean(preselectedController) &&
+    preselectedController?.type === 'cloud' &&
     !onlineControllers.some((c) => c.id === preselectedController?.id);
   const selectedControllerSelectable = onlineControllers.some((c) => c.id === selectedController);
 

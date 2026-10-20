@@ -122,6 +122,85 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     });
   });
 
+  it('keeps normal ended sessions resumable', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const token = signup.data.signup.token as string;
+    const userId = signup.data.signup.user.id as string;
+    const now = new Date();
+    const controllerId = new mongoose.Types.ObjectId();
+    await db.collection('controllers').insertOne({
+      _id: controllerId,
+      userId: new mongoose.Types.ObjectId(userId),
+      name: 'local',
+      hostname: 'local',
+      type: 'local',
+      status: 'online',
+      keyId: new mongoose.Types.ObjectId(),
+      version: '2.5.0',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const inserted = await db.collection('sessions').insertOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      controllerId,
+      controllerName: 'local',
+      acpServerType: 'opencode',
+      status: 'ended',
+      title: 'normal-ended',
+      endedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
+    expect(result.errors).toBeUndefined();
+    expect(result.data.resumeSession).toMatchObject({ success: true, status: 'connecting' });
+
+    await db.collection('sessions').deleteOne({ _id: inserted.insertedId });
+    await db.collection('controllers').deleteOne({ _id: controllerId });
+  });
+
+  it('rejects resume while cloud host is STOPPING', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const token = signup.data.signup.token as string;
+    const userId = signup.data.signup.user.id as string;
+    const { controllerId } = await seedCloudController(db, userId, 'STOPPED');
+    await db
+      .collection('cloudhosts')
+      .updateOne({ controllerId }, { $set: { status: 'STOPPING' } });
+    const now = new Date();
+    const inserted = await db.collection('sessions').insertOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      controllerId,
+      controllerName: 'cloud',
+      acpServerType: 'opencode',
+      status: 'ended',
+      title: 'stopping',
+      endedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
+    expect(result.data.resumeSession).toEqual({
+      success: false,
+      status: 'ended',
+      error: 'session is ended',
+    });
+    await db.collection('sessions').deleteOne({ _id: inserted.insertedId });
+    await db.collection('cloudhosts').deleteMany({ controllerId });
+    await db.collection('controllerworkspaces').deleteMany({ controllerId });
+    await db.collection('controllers').deleteOne({ _id: controllerId });
+  });
+
   it('rejects createSession while cloud host is not RUNNING', async () => {
     const db = (await mongoDb())!;
     const signup = await gql(SIGNUP, {

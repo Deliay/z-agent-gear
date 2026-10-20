@@ -183,6 +183,7 @@ export async function startCloudHostSupervisor(
       handshakeToken: env.hostKey,
       handleWorkload: false,
       skipLocalMcpStart: false,
+      persistConfig: false,
       onShutdown: (payload) => shutdown(`controller-api shutdown: ${payload.reason}`),
     });
   };
@@ -197,6 +198,8 @@ export async function startCloudHostSupervisor(
     log(`[CloudHost] waiting for harness initialization (timeout ${env.initWaitMs}ms)`);
     initWaitTimer = setTimeout(() => {
       initWaitTimer = null;
+      // 超时后视为已完成：迟到的 registered(initializing=true) 不得再次进入等待（幽灵定时器）。
+      initBatchCompleted = true;
       log('[CloudHost] harness initialization wait timed out; connecting controller-api anyway');
       connectController();
     }, env.initWaitMs);
@@ -207,6 +210,7 @@ export async function startCloudHostSupervisor(
     handshakeToken: env.controllerKey,
     handleWorkload: true,
     skipLocalMcpStart: true,
+    persistConfig: false,
     onRegistered: (payload) => {
       log(`[CloudHost] worker registered: ${payload.controllerId}${payload.initializing ? ' (initializing)' : ''}`);
       if (payload.initializing) {
@@ -217,9 +221,17 @@ export async function startCloudHostSupervisor(
     },
     onWorkloadBatchComplete: (summary) => {
       if (summary.phase !== 'init') return;
+      if (summary.cancelled || summary.status === 'cancelled') {
+        // 被新批次/销毁打断：不得视为初始化完成（重连重放 init 时 OpenCode 可能仍在安装）。
+        log('[CloudHost] harness initialization interrupted; waiting for replay');
+        return;
+      }
       initBatchCompleted = true;
       if (waitingForInit) {
-        log(`[CloudHost] harness initialization finished (${summary.status}); connecting controller-api`);
+        log(
+          `[CloudHost] harness initialization finished (${summary.status}` +
+            `${summary.failedCount ? `, failed=${summary.failedCount}` : ''}); connecting controller-api`,
+        );
         connectController();
       }
     },

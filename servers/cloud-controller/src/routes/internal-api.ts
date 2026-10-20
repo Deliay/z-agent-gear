@@ -188,6 +188,7 @@ interface ParsedHarnessRequest {
   harnessTypes: string[];
   controllerKeyId: string | null;
   containerApiKeyId: string | null;
+  agentGearMinVersion: string;
   expiresAt: Date;
   secrets: HarnessSecrets;
 }
@@ -211,14 +212,14 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
   const refId = nonEmptyString(body.refId);
   const userId = nonEmptyString(body.userId);
   const hostName = nonEmptyString(body.hostName);
-  const controllerKeyId = body.controllerKeyId === undefined || body.controllerKeyId === null
-    ? null
-    : nonEmptyString(body.controllerKeyId);
+  // 契约 A.2.2：refId 即标准连接 ControllerKey ID（不再单独下发 controllerKeyId）。
+  const controllerKeyId = refId;
   const containerApiKeyId = body.containerApiKeyId === undefined || body.containerApiKeyId === null
     ? null
     : nonEmptyString(body.containerApiKeyId);
+  const agentGearMinVersion = nonEmptyString(body.agentGearMinVersion);
   if (!hostId || !refId || !userId || !hostName) return null;
-  if (body.controllerKeyId !== undefined && body.controllerKeyId !== null && !controllerKeyId) {
+  if (!agentGearMinVersion || !/^\d+\.\d+\.\d+$/.test(agentGearMinVersion)) {
     return null;
   }
   if (
@@ -270,6 +271,7 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
+    agentGearMinVersion,
     expiresAt,
     secrets,
   };
@@ -396,7 +398,7 @@ export function createInternalRouter(
     }
 
     // 契约 A.2.2：harness 的 workloadPlan 必填（缺失/展开为空均 400 INVALID_HARNESS）。
-    if (isHarness && effectivePlan.length === 0) {
+    if (isHarness && (!hadExplicitPlan || effectivePlan.length === 0)) {
       res.status(400).json({
         error: 'INVALID_HARNESS',
         message: '云电脑参数非法（workloadPlan 为空）',

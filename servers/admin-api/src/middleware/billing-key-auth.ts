@@ -66,9 +66,14 @@ async function isCloudHostKeyUsable(verified: VerifiedApiKey): Promise<boolean> 
   if (!verified.cloudHostId || !mongoose.isValidObjectId(verified.cloudHostId)) return false;
   if (!verified.expiresAt || verified.expiresAt.getTime() <= Date.now()) return false;
   const host = await CloudHost.findById(verified.cloudHostId)
-    .select({ status: 1, deletedAt: 1 })
-    .lean<{ status?: string; deletedAt?: Date | null } | null>();
-  return !!host && !host.deletedAt && host.status === 'RUNNING';
+    .select({ status: 1, deletedAt: 1, userId: 1 })
+    .lean<{ status?: string; deletedAt?: Date | null; userId?: unknown } | null>();
+  if (!host || host.deletedAt || host.status !== 'RUNNING') return false;
+  // 纵深防御：运行 Key 的属主必须与云电脑属主一致（防止跨用户 Key 复用）。
+  if (verified.ownerType === 'front_user') {
+    return !!host.userId && String(host.userId) === verified.ownerId;
+  }
+  return true;
 }
 
 /** `Authorization: Bearer zag_sk_<hex>` → 校验 API Key 并注入 `billing`。 */

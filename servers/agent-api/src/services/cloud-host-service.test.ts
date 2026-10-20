@@ -47,6 +47,7 @@ vi.mock('../models/session.js', () => ({
 }));
 
 vi.mock('./billing-client.js', () => ({
+  BillingServiceUnavailableError: class BillingServiceUnavailableError extends Error {},
   billingClient: {
     getAccount: vi.fn(),
     createCloudHostApiKey: vi.fn(),
@@ -98,7 +99,7 @@ import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Session } from '../models/session.js';
-import { billingClient } from './billing-client.js';
+import { billingClient, BillingServiceUnavailableError } from './billing-client.js';
 import { cloudControllerClient } from './cloud-controller-client.js';
 import { cloudWorkloadReader } from './cloud-workload-reader.js';
 import { evictKeyById } from './key-cache.js';
@@ -325,7 +326,82 @@ describe('CloudHostService', () => {
       expect(Controller.deleteOne).toHaveBeenCalled();
       expect(evictKeyById).toHaveBeenCalledWith('key-1');
       expect(ControllerKey.deleteOne).toHaveBeenCalled();
+      expect(CloudHost.deleteOne).toHaveBeenCalled();
       expect(CloudHost.create).toHaveBeenCalled();
+    });
+
+    it('maps model key mint failure to billing service unavailable', async () => {
+      setupCreateSuccess();
+      vi.mocked(billingClient.createCloudHostApiKey).mockRejectedValue(
+        new BillingServiceUnavailableError('down'),
+      );
+
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('billing service unavailable');
+      expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
+      expect(CloudHost.deleteOne).toHaveBeenCalled();
+    });
+
+    it('serializes concurrent creates so only one host can start', async () => {
+      setupCreateSuccess();
+      vi.mocked(CloudHost.countDocuments)
+        .mockResolvedValueOnce(0 as never)
+        .mockResolvedValue(1 as never);
+
+      const results = await Promise.allSettled([
+        service.create('user-1', { name: 'first', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { name: 'second', harnessTypes: ['OPENCODE'] }),
+      ]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+      expect(String(rejected.reason)).toContain('too many cloud hosts');
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('list and stop impact', () => {
+    it('maps hosts with active session counts and excludes soft-deleted hosts', async () => {
+      vi.mocked(CloudHost.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([
+            hostDoc({ status: 'RUNNING' }),
+            hostDoc({ _id: oid('507f1f77bcf86cd799439099'), status: 'STOPPED' }),
+          ]),
+        }),
+      } as never);
+      vi.mocked(Session.countDocuments)
+        .mockResolvedValueOnce(2 as never)
+        .mockResolvedValueOnce(0 as never);
+
+      const result = await service.list('user-1');
+
+      expect(CloudHost.find).toHaveBeenCalledWith({ userId: 'user-1', deletedAt: null });
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({ status: 'RUNNING', activeSessionCount: 2 });
+      expect(result[1]).toMatchObject({ status: 'STOPPED', activeSessionCount: 0 });
+    });
+
+    it('returns stop impact session summaries', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'RUNNING' })) as never);
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([
+            { _id: oid('sess-1'), title: 'working', status: 'idling', acpServerType: 'opencode' },
+          ]),
+        }),
+      } as never);
+
+      const impact = await service.stopImpact(HOST_ID, 'user-1');
+
+      expect(impact).toEqual({
+        activeSessionCount: 1,
+        sessionsWillBeLost: true,
+        sessions: [
+          { id: 'sess-1', title: 'working', status: 'idling', acpServerType: 'opencode' },
+        ],
+      });
     });
   });
 
@@ -343,14 +419,11 @@ describe('CloudHostService', () => {
     it('ends sessions, destroys container, revokes keys and stops host', async () => {
       vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'RUNNING' })) as never);
       vi.mocked(Session.countDocuments).mockResolvedValue(1 as never);
-      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
-        chain(hostDoc({ status: 'STOPPING' })) as never,
-      );
+      vi.mocked(CloudHost.findOneAndUpdate)
+        .mockReturnValueOnce(chain(hostDoc({ status: 'STOPPING' })) as never)
+        .mockReturnValueOnce(chain(hostDoc({ status: 'STOPPED', containerId: null })) as never);
       vi.mocked(sessionService.endByController).mockResolvedValue(1 as never);
       vi.mocked(cloudControllerClient.destroyContainer).mockResolvedValue(undefined as never);
-      vi.mocked(CloudHost.findByIdAndUpdate).mockReturnValue(
-        chain(hostDoc({ status: 'STOPPED', containerId: null })) as never,
-      );
 
       const result = await service.stop(HOST_ID, 'user-1', true);
 
@@ -414,6 +487,15 @@ describe('CloudHostService', () => {
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
     });
+
+    it('is idempotent for already soft-deleted hosts', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'STOPPED', deletedAt: new Date() })) as never,
+      );
+      await expect(service.delete(HOST_ID, 'user-1')).resolves.toBe(true);
+      expect(CloudHost.updateOne).not.toHaveBeenCalled();
+      expect(ControllerKey.deleteOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('callbacks', () => {
@@ -458,6 +540,34 @@ describe('CloudHostService', () => {
       });
     });
 
+    it('does not create a default session when multiple harness types are selected', async () => {
+      const starting = hostDoc({ status: 'STARTING', harnessTypes: ['OPENCODE', 'CODEX'] });
+      const running = hostDoc({ status: 'RUNNING', harnessTypes: ['OPENCODE', 'CODEX'] });
+      vi.mocked(CloudHost.findOne)
+        .mockReturnValueOnce(chain(starting) as never)
+        .mockReturnValueOnce(chain(running) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        defaultSessionId: null,
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+    });
+
+    it('repeated ready on RUNNING host does not create a duplicate session', async () => {
+      const running = hostDoc({ status: 'RUNNING', defaultSessionId: oid('sess-existing') });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(1 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        status: 'RUNNING',
+        defaultSessionId: 'sess-existing',
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+      expect(CloudHost.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
     it('terminal ends sessions and revokes model key', async () => {
       vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'RUNNING' })) as never);
       vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
@@ -484,6 +594,17 @@ describe('CloudHostService', () => {
         reason: 'job failed',
       });
       expect(result).toMatchObject({ status: 'FAILED', failureReason: 'job failed' });
+    });
+
+    it('repeated terminal callback is idempotent', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'STOPPED' })) as never);
+
+      await expect(
+        service.handleTerminal(HOST_ID, { status: 'stopped' }),
+      ).resolves.toMatchObject({ status: 'STOPPED' });
+      expect(CloudHost.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(sessionService.endByController).not.toHaveBeenCalled();
+      expect(billingClient.revokeApiKeysByHost).not.toHaveBeenCalled();
     });
   });
 });

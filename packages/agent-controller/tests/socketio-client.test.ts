@@ -364,7 +364,7 @@ describe('SocketIO Client', () => {
       expect(onRegistered).toHaveBeenCalledWith({ controllerId: 'ctrl-1', initializing: true });
     });
 
-    it('T-AG4: invokes onWorkloadBatchComplete after an init batch completes', async () => {
+    it('T-AG4: invokes onWorkloadBatchComplete after an init batch ends', async () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
       const onWorkloadBatchComplete = vi.fn();
@@ -372,13 +372,19 @@ describe('SocketIO Client', () => {
       connectToServer('http://localhost:4001', 'zag_k_1_abc123', { onWorkloadBatchComplete });
       mockSocket._trigger('workload:run', {
         phase: 'init',
-        // 空脚本立即产生失败结果（不需要真实 spawn），用于锚定「批次结束即回调」
+        // 空脚本立即产生失败结果（不需要真实 spawn），用于锚定「批次结束即回调且摘要反映失败」
         items: [{ logId: 'init-1', workloadName: 'Init', script: '', timeoutMs: 5000 }],
       });
 
       await vi.waitFor(() => {
         expect(mockSocket.emit).toHaveBeenCalledWith('workload:result', expect.objectContaining({ logId: 'init-1' }));
-        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({ phase: 'init', itemCount: 1, status: 'completed' });
+        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({
+          phase: 'init',
+          itemCount: 1,
+          status: 'failed',
+          cancelled: false,
+          failedCount: 1,
+        });
       });
     });
 
@@ -394,7 +400,13 @@ describe('SocketIO Client', () => {
       });
 
       await vi.waitFor(() => {
-        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({ phase: 'init', itemCount: 1, status: 'completed' });
+        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({
+          phase: 'init',
+          itemCount: 1,
+          status: 'failed',
+          cancelled: false,
+          failedCount: 1,
+        });
       });
     });
 

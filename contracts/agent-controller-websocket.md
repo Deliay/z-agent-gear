@@ -59,9 +59,8 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `controllerId` | `string` | 是 | 服务端分配的控制器 ID |
-| `initializing` | `boolean` | 否 | 云电脑场景：是否存在待执行的初始化脚本；`true` 时客户端应等待首个 `workload:run` 批次结束后再建立标准连接。缺省/false 时立即连接（向后兼容） |
 
-**客户端行为：** 收到后开始每 30s 发送 `heartbeat`；云电脑模式下若 `initializing=true`，等待初始化批次完成后再连接 controller-api。
+**客户端行为：** 收到后开始每 30s 发送 `heartbeat`。`initializing` 仅由 cloud-controller `/worker` 的 `registered` 返回（见 `cloud-controller-websocket.md` §2.3），controller-api 标准连接不发送。
 
 ### 2.4 `error`（Server → Controller）
 

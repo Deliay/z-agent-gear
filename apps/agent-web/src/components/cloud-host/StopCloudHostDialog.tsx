@@ -45,6 +45,7 @@ export default function StopCloudHostDialog({
 }: StopCloudHostDialogProps) {
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [autoStopFailed, setAutoStopFailed] = useState(false)
   const autoStopRef = useRef(false)
   const [stopCloudHost] = useMutation<StopCloudHostMutation>(STOP_CLOUD_HOST)
 
@@ -64,6 +65,7 @@ export default function StopCloudHostDialog({
       autoStopRef.current = false
       setStopping(false)
       setError(null)
+      setAutoStopFailed(false)
     }
   }, [open])
 
@@ -82,6 +84,12 @@ export default function StopCloudHostDialog({
     } catch (err) {
       setError(getErrorMessage(err))
       setStopping(false)
+      // 自动停止在「impact 查询 → stop」之间出现了新会话：允许用户确认强制停止，
+      // 并重新拉取 impact 以展示最新活动会话数。
+      if (!force) {
+        setAutoStopFailed(true)
+        void refetch()
+      }
     }
   }, [cloudHost.id, onStopped, stopCloudHost])
 
@@ -89,10 +97,10 @@ export default function StopCloudHostDialog({
   useEffect(() => {
     if (!open || loading || !impact) return
     if (impact.activeSessionCount > 0) return
-    if (autoStopRef.current) return
+    if (autoStopRef.current || autoStopFailed) return
     autoStopRef.current = true
     void handleStop(false)
-  }, [open, loading, impact, handleStop])
+  }, [open, loading, impact, handleStop, autoStopFailed])
 
   const hasActiveSessions = (impact?.activeSessionCount ?? 0) > 0
 
@@ -141,6 +149,16 @@ export default function StopCloudHostDialog({
             取消
           </Button>
           {hasActiveSessions && (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={stopping}
+              onClick={() => { void handleStop(true) }}
+            >
+              {stopping ? '停止中...' : '继续停止'}
+            </Button>
+          )}
+          {!hasActiveSessions && autoStopFailed && (
             <Button
               type="button"
               variant="destructive"
