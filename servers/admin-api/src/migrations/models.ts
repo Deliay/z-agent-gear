@@ -10,7 +10,9 @@ const migrationsSchema = new mongoose.Schema(
   {
     name: { type: String, unique: true, sparse: true },
     executedAt: { type: Date },
-    _lock: { type: String, sparse: true },
+    _lock: { type: String, unique: true, sparse: true },
+    /** 锁归属（建议 5）：只有持有者本人可以释放，避免误删他人锁。 */
+    owner: { type: String, default: null },
     acquired: { type: Date },
     expiresAt: { type: Date },
   },

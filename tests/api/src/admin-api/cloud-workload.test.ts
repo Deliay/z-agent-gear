@@ -705,4 +705,43 @@ describe('Admin Cloud Workload API', () => {
     expect(script).toContain('dotnet10');
     expect(script).not.toContain('dotnet-install.sh');
   });
+
+  it('T-IA: preset Aspire uses the proxied-package init script (migration 004 upgrade)', async () => {
+    // 内网缓存代理安装包直链（与迁移 004 ASPIRE_CLI_URL_DEFAULT 一致）
+    const aspireCliUrlDefault =
+      'https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz';
+
+    const res = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
+    expect(res.errors).toBeUndefined();
+    const aspire = res.data!.adminCloudWorkloads.find((workload) => workload.name === 'Aspire');
+    expect(aspire, 'preset Aspire should exist').toBeTruthy();
+
+    // 下载地址成为可见参数，默认值为内网代理安装包直链
+    const param = aspire!.paramSchema?.find((field) => field.key === 'aspire_cli_url');
+    expect(param, 'aspire_cli_url param should exist').toBeTruthy();
+    expect(param).toMatchObject({
+      key: 'aspire_cli_url',
+      label: 'Aspire CLI 下载地址',
+      type: 'TEXT',
+      options: [],
+      defaultValue: aspireCliUrlDefault,
+    });
+
+    // 脚本直连下载解压，且不再引用官方安装渠道（脚本内不内置默认地址）
+    const script = aspire!.initScript ?? '';
+    expect(script).toContain('curl -fsSL');
+    expect(script).toContain('tar -xzf');
+    expect(script).not.toContain('install.sh');
+    expect(script).not.toContain('aspire.dev');
+    expect(script).not.toContain('aka.ms');
+    expect(script).not.toContain('ASPIRE_INSTALL_URL');
+
+    // 重复查询预制项 ID 集合稳定（迁移不重复写入/重建）
+    const second = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
+    const aspireIds = (list: WorkloadNode[]) =>
+      list.filter((workload) => workload.name === 'Aspire').map((workload) => workload.id).sort();
+    expect(aspireIds(second.data!.adminCloudWorkloads)).toEqual(
+      aspireIds(res.data!.adminCloudWorkloads),
+    );
+  });
 });

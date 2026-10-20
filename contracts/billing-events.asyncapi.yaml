@@ -1,0 +1,292 @@
+asyncapi: 3.0.0
+info:
+  title: Agent Gear 计费事件骨干
+  version: 1.0.0
+  description: |
+    业务事件 → 计量（Metering）→ 定价（Pricing）→ 账单（Invoice）→ 支付（Payment）→ 收据（Receipt）。
+
+    可靠性：at-least-once。业务侧本地 outbox 落库 → publisher confirm 发布 → 消费端手动 ack
+    + `eventId` 幂等；失败按 TTL 退避重试，超次进入 DLQ；事件丢失最终由三线对账兜底。
+
+    重复/乱序安全：`eventId` 唯一索引去重；事件按 `occurredAt` 归位计量。
+defaultContentType: application/json
+servers:
+  development:
+    host: localhost:5672
+    protocol: amqp
+    description: 本地 RabbitMQ（aspire 资源 `rabbitmq`）
+channels:
+  containerReady:
+    address: container.ready
+    messages:
+      containerReady:
+        $ref: '#/components/messages/ContainerReady'
+  containerDestroyed:
+    address: container.destroyed
+    messages:
+      containerDestroyed:
+        $ref: '#/components/messages/ContainerDestroyed'
+  modelCallCompleted:
+    address: model_call.completed
+    messages:
+      modelCallCompleted:
+        $ref: '#/components/messages/ModelCallCompleted'
+  modelCallAborted:
+    address: model_call.aborted
+    messages:
+      modelCallAborted:
+        $ref: '#/components/messages/ModelCallAborted'
+  settlementCycle:
+    address: billing.settlement.cycle
+    messages:
+      settlementCycle:
+        $ref: '#/components/messages/SettlementCycle'
+operations:
+  consumeMeteringEvents:
+    action: receive
+    channel:
+      $ref: '#/channels/containerReady'
+  consumeContainerDestroyed:
+    action: receive
+    channel:
+      $ref: '#/channels/containerDestroyed'
+  consumeModelCallCompleted:
+    action: receive
+    channel:
+      $ref: '#/channels/modelCallCompleted'
+  consumeModelCallAborted:
+    action: receive
+    channel:
+      $ref: '#/channels/modelCallAborted'
+  consumeSettlementCycle:
+    action: receive
+    channel:
+      $ref: '#/channels/settlementCycle'
+components:
+  messages:
+    BillingEvent:
+      name: BillingEvent
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BillingEvent'
+    ContainerReady:
+      name: ContainerReady
+      title: 容器就绪（计费起点）
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          x-event-id:
+            type: string
+          x-publish-attempts:
+            type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
+      payload:
+        $ref: '#/components/schemas/ContainerReadyEvent'
+    ContainerDestroyed:
+      name: ContainerDestroyed
+      title: 容器销毁
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          x-event-id:
+            type: string
+          x-publish-attempts:
+            type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
+      payload:
+        $ref: '#/components/schemas/ContainerDestroyedEvent'
+    ModelCallCompleted:
+      name: ModelCallCompleted
+      title: 模型调用完成
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          x-event-id:
+            type: string
+          x-publish-attempts:
+            type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
+      payload:
+        $ref: '#/components/schemas/ModelCallEvent'
+    ModelCallAborted:
+      name: ModelCallAborted
+      title: 模型调用中断
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          x-event-id:
+            type: string
+          x-publish-attempts:
+            type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
+      payload:
+        $ref: '#/components/schemas/ModelCallEvent'
+    SettlementCycle:
+      name: SettlementCycle
+      title: 周期结算调度消息（延迟消息）
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          x-event-id:
+            type: string
+          x-publish-attempts:
+            type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
+      payload:
+        $ref: '#/components/schemas/SettlementCycleMessage'
+  schemas:
+    BillingEvent:
+      type: object
+      required: [eventId, eventType, occurredAt, accountId, resourceId, payload]
+      properties:
+        eventId:
+          type: string
+          description: 幂等键；唯一索引
+        eventType:
+          type: string
+          enum:
+            - container.ready
+            - container.destroyed
+            - model_call.completed
+            - model_call.aborted
+        occurredAt:
+          type: string
+          format: date-time
+        accountId:
+          type: string
+        resourceId:
+          type: string
+        payload:
+          $ref: '#/components/schemas/BillingEventPayload'
+    ContainerReadyEvent:
+      allOf:
+        - $ref: '#/components/schemas/BillingEvent'
+        - type: object
+          properties:
+            eventType:
+              const: container.ready
+            payload:
+              type: object
+              required: [billingStartedAt]
+              properties:
+                billingStartedAt:
+                  type: string
+                  format: date-time
+    ContainerDestroyedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BillingEvent'
+        - type: object
+          properties:
+            eventType:
+              const: container.destroyed
+            payload:
+              type: object
+              required: [billingStartedAt, exitedAt]
+              properties:
+                billingStartedAt:
+                  type: string
+                  format: date-time
+                exitedAt:
+                  type: string
+                  format: date-time
+                minutes:
+                  type: integer
+                  description: 可选尾数；缺省由计费侧按 billingStartedAt + exitedAt 计算
+    ModelCallEvent:
+      allOf:
+        - $ref: '#/components/schemas/BillingEvent'
+        - type: object
+          properties:
+            eventType:
+              enum: [model_call.completed, model_call.aborted]
+            payload:
+              type: object
+              required: [modelId]
+              properties:
+                modelId:
+                  type: string
+                inputTokens:
+                  type: integer
+                  minimum: 0
+                cachedInputTokens:
+                  type: integer
+                  minimum: 0
+                outputTokens:
+                  type: integer
+                  minimum: 0
+                estimated:
+                  type: boolean
+                  description: 用量缺失时按兜底规则估算
+                estimatedInputTokens:
+                  type: integer
+                  minimum: 0
+                  description: 兜底估算的输入 token（网关计量缺失时提供）
+                estimatedOutputTokens:
+                  type: integer
+                  minimum: 0
+                  description: 兜底估算的输出 token（网关计量缺失时提供）
+                reason:
+                  type: string
+                  description: 中断原因（aborted）
+    BillingEventPayload:
+      type: object
+      description: 事实信息，不带金额；计费侧绝不回查业务库
+      properties:
+        billingStartedAt:
+          type: string
+          format: date-time
+        exitedAt:
+          type: string
+          format: date-time
+        minutes:
+          type: integer
+        modelId:
+          type: string
+        inputTokens:
+          type: integer
+        cachedInputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+        estimated:
+          type: boolean
+        estimatedInputTokens:
+          type: integer
+        estimatedOutputTokens:
+          type: integer
+        reason:
+          type: string
+    SettlementCycleMessage:
+      type: object
+      required: [reservationId, accountId, cycleSeq]
+      properties:
+        reservationId:
+          type: string
+        accountId:
+          type: string
+        cycleSeq:
+          type: integer
+          minimum: 0
+        occurredAt:
+          type: string
+          format: date-time

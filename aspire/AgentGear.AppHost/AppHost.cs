@@ -1,3 +1,6 @@
+using Aspire.Hosting.Docker.Resources.ComposeNodes;
+using Aspire.Hosting.Docker.Resources.ServiceNodes;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // 敏感参数：优先使用配置注入（`Parameters:<name>` / 环境变量 `Parameters__<name>`），
@@ -23,6 +26,25 @@ var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .ConfigureComposeFile(composeFile =>
     {
         composeFile.Services.Remove("agent-controller");
+        // 🟡9/D-5：把 RabbitMQ healthcheck 与依赖条件固化进 AppHost（发布时生成，不再依赖手工改
+        // manifest），避免下次 `aspire publish` 漂移回 `image: rabbitmq:3-management`/无健康检查。
+        if (composeFile.Services.TryGetValue("rabbitmq", out var rabbit))
+        {
+            rabbit.Healthcheck = new Healthcheck
+            {
+                Test = new List<string> { "CMD", "rabbitmq-diagnostics", "-q", "ping" },
+                Interval = "10s",
+                Timeout = "5s",
+                Retries = 10,
+                StartPeriod = "20s",
+            };
+        }
+        foreach (var name in new[] { "admin-api", "cloud-controller" })
+        {
+            if (!composeFile.Services.TryGetValue(name, out var service)) continue;
+            service.DependsOn["rabbitmq"] = new ServiceDependency { Condition = "service_healthy" };
+            service.DependsOn["mongodb"] = new ServiceDependency { Condition = "service_started" };
+        }
     });
 
 var mongodb = builder.AddMongoDB("mongodb")
@@ -44,6 +66,25 @@ var redis = builder.AddRedis("redis")
         service.Name = "redis";
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
+
+// 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
+// 仅当显式 RABBITMQ_DISABLED=true 时跳过（无镜像的受限环境跑其余服务；MQ 客户端会自行重试并降级）。
+var rabbitmqDisabled = string.Equals(
+    builder.Configuration["RABBITMQ_DISABLED"], "true", StringComparison.OrdinalIgnoreCase);
+IResourceBuilder<RabbitMQServerResource>? rabbitmq = null;
+if (!rabbitmqDisabled)
+{
+    rabbitmq = builder.AddRabbitMQ("rabbitmq")
+        .WithDataVolume()
+        .PublishAsDockerComposeService((resource, service) =>
+        {
+            service.Name = "rabbitmq";
+            // D-5：与 mongo/redis 同口径走内网镜像源（受限网络直接拉 Docker Hub 会失败，
+            // 计费事件骨干将整体空转）。可用 RABBITMQ_IMAGE 覆盖。
+            service.Image = builder.Configuration["RABBITMQ_IMAGE"]
+                ?? "registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management";
+        });
+}
 
 var corsOrigin = builder.AddParameter("cors-origin");
 var mcpJwtSecret = builder.AddParameter("mcp-jwt-secret", secret: true, value: SecretOrDefault("mcp-jwt-secret"));
@@ -118,6 +159,7 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
         service.Name = "cloud-controller";
         service.Restart = "unless-stopped";
     });
+if (rabbitmq is not null) cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -142,6 +184,7 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
         service.Name = "admin-api";
         service.Restart = "unless-stopped";
     });
+if (rabbitmq is not null) adminApi.WithReference(rabbitmq);
 
 if (!builder.ExecutionContext.IsPublishMode)
 {
@@ -158,6 +201,8 @@ if (!builder.ExecutionContext.IsPublishMode)
             service.Name = "agent-web";
         });
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+        .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
+        .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithHttpEndpoint(port: 10001, env: "PORT");
 
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
@@ -168,6 +213,10 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
+        // D9：server-side 调用必须指向 admin-api 容器 DNS，而不是浏览器可达的 localhost:8002
+        // （`admin-api-url` 仅供 admin-web 注入 config.js）。
+        .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
+        .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithHttpEndpoint(port: 8000, env: "PORT")
         .WithExternalHttpEndpoints();
 

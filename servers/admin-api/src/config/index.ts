@@ -30,6 +30,41 @@ export const config = {
     process.env.CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS,
     180000,
   ),
+  // ===== 费用中心（Credits 计费）=====
+  // RabbitMQ 事件骨干
+  rabbitmqUrl: process.env.RABBITMQ_URL || process.env.ConnectionStrings__rabbitmq || 'amqp://guest:guest@localhost:5672',
+  rabbitmqPrefetch: parsePositiveInt(process.env.RABBITMQ_PREFETCH, 10),
+  rabbitmqRetryMax: parsePositiveInt(process.env.RABBITMQ_RETRY_MAX, 5),
+  outboxRelayIntervalMs: parsePositiveInt(process.env.OUTBOX_RELAY_INTERVAL_MS, 2000),
+  // 容器计费：周期（秒，默认 60）、保证金（credits，默认 5）
+  billingCycleSeconds: parsePositiveInt(process.env.BILLING_CYCLE_SECONDS, 60),
+  containerDepositCredits: parsePositiveInt(process.env.CONTAINER_DEPOSIT_CREDITS, 5),
+  // 欠费宽限（毫秒，默认 10 分钟）
+  billingArrearsGraceMs: parsePositiveInt(process.env.BILLING_ARREARS_GRACE_MS, 600000),
+  // 计量缺失兜底：输出 token 估算上限
+  modelDefaultMaxOutputTokens: parsePositiveInt(process.env.MODEL_DEFAULT_MAX_OUTPUT_TOKENS, 1024),
+  // 网关预检输入估算（R10-1）：按 UTF-8 字节数 / 该倍率估算 token。
+  // 默认 1（1 token/字节）是保守上界；调大只会降低保守程度，不得低于 1。
+  modelTokenEstimateBytesPerToken: Math.max(
+    1,
+    Number.parseInt(process.env.MODEL_TOKEN_ESTIMATE_BYTES_PER_TOKEN || '1', 10) || 1,
+  ),
+  // 非文本内容块固定高估 token（图片/音频/文件/工具调用），确保多模态请求预检不为 0。
+  modelEstimateImageTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_IMAGE_TOKENS, 8192),
+  modelEstimateAudioTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_AUDIO_TOKENS, 16384),
+  modelEstimateFileTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_FILE_TOKENS, 16384),
+  modelEstimateToolTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_TOOL_TOKENS, 4096),
+  // 每日对账最大间隔（R10-11：错过 cron 分钟时按「距上次成功 ≥ 24h」补跑；R11-5 移除旧 BILLING_RECON_CRON）
+  billingReconIntervalMs: parsePositiveInt(
+    process.env.BILLING_RECON_INTERVAL_MS,
+    24 * 60 * 60 * 1000,
+  ),
+  reservationStaleMs: parsePositiveInt(process.env.RESERVATION_STALE_MS, 15 * 60 * 1000),
+  // `started/failed` 模型调用孤儿判定阈值（R10-4）
+  billingApiCallOrphanMs: parsePositiveInt(
+    process.env.BILLING_API_CALL_ORPHAN_MS,
+    30 * 60 * 1000,
+  ),
 };
 
 /** 解析正整数环境变量；缺失/非法（NaN/≤0）均回落默认值。 */

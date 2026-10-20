@@ -1,0 +1,271 @@
+# 后台费用中心契约（Credits 计费）
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+#
+# 金额口径：持久层为整数「分」（0.01 credits = 1 分），本契约边界统一以 Float
+# 展示 credits（服务端除以 100），四舍五入到 2 位小数。资金计算禁止浮点。
+#
+# 计费管线：业务事件 → 计量 → 定价 → 账单 → 支付 → 收据。
+# 本契约仅暴露「账单 / 收据 / 汇总 / 预留 / 定价 / API Key / 对账」的读写边界；
+# 业务事件与计量事实不对后台直接开放写入（由业务侧 outbox / 消息驱动）。
+
+scalar JSON
+
+enum BillingOwnerType {
+  front_user
+  admin_user
+}
+
+enum BillingLedgerType {
+  charge
+  recharge
+  adjust
+}
+
+enum BillingCategory {
+  container
+  model
+  manual
+}
+
+enum BillingRollupGranularity {
+  minute
+  hour
+  day
+}
+
+enum ReservationStatus {
+  PENDING
+  ACTIVE
+  SETTLING
+  SETTLED
+  RELEASE_PENDING
+}
+
+type BillingAccount {
+  id: ID!
+  ownerType: BillingOwnerType!
+  ownerId: ID!
+  ownerName: String!
+  cashBalance: Float! # 现金余额，可为负
+  giftBalance: Float! # 赠送金（预留维度，本期恒 0）
+  creditLimit: Float! # 授信额度（0=不支持透支）
+  frozenAmount: Float! # 冻结额（在途预留）
+  availableBalance: Float! # = cash + gift + creditLimit - frozen
+  status: String! # active | frozen
+  insufficientSince: String # 欠费计时起点（ISO 时间）
+  ledgerCount: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type BillingInvoice {
+  id: ID!
+  accountId: ID!
+  seq: Int! # 账户内序号，从 0 递增
+  type: BillingLedgerType!
+  category: BillingCategory!
+  amount: Float! # 充值为正、消费为负
+  balanceAfter: Float!
+  refType: String # container | model_call | recharge | reservation
+  refId: String
+  description: String!
+  items: [InvoiceItem!]! # 用量 + 单价快照
+  receiptId: ID
+  createdAt: String!
+}
+
+type InvoiceItem {
+  productId: String! # container.minute | model.<id>.token
+  quantity: Float!
+  unitPrice: Float! # 计价时点单价快照（credits / 单位，已换算展示单位）
+  amount: Float!
+  meteringRef: ID # 回溯计量事实
+  segment: String # input | cached_input | output（中断调用带 :aborted 后缀）
+}
+
+type BillingReceipt {
+  id: ID!
+  receiptNo: String!
+  invoiceId: ID!
+  accountId: ID!
+  amount: Float!
+  balanceAfter: Float!
+  issuedAt: String!
+}
+
+type BillingRollup {
+  bucketStart: String!
+  chargeTotal: Float!
+  rechargeTotal: Float!
+  chargeCount: Int!
+}
+
+type BillingReservation {
+  id: ID!
+  accountId: ID!
+  resourceId: String!
+  status: ReservationStatus!
+  reservedTotal: Float!
+  settledTotal: Float!
+  releasedTotal: Float!
+  startedAt: String!
+  lastSettleAt: String
+}
+
+type BillingApiKey {
+  id: ID!
+  name: String!
+  keyPrefix: String!
+  status: String! # active | revoked
+  lastUsedAt: String
+  createdAt: String!
+}
+
+type BillingApiKeyPayload {
+  apiKey: BillingApiKey!
+  secret: String! # 仅生成时返回一次
+}
+
+type ReconciliationReport {
+  line: String! # funds | metering | resources | events | rollups | apiCalls | containerInvoices
+  ranAt: String!
+  checkedCount: Int!
+  errorCount: Int!
+  errors: [JSON!]!
+}
+
+type BillingApiCall {
+  id: ID!
+  requestId: String!
+  accountId: ID!
+  modelId: String!
+  modelName: String!
+  inputTokens: Int!
+  cachedInputTokens: Int!
+  outputTokens: Int!
+  cost: Float!
+  status: String! # started | completed | aborted | failed
+  estimated: Boolean!
+  invoiceSeq: Int
+  startedAt: String!
+  finishedAt: String
+}
+
+type BillingDeadLetter {
+  id: ID!
+  queue: String!
+  routingKey: String!
+  eventId: String
+  error: String
+  attempts: Int!
+  createdAt: String!
+}
+
+type Query {
+  adminBillingAccounts(
+    keyword: String
+    ownerType: BillingOwnerType
+    page: Int
+    pageSize: Int
+  ): [BillingAccount!]!
+  adminBillingAccount(id: ID!): BillingAccount!
+  adminBillingInvoices(
+    accountId: ID!
+    from: String
+    to: String
+    type: BillingLedgerType
+    category: BillingCategory
+    page: Int
+    pageSize: Int
+  ): [BillingInvoice!]!
+  adminBillingReceipts(accountId: ID!, page: Int, pageSize: Int): [BillingReceipt!]!
+  adminBillingReceipt(invoiceId: ID!): BillingReceipt
+  adminBillingRollups(
+    accountId: ID!
+    granularity: BillingRollupGranularity!
+    from: String!
+    to: String!
+  ): [BillingRollup!]!
+  adminBillingReservations(accountId: ID, status: ReservationStatus): [BillingReservation!]!
+  adminReconciliationReports(line: String): [ReconciliationReport!]!
+  adminBillingApiKeys: [BillingApiKey!]!
+  adminBillingDeadLetters(limit: Int): [BillingDeadLetter!]!
+  adminBillingApiCalls(
+    accountId: ID!
+    status: String
+    page: Int
+    pageSize: Int
+  ): [BillingApiCall!]!
+}
+
+type Mutation {
+  rechargeBillingAccount(accountId: ID!, amount: Float!, note: String, idempotencyKey: String): BillingInvoice!
+  setBillingAccountCreditLimit(accountId: ID!, creditLimit: Float!): BillingAccount!
+  setBillingAccountStatus(accountId: ID!, status: String!): BillingAccount!
+  # 资金对账：sum(ledger) 校准钱包，返回校准后的账户
+  reconcileBillingAccount(accountId: ID!): BillingAccount!
+  runReconciliation(line: String): [ReconciliationReport!]!
+  updateModelPricing(modelId: ID!, pricing: ModelPricingInput!): Model!
+  createBillingApiKey(name: String!): BillingApiKeyPayload!
+  revokeBillingApiKey(id: ID!): BillingApiKey!
+}
+
+# 模型定价（与 admin-llm.graphql / llm.graphql 的 ModelPricing 逐字一致）
+type ModelPricing {
+  inputPerMillion: Float! # credits / 百万 token
+  cachedInputPerMillion: Float!
+  outputPerMillion: Float!
+  isBillable: Boolean!
+}
+
+input ModelPricingInput {
+  inputPerMillion: Float!
+  cachedInputPerMillion: Float!
+  outputPerMillion: Float!
+  isBillable: Boolean! = true
+}
+
+# updateModelPricing 返回的 Model 形状（与 admin-llm.graphql 的 Model 一致）
+type Model {
+  id: ID!
+  providerId: ID!
+  provider: Provider
+  name: String!
+  isCustom: Boolean!
+  isEnabled: Boolean!
+  sortOrder: Int!
+  scope: ConfigScope!
+  pricing: ModelPricing
+  createdAt: String!
+  updatedAt: String!
+}
+
+enum ProviderType {
+  OpenAI
+  Anthropic
+}
+
+enum CredentialType {
+  api_key
+}
+
+enum ConfigScope {
+  user
+  global
+}
+
+type Provider {
+  id: ID!
+  name: String!
+  type: ProviderType!
+  endpoint: String!
+  credentialType: CredentialType!
+  credentialValue: String!
+  isEnabled: Boolean!
+  scope: ConfigScope!
+  models: [Model!]!
+  createdAt: String!
+  updatedAt: String!
+}

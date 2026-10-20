@@ -18,6 +18,11 @@ import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
+import {
+  BillingEventPublisher,
+  RabbitMqTransport,
+} from './services/billing-event-publisher.js';
+import { BillingOutbox } from './models/billing-outbox.js';
 import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
 
@@ -76,7 +81,40 @@ export function createCloudControllerApp(): CloudControllerApp {
       shutdownGraceMs: 10000,
     },
     logger,
+    {
+      // 计费生命周期事件：只写本地 outbox，relay 异步发布；失败仅告警、不阻断生命周期。
+      onReady: async (container) => {
+        if (!container.billingAccountId || !container.billingStartedAt) return;
+        const startedAt = container.billingStartedAt.toISOString();
+        await billingPublisher.enqueue({
+          eventId: `container.ready:${container.id}`,
+          eventType: 'container.ready',
+          occurredAt: startedAt,
+          accountId: container.billingAccountId,
+          resourceId: container.id,
+          payload: { billingStartedAt: startedAt },
+        });
+      },
+      onDestroyed: async (container) => {
+        if (!container.billingAccountId || !container.billingStartedAt) return;
+        const startedAt = container.billingStartedAt.toISOString();
+        const exitedAt = (container.exitedAt ?? new Date()).toISOString();
+        await billingPublisher.enqueue({
+          eventId: `container.destroyed:${container.id}`,
+          eventType: 'container.destroyed',
+          occurredAt: exitedAt,
+          accountId: container.billingAccountId,
+          resourceId: container.id,
+          payload: { billingStartedAt: startedAt, exitedAt },
+        });
+      },
+    },
   );
+  const billingPublisher = new BillingEventPublisher({
+    intervalMs: config.outboxRelayIntervalMs,
+    transport: new RabbitMqTransport(config.rabbitmqUrl, logger),
+    logger,
+  });
   const heartbeatTracker = new HeartbeatTracker();
 
   // gateway ↔ dispatcher 的桥接：dispatcher 先构造并注入回调，gateway 注册后再回填句柄
@@ -137,6 +175,15 @@ export function createCloudControllerApp(): CloudControllerApp {
     if (started) return;
     started = true;
     await mongoose.connect(config.mongodbUri);
+    // 计费集合索引（eventId 唯一 / {producer,published,createdAt}）随启动建立。
+    // D3：enqueue 去重完全依赖 eventId 唯一索引，索引缺失会导致重复事件——必须 fail-fast。
+    try {
+      await BillingOutbox.syncIndexes();
+    } catch (err) {
+      logger.warn?.(`[billing] syncIndexes failed (fatal): ${(err as Error).message}`);
+      throw err;
+    }
+    billingPublisher.start();
     await statusSync.start();
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, resolve);
@@ -153,6 +200,9 @@ export function createCloudControllerApp(): CloudControllerApp {
 
   async function stop(): Promise<void> {
     statusSync.stop();
+    // O-1：先排空在途计费钩子（outbox enqueue），再停 publisher，避免 SIGTERM 截断事件写入。
+    await containerService.drainBillingHooks();
+    await billingPublisher.stop();
     io.close();
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());

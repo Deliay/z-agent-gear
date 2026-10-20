@@ -15,6 +15,10 @@ export interface CloudContainerDTO {
   workloadIds: string[];
   /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null */
   currentWorkloadName: string | null;
+  /** 计费账户 ID（费用中心）；未接入计费为 null */
+  billingAccountId: string | null;
+  /** 就绪计费起点；未就绪/不计费为 null */
+  billingStartedAt: string | null;
 }
 
 /** 控制面（cloud-controller）不可达时对外统一错误码（裁决 12） */
@@ -105,6 +109,8 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
     exitReason: (raw.exitReason as string | null | undefined) ?? null,
     workloadIds: normalizeWorkloadIds(raw.workloadIds),
     currentWorkloadName: (raw.currentWorkloadName as string | null | undefined) ?? null,
+    billingAccountId: (raw.billingAccountId as string | null | undefined) ?? null,
+    billingStartedAt: toIso(raw.billingStartedAt),
   };
 }
 
@@ -175,11 +181,13 @@ export class CloudControllerClient {
     purpose: string,
     workloadPlan?: WorkloadPlanItemDTO[],
     workloadIds: string[] = [],
+    billingAccountId?: string | null,
   ): Promise<CloudContainerDTO> {
     const body: Record<string, unknown> = {
       purpose: toInternalPurpose(purpose),
       workloadIds: workloadIds ?? [],
     };
+    if (billingAccountId) body.billingAccountId = billingAccountId;
     if (workloadPlan) body.workloadPlan = workloadPlan;
     const res = await this.request('/internal/containers', {
       method: 'POST',
@@ -209,10 +217,11 @@ export class CloudControllerClient {
     return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
   }
 
-  /** 强制销毁容器；404（不存在）返回 false，终态容器幂等返回 true */
-  async destroy(id: string): Promise<boolean> {
+  /** 强制销毁容器；404（不存在）返回 false，终态容器幂等返回 true。`reason` 写入容器 exitReason。 */
+  async destroy(id: string, reason?: string): Promise<boolean> {
+    const query = reason ? `?reason=${encodeURIComponent(reason)}` : '';
     const res = await this.request(
-      `/internal/containers/${encodeURIComponent(id)}`,
+      `/internal/containers/${encodeURIComponent(id)}${query}`,
       { method: 'DELETE' },
       this.destroyTimeoutMs,
     );

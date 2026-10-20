@@ -95,9 +95,8 @@ test.describe('Responsive Layout', () => {
 
     await page.goto('/sessions');
 
-    // Should be in list mode
+    // Should be in list mode（移动端列表由 Sidebar 承担，不再有 h2 标题）
     await expect(page.locator(sidebar())).toBeVisible();
-    await expect(page.locator('h2')).toContainText('会话');
 
     // Verify we're in mobile mode (no separate main content)
     // The page should show the sidebar as the main content

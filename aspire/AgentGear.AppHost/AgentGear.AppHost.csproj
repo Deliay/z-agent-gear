@@ -13,6 +13,7 @@
     <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.3.5" />
     <PackageReference Include="Aspire.Hosting.MongoDB" Version="13.3.5" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="13.3.5" />
+    <PackageReference Include="Aspire.Hosting.RabbitMQ" Version="13.3.5" />
   </ItemGroup>
 
   <ItemGroup>

@@ -253,3 +253,100 @@ export const DELETE_CLOUD_WORKLOAD = gql`
     adminDeleteCloudWorkload(id: $id)
   }
 `
+
+// ---------- 费用中心（contracts/admin-billing.graphql） ----------
+
+export const RECHARGE_BILLING_ACCOUNT = gql`
+  mutation RechargeBillingAccount($accountId: ID!, $amount: Float!, $note: String) {
+    rechargeBillingAccount(accountId: $accountId, amount: $amount, note: $note) {
+      id
+      accountId
+      seq
+      type
+      category
+      amount
+      balanceAfter
+      description
+      createdAt
+    }
+  }
+`
+
+export const SET_BILLING_ACCOUNT_CREDIT_LIMIT = gql`
+  mutation SetBillingAccountCreditLimit($accountId: ID!, $creditLimit: Float!) {
+    setBillingAccountCreditLimit(accountId: $accountId, creditLimit: $creditLimit) {
+      id
+      creditLimit
+      availableBalance
+    }
+  }
+`
+
+export const SET_BILLING_ACCOUNT_STATUS = gql`
+  mutation SetBillingAccountStatus($accountId: ID!, $status: String!) {
+    setBillingAccountStatus(accountId: $accountId, status: $status) {
+      id
+      status
+    }
+  }
+`
+
+export const RECONCILE_BILLING_ACCOUNT = gql`
+  mutation ReconcileBillingAccount($accountId: ID!) {
+    reconcileBillingAccount(accountId: $accountId) {
+      id
+      cashBalance
+      frozenAmount
+      availableBalance
+    }
+  }
+`
+
+export const RUN_RECONCILIATION = gql`
+  mutation RunReconciliation($line: String) {
+    runReconciliation(line: $line) {
+      line
+      ranAt
+      checkedCount
+      errorCount
+      errors
+    }
+  }
+`
+
+export const UPDATE_MODEL_PRICING = gql`
+  mutation UpdateModelPricing($modelId: ID!, $pricing: ModelPricingInput!) {
+    updateModelPricing(modelId: $modelId, pricing: $pricing) {
+      id
+      name
+      pricing {
+        inputPerMillion
+        cachedInputPerMillion
+        outputPerMillion
+        isBillable
+      }
+    }
+  }
+`
+
+export const CREATE_BILLING_API_KEY = gql`
+  mutation CreateBillingApiKey($name: String!) {
+    createBillingApiKey(name: $name) {
+      apiKey { id name keyPrefix status lastUsedAt createdAt }
+      secret
+    }
+  }
+`
+
+export const REVOKE_BILLING_API_KEY = gql`
+  mutation RevokeBillingApiKey($id: ID!) {
+    revokeBillingApiKey(id: $id) {
+      id
+      name
+      keyPrefix
+      status
+      lastUsedAt
+      createdAt
+    }
+  }
+`

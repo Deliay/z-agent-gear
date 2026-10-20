@@ -13,7 +13,33 @@ import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-preset-workloads.js';
 import * as migration002DotnetApt from './migrations/002-preset-dotnet-apt.js';
 import * as migration002RefreshDocker from './migrations/002-refresh-docker-preset-script.js';
+import { createInternalBillingRouter } from './routes/internal-billing.js';
+import { createBillingOpenAiRouter } from './routes/billing-openai.js';
+import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
+import { SettlementTickService } from './services/billing/settlement-tick.js';
+import { BillingScheduler } from './services/billing/scheduler.js';
+import { billingRuntime, reconciliationRuntime, isCloudContainerAlive } from './services/billing/instances.js';
+import { reservationService } from './services/billing/reservation.js';
+import { pricingService } from './services/billing/pricing.js';
+import { eventIngestService } from './services/billing/event-ingest.js';
+import { BillingMqRuntime } from './services/billing/mq/runtime.js';
+import { BillingAccount } from './models/billing-account.js';
+import { BillingLedger } from './models/billing-ledger.js';
+import { BillingEvent } from './models/billing-event.js';
+import { MeteringRecord } from './models/metering-record.js';
+import { ProductPrice } from './models/product-price.js';
+import { BillingInvoice } from './models/billing-invoice.js';
+import { BillingPayment } from './models/billing-payment.js';
+import { BillingReceipt } from './models/billing-receipt.js';
+import { BillingReservation, BillingReservationCycle } from './models/billing-reservation.js';
+import { BillingRollup } from './models/billing-rollup.js';
+import { BillingApiKey } from './models/billing-api-key.js';
+import { BillingApiCall } from './models/billing-api-call.js';
+import { BillingOutbox } from './models/billing-outbox.js';
+import { BillingDeadLetter } from './models/billing-dead-letter.js';
+import { BillingAppliedLedger } from './models/billing-applied-ledger.js';
 import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
+import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
 
 const app = express();
 
@@ -35,6 +61,15 @@ const yoga = createYoga({
 });
 
 app.use('/graphql', yoga);
+
+// 费用中心：OpenAI 兼容计费网关（API Key 鉴权）与 agent-api 内部 REST
+const outboxPublisher = new AdminOutboxPublisher(
+  config.rabbitmqUrl,
+  console,
+  config.outboxRelayIntervalMs,
+);
+app.use('/v1', createBillingOpenAiRouter({ publisher: outboxPublisher }));
+app.use('/internal/billing', createInternalBillingRouter());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -70,12 +105,14 @@ async function start() {
   // 002-preset-dotnet-apt——存量 .NET 预制脚本保守升级为 apt 版（三期）；
   // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）；
   // 003-docker-apt-source——把未定制过的「Docker」脚本刷新为 v3 并补齐 docker_apt_url 参数（本期）
+  // 004-aspire-cli-source——把未定制过的「Aspire」脚本刷新为 v2 并补齐 aspire_cli_url 参数（本期）
   try {
     await runMigrations([
       migration001,
       migration002DotnetApt,
       migration002RefreshDocker,
       migration003DockerAptSource,
+      migration004AspireCliSource,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
@@ -85,9 +122,73 @@ async function start() {
   await seedAdmin();
   console.log('Admin seed ensured');
 
-  app.listen(config.port, () => {
+  // ===== 费用中心初始化 =====
+  const billingModels = [
+    BillingAccount,
+    BillingLedger,
+    BillingEvent,
+    MeteringRecord,
+    ProductPrice,
+    BillingInvoice,
+    BillingPayment,
+    BillingReceipt,
+    BillingReservation,
+    BillingReservationCycle,
+    BillingRollup,
+    BillingApiKey,
+    BillingApiCall,
+    BillingOutbox,
+    BillingDeadLetter,
+    BillingAppliedLedger,
+  ];
+  try {
+    await Promise.all(billingModels.map((model) => model.syncIndexes()));
+  } catch (err) {
+    console.warn('[admin-api] billing syncIndexes failed (non-fatal):', (err as Error).message);
+  }
+  try {
+    await pricingService.ensureDefaultPrices();
+  } catch (err) {
+    console.warn('[admin-api] ensureDefaultPrices failed (non-fatal):', (err as Error).message);
+  }
+
+  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投；运行时自动重连）
+  const mqRuntime = new BillingMqRuntime({
+    url: config.rabbitmqUrl,
+    billing: billingRuntime,
+    ingest: eventIngestService,
+    logger: console,
+  });
+  await mqRuntime.start();
+
+  const scheduler = new BillingScheduler({
+    publisher: outboxPublisher,
+    settlementTick: new SettlementTickService(billingRuntime, reservationService, {
+      // A-3：stale 终结前复核控制面存活，活容器只补结算不置 SETTLED。
+      isAlive: isCloudContainerAlive,
+    }),
+    reconciliation: reconciliationRuntime,
+    logger: console,
+  });
+  scheduler.start();
+
+  const server = app.listen(config.port, () => {
     console.log(`Admin API running at http://localhost:${config.port}/graphql`);
   });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[admin-api] ${signal} received, shutting down...`);
+    server.close();
+    await scheduler.stop();
+    await mqRuntime.stop();
+    await mongoose.disconnect();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 start().catch((err) => {

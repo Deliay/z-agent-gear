@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Migrations } from './models.js';
 
 export interface Migration {
@@ -5,10 +6,21 @@ export interface Migration {
   run: () => Promise<void>;
 }
 
+/** 本次运行持有的锁归属标识（建议 5：释放时校验归属）。 */
+const LOCK_OWNER = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+
 async function acquireLock(): Promise<boolean> {
+  // D11/建议 5：清理崩溃遗留的过期锁（此前 expiresAt 从不生效 → 永久锁死未来迁移）。
+  // 用 deleteMany 容忍存量库曾出现多条 `_lock` 文档（唯一索引构建失败时可能残留）。
+  await Migrations.deleteMany({
+    _lock: 'migration_lock',
+    expiresAt: { $lt: new Date() },
+  }).catch(() => undefined);
   try {
+    // `_lock` 唯一索引保证并发双跑只有一个进程能拿到锁。
     await Migrations.create({
       _lock: 'migration_lock',
+      owner: LOCK_OWNER,
       acquired: new Date(),
       expiresAt: new Date(Date.now() + 300_000),
     });
@@ -19,7 +31,8 @@ async function acquireLock(): Promise<boolean> {
 }
 
 async function releaseLock(): Promise<void> {
-  await Migrations.deleteOne({ _lock: 'migration_lock' });
+  // 建议 5：只释放自己持有的锁，避免超时后被他人接管时误删。
+  await Migrations.deleteOne({ _lock: 'migration_lock', owner: LOCK_OWNER });
 }
 
 /**

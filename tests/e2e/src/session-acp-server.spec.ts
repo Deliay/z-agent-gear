@@ -229,8 +229,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -259,8 +259,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -294,8 +294,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -324,8 +324,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -359,8 +359,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -394,8 +394,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -447,8 +447,8 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await page.locator('#controller').selectOption({ index: 1 });
 
     await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
@@ -487,7 +487,7 @@ test.describe('Session ACP Server Type', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
     // Import the history session via settings
     await page.goto('/settings');
@@ -500,12 +500,12 @@ test.describe('Session ACP Server Type', () => {
     await expect(page.getByText('成功导入 1 个会话')).toBeVisible({ timeout: 30000 });
     await page.getByRole('button', { name: '完成' }).click();
 
-    // Open the imported session from the sidebar sessions list
+    // Open the imported session from the sidebar sessions list（控制器默认展开，勿点击折叠）
     await page.goto('/sessions');
-    await page.getByText(/e2e-acp-del-host-/).click();
-    await page.getByText(/e2e-del-/).click();
-    await expect(page.getByText('History - Delete Me')).toBeVisible({ timeout: 10000 });
-    await page.getByText('History - Delete Me').click();
+    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const historyLink = sidebar.getByRole('link', { name: 'History - Delete Me', exact: true });
+    await expect(historyLink).toBeVisible({ timeout: 10000 });
+    await historyLink.click();
 
     await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
 
@@ -515,8 +515,10 @@ test.describe('Session ACP Server Type', () => {
     await waitForDelete();
     await expect(page).toHaveURL(/\/sessions$/, { timeout: 10000 });
 
-    // Session removed from list
-    await expect(page.getByText('History - Delete Me')).not.toBeVisible({ timeout: 10000 });
+    // Session removed from list（Sidebar 由 15s 轮询刷新，给下一次聚合查询留出时间）
+    await expect(page.getByRole('link', { name: /History - Delete Me/ })).toHaveCount(0, {
+      timeout: 20000,
+    });
 
     disconnect();
   });

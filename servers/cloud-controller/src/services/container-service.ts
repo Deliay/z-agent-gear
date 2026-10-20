@@ -123,6 +123,14 @@ export interface StartOptions {
    *   `plan`（含兜底展开的隐式依赖）仅用于执行，避免与契约文字产生静默偏差。
    */
   deriveWorkloadIdsFromPlan?: boolean;
+  /** 计费归属账户（费用中心）：非空时容器参与计费；缺省/空表示不计费。 */
+  billingAccountId?: string | null;
+}
+
+/** 计费生命周期事件钩子（由 BillingEventPublisher 注入；不阻塞生命周期）。 */
+export interface ContainerServiceHooks {
+  onReady?: (container: CloudContainerEntity) => void | Promise<void>;
+  onDestroyed?: (container: CloudContainerEntity) => void | Promise<void>;
 }
 
 /**
@@ -142,7 +150,58 @@ export class ContainerService {
     private readonly jobManager: K8sJobManager,
     private readonly cfg: ContainerServiceConfig,
     private readonly logger: Logger = console,
+    private readonly hooks: ContainerServiceHooks = {},
   ) {}
+
+  /** 在途计费钩子（O-1：停机前必须排空，避免 outbox 写入被 SIGTERM 截断）。 */
+  private readonly billingHookTasks = new Set<Promise<void>>();
+
+  /**
+   * 触发计费生命周期钩子：失败只告警，绝不阻断生命周期（裁决 2）。
+   *
+   * O-1：不再「fire-and-forget 后丢失」——
+   * - 同步调用钩子（不退化为微任务，缩小 CAS 写成功→outbox 写入之间的窗口）；
+   * - 失败重试：共 **3 次尝试**（首次 + 100ms、250ms 两次退避重试），仍失败记 **error** 日志；
+   * - 在途任务登记到 `billingHookTasks`，`drainBillingHooks()` 供 SIGTERM 前排空；
+   * - 长期丢失由 admin-api 反向对账线（扫描 billingStartedAt≠null 且未生效的容器）补投。
+   */
+  private emitHook(
+    name: 'onReady' | 'onDestroyed',
+    container: CloudContainerEntity,
+  ): void {
+    const hook = this.hooks[name];
+    if (!hook) return;
+    const task = (async () => {
+      const delays = [0, 100, 250];
+      let lastError: unknown;
+      for (const delay of delays) {
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+          await hook(container);
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      this.logger.error?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
+    })();
+    this.billingHookTasks.add(task);
+    void task.finally(() => this.billingHookTasks.delete(task));
+  }
+
+  /** O-1：排空在途计费钩子（SIGTERM / 单测）。超时后放弃并告警，交给反向对账兜底。 */
+  async drainBillingHooks(timeoutMs = 5000): Promise<void> {
+    if (this.billingHookTasks.size === 0) return;
+    const pending = [...this.billingHookTasks];
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.logger.warn?.(`[billing] drain hooks timeout with ${this.billingHookTasks.size} pending`);
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    await Promise.race([Promise.allSettled(pending).then(() => undefined), timeout]);
+  }
 
   /** 注册销毁通知（由 Socket.IO 网关接入，用于向在线容器 emit shutdown）。 */
   onShutdown(handler: (containerId: string) => Promise<void> | void): () => void {
@@ -237,6 +296,7 @@ export class ContainerService {
       status: 'creating',
       workloadIds: effectiveWorkloadIds,
       workloadPlan: plan,
+      billingAccountId: options.billingAccountId ?? null,
     });
 
     return this.mutex.runExclusive(created.id, async () => {
@@ -250,15 +310,8 @@ export class ContainerService {
         });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        const failed = await this.repo.update(
-          created.id,
-          {
-            status: 'failed',
-            exitReason: `Job 创建失败: ${reason}`,
-            tokenHash: null,
-          },
-          { fromStatuses: [...ACTIVE_STATUSES] },
-        );
+        // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
+        const failed = await this.markFailed(created.id, `Job 创建失败: ${reason}`);
         throw new JobCreationError(
           created.id,
           reason,
@@ -317,12 +370,40 @@ export class ContainerService {
   }
 
   async markOnline(containerId: string): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, {
-      status: 'online',
-      connectedAt: new Date(),
+    // 首次进入 online：原子写入 billingStartedAt，并投递 container.ready。
+    // 重复 markOnline / 已计费容器重连（initializing→online）不重置计费起点、不重复投递（裁决 3）。
+    const current = await this.repo.findById(containerId);
+    if (!current) return null;
+
+    const now = new Date();
+    const basePatch = {
+      status: 'online' as const,
+      connectedAt: now,
       exitReason: null,
       currentWorkloadName: null,
-    });
+    };
+    if (current.billingStartedAt) {
+      return this.updateGuarded(containerId, basePatch);
+    }
+
+    // 首次 online：原子条件写入（filter billingStartedAt=null），并发 markOnline 只有一次生效
+    const firstOnline = await this.repo.update(
+      containerId,
+      { ...basePatch, billingStartedAt: now },
+      {
+        fromStatuses: [...ACTIVE_STATUSES],
+        requireNullFields: ['billingStartedAt'],
+      },
+    );
+    if (firstOnline) {
+      if (firstOnline.billingAccountId && firstOnline.billingStartedAt) {
+        this.emitHook('onReady', firstOnline);
+      }
+      return firstOnline;
+    }
+
+    // CAS 未命中（并发转移）：回读，避免用陈旧值覆写。
+    return this.repo.findById(containerId);
   }
 
   async markExited(
@@ -330,13 +411,25 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, {
-      status: 'exited',
-      exitedAt: at,
-      exitReason,
-      tokenHash: null,
-      currentWorkloadName: null,
-    });
+    // 阻断项 4a：仅当 CAS **真的发生转移**时才投递 destroyed。CAS 未命中（记录已被并发
+    // 转移/处于 destroying）时不得回读后投递——否则会用提前的 exitedAt 顶替精确事件（少计费）。
+    const updated = await this.repo.update(
+      containerId,
+      {
+        status: 'exited',
+        exitedAt: at,
+        exitReason,
+        tokenHash: null,
+        currentWorkloadName: null,
+      },
+      { fromStatuses: [...ACTIVE_STATUSES] },
+    );
+    if (updated) {
+      // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
+      this.emitDestroyedIfBilled(updated);
+    }
+    // CAS 未命中仅回读用于返回值，绝不据此投递事件。
+    return updated ?? this.repo.findById(containerId);
   }
 
   async markFailed(
@@ -344,13 +437,20 @@ export class ContainerService {
     exitReason: string,
     at: Date = new Date(),
   ): Promise<CloudContainerEntity | null> {
-    return this.updateGuarded(containerId, {
-      status: 'failed',
-      exitedAt: at,
-      exitReason,
-      tokenHash: null,
-      currentWorkloadName: null,
-    });
+    // 阻断项 4a：同 markExited，仅 CAS 命中才投递。
+    const updated = await this.repo.update(
+      containerId,
+      {
+        status: 'failed',
+        exitedAt: at,
+        exitReason,
+        tokenHash: null,
+        currentWorkloadName: null,
+      },
+      { fromStatuses: [...ACTIVE_STATUSES] },
+    );
+    if (updated) this.emitDestroyedIfBilled(updated);
+    return updated ?? this.repo.findById(containerId);
   }
 
   async getById(containerId: string): Promise<CloudContainerEntity | null> {
@@ -402,14 +502,22 @@ export class ContainerService {
           {
             status: 'exited',
             exitedAt: new Date(),
+            // D2：保留调用方传入的强拆原因（如「余额不足…」），仅在为空时回退默认文案。
             exitReason:
-              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+              container.exitReason && container.exitReason.length > 0
+                ? container.exitReason
+                : deletion === 'deleted'
+                  ? '强制销毁'
+                  : '强制销毁（Job 已不存在）',
             tokenHash: null,
             currentWorkloadName: null,
           },
           { fromStatuses: ['destroying'] },
         );
         const current = exited ?? (await this.repo.findById(containerId));
+        if (exited && current) {
+          this.emitDestroyedIfBilled(current);
+        }
         return {
           success: true,
           id: containerId,
@@ -453,7 +561,8 @@ export class ContainerService {
     }
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
-    const baseReason = options?.reason ?? '强制销毁';
+    // R7：未显式传 reason 时保留既有 exitReason（如必须失败原因），不无条件覆写。
+    const baseReason = options?.reason ?? container.exitReason ?? '强制销毁';
     const exitReason = deletedJob ? baseReason : `${baseReason}（Job 删除失败，需人工清理）`;
     // 终态写回同样带 CAS（问题 50）：仅从 destroying 迁移，避免扩副本/并发下用陈旧状态覆写。
     const exited = await this.repo.update(
@@ -478,7 +587,18 @@ export class ContainerService {
       };
     }
 
+    this.emitDestroyedIfBilled(exited);
+
     return { success: true, id: containerId, status: 'exited', deletedJob };
+  }
+
+  /**
+   * 销毁事件投递条件（裁决 4）：仅当容器 `billingAccountId` 与 `billingStartedAt`
+   * 均非空时投递 `container.destroyed`，保证「未就绪即销毁」不计费、不产生空事件。
+   */
+  private emitDestroyedIfBilled(container: CloudContainerEntity): void {
+    if (!container.billingAccountId || !container.billingStartedAt) return;
+    this.emitHook('onDestroyed', container);
   }
 
   /**
@@ -508,18 +628,24 @@ export class ContainerService {
 
       if (record.status === 'destroying') {
         // 契约要求 destroying → exited：无论 Job 本次被删除还是已不存在，都迁移终态。
-        await this.repo.update(
+        const exited = await this.repo.update(
           containerId,
           {
             status: 'exited',
             exitedAt: new Date(),
+            // D2：保留既有强拆原因，仅在为空时回退默认文案。
             exitReason:
-              deletion === 'deleted' ? '强制销毁' : '强制销毁（Job 已不存在）',
+              record.exitReason && record.exitReason.length > 0
+                ? record.exitReason
+                : deletion === 'deleted'
+                  ? '强制销毁'
+                  : '强制销毁（Job 已不存在）',
             tokenHash: null,
             currentWorkloadName: null,
           },
           { fromStatuses: ['destroying'] },
         );
+        if (exited) this.emitDestroyedIfBilled(exited);
       } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });
       }
