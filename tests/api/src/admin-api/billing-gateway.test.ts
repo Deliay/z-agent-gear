@@ -30,7 +30,7 @@ describe('OpenAI 兼容计费网关', () => {
     secret = created.data!.createBillingApiKey.secret;
   });
 
-  it('T-B22: GET /v1/models 返回 OpenAI 列表（仅计费且定价完整模型）', async () => {
+  it('T-B21: GET /v1/models 返回 OpenAI list 信封（形状）', async () => {
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: `Bearer ${secret}` },
     });
@@ -43,7 +43,7 @@ describe('OpenAI 兼容计费网关', () => {
     }
   });
 
-  it('T-B23: 无效 Key 401 invalid_api_key', async () => {
+  it('T-B29: 无效 Key 401 invalid_api_key', async () => {
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: 'Bearer zag_sk_deadbeef' },
     });
@@ -51,7 +51,7 @@ describe('OpenAI 兼容计费网关', () => {
     expect(openAiError(await res.json())?.code).toBe('invalid_api_key');
   });
 
-  it('T-B23: 缺参数 400、未知模型 404、未定价模型 400', async () => {
+  it('T-B26: 缺参数 400、未知模型 404', async () => {
     const missing = await fetch(`${HTTP}/v1/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
@@ -66,6 +66,136 @@ describe('OpenAI 兼容计费网关', () => {
     });
     expect(unknown.status).toBe(404);
     expect(openAiError(await unknown.json())?.code).toBe('model_not_found');
+  });
+});
+
+/**
+ * T-2/R3-5：T-B27/T-B28 名实相符——`/v1/models` 过滤逻辑与 `model_not_priced` 分支必须被真实断言，
+ * 而不是「删掉过滤逻辑也照样通过」。直写 `models`（需 MONGODB_URI）。
+ */
+describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模型）', () => {
+  let secret = '';
+  const providerId = new mongoose.Types.ObjectId();
+  const createdNames: string[] = [];
+
+  beforeAll(async () => {
+    const db = await mongoDb();
+    if (!db) return;
+    const token = await ensureAdminLogin();
+    const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
+      CREATE_KEY,
+      { name: `gateway-filter-${Date.now()}` },
+      token,
+    );
+    secret = created.data!.createBillingApiKey.secret;
+
+    const now = new Date();
+    await db.collection('providers').insertOne({
+      _id: providerId,
+      name: `gateway-provider-${Date.now()}`,
+      type: 'OpenAI',
+      endpoint: 'http://127.0.0.1:1',
+      credentialType: 'api_key',
+      encryptedCredential: { iv: 'a', ciphertext: 'b', tag: 'c' },
+      isEnabled: true,
+      scope: 'global',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const seedModel = async (
+      name: string,
+      pricing: { inputPerMillion: number; cachedInputPerMillion: number; outputPerMillion: number; isBillable: boolean } | null,
+    ) => {
+      createdNames.push(name);
+      await db.collection('models').insertOne({
+        providerId,
+        name,
+        isCustom: false,
+        isEnabled: true,
+        sortOrder: 0,
+        scope: 'global',
+        pricing,
+        createdAt: now,
+        updatedAt: now,
+      });
+    };
+    await seedModel(`priced-${Date.now()}`, {
+      inputPerMillion: 1,
+      cachedInputPerMillion: 0,
+      outputPerMillion: 1,
+      isBillable: true,
+    });
+    await seedModel(`not-billable-${Date.now()}`, {
+      inputPerMillion: 1,
+      cachedInputPerMillion: 0,
+      outputPerMillion: 1,
+      isBillable: false,
+    });
+    await seedModel(`unpriced-${Date.now()}`, {
+      inputPerMillion: 0,
+      cachedInputPerMillion: 0,
+      outputPerMillion: 0,
+      isBillable: true,
+    });
+    const noPricingName = `no-pricing-${Date.now()}`;
+    createdNames.push(noPricingName);
+    await db.collection('models').insertOne({
+      providerId,
+      name: noPricingName,
+      isCustom: false,
+      isEnabled: true,
+      sortOrder: 0,
+      scope: 'global',
+      pricing: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+
+  afterAll(async () => {
+    const db = await mongoDb();
+    if (!db) return;
+    await db.collection('models').deleteMany({ name: { $in: createdNames } });
+    await db.collection('providers').deleteOne({ _id: providerId });
+    await mongoose.disconnect();
+  });
+
+  it('T-B27: /v1/models 排除未定价 / 非计费（含全 0 价目档）模型', async () => {
+    const db = await mongoDb();
+    if (!db) return;
+    const res = await fetch(`${HTTP}/v1/models`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((model) => model.id);
+    for (const name of createdNames) {
+      // 已定价且可计费的模型应存在；其余三类必须被过滤。
+      if (name.startsWith('priced-')) {
+        expect(ids).toContain(name);
+      } else {
+        expect(ids).not.toContain(name);
+      }
+    }
+  });
+
+  it('T-B28: 未定价（pricing:null 与全 0 档）模型 400 model_not_priced', async () => {
+    const db = await mongoDb();
+    if (!db) return;
+    for (const prefix of ['^no-pricing-', '^unpriced-']) {
+      const model = await db.collection('models').findOne({ name: { $regex: prefix } });
+      expect(model).toBeTruthy();
+      const res = await fetch(`${HTTP}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: (model as { name: string }).name,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(openAiError(await res.json())?.code).toBe('model_not_priced');
+    }
   });
 });
 

@@ -64,6 +64,71 @@ describe('cloud-controller 计费源头', () => {
     expect(ready).toHaveLength(1);
   });
 
+  it('R-1: 发布失败即停止本轮（后续事件不得先发，避免顺序翻转）', async () => {
+    const repo = new InMemoryOutboxRepository('cloud-controller');
+    const published: string[] = [];
+    let failReady = true;
+    const transport: EventTransport = {
+      publish: async (_routingKey: string, message: BillingEventMessage) => {
+        if (message.eventType === 'container.ready' && failReady) {
+          failReady = false;
+          throw new Error('broker down');
+        }
+        published.push(message.eventId);
+      },
+      close: async () => {},
+    };
+    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    await publisher.enqueue({
+      eventId: 'container.ready:ord',
+      eventType: 'container.ready',
+      occurredAt: new Date().toISOString(),
+      accountId: 'acct-1',
+      resourceId: 'ord',
+      payload: {},
+    });
+    await publisher.enqueue({
+      eventId: 'container.destroyed:ord',
+      eventType: 'container.destroyed',
+      occurredAt: new Date().toISOString(),
+      accountId: 'acct-1',
+      resourceId: 'ord',
+      payload: {},
+    });
+
+    // 首条发布失败：本轮 0 条，且 destroyed **不得**先于 ready 发布。
+    expect(await publisher.relayOnce()).toBe(0);
+    expect(published).toEqual([]);
+
+    // 下一轮按 createdAt 顺序重试，先 ready 后 destroyed。
+    expect(await publisher.relayOnce()).toBe(2);
+    expect(published).toEqual(['container.ready:ord', 'container.destroyed:ord']);
+    await publisher.stop();
+  });
+
+  it('O-1: SIGTERM 前排空在途计费钩子', async () => {
+    let resolveHook: (() => void) | null = null;
+    const { service } = setupService({
+      onReady: () =>
+        new Promise<void>((resolve) => {
+          resolveHook = resolve;
+        }),
+    });
+    const created = await service.start('idle', null, [], null, { billingAccountId: 'acct-drain' });
+    await service.markOnline(created.id);
+
+    let drained = false;
+    const drain = service.drainBillingHooks().then(() => {
+      drained = true;
+    });
+    // 钩子未结束前 drain 不应完成。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(drained).toBe(false);
+    resolveHook?.();
+    await drain;
+    expect(drained).toBe(true);
+  });
+
   it('T-CC-B6/B9: outbox 失败重试保留，后续补投成功；hook 抛错不阻断生命周期', async () => {
     const repo = new InMemoryOutboxRepository();
     const published: string[] = [];

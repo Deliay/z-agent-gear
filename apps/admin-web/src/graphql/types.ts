@@ -426,6 +426,10 @@ export interface GetAdminBillingReceiptsQuery {
   adminBillingReceipts: BillingReceiptData[];
 }
 
+export interface GetAdminBillingReceiptQuery {
+  adminBillingReceipt: BillingReceiptData | null;
+}
+
 export interface GetAdminBillingRollupsQuery {
   adminBillingRollups: BillingRollupData[];
 }

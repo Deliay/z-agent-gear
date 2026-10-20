@@ -13,16 +13,18 @@ function requireUser(context: AuthContext): { id: string; username: string } {
   return context.currentUser;
 }
 
-/** C2：按上游状态码映射稳定 GraphQL 错误码（400 参数错误不再误标 BILLING_UNAVAILABLE）。 */
+/** C2/R2-3：按上游状态码映射稳定 GraphQL 错误码（与 admin-api/cloud-container 统一词汇：
+ *  400 → INVALID_ARGUMENT、404 → NOT_FOUND、其余 → BILLING_UNAVAILABLE）。 */
 function toGraphQLError(err: unknown): GraphQLError {
   if (err instanceof GraphQLError) return err;
   const status = err instanceof BillingServiceUnavailableError ? err.httpStatus : undefined;
   const message = err instanceof Error ? err.message : '费用服务请求失败';
-  const code = status === 400 ? 'BAD_REQUEST' : status === 404 ? 'NOT_FOUND' : 'BILLING_UNAVAILABLE';
+  const code =
+    status === 400 ? 'INVALID_ARGUMENT' : status === 404 ? 'NOT_FOUND' : 'BILLING_UNAVAILABLE';
   return new GraphQLError(message, { extensions: { code } });
 }
 
-/** P2：统一包裹 resolver —— 所有上游调用错误都经 `toGraphQLError` 稳定映射（含 BAD_REQUEST/NOT_FOUND）。 */
+/** P2：统一包裹 resolver —— 所有上游调用错误都经 `toGraphQLError` 稳定映射（含 INVALID_ARGUMENT/NOT_FOUND/BILLING_UNAVAILABLE）。 */
 async function run<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await task();

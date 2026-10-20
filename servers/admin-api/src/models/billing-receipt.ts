@@ -36,5 +36,13 @@ for (const method of [
   appendOnlyReceiptSchema.pre(method, blockReceiptMutation);
 }
 
+// A10：拦截 `load → save` 路径（query 级 pre hook 覆盖不到）。
+type SaveGuardSchema = {
+  pre: (method: string, fn: (this: { isNew: boolean }) => void) => unknown;
+};
+(billingReceiptSchema as unknown as SaveGuardSchema).pre('save', function () {
+  if (!this.isNew) throw new Error('billingreceipts is append-only; update/delete is forbidden');
+});
+
 export const BillingReceipt = mongoose.model('BillingReceipt', billingReceiptSchema);
 export type IBillingReceipt = mongoose.InferSchemaType<typeof billingReceiptSchema>;

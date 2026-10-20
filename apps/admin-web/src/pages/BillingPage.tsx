@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
   ADMIN_BILLING_ACCOUNTS,
   ADMIN_BILLING_API_CALLS,
   ADMIN_BILLING_INVOICES,
-  ADMIN_BILLING_RECEIPTS,
+  ADMIN_BILLING_RECEIPT,
   ADMIN_BILLING_ROLLUPS,
 } from '@/graphql/queries'
 import {
@@ -20,7 +20,7 @@ import type {
   GetAdminBillingAccountsQuery,
   GetAdminBillingApiCallsQuery,
   GetAdminBillingInvoicesQuery,
-  GetAdminBillingReceiptsQuery,
+  GetAdminBillingReceiptQuery,
   GetAdminBillingRollupsQuery,
 } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
@@ -45,7 +45,9 @@ function defaultRange(): { from: string; to: string } {
 
 export default function BillingPage() {
   const [keyword, setKeyword] = useState('')
-  const [selected, setSelected] = useState<BillingAccountData | null>(null)
+  // D-2：只保存 id，`selected` 由账户列表派生；mutation 后 refetch 即自动刷新，
+  // 不会出现「点击时刻陈旧快照」导致连续冻结/恢复方向翻转。
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [rechargeTarget, setRechargeTarget] = useState<BillingAccountData | null>(null)
   const [granularity, setGranularity] = useState<BillingRollupGranularity>('hour')
   const [range] = useState(defaultRange)
@@ -61,25 +63,27 @@ export default function BillingPage() {
     variables: { keyword: keyword || null, page, pageSize },
   })
   const invoicesQuery = useQuery<GetAdminBillingInvoicesQuery>(ADMIN_BILLING_INVOICES, {
-    variables: { accountId: selected?.id ?? '', page: invoicePage, pageSize },
-    skip: !selected,
+    variables: { accountId: selectedId ?? '', page: invoicePage, pageSize },
+    skip: !selectedId,
   })
-  const receiptsQuery = useQuery<GetAdminBillingReceiptsQuery>(ADMIN_BILLING_RECEIPTS, {
-    variables: { accountId: selected?.id ?? '', page: invoicePage, pageSize },
-    skip: !selected,
+  // D-1：收据按账单直查（不再与账单分页 rank 耦合）。
+  const receiptQuery = useQuery<GetAdminBillingReceiptQuery>(ADMIN_BILLING_RECEIPT, {
+    variables: { invoiceId: receiptInvoice?.id ?? '' },
+    skip: !receiptInvoice,
+    fetchPolicy: 'cache-and-network',
   })
   const callsQuery = useQuery<GetAdminBillingApiCallsQuery>(ADMIN_BILLING_API_CALLS, {
-    variables: { accountId: selected?.id ?? '', page: callPage, pageSize },
-    skip: !selected,
+    variables: { accountId: selectedId ?? '', page: callPage, pageSize },
+    skip: !selectedId,
   })
   const rollupsQuery = useQuery<GetAdminBillingRollupsQuery>(ADMIN_BILLING_ROLLUPS, {
     variables: {
-      accountId: selected?.id ?? '',
+      accountId: selectedId ?? '',
       granularity,
       from: range.from,
       to: range.to,
     },
-    skip: !selected,
+    skip: !selectedId,
   })
 
   const [updateCreditLimit] = useMutation(SET_BILLING_ACCOUNT_CREDIT_LIMIT)
@@ -87,14 +91,28 @@ export default function BillingPage() {
   const [reconcile] = useMutation(RECONCILE_BILLING_ACCOUNT)
 
   const accounts = useMemo(() => accountsQuery.data?.adminBillingAccounts ?? [], [accountsQuery.data])
+  const selected = useMemo(
+    () => accounts.find((account) => account.id === selectedId) ?? null,
+    [accounts, selectedId],
+  )
   const invoices = useMemo(() => invoicesQuery.data?.adminBillingInvoices ?? [], [invoicesQuery.data])
-  const receipts = useMemo(() => receiptsQuery.data?.adminBillingReceipts ?? [], [receiptsQuery.data])
+  const receipt = receiptQuery.data?.adminBillingReceipt ?? null
   const rollups = useMemo(() => rollupsQuery.data?.adminBillingRollups ?? [], [rollupsQuery.data])
   const calls = useMemo(() => callsQuery.data?.adminBillingApiCalls ?? [], [callsQuery.data])
-  const receipt = receipts.find((item) => item.invoiceId === receiptInvoice?.id) ?? null
+
+  // 选中账户数据刷新后同步输入框（仅在切换账户时初始化，避免覆盖正在编辑的值）。
+  useEffect(() => {
+    if (!selectedId) {
+      setCreditLimit('')
+      return
+    }
+    const current = accounts.find((account) => account.id === selectedId)
+    if (current) setCreditLimit(String(current.creditLimit))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
 
   const selectAccount = (account: BillingAccountData) => {
-    setSelected(account)
+    setSelectedId(account.id)
     setCreditLimit(String(account.creditLimit))
     setInvoicePage(1)
     setCallPage(1)
@@ -103,13 +121,22 @@ export default function BillingPage() {
   const applyCreditLimit = async () => {
     setConfirmAction(null)
     if (!selected) return
+    if (creditLimit.trim() === '') {
+      toast.error('请输入授信额度')
+      return
+    }
     const value = Number(creditLimit)
     if (!Number.isFinite(value) || value < 0) {
       toast.error('授信额度不能为负数')
       return
     }
     try {
-      await updateCreditLimit({ variables: { accountId: selected.id, creditLimit: value } })
+      const result = await updateCreditLimit({
+        variables: { accountId: selected.id, creditLimit: value },
+      })
+      const updated = (result.data as { setBillingAccountCreditLimit?: BillingAccountData } | undefined)
+        ?.setBillingAccountCreditLimit
+      if (updated) setCreditLimit(String(updated.creditLimit))
       await accountsQuery.refetch()
       toast.success('授信额度已更新')
     } catch (err) {
@@ -123,10 +150,16 @@ export default function BillingPage() {
     const next = selected.status === 'frozen' ? 'active' : 'frozen'
     try {
       await setStatus({ variables: { accountId: selected.id, status: next } })
-      await accountsQuery.refetch()
       toast.success(next === 'frozen' ? '账户已冻结' : '账户已恢复')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新失败')
+      return
+    }
+    // 🟡8：变更已成功，刷新失败不得反向误报为「更新失败」（否则用户会重试造成方向翻转）。
+    try {
+      await accountsQuery.refetch()
+    } catch {
+      toast.error('状态已更新，但列表刷新失败，请手动刷新')
     }
   }
 
@@ -140,6 +173,16 @@ export default function BillingPage() {
       toast.success(`精确核算完成，现金余额 ${account?.cashBalance.toFixed(2) ?? '-'}`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '核算失败')
+    }
+  }
+
+  const onRechargeSuccess = () => {
+    // D-4：充值成功后刷新账户与账单（此前只刷新账户，账单仍是旧列表）。
+    void accountsQuery.refetch()
+    if (selectedId) {
+      void invoicesQuery.refetch()
+      // 🟡8：收据查询用 `receiptInvoice?.id` 变量且 skip=!receiptInvoice，无选中时 refetch 会发空 invoiceId 必败请求。
+      if (receiptInvoice) void receiptQuery.refetch()
     }
   }
 
@@ -157,7 +200,11 @@ export default function BillingPage() {
           <Input
             className="max-w-xs"
             value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
+            onChange={(event) => {
+              setKeyword(event.target.value)
+              // 建议 19：搜索条件变化时重置页码，避免停留在旧范围的空页。
+              setPage(1)
+            }}
             placeholder="按用户名 / 账户 ID 检索"
           />
         </CardHeader>
@@ -251,6 +298,17 @@ export default function BillingPage() {
             <CardContent>
               {invoicesQuery.loading && !invoicesQuery.data ? (
                 <p className="text-sm text-muted-foreground">加载中…</p>
+              ) : invoicesQuery.error ? (
+                <div className="space-y-2 text-sm text-destructive">
+                  <p>账单加载失败：{invoicesQuery.error.message}</p>
+                  <Button size="sm" variant="outline" onClick={() => void invoicesQuery.refetch()}>
+                    重试
+                  </Button>
+                </div>
+              ) : invoices.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  暂无账单{invoicePage > 1 ? '（本页为空，可返回上一页）' : ''}
+                </p>
               ) : (
                 <>
                   <InvoiceTable invoices={invoices} onViewReceipt={setReceiptInvoice} />
@@ -273,8 +331,19 @@ export default function BillingPage() {
               <CardTitle>模型调用记录</CardTitle>
             </CardHeader>
             <CardContent>
-              {calls.length === 0 ? (
-                <p className="text-sm text-muted-foreground">暂无调用记录</p>
+              {callsQuery.loading && !callsQuery.data ? (
+                <p className="text-sm text-muted-foreground">加载中…</p>
+              ) : callsQuery.error ? (
+                <div className="space-y-2 text-sm text-destructive">
+                  <p>调用记录加载失败：{callsQuery.error.message}</p>
+                  <Button size="sm" variant="outline" onClick={() => void callsQuery.refetch()}>
+                    重试
+                  </Button>
+                </div>
+              ) : calls.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  暂无调用记录{callPage > 1 ? '（本页为空，可返回上一页）' : ''}
+                </p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[720px] text-sm">
@@ -341,7 +410,20 @@ export default function BillingPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <RollupChart rollups={rollups} />
+              {rollupsQuery.error ? (
+                <div className="space-y-2 text-sm text-destructive">
+                  <p>汇总加载失败：{rollupsQuery.error.message}</p>
+                  <Button size="sm" variant="outline" onClick={() => void rollupsQuery.refetch()}>
+                    重试
+                  </Button>
+                </div>
+              ) : rollupsQuery.loading && !rollupsQuery.data ? (
+                <p className="text-sm text-muted-foreground">加载中…</p>
+              ) : rollups.length === 0 ? (
+                <p className="text-sm text-muted-foreground">区间内暂无计费汇总</p>
+              ) : (
+                <RollupChart rollups={rollups} />
+              )}
             </CardContent>
           </Card>
         </>
@@ -360,10 +442,13 @@ export default function BillingPage() {
         account={rechargeTarget}
         open={rechargeTarget !== null}
         onClose={() => setRechargeTarget(null)}
+        onSuccess={onRechargeSuccess}
       />
       <ReceiptDrawer
         invoice={receiptInvoice}
         receipt={receipt}
+        loading={receiptQuery.loading}
+        error={receiptQuery.error?.message ?? null}
         open={receiptInvoice !== null}
         onClose={() => setReceiptInvoice(null)}
       />

@@ -23,6 +23,9 @@ export class ReceiptService {
   }> {
     const issuedAt = input.issuedAt ?? new Date();
     const datePart = issuedAt.toISOString().slice(0, 10).replace(/-/g, '');
+    // 注（R8-1 展示级）：补建收据（崩溃恢复）的 `issuedAt` 取补建时点，故 `receiptNo` 的
+    // `R<YYYYMMDD>` 段反映**补建日期**而非原始交易日期；`seq` 仍取自账单（账户内唯一），
+    // 编号规则与主路径同口径。
     // A12：原「账户后 4 位 hex」在多账户间易碰撞；改用账户 ID 的哈希前缀，保证跨账户唯一。
     const accountHash = crypto
       .createHash('sha256')

@@ -37,8 +37,31 @@ export interface ReservationServiceOptions {
   now?: () => number;
 }
 
-function reservationBizPrefix(reservationId: string): string {
+/**
+ * 预留资金流水的 `bizId` 前缀。R6-1：`BillingService` 需要按该前缀从 ledger 扣费行反查
+ * 窗口（补建缺失账单），故导出。
+ */
+export function reservationBizPrefix(reservationId: string): string {
   return `reservation:${reservationId}:`;
+}
+
+/**
+ * R4-1：解析最终结算流水 `bizId`（`…:final:<from>[:<to>]` / `…:final-gap:<from>:<to>`）**末尾的
+ * 窗口终点**（最后一个数字段）。崩溃恢复时据此只补未覆盖尾段 [已收费终点, 新 endedAt]；
+ * 无编码的历史行（`…:final`）返回 null。
+ */
+function parseWindowEnd(bizId: string | null | undefined): number | null {
+  if (!bizId) return null;
+  const match = /:(\d+(?::\d+)*)$/.exec(bizId);
+  if (!match) return null;
+  const parts = match[1].split(':');
+  const value = Number(parts[parts.length - 1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** A-5：`bizId` 前缀匹配的正则转义——`reservationId` 来自消息体，未转义时 `.*` 可跨预留求和。 */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -136,28 +159,26 @@ export class ReservationService {
         });
       }
     } catch (err) {
-      // 失败回滚（A1）：冻结中途失败不得卡死 PENDING（否则整生命周期无周期计费）。
-      // 释放已冻结部分并置 FAILED，交由资源对账/人工收口，避免僵尸预留。
-      if (input.depositCents > 0) {
-        await this.payments
-          .unfreeze({
-            accountId: input.accountId,
-            amountCents: input.depositCents,
-            bizId: `${reservationBizPrefix(reservationId)}deposit-rollback`,
-            idempotentKey: `unfreeze:deposit-rollback:${reservationId}`,
-          })
-          .catch(() => undefined);
-      }
-      if (input.cycleEstimateCents > 0) {
-        await this.payments
-          .unfreeze({
-            accountId: input.accountId,
-            amountCents: input.cycleEstimateCents,
-            bizId: `${reservationBizPrefix(reservationId)}cycle:0-rollback`,
-            idempotentKey: `unfreeze:cycle-rollback:${reservationId}:0`,
-          })
-          .catch(() => undefined);
-      }
+      // 失败回滚（A1/A-1）：冻结中途失败不得卡死 PENDING（否则整生命周期无周期计费）。
+      // **仅解冻确实落账的冻结额**：freeze 若在写 ledger 前就抛错（瞬时 DB 故障），对应键不存在，
+      // 无条件解冻会释放同账户其他预留的冻结额并污染 append-only ledger（对账会把污染当真值）。
+      // 与 `settleCycle` 的 freezeExists 守卫保持同一口径。
+      await this.rollbackFreeze({
+        accountId: input.accountId,
+        reservationId,
+        idempotentKey: `freeze:deposit:${reservationId}`,
+        amountCents: input.depositCents,
+        bizId: `${reservationBizPrefix(reservationId)}deposit-rollback`,
+        rollbackKey: `unfreeze:deposit-rollback:${reservationId}`,
+      });
+      await this.rollbackFreeze({
+        accountId: input.accountId,
+        reservationId,
+        idempotentKey: `freeze:cycle:${reservationId}:0`,
+        amountCents: input.cycleEstimateCents,
+        bizId: `${reservationBizPrefix(reservationId)}cycle:0-rollback`,
+        rollbackKey: `unfreeze:cycle-rollback:${reservationId}:0`,
+      });
       await BillingReservation.updateOne(
         { _id: reservationId, status: 'PENDING' },
         { $set: { status: 'FAILED' }, $inc: { version: 1 } },
@@ -171,6 +192,40 @@ export class ReservationService {
       { new: true },
     );
     return activated ?? (await BillingReservation.findById(reservationId))!;
+  }
+
+  /** A-1：回滚冻结——仅当对应 freeze 流水确实落账时，按**实际冻结额**解冻。 */
+  private async rollbackFreeze(input: {
+    accountId: string;
+    reservationId: string;
+    idempotentKey: string;
+    amountCents: number;
+    bizId: string;
+    rollbackKey: string;
+  }): Promise<void> {
+    if (input.amountCents <= 0) return;
+    try {
+      const freeze = await BillingLedger.findOne({
+        accountId: new mongoose.Types.ObjectId(input.accountId),
+        idempotentKey: input.idempotentKey,
+      })
+        .select({ deltaFrozen: 1 })
+        .lean<{ deltaFrozen?: number } | null>();
+      if (!freeze) return; // 未落账：不得解冻（否则蚕食同账户其他预留的冻结额）
+      const frozen = Math.min(
+        Math.max(0, Math.round(freeze.deltaFrozen ?? 0)),
+        Math.round(input.amountCents),
+      );
+      if (frozen <= 0) return;
+      await this.payments.unfreeze({
+        accountId: input.accountId,
+        amountCents: frozen,
+        bizId: input.bizId,
+        idempotentKey: input.rollbackKey,
+      });
+    } catch {
+      // 回滚失败不掩盖原始错误：预留仍置 FAILED，由资源对账/人工收口。
+    }
   }
 
   /**
@@ -234,16 +289,23 @@ export class ReservationService {
     const priced = await this.prices.priceContainer(minutes, windowFrom);
     const accountId = String(reservation.accountId);
 
-    // 仅当该周期确实冻结过才解冻，避免欠费周期无冻结却释放、蚕食保证金
+    // 仅当该周期确实冻结过才解冻，避免欠费周期无冻结却释放、蚕食保证金。
+    // 🟡11：解冻额以 **freeze 流水实际 `deltaFrozen`** 为准（而非 `cycleEstimateCents`），
+    // 与 `rollbackFreeze` 同口径，避免估算与实冻偏差时超解冻。
     const freezeKey = `freeze:cycle:${reservationId}:${cycleSeq}`;
-    const freezeExists = await BillingLedger.exists({ idempotentKey: freezeKey });
-    if (freezeExists && reservation.cycleEstimateCents > 0) {
-      await this.payments.unfreeze({
-        accountId,
-        amountCents: reservation.cycleEstimateCents,
-        bizId: `${reservationBizPrefix(reservationId)}cycle:${cycleSeq}`,
-        idempotentKey: `unfreeze:cycle:${reservationId}:${cycleSeq}`,
-      });
+    const freezeRow = await BillingLedger.findOne({ idempotentKey: freezeKey, accountId })
+      .select({ deltaFrozen: 1 })
+      .lean<{ deltaFrozen?: number } | null>();
+    if (freezeRow) {
+      const frozen = Math.max(0, Math.round(freezeRow.deltaFrozen ?? 0));
+      if (frozen > 0) {
+        await this.payments.unfreeze({
+          accountId,
+          amountCents: frozen,
+          bizId: `${reservationBizPrefix(reservationId)}cycle:${cycleSeq}`,
+          idempotentKey: `unfreeze:cycle:${reservationId}:${cycleSeq}`,
+        });
+      }
     }
 
     const preCheck = await this.checks.check({
@@ -359,20 +421,45 @@ export class ReservationService {
     return { frozen: true, insufficient: false };
   }
 
-  /** 最终结算：结清尾部分钟 + 释放全部剩余冻结（不阻塞资源释放）。 */
+  /**
+   * 最终结算：结清尾部分钟 + 释放全部剩余冻结（不阻塞资源释放）。
+   *
+   * A-3：若预留已 `SETTLED`（例如控制面误判 stale 提前终结），后续真实的 destroyed 事件
+   * 携带更晚的 `endedAt` 时，必须识别并补结「SETTLED 之后到真正销毁之间」的缺额，
+   * 而不是静默返回 0 让容器免费跑。
+   *
+   * R4-1/R5-1：`bizId` 均编码窗口区间两端（`charge:final` → `…:final:<from>:<to>`；
+   * `charge:final-gap` → `…:final-gap:<from>:<to>`，其幂等键同样编码两端）。注意 `charge:final` 的幂等键
+   * 仍是预留级单键 `charge:final:<rid>`（**不是**区间编码），恢复时通过回读该行 `bizId` 判定覆盖终点。
+   * 恢复时以 ledger 已覆盖终点为准只补未覆盖尾段；`lastSettleAt`/`expectedEndAt` 游标只推进、**绝不回退**
+   * （迟到 destroyed 的 `endedAt < lastSettleAt` 亦不得写回已收费区间）。
+   */
   async finalSettle(
     reservationId: string,
     endedAt: Date,
-  ): Promise<{ minutes: number; amount: number; cashBalance: number; windowFrom: Date }> {
+  ): Promise<{
+    minutes: number;
+    amount: number;
+    cashBalance: number;
+    windowFrom: Date;
+    /** 本次是否为「SETTLED 之后的缺额补结」。 */
+    tail?: boolean;
+  }> {
     const reservation = await this.findById(reservationId);
     if (!reservation) {
       return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: endedAt };
     }
     const accountId = String(reservation.accountId);
+    if (reservation.status === 'SETTLED') {
+      return this.settleTailAfterSettled(reservation, accountId, endedAt);
+    }
     const from = reservation.lastSettleAt ?? reservation.startedAt;
     const minutes = ceilMinutes(endedAt.getTime() - from.getTime());
     let amount = 0;
     let cashBalance = 0;
+    // R5-1：游标绝不回退——迟到的 destroyed（`endedAt < lastSettleAt`）不得把游标/expectedEndAt 写回
+    // 已收费区间，否则后续 A-3 尾结会与已有 cycle/final 收费区间重复计费。
+    let cursor = new Date(Math.max(endedAt.getTime(), from.getTime()));
 
     // 版本 CAS 抢占最终结算（SETTLING）；并发/重放时仅一个请求执行扣费，其余按幂等键 no-op。
     const claimed = await BillingReservation.findOneAndUpdate(
@@ -382,9 +469,18 @@ export class ReservationService {
     );
     if (!claimed) {
       const latest = await this.findById(reservationId);
-      if (!latest || latest.status === 'SETTLED') {
+      if (!latest) {
         return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
       }
+      if (latest.status === 'SETTLED') {
+        // A-3：并发下已被另一路径终结（可能基于更早的 expectedEndAt）；识别并补结缺额。
+        return this.settleTailAfterSettled(latest, accountId, endedAt);
+      }
+      if (latest.status !== 'SETTLING' && latest.status !== 'RELEASE_PENDING') {
+        // 🟡2：非「本次 CAS 的后续状态」时不得穿行扣费（避免在他人所有权下重复出账/金额错位）。
+        return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: from };
+      }
+      // SETTLING/RELEASE_PENDING：上一次最终结算中途崩溃的恢复路径，继续收敛（幂等键保证不重复扣）。
     }
 
     if (minutes > 0) {
@@ -400,15 +496,58 @@ export class ReservationService {
         accountId,
         amountCents: amount,
         idempotentKey: `charge:final:${reservationId}`,
-        bizId: `${reservationBizPrefix(reservationId)}final`,
+        bizId: `${reservationBizPrefix(reservationId)}final:${from.getTime()}:${endedAt.getTime()}`,
         preCheck: preCheck.preCheck!,
         ref: { type: 'container_reservation', id: reservationId },
       });
       cashBalance = payment.cashBalance;
+      // R4-1：以 ledger **已实际覆盖**为准回填金额（含历次崩溃恢复的 final/final-gap 流水，`bizId`
+      // 编码区间两端），解析**已收费窗口终点**；只补未覆盖尾段 [已收费终点, endedAt]。幂等键/`bizId`
+      // 均编码区间两端，故同一 (from,to) 重放幂等、不同 endedAt 各补各的缺口（不会撞键后静默漏收）。
+      const coverage = await this.settledCoverage(accountId, reservationId);
+      amount = coverage.coveredAmount;
+      // R5-1③：已收费终点 = max(`final*` 覆盖终点, 游标 `lastSettleAt`)。`settledCoverage` **不含**
+      // `cycle:*` 流水，靠「游标不回退」保证 cycle 已收费区间不被 final-gap 重复计费。
+      let billedThrough = Math.max(coverage.coveredEnd ?? from.getTime(), from.getTime());
+      if (coverage.coveredEnd === null && !payment.applied) {
+        // 历史无编码 final 行（`bizId` 未编码窗口终点）：无法从流水分辨覆盖终点，退回以游标为准（残余风险）。
+        console.warn(
+          `[billing] reservation ${reservationId} final charge lacks window end; falling back to cursor`,
+        );
+      }
+      if (billedThrough < endedAt.getTime()) {
+        const gapFrom = billedThrough;
+        const gapMinutes = ceilMinutes(endedAt.getTime() - gapFrom);
+        if (gapMinutes > 0) {
+          const gapPriced = await this.prices.priceContainer(gapMinutes, new Date(gapFrom));
+          const gapCheck = await this.checks.check({
+            accountId,
+            estimatedCredits: gapPriced.amountCents,
+            policy: 'accrue-and-track',
+            ref: { type: 'container_reservation', id: reservationId },
+          });
+          // R5-2：零价尾段同样落 0 元流水（`charge(0)` 写 `deltaBalance:0` 行），避免「覆盖终点」
+          // 与游标口径分裂、价格表调正后回溯计费此前免费窗口。
+          const gapPayment = await this.payments.charge({
+            accountId,
+            amountCents: gapPriced.amountCents,
+            idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+            bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+            preCheck: gapCheck.preCheck!,
+            ref: { type: 'container_reservation', id: reservationId },
+          });
+          cashBalance = gapPayment.cashBalance;
+          if (gapPayment.applied) amount += gapPriced.amountCents;
+          // 幂等键编码区间两端：`applied=false` 表示同窗口已收费（已计入 coveredAmount），同样视为已覆盖。
+          billedThrough = endedAt.getTime();
+        }
+      }
+      // 游标只推进到已收费终点，且绝不低于窗口起点/既有游标。
+      cursor = new Date(Math.max(billedThrough, from.getTime(), cursor.getTime()));
     }
 
     // 当前仍被该预留占用的冻结额（以 ledger 为准，重复执行时自然为 0）
-    const held = await this.heldFrozen(reservationId);
+    const held = await this.heldFrozen(reservationId, accountId);
     await BillingReservation.updateOne(
       { _id: reservationId },
       { $set: { status: 'RELEASE_PENDING' }, $inc: { version: 1 } },
@@ -424,11 +563,9 @@ export class ReservationService {
     await BillingReservation.updateOne(
       { _id: reservationId },
       {
-        $set: {
-          status: 'SETTLED',
-          lastSettleAt: endedAt,
-          expectedEndAt: endedAt,
-        },
+        $set: { status: 'SETTLED' },
+        // R5-1：`$max` 在落库层再次保证游标/expectedEndAt 只推进、不回退（防御并发与迟到事实）。
+        $max: { lastSettleAt: cursor, expectedEndAt: cursor },
         $inc: { version: 1 },
       },
     );
@@ -443,14 +580,121 @@ export class ReservationService {
     return { minutes, amount, cashBalance, windowFrom: from };
   }
 
-  /** 预留当前占用的冻结额（ledger 合计）。 */
-  async heldFrozen(reservationId: string): Promise<number> {
+  /**
+   * A-3/R4-1：补结「预留已 SETTLED，但真实销毁事件更晚」的缺额窗口。
+   * 以 ledger **已实际覆盖终点**为准只补未覆盖尾段（幂等键/`bizId` 编码区间两端），游标 `lastSettleAt`
+   * 只向前推进到已收费终点（`$max`）——即使上一次「推进游标后、扣费前」崩溃，也会按覆盖终点重新补收，
+   * 不会因游标已推进而永久漏收。只补结、不改变预留终态（已释放的冻结不会被重新冻结）。
+   * 序列化由调用方 `billingMutex.runExclusive('reservation:${id}')` 提供。
+   */
+  private async settleTailAfterSettled(
+    reservation: IBillingReservation,
+    accountId: string,
+    endedAt: Date,
+  ): Promise<{
+    minutes: number;
+    amount: number;
+    cashBalance: number;
+    windowFrom: Date;
+    tail?: boolean;
+  }> {
+    const reservationId = documentId(reservation);
+    const fallbackFrom = reservation.lastSettleAt ?? reservation.startedAt;
+    // R5-1③：已收费终点 = max(`final*` 覆盖终点, 游标 `lastSettleAt`)；`settledCoverage` 不含 `cycle:*`
+    // 流水，依赖「游标不回退」前提（见 `finalSettle`）。游标可能高于 final* 覆盖（cycle 已收费区间）。
+    const coverage = await this.settledCoverage(accountId, reservationId);
+    const gapFrom = Math.max(coverage.coveredEnd ?? fallbackFrom.getTime(), fallbackFrom.getTime());
+    if (endedAt.getTime() <= gapFrom) {
+      return { minutes: 0, amount: 0, cashBalance: 0, windowFrom: new Date(gapFrom) };
+    }
+    const minutes = ceilMinutes(endedAt.getTime() - gapFrom);
+    let amount = 0;
+    let cashBalance = 0;
+    let billedThrough = gapFrom;
+    if (minutes > 0) {
+      const priced = await this.prices.priceContainer(minutes, new Date(gapFrom));
+      const preCheck = await this.checks.check({
+        accountId,
+        estimatedCredits: priced.amountCents,
+        policy: 'accrue-and-track',
+        ref: { type: 'container_reservation', id: reservationId },
+      });
+      // R5-2：零价尾段同样落 0 元流水，保持「覆盖终点」与游标口径一致（避免价格调正后回溯计费）。
+      const payment = await this.payments.charge({
+        accountId,
+        amountCents: priced.amountCents,
+        idempotentKey: `charge:final-gap:${reservationId}:${gapFrom}:${endedAt.getTime()}`,
+        bizId: `${reservationBizPrefix(reservationId)}final-gap:${gapFrom}:${endedAt.getTime()}`,
+        preCheck: preCheck.preCheck!,
+        ref: { type: 'container_reservation', id: reservationId },
+      });
+      cashBalance = payment.cashBalance;
+      // 幂等键编码区间两端：`applied=false` 表示同窗口已收费（金额已计入 `coveredAmount`，不重复计费）。
+      // 注意：串行前提下本分支不会先于「窗口已覆盖」早退到达；「已扣费但账单缺失」由
+      // `BillingService.reconcileContainerInvoices` 以 ledger 扣费行驱动补建（R6-1），不依赖此回填。
+      amount = priced.amountCents;
+      billedThrough = endedAt.getTime();
+    }
+    // 游标只向前推进到已收费终点（`$max` 防回退），不改预留终态。
+    await BillingReservation.updateOne(
+      { _id: reservationId, status: 'SETTLED' },
+      { $max: { lastSettleAt: new Date(billedThrough) }, $inc: { version: 1 } },
+    );
+    await this.recomputeTotals(reservationId, accountId);
+    const account = await this.accounts.getById(accountId);
+    if (!account || account.availableBalance < 0) {
+      await this.accounts.markInsufficient(accountId, new Date(this.now()));
+    }
+    if (amount <= 0) {
+      return { minutes: 0, amount: 0, cashBalance, windowFrom: new Date(gapFrom) };
+    }
+    return {
+      minutes,
+      amount,
+      cashBalance,
+      windowFrom: new Date(gapFrom),
+      tail: true,
+    };
+  }
+
+  /**
+   * R4-1：该预留最终结算流水（`charge:final` + 全部 `charge:final-gap`）的**已实际收费覆盖**。
+   * 每条 `bizId` 编码区间两端（`…:final:<from>:<to>` / `…:final-gap:<from>:<to>`），取所有 `to` 的
+   * 最大值为 `coveredEnd`（已收费窗口终点），并汇总金额。用于「只补未覆盖尾段 + 游标不越过未收费窗口」。
+   */
+  private async settledCoverage(
+    accountId: string,
+    reservationId: string,
+  ): Promise<{ coveredEnd: number | null; coveredAmount: number }> {
+    const prefix = reservationBizPrefix(reservationId);
+    const rows = await BillingLedger.find({
+      accountId: new mongoose.Types.ObjectId(accountId),
+      bizType: 'charge',
+      bizId: { $regex: `^${escapeRegExp(prefix)}(final|final-gap):` },
+    })
+      .select({ deltaBalance: 1, bizId: 1 })
+      .lean<Array<{ deltaBalance?: number; bizId?: string | null }>>();
+    let coveredEnd: number | null = null;
+    let coveredAmount = 0;
+    for (const row of rows) {
+      coveredAmount += Math.abs(Math.round(row.deltaBalance ?? 0));
+      const end = parseWindowEnd(row.bizId);
+      if (end !== null && (coveredEnd === null || end > coveredEnd)) coveredEnd = end;
+    }
+    return { coveredEnd, coveredAmount };
+  }
+
+  /**
+   * 预留当前占用的冻结额（ledger 合计）。
+   * A-5：必须过滤 `accountId`（避免全表扫 + 跨账户误算），并对 `bizId` 正则转义。
+   */
+  async heldFrozen(reservationId: string, accountId?: string): Promise<number> {
+    const match: Record<string, unknown> = {
+      bizId: { $regex: `^${escapeRegExp(reservationBizPrefix(reservationId))}` },
+    };
+    if (accountId) match.accountId = new mongoose.Types.ObjectId(accountId);
     const rows = (await BillingLedger.aggregate([
-      {
-        $match: {
-          bizId: { $regex: `^reservation:${reservationId}:` },
-        },
-      },
+      { $match: match },
       { $group: { _id: null, frozen: { $sum: '$deltaFrozen' } } },
     ])) as Array<{ frozen: number }>;
     return Math.max(0, Math.round(rows[0]?.frozen ?? 0));
@@ -459,7 +703,12 @@ export class ReservationService {
   /** 预留累计口径以 ledger 为准重算（幂等，供展示与对账）。 */
   async recomputeTotals(reservationId: string, accountId: string): Promise<void> {
     const rows = (await BillingLedger.aggregate([
-      { $match: { accountId: new mongoose.Types.ObjectId(accountId), bizId: { $regex: `^reservation:${reservationId}:` } } },
+      {
+        $match: {
+          accountId: new mongoose.Types.ObjectId(accountId),
+          bizId: { $regex: `^${escapeRegExp(reservationBizPrefix(reservationId))}` },
+        },
+      },
       {
         $group: {
           _id: null,

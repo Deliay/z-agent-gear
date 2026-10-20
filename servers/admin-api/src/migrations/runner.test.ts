@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./models.js', () => ({
-  Migrations: { create: vi.fn(), find: vi.fn(), deleteOne: vi.fn() },
+  Migrations: {
+    create: vi.fn(),
+    find: vi.fn(),
+    deleteOne: vi.fn(),
+    deleteMany: vi.fn(),
+  },
 }));
 
 import { Migrations } from './models.js';
@@ -18,6 +23,7 @@ describe('runMigrations', () => {
     vi.clearAllMocks();
     (Migrations.create as any).mockResolvedValue({});
     (Migrations.deleteOne as any).mockResolvedValue({ deletedCount: 1 });
+    (Migrations.deleteMany as any).mockResolvedValue({ deletedCount: 0 });
   });
 
   it('skips everything when the lock cannot be acquired', async () => {
@@ -39,7 +45,9 @@ describe('runMigrations', () => {
     expect(migration.run).not.toHaveBeenCalled();
     // 仅锁写入，不写执行记录
     expect(Migrations.create).toHaveBeenCalledTimes(1);
-    expect(Migrations.deleteOne).toHaveBeenCalledWith({ _lock: 'migration_lock' });
+    expect(Migrations.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _lock: 'migration_lock', owner: expect.any(String) }),
+    );
   });
 
   it('runs a pending migration and records it in admin_migrations', async () => {
@@ -49,6 +57,10 @@ describe('runMigrations', () => {
     await runMigrations([migration]);
 
     expect(migration.run).toHaveBeenCalledTimes(1);
+    // 🟡7：过期锁清理用 deleteMany（此前 deleteOne 无法清掉多条残留 `_lock` 文档）。
+    expect(Migrations.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ _lock: 'migration_lock', expiresAt: expect.any(Object) }),
+    );
     expect(Migrations.create).toHaveBeenCalledWith({
       name: '001-preset-workloads',
       executedAt: expect.any(Date),
@@ -71,9 +83,10 @@ describe('runMigrations', () => {
     expect(recorded).toEqual([{ name: '002', executedAt: expect.any(Date) }]);
   });
 
-  it('always releases the lock', async () => {
-    executedLean([]);
+  it('always releases the lock', async () => {    executedLean([]);
     await runMigrations([]);
-    expect(Migrations.deleteOne).toHaveBeenCalledWith({ _lock: 'migration_lock' });
+    expect(Migrations.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _lock: 'migration_lock', owner: expect.any(String) }),
+    );
   });
 });

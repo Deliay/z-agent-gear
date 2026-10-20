@@ -71,5 +71,13 @@ for (const method of [
   appendOnlyInvoiceSchema.pre(method, blockInvoiceMutation);
 }
 
+// A10：拦截 `load → save` 路径（query 级 pre hook 覆盖不到）。
+type SaveGuardSchema = {
+  pre: (method: string, fn: (this: { isNew: boolean }) => void) => unknown;
+};
+(billingInvoiceSchema as unknown as SaveGuardSchema).pre('save', function () {
+  if (!this.isNew) throw new Error('billinginvoices is append-only; update/delete is forbidden');
+});
+
 export const BillingInvoice = mongoose.model('BillingInvoice', billingInvoiceSchema);
 export type IBillingInvoice = mongoose.InferSchemaType<typeof billingInvoiceSchema>;

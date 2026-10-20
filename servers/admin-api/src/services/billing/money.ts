@@ -49,9 +49,11 @@ export function parseRechargeCents(credits: number): number {
   return cents;
 }
 
-/**
- * token 计费：tokens × 分/百万 token，不足 1 分按 1 分（向上取整）。
+/** token 计费：tokens × 分/百万 token，不足 1 分按 1 分（向上取整）。
  * 输入为整数，避免浮点误差。
+ *
+ * 注意：这是**单段**计费。整单多段（输入/缓存/输出）请用 `allocateTokenCostCents`，
+ * 否则每段各自 ceil 会造成整单多收（例如 1+1 token 会被收 2~3 分）。
  */
 export function tokenCostCents(tokens: number, ratePerMillionCents: number): number {
   if (!Number.isFinite(tokens) || !Number.isFinite(ratePerMillionCents)) {
@@ -63,6 +65,38 @@ export function tokenCostCents(tokens: number, ratePerMillionCents: number): num
     throw new MoneyError('token 计费金额超出安全范围');
   }
   return cost;
+}
+
+/**
+ * 整单 token 计费：对多段按「先求和再向上取整」计算，并把结果按最大余数法分配到各段，
+ * 保证各段金额之和 == 整单金额（且各段与精确值相差 ≤ 1 分）。
+ *
+ * `numerators[i] = tokens_i × rate_i`（整数分·百万 token 的分子），分母固定 1e6。
+ */
+export function allocateTokenCostCents(numerators: readonly number[]): number[] {
+  const denominator = TOKENS_PER_MILLION;
+  const safe = numerators.map((value) => {
+    if (!Number.isFinite(value) || value < 0) throw new MoneyError('token 计费参数非法');
+    if (!Number.isSafeInteger(value)) throw new MoneyError('token 计费金额超出安全范围');
+    return value;
+  });
+  const totalNumerator = safe.reduce((acc, value) => acc + value, 0);
+  if (!Number.isSafeInteger(totalNumerator)) throw new MoneyError('token 计费金额超出安全范围');
+  if (totalNumerator <= 0) return safe.map(() => 0);
+  const totalCents = Math.ceil(totalNumerator / denominator);
+  const bases = safe.map((value) => Math.floor(value / denominator));
+  const remainders = safe.map((value) => value % denominator);
+  let remaining = totalCents - bases.reduce((acc, value) => acc + value, 0);
+  const order = remainders
+    .map((remainder, index) => ({ remainder, index }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+  const result = [...bases];
+  for (const { index } of order) {
+    if (remaining <= 0) break;
+    result[index] = (result[index] ?? 0) + 1;
+    remaining -= 1;
+  }
+  return result;
 }
 
 /** 容器分钟计费：分钟数 × 分/分钟（分钟数已由计量层向上取整）。 */

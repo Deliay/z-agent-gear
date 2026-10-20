@@ -22,6 +22,11 @@ const billingOutboxSchema = new mongoose.Schema(
     claimedBy: { type: String, default: null },
     /** 超过重试上限的毒消息隔离标记（不再无限重投）。 */
     failed: { type: Boolean, default: false, index: true },
+    /**
+     * R3-2：代偿补投行的来源事件 id（仅 admin-api 反向对账补投的 `…:repair:<ts>` 行写入）。
+     * 与 admin-api schema 严格对齐，避免读取侧字段缺失。
+     */
+    repairOf: { type: String, default: null, index: true },
     createdAt: { type: Date, default: Date.now },
     publishedAt: { type: Date, default: null },
   },

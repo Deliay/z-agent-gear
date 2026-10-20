@@ -200,6 +200,8 @@ export function createCloudControllerApp(): CloudControllerApp {
 
   async function stop(): Promise<void> {
     statusSync.stop();
+    // O-1：先排空在途计费钩子（outbox enqueue），再停 publisher，避免 SIGTERM 截断事件写入。
+    await containerService.drainBillingHooks();
     await billingPublisher.stop();
     io.close();
     await new Promise<void>((resolve) => {

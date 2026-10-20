@@ -251,6 +251,15 @@ export const ADMIN_BILLING_RECEIPTS = gql`
   }
 `
 
+// D-1：按账单直查收据，避免「账单分页 rank 与收据分页 rank 不一致」导致误报暂无收据。
+export const ADMIN_BILLING_RECEIPT = gql`
+  query AdminBillingReceipt($invoiceId: ID!) {
+    adminBillingReceipt(invoiceId: $invoiceId) {
+      ${BILLING_RECEIPT_FIELDS}
+    }
+  }
+`
+
 export const ADMIN_BILLING_ROLLUPS = gql`
   query AdminBillingRollups($accountId: ID!, $granularity: BillingRollupGranularity!, $from: String!, $to: String!) {
     adminBillingRollups(accountId: $accountId, granularity: $granularity, from: $from, to: $to) {

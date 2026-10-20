@@ -45,12 +45,14 @@ export interface OutboxRepository {
   markPublished(eventId: string): Promise<void>;
   /** 记录一次失败；`attempts` 达到上限时置 `failed` 隔离（不再无限重投）。 */
   markFailed(eventId: string, error: string, maxAttempts: number): Promise<void>;
+  /** 释放未处理的认领（保持 createdAt 顺序重试，避免租约等待）。 */
+  release?(eventIds: string[]): Promise<void>;
 }
 
 export type OutboxProducer = 'cloud-controller' | 'admin-api';
 
 export interface EventTransport {
-  publish(routingKey: string, message: BillingEventMessage): Promise<void>;
+  publish(routingKey: string, message: BillingEventMessage, attempt?: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -164,6 +166,14 @@ export class MongoOutboxRepository implements OutboxRepository {
       await BillingOutbox.updateOne({ eventId }, { $set: { failed: true } });
     }
   }
+
+  async release(eventIds: string[]): Promise<void> {
+    if (eventIds.length === 0) return;
+    await BillingOutbox.updateMany(
+      { eventId: { $in: eventIds } },
+      { $set: { claimedAt: null, claimedBy: null } },
+    );
+  }
 }
 
 /** 内存实现：单测/无 broker 环境使用。 */
@@ -232,6 +242,16 @@ export class InMemoryOutboxRepository implements OutboxRepository {
     }
   }
 
+  async release(eventIds: string[]): Promise<void> {
+    for (const eventId of eventIds) {
+      const record = this.store.get(eventId);
+      if (record) {
+        record.claimedAt = null;
+        record.claimedBy = null;
+      }
+    }
+  }
+
   /** 测试辅助：当前未发布事件。 */
   pending(): OutboxRecord[] {
     return [...this.store.values()].map((record) => ({ ...record }));
@@ -297,7 +317,7 @@ export class RabbitMqTransport implements EventTransport {
     }
   }
 
-  async publish(routingKey: string, message: BillingEventMessage): Promise<void> {
+  async publish(routingKey: string, message: BillingEventMessage, attempt = 0): Promise<void> {
     const channel = await this.ensureChannel();
     channel.publish(
       BILLING_EXCHANGE,
@@ -307,7 +327,8 @@ export class RabbitMqTransport implements EventTransport {
         persistent: true,
         contentType: 'application/json',
         messageId: message.eventId,
-        headers: { 'x-event-id': message.eventId, 'x-retry-count': 0 },
+        // 问题 16：broker 重投后 retry 计数不丢失（消费端据此补投结算链）。
+        headers: { 'x-event-id': message.eventId, 'x-retry-count': attempt },
       },
     );
     await channel.waitForConfirms();
@@ -378,19 +399,27 @@ export class BillingEventPublisher {
         this.instanceId,
         this.leaseMs,
       );
-      for (const record of records) {
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index]!;
         if (record.attempts >= this.maxAttempts) {
           await this.repository.markFailed(record.eventId, 'exceeded max attempts', this.maxAttempts);
           continue;
         }
         try {
-          await this.transport.publish(record.routingKey, record.payload);
+          await this.transport.publish(record.routingKey, record.payload, record.attempts);
           await this.repository.markPublished(record.eventId);
           published += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn?.(`[billing-outbox] publish failed for ${record.eventId}: ${message}`);
           await this.repository.markFailed(record.eventId, message, this.maxAttempts);
+          // R-1：**不要继续发布后续行**。单条失败后 continue 会让 broker 恢复后「后一条先发」，
+          // ready/destroyed 这类因果事件的顺序被翻转，消费端即出现 destroyed 先结算的重复计费。
+          // 停止本轮并释放剩余认领（按 createdAt 顺序重试），牺牲吞吐换顺序性。
+          await this.repository
+            .release?.(records.slice(index + 1).map((item) => item.eventId))
+            .catch(() => undefined);
+          break;
         }
       }
     } finally {
@@ -415,6 +444,11 @@ export class BillingEventPublisher {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    // O-1：停机前排空在途 relay（最多等一个租约窗口），避免已认领未发布的 outbox 行被滞留。
+    const deadline = Date.now() + this.leaseMs;
+    while (this.relaying && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await this.transport.close();
   }

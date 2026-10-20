@@ -4,9 +4,11 @@ import {
   type BillingOwnerType,
   type IBillingAccount,
 } from '../../models/billing-account.js';
+import { BillingAppliedLedger } from '../../models/billing-applied-ledger.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { AdminUser } from '../../models/admin-user.js';
 import { availableCents } from './money.js';
+import { accountMutex } from './keyed-mutex.js';
 import { documentId } from './id.js';
 
 export interface BillingAccountDTO {
@@ -250,6 +252,25 @@ export class AccountService {
     } | null;
   }> {
     if (!mongoose.isValidObjectId(accountId)) throw new Error('账户不存在');
+    // R2-1：与 PaymentService 的全部钱包写入共用同一把账户锁——否则「校准回写」与在途
+    // `$inc`/自愈交错，会把刚写入的增量覆盖掉（或反之）。
+    return accountMutex.runExclusive(`account:${accountId}`, () =>
+      this.reconcileAccountLocked(accountId),
+    );
+  }
+
+  private async reconcileAccountLocked(accountId: string): Promise<{
+    account: BillingAccountDTO;
+    error: {
+      accountId: string;
+      walletCash: number;
+      ledgerCash: number;
+      walletGift: number;
+      ledgerGift: number;
+      walletFrozen: number;
+      ledgerFrozen: number;
+    } | null;
+  }> {
     const account = await BillingAccount.findById(accountId).lean<IBillingAccount | null>();
     if (!account) throw new Error('账户不存在');
 
@@ -264,7 +285,7 @@ export class AccountService {
 
     const mismatch =
       walletCash !== ledgerCash || walletGift !== ledgerGift || walletFrozen !== ledgerFrozen;
-    // R1：无论是否有漂移，都把最近 ledger 行同步进「已应用水位」——防止「钱包已等于 ledger 真值
+    // R1/A-2：无论是否有漂移，都把最近 ledger 行同步进「已应用水位」——防止「钱包已等于 ledger 真值
     // 但水位缺失」（如历史数据/对账后）时重放二次扣减。有漂移时同时按 ledger 真值回写分池余额。
     const recent = (
       await BillingLedger.find({ accountId: new mongoose.Types.ObjectId(accountId) })
@@ -304,6 +325,10 @@ export class AccountService {
         { $set: { appliedLedgerIds: recent } },
       );
     }
+    // A-2/R2-1：钱包此刻**已**被校准到 ledger 真值（有漂移已回写、无漂移本就相等），
+    // 才可把全部历史行登记为已应用——顺序必须在钱包回写**之后**，否则会先宣称「已应用」
+    // 而钱包尚未写，重放被跳过 → 账实不符（违反 `markAllLedgerApplied` 自身不变量）。
+    await this.markAllLedgerApplied(accountId);
 
     const updated = mismatch
       ? await BillingAccount.findById(accountId).lean<IBillingAccount | null>()
@@ -322,6 +347,46 @@ export class AccountService {
           }
         : null,
     };
+  }
+
+  /**
+   * A-2：把该账户**全部** ledger 行登记为「已应用到钱包」。
+   *
+   * 仅在对账把钱包校准到 ledger 真值之后调用——此刻钱包 = Σledger，所有历史行在语义上
+   * 都已生效，登记全部行才能让「水位淘汰后的重放」保持幂等（幂等标记不淘汰）。
+   * 使用 `bulkWrite` + `upsert` 幂等；**失败向上抛**（R2-1：吞错会让「已校准但未登记」静默
+   * 留下重放窗口，由调用方按对账失败上报，下一次对账重试）。
+   *
+   * **残余风险（已显式标注）**：若「钱包校准回写成功、本登记失败」后，在下一次对账成功登记前
+   * 恰好重放了一条已被水位（`appliedLedgerIds`）淘汰的历史 ledger，则该行会按「未应用」再 `$inc`
+   * 一次（重复记账）。窗口 = 登记失败到下一次对账；`markLedgerApplied` 走单行 upsert 因此实际
+   * 只有批量路径可能出现。此窗口无法在不引入跨账户快照版本的前提下彻底关闭，接受并依赖对账重试。
+   */
+  async markAllLedgerApplied(accountId: string): Promise<void> {
+    if (!mongoose.isValidObjectId(accountId)) return;
+    const objectId = new mongoose.Types.ObjectId(accountId);
+    const rows = await BillingLedger.find({ accountId: objectId })
+      .select({ _id: 1 })
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    if (rows.length === 0) return;
+    const now = new Date(this.now());
+    const chunkSize = 500;
+    for (let start = 0; start < rows.length; start += chunkSize) {
+      const chunk = rows.slice(start, start + chunkSize);
+      await BillingAppliedLedger.bulkWrite(
+        chunk.map((row) => ({
+          updateOne: {
+            filter: { accountId: objectId, ledgerId: String(row._id) },
+            update: {
+              $set: { walletApplied: true, appliedAt: now, claimedAt: null },
+              $setOnInsert: { accountId: objectId, ledgerId: String(row._id) },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      );
+    }
   }
 }
 
