@@ -24,6 +24,7 @@ vi.mock('../models/model.js', () => ({
     findOne: vi.fn(),
     findById: vi.fn(),
     create: vi.fn(),
+    insertMany: vi.fn(),
     deleteOne: vi.fn(),
     bulkWrite: vi.fn(),
   },
@@ -35,8 +36,23 @@ vi.mock('../models/provider.js', () => ({
   },
 }));
 
+vi.mock('./llm-api', () => ({
+  llmApiService: {
+    fetchModels: vi.fn(),
+  },
+}));
+
+vi.mock('./provider', () => ({
+  PROVIDER_CONNECTIVITY_ERROR: '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+  providerService: {
+    getDecryptedConnection: vi.fn(),
+  },
+}));
+
 import { Model } from '../models/model.js';
 import { Provider } from '../models/provider.js';
+import { llmApiService } from './llm-api';
+import { providerService } from './provider';
 import { modelService } from './model';
 
 const VALID_OID = '507f1f77bcf86cd799439011';
@@ -62,6 +78,14 @@ describe('ModelService (admin / global scope)', () => {
     vi.clearAllMocks();
     // 默认：目标供应商存在且为 global
     (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: VALID_OID, scope: 'global' }) });
+    // 默认：无同名全局模型（assertNamesAvailable 通过）
+    (Model.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    (llmApiService.fetchModels as any).mockResolvedValue(['gpt-4o', 'claude', 'gpt-4o']);
+    (providerService.getDecryptedConnection as any).mockResolvedValue({
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      apiKey: 'sk-key',
+    });
   });
 
   describe('findAll', () => {
@@ -165,11 +189,15 @@ describe('ModelService (admin / global scope)', () => {
       expect(Model.deleteOne).toHaveBeenCalledWith({ _id: VALID_OID });
     });
 
-    it('T-M2: refuses to delete a synced (non-custom) model', async () => {
-      (Model.findById as any).mockResolvedValue(makeModelDoc({ isCustom: false }));
+    it('U-M10: deletes a synced (non-custom) global model too', async () => {
+      const doc = makeModelDoc({ isCustom: false });
+      (Model.findById as any).mockResolvedValue({ ...doc, toObject: () => doc });
+      (Model.deleteOne as any) = vi.fn().mockResolvedValue({ deletedCount: 1 });
 
-      expect(await modelService.delete(VALID_OID)).toBeNull();
-      expect(Model.deleteOne).not.toHaveBeenCalled();
+      const result = await modelService.delete(VALID_OID);
+
+      expect(result).not.toBeNull();
+      expect(Model.deleteOne).toHaveBeenCalledWith({ _id: VALID_OID });
     });
 
     it('T-M2: refuses to delete a user-scope model', async () => {
@@ -266,5 +294,134 @@ describe('ModelService (admin / global scope)', () => {
         { updateOne: { filter: { _id: VALID_OID, scope: 'global' }, update: { sortOrder: 0 } } },
       ]);
     });
+  });
+});
+
+describe('ModelService manual import / global name uniqueness', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: VALID_OID, scope: 'global' }) });
+    (Model.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    (llmApiService.fetchModels as any).mockResolvedValue(['gpt-4o', 'claude', 'gpt-4o']);
+    (providerService.getDecryptedConnection as any).mockResolvedValue({
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      apiKey: 'sk-key',
+    });
+    (Model.findOne as any).mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue({ sortOrder: 2 }) }),
+      }),
+    });
+  });
+
+  it('U-M2: assertNamesAvailable resolves when no global conflict exists', async () => {
+    await expect(modelService.assertNamesAvailable(['gpt-4o'])).resolves.toBeUndefined();
+    expect(Model.find).toHaveBeenCalledWith({ scope: 'global', name: { $in: ['gpt-4o'] } }, 'name');
+  });
+
+  it('U-M1: createCustom rejects a cross-provider duplicate without writing', async () => {
+    (Model.create as any) = vi.fn();
+    (Model.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]) });
+
+    await expect(
+      modelService.createCustom({ providerId: VALID_OID, name: 'gpt-4o' }),
+    ).rejects.toThrow('Model name already exists: gpt-4o');
+    expect(Model.create).not.toHaveBeenCalled();
+  });
+
+  it('U-M3: listProviderModels keeps upstream order and marks imported / duplicate names', async () => {
+    (Model.find as any).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([
+        { providerId: VALID_OID, name: 'gpt-4o' },
+        { providerId: VALID_OID_2, name: 'claude' },
+      ]),
+    });
+
+    const result = await modelService.listProviderModels(VALID_OID);
+
+    expect(result).toEqual([
+      { name: 'gpt-4o', isImported: true, isDuplicate: false },
+      { name: 'claude', isImported: false, isDuplicate: true },
+    ]);
+    expect(llmApiService.fetchModels).toHaveBeenCalledWith('OpenAI', 'https://api.openai.com/v1', 'sk-key');
+  });
+
+  it('U-M4: listProviderModels normalizes upstream connectivity failures', async () => {
+    (llmApiService.fetchModels as any).mockRejectedValue(new Error('Connection error.'));
+
+    await expect(modelService.listProviderModels(VALID_OID)).rejects.toThrow(
+      '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+    );
+  });
+
+  it('U-M5: importModels inserts only the missing names with consecutive sortOrder', async () => {
+    // 第一次查「该供应商已存在名」；后续 assertNamesAvailable 查全局冲突 → 无冲突
+    (Model.find as any).mockReturnValueOnce({
+      lean: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]),
+    });
+    (Model.insertMany as any).mockImplementation((docs: Array<Record<string, unknown>>) =>
+      Promise.resolve(docs.map((doc, i) => ({
+        ...doc,
+        _id: { toString: () => `new-${i}` },
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-01'),
+      }))),
+    );
+
+    const result = await modelService.importModels(VALID_OID, ['gpt-4o', 'claude', ' gemini ']);
+
+    const docs = (Model.insertMany as any).mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(docs.map((d) => d.name)).toEqual(['claude', 'gemini']);
+    expect(docs.map((d) => d.sortOrder)).toEqual([3, 4]);
+    expect(docs.every((d) => d.scope === 'global' && d.isCustom === false)).toBe(true);
+    expect((Model.insertMany as any).mock.calls[0][1]).toEqual({ ordered: false });
+    expect(result).toHaveLength(2);
+  });
+
+  it('U-M6: importModels returns [] without touching upstream when everything is already imported', async () => {
+    (Model.find as any).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }]),
+    });
+
+    await expect(modelService.importModels(VALID_OID, ['gpt-4o'])).resolves.toEqual([]);
+    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+    expect(Model.insertMany).not.toHaveBeenCalled();
+  });
+
+  it('U-M7: importModels rejects a global duplicate without writing', async () => {
+    (Model.find as any)
+      // 第一次：本供应商已存在名（无）
+      .mockReturnValueOnce({ lean: vi.fn().mockResolvedValue([]) })
+      // 第二次：全局重名冲突
+      .mockReturnValueOnce({ lean: vi.fn().mockResolvedValue([{ name: 'claude' }]) });
+
+    await expect(modelService.importModels(VALID_OID, ['claude'])).rejects.toThrow(
+      'Model name already exists: claude',
+    );
+    expect(Model.insertMany).not.toHaveBeenCalled();
+  });
+
+  it('U-M8: importModels rejects empty names before calling upstream', async () => {
+    await expect(modelService.importModels(VALID_OID, ['  ', 'gpt-4o'])).rejects.toThrow('Model name is invalid');
+    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+  });
+
+  it('U-M9: importModels maps concurrent E11000 to the duplicate-name message', async () => {
+    (Model.insertMany as any).mockRejectedValue(new Error('E11000 duplicate key error'));
+
+    await expect(modelService.importModels(VALID_OID, ['claude'])).rejects.toThrow('Model name already exists');
+  });
+
+  it('U-M11: importModels rejects an unknown provider', async () => {
+    (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+
+    await expect(modelService.importModels(VALID_OID, ['claude'])).rejects.toThrow('Provider not found');
+  });
+
+  it('U-M12: importModels returns [] for an empty name list (裁决 4)', async () => {
+    await expect(modelService.importModels(VALID_OID, [])).resolves.toEqual([]);
+    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+    expect(Model.insertMany).not.toHaveBeenCalled();
   });
 });

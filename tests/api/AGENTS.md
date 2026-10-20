@@ -107,8 +107,8 @@ npm test
 |------|------|
 | providers query - 无 token | 应返回「Not authenticated」 |
 | models query - 无 token | 应返回「Not authenticated」 |
-| providers query - 已认证 | 应返回空列表 |
-| models query - 已认证 | 应返回空列表 |
+| providers query - 已认证 | 仅返回用户 scope，且包含 beforeAll 创建的种子供应商（非空） |
+| models query - 已认证 | 返回非空模型列表，含种子供应商模型与已启用全局模型 |
 | createProvider - 无效 endpoint | 应返回连通性测试失败 |
 | createProvider - 空名称 | 应返回校验错误 |
 | createProvider - 无 auth | 应返回「Not authenticated」 |
@@ -380,12 +380,17 @@ npm test
 | adminProviders 无 auth | 「Not authenticated」 |
 | 业务 mutation 无 auth | 「Not authenticated」 |
 | 连通性失败不落库 | T-P1 |
-| 创建全局供应商 | scope=global、凭据脱敏、同步 scope=global 模型（T-P2） |
+| 创建全局供应商 | scope=global、凭据脱敏、**不自动导入模型**（T-P2） |
+| 更新供应商不重同步 | 改 endpoint 后模型不增不减（T-P2b） |
+| 手动导入链路 | 拉取清单 / 勾选导入 / 已导入标记 / 幂等返回 [] / 跨供应商重名拒绝（T-MI4）/ 上游不可用连通性文案且不写库（T-MI5） / 空名拒绝（T-MI6） |
+| 删除后重新导入 | 删除导入模型同名可重新导入（T-MD1）；自定义模型重名拒绝（T-MU1） |
+| 并发重名兜底 | 两供应商并发导入同名恰一成功一失败，库内仅 1 条（T-MU2） |
+| 重名整理台账 | 条目与实际改名一一对应、字段完整（T-MR1，需库内已有迁移 005 台账；全新库的空集由迁移单测 T-MIG33/T-MIG34 锁定）；删除被改名模型后台账仍可查（T-MR2）；均需 MONGODB_URI |
 | 全局同名冲突 | 「Provider name already exists」（T-P7） |
 | 更新留空保留凭据 | T-P3 |
 | 启停级联 + 删除级联 | T-P5 / T-P4 |
 | 批量操作空列表 | successCount=0 |
-| 全局自定义模型 | 添加/列表/仅自定义可删/禁用供应商下 toggle 拒绝（T-M1~T-M3） |
+| 全局模型管理 | 自定义模型添加/列表；任意全局模型可删；禁用供应商下 toggle 拒绝；全局模型名唯一（T-M1~T-M3） |
 | 全局模型排序 | T-M4 |
 
 ### Admin Base Image API (`admin-api/base-image.test.ts`)
@@ -396,13 +401,23 @@ npm test
 | CRUD | Dockerfile 原样存取（T-B1） |
 | 同名冲突 | 「Base image name already exists」（T-B2） |
 
+### Agent API 自动同步回归 (`agent-api/llm.test.ts` T-SYNC*)
+
+> 用户侧 `syncSyncedModels` 行为保持不变（本期零改动）：创建/更新用户供应商仍自动同步模型；后台仅在 admin-api 取消自动导入。
+
+| 测试 | 描述 |
+|------|------|
+| T-SYNC1 | 创建用户供应商仍返回同步模型 |
+| T-SYNC2 | 更新用户供应商（改 endpoint）后模型按新上游清单重同步（新增 synced-*、清理 gpt-4o 等旧模型），锁定 syncSyncedModels 行为 |
+| T-UP1 | 更新用户供应商 credentialValue 留空时保留原凭据（不覆盖、不重置） |
+
 ### Agent API scope 回归 (`agent-api/llm.test.ts` T-SC*)
 
 | 测试 | 描述 |
 |------|------|
 | 全局启用模型对用户可见 | models 查询包含 scope=global 且启用模型（T-SC1） |
 | 全局供应商不在用户 providers | T-SC5 |
-| 跨 scope 同名可并存 | T-SC7 |
+| 跨 scope 同名可并存 | 用户模型与全局模型可同名并存（T-SC7，验证 partial unique index 不误伤 user scope）；用户供应商与全局供应商也可同名 |
 | 用户写全局模型/供应商 | 返回「全局配置请在管理后台修改」（T-SC3/T-SC4） |
 | 管理员禁用全局供应商后 | 用户 models 不再返回（T-SC1 反向） |
 

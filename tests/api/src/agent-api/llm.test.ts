@@ -169,6 +169,10 @@ describe('LLM Provider & Model API', () => {
   });
 
   afterAll(async () => {
+    // 清理种子供应商，避免污染 e2e 的「暂无供应商/暂无可用模型」空态断言
+    if (seededProviderId) {
+      await gqlRequest(DELETE_PROVIDER, { id: seededProviderId }, authToken);
+    }
     await mock?.close();
   });
 
@@ -394,7 +398,7 @@ describe('LLM Provider & Model API', () => {
 
   // #3: updateProvider with empty credentialValue should preserve existing key
   describe('updateProvider with empty credentialValue', () => {
-    it('should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
+    it('T-UP1: should update without changing credentialValue (empty credentialValue preserves existing)', async () => {
       const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `crud-provider-${Date.now()}`;
       const createRes = await gqlRequest(
@@ -413,6 +417,8 @@ describe('LLM Provider & Model API', () => {
       const created = await createRes.json();
       expect(created.errors).toBeUndefined();
       const pid = created.data.createProvider.id;
+      const credentialBefore = created.data.createProvider.credentialValue as string;
+      expect(credentialBefore).toBeTruthy();
 
       // Update with empty credentialValue — should preserve existing
       const updateRes = await gqlRequest(
@@ -433,16 +439,83 @@ describe('LLM Provider & Model API', () => {
       expect(updated.errors).toBeUndefined();
       expect(updated.data.updateProvider.name).toBe(`${name}-renamed`);
 
+      // 留空更新后再次查询：凭据必须仍为原值（脱敏值不变，且未被清空）
+      const listRes = await gqlRequest(PROVIDERS_QUERY, undefined, authToken);
+      const listBody = await listRes.json();
+      const refreshed = listBody.data.providers.find((p: { id: string }) => p.id === pid);
+      expect(refreshed).toBeDefined();
+      expect(refreshed.credentialValue).toBe(credentialBefore);
+      expect(refreshed.credentialValue).not.toBe('');
+
       // Cleanup
       await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
     });
+  });
+
+  // T-SYNC2: 更新用户供应商（改 endpoint）会按新上游清单重同步模型（防止误删 syncSyncedModels）
+  it('T-SYNC2: re-syncs models against the new upstream list on endpoint change', async () => {
+    const alt = await startMockServer(['synced-new-a', 'synced-new-b']);
+    let pid = '';
+
+    try {
+      const name = `resync-provider-${Date.now()}`;
+      const createRes = await gqlRequest(
+        CREATE_PROVIDER,
+        {
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: 'sk-test-fake-key',
+          },
+        },
+        authToken,
+      );
+      const created = await createRes.json();
+      expect(created.errors).toBeUndefined();
+      pid = created.data.createProvider.id;
+      const initialNames: string[] = created.data.createProvider.models.map((m: { name: string }) => m.name);
+      expect(initialNames).toContain('gpt-4o');
+
+      const updateRes = await gqlRequest(
+        UPDATE_PROVIDER,
+        {
+          id: pid,
+          input: {
+            name,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${alt.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: '',
+          },
+        },
+        authToken,
+      );
+      const updated = await updateRes.json();
+      expect(updated.errors).toBeUndefined();
+
+      const providersRes = await gqlRequest(
+        `query { providers { id models { name } } }`,
+        undefined,
+        authToken,
+      );
+      const providersBody = await providersRes.json();
+      const provider = providersBody.data.providers.find((p: { id: string }) => p.id === pid);
+      const resyncedNames: string[] = provider.models.map((m: { name: string }) => m.name);
+      expect(resyncedNames.sort()).toEqual(['synced-new-a', 'synced-new-b']);
+      expect(resyncedNames).not.toContain('gpt-4o');
+    } finally {
+      if (pid) await gqlRequest(DELETE_PROVIDER, { id: pid }, authToken);
+      await alt.close();
+    }
   });
 
   // #2: Models should be returned after provider creation
   describe('model lifecycle after provider CRUD', () => {
     let pid = '';
 
-    it('should create provider and its models appear in models query', async () => {
+    it('T-SYNC1: should create provider and auto-sync its models (user-side behavior unchanged)', async () => {
       const mockEndpoint = `http://127.0.0.1:${mock.port}/v1`;
       const name = `lifecycle-provider-${Date.now()}`;
       const createRes = await gqlRequest(
@@ -501,6 +574,7 @@ describe('Agent API scope regression (global config from admin backend)', () => 
   let adminToken = '';
   let globalProviderId = '';
   let globalModelId = '';
+  let globalModelName = '';
 
   const CREATE_GLOBAL_PROVIDER = `
     mutation CreateGlobalProvider($input: ProviderInput!) {
@@ -539,7 +613,19 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     );
     expect(created.errors).toBeUndefined();
     globalProviderId = created.data!.createGlobalProvider.id;
-    globalModelId = created.data!.createGlobalProvider.models[0].id;
+
+    // 后台创建供应商不再自动导入模型，显式导入一个全局模型供 scope 回归使用
+    globalModelName = `scope-global-model-${Date.now()}`;
+    const imported = await adminGql<{ importGlobalModels: Array<{ id: string; name: string }> }>(
+      `mutation($providerId: ID!, $names: [String!]!) {
+        importGlobalModels(providerId: $providerId, names: $names) { id name }
+      }`,
+      { providerId: globalProviderId, names: [globalModelName] },
+      adminToken,
+    );
+    expect(imported.errors).toBeUndefined();
+    globalModelId = imported.data!.importGlobalModels[0]?.id ?? '';
+    expect(globalModelId).toBeTruthy();
   });
 
   afterAll(async () => {
@@ -588,7 +674,7 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     expect(body.errors[0].message).toContain('endpoint');
   });
 
-  it('should allow same provider name across user and global scopes (T-SC7)', async () => {
+  it('should allow same provider name across user and global scopes', async () => {
     // 读取全局供应商名称，用同名创建用户侧供应商
     const gql = await fetch(ADMIN_API_URL, {
       method: 'POST',
@@ -611,6 +697,48 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     expect(body.errors).toBeUndefined();
 
     await gqlRequest(DELETE_PROVIDER, { id: body.data.createProvider.id }, authToken);
+  });
+
+  it('should allow a user model to share a name with a global model (T-SC7)', async () => {
+    // partial unique index 仅覆盖 scope=global；用户侧同名模型必须可创建（syncSyncedModels 常见名不受影响）
+    const created = await gqlRequest(CREATE_PROVIDER, {
+      input: {
+        name: `scope-model-provider-${Date.now()}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, authToken);
+    const createdBody = await created.json();
+    expect(createdBody.errors).toBeUndefined();
+    const providerId = createdBody.data.createProvider.id;
+
+    try {
+      const custom = await gqlRequest(
+        CREATE_CUSTOM_MODEL,
+        { input: { providerId, name: globalModelName } },
+        authToken,
+      );
+      const customBody = await custom.json();
+      expect(customBody.errors).toBeUndefined();
+      const userModelId = customBody.data.createCustomModel.id;
+      expect(userModelId).not.toBe(globalModelId);
+
+      const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      const globalModel = body.data.models.find((m: { id: string }) => m.id === globalModelId);
+      const userModel = body.data.models.find((m: { id: string }) => m.id === userModelId);
+      expect(globalModel).toBeDefined();
+      expect(globalModel.scope).toBe('global');
+      expect(globalModel.name).toBe(globalModelName);
+      expect(userModel).toBeDefined();
+      expect(userModel.scope).toBe('user');
+      expect(userModel.name).toBe(globalModelName);
+    } finally {
+      await gqlRequest(DELETE_PROVIDER, { id: providerId }, authToken);
+    }
   });
 
   it('should reject user writes to a global model (T-SC3)', async () => {
