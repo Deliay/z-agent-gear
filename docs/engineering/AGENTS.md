@@ -188,6 +188,7 @@ flowchart LR
 - [[proposals/20261019-feat-aspire-workload-proxy.md]] — Aspire 工作负载下载代理（Aspire CLI 内网代理下载）
 - [[proposals/20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本门禁与自升级
 - [[proposals/20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）
+- [[proposals/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 工作负载与统一存储）
 
 ### 实现计划（`plan/`）
 
