@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号，须为三段数字且 `>=2.2.0`、major 为 `2`（见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 须 `>=2.5.0`（见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,9 +69,10 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 校验 `version` 完整版本（三段数字、`>=2.2.0` 且 major 为 `2`，见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
-3. 将 socket 绑定到 `containerId`，容器状态置 `online` 并写入 `connectedAt`。
-4. 回复 `registered`。
+2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 要求 `>=2.5.0`；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
+3. 查询是否存在待执行初始化脚本（`hasInitScripts`），据此计算 `initializing`。
+4. 将 socket 绑定到 `containerId`；无初始化脚本时容器状态置 `online` 并写入 `connectedAt`。
+5. 回复 `registered`（含可选 `initializing`）。
 
 ### 2.3 `registered`（Server → Worker）
 
@@ -80,8 +81,9 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `controllerId` | `string` | 是 | cloud-controller 为本次连接返回的标识（取 `containerId`） |
+| `initializing` | `boolean` | 否 | 是否存在待执行的初始化脚本；`true` 时客户端等待首个 `workload:run` 批次完成后才建立标准连接。缺省/false 立即连接（向后兼容） |
 
-**客户端行为：** 收到后开始每 30s 发送 `heartbeat`。
+**客户端行为：** 收到后开始每 30s 发送 `heartbeat`；云电脑模式下按 `initializing` 决定是否等待初始化完成（见 `agent-controller-websocket.md` §4.3）。
 
 ### 2.4 `error`（Server → Worker）
 
@@ -177,6 +179,30 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 | `items[].required` | `boolean` | 否 | 该项是否为本次初始化的「必须」项；缺省 `false`（兼容旧服务端/旧服务端配置） |
 | `items[].timeoutMs` | `number` | 是 | 单条脚本超时（init 默认 `WORKLOAD_INIT_TIMEOUT_MS=300000`） |
 | `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
+| `env` | `object` | 否 | 容器级环境变量（仅 `purpose=harness` 下发）；见下方「云电脑初始化 env」 |
+
+**云电脑初始化 env（仅 `purpose=harness`）：**
+
+```jsonc
+{
+  "ZAG_HARNESS_TYPES": "opencode",
+  "ZAG_CONTAINER_ID": "<containerId>",
+  "ZAG_HOST_ID": "<cloudHostId>",
+  "ZAG_HOST_NAME": "<用户命名>",
+  "ZAG_HOST_ENDPOINT": "wss://<controller-api>",
+  "ZAG_HOST_KEY": "zag_k_1_…",
+  "ZAG_DEFAULT_WORKSPACE": "/root/workspace",
+  "ZAG_USER_TYPE": "front_user",
+  "ZAG_USER_ID": "<前台用户 ID>",
+  "ZAG_MODEL_API_KEY": "zag_sk_…",
+  "ZAG_MODEL_BASE_URL": "http://admin-api:8002/v1",
+  "ZAG_MODEL_IDS": "[\"model-a\",\"model-b\"]"
+}
+```
+
+- `env` 仅随下发报文存在；worker 内存持有，`ZAG_MODEL_API_KEY`/`ZAG_HOST_KEY`/`ZAG_CONTROLLER_KEY` 在日志与错误消息中脱敏为 `***`。
+- `item.params` 的 `WORKLOAD_PARAM_*` 与容器 `env` 同名时，以 item 参数优先。
+- 普通容器不携带 `env`，行为不变。
 
 **必须失败语义（`required`，本期新增）：**
 
@@ -295,7 +321,8 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.5.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.5.0`（云电脑双连接 / `harness prepare`），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - 任一条件不满足返回 `VERSION_MISMATCH`（§2.4，含 `currentVersion`/`minimumVersion`/`supportedMajor`）并 `disconnect(true)`。
 - **拒绝副作用约束**：版本校验必须位于所有注册副作用之前——不设置 `socket.data.registered`，不调用心跳计时、初始化脚本查询/下发、`online`/`initializing` 状态迁移，不写入 `connectedAt`，不下发 `workload:run`。因此被拒绝的容器销毁时按「从未完成兼容注册」处理：不发送 shutdown、不等待宽限，直接删除 Job。
 - 兼容 worker（`>=2.2.0` 且 major 为 `2`）的注册、心跳、工作负载、重连与销毁协议不变。
@@ -322,9 +349,11 @@ Authorization: Bearer <INTERNAL_API_TOKEN>
 
 ```
 GET /internal/containers
+GET /internal/containers?hostId=<cloudHostId>
+GET /internal/containers?userId=<userId>
 ```
 
-**响应 200：** `CloudContainer[]`（JSON 字段见 A.3，含 K8s 实时状态合并）。
+**响应 200：** `CloudContainer[]`（JSON 字段见 A.3，含 K8s 实时状态合并）。`hostId`/`userId` 可选过滤；无参数保持全量（admin 兼容）。
 
 #### A.2.2 启动容器
 
@@ -344,6 +373,34 @@ Content-Type: application/json
 ```
 
 - `billingAccountId` 可选（费用中心）：非空时容器参与计费，`markOnline` 首次就绪写入 `billingStartedAt` 并经 outbox 投递 `container.ready`；为空表示不计费（存量/未接入计费调用方），不投递计费事件。
+- 云电脑（`purpose=harness`）额外字段：
+
+```jsonc
+{
+  "purpose": "harness",
+  "hostId": "<cloudHostId>",
+  "refId": "<controllerKeyId>",
+  "userId": "<前台用户 ID>",
+  "hostName": "<用户命名>",
+  "harnessTypes": ["opencode"],
+  "userId": "<userId>",
+  "expiresAt": "2026-10-21T00:00:00.000Z",
+  "agentGearMinVersion": "2.5.0",
+  "secrets": {
+    "hostEndpoint": "wss://<controller-api>",
+    "hostKey": "zag_k_1_…",
+    "modelApiKey": "zag_sk_…",
+    "modelBaseUrl": "http://admin-api:8002/v1",
+    "modelIds": "[\"model-a\"]",
+    "defaultWorkspace": "/root/workspace"
+  },
+  "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
+}
+```
+
+- `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`secrets`/`workloadPlan` 为 harness 必填（`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `expiresAt` 同时用于 Job `activeDeadlineSeconds = max(60, floor((expiresAt-now)/1000))`；缺省沿用 `JOB_ACTIVE_DEADLINE_SECONDS=86400`。
+- `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 - `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。
 - `workloadPlan[].required`（可选）语义：本次启动该条是否为「必须」；缺省/`null` 归一 `false`，仅 `true` 生效；仅对含初始化脚本的工作负载产生硬失败语义（见 §2.9「必须失败语义」）。
@@ -353,7 +410,8 @@ Content-Type: application/json
 **响应 201：** 新建的 `CloudContainer`。
 
 **错误：**
-- `400` —— `purpose` 非法（本期仅接受 `idle`；其余用途返回明确错误文案「该任务类型暂未开放」）。
+- `400` —— `purpose` 非法（仅接受 `idle|harness`；其余用途返回 `UNSUPPORTED_PURPOSE`「该任务类型暂未开放」）。
+- `400` `INVALID_HARNESS` —— `purpose=harness` 时缺字段/`secrets` 不完整/`harnessTypes` 为空或非白名单。
 - `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔 / `required` 非布尔。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
@@ -411,6 +469,14 @@ GET /internal/containers/:id/workload-logs
 | `currentWorkloadName` | `string \| null` | 初始化中当前正在执行的工作负载脚本名称；非初始化中为 `null` |
 | `billingAccountId` | `string \| null` | 计费账户 ID；`null` 表示不计费（存量/未接入计费） |
 | `billingStartedAt` | `string \| null` | 就绪计费起点（首次 `markOnline` 的时刻，ISO 时间戳）；`null` 表示未就绪/不计费 |
+| `hostId` | `string \| null` | 云电脑 ID（`purpose=harness`） |
+| `hostName` | `string \| null` | 云电脑用户命名 |
+| `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`） |
+| `controllerKeyId` | `string \| null` | 标准连接使用的 ControllerKey ID |
+| `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
+| `expiresAt` | `string \| null` | 容器 TTL 到期时间 |
+
+> `secrets` 永不出现在列表/详情响应中。
 
 ### A.3.1 容器生命周期计费事件（outbox → RabbitMQ）
 
@@ -481,7 +547,8 @@ cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 a
 
 | 值 | 说明 |
 |----|------|
-| `idle` | 空闲测试（本期唯一可启动用途） |
+| `idle` | 空闲测试（后台启动维持仅此用途） |
+| `harness` | 前台云电脑（OpenCode 等工作负载；创建即启动、停止即销毁） |
 | `admin-task` | 管理后台任务（构建等，预留） |
 | `workflow` | 用户工作流（预留） |
 | `session` | 独立会话（预留） |

@@ -59,8 +59,9 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `controllerId` | `string` | 是 | 服务端分配的控制器 ID |
+| `initializing` | `boolean` | 否 | 云电脑场景：是否存在待执行的初始化脚本；`true` 时客户端应等待首个 `workload:run` 批次结束后再建立标准连接。缺省/false 时立即连接（向后兼容） |
 
-**客户端行为：** 收到后开始每 30s 发送 `heartbeat`。
+**客户端行为：** 收到后开始每 30s 发送 `heartbeat`；云电脑模式下若 `initializing=true`，等待初始化批次完成后再连接 controller-api。
 
 ### 2.4 `error`（Server → Controller）
 
@@ -226,4 +227,18 @@ Controller 重连注册成功后，Server 立即下发此事件。
 - **`key` 字段被服务端忽略**：本文档 §2.2 的 `register.key` 为 controller-api 场景的必填项；cloud-controller 侧不读取、不校验该字段（token 由握手 query 替代）。`agent-gear` 现有参数体系仍照常发送 `key`，**不破坏既有握手**。
 - `register`/`heartbeat`/`unregister`/`shutdown` 事件面与上文字段完全一致，无需为 cloud-controller 场景新增事件。
 - 断线自动重连使用同一 endpoint（含同一 token）；token 在容器存活期内可重复握手，容器进入终态即作废。
+
+### 4.3 云电脑注册约定（controller-api 标准连接）
+
+云电脑容器同时建立两条连接：
+
+| 连接 | endpoint env | 凭据 env | 用途 |
+|------|--------------|----------|------|
+| `/worker`（cloud-controller） | `ZAG_SERVER_ENDPOINT` | `ZAG_CONTROLLER_KEY`（一次性容器 token） | 生命周期、初始化脚本 |
+| controller-api（标准连接） | `ZAG_HOST_ENDPOINT` | `ZAG_HOST_KEY`（`ControllerKey.type=cloud`，`zag_k_1_...`） | 会话 / ACP / 工作区 / 心跳 |
+
+- 标准连接必须使用 `ZAG_HOST_KEY`，**不得**把 `ZAG_CONTROLLER_KEY` 当作控制器 Key，也**不得**把 `ZAG_HOST_KEY` 放入 URL/query（仅经握手 `auth.token`）。
+- `register.version` 上报 `2.5.0`；`register.hostname` 使用 `ZAG_HOST_NAME`（用户命名）。agent-api 已预创建同 `controllerId` 的 Controller 行（`status=registering`），controller-api 的 register upsert 不得覆盖用户命名。
+- **不发送 `unregister`**：容器销毁由 agent-api 编排（`stopCloudHost` / TTL / 失败回调），worker 退出仅断开 socket。
+- Controller 状态口径：register 成功 → `online`；心跳超时/断线 → `offline`；`CloudHost.status` 才是云电脑生命周期的唯一事实源。
 

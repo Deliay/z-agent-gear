@@ -1,0 +1,80 @@
+# 前台云电脑（Cloud Host）契约
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <front user JWT>`；
+# 未认证返回 `Not authenticated`。
+#
+# 生命周期：创建即启动 → 停止即销毁。
+#   STARTING → RUNNING → STOPPING → STOPPED（终态，不可重新运行）
+#   启动/运行失败 → FAILED（终态）
+# 无 `startCloudHost`；需要新云电脑时重新 `createCloudHost`。
+
+enum HarnessType {
+  OPENCODE
+}
+
+enum CloudHostStatus {
+  STARTING
+  RUNNING
+  STOPPING
+  STOPPED
+  FAILED
+}
+
+type CloudHost {
+  id: ID!
+  name: String!
+  controllerId: ID!
+  status: CloudHostStatus!
+  harnessTypes: [HarnessType!]!
+  defaultSessionId: ID
+  activeSessionCount: Int!
+  containerId: String
+  createdAt: String!
+  readyAt: String
+  stoppedAt: String
+  failureReason: String
+  # 软删除时间；非空表示已从列表隐藏，仅用于前端只读判定
+  deletedAt: String
+}
+
+type CloudHostSessionSummary {
+  id: ID!
+  title: String!
+  status: String!
+  acpServerType: String!
+}
+
+type CloudHostStopImpact {
+  activeSessionCount: Int!
+  sessionsWillBeLost: Boolean!
+  sessions: [CloudHostSessionSummary!]!
+}
+
+type CloudHostCapabilities {
+  enabled: Boolean!
+  supportedHarnesses: [HarnessType!]!
+}
+
+input CreateCloudHostInput {
+  name: String!
+  harnessTypes: [HarnessType!]!
+}
+
+extend type Query {
+  cloudHostCapabilities: CloudHostCapabilities!
+  myCloudHosts: [CloudHost!]!
+  cloudHostStopImpact(id: ID!): CloudHostStopImpact!
+}
+
+extend type Mutation {
+  createCloudHost(input: CreateCloudHostInput!): CloudHost!
+  # 有活动会话时必须 force=true；已 STOPPED/FAILED 幂等返回当前状态
+  stopCloudHost(id: ID!, force: Boolean): CloudHost!
+  # 仅 STOPPED/FAILED 可删除；软删除并撤销 Key，Controller/会话保留
+  deleteCloudHost(id: ID!): Boolean!
+}
+
+extend type Controller {
+  # cloud 类型主机返回其云电脑；local/github 返回 null
+  cloudHost: CloudHost
+}
