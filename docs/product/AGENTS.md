@@ -127,7 +127,7 @@ flowchart LR
 - [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
 - [[draft/20261018-credits-billing.md]] — 费用中心（Credits 计费）
 - [[draft/20261020-api-channel-model-fixes.md]] — 内建API渠道一期上线后问题修复（供应商与模型管理）
-- [[draft/20261021-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与扩展互通）
+- [[draft/20261021-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与模型来源分组）
 
 ### 已发布文档（`released/`）
 

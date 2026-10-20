@@ -1,16 +1,22 @@
 ---
-description: ACP 协议增强技术提案：ACP v1 能力边界全景（支持/不支持对比）、扩展机制（_meta/扩展方法/能力广播）与 OpenCode ACP 支持清单，以及能力快照、agentgear 扩展通道、模型来源分组、工作流上下文闭环的增强设计
+description: ACP 协议增强技术提案（v1.1 返工修订）：ACP v1 能力边界全景、扩展机制盘点、OpenCode ACP 支持清单，回传形态→落库→渲染现状梳理，以及能力快照、模型来源三档推断、前端能力门控与能力面板设计
 type: Permanent
 ---
 
 # ACP 协议增强 — 技术提案
 
-**功能名称**: ACP 协议能力透明化与扩展互通
+**功能名称**: ACP 协议能力透明化与模型来源分组
 **关联 PRD**: `docs/product/draft/20261021-acp-protocol-enhancement.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-21
 **作者**: ZeroAsh
 **feat-branch**: `feat/acp-protocol-enhancement`
+
+> **v1.1 变更（下游评审返工）**：
+> 1. **保留**：能力快照归一化（实现点 1）、模型来源三档推断（实现点 2）、前端能力门控与能力面板（实现点 3）；
+> 2. **移除**：agentgear 扩展通道（原实现点 2）、工作流上下文与产物闭环（原实现点 4）、OpenCode 差异能力接入（原实现点 6）——均移出本期范围，仅在 §3/§4 如实盘点；
+> 3. **新增 §5**：「OpenCode ACP 回传形态 → 落库处理 → 前端渲染」全链路现状梳理与对照矩阵（含观察项登记）；
+> 4. 模型来源三档推断改为**纯标准协议 + 平台侧数据**口径（原 `_meta.agentgear.modelSource` 一档因扩展通道裁剪而替换为标识解析）。
 
 ## 1. 概述
 
@@ -23,30 +29,32 @@ type: Permanent
 1. **ACP 现在的能力边界是什么**——协议支持什么、不支持什么（见 §2）；
 2. **ACP 扩展机制是什么、OpenCode 在这两方面支持什么**（见 §3、§4）。
 
-在此基础上补齐产品侧缺口：能力不透明（入口一刀切）、平台与 Agent 之间信息单薄（模型来源、会话标签、工作流上下文无法互通，见 `20261020-api-channel-model-fixes` 需求总 PR 的遗留项「须由 ACP 侧补来源字段才能分组」）、协议演进跟进成本高。
+在此基础上补齐产品侧缺口：能力不透明（入口一刀切）、模型列表无来源区分（见 `20261020-api-channel-model-fixes` 需求总 PR 的遗留项「须由 ACP 侧补来源字段才能分组」）、回传内容各层处理口径无对照说明、协议演进跟进成本高。
 
 ### 1.2 目标
 
-1. **能力透明**：把 `initialize` 获得的能力协商结果归一化为「能力快照」，全链路持久化与展示，会话界面按能力自适应（PRD F1/F2）。
-2. **扩展互通**：按 ACP 扩展机制建立平台扩展通道（`agentgear` 命名空间），打通模型来源、会话标签、工作流上下文与产物回传（PRD F3）。
-3. **重点 Agent 适配**：把 OpenCode 已支持的进阶能力（命令集、会话恢复/发现/删除、认证、`usage_update`、子会话动态、`session/fork` 等）转化为产品体验（PRD F4）。
-4. **兼容可演进**：所有新能力以「未探测到即降级」为原则接入，存量 Agent 零退化（PRD F5）。
+1. **能力快照归一化**：把 `initialize` 获得的能力协商结果归一化为「能力快照」（三档状态 + 原始对象留档），全链路持久化，成为能力展示与适配的唯一事实源（PRD F1）。
+2. **模型来源三档推断与分组**：为「切换模型」的每个模型判定来源并分组展示，判定规则统一、结果可核对（PRD F3）。
+3. **前端能力门控与能力面板**：会话界面按能力快照自适应入口（显示/禁用/提示），并提供逐项可查的能力面板（PRD F1/F2）。
+4. **回传形态 → 落库 → 渲染 现状梳理**：逐形态理清 OpenCode（及其他 Agent）经 ACP 回传内容的形态全集、平台当前落库处理与前端渲染口径，形成对照矩阵与观察项登记（PRD F4，文档交付）。
+5. **兼容可演进**：所有新能力以「探测不到即降级」为原则接入，存量 Agent 零退化（PRD F4）。
 
 ### 1.3 范围
 
 **做**：
-- 能力快照（`AgentCapabilitySnapshot`）归一化、持久化、GraphQL 暴露、前端能力面板与入口门控；
-- `agentgear` 扩展通道：`_meta` 透传（会话元信息、工作流上下文、模型来源）+ `_agentgear/*` 扩展方法（产物回传、上下文更新）+ 扩展能力广播；
-- 模型来源三档推断与「切换模型」来源分组；
-- OpenCode 差异能力接入：命令集入口与不支持命令提示、认证引导文案、推理档位展示、子会话动态透传（P2）、`session/fork` 探测入口（P2）；
-- 契约增量（`agent-session-websocket.md`、`agent-session.graphql`）与测试覆盖。
+- 能力快照（`AgentCapabilitySnapshot`）归一化、持久化、GraphQL 暴露；
+- 模型来源三档推断（标识解析 → 平台模型库比对 → 兜底）与来源分组展示；
+- 前端能力门控（入口自适应）与能力面板；
+- 「回传形态 → 落库处理 → 前端渲染」现状对照梳理（§5，随提案交付）；
+- 契约增量（`agent-session.graphql`、`agent-session-websocket.md`）与测试覆盖。
 
-**不做**：
-- **终端能力**（`clientCapabilities.terminal` 与 `terminal/*`）：沿用 `20260803` 的云端架构决策，client 运行在用户各自环境，不实施；
-- **ACP `fs/*` client 能力**：维持既有设计决策（契约 `agent-session-websocket.md` §5.3），实测亦确认 OpenCode 自持文件能力、不回调 Client fs（见 §4.4）；
-- **MCP 相关变更**：MCP 模块维持现状，不修复不扩展；
-- **ACP v2 实施**：仅跟踪评估（§2.6）；**ACP Registry 接入**：不在本期；
-- 对 `_agentgear` 扩展的第三方 Agent 强制要求：扩展永远是可选增强。
+**不做**（经评审裁剪，列为后续需求候选）：
+- **平台扩展通道（agentgear）**：`_meta.agentgear.*` 命名空间、`_agentgear/*` 扩展方法与扩展能力广播，本期不实施（§3 仅作扩展机制能力盘点）；
+- **工作流上下文与产物闭环**：工作流节点上下文透传、结构化产物回传写黑板，本期不实施；
+- **OpenCode 差异能力接入**：子会话动态透传、`session/fork` 入口、命令面板增强、认证引导定制等，本期不实施（仅在 §4/§5 如实记录）；
+- **终端能力**（`clientCapabilities.terminal` 与 `terminal/*`）与 **ACP `fs/*` client 能力**：沿用 `20260803` 的云端架构决策；
+- **MCP 相关变更**：MCP 模块维持现状；**ACP v2 实施**：仅跟踪评估（§2.6）；**ACP Registry 接入**：不在本期；
+- 现状梳理中发现的存储/渲染缺口：本期**只登记不修改**（观察项，避免范围蔓延）。
 
 ## 2. ACP v1 能力全景与能力边界
 
@@ -171,6 +179,7 @@ ACP v2 已发布草案（<https://agentclientprotocol.com/announcements/acp-v2-d
 ## 3. ACP 扩展机制
 
 > 来源：`extensibility.md`、`initialization.md`、`prompt-turn.md`、`session-config-options.md`、RFD `meta-propagation`。
+> **本期口径**：扩展机制仅作能力盘点与兼容容错依据（§5 对 OpenCode 扩展的处理如实记录），**不实施平台扩展通道**（见 §1.3 不做项）。
 
 | 机制 | 能做 | 不能做 / 红线 |
 |---|---|---|
@@ -182,11 +191,11 @@ ACP v2 已发布草案（<https://agentclientprotocol.com/announcements/acp-v2-d
 | 开放枚举 | `notice.severity`、compaction status 等开放枚举的 `_` 前缀值留给实现扩展 | 其他未知值保留给未来 ACP，Client MUST 保留并通用呈现，不得推断行为 |
 | `_meta` 传播惯例 | Client MAY 经 `params._meta` 向 Agent 传关联字段（如 `requestId`），已形成 RFD 惯例 | 平台扩展键需成文档化命名空间，避免双方各自漂移 |
 
-**结论**：平台扩展必须走 `_meta`（数据）+ `_` 方法（行为）+ 能力 `_meta`（协商）三条通道，命名空间化（§6.2 的 `agentgear`），并遵守「未知即忽略/降级」。
+**结论**：未来若实施平台扩展，必须走 `_meta`（数据）+ `_` 方法（行为）+ 能力 `_meta`（协商）三条通道、命名空间化，并遵守「未知即忽略/降级」红线；**本期不实施扩展通道**（§1.3），上述规则仅作为 OpenCode 扩展的容错依据（§5.4 观察项 7）。
 
 ## 4. OpenCode ACP 支持清单
 
-> 来源：OpenCode 官方文档 <https://opencode.ai/docs/acp/> 与**本机实测**（`opencode acp` v2.0.31，stdio JSON-RPC 探测：`initialize` → `session/new` → `session/prompt` → `session/set_config_option`/`session/close`/`session/load`/`session/list`，并声明 `fs`/`terminal`/`elicitation` 等 client 能力观察回调）。实测证据标注「实测」，文档标注「文档」。
+> 来源：OpenCode 官方文档（v1 <https://opencode.ai/docs/acp/>、v2 <https://opencode.ai/v2/docs/cli/acp>）、**源码**（`anomalyco/opencode` dev 分支 `packages/cli/src/acp/` 与 tag `v1.17.9`）与**本机实测**（`opencode acp` v2.0.31 stdio JSON-RPC 探针）。完整证据（含源码文件定位与 v1/v2 差异）见调研附录 [`20261021-feat-acp-protocol-enhancement-opencode-support.md`](./20261021-feat-acp-protocol-enhancement-opencode-support.md)。标注「实测」为探针证据、「源码」为实现证据、「文档」为官方说明。
 
 ### 4.1 能力广播（initialize 响应，实测）
 
@@ -235,60 +244,188 @@ ACP v2 已发布草案（<https://agentclientprotocol.com/announcements/acp-v2-d
 
 | 能力 | OpenCode 支持 | 证据 |
 |---|---|---|
-| `agent_message_chunk`（带 `messageId`） | ✅ | 实测：`messageId: "msg_..."` 稳定分组 |
-| `user_message_chunk` / `agent_thought_chunk` | ✅ | 实测（`user_message_chunk` 于 load 重放出现） |
-| `tool_call` / `tool_call_update`（`kind:"edit"` 等） | ✅ | 实测：建文件走内部 edit 工具 |
-| `available_commands_update` | ✅ | 实测：`init`、`review`、`compact` 三个命令 |
-| `usage_update`（`used`/`size`/`cost`） | ✅ | 实测：`{used:5421,size:1000000,cost:{amount:0,currency:"USD"}}` |
-| `plan` / `current_mode_update` / `config_option_update` | ✅ | 实测 `config_option_update` 路径（set 返回全量）；plan/mode 属常规能力 |
-| `session_info_update` | ✅ | 会话标题/updatedAt 管理（`session/list` 可见 title 变化） |
-| `notice` / `compaction_update` | ⚠️ 未实测 | OpenCode 未在探测回合中发出；平台按能力开关门控（`session.notices`/`session.compaction`） |
-| 扩展能力 `_meta` | ✅ | 实测：`agentCapabilities._meta["opencode/child-session-updates"] = true`（子会话动态扩展） |
-| prompt 响应 `_meta` | ✅ | 实测：`session/prompt` 响应含 `_meta` 键 |
-| 自定义 `_` 扩展方法（自定义请求） | ❌ | 实测未知扩展方法回 `-32601`（仅 `_meta` 形式的扩展） |
+| `agent_message_chunk`（带 `messageId`） | ✅ | 实测：`messageId: "msg_..."` 稳定分组；源码 `translate.ts` |
+| `user_message_chunk` | ✅（仅 `session/load` 回放） | 源码 `replay.ts`：实时回合不发，仅历史回放 |
+| `agent_thought_chunk` | ✅ | 实测 + 源码：`messageId` 形如 `<msgId>:reasoning:<ordinal>` |
+| `tool_call` / `tool_call_update` | ✅ | 实测 `kind:"edit"`；源码：`pending → in_progress/completed/failed`，完成时附 text/image/diff 内容 |
+| `available_commands_update` | ✅ | 实测：`init`、`review`、`compact`；源码 `catalog.ts`（目录命令 + 内置 `compact`） |
+| `usage_update`（`used`/`size`/`cost`） | ✅ | 实测：`{used:5421,size:1000000,cost:{amount:0,currency:"USD"}}`；prompt 响应另有 `usage`（token 明细） |
+| `config_option_update` | ✅ | 实测 + 源码：模型/agent 列表变化或他端改配置时推送全量 |
+| `session_info_update` | ⚠️ 仅承载 `_meta` | 源码 `translate.ts`/`compaction.ts`：只用于 `opencode/retry`（重试状态）与 `opencode/compaction`（压缩标记），**不更新 title 等元数据** |
+| `compaction_update` / `compaction_summary_chunk` | ✅（需 `clientCapabilities.session.compaction`） | 源码 `compaction.ts`：否则降级为 `_meta` 标记 |
+| `plan` / `plan_update` / `plan_removed` | ❌ 从不发送 | 源码无构造代码：OpenCode 不向 ACP 暴露执行计划 |
+| `current_mode_update` | ❌ 从不发送 | 模式改用 `mode` config option 表达（`session/set_mode` 仍实现） |
+| `notice` | ❌ 从不发送 | 源码无构造代码 |
+| `subagent_update` / `session_message*`（实验面） | ❌ | 以自有扩展替代（见下） |
+| 扩展能力 `_meta` | ✅ | 实测：`agentCapabilities._meta["opencode/child-session-updates"] = true` |
+| `_meta` 扩展键（共 5 个） | ✅ | 源码：`opencode/child-session-updates`、`opencode/child-session`（子会话）、`opencode/retry`（重试）、`opencode/compaction`（压缩标记）、`terminal-auth`（认证方法 `_meta`） |
+| 自定义通知 `opencode/session/child_update` | ✅（需客户端 `_meta` opt-in） | 源码 `child.ts`：⚠️ **未用 `_` 前缀**（协议建议扩展方法以 `_` 开头），平台须按未知方法容错处理 |
+| prompt 响应 `_meta` | ✅ | 实测：`session/prompt` 响应含 `stopReason`/`usage`/`_meta`（可能带 `opencode/retry`） |
+| 自定义 `_` 扩展请求（如 `_agentgear/*`） | ❌ 无 | 实测未知扩展方法回 `-32601 Method not found`（OpenCode 只做 `_meta` 与自定义通知两类扩展） |
 
 ### 4.4 Client 侧依赖（OpenCode 是否回调 Client）
 
 | Client 方法 | OpenCode 是否调用 | 证据与结论 |
 |---|---|---|
-| `fs/read_text_file` / `fs/write_text_file` | ❌ 不调用 | 实测：声明 `clientCapabilities.fs` 后让其建文件，仍走内部 `edit` 工具，无任何 `fs/*` 请求。OpenCode 自持文件系统（文档：内置工具含文件操作） |
-| `terminal/*` | ❌ 不调用 | 实测：无 `terminal/*` 请求，终端由 OpenCode 自身处理 |
-| `session/request_permission` | ✅ 会调用 | 文档：Agents and permissions system 受支持；平台已全链路实现（`acp:permission`） |
-| `elicitation/create` | ⚠️ 未实测 | 平台已声明 `elicitation.form/url` 并实现处理；OpenCode 文档未单独说明，按需门控 |
+| `fs/read_text_file` / `fs/write_text_file` | v2 ❌ / v1 ⚠️ | 实测 v2：声明 `clientCapabilities.fs` 后让其建文件，仍走内部 `edit` 工具，无 `fs/*` 请求；源码：v1 在 edit 权限批准后会调 `fs/write_text_file` 写回，v2 完全不用 |
+| `terminal/*` | ❌ 不调用 | 实测 + 源码：shell 由 OpenCode 自身工具在 Agent 侧执行 |
+| `session/request_permission` | ✅ 会调用 | 源码 `permission.ts`：固定 `once/always/reject` 三选项，涉改文件时尽力附 `diff` 预览（不保证必有） |
+| `elicitation/create` | ✅（仅 form 模式，v2） | 源码 `elicitation.ts`：无 `url` 模式、不发 `elicitation/complete`；涉密/复杂表单直接取消 |
 
 ### 4.5 OpenCode 通过 ACP 的产品能力面（文档）
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 内置工具（文件、终端等） | ✅ 支持 | 文档：All features are supported |
-| 自定义工具与 slash 命令 | ✅ 支持 | 含用户自定义命令 |
-| MCP servers（OpenCode 配置） | ✅ 支持 | 另经 ACP `mcpServers` 注入亦受支持（`mcpCapabilities.http:true`，stdio 基线） |
+| 自定义工具与 slash 命令 | ⚠️ 部分支持 | 目录命令 + 内置 `compact` 经 `available_commands_update` 下发；其他 `/…` 按普通文本透传 |
+| MCP servers（OpenCode 配置） | ✅ 支持 | 另经 ACP `mcpServers` 注入亦受支持（stdio + HTTP；`mcpCapabilities.http:true`，SSE 不支持） |
 | `AGENTS.md` 项目规则 | ✅ 支持 | 文档明确 |
 | 自定义 formatter/linter | ✅ 支持 | 文档明确 |
-| Agents 与 permissions 系统 | ✅ 支持 | 文档明确 |
-| 内置 `/undo`、`/redo` 命令 | ❌ 不支持 | 文档明确「currently unsupported」，平台须做入口提示 |
-| 音频输入 | ❌ 不支持 | 实测 `promptCapabilities` 无 `audio` |
+| Agents 与 permissions 系统 | ✅ 支持 | ACP 下照常生效，`ask` 转 `session/request_permission` |
+| 执行计划（plan/todo）展示 | ❌ 不支持 | OpenCode 不向 ACP 暴露执行计划 |
+| 实时通知（notice） | ❌ 不支持 | 从不发送 |
+| 内置 `/undo`、`/redo`、`/help` 命令 | ❌ 不支持 | 文档明确「currently unsupported」，仅按普通文本透传 |
+| 音频输入 | ❌ 不支持 | 实测 `promptCapabilities` 无 `audio`（prompt 中 audio 块被忽略） |
 | SSE MCP 传输 | ❌ 不支持 | 实测 `mcpCapabilities.sse:false` |
+| MCP over ACP（`mcp/message`） | ❌ 不支持 | v2 文档明确 |
 | 编辑器/Client 侧集成（Zed、JetBrains、Avante.nvim、CodeCompanion.nvim） | ✅ | `opencode acp` 子进程 + JSON-RPC stdio（文档配置示例） |
 
 ### 4.6 与其他 Agent 的关系
 
-平台 detector 支持 7 类 Agent（opencode / github_copilot / claude_code / gemini_cli / codex / mimo_code / kimi_code，`packages/agent-controller/src/acp/detector.ts`）。各 Agent 能力广播差异大（如认证方法、`sessionCapabilities`、多模态），**能力快照（§6.1）是唯一可靠依据**；OpenCode 的专有项（`opencode/child-session-updates`、`fork`）按扩展能力门控，不影响其他 Agent。
+平台 detector 支持 7 类 Agent（opencode / github_copilot / claude_code / gemini_cli / codex / mimo_code / kimi_code，`packages/agent-controller/src/acp/detector.ts`）。各 Agent 能力广播差异大（如认证方法、`sessionCapabilities`、多模态），**能力快照（§9.2 实现点 1）是唯一可靠依据**；OpenCode 的专有扩展（`opencode/*` `_meta` 键、`opencode/session/child_update` 自定义通知、`fork`）本期只做识别与容错记录，不做能力接入。
 
-## 5. 平台现状与差距
+## 5. OpenCode ACP 回传形态 → 落库处理 → 前端渲染 现状梳理
 
-| 能力 | 平台现状 | 差距/动作 | 优先级 |
+> **本节口径**：逐形态如实记录 Agent 回传内容在平台三层（bridge 协议面 → 落库 → 前端渲染）的当前处理方式，**只梳理与登记，不修改既有行为**（缺口列入 §5.5 观察项，作为后续需求候选）。证据：调研附录（回传形态）、`packages/agent-controller/src/acp/bridge.ts`、`servers/controller-api/src/services/acp-session-manager.ts`、`servers/agent-api/src/models/acp-message.ts`、`apps/agent-web/src/components/session/*`。
+
+### 5.1 回传形态全集（Agent → 平台）
+
+OpenCode 经 ACP 回传给平台的内容形态（`session/update` 通知 + 请求 + 响应，详见调研附录 §7/§9/§13/§15）：
+
+| # | 形态 | 载荷形态 | OpenCode 实际行为 |
 |---|---|---|---|
-| 能力协商结果 | `bridge.ts` 仅摘取 `promptCapabilities`/`agentInfo`/`authMethods`/`mcpCapabilities`/`additionalDirectories` 逐个透传 | 归一化为能力快照（含 `_meta` 扩展）并持久化、展示 | P0 |
-| 能力驱动 UI | 前端按零散布尔字段局部判断 | 统一入口门控 + 能力面板 | P0 |
-| `_meta` 扩展 | 全仓未使用（协议允许的扩展通道闲置） | 建立 `agentgear` 命名空间与透传链路 | P0 |
-| `_` 扩展方法 | 未注册、未消费 | 实现 `_agentgear/artifact`（产物回传）、`_agentgear/context/update`（上下文更新） | P1 |
-| 模型来源 | `SessionConfigOptionValue` 仅 `{value,name}`，无来源（PR #242 遗留） | 三档来源推断 + 分组展示 | P0 |
-| 工作流上下文 | 会话仅有 `workflowInstanceId/workflowNodeId`，无上下文透传 | `session/prompt` `_meta` + 降级文本注入；产物回传写黑板 | P0 |
-| OpenCode 命令集 | `available_commands_update` 已透传 | 命令面板入口 + 不支持命令（/undo /redo）提示 | P1 |
-| OpenCode 子会话动态 | `_meta["opencode/child-session-updates"]` 未消费 | 识别广播并透传子会话动态（P2） | P2 |
-| `session/fork` | 未接入 | 按能力探测开放「从当前会话分叉」（P2） | P2 |
-| 推理档位 | `thought_level` 配置项已可用 | 按 category 归组展示为「推理档位」 | P2 |
+| 1 | `agent_message_chunk`（text） | `content: {type:"text",text}` + 可选 `messageId` | 模型输出流式片段，`messageId` 稳定（`msg_...`） |
+| 2 | `agent_message_chunk`（多模态块） | `content: {type:"image"/"audio"/"resource"}` | 理论可发（image/embeddedContext 已广播）；audio 不支持 |
+| 3 | `agent_thought_chunk` | 文本片段 + `messageId` | `messageId` 形如 `<msgId>:reasoning:<ordinal>` |
+| 4 | `user_message_chunk` | 文本/附件块 | **仅 `session/load` 回放**时发出，实时回合不发 |
+| 5 | `tool_call` | `toolCallId/title/kind/status:"pending"/locations/rawInput` | 工具开始 |
+| 6 | `tool_call_update` | 状态 + `content`（text/image/**diff**/**terminal**）+ `rawOutput` | `in_progress/completed/failed`；完成时附结果 |
+| 7 | `plan` | `entries[]` | **从不发送**（OpenCode 不暴露执行计划） |
+| 8 | `available_commands_update` | `availableCommands[]` | 建会话后发一次，命令变化再发 |
+| 9 | `config_option_update` | 全量 `configOptions` | 模型/agent 列表变化或他端改配置时发 |
+| 10 | `current_mode_update` | `currentModeId` | **从不发送**（用 `mode` 配置项表达） |
+| 11 | `session_info_update` | 仅 `_meta`（`opencode/retry`、`opencode/compaction`） | 不更新 title 等元数据 |
+| 12 | `usage_update` | `used/size/cost{amount,currency}` | 回合结束前发送 |
+| 13 | `compaction_update` / `compaction_summary_chunk` | 压缩状态 / 摘要片段 | 需 `clientCapabilities.session.compaction`，否则降级 `_meta` 标记 |
+| 14 | `notice` | — | **从不发送** |
+| 15 | `session/prompt` 响应 | `stopReason` + `usage`（token 明细）+ `_meta` | `usage` 为端 RFD 草案面；`_meta` 可能带 `opencode/retry` |
+| 16 | `session/request_permission` | `toolCall`（含 diff 预览）+ `options` | 固定 `once/always/reject` 三选项 |
+| 17 | `elicitation/create` | form 模式 | 仅 form；无 url 模式、无 `elicitation/complete` |
+| 18 | 自定义通知 `opencode/session/child_update` | 子会话状态/更新 | 需客户端 `_meta` opt-in；⚠️ 未用 `_` 前缀 |
+
+### 5.2 落库处理现状（bridge → controller-api → MongoDB）
+
+**第一层：bridge（`packages/agent-controller/src/acp/bridge.ts`，`sessionUpdate` switch L629-675）**
+
+| 回传形态 | bridge 处理 |
+|---|---|
+| `agent_message_chunk`（text） | 聚合缓冲：有 `messageId` 按 ID 边界立即 flush；无 ID 走 50ms debounce flush，随后 `sendUpdate`（L634-651、L790-806） |
+| `agent_message_chunk`（多模态块） | 先 flush 文本缓冲，再原样 `sendUpdate`（L652-656） |
+| `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` | 直接 `sendUpdate`（L657-662） |
+| `config_option_update` | **不走 `acp:message`**：更新 bridge 配置缓存并 emit 专用事件 `acp:config-options`（L663-671） |
+| `user_message_chunk` | **丢弃**，不透传（L672-673） |
+| 其余（`usage_update`、`available_commands_update`、`session_info_update`、`notice`、`compaction_*`、未知类型） | default 分支直接 `sendUpdate`（L674-678） |
+
+`sendUpdate` 将**原始 `SessionUpdate` 对象完整**经 `acp:message {sessionId, message}` 发出（L809-814），不做裁剪。
+
+**第二层：controller-api 落库（`servers/controller-api/src/services/acp-session-manager.ts`，`processControllerMessage` L275-357）**
+
+| 处理点 | 现状 |
+|---|---|
+| 消息串行化 | 同一 session 消息按队列串行处理（L258-273） |
+| `config_option_update` | 更新 `Session.configOptions/currentModeId/currentModelId` + 配置缓存 + 发布状态（L275-297） |
+| `current_mode_update` | 更新 `Session.currentModeId`（L300-310） |
+| 落库 | **所有**经 `acp:message` 到达的 update 一律 `AcpMessage.create`：`direction:'output'`、`content` = 原始 update（Mixed 完整保真）、`messageId` 透传（L320-350） |
+| 落库 `type` 映射 | `agent/user_message_chunk`、`agent_thought_chunk` → `text`；`tool_call`/`tool_call_update` → `tool_call`；`plan` → `plan`；`config_option_update`/`current_mode_update` → `text`；**其余一律 default → `text`**（`usage_update`/`available_commands_update`/`session_info_update`/`notice`/`compaction_*`/未知均落 `text`） |
+| 实时分发 | 落库后 `publishMessage`（Redis → SSE）推送前端（L352-357） |
+
+**存储模型**（`servers/agent-api/src/models/acp-message.ts:3-13`，controller-api 同构）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `sessionId` | ObjectId | 会话关联（索引） |
+| `direction` | `input` / `output` | 用户输入 / Agent 输出 |
+| `type` | enum `text/image/tool_call/tool_result/plan/error` | ⚠️ **无** thought/usage/commands/notice 等专用值，均兜底 `text` |
+| `content` | Mixed | **原始 `SessionUpdate` JSON 完整保真**（前端据 `content.sessionUpdate` 还原真实形态） |
+| `metadata` / `messageId` | Mixed / String | 备注与消息分组 ID（`sessionId+messageId` 索引） |
+
+其他链路：用户输入经 `agent-api` `session.addMessage`（`services/session.ts:535`）落 `direction:'input'` 并据首条输入生成会话标题（50 字符截断）；历史会话导入 `session-import.ts`（`insertMany`）；`migrations/001-unify-content-format.ts` 统一 content 格式。
+
+### 5.3 前端渲染现状（`apps/agent-web/src/components/session/`）
+
+前端**不依赖落库 `type`**，而是解析 `content.sessionUpdate` 重新分组（`group-messages.ts:35-154`），按 `messageId`/`toolCallId` 归并：
+
+| sessionUpdate | 分组 | 渲染组件 | 渲染形态 |
+|---|---|---|---|
+| `user_message_chunk` | `user_message`（每条独立组） | `MessageItem` | 纯文本气泡 |
+| `agent_message_chunk` | `agent_message`（按 `messageId` 归并） | `MessageItem` + `MarkdownContent` | Markdown；`mergeMessageChunks` **仅合并 text 块** |
+| `agent_thought_chunk` | `thought`（按 `messageId` 归并） | `ThoughtBlock` | 可折叠推理块 |
+| `tool_call`/`tool_call_update` | `tool_call`（按 `toolCallId` 归并） | `ToolCallCard` | 状态徽标、`locations` 文件:行号、`rawInput`/`rawOutput`、结果 content：text/image/**diff（DiffView）/terminal（terminalId 占位）** |
+| 同上（`kind:"read"`） | `read` | `ReadCard` | 读文件特化卡片 |
+| 同上（`kind:"fetch"`） | `fetch` | `FetchCard` | 抓取特化卡片 |
+| 同上（`kind:"other"` + `rawInput.subagent_type`） | `sub_agent` | `SubAgentCard` | 子代理卡片 |
+| `plan` | `plan` | `PlanCard`（最新一组浮层展示） | 计划条目列表 |
+| `available_commands_update` | `available_commands` | `AvailableCommandsCard` | 命令列表 |
+| `usage_update` | `usage` | `UsageCard` | `used/size/cost` |
+| `config_option_update` | `config_option_update` | `ConfigOptionCard` | 配置快照 |
+| `current_mode_update` | `current_mode_update` | `CurrentModeCard` | 模式变更 |
+| 其他/未知（`session_info_update`、`notice`、`compaction_*` 等） | `unknown` | `MessageItem` 兜底 | 按落库 `type` 取样式；非 text 时 `displayContent` 为空（`MessageItem.tsx:37-52`） |
+
+### 5.4 四层对照矩阵（形态 × bridge × 落库 × 渲染）
+
+| 回传形态 | bridge | 落库（type / 内容） | 前端渲染 | 结论 |
+|---|---|---|---|---|
+| `agent_message_chunk`（text） | 聚合后透传 | `text` / 原样 | Markdown 气泡 | ✅ 链路完整 |
+| `agent_message_chunk`（image/audio/resource 块） | 原样透传 | `text` / 原样保真 | ⚠️ `mergeMessageChunks` 只取 text，多模态块不渲染 | ⚠️ 落库保真、渲染缺失（观察项 1） |
+| `agent_thought_chunk` | 透传 | `text` / 原样 | `ThoughtBlock` 按 messageId 归并 | ✅（落库 type 语义粗） |
+| `user_message_chunk`（回放） | 丢弃 | 回放链路经导入落 `input` | 用户气泡 | ✅（实时不发，符合协议语义） |
+| `tool_call`（pending） | 透传 | `tool_call` / 原样 | `ToolCallCard`（含 read/fetch/sub_agent 特化） | ✅ 链路完整 |
+| `tool_call_update`（diff/terminal/text/image） | 透传 | `tool_call` / 原样 | diff→DiffView、terminal→ID 占位、text/image→内容 | ✅（terminal 仅占位，观察项 2） |
+| `plan` | 透传 | `plan` / 原样 | `PlanCard`（OpenCode 不发，其他 Agent 可用） | ✅ |
+| `available_commands_update` | 透传 | `text`（兜底）/ 原样 | `AvailableCommandsCard` | ✅（落库 type 兜底，观察项 3） |
+| `config_option_update` | 专用事件 `acp:config-options`（不走 `acp:message`） | 更新 `Session` 配置快照；同名 update 经 `acp:message` 时落 `text` | `ConfigOptionCard` + 状态栏 | ✅（双通道并存，观察项 4） |
+| `current_mode_update` | 透传 | `text`（兜底）+ 更新 `Session.currentModeId` | `CurrentModeCard` | ✅ |
+| `session_info_update`（仅 `_meta`） | 透传 | `text`（兜底）/ 原样 | ⚠️ `unknown` 兜底（OpenCode 的 retry/compaction 标记不可见） | ⚠️ 观察项 5 |
+| `usage_update` | 透传 | `text`（兜底）/ 原样 | `UsageCard` | ✅（落库 type 兜底，观察项 3） |
+| `compaction_update`/`compaction_summary_chunk` | 透传 | `text`（兜底）/ 原样 | ⚠️ `unknown` 兜底 | ⚠️ 观察项 5 |
+| `notice` | 透传 | `text`（兜底）/ 原样 | ⚠️ `unknown` 兜底（OpenCode 不发，其他 Agent 可能发） | ⚠️ 观察项 5 |
+| 未知 `sessionUpdate` | default 透传 | `text`（兜底）/ 原样 | `unknown` 兜底，可能为空白气泡 | ⚠️ 观察项 6 |
+| `session/prompt` 响应（stopReason/usage/`_meta`） | 不经 `acp:message`，走 `acp:prompt:complete` | 不落 `AcpMessage` | 回合结束状态 | ✅ |
+| `session/request_permission` | 专用事件 `acp:permission` | `PendingPermission` 记录 | `PermissionDialog`（含 diff 预览） | ✅ 链路完整 |
+| `elicitation/create`（form） | 专用事件 `acp:elicitation` | `PendingElicitation` 记录 | 表单弹窗 | ✅ 链路完整 |
+| `opencode/session/child_update`（自定义通知） | ⚠️ 未注册路由（且未用 `_` 前缀） | 不可达 | 不渲染 | ⚠️ 本期仅容错记录（观察项 7） |
+| `_meta` 键（retry/compaction/child-session 等） | 随原始 update 透传 | 保真于 `content` | 随所属 update 渲染（多数走 unknown） | ⚠️ 观察项 5/7 |
+
+### 5.5 观察项登记（本期不修改，作为后续需求候选）
+
+| # | 观察项 | 现状 | 建议 |
+|---|---|---|---|
+| 1 | 多模态内容块（image/audio/resource）渲染缺失 | 落库保真，`mergeMessageChunks` 只取 text、`MessageItem` 非 text 取空 | 后续需求：多模态块渲染 |
+| 2 | `tool_call_update` 的 terminal 内容仅显示 terminalId 占位 | 无终端流展示（与终端能力不实施一致） | 维持现状，随终端决策联动 |
+| 3 | 落库 `type` 语义粗（usage/commands/notice 等兜底 `text`） | `AcpMessage.type` enum 无对应值 | 后续需求：type 枚举扩展或废弃（前端已不依赖） |
+| 4 | `config_option_update` 双通道（`acp:config-options` 专用事件 + `acp:message` 落库分支）并存 | 历史演进形成 | 后续需求：链路收敛 |
+| 5 | `session_info_update`/`compaction_*`/`notice` 走 `unknown` 兜底，OpenCode 的 retry/compaction 标记不可见 | 渲染层不识别 | 后续需求：呈现补全 |
+| 6 | 未知 `sessionUpdate` 兜底渲染可能为空白气泡 | `MessageItem` displayContent 取空 | 后续需求：兜底展示原始 JSON/提示 |
+| 7 | `opencode/session/child_update` 未用 `_` 前缀、bridge 未注册路由 | 子会话动态不可达（本期 OpenCode 差异能力不做） | 后续需求：按未知方法容错 + 差异能力接入 |
+
+### 5.6 平台能力现状与差距（本期改造视角）
+
+| 能力 | 平台现状 | 本期动作 | 优先级 |
+|---|---|---|---|
+| 能力协商结果 | `bridge.ts` 仅摘取 `promptCapabilities`/`agentInfo`/`authMethods`/`mcpCapabilities`/`additionalDirectories` 逐个透传，无统一结构 | 归一化为能力快照（含 `raw` 留档）并持久化、GraphQL 暴露 | P0 |
+| 能力驱动 UI | 前端无统一能力依据，入口一刀切 | `Session.features` 为唯一事实源 + 门控 hook + 能力面板 | P0 |
+| 模型来源 | `SessionConfigOptionValue` 仅 `{value,name}`，无来源（PR #242 遗留） | 三档来源推断 + `source/provider/group` 暴露与分组展示 | P0 |
+| 回传形态口径 | 三层处理分散、无对照说明（§5.1-§5.5） | 对照矩阵随提案交付；缺口只登记不修改 | P1 |
 
 ## 6. 技术架构
 
@@ -300,61 +437,30 @@ graph LR
     A -->|Redis pub/sub| C[controller-api]
     C -->|Socket.IO acp:*| CTL[agent-controller]
     CTL -->|ACP SDK 1.x / stdio JSON-RPC| AG[ACP Agent 进程]
-    AG -.->|session/request_permission / _agentgear/*| CTL
-    CTL -.->|_meta 透传 / 能力广播| AG
-    A --> DB[(MongoDB)]
-    A --> BB[工作流黑板]
+    CTL -->|acp:initialized + capabilities| C
+    A --> DB[(MongoDB<br/>sessions.agentCapabilities)]
 ```
 
-架构不变。变更收敛在四层：agent-controller（协议面：能力快照、扩展通道）、controller-api/agent-api（透传、持久化、黑板写入）、agent-web（能力面板、入口门控、来源分组）。
+架构不变。变更收敛在四层：agent-controller（能力快照归一化）、controller-api/agent-api（快照透传与持久化、GraphQL 暴露）、agent-web（能力门控、能力面板、模型来源分组）。**既有消息链路（§5）零改动。**
 
 ### 6.2 技术栈
 
 | 层级 | 技术选型 | 说明 |
 |------|---------|------|
-| 协议层 | `@agentclientprotocol/sdk` 1.x | `_meta`/扩展方法经 SDK 透传，bridge 层隔离 |
-| 前端 | React + TypeScript + Vite | 能力门控 hook、能力面板、来源分组 |
-| 后端 | Node.js + Express + GraphQL + Mongoose | 契约增量、快照持久化 |
-| 探测 | Node.js 子进程 stdio JSON-RPC | 一次性能力探测与回归比对 |
+| 协议层 | `@agentclientprotocol/sdk` 1.x | 仅读取 `initialize` 结果（`agentCapabilities` 含 `_meta`），无需扩展 API |
+| 前端 | React + TypeScript + Vite | 能力门控 hook、能力面板、来源分组弹层 |
+| 后端 | Node.js + Express + GraphQL + Mongoose | 快照持久化、来源推断纯函数 |
+| 探测 | Node.js 子进程 stdio JSON-RPC | 一次性能力探测与回归比对（§12） |
 
 ### 6.3 模块划分
 
 | 模块 | 职责 | 关键变更 |
 |------|------|-----------|
-| `agent-controller/acp/bridge.ts` | ACP 协议面 | 能力快照归一化、`_meta` 透传（session/prompt/new）、`_agentgear/artifact` 注册、扩展能力广播 |
-| `agent-controller/acp/capabilities.ts`（新增） | 能力归一化 | `AgentCapabilitySnapshot` 构造、`raw` 保留、FeatureId 映射表 |
-| `agent-controller/acp/extensions.ts`（新增） | 扩展通道 | `agentgear` 命名空间编解码、未知扩展降级 |
-| `controller-api`（acp 会话管理） | 事件透传 | `acp:initialized` 增 `capabilities`、`acp:artifact` 新事件、`acp:start` 增 `sessionMeta` |
-| `agent-api` | 对外契约 | GraphQL：能力快照、配置项来源、产物落库与黑板写入 |
-| `agent-web` | 展示 | 能力面板、入口门控 hook、模型来源分组、命令面板与不支持命令提示、工作流上下文卡片 |
-
-### 6.4 扩展通道设计（`agentgear` 命名空间）
-
-**命名空间规约**（详见 `contracts/agent-session-websocket.md` 增补节）：
-
-| 载体 | 键/方法 | 方向 | 载荷 |
-|---|---|---|---|
-| `_meta` | `agentgear.session`（`session/new`、`session/load`、`session/resume` 请求） | Client→Agent | `{ tags: string[], source: "platform"\|"workflow", workflowInstanceId?, workflowNodeId?, requirementTitle? }` |
-| `_meta` | `agentgear.context`（`session/prompt` 请求） | Client→Agent | `{ nodeId?, task?, attachments?: [{name,uri}] }`，工作流节点上下文 |
-| `_meta` | `agentgear.modelSource`（`SessionConfigOption` / 值级 `_meta`） | Agent→Client | `{ kind: "platform"\|"agent"\|"custom", provider?: string }` |
-| `_meta` | `agentgear.capabilities`（`clientCapabilities` / `agentCapabilities`） | 双向广播 | `{ sessionContext: true, artifacts: true, contextUpdate: true }` |
-| 扩展方法 | `_agentgear/artifact`（通知） | Agent→Client | `{ title: string, value: string }` 结构化产物回传 |
-| 扩展方法 | `_agentgear/context/update`（通知） | Client→Agent | `{ context: {...} }` 运行中上下文更新 |
-
-**兼容规则**（必须全部满足）：
-1. 不在任何规范类型根部新增字段；平台数据只进 `_meta` 与 `_agentgear/*`；
-2. 不占用 `_meta` 根级 `traceparent`/`tracestate`/`baggage`；
-3. 未收到 `agentgear.capabilities` 广播 → 视为不支持扩展，全部走降级路径；
-4. 未知 `_meta` 键安全忽略；未知 `_agentgear/*` 请求回 `-32601`、未知通知忽略（协议规定）；
-5. 扩展载荷不携带密钥/令牌（PRD 4.2）。
-
-**降级路径**：
-
-| 能力 | 扩展可用 | 扩展不可用（降级） |
-|---|---|---|
-| 工作流上下文 | `_meta.agentgear.context` 传递 | 以文本块注入首条 prompt（可读、可追溯） |
-| 产物回传 | `_agentgear/artifact` → 写黑板 | 既有 MCP 工作流工具 / 人工搬运 |
-| 模型来源 | `_meta.agentgear.modelSource` | value 前缀推断（`provider/model`）→ 兜底「其他」组 |
+| `agent-controller/acp/capabilities.ts`（新增） | 能力归一化 | `AgentCapabilitySnapshot` 构造、FeatureId 映射表、`raw` 留档 |
+| `agent-controller/acp/bridge.ts` | ACP 协议面 | `initConnection` 接入归一化，`acp:initialized` 携带 `capabilities` |
+| `controller-api`（acp 会话管理） | 事件透传 | `acp:initialized` 增量透传（消息链路不动） |
+| `agent-api` | 对外契约 | 快照落库、GraphQL `Session.features`/`agentCapabilities`、模型来源推断 |
+| `agent-web` | 展示 | `useAgentCapabilities` 门控、能力面板、模型来源分组（含判定依据） |
 
 ## 7. API 设计（契约变更）
 
@@ -362,10 +468,7 @@ graph LR
 
 | 事件 | 变更 | 说明 |
 |---|---|---|
-| `acp:initialized` | 增 `capabilities: AgentCapabilitySnapshot` | 归一化能力快照 + `raw` 原始对象 |
-| `acp:start` / `acp:resume` | 增 `sessionMeta: { tags, source, workflowInstanceId?, workflowNodeId? }` | 会话元信息，bridge 写入 `session/new` `_meta.agentgear.session` |
-| `acp:message`（发起 prompt） | 增 `context`（可选） | 写入 `session/prompt` `_meta.agentgear.context` |
-| `acp:artifact`（新增，Controller→Server） | 新事件 | `{ sessionId, title, value }`，来自 `_agentgear/artifact` |
+| `acp:initialized` | 增 `capabilities: AgentCapabilitySnapshot` | 归一化能力快照 + `raw` 原始对象；其余事件（含 `acp:message` 消息链路）零变更 |
 
 `AgentCapabilitySnapshot` 载荷：
 
@@ -376,7 +479,7 @@ graph LR
   "features": [
     { "id": "session.load", "status": "supported", "detail": "loadSession" },
     { "id": "prompt.audio", "status": "unsupported", "detail": "promptCapabilities.audio 未声明" },
-    { "id": "ext.childSessionUpdates", "status": "supported", "detail": "_meta.opencode/child-session-updates" }
+    { "id": "session.fork", "status": "supported", "detail": "sessionCapabilities.fork" }
   ],
   "raw": { "agentCapabilities": {}, "authMethods": [] }
 }
@@ -406,7 +509,7 @@ extend type Session {
 }
 
 extend type SessionConfigOptionValue {
-  # 来源：agentgear.modelSource → value 前缀推断 → "fallback"
+  # 来源三档推断结果：platform | custom | agent | unknown
   source: String
   provider: String
   group: String
@@ -415,9 +518,9 @@ extend type SessionConfigOptionValue {
 
 ### 7.3 内部接口
 
-- agent-controller → controller-api：`acp:initialized`（增 `capabilities`）、`acp:artifact`（新增）；
-- controller-api → agent-api（Redis）：同名透传；
-- agent-api：`_agentgear/artifact` 落 `AcpMessage(type=artifact)`，会话归属工作流节点时写黑板 key `{节点ID}-{节点名称}-产物-{title}`（与工作流工具产物口径一致）。
+- agent-controller → controller-api：`acp:initialized`（增 `capabilities`），经既有 Redis 透传；
+- controller-api → agent-api：落 `sessions.agentCapabilities`；
+- agent-api：`Session.features` 由快照派生（唯一事实源），`SessionConfigOptionValue.source/provider/group` 由来源推断纯函数计算返回。
 
 ## 8. 数据模型
 
@@ -425,14 +528,13 @@ extend type SessionConfigOptionValue {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `agentCapabilities` | Object（Mixed） | 能力快照（含 `features[]` 与 `raw`），随 `acp:initialized` 写入、随 Agent 变更更新 |
-| `sessionMeta` | Object | `{ tags: string[], source: string, workflowInstanceId?, workflowNodeId? }` |
-| `configOptionSources` | Object | `configId → { source, provider, group }` 推断结果缓存（可由快照重算） |
+| `agentCapabilities` | Object（Mixed） | 能力快照（`protocolVersion`/`agentInfo`/`features[]`/`raw`），随 `acp:initialized` 写入、Agent 变更时整体更新 |
 
-### 8.2 缓存设计
+### 8.2 来源推断与缓存
 
-- 能力快照随会话生命周期持久化，无 TTL；`AcpDetector` 探测缓存（TTL 1h）不变；
-- 模型来源推断结果随 `acp:config-options` 快照刷新，不单独缓存服务。
+- 模型来源三档推断为**纯函数**（§9.2 实现点 2），输入 `configOptions` 与平台模型库，输出 `source/provider/group`，随 GraphQL 查询计算返回，**不落库**（避免与配置快照双写不一致）；
+- 如后续性能需要，可在 `Session` 增加推断结果缓存（本期不做）；
+- `AcpDetector` 探测缓存（TTL 1h）维持现状。
 
 ## 9. 技术实现方案
 
@@ -443,64 +545,45 @@ sequenceDiagram
     participant W as agent-web
     participant A as agent-api
     participant C as controller-api
-    participant B as agent-controller/bridge
-    participant O as ACP Agent(OpenCode)
+    participant B as bridge
+    participant O as ACP Agent
 
-    B->>O: initialize（clientCapabilities + _meta.agentgear.capabilities）
-    O-->>B: agentCapabilities（含 _meta 扩展广播）
-    B->>B: 归一化 AgentCapabilitySnapshot
+    B->>O: initialize（协议版本 + clientCapabilities）
+    O-->>B: agentCapabilities（含 _meta）/ authMethods / agentInfo
+    B->>B: capabilities.ts 归一化 AgentCapabilitySnapshot
     B->>C: acp:initialized（capabilities）
     C->>A: 透传
     A->>A: 落库 sessions.agentCapabilities
-    A->>W: GraphQL Session.features
-    W->>W: 能力面板 + 入口门控渲染
-    W->>A: 发送 prompt（含工作流 context）
-    A->>C: acp:message（context）
-    C->>B: session/prompt（_meta.agentgear.context）
-    B->>O: session/prompt
-    O-->>B: _agentgear/artifact 通知（结构化产物）
-    B->>C: acp:artifact
-    C->>A: 落 AcpMessage + 写工作流黑板
-    A->>W: 产物回执展示
+    A->>W: GraphQL Session.features / agentCapabilities
+    W->>W: 能力门控渲染 + 能力面板
+    W->>A: 查询 configOptions（切换模型）
+    A->>A: 来源三档推断（标识解析 → 平台模型库比对 → 兜底）
+    A->>W: source/provider/group
+    W->>W: 按来源分组展示 + 判定依据
 ```
 
 ### 9.2 关键实现点
 
 #### 实现点 1: 能力快照归一化（`capabilities.ts`）
 
-- **描述**: 将 `initialize` 结果（`agentCapabilities` 全量含 `_meta`、`authMethods`、`agentInfo`、`promptCapabilities`、`mcpCapabilities`、`sessionCapabilities`）映射为稳定的 FeatureId 三档清单，同时保留 `raw` 原始对象。
-- **技术细节**: FeatureId 映射表（`session.load/resume/close/list/delete/fork`、`prompt.image/audio/embeddedContext`、`auth.login/logout`、`mcp.http/sse`、`config.boolean`、`session.additionalDirectories`、`elicitation.form/url`、`ext.agentgear`、`ext.childSessionUpdates`…）；缺失字段一律 `unsupported` 并记录 `detail`（来源字段名）；未知 `_meta` 键原样保留进 `raw` 供回归比对。
-- **风险点**: Agent 版本升级导致字段形态变化（如 `loadSession` 未来并入 `sessionCapabilities`）；对策：映射表集中管理 + 原始快照留存 + 探针回归测试。
+- **描述**: 将 `initialize` 结果（`agentCapabilities` 全量含 `_meta`、`authMethods`、`agentInfo`）映射为稳定的 FeatureId 三档清单，同时保留 `raw` 原始对象。
+- **技术细节**: FeatureId 映射表集中管理（`session.load/resume/close/list/delete/fork`、`prompt.image/audio/embeddedContext`、`auth.login/logout`、`mcp.http/sse`、`config.boolean`、`session.additionalDirectories`、`elicitation.form/url` 等）；缺失字段一律 `unsupported` 并记 `detail`（来源字段名）；未知 `_meta` 键（如 `opencode/child-session-updates`）原样保留进 `raw`，仅登记不消费。
+- **风险点**: Agent 版本升级导致字段形态变化（如 `loadSession` 未来并入 `sessionCapabilities`）；对策：映射表集中管理 + `raw` 留档 + 探针回归（§12）。
 
-#### 实现点 2: `agentgear` 扩展通道（`extensions.ts`）
+#### 实现点 2: 模型来源三档推断
 
-- **描述**: 编解码 `_meta.agentgear.*` 与 `_agentgear/*` 扩展方法，负责能力广播、未知扩展降级与安全过滤（丢弃疑似密钥字段、限制载荷大小）。
-- **技术细节**: 扩展请求注册进 SDK connection 的自定义方法路由；未知方法回 `-32601`、未知通知忽略；`_meta` 只在允许的类型上写入（`SessionPromptRequest`、`NewSessionRequest` 等实测/文档确认含 `_meta` 的类型）。
-- **风险点**: Agent 对 `_meta` 透传实现不一；对策：一切扩展能力以广播为前提，未广播即降级（§6.4 降级表）。
+- **描述**: 「切换模型」列表来源分组的判定规则（**不依赖协议扩展**，纯标准信息 + 平台侧数据）：
+  1. **一档·标识解析**：模型值形如 `<provider>/<model>`（如 `opencode-go/kimi-k3`）时解析出 `provider`；
+  2. **二档·平台模型库比对**：与平台模型库比对（内建渠道模型 `scope=global` →「平台内置」；用户自定义模型 →「自定义」）；解析出 provider 但平台库无匹配 →「Agent 自带」；
+  3. **三档·兜底**：无标识段且比对不上 →「来源未知」。
+- **技术细节**: 纯函数可单测；`SessionConfigOptionValue` 扩展 `source/provider/group`；分组顺序沿用 `configOptions` 原始顺序保持稳定；每组附判定依据文案（「按标识前缀判定」「按平台模型库比对」「无法判定」）。
+- **风险点**: 无前缀模型名或多来源重名；对策：兜底组 + 判定依据可查 + 同名按规则优先级归组不重复。
 
-#### 实现点 3: 模型来源三档推断
+#### 实现点 3: 前端能力门控与能力面板
 
-- **描述**: 「切换模型」列表来源分组：① Agent 经 `_meta.agentgear.modelSource` 提供 → ② `value` 前缀推断（`provider/model`，如 `opencode-go/kimi-k3` → provider `opencode-go`）+ 平台侧 provider→分组映射（平台内置 / Agent 自带 / 自定义）→ ③ 兜底「其他」组。
-- **技术细节**: `SessionConfigOptionValue` 扩展 `source/provider/group`；推断纯函数可单测；分组顺序按 `configOptions` 原始顺序稳定。
-- **风险点**: 无前缀模型名无法推断；对策：兜底组 + 文案标注「来源未知」，不空白。
-
-#### 实现点 4: 工作流上下文与产物闭环
-
-- **描述**: 工作流节点会话在 `session/new` 携带 `agentgear.session`（节点/需求标识）、`session/prompt` 携带 `agentgear.context`；Agent 回传 `_agentgear/artifact` → `acp:artifact` → 落 `AcpMessage` + 写工作流黑板（`{节点ID}-{节点名称}-产物-{title}`）。
-- **技术细节**: 扩展不可用时上下文降级为 prompt 文本块注入；产物降级走既有 MCP 工作流工具；黑板写入幂等（同 title 覆盖更新）。
-- **风险点**: 产物格式不可信；对策：长度限制 + 转义 + 校验 `title/value` 必填，解析失败不误判节点完成。
-
-#### 实现点 5: 前端能力门控与能力面板
-
-- **描述**: `useAgentCapabilities(sessionId)` 提供三档能力判断；入口（附件/命令/模型/模式/认证/恢复会话/历史管理）按能力显示、禁用与提示；能力面板逐项展示 `features[]`。
-- **技术细节**: 门控仅依赖 `Session.features`（唯一事实源），不在组件内散落能力判断；禁用态 tooltip 使用 `detail` 文案。
-- **风险点**: 能力与实际行为不一致（Agent 声明了但调用失败）；对策：调用失败统一错误提示 + 记录，能力面板提供「报告问题」入口（展示 detail）。
-
-#### 实现点 6: OpenCode 差异能力
-
-- **描述**: 命令面板（`availableCommands` + 输入 hint）与不支持命令提示表（`/undo`、`/redo`）；认证引导文案（`opencode-login` 的 description）；`thought_level` 归组为「推理档位」；P2：`opencode/child-session-updates` 动态透传、`session/fork` 分叉入口。
-- **技术细节**: 不支持命令表按 `agentInfo` 版本维护（OpenCode 文档明确）；`session/fork` 以 `sessionCapabilities.fork` 广播为唯一门控，调用 SDK `unstable_forkSession` 并封装在独立适配器（unstable API 隔离，失效可回退隐藏）。
-- **风险点**: OpenCode 专有扩展形态随版本变化；对策：扩展载荷只透传不解释，UI 通用渲染。
+- **描述**: `useAgentCapabilities(sessionId)` 提供三档能力判断；入口（附件、模型、模式、认证、会话恢复、历史管理）按能力显示/禁用/提示；能力面板逐项展示 `features[]`；模型弹层按来源分组并展示判定依据。
+- **技术细节**: 门控仅依赖 `Session.features`（唯一事实源），不在组件内散落能力判断；禁用态 tooltip 用 `detail` 文案；模型分组数据来自 `source/group`。
+- **风险点**: 能力与实际行为不一致（声明了但调用失败）；对策：调用失败统一错误提示 + 记录，能力面板展示 `detail` 便于排查。
 
 ## 10. 技术决策
 
@@ -508,55 +591,55 @@ sequenceDiagram
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
-| 扩展承载 | ACP `_meta` + `_agentgear/*` 方法 | 自建旁路 WebSocket 通道 | **A** | 协议内协商、天然可忽略、跨 Agent 通用，符合扩展机制红线 |
 | 能力快照 | 落库持久化 | 仅会话内存 | **A** | 支持跨端展示、回归比对与 Agent 升级差异发现 |
-| 模型来源 | 仅 `_meta` | 三档推断（`_meta` → 前缀 → 兜底） | **三档** | 存量 Agent 不提供 `_meta` 也能分组（PR #242 遗留诉求） |
-| 上下文降级 | 只用扩展 | 扩展 + 文本块注入 | **扩展 + 注入** | 保证任意 Agent 都能携带工作流上下文 |
-| `session/fork`/子会话 | 一期全做 | 能力门控 + P2 | **P2** | 协议未稳定（SDK 仅 `unstable_forkSession`）、依赖 Agent 专有扩展，先落探测与展示 |
-| `fs`/`terminal` client 能力 | 实施 | 不实施 | **不实施** | 沿用 20260803 云端架构决策；实测 OpenCode 亦不回调（§4.4） |
+| 来源判定 | 仅标识解析 | 三档（解析 → 平台库比对 → 兜底） | **三档** | 兼容无前缀标识与平台库模型，兜底可解释 |
+| 来源数据载体 | 协议扩展 `_meta` 字段 | 标准协议信息 + 平台侧数据 | **B** | agentgear 扩展通道本期不实施（评审裁剪） |
+| 门控依据 | 组件内散落判断 | `Session.features` 唯一事实源 | **B** | 避免判断口径漂移 |
+| 现状梳理 | 顺手修复缺口 | 只登记不修改 | **B** | 控范围（评审裁剪），缺口走后续需求 |
+| 消息链路 | 顺带重构落库 type 枚举 | 零改动 | **零改动** | §5 明确「只登记不修改」；前端已不依赖落库 type |
+| `fs`/`terminal` client 能力 | 实施 | 不实施 | **不实施** | 沿用 20260803 云端架构决策；OpenCode v2 亦不回调（v1 会调 `fs/write_text_file` 属历史行为） |
 
 ### 10.2 依赖与约束
 
 | 类型 | 内容 | 说明 |
 |------|------|------|
-| 依赖 | `@agentclientprotocol/sdk` 1.x `_meta`/自定义方法透传能力 | ✅ 已核实 `@1.3.0` 支持：`NewSessionRequest` 等携 `_meta`；`request<Response,Params>(method: string)`/`notify` 支持自定义方法与通知；`onRequest`/`onNotification` 可注册 `_agentgear/*` 路由。`session/fork` 以 `unstable_forkSession` 提供（P2，须隔离封装） |
-| 依赖 | 各 Agent 的能力广播真实性 | 以探针回归测试 + 失败提示兜底 |
-| 约束 | 不改标准协议消息结构 | 扩展只走 `_meta`/`_` 方法/能力 `_meta` |
-| 约束 | 存量 Agent 零退化 | 未探测即降级，契约只做增量 |
+| 依赖 | `@agentclientprotocol/sdk` 1.x `initialize` 结果读取 | 含 `_meta` 的 `agentCapabilities` 读取无需扩展 API |
+| 依赖 | 平台模型库数据准确性（内建渠道 `scope=global`、用户自定义模型） | 来源二档比对的基准 |
+| 约束 | 不改标准协议交互、不改既有消息链路 | 契约只做增量，旧 Agent 零退化 |
+| 约束 | 不实施协议扩展通道/工作流闭环/OpenCode 差异能力 | 评审裁剪项，列为后续需求候选 |
 
 ## 11. 项目结构
 
 ```
 packages/agent-controller/src/acp/
-├── bridge.ts            # 协议面：能力快照接入、_meta 透传、扩展方法注册
+├── bridge.ts            # 协议面：initConnection 接入能力快照
 ├── capabilities.ts      # 新增：AgentCapabilitySnapshot 归一化与 FeatureId 映射
-├── extensions.ts        # 新增：agentgear 扩展通道编解码与降级
 ├── detector.ts          # Agent 探测（不变）
 └── ...
-servers/controller-api/src/   # acp:* 事件增量透传
-servers/agent-api/src/        # 快照落库、产物落 AcpMessage + 黑板写入
+servers/controller-api/src/   # acp:initialized 透传增量（消息链路不动）
+servers/agent-api/src/        # 快照落库、Session.features、来源三档推断
 apps/agent-web/src/           # useAgentCapabilities、能力面板、来源分组
 contracts/
-├── agent-session-websocket.md   # acp:initialized 增量、acp:artifact、sessionMeta
-└── agent-session.graphql        # AgentCapabilitySnapshot、Session.features、配置项来源
+├── agent-session-websocket.md   # acp:initialized 增 capabilities
+└── agent-session.graphql        # AgentCapabilitySnapshot、Session.features、来源字段
 ```
 
 ## 12. 测试策略
 
 ### 12.1 测试覆盖要求
 
-- 单元测试覆盖率：`capabilities.ts` / `extensions.ts` ≥ 90%（纯函数，穷举映射与降级分支）；
-- API 测试覆盖：`Session.features`、`Session.agentCapabilities`、配置项 `source/provider/group`、`acp:artifact` 落库与黑板写入；
-- E2E：OpenCode 真实会话全链路（能力面板、入口门控、模型分组、工作流上下文与产物闭环）。
+- 单元测试覆盖率：`capabilities.ts` ≥ 90%（穷举映射与缺失降级分支）；来源三档推断纯函数全覆盖；
+- API 测试覆盖：`Session.features`、`Session.agentCapabilities`、`SessionConfigOptionValue.source/provider/group`、旧 payload 兼容；
+- E2E：OpenCode 真实会话（能力面板一致性、入口门控、模型来源分组、零退化）。
 
 ### 12.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | vitest | 能力归一化映射、来源三档推断、扩展编解码、未知扩展降级、安全过滤 |
-| 探针回归 | 自研 stdio 探针（本提案 §4 实测脚本固化） | OpenCode 能力广播快照比对（字段增删可发现） |
-| API 测试 | z-test / supertest+GraphQL | 契约增量全字段、幂等黑板写入、旧 payload 兼容 |
-| E2E | z-test | 能力面板一致性、入口拦截提示、模型分组、产物闭环、旧 Agent 零退化 |
+| 单元测试 | vitest | 能力归一化映射、缺失字段降级、来源三档推断、兜底分组 |
+| 探针回归 | stdio 探针（本提案 §4 实测脚本固化） | OpenCode 能力广播快照比对（字段增删可发现），CI 可选 |
+| API 测试 | z-test / supertest+GraphQL | 契约增量全字段、快照落库与更新、旧 Agent（无能力广播）兼容 |
+| E2E | z-test | 能力面板与实际行为一致、禁用提示、模型分组与判定依据、存量会话零退化 |
 
 ## 13. 部署方案
 
@@ -569,25 +652,24 @@ contracts/
 
 ### 13.2 配置管理
 
-- `agentgear` 扩展开关（按 Agent 类型可关，默认开、自动降级）；
-- provider → 来源分组映射表（配置化，可随内建渠道调整）；
-- 不支持命令提示表（按 `agentInfo` 维度配置）。
+- 平台模型库来源分组映射（内建渠道/自定义 → 分组名），随内建渠道配置调整；
+- 能力快照无独立配置（随会话写入）；探针回归脚本可选启用。
 
 ## 14. 验收标准
 
 - [ ] 技术方案评审通过
-- [ ] Contract 评审通过（`agent-session-websocket.md`、`agent-session.graphql` 增量）
+- [ ] Contract 评审通过（`agent-session.graphql`、`agent-session-websocket.md` 增量）
 - [ ] 能力快照全链路可见：OpenCode 会话能力面板逐项展示且与实测能力广播一致
 - [ ] 能力门控生效：不支持能力的入口隐藏/禁用并有原因说明，操作不被静默丢弃
-- [ ] 模型来源分组可用：来源缺失时兜底分组且有据可查
-- [ ] 工作流上下文传递与产物闭环可验证；扩展不可用时降级路径可用
-- [ ] 旧 Agent（无能力广播/无扩展）会话功能零退化（回归用例锁定）
+- [ ] 模型来源分组可用：三档规则判定一致、兜底「来源未知」不遗漏、判定依据可查
+- [ ] §5 现状梳理随提案交付：对照矩阵覆盖全部回传形态，观察项逐条登记
+- [ ] 旧 Agent（无能力广播）会话功能零退化（回归用例锁定）；既有消息链路零改动
 - [ ] 单元测试覆盖达标、API 测试通过、E2E 测试通过
-- [ ] OpenCode 能力探针回归脚本纳入 CI 可选项
 
 ## 15. 相关文档
 
 - 关联 PRD：`docs/product/draft/20261021-acp-protocol-enhancement.md`
+- 调研附录：`docs/engineering/proposals/20261021-feat-acp-protocol-enhancement-opencode-support.md`（OpenCode ACP 支持清单调研：源码级证据、v1/v2 差异、信息缺口）
 - 相关提案：`docs/engineering/proposals/20260803-feat-acp-v1-completion.md`、`docs/engineering/proposals/20260705-feat-acp-server-extend.md`、`docs/engineering/proposals/20260721-feat-acp-mimo-kimi.md`
-- 契约：`contracts/agent-session-websocket.md`、`contracts/agent-session.graphql`、`contracts/workflow.graphql`
-- 参考：ACP v1 协议 <https://agentclientprotocol.com/protocol/v1/>、扩展机制 <https://agentclientprotocol.com/protocol/v1/extensibility>、Session Config Options <https://agentclientprotocol.com/protocol/v1/session-config-options>、RFD meta-propagation <https://agentclientprotocol.com/rfds/meta-propagation>、RFD session-fork <https://agentclientprotocol.com/rfds/session-fork>、OpenCode ACP <https://opencode.ai/docs/acp/>
+- 契约：`contracts/agent-session-websocket.md`、`contracts/agent-session.graphql`
+- 参考：ACP v1 协议 <https://agentclientprotocol.com/protocol/v1/>、扩展机制 <https://agentclientprotocol.com/protocol/v1/extensibility>、Session Config Options <https://agentclientprotocol.com/protocol/v1/session-config-options>、RFD meta-propagation <https://agentclientprotocol.com/rfds/meta-propagation>、RFD session-fork <https://agentclientprotocol.com/rfds/session-fork>、OpenCode ACP <https://opencode.ai/docs/acp/>、OpenCode v2 ACP <https://opencode.ai/v2/docs/cli/acp>

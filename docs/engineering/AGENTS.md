@@ -189,7 +189,8 @@ flowchart LR
 - [[proposals/20261017-feat-controller-version-requirement.md]] — 云端工作容器控制器版本门禁与自升级
 - [[proposals/20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）
 - [[proposals/20261020-fix-api-channel-model-fixes.md]] — 内建API渠道一期上线后问题修复（供应商与模型管理）
-- [[proposals/20261021-feat-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与扩展互通）
+- [[proposals/20261021-feat-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与模型来源分组）
+- [[proposals/20261021-feat-acp-protocol-enhancement-opencode-support.md]] — ACP 协议增强调研附录：OpenCode ACP 支持清单
 
 ### 实现计划（`plan/`）
 
