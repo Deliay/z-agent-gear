@@ -1,5 +1,5 @@
 ---
-description: 内建 API 渠道一期上线后问题修复技术提案：供应商模型手动导入（listGlobalProviderModels/importGlobalModels）、模型按供应商分组折叠（前台「系统内置」）、deleteGlobalModel、模型名全局唯一（重名检查 + 迁移 005）
+description: 内建 API 渠道一期上线后问题修复技术提案：供应商模型手动导入（listGlobalProviderModels/importGlobalModels）、模型按供应商分组折叠（前台「系统内置」）、deleteGlobalModel、模型名全局唯一（重名检查 + 迁移 005 + 重名整理记录）
 type: Permanent
 ---
 
@@ -7,10 +7,13 @@ type: Permanent
 
 **功能名称**: 内建 API 渠道供应商与模型管理优化
 **关联 PRD**: `docs/product/draft/20261020-api-channel-model-fixes.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-20
 **作者**: ZeroAsh
 **feat-branch**: `fix/api-channel-model-fixes`
+**版本说明**:
+- v1.0（2026-10-20）初版。
+- v1.1（2026-10-20，返工修订，对齐 PRD v1.1）① **agent-api 用户侧自动同步保留**：`syncSyncedModels` 不动，仅后台取消自动导入，§5.2 实现点 1 明确 admin/agent 两侧行为差异（对应打回项 1）；② **会话内「切换模型」分组移出范围**：核实 `packages/agent-controller/src/acp/bridge.ts` `extractConfigModels`（L168-178）与 `SessionConfigOptionData.options`（L33，仅 `{value, name}`）不产出 provider，探测链路无来源字段可透传，强行分组会退化为单组，改为保持现状并把「ACP 侧补来源字段」列为后续需求（对应打回项 2）；③ **重名整理记录持久化**：新增 `model_rename_records` 集合 + `modelRenameRecords` 后台查询 + 后台只读「重名整理记录」视图，作为改名对照的可查询核对载体（对应打回项 3）。
 
 ## 1. 概述
 
@@ -41,26 +44,26 @@ graph TD
 
 ### 1.2 目标
 
-- 供应商创建/更新**不再自动导入或同步模型**；新增「导入模型」手动导入链路（拉取上游清单 → 勾选 → 导入）。
-- 后台/前台模型列表按供应商分组、默认折叠；前台后台来源模型统一显示「系统内置」。
+- **仅后台**：供应商创建/更新**不再自动导入或同步模型**；新增「导入模型」手动导入链路（拉取上游清单 → 勾选 → 导入）。agent-api 用户侧供应商自动同步（`syncSyncedModels`）**保留不动**，两侧行为差异显式声明（§5.2 实现点 1、§6.1）。
+- 后台与前台「可用模型」列表按供应商分组、默认折叠；前台后台来源模型统一显示「系统内置」。会话内「切换模型」列表保持现状（不参与分组，理由见 §5.2 实现点 3）。
 - 后台可用模型支持删除任意模型（含导入模型），契约语义从「仅自定义」演进为「任意」。
-- 后台模型名全局唯一（`scope=global` 内跨供应商唯一）：写入路径重名检查 + 数据库唯一索引兜底 + 存量重名一次性迁移整理。
+- 后台模型名全局唯一（`scope=global` 内跨供应商唯一）：写入路径重名检查 + 数据库唯一索引兜底 + 存量重名一次性迁移整理，改名对照持久化为后台可查的「重名整理记录」。
 
 ### 1.3 范围
 
 **做**：
 
-- `admin-api`：新增 `listGlobalProviderModels` / `importGlobalModels` / `deleteGlobalModel`；`create/updateGlobalProvider` 移除自动导入与重同步；模型写入路径统一重名检查；迁移 005（存量重名整理 + 部分唯一索引）。
-- `admin-web`：供应商「导入模型」弹窗；可用模型分组折叠；全量删除；重名即时校验。
-- `agent-web`：设置「可用模型」分组折叠 +「系统内置」展示；会话「切换模型」弹窗分组折叠。
+- `admin-api`：新增 `listGlobalProviderModels` / `importGlobalModels` / `deleteGlobalModel` / `modelRenameRecords`；`create/updateGlobalProvider` 移除自动导入与重同步；模型写入路径统一重名检查；迁移 005（存量重名整理 + 部分唯一索引 + 改名记录落库）。
+- `admin-web`：供应商「导入模型」弹窗；可用模型分组折叠；全量删除；重名即时校验；「重名整理记录」只读视图。
+- `agent-web`：设置「可用模型」分组折叠 +「系统内置」展示。
 - `contracts/admin-llm.graphql` 同步演进；测试覆盖（单测 / tests/api / tests/e2e）。
 
 **不做**：
 
+- 不改 `agent-api` 用户侧供应商/模型管理：用户添加供应商仍自动同步模型（`services/provider.ts` `syncSyncedModels`（create L69、update L142）保留），自定义模型仍按供应商内唯一，行为完全不变（PRD §4.3/§5.2 约束）。
+- 不做会话内「切换模型」分组：该列表数据来自 ACP 探测的 configOptions，条目仅 `{id, name}`（`packages/agent-controller/src/acp/bridge.ts` `SessionConfigOptionData.options` L33、`extractConfigModels` L168-178），**不携带供应商/来源字段**，无法实现有意义的供应商分组；「ACP 侧补充模型来源字段」作为后续独立需求（见 §5.2 实现点 3、§6.1）。
 - 不做模型改名/编辑能力；不做供应商级的前台分组（前台统一「系统内置」）。
 - 不改计费网关寻址规则（`billing-openai.ts` 维持按模型名寻址，本期通过「名字唯一」使其确定）。
-- 不改 `agent-api` 用户侧模型管理（自定义模型仍按供应商内唯一，行为不变）。
-- 不改 ACP 探测链路的模型数据来源（仅同步分组折叠的展示样式）。
 
 ## 2. 技术架构
 
@@ -70,13 +73,13 @@ graph TD
 graph TD
     subgraph 前端
         AW[admin-web<br/>模型配置页/导入弹窗]
-        UW[agent-web<br/>设置-可用模型/切换模型]
+        UW[agent-web<br/>设置-可用模型]
     end
     subgraph 后端
         AA[admin-api GraphQL<br/>provider/model resolvers]
         UA[agent-api GraphQL<br/>models 查询]
         LLM[LLMAPIService<br/>fetchModels]
-        MIG[迁移 005<br/>重名整理+唯一索引]
+        MIG[迁移 005<br/>重名整理+改名对照+唯一索引]
     end
     UP[上游供应商<br/>OpenAI/Anthropic 兼容 /models]
     DB[(MongoDB<br/>providers / models)]
@@ -121,8 +124,10 @@ graph LR
 | `admin-web` `ModelSection` + `ModelGroup`（新增）/ `ModelItem` | 分组折叠、删除、重名校验 | 按 `providerId` 分组；`@dnd-kit` 组内排序；删除不限 `isCustom` |
 | `admin-api` `services/provider.ts` | 供应商增删改 | `create/update` 保留连通性校验、移除自动导入/重同步 |
 | `admin-api` `services/model.ts` + `services/llm-api.ts` | 模型写入/删除/清单拉取 | 统一重名检查 `assertNamesAvailable`；`delete()` 放开 `isCustom` 限制 |
-| `admin-api` `migrations/005-model-name-unique-global` | 存量重名整理 + 唯一索引 | 幂等；改名留痕 |
-| `agent-web` `settings/ModelSection` / `ModelItem` / `session/ModelSelectDialog` | 分组折叠 +「系统内置」 | `scope === 'global'` 归并「系统内置」组；折叠复用既有手写模式 |
+| `admin-api` `migrations/005-model-name-unique-global` | 存量重名整理 + 唯一索引 | 幂等；改名对照逐条写入 `model_rename_records` |
+| `admin-api` `ModelRenameRecord`（新增）+ Query `modelRenameRecords` | 改名对照的持久化核对载体 | 迁移写入、后台只读查询 |
+| `agent-api` `services/provider.ts` | 用户侧供应商管理（**不动**） | `syncSyncedModels`（create L69、update L142）保留，用户添加供应商仍自动同步 |
+| `agent-web` `settings/ModelSection` / `ModelItem` | 分组折叠 +「系统内置」 | `scope === 'global'` 归并「系统内置」组；折叠复用既有手写模式 |
 
 ## 3. API 设计
 
@@ -195,6 +200,50 @@ graph LR
 
 `contracts/admin-llm.graphql` 头部注释补充：`scope=global` 内 `Model.name` 全局唯一（跨供应商）；`createGlobalCustomModel` / `importGlobalModels` 均返回 `MODEL_NAME_EXISTS`。
 
+#### 变更 5: Query `modelRenameRecords` — 历史重名整理的改名对照（可查询核对载体）
+
+- **请求**（GraphQL Query）
+
+  ```graphql
+  modelRenameRecords: [ModelRenameRecord!]!
+  ```
+
+  ```graphql
+  type ModelRenameRecord {
+    id: ID!
+    modelId: ID!          # 被改名的模型（现以 newName 存在）
+    providerId: ID!
+    providerName: String! # 所属供应商名（冗余留档：供应商后续被删除仍可读）
+    oldName: String!
+    newName: String!
+    batchId: String!      # 同一次整理批次（迁移 005 一次运行一个批次）
+    renamedAt: DateTime!
+  }
+  ```
+
+- **响应**
+
+  ```json
+  {
+    "data": {
+      "modelRenameRecords": [
+        {
+          "id": "6660...ab",
+          "modelId": "665f...c2",
+          "providerId": "665f...c2a",
+          "providerName": "OpenAI-A",
+          "oldName": "gpt-4o",
+          "newName": "gpt-4o-2",
+          "batchId": "20261020-005",
+          "renamedAt": "2026-10-20T12:00:00.000Z"
+        }
+      ]
+    }
+  }
+  ```
+
+- **语义**：只读查询，仅迁移 005 写入记录；按 `renamedAt` 倒序返回全部记录。消费方为 admin-web「重名整理记录」只读视图（PRD §3.4）。记录是一次性历史整理的对照台账，不随模型删除而删除。
+
 ### 3.2 内部接口
 
 | 接口 | 调用方 | 说明 |
@@ -202,6 +251,7 @@ graph LR
 | `LLMAPIService.fetchModels(type, endpoint, credentialValue)` | `ProviderService.create/update`（连通性校验）、`ModelService.listProviderModels` | 复用现有实现（`services/llm-api.ts`，OpenAI/Anthropic SDK `models.list()`，10s 超时）；凭据解密仅在服务端进行 |
 | `ModelService.assertNamesAvailable(names)` | `createGlobalCustomModel`、`importGlobalModels` | 统一重名检查入口（口径唯一，禁止各写入点自建规则） |
 | `ProviderService.decryptedCredential(providerId)` | `listProviderModels` | 由 `encryptedCredential`（AES-256-GCM）解密，仅内存使用 |
+| `ModelRenameRecord` 写入 | 迁移 005 | 每条改名写入一条对照记录（old/new/provider/batchId/renamedAt），作为「重名整理记录」数据源 |
 
 ## 4. 数据模型
 
@@ -227,6 +277,22 @@ graph LR
 | `{name: 1}` + `partialFilterExpression: { scope: 'global' }` | unique（**新增**） | 后台模型名全局唯一兜底；`user` 作用域不受影响 |
 
 `providers`、`productprices` 等集合不做结构变更。
+
+#### 集合: `model_rename_records`（新增，Mongoose `ModelRenameRecord`）
+
+历史重名整理的改名对照台账——PRD §3.2 功能点 4「改名记录可核对」的持久化载体（不依赖控制台日志）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `modelId` | ObjectId | 被改名的模型（现以 `newName` 存在） |
+| `providerId` | ObjectId | 所属供应商 id |
+| `providerName` | String | 供应商名（冗余留档，供应商后续删除不影响可读） |
+| `oldName` | String | 原名 |
+| `newName` | String | 新名 |
+| `batchId` | String | 整理批次（迁移 005 一次运行一个批次） |
+| `renamedAt` | Date | 整理时间 |
+
+索引：`{ renamedAt: -1 }`（列表排序）、`{ batchId: 1 }`（按批次检索）。写入方**仅迁移 005**，服务运行期不写；通过 Query `modelRenameRecords` 只读消费。记录不随模型删除而删除（审计留痕）。
 
 ### 4.2 缓存设计
 
@@ -275,11 +341,20 @@ flowchart TD
 
 ### 5.2 关键实现点
 
-#### 实现点 1: 取消供应商创建/更新的自动导入与重同步
+#### 实现点 1: 后台取消供应商创建/更新的自动导入与重同步（用户侧保持不变）
 
-- **描述**：`ProviderService.create()` 删除 L165-190 的 `Model.insertMany` 段，`update()` 删除 L226-315 的 `needsResync` 重同步段；**保留** `fetchModels` 作为保存前连通性校验（凭据/地址填错仍能即时发现），只校验不落库。`agent-api` 对应的 `syncSyncedModels`（`services/provider.ts:155-192`）同语义移除，两侧行为一致。
-- **技术细节**：`create()` 事务范围缩小为单文档写入；`admin-web` 空态文案从「添加供应商后自动拉取」改为「暂无可用模型，通过供应商的『导入模型』手动导入」；`tests/api/src/admin-api/llm.test.ts`、`servers/*/src/services/provider.test.ts` 中「自动导入/重同步」断言改为「创建后 models 为空」。
-- **风险点**：运维习惯变化（过去靠自动同步刷新清单）→ 提案明确「刷新清单 = 重新打开导入弹窗增量导入」；更新凭据/地址后不再自动清理陈旧模型，由管理员用删除能力处理。
+- **描述**：**仅 admin-api**——`ProviderService.create()` 删除 L165-190 的 `Model.insertMany` 段，`update()` 删除 L226-315 的 `needsResync` 重同步段；**保留** `fetchModels` 作为保存前连通性校验（凭据/地址填错仍能即时发现），只校验不落库。**agent-api 用户侧不动**：`servers/agent-api/src/services/provider.ts` 的 `syncSyncedModels`（L155-192，create L69 调用、update L142 重同步）及其事务/回滚逻辑原样保留，用户添加自定义供应商后仍自动同步该供应商模型。
+- **两侧行为差异（显式声明，PRD §3.2 功能点 1「范围限定」同口径）**：
+
+  | 维度 | 后台（admin-api，scope=global） | 前台用户侧（agent-api，scope=user） |
+  |------|------|------|
+  | 供应商创建后模型来源 | 不自动导入，管理员「导入模型」弹窗手动勾选 | 自动同步上游全量模型（现状，`syncSyncedModels`） |
+  | 凭据/地址变更后 | 不自动重同步，由管理员手动增量导入 | 自动重同步（现状，保留自定义模型、清理陈旧同步模型） |
+  | 模型删除 | 支持删除任意模型（本期新增） | 仅自定义模型（现状） |
+  | 模型重名约束 | `scope=global` 内全局唯一（本期新增） | 供应商内唯一（现状，不变） |
+
+- **技术细节**：`create()` 事务范围缩小为单文档写入；`admin-web` 空态文案从「添加供应商后自动拉取」改为「暂无可用模型，通过供应商的『导入模型』手动导入」；`tests/api/src/admin-api/llm.test.ts`、`servers/admin-api/src/services/provider.test.ts` 中「自动导入/重同步」断言改为「创建后 models 为空」，并**新增 agent-api 侧回归断言**（`servers/agent-api/src/services/provider.test.ts`：创建用户供应商仍自动同步、update 仍重同步），把上述行为差异锁进测试。
+- **风险点**：运维习惯变化（过去靠自动同步刷新清单）→ 提案明确「刷新清单 = 重新打开导入弹窗增量导入」；更新凭据/地址后不再自动清理陈旧模型，由管理员用删除能力处理；两侧行为不一致带来的认知成本 → 后台导入弹窗/空态文案明确「手动导入」，用户侧不做改动。
 
 #### 实现点 2: 导入模型弹窗与两条新链路
 
@@ -287,9 +362,14 @@ flowchart TD
 - **技术细节**：`admin-web` 新增 `components/models/ImportModelsDialog.tsx`（清单 + 勾选 + 全选 + 关键字过滤 + 重试 + 结果反馈），入口在 `ProviderItem`/`ProviderActionMenu`；已导入与重名条目 `disabled` 并带「已导入」「已存在」标记；导入前服务端二次校验重名（防绕过 UI）。错误映射沿用 `resolvers/provider.ts:9-14` 的 E11000/连通性文案风格。
 - **风险点**：上游清单可能很大（数百条）→ 弹窗内关键字过滤 + 虚拟滚动兜底（沿用现有列表样式，必要时分批渲染）；重复点击导入 → 幂等跳过，不报错。
 
-#### 实现点 3: 模型分组折叠（admin-web / agent-web / 切换模型弹窗）
+#### 实现点 3: 模型分组折叠（admin-web / agent-web「可用模型」）
 
-- **描述**：三处模型列表统一「按供应商分组、默认折叠」。admin-web `ModelSection` 把平铺 `SortableContext` 改为按 `providerId` 分组渲染（新增 `ModelGroup`：组头 = 供应商名 + 数量 + 展开箭头，`defaultExpanded: false`）；`@dnd-kit` 排序收敛为**组内排序**，`UPDATE_GLOBAL_MODEL_SORT_ORDER` 仍提交全量有序 id（组间顺序按供应商创建顺序拼接，保证接口不变）。agent-web `settings/ModelSection` 同构改造，`scope === 'global'` 的模型统一归入「系统内置」组，`ModelItem.tsx:81-83` 的 `{model.provider.name}` 在该组内不再渲染（改为「系统内置」徽标，沿用 `McpRegistrySection.tsx:39-42`「平台内置」徽标样式）；`session/ModelSelectDialog.tsx:32-56` 按 `provider` 字符串分组折叠（数据来自 ACP 探测，来源名沿用探测值）。
+- **描述**：两处「可用模型」列表统一「按供应商分组、默认折叠」。admin-web `ModelSection` 把平铺 `SortableContext` 改为按 `providerId` 分组渲染（新增 `ModelGroup`：组头 = 供应商名 + 数量 + 展开箭头，`defaultExpanded: false`）；`@dnd-kit` 排序收敛为**组内排序**，`UPDATE_GLOBAL_MODEL_SORT_ORDER` 仍提交全量有序 id（组间顺序按供应商创建顺序拼接，保证接口不变）。agent-web `settings/ModelSection` 同构改造，`scope === 'global'` 的模型统一归入「系统内置」组，`ModelItem.tsx:81-83` 的 `{model.provider.name}` 在该组内不再渲染（改为「系统内置」徽标，沿用 `McpRegistrySection.tsx:39-42`「平台内置」徽标样式）。
+- **会话内「切换模型」列表不参与分组（结论与依据）**：
+  - **分组键**：不存在可靠分组键。该列表数据来自 ACP 探测的 configOptions：`packages/agent-controller/src/acp/bridge.ts` `SessionConfigOptionData.options`（L33）仅 `{ value, name }`，`extractConfigModels`（L168-178）映射出的 `availableModels` 只有 `{id, name}`，`provider` 为可选且**上游从未产出**（`acp-options-prober.ts` / `acp-session-manager.ts` 全链路透传的 `provider?: string` 恒为空）。按空 `provider` 分组必然退化为单一分组，无法达成 PRD 分组意图。
+  - **兜底组名**：不适用（不实现分组）。若强行以「系统内置」作为兜底组名，会把「Agent 自身探测到的模型」错误表述为「平台后台内置模型」，与 PRD「系统内置 = 后台来源模型」的口径冲突。
+  - **是否需要在 ACP 侧补充来源字段**：需要，但不在本期。补齐意味着 `SessionConfigOptionData.options` 增加 `provider` 并要求各 ACP Agent（opencode / claude-code / mimo / kimi 等）在 configOptions 中提供来源信息，涉及 `packages/agent-controller`（bridge/prober）、`controller-api`、`agent-api`、`contracts/agent-session.graphql` 多层与外部 Agent 协议数据，属独立需求。已在 PRD §5.2 约束登记为后续需求。
+  - 本期对 `session/ModelSelectDialog.tsx` **零改动**（保持现状平铺列表），E2E 断言其不退化。
 - **技术细节**：折叠交互沿用 agent-web 既有 `TreeSection`（`components/tree/TreeSection.tsx:14-67`）/ `Sidebar` 手写 `useState + chevron` 模式，抽一个轻量 `CollapsibleGroup` 共享组件（admin-web 无 Collapse 组件可复用，不引第三方库）；`agent-web` 的 `GET_MODELS` / `GET_PROVIDERS` 查询补 `scope` 字段（契约 `llm.graphql` 已有 `Model.scope: ConfigScope!`，后端零改动）；`aria-expanded` 可访问性与现有折叠组件一致。
 - **风险点**：分组后拖拽排序语义变化（跨组拖动取消）→ 组内拖拽、组间不互拖，避免重排语义混乱；「系统内置」组内模型来自多个后台供应商，排序按原 `sortOrder`。
 
@@ -304,8 +384,9 @@ flowchart TD
 - **描述**：三层保障——UI 即时校验、写入路径统一检查、数据库唯一索引兜底。
 - **技术细节**：
   - `ModelService.assertNamesAvailable(names)`：校验 `scope='global'` 内 `name` 冲突（含跨供应商），`createGlobalCustomModel` / `importGlobalModels` 统一调用，冲突返回 `MODEL_NAME_EXISTS`（含冲突名明细）；admin-web `CustomModelDialog` 与 `ImportModelsDialog` 提交前本地预检并提示「模型名已存在」。
-  - 迁移 `005-model-name-unique-global`（沿用 `agent-api/src/migrations` 既有 runner 模式）：① 扫描 `scope='global'` 存量重名；② 每组保留 `sortOrder` 最小、`createdAt` 最早的一条原名，其余按 `createdAt` 升序改名为 `<name>-2`、`<name>-3`…，逐条日志留痕（old→new）；③ 创建 partial unique index `{name:1}`（`partialFilterExpression: {scope:'global'}`）；④ 幂等（重跑检测无重名且索引已存在则跳过），索引创建失败即抛错中止。
-- **风险点**：改名影响既有按名调用方 → 仅存量重名模型被改名（这些名字在网关下本就路由不确定），迁移日志提供 old→new 对照供运维公告；并发写入在索引建立后由 E11000 兜底，resolver 统一映射为 `MODEL_NAME_EXISTS`。
+  - 迁移 `005-model-name-unique-global`（位于 `servers/admin-api/src/migrations/`，沿用该目录既有 runner + `admin_migrations` 账本/迁移锁模式）：① 扫描 `scope='global'` 存量重名；② 每组保留 `sortOrder` 最小、`createdAt` 最早的一条原名，其余按 `createdAt` 升序改名为 `<name>-2`、`<name>-3`…；③ **每条改名写入一条 `model_rename_records` 对照记录**（`oldName/newName/modelId/providerId/providerName/batchId/renamedAt`，见 §4.1）；④ 创建 partial unique index `{name:1}`（`partialFilterExpression: {scope:'global'}`）；⑤ 幂等（重跑检测无重名且索引已存在则跳过；已写入的对照记录不重复写），索引创建失败即抛错中止。
+  - **改名记录的可查询核对载体（不依赖日志）**：`contracts/admin-llm.graphql` 新增 Query `modelRenameRecords`（§3.1 变更 5）；admin-web 模型配置页新增只读「重名整理记录」入口（折叠面板/弹窗），逐条展示 原名→新名、所属供应商、整理时间，按时间倒序。核对口径：记录条数 == 实际改名模型数，且每条 `oldName → newName` 与库内实际名称一一对应（API 测试逐条比对断言）。
+- **风险点**：改名影响既有按名调用方 → 仅存量重名模型被改名（这些名字在网关下本就路由不确定），`model_rename_records` 提供持久 old→new 对照（后台可查），供运维公告与调用方迁移；并发写入在索引建立后由 E11000 兜底，resolver 统一映射为 `MODEL_NAME_EXISTS`。
 
 ## 6. 技术决策
 
@@ -317,10 +398,13 @@ flowchart TD
 | 更新供应商时模型重同步 | 保留 | 移除 | B | 模型清单完全由手动导入控制，凭据/地址变更不应静默增删模型 |
 | 重名口径 | 供应商内唯一（现状） | `scope=global` 内全局唯一 | B | 计费网关按 `Model.findOne({scope:'global', name})` 寻址（`billing-openai.ts:195`），重名即路由不确定 |
 | 重名兜底 | 仅应用层校验 | 应用层 + 部分唯一索引 | B | 防并发绕过；`user` 作用域用 partial index 隔离不受影响 |
-| 存量重名处理 | 删除重名项 | 仅禁用 | 改名（保留最早原名，其余 `<name>-n`） | 删除丢数据；禁用无法建唯一索引；改名保数据且让寻址确定，日志留痕可核对 |
+| 存量重名处理 | 删除重名项 | 仅禁用 | 改名（保留最早原名，其余 `<name>-n`） | 删除丢数据；禁用无法建唯一索引；改名保数据且让寻址确定，对照记录落库可核对 |
 | 删除能力契约 | 放宽 `deleteGlobalCustomModel` 语义 | 演进为 `deleteGlobalModel` | B | 命名语义清晰；admin-api/admin-web 同仓同步发布，无外部消费方 |
 | 「系统内置」数据来源 | 后端新增字段 | 复用 `Model.scope` / `Provider.scope`，前端补齐查询 | B | 契约已有 `ConfigScope`，后端零改动、口径一致 |
 | 分组折叠实现 | 引入折叠库 | 抽共享 `CollapsibleGroup`（沿用既有手写模式） | B | 两端已有成熟手写折叠模式，不新增依赖 |
+| agent-api 用户侧自动同步 | 与后台一致移除（两侧行为统一） | **保留**用户侧自动同步，仅后台改手动导入 | B | PRD 功能点 1 只约束后台；移除会让用户添加供应商后得到 0 模型且无任何导入入口，构成未定义回归，违反 PRD §4.3/§5.2「前台用户自定义能力保持不变」（打回项 1） |
+| 会话「切换模型」分组 | 按 `provider` 分组、空值兜底「系统内置」 | **移出本期范围**，保持现状；「ACP 侧补来源字段」另立后续需求 | B | ACP configOptions 仅 `{value, name}`（`bridge.ts` L33/L168-178），无来源字段可分组，强行实现退化为单组；「系统内置」兜底会把 Agent 探测模型错误表述为平台内置模型（打回项 2） |
+| 重名整理记录载体 | 仅迁移控制台日志 | 持久化 `model_rename_records` + Query `modelRenameRecords` + 后台只读视图 | B | 日志不可持久查询、无法逐条验收；PRD 要求「改名记录可核对」（打回项 3） |
 
 ### 6.2 依赖与约束
 
@@ -336,27 +420,30 @@ flowchart TD
 
 ```
 contracts/
-└── admin-llm.graphql                        # 新增 ProviderModelOption / listGlobalProviderModels / importGlobalModels / deleteGlobalModel
+└── admin-llm.graphql                        # 新增 ProviderModelOption / listGlobalProviderModels / importGlobalModels / deleteGlobalModel / modelRenameRecords
 servers/admin-api/src/
 ├── models/model.ts                          # 新增 partial unique index（scope=global, name）
-├── migrations/005-model-name-unique-global.ts  # 新增：存量重名整理 + 唯一索引
-├── graphql/schemas/{provider,model}.ts      # SDL 演进
+├── models/model-rename-record.ts            # 新增：改名对照台账（collection model_rename_records）
+├── migrations/005-model-name-unique-global.ts  # 新增：存量重名整理（改名对照落库）+ 唯一索引
+├── graphql/schemas/{provider,model}.ts      # SDL 演进（含 ModelRenameRecord / modelRenameRecords）
 ├── graphql/resolvers/{provider,model}.ts    # 新解析器 / 错误映射
-└── services/{provider,model,llm-api}.ts     # 移除自动导入；assertNamesAvailable / listProviderModels / importModels / delete 放开
+└── services/{provider,model,llm-api}.ts     # 后台移除自动导入；assertNamesAvailable / listProviderModels / importModels / delete 放开
 servers/agent-api/src/
 ├── models/model.ts                          # 同步演进索引定义（保持一致）
-└── services/provider.ts                     # 移除 syncSyncedModels 自动同步
+└── services/provider.ts                     # 不改动：syncSyncedModels 自动同步保留（用户侧行为不变，仅补回归测试）
 apps/admin-web/src/
 ├── components/providers/{ProviderSection,ProviderActionMenu}.tsx  # 「导入模型」入口 / 文案
 ├── components/models/{ModelSection,ModelItem,CustomModelDialog}.tsx  # 分组折叠 / 删除 / 重名校验
 └── components/models/{ModelGroup,ImportModelsDialog,CollapsibleGroup}.tsx  # 新增
+└── components/models/ModelRenameRecordsPanel.tsx  # 新增：「重名整理记录」只读视图
 apps/agent-web/src/
 ├── graphql/queries.ts                       # GET_MODELS / GET_PROVIDERS 补 scope
 └── components/settings/{ModelSection,ModelItem}.tsx  # 分组折叠 +「系统内置」
-└── components/session/ModelSelectDialog.tsx # 分组折叠
+└── components/session/ModelSelectDialog.tsx # 不改动（本期不分组，见 §5.2 实现点 3）
 tests/
-├── api/src/admin-api/llm.test.ts            # 新链路 / 重名 / 删除泛化 / 幂等
-└── e2e/src/admin-model-config.spec.ts       # 导入弹窗、分组折叠、删除、重名提示
+├── api/src/admin-api/llm.test.ts            # 新链路 / 重名 / 删除泛化 / 幂等 / modelRenameRecords
+├── api/src/agent-api/…                      # 回归：用户侧供应商仍自动同步（行为差异锁进测试）
+└── e2e/src/admin-model-config.spec.ts       # 导入弹窗、分组折叠、删除、重名提示、重名整理记录
 ```
 
 ## 8. 测试策略
@@ -364,16 +451,18 @@ tests/
 ### 8.1 测试覆盖要求
 
 - 新增/改动逻辑（service 层）单测覆盖率 ≥ 80%。
-- API 测试覆盖：`listGlobalProviderModels`、`importGlobalModels`、`deleteGlobalModel`、`createGlobalCustomModel` 重名分支、`create/updateGlobalProvider` 不再落模型、迁移 005。
+- API 测试覆盖：`listGlobalProviderModels`、`importGlobalModels`、`deleteGlobalModel`、`modelRenameRecords`、`createGlobalCustomModel` 重名分支、`create/updateGlobalProvider` 不再落模型、迁移 005（改名对照落库条数与改名数一致）。
+- **行为差异锁进测试**：agent-api 用户侧「创建供应商仍自动同步、update 仍重同步」回归断言（防止后续误删 `syncSyncedModels`）。
 - E2E 覆盖 PRD 四个功能点的主验收路径。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | vitest | `ModelService.assertNamesAvailable` / `listProviderModels` / `importModels`（幂等、重名）、`ProviderService.create/update` 不落模型、迁移 005（重名整理规则、幂等、索引生效） |
-| API 契约测试 | tests/api（supertest + 内存 Mongo） | `tests/api/src/admin-api/llm.test.ts`：新增两条链路全分支、错误码（`MODEL_NAME_EXISTS`/`PROVIDER_CONNECTIVITY_ERROR`）、`deleteGlobalModel` 对导入/自定义模型均可删、删除后同名可再导入、并发重名兜底、scope 隔离（`user` 不受唯一索引影响） |
-| E2E | Playwright | `tests/e2e/src/admin-model-config.spec.ts`：创建供应商后无自动导入 + 导入弹窗勾选导入 + 已导入/已存在禁选 + 分组折叠 + 删除确认；agent-web 断言「系统内置」分组、无后台供应商名、切换模型弹窗分组 |
+| 单元测试 | vitest | `ModelService.assertNamesAvailable` / `listProviderModels` / `importModels`（幂等、重名）、`ProviderService.create/update` 不落模型、迁移 005（重名整理规则、`model_rename_records` 写入、幂等、索引生效） |
+| API 契约测试 | tests/api（supertest + 内存 Mongo） | `tests/api/src/admin-api/llm.test.ts`：新增三条链路全分支、错误码（`MODEL_NAME_EXISTS`/`PROVIDER_CONNECTIVITY_ERROR`）、`deleteGlobalModel` 对导入/自定义模型均可删、删除后同名可再导入、并发重名兜底、`modelRenameRecords` 与实际改名一一对应、scope 隔离（`user` 不受唯一索引影响） |
+| API 回归测试 | tests/api | agent-api 用户侧供应商创建/更新仍自动同步模型（`syncSyncedModels` 行为不变） |
+| E2E | Playwright | `tests/e2e/src/admin-model-config.spec.ts`：创建供应商后无自动导入 + 导入弹窗勾选导入 + 已导入/已存在禁选 + 分组折叠 + 删除确认 + 重名整理记录可查；agent-web 断言「系统内置」分组、无后台供应商名、会话「切换模型」不退化 |
 | 回归 | tests/api / tests/e2e 既有用例 | 计费网关寻址、模型启停/排序、用户自定义模型链路不回归 |
 
 ## 9. 部署方案
@@ -389,7 +478,7 @@ tests/
 ### 9.2 配置管理
 
 - 无新增配置项；沿用现有凭据加密密钥与上游超时设置。
-- 迁移 005 随服务启动自动执行（与既有 migrations 一致），执行前建议备份 `models` 集合；迁移输出 old→new 改名清单日志，运维据此公告受影响模型名。
+- 迁移 005 随 admin-api 启动自动执行（`admin_migrations` 账本 + 迁移锁，与既有 migrations 一致），执行前建议备份 `models` 集合；改名对照持久写入 `model_rename_records`（后台「重名整理记录」可查），同时输出摘要日志供运维感知。
 
 ## 10. 验收标准
 
@@ -397,8 +486,10 @@ tests/
 - [ ] Contract（`contracts/admin-llm.graphql`）评审通过
 - [ ] 代码实现完成（admin-api / admin-web / agent-web 及迁移 005）
 - [ ] 单元测试覆盖达标（新增逻辑 ≥ 80%）
-- [ ] API 测试通过（含重名、删除泛化、幂等导入、迁移幂等）
-- [ ] E2E 测试通过（PRD §1.3 成功标准逐条可验证）
+- [ ] API 测试通过（含重名、删除泛化、幂等导入、迁移幂等、`modelRenameRecords` 与实际改名一一对应）
+- [ ] agent-api 用户侧行为回归通过（创建供应商仍自动同步模型，`syncSyncedModels` 不变）
+- [ ] 会话「切换模型」列表不退化（保持现状，无本期改动）
+- [ ] E2E 测试通过（PRD §1.3 成功标准逐条可验证，含后台「重名整理记录」可查）
 
 ## 11. 相关文档
 
