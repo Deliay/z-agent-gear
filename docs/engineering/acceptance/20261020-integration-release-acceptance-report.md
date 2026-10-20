@@ -1,9 +1,9 @@
 ---
-description: integration→release 集成验收报告（AI Review 第十轮独立复核·打回）：网关预检估算低估可致预付费账户透支、x-retry-count 语义混用致一次消费失败直进 DLQ、model_call 事件隔离后无补投线等 3 项必修 + 5 项一般 + 6 项观察
+description: integration→release 集成验收报告（AI Review 第十轮独立复核·打回 + 第十一轮返工复核·打回）：R10 十四项返工逐项核实为真修复且独立复跑全绿，但本 diff 自带的工作负载「必须标记」E2E（T-E17/T-E19）确定性失败（R11-1）、另有 16 项 session/gateway/auth 既有 E2E 失败待统一处置（R11-2）
 type: Permanent
 ---
 
-> **状态**: **第十轮 AI Review 独立复核 · 打回（REJECT）→ 已返工，待第十一轮复核**（修复提交 `d3782e8`，详见第七节）。本轮由 AI Review 节点对 `integration..release` 全量差异（179 文件 / +25953 行）做独立代码审查，**未参考任何历史验收报告**，仅以 PRD / 技术提案 / API 契约为基准。共提出 **14 项**问题：**1 项阻断（R10-1）+ 2 项重要（R10-2、R10-3）+ 5 项一般（R10-4~R10-8）+ 6 项观察（R10-9~R10-14）**。其中 R10-1 直接违反 PRD §3.5「余额不足且不支持透支时拒绝调用」的资金安全不变量，R10-2/R10-3 违反 PRD §4.4「事件不丢失、传递失败自动重试、任何消费都可被计费」，**故本轮打回，要求上游修复后重新提交验收**。
+> **状态**: **第十一轮 AI Review 返工复核 · 打回（REJECT）**（被审对象：返工提交 `d3782e8` + 回填 `8951bc6`，详见第七、八节）。第十轮提出的 **14 项问题（R10-1~R10-14）已逐项核实为真修复**（逐行核对修复落点 + 独立复跑 tsc/单测/构建全绿），资金安全与事件可靠性不变量恢复成立。但本轮对 `origin/release...integration` 全量差异（180 文件 / +27168 行）继续审查时发现 **2 项新问题**：**R11-1（一般·必修）本 diff 新增的工作负载「必须标记」E2E 用例（T-E17/T-E19）对本 diff 新增 UI 确定性失败**，该功能的验收证据无效；**R11-2（一般·必须处置）16 项 session/gateway/auth E2E 既有失败**（两分支同代码，非本 diff 引入，但经第十轮委托「集成验收统一处置」必须给出结论）。**故本轮再次打回**：R11-1 必修后重提；R11-2 至少完成选择器修复或书面登记为已知基线债务。
 
 ## 关联文档
 
@@ -13,10 +13,10 @@ type: Permanent
 | 技术提案 | [[../proposals/20261018-feat-credits-billing.md]]（v2.1）、[[../proposals/20261019-feat-aspire-workload-proxy.md]]（v1.0） |
 | 实现计划 | [[../plan/20261018-feat-credits-billing.md]]、[[../plan/20261019-feat-aspire-workload-proxy.md]] |
 | 契约 | `contracts/admin-billing.graphql`、`contracts/billing.graphql`、`contracts/billing-openai.openapi.yaml`、`contracts/billing-events.asyncapi.yaml`、`contracts/cloud-controller-websocket.md` |
-| 被审分支 | `integration`（5965fe9，与 origin 同步） |
-| 差异范围 | `origin/release...integration`：179 文件变更，+25953 / −77 |
-| 验收日期 | 2026-10-20 |
-| 上游产物 | 修复Review意见节点：无 Review 意见需修复（reworkCount=0，PR #239 无 Review 评论/结论） |
+| 被审分支 | `integration`（第十轮 86ff98d → 第十一轮复核对象 `8951bc6`，与 origin 同步） |
+| 差异范围 | `origin/release...integration`：第十轮 179 文件 / +25953；第十一轮复核时 180 文件 / +27168（含返工 `d3782e8`） |
+| 验收日期 | 2026-10-20（第十轮打回 → 同日返工 → 第十一轮复核） |
+| 上游产物 | 修复Review意见节点（`6ad6e2c93f0a2ef66c91bb2a`）：R10-1~R10-14 修复提交 `d3782e8` + 报告回填 `8951bc6`，PR #239 OPEN |
 
 ## 一、本轮验收范围与方法
 
@@ -158,20 +158,20 @@ type: Permanent
 
 | # | 问题 | 根因 | 级别 | 状态 | 修复 commit |
 |---|------|------|------|------|-------------|
-| R10-1 | 预检估算低估（多模态丢弃 / CJK len/4），预付费账户可透支 | 估算未构成实际费用上界，唯一同步卡点失效 | 阻断 | 待修复 | — |
-| R10-2 | `x-retry-count` 发布/消费语义混用，一次消费失败直进 DLQ | 同一 header 承载两个计数器 | 重要 | 待修复 | — |
-| R10-3 | outbox 隔离过激 + `model_call.*` 无补投线 | 隔离后无复位出口，事件线只覆盖容器 | 重要 | 待修复 | — |
-| R10-4 | `started` 孤儿调用不可发现、UI 显示「完成」 | 对账线状态过滤 + UI 状态映射兜底 | 一般 | 待修复 | — |
-| R10-5 | 充值收据无法查看 | 前端只对 `charge` 开放收据入口 | 一般 | 待修复 | — |
-| R10-6 | 对账中心只暴露 3 条线且标题误标 | 前端硬编码三条 + 标签兜底 | 一般 | 待修复 | — |
-| R10-7 | 账单筛选（时间/类型/来源）缺失 | 前端未透传已支持的 GraphQL 变量 | 一般 | 待修复 | — |
-| R10-8 | Anthropic 路径缺中断写保护 | 与 OpenAI 路径保护不对称 | 一般 | 待修复 | — |
-| R10-9 | Anthropic 缓存 token 口径不一致 | provider usage 语义未归一 | 观察 | 待修复/声明 | — |
-| R10-10 | 错误 `type` 枚举越界、500/502 未入契约 | 契约与实现漂移 | 观察 | 待修复 | — |
-| R10-11 | 每日对账无补跑 | cron 按分钟精确匹配 | 观察 | 待修复 | — |
-| R10-12 | preCheck 自铸，来源校验弱于文档 | 凭证签发点在扣费侧 | 观察 | 待澄清 | — |
-| R10-13 | 提案公式/prefetch 口径与实现不符 | 文档未随实现更新 | 观察 | 待更正 | — |
-| R10-14 | `stream`/`messages` 未严格校验 | 入参宽松 | 观察 | 待修复 | — |
+| R10-1 | 预检估算低估（多模态丢弃 / CJK len/4），预付费账户可透支 | 估算未构成实际费用上界，唯一同步卡点失效 | 阻断 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-2 | `x-retry-count` 发布/消费语义混用，一次消费失败直进 DLQ | 同一 header 承载两个计数器 | 重要 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-3 | outbox 隔离过激 + `model_call.*` 无补投线 | 隔离后无复位出口，事件线只覆盖容器 | 重要 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-4 | `started` 孤儿调用不可发现、UI 显示「完成」 | 对账线状态过滤 + UI 状态映射兜底 | 一般 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-5 | 充值收据无法查看 | 前端只对 `charge` 开放收据入口 | 一般 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-6 | 对账中心只暴露 3 条线且标题误标 | 前端硬编码三条 + 标签兜底 | 一般 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-7 | 账单筛选（时间/类型/来源）缺失 | 前端未透传已支持的 GraphQL 变量 | 一般 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-8 | Anthropic 路径缺中断写保护 | 与 OpenAI 路径保护不对称 | 一般 | ✅ 已修复并经第十一轮核实 | d3782e8 |
+| R10-9 | Anthropic 缓存 token 口径不一致 | provider usage 语义未归一 | 观察 | ✅ 已修复（usage 归一） | d3782e8 |
+| R10-10 | 错误 `type` 枚举越界、500/502 未入契约 | 契约与实现漂移 | 观察 | ✅ 已修复（契约补齐） | d3782e8 |
+| R10-11 | 每日对账无补跑 | cron 按分钟精确匹配 | 观察 | ✅ 已修复（≥24h 补跑） | d3782e8 |
+| R10-12 | preCheck 自铸，来源校验弱于文档 | 凭证签发点在扣费侧 | 观察 | ✅ 已如实限定（提案 + credit-check 注释） | d3782e8 |
+| R10-13 | 提案公式/prefetch 口径与实现不符 | 文档未随实现更新 | 观察 | ✅ 已更正（提案） | d3782e8 |
+| R10-14 | `stream`/`messages` 未严格校验 | 入参宽松 | 观察 | ✅ 已修复（严格校验 + 400 用例） | d3782e8 |
 
 ## 四、最终验证（本轮独立复跑）
 
@@ -242,4 +242,87 @@ type: Permanent
 | tests/api（真实 Aspire 编排） | ✅ 453 passed / 1 skipped |
 | tests/e2e 计费套件 | ✅ 3 passed（`billing.spec.ts`、`admin-billing.spec.ts`） |
 | tests/e2e 全量 | ⚠️ 183 passed / 47 failed（首轮）；重启 Aspire 清库后复跑相关 47 项，28 passed / 19 failed。剩余失败集中在 session/gateway/admin-cloud 的既有选择器 strict-mode 与侧边栏文案，与本次计费改动无交集，待集成验收统一处置 |
+
+## 八、第十一轮 AI Review 返工复核记录（2026-10-20）
+
+> 被审对象：返工提交 `d3782e8`（代码）+ `8951bc6`（报告回填）。复核方式：对返工 diff **逐行独立审读**（不采信第七节自述），并独立复跑验证。
+
+### 8.1 R10 十四项修复逐项核验（全部为真修复 ✅）
+
+| # | 核验落点（本轮逐行确认） | 结论 |
+|---|--------------------------|------|
+| R10-1 | `billing-openai.ts`：`estimatePromptTextTokens`（UTF-8 字节/可配置倍率，`Math.max(1, …)` 钳位）、`estimateContentTokens`（image/audio/file 固定高估 8192/16384/16384、tool_calls 计序列化字节 + 固定开销、未知块「绝不返回 0」）、`estimateRequestTokens`（messages+tools 全量）、`estimateCost` 改 `max(input, cached)` 单价；缺省 `max_tokens` 注入上游硬上限（OpenAI 路径 `basePayload` 与 Anthropic 路径 `max_tokens: input.maxOutputTokens` 同源）；预检链路 `promptTokens → creditCheck.estimatedCredits` 不变量恢复成立 | ✅ |
+| R10-2 | `mq/consumers.ts`：消费侧重试独立 `x-consumer-retry`，`wasRedelivered()` 只认消费侧计数/`msg.fields.redelivered`；`mq/publisher.ts:157` 与 cloud `billing-event-publisher.ts:331` 改发 `x-publish-attempts`；结算链补投门改用 `redelivered`，发布 attempts 不再触发 DLQ/补投 | ✅ |
+| R10-3 | 传输级/消息级失败分流（`isMessageLevelRejection`：仅 AMQP replyCode 或 NO_ROUTE 等拒绝码烧 attempts）；relay 失败轮 2s→4s→8s→16s→30s 退避（`nextDelayMs`）；`reconcileApiCalls` 新增 `model_call.*` 隔离行自动复位 + 发现即补投（复用 `repairEvent`，`repairOf` 收敛护栏、eventId 撞索引分派 requeue/代偿） | ✅ |
+| R10-4 | UI `started` 显示「进行中/异常」（admin/agent 两端）；`apiCalls` 线新增 `started/failed` 且超孤儿阈值（默认 30min）检查；契约 `admin-billing.graphql` 状态注释补 `started` | ✅ |
+| R10-5 | `InvoiceTable.tsx` / agent `BillingPage.tsx` 改为 `type==='charge' || receiptId` 开放收据（两查询均已含 `receiptId` 字段） | ✅ |
+| R10-6 | `ReconciliationPage.tsx` 补全 7 条线 + `LINE_LABELS` 全量映射并回退原始 line；契约注释同步 | ✅ |
+| R10-7 | 两端账单明细接入开始/结束日期、类型（charge/recharge/adjust）、来源（container/model/manual）筛选并透传 GraphQL 变量，切筛选重置页码 | ✅ |
+| R10-8 | Anthropic 非流式/流式所有 `res.write/res.end/res.json` 前判断 `aborted && writableEnded`；OpenAI 非流式两处补同标准保护 | ✅ |
+| R10-9 | `applyAnthropicUsage`：`input = input_tokens + cache_read + cache_creation`、`cached = cache_read`，`cached ⊆ input` 成立（流式 `message_start`/非流式统一走该函数） | ✅ |
+| R10-10 | `billing-openai.openapi.yaml` 补 `account_not_found` 枚举与 500/502 响应声明 | ✅ |
+| R10-11 | `scheduler.ts` 改「距上次成功 ≥ 24h 补跑」，失败不更新水位、`reconRunning` 防重入 | ✅ |
+| R10-12 | 技术提案 §5.2 与 `credit-check.verify` 注释如实限定（只证凭证存在/未过期/account+ref 一致，不证来源） | ✅ |
+| R10-13 | 提案判定公式更正（`available - estimated >= 0`，available 已含授信）、prefetch=10、退避与配置表口径同步 | ✅ |
+| R10-14 | `stream` 必须布尔、`max_tokens` 必须正整数、`messages` 非空，违例 400 且不打上游（有用例） | ✅ |
+
+**资金安全独立验证**：本轮重点复核「补投不双扣」——`reconcileApiCalls` 补投走 `repairEvent`，其 `model_call.*` 消费链最终经 `handleModelCallEvent → chargeAndInvoice`，`idempotentKey: charge:model:${resourceId}` / `invoiceKey: invoice:model:${resourceId}` 为业务幂等键（与 eventId 无关），代偿行（`…:repair:<ts>`）重放不会重复扣费/重复开票；`repairOf` 护栏保证每个原始事件至多补投一次。**结论：R10-3 修复无双扣风险**。
+
+### 8.2 本轮独立复跑（不引用上游数据）
+
+| 项目 | 命令 | 结果 |
+|------|------|------|
+| 类型检查 admin-api / agent-api / cloud-controller | `npx tsc --noEmit` ×3 | ✅ 0 error |
+| 单测 admin-api | `npx vitest run` | ✅ 554 passed / 1 skipped（55 文件） |
+| 单测 agent-api | `npx vitest run` | ✅ 658 passed（46 文件） |
+| 单测 cloud-controller | `npx vitest run` | ✅ 198 passed（14 文件） |
+| 单测 + 构建 admin-web | `npx vitest run` + `npm run build` | ✅ 207 passed，构建通过 |
+| 单测 + 构建 agent-web | `npx vitest run` + `npm run build` | ✅ 430 passed，构建通过 |
+| tests/api / tests/e2e | 本轮未重复起 Aspire 编排 | 引用返工轮记录：tests/api 453 passed / 1 skipped；tests/e2e 计费套件 3 passed；tests/e2e 全量剩 19 failed（见 R11-1/R11-2） |
+
+### 8.3 本轮新发现问题
+
+#### R11-1【一般·必修】本 diff 新增的工作负载「必须标记」E2E 用例确定性失败，验收证据无效
+
+- **问题描述**：`tests/e2e/src/admin-cloud-container.spec.ts` 的 **T-E17（:332）** 与 **T-E19（:439）** 是本 diff 新增用例（`release` 基线无此两用例、无「必须」相关断言），被测 UI（`StartContainerDialog` 必须开关、`WorkloadLogsDialog` 必须徽标）同样是本 diff 新增。两用例对本 diff 自身的 UI **必然失败**（非偶发）：
+  1. **T-E17**：`dialog.getByRole('checkbox', { name: withInit.name })` 撞 strict-mode——必须开关渲染后 `aria-label='e2e-req-init-xxx 必须'` 与工作负载多选项 `aria-label='e2e-req-init-xxx'` 同时命中（Playwright name 匹配为子串），2 elements → click 失败（证据：`tests/e2e/test-results/admin-cloud-container-Admi-82dad-orkloads-with-an-initScript/error-context.md`）；
+  2. **T-E19**：`dialog.getByText('必须', { exact: true })` 撞 strict-mode——选中 `required` 记录时 `WorkloadLogsDialog.tsx:120-122`（列表行徽标）与 `:141-143`（详情面板）各渲染一次「必须」，2 elements → `toBeVisible()` 失败（证据：`tests/e2e/test-results/admin-cloud-container-Admi-cce4f-tory-unmarked-direct-Mongo-/error-context.md`）。
+- **根因分析**：用例选择器未对同名子串/重复文案做消歧（缺 `exact: true` 或作用域限定）；该 spec 合入前未在真实 UI 上跑绿过，导致「工作负载必须标记」（PRD 工作负载三期验收项）的 E2E 回归**形同虚设**。UI 行为本身经代码审读符合设计（开关仅对 initScript 工作负载展示、取消勾选即清除），缺陷在测试侧。
+- **修复方案**：
+  1. T-E17：工作负载多选 checkbox 点击处改 `getByRole('checkbox', { name: withInit.name, exact: true })`，必须开关保持 `name: \`${withInit.name} 必须\``；
+  2. T-E19：「必须」断言限定到详情面板作用域（或改用 `getByText('必须', { exact: true }).first()` 并补断言列表行徽标），历史记录断言同步；
+  3. 修复后在真实 Aspire 编排下复跑 `admin-cloud-container.spec.ts` **全文件**并把结果回填本报告。
+- **验证结果（本轮）**：✅ 已核实两用例为本 diff 新增且失败根因如上；❌ 修复待上游完成。
+
+#### R11-2【一般·必须处置】16 项 session/gateway/auth E2E 既有失败，全量 E2E 质量门长期不绿（第十轮委托「集成验收统一处置」）
+
+- **问题描述**：全量 E2E 剩余 19 项失败中 16 项属 session（9）/gateway（6）/auth（1）：
+  - session 系：`getByRole('button', { name: '新建会话' })` strict-mode——侧边栏 `Sidebar.tsx:358-360`（`aria-label="新建会话"`）与页面头部 `SessionPage.tsx:48` 同时渲染，2 elements（9 个用例全部倒在同一前置步骤）；
+  - gateway 系（6）与 auth（1）：`locator('nav[aria-label="Sidebar"]').getByText('统一网关'/'会话')` 永远不可见——侧边栏导航为图标链接、可访问名由 `title` 属性承载（`Sidebar.tsx:187/233`），`getByText` 匹配不到文本节点。
+- **归属判定（本轮实证）**：上述 spec（`session*.spec.ts`/`gateway.spec.ts`/`auth.spec.ts`）与相关 UI（`Sidebar.tsx`/`SessionPage.tsx`）在 `release` 与 `integration` **两分支逐行同代码**（`release...integration` 对这些文件无差异，Sidebar 的 diff 仅新增计费导航项），**失败与本 diff 无关、属既有测试腐化**（图标化侧边栏/双入口按钮改版后未同步适配 spec）。因此不构成对本集成变更的功能性打回理由。
+- **处置要求（集成验收统一处置结论）**：以下二选一，且必须在本报告登记结论后随重提提交：
+  1. **修复（推荐）**：给 16 项 spec 做选择器适配（`exact: true`、按 `title`/`aria-label` 定位导航链接、页面头部按钮加精确作用域），使全量 E2E 转绿；或
+  2. **书面登记为已知基线债务**：在本报告与发布说明中明示「release 基线全量 E2E 即不绿」的 16 项清单、根因、修复责任与计划，明确其不得作为本集成的功能回归信号，同时不得掩盖 R11-1 类**本 diff 引入**的失败。
+- **验证结果（本轮）**：✅ 归属判定已实证（两分支同代码）；❌ 处置结论待上游给出。
+
+#### 观察项（不阻断，随下轮一并收口）
+
+- **R11-3【观察】** `AdminOutboxPublisher.start()` / cloud `BillingEventPublisher.start()` 退避改造后：`start()` 二次调用可在首个 `setTimeout` 落位前并发拉起双 relay 循环；`stop()` 后在途 `run()` 仍会续排 `setTimeout`（unref 定时器、进程退出无碍，但 stop 语义不严密）。建议以 `started` 标志在重排前判活。
+- **R11-4【观察】** R10-1 的「估算 ≥ 实际」上界性质仅在各模态固定高估常量（image 8192 / audio 16384 / file 16384 token）覆盖真实用量时严格成立；超长音频/超大文件输入（如 30min+ 音频）实际 token 可能超过常量。建议对 audio/file 增加请求体积/时长上限，或按 `max(常量, 序列化字节/倍率)` 取上界，并在契约中声明各模态上限。
+- **R11-5【观察】** `config.billingReconCron` 在 R10-11 改造后已无消费方（死配置）；提案配置表已改 `BILLING_RECON_INTERVAL_MS`，建议删除该配置或注明废弃。
+- **R11-6【观察】** `estimateRequestTokens(messages, body.tools)` 未计入已废弃的 legacy `body.functions`；仅影响仍传 `functions` 的调用方，建议顺手补计或显式拒绝。
+
+### 8.4 第十一轮结论与打回理由
+
+1. **R10-1~R10-14 全部为真修复**：资金安全（预检上界、补投业务幂等防双扣）与事件可靠性（重试头隔离、传输/消息级失败分流、隔离复位与补投线）不变量经逐行核验恢复成立，独立复跑 tsc ×3 + 单测 2047 passed / 1 skipped + 前端构建全绿，与上游自述一致。
+2. **但 `integration..release` 的交付物中，本 diff 新增的 E2E 验收证据无效（R11-1）**：T-E17/T-E19 确定性红，工作负载「必须标记」功能没有可运行的 E2E 回归背书，不符合「随代码交付可绿回归」的集成验收要求。
+3. **R11-2 需按 8.3 处置要求给出明确结论**（推荐修选择器），不得以「与计费无关」为由默认放行。
+
+**处置：第十一轮 AI Review 打回（REJECT）**。请上游：① 修复 R11-1 两用例选择器并复跑 `admin-cloud-container.spec.ts` 全绿回填；② 对 R11-2 按「修复或书面登记基线债务」二选一给出结论并回填；③ 观察项 R11-3~R11-6 可随本次返工一并收口（非必须）。完成后重新提交 integration 验收（第十二轮）。
+
+### 8.5 本轮经验沉淀
+
+1. **新增 UI 的 E2E 必须先跑绿再合入**：spec 与 UI 同 PR 交付时，「用例写完没跑过」等价于没有回归；strict-mode 命中是这类问题最快的暴露信号。
+2. **`getByRole(name)` 默认子串匹配**：存在派生命名（`<name>` 与 `<name> 必须`）时必须 `exact: true` 或换唯一作用域；`getByText` 同理防多节点。
+3. **既有失败与变更引入的失败要分开定性**：先做「两分支同代码」基线比对再定归属，避免把测试腐化记到本次变更头上，也避免用「既有」掩盖本 diff 的新失败。
 
