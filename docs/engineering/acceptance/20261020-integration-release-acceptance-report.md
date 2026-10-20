@@ -3,7 +3,7 @@ description: integration→release 集成验收报告（AI Review 第十轮独�
 type: Permanent
 ---
 
-> **状态**: **第十轮 AI Review 独立复核 · 打回（REJECT）**。本轮由 AI Review 节点对 `integration..release` 全量差异（179 文件 / +25953 行）做独立代码审查，**未参考任何历史验收报告**，仅以 PRD / 技术提案 / API 契约为基准。共提出 **14 项**问题：**1 项阻断（R10-1）+ 2 项重要（R10-2、R10-3）+ 5 项一般（R10-4~R10-8）+ 6 项观察（R10-9~R10-14）**。其中 R10-1 直接违反 PRD §3.5「余额不足且不支持透支时拒绝调用」的资金安全不变量，R10-2/R10-3 违反 PRD §4.4「事件不丢失、传递失败自动重试、任何消费都可被计费」，**故本轮打回，要求上游修复后重新提交验收**。
+> **状态**: **第十轮 AI Review 独立复核 · 打回（REJECT）→ 已返工，待第十一轮复核**（修复提交 `d3782e8`，详见第七节）。本轮由 AI Review 节点对 `integration..release` 全量差异（179 文件 / +25953 行）做独立代码审查，**未参考任何历史验收报告**，仅以 PRD / 技术提案 / API 契约为基准。共提出 **14 项**问题：**1 项阻断（R10-1）+ 2 项重要（R10-2、R10-3）+ 5 项一般（R10-4~R10-8）+ 6 项观察（R10-9~R10-14）**。其中 R10-1 直接违反 PRD §3.5「余额不足且不支持透支时拒绝调用」的资金安全不变量，R10-2/R10-3 违反 PRD §4.4「事件不丢失、传递失败自动重试、任何消费都可被计费」，**故本轮打回，要求上游修复后重新提交验收**。
 
 ## 关联文档
 
@@ -206,3 +206,40 @@ type: Permanent
 3. **隔离必须配复位出口**：任何「超过 N 次即隔离」的机制都要有自动 sweep / 对账补投线，且补投线的覆盖范围要与事件生产者范围一致（本例漏了 admin-api 自产的 `model_call.*`）。
 4. **对账线数量变化必须同步 UI 与契约**：后端新增对账线时，前端标签映射与 GraphQL 注释是同一契约的一部分。
 5. **两条相似路径要同标准**：OpenAI / Anthropic 两条转发路径的中断写保护必须一致，差异点是崩溃面。
+
+## 七、R10 返工修复记录（2026-10-20）
+
+> 修复提交：`d3782e8`（integration）。第十一轮复核请以本提交为被审对象。
+
+| # | 修复内容 | 关键落点 | 回归用例 |
+|---|----------|----------|----------|
+| R10-1 | 预检输入改为 UTF-8 字节保守估算（默认 1 token/字节，可配置），图片/音频/文件/工具参数固定高估；输入单价取 `max(input, cached)`；缺省 `max_tokens` 注入上游硬上限 | `billing-openai.ts`、`config/index.ts` | CJK/多模态/tool_calls「估算 ≥ 实际」断言；`billing-openai.test.ts` |
+| R10-2 | 消费侧重试独立为 `x-consumer-retry`；发布侧改为 `x-publish-attempts`；结算链补投改用消费侧重投/`redelivered` | `mq/consumers.ts`、`mq/publisher.ts`、cloud `billing-event-publisher.ts` | 发布 attempts 不触发 DLQ/补投；`redelivered` 可补投 |
+| R10-3 | 传输级失败不消耗 per-message attempts，relay 失败 2s→30s 指数退避；`model_call.*` 隔离行自动复位，`apiCalls` 线发现即补投 | `mq/publisher.ts`、`billing-event-publisher.ts`、`reconciliation.ts` | 传输/消息级失败分流；隔离复位；cost-without-invoice 补投 |
+| R10-4 | UI 对 `started` 显示「进行中/异常」；`apiCalls` 线新增超时 `started/failed` 孤儿检查；契约状态注释补齐 | admin/agent `BillingPage.tsx`、`reconciliation.ts`、`contracts/admin-billing.graphql` | 孤儿调用报告用例 |
+| R10-5 | 充值账单在存在 `receiptId` 时同样可查看收据 | admin `InvoiceTable.tsx`、agent `BillingPage.tsx` | 前台充值收据用例 |
+| R10-6 | 对账中心补全 7 条线，标题全量映射并回退原始 line | `ReconciliationPage.tsx`、契约注释 | 构建 + 对账中心 E2E |
+| R10-7 | 账单明细接入时间范围/类型/来源筛选，变更重置页码 | admin/agent `BillingPage.tsx` | 构建 + 页面单测 |
+| R10-8 | Anthropic 非流式/流式所有写响应前判断 `aborted`/`writableEnded` | `billing-openai.ts` | 与 OpenAI 路径同标准 |
+| R10-9 | Anthropic usage 归一：`input = input + cache_read + cache_creation`，`cached = cache_read` | `billing-openai.ts` | usage 归一化单测 |
+| R10-10 | 契约补齐 `account_not_found` 与 500/502 响应 | `contracts/billing-openai.openapi.yaml` | 契约审阅 |
+| R10-11 | 每日对账改为「距上次成功 ≥ 24h 补跑」，失败不更新水位 | `scheduler.ts`、`config/index.ts` | 24h 补跑单测 |
+| R10-12 | 提案如实限定 preCheck 只校验存在/未过期/account+ref，不证明来源 | 技术提案 §5.2 | 文档 |
+| R10-13 | 更正提案判定公式（available 已含授信）、prefetch=10、退避与默认值 | 技术提案 | 文档 |
+| R10-14 | 严格校验 `stream` 布尔、`max_tokens` 正整数、messages 非空 | `billing-openai.ts` | 网关 400 用例 |
+
+### 本轮独立复跑
+
+| 项目 | 结果 |
+|------|------|
+| `tsc --noEmit`（admin-api / cloud-controller） | ✅ 0 error |
+| `npm run build`（admin-web / agent-web） | ✅ 通过 |
+| Vitest admin-api | ✅ 554 passed / 1 skipped |
+| Vitest agent-api | ✅ 658 passed |
+| Vitest cloud-controller | ✅ 198 passed |
+| Vitest admin-web | ✅ 207 passed |
+| Vitest agent-web | ✅ 430 passed |
+| tests/api（真实 Aspire 编排） | ✅ 453 passed / 1 skipped |
+| tests/e2e 计费套件 | ✅ 3 passed（`billing.spec.ts`、`admin-billing.spec.ts`） |
+| tests/e2e 全量 | ⚠️ 183 passed / 47 failed（首轮）；重启 Aspire 清库后复跑相关 47 项，28 passed / 19 failed。剩余失败集中在 session/gateway/admin-cloud 的既有选择器 strict-mode 与侧边栏文案，与本次计费改动无交集，待集成验收统一处置 |
+
