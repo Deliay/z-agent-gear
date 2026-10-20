@@ -25,11 +25,13 @@ describe('ModelRenameRecordService', () => {
         renamedAt: new Date('2026-10-20T08:00:00.000Z'),
       },
     ]);
-    (ModelRenameRecord.find as any).mockReturnValue({ sort: vi.fn().mockReturnValue({ lean }) });
+    const sort = vi.fn().mockReturnValue({ lean });
+    (ModelRenameRecord.find as any).mockReturnValue({ sort });
 
     const result = await modelRenameRecordService.findAll();
 
     expect(ModelRenameRecord.find).toHaveBeenCalledWith();
+    expect(sort).toHaveBeenCalledWith({ renamedAt: -1, _id: -1 });
     expect(result).toEqual([
       {
         id: 'record-1',

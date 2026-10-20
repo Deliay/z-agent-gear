@@ -114,7 +114,7 @@ export default function ModelItem({
         </Button>
       )}
       <Switch
-        checked={model.isEnabled && canToggle}
+        checked={model.isEnabled}
         onCheckedChange={() => canToggle && onToggle(model.id)}
         disabled={!canToggle}
         title={readOnlyToggle ? '系统内置模型不可修改' : undefined}

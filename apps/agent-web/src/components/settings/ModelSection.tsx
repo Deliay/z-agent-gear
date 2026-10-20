@@ -70,7 +70,7 @@ export default function ModelSection() {
     const map = new Map<string, ModelGroupData>()
     for (const model of models) {
       if (model.scope === 'global') continue
-      const key = model.providerId || 'unknown'
+      const key = model.provider ? model.providerId : 'unknown'
       if (!map.has(key)) {
         map.set(key, {
           key,

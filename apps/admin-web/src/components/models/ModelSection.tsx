@@ -58,7 +58,7 @@ export default function ModelSection() {
     const order: string[] = []
     const map = new Map<string, ModelGroupData>()
     for (const model of models) {
-      const key = model.providerId || 'unknown'
+      const key = model.provider ? model.providerId : 'unknown'
       if (!map.has(key)) {
         map.set(key, { key, title: model.provider?.name ?? '未知供应商', models: [] })
         order.push(key)

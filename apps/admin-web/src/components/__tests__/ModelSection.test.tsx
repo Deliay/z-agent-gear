@@ -173,13 +173,21 @@ describe('ModelSection', () => {
     expect(screen.queryByText('model-b')).toBeNull()
   })
 
-  it('T-W7: puts models with a dangling provider into 未知供应商', () => {
-    setupQueries([model('x', { providerId: '', provider: undefined, name: 'orphan' })])
+  it('T-W7: merges models with different dangling providerIds into a single 未知供应商 group', () => {
+    setupQueries([
+      model('x1', { providerId: '', provider: undefined, name: 'orphan-1' }),
+      model('x2', { providerId: 'gone-2', provider: undefined, name: 'orphan-2' }),
+    ])
     render(<ModelSection />)
 
-    expect(screen.getByRole('button', { name: /未知供应商/ })).toBeDefined()
+    const headers = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-expanded'))
+    expect(headers).toHaveLength(1)
+    expect(headers[0].textContent).toContain('未知供应商')
+    expect(headers[0].textContent).toContain('2')
+
     expandAllGroups()
-    expect(screen.getByText('orphan')).toBeDefined()
+    expect(screen.getByText('orphan-1')).toBeDefined()
+    expect(screen.getByText('orphan-2')).toBeDefined()
   })
 
   it('T-W8: ignores a cross-group drag', async () => {
@@ -217,17 +225,16 @@ describe('ModelSection', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('模型已删除')
   })
 
-  it('T-W6: disables the switch when the parent provider is disabled', () => {
+  it('T-W6: disables the switch when the parent provider is disabled but keeps the real state', () => {
     setupQueries([
       model('a', { provider: { id: 'p1', name: 'Disabled', type: 'OpenAI', isEnabled: false, scope: 'global' } }),
     ])
     render(<ModelSection />)
     expandAllGroups()
 
-    expect(screen.getByRole('switch', { name: '启用 model-a' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
+    const sw = screen.getByRole('switch', { name: '启用 model-a' })
+    expect(sw).toHaveAttribute('aria-disabled', 'true')
+    expect(sw).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('供应商已禁用')).toBeDefined()
   })
 

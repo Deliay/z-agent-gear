@@ -116,6 +116,12 @@ export default function ImportModelsDialog({
       await refetch()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '导入失败，请重试')
+      // 并发导入可能仅部分落库（唯一索引兜底），刷新一次以展示已成功导入的条目
+      try {
+        await refetch()
+      } catch {
+        // 刷新失败不覆盖原始导入错误提示
+      }
     }
   }
 
@@ -127,9 +133,9 @@ export default function ImportModelsDialog({
           <DialogDescription>从「{providerName}」拉取上游模型清单并勾选导入</DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {loading && !data ? (
           <div className="text-sm text-muted-foreground">加载中...</div>
-        ) : error ? (
+        ) : error && !data ? (
           <QueryError message={error.message} onRetry={() => refetch()} />
         ) : options.length === 0 ? (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">

@@ -296,40 +296,59 @@ describe('Admin Global LLM API', () => {
 
   it('T-P2b: updating a provider no longer resyncs models', async () => {
     const alt = await startMockServer(['alt-model-a', 'alt-model-b']);
-    const name = `global-upd-nosync-${Date.now()}`;
-    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
-      input: {
-        name,
-        type: 'OpenAI',
-        endpoint: `http://127.0.0.1:${mock.port}/v1`,
-        credentialType: 'api_key',
-        credentialValue: 'sk-test-fake-key',
-      },
-    }, token);
-    const id = created.data!.createGlobalProvider.id;
-    const before = await adminGql<{ adminModelsByProvider: Array<{ id: string }> }>(
-      MODELS_BY_PROVIDER, { providerId: id }, token,
-    );
-    expect(before.data!.adminModelsByProvider).toEqual([]);
+    let id = '';
+    const stamp = Date.now();
+    const keepNames = [`keep-a-${stamp}`, `keep-b-${stamp}`];
 
-    const updated = await adminGql(UPDATE_PROVIDER, {
-      id,
-      input: {
-        name: `${name}-renamed`,
-        type: 'OpenAI',
-        endpoint: `http://127.0.0.1:${alt.port}/v1`,
-        credentialType: 'api_key',
-        credentialValue: '',
-      },
-    }, token);
-    expect(updated.errors).toBeUndefined();
+    try {
+      const name = `global-upd-nosync-${stamp}`;
+      const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+        input: {
+          name,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      }, token);
+      id = created.data!.createGlobalProvider.id;
 
-    const after = await adminGql<{ adminModelsByProvider: Array<{ id: string }> }>(
-      MODELS_BY_PROVIDER, { providerId: id }, token,
-    );
-    expect(after.data!.adminModelsByProvider).toEqual([]);
-    await adminGql(DELETE_PROVIDER, { id }, token);
-    await alt.close();
+      const imported = await adminGql(IMPORT_MODELS, { providerId: id, names: keepNames }, token);
+      expect(imported.errors).toBeUndefined();
+
+      const before = await adminGql<{ adminModelsByProvider: Array<{ id: string; name: string }> }>(
+        MODELS_BY_PROVIDER, { providerId: id }, token,
+      );
+      expect(before.data!.adminModelsByProvider.map((m) => m.name).sort()).toEqual([...keepNames].sort());
+
+      const updated = await adminGql(UPDATE_PROVIDER, {
+        id,
+        input: {
+          name: `${name}-renamed`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${alt.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: '',
+        },
+      }, token);
+      expect(updated.errors).toBeUndefined();
+
+      const after = await adminGql<{ adminModelsByProvider: Array<{ id: string; name: string }> }>(
+        MODELS_BY_PROVIDER, { providerId: id }, token,
+      );
+      const afterModels = after.data!.adminModelsByProvider;
+      // 不增：新上游清单未被导入；不减：原模型与 id 均原样保留
+      expect(afterModels.map((m) => m.name).sort()).toEqual([...keepNames].sort());
+      expect(afterModels.map((m) => m.id).sort()).toEqual(
+        before.data!.adminModelsByProvider.map((m) => m.id).sort(),
+      );
+      expect(afterModels.map((m) => m.name)).not.toEqual(
+        expect.arrayContaining(['alt-model-a', 'alt-model-b']),
+      );
+    } finally {
+      if (id) await adminGql(DELETE_PROVIDER, { id }, token);
+      await alt.close();
+    }
   });
 
   it.skipIf(!process.env.MONGODB_URI)('T-MR1: the rename ledger matches actual renames one-to-one', async () => {
@@ -343,7 +362,7 @@ describe('Admin Global LLM API', () => {
     expect(records.errors).toBeUndefined();
     const list = records.data!.modelRenameRecords;
     expect(list.every((r) => r.batchId === '20261020-005')).toBe(true);
-    expect(new Set(list.map((r) => r.modelId)).size).toBe(list.length);
+    expect(new Set(list.map((r) => `${r.oldName}->${r.newName}`)).size).toBe(list.length);
     for (const record of list) {
       expect(record.oldName).not.toBe(record.newName);
       expect(record.providerName.length).toBeGreaterThan(0);
@@ -525,11 +544,7 @@ describe('Admin Global LLM API', () => {
     }
   });
 
-  it.skipIf(!process.env.MONGODB_URI)('T-MU2: concurrent imports of the same name yield exactly one winner', async () => {
-    const uri = process.env.MONGODB_URI!;
-    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
-    const db = mongoose.connection.db!;
-
+  it('T-MU2: concurrent imports of the same name yield exactly one winner', async () => {
     const makeProvider = async (suffix: string) => {
       const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
         input: {
@@ -559,8 +574,11 @@ describe('Admin Global LLM API', () => {
       expect(failed).toHaveLength(1);
       expect(failed[0].errors![0].message).toMatch(/Model name already exists/);
 
-      const count = await db.collection('models').countDocuments({ scope: 'global', name: raceName });
-      expect(count).toBe(1);
+      // 通过公开查询核对库内仅 1 条（不依赖 MONGODB_URI）
+      const all = await adminGql<{ adminModels: Array<{ name: string; scope: string }> }>(
+        MODELS, undefined, token,
+      );
+      expect(all.data!.adminModels.filter((m) => m.name === raceName)).toHaveLength(1);
     } finally {
       await adminGql(DELETE_PROVIDER, { id: a }, token);
       await adminGql(DELETE_PROVIDER, { id: b }, token);
@@ -588,28 +606,26 @@ describe('Admin Global LLM API', () => {
     }
   });
 
-  it.skipIf(!process.env.MONGODB_URI)('T-MI5: normalizes upstream failures for list/import and writes nothing', async () => {
-    const uri = process.env.MONGODB_URI!;
-    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
-    const db = mongoose.connection.db!;
-
-    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
-      input: {
-        name: `global-import-down-${Date.now()}`,
-        type: 'OpenAI',
-        endpoint: `http://127.0.0.1:${mock.port}/v1`,
-        credentialType: 'api_key',
-        credentialValue: 'sk-test-fake-key',
-      },
-    }, token);
-    const providerId = created.data!.createGlobalProvider.id;
+  it('T-MI5: normalizes upstream failures for list/import and writes nothing', async () => {
+    const down = await startMockServer();
+    let downClosed = false;
+    let providerId = '';
 
     try {
-      // 直写端点模拟上游不可用（正常更新路径会先做连通性校验，无法构造失败态）
-      await db.collection('providers').updateOne(
-        { _id: new mongoose.Types.ObjectId(providerId) },
-        { $set: { endpoint: 'http://127.0.0.1:1/v1' } },
-      );
+      const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+        input: {
+          name: `global-import-down-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${down.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      }, token);
+      providerId = created.data!.createGlobalProvider.id;
+
+      // 关闭专用 mock 上游，无需直写 DB 即可构造不可用状态
+      await down.close();
+      downClosed = true;
 
       const listed = await adminGql(LIST_PROVIDER_MODELS, { providerId }, token);
       expect(listed.errors).toBeDefined();
@@ -624,7 +640,8 @@ describe('Admin Global LLM API', () => {
       );
       expect(models.data!.adminModelsByProvider).toEqual([]);
     } finally {
-      await adminGql(DELETE_PROVIDER, { id: providerId }, token);
+      if (!downClosed) await down.close();
+      if (providerId) await adminGql(DELETE_PROVIDER, { id: providerId }, token);
     }
   });
 

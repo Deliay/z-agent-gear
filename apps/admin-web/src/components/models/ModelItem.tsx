@@ -77,7 +77,7 @@ export default function ModelItem({ model, onToggle, onDelete, togglePending = f
         <Trash2Icon className="size-4" />
       </Button>
       <Switch
-        checked={model.isEnabled && canToggle}
+        checked={model.isEnabled}
         onCheckedChange={() => {
           if (canToggle && !togglePending) onToggle(model.id)
         }}

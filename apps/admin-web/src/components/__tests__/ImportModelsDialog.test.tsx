@@ -106,6 +106,27 @@ describe('ImportModelsDialog', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('成功导入 2 个模型')
   })
 
+  it('T-W16: keeps existing options and import feedback visible while refetching', () => {
+    setup({ loading: true })
+    renderDialog()
+
+    expect(screen.queryByText('加载中...')).toBeNull()
+    expect(screen.getByText('gpt-4o')).toBeDefined()
+  })
+
+  it('T-W17: refetches after a failed import so partially written models become visible', async () => {
+    setup()
+    mocks.refetch.mockResolvedValue(undefined)
+    mocks.importModels.mockRejectedValue(new Error('Model name already exists: gpt-4o'))
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    fireEvent.click(screen.getByRole('button', { name: /导入/ }))
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalled())
+    expect(mocks.refetch).toHaveBeenCalled()
+  })
+
   it('T-W15: shows the upstream error and lets the user retry', () => {
     setup({ error: new Error('供应商连通性测试失败，请检查 API 地址和凭据是否正确') })
     renderDialog()

@@ -137,17 +137,40 @@ describe('agent-web ModelSection', () => {
     expect(screen.queryByText('Backend OpenAI')).toBeNull()
   })
 
-  it('T-AW4: global models are read-only (no drag handle, no delete, disabled switch)', () => {
-    setupQueries([model('g1', { scope: 'global' })])
+  it('T-AW4: global models are read-only (no drag handle, no delete, disabled switch) and keep their real state', () => {
+    setupQueries([
+      model('g1', { scope: 'global' }),
+      model('g2', { scope: 'global', isEnabled: false }),
+    ])
     render(<ModelSection />)
     expandGroup('系统内置')
 
     expect(screen.queryByLabelText('拖动排序')).toBeNull()
     expect(screen.queryByTitle('删除自定义模型')).toBeNull()
-    expect(screen.getByRole('switch', { name: '启用 model-g1' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
+
+    const enabledSwitch = screen.getByRole('switch', { name: '启用 model-g1' })
+    const disabledSwitch = screen.getByRole('switch', { name: '启用 model-g2' })
+    expect(enabledSwitch).toHaveAttribute('aria-disabled', 'true')
+    expect(enabledSwitch).toHaveAttribute('aria-checked', 'true')
+    expect(disabledSwitch).toHaveAttribute('aria-disabled', 'true')
+    expect(disabledSwitch).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('T-AW8: merges dangling-provider models into a single 未知供应商 group', () => {
+    setupQueries([
+      model('x1', { providerId: 'gone-1', provider: undefined }),
+      model('x2', { providerId: 'gone-2', provider: undefined }),
+    ])
+    render(<ModelSection />)
+
+    const headers = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-expanded'))
+    expect(headers).toHaveLength(1)
+    expect(headers[0].textContent).toContain('未知供应商')
+    expect(headers[0].textContent).toContain('2')
+
+    expandGroup('未知供应商')
+    expect(screen.getByText('model-x1')).toBeDefined()
+    expect(screen.getByText('model-x2')).toBeDefined()
   })
 
   it('T-AW5: submits only user model ids after a user-group drag', async () => {
