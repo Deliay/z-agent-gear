@@ -14,6 +14,8 @@ permissions:
 
 env:
   IMAGE_NAMESPACE: zero-tools
+  # mongod 二进制缓存目录：必须放在 node_modules 之外（npm ci 会清空 node_modules）
+  MONGOMS_DOWNLOAD_DIR: ${{ github.workspace }}/.mongodb-binaries
 
 jobs:
   build:
@@ -27,10 +29,26 @@ jobs:
           cache: npm
           cache-dependency-path: servers/admin-api/package-lock.json
 
-      # 测试门禁：构建前跑单测，避免带红测试推成 latest
-      - name: Install and test
+      - name: Install
         working-directory: servers/admin-api
-        run: npm ci && npm test
+        run: npm ci
+
+      # 缓存 mongod 二进制（需包含 .md5 sidecar，缺失会被判定为损坏并重新下载）
+      - name: Cache mongod binary
+        uses: actions/cache@v4
+        with:
+          path: .mongodb-binaries
+          key: mongoms-${{ runner.os }}-${{ hashFiles('servers/admin-api/package-lock.json') }}
+
+      # npm 默认不执行依赖的 postinstall（install-scripts 策略），这里直接执行脚本预先下载 mongod
+      - name: Pre-download mongod
+        working-directory: servers/admin-api
+        run: node node_modules/mongodb-memory-server/postinstall.js
+
+      # 测试门禁：构建前跑单测，避免带红测试推成 latest
+      - name: Test
+        working-directory: servers/admin-api
+        run: npm test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
