@@ -340,6 +340,29 @@ describe('网关预检估算上界（R10-1）', () => {
     assertEstimateUpperBound(messages, 1200, 50);
   });
 
+  it('R11-4: 超大图片/音频按序列化体积高估，不低于固定常量', () => {
+    const bigData = 'A'.repeat(20_000);
+    const image = [
+      {
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${bigData}` } }],
+      },
+    ];
+    expect(estimateRequestTokens(image)).toBeGreaterThan(8192);
+    assertEstimateUpperBound(image, 20_000, 10);
+  });
+
+  it('R11-6: legacy functions 定义计入估算', () => {
+    const functions = [
+      { name: 'lookup', description: '中'.repeat(1000), parameters: { type: 'object' } },
+    ];
+    const messages = [{ role: 'user', content: 'hi' }];
+    const withFunctions = estimateRequestTokens(messages, undefined, functions);
+    const withoutFunctions = estimateRequestTokens(messages);
+    expect(withFunctions).toBeGreaterThan(withoutFunctions);
+    expect(withFunctions).toBeGreaterThanOrEqual(3000);
+  });
+
   it('Anthropic usage 归一化：input 包含 cache read/creation，cached ⊆ input（R10-9）', () => {
     const usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
     applyAnthropicUsage(usage, {

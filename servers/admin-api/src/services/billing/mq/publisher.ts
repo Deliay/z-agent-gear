@@ -44,6 +44,8 @@ export class AdminOutboxPublisher {
   private readonly maxBackoffMs = 30_000;
   private failureStreak = 0;
   private roundFailed = false;
+  /** R11-3：判活标志，避免重复 start 双循环、stop 后在途 run 续排定时器。 */
+  private started = false;
 
   constructor(
     private readonly url: string,
@@ -229,14 +231,18 @@ export class AdminOutboxPublisher {
   }
 
   start(): void {
-    if (this.timer) return;
+    if (this.started) return;
+    this.started = true;
     const run = async () => {
+      if (!this.started) return;
       try {
         await this.relayOnce();
       } catch (err) {
         this.roundFailed = true;
         this.logger.warn?.('[billing-outbox] relay failed', (err as Error).message);
       }
+      // stop() 可能在 relay 期间发生：此时不得续排定时器。
+      if (!this.started) return;
       this.failureStreak = this.roundFailed ? this.failureStreak + 1 : 0;
       const delay = this.nextDelayMs();
       this.timer = setTimeout(run, delay);
@@ -246,6 +252,7 @@ export class AdminOutboxPublisher {
   }
 
   async stop(): Promise<void> {
+    this.started = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;

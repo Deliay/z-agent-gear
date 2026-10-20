@@ -54,9 +54,7 @@ export const config = {
   modelEstimateAudioTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_AUDIO_TOKENS, 16384),
   modelEstimateFileTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_FILE_TOKENS, 16384),
   modelEstimateToolTokens: parsePositiveInt(process.env.MODEL_ESTIMATE_TOOL_TOKENS, 4096),
-  // 三线对账 cron（HH:MM，UTC）与僵尸预留阈值（毫秒）
-  billingReconCron: process.env.BILLING_RECON_CRON || '03:00',
-  // 每日对账最大间隔（R10-11：错过 cron 分钟时按「距上次成功 ≥ 24h」补跑）
+  // 每日对账最大间隔（R10-11：错过 cron 分钟时按「距上次成功 ≥ 24h」补跑；R11-5 移除旧 BILLING_RECON_CRON）
   billingReconIntervalMs: parsePositiveInt(
     process.env.BILLING_RECON_INTERVAL_MS,
     24 * 60 * 60 * 1000,

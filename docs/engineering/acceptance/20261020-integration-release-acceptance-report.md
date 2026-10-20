@@ -3,7 +3,7 @@ description: integration→release 集成验收报告（AI Review 第十轮独�
 type: Permanent
 ---
 
-> **状态**: **第十一轮 AI Review 返工复核 · 打回（REJECT）**（被审对象：返工提交 `d3782e8` + 回填 `8951bc6`，详见第七、八节）。第十轮提出的 **14 项问题（R10-1~R10-14）已逐项核实为真修复**（逐行核对修复落点 + 独立复跑 tsc/单测/构建全绿），资金安全与事件可靠性不变量恢复成立。但本轮对 `origin/release...integration` 全量差异（180 文件 / +27168 行）继续审查时发现 **2 项新问题**：**R11-1（一般·必修）本 diff 新增的工作负载「必须标记」E2E 用例（T-E17/T-E19）对本 diff 新增 UI 确定性失败**，该功能的验收证据无效；**R11-2（一般·必须处置）16 项 session/gateway/auth E2E 既有失败**（两分支同代码，非本 diff 引入，但经第十轮委托「集成验收统一处置」必须给出结论）。**故本轮再次打回**：R11-1 必修后重提；R11-2 至少完成选择器修复或书面登记为已知基线债务。
+> **状态**: **第十一轮 AI Review 返工复核 · 打回（REJECT）→ 已返工，待第十二轮复核**（R11-1~R11-6 处置见第九节；被审对象：返工提交 `d3782e8` + 回填 `8951bc6`，详见第七、八节）。第十轮提出的 **14 项问题（R10-1~R10-14）已逐项核实为真修复**（逐行核对修复落点 + 独立复跑 tsc/单测/构建全绿），资金安全与事件可靠性不变量恢复成立。但本轮对 `origin/release...integration` 全量差异（180 文件 / +27168 行）继续审查时发现 **2 项新问题**：**R11-1（一般·必修）本 diff 新增的工作负载「必须标记」E2E 用例（T-E17/T-E19）对本 diff 新增 UI 确定性失败**，该功能的验收证据无效；**R11-2（一般·必须处置）16 项 session/gateway/auth E2E 既有失败**（两分支同代码，非本 diff 引入，但经第十轮委托「集成验收统一处置」必须给出结论）。**故本轮再次打回**：R11-1 必修后重提；R11-2 至少完成选择器修复或书面登记为已知基线债务。
 
 ## 关联文档
 
@@ -326,3 +326,28 @@ type: Permanent
 2. **`getByRole(name)` 默认子串匹配**：存在派生命名（`<name>` 与 `<name> 必须`）时必须 `exact: true` 或换唯一作用域；`getByText` 同理防多节点。
 3. **既有失败与变更引入的失败要分开定性**：先做「两分支同代码」基线比对再定归属，避免把测试腐化记到本次变更头上，也避免用「既有」掩盖本 diff 的新失败。
 
+## 九、R11 返工修复记录（2026-10-20）
+
+> 修复内容随本轮代码提交推送至 integration；第十二轮复核请以最新 integration HEAD 为被审对象。
+
+| # | 处置 | 关键落点 | 验证 |
+|---|------|----------|------|
+| R11-1 | T-E17 工作负载多选项点击改 `exact: true`，必须开关保持 `<name> 必须` 且同加 exact；T-E19 给日志详情面板加 `data-testid="workload-log-detail"`，断言限定详情面板作用域 | `tests/e2e/src/admin-cloud-container.spec.ts`、`apps/admin-web/src/components/cloud-containers/WorkloadLogsDialog.tsx` | `admin-cloud-container.spec.ts` 全文件 10 passed（真实 Aspire） |
+| R11-2 | **选择修复（推荐项）**：session 系改用 `page.locator('main').getByRole('button', { name: '新建会话' })` 消除侧边栏/页面双入口 strict-mode；gateway 系改为等待默认展开的「统一网关」并按 `新增网关` 可访问名点击；auth 改用「我的费用」链接锚定布局；同时修复同批基线腐化：mobile h2→Sidebar、workflow/worktree 的控制器重复点击折叠、settings 工作区精确匹配等 | `tests/e2e/src/{session,session-acp-server,session-mobile,session,gateway,auth,responsive-layout,settings-workspace,workflow,worktree}.spec.ts` | **全量 E2E：230 passed / 0 failed**（重启 Aspire 清库后单 worker 串行，13.5m） |
+| R11-3 | `start()` 增加 `started` 判活标志：重复 start 直接返回；`stop()` 置 false，在途 `run()` 在重排前检查，不再续排 `setTimeout` | admin publisher、cloud `billing-event-publisher.ts` | tsc + cloud 单测 198 passed |
+| R11-4 | 非文本块估算改为 `max(固定常量, 序列化字节/倍率)`；契约 `ChatCompletionRequest.description` 声明估算口径 | `billing-openai.ts`、`contracts/billing-openai.openapi.yaml` | 新增超大图片/legacy functions 估算用例；admin-api 556 passed / 1 skipped |
+| R11-5 | 删除死配置 `billingReconCron`，实现计划同步为 `BILLING_RECON_INTERVAL_MS` | `config/index.ts`、`docs/engineering/plan/20261018-feat-credits-billing.md` | tsc 0 error |
+| R11-6 | `estimateRequestTokens` 增加第三参 `functions`，网关透传 `body.functions` 并计入估算 | `billing-openai.ts` | 新增 legacy functions 估算用例 |
+
+### 本轮独立复跑
+
+| 项目 | 结果 |
+|------|------|
+| `tsc --noEmit`（admin-api / cloud-controller） | ✅ 0 error |
+| `npm run build`（admin-web） | ✅ 通过 |
+| Vitest admin-api | ✅ 556 passed / 1 skipped |
+| Vitest cloud-controller | ✅ 198 passed |
+| Vitest admin-web | ✅ 207 passed |
+| Vitest agent-web | ✅ 430 passed |
+| tests/api（真实 Aspire 编排） | ✅ 453 passed / 1 skipped |
+| tests/e2e 全量（真实 Aspire，单 worker） | ✅ **230 passed / 0 failed（13.5m）** |

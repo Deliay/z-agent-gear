@@ -121,14 +121,15 @@ export function estimateContentTokens(content: unknown): number {
   if (type === 'text' || typeof record.text === 'string') {
     return estimatePromptTextTokens(String(record.text ?? ''));
   }
+  // R11-4：固定常量只是下限；序列化体积更大时按体积计，避免超长音频/大文件低估。
   if (type === 'image_url' || type === 'image') {
-    return config.modelEstimateImageTokens;
+    return Math.max(config.modelEstimateImageTokens, conservativeJsonTokens(record));
   }
   if (type === 'input_audio' || type === 'audio') {
-    return config.modelEstimateAudioTokens;
+    return Math.max(config.modelEstimateAudioTokens, conservativeJsonTokens(record));
   }
   if (type === 'file' || type === 'document') {
-    return config.modelEstimateFileTokens;
+    return Math.max(config.modelEstimateFileTokens, conservativeJsonTokens(record));
   }
   if (type === 'tool_result' || type === 'tool_use' || type === 'function') {
     return (
@@ -148,6 +149,7 @@ export function estimateContentTokens(content: unknown): number {
 export function estimateRequestTokens(
   messages: unknown[],
   tools?: unknown,
+  functions?: unknown,
 ): number {
   let total = 0;
   for (const message of messages) {
@@ -166,6 +168,10 @@ export function estimateRequestTokens(
   }
   if (tools !== undefined) {
     total += conservativeJsonTokens(tools, config.modelEstimateToolTokens);
+  }
+  // R11-6：兼容 legacy `functions` 入参，避免其定义不进入预检估算。
+  if (functions !== undefined) {
+    total += conservativeJsonTokens(functions, config.modelEstimateToolTokens);
   }
   return Math.max(1, total);
 }
@@ -342,7 +348,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
 
     const requestId = crypto.randomUUID();
     // R10-1：预检使用 messages/tools 全量保守估算（含多模态、CJK、工具参数），不再只取文本 len/4。
-    const promptTokens = estimateRequestTokens(messages, body.tools);
+    const promptTokens = estimateRequestTokens(messages, body.tools, body.functions);
     const maxOutputTokens = Math.max(
       1,
       Number(body.max_tokens ?? config.modelDefaultMaxOutputTokens) ||

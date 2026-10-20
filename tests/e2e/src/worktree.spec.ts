@@ -19,19 +19,19 @@ async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 15000, 
   throw new Error(`${label}: timed out after ${timeoutMs}ms`);
 }
 
-/** Expand controller and workspace nodes in sidebar to reveal worktree groups */
+/**
+ * 控制器默认展开；这里只等待 worktree 分支行出现。
+ * 旧实现会点击控制器（反而折叠）并等待 workspace 文本按钮，但当前 UI 的 worktree 行是分支按钮。
+ */
 async function expandSidebarToWorktrees(page: Page, hostname = 'e2e-host'): Promise<void> {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await sidebar.getByRole('button', { name: new RegExp(hostname) }).click();
-  await page.waitForTimeout(500);
-
+  await expect(sidebar.getByRole('button', { name: new RegExp(hostname) })).toBeVisible({
+    timeout: 10000,
+  });
   await waitFor(async () => {
-    const wsButton = sidebar.locator('button').filter({ hasText: /e2e-ws-/ }).first();
+    const wsButton = sidebar.locator('button').filter({ hasText: /main|feature\/test/ }).first();
     return (await wsButton.count()) > 0;
-  }, 10000, 'waiting for workspace button');
-  const wsButton = sidebar.locator('button').filter({ hasText: /e2e-ws-/ }).first();
-  await wsButton.click();
-  await page.waitForTimeout(500);
+  }, 15000, 'waiting for worktree branch button');
 }
 
 /** Register a fake controller that auto-answers ACP + worktree events */

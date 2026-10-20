@@ -150,6 +150,9 @@ components:
           type: string
     ChatCompletionRequest:
       type: object
+      description: >-
+        预检额度按保守上界估算：文本按 UTF-8 字节 / 可配置倍率，图片/音频/文件/工具调用取
+        「固定高估常量」与「序列化体积」的较大值；缺省 max_tokens 会被注入为上游硬上限。
       required: [model, messages]
       properties:
         model:
