@@ -236,4 +236,4 @@ flowchart LR
 - [[plan/20261018-feat-credits-billing.md]] — 费用中心（Credits 计费）实现计划
 - [[plan/20261018-fix-docker-ce-apt-source.md]] — Docker CE 软件源地址补齐（修复 Docker 工作负载初始化必然失败）实现计划
 - [[plan/20261019-feat-aspire-workload-proxy.md]] — Aspire 工作负载下载代理（Aspire CLI 内网代理下载）实现计划
-- [[plan/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云主机，v3.0：前台交付/主机同构/标准会话）实现计划
+- [[plan/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v3.0：前台交付/停止即销毁/会话只读/每用户 1 实例/harnessTypes 多选）实现计划
