@@ -86,6 +86,7 @@ export interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  scope: 'user' | 'global'
   createdAt: string
   updatedAt: string
 }

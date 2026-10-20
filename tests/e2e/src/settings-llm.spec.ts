@@ -1,22 +1,38 @@
 import { test, expect } from '@playwright/test';
+import { adminGqlRequest, adminLoginApi, startMockLlmServer } from './helpers.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const TEST_PASS = 'testpass123';
 
-async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>) {
+async function gqlRequest(
+  page: import('@playwright/test').Page,
+  query: string,
+  variables?: Record<string, unknown>,
+  token?: string,
+) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   return page.request.post(API_URL, {
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     data: { query, variables },
   });
 }
 
-async function registerUser(page: import('@playwright/test').Page): Promise<string> {
+async function registerUserWithToken(
+  page: import('@playwright/test').Page,
+): Promise<{ username: string; token: string }> {
   const username = `ll${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  await gqlRequest(page, `
+  const res = await gqlRequest(page, `
     mutation Signup($u: String!, $p: String!) {
       signup(username: $u, password: $p) { token user { id username } }
     }
   `, { u: username, p: TEST_PASS });
+  const body = await res.json();
+  return { username, token: body.data.signup.token as string };
+}
+
+async function registerUser(page: import('@playwright/test').Page): Promise<string> {
+  const { username } = await registerUserWithToken(page);
   return username;
 }
 
@@ -157,5 +173,106 @@ test.describe('Settings LLM Provider & Model E2E', () => {
 
     await page.getByRole('button', { name: '取消' }).click();
     await expect(page.getByRole('dialog')).not.toBeVisible();
+  });
+
+  test('T-E28: shows a read-only 系统内置 group and an expandable user group', async ({ page }) => {
+    const mock = await startMockLlmServer();
+    const adminToken = await adminLoginApi(page);
+    const providerName = `e2e-system-${Date.now()}`;
+    const modelName = `e2e-system-model-${Date.now()}`;
+
+    const created = await adminGqlRequest(page, `
+      mutation($input: ProviderInput!) {
+        createGlobalProvider(input: $input) { id }
+      }
+    `, {
+      input: {
+        name: providerName,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-e2e-fake-key',
+      },
+    }, adminToken);
+    const providerId = (await created.json()).data.createGlobalProvider.id as string;
+
+    const imported = await adminGqlRequest(page, `
+      mutation($providerId: ID!, $names: [String!]!) {
+        importGlobalModels(providerId: $providerId, names: $names) { id name }
+      }
+    `, { providerId, names: [modelName] }, adminToken);
+    expect((await imported.json()).errors).toBeUndefined();
+
+    const { username, token: userToken } = await registerUserWithToken(page);
+    const userProviderName = `e2e-user-${Date.now()}`;
+    const customName = `e2e-user-custom-${Date.now()}`;
+    let userProviderId = '';
+
+    try {
+      const userCreated = await gqlRequest(page, `
+        mutation($input: ProviderInput!) {
+          createProvider(input: $input) { id }
+        }
+      `, {
+        input: {
+          name: userProviderName,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-e2e-fake-key',
+        },
+      }, userToken);
+      userProviderId = (await userCreated.json()).data.createProvider.id as string;
+
+      const custom = await gqlRequest(page, `
+        mutation($input: CustomModelInput!) {
+          createCustomModel(input: $input) { id name }
+        }
+      `, { input: { providerId: userProviderId, name: customName } }, userToken);
+      expect((await custom.json()).errors).toBeUndefined();
+
+      await loginViaUI(page, username);
+      await page.click('a[href="/settings"]');
+      const section = page.locator('#model-section');
+
+      const systemHeader = section.getByRole('button', { name: /系统内置/ });
+      await expect(systemHeader).toBeVisible();
+      // 系统内置组默认折叠
+      await expect(systemHeader).toHaveAttribute('aria-expanded', 'false');
+
+      // 组头排首位（第一个带 aria-expanded 的按钮）
+      const firstHeader = section.locator('button[aria-expanded]').first();
+      await expect(firstHeader).toContainText('系统内置');
+
+      await systemHeader.click();
+      await expect(section.getByText(modelName, { exact: true }).first()).toBeVisible();
+      // 前台不泄露后台供应商名
+      await expect(section.getByText(providerName)).toHaveCount(0);
+      // 只读：开关禁用但如实显示启用状态、无删除入口、无拖拽手柄
+      const systemSwitch = section.getByRole('switch', { name: `启用 ${modelName}` });
+      await expect(systemSwitch).toHaveAttribute('aria-disabled', 'true');
+      await expect(systemSwitch).toHaveAttribute('aria-checked', 'true');
+      await expect(section.getByTitle('删除自定义模型')).toHaveCount(0);
+      await expect(section.getByLabel('拖动排序')).toHaveCount(0);
+
+      // 用户供应商组默认可展开，自定义模型可删除
+      const userHeader = section.getByRole('button', { name: new RegExp(userProviderName) });
+      await expect(userHeader).toHaveAttribute('aria-expanded', 'false');
+      await userHeader.click();
+      await expect(section.getByText(customName, { exact: true })).toBeVisible();
+
+      const customRow = section
+        .locator('div.flex.items-center.gap-3.rounded-lg.border')
+        .filter({ hasText: customName });
+      page.once('dialog', (dialog) => dialog.accept());
+      await customRow.getByTitle('删除自定义模型').click();
+      await expect(section.getByText(customName, { exact: true })).toHaveCount(0, { timeout: 10000 });
+    } finally {
+      if (userProviderId) {
+        await gqlRequest(page, `mutation($id: ID!) { deleteProvider(id: $id) }`, { id: userProviderId }, userToken);
+      }
+      await adminGqlRequest(page, `mutation($id: ID!) { deleteGlobalProvider(id: $id) }`, { id: providerId }, adminToken);
+      await mock.close();
+    }
   });
 });

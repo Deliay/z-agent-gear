@@ -17,15 +17,29 @@ interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  scope: 'user' | 'global'
 }
 
 interface ModelItemProps {
   model: ModelData
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  /** 是否渲染拖拽手柄（系统内置模型只读，不可拖拽） */
+  sortable?: boolean
+  /** 系统内置等场景不展示来源供应商 */
+  hideProviderName?: boolean
+  /** 只读开关（系统内置模型不可改） */
+  readOnlyToggle?: boolean
 }
 
-export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps) {
+export default function ModelItem({
+  model,
+  onToggle,
+  onDelete,
+  sortable = true,
+  hideProviderName = false,
+  readOnlyToggle = false,
+}: ModelItemProps) {
   const {
     attributes,
     listeners,
@@ -33,7 +47,7 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: model.id })
+  } = useSortable({ id: model.id, disabled: !sortable })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -41,7 +55,7 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
   }
 
   const providerDisabled = model.provider && !model.provider.isEnabled
-  const canToggle = !providerDisabled
+  const canToggle = !providerDisabled && !readOnlyToggle
 
   return (
     <div
@@ -51,14 +65,16 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
         isDragging ? 'z-50 shadow-lg' : ''
       } ${model.isEnabled ? '' : 'opacity-60'}`}
     >
-      <button
-        className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
-        aria-label="拖动排序"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVerticalIcon className="size-4" />
-      </button>
+      {sortable && (
+        <button
+          className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
+          aria-label="拖动排序"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVerticalIcon className="size-4" />
+        </button>
+      )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground">{model.name}</span>
@@ -78,11 +94,11 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
             </span>
           )}
         </div>
-        {model.provider && (
+        {!hideProviderName && model.provider && (
           <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
         )}
       </div>
-      {model.isCustom && (
+      {model.isCustom && model.scope !== 'global' && (
         <Button
           variant="ghost"
           size="icon"
@@ -98,9 +114,11 @@ export default function ModelItem({ model, onToggle, onDelete }: ModelItemProps)
         </Button>
       )}
       <Switch
-        checked={model.isEnabled && canToggle}
+        checked={model.isEnabled}
         onCheckedChange={() => canToggle && onToggle(model.id)}
         disabled={!canToggle}
+        title={readOnlyToggle ? '系统内置模型不可修改' : undefined}
+        aria-label={`启用 ${model.name}`}
       />
     </div>
   )

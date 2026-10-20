@@ -104,6 +104,37 @@ export interface GetAdminModelsByProviderQuery {
   adminModelsByProvider: AdminModelData[];
 }
 
+/** 上游模型清单条目（导入弹窗数据源） */
+export interface ProviderModelOptionData {
+  name: string;
+  isImported: boolean;
+  isDuplicate: boolean;
+}
+
+export interface ListGlobalProviderModelsQuery {
+  listGlobalProviderModels: ProviderModelOptionData[];
+}
+
+export interface ImportGlobalModelsMutation {
+  importGlobalModels: AdminModelData[];
+}
+
+/** 历史重名整理台账（迁移 005 写入，只读） */
+export interface ModelRenameRecordData {
+  id: string;
+  modelId: string;
+  providerId: string;
+  providerName: string;
+  oldName: string;
+  newName: string;
+  batchId: string;
+  renamedAt: string;
+}
+
+export interface ModelRenameRecordsQuery {
+  modelRenameRecords: ModelRenameRecordData[];
+}
+
 export interface BatchPayloadData {
   successCount: number;
 }
