@@ -351,3 +351,48 @@ type: Permanent
 | Vitest agent-web | ✅ 430 passed |
 | tests/api（真实 Aspire 编排） | ✅ 453 passed / 1 skipped |
 | tests/e2e 全量（真实 Aspire，单 worker） | ✅ **230 passed / 0 failed（13.5m）** |
+
+## 十、第十二轮 AI Review 返工复核记录（2026-10-20）
+
+> 被审对象：返工提交 `eee53d6`（R11 返工代码 + 第九节报告回填，基于 `da943e2`），差异范围 `origin/release...integration`（192 文件 / +27420 行）。复核方式：对返工 diff **逐行独立审读**（不采信第九节自述），并**独立复跑验证**（真实 Aspire 编排、清库、单 worker 串行）。
+
+### 10.1 R11 六项处置逐项核验（必修项全部为真修复 ✅）
+
+| # | 核验落点（本轮逐行确认） | 结论 |
+|---|--------------------------|------|
+| R11-1 | **T-E17**：`admin-cloud-container.spec.ts` 全部 6 处工作负载多选项点击/断言改 `exact: true`，必须开关保持 `name: \`${name} 必须\`` 且同加 `exact`——与 `StartContainerDialog.tsx:228`（`aria-label={workload.name}`）/`:239`（`aria-label={`${workload.name} ${REQUIRED_LABEL}`}`）精确对应，strict-mode 双命中消除；**T-E19**：`WorkloadLogsDialog.tsx:140` 详情面板新增 `data-testid="workload-log-detail"`，「必须」正/反断言均限定详情面板作用域，行内徽标（列表 `<li>` 内）在作用域之外，双命中消除。真实编排下单文件复跑 `admin-cloud-container.spec.ts` **10 passed**（T-E17 :332、T-E19 :440 均绿） | ✅ 真修复 |
+| R11-2 | 选择**修复（推荐项）**。逐项核对替换后的断言锚点在当前 UI 真实存在，非「删断言凑绿」：`Sidebar.tsx:192/217` `title="新增网关"/"实例化工作流"` 图标按钮（可访问名由 title 承载）、`:366` `aria-label="我的费用"` NavLink、`WorktreeSidebarGroup.tsx:202` `{workspaceName}（默认）`、`Sidebar.tsx:132` 控制器默认展开（`collapsedControllers` 例外）、worktree 分支行按钮、`InstantiateWorkflowDialog.tsx:124` 自动选首个可用工作区。session 系改 `page.locator('main')` 限定页面头部按钮消除双入口 strict-mode；删除类断言保留有效语义（`session-acp-server` 保留「删除后消失」并放宽 20s 轮询窗口，`session` 改为「列表空态可见」）。**独立复跑全量 E2E 230 passed / 0 failed**，与自述一致 | ✅ 真修复 |
+| R11-3 | admin `mq/publisher.ts` 与 cloud `billing-event-publisher.ts` 均加 `started` 判活：重复 `start()` 直接返回；`stop()` 置 false；在途 `run()` 于重排 `setTimeout` 前检查 `started`，stop 后不再续排。主路径竞态已闭合；残余窄竞态见 10.3 R12-1 | ✅ 收口（留观察） |
+| R11-4 | `estimateContentTokens` 对 image/audio/file 改 `max(固定常量, conservativeJsonTokens(record))`，常量降级为下限，「估算 ≥ 实际」上界性质严格性提升（序列化字节按 UTF-8 字节/倍率计）；契约 `ChatCompletionRequest.description` 声明估算口径；`billing-openai.test.ts` 新增超大图片用例（>8192 且满足上界断言） | ✅ 收口 |
+| R11-5 | `config.billingReconCron` 与 `BILLING_RECON_CRON` 已删（全仓 grep 仅余历史报告与说明性注释，无代码消费方）；提案计划表同步 `BILLING_RECON_INTERVAL_MS` | ✅ 收口 |
+| R11-6 | `estimateRequestTokens(messages, tools, functions)` 第三参计入 legacy `functions`（`conservativeJsonTokens` 保守上界）；网关 `body.functions` 随 `basePayload` 透传并进入预检估算；新增 legacy functions 用例。契约 schema 未列 `tools`/`functions` 属性见 10.3 R12-2 | ✅ 收口（留观察） |
+
+**本轮还核验**：`eee53d6` 对生产代码的唯一改动为 `WorkloadLogsDialog.tsx` 一行 `data-testid`（纯测试挂钩），无「为凑绿而改产品行为」的情形；R11-1/R11-2 修复后 T-E17/T-E19 的业务断言（落库 `workloadPlan[].required=true`、历史记录不误标）均完整保留，验收覆盖未被削弱。
+
+### 10.2 本轮独立复跑（真实 Aspire 编排，不引用上游数据）
+
+| 项目 | 命令 | 结果 |
+|------|------|------|
+| 类型检查 admin-api / cloud-controller / agent-api / controller-api | `npx tsc --noEmit` ×4 | ✅ 0 error |
+| 类型检查 admin-web / agent-web | `npx tsc -b` ×2 | ✅ 0 error |
+| 单测 admin-api | `npx vitest run` | ✅ 556 passed / 1 skipped（55 文件） |
+| 单测 agent-api | `npx vitest run` | ✅ 658 passed（46 文件） |
+| 单测 cloud-controller | `npx vitest run` | ✅ 198 passed（14 文件） |
+| 单测 controller-api | `npx vitest run` | ✅ 216 passed（19 文件） |
+| 单测 + 构建 admin-web / agent-web | `npx vitest run` + `vite build` | ✅ 207 / 430 passed，构建均通过 |
+| tests/api（真实 Aspire 编排） | `npm test` | ✅ **453 passed / 1 skipped**（28 文件，282s） |
+| tests/e2e 全量（真实 Aspire、清库、单 worker 串行） | `npx playwright test` | ✅ **230 passed / 0 failed（13.6m）** |
+| tests/e2e `admin-cloud-container.spec.ts` 单独复跑（R11-1 证据） | `npx playwright test admin-cloud-container.spec.ts` | ✅ **10 passed**（含 T-E17/T-E19） |
+
+### 10.3 残余观察（不阻断，可随后续迭代收口）
+
+- **R12-1【观察】** R11-3 的 `started` 判活仍留一处窄竞态：`stop()` 后同一 publisher 实例在**在途 `relayOnce()` 尚未返回时**再次 `start()`，旧 `run()` 检查 `started` 会看到重启后的 `true` 而续排定时器，与新循环并存（双循环）。触发窗口为单轮 relay 期间的 stop+start，且事件消费链有业务幂等键兜底，无资金风险；如需彻底闭合可在 `run()` 捕获轮次代际（`generation++`）后判等。
+- **R12-2【观察】** `contracts/billing-openai.openapi.yaml` 的 `ChatCompletionRequest` 未声明 `tools`/`functions` 属性（OpenAPI 缺省允许附加属性，网关透传无碍），而 R11-4 新增的估算口径描述只提「工具调用」。建议后续把 `tools`/`functions`（及估算计入口径）补进契约 schema，使「legacy functions 计入估算」在契约层可见。
+
+### 10.4 第十二轮结论
+
+1. **R11-1 / R11-2 必修项全部为真修复**：T-E17/T-E19 选择器修复后在真实编排下全文件 10 passed，工作负载「必须标记」（PRD 工作负载三期验收项）恢复有效 E2E 回归背书；R11-2 按推荐项完成选择器适配，**全量 E2E 由 19 failed 转为 230 passed / 0 failed**，质量门首次整链为绿，且经逐项锚点核验未以削弱断言换取绿灯。
+2. **R11-3~R11-6 观察项全部收口**（R11-3/R11-6 各留一处非阻断残余观察，见 10.3）。
+3. **独立复跑与上游自述完全一致**：tsc ×6 全绿、单测 2265 passed / 1 skipped、双前端构建通过、tests/api 453 passed / 1 skipped、tests/e2e 230 passed / 0 failed。
+
+**处置：第十二轮 AI Review 通过（ACCEPT），不再打回**。`integration..release` 差异满足集成验收要求：资金安全不变量（预检估算上界、补投业务幂等防双扣）、事件可靠性不变量（重试头隔离、失败分流、隔离复位与补投线）经第十/十一轮逐行核验成立，本轮返工项全部为真修复，全量质量门（tsc + 单测 + 构建 + tests/api + tests/e2e）独立复跑全绿。遗留观察项 R12-1/R12-2 不阻断合入，建议随后续迭代收口。
