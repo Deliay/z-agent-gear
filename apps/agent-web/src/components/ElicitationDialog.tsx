@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import {
   Dialog,
@@ -82,7 +82,18 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
   const missingRequired = requiredFields.filter((name) => isEmptyValue(values[name]));
   const urlParts = data?.url ? splitUrl(data.url) : null;
 
-  const [now] = useState(() => Date.now());
+  // 当前时间入 state（render 期保持纯函数）；到期定时器与 props 变化时刷新，
+  // 保证 Banner/TodoList 常驻挂载的弹窗跨过 expiresAt 后立即进入过期终态（无需等 15s 轮询）。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (todo.resolution || !todo.expiresAt) return;
+    const remaining = new Date(todo.expiresAt as string).getTime() - Date.now();
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), remaining + 50);
+    return () => clearTimeout(timer);
+  }, [todo.id, todo.resolution, todo.expiresAt]);
+
   // 终态判定：resolution 优先；TTL 未清理的窄窗口内 expiresAt 已过也按过期处理
   const isExpired = todo.resolution === 'expired'
     || (!todo.resolution && Boolean(todo.expiresAt) && new Date(todo.expiresAt as string).getTime() <= now);

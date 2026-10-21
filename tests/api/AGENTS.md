@@ -67,7 +67,7 @@ npm test
 |------|------|--------|
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
-| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
@@ -366,7 +366,7 @@ npm test
 | T-AC2 resume 更新快照 | close → resume 上报新 `agentInfo.version` → 会话快照更新、不残留旧值 |
 | T-AC3 旧 controller 零退化 | 不带 `capabilities` → `agentCapabilities=null`、`features=[]`、其余字段不变 |
 | T-AC4 features 抽样 | `session.load=supported`、`prompt.audio=unsupported`、`elicitation.form=supported` |
-| T-AC5 模型来源分组 | 需 `MONGODB_URI`：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
+| T-AC5 模型来源分组 | 必须注入 `MONGODB_URI`（缺失即失败）：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
 | T-AC6 问询 resolved(timeout) | fake controller 发 `acp:elicitation:resolved{reason:'timeout'}` → todo `resolution=expired`、`resolvedAt` 非空 |
 | T-AC7 问询响应 | `respondElicitation(decline)` → controller 收到 decline、todo `resolution=declined` |
 

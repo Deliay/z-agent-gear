@@ -181,10 +181,16 @@ describe('ModelSelectDialog - 来源分组', () => {
   it('T-W6: 四个来源组头按固定顺序渲染，组内保持输入顺序', () => {
     renderDialog(groupedModels);
 
-    const groupNames = ['平台内置', 'Agent 自带', '自定义', '来源未知'];
-    const positions = groupNames.map((name) => document.body.textContent!.indexOf(name));
-    expect(positions.every((pos) => pos >= 0)).toBe(true);
-    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    // 直接断言 DOM 中 model-group-* 的顺序（不用 textContent.indexOf：组名与依据文案可能撞名）
+    const groupIds = screen
+      .getAllByTestId(/^model-group-/)
+      .map((element) => element.getAttribute('data-testid'));
+    expect(groupIds).toEqual([
+      'model-group-平台内置',
+      'model-group-Agent 自带',
+      'model-group-自定义',
+      'model-group-来源未知',
+    ]);
 
     expect(screen.getByTestId('model-group-平台内置').textContent).toContain('GPT-4o');
     expect(screen.getByTestId('model-group-Agent 自带').textContent).toContain('Kimi');

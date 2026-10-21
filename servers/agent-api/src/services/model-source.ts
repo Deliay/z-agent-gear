@@ -2,7 +2,10 @@
  * 会话模型来源推断（纯函数，裁决 R6）。
  *
  * 判定顺序：
- * 1. 平台库比对（`id`/`name` 与平台库不区分大小写精确匹配）；
+ * 1. 平台库比对：以会话 `id` 作为模型标识与平台库 `name`（模型 id）比对；
+ *    **不用展示名（name）比对**——展示名可由 Agent 任意设置，同名碰撞会把 Agent 自带模型
+ *    误归为平台内置/自定义。仅当 `id` 为空时才回退用 name。
+ *    平台库空名条目不参与比对。
  * 2. 标识解析（`provider/model` 形式 → Agent 自带）；
  * 3. 兜底「来源未知」。
  */
@@ -45,9 +48,12 @@ export function inferModelSource(
   const name = typeof model.name === 'string' ? model.name : '';
   const id = typeof model.id === 'string' ? model.id : '';
 
-  // 1) 平台库比对：库内 name 先对会话 name、再对会话 id（不同 Agent 落点不同）
-  const hit = library.find((m) => key(m.name) === key(name))
-    ?? library.find((m) => key(m.name) === key(id));
+  // 1) 平台库比对：优先（且仅）以会话 id 作为模型标识；id 为空才回退展示名。
+  //    不使用 name 兜底，避免展示名同名碰撞误归属。
+  const identity = key(id) || key(name);
+  const hit = identity
+    ? library.find((m) => key(m.name) === identity && key(m.name) !== '')
+    : undefined;
 
   if (hit) {
     const source: AgentModelSource = hit.scope === 'global' ? 'platform' : 'custom';

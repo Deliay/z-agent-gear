@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
+// FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
+import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -49,6 +51,7 @@ const GET_SESSION = `
         protocolVersion
         agentInfo { name version }
         features { id status detail }
+        raw
       }
       features { id status detail }
     }
@@ -72,14 +75,6 @@ const RESPOND_ELICITATION = `
   }
 `;
 
-const FEATURE_IDS = [
-  'session.load', 'session.resume', 'session.close', 'session.list', 'session.delete',
-  'session.fork', 'session.additionalDirectories',
-  'prompt.image', 'prompt.audio', 'prompt.embeddedContext',
-  'auth.login', 'auth.logout', 'mcp.http', 'mcp.sse',
-  'config.boolean', 'config.model', 'config.mode', 'commands',
-  'elicitation.form', 'elicitation.url',
-];
 
 function makeCapabilities(
   agentVersion = '2.0.31',
@@ -224,6 +219,8 @@ describe('ACP 会话能力快照 API', () => {
     expect(session.agentCapabilities.agentInfo).toEqual({ name: 'OpenCode', version: '2.0.31' });
     expect(session.features).toHaveLength(FEATURE_IDS.length);
     expect(session.features.map((f: { id: string }) => f.id)).toEqual(FEATURE_IDS);
+    // 台账「原文」必须被实证：raw 三份声明与 controller 上报逐字段深相等
+    expect(session.agentCapabilities.raw).toEqual(makeCapabilities().raw);
 
     client.disconnect();
   });
@@ -257,7 +254,6 @@ describe('ACP 会话能力快照 API', () => {
     const byId = new Map<string, any>(session.features.map((f: any) => [f.id, f]));
     expect(byId.get('prompt.image')?.status).toBe('unsupported');
     expect(byId.get('prompt.image')?.detail).toContain('未声明');
-    expect(byId.get('prompt.image')?.status).not.toBe('partial');
 
     client.disconnect();
   });
@@ -269,7 +265,9 @@ describe('ACP 会话能力快照 API', () => {
     const session = await getSession(sessionId);
     expect(session.agentCapabilities).toBeNull();
     expect(session.features).toEqual([]);
+    // 「其余字段不变」实证：旧 controller 路径仍正常落 status
     expect(session.status).toBe('idling');
+    expect(session.id).toBe(sessionId);
 
     client.disconnect();
   });
@@ -301,7 +299,7 @@ describe('ACP 会话能力快照 API', () => {
     });
 
     const created = await findTodo(requestId);
-    expect(created).toBeDefined();
+    expect(created).not.toBeNull();
     expect(created.resolution).toBeNull();
 
     client.emit('acp:elicitation:resolved', {
@@ -364,8 +362,11 @@ describe('ACP 会话能力快照 API', () => {
     client.disconnect();
   });
 
-  describe.skipIf(!MONGODB_URI)('T-AC5: 模型来源三档分组（需 MONGODB_URI）', () => {
+  describe('T-AC5: 模型来源三档分组（唯一验收，禁止静默 skip）', () => {
     it('平台内置/自定义/Agent 自带/来源未知四组', async () => {
+      // 缺 MONGODB_URI 直接失败：该用例是模型来源分组的唯一 API 级验收，
+      // 条件跳过会把「环境缺失」静默当作「已通过」。
+      expect(MONGODB_URI, 'MONGODB_URI 必须注入（aspire describe mongodb），T-AC5 不允许静默 skip').toBeTruthy();
       mongoConnection = await mongoose.connect(MONGODB_URI);
       const suffix = Date.now().toString(36);
       const globalName = `cap-gpt-4o-${suffix}`;

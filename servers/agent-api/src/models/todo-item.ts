@@ -44,6 +44,8 @@ const todoItemSchema = new Schema({
 
 todoItemSchema.index({ userId: 1, isRead: 1 });
 todoItemSchema.index({ userId: 1, createdAt: -1 });
+// 终态写入/去重按 requestId 定位（含 userId + resolution 条件），避免全集合扫描
+todoItemSchema.index({ 'elicitationData.requestId': 1 });
 todoItemSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const TodoItem = mongoose.model('TodoItem', todoItemSchema);

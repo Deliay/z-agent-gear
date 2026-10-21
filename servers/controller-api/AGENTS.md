@@ -30,6 +30,10 @@ src/
 - `acp:start:result` / `acp:resume:result` 可携带 `capabilities`：**仅在 payload 携带时**写入 `sessions.agentCapabilities`（旧 controller 不上报不覆盖历史快照）。
 - 能力快照唯一持久化位置 = Mongo `sessions.agentCapabilities`；不为能力新增 Redis 键（`cacheCapabilities` 保持原语义）。
 - 新增 `acp:elicitation:resolved`（controller → server）：透传 Redis `elicitation:resolved`（附 `userId`/`controllerId`），reason ∈ `unsupported_mode|timeout|cancelled`。
+  `ElicitationManager.handleElicitationResolved` 做运行时校验：缺失/空 `sessionId` 或契约外 `reason` 直接丢弃并 `console.warn`；
+  `requestId`/`detail` 截断到 200 字符后才入 Redis（controller payload 不可信）。
+- `acp:start:result.capabilities` 落库前有 64 KiB 体积防护：超限时保留 20 项 `features`，仅把 `raw` 替换为
+  `{ truncated: true, originalBytes, preview }`（Agent 可控 `_meta` 不得放大 Mongo 文档）。
 - Elicitation 超时：controller-api `TIMEOUT_MS=60s` 是唯一用户可见超时，到点同时“回 Agent cancel + 发布 resolved(timeout) + 回前端 cancel”。
 
 ## Dev Commands

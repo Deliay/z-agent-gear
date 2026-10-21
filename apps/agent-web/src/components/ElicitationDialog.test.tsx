@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ElicitationDialog } from './ElicitationDialog';
 
 const mockRespondElicitation = vi.fn().mockResolvedValue({});
@@ -268,6 +268,32 @@ describe('ElicitationDialog - 终态', () => {
     );
     expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
     expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W15c: 挂载后跨过 expiresAt 立即进入已过期（now 不冻结于挂载时刻）', () => {
+    vi.useFakeTimers();
+    try {
+      const expiresAt = new Date(Date.now() + 1_000).toISOString();
+      render(
+        <ElicitationDialog
+          open
+          onOpenChange={vi.fn()}
+          todo={{ ...baseTodo, expiresAt }}
+        />,
+      );
+      // 挂载时尚未到期：操作可用
+      expect(screen.getByText('提交')).toBeDefined();
+      expect(screen.queryByTestId('elicitation-status')).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+
+      expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
+      expect(screen.queryByText('提交')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('T-W16: cancelled/failed 显示对应文案并隐藏操作', () => {

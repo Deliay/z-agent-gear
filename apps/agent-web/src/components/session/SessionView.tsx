@@ -122,7 +122,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
 
   /** SSE 状态事件里的 availableModels 是 controller 原文（无来源字段）；合并时保留 GraphQL 推断结果 */
   const mergeModelSources = useCallback(
-    (incoming: AgentModelInfoData[]): AgentModelInfoData[] => {
+    (incoming: AgentModelInfoData[]): void => {
       setAvailableModels((prev) => {
         const byId = new Map(prev.map((model) => [model.id, model]));
         return incoming.map((model) => {
@@ -137,7 +137,6 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           };
         });
       });
-      return incoming;
     },
     [],
   );

@@ -161,8 +161,11 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 
 - `src/acp/capabilities.ts` 是 FeatureId 全集（20 项）与平台支持矩阵的**唯一事实源**；其他位置不得复制清单或矩阵。
 - `normalizeCapabilities()` 是纯函数（无 socket/fs 依赖）：状态 = Agent 声明 × 平台支持（declared=false → unsupported；declared + full → supported；declared + partial/none → partial）。
+- 快照 `raw` 保留 `initialize` 原文（`authMethodsRaw`，不是 `type→kind` 转换后的展示产物），单份上限 16 KiB，超限替换为 `{ truncated, originalBytes, preview }`。
 - `CLIENT_CAPABILITIES` 常量由 `bridge.ts` 与 `sync-bridge.ts` 共用；`bridge` 在 `acp:initialized` 事件中携带 `capabilities`，`socketio-client.buildAcpInitResult()` 是 `acp:start:result`/`acp:resume:result` 的唯一出口。
-- Elicitation 可观测：未知模式 / 65s 兜底取消都会 `console.warn` 并发出 `acp:elicitation:resolved`（`unsupported_mode` / `timeout`），不再静默取消。
+- Elicitation 可观测：未知模式（带 `requestId`，`detail` 截断 100）/ 65s 兜底取消都会 `console.warn` 并发出 `acp:elicitation:resolved`（`unsupported_mode` / `timeout`），不再静默取消。
+- Elicitation 生命周期：`stop()` / `handleError()` / Agent 自发 `unstable_completeElicitation` 都会 `clearTimeout` + resolve(cancel) + 删除 pending，
+  并回发 `acp:elicitation:resolved{reason:'cancelled'}`；会话关闭后不得再出现 65s 迟到的 `timeout` 事件。
 - 同步链路仍自动 `cancel` 问询，但声明相同的 `CLIENT_CAPABILITIES` 并记录告警（无用户通道的合法降级）。
 - 回归：`capabilities.test.ts`（映射/三档合并/raw 保真）、`bridge.test.ts`（快照、resolved）、`elicitation.integration.test.ts`（真实 SDK + 假 Agent 进程验证 `elicitation/create` 路由）、`socketio-client.test.ts`（旧 payload 零退化）。
 

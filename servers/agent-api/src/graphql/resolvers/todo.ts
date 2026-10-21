@@ -52,7 +52,7 @@ export const todoResolvers = {
         outcome: { outcome: args.outcome, optionId: args.optionId },
       }));
 
-      await todoService.markTodoAsResponded(args.requestId);
+      await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
 
       return true;
     },
@@ -72,14 +72,17 @@ export const todoResolvers = {
         ...(args.action === 'accept' && args.values ? { content: args.values } : {}),
       }));
 
-      await todoService.markTodoAsResponded(args.requestId);
+      await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
 
       const resolution = args.action === 'accept'
         ? 'accepted'
         : args.action === 'decline'
           ? 'declined'
           : 'cancelled';
-      await todoService.markElicitationResolved(args.requestId, resolution);
+      // 归属 + 终态单调由 Service 数据层强制：仅本人、仅 null→终态
+      await todoService.markElicitationResolved(args.requestId, resolution, {
+        userId: context.currentUser.id,
+      });
 
       return true;
     },

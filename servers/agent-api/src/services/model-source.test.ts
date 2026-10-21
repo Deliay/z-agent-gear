@@ -75,4 +75,24 @@ describe('inferModelSource', () => {
     );
     expect(viaId.source).toBe('custom');
   });
+
+  it('T-MS8: 展示名与平台库同名但 id 不同 → 不误归平台（按 id 判定）', () => {
+    const result = inferModelSource(
+      // Agent 自带模型展示了与平台模型相同的 display name
+      { id: 'opencode-go/gpt-4o', name: 'GPT-4O' },
+      [{ name: 'gpt-4o', scope: 'global' }],
+    );
+
+    expect(result.source).toBe('agent');
+    expect(result.sourceProvider).toBe('opencode-go');
+    expect(result.group).toBe(SOURCE_GROUP.agent);
+  });
+
+  it('T-MS9: 平台库空名条目不入比对', () => {
+    const result = inferModelSource(
+      { id: '', name: '' },
+      [{ name: '', scope: 'global' }],
+    );
+    expect(result.source).toBe('unknown');
+  });
 });

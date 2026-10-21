@@ -101,7 +101,7 @@ describe('ElicitationSubscriberService', () => {
       userId: 'user-1',
     }));
 
-    expect(todoService.markElicitationCompleted).toHaveBeenCalledWith('github-oauth-001');
+    expect(todoService.markElicitationCompleted).toHaveBeenCalledWith('github-oauth-001', 'user-1');
     expect(sessionSSEService.pushToUser).toHaveBeenCalledWith('user-1', {
       type: 'elicitation_complete',
       data: { elicitationId: 'github-oauth-001' },
@@ -154,47 +154,104 @@ describe('ElicitationSubscriberService - resolved', () => {
     service.stop();
   });
 
-  it('T-ES2: resolved(timeout) → markElicitationResolved(expired)', async () => {
+  it('T-ES2: resolved(timeout) → markElicitationResolved(expired) 且带 userId 归属', async () => {
     const { service, handler } = setup();
+    vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
     await handler('elicitation:resolved', JSON.stringify({
       requestId: 'elic-1',
       sessionId: 'sess-1',
       reason: 'timeout',
+      userId: 'user-1',
     }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'expired');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'expired', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
     service.stop();
   });
 
-  it('T-ES3: resolved(unsupported_mode) → failed', async () => {
+  it('T-ES3: 缺 requestId 时按 sessionId 兜底收敛（不静默丢弃）', async () => {
     const { service, handler } = setup();
+    vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
     await handler('elicitation:resolved', JSON.stringify({
       sessionId: 'sess-1',
       reason: 'unsupported_mode',
       detail: 'custom',
+      userId: 'user-1',
     }));
-    expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith(undefined, 'failed', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
     service.stop();
   });
 
   it('T-ES3b: resolved(unsupported_mode) 带 requestId → failed', async () => {
     const { service, handler } = setup();
+    vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
     await handler('elicitation:resolved', JSON.stringify({
       requestId: 'elic-2',
       sessionId: 'sess-1',
       reason: 'unsupported_mode',
+      userId: 'user-1',
     }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'failed');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'failed', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
     service.stop();
   });
 
   it('T-ES4: resolved(cancelled) → cancelled', async () => {
     const { service, handler } = setup();
+    vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
     await handler('elicitation:resolved', JSON.stringify({
       requestId: 'elic-3',
       sessionId: 'sess-1',
       reason: 'cancelled',
+      userId: 'user-1',
     }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
+    service.stop();
+  });
+
+  it('T-ES5: 缺 userId 时拒绝写入（租户隔离）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { service, handler } = setup();
+    await handler('elicitation:resolved', JSON.stringify({
+      requestId: 'elic-4',
+      sessionId: 'sess-1',
+      reason: 'timeout',
+    }));
+    expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('without userId'), expect.anything(), expect.anything());
+    warnSpy.mockRestore();
+    service.stop();
+  });
+
+  it('T-ES6: 未知 reason 收敛为 failed 并告警（不静默按 cancelled 处理）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { service, handler } = setup();
+    vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
+    await handler('elicitation:resolved', JSON.stringify({
+      requestId: 'elic-5',
+      sessionId: 'sess-1',
+      reason: 'protocol_drift',
+      userId: 'user-1',
+    }));
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-5', 'failed', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('unknown reason'),
+      'protocol_drift',
+      'elic-5',
+    );
+    warnSpy.mockRestore();
     service.stop();
   });
 });

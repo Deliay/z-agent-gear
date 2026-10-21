@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TodoListPanel } from './TodoListPanel';
+import { resetElicitationDialog } from '../stores/elicitationDialog';
 
 const mockRefetch = vi.fn();
 const mockMarkAllTodoRead = vi.fn().mockResolvedValue({});
@@ -59,6 +60,7 @@ describe('TodoListPanel', () => {
   beforeEach(() => {
     mockMarkAllTodoRead.mockClear();
     mockRefetch.mockClear();
+    resetElicitationDialog();
     mockOverview(defaultTodos);
   });
 
@@ -172,6 +174,10 @@ describe('TodoListPanel', () => {
 });
 
 describe('TodoListPanel - resolved elicitation', () => {
+  beforeEach(() => {
+    resetElicitationDialog();
+  });
+
   it('T-W17: 已 resolved 的问询不触发自动弹窗', async () => {
     mockOverview([
       {

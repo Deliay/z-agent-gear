@@ -9,8 +9,9 @@ export interface AcpServerOptionsProbeResult {
   availableModels: Array<{ id: string; name: string; provider?: string }>;
   currentModeId: string | null;
   currentModelId: string | null;
-  /** 能力快照（供 API 测试与后续回归复用；旧调用方忽略该字段即可） */
-  capabilities: AcpInitializedPayload['capabilities'];
+  /** 能力快照（供 API 测试与后续回归复用；旧调用方忽略该字段即可）。
+   *  旧版 controller 可能不上报，故运行时允许缺省（类型保持可选，消费方须判空）。 */
+  capabilities?: AcpInitializedPayload['capabilities'];
 }
 
 /**
@@ -58,7 +59,7 @@ export async function probeAcpServerOptions(
           availableModels: payload.availableModels ?? [],
           currentModeId: payload.currentModeId ?? null,
           currentModelId: payload.currentModelId ?? null,
-          capabilities: payload.capabilities,
+          ...(payload.capabilities ? { capabilities: payload.capabilities } : {}),
         }),
       );
     });

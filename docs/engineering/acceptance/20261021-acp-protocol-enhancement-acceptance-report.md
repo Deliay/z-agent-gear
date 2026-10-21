@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review 首轮打回：1 × 🔴（elicitation 终态写入无租户过滤、无终态守卫，越权写 + accepted→expired 覆盖竞态）+ 8 × 🟠（T-ES3 名实不符假绿与无 requestId 静默丢弃、raw.authMethods 契约漂移、stop() 65s timer 泄漏与迟到 timeout 事件、cancelled 死契约致待办悬挂、前端 now 冻结过期判定失效、Banner 早退卸载弹窗与双弹窗双回传、T-E31/T-E36 文档声称大于实际断言、模型来源分组唯一验收挂 MONGODB_URI 静默 skip）+ 15 × 🟡 随修复收口；独立实跑 tsc ×4 全 0、单测合计 1869 passed（agent-controller 389 / agent-api 732 / controller-api 223 / agent-web 525）、eslint 0 error；git merge-tree 合并预检 CONFLICTING（3 文件 add/add 与 import 块冲突）；打回要求修复后重提二轮复核
+description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review 首轮打回 1 × 🔴 + 8 × 🟠 + 15 × 🟡；**二轮返工已全部修复**：终态写入加 userId + resolution:null 双不变量、resolved 缺必须字段的兜底与运行时校验、raw.authMethods 保留原文、stop()/handleError()/Agent complete 收敛 pending、reason:'cancelled' 补齐产生路径、弹窗到期定时重渲染、Banner/待办共享打开权、T-E31/T-E36 断言收口、MONGODB_URI 缺参即失败、15 项 🟡 逐项收口；合并冲突按并集解决（release 已合入 integration）。独立实跑 tsc ×4 全 0、单测合计 1953 passed（agent-controller 411 / agent-api 767 / controller-api 227 / agent-web 548）、eslint 0 error（6 存量 warning）；Aspire 全栈实跑 tests/api session-capabilities 7 passed（含 T-AC5 非 skip）与 tests/e2e session-capabilities 9 passed + permission 10 passed
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: ❌ **首轮 AI Review 打回（REJECT）**——对 PR #250（integration→release，12 提交 / 83 文件 / +6497 −116）做 4 域并行深度代码评审 + 关键结论人工逐条复核，共提出 **1 × 🔴 阻断 + 8 × 🟠 重要 + 15 × 🟡 建议**：🔴 为 elicitation 终态写入面（`markElicitationResolved`）无租户过滤、无终态守卫，可越权改写他人待办且用户已接受的决定可被 timeout 覆盖为 expired；🟠 集中在 elicitation 收敛链路（T-ES3 名实不符假绿、无 requestId 静默丢弃、`reason:'cancelled'` 零产生路径、stop() 后 65s 迟发 timeout 事件）、契约保真（`raw.authMethods` 非原文）、前端弹窗生命周期（`now` 冻结致过期判定失效、Banner 早退卸载已打开弹窗、双弹窗双回传）与验收证据完整性（T-E31/T-E36 声称大于断言、模型来源分组唯一验收挂 `MONGODB_URI` 静默 skip）。按验收红线「🔴/🟠 → 打回返工」，本轮**打回**，要求修复后重提二轮复核。合并预检 `git merge-tree` 实证 PR #250 `CONFLICTING`（3 文件），随修复项一并收口。
+> **状态**: 🔁 **二轮返工完成，待二轮 AI Review 复核**（首轮结论：❌ REJECT，详见下方）——对 PR #250（integration→release，12 提交 / 83 文件 / +6497 −116）做 4 域并行深度代码评审 + 关键结论人工逐条复核，共提出 **1 × 🔴 阻断 + 8 × 🟠 重要 + 15 × 🟡 建议**：🔴 为 elicitation 终态写入面（`markElicitationResolved`）无租户过滤、无终态守卫，可越权改写他人待办且用户已接受的决定可被 timeout 覆盖为 expired；🟠 集中在 elicitation 收敛链路（T-ES3 名实不符假绿、无 requestId 静默丢弃、`reason:'cancelled'` 零产生路径、stop() 后 65s 迟发 timeout 事件）、契约保真（`raw.authMethods` 非原文）、前端弹窗生命周期（`now` 冻结致过期判定失效、Banner 早退卸载已打开弹窗、双弹窗双回传）与验收证据完整性（T-E31/T-E36 声称大于断言、模型来源分组唯一验收挂 `MONGODB_URI` 静默 skip）。按验收红线「🔴/🟠 → 打回返工」，本轮**打回**，要求修复后重提二轮复核。合并预检 `git merge-tree` 实证 PR #250 `CONFLICTING`（3 文件），随修复项一并收口。
 
 ## 关联文档
 
@@ -76,42 +76,42 @@ type: Permanent
   1. `markElicitationResolved` 增加 `userId` 参数并进入 filter：`{ 'elicitationData.requestId': requestId, userId, resolution: null }`；subscriber 传 `data.userId`，`respondElicitation` 传 `context.currentUser.id`。
   2. 终态单调：对 timeout/自发 resolved 路径仅在 `resolution: null` 时写入（条件更新）；用户响应路径如需覆盖仅允许 null→终态。
   3. 补测试：跨用户 requestId 不命中（modifiedCount=0）、accepted 后迟到 timeout 不覆盖。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `todo-service.test.ts` T-TD1/3/4/5/6/7 + `todo.test.ts` T-TR1/2 覆盖跨用户不命中、accepted 后迟到 timeout 不覆盖、缺 userId 拒写、session 兜底；Aspire 实跑 T-AC6/AC7 通过。
 
 ### 3.2 🟠-1 T-ES3 名实不符假绿；resolved 事件缺 requestId 时静默丢弃、终态不收敛
 
 - **问题描述**：`servers/agent-api/src/services/elicitation-subscriber.test.ts:168-177` 用例名 `T-ES3: resolved(unsupported_mode) → failed`，断言却是 `expect(todoService.markElicitationResolved).not.toHaveBeenCalled()`（验证「什么都不做」）；`→ failed` 映射实际仅由 T-ES3b（:179-188）覆盖。同时 `elicitation-subscriber.ts:114-127` 对 `requestId` 缺失的事件**无任何兜底**（不按 sessionId 收敛、不告警），而 `controller-api/src/services/socketio.ts:205-218` 的 payload 类型明确允许 `requestId?: string`，bridge 的 `unsupported_mode` 路径（`bridge.ts:737-741`）实际就不带 requestId。
 - **根因分析**：用例命名与断言内容脱节（「名字说 A、断言验 B」），按用例名扫描会误判覆盖已存在；接收端把「requestId 可选」的合法 payload 当作可丢弃。
 - **修复方案**：重命名/重写 T-ES3 为「缺 requestId 时的兜底行为」并断言兜底结果（failed 映射断言保留在 T-ES3b）；`handleElicitationResolved` 对无 requestId 事件按 `sessionId` 兜底收敛或至少 `console.warn` 可观测告警（二选一需在契约显式声明）。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `elicitation-subscriber.test.ts` T-ES2/3/3b/4/5/6 + `bridge.test.ts` T-B3 覆盖；`unsupported_mode` 事件已携带 requestId。
 
 ### 3.3 🟠-2 快照 `raw.authMethods` 非「对端声明原文」，契约漂移且保真断言测不到调用点
 
 - **问题描述**：`contracts/agent-session-websocket.md:176` 声明快照 `raw` = 对端声明原文（agentCapabilities / authMethods / clientCapabilities）；但 `bridge.ts:558` `this.authMethods = toAuthMethods(result.authMethods)` 已做形态转换（`type`→`kind` 重命名、`?? null` 补齐、`AuthMethodAgent` 字段丢弃），`bridge.ts:630` 快照 raw 传入的是**转换后产物**，原文不可恢复。`capabilities.test.ts:152-157`（T-C7 保真断言）直接喂 `normalizeCapabilities(fixture.authMethods)`，纯函数保真恒绿，**测不到调用点失真**。
 - **根因分析**：归一化入参与「原文留存」两个职责共用同一字段，转换发生于留存之前。
 - **修复方案**：initConnection 保留 `result.authMethods` 原文（`authMethodsRaw`）供快照 raw 使用；补一条穿过 `buildInitializedPayload()` 的断言 raw.authMethods 与 SDK 原始返回深相等的测试。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `bridge.test.ts` T-B6 断言 `raw.authMethods` 与 initialize 原文深相等且不同于归一化产物。
 
 ### 3.4 🟠-3 `stop()`/`handleError()` 不清理 pending Maps：65s timer 泄漏 + 迟到 `resolved(timeout)` 事件
 
 - **问题描述**：`bridge.ts:349-366` `stop()` 只清 `activePrompt/inputQueue/spawner`，`pendingElicitations`/`pendingPermissions` 两个 Map 与其中 65s `setTimeout` 均未触碰；`handleError()`（进程崩溃路径，:859）同样不清理。用户在弹窗打开后关闭会话 → 65 秒后对已终止会话发出 `acp:elicitation:resolved{reason:'timeout'}`（bridge.ts:756-761 为本次 diff 新增的对外事件），服务端把待办标 `expired`（用户视角：已关闭会话却被记「超时未响应」）；未 `unref()` 的 timer 最长拖住进程事件循环 65s。
 - **根因分析**：生命周期清理清单未随新增 pending Map/对外事件同步扩展。
 - **修复方案**：`stop()`/`handleError()`/`emitStopped()` 遍历两 Map：`clearTimeout` + `resolve({action:'cancel'})` + delete；若需给待办收口改发 `reason:'cancelled'`（与 🟠-4 一并处理）；补测试覆盖 stop 后 65s 不再发事件。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `bridge.test.ts` T-B5c/T-B5d 断言 stop 后 pending 收敛为 cancelled，65s 后无迟到事件。
 
 ### 3.5 🟠-4 契约枚举 `reason:'cancelled'` 零产生路径；`elicitation/complete` 不 settle pending，待办悬挂误标 expired
 
 - **问题描述**：契约 §2.34 声明 `reason: "unsupported_mode" | "timeout" | "cancelled"` 并要求 agent-api 据此标记 failed/expired/cancelled；但 bridge 全文 `acp:elicitation:resolved` 仅两处发出（reason 只有 `unsupported_mode`/`timeout`），`'cancelled'` **零产生点**。对应入口 `unstable_completeElicitation`（`bridge.ts:813-818`）只转发 `acp:elicitation:complete`，不 settle `pendingElicitations`、不发 resolved → Agent 自行完成/取消的问询 pending Promise 悬挂至 65s 超时，被误标 `expired` 而非 `cancelled`。
 - **根因分析**：契约先于实现声明了三值枚举，实现未补齐产生路径；complete 与 resolved 双通道的收敛语义未定义。
 - **修复方案**：`unstable_completeElicitation` 中 delete+clearTimeout+resolve 并发 `resolved{reason:'cancelled'}`；或明确 complete 为独立收敛通道并从契约删除 `cancelled` 枚举（需同步 agent-api 映射文档）。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `bridge.test.ts` T-B5e 断言 Agent complete 收敛 pending 并发 `resolved(cancelled)`。
 
 ### 3.6 🟠-5 ElicitationDialog `now` 冻结于挂载时刻，挂载后到期的问询不再进入「已过期」终态
 
 - **问题描述**：`apps/agent-web/src/components/ElicitationDialog.tsx:85` `const [now] = useState(() => Date.now())`，`useState` 初始化器只执行一次；`:87-88` 的 `isExpired` 判定依赖该冻结值。`PendingElicitationBanner.tsx:44-52` 在 pending 存在期间**常驻挂载** Dialog（`open` 仅显隐），`now` 即 Banner 挂载时刻。问询 10:00 创建、10:05 到期、TTL 未清理的窄窗口内用户 10:06 点开 → `expiresAt(10:05) <= now(10:00:05)` 为 false → 弹窗仍显示「提交/拒绝」且可对已过期问询提交。测试 T-W15b 每次全新 `render`（now 必大于 expiresAt）恒绿，掩盖「同一实例跨过 expiresAt」场景。
 - **根因分析**：把「当前时间」当作不随渲染更新的快照；测试只覆盖单时刻渲染。
 - **修复方案**：改为 render 期取值 `const now = Date.now()`（随 15s 轮询重渲染刷新）或定时器在 expiresAt 触发重渲染；补 fake timers 推进时间的用例。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `ElicitationDialog.test.tsx` T-W15c 用 fake timers 跨过 expiresAt，弹窗立即显示已过期且隐藏提交。
 
 ### 3.7 🟠-6 PendingElicitationBanner 早退卸载已打开弹窗（表单丢失）；与 TodoListPanel 自动弹窗无互斥（双弹窗/双回传）
 
@@ -120,7 +120,7 @@ type: Permanent
   2. Banner 自持 `open` 状态与 `TodoListPanel.tsx:28-42` 的自动弹窗（互斥仅限其自身两状态）零协调：桌面端 `priority=immediate` 问询可被 TodoListPanel 自动弹出，用户再点 Banner「查看」→ 第二个 `ElicitationDialog` 叠加，同一 `requestId` 双入口各自可提交/拒绝，产生重复回传或 UI 状态错乱。
 - **根因分析**：「入口显隐」与「弹窗生命周期」耦合在同一早退分支；弹窗打开权未提升为共享状态。
 - **修复方案**：入口按 `pending` 过滤、弹窗数据按 todo id 从全量 `todos` 派生（不过滤 resolution），已打开弹窗不随 pending 清空而卸载；「当前打开的问询 todo id」提升至共享 store，Banner 与 TodoListPanel 双入口读写同一状态。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ `PendingElicitationBanner.test.tsx` T-W14b（pending 清空仍保留终态弹窗）/ T-W14c（共享打开权单弹窗）；E2E T-E38/E39 实跑。
 
 ### 3.8 🟠-7 T-E31 / T-E36 文档与用例标题声称远大于实际断言（声称已测但实际未测）
 
@@ -129,14 +129,14 @@ type: Permanent
   - `tests/e2e/AGENTS.md:260`（T-E36「模型来源分组」）声称「四个组头、**固定顺序**、组头含判定依据」，`spec.ts:254-293` 对顺序**零断言**，且 `:286` `expect(getByTestId('model-group-平台内置')).toContainText('平台内置')` 断言「组头包含自己的组名」近恒真。
 - **根因分析**：用例台账先行、断言落地缩水，台账未随实现回改；恒真断言未在自查中识别。与既往多轮「文档声称 vs 实测覆盖不符」同型。
 - **修复方案**：T-E31 断言 `agent-capability-row-*` 计数 = 20 并至少断言一行 detail 文本；T-E36 按 `[data-testid^="model-group-"]` DOM 顺序断言四组固定顺序、删除 :286 恒真断言；或如实收缩 AGENTS.md 台账措辞。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ E2E T-E31/T-E36 实跑通过（20 行 + detail、四组 DOM 顺序）。
 
 ### 3.9 🟠-8 模型来源分组唯一验收（T-AC5 / T-E36）挂 `MONGODB_URI` 静默 skip，存在按运行口径零覆盖假绿风险
 
 - **问题描述**：`tests/api/src/agent-api/session-capabilities.test.ts:367` `describe.skipIf(!MONGODB_URI)`、`tests/e2e/src/session-capabilities.spec.ts:255` `test.skip(!MONGODB_URI, ...)`——环境缺失即静默 skip（不报错）。T-AC5 是「平台内置/自定义/Agent 自带/来源未知四组 + basis」唯一的 API 级断言，T-AC5/T-E36 是模型来源三档分组仅有的集成级/E2E 验收。
 - **根因分析**：条件跳过把「环境缺失」静默转化为「已通过」，与历史 `billing-events.test.ts` 因缺 `INTERNAL_API_TOKEN` 永久 skip 的假绿同型；运行口径文档未强制注入 `MONGODB_URI`。
 - **修复方案**：tests/api、tests/e2e 的 AGENTS.md 运行口径显式要求注入 `MONGODB_URI` 并在验收报告登记实跑（非 skip）证据；或缺变量时显式 fail/告警，不允许静默跳过。
-- **验证结果**：待二轮回填（修复 commit：待回填）
+- **验证结果**：✅ T-AC5 在 `MONGODB_URI` 注入下实跑（非 skip），7 passed；缺失时显式失败。
 
 ### 3.10 🟡 建议项（15 项，随修复收口）
 
@@ -158,31 +158,63 @@ type: Permanent
 | 14 | FeatureId 清单在两份测试手抄复制，与「唯一事实源」声明冲突；E2E `setupSession` 有 `acp:start` 事件早于 sessionId 赋值的竞态（假红 flaky）；`acp-real-capabilities.test.ts:106` 残留 `console.log` | `tests/**` |
 | 15 | 前端小项：`AgentCapabilityPanel` 与 `useAgentCapabilities` 取数路径不一致（`features ?? []` 空数组不穿透、门控可被数据形态绕过）；ModelSelectDialog T-W6 用 `indexOf` 子串定位有撞名风险；`mergeModelSources` 死返回值；i18n 中英混排、Banner 无 `aria-live`；`TodoListPanel.tsx:94` exhaustive-deps 告警 | `apps/agent-web/**` |
 
+## 3.11 二轮返工修复记录（逐项可证伪）
+
+> 每项均先落测试再改实现；测试名同时登记在对应包内，修复前可红。
+
+| # | 修复内容 | 关键落点 | 可证伪回归测试 |
+|---|---|---|---|
+| 🔴-1 | `markElicitationResolved` filter 强制 `userId` + `resolution: null`；缺 `userId` 直接拒绝；`markTodoAsResponded`/`markElicitationCompleted` 同样加归属；`todoitems.elicitationData.requestId` 建索引 | `todo-service.ts`、`todo.ts`、`models/todo-item.ts` | `todo-service.test.ts` T-TD1/3/4/5/6/7、`todo.test.ts` T-TR1/2 |
+| 🟠-1 | subscriber 运行时 reason 白名单（未知→failed+告警）、缺 `userId` 拒写、缺 `requestId` 按 `sessionId` 兜底；bridge `unsupported_mode` 也携带 `requestId` | `elicitation-subscriber.ts`、`bridge.ts` | `elicitation-subscriber.test.ts` T-ES2/3/3b/4/5/6、`bridge.test.ts` T-B3 |
+| 🟠-2 | `initConnection` 留存 `authMethodsRaw`，快照 `raw.authMethods` 用原文；测试穿过 `start()`/`buildInitializedPayload()` 调用点 | `bridge.ts` | `bridge.test.ts` T-B6 |
+| 🟠-3 | `stop()`/`handleError()` 统一 `settlePendingRequests`：clearTimeout + resolve(cancel) + delete，问询补发 `resolved(cancelled)`；`emitStopped` 清 text timer | `bridge.ts` | `bridge.test.ts` T-B5c/T-B5d |
+| 🟠-4 | Agent `unstable_completeElicitation` 按 `elicitationId` 定位 pending 就地收敛并发 `resolved(cancelled)`；补齐契约产生路径 | `bridge.ts`、contract | `bridge.test.ts` T-B5e |
+| 🟠-5 | `ElicitationDialog` 当前时间入 state + 到期定时器 + props 变化刷新，挂载后跨过 `expiresAt` 立即过期 | `ElicitationDialog.tsx` | `ElicitationDialog.test.tsx` T-W15c（fake timers 推进） |
+| 🟠-6 | 新增 `stores/elicitationDialog.ts`（todoId+owner 共享打开权）；Banner 不再早退卸载弹窗，弹窗按 id 从全量 todos 派生；TodoListPanel 与 Banner 互斥 | `stores/elicitationDialog.ts`、`PendingElicitationBanner.tsx`、`TodoListPanel.tsx` | `PendingElicitationBanner.test.tsx` T-W14b/T-W14c |
+| 🟠-7 | T-E31 断言 20 行 + detail 文本；T-E36 断言 `model-group-*` DOM 固定顺序、删除恒真断言 | `tests/e2e/src/session-capabilities.spec.ts` | E2E T-E31/T-E36 实跑 |
+| 🟠-8 | T-AC5/T-E36 删除静默 skip，缺 `MONGODB_URI` 显式失败；文档运行口径同步 | tests/api、tests/e2e、AGENTS.md | Aspire 实跑 T-AC5 非 skip（7 passed） |
+| 🟡-1 | 终态索引（见 🔴-1） | `models/todo-item.ts` | — |
+| 🟡-2 | controller-api 运行时校验 reason/sessionId、requestId/detail 截断 200 | `elicitation-manager.ts` | `elicitation-manager.test.ts` T-S6b/6c/6d |
+| 🟡-3 | controller 落库 64 KiB 上限，保留 features 仅截断 raw | `acp-session-manager.ts` | `acp-session-manager.test.ts` T-S1b |
+| 🟡-4 | 模型来源改按 `id` 判定（不再用展示名），空名条目跳过 | `model-source.ts` | `model-source.test.ts` T-MS8/T-MS9 |
+| 🟡-5 | `unsupported_mode.detail` 截断 100 | `bridge.ts` | `bridge.test.ts` T-B3b |
+| 🟡-6 | 快照 raw 单份 16 KiB 上限 + 截断摘要 | `capabilities.ts` | `capabilities.test.ts` T-C9 |
+| 🟡-7 | T-B5 响应后推进 65s，锁 `clearTimeout` 回归 | `bridge.test.ts` | T-B5 |
+| 🟡-8 | CLIENT_CAPABILITIES 断言改显式字面量（去掉自引用） | `bridge.test.ts`、`capabilities.test.ts`、`acp-sync-bridge.test.ts` | 上述用例 |
+| 🟡-9 | url 模式 payload 零覆盖补齐 | `bridge.test.ts` | T-B5b |
+| 🟡-10 | `vitest.config` 用 `configDefaults.exclude` + dist，保留默认排除 | `vitest.config.ts` | 全量单测 |
+| 🟡-11 | prober `capabilities` 改可选并在缺省时不写入 | `prober.ts` | tsc/单测 |
+| 🟡-12 | T-AC1 增查 `raw` 深相等；T-AC3 补 status/id | `session-capabilities.test.ts` | Aspire 实跑 |
+| 🟡-13 | T-ARC1 改定长 20；T-ARC2 逐项精确断言；删除 T-AC2 冗余断言；T-AC6 `not.toBeNull` | tests/api | `test:real`/常规实跑 |
+| 🟡-14 | 测试直接引用 `capabilities.ts` 的 FEATURE_IDS；`setupSession` 先等 sessionId 再回包；移除 console.log | tests/** | E2E T-E31/T-E37 实跑 |
+| 🟡-15 | 面板与门控共用 `useAgentCapabilities`（hasSnapshot 以 agentCapabilities 为准）；T-W6 改 DOM 顺序断言；`mergeModelSources` 去掉死返回；Banner 加 `aria-live`；TodoListPanel exhaustive-deps 告警消除 | `apps/agent-web/**` | `AgentCapabilityPanel.test.tsx`、`ModelSelectDialog.test.tsx`、eslint 6 warning（全存量） |
+
 ## 四、修复总览
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 🔴-1 | elicitation 终态写入无租户过滤/无终态守卫 | 归属校验与终态单调性未进数据层 | ⬜ 待修复 | — |
-| 🟠-1 | T-ES3 名实不符 + 无 requestId 静默丢弃 | 用例命名与断言脱节；合法可选 payload 无兜底 | ⬜ 待修复 | — |
-| 🟠-2 | `raw.authMethods` 非原文 | 转换与留存共用字段 | ⬜ 待修复 | — |
-| 🟠-3 | `stop()` 后 timer 泄漏/迟到 timeout 事件 | 生命周期清理清单未扩展 | ⬜ 待修复 | — |
-| 🟠-4 | `reason:'cancelled'` 死契约、待办悬挂误标 | 双通道收敛语义未定义 | ⬜ 待修复 | — |
-| 🟠-5 | ElicitationDialog `now` 冻结 | 当前时间被当快照 | ⬜ 待修复 | — |
-| 🟠-6 | Banner 卸载弹窗 + 双弹窗双回传 | 弹窗打开权未共享 | ⬜ 待修复 | — |
-| 🟠-7 | T-E31/T-E36 声称大于断言 | 台账与断言脱节 | ⬜ 待修复 | — |
-| 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ⬜ 待修复 | — |
-| 🟡×15 | §3.10 | — | ⬜ 随修复收口 | — |
+| 🔴-1 | elicitation 终态写入无租户过滤/无终态守卫 | 归属校验与终态单调性未进数据层 | ✅ 已修复 | 64c57ce |
+| 🟠-1 | T-ES3 名实不符 + 无 requestId 静默丢弃 | 用例命名与断言脱节；合法可选 payload 无兜底 | ✅ 已修复 | 64c57ce |
+| 🟠-2 | `raw.authMethods` 非原文 | 转换与留存共用字段 | ✅ 已修复 | 64c57ce |
+| 🟠-3 | `stop()` 后 timer 泄漏/迟到 timeout 事件 | 生命周期清理清单未扩展 | ✅ 已修复 | 64c57ce |
+| 🟠-4 | `reason:'cancelled'` 死契约、待办悬挂误标 | 双通道收敛语义未定义 | ✅ 已修复 | 64c57ce |
+| 🟠-5 | ElicitationDialog `now` 冻结 | 当前时间被当快照 | ✅ 已修复 | 64c57ce |
+| 🟠-6 | Banner 卸载弹窗 + 双弹窗双回传 | 弹窗打开权未共享 | ✅ 已修复 | 64c57ce |
+| 🟠-7 | T-E31/T-E36 声称大于断言 | 台账与断言脱节 | ✅ 已修复 | 64c57ce |
+| 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ✅ 已修复 | 64c57ce |
+| 🟡×15 | §3.10 | — | ✅ 随修复收口（逐项见 §3.11） | 64c57ce |
+| 合并冲突 | PR #250 CONFLICTING（3 文件） | main/release 分叉改同一批 session 文件 | ✅ 已按并集解决（`merge release`） | 64c57ce |
 
 ## 五、最终验证
 
-| 项目 | 本轮（首轮） | 二轮要求 |
+| 项目 | 首轮 | 二轮返工（本轮实跑） |
 |---|---|---|
-| tsc（agent-controller / agent-api / controller-api / agent-web） | ✅ 全 0 | 复跑全 0 |
-| 单测 | ✅ 合计 1869 passed（389 + 732 + 223 + 525） | 复跑全绿，且新修复项须有**可证伪**回归测试 |
-| eslint（agent-web） | ✅ 0 error / 7 warning | 0 error，本 diff 新增告警收口 |
-| tests/api（实机） | ⏸️ 未跑 | Aspire 全栈实跑，`MONGODB_URI` 注入下 T-AC5 **非 skip** 实证 |
-| tests/e2e | ⏸️ 未跑 | T-E31/T-E36 断言收口后实跑 9 例 |
-| 合并预检 | ❌ CONFLICTING（`session.ts` / `session.test.ts` / `socketio-client.test.ts`） | `git merge-tree` CLEAN：3 文件按并集解决（import 块取并集、两侧测试文件合并保留），且解决后复跑 agent-api + agent-controller 单测 |
+| tsc（agent-controller / agent-api / controller-api / agent-web） | ✅ 全 0 | ✅ 全 0（agent-web `tsc -b`） |
+| 单测 | ✅ 合计 1869 passed（389 + 732 + 223 + 525） | ✅ 合计 **1953 passed**（agent-controller 411 / agent-api 767 / controller-api 227 / agent-web 548） |
+| eslint（agent-web） | ✅ 0 error / 7 warning | ✅ 0 error / 6 warning（均为存量，本 diff 新增告警已消除） |
+| tests/api（实机） | ⏸️ 未跑 | ✅ Aspire 全栈实跑 `session-capabilities.test.ts` **7 passed**（注入 `MONGODB_URI`，T-AC5 **非 skip**；含 T-AC1 raw 深相等、T-AC6/AC7 终态） |
+| tests/e2e | ⏸️ 未跑 | ✅ Aspire 全栈实跑 `session-capabilities.spec.ts` **9 passed**（T-E31 20 行+detail、T-E36 顺序断言、T-E38 过期收敛）+ `permission.spec.ts` **10 passed**（TodoListPanel 改动回归） |
+| 合并预检 | ❌ CONFLICTING（3 文件） | ✅ 已 `merge origin/release` 按并集解决（`session.ts` import 并集 + Session 字段合并、`session.test.ts` 双测试套件保留、`socketio-client.test.ts` 双套件保留），解决后 agent-api 758、agent-controller 404 单测通过，PR 转 CLEAN |
 
 ## 六、经验总结
 

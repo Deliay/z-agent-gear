@@ -3,6 +3,7 @@ import {
   CLIENT_CAPABILITIES,
   FEATURE_IDS,
   normalizeCapabilities,
+  RAW_SNAPSHOT_MAX_BYTES,
   type AgentCapabilitySnapshot,
 } from './capabilities.js';
 import opencodeFixture from './__fixtures__/opencode-2.0.31-capabilities.json' with { type: 'json' };
@@ -154,9 +155,34 @@ describe('normalizeCapabilities', () => {
 
     expect(snapshot.raw.agentCapabilities).toEqual(fixture.agentCapabilities);
     expect(snapshot.raw.authMethods).toEqual(fixture.authMethods);
-    expect(snapshot.raw.clientCapabilities).toEqual(CLIENT_CAPABILITIES);
+    // 显式值断言（非自引用常量），防止常量被改空后测试恒绿
+    expect(snapshot.raw.clientCapabilities).toEqual({
+      session: { configOptions: { boolean: {} } },
+      elicitation: { form: {}, url: {} },
+    });
     expect(snapshot.protocolVersion).toBe(1);
     expect(snapshot.agentInfo).toEqual({ name: 'OpenCode', version: '2.0.31' });
+  });
+
+  it('T-C9: 超限 raw 只保留截断摘要，不原样外露', () => {
+    const hugeKey = 'x'.repeat(64);
+    const huge = { [hugeKey]: 'y'.repeat(RAW_SNAPSHOT_MAX_BYTES * 2) };
+    const snapshot = normalizeCapabilities({
+      protocolVersion: 1,
+      agentInfo: { name: 'A', version: null },
+      agentCapabilities: huge,
+      authMethods: [],
+      clientCapabilities: CLIENT_CAPABILITIES,
+      configOptions: [],
+      modes: [],
+    });
+
+    const raw = snapshot.raw.agentCapabilities as { truncated?: boolean; originalBytes?: number; preview?: string };
+    expect(raw).toMatchObject({ truncated: true });
+    expect(raw.originalBytes).toBeGreaterThan(RAW_SNAPSHOT_MAX_BYTES);
+    expect(raw.preview?.length).toBeLessThanOrEqual(512);
+    // 超限时不得保留原文键
+    expect(raw).not.toHaveProperty(hugeKey);
   });
 
   it('T-C8: detail 文案（unsupported 以「未声明 <字段>」开头；partial 含「平台」）', () => {

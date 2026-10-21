@@ -38,6 +38,9 @@ interface ElicitationResolvedData {
   detail?: string;
 }
 
+const RESOLVED_REASONS = new Set(['unsupported_mode', 'timeout', 'cancelled']);
+const DETAIL_MAX_LENGTH = 200;
+
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_RESPONSE_CHANNEL = 'elicitation:response';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
@@ -141,9 +144,29 @@ export class ElicitationManager {
    * 供 agent-api 把待办收敛为 failed/cancelled；用户已响应的情况不走该事件。
    */
   async handleElicitationResolved(socket: Socket, data: ElicitationResolvedData): Promise<void> {
+    // 运行时校验：controller 侧的 payload 不可信，非法 reason/缺失 sessionId 直接丢弃并告警，
+    // 避免未知枚举被下游静默归并。
+    if (!data || typeof data.sessionId !== 'string' || data.sessionId.length === 0) {
+      console.warn('[Elicitation] dropped resolved event without sessionId');
+      return;
+    }
+    if (!RESOLVED_REASONS.has(data.reason)) {
+      console.warn('[Elicitation] dropped resolved event with unknown reason=%j', data.reason);
+      return;
+    }
+
+    const requestId = typeof data.requestId === 'string' && data.requestId.length > 0
+      ? data.requestId.slice(0, DETAIL_MAX_LENGTH)
+      : undefined;
+    const detail = typeof data.detail === 'string'
+      ? data.detail.slice(0, DETAIL_MAX_LENGTH)
+      : undefined;
+
     const redis = getRedisClient();
     await redis.publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
       ...data,
+      ...(requestId ? { requestId } : { requestId: undefined }),
+      ...(detail ? { detail } : {}),
       controllerId: socket.data.controllerId,
       userId: socket.data.userId,
     }));

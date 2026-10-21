@@ -1,4 +1,5 @@
-import type { AgentCapabilitySnapshotData, AgentFeatureStatus, SessionData } from '../../graphql/types';
+import type { AgentFeatureStatus, SessionData } from '../../graphql/types';
+import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 import {
   Dialog,
   DialogContent,
@@ -64,17 +65,11 @@ interface AgentCapabilityPanelProps {
   session: SessionData | null | undefined;
 }
 
-function snapshotOf(session: SessionData | null | undefined): AgentCapabilitySnapshotData | null {
-  if (!session?.agentCapabilities) return null;
-  return session.agentCapabilities;
-}
-
 export function AgentCapabilityPanel({ open, onOpenChange, session }: AgentCapabilityPanelProps) {
-  const snapshot = snapshotOf(session);
-  const features = session?.features ?? snapshot?.features ?? [];
-  const hasSnapshot = features.length > 0;
-  const agentName = snapshot?.agentInfo?.name ?? session?.agentInfo?.name ?? null;
-  const agentVersion = snapshot?.agentInfo?.version ?? session?.agentInfo?.version ?? null;
+  // 与门控共用同一取数路径（useAgentCapabilities），避免面板/门控对「空 features」判定不一致
+  const { hasSnapshot, status, detail } = useAgentCapabilities(session);
+  const agentName = session?.agentCapabilities?.agentInfo?.name ?? session?.agentInfo?.name ?? null;
+  const agentVersion = session?.agentCapabilities?.agentInfo?.version ?? session?.agentInfo?.version ?? null;
   const agentLabel = agentName
     ? `${agentName}${agentVersion ? ` ${agentVersion}` : ''}`
     : null;
@@ -100,9 +95,8 @@ export function AgentCapabilityPanel({ open, onOpenChange, session }: AgentCapab
           ) : (
             <ul className="space-y-1" data-testid="agent-capability-list">
               {FEATURE_ORDER.map((id) => {
-                const feature = features.find((item) => item.id === id);
-                const status = feature?.status ?? 'partial';
-                const meta = STATUS_META[status];
+                const featureDetail = detail(id);
+                const meta = STATUS_META[status(id)];
                 return (
                   <li
                     key={id}
@@ -114,8 +108,8 @@ export function AgentCapabilityPanel({ open, onOpenChange, session }: AgentCapab
                         {FEATURE_LABELS[id] ?? id}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">{id}</p>
-                      {feature?.detail && (
-                        <p className="mt-0.5 text-xs text-muted-foreground">{feature.detail}</p>
+                      {featureDetail && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">{featureDetail}</p>
                       )}
                     </div>
                     <span

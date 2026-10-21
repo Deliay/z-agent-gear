@@ -19,11 +19,14 @@ function makeSession(features: SessionData['features'], agentInfo: SessionData['
     createdAt: '2026-10-21T00:00:00.000Z',
     updatedAt: '2026-10-21T00:00:00.000Z',
     endedAt: null,
-    agentCapabilities: {
-      protocolVersion: 1,
-      agentInfo: { name: 'OpenCode', version: '2.0.31' },
-      features: features ?? [],
-    },
+    // 旧会话（无快照）必须 agentCapabilities=null，与后端 features=[] / agentCapabilities=null 同口径
+    agentCapabilities: features
+      ? {
+          protocolVersion: 1,
+          agentInfo: { name: 'OpenCode', version: '2.0.31' },
+          features,
+        }
+      : null,
     features,
     agentInfo,
   };

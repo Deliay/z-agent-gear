@@ -208,6 +208,47 @@ describe('ElicitationManager', () => {
         controllerId: 'ctrl-1',
       });
     });
+
+    it('T-S6b: 契约外 reason 丢弃并告警（不静默归并）', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationResolved(mockSocket as never, {
+        sessionId: 'session-1',
+        reason: 'protocol_drift' as never,
+      });
+
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown reason'), 'protocol_drift');
+    });
+
+    it('T-S6c: 缺 sessionId 丢弃并告警', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationResolved(mockSocket as never, {
+        sessionId: '',
+        reason: 'timeout',
+      });
+
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('without sessionId'));
+    });
+
+    it('T-S6d: requestId/detail 超长时截断到 200 字符', async () => {
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationResolved(mockSocket as never, {
+        requestId: 'r'.repeat(500),
+        sessionId: 'session-1',
+        reason: 'timeout',
+        detail: 'd'.repeat(500),
+      });
+
+      const payload = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(payload.requestId).toHaveLength(200);
+      expect(payload.detail).toHaveLength(200);
+    });
   });
 
   describe('handleElicitationComplete', () => {

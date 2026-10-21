@@ -461,10 +461,13 @@ describe('TodoService', () => {
     it('should mark todo with matching requestId as read (permission or elicitation)', async () => {
       vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
-      await service.markTodoAsResponded('req-1');
+      await service.markTodoAsResponded('req-1', 'user-1');
 
       expect(TodoItem.updateOne).toHaveBeenCalledWith(
-        { $or: [{ 'data.requestId': 'req-1' }, { 'elicitationData.requestId': 'req-1' }] },
+        {
+          userId: 'user-1',
+          $or: [{ 'data.requestId': 'req-1' }, { 'elicitationData.requestId': 'req-1' }],
+        },
         { $set: { isRead: true } },
       );
     });
@@ -474,10 +477,10 @@ describe('TodoService', () => {
     it('should mark elicitation todo with matching elicitationId as read', async () => {
       vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
-      await service.markElicitationCompleted('elic-id-1');
+      await service.markElicitationCompleted('elic-id-1', 'user-1');
 
       expect(TodoItem.updateOne).toHaveBeenCalledWith(
-        { 'elicitationData.elicitationId': 'elic-id-1' },
+        { 'elicitationData.elicitationId': 'elic-id-1', userId: 'user-1' },
         { $set: { isRead: true } },
       );
     });
@@ -604,13 +607,18 @@ describe('TodoService - elicitation resolution', () => {
     service = new TodoService();
   });
 
-  it('T-TD1: markElicitationResolved 写入 resolution/resolvedAt/isRead', async () => {
+  it('T-TD1: markElicitationResolved 带 userId 与 resolution:null 终态守卫写入', async () => {
     vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
-    await service.markElicitationResolved('elic-1', 'expired');
+    const updated = await service.markElicitationResolved('elic-1', 'expired', { userId: 'user-1' });
 
+    expect(updated).toBe(1);
     expect(TodoItem.updateOne).toHaveBeenCalledWith(
-      { 'elicitationData.requestId': 'elic-1' },
+      {
+        userId: 'user-1',
+        resolution: null,
+        'elicitationData.requestId': 'elic-1',
+      },
       {
         $set: {
           resolution: 'expired',
@@ -624,6 +632,70 @@ describe('TodoService - elicitation resolution', () => {
   it('T-TD2: 不存在的 requestId 不抛错（modifiedCount=0）', async () => {
     vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 0 } as never);
 
-    await expect(service.markElicitationResolved('missing', 'failed')).resolves.toBeUndefined();
+    await expect(
+      service.markElicitationResolved('missing', 'failed', { userId: 'user-1' }),
+    ).resolves.toBe(0);
+  });
+
+  it('T-TD3: 跨用户 requestId 不命中（filter 带 userId，modifiedCount=0）', async () => {
+    // 数据层只有「本人 + 待处理」一条命中：他人 requestId 的 updateOne 必然 modifiedCount=0
+    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 0 } as never);
+
+    const updated = await service.markElicitationResolved('elic-of-user-2', 'accepted', {
+      userId: 'user-1',
+    });
+
+    expect(updated).toBe(0);
+    expect(TodoItem.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', resolution: null }),
+      expect.anything(),
+    );
+  });
+
+  it('T-TD4: accepted 后迟到 timeout 不覆盖（终态条件 resolution:null 恒不命中）', async () => {
+    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 0 } as never);
+
+    const updated = await service.markElicitationResolved('elic-1', 'expired', { userId: 'user-1' });
+
+    expect(updated).toBe(0);
+    const [filter, update] = vi.mocked(TodoItem.updateOne).mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      { $set: { resolution: string } },
+    ];
+    expect(filter.resolution).toBeNull();
+    expect(update.$set.resolution).toBe('expired');
+  });
+
+  it('T-TD5: 缺 userId 直接拒绝写入（越权防线）', async () => {
+    await expect(
+      service.markElicitationResolved('elic-1', 'accepted', { userId: '' }),
+    ).resolves.toBe(0);
+    expect(TodoItem.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-TD6: requestId 缺失时按 sessionId + userId 会话级兜底收敛', async () => {
+    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+
+    const updated = await service.markElicitationResolved(undefined, 'failed', {
+      userId: 'user-1',
+      sessionId: 'sess-1',
+    });
+
+    expect(updated).toBe(1);
+    expect(TodoItem.updateOne).toHaveBeenCalledWith(
+      {
+        userId: 'user-1',
+        resolution: null,
+        'elicitationData.sessionId': 'sess-1',
+      },
+      expect.anything(),
+    );
+  });
+
+  it('T-TD7: requestId 与 sessionId 都缺失时不写库', async () => {
+    await expect(
+      service.markElicitationResolved(undefined, 'failed', { userId: 'user-1' }),
+    ).resolves.toBe(0);
+    expect(TodoItem.updateOne).not.toHaveBeenCalled();
   });
 });

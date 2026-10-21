@@ -65,7 +65,7 @@ describe('Todo Resolvers', () => {
         action: 'accept',
         content: { strategy: 'balanced' },
       });
-      expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('elic-1');
+      expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('elic-1', 'user1');
     });
 
     it('should publish decline without content', async () => {
@@ -138,7 +138,7 @@ describe('Todo Resolvers - elicitation resolution', () => {
       { requestId: 'elic-1', action: 'accept', values: { a: 1 } },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'accepted');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'accepted', { userId: 'user1' });
   });
 
   it('T-TR2: decline/cancel 分别写 declined/cancelled', async () => {
@@ -147,14 +147,14 @@ describe('Todo Resolvers - elicitation resolution', () => {
       { requestId: 'elic-2', action: 'decline' },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'declined');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'declined', { userId: 'user1' });
 
     await todoResolvers.Mutation.respondElicitation(
       {},
       { requestId: 'elic-3', action: 'cancel' },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled', { userId: 'user1' });
   });
 
   it('T-TR3: expiresAt/resolvedAt Date → ISO 字符串，缺失返回 null', () => {
