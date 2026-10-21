@@ -159,6 +159,55 @@ describe('ElicitationManager', () => {
 
       expect(mockSocket.emit).toHaveBeenCalledTimes(1);
     });
+
+    it('T-S5: 60s 超时同时发布 elicitation:resolved(timeout) 并回 cancel', async () => {
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-1',
+        sessionId: 'session-1',
+        mode: 'form',
+        message: 'Which strategy?',
+      });
+
+      mockRedis.publish.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.resolve();
+
+      const resolvedCall = mockRedis.publish.mock.calls.find((c) => c[0] === 'elicitation:resolved');
+      expect(resolvedCall).toBeDefined();
+      const payload = JSON.parse(resolvedCall![1]);
+      expect(payload).toMatchObject({
+        requestId: 'elic-1',
+        sessionId: 'session-1',
+        userId: 'user-1',
+        controllerId: 'ctrl-1',
+        reason: 'timeout',
+      });
+      expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:response', {
+        requestId: 'elic-1',
+        action: 'cancel',
+      });
+      expect(manager.getPendingRequestCount()).toBe(0);
+    });
+  });
+
+  describe('handleElicitationResolved', () => {
+    it('T-S6: 透传 resolved 事件并附 userId/controllerId/detail', async () => {
+      await manager.handleElicitationResolved(mockSocket as never, {
+        sessionId: 'session-1',
+        reason: 'unsupported_mode',
+        detail: 'custom',
+      });
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('elicitation:resolved', expect.any(String));
+      const payload = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(payload).toMatchObject({
+        sessionId: 'session-1',
+        reason: 'unsupported_mode',
+        detail: 'custom',
+        userId: 'user-1',
+        controllerId: 'ctrl-1',
+      });
+    });
   });
 
   describe('handleElicitationComplete', () => {

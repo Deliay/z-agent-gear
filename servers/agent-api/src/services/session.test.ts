@@ -1827,3 +1827,31 @@ describe('SessionService', () => {
     });
   });
 });
+
+describe('SessionService - capability snapshot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  });
+
+  it('T-SS1: mapSession 含快照时原样返回，无快照返回 null', async () => {
+    const snapshot = {
+      protocolVersion: 1,
+      agentInfo: { name: 'OpenCode', version: '2.0.31' },
+      features: [{ id: 'session.load', status: 'supported', detail: null }],
+      raw: { agentCapabilities: {}, authMethods: [], clientCapabilities: {} },
+    };
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(mockSessionDoc({ agentCapabilities: snapshot })),
+    } as never);
+
+    const withSnapshot = await sessionService.findById('sess-1', 'user-1');
+    expect(withSnapshot!.agentCapabilities).toEqual(snapshot);
+
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+    } as never);
+    const withoutSnapshot = await sessionService.findById('sess-1', 'user-1');
+    expect(withoutSnapshot!.agentCapabilities).toBeNull();
+  });
+});

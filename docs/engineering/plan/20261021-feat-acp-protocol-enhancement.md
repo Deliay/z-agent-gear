@@ -15,6 +15,7 @@ type: Permanent
 **版本说明**:
 - v1.0（2026-10-21）首版，与 PRD v1.2 / 提案 v1.2 对齐。本计划把提案 §9.2 的四个实现点拆成 7 个 Phase：契约 → agent-controller（能力快照 + Elicitation 可观测）→ controller-api（快照落库 + resolved 透传）→ agent-api（快照暴露 + 来源推断 + 待办状态）→ agent-web（门控/面板/分组/兜底）→ tests/api → tests/e2e + 文档收口。
 - 本版新增「上游文档 × 代码现状差异」与 16 条计划期裁决（§「计划期裁决」），覆盖提案未落地的细节：FeatureId 全集、三档状态语义、门控边界、模型来源字段落点、Elicitation 超时与待办留存口径。
+- **实现期修订（v1.1，2026-10-21）**：裁决 R1 表格逐行统计为 **20 项** FeatureId（session 7 + prompt 3 + auth 2 + mcp 2 + config 3 + commands 1 + elicitation 2）；正文中的「18 项」为计数笔误。实现与测试以 20 项为准（含 `elicitation.form`/`elicitation.url`），否则会漏掉本需求要修复的 Elicitation 能力项。
 
 ## 实现顺序
 

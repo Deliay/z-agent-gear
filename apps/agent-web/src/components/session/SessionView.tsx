@@ -34,7 +34,9 @@ import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
 import ResumeConfirmDialog from './ResumeConfirmDialog';
+import { PendingElicitationBanner } from './PendingElicitationBanner';
 import { useCommandState } from '../../hooks/useCommandState';
+import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 
 interface AcpMessage {
   id: string;
@@ -113,6 +115,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     // 断连场景：controller 重连后「继续」按钮依赖 controllerOnline 解锁，轮询保持新鲜
     pollInterval: 10000,
   });
+
+  // 会话能力门控：只对「有快照 + 明确 unsupported」的入口生效（旧会话/partial 放行）
+  const capabilities = useAgentCapabilities(sessionData?.session ?? null);
 
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
@@ -453,7 +458,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         closing={closing}
         deleting={deleting}
         controllerOnline={controllerOnline}
+        capabilities={capabilities}
+        capabilitySession={sessionData?.session ?? null}
       />
+      <PendingElicitationBanner sessionId={id} />
       <MessageList
         messages={messages}
         sseLoading={sseLoading}
@@ -479,6 +487,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         availableCommands={availableCommands}
         configOptions={configOptions}
         onSetConfigOption={handleSetConfigOption}
+        capabilities={capabilities}
       />
       <ResumeConfirmDialog
         open={resumeConfirmOpen}

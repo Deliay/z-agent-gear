@@ -82,6 +82,26 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
   const missingRequired = requiredFields.filter((name) => isEmptyValue(values[name]));
   const urlParts = data?.url ? splitUrl(data.url) : null;
 
+  const [now] = useState(() => Date.now());
+  // 终态判定：resolution 优先；TTL 未清理的窄窗口内 expiresAt 已过也按过期处理
+  const isExpired = todo.resolution === 'expired'
+    || (!todo.resolution && Boolean(todo.expiresAt) && new Date(todo.expiresAt as string).getTime() <= now);
+  const isCancelled = todo.resolution === 'cancelled' || todo.resolution === 'failed';
+  const isFinished = todo.resolution === 'accepted' || todo.resolution === 'declined';
+  const isClosed = isExpired || isCancelled || isFinished;
+
+  const statusMessage = isExpired
+    ? '该问询已过期'
+    : todo.resolution === 'cancelled'
+      ? '该问询已取消'
+      : todo.resolution === 'failed'
+        ? '该问询已失效'
+        : todo.resolution === 'accepted'
+          ? '该问询已提交'
+          : todo.resolution === 'declined'
+            ? '该问询已拒绝'
+            : null;
+
   const setValue = (name: string, value: unknown) => {
     setEdits((prev) => ({ ...prev, [name]: value }));
   };
@@ -260,6 +280,20 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{data.message}</p>
 
+          {statusMessage && (
+            <p
+              data-testid="elicitation-status"
+              className={`rounded-md px-3 py-2 text-sm ${
+                isExpired || isCancelled
+                  ? 'bg-muted text-muted-foreground'
+                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+              }`}
+            >
+              {statusMessage}
+              {!isFinished && '，该问询已不可操作。'}
+            </p>
+          )}
+
           {data.mode === 'form' && (
             <div className="space-y-4">
               {schema?.description && (
@@ -294,7 +328,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
           )}
 
           <div className="flex flex-col gap-2">
-            {data.mode === 'url' ? (
+            {isClosed ? null : data.mode === 'url' ? (
               <Button onClick={handleOpenUrl} disabled={responding || !data.url}>
                 打开链接
               </Button>
@@ -306,20 +340,24 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
                 提交
               </Button>
             )}
-            <Button
-              variant="destructive"
-              onClick={() => handleRespond('decline')}
-              disabled={responding}
-            >
-              拒绝
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleRespond('cancel')}
-              disabled={responding}
-            >
-              取消
-            </Button>
+            {!isClosed && (
+              <>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleRespond('decline')}
+                  disabled={responding}
+                >
+                  拒绝
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleRespond('cancel')}
+                  disabled={responding}
+                >
+                  取消
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </DialogContent>

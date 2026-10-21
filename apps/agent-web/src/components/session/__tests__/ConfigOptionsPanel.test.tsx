@@ -104,3 +104,19 @@ describe('ConfigOptionsPanel', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe('ConfigOptionsPanel - 能力门控', () => {
+  it('T-W12: config.boolean unsupported 时布尔项禁用，select 项不受影响', () => {
+    render(
+      <ConfigOptionsPanel
+        configOptions={[boolOption, selectOption]}
+        status="idling"
+        onSetConfigOption={vi.fn().mockResolvedValue(undefined)}
+        booleanBlocked
+      />,
+    );
+
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('combobox') as HTMLSelectElement).disabled).toBe(false);
+  });
+});

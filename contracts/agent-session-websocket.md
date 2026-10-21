@@ -164,6 +164,24 @@
 | `agentInfo` | `AgentInfo` | 否 | Agent 名称与版本 |
 | `authMethods` | `AuthMethodInfo[]` | 否 | Agent 支持的认证方式（非空表示要求认证） |
 | `supportsAdditionalDirectories` | `boolean` | 否 | Agent 是否支持附加工作目录 |
+| `capabilities` | `AgentCapabilitySnapshot` | 否 | 能力快照（缺省 = 该 controller 版本未上报，服务端按旧行为处理） |
+
+**AgentCapabilitySnapshot 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `protocolVersion` | `number \| null` | Agent 协商的协议版本 |
+| `agentInfo` | `AgentInfo \| null` | Agent 名称与版本 |
+| `features` | `AgentFeatureSupport[]` | 归一化后的能力清单（18 项） |
+| `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods` / `clientCapabilities` |
+
+**AgentFeatureSupport 结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 能力 ID（如 `config.model`、`elicitation.form`） |
+| `status` | `"supported" \| "partial" \| "unsupported"` | Agent 声明 × 平台支持三档合并结果 |
+| `detail` | `string \| null` | 可读说明（未声明字段 / 平台侧限制） |
 
 **SessionConfigOption 结构：**
 
@@ -388,6 +406,7 @@ Controller 转发 ACP 输出。
 | `currentModel` | `AgentModelInfo` | 否 | 当前使用的 LLM 模型信息 |
 | `availableModels` | `AgentModel[]` | 否 | Agent 支持的可用 LLM 模型列表 |
 | `currentModelId` | `string` | 否 | 当前使用的 LLM 模型 ID |
+| `capabilities` | `AgentCapabilitySnapshot` | 否 | 能力快照（结构同 §2.5；缺省 = 旧 controller，不覆盖已落库快照） |
 
 **服务端行为：**
 
@@ -843,6 +862,23 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `elicitationId` | `string` | 是 | Agent 侧 Elicitation ID（与 `acp:elicitation` 中的 `elicitationId` 对应） |
 
 **客户端行为：** 无需响应，收到后忽略未知或已完成的 `elicitationId`。
+
+### 2.34 `acp:elicitation:resolved`（Controller → Server）
+
+Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 Agent 取消）。
+仅用于可观测与待办状态收敛；用户已响应的情况走 `acp:elicitation:response`。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 否 | 平台侧请求 ID（模式不支持时可能没有） |
+| `sessionId` | `string` | 是 | 会话 ID |
+| `reason` | `"unsupported_mode" \| "timeout" \| "cancelled"` | 是 | 结束原因 |
+| `detail` | `string` | 否 | 可读原因（如未知模式名） |
+
+**服务端行为：** 发布 Redis `elicitation:resolved`（附 `userId`/`controllerId`），agent-api 据此把
+对应待办标记为 `failed` / `expired` / `cancelled`，并记录 `resolvedAt`。
 
 ---
 
@@ -1556,6 +1592,8 @@ LLM 模型切换成功后推送。
 **initialize:**
 
 Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 OpenCode 自身处理；声明 `session.configOptions.boolean` 以支持布尔配置项（注意：`session.configOptions.boolean` 是扩展字段，非 ACP 官方 schema 属性）；声明 `elicitation.form`/`elicitation.url` 以支持 Elicitation 两种模式（ACP UNSTABLE 能力，仅显式声明的模式可被 Agent 使用）。
+
+> 历史同步链路 `sync-bridge` 使用同一份 `CLIENT_CAPABILITIES` 声明（`session.configOptions.boolean` + `elicitation.form`/`url`）；因同步进程无用户交互通道，其 `elicitation/create` 一律返回 `cancel` 并记录告警（声明 + 立即取消是合法降级）。
 
 ```json
 {
