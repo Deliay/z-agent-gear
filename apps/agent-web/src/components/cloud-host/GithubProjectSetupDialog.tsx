@@ -118,12 +118,13 @@ export default function GithubProjectSetupDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Github 预制工作负载固定选中且不可取消
+  // Github 预制工作负载固定选中且不可取消；保留用户已勾选的其他负载
   useEffect(() => {
-    if (!open || !githubPresetId) return
-    setSelectedWorkloadIds((prev) =>
-      prev.includes(githubPresetId) ? prev : [...prev, githubPresetId],
-    )
+    if (!open) return
+    setSelectedWorkloadIds((prev) => {
+      const others = prev.filter((id) => id !== githubPresetId)
+      return githubPresetId ? [githubPresetId, ...others] : others
+    })
   }, [open, githubPresetId])
 
   // 默认选中第一个已绑定账号
@@ -133,12 +134,6 @@ export default function GithubProjectSetupDialog({
     if (accounts.some((account) => account.id === accountId)) return
     setAccountId(accounts[0].id)
   }, [open, accounts, accountId])
-
-  // Github 预制工作负载固定选中且不可取消
-  useEffect(() => {
-    if (!open) return
-    setSelectedWorkloadIds(githubPresetId ? [githubPresetId] : [])
-  }, [open, githubPresetId])
 
   const hostRunning = cloudHost.status === 'RUNNING' && !cloudHost.deletedAt
   const trimmedTargetPath = targetPath.trim()

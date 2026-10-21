@@ -33,11 +33,17 @@ function getErrorMessage(error: unknown): string {
   return '安装工作负载失败，请稍后重试'
 }
 
+// 后端 paramSchema.type 落库为小写（text/select/multi_select/boolean），
+// admin GraphQL 输出为大写；此处统一按大小写不敏感归一，避免真实数据退化为 text。
+function normalizedType(field: CloudHostWorkloadParamFieldData): string {
+  return String(field.type ?? '').toUpperCase()
+}
+
 function defaultValueFor(field: CloudHostWorkloadParamFieldData): unknown {
   if (field.defaultValue !== undefined && field.defaultValue !== null) {
     return field.defaultValue
   }
-  switch (field.type) {
+  switch (normalizedType(field)) {
     case 'BOOLEAN':
       return false
     case 'MULTI_SELECT':
@@ -72,7 +78,7 @@ function WorkloadParamFields({
     <div className="min-w-0 space-y-3">
       {schema.map((field) => {
         const value = values[field.key]
-        if (field.type === 'BOOLEAN') {
+        if (normalizedType(field) === 'BOOLEAN') {
           return (
             <label key={field.key} className="flex items-center gap-2">
               <input
@@ -87,7 +93,7 @@ function WorkloadParamFields({
           )
         }
 
-        if (field.type === 'SELECT') {
+        if (normalizedType(field) === 'SELECT') {
           return (
             <div key={field.key} className="min-w-0">
               <label htmlFor={`workload-param-${field.key}`} className="mb-1 block text-sm font-medium">
@@ -111,7 +117,7 @@ function WorkloadParamFields({
           )
         }
 
-        if (field.type === 'MULTI_SELECT') {
+        if (normalizedType(field) === 'MULTI_SELECT') {
           const selected = Array.isArray(value) ? value.map(String) : []
           return (
             <fieldset key={field.key} className="min-w-0">

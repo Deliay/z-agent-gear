@@ -19,6 +19,7 @@ import {
 } from './cloud-host-workload-service.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { KeyedMutex } from './keyed-mutex.js';
 import { sessionService } from './session.js';
 
 type Doc = Record<string, unknown>;
@@ -56,6 +57,8 @@ fi
  * 设置批次下发前 upsert 绑定记录，供容器凭据管理器按 controllerId 取回本机仓库凭据。
  */
 export class CloudHostGithubService {
+  /** 同一云主机串行化设置请求（进程内），与 DB RUNNING 查询构成双保险。 */
+  private readonly mutex = new KeyedMutex();
   private readonly controllerClient: CloudControllerClient;
   private readonly workloadService: CloudHostWorkloadService;
   private readonly catalog: typeof cloudWorkloadCatalog;
@@ -105,33 +108,35 @@ export class CloudHostGithubService {
     );
     if (!authorized) throw new Error('仓库未授权，请前往设置页重新授权');
 
-    const running = await CloudHostSetupOperation.findOne({
-      controllerId: input.controllerId,
-      userId: input.userId,
-      kind: 'githubSetup',
-      status: 'RUNNING',
-    }).lean();
-    if (running) throw new Error('该云电脑正在执行 Github 项目设置');
+    return this.mutex.runExclusive(`github-setup:${input.controllerId}`, async () => {
+      const running = await CloudHostSetupOperation.findOne({
+        controllerId: input.controllerId,
+        userId: input.userId,
+        kind: 'githubSetup',
+        status: 'RUNNING',
+      }).lean();
+      if (running) throw new Error('该云电脑正在执行 Github 项目设置');
 
-    const operation = await CloudHostSetupOperation.create(({
-      userId: input.userId,
-      controllerId: input.controllerId,
-      hostId: host._id,
-      kind: 'githubSetup',
-      status: 'RUNNING',
-      steps: [
-        { key: 'workload', status: 'PENDING', detail: null },
-        { key: 'gitSetup', status: 'PENDING', detail: null },
-        { key: 'session', status: 'PENDING', detail: null },
-      ],
-      containerId: String(host.containerId),
-      accountId: input.accountId,
-      repoFullName,
-      targetPath,
-      setupWorkloadIds: input.workloadIds ?? [],
-    }) as any);
-    this.enqueue(String(operation._id));
-    return mapOperation(operation.toObject());
+      const operation = await CloudHostSetupOperation.create(({
+        userId: input.userId,
+        controllerId: input.controllerId,
+        hostId: host._id,
+        kind: 'githubSetup',
+        status: 'RUNNING',
+        steps: [
+          { key: 'workload', status: 'PENDING', detail: null },
+          { key: 'gitSetup', status: 'PENDING', detail: null },
+          { key: 'session', status: 'PENDING', detail: null },
+        ],
+        containerId: String(host.containerId),
+        accountId: input.accountId,
+        repoFullName,
+        targetPath,
+        setupWorkloadIds: input.workloadIds ?? [],
+      }) as any);
+      this.enqueue(String(operation._id));
+      return mapOperation(operation.toObject());
+    });
   }
 
   enqueue(opId: string): void {
@@ -223,32 +228,33 @@ export class CloudHostGithubService {
         status: 'SKIPPED',
         detail: 'Github 工作负载已安装',
       });
-      return;
+    } else {
+      await this.workloadService.updateStep(opId, 'workload', {
+        status: 'RUNNING',
+        detail: github.name,
+      });
+      const result = await this.controllerClient.startRuntimeWorkload({
+        containerId: String(op.containerId),
+        workloadId: github.id,
+        params: {
+          repoFullName: String(op.repoFullName ?? ''),
+          targetPath: String(op.targetPath ?? ''),
+        },
+        source: 'user',
+      });
+      await this.workloadService.pollBatch(
+        opId,
+        String(op.containerId),
+        result.items.map((item) => item.logId),
+        'workload',
+      );
     }
-    await this.workloadService.updateStep(opId, 'workload', {
-      status: 'RUNNING',
-      detail: github.name,
-    });
-    const result = await this.controllerClient.startRuntimeWorkload({
-      containerId: String(op.containerId),
-      workloadId: github.id,
-      params: {
-        repoFullName: String(op.repoFullName ?? ''),
-        targetPath: String(op.targetPath ?? ''),
-      },
-      source: 'user',
-    });
-    await this.workloadService.pollBatch(
-      opId,
-      String(op.containerId),
-      result.items.map((item) => item.logId),
-      'workload',
-    );
 
-    // 弹窗中额外勾选的 standard 工作负载（Github 固定，已去重）
+    // 弹窗中额外勾选的 standard 工作负载（Github 固定，已去重）；Github 已安装时同样执行。
     const extras = Array.isArray(op.setupWorkloadIds)
       ? (op.setupWorkloadIds as unknown[]).map((value) => String(value))
       : [];
+    const extraNames: string[] = [];
     for (const extraId of extras) {
       if (extraId === github.id) continue;
       const workload = await this.catalog.findById(extraId);
@@ -272,12 +278,15 @@ export class CloudHostGithubService {
         extra.items.map((item) => item.logId),
         'workload',
       );
+      extraNames.push(workload.name);
     }
 
-    await this.workloadService.updateStep(opId, 'workload', {
-      status: 'SUCCEEDED',
-      detail: github.name,
-    });
+    if (!installed || extraNames.length > 0) {
+      await this.workloadService.updateStep(opId, 'workload', {
+        status: 'SUCCEEDED',
+        detail: [installed ? `${github.name}（已安装）` : github.name, ...extraNames].join('、'),
+      });
+    }
   }
 
   private async runGitSetupStep(opId: string, op: Doc): Promise<void> {

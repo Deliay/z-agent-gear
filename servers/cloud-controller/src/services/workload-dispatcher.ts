@@ -65,6 +65,14 @@ export class ContainerNotOnlineError extends Error {
   }
 }
 
+/** runtime 批次参数非法（如空 entries）。 */
+export class InvalidRuntimeBatchError extends Error {
+  constructor(message = 'invalid runtime batch') {
+    super(message);
+    this.name = 'InvalidRuntimeBatchError';
+  }
+}
+
 /** runtime 安装批次：已有 runtime 批次在执行。 */
 export class ContainerBusyError extends Error {
   constructor(message = 'container is busy') {
@@ -422,7 +430,7 @@ export class WorkloadDispatcher {
         throw new ContainerNotOnlineError();
       }
       if (input.entries.length === 0) {
-        throw new ContainerNotOnlineError('no runtime entries');
+        throw new InvalidRuntimeBatchError('runtime batch requires at least one entry');
       }
 
       const now = new Date(this.now());

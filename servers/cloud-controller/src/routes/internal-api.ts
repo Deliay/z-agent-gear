@@ -32,6 +32,7 @@ import {
 import {
   ContainerBusyError,
   ContainerNotOnlineError,
+  InvalidRuntimeBatchError,
   RuntimeContainerNotFoundError,
   type WorkloadDispatcher,
 } from '../services/workload-dispatcher.js';
@@ -498,6 +499,10 @@ export function createInternalRouter(
     }
     if (err instanceof ContainerBusyError) {
       res.status(409).json({ error: 'CONTAINER_BUSY', message: err.message });
+      return;
+    }
+    if (err instanceof InvalidRuntimeBatchError) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
       return;
     }
     if (err instanceof WorkloadPlanError) {

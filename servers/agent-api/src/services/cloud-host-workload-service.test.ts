@@ -217,6 +217,41 @@ describe('CloudHostWorkloadService', () => {
     expect(patch.$set.error).not.toContain('Bearer abc');
   });
 
+  it('T-CHW4b: runInstall 执行失败 → step.workload 被置 FAILED（不再把 workloadId 当 stepKey）', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(
+      lean({
+        _id: 'op4',
+        hostId: HOST_ID,
+        containerId: CONTAINER_ID,
+        workloadId: W1,
+        status: 'RUNNING',
+        steps: [{ key: 'workload', status: 'RUNNING', detail: 'Github' }],
+      }),
+    );
+    const controllerClient = {
+      startRuntimeWorkload: vi.fn().mockRejectedValue(new Error('control plane down')),
+    };
+    const service = new CloudHostWorkloadService({
+      controllerClient: controllerClient as never,
+      catalog: {
+        findById: vi.fn().mockResolvedValue({
+          id: W1,
+          name: 'Github',
+          workloadKind: 'standard',
+        }),
+      } as never,
+    });
+    vi.spyOn(service, 'updateStep').mockResolvedValue();
+
+    await (service as any).runInstall('op4');
+
+    const patch = vi.mocked(CloudHostSetupOperation.updateOne).mock.calls.at(-1)?.[1] as any;
+    expect(patch.$set.status).toBe('FAILED');
+    expect(patch.$set.steps).toEqual([
+      expect.objectContaining({ key: 'workload', status: 'FAILED' }),
+    ]);
+  });
+
   it('mapOperation/sanitizeOperationError 输出契约形态', () => {
     expect(
       mapOperation({

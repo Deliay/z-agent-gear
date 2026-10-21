@@ -164,6 +164,44 @@ describe('CloudHostGithubService', () => {
     expect(controllerClient.startRuntimeScript).toHaveBeenCalled();
   });
 
+  it('T-CHG2b: Github 已安装时仍安装弹窗额外勾选的工作负载', async () => {
+    const EXTRA_ID = '507f1f77bcf86cd799439018';
+    vi.mocked(CloudContainer.findOne).mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          installedWorkloads: [{ workloadId: WORKLOAD_ID }],
+        }),
+      }),
+    } as never);
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(
+      lean({ ...operation, setupWorkloadIds: [WORKLOAD_ID, EXTRA_ID] }),
+    );
+    const catalog = {
+      findGithubPreset: vi.fn().mockResolvedValue({
+        id: WORKLOAD_ID,
+        name: 'Github',
+        workloadKind: 'standard',
+      }),
+      findById: vi.fn().mockResolvedValue({
+        id: EXTRA_ID,
+        name: 'Node.js',
+        workloadKind: 'standard',
+      }),
+    };
+    const { service, controllerClient, workloadService } = makeService({ catalog: catalog as never });
+
+    await (service as any).run('op1');
+
+    expect(controllerClient.startRuntimeWorkload).toHaveBeenCalledTimes(1);
+    expect(controllerClient.startRuntimeWorkload).toHaveBeenCalledWith(
+      expect.objectContaining({ workloadId: EXTRA_ID }),
+    );
+    expect(workloadService.updateStep).toHaveBeenCalledWith('op1', 'workload', {
+      status: 'SUCCEEDED',
+      detail: 'Github（已安装）、Node.js',
+    });
+  });
+
   it('T-CHG3: gitSetup 失败 → operation FAILED，session 保持 PENDING', async () => {
     vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
     const { service, controllerClient, workloadService, createSession } = makeService();

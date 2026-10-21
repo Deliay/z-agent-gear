@@ -276,7 +276,7 @@ export class CloudHostWorkloadService {
         { $set: { status: 'SUCCEEDED', error: null } },
       );
     } catch (err) {
-      await this.fail(opId, err, workloadId);
+      await this.fail(opId, err);
     }
   }
 
