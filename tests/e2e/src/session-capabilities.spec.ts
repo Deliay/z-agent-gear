@@ -304,8 +304,15 @@ test.describe('ACP 能力透明化 E2E', () => {
 
     const banner = page.getByTestId('pending-elicitation-banner');
     await expect(banner).toBeVisible({ timeout: 25000 });
+
+    // 桌面端全局待办可能已自动弹窗（遮罩会拦截提示条点击）：先关闭自动弹窗再验证兜底入口
+    const dialog = page.getByRole('dialog');
+    if (await dialog.isVisible().catch(() => false)) {
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+    }
     await banner.getByRole('button', { name: '查看' }).click();
-    await expect(page.getByRole('dialog').getByText('Need your input')).toBeVisible();
+    await expect(dialog.getByText('Need your input')).toBeVisible();
 
     disconnect();
   });

@@ -119,6 +119,28 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   // 会话能力门控：只对「有快照 + 明确 unsupported」的入口生效（旧会话/partial 放行）
   const capabilities = useAgentCapabilities(sessionData?.session ?? null);
 
+  /** SSE 状态事件里的 availableModels 是 controller 原文（无来源字段）；合并时保留 GraphQL 推断结果 */
+  const mergeModelSources = useCallback(
+    (incoming: AgentModelInfoData[]): AgentModelInfoData[] => {
+      setAvailableModels((prev) => {
+        const byId = new Map(prev.map((model) => [model.id, model]));
+        return incoming.map((model) => {
+          const known = byId.get(model.id);
+          if (!known) return model;
+          return {
+            ...model,
+            source: model.source ?? known.source,
+            sourceProvider: model.sourceProvider ?? known.sourceProvider,
+            group: model.group ?? known.group,
+            basis: model.basis ?? known.basis,
+          };
+        });
+      });
+      return incoming;
+    },
+    [],
+  );
+
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
   const [deleteHistorySession] = useMutation<DeleteHistorySessionMutation>(DELETE_HISTORY_SESSION);
@@ -224,7 +246,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         }
         if (data.data.modes) setModes(data.data.modes);
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
-        if (data.data.availableModels) setAvailableModels(data.data.availableModels);
+        if (data.data.availableModels) mergeModelSources(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
         if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'config:changed') {
@@ -250,7 +272,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     return () => {
       eventSource.close();
     };
-  }, [id, updateCommands, handleSendMessage]);
+  }, [id, updateCommands, handleSendMessage, mergeModelSources]);
 
   // Resume timeout protection
   useEffect(() => {
