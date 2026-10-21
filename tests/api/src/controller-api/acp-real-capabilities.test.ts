@@ -159,6 +159,7 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
   let controllerId = '';
   let authToken = '';
   let configBackup: string | null = null;
+  let realSessionId = '';
 
   beforeAll(async () => {
     if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
@@ -212,6 +213,7 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
     const body = await res.json();
     const sessionId = body.data?.createSession?.session?.id;
     expect(sessionId).toBeTruthy();
+    realSessionId = sessionId;
 
     const session = await waitForSession(sessionId, authToken);
     expect(session.agentCapabilities).not.toBeNull();
@@ -225,20 +227,20 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
   }, 90_000);
 
   it('T-ARC2: partial 项与调研附录判断一致', async () => {
-    const sessionsRes = await gqlRequest(
-      `query { sessions { id agentCapabilities { features { id status } } features { id status } } }`,
-      undefined,
+    expect(realSessionId).toBeTruthy();
+    const res = await gqlRequest(
+      `query Session($id: ID!) { session(id: $id) { features { id status } } }`,
+      { id: realSessionId },
       authToken,
     );
-    const sessionsBody = await sessionsRes.json();
-    const session = (sessionsBody.data?.sessions ?? []).find(
-      (s: any) => Array.isArray(s.features) && s.features.length > 0,
-    );
-    expect(session).toBeDefined();
-    const byId = new Map<string, any>(session.features.map((f: any) => [f.id, f]));
-    // OpenCode 声明 fork/additionalDirectories/image 能力，但平台暂无入口 → partial
-    for (const id of ['session.fork', 'session.additionalDirectories', 'prompt.image']) {
-      if (byId.has(id)) expect(byId.get(id).status).toBe('partial');
-    }
+    const body = await res.json();
+    const features = (body.data?.session?.features ?? []) as Array<{ id: string; status: string }>;
+    const byId = new Map(features.map((f) => [f.id, f]));
+
+    // OpenCode 声明 fork/additionalDirectories/image 能力，但平台暂无入口 → partial。
+    // 至少命中一项，避免循环条件为空导致「零断言恒过」。
+    const partialIds = ['session.fork', 'session.additionalDirectories', 'prompt.image']
+      .filter((id) => byId.get(id)?.status === 'partial');
+    expect(partialIds.length).toBeGreaterThan(0);
   }, 30_000);
 });

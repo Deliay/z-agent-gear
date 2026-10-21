@@ -118,7 +118,10 @@ export function AgentCapabilityPanel({ open, onOpenChange, session }: AgentCapab
                         <p className="mt-0.5 text-xs text-muted-foreground">{feature.detail}</p>
                       )}
                     </div>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}>
+                    <span
+                      data-testid={`agent-capability-status-${id}`}
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
+                    >
                       {meta.label}
                     </span>
                   </li>

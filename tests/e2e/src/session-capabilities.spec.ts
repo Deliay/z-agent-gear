@@ -173,7 +173,9 @@ test.describe('ACP 能力透明化 E2E', () => {
   test.setTimeout(90000);
 
   test('T-E31: 能力面板展示 20 项状态、detail 与 Agent 版本', async ({ page }) => {
-    const { sessionId, disconnect } = await setupSession(page, { capabilities: makeCapabilities() });
+    const { sessionId, disconnect } = await setupSession(page, {
+      capabilities: makeCapabilities({ 'prompt.image': 'partial' }),
+    });
     await openSessionPage(page, sessionId);
 
     await page.getByLabel('能力清单').click();
@@ -181,8 +183,9 @@ test.describe('ACP 能力透明化 E2E', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('Agent：OpenCode 2.0.31')).toBeVisible();
     await expect(page.getByTestId('agent-capability-row-session.load')).toBeVisible();
-    await expect(page.getByTestId('agent-capability-row-elicitation.form')).toContainText('支持');
-    await expect(page.getByTestId('agent-capability-row-prompt.audio')).toContainText('未声明');
+    await expect(page.getByTestId('agent-capability-status-elicitation.form')).toHaveText('支持');
+    await expect(page.getByTestId('agent-capability-status-prompt.image')).toHaveText('部分支持');
+    await expect(page.getByTestId('agent-capability-status-prompt.audio')).toHaveText('不支持');
 
     disconnect();
   });

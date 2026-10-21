@@ -81,15 +81,23 @@ const FEATURE_IDS = [
   'elicitation.form', 'elicitation.url',
 ];
 
-function makeCapabilities(agentVersion = '2.0.31') {
+function makeCapabilities(
+  agentVersion = '2.0.31',
+  overrides: Record<string, 'supported' | 'partial' | 'unsupported'> = {},
+) {
   return {
     protocolVersion: 1,
     agentInfo: { name: 'OpenCode', version: agentVersion },
-    features: FEATURE_IDS.map((id) => ({
-      id,
-      status: id === 'prompt.audio' ? 'unsupported' : id === 'prompt.image' ? 'partial' : 'supported',
-      detail: id === 'prompt.audio' ? '未声明 agentCapabilities.promptCapabilities.audio' : null,
-    })),
+    features: FEATURE_IDS.map((id) => {
+      const status = overrides[id] ?? (id === 'prompt.audio' ? 'unsupported' : id === 'prompt.image' ? 'partial' : 'supported');
+      return {
+        id,
+        status,
+        detail: status === 'unsupported'
+          ? `未声明 ${id}`
+          : id === 'prompt.audio' ? '未声明 agentCapabilities.promptCapabilities.audio' : null,
+      };
+    }),
     raw: {
       agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
       authMethods: [],
@@ -237,13 +245,19 @@ describe('ACP 会话能力快照 API', () => {
       requestId: resumeData.requestId,
       sessionId,
       success: true,
-      capabilities: makeCapabilities('2.1.0'),
+      // 第二个快照翻转 prompt.image（partial → unsupported）并更新版本，
+      // 用于检出「旧值残留」：若仍返回旧状态/旧版本，断言会失败。
+      capabilities: makeCapabilities('2.1.0', { 'prompt.image': 'unsupported' }),
     });
     await sleep(700);
 
     const session = await getSession(sessionId);
     expect(session.agentCapabilities.agentInfo.version).toBe('2.1.0');
     expect(session.features).toHaveLength(FEATURE_IDS.length);
+    const byId = new Map<string, any>(session.features.map((f: any) => [f.id, f]));
+    expect(byId.get('prompt.image')?.status).toBe('unsupported');
+    expect(byId.get('prompt.image')?.detail).toContain('未声明');
+    expect(byId.get('prompt.image')?.status).not.toBe('partial');
 
     client.disconnect();
   });

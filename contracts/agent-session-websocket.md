@@ -172,7 +172,7 @@
 |------|------|------|
 | `protocolVersion` | `number \| null` | Agent 协商的协议版本 |
 | `agentInfo` | `AgentInfo \| null` | Agent 名称与版本 |
-| `features` | `AgentFeatureSupport[]` | 归一化后的能力清单（18 项） |
+| `features` | `AgentFeatureSupport[]` | 归一化后的能力清单（20 项） |
 | `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods` / `clientCapabilities` |
 
 **AgentFeatureSupport 结构：**
