@@ -299,13 +299,17 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     await vi.waitFor(() => {
       expect(fakeBridges.instances.length).toBe(2);
     });
+    processRegistry.register('sess-replace', { pid: 123456, cwd: '/tmp', acpServerType: 'opencode' });
     fake.socket.emit.mockClear();
 
-    // 旧 bridge 迟到 stopped（例如 5s race 后 emitStopped）：持有权守卫必须拦住
+    // 旧 bridge 迟到 stopped（例如 5s race 后 emitStopped）：内联监听器与 onStopped 的
+    // 持有权守卫都必须拦住，不得注销新会话的 process registry / MCP relay 注册。
     (oldBridge as unknown as { emit: (event: string, payload: unknown) => void })
       .emit('acp:stopped', { sessionId: 'sess-replace', reason: 'user_close' });
 
+    expect(processRegistry.get('sess-replace')).toBeDefined();
     expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:start:result', expect.anything());
+    processRegistry.deregister('sess-replace');
   });
 
   it('N3-disconnect: 断线时对每个 bridge 调用 settlePendingOnDisconnect（socket.io 不缓存迟到 timeout）', async () => {

@@ -47,8 +47,9 @@ npm run preview  # Preview production build
 - 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询，保证移动端（Sidebar 未挂载）也能打开 `ElicitationDialog`。
 - `ElicitationDialog` 按 `resolution` / 已过期的 `expiresAt` 展示「已过期/已取消/已失效/已提交/已拒绝」并隐藏操作；到期用定时器就地重渲染（`now = Date.now()`，不得用 `useState` 快照冻结）。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
-  （且不再阻塞后续 immediate 自动弹窗）；`close(owner)` 只允许持有方关闭，切会话/卸载时清理自己持有的状态；
-  表单草稿按 requestId 缓存，owner 切换重挂载不丢已填内容。
+  （stale 判定与 owner 无关，banner/todo 任一持有 stale 都不阻塞后续 immediate）；`close(owner)` 只允许持有方关闭；
+  **真实卸载**时 cleanup 经微任务确认（排除 StrictMode 的 mount→cleanup→mount 模拟卸载）后关闭 `owner='todo'` 弹窗，
+  切会话时 banner 侧同样清理自己持有的状态；表单草稿按 requestId 缓存（上限 50），owner 切换重挂载不丢已填内容。
 
 ## 云电脑（Cloud Host）约定
 

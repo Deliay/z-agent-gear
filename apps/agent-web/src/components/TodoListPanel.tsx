@@ -74,15 +74,17 @@ export function TodoListPanel() {
     if (liveElicitationTodo) syncElicitationSnapshot(liveElicitationTodo);
   }, [liveElicitationTodo, syncElicitationSnapshot]);
 
-  // 面板卸载时清理自己持有的状态。StrictMode 会 mount→cleanup→mount：
-  // 跳过首次 cleanup，避免 dev 下首条 immediate 自动弹窗被误关且 processed 记账后不再重开。
-  const mountedOnceRef = useRef(false);
+  // 面板卸载时清理自己持有的状态。StrictMode 的 mount→cleanup→mount 是 dev-only 模拟卸载：
+  // cleanup 里用微任务标记区分「同 tick 重新挂载」与「真实卸载」，无条件注册 cleanup。
+  const mountedRef = useRef(false);
   useEffect(() => {
-    if (!mountedOnceRef.current) {
-      mountedOnceRef.current = true;
-      return;
-    }
-    return () => closeElicitation('todo');
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      queueMicrotask(() => {
+        if (!mountedRef.current) closeElicitation('todo');
+      });
+    };
   }, [closeElicitation]);
 
   // 检测立即优先级的待办，自动弹出全局弹窗（三种弹窗互斥）

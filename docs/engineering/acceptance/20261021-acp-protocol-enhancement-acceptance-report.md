@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **四轮 AI Review 复核完成：REJECT（四轮打回）**——三轮 4 项 🟠 主体修复真实且可证伪（M1-M4 改坏即红全部复现），独立实跑全部复现返工声称（tsc ×4 全 0、单测 1989 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、缺参负向均红、PR CLEAN、merge-tree 0 冲突）；但 **2 × 🟠**：R1 收口不完整（迟到 `acp:stopped` 另两条产出口未设防，误杀新会话经 `handleError`/内联监听器仍可复现）+ R2 修复反向引入生产缺陷（`mountedOnceRef` 依赖 StrictMode dev-only 语义，生产卸载清理永不注册）；1 × 🟡 台账精确化未执行。详见 §十一。
+> **状态**: 🔁 **五轮返工完成，待五轮 AI Review 复核**——四轮复核 2 项 🟠（R5a 迟到 stopped 另两条产出口、R5b 非 StrictMode 卸载 cleanup 未注册）+ 🟡 R5c 已修复并完成变异实证（§十二）；五轮实跑：tsc ×4 全 0、单测 1991 passed（420/775/233/563）、eslint 0 error/6 存量 warning、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、三组缺参负向均红。
 
 ## 关联文档
 
@@ -573,3 +573,50 @@ settle 前移到 5s race 之前（bridge.ts:356-375，R3 关联）；spawner `'e
 ### 11.6 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（四轮打回）**，返工目标节点「修复Review意见」。四轮返工的证据链质量高（数字全对齐、变异全部可复现、假绿通道封死），本轮 2 项 🟠 均为一行至十行级的收口边界缺陷，且证伪用例已随本文档思路备好，修复成本低；R1/R2 连续两轮在同一类「迟到事件/卸载清理」边界上留口，建议修复时以「所有产出口逐一列举 + 每条产出口一条负断言」的方式自查后再提交。
+
+## 十二、五轮返工修复记录（2026-10-21，对应 §11.3 R5a-R5c）
+
+> 状态：R5a/R5b 全部修复，R5c 随 R5b 收口；每项均有可证伪回归测试并完成变异实证。
+
+### 12.1 R5a：迟到 `acp:stopped` 的其余产出口
+
+R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮逐一封死：
+
+| 产出口 | 修复 |
+|---|---|
+| `acp:start` 内联 `bridge.on('acp:stopped')`（processRegistry.deregister + mcpRelay.unregisterSession） | 增加 `acpBridges.get(sessionId) === bridge` 持有权守卫 |
+| `acp:resume` 内联监听器（同型） | 同上 |
+| `bridge.handleError`（初始化/提示失败，无条件 socket+本地 emit） | 新增 `silentStop` 标记（`stop({silent:true})` 入口即置位）；`handleError` 发现 `stopped || silentStop` 时只收敛 pending，**不再 emit** |
+
+回归测试：
+- `R1: 同 sessionId 重建后旧 bridge 的迟到 stopped 不影响新会话` 扩展为**注册 processRegistry 后**断言注册存活（不再只断言 socket 无 `acp:start:result`）。
+- `R5a: silent stop 后迟到的 handleError 不再向服务端/本地发 acp:stopped`。
+- 变异实证：删内联守卫 → 第一例红；去掉 `wasStopped` 早退 → 第二例红。
+
+### 12.2 R5b：卸载 cleanup 在非 StrictMode 下永不注册
+
+- 改为**无条件注册 cleanup**：cleanup 里置 `mountedRef=false` 并 `queueMicrotask` 检查；StrictMode 的 setup→cleanup→setup 在同一 tick 内把 `mountedRef` 重新置 true，微任务跳过关闭；真实卸载没有重新 setup，微任务执行 `closeElicitation('todo')`。
+- 新增 `R5b: 非 StrictMode 真实卸载时清理 owner=todo 的弹窗状态`：`renderHook` 观察 store，卸载后断言 `todoId/owner` 归零。
+- 变异实证：回灌旧 `mountedOnceRef` 逻辑 → 该用例红（`todoId` 仍为 `todo-prod`）。
+- `apps/agent-web/AGENTS.md` 同步精确口径：真实卸载经微任务确认后清理；StrictMode 模拟卸载不关闭；stale 与 owner 无关；草稿上限 50（R5c）。
+
+### 12.3 五轮实跑证据（Aspire 全栈）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1991 passed**（agent-controller 420 / agent-api 775 / controller-api 233 / agent-web 563） |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） |
+| agent-web production build | ✅ 成功 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip |
+| tests/api billing-events | ✅ 3 passed / 0 skip |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed/exit 1；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed/exit 1；T-AC5 failed（其余 6 passed，exit 1） |
+| 变异实证 | ✅ R5a 内联守卫/`wasStopped` 早退、R5b 旧 cleanup 逻辑，三处改坏均红 |
+
+### 12.4 提交
+
+- 代码修复 commit：`<待回填>`
+- 报告回填 commit：本提交
+- PR #250：状态与 head 以 PR 页面为准。

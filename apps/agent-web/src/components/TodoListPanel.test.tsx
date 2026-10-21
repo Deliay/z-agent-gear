@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TodoListPanel } from './TodoListPanel';
 import { openElicitationDialog } from '../stores/elicitationDialog';
-import { resetElicitationDialog } from '../stores/elicitationDialog';
+import { resetElicitationDialog, useElicitationDialogState } from '../stores/elicitationDialog';
 
 const mockRefetch = vi.fn();
 const mockMarkAllTodoRead = vi.fn().mockResolvedValue({});
@@ -240,6 +240,18 @@ describe('TodoListPanel - 弹窗状态机', () => {
     rerender(<TodoListPanel />);
     await waitFor(() => expect(screen.getByTestId('elicitation-status').textContent).toContain('已提交'));
     expect(screen.getByTestId('elicitation-status').textContent).not.toContain('已从待办移除');
+  });
+
+  it('R5b: 非 StrictMode 真实卸载时清理 owner=todo 的弹窗状态', async () => {
+    mockOverview([makeElicitation('todo-prod', 'elic-prod', 'Prod input')]);
+    const probe = renderHook(() => useElicitationDialogState());
+    const { unmount } = render(<TodoListPanel />);
+    await waitFor(() => expect(probe.result.current.todoId).toBe('todo-prod'));
+
+    unmount();
+
+    await waitFor(() => expect(probe.result.current.todoId).toBeNull());
+    expect(probe.result.current.owner).toBeNull();
   });
 
   it('N6: todo 被移除后不残留 id 阻塞后续 immediate 问询自动弹窗', async () => {

@@ -689,10 +689,12 @@ export function connectToServer(
       // Registry lifecycle is bound to the bridge: any stop exit (user close,
       // agent exit, error) deregisters the PID so stale entries cannot pile up
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
-        if (payload.sessionId === data.sessionId) {
-          processRegistry.deregister(data.sessionId);
-          mcpRelay.unregisterSession(data.sessionId);
-        }
+        if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫（与 onStopped 同口径）：旧 bridge 的迟到 stopped 不得注销新会话的
+        // process registry / MCP relay 注册（否则对账盲区 + MCP 断链）。
+        if (acpBridges.get(data.sessionId) !== bridge) return;
+        processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
       });
 
       // Register PID in process registry after spawner starts
@@ -828,10 +830,12 @@ export function connectToServer(
 
       fsHandler.registerAllowedPath(data.cwd);
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
-        if (payload.sessionId === data.sessionId) {
-          processRegistry.deregister(data.sessionId);
-          mcpRelay.unregisterSession(data.sessionId);
-        }
+        if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫（与 onStopped 同口径）：旧 bridge 的迟到 stopped 不得注销新会话的
+        // process registry / MCP relay 注册（否则对账盲区 + MCP 断链）。
+        if (acpBridges.get(data.sessionId) !== bridge) return;
+        processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
       });
 
       bridge.on('permission:sent', (requestId: string) => {

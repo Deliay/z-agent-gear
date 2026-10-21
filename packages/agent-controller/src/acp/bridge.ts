@@ -222,6 +222,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private initializing = false;
   private stopped = false;
   private processExitSubscribed = false;
+  /** silent stop（同 sessionId 替换/对账）：后续迟到的 handleError 不得再向服务端发 stopped */
+  private silentStop = false;
   private pendingPermissions = new Map<string, {
     resolve: (response: acp.RequestPermissionResponse) => void;
     timeout: NodeJS.Timeout;
@@ -354,6 +356,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   async stop(options: { silent?: boolean } = {}): Promise<void> {
+    if (options.silent) this.silentStop = true;
     this.activePrompt = null;
     this.inputQueue = [];
     // 会话关闭：所有在途问询/授权必须先同步收敛（在 cancel/closeSession 的 5s race 之前），
@@ -958,9 +961,13 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     const msg = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
     console.error(`[ACP bridge] session ${this.sessionId} failed: ${msg}${stack ? `\n${stack}` : ''}`);
+    const wasStopped = this.stopped || this.silentStop;
     this.stopped = true;
     // 进程崩溃同样必须收敛 pending：否则 65s timer 泄漏且迟发 timeout 事件
     this.settlePendingRequests('session failed');
+    // 已停止（含 silent 替换/对账）后迟到的初始化失败：不得再发 stopped，
+    // 否则内联监听器/服务端会按 sessionId 删除新会话的注册与映射。
+    if (wasStopped) return;
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
       reason: 'error',
