@@ -500,4 +500,4 @@ settle 前移到 5s race 之前（bridge.ts:356-375，R3 关联）；spawner `'e
 
 - 代码修复 commit：`af51f4c`（含 R1-R4 修复、回归测试与变异实证）
 - 报告回填 commit：本提交（仅文档；最终 head 以 PR 为准）
-- PR #250：MERGEABLE / CLEAN，20 commits；merge-tree 对最新 release `cb369eb` 0 冲突。
+- PR #250：MERGEABLE / CLEAN（代码修复后仅追加本文档提交，commits 计数以 PR 页面为准）；merge-tree 对最新 release `cb369eb` 0 冲突。
