@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review。首轮打回 1 × 🔴 + 8 × 🟠 + 15 × 🟡；二轮复核 REJECT（二次打回）2 残余 + 6 新 🟠（§七）；三轮返工 8 项 🟠 主体真实修复且独立实跑全部复现（tsc ×4 全 0、单测 1979 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、PR CLEAN、merge-tree 0 冲突），但**三轮复核结论 REJECT（三轮打回）**：4 × 🟠（B-1 修复新引入 reconcile 迟到 acp:stopped 误杀重建会话竞态；B-4 收口不完整+新引入副作用——owner='banner' stale 仍阻塞 immediate 自动弹窗与 StrictMode 首条自动弹窗丢失、AGENTS.md 台账失实、N6 浮空断言；「声称大于实际」第三轮复发——§八「每项均有可证伪回归测试」经改坏即红实证不成立 T-S8、契约 cancelled 条目失实自相矛盾、§8.3「入参校验均收口」措辞失实；A-2 收口不完整——billing T-CC-B11 外层 TOKEN 门控残留缺参整套静默 skip 假绿）；详见 §九
+description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review。首轮打回 1 × 🔴 + 8 × 🟠 + 15 × 🟡；二轮复核 REJECT（二次打回）2 残余 + 6 新 🟠（§七）；三轮返工 8 项 🟠 主体真实修复且独立实跑全部复现（tsc ×4 全 0、单测 1979 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、PR CLEAN、merge-tree 0 冲突），但**三轮复核结论 REJECT（三轮打回）**：4 × 🟠（B-1 修复新引入 reconcile 迟到 acp:stopped 误杀重建会话竞态；B-4 收口不完整+新引入副作用——owner='banner' stale 仍阻塞 immediate 自动弹窗与 StrictMode 首条自动弹窗丢失、AGENTS.md 台账失实、N6 浮空断言；「声称大于实际」第三轮复发——§八「每项均有可证伪回归测试」经改坏即红实证不成立 T-S8、契约 cancelled 条目失实自相矛盾、§8.3「入参校验均收口」措辞失实；A-2 收口不完整——billing T-CC-B11 外层 TOKEN 门控残留缺参整套静默 skip 假绿）；四轮返工 R1-R4 主体真实且变异实证全部复现（M1-M4 改坏即红）、独立实跑全部复现声称（tsc ×4 全 0、单测 1989 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、缺参负向均红、PR CLEAN、merge-tree 0 冲突），但**四轮复核结论 REJECT（四轮打回）**：2 × 🟠（R1 收口不完整——迟到 acp:stopped 经内联监听器与 handleError 两条产出口仍可误杀重建会话；R2 修复反向引入生产缺陷——mountedOnceRef 依赖 StrictMode dev-only 语义致生产卸载清理永不注册）+ 1 × 🟡（AGENTS.md 精确化未执行）；详见 §九/§十一
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **四轮返工完成，待四轮 AI Review 复核**——三轮复核 4 项 🟠（R1 reconcile 竞态、R2 stale/StrictMode、R3 台账一致性、R4 token 门控）已逐项修复并附变异实证（§十）；四轮独立实跑：tsc ×4 全 0、单测 1989 passed（419/775/233/562）、eslint 0 error/6 存量 warning、tests/api 13 + billing-gateway 6 + billing-events 3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
+> **状态**: 🔁 **四轮 AI Review 复核完成：REJECT（四轮打回）**——三轮 4 项 🟠 主体修复真实且可证伪（M1-M4 改坏即红全部复现），独立实跑全部复现返工声称（tsc ×4 全 0、单测 1989 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、缺参负向均红、PR CLEAN、merge-tree 0 冲突）；但 **2 × 🟠**：R1 收口不完整（迟到 `acp:stopped` 另两条产出口未设防，误杀新会话经 `handleError`/内联监听器仍可复现）+ R2 修复反向引入生产缺陷（`mountedOnceRef` 依赖 StrictMode dev-only 语义，生产卸载清理永不注册）；1 × 🟡 台账精确化未执行。详见 §十一。
 
 ## 关联文档
 
@@ -501,3 +501,75 @@ settle 前移到 5s race 之前（bridge.ts:356-375，R3 关联）；spawner `'e
 - 代码修复 commit：`af51f4c`（含 R1-R4 修复、回归测试与变异实证）
 - 报告回填 commit：本提交（仅文档；最终 head 以 PR 为准）
 - PR #250：MERGEABLE / CLEAN（代码修复后仅追加本文档提交，commits 计数以 PR 页面为准）；merge-tree 对最新 release `cb369eb` 0 冲突。
+
+## 十一、四轮 AI Review 复核（2026-10-21/22）：结论 REJECT（四轮打回）
+
+### 11.1 复核方法与独立验证（不采信自报，全部本机实跑）
+
+逐文件读码核对 `af51f4c`（21 文件）+ 全部台账声称与实现对照 + **改坏即红变异实证**（复跑四轮声称的 3 组变异）+ **独立证伪测试**（对声称的不变量写反向用例）+ Aspire 全栈实机运行 tests/api 与 tests/e2e + 缺参负向核对。
+
+| 项目 | 四轮复核实跑 | 与返工声称对比 |
+|---|---|---|
+| tsc ×4（agent-controller / agent-api / controller-api / agent-web） | ✅ 全 0 | 一致 |
+| 单测 | ✅ **1989 passed**（419 / 775 / 233 / 562） | **精确一致** |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） | 一致 |
+| agent-web production build | ✅ 成功（仅 chunk 体积提示） | 一致 |
+| tests/api session-capabilities + elicitation | ✅ **13 passed / 0 skip** | 一致 |
+| tests/api billing-gateway | ✅ **6 passed / 0 skip** | 一致 |
+| tests/api billing-events | ✅ **3 passed / 0 skip** | 一致 |
+| tests/e2e session-capabilities + permission | ✅ **19 passed / 0 skip** | 一致 |
+| PR #250 | ✅ OPEN / MERGEABLE / CLEAN，head `b4a2e17`，22 commits | 一致（口径以 PR 页面为准） |
+| 合并预检 `git merge-tree --write-tree`（vs `origin/release`） | ✅ exit 0 无冲突 | 一致 |
+
+**缺参负向核对（实测）**：billing-events 缺 token → **3 failed / 0 skip** ✅；billing-gateway 缺 `MONGODB_URI` → **T-B24/T-B27/T-B28 failed / 0 skip** ✅；session-capabilities 缺 `MONGODB_URI` → **T-AC5 failed（其余 6 passed）** ✅——三组全部与 §10.4/§10.6 声称一致，R4 假绿通道封死属实。
+
+**变异实证（复跑四轮声称）**：① 删 `elicitation-manager.ts:116` clearTimeout → T-S8 红 ✅；② 去掉 onStopped 持有权守卫 → R1 用例红 ✅；③ 回灌旧 `elicitationBlocking` → R2-1 红 ✅；④ 回灌旧无条件 cleanup → R2-2 红 ✅。四轮「改坏即红」声称**全部属实**（三轮 R3a「声称大于实际」病灶在证据面已收敛）。
+
+**关键事实**：四轮返工质量与证据链继续提升，R1-R4 主体机制真实、可证伪性全部经变异实证复现。**打回不针对主体，而针对下列 2 项：R1/R2 修复各自在边界处留有/引入缺陷（各补证伪测试实测红），属同一「收口不完整 + 测试绿应用坏」病灶的第四轮变体。**
+
+### 11.2 三轮 4 项 🟠 逐项复核结论
+
+| 三轮编号 | 问题 | 四轮结论 | 证据摘要 |
+|---|---|---|---|
+| R1 | reconcile 迟到 `acp:stopped` 误杀重建会话 | ⚠️ PARTIAL（R5a） | 主路径真实修复：reconcile 先同步 settle 再 `stop({silent:true})`、替换路径 silent、`onStopped` 持有权守卫、`stop({silent:true})` 不发 `acp:stopped`（均核实 + 变异②实证）；但**迟到 stopped 的另两条产出口未设防**（见 11.3 R5a） |
+| R2 | stale 阻塞 + StrictMode 首弹丢失 | ⚠️ PARTIAL（R5b） | blocking/stale owner 无关（变异③实证）、N6 补 `await`、R2-1/R2-2 可证伪均属实；但 `mountedOnceRef` **反向引入生产缺陷**（见 11.3 R5b） |
+| R3 | 「声称大于实际」第三次复发 | ✅ FIXED | T-S8 可证伪化（变异①实证）；契约 `cancelled` 条目已按实现修正并与 §2.34 对齐（读码核实）；settle 前移至 5s race 之前（`bridge.ts:358-361`，R3 用例覆盖 cancel 永久挂起）；`handleElicitationRequest` 校验补全（requestedSchema ≤64KiB / url 仅 http(s) ≤2048 / toolCallId / elicitationId）+ T-S11；§8.3 已改精确字段清单 |
+| R4 | billing T-CC-B11 双门控假绿 | ✅ FIXED | `describe.skipIf(!TOKEN)` 移除、`beforeEach(requireToken)`、billing-gateway beforeAll 不抛错 + 用例体显式断言；缺参负向三组实测全红 0 skip（11.1） |
+
+### 11.3 四轮问题清单（打回依据）
+
+**【🟠-R5a R1 收口不完整：迟到 `acp:stopped` 的另两条产出口未设防，「误杀重建会话」仍可复现】**
+
+- **问题描述**：R1 为「迟到 `acp:stopped`」只封了两条出口：`stop({silent:true})` 不发事件、`onStopped` 加持有权守卫。但同一事件还有两条出口未设防：
+  1. **内联监听器无守卫**：`acp:start`（`socketio-client.ts:691-696`）与 `acp:resume`（:830-836）各自注册的内联 `bridge.on('acp:stopped')`（`processRegistry.deregister(sessionId)` + `mcpRelay.unregisterSession(sessionId)`，按 sessionId 键删除）**没有** `acpBridges.get(sessionId) === bridge` 守卫——旧 bridge 的迟到本地 stopped 会把**新会话**的进程注册与 MCP relay 注册一并注销（新会话成为对账盲区、MCP 中继断链）。
+  2. **`handleError` 无 silent/stopped 意识**：`bridge.ts:957-975` 无条件 `socket.emit('acp:stopped')` + 本地 emit——旧 bridge 若在被替换时仍处于初始化中（`acp:start` 注释自述的「start 超时后的兜底 resume/重试与迟到初始化交叠」恰是替换路径的**主场景**），init 随后失败即触发 `handleError`：本地 emit 命中 ① 的内联监听器，socket emit 命中服务端 `handleControllerStopped` 删除新会话映射——**R1 定义的失败模式经由另一条产出口原样重现**。
+- **证伪实测**：独立证伪用例（替换同 sessionId → 模拟新 bridge 注册 → 旧 bridge 迟到 `acp:stopped`）**实测红**：`processRegistry.get('sess-r')` 为 undefined（新会话注册被注销）。而 R1 回归测试只断言「socket 不发 `acp:start:result`」，对内联监听器的破坏零感知——「旧 bridge 的迟到 stopped 不影响新会话」的**声称面大于测试面**。
+- **修复方案**：内联监听器并入同一持有权守卫（`acpBridges.get(sessionId) === bridge` 才 deregister/unregister），或统一收口到 `onStopped`；`handleError` 尊重 silent/stopped（已 silent 或已 stopped 时不再发事件，或同样经持有权判定后发）；回归测试补两条断言（迟到 stopped 后新会话 registry/relay 注册存活、`handleError` 迟到不向服务端发 `acp:stopped`），证伪用例可直接改造沿用。
+
+**【🟠-R5b R2 修复反向引入生产缺陷：卸载 cleanup 在非 StrictMode 下永不注册（「测试绿、应用坏」反向复发）】**
+
+- **问题描述**：`TodoListPanel.tsx:80-88` 的 `mountedOnceRef` 方案把「跳过 StrictMode 首次 cleanup」实现为「首次 effect 不注册 cleanup」。但 StrictMode 的 setup→cleanup→setup 双调用是 **dev-only** 语义：生产环境每次挂载只跑一次 effect，首轮即 `return` undefined——**卸载 cleanup 永远不会被注册**，`closeElicitation('todo')` 在生产卸载时不再执行。真实卸载场景：移动端首页→会话详情（`MainLayout.tsx:105-110` 此时整个 Sidebar 不渲染）、桌面↔移动断点切换。结果：owner='todo' 的弹窗状态残留（重新挂载后幻影重现），代码注释「面板卸载时清理自己持有的状态」与 `apps/agent-web/AGENTS.md`「切会话/卸载时清理自己持有的状态」在生产口径**失实**。
+- **证伪实测**：独立证伪用例（**不带 StrictMode** 渲染 → immediate 自动弹窗 → unmount → 断言 store 状态关闭）**实测红**：`todoId` 仍为 `'todo-p'`。R2-2 用例带 `<StrictMode>` 渲染，只能证明 dev 语义，测不到本缺陷；「第二次挂载才注册清理」仅在 StrictMode 成立。全库（TodoListPanel/store 测试）**无任何卸载清理用例**（StrictMode 与否均无）——与 R2 原缺陷同型的「测试绿、应用坏」以反向形式复发。
+- **修复方案**：改为「cleanup 总是注册，但只跳过 StrictMode 的模拟卸载」语义（如 setup 内以微任务/时间戳标记「真实挂载完成」，cleanup 仅在标记后执行 `closeElicitation('todo')`）；或在 `closeElicitationDialog`/store 侧同步清 `processedImmediateRef` 记账后恢复无条件 cleanup；补「非 StrictMode 卸载即清理」可证伪用例（证伪用例可直接改造沿用）；同步修正注释与 AGENTS.md 表述。
+
+**【🟡-R5c R2 修复要求「AGENTS.md 表述精确化」未执行】**：`af51f4c` 未包含 `apps/agent-web/AGENTS.md`（§9.6 第 2 条明确要求）。其中「不再阻塞后续 immediate」经 owner 无关修复后已为真，但同段「切会话/卸载时清理自己持有的状态」因 R5b 失实，且「只有列表中仍存在的问询才阻塞自动弹窗」等限定语未按要求落台账。随 R5b 一并精确化。
+
+### 11.4 反证记录（人工复核排除的疑点）
+
+| 疑点 | 复核结论 |
+|---|---|
+| R2-1 放行后 banner stale 弹窗被新 immediate 顶掉（表单丢失） | **不判缺陷**：§9.6 明确要求「blocking/stale owner 无关、stale 放行」，顶替是既定取舍；drafts 按 requestId 缓存兜底 |
+| `stop({silent:true})` 后服务端不再收到该会话的 stopped | **不判缺陷**：reconcile 杀的本就是服务端已判定不存在/待杀的会话；替换路径服务端自身发起 `acp:start`，语义自洽 |
+| `handleElicitationRequest` 非 url 模式下 `url` 字段仅限长不限协议 | **不判缺陷**：非 url 模式 `url` 不参与展示/开窗（前端 `handleOpenUrl` 已双重校验 http(s)），登记即可 |
+| `validSchema` 对 `JSON.stringify` 抛错（循环引用） | **排除**：socket.io payload 经 JSON 反序列化，无循环引用面 |
+| 四轮声称「变异实证」可能自证式摆拍 | **排除**：M1-M4 由本轮独立复跑重放，全部红，与声称一致 |
+
+### 11.5 修复要求（五轮复核入口条件）
+
+1. **R5a**：迟到 `acp:stopped` 全部产出口收口——内联监听器加持有权守卫（或并入 `onStopped`）、`handleError` 尊重 silent/stopped；补两条回归断言（新会话 registry/relay 注册存活、`handleError` 迟到不发服务端 `acp:stopped`）。
+2. **R5b**：卸载 cleanup 改「总是注册、仅跳过 StrictMode 模拟卸载」（或 close 时清记账后恢复无条件 cleanup）；补「非 StrictMode 卸载即清理」可证伪用例；注释与 AGENTS.md 同步（含 R5c）。
+3. 台账一致性自查继续：所有「清理/不影响/均收口」断言与实现逐条对照后方可声称；修复后重跑 tsc ×4、四包单测、tests/api 三套（含缺参负向）、tests/e2e，登记实跑与变异证据，重提**五轮 AI Review**。
+
+### 11.6 判定
+
+按验收红线「🔴/🟠 → 打回返工」：**REJECT（四轮打回）**，返工目标节点「修复Review意见」。四轮返工的证据链质量高（数字全对齐、变异全部可复现、假绿通道封死），本轮 2 项 🟠 均为一行至十行级的收口边界缺陷，且证伪用例已随本文档思路备好，修复成本低；R1/R2 连续两轮在同一类「迟到事件/卸载清理」边界上留口，建议修复时以「所有产出口逐一列举 + 每条产出口一条负断言」的方式自查后再提交。
