@@ -755,8 +755,10 @@ export function connectToServer(
         if (payload.sessionId !== data.sessionId) return;
         // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
         // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        // current === undefined 也视为「已不是当前持有者」（替换路径 delete→set 窗口），
+        // 否则旧 bridge 会注销新会话刚注册的 MCP relay / process registry。
         const current = acpBridges.get(data.sessionId);
-        if (current && current !== bridge) return;
+        if (current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -869,8 +871,10 @@ export function connectToServer(
         if (payload.sessionId !== data.sessionId) return;
         // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
         // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        // current === undefined 也视为「已不是当前持有者」（替换路径 delete→set 窗口），
+        // 否则旧 bridge 会注销新会话刚注册的 MCP relay / process registry。
         const current = acpBridges.get(data.sessionId);
-        if (current && current !== bridge) return;
+        if (current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -1048,7 +1052,6 @@ export function connectToServer(
     let killedByRegistry = false;
     if (bridge) {
       await bridge.stop();
-      acpBridges.delete(data.sessionId);
     } else {
       // Bridge not found: fallback to registry PID kill
       const entry = processRegistry.get(data.sessionId);
@@ -1073,13 +1076,21 @@ export function connectToServer(
         processRegistry.deregister(data.sessionId);
       }
     }
-    mcpRelay.unregisterSession(data.sessionId);
-    if (data.ackRequired) {
-      socket.emit('acp:stopped', {
-        sessionId: data.sessionId,
-        reason: 'user_close',
-        killed: killedByRegistry,
-      });
+    // await 期间同 sessionId 可能已被新 bridge 接管（stop 后立即 resume）：
+    // 仅当自己仍是当前持有者时才清理映射/回 ack，避免误杀新会话（R6c）。
+    const stillCurrent = bridge
+      ? acpBridges.get(data.sessionId) === bridge
+      : !acpBridges.get(data.sessionId);
+    if (stillCurrent) {
+      if (bridge) acpBridges.delete(data.sessionId);
+      mcpRelay.unregisterSession(data.sessionId);
+      if (data.ackRequired) {
+        socket.emit('acp:stopped', {
+          sessionId: data.sessionId,
+          reason: 'user_close',
+          killed: killedByRegistry,
+        });
+      }
     }
   });
 

@@ -951,8 +951,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       clearTimeout(this.textChunkTimer);
       this.textChunkTimer = null;
     }
-    // silent：同 sessionId 被替换/对账杀掉时，旧 bridge 的迟到 stopped 不得删除新会话映射
-    if (silent) return;
+    // silent：同 sessionId 被替换/对账杀掉时，旧 bridge 的迟到 stopped 不得删除新会话映射。
+    // silentStop 为 once-silent-always-silent：非 silent stop 在 5s race 在途时被替换路径
+    // 的 stop({silent:true}) 接管，迟到的 emitStopped 同样必须抑制（R6a）。
+    if (silent || this.silentStop) return;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }

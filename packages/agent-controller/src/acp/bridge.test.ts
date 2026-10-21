@@ -777,6 +777,44 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(stopped).not.toHaveBeenCalled();
   });
 
+  it('R6a: 非 silent stop 在途被 silent stop 覆盖后，迟到 emitStopped 不发 stopped', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+    const connection = (bridge as unknown as {
+      connection: { cancel: ReturnType<typeof vi.fn> };
+    }).connection;
+    connection.cancel.mockReturnValue(new Promise(() => {}));
+    mockSocket.emit.mockClear();
+
+    const first = bridge.stop();
+    const second = bridge.stop({ silent: true });
+    await vi.advanceTimersByTimeAsync(5000);
+    await Promise.all([first, second]);
+
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+  });
+
+  it('R6b: stop 5s race 在途（stopped 尚未置位）时 handleError 仍被 silentStop 抑制', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+    const connection = (bridge as unknown as {
+      connection: { cancel: ReturnType<typeof vi.fn> };
+    }).connection;
+    connection.cancel.mockReturnValue(new Promise(() => {}));
+    mockSocket.emit.mockClear();
+
+    const first = bridge.stop();
+    const second = bridge.stop({ silent: true });
+    // 此时 stopped 仍为 false（emitStopped 尚未执行），只能靠 silentStop 早退
+    (bridge as unknown as { handleError: (error: unknown) => void })
+      .handleError(new Error('late init failure in stop race window'));
+
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await Promise.all([first, second]);
+  });
+
   it('R5a: silent stop 后迟到的 handleError 不再向服务端/本地发 acp:stopped', async () => {
     const bridge = createBridge();
     const stopped = vi.fn();

@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **五轮 AI Review 复核完成：REJECT（五轮打回）**——R5b/R5c ✅ 真实修复且可证伪（变异实证红）；R5a 两条指定产出口已封死（M1/M2 变异实证红），但「全产出口逐一封死」声称被证伪：2 × 🟠（R6a `emitStopped` 不认 `silentStop`——stop 在途被替换后迟到 stopped 仍误杀重建会话，独立证伪用例实测红；R6b 测试面未达入口条件——relay 断言缺位 + silentStop 零覆盖，M4 反向变异实证「声称大于测试面」第五轮复发）+ 1 × 🟡（R6c acp:stop handler 存量同型登记）；五轮独立实跑全部复现返工声称（tsc ×4 全 0、单测 1991 passed 420/775/233/563、tests/api 13+6+3、tests/e2e 19 passed 0 skip、缺参负向三组均红、PR #250 CLEAN head cb52c5c、merge-tree 0 冲突）；详见 §十三。
+> **状态**: 🔁 **六轮返工完成，待六轮 AI Review 复核**——五轮复核 R6a（emitStopped 不认 silentStop、onStopped 空档、acp:stop 存量）与 R6b（mcpRelay 断言缺失/窗口用例缺失）已修复，R6c 一并收口；已落「产出口 × 负断言」自查表并逐条变异（M1-M4 全红，§十四）。六轮实跑：tsc ×4 全 0、单测 1996 passed（425/775/233/563）、eslint 0 error/6 存量 warning、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、三组缺参负向均红。
 
 ## 关联文档
 
@@ -692,3 +692,61 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 ### 13.6 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（五轮打回）**，返工目标节点「修复Review意见」。五轮返工质量与证据链继续提升（R5b/R5c 真实修复、三组变异全部可复现、实跑数字全对齐、缺参负向封死），本轮 1 项 🟠 为一行级收口缺陷（`emitStopped` 补 `|| this.silentStop`）+ 1 项 🟠 测试面补强，修复成本低。「迟到事件产出口收口」连续三轮留口（三轮 reconcile / 四轮内联+handleError / 五轮 emitStopped），六轮请以 13.5-2 的自查表**先列全产出口、再逐条上守卫与负断言**，一次性收口。
+
+## 十四、六轮返工修复记录（2026-10-21，对应 §13.3 R6a-R6c）
+
+> 状态：R6a/R6b 修复、R6c 随修复收口；按「产出口 × 负断言」自查表逐条落地并完成单点变异实证。
+
+### 14.1 R6a：迟到 `acp:stopped` 第四条产出口与空档窗口
+
+| 产出口 | 修复 | 负断言测试 |
+|---|---|---|
+| `bridge.emitStopped`（非 silent stop 在 5s race 后迟到执行） | 判定改为 `if (silent \|\| this.silentStop) return;`（once-silent-always-silent），不再只看调用参数 | `R6a: 非 silent stop 在途被 silent stop 覆盖后，迟到 emitStopped 不发 stopped` |
+| `onStopped` 的 `current === undefined` 空档（替换 delete→set 窗口） | 收紧为 `if (current !== bridge) return;` | `R6a-空档: 替换 delete→set 窗口（current===undefined）旧 stopped 不注销注册` |
+| `acp:stop` 在 `await bridge.stop()` 之后的 `acpBridges.delete` / `mcpRelay.unregisterSession` / ack `socket.emit('acp:stopped')`（R6c，release 存量） | 增加 `stillCurrent` 持有权判定，仅当前持有者才清理与回 ack | `R6c: acp:stop 在途时同 sessionId 被替换，迟到 ack 不得发 acp:stopped` |
+
+### 14.2 R6b：补齐测试面与自查表
+
+- R1 用例补 `McpRelay.prototype.unregisterSession` 断言（不再只断言 processRegistry）。
+- 新增 stop 5s race 在途窗口的 `handleError` 负断言（`stopped` 尚未置位，只有 `silentStop` 能拦住）。
+- 新增 `acp:resume` 替换路径的 registry 存活断言。
+- 六轮自查表（所有可产生迟到 stopped/注销的产出口 × 每条一条负断言）：
+
+| # | 产出口 | 守卫 | 负断言测试 |
+|---|---|---|---|
+| 1 | `bridge.emitStopped`（非 silent 迟到） | `silent \|\| silentStop` | R6a |
+| 2 | `bridge.handleError` | `stopped \|\| silentStop` | R5a、R6b |
+| 3 | `acp:start` 内联 `acp:stopped` | `current !== bridge` | R1、R6a-空档 |
+| 4 | `acp:resume` 内联 `acp:stopped` | `current !== bridge` | R6a-resume |
+| 5 | `onStopped`（含 `current===undefined`） | `current !== bridge` | R1、R6a-空档 |
+| 6 | `acp:stop` await 后清理/ack | `stillCurrent` | R6c |
+
+### 14.3 变异实证（逐条单独执行）
+
+| 变异 | 结果 |
+|---|---|
+| M1 `emitStopped` 去掉 `\|\| silentStop` | R6a **红** |
+| M2 `wasStopped` 去掉 `\|\| silentStop` | R6b **红** |
+| M3 `onStopped` 回灌 `current && current !== bridge` | R6a-空档 **红** |
+| M4 `acp:stop` 回灌 `stillCurrent = true` | R6c **红** |
+
+### 14.4 六轮实跑证据（Aspire 全栈）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1996 passed**（agent-controller 425 / agent-api 775 / controller-api 233 / agent-web 563） |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） |
+| agent-web production build | ✅ 成功 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip |
+| tests/api billing-events | ✅ 3 passed / 0 skip |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed/exit 1；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed/exit 1；T-AC5 failed/exit 1 |
+| 合并预检 | ✅ merge-tree 对最新 release 0 冲突 |
+
+### 14.5 提交
+
+- 代码修复 commit：六轮修复提交（R6a/R6b/R6c 及回归测试，见 git log）
+- 报告回填 commit：本提交
+- PR #250：状态与 head 以 PR 页面为准。

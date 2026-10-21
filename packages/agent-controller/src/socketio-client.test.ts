@@ -25,6 +25,7 @@ vi.mock('./acp/bridge.js', async () => {
   const { EventEmitter } = await import('events');
   class FakeAcpSessionBridge extends EventEmitter {
     start = vi.fn().mockResolvedValue(undefined);
+    resume = vi.fn().mockResolvedValue(undefined);
     stop = vi.fn().mockResolvedValue(undefined);
     settlePendingOnDisconnect = vi.fn();
     constructor() {
@@ -48,6 +49,7 @@ vi.mock('./acp/spawner.js', () => ({
 
 import { buildAcpInitResult, cloudHostReconnectDelay, connectToServer } from './socketio-client.js';
 import { processRegistry } from './acp/process-registry.js';
+import { McpRelay } from './mcp/relay.js';
 
 function errorHandler(): (payload: { code: string; message: string }) => void {
   const handler = fake.handlers.get('error');
@@ -288,6 +290,7 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
   });
 
   it('R1: 同 sessionId 重建后旧 bridge 的迟到 stopped 不影响新会话', async () => {
+    const unregisterSpy = vi.spyOn(McpRelay.prototype, 'unregisterSession');
     const oldBridge = await startBridge('sess-replace');
     // 同 sessionId 再次 acp:start：旧 bridge 被 silent 停掉并新建
     fake.handlers.get('acp:start')?.({
@@ -308,8 +311,88 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
       .emit('acp:stopped', { sessionId: 'sess-replace', reason: 'user_close' });
 
     expect(processRegistry.get('sess-replace')).toBeDefined();
+    expect(unregisterSpy).not.toHaveBeenCalledWith('sess-replace');
     expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:start:result', expect.anything());
     processRegistry.deregister('sess-replace');
+  });
+
+  it('R6a-空档: 替换 delete→set 窗口（current===undefined）旧 stopped 不注销注册', async () => {
+    const oldBridge = await startBridge('sess-gap');
+    processRegistry.register('sess-gap', { pid: 654321, cwd: '/tmp', acpServerType: 'opencode' });
+
+    let releaseStop!: () => void;
+    (oldBridge as unknown as { stop: ReturnType<typeof vi.fn> }).stop.mockReturnValueOnce(
+      new Promise<void>((resolve) => { releaseStop = resolve; }),
+    );
+    // 替换路径：delete 后 await 旧 stop，此时 acpBridges 处于「无当前 bridge」空档
+    const restartPromise = (fake.handlers.get('acp:start') as unknown as (
+      payload: Record<string, unknown>,
+    ) => Promise<void>)({
+      requestId: 'req-gap',
+      sessionId: 'sess-gap',
+      serverType: 'opencode',
+      cwd: '/tmp',
+    });
+    await vi.waitFor(() => {
+      expect((oldBridge as unknown as { stop: ReturnType<typeof vi.fn> }).stop).toHaveBeenCalledWith({ silent: true });
+    });
+
+    (oldBridge as unknown as { emit: (event: string, payload: unknown) => void })
+      .emit('acp:stopped', { sessionId: 'sess-gap', reason: 'user_close' });
+
+    expect(processRegistry.get('sess-gap')).toBeDefined();
+    releaseStop();
+    await restartPromise;
+    processRegistry.deregister('sess-gap');
+  });
+
+  it('R6a-resume: resume 替换同 sessionId 后旧 stopped 不注销新会话注册', async () => {
+    const oldBridge = await startBridge('sess-resume-replace');
+    processRegistry.register('sess-resume-replace', { pid: 777777, cwd: '/tmp', acpServerType: 'opencode' });
+
+    (fake.handlers.get('acp:resume') as unknown as (payload: Record<string, unknown>) => Promise<void>)({
+      requestId: 'req-resume',
+      sessionId: 'sess-resume-replace',
+      serverType: 'opencode',
+      cwd: '/tmp',
+      externalSessionId: 'ext-1',
+    });
+    await vi.waitFor(() => expect(fakeBridges.instances.length).toBe(2));
+    fake.socket.emit.mockClear();
+
+    (oldBridge as unknown as { emit: (event: string, payload: unknown) => void })
+      .emit('acp:stopped', { sessionId: 'sess-resume-replace', reason: 'error' });
+
+    expect(processRegistry.get('sess-resume-replace')).toBeDefined();
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:resume:result', expect.anything());
+    processRegistry.deregister('sess-resume-replace');
+  });
+
+  it('R6c: acp:stop 在途时同 sessionId 被替换，迟到 ack 不得发 acp:stopped', async () => {
+    const oldBridge = await startBridge('sess-stop-replace');
+    let releaseStop!: () => void;
+    (oldBridge as unknown as { stop: ReturnType<typeof vi.fn> }).stop.mockReturnValueOnce(
+      new Promise<void>((resolve) => { releaseStop = resolve; }),
+    );
+
+    const stopHandler = fake.handlers.get('acp:stop') as unknown as (
+      payload: { sessionId: string; ackRequired: boolean },
+    ) => Promise<void>;
+    const stopPromise = stopHandler({ sessionId: 'sess-stop-replace', ackRequired: true });
+
+    // 替换路径：同 sessionId 重新 acp:start（旧 bridge.stop 第二次调用走 mockResolvedValue）
+    fake.handlers.get('acp:start')?.({
+      requestId: 'req-shift',
+      sessionId: 'sess-stop-replace',
+      serverType: 'opencode',
+      cwd: '/tmp',
+    });
+    await vi.waitFor(() => expect(fakeBridges.instances.length).toBe(2));
+
+    releaseStop();
+    await stopPromise;
+
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
   });
 
   it('N3-disconnect: 断线时对每个 bridge 调用 settlePendingOnDisconnect（socket.io 不缓存迟到 timeout）', async () => {
