@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review：首轮打回 2 × 🔴 + 7 × 🟠 + 27 × 🟡 已由返工提交 3627eda 全部修复（A-1 CAS/回收、D-1 会话级只读、A-2/A-3 写路径收口、B-1 STARTING 放行、C-1/C-2 失败语义、D-2/D-3 体验与测试真实性、🟡 随修复收口）；返工回归七包 tsc/build 0 error、单测 3310 passed/1 skipped、agent-web lint 0 error，tests/api/E2E 待二轮复跑，提交二轮 AI Review 复核
+description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review 两轮：首轮打回 2 × 🔴 + 7 × 🟠 + 27 × 🟡，返工 3627eda 二轮复核后再次打回——D-1 修复为运行时不生效的死代码（Session 类型 resolver 未登记，GET_SESSION controllerType/cloudHost 恒 null，软删会话仍可输入，测试假绿换层重现，运行时实证坐实）+ D-6 tests/api 显式断言与服务端真实行为不符把套件改红 + C-1 落库测试假绿 + D-2 自动进入竞态；其余 A-1/A-2/A-3/B-1/C-2/D-2 主体与 🟡×27 复核属实；七包单测 3310 passed、tests/api 484 passed/1 failed、合并预检 CLEAN
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **首轮 AI Review 打回后已返工完成（REWORK→DONE），待二轮 AI Review 复核**——`integration` 提交 `3627eda` 逐项修复 **2 × 🔴 阻断 + 7 × 🟠 重要 + 27 × 🟡 建议**：A-1 改为 CAS 回写 + 未命中销毁回收，D-1 只读判定改读 `GET_SESSION.controllerType/cloudHost`（含软删留档）并按真实响应形态重写单测；A-2/A-3/B-1/C-1/C-2/D-2/D-3 与全部 🟡 项同步收口。返工回归：七包 tsc/build 0 error、单测 **3310 passed / 1 skipped**、agent-web lint 0 error、`git diff --check` 0、`git merge-tree` 预检待二轮复跑。
+> **状态**: 🔴 **二轮 AI Review 复核打回（REJECT）**——返工 `3627eda` 中 A-1/A-2/A-3/B-1/C-2 等首轮 🔴/🟠 复核属实已落地，但 **D-1 的修复是运行时不生效的死代码**（`sessionResolvers.Session` 未登记 `graphql/resolvers/index.ts`，运行时实证 `GET_SESSION.controllerType/cloudHost` 恒 null，首轮软删会话可输入的 🔴 缺陷原样存在，测试假绿换层重现）；另 **D-6 修复后的 tests/api 显式断言与服务端真实行为不符（实跑 1 failed）**、**新增 E2E T-AW2..T-AW9 选择器歧义从未跑绿（实跑 1 failed）**、C-1 落库测试假绿、D-2 自动进入竞态。二轮新问题 **1 × 🔴 + 4 × 🟠 + 10 × 🟡**（第九节），修复后重提三轮复核。
 
 ## 关联文档
 
@@ -295,3 +295,95 @@ type: Permanent
 4. **兜底任务（对账/巡检）的撤销条件必须放行合法中间态**：B-1 说明「非终态即异常」的兜底口径会误杀 STARTING 窗口；兜底线要与状态机的合法中间态逐一对表。
 5. **失败路径的状态映射与退出码同样是验收面**：C-1/C-2 都是「成功路径严谨、失败路径随手」——PRD「失败则启动失败并给出原因」需要 FAILED+failureReason 与非零退出码共同兑现，且失败路径必须有测试锚定（否则如 `harness-lifecycle.test.ts` 把错误口径固化成预期）。
 6. **测试文件的「跳过模式」是一致性契约**：D-3 的静默早退让安全断言消失于无形；无 env 时必须显式 skipped，验收证据才可信。
+
+## 九、二轮 AI Review 复核（2026-10-21，返工提交 `3627eda`）
+
+> 裁决：**打回（REJECT）**。首轮 2×🔴/7×🟠/27×🟡 的主体修复真实落地，但 **D-1 的修复是运行时不生效的死代码**——首轮 🔴 阻断缺陷在运行时原样存在且测试假绿换层重现；另有 3×🟠（tests/api 实跑红、E2E 实跑红、C-1 落库测试假绿、D-2 竞态，其中前两项为返工直接引入/从未跑绿）。
+
+### 9.1 复核方法（不采信自报）
+
+1. 逐条回读 `3627eda` 修复代码与测试：B/C 组、D 组、返工回归风险三路并行深度复核 + 主评对 A-1/A-2/A-3/B-1/C-1/D-1 六条首轮 🔴/🟠 逐条交叉回读源码。
+2. **独立回归实跑**：七包 `vitest`/`build`/`eslint` 本机复跑；`git merge-tree --write-tree origin/release integration` 合并预检 + 交集文件逐行核对；Aspire `--isolated` 全新隔离栈（`HARNESS_ENABLED=true`、MONGODB_URI、`admin-initial-password`、`internal-api-token` 全量注入）实跑 tests/api 全量 32 文件与 E2E 云电脑套件。
+3. **运行时实证**（非静态推理）：向隔离栈真实 agent-api 注入「软删云电脑 + ended 会话」fixture，直接调 `GET_SESSION` 验证 `controllerType/cloudHost` 实际返回值（R2-1 铁证）。
+
+### 9.2 首轮问题复核结论（逐条）
+
+| 首轮问题 | 二轮结论 | 证据要点 |
+|---|---|---|
+| A-1 create⇄stop 并发孤儿容器 | ✅ 已修复 | CAS 回写 + 未命中 `reclaimStartedContainer`（destroy+revoke）、stop 用 CAS 后快照销毁；主评交叉回读属实 |
+| **D-1 软删只读失效 + 单测假绿** | ❌ **未修复（运行时不生效）** | **R2-1**：`sessionResolvers.Session` 未登记，字段运行时恒 null |
+| A-2 sendSessionMessage 未拦只读 | ✅ 已修复 | `assertSessionWritable` 收口 send/cancel；setMode/setModel/setConfigOption 另有 `status!=='idling'` 门禁 |
+| A-3 幽灵会话/终态无锁 | ✅ 已修复（残留窗口 🟡 R2-14） | `handleTerminal` 纳入 hostMutex、落库前复查 + 终态后二次 `endByController` |
+| B-1 对账误杀 STARTING | ✅ 已修复 | `reconciliation.ts:533` 放行 `STARTING`；全部撤销路径逐条核查无误杀；用例回读 DB 断言 |
+| C-1 启动失败丢原因 | ✅ 实现已修复（测试假绿 **R2-4**） | `harnessTerminalStatus(status, mustFailure)` → agent-api 落 FAILED+failureReason，链路逐环属实 |
+| C-2 错误路径 exit(0) | ✅ 已修复 | `isFailureShutdownReason` 分流退出码，测试断言 exit 1/0；本地单连接模式回归不受影响 |
+| D-2 自动进入会话 | ✅ 已修复（竞态 **R2-5**） | MainLayout STARTING→RUNNING 一次性导航（Set 防重）+ Sidebar 失败提示，用例断言导航次数 |
+| D-3 静默假绿 | ✅ 该文件已修复（同类残留 🟡 R2-6） | `it.skipIf(!HAS_MONGO)` + 密钥不回显断言真实执行（本轮实跑确认） |
+| 🟡×27 | ✅ 主体收口属实 | A 组 8 项、B 组 5 项、C 组 5 项、D 组 7 项逐条回读落地；B-7 三类边缘项仅测两类（R2-7）、D-6 断言反而与真实行为不符（R2-2） |
+
+### 9.3 二轮新发现问题
+
+#### R2-1（🔴 阻断）D-1 修复为死代码：`Session` 类型 resolver 未注册，运行时只读判定仍依赖会被软删破坏的 controllers 列表
+
+- **问题描述**：返工在 `servers/agent-api/src/graphql/resolvers/session.ts:12-38` 新增 `sessionResolvers.Session.controllerType/cloudHost`，契约（`contracts/agent-session.graphql:201-209`）、schema（`graphql/schemas/session.ts:88-96`）、前端查询（`apps/agent-web/src/graphql/queries.ts:90-100`）、SessionView（`SessionView.tsx:420-428`）全部接线完成——**但 `servers/agent-api/src/graphql/resolvers/index.ts`（17-72 行）没有 `Session:` 类型键**，该 resolver 从未进入 `makeExecutableSchema` 的 resolver map（`src/index.ts:37`）。运行时字段走 GraphQL 默认解析器，而 `mapSession`（`services/session.ts:790-825`）不含它们 → **恒返回 null**。`servers/agent-api/AGENTS.md` 明文要求「新增类型级 resolver 必须登记 graphql/resolvers/index.ts，否则线上不生效」。
+- **运行时实证（Aspire --isolated 隔离栈真实服务）**：注入「type=cloud 控制器 + 软删云电脑（`deletedAt` 非空）+ ended 会话」fixture 后以属主 token 调 `session(id:){ controllerType cloudHost { id status deletedAt } }`：
+  - 实际返回 `{"controllerType":null,"cloudHost":null,"status":"ended"}`（期望 `controllerType:"cloud"`、`cloudHost:{deletedAt:...}`）；
+  - 同时 `controllers` 查询返回 **0** 条（软删云电脑 Controller 被 `controllerService.findAllByUser` 过滤，`services/controller.ts:12-27`）。
+  → `SessionView` 的 `isCloudSession = controllerType==='cloud' || sessionController?.type==='cloud'` 两侧皆空 → `readOnlyCloudHost=false` → **输入框与「继续」按钮重现**——首轮 🔴 D-1 的缺陷在运行时**原样存在**（GET_CONTROLLERS 加载完成前另有短暂可输入窗口）。
+- **测试假绿换层重现（与首轮 D-1 同类）**：① `SessionView.cloudHost.test.tsx:45-46` mock 的 GET_SESSION 含 `controllerType/cloudHost`，与真实响应（恒 null）不符，正是首轮「mock 形态与服务端真实响应脱节」的翻版；② `resolvers/session.test.ts:66-107` 直接调用 resolver 函数，不校验注册；③ tests/api 与 tests/e2e **无任何用例查询 `session{controllerType cloudHost{…}}`**（全仓 grep 证实），E2E 只读 fixture 用非软删 cloudhosts（`cloud-host-readonly.spec.ts:73` `deletedAt:null`）恰好走 controllers 列表 fallback 照绿。
+- **修复要求**：① `resolvers/index.ts` 登记 `Session: { ...sessionResolvers.Session }`；② 补 tests/api 集成用例：软删场景断言 `session{controllerType cloudHost{deletedAt}}` 真实返回值 + 只读入口消失（以真实 GraphQL 响应断言，mock 不得替代）；③ 单测改为断言真实响应形态或加注册锚点（如断言 `resolvers.Session` 已进入 schema）。
+
+#### R2-2（🟠 重要）D-6 修复后的 tests/api 显式断言与服务端真实行为不符——返工把套件从绿改红
+
+- **问题描述**：D-6 将 `tests/api/src/agent-api/cloud-host.test.ts:211-218` 从含糊断言改为显式断言「软删后 `homeOverview.controllers` **仍包含**该 Controller 且 `cloudHost` 为 null」。但服务端真实行为是**整条过滤**：`homeOverview.controllers` 复用 `controllerService.findAllByUser`（`graphql/resolvers/home.ts:51-57` → `services/controller.ts:12-27`，软删云电脑 Controller 被移除）。本轮实跑该用例 **failed**：`expect(offlined).toBeTruthy()` 收到 `undefined`。该断言同时与 D-1 修复叙述（「软删后 Controller 被列表过滤」）自相矛盾——两个「修复」对同一服务端行为的认知互相冲突，且没有任何一路实跑校验。
+- **修复要求**：统一软删后的列表语义（建议维持「列表过滤 + 详情留档」）并把 D-6 断言改为与之匹配的真实形态（断言列表移除 + `session.cloudHost` 留档）；tests/api 须实跑绿后随修复提交。
+
+#### R2-3（🟠 重要）新增 E2E `T-AW2..T-AW9` 选择器歧义，从未跑绿——PR 自带 E2E 证据不成立
+
+- **问题描述**：`tests/e2e/src/cloud-host.spec.ts:60` `page.getByRole('button', { name: '工作区' })` 在页面上同时命中两个按钮：Sidebar 计数按钮「工作区 1」（标签+计数）与控制器配置页 nav tab「工作区」（`ControllerConfigPage.tsx:186-188`）→ Playwright strict mode violation，`toBeVisible()` 必然失败。本轮实跑 **1 failed / 2 passed**（`cloud-host-readonly.spec.ts` T-AW10 ✅、`cloud-host.spec.ts` T-AW3/T-AW5 ✅、T-AW2..T-AW9 ✘）。该用例覆盖「create→starting→stop→stopped→delete」主链路，作为交付物声称的「tests/e2e 2 套」之一，提交前从未跑绿；与 D-4/D-11 的「E2E 收口」声明共同说明返工的 E2E 未实际验证。
+- **修复要求**：选择器改 `exact: true`/限定配置页容器/补 `data-testid`；修复后实跑全绿并把结果回填报告。
+
+#### R2-4（🟠 重要）C-1 落库口径测试假绿：`$set` 载荷零断言 + `mustFailure` 传递无锚
+
+- **问题描述**：C-1 实现链路（dispatcher `markMustFailure` → destroy 保留 `exitReason` → `harnessTerminalStatus(status, mustFailure)` → agent-api 落 FAILED+failureReason）主评逐环回读属实，但**唯一相关测试是回声 mock**：`cloud-host-service.test.ts:649-661` 把 `CloudHost.findOneAndUpdate` mock 成无条件返回预置 `{status:'FAILED',failureReason:'job failed'}` 文档再 `toMatchObject`——**从未断言 `$set` 写入内容**；target 映射回归成 STOPPED/null 也全绿。`container-service.test.ts:725-758` 亦从不断言 `container.mustFailure` 传入 `onDestroyed`，端到端口径没有任何单一测试锚定。首轮正是因「把错误口径固化为预期」打回 C-1，本轮修复又留下「口径无锚」的同类缺口。
+- **修复要求**：断言 `findOneAndUpdate` 的 `$set`（失败路径 `status:'FAILED'`+`failureReason===reason`；非失败路径 `failureReason:null`）；补 `mustFailure` 传入 terminal 回调的断言或端到端用例。
+
+#### R2-5（🟠 重要）D-2 自动进入竞态：`RUNNING` 与 `defaultSessionId` 两次落库间的快照永久丢失自动进入
+
+- **问题描述**：`handleReadyLocked` 先 CAS `status:'RUNNING'`（`cloud-host-service.ts:495-499`）再写 `defaultSessionId`（:517-520）；两写之间若前端取到 HOME_OVERVIEW 快照，`MainLayout.tsx:51` 会记录 previousStatus=RUNNING 且因 `!defaultSessionId` 跳过导航，此后 `STARTING→RUNNING` 迁移条件恒假、永不补跳；Sidebar 同时短暂误报「默认会话创建失败，可手动创建会话」。窗口毫秒级 vs 15s 轮询，概率低但结果是静默丢失 PRD「自动进入」并误报失败。
+- **修复要求**：ready 回调将 `status`+`defaultSessionId` 合并为一次原子更新；或前端对 `RUNNING && 单 Harness && !defaultSessionId` 延迟一拍再判定失败提示；补竞态用例。
+
+#### 🟡 二轮建议项（10 项，随下次修复一并收口）
+
+| # | 问题 | 位置 |
+|---|---|---|
+| R2-6 | 「静默早退」假绿模式残留 6 处（D-3 只改了 internal-api.test.ts 一个文件） | `tests/api/src/admin-api/billing-gateway.test.ts:83,157,165,184,233`、`tests/api/src/cloud-controller/billing-events.test.ts:70` |
+| R2-7 | B-7 三类边缘项仅测两类：缺 scope 存量模型无断言，且与 `servers/agent-api/src/services/model.ts:9-11`（缺 scope 当 user 可用）口径分裂——用户列表可见但网关 404 | `billing-openai.ts:185-186,252,256` |
+| R2-8 | B-7 账号 Key 分支未联查 provider：禁用供应商的 global 模型仍列出、调用 404，「列出即可调用」仅对 cloud_host 分支成立 | `billing-openai.ts:230-237` |
+| R2-9 | D-4 只读 E2E 只构造 STOPPED 终态，未覆盖 `deletedAt != null` 软删形态——恰是 R2-1 破坏的场景无 E2E 网 | `tests/e2e/src/cloud-host-readonly.spec.ts:58-76` |
+| R2-10 | D-6 软删语义无 DB 级断言（软删留档仅由 resolver mock 锚定） | `tests/api/src/agent-api/cloud-host.test.ts` |
+| R2-11 | D-8 异常路径无测试（`mockRejectedValue` 后 catch+finally 复位未验证） | `StopCloudHostDialog.test.tsx` |
+| R2-12 | B-4 并发用例判别力概率性（删掉 mutex 可能仍绿）、无用例锚定 `cloudHostKeyMutex` 持锁；锁为进程内，多副本仍会互撤（已文档化） | `api-key-service.test.ts:188-203`、`keyed-mutex.ts:4-7` |
+| R2-13 | B-2/B-5 口径不对称：mint 路由对 admin_user 亦强制 `host.userId===ownerId`，网关豁免 admin_user——豁免用例绕过铸造路由造数，与真实路径不一致 | `internal-billing.ts:243`、`billing-key-auth.ts:73-76` |
+| R2-14 | C-3 退避定时器 `unref`+disconnect 停心跳：极端情况下重连触发前进程自然 exit(0)，把「永久离线」换成「提前干净退出」；A-3 残留窗口为「落库前复查→insert」毫秒级竞态 | `socketio-client.ts:436`、`session.ts:234-247` |
+| R2-15 | 断言强度/命名小缺口：B-5 越权用例只断 404 未断「拒绝时无 Key 落库」；C-7 temp 写失败清理分支未执行到；B-6 测试 ID 仍为 `T-MIG5-*`；B-3 缺 scope 存量 Key 保留无显式用例 | 多处 |
+
+### 9.4 二轮独立验证数据（本机实跑，2026-10-21）
+
+| 层级 | 结果 |
+|---|---|
+| tsc/build（7 包） | ✅ 0 error（agent-api / admin-api / cloud-controller / controller-api / agent-controller / agent-web / admin-web 全部 exit 0） |
+| eslint（2 前端） | ✅ 0 error（6 条既有 react-hooks warning） |
+| 单测（7 包） | ✅ **3310 passed / 1 skipped**（agent-api 724、admin-api 608+1 skip、cloud-controller 240、controller-api 432、agent-controller 571、agent-web 515、admin-web 220）——逐包与返工自报一致 |
+| tests/api（Aspire `--isolated` 全新栈，32 文件全量） | ❌ **484 passed / 1 skipped / 1 failed**——唯一失败即 **R2-2**（D-6 断言与真实行为不符）。环境注记：首轮环境注入缺 `HARNESS_ENABLED`/MONGODB_URI 时出现的 48 skip/1 fail 属环境问题（已甄别），全量注入后为上述真实结果 |
+| E2E（云电脑套件，Aspire 栈实跑） | ❌ **2 passed / 1 failed**——T-AW10 只读 ✅、T-AW3/T-AW5 校验错误 ✅、**T-AW2..T-AW9 ✘（R2-3 选择器歧义）** |
+| 合并预检 | ✅ `git merge-tree --write-tree origin/release integration` CLEAN（tree `4518fc65`）；8 个交集文件（types.ts / admin-billing.graphql / billing-openai.openapi.yaml / billing-openai(.test).ts / reconciliation(.test).ts / settings-controller-config.spec.ts）逐行核对 **release 侧改动 0 缺失**，不回退 `36e62dd`/`d3782e8`/`eee53d6` 既有修复 |
+| 运行时实证 | ✅ R2-1 探针（软删 fixture + 真实 `GET_SESSION`）复现字段恒 null，详见 9.3 |
+
+### 9.5 打回要求（修复后重提 AI Review 三轮复核）
+
+1. **必修（🔴）R2-1**：登记 `Session` 类型 resolver，按真实响应形态补集成/单测锚点，重跑「软删云电脑会话回看」全链路（服务端拒绝 + 前端无输入框/继续）。
+2. **必修（🟠）R2-2 / R2-3**：D-6 断言改为与真实列表语义一致；E2E 选择器修复后实跑全绿——**tests/api 与 E2E 必须随修复实跑绿并回填数据**。
+3. **必修（🟠）R2-4 / R2-5**：C-1 落库 `$set`/`mustFailure` 补断言锚点；ready 回调原子写或前端延迟判定 + 竞态用例。
+4. 🟡 R2-6~R2-15 随修复一并收口（R2-6 静默早退残留建议全仓清零）。
+5. 回归基线：七包 build/单测全绿 + tests/api 全绿 + E2E 云电脑套件全绿 + 合并预检 CLEAN，缺一不得进入下一轮。
