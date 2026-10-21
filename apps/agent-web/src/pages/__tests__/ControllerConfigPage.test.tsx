@@ -25,6 +25,26 @@ vi.mock('@/components/cloud-host/DeleteCloudHostDialog', () => ({
   default: ({ open }: { open: boolean }) => open ? <div data-testid="delete-cloud-host-dialog" /> : null,
 }));
 
+vi.mock('@/components/cloud-host/CloudHostWorkloadsSection', () => ({
+  default: ({ controllerId, cloudHost }: { controllerId: string; cloudHost: CloudHostData }) => (
+    <div data-testid="cloud-host-workloads-section" data-controller-id={controllerId}>
+      {cloudHost.name}
+    </div>
+  ),
+}));
+
+vi.mock('@/components/cloud-host/GithubProjectSetupDialog', () => ({
+  default: ({ open, controllerId, cloudHost }: {
+    open: boolean;
+    controllerId: string;
+    cloudHost: CloudHostData;
+  }) => open ? (
+    <div data-testid="github-setup-dialog" data-controller-id={controllerId}>
+      {cloudHost.name}
+    </div>
+  ) : null,
+}));
+
 function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
   return {
     id: 'cloud-1',
@@ -215,6 +235,44 @@ describe('ControllerConfigPage', () => {
       expect(screen.queryByTestId('cloud-host-panel')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: '停止云电脑' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: '删除云电脑' })).not.toBeInTheDocument();
+    });
+
+    it('T-AW-G1/G12 云电脑展示工作负载页签与 Github 入口', () => {
+      mockControllers([
+        makeController({ type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),
+      ]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '工作负载' }));
+      expect(screen.getByTestId('cloud-host-workloads-section')).toHaveAttribute('data-controller-id', 'ctrl-1');
+
+      const githubButton = screen.getByRole('button', { name: 'Github 项目设置' });
+      expect(githubButton).not.toBeDisabled();
+      fireEvent.click(githubButton);
+
+      expect(screen.getByTestId('github-setup-dialog')).toHaveAttribute('data-controller-id', 'ctrl-1');
+    });
+
+    it('T-AW-G13 非 RUNNING 云电脑的 Github 入口禁用', () => {
+      mockControllers([
+        makeController({ type: 'cloud', cloudHost: makeCloudHost({ status: 'STOPPED' }) }),
+      ]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '工作负载' }));
+      expect(screen.getByRole('button', { name: 'Github 项目设置' })).toBeDisabled();
+    });
+
+    it('普通主机不展示工作负载页签与 Github 入口', () => {
+      mockControllers([makeController({ type: 'local' })]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      expect(screen.queryByRole('button', { name: '工作负载' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Github 项目设置' })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cloud-host-workloads-section')).not.toBeInTheDocument();
     });
   });
 });

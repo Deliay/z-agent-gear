@@ -42,6 +42,7 @@ import * as migration003DockerAptSource from './migrations/003-docker-apt-source
 import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
 import * as migration005ModelNameUnique from './migrations/005-model-name-unique-global.js';
 import * as migration005HarnessOpencode from './migrations/005-preset-harness-opencode.js';
+import * as migration006PresetGithub from './migrations/006-preset-github.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -111,6 +112,7 @@ async function start() {
   // 004-aspire-cli-source——把未定制过的「Aspire」脚本刷新为 v2 并补齐 aspire_cli_url 参数（本期）
   // 005-model-name-unique-global——整理 global 存量重名模型并建立 name 部分唯一索引（本期）
   // 005-preset-harness-opencode——写入云电脑 harness 运行环境预置项「OpenCode（Harness）」（云电脑）
+  // 006-preset-github——写入 Github 工作负载预置项（安装 gh CLI，Github 工作负载）
   try {
     await runMigrations([
       migration001,
@@ -120,6 +122,7 @@ async function start() {
       migration004AspireCliSource,
       migration005ModelNameUnique,
       migration005HarnessOpencode,
+      migration006PresetGithub,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);

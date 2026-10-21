@@ -49,6 +49,49 @@ export interface StartInitResult {
   failed?: boolean;
 }
 
+/** runtime 安装批次：容器不存在。 */
+export class RuntimeContainerNotFoundError extends Error {
+  constructor(message = 'container not found') {
+    super(message);
+    this.name = 'RuntimeContainerNotFoundError';
+  }
+}
+
+/** runtime 安装批次：容器不在线。 */
+export class ContainerNotOnlineError extends Error {
+  constructor(message = 'container is not online') {
+    super(message);
+    this.name = 'ContainerNotOnlineError';
+  }
+}
+
+/** runtime 安装批次：已有 runtime 批次在执行。 */
+export class ContainerBusyError extends Error {
+  constructor(message = 'container is busy') {
+    super(message);
+    this.name = 'ContainerBusyError';
+  }
+}
+
+export interface RuntimeEntry {
+  workloadId: string;
+  workloadName: string;
+  script: string;
+  params: Record<string, unknown>;
+}
+
+export interface RuntimeBatchInput {
+  entries: RuntimeEntry[];
+  source: 'user' | 'mcp' | 'system';
+  /** 仅 Git 设置脚本批次为 true：worker 在执行前申请并写入 gh 凭据。 */
+  githubAuth?: boolean;
+}
+
+export interface RuntimeBatchResult {
+  batchId: string;
+  items: Array<{ logId: string; workloadId: string; workloadName: string }>;
+}
+
 export interface WorkloadResultPayload {
   logId?: unknown;
   status?: unknown;
@@ -228,6 +271,11 @@ export class WorkloadDispatcher {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container) return noInit;
     if (container.status === 'initializing') return { initializing: true, requiredFailure: null };
+    // runtime 批次中断线后重连：只收口，不重放创建时的启动计划。
+    if (container.status === 'connecting' && container.initTrigger === 'runtime') {
+      await this.deps.containerRepository.update(containerId, { initTrigger: null });
+      return noInit;
+    }
     // 仅 creating/connecting（回连注册路径）触发初始化；online 重连不重跑。
     if (container.status !== 'connecting' && container.status !== 'creating') return noInit;
 
@@ -349,8 +397,76 @@ export class WorkloadDispatcher {
     }
 
     await this.deps.containerService.markInitializing(containerId, runLogs[0]!.workloadName);
+    await this.deps.containerRepository.update(containerId, { initTrigger: 'start' });
     this.emitRun(containerId, 'init', runLogs, runEnv.env);
     return { initializing: true, requiredFailure: null };
+  }
+
+  /**
+   * 在线容器 runtime 批次（安装工作负载 / 系统 Git 设置脚本）。
+   *
+   * 入口要求 `online`；CAS 到 `initializing` 并写入 `initTrigger='runtime'`。批次结束后
+   * 由 `finishInit` 直接 `markOnline`（不回 `connecting`）。同一容器同时只允许一个 runtime 批次。
+   */
+  async startRuntimeBatch(
+    containerId: string,
+    input: RuntimeBatchInput,
+  ): Promise<RuntimeBatchResult> {
+    return this.mutex.runExclusive(containerId, async () => {
+      const container = await this.deps.containerRepository.findById(containerId);
+      if (!container) throw new RuntimeContainerNotFoundError();
+      if (container.status === 'initializing') {
+        throw new ContainerBusyError('another runtime batch is running');
+      }
+      if (container.status !== 'online') {
+        throw new ContainerNotOnlineError();
+      }
+      if (input.entries.length === 0) {
+        throw new ContainerNotOnlineError('no runtime entries');
+      }
+
+      const now = new Date(this.now());
+      const inputs: CreateWorkloadLogInput[] = input.entries.map((entry, index) => ({
+        containerId,
+        workloadId: entry.workloadId,
+        workloadName: entry.workloadName,
+        phase: 'init',
+        status: index === 0 ? 'running' : 'pending',
+        script: entry.script,
+        params: entry.params,
+        required: false,
+        trigger: 'runtime',
+        source: input.source,
+        log: '',
+        exitCode: null,
+        startedAt: index === 0 ? now : null,
+        finishedAt: null,
+      }));
+      const logs = await this.deps.workloadLogRepository.createMany(inputs);
+
+      await this.deps.containerService.markInitializing(
+        containerId,
+        logs[0]!.workloadName,
+      );
+      await this.deps.containerRepository.update(containerId, { initTrigger: 'runtime' });
+      this.emitRun(
+        containerId,
+        'init',
+        logs,
+        undefined,
+        input.githubAuth === true,
+      );
+
+      const batchId = `runtime-${Date.now()}-${logs[0]!.id}`;
+      return {
+        batchId,
+        items: logs.map((log) => ({
+          logId: log.id,
+          workloadId: log.workloadId,
+          workloadName: log.workloadName,
+        })),
+      };
+    });
   }
 
   /** 解析本轮下发所需 env：非 harness 返回无 env；harness 读取 secretStore（失败不打印内容）。 */
@@ -508,8 +624,44 @@ export class WorkloadDispatcher {
       return { workloadName: record.workloadName };
     }
 
+    // 已安装集合回填：仅成功结果，runtime 系统脚本不写入。
+    if (status === 'success' && record.phase === 'init' && record.source !== 'system') {
+      const source =
+        record.trigger === 'runtime'
+          ? record.source === 'mcp'
+            ? 'mcp'
+            : 'user'
+          : 'start';
+      await this.appendInstalledWorkload(
+        containerId,
+        record.workloadId,
+        record.workloadName,
+        source,
+      );
+    }
+
     await this.advance(containerId, record.phase);
     return null;
+  }
+
+  /** 回填已安装工作负载（按 workloadId 去重，保留首次记录）。 */
+  private async appendInstalledWorkload(
+    containerId: string,
+    workloadId: string,
+    name: string,
+    source: 'start' | 'user' | 'mcp',
+  ): Promise<void> {
+    const container = await this.deps.containerRepository.findById(containerId);
+    if (!container) return;
+    if ((container.installedWorkloads ?? []).some((item) => item.workloadId === workloadId)) {
+      return;
+    }
+    await this.deps.containerRepository.update(containerId, {
+      installedWorkloads: [
+        ...(container.installedWorkloads ?? []),
+        { workloadId, name, installedAt: new Date(this.now()), source },
+      ],
+    });
   }
 
   /** 推到下一条 pending（RUNNING）或收口本阶段。 */
@@ -534,17 +686,20 @@ export class WorkloadDispatcher {
     }
   }
 
-  /** init 全部终态：有活跃 socket → online，否则 connecting（裁决 5）。 */
+  /** init 全部终态：runtime 批次直接 online；起始批次按连接状态 online/connecting（裁决 5）。 */
   private async finishInit(containerId: string): Promise<void> {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container || container.status !== 'initializing') return;
     // 必须失败：绝不收口为 online/connecting（缺陷修复）——由 forceDestroy/看门狗负责注销。
     if (container.mustFailure) return;
-    if (this.deps.isConnected(containerId)) {
+    if (container.initTrigger === 'runtime') {
+      await this.deps.containerService.markOnline(containerId);
+    } else if (this.deps.isConnected(containerId)) {
       await this.deps.containerService.markOnline(containerId);
     } else {
       await this.deps.containerService.markConnecting(containerId);
     }
+    await this.deps.containerRepository.update(containerId, { initTrigger: null });
   }
 
   /** 是否存在带 `postScript` 的挂载工作负载（容器尚存时）。 */
@@ -822,6 +977,7 @@ export class WorkloadDispatcher {
     phase: WorkloadLogPhase,
     logs: CloudWorkloadLogEntity[],
     env?: Record<string, string>,
+    githubAuth?: boolean,
   ): void {
     const payload: Record<string, unknown> = {
       phase,
@@ -837,6 +993,8 @@ export class WorkloadDispatcher {
       })),
     };
     if (phase === 'post') payload.budgetMs = this.deps.postBudgetMs;
+    // 仅 Git 设置批次携带 githubAuth，普通批次保持报文形状零变化。
+    if (githubAuth === true) payload.githubAuth = true;
     // 仅 harness 携带 env；普通容器保持报文形状不变（无 env 键）。
     if (env) payload.env = env;
     this.deps.emitToContainer(containerId, WORKLOAD_RUN_EVENT, payload);

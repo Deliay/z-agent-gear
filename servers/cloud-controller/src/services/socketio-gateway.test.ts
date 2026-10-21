@@ -793,7 +793,7 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
-  it('T-CC9/T-CC10: harness 2.4.0 被拒（VERSION_MISMATCH 2.5.0）且无注册副作用', async () => {
+  it('T-CC9/T-CC10: harness 2.4.0 被拒（VERSION_MISMATCH 2.6.0）且无注册副作用', async () => {
     const { container, token } = await newContainer([], {
       purpose: 'harness',
       hostId: 'host-gate-1',
@@ -806,7 +806,7 @@ describe('worker Socket.IO gateway', () => {
     expect(error).toMatchObject({
       code: 'VERSION_MISMATCH',
       currentVersion: '2.4.0',
-      minimumVersion: '2.5.0',
+      minimumVersion: '2.6.0',
       supportedMajor: 2,
     });
     const stored = await repo.findById(container.id);
@@ -816,7 +816,7 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
-  it('T-CC9/T-CC11: harness 2.5.0 通过，无 init 时 registered.initializing=false 且 online', async () => {
+  it('T-CC9/T-CC11: harness 2.6.0 通过，无 init 时 registered.initializing=false 且 online', async () => {
     const { container, token } = await newContainer([], {
       purpose: 'harness',
       hostId: 'host-gate-2',
@@ -826,7 +826,7 @@ describe('worker Socket.IO gateway', () => {
       socket,
       'registered',
     );
-    socket.emit('register', { hostname: 'harness-new', version: '2.5.0' });
+    socket.emit('register', { hostname: 'harness-new', version: '2.6.0' });
     const payload = await registered;
 
     expect(payload.controllerId).toBe(container.id);
@@ -861,7 +861,7 @@ describe('worker Socket.IO gateway', () => {
       'workload:run',
     );
     const registered = waitFor<{ initializing: boolean }>(socket, 'registered');
-    socket.emit('register', { hostname: 'harness-init', version: '2.5.0' });
+    socket.emit('register', { hostname: 'harness-init', version: '2.6.0' });
 
     expect((await registered).initializing).toBe(true);
     const run = await runPromise;

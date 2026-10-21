@@ -19,6 +19,13 @@ export interface CloudContainerDTO {
   billingAccountId: string | null;
   /** 就绪计费起点；未就绪/不计费为 null */
   billingStartedAt: string | null;
+  /** 容器内已安装工作负载（只增不删）；历史容器为空数组 */
+  installedWorkloads: Array<{
+    workloadId: string;
+    name: string;
+    installedAt: string;
+    source: string;
+  }>;
 }
 
 /** 控制面（cloud-controller）不可达时对外统一错误码（裁决 12） */
@@ -81,6 +88,21 @@ function normalizeWorkloadIds(value: unknown): string[] {
   return value.map((id) => String(id));
 }
 
+function normalizeInstalledWorkloads(
+  value: unknown,
+): Array<{ workloadId: string; name: string; installedAt: string; source: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+    return {
+      workloadId: String(record.workloadId ?? ''),
+      name: String(record.name ?? ''),
+      installedAt: toIso(record.installedAt) ?? new Date(0).toISOString(),
+      source: String(record.source ?? 'start'),
+    };
+  });
+}
+
 /** GraphQL 用途枚举 → 内部 API 小写字符串（未知值原样小写透传，交由 cloud-controller 校验） */
 export function toInternalPurpose(purpose: string): string {
   return GQL_TO_PURPOSE[purpose] ?? purpose.toLowerCase();
@@ -111,6 +133,7 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
     currentWorkloadName: (raw.currentWorkloadName as string | null | undefined) ?? null,
     billingAccountId: (raw.billingAccountId as string | null | undefined) ?? null,
     billingStartedAt: toIso(raw.billingStartedAt),
+    installedWorkloads: normalizeInstalledWorkloads(raw.installedWorkloads),
   };
 }
 

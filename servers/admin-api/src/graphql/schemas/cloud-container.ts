@@ -19,6 +19,15 @@ export const cloudContainerTypeDefs = `#graphql
     billingAccountId: ID
     # 就绪计费起点（首次进入 ONLINE 的时刻）；null=未就绪/不计费
     billingStartedAt: String
+    # 容器内已安装的工作负载（只增不删）；历史容器为 null/空数组
+    installedWorkloads: [CloudContainerInstalledWorkload!]
+  }
+
+  type CloudContainerInstalledWorkload {
+    workloadId: ID!
+    name: String!
+    installedAt: String!
+    source: String!
   }
 
   type CloudContainerControlPlane {

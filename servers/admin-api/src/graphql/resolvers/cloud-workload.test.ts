@@ -66,6 +66,8 @@ const mappedLog = {
   script: 'echo init',
   params: { version: '20' },
   required: false,
+  trigger: 'START',
+  source: 'ADMIN',
   exitCode: 0,
   log: 'init done',
   startedAt: '2026-10-17T00:00:00.000Z',

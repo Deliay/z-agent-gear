@@ -150,6 +150,7 @@ describe('internal management API', () => {
       [
         'billingAccountId',
         'billingStartedAt',
+        'installedWorkloads',
         'connectedAt',
         'containerApiKeyId',
         'controllerKeyId',

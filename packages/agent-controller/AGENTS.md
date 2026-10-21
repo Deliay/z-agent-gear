@@ -20,6 +20,9 @@ src/
 ├── daemon.ts             # Daemon management (PID file, signal handling)
 ├── cloud-host/
 │   └── supervisor.ts     # 云电脑双连接（/worker → controller-api）与 init 等待编排
+├── github/
+│   ├── credential-manager.ts # 云主机 Github 凭据申请 + 50 分钟续期（唯一凭据写入口）
+│   └── gh-config.ts      # `gh auth login --with-token` + `gh auth setup-git`（token 仅经 stdin）
 ├── harness/
 │   ├── env.ts            # harness env 校验（ZAG_MODEL_* / ZAG_DEFAULT_WORKSPACE）
 │   ├── opencode-cli.ts   # `opencode --version` 硬校验（兼容 `-v`）
@@ -52,10 +55,10 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.5.0`（major 保持 2；云电脑双连接 / `harness prepare`，cloud-controller 对
-  `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.5.0`）。参数注入需 `>=2.3.0`、`items[].required`
-  短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION` 仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略
-  `required` 仍正确）。
+- 版本：包版本 `2.6.0`（major 保持 2；Github 凭据管理器 / `workload:run.githubAuth`，cloud-controller 对
+  `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`）。云电脑双连接 / `harness prepare` 自
+  `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
+  仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
 ## 容器级 env 与 secret 脱敏（2.5.0）
 
@@ -69,6 +72,32 @@ process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / W
 - `ZAG_MODEL_API_KEY` / `ZAG_HOST_KEY` / `ZAG_CONTROLLER_KEY` 的值在**脚本输出、日志、错误**中统一替换为
   `***`（`redactSecrets`；日志中的 `workload:run` payload 同样脱敏）。
 - 普通容器不携带 `env`，行为与旧版完全一致。
+
+## Github 凭据管理器（2.6.0）
+
+云主机内 **唯一**的 Github 凭据写入口（`src/github/credential-manager.ts`）；agent-api 不下发 token env。
+
+| 环境变量 | 说明 |
+|---------|------|
+| `ZAG_AGENT_API_ENDPOINT` | agent-api 内部地址（缺失时管理器禁用并只 warn 变量名，不阻塞云主机） |
+| `ZAG_CONTROLLER_ID` | 云主机 controllerId（同上） |
+| `ZAG_HOST_KEY` | 申请凭据的 Bearer（既有云主机 key） |
+
+- 协议：`POST {ZAG_AGENT_API_ENDPOINT}/internal/cloud-hosts/{ZAG_CONTROLLER_ID}/github-credential`，
+  `Authorization: Bearer ${ZAG_HOST_KEY}`、无 body、10s 超时；`200 { token, expiresAt }`。
+- `404` → `{ ok:false, error:'no-binding' }`（未设置 Git 项目，不告警、不重试）；`401/403` 在
+  `refreshNow()` 内按 1/2/4 分钟退避（最多 3 次）；网络/非法 JSON → 可读错误，不崩溃。
+- 成功时先 `writeGhAuth(token)` 再返回 `{ ok:true, expiresAt }`；随后按「50 分钟」或「到期前 10 分钟」
+  （取较早）续期，定时器 `unref()`；`stop()` 随 supervisor `shutdown` 调用。
+- 并发 `refreshNow()` 合并为一次请求（串行化「申请 → 写入」）。
+- token 只经 stdin 进入 `gh auth login --with-token`，随后 `gh auth setup-git`；不进入 argv/env/日志，
+  错误信息统一脱敏。
+
+`workload:run` 可选 `githubAuth: boolean`：为 `true` 时 `WorkloadExecutor.runBatch` 在执行首条脚本前
+调用 `options.beforeGithubAuth(payload)`（由 `ConnectToServerOptions.onBeforeWorkloadBatch` 透传）。
+hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失败：<可读原因>`，且不启动任何脚本；
+缺省/false 与旧版行为完全一致。supervisor 将 `githubAuth` 批次接到 `refreshNow()`，`no-binding` 时
+抛出「未设置 Github 项目」。
 
 ## 云电脑模式（cloud-host supervisor）
 

@@ -63,6 +63,25 @@ const workloadPlanEntrySchema = new mongoose.Schema(
   { _id: false },
 );
 
+/** 容器内已安装工作负载（只增不删，按 workloadId 去重并保留首次记录）。 */
+export interface InstalledWorkloadEntry {
+  workloadId: string;
+  name: string;
+  installedAt: Date;
+  source: 'start' | 'user' | 'mcp';
+}
+
+const installedWorkloadSchema = new mongoose.Schema(
+  {
+    workloadId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true },
+    installedAt: { type: Date, required: true },
+    source: { type: String, enum: ['start', 'user', 'mcp'], required: true },
+  },
+  { _id: false },
+);
+
+
 const cloudContainerSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, unique: true },
@@ -100,6 +119,10 @@ const cloudContainerSchema = new mongoose.Schema(
     billingStartedAt: { type: Date, default: null },
     // 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null
     currentWorkloadName: { type: String, default: null },
+    // 容器内已安装工作负载（runtime 安装/起始 init 成功回填）；历史容器为空
+    installedWorkloads: { type: [installedWorkloadSchema], default: [] },
+    // 当前初始化批次来源：start（创建启动）/ runtime（在线安装）；用于收口判定与重连防重放
+    initTrigger: { type: String, enum: ['start', 'runtime', null], default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },
 );
