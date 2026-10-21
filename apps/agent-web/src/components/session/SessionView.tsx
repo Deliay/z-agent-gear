@@ -108,7 +108,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
 
   const isWorking = status === 'running';
 
-  const { data: sessionData, loading: sessionLoading } = useQuery<GetSessionQuery>(GET_SESSION, {
+  const { data: sessionData, loading: sessionLoading, error: sessionError } = useQuery<GetSessionQuery>(GET_SESSION, {
     variables: { id },
   });
 
@@ -442,15 +442,37 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     (c) => c.id === sessionData?.session?.controllerId,
   );
   const controllerOnline = sessionController?.status === 'online';
-  // 云电脑 STOPPED/FAILED/deletedAt：会话只读回看（服务端同样拒绝 resume/command）
+  // D-1：只读判定不依赖 controller 列表命中（软删除后列表会过滤该 Controller）。
+  // 优先使用 GET_SESSION 返回的 controllerType/cloudHost（cloudHost 含软删除留档）。
+  const isCloudSession =
+    sessionData?.session?.controllerType === 'cloud' || sessionController?.type === 'cloud';
+  const sessionCloudHost = sessionData?.session?.cloudHost;
+  const cloudHost = isCloudSession
+    ? sessionCloudHost ?? sessionController?.cloudHost ?? null
+    : null;
+  // 云电脑 STOPPED/FAILED/deletedAt/缺失：会话只读回看（服务端同样拒绝 resume/command）
   const readOnlyCloudHost =
-    sessionController?.type === 'cloud' &&
-    (sessionController.cloudHost == null || isReadOnlyCloudHost(sessionController.cloudHost));
+    isCloudSession && (cloudHost == null || isReadOnlyCloudHost(cloudHost));
 
   if (sessionLoading) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
+      </div>
+    );
+  }
+
+  // R2-21：目标会话不存在/无权限/查询失败时给出明确出口，避免落入「空会话+输入框」死页面。
+  if (sessionError || !sessionData?.session) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3" role="alert" data-testid="session-load-error">
+        <p className="text-sm text-destructive">会话不存在或无权访问</p>
+        {sessionError?.message && (
+          <p className="max-w-md text-xs text-muted-foreground">{sessionError.message}</p>
+        )}
+        <a href="/" className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent">
+          返回首页
+        </a>
       </div>
     );
   }

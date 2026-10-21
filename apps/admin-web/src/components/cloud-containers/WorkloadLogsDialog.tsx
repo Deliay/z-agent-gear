@@ -137,7 +137,7 @@ export default function WorkloadLogsDialog({
             </div>
 
             {selected && (
-              <div className="min-w-0 flex-1 space-y-3">
+              <div className="min-w-0 flex-1 space-y-3" data-testid="workload-log-detail">
                 {selected.required && (
                   <span className="inline-block rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
                     {REQUIRED_LABEL}

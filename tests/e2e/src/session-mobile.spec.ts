@@ -119,8 +119,8 @@ test.describe('Session Mobile Layout', () => {
       const sidebarEl = page.locator(sidebar());
       await expect(sidebarEl).toBeVisible();
 
-      // Sessions heading should be visible
-      await expect(page.locator('h2')).toContainText('会话');
+      // 移动端会话列表由 Sidebar 承担（不再渲染旧的 h2「会话」标题）。
+      await expect(page.locator(sidebar()).getByRole('button', { name: /^会话/ })).toBeVisible();
 
       // Controller should be visible in the tree
       await expect(page.getByText('e2e-mobile-host')).toBeVisible();
@@ -139,11 +139,7 @@ test.describe('Session Mobile Layout', () => {
       const sessionId = await createSession(page, controllerId, token, ws.id);
       await loginViaUI(page, username);
 
-      // Expand controller and workspace to find session
-      await page.locator(sidebar()).getByText('e2e-mobile-host').click();
-      await page.locator(sidebar()).getByText('e2e-mob', { exact: true }).click();
-
-      // Click on session - use link selector since sessions are rendered as NavLinks
+      // 控制器/工作区默认展开，直接点击会话链接（点击控制器会折叠）。
       await page.locator(sidebar()).locator('a[href^="/sessions/"]').first().click();
 
       // Should navigate to detail page - back button should be visible on mobile
@@ -173,8 +169,8 @@ test.describe('Session Mobile Layout', () => {
       // Click back button
       await page.getByText('← 返回').click();
 
-      // Should be back on list - Sessions heading visible
-      await expect(page.locator('h2')).toContainText('会话', { timeout: 5000 });
+      // Should be back on list - mobile Sidebar is visible again
+      await expect(page.locator(sidebar())).toBeVisible({ timeout: 5000 });
     } finally {
       disconnect();
     }
@@ -214,11 +210,8 @@ test.describe('Session Mobile Layout', () => {
     // Wait for navigation
     await page.waitForURL('**/sessions', { timeout: 5000 });
 
-    // Wait for page to fully render (loading spinner may appear first)
-    await page.waitForSelector('h2:has-text("会话")', { timeout: 10000 });
-
-    // Should be back on sessions list (Sidebar renders h2 "Sessions")
-    await expect(page.locator('h2:has-text("会话")')).toBeVisible();
+    // Should be back on sessions list (mobile Sidebar visible)
+    await expect(page.locator(sidebar())).toBeVisible({ timeout: 10000 });
   });
 
   test('should not show sidebar on session detail page', async ({ page }) => {

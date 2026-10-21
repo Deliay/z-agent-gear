@@ -24,7 +24,10 @@ import { providerService } from '../../services/provider.js';
 
 const mockContext = { currentUser: { id: 'user1', username: 'testuser' } };
 
-const Model = modelResolvers.Model as { provider: (parent: { providerId: string }) => Promise<unknown> };
+const Model = modelResolvers.Model as {
+  provider: (parent: { providerId: string; scope?: string }) => Promise<unknown>;
+  providerId: (parent: { providerId: string; scope?: string }) => string | null;
+};
 
 describe('modelResolvers', () => {
   beforeEach(() => {
@@ -32,7 +35,19 @@ describe('modelResolvers', () => {
   });
 
   describe('Model.provider', () => {
-    it('delegates to providerService.findSummaryById (never the credential-bearing findById)', async () => {
+    it('returns null for global models without querying the provider (never leaks backend name/type)', async () => {
+      const result = await Model.provider({ providerId: 'p-global', scope: 'global' });
+
+      expect(result).toBeNull();
+      expect(providerService.findSummaryById).not.toHaveBeenCalled();
+    });
+
+    it('masks providerId for global models', () => {
+      expect(Model.providerId({ providerId: 'p-global', scope: 'global' })).toBeNull();
+      expect(Model.providerId({ providerId: 'p-user', scope: 'user' })).toBe('p-user');
+    });
+
+    it('delegates user-model provider lookup to providerService.findSummaryById (never the credential-bearing findById)', async () => {
       (providerService.findSummaryById as any).mockResolvedValue({
         id: 'p1',
         name: 'Global OpenAI',

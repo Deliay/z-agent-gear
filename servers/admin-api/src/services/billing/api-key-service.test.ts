@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { apiKeyService, ApiKeyNotFoundError } from './api-key-service.js';
 import { BillingApiKey } from '../../models/billing-api-key.js';
@@ -173,6 +173,69 @@ describe('ApiKeyService', () => {
     const active = await BillingApiKey.find({ cloudHostId, status: 'active' }).lean();
     expect(active).toHaveLength(1);
     expect(String(active[0]._id)).toBe(second.apiKey.id);
+  });
+
+  it('B-4: 同宿主并发铸造串行化 — 最终仅 1 枚 active Key，其余明文失效', async () => {
+    const accountId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = new mongoose.Types.ObjectId().toString();
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        apiKeyService.createCloudHostScopedKey({
+          accountId,
+          ownerType: 'front_user',
+          ownerId: 'u-concurrent',
+          name: `host-key-${index}`,
+          cloudHostId,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+      ),
+    );
+
+    const active = await BillingApiKey.find({ cloudHostId, status: 'active' }).lean();
+    expect(active).toHaveLength(1);
+    const winner = results.find((result) => result.apiKey.id === String(active[0]._id));
+    expect(winner).toBeDefined();
+    expect((await apiKeyService.verify(winner!.secret))?.id).toBe(winner!.apiKey.id);
+    for (const result of results) {
+      if (result === winner) continue;
+      expect(await apiKeyService.verify(result.secret)).toBeNull();
+    }
+  });
+
+  it('R2-13: 持 cloudHost 锁串行执行（判别力锚定，max concurrency = 1）', async () => {
+    const cloudHostId = new mongoose.Types.ObjectId().toString();
+    const accountId = new mongoose.Types.ObjectId().toString();
+    const originalCreate = apiKeyService.create.bind(apiKeyService);
+    let active = 0;
+    let maxActive = 0;
+    const spy = vi.spyOn(apiKeyService, 'create').mockImplementation(async (input) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const created = await originalCreate(input);
+      active -= 1;
+      return created;
+    });
+
+    try {
+      await Promise.all(
+        Array.from({ length: 3 }, (_, index) =>
+          apiKeyService.createCloudHostScopedKey({
+            accountId,
+            ownerType: 'front_user',
+            ownerId: 'u-lock',
+            name: `lock-${index}`,
+            cloudHostId,
+            expiresAt: new Date(Date.now() + 60_000),
+          }),
+        ),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(maxActive).toBe(1);
+    expect(await BillingApiKey.countDocuments({ cloudHostId, status: 'active' })).toBe(1);
   });
 
   it('T-BK4: verify 对过期 Key 返回 null', async () => {

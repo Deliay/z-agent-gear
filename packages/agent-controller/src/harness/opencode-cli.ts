@@ -48,18 +48,37 @@ export function extractVersion(stdout: string, stderr = ''): string | undefined 
 /**
  * `opencode --version` 硬校验（`opencode -v` 仅作旧版 CLI 的兼容探测）。
  *
+ * `expectedVersion` 非空时要求实际版本严格一致（去掉 `v` 前缀后比较），不一致立即失败，
+ * 用于 init 脚本已固定安装版本的二次校验（C-5）。
+ *
  * 失败时抛 {@link OpencodeCliError}，消息包含「版本校验」提示与命令级错误摘要
  * （不包含任何 env/secret）。调用方（init 脚本 / `harness prepare`）必须以非零退出。
  */
-export async function verifyOpencodeCli(runner: CommandRunner = defaultRunner): Promise<string> {
+export async function verifyOpencodeCli(
+  runner: CommandRunner = defaultRunner,
+  expectedVersion?: string,
+): Promise<string> {
   const failures: string[] = [];
+
+  const normalizeVersion = (version: string): string =>
+    (version.trim().split(/\s+/).pop() ?? '').replace(/^v/i, '');
+
+  const ensureExpected = (version: string): string => {
+    if (expectedVersion && normalizeVersion(version) !== normalizeVersion(expectedVersion)) {
+      throw new OpencodeCliError(
+        `OpenCode CLI version mismatch: expected ${expectedVersion}, got ${version}`,
+      );
+    }
+    return version;
+  };
 
   try {
     const result = await runner('opencode', ['--version']);
     const version = extractVersion(result.stdout, result.stderr);
-    if (version) return version;
+    if (version) return ensureExpected(version);
     failures.push('`opencode --version` returned no version output');
   } catch (error) {
+    if (error instanceof OpencodeCliError) throw error;
     failures.push(`\`opencode --version\` failed: ${(error as Error).message}`);
   }
 
@@ -67,9 +86,10 @@ export async function verifyOpencodeCli(runner: CommandRunner = defaultRunner): 
   try {
     const result = await runner('opencode', ['-v']);
     const version = extractVersion(result.stdout, result.stderr);
-    if (version) return version;
+    if (version) return ensureExpected(version);
     failures.push('`opencode -v` returned no version output');
   } catch (error) {
+    if (error instanceof OpencodeCliError) throw error;
     failures.push(`\`opencode -v\` failed: ${(error as Error).message}`);
   }
 

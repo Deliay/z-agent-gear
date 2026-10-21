@@ -5,14 +5,15 @@ type: Permanent
 
 # 内建 API 渠道一期上线后问题修复（供应商与模型管理）- 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261020-fix-api-channel-model-fixes.md`（v1.1）
-**关联 PRD**: `docs/product/draft/20261020-api-channel-model-fixes.md`（v1.1）
+**关联 PRD**: `docs/product/draft/20261020-api-channel-model-fixes.md`（v1.2）
+**关联 Proposal**: `docs/engineering/proposals/20261020-fix-api-channel-model-fixes.md`（v1.2）
 **需求总分支（feat-branch）**: `fix/api-channel-model-fixes`（需求总 PR #242）
 **实现分支**: `fix/api-channel-model-fixes-impl`（基于 `fix/api-channel-model-fixes`）
 **创建日期**: 2026-10-20
-**计划版本**: v1.0
+**计划版本**: v1.1
 **版本说明**:
 - v1.0（2026-10-20）首版，与 PRD v1.1 / 提案 v1.1 对齐。上游打回三项的处置已固化在提案中：① agent-api 用户侧 `syncSyncedModels` 保留不动；② 会话内「切换模型」不分组、本期零改动；③ 改名对照持久化为 `model_rename_records` 并在后台可查。
+- v1.1（2026-10-21，集成验收返工）对齐 PRD v1.2 / 提案 v1.2：① 裁决 17 的取消语义回写 PRD；② 迁移 005 台账改为先按 `(modelId, batchId)` 幂等 upsert 再改名（C-11）；③ 组内拖拽只替换该组在全局顺序中的原位置（C-1）；④ 导入结果与 refetch 副作用分离异常通道（B-1），失败明细弹窗内持久展示（C-3）；⑤ global 模型 `provider`/`providerId` 在数据层返回 null（A-1）。
 
 ## 实现顺序
 
@@ -73,7 +74,7 @@ flowchart TD
 14. **agent-web 排序只提交用户模型 id**：`updateModelSortOrder` 仍全量提交「用户分组拼接后的 id」，**不含 global id**（agent-api 明确拒绝含 global id 的批量排序）。
 15. **「重名整理记录」入口位置**：独立只读区块放在 `ModelConfigPage` 的 `ModelSection` 之后、`ModelPricingSection` 之前，默认折叠；`useQuery(..., { skip: !expanded })`，展开才请求，避免首屏多余流量。
 16. **迁移批号与命名**：迁移文件名 `005-model-name-unique-global.ts`，`name = '005-model-name-unique-global'`；`batchId = '20261020-005'`（常量，单次整理只有一个批次，便于 API 测试断言）。
-17. **导入弹窗的「取消」语义**：导入是单次 GraphQL 请求，客户端关闭弹窗不中止服务端写入；再次打开以服务端最新结果为准（已导入项禁选）。不引入请求取消/回滚，避免与「取消不影响已完成导入」的 PRD 口径冲突。
+17. **导入弹窗的「取消」语义**：导入是单次 GraphQL 请求，客户端关闭弹窗不中止服务端写入；再次打开以服务端最新结果为准（已导入项禁选、勾选清零）。不引入请求取消/回滚。**v1.1（2026-10-21）**：该口径已回写 PRD v1.2（原「未开始的不执行」如实收窄），并补单测锁定「导入中关闭 → 不 refetch、不误报失败；重开以服务端结果为准」。
 18. **文档生命周期**：PRD 与提案本期保持各自目录（`draft` / `proposals`）不移动，待实现验收后按既有流程归档。
 
 ---

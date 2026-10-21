@@ -116,7 +116,7 @@ export interface ListGlobalProviderModelsQuery {
 }
 
 export interface ImportGlobalModelsMutation {
-  importGlobalModels: AdminModelData[];
+  importGlobalModels: AdminProviderModelData[];
 }
 
 /** 历史重名整理台账（迁移 005 写入，只读） */

@@ -93,8 +93,15 @@ export const modelResolvers = {
     },
   },
   Model: {
-    provider: async (parent: { providerId: string }) => {
-      // providerId 可能悬空（关联供应商已删除）→ 返回 null；
+    providerId: (parent: { providerId: string; scope?: string }) => {
+      // global（后台/系统内置）模型的来源供应商属于平台内部信息：
+      // 数据层一并掩蔽 providerId，避免前端按 id 反查后台供应商（PRD §1.3/§4.2）。
+      return parent.scope === 'global' ? null : parent.providerId;
+    },
+    provider: async (parent: { providerId: string; scope?: string }) => {
+      // global 模型不返回供应商摘要（连 name/type 都不暴露），统一由前台展示「系统内置」。
+      if (parent.scope === 'global') return null;
+      // user 模型的 providerId 可能悬空（关联供应商已删除）→ 返回 null；
       // 契约已将该字段声明为可空（ProviderSummary），避免非空违规打挂整条 models 查询（问题 51）。
       return providerService.findSummaryById(parent.providerId);
     },

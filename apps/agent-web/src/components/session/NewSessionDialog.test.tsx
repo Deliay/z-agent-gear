@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import NewSessionDialog from './NewSessionDialog';
 import type { CloudHostData } from '../../graphql/types';
 
@@ -79,7 +79,7 @@ describe('NewSessionDialog', () => {
   });
 
   it.each(['STOPPED', 'FAILED', 'STARTING', 'STOPPING'] as const)(
-    '云电脑 %s 时不可选并提示',
+    '预选云电脑 %s 时不可选并提示',
     (status) => {
       render(
         <NewSessionDialog
@@ -94,11 +94,12 @@ describe('NewSessionDialog', () => {
           ]}
           onClose={vi.fn()}
           onCreate={vi.fn()}
+          existingControllerId="ctrl-cloud"
         />,
       );
 
       expect(screen.queryByRole('option', { name: '云电脑 A' })).not.toBeInTheDocument();
-      expect(screen.getByTestId('cloud-host-unavailable-hint')).toHaveTextContent('云电脑未运行，暂不可创建会话');
+      expect(screen.getByTestId('cloud-host-unavailable-hint')).toHaveTextContent('该云电脑未运行，无法创建会话');
     },
   );
 
@@ -122,5 +123,60 @@ describe('NewSessionDialog', () => {
 
     expect(screen.getByTestId('cloud-host-unavailable-hint')).toHaveTextContent('该云电脑未运行，无法创建会话');
     expect(screen.getByRole('button', { name: '创建会话' })).toBeDisabled();
+  });
+
+  it('D-9 普通主机在线且存在未运行云电脑时不展示云电脑提示', () => {
+    render(
+      <NewSessionDialog
+        controllers={[
+          { id: 'ctrl-local', name: '本机', status: 'online', type: 'local' },
+          {
+            id: 'ctrl-cloud',
+            name: '云电脑 A',
+            status: 'offline',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'STOPPED' }),
+          },
+        ]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('option', { name: '本机' })).toBeInTheDocument();
+    expect(screen.queryByTestId('cloud-host-unavailable-hint')).not.toBeInTheDocument();
+  });
+
+  it('D-9 已选中的云电脑变为未运行时展示提示', () => {
+    const controllers = (status: 'RUNNING' | 'STOPPED') => [
+      {
+        id: 'ctrl-cloud',
+        name: '云电脑 A',
+        status: 'online',
+        type: 'cloud',
+        cloudHost: makeCloudHost({ status }),
+      },
+    ];
+
+    const { rerender } = render(
+      <NewSessionDialog
+        controllers={controllers('RUNNING')}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('控制器'), { target: { value: 'ctrl-cloud' } });
+    expect(screen.queryByTestId('cloud-host-unavailable-hint')).not.toBeInTheDocument();
+
+    rerender(
+      <NewSessionDialog
+        controllers={controllers('STOPPED')}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('cloud-host-unavailable-hint')).toHaveTextContent('云电脑未运行，暂不可创建会话');
   });
 });

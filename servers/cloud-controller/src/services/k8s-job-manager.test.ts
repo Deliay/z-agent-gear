@@ -38,6 +38,7 @@ describe('K8sJobManager', () => {
     expect(manifest.spec.backoffLimit).toBe(0);
     expect(manifest.spec.ttlSecondsAfterFinished).toBe(600);
     expect(manifest.spec.template.spec.restartPolicy).toBe('Never');
+    expect(manifest.spec.template.spec.automountServiceAccountToken).toBe(false);
     expect(manifest.spec.template.spec.runtimeClassName).toBe('sysbox-runc');
     expect(manifest.spec.template.spec.containers[0]?.image).toBe(
       'core.harbor.internal.fffdan.com/zero-tools/zag-worker:1.0.0',

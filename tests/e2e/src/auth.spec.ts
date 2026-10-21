@@ -48,7 +48,8 @@ test.describe('Auth E2E', () => {
   test('should login with existing credentials and show main layout', async ({ page }) => {
     const username = await registerUser(page);
     await loginViaUI(page, username);
-    await expect(page.locator(sidebar()).getByText('会话')).toBeVisible();
+    // 侧边栏导航为图标链接，不再渲染「会话」文本；以「我的费用」入口锚定登录后布局。
+    await expect(page.locator(sidebar()).getByRole('link', { name: '我的费用' })).toBeVisible();
   });
 
   test('should show username in sidebar after login', async ({ page }) => {

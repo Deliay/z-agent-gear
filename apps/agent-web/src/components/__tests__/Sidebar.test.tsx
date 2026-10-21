@@ -479,6 +479,55 @@ describe('Sidebar 集成测试', () => {
       expect(screen.getByTitle('控制器配置')).toBeInTheDocument();
     });
 
+    it('D-2 RUNNING 且单一 Harness 但无默认会话时提示可手动创建会话', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'RUNNING', defaultSessionId: null }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getByTestId('cloud-host-default-session-hint')).toHaveTextContent(
+        '默认会话创建失败，可手动创建会话',
+      );
+    });
+
+    it('D-2 默认会话已创建或多 Harness 时不展示失败提示', () => {
+      const { rerender } = render(<Sidebar username="testuser" />);
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'RUNNING', defaultSessionId: 'sess-1' }),
+          }),
+        ],
+      });
+      rerender(<Sidebar username="testuser" />);
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({
+              status: 'RUNNING',
+              defaultSessionId: null,
+              harnessTypes: ['OPENCODE', 'CLAUDE_CODE'] as CloudHostData['harnessTypes'],
+            }),
+          }),
+        ],
+      });
+      rerender(<Sidebar username="testuser" />);
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+    });
+
     it('云电脑未运行时禁用新建会话入口并提示', () => {
       mockHome({
         controllers: [

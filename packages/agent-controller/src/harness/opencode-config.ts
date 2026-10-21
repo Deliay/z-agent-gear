@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import {
@@ -101,7 +102,8 @@ export interface WriteOpencodeConfigResult {
  * 写入/合并 OpenCode 配置：
  *
  * - 用 `jsonc-parser` 的 `modify` 仅替换 `provider.zag`，保留注释与既有 provider；
- * - 文件权限固定 `0600`（含已存在文件）；
+ * - 文件权限固定 `0600`（含已存在文件），目录权限收紧为 `0700`（含已存在目录）；
+ * - 同目录临时文件 + `rename` 原子替换（避免半写文件，C-7）；
  * - 非法 JSONC 直接报错（不覆盖用户配置，避免静默丢数据）。
  */
 export async function writeOpencodeConfig(
@@ -109,6 +111,14 @@ export async function writeOpencodeConfig(
 ): Promise<WriteOpencodeConfigResult> {
   const dir = options.configDir ?? defaultConfigDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  // `mkdir` 的 mode 只对新建目录生效：已存在目录显式收紧到 0700（可能含模型 Key）。
+  try {
+    await chmod(dir, 0o700);
+  } catch (error) {
+    throw new OpencodeConfigError(
+      `cannot set permissions on OpenCode config directory ${dir}: ${(error as Error).message}`,
+    );
+  }
 
   const target = await resolveOpencodeConfigPath(dir);
   const created = !(await exists(target));
@@ -147,11 +157,14 @@ export async function writeOpencodeConfig(
   let content = applyEdits(text, edits);
   if (!content.endsWith('\n')) content += '\n';
 
+  const tempPath = join(dir, `.opencode-config.${process.pid}.${randomUUID()}.tmp`);
   try {
-    await writeFile(target, content, { encoding: 'utf-8', mode: 0o600 });
-    // writeFile 的 mode 只对新建文件生效：已存在文件显式收紧到 0600（可能含模型 Key）。
-    await chmod(target, 0o600);
+    // 先写同目录临时文件（0600）再 rename：失败时原配置保持完整，不产生半写文件。
+    await writeFile(tempPath, content, { encoding: 'utf-8', mode: 0o600 });
+    await chmod(tempPath, 0o600);
+    await rename(tempPath, target);
   } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
     throw new OpencodeConfigError(`cannot write OpenCode config at ${target}: ${(error as Error).message}`);
   }
 

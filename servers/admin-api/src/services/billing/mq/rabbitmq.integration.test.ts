@@ -54,7 +54,7 @@ const RABBITMQ_URL = process.env.RABBITMQ_TEST_URL;
             persistent: true,
             contentType: 'application/json',
             messageId: eventId,
-            headers: { 'x-event-id': eventId, 'x-retry-count': 0 },
+            headers: { 'x-event-id': eventId, 'x-publish-attempts': 0 },
           },
         );
         const consumed = await received;

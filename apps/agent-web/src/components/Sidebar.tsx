@@ -225,16 +225,28 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       </span>
                     </span>
                     {isCloud && cloudHost && (
-                      <span
-                        className="truncate text-xs text-muted-foreground"
-                        title={cloudHost.failureReason || undefined}
-                        data-testid="cloud-host-status"
-                      >
-                        {cloudHostStatusLabel(cloudHost.status)}
-                        {cloudHost.status === 'FAILED' && cloudHost.failureReason
-                          ? ` · ${cloudHost.failureReason}`
-                          : ''}
-                      </span>
+                      <>
+                        <span
+                          className="truncate text-xs text-muted-foreground"
+                          title={cloudHost.failureReason || undefined}
+                          data-testid="cloud-host-status"
+                        >
+                          {cloudHostStatusLabel(cloudHost.status)}
+                          {cloudHost.status === 'FAILED' && cloudHost.failureReason
+                            ? ` · ${cloudHost.failureReason}`
+                            : ''}
+                        </span>
+                        {cloudHostRunning
+                          && cloudHost.harnessTypes.length === 1
+                          && !cloudHost.defaultSessionId && (
+                            <span
+                              className="truncate text-xs text-destructive"
+                              data-testid="cloud-host-default-session-hint"
+                            >
+                              默认会话创建失败，可手动创建会话
+                            </span>
+                          )}
+                      </>
                     )}
                   </span>
                   <span

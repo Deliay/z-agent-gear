@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { LIST_GLOBAL_PROVIDER_MODELS, ADMIN_MODELS, ADMIN_PROVIDERS } from '@/graphql/queries'
@@ -49,7 +49,16 @@ export default function ImportModelsDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [keyword, setKeyword] = useState('')
   const [importedNames, setImportedNames] = useState<Set<string>>(new Set())
-  const [result, setResult] = useState<string | null>(null)
+  // 导入结果持久展示（PRD §3.5：成功与失败明细不能只靠一次性 toast）
+  const [result, setResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  // 防在途双击：按钮 loading 生效前可能连点两次
+  const importingRef = useRef(false)
+  // 异步回包时判断弹窗是否仍对同一供应商打开，避免用失效变量刷新（B-1）
+  const dialogRef = useRef({ open, providerId })
+
+  useEffect(() => {
+    dialogRef.current = { open, providerId }
+  }, [open, providerId])
 
   useEffect(() => {
     if (open) {
@@ -102,26 +111,37 @@ export default function ImportModelsDialog({
   }
 
   const handleImport = async () => {
-    if (!providerId || selected.size === 0) return
+    const targetProviderId = providerId
+    if (!targetProviderId || selected.size === 0 || importingRef.current) return
+    importingRef.current = true
+    const names = [...selected]
     try {
       const { data: mutationData } = await importModels({
-        variables: { providerId, names: [...selected] },
+        variables: { providerId: targetProviderId, names },
         refetchQueries: [ADMIN_MODELS, ADMIN_PROVIDERS],
       })
       const created = mutationData?.importGlobalModels?.length ?? 0
-      setImportedNames((prev) => new Set([...prev, ...selected]))
+      setImportedNames((prev) => new Set([...prev, ...names]))
       setSelected(new Set())
-      setResult(`成功导入 ${created} 个模型`)
+      setResult({ tone: 'success', message: `成功导入 ${created} 个模型` })
       toast.success(`成功导入 ${created} 个模型`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '导入失败，请重试'
+      setResult({ tone: 'error', message: `导入失败：${message}` })
+      toast.error(message)
+    } finally {
+      importingRef.current = false
+    }
+
+    // 刷新清单属于「操作后的副作用」，与导入结果分开异常通道：
+    // 弹窗已关闭 / 已切换到其他供应商时不再 refetch（变量已失效，必然失败），
+    // refetch 失败也不得把已成功的导入误报为失败（B-1）。
+    const current = dialogRef.current
+    if (!current.open || current.providerId !== targetProviderId) return
+    try {
       await refetch()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '导入失败，请重试')
-      // 并发导入可能仅部分落库（唯一索引兜底），刷新一次以展示已成功导入的条目
-      try {
-        await refetch()
-      } catch {
-        // 刷新失败不覆盖原始导入错误提示
-      }
+      console.warn('[ImportModelsDialog] 刷新模型清单失败（导入结果已按服务端返回展示）', err)
     }
   }
 
@@ -197,8 +217,13 @@ export default function ImportModelsDialog({
               )}
             </div>
             {result && (
-              <p role="status" className="text-sm text-foreground">
-                {result}
+              <p
+                role={result.tone === 'error' ? 'alert' : 'status'}
+                className={`text-sm ${
+                  result.tone === 'error' ? 'text-destructive' : 'text-foreground'
+                }`}
+              >
+                {result.message}
               </p>
             )}
           </div>
@@ -208,7 +233,7 @@ export default function ImportModelsDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             关闭
           </Button>
-          <Button onClick={handleImport} disabled={selected.size === 0 || importing || !!error}>
+          <Button onClick={handleImport} disabled={selected.size === 0 || importing || (!!error && !data)}>
             {importing ? '导入中...' : `导入${selected.size > 0 ? `（${selected.size}）` : ''}`}
           </Button>
         </DialogFooter>
