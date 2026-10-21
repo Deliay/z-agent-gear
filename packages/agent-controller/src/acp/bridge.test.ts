@@ -37,9 +37,13 @@ class MockAcpSpawner {
   isRunning = vi.fn().mockReturnValue(true);
   _stdin = new WritableStream();
   _stdout = new ReadableStream();
+  /** 可控进程退出：默认不退出，测试显式 triggerExit() */
+  private resolveClosed!: () => void;
+  private closedPromise = new Promise<void>((resolve) => { this.resolveClosed = resolve; });
+  triggerExit(): void { this.resolveClosed(); }
   get stdin() { return this._stdin; }
   get stdout() { return this._stdout; }
-  get closed() { return Promise.resolve(); }
+  get closed() { return this.closedPromise; }
 }
 
 function createMockSocket() {
@@ -741,8 +745,10 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 
-  it('T-B5d: stop() 同时收敛 pending 授权为 cancelled', async () => {
+  it('T-B5d: stop() 同时收敛 pending 授权为 cancelled 并发出 settled', async () => {
     const bridge = createBridge();
+    const settled = vi.fn();
+    bridge.on('permission:settled', settled);
 
     const promise = bridge.requestPermission({
       toolCall: { toolCallId: 'tc-1' },
@@ -752,9 +758,99 @@ describe('AcpSessionBridge - elicitation observability', () => {
     await bridge.stop();
 
     expect(await promise).toEqual({ outcome: { outcome: 'cancelled' } });
+    expect(settled).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(65_000);
-    // timer 已清理：65s 后不会再有新的 permission 事件
+    // timer 已清理：65s 后不会再有新的 permission 事件，且不会二次 settled
     expect(mockSocket.emit.mock.calls.filter((c: unknown[]) => c[0] === 'acp:permission')).toHaveLength(1);
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-B11: 进程退出（spawner.closed）收敛 pending 并发 cancelled，65s 后不再发 timeout', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = createBridge();
+    await bridge.start();
+
+    const promise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+    const requestId = (mockSocket.emit.mock.calls.find(
+      (c: unknown[]) => c[0] === 'acp:elicitation',
+    )![1] as { requestId: string }).requestId;
+
+    mockSpawner.triggerExit();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(await promise).toEqual({ action: 'cancel' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:resolved', expect.objectContaining({
+      requestId,
+      reason: 'cancelled',
+      detail: 'process exited',
+    }));
+
+    // 真实时钟推进 65s：timer 已清理，不得再发 timeout
+    const resolvedReasons = mockSocket.emit.mock.calls
+      .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
+      .map((c: unknown[]) => (c[1] as { reason: string }).reason);
+    await vi.advanceTimersByTimeAsync(65_000);
+    const afterReasons = mockSocket.emit.mock.calls
+      .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
+      .map((c: unknown[]) => (c[1] as { reason: string }).reason);
+    expect(afterReasons).toEqual(resolvedReasons);
+    expect(afterReasons).not.toContain('timeout');
+  });
+
+  it('T-B11b: 连接断开（settlePendingOnDisconnect）收敛 pending 且不发 timeout', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+
+    const promise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+
+    bridge.settlePendingOnDisconnect();
+
+    expect(await promise).toEqual({ action: 'cancel' });
+    await vi.advanceTimersByTimeAsync(65_000);
+    const reasons = mockSocket.emit.mock.calls
+      .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
+      .map((c: unknown[]) => (c[1] as { reason: string }).reason);
+    expect(reasons).toEqual(['cancelled']);
+  });
+
+  it('T-B11c: 收敛时发出 settled 事件（供请求级 Map 清理），响应/超时同样触发', async () => {
+    const bridge = createBridge();
+    const elicitationSettled = vi.fn();
+    const permissionSettled = vi.fn();
+    bridge.on('elicitation:settled', elicitationSettled);
+    bridge.on('permission:settled', permissionSettled);
+
+    const elicitationPromise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+    const elicitationId = (mockSocket.emit.mock.calls.find(
+      (c: unknown[]) => c[0] === 'acp:elicitation',
+    )![1] as { requestId: string }).requestId;
+    bridge.handleElicitationResponse(elicitationId, 'decline');
+    await elicitationPromise;
+    expect(elicitationSettled).toHaveBeenCalledWith(elicitationId);
+
+    const permissionPromise = bridge.requestPermission({
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'opt-1', name: 'Allow', kind: 'allow_once' }],
+    } as never);
+    const permissionId = (mockSocket.emit.mock.calls.find(
+      (c: unknown[]) => c[0] === 'acp:permission',
+    )![1] as { requestId: string }).requestId;
+    await vi.advanceTimersByTimeAsync(65_000);
+    await permissionPromise;
+    expect(permissionSettled).toHaveBeenCalledWith(permissionId);
   });
 
   it('T-B5e: Agent 自发 complete 时收敛 pending 并发 resolved(cancelled)', async () => {

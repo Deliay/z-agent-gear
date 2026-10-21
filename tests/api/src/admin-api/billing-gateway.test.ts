@@ -73,12 +73,13 @@ describe('OpenAI 兼容计费网关', () => {
  * T-2/R3-5：T-B27/T-B28 名实相符——`/v1/models` 过滤逻辑与 `model_not_priced` 分支必须被真实断言，
  * 而不是「删掉过滤逻辑也照样通过」。直写 `models`（需 MONGODB_URI）。
  */
-describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模型）', () => {
+describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败）', () => {
   let secret = '';
   const providerId = new mongoose.Types.ObjectId();
   const createdNames: string[] = [];
 
   beforeAll(async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-B27/T-B28 不允许静默 skip').toBeTruthy();
     const db = (await mongoDb())!;
     const token = await ensureAdminLogin();
     const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
@@ -223,8 +224,9 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
  * PRD §3.5：账户被冻结 → 拒绝新的模型调用，且不限于「已开启计费」的模型。
  * 直写一个 isBillable=false 的全局模型（无真实上游），断言冻结账户调用被 402 拒绝。
  */
-describe.skipIf(!process.env.MONGODB_URI)('冻结账户网关口径（含未开启计费模型）', () => {
+describe('冻结账户网关口径（含未开启计费模型，MONGODB_URI 缺失即失败）', () => {
   it('T-B24: frozen 账户调用非计费模型同样 402 account_frozen', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-B24 不允许静默 skip').toBeTruthy();
     const db = (await mongoDb())!;
     const token = await ensureAdminLogin();
 

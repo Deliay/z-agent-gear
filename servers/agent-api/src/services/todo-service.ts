@@ -166,7 +166,25 @@ export class TodoService {
     return result.modifiedCount > 0;
   }
 
+  /**
+   * 响应前置归属校验：确认 requestId 属于该用户且仍可响应。
+   * 权限待办无 resolution 字段，只校验归属；问询必须仍未终结。
+   */
+  async isRespondableTodo(
+    userId: string,
+    requestId: string,
+    type: 'permission_request' | 'elicitation_request',
+  ): Promise<boolean> {
+    if (!userId || !requestId) return false;
+    const filter: Record<string, unknown> = type === 'elicitation_request'
+      ? { userId, 'elicitationData.requestId': requestId, resolution: null }
+      : { userId, 'data.requestId': requestId };
+    return (await TodoItem.countDocuments(filter)) > 0;
+  }
+
   async markTodoAsResponded(requestId: string, userId: string): Promise<boolean> {
+    // 缺 userId 时直接拒绝：Mongoose 会剥离 undefined 条件，静默退化为「匹配任意租户」
+    if (!userId) return false;
     const result = await TodoItem.updateOne(
       {
         userId,
@@ -178,6 +196,7 @@ export class TodoService {
   }
 
   async markElicitationCompleted(elicitationId: string, userId: string): Promise<boolean> {
+    if (!userId) return false;
     const result = await TodoItem.updateOne(
       { 'elicitationData.elicitationId': elicitationId, userId },
       { $set: { isRead: true } },
@@ -215,10 +234,10 @@ export class TodoService {
       return 0;
     }
 
-    const result = await TodoItem.updateOne(
-      filter,
-      { $set: { resolution, resolvedAt: new Date(), isRead: true } },
-    );
+    // 会话级兜底可能同时存在多条未终结问询：用 updateMany 全部收敛，而非只命中第一条
+    const result = requestId
+      ? await TodoItem.updateOne(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } })
+      : await TodoItem.updateMany(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } });
     return result.modifiedCount ?? 0;
   }
 

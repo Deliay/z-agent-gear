@@ -46,6 +46,17 @@ export const todoResolvers = {
         throw new GraphQLError('Not authenticated');
       }
 
+      // 归属前置校验：必须先确认待办属于当前用户，再向 Agent 下发响应动作，
+      // 否则持有他人 requestId 即可代答（例如代接受权限 → Agent 执行命令）。
+      const owned = await todoService.isRespondableTodo(
+        context.currentUser.id,
+        args.requestId,
+        'permission_request',
+      );
+      if (!owned) {
+        throw new GraphQLError('Todo item not found or already handled');
+      }
+
       const redis = getRedisClient();
       await redis.publish('permission:response', JSON.stringify({
         requestId: args.requestId,
@@ -63,6 +74,16 @@ export const todoResolvers = {
     ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
+      }
+
+      // 归属 + 终态前置校验：只有本人且仍待处理的问询才允许回传 Agent
+      const owned = await todoService.isRespondableTodo(
+        context.currentUser.id,
+        args.requestId,
+        'elicitation_request',
+      );
+      if (!owned) {
+        throw new GraphQLError('Todo item not found or already handled');
       }
 
       const redis = getRedisClient();

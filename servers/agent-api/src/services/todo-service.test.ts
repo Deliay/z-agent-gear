@@ -647,7 +647,11 @@ describe('TodoService - elicitation resolution', () => {
 
     expect(updated).toBe(0);
     expect(TodoItem.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-1', resolution: null }),
+      {
+        userId: 'user-1',
+        resolution: null,
+        'elicitationData.requestId': 'elic-of-user-2',
+      },
       expect.anything(),
     );
   });
@@ -658,12 +662,15 @@ describe('TodoService - elicitation resolution', () => {
     const updated = await service.markElicitationResolved('elic-1', 'expired', { userId: 'user-1' });
 
     expect(updated).toBe(0);
-    const [filter, update] = vi.mocked(TodoItem.updateOne).mock.calls[0] as unknown as [
-      Record<string, unknown>,
-      { $set: { resolution: string } },
-    ];
-    expect(filter.resolution).toBeNull();
-    expect(update.$set.resolution).toBe('expired');
+    // 完整 filter：他人写入必须同时受 userId/requestId/resolution 三重约束
+    expect(TodoItem.updateOne).toHaveBeenCalledWith(
+      {
+        userId: 'user-1',
+        resolution: null,
+        'elicitationData.requestId': 'elic-1',
+      },
+      { $set: { resolution: 'expired', resolvedAt: expect.any(Date), isRead: true } },
+    );
   });
 
   it('T-TD5: 缺 userId 直接拒绝写入（越权防线）', async () => {
@@ -673,22 +680,23 @@ describe('TodoService - elicitation resolution', () => {
     expect(TodoItem.updateOne).not.toHaveBeenCalled();
   });
 
-  it('T-TD6: requestId 缺失时按 sessionId + userId 会话级兜底收敛', async () => {
-    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+  it('T-TD6: requestId 缺失时按 sessionId + userId 用 updateMany 收敛全部未终结问询', async () => {
+    vi.mocked(TodoItem.updateMany).mockResolvedValue({ modifiedCount: 2 } as never);
 
     const updated = await service.markElicitationResolved(undefined, 'failed', {
       userId: 'user-1',
       sessionId: 'sess-1',
     });
 
-    expect(updated).toBe(1);
-    expect(TodoItem.updateOne).toHaveBeenCalledWith(
+    expect(updated).toBe(2);
+    expect(TodoItem.updateOne).not.toHaveBeenCalled();
+    expect(TodoItem.updateMany).toHaveBeenCalledWith(
       {
         userId: 'user-1',
         resolution: null,
         'elicitationData.sessionId': 'sess-1',
       },
-      expect.anything(),
+      { $set: { resolution: 'failed', resolvedAt: expect.any(Date), isRead: true } },
     );
   });
 
@@ -696,6 +704,35 @@ describe('TodoService - elicitation resolution', () => {
     await expect(
       service.markElicitationResolved(undefined, 'failed', { userId: 'user-1' }),
     ).resolves.toBe(0);
+    expect(TodoItem.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-TD8: isRespondableTodo 的问询/权限 filter 均带 userId', async () => {
+    vi.mocked(TodoItem.countDocuments).mockResolvedValue(1);
+
+    await expect(service.isRespondableTodo('user-1', 'elic-1', 'elicitation_request')).resolves.toBe(true);
+    expect(TodoItem.countDocuments).toHaveBeenCalledWith({
+      userId: 'user-1',
+      'elicitationData.requestId': 'elic-1',
+      resolution: null,
+    });
+
+    await expect(service.isRespondableTodo('user-1', 'perm-1', 'permission_request')).resolves.toBe(true);
+    expect(TodoItem.countDocuments).toHaveBeenCalledWith({
+      userId: 'user-1',
+      'data.requestId': 'perm-1',
+    });
+  });
+
+  it('T-TD9: isRespondableTodo 缺 userId/requestId 时不查库', async () => {
+    await expect(service.isRespondableTodo('', 'elic-1', 'elicitation_request')).resolves.toBe(false);
+    await expect(service.isRespondableTodo('user-1', '', 'permission_request')).resolves.toBe(false);
+    expect(TodoItem.countDocuments).not.toHaveBeenCalled();
+  });
+
+  it('T-TD10: markTodoAsResponded/markElicitationCompleted 缺 userId 时拒绝写入', async () => {
+    await expect(service.markTodoAsResponded('req-1', '')).resolves.toBe(false);
+    await expect(service.markElicitationCompleted('elic-1', '')).resolves.toBe(false);
     expect(TodoItem.updateOne).not.toHaveBeenCalled();
   });
 });

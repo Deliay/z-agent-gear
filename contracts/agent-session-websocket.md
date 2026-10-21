@@ -173,7 +173,7 @@
 | `protocolVersion` | `number \| null` | Agent 协商的协议版本 |
 | `agentInfo` | `AgentInfo \| null` | Agent 名称与版本 |
 | `features` | `AgentFeatureSupport[]` | 归一化后的能力清单（20 项） |
-| `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods`（`initialize` 返回值原样，不做 `type→kind` 等转换）/ `clientCapabilities`。单份原文上限 16 KiB，超限替换为 `{ truncated: true, originalBytes, preview }`（`preview` 最长 512 字符），避免 Agent 可控 `_meta` 放大 WS/Mongo 写入 |
+| `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods`（`initialize` 返回值原样，不做 `type→kind` 等转换）/ `clientCapabilities`。单份原文上限 **16 KiB（UTF-8 字节口径，`TextEncoder` 计数）**，超限替换为 `{ truncated: true, originalBytes, preview }`（`preview` 最长 512 字符），避免 Agent 可控 `_meta` 放大 WS/Mongo 写入。controller-api 落库前另有 64 KiB 总快照上限：超限保留 20 项 `features`，把 `raw` 替换为同形态截断摘要 |
 
 **AgentFeatureSupport 结构：**
 
@@ -865,6 +865,14 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 controller 侧对匹配的 pending 问询就地收敛（`clearTimeout` + 回 Agent `cancel`），并补发
 `acp:elicitation:resolved{reason:'cancelled', detail:'agent completed elicitation'}`，
 避免待办悬挂到 65s 被误标 `expired`。
+
+`cancelled` 的产生条件（全部在 controller 侧）：
+1. 用户主动取消 / Agent 自发 `elicitation/complete`；
+2. `stop()`（会话关闭）、`handleError()`（初始化失败）、`spawner.closed`（进程退出）；
+3. socket `disconnect`（`settlePendingOnDisconnect`）与 `acp:reconcile` 对账杀会话（走 `stop()`）。
+
+以上路径均 `clearTimeout` + resolve(cancel) + delete pending，并在会话仍连接时发 `resolved{cancelled}`；
+因此**任何会话关闭/进程退出/断线/对账之后都不应再出现 65s 迟到的 `resolved{timeout}`**。
 
 ### 2.34 `acp:elicitation:resolved`（Controller → Server）
 

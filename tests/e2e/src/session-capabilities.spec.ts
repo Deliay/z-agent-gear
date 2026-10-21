@@ -294,9 +294,14 @@ test.describe('ACP 能力透明化 E2E', () => {
         /自定义/,
         /来源未知/,
       ]);
-      // 组头含判定依据（去重后「；」连接）
+      // 组头含判定依据（去重后「；」连接）+ 组内归属（模型不得串组）
       await expect(page.getByTestId('model-group-平台内置')).toContainText('按平台模型库比对（平台内置）');
+      await expect(page.getByTestId('model-group-平台内置')).toContainText(globalName);
+      await expect(page.getByTestId('model-group-自定义')).toContainText('按平台模型库比对（自定义）');
+      await expect(page.getByTestId('model-group-自定义')).toContainText(userName);
       await expect(page.getByTestId('model-group-Agent 自带')).toContainText('按标识前缀判定');
+      await expect(page.getByTestId('model-group-Agent 自带')).toContainText('Kimi K3');
+      await expect(page.getByTestId('model-group-来源未知')).toContainText('Local LLM');
 
       disconnect();
     } finally {

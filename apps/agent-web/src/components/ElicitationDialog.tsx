@@ -11,6 +11,11 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Checkbox } from './ui/checkbox';
 import { RESPOND_ELICITATION } from '../graphql/mutations';
+import {
+  clearElicitationDraft,
+  getElicitationDraft,
+  saveElicitationDraft,
+} from '../stores/elicitationDialog';
 import type {
   TodoItemData,
   RespondElicitationMutation,
@@ -23,6 +28,8 @@ interface ElicitationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   todo: TodoItemData;
+  /** 待办已从列表移除（TTL/limit 挤出）：按已失效终态展示，不静默卸载表单 */
+  stale?: boolean;
   onResponded?: () => void;
 }
 
@@ -66,9 +73,14 @@ function splitUrl(url: string): UrlParts | null {
   }
 }
 
-export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: ElicitationDialogProps) {
+export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onResponded }: ElicitationDialogProps) {
   const [responding, setResponding] = useState(false);
-  const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const draftKey = todo.elicitationData?.requestId ?? todo.id;
+  const [edits, setEdits] = useState<Record<string, unknown>>(() => getElicitationDraft(draftKey));
+  // owner 切换/重挂载后恢复草稿
+  useEffect(() => {
+    setEdits(getElicitationDraft(draftKey));
+  }, [draftKey]);
   const [respondElicitation] = useMutation<RespondElicitationMutation>(RESPOND_ELICITATION);
 
   const data = todo.elicitationData;
@@ -90,7 +102,8 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
     if (todo.resolution || !todo.expiresAt) return;
     const remaining = new Date(todo.expiresAt as string).getTime() - Date.now();
     if (remaining <= 0) return;
-    const timer = setTimeout(() => setNow(Date.now()), remaining + 50);
+    // 到点即刷新（不加宽限窗口），避免 expiresAt 之后的窄窗口仍可提交
+    const timer = setTimeout(() => setNow(Date.now()), remaining);
     return () => clearTimeout(timer);
   }, [todo.id, todo.resolution, todo.expiresAt]);
 
@@ -99,9 +112,12 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
     || (!todo.resolution && Boolean(todo.expiresAt) && new Date(todo.expiresAt as string).getTime() <= now);
   const isCancelled = todo.resolution === 'cancelled' || todo.resolution === 'failed';
   const isFinished = todo.resolution === 'accepted' || todo.resolution === 'declined';
-  const isClosed = isExpired || isCancelled || isFinished;
+  const isStale = stale && !todo.resolution;
+  const isClosed = isExpired || isCancelled || isFinished || isStale;
 
-  const statusMessage = isExpired
+  const statusMessage = isStale
+    ? '该问询已失效（已从待办移除）'
+    : isExpired
     ? '该问询已过期'
     : todo.resolution === 'cancelled'
       ? '该问询已取消'
@@ -114,7 +130,11 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
             : null;
 
   const setValue = (name: string, value: unknown) => {
-    setEdits((prev) => ({ ...prev, [name]: value }));
+    setEdits((prev) => {
+      const next = { ...prev, [name]: value };
+      saveElicitationDraft(draftKey, next);
+      return next;
+    });
   };
 
   const toggleArrayValue = (name: string, option: unknown, checked: boolean) => {
@@ -124,7 +144,8 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
   };
 
   const handleRespond = async (action: ElicitationAction) => {
-    if (!data) return;
+    // 终态/过期/失效守卫：即使按钮因竞态未及时隐藏，也不得再回传
+    if (!data || isClosed) return;
 
     setResponding(true);
     try {
@@ -135,6 +156,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
           values: action === 'accept' && data.mode === 'form' ? values : null,
         },
       });
+      clearElicitationDraft(draftKey);
       onResponded?.();
       onOpenChange(false);
     } catch (error) {
@@ -294,14 +316,16 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
           {statusMessage && (
             <p
               data-testid="elicitation-status"
+              role="status"
+              aria-live="polite"
               className={`rounded-md px-3 py-2 text-sm ${
-                isExpired || isCancelled
+                isExpired || isCancelled || isStale
                   ? 'bg-muted text-muted-foreground'
                   : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
               }`}
             >
               {statusMessage}
-              {!isFinished && '，该问询已不可操作。'}
+              {!isFinished && !isStale && '，该问询已不可操作。'}
             </p>
           )}
 

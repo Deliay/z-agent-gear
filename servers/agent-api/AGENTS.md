@@ -31,7 +31,10 @@ src/
 - **终态写入不变量（`TodoService.markElicitationResolved`）**：filter 必须同时包含 `userId` 与 `resolution: null`——
   前者做租户隔离（缺 `userId` 直接拒绝写入），后者保证终态单调（迟到的 timeout 不得覆盖已 accepted/declined）。
   事件缺 `requestId` 时按 `sessionId + userId` 会话级兜底；契约外 `reason` 收敛为 `failed` 并告警。
-  `todoitems` 上为 `elicitationData.requestId` 建了索引，避免全集合扫描。
+  `todoitems` 上为 `elicitationData.requestId` 建了索引（迁移 006 显式创建，避免关闭 autoIndex 时缺失），避免全集合扫描。
+- **响应动作归属校验**：`respondPermission` / `respondElicitation` 先调 `isRespondableTodo(userId, requestId, type)`
+  （问询还要求 `resolution: null`），未命中直接抛 `Todo item not found or already handled`，**不向 Agent publish**；
+  `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false（Mongoose 会剥离 undefined 条件，必须显式拒绝）。
 - 新增或修改 `Session` 字段级 resolver 时，必须在 `graphql/resolvers/index.ts` 的 `Session` 键登记，否则线上字段不生效（backend-rules 陷阱）。
 
 ## Dev Commands

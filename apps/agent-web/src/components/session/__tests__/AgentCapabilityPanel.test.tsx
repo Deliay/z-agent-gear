@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { AgentCapabilityPanel } from '../AgentCapabilityPanel';
 import type { SessionData } from '../../../graphql/types';
+import { AGENT_FEATURE_ORDER } from '../../../constants/agentFeatures';
 
 function makeSession(features: SessionData['features'], agentInfo: SessionData['agentInfo'] = null): SessionData {
   return {
@@ -32,31 +33,12 @@ function makeSession(features: SessionData['features'], agentInfo: SessionData['
   };
 }
 
-const featureIds = [
-  'session.load',
-  'session.resume',
-  'session.close',
-  'session.list',
-  'session.delete',
-  'session.fork',
-  'session.additionalDirectories',
-  'prompt.image',
-  'prompt.audio',
-  'prompt.embeddedContext',
-  'auth.login',
-  'auth.logout',
-  'mcp.http',
-  'mcp.sse',
-  'config.boolean',
-  'config.model',
-  'config.mode',
-  'commands',
-  'elicitation.form',
-  'elicitation.url',
-];
+const featureIds = AGENT_FEATURE_ORDER;
 
 describe('AgentCapabilityPanel', () => {
   it('T-W4: 渲染固定顺序的能力行、状态徽标、detail 与 Agent 版本', () => {
+    // 唯一事实源固定 20 项（集合断言）
+    expect(new Set(AGENT_FEATURE_ORDER).size).toBe(20);
     const features = featureIds.map((id) => ({
       id,
       status: id === 'prompt.audio' ? 'unsupported' as const : 'supported' as const,
@@ -69,6 +51,9 @@ describe('AgentCapabilityPanel', () => {
 
     const rows = screen.getAllByTestId(/agent-capability-row-/);
     expect(rows).toHaveLength(20);
+    // 顺序断言（名实相符）：DOM 顺序必须与唯一事实源 FEATURE_IDS 一致
+    expect(rows.map((row) => row.getAttribute('data-testid')?.replace('agent-capability-row-', '')))
+      .toEqual(featureIds);
     expect(screen.getByTestId('agent-capability-row-session.load')).toBeDefined();
     expect(screen.getByText('Agent：OpenCode 2.0.31')).toBeDefined();
     expect(screen.getByTestId('agent-capability-row-prompt.audio').textContent).toContain('不支持');

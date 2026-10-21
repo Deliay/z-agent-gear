@@ -232,7 +232,7 @@ describe('ElicitationManager', () => {
       });
 
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('without sessionId'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
     });
 
     it('T-S6d: requestId/detail 超长时截断到 200 字符', async () => {
@@ -248,6 +248,91 @@ describe('ElicitationManager', () => {
       const payload = JSON.parse(mockRedis.publish.mock.calls[0][1]);
       expect(payload.requestId).toHaveLength(200);
       expect(payload.detail).toHaveLength(200);
+    });
+
+    it('T-S6e: 非字符串 detail 与未知字段被丢弃（白名单重建，不绕过截断）', async () => {
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationResolved(mockSocket as never, {
+        requestId: 'elic-1',
+        sessionId: 'session-1',
+        reason: 'cancelled',
+        detail: { nested: 'x'.repeat(10_000) } as never,
+        evil: 'z'.repeat(10_000),
+      } as never);
+
+      const payload = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(payload).not.toHaveProperty('detail');
+      expect(payload).not.toHaveProperty('evil');
+      expect(Object.keys(payload).sort()).toEqual(
+        ['controllerId', 'reason', 'requestId', 'sessionId', 'userId'].sort(),
+      );
+    });
+
+    it('T-S6f: 超长 sessionId 丢弃（不进入 Redis）', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationResolved(mockSocket as never, {
+        sessionId: 's'.repeat(500),
+        reason: 'timeout',
+      });
+
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+    });
+  });
+
+  describe('pending 生命周期', () => {
+    it('T-S8: 重复 requestId 清理旧 60s timer（不重复发 timeout）', async () => {
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'first',
+      });
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'second',
+      });
+
+      expect(manager.getPendingRequestCount()).toBe(1);
+
+      mockRedis.publish.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.resolve();
+
+      const timeoutPublishes = mockRedis.publish.mock.calls.filter(
+        (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
+      );
+      expect(timeoutPublishes).toHaveLength(1);
+    });
+
+    it('T-S9: clearForSocket 清理该 socket 的 pending 与 timer（断线不迟发 timeout）', async () => {
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-1', sessionId: 'session-1', mode: 'form', message: 'hi',
+      });
+      expect(manager.getPendingRequestCount()).toBe(1);
+
+      manager.clearForSocket('socket-123');
+      expect(manager.getPendingRequestCount()).toBe(0);
+
+      mockRedis.publish.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.resolve();
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
+    });
+
+    it('T-S10: 非法 mode / 空 sessionId 的请求不入 pending、不发 Redis', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-bad', sessionId: '', mode: 'form', message: 'hi',
+      });
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-bad2', sessionId: 's', mode: 'custom' as never, message: 'hi',
+      });
+
+      expect(manager.getPendingRequestCount()).toBe(0);
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:request', expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid elicitation request'), expect.anything(), expect.anything(), expect.anything());
     });
   });
 

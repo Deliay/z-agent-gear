@@ -236,10 +236,12 @@ function capRaw(value: unknown): unknown {
   try {
     const json = JSON.stringify(value);
     if (json === undefined) return null;
-    if (Buffer.byteLength(json, 'utf8') <= RAW_SNAPSHOT_MAX_BYTES) return value;
+    // UTF-8 字节口径（TextEncoder 在 Node/浏览器一致；避免依赖 Buffer 类型）
+    const bytes = new TextEncoder().encode(json).length;
+    if (bytes <= RAW_SNAPSHOT_MAX_BYTES) return value;
     return {
       truncated: true,
-      originalBytes: Buffer.byteLength(json, 'utf8'),
+      originalBytes: bytes,
       preview: json.slice(0, 512),
     };
   } catch {

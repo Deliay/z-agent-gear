@@ -40,6 +40,8 @@ interface ElicitationResolvedData {
 
 const RESOLVED_REASONS = new Set(['unsupported_mode', 'timeout', 'cancelled']);
 const DETAIL_MAX_LENGTH = 200;
+const SESSION_ID_MAX_LENGTH = 200;
+const MESSAGE_MAX_LENGTH = 4000;
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_RESPONSE_CHANNEL = 'elicitation:response';
@@ -82,6 +84,21 @@ export class ElicitationManager {
 
   async handleElicitationRequest(socket: Socket, data: ElicitationRequestData): Promise<void> {
     const { requestId, sessionId, mode, message, toolCallId, requestedSchema, elicitationId, url } = data;
+
+    // 入参运行时校验：controller payload 不可信，非法请求不入 pending、不落 Redis
+    if (
+      typeof requestId !== 'string' || requestId.length === 0 || requestId.length > SESSION_ID_MAX_LENGTH
+      || typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > SESSION_ID_MAX_LENGTH
+      || (mode !== 'form' && mode !== 'url')
+      || typeof message !== 'string' || message.length > MESSAGE_MAX_LENGTH
+    ) {
+      console.warn('[Elicitation] dropped invalid elicitation request: requestId=%j sessionId=%j mode=%j', requestId, sessionId, mode);
+      return;
+    }
+
+    // 重复 requestId：先清旧 timer，避免悬挂的 60s 定时器泄漏/误发 timeout
+    const existing = this.pendingRequests.get(requestId);
+    if (existing) clearTimeout(existing.timeout);
 
     const timeout = setTimeout(() => {
       this.handleTimeout(requestId);
@@ -146,8 +163,13 @@ export class ElicitationManager {
   async handleElicitationResolved(socket: Socket, data: ElicitationResolvedData): Promise<void> {
     // 运行时校验：controller 侧的 payload 不可信，非法 reason/缺失 sessionId 直接丢弃并告警，
     // 避免未知枚举被下游静默归并。
-    if (!data || typeof data.sessionId !== 'string' || data.sessionId.length === 0) {
-      console.warn('[Elicitation] dropped resolved event without sessionId');
+    if (
+      !data
+      || typeof data.sessionId !== 'string'
+      || data.sessionId.length === 0
+      || data.sessionId.length > SESSION_ID_MAX_LENGTH
+    ) {
+      console.warn('[Elicitation] dropped resolved event with invalid sessionId');
       return;
     }
     if (!RESOLVED_REASONS.has(data.reason)) {
@@ -158,15 +180,18 @@ export class ElicitationManager {
     const requestId = typeof data.requestId === 'string' && data.requestId.length > 0
       ? data.requestId.slice(0, DETAIL_MAX_LENGTH)
       : undefined;
+    // 显式白名单重建 payload：非字符串 detail / 未知字段一律丢弃，
+    // 不能靠 {...data} 让对象 detail 绕过截断进入 Redis。
     const detail = typeof data.detail === 'string'
       ? data.detail.slice(0, DETAIL_MAX_LENGTH)
       : undefined;
 
     const redis = getRedisClient();
     await redis.publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
-      ...data,
-      ...(requestId ? { requestId } : { requestId: undefined }),
-      ...(detail ? { detail } : {}),
+      requestId,
+      sessionId: data.sessionId,
+      reason: data.reason,
+      ...(detail !== undefined ? { detail } : {}),
       controllerId: socket.data.controllerId,
       userId: socket.data.userId,
     }));
@@ -207,6 +232,15 @@ export class ElicitationManager {
 
   getPendingRequestCount(): number {
     return this.pendingRequests.size;
+  }
+
+  /** controller 断线：清理该 socket 的 pending 与 timer，避免 60s 后对已失联会话发 timeout */
+  clearForSocket(socketId: string): void {
+    for (const [requestId, pending] of this.pendingRequests) {
+      if (pending.socketId !== socketId) continue;
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(requestId);
+    }
   }
 
   stop(): void {

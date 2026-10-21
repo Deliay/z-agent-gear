@@ -727,6 +727,14 @@ export function connectToServer(
         elicitationRequestBridge.set(requestId, bridge);
       });
 
+      // 超时 / 用户响应 / stop / complete 收敛后清理请求级映射，避免 Map 单调增长并释放 bridge
+      bridge.on('permission:settled', (requestId: string) => {
+        permissionRequestBridge.delete(requestId);
+      });
+      bridge.on('elicitation:settled', (requestId: string) => {
+        elicitationRequestBridge.delete(requestId);
+      });
+
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
@@ -826,6 +834,14 @@ export function connectToServer(
 
       bridge.on('elicitation:sent', (requestId: string) => {
         elicitationRequestBridge.set(requestId, bridge);
+      });
+
+      // 超时 / 用户响应 / stop / complete 收敛后清理请求级映射，避免 Map 单调增长并释放 bridge
+      bridge.on('permission:settled', (requestId: string) => {
+        permissionRequestBridge.delete(requestId);
+      });
+      bridge.on('elicitation:settled', (requestId: string) => {
+        elicitationRequestBridge.delete(requestId);
       });
 
       const onInitialized = (payload: Record<string, unknown>) => {
@@ -1323,6 +1339,9 @@ export function connectToServer(
         const bridge = acpBridges.get(entry.sessionId);
         if (bridge) {
           acpBridges.delete(entry.sessionId);
+          // 对账杀会话必须走 stop()：收敛 pending（含 65s timer）并发 cancelled，
+          // 否则已杀会话仍会迟到发 acp:elicitation:resolved{timeout}
+          void bridge.stop().catch(() => { /* ignore */ });
         }
       }
     }
@@ -1374,6 +1393,11 @@ export function connectToServer(
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     gatewayManager.closeAll();
+    // 断线后 pending 计时器必须就地收敛：socket.io 会缓存断线期间 emit，
+    // 不收敛会在重连后补发 65s timeout（待办被误标 expired）。
+    for (const bridge of acpBridges.values()) {
+      bridge.settlePendingOnDisconnect();
+    }
     permissionRequestBridge.clear();
     elicitationRequestBridge.clear();
     mcpRelay.handleDisconnect();

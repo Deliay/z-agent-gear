@@ -34,6 +34,7 @@ export function TodoListPanel() {
   const {
     todoId: elicitationTodoId,
     owner: elicitationOwner,
+    snapshot: elicitationSnapshot,
     open: openElicitation,
     close: closeElicitation,
   } = useElicitationDialogState();
@@ -54,25 +55,34 @@ export function TodoListPanel() {
   const immediateTodo = immediateTodoId
     ? todos.find((todo) => todo.id === immediateTodoId) ?? null
     : null;
-  // 问询弹窗数据按 id 从全量 todos 派生（不过滤 resolution）：轮询后自动收敛为终态
-  const elicitationTodo = elicitationOwner === 'todo' && elicitationTodoId
+  // 问询弹窗数据按 id 从全量 todos 派生（不过滤 resolution）：轮询后自动收敛为终态；
+  // todo 被 TTL 删除/limit 挤出时退回打开时快照并标记 stale，不静默卸载表单
+  const liveElicitationTodo = elicitationOwner === 'todo' && elicitationTodoId
     ? todos.find((todo) => todo.id === elicitationTodoId) ?? null
     : null;
+  const elicitationTodo = liveElicitationTodo
+    ?? (elicitationOwner === 'todo' ? elicitationSnapshot : null);
+  const elicitationStale = Boolean(elicitationTodo) && !liveElicitationTodo;
+  // 列表已移除该 todo：不再用它阻塞后续 immediate 自动弹窗
+  const elicitationBlocking = Boolean(elicitationTodoId) && !elicitationStale;
+
+  // 面板卸载时清理自己持有的状态
+  useEffect(() => () => closeElicitation('todo'), [closeElicitation]);
 
   // 检测立即优先级的待办，自动弹出全局弹窗（三种弹窗互斥）
   useEffect(() => {
-    if (selectedTodoId || immediateTodoId || elicitationTodoId) return;
+    if (selectedTodoId || immediateTodoId || elicitationBlocking) return;
     const immediate = todos.find(
       (todo) => todo.priority === 'immediate' && !todo.isRead && isActionable(todo) && !processedImmediateRef.current.has(todo.id)
     );
     if (!immediate) return;
     processedImmediateRef.current.add(immediate.id);
     if (isActionableElicitation(immediate)) {
-      openElicitation(immediate.id, 'todo');
+      openElicitation(immediate, 'todo');
     } else {
       setImmediateTodoId(immediate.id);
     }
-  }, [todos, selectedTodoId, immediateTodoId, elicitationTodoId, openElicitation]);
+  }, [todos, selectedTodoId, immediateTodoId, elicitationBlocking, openElicitation]);
 
   const handleMarkAllRead = async () => {
     // mutation 已带 refetchQueries: HOME_OVERVIEW，避免二次全量刷新
@@ -85,10 +95,10 @@ export function TodoListPanel() {
       // 问询走共享弹窗状态：与 Banner 互斥，避免同一 requestId 双弹窗
       setSelectedTodoId(null);
       setImmediateTodoId(null);
-      openElicitation(todo.id, 'todo');
+      openElicitation(todo, 'todo');
       return;
     }
-    closeElicitation();
+    closeElicitation('todo');
     setSelectedTodoId(todo.id);
   };
 
@@ -177,12 +187,13 @@ export function TodoListPanel() {
       {elicitationTodo && (
         <ElicitationDialog
           open
+          stale={elicitationStale}
           onOpenChange={(open) => {
-            if (!open) closeElicitation();
+            if (!open) closeElicitation('todo');
           }}
           todo={elicitationTodo}
           onResponded={() => {
-            closeElicitation();
+            closeElicitation('todo');
             refetchOverview();
           }}
         />

@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: ❌ **二轮 AI Review 复核结论：REJECT（二次打回）**——二轮复核实证首轮 1×🔴 与多数 🟠/🟡 已真实修复且可证伪（独立实跑全部复现），但按验收红线仍有 **2 项 🟠 残余未收口 + 6 项返工新引入/新暴露 🟠**：🟠-7 弹窗在 todo 离开列表时被卸载无终态收敛（口子未封死）、🟠-9 billing-events/billing-gateway 同型静默 skip 未治理且台账标「✅ 已修复」构成新的声称大于实际；新 🟠 集中在 bridge 收敛缺口（进程崩溃/对账杀会话/断线仍迟到发 timeout，与返工声称不变量可复现反例）、controller-api 校验 fail-open（非字符串 detail/未知字段绕过截断直入 Redis）、socketio-client 请求 Map 泄漏、前端 elicitationDialog store 无卸载对账致自动弹窗失效与跨会话幻影重开、agent-api 归属守卫不一致（Mongoose 剥离 undefined filter 键致归属静默失效）、respond 路径无归属前置校验（先 publish 后校验）。详见「七、二轮 AI Review 复核」。修复后重提三轮复核。（首轮结论：❌ REJECT，详见下方）——对 PR #250（integration→release，12 提交 / 83 文件 / +6497 −116）做 4 域并行深度代码评审 + 关键结论人工逐条复核，共提出 **1 × 🔴 阻断 + 8 × 🟠 重要 + 15 × 🟡 建议**：🔴 为 elicitation 终态写入面（`markElicitationResolved`）无租户过滤、无终态守卫，可越权改写他人待办且用户已接受的决定可被 timeout 覆盖为 expired；🟠 集中在 elicitation 收敛链路（T-ES3 名实不符假绿、无 requestId 静默丢弃、`reason:'cancelled'` 零产生路径、stop() 后 65s 迟发 timeout 事件）、契约保真（`raw.authMethods` 非原文）、前端弹窗生命周期（`now` 冻结致过期判定失效、Banner 早退卸载已打开弹窗、双弹窗双回传）与验收证据完整性（T-E31/T-E36 声称大于断言、模型来源分组唯一验收挂 `MONGODB_URI` 静默 skip）。按验收红线「🔴/🟠 → 打回返工」，本轮**打回**，要求修复后重提二轮复核。合并预检 `git merge-tree` 实证 PR #250 `CONFLICTING`（3 文件），随修复项一并收口。
+> **状态**: 🔁 **三轮返工完成，待三轮 AI Review 复核**——首轮 1 × 🔴 + 8 × 🟠 + 15 × 🟡（§三）、二轮复核 2 项 🟠 残余 + 6 项新 🟠（§七）均已逐项修复并附可证伪回归测试（§八）；三轮独立实跑：tsc ×4 全 0、单测 1979 passed（416/775/232/556）、eslint 0 error/6 存量 warning、tests/api 13 + billing-gateway 6 + billing-events 3 全 passed 0 skip、tests/e2e 19 passed 0 skip。
 
 ## 关联文档
 
@@ -204,6 +204,9 @@ type: Permanent
 | 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ✅ 已修复 | 3f30ecf |
 | 🟡×15 | §3.10 | — | ✅ 随修复收口（逐项见 §3.11） | 3f30ecf |
 | 合并冲突 | PR #250 CONFLICTING（3 文件） | main/release 分叉改同一批 session 文件 | ✅ 已按并集解决（`merge release`） | 3f30ecf |
+| 🟠-9 | billing-events / billing-gateway 同型静默 skip | 缺 MONGODB_URI 被静默当通过 | ✅ 三轮修复（缺参即 fail，实跑 3+6 passed 0 skip，见 §8.1 A-2） | 本轮返工提交 |
+
+> 说明：本节 🟠-8 行原仅覆盖 T-AC5/T-E36；首轮同时点名的「billing-events 同型」对应 🟠-9，已于三轮返工按同标准治理（§8.1 A-2），避免「声称大于实际」再次复发。
 
 ## 五、最终验证
 
@@ -297,3 +300,48 @@ sessionId 兜底 `updateOne` 无排序（多 pending 时误收敛其一，应 `u
 ### 7.7 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（二次打回）**，返工目标节点「修复Review意见」。主体修复质量与测试可证伪性较首轮显著提升（1953 单测/13 API/19 E2E 全部独立复现、冲突并集干净、PR CLEAN），收口上述 8 项 🟠 与台账一致性后可快速三轮复核。
+
+## 八、三轮返工修复记录（2026-10-21，对应 7.3 A+B 共 8 项 🟠）
+
+> 状态：8 项 🟠 全部修复，且每项均有可证伪回归测试；§7.5 指定 🟡 四项 + 多项廉价项一并收口。
+
+### 8.1 A. 首轮残余（2 项）
+
+| # | 修复 | 可证伪测试 |
+|---|---|---|
+| A-1（残余 🟠-7） | store 增加「打开时 todo 快照 + `stale` 标记」；Banner/TodoList 优先取列表最新数据，todo 被 TTL 删档/limit 挤出时退回快照并由 `ElicitationDialog stale` 展示「该问询已失效（已从待办移除）」，不再卸载表单；`ElicitationDialog` 新增 `isClosed` 提交守卫 | `PendingElicitationBanner.test.tsx` T-W14d（列表清空后状态仍显示）、`ElicitationDialog.test.tsx` T-W18 |
+| A-2（残余 🟠-9） | `billing-events.test.ts` T-CC-B11、`billing-gateway.test.ts` T-B24/T-B27/T-B28 移除 `describe.skipIf`，缺 `MONGODB_URI` 显式 `expect(...).toBeTruthy()` 失败；`tests/api/AGENTS.md` 同步口径 | Aspire + MONGODB_URI 实跑：billing-gateway **6 passed / 0 skip**、billing-events **3 passed / 0 skip** |
+
+### 8.2 B. 返工新引入/新暴露（6 项）
+
+| # | 修复 | 可证伪测试 |
+|---|---|---|
+| B-1（N1 进程崩溃/reconcile/断线） | `bridge` 订阅 `spawner.closed` 收敛 pending；新增 `settlePendingOnDisconnect()`；`socketio-client` 的 `acp:reconcile` 杀会话改走 `bridge.stop()`，`disconnect` 遍历 bridges 调 `settlePendingOnDisconnect()`；`stop()` 的 5s race timer 结束即清理 | `bridge.test.ts` T-B11（进程退出）/T-B11b（断线）推进 65s 负断言；`socketio-client.test.ts` N3-reconcile（断言 `bridge.stop()`）/N3-disconnect（断言 settle 被调用） |
+| B-2（N2 校验 fail-open） | `handleElicitationResolved` 按白名单重建 payload：非字符串 `detail`/未知字段丢弃、`sessionId` ≤200、超长截断 200；`handleElicitationRequest` 校验 requestId/sessionId/mode/message，重复 requestId 清旧 timer；`disconnect` 调 `clearForSocket` | `elicitation-manager.test.ts` T-S6e（对象 detail + evil 字段不进 Redis）/T-S6f/T-S8/T-S9/T-S10 |
+| B-3（N3 请求级 Map 泄漏） | bridge 在超时/响应/stop/complete/断线收敛时发 `permission:settled` / `elicitation:settled`；socketio-client 订阅并删除 requestId → bridge 映射 | `bridge.test.ts` T-B11c（响应/超时均 settled）、T-B5d（settle 后 65s 不二次 settled） |
+| B-4（N4 store 状态机） | `close(owner)` 持有方守卫；Banner/TodoList 卸载 cleanup；Banner 校验快照 `sessionId`（切会话不幻影重开）；todo 缺失标记 stale 后不再阻塞后续 immediate 自动弹窗；表单草稿按 requestId 保留（owner 切换不丢已填值） | `PendingElicitationBanner.test.tsx` T-W14e、`TodoListPanel.test.tsx` N6、`stores/__tests__/elicitationDialog.test.ts`（owner 守卫/快照/切换）、`ElicitationDialog.test.tsx` T-W19（草稿跨挂载） |
+| B-5（N5 归属守卫缺口） | `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false、不查库（不依赖 Mongoose 剥离 undefined 的隐式行为） | `todo-service.test.ts` T-TD10 |
+| B-6（N6 respond 无前置校验） | `respondPermission`/`respondElicitation` 先调 `isRespondableTodo(userId, requestId, type)`（问询含 `resolution:null`），未命中抛错、**不 publish**；新增 `isRespondableTodo` 查询 | `todo.test.ts` T-TR0a（问询跨租户拒答）/T-TR0b（权限跨租户拒答）、`todo-service.test.ts` T-TD8/T-TD9 |
+
+### 8.3 🟡 收口（含指定四项）
+
+| 项 | 修复 |
+|---|---|
+| 前端 FeatureId 唯一事实源 | 新增 `apps/agent-web/src/constants/agentFeatures.ts` 直接引用 agent-controller `FEATURE_IDS`；`AgentCapabilityPanel` 使用该常量；capabilities 的 16KiB 计数改 `TextEncoder`（去掉 Buffer，前端可安全引入） |
+| `tests/api/vitest.config.ts` exclude | 改用 `configDefaults.exclude` + `acp-real-*`，保留默认排除项 |
+| 契约补录 | `raw` 16KiB 为 UTF-8 字节口径 + 落库 64KiB 截断形态；`cancelled` 产生条件（complete/stop/error/进程退出/断线/reconcile）与「此后不得迟到 timeout」 |
+| T-W4 顺序断言 | `AgentCapabilityPanel.test.tsx` 断言 20 行 DOM 顺序等于唯一事实源，并断言集合大小 20 |
+| 其他 | sessionId 兜底改 `updateMany`（T-TD6）；新增迁移 006 显式建 `elicitationData.requestId` 索引（含用例）；T-TD3/T-TD4/T-MS9/T-B5d 断言加固；`close()` owner 守卫；到期守卫去掉 +50ms；`aria-live`+`role=status`+`aria-atomic`；T-E36 补组内归属断言；`tests/api/AGENTS.md` 数字 24/5 → 33/6；controller-api 重复 requestId timer / 断线 pending / stop 5s timer / 入参校验均收口 |
+
+### 8.4 三轮独立实跑证据（本机，Aspire 全栈）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1979 passed**（agent-controller 416 / agent-api 775 / controller-api 232 / agent-web 556） |
+| eslint agent-web | ✅ 0 error / 6 warning（全存量，无新增） |
+| tests/api session-capabilities + elicitation | ✅ **13 passed / 0 skip**（MONGODB_URI 注入，T-AC5 非 skip） |
+| tests/api billing-gateway | ✅ **6 passed / 0 skip**（MONGODB_URI 注入） |
+| tests/api billing-events | ✅ **3 passed / 0 skip**（MONGODB_URI + internal token） |
+| tests/e2e session-capabilities + permission | ✅ **19 passed / 0 skip** |
+| PR #250 / merge-tree | ✅ 待推送后复核（本地 merge-tree 对最新 release 0 冲突） |

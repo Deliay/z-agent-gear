@@ -9,6 +9,7 @@ vi.mock('../../services/todo-service.js', () => ({
     markAllTodoRead: vi.fn(),
     markTodoAsResponded: vi.fn(),
     markElicitationResolved: vi.fn(),
+    isRespondableTodo: vi.fn(),
     updatePermissionTimeout: vi.fn(),
     updateGlobalPermissionTimeout: vi.fn(),
   },
@@ -36,10 +37,47 @@ const emptyContext = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  // 默认：待办属于当前用户且可响应
+  vi.mocked(todoService.isRespondableTodo).mockResolvedValue(true);
 });
 
 describe('Todo Resolvers', () => {
+  describe('Mutation.respondPermission', () => {
+    it('T-TR0b: 他人 requestId 拒绝代答（不 publish、不标已读）', async () => {
+      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+
+      await expect(
+        todoResolvers.Mutation.respondPermission(
+          {},
+          { requestId: 'perm-of-other-user', outcome: 'selected', optionId: 'opt-1' },
+          mockContext,
+        ),
+      ).rejects.toThrow('Todo item not found or already handled');
+
+      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'perm-of-other-user', 'permission_request');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+      expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Mutation.respondElicitation', () => {
+    it('T-TR0a: 他人/已终结的 requestId 拒绝回传 Agent（不 publish、不写终态）', async () => {
+      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+
+      await expect(
+        todoResolvers.Mutation.respondElicitation(
+          {},
+          { requestId: 'elic-of-other-user', action: 'accept', values: { a: 1 } },
+          mockContext,
+        ),
+      ).rejects.toThrow('Todo item not found or already handled');
+
+      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'elic-of-other-user', 'elicitation_request');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+      expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
+      expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
+    });
+
     it('should throw when not authenticated', async () => {
       await expect(
         todoResolvers.Mutation.respondElicitation(

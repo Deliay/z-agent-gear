@@ -19,7 +19,35 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => fake.socket),
 }));
 
+// 用可控 fake bridge 验证 reconcile / disconnect 的生命周期接线（不启动真实 ACP 进程）
+const fakeBridges = vi.hoisted(() => ({ instances: [] as Array<Record<string, unknown>> }));
+vi.mock('./acp/bridge.js', async () => {
+  const { EventEmitter } = await import('events');
+  class FakeAcpSessionBridge extends EventEmitter {
+    start = vi.fn().mockResolvedValue(undefined);
+    stop = vi.fn().mockResolvedValue(undefined);
+    settlePendingOnDisconnect = vi.fn();
+    constructor() {
+      super();
+      fakeBridges.instances.push(this as unknown as Record<string, unknown>);
+    }
+  }
+  return { AcpSessionBridge: FakeAcpSessionBridge };
+});
+
+vi.mock('./acp/spawner.js', () => ({
+  AcpSpawner: class {
+    pid = undefined as number | undefined;
+    start = vi.fn();
+    stop = vi.fn();
+    closed = Promise.resolve();
+    stdin = {};
+    stdout = {};
+  },
+}));
+
 import { buildAcpInitResult, cloudHostReconnectDelay, connectToServer } from './socketio-client.js';
+import { processRegistry } from './acp/process-registry.js';
 
 function errorHandler(): (payload: { code: string; message: string }) => void {
   const handler = fake.handlers.get('error');
@@ -208,5 +236,60 @@ describe('buildAcpInitResult', () => {
     expect(result.configOptions).toEqual([]);
     expect(result).not.toHaveProperty('currentModeId');
     expect(result).not.toHaveProperty('agentInfo');
+  });
+});
+
+describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fakeBridges.instances.length = 0;
+    fake.socket.emit.mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function startBridge(sessionId: string) {
+    setup(true);
+    fake.handlers.get('acp:start')?.({
+      requestId: `req-${sessionId}`,
+      sessionId,
+      serverType: 'opencode',
+      cwd: '/tmp',
+    });
+    await vi.waitFor(() => {
+      expect(fakeBridges.instances.length).toBe(1);
+    });
+    return fakeBridges.instances[0] as unknown as {
+      stop: ReturnType<typeof vi.fn>;
+      settlePendingOnDisconnect: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  it('N3-reconcile: 对账杀会话调用 bridge.stop()（收敛 pending，不再迟发 timeout）', async () => {
+    const bridge = await startBridge('sess-reconcile');
+    processRegistry.register('sess-reconcile', { pid: 999999, cwd: '/tmp', acpServerType: 'opencode' });
+
+    fake.handlers.get('acp:reconcile')?.({
+      activeSessionIds: [],
+      pendingKillSessionIds: ['sess-reconcile'],
+    });
+    await vi.waitFor(() => {
+      expect(bridge.stop).toHaveBeenCalled();
+    });
+
+    processRegistry.deregister('sess-reconcile');
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
+  });
+
+  it('N3-disconnect: 断线时对每个 bridge 调用 settlePendingOnDisconnect（socket.io 不缓存迟到 timeout）', async () => {
+    const bridge = await startBridge('sess-disconnect');
+
+    fake.handlers.get('disconnect')?.('transport close');
+
+    expect(bridge.settlePendingOnDisconnect).toHaveBeenCalledTimes(1);
   });
 });

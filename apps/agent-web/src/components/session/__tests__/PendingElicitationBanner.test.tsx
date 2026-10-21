@@ -100,6 +100,32 @@ describe('PendingElicitationBanner', () => {
     expect(screen.queryByText('提交')).toBeNull();
   });
 
+  it('T-W14d: 打开后 todo 被 TTL/limit 移除仍保留弹窗并展示已失效终态', () => {
+    mockOverview([elicitationTodo()]);
+    const { rerender } = render(<PendingElicitationBanner sessionId="sess-1" />);
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getByText('提交')).toBeDefined();
+
+    // 待办从列表消失（TTL 删档）：不能连同表单一起卸载
+    mockOverview([]);
+    rerender(<PendingElicitationBanner sessionId="sess-1" />);
+
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('已从待办移除');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W14e: 切换会话不重开他会话的问询弹窗（快照校验 sessionId）', () => {
+    mockOverview([elicitationTodo()]);
+    const { rerender } = render(<PendingElicitationBanner sessionId="sess-1" />);
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getByText('Need input')).toBeDefined();
+
+    mockOverview([elicitationTodo()]);
+    rerender(<PendingElicitationBanner sessionId="sess-2" />);
+
+    expect(screen.queryByText('Need input')).toBeNull();
+  });
+
   it('T-W14c: Banner 与全局待办面板共享打开权（同一时刻只可能一个弹窗）', async () => {
     mockOverview([elicitationTodo()]);
     const { TodoListPanel } = await import('../../TodoListPanel');

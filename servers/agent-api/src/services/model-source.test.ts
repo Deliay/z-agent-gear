@@ -93,6 +93,17 @@ describe('inferModelSource', () => {
       { id: '', name: '' },
       [{ name: '', scope: 'global' }],
     );
-    expect(result.source).toBe('unknown');
+    expect(result).toEqual({
+      source: 'unknown',
+      sourceProvider: null,
+      group: SOURCE_GROUP.unknown,
+      basis: '无法判定',
+    });
+    // 模型 id 非空时也不得命中库内空名条目
+    const withId = inferModelSource(
+      { id: 'local-llm', name: '' },
+      [{ name: '', scope: 'global' }, { name: 'local-llm-2', scope: 'global' }],
+    );
+    expect(withId.source).toBe('unknown');
   });
 });

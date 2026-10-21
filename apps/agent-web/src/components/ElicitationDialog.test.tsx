@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ElicitationDialog } from './ElicitationDialog';
+import { resetElicitationDialog } from '../stores/elicitationDialog';
 
 const mockRespondElicitation = vi.fn().mockResolvedValue({});
 
@@ -79,6 +80,7 @@ describe('ElicitationDialog', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetElicitationDialog();
   });
 
   describe('form mode', () => {
@@ -294,6 +296,27 @@ describe('ElicitationDialog - 终态', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('T-W19: 表单草稿跨挂载保留（owner 切换不丢已填内容）', () => {
+    const { unmount } = render(
+      <ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo }} />,
+    );
+    const input = screen.getByLabelText('A') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '半途输入' } });
+    unmount();
+
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo }} />);
+    expect((screen.getByLabelText('A') as HTMLInputElement).value).toBe('半途输入');
+  });
+
+  it('T-W18: stale=true（待办已从列表移除）展示已失效终态且隐藏操作', () => {
+    render(
+      <ElicitationDialog open stale onOpenChange={vi.fn()} todo={{ ...baseTodo }} />,
+    );
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('已从待办移除');
+    expect(screen.queryByText('提交')).toBeNull();
+    expect(screen.queryByText('拒绝')).toBeNull();
   });
 
   it('T-W16: cancelled/failed 显示对应文案并隐藏操作', () => {

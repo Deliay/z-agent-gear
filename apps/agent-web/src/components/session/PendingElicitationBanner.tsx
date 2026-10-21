@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Button } from '../ui/button';
 import { ElicitationDialog } from '../ElicitationDialog';
 import { useHomeOverview } from '../../stores/homeOverview';
@@ -16,12 +17,13 @@ interface PendingElicitationBannerProps {
  *
  * 入口显隐与弹窗生命周期解耦：
  * - 提示条只在存在未 resolved 问询时渲染；
- * - 已打开的弹窗按 todo id 从全量 todos 派生，即使 pending 变空也保留到出现终态，
- *   避免用户填表中因轮询（如超时标 expired）导致弹窗连同表单瞬间卸载。
+ * - 已打开弹窗优先用列表最新数据，todo 被 TTL 删除/limit 挤出时退回打开时快照并标记 missing，
+ *   展示「已失效」终态而不是卸载弹窗；
+ * - 切会话/卸载时只关闭自己（owner=banner）持有的弹窗，避免他会话幻影弹窗。
  */
 export function PendingElicitationBanner({ sessionId }: PendingElicitationBannerProps) {
   const { data, refetch } = useHomeOverview();
-  const { todoId, owner, open, close } = useElicitationDialogState();
+  const { todoId, owner, snapshot, open, close } = useElicitationDialogState();
 
   const todos: TodoItemData[] = data?.todos ?? [];
   const pending = todos.filter(
@@ -31,16 +33,31 @@ export function PendingElicitationBanner({ sessionId }: PendingElicitationBanner
       && !todo.resolution,
   );
 
-  const active = owner === 'banner' && todoId
+  const liveTodo = owner === 'banner' && todoId
     ? todos.find((todo) => todo.id === todoId) ?? null
     : null;
+  const belongsToSession = snapshot?.elicitationData?.sessionId === sessionId;
+  const active = liveTodo ?? (owner === 'banner' && belongsToSession ? snapshot : null);
+  const stale = Boolean(active) && !liveTodo;
+
+  // 切会话后快照不属于本会话：关闭 banner 持有的弹窗，避免幻影重开
+  useEffect(() => {
+    if (owner === 'banner' && todoId && snapshot && !belongsToSession) {
+      close('banner');
+    }
+  }, [owner, todoId, snapshot, belongsToSession, close]);
+
+  // 会话组件卸载（切路由）时清掉自己持有的状态，避免残留 id 阻塞后续入口
+  useEffect(() => () => close('banner'), [close]);
 
   return (
     <>
       {pending.length > 0 && (
         <div
           data-testid="pending-elicitation-banner"
+          role="status"
           aria-live="polite"
+          aria-atomic="true"
           className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
         >
           <span>Agent 正在等待你的输入（{pending.length}）</span>
@@ -49,7 +66,7 @@ export function PendingElicitationBanner({ sessionId }: PendingElicitationBanner
             variant="outline"
             onClick={() => {
               const first = pending[0];
-              if (first) open(first.id, 'banner');
+              if (first) open(first, 'banner');
             }}
           >
             查看
@@ -59,12 +76,13 @@ export function PendingElicitationBanner({ sessionId }: PendingElicitationBanner
       {active && (
         <ElicitationDialog
           open
+          stale={stale}
           onOpenChange={(next) => {
-            if (!next) close();
+            if (!next) close('banner');
           }}
           todo={active}
           onResponded={() => {
-            close();
+            close('banner');
             refetch();
           }}
         />

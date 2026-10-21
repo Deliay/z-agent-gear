@@ -1,5 +1,6 @@
 import type { AgentFeatureStatus, SessionData } from '../../graphql/types';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
+import { AGENT_FEATURE_ORDER } from '../../constants/agentFeatures';
 import {
   Dialog,
   DialogContent,
@@ -30,28 +31,6 @@ const FEATURE_LABELS: Record<string, string> = {
   'elicitation.url': '问询：链接模式',
 };
 
-const FEATURE_ORDER = [
-  'session.load',
-  'session.resume',
-  'session.close',
-  'session.list',
-  'session.delete',
-  'session.fork',
-  'session.additionalDirectories',
-  'prompt.image',
-  'prompt.audio',
-  'prompt.embeddedContext',
-  'auth.login',
-  'auth.logout',
-  'mcp.http',
-  'mcp.sse',
-  'config.boolean',
-  'config.model',
-  'config.mode',
-  'commands',
-  'elicitation.form',
-  'elicitation.url',
-];
 
 const STATUS_META: Record<AgentFeatureStatus, { label: string; className: string }> = {
   supported: { label: '支持', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
@@ -94,7 +73,7 @@ export function AgentCapabilityPanel({ open, onOpenChange, session }: AgentCapab
             </p>
           ) : (
             <ul className="space-y-1" data-testid="agent-capability-list">
-              {FEATURE_ORDER.map((id) => {
+              {AGENT_FEATURE_ORDER.map((id) => {
                 const featureDetail = detail(id);
                 const meta = STATUS_META[status(id)];
                 return (
