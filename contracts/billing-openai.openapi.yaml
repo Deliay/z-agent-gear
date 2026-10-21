@@ -6,9 +6,15 @@ info:
     平台对外提供的独立模型调用入口，兼容 OpenAI 风格的请求/响应与错误格式。
 
     - 鉴权：`Authorization: Bearer zag_sk_<32 hex>`（API Key 仅生成时完整可见）。
+    - Key 范围：`account`（用户设置页生成）与 `cloud_host`（云电脑运行专用，绑定 `cloudHostId` + `expiresAt`）。
+      `cloud_host` Key 在过期、云电脑不存在/已软删除/状态非 `RUNNING` 时一律返回 `401 invalid_api_key`。
+    - 模型范围：`cloud_host` Key 的 `/v1/models` 返回系统启用模型 ∪ 用户启用模型（含自定义模型）；
+      `account` Key 仍只返回定价完整的全局模型。
     - 计费：调用前统一预扣费检查（余额不足且无授信返回 402，不产生账单）；
       调用完成后按输入 / 缓存输入 / 输出三段 token 出账并生成收据；
       中断调用按已产生用量出账（标注中断），用量缺失按兜底规则估算（标注估算）。
+      系统模型（`scope=global`）走既有计费链路；`cloud_host` Key 调用用户自定义模型（`scope=user`）
+      由网关代转发，**不计费**（无计量/outbox，仅写 `billable=false,cost=0` 的调用审计）。
     - 事件：调用完成后网关只写本地 outbox 即返回，异步经 RabbitMQ 进入计量管线。
 servers:
   - url: http://localhost:4002
@@ -19,7 +25,10 @@ paths:
   /v1/models:
     get:
       summary: 列出可用模型
-      description: 仅返回 `isEnabled && pricing.isBillable` 且定价完整的全局模型。
+      description: |
+        - `account` Key：仅返回 `isEnabled && pricing.isBillable` 且定价完整的全局模型。
+        - `cloud_host` Key：返回系统启用模型（`scope=global,isEnabled=true`）∪ 用户启用模型
+          （`scope=user,isEnabled=true`，含未配置定价的自定义模型）。
       security:
         - bearerAuth: []
       responses:
@@ -48,6 +57,11 @@ paths:
       description: |
         普通返回或 SSE 流式返回。流式请求自动注入 `stream_options.include_usage=true`
         以便采集用量。
+
+        模型解析顺序：先查系统模型（`scope=global,isEnabled=true`）；未命中且 Key 为
+        `cloud_host` 时查用户自定义模型（`scope=user,isEnabled=true`，按 `sortOrder,createdAt`
+        取第一条）。同名时系统模型优先。自定义模型不要求定价，返回内容由网关代转发且不计费
+        （`BillingApiCall.billable=false,cost=0`）。
       security:
         - bearerAuth: []
       requestBody:
@@ -96,7 +110,7 @@ components:
       bearerFormat: zag_sk_<hex>
   responses:
     Unauthorized:
-      description: API Key 无效或已吊销
+      description: API Key 无效、已吊销、已过期，或 `cloud_host` Key 对应云电脑非 RUNNING/已删除
       content:
         application/json:
           schema:

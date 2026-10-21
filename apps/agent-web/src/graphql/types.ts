@@ -12,6 +12,71 @@ export interface ControllerKeyData {
   updatedAt: string
 }
 
+export type HarnessType = 'OPENCODE'
+
+export type CloudHostStatus = 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'FAILED'
+
+/** 前台云电脑（contracts/cloud-host.graphql）；非云电脑控制器为 null */
+export interface CloudHostData {
+  id: string
+  name: string
+  /** 归属控制器；HOME_OVERVIEW/GET_CONTROLLERS 的嵌套字段未选择时不返回 */
+  controllerId?: string
+  status: CloudHostStatus
+  harnessTypes: HarnessType[]
+  defaultSessionId?: string | null
+  activeSessionCount: number
+  containerId?: string | null
+  createdAt?: string
+  readyAt?: string | null
+  stoppedAt?: string | null
+  failureReason?: string | null
+  /** 软删除时间；非空表示已从列表隐藏，仅用于前端只读判定 */
+  deletedAt?: string | null
+}
+
+export interface CloudHostCapabilitiesData {
+  enabled: boolean
+  supportedHarnesses: HarnessType[]
+}
+
+export interface CloudHostSessionSummaryData {
+  id: string
+  title: string
+  status: string
+  acpServerType: string
+}
+
+export interface CloudHostStopImpactData {
+  activeSessionCount: number
+  sessionsWillBeLost: boolean
+  sessions: CloudHostSessionSummaryData[]
+}
+
+export interface GetCloudHostCapabilitiesQuery {
+  cloudHostCapabilities: CloudHostCapabilitiesData
+}
+
+export interface MyCloudHostsQuery {
+  myCloudHosts: CloudHostData[]
+}
+
+export interface CloudHostStopImpactQuery {
+  cloudHostStopImpact: CloudHostStopImpactData
+}
+
+export interface CreateCloudHostMutation {
+  createCloudHost: CloudHostData
+}
+
+export interface StopCloudHostMutation {
+  stopCloudHost: CloudHostData
+}
+
+export interface DeleteCloudHostMutation {
+  deleteCloudHost: boolean
+}
+
 export interface ControllerData {
   id: string
   name: string
@@ -23,6 +88,8 @@ export interface ControllerData {
   lastHeartbeatAt: string | null
   createdAt: string
   updatedAt: string
+  /** cloud 类型主机返回其云电脑；local/github 为 null */
+  cloudHost?: CloudHostData | null
 }
 
 export interface ControllerWorkspaceData {

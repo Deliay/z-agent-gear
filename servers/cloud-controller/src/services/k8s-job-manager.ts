@@ -20,6 +20,20 @@ export const DELETE_MAX_ATTEMPTS = 3;
 export const JOB_ACTIVE_DEADLINE_SECONDS = 86400;
 
 /**
+ * 由云电脑 `expiresAt` 换算 Job `activeDeadlineSeconds`（裁决 A24 / B13）：
+ * `max(60, floor((expiresAt-now)/1000))`；缺省/非法沿用 `JOB_ACTIVE_DEADLINE_SECONDS`。
+ */
+export function computeActiveDeadlineSeconds(
+  expiresAt: Date | null | undefined,
+  now: number = Date.now(),
+): number {
+  if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
+    return JOB_ACTIVE_DEADLINE_SECONDS;
+  }
+  return Math.max(60, Math.floor((expiresAt.getTime() - now) / 1000));
+}
+
+/**
  * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
  * request 保证调度可落地，limit 为资源耗尽时的硬上限。
  */
@@ -80,6 +94,13 @@ export interface CreateJobInput {
   jobName: string;
   containerId: string;
   token: string;
+  /** Job 硬性截止（秒）；缺省 `JOB_ACTIVE_DEADLINE_SECONDS`（云电脑由 expiresAt 换算）。 */
+  activeDeadlineSeconds?: number;
+  /**
+   * 追加 env（`ZAG_*`）：仅 harness 使用；基础两项 `ZAG_SERVER_ENDPOINT` /
+   * `ZAG_CONTROLLER_KEY` 始终由本模块注入且顺序在前。
+   */
+  env?: Record<string, string>;
 }
 
 export class K8sJobManager {
@@ -102,7 +123,7 @@ export class K8sJobManager {
 
     const spec: K8sJobManifest['spec'] = {
       backoffLimit: 0,
-      activeDeadlineSeconds: JOB_ACTIVE_DEADLINE_SECONDS,
+      activeDeadlineSeconds: input.activeDeadlineSeconds ?? JOB_ACTIVE_DEADLINE_SECONDS,
       ttlSecondsAfterFinished: TTL_SECONDS_AFTER_FINISHED,
       template: {
         metadata: { labels },
@@ -115,6 +136,7 @@ export class K8sJobManager {
               env: [
                 { name: 'ZAG_SERVER_ENDPOINT', value: serverEndpoint },
                 { name: 'ZAG_CONTROLLER_KEY', value: input.token },
+                ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
               resources: {
                 requests: { ...JOB_RESOURCES.requests },

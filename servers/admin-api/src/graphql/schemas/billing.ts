@@ -31,6 +31,11 @@ export const billingTypeDefs = `#graphql
     RELEASE_PENDING
   }
 
+  enum BillingApiKeyScope {
+    ACCOUNT
+    CLOUD_HOST
+  }
+
   type BillingAccount {
     id: ID!
     ownerType: BillingOwnerType!
@@ -107,6 +112,9 @@ export const billingTypeDefs = `#graphql
     name: String!
     keyPrefix: String!
     status: String!
+    scope: BillingApiKeyScope!
+    cloudHostId: ID
+    expiresAt: String
     lastUsedAt: String
     createdAt: String!
   }
@@ -128,6 +136,8 @@ export const billingTypeDefs = `#graphql
     id: ID!
     requestId: String!
     accountId: ID!
+    cloudHostId: ID
+    billable: Boolean!
     modelId: String!
     modelName: String!
     inputTokens: Int!

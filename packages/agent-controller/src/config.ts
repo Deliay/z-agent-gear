@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { parse, stringify } from 'smol-toml';
@@ -23,9 +23,15 @@ export function readConfig(): ConfigData {
 
 export function writeConfig(data: ConfigData): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(CONFIG_FILE, stringify(data), 'utf-8');
+  // 配置含 Key/resumeToken：仅属主可读写（避免 world-readable 凭据落盘）。
+  writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
+  try {
+    chmodSync(CONFIG_FILE, 0o600);
+  } catch {
+    // 某些平台/文件系统不支持 chmod：不阻断配置写入（已在 Windows 等平台降级）
+  }
 }
 
 export function clearConfigKey(): void {

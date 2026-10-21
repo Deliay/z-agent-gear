@@ -565,19 +565,19 @@ test.describe('Admin Cloud Workload E2E', () => {
     }
   });
 
-  test('T-E16: lists the four preset workloads with the preset badge', async ({ page }) => {
+  test('T-E16: lists the five preset workloads with the preset badge', async ({ page }) => {
     const token = await adminLoginApi(page);
     await adminLoginViaUI(page);
     await page.getByRole('link', { name: /工作负载/ }).click();
     await expect(page).toHaveURL(/\/cloud-workloads/);
     await expect(page.getByRole('heading', { name: '工作负载' })).toBeVisible();
 
-    // 迁移已执行：四个预制项均出现
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire']) {
+    // 迁移已执行：五个预制项均出现
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）']) {
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     }
-    // 「预制」徽章恰好 4 个
-    await expect(page.getByText('预制', { exact: true })).toHaveCount(4);
+    // 「预制」徽章恰好 5 个
+    await expect(page.getByText('预制', { exact: true })).toHaveCount(5);
 
     // Aspire 行展示依赖 Docker / .NET
     const aspireRow = page.locator('tr', { has: page.getByText('Aspire', { exact: true }) });
@@ -590,6 +590,12 @@ test.describe('Admin Cloud Workload E2E', () => {
 
     // 通过 API 校验预制标记（与 UI 展示一致）
     const presets = (await listWorkloads(page, token)).filter((w) => w.isPreset);
-    expect(presets.map((w) => w.name).sort()).toEqual(['.NET', 'Aspire', 'Docker', 'Node.js']);
+    expect(presets.map((w) => w.name).sort()).toEqual([
+      '.NET',
+      'Aspire',
+      'Docker',
+      'Node.js',
+      'OpenCode（Harness）',
+    ]);
   });
 });

@@ -80,6 +80,9 @@ export interface BillingApiKeyWire {
   name: string;
   keyPrefix: string;
   status: string;
+  scope?: 'account' | 'cloud_host';
+  cloudHostId?: string | null;
+  expiresAt?: string | null;
   lastUsedAt: string | null;
   createdAt: string;
 }
@@ -251,6 +254,45 @@ export class BillingClient {
       `/internal/billing/api-keys/${encodeURIComponent(id)}?${this.params({ ownerType, ownerId })}`,
       { method: 'DELETE' },
     );
+  }
+
+  /** 云电脑运行专用 Key：`scope=cloud_host`，绑定 hostId 与有效期。 */
+  async createCloudHostApiKey(input: {
+    accountId: string;
+    ownerType: 'front_user' | 'admin_user';
+    ownerId: string;
+    name: string;
+    cloudHostId: string;
+    expiresAt: string;
+  }): Promise<BillingApiKeyPayloadWire> {
+    return this.request<BillingApiKeyPayloadWire>('/internal/billing/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({
+        ownerType: input.ownerType,
+        ownerId: input.ownerId,
+        name: input.name,
+        scope: 'cloud_host',
+        cloudHostId: input.cloudHostId,
+        expiresAt: input.expiresAt,
+        accountId: input.accountId,
+      }),
+    });
+  }
+
+  /** 按 Key ID 内部撤销（不要求 owner，幂等）。 */
+  async revokeApiKeyById(id: string): Promise<void> {
+    await this.request<{ success: boolean }>(
+      `/internal/billing/api-keys/${encodeURIComponent(id)}/revoke`,
+      { method: 'POST' },
+    );
+  }
+
+  /** 按云电脑撤销全部 active 运行 Key（幂等）。 */
+  async revokeApiKeysByHost(cloudHostId: string): Promise<void> {
+    await this.request<{ success: boolean }>('/internal/billing/api-keys/revoke-by-host', {
+      method: 'POST',
+      body: JSON.stringify({ cloudHostId }),
+    });
   }
 
   private params(values: Record<string, unknown>): string {

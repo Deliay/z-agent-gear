@@ -136,6 +136,8 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
 var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
+// 前台云电脑开关：publish 默认关闭（灰度时置 true）；dev 固定 true 便于联调。
+var harnessEnabled = builder.AddParameter("harness-enabled", value: "false");
 // admin-web 运行在浏览器，需要一个可达的 admin-api 地址（容器运行时注入 config.js，见 40-generate-config-js.sh）
 var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost:8002");
 
@@ -186,6 +188,22 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     });
 if (rabbitmq is not null) adminApi.WithReference(rabbitmq);
 
+// 前台云电脑（harness）：dev 默认开启便于联调，publish 默认关闭（灰度时经参数/环境打开）。
+// CLOUD_HOST_MODEL_BASE_URL 必须是容器内可达的 admin-api 计费网关地址。
+agentApi
+    .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
+    .WithEnvironment("CONTROLLER_API_PUBLIC_WS_ENDPOINT", controllerApi.GetEndpoint("http"))
+    .WithEnvironment("CLOUD_HOST_MODEL_BASE_URL", $"{adminApi.GetEndpoint("http")}/v1")
+    .WithEnvironment("CLOUD_HOST_DEFAULT_WORKSPACE", "/root/workspace")
+    .WithEnvironment("CLOUD_HOST_MAX_PER_USER", "1")
+    .WithEnvironment("HARNESS_CONTAINER_TTL_SECONDS", "86400");
+
+// cloud-controller → agent-api ready/terminal 回调、→ admin-api 按宿主撤销模型 Key。
+cloudController
+    .WithEnvironment("AGENT_API_URL", agentApi.GetEndpoint("http"))
+    .WithEnvironment("AGENT_API_TIMEOUT_MS", "5000")
+    .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"));
+
 if (!builder.ExecutionContext.IsPublishMode)
 {
     // 本地 dev 直跑 TS 源码，需要 tsx 加载器
@@ -203,6 +221,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
         .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
         .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+        .WithEnvironment("HARNESS_ENABLED", "true")
         .WithHttpEndpoint(port: 10001, env: "PORT");
 
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
@@ -217,6 +236,7 @@ else
         // （`admin-api-url` 仅供 admin-web 注入 config.js）。
         .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
         .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+        .WithEnvironment("HARNESS_ENABLED", harnessEnabled)
         .WithHttpEndpoint(port: 8000, env: "PORT")
         .WithExternalHttpEndpoints();
 

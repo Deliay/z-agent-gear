@@ -7,6 +7,8 @@ import { connectToServer } from './socketio-client.js';
 import { writePid, removePid, isRunning } from './daemon.js';
 import { startMcpRegistration } from './commands/mcp-proxy.js';
 import { startMcpProxy } from './commands/mcp.js';
+import { registerHarnessCommands } from './commands/harness.js';
+import { isCloudHostMode, startCloudHostSupervisor } from './cloud-host/supervisor.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 
 // 版本号唯一事实源为 package.json（`--version` 与 npm 发布版本保持一致，避免手工同步漂移）。
@@ -27,6 +29,23 @@ program
     if (isRunning()) {
       console.error('Controller is already running. Stop it first or remove the PID file.');
       process.exit(1);
+    }
+
+    // 云电脑模式（`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY` + `ZAG_CONTROLLER_KEY` 同时存在）：
+    // 双连接编排（/worker 初始化 → controller-api 标准连接），不读取/写入本地 key 配置。
+    if (isCloudHostMode()) {
+      writePid();
+      process.on('exit', () => {
+        removePid();
+      });
+      try {
+        await startCloudHostSupervisor();
+      } catch (error) {
+        console.error(`Cloud host supervisor failed: ${(error as Error).message}`);
+        removePid();
+        process.exit(1);
+      }
+      return;
     }
 
     const key = resolveKey(options.key);
@@ -114,5 +133,8 @@ program
       token: options.token,
     });
   });
+
+// 云电脑 harness 初始化子命令：`agent-gear harness prepare`（init 脚本调用）。
+registerHarnessCommands(program);
 
 program.parse();

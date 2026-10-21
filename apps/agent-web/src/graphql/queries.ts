@@ -186,6 +186,20 @@ export const GET_ACP_SERVER_OPTIONS = gql`
   }
 `
 
+/** 云电脑字段选择（对齐 contracts/cloud-host.graphql），供 GET_CONTROLLERS / HOME_OVERVIEW 复用 */
+export const CLOUD_HOST_FIELDS = gql`
+  fragment CloudHostFields on CloudHost {
+    id
+    name
+    status
+    harnessTypes
+    defaultSessionId
+    activeSessionCount
+    failureReason
+    deletedAt
+  }
+`
+
 export const GET_CONTROLLERS = gql`
   query GetControllers {
     controllers {
@@ -199,6 +213,43 @@ export const GET_CONTROLLERS = gql`
       lastHeartbeatAt
       createdAt
       updatedAt
+      cloudHost {
+        ...CloudHostFields
+      }
+    }
+  }
+  ${CLOUD_HOST_FIELDS}
+`
+
+export const CLOUD_HOST_CAPABILITIES = gql`
+  query CloudHostCapabilities {
+    cloudHostCapabilities {
+      enabled
+      supportedHarnesses
+    }
+  }
+`
+
+export const MY_CLOUD_HOSTS = gql`
+  query MyCloudHosts {
+    myCloudHosts {
+      ...CloudHostFields
+    }
+  }
+  ${CLOUD_HOST_FIELDS}
+`
+
+export const CLOUD_HOST_STOP_IMPACT = gql`
+  query CloudHostStopImpact($id: ID!) {
+    cloudHostStopImpact(id: $id) {
+      activeSessionCount
+      sessionsWillBeLost
+      sessions {
+        id
+        title
+        status
+        acpServerType
+      }
     }
   }
 `

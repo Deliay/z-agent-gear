@@ -40,6 +40,8 @@ import { BillingDeadLetter } from './models/billing-dead-letter.js';
 import { BillingAppliedLedger } from './models/billing-applied-ledger.js';
 import * as migration003DockerAptSource from './migrations/003-docker-apt-source.js';
 import * as migration004AspireCliSource from './migrations/004-aspire-cli-source.js';
+import * as migration005HarnessOpencode from './migrations/005-preset-harness-opencode.js';
+import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
 
@@ -106,6 +108,7 @@ async function start() {
   // 002-refresh-docker-preset-script——把未定制过的「Docker」预制脚本刷新为自包含 v2（四期）；
   // 003-docker-apt-source——把未定制过的「Docker」脚本刷新为 v3 并补齐 docker_apt_url 参数（本期）
   // 004-aspire-cli-source——把未定制过的「Aspire」脚本刷新为 v2 并补齐 aspire_cli_url 参数（本期）
+  // 005-preset-harness-opencode——写入云电脑 harness 运行环境预置项「OpenCode（Harness）」（云电脑）
   try {
     await runMigrations([
       migration001,
@@ -113,6 +116,7 @@ async function start() {
       migration002RefreshDocker,
       migration003DockerAptSource,
       migration004AspireCliSource,
+      migration005HarnessOpencode,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
@@ -145,6 +149,13 @@ async function start() {
     await Promise.all(billingModels.map((model) => model.syncIndexes()));
   } catch (err) {
     console.warn('[admin-api] billing syncIndexes failed (non-fatal):', (err as Error).message);
+  }
+  // 只读模型（cloudhosts 归 agent-api 所有）：只补建声明索引，绝不使用 syncIndexes——
+  // syncIndexes 会删除 schema 未声明的索引，误删 agent-api 的所有索引。
+  try {
+    await CloudHost.createIndexes();
+  } catch (err) {
+    console.warn('[admin-api] cloudhosts createIndexes failed (non-fatal):', (err as Error).message);
   }
   try {
     await pricingService.ensureDefaultPrices();

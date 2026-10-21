@@ -111,13 +111,17 @@ RUN printf '%s\n' \
       '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
       > /etc/profile.d/nvm.sh
 
-# 4) npm 走内网代理并全局预装 Agent 工具链（PRD 功能点 3 全量 7 包）
-#    agent-gear 固定 2.4.x：工作负载「必须」短路（items[].required）自 2.4.0 起提供，
-#    参数注入（WORKLOAD_PARAMS / WORKLOAD_PARAM_*）自 2.3.0 起提供，
-#    避免构建期取到不支持这些能力的旧版本（cloud-controller 门禁仍为 >=2.2.0，运行期入口会再更新到最新）。
+# 4) npm 走内网代理并全局预装 Agent 工具链（镜像 3 包；OpenCode 由 harness 工作负载安装）
+#    镜像只预装 agent-gear + ACP 适配器（claude-agent-acp / codex-acp）：
+#    - agent-gear 固定 2.5.x：云电脑双连接与 `harness prepare` 自 2.5.0 起提供，
+#      工作负载「必须」短路（items[].required）自 2.4.0 起、参数注入自 2.3.0 起；
+#      避免构建期取到不支持这些能力的旧版本（普通容器门禁仍为 >=2.2.0）。
+#    - **不预装 `@opencode/cli`**：OpenCode 由「OpenCode（Harness）」工作负载的 init 脚本按
+#      `OPENCODE_CLI_VERSION` 固定版本安装，并执行 `opencode --version` 硬校验 + `agent-gear harness prepare`
+#      （见 servers/admin-api 迁移 005 与 BUILD.md）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.4.x \
+      agent-gear@2.5.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force
