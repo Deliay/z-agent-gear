@@ -168,6 +168,13 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
 
   const handleOpenUrl = async () => {
     if (!data?.url) return;
+    // 只允许 http(s)：screen 未及时隐藏时也不得把 javascript:/data: 交给 window.open
+    try {
+      const parsed = new URL(data.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    } catch {
+      return;
+    }
     window.open(data.url, '_blank', 'noopener,noreferrer');
     await handleRespond('accept');
   };

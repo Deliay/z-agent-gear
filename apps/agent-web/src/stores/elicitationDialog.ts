@@ -20,7 +20,9 @@ interface ElicitationDialogState {
 
 let state: ElicitationDialogState = { todoId: null, owner: null, snapshot: null };
 const listeners = new Set<() => void>();
-// 表单草稿按 requestId 存取：Banner/TodoList 切换持有方导致弹窗重挂载时保留用户已填内容
+// 表单草稿按 requestId 存取：Banner/TodoList 切换持有方导致弹窗重挂载时保留用户已填内容。
+// 上限 50 条（Map 按插入序淘汰最旧），避免长会话/异常 requestId 无界增长。
+const MAX_DRAFTS = 50;
 const drafts = new Map<string, Record<string, unknown>>();
 const EMPTY: ElicitationDialogState = { todoId: null, owner: null, snapshot: null };
 
@@ -59,7 +61,20 @@ export function getElicitationDraft(key: string): Record<string, unknown> {
 }
 
 export function saveElicitationDraft(key: string, values: Record<string, unknown>): void {
+  drafts.delete(key);
   drafts.set(key, values);
+  while (drafts.size > MAX_DRAFTS) {
+    const oldest = drafts.keys().next().value;
+    if (oldest === undefined) break;
+    drafts.delete(oldest);
+  }
+}
+
+/** 用列表最新数据刷新打开中的快照（保留终态：todo 随后被 TTL 移除时仍显示已接受/已拒绝） */
+export function syncElicitationSnapshot(todo: TodoItemData): void {
+  if (state.todoId !== todo.id || !state.snapshot) return;
+  if (state.snapshot.resolution === todo.resolution) return;
+  emit({ ...state, snapshot: todo });
 }
 
 export function clearElicitationDraft(key: string): void {
@@ -75,11 +90,13 @@ export function resetElicitationDialog(): void {
 export function useElicitationDialogState(): ElicitationDialogState & {
   open: (todo: TodoItemData, owner: ElicitationDialogOwner) => void;
   close: (owner?: ElicitationDialogOwner) => void;
+  sync: (todo: TodoItemData) => void;
 } {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   return {
     ...snapshot,
     open: openElicitationDialog,
     close: closeElicitationDialog,
+    sync: syncElicitationSnapshot,
   };
 }

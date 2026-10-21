@@ -79,7 +79,9 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
   const createdNames: string[] = [];
 
   beforeAll(async () => {
-    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-B27/T-B28 不允许静默 skip').toBeTruthy();
+    // 缺 MONGODB_URI 时不在 beforeAll 抛错（否则 vitest 把用例标 skipped）：
+    // 直接返回，让每个用例体内的显式断言失败（缺参即红）。
+    if (!process.env.MONGODB_URI) return;
     const db = (await mongoDb())!;
     const token = await ensureAdminLogin();
     const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
@@ -160,6 +162,7 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
   });
 
   it('T-B27: /v1/models 排除未定价 / 非计费（含全 0 价目档）模型', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-B27 不允许静默 skip').toBeTruthy();
     const db = (await mongoDb())!;
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: `Bearer ${secret}` },
@@ -178,6 +181,7 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
   });
 
   it('T-B28: 未定价（pricing:null 与全 0 档）模型 400 model_not_priced', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-B28 不允许静默 skip').toBeTruthy();
     const db = (await mongoDb())!;
     for (const prefix of ['^no-pricing-', '^unpriced-']) {
       const model = await db.collection('models').findOne({ name: { $regex: prefix } });

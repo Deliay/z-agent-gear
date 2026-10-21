@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 
 // T-1：本套件按文档口径读取 `CLOUD_CONTROLLER_INTERNAL_TOKEN`（此前误读 INTERNAL_API_TOKEN，
-// 导致按 AGENTS.md 运行时 describe.skip 恒不执行 = 假绿）。未提供 token 时显式跳过而非静默通过。
+// 导致按 AGENTS.md 运行时 describe.skip 恒不执行 = 假绿）。
+// 缺 token 显式失败（不允许条件跳过把环境缺失静默当作通过）：T-CC-B11 是 billingoutbox 落库唯一集成验收。
 const CLOUD_URL = process.env.CLOUD_CONTROLLER_URL || 'http://localhost:10004';
 const TOKEN = process.env.CLOUD_CONTROLLER_INTERNAL_TOKEN || process.env.INTERNAL_API_TOKEN || '';
 
@@ -17,7 +18,18 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   return mongoose.connection.db ?? null;
 }
 
-describe.skipIf(!TOKEN)('cloud-controller 计费字段与强拆原因', () => {
+function requireToken(): void {
+  expect(
+    TOKEN,
+    'CLOUD_CONTROLLER_INTERNAL_TOKEN 必须注入（缺参即失败，不允许静默 skip）',
+  ).toBeTruthy();
+}
+
+describe('cloud-controller 计费字段与强拆原因', () => {
+  beforeEach(() => {
+    requireToken();
+  });
+
   it('T-CC-B4/B8: 创建容器携带 billingAccountId，A.3 透出计费字段', async () => {
     const created = await fetch(`${CLOUD_URL}/internal/containers`, {
       method: 'POST',

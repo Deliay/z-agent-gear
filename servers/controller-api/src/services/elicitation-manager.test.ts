@@ -288,6 +288,8 @@ describe('ElicitationManager', () => {
       await manager.handleElicitationRequest(mockSocket as never, {
         requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'first',
       });
+      // 先推进 30s 再发同 requestId：若旧 timer 未清理，它会在 t=60s 提前触发 timeout
+      await vi.advanceTimersByTimeAsync(30_000);
       await manager.handleElicitationRequest(mockSocket as never, {
         requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'second',
       });
@@ -295,9 +297,16 @@ describe('ElicitationManager', () => {
       expect(manager.getPendingRequestCount()).toBe(1);
 
       mockRedis.publish.mockClear();
-      await vi.advanceTimersByTimeAsync(60_000);
+      // t=65s：旧 timer 若未清会在 t=60s 误发 timeout（新请求此时才 35s）
+      await vi.advanceTimersByTimeAsync(35_000);
       await Promise.resolve();
+      expect(mockRedis.publish.mock.calls.filter(
+        (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
+      )).toHaveLength(0);
 
+      // t=95s：新请求自身在 t=90s 超时，且整段只允许 1 条 timeout
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.resolve();
       const timeoutPublishes = mockRedis.publish.mock.calls.filter(
         (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
       );
@@ -319,6 +328,31 @@ describe('ElicitationManager', () => {
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
     });
 
+    it('T-S11: 非 http(s) url / 超大 schema / 非法 toolCallId 均拒绝入 pending', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockRedis.publish.mockClear();
+
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-url', sessionId: 's', mode: 'url', message: 'open',
+        url: 'javascript:alert(1)',
+      });
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-schema', sessionId: 's', mode: 'form', message: 'big',
+        requestedSchema: { type: 'object', properties: { x: { type: 'string', description: 'd'.repeat(70 * 1024) } } },
+      });
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-tool', sessionId: 's', mode: 'form', message: 'bad tool',
+        toolCallId: { nested: true } as never,
+      });
+
+      expect(manager.getPendingRequestCount()).toBe(0);
+      expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:request', expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('invalid elicitation request'),
+        expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+      );
+    });
+
     it('T-S10: 非法 mode / 空 sessionId 的请求不入 pending、不发 Redis', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
@@ -332,7 +366,7 @@ describe('ElicitationManager', () => {
 
       expect(manager.getPendingRequestCount()).toBe(0);
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:request', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid elicitation request'), expect.anything(), expect.anything(), expect.anything());
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid elicitation request'), expect.anything(), expect.anything(), expect.anything(), expect.anything());
     });
   });
 

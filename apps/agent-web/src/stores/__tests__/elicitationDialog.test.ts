@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import {
+  getElicitationDraft,
   resetElicitationDialog,
+  saveElicitationDraft,
   useElicitationDialogState,
 } from '../elicitationDialog';
 import type { TodoItemData } from '../../graphql/types';
@@ -54,6 +56,22 @@ describe('elicitationDialog store', () => {
     expect(result.current.todoId).toBeNull();
     expect(result.current.owner).toBeNull();
     expect(result.current.snapshot).toBeNull();
+  });
+
+  it('N-5: 草稿 Map 上限 50，超限淘汰最旧', () => {
+    for (let i = 0; i < 55; i += 1) saveElicitationDraft(`req-${i}`, { i });
+    expect(getElicitationDraft('req-0')).toEqual({});
+    expect(getElicitationDraft('req-4')).toEqual({});
+    expect(getElicitationDraft('req-5')).toEqual({ i: 5 });
+    expect(getElicitationDraft('req-54')).toEqual({ i: 54 });
+  });
+
+  it('N-6: sync 刷新快照终态，移除后仍可读取 accepted', () => {
+    const { result } = renderHook(() => useElicitationDialogState());
+    act(() => result.current.open(todo, 'todo'));
+    act(() => result.current.sync({ ...todo, resolution: 'accepted' }));
+
+    expect(result.current.snapshot?.resolution).toBe('accepted');
   });
 
   it('owner 切换（同一 todo）更新持有方并保留快照', () => {

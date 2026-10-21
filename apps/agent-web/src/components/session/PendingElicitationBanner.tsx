@@ -23,7 +23,7 @@ interface PendingElicitationBannerProps {
  */
 export function PendingElicitationBanner({ sessionId }: PendingElicitationBannerProps) {
   const { data, refetch } = useHomeOverview();
-  const { todoId, owner, snapshot, open, close } = useElicitationDialogState();
+  const { todoId, owner, snapshot, open, close, sync } = useElicitationDialogState();
 
   const todos: TodoItemData[] = data?.todos ?? [];
   const pending = todos.filter(
@@ -33,12 +33,18 @@ export function PendingElicitationBanner({ sessionId }: PendingElicitationBanner
       && !todo.resolution,
   );
 
-  const liveTodo = owner === 'banner' && todoId
+  const belongsToSession = snapshot?.elicitationData?.sessionId === sessionId;
+  // 先按会话归属过滤再取 live：否则切会话后即使旧 todo 仍在轮询数据里，也会渲染一帧幻影弹窗
+  const liveTodo = owner === 'banner' && todoId && belongsToSession
     ? todos.find((todo) => todo.id === todoId) ?? null
     : null;
-  const belongsToSession = snapshot?.elicitationData?.sessionId === sessionId;
-  const active = liveTodo ?? (owner === 'banner' && belongsToSession ? snapshot : null);
+  const active = owner === 'banner' && belongsToSession ? liveTodo ?? snapshot : null;
   const stale = Boolean(active) && !liveTodo;
+
+  // 终态同步：todo 收敛后刷新快照，TTL 移除后仍显示已接受/已拒绝而不是「已失效」
+  useEffect(() => {
+    if (liveTodo) sync(liveTodo);
+  }, [liveTodo, sync]);
 
   // 切会话后快照不属于本会话：关闭 banner 持有的弹窗，避免幻影重开
   useEffect(() => {

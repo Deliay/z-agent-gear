@@ -765,6 +765,44 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
+  it('R1: stop({silent:true}) 不发 acp:stopped（替换/对账旧 bridge 不误删新会话）', async () => {
+    const bridge = createBridge();
+    const stopped = vi.fn();
+    bridge.on('acp:stopped', stopped);
+    await bridge.start();
+
+    await bridge.stop({ silent: true });
+
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+    expect(stopped).not.toHaveBeenCalled();
+  });
+
+  it('R3: stop() 在 cancel/closeSession 的 5s race 之前同步收敛 pending', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+
+    const promise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+
+    // 模拟 cancel 永久挂起：若 settle 在 5s race 之后，下面的 await 会超时
+    const connection = (bridge as unknown as {
+      connection: { cancel: ReturnType<typeof vi.fn> };
+    }).connection;
+    connection.cancel.mockReturnValue(new Promise(() => {}));
+
+    const stopPromise = bridge.stop();
+    expect(await promise).toEqual({ action: 'cancel' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:resolved', expect.objectContaining({
+      reason: 'cancelled',
+    }));
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await stopPromise;
+  });
+
   it('T-B11: 进程退出（spawner.closed）收敛 pending 并发 cancelled，65s 后不再发 timeout', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge();

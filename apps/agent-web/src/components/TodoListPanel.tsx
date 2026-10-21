@@ -37,6 +37,7 @@ export function TodoListPanel() {
     snapshot: elicitationSnapshot,
     open: openElicitation,
     close: closeElicitation,
+    sync: syncElicitationSnapshot,
   } = useElicitationDialogState();
 
   // 待办随首页聚合查询统一下发（轮询周期与首页一致：15s）
@@ -56,18 +57,33 @@ export function TodoListPanel() {
     ? todos.find((todo) => todo.id === immediateTodoId) ?? null
     : null;
   // 问询弹窗数据按 id 从全量 todos 派生（不过滤 resolution）：轮询后自动收敛为终态；
-  // todo 被 TTL 删除/limit 挤出时退回打开时快照并标记 stale，不静默卸载表单
-  const liveElicitationTodo = elicitationOwner === 'todo' && elicitationTodoId
+  // todo 被 TTL 删除/limit 挤出时退回打开时快照并标记 stale，不静默卸载表单。
+  // 注意：live 计算与 owner 无关——banner 持有 stale 弹窗时同样不得阻塞后续 immediate。
+  const liveElicitationTodo = elicitationTodoId
     ? todos.find((todo) => todo.id === elicitationTodoId) ?? null
     : null;
-  const elicitationTodo = liveElicitationTodo
-    ?? (elicitationOwner === 'todo' ? elicitationSnapshot : null);
+  const elicitationTodo = elicitationOwner === 'todo'
+    ? liveElicitationTodo ?? elicitationSnapshot
+    : null;
   const elicitationStale = Boolean(elicitationTodo) && !liveElicitationTodo;
-  // 列表已移除该 todo：不再用它阻塞后续 immediate 自动弹窗
-  const elicitationBlocking = Boolean(elicitationTodoId) && !elicitationStale;
+  // 只有「列表中仍存在」的问询才阻塞自动弹窗；stale（TTL/limit 移除）必须放行
+  const elicitationBlocking = Boolean(liveElicitationTodo);
 
-  // 面板卸载时清理自己持有的状态
-  useEffect(() => () => closeElicitation('todo'), [closeElicitation]);
+  // 终态同步：todo 收敛后（如 accepted/expired）刷新快照，随后被 TTL 移除仍保留终态
+  useEffect(() => {
+    if (liveElicitationTodo) syncElicitationSnapshot(liveElicitationTodo);
+  }, [liveElicitationTodo, syncElicitationSnapshot]);
+
+  // 面板卸载时清理自己持有的状态。StrictMode 会 mount→cleanup→mount：
+  // 跳过首次 cleanup，避免 dev 下首条 immediate 自动弹窗被误关且 processed 记账后不再重开。
+  const mountedOnceRef = useRef(false);
+  useEffect(() => {
+    if (!mountedOnceRef.current) {
+      mountedOnceRef.current = true;
+      return;
+    }
+    return () => closeElicitation('todo');
+  }, [closeElicitation]);
 
   // 检测立即优先级的待办，自动弹出全局弹窗（三种弹窗互斥）
   useEffect(() => {

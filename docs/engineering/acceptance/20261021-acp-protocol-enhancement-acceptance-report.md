@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **三轮复核完成，结论 REJECT（三轮打回）**——8 项 🟠 中 A-1/B-3/B-5/B-6 真实修复且可证伪（改坏即红反证）；但 4 项 🟠 不放行（§9.3）：R1 B-1 修复新引入 reconcile 迟到 `acp:stopped` 误杀重建会话竞态、R2 B-4 收口不完整+新引入副作用（banner-stale 仍阻塞 immediate 自动弹窗、StrictMode 首条自动弹窗丢失）+台账失实+浮空断言、R3「声称大于实际」第三轮复发（T-S8 改坏即红实证「可证伪」声明不成立、契约 cancelled 条目失实、§8.3 措辞失实）、R4 billing T-CC-B11 外层 TOKEN 门控残留假绿通道。三轮独立实跑全部复现返工声称（1979/13/6/3/19/tsc0/PR CLEAN/merge-tree 0 冲突）。
+> **状态**: 🔁 **四轮返工完成，待四轮 AI Review 复核**——三轮复核 4 项 🟠（R1 reconcile 竞态、R2 stale/StrictMode、R3 台账一致性、R4 token 门控）已逐项修复并附变异实证（§十）；四轮独立实跑：tsc ×4 全 0、单测 1989 passed（419/775/233/562）、eslint 0 error/6 存量 warning、tests/api 13 + billing-gateway 6 + billing-events 3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
 
 ## 关联文档
 
@@ -303,14 +303,14 @@ sessionId 兜底 `updateOne` 无排序（多 pending 时误收敛其一，应 `u
 
 ## 八、三轮返工修复记录（2026-10-21，对应 7.3 A+B 共 8 项 🟠）
 
-> 状态：8 项 🟠 全部修复，且每项均有可证伪回归测试；§7.5 指定 🟡 四项 + 多项廉价项一并收口。
+> 状态：8 项 🟠 全部修复；§7.5 指定 🟡 四项 + 多项廉价项一并收口。三轮复核指出的 T-S8 浮空断言已在 §十 加固（删 `clearTimeout` 实测即红）。
 
 ### 8.1 A. 首轮残余（2 项）
 
 | # | 修复 | 可证伪测试 |
 |---|---|---|
 | A-1（残余 🟠-7） | store 增加「打开时 todo 快照 + `stale` 标记」；Banner/TodoList 优先取列表最新数据，todo 被 TTL 删档/limit 挤出时退回快照并由 `ElicitationDialog stale` 展示「该问询已失效（已从待办移除）」，不再卸载表单；`ElicitationDialog` 新增 `isClosed` 提交守卫 | `PendingElicitationBanner.test.tsx` T-W14d（列表清空后状态仍显示）、`ElicitationDialog.test.tsx` T-W18 |
-| A-2（残余 🟠-9） | `billing-events.test.ts` T-CC-B11、`billing-gateway.test.ts` T-B24/T-B27/T-B28 移除 `describe.skipIf`，缺 `MONGODB_URI` 显式 `expect(...).toBeTruthy()` 失败；`tests/api/AGENTS.md` 同步口径 | Aspire + MONGODB_URI 实跑：billing-gateway **6 passed / 0 skip**、billing-events **3 passed / 0 skip** |
+| A-2（残余 🟠-9） | `billing-events.test.ts` T-CC-B11、`billing-gateway.test.ts` T-B24/T-B27/T-B28 移除 `describe.skipIf`，缺 `MONGODB_URI` 显式 `expect(...).toBeTruthy()` 失败；**三轮复核补：billing-events 外层 `skipIf(!TOKEN)` 一并移除，缺 token 同样即失败**；`tests/api/AGENTS.md` 同步口径 | Aspire + MONGODB_URI + token 实跑：billing-gateway **6 passed / 0 skip**、billing-events **3 passed / 0 skip**；缺参负向：两者均红（非 skip） |
 
 ### 8.2 B. 返工新引入/新暴露（6 项）
 
@@ -331,7 +331,7 @@ sessionId 兜底 `updateOne` 无排序（多 pending 时误收敛其一，应 `u
 | `tests/api/vitest.config.ts` exclude | 改用 `configDefaults.exclude` + `acp-real-*`，保留默认排除项 |
 | 契约补录 | `raw` 16KiB 为 UTF-8 字节口径 + 落库 64KiB 截断形态；`cancelled` 产生条件（complete/stop/error/进程退出/断线/reconcile）与「此后不得迟到 timeout」 |
 | T-W4 顺序断言 | `AgentCapabilityPanel.test.tsx` 断言 20 行 DOM 顺序等于唯一事实源，并断言集合大小 20 |
-| 其他 | sessionId 兜底改 `updateMany`（T-TD6）；新增迁移 006 显式建 `elicitationData.requestId` 索引（含用例）；T-TD3/T-TD4/T-MS9/T-B5d 断言加固；`close()` owner 守卫；到期守卫去掉 +50ms；`aria-live`+`role=status`+`aria-atomic`；T-E36 补组内归属断言；`tests/api/AGENTS.md` 数字 24/5 → 33/6；controller-api 重复 requestId timer / 断线 pending / stop 5s timer / 入参校验均收口 |
+| 其他 | sessionId 兜底改 `updateMany`（T-TD6）；新增迁移 006 显式建 `elicitationData.requestId` 索引（含用例）；T-TD3/T-TD4/T-MS9/T-B5d 断言加固；`close()` owner 守卫；到期守卫去掉 +50ms；`aria-live`+`role=status`+`aria-atomic`；T-E36 补组内归属断言；`tests/api/AGENTS.md` 数字 24/5 → 33/6；controller-api 重复 requestId timer / 断线 pending / stop 5s timer。**入参校验范围（精确）**：requestId/sessionId/mode/message（三轮复核后又补 requestedSchema ≤64 KiB、url 仅 http(s) ≤2048、toolCallId/elicitationId） |
 
 ### 8.4 三轮独立实跑证据（本机，Aspire 全栈）
 
@@ -344,7 +344,7 @@ sessionId 兜底 `updateOne` 无排序（多 pending 时误收敛其一，应 `u
 | tests/api billing-gateway | ✅ **6 passed / 0 skip**（MONGODB_URI 注入） |
 | tests/api billing-events | ✅ **3 passed / 0 skip**（MONGODB_URI + internal token） |
 | tests/e2e session-capabilities + permission | ✅ **19 passed / 0 skip** |
-| PR #250 / merge-tree | ✅ 待推送后复核（本地 merge-tree 对最新 release 0 冲突） |
+| PR #250 / merge-tree | ✅ 三轮复核时 MERGEABLE/CLEAN；merge-tree 对最新 release `cb369eb` 0 冲突 |
 
 ## 九、三轮 AI Review 复核（2026-10-21）：结论 REJECT（三轮打回）
 
@@ -434,3 +434,70 @@ settle 前移到 5s race 之前（bridge.ts:356-375，R3 关联）；spawner `'e
 ### 9.7 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（三轮打回）**，返工目标节点「修复Review意见」。三轮返工主体真实、可证伪性显著优于前两轮（数字链三重自洽、独立实跑全部复现），本轮 4 项 🟠 均为收口边界问题且修复方案便宜（多项为一行级修复），收口后可快速四轮复核。
+
+## 十、四轮返工修复记录（2026-10-21，对应 §9.3 R1-R4）
+
+> 状态：R1-R4 全部修复，均附可证伪回归测试（关键项已做变异实证）；§9.5 指定 🟡 项一并收口。
+
+### 10.1 R1：reconcile 旧 bridge 迟到 stopped 误杀新会话
+
+- `socketio-client` 的 `acp:reconcile` 改为**先同步** `bridge.settlePendingOnDisconnect()`，再 `bridge.stop({ silent: true })`；同 sessionId 重复 `acp:start` 的旧 bridge 也走 silent stop。
+- `bridge.stop({silent:true})` 不发 `acp:stopped`（仍置 `stopped` 并清理 timer），`onStopped` 增加 `acpBridges.get(sessionId) === bridge` 持有权守卫。
+- 测试：`R1: stop({silent:true}) 不发 acp:stopped`、`R1: 同 sessionId 重建后旧 bridge 的迟到 stopped 不影响新会话`（`socketio-client.test.ts`）；变异（去掉持有权守卫）实测该用例变红。
+
+### 10.2 R2：stale 阻塞与 StrictMode 首弹丢失
+
+- `TodoListPanel` 的 live todo 计算改为**与 owner 无关**，`elicitationBlocking = Boolean(liveElicitationTodo)`：banner 持有 stale（列表已移除）时同样放行后续 immediate。
+- 卸载 cleanup 用 `mountedOnceRef` 跳过 StrictMode 的首次 cleanup（第二次挂载才注册清理），解决「cleanup 关掉首弹 + processed 记账后不再重开」。
+- `N6` 中段 `waitFor` 补 `await`（浮空断言修正）。
+- 测试：`R2-1: owner=banner 持 stale 快照时同样放行`、`R2-2: StrictMode 双挂载下首条 immediate 不丢失`；变异（恢复旧 blocking / 无条件 cleanup）实测两用例均红。
+
+### 10.3 R3：台账一致性（T-S8、契约、校验范围）
+
+- **T-S8 可证伪化**：先发首请求 → 推进 30s → 同 requestId 再发 → 在 t=65s 断言 **0 条 timeout**，t=95s 断言恰好 1 条；删除 `clearTimeout` 变异实测该用例红。
+- **契约修正**：`agent-session-websocket.md` 删除「用户主动取消也发 `resolved{cancelled}`」的错误表述——用户取消走 `acp:elicitation:response` 写终态，本事件仅覆盖 complete/stop/error/进程退出/断线/对账。
+- **settle 前移**：`bridge.stop()` 在 `cancel/closeSession` 的 5s race **之前**同步 `settlePendingRequests`，封死 race 窗口（测试 `R3: stop() 在 5s race 之前同步收敛 pending`，cancel 永久挂起仍立即收敛）。
+- **入参校验补全**：`handleElicitationRequest` 新增 requestedSchema ≤64 KiB、url（url 模式仅 http(s)、≤2048）、toolCallId/elicitationId 校验；报告 §8.3 的「入参校验均收口」改为精确字段清单。
+- 测试：`T-S11`（超大 schema / javascript: url / 非法 toolCallId 均不入 pending）。
+
+### 10.4 R4：billing-events 外层 token 门控
+
+- 移除 `describe.skipIf(!TOKEN)`，改为 `beforeEach(requireToken)`：缺 `CLOUD_CONTROLLER_INTERNAL_TOKEN` 时 3 个用例全部**失败**而非 skip。
+- `billing-gateway` 的 beforeAll 在缺 MONGODB_URI 时不再抛错（避免 vitest 标 skipped），改为每个用例体内显式断言失败。
+- 负向实跑：billing-events 缺 token → **3 failed / 0 skip**；billing-gateway 缺 MONGODB_URI → **T-B24/T-B27/T-B28 均 failed / 0 skip**；session-capabilities 缺 MONGODB_URI → T-AC5 failed（其余 6 passed）。
+
+### 10.5 🟡 收口（节选）
+
+| 项 | 处理 |
+|---|---|
+| N-4 切会话单帧幻影 | Banner 先校验快照 `sessionId` 再取 live，切会话不再渲染一帧旧弹窗 |
+| N-5 drafts 无上限 | 草稿 Map 上限 50（LRU 淘汰最旧），含单测 |
+| N-6 快照丢终态 | `syncElicitationSnapshot` 在 live 收敛时刷新快照；TTL 移除后仍显示「已提交」，不再退化为「已失效」，含测试 |
+| N-8 先开窗 | `handleOpenUrl` 先校验 http(s)，非法 URL 不开窗、不回传（含单测） |
+| spawner error 不 resolve closed | `error` 事件同样 `resolveClosed`，桥接层收敛 pending |
+| T-E36 无排除断言 | 增加跨组 `not.toContainText` 排除断言 |
+| N3-* 弱断言 | reconcile 断言 `stop({silent:true})` + settle 调用 + 无 stopped/resolved；disconnect 断言 settle 次数 |
+| PR 计数 | 报告按实际提交数回填（三轮为 18，本轮后见 10.7） |
+| 存量 fail-open 登记 | `permission-manager` / `handleElicitationComplete` 为 release 存量、不在本 PR diff，登记为已知后续项，不虚称已修 |
+
+### 10.6 四轮独立实跑证据（Aspire 全栈）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1989 passed**（agent-controller 419 / agent-api 775 / controller-api 233 / agent-web 562） |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） |
+| agent-web production build | ✅ 成功 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip |
+| tests/api billing-events | ✅ 3 passed / 0 skip |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip |
+| 缺参负向 | ✅ billing-events 3 failed/0 skip；billing-gateway T-B24/T-B27/T-B28 failed/0 skip；T-AC5 failed |
+| 变异实证 | ✅ T-S8 删 clearTimeout 即红；R1 去持有权守卫即红；R2 旧 blocking/cleanup 即红 |
+| 合并预检 | ✅ merge-tree 对最新 release 0 冲突 |
+
+### 10.7 提交与 PR
+
+- 代码修复 commit：`<待回填>`
+- 报告回填 commit：`<待回填>`
+- PR #250：MERGEABLE / CLEAN，commits 与 head 见回填。

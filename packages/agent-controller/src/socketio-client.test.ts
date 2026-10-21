@@ -278,11 +278,34 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
       pendingKillSessionIds: ['sess-reconcile'],
     });
     await vi.waitFor(() => {
-      expect(bridge.stop).toHaveBeenCalled();
+      expect(bridge.stop).toHaveBeenCalledWith({ silent: true });
     });
+    expect(bridge.settlePendingOnDisconnect).toHaveBeenCalled();
 
     processRegistry.deregister('sess-reconcile');
     expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+  });
+
+  it('R1: 同 sessionId 重建后旧 bridge 的迟到 stopped 不影响新会话', async () => {
+    const oldBridge = await startBridge('sess-replace');
+    // 同 sessionId 再次 acp:start：旧 bridge 被 silent 停掉并新建
+    fake.handlers.get('acp:start')?.({
+      requestId: 'req-new',
+      sessionId: 'sess-replace',
+      serverType: 'opencode',
+      cwd: '/tmp',
+    });
+    await vi.waitFor(() => {
+      expect(fakeBridges.instances.length).toBe(2);
+    });
+    fake.socket.emit.mockClear();
+
+    // 旧 bridge 迟到 stopped（例如 5s race 后 emitStopped）：持有权守卫必须拦住
+    (oldBridge as unknown as { emit: (event: string, payload: unknown) => void })
+      .emit('acp:stopped', { sessionId: 'sess-replace', reason: 'user_close' });
+
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:start:result', expect.anything());
   });
 
   it('N3-disconnect: 断线时对每个 bridge 调用 settlePendingOnDisconnect（socket.io 不缓存迟到 timeout）', async () => {

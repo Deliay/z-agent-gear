@@ -653,7 +653,8 @@ export function connectToServer(
       if (existingBridge) {
         console.warn(`[ACP ctrl] acp:start for session ${data.sessionId} already has a bridge, stopping the previous one`);
         acpBridges.delete(data.sessionId);
-        await existingBridge.stop().catch(() => {});
+        // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
+        await existingBridge.stop({ silent: true }).catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
@@ -750,6 +751,10 @@ export function connectToServer(
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
         if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
+        // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        const current = acpBridges.get(data.sessionId);
+        if (current && current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -790,7 +795,8 @@ export function connectToServer(
       if (existingBridge) {
         console.warn(`[ACP ctrl] acp:resume for session ${data.sessionId} already has a bridge, stopping the previous one`);
         acpBridges.delete(data.sessionId);
-        await existingBridge.stop().catch(() => {});
+        // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
+        await existingBridge.stop({ silent: true }).catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
@@ -857,6 +863,10 @@ export function connectToServer(
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
         if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
+        // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        const current = acpBridges.get(data.sessionId);
+        if (current && current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -1338,10 +1348,11 @@ export function connectToServer(
         // Also clean up bridge if present
         const bridge = acpBridges.get(entry.sessionId);
         if (bridge) {
+          // 先同步收敛 pending（在 stop 的 5s race 之前），再停止进程；
+          // silent：对账杀掉的是旧会话，不得发 stopped 删除同 sessionId 的新映射。
+          bridge.settlePendingOnDisconnect();
           acpBridges.delete(entry.sessionId);
-          // 对账杀会话必须走 stop()：收敛 pending（含 65s timer）并发 cancelled，
-          // 否则已杀会话仍会迟到发 acp:elicitation:resolved{timeout}
-          void bridge.stop().catch(() => { /* ignore */ });
+          void bridge.stop({ silent: true }).catch(() => { /* ignore */ });
         }
       }
     }

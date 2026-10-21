@@ -207,6 +207,23 @@ describe('ElicitationDialog', () => {
       });
     });
 
+    it('N-8: 非 http(s) URL 不打开窗口也不回传 accept', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      render(
+        <ElicitationDialog
+          {...defaultProps}
+          todo={{
+            ...urlTodo,
+            elicitationData: { ...urlTodo.elicitationData, url: 'javascript:alert(1)' },
+          }}
+        />,
+      );
+      fireEvent.click(screen.getByText('打开链接'));
+
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(mockRespondElicitation).not.toHaveBeenCalled();
+    });
+
     it('should send decline action in url mode', async () => {
       render(<ElicitationDialog {...urlProps} />);
       fireEvent.click(screen.getByText('拒绝'));

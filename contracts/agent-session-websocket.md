@@ -867,7 +867,7 @@ controller 侧对匹配的 pending 问询就地收敛（`clearTimeout` + 回 Age
 避免待办悬挂到 65s 被误标 `expired`。
 
 `cancelled` 的产生条件（全部在 controller 侧）：
-1. 用户主动取消 / Agent 自发 `elicitation/complete`；
+1. Agent 自发 `elicitation/complete`（**用户主动取消不走本事件**：走 `acp:elicitation:response`，由服务端直接写终态，避免重复收敛）；
 2. `stop()`（会话关闭）、`handleError()`（初始化失败）、`spawner.closed`（进程退出）；
 3. socket `disconnect`（`settlePendingOnDisconnect`）与 `acp:reconcile` 对账杀会话（走 `stop()`）。
 

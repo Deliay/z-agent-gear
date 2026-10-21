@@ -353,7 +353,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { silent?: boolean } = {}): Promise<void> {
+    this.activePrompt = null;
+    this.inputQueue = [];
+    // 会话关闭：所有在途问询/授权必须先同步收敛（在 cancel/closeSession 的 5s race 之前），
+    // 否则 race 窗口内 65s timer 仍可能迟到发 timeout。
+    this.settlePendingRequests('session stopped by user');
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (this.acpSessionId && this.connection) {
@@ -369,12 +374,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     } catch { /* ignore */ } finally {
       if (stopTimer) clearTimeout(stopTimer);
     }
-    this.activePrompt = null;
-    this.inputQueue = [];
-    // 会话关闭：所有在途问询/授权必须就地收敛，否则 65s 后仍会对已终止会话迟到发事件
-    this.settlePendingRequests('session stopped by user');
     this.spawner.stop();
-    this.emitStopped('user_close');
+    this.emitStopped('user_close', undefined, options.silent);
   }
 
   /**
@@ -940,13 +941,15 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     });
   }
 
-  private emitStopped(reason: string, exitCode?: number): void {
-    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}`);
+  private emitStopped(reason: string, exitCode?: number, silent = false): void {
+    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}${silent ? ' (silent)' : ''}`);
     this.stopped = true;
     if (this.textChunkTimer) {
       clearTimeout(this.textChunkTimer);
       this.textChunkTimer = null;
     }
+    // silent：同 sessionId 被替换/对账杀掉时，旧 bridge 的迟到 stopped 不得删除新会话映射
+    if (silent) return;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }

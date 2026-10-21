@@ -302,6 +302,10 @@ test.describe('ACP 能力透明化 E2E', () => {
       await expect(page.getByTestId('model-group-Agent 自带')).toContainText('按标识前缀判定');
       await expect(page.getByTestId('model-group-Agent 自带')).toContainText('Kimi K3');
       await expect(page.getByTestId('model-group-来源未知')).toContainText('Local LLM');
+      // 排除断言：组内归属不得串组
+      await expect(page.getByTestId('model-group-平台内置')).not.toContainText('Kimi K3');
+      await expect(page.getByTestId('model-group-Agent 自带')).not.toContainText(globalName);
+      await expect(page.getByTestId('model-group-来源未知')).not.toContainText(globalName);
 
       disconnect();
     } finally {

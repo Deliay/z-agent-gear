@@ -42,6 +42,8 @@ const RESOLVED_REASONS = new Set(['unsupported_mode', 'timeout', 'cancelled']);
 const DETAIL_MAX_LENGTH = 200;
 const SESSION_ID_MAX_LENGTH = 200;
 const MESSAGE_MAX_LENGTH = 4000;
+const SCHEMA_MAX_BYTES = 64 * 1024;
+const URL_MAX_LENGTH = 2048;
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_RESPONSE_CHANNEL = 'elicitation:response';
@@ -85,14 +87,27 @@ export class ElicitationManager {
   async handleElicitationRequest(socket: Socket, data: ElicitationRequestData): Promise<void> {
     const { requestId, sessionId, mode, message, toolCallId, requestedSchema, elicitationId, url } = data;
 
-    // 入参运行时校验：controller payload 不可信，非法请求不入 pending、不落 Redis
+    // 入参运行时校验：controller payload 不可信，非法请求不入 pending、不落 Redis。
+    // 校验覆盖全部落库/下发字段（含 requestedSchema 体积、url 协议、toolCallId/elicitationId），
+    // 避免任意体积 schema 直落 Mongo Mixed 或 javascript: URL 直达前端。
+    const schemaBytes = requestedSchema == null
+      ? 0
+      : new TextEncoder().encode(JSON.stringify(requestedSchema)).length;
+    const validNullableId = (value: unknown): boolean =>
+      value == null || (typeof value === 'string' && value.length <= SESSION_ID_MAX_LENGTH);
+    const validUrl = mode === 'url'
+      ? typeof url === 'string' && url.length > 0 && url.length <= URL_MAX_LENGTH && /^https?:\/\//i.test(url)
+      : url == null || (typeof url === 'string' && url.length <= URL_MAX_LENGTH);
+    const validSchema = requestedSchema == null
+      || (typeof requestedSchema === 'object' && !Array.isArray(requestedSchema) && schemaBytes <= SCHEMA_MAX_BYTES);
     if (
       typeof requestId !== 'string' || requestId.length === 0 || requestId.length > SESSION_ID_MAX_LENGTH
       || typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > SESSION_ID_MAX_LENGTH
       || (mode !== 'form' && mode !== 'url')
       || typeof message !== 'string' || message.length > MESSAGE_MAX_LENGTH
+      || !validSchema || !validUrl || !validNullableId(toolCallId) || !validNullableId(elicitationId)
     ) {
-      console.warn('[Elicitation] dropped invalid elicitation request: requestId=%j sessionId=%j mode=%j', requestId, sessionId, mode);
+      console.warn('[Elicitation] dropped invalid elicitation request: requestId=%j sessionId=%j mode=%j schemaBytes=%d', requestId, sessionId, mode, schemaBytes);
       return;
     }
 
