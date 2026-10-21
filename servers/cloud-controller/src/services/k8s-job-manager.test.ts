@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { InMemoryK8sClient } from './k8s-client.js';
 import {
   buildServerEndpoint,
+  computeActiveDeadlineSeconds,
   JOB_ACTIVE_DEADLINE_SECONDS,
   K8sJobManager,
 } from './k8s-job-manager.js';
@@ -153,5 +154,68 @@ describe('K8sJobManager', () => {
     // 永远注册不上 → fail-fast，而非静默产出坏地址。
     expect(() => buildServerEndpoint('cloud.example.com/gateway')).toThrow(/host\(:port\)/);
     expect(() => setup('wss://cloud.example.com/gateway')).toThrow(/host\(:port\)/);
+  });
+
+  it('T-CC7: harness 额外 env 追加在基础两项之后（ZAG_CONTROLLER_KEY 仍为一次性 token）', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-harness',
+      containerId: 'container-h',
+      token: 'container-h.secret',
+      activeDeadlineSeconds: 3600,
+      env: {
+        ZAG_HOST_ENDPOINT: 'wss://controller.example.com',
+        ZAG_HOST_KEY: 'zag_k_1_host',
+        ZAG_HOST_NAME: 'my-pc',
+        ZAG_HARNESS_TYPES: 'opencode',
+        ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+        ZAG_USER_TYPE: 'front_user',
+        ZAG_USER_ID: 'user-1',
+      },
+    });
+
+    const env = Object.fromEntries(
+      manifest.spec.template.spec.containers[0]!.env.map((e) => [e.name, e.value]),
+    );
+    expect(manifest.spec.template.spec.containers[0]!.env.slice(0, 2).map((e) => e.name)).toEqual([
+      'ZAG_SERVER_ENDPOINT',
+      'ZAG_CONTROLLER_KEY',
+    ]);
+    expect(env.ZAG_CONTROLLER_KEY).toBe('container-h.secret');
+    expect(env.ZAG_HOST_ENDPOINT).toBe('wss://controller.example.com');
+    expect(env.ZAG_HOST_KEY).toBe('zag_k_1_host');
+    expect(env.ZAG_HOST_NAME).toBe('my-pc');
+    expect(env.ZAG_HARNESS_TYPES).toBe('opencode');
+    expect(env.ZAG_DEFAULT_WORKSPACE).toBe('/root/workspace');
+    expect(env.ZAG_USER_TYPE).toBe('front_user');
+    expect(env.ZAG_USER_ID).toBe('user-1');
+    // 模型 Key 仅走 workload:run.env，不进入 Job env
+    expect(env.ZAG_MODEL_API_KEY).toBeUndefined();
+    expect(manifest.spec.activeDeadlineSeconds).toBe(3600);
+  });
+
+  it('T-CC8: idle Job 保持旧两项 env 与默认 activeDeadlineSeconds', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-idle',
+      containerId: 'container-i',
+      token: 'container-i.secret',
+    });
+    expect(manifest.spec.template.spec.containers[0]!.env.map((e) => e.name)).toEqual([
+      'ZAG_SERVER_ENDPOINT',
+      'ZAG_CONTROLLER_KEY',
+    ]);
+    expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
+  });
+
+  it('T-CC22: expiresAt 换算 activeDeadlineSeconds（最小 60s，缺省 86400）', () => {
+    const now = new Date('2026-10-20T00:00:00.000Z').getTime();
+    expect(
+      computeActiveDeadlineSeconds(new Date(now + 3600_000), now),
+    ).toBe(3600);
+    expect(computeActiveDeadlineSeconds(new Date(now + 10_000), now)).toBe(60);
+    expect(computeActiveDeadlineSeconds(new Date(now - 10_000), now)).toBe(60);
+    expect(computeActiveDeadlineSeconds(null, now)).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
+    expect(computeActiveDeadlineSeconds(undefined, now)).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
   });
 });

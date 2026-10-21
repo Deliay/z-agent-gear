@@ -41,6 +41,14 @@ type Controller {
   updatedAt: String!
 }
 
+# 云电脑约定（ControllerType.cloud）：
+# - 由 agent-api 在 createCloudHost 时预创建：status=registering、name=用户命名、hostname=name、version='0.0.0'
+# - controller-api register 的 upsert 使用 $setOnInsert{name:hostname}，不覆盖用户命名
+# - 云电脑停止后 Controller 行保留（连接态 offline）；删除云电脑仅软删除 cloudhosts，Controller 与会话留档
+# - 标准连接凭据为 ControllerKey(type=cloud)（容器 env ZAG_HOST_KEY/ZAG_HOST_ENDPOINT）
+# - 容器销毁由 agent-api 编排，worker 不发送 unregister
+# 无新增字段；`cloudHost` 字段由 contracts/cloud-host.graphql 扩展。
+
 input CreateKeyInput {
   name: String!
   type: ControllerType! = local

@@ -13,6 +13,7 @@ import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
+import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
@@ -49,6 +50,7 @@ app.use('/graphql', yoga);
 app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
+app.use('/internal/cloud-hosts', internalCloudHostRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

@@ -29,6 +29,12 @@ vi.mock('../models/controller.js', () => ({
   },
 }));
 
+vi.mock('../models/cloud-host.js', () => ({
+  CloudHost: {
+    findOne: vi.fn(),
+  },
+}));
+
 vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: {
     findOne: vi.fn(),
@@ -57,6 +63,7 @@ import { sessionService } from './session.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
+import { CloudHost } from '../models/cloud-host.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
@@ -1824,6 +1831,58 @@ describe('SessionService', () => {
       await sessionService.notifySessionIdled('sess-1');
 
       expect(callback).toHaveBeenCalledWith('sess-1');
+    });
+  });
+
+  describe('cloud host guards', () => {
+    it('rejects createSession on a non-RUNNING cloud host', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'STARTING' }),
+      } as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+        }),
+      ).rejects.toThrow('cloud host is not running');
+    });
+
+    it('rejects resume when cloud host is stopped', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'ended' })),
+      } as never);
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'STOPPED' }),
+      } as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result).toEqual({ success: false, status: 'ended', error: 'session is ended' });
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('keeps normal ended sessions resumable', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'ended' })),
+      } as never);
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'local' }),
+      } as never);
+      vi.mocked(mcpEndpointService.reissueEndpoint).mockResolvedValue(undefined as never);
+
+      const result = await sessionService.resume('sess-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalled();
+      expect(CloudHost.findOne).not.toHaveBeenCalled();
     });
   });
 });

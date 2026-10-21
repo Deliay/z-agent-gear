@@ -542,6 +542,16 @@ npm test
 |------|------|
 | T-B* | 账户/账单/收据/充值/ApiKey 全链路与鉴权、幂等、错误映射 |
 
+### 前台云电脑（harness）
+
+| 文件 | 说明 |
+|------|------|
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权 |
+| `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
+
+> `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。
+
 #### Agent 前台计费 (`agent-api/billing.test.ts` T-MB*)
 
 | 测试 | 描述 |

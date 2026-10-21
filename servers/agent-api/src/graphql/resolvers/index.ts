@@ -12,6 +12,7 @@ import { githubResolvers } from './github.js';
 import { workflowResolvers } from './workflow.js';
 import { homeResolvers } from './home.js';
 import { billingResolvers } from './billing.js';
+import { cloudHostResolvers } from './cloud-host.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -29,6 +30,7 @@ export const resolvers = {
     ...workflowResolvers.Query,
     ...homeResolvers.Query,
     ...billingResolvers.Query,
+    ...cloudHostResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -43,6 +45,7 @@ export const resolvers = {
     ...githubResolvers.Mutation,
     ...workflowResolvers.Mutation,
     ...billingResolvers.Mutation,
+    ...cloudHostResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,
@@ -64,6 +67,7 @@ export const resolvers = {
   },
   Controller: {
     ...homeResolvers.Controller,
+    ...cloudHostResolvers.Controller,
   },
   ControllerWorkspace: {
     ...homeResolvers.ControllerWorkspace,

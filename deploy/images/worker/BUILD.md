@@ -74,10 +74,8 @@ docker run --rm -it --entrypoint bash \
     nvm --version && nvm ls && \
     which node npm && node -v && npm -v && npm config get registry && \
     git --version && gh --version && \
-    agent-gear --version && \
-    claude-agent-acp --help >/dev/null 2>&1 || true && \
-    opencode --version || true && codex --version || true && \
-    claude --version || true && gemini --version || true
+    agent-gear --version && agent-gear harness --help && \
+    claude-agent-acp --help >/dev/null 2>&1 || true
   '
 ```
 
@@ -86,13 +84,18 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] 7 个 npm 全局包已安装：`agent-gear` `@agentclientprotocol/claude-agent-acp` `@agentclientprotocol/codex-acp` `@opencode/cli` `@openai/codex` `@anthropic-ai/claude-code` `@google/gemini-cli`
-- [ ] `agent-gear --version` ≥ `2.4.0`（工作负载「必须」短路 `items[].required` 能力；参数注入需 ≥ `2.3.0`；见下方「工作负载执行自验」）
+- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 在镜像内应无输出，OpenCode 由 harness 工作负载安装，见下文）
+- [ ] `agent-gear --version` ≥ `2.5.0`（云电脑双连接与 `harness prepare`；参数注入需 ≥ `2.3.0`、`items[].required` 短路需 ≥ `2.4.0`）
+- [ ] `agent-gear harness --help` 可见 `prepare` 子命令
 - [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
 - [ ] **未选择「.NET」/「Aspire」时容器内不存在 .NET 能力**：`command -v dotnet` 无输出
 
 > Docker（`docker buildx`、镜像代理拉取）与 .NET / Aspire 能力属工作负载范畴，验收见下方
 > 「预制工作负载脚本手工验收（真实集群）」。
+>
+> **OpenCode 不属于镜像预装能力**：它由「OpenCode（Harness）」工作负载的 init 脚本按
+> `OPENCODE_CLI_VERSION` 安装，因此镜像内 `opencode --version` 失败是**预期行为**，不阻断构建。
+> 对应的硬校验发生在 harness 初始化阶段（见「OpenCode（Harness）工作负载自验」）。
 
 ### 镜像瘦身静态校验（工作负载四期）
 
@@ -119,6 +122,7 @@ echo "静态校验通过：镜像不含 Docker/.NET 预装与 shim 残留"
 docker run --rm -it --entrypoint bash \
   core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
     agent-gear --version && \
+    agent-gear harness --help && \
     bash -c "echo workload-ok" && \
     bash -c "echo out; echo err 1>&2; exit 7" ; echo "exit=$?"
   '
@@ -126,7 +130,8 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.4.0`（支持工作负载**参数注入**与**必须项短路**协议；注册门禁要求 `>=2.2.0` 且 major 为 `2`，低于最低版本会被 `VERSION_MISMATCH` 拒绝）
+- [ ] `agent-gear --version` ≥ `2.5.0`（云电脑双连接 + `harness prepare`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`；普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`，harness 容器门禁为 `>=2.5.0`）
+- [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
 - [ ] 单条输出超过 256 KiB 时按尾部截断
@@ -156,6 +161,45 @@ docker run --rm --entrypoint bash \
 - [ ] `WORKLOAD_PARAM_<KEY_UPPER>` 单值编码正确：字符串原样、布尔 `"true"`/`"false"`、多选为 JSON 数组字符串（如 `["pnpm"]`）
 - [ ] 多选参数可由脚本自行 `JSON.parse`（预制 Node.js 脚本用容器内 Node 解析）
 - [ ] 未选择任何参数时行为与旧版一致（仅注入 `WORKLOAD_PARAMS={}`）
+
+### OpenCode（Harness）工作负载自验
+
+镜像**不预装** `@opencode/cli`；OpenCode 由「OpenCode（Harness）」工作负载（admin-api 迁移 005）在
+`init` 阶段按固定版本安装，随后执行 `opencode --version` 硬校验与 `agent-gear harness prepare`。
+任一失败以非零退出，`required=true` 会触发 cloud-controller 强制注销容器。
+
+`OPENCODE_CLI_VERSION` 锁定口径：
+
+- 迁移 005 脚本内硬编码默认值（当前 `2.1.1`）；**验收以该固定版本为准**。
+- 实施/升级时用 `npm view @opencode/cli versions --json` 实测确认内网 npm 代理可用版本，再把默认值写回迁移脚本与本文档。
+- 运行时可经同名 env `OPENCODE_CLI_VERSION` 覆盖（仅排障/临时验证，不作为验收依据）。
+
+真实集群启动一个 harness 云电脑后，在容器内自验：
+
+```bash
+# 1) OpenCode 已由 harness 工作负载安装，且版本与 OPENCODE_CLI_VERSION 一致
+opencode --version
+
+# 2) 模型配置已写入（provider.zag；保留既有 provider/注释）
+agent-gear harness prepare           # 幂等：重复执行只替换 provider.zag
+cat ~/.config/opencode/opencode.jsonc
+stat -c '%a' ~/.config/opencode/opencode.jsonc   # 期望 600
+
+# 3) 默认工作区已创建
+test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
+
+# 4) 日志不含模型/控制器 Key（secret 脱敏为 ***）
+#    检查 cloud-controller 的 workload 日志与容器 stdout
+```
+
+逐项核对：
+
+- [ ] 镜像内 `command -v opencode` 无输出（未预装）；harness 初始化后 `opencode --version` 成功
+- [ ] 安装版本为 `OPENCODE_CLI_VERSION` 固定值（默认 `2.1.1`），非 `latest`
+- [ ] `agent-gear harness prepare` 成功；`opencode.jsonc` 的 `provider.zag` 含 `baseURL`/`apiKey`/`models`，权限 `600`
+- [ ] 重复执行 `agent-gear harness prepare` 不破坏既有 `provider`/注释（幂等）
+- [ ] `ZAG_DEFAULT_WORKSPACE` 已创建；`ZAG_MODEL_API_KEY`/`ZAG_HOST_KEY`/`ZAG_CONTROLLER_KEY` 不出现在日志/错误中
+- [ ] 缺失 harness env 或 `opencode` 不可用时，init 工作负载失败 → 容器被强制注销（不上线）
 
 ### 预制工作负载脚本手工验收（真实集群）
 
@@ -220,7 +264,7 @@ aspire --version
 
 ### 必须工作负载失败强制注销手工验收（真实集群）
 
-前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`。
+前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`（当前镜像为 2.5.x）。
 
 内网 K8s 受控验收步骤：
 
@@ -244,12 +288,17 @@ aspire --version
 1. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
 2. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
+> 云电脑（harness）容器额外注入标准连接凭据：`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`（controller-api），
+> agent-gear 检测到后进入**双连接**模式（详见 `packages/agent-controller/AGENTS.md`）。`ZAG_CONTROLLER_KEY`
+> 始终是 `/worker` 一次性 token，**不是**控制器 Key；`ZAG_HOST_KEY` 仅经握手 `auth.token` 携带，不进 URL。
+> 普通 idle 容器不含 `ZAG_HOST_*`，行为与旧版完全一致。
+
 > 入口**不**装配任何 docker shim、**不**调用 docker、也**不**启动 dockerd —— 容器内 docker 能力
 > （CLI、镜像代理 shim、dockerd）全部由「Docker」工作负载的初始化脚本按需提供（工作负载四期）。
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
-- `cloud-controller` 要求 worker 版本 `>=2.2.0` 且 major 为 `2`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
+- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.5.0`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
 - 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
 - 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
@@ -267,7 +316,7 @@ bash entrypoint.test.sh
 
 自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），因此不会启动真实 dockerd、不访问网络。
 
-> **镜像升级要求**：工作负载「必须」短路依赖 `agent-gear` ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。`cloud-controller` 的门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.4.0` 的 worker 镜像才具备 `items[].required` 短路优化。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
+> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.5.0`（harness 容器门禁）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.5.0` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 

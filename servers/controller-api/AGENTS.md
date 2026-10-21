@@ -43,6 +43,13 @@ npm run test    # Run tests
 
 本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 controller-api 的 HTTP endpoint。
 
+## 云电脑标准注册约定
+
+- 云电脑 worker 同时连接 cloud-controller `/worker` 与 controller-api 标准连接；标准连接使用 `ControllerKey(type=cloud)`（env `ZAG_HOST_KEY`/`ZAG_HOST_ENDPOINT`），**不得**把 `ZAG_CONTROLLER_KEY` 当作控制器 Key。
+- agent-api 在创建云电脑时预创建 `Controller(type=cloud,status=registering,name=用户命名,version='0.0.0')`；本服务 `register` 的 upsert 使用 `$setOnInsert: { name: hostname }`，不覆盖用户命名。
+- worker 不发送 `unregister`；容器销毁由 agent-api 编排。断开/心跳超时只影响 `Controller.status`（offline），云电脑生命周期以 `CloudHost.status` 为准。
+- 心跳超时/断线恢复沿用既有标准会话语义；普通本地/云主机行为不变。
+
 ## TDD Workflow
 
 本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环：

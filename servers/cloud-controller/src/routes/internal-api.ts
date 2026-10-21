@@ -1,5 +1,9 @@
 import { Router, type Request, type Response } from 'express';
-import type { WorkloadPlanEntry } from '../models/cloud-container.js';
+import {
+  STARTABLE_PURPOSES,
+  SUPPORTED_HARNESS_TYPES,
+  type WorkloadPlanEntry,
+} from '../models/cloud-container.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
 import {
   InMemoryWorkloadLogRepository,
@@ -15,7 +19,9 @@ import {
   UnsupportedPurposeError,
   dedupeWorkloadIds,
   type ContainerService,
+  type StartHarnessOptions,
 } from '../services/container-service.js';
+import type { HarnessSecrets } from '../services/secret-store.js';
 import {
   WorkloadPlanError,
   collectWorkloadDefinitions,
@@ -43,6 +49,12 @@ export interface CloudContainerJson {
   currentWorkloadName: string | null;
   billingAccountId: string | null;
   billingStartedAt: string | null;
+  hostId: string | null;
+  hostName: string | null;
+  harnessTypes: string[];
+  controllerKeyId: string | null;
+  containerApiKeyId: string | null;
+  expiresAt: string | null;
 }
 
 /** 严格对齐契约附录 A.3 的 JSON 结构。 */
@@ -70,6 +82,13 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     currentWorkloadName: entity.currentWorkloadName ?? null,
     billingAccountId: entity.billingAccountId ?? null,
     billingStartedAt: entity.billingStartedAt ? entity.billingStartedAt.toISOString() : null,
+    // 云电脑字段（secrets 永不返回）
+    hostId: entity.hostId ?? null,
+    hostName: entity.hostName ?? null,
+    harnessTypes: entity.harnessTypes ?? [],
+    controllerKeyId: entity.controllerKeyId ?? null,
+    containerApiKeyId: entity.containerApiKeyId ?? null,
+    expiresAt: entity.expiresAt ? entity.expiresAt.toISOString() : null,
   };
 }
 
@@ -161,6 +180,103 @@ async function resolveWorkloadPlan(
   return entries;
 }
 
+interface ParsedHarnessRequest {
+  hostId: string;
+  refId: string;
+  userId: string;
+  hostName: string;
+  harnessTypes: string[];
+  controllerKeyId: string | null;
+  containerApiKeyId: string | null;
+  agentGearMinVersion: string;
+  expiresAt: Date;
+  secrets: HarnessSecrets;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function isStartablePurpose(value: unknown): value is (typeof STARTABLE_PURPOSES)[number] {
+  return (
+    typeof value === 'string' && (STARTABLE_PURPOSES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * 校验 `purpose=harness` 的必填字段（契约 A.2.2 / T-CC5）。非法返回 `null`
+ * （调用方 400 `INVALID_HARNESS`，且不创建 Job）。`workloadPlan` 在解析计划后单独校验。
+ */
+export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnessRequest | null {
+  const hostId = nonEmptyString(body.hostId);
+  const refId = nonEmptyString(body.refId);
+  const userId = nonEmptyString(body.userId);
+  const hostName = nonEmptyString(body.hostName);
+  // 契约 A.2.2：refId 即标准连接 ControllerKey ID（不再单独下发 controllerKeyId）。
+  const controllerKeyId = refId;
+  const containerApiKeyId = body.containerApiKeyId === undefined || body.containerApiKeyId === null
+    ? null
+    : nonEmptyString(body.containerApiKeyId);
+  const agentGearMinVersion = nonEmptyString(body.agentGearMinVersion);
+  if (!hostId || !refId || !userId || !hostName) return null;
+  if (!agentGearMinVersion || !/^\d+\.\d+\.\d+$/.test(agentGearMinVersion)) {
+    return null;
+  }
+  if (
+    body.containerApiKeyId !== undefined &&
+    body.containerApiKeyId !== null &&
+    !containerApiKeyId
+  ) {
+    return null;
+  }
+
+  const harnessTypes = body.harnessTypes;
+  if (
+    !Array.isArray(harnessTypes) ||
+    harnessTypes.length === 0 ||
+    harnessTypes.some(
+      (value) =>
+        typeof value !== 'string' ||
+        !(SUPPORTED_HARNESS_TYPES as readonly string[]).includes(value),
+    )
+  ) {
+    return null;
+  }
+
+  const rawExpiresAt = body.expiresAt;
+  const expiresAt =
+    typeof rawExpiresAt === 'string' && rawExpiresAt.trim().length > 0
+      ? new Date(rawExpiresAt)
+      : null;
+  if (!expiresAt || Number.isNaN(expiresAt.getTime())) return null;
+
+  const rawSecrets = body.secrets;
+  if (!rawSecrets || typeof rawSecrets !== 'object' || Array.isArray(rawSecrets)) return null;
+  const record = rawSecrets as Record<string, unknown>;
+  const secrets: HarnessSecrets = {
+    hostEndpoint: nonEmptyString(record.hostEndpoint) ?? '',
+    hostKey: nonEmptyString(record.hostKey) ?? '',
+    modelApiKey: nonEmptyString(record.modelApiKey) ?? '',
+    modelBaseUrl: nonEmptyString(record.modelBaseUrl) ?? '',
+    modelIds: nonEmptyString(record.modelIds) ?? '',
+    defaultWorkspace: nonEmptyString(record.defaultWorkspace) ?? '',
+  };
+  if (Object.values(secrets).some((value) => value.length === 0)) return null;
+
+  return {
+    hostId,
+    refId,
+    userId,
+    hostName,
+    harnessTypes: [...new Set(harnessTypes as string[])],
+    controllerKeyId,
+    containerApiKeyId,
+    agentGearMinVersion,
+    expiresAt,
+    secrets,
+  };
+}
+
 export function createInternalRouter(
   containerService: ContainerService,
   deps: InternalRouterDeps = {},
@@ -169,10 +285,18 @@ export function createInternalRouter(
   const workloadRepository = deps.workloadRepository ?? new InMemoryWorkloadRepository();
   const workloadLogRepository = deps.workloadLogRepository ?? new InMemoryWorkloadLogRepository();
 
-  router.get('/containers', async (_req: Request, res: Response) => {
+  router.get('/containers', async (req: Request, res: Response) => {
     try {
+      const hostId = typeof req.query.hostId === 'string' ? req.query.hostId : undefined;
+      const userId = typeof req.query.userId === 'string' ? req.query.userId : undefined;
       const containers = await containerService.list();
-      res.json(containers.map(toCloudContainerJson));
+      // 可选过滤（契约 A.2.1）：无参数保持全量，admin 兼容。
+      const filtered = containers.filter(
+        (container) =>
+          (hostId === undefined || container.hostId === hostId) &&
+          (userId === undefined || container.userId === userId),
+      );
+      res.json(filtered.map(toCloudContainerJson));
     } catch (err) {
       res.status(500).json({
         error: 'INTERNAL_ERROR',
@@ -182,9 +306,31 @@ export function createInternalRouter(
   });
 
   router.post('/containers', async (req: Request, res: Response) => {
-    const purpose = req.body?.purpose;
-    const refId = typeof req.body?.refId === 'string' ? req.body.refId : null;
-    const rawBillingAccountId = req.body?.billingAccountId;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const purpose = body.purpose;
+    if (!isStartablePurpose(purpose)) {
+      res.status(400).json({
+        error: 'UNSUPPORTED_PURPOSE',
+        message: '该任务类型暂未开放',
+      });
+      return;
+    }
+    const isHarness = purpose === 'harness';
+    const harness = isHarness ? parseHarnessRequest(body) : null;
+    if (isHarness && !harness) {
+      res.status(400).json({
+        error: 'INVALID_HARNESS',
+        message: '云电脑参数非法（缺少必填字段、harnessTypes 非白名单或 secrets 不完整）',
+      });
+      return;
+    }
+    // harness 的 refId 语义为 controllerKeyId（裁决 A7）；idle 保持自由字符串。
+    const refId = harness
+      ? harness.refId
+      : typeof body.refId === 'string'
+        ? body.refId
+        : null;
+    const rawBillingAccountId = body.billingAccountId;
     if (
       rawBillingAccountId !== undefined &&
       rawBillingAccountId !== null &&
@@ -199,18 +345,10 @@ export function createInternalRouter(
     const billingAccountId =
       typeof rawBillingAccountId === 'string' ? rawBillingAccountId : null;
 
-    if (purpose !== 'idle') {
-      res.status(400).json({
-        error: 'UNSUPPORTED_PURPOSE',
-        message: '该任务类型暂未开放',
-      });
-      return;
-    }
-
     let workloadIds: string[];
     let plan: WorkloadPlanEntry[];
     try {
-      const resolved = await resolveWorkloadIds(req.body?.workloadIds, workloadRepository);
+      const resolved = await resolveWorkloadIds(body.workloadIds, workloadRepository);
       if (resolved === null) {
         res.status(400).json({
           error: 'INVALID_WORKLOAD',
@@ -220,7 +358,7 @@ export function createInternalRouter(
       }
       workloadIds = resolved;
 
-      const resolvedPlan = await resolveWorkloadPlan(req.body?.workloadPlan, workloadRepository);
+      const resolvedPlan = await resolveWorkloadPlan(body.workloadPlan, workloadRepository);
       if (resolvedPlan === null) {
         res.status(400).json({
           error: 'INVALID_WORKLOAD',
@@ -259,12 +397,35 @@ export function createInternalRouter(
       }
     }
 
+    // 契约 A.2.2：harness 的 workloadPlan 必填（缺失/展开为空均 400 INVALID_HARNESS）。
+    if (isHarness && (!hadExplicitPlan || effectivePlan.length === 0)) {
+      res.status(400).json({
+        error: 'INVALID_HARNESS',
+        message: '云电脑参数非法（workloadPlan 为空）',
+      });
+      return;
+    }
+
+    const harnessOptions: StartHarnessOptions = harness
+      ? {
+          hostId: harness.hostId,
+          hostName: harness.hostName,
+          harnessTypes: harness.harnessTypes,
+          controllerKeyId: harness.controllerKeyId,
+          containerApiKeyId: harness.containerApiKeyId,
+          userId: harness.userId,
+          expiresAt: harness.expiresAt,
+          secrets: harness.secrets,
+        }
+      : {};
+
     try {
       // 契约 A.2.2：显式下发 plan 时由 plan 派生 workloadIds；仅 workloadIds 的旧版请求
       // 按选择顺序落库 workloadIds（兜底展开的 plan 仅用于执行），二者不产生静默偏差。
-      const created = await containerService.start('idle', refId, workloadIds, effectivePlan, {
+      const created = await containerService.start(purpose, refId, workloadIds, effectivePlan, {
         deriveWorkloadIdsFromPlan: hadExplicitPlan,
         billingAccountId,
+        ...harnessOptions,
       });
       res.status(201).json(toCloudContainerJson(created));
     } catch (err) {

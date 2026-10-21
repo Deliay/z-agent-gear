@@ -13,7 +13,13 @@
 #
 # 连接参数来自注入的环境变量：
 #   ZAG_SERVER_ENDPOINT  形如 wss://<cloud-controller>/worker（不含 token）
-#   ZAG_CONTROLLER_KEY   一次性容器 token（agent-gear 连接时经 Socket.IO 握手 auth.token 携带，不进 URL）
+#   ZAG_CONTROLLER_KEY   /worker 一次性容器 token（agent-gear 连接 cloud-controller 时经 Socket.IO
+#                        握手 auth.token 携带，不进 URL；**不是** controller-api 的控制器 Key）
+#   ZAG_HOST_ENDPOINT    云电脑标准连接地址（controller-api；仅 harness 容器注入）
+#   ZAG_HOST_KEY         云电脑标准连接凭据（ControllerKey type=cloud；仅经握手 auth.token 携带，
+#                        不进 URL；普通 idle 容器不注入）
+# 云电脑容器由 agent-gear 自动进入双连接模式（/worker + controller-api），退出时不发送 unregister；
+# 普通容器的连接行为与既有版本完全一致。
 # 可选开关：
 #   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过启动更新与版本不匹配后的自动升级
 set -euo pipefail

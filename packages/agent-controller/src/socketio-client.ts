@@ -18,10 +18,11 @@ import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
-import { WorkloadExecutor, type WorkloadRunPayload } from './workload-executor.js';
+import { WorkloadExecutor, type WorkloadRunPayload, collectSecretValues, redactSecrets } from './workload-executor.js';
 
 // 与 package.json 版本保持一致（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
-const CONTROLLER_VERSION = '2.4.0';
+// 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`（MIN_HARNESS_WORKER_VERSION=2.5.0）。
+const CONTROLLER_VERSION = '2.5.0';
 // 进程内全局单实例：工作负载批次严格串行（新批次打断旧批次，见 workload-executor）。
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
@@ -32,6 +33,15 @@ const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** 安全序列化（循环引用/不可序列化时不抛错，日志路径不得因脱敏而失败）。 */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return '<unserializable>';
+  }
 }
 
 function createSpawner(serverType: string, sessionId: string, cwd: string): AcpSpawner {
@@ -65,6 +75,56 @@ export function buildAcpInitResult(payload: Record<string, unknown>): Record<str
 interface RegisteredPayload {
   controllerId: string;
   resumeToken?: string;
+  /** 云电脑场景：是否存在待执行的初始化脚本（缺省/false 立即建立标准连接）。 */
+  initializing?: boolean;
+}
+
+/** `workload:run` 批次结束摘要（成功/失败/被打断都会回调）。 */
+export interface WorkloadBatchSummary {
+  phase: 'init' | 'post';
+  itemCount: number;
+  /** 批次正常结束且无失败项为 completed；有失败/超时为 failed；被打断为 cancelled。 */
+  status: 'completed' | 'failed' | 'cancelled';
+  /** 失败/超时条目数。 */
+  failedCount?: number;
+  /** 批次是否被新批次/销毁流程打断（打断不得视为初始化完成）。 */
+  cancelled?: boolean;
+  error?: string;
+}
+
+export interface ConnectToServerOptions {
+  serverName?: string;
+  /**
+   * Socket.IO 握手 `auth.token`：
+   * - `string`：显式使用（controller-api 标准连接传 `ZAG_HOST_KEY`，worker 连接传一次性 token）；
+   * - `false`：不发送 `auth.token`（既有本地控制器 legacy 行为由缺省值处理，通常无需使用）；
+   * - 缺省：endpoint query `?token=`（兼容旧注入）否则用 `key`（cloud-controller 场景 key=token）。
+   */
+  handshakeToken?: string | false;
+  /** `registered` 回调（云电脑 supervisor 据此判断 `initializing`）。 */
+  onRegistered?: (payload: RegisteredPayload) => void;
+  /** `workload:run` 批次结束回调（成功/失败都回调；用于 init 完成后建立标准连接）。 */
+  onWorkloadBatchComplete?: (summary: WorkloadBatchSummary) => void;
+  /**
+   * 不启动本地 MCP 回环服务（双连接时仅由 controller-api 标准连接启动一次，
+   * 避免 worker 连接重复监听同一端口）。
+   */
+  skipLocalMcpStart?: boolean;
+  /**
+   * 是否处理 `workload:run` / 重连重放（默认 true）。云电脑的 controller-api 标准连接
+   * 不处理工作负载事件，避免结果被重放到非 cloud-controller 侧。
+   */
+  handleWorkload?: boolean;
+  /**
+   * 是否持久化本地配置（resumeToken/清除 Key）。云电脑模式必须为 false：
+   * 容器内不读写 `~/.zag/config.toml`，避免凭据落盘。
+   */
+  persistConfig?: boolean;
+  /**
+   * 自定义 `shutdown` 处理（云电脑双连接需同时关闭两端）。缺省保持既有行为：
+   * 清理本地 Key、关闭 socket、退出进程。
+   */
+  onShutdown?: (payload: ShutdownPayload) => void;
 }
 
 interface ErrorPayload {
@@ -313,11 +373,19 @@ export function describeConnectError(err: Error): string {
 export function connectToServer(
   endpoint: string,
   key: string,
-  options?: { serverName?: string },
+  options?: ConnectToServerOptions,
 ): Socket {
   // 一次性 token 优先取 endpoint query（兼容旧注入），否则用 key（cloud-controller 场景 key=token）。
   // token 不再放进 URL，改经 Socket.IO 握手 auth 传递，避免进入 ingress/中间层访问日志。
-  const handshakeToken = extractHandshakeToken(endpoint) ?? (key || undefined);
+  const endpointToken = extractHandshakeToken(endpoint);
+  let handshakeToken: string | undefined;
+  if (options?.handshakeToken === false) {
+    handshakeToken = undefined;
+  } else if (typeof options?.handshakeToken === 'string' && options.handshakeToken.length > 0) {
+    handshakeToken = options.handshakeToken;
+  } else {
+    handshakeToken = endpointToken ?? (key || undefined);
+  }
   const connectEndpoint = stripTokenFromEndpoint(endpoint);
 
   const socket = createSocketIOClient(connectEndpoint, {
@@ -330,12 +398,16 @@ export function connectToServer(
 
   const heartbeat = new Heartbeat();
   const controllerName = options?.serverName || hostname();
+  const persistConfig = options?.persistConfig !== false;
   const mcpRelay = new McpRelay((payload) => socket.emit('mcp:request', payload));
-  const localServer = new LocalMcpServer(mcpRelay);
+  const handleWorkload = options?.handleWorkload !== false;
+  // 双连接（云电脑）只启动一个本地 MCP 回环服务：worker 连接传 skipLocalMcpStart=true，
+  // controller-api 标准连接负责启动（ACP 会话的 `mcpEndpoint` 走标准连接）。
+  const localServer = options?.skipLocalMcpStart ? null : new LocalMcpServer(mcpRelay);
   // 回环 HTTP 服务在守护进程内只启动一次、进程退出前不停止（提案 Phase 2 要求全守护进程共享一个端口）。
   // 断线快速失败由 mcpRelay.handleDisconnect()（503）承担，无需随 socket 连接启停 HTTP 服务。
   // ready promise 保证 acp:start/acp:resume 读取 localServer.port 前服务已 listening（启动只 await 一次）。
-  const mcpServerReady = localServer.start();
+  const mcpServerReady = localServer ? localServer.start() : Promise.resolve();
   mcpServerReady.catch((err: Error) => {
     console.error(`[MCP] failed to start local MCP endpoint: ${err.message}`);
   });
@@ -350,7 +422,7 @@ export function connectToServer(
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
     const { origin, namespace } = parseEndpoint(connectEndpoint);
     console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
-    const resumeToken = getResumeTokenFromConfig();
+    const resumeToken = persistConfig ? getResumeTokenFromConfig() : undefined;
     socket.emit('register', {
       key,
       hostname: controllerName,
@@ -360,16 +432,20 @@ export function connectToServer(
       platform: platform(),
     });
     // 重连重放：将未确认的工作负载执行结果重新上报；服务端按终态幂等忽略（契约 §2.9）。
-    workloadExecutor.replayPendingResults((result) => socket.emit('workload:result', result));
+    // controller-api 标准连接不处理工作负载事件（handleWorkload=false），避免结果被重放到非 worker 侧。
+    if (handleWorkload) {
+      workloadExecutor.replayPendingResults((result) => socket.emit('workload:result', result));
+    }
   });
 
   socket.on('registered', (data: RegisteredPayload) => {
     console.log(`Controller registered: ${data.controllerId}`);
-    if (data.resumeToken) {
+    if (data.resumeToken && persistConfig) {
       saveResumeTokenToConfig(data.resumeToken);
       console.log('Resume token saved to config');
     }
     heartbeat.start(() => socket.emit('heartbeat'));
+    options?.onRegistered?.(data);
   });
 
   socket.on('error', (data: ErrorPayload) => {
@@ -378,24 +454,36 @@ export function connectToServer(
       console.error('The agent-controller version is not supported by the server.');
       console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
       socket.disconnect();
+      if (options?.onShutdown) {
+        options.onShutdown({ reason: `version_mismatch: ${data.message}` });
+        return;
+      }
       process.exit(1);
       return;
     }
     if (data.code === 'KEY_ALREADY_ONLINE') {
       console.log('Clearing resume token and retrying connection...');
-      clearResumeTokenFromConfig();
+      if (persistConfig) clearResumeTokenFromConfig();
       // Don't exit, let the reconnection logic handle it
       socket.disconnect();
       return;
     }
     socket.disconnect();
+    if (options?.onShutdown) {
+      options.onShutdown({ reason: `error: ${data.code}` });
+      return;
+    }
     process.exit(1);
   });
 
   socket.on('unregistered', () => {
     console.log('Unregistered from server');
     heartbeat.stop();
-    clearConfigKey();
+    if (persistConfig) clearConfigKey();
+    if (options?.onShutdown) {
+      options.onShutdown({ reason: 'unregistered' });
+      return;
+    }
     socket.close();
     process.exit(0);
   });
@@ -404,7 +492,12 @@ export function connectToServer(
     console.log(`Shutdown requested: ${data.reason}`);
     const finishShutdown = (): void => {
       heartbeat.stop();
-      clearConfigKey();
+      if (options?.onShutdown) {
+        // 云电脑双连接：由 supervisor 统一关闭两端并退出（不发送 unregister）。
+        options.onShutdown(data);
+        return;
+      }
+      if (persistConfig) clearConfigKey();
       socket.close();
       process.exit(0);
     };
@@ -419,15 +512,41 @@ export function connectToServer(
 
   // Workload events
   socket.on('workload:run', (data: WorkloadRunPayload) => {
+    if (!handleWorkload) return;
     if (!data || !Array.isArray(data.items)) {
-      console.warn(`[Workload] workload:run ignored: invalid payload ${JSON.stringify(data)}`);
+      // payload 可能携带容器 env（含 secret），日志必须脱敏后再输出。
+      const secrets = collectSecretValues(process.env, data?.env);
+      console.warn(redactSecrets(`[Workload] workload:run ignored: invalid payload ${safeStringify(data)}`, secrets));
       return;
     }
     const budget = typeof data.budgetMs === 'number' ? ` budgetMs=${data.budgetMs}` : '';
     console.log(`[Workload] workload:run received: phase=${data.phase} items=${data.items.length}${budget}`);
-    workloadExecutor.runBatch(data, (result) => socket.emit('workload:result', result)).catch((error: Error) => {
-      console.error(`[Workload] batch execution failed: ${error.message}`);
-    });
+    const summary: WorkloadBatchSummary = {
+      phase: data.phase,
+      itemCount: data.items.length,
+      status: 'completed',
+    };
+    workloadExecutor
+      .runBatch(data, (result) => socket.emit('workload:result', result))
+      .then((outcome) => {
+        const status: WorkloadBatchSummary['status'] = outcome.cancelled
+          ? 'cancelled'
+          : outcome.failedCount > 0
+            ? 'failed'
+            : 'completed';
+        options?.onWorkloadBatchComplete?.({
+          ...summary,
+          status,
+          cancelled: outcome.cancelled,
+          failedCount: outcome.failedCount,
+        });
+      })
+      .catch((error: Error) => {
+        const secrets = collectSecretValues(process.env, data.env);
+        const message = redactSecrets(error.message, secrets);
+        console.error(`[Workload] batch execution failed: ${message}`);
+        options?.onWorkloadBatchComplete?.({ ...summary, status: 'failed', error: message });
+      });
   });
 
   // ACP events
@@ -479,6 +598,9 @@ export function connectToServer(
       if (data.mcpEndpoint) {
         // 确保回环服务已 listening 后再读取 port 并注入（启动失败时 fail loudly，不静默注入端口 0）
         await mcpServerReady;
+        if (!localServer) {
+          throw new Error('MCP endpoint unavailable: local MCP server is not started on this connection');
+        }
         if (localServer.port <= 0) {
           throw new Error(`MCP endpoint unavailable: local loopback server not listening (port=${localServer.port})`);
         }
@@ -492,7 +614,7 @@ export function connectToServer(
         cwd: data.cwd,
         mcpServers: data.mcpServers,
         mcpEndpoint: data.mcpEndpoint,
-        mcpPort: localServer.port,
+        mcpPort: localServer?.port ?? 0,
         additionalDirectories: data.additionalDirectories,
         initialModeId: data.modeId,
         initialModelId: data.modelId,
@@ -605,6 +727,9 @@ export function connectToServer(
       if (data.mcpEndpoint) {
         // 确保回环服务已 listening 后再读取 port 并注入（启动失败时 fail loudly，不静默注入端口 0）
         await mcpServerReady;
+        if (!localServer) {
+          throw new Error('MCP endpoint unavailable: local MCP server is not started on this connection');
+        }
         if (localServer.port <= 0) {
           throw new Error(`MCP endpoint unavailable: local loopback server not listening (port=${localServer.port})`);
         }
@@ -617,7 +742,7 @@ export function connectToServer(
         sessionId: data.sessionId,
         cwd: data.cwd,
         mcpEndpoint: data.mcpEndpoint,
-        mcpPort: localServer.port,
+        mcpPort: localServer?.port ?? 0,
         additionalDirectories: data.additionalDirectories,
         // 初始 mode/model：resume 完成后、acp:initialized 之前应用（时序同 acp:start）
         initialModeId: data.modeId,

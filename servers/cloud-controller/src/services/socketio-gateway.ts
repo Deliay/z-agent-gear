@@ -4,8 +4,10 @@ import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { TokenService } from './token-service.js';
 import type { WorkloadDispatcher } from './workload-dispatcher.js';
 import {
+  MIN_HARNESS_WORKER_VERSION,
   MIN_WORKER_VERSION,
   SUPPORTED_MAJOR,
+  isSupportedHarnessWorkerVersion,
   isSupportedWorkerVersion,
   sanitizeVersionForLog,
 } from './worker-version.js';
@@ -261,22 +263,38 @@ export function registerWorkerGateway(
     socket.on('register', async (payload: RegisterPayload = {}) => {
       // key 字段被忽略（由握手 token 替代）。
       // 版本门禁必须先于全部注册副作用（心跳计时 / 初始化查询下发 / online / connectedAt）：
-      // 完整版本校验见 worker-version.ts（>=MIN_WORKER_VERSION 且 major 为 SUPPORTED_MAJOR）。
-      const versionSupport = isSupportedWorkerVersion(payload?.version);
+      // 先读取容器 purpose，再按 purpose 选择门禁（harness 2.5.0 / 普通 2.2.0，契约 §3.4）。
+      // 读取本身只读、无副作用；历史记录缺少 purpose 时按 idle 处理。
+      // 读取失败（DB 抖动）按注册失败处理，避免 async handler 产生未捕获 rejection。
+      let record: Awaited<ReturnType<ContainerService['getById']>>;
+      try {
+        record = await deps.containerService.getById(containerId);
+      } catch (err) {
+        logger.error?.('[worker] register purpose lookup error', err);
+        socket.emit('error', { code: 'REGISTER_FAILED', message: '注册失败' });
+        socket.disconnect(true);
+        return;
+      }
+      const purpose = record?.purpose ?? 'idle';
+      const isHarness = purpose === 'harness';
+      const minimumVersion = isHarness ? MIN_HARNESS_WORKER_VERSION : MIN_WORKER_VERSION;
+      const versionSupport = isHarness
+        ? isSupportedHarnessWorkerVersion(payload?.version)
+        : isSupportedWorkerVersion(payload?.version);
       if (!versionSupport.supported) {
         const currentVersion = sanitizeVersionForLog(payload?.version);
         logger.warn?.(
           `[worker] register rejected containerId=${containerId}: VERSION_MISMATCH ` +
-            `(agent-gear version=${currentVersion}, minimum=${MIN_WORKER_VERSION}, ` +
+            `(purpose=${purpose}, agent-gear version=${currentVersion}, minimum=${minimumVersion}, ` +
             `supported major=${SUPPORTED_MAJOR}) reason=${versionSupport.reason}`,
         );
         socket.emit('error', {
           code: 'VERSION_MISMATCH',
           message:
-            `agent-gear 版本不兼容，当前版本 ${currentVersion}，最低版本 ${MIN_WORKER_VERSION}` +
+            `agent-gear 版本不兼容，当前版本 ${currentVersion}，最低版本 ${minimumVersion}` +
             `（supported major: ${SUPPORTED_MAJOR}）`,
           currentVersion,
-          minimumVersion: MIN_WORKER_VERSION,
+          minimumVersion,
           supportedMajor: SUPPORTED_MAJOR,
         });
         socket.disconnect(true);
@@ -310,12 +328,13 @@ export function registerWorkerGateway(
         if (!willInitialize) {
           await deps.containerService.markOnline(containerId);
         }
-        socket.emit('registered', { controllerId: containerId });
+        socket.emit('registered', { controllerId: containerId, initializing: willInitialize });
         if (willInitialize && deps.workloadDispatcher) {
           const result = await deps.workloadDispatcher.startInit(containerId);
           // 仅有占位/已删除项时 startInit 返回 initializing=false：仍须按现状上线。
           // 必须失败（requiredFailure）时容器已被强制注销，**不得** markOnline（裁决 10）。
-          if (!result.initializing && !result.requiredFailure) {
+          // harness 环境缺失（failed）时容器已判 failed，同样不得 online（T-CC13）。
+          if (!result.initializing && !result.requiredFailure && !result.failed) {
             await deps.containerService.markOnline(containerId);
           }
         }

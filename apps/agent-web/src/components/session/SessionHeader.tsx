@@ -44,9 +44,11 @@ interface SessionHeaderProps {
   capabilities?: AgentCapabilitiesController;
   /** 能力面板数据源（完整 Session，含快照与 features） */
   capabilitySession?: SessionData | null;
+  /** 云电脑终态只读：隐藏「继续」/恢复入口 */
+  readOnly?: boolean;
 }
 
-export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession }: SessionHeaderProps) {
+export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly }: SessionHeaderProps) {
   const isMobile = useIsMobile();
   const [capabilityOpen, setCapabilityOpen] = useState(false);
   const acpServerTypeLabels: Record<string, string> = {
@@ -119,7 +121,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             ) : '关闭'}
           </Button>
         )}
-        {(status === 'ended' || status === 'disconnected' || resuming) && (
+        {(status === 'ended' || status === 'disconnected' || resuming) && !readOnly && (
           <Button
             onClick={onContinue}
             disabled={continueDisabled}
