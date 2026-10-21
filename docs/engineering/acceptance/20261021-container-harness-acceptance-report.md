@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review 首轮打回：2 × 🔴 阻断（create⇄stop 并发竞态致孤儿容器持续计费与 containerId 被清零、软删除云电脑会话只读失效且单测假绿）+ 7 × 🟠 重要（sendSessionMessage 未拦截只读续写、会话创建⇄终态无原子性幽灵会话、对账误杀 STARTING 窗口 Key 无重铸、启动失败被映射「已销毁」且丢失败原因、agent-gear 错误路径 exit(0) 掩盖失败并绕过自愈、「自动进入会话」未实现、tests/api 静默假绿含密钥不回显断言）+ 27 × 🟡 随修复收口；独立复跑七包 tsc/单测（agent-api 545/cloud-controller 708/controller-api 236/agent-controller 432/agent-web 501/admin-web 220/admin-api 602 中 1 例基线 flaky 实证非本 diff）+ Aspire --isolated 全新栈实跑 tests/api 云电脑五套件 + 合并预检 CLEAN 不回退上轮 36e62dd 修复；裁决 A1~A24/B1~B20 逐条登记（A18/B7/B9/B15/B16/B20 落地有缺口），打回要求修复后重提
+description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review：首轮打回 2 × 🔴 + 7 × 🟠 + 27 × 🟡 已由返工提交 3627eda 全部修复（A-1 CAS/回收、D-1 会话级只读、A-2/A-3 写路径收口、B-1 STARTING 放行、C-1/C-2 失败语义、D-2/D-3 体验与测试真实性、🟡 随修复收口）；返工回归七包 tsc/build 0 error、单测 3310 passed/1 skipped、agent-web lint 0 error，tests/api/E2E 待二轮复跑，提交二轮 AI Review 复核
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: ❌ **首轮 AI Review 打回（REJECT）**——独立复审 `integration..release`（PR #248，14 提交 / 148 文件 / +13960 −365，云电脑（OpenCode harness）一期），发现 **2 × 🔴 阻断 + 7 × 🟠 重要 + 27 × 🟡 建议**。🔴/🟠 全部经主评回读源码逐条核实属实；按判定红线（🔴/🟠 → 打回返工）**打回**，必修项为 A-1、D-1（🔴）与 A-2、A-3、B-1、C-1、C-2、D-2、D-3（🟠），修复后重提二轮复核。🟡 项随修复一并收口，不单独构成打回。
+> **状态**: 🔁 **首轮 AI Review 打回后已返工完成（REWORK→DONE），待二轮 AI Review 复核**——`integration` 提交 `3627eda` 逐项修复 **2 × 🔴 阻断 + 7 × 🟠 重要 + 27 × 🟡 建议**：A-1 改为 CAS 回写 + 未命中销毁回收，D-1 只读判定改读 `GET_SESSION.controllerType/cloudHost`（含软删留档）并按真实响应形态重写单测；A-2/A-3/B-1/C-1/C-2/D-2/D-3 与全部 🟡 项同步收口。返工回归：七包 tsc/build 0 error、单测 **3310 passed / 1 skipped**、agent-web lint 0 error、`git diff --check` 0、`git merge-tree` 预检待二轮复跑。
 
 ## 关联文档
 
@@ -86,63 +86,63 @@ type: Permanent
 - **问题描述**：`servers/agent-api/src/services/cloud-host-service.ts`——`CloudHost.create({status:'STARTING'})`（:202-212）在容器启动前即落库并可被用户停止；`startHarness`（:241-267，最长 30s）成功后 `findByIdAndUpdate` **无条件** `$set:{containerId}`（:269-273）。而 `stop()`（:360-411）持 `host:${id}` 锁、`create()` 持 `user:${userId}` 锁，**两者互不互斥**：`stop` 提前读取快照（:361），快照 `containerId=null` 时跳过 `destroyContainer`（:388-395），CAS 置 STOPPED 且 `containerId:null`（:401-411）；随后 `create` 继续把 `containerId` 写回 STOPPED 记录。结果：① 容器真实运行无人销毁，直到 `expiresAt`/`activeDeadlineSeconds`（默认 TTL 86400s）被 K8s 杀掉；② 该容器 `billingAccountId` 生效，`container.ready` 计费事件照常出账——用户对「已停止」的云电脑持续付费最长 24h；③ `cloudhosts.containerId` 被清零失去清理线索；④ 孤儿容器仍以 `ControllerKey(type=cloud)` 注册成 online 主机。
 - **根因分析**：创建编排把「记录可见」置于「容器启动」之前，回写 `containerId` 不做状态 CAS；`stop` 用过期快照决定是否销毁。
 - **修复方案**：`startHarness` 成功后以 CAS 回写 `findOneAndUpdate({_id, status:'STARTING'}, {$set:{containerId}})`，CAS 未命中（已被并发停止）立即 `destroyContainer`+`revokeApiKeysByHost`；或 `create` 全程持 `host:${id}` 锁、`stop` 持同一把锁并在 CAS 后重读 `containerId` 再决定销毁。补 create⇄stop 并发回归用例。
-- **验证结果**：待第二轮复核实测（主评已回读 :202-273/:360-411 确认竞态成立）。
+- **验证结果**：✅ 已修复（`3627eda`）——创建侧 CAS 未命中立即 `destroyContainer`+`revokeApiKeysByHost`；stop 使用 CAS 后最新快照销毁，拒绝时回滚状态；新增并发/孤儿回收/晚到 containerId 用例。
 
 ### D-1（🔴）软删除云电脑的会话回看不进入只读（输入框/「继续」重现），对应单测假绿
 
 - **问题描述**：`apps/agent-web/src/components/session/SessionView.tsx:414-421` 只读判定 `readOnlyCloudHost = sessionController?.type === 'cloud' && (cloudHost == null || isReadOnlyCloudHost(...))` 依赖 `controllers.find(...)` 命中；但软删除后 `controllerService.findAllByUser`（`servers/agent-api/src/services/controller.ts:7-25`）把该 Controller **整条过滤**（`deletedAt != null`）→ `sessionController=undefined` → 只读失效，InputBox 与 SessionHeader「继续」按钮重现。而 `homeOverview.sessions` 独立于 controller 过滤，软删除后旧会话仍可从首页打开——用户对已删除云电脑的留档会话看到「发送/继续」入口，违反 PRD「只读展示历史，无发送/继续入口」。**假绿证据**：`SessionView.cloudHost.test.tsx:127-140` mock 的「controller 在列且 `cloudHost:null`」形态在软删除路径下真实服务端不会返回，绿灯误导；真实软删除路径（controller 缺失）零测试。
 - **根因分析**：只读判定依赖会被删除操作破坏的数据源（列表命中）；测试 mock 与服务端真实响应形态脱节。
 - **修复方案**：只读判定改为不依赖列表命中（如 `GET_SESSION` 带出 controller `type`/`cloudHost`，或对 session 的 controller 用 `findById` 不过滤软删；或 `sessionController` 缺失且 `session.status==='ended'` 时只读兜底渲染）；单测 mock 改为「GET_CONTROLLERS 不返回该 controller」的真实形态。服务端 `session.ts` 已有守卫（无数据风险），但 UI 与验收证据必须收口。
-- **验证结果**：待第二轮复核实测（主评已回读 SessionView.tsx/controller.ts 确认链路成立）。
+- **验证结果**：✅ 已修复（`3627eda`）——`Session.controllerType/cloudHost` 由 GET_SESSION 直接返回（cloudHost 含软删留档），SessionView 不再依赖 controllers 列表；单测改为「列表为空 + cloudHost 终态/软删/null」真实形态。
 
 ### A-2（🟠）会话只读只拦 `resume`/`createSession`，`sendSessionMessage` 未拦截——停止后仍可「继续对话」
 
 - **问题描述**：守卫仅存在于 `session.ts:86-93`（create）与 `:355-374`（resume）；`resolvers/session.ts:149-166` `sendSessionMessage` 仅校验属主即调用 `sessionService.addMessage`（`session.ts:575-621` 无任何状态/云电脑校验）——停止后对只读会话发消息**成功写入历史留档并 SSE 推送**（留档被「续写」），只是对端无回复。违反 PRD 功能点 4「停止后会话仅只读可查看，无法继续对话」与计划 A18「服务端拒绝 `session:command`（`session is ended`）」。`cancelGeneration`（:333-343）同样无守卫。
 - **根因分析**：只读被实现为「resume 拦截 + 前端隐藏」，漏掉真正承载「继续对话」的 mutation。
 - **修复方案**：`sendSessionMessage`/`addMessage` 复用同一判定（cloud 控制器 + 云电脑终态/软删 → `session is ended`）；建议抽 `assertSessionWritable` 统一所有 `session:command` 发布路径；补「停止后 sendSessionMessage 拒绝」用例。
-- **验证结果**：待第二轮复核实测（主评已复核 resolver 与守卫分布，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——`assertSessionWritable` 收口 sendSessionMessage，cancelGeneration 同守卫；补「停止后 send/cancel 拒绝」「普通 ended 可写」用例。
 
 ### A-3（🟠）会话创建与 stop/terminal 无原子性 + `handleTerminal` 不持锁 → STOPPED 主机残留活跃会话
 
 - **问题描述**：三条竞态同源——(a) `createSession` 通过 RUNNING 守卫后、`Session.create` 落库前（中间夹 worktree/MCP 流程最坏 ~30s，`session.ts:148-207`），`stop()`/`handleTerminal` 的 `updateMany→ENDED` 已执行完毕，新会话以 `creating` 落库永不结束；(b) `handleReady` 持 `hostMutex`（`cloud-host-service.ts:447-448`）而 `handleTerminal`（:500）**不持锁**，ready/terminal 并发时默认会话创建可漏网；(c) 残留会话计入 `activeSessionCount`/`cloudHostStopImpact`，叠加 A-2 后还能写消息。
 - **根因分析**：状态守卫与落库非原子；终态回调绕过 per-host 串行锁。
 - **修复方案**：`handleTerminal` 同样走 `hostMutex.runExclusive('host:'+id)`；`Session.create` 落库前复查 `CloudHost.status==='RUNNING'`，或 `endByController` 在终态 CAS 后再扫一次兜住晚到会话；补并发回归用例。
-- **验证结果**：待第二轮复核实测（主评已复核锁分布，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——`handleTerminal` 纳入 `hostMutex`，`Session.create` 落库前复查 RUNNING，stop/terminal 终态 CAS 后再扫一次会话；补 keyed-mutex 串行化用例。
 
 ### B-1（🟠）对账线误杀 STARTING 窗口内的云电脑运行 Key，本期无重铸 → 云电脑模型永久不可用
 
 - **问题描述**：`servers/admin-api/src/services/billing/reconciliation.ts:531`——`else if (host.status !== 'RUNNING') reason='cloud_host_not_running'` 即撤销 Key。但 Key 在宿主 `status='STARTING'` 期铸造（`cloud-host-service.ts:207→:224`），STARTING 窗口=K8s 调度+init（`npm install @opencode/cli`+`harness prepare`）分钟级；对账触发源为每日 cron + admin 手动 `runReconciliation`（`resolvers/billing.ts:365`）。命中即整台云电脑报废：容器内已注入的明文 Key 失效、所有模型调用 401，本期无重铸/无重启，只能销毁重建——击穿 PRD 功能点 5/6。与计划第 9 条「STARTING 窗口 Key 存活、由网关拒绝」的意图自相矛盾（`billing-key-auth.ts:61` 注释即此意图）。
 - **根因分析**：计划 A16 兜底线表述「云电脑非 RUNNING 但 Key 仍 active」被照搬实现，未排除 STARTING 合法窗口。
 - **修复方案**：撤销条件放行 STARTING（`status !== 'RUNNING' && status !== 'STARTING'`）或仅扫 STOPPING/STOPPED/FAILED + 过期/缺 expiry；补「STARTING 宿主 active Key 不得被对账撤销」用例；同步修订计划 A16/提案 §3.2.2 表述。
-- **验证结果**：待第二轮复核实测（主评已复核 :523-533 与铸造时序，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——对账放行 `STARTING`；新增「STARTING 宿主 active Key 不得撤销」用例；计划 A16/提案 §3.2.2 已同步修订。
 
 ### C-1（🟠）启动/初始化失败被映射为「已销毁」且丢失失败原因——违反 PRD 3.5
 
 - **问题描述**：必须工作负载初始化失败（OpenCode 安装失败、`harness prepare` 非零退出等主要「启动失败」场景）走 `workload-dispatcher.ts:501-508`（required failed → `markMustFailure`）→ `forceDestroy` → `container-service.ts:642-652`（终态固定写 `status:'exited'`，失败原因仅在 `exitReason`）→ `index.ts:42` `harnessTerminalStatus('exited')='stopped'` → agent-api `handleTerminal`：`target='STOPPED'` 且 `failureReason: target==='FAILED' ? reason : null`（`cloud-host-service.ts:507-515`）——**reason 被丢弃**。用户看到「已销毁」、`failureReason=null`，无法区分主动停止与启动失败。对照 secret 缺失路径走 `markFailed`→`failed`→FAILED 是正确的，两条失败路径口径分裂。
 - **根因分析**：`harnessTerminalStatus` 只认容器 `status==='failed'`，而必须项失败走 destroy 链路终态恒为 `exited`。
 - **修复方案**（任一）：必须失败路径先 `markFailed(containerId, reason)` 再 destroy（CAS 仅 ACTIVE 可安全先行）；或 `harnessTerminalStatus` 按 `exitReason` 判失败；或 agent-api 对 `stopped`+非空 reason+`readyAt` 空落 FAILED+`failureReason`。补「required init 失败 → FAILED + failureReason」端到端用例（现 `harness-lifecycle.test.ts:5-9` 把 `exited→stopped` 固化为预期，恰掩盖本缺陷）。
-- **验证结果**：待第二轮复核实测（主评已复核 handleTerminal 丢弃 reason，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——`harnessTerminalStatus(status, mustFailure)` 将 destroy 链路的 exited+mustFailure 映射为 failed，agent-api 落 FAILED+failureReason；补 harness-lifecycle 用例。
 
 ### C-2（🟠）agent-gear 云电脑模式错误路径 `exit(0)`：失败被掩盖为「正常退出」并绕过 entrypoint 自愈
 
 - **问题描述**：`socketio-client.ts:429-452` 把 `VERSION_MISMATCH`、`REGISTER_FAILED` 及一切 `error` 事件改道 `options.onShutdown(...)`；`cloud-host/supervisor.ts:157-174` 的 `shutdown()` **无条件 `exit(0)`**（`supervisor.test.ts:294` 甚至把 `reason:'必须工作负载初始化失败'` 断言为 `exit(0)`）。后果：① Job 以 `succeeded` 结束 → 终态 `exited` → 显示「已销毁」（叠加 C-1）；② `entrypoint.sh:137-151` 只在「非零退出 + VERSION_MISMATCH 标记」时执行一次性 `agent-gear` 自愈升级——`exit(0)` 直接走「exited normally」，**自愈被完全绕过**（旧 worker 镜像跑 harness 容器会静默起不来）。本地单连接模式同场景仍 `process.exit(1)`，回归仅限云电脑模式。
 - **根因分析**：`onShutdown` 混用「服务端主动 shutdown（应 exit 0）」与「错误/版本不兼容（应非零）」两类语义。
 - **修复方案**：`shutdown(reason, code)` 显式分流——`shutdown`/SIGINT/SIGTERM → `exit(0)`；`version_mismatch:*`/`error:*` → `exit(1)`；补错误路径退出码测试（现仅 T-AG17 覆盖 shutdown→exit 0，C-2 因此逃逸）。
-- **验证结果**：待第二轮复核实测（主评已复核 supervisor.ts:157-174 与 socketio-client.ts:429-452，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——supervisor 按 reason 分流退出码：version_mismatch/error/初始化失败→1，正常 shutdown/信号→0；补错误路径退出码用例。
 
 ### D-2（🟠）「就绪后自动创建并进入会话」的「自动进入」未实现；默认会话失败提示缺失
 
 - **问题描述**：PRD 成功标准/功能点 1 要求「恰好选 1 个工具时，就绪后自动创建**并自动进入**该工具的新会话」。自动创建在服务端实现（ready 回调写 `defaultSessionId`，T-CH19），但 `defaultSessionId` 在前端**零消费逻辑**（全仓仅 `types.ts`/`queries.ts`/`mutations.ts` 声明），创建后落点是主机配置页（`Sidebar.tsx:71-83`）；PRD 3.5「默认会话创建失败 → 提示可手动创建会话」也未实现。
 - **根因分析**：字段拉取后无消费者；就绪→导航链路缺失。
 - **修复方案**：HOME_OVERVIEW 数据流检测 STARTING→RUNNING 且 `defaultSessionId` 非空时一次性导航进会话（防重复）；`RUNNING && 单工具 && !defaultSessionId` 时提示「可手动创建会话」；补单测。
-- **验证结果**：待第二轮复核实测（主评已 grep 确认零消费，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——MainLayout 观测 STARTING→RUNNING + defaultSessionId 一次性导航；Sidebar 在 RUNNING+单 Harness+无默认会话时提示可手动创建；补单测。
 
 ### D-3（🟠）tests/api 新用例缺 `MONGODB_URI` 时静默假绿（含「密钥不回显」安全断言）
 
 - **问题描述**：`tests/api/src/cloud-controller/internal-api.test.ts:103-104` 新增 `T-CC2/T-CC6/T-CC16: creates harness container and never echoes secrets` 用 `const db = await mongoDb(); if (!db) return;` 早退——无 Mongo 时零断言却显示 **passed**。同文件其余 11 处依赖 Mongo 的用例统一 `it.skipIf(!HAS_MONGO)` 显式跳过，文件头注释明确承诺「显式跳过而非静默假绿」。被静默跳过的恰含 `expect(raw).not.toContain(secrets.hostKey/modelApiKey)`（密钥不回显）这一安全验收点。
 - **根因分析**：新用例未沿用既定 `it.skipIf(!HAS_MONGO)` 模式。
 - **修复方案**：改 `it.skipIf(!HAS_MONGO)(...)`。
-- **验证结果**：待第二轮复核实测（主评已复核 :103-104 与同文件模式对比，属实）。
+- **验证结果**：✅ 已修复（`3627eda`）——改用 `it.skipIf(!HAS_MONGO)`，Mongo 可用时密钥不回显断言必定执行，缺失时显式 skipped。
 
 ### 🟡 建议项（27 项，随本轮修复一并收口，不单独构成打回）
 
@@ -211,16 +211,16 @@ type: Permanent
 | A10 | BillingApiKey scope/cloudHostId/expiresAt，网关按 cloudhosts 状态校验 | ✅ 落地（对账口径缺陷 B-1） |
 | A11 | tests/api+e2e 裁剪覆盖、真实集群手工验收、无测试后门 | ✅ 按裁决执行（手工验收项见 8.3） |
 | A12 | cloudHostCapabilities 开关 | ✅ 落地 |
-| A13 | jsonc-parser 合并保留注释、仅替换 provider.zag | ✅ 落地（T-AG9~12b；原子写缺口 C-7） |
-| A14 | 固定 OPENCODE_CLI_VERSION=2.1.1 | ✅ 落地（与提案 `OPENCODE_CLI_PIN` 命名差异按裁决为准；一致性弱化 C-5） |
+| A13 | jsonc-parser 合并保留注释、仅替换 provider.zag | ✅ 落地（T-AG9~12b；C-7 已补原子写/目录 0700） |
+| A14 | 固定 OPENCODE_CLI_VERSION=2.1.1 | ✅ 落地（与提案 `OPENCODE_CLI_PIN` 命名差异按裁决为准；C-5 已补版本一致性校验） |
 | A15 | CONTROLLER_API_PUBLIC_WS_ENDPOINT/CLOUD_HOST_MODEL_BASE_URL/CLOUD_HOST_DEFAULT_WORKSPACE 配置 | ✅ 落地（部署前置条件登记 8.3） |
-| A16 | 撤销三线 + 对账兜底 | ⚠️ 落地但对账线误杀 STARTING 窗口（**B-1**），须按修复方案同步修订表述 |
+| A16 | 撤销三线 + 对账兜底 | ✅ 返工修复（B-1）：对账放行 STARTING，表述已同步 |
 | A17 | tests/api 继续 vitest+fetch | ✅ |
-| A18 | resume/createSession 拦截、普通 ended 不变 | ⚠️ 部分落地：`sendSessionMessage`/`cancelGeneration` 未拦（**A-2**） |
-| A19 | ready/terminal 内部回调 + Bearer + 幂等 | ✅ 落地（副作用续做缺口 A-4） |
+| A18 | resume/createSession 拦截、普通 ended 不变 | ✅ 返工修复（A-2）：sendSessionMessage/cancelGeneration 统一守卫 |
+| A19 | ready/terminal 内部回调 + Bearer + 幂等 | ✅ 落地（A-4 已补早退分支幂等收尾） |
 | A20 | 停止失败保持 STOPPING、会话不回滚 | ✅ 落地 |
 | A21 | 删除软删+Controller offline+Key 撤销、幂等 | ✅ 落地 |
-| A22 | ready 回调建默认会话、失败容忍 | ✅ 服务端落地（前端「自动进入/失败提示」缺失 **D-2**） |
+| A22 | ready 回调建默认会话、失败容忍 | ✅ 服务端落地；前端「自动进入/失败提示」见 D-2（已修复） |
 | A23 | E2E 不断言 RUNNING/默认会话 | ✅ 按裁决执行 |
 | A24 | expiresAt 双用（Key+activeDeadlineSeconds）、TTL/异常退出经 terminal 兜底 | ✅ 落地（回调丢失窗口见 C 域残余 2，有对账/过期兜底） |
 
@@ -228,52 +228,64 @@ type: Permanent
 
 | # | 裁决 | 落地情况 |
 |---|---|---|
-| B1 | 创建编排顺序与逆序回滚 | ⚠️ 骨架正确（回滚用例逐项断言），但「记录可见先于容器启动」+无 CAS 回写构成 **A-1** |
+| B1 | 创建编排顺序与逆序回滚 | ✅ 返工修复（A-1）：CAS 回写 + 未命中回收 |
 | B2 | ControllerKey 不删未绑定 Key | ✅（T 断言 findOneAndDelete 未被调用） |
 | B3 | Controller 预创建字段、register upsert 不覆盖命名 | ✅ |
-| B4 | 状态映射（STARTING/RUNNING/STOPPING/STOPPED/FAILED） | ✅（失败路径映射缺陷 **C-1**） |
+| B4 | 状态映射（STARTING/RUNNING/STOPPING/STOPPED/FAILED） | ✅ 返工修复（C-1）：mustFailure→failed |
 | B5 | cloudHostCapabilities 语义 | ✅ |
-| B6 | Controller.cloudHost 扩展 | ✅（契约注释失真 A-8） |
-| B7 | 停止编排（锁内统计→STOPPING→ENDED→destroy→revoke→STOPPED） | ⚠️ **A-1**（快照销毁判定）/**A-3**（终态无锁）/A-9（TOCTOU） |
+| B6 | Controller.cloudHost 扩展 | ✅（A-8 契约注释已修正） |
+| B7 | 停止编排（锁内统计→STOPPING→ENDED→destroy→revoke→STOPPED） | ✅ 返工修复（A-1/A-3/A-9）：CAS 后快照销毁、终态锁、先 CAS 再统计 |
 | B8 | 删除语义 | ✅ |
-| B9 | 模型 Key 失效校验 | ✅ 网关侧；对账侧误杀 **B-1** |
+| B9 | 模型 Key 失效校验 | ✅ 网关侧；对账侧 STARTING 放行（B-1） |
 | B10 | 自定义模型路由（系统优先、不记账仅审计） | ✅（T-BK12~15） |
 | B11 | 模型列表快照 ZAG_MODEL_IDS | ✅（跨用户归属二期登记） |
 | B12 | 初始化就绪门禁（initializing+超时） | ✅ |
 | B13 | 容器 TTL | ✅ |
 | B14 | ready/terminal 回调幂等 | ✅（重试续做缺口 A-4） |
-| B15 | 会话只读（resume 拒绝+前端只读） | ⚠️ **A-2**（sendSessionMessage 未拦）/**D-1**（软删前端失效） |
-| B16 | OpenCode 环境（安装→硬校验→工作区→prepare） | ✅（版本一致性弱化 C-5；退出码缺陷 **C-2**） |
+| B15 | 会话只读（resume 拒绝+前端只读） | ✅ 返工修复（A-2/D-1） |
+| B16 | OpenCode 环境（安装→硬校验→工作区→prepare） | ✅ 返工修复（C-5/C-2）：版本一致性与退出码 |
 | B17 | 默认会话失败容忍 | ✅ 服务端；前端提示缺失 **D-2** |
 | B18 | 1 实例校验 | ✅ 单实例（多副本防线 A-5） |
-| B19 | 错误文案统一 GraphQLError | ⚠️ 文案逐字一致；意外错误透传（A-6） |
-| B20 | 软删除与历史 | ⚠️ 服务端留档正确；前端只读链路 **D-1** |
+| B19 | 错误文案统一 GraphQLError | ✅ 返工修复（A-6）：白名单透传，未知统一 internal error |
+| B20 | 软删除与历史 | ✅ 返工修复（D-1）：前端只读链路收口 |
 
 ## 六、修复总览（返工后回填）
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| A-1 | create⇄stop 并发孤儿容器/计费泄漏 | 记录可见先于启动+无 CAS 回写+快照销毁判定 | ⬜ 待修复 | |
-| D-1 | 软删会话只读失效+单测假绿 | 只读判定依赖列表命中 | ⬜ 待修复 | |
-| A-2 | sendSessionMessage 未拦只读 | 守卫漏 mutation | ⬜ 待修复 | |
-| A-3 | 幽灵会话/终态无锁 | 守卫与落库非原子 | ⬜ 待修复 | |
-| B-1 | 对账误杀 STARTING Key | A16 表述照搬未放行 STARTING | ⬜ 待修复 | |
-| C-1 | 启动失败映射「已销毁」丢原因 | exited→stopped 口径分裂 | ⬜ 待修复 | |
-| C-2 | 错误路径 exit(0) 掩盖失败 | onShutdown 语义混用 | ⬜ 待修复 | |
-| D-2 | 自动进入会话缺失 | defaultSessionId 零消费 | ⬜ 待修复 | |
-| D-3 | 静默假绿用例 | 未沿用 skipIf 模式 | ⬜ 待修复 | |
-| 🟡×27 | 见问题清单 | — | ⬜ 随修复收口 | |
+| A-1 | create⇄stop 并发孤儿容器/计费泄漏 | 记录可见先于启动+无 CAS 回写+快照销毁判定 | ✅ 已修复 | `3627eda` |
+| D-1 | 软删会话只读失效+单测假绿 | 只读判定依赖列表命中 | ✅ 已修复 | `3627eda` |
+| A-2 | sendSessionMessage 未拦只读 | 守卫漏 mutation | ✅ 已修复 | `3627eda` |
+| A-3 | 幽灵会话/终态无锁 | 守卫与落库非原子 | ✅ 已修复 | `3627eda` |
+| B-1 | 对账误杀 STARTING Key | A16 表述照搬未放行 STARTING | ✅ 已修复 | `3627eda` |
+| C-1 | 启动失败映射「已销毁」丢原因 | exited→stopped 口径分裂 | ✅ 已修复 | `3627eda` |
+| C-2 | 错误路径 exit(0) 掩盖失败 | onShutdown 语义混用 | ✅ 已修复 | `3627eda` |
+| D-2 | 自动进入会话缺失 | defaultSessionId 零消费 | ✅ 已修复 | `3627eda` |
+| D-3 | 静默假绿用例 | 未沿用 skipIf 模式 | ✅ 已修复 | `3627eda` |
+| 🟡×27 | 见问题清单 | — | ✅ 随修复收口 | `3627eda` |
+
+### 6.1 返工验证（2026-10-21，提交 `3627eda`）
+
+| 验证项 | 结果 | 说明 |
+|---|---|---|
+| 七包 build / tsc | ✅ 0 error | agent-api / admin-api / cloud-controller / controller-api / agent-controller / agent-web / admin-web |
+| 单测 | ✅ **3310 passed / 1 skipped** | agent-api 724、admin-api 608+1 skip、cloud-controller 240、controller-api 432、agent-controller 571、agent-web 515、admin-web 220 |
+| eslint | ✅ 0 error（6 既有 warning） | agent-web / admin-web |
+| 关键回归用例 | ✅ | A-1 CAS 未命中回收、A-2 send/cancel 拒绝、A-3 终态锁+二次扫会话、A-9 回滚、B-1 STARTING 不撤销、B-2 owner 401、B-4 并发轮换单 active、B-5 越权铸造 404、C-1 mustFailure→failed、C-2 错误退出码、C-5 版本不一致重装、C-7 原子写、D-2 自动进入一次、D-3 显式 skip、D-4 只读真实断言 |
+| tests/api | ⏸ 二轮复核实跑 | 需 Aspire 隔离栈；本轮改动仅测试显式跳过与断言/清理，未改服务契约 |
+| E2E | ⏸ 二轮复核实跑 | D-4/D-11 已改为 `getByRole('textbox')` + 历史消息断言 + finally 清理 |
+| 静态检查 | ✅ | `git diff --check` 0；tests 改动文件等效 `tsc --noEmit --strict` 0 |
 
 ## 七、最终验证
 
-| 层级 | 首轮 | 说明 |
+| 层级 | 首轮 | 返工后（`3627eda`） |
 |---|---|---|
-| tsc/build（7 包） | ✅ 0 error | 本机复跑 |
-| eslint（2 前端） | ✅ 0 error | — |
-| 单测 | ⚠️ 3012 passed / 1 failed / 1 skipped | 545+602+708+236+432+501+220；唯一失败实证为基线 flaky（2.1） |
-| tests/api（Aspire --isolated 实跑） | ✅ 37 passed / 1 skipped（5/5 文件） | 云电脑五套件；主路径全绿，缺陷集中在并发/失败路径/只读收口（套件缺口见 A-10/B-2/D-3） |
-| E2E | 二轮复核实跑 | 见 2.1 说明 |
-| 合并预检 | ✅ CLEAN | 不回退上轮 `36e62dd` 修复 |
+| tsc/build（7 包） | ✅ 0 error | ✅ 0 error |
+| eslint（2 前端） | ✅ 0 error | ✅ 0 error（6 既有 warning） |
+| 单测 | ⚠️ 3012 passed / 1 failed / 1 skipped | ✅ **3310 passed / 1 skipped**（基线 flaky 未复现） |
+| tests/api（Aspire --isolated 实跑） | ✅ 37 passed / 1 skipped（5/5 文件） | ⏸ 待二轮复核复跑（改动仅测试断言/跳过/清理） |
+| E2E | 二轮复核实跑 | ⏸ 待二轮复核复跑 |
+| 合并预检 | ✅ CLEAN | ✅ 待二轮复跑（本轮基于 `origin/integration` 快进提交，无 release 侧回退） |
 
 ## 八、经验总结
 
