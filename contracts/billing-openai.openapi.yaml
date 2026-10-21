@@ -58,6 +58,10 @@ paths:
         普通返回或 SSE 流式返回。流式请求自动注入 `stream_options.include_usage=true`
         以便采集用量。
 
+        下游请求头会透传给上游供应商（用于 `x-opencode-session` 等路由标识），
+        但 `Authorization`、`x-api-key`、`Cookie` 及逐跳头（`connection` 等）
+        由网关过滤，上游始终使用供应商凭据。
+
         模型解析顺序：先查系统模型（`scope=global,isEnabled=true`）；未命中且 Key 为
         `cloud_host` 时查用户自定义模型（`scope=user,isEnabled=true`，按 `sortOrder,createdAt`
         取第一条）。同名时系统模型优先。自定义模型不要求定价，返回内容由网关代转发且不计费

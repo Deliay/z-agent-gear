@@ -38,6 +38,42 @@ interface Usage {
 const RATE_LIMIT_PER_MINUTE = 60;
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
+/**
+ * 透传下游请求头到上游（如 opencode 供应商路由所需的 `x-opencode-session`）。
+ * 排除逐跳头、由网关/上游 SDK 自行生成的鉴权与报文头，避免覆盖供应商凭据或破坏请求体。
+ */
+const NOT_FORWARDED_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'host',
+  'content-length',
+  'content-type',
+  'accept-encoding',
+  'authorization',
+  'x-api-key',
+  'cookie',
+  'set-cookie',
+]);
+
+export function forwardableHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    const lower = name.toLowerCase();
+    if (NOT_FORWARDED_HEADERS.has(lower)) continue;
+    forwarded[lower] = Array.isArray(value) ? value.join(', ') : value;
+  }
+  return forwarded;
+}
+
 function allowRequest(keyId: string): boolean {
   const now = Date.now();
   // C5：定期清理过期桶，避免 Map 无限增长。
@@ -613,11 +649,17 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     };
     delete (basePayload as Record<string, unknown>).stream_options;
 
+    // 透传下游请求头（鉴权/逐跳头已过滤），供需要路由标识的上游使用。
+    const upstreamHeaders = forwardableHeaders(
+      req.headers as Record<string, string | string[] | undefined>,
+    );
+
     try {
       if (provider.type === 'Anthropic') {
         const result = await forwardAnthropic({
           provider: provider as unknown as { endpoint: string },
           apiKey,
+          headers: upstreamHeaders,
           modelName: model.name,
           messages,
           maxOutputTokens,
@@ -641,6 +683,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         apiKey,
         baseURL: provider.endpoint,
         timeout: 300_000,
+        defaultHeaders: upstreamHeaders,
       });
       if (!stream) {
         const completion = (await client.chat.completions.create(basePayload as never, {
@@ -751,6 +794,7 @@ export function applyAnthropicUsage(target: Usage, usage?: AnthropicUsage): void
 async function forwardAnthropic(input: {
   provider: { endpoint: string };
   apiKey: string;
+  headers: Record<string, string>;
   modelName: string;
   messages: unknown[];
   maxOutputTokens: number;
@@ -760,7 +804,11 @@ async function forwardAnthropic(input: {
   usage: Usage;
   onText: (text: string) => void;
 }): Promise<unknown> {
-  const client = new Anthropic({ apiKey: input.apiKey, baseURL: input.provider.endpoint });
+  const client = new Anthropic({
+    apiKey: input.apiKey,
+    baseURL: input.provider.endpoint,
+    defaultHeaders: input.headers,
+  });
   const system = input.messages
     .filter((message) => (message as { role?: string }).role === 'system')
     .map((message) => contentText((message as { content?: unknown }).content))

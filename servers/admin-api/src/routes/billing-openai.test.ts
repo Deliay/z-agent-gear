@@ -31,6 +31,7 @@ interface PublisherMock {
 let upstream: Server;
 let upstreamUrl = '';
 let upstreamMode: 'complete' | 'hang' = 'complete';
+let upstreamHeaders: Record<string, string | string[] | undefined> = {};
 let gateway: Server;
 let gatewayUrl = '';
 let apiKeySecret = '';
@@ -39,6 +40,7 @@ let publisher: PublisherMock;
 function startUpstream(): Promise<void> {
   return new Promise((resolve) => {
     upstream = createServer((req, res) => {
+      upstreamHeaders = req.headers;
       if (upstreamMode === 'hang') return; // 保持连接不响应，供客户端中断测试
       let body = '';
       req.on('data', (chunk) => (body += chunk));
@@ -269,6 +271,7 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     publisher.events = [];
     publisher.enqueue.mockClear();
     upstreamMode = 'complete';
+    upstreamHeaders = {};
     await seedProviderAndModel();
     apiKeySecret = await seedAccountWithKey();
   });
@@ -330,6 +333,23 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
       const call = await BillingApiCall.findOne({});
       expect(call?.status).toBe('completed');
     });
+  });
+
+  it('透传下游请求头到上游（x-opencode-session），但不透传客户端凭据', async () => {
+    const res = await callGateway({
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKeySecret}`,
+        'x-opencode-session': 'ses-regression-1',
+      },
+    });
+    expect(res.status).toBe(200);
+    await res.json();
+
+    expect(upstreamHeaders['x-opencode-session']).toBe('ses-regression-1');
+    // 上游只应看到供应商凭据，不得收到网关 API Key。
+    expect(upstreamHeaders['authorization']).toBe('Bearer sk-test');
+    expect(upstreamHeaders['authorization']).not.toContain(apiKeySecret);
   });
 
   it('R3：finalize 落库失败不把完成调用翻转为 aborted、不投双事件', async () => {
