@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
+import type { QueryFilter } from 'mongoose';
 import { Router, type Request, type Response } from 'express';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
-import { Model } from '../models/model.js';
+import { Model, type IModel } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { billingKeyAuth, openAiError, type BillingRequest } from '../middleware/billing-key-auth.js';
 import { creditCheckService } from '../services/billing/credit-check.js';
@@ -257,10 +258,44 @@ function toApiError(
   openAiError(res, status, { type, code, message });
 }
 
+function toModelEntry(model: {
+  name: string;
+  createdAt?: Date;
+}): { id: string; object: string; owned_by: string; created: number } {
+  return {
+    id: model.name,
+    object: 'model',
+    owned_by: 'agent-gear',
+    created: Math.floor(new Date(model.createdAt ?? Date.now()).getTime() / 1000),
+  };
+}
+
 /** OpenAI 兼容计费网关：Key 鉴权 → 预扣费检查 → 转发 → 用量事件（outbox）。 */
 export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router {
   const router = Router();
   const logger = deps.logger ?? console;
+
+  /** 批量查询供应商启用状态；列表与调用（404）口径共用。 */
+  const enabledProviderIdSet = async (
+    models: Array<{ providerId: unknown }>,
+  ): Promise<Set<string>> => {
+    const providerIds = [...new Set(models.map((model) => String(model.providerId)))];
+    if (providerIds.length === 0) return new Set();
+    const providers = await Provider.find({ _id: { $in: providerIds } })
+      .select({ isEnabled: 1 })
+      .lean<Array<{ _id: unknown; isEnabled?: boolean }>>();
+    return new Set(
+      providers
+        .filter((provider) => provider.isEnabled !== false)
+        .map((provider) => String(provider._id)),
+    );
+  };
+
+  /** 用户可用模型：scope=user ∪ 存量缺 scope（与 agent-api `services/model.ts` 口径一致，R2-8）。 */
+  const USER_MODEL_FILTER: QueryFilter<IModel> = {
+    isEnabled: true,
+    $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+  };
 
   router.get('/models', billingKeyAuth, async (req: Request, res: Response) => {
     const billing = (req as BillingRequest).billing!;
@@ -269,20 +304,50 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       toApiError(res, 429, 'rate_limit_exceeded', 'rate_limit_exceeded', '请求过于频繁，请稍后重试');
       return;
     }
+    if (billing.scope === 'cloud_host') {
+      // A4 口径：cloud_host Key = 系统启用模型 ∪ 用户启用模型（含自定义、无定价）。
+      // B-7：列表必须与 `/chat/completions` 解析口径一致——供应商不存在/禁用不列出；
+      // global 模型还需按调用口径过滤未定价/定价不完整（否则列出后调用 400）；user 自定义模型可无定价。
+      const [globalModels, userModels] = await Promise.all([
+        Model.find({ scope: 'global', isEnabled: true }).lean(),
+        Model.find(USER_MODEL_FILTER).sort({ sortOrder: 1, createdAt: 1 }).lean(),
+      ]);
+      const enabledProviderIds = await enabledProviderIdSet([...globalModels, ...userModels]);
+      const selectable = (model: {
+        scope?: string;
+        providerId: unknown;
+        pricing?: unknown;
+      }): boolean => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
+        if (model.scope === 'global') {
+          const pricing = pricingFromModel(model.pricing);
+          return !!pricing && (!pricing.isBillable || isPricingComplete(pricing));
+        }
+        // 用户自定义模型（scope=user 或存量缺 scope）：不要求定价，网关代转发且不计费。
+        return true;
+      };
+      const seen = new Set<string>();
+      const data: Array<ReturnType<typeof toModelEntry>> = [];
+      for (const model of [...globalModels, ...userModels]) {
+        // 同名去重（global 优先）：与调用解析顺序一致；不可用的 global 也不回退到同名 user 模型。
+        if (seen.has(model.name)) continue;
+        seen.add(model.name);
+        if (!selectable(model)) continue;
+        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      }
+      res.json({ object: 'list', data });
+      return;
+    }
     const models = await Model.find({ scope: 'global', isEnabled: true }).lean();
+    // R2-9：账号 Key 列表同样联查供应商启用状态，避免列出后调用 404。
+    const enabledProviderIds = await enabledProviderIdSet(models);
     const data = models
       .filter((model) => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
-      .map((model) => ({
-        id: model.name,
-        object: 'model',
-        owned_by: 'agent-gear',
-        created: Math.floor(
-          new Date((model as unknown as { createdAt?: Date }).createdAt ?? Date.now()).getTime() / 1000,
-        ),
-      }));
+      .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
     res.json({ object: 'list', data });
   });
 
@@ -308,7 +373,21 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       return;
     }
 
-    const model = await Model.findOne({ scope: 'global', name: modelName, isEnabled: true });
+    // 解析顺序（契约 §/v1/chat/completions）：系统模型优先；未命中且 Key 为 cloud_host 时
+    // 取用户启用模型（scope=user，按 sortOrder,createdAt 第一条）。同名时系统模型优先。
+    const systemModel = await Model.findOne({ scope: 'global', name: modelName, isEnabled: true });
+    const model =
+      systemModel ??
+      (billing.scope === 'cloud_host'
+        ? await Model.findOne({
+            name: modelName,
+            isEnabled: true,
+            $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+          }).sort({
+            sortOrder: 1,
+            createdAt: 1,
+          })
+        : null);
     if (!model) {
       toApiError(res, 404, 'invalid_request_error', 'model_not_found', `模型不存在: ${modelName}`);
       return;
@@ -318,28 +397,34 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       toApiError(res, 404, 'invalid_request_error', 'model_not_found', `模型供应商不可用: ${modelName}`);
       return;
     }
-    const pricing = pricingFromModel(model.pricing);
-    if (!pricing) {
-      toApiError(
-        res,
-        400,
-        'invalid_request_error',
-        'model_not_priced',
-        '模型尚未配置定价，请联系管理员补全',
-      );
-      return;
+
+    let pricing: ModelPricingCents | null = null;
+    let billable = false;
+    if (systemModel) {
+      pricing = pricingFromModel(model.pricing);
+      if (!pricing) {
+        toApiError(
+          res,
+          400,
+          'invalid_request_error',
+          'model_not_priced',
+          '模型尚未配置定价，请联系管理员补全',
+        );
+        return;
+      }
+      billable = pricing.isBillable;
+      if (billable && !isPricingComplete(pricing)) {
+        toApiError(
+          res,
+          400,
+          'invalid_request_error',
+          'model_not_priced',
+          '模型定价不完整，请联系管理员补全',
+        );
+        return;
+      }
     }
-    const billable = pricing.isBillable;
-    if (billable && !isPricingComplete(pricing)) {
-      toApiError(
-        res,
-        400,
-        'invalid_request_error',
-        'model_not_priced',
-        '模型定价不完整，请联系管理员补全',
-      );
-      return;
-    }
+    // 自定义模型（scope=user）：不要求定价，网关代转发且不计费（billable=false,cost=0）。
 
     if (!allowRequest(billing.id)) {
       toApiError(res, 429, 'rate_limit_exceeded', 'rate_limit_exceeded', '请求过于频繁，请稍后重试');
@@ -373,7 +458,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         return;
       }
     }
-    if (billable) {
+    if (billable && pricing) {
       const estimate = Math.max(1, estimateCost(pricing, promptTokens, maxOutputTokens));
       const check = await creditCheckService.check({
         accountId: billing.accountId,
@@ -401,6 +486,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       requestId,
       accountId: billing.accountId,
       apiKeyId: billing.id,
+      cloudHostId: billing.cloudHostId ?? null,
+      billable,
       modelId: String(model._id),
       modelName: model.name,
       inputTokens: 0,
@@ -426,11 +513,12 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       const resolved = resolveUsageFallback(usage, promptTokens, maxOutputTokens, outputText, estimatedTokens);
       const estimated = resolved.estimated;
       estimatedTokens = estimated;
-      const cost = billable
-        ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
-          tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
-          tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
-        : 0;
+      const cost =
+        billable && pricing
+          ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
+            tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
+            tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
+          : 0;
       // R3：finalize 只负责「落事实」，绝不抛出——落库失败不得被外层 catch 当成 upstream_error
       // 而把正常完成的调用翻转为 aborted、换 eventType 重投双事实。此处原地重试 + 告警。
       const writeFinalize = async (): Promise<void> => {

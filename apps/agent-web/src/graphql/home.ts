@@ -1,4 +1,5 @@
 import { gql } from '@apollo/client'
+import { CLOUD_HOST_FIELDS } from './queries'
 
 // 对齐 contracts/home.graphql（首页展示优化聚合查询，已定稿契约）
 //
@@ -55,6 +56,9 @@ export const HOME_OVERVIEW = gql`
           }
           total
           limit
+        }
+        cloudHost {
+          ...CloudHostFields
         }
       }
       sessions {
@@ -145,4 +149,5 @@ export const HOME_OVERVIEW = gql`
     }
   }
   ${HOME_WORKFLOW_INSTANCE_FIELDS}
+  ${CLOUD_HOST_FIELDS}
 `

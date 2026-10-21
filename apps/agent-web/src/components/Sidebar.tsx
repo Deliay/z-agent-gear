@@ -1,10 +1,22 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { useMutation } from '@apollo/client/react';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { CREATE_SESSION } from '../graphql/mutations';
-import type { CreateSessionMutation, SessionData } from '../graphql/types';
+import type {
+  CloudHostCapabilitiesData,
+  CreateSessionMutation,
+  GetCloudHostCapabilitiesQuery,
+  SessionData,
+} from '../graphql/types';
 import type { WorkflowInstanceSummaryData } from '../graphql/workflow';
 import NewSessionDialog from './session/NewSessionDialog';
+import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
+import {
+  cloudHostStatusDotClass,
+  cloudHostStatusLabel,
+  isActiveCloudHost,
+  isTerminalCloudHost,
+} from './cloud-host/cloud-host-status';
 import { getStatusDotColor } from './session/status-colors';
 import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
@@ -17,11 +29,13 @@ import {
   ChevronDown,
   ChevronRight,
   Archive,
+  Cloud,
   CreditCard,
 } from 'lucide-react';
 import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
 import { HOME_OVERVIEW } from '../graphql/home';
+import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
 import { useHomeOverview } from '../stores/homeOverview';
 
 interface SidebarProps {
@@ -34,11 +48,16 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   // 改为追踪「已折叠」集合，默认全部展开
   const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState<{ controllerId?: string } | null>(null);
+  const [showNewCloudHost, setShowNewCloudHost] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
 
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
-  const { data } = useHomeOverview();
+  const { data, refetch } = useHomeOverview();
+
+  // 云电脑开关与支持的 Harness（HARNESS_ENABLED=false 时隐藏入口）
+  const { data: capabilitiesData } = useQuery<GetCloudHostCapabilitiesQuery>(CLOUD_HOST_CAPABILITIES);
+  const capabilities: CloudHostCapabilitiesData | undefined = capabilitiesData?.cloudHostCapabilities;
 
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
@@ -47,6 +66,21 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const allWorkspaces = data?.workspaces ?? [];
   const workflowInstances = data?.workflowInstances ?? [];
   const archivedWorkflowInstances = data?.archivedWorkflowInstances ?? [];
+
+  const hasActiveCloudHost = controllers.some((controller) => isActiveCloudHost(controller.cloudHost));
+
+  const handleCloudHostCreated = (cloudHost: { id: string; controllerId?: string }) => {
+    setShowNewCloudHost(false);
+    refetch();
+    const controllerId =
+      cloudHost.controllerId ||
+      controllers.find((controller) => controller.cloudHost?.id === cloudHost.id)?.id;
+    if (controllerId) {
+      navigate(`/settings?controllerId=${controllerId}`);
+    } else {
+      navigate('/settings');
+    }
+  };
 
   const getWorkspaceNameForSession = (session: SessionData): string => {
     // 1. worktree 会话：从 worktreePath 推导
@@ -127,11 +161,35 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
+        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+          <span className="text-xs font-medium text-muted-foreground">主机</span>
+          {capabilities?.enabled && (
+            <button
+              type="button"
+              aria-label="新建云电脑"
+              title={hasActiveCloudHost ? '每用户同时最多 1 个云电脑实例' : '新建云电脑'}
+              disabled={hasActiveCloudHost}
+              onClick={() => setShowNewCloudHost(true)}
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="relative inline-flex">
+                <Cloud className="size-4" />
+                <Plus className="absolute -right-1.5 -top-1.5 size-2.5" />
+              </span>
+            </button>
+          )}
+        </div>
         <ul className="space-y-1">
           {controllers.map((controller) => {
             // 默认展开，除非在 collapsedControllers 中
             const isExpanded = !collapsedControllers.has(controller.id);
             const isOffline = controller.status !== 'online';
+            const isCloud = controller.type === 'cloud';
+            const cloudHost = controller.cloudHost ?? null;
+            const cloudTerminal = isCloud && isTerminalCloudHost(cloudHost);
+            const cloudHostRunning = isCloud && cloudHost?.status === 'RUNNING' && !cloudHost.deletedAt;
+            // 已销毁/失败的云电脑置灰；普通主机沿用离线置灰规则
+            const dimmed = isCloud ? cloudTerminal : isOffline;
             const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
             const controllerWorkspaces = allWorkspaces.filter(
               (w) => w.controllerId === controller.id && w.isEnabled,
@@ -150,15 +208,46 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                 <button
                   type="button"
                   className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent ${
-                    isOffline ? 'opacity-50' : ''
+                    dimmed ? 'opacity-50' : ''
                   }`}
                   onClick={() => toggleController(controller.id)}
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${
-                    controller.status === 'online' ? 'bg-success' : 'bg-muted-foreground'
+                    isCloud && cloudHost
+                      ? cloudHostStatusDotClass(cloudHost.status)
+                      : controller.status === 'online' ? 'bg-success' : 'bg-muted-foreground'
                   }`} />
-                  <span className="flex-1 truncate text-left font-medium">
-                    {controller.name || controller.hostname}
+                  <span className="flex min-w-0 flex-1 flex-col text-left">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      {isCloud && <Cloud className="size-3.5 shrink-0" data-testid="cloud-host-icon" />}
+                      <span className="truncate font-medium">
+                        {controller.name || controller.hostname}
+                      </span>
+                    </span>
+                    {isCloud && cloudHost && (
+                      <>
+                        <span
+                          className="truncate text-xs text-muted-foreground"
+                          title={cloudHost.failureReason || undefined}
+                          data-testid="cloud-host-status"
+                        >
+                          {cloudHostStatusLabel(cloudHost.status)}
+                          {cloudHost.status === 'FAILED' && cloudHost.failureReason
+                            ? ` · ${cloudHost.failureReason}`
+                            : ''}
+                        </span>
+                        {cloudHostRunning
+                          && cloudHost.harnessTypes.length === 1
+                          && !cloudHost.defaultSessionId && (
+                            <span
+                              className="truncate text-xs text-destructive"
+                              data-testid="cloud-host-default-session-hint"
+                            >
+                              默认会话创建失败，可手动创建会话
+                            </span>
+                          )}
+                      </>
+                    )}
                   </span>
                   <span
                     role="button"
@@ -234,14 +323,26 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       count={controllerSessions.length}
                       emptyMessage="无会话"
                       actions={
-                        <button
-                          type="button"
-                          className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                          title="新建会话"
-                          onClick={() => setShowNewDialog({ controllerId: controller.id })}
-                        >
-                          <Plus className="size-3" />
-                        </button>
+                        isCloud && !cloudHostRunning ? (
+                          <button
+                            type="button"
+                            title="云电脑未运行，无法创建会话"
+                            disabled
+                            className="cursor-not-allowed rounded p-0.5 text-muted-foreground opacity-50"
+                            aria-label="新建会话"
+                          >
+                            <Plus className="size-3" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                            title="新建会话"
+                            onClick={() => setShowNewDialog({ controllerId: controller.id })}
+                          >
+                            <Plus className="size-3" />
+                          </button>
+                        )
                       }
                     >
                       {controllerSessions.map((session) => {
@@ -308,6 +409,16 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           })}
         </ul>
       </div>
+
+      {showNewCloudHost && capabilities && (
+        <NewCloudHostDialog
+          open={showNewCloudHost}
+          capabilities={capabilities}
+          hasActiveCloudHost={hasActiveCloudHost}
+          onClose={() => setShowNewCloudHost(false)}
+          onCreated={handleCloudHostCreated}
+        />
+      )}
 
       {showNewDialog && (
         <NewSessionDialog

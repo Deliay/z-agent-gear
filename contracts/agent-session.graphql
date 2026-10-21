@@ -203,6 +203,10 @@ type Session {
   userId: ID!
   controllerId: ID!
   controllerName: String!
+  # 控制器类型；软删除云电脑的 Controller 可能不在列表结果中，会话详情以此判定只读
+  controllerType: ControllerType
+  # 会话所属云电脑（含已软删除留档）；普通主机/不存在时为 null
+  cloudHost: CloudHost
   acpServerType: AcpServerType!
   status: SessionStatus!
   title: String

@@ -17,6 +17,9 @@ import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
+import { SecretStore } from './services/secret-store.js';
+import { AgentApiClient } from './services/agent-api-client.js';
+import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
   BillingEventPublisher,
@@ -33,6 +36,41 @@ export interface CloudControllerApp {
   statusSync: StatusSyncService;
   start: () => Promise<void>;
   stop: () => Promise<void>;
+}
+
+/**
+ * 云电脑终态映射（契约 A19）：exited→stopped、failed→failed、其它→stopped。
+ *
+ * 必须工作负载失败走 `forceDestroy` 链路（终态固定 `exited`），仅靠 `status==='failed'`
+ * 会被误映射为「已销毁」并丢弃 `exitReason`（C-1）。因此 `mustFailure===true` 时同样
+ * 映射为 `failed`，让 agent-api 落 FAILED + failureReason。
+ */
+export function harnessTerminalStatus(status: string, mustFailure = false): 'stopped' | 'failed' {
+  return status === 'failed' || mustFailure ? 'failed' : 'stopped';
+}
+
+/** harness 生命周期回调重试（agent-api/admin-api 短暂不可达时退避；最终失败由外层钩子再重试并记 error）。 */
+export async function retryHarnessCallback(
+  label: string,
+  task: () => Promise<void>,
+  logger: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void } = console,
+  delays: readonly number[] = [0, 250, 1000, 3000],
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]! > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+    try {
+      await task();
+      return;
+    } catch (err) {
+      lastError = err;
+      logger.warn?.(`[harness] ${label} failed (attempt ${attempt + 1}/${delays.length})`, err);
+    }
+  }
+  logger.error?.(`[harness] ${label} failed after retries`, lastError);
+  throw lastError;
 }
 
 export function createCloudControllerApp(): CloudControllerApp {
@@ -70,6 +108,34 @@ export function createCloudControllerApp(): CloudControllerApp {
     runtimeClassName: config.runtimeClassName,
     publicWsEndpoint: config.publicWsEndpoint,
   });
+  // 云电脑运行期 secret（仅内存）与内部回调客户端；地址为空时对应回调为 no-op。
+  const secretStore = new SecretStore();
+  const agentApiClient = new AgentApiClient({
+    baseUrl: config.agentApiUrl,
+    token: config.internalApiToken,
+    timeoutMs: config.agentApiTimeoutMs,
+  });
+  const adminBillingClient = new AdminBillingClient({
+    baseUrl: config.adminApiUrl,
+    token: config.internalApiToken,
+    timeoutMs: config.agentApiTimeoutMs,
+  });
+  if (!agentApiClient.configured) {
+    logger.warn?.(
+      '[harness] AGENT_API_URL 未配置：云电脑 ready/terminal 回调将不会发送（云电脑可能停在 STARTING/RUNNING）',
+    );
+  }
+  if (!adminBillingClient.configured) {
+    logger.warn?.(
+      '[harness] ADMIN_API_URL 未配置：容器终态撤销运行专用模型 Key 将不会发送（依赖 Key 过期/对账兜底）',
+    );
+  }
+
+  /**
+   * harness 生命周期回调重试：agent-api 短暂不可达时自动退避重试。
+   * 最终仍失败由外层 ContainerService 钩子（3 次）再重试并记录 error 日志（降级：
+   * agent-api 侧仍可用过期/对账与容器状态兜底，不阻断容器回收）。
+   */
   const containerService = new ContainerService(
     repo,
     tokenService,
@@ -82,33 +148,92 @@ export function createCloudControllerApp(): CloudControllerApp {
     },
     logger,
     {
-      // 计费生命周期事件：只写本地 outbox，relay 异步发布；失败仅告警、不阻断生命周期。
+      // 生命周期钩子：先计费（只写本地 outbox，relay 异步发布），再云电脑回调；
+      // 二者互不影响，各自失败独立告警（计费失败保留既有 3 次重试语义）。
       onReady: async (container) => {
-        if (!container.billingAccountId || !container.billingStartedAt) return;
-        const startedAt = container.billingStartedAt.toISOString();
-        await billingPublisher.enqueue({
-          eventId: `container.ready:${container.id}`,
-          eventType: 'container.ready',
-          occurredAt: startedAt,
-          accountId: container.billingAccountId,
-          resourceId: container.id,
-          payload: { billingStartedAt: startedAt },
-        });
+        let billingError: unknown;
+        try {
+          if (container.billingAccountId && container.billingStartedAt) {
+            const startedAt = container.billingStartedAt.toISOString();
+            await billingPublisher.enqueue({
+              eventId: `container.ready:${container.id}`,
+              eventType: 'container.ready',
+              occurredAt: startedAt,
+              accountId: container.billingAccountId,
+              resourceId: container.id,
+              payload: { billingStartedAt: startedAt },
+            });
+          }
+        } catch (err) {
+          billingError = err;
+        }
+        let callbackError: unknown;
+        if (container.purpose === 'harness' && container.hostId) {
+          try {
+            await retryHarnessCallback(
+              `ready callback hostId=${container.hostId}`,
+              () => agentApiClient.notifyReady(container.hostId!),
+              logger,
+            );
+          } catch (err) {
+            callbackError = err;
+          }
+        }
+        if (billingError) throw billingError;
+        if (callbackError) throw callbackError;
       },
       onDestroyed: async (container) => {
-        if (!container.billingAccountId || !container.billingStartedAt) return;
-        const startedAt = container.billingStartedAt.toISOString();
-        const exitedAt = (container.exitedAt ?? new Date()).toISOString();
-        await billingPublisher.enqueue({
-          eventId: `container.destroyed:${container.id}`,
-          eventType: 'container.destroyed',
-          occurredAt: exitedAt,
-          accountId: container.billingAccountId,
-          resourceId: container.id,
-          payload: { billingStartedAt: startedAt, exitedAt },
-        });
+        let billingError: unknown;
+        try {
+          if (container.billingAccountId && container.billingStartedAt) {
+            const startedAt = container.billingStartedAt.toISOString();
+            const exitedAt = (container.exitedAt ?? new Date()).toISOString();
+            await billingPublisher.enqueue({
+              eventId: `container.destroyed:${container.id}`,
+              eventType: 'container.destroyed',
+              occurredAt: exitedAt,
+              accountId: container.billingAccountId,
+              resourceId: container.id,
+              payload: { billingStartedAt: startedAt, exitedAt },
+            });
+          }
+        } catch (err) {
+          billingError = err;
+        }
+        let callbackError: unknown;
+        if (container.purpose === 'harness' && container.hostId) {
+          // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped；
+          // 必须工作负载失败（destroy 链路终态 exited + mustFailure）按 failed 上报并保留原因（C-1）。
+          const status = harnessTerminalStatus(container.status, container.mustFailure);
+          try {
+            await retryHarnessCallback(
+              `terminal callback hostId=${container.hostId}`,
+              () =>
+                agentApiClient.notifyTerminal(
+                  container.hostId!,
+                  status,
+                  container.exitReason ?? undefined,
+                ),
+              logger,
+            );
+          } catch (err) {
+            callbackError = err;
+          }
+          try {
+            await retryHarnessCallback(
+              `revoke-by-host hostId=${container.hostId}`,
+              () => adminBillingClient.revokeByHost(container.hostId!),
+              logger,
+            );
+          } catch (err) {
+            callbackError = callbackError ?? err;
+          }
+        }
+        if (billingError) throw billingError;
+        if (callbackError) throw callbackError;
       },
     },
+    secretStore,
   );
   const billingPublisher = new BillingEventPublisher({
     intervalMs: config.outboxRelayIntervalMs,
@@ -139,6 +264,7 @@ export function createCloudControllerApp(): CloudControllerApp {
     logMaxBytes: config.workloadLogMaxBytes,
     // 必须失败通知：锁外强制注销（复用既有 destroy，reason 写入 exitReason；裁决 7）。
     forceDestroy: (containerId, reason) => containerService.destroy(containerId, { reason }),
+    secretStore,
     logger,
   });
 

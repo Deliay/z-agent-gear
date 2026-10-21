@@ -79,8 +79,7 @@ describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模�
   const createdNames: string[] = [];
 
   beforeAll(async () => {
-    const db = await mongoDb();
-    if (!db) return;
+    const db = (await mongoDb())!;
     const token = await ensureAdminLogin();
     const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
       CREATE_KEY,
@@ -153,16 +152,14 @@ describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模�
   });
 
   afterAll(async () => {
-    const db = await mongoDb();
-    if (!db) return;
+    const db = (await mongoDb())!;
     await db.collection('models').deleteMany({ name: { $in: createdNames } });
     await db.collection('providers').deleteOne({ _id: providerId });
     await mongoose.disconnect();
   });
 
   it('T-B27: /v1/models 排除未定价 / 非计费（含全 0 价目档）模型', async () => {
-    const db = await mongoDb();
-    if (!db) return;
+    const db = (await mongoDb())!;
     const res = await fetch(`${HTTP}/v1/models`, {
       headers: { Authorization: `Bearer ${secret}` },
     });
@@ -180,8 +177,7 @@ describe.skipIf(!process.env.MONGODB_URI)('计费网关分支覆盖（直写模�
   });
 
   it('T-B28: 未定价（pricing:null 与全 0 档）模型 400 model_not_priced', async () => {
-    const db = await mongoDb();
-    if (!db) return;
+    const db = (await mongoDb())!;
     for (const prefix of ['^no-pricing-', '^unpriced-']) {
       const model = await db.collection('models').findOne({ name: { $regex: prefix } });
       expect(model).toBeTruthy();
@@ -229,8 +225,7 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
  */
 describe.skipIf(!process.env.MONGODB_URI)('冻结账户网关口径（含未开启计费模型）', () => {
   it('T-B24: frozen 账户调用非计费模型同样 402 account_frozen', async () => {
-    const db = await mongoDb();
-    if (!db) return;
+    const db = (await mongoDb())!;
     const token = await ensureAdminLogin();
 
     const accounts = await adminGql<{

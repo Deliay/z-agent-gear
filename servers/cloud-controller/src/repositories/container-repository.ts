@@ -18,6 +18,20 @@ export interface CloudContainerEntity {
   purpose: CloudContainerPurpose;
   refId: string | null;
   userId: string | null;
+  /** 云电脑 ID（purpose=harness）；历史记录为 null。 */
+  hostId: string | null;
+  /** 云电脑用户命名（purpose=harness）。 */
+  hostName: string | null;
+  /** harness 类型（purpose=harness，缺省 []）。 */
+  harnessTypes: string[];
+  /** 标准连接使用的 ControllerKey ID。 */
+  controllerKeyId: string | null;
+  /** 运行专用模型 Key ID。 */
+  containerApiKeyId: string | null;
+  /** 云电脑最低 agent-gear 版本（已按 max(常量, 请求值) 收敛）；普通容器为 null。 */
+  agentGearMinVersion: string | null;
+  /** 容器 TTL 到期时间；历史记录为 null。 */
+  expiresAt: Date | null;
   tokenHash: string | null;
   image: string;
   connectedAt: Date | null;
@@ -49,6 +63,13 @@ export interface CreateContainerInput {
   image: string;
   refId?: string | null;
   userId?: string | null;
+  hostId?: string | null;
+  hostName?: string | null;
+  harnessTypes?: string[];
+  controllerKeyId?: string | null;
+  containerApiKeyId?: string | null;
+  agentGearMinVersion?: string | null;
+  expiresAt?: Date | null;
   status?: CloudContainerStatus;
   tokenHash?: string | null;
   connectedAt?: Date | null;
@@ -99,6 +120,13 @@ interface RawDoc {
   purpose: CloudContainerPurpose;
   refId?: string | null;
   userId?: string | null;
+  hostId?: string | null;
+  hostName?: string | null;
+  harnessTypes?: string[] | null;
+  controllerKeyId?: string | null;
+  containerApiKeyId?: string | null;
+  agentGearMinVersion?: string | null;
+  expiresAt?: Date | null;
   tokenHash?: string | null;
   image: string;
   connectedAt?: Date | null;
@@ -150,6 +178,13 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     purpose: doc.purpose,
     refId: doc.refId ?? null,
     userId: doc.userId ?? null,
+    hostId: doc.hostId ?? null,
+    hostName: doc.hostName ?? null,
+    harnessTypes: (doc.harnessTypes ?? []).map((value) => String(value)),
+    controllerKeyId: doc.controllerKeyId ?? null,
+    containerApiKeyId: doc.containerApiKeyId ?? null,
+    agentGearMinVersion: doc.agentGearMinVersion ?? null,
+    expiresAt: doc.expiresAt ?? null,
     tokenHash: doc.tokenHash ?? null,
     image: doc.image,
     connectedAt: doc.connectedAt ?? null,
@@ -176,6 +211,13 @@ export class MongoContainerRepository implements ContainerRepository {
       status: input.status ?? 'creating',
       refId: input.refId ?? null,
       userId: input.userId ?? null,
+      hostId: input.hostId ?? null,
+      hostName: input.hostName ?? null,
+      harnessTypes: input.harnessTypes ?? [],
+      controllerKeyId: input.controllerKeyId ?? null,
+      containerApiKeyId: input.containerApiKeyId ?? null,
+      agentGearMinVersion: input.agentGearMinVersion ?? null,
+      expiresAt: input.expiresAt ?? null,
       tokenHash: input.tokenHash ?? null,
       connectedAt: input.connectedAt ?? null,
       exitedAt: input.exitedAt ?? null,
@@ -247,6 +289,13 @@ export class InMemoryContainerRepository implements ContainerRepository {
       purpose: input.purpose,
       refId: input.refId ?? null,
       userId: input.userId ?? null,
+      hostId: input.hostId ?? null,
+      hostName: input.hostName ?? null,
+      harnessTypes: [...(input.harnessTypes ?? [])],
+      controllerKeyId: input.controllerKeyId ?? null,
+      containerApiKeyId: input.containerApiKeyId ?? null,
+      agentGearMinVersion: input.agentGearMinVersion ?? null,
+      expiresAt: input.expiresAt ?? null,
       tokenHash: input.tokenHash ?? null,
       image: input.image,
       connectedAt: input.connectedAt ?? null,
@@ -268,13 +317,19 @@ export class InMemoryContainerRepository implements ContainerRepository {
 
   async findById(id: string): Promise<CloudContainerEntity | null> {
     const found = this.store.get(id);
-    return found ? { ...found, workloadPlan: clonePlan(found.workloadPlan) } : null;
+    return found
+      ? { ...found, harnessTypes: [...found.harnessTypes], workloadPlan: clonePlan(found.workloadPlan) }
+      : null;
   }
 
   async findByName(name: string): Promise<CloudContainerEntity | null> {
     for (const entity of this.store.values()) {
       if (entity.name === name) {
-        return { ...entity, workloadPlan: clonePlan(entity.workloadPlan) };
+        return {
+          ...entity,
+          harnessTypes: [...entity.harnessTypes],
+          workloadPlan: clonePlan(entity.workloadPlan),
+        };
       }
     }
     return null;
@@ -283,7 +338,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
   async findAll(): Promise<CloudContainerEntity[]> {
     return [...this.store.values()]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .map((e) => ({ ...e, workloadPlan: clonePlan(e.workloadPlan) }));
+      .map((e) => ({ ...e, harnessTypes: [...e.harnessTypes], workloadPlan: clonePlan(e.workloadPlan) }));
   }
 
   async update(

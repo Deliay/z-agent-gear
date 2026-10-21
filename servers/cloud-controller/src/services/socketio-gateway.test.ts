@@ -11,6 +11,7 @@ import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
 import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken } from './socketio-gateway.js';
 import { WorkloadDispatcher } from './workload-dispatcher.js';
+import { SecretStore } from './secret-store.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 import { InMemoryWorkloadRepository, type CloudWorkloadEntity } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
@@ -30,6 +31,7 @@ let statusSync: StatusSyncService;
 let workloadRepository: InMemoryWorkloadRepository;
 let workloadLogRepository: InMemoryWorkloadLogRepository;
 let dispatcher: WorkloadDispatcher;
+let secretStore: SecretStore;
 
 function mkWorkload(
   id: string,
@@ -98,14 +100,36 @@ async function connectError(token?: string): Promise<string> {
   });
 }
 
-async function newContainer(workloadIds: string[] = []) {
+async function newContainer(
+  workloadIds: string[] = [],
+  overrides: {
+    purpose?: 'idle' | 'harness';
+    status?: 'creating' | 'connecting';
+    workloadPlan?: Array<{
+      workloadId: string;
+      params: Record<string, unknown>;
+      implicit: boolean;
+      required: boolean;
+    }>;
+    hostId?: string;
+    userId?: string;
+    harnessTypes?: string[];
+    agentGearMinVersion?: string;
+  } = {},
+) {
+  const purpose = overrides.purpose ?? 'idle';
   const container = await repo.create({
     name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
     namespace: 'zag-workers',
-    purpose: 'idle',
+    purpose,
     image: 'zero-tools/zag-worker:latest',
-    status: 'connecting',
+    status: overrides.status ?? 'connecting',
     workloadIds,
+    workloadPlan: overrides.workloadPlan ?? [],
+    hostId: overrides.hostId ?? null,
+    userId: overrides.userId ?? null,
+    harnessTypes: overrides.harnessTypes ?? (purpose === 'harness' ? ['opencode'] : []),
+    agentGearMinVersion: overrides.agentGearMinVersion ?? null,
   });
   const token = await tokenService.issue(container.id);
   return { container, token };
@@ -161,6 +185,7 @@ beforeAll(async () => {
 
   workloadRepository = new InMemoryWorkloadRepository();
   workloadLogRepository = new InMemoryWorkloadLogRepository();
+  secretStore = new SecretStore();
   const gatewayBridge: {
     emitToContainer: (containerId: string, event: string, payload: unknown) => void;
     isConnected: (containerId: string) => boolean;
@@ -177,6 +202,7 @@ beforeAll(async () => {
     postBudgetMs: 5000,
     logMaxBytes: 262144,
     forceDestroy: async () => {},
+    secretStore,
   });
 
   const gateway = registerWorkerGateway(io, {
@@ -272,6 +298,19 @@ describe('worker Socket.IO gateway', () => {
     const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
     await service.destroy(container.id);
     expect((await shutdown).reason).toBe('强制销毁');
+
+    socket.close();
+  });
+
+  it('R2-20: destroy(reason) forwards the real reason in the shutdown event', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-r2-20', version: OK_VERSION });
+    await waitFor(socket, 'registered');
+
+    const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
+    await service.destroy(container.id, { reason: '必须工作负载「opencode」初始化失败' });
+    expect((await shutdown).reason).toBe('必须工作负载「opencode」初始化失败');
 
     socket.close();
   });
@@ -766,6 +805,121 @@ describe('worker Socket.IO gateway', () => {
     // 必须失败 → 不下发 workload:run，且未被 markOnline
     expect(runs).toHaveLength(0);
     expect((await repo.findById(container.id))?.status).toBe('connecting');
+    socket.close();
+  });
+
+  it('T-CC9/T-CC10: harness 2.4.0 被拒（VERSION_MISMATCH 2.5.0）且无注册副作用', async () => {
+    const { container, token } = await newContainer([], {
+      purpose: 'harness',
+      hostId: 'host-gate-1',
+    });
+    const socket = await connectWith(token);
+    const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+    socket.emit('register', { hostname: 'harness-old', version: '2.4.0' });
+    const error = await errorPromise;
+
+    expect(error).toMatchObject({
+      code: 'VERSION_MISMATCH',
+      currentVersion: '2.4.0',
+      minimumVersion: '2.5.0',
+      supportedMajor: 2,
+    });
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('connecting');
+    expect(stored?.connectedAt).toBeNull();
+    expect(await workloadLogRepository.findByContainer(container.id)).toEqual([]);
+    socket.close();
+  });
+
+  it('C-4: harness 注册门禁使用落库的 agentGearMinVersion（高于常量时生效）', async () => {
+    const { container, token } = await newContainer([], {
+      purpose: 'harness',
+      hostId: 'host-gate-minver',
+      agentGearMinVersion: '2.10.0',
+    });
+    const socket = await connectWith(token);
+    const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+    socket.emit('register', { hostname: 'harness-minver', version: '2.9.0' });
+    const error = await errorPromise;
+
+    expect(error).toMatchObject({
+      code: 'VERSION_MISMATCH',
+      currentVersion: '2.9.0',
+      minimumVersion: '2.10.0',
+    });
+    expect((await repo.findById(container.id))?.status).toBe('connecting');
+    socket.close();
+  });
+
+  it('T-CC9/T-CC11: harness 2.5.0 通过，无 init 时 registered.initializing=false 且 online', async () => {
+    const { container, token } = await newContainer([], {
+      purpose: 'harness',
+      hostId: 'host-gate-2',
+    });
+    const socket = await connectWith(token);
+    const registered = waitFor<{ controllerId: string; initializing: boolean }>(
+      socket,
+      'registered',
+    );
+    socket.emit('register', { hostname: 'harness-new', version: '2.5.0' });
+    const payload = await registered;
+
+    expect(payload.controllerId).toBe(container.id);
+    expect(payload.initializing).toBe(false);
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('online');
+    expect(stored?.connectedAt).toBeInstanceOf(Date);
+    socket.close();
+  });
+
+  it('T-CC11/T-CC12: harness 有 init 时 registered.initializing=true，workload:run 携带 env', async () => {
+    workloadRepository.add(mkWorkload('gw-harness', 'opencode', { initScript: 'echo init' }));
+    const { container, token } = await newContainer(['gw-harness'], {
+      purpose: 'harness',
+      hostId: 'host-gate-3',
+      userId: 'user-gate-1',
+      workloadPlan: [
+        { workloadId: 'gw-harness', params: {}, implicit: false, required: true },
+      ],
+    });
+    secretStore.put(container.id, {
+      hostEndpoint: 'wss://controller.example.com',
+      hostKey: 'zag_k_1_gateway-secret',
+      modelApiKey: 'zag_sk_gateway-secret',
+      modelBaseUrl: 'http://admin-api:8002/v1',
+      modelIds: '["model-a"]',
+      defaultWorkspace: '/root/workspace',
+    });
+    const socket = await connectWith(token);
+    const runPromise = waitFor<{ phase: string; env?: Record<string, string> }>(
+      socket,
+      'workload:run',
+    );
+    const registered = waitFor<{ initializing: boolean }>(socket, 'registered');
+    socket.emit('register', { hostname: 'harness-init', version: '2.5.0' });
+
+    expect((await registered).initializing).toBe(true);
+    const run = await runPromise;
+    expect(run.phase).toBe('init');
+    expect(run.env).toMatchObject({
+      ZAG_HARNESS_TYPES: 'opencode',
+      ZAG_CONTAINER_ID: container.id,
+      ZAG_HOST_ID: 'host-gate-3',
+      ZAG_USER_ID: 'user-gate-1',
+      ZAG_HOST_KEY: 'zag_k_1_gateway-secret',
+      ZAG_MODEL_API_KEY: 'zag_sk_gateway-secret',
+    });
+    expect((await repo.findById(container.id))?.status).toBe('initializing');
+    socket.close();
+  });
+
+  it('T-CC18: idle 仍接受 2.2.0（普通容器门禁未上调）', async () => {
+    const { container, token } = await newContainer([], { purpose: 'idle' });
+    const socket = await connectWith(token);
+    const registered = waitFor<{ initializing: boolean }>(socket, 'registered');
+    socket.emit('register', { hostname: 'idle-old', version: OK_VERSION });
+    expect((await registered).initializing).toBe(false);
+    expect((await repo.findById(container.id))?.status).toBe('online');
     socket.close();
   });
 });

@@ -13,11 +13,13 @@ import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
+import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
 import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import * as migration004 from './migrations/004-provider-scope-name-index.js';
+import * as migration005 from './migrations/005-cloud-host-active-unique-index.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
@@ -49,6 +51,7 @@ app.use('/graphql', yoga);
 app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
+app.use('/internal/cloud-hosts', internalCloudHostRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -68,7 +71,7 @@ async function start() {
   }
 
   try {
-    await runMigrations([migration001, migration002, migration003, migration004]);
+    await runMigrations([migration001, migration002, migration003, migration004, migration005]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }

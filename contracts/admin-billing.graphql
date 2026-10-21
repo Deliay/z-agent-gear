@@ -114,11 +114,19 @@ type BillingReservation {
   lastSettleAt: String
 }
 
+enum BillingApiKeyScope {
+  ACCOUNT
+  CLOUD_HOST
+}
+
 type BillingApiKey {
   id: ID!
   name: String!
   keyPrefix: String!
   status: String! # active | revoked
+  scope: BillingApiKeyScope! # account（设置页）| cloud_host（云电脑运行专用）
+  cloudHostId: ID # scope=cloud_host 时的云电脑 ID
+  expiresAt: String # scope=cloud_host 的有效期（ISO）；account 为 null
   lastUsedAt: String
   createdAt: String!
 }
@@ -140,6 +148,8 @@ type BillingApiCall {
   id: ID!
   requestId: String!
   accountId: ID!
+  cloudHostId: ID # 云电脑 Key 调用归因；账号 Key 为 null
+  billable: Boolean! # false 表示自定义模型代转发（不计费，仅审计）
   modelId: String!
   modelName: String!
   inputTokens: Int!

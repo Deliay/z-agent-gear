@@ -11,6 +11,12 @@
 /** 本期最低兼容的 worker 版本（工作负载能力自 2.2.0 起提供）。 */
 export const MIN_WORKER_VERSION = '2.2.0';
 
+/**
+ * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供。
+ * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
+ */
+export const MIN_HARNESS_WORKER_VERSION = '2.5.0';
+
 /** 本期支持的 worker major 版本。 */
 export const SUPPORTED_MAJOR = 2;
 
@@ -100,6 +106,29 @@ export function isSupportedWorkerVersion(
     return { supported: false, reason: 'below-minimum', parsed };
   }
   return { supported: true, reason: 'supported', parsed };
+}
+
+/**
+ * 取两个三段版本中较大的一个（字符串原样返回，便于落库/契约透出）。
+ * 仅用于已通过严格格式校验的版本串（`internal-api` 的 `agentGearMinVersion`）；
+ * 任一侧非法时回退 `fallback`（调用方保证合法时不会触发）。
+ */
+export function maxWorkerVersion(a: string, b: string, fallback = MIN_HARNESS_WORKER_VERSION): string {
+  const parsedA = parseWorkerVersion(a);
+  const parsedB = parseWorkerVersion(b);
+  if (!parsedA.ok || !parsedB.ok) return parsedA.ok ? a : parsedB.ok ? b : fallback;
+  return compareVersions(parsedA, parsedB) >= 0 ? a : b;
+}
+
+/**
+ * 判定云电脑（`purpose=harness`）上报版本是否兼容：`>=MIN_HARNESS_WORKER_VERSION` 且 major 为 2。
+ * 复用与普通容器完全相同的解析/比较实现，仅最低版本不同。
+ */
+export function isSupportedHarnessWorkerVersion(
+  raw: unknown,
+  supportedMajor: number = SUPPORTED_MAJOR,
+): WorkerVersionSupport {
+  return isSupportedWorkerVersion(raw, MIN_HARNESS_WORKER_VERSION, supportedMajor);
 }
 
 /**

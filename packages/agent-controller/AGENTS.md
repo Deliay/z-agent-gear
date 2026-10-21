@@ -16,8 +16,19 @@ src/
 ├── config.ts             # Key/endpoint reading with priority chain
 ├── socketio-client.ts    # Socket.IO client connection + event handling（register 上报完整版本）
 ├── heartbeat.ts          # Heartbeat sender (30s interval)
-├── workload-executor.ts  # 工作负载脚本串行执行（超时/截断/重连重放）+ 参数注入
-└── daemon.ts             # Daemon management (PID file, signal handling)
+├── workload-executor.ts  # 工作负载脚本串行执行（超时/截断/重连重放）+ 参数/容器 env 注入 + secret 脱敏
+├── daemon.ts             # Daemon management (PID file, signal handling)
+├── cloud-host/
+│   └── supervisor.ts     # 云电脑双连接（/worker → controller-api）与 init 等待编排
+├── harness/
+│   ├── env.ts            # harness env 校验（ZAG_MODEL_* / ZAG_DEFAULT_WORKSPACE）
+│   ├── opencode-cli.ts   # `opencode --version` 硬校验（兼容 `-v`）
+│   ├── opencode-config.ts# opencode.jsonc 定位/合并（保留注释，仅替换 provider.zag，0600）
+│   └── prepare.ts        # `harness prepare` 编排 + 摘要（不含 secret）
+└── commands/
+    ├── harness.ts        # `agent-gear harness prepare`
+    ├── mcp.ts
+    └── mcp-proxy.ts
 ```
 
 ## 工作负载参数注入
@@ -41,9 +52,57 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.4.0`（major 保持 2；标记 `items[].required` 短路能力）；worker 镜像内 agent-gear 需
-  `>=2.4.0` 才具备短路优化。参数注入需 `>=2.3.0`。cloud-controller `MIN_WORKER_VERSION` 仍为 `2.2.0`
-  （服务端为唯一裁决，旧 worker 忽略 `required` 仍正确）。
+- 版本：包版本 `2.5.0`（major 保持 2；云电脑双连接 / `harness prepare`，cloud-controller 对
+  `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.5.0`）。参数注入需 `>=2.3.0`、`items[].required`
+  短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION` 仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略
+  `required` 仍正确）。
+
+## 容器级 env 与 secret 脱敏（2.5.0）
+
+`workload:run` 可携带容器级 `env`（仅 `purpose=harness` 下发，如 `ZAG_MODEL_*` / `ZAG_HOST_*` /
+`ZAG_DEFAULT_WORKSPACE`）。每个 item 的执行环境合并顺序：
+
+```
+process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / WORKLOAD_PARAM_*（item 参数优先）
+```
+
+- `ZAG_MODEL_API_KEY` / `ZAG_HOST_KEY` / `ZAG_CONTROLLER_KEY` 的值在**脚本输出、日志、错误**中统一替换为
+  `***`（`redactSecrets`；日志中的 `workload:run` payload 同样脱敏）。
+- 普通容器不携带 `env`，行为与旧版完全一致。
+
+## 云电脑模式（cloud-host supervisor）
+
+入口默认 action 检测 `ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY` + `ZAG_CONTROLLER_KEY`（三者同时非空）：
+
+| 连接 | endpoint env | 凭据 env | 职责 |
+|------|--------------|----------|------|
+| `/worker`（cloud-controller） | `ZAG_SERVER_ENDPOINT` | `ZAG_CONTROLLER_KEY`（一次性 token） | 生命周期 / 初始化脚本 |
+| controller-api 标准连接 | `ZAG_HOST_ENDPOINT` | `ZAG_HOST_KEY`（仅握手 `auth.token`，不入 URL） | 会话 / ACP / 工作区 / 心跳 |
+
+- 先连 `/worker`：`registered.initializing=true` 时等待首个 `workload:run` init 批次结束（成功/失败）后
+  再连 controller-api；`false`/缺省立即连接；等待上限 `HARNESS_INIT_WAIT_MS`（默认 10 分钟）。
+  **被打断（cancelled）的批次不算完成**（重连重放时继续等待）；超时后迟到的 `registered` 不再次进入等待。
+- 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/root/workspace`，幂等）。
+- 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
+  本地单连接保持原行为，配置写入使用权限 `0600`。
+- 任一端 `shutdown` → 关闭两端并退出：正常（服务端主动 shutdown/SIGTERM/SIGINT）退出 0；`version_mismatch:*` / `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
+- 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
+- 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
+
+## harness prepare（OpenCode）
+
+init 脚本（admin-api 迁移 005）在安装固定版本 OpenCode 后执行 `agent-gear harness prepare`：
+
+1. 校验 `ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS`（JSON 数组，去空去重）/
+   `ZAG_DEFAULT_WORKSPACE`；缺失项按变量名报错并非零退出（不泄漏其它 env 值）。
+2. `opencode --version` 硬校验（旧版兼容 `opencode -v`），失败非零退出。
+3. `mkdir -p ZAG_DEFAULT_WORKSPACE`。
+4. 定位 `~/.config/opencode/opencode.jsonc`：同目录已有 `.json` 且无 `.jsonc` 时合并 `.json`；否则新建
+   `.jsonc`。使用 `jsonc-parser` 保留注释与既有 provider，仅替换 `provider.zag`；权限 0600。
+   `provider.zag = { npm: '@ai-sdk/openai-compatible', name: 'ZAG', options: { baseURL, apiKey }, models: { <id>: { name: <id> } } }`。
+
+> 镜像**不预装** `@opencode/cli`，由 harness 工作负载按 `OPENCODE_CLI_VERSION` 固定版本安装。
 
 ## Dev Commands
 

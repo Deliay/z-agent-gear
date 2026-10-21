@@ -56,6 +56,33 @@ export class ControllerWorkspaceService {
     return this.mapWorkspace(workspace.toObject());
   }
 
+  /**
+   * 为云电脑预置默认工作区（幂等 upsert，不触发 10 个工作区上限）。
+   * 路径与 worker `ZAG_DEFAULT_WORKSPACE` 保持一致。
+   */
+  async ensureCloudHostWorkspace(
+    controllerId: string,
+    userId: string,
+    workspacePath: string,
+  ): Promise<Record<string, unknown>> {
+    const path = workspacePath.trim() || '/root/workspace';
+    const name = path.split('/').filter(Boolean).pop() || 'workspace';
+    const workspace = await ControllerWorkspace.findOneAndUpdate(
+      { controllerId, userId, path },
+      {
+        $setOnInsert: {
+          userId,
+          controllerId,
+          name,
+          path,
+          isEnabled: true,
+        },
+      },
+      { new: true, upsert: true },
+    ).lean();
+    return this.mapWorkspace(workspace);
+  }
+
   async delete(id: string, userId: string): Promise<boolean> {
     const result = await ControllerWorkspace.findOneAndDelete({ _id: id, userId });
     return !!result;

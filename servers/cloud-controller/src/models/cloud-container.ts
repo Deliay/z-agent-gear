@@ -12,7 +12,19 @@ export const CONTAINER_STATUSES = [
 
 export type CloudContainerStatus = (typeof CONTAINER_STATUSES)[number];
 
-export const CONTAINER_PURPOSES = ['idle', 'admin-task', 'workflow', 'session'] as const;
+export const CONTAINER_PURPOSES = [
+  'idle',
+  'harness',
+  'admin-task',
+  'workflow',
+  'session',
+] as const;
+
+/** 可被 `/internal/containers` 启动的用途白名单（契约 A.2.2）。 */
+export const STARTABLE_PURPOSES = ['idle', 'harness'] as const;
+
+/** 本期支持的 harness 类型白名单。 */
+export const SUPPORTED_HARNESS_TYPES = ['opencode'] as const;
 
 export type CloudContainerPurpose = (typeof CONTAINER_PURPOSES)[number];
 
@@ -64,6 +76,16 @@ const cloudContainerSchema = new mongoose.Schema(
     purpose: { type: String, enum: CONTAINER_PURPOSES, required: true },
     refId: { type: String, default: null },
     userId: { type: String, default: null },
+    // 云电脑（purpose=harness）关联字段；历史记录缺失时读取层容忍为 null/[]
+    hostId: { type: String, default: null, index: true },
+    hostName: { type: String, default: null },
+    harnessTypes: { type: [String], default: [] },
+    controllerKeyId: { type: String, default: null },
+    containerApiKeyId: { type: String, default: null },
+    /** 云电脑最低 agent-gear 版本（max(服务端常量, 请求值)）；普通容器为 null。 */
+    agentGearMinVersion: { type: String, default: null },
+    /** 容器 TTL 到期时间（同时用于 Job activeDeadlineSeconds）；历史记录为 null。 */
+    expiresAt: { type: Date, default: null },
     tokenHash: { type: String, default: null },
     image: { type: String, required: true },
     connectedAt: { type: Date, default: null },

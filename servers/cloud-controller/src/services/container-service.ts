@@ -10,8 +10,10 @@ import type {
   UpdateContainerInput,
 } from '../repositories/container-repository.js';
 import type { K8sJobManager } from './k8s-job-manager.js';
+import { computeActiveDeadlineSeconds } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
+import { SecretStore, type HarnessSecrets } from './secret-store.js';
 
 export class ContainerNotFoundError extends Error {
   constructor(public readonly containerId: string) {
@@ -114,7 +116,7 @@ export interface DestroyResult {
   deletedJob: boolean;
 }
 
-export interface StartOptions {
+export interface StartHarnessOptions {
   /**
    * 是否由 `workloadPlan` 派生容器 `workloadIds`（契约 A.2.2）。
    *
@@ -125,7 +127,28 @@ export interface StartOptions {
   deriveWorkloadIdsFromPlan?: boolean;
   /** 计费归属账户（费用中心）：非空时容器参与计费；缺省/空表示不计费。 */
   billingAccountId?: string | null;
+  /** 云电脑 ID（`purpose=harness` 必填，由 internal-api 校验）。 */
+  hostId?: string | null;
+  /** 云电脑用户命名。 */
+  hostName?: string | null;
+  /** harness 类型列表（本期仅 `opencode`）。 */
+  harnessTypes?: string[];
+  /** 标准连接使用的 ControllerKey ID。 */
+  controllerKeyId?: string | null;
+  /** 运行专用模型 Key ID。 */
+  containerApiKeyId?: string | null;
+  /** 云电脑最低 agent-gear 版本（已按 max(常量, 请求值) 收敛）。 */
+  agentGearMinVersion?: string | null;
+  /** 关联前台用户 ID。 */
+  userId?: string | null;
+  /** 容器 TTL 到期时间（harness；换算 Job activeDeadlineSeconds）。 */
+  expiresAt?: Date | null;
+  /** 云电脑运行期 secret（仅内存，不落库）。 */
+  secrets?: HarnessSecrets | null;
 }
+
+/** 兼容既有调用方命名。 */
+export type StartOptions = StartHarnessOptions;
 
 /** 计费生命周期事件钩子（由 BillingEventPublisher 注入；不阻塞生命周期）。 */
 export interface ContainerServiceHooks {
@@ -141,7 +164,9 @@ export interface ContainerServiceHooks {
  * 避免多链路交错产生状态错乱或孤儿 Job。
  */
 export class ContainerService {
-  private readonly shutdownHandlers = new Set<(containerId: string) => Promise<void> | void>();
+  private readonly shutdownHandlers = new Set<
+    (containerId: string, reason?: string) => Promise<void> | void
+  >();
   private readonly mutex = new KeyedMutex();
 
   constructor(
@@ -151,6 +176,7 @@ export class ContainerService {
     private readonly cfg: ContainerServiceConfig,
     private readonly logger: Logger = console,
     private readonly hooks: ContainerServiceHooks = {},
+    private readonly secretStore: SecretStore = new SecretStore(),
   ) {}
 
   /** 在途计费钩子（O-1：停机前必须排空，避免 outbox 写入被 SIGTERM 截断）。 */
@@ -204,7 +230,9 @@ export class ContainerService {
   }
 
   /** 注册销毁通知（由 Socket.IO 网关接入，用于向在线容器 emit shutdown）。 */
-  onShutdown(handler: (containerId: string) => Promise<void> | void): () => void {
+  onShutdown(
+    handler: (containerId: string, reason?: string) => Promise<void> | void,
+  ): () => void {
     this.shutdownHandlers.add(handler);
     return () => this.shutdownHandlers.delete(handler);
   }
@@ -213,10 +241,10 @@ export class ContainerService {
    * 依次执行销毁通知处理器（串行 await）：网关在 handler 内先下发并等待 post 脚本批次，
    * 再 emit shutdown（契约 §2.8）。单个 handler 失败只告警，不阻断后续删除 Job 流程。
    */
-  private async notifyShutdown(containerId: string): Promise<void> {
+  private async notifyShutdown(containerId: string, reason?: string): Promise<void> {
     for (const handler of this.shutdownHandlers) {
       try {
-        await handler(containerId);
+        await handler(containerId, reason);
       } catch (err) {
         this.logger.warn?.(`shutdown handler failed for ${containerId}`, err);
       }
@@ -273,9 +301,9 @@ export class ContainerService {
     refId: string | null = null,
     workloadIds: readonly string[] = [],
     workloadPlan: readonly WorkloadPlanEntry[] | null = null,
-    options: StartOptions = {},
+    options: StartHarnessOptions = {},
   ): Promise<CloudContainerEntity> {
-    if (purpose !== 'idle') {
+    if (purpose !== 'idle' && purpose !== 'harness') {
       throw new UnsupportedPurposeError();
     }
 
@@ -293,49 +321,98 @@ export class ContainerService {
       purpose,
       image: this.cfg.image,
       refId: refId ?? null,
+      userId: options.userId ?? null,
+      hostId: options.hostId ?? null,
+      hostName: options.hostName ?? null,
+      harnessTypes: options.harnessTypes ?? [],
+      controllerKeyId: options.controllerKeyId ?? null,
+      containerApiKeyId: options.containerApiKeyId ?? null,
+      agentGearMinVersion: options.agentGearMinVersion ?? null,
+      expiresAt: options.expiresAt ?? null,
       status: 'creating',
       workloadIds: effectiveWorkloadIds,
       workloadPlan: plan,
       billingAccountId: options.billingAccountId ?? null,
     });
 
-    return this.mutex.runExclusive(created.id, async () => {
-      const token = await this.tokenService.issue(created.id);
+    // 云电脑 secret 仅内存持有（不落库、不打印）；Job/初始化下发需要它，失败时随终态清理。
+    if (purpose === 'harness' && options.secrets) {
+      this.secretStore.put(created.id, options.secrets);
+    }
 
-      try {
-        await this.jobManager.createJob({
-          jobName: name,
-          containerId: created.id,
-          token,
-        });
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
-        const failed = await this.markFailed(created.id, `Job 创建失败: ${reason}`);
-        throw new JobCreationError(
+    try {
+      return await this.mutex.runExclusive(created.id, async () => {
+        const token = await this.tokenService.issue(created.id);
+
+        try {
+          await this.jobManager.createJob({
+            jobName: name,
+            containerId: created.id,
+            token,
+            ...(purpose === 'harness'
+              ? {
+                  activeDeadlineSeconds: computeActiveDeadlineSeconds(options.expiresAt),
+                  env: this.buildHarnessJobEnv(options),
+                }
+              : {}),
+          });
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
+          const failed = await this.markFailed(created.id, `Job 创建失败: ${reason}`);
+          throw new JobCreationError(
+            created.id,
+            reason,
+            failed ?? (await this.repo.findById(created.id)),
+          );
+        }
+
+        const connecting = await this.repo.update(
           created.id,
-          reason,
-          failed ?? (await this.repo.findById(created.id)),
+          { status: 'connecting' },
+          { fromStatuses: ['creating'] },
         );
-      }
+        if (connecting) return connecting;
 
-      const connecting = await this.repo.update(
-        created.id,
-        { status: 'connecting' },
-        { fromStatuses: ['creating'] },
-      );
-      if (connecting) return connecting;
-
-      // CAS 未命中：除「记录被并发销毁/置终态」外，还可能是 worker 先注册
-      // （`markOnline` 允许 creating→online）。因此回读记录，仅当已进入终态
-      // （destroying/exited/failed）才回收 Job；online/connecting 的健康容器
-      // 不得被误删活 Job（问题 58）。
+        // CAS 未命中：除「记录被并发销毁/置终态」外，还可能是 worker 先注册
+        // （`markOnline` 允许 creating→online）。因此回读记录，仅当已进入终态
+        // （destroying/exited/failed）才回收 Job；online/connecting 的健康容器
+        // 不得被误删活 Job（问题 58）。
+        const current = await this.repo.findById(created.id);
+        if (current && isTerminalStatus(current.status)) {
+          await this.deleteResidualJob(name);
+        }
+        return current ?? created;
+      });
+    } catch (err) {
+      // 启动链路异常（如 token 签发失败）：仅当容器已进入终态或记录不存在时清理内存 secret，
+      // 避免与仍在运行的 worker 初始化批次竞态；非终态由后续销毁/巡检路径清理。
       const current = await this.repo.findById(created.id);
-      if (current && isTerminalStatus(current.status)) {
-        await this.deleteResidualJob(name);
+      if (!current || isTerminalStatus(current.status)) {
+        this.secretStore.delete(created.id);
       }
-      return current ?? created;
-    });
+      throw err;
+    }
+  }
+
+  /**
+   * harness Job env（契约 A.2.2）：`ZAG_SERVER_ENDPOINT`/`ZAG_CONTROLLER_KEY` 由 job manager
+   * 固定注入；此处仅返回追加项。模型 Key/BaseURL/模型列表**不进入 Job env**（只走
+   * `workload:run.env`），避免容器环境变量长期暴露模型凭据。
+   */
+  private buildHarnessJobEnv(options: StartHarnessOptions): Record<string, string> {
+    const env: Record<string, string> = {};
+    const secrets = options.secrets;
+    if (secrets?.hostEndpoint) env.ZAG_HOST_ENDPOINT = secrets.hostEndpoint;
+    if (secrets?.hostKey) env.ZAG_HOST_KEY = secrets.hostKey;
+    if (options.hostName) env.ZAG_HOST_NAME = options.hostName;
+    if (options.harnessTypes && options.harnessTypes.length > 0) {
+      env.ZAG_HARNESS_TYPES = options.harnessTypes.join(',');
+    }
+    if (secrets?.defaultWorkspace) env.ZAG_DEFAULT_WORKSPACE = secrets.defaultWorkspace;
+    env.ZAG_USER_TYPE = 'front_user';
+    if (options.userId) env.ZAG_USER_ID = options.userId;
+    return env;
   }
 
   private async deleteResidualJob(name: string): Promise<void> {
@@ -396,9 +473,11 @@ export class ContainerService {
       },
     );
     if (firstOnline) {
-      if (firstOnline.billingAccountId && firstOnline.billingStartedAt) {
-        this.emitHook('onReady', firstOnline);
-      }
+      // 计费就绪与云电脑就绪共用同一「首次 online」时机；harness 无计费账户也必须回调。
+      const shouldEmit =
+        (firstOnline.billingAccountId !== null && firstOnline.billingStartedAt !== null) ||
+        firstOnline.purpose === 'harness';
+      if (shouldEmit) this.emitHook('onReady', firstOnline);
       return firstOnline;
     }
 
@@ -426,7 +505,7 @@ export class ContainerService {
     );
     if (updated) {
       // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
-      this.emitDestroyedIfBilled(updated);
+      this.finalizeTerminal(updated);
     }
     // CAS 未命中仅回读用于返回值，绝不据此投递事件。
     return updated ?? this.repo.findById(containerId);
@@ -449,7 +528,7 @@ export class ContainerService {
       },
       { fromStatuses: [...ACTIVE_STATUSES] },
     );
-    if (updated) this.emitDestroyedIfBilled(updated);
+    if (updated) this.finalizeTerminal(updated);
     return updated ?? this.repo.findById(containerId);
   }
 
@@ -490,6 +569,8 @@ export class ContainerService {
 
     // 终态记录：不跳过清理，核实并删除残留 Job（幂等语义 = Job 不存在时不再重复删除）。
     if (isTerminalStatus(container.status)) {
+      // 云电脑 secret 随终态清理（幂等）。
+      this.secretStore.delete(containerId);
       const deletion = await this.deleteJobIfExistsDetailed(container.name);
       // 卡死的 destroying（销毁被 SIGTERM 打断）：Job 删除失败则保留待巡检重试；
       // 否则迁移 exited，兑现契约 `destroying → exited`（问题 50）。
@@ -516,7 +597,7 @@ export class ContainerService {
         );
         const current = exited ?? (await this.repo.findById(containerId));
         if (exited && current) {
-          this.emitDestroyedIfBilled(current);
+          this.finalizeTerminal(current);
         }
         return {
           success: true,
@@ -546,7 +627,12 @@ export class ContainerService {
     // CAS 之前把记录置为 online（connectedAt 被写入且随 CAS 结果保留），此时不得跳过
     // shutdown，否则会丢掉一次优雅停机机会（建议 G）。
     if (destroying.connectedAt !== null) {
-      await this.notifyShutdown(containerId);
+      // R2-20：把真实销毁原因透传给 worker（必须失败 = markMustFailure 写入的 exitReason），
+      // 避免 gateway 硬编码「强制销毁」导致 worker 以 exit(0) 掩盖失败。
+      await this.notifyShutdown(
+        containerId,
+        options?.reason ?? container.exitReason ?? '强制销毁',
+      );
       if (this.cfg.shutdownGraceMs > 0) {
         await delay(this.cfg.shutdownGraceMs);
       }
@@ -587,17 +673,21 @@ export class ContainerService {
       };
     }
 
-    this.emitDestroyedIfBilled(exited);
+    this.finalizeTerminal(exited);
 
     return { success: true, id: containerId, status: 'exited', deletedJob };
   }
 
   /**
-   * 销毁事件投递条件（裁决 4）：仅当容器 `billingAccountId` 与 `billingStartedAt`
-   * 均非空时投递 `container.destroyed`，保证「未就绪即销毁」不计费、不产生空事件。
+   * 终态统一收口：先清理内存 secret，再按需投递销毁钩子。
+   *
+   * 销毁事件投递条件（裁决 4）：`billingAccountId` 与 `billingStartedAt` 均非空（计费），
+   * 或 `purpose=harness`（云电脑 terminal 回调不依赖计费，裁决 A19/A24）。
    */
-  private emitDestroyedIfBilled(container: CloudContainerEntity): void {
-    if (!container.billingAccountId || !container.billingStartedAt) return;
+  private finalizeTerminal(container: CloudContainerEntity): void {
+    this.secretStore.delete(container.id);
+    const billed = container.billingAccountId !== null && container.billingStartedAt !== null;
+    if (!billed && container.purpose !== 'harness') return;
     this.emitHook('onDestroyed', container);
   }
 
@@ -645,7 +735,7 @@ export class ContainerService {
           },
           { fromStatuses: ['destroying'] },
         );
-        if (exited) this.emitDestroyedIfBilled(exited);
+        if (exited) this.finalizeTerminal(exited);
       } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });
       }

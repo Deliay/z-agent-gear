@@ -4,13 +4,19 @@ import {
   JobCreationError,
   UnsupportedPurposeError,
   type ContainerServiceConfig,
+  type ContainerServiceHooks,
+  type StartHarnessOptions,
 } from './container-service.js';
 import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
+import { SecretStore, type HarnessSecrets } from './secret-store.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 
-function setup(overrides: Partial<ContainerServiceConfig> = {}) {
+function setup(
+  overrides: Partial<ContainerServiceConfig> = {},
+  extras: { hooks?: ContainerServiceHooks; secretStore?: SecretStore } = {},
+) {
   const repo = new InMemoryContainerRepository();
   const client = new InMemoryK8sClient();
   const tokenService = new TokenService(repo);
@@ -20,14 +26,49 @@ function setup(overrides: Partial<ContainerServiceConfig> = {}) {
     runtimeClassName: 'sysbox-runc',
     publicWsEndpoint: 'cloud.example.com:4003',
   });
-  const service = new ContainerService(repo, tokenService, jobManager, {
-    namespace: 'zag-workers',
-    image: 'zero-tools/zag-worker:latest',
-    connectTimeoutMs: 300000,
-    shutdownGraceMs: 0,
+  const secretStore = extras.secretStore ?? new SecretStore();
+  const service = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+      ...overrides,
+    },
+    undefined,
+    extras.hooks ?? {},
+    secretStore,
+  );
+  return { repo, client, tokenService, jobManager, service, secretStore };
+}
+
+function harnessSecrets(overrides: Partial<HarnessSecrets> = {}): HarnessSecrets {
+  return {
+    hostEndpoint: 'wss://controller.example.com',
+    hostKey: 'zag_k_1_host-secret',
+    modelApiKey: 'zag_sk_model-secret',
+    modelBaseUrl: 'http://admin-api:8002/v1',
+    modelIds: '["model-a"]',
+    defaultWorkspace: '/root/workspace',
     ...overrides,
-  });
-  return { repo, client, tokenService, jobManager, service };
+  };
+}
+
+function harnessOptions(overrides: Partial<StartHarnessOptions> = {}): StartHarnessOptions {
+  return {
+    hostId: 'host-1',
+    hostName: 'my-pc',
+    harnessTypes: ['opencode'],
+    controllerKeyId: 'ck-1',
+    containerApiKeyId: 'ak-1',
+    userId: 'user-1',
+    expiresAt: new Date(Date.now() + 3600_000),
+    secrets: harnessSecrets(),
+    ...overrides,
+  };
 }
 
 describe('ContainerService', () => {
@@ -94,6 +135,20 @@ describe('ContainerService', () => {
     expect(stored?.tokenHash).toBeNull();
     expect(await tokenService.verify(token)).toBeNull();
     expect(result.deletedJob).toBe(true);
+  });
+
+  it('R2-20: destroy passes the real failure reason to the worker shutdown handler', async () => {
+    const { service } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(created.id);
+    const reasons: Array<string | undefined> = [];
+    service.onShutdown((_id, reason) => {
+      reasons.push(reason);
+    });
+
+    await service.destroy(created.id, { reason: '必须工作负载「opencode」初始化失败' });
+
+    expect(reasons).toEqual(['必须工作负载「opencode」初始化失败']);
   });
 
   it('T-WD15: destroy(id, { reason }) overrides exitReason; no reason stays 强制销毁; delete failure keeps suffix', async () => {
@@ -584,5 +639,214 @@ describe('ContainerService workload state machine', () => {
     const stored = await repo.findById(created.id);
     expect(stored?.status).toBe('exited');
     expect(stored?.currentWorkloadName).toBeNull();
+  });
+
+  it('T-CC2/T-CC7: harness 启动落库新字段、Job env 与 TTL、secret 仅存内存', async () => {
+    const { repo, client, service, secretStore } = setup();
+    const expiresAt = new Date(Date.now() + 3600_000);
+    const secrets = harnessSecrets();
+
+    const created = await service.start(
+      'harness',
+      'ck-1',
+      ['wl-1'],
+      [{ workloadId: 'wl-1', params: {}, implicit: false, required: true }],
+      harnessOptions({ expiresAt, secrets }),
+    );
+
+    expect(created.purpose).toBe('harness');
+    const stored = await repo.findById(created.id);
+    expect(stored).toMatchObject({
+      purpose: 'harness',
+      hostId: 'host-1',
+      hostName: 'my-pc',
+      harnessTypes: ['opencode'],
+      controllerKeyId: 'ck-1',
+      containerApiKeyId: 'ak-1',
+      refId: 'ck-1',
+      userId: 'user-1',
+    });
+    expect(stored?.expiresAt?.getTime()).toBe(expiresAt.getTime());
+
+    const env = client.getEnv(created.name);
+    expect(env.ZAG_SERVER_ENDPOINT).toContain('/worker');
+    expect(env.ZAG_CONTROLLER_KEY).toBeTruthy();
+    expect(env.ZAG_HOST_ENDPOINT).toBe(secrets.hostEndpoint);
+    expect(env.ZAG_HOST_KEY).toBe(secrets.hostKey);
+    expect(env.ZAG_HOST_NAME).toBe('my-pc');
+    expect(env.ZAG_HARNESS_TYPES).toBe('opencode');
+    expect(env.ZAG_DEFAULT_WORKSPACE).toBe(secrets.defaultWorkspace);
+    expect(env.ZAG_USER_TYPE).toBe('front_user');
+    expect(env.ZAG_USER_ID).toBe('user-1');
+    // 模型 Key 不进入 Job env（只走 workload:run.env）
+    expect(env.ZAG_MODEL_API_KEY).toBeUndefined();
+
+    const manifest = client.getManifest(created.name)!;
+    expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThanOrEqual(3598);
+    expect(manifest.spec.activeDeadlineSeconds).toBeLessThanOrEqual(3600);
+
+    expect(secretStore.get(created.id)).toEqual(secrets);
+    // secret 不落库：实体无 secrets 字段
+    expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
+    expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
+  });
+
+  it('T-CC1/T-CC8: idle 启动行为不变（Job env 仅基础两项、无 secret 写入）', async () => {
+    const { client, service, secretStore } = setup();
+    const created = await service.start('idle');
+
+    const manifest = client.getManifest(created.name)!;
+    expect(manifest.spec.template.spec.containers[0]!.env.map((entry) => entry.name)).toEqual([
+      'ZAG_SERVER_ENDPOINT',
+      'ZAG_CONTROLLER_KEY',
+    ]);
+    expect(manifest.spec.activeDeadlineSeconds).toBe(86400);
+    expect(secretStore.size).toBe(0);
+  });
+
+  it('T-CC3: 非 idle/harness 的 purpose 仍被拒绝', async () => {
+    const { service } = setup();
+    for (const purpose of ['admin-task', 'workflow', 'session'] as const) {
+      await expect(service.start(purpose)).rejects.toBeInstanceOf(UnsupportedPurposeError);
+    }
+  });
+
+  it('T-CC19: harness 首次 online 触发 onReady（不依赖计费），重复 online 不重复', async () => {
+    const ready: string[] = [];
+    const { service } = setup(
+      {},
+      {
+        hooks: {
+          onReady: (container) => {
+            ready.push(`${container.purpose}:${container.id}`);
+          },
+        },
+      },
+    );
+    const idle = await service.start('idle');
+    await service.markOnline(idle.id);
+    // idle 无计费账户：不触发（保持既有计费语义）
+    expect(ready).toEqual([]);
+
+    const harness = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(harness.id);
+    expect(ready).toEqual([`harness:${harness.id}`]);
+
+    await service.markOnline(harness.id);
+    expect(ready).toHaveLength(1);
+  });
+
+  it('T-CC14/T-CC20: harness 终态触发 onDestroyed 并清理 secret（无计费也触发）', async () => {
+    const destroyed: string[] = [];
+    const { service, secretStore } = setup(
+      {},
+      {
+        hooks: {
+          onDestroyed: (container) => {
+            destroyed.push(`${container.purpose}:${container.status}:${container.id}`);
+          },
+        },
+      },
+    );
+
+    const harness = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    expect(secretStore.get(harness.id)).not.toBeNull();
+    await service.markOnline(harness.id);
+    await service.destroy(harness.id);
+
+    expect(destroyed).toEqual([`harness:exited:${harness.id}`]);
+    expect(secretStore.get(harness.id)).toBeNull();
+
+    // Job 异常退出（markExited / markFailed）同样清理 secret 并触发 destroyed
+    const exited = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(exited.id);
+    await service.markExited(exited.id, '容器正常退出');
+    expect(destroyed).toContain(`harness:exited:${exited.id}`);
+    expect(secretStore.get(exited.id)).toBeNull();
+
+    const failed = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(failed.id);
+    await service.markFailed(failed.id, '容器异常退出');
+    expect(destroyed).toContain(`harness:failed:${failed.id}`);
+    expect(secretStore.get(failed.id)).toBeNull();
+  });
+
+  it('R2-4: mustFailure is preserved into the terminal onDestroyed callback', async () => {
+    let captured: { mustFailure: boolean; exitReason: string | null } | null = null;
+    const { repo, service } = setup(
+      {},
+      {
+        hooks: {
+          onDestroyed: (container) => {
+            captured = {
+              mustFailure: container.mustFailure,
+              exitReason: container.exitReason,
+            };
+          },
+        },
+      },
+    );
+    const harness = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(harness.id);
+    // dispatcher 在锁内先落 mustFailure + exitReason，再锁外 forceDestroy
+    await repo.update(harness.id, {
+      mustFailure: true,
+      exitReason: '必须工作负载「opencode」初始化失败',
+    });
+
+    await service.destroy(harness.id, { reason: '必须工作负载「opencode」初始化失败' });
+
+    expect(captured).toEqual({
+      mustFailure: true,
+      exitReason: '必须工作负载「opencode」初始化失败',
+    });
+  });
+
+  it('T-CC1: idle 无计费时终态不触发 onDestroyed（既有语义不变）', async () => {
+    const destroyed: string[] = [];
+    const { service } = setup(
+      {},
+      {
+        hooks: {
+          onDestroyed: (container) => {
+            destroyed.push(container.id);
+          },
+        },
+      },
+    );
+    const idle = await service.start('idle');
+    await service.markOnline(idle.id);
+    await service.destroy(idle.id);
+    expect(destroyed).toEqual([]);
+  });
+
+  it('T-CC17: 历史容器（无新字段）读取与销毁正常，新字段归一为 null/[]', async () => {
+    const { repo, service, secretStore } = setup();
+    // 模拟旧记录：仅含历史必填字段（无 hostId/harnessTypes/expiresAt 等）。
+    const legacy = await repo.create({
+      name: 'zag-worker-legacy',
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'online',
+      connectedAt: new Date(),
+    });
+
+    const stored = await repo.findById(legacy.id);
+    expect(stored).toMatchObject({
+      purpose: 'idle',
+      hostId: null,
+      hostName: null,
+      harnessTypes: [],
+      controllerKeyId: null,
+      containerApiKeyId: null,
+      expiresAt: null,
+    });
+
+    const result = await service.destroy(legacy.id);
+    expect(result.success).toBe(true);
+    expect((await repo.findById(legacy.id))?.status).toBe('exited');
+    // 历史容器无 secret，删除 secret 幂等无害
+    expect(secretStore.get(legacy.id)).toBeNull();
   });
 });

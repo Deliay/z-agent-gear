@@ -657,13 +657,13 @@ describe('Admin Cloud Workload API', () => {
   // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
   // -------------------------------------------------------------------------
 
-  it('T-IA: exposes the four preset workloads with stable ids (idempotent)', async () => {
+  it('T-IA: exposes the five preset workloads with stable ids (idempotent)', async () => {
     const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
     expect(first.errors).toBeUndefined();
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -691,7 +691,7 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(4);
+    expect(presetIds(all)).toHaveLength(5);
   });
 
   it('T-IA: preset .NET uses the apt-based init script (migration 002 upgrade)', async () => {

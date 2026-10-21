@@ -229,7 +229,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '2.4.0',
+        version: '2.5.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -247,7 +247,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '2.4.0',
+        version: '2.5.0',
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -327,6 +327,144 @@ describe('SocketIO Client', () => {
       mockSocket._trigger('connect_error', new Error('connection failed'));
 
       expect(console.error).toHaveBeenCalledWith('Connection error: connection failed');
+    });
+
+    it('T-AG16: uses an explicit handshake token instead of the key (controller-api standard connection)', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('wss://controller.example.com', 'zag_k_1_host_key', {
+        handshakeToken: 'zag_k_1_host_key',
+      });
+
+      expect(io).toHaveBeenCalledWith('wss://controller.example.com', expect.objectContaining({
+        auth: { token: 'zag_k_1_host_key' },
+      }));
+    });
+
+    it('T-AG16b: never puts the host key into the URL/query and supports handshakeToken=false', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('wss://controller.example.com?token=leaked', 'zag_k_1_host_key', {
+        handshakeToken: false,
+      });
+
+      expect(io).toHaveBeenCalledWith(expect.not.stringContaining('token='), expect.objectContaining({ auth: {} }));
+    });
+
+    it('T-AG3: forwards the full registered payload (including initializing) to onRegistered', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const onRegistered = vi.fn();
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { onRegistered });
+      mockSocket._trigger('registered', { controllerId: 'ctrl-1', initializing: true });
+
+      expect(onRegistered).toHaveBeenCalledWith({ controllerId: 'ctrl-1', initializing: true });
+    });
+
+    it('T-AG4: invokes onWorkloadBatchComplete after an init batch ends', async () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const onWorkloadBatchComplete = vi.fn();
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { onWorkloadBatchComplete });
+      mockSocket._trigger('workload:run', {
+        phase: 'init',
+        // 空脚本立即产生失败结果（不需要真实 spawn），用于锚定「批次结束即回调且摘要反映失败」
+        items: [{ logId: 'init-1', workloadName: 'Init', script: '', timeoutMs: 5000 }],
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('workload:result', expect.objectContaining({ logId: 'init-1' }));
+        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({
+          phase: 'init',
+          itemCount: 1,
+          status: 'failed',
+          cancelled: false,
+          failedCount: 1,
+        });
+      });
+    });
+
+    it('T-AG4b: invokes onWorkloadBatchComplete even when a required init item fails', async () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const onWorkloadBatchComplete = vi.fn();
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { onWorkloadBatchComplete });
+      mockSocket._trigger('workload:run', {
+        phase: 'init',
+        items: [{ logId: 'init-fail', workloadName: 'Fail', script: '', timeoutMs: 5000, required: true }],
+      });
+
+      await vi.waitFor(() => {
+        expect(onWorkloadBatchComplete).toHaveBeenCalledWith({
+          phase: 'init',
+          itemCount: 1,
+          status: 'failed',
+          cancelled: false,
+          failedCount: 1,
+        });
+      });
+    });
+
+    it('T-AG18: skips the local MCP server when skipLocalMcpStart is set (dual connection singleton)', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { skipLocalMcpStart: true });
+
+      expect(localServerInstances).toHaveLength(0);
+    });
+
+    it('T-AG17: delegates shutdown to onShutdown without clearing local config or exiting', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const onShutdown = vi.fn();
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { onShutdown });
+      mockSocket._trigger('shutdown', { reason: 'container destroyed' });
+
+      expect(onShutdown).toHaveBeenCalledWith({ reason: 'container destroyed' });
+      expect(clearConfigKey).not.toHaveBeenCalled();
+      expect(process.exit).not.toHaveBeenCalled();
+    });
+
+    it('T-AG16c: does not handle workload events when handleWorkload=false', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const onWorkloadBatchComplete = vi.fn();
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', {
+        handleWorkload: false,
+        onWorkloadBatchComplete,
+      });
+      mockSocket._trigger('connect');
+      mockSocket._trigger('workload:run', {
+        phase: 'init',
+        items: [{ logId: 'x', workloadName: 'X', script: 'echo nope', timeoutMs: 5000 }],
+      });
+
+      expect(onWorkloadBatchComplete).not.toHaveBeenCalled();
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('workload:result', expect.anything());
+    });
+
+    it('T-AG13: redacts secret values from invalid workload payload logs', () => {
+      const mockSocket = createMockSocket();
+      vi.mocked(io).mockReturnValue(mockSocket as never);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      mockSocket._trigger('workload:run', {
+        phase: 'init',
+        items: 'invalid',
+        env: { ZAG_MODEL_API_KEY: 'zag_sk_super_secret' },
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.not.stringContaining('zag_sk_super_secret'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('***'));
     });
   });
 

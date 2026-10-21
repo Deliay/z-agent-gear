@@ -1,12 +1,14 @@
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
+import { BillingApiKey } from '../../models/billing-api-key.js';
 import { BillingEvent } from '../../models/billing-event.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingOutbox } from '../../models/billing-outbox.js';
 import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingRollup } from '../../models/billing-rollup.js';
+import { CloudHost } from '../../models/cloud-host.js';
 import { accountService, type AccountService } from './account-service.js';
 import type { BillingService } from './billing-service.js';
 import type { ReservationService } from './reservation.js';
@@ -41,6 +43,7 @@ export const RECONCILIATION_LINES = [
   'rollups',
   'apiCalls',
   'containerInvoices',
+  'cloud-host-keys',
 ] as const;
 export type ReconciliationLine = (typeof RECONCILIATION_LINES)[number];
 
@@ -87,6 +90,7 @@ export class ReconciliationService {
       else if (item === 'apiCalls') reports.push(await this.reconcileApiCalls());
       else if (item === 'containerInvoices')
         reports.push(await this.reconcileContainerInvoices());
+      else if (item === 'cloud-host-keys') reports.push(await this.reconcileCloudHostKeys());
     }
     this.lastReports = reports;
     return reports;
@@ -584,6 +588,71 @@ export class ReconciliationService {
       });
     }
     return this.report('containerInvoices', checked, errors);
+  }
+
+  /**
+   * A16/B9 对账线：扫描 `scope=cloud_host,status=active` 的运行专用 Key，宿主不存在/已软删除/
+   * **非合法中间态**（`STOPPING/STOPPED/FAILED`）或 Key 已过期时幂等撤销，并写入报告。
+   * `STARTING` 属于创建窗口（Key 在 STARTING 期铸造、本期无重铸），必须放行——由网关实时校验
+   * 拒绝非 `RUNNING` 调用；账号 Key 不在扫描范围，绝不误伤。
+   *
+   * 网关鉴权已做实时失效（双保险）；本线兜底「停止/删除编排未显式 revoke」「TTL 自然退出」等遗漏。
+   */
+  private async reconcileCloudHostKeys(): Promise<ReconciliationReport> {
+    const now = this.now();
+    const keys = await BillingApiKey.find({ scope: 'cloud_host', status: 'active' })
+      .select({ keyPrefix: 1, cloudHostId: 1, expiresAt: 1 })
+      .lean<
+        Array<{
+          _id: unknown;
+          keyPrefix?: string;
+          cloudHostId?: unknown;
+          expiresAt?: Date | null;
+        }>
+      >();
+
+    const hostIds = [
+      ...new Set(
+        keys
+          .map((key) => (key.cloudHostId ? String(key.cloudHostId) : ''))
+          .filter((id) => mongoose.isValidObjectId(id)),
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+    const hosts = hostIds.length
+      ? await CloudHost.find({ _id: { $in: hostIds } })
+          .select({ status: 1, deletedAt: 1 })
+          .lean<Array<{ _id: unknown; status?: string; deletedAt?: Date | null }>>()
+      : [];
+    const byId = new Map(hosts.map((host) => [String(host._id), host]));
+
+    const errors: Array<Record<string, unknown>> = [];
+    for (const key of keys) {
+      const cloudHostId = key.cloudHostId ? String(key.cloudHostId) : '';
+      const host = cloudHostId ? byId.get(cloudHostId) : undefined;
+      const expired = !!key.expiresAt && new Date(key.expiresAt).getTime() <= now;
+      let reason: string | null = null;
+      if (!cloudHostId) reason = 'missing_cloud_host';
+      else if (!host) reason = 'cloud_host_missing';
+      else if (host.deletedAt) reason = 'cloud_host_deleted';
+      else if (host.status !== 'RUNNING' && host.status !== 'STARTING') {
+        reason = 'cloud_host_not_running';
+      } else if (!key.expiresAt) reason = 'missing_expiry';
+      else if (expired) reason = 'expired';
+      if (!reason) continue;
+
+      const result = await BillingApiKey.updateOne(
+        { _id: key._id, status: 'active' },
+        { $set: { status: 'revoked' } },
+      );
+      errors.push({
+        keyId: String(key._id),
+        keyPrefix: key.keyPrefix ?? null,
+        cloudHostId: cloudHostId || null,
+        reason,
+        action: (result.modifiedCount ?? 0) > 0 ? 'revoked' : 'already_revoked',
+      });
+    }
+    return this.report('cloud-host-keys', keys.length, errors);
   }
 
   /**

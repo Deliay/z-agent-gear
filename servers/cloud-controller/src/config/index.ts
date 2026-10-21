@@ -29,6 +29,12 @@ export interface AppConfig {
   rabbitmqRetryMax: number;
   /** outbox relay 轮询间隔（`OUTBOX_RELAY_INTERVAL_MS`，默认 2000）。 */
   outboxRelayIntervalMs: number;
+  /** agent-api 内部地址（`AGENT_API_URL`，可空；配置后启用 ready/terminal 回调）。 */
+  agentApiUrl: string;
+  /** 内部回调超时（`AGENT_API_TIMEOUT_MS`，默认 5000，正数）。 */
+  agentApiTimeoutMs: number;
+  /** admin-api 内部地址（`ADMIN_API_URL`，可空；配置后启用模型 Key 撤销）。 */
+  adminApiUrl: string;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -95,6 +101,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       'OUTBOX_RELAY_INTERVAL_MS',
       2000,
     ),
+    agentApiUrl: env.AGENT_API_URL ?? '',
+    agentApiTimeoutMs: toPositiveIntStrict(
+      env.AGENT_API_TIMEOUT_MS,
+      'AGENT_API_TIMEOUT_MS',
+      5000,
+    ),
+    adminApiUrl: env.ADMIN_API_URL ?? '',
   };
 }
 

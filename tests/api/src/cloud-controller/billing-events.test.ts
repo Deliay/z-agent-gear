@@ -66,8 +66,7 @@ describe.skipIf(!TOKEN)('cloud-controller 计费字段与强拆原因', () => {
    */
   describe.skipIf(!process.env.MONGODB_URI)('事件链路（需 MONGODB_URI）', () => {
     it('T-CC-B11: 已计费容器销毁后 billingoutbox 落一条 container.destroyed', async () => {
-      const db = await mongoDb();
-      if (!db) return;
+      const db = (await mongoDb())!;
       const created = await fetch(`${CLOUD_URL}/internal/containers`, {
         method: 'POST',
         headers: authHeaders(),
