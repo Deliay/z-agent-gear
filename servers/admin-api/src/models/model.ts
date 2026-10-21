@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 
 // 与 servers/agent-api/src/models/model.ts 同步演进
+//
+// 注意：`scope = 'global'` 内 `name` 全局唯一（跨供应商）由迁移
+// `005-model-name-unique-global` 以固定名 `scope_global_name_unique` 创建
+// （partialFilterExpression: { scope: 'global' }），**不在此 schema 声明**：
+// Mongoose 默认 autoIndex 会在启动连接后立即建索引，与「先清理存量重名再建索引」
+// 的迁移顺序竞态，存量重复数据下必然 E11000。迁移是唯一创建入口。
 const modelPricingSchema = new mongoose.Schema(
   {
     // 费用中心模型定价（便捷编辑视图）；价目真相在 productprices。

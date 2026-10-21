@@ -27,6 +27,8 @@ interface CustomModelDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   providers: ProviderOption[]
+  /** 现有全局模型名（本地重名预检；服务端仍是唯一事实源） */
+  existingNames?: string[]
   onSave: (providerId: string, name: string) => Promise<void>
 }
 
@@ -34,6 +36,7 @@ export default function CustomModelDialog({
   open,
   onOpenChange,
   providers,
+  existingNames = [],
   onSave,
 }: CustomModelDialogProps) {
   const [providerId, setProviderId] = useState('')
@@ -49,12 +52,15 @@ export default function CustomModelDialog({
     }
   }, [open, providers])
 
+  const trimmedName = name.trim()
+  const duplicateName = trimmedName.length > 0 && existingNames.includes(trimmedName)
+
   const handleSave = async () => {
-    if (!providerId || !name.trim()) return
+    if (!providerId || !trimmedName || duplicateName) return
     setSaving(true)
     setError(null)
     try {
-      await onSave(providerId, name.trim())
+      await onSave(providerId, trimmedName)
       onOpenChange(false)
     } catch (err) {
       const message = err instanceof Error ? err.message : '操作失败，请重试'
@@ -64,7 +70,7 @@ export default function CustomModelDialog({
     }
   }
 
-  const isValid = providerId && name.trim()
+  const isValid = providerId && trimmedName && !duplicateName
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -102,6 +108,11 @@ export default function CustomModelDialog({
                   onChange={(e) => setName(e.target.value)}
                   placeholder="例如: gpt-4o-mini"
                 />
+                {duplicateName && (
+                  <p role="alert" className="text-sm text-destructive">
+                    模型名已存在
+                  </p>
+                )}
               </div>
             </>
           )}

@@ -39,6 +39,7 @@ export const GET_MODELS = gql`
       isCustom
       isEnabled
       sortOrder
+      scope
       createdAt
       updatedAt
     }

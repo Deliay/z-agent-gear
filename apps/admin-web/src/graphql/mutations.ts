@@ -121,10 +121,24 @@ export const CREATE_GLOBAL_CUSTOM_MODEL = gql`
   }
 `
 
-export const DELETE_GLOBAL_CUSTOM_MODEL = gql`
-  mutation DeleteGlobalCustomModel($id: ID!) {
-    deleteGlobalCustomModel(id: $id) {
+export const DELETE_GLOBAL_MODEL = gql`
+  mutation DeleteGlobalModel($id: ID!) {
+    deleteGlobalModel(id: $id) {
       id
+    }
+  }
+`
+
+export const IMPORT_GLOBAL_MODELS = gql`
+  mutation ImportGlobalModels($providerId: ID!, $names: [String!]!) {
+    importGlobalModels(providerId: $providerId, names: $names) {
+      id
+      providerId
+      name
+      isCustom
+      isEnabled
+      sortOrder
+      scope
     }
   }
 `
