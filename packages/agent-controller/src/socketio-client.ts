@@ -27,6 +27,10 @@ const CONTROLLER_VERSION = '2.5.0';
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
 const SHUTDOWN_WORKLOAD_WAIT_MS = 5000;
+// 云电脑模式 `KEY_ALREADY_ONLINE` 退避重连：断开后手动重连（1s→2s→…→30s）。
+// 非云电脑模式保持既有行为（仅断开，不做额外兜底）。
+const CLOUD_HOST_RECONNECT_BASE_MS = 1000;
+const CLOUD_HOST_RECONNECT_MAX_MS = 30_000;
 const acpBridges = new Map<string, AcpSessionBridge>();
 const permissionRequestBridge = new Map<string, AcpSessionBridge>();
 const elicitationRequestBridge = new Map<string, AcpSessionBridge>();
@@ -347,6 +351,15 @@ export function describeConnectError(err: Error): string {
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
 
+/**
+ * 云电脑模式重连退避：`1s → 2s → 4s → …`，封顶 30s（C-3）。
+ * `attempt` 从 0 开始（首次断开后等待 1s）。
+ */
+export function cloudHostReconnectDelay(attempt: number): number {
+  const safeAttempt = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0;
+  return Math.min(CLOUD_HOST_RECONNECT_MAX_MS, CLOUD_HOST_RECONNECT_BASE_MS * 2 ** safeAttempt);
+}
+
 export function connectToServer(
   endpoint: string,
   key: string,
@@ -395,7 +408,44 @@ export function connectToServer(
     fsHandler.registerAllowedPath(entry.cwd);
   }
 
+  // 云电脑模式（supervisor 注入 onShutdown）下，`KEY_ALREADY_ONLINE` 的主动 disconnect
+  // 会停掉 Socket.IO 自动重连，且 supervisor 无兜底 → 主机永久离线（C-3）。
+  // 这里用指数退避手动重连；正常 shutdown 时清除定时器，避免退出前再连。
+  const cloudHostMode = typeof options?.onShutdown === 'function';
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let shutdownStarted = false;
+
+  const clearReconnectTimer = (): void => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  const scheduleReconnect = (): void => {
+    if (!cloudHostMode || shutdownStarted) return;
+    clearReconnectTimer();
+    const delay = cloudHostReconnectDelay(reconnectAttempt);
+    reconnectAttempt += 1;
+    console.log(`Connection lost; reconnecting in ${delay}ms...`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!shutdownStarted) socket.connect();
+    }, delay);
+    reconnectTimer.unref?.();
+  };
+
+  /** 统一 shutdown 入口：先停重连定时器，再交给 supervisor（避免与正常 shutdown 冲突）。 */
+  const notifyShutdown = (payload: ShutdownPayload): void => {
+    shutdownStarted = true;
+    clearReconnectTimer();
+    options?.onShutdown?.(payload);
+  };
+
   socket.on('connect', () => {
+    reconnectAttempt = 0;
+    clearReconnectTimer();
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
     const { origin, namespace } = parseEndpoint(connectEndpoint);
     console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
@@ -432,7 +482,7 @@ export function connectToServer(
       console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
       socket.disconnect();
       if (options?.onShutdown) {
-        options.onShutdown({ reason: `version_mismatch: ${data.message}` });
+        notifyShutdown({ reason: `version_mismatch: ${data.message}` });
         return;
       }
       process.exit(1);
@@ -441,13 +491,20 @@ export function connectToServer(
     if (data.code === 'KEY_ALREADY_ONLINE') {
       console.log('Clearing resume token and retrying connection...');
       if (persistConfig) clearResumeTokenFromConfig();
+      if (cloudHostMode) {
+        // 云电脑模式：disconnect() 会关闭 Socket.IO 自动重连，按指数退避手动重试（C-3）。
+        console.log('Cloud-host mode: retrying connection with backoff...');
+        socket.disconnect();
+        scheduleReconnect();
+        return;
+      }
       // Don't exit, let the reconnection logic handle it
       socket.disconnect();
       return;
     }
     socket.disconnect();
     if (options?.onShutdown) {
-      options.onShutdown({ reason: `error: ${data.code}` });
+      notifyShutdown({ reason: `error: ${data.code}` });
       return;
     }
     process.exit(1);
@@ -458,7 +515,7 @@ export function connectToServer(
     heartbeat.stop();
     if (persistConfig) clearConfigKey();
     if (options?.onShutdown) {
-      options.onShutdown({ reason: 'unregistered' });
+      notifyShutdown({ reason: 'unregistered' });
       return;
     }
     socket.close();
@@ -467,11 +524,13 @@ export function connectToServer(
 
   socket.on('shutdown', (data: ShutdownPayload) => {
     console.log(`Shutdown requested: ${data.reason}`);
+    shutdownStarted = true;
+    clearReconnectTimer();
     const finishShutdown = (): void => {
       heartbeat.stop();
       if (options?.onShutdown) {
         // 云电脑双连接：由 supervisor 统一关闭两端并退出（不发送 unregister）。
-        options.onShutdown(data);
+        notifyShutdown(data);
         return;
       }
       if (persistConfig) clearConfigKey();

@@ -7,7 +7,6 @@ import {
   MIN_HARNESS_WORKER_VERSION,
   MIN_WORKER_VERSION,
   SUPPORTED_MAJOR,
-  isSupportedHarnessWorkerVersion,
   isSupportedWorkerVersion,
   sanitizeVersionForLog,
 } from './worker-version.js';
@@ -277,10 +276,11 @@ export function registerWorkerGateway(
       }
       const purpose = record?.purpose ?? 'idle';
       const isHarness = purpose === 'harness';
-      const minimumVersion = isHarness ? MIN_HARNESS_WORKER_VERSION : MIN_WORKER_VERSION;
-      const versionSupport = isHarness
-        ? isSupportedHarnessWorkerVersion(payload?.version)
-        : isSupportedWorkerVersion(payload?.version);
+      // C-4：harness 使用落库的 max(常量, 请求值)；历史记录缺省回退常量。
+      const minimumVersion = isHarness
+        ? (record?.agentGearMinVersion ?? MIN_HARNESS_WORKER_VERSION)
+        : MIN_WORKER_VERSION;
+      const versionSupport = isSupportedWorkerVersion(payload?.version, minimumVersion);
       if (!versionSupport.supported) {
         const currentVersion = sanitizeVersionForLog(payload?.version);
         logger.warn?.(

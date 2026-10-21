@@ -534,6 +534,41 @@ describe('ReconciliationService（三线对账）', () => {
     expect(billing.handleContainerDestroyed).not.toHaveBeenCalled();
   });
 
+  it('B-1: STARTING 宿主 active Key 不得被对账撤销（创建窗口无重铸）', async () => {
+    const { BillingApiKey } = await import('../../models/billing-api-key.js');
+    const startingHostId = new mongoose.Types.ObjectId();
+    await mongoose.connection.db!.collection('cloudhosts').insertOne({
+      _id: startingHostId,
+      userId: new mongoose.Types.ObjectId(),
+      controllerId: new mongoose.Types.ObjectId(),
+      status: 'STARTING',
+      deletedAt: null,
+      createdAt: new Date(),
+    });
+    const key = await BillingApiKey.create({
+      accountId: new mongoose.Types.ObjectId(),
+      ownerType: 'front_user',
+      ownerId: 'recon-starting',
+      name: 'starting-key',
+      keyPrefix: 'zag_sk_starting1',
+      keyHash: 'h',
+      scope: 'cloud_host',
+      cloudHostId: startingHostId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('cloud-host-keys');
+    expect(report.checkedCount).toBe(1);
+    expect(report.errorCount).toBe(0);
+    // Key 在 STARTING 期铸造，本期无重铸：对账必须放行，由网关实时校验拒绝非 RUNNING 调用。
+    expect((await BillingApiKey.findById(key._id).lean())?.status).toBe('active');
+  });
+
   it('T-BK17: cloud-host-keys — 宿主非 RUNNING/已删除/过期 Key 被撤销，RUNNING 保留，账号 Key 不受影响', async () => {
     const { BillingApiKey } = await import('../../models/billing-api-key.js');
     const accountId = new mongoose.Types.ObjectId();

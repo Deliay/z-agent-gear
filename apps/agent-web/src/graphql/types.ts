@@ -209,6 +209,10 @@ export interface SessionData {
   userId: string
   controllerId: string
   controllerName: string
+  /** 控制器类型；云电脑软删除后 controller 可能不在列表结果中，以此判定只读 */
+  controllerType?: string | null
+  /** 会话所属云电脑（含软删除留档）；普通主机为 null */
+  cloudHost?: CloudHostData | null
   acpServerType: string
   status: string
   title: string | null

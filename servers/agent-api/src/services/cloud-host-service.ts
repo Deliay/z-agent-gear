@@ -266,12 +266,20 @@ export class CloudHostService {
         // cloud-controller 成功返回后不再回滚（后续异常由 terminal/TTL 兜底）
         containerStarted = true;
 
-        const updated = await CloudHost.findByIdAndUpdate(
-          cloudHostId,
+        // A-1：CAS 回写 containerId。若并发 stop 已推进状态（CAS 未命中），
+        // 容器已经真实启动，必须立即回收，避免孤儿容器持续计费与 containerId 丢失。
+        const updated = await CloudHost.findOneAndUpdate(
+          { _id: cloudHostId, status: 'STARTING' },
           { $set: { containerId: container.id } },
           { new: true },
         ).lean();
-        return this.mapCloudHost(updated ?? (await CloudHost.findById(cloudHostId).lean())!, 0);
+        if (!updated) {
+          await this.reclaimStartedContainer(cloudHostId, container.id);
+          const current = await CloudHost.findById(cloudHostId).lean();
+          if (!current) throw new Error('Cloud host not found');
+          return this.mapCloudHost(current as Doc, 0);
+        }
+        return this.mapCloudHost(updated as Doc, 0);
       } catch (err) {
         if (!containerStarted) {
           await this.rollback({
@@ -287,6 +295,10 @@ export class CloudHostService {
         }
         if (err instanceof BillingServiceUnavailableError) {
           throw new Error('billing service unavailable');
+        }
+        if ((err as { code?: number }).code === 11000) {
+          // A-5：DB 部分唯一索引兜底（多副本并发创建）
+          throw new Error('too many cloud hosts');
         }
         throw err;
       }
@@ -356,6 +368,18 @@ export class CloudHostService {
     };
   }
 
+  /** A-1：创建侧 CAS 未命中（已被并发 stop）时回收已启动容器与模型 Key（幂等、best-effort）。 */
+  private async reclaimStartedContainer(cloudHostId: string, containerId: string): Promise<void> {
+    await Promise.allSettled([
+      Promise.resolve(this.controllerClient.destroyContainer(containerId)).catch((err) => {
+        console.warn('[cloud-host] destroy orphan container failed:', (err as Error).message);
+      }),
+      Promise.resolve(billingClient.revokeApiKeysByHost(cloudHostId)).catch((err) => {
+        console.warn('[cloud-host] revoke model key on orphan reclaim failed:', (err as Error).message);
+      }),
+    ]);
+  }
+
   async stop(id: string, userId: string, force?: boolean): Promise<Doc> {
     return this.hostMutex.runExclusive(`host:${id}`, async () => {
       const host = await this.findOwnedHost(id, userId);
@@ -363,13 +387,8 @@ export class CloudHostService {
         return this.mapCloudHost(host as unknown as Doc, await this.countActive(host));
       }
 
-      const activeCount = await this.countActive(host);
-      if (activeCount > 0 && force !== true) {
-        throw new Error(
-          'stopping this cloud host will permanently lose all active sessions',
-        );
-      }
-
+      // A-9：先 CAS STOPPING 再统计活动会话，关闭 stopImpact→stop 之间的 TOCTOU 窗口。
+      const previousStatus = host.status;
       const stopping = await CloudHost.findOneAndUpdate(
         { _id: id, userId, status: { $in: ACTIVE_STATUSES } },
         { $set: { status: 'STOPPING' } },
@@ -383,11 +402,25 @@ export class CloudHostService {
         throw new Error('control plane unavailable');
       }
 
+      const activeCount = await this.countActive(stopping as Doc);
+      if (activeCount > 0 && force !== true) {
+        // 未确认强制停止：回滚到停止前状态，保持可继续使用。
+        await CloudHost.updateOne(
+          { _id: id, userId, status: 'STOPPING' },
+          { $set: { status: previousStatus } },
+        );
+        throw new Error(
+          'stopping this cloud host will permanently lose all active sessions',
+        );
+      }
+
       await sessionService.endByController(String(host.controllerId), userId);
 
-      if (host.containerId) {
+      // A-1：使用 CAS 后的最新快照决定是否销毁；创建侧并发回写已由 CAS 串行化。
+      const containerId = (stopping as Doc).containerId;
+      if (containerId) {
         try {
-          await this.controllerClient.destroyContainer(String(host.containerId));
+          await this.controllerClient.destroyContainer(String(containerId));
         } catch {
           // 停止失败保持 STOPPING 可重试；会话已 ENDED 不回滚
           throw new Error('control plane unavailable');
@@ -410,6 +443,8 @@ export class CloudHostService {
         { new: true },
       ).lean();
       const latest = stopped ?? (await this.findOwnedHost(id, userId));
+      // A-3：终态 CAS 后再兜一次，回收 CAS 与 Session.create 之间漏网的晚到会话。
+      await sessionService.endByController(String(host.controllerId), userId);
       return this.mapCloudHost(latest, 0);
     });
   }
@@ -496,11 +531,23 @@ export class CloudHostService {
     return this.mapCloudHost(refreshed, await this.countActive(refreshed));
   }
 
-  /** 内部 terminal 回调：驱动 STOPPED/FAILED + 会话 ENDED + 撤销模型 Key（幂等）。 */
+  /** 内部 terminal 回调：驱动 STOPPED/FAILED + 会话 ENDED + 撤销模型 Key（幂等，per-host 串行）。 */
   async handleTerminal(id: string, input: TerminalCallbackInput): Promise<Doc | null> {
+    return this.hostMutex.runExclusive(`host:${id}`, () => this.handleTerminalLocked(id, input));
+  }
+
+  private async handleTerminalLocked(
+    id: string,
+    input: TerminalCallbackInput,
+  ): Promise<Doc | null> {
     const host = await this.findRawHost(id);
     if (!host) return null;
     if (host.status === 'STOPPED' || host.status === 'FAILED') {
+      // A-4：早退分支仍需幂等补做副作用收尾（回调重试可能命中早退）。
+      await sessionService.endByController(String(host.controllerId), String(host.userId));
+      await billingClient.revokeApiKeysByHost(id).catch((err) => {
+        console.warn('[cloud-host] revoke model key on terminal retry failed:', (err as Error).message);
+      });
       return this.mapCloudHost(host, 0);
     }
 
@@ -524,6 +571,8 @@ export class CloudHostService {
     await billingClient.revokeApiKeysByHost(id).catch((err) => {
       console.warn('[cloud-host] revoke model key on terminal failed:', (err as Error).message);
     });
+    // A-3：终态 CAS 后再兜一次，确保晚到创建的会话也被结束。
+    await sessionService.endByController(String(current.controllerId), String(current.userId));
     return this.mapCloudHost(current, 0);
   }
 
@@ -569,10 +618,31 @@ export class CloudHostService {
   }
 }
 
-/** 供 resolver 统一把 service 错误转为 GraphQLError（保留逐字文案）。 */
+/** 契约允许透传的错误文案（B19：未知异常统一 internal error，避免泄露 Mongo/驱动信息）。 */
+const CLOUD_HOST_PUBLIC_ERRORS = new Set([
+  'name is required',
+  'name is too long',
+  'too many cloud hosts',
+  'harness feature is disabled',
+  'at least one harness type is required',
+  'cloud host is not configured',
+  'control plane unavailable',
+  'billing service unavailable',
+  'Cloud host not found',
+  'cloud host is not running',
+  'stop the cloud host before deleting',
+  'stopping this cloud host will permanently lose all active sessions',
+  'session is ended',
+]);
+
+/** 供 resolver 统一把 service 错误转为 GraphQLError（白名单透传契约文案）。 */
 export function toCloudHostGraphQLError(err: unknown): never {
   if (err instanceof GraphQLError) throw err;
-  throw new GraphQLError(err instanceof Error ? err.message : String(err));
+  const message = err instanceof Error ? err.message : String(err);
+  if (CLOUD_HOST_PUBLIC_ERRORS.has(message) || message.startsWith('unsupported harness type:')) {
+    throw new GraphQLError(message);
+  }
+  throw new GraphQLError('internal error');
 }
 
 export const cloudHostService = new CloudHostService();

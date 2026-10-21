@@ -208,12 +208,14 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       host.id,
     );
 
-    // 软删除后 Controller.cloudHost 为 null
+    // 软删除后 Controller 保留留档，但 Controller.cloudHost 显式为 null
+    // （显式断言「控制器仍在列表」+「cloudHost 为 null」，不做「控制器缺失/cloudHost null」双形态兜底）
     const homeAfter = await gql(HOME, undefined, token);
     const offlined = homeAfter.data.homeOverview.controllers.find(
       (item: { id: string }) => item.id === host.controllerId,
     );
-    expect(offlined?.cloudHost ?? null).toBeNull();
+    expect(offlined).toBeTruthy();
+    expect(offlined!.cloudHost).toBeNull();
   });
 
   it('T-CH17: refuses to delete a non-terminal cloud host', async () => {
@@ -239,55 +241,57 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const hostId = new mongoose.Types.ObjectId();
       const controllerId = new mongoose.Types.ObjectId();
       const now = new Date();
-      await db.collection('cloudhosts').insertOne({
-        _id: hostId,
-        userId: new mongoose.Types.ObjectId(userId),
-        name: `active-${hostId.toString()}`,
-        harnessTypes: ['OPENCODE'],
-        status: 'RUNNING',
-        controllerId,
-        keyId: new mongoose.Types.ObjectId(),
-        workspaceId: new mongoose.Types.ObjectId(),
-        containerId: null,
-        defaultSessionId: null,
-        startedAt: now,
-        readyAt: now,
-        stoppedAt: null,
-        failureReason: null,
-        deletedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      await db.collection('sessions').insertOne({
-        userId: new mongoose.Types.ObjectId(userId),
-        controllerId,
-        controllerName: 'cloud',
-        acpServerType: 'opencode',
-        status: 'idling',
-        title: 'active',
-        createdAt: now,
-        updatedAt: now,
-      });
+      try {
+        await db.collection('cloudhosts').insertOne({
+          _id: hostId,
+          userId: new mongoose.Types.ObjectId(userId),
+          name: `active-${hostId.toString()}`,
+          harnessTypes: ['OPENCODE'],
+          status: 'RUNNING',
+          controllerId,
+          keyId: new mongoose.Types.ObjectId(),
+          workspaceId: new mongoose.Types.ObjectId(),
+          containerId: null,
+          defaultSessionId: null,
+          startedAt: now,
+          readyAt: now,
+          stoppedAt: null,
+          failureReason: null,
+          deletedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.collection('sessions').insertOne({
+          userId: new mongoose.Types.ObjectId(userId),
+          controllerId,
+          controllerName: 'cloud',
+          acpServerType: 'opencode',
+          status: 'idling',
+          title: 'active',
+          createdAt: now,
+          updatedAt: now,
+        });
 
-      const impact = await gql(STOP_IMPACT, { id: hostId.toString() }, token);
-      expect(impact.data.cloudHostStopImpact).toMatchObject({
-        activeSessionCount: 1,
-        sessionsWillBeLost: true,
-      });
+        const impact = await gql(STOP_IMPACT, { id: hostId.toString() }, token);
+        expect(impact.data.cloudHostStopImpact).toMatchObject({
+          activeSessionCount: 1,
+          sessionsWillBeLost: true,
+        });
 
-      const rejected = await gql(STOP, { id: hostId.toString(), force: false }, token);
-      expect(rejected.errors?.[0].message).toBe(
-        'stopping this cloud host will permanently lose all active sessions',
-      );
+        const rejected = await gql(STOP, { id: hostId.toString(), force: false }, token);
+        expect(rejected.errors?.[0].message).toBe(
+          'stopping this cloud host will permanently lose all active sessions',
+        );
 
-      const stopped = await gql(STOP, { id: hostId.toString(), force: true }, token);
-      expect(stopped.errors).toBeUndefined();
-      expect(stopped.data.stopCloudHost.status).toBe('STOPPED');
-      const session = await db.collection('sessions').findOne({ controllerId });
-      expect(session?.status).toBe('ended');
-
-      await db.collection('sessions').deleteMany({ controllerId });
-      await db.collection('cloudhosts').deleteOne({ _id: hostId });
+        const stopped = await gql(STOP, { id: hostId.toString(), force: true }, token);
+        expect(stopped.errors).toBeUndefined();
+        expect(stopped.data.stopCloudHost.status).toBe('STOPPED');
+        const session = await db.collection('sessions').findOne({ controllerId });
+        expect(session?.status).toBe('ended');
+      } finally {
+        await db.collection('sessions').deleteMany({ controllerId });
+        await db.collection('cloudhosts').deleteOne({ _id: hostId });
+      }
     },
   );
 
@@ -296,24 +300,27 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const { token, userId } = await signupWithId();
     const controllerId = new mongoose.Types.ObjectId();
     const now = new Date();
-    await db.collection('controllers').insertOne({
-      _id: controllerId,
-      userId: new mongoose.Types.ObjectId(userId),
-      name: 'local-host',
-      hostname: 'local-host',
-      type: 'local',
-      status: 'online',
-      keyId: new mongoose.Types.ObjectId(),
-      version: '2.5.0',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const controllers = await gql(CONTROLLERS, undefined, token);
-    const local = controllers.data.controllers.find(
-      (item: { id: string }) => item.id === controllerId.toString(),
-    );
-    expect(local).toMatchObject({ type: 'local', cloudHost: null });
-    await db.collection('controllers').deleteOne({ _id: controllerId });
+    try {
+      await db.collection('controllers').insertOne({
+        _id: controllerId,
+        userId: new mongoose.Types.ObjectId(userId),
+        name: 'local-host',
+        hostname: 'local-host',
+        type: 'local',
+        status: 'online',
+        keyId: new mongoose.Types.ObjectId(),
+        version: '2.5.0',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const controllers = await gql(CONTROLLERS, undefined, token);
+      const local = controllers.data.controllers.find(
+        (item: { id: string }) => item.id === controllerId.toString(),
+      );
+      expect(local).toMatchObject({ type: 'local', cloudHost: null });
+    } finally {
+      await db.collection('controllers').deleteOne({ _id: controllerId });
+    }
   });
 
   it('T-CH28: all entries require authentication', async () => {

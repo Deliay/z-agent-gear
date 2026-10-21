@@ -1,12 +1,12 @@
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useAuth } from '../stores/auth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import Sidebar from '../components/Sidebar';
 import { Button } from '../components/ui/button';
 import { HOME_OVERVIEW } from '../graphql/home';
-import type { HomeOverviewQuery } from '../graphql/types';
+import type { CloudHostStatus, HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
 
 function FullPageSpinner() {
@@ -22,6 +22,7 @@ export default function MainLayout() {
   const { user, loading } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {
@@ -32,6 +33,37 @@ export default function MainLayout() {
   } = useQuery<HomeOverviewQuery>(HOME_OVERVIEW, {
     pollInterval: 15000,
   });
+
+  // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
+  // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
+  const homeData = data?.homeOverview ?? null;
+
+  // D-2：云电脑就绪（STARTING→RUNNING）且服务端已建好默认会话时，自动进入该会话。
+  // 只认可观测到的状态迁移，首次加载已是 RUNNING 的旧主机不跳转；每台主机只导航一次。
+  const previousCloudHostStatus = useRef<Map<string, CloudHostStatus>>(new Map());
+  const navigatedCloudHosts = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const controller of homeData?.controllers ?? []) {
+      const cloudHost = controller.type === 'cloud' ? controller.cloudHost : null;
+      if (!cloudHost) continue;
+
+      const previousStatus = previousCloudHostStatus.current.get(cloudHost.id);
+      previousCloudHostStatus.current.set(cloudHost.id, cloudHost.status);
+
+      if (
+        previousStatus !== 'STARTING' ||
+        cloudHost.status !== 'RUNNING' ||
+        !cloudHost.defaultSessionId ||
+        cloudHost.deletedAt ||
+        navigatedCloudHosts.current.has(cloudHost.id)
+      ) {
+        continue;
+      }
+
+      navigatedCloudHosts.current.add(cloudHost.id);
+      navigate(`/sessions/${cloudHost.defaultSessionId}`);
+    }
+  }, [homeData, navigate]);
 
   if (loading) {
     return <FullPageSpinner />;
@@ -47,10 +79,6 @@ export default function MainLayout() {
       </div>
     );
   }
-
-  // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
-  // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
-  const homeData = data?.homeOverview ?? null;
 
   let layout: ReactNode;
 

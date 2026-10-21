@@ -34,7 +34,9 @@ export async function prepareHarness(
   options: PrepareHarnessOptions = {},
 ): Promise<HarnessPrepareResult> {
   const env = readHarnessEnv(options.env ?? process.env);
-  const opencodeVersion = await verifyOpencodeCli(options.runner);
+  // init 脚本 export OPENCODE_CLI_VERSION：agent-gear 侧做二次硬校验（C-5，缺省不启用）。
+  const expectedOpencodeVersion = (options.env ?? process.env).OPENCODE_CLI_VERSION;
+  const opencodeVersion = await verifyOpencodeCli(options.runner, expectedOpencodeVersion);
 
   const makeDir = options.makeDir ?? ((path: string) => mkdir(path, { recursive: true }).then(() => undefined));
   await makeDir(env.defaultWorkspace);

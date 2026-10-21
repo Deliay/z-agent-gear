@@ -22,6 +22,7 @@ import {
   type StartHarnessOptions,
 } from '../services/container-service.js';
 import type { HarnessSecrets } from '../services/secret-store.js';
+import { maxWorkerVersion, MIN_HARNESS_WORKER_VERSION } from '../services/worker-version.js';
 import {
   WorkloadPlanError,
   collectWorkloadDefinitions,
@@ -271,7 +272,8 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
-    agentGearMinVersion,
+    // C-4：请求值不得低于服务端常量——落库 max(常量, 请求值)，注册门禁按该值生效。
+    agentGearMinVersion: maxWorkerVersion(agentGearMinVersion, MIN_HARNESS_WORKER_VERSION),
     expiresAt,
     secrets,
   };
@@ -413,6 +415,7 @@ export function createInternalRouter(
           harnessTypes: harness.harnessTypes,
           controllerKeyId: harness.controllerKeyId,
           containerApiKeyId: harness.containerApiKeyId,
+          agentGearMinVersion: harness.agentGearMinVersion,
           userId: harness.userId,
           expiresAt: harness.expiresAt,
           secrets: harness.secrets,

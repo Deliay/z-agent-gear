@@ -488,7 +488,9 @@ export class ReconciliationService {
 
   /**
    * A16/B9 对账线：扫描 `scope=cloud_host,status=active` 的运行专用 Key，宿主不存在/已软删除/
-   * 非 `RUNNING` 或 Key 已过期时幂等撤销，并写入报告。账号 Key 不在扫描范围，绝不误伤。
+   * **非合法中间态**（`STOPPING/STOPPED/FAILED`）或 Key 已过期时幂等撤销，并写入报告。
+   * `STARTING` 属于创建窗口（Key 在 STARTING 期铸造、本期无重铸），必须放行——由网关实时校验
+   * 拒绝非 `RUNNING` 调用；账号 Key 不在扫描范围，绝不误伤。
    *
    * 网关鉴权已做实时失效（双保险）；本线兜底「停止/删除编排未显式 revoke」「TTL 自然退出」等遗漏。
    */
@@ -528,8 +530,9 @@ export class ReconciliationService {
       if (!cloudHostId) reason = 'missing_cloud_host';
       else if (!host) reason = 'cloud_host_missing';
       else if (host.deletedAt) reason = 'cloud_host_deleted';
-      else if (host.status !== 'RUNNING') reason = 'cloud_host_not_running';
-      else if (!key.expiresAt) reason = 'missing_expiry';
+      else if (host.status !== 'RUNNING' && host.status !== 'STARTING') {
+        reason = 'cloud_host_not_running';
+      } else if (!key.expiresAt) reason = 'missing_expiry';
       else if (expired) reason = 'expired';
       if (!reason) continue;
 

@@ -48,6 +48,24 @@ function owner() {
   };
 }
 
+/** 只读模型口径：cloudhosts 由 agent-api 写入，测试用原生集合插入。 */
+async function seedCloudHost(
+  userId: string,
+  options: { deletedAt?: Date | null } = {},
+): Promise<string> {
+  const _id = new mongoose.Types.ObjectId();
+  await mongoose.connection.db!.collection('cloudhosts').insertOne({
+    _id,
+    userId: new mongoose.Types.ObjectId(userId),
+    controllerId: new mongoose.Types.ObjectId(),
+    status: 'RUNNING',
+    deletedAt: options.deletedAt ?? null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return _id.toString();
+}
+
 describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => {
   beforeAll(async () => {
     await connectTestDb();
@@ -92,10 +110,11 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
   });
 
   it('T-BK2: 云电脑 Key 接受 scope/cloudHostId/expiresAt 并落库', async () => {
-    const cloudHostId = new mongoose.Types.ObjectId().toString();
+    const base = owner();
+    const cloudHostId = await seedCloudHost(base.ownerId);
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     const res = await post('/api-keys', {
-      ...owner(),
+      ...base,
       scope: 'cloud_host',
       cloudHostId,
       expiresAt: expiresAt.toISOString(),
@@ -152,6 +171,38 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
       ).status,
     ).toBe(400);
     expect((await post('/api-keys', { ...base, scope: 'root' })).status).toBe(400);
+  });
+
+  it('B-5: 云电脑 Key 铸造校验 cloudHostId↔ownerId 绑定（不存在/属主不符/已软删 → 404）', async () => {
+    const base = owner();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const body = (cloudHostId: string) => ({
+      ...base,
+      scope: 'cloud_host',
+      cloudHostId,
+      expiresAt,
+    });
+
+    // 宿主不存在
+    const missing = await post('/api-keys', body(new mongoose.Types.ObjectId().toString()));
+    expect(missing.status).toBe(404);
+    expect((await missing.json()) as { error: string }).toEqual({ error: 'CLOUD_HOST_NOT_FOUND' });
+
+    // 宿主属主与 ownerId 不一致
+    const otherHostId = await seedCloudHost(new mongoose.Types.ObjectId().toString());
+    const mismatch = await post('/api-keys', body(otherHostId));
+    expect(mismatch.status).toBe(404);
+    expect((await mismatch.json()) as { error: string }).toEqual({ error: 'CLOUD_HOST_NOT_FOUND' });
+
+    // 宿主已软删除
+    const deletedHostId = await seedCloudHost(base.ownerId, { deletedAt: new Date() });
+    const deleted = await post('/api-keys', body(deletedHostId));
+    expect(deleted.status).toBe(404);
+
+    // 绑定一致才允许铸造
+    const ownHostId = await seedCloudHost(base.ownerId);
+    const ok = await post('/api-keys', body(ownHostId));
+    expect(ok.status).toBe(201);
   });
 
   it('T-BK6: POST /api-keys/:id/revoke 幂等，未知 id 404，不要求 owner', async () => {

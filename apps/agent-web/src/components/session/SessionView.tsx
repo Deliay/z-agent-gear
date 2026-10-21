@@ -415,10 +415,17 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     (c) => c.id === sessionData?.session?.controllerId,
   );
   const controllerOnline = sessionController?.status === 'online';
-  // 云电脑 STOPPED/FAILED/deletedAt：会话只读回看（服务端同样拒绝 resume/command）
+  // D-1：只读判定不依赖 controller 列表命中（软删除后列表会过滤该 Controller）。
+  // 优先使用 GET_SESSION 返回的 controllerType/cloudHost（cloudHost 含软删除留档）。
+  const isCloudSession =
+    sessionData?.session?.controllerType === 'cloud' || sessionController?.type === 'cloud';
+  const sessionCloudHost = sessionData?.session?.cloudHost;
+  const cloudHost = isCloudSession
+    ? sessionCloudHost ?? sessionController?.cloudHost ?? null
+    : null;
+  // 云电脑 STOPPED/FAILED/deletedAt/缺失：会话只读回看（服务端同样拒绝 resume/command）
   const readOnlyCloudHost =
-    sessionController?.type === 'cloud' &&
-    (sessionController.cloudHost == null || isReadOnlyCloudHost(sessionController.cloudHost));
+    isCloudSession && (cloudHost == null || isReadOnlyCloudHost(cloudHost));
 
   if (sessionLoading) {
     return (

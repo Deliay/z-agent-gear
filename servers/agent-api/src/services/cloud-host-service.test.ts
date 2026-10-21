@@ -93,7 +93,7 @@ vi.mock('./controller-workspace.js', () => ({
   controllerWorkspaceService: { ensureCloudHostWorkspace: vi.fn() },
 }));
 
-import { CloudHostService } from './cloud-host-service.js';
+import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
@@ -175,7 +175,10 @@ function setupCreateSuccess() {
     id: 'container-1',
     status: 'creating',
   } as never);
-  vi.mocked(CloudHost.findByIdAndUpdate).mockReturnValue(
+  vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+    chain(hostDoc({ containerId: 'container-1' })) as never,
+  );
+  vi.mocked(CloudHost.findById).mockReturnValue(
     chain(hostDoc({ containerId: 'container-1' })) as never,
   );
 }
@@ -184,6 +187,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.config.harnessEnabled = true;
   vi.mocked(CloudHost.findByIdAndUpdate).mockReset();
+  vi.mocked(CloudHost.findOneAndUpdate).mockReset();
+  vi.mocked(CloudHost.findById).mockReset();
   vi.mocked(billingClient.revokeApiKeysByHost).mockResolvedValue(undefined as never);
   vi.mocked(evictKeyById).mockResolvedValue(undefined as never);
   vi.mocked(ControllerWorkspace.deleteOne).mockResolvedValue(undefined as never);
@@ -343,6 +348,25 @@ describe('CloudHostService', () => {
       expect(CloudHost.deleteOne).toHaveBeenCalled();
     });
 
+    it('A-1 reclaims the started container when a concurrent stop wins the CAS', async () => {
+      setupCreateSuccess();
+      // stop 抢先 CAS 成功；创建侧回写未命中。
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(null) as never);
+      vi.mocked(CloudHost.findById).mockReturnValue(
+        chain(hostDoc({ status: 'STOPPED', containerId: null })) as never,
+      );
+
+      const result = await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+      });
+
+      expect(cloudControllerClient.destroyContainer).toHaveBeenCalledWith('container-1');
+      expect(billingClient.revokeApiKeysByHost).toHaveBeenCalled();
+      expect(result.status).toBe('STOPPED');
+      expect(result.containerId).toBeNull();
+    });
+
     it('serializes concurrent creates so only one host can start', async () => {
       setupCreateSuccess();
       vi.mocked(CloudHost.countDocuments)
@@ -408,6 +432,9 @@ describe('CloudHostService', () => {
   describe('stop', () => {
     it('rejects when active sessions exist and force is false', async () => {
       vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'RUNNING' })) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValueOnce(
+        chain(hostDoc({ status: 'STOPPING' })) as never,
+      );
       vi.mocked(Session.countDocuments).mockResolvedValue(2 as never);
 
       await expect(service.stop(HOST_ID, 'user-1', false)).rejects.toThrow(
@@ -433,6 +460,43 @@ describe('CloudHostService', () => {
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
       expect(result.status).toBe('STOPPED');
       expect(result.containerId).toBeNull();
+    });
+
+    it('A-1 destroys the containerId observed after the STOPPING CAS', async () => {
+      // 停止前快照 containerId=null；CAS 后并发创建回写 containerId → 必须按最新快照销毁。
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'STARTING', containerId: null })) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(CloudHost.findOneAndUpdate)
+        .mockReturnValueOnce(
+          chain(hostDoc({ status: 'STOPPING', containerId: 'container-late' })) as never,
+        )
+        .mockReturnValueOnce(chain(hostDoc({ status: 'STOPPED', containerId: null })) as never);
+      vi.mocked(sessionService.endByController).mockResolvedValue(0 as never);
+      vi.mocked(cloudControllerClient.destroyContainer).mockResolvedValue(undefined as never);
+
+      const result = await service.stop(HOST_ID, 'user-1', false);
+
+      expect(cloudControllerClient.destroyContainer).toHaveBeenCalledWith('container-late');
+      expect(result.status).toBe('STOPPED');
+    });
+
+    it('A-9 reverts to the previous status when new active sessions appear before stop', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'RUNNING' })) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValueOnce(
+        chain(hostDoc({ status: 'STOPPING' })) as never,
+      );
+
+      await expect(service.stop(HOST_ID, 'user-1', false)).rejects.toThrow(
+        'stopping this cloud host will permanently lose all active sessions',
+      );
+      expect(CloudHost.updateOne).toHaveBeenCalledWith(
+        { _id: HOST_ID, userId: 'user-1', status: 'STOPPING' },
+        { $set: { status: 'RUNNING' } },
+      );
+      expect(cloudControllerClient.destroyContainer).not.toHaveBeenCalled();
     });
 
     it('keeps STOPPING when control plane is unavailable', async () => {
@@ -596,15 +660,32 @@ describe('CloudHostService', () => {
       expect(result).toMatchObject({ status: 'FAILED', failureReason: 'job failed' });
     });
 
-    it('repeated terminal callback is idempotent', async () => {
+    it('repeated terminal callback is idempotent and replays side effects', async () => {
       vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'STOPPED' })) as never);
 
       await expect(
         service.handleTerminal(HOST_ID, { status: 'stopped' }),
       ).resolves.toMatchObject({ status: 'STOPPED' });
       expect(CloudHost.findOneAndUpdate).not.toHaveBeenCalled();
-      expect(sessionService.endByController).not.toHaveBeenCalled();
-      expect(billingClient.revokeApiKeysByHost).not.toHaveBeenCalled();
+      expect(sessionService.endByController).toHaveBeenCalledWith(CONTROLLER_ID, 'user-1');
+      expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
+    });
+  });
+
+  describe('graphql error mapping', () => {
+    it('A-6 passes whitelisted contract messages through', () => {
+      expect(() => toCloudHostGraphQLError(new Error('too many cloud hosts'))).toThrow(
+        'too many cloud hosts',
+      );
+      expect(() =>
+        toCloudHostGraphQLError(new Error('unsupported harness type: CODEX')),
+      ).toThrow('unsupported harness type: CODEX');
+    });
+
+    it('A-6 hides unexpected internal errors', () => {
+      expect(() =>
+        toCloudHostGraphQLError(new Error('MongoServerError: duplicate key')),
+      ).toThrow('internal error');
     });
   });
 });

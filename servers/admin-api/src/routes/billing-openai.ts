@@ -179,20 +179,51 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     }
     if (billing.scope === 'cloud_host') {
       // A4 口径：cloud_host Key = 系统启用模型 ∪ 用户启用模型（含自定义、无定价）。
+      // B-7：列表必须与 `/chat/completions` 解析口径一致——供应商不存在/禁用不列出；
+      // global 模型还需按调用口径过滤未定价/定价不完整（否则列出后调用 400）；user 自定义模型可无定价。
       const [globalModels, userModels] = await Promise.all([
         Model.find({ scope: 'global', isEnabled: true }).lean(),
         Model.find({ scope: 'user', isEnabled: true })
           .sort({ sortOrder: 1, createdAt: 1 })
           .lean(),
       ]);
+      const providerIds = [
+        ...new Set(
+          [...globalModels, ...userModels].map((model) => String(model.providerId)),
+        ),
+      ];
+      const providers = providerIds.length
+        ? await Provider.find({ _id: { $in: providerIds } })
+            .select({ isEnabled: 1 })
+            .lean<Array<{ _id: unknown; isEnabled?: boolean }>>()
+        : [];
+      const enabledProviderIds = new Set(
+        providers
+          .filter((provider) => provider.isEnabled !== false)
+          .map((provider) => String(provider._id)),
+      );
+      const selectable = (model: {
+        scope?: string;
+        providerId: unknown;
+        pricing?: unknown;
+      }): boolean => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
+        if (model.scope === 'global') {
+          const pricing = pricingFromModel(model.pricing);
+          return !!pricing && (!pricing.isBillable || isPricingComplete(pricing));
+        }
+        // 用户自定义模型（scope=user）：不要求定价，网关代转发且不计费。
+        return true;
+      };
       const seen = new Set<string>();
-      const data = [...globalModels, ...userModels]
-        .filter((model) => {
-          if (seen.has(model.name)) return false;
-          seen.add(model.name);
-          return true;
-        })
-        .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      const data: Array<ReturnType<typeof toModelEntry>> = [];
+      for (const model of [...globalModels, ...userModels]) {
+        // 同名去重（global 优先）：与调用解析顺序一致；不可用的 global 也不回退到同名 user 模型。
+        if (seen.has(model.name)) continue;
+        seen.add(model.name);
+        if (!selectable(model)) continue;
+        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      }
       res.json({ object: 'list', data });
       return;
     }

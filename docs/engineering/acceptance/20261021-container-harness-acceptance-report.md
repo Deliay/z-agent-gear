@@ -24,7 +24,7 @@ type: Permanent
 
 | 特性 | 内容 | 主要落点 |
 |---|---|---|
-| 启动任务扩展 harness | `purpose=harness` 全链路；预置工作负载「OpenCode（Harness）」（migration 005：固定 `@opencode/cli@2.1.1` + `opencode --version` 硬校验 + `opencode.jsonc` 注入）；`workloadPlan` 展开；`HARNESS_ENABLED` 开关（Aspire dev 实测 `true`，publish 默认 `false`） | `servers/admin-api/src/migrations/005-preset-harness-opencode.ts`、`servers/cloud-controller`、`packages/agent-controller/src/harness/*` |
+| 启动任务扩展 harness | `purpose=harness` 全链路；预置工作负载「OpenCode（Harness）」（migration 006：固定 `@opencode/cli@2.1.1` + `opencode --version` 硬校验 + `opencode.jsonc` 注入）；`workloadPlan` 展开；`HARNESS_ENABLED` 开关（Aspire dev 实测 `true`，publish 默认 `false`） | `servers/admin-api/src/migrations/006-preset-harness-opencode.ts`、`servers/cloud-controller`、`packages/agent-controller/src/harness/*` |
 | 前台云电脑域 | `cloudHostCapabilities/myCloudHosts/cloudHostStopImpact` + `createCloudHost/stopCloudHost/deleteCloudHost`；创建编排（per-user 锁→1 实例校验→ControllerKey/Controller/Workspace 预创建→CLOUD_HOST 模型 Key→容器启动，逆序回滚）；停止即销毁（会话批量 ENDED→销毁容器→撤销 Key→STOPPED 终态）；软删除留档 | `servers/agent-api/src/{graphql/resolvers/cloud-host.ts,services/cloud-host-service.ts,routes/internal-cloud-host.ts,models/cloud-*.ts}` |
 | 云电脑=「主机」同构 | `Controller(type=cloud)` 预创建（用户命名不被 register upsert 覆盖）；agent-gear 2.5.0 双连接（`/worker` + controller-api）；`initializing` 就绪门禁；默认会话规则（恰好 1 工具自动创建） | `packages/agent-controller/src/{cloud-host/supervisor.ts,commands/harness.ts}`、`servers/controller-api` |
 | 运行专用模型计费 | `BillingApiKey.scope=CLOUD_HOST`（cloudHostId+expiresAt）；网关 `billingKeyAuth` 实时失效校验；自定义模型代转发不计费（`billable=false,cost=0`）；系统模型计费入用户账户；撤销三线+对账兜底 | `servers/admin-api/src/{middleware/billing-key-auth.ts,routes/billing-openai.ts,routes/internal-billing.ts,services/billing/*}` |
@@ -52,7 +52,7 @@ type: Permanent
 | apps/agent-web | ✅ `tsc -b` 0 | ✅ 0 error | ✅ **501 passed**（57 文件） | 含三个云电脑弹窗/SessionView.cloudHost/Sidebar 新增用例 |
 | apps/admin-web | ✅ `tsc -b` 0 | ✅ 0 error | ✅ **220 passed**（29 文件） | 回归面（本 diff 零改动） |
 | tests/api（Aspire `--isolated` 全新栈实跑） | — | — | ✅ **37 passed / 1 skipped（38）**，5/5 文件 | 云电脑五套件全绿：cloud-host / cloud-host-callback / session-readonly / admin-api cloud-host-billing / cloud-controller internal-api（含密钥不回显、生命周期状态门控、幂等） |
-| 迁移 005-preset-harness-opencode | — | — | ✅ 随 Aspire 启动执行（单测 T-MIG5-1~4 含 `bash -n` 语法与脚本顺序锚定） | 与 `005-model-name-unique-global` 并存（编号重复见 🟡 B-6） |
+| 迁移 006-preset-harness-opencode | — | — | ✅ 随 Aspire 启动执行（单测 T-MIG5-1~4 含 `bash -n` 语法与脚本顺序锚定） | 原编号 005 与 `005-model-name-unique-global` 重复，已改名 006（见 🟡 B-6） |
 
 ### 2.1 执行环境备注
 
@@ -176,7 +176,7 @@ type: Permanent
 |---|---|---|---|
 | C-3 | `KEY_ALREADY_ONLINE` 后 `socket.disconnect()` 停止自动重连，supervisor 无兜底 → 主机永久离线 | `socketio-client.ts:441-445` | 云电脑模式退避重连或 supervisor 看门狗重建 |
 | C-4 | `agentGearMinVersion` 仅格式校验后被静默忽略（门禁实为常量） | `internal-api.ts:220-224,409-420` | 落库生效 `max(常量,请求值)` 或契约标注「仅声明」 |
-| C-5 | OpenCode「固定版本可重复执行」只保证首次安装，版本一致性无硬校验 | `005-preset-harness-opencode.ts:22-27`、`opencode-cli.ts:54-79` | 安装前比对版本、不一致强制重装 |
+| C-5 | OpenCode「固定版本可重复执行」只保证首次安装，版本一致性无硬校验 | `006-preset-harness-opencode.ts:22-27`、`opencode-cli.ts:54-79` | 安装前比对版本、不一致强制重装 |
 | C-6 | `ZAG_HOST_KEY` 进 Job env 且未设 `automountServiceAccountToken:false`（纵深防御） | `k8s-job-manager.ts:124-155` | Job manifest 加 `automountServiceAccountToken:false`；中期移入 `workload:run.env` |
 | C-7 | `opencode.jsonc` 非原子写、已存在目录权限不收紧 | `opencode-config.ts:111,150-153` | 临时文件+rename 原子替换；写前 chmod 0700 |
 

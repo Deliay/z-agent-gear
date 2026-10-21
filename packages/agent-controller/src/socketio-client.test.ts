@@ -1,0 +1,129 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const fake = vi.hoisted(() => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const socket = {
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      handlers.set(event, handler);
+      return socket;
+    }),
+    emit: vi.fn(),
+    disconnect: vi.fn(),
+    connect: vi.fn(),
+    close: vi.fn(),
+  };
+  return { handlers, socket };
+});
+
+vi.mock('socket.io-client', () => ({
+  io: vi.fn(() => fake.socket),
+}));
+
+import { cloudHostReconnectDelay, connectToServer } from './socketio-client.js';
+
+function errorHandler(): (payload: { code: string; message: string }) => void {
+  const handler = fake.handlers.get('error');
+  if (!handler) throw new Error('error handler not registered');
+  return handler as (payload: { code: string; message: string }) => void;
+}
+
+function shutdownHandler(): (payload: { reason: string }) => void {
+  const handler = fake.handlers.get('shutdown');
+  if (!handler) throw new Error('shutdown handler not registered');
+  return handler as (payload: { reason: string }) => void;
+}
+
+function setup(withShutdown = true) {
+  const onShutdown = vi.fn();
+  connectToServer('http://localhost:4001', 'controller-key', {
+    serverName: 'test-controller',
+    handshakeToken: 'controller-key',
+    skipLocalMcpStart: true,
+    handleWorkload: false,
+    persistConfig: false,
+    ...(withShutdown ? { onShutdown } : {}),
+  });
+  return { onShutdown };
+}
+
+describe('cloud-host reconnect backoff (C-3)', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.on.mockClear();
+    fake.socket.emit.mockClear();
+    fake.socket.disconnect.mockClear();
+    fake.socket.connect.mockClear();
+    fake.socket.close.mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('backs off exponentially from 1s and caps at 30s', () => {
+    expect(cloudHostReconnectDelay(0)).toBe(1000);
+    expect(cloudHostReconnectDelay(1)).toBe(2000);
+    expect(cloudHostReconnectDelay(2)).toBe(4000);
+    expect(cloudHostReconnectDelay(4)).toBe(16000);
+    expect(cloudHostReconnectDelay(5)).toBe(30000);
+    expect(cloudHostReconnectDelay(10)).toBe(30000);
+  });
+
+  it('KEY_ALREADY_ONLINE reconnects in cloud-host mode after 1s then 2s', () => {
+    const { onShutdown } = setup(true);
+    const handler = errorHandler();
+
+    handler({ code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
+
+    expect(fake.socket.disconnect).toHaveBeenCalledTimes(1);
+    expect(onShutdown).not.toHaveBeenCalled();
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(999);
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(1);
+
+    // 再次冲突：退避翻倍到 2s
+    handler({ code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
+    vi.advanceTimersByTime(1999);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reconnect after a normal shutdown (timer is cleared)', () => {
+    const { onShutdown } = setup(true);
+    errorHandler()({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });
+
+    shutdownHandler()({ reason: 'server requested shutdown' });
+
+    expect(onShutdown).toHaveBeenCalledWith({ reason: 'server requested shutdown' });
+    vi.advanceTimersByTime(60_000);
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy behaviour outside cloud-host mode (no manual reconnect)', () => {
+    setup(false);
+    errorHandler()({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });
+
+    expect(fake.socket.disconnect).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_000);
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+  });
+
+  it('forwards error paths with failure-prefixed reasons for exit-code classification', () => {
+    const { onShutdown } = setup(true);
+
+    errorHandler()({ code: 'VERSION_MISMATCH', message: 'too old' });
+    expect(onShutdown).toHaveBeenCalledWith({ reason: 'version_mismatch: too old' });
+
+    const second = setup(true);
+    errorHandler()({ code: 'REGISTER_FAILED', message: 'boom' });
+    expect(second.onShutdown).toHaveBeenCalledWith({ reason: 'error: REGISTER_FAILED' });
+  });
+});

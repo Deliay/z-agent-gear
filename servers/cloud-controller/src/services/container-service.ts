@@ -137,6 +137,8 @@ export interface StartHarnessOptions {
   controllerKeyId?: string | null;
   /** 运行专用模型 Key ID。 */
   containerApiKeyId?: string | null;
+  /** 云电脑最低 agent-gear 版本（已按 max(常量, 请求值) 收敛）。 */
+  agentGearMinVersion?: string | null;
   /** 关联前台用户 ID。 */
   userId?: string | null;
   /** 容器 TTL 到期时间（harness；换算 Job activeDeadlineSeconds）。 */
@@ -321,6 +323,7 @@ export class ContainerService {
       harnessTypes: options.harnessTypes ?? [],
       controllerKeyId: options.controllerKeyId ?? null,
       containerApiKeyId: options.containerApiKeyId ?? null,
+      agentGearMinVersion: options.agentGearMinVersion ?? null,
       expiresAt: options.expiresAt ?? null,
       status: 'creating',
       workloadIds: effectiveWorkloadIds,

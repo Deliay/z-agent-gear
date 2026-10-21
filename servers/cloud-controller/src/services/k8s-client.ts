@@ -42,6 +42,11 @@ export interface K8sJobManifest {
          * （FailedCreatePodSandBox / permission denied）。
          */
         hostUsers?: boolean;
+        /**
+         * 纵深防御：worker 不需要 K8s API 凭据，禁止自动挂载 ServiceAccount token
+         * （C-6；`ZAG_HOST_KEY` 已注入 env，Pod 内不应再持有集群凭据）。
+         */
+        automountServiceAccountToken?: boolean;
         containers: Array<{
           name: string;
           image: string;

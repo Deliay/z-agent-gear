@@ -6,6 +6,7 @@ import { BillingInvoice } from '../models/billing-invoice.js';
 import { BillingLedger } from '../models/billing-ledger.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
+import { CloudHost } from '../models/cloud-host.js';
 import { accountService } from '../services/billing/account-service.js';
 import { apiKeyService, ApiKeyNotFoundError } from '../services/billing/api-key-service.js';
 import {
@@ -233,6 +234,17 @@ export function createInternalBillingRouter(): Router {
       hostId = cloudHostId;
     }
     try {
+      // B-5：cloud_host Key 必须绑定到 ownerId 本人且未软删除的云电脑，避免内部接口被用来
+      // 为任意宿主铸造运行 Key（跨用户越权）。宿主缺失/属主不符/已删除统一 404，不泄露存在性。
+      if (hostId) {
+        const host = await CloudHost.findById(hostId)
+          .select({ userId: 1, deletedAt: 1 })
+          .lean<{ userId?: unknown; deletedAt?: Date | null } | null>();
+        if (!host || host.deletedAt || !host.userId || String(host.userId) !== ownerId) {
+          res.status(404).json({ error: 'CLOUD_HOST_NOT_FOUND' });
+          return;
+        }
+      }
       const account = await accountService.getOrCreate(ownerType, ownerId);
       const created =
         scope === 'cloud_host'

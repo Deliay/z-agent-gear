@@ -154,14 +154,14 @@ async function seedCloudHostKey(
 /** 用户自定义模型（scope=user，无定价）。每次使用独立 provider 避免 (providerId,name) 唯一冲突。 */
 async function seedCustomModel(
   name: string,
-  options: { isEnabled?: boolean; sortOrder?: number } = {},
+  options: { isEnabled?: boolean; sortOrder?: number; providerEnabled?: boolean } = {},
 ): Promise<void> {
   const provider = await Provider.create({
     name: `p-user-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     type: 'OpenAI',
     endpoint: upstreamUrl,
     encryptedCredential: encrypt('sk-test'),
-    isEnabled: true,
+    isEnabled: options.providerEnabled ?? true,
     scope: 'user',
   });
   await Model.create({
@@ -175,21 +175,56 @@ async function seedCustomModel(
   });
 }
 
-/** 全局模型（可禁用），复用 beforeEach 已建的全局 provider。 */
-async function seedGlobalModel(name: string, options: { isEnabled?: boolean } = {}): Promise<void> {
-  const provider = await Provider.findOne({ scope: 'global' });
+/** 全局模型（可禁用/可指定供应商状态与定价），默认复用 beforeEach 已建的全局 provider。 */
+async function seedGlobalModel(
+  name: string,
+  options: {
+    isEnabled?: boolean;
+    providerEnabled?: boolean;
+    pricing?: 'complete' | 'missing' | 'incomplete' | 'free';
+  } = {},
+): Promise<void> {
+  const provider =
+    options.providerEnabled === undefined
+      ? (await Provider.findOne({ scope: 'global' }))!
+      : await Provider.create({
+          name: `p-global-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+          type: 'OpenAI',
+          endpoint: upstreamUrl,
+          encryptedCredential: encrypt('sk-test'),
+          isEnabled: options.providerEnabled,
+          scope: 'global',
+        });
+  const pricing =
+    options.pricing === 'missing'
+      ? null
+      : options.pricing === 'incomplete'
+        ? {
+            inputPerMillion: 0,
+            cachedInputPerMillion: 0,
+            outputPerMillion: 0,
+            isBillable: true,
+          }
+        : options.pricing === 'free'
+          ? {
+              inputPerMillion: 0,
+              cachedInputPerMillion: 0,
+              outputPerMillion: 0,
+              isBillable: false,
+            }
+          : {
+              inputPerMillion: 100,
+              cachedInputPerMillion: 0,
+              outputPerMillion: 100,
+              isBillable: true,
+            };
   await Model.create({
-    providerId: provider!._id,
+    providerId: provider._id,
     name,
     isCustom: false,
     isEnabled: options.isEnabled ?? true,
     scope: 'global',
-    pricing: {
-      inputPerMillion: 100,
-      cachedInputPerMillion: 0,
-      outputPerMillion: 100,
-      isBillable: true,
-    },
+    pricing,
   });
 }
 
@@ -352,6 +387,30 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     expect(ids).not.toContain('disabled-user');
     // 同名去重（global 优先）
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('B-7: 云电脑 /v1/models 与调用口径一致 — 不列禁用供应商/未定价/定价不完整 global，自定义可无定价', async () => {
+    const { secret } = await seedCloudHostKey();
+    await seedCustomModel('custom-unpriced');
+    await seedCustomModel('custom-disabled-provider', { providerEnabled: false });
+    await seedGlobalModel('global-disabled-provider', { providerEnabled: false });
+    await seedGlobalModel('global-unpriced', { pricing: 'missing' });
+    await seedGlobalModel('global-incomplete', { pricing: 'incomplete' });
+    await seedGlobalModel('global-free', { pricing: 'free' });
+
+    const res = await listModels(secret);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((item) => item.id);
+
+    // 调用可成功的模型才列出（避免列出后 /chat/completions 400/404）
+    expect(ids).toContain('test-model');
+    expect(ids).toContain('custom-unpriced');
+    expect(ids).toContain('global-free');
+    expect(ids).not.toContain('custom-disabled-provider');
+    expect(ids).not.toContain('global-disabled-provider');
+    expect(ids).not.toContain('global-unpriced');
+    expect(ids).not.toContain('global-incomplete');
   });
 
   it('T-BK10: 账号 /v1/models 回归 — 仅返回定价完整的 global 模型', async () => {

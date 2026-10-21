@@ -102,7 +102,7 @@ graph TD
     CA -->|upsert Controller type=cloud| M
     W -->|OpenAI 兼容 /v1<br/>zag_sk_ 运行专用 Key| BG[计费网关 admin-api]
     BG --> M
-    AA -.启动时.-> MIG[migration runner<br/>005-preset-harness-opencode]
+    AA -.启动时.-> MIG[migration runner<br/>006-preset-harness-opencode]
 ```
 
 关键边界：
@@ -315,7 +315,7 @@ type BillingApiKey {
 #### 3.2.2 cloud-controller → admin-api（撤销，幂等三线）
 
 - `POST /internal/billing/api-keys/revoke-by-host`（按 `cloudHostId`）。
-- 触发线 1：容器终态/`destroy()` 完成；线 2：`container.destroyed` 计费事件消费兜底；线 3：admin-api 定时对账（「云电脑非 RUNNING 但 Key 仍 active」）。
+- 触发线 1：容器终态/`destroy()` 完成；线 2：`container.destroyed` 计费事件消费兜底；线 3：admin-api 定时对账（「云电脑处于 `STOPPING`/`STOPPED`/`FAILED` 等非合法态或 Key 已过期/缺 expiry 但 Key 仍 active」）。**`STARTING` 窗口 Key 必须存活**（Key 在 STARTING 期铸造、本期无重铸），由网关实时校验拒绝非 `RUNNING` 调用。
 
 #### 3.2.3 Worker ↔ cloud-controller（Socket.IO `/worker` 扩展）
 
@@ -401,7 +401,7 @@ type BillingApiKey {
 
 #### 集合: `admin_migrations`（新增批次）
 
-- `005-preset-harness-opencode`：预置工作负载「OpenCode（Harness）」（presetKey `harness-opencode`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[]`、仅 init 脚本）。二期新增 harness 时追加预置项，展开机制不变。
+- `006-preset-harness-opencode`：预置工作负载「OpenCode（Harness）」（presetKey `harness-opencode`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[]`、仅 init 脚本）。二期新增 harness 时追加预置项，展开机制不变。
 
 ### 4.2 缓存设计
 
@@ -671,7 +671,7 @@ servers/admin-api/src/
 ├── routes/internal-billing.ts           # 扩展：scope 铸造 + revoke + revoke-by-host
 ├── services/billing/api-key-service.ts  # 扩展：云电脑作用域 Key
 ├── routes/billing-openai.ts             # 扩展：分流（自定义不记账）
-└── migrations/005-preset-harness-opencode.ts  # 新增（init-only，多预设展开）
+└── migrations/006-preset-harness-opencode.ts  # 新增（init-only，多预设展开）
 
 servers/cloud-controller/src/
 ├── routes/internal-api.ts               # 放开 purpose、hostId/harnessTypes、secrets

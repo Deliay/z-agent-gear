@@ -79,6 +79,36 @@ describe('agent-api billing resolvers 错误映射（P2/C2）', () => {
     await expectCode(billingResolvers.Query.myBillingInvoices(null, {}, context()), 'INVALID_ARGUMENT');
   });
 
+  it('B-3: myBillingApiKeys 过滤 scope=cloud_host 运行 Key（费用中心只展示 account Key）', async () => {
+    client.listApiKeys.mockResolvedValue([
+      {
+        id: 'acc-key',
+        name: 'account',
+        keyPrefix: 'zag_sk_accountaa',
+        status: 'active',
+        scope: 'account',
+        cloudHostId: null,
+        expiresAt: null,
+        lastUsedAt: null,
+        createdAt: '2026-10-20T00:00:00.000Z',
+      },
+      {
+        id: 'host-key',
+        name: 'host',
+        keyPrefix: 'zag_sk_hostaaaaa',
+        status: 'active',
+        scope: 'cloud_host',
+        cloudHostId: 'host-1',
+        expiresAt: '2026-10-21T00:00:00.000Z',
+        lastUsedAt: null,
+        createdAt: '2026-10-20T00:00:00.000Z',
+      },
+    ]);
+
+    const keys = await billingResolvers.Query.myBillingApiKeys(null, {}, context());
+    expect(keys.map((key) => key.id)).toEqual(['acc-key']);
+  });
+
   it('未认证不受影响（UNAUTHENTICATED）', async () => {
     await expectCode(
       billingResolvers.Query.myBillingApiKeys(null, {}, { currentUser: null } as AuthContext),

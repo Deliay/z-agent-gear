@@ -56,6 +56,24 @@ describe('verifyOpencodeCli (T-AG8)', () => {
     expect(message).toContain('ENOENT');
   });
 
+  it('C-5: validates the expected pinned version (tolerates v prefix and command output prefix)', async () => {
+    const runner = vi.fn<CommandRunner>(async () => ({ stdout: 'v2.1.1\n', stderr: '' }));
+    await expect(verifyOpencodeCli(runner, '2.1.1')).resolves.toBe('2.1.1');
+
+    const prefixed = vi.fn<CommandRunner>(async () => ({ stdout: 'opencode 2.1.1\n', stderr: '' }));
+    await expect(verifyOpencodeCli(prefixed, '2.1.1')).resolves.toBe('opencode 2.1.1');
+  });
+
+  it('C-5: throws immediately on a pinned version mismatch', async () => {
+    const runner = vi.fn<CommandRunner>(async () => ({ stdout: '2.0.0\n', stderr: '' }));
+
+    await expect(verifyOpencodeCli(runner, '2.1.1')).rejects.toThrow(
+      /version mismatch: expected 2\.1\.1, got 2\.0\.0/,
+    );
+    // 不匹配即失败，不再退回 `-v`
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
   it('reads the version from stderr when stdout is empty', () => {
     expect(extractVersion('', 'opencode 1.0.0\n')).toBe('opencode 1.0.0');
     expect(extractVersion('\n\n3.2.1\n')).toBe('3.2.1');
