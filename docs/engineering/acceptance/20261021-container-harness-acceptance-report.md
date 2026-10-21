@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review 三轮：首轮 2 × 🔴 + 7 × 🟠 + 27 × 🟡、二轮 1 × 🔴 + 5 × 🟠 + 17 × 🟡 均已由三轮返工修复——登记 Session 类型 resolver（R2-1）、真实 GraphQL/tests/api/E2E 软删只读锚点、D-6 列表语义对齐、E2E testid、C-1 $set/mustFailure 断言、ready 原子落库（R2-5）、C-3 退避按 registered 重置（R2-6）及 R2-7~R2-23 全部收口；三轮回归七包单测 3330 passed/1 skipped、tests/api 32 文件 487 passed/1 skipped、E2E 云电脑 4 passed、合并预检 CLEAN，重提三轮复核
+description: integration→release 集成验收报告（PR #248）——容器启动任务支持 harness 类型（OpenCode 云电脑）集成级 AI Review 三轮闭环：首轮 2 × 🔴 + 7 × 🟠 + 27 × 🟡、二轮 1 × 🔴 + 5 × 🟠 + 17 × 🟡，均由三轮返工（8461672）修复；三轮 AI Review 逐条复核 R2-1~R2-23 真实落地（Session 类型 resolver 登记并经真实 GET_SESSION 运行时验证、D-6 列表语义对齐、E2E testid、C-1 $set/mustFailure 锚点、ready 原子 CAS、C-3 退避按 registered 重置等），并独立实跑七包单测 3330 passed/1 skipped、tests/api 32 文件 487 passed/1 skipped、E2E 云电脑 4 passed、合并预检 CLEAN——**验收通过（PASS）**，遗留 2 × 🟡（R3-1/R3-2）登记跟进
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: ✅ **二轮打回后已完成三轮返工，待三轮 AI Review 复核**——本轮提交逐项修复 **1 × 🔴 + 5 × 🟠 + 17 × 🟡（R2-1~R2-23）**：登记 `Session` 类型 resolver 并补真实 GraphQL/tests/api/E2E 锚点（R2-1）；D-6 断言按真实列表语义改写（R2-2）；E2E 选择器改 `data-testid`（R2-3）；C-1 `$set`/mustFailure 补断言（R2-4）；ready 默认会话与 RUNNING 合并为一次 CAS（R2-5）；C-3 退避仅在 `registered` 后重置 + 真实 connect→error 序列用例（R2-6）；17 项建议逐条收口。**本轮 tests/api 与 E2E 已实跑绿**：tests/api 32 文件 **487 passed / 1 skipped**、E2E 云电脑套件 **4 passed**；七包单测 **3330 passed / 1 skipped**、build/tsc/lint 0 error。
+> **状态**: ✅ **三轮 AI Review 复核通过（PASS，2026-10-21）**——二轮打回的 **1 × 🔴 + 5 × 🟠 + 17 × 🟡（R2-1~R2-23）** 经三轮返工（`8461672`）修复后，三轮复核**逐条回读修复代码与测试锚点并独立实机复跑**（不采信自报）：R2-1 `Session` 类型 resolver 已登记且经真实 `GET_SESSION` 运行时验证（软删留档返回 `controllerType:'cloud'`+`cloudHost.deletedAt`，上轮 🔴 阻断真实闭合）；R2-2/R2-3 与真实行为/选择器对齐；R2-4~R2-6 的 `$set`/mustFailure 锚点、ready 原子 CAS、退避按 `registered` 重置均落地；R2-7~R2-23 逐条收口。独立验证：七包单测 **3330 passed / 1 skipped**、tests/api 32 文件 **487 passed / 1 skipped**、E2E 云电脑套件 **4 passed**、build/tsc/lint 0 error、合并预检 CLEAN。遗留 2 × 🟡（R3-1 自动进入全生命周期仅一次、R3-2 tests/api 文档数字漂移）登记跟进，不构成打回。
 
 ## 关联文档
 
@@ -278,14 +278,14 @@ type: Permanent
 
 ## 七、最终验证
 
-| 层级 | 首轮 | 返工后（`3627eda`） |
-|---|---|---|
-| tsc/build（7 包） | ✅ 0 error | ✅ 0 error |
-| eslint（2 前端） | ✅ 0 error | ✅ 0 error（6 既有 warning） |
-| 单测 | ⚠️ 3012 passed / 1 failed / 1 skipped | ✅ **3310 passed / 1 skipped**（基线 flaky 未复现） |
-| tests/api（Aspire --isolated 实跑） | ✅ 37 passed / 1 skipped（5/5 文件） | ⏸ 待二轮复核复跑（改动仅测试断言/跳过/清理） |
-| E2E | 二轮复核实跑 | ⏸ 待二轮复核复跑 |
-| 合并预检 | ✅ CLEAN | ✅ 待二轮复跑（本轮基于 `origin/integration` 快进提交，无 release 侧回退） |
+| 层级 | 首轮 | 返工后（`3627eda`） | 三轮返工后（`8461672`，三轮复核实测） |
+|---|---|---|---|
+| tsc/build（7 包） | ✅ 0 error | ✅ 0 error | ✅ 0 error |
+| eslint（2 前端） | ✅ 0 error | ✅ 0 error（6 既有 warning） | ✅ 0 error（6 既有 warning） |
+| 单测 | ⚠️ 3012 passed / 1 failed / 1 skipped | ✅ **3310 passed / 1 skipped**（基线 flaky 未复现） | ✅ **3330 passed / 1 skipped** |
+| tests/api（Aspire --isolated 实跑） | ✅ 37 passed / 1 skipped（5/5 文件） | ⏸ 待二轮复核复跑（改动仅测试断言/跳过/清理） | ✅ **487 passed / 1 skipped（32/32 文件）** |
+| E2E | 二轮复核实跑 | ⏸ 待二轮复核复跑 | ✅ **4 passed**（主链路/校验错误/只读终态/只读软删） |
+| 合并预检 | ✅ CLEAN | ✅ 待二轮复跑（本轮基于 `origin/integration` 快进提交，无 release 侧回退） | ✅ CLEAN（tree `ad646ab`，交集文件无语义冲突） |
 
 ## 八、经验总结
 
@@ -448,3 +448,78 @@ type: Permanent
 | E2E（云电脑套件） | ✅ **4 passed**（cloud-host 主链路 + 校验错误；只读终态 + 软删形态） |
 | Mongo 索引 | ✅ `uniq_active_cloud_host_per_user` 已建成，`partialFilterExpression` 为 `status ∈ {STARTING,RUNNING,STOPPING} + deletedAt:null` |
 | 合并预检 | ✅ `git merge-tree --write-tree origin/release integration` CLEAN（本轮提交后复跑） |
+
+## 十一、三轮 AI Review 复核（2026-10-21，返工提交 `8461672`）
+
+> 裁决：**验收通过（PASS）**。R2-1~R2-23（1 × 🔴 + 5 × 🟠 + 17 × 🟡）逐条回读**全部真实落地**，无假绿换层重现；独立实机复跑七包 build/单测/lint、tests/api 全量、E2E 云电脑套件、Mongo 索引、合并预检**全部与自报一致且绿**。遗留 2 × 🟡（R3-1/R3-2）登记跟进，不构成打回。
+
+### 11.1 复核方法（不采信自报）
+
+1. **逐条回读 `8461672` 全部 41 文件**（942+/217-）：R2-1~R2-23 的修复实现与测试锚点逐一对照二轮打回要求；全部 🔴/🟠 修复链路端到端追踪（resolver 注册 → schema 挂载 → 真实响应；`markMustFailure` → `exitReason` → `destroy({reason})` → `notifyShutdown` → gateway `shutdown` 事件 → worker `isFailureShutdownReason` → exit(1)）。
+2. **独立实机复跑**：七包 `build`/`tsc`、`vitest` 全量、`eslint` 本机复跑；`aspire start --isolated` **全新隔离栈**（注入 `Parameters__internal-api-token`/`Parameters__admin-initial-password`，`HARNESS_ENABLED=true`，MONGODB_URI 含 SCRAM 认证）实跑 tests/api 32 文件全量与 E2E 云电脑套件；Mongo 7 索引实地核查；`git merge-tree --write-tree` 合并预检 + 8 个交集文件逐行区域核对。
+3. **运行时证据**：tests/api `session-readonly` 的 R2-1 用例即「软删 fixture + 真实 `GET_SESSION`」探针（与二轮坐实 R2-1 的运行时实证同场景、断言真实响应形态），本机实跑绿——上轮 🔴 阻断在运行时真实闭合，非 mock 假绿。
+4. **交叉验证**：R2-19 异步锁重入防护上线后，回查 `handleReady` → `sessionService.create` 等嵌套路径确认无同 key 嵌套（`services/session.ts` 零锁引用），新防护不引入自锁回归。
+
+### 11.2 二轮问题逐条复核结论（R2-1~R2-23）
+
+| # | 二轮问题 | 三轮结论 | 证据要点 |
+|---|---|---|---|
+| R2-1（🔴） | `Session` 类型 resolver 未登记 → 运行时恒 null | ✅ 已修复（真实） | `resolvers/index.ts:62-64` 登记 `Session: {...sessionResolvers.Session}`；`resolvers/index.test.ts` 以 `makeExecutableSchema` 断言字段 resolver 挂载；tests/api 软删 fixture 真实 `GET_SESSION` 断言 `controllerType:'cloud'` + `cloudHost.deletedAt`（本机实跑绿）；E2E 软删只读形态 1 passed |
+| R2-2（🟠） | D-6 断言与真实列表语义相反 | ✅ 已修复 | `cloud-host.test.ts` 改断言软删后 `homeOverview.controllers` **不含**该 Controller（`toBeUndefined`），与 `controllerService.findAllByUser` 过滤语义一致；实跑绿 |
+| R2-3（🟠） | E2E「工作区」选择器歧义 | ✅ 已修复 | `ControllerConfigPage` 桌面/移动两处 tab 增 `config-tab-workspace`/`config-tab-harness` testid；E2E 改用 testid；T-AW2..T-AW9 实跑 1 passed |
+| R2-4（🟠） | C-1 落库口径回声 mock | ✅ 已修复 | `cloud-host-service.test` 断言 `findOneAndUpdate` 的 `$set`（FAILED+`failureReason==='job failed'` / STOPPED+`failureReason:null`）；`container-service.test` 断言 `container.mustFailure/exitReason` 透传 `onDestroyed` |
+| R2-5（🟠） | ready 先 RUNNING 后写 defaultSessionId 竞态 | ✅ 已修复 | 默认会话在 STARTING 窗口创建（`allowStartingCloudHost`，`session.ts` 前后两次状态复查覆盖 `$in:['STARTING','RUNNING']`），随后 `status/readyAt/defaultSessionId` **一次 CAS** 落库；单测断言合并 `$set`；前端 `startingHosts` 支持晚到 sessionId 补跳 + 竞态序列用例（STARTING→RUNNING(null)→RUNNING(sess) 恰好导航 1 次） |
+| R2-6（🟠） | C-3 退避被 `connect` 自我重置 | ✅ 已修复 | `reconnectAttempt` 仅在 `registered` 重置（`connect` 不再归零/清定时器）；新增真实 `connect→error→重连→connect→error` 退避升级用例（1s→2s），registered 后恢复 1s |
+| R2-7 | 静默早退残留 6 处 | ✅ 已修复 | `billing-gateway.test`/`billing-events.test` 6 处 `if(!db) return` 清零，改 `describe.skipIf` + 非空断言 |
+| R2-8 | 缺 scope 存量模型口径分裂 | ✅ 已修复 | `USER_MODEL_FILTER = isEnabled ∧ (scope='user' ∨ scope 缺失)` 与 `agent-api services/model.ts` 对齐，调用侧同口径；新增「绕过 Mongoose 默认写缺 scope 文档 → 列出 + 调用 200」用例（实跑绿） |
+| R2-9 | 账号 Key 列表未联查供应商 | ✅ 已修复 | `/v1/models` 账号分支同样 `enabledProviderIdSet` 过滤；调用侧 `provider.isEnabled` 404 口径与列表一致（`billing-openai.ts:281-284`）；补禁用供应商不列出用例 |
+| R2-10 | E2E 未覆盖软删形态 | ✅ 已修复 | `cloud-host-readonly.spec.ts` 抽 `runReadonlyScenario({deletedAt})` 双形态；R2-10 软删用例实跑 passed |
+| R2-11 | 软删无 DB 级断言 | ✅ 已修复 | `cloud-host.test.ts` 断言 `cloudhosts.deletedAt` 非空 + `controllers` 行保留（finally 清理） |
+| R2-12 | Stop 异常路径无测试 | ✅ 已修复 | `mockRejectedValue` → 错误展示（契约错误映射中文）+ `stopping` 复位断言 |
+| R2-13 | B-4 并发用例判别力弱 | ✅ 已修复 | 「`createCloudHostScopedKey` 最大并发=1」判别力用例（spy 计数 maxActive）；进程内锁限制已文档化 |
+| R2-14 | B-2/B-5 口径不对称 | ✅ 已修复 | 铸造路由 `front_user` 强制宿主归属、`admin_user` 豁免，与网关 `billingKeyAuth` 一致；补 admin 铸造 201 用例 |
+| R2-15 | `unref` 定时器 + 落库前残留窗口 | ✅ 已修复 | 退避定时器移除 `unref`；`Session.create` insert 后回查云电脑状态，竞态则置 ENDED 并拒绝 |
+| R2-16 | 断言强度小缺口 | ✅ 已修复 | 越权铸造断言无 Key 落库（`countDocuments===0`）；C-7 rename 失败清理 temp 用例（`opencode-config.atomic-failure.test.ts`）；迁移测试 ID 改 `T-MIG6-*`；缺 scope 账号 Key 保留用例 |
+| R2-17 | A-5 唯一索引无迁移兜底 | ✅ 已修复 | 迁移 `005-cloud-host-active-unique-index.ts` 显式创建并登记 `index.ts:74` runner；本机全新 Mongo 7 实测索引存在且 `partialFilterExpression` 正确 |
+| R2-18 | 11000 误吞其它唯一键冲突 | ✅ 已修复 | 仅错误信息含 `uniq_active_cloud_host_per_user` 才映射 `too many cloud hosts`；双向用例（目标索引映射 / `controllerkeys.keyHash_1` 原样抛出） |
+| R2-19 | `KeyedMutex` 非可重入 | ✅ 已修复 | `AsyncLocalStorage` 同 key 重入立即报错（不再永久挂起），外层释放后可复用；补用例；复核无既有嵌套路径受影响 |
+| R2-20 | must-failure 真实 reason 脱节 | ✅ 已修复 | `destroy` 的 `notifyShutdown` 透传 `options?.reason ?? container.exitReason ?? '强制销毁'`；`forceDestroy(id,reason)` 封装 `destroy(id,{reason})`；gateway 不再硬编码；worker `isFailureShutdownReason` 识别「初始化失败」→ exit(1)；container-service 与 socketio-gateway 双端断言 |
+| R2-21 | D-2 导航无兜底 | ✅ 已修复（过度收紧见 R3-1） | `SessionView` 查询失败/会话不存在展示 `session-load-error` 出口（loading 守卫先行，无闪烁）；MainLayout 一次性导航 + `startingHosts` 晚到补跳 |
+| R2-22 | Stop 错误映射缺失 | ✅ 已修复 | `SERVER_ERROR_MESSAGES` 映射契约竞态错误/控制面不可用为中文，与 New 侧口径一致 |
+| R2-23 | E2E 清理链无容错 | ✅ 已修复 | finally 内 stop/delete 分步 try/catch，任一步失败继续回收 |
+
+### 11.3 三轮新发现问题
+
+#### R3-1（🟡 建议）自动进入收紧为「页面生命周期仅一次」：同页第二台云电脑就绪后不再自动进入
+
+- **问题描述**：`apps/agent-web/src/pages/MainLayout.tsx:55-64`——R2-21 为消除「多主机同轮就绪两次 navigate 覆盖」把放行条件从 `!navigatedCloudHosts.has(id)` 改为 `navigatedCloudHosts.size > 0`，即**整个 MainLayout 页面生命周期只自动进入一次**。但每用户 1 实例上限下「同轮多主机就绪」不可达（ACTIVE_STATUSES 计数限制），而真实可达场景是：主机 A 就绪→自动进入→停止 A→同页新建主机 B→B 就绪——此时 `size > 0` 恒真，B 的默认会话**永不自动进入**（直到整页刷新，而刷新后 `startingHosts` 为空也不跳）。PRD 成功标准「就绪后自动创建**并自动进入**」在该场景退化为「自动创建 + 手动进入」。
+- **修复建议**：恢复按主机放行（`!navigatedCloudHosts.has(id)`，StrictMode 双跑同样被 `has(id)` 拦住）；如需防「用户正在会话中被抢导航」，可在导航时判断当前路由是否已在 `/sessions/` 下再决定延迟或跳过。
+
+#### R3-2（🟡 建议）tests/api 文档数字漂移
+
+- **问题描述**：`tests/api/AGENTS.md` 仍写 `npm test` 运行「24 个」测试文件，实际已 32 个（admin-api / agent-api / cloud-controller / controller-api）。不影响执行，属文档漂移。
+- **修复建议**：随下次文档维护改为按 `npm test` 实际文件数表述或删除固定数字。
+
+### 11.4 三轮独立验证数据（本机实跑，2026-10-21）
+
+| 层级 | 结果 |
+|---|---|
+| tsc/build（7 包） | ✅ 0 error（agent-api / admin-api / cloud-controller / controller-api / agent-controller / agent-web / admin-web 全部 exit 0） |
+| eslint（2 前端） | ✅ 0 error（agent-web 6 条既有 react-hooks warning，admin-web 0） |
+| 单测（7 包） | ✅ **3330 passed / 1 skipped**（agent-api 731、admin-api 611+1 skip、cloud-controller 243、controller-api 432、agent-controller 575、agent-web 518、admin-web 220）——逐包与返工自报一致，admin-api 上轮 flaky 用例本轮未复现 |
+| tests/api（Aspire `--isolated` 全新隔离栈，32 文件全量） | ✅ **487 passed / 1 skipped**，32/32 文件——含 R2-1 软删 `GET_SESSION` 真实断言、R2-2 列表过滤语义、R2-11 DB 留档、R2-8 缺 scope 列出+调用、R2-9 禁用供应商过滤 |
+| E2E（云电脑套件，同栈实跑） | ✅ **4 passed**——T-AW2..T-AW9 主链路（testid 选择器）、T-AW3/T-AW5 校验错误、T-AW10 只读终态、R2-10 只读软删形态 |
+| Mongo 索引（全新 Mongo 7 实测） | ✅ `uniq_active_cloud_host_per_user`（unique, `{userId:1}`, partial `status ∈ {STARTING,RUNNING,STOPPING} ∧ deletedAt:null`）——R2-17 迁移兜底真实生效 |
+| 合并预检 | ✅ `git merge-tree --write-tree origin/release origin/integration` CLEAN（tree `ad646ab`，exit 0）；8 个交集文件中本轮返工仅触碰 `billing-openai(.test).ts`，与 release 侧改动（R10-1 token 估算区）不同区域语义无冲突，release 独有 21 提交不回退 |
+| 静态检查 | ✅ `git diff --check` 0 |
+
+### 11.5 环境注记（复核过程甄别，非产品缺陷）
+
+- 首次 tests/api 实跑因 `MONGODB_URI` 缺 SCRAM 认证凭据出现 41 failed（`Command insert requires authentication`，fixture 直写被拒）——**环境注入问题**；补齐 `authSource=admin&authMechanism=SCRAM-SHA-256` 后全绿。
+- 其后一次复跑出现 `admin-api/llm.test.ts` 2 failed，甄别为**上一次失败运行的跨轮残留**：失败运行中 API 侧写入成功（import 的 `gpt-4/gpt-4o/gpt-4o-mini` 落库）而 fixture 清理（直写路径）被拒 → 残留触发 `isDuplicate`/重复导入断言；清库后独立复跑 487/1 全绿。**经验**：tests/api 对共享 DB 残留敏感，多轮实跑之间应重建隔离栈或先清理测试残留，否则易误判为产品缺陷。
+
+### 11.6 验收结论
+
+1. **通过（PASS）**：首轮 2 × 🔴 + 7 × 🟠 + 27 × 🟡 与二轮 1 × 🔴 + 5 × 🟠 + 17 × 🟡 全部闭环；三轮无 🔴/🟠。
+2. **遗留跟进（🟡，不阻断）**：R3-1（自动进入按主机放行）、R3-2（tests/api 文档数字）。
+3. 验收报告即本文件，为本特性验收闭环的唯一事实来源；待合并 release 后按 `acceptance/AGENTS.md` 归档至 `archived/`。
