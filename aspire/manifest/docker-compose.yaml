@@ -101,8 +101,8 @@ services:
       FRONTEND_URL: "${FRONTEND_URL}"
       ADMIN_API_URL: "http://admin-api:8002"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
-      # 前台云电脑（harness）：publish 默认关闭；打开前请把 CONTROLLER_API_PUBLIC_WS_ENDPOINT
-      # 改为集群内可达的 controller-api 地址（worker 在 K8s 内运行）。
+      # 前台云电脑（harness）：默认开启；关闭时设 HARNESS_ENABLED=false 回滚隐藏入口并拒绝 create。
+      # 开启前请确认 CONTROLLER_API_PUBLIC_WS_ENDPOINT 为集群内可达的 controller-api 地址（worker 在 K8s 内运行）。
       HARNESS_ENABLED: "${HARNESS_ENABLED}"
       CLOUD_HOST_MAX_PER_USER: "1"
       HARNESS_CONTAINER_TTL_SECONDS: "86400"

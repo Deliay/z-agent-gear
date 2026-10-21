@@ -136,8 +136,8 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
 var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
-// 前台云电脑开关：publish 默认关闭（灰度时置 true）；dev 固定 true 便于联调。
-var harnessEnabled = builder.AddParameter("harness-enabled", value: "false");
+// 前台云电脑开关：dev/publish 默认开启；回滚时可通过 Parameters__harness-enabled=false 关闭。
+var harnessEnabled = builder.AddParameter("harness-enabled", value: "true");
 // admin-web 运行在浏览器，需要一个可达的 admin-api 地址（容器运行时注入 config.js，见 40-generate-config-js.sh）
 var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost:8002");
 
@@ -188,7 +188,7 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     });
 if (rabbitmq is not null) adminApi.WithReference(rabbitmq);
 
-// 前台云电脑（harness）：dev 默认开启便于联调，publish 默认关闭（灰度时经参数/环境打开）。
+// 前台云电脑（harness）：dev/publish 默认开启；回滚时经参数/环境变量关闭。
 // CLOUD_HOST_MODEL_BASE_URL 必须是容器内可达的 admin-api 计费网关地址。
 agentApi
     .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
