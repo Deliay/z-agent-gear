@@ -34,8 +34,10 @@ import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
 import ResumeConfirmDialog from './ResumeConfirmDialog';
+import { PendingElicitationBanner } from './PendingElicitationBanner';
 import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
+import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 
 interface AcpMessage {
   id: string;
@@ -114,6 +116,31 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     // 断连场景：controller 重连后「继续」按钮依赖 controllerOnline 解锁，轮询保持新鲜
     pollInterval: 10000,
   });
+
+  // 会话能力门控：只对「有快照 + 明确 unsupported」的入口生效（旧会话/partial 放行）
+  const capabilities = useAgentCapabilities(sessionData?.session ?? null);
+
+  /** SSE 状态事件里的 availableModels 是 controller 原文（无来源字段）；合并时保留 GraphQL 推断结果 */
+  const mergeModelSources = useCallback(
+    (incoming: AgentModelInfoData[]): AgentModelInfoData[] => {
+      setAvailableModels((prev) => {
+        const byId = new Map(prev.map((model) => [model.id, model]));
+        return incoming.map((model) => {
+          const known = byId.get(model.id);
+          if (!known) return model;
+          return {
+            ...model,
+            source: model.source ?? known.source,
+            sourceProvider: model.sourceProvider ?? known.sourceProvider,
+            group: model.group ?? known.group,
+            basis: model.basis ?? known.basis,
+          };
+        });
+      });
+      return incoming;
+    },
+    [],
+  );
 
   const [closeSession] = useMutation(CLOSE_SESSION);
   const [deleteSession] = useMutation(DELETE_SESSION);
@@ -220,7 +247,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         }
         if (data.data.modes) setModes(data.data.modes);
         if (data.data.currentModeId) setCurrentModeId(data.data.currentModeId);
-        if (data.data.availableModels) setAvailableModels(data.data.availableModels);
+        if (data.data.availableModels) mergeModelSources(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
         if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'config:changed') {
@@ -246,7 +273,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     return () => {
       eventSource.close();
     };
-  }, [id, updateCommands, handleSendMessage]);
+  }, [id, updateCommands, handleSendMessage, mergeModelSources]);
 
   // Resume timeout protection
   useEffect(() => {
@@ -458,8 +485,11 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         closing={closing}
         deleting={deleting}
         controllerOnline={controllerOnline}
+        capabilities={capabilities}
+        capabilitySession={sessionData?.session ?? null}
         readOnly={readOnlyCloudHost}
       />
+      <PendingElicitationBanner sessionId={id} />
       {readOnlyCloudHost && (
         <div className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground" data-testid="cloud-host-readonly-notice">
           云电脑已销毁，会话记录仅供只读回看。
@@ -491,6 +521,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           availableCommands={availableCommands}
           configOptions={configOptions}
           onSetConfigOption={handleSetConfigOption}
+          capabilities={capabilities}
         />
       )}
       <ResumeConfirmDialog
