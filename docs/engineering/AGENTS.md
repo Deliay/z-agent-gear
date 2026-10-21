@@ -191,6 +191,7 @@ flowchart LR
 - [[proposals/20261020-fix-api-channel-model-fixes.md]] — 内建API渠道一期上线后问题修复（供应商与模型管理）
 - [[proposals/20261021-feat-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与模型来源分组）
 - [[proposals/20261021-feat-acp-protocol-enhancement-opencode-support.md]] — ACP 协议增强调研附录：OpenCode ACP 支持清单
+- [[proposals/20261021-feat-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、最小化凭据 clone 并自动建会话）
 - [[proposals/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
 
 ### 实现计划（`plan/`）
