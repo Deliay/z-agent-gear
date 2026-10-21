@@ -204,7 +204,7 @@ type: Permanent
 | 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ✅ 已修复 | 3f30ecf |
 | 🟡×15 | §3.10 | — | ✅ 随修复收口（逐项见 §3.11） | 3f30ecf |
 | 合并冲突 | PR #250 CONFLICTING（3 文件） | main/release 分叉改同一批 session 文件 | ✅ 已按并集解决（`merge release`） | 3f30ecf |
-| 🟠-9 | billing-events / billing-gateway 同型静默 skip | 缺 MONGODB_URI 被静默当通过 | ✅ 三轮修复（缺参即 fail，实跑 3+6 passed 0 skip，见 §8.1 A-2） | 本轮返工提交 |
+| 🟠-9 | billing-events / billing-gateway 同型静默 skip | 缺 MONGODB_URI 被静默当通过 | ✅ 三轮修复（缺参即 fail，实跑 3+6 passed 0 skip，见 §8.1 A-2） | 04cdc21 |
 
 > 说明：本节 🟠-8 行原仅覆盖 T-AC5/T-E36；首轮同时点名的「billing-events 同型」对应 🟠-9，已于三轮返工按同标准治理（§8.1 A-2），避免「声称大于实际」再次复发。
 
