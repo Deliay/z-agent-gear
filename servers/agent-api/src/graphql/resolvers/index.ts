@@ -59,6 +59,9 @@ export const resolvers = {
   PermissionRequestData: {
     ...todoResolvers.PermissionRequestData,
   },
+  Session: {
+    ...sessionResolvers.Session,
+  },
   WorkflowInstance: {
     ...workflowResolvers.WorkflowInstance,
   },

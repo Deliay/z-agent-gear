@@ -193,6 +193,20 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     const mismatch = await post('/api-keys', body(otherHostId));
     expect(mismatch.status).toBe(404);
     expect((await mismatch.json()) as { error: string }).toEqual({ error: 'CLOUD_HOST_NOT_FOUND' });
+    // R2-16：拒绝时不得留下任何 Key 记录
+    expect(await BillingApiKey.countDocuments({ cloudHostId: otherHostId })).toBe(0);
+
+    // R2-14：admin_user 与网关口径一致保留管理豁免（可代任意宿主铸造）
+    const adminHostId = await seedCloudHost(new mongoose.Types.ObjectId().toString());
+    const admin = await post('/api-keys', {
+      ...base,
+      ownerType: 'admin_user',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+      scope: 'cloud_host',
+      cloudHostId: adminHostId,
+      expiresAt,
+    });
+    expect(admin.status).toBe(201);
 
     // 宿主已软删除
     const deletedHostId = await seedCloudHost(base.ownerId, { deletedAt: new Date() });

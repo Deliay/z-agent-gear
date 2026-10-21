@@ -6,7 +6,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import Sidebar from '../components/Sidebar';
 import { Button } from '../components/ui/button';
 import { HOME_OVERVIEW } from '../graphql/home';
-import type { CloudHostStatus, HomeOverviewQuery } from '../graphql/types';
+import type { HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
 
 function FullPageSpinner() {
@@ -38,24 +38,27 @@ export default function MainLayout() {
   // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
   const homeData = data?.homeOverview ?? null;
 
-  // D-2：云电脑就绪（STARTING→RUNNING）且服务端已建好默认会话时，自动进入该会话。
-  // 只认可观测到的状态迁移，首次加载已是 RUNNING 的旧主机不跳转；每台主机只导航一次。
-  const previousCloudHostStatus = useRef<Map<string, CloudHostStatus>>(new Map());
+  // D-2：云电脑就绪且服务端已建好默认会话时，自动进入该会话。
+  // - `startingHosts` 记录本次会话观测到过 STARTING 的主机：即使中间轮询到 RUNNING+null
+  //   （历史遗留/补建路径），后续 defaultSessionId 到达仍可补跳（R2-5/R2-21）。
+  // - 首次加载已是 RUNNING 的旧主机不跳转；整个页面生命周期只自动进入一次，避免多主机
+  //   同轮就绪时 navigate 互相覆盖。
+  const startingCloudHosts = useRef<Set<string>>(new Set());
   const navigatedCloudHosts = useRef<Set<string>>(new Set());
   useEffect(() => {
     for (const controller of homeData?.controllers ?? []) {
       const cloudHost = controller.type === 'cloud' ? controller.cloudHost : null;
       if (!cloudHost) continue;
 
-      const previousStatus = previousCloudHostStatus.current.get(cloudHost.id);
-      previousCloudHostStatus.current.set(cloudHost.id, cloudHost.status);
-
+      if (cloudHost.status === 'STARTING') {
+        startingCloudHosts.current.add(cloudHost.id);
+      }
       if (
-        previousStatus !== 'STARTING' ||
         cloudHost.status !== 'RUNNING' ||
+        !startingCloudHosts.current.has(cloudHost.id) ||
         !cloudHost.defaultSessionId ||
         cloudHost.deletedAt ||
-        navigatedCloudHosts.current.has(cloudHost.id)
+        navigatedCloudHosts.current.size > 0
       ) {
         continue;
       }

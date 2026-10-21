@@ -208,14 +208,45 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       host.id,
     );
 
-    // 软删除后 Controller 保留留档，但 Controller.cloudHost 显式为 null
-    // （显式断言「控制器仍在列表」+「cloudHost 为 null」，不做「控制器缺失/cloudHost null」双形态兜底）
+    // 软删除后列表语义 = 整条过滤（homeOverview 复用 controllerService.findAllByUser）：
+    // Controller/会话/消息在 DB 留档，但不再出现在任何列表；会话级 cloudHost 留档由
+    // tests/api session-readonly 的 GET_SESSION 用例断言。
     const homeAfter = await gql(HOME, undefined, token);
     const offlined = homeAfter.data.homeOverview.controllers.find(
       (item: { id: string }) => item.id === host.controllerId,
     );
-    expect(offlined).toBeTruthy();
-    expect(offlined!.cloudHost).toBeNull();
+    expect(offlined).toBeUndefined();
+  });
+
+  it.skipIf(!HAS_MONGO)('R2-11: soft delete keeps DB archive row (cloudhosts.deletedAt + controllers row)', async () => {
+    const db = (await mongoDb())!;
+    const token = await signup();
+    const created = await gql(
+      CREATE,
+      { input: { name: `del-db-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      token,
+    );
+    const host = created.data.createCloudHost;
+    try {
+      await gql(STOP, { id: host.id, force: true }, token);
+      await gql(DELETE, { id: host.id }, token);
+
+      const hostDoc = await db.collection('cloudhosts').findOne({
+        _id: new mongoose.Types.ObjectId(host.id),
+      });
+      expect(hostDoc?.deletedAt).not.toBeNull();
+      const controllerDoc = await db.collection('controllers').findOne({
+        _id: new mongoose.Types.ObjectId(host.controllerId),
+      });
+      expect(controllerDoc).toBeTruthy();
+    } finally {
+      await db.collection('cloudhosts').deleteOne({ _id: new mongoose.Types.ObjectId(host.id) });
+      await db.collection('controllers').deleteOne({
+        _id: new mongoose.Types.ObjectId(host.controllerId),
+      });
+      await db.collection('controllerworkspaces').deleteMany({ controllerId: new mongoose.Types.ObjectId(host.controllerId) });
+      await db.collection('sessions').deleteMany({ controllerId: new mongoose.Types.ObjectId(host.controllerId) });
+    }
   });
 
   it('T-CH17: refuses to delete a non-terminal cloud host', async () => {

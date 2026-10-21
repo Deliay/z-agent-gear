@@ -433,7 +433,6 @@ export function connectToServer(
       reconnectTimer = null;
       if (!shutdownStarted) socket.connect();
     }, delay);
-    reconnectTimer.unref?.();
   };
 
   /** 统一 shutdown 入口：先停重连定时器，再交给 supervisor（避免与正常 shutdown 冲突）。 */
@@ -444,8 +443,8 @@ export function connectToServer(
   };
 
   socket.on('connect', () => {
-    reconnectAttempt = 0;
-    clearReconnectTimer();
+    // 注意：不在此重置 reconnectAttempt —— KEY_ALREADY_ONLINE 在 connect 之后经 error 送达，
+    // 若此处归零会使退避永远停留在 1s（R2-6）。仅在 registered（真正注册成功）后重置。
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
     const { origin, namespace } = parseEndpoint(connectEndpoint);
     console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
@@ -467,6 +466,9 @@ export function connectToServer(
 
   socket.on('registered', (data: RegisteredPayload) => {
     console.log(`Controller registered: ${data.controllerId}`);
+    // R2-6：注册成功才重置退避计数（connect 事件早于 register 结果，不能作为成功信号）。
+    reconnectAttempt = 0;
+    clearReconnectTimer();
     if (data.resumeToken && persistConfig) {
       saveResumeTokenToConfig(data.resumeToken);
       console.log('Resume token saved to config');

@@ -27,8 +27,16 @@ interface StopCloudHostDialogProps {
 
 const LOSS_WARNING = '停止云主机会导致所有会话永久丢失，是否继续'
 
+/** 服务端契约错误 → 前台中文文案（与 NewCloudHostDialog 口径一致，R2-22） */
+const SERVER_ERROR_MESSAGES: Record<string, string> = {
+  'stopping this cloud host will permanently lose all active sessions': LOSS_WARNING,
+  'control plane unavailable': '控制面暂时不可用，请稍后重试',
+}
+
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
+  if (error instanceof Error && error.message) {
+    return SERVER_ERROR_MESSAGES[error.message.trim()] ?? error.message
+  }
   return '停止云电脑失败，请稍后重试'
 }
 

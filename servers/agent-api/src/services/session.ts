@@ -111,18 +111,23 @@ export class SessionService {
     /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
     modeId?: string;
     modelId?: string;
+    /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
+    allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
+    const cloudHostRunning = (host: { status?: string } | null): boolean =>
+      host?.status === 'RUNNING' ||
+      (input.allowStartingCloudHost === true && host?.status === 'STARTING');
     if (controller.type === 'cloud') {
       const host = await CloudHost.findOne({
         controllerId: input.controllerId,
         userId,
         deletedAt: null,
       }).lean();
-      if (!host || host.status !== 'RUNNING') {
+      if (!host || !cloudHostRunning(host as { status?: string })) {
         throw new Error('cloud host is not running');
       }
       // A-11：会话 ACP 工具必须落在云电脑已启用的 harnessTypes 映射内。
@@ -235,13 +240,15 @@ export class SessionService {
     }
 
     // A-3：创建会话与 stop/terminal 无原子性——长耗时 worktree/MCP 流程结束后、
-    // 落库前复查云电脑仍为 RUNNING，缩小「终态后残留 creating 幽灵会话」窗口。
+    // 落库前复查云电脑仍在允许状态，缩小「终态后残留 creating 幽灵会话」窗口。
     if (controller.type === 'cloud') {
       const stillRunning = await CloudHost.findOne({
         controllerId: input.controllerId,
         userId,
         deletedAt: null,
-        status: 'RUNNING',
+        ...(input.allowStartingCloudHost === true
+          ? { status: { $in: ['STARTING', 'RUNNING'] } }
+          : { status: 'RUNNING' }),
       }).lean();
       if (!stillRunning) {
         throw new Error('cloud host is not running');
@@ -260,6 +267,26 @@ export class SessionService {
       ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
       ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });
+
+    // A-3 残留窗口（毫秒级）：insert 之后立即回查；若 stop/terminal 已在复查与 insert 之间收口，
+    // 将刚创建的会话置 ENDED 并拒绝，避免 creating 幽灵会话。
+    if (controller.type === 'cloud') {
+      const afterInsert = await CloudHost.findOne({
+        controllerId: input.controllerId,
+        userId,
+        deletedAt: null,
+        ...(input.allowStartingCloudHost === true
+          ? { status: { $in: ['STARTING', 'RUNNING'] } }
+          : { status: 'RUNNING' }),
+      }).lean();
+      if (!afterInsert) {
+        await Session.updateOne(
+          { _id: session._id },
+          { $set: { status: 'ended', endedAt: new Date() } },
+        );
+        throw new Error('cloud host is not running');
+      }
+    }
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
     let mcpEndpoint: { token: string; serverNames: string[] } | undefined;

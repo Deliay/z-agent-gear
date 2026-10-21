@@ -155,4 +155,21 @@ describe('StopCloudHostDialog', () => {
     expect(retryButton).not.toBeDisabled();
     expect(screen.queryByText('停止中...')).not.toBeInTheDocument();
   });
+
+  it('R2-12/R2-22 异常路径：catch + finally 复位，契约竞态错误映射中文', async () => {
+    mockImpact(0);
+    mockStopCloudHost.mockRejectedValueOnce(
+      new Error('stopping this cloud host will permanently lose all active sessions'),
+    );
+    const onStopped = vi.fn();
+    render(
+      <StopCloudHostDialog open cloudHost={cloudHost} onClose={vi.fn()} onStopped={onStopped} />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '停止云主机会导致所有会话永久丢失，是否继续',
+    );
+    expect(onStopped).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '继续停止' })).not.toBeDisabled();
+  });
 });

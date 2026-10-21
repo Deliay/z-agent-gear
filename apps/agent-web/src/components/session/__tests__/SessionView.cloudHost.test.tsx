@@ -182,4 +182,20 @@ describe('SessionView 云电脑只读回看', () => {
     expect(screen.getByTestId('input-box')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '继续' })).toBeInTheDocument();
   });
+
+  it('R2-21 会话不存在/查询失败时展示明确出口，不渲染输入框', () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (query === GET_SESSION) {
+        return { data: undefined, loading: false, error: new Error('Session not found') };
+      }
+      if (query === GET_CONTROLLERS) return { data: { controllers: [] }, loading: false };
+      return { data: null, loading: false };
+    });
+
+    render(<SessionView sessionId="missing-session" />);
+
+    expect(screen.getByTestId('session-load-error')).toBeInTheDocument();
+    expect(screen.getByText('会话不存在或无权访问')).toBeInTheDocument();
+    expect(screen.queryByTestId('input-box')).not.toBeInTheDocument();
+  });
 });

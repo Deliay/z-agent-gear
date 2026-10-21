@@ -57,8 +57,8 @@ test.describe('Cloud Host E2E', () => {
       await expect(page.getByTestId('cloud-host-panel')).toBeVisible();
       await expect(page.getByTestId('cloud-host-panel')).toContainText('启动中');
       // 工作区 + Harness 工具两栏与普通主机一致
-      await expect(page.getByRole('button', { name: '工作区' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Harness 工具' })).toBeVisible();
+      await expect(page.getByTestId('config-tab-workspace')).toBeVisible();
+      await expect(page.getByTestId('config-tab-harness')).toBeVisible();
 
       // 无活动会话：直接停止（不弹告警）
       await page.getByRole('button', { name: '停止云电脑' }).click();
@@ -86,13 +86,22 @@ test.describe('Cloud Host E2E', () => {
         (host: { name: string }) => host.name === hostName,
       );
       if (leftover) {
-        await gqlRequest(
-          page,
-          `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`,
-          { id: leftover.id },
-          token,
-        );
-        await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id: leftover.id }, token);
+        // R2-23：stop/delete 任一步失败都继续尝试后续步骤，避免残留主机
+        try {
+          await gqlRequest(
+            page,
+            `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`,
+            { id: leftover.id },
+            token,
+          );
+        } catch {
+          /* 已停止或控制面不可用：继续尝试删除 */
+        }
+        try {
+          await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id: leftover.id }, token);
+        } catch {
+          /* 删除失败无法进一步回收：保留日志由运维巡检处理 */
+        }
       }
     }
   });

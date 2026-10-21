@@ -241,11 +241,11 @@ export function registerWorkerGateway(
   });
 
   // 销毁流程：先下发并等待 post 脚本批次（若有），再向绑定到 containerId room 的在线容器发送 shutdown。
-  deps.containerService.onShutdown(async (containerId) => {
+  deps.containerService.onShutdown(async (containerId, reason) => {
     if (deps.workloadDispatcher) {
       await deps.workloadDispatcher.runPostBatch(containerId);
     }
-    nsp.to(containerId).emit('shutdown', { reason: '强制销毁' });
+    nsp.to(containerId).emit('shutdown', { reason: reason ?? '强制销毁' });
   });
 
   nsp.on('connection', (socket: Socket) => {

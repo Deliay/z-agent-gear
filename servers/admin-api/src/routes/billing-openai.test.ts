@@ -413,6 +413,39 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     expect(ids).not.toContain('global-incomplete');
   });
 
+  it('R2-8: 存量缺 scope 模型按 user 口径列出且可调用', async () => {
+    const { secret } = await seedCloudHostKey();
+    const provider = (await Provider.findOne({ scope: 'global' }))!;
+    // 模拟历史存量：绕过 Mongoose 默认 scope=user，直接写缺省字段文档。
+    await Model.collection.insertOne({
+      providerId: provider._id,
+      name: 'legacy-no-scope',
+      isCustom: true,
+      isEnabled: true,
+      sortOrder: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const list = await listModels(secret);
+    const ids = ((await list.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id);
+    expect(ids).toContain('legacy-no-scope');
+
+    const call = await callWithKey(secret, {
+      model: 'legacy-no-scope',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(call.status).toBe(200);
+  });
+
+  it('R2-9: 账号 Key /v1/models 排除禁用供应商的 global 模型', async () => {
+    await seedGlobalModel('account-disabled-provider', { providerEnabled: false });
+    const res = await listModels(apiKeySecret);
+    expect(res.status).toBe(200);
+    const ids = ((await res.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id);
+    expect(ids).not.toContain('account-disabled-provider');
+  });
+
   it('T-BK10: 账号 /v1/models 回归 — 仅返回定价完整的 global 模型', async () => {
     await seedCustomModel('custom-model');
     const res = await listModels(apiKeySecret);

@@ -30,6 +30,19 @@ const CREATE_SESSION = `
   }
 `;
 
+const SESSION_READONLY_FIELDS = `
+  query Session($id: ID!) {
+    session(id: $id) {
+      id
+      status
+      controllerType
+      cloudHost { id status deletedAt }
+    }
+  }
+`;
+
+const CONTROLLERS = `query { controllers { id type } }`;
+
 async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   const uri = process.env.MONGODB_URI;
   if (!uri) return null;
@@ -87,7 +100,7 @@ async function seedCloudController(
     createdAt: now,
     updatedAt: now,
   });
-  return { controllerId, workspaceId };
+  return { controllerId, workspaceId, hostId };
 }
 
 /** 兜底清理本用例创建的云主机 fixture（Controller/工作区/云电脑/会话，按唯一 controllerId 匹配）。 */
@@ -241,6 +254,58 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
         token,
       );
       expect(result.errors?.[0].message).toBe('cloud host is not running');
+    } finally {
+      await cleanupCloudFixture(db, controllerId);
+    }
+  });
+
+  it('R2-1: soft-deleted cloud host session returns controllerType/cloudHost via real GET_SESSION', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const token = signup.data.signup.token as string;
+    const userId = signup.data.signup.user.id as string;
+    const { controllerId, hostId } = await seedCloudController(db, userId, 'STOPPED');
+    const now = new Date();
+    await db
+      .collection('cloudhosts')
+      .updateOne({ _id: hostId }, { $set: { deletedAt: now } });
+    try {
+      const inserted = await db.collection('sessions').insertOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        controllerId,
+        controllerName: 'cloud',
+        acpServerType: 'opencode',
+        status: 'ended',
+        title: 'soft-deleted-archive',
+        endedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const result = await gql(
+        SESSION_READONLY_FIELDS,
+        { id: inserted.insertedId.toString() },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      // 真实 GraphQL 响应锚点：字段 resolver 必须已注册（R2-1），且软删留档可返回
+      expect(result.data.session).toMatchObject({
+        controllerType: 'cloud',
+        cloudHost: {
+          id: hostId.toString(),
+          status: 'STOPPED',
+        },
+      });
+      expect(result.data.session.cloudHost.deletedAt).toBeTruthy();
+
+      // 列表语义：软删后整条过滤，前端不得再依赖 controllers 命中
+      const controllers = await gql(CONTROLLERS, undefined, token);
+      expect(
+        controllers.data.controllers.map((item: { id: string }) => item.id),
+      ).not.toContain(controllerId.toString());
     } finally {
       await cleanupCloudFixture(db, controllerId);
     }

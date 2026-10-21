@@ -103,10 +103,19 @@ describe('agent-api billing resolvers 错误映射（P2/C2）', () => {
         lastUsedAt: null,
         createdAt: '2026-10-20T00:00:00.000Z',
       },
+      {
+        // R2-16：存量缺 scope 的账号 Key 必须保留（不得被 cloud_host 过滤误删）
+        id: 'legacy-key',
+        name: 'legacy',
+        keyPrefix: 'zag_sk_legacyaa',
+        status: 'active',
+        lastUsedAt: null,
+        createdAt: '2026-10-20T00:00:00.000Z',
+      },
     ]);
 
     const keys = await billingResolvers.Query.myBillingApiKeys(null, {}, context());
-    expect(keys.map((key) => key.id)).toEqual(['acc-key']);
+    expect(keys.map((key) => key.id)).toEqual(['acc-key', 'legacy-key']);
   });
 
   it('未认证不受影响（UNAUTHENTICATED）', async () => {

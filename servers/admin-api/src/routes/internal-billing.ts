@@ -234,9 +234,9 @@ export function createInternalBillingRouter(): Router {
       hostId = cloudHostId;
     }
     try {
-      // B-5：cloud_host Key 必须绑定到 ownerId 本人且未软删除的云电脑，避免内部接口被用来
-      // 为任意宿主铸造运行 Key（跨用户越权）。宿主缺失/属主不符/已删除统一 404，不泄露存在性。
-      if (hostId) {
+      // B-5/R2-14：front_user 的 cloud_host Key 必须绑定本人且未软删除的云电脑，避免越权；
+      // admin_user 与网关鉴权口径一致保留管理豁免（可代任意宿主铸造）。
+      if (hostId && ownerType === 'front_user') {
         const host = await CloudHost.findById(hostId)
           .select({ userId: 1, deletedAt: 1 })
           .lean<{ userId?: unknown; deletedAt?: Date | null } | null>();

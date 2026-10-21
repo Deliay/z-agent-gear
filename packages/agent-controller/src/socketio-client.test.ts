@@ -96,6 +96,32 @@ describe('cloud-host reconnect backoff (C-3)', () => {
     expect(fake.socket.connect).toHaveBeenCalledTimes(2);
   });
 
+  it('escalates backoff across real connect→error cycles (R2-6)', () => {
+    setup(true);
+    const handler = errorHandler();
+
+    // 第一次冲突：1s
+    handler({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });
+    vi.advanceTimersByTime(1000);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(1);
+
+    // 真实时序：先 connect，再收到 KEY_ALREADY_ONLINE；不得因 connect 归零
+    fake.handlers.get('connect')?.();
+    handler({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });
+    vi.advanceTimersByTime(1999);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(2);
+
+    // 注册成功（registered）才重置：下一轮恢复 1s
+    fake.handlers.get('registered')?.({ controllerId: 'c-1' });
+    handler({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });
+    vi.advanceTimersByTime(999);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(fake.socket.connect).toHaveBeenCalledTimes(3);
+  });
+
   it('does not reconnect after a normal shutdown (timer is cleared)', () => {
     const { onShutdown } = setup(true);
     errorHandler()({ code: 'KEY_ALREADY_ONLINE', message: 'busy' });

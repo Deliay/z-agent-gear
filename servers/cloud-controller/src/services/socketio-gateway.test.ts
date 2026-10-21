@@ -302,6 +302,19 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
+  it('R2-20: destroy(reason) forwards the real reason in the shutdown event', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-r2-20', version: OK_VERSION });
+    await waitFor(socket, 'registered');
+
+    const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
+    await service.destroy(container.id, { reason: '必须工作负载「opencode」初始化失败' });
+    expect((await shutdown).reason).toBe('必须工作负载「opencode」初始化失败');
+
+    socket.close();
+  });
+
   it('T-G5: three missed heartbeats mark the worker offline (connecting)', async () => {
     const { container, token } = await newContainer();
     const socket = await connectWith(token);

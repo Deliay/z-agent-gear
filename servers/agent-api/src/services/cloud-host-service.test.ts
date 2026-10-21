@@ -367,6 +367,30 @@ describe('CloudHostService', () => {
       expect(result.containerId).toBeNull();
     });
 
+    it('R2-18 maps only cloud-host active unique-index conflicts to too many cloud hosts', async () => {
+      setupCreateSuccess();
+      vi.mocked(CloudHost.create).mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key error ... uniq_active_cloud_host_per_user'), {
+          code: 11000,
+        }),
+      );
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('too many cloud hosts');
+    });
+
+    it('R2-18 rethrows unrelated unique-key conflicts', async () => {
+      setupCreateSuccess();
+      vi.mocked(CloudHost.create).mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key error ... controllerkeys.keyHash_1'), {
+          code: 11000,
+        }),
+      );
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('controllerkeys.keyHash_1');
+    });
+
     it('serializes concurrent creates so only one host can start', async () => {
       setupCreateSuccess();
       vi.mocked(CloudHost.countDocuments)
@@ -563,13 +587,10 @@ describe('CloudHostService', () => {
   });
 
   describe('callbacks', () => {
-    it('ready transitions to RUNNING and creates default session for single harness', async () => {
+    it('ready atomically creates default session and transitions to RUNNING (R2-5)', async () => {
       const starting = hostDoc({ status: 'STARTING' });
-      const running = hostDoc({ status: 'RUNNING' });
-      const refreshed = hostDoc({ status: 'RUNNING', defaultSessionId: oid('sess-1') });
-      vi.mocked(CloudHost.findOne)
-        .mockReturnValueOnce(chain(starting) as never)
-        .mockReturnValueOnce(chain(refreshed) as never);
+      const running = hostDoc({ status: 'RUNNING', defaultSessionId: oid('sess-1') });
+      vi.mocked(CloudHost.findOne).mockReturnValueOnce(chain(starting) as never);
       vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
       vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
       vi.mocked(Session.countDocuments).mockResolvedValue(1 as never);
@@ -580,20 +601,27 @@ describe('CloudHostService', () => {
         controllerId: CONTROLLER_ID,
         workspaceId: WORKSPACE_ID,
         acpServerType: 'opencode',
+        allowStartingCloudHost: true,
       });
-      expect(CloudHost.updateOne).toHaveBeenCalledWith(
-        { _id: HOST_ID, defaultSessionId: null },
-        { $set: { defaultSessionId: 'sess-1' } },
+      // 状态与会话 id 合并为一次 CAS 落库，避免 RUNNING+null 中间态
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
+        {
+          $set: {
+            status: 'RUNNING',
+            readyAt: expect.any(Date),
+            defaultSessionId: 'sess-1',
+          },
+        },
+        { new: true },
       );
       expect(result).toMatchObject({ status: 'RUNNING', defaultSessionId: 'sess-1' });
     });
 
-    it('ready keeps RUNNING when default session creation fails', async () => {
+    it('ready keeps RUNNING (without session id) when default session creation fails', async () => {
       const starting = hostDoc({ status: 'STARTING' });
       const running = hostDoc({ status: 'RUNNING' });
-      vi.mocked(CloudHost.findOne)
-        .mockReturnValueOnce(chain(starting) as never)
-        .mockReturnValueOnce(chain(running) as never);
+      vi.mocked(CloudHost.findOne).mockReturnValueOnce(chain(starting) as never);
       vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
       vi.mocked(sessionService.create).mockRejectedValue(new Error('agent offline'));
       vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
@@ -602,6 +630,11 @@ describe('CloudHostService', () => {
         status: 'RUNNING',
         defaultSessionId: null,
       });
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
+        { $set: { status: 'RUNNING', readyAt: expect.any(Date) } },
+        { new: true },
+      );
     });
 
     it('does not create a default session when multiple harness types are selected', async () => {
@@ -642,11 +675,23 @@ describe('CloudHostService', () => {
       await expect(
         service.handleTerminal(HOST_ID, { status: 'stopped' }),
       ).resolves.toMatchObject({ status: 'STOPPED' });
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, status: { $in: ['STARTING', 'RUNNING', 'STOPPING'] } },
+        {
+          $set: {
+            status: 'STOPPED',
+            stoppedAt: expect.any(Date),
+            containerId: null,
+            failureReason: null,
+          },
+        },
+        { new: true },
+      );
       expect(sessionService.endByController).toHaveBeenCalledWith(CONTROLLER_ID, 'user-1');
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
     });
 
-    it('terminal maps failed status with reason', async () => {
+    it('terminal maps failed status with reason (asserts persisted $set, R2-4)', async () => {
       vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'STARTING' })) as never);
       vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
         chain(hostDoc({ status: 'FAILED', failureReason: 'job failed' })) as never,
@@ -657,6 +702,18 @@ describe('CloudHostService', () => {
         status: 'failed',
         reason: 'job failed',
       });
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, status: { $in: ['STARTING', 'RUNNING', 'STOPPING'] } },
+        {
+          $set: {
+            status: 'FAILED',
+            stoppedAt: expect.any(Date),
+            containerId: null,
+            failureReason: 'job failed',
+          },
+        },
+        { new: true },
+      );
       expect(result).toMatchObject({ status: 'FAILED', failureReason: 'job failed' });
     });
 

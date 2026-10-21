@@ -42,7 +42,7 @@ describe('migration 006-preset-harness-opencode', () => {
     expect(migration.name).toBe('006-preset-harness-opencode');
   });
 
-  it('T-MIG5-1: 首次执行写入 harness 预制项（无 post、无参数、无依赖）', async () => {
+  it('T-MIG6-1: 首次执行写入 harness 预制项（无 post、无参数、无依赖）', async () => {
     await migration.run();
 
     expect(CloudWorkload.create).toHaveBeenCalledTimes(1);
@@ -60,7 +60,7 @@ describe('migration 006-preset-harness-opencode', () => {
     expect(arg.initScript).toContain('agent-gear harness prepare');
   });
 
-  it('T-MIG5-2: 二次执行跳过，不覆盖管理员修改', async () => {
+  it('T-MIG6-2: 二次执行跳过，不覆盖管理员修改', async () => {
     await migration.run();
     expect(CloudWorkload.create).toHaveBeenCalledTimes(1);
 
@@ -79,7 +79,7 @@ describe('migration 006-preset-harness-opencode', () => {
     expect(existing.save).not.toHaveBeenCalled();
   });
 
-  it('T-MIG5-3: presetKey 或同名校验命中即跳过并告警，不重复创建', async () => {
+  it('T-MIG6-3: presetKey 或同名校验命中即跳过并告警，不重复创建', async () => {
     (CloudWorkload.findOne as any).mockImplementation(
       (filter: { presetKey?: string; name?: string }) =>
         Promise.resolve(
@@ -94,7 +94,7 @@ describe('migration 006-preset-harness-opencode', () => {
     expect(console.warn).toHaveBeenCalled();
   });
 
-  it('T-MIG5-4: 脚本语法通过 bash -n，且顺序为 安装 → 版本校验 → mkdir → harness prepare', () => {
+  it('T-MIG6-4: 脚本语法通过 bash -n，且顺序为 安装 → 版本校验 → mkdir → harness prepare', () => {
     const script = migration.HARNESS_OPENCODE_INIT_SCRIPT;
 
     expect(script).toContain('set -euo pipefail');
@@ -124,7 +124,7 @@ describe('migration 006-preset-harness-opencode', () => {
     }
   });
 
-  it('T-MIG5-5/C-5: 已安装时比对版本，不一致（含 v 前缀）强制重装并硬校验', () => {
+  it('T-MIG6-5/C-5: 已安装时比对版本，不一致（含 v 前缀）强制重装并硬校验', () => {
     const script = migration.HARNESS_OPENCODE_INIT_SCRIPT;
 
     // 已安装时读取实际版本（去 v 前缀，命令失败视为未安装）

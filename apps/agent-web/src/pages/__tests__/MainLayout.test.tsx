@@ -173,6 +173,37 @@ describe('MainLayout 首页聚合查询', () => {
       expect(mockNavigate).toHaveBeenCalledTimes(1);
     });
 
+    it('R2-5: STARTING→RUNNING(无 session)→RUNNING(有 session) 仍补跳一次', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('STARTING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      const { rerender } = render(<MainLayout />);
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+      expect(mockNavigate).not.toHaveBeenCalled();
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-late'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/sessions/sess-late');
+    });
+
     it('首次加载即为 RUNNING 的旧主机不强制跳转', () => {
       mockUseQuery.mockReturnValue({
         data: homeWithCloudHost('RUNNING', 'sess-old'),

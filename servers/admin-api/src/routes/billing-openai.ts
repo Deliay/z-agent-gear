@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
+import type { QueryFilter } from 'mongoose';
 import { Router, type Request, type Response } from 'express';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
-import { Model } from '../models/model.js';
+import { Model, type IModel } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { billingKeyAuth, openAiError, type BillingRequest } from '../middleware/billing-key-auth.js';
 import { creditCheckService } from '../services/billing/credit-check.js';
@@ -170,6 +171,28 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   const router = Router();
   const logger = deps.logger ?? console;
 
+  /** 批量查询供应商启用状态；列表与调用（404）口径共用。 */
+  const enabledProviderIdSet = async (
+    models: Array<{ providerId: unknown }>,
+  ): Promise<Set<string>> => {
+    const providerIds = [...new Set(models.map((model) => String(model.providerId)))];
+    if (providerIds.length === 0) return new Set();
+    const providers = await Provider.find({ _id: { $in: providerIds } })
+      .select({ isEnabled: 1 })
+      .lean<Array<{ _id: unknown; isEnabled?: boolean }>>();
+    return new Set(
+      providers
+        .filter((provider) => provider.isEnabled !== false)
+        .map((provider) => String(provider._id)),
+    );
+  };
+
+  /** 用户可用模型：scope=user ∪ 存量缺 scope（与 agent-api `services/model.ts` 口径一致，R2-8）。 */
+  const USER_MODEL_FILTER: QueryFilter<IModel> = {
+    isEnabled: true,
+    $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+  };
+
   router.get('/models', billingKeyAuth, async (req: Request, res: Response) => {
     const billing = (req as BillingRequest).billing!;
     // C5：契约声明 /v1/models 也受限流约束（429）。
@@ -183,25 +206,9 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       // global 模型还需按调用口径过滤未定价/定价不完整（否则列出后调用 400）；user 自定义模型可无定价。
       const [globalModels, userModels] = await Promise.all([
         Model.find({ scope: 'global', isEnabled: true }).lean(),
-        Model.find({ scope: 'user', isEnabled: true })
-          .sort({ sortOrder: 1, createdAt: 1 })
-          .lean(),
+        Model.find(USER_MODEL_FILTER).sort({ sortOrder: 1, createdAt: 1 }).lean(),
       ]);
-      const providerIds = [
-        ...new Set(
-          [...globalModels, ...userModels].map((model) => String(model.providerId)),
-        ),
-      ];
-      const providers = providerIds.length
-        ? await Provider.find({ _id: { $in: providerIds } })
-            .select({ isEnabled: 1 })
-            .lean<Array<{ _id: unknown; isEnabled?: boolean }>>()
-        : [];
-      const enabledProviderIds = new Set(
-        providers
-          .filter((provider) => provider.isEnabled !== false)
-          .map((provider) => String(provider._id)),
-      );
+      const enabledProviderIds = await enabledProviderIdSet([...globalModels, ...userModels]);
       const selectable = (model: {
         scope?: string;
         providerId: unknown;
@@ -212,7 +219,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
           const pricing = pricingFromModel(model.pricing);
           return !!pricing && (!pricing.isBillable || isPricingComplete(pricing));
         }
-        // 用户自定义模型（scope=user）：不要求定价，网关代转发且不计费。
+        // 用户自定义模型（scope=user 或存量缺 scope）：不要求定价，网关代转发且不计费。
         return true;
       };
       const seen = new Set<string>();
@@ -228,8 +235,11 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       return;
     }
     const models = await Model.find({ scope: 'global', isEnabled: true }).lean();
+    // R2-9：账号 Key 列表同样联查供应商启用状态，避免列出后调用 404。
+    const enabledProviderIds = await enabledProviderIdSet(models);
     const data = models
       .filter((model) => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
@@ -253,7 +263,11 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const model =
       systemModel ??
       (billing.scope === 'cloud_host'
-        ? await Model.findOne({ scope: 'user', name: modelName, isEnabled: true }).sort({
+        ? await Model.findOne({
+            name: modelName,
+            isEnabled: true,
+            $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+          }).sort({
             sortOrder: 1,
             createdAt: 1,
           })

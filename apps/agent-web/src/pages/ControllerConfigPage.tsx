@@ -145,8 +145,8 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
         </div>
         {/* tab 常驻在滚动容器外，内容滚动时仍可切换 */}
         <div className="flex shrink-0 gap-1 border-b px-4 py-2">
-          <button type="button" onClick={() => setActiveSection('workspace')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workspace' ? 'bg-accent' : 'hover:bg-accent'}`}>工作区</button>
-          <button type="button" onClick={() => setActiveSection('harness')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'harness' ? 'bg-accent' : 'hover:bg-accent'}`}>Harness 工具</button>
+          <button type="button" data-testid="config-tab-workspace" onClick={() => setActiveSection('workspace')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workspace' ? 'bg-accent' : 'hover:bg-accent'}`}>工作区</button>
+          <button type="button" data-testid="config-tab-harness" onClick={() => setActiveSection('harness')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'harness' ? 'bg-accent' : 'hover:bg-accent'}`}>Harness 工具</button>
         </div>
         <div className="flex-1 overflow-y-auto" data-testid="mobile-section-scroll">
           {panel && <div className="px-4 pt-4">{panel}</div>}
@@ -182,6 +182,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           <div className="mt-6 space-y-1">
             <button
               type="button"
+              data-testid="config-tab-workspace"
               onClick={() => setActiveSection('workspace')}
               className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'workspace' ? 'bg-accent' : 'hover:bg-accent'}`}
             >
@@ -189,6 +190,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             </button>
             <button
               type="button"
+              data-testid="config-tab-harness"
               onClick={() => setActiveSection('harness')}
               className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'harness' ? 'bg-accent' : 'hover:bg-accent'}`}
             >

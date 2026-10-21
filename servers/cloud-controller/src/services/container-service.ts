@@ -164,7 +164,9 @@ export interface ContainerServiceHooks {
  * 避免多链路交错产生状态错乱或孤儿 Job。
  */
 export class ContainerService {
-  private readonly shutdownHandlers = new Set<(containerId: string) => Promise<void> | void>();
+  private readonly shutdownHandlers = new Set<
+    (containerId: string, reason?: string) => Promise<void> | void
+  >();
   private readonly mutex = new KeyedMutex();
 
   constructor(
@@ -228,7 +230,9 @@ export class ContainerService {
   }
 
   /** 注册销毁通知（由 Socket.IO 网关接入，用于向在线容器 emit shutdown）。 */
-  onShutdown(handler: (containerId: string) => Promise<void> | void): () => void {
+  onShutdown(
+    handler: (containerId: string, reason?: string) => Promise<void> | void,
+  ): () => void {
     this.shutdownHandlers.add(handler);
     return () => this.shutdownHandlers.delete(handler);
   }
@@ -237,10 +241,10 @@ export class ContainerService {
    * 依次执行销毁通知处理器（串行 await）：网关在 handler 内先下发并等待 post 脚本批次，
    * 再 emit shutdown（契约 §2.8）。单个 handler 失败只告警，不阻断后续删除 Job 流程。
    */
-  private async notifyShutdown(containerId: string): Promise<void> {
+  private async notifyShutdown(containerId: string, reason?: string): Promise<void> {
     for (const handler of this.shutdownHandlers) {
       try {
-        await handler(containerId);
+        await handler(containerId, reason);
       } catch (err) {
         this.logger.warn?.(`shutdown handler failed for ${containerId}`, err);
       }
@@ -623,7 +627,12 @@ export class ContainerService {
     // CAS 之前把记录置为 online（connectedAt 被写入且随 CAS 结果保留），此时不得跳过
     // shutdown，否则会丢掉一次优雅停机机会（建议 G）。
     if (destroying.connectedAt !== null) {
-      await this.notifyShutdown(containerId);
+      // R2-20：把真实销毁原因透传给 worker（必须失败 = markMustFailure 写入的 exitReason），
+      // 避免 gateway 硬编码「强制销毁」导致 worker 以 exit(0) 掩盖失败。
+      await this.notifyShutdown(
+        containerId,
+        options?.reason ?? container.exitReason ?? '强制销毁',
+      );
       if (this.cfg.shutdownGraceMs > 0) {
         await delay(this.cfg.shutdownGraceMs);
       }

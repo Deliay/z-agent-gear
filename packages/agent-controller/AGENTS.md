@@ -85,7 +85,8 @@ process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / W
 - 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/root/workspace`，幂等）。
 - 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
   本地单连接保持原行为，配置写入使用权限 `0600`。
-- 任一端 `shutdown` → 关闭两端并退出 0；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- 任一端 `shutdown` → 关闭两端并退出：正常（服务端主动 shutdown/SIGTERM/SIGINT）退出 0；`version_mismatch:*` / `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 

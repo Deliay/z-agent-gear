@@ -52,4 +52,15 @@ describe('KeyedMutex', () => {
 
     await expect(mutex.runExclusive('k', async () => 'ok')).resolves.toBe('ok');
   });
+
+  it('rejects re-entrant acquisition of the same key instead of hanging (R2-19)', async () => {
+    const mutex = new KeyedMutex();
+
+    await expect(
+      mutex.runExclusive('k', async () => mutex.runExclusive('k', async () => 'nested')),
+    ).rejects.toThrow('KeyedMutex re-entrant lock detected for key: k');
+
+    // 外层释放后仍可正常获取
+    await expect(mutex.runExclusive('k', async () => 'ok')).resolves.toBe('ok');
+  });
 });

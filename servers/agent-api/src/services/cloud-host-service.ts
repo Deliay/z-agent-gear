@@ -296,8 +296,12 @@ export class CloudHostService {
         if (err instanceof BillingServiceUnavailableError) {
           throw new Error('billing service unavailable');
         }
-        if ((err as { code?: number }).code === 11000) {
-          // A-5：DB 部分唯一索引兜底（多副本并发创建）
+        if (
+          (err as { code?: number }).code === 11000 &&
+          String((err as Error).message).includes('uniq_active_cloud_host_per_user')
+        ) {
+          // A-5/R2-18：仅云电脑活跃唯一索引冲突映射为业务文案；
+          // ControllerKey/Controller 等其它唯一键冲突仍按原始错误抛出。
           throw new Error('too many cloud hosts');
         }
         throw err;
@@ -490,22 +494,48 @@ export class CloudHostService {
       return this.mapCloudHost(host, await this.countActive(host));
     }
 
-    let current = host;
-    if (host.status !== 'RUNNING') {
+    // R2-5：单 harness 默认会话在 STARTING 窗口内创建（内部允许 STARTING），随后与
+    // RUNNING/readyAt 合并为一次 CAS 落库；前端永远不会观测到「RUNNING + defaultSessionId=null」
+    // 的中间态，消除自动进入丢失与误报失败提示的竞态。
+    if (host.status === 'STARTING') {
+      const harnessTypes = (host.harnessTypes ?? []) as HarnessType[];
+      let defaultSessionId: string | null = null;
+      if (harnessTypes.length === 1) {
+        try {
+          const session = await sessionService.create(String(host.userId), {
+            controllerId: String(host.controllerId),
+            workspaceId: String(host.workspaceId),
+            acpServerType: HARNESS_ACP_TYPES[harnessTypes[0]] ?? 'opencode',
+            allowStartingCloudHost: true,
+          });
+          defaultSessionId = session.id as string;
+        } catch (err) {
+          // 默认会话失败不影响云电脑可用；前端提示可手动创建
+          console.warn(
+            `[cloud-host] create default session failed for ${id}:`,
+            (err as Error).message,
+          );
+        }
+      }
+
       const updated = await CloudHost.findOneAndUpdate(
         { _id: id, deletedAt: null, status: 'STARTING' },
-        { $set: { status: 'RUNNING', readyAt: new Date() } },
+        {
+          $set: {
+            status: 'RUNNING',
+            readyAt: new Date(),
+            ...(defaultSessionId ? { defaultSessionId } : {}),
+          },
+        },
         { new: true },
       ).lean();
       const fetched = updated ?? (await this.findRawHost(id));
       if (!fetched) return null;
-      // CAS 未命中且已被并发终止（STOPPING/STOPPED/FAILED）：不得创建默认会话
-      if (fetched.status !== 'RUNNING') {
-        return this.mapCloudHost(fetched, await this.countActive(fetched));
-      }
-      current = fetched;
+      return this.mapCloudHost(fetched as Doc, await this.countActive(fetched as Doc));
     }
 
+    // 已 RUNNING 的重复 ready（历史遗留/回调重试）：仅在缺默认会话时补建，不改变状态。
+    let current = host;
     const harnessTypes = (current.harnessTypes ?? []) as HarnessType[];
     if (harnessTypes.length === 1 && !current.defaultSessionId) {
       try {
@@ -520,7 +550,6 @@ export class CloudHostService {
         );
         current.defaultSessionId = session.id;
       } catch (err) {
-        // 默认会话失败不影响云电脑可用；前端提示可手动创建
         console.warn(
           `[cloud-host] create default session failed for ${id}:`,
           (err as Error).message,
