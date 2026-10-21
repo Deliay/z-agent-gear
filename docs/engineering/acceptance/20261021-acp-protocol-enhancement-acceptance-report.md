@@ -193,17 +193,17 @@ type: Permanent
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| 🔴-1 | elicitation 终态写入无租户过滤/无终态守卫 | 归属校验与终态单调性未进数据层 | ✅ 已修复 | 64c57ce |
-| 🟠-1 | T-ES3 名实不符 + 无 requestId 静默丢弃 | 用例命名与断言脱节；合法可选 payload 无兜底 | ✅ 已修复 | 64c57ce |
-| 🟠-2 | `raw.authMethods` 非原文 | 转换与留存共用字段 | ✅ 已修复 | 64c57ce |
-| 🟠-3 | `stop()` 后 timer 泄漏/迟到 timeout 事件 | 生命周期清理清单未扩展 | ✅ 已修复 | 64c57ce |
-| 🟠-4 | `reason:'cancelled'` 死契约、待办悬挂误标 | 双通道收敛语义未定义 | ✅ 已修复 | 64c57ce |
-| 🟠-5 | ElicitationDialog `now` 冻结 | 当前时间被当快照 | ✅ 已修复 | 64c57ce |
-| 🟠-6 | Banner 卸载弹窗 + 双弹窗双回传 | 弹窗打开权未共享 | ✅ 已修复 | 64c57ce |
-| 🟠-7 | T-E31/T-E36 声称大于断言 | 台账与断言脱节 | ✅ 已修复 | 64c57ce |
-| 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ✅ 已修复 | 64c57ce |
-| 🟡×15 | §3.10 | — | ✅ 随修复收口（逐项见 §3.11） | 64c57ce |
-| 合并冲突 | PR #250 CONFLICTING（3 文件） | main/release 分叉改同一批 session 文件 | ✅ 已按并集解决（`merge release`） | 64c57ce |
+| 🔴-1 | elicitation 终态写入无租户过滤/无终态守卫 | 归属校验与终态单调性未进数据层 | ✅ 已修复 | 3f30ecf |
+| 🟠-1 | T-ES3 名实不符 + 无 requestId 静默丢弃 | 用例命名与断言脱节；合法可选 payload 无兜底 | ✅ 已修复 | 3f30ecf |
+| 🟠-2 | `raw.authMethods` 非原文 | 转换与留存共用字段 | ✅ 已修复 | 3f30ecf |
+| 🟠-3 | `stop()` 后 timer 泄漏/迟到 timeout 事件 | 生命周期清理清单未扩展 | ✅ 已修复 | 3f30ecf |
+| 🟠-4 | `reason:'cancelled'` 死契约、待办悬挂误标 | 双通道收敛语义未定义 | ✅ 已修复 | 3f30ecf |
+| 🟠-5 | ElicitationDialog `now` 冻结 | 当前时间被当快照 | ✅ 已修复 | 3f30ecf |
+| 🟠-6 | Banner 卸载弹窗 + 双弹窗双回传 | 弹窗打开权未共享 | ✅ 已修复 | 3f30ecf |
+| 🟠-7 | T-E31/T-E36 声称大于断言 | 台账与断言脱节 | ✅ 已修复 | 3f30ecf |
+| 🟠-8 | 模型来源分组验收静默 skip | 环境缺失被静默当通过 | ✅ 已修复 | 3f30ecf |
+| 🟡×15 | §3.10 | — | ✅ 随修复收口（逐项见 §3.11） | 3f30ecf |
+| 合并冲突 | PR #250 CONFLICTING（3 文件） | main/release 分叉改同一批 session 文件 | ✅ 已按并集解决（`merge release`） | 3f30ecf |
 
 ## 五、最终验证
 
