@@ -2,6 +2,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value.trim() === '') return fallback;
+  return value.toLowerCase() === 'true' || value === '1';
+}
+
+function toPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   mongodbUri: process.env.MONGODB_URI || process.env.MONGODB_CONNECTION_STRING || 'mongodb://localhost:27017/agent-gear',
@@ -22,4 +32,14 @@ export const config = {
   // 费用中心：agent-api 不直写计费库，经 admin-api `/internal/billing/*` 转发（缺失时不 fail-fast）
   adminApiUrl: process.env.ADMIN_API_URL || '',
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
+  // 前台云电脑（harness）：默认关闭，由发布参数/灰度打开
+  harnessEnabled: toBool(process.env.HARNESS_ENABLED, false),
+  cloudHostMaxPerUser: toPositiveInt(process.env.CLOUD_HOST_MAX_PER_USER, 1),
+  harnessContainerTtlSeconds: toPositiveInt(process.env.HARNESS_CONTAINER_TTL_SECONDS, 86400),
+  // cloud-controller 内部 API
+  cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',
+  // 容器内标准连接地址与模型网关地址（随创建请求下发，不落库）
+  controllerApiPublicEndpoint: process.env.CONTROLLER_API_PUBLIC_WS_ENDPOINT || '',
+  cloudHostModelBaseUrl: process.env.CLOUD_HOST_MODEL_BASE_URL || '',
+  cloudHostDefaultWorkspace: process.env.CLOUD_HOST_DEFAULT_WORKSPACE || '/root/workspace',
 };

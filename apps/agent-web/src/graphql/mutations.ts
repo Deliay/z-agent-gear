@@ -434,6 +434,46 @@ export const REGENERATE_CONTROLLER_KEY = gql`
   }
 `
 
+// ---------- 云电脑（contracts/cloud-host.graphql） ----------
+
+export const CREATE_CLOUD_HOST = gql`
+  mutation CreateCloudHost($input: CreateCloudHostInput!) {
+    createCloudHost(input: $input) {
+      id
+      name
+      controllerId
+      status
+      harnessTypes
+      defaultSessionId
+      activeSessionCount
+      failureReason
+      deletedAt
+    }
+  }
+`
+
+export const STOP_CLOUD_HOST = gql`
+  mutation StopCloudHost($id: ID!, $force: Boolean) {
+    stopCloudHost(id: $id, force: $force) {
+      id
+      name
+      controllerId
+      status
+      harnessTypes
+      defaultSessionId
+      activeSessionCount
+      failureReason
+      deletedAt
+    }
+  }
+`
+
+export const DELETE_CLOUD_HOST = gql`
+  mutation DeleteCloudHost($id: ID!) {
+    deleteCloudHost(id: $id)
+  }
+`
+
 // ---------- 我的费用（contracts/billing.graphql） ----------
 
 export const CREATE_MY_BILLING_API_KEY = gql`

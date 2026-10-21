@@ -4,6 +4,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
 import { WorkloadDispatcher, truncateLogTail } from './workload-dispatcher.js';
+import { SecretStore, type HarnessSecrets } from './secret-store.js';
 import type { CloudContainerStatus, WorkloadPlanEntry } from '../models/cloud-container.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
@@ -60,9 +61,17 @@ interface RunPayload {
     timeoutMs: number;
   }>;
   budgetMs?: number;
+  env?: Record<string, string>;
 }
 
-function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected?: boolean } = {}) {
+function setup(
+  options: {
+    postBudgetMs?: number;
+    logMaxBytes?: number;
+    connected?: boolean;
+    secretStore?: SecretStore;
+  } = {},
+) {
   const repo = new InMemoryContainerRepository();
   const tokenService = new TokenService(repo);
   const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -78,6 +87,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
   });
   const workloadRepository = new InMemoryWorkloadRepository();
   const workloadLogRepository = new InMemoryWorkloadLogRepository();
+  const secretStore = options.secretStore ?? new SecretStore();
   const emitted: Array<{ containerId: string; event: string; payload: RunPayload }> = [];
   const warnings: unknown[][] = [];
   const forceDestroyCalls: Array<{ containerId: string; reason: string }> = [];
@@ -103,6 +113,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
     postBudgetMs: options.postBudgetMs ?? 5000,
     logMaxBytes: options.logMaxBytes ?? 64,
     forceDestroy: (containerId, reason) => forceDestroyImpl.fn(containerId, reason),
+    secretStore,
     now: () => nowMs,
     logger: {
       info: () => {},
@@ -127,6 +138,32 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
       connectedAt: status === 'online' ? new Date(NOW_BASE) : null,
     });
 
+  const createHarnessContainer = async (
+    workloadIds: string[],
+    overrides: {
+      status?: CloudContainerStatus;
+      workloadPlan?: WorkloadPlanEntry[];
+      hostId?: string | null;
+      hostName?: string | null;
+      userId?: string | null;
+      harnessTypes?: string[];
+    } = {},
+  ) =>
+    repo.create({
+      name: `zag-worker-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'harness',
+      image: 'zero-tools/zag-worker:latest',
+      status: overrides.status ?? 'connecting',
+      workloadIds,
+      workloadPlan: overrides.workloadPlan ?? [],
+      hostId: overrides.hostId === undefined ? 'host-1' : overrides.hostId,
+      hostName: overrides.hostName === undefined ? 'my-pc' : overrides.hostName,
+      harnessTypes: overrides.harnessTypes ?? ['opencode'],
+      userId: overrides.userId === undefined ? 'user-1' : overrides.userId,
+      connectedAt: null,
+    });
+
   const runs = (phase: 'init' | 'post') =>
     emitted.filter((entry) => entry.event === 'workload:run' && entry.payload.phase === phase);
 
@@ -135,6 +172,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
     containerService,
     workloadRepository,
     workloadLogRepository,
+    secretStore,
     dispatcher,
     emitted,
     warnings,
@@ -142,6 +180,7 @@ function setup(options: { postBudgetMs?: number; logMaxBytes?: number; connected
     forceDestroyCalls,
     forceDestroyImpl,
     createContainer,
+    createHarnessContainer,
     runs,
     setNow: (value: number) => {
       nowMs = value;
@@ -1095,5 +1134,143 @@ describe('WorkloadDispatcher - forceDestroy 失败兜底（缺陷修复）', () 
     const stored = await repo.findById(container.id);
     expect(stored?.status).toBe('exited');
     expect(stored?.exitReason).toContain('must-a');
+  });
+});
+
+describe('WorkloadDispatcher - harness env', () => {
+  const secrets: HarnessSecrets = {
+    hostEndpoint: 'wss://controller.example.com',
+    hostKey: 'zag_k_1_host-secret',
+    modelApiKey: 'zag_sk_model-secret',
+    modelBaseUrl: 'http://admin-api:8002/v1',
+    modelIds: '["model-a","model-b"]',
+    defaultWorkspace: '/root/workspace',
+  };
+
+  it('T-CC12: harness init 批次 env 含全部 ZAG_*（含 model 配置）', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'agent-gear harness prepare' }));
+    const container = await createHarnessContainer(['w1'], { harnessTypes: ['opencode'] });
+    secretStore.put(container.id, secrets);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
+    const payload = runs('init')[0]!.payload;
+    expect(payload.env).toEqual({
+      ZAG_HARNESS_TYPES: 'opencode',
+      ZAG_CONTAINER_ID: container.id,
+      ZAG_HOST_ID: 'host-1',
+      ZAG_HOST_NAME: 'my-pc',
+      ZAG_HOST_ENDPOINT: secrets.hostEndpoint,
+      ZAG_HOST_KEY: secrets.hostKey,
+      ZAG_DEFAULT_WORKSPACE: secrets.defaultWorkspace,
+      ZAG_USER_TYPE: 'front_user',
+      ZAG_USER_ID: 'user-1',
+      ZAG_MODEL_API_KEY: secrets.modelApiKey,
+      ZAG_MODEL_BASE_URL: secrets.modelBaseUrl,
+      ZAG_MODEL_IDS: secrets.modelIds,
+    });
+    expect((await repo.findById(container.id))?.status).toBe('initializing');
+  });
+
+  it('T-CC1/T-CC8: idle init 批次不携带 env（行为不变）', async () => {
+    const { dispatcher, workloadRepository, createContainer, runs } = setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    const container = await createContainer(['w1']);
+
+    await dispatcher.startInit(container.id);
+
+    const payload = runs('init')[0]!.payload;
+    expect(payload.env).toBeUndefined();
+    expect('env' in payload).toBe(false);
+  });
+
+  it('T-CC13: harness secret 缺失 → init 失败且不 online，日志不打印 secret', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs, warnings } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
+    const container = await createHarnessContainer(['w1']);
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started.initializing).toBe(false);
+    expect(started.failed).toBe(true);
+    expect(runs('init')).toHaveLength(0);
+    const stored = await repo.findById(container.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.exitReason).toContain('环境');
+    // 告警文本不包含任何 secret 或模型 Key 占位
+    expect(JSON.stringify(warnings)).not.toContain('zag_sk_');
+    expect(JSON.stringify(warnings)).not.toContain('zag_k_');
+  });
+
+  it('T-CC13: harness model 配置缺失视为错误（host 字段缺失则跳过对应变量）', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
+    const container = await createHarnessContainer(['w1']);
+    secretStore.put(container.id, { ...secrets, modelApiKey: '' });
+
+    const started = await dispatcher.startInit(container.id);
+    expect(started.failed).toBe(true);
+    expect(runs('init')).toHaveLength(0);
+    expect((await repo.findById(container.id))?.status).toBe('failed');
+
+    // 缺可选容器字段时跳过变量，但 model 配置齐全仍可下发
+    const secretStore2 = new SecretStore();
+    const second = setup({ secretStore: secretStore2 });
+    second.workloadRepository.add(mkWorkload('w2', 'opencode', { initScript: 'echo init' }));
+    const container2 = await second.createHarnessContainer(['w2'], {
+      hostId: null,
+      hostName: null,
+      userId: null,
+    });
+    secretStore2.put(container2.id, secrets);
+
+    const started2 = await second.dispatcher.startInit(container2.id);
+    expect(started2.initializing).toBe(true);
+    const env = second.runs('init')[0]!.payload.env!;
+    expect(env.ZAG_HOST_ID).toBeUndefined();
+    expect(env.ZAG_HOST_NAME).toBeUndefined();
+    expect(env.ZAG_USER_ID).toBeUndefined();
+    expect(env.ZAG_CONTAINER_ID).toBe(container2.id);
+    expect(env.ZAG_MODEL_API_KEY).toBe(secrets.modelApiKey);
+  });
+
+  it('T-CC12: harness post 批次同样携带 env（secret 仍存在时）', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, workloadLogRepository, createHarnessContainer, runs } =
+      setup({ secretStore });
+    workloadRepository.add(
+      mkWorkload('w1', 'opencode', { initScript: 'echo init', postScript: 'echo cleanup' }),
+    );
+    const container = await createHarnessContainer(['w1']);
+    secretStore.put(container.id, secrets);
+    await dispatcher.startInit(container.id);
+
+    // 让 init 完成再进入销毁 post 批次
+    const log = (await workloadLogRepository.findByContainer(container.id))[0]!;
+    await dispatcher.handleResult(container.id, { logId: log.id, status: 'success' });
+
+    const post = dispatcher.runPostBatch(container.id);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const payload = runs('post')[0]!.payload;
+    expect(payload.env?.ZAG_MODEL_API_KEY).toBe(secrets.modelApiKey);
+    expect(payload.env?.ZAG_HARNESS_TYPES).toBe('opencode');
+
+    // 结束 post，避免未完成的 waiter 悬挂
+    const postLog = (await workloadLogRepository.findByContainer(container.id)).find(
+      (entry) => entry.phase === 'post',
+    )!;
+    await dispatcher.handleResult(container.id, { logId: postLog.id, status: 'success' });
+    await post;
   });
 });

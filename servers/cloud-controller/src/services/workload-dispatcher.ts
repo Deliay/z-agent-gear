@@ -12,6 +12,7 @@ import {
   type WorkloadLogStatus,
 } from '../models/cloud-workload-log.js';
 import { KeyedMutex } from './keyed-mutex.js';
+import type { HarnessSecrets, HarnessSecretStore } from './secret-store.js';
 
 interface Logger {
   info?: (...args: unknown[]) => void;
@@ -41,6 +42,11 @@ export interface RequiredFailure {
 export interface StartInitResult {
   initializing: boolean;
   requiredFailure: RequiredFailure | null;
+  /**
+   * harness 运行环境无法构建（secret/model 缺失）时置位：容器已记 failed，
+   * 调用方**不得** markOnline（T-CC13）。
+   */
+  failed?: boolean;
 }
 
 export interface WorkloadResultPayload {
@@ -71,6 +77,8 @@ export interface WorkloadDispatcherDeps {
   forceDestroy: (containerId: string, reason: string) => Promise<unknown>;
   /** 可注入的时钟（测试确定性用），默认 `Date.now`。 */
   now?: () => number;
+  /** 云电脑运行期 secret（仅 harness 使用；缺失时 init 失败，见 T-CC13）。 */
+  secretStore?: HarnessSecretStore;
   logger?: Logger;
 }
 
@@ -88,6 +96,9 @@ const DISCONNECTED_LOG = '容器未连接，未执行';
 const DESTROY_INTERRUPT_LOG = '容器销毁中断';
 const POST_BUDGET_EXCEEDED_LOG = '清理脚本超时';
 const INIT_TIMEOUT_LOG = '初始化超时';
+/** harness secret/模型配置缺失时的中断说明与失败原因（不含 secret 明文）。 */
+const HARNESS_ENV_MISSING_LOG = '云电脑运行环境缺失，未执行';
+const HARNESS_ENV_MISSING_REASON = '云电脑初始化环境缺失';
 /** 必须项失败后，对剩余非终态 init 记录追加的中断说明（裁决 5）。 */
 const REQUIRED_FAILURE_INTERRUPT_LOG = '必须工作负载初始化失败，已中断';
 
@@ -134,6 +145,41 @@ export function resolveContainerPlan(
     implicit: false,
     required: false,
   }));
+}
+
+/**
+ * 构建 harness 的 `workload:run.env`（契约 §2.9「云电脑初始化 env」）。
+ *
+ * - `ZAG_HARNESS_TYPES`/`ZAG_CONTAINER_ID` 必有；
+ * - 容器缺失的关联字段（hostId/hostName/userId）跳过对应变量（历史/降级兼容）；
+ * - **model 配置（Key/BaseURL/modelIds）缺失视为错误**：不给 worker 下发半套配置，
+ *   由调用方把容器判失败（T-CC13）。返回值/错误文案不含任何 secret 明文。
+ */
+export function buildHarnessEnv(
+  container: Pick<CloudContainerEntity, 'id' | 'hostId' | 'hostName' | 'harnessTypes' | 'userId'>,
+  secrets: HarnessSecrets | null,
+): { ok: true; env: Record<string, string> } | { ok: false; reason: string } {
+  if (!secrets) return { ok: false, reason: 'secret not found' };
+  if (!secrets.modelApiKey || !secrets.modelBaseUrl || !secrets.modelIds) {
+    return { ok: false, reason: 'model config incomplete' };
+  }
+
+  const env: Record<string, string> = {
+    ZAG_HARNESS_TYPES: (container.harnessTypes ?? []).join(','),
+    ZAG_CONTAINER_ID: container.id,
+  };
+  if (container.hostId) env.ZAG_HOST_ID = container.hostId;
+  if (container.hostName) env.ZAG_HOST_NAME = container.hostName;
+  if (secrets.hostEndpoint) env.ZAG_HOST_ENDPOINT = secrets.hostEndpoint;
+  if (secrets.hostKey) env.ZAG_HOST_KEY = secrets.hostKey;
+  if (secrets.defaultWorkspace) env.ZAG_DEFAULT_WORKSPACE = secrets.defaultWorkspace;
+  env.ZAG_USER_TYPE = 'front_user';
+  if (container.userId) env.ZAG_USER_ID = container.userId;
+  env.ZAG_MODEL_API_KEY = secrets.modelApiKey;
+  env.ZAG_MODEL_BASE_URL = secrets.modelBaseUrl;
+  env.ZAG_MODEL_IDS = secrets.modelIds;
+
+  return { ok: true, env };
 }
 
 /**
@@ -291,9 +337,30 @@ export class WorkloadDispatcher {
       return noInit;
     }
 
+    // 云电脑：secret/模型配置缺失时不向 worker 下发半套环境，直接判失败（不 online，T-CC13）。
+    const runEnv = this.resolveRunEnv(container);
+    if (!runEnv.ok) {
+      this.deps.logger?.warn?.(
+        `[workload] harness env unavailable containerId=${containerId} (init aborted)`,
+      );
+      await this.markRemainingInitTimeout(containerId, now, HARNESS_ENV_MISSING_LOG);
+      await this.deps.containerService.markFailed(containerId, HARNESS_ENV_MISSING_REASON);
+      return { initializing: false, requiredFailure: null, failed: true };
+    }
+
     await this.deps.containerService.markInitializing(containerId, runLogs[0]!.workloadName);
-    this.emitRun(containerId, 'init', runLogs);
+    this.emitRun(containerId, 'init', runLogs, runEnv.env);
     return { initializing: true, requiredFailure: null };
+  }
+
+  /** 解析本轮下发所需 env：非 harness 返回无 env；harness 读取 secretStore（失败不打印内容）。 */
+  private resolveRunEnv(
+    container: CloudContainerEntity,
+  ): { ok: true; env?: Record<string, string> } | { ok: false } {
+    if (container.purpose !== 'harness') return { ok: true };
+    const secrets = this.deps.secretStore?.get(container.id) ?? null;
+    const result = buildHarnessEnv(container, secrets);
+    return result.ok ? { ok: true, env: result.env } : { ok: false };
   }
 
   /** 把该容器剩余非终态 init 记录标 `timeout` 并追加中断说明（裁决 5）。 */
@@ -608,9 +675,16 @@ export class WorkloadDispatcher {
       finishedAt: null,
     }));
     const logs = await this.deps.workloadLogRepository.createMany(inputs);
+    const runEnv = this.resolveRunEnv(container);
+    if (!runEnv.ok) {
+      // post 批次不阻断销毁：仅跳过 env 并告警（不含 secret 内容）。
+      this.deps.logger?.warn?.(
+        `[workload] harness env unavailable containerId=${containerId} (post batch without env)`,
+      );
+    }
     // 仍持有容器互斥锁：先注册 waiter 再 emit，杜绝「结果先到、waiter 未注册」的窗口。
     const wait = this.createWaiter(containerId, this.deps.postBudgetMs);
-    this.emitRun(containerId, 'post', logs);
+    this.emitRun(containerId, 'post', logs, runEnv.ok ? runEnv.env : undefined);
     return { wait };
   }
 
@@ -747,6 +821,7 @@ export class WorkloadDispatcher {
     containerId: string,
     phase: WorkloadLogPhase,
     logs: CloudWorkloadLogEntity[],
+    env?: Record<string, string>,
   ): void {
     const payload: Record<string, unknown> = {
       phase,
@@ -762,6 +837,8 @@ export class WorkloadDispatcher {
       })),
     };
     if (phase === 'post') payload.budgetMs = this.deps.postBudgetMs;
+    // 仅 harness 携带 env；普通容器保持报文形状不变（无 env 键）。
+    if (env) payload.env = env;
     this.deps.emitToContainer(containerId, WORKLOAD_RUN_EVENT, payload);
   }
 

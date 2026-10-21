@@ -533,4 +533,88 @@ describe('ReconciliationService（三线对账）', () => {
     expect(failedReport.errors[0]).toMatchObject({ error: 'list_containers_failed' });
     expect(billing.handleContainerDestroyed).not.toHaveBeenCalled();
   });
+
+  it('T-BK17: cloud-host-keys — 宿主非 RUNNING/已删除/过期 Key 被撤销，RUNNING 保留，账号 Key 不受影响', async () => {
+    const { BillingApiKey } = await import('../../models/billing-api-key.js');
+    const accountId = new mongoose.Types.ObjectId();
+    const host = (status: string, deletedAt: Date | null = null) => {
+      const _id = new mongoose.Types.ObjectId();
+      return { _id, status, deletedAt };
+    };
+    const running = host('RUNNING');
+    const stopped = host('STOPPED');
+    const deleted = host('STOPPED', new Date());
+    const missingId = new mongoose.Types.ObjectId();
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    const past = new Date(Date.now() - 1000);
+
+    for (const item of [running, stopped, deleted]) {
+      await mongoose.connection.db!.collection('cloudhosts').insertOne({
+        ...item,
+        userId: new mongoose.Types.ObjectId(),
+        controllerId: new mongoose.Types.ObjectId(),
+        createdAt: new Date(),
+      });
+    }
+
+    const makeKey = (cloudHostId: mongoose.Types.ObjectId | null, expiresAt: Date, scope = 'cloud_host') =>
+      BillingApiKey.create({
+        accountId,
+        ownerType: 'front_user',
+        ownerId: 'recon-user',
+        name: 'k',
+        keyPrefix: `zag_sk_${Math.random().toString(16).slice(2, 11)}`,
+        keyHash: 'h',
+        scope,
+        cloudHostId,
+        expiresAt,
+      });
+
+    const runningKey = await makeKey(running._id, future);
+    const stoppedKey = await makeKey(stopped._id, future);
+    const deletedKey = await makeKey(deleted._id, future);
+    const missingKey = await makeKey(missingId, future);
+    const expiredKey = await makeKey(running._id, past);
+    const accountKey = await BillingApiKey.create({
+      accountId,
+      ownerType: 'front_user',
+      ownerId: 'recon-user',
+      name: 'account',
+      keyPrefix: 'zag_sk_accountaa',
+      keyHash: 'h',
+    });
+
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('cloud-host-keys');
+    expect(report.line).toBe('cloud-host-keys');
+    expect(report.checkedCount).toBe(5);
+
+    const status = async (id: mongoose.Types.ObjectId) =>
+      (await BillingApiKey.findById(id).lean())?.status;
+    expect(await status(runningKey._id)).toBe('active');
+    expect(await status(stoppedKey._id)).toBe('revoked');
+    expect(await status(deletedKey._id)).toBe('revoked');
+    expect(await status(missingKey._id)).toBe('revoked');
+    expect(await status(expiredKey._id)).toBe('revoked');
+    expect(await status(accountKey._id)).toBe('active');
+
+    const reasons = report.errors.map((error) => error.reason);
+    expect(reasons).toEqual(
+      expect.arrayContaining([
+        'cloud_host_not_running',
+        'cloud_host_deleted',
+        'cloud_host_missing',
+        'expired',
+      ]),
+    );
+
+    // 幂等：再跑一次不重复撤销（已撤销的不在扫描范围）
+    const [second] = await recon.run('cloud-host-keys');
+    expect(second.checkedCount).toBe(1);
+    expect(second.errorCount).toBe(0);
+  });
 });

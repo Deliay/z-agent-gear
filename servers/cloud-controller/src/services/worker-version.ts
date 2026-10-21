@@ -11,6 +11,12 @@
 /** 本期最低兼容的 worker 版本（工作负载能力自 2.2.0 起提供）。 */
 export const MIN_WORKER_VERSION = '2.2.0';
 
+/**
+ * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供。
+ * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
+ */
+export const MIN_HARNESS_WORKER_VERSION = '2.5.0';
+
 /** 本期支持的 worker major 版本。 */
 export const SUPPORTED_MAJOR = 2;
 
@@ -100,6 +106,17 @@ export function isSupportedWorkerVersion(
     return { supported: false, reason: 'below-minimum', parsed };
   }
   return { supported: true, reason: 'supported', parsed };
+}
+
+/**
+ * 判定云电脑（`purpose=harness`）上报版本是否兼容：`>=MIN_HARNESS_WORKER_VERSION` 且 major 为 2。
+ * 复用与普通容器完全相同的解析/比较实现，仅最低版本不同。
+ */
+export function isSupportedHarnessWorkerVersion(
+  raw: unknown,
+  supportedMajor: number = SUPPORTED_MAJOR,
+): WorkerVersionSupport {
+  return isSupportedWorkerVersion(raw, MIN_HARNESS_WORKER_VERSION, supportedMajor);
 }
 
 /**

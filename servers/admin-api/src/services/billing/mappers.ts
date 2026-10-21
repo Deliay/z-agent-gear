@@ -56,6 +56,8 @@ export function toBillingApiCall(doc: Record<string, unknown>) {
     id: documentId(doc),
     requestId: String(doc.requestId ?? ''),
     accountId: String(doc.accountId ?? ''),
+    cloudHostId: doc.cloudHostId ? String(doc.cloudHostId) : null,
+    billable: doc.billable !== false,
     modelId: String(doc.modelId ?? ''),
     modelName: String(doc.modelName ?? ''),
     inputTokens: Number(doc.inputTokens ?? 0),

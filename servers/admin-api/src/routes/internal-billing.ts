@@ -40,6 +40,22 @@ function toDate(value: unknown): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+/** API Key DTO → 内部 REST wire（时间 ISO；新增 scope/cloudHostId/expiresAt）。 */
+function apiKeyToWire(key: {
+  scope: string;
+  cloudHostId: string | null;
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
+  createdAt: Date;
+}) {
+  return {
+    ...key,
+    expiresAt: key.expiresAt ? key.expiresAt.toISOString() : null,
+    lastUsedAt: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
+    createdAt: key.createdAt.toISOString(),
+  };
+}
+
 /** `/internal/billing/*`：仅供 agent-api 调用（Bearer INTERNAL_API_TOKEN）。 */
 export function createInternalBillingRouter(): Router {
   const router = Router();
@@ -182,17 +198,11 @@ export function createInternalBillingRouter(): Router {
       return;
     }
     const keys = await apiKeyService.list(ownerType, ownerId);
-    res.json(
-      keys.map((key) => ({
-        ...key,
-        lastUsedAt: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
-        createdAt: key.createdAt.toISOString(),
-      })),
-    );
+    res.json(keys.map(apiKeyToWire));
   });
 
   router.post('/api-keys', async (req: Request, res: Response) => {
-    const { ownerType, ownerId, name } = req.body ?? {};
+    const { ownerType, ownerId, name, scope: rawScope, cloudHostId, expiresAt } = req.body ?? {};
     if (
       (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
       typeof ownerId !== 'string' ||
@@ -202,30 +212,95 @@ export function createInternalBillingRouter(): Router {
       res.status(400).json({ error: 'INVALID_BODY' });
       return;
     }
+    // 缺省 scope=account（既有 agent-api 调用零改动）；cloud_host 必须绑定云电脑与合法有效期。
+    const scope = rawScope === undefined || rawScope === null ? 'account' : rawScope;
+    if (scope !== 'account' && scope !== 'cloud_host') {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    let hostId: string | null = null;
+    let expires: Date | undefined;
+    if (scope === 'cloud_host') {
+      if (typeof cloudHostId !== 'string' || !mongoose.isValidObjectId(cloudHostId)) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      expires = toDate(expiresAt);
+      if (!expires) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      hostId = cloudHostId;
+    }
     try {
       const account = await accountService.getOrCreate(ownerType, ownerId);
-      const created = await apiKeyService.create({
-        accountId: account.id,
-        ownerType,
-        ownerId,
-        name,
-      });
+      const created =
+        scope === 'cloud_host'
+          ? await apiKeyService.createCloudHostScopedKey({
+              accountId: account.id,
+              ownerType,
+              ownerId,
+              name,
+              cloudHostId: hostId!,
+              expiresAt: expires!,
+            })
+          : await apiKeyService.create({
+              accountId: account.id,
+              ownerType,
+              ownerId,
+              name,
+            });
       res.status(201).json({
-        apiKey: {
-          ...created.apiKey,
-          createdAt: created.apiKey.createdAt.toISOString(),
-          lastUsedAt: created.apiKey.lastUsedAt?.toISOString() ?? null,
-        },
+        apiKey: apiKeyToWire(created.apiKey),
         secret: created.secret,
       });
     } catch (err) {
       // P3：校验类失败 400，其余（Mongo/驱动等）500——基建故障不误报为请求错误。
       const message = (err as Error).message;
-      if (message === 'API Key 名称不能为空') {
+      if (
+        message === 'API Key 名称不能为空' ||
+        message === '云电脑 ID 非法' ||
+        message === 'API Key 有效期非法'
+      ) {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }
       console.error('[internal-billing] POST /api-keys failed', message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // 按云电脑 ID 撤销全部 active Key（停止/删除/终态兜底）：幂等。
+  router.post('/api-keys/revoke-by-host', async (req: Request, res: Response) => {
+    const cloudHostId = req.body?.cloudHostId;
+    if (typeof cloudHostId !== 'string' || !mongoose.isValidObjectId(cloudHostId)) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const revoked = await apiKeyService.revokeByCloudHost(cloudHostId);
+      res.json({ success: true, revoked });
+    } catch (err) {
+      console.error('[internal-billing] POST /api-keys/revoke-by-host failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // 按 ID 撤销（不要求 owner）：幂等；未知 id 404。
+  router.post('/api-keys/:id/revoke', async (req: Request, res: Response) => {
+    if (!mongoose.isValidObjectId(String(req.params.id))) {
+      res.status(400).json({ error: 'INVALID_ID' });
+      return;
+    }
+    try {
+      const revoked = await apiKeyService.revokeById(String(req.params.id));
+      res.json({ success: true, apiKey: apiKeyToWire(revoked) });
+    } catch (err) {
+      if (err instanceof ApiKeyNotFoundError) {
+        res.status(404).json({ error: 'NOT_FOUND' });
+        return;
+      }
+      console.error('[internal-billing] POST /api-keys/:id/revoke failed', (err as Error).message);
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });

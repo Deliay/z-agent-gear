@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import Sidebar from '../Sidebar';
-import type { HomeOverviewData, HomeOverviewControllerData, HomeOverviewWorkspaceData, SessionData } from '../../graphql/types';
+import type { CloudHostData, HomeOverviewData, HomeOverviewControllerData, HomeOverviewWorkspaceData, SessionData } from '../../graphql/types';
 import type { WorkflowInstanceSummaryData } from '../../graphql/workflow';
 
 const mockUseMutation = vi.fn();
+const mockUseQuery = vi.fn();
 const mockUseHomeOverview = vi.fn();
+const mockNavigate = vi.fn();
+const mockRefetch = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: () => [mockUseMutation],
+  useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
 vi.mock('../../stores/homeOverview', () => ({
@@ -22,11 +26,39 @@ vi.mock('react-router-dom', () => ({
     </a>
   ),
   useParams: () => ({}),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../session/NewSessionDialog', () => ({
   default: () => <div data-testid="new-session-dialog" />,
+}));
+
+vi.mock('../cloud-host/NewCloudHostDialog', () => ({
+  default: ({ open, onCreated, onClose }: {
+    open: boolean;
+    onCreated: (cloudHost: CloudHostData) => void;
+    onClose: () => void;
+  }) => open ? (
+    <div data-testid="new-cloud-host-dialog">
+      <button
+        type="button"
+        onClick={() => onCreated({
+          id: 'cloud-host-new',
+          name: '新云电脑',
+          controllerId: 'ctrl-cloud-new',
+          status: 'STARTING',
+          harnessTypes: ['OPENCODE'],
+          defaultSessionId: null,
+          activeSessionCount: 0,
+          failureReason: null,
+          deletedAt: null,
+        })}
+      >
+        提交云电脑
+      </button>
+      <button type="button" onClick={onClose}>关闭云电脑对话框</button>
+    </div>
+  ) : null,
 }));
 
 vi.mock('../workflow/InstantiateWorkflowDialog', () => ({
@@ -108,8 +140,7 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
   };
 }
 
-function makeInstance(overrides: Partial<WorkflowInstanceSummaryData> = {}): WorkflowInstanceSummaryData {
-  return {
+function makeInstance(overrides: Partial<WorkflowInstanceSummaryData> = {}): WorkflowInstanceSummaryData {  return {
     id: 'inst-1',
     configuredWorkflowId: null,
     controllerId: 'ctrl-1',
@@ -127,6 +158,21 @@ function makeInstance(overrides: Partial<WorkflowInstanceSummaryData> = {}): Wor
   };
 }
 
+function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
+  return {
+    id: 'cloud-host-1',
+    name: '云电脑',
+    controllerId: 'ctrl-1',
+    status: 'RUNNING',
+    harnessTypes: ['OPENCODE'],
+    defaultSessionId: null,
+    activeSessionCount: 0,
+    failureReason: null,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 /** 默认空数据；测试通过 mockHome 覆盖 */
 function mockHome(overrides: Partial<HomeOverviewData> = {}) {
   const data: HomeOverviewData = {
@@ -140,13 +186,21 @@ function mockHome(overrides: Partial<HomeOverviewData> = {}) {
     unreadTodoCount: 0,
     ...overrides,
   };
-  mockUseHomeOverview.mockReturnValue({ data, loading: false, error: undefined, refetch: vi.fn() });
+  mockUseHomeOverview.mockReturnValue({ data, loading: false, error: undefined, refetch: mockRefetch });
   return data;
+}
+
+function mockCapabilities(enabled = true, supportedHarnesses: CloudHostData['harnessTypes'] = ['OPENCODE']) {
+  mockUseQuery.mockReturnValue({
+    data: { cloudHostCapabilities: { enabled, supportedHarnesses } },
+    loading: false,
+  });
 }
 
 describe('Sidebar 集成测试', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCapabilities();
     mockHome();
   });
 
@@ -298,6 +352,146 @@ describe('Sidebar 集成测试', () => {
 
       expect(screen.getByText('已归档实例')).toBeInTheDocument();
       expect(archiveButton).toHaveAttribute('aria-expanded', 'true');
+    });
+  });
+
+  describe('云电脑体验（Phase 8）', () => {
+    it('T-AW1 云电脑显示云图标，普通主机不显示', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost() }),
+          makeController({ id: 'ctrl-local', type: 'local' }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getAllByTestId('cloud-host-icon')).toHaveLength(1);
+    });
+
+    it.each([
+      ['STARTING', '启动中'],
+      ['RUNNING', '运行中'],
+      ['STOPPING', '停止中'],
+      ['STOPPED', '已销毁'],
+      ['FAILED', '失败'],
+    ] as const)('T-AW6 %s 映射为「%s」且已销毁仍可进入', (status, label) => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status }) }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getByTestId('cloud-host-status')).toHaveTextContent(label);
+      fireEvent.click(screen.getByTitle('控制器配置'));
+      expect(mockNavigate).toHaveBeenCalledWith('/settings?controllerId=ctrl-cloud');
+    });
+
+    it('FAILED 状态展示失败原因', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'FAILED', failureReason: 'container exited' }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getByTestId('cloud-host-status')).toHaveTextContent('失败 · container exited');
+    });
+
+    it('T-AW2 capabilities.enabled=false 时隐藏新建云电脑入口', () => {
+      mockCapabilities(false, []);
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.queryByLabelText('新建云电脑')).not.toBeInTheDocument();
+    });
+
+    it('T-AW2 无活跃云电脑时显示新建入口并可打开对话框', () => {
+      render(<Sidebar username="testuser" />);
+
+      const entry = screen.getByLabelText('新建云电脑');
+      expect(entry).not.toBeDisabled();
+      fireEvent.click(entry);
+
+      expect(screen.getByTestId('new-cloud-host-dialog')).toBeInTheDocument();
+    });
+
+    it('T-AW2 已有 RUNNING 云电脑时禁用并提示 1 实例上限', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      const entry = screen.getByLabelText('新建云电脑');
+      expect(entry).toBeDisabled();
+      expect(entry).toHaveAttribute('title', '每用户同时最多 1 个云电脑实例');
+    });
+
+    it.each(['STARTING', 'STOPPING'] as const)('%s 状态同样占用实例上限', (status) => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status }) }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getByLabelText('新建云电脑')).toBeDisabled();
+    });
+
+    it('T-AW4 新建成功后 refetch HOME_OVERVIEW 并进入主机配置页', () => {
+      render(<Sidebar username="testuser" />);
+
+      fireEvent.click(screen.getByLabelText('新建云电脑'));
+      fireEvent.click(screen.getByText('提交云电脑'));
+
+      expect(mockRefetch).toHaveBeenCalled();
+      expect(mockNavigate).toHaveBeenCalledWith('/settings?controllerId=ctrl-cloud-new');
+      expect(screen.queryByTestId('new-cloud-host-dialog')).not.toBeInTheDocument();
+    });
+
+    it('T-AW14 mobile Sidebar 同样可达新建云电脑入口', () => {
+      render(<Sidebar username="testuser" mobile />);
+
+      expect(screen.getByLabelText('新建云电脑')).toBeInTheDocument();
+    });
+
+    it('已销毁条目置灰但仍可进入', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status: 'STOPPED' }) }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      const row = screen.getByTestId('cloud-host-status').closest('button');
+      expect(row).toHaveClass('opacity-50');
+      expect(screen.getByTitle('控制器配置')).toBeInTheDocument();
+    });
+
+    it('云电脑未运行时禁用新建会话入口并提示', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status: 'STOPPED' }) }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      const buttons = screen.getAllByLabelText('新建会话');
+      const sectionButton = buttons.find((button) => button.getAttribute('title') === '云电脑未运行，无法创建会话');
+      expect(sectionButton).toBeDefined();
+      expect(sectionButton).toBeDisabled();
     });
   });
 });

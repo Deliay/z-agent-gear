@@ -1,0 +1,194 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parse } from 'jsonc-parser';
+import {
+  OpencodeConfigError,
+  ZAG_PROVIDER_NPM,
+  buildZagProvider,
+  resolveOpencodeConfigPath,
+  writeOpencodeConfig,
+} from './opencode-config.js';
+
+const TMP_BASE = '/tmp/opencode';
+
+const ENV = {
+  modelBaseUrl: 'http://admin-api:8002/v1',
+  modelApiKey: 'zag_sk_super_secret',
+  modelIds: ['model-a', 'model-b'],
+};
+
+async function makeDir(): Promise<string> {
+  await mkdir(TMP_BASE, { recursive: true });
+  return mkdtemp(join(TMP_BASE, 'opencode-config-'));
+}
+
+async function fileMode(path: string): Promise<number> {
+  return (await stat(path)).mode & 0o777;
+}
+
+describe('buildZagProvider (T-AG9/T-AG11)', () => {
+  it('builds an OpenAI-compatible provider with baseURL/apiKey/models', () => {
+    expect(buildZagProvider(ENV)).toEqual({
+      npm: '@ai-sdk/openai-compatible',
+      name: 'ZAG',
+      options: {
+        baseURL: 'http://admin-api:8002/v1',
+        apiKey: 'zag_sk_super_secret',
+      },
+      models: {
+        'model-a': { name: 'model-a' },
+        'model-b': { name: 'model-b' },
+      },
+    });
+    expect(ZAG_PROVIDER_NPM).toBe('@ai-sdk/openai-compatible');
+  });
+
+  it('writes models:{} for an empty model list', () => {
+    expect(buildZagProvider({ ...ENV, modelIds: [] }).models).toEqual({});
+  });
+});
+
+describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('T-AG9: creates opencode.jsonc with provider.zag and 0600 permissions', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+
+    const result = await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    expect(result.path).toBe(join(dir, 'opencode.jsonc'));
+    expect(result.created).toBe(true);
+    expect(result.modelCount).toBe(2);
+    expect(await fileMode(result.path)).toBe(0o600);
+
+    const config = parse(await readFile(result.path, 'utf-8'));
+    expect(config.provider.zag.options.baseURL).toBe('http://admin-api:8002/v1');
+    expect(config.provider.zag.options.apiKey).toBe('zag_sk_super_secret');
+    expect(config.provider.zag.models).toEqual({
+      'model-a': { name: 'model-a' },
+      'model-b': { name: 'model-b' },
+    });
+  });
+
+  it('T-AG10: merges an existing config, preserving comments and other providers and replacing provider.zag', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const target = join(dir, 'opencode.jsonc');
+    await writeFile(
+      target,
+      `{
+  // keep this comment
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    // existing provider must survive
+    "other": {
+      "npm": "@example/other",
+      "name": "Other",
+      "options": { "baseURL": "http://other" },
+      "models": { "x": { "name": "x" } }
+    },
+    "zag": {
+      "npm": "old-npm",
+      "name": "Old ZAG",
+      "options": { "baseURL": "http://old", "apiKey": "old-key" },
+      "models": {}
+    }
+  }
+}
+`,
+      'utf-8',
+    );
+
+    await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    const text = await readFile(target, 'utf-8');
+    expect(text).toContain('// keep this comment');
+    expect(text).toContain('// existing provider must survive');
+
+    const config = parse(text);
+    expect(config.$schema).toBe('https://opencode.ai/config.json');
+    expect(config.provider.other).toMatchObject({ npm: '@example/other', name: 'Other' });
+    expect(config.provider.zag).toMatchObject({
+      npm: ZAG_PROVIDER_NPM,
+      name: 'ZAG',
+      options: { baseURL: 'http://admin-api:8002/v1', apiKey: 'zag_sk_super_secret' },
+    });
+    // 旧 apiKey/baseURL 已被替换
+    expect(text).not.toContain('old-key');
+    expect(text).not.toContain('http://old');
+  });
+
+  it('T-AG11: writes models:{} when ZAG_MODEL_IDS is an empty array', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+
+    await writeOpencodeConfig({ env: { ...ENV, modelIds: [] }, configDir: dir });
+
+    const config = parse(await readFile(join(dir, 'opencode.jsonc'), 'utf-8'));
+    expect(config.provider.zag.models).toEqual({});
+  });
+
+  it('T-AG12: merges an existing opencode.json instead of creating a new .jsonc', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const jsonPath = join(dir, 'opencode.json');
+    await writeFile(jsonPath, '{\n  "theme": "dark"\n}\n', 'utf-8');
+
+    const result = await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    expect(result.path).toBe(jsonPath);
+    expect(result.created).toBe(false);
+    expect(await fileMode(jsonPath)).toBe(0o600);
+
+    const config = parse(await readFile(jsonPath, 'utf-8'));
+    expect(config.theme).toBe('dark');
+    expect(config.provider.zag.name).toBe('ZAG');
+
+    // 不创建并存的 .jsonc
+    await expect(stat(join(dir, 'opencode.jsonc'))).rejects.toThrow();
+  });
+
+  it('T-AG9b: tightens permissions of an existing config to 0600', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const target = join(dir, 'opencode.jsonc');
+    await writeFile(target, '{}\n', 'utf-8');
+    await chmod(target, 0o644);
+
+    await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    expect(await fileMode(target)).toBe(0o600);
+  });
+
+  it('rejects invalid JSONC and leaves the file untouched', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const target = join(dir, 'opencode.jsonc');
+    const original = '{ "provider": ';
+    await writeFile(target, original, 'utf-8');
+
+    await expect(writeOpencodeConfig({ env: ENV, configDir: dir })).rejects.toBeInstanceOf(
+      OpencodeConfigError,
+    );
+    expect(await readFile(target, 'utf-8')).toBe(original);
+  });
+
+  it('T-AG12b: resolves the target file by precedence', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+
+    expect(await resolveOpencodeConfigPath(dir)).toBe(join(dir, 'opencode.jsonc'));
+
+    await writeFile(join(dir, 'opencode.json'), '{}\n', 'utf-8');
+    expect(await resolveOpencodeConfigPath(dir)).toBe(join(dir, 'opencode.json'));
+
+    await writeFile(join(dir, 'opencode.jsonc'), '{}\n', 'utf-8');
+    expect(await resolveOpencodeConfigPath(dir)).toBe(join(dir, 'opencode.jsonc'));
+  });
+});

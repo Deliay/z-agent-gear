@@ -153,6 +153,18 @@ function toApiError(
   openAiError(res, status, { type, code, message });
 }
 
+function toModelEntry(model: {
+  name: string;
+  createdAt?: Date;
+}): { id: string; object: string; owned_by: string; created: number } {
+  return {
+    id: model.name,
+    object: 'model',
+    owned_by: 'agent-gear',
+    created: Math.floor(new Date(model.createdAt ?? Date.now()).getTime() / 1000),
+  };
+}
+
 /** OpenAI 兼容计费网关：Key 鉴权 → 预扣费检查 → 转发 → 用量事件（outbox）。 */
 export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router {
   const router = Router();
@@ -165,20 +177,32 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       toApiError(res, 429, 'rate_limit_exceeded', 'rate_limit_exceeded', '请求过于频繁，请稍后重试');
       return;
     }
+    if (billing.scope === 'cloud_host') {
+      // A4 口径：cloud_host Key = 系统启用模型 ∪ 用户启用模型（含自定义、无定价）。
+      const [globalModels, userModels] = await Promise.all([
+        Model.find({ scope: 'global', isEnabled: true }).lean(),
+        Model.find({ scope: 'user', isEnabled: true })
+          .sort({ sortOrder: 1, createdAt: 1 })
+          .lean(),
+      ]);
+      const seen = new Set<string>();
+      const data = [...globalModels, ...userModels]
+        .filter((model) => {
+          if (seen.has(model.name)) return false;
+          seen.add(model.name);
+          return true;
+        })
+        .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      res.json({ object: 'list', data });
+      return;
+    }
     const models = await Model.find({ scope: 'global', isEnabled: true }).lean();
     const data = models
       .filter((model) => {
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
-      .map((model) => ({
-        id: model.name,
-        object: 'model',
-        owned_by: 'agent-gear',
-        created: Math.floor(
-          new Date((model as unknown as { createdAt?: Date }).createdAt ?? Date.now()).getTime() / 1000,
-        ),
-      }));
+      .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
     res.json({ object: 'list', data });
   });
 
@@ -192,7 +216,17 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       return;
     }
 
-    const model = await Model.findOne({ scope: 'global', name: modelName, isEnabled: true });
+    // 解析顺序（契约 §/v1/chat/completions）：系统模型优先；未命中且 Key 为 cloud_host 时
+    // 取用户启用模型（scope=user，按 sortOrder,createdAt 第一条）。同名时系统模型优先。
+    const systemModel = await Model.findOne({ scope: 'global', name: modelName, isEnabled: true });
+    const model =
+      systemModel ??
+      (billing.scope === 'cloud_host'
+        ? await Model.findOne({ scope: 'user', name: modelName, isEnabled: true }).sort({
+            sortOrder: 1,
+            createdAt: 1,
+          })
+        : null);
     if (!model) {
       toApiError(res, 404, 'invalid_request_error', 'model_not_found', `模型不存在: ${modelName}`);
       return;
@@ -202,28 +236,34 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       toApiError(res, 404, 'invalid_request_error', 'model_not_found', `模型供应商不可用: ${modelName}`);
       return;
     }
-    const pricing = pricingFromModel(model.pricing);
-    if (!pricing) {
-      toApiError(
-        res,
-        400,
-        'invalid_request_error',
-        'model_not_priced',
-        '模型尚未配置定价，请联系管理员补全',
-      );
-      return;
+
+    let pricing: ModelPricingCents | null = null;
+    let billable = false;
+    if (systemModel) {
+      pricing = pricingFromModel(model.pricing);
+      if (!pricing) {
+        toApiError(
+          res,
+          400,
+          'invalid_request_error',
+          'model_not_priced',
+          '模型尚未配置定价，请联系管理员补全',
+        );
+        return;
+      }
+      billable = pricing.isBillable;
+      if (billable && !isPricingComplete(pricing)) {
+        toApiError(
+          res,
+          400,
+          'invalid_request_error',
+          'model_not_priced',
+          '模型定价不完整，请联系管理员补全',
+        );
+        return;
+      }
     }
-    const billable = pricing.isBillable;
-    if (billable && !isPricingComplete(pricing)) {
-      toApiError(
-        res,
-        400,
-        'invalid_request_error',
-        'model_not_priced',
-        '模型定价不完整，请联系管理员补全',
-      );
-      return;
-    }
+    // 自定义模型（scope=user）：不要求定价，网关代转发且不计费（billable=false,cost=0）。
 
     if (!allowRequest(billing.id)) {
       toApiError(res, 429, 'rate_limit_exceeded', 'rate_limit_exceeded', '请求过于频繁，请稍后重试');
@@ -257,7 +297,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         return;
       }
     }
-    if (billable) {
+    if (billable && pricing) {
       const estimate = Math.max(1, estimateCost(pricing, promptTokens, maxOutputTokens));
       const check = await creditCheckService.check({
         accountId: billing.accountId,
@@ -285,6 +325,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       requestId,
       accountId: billing.accountId,
       apiKeyId: billing.id,
+      cloudHostId: billing.cloudHostId ?? null,
+      billable,
       modelId: String(model._id),
       modelName: model.name,
       inputTokens: 0,
@@ -310,11 +352,12 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       const resolved = resolveUsageFallback(usage, promptTokens, maxOutputTokens, outputText, estimatedTokens);
       const estimated = resolved.estimated;
       estimatedTokens = estimated;
-      const cost = billable
-        ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
-          tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
-          tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
-        : 0;
+      const cost =
+        billable && pricing
+          ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
+            tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
+            tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
+          : 0;
       // R3：finalize 只负责「落事实」，绝不抛出——落库失败不得被外层 catch 当成 upstream_error
       // 而把正常完成的调用翻转为 aborted、换 eventType 重投双事实。此处原地重试 + 告警。
       const writeFinalize = async (): Promise<void> => {

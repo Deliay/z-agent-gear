@@ -6,6 +6,10 @@ const billingApiCallSchema = new mongoose.Schema(
     requestId: { type: String, required: true, unique: true },
     accountId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
     apiKeyId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    // 云电脑 Key 调用归因；账号 Key 为 null
+    cloudHostId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+    // false = 自定义模型代转发（不计费，仅调用审计）
+    billable: { type: Boolean, default: true },
     modelId: { type: String, required: true },
     modelName: { type: String, default: '' },
     inputTokens: { type: Number, default: 0 },

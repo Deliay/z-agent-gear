@@ -7,6 +7,9 @@ import {
   MAX_OUTPUT_BYTES,
   MAX_PENDING_RESULTS,
   EMPTY_SCRIPT_MESSAGE,
+  redactSecrets,
+  collectSecretValues,
+  REDACTED,
   type WorkloadResult,
 } from './workload-executor.js';
 
@@ -555,4 +558,121 @@ describe('WorkloadExecutor required short-circuit (T-WE-REQ)', () => {
     expect(results.map((r) => r.logId)).toEqual(['req']);
     expect(results[0].status).toBe('timeout');
   }, 10000);
+});
+
+describe('WorkloadExecutor container env + secret redaction (T-AG13/T-AG14)', () => {
+  it('T-AG14: injects container env into every item and lets item params win on WORKLOAD_PARAM_*', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        env: {
+          ZAG_MODEL_IDS: '["model-a","model-b"]',
+          ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+          ZAG_USER_ID: 'user-1',
+          WORKLOAD_PARAM_VERSION: 'from-container-env',
+        },
+        items: [
+          {
+            logId: 'first',
+            workloadName: 'First',
+            script: `printf 'IDS=%s\\n' "$ZAG_MODEL_IDS"; printf 'WS=%s\\n' "$ZAG_DEFAULT_WORKSPACE"; printf 'USER=%s\\n' "$ZAG_USER_ID"; printf 'V=%s\\n' "$WORKLOAD_PARAM_VERSION"`,
+            timeoutMs: 5000,
+            params: { version: 'from-item-param' },
+          },
+          {
+            logId: 'second',
+            workloadName: 'Second',
+            script: `printf 'IDS=%s\\n' "$ZAG_MODEL_IDS"; printf 'V=%s\\n' "$WORKLOAD_PARAM_VERSION"`,
+            timeoutMs: 5000,
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results.map((r) => r.logId)).toEqual(['first', 'second']);
+    expect(results[0].log).toContain('IDS=["model-a","model-b"]');
+    expect(results[0].log).toContain('WS=/root/workspace');
+    expect(results[0].log).toContain('USER=user-1');
+    // item 参数优先于容器 env 的同名 WORKLOAD_PARAM_*
+    expect(results[0].log).toContain('V=from-item-param');
+    expect(results[1].log).toContain('V=from-container-env');
+  });
+
+  it('T-AG14b: keeps legacy behavior when the payload has no container env', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        items: [
+          {
+            logId: 'legacy',
+            workloadName: 'Legacy',
+            script: `printf 'ENV=%s\\n' "\${ZAG_MODEL_IDS-unset}"; printf 'P=%s\\n' "$WORKLOAD_PARAMS"`,
+            timeoutMs: 5000,
+          },
+        ],
+      },
+      sink,
+    );
+
+    expect(results[0].status).toBe('success');
+    expect(results[0].log).toContain('ENV=unset');
+    expect(results[0].log).toContain('P={}');
+  });
+
+  it('T-AG13: redacts secret values from script output (container env + process env)', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+    const previousHostKey = process.env.ZAG_HOST_KEY;
+    process.env.ZAG_HOST_KEY = 'zag_k_process_secret';
+    try {
+      await executor.runBatch(
+        {
+          phase: 'init',
+          env: {
+            ZAG_MODEL_API_KEY: 'zag_sk_container_secret',
+            ZAG_CONTROLLER_KEY: 'controller-token-secret',
+          },
+          items: [
+            {
+              logId: 'leak',
+              workloadName: 'Leak',
+              script: `printf 'A=%s\\n' "$ZAG_MODEL_API_KEY"; printf 'B=%s\\n' "$ZAG_HOST_KEY"; printf 'C=%s\\n' "$ZAG_CONTROLLER_KEY"`,
+              timeoutMs: 5000,
+            },
+          ],
+        },
+        sink,
+      );
+    } finally {
+      if (previousHostKey === undefined) delete process.env.ZAG_HOST_KEY;
+      else process.env.ZAG_HOST_KEY = previousHostKey;
+    }
+
+    expect(results).toHaveLength(1);
+    const log = results[0].log;
+    expect(log).not.toContain('zag_sk_container_secret');
+    expect(log).not.toContain('zag_k_process_secret');
+    expect(log).not.toContain('controller-token-secret');
+    expect(log).toContain(`A=${REDACTED}`);
+    expect(log).toContain(`B=${REDACTED}`);
+    expect(log).toContain(`C=${REDACTED}`);
+  });
+
+  it('T-AG13b: redactSecrets handles multiple secrets and ignores empty values', () => {
+    const secrets = collectSecretValues(
+      { ZAG_MODEL_API_KEY: 'sk-1', ZAG_HOST_KEY: '', ZAG_CONTROLLER_KEY: 'ct-2' },
+      { ZAG_HOST_KEY: 'host-3' },
+    );
+    expect(secrets.sort()).toEqual(['ct-2', 'host-3', 'sk-1'].sort());
+
+    expect(redactSecrets('a sk-1 b ct-2 c host-3 d', secrets)).toBe(`a ${REDACTED} b ${REDACTED} c ${REDACTED} d`);
+    expect(redactSecrets('nothing to hide', secrets)).toBe('nothing to hide');
+  });
 });

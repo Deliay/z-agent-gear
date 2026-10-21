@@ -101,6 +101,98 @@ async function seedAccountWithKey(): Promise<string> {
   return created.secret;
 }
 
+/** 只读模型口径：cloudhosts 由 agent-api 写入，网关测试用原生集合插入。 */
+async function seedCloudHost(input: { status?: string; userId?: string } = {}): Promise<string> {
+  const _id = new mongoose.Types.ObjectId();
+  await mongoose.connection.db!.collection('cloudhosts').insertOne({
+    _id,
+    userId: input.userId ?? new mongoose.Types.ObjectId().toString(),
+    controllerId: new mongoose.Types.ObjectId(),
+    status: input.status ?? 'RUNNING',
+    deletedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return _id.toString();
+}
+
+/** 云电脑运行专用 Key：账号需有余额（系统模型仍走预扣费检查）。 */
+async function seedCloudHostKey(
+  cloudHostId?: string,
+  expiresAt = new Date(Date.now() + 60 * 60 * 1000),
+): Promise<{ secret: string; cloudHostId: string }> {
+  const userId = new mongoose.Types.ObjectId().toString();
+  const hostId = cloudHostId ?? (await seedCloudHost({ userId }));
+  if (cloudHostId) {
+    await mongoose.connection.db!.collection('cloudhosts').updateOne(
+      { _id: new mongoose.Types.ObjectId(cloudHostId) },
+      { $set: { userId: new mongoose.Types.ObjectId(userId) } },
+    );
+  }
+  const account = await accountService.getOrCreate(
+    'front_user',
+    userId,
+    'cloud-host-user',
+  );
+  await paymentService.recharge({
+    accountId: account.id,
+    amountCents: 1_000_000,
+    idempotentKey: `seed-host:${account.id}`,
+    bizId: `seed-host:${account.id}`,
+  });
+  const created = await apiKeyService.createCloudHostScopedKey({
+    accountId: account.id,
+    ownerType: 'front_user',
+    ownerId: userId,
+    name: 'host-key',
+    cloudHostId: hostId,
+    expiresAt,
+  });
+  return { secret: created.secret, cloudHostId: hostId };
+}
+
+/** 用户自定义模型（scope=user，无定价）。每次使用独立 provider 避免 (providerId,name) 唯一冲突。 */
+async function seedCustomModel(
+  name: string,
+  options: { isEnabled?: boolean; sortOrder?: number } = {},
+): Promise<void> {
+  const provider = await Provider.create({
+    name: `p-user-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    type: 'OpenAI',
+    endpoint: upstreamUrl,
+    encryptedCredential: encrypt('sk-test'),
+    isEnabled: true,
+    scope: 'user',
+  });
+  await Model.create({
+    providerId: provider._id,
+    name,
+    isCustom: true,
+    isEnabled: options.isEnabled ?? true,
+    sortOrder: options.sortOrder ?? 0,
+    scope: 'user',
+    pricing: null,
+  });
+}
+
+/** 全局模型（可禁用），复用 beforeEach 已建的全局 provider。 */
+async function seedGlobalModel(name: string, options: { isEnabled?: boolean } = {}): Promise<void> {
+  const provider = await Provider.findOne({ scope: 'global' });
+  await Model.create({
+    providerId: provider!._id,
+    name,
+    isCustom: false,
+    isEnabled: options.isEnabled ?? true,
+    scope: 'global',
+    pricing: {
+      inputPerMillion: 100,
+      cachedInputPerMillion: 0,
+      outputPerMillion: 100,
+      isBillable: true,
+    },
+  });
+}
+
 describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => {
   beforeAll(async () => {
     await connectTestDb();
@@ -152,6 +244,33 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
       body: JSON.stringify({ model: 'test-model', messages: [{ role: 'user', content: 'hi' }] }),
       ...init,
     });
+  }
+
+  async function callWithKey(secret: string, body: Record<string, unknown>): Promise<Response> {
+    return fetch(`${gatewayUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function listModels(secret: string): Promise<Response> {
+    return fetch(`${gatewayUrl}/v1/models`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+  }
+
+  async function waitForCall(): Promise<{ billable?: boolean; cost?: number; cloudHostId?: unknown; status: string }> {
+    let call: { billable?: boolean; cost?: number; cloudHostId?: unknown; status: string } | null = null;
+    await vi.waitFor(async () => {
+      const doc = await BillingApiCall.findOne({});
+      expect(doc?.status).toBe('completed');
+      call = doc as never;
+    });
+    return call!;
   }
 
   it('正常完成：投递 model_call.completed，调用记录 status=completed', async () => {
@@ -212,6 +331,127 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
       const call = await BillingApiCall.findOne({});
       expect(call?.status).toBe('aborted');
     });
+  });
+
+  // ===== Phase 2：cloud_host Key 模型范围 / 分流 / 归因 =====
+
+  it('T-BK9: 云电脑 /v1/models = global enabled ∪ user enabled（含自定义、不含禁用）', async () => {
+    const { secret } = await seedCloudHostKey();
+    await seedCustomModel('custom-model');
+    await seedGlobalModel('disabled-global', { isEnabled: false });
+    await seedCustomModel('disabled-user', { isEnabled: false });
+
+    const res = await listModels(secret);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { object: string; data: Array<{ id: string }> };
+    expect(body.object).toBe('list');
+    const ids = body.data.map((item) => item.id);
+    expect(ids).toContain('test-model');
+    expect(ids).toContain('custom-model');
+    expect(ids).not.toContain('disabled-global');
+    expect(ids).not.toContain('disabled-user');
+    // 同名去重（global 优先）
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('T-BK10: 账号 /v1/models 回归 — 仅返回定价完整的 global 模型', async () => {
+    await seedCustomModel('custom-model');
+    const res = await listModels(apiKeySecret);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((item) => item.id)).toEqual(['test-model']);
+  });
+
+  it('T-BK11: 系统模型调用 — 计量/outbox、cloudHostId 归因、billable=true', async () => {
+    const { secret, cloudHostId } = await seedCloudHostKey();
+    const res = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(200);
+    await res.json();
+
+    const call = await waitForCall();
+    expect(call.billable).toBe(true);
+    expect(String(call.cloudHostId)).toBe(cloudHostId);
+    await vi.waitFor(() => {
+      expect(publisher.events.some((e) => e.eventType === 'model_call.completed')).toBe(true);
+    });
+  });
+
+  it('T-BK12/T-BK13: 自定义模型无定价 → 代转发成功、不记账（billable=false,cost=0）、无 outbox', async () => {
+    const { secret, cloudHostId } = await seedCloudHostKey();
+    await seedCustomModel('custom-model');
+
+    const res = await callWithKey(secret, {
+      model: 'custom-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(body.choices[0].message.content).toBe('hi');
+
+    const call = await waitForCall();
+    expect(call.billable).toBe(false);
+    expect(call.cost).toBe(0);
+    expect(String(call.cloudHostId)).toBe(cloudHostId);
+    expect(publisher.events).toHaveLength(0);
+  });
+
+  it('T-BK14: 同名系统/自定义模型 → 系统模型优先并计费', async () => {
+    const { secret } = await seedCloudHostKey();
+    // 独立 provider 上建同名用户模型（无定价）
+    await seedCustomModel('test-model');
+
+    const res = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(200);
+    await res.json();
+
+    const call = await waitForCall();
+    expect(call.billable).toBe(true);
+    await vi.waitFor(() => {
+      expect(publisher.events.some((e) => e.eventType === 'model_call.completed')).toBe(true);
+    });
+  });
+
+  it('T-BK15: 不存在/禁用模型 → 404 model_not_found；账号 Key 不可用自定义模型', async () => {
+    const { secret } = await seedCloudHostKey();
+    await seedCustomModel('disabled-user', { isEnabled: false });
+
+    const missing = await callWithKey(secret, {
+      model: 'does-not-exist',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { error: { code: string } }).error.code).toBe('model_not_found');
+
+    const disabled = await callWithKey(secret, {
+      model: 'disabled-user',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(disabled.status).toBe(404);
+
+    // 账号 Key 仍只解析系统模型
+    await seedCustomModel('account-custom');
+    const accountCall = await callWithKey(apiKeySecret, {
+      model: 'account-custom',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(accountCall.status).toBe(404);
+  });
+
+  it('T-BK5: 云电脑非 RUNNING 时网关直接 401（含 /models）', async () => {
+    const startingHost = await seedCloudHost({ status: 'STARTING' });
+    const { secret } = await seedCloudHostKey(startingHost);
+    expect((await listModels(secret)).status).toBe(401);
+    const res = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(401);
   });
 });
 

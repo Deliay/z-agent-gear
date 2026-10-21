@@ -154,6 +154,9 @@ test.describe('Settings Controller Config Page E2E', () => {
     await expect(page.getByRole('heading', { name: '工作区' })).toBeVisible();
     await expect(page.getByText('可用 Harness 工具')).toBeVisible();
     await expect(page.getByRole('main').getByText(/e2e-cfg-host/)).toBeVisible();
+    // 普通主机不展示云电脑停止/删除入口
+    await expect(page.getByTestId('cloud-host-panel')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '停止云电脑' })).toHaveCount(0);
 
     disconnect();
   });
