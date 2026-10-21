@@ -316,7 +316,8 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     processRegistry.deregister('sess-replace');
   });
 
-  it('R6a-空档: 替换 delete→set 窗口（current===undefined）旧 stopped 不注销注册', async () => {
+  it('R6a-空档: 替换 delete→set 窗口（current===undefined）旧 stopped 不注销注册/relay', async () => {
+    const unregisterSpy = vi.spyOn(McpRelay.prototype, 'unregisterSession');
     const oldBridge = await startBridge('sess-gap');
     processRegistry.register('sess-gap', { pid: 654321, cwd: '/tmp', acpServerType: 'opencode' });
 
@@ -341,12 +342,14 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
       .emit('acp:stopped', { sessionId: 'sess-gap', reason: 'user_close' });
 
     expect(processRegistry.get('sess-gap')).toBeDefined();
+    expect(unregisterSpy).not.toHaveBeenCalledWith('sess-gap');
     releaseStop();
     await restartPromise;
     processRegistry.deregister('sess-gap');
   });
 
-  it('R6a-resume: resume 替换同 sessionId 后旧 stopped 不注销新会话注册', async () => {
+  it('R6a-resume: resume 替换同 sessionId 后旧 stopped 不注销新会话注册/relay', async () => {
+    const unregisterSpy = vi.spyOn(McpRelay.prototype, 'unregisterSession');
     const oldBridge = await startBridge('sess-resume-replace');
     processRegistry.register('sess-resume-replace', { pid: 777777, cwd: '/tmp', acpServerType: 'opencode' });
 
@@ -364,6 +367,7 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
       .emit('acp:stopped', { sessionId: 'sess-resume-replace', reason: 'error' });
 
     expect(processRegistry.get('sess-resume-replace')).toBeDefined();
+    expect(unregisterSpy).not.toHaveBeenCalledWith('sess-resume-replace');
     expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:resume:result', expect.anything());
     processRegistry.deregister('sess-resume-replace');
   });

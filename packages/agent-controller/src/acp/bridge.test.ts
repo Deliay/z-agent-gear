@@ -777,8 +777,10 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(stopped).not.toHaveBeenCalled();
   });
 
-  it('R6a: 非 silent stop 在途被 silent stop 覆盖后，迟到 emitStopped 不发 stopped', async () => {
+  it('R6a: 非 silent stop 在途被 silent stop 覆盖后，迟到 emitStopped 不发 stopped（服务端+本地）', async () => {
     const bridge = createBridge();
+    const localStopped = vi.fn();
+    bridge.on('acp:stopped', localStopped);
     await bridge.start();
     const connection = (bridge as unknown as {
       connection: { cancel: ReturnType<typeof vi.fn> };
@@ -792,10 +794,13 @@ describe('AcpSessionBridge - elicitation observability', () => {
     await Promise.all([first, second]);
 
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+    expect(localStopped).not.toHaveBeenCalled();
   });
 
-  it('R6b: stop 5s race 在途（stopped 尚未置位）时 handleError 仍被 silentStop 抑制', async () => {
+  it('R6b: stop 5s race 在途（stopped 尚未置位）时 handleError 仍被 silentStop 抑制（服务端+本地）', async () => {
     const bridge = createBridge();
+    const localStopped = vi.fn();
+    bridge.on('acp:stopped', localStopped);
     await bridge.start();
     const connection = (bridge as unknown as {
       connection: { cancel: ReturnType<typeof vi.fn> };
@@ -810,9 +815,11 @@ describe('AcpSessionBridge - elicitation observability', () => {
       .handleError(new Error('late init failure in stop race window'));
 
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
+    expect(localStopped).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5000);
     await Promise.all([first, second]);
+    expect(localStopped).not.toHaveBeenCalled();
   });
 
   it('R5a: silent stop 后迟到的 handleError 不再向服务端/本地发 acp:stopped', async () => {

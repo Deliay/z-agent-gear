@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **六轮返工完成，待六轮 AI Review 复核**——五轮复核 R6a（emitStopped 不认 silentStop、onStopped 空档、acp:stop 存量）与 R6b（mcpRelay 断言缺失/窗口用例缺失）已修复，R6c 一并收口；已落「产出口 × 负断言」自查表并逐条变异（M1-M4 全红，§十四）。六轮实跑：tsc ×4 全 0、单测 1996 passed（425/775/233/563）、eslint 0 error/6 存量 warning、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、三组缺参负向均红。
+> **状态**: 🔁 **七轮返工完成，待七轮 AI Review 复核**——六轮复核仅指断言面窄于修复面（R7a/R7b），已补本地 acp:stopped 双断言与 mcpRelay 断言，M5b/M5c 转红、M1-M4 复放全红（§十六）；R7c 存量 ack 重试竞态登记不阻断。七轮实跑：tsc ×4 全 0、单测 1996 passed（425/775/233/563）、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
 
 ## 关联文档
 
@@ -714,10 +714,10 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 
 | # | 产出口 | 守卫 | 负断言测试 |
 |---|---|---|---|
-| 1 | `bridge.emitStopped`（非 silent 迟到） | `silent \|\| silentStop` | R6a |
-| 2 | `bridge.handleError` | `stopped \|\| silentStop` | R5a、R6b |
-| 3 | `acp:start` 内联 `acp:stopped` | `current !== bridge` | R1、R6a-空档 |
-| 4 | `acp:resume` 内联 `acp:stopped` | `current !== bridge` | R6a-resume |
+| 1 | `bridge.emitStopped`（非 silent 迟到） | `silent \|\| silentStop` | R6a（**socket + 本地**双断言） |
+| 2 | `bridge.handleError` | `stopped \|\| silentStop` | R5a、R6b（**socket + 本地**双断言，R6b 覆盖 stop race 在途窗口） |
+| 3 | `acp:start` 内联 `acp:stopped` | `current !== bridge` | R1、R6a-空档（registry + **mcpRelay**） |
+| 4 | `acp:resume` 内联 `acp:stopped` | `current !== bridge` | R6a-resume（registry + **mcpRelay**） |
 | 5 | `onStopped`（含 `current===undefined`） | `current !== bridge` | R1、R6a-空档 |
 | 6 | `acp:stop` await 后清理/ack | `stillCurrent` | R6c |
 
@@ -831,3 +831,47 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 ### 15.6 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（六轮打回）**，返工目标节点「修复Review意见」。六轮修复本体（R6a/R6b/R6c）全部真实且 M1-M4 可证伪（本轮独立复放全红），代码行为已收口；打回仅针对回归用例断言面/台账声称面（🟠-R7a + 🟡-R7b），修复成本极低（4-6 条断言 + 自查表措辞）。「声称大于测试面」已连续三轮复发（四轮/五轮/六轮），七轮请以「断言面=修复面=声称面」为唯一口径自查后重提。
+
+## 十六、七轮返工修复记录（2026-10-21，对应 §15.3 R7a-R7c）
+
+> 本轮不改变修复行为，只把断言面补齐到与修复面/声称面等宽；R7c 为存量竞态登记，不阻断。
+
+### 16.1 R7a：R6a/R6b 补本地 `acp:stopped` 负断言
+
+- `R6a` 用例在 `bridge.on('acp:stopped')` 挂本地 spy，收敛后同时断言 `mockSocket.emit` 与本地事件均未触发。
+- `R6b` 用例同样加本地 spy；且在 5s race 放行、两个 stop 完成后再次断言本地事件为零。
+- 反向变异：
+  - **M5b**：`emitStopped` 对 `silentStop` 只拦 socket、仍发本地事件 → R6a **红**。
+  - **M5c**：`handleError` 在 `wasStopped` 分支发本地事件 → R6b **红**。
+- §14.2 自查表 row1/row2 已标注「socket + 本地」双断言，声称面=断言面。
+
+### 16.2 R7b：空档/resume 用例补 mcpRelay 断言
+
+- `R6a-空档`、`R6a-resume` 均增加 `vi.spyOn(McpRelay.prototype, 'unregisterSession')`，断言迟到 stopped 后未注销对应 session（与 R1 等宽）。
+- 自查表 row3/row4 已标注 registry + mcpRelay。
+
+### 16.3 R7c：stop 后立即 resume 的 ack 重试竞态（存量登记）
+
+`stopSessionWithAck` 5s 超时后重发 `acp:stop`，若替换 bridge 已 set 会被非 silent stop，属 release 存量 retry 语义 + ack 与通知共用 `acp:stopped` 事件；本 diff 未实质改变可达性。登记为后续项（专用 `acp:stop:ack` 事件或 retry 前校验 `startingSessions`），本轮不阻断。
+
+### 16.4 七轮实跑证据（Aspire 全栈）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1996 passed**（agent-controller 425 / agent-api 775 / controller-api 233 / agent-web 563） |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） |
+| agent-web production build | ✅ 成功 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip |
+| tests/api billing-events | ✅ 3 passed / 0 skip |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed；T-AC5 failed |
+| 变异 | ✅ M1-M4 复放全红；**M5b/M5c 本轮转红** |
+| merge-tree vs origin/release | ✅ 0 冲突 |
+
+### 16.5 提交
+
+- 代码修复 commit：七轮修复提交（R7a/R7b 断言补齐，见 git log）
+- 报告回填 commit：本提交
+- PR #250：状态与 head 以 PR 页面为准。
