@@ -22,9 +22,14 @@ const { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnect
 vi.mock('@agentclientprotocol/sdk', () => ({
   ndJsonStream: vi.fn(() => ({})),
   ClientSideConnection: mockClientSideConnection,
+  CreateElicitationRequest: {
+    isForm: vi.fn((params: { mode?: string }) => params?.mode === 'form'),
+    isUrl: vi.fn((params: { mode?: string }) => params?.mode === 'url'),
+  },
 }));
 
 import { AcpSessionBridge } from './bridge.js';
+import { CLIENT_CAPABILITIES, FEATURE_IDS } from './capabilities.js';
 
 class MockAcpSpawner {
   start = vi.fn();
@@ -502,5 +507,140 @@ describe('AcpSessionBridge - initial mode/model', () => {
     expect(conn.setSessionMode.mock.invocationCallOrder[0]).toBeLessThan(
       initialized.mock.invocationCallOrder[0],
     );
+  });
+});
+
+describe('AcpSessionBridge - capability snapshot', () => {
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let mockSpawner: MockAcpSpawner;
+
+  function createBridge() {
+    return new AcpSessionBridge(
+      mockSocket as never,
+      { sessionId: 'sess-1', cwd: '/home/user' },
+      mockSpawner as never,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockSocket = createMockSocket();
+    mockSpawner = new MockAcpSpawner();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('T-B1: start() 后 acp:initialized 含 capabilities', async () => {
+    const bridge = createBridge();
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.start();
+
+    const payload = initialized.mock.calls[0][0] as { capabilities?: { features?: unknown[]; raw?: { clientCapabilities?: { elicitation?: unknown } } } };
+    expect(payload.capabilities).toBeDefined();
+    expect(payload.capabilities?.features).toHaveLength(FEATURE_IDS.length);
+    expect(payload.capabilities?.raw?.clientCapabilities).toEqual(CLIENT_CAPABILITIES);
+  });
+
+  it('T-B2: resume() 后同样携带 capabilities', async () => {
+    const bridge = createBridge();
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.resume('ext-123');
+
+    const payload = initialized.mock.calls[0][0] as { capabilities?: { features?: unknown[] } };
+    expect(payload.capabilities?.features).toHaveLength(FEATURE_IDS.length);
+  });
+});
+
+describe('AcpSessionBridge - elicitation observability', () => {
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let mockSpawner: MockAcpSpawner;
+
+  function createBridge() {
+    return new AcpSessionBridge(
+      mockSocket as never,
+      { sessionId: 'sess-1', cwd: '/home/user' },
+      mockSpawner as never,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockSocket = createMockSocket();
+    mockSpawner = new MockAcpSpawner();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('T-B3: 未知 elicitation 模式返回 cancel 并发出 resolved(unsupported_mode)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = createBridge();
+
+    const result = await bridge.unstable_createElicitation({ mode: 'custom' } as never);
+
+    expect(result).toEqual({ action: 'cancel' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:resolved', expect.objectContaining({
+      sessionId: 'sess-1',
+      reason: 'unsupported_mode',
+      detail: 'custom',
+    }));
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation', expect.anything());
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-B4: 65s 超时返回 cancel 并发出 resolved(timeout)，不残留 pending', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bridge = createBridge();
+
+    const promise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+
+    const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:elicitation');
+    const requestId = (emitCall![1] as { requestId: string }).requestId;
+
+    await vi.advanceTimersByTimeAsync(65_000);
+
+    expect(await promise).toEqual({ action: 'cancel' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:resolved', expect.objectContaining({
+      requestId,
+      reason: 'timeout',
+      detail: 'bridge timeout (65s)',
+    }));
+    expect(warnSpy).toHaveBeenCalled();
+
+    bridge.handleElicitationResponse(requestId, 'accept', { answer: 'x' });
+    expect(warnSpy).toHaveBeenCalledWith(`Elicitation request ${requestId} not found`);
+  });
+
+  it('T-B5: 正常 form 模式只发 acp:elicitation，不发 resolved', async () => {
+    const bridge = createBridge();
+
+    const promise = bridge.unstable_createElicitation({
+      mode: 'form',
+      message: 'Need input',
+      requestedSchema: { type: 'object', properties: {} },
+    } as never);
+
+    const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:elicitation');
+    const requestId = (emitCall![1] as { requestId: string }).requestId;
+
+    bridge.handleElicitationResponse(requestId, 'accept', { answer: 'x' });
+
+    expect(await promise).toEqual({ action: 'accept', content: { answer: 'x' } });
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 });

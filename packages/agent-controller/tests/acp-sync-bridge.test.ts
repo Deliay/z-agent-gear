@@ -21,6 +21,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
 }));
 
 import { AcpSyncBridge } from '../src/acp/sync-bridge.js';
+import { CLIENT_CAPABILITIES } from '../src/acp/capabilities.js';
 
 class MockAcpSpawner {
   start = vi.fn();
@@ -65,7 +66,7 @@ describe('AcpSyncBridge', () => {
       expect(mockSpawner.start).toHaveBeenCalledOnce();
       expect(mc().initialize).toHaveBeenCalledWith({
         protocolVersion: 1,
-        clientCapabilities: {},
+        clientCapabilities: CLIENT_CAPABILITIES,
         clientInfo: { name: 'agent-gear', version: '1.0.0' },
       });
     });

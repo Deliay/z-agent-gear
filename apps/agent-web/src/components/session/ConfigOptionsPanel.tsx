@@ -5,11 +5,13 @@ interface ConfigOptionsPanelProps {
   configOptions: SessionConfigOptionData[];
   status: string;
   onSetConfigOption: (configId: string, value: string) => Promise<void>;
+  /** 能力门控：仅布尔配置项受 config.boolean 影响（明确 unsupported 时禁用） */
+  booleanBlocked?: boolean;
 }
 
 const UNCATEGORIZED = '其他';
 
-export default function ConfigOptionsPanel({ configOptions, status, onSetConfigOption }: ConfigOptionsPanelProps) {
+export default function ConfigOptionsPanel({ configOptions, status, onSetConfigOption, booleanBlocked }: ConfigOptionsPanelProps) {
   const [savingId, setSavingId] = useState<string | null>(null);
 
   // mode/model 由 ModeSwitcher/ModelSwitcher 负责（bridge 已双轨路由到 setSessionConfigOption），此处过滤避免重复控件
@@ -56,14 +58,14 @@ export default function ConfigOptionsPanel({ configOptions, status, onSetConfigO
           return (
             <label
               key={opt.id}
-              title={opt.description || undefined}
+              title={booleanBlocked ? '当前 Agent 不支持布尔配置项' : (opt.description || undefined)}
               className="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"
             >
               <button
                 type="button"
                 role="switch"
                 aria-checked={checked}
-                disabled={disabled || savingId === opt.id}
+                disabled={disabled || booleanBlocked || savingId === opt.id}
                 onClick={() => handleSelect(opt, checked ? 'false' : 'true')}
                 className={`relative h-4 w-7 rounded-full transition-colors ${
                   checked ? 'bg-primary' : 'bg-muted-foreground/40'

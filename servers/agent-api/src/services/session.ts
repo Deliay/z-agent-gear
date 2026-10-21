@@ -712,6 +712,7 @@ export class SessionService {
       authRequired: (session as any).authRequired || false,
       authMethods: this.mapAuthMethods((session as any).authMethods),
       supportsAdditionalDirectories: (session as any).supportsAdditionalDirectories || false,
+      agentCapabilities: (session as any).agentCapabilities ?? null,
       permissionTimeoutAction: (session as any).permissionTimeoutAction || null,
       workflowInstanceId: (session as any).workflowInstanceId
         ? (session as any).workflowInstanceId.toString()

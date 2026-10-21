@@ -12,17 +12,17 @@ import { ElicitationDialog } from './ElicitationDialog';
 import { useHomeOverview } from '../stores/homeOverview';
 import type { TodoItemData } from '../graphql/types';
 
-// 可交互弹窗的待办类型
+// 可交互弹窗的待办类型（已 resolved 的问询不再弹出/可点击）
 function isActionable(todo: TodoItemData): boolean {
   return (
     (todo.type === 'permission_request' && !!todo.data) ||
-    (todo.type === 'elicitation_request' && !!todo.elicitationData)
+    (todo.type === 'elicitation_request' && !!todo.elicitationData && !todo.resolution)
   );
 }
 
 export function TodoListPanel() {
-  const [selectedTodo, setSelectedTodo] = useState<TodoItemData | null>(null);
-  const [immediateTodo, setImmediateTodo] = useState<TodoItemData | null>(null);
+  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
+  const [immediateTodoId, setImmediateTodoId] = useState<string | null>(null);
   const processedImmediateRef = useRef<Set<string>>(new Set());
 
   // 待办随首页聚合查询统一下发（轮询周期与首页一致：15s）
@@ -34,17 +34,25 @@ export function TodoListPanel() {
   const todos: TodoItemData[] = data?.todos ?? [];
   const unreadCount = data?.unreadTodoCount ?? 0;
 
+  // 只存 id：轮询拿到新数据（如问询被标记 expired）时弹窗内容随之收敛
+  const selectedTodo = selectedTodoId
+    ? todos.find((todo) => todo.id === selectedTodoId) ?? null
+    : null;
+  const immediateTodo = immediateTodoId
+    ? todos.find((todo) => todo.id === immediateTodoId) ?? null
+    : null;
+
   // 检测立即优先级的待办，自动弹出全局弹窗（与手动打开的弹窗互斥）
   useEffect(() => {
-    if (selectedTodo || immediateTodo) return;
+    if (selectedTodoId || immediateTodoId) return;
     const immediate = todos.find(
       (todo) => todo.priority === 'immediate' && !todo.isRead && isActionable(todo) && !processedImmediateRef.current.has(todo.id)
     );
     if (immediate) {
       processedImmediateRef.current.add(immediate.id);
-      setImmediateTodo(immediate);
+      setImmediateTodoId(immediate.id);
     }
-  }, [todos, selectedTodo, immediateTodo]);
+  }, [todos, selectedTodoId, immediateTodoId]);
 
   const handleMarkAllRead = async () => {
     // mutation 已带 refetchQueries: HOME_OVERVIEW，避免二次全量刷新
@@ -53,14 +61,14 @@ export function TodoListPanel() {
 
   const handleTodoClick = (todo: TodoItemData) => {
     if (!todo.isRead && isActionable(todo)) {
-      setSelectedTodo(todo);
+      setSelectedTodoId(todo.id);
     }
   };
 
   const handleDialogOpenChange = (open: boolean) => {
     if (!open) {
-      setSelectedTodo(null);
-      setImmediateTodo(null);
+      setSelectedTodoId(null);
+      setImmediateTodoId(null);
     }
   };
 

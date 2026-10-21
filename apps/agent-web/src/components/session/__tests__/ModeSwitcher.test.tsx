@@ -90,3 +90,22 @@ describe('ModeSwitcher', () => {
     expect(screen.getByText('切换模式')).toBeDefined();
   });
 });
+
+describe('ModeSwitcher - 能力门控', () => {
+  it('T-W10: config.mode unsupported 时禁用并显示 detail', () => {
+    render(
+      <ModeSwitcher
+        currentModeId="code"
+        modes={defaultModes}
+        status="idling"
+        onSetMode={vi.fn()}
+        blocked
+        blockedReason="未声明 configOptions(category=mode)/modes"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    expect(button.getAttribute('title')).toContain('未声明');
+  });
+});

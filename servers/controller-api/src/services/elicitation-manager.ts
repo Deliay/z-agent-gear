@@ -27,12 +27,21 @@ interface PendingRequest {
   socketId: string;
   sessionId: string;
   userId: string;
+  controllerId?: string;
   timeout: NodeJS.Timeout;
+}
+
+interface ElicitationResolvedData {
+  requestId?: string;
+  sessionId: string;
+  reason: 'unsupported_mode' | 'timeout' | 'cancelled';
+  detail?: string;
 }
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_RESPONSE_CHANNEL = 'elicitation:response';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
+const ELICITATION_RESOLVED_CHANNEL = 'elicitation:resolved';
 const TIMEOUT_MS = 60_000;
 
 export class ElicitationManager {
@@ -79,6 +88,7 @@ export class ElicitationManager {
       socketId: socket.id,
       sessionId,
       userId: socket.data.userId,
+      controllerId: socket.data.controllerId,
       timeout,
     });
 
@@ -126,11 +136,40 @@ export class ElicitationManager {
     }));
   }
 
+  /**
+   * 问询在到达用户之前已结束（模式不支持 / 被 Agent 取消）时透传，
+   * 供 agent-api 把待办收敛为 failed/cancelled；用户已响应的情况不走该事件。
+   */
+  async handleElicitationResolved(socket: Socket, data: ElicitationResolvedData): Promise<void> {
+    const redis = getRedisClient();
+    await redis.publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
+      ...data,
+      controllerId: socket.data.controllerId,
+      userId: socket.data.userId,
+    }));
+  }
+
   private handleTimeout(requestId: string): void {
     const pending = this.pendingRequests.get(requestId);
     if (!pending) return;
 
     this.pendingRequests.delete(requestId);
+
+    // 1) 回 Agent cancel（既有行为）
+    // 2) 落 resolved(timeout)：60s 是唯一用户可见超时口径，待办据此收敛为 expired
+    // 3) 仍回发 acp:elicitation:response{cancel} 给 controller（既有行为）
+    void Promise.resolve()
+      .then(() => getRedisClient().publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
+        requestId,
+        sessionId: pending.sessionId,
+        userId: pending.userId,
+        controllerId: pending.controllerId,
+        reason: 'timeout',
+        detail: 'controller-api timeout (60s)',
+      })))
+      .catch((err: unknown) => {
+        console.error('Failed to publish elicitation resolved (timeout):', err);
+      });
 
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);

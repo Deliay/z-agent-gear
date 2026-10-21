@@ -8,6 +8,7 @@ vi.mock('../../services/todo-service.js', () => ({
     markTodoRead: vi.fn(),
     markAllTodoRead: vi.fn(),
     markTodoAsResponded: vi.fn(),
+    markElicitationResolved: vi.fn(),
     updatePermissionTimeout: vi.fn(),
     updateGlobalPermissionTimeout: vi.fn(),
   },
@@ -122,5 +123,48 @@ describe('Todo Resolvers', () => {
       const toolCall = { toolCallId: 'tc-1', title: 'Bash: ls' };
       expect(todoResolvers.PermissionRequestData.toolCall({ toolCall })).toBe(toolCall);
     });
+  });
+});
+
+describe('Todo Resolvers - elicitation resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  });
+
+  it('T-TR1: respondElicitation(accept) 写 accepted', async () => {
+    await todoResolvers.Mutation.respondElicitation(
+      {},
+      { requestId: 'elic-1', action: 'accept', values: { a: 1 } },
+      mockContext,
+    );
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'accepted');
+  });
+
+  it('T-TR2: decline/cancel 分别写 declined/cancelled', async () => {
+    await todoResolvers.Mutation.respondElicitation(
+      {},
+      { requestId: 'elic-2', action: 'decline' },
+      mockContext,
+    );
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'declined');
+
+    await todoResolvers.Mutation.respondElicitation(
+      {},
+      { requestId: 'elic-3', action: 'cancel' },
+      mockContext,
+    );
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled');
+  });
+
+  it('T-TR3: expiresAt/resolvedAt Date → ISO 字符串，缺失返回 null', () => {
+    expect(todoResolvers.TodoItem.expiresAt({ expiresAt: new Date('2026-10-21T00:00:00Z') }))
+      .toBe('2026-10-21T00:00:00.000Z');
+    expect(todoResolvers.TodoItem.resolvedAt({ resolvedAt: new Date('2026-10-21T01:00:00Z') }))
+      .toBe('2026-10-21T01:00:00.000Z');
+    expect(todoResolvers.TodoItem.expiresAt({})).toBeNull();
+    expect(todoResolvers.TodoItem.resolvedAt({ resolvedAt: null })).toBeNull();
+    expect(todoResolvers.TodoItem.resolution({})).toBeNull();
+    expect(todoResolvers.TodoItem.resolution({ resolution: 'expired' })).toBe('expired');
   });
 });

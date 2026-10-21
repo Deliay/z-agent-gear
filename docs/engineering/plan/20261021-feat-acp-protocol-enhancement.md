@@ -15,6 +15,7 @@ type: Permanent
 **版本说明**:
 - v1.0（2026-10-21）首版，与 PRD v1.2 / 提案 v1.2 对齐。本计划把提案 §9.2 的四个实现点拆成 7 个 Phase：契约 → agent-controller（能力快照 + Elicitation 可观测）→ controller-api（快照落库 + resolved 透传）→ agent-api（快照暴露 + 来源推断 + 待办状态）→ agent-web（门控/面板/分组/兜底）→ tests/api → tests/e2e + 文档收口。
 - 本版新增「上游文档 × 代码现状差异」与 16 条计划期裁决（§「计划期裁决」），覆盖提案未落地的细节：FeatureId 全集、三档状态语义、门控边界、模型来源字段落点、Elicitation 超时与待办留存口径。
+- **实现期修订（v1.1，2026-10-21）**：裁决 R1 表格逐行统计为 **20 项** FeatureId（session 7 + prompt 3 + auth 2 + mcp 2 + config 3 + commands 1 + elicitation 2）；正文中的「18 项」为计数笔误。实现与测试以 20 项为准（含 `elicitation.form`/`elicitation.url`），否则会漏掉本需求要修复的 Elicitation 能力项。
 
 ## 实现顺序
 
@@ -63,14 +64,14 @@ flowchart TD
 |---|---|---|---|
 | D1 | 提案 §9.2 实现点 3 要求「入口（附件、模型、模式、认证、会话恢复、历史管理）按能力显示/禁用/提示」；PRD F2 验收同款列表 | `apps/agent-web/src/components/session/InputBox.tsx` 无附件上传；全仓无 `authenticate/logout` mutation 与调用点（controller 侧 `acp:authenticate` 已实现，controller-api/agent-api/前端未接线）；无 `additionalDirectories` 入口 | 门控只覆盖**已存在且会失败**的入口（模型/模式/配置项/会话继续）；不存在的入口用能力面板 `partial` 如实表达；历史管理已有降级提示，不加门控（裁决 R4） |
 | D2 | 提案 §7.2 把来源字段加在 `SessionConfigOptionValue` 上 | 会话内「切换模型」渲染的是 `Session.availableModels`（`AgentModelInfo`，`ModelSelectDialog.tsx` / `InputBox.tsx`），`configOptions.options` 不参与该弹层 | 来源字段落 `AgentModelInfo`（裁决 R12）；`SessionConfigOptionValue` 保持三字段不变 |
-| D3 | 提案 §9.2 实现点 1 的 FeatureId 表只覆盖 `initialize` 能力字段 | PRD F1 要求清单覆盖「模式切换、模型切换、命令集」，这些不是 `initialize` 能力字段（分别来自 `session/new` 的 `configOptions.category` 与后续 `available_commands_update`） | FeatureId 扩容为 18 项，并把 `commands` 标为固定 `partial`（裁决 R1/R2） |
+| D3 | 提案 §9.2 实现点 1 的 FeatureId 表只覆盖 `initialize` 能力字段 | PRD F1 要求清单覆盖「模式切换、模型切换、命令集」，这些不是 `initialize` 能力字段（分别来自 `session/new` 的 `configOptions.category` 与后续 `available_commands_update`） | FeatureId 扩容为 20 项，并把 `commands` 标为固定 `partial`（裁决 R1/R2） |
 | D4 | PRD §3.4 页面表列出「Agent 选择界面：各 Agent 能力摘要」 | 能力是**会话级**协商结果（`initialize` + `session/new`），创建会话前只有 CLI 可用性探测（`detector.ts`），没有能力数据；提案未设计该页面 | 本期不做（不编造 pre-session 能力数据），能力摘要只在会话内呈现；如需「选择前预知」另立「按类型空实例能力探测缓存」需求 |
 
 ---
 
 ## 计划期裁决（提案留白 / 含混处的实现口径）
 
-1. **FeatureId 全集（18 项）**，映射与平台侧支持矩阵集中在 `packages/agent-controller/src/acp/capabilities.ts`：
+1. **FeatureId 全集（20 项）**，映射与平台侧支持矩阵集中在 `packages/agent-controller/src/acp/capabilities.ts`：
 
 | FeatureId | 判定来源（Agent 侧） | 平台侧支持 | 备注 |
 |---|---|---|---|
@@ -267,7 +268,7 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `packages/agent-controller/src/acp/capabilities.ts` | 新增 | `AgentCapabilitySnapshot` 类型、FeatureId 目录、平台支持矩阵、`normalizeCapabilities()` 纯函数 |
-| `packages/agent-controller/src/acp/capabilities.test.ts` | 新增 | 18 项映射、三档合并、`raw` 保真、缺失降级、OpenCode fixture 断言 |
+| `packages/agent-controller/src/acp/capabilities.test.ts` | 新增 | 20 项映射、三档合并、`raw` 保真、缺失降级、OpenCode fixture 断言 |
 | `packages/agent-controller/src/acp/__fixtures__/opencode-2.0.31-capabilities.json` | 新增 | 调研附录 §4.1 实测广播原文（回归基线） |
 | `packages/agent-controller/src/acp/__fixtures__/fake-elicitation-agent.mjs` | 新增 | stdio 假 Agent：`initialize` → `session/new` → 发 `elicitation/create` → 读响应 → 记录并退出 |
 | `packages/agent-controller/src/acp/elicitation.integration.test.ts` | 新增 | 真实 SDK + 假 Agent 进程：验证 `elicitation/create` 被路由到 `unstable_createElicitation` 并回传响应 |
@@ -366,8 +367,8 @@ export function buildAcpInitResult(payload: Record<string, unknown>): Record<str
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-C1 | OpenCode 2.0.31 fixture 全量归一化 | 18 项 feature id 全集；`session.load/resume/close/list/delete` = supported；`prompt.image/embeddedContext` = partial；`prompt.audio` = unsupported；`session.fork` = partial；`session.additionalDirectories` = partial；`config.model` = supported（fixture 需带 model 配置项，见下） |
-| T-C2 | `agentCapabilities` 为 `null`（旧 Agent） | 全 18 项仍返回；声明类全部 `unsupported`（detail 以「未声明」开头）；`elicitation.*`/`config.boolean` 仍 supported（本端声明） |
+| T-C1 | OpenCode 2.0.31 fixture 全量归一化 | 20 项 feature id 全集；`session.load/resume/close/list/delete` = supported；`prompt.image/embeddedContext` = partial；`prompt.audio` = unsupported；`session.fork` = partial；`session.additionalDirectories` = partial；`config.model` = supported（fixture 需带 model 配置项，见下） |
+| T-C2 | `agentCapabilities` 为 `null`（旧 Agent） | 全 20 项仍返回；声明类全部 `unsupported`（detail 以「未声明」开头）；`elicitation.*`/`config.boolean` 仍 supported（本端声明） |
 | T-C3 | `{}` 与 `false` 区分 | `sessionCapabilities.resume: {}` → 视为已声明；`resume: false` → 未声明 |
 | T-C4 | `authMethods` 非空 | `auth.login` = partial（平台无入口），`auth.logout` = unsupported |
 | T-C5 | `modes[]` 回退 | 无 `category==='mode'` 配置项但 `modes` 非空 → `config.mode` = supported |
@@ -381,7 +382,7 @@ export function buildAcpInitResult(payload: Record<string, unknown>): Record<str
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-B1 | `start()` 后 `acp:initialized` 含 `capabilities` | `features` 为 18 项数组；`raw.clientCapabilities.elicitation.form` 存在 |
+| T-B1 | `start()` 后 `acp:initialized` 含 `capabilities` | `features` 为 20 项数组；`raw.clientCapabilities.elicitation.form` 存在 |
 | T-B2 | `resume()` 后同样携带 `capabilities` | 同 T-B1（走 resume 分支） |
 | T-B3 | 未知 elicitation 模式 | 返回 `{action:'cancel'}`；`socket.emit('acp:elicitation:resolved', {reason:'unsupported_mode'})`；`console.warn` 调用一次 |
 | T-B4 | 65s 超时 | 前进假时钟 → 返回 `{action:'cancel'}`；发出 `reason:'timeout'`；不残留 pending |
@@ -419,7 +420,7 @@ npm run build
 - [ ] `socketio-client.ts` 的 start/resume 两条路径都经 `buildAcpInitResult` 输出，`grep 'acp:start:result'` 外无第二处拼装
 - [ ] `CLIENT_CAPABILITIES` 常量在 bridge/sync-bridge 共用，无重复字面量
 - [ ] `capabilities.ts` 无任何 `socket`/`fs` 依赖（纯函数，可单测）
-- [ ] 18 项 FeatureId 与裁决 R1 表格逐项一致
+- [ ] 20 项 FeatureId 与裁决 R1 表格逐项一致
 - [ ] 未引入新依赖；`npm run build` 通过
 
 ---
@@ -711,7 +712,7 @@ npm run build
 | `apps/agent-web/src/graphql/queries.ts` | 修改 | `GET_SESSION`（及 `GET_SESSIONS` 如需卡片摘要）增 `features { id status detail }`、`agentCapabilities { protocolVersion agentInfo { name version } features { id status detail } }`（不选 `raw`）、`availableModels { id name provider source sourceProvider group basis }` |
 | `apps/agent-web/src/hooks/useAgentCapabilities.ts` | 新增 | 门控 hook（裁决 R4 语义） |
 | `apps/agent-web/src/hooks/useAgentCapabilities.test.ts` | 新增 | 空清单/unsupported/partial 三态 |
-| `apps/agent-web/src/components/session/AgentCapabilityPanel.tsx` | 新增 | 能力清单弹层：Agent 名称版本 + 18 项逐项状态/detail + 旧会话提示 |
+| `apps/agent-web/src/components/session/AgentCapabilityPanel.tsx` | 新增 | 能力清单弹层：Agent 名称版本 + 20 项逐项状态/detail + 旧会话提示 |
 | `apps/agent-web/src/components/session/__tests__/AgentCapabilityPanel.test.tsx` | 新增 | 渲染/状态徽标/空快照提示 |
 | `apps/agent-web/src/components/session/SessionHeader.tsx` | 修改 | 新增「能力」入口按钮；「继续」按 `session.resume`/`session.load` 门控 |
 | `apps/agent-web/src/components/session/SessionHeader.test.tsx` | 修改 | 新按钮 + 门控断言 |
@@ -748,7 +749,7 @@ export function useAgentCapabilities(session: SessionData | null | undefined) {
 
 ### UI 口径
 
-- **能力面板**：`SessionHeader` 右侧新增 icon 按钮（`aria-label="能力清单"`），点开 `AgentCapabilityPanel`（`Dialog`）。面板头部显示 `agentInfo.name + version`；列表按固定顺序（裁决 R1 表格顺序）渲染 18 项，状态徽标：支持（绿）/部分支持（黄）/不支持（灰）；每行右侧显示 `detail`；`hasSnapshot=false` 时列表区替换为提示文案「该会话创建于能力快照上线前，继续会话后可获取能力清单」。移动端同样可打开（`SessionHeader` 已有移动分支）。
+- **能力面板**：`SessionHeader` 右侧新增 icon 按钮（`aria-label="能力清单"`），点开 `AgentCapabilityPanel`（`Dialog`）。面板头部显示 `agentInfo.name + version`；列表按固定顺序（裁决 R1 表格顺序）渲染 20 项，状态徽标：支持（绿）/部分支持（黄）/不支持（灰）；每行右侧显示 `detail`；`hasSnapshot=false` 时列表区替换为提示文案「该会话创建于能力快照上线前，继续会话后可获取能力清单」。移动端同样可打开（`SessionHeader` 已有移动分支）。
 - **门控**：
   - `ModelSwitcher`：`isBlocked('config.model')` → `disabled=true`，`title` 用 `detail`（缺省「当前 Agent 不支持模型切换」）。`availableModels.length === 0` 仍沿用现有「No models available」。
   - `ModeSwitcher`：`isBlocked('config.mode')` → 同上。
@@ -802,7 +803,7 @@ npm run build
 
 ### 验收 checklist
 
-- [ ] 会话内可打开能力清单，18 项状态与 Agent 广播一致（OpenCode 实测对照）
+- [ ] 会话内可打开能力清单，20 项状态与 Agent 广播一致（OpenCode 实测对照）
 - [ ] 明确 unsupported 的入口被禁用并给出原因；partial/旧会话不误伤
 - [ ] 模型弹层按来源分组、兜底「来源未知」非空、判定依据可见
 - [ ] 会话内与移动端都能通过提示条打开问询弹窗
@@ -894,7 +895,7 @@ socket.once('acp:start', (data) => {
     capabilities: {
       protocolVersion: 1,
       agentInfo: { name: 'OpenCode', version: '2.0.31' },
-      features: [/* 18 项，见 fixture */],
+      features: [/* 20 项，见 fixture */],
       raw: { agentCapabilities: {}, authMethods: [], clientCapabilities: {} },
     },
   });
@@ -903,7 +904,7 @@ socket.once('acp:start', (data) => {
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-E31 | 能力面板 | 打开会话 → 「能力清单」→ 18 项、状态徽标与 detail 可见、Agent 版本可见 |
+| T-E31 | 能力面板 | 打开会话 → 「能力清单」→ 20 项、状态徽标与 detail 可见、Agent 版本可见 |
 | T-E32 | 旧会话面板提示 | fake controller 不带 `capabilities` → 面板显示「创建于能力快照上线前」提示 |
 | T-E33 | 模型切换门控 | `config.model:unsupported` → 模型按钮 disabled，tooltip 含原因 |
 | T-E34 | 模式切换门控 | `config.mode:unsupported` → 模式按钮 disabled |
@@ -956,7 +957,7 @@ cd tests/e2e && BASE_URL=... API_URL=... CONTROLLER_API_URL=... npx playwright t
 
 - [ ] 契约评审通过：`agent-session.graphql` / `agent-session-websocket.md` 增量与实现一致，消息事件零改动
 - [ ] 能力快照全链路：`initialize` → bridge 归一化 → `acp:start:result/resume:result.capabilities` → `sessions.agentCapabilities` → GraphQL `agentCapabilities`/`features` → 能力面板
-- [ ] 能力清单覆盖 18 项（含 Elicitation form/url），状态为「Agent 声明 × 平台支持」合并结果，detail 可解释
+- [ ] 能力清单覆盖 20 项（含 Elicitation form/url），状态为「Agent 声明 × 平台支持」合并结果，detail 可解释
 - [ ] 门控生效且不误伤：明确 unsupported 的模型/模式/布尔配置项/继续入口被禁用并给出原因；partial 与旧会话保持现状
 - [ ] 模型来源三档推断：平台库命中 → 平台内置/自定义；前缀 → Agent 自带；兜底 → 来源未知；判定依据可查、组序稳定
 - [ ] **Elicitation 端到端可用**：Agent 发起 → 弹窗可见 → 响应回传 → Agent 收到；静默取消全部有日志 + `acp:elicitation:resolved`；超时/取消/失效在待办与弹窗可见
