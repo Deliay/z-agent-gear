@@ -50,7 +50,8 @@ const app = express();
 
 // 生产环境未显式配置 CORS_ORIGIN 时 config.corsOrigin 为空串：origin:false 仅允许同源，不再默认放开 `*`
 app.use(cors({ origin: config.corsOrigin || false }));
-app.use(express.json());
+// 计费网关会转发较大的请求体（如批量事件），放宽 body 上限至 128MB
+app.use(express.json({ limit: '128mb' }));
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
