@@ -173,7 +173,7 @@
 | `protocolVersion` | `number \| null` | Agent 协商的协议版本 |
 | `agentInfo` | `AgentInfo \| null` | Agent 名称与版本 |
 | `features` | `AgentFeatureSupport[]` | 归一化后的能力清单（20 项） |
-| `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods` / `clientCapabilities` |
+| `raw` | `object` | 对端声明原文：`agentCapabilities` / `authMethods`（`initialize` 返回值原样，不做 `type→kind` 等转换）/ `clientCapabilities`。单份原文上限 **16 KiB（UTF-8 字节口径，`TextEncoder` 计数）**，超限替换为 `{ truncated: true, originalBytes, preview }`（`preview` 最长 512 字符），避免 Agent 可控 `_meta` 放大 WS/Mongo 写入。controller-api 落库前另有 64 KiB 总快照上限：超限保留 20 项 `features`，把 `raw` 替换为同形态截断摘要 |
 
 **AgentFeatureSupport 结构：**
 
@@ -862,6 +862,17 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `elicitationId` | `string` | 是 | Agent 侧 Elicitation ID（与 `acp:elicitation` 中的 `elicitationId` 对应） |
 
 **客户端行为：** 无需响应，收到后忽略未知或已完成的 `elicitationId`。
+controller 侧对匹配的 pending 问询就地收敛（`clearTimeout` + 回 Agent `cancel`），并补发
+`acp:elicitation:resolved{reason:'cancelled', detail:'agent completed elicitation'}`，
+避免待办悬挂到 65s 被误标 `expired`。
+
+`cancelled` 的产生条件（全部在 controller 侧）：
+1. Agent 自发 `elicitation/complete`（**用户主动取消不走本事件**：走 `acp:elicitation:response`，由服务端直接写终态，避免重复收敛）；
+2. `stop()`（会话关闭）、`handleError()`（初始化失败）、`spawner.closed`（进程退出）；
+3. socket `disconnect`（`settlePendingOnDisconnect`）与 `acp:reconcile` 对账杀会话（走 `stop()`）。
+
+以上路径均 `clearTimeout` + resolve(cancel) + delete pending，并在会话仍连接时发 `resolved{cancelled}`；
+因此**任何会话关闭/进程退出/断线/对账之后都不应再出现 65s 迟到的 `resolved{timeout}`**。
 
 ### 2.34 `acp:elicitation:resolved`（Controller → Server）
 
@@ -872,13 +883,19 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `requestId` | `string` | 否 | 平台侧请求 ID（模式不支持时可能没有） |
+| `requestId` | `string` | 否 | 平台侧请求 ID。新 controller 在所有路径（含 `unsupported_mode`）都会携带；仅旧版本可能缺省，服务端按 `sessionId` 会话级兜底收敛 |
 | `sessionId` | `string` | 是 | 会话 ID |
-| `reason` | `"unsupported_mode" \| "timeout" \| "cancelled"` | 是 | 结束原因 |
-| `detail` | `string` | 否 | 可读原因（如未知模式名） |
+| `reason` | `"unsupported_mode" \| "timeout" \| "cancelled"` | 是 | 结束原因。controller-api 运行时校验，契约外取值丢弃并告警 |
+| `detail` | `string` | 否 | 可读原因（如未知模式名）。bridge 侧截断 100 字符、controller-api/Redis 侧截断 200 字符 |
 
-**服务端行为：** 发布 Redis `elicitation:resolved`（附 `userId`/`controllerId`），agent-api 据此把
-对应待办标记为 `failed` / `expired` / `cancelled`，并记录 `resolvedAt`。
+**服务端行为：**
+
+1. 发布 Redis `elicitation:resolved`（附 `userId`/`controllerId`）。
+2. agent-api 写入待办终态时强制两个不变量：
+   - **租户隔离**：`filter.userId` 必须与会话归属一致；事件缺 `userId` 时拒绝写入并告警（防止持有他人 `requestId` 越权改写）。
+   - **终态单调**：`filter.resolution = null`，只允许「待处理 → 终态」；迟到的 `timeout` 不得覆盖 `accepted` / `declined` / `cancelled`。
+3. `reason` 映射：`unsupported_mode → failed`、`timeout → expired`、`cancelled → cancelled`；契约外取值收敛为 `failed` 并告警。
+4. `requestId` 缺省且 `sessionId` 存在时，按 `sessionId + userId + resolution:null` 兜底收敛。
 
 ---
 

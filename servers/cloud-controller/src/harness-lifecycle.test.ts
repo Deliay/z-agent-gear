@@ -8,6 +8,15 @@ describe('harness lifecycle helpers', () => {
     expect(harnessTerminalStatus('failed')).toBe('failed');
   });
 
+  it('C-1: maps exited + mustFailure to failed (required init failure keeps its reason)', () => {
+    // 必须工作负载失败经 forceDestroy 收口为 exited，mustFailure 标记不得丢失失败语义。
+    expect(harnessTerminalStatus('exited', true)).toBe('failed');
+    expect(harnessTerminalStatus('destroying', true)).toBe('failed');
+    // 正常 exited（主动停止/TTL）仍为 stopped。
+    expect(harnessTerminalStatus('exited', false)).toBe('stopped');
+    expect(harnessTerminalStatus('failed', false)).toBe('failed');
+  });
+
   it('retries transient callback failures and succeeds', async () => {
     const task = vi
       .fn<() => Promise<void>>()

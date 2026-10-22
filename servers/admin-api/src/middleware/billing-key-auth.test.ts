@@ -27,11 +27,12 @@ function startGateway(): Promise<void> {
 async function seedCloudHost(input: {
   status?: string;
   deletedAt?: Date | null;
+  userId?: string;
 } = {}): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await mongoose.connection.db!.collection('cloudhosts').insertOne({
     _id,
-    userId: 'probe-user',
+    userId: input.userId ?? 'probe-user',
     controllerId: new mongoose.Types.ObjectId(),
     status: input.status ?? 'RUNNING',
     deletedAt: input.deletedAt ?? null,
@@ -130,6 +131,32 @@ describe('billingKeyAuth（CLOUD_HOST Key 实时失效）', () => {
     const deletedHostId = await seedCloudHost({ deletedAt: new Date() });
     const deletedSecret = await seedKey({ scope: 'cloud_host', cloudHostId: deletedHostId });
     expect((await probe(deletedSecret)).status).toBe(401);
+  });
+
+  it('B-2: owner 与宿主属主不一致 → 401（防跨用户 Key 复用）', async () => {
+    const cloudHostId = await seedCloudHost({ status: 'RUNNING', userId: 'other-user' });
+    const secret = await seedKey({ scope: 'cloud_host', cloudHostId });
+
+    const res = await probe(secret);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('invalid_api_key');
+  });
+
+  it('B-2: admin_user 豁免属主一致性校验（后台代运行）', async () => {
+    // 宿主属主为 probe-user，但 admin_user Key 不参与 ownerId 绑定校验。
+    const cloudHostId = await seedCloudHost({ status: 'RUNNING', userId: 'probe-user' });
+    const { secret } = await apiKeyService.createCloudHostScopedKey({
+      accountId: new mongoose.Types.ObjectId().toString(),
+      ownerType: 'admin_user',
+      ownerId: 'admin-1',
+      name: 'admin-host-key',
+      cloudHostId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const res = await probe(secret);
+    expect(res.status).toBe(200);
   });
 
   it('T-BK4: 过期 Key 拒绝', async () => {

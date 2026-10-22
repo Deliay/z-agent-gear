@@ -64,6 +64,39 @@ export class SessionService {
     return this.mapSession(session);
   }
 
+  /**
+   * A-2/B15：会话写路径统一只读判定。
+   * 云电脑（Controller.type=cloud）缺失/软删除/非 RUNNING（STOPPING/STOPPED/FAILED）→ `session is ended`；
+   * 普通本地/GitHub 会话不受影响。
+   */
+  async assertSessionWritable(sessionId: string, userId: string): Promise<void> {
+    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    if (!session) throw new Error('Session not found');
+    await this.assertControllerWritable(session.controllerId, userId);
+  }
+
+  private async assertControllerWritable(controllerId: unknown, userId: string): Promise<void> {
+    const controllerRef = controllerId as mongoose.Types.ObjectId;
+    const controller = await Controller.findOne({
+      _id: controllerRef,
+      userId,
+    }).lean();
+    if (controller?.type !== 'cloud') return;
+    const host = await CloudHost.findOne({
+      controllerId: controllerRef,
+      userId,
+      deletedAt: null,
+    }).lean();
+    if (
+      !host ||
+      host.status === 'STOPPING' ||
+      host.status === 'STOPPED' ||
+      host.status === 'FAILED'
+    ) {
+      throw new Error('session is ended');
+    }
+  }
+
   async create(userId: string, input: {
     controllerId: string;
     acpServerType: string;
@@ -78,19 +111,32 @@ export class SessionService {
     /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
     modeId?: string;
     modelId?: string;
+    /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
+    allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
+    const cloudHostRunning = (host: { status?: string } | null): boolean =>
+      host?.status === 'RUNNING' ||
+      (input.allowStartingCloudHost === true && host?.status === 'STARTING');
     if (controller.type === 'cloud') {
       const host = await CloudHost.findOne({
         controllerId: input.controllerId,
         userId,
         deletedAt: null,
       }).lean();
-      if (!host || host.status !== 'RUNNING') {
+      if (!host || !cloudHostRunning(host as { status?: string })) {
         throw new Error('cloud host is not running');
+      }
+      // A-11：会话 ACP 工具必须落在云电脑已启用的 harnessTypes 映射内。
+      const harnessAcpTypes: Record<string, string> = { OPENCODE: 'opencode' };
+      const allowed = ((host.harnessTypes ?? []) as string[])
+        .map((type) => harnessAcpTypes[type])
+        .filter((type): type is string => Boolean(type));
+      if (allowed.length > 0 && !allowed.includes(input.acpServerType)) {
+        throw new Error(`unsupported harness type: ${input.acpServerType}`);
       }
     }
 
@@ -193,6 +239,22 @@ export class SessionService {
       }
     }
 
+    // A-3：创建会话与 stop/terminal 无原子性——长耗时 worktree/MCP 流程结束后、
+    // 落库前复查云电脑仍在允许状态，缩小「终态后残留 creating 幽灵会话」窗口。
+    if (controller.type === 'cloud') {
+      const stillRunning = await CloudHost.findOne({
+        controllerId: input.controllerId,
+        userId,
+        deletedAt: null,
+        ...(input.allowStartingCloudHost === true
+          ? { status: { $in: ['STARTING', 'RUNNING'] } }
+          : { status: 'RUNNING' }),
+      }).lean();
+      if (!stillRunning) {
+        throw new Error('cloud host is not running');
+      }
+    }
+
     const session = await Session.create({
       userId,
       controllerId: input.controllerId,
@@ -205,6 +267,26 @@ export class SessionService {
       ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
       ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });
+
+    // A-3 残留窗口（毫秒级）：insert 之后立即回查；若 stop/terminal 已在复查与 insert 之间收口，
+    // 将刚创建的会话置 ENDED 并拒绝，避免 creating 幽灵会话。
+    if (controller.type === 'cloud') {
+      const afterInsert = await CloudHost.findOne({
+        controllerId: input.controllerId,
+        userId,
+        deletedAt: null,
+        ...(input.allowStartingCloudHost === true
+          ? { status: { $in: ['STARTING', 'RUNNING'] } }
+          : { status: 'RUNNING' }),
+      }).lean();
+      if (!afterInsert) {
+        await Session.updateOne(
+          { _id: session._id },
+          { $set: { status: 'ended', endedAt: new Date() } },
+        );
+        throw new Error('cloud host is not running');
+      }
+    }
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
     let mcpEndpoint: { token: string; serverNames: string[] } | undefined;
@@ -333,6 +415,9 @@ export class SessionService {
   async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
     const session = await Session.findOne({ _id: sessionId, userId }).lean();
     if (!session) return false;
+
+    // A-2：只读留档会话不得继续（cancel 亦属于 session:command 写路径）。
+    await this.assertControllerWritable(session.controllerId, userId);
 
     const redis = getRedisClient();
     await redis.publish('session:command', JSON.stringify({

@@ -42,6 +42,8 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     userId: 'user-1',
     controllerId: 'ctrl-cloud',
     controllerName: '云电脑 A',
+    controllerType: 'cloud',
+    cloudHost: makeCloudHost(),
     acpServerType: 'opencode',
     status: 'ended',
     title: '会话一',
@@ -110,11 +112,8 @@ describe('SessionView 云电脑只读回看', () => {
     { status: 'STOPPED' as const, failureReason: null },
     { status: 'FAILED' as const, failureReason: 'container exited' },
   ])('T-AW10 云电脑终态($status)时隐藏输入/发送/继续，保留历史消息', ({ status, failureReason }) => {
-    mockQueries(makeSession(), [
-      makeController({
-        cloudHost: makeCloudHost({ status, failureReason }),
-      }),
-    ]);
+    // 关键：controllers 列表不包含该 controller（真实 GET_CONTROLLERS 可能已过滤/尚未加载）
+    mockQueries(makeSession({ cloudHost: makeCloudHost({ status, failureReason }) }), []);
 
     render(<SessionView sessionId="session-1" />);
 
@@ -124,27 +123,48 @@ describe('SessionView 云电脑只读回看', () => {
     expect(screen.getByTestId('cloud-host-readonly-notice')).toBeInTheDocument();
   });
 
-  it('T-AW10 软删除云电脑（cloudHost=null）仍按只读渲染', () => {
-    mockQueries(makeSession(), [makeController({ cloudHost: null })]);
+  it('T-AW10 软删除云电脑（controller 被列表过滤）仍按只读渲染', () => {
+    mockQueries(
+      makeSession({ cloudHost: makeCloudHost({ deletedAt: '2026-01-02T00:00:00Z' }) }),
+      [],
+    );
 
     render(<SessionView sessionId="session-1" />);
 
     expect(screen.getByTestId('message-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('input-box')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-readonly-notice')).toBeInTheDocument();
+  });
+
+  it('T-AW10 云电脑记录缺失（cloudHost=null）时按只读兜底', () => {
+    mockQueries(makeSession({ cloudHost: null }), []);
+
+    render(<SessionView sessionId="session-1" />);
+
     expect(screen.queryByTestId('input-box')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument();
     expect(screen.getByTestId('cloud-host-readonly-notice')).toBeInTheDocument();
   });
 
   it('T-AW11 普通已结束会话仍显示恢复入口与输入框', () => {
-    mockQueries(makeSession({ controllerId: 'ctrl-local', controllerName: '本机' }), [
-      makeController({
-        id: 'ctrl-local',
-        name: '本机',
-        type: 'local',
-        status: 'online',
+    mockQueries(
+      makeSession({
+        controllerId: 'ctrl-local',
+        controllerName: '本机',
+        controllerType: 'local',
         cloudHost: null,
       }),
-    ]);
+      [
+        makeController({
+          id: 'ctrl-local',
+          name: '本机',
+          type: 'local',
+          status: 'online',
+          cloudHost: null,
+        }),
+      ],
+    );
 
     render(<SessionView sessionId="session-1" />);
 
@@ -154,12 +174,28 @@ describe('SessionView 云电脑只读回看', () => {
     expect(screen.queryByTestId('cloud-host-readonly-notice')).not.toBeInTheDocument();
   });
 
-  it('T-AW11 云电脑 RUNNING 时已结束会话仍可恢复', () => {
-    mockQueries(makeSession(), [makeController({ cloudHost: makeCloudHost({ status: 'RUNNING' }) })]);
+  it('T-AW11 云电脑 RUNNING 时已结束会话仍可恢复（不依赖 controller 列表）', () => {
+    mockQueries(makeSession({ cloudHost: makeCloudHost({ status: 'RUNNING' }) }), []);
 
     render(<SessionView sessionId="session-1" />);
 
     expect(screen.getByTestId('input-box')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '继续' })).toBeInTheDocument();
+  });
+
+  it('R2-21 会话不存在/查询失败时展示明确出口，不渲染输入框', () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (query === GET_SESSION) {
+        return { data: undefined, loading: false, error: new Error('Session not found') };
+      }
+      if (query === GET_CONTROLLERS) return { data: { controllers: [] }, loading: false };
+      return { data: null, loading: false };
+    });
+
+    render(<SessionView sessionId="missing-session" />);
+
+    expect(screen.getByTestId('session-load-error')).toBeInTheDocument();
+    expect(screen.getByText('会话不存在或无权访问')).toBeInTheDocument();
+    expect(screen.queryByTestId('input-box')).not.toBeInTheDocument();
   });
 });

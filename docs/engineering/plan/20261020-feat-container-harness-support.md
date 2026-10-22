@@ -169,7 +169,7 @@ docker run --rm --entrypoint bash \
 | A13 | §5.1.5：写 `opencode.jsonc`（custom provider） | `packages/agent-controller` 无 `jsonc-parser`；OpenCode 配置为 `opencode.jsonc`（`.json` 亦兼容） | 新增 `jsonc-parser` 依赖；默认写 `~/.config/opencode/opencode.jsonc`，若同目录只存在 `opencode.json` 则合并该文件；保留注释与既有 provider，仅替换 `provider.zag`。 |
 | A14 | §5.3：`@opencode/cli@<pin>` | 内网 npm 代理可用版本在实施时确认；旧计划使用 `2.1.1` | 固定 `OPENCODE_CLI_VERSION`（默认 `2.1.1`，实施时以 `npm view @opencode/cli versions` 实测锁定并写入 BUILD.md）；init 脚本中硬编码默认值，可用同名 env 覆盖但**验收以固定版本为准**。 |
 | A15 | §3.2.1：`secrets` 由 agent-api 下发 | agent-api 无 controller-api 对外地址配置；worker 在 K8s 内需可达 controller-api 与计费网关 | agent-api 新增 `CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`、`CLOUD_HOST_DEFAULT_WORKSPACE` 配置；创建时校验非空，随内部请求下发（非 secret 的 baseURL 也放在 `secrets` 报文内，但不落库）。 |
-| A16 | §3.2.2：cloud-controller 终态撤销 + `container.destroyed` 兜底 + admin-api 对账三线 | admin-api 与 cloud-controller 共享 Mongo；admin-api 已有 `cloudcontainers` 只读模型；cloud-controller 无 admin-api 客户端 | 三线落地为：① agent-api `stopCloudHost`/`deleteCloudHost` 显式 `revoke-by-host`；② cloud-controller `onDestroyed` 调 admin-api `revoke-by-host`（按 `hostId` 幂等）；③ 计费网关每次鉴权校验 `cloudhosts.status=RUNNING` 且未过期（实时失效）+ admin-api 每日对账扫描 `scope=cloud_host` 且宿主非 RUNNING 的 Key。不依赖 `container.destroyed` MQ 消费。 |
+| A16 | §3.2.2：cloud-controller 终态撤销 + `container.destroyed` 兜底 + admin-api 对账三线 | admin-api 与 cloud-controller 共享 Mongo；admin-api 已有 `cloudcontainers` 只读模型；cloud-controller 无 admin-api 客户端 | 三线落地为：① agent-api `stopCloudHost`/`deleteCloudHost` 显式 `revoke-by-host`；② cloud-controller `onDestroyed` 调 admin-api `revoke-by-host`（按 `hostId` 幂等）；③ 计费网关每次鉴权校验 `cloudhosts.status=RUNNING` 且未过期（实时失效）+ admin-api 每日对账扫描 `scope=cloud_host` 且宿主处于非合法态（`STOPPING`/`STOPPED`/`FAILED` 等）或过期/缺 expiry 的 Key。**`STARTING` 窗口 Key 必须存活**（Key 在 STARTING 期铸造、本期无重铸），由网关实时校验拒绝非 RUNNING 调用。不依赖 `container.destroyed` MQ 消费。 |
 | A17 | §8.2：tests/api 使用 `vitest + supertest` | 仓库无 `supertest`；`tests/api` 用 `fetch` 打真实 Aspire 服务 | 继续 **vitest + fetch**；不引入 supertest。 |
 | A18 | §3.1.1/§5.1.4：停止后会话 `ENDED` 且只读；服务端拒绝 `session:command`（`session is ended`） | 既有 `sessionService.resume` **允许** `ended` 会话恢复（`session.ts:328-331`）；普通「已结束」会话可 resume；`Session` 无只读字段 | **不新增 Session 字段/不改 `agent-session.graphql`**：`resume` 前按 `controllerId` 查 `cloudhosts`，若云电脑 `STOPPED/FAILED/deletedAt` 则返回 `session is ended`；普通 ended 会话行为不变。前端按 `cloudHost.status` 隐藏继续/发送入口，服务端拒绝为主。`createSession` 对 cloud Controller 校验云电脑必须 RUNNING（否则 `cloud host is not running`）。 |
 | A19 | §5.1.1：`CC-->>AA: 就绪 → cloudhosts.status=RUNNING`；§5.1.4 停止/终态 | cloud-controller 只有计费 `onReady/onDestroyed` 钩子，**没有**通知 agent-api 的通道 | 新增 cloud-controller → agent-api 内部回调：`POST /internal/cloud-hosts/:id/ready`（首次 online）与 `POST /internal/cloud-hosts/:id/terminal`（exited/failed/destroyed，含 TTL 自然退出）。Bearer `INTERNAL_API_TOKEN`，幂等。 |
@@ -278,7 +278,7 @@ docker run --rm --entrypoint bash \
 | `servers/admin-api/src/routes/billing-openai.ts` | 修改 | `/models`：cloud_host scope 返回 `global enabled` ∪ `user enabled`（含无 pricing 的自定义模型），account scope 维持现状；`/chat/completions`：先查 global，cloud_host scope 未命中再查 user；自定义模型不要求 pricing、不写计量/outbox，`BillingApiCall.billable=false,cost=0`；系统模型写入 `cloudHostId` |
 | `servers/admin-api/src/graphql/schemas/billing.ts` | 修改 | `BillingApiKeyScope`、`BillingApiKey.scope/cloudHostId/expiresAt`、`BillingApiCall.cloudHostId/billable`（与契约对齐；admin-web 不消费新字段） |
 | `servers/admin-api/src/graphql/resolvers/billing.ts` | 修改 | `toApiKeyWire`/`BillingApiCall` 映射新字段；既有 create/revoke mutation 不变（云电脑 Key 不经 admin GraphQL 创建） |
-| `servers/admin-api/src/services/billing/reconciliation.ts` | 修改 | 新增 `cloud-host-keys` 对账：扫描 `scope=cloud_host,status=active` 且宿主非 RUNNING/已删除/过期的 Key，幂等撤销并登记报告 |
+| `servers/admin-api/src/services/billing/reconciliation.ts` | 修改 | 新增 `cloud-host-keys` 对账：扫描 `scope=cloud_host,status=active` 且宿主处于非合法态（`STOPPING`/`STOPPED`/`FAILED`，**放行 `STARTING` 创建窗口**）/已删除/过期的 Key，幂等撤销并登记报告 |
 | `servers/admin-api/src/index.ts` | 修改 | `syncIndexes` 覆盖新字段/新只读模型；对账注册（沿用 BillingScheduler 每日 cron） |
 | `servers/admin-api/src/services/billing/api-key-service.test.ts` | 修改 | 云电脑 Key 铸造/过期/撤销/幂等/同宿主轮换 |
 | `servers/admin-api/src/middleware/billing-key-auth.test.ts` | 新增 | 过期/宿主非 RUNNING/已删除/正常/账号 Key 回归 |
@@ -332,7 +332,7 @@ sequenceDiagram
 | T-BK14 | 同名系统/自定义模型 | 系统模型优先，走计费 |
 | T-BK15 | 禁用/不存在模型 | `404 model_not_found` |
 | T-BK16 | Key 明文不落库/不进日志 | Mongo 无明文；错误日志/响应脱敏 |
-| T-BK17 | 对账 `cloud-host-keys` | 宿主非 RUNNING/过期/删除的 active Key 被撤销；RUNNING 保留 |
+| T-BK17 | 对账 `cloud-host-keys` | 宿主终态（`STOPPING/STOPPED/FAILED`）/过期/删除的 active Key 被撤销；`RUNNING` 与 `STARTING` 窗口保留 |
 | T-BK18 | 账号 Key 行为不受影响 | 既有 billing-flow/预留/账单回归全绿 |
 
 ### 验收 checklist
@@ -348,16 +348,16 @@ sequenceDiagram
 
 ## Phase 3: admin-api 预置「OpenCode（Harness）」工作负载
 
-开发分支：`servers/harness-support`。TDD 先写 `005-preset-harness-opencode.test.ts`（新增）→ RED。
+开发分支：`servers/harness-support`。TDD 先写 `006-preset-harness-opencode.test.ts`（新增）→ RED。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/admin-api/src/models/cloud-workload.ts` | 修改 | 增 `workloadKind: 'standard'\|'harness'`（默认 `standard`，index）、`harnessType: 'opencode'\|null`（默认 null）；不新增 `optionsSource`（会话参数二期） |
-| `servers/admin-api/src/migrations/005-preset-harness-opencode.ts` | 新增 | 写入 `name='OpenCode（Harness）'`、`presetKey='harness-opencode'`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[]`、仅 `initScript`、无 `dependsOnWorkloadIds`（Node/npm 已在镜像） |
-| `servers/admin-api/src/migrations/005-preset-harness-opencode.test.ts` | 新增 | 幂等、已存在不覆盖、字段完整、`bash -n`、脚本顺序 |
-| `servers/admin-api/src/index.ts` | 修改 | 注册 `005` 到迁移数组 |
+| `servers/admin-api/src/migrations/006-preset-harness-opencode.ts` | 新增 | 写入 `name='OpenCode（Harness）'`、`presetKey='harness-opencode'`、`workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`、`paramSchema=[]`、仅 `initScript`、无 `dependsOnWorkloadIds`（Node/npm 已在镜像） |
+| `servers/admin-api/src/migrations/006-preset-harness-opencode.test.ts` | 新增 | 幂等、已存在不覆盖、字段完整、`bash -n`、脚本顺序 |
+| `servers/admin-api/src/index.ts` | 修改 | 注册 `006` 到迁移数组 |
 
 ### init 脚本（migration 内置，示意）
 
@@ -930,7 +930,7 @@ flowchart LR
     I --> J[10 验收 + 归档]
 ```
 
-- **回滚**：`HARNESS_ENABLED=false` 立即隐藏新建入口并拒绝 create；存量云电脑仍可 `myCloudHosts`/`stopCloudHost`/`deleteCloudHost`；模型 Key 到期/宿主非 RUNNING/删除自动失效；worker 镜像可回退（普通容器门禁仍 2.2.0）；migration 005 不删除（幂等、无破坏性）。
+- **回滚**：`HARNESS_ENABLED=false` 立即隐藏新建入口并拒绝 create；存量云电脑仍可 `myCloudHosts`/`stopCloudHost`/`deleteCloudHost`；模型 Key 到期/宿主非 RUNNING/删除自动失效；worker 镜像可回退（普通容器门禁仍 2.2.0）；migration 006 不删除（幂等、无破坏性）。
 - **配置清单**：`HARNESS_ENABLED`、`HARNESS_CONTAINER_TTL_SECONDS`、`CLOUD_HOST_MAX_PER_USER=1`、`CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`、`CLOUD_HOST_DEFAULT_WORKSPACE`、`AGENT_API_URL`/`AGENT_API_TIMEOUT_MS`、`ADMIN_API_URL`（cloud-controller）、`MIN_HARNESS_WORKER_VERSION`（代码常量）、`OPENCODE_CLI_VERSION`（init 固定版本）。
 - **监控/排障**：云电脑创建失败看 agent-api `cloud-host` 日志（回滚项）；worker 回连看 cloud-controller `/worker` 握手/`registered`；ready/terminal 回调看 agent-api `/internal/cloud-hosts` 日志；OpenCode 初始化看 `cloudworkloadlogs` 的 init 记录；Key 401 看 admin-api `billing-key-auth`（过期/宿主非 RUNNING/已删除）。
 

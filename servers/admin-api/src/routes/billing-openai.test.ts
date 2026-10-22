@@ -11,7 +11,15 @@ import { accountService } from '../services/billing/account-service.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
 import { paymentService } from '../services/billing/payment.js';
 import { encrypt } from '../services/crypto.js';
-import { createBillingOpenAiRouter, resolveUsageFallback } from './billing-openai.js';
+import {
+  applyAnthropicUsage,
+  createBillingOpenAiRouter,
+  estimateCost,
+  estimatePromptTextTokens,
+  estimateRequestTokens,
+  resolveUsageFallback,
+} from './billing-openai.js';
+import { tokenCostCents } from '../services/billing/money.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
 
@@ -154,14 +162,14 @@ async function seedCloudHostKey(
 /** 用户自定义模型（scope=user，无定价）。每次使用独立 provider 避免 (providerId,name) 唯一冲突。 */
 async function seedCustomModel(
   name: string,
-  options: { isEnabled?: boolean; sortOrder?: number } = {},
+  options: { isEnabled?: boolean; sortOrder?: number; providerEnabled?: boolean } = {},
 ): Promise<void> {
   const provider = await Provider.create({
     name: `p-user-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     type: 'OpenAI',
     endpoint: upstreamUrl,
     encryptedCredential: encrypt('sk-test'),
-    isEnabled: true,
+    isEnabled: options.providerEnabled ?? true,
     scope: 'user',
   });
   await Model.create({
@@ -175,21 +183,56 @@ async function seedCustomModel(
   });
 }
 
-/** 全局模型（可禁用），复用 beforeEach 已建的全局 provider。 */
-async function seedGlobalModel(name: string, options: { isEnabled?: boolean } = {}): Promise<void> {
-  const provider = await Provider.findOne({ scope: 'global' });
+/** 全局模型（可禁用/可指定供应商状态与定价），默认复用 beforeEach 已建的全局 provider。 */
+async function seedGlobalModel(
+  name: string,
+  options: {
+    isEnabled?: boolean;
+    providerEnabled?: boolean;
+    pricing?: 'complete' | 'missing' | 'incomplete' | 'free';
+  } = {},
+): Promise<void> {
+  const provider =
+    options.providerEnabled === undefined
+      ? (await Provider.findOne({ scope: 'global' }))!
+      : await Provider.create({
+          name: `p-global-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+          type: 'OpenAI',
+          endpoint: upstreamUrl,
+          encryptedCredential: encrypt('sk-test'),
+          isEnabled: options.providerEnabled,
+          scope: 'global',
+        });
+  const pricing =
+    options.pricing === 'missing'
+      ? null
+      : options.pricing === 'incomplete'
+        ? {
+            inputPerMillion: 0,
+            cachedInputPerMillion: 0,
+            outputPerMillion: 0,
+            isBillable: true,
+          }
+        : options.pricing === 'free'
+          ? {
+              inputPerMillion: 0,
+              cachedInputPerMillion: 0,
+              outputPerMillion: 0,
+              isBillable: false,
+            }
+          : {
+              inputPerMillion: 100,
+              cachedInputPerMillion: 0,
+              outputPerMillion: 100,
+              isBillable: true,
+            };
   await Model.create({
-    providerId: provider!._id,
+    providerId: provider._id,
     name,
     isCustom: false,
     isEnabled: options.isEnabled ?? true,
     scope: 'global',
-    pricing: {
-      inputPerMillion: 100,
-      cachedInputPerMillion: 0,
-      outputPerMillion: 100,
-      isBillable: true,
-    },
+    pricing,
   });
 }
 
@@ -311,6 +354,22 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     });
   });
 
+  it('R10-14: stream 非布尔值 / 空 messages 直接 400，不打上游', async () => {
+    const badStream = await callGateway({
+      body: JSON.stringify({
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: 'true',
+      }),
+    });
+    expect(badStream.status).toBe(400);
+
+    const emptyMessages = await callGateway({
+      body: JSON.stringify({ model: 'test-model', messages: [] }),
+    });
+    expect(emptyMessages.status).toBe(400);
+  });
+
   it('R6：客户端中断 → 投递 model_call.aborted，调用记录 status=aborted', async () => {
     upstreamMode = 'hang';
     const controller = new AbortController();
@@ -352,6 +411,63 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     expect(ids).not.toContain('disabled-user');
     // 同名去重（global 优先）
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('B-7: 云电脑 /v1/models 与调用口径一致 — 不列禁用供应商/未定价/定价不完整 global，自定义可无定价', async () => {
+    const { secret } = await seedCloudHostKey();
+    await seedCustomModel('custom-unpriced');
+    await seedCustomModel('custom-disabled-provider', { providerEnabled: false });
+    await seedGlobalModel('global-disabled-provider', { providerEnabled: false });
+    await seedGlobalModel('global-unpriced', { pricing: 'missing' });
+    await seedGlobalModel('global-incomplete', { pricing: 'incomplete' });
+    await seedGlobalModel('global-free', { pricing: 'free' });
+
+    const res = await listModels(secret);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((item) => item.id);
+
+    // 调用可成功的模型才列出（避免列出后 /chat/completions 400/404）
+    expect(ids).toContain('test-model');
+    expect(ids).toContain('custom-unpriced');
+    expect(ids).toContain('global-free');
+    expect(ids).not.toContain('custom-disabled-provider');
+    expect(ids).not.toContain('global-disabled-provider');
+    expect(ids).not.toContain('global-unpriced');
+    expect(ids).not.toContain('global-incomplete');
+  });
+
+  it('R2-8: 存量缺 scope 模型按 user 口径列出且可调用', async () => {
+    const { secret } = await seedCloudHostKey();
+    const provider = (await Provider.findOne({ scope: 'global' }))!;
+    // 模拟历史存量：绕过 Mongoose 默认 scope=user，直接写缺省字段文档。
+    await Model.collection.insertOne({
+      providerId: provider._id,
+      name: 'legacy-no-scope',
+      isCustom: true,
+      isEnabled: true,
+      sortOrder: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const list = await listModels(secret);
+    const ids = ((await list.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id);
+    expect(ids).toContain('legacy-no-scope');
+
+    const call = await callWithKey(secret, {
+      model: 'legacy-no-scope',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(call.status).toBe(200);
+  });
+
+  it('R2-9: 账号 Key /v1/models 排除禁用供应商的 global 模型', async () => {
+    await seedGlobalModel('account-disabled-provider', { providerEnabled: false });
+    const res = await listModels(apiKeySecret);
+    expect(res.status).toBe(200);
+    const ids = ((await res.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id);
+    expect(ids).not.toContain('account-disabled-provider');
   });
 
   it('T-BK10: 账号 /v1/models 回归 — 仅返回定价完整的 global 模型', async () => {
@@ -484,5 +600,109 @@ describe('resolveUsageFallback（缺失用量兜底）', () => {
     const r = resolveUsageFallback({ inputTokens: 8, cachedInputTokens: 0, outputTokens: 5 }, 10, 100, 'abcdefgh', false);
     expect(r.estimated).toBe(false);
     expect(r.usage).toMatchObject({ inputTokens: 8, outputTokens: 5 });
+  });
+});
+
+/** R10-1：预检估算必须构成实际费用上界。 */
+describe('网关预检估算上界（R10-1）', () => {
+  const pricing = {
+    inputPerMillion: 100,
+    cachedInputPerMillion: 50,
+    outputPerMillion: 100,
+    isBillable: true,
+  };
+  const maxOutputTokens = 200;
+
+  function assertEstimateUpperBound(
+    messages: unknown[],
+    actualInputTokens: number,
+    actualOutputTokens: number,
+    actualCachedTokens = 0,
+    tools?: unknown,
+  ) {
+    const estimatedTokens = estimateRequestTokens(messages, tools);
+    expect(estimatedTokens).toBeGreaterThanOrEqual(actualInputTokens);
+    const estimated = estimateCost(pricing, estimatedTokens, maxOutputTokens);
+    const actual = tokenCostCents(
+      Math.max(0, actualInputTokens - actualCachedTokens),
+      pricing.inputPerMillion,
+    ) +
+      tokenCostCents(actualCachedTokens, pricing.cachedInputPerMillion) +
+      tokenCostCents(actualOutputTokens, pricing.outputPerMillion);
+    expect(estimated).toBeGreaterThanOrEqual(actual);
+  }
+
+  it('CJK 文本不再按 len/4 低估（默认 1 token/UTF-8 字节）', () => {
+    expect(estimatePromptTextTokens('中文')).toBe(6);
+    const messages = [{ role: 'user', content: '中'.repeat(2000) }];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(6000);
+    // 实际中文 usage 约 2000 input tokens，估算仍应 >= 实际。
+    assertEstimateUpperBound(messages, 2000, 100);
+  });
+
+  it('多模态（image/audio）非文本块估算不为 0，且 >= 实际用量', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '描述这张图' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+    ];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(4096);
+    assertEstimateUpperBound(messages, 1500, 200);
+  });
+
+  it('tool_calls 参数计入估算，且 >= 实际用量', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'lookup', arguments: JSON.stringify({ q: '中'.repeat(500) }) },
+          },
+        ],
+      },
+    ];
+    expect(estimateRequestTokens(messages)).toBeGreaterThanOrEqual(1500);
+    assertEstimateUpperBound(messages, 1200, 50);
+  });
+
+  it('R11-4: 超大图片/音频按序列化体积高估，不低于固定常量', () => {
+    const bigData = 'A'.repeat(20_000);
+    const image = [
+      {
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${bigData}` } }],
+      },
+    ];
+    expect(estimateRequestTokens(image)).toBeGreaterThan(8192);
+    assertEstimateUpperBound(image, 20_000, 10);
+  });
+
+  it('R11-6: legacy functions 定义计入估算', () => {
+    const functions = [
+      { name: 'lookup', description: '中'.repeat(1000), parameters: { type: 'object' } },
+    ];
+    const messages = [{ role: 'user', content: 'hi' }];
+    const withFunctions = estimateRequestTokens(messages, undefined, functions);
+    const withoutFunctions = estimateRequestTokens(messages);
+    expect(withFunctions).toBeGreaterThan(withoutFunctions);
+    expect(withFunctions).toBeGreaterThanOrEqual(3000);
+  });
+
+  it('Anthropic usage 归一化：input 包含 cache read/creation，cached ⊆ input（R10-9）', () => {
+    const usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+    applyAnthropicUsage(usage, {
+      input_tokens: 200,
+      output_tokens: 30,
+      cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 50,
+    });
+    expect(usage).toEqual({ inputTokens: 1250, cachedInputTokens: 1000, outputTokens: 30 });
   });
 });

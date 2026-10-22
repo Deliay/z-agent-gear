@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { BillingApiKey } from '../../models/billing-api-key.js';
 import { documentId } from './id.js';
+import { cloudHostKeyMutex } from './keyed-mutex.js';
 
 export const API_KEY_PREFIX = 'zag_sk_';
 export const API_KEY_PREFIX_LENGTH = 16; // zag_sk_ (7) + 9 hex
@@ -118,6 +119,8 @@ export class ApiKeyService {
   /**
    * 云电脑运行专用 Key：
    * - **先铸造成功再撤销同宿主旧 active Key**，避免铸造失败导致旧 Key 提前失效；
+   * - B-4：同一 `cloudHostId` 的「铸造 + 撤销」由 `cloudHostKeyMutex` 串行化，避免并发轮换时
+   *   两次铸造互相撤销导致全部失效；
    * - `expiresAt` 由调用方按容器 TTL 提供，必须为未来时间。
    */
   async createCloudHostScopedKey(input: {
@@ -133,22 +136,24 @@ export class ApiKeyService {
     if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
       throw new Error('API Key 有效期非法');
     }
-    const created = await this.create({
-      ...input,
-      scope: 'cloud_host',
-      cloudHostId: input.cloudHostId,
-      expiresAt,
-    });
-    await BillingApiKey.updateMany(
-      {
+    return cloudHostKeyMutex.runExclusive(`cloudHost:${input.cloudHostId}`, async () => {
+      const created = await this.create({
+        ...input,
         scope: 'cloud_host',
         cloudHostId: input.cloudHostId,
-        status: 'active',
-        _id: { $ne: new mongoose.Types.ObjectId(created.apiKey.id) },
-      },
-      { $set: { status: 'revoked' } },
-    );
-    return created;
+        expiresAt,
+      });
+      await BillingApiKey.updateMany(
+        {
+          scope: 'cloud_host',
+          cloudHostId: input.cloudHostId,
+          status: 'active',
+          _id: { $ne: new mongoose.Types.ObjectId(created.apiKey.id) },
+        },
+        { $set: { status: 'revoked' } },
+      );
+      return created;
+    });
   }
 
   /** 校验完整 Key：前缀索引定位 + bcrypt 比对；成功后更新 lastUsedAt。过期 Key 视为无效。 */

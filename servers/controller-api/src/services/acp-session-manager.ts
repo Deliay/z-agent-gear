@@ -11,6 +11,8 @@ const STOP_ACK_TIMEOUT_MS = 5_000;
 const STOP_MAX_RETRIES = 1;
 // acp:stop:ack:{sessionId} 的 TTL，与提案统一为 60s
 const STOP_ACK_TTL_SECONDS = 60;
+// 能力快照落库体积上限（features 固定 20 项，raw 由 Agent 控制）
+const AGENT_CAPABILITIES_MAX_BYTES = 64 * 1024;
 
 interface ACPSession {
   controllerSocket: Socket;
@@ -51,6 +53,30 @@ export class ACPSessionManager {
   // 此期间到达的 acp:stop 必须先等待在途 start/resume 结算再处理，
   // 否则会被误判为「controller 离线」写入 pending（在线时永不补做），导致 ACP 进程泄漏。
   private startingSessions = new Map<string, Promise<void>>();
+
+  /**
+   * 能力快照落库前的体积防护：Agent 可控的 raw（_meta 任意 KV）不得无限放大 Mongo 文档。
+   * 超限时保留 20 项 features（固定体积），仅把 raw 替换为可诊断摘要。
+   */
+  private capCapabilitiesSnapshot(snapshot: unknown): unknown {
+    try {
+      const json = JSON.stringify(snapshot);
+      if (json === undefined) return snapshot;
+      const bytes = Buffer.byteLength(json, 'utf8');
+      if (bytes <= AGENT_CAPABILITIES_MAX_BYTES) return snapshot;
+      console.warn(
+        '[ACP] agentCapabilities snapshot too large (%d bytes > %d), truncating raw',
+        bytes,
+        AGENT_CAPABILITIES_MAX_BYTES,
+      );
+      return {
+        ...(snapshot as Record<string, unknown>),
+        raw: { truncated: true, originalBytes: bytes, preview: json.slice(0, 512) },
+      };
+    } catch {
+      return null;
+    }
+  }
 
   /** 登记一次 start/resume 在途过程，返回结算函数（finally 中调用） */
   private trackStarting(sessionId: string): () => void {
@@ -148,7 +174,7 @@ export class ACPSessionManager {
         }
         if (payload.capabilities) {
           // 旧 controller 不上报时不覆盖历史快照（避免 undefined 抹掉）
-          updateData.agentCapabilities = payload.capabilities;
+          updateData.agentCapabilities = this.capCapabilitiesSnapshot(payload.capabilities);
         }
         updateData.authRequired = Boolean(payload.authMethods?.length);
         await Session.findByIdAndUpdate(sessionId, updateData);
@@ -556,7 +582,7 @@ export class ACPSessionManager {
         }
         if (payload.capabilities) {
           // 旧 controller 不上报时不覆盖历史快照（避免 undefined 抹掉）
-          updateData.agentCapabilities = payload.capabilities;
+          updateData.agentCapabilities = this.capCapabilitiesSnapshot(payload.capabilities);
         }
         updateData.authRequired = Boolean(payload.authMethods?.length);
         await Session.findByIdAndUpdate(sessionId, updateData);

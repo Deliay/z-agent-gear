@@ -82,11 +82,13 @@ export default function ModelSection() {
     }
   }, [providersError])
 
-  // 拖拽结束可能晚于一次 refetch 到达，用 ref 持有最新分组，避免发全量 ids 时用到旧闭包数据
+  // 拖拽结束可能晚于一次 refetch 到达，用 ref 持有最新分组/全局顺序，避免发全量 ids 时用到旧闭包数据
   const groupsRef = useRef(groups)
+  const modelsRef = useRef(models)
   useEffect(() => {
     groupsRef.current = groups
-  }, [groups])
+    modelsRef.current = models
+  }, [groups, models])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -163,10 +165,11 @@ export default function ModelSection() {
     const [removed] = reordered.splice(from, 1)
     reordered.splice(to, 0, removed)
 
-    // 全量 id：按组展示顺序拼接各组当前顺序（契约不变）
-    const fullIds = currentGroups.flatMap((g) =>
-      g.key === group.key ? reordered : g.models.map((m) => m.id),
-    )
+    // 全量 id：只替换被拖拽组在全局顺序中的原位置，保留其他组模型的全局相对顺序（C-1）。
+    // 不能按「分组展示顺序」拼接，否则会连带改写未操作组的相对顺序。
+    const groupIds = new Set(ids)
+    let cursor = 0
+    const fullIds = modelsRef.current.map((m) => (groupIds.has(m.id) ? reordered[cursor++] : m.id))
     try {
       await updateSortOrder({
         variables: { ids: fullIds },
@@ -180,7 +183,7 @@ export default function ModelSection() {
   const handleCustomSave = async (providerId: string, name: string) => {
     await createCustom({
       variables: { input: { providerId, name } },
-      refetchQueries: [ADMIN_MODELS],
+      refetchQueries: [ADMIN_MODELS, ADMIN_PROVIDERS],
     })
   }
 

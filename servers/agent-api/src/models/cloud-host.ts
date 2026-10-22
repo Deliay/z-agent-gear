@@ -52,6 +52,18 @@ const cloudHostSchema = new mongoose.Schema(
 
 cloudHostSchema.index({ userId: 1, status: 1 });
 cloudHostSchema.index({ controllerId: 1 });
+// A-5：每用户同时最多 1 个活跃云电脑（多副本部署时由 DB 兜底；进程内 KeyedMutex 仅单实例优化）。
+cloudHostSchema.index(
+  { userId: 1 },
+  {
+    unique: true,
+    name: 'uniq_active_cloud_host_per_user',
+    partialFilterExpression: {
+      status: { $in: ['STARTING', 'RUNNING', 'STOPPING'] },
+      deletedAt: null,
+    },
+  },
+);
 
 export const CloudHost = mongoose.model('CloudHost', cloudHostSchema);
 export type ICloudHost = mongoose.InferSchemaType<typeof cloudHostSchema>;

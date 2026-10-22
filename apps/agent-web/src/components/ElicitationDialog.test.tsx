@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ElicitationDialog } from './ElicitationDialog';
+import { resetElicitationDialog } from '../stores/elicitationDialog';
 
 const mockRespondElicitation = vi.fn().mockResolvedValue({});
 
@@ -79,6 +80,7 @@ describe('ElicitationDialog', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetElicitationDialog();
   });
 
   describe('form mode', () => {
@@ -205,6 +207,23 @@ describe('ElicitationDialog', () => {
       });
     });
 
+    it('N-8: 非 http(s) URL 不打开窗口也不回传 accept', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      render(
+        <ElicitationDialog
+          {...defaultProps}
+          todo={{
+            ...urlTodo,
+            elicitationData: { ...urlTodo.elicitationData, url: 'javascript:alert(1)' },
+          }}
+        />,
+      );
+      fireEvent.click(screen.getByText('打开链接'));
+
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(mockRespondElicitation).not.toHaveBeenCalled();
+    });
+
     it('should send decline action in url mode', async () => {
       render(<ElicitationDialog {...urlProps} />);
       fireEvent.click(screen.getByText('拒绝'));
@@ -268,6 +287,53 @@ describe('ElicitationDialog - 终态', () => {
     );
     expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
     expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W15c: 挂载后跨过 expiresAt 立即进入已过期（now 不冻结于挂载时刻）', () => {
+    vi.useFakeTimers();
+    try {
+      const expiresAt = new Date(Date.now() + 1_000).toISOString();
+      render(
+        <ElicitationDialog
+          open
+          onOpenChange={vi.fn()}
+          todo={{ ...baseTodo, expiresAt }}
+        />,
+      );
+      // 挂载时尚未到期：操作可用
+      expect(screen.getByText('提交')).toBeDefined();
+      expect(screen.queryByTestId('elicitation-status')).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+
+      expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
+      expect(screen.queryByText('提交')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-W19: 表单草稿跨挂载保留（owner 切换不丢已填内容）', () => {
+    const { unmount } = render(
+      <ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo }} />,
+    );
+    const input = screen.getByLabelText('A') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '半途输入' } });
+    unmount();
+
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo }} />);
+    expect((screen.getByLabelText('A') as HTMLInputElement).value).toBe('半途输入');
+  });
+
+  it('T-W18: stale=true（待办已从列表移除）展示已失效终态且隐藏操作', () => {
+    render(
+      <ElicitationDialog open stale onOpenChange={vi.fn()} todo={{ ...baseTodo }} />,
+    );
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('已从待办移除');
+    expect(screen.queryByText('提交')).toBeNull();
+    expect(screen.queryByText('拒绝')).toBeNull();
   });
 
   it('T-W16: cancelled/failed 显示对应文案并隐藏操作', () => {

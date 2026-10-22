@@ -4,10 +4,64 @@ import { sessionImportService } from '../../services/session-import.js';
 import { modelService } from '../../services/model.js';
 import { featuresFromSnapshot } from '../../services/agent-capabilities.js';
 import { inferModelSource } from '../../services/model-source.js';
+import { cloudHostService } from '../../services/cloud-host-service.js';
 import { Controller } from '../../models/controller.js';
+import { CloudHost } from '../../models/cloud-host.js';
 import type { AuthContext } from './auth.js';
 
+type Doc = Record<string, unknown>;
+
 export const sessionResolvers = {
+  Session: {
+    /** D-1：只读判定不依赖 controllers 列表命中（软删除后列表会过滤该 Controller）。 */
+    controllerType: async (parent: Doc, _args: unknown, context: AuthContext) => {
+      const userId = context.currentUser?.id;
+      if (!userId) return null;
+      const controller = await Controller.findOne({
+        _id: parent.controllerId,
+        userId,
+      }).lean();
+      return controller?.type ?? null;
+    },
+    cloudHost: async (parent: Doc, _args: unknown, context: AuthContext) => {
+      const userId = context.currentUser?.id;
+      if (!userId) return null;
+      const controller = await Controller.findOne({
+        _id: parent.controllerId,
+        userId,
+      }).lean();
+      if (controller?.type !== 'cloud') return null;
+      // 不过滤 deletedAt：软删除后仍需返回留档对象供前端只读判定。
+      const host = await CloudHost.findOne({
+        controllerId: String(parent.controllerId),
+        userId,
+      }).lean();
+      if (!host) return null;
+      return cloudHostService.mapCloudHost(host as Doc, 0);
+    },
+    agentCapabilities: (session: Record<string, unknown>) => session.agentCapabilities ?? null,
+    features: (session: Record<string, unknown>) => featuresFromSnapshot(session.agentCapabilities),
+    availableModels: async (
+      session: Record<string, unknown>,
+      _args: unknown,
+      context: AuthContext,
+    ) => {
+      const models = (session.availableModels ?? []) as Array<{
+        id: string;
+        name: string;
+        provider?: string | null;
+      }>;
+      if (models.length === 0) return [];
+      // 同一 GraphQL 请求内只查一次平台库（sessions 列表 N 条会话共享）
+      context.modelLibraryPromise ??= modelService.listSourceLibrary();
+      const library = await context.modelLibraryPromise;
+      return models.map((model) => ({
+        ...model,
+        provider: model.provider ?? null,
+        ...inferModelSource(model, library),
+      }));
+    },
+  },
   Query: {
     sessions: async (
       _parent: unknown,
@@ -162,6 +216,12 @@ export const sessionResolvers = {
       if (!session) {
         throw new GraphQLError('Session not found');
       }
+      // A-2/B15：云电脑停止/软删除后会话只读，拒绝续写消息。
+      try {
+        await sessionService.assertSessionWritable(args.sessionId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
       return sessionService.addMessage(args.sessionId, {
         direction: 'input',
         type: args.type,
@@ -255,30 +315,6 @@ export const sessionResolvers = {
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
-    },
-  },
-  Session: {
-    agentCapabilities: (session: Record<string, unknown>) => session.agentCapabilities ?? null,
-    features: (session: Record<string, unknown>) => featuresFromSnapshot(session.agentCapabilities),
-    availableModels: async (
-      session: Record<string, unknown>,
-      _args: unknown,
-      context: AuthContext,
-    ) => {
-      const models = (session.availableModels ?? []) as Array<{
-        id: string;
-        name: string;
-        provider?: string | null;
-      }>;
-      if (models.length === 0) return [];
-      // 同一 GraphQL 请求内只查一次平台库（sessions 列表 N 条会话共享）
-      context.modelLibraryPromise ??= modelService.listSourceLibrary();
-      const library = await context.modelLibraryPromise;
-      return models.map((model) => ({
-        ...model,
-        provider: model.provider ?? null,
-        ...inferModelSource(model, library),
-      }));
     },
   },
 };

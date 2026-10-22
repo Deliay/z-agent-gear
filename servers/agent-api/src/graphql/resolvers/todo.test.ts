@@ -9,6 +9,7 @@ vi.mock('../../services/todo-service.js', () => ({
     markAllTodoRead: vi.fn(),
     markTodoAsResponded: vi.fn(),
     markElicitationResolved: vi.fn(),
+    isRespondableTodo: vi.fn(),
     updatePermissionTimeout: vi.fn(),
     updateGlobalPermissionTimeout: vi.fn(),
   },
@@ -36,10 +37,47 @@ const emptyContext = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  // 默认：待办属于当前用户且可响应
+  vi.mocked(todoService.isRespondableTodo).mockResolvedValue(true);
 });
 
 describe('Todo Resolvers', () => {
+  describe('Mutation.respondPermission', () => {
+    it('T-TR0b: 他人 requestId 拒绝代答（不 publish、不标已读）', async () => {
+      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+
+      await expect(
+        todoResolvers.Mutation.respondPermission(
+          {},
+          { requestId: 'perm-of-other-user', outcome: 'selected', optionId: 'opt-1' },
+          mockContext,
+        ),
+      ).rejects.toThrow('Todo item not found or already handled');
+
+      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'perm-of-other-user', 'permission_request');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+      expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Mutation.respondElicitation', () => {
+    it('T-TR0a: 他人/已终结的 requestId 拒绝回传 Agent（不 publish、不写终态）', async () => {
+      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+
+      await expect(
+        todoResolvers.Mutation.respondElicitation(
+          {},
+          { requestId: 'elic-of-other-user', action: 'accept', values: { a: 1 } },
+          mockContext,
+        ),
+      ).rejects.toThrow('Todo item not found or already handled');
+
+      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'elic-of-other-user', 'elicitation_request');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+      expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
+      expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
+    });
+
     it('should throw when not authenticated', async () => {
       await expect(
         todoResolvers.Mutation.respondElicitation(
@@ -65,7 +103,7 @@ describe('Todo Resolvers', () => {
         action: 'accept',
         content: { strategy: 'balanced' },
       });
-      expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('elic-1');
+      expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('elic-1', 'user1');
     });
 
     it('should publish decline without content', async () => {
@@ -138,7 +176,7 @@ describe('Todo Resolvers - elicitation resolution', () => {
       { requestId: 'elic-1', action: 'accept', values: { a: 1 } },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'accepted');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'accepted', { userId: 'user1' });
   });
 
   it('T-TR2: decline/cancel 分别写 declined/cancelled', async () => {
@@ -147,14 +185,14 @@ describe('Todo Resolvers - elicitation resolution', () => {
       { requestId: 'elic-2', action: 'decline' },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'declined');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'declined', { userId: 'user1' });
 
     await todoResolvers.Mutation.respondElicitation(
       {},
       { requestId: 'elic-3', action: 'cancel' },
       mockContext,
     );
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled');
+    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled', { userId: 'user1' });
   });
 
   it('T-TR3: expiresAt/resolvedAt Date → ISO 字符串，缺失返回 null', () => {

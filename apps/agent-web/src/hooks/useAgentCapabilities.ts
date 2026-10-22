@@ -24,12 +24,16 @@ export function useAgentCapabilities(session: SessionData | null | undefined): A
 
   return useMemo(() => {
     const map = new Map(features.map((feature) => [feature.id, feature]));
+    // 快照存在性以 agentCapabilities 为准（features 为空数组时也说明有快照），
+    // 与 AgentCapabilityPanel 共用同一判定，避免「空数组不穿透」被数据形态绕过。
+    const hasSnapshot = Boolean(session?.agentCapabilities) || features.length > 0;
     return {
       features,
-      hasSnapshot: features.length > 0,
+      hasSnapshot,
       status: (id: string) => map.get(id)?.status ?? unknownStatus(),
       detail: (id: string) => map.get(id)?.detail ?? null,
-      isBlocked: (id: string) => features.length > 0 && map.get(id)?.status === 'unsupported',
+      // 只有「有快照 + 该能力明确 unsupported」才拦截；缺失条目/partial 一律放行
+      isBlocked: (id: string) => hasSnapshot && map.get(id)?.status === 'unsupported',
     };
-  }, [features]);
+  }, [features, session?.agentCapabilities]);
 }

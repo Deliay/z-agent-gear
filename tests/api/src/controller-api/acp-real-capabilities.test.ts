@@ -102,13 +102,14 @@ function spawnController(): { process: ChildProcess; waitForRegistered: Promise<
     env: spawnEnv(),
   });
 
+  let output = '';
+  // stderr 收进 output（失败时随错误抛出），不直接 console.log，避免测试输出噪声
   proc.stderr?.on('data', (data: Buffer) => {
-    console.log(`[controller stderr] ${data.toString().trim()}`);
+    output += data.toString();
   });
 
   const waitForRegistered = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Controller registration timeout')), 15_000);
-    let output = '';
     proc.stdout?.on('data', (data: Buffer) => {
       output += data.toString();
       const match = output.match(/Controller registered: (\w+)/);
@@ -218,7 +219,8 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
     const session = await waitForSession(sessionId, authToken);
     expect(session.agentCapabilities).not.toBeNull();
     expect(session.agentCapabilities.raw.agentCapabilities.sessionCapabilities).toBeDefined();
-    expect(session.features.length).toBeGreaterThanOrEqual(20);
+    // 契约固定 20 项：>=20 会放过「多出/重复」回归
+    expect(session.features).toHaveLength(20);
 
     const byId = new Map<string, any>(session.features.map((f: any) => [f.id, f]));
     expect(byId.get('session.load')?.status).toBe('supported');
@@ -237,10 +239,14 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
     const features = (body.data?.session?.features ?? []) as Array<{ id: string; status: string }>;
     const byId = new Map(features.map((f) => [f.id, f]));
 
-    // OpenCode 声明 fork/additionalDirectories/image 能力，但平台暂无入口 → partial。
-    // 至少命中一项，避免循环条件为空导致「零断言恒过」。
-    const partialIds = ['session.fork', 'session.additionalDirectories', 'prompt.image']
-      .filter((id) => byId.get(id)?.status === 'partial');
-    expect(partialIds.length).toBeGreaterThan(0);
+    // OpenCode 2.0.31 声明 fork/additionalDirectories/image/embeddedContext，但平台暂无入口 → 全部 partial。
+    // 逐项断言（不用 filter().length>0，避免任一项漂移仍恒绿）。
+    expect(byId.get('session.fork')?.status).toBe('partial');
+    expect(byId.get('session.additionalDirectories')?.status).toBe('partial');
+    expect(byId.get('prompt.image')?.status).toBe('partial');
+    expect(byId.get('prompt.embeddedContext')?.status).toBe('partial');
+    // 未声明项必须 unsupported（与调研附录一致）
+    expect(byId.get('prompt.audio')?.status).toBe('unsupported');
+    expect(byId.get('mcp.sse')?.status).toBe('unsupported');
   }, 30_000);
 });

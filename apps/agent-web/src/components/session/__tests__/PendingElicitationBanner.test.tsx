@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { PendingElicitationBanner } from '../PendingElicitationBanner';
+import { resetElicitationDialog } from '../../../stores/elicitationDialog';
 import type { TodoItemData } from '../../../graphql/types';
 
 const mockRefetch = vi.fn();
@@ -46,6 +47,7 @@ function mockOverview(todos: TodoItemData[]) {
 describe('PendingElicitationBanner', () => {
   beforeEach(() => {
     mockRefetch.mockClear();
+    resetElicitationDialog();
   });
 
   it('T-W13: 有未解决问询时显示数量与查看按钮；无则不渲染', () => {
@@ -81,5 +83,64 @@ describe('PendingElicitationBanner', () => {
     expect(screen.getByText('Agent请求输入：填写信息')).toBeDefined();
     expect(screen.getByText('Need input')).toBeDefined();
     expect(screen.getByText('提交')).toBeDefined();
+  });
+
+  it('T-W14b: 弹窗打开后 pending 变空（轮询标 expired）仍保留弹窗并展示终态', () => {
+    mockOverview([elicitationTodo()]);
+    const { rerender } = render(<PendingElicitationBanner sessionId="sess-1" />);
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getByText('提交')).toBeDefined();
+
+    // 轮询拿到 resolution：入口消失，但弹窗不得连同表单一起被卸载
+    mockOverview([elicitationTodo({ resolution: 'expired' })]);
+    rerender(<PendingElicitationBanner sessionId="sess-1" />);
+
+    expect(screen.queryByTestId('pending-elicitation-banner')).toBeNull();
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W14d: 打开后 todo 被 TTL/limit 移除仍保留弹窗并展示已失效终态', () => {
+    mockOverview([elicitationTodo()]);
+    const { rerender } = render(<PendingElicitationBanner sessionId="sess-1" />);
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getByText('提交')).toBeDefined();
+
+    // 待办从列表消失（TTL 删档）：不能连同表单一起卸载
+    mockOverview([]);
+    rerender(<PendingElicitationBanner sessionId="sess-1" />);
+
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('已从待办移除');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W14e: 切换会话不重开他会话的问询弹窗（快照校验 sessionId）', () => {
+    mockOverview([elicitationTodo()]);
+    const { rerender } = render(<PendingElicitationBanner sessionId="sess-1" />);
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getByText('Need input')).toBeDefined();
+
+    mockOverview([elicitationTodo()]);
+    rerender(<PendingElicitationBanner sessionId="sess-2" />);
+
+    expect(screen.queryByText('Need input')).toBeNull();
+  });
+
+  it('T-W14c: Banner 与全局待办面板共享打开权（同一时刻只可能一个弹窗）', async () => {
+    mockOverview([elicitationTodo()]);
+    const { TodoListPanel } = await import('../../TodoListPanel');
+    render(
+      <>
+        <PendingElicitationBanner sessionId="sess-1" />
+        <TodoListPanel />
+      </>,
+    );
+
+    // 全局面板自动弹窗（owner=todo）后，Banner 点击切换 owner 不会产生第二个弹窗
+    await screen.findByText('Agent请求输入：填写信息');
+    expect(screen.getAllByText('Need input')).toHaveLength(1);
+
+    fireEvent.click(screen.getByText('查看'));
+    expect(screen.getAllByText('Need input')).toHaveLength(1);
   });
 });

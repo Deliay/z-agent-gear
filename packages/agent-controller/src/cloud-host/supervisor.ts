@@ -108,8 +108,41 @@ export interface CloudHostSupervisorHandle {
   readonly controllerSocket: Socket | null;
   /** 已创建（幂等）的默认工作区。 */
   workspace: string;
-  /** 关闭两端并退出（不发送 `unregister`）。 */
-  shutdown: (reason: string) => void;
+  /**
+   * 关闭两端并退出（不发送 `unregister`）。
+   *
+   * `code` 缺省按 `reason` 自动判定：服务端主动 shutdown / 信号 / unregistered → 0；
+   * `version_mismatch:*` / `error:*` / 初始化失败类 → 1（避免错误路径 `exit(0)` 掩盖失败，
+   * 并让 entrypoint 的 VERSION_MISMATCH 自愈生效，C-2）。
+   */
+  shutdown: (reason: string, code?: number) => void;
+}
+
+/**
+ * 错误/失败类 shutdown reason 判定（C-2）：
+ *
+ * - `socketio-client` 把 `VERSION_MISMATCH` / 其它 `error` 事件转成
+ *   `version_mismatch:*` / `error:<code>` 前缀；
+ * - cloud-controller 的必须工作负载失败 reason 形如「必须工作负载「x」初始化失败」
+ *   （经 `worker shutdown: ...` 包装后仍需识别）；
+ * - 其余（服务端主动 shutdown、`unregistered`、SIGINT/SIGTERM）视为正常退出。
+ */
+export function isFailureShutdownReason(reason: string): boolean {
+  const normalized = reason.trim().toLowerCase();
+  // reason 可能被 `worker shutdown:` / `controller-api shutdown:` 包装，用 includes 判定前缀。
+  if (normalized.includes('version_mismatch:') || /(^|[\s:])error:/.test(normalized)) {
+    return true;
+  }
+  return (
+    reason.includes('初始化失败') ||
+    normalized.includes('init failed') ||
+    normalized.includes('initialization failed')
+  );
+}
+
+/** 由 shutdown reason 推导退出码：失败路径 1、正常退出 0。 */
+export function resolveShutdownExitCode(reason: string): number {
+  return isFailureShutdownReason(reason) ? 1 : 0;
 }
 
 /** 日志中的连接目标：仅 origin + namespace，绝不包含 query/token。 */
@@ -125,7 +158,7 @@ function describeEndpoint(endpoint: string): string {
  * 2. 先连 cloud-controller `/worker`（`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`）；
  * 3. `registered.initializing=true` → 等待首个 `workload:run` 批次结束（成功/失败/超时）后
  *    再连 controller-api（`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`）；`false`/缺省立即连接；
- * 4. 任一端 `shutdown` → 关闭两端并 `exit(0)`；**始终不发送 `unregister`**；
+ * 4. 任一端 `shutdown` → 关闭两端并退出（正常 0；`version_mismatch`/`error`/初始化失败 1）；**始终不发送 `unregister`**；
  * 5. 仅 controller-api 标准连接启动本地 MCP 回环服务（worker 连接跳过，避免端口冲突）。
  */
 export async function startCloudHostSupervisor(
@@ -154,11 +187,12 @@ export async function startCloudHostSupervisor(
     }
   };
 
-  const shutdown = (reason: string): void => {
+  const shutdown = (reason: string, code?: number): void => {
     if (shutdownStarted) return;
     shutdownStarted = true;
     clearInitTimer();
-    log(`[CloudHost] shutting down: ${reason}`);
+    const exitCode = code ?? resolveShutdownExitCode(reason);
+    log(`[CloudHost] shutting down: ${reason} (exit ${exitCode})`);
     try {
       workerSocket.disconnect();
     } catch {
@@ -170,7 +204,8 @@ export async function startCloudHostSupervisor(
       /* socket may already be closed */
     }
     // 不发送 unregister：容器销毁由 agent-api 编排（stopCloudHost / TTL / 失败回调）。
-    exit(0);
+    // 失败/版本不兼容路径必须非零退出：Job 终态映射为 failed，且 entrypoint 的自愈升级生效（C-2）。
+    exit(exitCode);
   };
 
   const connectController = (): void => {

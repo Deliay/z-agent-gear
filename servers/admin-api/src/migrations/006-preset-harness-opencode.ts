@@ -1,7 +1,7 @@
 import { CloudWorkload } from '../models/cloud-workload.js';
 
 /**
- * 005-preset-harness-opencode：写入云电脑 harness 运行环境预置项「OpenCode（Harness）」。
+ * 006-preset-harness-opencode：写入云电脑 harness 运行环境预置项「OpenCode（Harness）」。
  *
  * 口径（计划 Phase 3）：
  * - `workloadKind='harness'`、`harnessType='opencode'`、`isPreset=true`；
@@ -9,7 +9,7 @@ import { CloudWorkload } from '../models/cloud-workload.js';
  * - 仅 `initScript`（Node/npm 已在 worker 镜像内，无 `dependsOnWorkloadIds`）；
  * - 已存在（presetKey 或精确 name 命中）则跳过并告警，**不覆盖管理员修改**。
  */
-export const name = '005-preset-harness-opencode';
+export const name = '006-preset-harness-opencode';
 
 /** 固定 OpenCode CLI 版本（A14：验收以固定版本为准，可用同名 env 覆盖）。 */
 export const OPENCODE_CLI_VERSION = '2.1.1';
@@ -19,12 +19,26 @@ set -euo pipefail
 
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
 
-# 1) 固定版本安装（镜像未预装；仅命令缺失时安装，保证幂等）
-OPENCODE_CLI_VERSION="\${OPENCODE_CLI_VERSION:-2.1.1}"
-if ! command -v opencode >/dev/null 2>&1; then
+# 1) 固定版本安装 / 版本收敛（镜像未预装；缺失或版本不一致时强制重装，保证幂等）
+export OPENCODE_CLI_VERSION="\${OPENCODE_CLI_VERSION:-2.1.1}"
+installed_version=""
+if command -v opencode >/dev/null 2>&1; then
+  # 已安装时读取实际版本（去掉可能的 v 前缀）；命令失败按未安装处理
+  installed_version="$(opencode --version 2>/dev/null | head -n 1 | awk '{print $NF}')" || installed_version=""
+  installed_version="\${installed_version#v}"
+fi
+if [ "\${installed_version}" != "\${OPENCODE_CLI_VERSION}" ]; then
+  echo "Installing OpenCode CLI \${OPENCODE_CLI_VERSION} (installed: \${installed_version:-none})"
   npm install -g "@opencode/cli@\${OPENCODE_CLI_VERSION}"
 fi
-opencode --version   # 硬校验：安装返回 0 但不可用视为失败
+
+# 硬校验：命令不可用或版本与固定版本不一致均视为失败
+actual_version="$(opencode --version | head -n 1 | awk '{print $NF}')"
+actual_version="\${actual_version#v}"
+if [ "\${actual_version}" != "\${OPENCODE_CLI_VERSION}" ]; then
+  echo "OpenCode CLI version mismatch: expected \${OPENCODE_CLI_VERSION}, got \${actual_version:-unknown}" >&2
+  exit 1
+fi
 
 # 2) 默认工作区 + 模型配置注入（opencode.jsonc，custom provider）
 mkdir -p "\${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"
@@ -38,13 +52,13 @@ export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: PRESET_KEY });
   if (byKey) {
     console.warn(
-      `[Migration 005] preset workload "${PRESET_KEY}" already exists (by presetKey), skipping`,
+      `[Migration 006] preset workload "${PRESET_KEY}" already exists (by presetKey), skipping`,
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 005] workload named "${PRESET_NAME}" already exists, skipping`);
+    console.warn(`[Migration 006] workload named "${PRESET_NAME}" already exists, skipping`);
     return;
   }
 
@@ -59,5 +73,5 @@ export async function run(): Promise<void> {
     workloadKind: 'harness',
     harnessType: 'opencode',
   });
-  console.log(`[Migration 005] preset workload "${PRESET_KEY}" created`);
+  console.log(`[Migration 006] preset workload "${PRESET_KEY}" created`);
 }

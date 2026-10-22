@@ -221,6 +221,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private textChunkTimer: ReturnType<typeof setTimeout> | null = null;
   private initializing = false;
   private stopped = false;
+  private processExitSubscribed = false;
+  /** silent stop（同 sessionId 替换/对账）：后续迟到的 handleError 不得再向服务端发 stopped */
+  private silentStop = false;
   private pendingPermissions = new Map<string, {
     resolve: (response: acp.RequestPermissionResponse) => void;
     timeout: NodeJS.Timeout;
@@ -228,6 +231,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private pendingElicitations = new Map<string, {
     resolve: (response: acp.CreateElicitationResponse) => void;
     timeout: NodeJS.Timeout;
+    /** url 模式的 elicitationId：用于 Agent 自发 complete 时精确定位 pending 请求 */
+    elicitationId?: string;
   }>();
 
   // Capability snapshot from initialize / session/new / resume
@@ -235,6 +240,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private promptCapabilities: AcpInitializedPayload['promptCapabilities'] = null;
   private agentInfo: AcpInitializedPayload['agentInfo'] = null;
   private authMethods: AcpAuthMethodData[] = [];
+  /** initialize 返回的 authMethods 原文（契约要求快照 raw 保留对端声明原文，不能存转换后产物） */
+  private authMethodsRaw: unknown = null;
   private supportsAdditionalDirectories = false;
   private agentProtocolVersion: number | null = null;
   private agentMcpCapabilities: { http?: boolean | null; sse?: boolean | null } | null = null;
@@ -281,6 +288,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.initializing = true;
 
     this.spawner.start();
+    this.subscribeToProcessExit();
     try {
       await this.initConnection();
       const mcpServers = this.resolveMcpServers();
@@ -309,6 +317,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.initializing = true;
 
     this.spawner.start();
+    this.subscribeToProcessExit();
     try {
       await this.initConnection();
       const mcpServers = this.resolveMcpServers();
@@ -346,23 +355,74 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { silent?: boolean } = {}): Promise<void> {
+    if (options.silent) this.silentStop = true;
+    this.activePrompt = null;
+    this.inputQueue = [];
+    // 会话关闭：所有在途问询/授权必须先同步收敛（在 cancel/closeSession 的 5s race 之前），
+    // 否则 race 窗口内 65s timer 仍可能迟到发 timeout。
+    this.settlePendingRequests('session stopped by user');
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (this.acpSessionId && this.connection) {
-        // 5s timeout for cancel/closeSession to prevent hanging
+        // 5s timeout for cancel/closeSession to prevent hanging（结束后清理 timer，避免拖住事件循环）
         await Promise.race([
           (async () => {
             await this.connection!.cancel({ sessionId: this.acpSessionId! });
             await this.connection!.closeSession({ sessionId: this.acpSessionId! });
           })(),
-          new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+          new Promise<void>((resolve) => { stopTimer = setTimeout(resolve, 5000); }),
         ]);
       }
-    } catch { /* ignore */ }
-    this.activePrompt = null;
-    this.inputQueue = [];
+    } catch { /* ignore */ } finally {
+      if (stopTimer) clearTimeout(stopTimer);
+    }
     this.spawner.stop();
-    this.emitStopped('user_close');
+    this.emitStopped('user_close', undefined, options.silent);
+  }
+
+  /**
+   * 清空 pending 请求：clearTimeout + resolve(cancel) + delete。
+   * 问询额外回发 resolved(cancelled)，让服务端待办收敛为 cancelled 而不是等 65s 超时误标 expired。
+   * 同时发出 settled 事件，供 socketio-client 清理 requestId → bridge 映射（避免 Map 单调增长/阻止 GC）。
+   */
+  private settlePendingRequests(detail: string): void {
+    for (const [requestId, pending] of this.pendingElicitations) {
+      clearTimeout(pending.timeout);
+      this.pendingElicitations.delete(requestId);
+      pending.resolve({ action: 'cancel' });
+      this.emit('elicitation:settled', requestId);
+      this.socket.emit('acp:elicitation:resolved', {
+        requestId,
+        sessionId: this.sessionId,
+        reason: 'cancelled',
+        detail: detail.slice(0, 100),
+      });
+    }
+
+    for (const [requestId, pending] of this.pendingPermissions) {
+      clearTimeout(pending.timeout);
+      this.pendingPermissions.delete(requestId);
+      pending.resolve({ outcome: { outcome: 'cancelled' } });
+      this.emit('permission:settled', requestId);
+    }
+  }
+
+  /** 进程退出（不可恢复）：收敛所有 pending；socket 仍连接时服务端据 cancelled 收敛待办 */
+  private subscribeToProcessExit(): void {
+    if (this.processExitSubscribed) return;
+    this.processExitSubscribed = true;
+    this.spawner.closed.then(() => {
+      if (this.stopped) return;
+      console.warn(`[ACP bridge] session ${this.sessionId}: process exited, settling pending requests`);
+      this.settlePendingRequests('process exited');
+    }).catch(() => { /* ignore */ });
+  }
+
+  /** 连接断开（可能自动重连）：只收敛 pending，不停止会话进程；重连后可继续使用 */
+  settlePendingOnDisconnect(): void {
+    if (this.stopped) return;
+    this.settlePendingRequests('connection lost');
   }
 
   cancel(): void {
@@ -555,6 +615,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.agentInfo = result.agentInfo
       ? { name: result.agentInfo.name, version: result.agentInfo.version ?? null }
       : null;
+    // 原文留存与归一化分离：authMethods 用于下发/展示，authMethodsRaw 只进能力快照 raw
+    this.authMethodsRaw = result.authMethods ?? null;
     this.authMethods = toAuthMethods(result.authMethods);
     this.agentMcpCapabilities = result.agentCapabilities?.mcpCapabilities ?? null;
     console.log(
@@ -627,7 +689,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
           ? { name: this.agentInfo.name, version: this.agentInfo.version ?? null }
           : null,
         agentCapabilities: this.agentCapabilitiesRaw,
-        authMethods: this.authMethods,
+        authMethods: this.authMethodsRaw,
         clientCapabilities: this.clientCapabilitiesRaw,
         configOptions: this.configOptions,
         modes,
@@ -698,6 +760,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingPermissions.delete(requestId);
+        this.emit('permission:settled', requestId);
         resolve({ outcome: { outcome: 'cancelled' } });
       }, 65_000);
 
@@ -723,31 +786,38 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
     clearTimeout(pending.timeout);
     this.pendingPermissions.delete(requestId);
+    this.emit('permission:settled', requestId);
     pending.resolve({ outcome });
   }
 
   async unstable_createElicitation(
     params: acp.CreateElicitationRequest,
   ): Promise<acp.CreateElicitationResponse> {
+    // 先分配 requestId：unsupported_mode 事件同样需要可定位的请求 id，
+    // 否则接收端只能按 sessionId 兜底或静默丢弃。
+    const requestId = `elic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
     // custom/未知模式不支持：立即取消，避免挂起 Agent。必须留下日志与 resolved 事件，
     // 否则「Agent 发起问询但用户从未看到弹窗」无法从日志/待办侧定位。
     if (!acp.CreateElicitationRequest.isForm(params) && !acp.CreateElicitationRequest.isUrl(params)) {
       const mode = (params as { mode?: unknown }).mode ?? 'unknown';
       console.warn('[ACP bridge] session %s: unsupported elicitation mode=%j', this.sessionId, mode);
       this.socket.emit('acp:elicitation:resolved', {
+        requestId,
         sessionId: this.sessionId,
         reason: 'unsupported_mode',
-        detail: String(mode),
+        // Agent 可控字符串：截断后再入事件/日志，避免无限放大
+        detail: String(mode).slice(0, 100),
       });
       return { action: 'cancel' };
     }
 
-    const requestId = `elic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const toolCallId = 'toolCallId' in params ? params.toolCallId : undefined;
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingElicitations.delete(requestId);
+        this.emit('elicitation:settled', requestId);
         console.warn(
           '[ACP bridge] session %s: elicitation %s timed out after 65s, auto-cancelling',
           this.sessionId,
@@ -762,7 +832,13 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         resolve({ action: 'cancel' });
       }, 65_000);
 
-      this.pendingElicitations.set(requestId, { resolve, timeout });
+      this.pendingElicitations.set(requestId, {
+        resolve,
+        timeout,
+        ...('elicitationId' in params && params.elicitationId
+          ? { elicitationId: String(params.elicitationId) }
+          : {}),
+      });
 
       if (acp.CreateElicitationRequest.isForm(params)) {
         this.socket.emit('acp:elicitation', {
@@ -802,6 +878,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
     clearTimeout(pending.timeout);
     this.pendingElicitations.delete(requestId);
+    this.emit('elicitation:settled', requestId);
     pending.resolve({
       action,
       ...(action === 'accept' && content
@@ -814,6 +891,24 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.socket.emit('acp:elicitation:complete', {
       sessionId: this.sessionId,
       elicitationId: params.elicitationId,
+    });
+
+    // Agent 自行完成/取消：对匹配的 pending 就地收敛，避免悬挂到 65s 被误标 expired。
+    // 契约 reason:'cancelled' 的产生路径之一（另一处为会话关闭 settle）。
+    const entry = [...this.pendingElicitations.entries()]
+      .find(([, pending]) => pending.elicitationId === params.elicitationId);
+    if (!entry) return;
+
+    const [requestId, pending] = entry;
+    clearTimeout(pending.timeout);
+    this.pendingElicitations.delete(requestId);
+    this.emit('elicitation:settled', requestId);
+    pending.resolve({ action: 'cancel' });
+    this.socket.emit('acp:elicitation:resolved', {
+      requestId,
+      sessionId: this.sessionId,
+      reason: 'cancelled',
+      detail: 'agent completed elicitation',
     });
   }
 
@@ -849,9 +944,17 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     });
   }
 
-  private emitStopped(reason: string, exitCode?: number): void {
-    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}`);
+  private emitStopped(reason: string, exitCode?: number, silent = false): void {
+    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}${silent ? ' (silent)' : ''}`);
     this.stopped = true;
+    if (this.textChunkTimer) {
+      clearTimeout(this.textChunkTimer);
+      this.textChunkTimer = null;
+    }
+    // silent：同 sessionId 被替换/对账杀掉时，旧 bridge 的迟到 stopped 不得删除新会话映射。
+    // silentStop 为 once-silent-always-silent：非 silent stop 在 5s race 在途时被替换路径
+    // 的 stop({silent:true}) 接管，迟到的 emitStopped 同样必须抑制（R6a）。
+    if (silent || this.silentStop) return;
     this.socket.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
     this.emit('acp:stopped', { sessionId: this.sessionId, reason, exitCode });
   }
@@ -860,7 +963,13 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     const msg = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
     console.error(`[ACP bridge] session ${this.sessionId} failed: ${msg}${stack ? `\n${stack}` : ''}`);
+    const wasStopped = this.stopped || this.silentStop;
     this.stopped = true;
+    // 进程崩溃同样必须收敛 pending：否则 65s timer 泄漏且迟发 timeout 事件
+    this.settlePendingRequests('session failed');
+    // 已停止（含 silent 替换/对账）后迟到的初始化失败：不得再发 stopped，
+    // 否则内联监听器/服务端会按 sessionId 删除新会话的注册与映射。
+    if (wasStopped) return;
     this.socket.emit('acp:stopped', {
       sessionId: this.sessionId,
       reason: 'error',

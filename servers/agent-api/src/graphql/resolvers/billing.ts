@@ -89,7 +89,10 @@ export const billingResolvers = {
     myBillingApiKeys: async (_parent: unknown, _args: unknown, context: AuthContext) =>
       run(async () => {
         const user = requireUser(context);
-        return billingClient.listApiKeys('front_user', user.id);
+        // B-3：费用中心「API Key」列表只展示账号 Key；`scope=cloud_host` 是云电脑运行专用 Key，
+        // 生命周期与宿主绑定（创建/轮换/撤销由云端编排管理），不应出现在用户可管理列表中。
+        const keys = await billingClient.listApiKeys('front_user', user.id);
+        return keys.filter((key) => key.scope !== 'cloud_host');
       }),
     myBillingApiCalls: async (
       _parent: unknown,

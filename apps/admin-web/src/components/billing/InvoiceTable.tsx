@@ -48,7 +48,8 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
               </td>
               <td className="py-2 pr-3 text-right tabular-nums">{invoice.balanceAfter.toFixed(2)}</td>
               <td className="py-2">
-                {invoice.type === 'charge' ? (
+                {/* R10-5：充值（recharge）账单同样有收据，不能再只对 charge 开放入口。 */}
+                {invoice.type === 'charge' || invoice.receiptId ? (
                   <Button size="sm" variant="ghost" onClick={() => onViewReceipt(invoice)}>
                     查看
                   </Button>

@@ -252,12 +252,12 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| T-E31 能力面板 | 打开会话 →「能力清单」→ 20 项状态、detail 与 Agent 版本可见 |
+| T-E31 能力面板 | 打开会话 →「能力清单」→ 断言 `agent-capability-row-*` 计数 = 20、状态徽标、至少一行 detail 文本与 Agent 版本 |
 | T-E32 旧会话面板提示 | fake controller 不带 `capabilities` → 显示「创建于能力快照上线前」 |
 | T-E33 模型切换门控 | `config.model:unsupported` → 模型按钮禁用，title 含原因 |
 | T-E34 模式切换门控 | `config.mode:unsupported` → 模式按钮禁用 |
 | T-E35 继续按钮门控 | `resume`+`load` 均 unsupported → 禁用；仅 resume unsupported → 可用 |
-| T-E36 模型来源分组 | 需 `MONGODB_URI` 直写平台库；四个组头、固定顺序、组头含判定依据 |
+| T-E36 模型来源分组 | 必须注入 `MONGODB_URI`（缺失即失败，不静默 skip）直写平台库；`model-group-*` DOM 顺序断言四组固定顺序、组头含判定依据 |
 | T-E37 问询提示条 | fake controller 发 `acp:elicitation` → 会话内提示条可打开弹窗 |
 | T-E38 问询过期 | 发 `acp:elicitation:resolved{timeout}` → 弹窗显示「已过期」且操作按钮隐藏 |
 | T-E39 移动端问询 | 移动视口 → 提示条可见、可打开弹窗（Sidebar 未挂载场景） |

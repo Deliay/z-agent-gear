@@ -1,19 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
 import mongoose from 'mongoose';
+// FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
+import { FEATURE_IDS } from '../../../packages/agent-controller/src/acp/capabilities.js';
+
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 const MONGODB_URI = process.env.MONGODB_URI || '';
-
-const FEATURE_IDS = [
-  'session.load', 'session.resume', 'session.close', 'session.list', 'session.delete',
-  'session.fork', 'session.additionalDirectories',
-  'prompt.image', 'prompt.audio', 'prompt.embeddedContext',
-  'auth.login', 'auth.logout', 'mcp.http', 'mcp.sse',
-  'config.boolean', 'config.model', 'config.mode', 'commands',
-  'elicitation.form', 'elicitation.url',
-];
 
 function makeCapabilities(overrides: Record<string, 'supported' | 'partial' | 'unsupported'> = {}) {
   return {
@@ -138,10 +132,14 @@ async function setupSession(
   const workspaceId = await createWorkspace(page, controllerId, token);
 
   let sessionId = '';
-  socket.once('acp:start', (data: { requestId: string }) => {
+  let resolveSessionId!: (id: string) => void;
+  const sessionIdReady = new Promise<string>((resolve) => { resolveSessionId = resolve; });
+  // acp:start 可能早于 createSession 响应到达：先等 sessionId 赋值，避免上报空 sessionId（假红 flaky）
+  socket.once('acp:start', async (data: { requestId: string }) => {
+    const sid = await sessionIdReady;
     socket.emit('acp:start:result', {
       requestId: data.requestId,
-      sessionId,
+      sessionId: sid,
       success: true,
       externalSessionId: `ext_${Date.now()}`,
       modes: options.modes ?? [],
@@ -159,6 +157,7 @@ async function setupSession(
   `, { input: { controllerId, acpServerType: 'opencode', workspaceId } }, token);
   const body = await res.json();
   sessionId = body.data.createSession.session.id;
+  resolveSessionId(sessionId);
 
   await loginViaUI(page, username);
   return { socket, sessionId, token, username, controllerId, disconnect };
@@ -182,10 +181,16 @@ test.describe('ACP 能力透明化 E2E', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('Agent：OpenCode 2.0.31')).toBeVisible();
+    // 20 项固定清单：数量与顺序都必须被实证（面板只渲染 5 行/漏项会红）
+    const rows = dialog.locator('[data-testid^="agent-capability-row-"]');
+    await expect(rows).toHaveCount(20);
     await expect(page.getByTestId('agent-capability-row-session.load')).toBeVisible();
     await expect(page.getByTestId('agent-capability-status-elicitation.form')).toHaveText('支持');
     await expect(page.getByTestId('agent-capability-status-prompt.image')).toHaveText('部分支持');
     await expect(page.getByTestId('agent-capability-status-prompt.audio')).toHaveText('不支持');
+    // detail 列必须真实展示（unsupported 原因文案）
+    await expect(page.getByTestId('agent-capability-row-prompt.audio'))
+      .toContainText('未声明 agentCapabilities.promptCapabilities.audio');
 
     disconnect();
   });
@@ -252,7 +257,8 @@ test.describe('ACP 能力透明化 E2E', () => {
   });
 
   test('T-E36: 模型来源分组（平台内置/自定义/Agent 自带/来源未知）', async ({ page }) => {
-    test.skip(!MONGODB_URI, '需要 MONGODB_URI 直写平台模型库');
+    // 唯一集成级验收：缺 MONGODB_URI 直接失败，禁止静默 skip 冒充通过
+    expect(MONGODB_URI, 'MONGODB_URI 必须注入（aspire describe mongodb），T-E36 不允许静默 skip').toBeTruthy();
 
     await mongoose.connect(MONGODB_URI);
     const suffix = Date.now().toString(36);
@@ -279,12 +285,27 @@ test.describe('ACP 能力透明化 E2E', () => {
       await openSessionPage(page, sessionId);
 
       await page.getByRole('button', { name: new RegExp(globalName) }).click();
-      await expect(page.getByTestId('model-group-平台内置')).toBeVisible();
-      await expect(page.getByTestId('model-group-自定义')).toBeVisible();
-      await expect(page.getByTestId('model-group-Agent 自带')).toBeVisible();
-      await expect(page.getByTestId('model-group-来源未知')).toBeVisible();
-      await expect(page.getByTestId('model-group-平台内置')).toContainText('平台内置');
+      const groups = page.locator('[data-testid^="model-group-"]');
+      // 四组固定顺序（DOM 顺序断言，非仅存在性）
+      await expect(groups).toHaveCount(4);
+      await expect(groups).toHaveText([
+        /平台内置/,
+        /Agent 自带/,
+        /自定义/,
+        /来源未知/,
+      ]);
+      // 组头含判定依据（去重后「；」连接）+ 组内归属（模型不得串组）
+      await expect(page.getByTestId('model-group-平台内置')).toContainText('按平台模型库比对（平台内置）');
+      await expect(page.getByTestId('model-group-平台内置')).toContainText(globalName);
+      await expect(page.getByTestId('model-group-自定义')).toContainText('按平台模型库比对（自定义）');
+      await expect(page.getByTestId('model-group-自定义')).toContainText(userName);
       await expect(page.getByTestId('model-group-Agent 自带')).toContainText('按标识前缀判定');
+      await expect(page.getByTestId('model-group-Agent 自带')).toContainText('Kimi K3');
+      await expect(page.getByTestId('model-group-来源未知')).toContainText('Local LLM');
+      // 排除断言：组内归属不得串组
+      await expect(page.getByTestId('model-group-平台内置')).not.toContainText('Kimi K3');
+      await expect(page.getByTestId('model-group-Agent 自带')).not.toContainText(globalName);
+      await expect(page.getByTestId('model-group-来源未知')).not.toContainText(globalName);
 
       disconnect();
     } finally {

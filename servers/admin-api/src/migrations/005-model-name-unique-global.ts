@@ -13,7 +13,8 @@ import { ModelRenameRecord } from '../models/model-rename-record.js';
  * 口径（提案 §4.1 / 计划期裁决 2、16）：
  * - 重名组内保留「最早创建（createdAt 最小，缺失按 epoch；再以 _id 升序兜底）」的一条原名，
  *   其余依次改为 `<name>-2`、`<name>-3`…，并跳过全库已占用的名称；
- * - 每次改名先 `updateOne` 再写一条 `model_rename_records` 台账（oldName → newName、供应商名冗余）；
+ * - 每次改名先按 `(modelId, batchId)` 幂等写入 `model_rename_records` 台账，再 `updateOne` 改名
+ *   （崩溃后可重跑补做，不会出现改名成功而台账缺失的窗口）；
  * - 索引由本迁移**唯一**创建（固定名 `scope_global_name_unique`，partial 条件仅 `scope: 'global'`），
  *   schema 不声明该索引，避免 Mongoose autoIndex 在重名清理前建索引的竞态；
  * - 迁移失败直接向上抛，交由 runner 记录并在下次启动重试（不静默降级为无唯一约束）。
@@ -87,19 +88,27 @@ export async function run(): Promise<void> {
       }
       used.add(newName);
 
+      // 先写台账（modelId+batchId 幂等 upsert）再改名：崩溃后重跑可补做改名，
+      // 不会出现「模型已改名但台账缺失」的窗口（C-11）。
+      await ModelRenameRecord.updateOne(
+        { modelId: model._id as unknown as mongoose.Types.ObjectId, batchId: BATCH_ID },
+        {
+          $setOnInsert: {
+            providerId: model.providerId as unknown as mongoose.Types.ObjectId,
+            providerName: providerNames.get(String(model.providerId)) ?? '未知供应商',
+            oldName: model.name,
+            newName,
+            batchId: BATCH_ID,
+            renamedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
       await Model.updateOne(
         { _id: model._id as unknown as mongoose.Types.ObjectId, scope: 'global' },
         { $set: { name: newName } },
       );
-      await ModelRenameRecord.create({
-        modelId: model._id as unknown as mongoose.Types.ObjectId,
-        providerId: model.providerId as unknown as mongoose.Types.ObjectId,
-        providerName: providerNames.get(String(model.providerId)) ?? '未知供应商',
-        oldName: model.name,
-        newName,
-        batchId: BATCH_ID,
-        renamedAt: new Date(),
-      });
+      console.log(`[Migration 005] renamed ${model.name} -> ${newName} (model ${String(model._id)})`);
       renamedCount += 1;
     }
   }

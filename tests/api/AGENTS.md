@@ -55,8 +55,8 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（24 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
-| `npm run test:real` | 仅运行 `acp-real-*` 测试（5 个，串行，超时 30s） |
+| `npm test` | 运行全部常规测试文件（33 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
@@ -67,11 +67,11 @@ npm test
 |------|------|--------|
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
-| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离等 DB 断言用；缺省时相关用例自动跳过） | -（可 `aspire describe mongodb` 获取） |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；billing-events T-CC-B11、billing-gateway T-B24/T-B27/T-B28 同样缺参即失败；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
+| `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
-| `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致（`Parameters__internal-api-token` 注入）；未提供时 cloud-controller 内部 API 套件显式跳过 | - |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 
@@ -366,7 +366,7 @@ npm test
 | T-AC2 resume 更新快照 | close → resume 上报新 `agentInfo.version` → 会话快照更新、不残留旧值 |
 | T-AC3 旧 controller 零退化 | 不带 `capabilities` → `agentCapabilities=null`、`features=[]`、其余字段不变 |
 | T-AC4 features 抽样 | `session.load=supported`、`prompt.audio=unsupported`、`elicitation.form=supported` |
-| T-AC5 模型来源分组 | 需 `MONGODB_URI`：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
+| T-AC5 模型来源分组 | 必须注入 `MONGODB_URI`（缺失即失败）：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
 | T-AC6 问询 resolved(timeout) | fake controller 发 `acp:elicitation:resolved{reason:'timeout'}` → todo `resolution=expired`、`resolvedAt` 非空 |
 | T-AC7 问询响应 | `respondElicitation(decline)` → controller 收到 decline、todo `resolution=declined` |
 
@@ -514,7 +514,7 @@ npm test
 
 ### Billing 计费 API（费用中心）
 
-> 计费事件骨干经 RabbitMQ；`billing-events` 直断言 `billingoutbox`，需要 `MONGODB_URI`（缺省时 `skipIf` 跳过）。
+> 计费事件骨干经 RabbitMQ；`billing-events` 直断言 `billingoutbox`，需要 `CLOUD_CONTROLLER_INTERNAL_TOKEN` 与 `MONGODB_URI`（缺任一即失败，不再 `skipIf`）。
 > 网关/前台计费套件需要 admin-api / agent-api / cloud-controller 就绪：`aspire start && aspire wait admin-api agent-api cloud-controller`。
 
 #### Cloud Controller 计费事件 (`cloud-controller/billing-events.test.ts` T-CC-B*)

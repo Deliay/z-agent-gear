@@ -87,6 +87,17 @@ export const GET_SESSION = gql`
       userId
       controllerId
       controllerName
+      controllerType
+      cloudHost {
+        id
+        name
+        status
+        harnessTypes
+        defaultSessionId
+        activeSessionCount
+        failureReason
+        deletedAt
+      }
       acpServerType
       status
       title

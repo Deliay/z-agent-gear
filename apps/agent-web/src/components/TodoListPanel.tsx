@@ -10,20 +10,35 @@ import { MARK_ALL_TODO_READ } from '../graphql/mutations';
 import { PermissionDialog } from './PermissionDialog';
 import { ElicitationDialog } from './ElicitationDialog';
 import { useHomeOverview } from '../stores/homeOverview';
+import { useElicitationDialogState } from '../stores/elicitationDialog';
 import type { TodoItemData } from '../graphql/types';
 
-// 可交互弹窗的待办类型（已 resolved 的问询不再弹出/可点击）
+function isActionablePermission(todo: TodoItemData): boolean {
+  return todo.type === 'permission_request' && !!todo.data;
+}
+
+function isActionableElicitation(todo: TodoItemData): boolean {
+  return todo.type === 'elicitation_request' && !!todo.elicitationData && !todo.resolution;
+}
+
+// 可交互弹窗的待办类型（已 resolved 的问询不再自动弹出）
 function isActionable(todo: TodoItemData): boolean {
-  return (
-    (todo.type === 'permission_request' && !!todo.data) ||
-    (todo.type === 'elicitation_request' && !!todo.elicitationData && !todo.resolution)
-  );
+  return isActionablePermission(todo) || isActionableElicitation(todo);
 }
 
 export function TodoListPanel() {
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
   const [immediateTodoId, setImmediateTodoId] = useState<string | null>(null);
   const processedImmediateRef = useRef<Set<string>>(new Set());
+  // 问询弹窗打开权与会话内 Banner 共享（同一时刻只有 owner 一方持有）
+  const {
+    todoId: elicitationTodoId,
+    owner: elicitationOwner,
+    snapshot: elicitationSnapshot,
+    open: openElicitation,
+    close: closeElicitation,
+    sync: syncElicitationSnapshot,
+  } = useElicitationDialogState();
 
   // 待办随首页聚合查询统一下发（轮询周期与首页一致：15s）
   const { data, refetch: refetchOverview } = useHomeOverview();
@@ -41,18 +56,51 @@ export function TodoListPanel() {
   const immediateTodo = immediateTodoId
     ? todos.find((todo) => todo.id === immediateTodoId) ?? null
     : null;
+  // 问询弹窗数据按 id 从全量 todos 派生（不过滤 resolution）：轮询后自动收敛为终态；
+  // todo 被 TTL 删除/limit 挤出时退回打开时快照并标记 stale，不静默卸载表单。
+  // 注意：live 计算与 owner 无关——banner 持有 stale 弹窗时同样不得阻塞后续 immediate。
+  const liveElicitationTodo = elicitationTodoId
+    ? todos.find((todo) => todo.id === elicitationTodoId) ?? null
+    : null;
+  const elicitationTodo = elicitationOwner === 'todo'
+    ? liveElicitationTodo ?? elicitationSnapshot
+    : null;
+  const elicitationStale = Boolean(elicitationTodo) && !liveElicitationTodo;
+  // 只有「列表中仍存在」的问询才阻塞自动弹窗；stale（TTL/limit 移除）必须放行
+  const elicitationBlocking = Boolean(liveElicitationTodo);
 
-  // 检测立即优先级的待办，自动弹出全局弹窗（与手动打开的弹窗互斥）
+  // 终态同步：todo 收敛后（如 accepted/expired）刷新快照，随后被 TTL 移除仍保留终态
   useEffect(() => {
-    if (selectedTodoId || immediateTodoId) return;
+    if (liveElicitationTodo) syncElicitationSnapshot(liveElicitationTodo);
+  }, [liveElicitationTodo, syncElicitationSnapshot]);
+
+  // 面板卸载时清理自己持有的状态。StrictMode 的 mount→cleanup→mount 是 dev-only 模拟卸载：
+  // cleanup 里用微任务标记区分「同 tick 重新挂载」与「真实卸载」，无条件注册 cleanup。
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      queueMicrotask(() => {
+        if (!mountedRef.current) closeElicitation('todo');
+      });
+    };
+  }, [closeElicitation]);
+
+  // 检测立即优先级的待办，自动弹出全局弹窗（三种弹窗互斥）
+  useEffect(() => {
+    if (selectedTodoId || immediateTodoId || elicitationBlocking) return;
     const immediate = todos.find(
       (todo) => todo.priority === 'immediate' && !todo.isRead && isActionable(todo) && !processedImmediateRef.current.has(todo.id)
     );
-    if (immediate) {
-      processedImmediateRef.current.add(immediate.id);
+    if (!immediate) return;
+    processedImmediateRef.current.add(immediate.id);
+    if (isActionableElicitation(immediate)) {
+      openElicitation(immediate, 'todo');
+    } else {
       setImmediateTodoId(immediate.id);
     }
-  }, [todos, selectedTodoId, immediateTodoId]);
+  }, [todos, selectedTodoId, immediateTodoId, elicitationBlocking, openElicitation]);
 
   const handleMarkAllRead = async () => {
     // mutation 已带 refetchQueries: HOME_OVERVIEW，避免二次全量刷新
@@ -60,9 +108,16 @@ export function TodoListPanel() {
   };
 
   const handleTodoClick = (todo: TodoItemData) => {
-    if (!todo.isRead && isActionable(todo)) {
-      setSelectedTodoId(todo.id);
+    if (todo.isRead || !isActionable(todo)) return;
+    if (isActionableElicitation(todo)) {
+      // 问询走共享弹窗状态：与 Banner 互斥，避免同一 requestId 双弹窗
+      setSelectedTodoId(null);
+      setImmediateTodoId(null);
+      openElicitation(todo, 'todo');
+      return;
     }
+    closeElicitation('todo');
+    setSelectedTodoId(todo.id);
   };
 
   const handleDialogOpenChange = (open: boolean) => {
@@ -147,12 +202,18 @@ export function TodoListPanel() {
         </PopoverContent>
       </Popover>
 
-      {activeTodo && activeTodo.type === 'elicitation_request' && (
+      {elicitationTodo && (
         <ElicitationDialog
-          open={!!activeTodo}
-          onOpenChange={handleDialogOpenChange}
-          todo={activeTodo}
-          onResponded={() => refetchOverview()}
+          open
+          stale={elicitationStale}
+          onOpenChange={(open) => {
+            if (!open) closeElicitation('todo');
+          }}
+          todo={elicitationTodo}
+          onResponded={() => {
+            closeElicitation('todo');
+            refetchOverview();
+          }}
         />
       )}
 

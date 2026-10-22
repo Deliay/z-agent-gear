@@ -227,6 +227,28 @@ function mergeStatus(
   return { id, status: 'partial', detail };
 }
 
+/** 快照 raw 体积上限：`_meta` 等扩展字段由 Agent 任意控制，避免放大 WS/Mongo 写入 */
+export const RAW_SNAPSHOT_MAX_BYTES = 16 * 1024;
+
+/** 原文留存带体积上限：超限时只保留可诊断摘要，不原样外露/落库 */
+function capRaw(value: unknown): unknown {
+  if (value == null) return null;
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined) return null;
+    // UTF-8 字节口径（TextEncoder 在 Node/浏览器一致；避免依赖 Buffer 类型）
+    const bytes = new TextEncoder().encode(json).length;
+    if (bytes <= RAW_SNAPSHOT_MAX_BYTES) return value;
+    return {
+      truncated: true,
+      originalBytes: bytes,
+      preview: json.slice(0, 512),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 归一化能力快照。输出固定 20 项（FEATURE_IDS 顺序），与 Agent 是否广播无关。
  */
@@ -244,9 +266,9 @@ export function normalizeCapabilities(input: NormalizeCapabilitiesInput): AgentC
     agentInfo: input.agentInfo ?? null,
     features,
     raw: {
-      agentCapabilities: input.agentCapabilities ?? null,
-      authMethods: input.authMethods ?? null,
-      clientCapabilities: input.clientCapabilities ?? null,
+      agentCapabilities: capRaw(input.agentCapabilities),
+      authMethods: capRaw(input.authMethods),
+      clientCapabilities: capRaw(input.clientCapabilities),
     },
   };
 }

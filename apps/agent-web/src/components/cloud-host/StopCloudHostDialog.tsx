@@ -27,8 +27,16 @@ interface StopCloudHostDialogProps {
 
 const LOSS_WARNING = '停止云主机会导致所有会话永久丢失，是否继续'
 
+/** 服务端契约错误 → 前台中文文案（与 NewCloudHostDialog 口径一致，R2-22） */
+const SERVER_ERROR_MESSAGES: Record<string, string> = {
+  'stopping this cloud host will permanently lose all active sessions': LOSS_WARNING,
+  'control plane unavailable': '控制面暂时不可用，请稍后重试',
+}
+
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
+  if (error instanceof Error && error.message) {
+    return SERVER_ERROR_MESSAGES[error.message.trim()] ?? error.message
+  }
   return '停止云电脑失败，请稍后重试'
 }
 
@@ -77,21 +85,28 @@ export default function StopCloudHostDialog({
         variables: { id: cloudHost.id, force },
       })
       const stopped = result?.stopCloudHost
-      if (stopped) {
-        setStopping(false)
-        onStopped(stopped)
+      if (!stopped) {
+        // 契约返回空值：不能停留在「停止中」，回到可重试状态并刷新影响数据
+        setError('停止云电脑失败，请重试')
+        if (!force) {
+          setAutoStopFailed(true)
+          void refetch()
+        }
+        return
       }
+      onStopped(stopped)
     } catch (err) {
       setError(getErrorMessage(err))
-      setStopping(false)
       // 自动停止在「impact 查询 → stop」之间出现了新会话：允许用户确认强制停止，
       // 并重新拉取 impact 以展示最新活动会话数。
       if (!force) {
         setAutoStopFailed(true)
         void refetch()
       }
+    } finally {
+      setStopping(false)
     }
-  }, [cloudHost.id, onStopped, stopCloudHost])
+  }, [cloudHost.id, onStopped, stopCloudHost, refetch])
 
   // 无活动会话：直接停止，不展示告警
   useEffect(() => {
@@ -103,6 +118,7 @@ export default function StopCloudHostDialog({
   }, [open, loading, impact, handleStop, autoStopFailed])
 
   const hasActiveSessions = (impact?.activeSessionCount ?? 0) > 0
+  const sessions = impact?.sessions ?? []
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -131,6 +147,25 @@ export default function StopCloudHostDialog({
             <p className="text-sm text-muted-foreground">
               当前有 {impact?.activeSessionCount} 个活动会话。
             </p>
+            {sessions.length > 0 ? (
+              <ul
+                className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border p-2"
+                data-testid="cloud-host-stop-sessions"
+              >
+                {sessions.map((session) => (
+                  <li key={session.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate" title={session.title}>
+                      {session.title || '未命名会话'}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{session.status}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground" data-testid="cloud-host-stop-sessions-empty">
+                暂无会话明细
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">

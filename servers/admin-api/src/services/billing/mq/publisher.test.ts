@@ -74,7 +74,7 @@ describe('AdminOutboxPublisher', () => {
     expect(await publisher.relayOnce()).toBe(0);
   });
 
-  it('发布失败保留未发布并记录 attempts/lastError，下一轮重试成功', async () => {
+  it('R10-3: 传输级失败不消耗 attempts，下一轮重试成功', async () => {
     const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
     await publisher.enqueue({
       eventId: 'model_call.completed:r2',
@@ -90,13 +90,54 @@ describe('AdminOutboxPublisher', () => {
     expect(await publisher.relayOnce()).toBe(0);
     const failed = await BillingOutbox.findOne({ eventId: 'model_call.completed:r2' });
     expect(failed?.published).toBe(false);
-    expect(failed?.attempts).toBe(1);
-    expect(failed?.lastError).toContain('broker down');
+    // 传输失败保留认领结果以外的一切，不烧 per-message attempts。
+    expect(failed?.attempts).toBe(0);
+    expect(failed?.claimedAt).toBeNull();
 
     expect(await publisher.relayOnce()).toBe(1);
     expect((await BillingOutbox.findOne({ eventId: 'model_call.completed:r2' }))?.published).toBe(
       true,
     );
+  });
+
+  it('R10-3: 消息级被拒（AMQP replyCode）才消耗 attempts 并记录 lastError', async () => {
+    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    await publisher.enqueue({
+      eventId: 'model_call.completed:r3',
+      eventType: 'model_call.completed',
+      occurredAt: new Date().toISOString(),
+      accountId: 'a1',
+      resourceId: 'r3',
+      payload: {},
+    });
+    fakeChannel.publish.mockImplementationOnce((...args: unknown[]) => {
+      const callback = args[args.length - 1] as (err: Error | null) => void;
+      const err = Object.assign(new Error('ACCESS_REFUSED'), { replyCode: 403 });
+      callback(err);
+      return true;
+    });
+    expect(await publisher.relayOnce()).toBe(0);
+    const rejected = await BillingOutbox.findOne({ eventId: 'model_call.completed:r3' });
+    expect(rejected?.published).toBe(false);
+    expect(rejected?.attempts).toBe(1);
+    expect(rejected?.lastError).toContain('ACCESS_REFUSED');
+  });
+
+  it('R10-2: 发布头只携带 x-publish-attempts，不再发送 x-retry-count', async () => {
+    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    await publisher.enqueue({
+      eventId: 'model_call.completed:r4',
+      eventType: 'model_call.completed',
+      occurredAt: new Date().toISOString(),
+      accountId: 'a1',
+      resourceId: 'r4',
+      payload: {},
+    });
+    await publisher.relayOnce();
+    const call = fakeChannel.publish.mock.calls.at(-1) as unknown[];
+    const options = call[3] as { headers: Record<string, unknown> };
+    expect(options.headers['x-publish-attempts']).toBe(0);
+    expect(options.headers['x-retry-count']).toBeUndefined();
   });
 
   it('start/stop 启停 relay 定时器', async () => {

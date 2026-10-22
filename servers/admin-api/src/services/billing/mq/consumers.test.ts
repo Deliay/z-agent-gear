@@ -30,11 +30,19 @@ function fakeChannel() {
   };
 }
 
-function message(payload: unknown, retry = 0, routingKey = 'container.ready') {
+function message(
+  payload: unknown,
+  retry = 0,
+  routingKey = 'container.ready',
+  headers: Record<string, unknown> = {},
+  redelivered = false,
+) {
   return {
     content: Buffer.from(JSON.stringify(payload)),
-    fields: { routingKey },
-    properties: { headers: { 'x-event-id': 'evt-1', 'x-retry-count': retry } },
+    fields: { routingKey, redelivered },
+    properties: {
+      headers: { 'x-event-id': 'evt-1', 'x-consumer-retry': retry, ...headers },
+    },
   } as never;
 }
 
@@ -73,9 +81,102 @@ describe('计费消费者', () => {
       BILLING_RETRY_EXCHANGE,
       'container.ready',
       expect.any(Buffer),
-      expect.objectContaining({ expiration: '20000', headers: expect.objectContaining({ 'x-retry-count': 3 }) }),
+      expect.objectContaining({ expiration: '20000', headers: expect.objectContaining({ 'x-consumer-retry': 3 }) }),
     );
     expect(channel.ack).toHaveBeenCalled();
+  });
+
+  it('R10-2: 发布侧 x-publish-attempts 不计入消费侧重试，首次失败仍按第 1 次退避', async () => {
+    const channel = fakeChannel();
+    await consumeWithRetry(
+      channel as never,
+      message({}, 0, 'container.ready', { 'x-publish-attempts': 5, 'x-retry-count': 5 }),
+      {
+        routingKey: 'container.ready',
+        retryQueue: METERING_QUEUE,
+        dlq: METERING_DLQ,
+        logger,
+        handler: async () => {
+          throw new Error('mongo blip');
+        },
+      },
+    );
+    expect(BillingDeadLetter.create).not.toHaveBeenCalled();
+    expect(channel.publish).toHaveBeenCalledWith(
+      BILLING_RETRY_EXCHANGE,
+      'container.ready',
+      expect.any(Buffer),
+      expect.objectContaining({
+        expiration: '5000',
+        headers: expect.objectContaining({ 'x-consumer-retry': 1 }),
+      }),
+    );
+  });
+
+  it('R10-2: 发布侧重试后首次投递（redelivered=false）不触发结算链补投', async () => {
+    const channel = fakeChannel();
+    const billing = {
+      handleContainerReady: vi.fn(async () => ({ reservationId: 'r1', nextCycleSeq: 0, created: false })),
+      handleEvent: vi.fn(),
+    };
+    const ingest = { ingest: vi.fn(async () => ({ created: false })) };
+    const publishSettlement = vi.fn(async () => undefined);
+    await startMeteringConsumer(channel as never, {
+      billing: billing as never,
+      ingest: ingest as never,
+      publishSettlement,
+      logger,
+    });
+    await channel.invoke(
+      message(
+        {
+          eventId: 'container.ready:c1',
+          eventType: 'container.ready',
+          occurredAt: new Date().toISOString(),
+          accountId: 'a1',
+          resourceId: 'c1',
+          payload: { billingStartedAt: new Date().toISOString() },
+        },
+        0,
+        'container.ready',
+        { 'x-publish-attempts': 5 },
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishSettlement).not.toHaveBeenCalled();
+  });
+
+  it('R10-2: broker redelivered 标记可触发结算链补投（独立于发布 attempts）', async () => {
+    const channel = fakeChannel();
+    const billing = {
+      handleContainerReady: vi.fn(async () => ({ reservationId: 'r1', nextCycleSeq: 0, created: false })),
+      handleEvent: vi.fn(),
+    };
+    const publishSettlement = vi.fn(async () => undefined);
+    await startMeteringConsumer(channel as never, {
+      billing: billing as never,
+      ingest: { ingest: vi.fn(async () => ({ created: false })) } as never,
+      publishSettlement,
+      logger,
+    });
+    await channel.invoke(
+      message(
+        {
+          eventId: 'container.ready:c2',
+          eventType: 'container.ready',
+          occurredAt: new Date().toISOString(),
+          accountId: 'a1',
+          resourceId: 'c2',
+          payload: { billingStartedAt: new Date().toISOString() },
+        },
+        0,
+        'container.ready',
+        {},
+        true,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishSettlement).toHaveBeenCalledWith('r1', 'a1', 0);
   });
 
   it('超过最大重试落 DLQ 并写死信留档', async () => {

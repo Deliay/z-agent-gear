@@ -78,8 +78,12 @@ components:
         properties:
           x-event-id:
             type: string
-          x-retry-count:
+          x-publish-attempts:
             type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
       payload:
         $ref: '#/components/schemas/ContainerReadyEvent'
     ContainerDestroyed:
@@ -91,8 +95,12 @@ components:
         properties:
           x-event-id:
             type: string
-          x-retry-count:
+          x-publish-attempts:
             type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
       payload:
         $ref: '#/components/schemas/ContainerDestroyedEvent'
     ModelCallCompleted:
@@ -104,8 +112,12 @@ components:
         properties:
           x-event-id:
             type: string
-          x-retry-count:
+          x-publish-attempts:
             type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
       payload:
         $ref: '#/components/schemas/ModelCallEvent'
     ModelCallAborted:
@@ -117,8 +129,12 @@ components:
         properties:
           x-event-id:
             type: string
-          x-retry-count:
+          x-publish-attempts:
             type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
       payload:
         $ref: '#/components/schemas/ModelCallEvent'
     SettlementCycle:
@@ -130,8 +146,12 @@ components:
         properties:
           x-event-id:
             type: string
-          x-retry-count:
+          x-publish-attempts:
             type: integer
+            description: 发布侧 outbox relay 尝试次数（仅观测，不参与消费侧重试）
+          x-consumer-retry:
+            type: integer
+            description: 消费侧重试次数（首次投递缺省/0；只有消费失败重投时递增）
       payload:
         $ref: '#/components/schemas/SettlementCycleMessage'
   schemas:
