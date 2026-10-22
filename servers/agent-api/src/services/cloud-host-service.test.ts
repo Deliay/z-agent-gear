@@ -93,6 +93,15 @@ vi.mock('./controller-workspace.js', () => ({
   controllerWorkspaceService: { ensureCloudHostWorkspace: vi.fn() },
 }));
 
+const catalogMock = vi.hoisted(() => ({
+  listStandard: vi.fn(),
+  findById: vi.fn(),
+  findByPresetKey: vi.fn(),
+  findGithubPreset: vi.fn(),
+}));
+
+vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMock }));
+
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
@@ -406,6 +415,134 @@ describe('CloudHostService', () => {
       const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
       expect(String(rejected.reason)).toContain('too many cloud hosts');
       expect(cloudControllerClient.startHarness).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('create with workloadIds (T-CH-C1..C5)', () => {
+    const DOCKER_ID = '507f1f77bcf86cd7994390a1';
+    const DOTNET_ID = '507f1f77bcf86cd7994390a2';
+    const ASPIRE_ID = '507f1f77bcf86cd7994390a3';
+    const HARNESS_ID = '507f1f77bcf86cd7994390a4';
+
+    function catalogItem(overrides: Record<string, unknown>) {
+      return {
+        name: 'w',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: false,
+        workloadKind: 'standard',
+        initScript: 'echo',
+        ...overrides,
+      };
+    }
+
+    const DOCKER = catalogItem({ id: DOCKER_ID, name: 'Docker' });
+    const DOTNET = catalogItem({ id: DOTNET_ID, name: '.NET' });
+    const ASPIRE = catalogItem({
+      id: ASPIRE_ID,
+      name: 'Aspire',
+      dependsOnWorkloadIds: [DOCKER_ID, DOTNET_ID],
+    });
+
+    beforeEach(() => {
+      catalogMock.listStandard.mockResolvedValue([DOCKER, DOTNET, ASPIRE]);
+      catalogMock.findById.mockImplementation((id: string) =>
+        Promise.resolve(
+          id === HARNESS_ID ? catalogItem({ id: HARNESS_ID, name: 'OpenCode', workloadKind: 'harness' }) : null,
+        ),
+      );
+    });
+
+    it('T-CH-C1: 不带 workloadIds 时 plan 与今天一致', async () => {
+      setupCreateSuccess();
+
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.workloadPlan).toEqual([
+        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+      ]);
+      expect(catalogMock.listStandard).not.toHaveBeenCalled();
+    });
+
+    it('T-CH-C2: 带 Docker 时 plan 含 harness + Docker（standard 非必须）', async () => {
+      setupCreateSuccess();
+
+      await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+        workloadIds: [DOCKER_ID],
+      });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.workloadPlan).toEqual([
+        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: DOCKER_ID, params: {}, implicit: false, required: false },
+      ]);
+    });
+
+    it('T-CH-C3: 带 Aspire 时依赖先行（Docker → .NET → Aspire）', async () => {
+      setupCreateSuccess();
+
+      await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+        workloadIds: [ASPIRE_ID],
+      });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.workloadPlan?.map((entry) => entry.workloadId)).toEqual([
+        'preset-1',
+        DOCKER_ID,
+        DOTNET_ID,
+        ASPIRE_ID,
+      ]);
+      expect(payload.workloadPlan?.[1]).toMatchObject({ implicit: true, required: false });
+      expect(payload.workloadPlan?.[3]).toMatchObject({ implicit: false, required: false });
+    });
+
+    it('T-CH-C4: harness ID / 不存在 / 超量在落库前报错且不启动容器', async () => {
+      setupCreateSuccess();
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          workloadIds: [HARNESS_ID],
+        }),
+      ).rejects.toThrow('workload is not installable: OpenCode');
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          workloadIds: ['507f1f77bcf86cd7994390ff'],
+        }),
+      ).rejects.toThrow('invalid workload: 507f1f77bcf86cd7994390ff');
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          workloadIds: ['a', 'b', 'c', 'd', 'e', 'f'],
+        }),
+      ).rejects.toThrow('too many workloads (max 5)');
+
+      expect(CloudHost.create).not.toHaveBeenCalled();
+      expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
+    });
+
+    it('T-CH-C5: 重复 ID 去重后只出现一次', async () => {
+      setupCreateSuccess();
+
+      await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+        workloadIds: [DOCKER_ID, DOCKER_ID],
+      });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.workloadPlan?.filter((entry) => entry.workloadId === DOCKER_ID)).toHaveLength(1);
     });
   });
 

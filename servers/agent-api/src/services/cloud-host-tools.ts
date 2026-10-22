@@ -5,6 +5,7 @@ import { McpServer } from '../models/mcp-server.js';
 import { Session } from '../models/session.js';
 import {
   cloudHostWorkloadService,
+  sanitizeOperationError,
   type CloudHostWorkloadService,
 } from './cloud-host-workload-service.js';
 
@@ -19,7 +20,8 @@ interface ToolDefinition {
 export const CLOUD_HOST_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'workload_list',
-    description: '列出当前云主机可安装的工作负载（含已安装标记与参数定义）',
+    description:
+      '列出当前云主机可安装的工作负载（含 Aspire / Docker / .NET 等运行环境负载、已安装标记与参数定义）',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -173,7 +175,7 @@ export async function handleCloudHostToolRequest(
                 type: 'text',
                 text: JSON.stringify({
                   code: 'INTERNAL_ERROR',
-                  message: err instanceof Error ? err.message : String(err),
+                  message: sanitizeOperationError(err),
                 }),
               },
             ],
