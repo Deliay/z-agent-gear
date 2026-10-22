@@ -170,3 +170,37 @@ describe('TodoListPanel', () => {
     });
   });
 });
+
+describe('TodoListPanel - resolved elicitation', () => {
+  it('T-W17: 已 resolved 的问询不触发自动弹窗', async () => {
+    mockOverview([
+      {
+        id: 'todo-e1',
+        type: 'elicitation_request',
+        priority: 'immediate',
+        title: 'Agent请求输入：已过期问询',
+        description: 'Need input',
+        isRead: false,
+        data: null,
+        elicitationData: {
+          requestId: 'elic-resolved',
+          sessionId: 'sess-1',
+          toolCallId: null,
+          mode: 'form',
+          message: 'Need input',
+          requestedSchema: { type: 'object', properties: { a: { type: 'string' } } },
+          elicitationId: null,
+          url: null,
+        },
+        resolution: 'expired',
+        resolvedAt: '2026-10-21T00:00:00.000Z',
+        createdAt: '2026-10-21T00:00:00.000Z',
+      },
+    ]);
+
+    render(<TodoListPanel />);
+    await waitFor(() => {
+      expect(screen.queryByText('Agent请求输入：已过期问询')).toBeNull();
+    });
+  });
+});

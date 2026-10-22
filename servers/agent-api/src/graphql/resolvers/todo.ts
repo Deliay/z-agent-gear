@@ -12,6 +12,11 @@ export const todoResolvers = {
       todo.data?.requestId ? todo.data : null,
     elicitationData: (todo: { elicitationData?: { requestId?: string } | null }) =>
       todo.elicitationData?.requestId ? todo.elicitationData : null,
+    resolution: (todo: { resolution?: string | null }) => todo.resolution ?? null,
+    resolvedAt: (todo: { resolvedAt?: Date | string | null }) =>
+      todo.resolvedAt ? new Date(todo.resolvedAt).toISOString() : null,
+    expiresAt: (todo: { expiresAt?: Date | string | null }) =>
+      todo.expiresAt ? new Date(todo.expiresAt).toISOString() : null,
   },
   PermissionRequestData: {
     toolCall: (data: { toolCall?: { toolCallId?: string } | null }) =>
@@ -68,6 +73,13 @@ export const todoResolvers = {
       }));
 
       await todoService.markTodoAsResponded(args.requestId);
+
+      const resolution = args.action === 'accept'
+        ? 'accepted'
+        : args.action === 'decline'
+          ? 'declined'
+          : 'cancelled';
+      await todoService.markElicitationResolved(args.requestId, resolution);
 
       return true;
     },

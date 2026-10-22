@@ -228,3 +228,64 @@ describe('ElicitationDialog', () => {
     expect(container.innerHTML).toBe('');
   });
 });
+
+describe('ElicitationDialog - 终态', () => {
+  const baseTodo = {
+    id: 'todo-e3',
+    type: 'elicitation_request',
+    priority: 'immediate',
+    title: 'Agent请求补充信息',
+    description: null,
+    isRead: false,
+    data: null,
+    elicitationData: {
+      requestId: 'el-req-3',
+      sessionId: 'sess-1',
+      toolCallId: null,
+      mode: 'form' as const,
+      message: '请确认发布配置',
+      requestedSchema: { type: 'object' as const, properties: { a: { type: 'string' as const, title: 'A' } } },
+      elicitationId: null,
+      url: null,
+    },
+    createdAt: '2026-10-21T00:00:00.000Z',
+  };
+
+  it('T-W15: resolution=expired 显示已过期并隐藏操作按钮', () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo, resolution: 'expired' }} />);
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
+    expect(screen.queryByText('提交')).toBeNull();
+    expect(screen.queryByText('拒绝')).toBeNull();
+  });
+
+  it('T-W15b: expiresAt 已过但 resolution 为空（TTL 未清理）同样按过期处理', () => {
+    render(
+      <ElicitationDialog
+        open
+        onOpenChange={vi.fn()}
+        todo={{ ...baseTodo, expiresAt: new Date(Date.now() - 60_000).toISOString() }}
+      />,
+    );
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已过期');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('T-W16: cancelled/failed 显示对应文案并隐藏操作', () => {
+    const { unmount } = render(
+      <ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo, resolution: 'cancelled' }} />,
+    );
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已取消');
+    expect(screen.queryByText('提交')).toBeNull();
+    unmount();
+
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo, resolution: 'failed' }} />);
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已失效');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+
+  it('accepted/declined 展示结果且允许关闭', () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo, resolution: 'accepted' }} />);
+    expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已提交');
+    expect(screen.queryByText('提交')).toBeNull();
+  });
+});
