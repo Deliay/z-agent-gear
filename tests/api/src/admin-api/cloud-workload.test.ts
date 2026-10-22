@@ -667,7 +667,7 @@ describe('Admin Cloud Workload API', () => {
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Github']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -695,7 +695,7 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(5);
+    expect(presetIds(all)).toHaveLength(6);
 
     // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/opencode）
     expect(docker.workloadKind).toBe('STANDARD');
