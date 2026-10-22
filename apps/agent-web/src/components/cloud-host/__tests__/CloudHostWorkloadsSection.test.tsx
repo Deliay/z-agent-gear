@@ -168,4 +168,41 @@ describe('CloudHostWorkloadsSection', () => {
 
     expect(screen.getByText('正在加载工作负载...')).toBeInTheDocument()
   })
+
+  it('T-WEB-W1/W2: 按 workloadKind 分组展示并显示依赖名称', () => {
+    mockWorkloads([
+      {
+        workloadId: 'wl-docker',
+        name: 'Docker',
+        workloadKind: 'STANDARD',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: false,
+        installed: false,
+      },
+      {
+        workloadId: 'wl-dotnet',
+        name: '.NET',
+        workloadKind: 'STANDARD',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: false,
+        installed: false,
+      },
+      {
+        workloadId: 'wl-aspire',
+        name: 'Aspire',
+        workloadKind: 'STANDARD',
+        paramSchema: [],
+        dependsOnWorkloadIds: ['wl-docker', 'wl-dotnet'],
+        isPreset: false,
+        installed: false,
+      },
+    ])
+    renderSection()
+
+    expect(screen.getByText('运行环境 / 工具')).toBeInTheDocument()
+    expect(screen.queryByText('云电脑')).not.toBeInTheDocument()
+    expect(screen.getByText('依赖：Docker、.NET')).toBeInTheDocument()
+  })
 })

@@ -20,6 +20,12 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
+import {
+  MAX_CREATE_WORKLOADS,
+  resolveCreateWorkloadPlan,
+  type CreateWorkloadPlanEntry,
+} from './cloud-host-workload-plan.js';
 
 export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.6.0';
 
@@ -32,6 +38,8 @@ const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
 export interface CreateCloudHostInput {
   name: string;
   harnessTypes: string[];
+  /** 创建时附加预装的 standard 负载（去重后 ≤5；缺省/空 = 仅 harness）。 */
+  workloadIds?: string[];
 }
 
 export interface CloudHostStopImpact {
@@ -55,6 +63,7 @@ type Doc = Record<string, unknown>;
 interface CloudHostServiceDeps {
   controllerClient?: CloudControllerClient;
   workloadReader?: typeof cloudWorkloadReader;
+  catalog?: typeof cloudWorkloadCatalog;
   maxPerUser?: number;
   ttlSeconds?: number;
 }
@@ -86,6 +95,23 @@ function parseHarnessTypes(raw: string[]): HarnessType[] {
   return result;
 }
 
+/** 创建期显式 workloadIds：去重保序；空/缺省 = 仅 harness（与历史行为一致）。 */
+function parseWorkloadIds(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Error('invalid workload');
+  const result: string[] = [];
+  for (const value of raw) {
+    if (value === undefined || value === null) continue;
+    const id = String(value).trim();
+    if (!id) continue;
+    if (!result.includes(id)) result.push(id);
+  }
+  if (result.length > MAX_CREATE_WORKLOADS) {
+    throw new Error(`too many workloads (max ${MAX_CREATE_WORKLOADS})`);
+  }
+  return result;
+}
+
 /**
  * 前台云电脑领域服务：创建编排 / 每用户 1 实例 / 停止即销毁 / 软删除 /
  * ready+terminal 回调 / 默认会话 / 会话只读判定入口。
@@ -95,12 +121,14 @@ export class CloudHostService {
   private readonly hostMutex = new KeyedMutex();
   private readonly controllerClient: CloudControllerClient;
   private readonly workloadReader: typeof cloudWorkloadReader;
+  private readonly catalog: typeof cloudWorkloadCatalog;
   private readonly maxPerUser: number;
   private readonly ttlSeconds: number;
 
   constructor(deps: CloudHostServiceDeps = {}) {
     this.controllerClient = deps.controllerClient ?? cloudControllerClient;
     this.workloadReader = deps.workloadReader ?? cloudWorkloadReader;
+    this.catalog = deps.catalog ?? cloudWorkloadCatalog;
     this.maxPerUser = deps.maxPerUser ?? config.cloudHostMaxPerUser;
     this.ttlSeconds = deps.ttlSeconds ?? config.harnessContainerTtlSeconds;
   }
@@ -138,23 +166,31 @@ export class CloudHostService {
   private validateInput(input: CreateCloudHostInput): {
     name: string;
     harnessTypes: HarnessType[];
+    workloadIds: string[];
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
     if (name.length > 64) throw new Error('name is too long');
-    return { name, harnessTypes: parseHarnessTypes(input.harnessTypes) };
+    return {
+      name,
+      harnessTypes: parseHarnessTypes(input.harnessTypes),
+      workloadIds: parseWorkloadIds(input.workloadIds),
+    };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes } = this.validateInput(input);
+    const { name, harnessTypes, workloadIds } = this.validateInput(input);
 
     // 读取 harness preset 先于任何落库（缺失时不留下半成品记录）
     const presets: HarnessPreset[] = [];
     for (const type of harnessTypes) {
       presets.push(await this.workloadReader.findHarnessPreset(type));
     }
+
+    // 创建期负载展开同样先于落库：非法/超量/依赖环不留半成品
+    const workloadPlan = await this.resolveWorkloadPlan(presets, workloadIds);
 
     return this.userMutex.runExclusive(`user:${userId}`, async () => {
       const activeCount = await CloudHost.countDocuments({
@@ -230,13 +266,6 @@ export class CloudHostService {
           expiresAt: expiresAt.toISOString(),
         });
         modelKeyId = modelKey.apiKey.id;
-
-        const workloadPlan = presets.map((preset) => ({
-          workloadId: preset.id,
-          params: {},
-          implicit: false,
-          required: true,
-        }));
 
         const container = await this.controllerClient
           .startHarness({
@@ -333,6 +362,36 @@ export class CloudHostService {
     }
     tasks.push(CloudHost.deleteOne({ _id: input.cloudHostId }));
     await Promise.allSettled(tasks);
+  }
+
+  /** 创建期负载计划：无勾选时与历史一致（仅 harness）；有勾选时展开依赖。 */
+  private async resolveWorkloadPlan(
+    presets: HarnessPreset[],
+    workloadIds: string[],
+  ): Promise<CreateWorkloadPlanEntry[]> {
+    const harnessPlan: CreateWorkloadPlanEntry[] = presets.map((preset) => ({
+      workloadId: preset.id,
+      params: {},
+      implicit: false,
+      required: true,
+    }));
+    if (workloadIds.length === 0) return harnessPlan;
+
+    const standardCatalog = await this.catalog.listStandard();
+    const standardIds = new Set(standardCatalog.map((item) => item.id));
+    for (const id of workloadIds) {
+      if (standardIds.has(id)) continue;
+      if (!mongoose.isValidObjectId(id)) throw new Error(`invalid workload: ${id}`);
+      const found = await this.catalog.findById(id);
+      if (!found) throw new Error(`invalid workload: ${id}`);
+      throw new Error(`workload is not installable: ${found.name}`);
+    }
+
+    return resolveCreateWorkloadPlan({
+      harnessPresets: presets.map((preset) => ({ id: preset.id })),
+      selectedIds: workloadIds,
+      standardCatalog,
+    });
   }
 
   async list(userId: string): Promise<Doc[]> {
@@ -699,10 +758,25 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
 ]);
 
 /** 供 resolver 统一把 service 错误转为 GraphQLError（白名单透传契约文案）。 */
+const CLOUD_HOST_PUBLIC_ERROR_PREFIXES = [
+  'unsupported harness type:',
+  'invalid workload:',
+  'workload is not installable:',
+  'invalid workload parameter:',
+  'dependency workload not found:',
+  'dependency cycle detected',
+  'too many workloads (max',
+  'workloads exceed',
+  '前缀地址',
+] as const;
+
 export function toCloudHostGraphQLError(err: unknown): never {
   if (err instanceof GraphQLError) throw err;
   const message = err instanceof Error ? err.message : String(err);
-  if (CLOUD_HOST_PUBLIC_ERRORS.has(message) || message.startsWith('unsupported harness type:')) {
+  if (
+    CLOUD_HOST_PUBLIC_ERRORS.has(message) ||
+    CLOUD_HOST_PUBLIC_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+  ) {
     throw new GraphQLError(message);
   }
   throw new GraphQLError('internal error');

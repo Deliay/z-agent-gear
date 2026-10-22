@@ -60,6 +60,14 @@ export const cloudHostResolvers = {
         toCloudHostSetupGraphQLError(err);
       }
     },
+    cloudHostWorkloadCatalog: async (_parent: unknown, _args: unknown, context: AuthContext) => {
+      requireUser(context);
+      try {
+        return await cloudHostWorkloadService.listCatalog();
+      } catch (err) {
+        toCloudHostSetupGraphQLError(err);
+      }
+    },
     cloudHostSetupOperation: async (
       _parent: unknown,
       args: { id: string },
@@ -93,7 +101,7 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[] } },
+      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[] } },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);

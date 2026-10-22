@@ -91,6 +91,20 @@ export default function StartContainerDialog({
     name: workload.name,
     dependsOnWorkloadIds: workload.dependsOnWorkloadIds ?? [],
   }));
+
+  // 按 workloadKind 分组展示（不改勾选/参数/计划逻辑）；空组不渲染标题
+  const workloadGroups = [
+    {
+      key: 'STANDARD',
+      title: '运行环境（standard）',
+      items: workloads.filter((workload) => (workload.workloadKind ?? 'STANDARD') === 'STANDARD'),
+    },
+    {
+      key: 'HARNESS',
+      title: '云电脑（harness）',
+      items: workloads.filter((workload) => workload.workloadKind === 'HARNESS'),
+    },
+  ].filter((group) => group.items.length > 0);
   // 顺序预览与隐式依赖（前端镜像，最终以服务端计划为准）
   const preview = previewWorkloadPlan(selectedIds, definitions);
   const overLimit = preview.items.length > MAX_PLAN_ITEMS;
@@ -219,34 +233,41 @@ export default function StartContainerDialog({
               <p className="text-xs text-muted-foreground">暂无可用工作负载</p>
             ) : (
               <ScrollArea className="max-h-48 rounded-md border p-2">
-                <ul className="space-y-1">
-                  {workloads.map((workload) => {
-                    const selected = selectedIds.includes(workload.id);
-                    return (
-                      <li key={workload.id} className="flex min-w-0 items-center gap-2">
-                        <Checkbox
-                          aria-label={workload.name}
-                          checked={selected}
-                          disabled={atLimit && !selected}
-                          onCheckedChange={(checked) => toggleWorkload(workload.id, checked)}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                          {workload.name}
-                        </span>
-                        {selected && canBeRequired(workload) && (
-                          <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                            <Checkbox
-                              aria-label={`${workload.name} ${REQUIRED_LABEL}`}
-                              checked={requiredByWorkload[workload.id] === true}
-                              onCheckedChange={(checked) => toggleRequired(workload.id, checked)}
-                            />
-                            {REQUIRED_LABEL}
-                          </label>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="space-y-2">
+                  {workloadGroups.map((group) => (
+                    <div key={group.key} className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">{group.title}</p>
+                      <ul className="space-y-1">
+                        {group.items.map((workload) => {
+                          const selected = selectedIds.includes(workload.id);
+                          return (
+                            <li key={workload.id} className="flex min-w-0 items-center gap-2">
+                              <Checkbox
+                                aria-label={workload.name}
+                                checked={selected}
+                                disabled={atLimit && !selected}
+                                onCheckedChange={(checked) => toggleWorkload(workload.id, checked)}
+                              />
+                              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                                {workload.name}
+                              </span>
+                              {selected && canBeRequired(workload) && (
+                                <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                                  <Checkbox
+                                    aria-label={`${workload.name} ${REQUIRED_LABEL}`}
+                                    checked={requiredByWorkload[workload.id] === true}
+                                    onCheckedChange={(checked) => toggleRequired(workload.id, checked)}
+                                  />
+                                  {REQUIRED_LABEL}
+                                </label>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
               </ScrollArea>
             )}
             <p className="text-xs text-muted-foreground">

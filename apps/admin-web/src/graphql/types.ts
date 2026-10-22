@@ -181,6 +181,9 @@ export interface GetBaseImageQuery {
 /** 参数字段类型（契约 CloudWorkloadParamType）。 */
 export type CloudWorkloadParamType = 'SELECT' | 'MULTI_SELECT' | 'TEXT' | 'BOOLEAN';
 
+/** 工作负载分类（契约 CloudWorkloadKind）：standard = 运行环境/工具，harness = 云电脑 */
+export type CloudWorkloadKind = 'STANDARD' | 'HARNESS';
+
 /**
  * 参数值/默认值（JSON scalar）：字符串（TEXT/SELECT）、字符串数组（MULTI_SELECT）或布尔（BOOLEAN）。
  * 服务端为唯一事实源，前端仅做预校验。
@@ -219,6 +222,10 @@ export interface CloudWorkloadData {
   dependsOnWorkloadIds: string[];
   /** 是否为预制工作负载（仅展示用） */
   isPreset: boolean;
+  /** 工作负载分类；历史数据缺省 STANDARD */
+  workloadKind?: CloudWorkloadKind;
+  /** harness 负载类型（如 opencode）；standard 为 null */
+  harnessType?: string | null;
   createdAt: string;
   updatedAt: string;
 }

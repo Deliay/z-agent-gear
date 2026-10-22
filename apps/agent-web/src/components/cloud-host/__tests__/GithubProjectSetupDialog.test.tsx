@@ -203,29 +203,52 @@ describe('GithubProjectSetupDialog', () => {
     expect(screen.getByLabelText('Node.js')).not.toBeChecked()
   })
 
-  it('T-AW-G6 默认路径等于 cloudHost.defaultWorkspace 且可编辑', async () => {
+  it('T-AW-G6 默认前缀等于 cloudHost.defaultWorkspace 且可编辑', async () => {
     renderDialog()
 
-    const input = screen.getByLabelText('目标路径')
+    const input = screen.getByLabelText('前缀地址')
     await waitFor(() => expect(input).toHaveValue('/root/workspace'))
 
     fireEvent.change(input, { target: { value: '/root/workspace/custom' } })
     expect(input).toHaveValue('/root/workspace/custom')
   })
 
-  it('T-AW-G7 空/相对路径禁用确认', async () => {
+  it('T-WEB-G1: 选择仓库后展示最终 clone 地址', async () => {
+    renderDialog()
+    await selectRepo('alice/repo-a')
+
+    expect(screen.getByText('最终 clone 地址：/root/workspace/alice/repo-a')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '/work/' } })
+    expect(screen.getByText('最终 clone 地址：/work/alice/repo-a')).toBeInTheDocument()
+  })
+
+  it('T-AW-G7 / T-WEB-G2 空/相对路径/含 .. 禁用确认并提示', async () => {
     renderDialog()
     await selectRepo()
-    const input = screen.getByLabelText('目标路径')
+    const input = screen.getByLabelText('前缀地址')
 
     fireEvent.change(input, { target: { value: '' } })
+    expect(screen.getByText('请输入前缀地址')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
     fireEvent.change(input, { target: { value: 'workspace/repo' } })
-    expect(screen.getByText('请输入绝对路径（以 / 开头）')).toBeInTheDocument()
+    expect(screen.getByText('前缀地址必须以 / 开头')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
-    fireEvent.change(input, { target: { value: '/workspace/repo' } })
+    fireEvent.change(input, { target: { value: '/root/../etc' } })
+    expect(screen.getByText('前缀地址不能包含 ..')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: '/root\\workspace' } })
+    expect(screen.getByText('前缀地址包含非法字符')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: 'root\\workspace' } })
+    expect(screen.getByText('前缀地址包含非法字符')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: '/workspace/repo/' } })
     expect(submitButton()).not.toBeDisabled()
   })
 
@@ -238,9 +261,10 @@ describe('GithubProjectSetupDialog', () => {
     expect(submitButton()).toBeDisabled()
   })
 
-  it('提交 setupCloudHostGithubProject 后打开进度对话框', async () => {
+  it('T-WEB-G3 提交的是归一后的前缀（非最终目录）', async () => {
     renderDialog()
     await selectRepo()
+    fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '/root//workspace/' } })
     fireEvent.click(submitButton())
 
     await waitFor(() => {

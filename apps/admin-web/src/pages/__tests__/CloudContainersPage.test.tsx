@@ -326,6 +326,41 @@ describe('CloudContainersPage', () => {
     );
   });
 
+  it('T-ADM-WEB1/WEB2: 工作负载按 kind 分组，仅 standard 时不渲染 harness 标题', () => {
+    setupData({
+      containers: [],
+      workloads: [
+        workload('w1', 'Aspire', { workloadKind: 'STANDARD', dependsOnWorkloadIds: ['w2'] }),
+        workload('w2', 'Docker', { workloadKind: 'STANDARD' }),
+      ],
+    });
+    const { unmount } = render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+
+    expect(screen.getByText('运行环境（standard）')).toBeDefined();
+    expect(screen.queryByText('云电脑（harness）')).toBeNull();
+    unmount();
+  });
+
+  it('T-ADM-WEB1: 混合 kind 时两组标题均可见且项归属正确', () => {
+    setupData({
+      containers: [],
+      workloads: [
+        workload('w1', 'Docker', { workloadKind: 'STANDARD' }),
+        workload('w2', 'OpenCode', { workloadKind: 'HARNESS', harnessType: 'opencode' }),
+      ],
+    });
+    render(<CloudContainersPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '启动' }));
+
+    expect(screen.getByText('运行环境（standard）')).toBeDefined();
+    expect(screen.getByText('云电脑（harness）')).toBeDefined();
+    expect(screen.getByRole('checkbox', { name: 'Docker' })).toBeDefined();
+    expect(screen.getByRole('checkbox', { name: 'OpenCode' })).toBeDefined();
+  });
+
   it('T-FW4: closing the dialog without confirming does not start', () => {
     setupData({ containers: [], workloads: [workload('w1', 'load-a')] });
     render(<CloudContainersPage />);

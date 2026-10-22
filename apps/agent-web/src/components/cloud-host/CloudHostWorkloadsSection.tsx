@@ -185,9 +185,26 @@ export default function CloudHostWorkloadsSection({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const workloads = data?.cloudHostWorkloads ?? []
+  const workloads = useMemo(() => data?.cloudHostWorkloads ?? [], [data])
   const hostRunning = cloudHost.status === 'RUNNING' && !cloudHost.deletedAt
   const installingName = cloudHost.workloadInstalling ?? null
+
+  const workloadNames = useMemo(
+    () => new Map(workloads.map((workload) => [workload.workloadId, workload.name])),
+    [workloads],
+  )
+  // 按 workloadKind 分组：standard = 运行环境/工具，harness = 云电脑（当前目录只含 standard）
+  const groups = useMemo(() => {
+    const standard = workloads.filter((workload) => (workload.workloadKind ?? 'STANDARD') === 'STANDARD')
+    const harness = workloads.filter((workload) => workload.workloadKind === 'HARNESS')
+    return [
+      { key: 'STANDARD', title: '运行环境 / 工具', items: standard },
+      { key: 'HARNESS', title: '云电脑', items: harness },
+    ].filter((group) => group.items.length > 0)
+  }, [workloads])
+
+  const dependencyNames = (workload: CloudHostWorkloadItemData): string[] =>
+    (workload.dependsOnWorkloadIds ?? []).map((id) => workloadNames.get(id) ?? id)
 
   const targetSchema = useMemo(() => installTarget?.paramSchema ?? [], [installTarget])
 
@@ -257,46 +274,61 @@ export default function CloudHostWorkloadsSection({
       ) : workloads.length === 0 ? (
         <p className="text-sm text-muted-foreground">暂无可安装工作负载</p>
       ) : (
-        <ul className="min-w-0 space-y-2">
-          {workloads.map((workload) => (
-            <li
-              key={workload.workloadId}
-              className="min-w-0 rounded-lg border border-border p-3"
-              data-testid={`workload-item-${workload.workloadId}`}
-            >
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="min-w-0 break-words text-sm font-medium">{workload.name}</span>
-                {workload.isPreset && (
-                  <Badge variant="outline" className="shrink-0">
-                    预制
-                  </Badge>
-                )}
-                {workload.installed && (
-                  <Badge variant="secondary" className="shrink-0">
-                    已安装
-                  </Badge>
-                )}
-                <span className="ml-auto shrink-0">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    aria-label={`安装 ${workload.name}`}
-                    disabled={workload.installed || !hostRunning}
-                    onClick={() => openInstallDialog(workload)}
-                  >
-                    安装
-                  </Button>
-                </span>
-              </div>
-              {workload.paramSchema.length > 0 && (
-                <p className="mt-1 break-words text-xs text-muted-foreground">
-                  参数：{workload.paramSchema.map((field) => field.label || field.key).join('、')}
-                </p>
-              )}
-            </li>
+        <div className="min-w-0 space-y-3">
+          {groups.map((group) => (
+            <div key={group.key} className="min-w-0 space-y-2">
+              <h3 className="text-sm font-medium text-muted-foreground">{group.title}</h3>
+              <ul className="min-w-0 space-y-2">
+                {group.items.map((workload) => {
+                  const deps = dependencyNames(workload)
+                  return (
+                    <li
+                      key={workload.workloadId}
+                      className="min-w-0 rounded-lg border border-border p-3"
+                      data-testid={`workload-item-${workload.workloadId}`}
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="min-w-0 break-words text-sm font-medium">{workload.name}</span>
+                        {workload.isPreset && (
+                          <Badge variant="outline" className="shrink-0">
+                            预制
+                          </Badge>
+                        )}
+                        {workload.installed && (
+                          <Badge variant="secondary" className="shrink-0">
+                            已安装
+                          </Badge>
+                        )}
+                        <span className="ml-auto shrink-0">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            aria-label={`安装 ${workload.name}`}
+                            disabled={workload.installed || !hostRunning}
+                            onClick={() => openInstallDialog(workload)}
+                          >
+                            安装
+                          </Button>
+                        </span>
+                      </div>
+                      {deps.length > 0 && (
+                        <p className="mt-1 break-words text-xs text-muted-foreground">
+                          依赖：{deps.join('、')}
+                        </p>
+                      )}
+                      {workload.paramSchema.length > 0 && (
+                        <p className="mt-1 break-words text-xs text-muted-foreground">
+                          参数：{workload.paramSchema.map((field) => field.label || field.key).join('、')}
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       <Dialog open={installTarget !== null} onOpenChange={(next) => { if (!next) closeInstallDialog() }}>

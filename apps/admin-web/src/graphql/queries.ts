@@ -173,6 +173,8 @@ export const ADMIN_CLOUD_WORKLOADS = gql`
       }
       dependsOnWorkloadIds
       isPreset
+      workloadKind
+      harnessType
       createdAt
       updatedAt
     }
