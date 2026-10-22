@@ -41,7 +41,10 @@ test.describe('Github workload E2E', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Git 项目设置' })).toBeVisible();
     await expect(dialog.getByLabel('目标主机')).toContainText(name);
-    await expect(dialog.getByLabel('目标路径')).toHaveValue('/root/workspace');
+    await expect(dialog.getByLabel('前缀地址')).toHaveValue('/root/workspace');
+    // 前缀语义：最终地址 = <前缀>/<owner>/<repo>（未选仓库时以占位符展示）
+    await expect(dialog.getByText(/项目将 clone 到 \/root\/workspace\/<User\/Repo>/)).toBeVisible();
+    await expect(dialog.getByText(/最终 clone 地址：/)).toBeVisible();
 
     const githubCheckbox = dialog.getByRole('checkbox', { name: 'Github' });
     await expect(githubCheckbox).toBeChecked();

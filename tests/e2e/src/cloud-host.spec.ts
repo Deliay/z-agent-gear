@@ -42,6 +42,18 @@ test.describe('Cloud Host E2E', () => {
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
       await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+
+      // 预装工作负载来自 cloudHostWorkloadCatalog（迁移 001/002/007 seed）
+      await expect(dialog.getByText('预装工作负载（可选）')).toBeVisible();
+      for (const name of ['Aspire', 'Docker', '.NET']) {
+        await expect(dialog.getByRole('checkbox', { name, exact: true })).toBeVisible({
+          timeout: 15000,
+        });
+      }
+      await expect(dialog.getByText('依赖：Docker、.NET')).toBeVisible();
+      await dialog.getByRole('checkbox', { name: 'Docker', exact: true }).check();
+      await expect(dialog.getByText('勾选运行环境负载会延长首次就绪时间')).toBeVisible();
+
       await expect(createButton).toBeEnabled();
       await createButton.click();
 

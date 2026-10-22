@@ -25,6 +25,8 @@ const WORKLOAD_FIELDS = `
   paramSchema { key label type options defaultValue }
   dependsOnWorkloadIds
   isPreset
+  workloadKind
+  harnessType
 `;
 
 const LIST = `
@@ -84,6 +86,8 @@ interface WorkloadNode {
   paramSchema?: ParamFieldNode[];
   dependsOnWorkloadIds?: string[];
   isPreset?: boolean;
+  workloadKind?: string;
+  harnessType?: string | null;
 }
 
 interface ParamFieldInput {
@@ -692,6 +696,16 @@ describe('Admin Cloud Workload API', () => {
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
     expect(presetIds(all)).toHaveLength(5);
+
+    // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/opencode）
+    expect(docker.workloadKind).toBe('STANDARD');
+    expect(docker.harnessType).toBeNull();
+    const harness = byName.get('OpenCode（Harness）')!;
+    expect(harness.workloadKind).toBe('HARNESS');
+    expect(harness.harnessType).toBe('opencode');
+    for (const workload of all) {
+      expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
+    }
   });
 
   it('T-IA: preset .NET uses the apt-based init script (migration 002 upgrade)', async () => {
