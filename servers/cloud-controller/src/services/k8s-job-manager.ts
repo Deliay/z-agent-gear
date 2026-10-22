@@ -129,6 +129,8 @@ export class K8sJobManager {
         metadata: { labels },
         spec: {
           restartPolicy: 'Never',
+          // 纵深防御：工作容器不需要集群 API 权限，禁止自动挂载 ServiceAccount token（C-6）。
+          automountServiceAccountToken: false,
           containers: [
             {
               name: 'worker',

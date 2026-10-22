@@ -114,11 +114,10 @@ test.describe('Admin Model Config E2E', () => {
       await dialog.getByRole('button', { name: '保存' }).click();
       await expect(dialog).not.toBeVisible({ timeout: 15000 });
 
-      // 供应商出现，但不再自动导入模型；toast 提示手动导入
+      // 供应商出现，但不再自动导入模型；持久文案「0 个模型」可稳定断言（不依赖 4s 自动消失的 toast，C-7）
       await expect(page.getByText(name).first()).toBeVisible();
       await expect(page.getByText('0 个模型').first()).toBeVisible();
       await expect(modelSection.getByText('gpt-4o', { exact: true })).toHaveCount(0);
-      await expect(page.getByText(/请通过「导入模型」手动导入模型/)).toBeVisible();
 
       // 凭据脱敏展示
       await expect(page.getByText(/sk-\*\*\*\*/).first()).toBeVisible();
@@ -325,7 +324,6 @@ test.describe('Admin Model Config E2E', () => {
     const second = `${PROVIDER_PREFIX}dup-b-${Date.now()}`;
     try {
       const providerA = await createProviderViaApi(page, token, first, `http://127.0.0.1:${mock.port}/v1`);
-      await page.waitForTimeout(50);
       await createProviderViaApi(page, token, second, `http://127.0.0.1:${mock.port}/v1`);
 
       const imported = await adminGqlRequest(page, `
@@ -336,8 +334,11 @@ test.describe('Admin Model Config E2E', () => {
       expect((await imported.json()).errors).toBeUndefined();
 
       await adminLoginViaUI(page);
-      // 第二个供应商（列表按 createdAt desc，第一条是 second）
-      await page.getByRole('button', { name: '操作菜单' }).first().click();
+      // 按供应商名定位行，不依赖 createdAt 排序或 .first()（C-8）
+      const secondRow = page
+        .locator('div.flex.items-center.gap-3.rounded-lg.border')
+        .filter({ has: page.getByText(second, { exact: true }) });
+      await secondRow.getByRole('button', { name: '操作菜单' }).click();
       await page.getByRole('menuitem', { name: '导入模型' }).click();
       const dialog = page.getByRole('dialog');
       await expect(dialog).toBeVisible();

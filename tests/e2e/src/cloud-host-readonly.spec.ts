@@ -1,9 +1,9 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import mongoose from 'mongoose';
 import { loginViaUI, registerUser } from './helpers';
 
 // fixture 驱动：K8S_ENABLED=false 下无法真实产生 RUNNING→STOPPED 的会话，
-// 直接写 Mongo 构造「已销毁云电脑 + ended 会话」，断言前端只读渲染。
+// 直接写 Mongo 构造「终态/软删除云电脑 + ended 会话」，断言前端只读渲染。
 const HAS_MONGO = Boolean(process.env.MONGODB_URI);
 
 async function mongoDb(): Promise<mongoose.mongo.Db | null> {
@@ -13,21 +13,21 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   return mongoose.connection.db ?? null;
 }
 
-test.describe('Cloud Host read-only session', () => {
-  test.skip(!HAS_MONGO, '需要 MONGODB_URI 写入只读 fixture');
+async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null }): Promise<void> {
+  const { username } = await registerUser(page);
+  const db = (await mongoDb())!;
+  const userDoc = await db.collection('users').findOne({ username });
+  expect(userDoc?._id).toBeTruthy();
+  const userId = userDoc!._id;
 
-  test('T-AW10: stopped cloud host session hides input/send/continue', async ({ page }) => {
-    const { username } = await registerUser(page);
-    // 从 Mongo 反查用户名对应的 userId
-    const db = (await mongoDb())!;
-    const userDoc = await db.collection('users').findOne({ username });
-    expect(userDoc?._id).toBeTruthy();
-    const userId = userDoc!._id;
+  const now = new Date();
+  const controllerId = new mongoose.Types.ObjectId();
+  const hostId = new mongoose.Types.ObjectId();
+  const workspaceId = new mongoose.Types.ObjectId();
+  const historyText = `只读历史消息-${new mongoose.Types.ObjectId().toString()}`;
+  let sessionId: mongoose.Types.ObjectId | null = null;
 
-    const now = new Date();
-    const controllerId = new mongoose.Types.ObjectId();
-    const hostId = new mongoose.Types.ObjectId();
-    const workspaceId = new mongoose.Types.ObjectId();
+  try {
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId,
@@ -65,7 +65,7 @@ test.describe('Cloud Host read-only session', () => {
       readyAt: now,
       stoppedAt: now,
       failureReason: null,
-      deletedAt: null,
+      deletedAt: options.deletedAt,
       createdAt: now,
       updatedAt: now,
     });
@@ -81,19 +81,41 @@ test.describe('Cloud Host read-only session', () => {
       createdAt: now,
       updatedAt: now,
     });
+    sessionId = session.insertedId;
+    await db.collection('acpmessages').insertOne({
+      sessionId,
+      direction: 'input',
+      type: 'text',
+      content: historyText,
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await loginViaUI(page, username);
-    await page.goto(`/sessions/${session.insertedId.toString()}`);
+    await page.goto(`/sessions/${sessionId.toString()}`);
 
     await expect(page.getByTestId('cloud-host-readonly-notice')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('cloud-host-readonly-notice')).toContainText('云电脑已销毁');
-    await expect(page.getByPlaceholder(/Type your message/)).toHaveCount(0);
+    await expect(page.getByRole('textbox')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /继续/ })).toHaveCount(0);
-
-    // 清理 fixture（Controller/会话/消息保留语义仅在软删除路径；测试数据直接清理）
-    await db.collection('sessions').deleteOne({ _id: session.insertedId });
+    await expect(page.getByText(historyText)).toBeVisible({ timeout: 15000 });
+  } finally {
+    if (sessionId) await db.collection('acpmessages').deleteMany({ sessionId });
+    await db.collection('sessions').deleteMany({ controllerId });
     await db.collection('cloudhosts').deleteOne({ _id: hostId });
     await db.collection('controllerworkspaces').deleteOne({ _id: workspaceId });
     await db.collection('controllers').deleteOne({ _id: controllerId });
+  }
+}
+
+test.describe('Cloud Host read-only session', () => {
+  test.skip(!HAS_MONGO, '需要 MONGODB_URI 写入只读 fixture');
+
+  test('T-AW10: stopped cloud host session hides input/send/continue', async ({ page }) => {
+    await runReadonlyScenario(page, { deletedAt: null });
+  });
+
+  test('R2-10: soft-deleted cloud host session hides input/send/continue', async ({ page }) => {
+    await runReadonlyScenario(page, { deletedAt: new Date() });
   });
 });

@@ -122,7 +122,7 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('T-AW5 服务端错误文案原样展示', async () => {
+  it('T-AW5 服务端 too many cloud hosts 映射为中文 1 实例上限提示', async () => {
     mockCreateCloudHost.mockRejectedValueOnce(new Error('too many cloud hosts'));
 
     render(<NewCloudHostDialog {...defaultProps} />);
@@ -131,7 +131,8 @@ describe('NewCloudHostDialog', () => {
     fireEvent.click(screen.getByLabelText('OpenCode'));
     fireEvent.click(submitButton());
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('too many cloud hosts');
+    expect(await screen.findByRole('alert')).toHaveTextContent('每用户同时最多 1 个云电脑实例');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('too many cloud hosts');
   });
 
   it.each([

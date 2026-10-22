@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ImportModelsDialog from '../models/ImportModelsDialog'
 
 const mocks = vi.hoisted(() => ({
@@ -31,8 +31,13 @@ const options = [
 ]
 
 function setup(overrides: { loading?: boolean; error?: Error | null; data?: unknown } = {}) {
+  const hasData = Object.prototype.hasOwnProperty.call(overrides, 'data')
   mocks.useQuery.mockReturnValue({
-    data: overrides.error ? undefined : { listGlobalProviderModels: overrides.data ?? options },
+    data: hasData
+      ? { listGlobalProviderModels: overrides.data ?? [] }
+      : overrides.error
+        ? undefined
+        : { listGlobalProviderModels: options },
     loading: overrides.loading ?? false,
     error: overrides.error ?? undefined,
     refetch: mocks.refetch,
@@ -140,5 +145,111 @@ describe('ImportModelsDialog', () => {
     setup({ data: [] })
     renderDialog()
     expect(screen.getByText('暂无可导入的模型')).toBeDefined()
+  })
+
+  it('T-W18: does not report a successful import as failed when the follow-up refetch rejects (B-1)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setup()
+    mocks.importModels.mockResolvedValue({ data: { importGlobalModels: [{ id: 'm1' }] } })
+    mocks.refetch.mockRejectedValue(new Error('Variable "$providerId" of required type "ID!" was not provided.'))
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    fireEvent.click(screen.getByRole('button', { name: /导入/ }))
+
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('成功导入 1 个模型'))
+    expect(mocks.toastError).not.toHaveBeenCalled()
+    expect(screen.getByText('成功导入 1 个模型')).toBeDefined()
+    // 导入后本地立即标记已导入并禁选
+    expect(screen.getByRole('checkbox', { name: '选择 gpt-4o' })).toHaveAttribute('aria-disabled', 'true')
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('T-W19: closing while the import is in flight does not refetch, and reopening trusts server results (B-2)', async () => {
+    setup()
+    let resolveImport: (value: unknown) => void = () => {}
+    mocks.importModels.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveImport = resolve
+      }),
+    )
+    const { rerender } = renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    fireEvent.click(screen.getByRole('button', { name: /导入/ }))
+
+    // 关闭弹窗：ProviderSection 会把 importTarget 置 null，providerId 随之变为 null
+    rerender(
+      <ImportModelsDialog open={false} onOpenChange={() => {}} providerId={null} providerName="" />,
+    )
+    await act(async () => {
+      resolveImport({ data: { importGlobalModels: [{ id: 'm1' }] } })
+    })
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('成功导入 1 个模型')
+    expect(mocks.toastError).not.toHaveBeenCalled()
+    expect(mocks.refetch).not.toHaveBeenCalled()
+
+    // 重新打开：以服务端结果为准（gpt-4o 已导入、禁选），勾选清零
+    setup({ data: [
+      { name: 'gpt-4o', isImported: true, isDuplicate: false },
+      { name: 'gpt-4o-mini', isImported: false, isDuplicate: false },
+    ] })
+    rerender(
+      <ImportModelsDialog open onOpenChange={() => {}} providerId="p1" providerName="My OpenAI" />,
+    )
+
+    expect(screen.getByText('已选 0 个')).toBeDefined()
+    expect(screen.getByRole('checkbox', { name: '选择 gpt-4o' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByText('已导入')).toBeDefined()
+  })
+
+  it('T-W20: ignores a rapid double click before the importing state renders (C-12)', async () => {
+    setup()
+    let resolveImport: (value: unknown) => void = () => {}
+    mocks.importModels.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveImport = resolve
+      }),
+    )
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    const importButton = screen.getByRole('button', { name: /导入/ })
+    fireEvent.click(importButton)
+    fireEvent.click(importButton)
+
+    expect(mocks.importModels).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      resolveImport({ data: { importGlobalModels: [] } })
+    })
+  })
+
+  it('T-W21: keeps the import button usable when a background refetch fails after data has loaded (C-2)', () => {
+    mocks.useQuery.mockReturnValue({
+      data: { listGlobalProviderModels: options },
+      loading: false,
+      error: new Error('refetch failed'),
+      refetch: mocks.refetch,
+    })
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    expect(screen.getByRole('button', { name: /导入/ })).not.toBeDisabled()
+  })
+
+  it('T-W22: keeps the failure detail in the dialog instead of only a transient toast (C-3)', async () => {
+    setup()
+    mocks.refetch.mockResolvedValue(undefined)
+    mocks.importModels.mockRejectedValue(new Error('Model name already exists: gpt-4o'))
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-4o' }))
+    fireEvent.click(screen.getByRole('button', { name: /导入/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('导入失败：Model name already exists: gpt-4o'),
+    )
   })
 })

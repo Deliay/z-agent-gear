@@ -30,6 +30,19 @@ const CREATE_SESSION = `
   }
 `;
 
+const SESSION_READONLY_FIELDS = `
+  query Session($id: ID!) {
+    session(id: $id) {
+      id
+      status
+      controllerType
+      cloudHost { id status deletedAt }
+    }
+  }
+`;
+
+const CONTROLLERS = `query { controllers { id type } }`;
+
 async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   const uri = process.env.MONGODB_URI;
   if (!uri) return null;
@@ -87,7 +100,18 @@ async function seedCloudController(
     createdAt: now,
     updatedAt: now,
   });
-  return { controllerId, workspaceId };
+  return { controllerId, workspaceId, hostId };
+}
+
+/** 兜底清理本用例创建的云主机 fixture（Controller/工作区/云电脑/会话，按唯一 controllerId 匹配）。 */
+async function cleanupCloudFixture(
+  db: mongoose.mongo.Db,
+  controllerId: mongoose.Types.ObjectId,
+): Promise<void> {
+  await db.collection('sessions').deleteMany({ controllerId });
+  await db.collection('cloudhosts').deleteMany({ controllerId });
+  await db.collection('controllerworkspaces').deleteMany({ controllerId });
+  await db.collection('controllers').deleteOne({ _id: controllerId });
 }
 
 describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
@@ -100,26 +124,30 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     const token = signup.data.signup.token as string;
     const userId = signup.data.signup.user.id as string;
     const { controllerId } = await seedCloudController(db, userId, 'STOPPED');
-    const now = new Date();
-    const inserted = await db.collection('sessions').insertOne({
-      userId: new mongoose.Types.ObjectId(userId),
-      controllerId,
-      controllerName: 'cloud',
-      acpServerType: 'opencode',
-      status: 'ended',
-      title: 'archived',
-      endedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      const now = new Date();
+      const inserted = await db.collection('sessions').insertOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        controllerId,
+        controllerName: 'cloud',
+        acpServerType: 'opencode',
+        status: 'ended',
+        title: 'archived',
+        endedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
-    expect(result.errors).toBeUndefined();
-    expect(result.data.resumeSession).toEqual({
-      success: false,
-      status: 'ended',
-      error: 'session is ended',
-    });
+      const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
+      expect(result.errors).toBeUndefined();
+      expect(result.data.resumeSession).toEqual({
+        success: false,
+        status: 'ended',
+        error: 'session is ended',
+      });
+    } finally {
+      await cleanupCloudFixture(db, controllerId);
+    }
   });
 
   it('keeps normal ended sessions resumable', async () => {
@@ -132,36 +160,38 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     const userId = signup.data.signup.user.id as string;
     const now = new Date();
     const controllerId = new mongoose.Types.ObjectId();
-    await db.collection('controllers').insertOne({
-      _id: controllerId,
-      userId: new mongoose.Types.ObjectId(userId),
-      name: 'local',
-      hostname: 'local',
-      type: 'local',
-      status: 'online',
-      keyId: new mongoose.Types.ObjectId(),
-      version: '2.5.0',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const inserted = await db.collection('sessions').insertOne({
-      userId: new mongoose.Types.ObjectId(userId),
-      controllerId,
-      controllerName: 'local',
-      acpServerType: 'opencode',
-      status: 'ended',
-      title: 'normal-ended',
-      endedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      await db.collection('controllers').insertOne({
+        _id: controllerId,
+        userId: new mongoose.Types.ObjectId(userId),
+        name: 'local',
+        hostname: 'local',
+        type: 'local',
+        status: 'online',
+        keyId: new mongoose.Types.ObjectId(),
+        version: '2.5.0',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const inserted = await db.collection('sessions').insertOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        controllerId,
+        controllerName: 'local',
+        acpServerType: 'opencode',
+        status: 'ended',
+        title: 'normal-ended',
+        endedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
-    expect(result.errors).toBeUndefined();
-    expect(result.data.resumeSession).toMatchObject({ success: true, status: 'connecting' });
-
-    await db.collection('sessions').deleteOne({ _id: inserted.insertedId });
-    await db.collection('controllers').deleteOne({ _id: controllerId });
+      const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
+      expect(result.errors).toBeUndefined();
+      expect(result.data.resumeSession).toMatchObject({ success: true, status: 'connecting' });
+    } finally {
+      await db.collection('sessions').deleteMany({ controllerId });
+      await db.collection('controllers').deleteOne({ _id: controllerId });
+    }
   });
 
   it('rejects resume while cloud host is STOPPING', async () => {
@@ -173,32 +203,32 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     const token = signup.data.signup.token as string;
     const userId = signup.data.signup.user.id as string;
     const { controllerId } = await seedCloudController(db, userId, 'STOPPED');
-    await db
-      .collection('cloudhosts')
-      .updateOne({ controllerId }, { $set: { status: 'STOPPING' } });
-    const now = new Date();
-    const inserted = await db.collection('sessions').insertOne({
-      userId: new mongoose.Types.ObjectId(userId),
-      controllerId,
-      controllerName: 'cloud',
-      acpServerType: 'opencode',
-      status: 'ended',
-      title: 'stopping',
-      endedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      await db
+        .collection('cloudhosts')
+        .updateOne({ controllerId }, { $set: { status: 'STOPPING' } });
+      const now = new Date();
+      const inserted = await db.collection('sessions').insertOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        controllerId,
+        controllerName: 'cloud',
+        acpServerType: 'opencode',
+        status: 'ended',
+        title: 'stopping',
+        endedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
-    expect(result.data.resumeSession).toEqual({
-      success: false,
-      status: 'ended',
-      error: 'session is ended',
-    });
-    await db.collection('sessions').deleteOne({ _id: inserted.insertedId });
-    await db.collection('cloudhosts').deleteMany({ controllerId });
-    await db.collection('controllerworkspaces').deleteMany({ controllerId });
-    await db.collection('controllers').deleteOne({ _id: controllerId });
+      const result = await gql(RESUME, { id: inserted.insertedId.toString() }, token);
+      expect(result.data.resumeSession).toEqual({
+        success: false,
+        status: 'ended',
+        error: 'session is ended',
+      });
+    } finally {
+      await cleanupCloudFixture(db, controllerId);
+    }
   });
 
   it('rejects createSession while cloud host is not RUNNING', async () => {
@@ -211,17 +241,73 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     const userId = signup.data.signup.user.id as string;
     const { controllerId, workspaceId } = await seedCloudController(db, userId, 'STARTING');
 
-    const result = await gql(
-      CREATE_SESSION,
-      {
-        input: {
-          controllerId: controllerId.toString(),
-          workspaceId: workspaceId.toString(),
-          acpServerType: 'opencode',
+    try {
+      const result = await gql(
+        CREATE_SESSION,
+        {
+          input: {
+            controllerId: controllerId.toString(),
+            workspaceId: workspaceId.toString(),
+            acpServerType: 'opencode',
+          },
         },
-      },
-      token,
-    );
-    expect(result.errors?.[0].message).toBe('cloud host is not running');
+        token,
+      );
+      expect(result.errors?.[0].message).toBe('cloud host is not running');
+    } finally {
+      await cleanupCloudFixture(db, controllerId);
+    }
+  });
+
+  it('R2-1: soft-deleted cloud host session returns controllerType/cloudHost via real GET_SESSION', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const token = signup.data.signup.token as string;
+    const userId = signup.data.signup.user.id as string;
+    const { controllerId, hostId } = await seedCloudController(db, userId, 'STOPPED');
+    const now = new Date();
+    await db
+      .collection('cloudhosts')
+      .updateOne({ _id: hostId }, { $set: { deletedAt: now } });
+    try {
+      const inserted = await db.collection('sessions').insertOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        controllerId,
+        controllerName: 'cloud',
+        acpServerType: 'opencode',
+        status: 'ended',
+        title: 'soft-deleted-archive',
+        endedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const result = await gql(
+        SESSION_READONLY_FIELDS,
+        { id: inserted.insertedId.toString() },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      // 真实 GraphQL 响应锚点：字段 resolver 必须已注册（R2-1），且软删留档可返回
+      expect(result.data.session).toMatchObject({
+        controllerType: 'cloud',
+        cloudHost: {
+          id: hostId.toString(),
+          status: 'STOPPED',
+        },
+      });
+      expect(result.data.session.cloudHost.deletedAt).toBeTruthy();
+
+      // 列表语义：软删后整条过滤，前端不得再依赖 controllers 命中
+      const controllers = await gql(CONTROLLERS, undefined, token);
+      expect(
+        controllers.data.controllers.map((item: { id: string }) => item.id),
+      ).not.toContain(controllerId.toString());
+    } finally {
+      await cleanupCloudFixture(db, controllerId);
+    }
   });
 });

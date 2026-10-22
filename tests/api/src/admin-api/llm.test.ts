@@ -351,7 +351,7 @@ describe('Admin Global LLM API', () => {
     }
   });
 
-  it.skipIf(!process.env.MONGODB_URI)('T-MR1: the rename ledger matches actual renames one-to-one', async () => {
+  it.skipIf(!process.env.MONGODB_URI)('T-MR1: the rename ledger matches actual renames one-to-one', async (ctx) => {
     const uri = process.env.MONGODB_URI!;
     if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
     const db = mongoose.connection.db!;
@@ -361,6 +361,12 @@ describe('Admin Global LLM API', () => {
     );
     expect(records.errors).toBeUndefined();
     const list = records.data!.modelRenameRecords;
+    // fresh/无重名环境没有台账：显式 skip 并说明前提，避免空集断言「恒真假绿」（C-6）。
+    // 重名整理路径的写入/对照由 admin-api 迁移单测 T-MIG33~35 自建数据锁定。
+    if (list.length === 0) {
+      ctx.skip('no duplicate global models in this environment; rename path covered by migration unit tests');
+      return;
+    }
     expect(list.every((r) => r.batchId === '20261020-005')).toBe(true);
     expect(new Set(list.map((r) => `${r.oldName}->${r.newName}`)).size).toBe(list.length);
     for (const record of list) {

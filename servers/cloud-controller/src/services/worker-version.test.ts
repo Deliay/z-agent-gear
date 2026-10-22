@@ -5,6 +5,7 @@ import {
   SUPPORTED_MAJOR,
   isSupportedHarnessWorkerVersion,
   isSupportedWorkerVersion,
+  maxWorkerVersion,
   parseWorkerVersion,
   sanitizeVersionForLog,
 } from './worker-version.js';
@@ -136,6 +137,20 @@ describe('isSupportedHarnessWorkerVersion', () => {
     });
     // 普通容器门禁不被上调
     expect(isSupportedWorkerVersion('2.2.0').supported).toBe(true);
+  });
+});
+
+describe('maxWorkerVersion (C-4)', () => {
+  it('取常量与请求值的较大者（数字段比较，非字典序）', () => {
+    expect(maxWorkerVersion('2.1.0', '2.5.0')).toBe('2.5.0');
+    expect(maxWorkerVersion('2.5.0', '2.5.0')).toBe('2.5.0');
+    expect(maxWorkerVersion('2.6.0', '2.5.0')).toBe('2.6.0');
+    expect(maxWorkerVersion('2.5.0', '2.10.0')).toBe('2.10.0');
+    expect(maxWorkerVersion('2.10.0', '2.9.0')).toBe('2.10.0');
+    // 非法输入回退到合法一侧
+    expect(maxWorkerVersion('bad', '2.5.0')).toBe('2.5.0');
+    expect(maxWorkerVersion('2.6.0', 'bad')).toBe('2.6.0');
+    expect(maxWorkerVersion('bad', 'bad')).toBe(MIN_HARNESS_WORKER_VERSION);
   });
 });
 

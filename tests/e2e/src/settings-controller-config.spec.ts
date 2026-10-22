@@ -177,7 +177,7 @@ test.describe('Settings Controller Config Page E2E', () => {
     await expect(page.getByRole('heading', { name: '可用 Harness 工具' })).toBeVisible();
     await expect(page.getByRole('button', { name: '刷新' })).toBeVisible();
 
-    await page.getByRole('button', { name: '工作区' }).click();
+    await page.getByRole('button', { name: '工作区', exact: true }).click();
     await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible();
 
     disconnect();

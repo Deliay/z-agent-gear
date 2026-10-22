@@ -9,7 +9,7 @@ vi.mock('../models/cloud-workload.js', () => ({
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './006-preset-github';
+import * as migration from './007-preset-github';
 
 type CreateArg = {
   name: string;
@@ -27,7 +27,7 @@ function createdArgs(): CreateArg[] {
   return (CloudWorkload.create as any).mock.calls.map((call: unknown[]) => call[0] as CreateArg);
 }
 
-describe('migration 006-preset-github', () => {
+describe('migration 007-preset-github', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -39,7 +39,7 @@ describe('migration 006-preset-github', () => {
   });
 
   it('exposes the migration name', () => {
-    expect(migration.name).toBe('006-preset-github');
+    expect(migration.name).toBe('007-preset-github');
   });
 
   it('T-MIG1: 空库执行迁移写入 standard 预制项', async () => {
@@ -117,7 +117,7 @@ describe('migration 006-preset-github', () => {
     expect(firstCheck).toBeGreaterThan(-1);
     expect(firstCheck).toBeLessThan(aptInstall);
 
-    const dir = mkdtempSync(join(tmpdir(), 'zag-mig006-'));
+    const dir = mkdtempSync(join(tmpdir(), 'zag-mig007-'));
     const file = join(dir, 'github.sh');
     try {
       writeFileSync(file, script);

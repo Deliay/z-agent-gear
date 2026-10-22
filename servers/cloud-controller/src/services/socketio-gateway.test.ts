@@ -114,6 +114,7 @@ async function newContainer(
     hostId?: string;
     userId?: string;
     harnessTypes?: string[];
+    agentGearMinVersion?: string;
   } = {},
 ) {
   const purpose = overrides.purpose ?? 'idle';
@@ -128,6 +129,7 @@ async function newContainer(
     hostId: overrides.hostId ?? null,
     userId: overrides.userId ?? null,
     harnessTypes: overrides.harnessTypes ?? (purpose === 'harness' ? ['opencode'] : []),
+    agentGearMinVersion: overrides.agentGearMinVersion ?? null,
   });
   const token = await tokenService.issue(container.id);
   return { container, token };
@@ -296,6 +298,19 @@ describe('worker Socket.IO gateway', () => {
     const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
     await service.destroy(container.id);
     expect((await shutdown).reason).toBe('强制销毁');
+
+    socket.close();
+  });
+
+  it('R2-20: destroy(reason) forwards the real reason in the shutdown event', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-r2-20', version: OK_VERSION });
+    await waitFor(socket, 'registered');
+
+    const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
+    await service.destroy(container.id, { reason: '必须工作负载「opencode」初始化失败' });
+    expect((await shutdown).reason).toBe('必须工作负载「opencode」初始化失败');
 
     socket.close();
   });
@@ -813,6 +828,26 @@ describe('worker Socket.IO gateway', () => {
     expect(stored?.status).toBe('connecting');
     expect(stored?.connectedAt).toBeNull();
     expect(await workloadLogRepository.findByContainer(container.id)).toEqual([]);
+    socket.close();
+  });
+
+  it('C-4: harness 注册门禁使用落库的 agentGearMinVersion（高于常量时生效）', async () => {
+    const { container, token } = await newContainer([], {
+      purpose: 'harness',
+      hostId: 'host-gate-minver',
+      agentGearMinVersion: '2.10.0',
+    });
+    const socket = await connectWith(token);
+    const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
+    socket.emit('register', { hostname: 'harness-minver', version: '2.9.0' });
+    const error = await errorPromise;
+
+    expect(error).toMatchObject({
+      code: 'VERSION_MISMATCH',
+      currentVersion: '2.9.0',
+      minimumVersion: '2.10.0',
+    });
+    expect((await repo.findById(container.id))?.status).toBe('connecting');
     socket.close();
   });
 

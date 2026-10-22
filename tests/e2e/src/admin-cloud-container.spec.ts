@@ -352,23 +352,24 @@ test.describe('Admin Cloud Container E2E', () => {
       await expect(dialog.getByText(/标记为必须的工作负载初始化失败将导致容器被强制注销/)).toBeVisible();
 
       // 未勾选：无开关
-      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).toHaveCount(0);
-      await dialog.getByRole('checkbox', { name: postOnly.name }).click();
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须`, exact: true })).toHaveCount(0);
+      await dialog.getByRole('checkbox', { name: postOnly.name, exact: true }).click();
       // 仅 postScript：不展示开关
-      await expect(dialog.getByRole('checkbox', { name: `${postOnly.name} 必须` })).toHaveCount(0);
+      await expect(dialog.getByRole('checkbox', { name: `${postOnly.name} 必须`, exact: true })).toHaveCount(0);
 
-      await dialog.getByRole('checkbox', { name: withInit.name }).click();
-      const requiredSwitch = dialog.getByRole('checkbox', { name: `${withInit.name} 必须` });
+      // 必须开关的 aria-label 为 `${name} 必须`，会与工作负载多选项 `${name}` 子串匹配；必须 exact。
+      await dialog.getByRole('checkbox', { name: withInit.name, exact: true }).click();
+      const requiredSwitch = dialog.getByRole('checkbox', { name: `${withInit.name} 必须`, exact: true });
       await expect(requiredSwitch).toBeVisible();
       await expect(requiredSwitch).not.toBeChecked();
       await requiredSwitch.click();
       await expect(requiredSwitch).toBeChecked();
 
       // 取消勾选 → 开关消失；重新勾选 → 回到默认（非必须）
-      await dialog.getByRole('checkbox', { name: withInit.name }).click();
-      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).toHaveCount(0);
-      await dialog.getByRole('checkbox', { name: withInit.name }).click();
-      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须` })).not.toBeChecked();
+      await dialog.getByRole('checkbox', { name: withInit.name, exact: true }).click();
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须`, exact: true })).toHaveCount(0);
+      await dialog.getByRole('checkbox', { name: withInit.name, exact: true }).click();
+      await expect(dialog.getByRole('checkbox', { name: `${withInit.name} 必须`, exact: true })).not.toBeChecked();
 
       // 提交并核对落库 required=true
       await requiredSwitch.click();
@@ -489,11 +490,13 @@ test.describe('Admin Cloud Container E2E', () => {
 
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByRole('heading', { name: '工作负载执行日志' })).toBeVisible();
-      // 必须项记录出现「必须」标识；历史记录不误标（默认选中首条 = must-setup）
-      await expect(dialog.getByText('必须', { exact: true })).toBeVisible();
-      // 切到历史记录：无「必须」标识
+      // 列表行内徽标与详情面板各渲染一次「必须」；断言限定详情面板，避免 strict-mode 双命中。
+      const detail = dialog.getByTestId('workload-log-detail');
+      // 必须项记录在详情面板出现「必须」标识；历史记录不误标（默认选中首条 = must-setup）
+      await expect(detail.getByText('必须', { exact: true })).toBeVisible();
+      // 切到历史记录：详情面板无「必须」标识
       await dialog.getByRole('button', { name: /查看 legacy-setup/ }).click();
-      await expect(dialog.getByText('必须', { exact: true })).toHaveCount(0);
+      await expect(detail.getByText('必须', { exact: true })).toHaveCount(0);
     } finally {
       await db!.collection('cloudworkloadlogs').deleteMany({ containerId });
       await destroyViaApi(page, token, container.id);

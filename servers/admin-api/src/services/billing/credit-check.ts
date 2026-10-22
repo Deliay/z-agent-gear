@@ -143,6 +143,9 @@ export class CreditCheckService {
   /**
    * 校验 payment/settle 的预检凭证：必须存在、未过期、accountId/ref 匹配。
    * 返回凭证本身（调用方可读取 insufficient 以做欠费宽限判断）。
+   *
+   * R10-12 限定：这里只证明「存在一张匹配的凭证」，**不能证明准入检查由扣费方之外独立发生**；
+   * 结算路径的 `accrue-and-track` 凭证由计费侧自行签发。若要强制来源，需要额外的签发方/单调计数。
    */
   verify(
     preCheck: PreCheck | string | null | undefined,

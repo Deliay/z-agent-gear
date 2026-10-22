@@ -16,7 +16,7 @@ vi.mock('../models/provider.js', () => ({
 }));
 
 vi.mock('../models/model-rename-record.js', () => ({
-  ModelRenameRecord: { create: vi.fn() },
+  ModelRenameRecord: { updateOne: vi.fn() },
 }));
 
 import { Model } from '../models/model.js';
@@ -51,7 +51,7 @@ describe('migration 005-model-name-unique-global', () => {
     mockModels([]);
     mockProviders([{ _id: 'provider-1', name: 'OpenAI A' }]);
     (Model.updateOne as any).mockResolvedValue({ modifiedCount: 1 });
-    (ModelRenameRecord.create as any).mockResolvedValue({});
+    (ModelRenameRecord.updateOne as any).mockResolvedValue({});
     (Model.collection.indexes as any).mockResolvedValue([]);
     (Model.collection.createIndex as any).mockResolvedValue('scope_global_name_unique');
   });
@@ -69,7 +69,7 @@ describe('migration 005-model-name-unique-global', () => {
     await migration.run();
 
     expect(Model.updateOne).not.toHaveBeenCalled();
-    expect(ModelRenameRecord.create).not.toHaveBeenCalled();
+    expect(ModelRenameRecord.updateOne).not.toHaveBeenCalled();
     expect(Model.collection.createIndex).not.toHaveBeenCalled();
   });
 
@@ -78,7 +78,7 @@ describe('migration 005-model-name-unique-global', () => {
 
     await migration.run();
 
-    expect(ModelRenameRecord.create).not.toHaveBeenCalled();
+    expect(ModelRenameRecord.updateOne).not.toHaveBeenCalled();
     expect(Model.collection.createIndex).toHaveBeenCalledTimes(1);
     expect(Model.collection.createIndex).toHaveBeenCalledWith(
       { name: 1 },
@@ -103,16 +103,19 @@ describe('migration 005-model-name-unique-global', () => {
       { _id: 'm-new', scope: 'global' },
       { $set: { name: 'gpt-4o-2' } },
     );
-    expect(ModelRenameRecord.create).toHaveBeenCalledTimes(1);
-    expect(ModelRenameRecord.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelId: 'm-new',
-        providerId: 'provider-2',
-        providerName: 'OpenAI B',
-        oldName: 'gpt-4o',
-        newName: 'gpt-4o-2',
-        batchId: migration.BATCH_ID,
-      }),
+    expect(ModelRenameRecord.updateOne).toHaveBeenCalledTimes(1);
+    expect(ModelRenameRecord.updateOne).toHaveBeenCalledWith(
+      { modelId: 'm-new', batchId: migration.BATCH_ID },
+      {
+        $setOnInsert: expect.objectContaining({
+          providerId: 'provider-2',
+          providerName: 'OpenAI B',
+          oldName: 'gpt-4o',
+          newName: 'gpt-4o-2',
+          batchId: migration.BATCH_ID,
+        }),
+      },
+      { upsert: true },
     );
     expect(Model.collection.createIndex).toHaveBeenCalled();
   });
@@ -131,7 +134,7 @@ describe('migration 005-model-name-unique-global', () => {
       (call: unknown[]) => (call[1] as { $set: { name: string } }).$set.name,
     );
     expect(renames).toEqual(['gpt-4o-3', 'gpt-4o-4']);
-    expect(ModelRenameRecord.create).toHaveBeenCalledTimes(2);
+    expect(ModelRenameRecord.updateOne).toHaveBeenCalledTimes(2);
   });
 
   it('T-MIG35: falls back to 未知供应商 when the provider no longer exists', async () => {
@@ -140,8 +143,10 @@ describe('migration 005-model-name-unique-global', () => {
 
     await migration.run();
 
-    expect(ModelRenameRecord.create).toHaveBeenCalledWith(
-      expect.objectContaining({ providerName: '未知供应商', oldName: 'gpt-4o', newName: 'gpt-4o-2' }),
+    expect(ModelRenameRecord.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { $setOnInsert: expect.objectContaining({ providerName: '未知供应商', oldName: 'gpt-4o', newName: 'gpt-4o-2' }) },
+      { upsert: true },
     );
   });
 
@@ -158,7 +163,26 @@ describe('migration 005-model-name-unique-global', () => {
     await migration.run();
 
     expect(Model.updateOne).not.toHaveBeenCalled();
-    expect(ModelRenameRecord.create).not.toHaveBeenCalled();
+    expect(ModelRenameRecord.updateOne).not.toHaveBeenCalled();
     expect(Model.collection.createIndex).not.toHaveBeenCalled();
+  });
+
+  it('T-MIG38: writes the ledger before renaming so a crash cannot leave a rename without a record (C-11)', async () => {
+    mockModels([
+      model('m-old', 'gpt-4o', 'provider-1', new Date('2026-01-01T00:00:00Z')),
+      model('m-new', 'gpt-4o', 'provider-2', new Date('2026-02-01T00:00:00Z')),
+    ]);
+
+    await migration.run();
+
+    const ledgerOrder = (ModelRenameRecord.updateOne as any).mock.invocationCallOrder[0];
+    const renameOrder = (Model.updateOne as any).mock.invocationCallOrder[0];
+    expect(ledgerOrder).toBeLessThan(renameOrder);
+    // upsert 键固定为 (modelId, batchId)，重复执行不会产生第二条台账
+    expect(ModelRenameRecord.updateOne).toHaveBeenCalledWith(
+      { modelId: 'm-new', batchId: migration.BATCH_ID },
+      expect.anything(),
+      { upsert: true },
+    );
   });
 });

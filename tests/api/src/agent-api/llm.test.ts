@@ -651,16 +651,52 @@ describe('Agent API scope regression (global config from admin backend)', () => 
     expect(body.data.providers.some((p: { id: string }) => p.id === globalProviderId)).toBe(false);
   });
 
-  it('should expose only a credential-free provider summary via Model.provider (T-SC5)', async () => {
-    const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
-    const body = await res.json();
-    expect(body.errors).toBeUndefined();
-    const found = body.data.models.find((m: { id: string }) => m.id === globalModelId);
-    expect(found).toBeDefined();
-    expect(found.provider).toBeDefined();
-    expect(found.provider.scope).toBe('global');
-    // 摘要仅暴露非敏感字段，不含 endpoint / credentialType / credentialValue
-    expect(Object.keys(found.provider).sort()).toEqual(['id', 'isEnabled', 'name', 'scope', 'type']);
+  it('should hide the backend provider from global models via Model.provider (T-SC5)', async () => {
+    // 自建一个 user 供应商（自动同步模型），用于对照「user 模型仍返回自身供应商摘要」
+    const createdUser = await gqlRequest(CREATE_PROVIDER, {
+      input: {
+        name: `scope-summary-user-${Date.now()}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, authToken);
+    const createdUserBody = await createdUser.json();
+    expect(createdUserBody.errors).toBeUndefined();
+    const userProviderId = createdUserBody.data.createProvider.id as string;
+
+    try {
+      const res = await gqlRequest(MODELS_QUERY, undefined, authToken);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+
+      // global（系统内置）模型：数据层收口，provider 与 providerId 均为 null，
+      // 后台供应商名称/类型/id 不进入前台网络响应（PRD §1.3/§4.2）。
+      const found = body.data.models.find((m: { id: string }) => m.id === globalModelId);
+      expect(found).toBeDefined();
+      expect(found.scope).toBe('global');
+      expect(found.provider).toBeNull();
+      expect(found.providerId).toBeNull();
+
+      // user 模型仍返回自身供应商摘要（不含 endpoint / 凭据）
+      const userModel = body.data.models.find(
+        (m: { providerId: string | null }) => m.providerId === userProviderId,
+      );
+      expect(userModel).toBeDefined();
+      expect(userModel.provider).not.toBeNull();
+      expect(typeof userModel.provider.name).toBe('string');
+      expect(userModel.provider.name.length).toBeGreaterThan(0);
+      expect(Object.keys(userModel.provider).sort()).toEqual([
+        'id',
+        'isEnabled',
+        'name',
+        'scope',
+        'type',
+      ]);
+    } finally {
+      await gqlRequest(DELETE_PROVIDER, { id: userProviderId }, authToken);
+    }
   });
 
   it('should reject queries for provider endpoint/credential via Model.provider (T-SC5)', async () => {

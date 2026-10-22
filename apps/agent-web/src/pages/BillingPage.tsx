@@ -39,11 +39,23 @@ export default function BillingPage() {
   const [invoicePage, setInvoicePage] = useState(1)
   const [callPage, setCallPage] = useState(1)
   const [receiptInvoice, setReceiptInvoice] = useState<MyBillingInvoiceData | null>(null)
+  // R10-7：PRD 功能点 7 的时间范围/类型/来源筛选。
+  const [invoiceFrom, setInvoiceFrom] = useState('')
+  const [invoiceTo, setInvoiceTo] = useState('')
+  const [invoiceType, setInvoiceType] = useState<'charge' | 'recharge' | 'adjust' | ''>('')
+  const [invoiceCategory, setInvoiceCategory] = useState<'container' | 'model' | 'manual' | ''>('')
   const pageSize = 20
 
   const accountQuery = useQuery<GetMyBillingAccountQuery>(MY_BILLING_ACCOUNT)
   const invoicesQuery = useQuery<GetMyBillingInvoicesQuery>(MY_BILLING_INVOICES, {
-    variables: { page: invoicePage, pageSize },
+    variables: {
+      from: invoiceFrom ? new Date(`${invoiceFrom}T00:00:00.000Z`).toISOString() : null,
+      to: invoiceTo ? new Date(`${invoiceTo}T23:59:59.999Z`).toISOString() : null,
+      type: invoiceType || null,
+      category: invoiceCategory || null,
+      page: invoicePage,
+      pageSize,
+    },
   })
   const receiptsQuery = useQuery<GetMyBillingReceiptQuery>(MY_BILLING_RECEIPT, {
     variables: { invoiceId: receiptInvoice?.id ?? '' },
@@ -168,6 +180,62 @@ export default function BillingPage() {
           <CardTitle>账单明细</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-3 flex flex-wrap items-end gap-2 text-sm">
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">开始日期</span>
+              <Input
+                type="date"
+                value={invoiceFrom}
+                onChange={(event) => {
+                  setInvoiceFrom(event.target.value)
+                  setInvoicePage(1)
+                }}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">结束日期</span>
+              <Input
+                type="date"
+                value={invoiceTo}
+                onChange={(event) => {
+                  setInvoiceTo(event.target.value)
+                  setInvoicePage(1)
+                }}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">类型</span>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={invoiceType}
+                onChange={(event) => {
+                  setInvoiceType(event.target.value as 'charge' | 'recharge' | 'adjust' | '')
+                  setInvoicePage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="charge">消费</option>
+                <option value="recharge">充值</option>
+                <option value="adjust">调整</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">来源</span>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={invoiceCategory}
+                onChange={(event) => {
+                  setInvoiceCategory(event.target.value as 'container' | 'model' | 'manual' | '')
+                  setInvoicePage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="container">容器</option>
+                <option value="model">模型</option>
+                <option value="manual">手工</option>
+              </select>
+            </label>
+          </div>
           {invoicesQuery.loading && !invoicesQuery.data ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : invoicesQuery.error ? (
@@ -215,7 +283,8 @@ export default function BillingPage() {
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums">{invoice.balanceAfter.toFixed(2)}</td>
                       <td className="py-2">
-                        {invoice.type === 'charge' ? (
+                        {/* R10-5：充值账单同样生成收据，只要 receiptId 存在即可查看。 */}
+                        {invoice.type === 'charge' || invoice.receiptId ? (
                           <Button size="sm" variant="ghost" onClick={() => setReceiptInvoice(invoice)}>
                             查看
                           </Button>
@@ -281,8 +350,20 @@ export default function BillingPage() {
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums">{call.cost.toFixed(2)}</td>
                       <td className="py-2">
-                        <Badge variant={call.status === 'aborted' ? 'destructive' : 'outline'}>
-                          {call.status === 'aborted' ? '中断调用' : call.status === 'failed' ? '失败' : '完成'}
+                        <Badge
+                          variant={
+                            call.status === 'aborted' || call.status === 'failed'
+                              ? 'destructive'
+                              : 'outline'
+                          }
+                        >
+                          {call.status === 'aborted'
+                            ? '中断调用'
+                            : call.status === 'failed'
+                              ? '失败'
+                              : call.status === 'started'
+                                ? '进行中/异常'
+                                : '完成'}
                           {call.estimated ? '（估算）' : ''}
                         </Badge>
                       </td>

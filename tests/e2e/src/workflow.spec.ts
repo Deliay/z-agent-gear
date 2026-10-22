@@ -516,9 +516,7 @@ test.describe('Workflow E2E', () => {
     const nav = page.locator(sidebar());
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
-    await nav.getByRole('button', { name: new RegExp(`wf-e1-host`) }).click();
-    const wsName = env.workspacePath.split('/').pop()!;
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
     await nav.getByRole('button', { name: '实例化工作流' }).click();
 
     // 实例化对话框：选择已配置工作流并命名实例
@@ -1417,9 +1415,7 @@ test.describe('Workflow E2E', () => {
 
     await loginViaUI(page, username);
     const nav = page.locator(sidebar());
-    await nav.getByRole('button', { name: new RegExp(hostname) }).click();
-    const wsName = workspacePath.split('/').pop()!;
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
     await nav.getByRole('button', { name: '实例化工作流' }).click();
 
     const dialog = page.getByRole('dialog');
@@ -1469,9 +1465,7 @@ test.describe('Workflow E2E', () => {
 
     await loginViaUI(page, username);
     const nav = page.locator(sidebar());
-    await nav.getByRole('button', { name: new RegExp(hostname) }).click();
-    const wsName = workspacePath.split('/').pop()!;
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
     await nav.getByRole('button', { name: '实例化工作流' }).click();
 
     const dialog = page.getByRole('dialog');
@@ -1850,9 +1844,7 @@ test.describe('Workflow E2E', () => {
     const nav = page.locator(sidebar());
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
-    await nav.getByRole('button', { name: new RegExp(`wf-e22-host`) }).click();
-    const wsName = env.workspacePath.split('/').pop()!;
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
     await nav.getByRole('button', { name: '实例化工作流' }).click();
 
     // 打开实例化对话框
@@ -1896,9 +1888,7 @@ test.describe('Workflow E2E', () => {
     await page.goto('/sessions');
     await page.waitForTimeout(500);
 
-    // 重新通过侧边栏打开对话框
-    await nav.getByRole('button', { name: new RegExp(`wf-e22-host`) }).click();
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 重新通过侧边栏打开对话框（控制器默认展开，对话框自动选择首个工作区）
     await nav.getByRole('button', { name: '实例化工作流' }).click();
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
@@ -1926,9 +1916,7 @@ test.describe('Workflow E2E', () => {
     const nav = page.locator(sidebar());
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
-    await nav.getByRole('button', { name: new RegExp(`wf-e23-host`) }).click();
-    const wsName = env.workspacePath.split('/').pop()!;
-    await nav.getByRole('button', { name: new RegExp(wsName) }).click();
+    // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
     await nav.getByRole('button', { name: '实例化工作流' }).click();
 
     // 打开实例化对话框

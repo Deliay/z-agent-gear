@@ -155,6 +155,9 @@ export class ModelService {
    * 3) 反之上游连通性门禁失败 → `PROVIDER_CONNECTIVITY_ERROR`；
    * 4) 全局重名 → `Model name already exists: <names>`；
    * 5) `insertMany(ordered: false)` 写入，并发冲突由唯一索引兜底并映射为同一文案。
+   *
+   * 注：names 由调用方提交（前端仅提交上游清单中的勾选项）；本服务不校验 names
+   * 是否属于当前 `fetchModels` 清单，只做连通性门禁（裁决 5，契约与 PRD §3.5 已声明）。
    */
   async importModels(providerId: string, rawNames: string[]): Promise<MappedModel[]> {
     const provider = await this.findGlobalProvider(providerId);

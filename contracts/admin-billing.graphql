@@ -137,7 +137,7 @@ type BillingApiKeyPayload {
 }
 
 type ReconciliationReport {
-  line: String! # funds | metering | resources
+  line: String! # funds | metering | resources | events | rollups | apiCalls | containerInvoices
   ranAt: String!
   checkedCount: Int!
   errorCount: Int!
@@ -156,7 +156,7 @@ type BillingApiCall {
   cachedInputTokens: Int!
   outputTokens: Int!
   cost: Float!
-  status: String! # completed | aborted | failed
+  status: String! # started | completed | aborted | failed
   estimated: Boolean!
   invoiceSeq: Int
   startedAt: String!

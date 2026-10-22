@@ -1,6 +1,6 @@
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useAuth } from '../stores/auth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import Sidebar from '../components/Sidebar';
@@ -22,6 +22,7 @@ export default function MainLayout() {
   const { user, loading } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {
@@ -32,6 +33,40 @@ export default function MainLayout() {
   } = useQuery<HomeOverviewQuery>(HOME_OVERVIEW, {
     pollInterval: 15000,
   });
+
+  // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
+  // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
+  const homeData = data?.homeOverview ?? null;
+
+  // D-2：云电脑就绪且服务端已建好默认会话时，自动进入该会话。
+  // - `startingHosts` 记录本次会话观测到过 STARTING 的主机：即使中间轮询到 RUNNING+null
+  //   （历史遗留/补建路径），后续 defaultSessionId 到达仍可补跳（R2-5/R2-21）。
+  // - 首次加载已是 RUNNING 的旧主机不跳转；整个页面生命周期只自动进入一次，避免多主机
+  //   同轮就绪时 navigate 互相覆盖。
+  const startingCloudHosts = useRef<Set<string>>(new Set());
+  const navigatedCloudHosts = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const controller of homeData?.controllers ?? []) {
+      const cloudHost = controller.type === 'cloud' ? controller.cloudHost : null;
+      if (!cloudHost) continue;
+
+      if (cloudHost.status === 'STARTING') {
+        startingCloudHosts.current.add(cloudHost.id);
+      }
+      if (
+        cloudHost.status !== 'RUNNING' ||
+        !startingCloudHosts.current.has(cloudHost.id) ||
+        !cloudHost.defaultSessionId ||
+        cloudHost.deletedAt ||
+        navigatedCloudHosts.current.size > 0
+      ) {
+        continue;
+      }
+
+      navigatedCloudHosts.current.add(cloudHost.id);
+      navigate(`/sessions/${cloudHost.defaultSessionId}`);
+    }
+  }, [homeData, navigate]);
 
   if (loading) {
     return <FullPageSpinner />;
@@ -47,10 +82,6 @@ export default function MainLayout() {
       </div>
     );
   }
-
-  // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
-  // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
-  const homeData = data?.homeOverview ?? null;
 
   let layout: ReactNode;
 

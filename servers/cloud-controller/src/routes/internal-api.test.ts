@@ -596,6 +596,7 @@ describe('internal management API', () => {
     const stored = await repo.findById(body.id as string);
     expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
     expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
+    expect(stored?.agentGearMinVersion).toBe('2.6.0');
 
     // Job env 含 harness 变量且模型 Key 不进入 Job env
     const env = k8sClient.getEnv(body.name as string);
@@ -611,6 +612,37 @@ describe('internal management API', () => {
     const manifest = k8sClient.getManifest(body.name as string)!;
     expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThanOrEqual(3598);
     expect(manifest.spec.activeDeadlineSeconds).toBeLessThanOrEqual(3600);
+  });
+
+  it('C-4: agentGearMinVersion 落库为 max(服务端常量, 请求值)', async () => {
+    const base = {
+      purpose: 'harness',
+      hostId: 'host-minver',
+      refId: 'ck-minver',
+      userId: 'user-minver',
+      hostName: 'pc-minver',
+      harnessTypes: ['opencode'],
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_minver',
+        modelApiKey: 'zag_sk_minver',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/root/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    };
+
+    const lower = await createContainer({ ...base, agentGearMinVersion: '2.1.0' });
+    expect(lower.status).toBe(201);
+    const lowerBody = (await lower.json()) as { id: string };
+    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.6.0');
+
+    const higher = await createContainer({ ...base, agentGearMinVersion: '2.10.0' });
+    expect(higher.status).toBe(201);
+    const higherBody = (await higher.json()) as { id: string };
+    expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.10.0');
   });
 
   it('T-CC5: harness 缺字段 / secrets 不完整 / harnessTypes 非法 / workloadPlan 缺失 → 400 INVALID_HARNESS 且不创建 Job', async () => {

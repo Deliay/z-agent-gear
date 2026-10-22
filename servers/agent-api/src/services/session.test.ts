@@ -1852,6 +1852,58 @@ describe('SessionService', () => {
       ).rejects.toThrow('cloud host is not running');
     });
 
+    it('rejects createSession for an ACP type outside the cloud host harnessTypes', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'RUNNING', harnessTypes: ['OPENCODE'] }),
+      } as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'claude_code',
+          workspaceId: 'ws-1',
+        }),
+      ).rejects.toThrow('unsupported harness type: claude_code');
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('A-2 rejects send/cancel writes to a stopped cloud host session', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'ended' })),
+      } as never);
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'STOPPED' }),
+      } as never);
+
+      await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+        'session is ended',
+      );
+      await expect(sessionService.cancelGeneration('sess-1', 'user-1')).rejects.toThrow(
+        'session is ended',
+      );
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('keeps normal ended sessions writable', async () => {
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'ended' })),
+      } as never);
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'local' }),
+      } as never);
+
+      await expect(
+        sessionService.assertSessionWritable('sess-1', 'user-1'),
+      ).resolves.toBeUndefined();
+      expect(CloudHost.findOne).not.toHaveBeenCalled();
+    });
+
     it('rejects resume when cloud host is stopped', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockSessionDoc({ status: 'ended' })),
@@ -1884,5 +1936,33 @@ describe('SessionService', () => {
       expect(mockRedis.publish).toHaveBeenCalled();
       expect(CloudHost.findOne).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('SessionService - capability snapshot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  });
+
+  it('T-SS1: mapSession 含快照时原样返回，无快照返回 null', async () => {
+    const snapshot = {
+      protocolVersion: 1,
+      agentInfo: { name: 'OpenCode', version: '2.0.31' },
+      features: [{ id: 'session.load', status: 'supported', detail: null }],
+      raw: { agentCapabilities: {}, authMethods: [], clientCapabilities: {} },
+    };
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(mockSessionDoc({ agentCapabilities: snapshot })),
+    } as never);
+
+    const withSnapshot = await sessionService.findById('sess-1', 'user-1');
+    expect(withSnapshot!.agentCapabilities).toEqual(snapshot);
+
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(mockSessionDoc()),
+    } as never);
+    const withoutSnapshot = await sessionService.findById('sess-1', 'user-1');
+    expect(withoutSnapshot!.agentCapabilities).toBeNull();
   });
 });

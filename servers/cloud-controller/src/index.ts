@@ -38,9 +38,15 @@ export interface CloudControllerApp {
   stop: () => Promise<void>;
 }
 
-/** 云电脑终态映射（契约 A19）：exited→stopped、failed→failed、其它→stopped。 */
-export function harnessTerminalStatus(status: string): 'stopped' | 'failed' {
-  return status === 'failed' ? 'failed' : 'stopped';
+/**
+ * 云电脑终态映射（契约 A19）：exited→stopped、failed→failed、其它→stopped。
+ *
+ * 必须工作负载失败走 `forceDestroy` 链路（终态固定 `exited`），仅靠 `status==='failed'`
+ * 会被误映射为「已销毁」并丢弃 `exitReason`（C-1）。因此 `mustFailure===true` 时同样
+ * 映射为 `failed`，让 agent-api 落 FAILED + failureReason。
+ */
+export function harnessTerminalStatus(status: string, mustFailure = false): 'stopped' | 'failed' {
+  return status === 'failed' || mustFailure ? 'failed' : 'stopped';
 }
 
 /** harness 生命周期回调重试（agent-api/admin-api 短暂不可达时退避；最终失败由外层钩子再重试并记 error）。 */
@@ -197,8 +203,9 @@ export function createCloudControllerApp(): CloudControllerApp {
         }
         let callbackError: unknown;
         if (container.purpose === 'harness' && container.hostId) {
-          // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped。
-          const status = harnessTerminalStatus(container.status);
+          // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped；
+          // 必须工作负载失败（destroy 链路终态 exited + mustFailure）按 failed 上报并保留原因（C-1）。
+          const status = harnessTerminalStatus(container.status, container.mustFailure);
           try {
             await retryHarnessCallback(
               `terminal callback hostId=${container.hostId}`,

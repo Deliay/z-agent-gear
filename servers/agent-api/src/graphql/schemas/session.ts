@@ -43,6 +43,38 @@ export const sessionTypeDefs = `#graphql
     id: String!
     name: String!
     provider: String
+    # 来源推断（仅 Session.availableModels 解析器填充，其余位置为 null）
+    source: AgentModelSource
+    sourceProvider: String
+    group: String
+    basis: String
+  }
+
+  enum AgentFeatureStatus {
+    supported
+    partial
+    unsupported
+  }
+
+  enum AgentModelSource {
+    platform
+    agent
+    custom
+    unknown
+  }
+
+  type AgentFeatureSupport {
+    id: String!
+    status: AgentFeatureStatus!
+    detail: String
+  }
+
+  type AgentCapabilitySnapshot {
+    protocolVersion: Int
+    agentInfo: AgentInfo
+    features: [AgentFeatureSupport!]!
+    # 对端声明原文（agentCapabilities / authMethods / clientCapabilities），前端不查询
+    raw: JSON
   }
 
   type SessionConfigOptionValue {
@@ -90,6 +122,10 @@ export const sessionTypeDefs = `#graphql
     userId: ID!
     controllerId: ID!
     controllerName: String!
+    # 控制器类型；软删除云电脑的 Controller 可能不在列表结果中，会话详情以此判定只读
+    controllerType: ControllerType
+    # 会话所属云电脑（含已软删除留档）；普通主机/不存在时为 null
+    cloudHost: CloudHost
     acpServerType: AcpServerType!
     status: SessionStatus!
     title: String
@@ -103,6 +139,10 @@ export const sessionTypeDefs = `#graphql
     availableModels: [AgentModelInfo!]
     currentModelId: String
     configOptions: [SessionConfigOption!]
+    # 能力快照（会话初始化时协商结果；旧会话为 null）
+    agentCapabilities: AgentCapabilitySnapshot
+    # 能力清单（由快照归一化；无快照返回空数组）
+    features: [AgentFeatureSupport!]!
     promptCapabilities: PromptCapabilities
     agentInfo: AgentInfo
     authRequired: Boolean!

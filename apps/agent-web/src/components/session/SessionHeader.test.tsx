@@ -219,3 +219,79 @@ describe('SessionHeader', () => {
     expect(screen.getByText('Session')).toBeDefined();
   });
 });
+
+describe('SessionHeader - 能力入口与门控', () => {
+  const baseSession = {
+    id: 'sess-1',
+    userId: 'user-1',
+    controllerId: 'ctrl-1',
+    controllerName: 'My Dev Machine',
+    acpServerType: 'opencode',
+    status: 'ended',
+    externalSessionId: null,
+    cwd: '/home/user/project',
+    createdAt: '2026-05-19T10:00:00.000Z',
+    updatedAt: '2026-05-19T10:00:00.000Z',
+    endedAt: null,
+  };
+
+  function makeCapabilities(blockedIds: string[]) {
+    return {
+      features: blockedIds.map((id) => ({ id, status: 'unsupported' as const, detail: `未声明 ${id}` })),
+      hasSnapshot: true,
+      status: (id: string) => (blockedIds.includes(id) ? 'unsupported' as const : 'supported' as const),
+      detail: (id: string) => (blockedIds.includes(id) ? `未声明 ${id}` : null),
+      isBlocked: (id: string) => blockedIds.includes(id),
+    };
+  }
+
+  it('渲染能力清单入口按钮', () => {
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onContinue={vi.fn()}
+        controllerOnline
+        capabilities={makeCapabilities([])}
+      />,
+    );
+    expect(screen.getByLabelText('能力清单')).toBeDefined();
+  });
+
+  it('T-W11: resume+load 均 unsupported 时「继续」禁用', () => {
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onContinue={vi.fn()}
+        controllerOnline
+        capabilities={makeCapabilities(['session.resume', 'session.load'])}
+      />,
+    );
+
+    const continueButton = screen.getByText('继续') as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(true);
+    expect(continueButton.getAttribute('title')).toBe('当前 Agent 不支持会话恢复');
+  });
+
+  it('T-W11b: 仅 load supported（resume unsupported）时「继续」可用', () => {
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onContinue={vi.fn()}
+        controllerOnline
+        capabilities={makeCapabilities(['session.resume'])}
+      />,
+    );
+
+    const continueButton = screen.getByText('继续') as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(false);
+  });
+});
