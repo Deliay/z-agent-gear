@@ -1,4 +1,5 @@
 import { gql } from '@apollo/client'
+import { CLOUD_HOST_SETUP_OPERATION_FIELDS } from './queries'
 
 export const CREATE_PROVIDER = gql`
   mutation CreateProvider($input: ProviderInput!) {
@@ -472,6 +473,33 @@ export const DELETE_CLOUD_HOST = gql`
   mutation DeleteCloudHost($id: ID!) {
     deleteCloudHost(id: $id)
   }
+`
+
+export const INSTALL_CLOUD_HOST_WORKLOAD = gql`
+  mutation InstallCloudHostWorkload($input: InstallCloudHostWorkloadInput!) {
+    installCloudHostWorkload(input: $input) {
+      ...CloudHostSetupOperationFields
+    }
+  }
+  ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
+`
+
+export const SETUP_CLOUD_HOST_GITHUB_PROJECT = gql`
+  mutation SetupCloudHostGithubProject($input: SetupCloudHostGithubProjectInput!) {
+    setupCloudHostGithubProject(input: $input) {
+      ...CloudHostSetupOperationFields
+    }
+  }
+  ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
+`
+
+export const RETRY_CLOUD_HOST_SETUP_OPERATION = gql`
+  mutation RetryCloudHostSetupOperation($id: ID!) {
+    retryCloudHostSetupOperation(id: $id) {
+      ...CloudHostSetupOperationFields
+    }
+  }
+  ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
 `
 
 // ---------- 我的费用（contracts/billing.graphql） ----------

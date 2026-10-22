@@ -11,8 +11,10 @@ import {
   parseInitWaitMs,
   readCloudHostEnv,
   startCloudHostSupervisor,
+  type CredentialManagerLike,
 } from './supervisor.js';
 import type { ConnectToServerOptions } from '../socketio-client.js';
+import type { GithubCredentialRefreshResult } from '../github/credential-manager.js';
 
 const TMP_BASE = '/tmp/opencode';
 
@@ -34,7 +36,11 @@ function fakeSocket(): FakeSocket {
   return { disconnect: vi.fn(), emit: vi.fn() };
 }
 
-function setup(overrides: { env?: NodeJS.ProcessEnv; makeDir?: (path: string) => Promise<void> } = {}) {
+function setup(overrides: {
+  env?: NodeJS.ProcessEnv;
+  makeDir?: (path: string) => Promise<void>;
+  credentialManager?: CredentialManagerLike;
+} = {}) {
   const worker = fakeSocket();
   const controller = fakeSocket();
   const connect = vi.fn((endpoint: string, key: string, options?: ConnectToServerOptions) => {
@@ -58,7 +64,18 @@ function setup(overrides: { env?: NodeJS.ProcessEnv; makeDir?: (path: string) =>
       exit,
       log: (message: string) => logs.push(message),
       installSignalHandlers: false,
+      credentialManager: overrides.credentialManager,
     },
+  };
+}
+
+function fakeCredentialManager(
+  result: GithubCredentialRefreshResult = { ok: true, expiresAt: new Date('2026-10-22T12:00:00Z') },
+): CredentialManagerLike {
+  return {
+    start: vi.fn(),
+    stop: vi.fn(),
+    refreshNow: vi.fn(async () => result),
   };
 }
 
@@ -319,5 +336,83 @@ describe('startCloudHostSupervisor', () => {
     await expect(startCloudHostSupervisor(context.deps)).rejects.toBeInstanceOf(CloudHostEnvError);
     expect(context.connect).not.toHaveBeenCalled();
     expect(context.exit).not.toHaveBeenCalled();
+  });
+});
+
+describe('cloud host github credential manager (T-SUP-G)', () => {
+  it('T-SUP-G1: starts the credential manager and wires githubAuth batches to refreshNow', async () => {
+    const credentials = fakeCredentialManager();
+    const context = setup({
+      env: { ...BASE_ENV, ZAG_AGENT_API_ENDPOINT: 'http://agent-api:8002', ZAG_CONTROLLER_ID: 'c-1' },
+      credentialManager: credentials,
+    });
+
+    await startCloudHostSupervisor(context.deps);
+
+    expect(credentials.start).toHaveBeenCalledTimes(1);
+
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+    expect(workerOptions.onBeforeWorkloadBatch).toBeTypeOf('function');
+
+    await workerOptions.onBeforeWorkloadBatch?.({
+      phase: 'init',
+      githubAuth: true,
+      items: [{ logId: 'x', workloadName: 'Git 项目设置', script: 'echo', timeoutMs: 1000 }],
+    });
+    expect(credentials.refreshNow).toHaveBeenCalledTimes(1);
+
+    // 非 githubAuth 批次不触发凭据申请
+    await workerOptions.onBeforeWorkloadBatch?.({
+      phase: 'init',
+      items: [{ logId: 'y', workloadName: 'Other', script: 'echo', timeoutMs: 1000 }],
+    });
+    expect(credentials.refreshNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-SUP-G1b: no-binding and other failures surface readable errors to the executor', async () => {
+    const noBinding = fakeCredentialManager({ ok: false, error: 'no-binding' });
+    const context = setup({ credentialManager: noBinding });
+    await startCloudHostSupervisor(context.deps);
+    const options = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+    const payload = {
+      phase: 'init' as const,
+      githubAuth: true,
+      items: [{ logId: 'x', workloadName: 'Git 项目设置', script: 'echo', timeoutMs: 1000 }],
+    };
+
+    await expect(options.onBeforeWorkloadBatch?.(payload)).rejects.toThrow('未设置 Github 项目');
+
+    const invalid = fakeCredentialManager({ ok: false, error: 'Github 凭据无效（HTTP 401）' });
+    const context2 = setup({ credentialManager: invalid });
+    await startCloudHostSupervisor(context2.deps);
+    const options2 = context2.connect.mock.calls[0][2] as ConnectToServerOptions;
+    await expect(options2.onBeforeWorkloadBatch?.(payload)).rejects.toThrow('Github 凭据无效');
+  });
+
+  it('T-SUP-G2: shutdown stops the credential manager (idempotently)', async () => {
+    const credentials = fakeCredentialManager();
+    const context = setup({ credentialManager: credentials });
+    const handle = await startCloudHostSupervisor(context.deps);
+
+    handle.shutdown('test');
+    handle.shutdown('again');
+
+    expect(credentials.stop).toHaveBeenCalledTimes(1);
+    expect(context.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('T-SUP-G3: missing credential env does not block the supervisor, only warns', async () => {
+    const context = setup({ env: { ...BASE_ENV } });
+
+    const handle = await startCloudHostSupervisor(context.deps);
+
+    expect(handle.workerSocket).toBe(context.worker);
+    expect(context.connect).toHaveBeenCalledTimes(1);
+    expect(context.exit).not.toHaveBeenCalled();
+    const output = context.logs.join('\n');
+    expect(output).toContain('disabled');
+    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
+    expect(output).toContain('ZAG_CONTROLLER_ID');
+    expect(output).not.toContain(BASE_ENV.ZAG_HOST_KEY);
   });
 });

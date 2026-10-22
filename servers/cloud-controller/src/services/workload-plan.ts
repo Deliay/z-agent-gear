@@ -158,6 +158,109 @@ export function resolveFallbackWorkloadPlan(
 }
 
 /**
+ * 归一用户显式参数：以默认值为底，逐项覆盖并按 `paramSchema` 校验。
+ * 未知参数 / 类型不符 / select 不在 options / text 超长均抛 `WorkloadPlanError`。
+ */
+export function normalizeProvidedParams(
+  paramSchema: readonly WorkloadParamField[] | undefined,
+  provided: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const params = normalizeDefaultParams(paramSchema);
+  if (!provided) return params;
+  const fields = new Map((paramSchema ?? []).map((field) => [field.key, field]));
+  for (const [key, raw] of Object.entries(provided)) {
+    const field = fields.get(key);
+    if (!field) throw new WorkloadPlanError(`unknown parameter: ${key}`);
+    const type = String(field.type).toLowerCase();
+    const options = field.options ?? [];
+    switch (type) {
+      case 'select':
+        if (typeof raw !== 'string' || !options.includes(raw)) {
+          throw new WorkloadPlanError(`invalid value for parameter ${key}`);
+        }
+        params[key] = raw;
+        break;
+      case 'multi_select':
+        if (
+          !Array.isArray(raw) ||
+          !raw.every((item) => typeof item === 'string' && options.includes(item))
+        ) {
+          throw new WorkloadPlanError(`invalid value for parameter ${key}`);
+        }
+        params[key] = [...new Set(raw as string[])];
+        break;
+      case 'text':
+        if (typeof raw !== 'string' || raw.length > MAX_PARAM_TEXT_LENGTH) {
+          throw new WorkloadPlanError(`invalid value for parameter ${key}`);
+        }
+        params[key] = raw;
+        break;
+      case 'boolean':
+        if (typeof raw !== 'boolean') {
+          throw new WorkloadPlanError(`invalid value for parameter ${key}`);
+        }
+        params[key] = raw;
+        break;
+      default:
+        throw new WorkloadPlanError(`invalid value for parameter ${key}`);
+    }
+  }
+  return params;
+}
+
+/**
+ * runtime 安装计划：显式工作负载合并用户参数 + 后序 DFS 展开隐式依赖（默认参数）。
+ *
+ * @throws WorkloadPlanError 工作负载缺失、参数非法、依赖环、展开条数 > 10。
+ */
+export function resolveRuntimeWorkloadPlan(input: {
+  workloadId: string;
+  params?: Record<string, unknown>;
+  definitions: readonly WorkloadPlanDefinition[];
+}): WorkloadPlanEntry[] {
+  const byId = new Map(input.definitions.map((definition) => [definition.id, definition]));
+  if (!byId.has(input.workloadId)) {
+    throw new WorkloadPlanError('workload not found');
+  }
+
+  const state = new Map<string, 'visiting' | 'done'>();
+  const result: WorkloadPlanEntry[] = [];
+
+  const visit = (id: string, path: readonly string[], explicit: boolean): void => {
+    const color = state.get(id);
+    if (color === 'done') return;
+    if (color === 'visiting') {
+      const cycle = [...path.slice(path.indexOf(id)), id];
+      throw new WorkloadPlanError(`dependency cycle detected: ${cycle.join(' -> ')}`);
+    }
+    const definition = byId.get(id);
+    if (!definition) {
+      throw new WorkloadPlanError(`dependency workload not found: ${id}`);
+    }
+    state.set(id, 'visiting');
+    for (const dependencyId of definition.dependsOnWorkloadIds ?? []) {
+      visit(dependencyId, [...path, id], false);
+    }
+    state.set(id, 'done');
+    result.push({
+      workloadId: id,
+      params: explicit
+        ? normalizeProvidedParams(definition.paramSchema, input.params)
+        : normalizeDefaultParams(definition.paramSchema),
+      implicit: !explicit,
+      required: false,
+    });
+  };
+
+  visit(input.workloadId, [], true);
+
+  if (result.length > MAX_WORKLOAD_PLAN_ENTRIES) {
+    throw new WorkloadPlanError('expanded workloads exceed 10');
+  }
+  return result;
+}
+
+/**
  * 按需（含传递依赖）批量加载定义快照：从 `ids` 出发 BFS `dependsOnWorkloadIds`，
  * 使纯函数 `resolveFallbackWorkloadPlan` 拿到完整定义。缺失的依赖不会出现在结果里，
  * 由纯函数负责报错（`dependency workload not found`）。

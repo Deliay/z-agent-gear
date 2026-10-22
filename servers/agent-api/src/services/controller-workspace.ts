@@ -65,6 +65,18 @@ export class ControllerWorkspaceService {
     userId: string,
     workspacePath: string,
   ): Promise<Record<string, unknown>> {
+    return this.ensureWorkspace(controllerId, userId, workspacePath);
+  }
+
+  /**
+   * 按路径幂等 upsert 工作区（不触发 10 个工作区上限；名称取路径末段）。
+   * 供云电脑默认工作区与 Git 项目 clone 目标目录复用。
+   */
+  async ensureWorkspace(
+    controllerId: string,
+    userId: string,
+    workspacePath: string,
+  ): Promise<Record<string, unknown>> {
     const path = workspacePath.trim() || '/root/workspace';
     const name = path.split('/').filter(Boolean).pop() || 'workspace';
     const workspace = await ControllerWorkspace.findOneAndUpdate(

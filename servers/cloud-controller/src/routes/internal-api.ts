@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import mongoose from 'mongoose';
 import {
   STARTABLE_PURPOSES,
   SUPPORTED_HARNESS_TYPES,
@@ -26,7 +27,15 @@ import {
   WorkloadPlanError,
   collectWorkloadDefinitions,
   resolveFallbackWorkloadPlan,
+  resolveRuntimeWorkloadPlan,
 } from '../services/workload-plan.js';
+import {
+  ContainerBusyError,
+  ContainerNotOnlineError,
+  InvalidRuntimeBatchError,
+  RuntimeContainerNotFoundError,
+  type WorkloadDispatcher,
+} from '../services/workload-dispatcher.js';
 
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 12）。 */
 export const MAX_WORKLOAD_IDS = 10;
@@ -47,6 +56,12 @@ export interface CloudContainerJson {
   workloadIds: string[];
   workloadPlan: WorkloadPlanEntry[];
   currentWorkloadName: string | null;
+  installedWorkloads: Array<{
+    workloadId: string;
+    name: string;
+    installedAt: string;
+    source: string;
+  }>;
   billingAccountId: string | null;
   billingStartedAt: string | null;
   hostId: string | null;
@@ -80,6 +95,12 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
       required: entry.required === true,
     })),
     currentWorkloadName: entity.currentWorkloadName ?? null,
+    installedWorkloads: (entity.installedWorkloads ?? []).map((item) => ({
+      workloadId: item.workloadId,
+      name: item.name,
+      installedAt: item.installedAt.toISOString(),
+      source: item.source,
+    })),
     billingAccountId: entity.billingAccountId ?? null,
     billingStartedAt: entity.billingStartedAt ? entity.billingStartedAt.toISOString() : null,
     // 云电脑字段（secrets 永不返回）
@@ -104,6 +125,8 @@ export function toCloudWorkloadLogJson(entity: CloudWorkloadLogEntity): Record<s
     script: entity.script,
     params: entity.params ?? {},
     required: entity.required === true,
+    trigger: entity.trigger ?? 'start',
+    source: entity.source ?? 'admin',
     exitCode: entity.exitCode ?? null,
     log: entity.log,
     startedAt: entity.startedAt ? entity.startedAt.toISOString() : null,
@@ -115,6 +138,7 @@ export function toCloudWorkloadLogJson(entity: CloudWorkloadLogEntity): Record<s
 export interface InternalRouterDeps {
   workloadRepository?: WorkloadRepository;
   workloadLogRepository?: WorkloadLogRepository;
+  workloadDispatcher?: WorkloadDispatcher;
 }
 
 /**
@@ -189,6 +213,7 @@ interface ParsedHarnessRequest {
   controllerKeyId: string | null;
   containerApiKeyId: string | null;
   agentGearMinVersion: string;
+  controllerId: string | null;
   expiresAt: Date;
   secrets: HarnessSecrets;
 }
@@ -263,6 +288,8 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
   };
   if (Object.values(secrets).some((value) => value.length === 0)) return null;
 
+  const controllerId = nonEmptyString(body.controllerId);
+
   return {
     hostId,
     refId,
@@ -272,6 +299,7 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     controllerKeyId,
     containerApiKeyId,
     agentGearMinVersion,
+    controllerId,
     expiresAt,
     secrets,
   };
@@ -284,6 +312,7 @@ export function createInternalRouter(
   const router = Router();
   const workloadRepository = deps.workloadRepository ?? new InMemoryWorkloadRepository();
   const workloadLogRepository = deps.workloadLogRepository ?? new InMemoryWorkloadLogRepository();
+  const workloadDispatcher = deps.workloadDispatcher;
 
   router.get('/containers', async (req: Request, res: Response) => {
     try {
@@ -415,6 +444,7 @@ export function createInternalRouter(
           containerApiKeyId: harness.containerApiKeyId,
           userId: harness.userId,
           expiresAt: harness.expiresAt,
+          controllerId: harness.controllerId,
           secrets: harness.secrets,
         }
       : {};
@@ -455,6 +485,180 @@ export function createInternalRouter(
         error: 'INTERNAL_ERROR',
         message: err instanceof Error ? err.message : String(err),
       });
+    }
+  });
+
+  function respondRuntimeError(res: Response, err: unknown): void {
+    if (err instanceof RuntimeContainerNotFoundError) {
+      res.status(404).json({ error: 'NOT_FOUND', message: err.message });
+      return;
+    }
+    if (err instanceof ContainerNotOnlineError) {
+      res.status(409).json({ error: 'CONTAINER_NOT_ONLINE', message: err.message });
+      return;
+    }
+    if (err instanceof ContainerBusyError) {
+      res.status(409).json({ error: 'CONTAINER_BUSY', message: err.message });
+      return;
+    }
+    if (err instanceof InvalidRuntimeBatchError) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
+      return;
+    }
+    if (err instanceof WorkloadPlanError) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
+      return;
+    }
+    res.status(500).json({
+      error: 'INTERNAL_ERROR',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  function parseSource(raw: unknown): 'user' | 'mcp' | 'system' | null {
+    if (raw === undefined || raw === null) return 'user';
+    return raw === 'user' || raw === 'mcp' || raw === 'system' ? raw : null;
+  }
+
+  router.post('/containers/:containerId/workloads', async (req: Request, res: Response) => {
+    if (!workloadDispatcher) {
+      res.status(503).json({ error: 'UNAVAILABLE', message: 'workload dispatcher not configured' });
+      return;
+    }
+    const containerId = String(req.params.containerId);
+    if (!mongoose.isValidObjectId(containerId)) {
+      res.status(404).json({ error: 'NOT_FOUND', message: `Container not found: ${containerId}` });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const workloadId = typeof body.workloadId === 'string' ? body.workloadId : '';
+    if (!mongoose.isValidObjectId(workloadId)) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: 'workloadId 非法' });
+      return;
+    }
+    if (
+      body.params !== undefined &&
+      body.params !== null &&
+      (typeof body.params !== 'object' || Array.isArray(body.params))
+    ) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: 'params 非法' });
+      return;
+    }
+    const source = parseSource(body.source);
+    if (!source || source === 'system') {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: 'source 非法' });
+      return;
+    }
+
+    try {
+      const definitions = await collectWorkloadDefinitions([workloadId], (ids) =>
+        workloadRepository.findByIds(ids),
+      );
+      const plan = resolveRuntimeWorkloadPlan({
+        workloadId,
+        params:
+          body.params && typeof body.params === 'object' && !Array.isArray(body.params)
+            ? (body.params as Record<string, unknown>)
+            : {},
+        definitions,
+      });
+      const workloads = await workloadRepository.findByIds(plan.map((entry) => entry.workloadId));
+      const byId = new Map(workloads.map((workload) => [workload.id, workload]));
+      const entries = plan
+        .map((entry) => {
+          const workload = byId.get(entry.workloadId);
+          if (!workload) return null;
+          const script = workload.initScript ?? '';
+          if (script.trim().length === 0) return null;
+          return {
+            workloadId: entry.workloadId,
+            workloadName: workload.name,
+            script,
+            params: entry.params ?? {},
+          };
+        })
+        .filter(
+          (entry): entry is NonNullable<typeof entry> => entry !== null,
+        );
+      if (entries.length === 0) {
+        res.status(400).json({ error: 'INVALID_WORKLOAD', message: '工作负载无初始化脚本' });
+        return;
+      }
+      const result = await workloadDispatcher.startRuntimeBatch(containerId, {
+        entries,
+        source,
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      respondRuntimeError(res, err);
+    }
+  });
+
+  router.post('/containers/:containerId/runtime-scripts', async (req: Request, res: Response) => {
+    if (!workloadDispatcher) {
+      res.status(503).json({ error: 'UNAVAILABLE', message: 'workload dispatcher not configured' });
+      return;
+    }
+    const containerId = String(req.params.containerId);
+    if (!mongoose.isValidObjectId(containerId)) {
+      res.status(404).json({ error: 'NOT_FOUND', message: `Container not found: ${containerId}` });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const workloadId = typeof body.workloadId === 'string' ? body.workloadId : '';
+    const workloadName =
+      typeof body.workloadName === 'string' ? body.workloadName.trim() : '';
+    const script = typeof body.script === 'string' ? body.script : '';
+    if (
+      !mongoose.isValidObjectId(workloadId) ||
+      !workloadName ||
+      script.trim().length === 0 ||
+      Buffer.byteLength(script, 'utf8') > 16 * 1024
+    ) {
+      res.status(400).json({ error: 'INVALID_SCRIPT', message: '脚本参数非法' });
+      return;
+    }
+    if (
+      body.params !== undefined &&
+      body.params !== null &&
+      (typeof body.params !== 'object' || Array.isArray(body.params))
+    ) {
+      res.status(400).json({ error: 'INVALID_SCRIPT', message: 'params 非法' });
+      return;
+    }
+    if (
+      body.githubAuth !== undefined &&
+      body.githubAuth !== null &&
+      typeof body.githubAuth !== 'boolean'
+    ) {
+      res.status(400).json({ error: 'INVALID_SCRIPT', message: 'githubAuth 非法' });
+      return;
+    }
+    const source = parseSource(body.source);
+    if (!source) {
+      res.status(400).json({ error: 'INVALID_SCRIPT', message: 'source 非法' });
+      return;
+    }
+
+    try {
+      const result = await workloadDispatcher.startRuntimeBatch(containerId, {
+        entries: [
+          {
+            workloadId,
+            workloadName,
+            script,
+            params:
+              body.params && typeof body.params === 'object' && !Array.isArray(body.params)
+                ? (body.params as Record<string, unknown>)
+                : {},
+          },
+        ],
+        source,
+        githubAuth: body.githubAuth === true,
+      });
+      res.status(200).json({ batchId: result.batchId, logId: result.items[0]?.logId ?? null });
+    } catch (err) {
+      respondRuntimeError(res, err);
     }
   });
 

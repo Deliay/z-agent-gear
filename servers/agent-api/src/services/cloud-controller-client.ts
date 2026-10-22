@@ -2,6 +2,8 @@ import { config } from '../config/index.js';
 
 export interface StartHarnessInput {
   hostId: string;
+  /** 云电脑 controllerId（Job env `ZAG_CONTROLLER_ID`）。 */
+  controllerId?: string | null;
   /** 标准连接使用的 ControllerKey ID（作为内部请求 `refId` 下发）。 */
   controllerKeyId: string;
   containerApiKeyId: string;
@@ -37,6 +39,48 @@ export class CloudControllerUnavailableError extends Error {
     super(message);
     this.name = 'CloudControllerUnavailableError';
   }
+}
+
+/** 内部 API 明确返回非 2xx（保留状态码与错误码，供上层映射可读文案）。 */
+export class CloudControllerRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message?: string,
+  ) {
+    super(message ?? code);
+    this.name = 'CloudControllerRequestError';
+  }
+}
+
+export interface StartRuntimeWorkloadInput {
+  containerId: string;
+  workloadId: string;
+  params?: Record<string, unknown>;
+  source?: 'user' | 'mcp';
+}
+
+export interface StartRuntimeScriptInput {
+  containerId: string;
+  workloadId: string;
+  workloadName: string;
+  script: string;
+  params?: Record<string, unknown>;
+  source?: 'user' | 'mcp' | 'system';
+  githubAuth?: boolean;
+}
+
+export interface RuntimeBatchResponse {
+  batchId: string;
+  items: Array<{ logId: string; workloadId: string; workloadName: string }>;
+}
+
+export interface CloudWorkloadLogSummary {
+  id: string;
+  workloadName: string;
+  status: string;
+  log: string;
+  exitCode: number | null;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -85,6 +129,7 @@ export class CloudControllerClient {
     const body = {
       purpose: 'harness',
       hostId: input.hostId,
+      controllerId: input.controllerId ?? undefined,
       refId: input.controllerKeyId,
       userId: input.userId,
       hostName: input.hostName,
@@ -118,6 +163,86 @@ export class CloudControllerClient {
     await this.request<{ success: boolean }>(`/internal/containers/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
+  }
+
+  private async requestWithError<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (!this.baseUrl || !this.token) {
+      throw new CloudControllerUnavailableError();
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl.replace(/\/+$/, '')}${path}`, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+          ...(init.headers ?? {}),
+        },
+        signal: controller.signal,
+      });
+    } catch {
+      throw new CloudControllerUnavailableError();
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      let code = `HTTP_${response.status}`;
+      let message: string | undefined;
+      try {
+        const body = (await response.json()) as { error?: unknown; message?: unknown };
+        if (typeof body.error === 'string') code = body.error;
+        if (typeof body.message === 'string') message = body.message;
+      } catch {
+        // 非 JSON 响应保留状态码
+      }
+      throw new CloudControllerRequestError(response.status, code, message);
+    }
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new CloudControllerUnavailableError();
+    }
+  }
+
+  async startRuntimeWorkload(input: StartRuntimeWorkloadInput): Promise<RuntimeBatchResponse> {
+    return this.requestWithError<RuntimeBatchResponse>(
+      `/internal/containers/${encodeURIComponent(input.containerId)}/workloads`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workloadId: input.workloadId,
+          params: input.params ?? {},
+          source: input.source ?? 'user',
+        }),
+      },
+    );
+  }
+
+  async startRuntimeScript(
+    input: StartRuntimeScriptInput,
+  ): Promise<{ batchId: string; logId: string }> {
+    return this.requestWithError<{ batchId: string; logId: string }>(
+      `/internal/containers/${encodeURIComponent(input.containerId)}/runtime-scripts`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workloadId: input.workloadId,
+          workloadName: input.workloadName,
+          script: input.script,
+          params: input.params ?? {},
+          source: input.source ?? 'system',
+          githubAuth: input.githubAuth === true,
+        }),
+      },
+    );
+  }
+
+  async getWorkloadLogs(containerId: string): Promise<CloudWorkloadLogSummary[]> {
+    return this.requestWithError<CloudWorkloadLogSummary[]>(
+      `/internal/containers/${encodeURIComponent(containerId)}/workload-logs`,
+    );
   }
 }
 

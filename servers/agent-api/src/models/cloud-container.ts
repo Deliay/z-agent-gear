@@ -19,6 +19,8 @@ const cloudContainerSchema = new mongoose.Schema(
     connectedAt: { type: Date, default: null },
     exitedAt: { type: Date, default: null },
     billingAccountId: { type: String, default: null },
+    currentWorkloadName: { type: String, default: null },
+    installedWorkloads: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },
   { collection: 'cloudcontainers', strict: false },
 );

@@ -42,4 +42,11 @@ export const config = {
   controllerApiPublicEndpoint: process.env.CONTROLLER_API_PUBLIC_WS_ENDPOINT || '',
   cloudHostModelBaseUrl: process.env.CLOUD_HOST_MODEL_BASE_URL || '',
   cloudHostDefaultWorkspace: process.env.CLOUD_HOST_DEFAULT_WORKSPACE || '/root/workspace',
+  // 云主机操作单步超时（等待工作负载执行完成，默认 10 分钟）
+  cloudHostSetupStepTimeoutMs: toPositiveInt(
+    process.env.CLOUD_HOST_SETUP_STEP_TIMEOUT_MS,
+    600_000,
+  ),
+  // 操作 RUNNING 超过该时长视为中断（查询时标记 FAILED，默认 30 分钟）
+  cloudHostSetupStaleMs: toPositiveInt(process.env.CLOUD_HOST_SETUP_STALE_MS, 1_800_000),
 };

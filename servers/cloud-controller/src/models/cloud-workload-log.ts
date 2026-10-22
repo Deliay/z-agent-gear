@@ -44,6 +44,10 @@ const cloudWorkloadLogSchema = new mongoose.Schema(
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     // 本次启动该项是否为「必须」；缺省 false（历史记录按非必须展示）
     required: { type: Boolean, default: false },
+    // 触发来源：start（容器启动初始化）/ runtime（在线安装或系统脚本）；历史记录缺省 start
+    trigger: { type: String, enum: ['start', 'runtime'], default: 'start' },
+    // 调用来源：admin/user/mcp/system；历史记录缺省 admin
+    source: { type: String, enum: ['admin', 'user', 'mcp', 'system'], default: 'admin' },
     exitCode: { type: Number, default: null },
     log: { type: String, default: '' },
     startedAt: { type: Date, default: null },

@@ -300,7 +300,7 @@ describe('CloudHostService', () => {
         hostName: 'my-cloud',
         harnessTypes: ['opencode'],
         billingAccountId: 'account-1',
-        agentGearMinVersion: '2.5.0',
+        agentGearMinVersion: '2.6.0',
       });
       expect(payload.workloadPlan).toEqual([
         { workloadId: 'preset-1', params: {}, implicit: false, required: true },

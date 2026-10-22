@@ -84,6 +84,18 @@ export const cloudWorkloadTypeDefs = `#graphql
     TIMEOUT
   }
 
+  enum CloudWorkloadLogTrigger {
+    START
+    RUNTIME
+  }
+
+  enum CloudWorkloadLogSource {
+    ADMIN
+    USER
+    MCP
+    SYSTEM
+  }
+
   type CloudWorkloadLog {
     id: ID!
     containerId: ID!
@@ -94,6 +106,8 @@ export const cloudWorkloadTypeDefs = `#graphql
     script: String!
     params: JSON! # 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {}
     required: Boolean! # 本次启动该项是否为「必须」；历史记录缺省 false
+    trigger: CloudWorkloadLogTrigger
+    source: CloudWorkloadLogSource
     exitCode: Int
     log: String!
     startedAt: String
