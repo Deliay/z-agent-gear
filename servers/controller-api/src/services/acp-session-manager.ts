@@ -20,7 +20,7 @@ interface ACPSession {
 }
 
 interface PendingRequest {
-  resolve: (value: { success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean; capabilities?: Record<string, unknown> }) => void;
+  resolve: (value: { success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }) => void;
   timeout: ReturnType<typeof setTimeout>;
   sessionId: string;
   statusAtStart: string;
@@ -145,10 +145,6 @@ export class ACPSessionManager {
         if (payload.authMethods) updateData.authMethods = payload.authMethods;
         if (payload.supportsAdditionalDirectories != null) {
           updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
-        }
-        if (payload.capabilities) {
-          // 旧 controller 不上报时不覆盖历史快照（避免 undefined 抹掉）
-          updateData.agentCapabilities = payload.capabilities;
         }
         updateData.authRequired = Boolean(payload.authMethods?.length);
         await Session.findByIdAndUpdate(sessionId, updateData);
@@ -554,10 +550,6 @@ export class ACPSessionManager {
         if (payload.supportsAdditionalDirectories != null) {
           updateData.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
         }
-        if (payload.capabilities) {
-          // 旧 controller 不上报时不覆盖历史快照（避免 undefined 抹掉）
-          updateData.agentCapabilities = payload.capabilities;
-        }
         updateData.authRequired = Boolean(payload.authMethods?.length);
         await Session.findByIdAndUpdate(sessionId, updateData);
         await this.refreshSessionCache(sessionId);
@@ -902,7 +894,7 @@ export class ACPSessionManager {
     statusAtStart: string,
     timeoutMs: number,
     timeoutMessage?: string,
-  ): Promise<{ success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean; capabilities?: Record<string, unknown> }> {
+  ): Promise<{ success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean }> {
     this.ensureSocketDispatcher(socket);
     const dispatcher = this.socketDispatchers.get(socket.id)!;
     return new Promise((resolve) => {

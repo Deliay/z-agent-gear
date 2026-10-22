@@ -202,20 +202,6 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
-    socket.on('acp:elicitation:resolved', async (data: {
-      requestId?: string;
-      sessionId: string;
-      reason: 'unsupported_mode' | 'timeout' | 'cancelled';
-      detail?: string;
-    }) => {
-      if (!authenticated) return;
-      try {
-        await elicitationManager.handleElicitationResolved(socket, data);
-      } catch (error) {
-        console.error('Error handling elicitation resolved:', error);
-      }
-    });
-
     socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
       if (!authenticated) return;
       acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);

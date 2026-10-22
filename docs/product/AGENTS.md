@@ -127,7 +127,6 @@ flowchart LR
 - [[draft/20261017-controller-version-requirement.md]] — 云端工作容器控制器版本兼容与自动恢复
 - [[draft/20261018-credits-billing.md]] — 费用中心（Credits 计费）
 - [[draft/20261020-api-channel-model-fixes.md]] — 内建API渠道一期上线后问题修复（供应商与模型管理）
-- [[draft/20261021-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与模型来源分组）
 - [[draft/20261021-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、云主机申请最小化凭据 clone 并自动建会话）
 - [[draft/20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
 

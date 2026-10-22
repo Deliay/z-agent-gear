@@ -235,25 +235,6 @@ export interface AgentModelInfoData {
   id: string
   name: string
   provider?: string | null
-  source?: AgentModelSource | null
-  sourceProvider?: string | null
-  group?: string | null
-  basis?: string | null
-}
-
-export type AgentFeatureStatus = 'supported' | 'partial' | 'unsupported'
-export type AgentModelSource = 'platform' | 'agent' | 'custom' | 'unknown'
-
-export interface AgentFeatureSupportData {
-  id: string
-  status: AgentFeatureStatus
-  detail?: string | null
-}
-
-export interface AgentCapabilitySnapshotData {
-  protocolVersion?: number | null
-  agentInfo?: AgentInfoData | null
-  features: AgentFeatureSupportData[]
 }
 
 export interface SessionConfigOptionValueData {
@@ -307,8 +288,6 @@ export interface SessionData {
   availableModels?: AgentModelInfoData[] | null
   currentModelId?: string | null
   configOptions?: SessionConfigOptionData[] | null
-  agentCapabilities?: AgentCapabilitySnapshotData | null
-  features?: AgentFeatureSupportData[] | null
   promptCapabilities?: PromptCapabilitiesData | null
   agentInfo?: AgentInfoData | null
   authRequired?: boolean | null
@@ -613,13 +592,8 @@ export interface TodoItemData {
   isRead: boolean
   data: PermissionRequestDataFields | null
   elicitationData?: ElicitationRequestDataFields | null
-  resolution?: ElicitationResolution | null
-  resolvedAt?: string | null
-  expiresAt?: string | null
   createdAt: string
 }
-
-export type ElicitationResolution = 'accepted' | 'declined' | 'cancelled' | 'expired' | 'failed'
 
 export interface GetTodoListQuery {
   getTodoList: TodoItemData[]

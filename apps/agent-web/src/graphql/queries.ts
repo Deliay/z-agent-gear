@@ -109,10 +109,6 @@ export const GET_SESSION = gql`
         id
         name
         provider
-        source
-        sourceProvider
-        group
-        basis
       }
       currentModelId
       configOptions {
@@ -126,23 +122,6 @@ export const GET_SESSION = gql`
           value
           name
         }
-      }
-      agentCapabilities {
-        protocolVersion
-        agentInfo {
-          name
-          version
-        }
-        features {
-          id
-          status
-          detail
-        }
-      }
-      features {
-        id
-        status
-        detail
       }
       promptCapabilities {
         image

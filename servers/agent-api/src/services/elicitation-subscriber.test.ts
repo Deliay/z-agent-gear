@@ -8,7 +8,6 @@ vi.mock('./todo-service.js', () => ({
   todoService: {
     createElicitationTodo: vi.fn(),
     markElicitationCompleted: vi.fn(),
-    markElicitationResolved: vi.fn(),
   },
 }));
 
@@ -134,67 +133,6 @@ describe('ElicitationSubscriberService', () => {
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
 
-    service.stop();
-  });
-});
-
-describe('ElicitationSubscriberService - resolved', () => {
-  function setup() {
-    const service = new ElicitationSubscriberService();
-    service.start();
-    return { service, handler: getMessageHandler() };
-  }
-
-  it('T-ES1: 订阅 elicitation:resolved channel', () => {
-    const { service } = setup();
-    const channels = mockSubscriber.subscribe.mock.calls[0];
-    expect(channels).toContain('elicitation:request');
-    expect(channels).toContain('elicitation:complete');
-    expect(channels).toContain('elicitation:resolved');
-    service.stop();
-  });
-
-  it('T-ES2: resolved(timeout) → markElicitationResolved(expired)', async () => {
-    const { service, handler } = setup();
-    await handler('elicitation:resolved', JSON.stringify({
-      requestId: 'elic-1',
-      sessionId: 'sess-1',
-      reason: 'timeout',
-    }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-1', 'expired');
-    service.stop();
-  });
-
-  it('T-ES3: resolved(unsupported_mode) → failed', async () => {
-    const { service, handler } = setup();
-    await handler('elicitation:resolved', JSON.stringify({
-      sessionId: 'sess-1',
-      reason: 'unsupported_mode',
-      detail: 'custom',
-    }));
-    expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
-    service.stop();
-  });
-
-  it('T-ES3b: resolved(unsupported_mode) 带 requestId → failed', async () => {
-    const { service, handler } = setup();
-    await handler('elicitation:resolved', JSON.stringify({
-      requestId: 'elic-2',
-      sessionId: 'sess-1',
-      reason: 'unsupported_mode',
-    }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-2', 'failed');
-    service.stop();
-  });
-
-  it('T-ES4: resolved(cancelled) → cancelled', async () => {
-    const { service, handler } = setup();
-    await handler('elicitation:resolved', JSON.stringify({
-      requestId: 'elic-3',
-      sessionId: 'sess-1',
-      reason: 'cancelled',
-    }));
-    expect(todoService.markElicitationResolved).toHaveBeenCalledWith('elic-3', 'cancelled');
     service.stop();
   });
 });

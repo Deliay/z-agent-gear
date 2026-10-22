@@ -65,14 +65,6 @@ export const todoTypeDefs = `#graphql
     cancel
   }
 
-  enum ElicitationResolution {
-    accepted
-    declined
-    cancelled
-    expired
-    failed
-  }
-
   type ElicitationRequestData {
     requestId: String!
     sessionId: ID!
@@ -93,10 +85,6 @@ export const todoTypeDefs = `#graphql
     isRead: Boolean!
     data: PermissionRequestData
     elicitationData: ElicitationRequestData
-    # 问询终态：null = 仍待处理；expired = 超时未响应；failed = 链路不支持
-    resolution: ElicitationResolution
-    resolvedAt: String
-    expiresAt: String
     createdAt: String!
   }
 

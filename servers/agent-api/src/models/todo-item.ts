@@ -37,9 +37,6 @@ const todoItemSchema = new Schema({
     url: String,
   },
   expiresAt: { type: Date },
-  // 问询终态：null = 仍待处理；expired = 超时未响应；failed = 链路不支持
-  resolution: { type: String, enum: ['accepted', 'declined', 'cancelled', 'expired', 'failed'] },
-  resolvedAt: { type: Date },
 }, { timestamps: true });
 
 todoItemSchema.index({ userId: 1, isRead: 1 });
