@@ -53,10 +53,12 @@ function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
     const message = error.message.trim()
     if (SERVER_ERROR_MESSAGES[message]) return SERVER_ERROR_MESSAGES[message]
+    // 先匹配更具体的 parameter 错误，避免被 invalid workload 前缀吞掉
+    if (message.startsWith('invalid workload parameter')) return '工作负载参数默认值非法，无法创建'
     if (message.startsWith('invalid workload')) return '所选工作负载不存在或不可用'
     if (message.startsWith('workload is not installable')) return '该工作负载不支持创建时预装'
     if (message.startsWith('dependency workload not found')) return '工作负载依赖缺失，无法创建'
-    if (message === 'dependency cycle detected') return '工作负载依赖成环，无法创建'
+    if (message.startsWith('dependency cycle detected')) return '工作负载依赖成环，无法创建'
     return message
   }
   return '创建云电脑失败，请稍后重试'

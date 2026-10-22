@@ -271,6 +271,10 @@ describe('NewCloudHostDialog', () => {
     ['too many workloads (max 5)', '创建时最多选择 5 个工作负载'],
     ['invalid workload: wl-x', '所选工作负载不存在或不可用'],
     ['workload is not installable: OpenCode', '该工作负载不支持创建时预装'],
+    ['invalid workload parameter: mode', '工作负载参数默认值非法，无法创建'],
+    ['dependency workload not found: ghost', '工作负载依赖缺失，无法创建'],
+    ['dependency cycle detected', '工作负载依赖成环，无法创建'],
+    ['dependency cycle detected: a -> b -> a', '工作负载依赖成环，无法创建'],
   ])('T-WEB-N5: 服务端错误「%s」映射为中文', async (message, expected) => {
     mockCreateCloudHost.mockRejectedValueOnce(new Error(message));
 

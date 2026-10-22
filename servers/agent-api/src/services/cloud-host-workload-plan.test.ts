@@ -78,6 +78,29 @@ describe('resolveCreateWorkloadPlan', () => {
     expect(docker[0]).toMatchObject({ implicit: false });
   });
 
+  it('T-WP3b: 反序勾选 [Aspire, Docker] 时显式项仍 implicit=false（显式优先于隐式）', () => {
+    const reversed = resolveCreateWorkloadPlan({
+      harnessPresets: HARNESS,
+      selectedIds: ['aspire', 'docker'],
+      standardCatalog: CATALOG,
+    });
+
+    const forward = resolveCreateWorkloadPlan({
+      harnessPresets: HARNESS,
+      selectedIds: ['docker', 'aspire'],
+      standardCatalog: CATALOG,
+    });
+
+    // 同一组选择不因勾选顺序改变 implicit 语义
+    expect(reversed).toEqual(forward);
+    expect(reversed.filter((entry) => entry.workloadId === 'docker')[0]).toMatchObject({
+      implicit: false,
+    });
+    expect(reversed.filter((entry) => entry.workloadId === 'dotnet')[0]).toMatchObject({
+      implicit: true,
+    });
+  });
+
   it('T-WP4: 显式选择超过 5 个抛错', () => {
     const catalog = Array.from({ length: 6 }, (_, index) =>
       item({ id: `w${index}`, name: `w${index}` }),
@@ -211,6 +234,64 @@ describe('resolveCreateWorkloadPlan', () => {
         standardCatalog: [bad],
       }),
     ).toThrow('invalid workload parameter: mode');
+  });
+
+  it('T-WP7b: MULTI_SELECT 默认值重复项去重保留首序（与 cloud-controller 同口径）', () => {
+    const multi = item({
+      id: 'multi',
+      name: 'Multi',
+      paramSchema: [
+        {
+          key: 'list',
+          label: 'List',
+          type: 'multi_select',
+          options: ['a', 'b'],
+          defaultValue: ['b', 'a', 'b'],
+        },
+      ],
+    });
+
+    const plan = resolveCreateWorkloadPlan({
+      harnessPresets: [],
+      selectedIds: ['multi'],
+      standardCatalog: [multi],
+    });
+
+    expect(plan[0].params).toEqual({ list: ['b', 'a'] });
+  });
+
+  it('T-WP7b: TEXT 默认值超过 1024 字符抛错', () => {
+    const long = item({
+      id: 'long',
+      name: 'Long',
+      paramSchema: [
+        { key: 'text', label: 'Text', type: 'text', options: [], defaultValue: 'x'.repeat(1025) },
+      ],
+    });
+    expect(() =>
+      resolveCreateWorkloadPlan({
+        harnessPresets: [],
+        selectedIds: ['long'],
+        standardCatalog: [long],
+      }),
+    ).toThrow('invalid workload parameter: text');
+  });
+
+  it('T-WP7b: 未知参数类型抛错（不静默按 TEXT 处理）', () => {
+    const unknown = item({
+      id: 'unknown',
+      name: 'Unknown',
+      paramSchema: [
+        { key: 'weird', label: 'Weird', type: 'json', options: [], defaultValue: 'v' },
+      ],
+    });
+    expect(() =>
+      resolveCreateWorkloadPlan({
+        harnessPresets: [],
+        selectedIds: ['unknown'],
+        standardCatalog: [unknown],
+      }),
+    ).toThrow('invalid workload parameter: weird');
   });
 
   it('展开后总条数超过 10 抛 workloads exceed 10', () => {

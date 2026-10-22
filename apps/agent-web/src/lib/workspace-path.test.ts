@@ -42,4 +42,9 @@ describe('workspacePrefixError', () => {
     expect(workspacePrefixError('/root\\workspace')).toBe('前缀地址包含非法字符')
     expect(workspacePrefixError('/root/workspace')).toBeNull()
   })
+
+  it('混合非法输入时与后端同序（先判非法字符再判绝对路径）', () => {
+    expect(workspacePrefixError('root\\workspace')).toBe('前缀地址包含非法字符')
+    expect(workspacePrefixError('root/../etc')).toBe('前缀地址必须以 / 开头')
+  })
 })

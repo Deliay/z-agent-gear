@@ -876,6 +876,21 @@ describe('CloudHostService', () => {
       ).toThrow('unsupported harness type: CODEX');
     });
 
+    it('T-CH-C6: 创建期负载错误文案原样透传（含依赖成环）', () => {
+      const messages = [
+        'too many workloads (max 5)',
+        'invalid workload: 507f1f77bcf86cd799439011',
+        'workload is not installable: OpenCode',
+        'invalid workload parameter: mode',
+        'dependency workload not found: ghost',
+        'dependency cycle detected',
+        'workloads exceed 10',
+      ];
+      for (const message of messages) {
+        expect(() => toCloudHostGraphQLError(new Error(message))).toThrow(message);
+      }
+    });
+
     it('A-6 hides unexpected internal errors', () => {
       expect(() =>
         toCloudHostGraphQLError(new Error('MongoServerError: duplicate key')),

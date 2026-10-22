@@ -240,6 +240,14 @@ describe('GithubProjectSetupDialog', () => {
     expect(screen.getByText('前缀地址不能包含 ..')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
+    fireEvent.change(input, { target: { value: '/root\\workspace' } })
+    expect(screen.getByText('前缀地址包含非法字符')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: 'root\\workspace' } })
+    expect(screen.getByText('前缀地址包含非法字符')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+
     fireEvent.change(input, { target: { value: '/workspace/repo/' } })
     expect(submitButton()).not.toBeDisabled()
   })

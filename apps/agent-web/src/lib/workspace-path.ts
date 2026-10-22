@@ -43,8 +43,9 @@ export function previewClonePath(rawPrefix: string, repoFullName: string): strin
 export function workspacePrefixError(raw: string): string | null {
   const trimmed = raw.trim()
   if (!trimmed) return '请输入前缀地址'
-  if (!trimmed.startsWith('/')) return '前缀地址必须以 / 开头'
+  // 与后端 normalizeWorkspacePrefix 同序：空 → 非法字符 → 绝对路径 → ..
   if (trimmed.includes('\0') || trimmed.includes('\\')) return '前缀地址包含非法字符'
+  if (!trimmed.startsWith('/')) return '前缀地址必须以 / 开头'
   if (trimmed.split('/').some((segment) => segment === '..')) return '前缀地址不能包含 ..'
   return null
 }

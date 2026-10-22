@@ -764,6 +764,7 @@ const CLOUD_HOST_PUBLIC_ERROR_PREFIXES = [
   'workload is not installable:',
   'invalid workload parameter:',
   'dependency workload not found:',
+  'dependency cycle detected',
   'too many workloads (max',
   'workloads exceed',
   '前缀地址',
