@@ -13,6 +13,11 @@ import type {
 } from '../../graphql/types'
 import GithubSetupProgressDialog from './GithubSetupProgressDialog'
 import {
+  normalizeWorkspacePrefixForPreview,
+  previewClonePath,
+  workspacePrefixError,
+} from '../../lib/workspace-path'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -109,7 +114,7 @@ export default function GithubProjectSetupDialog({
     if (!open) return
     setAccountId('')
     setRepoFullName('')
-    setTargetPath(cloudHost.defaultWorkspace ?? '')
+    setTargetPath(cloudHost.defaultWorkspace ?? '/root/workspace')
     setSelectedWorkloadIds([])
     setSubmitting(false)
     setError(null)
@@ -136,8 +141,9 @@ export default function GithubProjectSetupDialog({
   }, [open, accounts, accountId])
 
   const hostRunning = cloudHost.status === 'RUNNING' && !cloudHost.deletedAt
-  const trimmedTargetPath = targetPath.trim()
-  const targetPathValid = trimmedTargetPath.startsWith('/')
+  const prefixError = workspacePrefixError(targetPath)
+  const normalizedPrefix = normalizeWorkspacePrefixForPreview(targetPath)
+  const finalClonePath = previewClonePath(targetPath, repoFullName)
   const hasAccounts = accounts.length > 0
   const submitDisabled =
     submitting ||
@@ -145,7 +151,8 @@ export default function GithubProjectSetupDialog({
     !hasAccounts ||
     !accountId ||
     !repoFullName ||
-    !targetPathValid
+    prefixError !== null ||
+    normalizedPrefix === null
 
   const handleAccountChange = (nextAccountId: string) => {
     setAccountId(nextAccountId)
@@ -160,7 +167,7 @@ export default function GithubProjectSetupDialog({
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (submitDisabled) return
+    if (submitDisabled || normalizedPrefix === null) return
 
     setSubmitting(true)
     setError(null)
@@ -171,7 +178,8 @@ export default function GithubProjectSetupDialog({
             controllerId,
             accountId,
             repoFullName,
-            targetPath: trimmedTargetPath,
+            // 提交前缀（非最终目录），服务端负责拼接 <前缀>/<owner>/<repo>
+            targetPath: normalizedPrefix,
             workloadIds: selectedWorkloadIds,
           },
         },
@@ -317,19 +325,27 @@ export default function GithubProjectSetupDialog({
 
           <div className="min-w-0">
             <label htmlFor="github-setup-target-path" className="mb-1 block text-sm font-medium">
-              目标路径
+              前缀地址（工作根目录）
             </label>
             <input
               id="github-setup-target-path"
               type="text"
-              aria-label="目标路径"
+              aria-label="前缀地址"
               value={targetPath}
               onChange={(event) => setTargetPath(event.target.value)}
               placeholder="/root/workspace"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             />
-            {targetPath.length > 0 && !targetPathValid && (
-              <p className="mt-1 text-xs text-destructive">请输入绝对路径（以 / 开头）</p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">
+              项目将 clone 到 {normalizedPrefix === null ? '<前缀>' : normalizedPrefix}/&lt;User/Repo&gt;
+            </p>
+            {prefixError !== null && (
+              <p className="mt-1 text-xs text-destructive">{prefixError}</p>
+            )}
+            {normalizedPrefix !== null && (
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                最终 clone 地址：{finalClonePath ?? '—'}
+              </p>
             )}
           </div>
 

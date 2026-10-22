@@ -33,7 +33,15 @@ const SIGNUP = `
 const WORKLOADS = `
   query Workloads($controllerId: ID!) {
     cloudHostWorkloads(controllerId: $controllerId) {
-      workloadId name isPreset installed installedAt source paramSchema dependsOnWorkloadIds
+      workloadId name workloadKind isPreset installed installedAt source paramSchema dependsOnWorkloadIds
+    }
+  }
+`;
+
+const CATALOG = `
+  query Catalog {
+    cloudHostWorkloadCatalog {
+      workloadId name workloadKind isPreset installed installedAt source dependsOnWorkloadIds
     }
   }
 `;
@@ -163,7 +171,21 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
         },
         token,
       );
-      expect(relative.errors?.[0]?.message).toBe('目标路径必须是绝对路径');
+      expect(relative.errors?.[0]?.message).toBe('前缀地址必须是绝对路径');
+
+      const traversal = await gql(
+        SETUP,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: new mongoose.Types.ObjectId().toString(),
+            repoFullName: 'owner/repo',
+            targetPath: '/root/../etc',
+          },
+        },
+        token,
+      );
+      expect(traversal.errors?.[0]?.message).toBe('前缀地址不能包含 ..');
 
       const invalidRepo = await gql(
         SETUP,
@@ -188,5 +210,48 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     } finally {
       await seeded.cleanup();
     }
+  });
+
+  it('T-GH-API-P3: 合法前缀通过校验后在授权处返回原错误', async () => {
+    const { token, userId } = await signup();
+    const seeded = await seedHost(userId);
+    try {
+      const unauthorized = await gql(
+        SETUP,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: new mongoose.Types.ObjectId().toString(),
+            repoFullName: 'owner/repo',
+            targetPath: '/root/workspace/',
+          },
+        },
+        token,
+      );
+      expect(unauthorized.errors?.[0]?.message).toBe('Github 账号不存在或不属于当前用户');
+    } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-CAT-API1/T-CAT-API2: 负载目录需登录且返回 standard 列表', async () => {
+    const anonymous = await gql(CATALOG);
+    expect(anonymous.errors?.[0]?.message).toBe('Not authenticated');
+
+    const { token } = await signup();
+    const result = await gql(CATALOG, {}, token);
+    expect(result.errors).toBeUndefined();
+    const items = result.data.cloudHostWorkloadCatalog as Array<Record<string, unknown>>;
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.workloadKind).toBe('STANDARD');
+      expect(item.installed).toBe(false);
+      expect(item.installedAt).toBeNull();
+      expect(item.source).toBeNull();
+    }
+    expect(items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['Aspire', 'Docker', '.NET']),
+    );
   });
 });

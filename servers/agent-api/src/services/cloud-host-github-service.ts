@@ -21,6 +21,7 @@ import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import { sessionService } from './session.js';
+import { normalizeWorkspacePrefix, resolveClonePath } from './workspace-path.js';
 
 type Doc = Record<string, unknown>;
 
@@ -90,10 +91,9 @@ export class CloudHostGithubService {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repoFullName)) {
       throw new Error('仓库格式应为 owner/repo');
     }
-    const targetPath = input.targetPath.trim();
-    if (!targetPath.startsWith('/')) {
-      throw new Error('目标路径必须是绝对路径');
-    }
+    // targetPath 语义为 clone 前缀地址（工作根目录）；最终目录由服务端权威拼接。
+    const prefix = normalizeWorkspacePrefix(input.targetPath);
+    const targetPath = resolveClonePath(prefix, repoFullName);
 
     const account = await GitHubAccount.findOne({
       _id: input.accountId,

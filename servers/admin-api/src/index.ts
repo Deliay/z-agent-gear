@@ -43,6 +43,7 @@ import * as migration004AspireCliSource from './migrations/004-aspire-cli-source
 import * as migration005ModelNameUnique from './migrations/005-model-name-unique-global.js';
 import * as migration006HarnessOpencode from './migrations/006-preset-harness-opencode.js';
 import * as migration007PresetGithub from './migrations/007-preset-github.js';
+import * as migration008FixGithubWorkloadPrefix from './migrations/008-fix-github-workload-prefix.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -123,6 +124,7 @@ async function start() {
       migration005ModelNameUnique,
       migration006HarnessOpencode,
       migration007PresetGithub,
+      migration008FixGithubWorkloadPrefix,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);

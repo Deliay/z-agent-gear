@@ -294,6 +294,24 @@ export const CLOUD_HOST_WORKLOADS = gql`
     cloudHostWorkloads(controllerId: $controllerId) {
       workloadId
       name
+      workloadKind
+      paramSchema
+      dependsOnWorkloadIds
+      isPreset
+      installed
+      installedAt
+      source
+    }
+  }
+`
+
+/** 无主机上下文的 standard 负载目录（新建云电脑时勾选预装） */
+export const CLOUD_HOST_WORKLOAD_CATALOG = gql`
+  query CloudHostWorkloadCatalog {
+    cloudHostWorkloadCatalog {
+      workloadId
+      name
+      workloadKind
       paramSchema
       dependsOnWorkloadIds
       isPreset

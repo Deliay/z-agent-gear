@@ -70,6 +70,8 @@ describe('CloudWorkloadService', () => {
         paramSchema: [],
         dependsOnWorkloadIds: [],
         isPreset: false,
+        workloadKind: 'STANDARD',
+        harnessType: null,
         createdAt: '2026-10-17T00:00:00.000Z',
         updatedAt: '2026-10-17T01:00:00.000Z',
       });
@@ -475,6 +477,29 @@ describe('CloudWorkloadService', () => {
 
       expect(sort).toHaveBeenCalledWith({ createdAt: -1 });
       expect(result).toHaveLength(2);
+    });
+
+    it('T-ADM-WL1/WL2/WL3: standard/harness 分类透出，历史缺省归一为 STANDARD', async () => {
+      const lean = vi.fn().mockResolvedValue([
+        makeWorkload({ _id: { toString: () => 's1' }, workloadKind: 'standard', harnessType: null }),
+        makeWorkload({
+          _id: { toString: () => 'h1' },
+          name: 'OpenCode',
+          workloadKind: 'harness',
+          harnessType: 'opencode',
+        }),
+        // 历史文档缺字段
+        makeWorkload({ _id: { toString: () => 'legacy' } }),
+      ]);
+      (CloudWorkload.find as any).mockReturnValue({ sort: vi.fn().mockReturnValue({ lean }) });
+
+      const result = await service.list();
+
+      expect(result.map((w) => [w.id, w.workloadKind, w.harnessType])).toEqual([
+        ['s1', 'STANDARD', null],
+        ['h1', 'HARNESS', 'opencode'],
+        ['legacy', 'STANDARD', null],
+      ]);
     });
   });
 
