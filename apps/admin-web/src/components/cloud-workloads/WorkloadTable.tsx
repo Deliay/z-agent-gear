@@ -57,6 +57,9 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
                 <td className="px-4 py-3 font-medium text-foreground">
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 truncate">{workload.name}</span>
+                    <Badge variant="outline">
+                      {(workload.workloadKind ?? 'STANDARD') === 'HARNESS' ? 'HARNESS' : 'STANDARD'}
+                    </Badge>
                     {workload.isPreset && <Badge variant="secondary">预制</Badge>}
                   </span>
                 </td>
