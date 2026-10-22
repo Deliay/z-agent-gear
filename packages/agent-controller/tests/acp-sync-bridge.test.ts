@@ -65,7 +65,11 @@ describe('AcpSyncBridge', () => {
       expect(mockSpawner.start).toHaveBeenCalledOnce();
       expect(mc().initialize).toHaveBeenCalledWith({
         protocolVersion: 1,
-        clientCapabilities: {},
+        // 显式值断言（非 CLIENT_CAPABILITIES 自引用）
+        clientCapabilities: {
+          session: { configOptions: { boolean: {} } },
+          elicitation: { form: {}, url: {} },
+        },
         clientInfo: { name: 'agent-gear', version: '1.0.0' },
       });
     });

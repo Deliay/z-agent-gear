@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import {
   Dialog,
@@ -11,6 +11,11 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Checkbox } from './ui/checkbox';
 import { RESPOND_ELICITATION } from '../graphql/mutations';
+import {
+  clearElicitationDraft,
+  getElicitationDraft,
+  saveElicitationDraft,
+} from '../stores/elicitationDialog';
 import type {
   TodoItemData,
   RespondElicitationMutation,
@@ -23,6 +28,8 @@ interface ElicitationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   todo: TodoItemData;
+  /** 待办已从列表移除（TTL/limit 挤出）：按已失效终态展示，不静默卸载表单 */
+  stale?: boolean;
   onResponded?: () => void;
 }
 
@@ -66,9 +73,14 @@ function splitUrl(url: string): UrlParts | null {
   }
 }
 
-export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: ElicitationDialogProps) {
+export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onResponded }: ElicitationDialogProps) {
   const [responding, setResponding] = useState(false);
-  const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const draftKey = todo.elicitationData?.requestId ?? todo.id;
+  const [edits, setEdits] = useState<Record<string, unknown>>(() => getElicitationDraft(draftKey));
+  // owner 切换/重挂载后恢复草稿
+  useEffect(() => {
+    setEdits(getElicitationDraft(draftKey));
+  }, [draftKey]);
   const [respondElicitation] = useMutation<RespondElicitationMutation>(RESPOND_ELICITATION);
 
   const data = todo.elicitationData;
@@ -82,8 +94,47 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
   const missingRequired = requiredFields.filter((name) => isEmptyValue(values[name]));
   const urlParts = data?.url ? splitUrl(data.url) : null;
 
+  // 当前时间入 state（render 期保持纯函数）；到期定时器与 props 变化时刷新，
+  // 保证 Banner/TodoList 常驻挂载的弹窗跨过 expiresAt 后立即进入过期终态（无需等 15s 轮询）。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (todo.resolution || !todo.expiresAt) return;
+    const remaining = new Date(todo.expiresAt as string).getTime() - Date.now();
+    if (remaining <= 0) return;
+    // 到点即刷新（不加宽限窗口），避免 expiresAt 之后的窄窗口仍可提交
+    const timer = setTimeout(() => setNow(Date.now()), remaining);
+    return () => clearTimeout(timer);
+  }, [todo.id, todo.resolution, todo.expiresAt]);
+
+  // 终态判定：resolution 优先；TTL 未清理的窄窗口内 expiresAt 已过也按过期处理
+  const isExpired = todo.resolution === 'expired'
+    || (!todo.resolution && Boolean(todo.expiresAt) && new Date(todo.expiresAt as string).getTime() <= now);
+  const isCancelled = todo.resolution === 'cancelled' || todo.resolution === 'failed';
+  const isFinished = todo.resolution === 'accepted' || todo.resolution === 'declined';
+  const isStale = stale && !todo.resolution;
+  const isClosed = isExpired || isCancelled || isFinished || isStale;
+
+  const statusMessage = isStale
+    ? '该问询已失效（已从待办移除）'
+    : isExpired
+    ? '该问询已过期'
+    : todo.resolution === 'cancelled'
+      ? '该问询已取消'
+      : todo.resolution === 'failed'
+        ? '该问询已失效'
+        : todo.resolution === 'accepted'
+          ? '该问询已提交'
+          : todo.resolution === 'declined'
+            ? '该问询已拒绝'
+            : null;
+
   const setValue = (name: string, value: unknown) => {
-    setEdits((prev) => ({ ...prev, [name]: value }));
+    setEdits((prev) => {
+      const next = { ...prev, [name]: value };
+      saveElicitationDraft(draftKey, next);
+      return next;
+    });
   };
 
   const toggleArrayValue = (name: string, option: unknown, checked: boolean) => {
@@ -93,7 +144,8 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
   };
 
   const handleRespond = async (action: ElicitationAction) => {
-    if (!data) return;
+    // 终态/过期/失效守卫：即使按钮因竞态未及时隐藏，也不得再回传
+    if (!data || isClosed) return;
 
     setResponding(true);
     try {
@@ -104,6 +156,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
           values: action === 'accept' && data.mode === 'form' ? values : null,
         },
       });
+      clearElicitationDraft(draftKey);
       onResponded?.();
       onOpenChange(false);
     } catch (error) {
@@ -115,6 +168,13 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
 
   const handleOpenUrl = async () => {
     if (!data?.url) return;
+    // 只允许 http(s)：screen 未及时隐藏时也不得把 javascript:/data: 交给 window.open
+    try {
+      const parsed = new URL(data.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    } catch {
+      return;
+    }
     window.open(data.url, '_blank', 'noopener,noreferrer');
     await handleRespond('accept');
   };
@@ -260,6 +320,22 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{data.message}</p>
 
+          {statusMessage && (
+            <p
+              data-testid="elicitation-status"
+              role="status"
+              aria-live="polite"
+              className={`rounded-md px-3 py-2 text-sm ${
+                isExpired || isCancelled || isStale
+                  ? 'bg-muted text-muted-foreground'
+                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+              }`}
+            >
+              {statusMessage}
+              {!isFinished && !isStale && '，该问询已不可操作。'}
+            </p>
+          )}
+
           {data.mode === 'form' && (
             <div className="space-y-4">
               {schema?.description && (
@@ -294,7 +370,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
           )}
 
           <div className="flex flex-col gap-2">
-            {data.mode === 'url' ? (
+            {isClosed ? null : data.mode === 'url' ? (
               <Button onClick={handleOpenUrl} disabled={responding || !data.url}>
                 打开链接
               </Button>
@@ -306,20 +382,24 @@ export function ElicitationDialog({ open, onOpenChange, todo, onResponded }: Eli
                 提交
               </Button>
             )}
-            <Button
-              variant="destructive"
-              onClick={() => handleRespond('decline')}
-              disabled={responding}
-            >
-              拒绝
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleRespond('cancel')}
-              disabled={responding}
-            >
-              取消
-            </Button>
+            {!isClosed && (
+              <>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleRespond('decline')}
+                  disabled={responding}
+                >
+                  拒绝
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleRespond('cancel')}
+                  disabled={responding}
+                >
+                  取消
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </DialogContent>

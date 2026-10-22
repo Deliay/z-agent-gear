@@ -61,6 +61,9 @@ export class AcpSpawner {
 
     this.process.on('error', (error) => {
       console.error(`ACP process error (session=${this.sessionId}, cmd=${cmd}):`, error);
+      // spawn 失败同样视为进程终止：必须 resolve closed，让 bridge 收敛 pending，避免 65s 迟到 timeout
+      this.process = null;
+      this.resolveClosed?.();
     });
   }
 

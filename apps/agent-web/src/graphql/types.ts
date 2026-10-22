@@ -209,7 +209,8 @@ export interface ProviderData {
 
 export interface ModelData {
   id: string
-  providerId: string
+  /** global（系统内置）模型由服务端掩蔽为 null */
+  providerId: string | null
   provider?: {
     id: string
     name: string
@@ -235,6 +236,25 @@ export interface AgentModelInfoData {
   id: string
   name: string
   provider?: string | null
+  source?: AgentModelSource | null
+  sourceProvider?: string | null
+  group?: string | null
+  basis?: string | null
+}
+
+export type AgentFeatureStatus = 'supported' | 'partial' | 'unsupported'
+export type AgentModelSource = 'platform' | 'agent' | 'custom' | 'unknown'
+
+export interface AgentFeatureSupportData {
+  id: string
+  status: AgentFeatureStatus
+  detail?: string | null
+}
+
+export interface AgentCapabilitySnapshotData {
+  protocolVersion?: number | null
+  agentInfo?: AgentInfoData | null
+  features: AgentFeatureSupportData[]
 }
 
 export interface SessionConfigOptionValueData {
@@ -276,6 +296,10 @@ export interface SessionData {
   userId: string
   controllerId: string
   controllerName: string
+  /** 控制器类型；云电脑软删除后 controller 可能不在列表结果中，以此判定只读 */
+  controllerType?: string | null
+  /** 会话所属云电脑（含软删除留档）；普通主机为 null */
+  cloudHost?: CloudHostData | null
   acpServerType: string
   status: string
   title: string | null
@@ -288,6 +312,8 @@ export interface SessionData {
   availableModels?: AgentModelInfoData[] | null
   currentModelId?: string | null
   configOptions?: SessionConfigOptionData[] | null
+  agentCapabilities?: AgentCapabilitySnapshotData | null
+  features?: AgentFeatureSupportData[] | null
   promptCapabilities?: PromptCapabilitiesData | null
   agentInfo?: AgentInfoData | null
   authRequired?: boolean | null
@@ -592,8 +618,13 @@ export interface TodoItemData {
   isRead: boolean
   data: PermissionRequestDataFields | null
   elicitationData?: ElicitationRequestDataFields | null
+  resolution?: ElicitationResolution | null
+  resolvedAt?: string | null
+  expiresAt?: string | null
   createdAt: string
 }
+
+export type ElicitationResolution = 'accepted' | 'declined' | 'cancelled' | 'expired' | 'failed'
 
 export interface GetTodoListQuery {
   getTodoList: TodoItemData[]

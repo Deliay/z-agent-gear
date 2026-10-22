@@ -101,6 +101,8 @@ const cloudContainerSchema = new mongoose.Schema(
     harnessTypes: { type: [String], default: [] },
     controllerKeyId: { type: String, default: null },
     containerApiKeyId: { type: String, default: null },
+    /** 云电脑最低 agent-gear 版本（max(服务端常量, 请求值)）；普通容器为 null。 */
+    agentGearMinVersion: { type: String, default: null },
     /** 容器 TTL 到期时间（同时用于 Job activeDeadlineSeconds）；历史记录为 null。 */
     expiresAt: { type: Date, default: null },
     tokenHash: { type: String, default: null },

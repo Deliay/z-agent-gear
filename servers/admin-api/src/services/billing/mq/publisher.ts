@@ -19,6 +19,19 @@ export interface BillingEventMessage {
   payload: Record<string, unknown>;
 }
 
+/**
+ * R10-3：区分**消息级被拒**与**传输级失败**。只有 broker 明确以 AMQP 回复码拒绝消息
+ * （如 403 ACCESS_REFUSED、404 NOT_FOUND、406 PRECONDITION_FAILED）才消耗 per-message attempts；
+ * 连接断开/confirm 超时等传输失败不得烧 attempts，否则短时故障就会把积压整体隔离。
+ */
+export function isMessageLevelRejection(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const record = err as { replyCode?: unknown; message?: unknown };
+  if (typeof record.replyCode === 'number') return true;
+  const message = typeof record.message === 'string' ? record.message : '';
+  return /NO_ROUTE|ACCESS_REFUSED|PRECONDITION_FAILED|NOT_FOUND|RESOURCE_LOCKED/.test(message);
+}
+
 /** admin-api 侧 outbox relay：只处理 `producer='admin-api'` 的行。 */
 export class AdminOutboxPublisher {
   private readonly connection: MqConnection;
@@ -28,6 +41,11 @@ export class AdminOutboxPublisher {
   private readonly instanceId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
   private readonly maxAttempts = 20;
   private readonly leaseMs = 30_000;
+  private readonly maxBackoffMs = 30_000;
+  private failureStreak = 0;
+  private roundFailed = false;
+  /** R11-3：判活标志，避免重复 start 双循环、stop 后在途 run 续排定时器。 */
+  private started = false;
 
   constructor(
     private readonly url: string,
@@ -129,6 +147,7 @@ export class AdminOutboxPublisher {
   async relayOnce(): Promise<number> {
     if (this.relaying) return 0;
     this.relaying = true;
+    this.roundFailed = false;
     let published = 0;
     let channel: ConfirmChannel | null = null;
     try {
@@ -153,8 +172,8 @@ export class AdminOutboxPublisher {
                 persistent: true,
                 contentType: 'application/json',
                 messageId: doc.eventId,
-                // 问题 16：发布头携带真实重试计数，broker 重投后消费端仍能据此补投结算链。
-                headers: { 'x-event-id': doc.eventId, 'x-retry-count': doc.attempts },
+                // R10-2：发布侧 attempts 只作为发布观测信息，不再冒充消费侧重试计数。
+                headers: { 'x-event-id': doc.eventId, 'x-publish-attempts': doc.attempts },
               },
               (err) => (err ? reject(err) : resolve()),
             );
@@ -175,10 +194,19 @@ export class AdminOutboxPublisher {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn?.(`[billing-outbox] publish failed for ${doc.eventId}: ${message}`);
-          await this.markFailure(doc.eventId, message, doc.attempts);
+          this.roundFailed = true;
+          if (isMessageLevelRejection(err)) {
+            // 消息级被拒（毒消息）：消耗 attempts，达到上限后隔离。
+            await this.markFailure(doc.eventId, message, doc.attempts);
+          } else {
+            // R10-3：传输级失败不消耗 per-message attempts，仅释放认领并进入 relay 退避。
+            this.logger.warn?.(
+              `[billing-outbox] transport failure, keeping ${doc.eventId} attempts=${doc.attempts}`,
+            );
+          }
           // R-1：失败后停止本轮（不再 continue）。否则 broker 恢复后「后一条先发」，
           // 造成同类因果事件顺序翻转；剩余认领释放，下一轮按 createdAt 顺序重试。
-          await this.releaseClaims(docs.slice(index + 1).map((item) => item.eventId));
+          await this.releaseClaims(docs.slice(index).map((item) => item.eventId));
           break;
         }
       }
@@ -193,19 +221,40 @@ export class AdminOutboxPublisher {
     return published;
   }
 
+  /** R10-3：失败轮次指数退避（2s→4s→8s→16s→30s），让 20 次尝试覆盖更长故障窗。 */
+  private nextDelayMs(): number {
+    if (this.failureStreak === 0) return this.intervalMs;
+    return Math.min(
+      this.intervalMs * 2 ** Math.min(this.failureStreak, 4),
+      this.maxBackoffMs,
+    );
+  }
+
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      void this.relayOnce().catch((err) => {
+    if (this.started) return;
+    this.started = true;
+    const run = async () => {
+      if (!this.started) return;
+      try {
+        await this.relayOnce();
+      } catch (err) {
+        this.roundFailed = true;
         this.logger.warn?.('[billing-outbox] relay failed', (err as Error).message);
-      });
-    }, this.intervalMs);
-    this.timer.unref?.();
+      }
+      // stop() 可能在 relay 期间发生：此时不得续排定时器。
+      if (!this.started) return;
+      this.failureStreak = this.roundFailed ? this.failureStreak + 1 : 0;
+      const delay = this.nextDelayMs();
+      this.timer = setTimeout(run, delay);
+      this.timer.unref?.();
+    };
+    void run();
   }
 
   async stop(): Promise<void> {
+    this.started = false;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     // O-1：停机前排空在途 relay，避免已认领未发布的行长时间滞留。

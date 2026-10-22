@@ -122,7 +122,7 @@ flowchart TD
 | `aspire/AgentGear.AppHost/AGENTS.md` | 修改 | Managed Resources 表新增 `rabbitmq` 行；补充 `admin-api`/`cloud-controller` 注入 `RABBITMQ_URL` 的说明 |
 | `servers/admin-api/package.json` | 修改 | dependencies 新增 `amqplib`；devDependencies 新增 `@types/amqplib` |
 | `servers/cloud-controller/package.json` | 修改 | dependencies 新增 `amqplib`；devDependencies 新增 `@types/amqplib` |
-| `servers/admin-api/src/config/index.ts` | 修改 | 新增计费与 MQ 配置项（见提案 §9.2）：`rabbitmqUrl`/`rabbitmqPrefetch`/`rabbitmqRetryMax`/`billingCycleSeconds`/`containerDepositCredits`/`billingArrearsGraceMs`/`modelDefaultMaxOutputTokens`/`billingReconCron`/`reservationStaleMs`/`outboxRelayIntervalMs`；`parsePositiveInt` 复用 |
+| `servers/admin-api/src/config/index.ts` | 修改 | 新增计费与 MQ 配置项（见提案 §9.2）：`rabbitmqUrl`/`rabbitmqPrefetch`/`rabbitmqRetryMax`/`billingCycleSeconds`/`containerDepositCredits`/`billingArrearsGraceMs`/`modelDefaultMaxOutputTokens`/`billingReconIntervalMs`/`reservationStaleMs`/`outboxRelayIntervalMs`；`parsePositiveInt` 复用 |
 | `servers/cloud-controller/src/config/index.ts` | 修改 | 新增 `rabbitmqUrl`（`RABBITMQ_URL`，默认 `amqp://guest:guest@localhost:5672`）、`rabbitmqPrefetch`/`rabbitmqRetryMax`/`outboxRelayIntervalMs`；加入 `AppConfig` |
 
 ### 命令参考
@@ -288,7 +288,7 @@ cd servers/admin-api && npm run build
 | `servers/admin-api/src/services/billing/mq/publisher.ts` | 新增 | outbox relay：读 `producer='admin-api'` 未发布行 → `publish(confirm)` → 标记 published（`OUTBOX_RELAY_INTERVAL_MS`） |
 | `servers/admin-api/src/services/billing/mq/consumers.ts` | 新增 | 手动 ack 消费者：`billing.metering.q`（事件→计量）、`billing.settlement.q`（周期结算消息）；处理成功才 ack；异常 nack 进 retry（TTL 指数退避），超次进 DLQ；`eventId` 幂等 |
 | `servers/admin-api/src/services/billing/settlement-tick.ts` | 新增 | 周期结算器 + 欠费宽限强拆：按 `reservationId` 分区串行（复用 `KeyedMutex` 模式），`(reservationId,cycleSeq)` 幂等（**裁决 7**）；结算 → 用冻结抵本期 → `recheck(下期,accrue-and-track)` → 重冻下期；首期消息由消费者在 reservation ACTIVE 后发布延迟消息；兜底 `setInterval` 扫描 ACTIVE reservation |
-| `servers/admin-api/src/services/billing/reconciliation.ts` | 新增 | 三线对账：资金（wallet vs Σledger）、计量（meteringrecords vs billingevents）、资源（ACTIVE reservations vs 存活容器）+ 僵尸预留扫描（`RESERVATION_STALE_MS`）；`BILLING_RECON_CRON`（默认每日 03:00） |
+| `servers/admin-api/src/services/billing/reconciliation.ts` | 新增 | 三线对账：资金（wallet vs Σledger）、计量（meteringrecords vs billingevents）、资源（ACTIVE reservations vs 存活容器）+ 僵尸预留扫描（`RESERVATION_STALE_MS`）；`BILLING_RECON_INTERVAL_MS`（默认 24h，错过触发点后补跑） |
 | `servers/admin-api/src/services/billing/scheduler.ts` | 新增 | 统一注册周期任务：outbox relay、对账 cron、reservation 兜底扫描；`start()/stop()` |
 | `servers/admin-api/src/index.ts` | 修改 | 连接 Mongo 后 `syncIndexes()`（计费集合）；启动 MQ 连接/消费者/结算调度/对账；zombie 强拆经 `cloudControllerClient.destroy(id, reason)`（**裁决 5**）；`stop` 优雅关闭 |
 

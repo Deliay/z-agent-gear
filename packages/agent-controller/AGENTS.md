@@ -114,7 +114,8 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/root/workspace`，幂等）。
 - 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
   本地单连接保持原行为，配置写入使用权限 `0600`。
-- 任一端 `shutdown` → 关闭两端并退出 0；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- 任一端 `shutdown` → 关闭两端并退出：正常（服务端主动 shutdown/SIGTERM/SIGINT）退出 0；`version_mismatch:*` / `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 
@@ -184,6 +185,21 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 3. **REFACTOR**: 重构代码，保持测试通过
 
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
+
+## ACP 能力快照（capabilities.ts）
+
+- `src/acp/capabilities.ts` 是 FeatureId 全集（20 项）与平台支持矩阵的**唯一事实源**；其他位置不得复制清单或矩阵。
+- `normalizeCapabilities()` 是纯函数（无 socket/fs 依赖）：状态 = Agent 声明 × 平台支持（declared=false → unsupported；declared + full → supported；declared + partial/none → partial）。
+- 快照 `raw` 保留 `initialize` 原文（`authMethodsRaw`，不是 `type→kind` 转换后的展示产物），单份上限 16 KiB，超限替换为 `{ truncated, originalBytes, preview }`。
+- `CLIENT_CAPABILITIES` 常量由 `bridge.ts` 与 `sync-bridge.ts` 共用；`bridge` 在 `acp:initialized` 事件中携带 `capabilities`，`socketio-client.buildAcpInitResult()` 是 `acp:start:result`/`acp:resume:result` 的唯一出口。
+- Elicitation 可观测：未知模式（带 `requestId`，`detail` 截断 100）/ 65s 兜底取消都会 `console.warn` 并发出 `acp:elicitation:resolved`（`unsupported_mode` / `timeout`），不再静默取消。
+- Elicitation 生命周期：`stop()` / `handleError()` / `spawner.closed`（进程退出）/ `settlePendingOnDisconnect()`（断线）/
+  Agent 自发 `unstable_completeElicitation` 都会 `clearTimeout` + resolve(cancel) + 删除 pending，并回发
+  `acp:elicitation:resolved{reason:'cancelled'}`；`acp:reconcile` 对账杀会话走 `bridge.stop()`。
+  收敛时发 `permission:settled` / `elicitation:settled`，socketio-client 据此清理请求级 Map。
+  会话关闭/进程退出/断线/对账后不得再出现 65s 迟到的 `timeout` 事件。
+- 同步链路仍自动 `cancel` 问询，但声明相同的 `CLIENT_CAPABILITIES` 并记录告警（无用户通道的合法降级）。
+- 回归：`capabilities.test.ts`（映射/三档合并/raw 保真）、`bridge.test.ts`（快照、resolved）、`elicitation.integration.test.ts`（真实 SDK + 假 Agent 进程验证 `elicitation/create` 路由）、`socketio-client.test.ts`（旧 payload 零退化）。
 
 ## Related Rules
 

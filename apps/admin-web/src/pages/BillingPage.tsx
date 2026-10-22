@@ -15,7 +15,9 @@ import {
 } from '@/graphql/mutations'
 import type {
   BillingAccountData,
+  BillingCategory,
   BillingInvoiceData,
+  BillingLedgerType,
   BillingRollupGranularity,
   GetAdminBillingAccountsQuery,
   GetAdminBillingApiCallsQuery,
@@ -56,6 +58,11 @@ export default function BillingPage() {
   const [page, setPage] = useState(1)
   const [invoicePage, setInvoicePage] = useState(1)
   const [callPage, setCallPage] = useState(1)
+  // R10-7：PRD 功能点 7 的时间范围/类型/来源筛选。
+  const [invoiceFrom, setInvoiceFrom] = useState('')
+  const [invoiceTo, setInvoiceTo] = useState('')
+  const [invoiceType, setInvoiceType] = useState<BillingLedgerType | ''>('')
+  const [invoiceCategory, setInvoiceCategory] = useState<BillingCategory | ''>('')
   const [confirmAction, setConfirmAction] = useState<'limit' | 'status' | null>(null)
   const pageSize = 20
 
@@ -63,7 +70,15 @@ export default function BillingPage() {
     variables: { keyword: keyword || null, page, pageSize },
   })
   const invoicesQuery = useQuery<GetAdminBillingInvoicesQuery>(ADMIN_BILLING_INVOICES, {
-    variables: { accountId: selectedId ?? '', page: invoicePage, pageSize },
+    variables: {
+      accountId: selectedId ?? '',
+      from: invoiceFrom ? new Date(`${invoiceFrom}T00:00:00.000Z`).toISOString() : null,
+      to: invoiceTo ? new Date(`${invoiceTo}T23:59:59.999Z`).toISOString() : null,
+      type: invoiceType || null,
+      category: invoiceCategory || null,
+      page: invoicePage,
+      pageSize,
+    },
     skip: !selectedId,
   })
   // D-1：收据按账单直查（不再与账单分页 rank 耦合）。
@@ -296,6 +311,62 @@ export default function BillingPage() {
               <CardTitle>账单明细</CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="mb-3 flex flex-wrap items-end gap-2 text-sm">
+                <label className="space-y-1">
+                  <span className="block text-muted-foreground">开始日期</span>
+                  <Input
+                    type="date"
+                    value={invoiceFrom}
+                    onChange={(event) => {
+                      setInvoiceFrom(event.target.value)
+                      setInvoicePage(1)
+                    }}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-muted-foreground">结束日期</span>
+                  <Input
+                    type="date"
+                    value={invoiceTo}
+                    onChange={(event) => {
+                      setInvoiceTo(event.target.value)
+                      setInvoicePage(1)
+                    }}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-muted-foreground">类型</span>
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    value={invoiceType}
+                    onChange={(event) => {
+                      setInvoiceType(event.target.value as BillingLedgerType | '')
+                      setInvoicePage(1)
+                    }}
+                  >
+                    <option value="">全部</option>
+                    <option value="charge">消费</option>
+                    <option value="recharge">充值</option>
+                    <option value="adjust">调整</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-muted-foreground">来源</span>
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    value={invoiceCategory}
+                    onChange={(event) => {
+                      setInvoiceCategory(event.target.value as BillingCategory | '')
+                      setInvoicePage(1)
+                    }}
+                  >
+                    <option value="">全部</option>
+                    <option value="container">容器</option>
+                    <option value="model">模型</option>
+                    <option value="manual">手工</option>
+                  </select>
+                </label>
+              </div>
               {invoicesQuery.loading && !invoicesQuery.data ? (
                 <p className="text-sm text-muted-foreground">加载中…</p>
               ) : invoicesQuery.error ? (
@@ -370,8 +441,20 @@ export default function BillingPage() {
                           </td>
                           <td className="py-2 pr-3 text-right tabular-nums">{call.cost.toFixed(2)}</td>
                           <td className="py-2">
-                            <Badge variant={call.status === 'aborted' ? 'destructive' : 'outline'}>
-                              {call.status === 'aborted' ? '中断调用' : call.status === 'failed' ? '失败' : '完成'}
+                            <Badge
+                              variant={
+                                call.status === 'aborted' || call.status === 'failed'
+                                  ? 'destructive'
+                                  : 'outline'
+                              }
+                            >
+                              {call.status === 'aborted'
+                                ? '中断调用'
+                                : call.status === 'failed'
+                                  ? '失败'
+                                  : call.status === 'started'
+                                    ? '进行中/异常'
+                                    : '完成'}
                               {call.estimated ? '（估算）' : ''}
                             </Badge>
                           </td>

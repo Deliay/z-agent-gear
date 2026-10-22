@@ -36,7 +36,10 @@ function mocks(options: { receiptError?: boolean } = {}) {
       result: { data: { myBillingAccount: account } },
     },
     {
-      request: { query: MY_BILLING_INVOICES, variables: { page: 1, pageSize: 20 } },
+      request: {
+        query: MY_BILLING_INVOICES,
+        variables: { from: null, to: null, type: null, category: null, page: 1, pageSize: 20 },
+      },
       result: {
         data: {
           myBillingInvoices: Array.from({ length: 20 }, (_, index) => ({
@@ -44,13 +47,13 @@ function mocks(options: { receiptError?: boolean } = {}) {
             id: index === 0 ? 'i1' : `i1-${index}`,
             accountId: 'a1',
             seq: index,
-            type: 'charge',
-            category: 'container',
-            amount: -1,
+            type: index === 1 ? 'recharge' : 'charge',
+            category: index === 1 ? 'manual' : 'container',
+            amount: index === 1 ? 10 : -1,
             balanceAfter: -3,
             refType: 'container',
             refId: `c${index}`,
-            description: index === 0 ? '容器周期结算' : `容器周期结算 ${index}`,
+            description: index === 0 ? '容器周期结算' : index === 1 ? '后台充值' : `容器周期结算 ${index}`,
             items: [
               {
                 __typename: 'InvoiceItem',
@@ -62,14 +65,17 @@ function mocks(options: { receiptError?: boolean } = {}) {
                 segment: null,
               },
             ],
-            receiptId: null,
+            receiptId: index === 1 ? 'r1' : null,
             createdAt: '2026-10-18T00:00:00.000Z',
           })),
         },
       },
     },
     {
-      request: { query: MY_BILLING_INVOICES, variables: { page: 2, pageSize: 20 } },
+      request: {
+        query: MY_BILLING_INVOICES,
+        variables: { from: null, to: null, type: null, category: null, page: 2, pageSize: 20 },
+      },
       result: {
         data: {
           myBillingInvoices: [
@@ -100,6 +106,23 @@ function mocks(options: { receiptError?: boolean } = {}) {
               createdAt: '2026-10-17T00:00:00.000Z',
             },
           ],
+        },
+      },
+    },
+    {
+      request: { query: MY_BILLING_RECEIPT, variables: { invoiceId: 'i1-1' } },
+      result: {
+        data: {
+          myBillingReceipt: {
+            __typename: 'BillingReceipt',
+            id: 'r1',
+            receiptNo: 'R-0001',
+            invoiceId: 'i1-1',
+            accountId: 'a1',
+            amount: 10,
+            balanceAfter: -3,
+            issuedAt: '2026-10-18T00:00:01.000Z',
+          },
         },
       },
     },
@@ -240,6 +263,14 @@ describe('前台我的费用', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看' }));
     expect(await screen.findByText('收据号 R-0002')).toBeDefined();
     expect(screen.queryByText('该账单暂无收据')).toBeNull();
+  });
+
+  it('R10-5: 充值账单（recharge）同样可查看收据', async () => {
+    renderPage();
+    await screen.findByText('后台充值');
+    // 第一页第二个「查看」对应 receiptId 非空的充值账单。
+    fireEvent.click(screen.getAllByRole('button', { name: '查看' })[1]);
+    expect(await screen.findByText('收据号 R-0001')).toBeDefined();
   });
 
   it('T-AW11: 收据查询失败展示错误态而非误报「暂无收据」', async () => {

@@ -38,3 +38,9 @@ export const billingMutex = new KeyedMutex();
  * 避免自愈写与在途增量互相覆盖。与 `billingMutex` 一样是进程内锁（A11 单实例前提）。
  */
 export const accountMutex = new KeyedMutex();
+
+/**
+ * 云电脑运行 Key 轮换互斥（B-4）：同一 `cloudHostId` 的「铸造新 Key + 撤销旧 active Key」必须
+ * 串行执行，否则并发铸造会出现「各自撤销对方」导致全部失效。与其余锁一样是进程内锁（A11 单实例前提）。
+ */
+export const cloudHostKeyMutex = new KeyedMutex();

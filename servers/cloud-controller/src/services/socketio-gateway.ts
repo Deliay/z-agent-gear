@@ -7,7 +7,6 @@ import {
   MIN_HARNESS_WORKER_VERSION,
   MIN_WORKER_VERSION,
   SUPPORTED_MAJOR,
-  isSupportedHarnessWorkerVersion,
   isSupportedWorkerVersion,
   sanitizeVersionForLog,
 } from './worker-version.js';
@@ -242,11 +241,11 @@ export function registerWorkerGateway(
   });
 
   // 销毁流程：先下发并等待 post 脚本批次（若有），再向绑定到 containerId room 的在线容器发送 shutdown。
-  deps.containerService.onShutdown(async (containerId) => {
+  deps.containerService.onShutdown(async (containerId, reason) => {
     if (deps.workloadDispatcher) {
       await deps.workloadDispatcher.runPostBatch(containerId);
     }
-    nsp.to(containerId).emit('shutdown', { reason: '强制销毁' });
+    nsp.to(containerId).emit('shutdown', { reason: reason ?? '强制销毁' });
   });
 
   nsp.on('connection', (socket: Socket) => {
@@ -277,10 +276,11 @@ export function registerWorkerGateway(
       }
       const purpose = record?.purpose ?? 'idle';
       const isHarness = purpose === 'harness';
-      const minimumVersion = isHarness ? MIN_HARNESS_WORKER_VERSION : MIN_WORKER_VERSION;
-      const versionSupport = isHarness
-        ? isSupportedHarnessWorkerVersion(payload?.version)
-        : isSupportedWorkerVersion(payload?.version);
+      // C-4：harness 使用落库的 max(常量, 请求值)；历史记录缺省回退常量。
+      const minimumVersion = isHarness
+        ? (record?.agentGearMinVersion ?? MIN_HARNESS_WORKER_VERSION)
+        : MIN_WORKER_VERSION;
+      const versionSupport = isSupportedWorkerVersion(payload?.version, minimumVersion);
       if (!versionSupport.supported) {
         const currentVersion = sanitizeVersionForLog(payload?.version);
         logger.warn?.(

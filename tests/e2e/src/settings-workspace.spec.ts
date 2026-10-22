@@ -264,9 +264,9 @@ test.describe('Settings Workspace E2E', () => {
 
     await loginViaUI(page, username);
     await page.goto('/sessions');
-    await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole('button', { name: '新建会话' }).click();
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
 
     await page.locator('#controller').selectOption({ index: 1 });
@@ -299,8 +299,8 @@ test.describe('Settings Workspace E2E', () => {
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
     await expect(sidebar.getByRole('button', { name: /e2e-ws-host/ })).toBeVisible({ timeout: 5000 });
 
-    await sidebar.getByRole('button', { name: /e2e-ws-host/ }).click();
-    await expect(sidebar.getByText(/myproject/)).toBeVisible();
+    // 控制器默认展开，勿再点击（点击会折叠）；直接断言工作区树下可见。
+    await expect(sidebar.getByText('myproject（默认）', { exact: true })).toBeVisible();
 
     disconnect();
   });

@@ -17,6 +17,20 @@ function normalizeScope(value: unknown): 'user' | 'global' {
 }
 
 export class ModelService {
+  /**
+   * 平台模型库来源快照（会话内模型来源推断用）：
+   * 与 AVAILABLE_MODELS_FILTER 同口径，只取 name/scope，避免 N+1 全量文档读取。
+   */
+  async listSourceLibrary(): Promise<Array<{ name: string; scope: 'user' | 'global' }>> {
+    const models = await Model.find(AVAILABLE_MODELS_FILTER)
+      .select('name scope')
+      .lean();
+    return models.map((model) => ({
+      name: String(model.name),
+      scope: normalizeScope(model.scope),
+    }));
+  }
+
   async findAll() {
     const models = await Model.find(AVAILABLE_MODELS_FILTER)
       .sort({ sortOrder: 1, createdAt: 1 })

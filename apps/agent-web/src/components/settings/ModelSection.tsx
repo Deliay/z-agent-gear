@@ -26,7 +26,8 @@ import CustomModelDialog from './CustomModelDialog'
 
 interface ModelData {
   id: string
-  providerId: string
+  /** global（系统内置）模型由服务端掩蔽为 null */
+  providerId: string | null
   provider?: {
     id: string
     name: string
@@ -70,7 +71,7 @@ export default function ModelSection() {
     const map = new Map<string, ModelGroupData>()
     for (const model of models) {
       if (model.scope === 'global') continue
-      const key = model.provider ? model.providerId : 'unknown'
+      const key = model.provider ? (model.providerId ?? 'unknown') : 'unknown'
       if (!map.has(key)) {
         map.set(key, {
           key,
@@ -176,7 +177,7 @@ export default function ModelSection() {
         <div className="text-sm text-muted-foreground">加载中...</div>
       ) : models.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          暂无可用模型
+          暂无可用模型，添加供应商后自动同步模型
         </div>
       ) : (
         <DndContext

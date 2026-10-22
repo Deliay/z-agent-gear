@@ -1,7 +1,7 @@
 import { CloudWorkload } from '../models/cloud-workload.js';
 
 /**
- * 006-preset-github：写入预制工作负载「Github」（安装 gh CLI）。
+ * 007-preset-github：写入预制工作负载「Github」（安装 gh CLI）。
  *
  * 口径（实现计划 Phase 1）：
  * - `workloadKind='standard'`、`isPreset=true`、`presetKey='github'`；
@@ -9,7 +9,7 @@ import { CloudWorkload } from '../models/cloud-workload.js';
  * - 参数：`repoFullName`（TEXT，默认空）与 `targetPath`（TEXT，默认 `/root/workspaces/{repo}`）；
  * - 已存在（presetKey 或精确 name 命中）则跳过并告警，**不覆盖管理员修改**。
  */
-export const name = '006-preset-github';
+export const name = '007-preset-github';
 
 export const GITHUB_PRESET_KEY = 'github';
 export const GITHUB_PRESET_NAME = 'Github';
@@ -56,13 +56,13 @@ export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: GITHUB_PRESET_KEY });
   if (byKey) {
     console.warn(
-      `[Migration 006] preset workload "${GITHUB_PRESET_KEY}" already exists (by presetKey), skipping`,
+      `[Migration 007] preset workload "${GITHUB_PRESET_KEY}" already exists (by presetKey), skipping`,
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: GITHUB_PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 006] workload named "${GITHUB_PRESET_NAME}" already exists, skipping`);
+    console.warn(`[Migration 007] workload named "${GITHUB_PRESET_NAME}" already exists, skipping`);
     return;
   }
 
@@ -77,5 +77,5 @@ export async function run(): Promise<void> {
     workloadKind: 'standard',
     harnessType: null,
   });
-  console.log(`[Migration 006] preset workload "${GITHUB_PRESET_KEY}" created`);
+  console.log(`[Migration 007] preset workload "${GITHUB_PRESET_KEY}" created`);
 }

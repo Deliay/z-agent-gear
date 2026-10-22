@@ -12,6 +12,11 @@ export const todoResolvers = {
       todo.data?.requestId ? todo.data : null,
     elicitationData: (todo: { elicitationData?: { requestId?: string } | null }) =>
       todo.elicitationData?.requestId ? todo.elicitationData : null,
+    resolution: (todo: { resolution?: string | null }) => todo.resolution ?? null,
+    resolvedAt: (todo: { resolvedAt?: Date | string | null }) =>
+      todo.resolvedAt ? new Date(todo.resolvedAt).toISOString() : null,
+    expiresAt: (todo: { expiresAt?: Date | string | null }) =>
+      todo.expiresAt ? new Date(todo.expiresAt).toISOString() : null,
   },
   PermissionRequestData: {
     toolCall: (data: { toolCall?: { toolCallId?: string } | null }) =>
@@ -41,13 +46,24 @@ export const todoResolvers = {
         throw new GraphQLError('Not authenticated');
       }
 
+      // 归属前置校验：必须先确认待办属于当前用户，再向 Agent 下发响应动作，
+      // 否则持有他人 requestId 即可代答（例如代接受权限 → Agent 执行命令）。
+      const owned = await todoService.isRespondableTodo(
+        context.currentUser.id,
+        args.requestId,
+        'permission_request',
+      );
+      if (!owned) {
+        throw new GraphQLError('Todo item not found or already handled');
+      }
+
       const redis = getRedisClient();
       await redis.publish('permission:response', JSON.stringify({
         requestId: args.requestId,
         outcome: { outcome: args.outcome, optionId: args.optionId },
       }));
 
-      await todoService.markTodoAsResponded(args.requestId);
+      await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
 
       return true;
     },
@@ -60,6 +76,16 @@ export const todoResolvers = {
         throw new GraphQLError('Not authenticated');
       }
 
+      // 归属 + 终态前置校验：只有本人且仍待处理的问询才允许回传 Agent
+      const owned = await todoService.isRespondableTodo(
+        context.currentUser.id,
+        args.requestId,
+        'elicitation_request',
+      );
+      if (!owned) {
+        throw new GraphQLError('Todo item not found or already handled');
+      }
+
       const redis = getRedisClient();
       await redis.publish('elicitation:response', JSON.stringify({
         requestId: args.requestId,
@@ -67,7 +93,17 @@ export const todoResolvers = {
         ...(args.action === 'accept' && args.values ? { content: args.values } : {}),
       }));
 
-      await todoService.markTodoAsResponded(args.requestId);
+      await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
+
+      const resolution = args.action === 'accept'
+        ? 'accepted'
+        : args.action === 'decline'
+          ? 'declined'
+          : 'cancelled';
+      // 归属 + 终态单调由 Service 数据层强制：仅本人、仅 null→终态
+      await todoService.markElicitationResolved(args.requestId, resolution, {
+        userId: context.currentUser.id,
+      });
 
       return true;
     },

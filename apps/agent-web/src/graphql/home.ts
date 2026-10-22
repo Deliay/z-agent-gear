@@ -143,6 +143,9 @@ export const HOME_OVERVIEW = gql`
           elicitationId
           url
         }
+        resolution
+        resolvedAt
+        expiresAt
         createdAt
       }
       unreadTodoCount

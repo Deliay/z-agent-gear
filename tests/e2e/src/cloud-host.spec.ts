@@ -24,72 +24,85 @@ test.describe('Cloud Host E2E', () => {
 
     const hostName = `e2e-cloud-${Date.now().toString(36)}`;
 
-    await page.getByRole('button', { name: '新建云电脑' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: '新建云电脑' })).toBeVisible();
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: '新建云电脑' })).toBeVisible();
 
-    // 名称必填 + harness 必选；本期无存储/会话导入参数
-    const createButton = dialog.getByRole('button', { name: '创建云电脑' });
-    await expect(createButton).toBeDisabled();
-    await expect(dialog.getByText('存储会话')).toHaveCount(0);
-    await expect(dialog.getByText('恢复的会话')).toHaveCount(0);
+      // 名称必填 + harness 必选；本期无存储/会话导入参数
+      const createButton = dialog.getByRole('button', { name: '创建云电脑' });
+      await expect(createButton).toBeDisabled();
+      await expect(dialog.getByText('存储会话')).toHaveCount(0);
+      await expect(dialog.getByText('恢复的会话')).toHaveCount(0);
 
-    await dialog.locator('#cloud-host-name').fill('   ');
-    await expect(createButton).toBeDisabled();
-    await expect(dialog.getByText('请输入云电脑名称')).toBeVisible();
+      await dialog.locator('#cloud-host-name').fill('   ');
+      await expect(createButton).toBeDisabled();
+      await expect(dialog.getByText('请输入云电脑名称')).toBeVisible();
 
-    await dialog.locator('#cloud-host-name').fill(hostName);
-    await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-    await expect(dialog.getByText('将自动创建会话')).toBeVisible();
-    await expect(createButton).toBeEnabled();
-    await createButton.click();
+      await dialog.locator('#cloud-host-name').fill(hostName);
+      await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(createButton).toBeEnabled();
+      await createButton.click();
 
-    await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toBeVisible({
-      timeout: 15000,
-    });
-    const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
-    await expect(controllerRow.getByTestId('cloud-host-icon')).toBeVisible();
-    await expect(controllerRow.getByTestId('cloud-host-status')).toHaveText('启动中');
+      await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
+      const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
+      await expect(controllerRow.getByTestId('cloud-host-icon')).toBeVisible();
+      await expect(controllerRow.getByTestId('cloud-host-status')).toHaveText('启动中');
 
-    await controllerRow.getByTitle('控制器配置').click();
-    await expect(page).toHaveURL(/\/settings\?controllerId=/);
-    await expect(page.getByTestId('cloud-host-panel')).toBeVisible();
-    await expect(page.getByTestId('cloud-host-panel')).toContainText('启动中');
-    // 工作区 + Harness 工具两栏与普通主机一致
-    await expect(page.getByRole('button', { name: '工作区' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Harness 工具' })).toBeVisible();
+      await controllerRow.getByTitle('控制器配置').click();
+      await expect(page).toHaveURL(/\/settings\?controllerId=/);
+      await expect(page.getByTestId('cloud-host-panel')).toBeVisible();
+      await expect(page.getByTestId('cloud-host-panel')).toContainText('启动中');
+      // 工作区 + Harness 工具两栏与普通主机一致
+      await expect(page.getByTestId('config-tab-workspace')).toBeVisible();
+      await expect(page.getByTestId('config-tab-harness')).toBeVisible();
 
-    // 无活动会话：直接停止（不弹告警）
-    await page.getByRole('button', { name: '停止云电脑' }).click();
-    await expect(page.getByTestId('cloud-host-panel')).toContainText('已销毁', { timeout: 15000 });
-    await expect(page.getByText('停止云主机会导致所有会话永久丢失，是否继续')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '停止云电脑' })).toHaveCount(0);
+      // 无活动会话：直接停止（不弹告警）
+      await page.getByRole('button', { name: '停止云电脑' }).click();
+      await expect(page.getByTestId('cloud-host-panel')).toContainText('已销毁', { timeout: 15000 });
+      await expect(page.getByText('停止云主机会导致所有会话永久丢失，是否继续')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '停止云电脑' })).toHaveCount(0);
 
-    // 终态才允许删除
-    await page.getByRole('button', { name: '删除云电脑' }).click();
-    await expect(page.getByRole('heading', { name: '删除云电脑' })).toBeVisible();
-    await page.getByRole('button', { name: '确认删除' }).click();
-    await expect(page.getByTestId('cloud-host-panel')).toHaveCount(0, { timeout: 15000 });
-    await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toHaveCount(0, {
-      timeout: 15000,
-    });
-
-    // 清理兜底（删除失败时通过 API 兜底）
-    const hosts = await gqlRequest(
-      page,
-      `query { myCloudHosts { id name } }`,
-      undefined,
-      token,
-    ).then((res) => res.json());
-    const leftover = hosts.data?.myCloudHosts?.find((host: { name: string }) => host.name === hostName);
-    if (leftover) {
-      await gqlRequest(
+      // 终态才允许删除
+      await page.getByRole('button', { name: '删除云电脑' }).click();
+      await expect(page.getByRole('heading', { name: '删除云电脑' })).toBeVisible();
+      await page.getByRole('button', { name: '确认删除' }).click();
+      await expect(page.getByTestId('cloud-host-panel')).toHaveCount(0, { timeout: 15000 });
+      await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toHaveCount(0, {
+        timeout: 15000,
+      });
+    } finally {
+      // 兜底清理放在 finally：任一断言失败也不会遗留云电脑（先停后删）
+      const hosts = await gqlRequest(
         page,
-        `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`,
-        { id: leftover.id },
+        `query { myCloudHosts { id name } }`,
+        undefined,
         token,
+      ).then((res) => res.json());
+      const leftover = hosts.data?.myCloudHosts?.find(
+        (host: { name: string }) => host.name === hostName,
       );
-      await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id: leftover.id }, token);
+      if (leftover) {
+        // R2-23：stop/delete 任一步失败都继续尝试后续步骤，避免残留主机
+        try {
+          await gqlRequest(
+            page,
+            `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`,
+            { id: leftover.id },
+            token,
+          );
+        } catch {
+          /* 已停止或控制面不可用：继续尝试删除 */
+        }
+        try {
+          await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id: leftover.id }, token);
+        } catch {
+          /* 删除失败无法进一步回收：保留日志由运维巡检处理 */
+        }
+      }
     }
   });
 

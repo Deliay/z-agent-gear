@@ -75,14 +75,15 @@ export default function NewSessionDialog({
       c.status === 'online' &&
       (c.type !== 'cloud' || (c.cloudHost?.status === 'RUNNING' && !c.cloudHost.deletedAt)),
   );
-  // 云电脑仅 RUNNING 可创建会话：终态/启动/停止中给出提示且不可选
-  const unavailableCloudControllers = controllers.filter(
-    (c) => c.type === 'cloud' && !onlineControllers.some((online) => online.id === c.id),
-  );
+  // 云电脑仅 RUNNING 可创建会话：当前选中/预选的云电脑不可用时给出提示
   const preselectedController = controllers.find((c) => c.id === existingControllerId);
   const preselectedControllerUnavailable =
     preselectedController?.type === 'cloud' &&
     !onlineControllers.some((c) => c.id === preselectedController?.id);
+  const selectedControllerData = controllers.find((c) => c.id === selectedController);
+  const selectedCloudHostUnavailable =
+    selectedControllerData?.type === 'cloud' &&
+    !onlineControllers.some((c) => c.id === selectedControllerData.id);
   const selectedControllerSelectable = onlineControllers.some((c) => c.id === selectedController);
 
   const { data: mcpData } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
@@ -196,16 +197,15 @@ export default function NewSessionDialog({
             {onlineControllers.length === 0 && (
               <p className="mt-1 text-sm text-destructive">无在线控制器</p>
             )}
-            {preselectedControllerUnavailable && (
+            {preselectedControllerUnavailable ? (
               <p className="mt-1 text-sm text-destructive" data-testid="cloud-host-unavailable-hint">
                 该云电脑未运行，无法创建会话
               </p>
-            )}
-            {!preselectedControllerUnavailable && unavailableCloudControllers.length > 0 && (
+            ) : selectedCloudHostUnavailable ? (
               <p className="mt-1 text-sm text-muted-foreground" data-testid="cloud-host-unavailable-hint">
                 云电脑未运行，暂不可创建会话
               </p>
-            )}
+            ) : null}
           </div>
 
           {selectedController && (

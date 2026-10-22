@@ -36,8 +36,15 @@ function harnessLabel(harness: HarnessType): string {
   return HARNESS_LABELS[harness] ?? harness
 }
 
+/** 服务端契约错误 → 前台中文文案；未登记的契约错误仍原样展示 */
+const SERVER_ERROR_MESSAGES: Record<string, string> = {
+  'too many cloud hosts': '每用户同时最多 1 个云电脑实例',
+}
+
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
+  if (error instanceof Error && error.message) {
+    return SERVER_ERROR_MESSAGES[error.message.trim()] ?? error.message
+  }
   return '创建云电脑失败，请稍后重试'
 }
 

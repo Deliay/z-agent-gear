@@ -9,11 +9,20 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatDateTime } from '@/lib/format'
 
+// R10-6：与后端 RECONCILIATION_LINES 全量对齐（7 条），避免其余线被误标为「资源对账」。
 const LINES = [
   { value: 'funds', label: '资金对账' },
   { value: 'metering', label: '计量对账' },
   { value: 'resources', label: '资源对账' },
+  { value: 'events', label: '事件对账' },
+  { value: 'rollups', label: '汇总对账' },
+  { value: 'apiCalls', label: '模型调用对账' },
+  { value: 'containerInvoices', label: '容器凭证对账' },
 ] as const
+
+const LINE_LABELS: Record<string, string> = Object.fromEntries(
+  LINES.map((line) => [line.value, line.label]),
+)
 
 export default function ReconciliationPage() {
   const [reports, setReports] = useState<ReconciliationReportData[] | null>(null)
@@ -47,7 +56,7 @@ export default function ReconciliationPage() {
         </Button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {LINES.map((line) => (
           <Button key={line.value} variant="outline" size="sm" onClick={() => run(line.value)} disabled={running}>
             {line.label}
@@ -61,9 +70,7 @@ export default function ReconciliationPage() {
         shown.map((report) => (
           <Card key={`${report.line}-${report.ranAt}`}>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>
-                {report.line === 'funds' ? '资金对账' : report.line === 'metering' ? '计量对账' : '资源对账'}
-              </CardTitle>
+              <CardTitle>{LINE_LABELS[report.line] ?? report.line}</CardTitle>
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">{formatDateTime(report.ranAt)}</span>
                 <Badge variant={report.errorCount > 0 ? 'destructive' : 'outline'}>

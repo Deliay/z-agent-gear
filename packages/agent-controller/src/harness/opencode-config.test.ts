@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'jsonc-parser';
 import {
@@ -164,6 +164,50 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
     await writeOpencodeConfig({ env: ENV, configDir: dir });
 
     expect(await fileMode(target)).toBe(0o600);
+  });
+
+  it('C-7: tightens an existing config directory to 0700', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    await chmod(dir, 0o755);
+
+    await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    expect(await fileMode(dir)).toBe(0o700);
+  });
+
+  it('C-7: writes atomically via a temp file and leaves no partial/temp files', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const target = join(dir, 'opencode.jsonc');
+    await writeFile(target, '{\n  "theme": "dark"\n}\n', 'utf-8');
+
+    await writeOpencodeConfig({ env: ENV, configDir: dir });
+
+    // 同目录只应有目标文件（临时文件已 rename 掉）
+    expect(await readdir(dir)).toEqual(['opencode.jsonc']);
+    expect(await fileMode(target)).toBe(0o600);
+    const config = parse(await readFile(target, 'utf-8'));
+    expect(config.theme).toBe('dark');
+    expect(config.provider.zag.name).toBe('ZAG');
+  });
+
+  it('C-7: keeps the original file intact when the write path fails', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const target = join(dir, 'opencode.jsonc');
+    const original = '{\n  "theme": "dark"\n}\n';
+    await writeFile(target, original, 'utf-8');
+    // 目标文件不可读（解析阶段失败）：不得产生临时文件，原文件保持原样。
+    await chmod(target, 0o200);
+
+    await expect(writeOpencodeConfig({ env: ENV, configDir: dir })).rejects.toBeInstanceOf(
+      OpencodeConfigError,
+    );
+
+    expect(await readdir(dir)).toEqual(['opencode.jsonc']);
+    await chmod(target, 0o600);
+    expect(await readFile(target, 'utf-8')).toBe(original);
   });
 
   it('rejects invalid JSONC and leaves the file untouched', async () => {

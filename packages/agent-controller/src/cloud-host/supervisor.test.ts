@@ -10,6 +10,7 @@ import {
   isCloudHostMode,
   parseInitWaitMs,
   readCloudHostEnv,
+  resolveShutdownExitCode,
   startCloudHostSupervisor,
   type CredentialManagerLike,
 } from './supervisor.js';
@@ -304,7 +305,7 @@ describe('startCloudHostSupervisor', () => {
     workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: false });
     const controllerOptions = context.connect.mock.calls[1][2] as ConnectToServerOptions;
 
-    workerOptions.onShutdown?.({ reason: '必须工作负载初始化失败' });
+    workerOptions.onShutdown?.({ reason: 'server requested shutdown' });
 
     expect(context.worker.disconnect).toHaveBeenCalled();
     expect(context.controller.disconnect).toHaveBeenCalled();
@@ -314,7 +315,7 @@ describe('startCloudHostSupervisor', () => {
 
     // 另一端 shutdown / 重复 shutdown 幂等
     controllerOptions.onShutdown?.({ reason: 'duplicate' });
-    handle.shutdown('signal');
+    handle.shutdown('SIGTERM');
     expect(context.exit).toHaveBeenCalledTimes(1);
   });
 
@@ -323,11 +324,54 @@ describe('startCloudHostSupervisor', () => {
     await startCloudHostSupervisor(context.deps);
     const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
 
-    workerOptions.onShutdown?.({ reason: 'required init failed' });
+    workerOptions.onShutdown?.({ reason: 'server requested shutdown' });
 
     expect(context.worker.disconnect).toHaveBeenCalled();
     expect(context.controller.disconnect).not.toHaveBeenCalled();
     expect(context.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('C-2: failure/version-mismatch shutdown exits non-zero (entrypoint self-heal path)', async () => {
+    // socketio-client 的错误事件 reason 前缀
+    expect(resolveShutdownExitCode('version_mismatch: agent-gear 版本不兼容')).toBe(1);
+    expect(resolveShutdownExitCode('error: REGISTER_FAILED')).toBe(1);
+    // 必须工作负载初始化失败（worker shutdown 包装后仍须识别）
+    expect(resolveShutdownExitCode('worker shutdown: 必须工作负载「OpenCode（Harness）」初始化失败')).toBe(1);
+    expect(resolveShutdownExitCode('required init failed')).toBe(1);
+    // 正常路径
+    expect(resolveShutdownExitCode('controller-api shutdown: server requested')).toBe(0);
+    expect(resolveShutdownExitCode('SIGINT')).toBe(0);
+    expect(resolveShutdownExitCode('unregistered')).toBe(0);
+  });
+
+  it('C-2: required init failure closes both sockets and exits 1', async () => {
+    const context = setup();
+    await startCloudHostSupervisor(context.deps);
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+    workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: false });
+
+    workerOptions.onShutdown?.({ reason: 'worker shutdown: 必须工作负载初始化失败' });
+
+    expect(context.worker.disconnect).toHaveBeenCalled();
+    expect(context.controller.disconnect).toHaveBeenCalled();
+    expect(context.exit).toHaveBeenCalledWith(1);
+    expect(context.worker.emit).not.toHaveBeenCalledWith('unregister', expect.anything());
+
+    // 显式 code 优先（调用方可覆盖）
+    const explicit = setup();
+    const explicitHandle = await startCloudHostSupervisor(explicit.deps);
+    explicitHandle.shutdown('server requested shutdown', 1);
+    expect(explicit.exit).toHaveBeenCalledWith(1);
+  });
+
+  it('C-2: version_mismatch reason exits 1', async () => {
+    const context = setup();
+    await startCloudHostSupervisor(context.deps);
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+
+    workerOptions.onShutdown?.({ reason: 'version_mismatch: agent-gear 版本不兼容' });
+
+    expect(context.exit).toHaveBeenCalledWith(1);
   });
 
   it('T-AG7b: rejects with a clear error instead of connecting when cloud-host env is incomplete', async () => {

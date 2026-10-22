@@ -137,6 +137,20 @@ describe('ContainerService', () => {
     expect(result.deletedJob).toBe(true);
   });
 
+  it('R2-20: destroy passes the real failure reason to the worker shutdown handler', async () => {
+    const { service } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(created.id);
+    const reasons: Array<string | undefined> = [];
+    service.onShutdown((_id, reason) => {
+      reasons.push(reason);
+    });
+
+    await service.destroy(created.id, { reason: '必须工作负载「opencode」初始化失败' });
+
+    expect(reasons).toEqual(['必须工作负载「opencode」初始化失败']);
+  });
+
   it('T-WD15: destroy(id, { reason }) overrides exitReason; no reason stays 强制销毁; delete failure keeps suffix', async () => {
     const { repo, service } = setup();
 
@@ -755,6 +769,37 @@ describe('ContainerService workload state machine', () => {
     await service.markFailed(failed.id, '容器异常退出');
     expect(destroyed).toContain(`harness:failed:${failed.id}`);
     expect(secretStore.get(failed.id)).toBeNull();
+  });
+
+  it('R2-4: mustFailure is preserved into the terminal onDestroyed callback', async () => {
+    let captured: { mustFailure: boolean; exitReason: string | null } | null = null;
+    const { repo, service } = setup(
+      {},
+      {
+        hooks: {
+          onDestroyed: (container) => {
+            captured = {
+              mustFailure: container.mustFailure,
+              exitReason: container.exitReason,
+            };
+          },
+        },
+      },
+    );
+    const harness = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(harness.id);
+    // dispatcher 在锁内先落 mustFailure + exitReason，再锁外 forceDestroy
+    await repo.update(harness.id, {
+      mustFailure: true,
+      exitReason: '必须工作负载「opencode」初始化失败',
+    });
+
+    await service.destroy(harness.id, { reason: '必须工作负载「opencode」初始化失败' });
+
+    expect(captured).toEqual({
+      mustFailure: true,
+      exitReason: '必须工作负载「opencode」初始化失败',
+    });
   });
 
   it('T-CC1: idle 无计费时终态不触发 onDestroyed（既有语义不变）', async () => {

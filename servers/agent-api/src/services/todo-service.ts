@@ -40,6 +40,14 @@ interface ElicitationRequestData {
 
 const SUMMARY_MAX_LENGTH = 200;
 
+export type ElicitationResolution = 'accepted' | 'declined' | 'cancelled' | 'expired' | 'failed';
+
+/** 终态写入的归属目标：userId 必填（租户隔离），requestId 缺失时用 sessionId 会话级兜底 */
+export interface ElicitationResolvedTarget {
+  userId: string;
+  sessionId?: string;
+}
+
 export class TodoService {
   async createPermissionTodo(data: PermissionRequestData): Promise<InstanceType<typeof TodoItem>> {
     const todo = await TodoItem.create({
@@ -158,18 +166,79 @@ export class TodoService {
     return result.modifiedCount > 0;
   }
 
-  async markTodoAsResponded(requestId: string): Promise<void> {
-    await TodoItem.updateOne(
-      { $or: [{ 'data.requestId': requestId }, { 'elicitationData.requestId': requestId }] },
-      { $set: { isRead: true } },
-    );
+  /**
+   * 响应前置归属校验：确认 requestId 属于该用户且仍可响应。
+   * 权限待办无 resolution 字段，只校验归属；问询必须仍未终结。
+   */
+  async isRespondableTodo(
+    userId: string,
+    requestId: string,
+    type: 'permission_request' | 'elicitation_request',
+  ): Promise<boolean> {
+    if (!userId || !requestId) return false;
+    const filter: Record<string, unknown> = type === 'elicitation_request'
+      ? { userId, 'elicitationData.requestId': requestId, resolution: null }
+      : { userId, 'data.requestId': requestId };
+    return (await TodoItem.countDocuments(filter)) > 0;
   }
 
-  async markElicitationCompleted(elicitationId: string): Promise<void> {
-    await TodoItem.updateOne(
-      { 'elicitationData.elicitationId': elicitationId },
+  async markTodoAsResponded(requestId: string, userId: string): Promise<boolean> {
+    // 缺 userId 时直接拒绝：Mongoose 会剥离 undefined 条件，静默退化为「匹配任意租户」
+    if (!userId) return false;
+    const result = await TodoItem.updateOne(
+      {
+        userId,
+        $or: [{ 'data.requestId': requestId }, { 'elicitationData.requestId': requestId }],
+      },
       { $set: { isRead: true } },
     );
+    return (result.modifiedCount ?? 0) > 0;
+  }
+
+  async markElicitationCompleted(elicitationId: string, userId: string): Promise<boolean> {
+    if (!userId) return false;
+    const result = await TodoItem.updateOne(
+      { 'elicitationData.elicitationId': elicitationId, userId },
+      { $set: { isRead: true } },
+    );
+    return (result.modifiedCount ?? 0) > 0;
+  }
+
+  /**
+   * 写入问询终态（用户响应 / 超时 / 取消 / 链路不支持）。
+   *
+   * 数据层强制两个不变量：
+   * 1. 归属：必须带 userId，缺失直接拒绝写入（防止持有他人 requestId 的调用方越权改写）；
+   * 2. 单调：条件 `resolution: null` 只允许「待处理 → 终态」，accepted/declined/cancelled
+   *    不会被迟到的 timeout/unsupported 事件覆盖。
+   *
+   * requestId 缺失（旧 controller / 模式不支持的早期事件）时按 sessionId + userId 做会话级兜底收敛。
+   * 找不到待办（如已被 TTL 清理）时 modifiedCount=0，幂等不抛错。
+   */
+  async markElicitationResolved(
+    requestId: string | undefined,
+    resolution: ElicitationResolution,
+    target: ElicitationResolvedTarget,
+  ): Promise<number> {
+    if (!target.userId) return 0;
+
+    const filter: Record<string, unknown> = {
+      userId: target.userId,
+      resolution: null,
+    };
+    if (requestId) {
+      filter['elicitationData.requestId'] = requestId;
+    } else if (target.sessionId) {
+      filter['elicitationData.sessionId'] = target.sessionId;
+    } else {
+      return 0;
+    }
+
+    // 会话级兜底可能同时存在多条未终结问询：用 updateMany 全部收敛，而非只命中第一条
+    const result = requestId
+      ? await TodoItem.updateOne(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } })
+      : await TodoItem.updateMany(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } });
+    return result.modifiedCount ?? 0;
   }
 
   async getTimeoutAction(userId: string, sessionId?: string | null): Promise<string> {

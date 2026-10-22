@@ -58,6 +58,10 @@ paths:
         普通返回或 SSE 流式返回。流式请求自动注入 `stream_options.include_usage=true`
         以便采集用量。
 
+        下游请求头会透传给上游供应商（用于 `x-opencode-session` 等路由标识），
+        但 `Authorization`、`x-api-key`、`Cookie` 及逐跳头（`connection` 等）
+        由网关过滤，上游始终使用供应商凭据。
+
         模型解析顺序：先查系统模型（`scope=global,isEnabled=true`）；未命中且 Key 为
         `cloud_host` 时查用户自定义模型（`scope=user,isEnabled=true`，按 `sortOrder,createdAt`
         取第一条）。同名时系统模型优先。自定义模型不要求定价，返回内容由网关代转发且不计费
@@ -89,7 +93,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '402':
-          description: 余额不足且无授信（`insufficient_quota`，不产生账单）
+          description: 余额不足且无授信（`insufficient_quota`）、账户冻结（`account_frozen`）或账户缺失（`account_not_found`）
           content:
             application/json:
               schema:
@@ -102,6 +106,18 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          description: 服务端配置异常（`provider_credential_error`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游模型服务不可用（`upstream_error`）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     bearerAuth:
@@ -152,6 +168,9 @@ components:
           type: string
     ChatCompletionRequest:
       type: object
+      description: >-
+        预检额度按保守上界估算：文本按 UTF-8 字节 / 可配置倍率，图片/音频/文件/工具调用取
+        「固定高估常量」与「序列化体积」的较大值；缺省 max_tokens 会被注入为上游硬上限。
       required: [model, messages]
       properties:
         model:
@@ -230,6 +249,7 @@ components:
                 - insufficient_quota
                 - rate_limit_exceeded
                 - account_frozen
+                - account_not_found
                 - server_error
             code:
               type: string

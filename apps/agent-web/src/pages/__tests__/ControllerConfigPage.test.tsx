@@ -4,9 +4,19 @@ import ControllerConfigPage from '../ControllerConfigPage';
 import type { CloudHostData, ControllerData } from '@/graphql/types';
 
 const mockUseQuery = vi.fn();
+const mockIsMobile = vi.fn(() => false);
+const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+}));
+
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => mockIsMobile(),
+}));
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('@/components/settings/WorkspaceSection', () => ({
@@ -83,6 +93,7 @@ function mockControllers(controllers: ControllerData[], loading = false) {
 describe('ControllerConfigPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsMobile.mockReturnValue(false);
   });
 
   const defaultProps = {
@@ -273,6 +284,42 @@ describe('ControllerConfigPage', () => {
       expect(screen.queryByRole('button', { name: '工作负载' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Github 项目设置' })).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-workloads-section')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('移动端布局（D-10）', () => {
+    it('tab 常驻在滚动容器外，两个 tab 均可切换', () => {
+      mockIsMobile.mockReturnValue(true);
+      mockControllers([
+        makeController({ type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),
+      ]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      const scrollArea = screen.getByTestId('mobile-section-scroll');
+      const workspaceTab = screen.getByRole('button', { name: '工作区' });
+      const harnessTab = screen.getByRole('button', { name: 'Harness 工具' });
+
+      expect(scrollArea).not.toContainElement(workspaceTab);
+      expect(scrollArea).not.toContainElement(harnessTab);
+
+      fireEvent.click(harnessTab);
+      expect(screen.getByTestId('harness-section')).toBeInTheDocument();
+      expect(scrollArea).toContainElement(screen.getByTestId('harness-section'));
+
+      fireEvent.click(workspaceTab);
+      expect(screen.getByTestId('workspace-section')).toBeInTheDocument();
+    });
+
+    it('普通主机移动端同样渲染 2 个 tab 且不展示云电脑面板', () => {
+      mockIsMobile.mockReturnValue(true);
+      mockControllers([makeController({ type: 'local' })]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      expect(screen.getByRole('button', { name: '工作区' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Harness 工具' })).toBeInTheDocument();
+      expect(screen.queryByTestId('cloud-host-panel')).not.toBeInTheDocument();
     });
   });
 });

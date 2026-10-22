@@ -135,7 +135,9 @@ type Mutation {
   batchDisableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
   batchDeleteGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
   createGlobalCustomModel(input: CustomModelInput!): Model!
-  # 手动导入上游模型（幂等：已存在项跳过）；返回实际新建的模型
+  # 手动导入上游模型（幂等：已存在项跳过）；返回实际新建的模型。
+  # names 由调用方提交（前端仅提交清单中的勾选项）；服务端只做上游连通性门禁与全局重名校验，
+  # 不校验 names 是否属于当前上游清单（裁决 5，提案/PRD §3.5 如实声明）。
   importGlobalModels(providerId: ID!, names: [String!]!): [Model!]!
   # 删除任意全局模型（导入模型或自定义模型）
   deleteGlobalModel(id: ID!): Model!

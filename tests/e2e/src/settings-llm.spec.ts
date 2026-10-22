@@ -248,12 +248,16 @@ test.describe('Settings LLM Provider & Model E2E', () => {
       await expect(section.getByText(modelName, { exact: true }).first()).toBeVisible();
       // 前台不泄露后台供应商名
       await expect(section.getByText(providerName)).toHaveCount(0);
-      // 只读：开关禁用但如实显示启用状态、无删除入口、无拖拽手柄
+      // 只读：开关禁用但如实显示启用状态、系统内置条目无删除入口、无拖拽手柄
       const systemSwitch = section.getByRole('switch', { name: `启用 ${modelName}` });
       await expect(systemSwitch).toHaveAttribute('aria-disabled', 'true');
       await expect(systemSwitch).toHaveAttribute('aria-checked', 'true');
-      await expect(section.getByTitle('删除自定义模型')).toHaveCount(0);
-      await expect(section.getByLabel('拖动排序')).toHaveCount(0);
+      // 精确到系统内置模型行，避免全 section 的 count=0 因未展开用户组而恒真（C-9）
+      const systemRow = section
+        .locator('div.flex.items-center.gap-3.rounded-lg.border')
+        .filter({ hasText: modelName });
+      await expect(systemRow.getByTitle('删除自定义模型')).toHaveCount(0);
+      await expect(systemRow.getByLabel('拖动排序')).toHaveCount(0);
 
       // 用户供应商组默认可展开，自定义模型可删除
       const userHeader = section.getByRole('button', { name: new RegExp(userProviderName) });

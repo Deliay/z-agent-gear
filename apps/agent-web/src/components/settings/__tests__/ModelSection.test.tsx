@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ModelSection from '../ModelSection'
 
 const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => void) }))
@@ -213,9 +213,66 @@ describe('agent-web ModelSection', () => {
     expect(screen.getByText('model-u1')).toBeDefined()
   })
 
+  it('T-AW9: user custom models keep delete, toggle and drag capabilities', async () => {
+    setupQueries([
+      model('u1', { isCustom: true }),
+      model('u2', { isCustom: true }),
+    ])
+    mocks.toggle.mockResolvedValue({})
+    mocks.remove.mockResolvedValue({})
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+
+    const sw = screen.getByRole('switch', { name: '启用 model-u1' })
+    expect(sw).not.toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(sw)
+    await waitFor(() => expect(mocks.toggle).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { id: 'u1' } }),
+    ))
+
+    fireEvent.click(screen.getAllByTitle('删除自定义模型')[0])
+    await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { id: 'u1' } }),
+    ))
+    expect(confirm).toHaveBeenCalled()
+
+    await act(async () => {
+      dnd.onDragEnd?.({ active: { id: 'u2' }, over: { id: 'u1' } })
+    })
+    expect(mocks.sort).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { ids: ['u2', 'u1'] } }),
+    )
+    confirm.mockRestore()
+  })
+
+  it('T-AW10: recomputes user ids from the latest groups at drag end (groupsRef, C-12)', async () => {
+    let currentModels = [model('u1'), model('u2')]
+    mocks.useQuery.mockImplementation((doc: unknown) => {
+      if (String(doc).includes('providers')) {
+        return { data: { providers: [] }, loading: false }
+      }
+      return { data: { models: currentModels }, loading: false }
+    })
+
+    const { rerender } = render(<ModelSection />)
+    const staleHandler = dnd.onDragEnd
+
+    currentModels = [model('u1'), model('u2'), model('u3')]
+    rerender(<ModelSection />)
+
+    await act(async () => {
+      staleHandler?.({ active: { id: 'u2' }, over: { id: 'u1' } })
+    })
+
+    expect(mocks.sort).toHaveBeenCalledWith(
+      expect.objectContaining({ variables: { ids: ['u2', 'u1', 'u3'] } }),
+    )
+  })
+
   it('shows the empty state', () => {
     setupQueries([])
     render(<ModelSection />)
-    expect(screen.getByText('暂无可用模型')).toBeDefined()
+    expect(screen.getByText('暂无可用模型，添加供应商后自动同步模型')).toBeDefined()
   })
 })

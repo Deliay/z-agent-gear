@@ -89,13 +89,15 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
 
 async function expandController(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await sidebar.getByRole('button', { name: /e2e-gw-host/ }).click();
+  // 控制器节点默认展开；点击会折叠，因此这里只等待其子分区出现。
+  await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
   return sidebar;
 }
 
 async function expandGateway(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await sidebar.getByText('统一网关').click();
+  // TreeSection 默认展开；再次点击会折叠。
+  await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
   return sidebar;
 }
 
@@ -130,7 +132,7 @@ test.describe('Gateway E2E', () => {
     await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
 
     await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('input[type="text"]')).toBeVisible();
@@ -151,7 +153,7 @@ test.describe('Gateway E2E', () => {
     await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
 
     await page.locator('input[type="text"]').fill('my-api');
     await page.locator('input[type="number"]').fill('3000');
@@ -174,14 +176,14 @@ test.describe('Gateway E2E', () => {
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3001');
     await page.getByRole('button', { name: '创建', exact: true }).click();
     await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
     await expect(sidebar.getByText('dup-svc')).toBeAttached({ timeout: 15000 });
 
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3002');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -201,7 +203,7 @@ test.describe('Gateway E2E', () => {
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
     await page.locator('input[type="text"]').fill('del-svc');
     await page.locator('input[type="number"]').fill('4000');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -222,7 +224,7 @@ test.describe('Gateway E2E', () => {
     await expandGateway(page);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '+', exact: true }).click();
+    await sidebar.getByRole('button', { name: '新增网关' }).click();
 
     await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
     await page.getByText('取消').click();

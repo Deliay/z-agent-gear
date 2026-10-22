@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
+import type { QueryFilter } from 'mongoose';
 import { Router, type Request, type Response } from 'express';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
-import { Model } from '../models/model.js';
+import { Model, type IModel } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { billingKeyAuth, openAiError, type BillingRequest } from '../middleware/billing-key-auth.js';
 import { creditCheckService } from '../services/billing/credit-check.js';
@@ -21,7 +22,7 @@ export interface BillingOpenAiRouterDeps {
   logger?: { warn?: (...args: unknown[]) => void };
 }
 
-interface ModelPricingCents {
+export interface ModelPricingCents {
   inputPerMillion: number;
   cachedInputPerMillion: number;
   outputPerMillion: number;
@@ -36,6 +37,42 @@ interface Usage {
 
 const RATE_LIMIT_PER_MINUTE = 60;
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+/**
+ * 透传下游请求头到上游（如 opencode 供应商路由所需的 `x-opencode-session`）。
+ * 排除逐跳头、由网关/上游 SDK 自行生成的鉴权与报文头，避免覆盖供应商凭据或破坏请求体。
+ */
+const NOT_FORWARDED_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'host',
+  'content-length',
+  'content-type',
+  'accept-encoding',
+  'authorization',
+  'x-api-key',
+  'cookie',
+  'set-cookie',
+]);
+
+export function forwardableHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    const lower = name.toLowerCase();
+    if (NOT_FORWARDED_HEADERS.has(lower)) continue;
+    forwarded[lower] = Array.isArray(value) ? value.join(', ') : value;
+  }
+  return forwarded;
+}
 
 function allowRequest(keyId: string): boolean {
   const now = Date.now();
@@ -72,9 +109,108 @@ function contentText(content: unknown): string {
   return '';
 }
 
+/** 缺失用量兜底用的文本估算（保持历史口径，仅用于 output 兜底）。 */
 function estimateTokens(text: string): number {
   if (!text) return 0;
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+/**
+ * R10-1：**预检**输入估算必须构成实际费用的上界。
+ *
+ * 采用 UTF-8 字节数 / 可配置倍率（默认 1 token/字节）：
+ * - 每个 token 至少消费 1 字节，因此字节数不会低于真实 token 数；
+ * - CJK 每字 3 字节，天然覆盖「1 字 ≈ 1 token」甚至更差的 tokenizer；
+ * - 倍率只允许调大（降低保守程度），默认不得低于 1。
+ */
+export function estimatePromptTextTokens(text: string): number {
+  if (!text) return 0;
+  const divisor = Math.max(1, config.modelTokenEstimateBytesPerToken);
+  return Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / divisor));
+}
+
+function conservativeJsonTokens(value: unknown, minimum = 0): number {
+  if (value === undefined || value === null) return minimum;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? '';
+  } catch {
+    serialized = String(value);
+  }
+  return Math.max(minimum, estimatePromptTextTokens(serialized));
+}
+
+/**
+ * 单条消息 content 的保守 token 上界。R10-1：
+ * - 文本按 UTF-8 字节估算；
+ * - image / audio / file 等非文本块按固定高估系数（≥ 数千 token）；
+ * - tool/function 参数与结果既计固定开销也计入序列化字节。
+ */
+export function estimateContentTokens(content: unknown): number {
+  if (typeof content === 'string') return estimatePromptTextTokens(content);
+  if (Array.isArray(content)) {
+    return content.reduce<number>((total, part) => total + estimateContentTokens(part), 0);
+  }
+  if (!content || typeof content !== 'object') return 0;
+
+  const record = content as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type === 'text' || typeof record.text === 'string') {
+    return estimatePromptTextTokens(String(record.text ?? ''));
+  }
+  // R11-4：固定常量只是下限；序列化体积更大时按体积计，避免超长音频/大文件低估。
+  if (type === 'image_url' || type === 'image') {
+    return Math.max(config.modelEstimateImageTokens, conservativeJsonTokens(record));
+  }
+  if (type === 'input_audio' || type === 'audio') {
+    return Math.max(config.modelEstimateAudioTokens, conservativeJsonTokens(record));
+  }
+  if (type === 'file' || type === 'document') {
+    return Math.max(config.modelEstimateFileTokens, conservativeJsonTokens(record));
+  }
+  if (type === 'tool_result' || type === 'tool_use' || type === 'function') {
+    return (
+      config.modelEstimateToolTokens +
+      estimateContentTokens(record.content) +
+      conservativeJsonTokens(record.input ?? record.arguments)
+    );
+  }
+  // 未知非文本块：按工具开销 + 序列化字节高估，绝不返回 0。
+  return Math.max(config.modelEstimateToolTokens, conservativeJsonTokens(record));
+}
+
+/**
+ * R10-1：整轮请求（messages + tools + tool_calls）的保守 token 上界。
+ * 作为 `creditCheck` 的同步预检额度，保证「估算 ≥ 实际」。
+ */
+export function estimateRequestTokens(
+  messages: unknown[],
+  tools?: unknown,
+  functions?: unknown,
+): number {
+  let total = 0;
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue;
+    const record = message as Record<string, unknown>;
+    // role/分隔符等结构开销。
+    total += 4;
+    total += estimateContentTokens(record.content);
+    if (record.tool_calls !== undefined) {
+      total += conservativeJsonTokens(record.tool_calls, config.modelEstimateToolTokens);
+    }
+    if (record.function_call !== undefined) {
+      total += conservativeJsonTokens(record.function_call, config.modelEstimateToolTokens);
+    }
+    if (typeof record.name === 'string') total += estimatePromptTextTokens(record.name);
+  }
+  if (tools !== undefined) {
+    total += conservativeJsonTokens(tools, config.modelEstimateToolTokens);
+  }
+  // R11-6：兼容 legacy `functions` 入参，避免其定义不进入预检估算。
+  if (functions !== undefined) {
+    total += conservativeJsonTokens(functions, config.modelEstimateToolTokens);
+  }
+  return Math.max(1, total);
 }
 
 export interface UsageFallbackInput {
@@ -132,13 +268,18 @@ function isPricingComplete(pricing: ModelPricingCents): boolean {
   );
 }
 
-function estimateCost(
+/**
+ * R10-1：预检费用上界。输入按 `max(input, cachedInput)` 单价计算，避免缓存单价更高时低估；
+ * 输出受 `max_tokens` 硬上限约束，直接按上限计价。
+ */
+export function estimateCost(
   pricing: ModelPricingCents,
   promptTokens: number,
   maxOutputTokens: number,
 ): number {
+  const maxInputRate = Math.max(pricing.inputPerMillion, pricing.cachedInputPerMillion);
   return (
-    tokenCostCents(promptTokens, pricing.inputPerMillion) +
+    tokenCostCents(promptTokens, maxInputRate) +
     tokenCostCents(maxOutputTokens, pricing.outputPerMillion)
   );
 }
@@ -170,6 +311,28 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   const router = Router();
   const logger = deps.logger ?? console;
 
+  /** 批量查询供应商启用状态；列表与调用（404）口径共用。 */
+  const enabledProviderIdSet = async (
+    models: Array<{ providerId: unknown }>,
+  ): Promise<Set<string>> => {
+    const providerIds = [...new Set(models.map((model) => String(model.providerId)))];
+    if (providerIds.length === 0) return new Set();
+    const providers = await Provider.find({ _id: { $in: providerIds } })
+      .select({ isEnabled: 1 })
+      .lean<Array<{ _id: unknown; isEnabled?: boolean }>>();
+    return new Set(
+      providers
+        .filter((provider) => provider.isEnabled !== false)
+        .map((provider) => String(provider._id)),
+    );
+  };
+
+  /** 用户可用模型：scope=user ∪ 存量缺 scope（与 agent-api `services/model.ts` 口径一致，R2-8）。 */
+  const USER_MODEL_FILTER: QueryFilter<IModel> = {
+    isEnabled: true,
+    $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+  };
+
   router.get('/models', billingKeyAuth, async (req: Request, res: Response) => {
     const billing = (req as BillingRequest).billing!;
     // C5：契约声明 /v1/models 也受限流约束（429）。
@@ -179,26 +342,44 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     }
     if (billing.scope === 'cloud_host') {
       // A4 口径：cloud_host Key = 系统启用模型 ∪ 用户启用模型（含自定义、无定价）。
+      // B-7：列表必须与 `/chat/completions` 解析口径一致——供应商不存在/禁用不列出；
+      // global 模型还需按调用口径过滤未定价/定价不完整（否则列出后调用 400）；user 自定义模型可无定价。
       const [globalModels, userModels] = await Promise.all([
         Model.find({ scope: 'global', isEnabled: true }).lean(),
-        Model.find({ scope: 'user', isEnabled: true })
-          .sort({ sortOrder: 1, createdAt: 1 })
-          .lean(),
+        Model.find(USER_MODEL_FILTER).sort({ sortOrder: 1, createdAt: 1 }).lean(),
       ]);
+      const enabledProviderIds = await enabledProviderIdSet([...globalModels, ...userModels]);
+      const selectable = (model: {
+        scope?: string;
+        providerId: unknown;
+        pricing?: unknown;
+      }): boolean => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
+        if (model.scope === 'global') {
+          const pricing = pricingFromModel(model.pricing);
+          return !!pricing && (!pricing.isBillable || isPricingComplete(pricing));
+        }
+        // 用户自定义模型（scope=user 或存量缺 scope）：不要求定价，网关代转发且不计费。
+        return true;
+      };
       const seen = new Set<string>();
-      const data = [...globalModels, ...userModels]
-        .filter((model) => {
-          if (seen.has(model.name)) return false;
-          seen.add(model.name);
-          return true;
-        })
-        .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      const data: Array<ReturnType<typeof toModelEntry>> = [];
+      for (const model of [...globalModels, ...userModels]) {
+        // 同名去重（global 优先）：与调用解析顺序一致；不可用的 global 也不回退到同名 user 模型。
+        if (seen.has(model.name)) continue;
+        seen.add(model.name);
+        if (!selectable(model)) continue;
+        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      }
       res.json({ object: 'list', data });
       return;
     }
     const models = await Model.find({ scope: 'global', isEnabled: true }).lean();
+    // R2-9：账号 Key 列表同样联查供应商启用状态，避免列出后调用 404。
+    const enabledProviderIds = await enabledProviderIdSet(models);
     const data = models
       .filter((model) => {
+        if (!enabledProviderIds.has(String(model.providerId))) return false;
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
@@ -211,7 +392,19 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const body = (req.body ?? {}) as Record<string, unknown>;
     const modelName = typeof body.model === 'string' ? body.model : '';
     const messages = Array.isArray(body.messages) ? body.messages : null;
-    if (!modelName || !messages) {
+    // R10-14：严格校验请求体，避免 `stream:"true"` 字符串走非流分支、空 messages 打到上游。
+    if (body.stream !== undefined && typeof body.stream !== 'boolean') {
+      toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'stream 必须为布尔值');
+      return;
+    }
+    if (
+      body.max_tokens !== undefined &&
+      (!Number.isInteger(body.max_tokens) || Number(body.max_tokens) < 1)
+    ) {
+      toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'max_tokens 必须为正整数');
+      return;
+    }
+    if (!modelName || !messages || messages.length === 0) {
       toApiError(res, 400, 'invalid_request_error', 'invalid_request', 'model 与 messages 为必填项');
       return;
     }
@@ -222,7 +415,11 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const model =
       systemModel ??
       (billing.scope === 'cloud_host'
-        ? await Model.findOne({ scope: 'user', name: modelName, isEnabled: true }).sort({
+        ? await Model.findOne({
+            name: modelName,
+            isEnabled: true,
+            $or: [{ scope: 'user' }, { scope: { $exists: false } }],
+          }).sort({
             sortOrder: 1,
             createdAt: 1,
           })
@@ -271,8 +468,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     }
 
     const requestId = crypto.randomUUID();
-    const promptText = messages.map((message) => contentText((message as { content?: unknown }).content)).join('\n');
-    const promptTokens = estimateTokens(promptText);
+    // R10-1：预检使用 messages/tools 全量保守估算（含多模态、CJK、工具参数），不再只取文本 len/4。
+    const promptTokens = estimateRequestTokens(messages, body.tools, body.functions);
     const maxOutputTokens = Math.max(
       1,
       Number(body.max_tokens ?? config.modelDefaultMaxOutputTokens) ||
@@ -445,15 +642,24 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
     const basePayload = {
       ...body,
       model: model.name,
+      // R10-1：预检按 `maxOutputTokens` 计价，必须把它变成上游的硬上限；
+      // 缺省时注入默认值，避免上游按自身默认生成更长的输出击穿上界。
+      ...(body.max_tokens === undefined ? { max_tokens: maxOutputTokens } : {}),
       ...(stream ? { stream_options: { include_usage: true } } : {}),
     };
     delete (basePayload as Record<string, unknown>).stream_options;
+
+    // 透传下游请求头（鉴权/逐跳头已过滤），供需要路由标识的上游使用。
+    const upstreamHeaders = forwardableHeaders(
+      req.headers as Record<string, string | string[] | undefined>,
+    );
 
     try {
       if (provider.type === 'Anthropic') {
         const result = await forwardAnthropic({
           provider: provider as unknown as { endpoint: string },
           apiKey,
+          headers: upstreamHeaders,
           modelName: model.name,
           messages,
           maxOutputTokens,
@@ -466,7 +672,8 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
           },
         });
         if (!stream) {
-          res.json(result);
+          // R10-8：与 OpenAI 路径同标准，客户端中断后不得再写已销毁的响应。
+          if (!aborted && !res.writableEnded) res.json(result);
         }
         await finalize(aborted ? 'aborted' : 'completed');
         return;
@@ -476,6 +683,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         apiKey,
         baseURL: provider.endpoint,
         timeout: 300_000,
+        defaultHeaders: upstreamHeaders,
       });
       if (!stream) {
         const completion = (await client.chat.completions.create(basePayload as never, {
@@ -492,7 +700,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         usage.cachedInputTokens = Number(completion.usage?.prompt_tokens_details?.cached_tokens ?? 0);
         usage.outputTokens = Number(completion.usage?.completion_tokens ?? 0);
         outputText = completion.choices?.[0]?.message?.content ?? '';
-        res.json(completion);
+        if (!aborted && !res.writableEnded) res.json(completion);
         await finalize(aborted ? 'aborted' : 'completed');
         return;
       }
@@ -558,10 +766,35 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   return router;
 }
 
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/**
+ * R10-9：Anthropic 的 `input_tokens` **不含**缓存 token，而本管线统一按 OpenAI 语义
+ * （`prompt_tokens` 包含 cached）处理。这里把缓存读写回加到 input，保证 `cached ⊆ input`，
+ * 避免未来支持 prompt caching 后系统性少计费。
+ */
+export function applyAnthropicUsage(target: Usage, usage?: AnthropicUsage): void {
+  if (!usage) return;
+  const cacheRead = Number(usage.cache_read_input_tokens ?? 0);
+  const cacheCreation = Number(usage.cache_creation_input_tokens ?? 0);
+  const uncachedInput = Number(usage.input_tokens ?? 0);
+  target.inputTokens = uncachedInput + cacheRead + cacheCreation;
+  target.cachedInputTokens = cacheRead;
+  if (usage.output_tokens !== undefined) {
+    target.outputTokens = Number(usage.output_tokens ?? 0);
+  }
+}
+
 /** Anthropic 形状转换：OpenAI messages → Anthropic messages，响应/流式 → OpenAI 形状。 */
 async function forwardAnthropic(input: {
   provider: { endpoint: string };
   apiKey: string;
+  headers: Record<string, string>;
   modelName: string;
   messages: unknown[];
   maxOutputTokens: number;
@@ -571,7 +804,11 @@ async function forwardAnthropic(input: {
   usage: Usage;
   onText: (text: string) => void;
 }): Promise<unknown> {
-  const client = new Anthropic({ apiKey: input.apiKey, baseURL: input.provider.endpoint });
+  const client = new Anthropic({
+    apiKey: input.apiKey,
+    baseURL: input.provider.endpoint,
+    defaultHeaders: input.headers,
+  });
   const system = input.messages
     .filter((message) => (message as { role?: string }).role === 'system')
     .map((message) => contentText((message as { content?: unknown }).content))
@@ -602,15 +839,13 @@ async function forwardAnthropic(input: {
     })) as unknown as {
       content?: Array<{ type: string; text?: string }>;
       stop_reason?: string;
-      usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+      usage?: AnthropicUsage;
     };
     const text = (response.content ?? [])
       .filter((part) => part.type === 'text')
       .map((part) => part.text ?? '')
       .join('');
-    input.usage.inputTokens = Number(response.usage?.input_tokens ?? 0);
-    input.usage.outputTokens = Number(response.usage?.output_tokens ?? 0);
-    input.usage.cachedInputTokens = Number(response.usage?.cache_read_input_tokens ?? 0);
+    applyAnthropicUsage(input.usage, response.usage);
     input.onText(text);
     return {
       id,
@@ -645,47 +880,47 @@ async function forwardAnthropic(input: {
   for await (const event of stream) {
     const type = event.type as string;
     if (type === 'message_start') {
-      const message = event.message as
-        | { usage?: { input_tokens?: number; cache_read_input_tokens?: number } }
-        | undefined;
-      input.usage.inputTokens = Number(message?.usage?.input_tokens ?? input.usage.inputTokens);
-      input.usage.cachedInputTokens = Number(
-        message?.usage?.cache_read_input_tokens ?? input.usage.cachedInputTokens,
-      );
+      const message = event.message as { usage?: AnthropicUsage } | undefined;
+      applyAnthropicUsage(input.usage, message?.usage);
     } else if (type === 'content_block_delta') {
       const delta = event.delta as { text?: string } | undefined;
       if (delta?.text) {
         input.onText(delta.text);
-        input.res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: 'chat.completion.chunk',
-            created,
-            model: input.modelName,
-            choices: [{ index: 0, delta: { content: delta.text } }],
-          })}\n\n`,
-        );
+        // R10-8：客户端中断后不再写已销毁的响应（与 OpenAI 流式路径一致）。
+        if (!input.signal.aborted && !input.res.writableEnded) {
+          input.res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model: input.modelName,
+              choices: [{ index: 0, delta: { content: delta.text } }],
+            })}\n\n`,
+          );
+        }
       }
     } else if (type === 'message_delta') {
       const deltaUsage = event.usage as { output_tokens?: number } | undefined;
       input.usage.outputTokens = Number(deltaUsage?.output_tokens ?? input.usage.outputTokens);
     }
   }
-  input.res.write(
-    `data: ${JSON.stringify({
-      id,
-      object: 'chat.completion.chunk',
-      created,
-      model: input.modelName,
-      choices: [],
-      usage: {
-        prompt_tokens: input.usage.inputTokens,
-        completion_tokens: input.usage.outputTokens,
-        total_tokens: input.usage.inputTokens + input.usage.outputTokens,
-      },
-    })}\n\n`,
-  );
-  input.res.write('data: [DONE]\n\n');
-  input.res.end();
+  if (!input.signal.aborted && !input.res.writableEnded) {
+    input.res.write(
+      `data: ${JSON.stringify({
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model: input.modelName,
+        choices: [],
+        usage: {
+          prompt_tokens: input.usage.inputTokens,
+          completion_tokens: input.usage.outputTokens,
+          total_tokens: input.usage.inputTokens + input.usage.outputTokens,
+        },
+      })}\n\n`,
+    );
+    input.res.write('data: [DONE]\n\n');
+    input.res.end();
+  }
   return null;
 }

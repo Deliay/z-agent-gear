@@ -395,7 +395,64 @@ describe('ReconciliationService（三线对账）', () => {
     const [report] = await recon.run('apiCalls');
     expect(report.line).toBe('apiCalls');
     expect(report.errorCount).toBe(1);
-    expect(report.errors[0]).toMatchObject({ requestId: 'req-drift', reason: 'cost_without_invoice' });
+    expect(report.errors[0]).toMatchObject({
+      requestId: 'req-drift',
+      reason: 'cost_without_invoice',
+      repair: 'injected',
+    });
+    const { BillingOutbox } = await import('../../models/billing-outbox.js');
+    expect(await BillingOutbox.countDocuments({ eventId: 'model_call.completed:req-drift' })).toBe(1);
+  });
+
+  it('R10-3/R10-4: model_call 隔离行复位，started 孤儿调用被报告', async () => {
+    const { BillingApiCall } = await import('../../models/billing-api-call.js');
+    const { BillingOutbox } = await import('../../models/billing-outbox.js');
+    const account = await accountService.getOrCreate(
+      'front_user',
+      new mongoose.Types.ObjectId().toString(),
+      'orphan-user',
+    );
+    await BillingOutbox.create({
+      eventId: 'model_call.completed:req-quarantined',
+      producer: 'admin-api',
+      eventType: 'model_call.completed',
+      routingKey: 'model_call.completed',
+      payload: {},
+      published: false,
+      failed: true,
+      attempts: 20,
+    });
+    await BillingApiCall.create({
+      requestId: 'req-orphan',
+      accountId: account.id,
+      apiKeyId: new mongoose.Types.ObjectId(),
+      modelId: 'gpt-5',
+      cost: 0,
+      status: 'started',
+      invoiceSeq: null,
+      startedAt: new Date(Date.now() - 60 * 60_000),
+    });
+
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('apiCalls');
+    expect(report.line).toBe('apiCalls');
+    expect(report.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventId: 'model_call.completed:req-quarantined',
+          reason: 'quarantined_event_requeued',
+        }),
+        expect.objectContaining({ requestId: 'req-orphan', reason: 'orphan_api_call' }),
+      ]),
+    );
+    const reset = await BillingOutbox.findOne({ eventId: 'model_call.completed:req-quarantined' });
+    expect(reset?.failed).toBe(false);
+    expect(reset?.published).toBe(false);
+    expect(reset?.attempts).toBe(0);
   });
 
   it('containerInvoices: charge>0 但无对应账单的容器流水被报告（R6-1 发现线）', async () => {
@@ -532,6 +589,41 @@ describe('ReconciliationService（三线对账）', () => {
     const [failedReport] = await failed.run('resources');
     expect(failedReport.errors[0]).toMatchObject({ error: 'list_containers_failed' });
     expect(billing.handleContainerDestroyed).not.toHaveBeenCalled();
+  });
+
+  it('B-1: STARTING 宿主 active Key 不得被对账撤销（创建窗口无重铸）', async () => {
+    const { BillingApiKey } = await import('../../models/billing-api-key.js');
+    const startingHostId = new mongoose.Types.ObjectId();
+    await mongoose.connection.db!.collection('cloudhosts').insertOne({
+      _id: startingHostId,
+      userId: new mongoose.Types.ObjectId(),
+      controllerId: new mongoose.Types.ObjectId(),
+      status: 'STARTING',
+      deletedAt: null,
+      createdAt: new Date(),
+    });
+    const key = await BillingApiKey.create({
+      accountId: new mongoose.Types.ObjectId(),
+      ownerType: 'front_user',
+      ownerId: 'recon-starting',
+      name: 'starting-key',
+      keyPrefix: 'zag_sk_starting1',
+      keyHash: 'h',
+      scope: 'cloud_host',
+      cloudHostId: startingHostId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const recon = new ReconciliationService(
+      { handleContainerDestroyed: vi.fn() } as never,
+      { list: vi.fn() } as never,
+      { listContainers: async () => [] },
+    );
+    const [report] = await recon.run('cloud-host-keys');
+    expect(report.checkedCount).toBe(1);
+    expect(report.errorCount).toBe(0);
+    // Key 在 STARTING 期铸造，本期无重铸：对账必须放行，由网关实时校验拒绝非 RUNNING 调用。
+    expect((await BillingApiKey.findById(key._id).lean())?.status).toBe('active');
   });
 
   it('T-BK17: cloud-host-keys — 宿主非 RUNNING/已删除/过期 Key 被撤销，RUNNING 保留，账号 Key 不受影响', async () => {

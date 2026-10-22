@@ -5,6 +5,7 @@ import { HOME_OVERVIEW } from '../../graphql/home';
 
 const mockUseQuery = vi.fn();
 const mockRefetch = vi.fn();
+const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
@@ -13,6 +14,7 @@ vi.mock('@apollo/client/react', () => ({
 vi.mock('react-router-dom', () => ({
   Outlet: () => <div data-testid="outlet" />,
   useLocation: () => ({ pathname: '/' }),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../../stores/auth', () => ({
@@ -39,6 +41,49 @@ const homeData = {
     unreadTodoCount: 0,
   },
 };
+
+function homeWithCloudHost(
+  status: 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'FAILED',
+  defaultSessionId: string | null,
+) {
+  return {
+    homeOverview: {
+      controllers: [
+        {
+          id: 'ctrl-cloud',
+          name: '云电脑 A',
+          hostname: 'cloud-host-1',
+          type: 'cloud',
+          status: 'online',
+          keyId: 'key-1',
+          version: '1.0.0',
+          lastHeartbeatAt: null,
+          createdAt: '',
+          updatedAt: '',
+          gateways: { gateways: [], total: 0, limit: 0 },
+          cloudHost: {
+            id: 'host-1',
+            name: '云电脑 A',
+            controllerId: 'ctrl-cloud',
+            status,
+            harnessTypes: ['OPENCODE'],
+            defaultSessionId,
+            activeSessionCount: 0,
+            failureReason: null,
+            deletedAt: null,
+          },
+        },
+      ],
+      sessions: [],
+      sessionTotalCount: 0,
+      workspaces: [],
+      workflowInstances: [],
+      archivedWorkflowInstances: [],
+      todos: [],
+      unreadTodoCount: 0,
+    },
+  };
+}
 
 describe('MainLayout 首页聚合查询', () => {
   beforeEach(() => {
@@ -73,5 +118,124 @@ describe('MainLayout 首页聚合查询', () => {
     expect(screen.getByText('首页数据加载失败')).toBeInTheDocument();
     fireEvent.click(screen.getByText('重试'));
     expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  describe('D-2 默认会话就绪后自动进入', () => {
+    it('STARTING→RUNNING 且 defaultSessionId 非空时导航一次', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('STARTING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      const { rerender } = render(<MainLayout />);
+      expect(mockNavigate).not.toHaveBeenCalled();
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-default-1'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/sessions/sess-default-1');
+    });
+
+    it('后续轮询保持 RUNNING 时不重复导航', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('STARTING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      const { rerender } = render(<MainLayout />);
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-default-1'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-default-1'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it('R2-5: STARTING→RUNNING(无 session)→RUNNING(有 session) 仍补跳一次', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('STARTING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      const { rerender } = render(<MainLayout />);
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+      expect(mockNavigate).not.toHaveBeenCalled();
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-late'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/sessions/sess-late');
+    });
+
+    it('首次加载即为 RUNNING 的旧主机不强制跳转', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', 'sess-old'),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      render(<MainLayout />);
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('STARTING→RUNNING 但 defaultSessionId 为空时不导航', () => {
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('STARTING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+
+      const { rerender } = render(<MainLayout />);
+
+      mockUseQuery.mockReturnValue({
+        data: homeWithCloudHost('RUNNING', null),
+        loading: false,
+        error: undefined,
+        refetch: mockRefetch,
+      });
+      rerender(<MainLayout />);
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
   });
 });

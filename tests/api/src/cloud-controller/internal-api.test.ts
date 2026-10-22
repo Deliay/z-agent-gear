@@ -99,65 +99,76 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
     expect((await req(`/internal/containers/${created.id}`, { method: 'DELETE' })).status).toBe(200);
   });
 
-  it('T-CC2/T-CC6/T-CC16: creates harness container and never echoes secrets', async () => {
-    const db = await mongoDb();
-    if (!db) return;
-    const workloadId = await insertWorkload(db);
-    const hostId = new mongoose.Types.ObjectId().toString();
-    const secrets = {
-      hostEndpoint: 'wss://controller-api.internal',
-      hostKey: 'zag_k_1_test_secret',
-      modelApiKey: 'zag_sk_test_secret',
-      modelBaseUrl: 'http://admin-api:8002/v1',
-      modelIds: '["model-a"]',
-      defaultWorkspace: '/root/workspace',
-    };
+  // 显式 skipIf（而非静默早退）：MONGODB_URI 缺失时该安全断言必须显示为 skipped。
+  it.skipIf(!HAS_MONGO)(
+    'T-CC2/T-CC6/T-CC16: creates harness container and never echoes secrets',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
 
-    const created = await req('/internal/containers', {
-      method: 'POST',
-      body: JSON.stringify({
-        purpose: 'harness',
-        hostId,
-        refId: new mongoose.Types.ObjectId().toString(),
-        userId: new mongoose.Types.ObjectId().toString(),
-        hostName: 'harness-it',
-        harnessTypes: ['opencode'],
-        containerApiKeyId: new mongoose.Types.ObjectId().toString(),
-        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        agentGearMinVersion: '2.5.0',
-        secrets,
-        workloadPlan: [
-          { workloadId: workloadId.toString(), params: {}, implicit: false, required: true },
-        ],
-      }),
-    });
-    expect(created.status).toBe(201);
-    const raw = await created.text();
-    expect(raw).not.toContain(secrets.hostKey);
-    expect(raw).not.toContain(secrets.modelApiKey);
-    const body = JSON.parse(raw) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      purpose: 'harness',
-      hostId,
-      hostName: 'harness-it',
-      harnessTypes: ['opencode'],
-    });
-    expect(body.secrets).toBeUndefined();
-    expect(body.controllerKeyId).toBeTruthy();
-    expect(body.containerApiKeyId).toBeTruthy();
+      const workloadId = await insertWorkload(db!);
+      const hostId = new mongoose.Types.ObjectId().toString();
+      const secrets = {
+        hostEndpoint: 'wss://controller-api.internal',
+        hostKey: 'zag_k_1_test_secret',
+        modelApiKey: 'zag_sk_test_secret',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["model-a"]',
+        defaultWorkspace: '/root/workspace',
+      };
 
-    const list = (await (await req(`/internal/containers?hostId=${hostId}`)).json()) as Array<{
-      hostId?: string;
-    }>;
-    expect(list.length).toBeGreaterThan(0);
-    expect(list.every((item) => item.hostId === hostId)).toBe(true);
+      let containerId: string | null = null;
+      try {
+        const created = await req('/internal/containers', {
+          method: 'POST',
+          body: JSON.stringify({
+            purpose: 'harness',
+            hostId,
+            refId: new mongoose.Types.ObjectId().toString(),
+            userId: new mongoose.Types.ObjectId().toString(),
+            hostName: 'harness-it',
+            harnessTypes: ['opencode'],
+            containerApiKeyId: new mongoose.Types.ObjectId().toString(),
+            expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+            agentGearMinVersion: '2.5.0',
+            secrets,
+            workloadPlan: [
+              { workloadId: workloadId.toString(), params: {}, implicit: false, required: true },
+            ],
+          }),
+        });
+        expect(created.status).toBe(201);
+        const raw = await created.text();
+        expect(raw).not.toContain(secrets.hostKey);
+        expect(raw).not.toContain(secrets.modelApiKey);
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        containerId = String(body.id);
+        expect(body).toMatchObject({
+          purpose: 'harness',
+          hostId,
+          hostName: 'harness-it',
+          harnessTypes: ['opencode'],
+        });
+        expect(body.secrets).toBeUndefined();
+        expect(body.controllerKeyId).toBeTruthy();
+        expect(body.containerApiKeyId).toBeTruthy();
 
-    expect(
-      (await req(`/internal/containers/${String(body.id)}`, { method: 'DELETE' })).status,
-    ).toBe(200);
-    await db.collection('cloudworkloadlogs').deleteMany({ containerId: String(body.id) });
-    await db.collection('cloudworkloads').deleteOne({ _id: workloadId });
-  });
+        const list = (await (
+          await req(`/internal/containers?hostId=${hostId}`)
+        ).json()) as Array<{ hostId?: string }>;
+        expect(list.length).toBeGreaterThan(0);
+        expect(list.every((item) => item.hostId === hostId)).toBe(true);
+      } finally {
+        if (containerId) {
+          await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
+          await db!
+            .collection('cloudworkloadlogs')
+            .deleteMany({ containerId: new mongoose.Types.ObjectId(containerId) });
+        }
+        await db!.collection('cloudworkloads').deleteOne({ _id: workloadId });
+      }
+    },
+  );
 
   it('T-IC5: rejects invalid workloadIds with 400 INVALID_WORKLOAD', async () => {
     // 非数组

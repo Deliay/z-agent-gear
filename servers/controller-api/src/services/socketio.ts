@@ -202,6 +202,20 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:elicitation:resolved', async (data: {
+      requestId?: string;
+      sessionId: string;
+      reason: 'unsupported_mode' | 'timeout' | 'cancelled';
+      detail?: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await elicitationManager.handleElicitationResolved(socket, data);
+      } catch (error) {
+        console.error('Error handling elicitation resolved:', error);
+      }
+    });
+
     socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
       if (!authenticated) return;
       acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);
@@ -523,6 +537,8 @@ export function createSocketIOServer(io: SocketIOServer): void {
       try {
         mcpRelayService.handleSocketDisconnect(socket.id);
         acpSessionSyncService.cleanupSocket(socket);
+        // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 60s 后误发 timeout
+        elicitationManager.clearForSocket(socket.id);
         if (socket.data.keyId) {
           await Controller.updateOne(
             { keyId: socket.data.keyId, status: { $ne: 'unbound' } },
