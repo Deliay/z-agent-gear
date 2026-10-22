@@ -40,6 +40,15 @@ const cloudWorkloadSchema = new mongoose.Schema(
     postScript: { type: String, default: null },
     paramSchema: { type: [workloadParamFieldSchema], default: [] },
     dependsOnWorkloadIds: { type: [mongoose.Schema.Types.ObjectId], default: [], index: true },
+    // 工作负载类别：standard（通用初始化）/ harness（云电脑 harness 运行环境）
+    workloadKind: {
+      type: String,
+      enum: ['standard', 'harness'],
+      default: 'standard',
+      index: true,
+    },
+    // harness 类型（本期仅 opencode）；standard 为 null
+    harnessType: { type: String, enum: ['opencode', null], default: null },
   },
   { timestamps: true, collection: 'cloudworkloads' },
 );
