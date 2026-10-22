@@ -366,4 +366,80 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       expect(result.errors?.[0].message).toBe('Not authenticated');
     }
   });
+
+  describe('创建期 workloadIds（T-CH-API-W1..W4）', () => {
+    it('T-CH-API-W3: 超过 5 个 ID 报 too many workloads', async () => {
+      const token = await signup();
+      const ids = Array.from(
+        { length: 6 },
+        () => new mongoose.Types.ObjectId().toString(),
+      );
+      const result = await gql(
+        CREATE,
+        { input: { name: 'wl-too-many', harnessTypes: ['OPENCODE'], workloadIds: ids } },
+        token,
+      );
+      expect(result.errors?.[0].message).toBe('too many workloads (max 5)');
+    });
+
+    it('T-CH-API-W4: 不存在 ID 报 invalid workload', async () => {
+      const token = await signup();
+      const missing = new mongoose.Types.ObjectId().toString();
+      const result = await gql(
+        CREATE,
+        { input: { name: 'wl-missing', harnessTypes: ['OPENCODE'], workloadIds: [missing] } },
+        token,
+      );
+      expect(result.errors?.[0].message).toBe(`invalid workload: ${missing}`);
+    });
+
+    it.skipIf(!HAS_MONGO)('T-CH-API-W2/W4: Docker 可创建，harness ID 拒绝', async () => {
+      const db = (await mongoDb())!;
+      const standard = await db
+        .collection('cloudworkloads')
+        .findOne({ workloadKind: 'standard', name: 'Docker' });
+      const harness = await db
+        .collection('cloudworkloads')
+        .findOne({ workloadKind: 'harness' });
+      expect(standard).toBeTruthy();
+      expect(harness).toBeTruthy();
+
+      const harnessToken = await signup();
+      const harnessResult = await gql(
+        CREATE,
+        {
+          input: {
+            name: 'wl-harness',
+            harnessTypes: ['OPENCODE'],
+            workloadIds: [String(harness!._id)],
+          },
+        },
+        harnessToken,
+      );
+      expect(harnessResult.errors?.[0].message).toBe(
+        `workload is not installable: ${String(harness!.name)}`,
+      );
+
+      const token = await signup();
+      const created = await gql(
+        CREATE,
+        {
+          input: {
+            name: `wl-docker-${Date.now().toString(36)}`,
+            harnessTypes: ['OPENCODE'],
+            workloadIds: [String(standard!._id)],
+          },
+        },
+        token,
+      );
+      expect(created.errors).toBeUndefined();
+      const hostId = created.data.createCloudHost.id as string;
+      try {
+        await gql(STOP, { id: hostId, force: true }, token);
+        await gql(DELETE, { id: hostId }, token);
+      } finally {
+        // 清理失败不影响断言（容器可能在 STARTING 无法停止）
+      }
+    });
+  });
 });

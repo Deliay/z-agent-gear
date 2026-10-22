@@ -77,6 +77,18 @@ describe('CloudWorkloadsPage', () => {
     expect(screen.getByText('更新时间')).toBeDefined();
   });
 
+  it('T-ADM-WEB4: 列表展示 STANDARD/HARNESS 分类徽标，历史缺省按 STANDARD', () => {
+    setupWorkloads([
+      workload({ id: 'w1', name: 'Docker', workloadKind: 'STANDARD' }),
+      workload({ id: 'w2', name: 'OpenCode', workloadKind: 'HARNESS', harnessType: 'opencode' }),
+      workload({ id: 'w3', name: 'legacy' }),
+    ]);
+    render(<CloudWorkloadsPage />);
+
+    expect(screen.getAllByText('STANDARD')).toHaveLength(2);
+    expect(screen.getByText('HARNESS')).toBeDefined();
+  });
+
   it('T-FW1: renders an error state with retry instead of the empty state', () => {
     mocks.useQuery.mockReturnValue({
       data: undefined,

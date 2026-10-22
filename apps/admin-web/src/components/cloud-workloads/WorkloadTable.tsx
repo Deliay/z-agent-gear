@@ -38,6 +38,7 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
         <thead className="bg-muted/50 text-left text-muted-foreground">
           <tr>
             <th className="px-4 py-2 font-medium">名称</th>
+            <th className="px-4 py-2 font-medium">类型</th>
             <th className="px-4 py-2 font-medium">参数</th>
             <th className="px-4 py-2 font-medium">依赖</th>
             <th className="px-4 py-2 font-medium">初始化脚本</th>
@@ -59,6 +60,11 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
                     <span className="min-w-0 truncate">{workload.name}</span>
                     {workload.isPreset && <Badge variant="secondary">预制</Badge>}
                   </span>
+                </td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  <Badge variant="outline">
+                    {(workload.workloadKind ?? 'STANDARD') === 'HARNESS' ? 'HARNESS' : 'STANDARD'}
+                  </Badge>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {paramCount > 0 ? paramCount : '-'}

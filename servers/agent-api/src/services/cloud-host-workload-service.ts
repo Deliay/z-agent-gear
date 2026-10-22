@@ -19,6 +19,7 @@ type Doc = Record<string, unknown>;
 export interface CloudHostWorkloadItem {
   workloadId: string;
   name: string;
+  workloadKind: string;
   paramSchema: unknown[];
   dependsOnWorkloadIds: string[];
   isPreset: boolean;
@@ -127,6 +128,7 @@ export class CloudHostWorkloadService {
       return {
         workloadId: item.id,
         name: item.name,
+        workloadKind: 'STANDARD',
         paramSchema: item.paramSchema,
         dependsOnWorkloadIds: item.dependsOnWorkloadIds,
         isPreset: item.isPreset,
@@ -135,6 +137,25 @@ export class CloudHostWorkloadService {
         source: record?.source ?? null,
       };
     });
+  }
+
+  /**
+   * 无主机上下文的 standard 负载目录（创建云电脑时可勾选预装）。
+   * 复用同一 `CloudHostWorkloadItem` 类型；无容器记录，`installed` 固定 false。
+   */
+  async listCatalog(): Promise<CloudHostWorkloadItem[]> {
+    const items = await this.catalog.listStandard();
+    return items.map((item) => ({
+      workloadId: item.id,
+      name: item.name,
+      workloadKind: 'STANDARD',
+      paramSchema: item.paramSchema,
+      dependsOnWorkloadIds: item.dependsOnWorkloadIds,
+      isPreset: item.isPreset,
+      installed: false,
+      installedAt: null,
+      source: null,
+    }));
   }
 
   private async installedMap(

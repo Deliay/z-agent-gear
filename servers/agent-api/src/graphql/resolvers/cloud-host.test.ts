@@ -37,6 +37,10 @@ describe('cloudHostResolvers authentication', () => {
     ['cloudHostCapabilities', () => cloudHostResolvers.Query.cloudHostCapabilities({}, {}, context)],
     ['myCloudHosts', () => cloudHostResolvers.Query.myCloudHosts({}, {}, context)],
     [
+      'cloudHostWorkloadCatalog',
+      () => cloudHostResolvers.Query.cloudHostWorkloadCatalog({}, {}, context),
+    ],
+    [
       'cloudHostStopImpact',
       () => cloudHostResolvers.Query.cloudHostStopImpact({}, { id: '507f1f77bcf86cd799439011' }, context),
     ],

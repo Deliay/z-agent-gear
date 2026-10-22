@@ -94,6 +94,70 @@ describe('cloud-host-tools', () => {
     expect((result.result as any).content[0].text).toContain('Github');
   });
 
+  it('T-CHM-L1: workload_list 含 Aspire/Docker/.NET 与 workloadKind/installed', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(
+      lean({ _id: SESSION_ID, controllerId: CONTROLLER_ID }),
+    );
+    vi.mocked(Controller.findOne).mockReturnValue(lean({ _id: CONTROLLER_ID, type: 'cloud' }));
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      lean({ _id: 'host1', controllerId: CONTROLLER_ID }),
+    );
+    const service = makeService({
+      list: vi.fn().mockResolvedValue([
+        { workloadId: 'docker', name: 'Docker', workloadKind: 'STANDARD', installed: true },
+        { workloadId: 'dotnet', name: '.NET', workloadKind: 'STANDARD', installed: false },
+        { workloadId: 'aspire', name: 'Aspire', workloadKind: 'STANDARD', installed: false },
+      ]),
+    });
+
+    const result = await handleCloudHostToolRequest(
+      { userId: USER_ID, sessionId: SESSION_ID },
+      { method: 'tools/call', params: { name: 'workload_list', arguments: {} } },
+      service,
+    );
+
+    const payload = JSON.parse((result.result as any).content[0].text);
+    expect(payload.map((item: any) => item.name)).toEqual(['Docker', '.NET', 'Aspire']);
+    expect(payload[0]).toMatchObject({ workloadKind: 'STANDARD', installed: true });
+
+    const tools = (
+      await handleCloudHostToolRequest(
+        { userId: USER_ID, sessionId: SESSION_ID },
+        { method: 'tools/list' },
+        service,
+      )
+    ).result as any;
+    expect(tools.tools[0].description).toContain('Aspire');
+  });
+
+  it('T-CHM-L2: workload_install 失败返回 isError 且不含 token', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(
+      lean({ _id: SESSION_ID, controllerId: CONTROLLER_ID }),
+    );
+    vi.mocked(Controller.findOne).mockReturnValue(lean({ _id: CONTROLLER_ID, type: 'cloud' }));
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      lean({ _id: 'host1', controllerId: CONTROLLER_ID }),
+    );
+    const service = makeService({
+      createInstallOperation: vi
+        .fn()
+        .mockRejectedValue(new Error('安装失败 token=ghp_secret123')),
+    });
+
+    const result = await handleCloudHostToolRequest(
+      { userId: USER_ID, sessionId: SESSION_ID },
+      {
+        method: 'tools/call',
+        params: { name: 'workload_install', arguments: { workloadId: 'w1' } },
+      },
+      service,
+    );
+
+    expect((result.result as any).isError).toBe(true);
+    expect((result.result as any).content[0].text).toContain('安装失败');
+    expect((result.result as any).content[0].text).not.toContain('ghp_secret123');
+  });
+
   it('T-CHM4: workload_install 等待终态并返回摘要', async () => {
     vi.mocked(Session.findOne).mockReturnValue(
       lean({ _id: SESSION_ID, controllerId: CONTROLLER_ID }),

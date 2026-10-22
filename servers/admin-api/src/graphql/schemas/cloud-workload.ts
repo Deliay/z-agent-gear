@@ -17,6 +17,12 @@ export const cloudWorkloadTypeDefs = `#graphql
     BOOLEAN # 布尔
   }
 
+  # 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness
+  enum CloudWorkloadKind {
+    STANDARD
+    HARNESS
+  }
+
   # 单个参数定义
   type CloudWorkloadParamField {
     key: String! # 参数标识，工作负载内唯一，用于脚本中引用（WORKLOAD_PARAM_<KEY_UPPER>）
@@ -42,6 +48,8 @@ export const cloudWorkloadTypeDefs = `#graphql
     paramSchema: [CloudWorkloadParamField!]! # 空数组表示无参数配置
     dependsOnWorkloadIds: [ID!]! # 依赖的工作负载，按配置顺序初始化；一期最多 5 个
     isPreset: Boolean! # 是否为预制工作负载（仅展示用）
+    workloadKind: CloudWorkloadKind! # 历史数据缺省 STANDARD
+    harnessType: String # harness 负载类型（如 opencode）；standard 为 null
     createdAt: String!
     updatedAt: String!
   }

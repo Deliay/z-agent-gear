@@ -19,6 +19,10 @@ export interface CloudWorkloadDTO {
   paramSchema: CloudWorkloadParamFieldDTO[];
   dependsOnWorkloadIds: string[];
   isPreset: boolean;
+  /** STANDARD / HARNESS；历史数据缺省 STANDARD */
+  workloadKind: string;
+  /** harness 负载类型（如 opencode）；standard 为 null */
+  harnessType: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -482,6 +486,11 @@ export class CloudWorkloadService {
         ? (doc.dependsOnWorkloadIds as unknown[]).map(String)
         : [],
       isPreset: Boolean(doc.isPreset),
+      workloadKind: doc.workloadKind === 'harness' ? 'HARNESS' : 'STANDARD',
+      harnessType:
+        typeof doc.harnessType === 'string' && doc.harnessType.trim().length > 0
+          ? doc.harnessType
+          : null,
       createdAt: (doc.createdAt as Date).toISOString(),
       updatedAt: (doc.updatedAt as Date).toISOString(),
     };

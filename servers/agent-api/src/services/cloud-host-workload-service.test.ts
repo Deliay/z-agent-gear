@@ -91,6 +91,62 @@ describe('CloudHostWorkloadService', () => {
     expect(items[1]).toMatchObject({ workloadId: 'w2', installed: false });
   });
 
+  it('T-CHW1-b: list 透出 workloadKind（standard 固定 STANDARD）', async () => {
+    vi.mocked(CloudContainer.findOne).mockReturnValue({
+      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+    } as never);
+    const service = new CloudHostWorkloadService({
+      catalog: {
+        listStandard: vi.fn().mockResolvedValue([
+          {
+            id: 'w1',
+            name: 'Docker',
+            paramSchema: [],
+            dependsOnWorkloadIds: [],
+            isPreset: false,
+            workloadKind: 'standard',
+            initScript: 'x',
+          },
+        ]),
+      } as never,
+    });
+
+    const items = await service.list(USER_ID, CONTROLLER_ID);
+    expect(items[0].workloadKind).toBe('STANDARD');
+  });
+
+  it('T-CHW-CAT: listCatalog 无主机上下文返回全部 standard 且 installed=false', async () => {
+    const listStandard = vi.fn().mockResolvedValue([
+      {
+        id: 'w1',
+        name: 'Aspire',
+        paramSchema: [{ key: 'x', label: 'X', type: 'text', options: [], defaultValue: '' }],
+        dependsOnWorkloadIds: ['w0'],
+        isPreset: false,
+        workloadKind: 'standard',
+        initScript: 'x',
+      },
+    ]);
+    const service = new CloudHostWorkloadService({ catalog: { listStandard } as never });
+
+    const items = await service.listCatalog();
+
+    expect(items).toEqual([
+      {
+        workloadId: 'w1',
+        name: 'Aspire',
+        workloadKind: 'STANDARD',
+        paramSchema: [{ key: 'x', label: 'X', type: 'text', options: [], defaultValue: '' }],
+        dependsOnWorkloadIds: ['w0'],
+        isPreset: false,
+        installed: false,
+        installedAt: null,
+        source: null,
+      },
+    ]);
+    expect(CloudContainer.findOne).not.toHaveBeenCalled();
+  });
+
   it('T-CHW2/T-CHW5: 已安装项走 SKIPPED，不调用 runtime 接口', async () => {
     vi.mocked(CloudContainer.findOne).mockReturnValue({
       sort: vi.fn().mockReturnValue({

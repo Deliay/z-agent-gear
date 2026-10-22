@@ -251,4 +251,129 @@ describe('CloudHostGithubService', () => {
     expect(GITHUB_SETUP_SCRIPT).toContain('目标目录非空且不是 Git 仓库');
     expect(GITHUB_SETUP_SCRIPT).toContain('git -C "$TARGET" pull --ff-only');
   });
+
+  describe('createOperation 前缀拼接（T-CHG-P1..P6）', () => {
+    const created: Array<Record<string, unknown>> = [];
+
+    beforeEach(() => {
+      created.length = 0;
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(lean({ _id: ACCOUNT_ID }) as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue(
+        lean([{ repos: [{ fullName: 'User/Repo' }] }]) as never,
+      );
+      vi.mocked(CloudHostSetupOperation.findOne).mockReturnValue(lean(null) as never);
+      vi.mocked(CloudHostSetupOperation.create).mockImplementation((async (doc: unknown) => {
+        const value = doc as Record<string, unknown>;
+        created.push(value);
+        return { _id: 'op1', toObject: () => ({ _id: 'op1', ...value }) };
+      }) as never);
+    });
+
+    it('T-CHG-P1: 前缀末尾斜杠 + User/Repo → 最终路径为前缀/仓库', async () => {
+      const { service } = makeService();
+
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: ' User/Repo ',
+        targetPath: '/root/workspace/',
+      });
+
+      expect(created[0]).toMatchObject({
+        repoFullName: 'User/Repo',
+        targetPath: '/root/workspace/User/Repo',
+      });
+    });
+
+    it('T-CHG-P1b: 默认前缀（迁移 008 后）拼出单层目录', async () => {
+      const { service } = makeService();
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'User/Repo',
+        targetPath: '/root/workspace',
+      });
+      expect(created[0].targetPath).toBe('/root/workspace/User/Repo');
+    });
+
+    it('T-CHG-P2/P3/P4: binding / 脚本 / 会话均使用 finalPath', async () => {
+      vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(
+        lean({
+          _id: 'op1',
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          hostId: HOST_ID,
+          containerId: CONTAINER_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'User/Repo',
+          targetPath: '/root/workspace/User/Repo',
+          status: 'RUNNING',
+          steps: [
+            { key: 'workload', status: 'PENDING', detail: null },
+            { key: 'gitSetup', status: 'PENDING', detail: null },
+            { key: 'session', status: 'PENDING', detail: null },
+          ],
+        }) as never,
+      );
+      const { service, controllerClient, ensureWorkspace } = makeService();
+
+      await (service as any).run('op1');
+
+      expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalledWith(
+        { controllerId: CONTROLLER_ID },
+        expect.objectContaining({
+          $set: expect.objectContaining({ targetPath: '/root/workspace/User/Repo' }),
+        }),
+        { upsert: true, new: true },
+      );
+      expect(controllerClient.startRuntimeScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { repoFullName: 'User/Repo', targetPath: '/root/workspace/User/Repo' },
+        }),
+      );
+      expect(ensureWorkspace).toHaveBeenCalledWith(
+        CONTROLLER_ID,
+        USER_ID,
+        '/root/workspace/User/Repo',
+      );
+    });
+
+    it('T-CHG-P6: 非法前缀在创建前报错，不产生 operation', async () => {
+      const { service } = makeService();
+
+      await expect(
+        service.createOperation({
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'User/Repo',
+          targetPath: 'root/workspace',
+        }),
+      ).rejects.toThrow('前缀地址必须是绝对路径');
+
+      await expect(
+        service.createOperation({
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'User/Repo',
+          targetPath: '/root/../etc',
+        }),
+      ).rejects.toThrow('前缀地址不能包含 ..');
+
+      await expect(
+        service.createOperation({
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'owner/..',
+          targetPath: '/root/workspace',
+        }),
+      ).rejects.toThrow('仓库格式应为 owner/repo');
+
+      expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
+    });
+  });
 });

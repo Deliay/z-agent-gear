@@ -4,6 +4,12 @@ export const cloudHostTypeDefs = `#graphql
     OPENCODE
   }
 
+  # 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness
+  enum CloudWorkloadKind {
+    STANDARD
+    HARNESS
+  }
+
   enum CloudHostStatus {
     STARTING
     RUNNING
@@ -54,6 +60,7 @@ export const cloudHostTypeDefs = `#graphql
   type CloudHostWorkloadItem {
     workloadId: ID!
     name: String!
+    workloadKind: CloudWorkloadKind!
     paramSchema: JSON!
     dependsOnWorkloadIds: [ID!]!
     isPreset: Boolean!
@@ -100,6 +107,8 @@ export const cloudHostTypeDefs = `#graphql
   input CreateCloudHostInput {
     name: String!
     harnessTypes: [HarnessType!]!
+    # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
+    workloadIds: [ID!]
   }
 
   input InstallCloudHostWorkloadInput {
@@ -112,6 +121,7 @@ export const cloudHostTypeDefs = `#graphql
     controllerId: ID!
     accountId: ID!
     repoFullName: String!
+    # 语义：clone 前缀地址（工作根目录）；最终目录 = <targetPath>/<repoFullName>
     targetPath: String!
     workloadIds: [ID!]
   }
@@ -121,6 +131,8 @@ export const cloudHostTypeDefs = `#graphql
     myCloudHosts: [CloudHost!]!
     cloudHostStopImpact(id: ID!): CloudHostStopImpact!
     cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
+    # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
+    cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
     cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
   }
 

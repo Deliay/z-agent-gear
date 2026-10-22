@@ -12,6 +12,12 @@ enum HarnessType {
   OPENCODE
 }
 
+# 工作负载分类：standard = 运行环境/工具（Aspire/Docker/.NET/Github 等），harness = 云电脑 harness（如 OpenCode）
+enum CloudWorkloadKind {
+  STANDARD
+  HARNESS
+}
+
 enum CloudHostStatus {
   STARTING
   RUNNING
@@ -64,6 +70,7 @@ enum CloudHostSetupStepStatus {
 type CloudHostWorkloadItem {
   workloadId: ID!
   name: String!
+  workloadKind: CloudWorkloadKind!
   paramSchema: JSON!
   dependsOnWorkloadIds: [ID!]!
   isPreset: Boolean!
@@ -110,6 +117,9 @@ type CloudHostCapabilities {
 input CreateCloudHostInput {
   name: String!
   harnessTypes: [HarnessType!]!
+  # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
+  # 缺省/空数组 = 仅安装 harness 负载（与历史行为一致）
+  workloadIds: [ID!]
 }
 
 input InstallCloudHostWorkloadInput {
@@ -122,6 +132,8 @@ input SetupCloudHostGithubProjectInput {
   controllerId: ID!
   accountId: ID!
   repoFullName: String!
+  # 语义：clone 前缀地址（工作根目录），不是最终目录。
+  # 最终目录 = <targetPath>/<repoFullName>，由服务端用 path.posix.join 权威拼接。
   targetPath: String!
   # 除固定的 Github 工作负载外，额外选择安装的 standard 工作负载
   workloadIds: [ID!]
@@ -132,6 +144,8 @@ extend type Query {
   myCloudHosts: [CloudHost!]!
   cloudHostStopImpact(id: ID!): CloudHostStopImpact!
   cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
+  # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
+  cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
   cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
 }
 
