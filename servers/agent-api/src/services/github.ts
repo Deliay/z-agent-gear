@@ -200,7 +200,8 @@ export class GitHubService {
   }
 
   /**
-   * 签发仅对目标仓库有效的 installation token（`repositories` + `contents:write`）。
+   * 签发仅对目标仓库有效的 installation token，权限与 App 安装授权保持一致：
+   * actions / contents / deployments / environments / issues / pull_requests / workflows 均为 write。
    * 错误信息不含 GitHub 响应体，避免泄露凭据/内部细节。
    */
   async createRepoScopedToken(
@@ -233,7 +234,15 @@ export class GitHubService {
         },
         body: JSON.stringify({
           repositories: [repoName],
-          permissions: { contents: 'write' },
+          permissions: {
+            actions: 'write',
+            contents: 'write',
+            deployments: 'write',
+            environments: 'write',
+            issues: 'write',
+            pull_requests: 'write',
+            workflows: 'write',
+          },
         }),
       },
     );

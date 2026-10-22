@@ -189,7 +189,7 @@ describe('GitHubService', () => {
       } as never);
     });
 
-    it('T-GH1/T-GH4: 命中安装与仓库（大小写不敏感），body 限定 repositories+contents:write', async () => {
+    it('T-GH1/T-GH4: 命中安装与仓库（大小写不敏感），body 限定 repositories 与 App 已授权权限', async () => {
       const calls: Array<{ url: string; init: RequestInit }> = [];
       const originalFetch = globalThis.fetch;
       globalThis.fetch = ((url: string, init: RequestInit) => {
@@ -211,7 +211,15 @@ describe('GitHubService', () => {
       expect(calls[0].url).toBe('https://api.github.com/app/installations/42/access_tokens');
       expect(JSON.parse(String(calls[0].init.body))).toEqual({
         repositories: ['repo'],
-        permissions: { contents: 'write' },
+        permissions: {
+          actions: 'write',
+          contents: 'write',
+          deployments: 'write',
+          environments: 'write',
+          issues: 'write',
+          pull_requests: 'write',
+          workflows: 'write',
+        },
       });
       expect(result).toEqual({
         token: 'ghs_scoped',
