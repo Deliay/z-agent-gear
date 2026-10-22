@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: ❌ **七轮 AI Review 复核完成：REJECT（七轮打回返工）**——R7a/R7b 全部兑现（M5b/M5c 转红、M7 证明 relay 断言非浮空），六轮遗留入口条件全部补齐（含 Aspire 全栈补跑 tests/api 13+6+3、tests/e2e 19、缺参负向三组）；但本轮反向变异发现 **R8a（🟠）：`acp:resume` 路径两条产出口（内联监听器 + resume 路径 onStopped）持有权守卫零断言覆盖**，M6c/M3c 变异 14 passed 全绿存活，§14.2 row4「R6a-resume（registry + mcpRelay）」声称失实——「声称大于测试面」第七轮复发。详见 §十七。
+> **状态**: 🔁 **八轮返工完成，待八轮 AI Review 复核（feat/enhance-acp）**——七轮复核仅指 resume 路径监听器零断言（R8a），已新增 resume 建桥 + 替换空档的 registry/mcpRelay/result 三重负断言；M6c/M3c 转红，M1-M5c 复放全红（§十八）。八轮实跑：tsc ×4 全 0、单测 1997 passed（426/775/233/563）、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
 
 > **分支注记（2026-10-22）**: 本需求代码与验收报告整体迁移至 **`feat/enhance-acp`** 分支（内容与七轮评审基线 `dad3113` 完全一致，经 `ec56c85` 合入）；`integration` 分支将另作他用，**不再承载本需求**。后续返工（R8a 修复）与八轮 AI Review 均在 `feat/enhance-acp` 上进行。
 
@@ -719,8 +719,8 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 | 1 | `bridge.emitStopped`（非 silent 迟到） | `silent \|\| silentStop` | R6a（**socket + 本地**双断言） |
 | 2 | `bridge.handleError` | `stopped \|\| silentStop` | R5a、R6b（**socket + 本地**双断言，R6b 覆盖 stop race 在途窗口） |
 | 3 | `acp:start` 内联 `acp:stopped` | `current !== bridge` | R1、R6a-空档（registry + **mcpRelay**） |
-| 4 | `acp:resume` 内联 `acp:stopped` | `current !== bridge` | R6a-resume（registry + **mcpRelay**） |
-| 5 | `onStopped`（含 `current===undefined`） | `current !== bridge` | R1、R6a-空档 |
+| 4 | `acp:resume` 内联 `acp:stopped` | `current !== bridge` | **R8a**（旧 bridge 由 resume 创建、替换空档触发；registry + **mcpRelay**） |
+| 5 | `onStopped`（含 `current===undefined`） | `current !== bridge` | R1、R6a-空档（start 路径）、**R8a（resume 路径）** |
 | 6 | `acp:stop` await 后清理/ack | `stillCurrent` | R6c |
 
 ### 14.3 变异实证（逐条单独执行）
@@ -955,3 +955,53 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 ### 17.6 判定
 
 按验收红线「🔴/🟠 → 打回返工」：**REJECT（七轮打回）**，返工目标节点「修复Review意见」（**在 `feat/enhance-acp` 分支修复**，integration 另作他用）。七轮返工（R7a/R7b）本身全部真实兑现、证据链高质量（M5b/M5c 转红属实、relay 断言经 M7 证实非浮空），六轮遗留入口条件已全部补齐；本轮打回仅针对 R8a（1×🟠：resume 路径断言面缺口 + 自查表 row4/row5 声称失实），修复成本低（1 条用例 + 自查表措辞）。七轮请以「断言面=修复面=声称面」自查，**八轮请把自查表每一行的「负断言测试」逐条反向变异验证后再声称**（本轮 row4 若做过一次 M6c 自查即会发现）。
+
+## 十八、八轮返工修复记录（2026-10-21，对应 §17.3 R8a；分支 feat/enhance-acp）
+
+> 本轮分支已迁移至 `feat/enhance-acp`（七轮基线 9fd3de7 经 ec56c85 合入，注记 7fddd9b）；R8a 修复与八轮复核均在该分支。
+
+### 18.1 R8a：resume 路径监听器零断言覆盖
+
+- 新增 `startBridgeViaResume` helper：由 `acp:resume` handler 创建旧 bridge，确保后续迟到 `acp:stopped` 触达的是 **resume 路径**独立注册的内联监听器与 `onStopped`（而非 start 路径）。
+- 新增 `R8a` 用例：resume 建桥 → 同 sessionId `acp:start` 替换（旧 `stop` 挂起制造 delete→set 空档）→ 空档内旧 bridge 发 `acp:stopped` → 断言：
+  1. `processRegistry.get(sessionId)` 仍存在；
+  2. `McpRelay.prototype.unregisterSession` 未被以该 sessionId 调用；
+  3. 不向服务端发 `acp:resume:result`（resume 路径 `onStopped` 的失败回执）。
+- 反向变异：
+  - **M6c**：仅删除 `acp:resume` 内联监听器持有权守卫 → R8a **红**。
+  - **M3c**：仅把 resume 路径 `onStopped` 守卫回灌为 `current && current !== bridge` → R8a **红**。
+- §14.2 自查表 row4 改为 R8a，row5 补 resume 路径（R8a），声称面=断言面。
+
+### 18.2 变异矩阵全量复放（八轮）
+
+| 变异 | 目标用例 | 结果 |
+|---|---|---|
+| M1 `emitStopped` 去 `\|\| silentStop` | R6a | 红 |
+| M2 `wasStopped` 去 `\|\| silentStop` | R6b | 红 |
+| M3 start `onStopped` 回旧守卫 | R6a-空档 | 红 |
+| M4 `acp:stop` 回 `stillCurrent=true` | R6c | 红 |
+| M5b `emitStopped` 本地 emit 逃生 | R6a | 红 |
+| M5c `handleError` 本地 emit 逃生 | R6b | 红 |
+| **M6c** resume 内联守卫删除 | **R8a** | **红** |
+| **M3c** resume `onStopped` 回旧守卫 | **R8a** | **红** |
+
+### 18.3 八轮实跑证据（Aspire 全栈，feat/enhance-acp）
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×4 | ✅ 全 0 |
+| 单测 | ✅ **1997 passed**（agent-controller 426 / agent-api 775 / controller-api 233 / agent-web 563） |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） |
+| agent-web production build | ✅ 成功 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip |
+| tests/api billing-events | ✅ 3 passed / 0 skip |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed；T-AC5 failed |
+| 变异 | ✅ M1-M5c 复放全红 + **M6c/M3c 转红** |
+| 分支 | `feat/enhance-acp`（八轮提交见 git log） |
+
+### 18.4 提交
+
+- 代码修复 commit：八轮修复提交（R8a 用例与报告回填，见 git log）
+- PR：由 `feat/enhance-acp` 发起/更新（原 #250 integration→release 随分支用途变更另行处置）

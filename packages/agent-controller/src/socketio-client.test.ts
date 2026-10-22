@@ -271,6 +271,26 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     };
   }
 
+  /** 由 acp:resume 创建旧 bridge：其内联/onStopped 监听器属于 resume 路径（R8a） */
+  async function startBridgeViaResume(sessionId: string) {
+    setup(true);
+    fake.handlers.get('acp:resume')?.({
+      requestId: `resume-${sessionId}`,
+      sessionId,
+      serverType: 'opencode',
+      cwd: '/tmp',
+      externalSessionId: 'ext-r8',
+    });
+    await vi.waitFor(() => {
+      expect(fakeBridges.instances.length).toBe(1);
+    });
+    return fakeBridges.instances[0] as unknown as {
+      stop: ReturnType<typeof vi.fn>;
+      settlePendingOnDisconnect: ReturnType<typeof vi.fn>;
+      emit: (event: string, payload: unknown) => void;
+    };
+  }
+
   it('N3-reconcile: 对账杀会话调用 bridge.stop()（收敛 pending，不再迟发 timeout）', async () => {
     const bridge = await startBridge('sess-reconcile');
     processRegistry.register('sess-reconcile', { pid: 999999, cwd: '/tmp', acpServerType: 'opencode' });
@@ -370,6 +390,37 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     expect(unregisterSpy).not.toHaveBeenCalledWith('sess-resume-replace');
     expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:resume:result', expect.anything());
     processRegistry.deregister('sess-resume-replace');
+  });
+
+  it('R8a: resume 创建的旧 bridge 在替换空档迟到 stopped 不注销 registry/relay、不发 resume result', async () => {
+    const unregisterSpy = vi.spyOn(McpRelay.prototype, 'unregisterSession');
+    const oldBridge = await startBridgeViaResume('sess-r8');
+    processRegistry.register('sess-r8', { pid: 888888, cwd: '/tmp', acpServerType: 'opencode' });
+
+    let releaseStop!: () => void;
+    oldBridge.stop.mockReturnValueOnce(new Promise<void>((resolve) => { releaseStop = resolve; }));
+    const restartPromise = (fake.handlers.get('acp:start') as unknown as (
+      payload: Record<string, unknown>,
+    ) => Promise<void>)({
+      requestId: 'req-r8',
+      sessionId: 'sess-r8',
+      serverType: 'opencode',
+      cwd: '/tmp',
+    });
+    await vi.waitFor(() => {
+      expect(oldBridge.stop).toHaveBeenCalledWith({ silent: true });
+    });
+
+    // 替换 delete→set 空档：resume 路径的内联 + onStopped 监听器都会被触达
+    oldBridge.emit('acp:stopped', { sessionId: 'sess-r8', reason: 'error' });
+
+    expect(processRegistry.get('sess-r8')).toBeDefined();
+    expect(unregisterSpy).not.toHaveBeenCalledWith('sess-r8');
+    expect(fake.socket.emit).not.toHaveBeenCalledWith('acp:resume:result', expect.anything());
+
+    releaseStop();
+    await restartPromise;
+    processRegistry.deregister('sess-r8');
   });
 
   it('R6c: acp:stop 在途时同 sessionId 被替换，迟到 ack 不得发 acp:stopped', async () => {
