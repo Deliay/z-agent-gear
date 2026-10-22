@@ -44,6 +44,20 @@ export interface WorkloadRunPayload {
    * 对批次内所有 item 生效；`item.params` 派生的 `WORKLOAD_PARAM_*` 同名时优先。
    */
   env?: Record<string, string>;
+  /**
+   * `true` 时必须在执行本批第一条脚本前完成 gh 凭据申请与写入（由 `beforeGithubAuth` 承担）；
+   * 缺省/false 行为与旧版完全一致。
+   */
+  githubAuth?: boolean;
+}
+
+/** `runBatch` 的可选行为注入（默认空实现，保证旧调用方零变化）。 */
+export interface WorkloadRunOptions {
+  /**
+   * `payload.githubAuth === true` 时、执行首条脚本前调用一次。
+   * 抛错时本批所有 item 直接回报 `failed`，且不启动任何脚本。
+   */
+  beforeGithubAuth?: (payload: WorkloadRunPayload) => Promise<void>;
 }
 
 /** 需要在日志/错误/脚本输出中脱敏的环境变量名（契约 §2.9「云电脑初始化 env」）。 */
@@ -273,12 +287,16 @@ export class WorkloadExecutor {
   /**
    * 执行一个批次。若已有批次在跑，先终止其进程组并停止推进，再执行新批次。
    */
-  runBatch(payload: WorkloadRunPayload, onResult: WorkloadResultSink): Promise<WorkloadBatchOutcome> {
+  runBatch(
+    payload: WorkloadRunPayload,
+    onResult: WorkloadResultSink,
+    options: WorkloadRunOptions = {},
+  ): Promise<WorkloadBatchOutcome> {
     this.interruptActive();
 
     const run: ActiveRun = { cancelled: false, child: null };
     this.active = run;
-    const promise = this.executeBatch(payload, onResult, run).finally(() => {
+    const promise = this.executeBatch(payload, onResult, run, options).finally(() => {
       // 仅当自己仍是当前批次时才清空（被打断时 active 已指向新批次）
       if (this.active === run) {
         this.active = null;
@@ -293,6 +311,7 @@ export class WorkloadExecutor {
     payload: WorkloadRunPayload,
     onResult: WorkloadResultSink,
     run: ActiveRun,
+    options: WorkloadRunOptions = {},
   ): Promise<WorkloadBatchOutcome> {
     const items = Array.isArray(payload?.items) ? payload.items : [];
     const total = items.length;
@@ -309,6 +328,33 @@ export class WorkloadExecutor {
     const phase = payload.phase;
     const containerEnv = normalizeContainerEnv(payload.env);
     const secrets = collectSecretValues(process.env, containerEnv);
+
+    // Github 凭据预取：仅在显式 `githubAuth === true` 时触发，失败则整批逐条 failed、不启动脚本。
+    // 缺省/false 时不调用 hook，行为与旧版完全一致。
+    if (payload.githubAuth === true && options.beforeGithubAuth) {
+      try {
+        await options.beforeGithubAuth(payload);
+      } catch (error) {
+        if (run.cancelled) return outcome();
+        const reason = error instanceof Error ? error.message : String(error);
+        const message = redactSecrets(`Github 凭据申请失败：${reason}`, secrets);
+        const now = nowIso();
+        for (const item of items) {
+          if (run.cancelled) return outcome();
+          failedCount += 1;
+          this.report(onResult, {
+            logId: item.logId,
+            status: 'failed',
+            exitCode: null,
+            log: message,
+            startedAt: now,
+            finishedAt: nowIso(),
+          });
+        }
+        return outcome();
+      }
+      if (run.cancelled) return outcome();
+    }
 
     for (const item of items) {
       if (run.cancelled) return outcome();

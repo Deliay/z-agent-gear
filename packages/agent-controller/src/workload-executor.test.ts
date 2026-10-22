@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm, access } from 'node:fs/promises';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -674,5 +674,147 @@ describe('WorkloadExecutor container env + secret redaction (T-AG13/T-AG14)', ()
 
     expect(redactSecrets('a sk-1 b ct-2 c host-3 d', secrets)).toBe(`a ${REDACTED} b ${REDACTED} c ${REDACTED} d`);
     expect(redactSecrets('nothing to hide', secrets)).toBe('nothing to hide');
+  });
+});
+
+describe('WorkloadExecutor githubAuth prefetch (T-WE-G)', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function tmp(): Promise<string> {
+    const dir = await makeTmpDir();
+    dirs.push(dir);
+    return dir;
+  }
+
+  it('T-WE-G1: githubAuth=true calls the hook once before the first script runs', async () => {
+    const executor = new WorkloadExecutor();
+    const dir = await tmp();
+    const marker = join(dir, 'hook.marker');
+    const { results, sink } = collect();
+    const calls: string[] = [];
+
+    const outcome = await executor.runBatch(
+      {
+        phase: 'init',
+        githubAuth: true,
+        items: [
+          { logId: 'g1', workloadName: 'One', script: `test -f "${marker}" && echo ready`, timeoutMs: 5000 },
+          { logId: 'g2', workloadName: 'Two', script: `test -f "${marker}" && echo ready`, timeoutMs: 5000 },
+        ],
+      },
+      sink,
+      {
+        beforeGithubAuth: async () => {
+          calls.push('hook');
+          await writeFile(marker, 'written');
+        },
+      },
+    );
+
+    expect(calls).toEqual(['hook']);
+    expect(outcome.failedCount).toBe(0);
+    expect(results.map((result) => result.status)).toEqual(['success', 'success']);
+    expect(results.map((result) => result.log.trim())).toEqual(['ready', 'ready']);
+  });
+
+  it('T-WE-G2: hook failure reports failed for every item and never spawns scripts', async () => {
+    const executor = new WorkloadExecutor();
+    const dir = await tmp();
+    const marker = join(dir, 'should-not-exist');
+    const { results, sink } = collect();
+
+    const outcome = await executor.runBatch(
+      {
+        phase: 'init',
+        githubAuth: true,
+        items: [
+          { logId: 'g1', workloadName: 'One', script: `touch "${marker}"`, timeoutMs: 5000 },
+          { logId: 'g2', workloadName: 'Two', script: `touch "${marker}"`, timeoutMs: 5000 },
+        ],
+      },
+      sink,
+      {
+        beforeGithubAuth: async () => {
+          throw new Error('未设置 Github 项目');
+        },
+      },
+    );
+
+    expect(outcome.failedCount).toBe(2);
+    expect(outcome.total).toBe(2);
+    expect(results.map((result) => result.status)).toEqual(['failed', 'failed']);
+    expect(results.map((result) => result.log)).toEqual([
+      'Github 凭据申请失败：未设置 Github 项目',
+      'Github 凭据申请失败：未设置 Github 项目',
+    ]);
+    expect(await fileExists(marker)).toBe(false);
+  });
+
+  it('T-WE-G3: no githubAuth field keeps legacy behavior and never calls the hook', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+    const hook = vi.fn(async () => {});
+
+    const outcome = await executor.runBatch(
+      {
+        phase: 'init',
+        items: [{ logId: 'legacy', workloadName: 'Legacy', script: 'echo legacy', timeoutMs: 5000 }],
+      },
+      sink,
+      { beforeGithubAuth: hook },
+    );
+
+    expect(hook).not.toHaveBeenCalled();
+    expect(outcome.failedCount).toBe(0);
+    expect(results.map((result) => result.status)).toEqual(['success']);
+    expect(results[0].log.trim()).toBe('legacy');
+  });
+
+  it('T-WE-G4: githubAuth=false is accepted and behaves like the legacy payload', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+    const hook = vi.fn(async () => {});
+
+    const outcome = await executor.runBatch(
+      {
+        phase: 'post',
+        githubAuth: false,
+        items: [{ logId: 'off', workloadName: 'Off', script: 'echo off', timeoutMs: 5000 }],
+      },
+      sink,
+      { beforeGithubAuth: hook },
+    );
+
+    expect(hook).not.toHaveBeenCalled();
+    expect(outcome.failedCount).toBe(0);
+    expect(results[0].status).toBe('success');
+  });
+
+  it('T-WE-G2b: redacts secrets from the hook failure reason', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+    const secret = 'zag_k_1_super_secret';
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        githubAuth: true,
+        env: { ZAG_HOST_KEY: secret },
+        items: [{ logId: 'redact', workloadName: 'Redact', script: 'echo nope', timeoutMs: 5000 }],
+      },
+      sink,
+      {
+        beforeGithubAuth: async () => {
+          throw new Error(`hook failed with ${secret}`);
+        },
+      },
+    );
+
+    expect(results[0].log).toContain(REDACTED);
+    expect(results[0].log).not.toContain(secret);
   });
 });

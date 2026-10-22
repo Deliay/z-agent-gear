@@ -1,0 +1,55 @@
+import { test, expect } from '@playwright/test';
+import { loginViaUI, registerUser } from './helpers';
+
+// Github 工作负载 E2E（需要 HARNESS_ENABLED=true 的真实云主机）。
+// 真实 GitHub API 不在 E2E 中调用：未绑定账号路径只验证引导与禁用态；
+// 成功 clone/凭据/会话链路由单测 + 部署侧手工验收覆盖。
+const HARNESS_ENABLED = process.env.HARNESS_ENABLED === 'true';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+
+async function createHost(page: import('@playwright/test').Page, token: string, name: string) {
+  const response = await page.request.post(API_URL, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    data: {
+      query: `mutation Create($input: CreateCloudHostInput!) {
+        createCloudHost(input: $input) { id controllerId name status }
+      }`,
+      variables: { input: { name, harnessTypes: ['OPENCODE'] } },
+    },
+  });
+  const body = (await response.json()) as any;
+  if (body.errors) throw new Error(body.errors[0].message);
+  return body.data.createCloudHost as { id: string; controllerId: string };
+}
+
+test.describe('Github workload E2E', () => {
+  test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
+
+  test('T-EG1/T-EG4: 云主机工作区 Github 图标 → 弹窗默认值与固定工作负载', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    await loginViaUI(page, username);
+    const name = `e2e-gh-${Date.now().toString(36)}`;
+    await createHost(page, token, name);
+
+    await page.reload();
+    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    await expect(sidebar.getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
+
+    const controllerRow = sidebar.locator('li', { hasText: name });
+    await controllerRow.getByLabel('Github 项目设置').click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Git 项目设置' })).toBeVisible();
+    await expect(dialog.getByLabel('目标主机')).toContainText(name);
+    await expect(dialog.getByLabel('目标路径')).toHaveValue('/root/workspace');
+
+    const githubCheckbox = dialog.getByRole('checkbox', { name: 'Github' });
+    await expect(githubCheckbox).toBeChecked();
+    await expect(githubCheckbox).toBeDisabled();
+
+    // 新用户未绑定 Github：展示引导，确认禁用
+    await expect(dialog.getByText('尚未绑定 Github 帐号')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '确认' })).toBeDisabled();
+
+  });
+});

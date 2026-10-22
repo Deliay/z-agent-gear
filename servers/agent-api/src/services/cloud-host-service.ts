@@ -21,7 +21,7 @@ import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 
-export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.5.0';
+export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.6.0';
 
 const ACTIVE_STATUSES = ['STARTING', 'RUNNING', 'STOPPING'] as const;
 
@@ -241,6 +241,7 @@ export class CloudHostService {
         const container = await this.controllerClient
           .startHarness({
             hostId: cloudHostId,
+            controllerId,
             controllerKeyId: keyId,
             containerApiKeyId: modelKeyId,
             userId,
@@ -609,6 +610,39 @@ export class CloudHostService {
   async findRawHost(id: string): Promise<Doc | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     return (await CloudHost.findOne({ _id: id, deletedAt: null }).lean()) as Doc | null;
+  }
+
+  /** 按 controllerId 查找云主机（凭据接口 / MCP 会话解析）。 */
+  async findRawHostByController(controllerId: string): Promise<Doc | null> {
+    if (!mongoose.isValidObjectId(controllerId)) return null;
+    return (await CloudHost.findOne({
+      controllerId,
+      deletedAt: null,
+    }).lean()) as Doc | null;
+  }
+
+  /** 用户拥有的云主机（按 controllerId），不存在/非本人返回 null。 */
+  async findOwnedRawHostByController(
+    controllerId: string,
+    userId: string,
+  ): Promise<Doc | null> {
+    if (!mongoose.isValidObjectId(controllerId)) return null;
+    return (await CloudHost.findOne({
+      controllerId,
+      userId,
+      deletedAt: null,
+    }).lean()) as Doc | null;
+  }
+
+  /** 默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退配置默认值）。 */
+  async defaultWorkspace(host: Doc): Promise<string> {
+    const workspaceId = host.workspaceId ? String(host.workspaceId) : '';
+    if (!workspaceId) return config.cloudHostDefaultWorkspace;
+    const workspace = await ControllerWorkspace.findOne({
+      _id: workspaceId,
+      userId: host.userId,
+    } as any).lean();
+    return workspace?.path ? String(workspace.path) : config.cloudHostDefaultWorkspace;
   }
 
   private async findOwnedHost(id: string, userId: string): Promise<Doc> {

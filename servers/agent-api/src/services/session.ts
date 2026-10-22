@@ -9,6 +9,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
+import { ensureCloudHostToolsServer } from './cloud-host-tools.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
@@ -140,6 +141,13 @@ export class SessionService {
       }
     }
 
+    // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
+    let mcpServerIds = input.mcpServerIds;
+    if (controller.type === 'cloud') {
+      const cloudToolsId = await ensureCloudHostToolsServer(userId);
+      mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), cloudToolsId]));
+    }
+
     const workspace = await ControllerWorkspace.findOne({ _id: input.workspaceId, userId, controllerId: input.controllerId }).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
@@ -228,13 +236,13 @@ export class SessionService {
 
     // Validate selected MCP servers up front so an invalid selection fails the
     // mutation instead of silently creating a session without MCP.
-    if (input.mcpServerIds && input.mcpServerIds.length > 0) {
+    if (mcpServerIds && mcpServerIds.length > 0) {
       const selectable = await McpServer.countDocuments({
-        _id: { $in: input.mcpServerIds },
+        _id: { $in: mcpServerIds },
         userId,
         enabled: true,
       });
-      if (selectable !== input.mcpServerIds.length) {
+      if (selectable !== mcpServerIds.length) {
         throw new Error('MCP_SERVER_NOT_FOUND: some selected MCP servers are invalid or disabled');
       }
     }
@@ -290,12 +298,12 @@ export class SessionService {
 
     // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
     let mcpEndpoint: { token: string; serverNames: string[] } | undefined;
-    if (input.mcpServerIds && input.mcpServerIds.length > 0) {
+    if (mcpServerIds && mcpServerIds.length > 0) {
       try {
         mcpEndpoint = await mcpEndpointService.createEndpoint(
           session._id.toString(),
           userId,
-          input.mcpServerIds,
+          mcpServerIds,
           // 工作流节点会话：token 扩展节点作用域
           input.workflowInstanceId && input.workflowNodeId
             ? { instanceId: input.workflowInstanceId, nodeId: input.workflowNodeId }

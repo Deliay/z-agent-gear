@@ -136,6 +136,7 @@ describe('cloudContainerResolvers', () => {
           currentWorkloadName: null,
           billingAccountId: null,
           billingStartedAt: null,
+          installedWorkloads: [],
         },
       ]);
       expect(warn).toHaveBeenCalled();

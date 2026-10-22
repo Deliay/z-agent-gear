@@ -180,6 +180,7 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 | `items[].timeoutMs` | `number` | 是 | 单条脚本超时（init 默认 `WORKLOAD_INIT_TIMEOUT_MS=300000`） |
 | `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
 | `env` | `object` | 否 | 容器级环境变量（仅 `purpose=harness` 下发）；见下方「云电脑初始化 env」 |
+| `githubAuth` | `boolean` | 否 | `true` 时客户端必须在执行本批第一条脚本前完成 gh 凭据申请与写入；缺省/false 行为不变 |
 
 **云电脑初始化 env（仅 `purpose=harness`）：**
 
@@ -321,8 +322,8 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.5.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
-- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.5.0`（云电脑双连接 / `harness prepare`），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.6.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.6.0`（云电脑双连接 / `harness prepare` / Github 凭据管理器），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - 任一条件不满足返回 `VERSION_MISMATCH`（§2.4，含 `currentVersion`/`minimumVersion`/`supportedMajor`）并 `disconnect(true)`。
 - **拒绝副作用约束**：版本校验必须位于所有注册副作用之前——不设置 `socket.data.registered`，不调用心跳计时、初始化脚本查询/下发、`online`/`initializing` 状态迁移，不写入 `connectedAt`，不下发 `workload:run`。因此被拒绝的容器销毁时按「从未完成兼容注册」处理：不发送 shutdown、不等待宽限，直接删除 Job。
 - 兼容 worker（`>=2.2.0` 且 major 为 `2`）的注册、心跳、工作负载、重连与销毁协议不变。
@@ -401,7 +402,7 @@ Content-Type: application/json
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
 - `expiresAt` 同时用于 Job `activeDeadlineSeconds = max(60, floor((expiresAt-now)/1000))`；缺省沿用 `JOB_ACTIVE_DEADLINE_SECONDS=86400`。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
-- Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
+- Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`、`ZAG_AGENT_API_ENDPOINT`（agent-api 内部地址，来自 `AGENT_API_URL`）、`ZAG_CONTROLLER_ID`（云主机 controllerId）。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 - `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。
 - `workloadPlan[].required`（可选）语义：本次启动该条是否为「必须」；缺省/`null` 归一 `false`，仅 `true` 生效；仅对含初始化脚本的工作负载产生硬失败语义（见 §2.9「必须失败语义」）。
@@ -449,6 +450,57 @@ GET /internal/containers/:id/workload-logs
 **错误：**
 - `404` `NOT_FOUND` —— 容器不存在（容器存在但无记录时返回空数组 `[]`）。
 
+#### A.2.5 在线容器 runtime 安装工作负载
+
+```
+POST /internal/containers/:containerId/workloads
+Content-Type: application/json
+
+{
+  "workloadId": "<objectId>",
+  "params": { "version": "22" },
+  "source": "user"
+}
+```
+
+- `source` 可选：`user` | `mcp`（缺省 `user`）。
+- 服务端按只读定义做后序 DFS 展开（依赖先行、去重、≤10），显式工作负载合并用户参数并按 `paramSchema` 校验；隐式依赖取默认参数。`required` 固定 `false`。
+- 已安装仍允许重复执行（脚本幂等）；成功结果的 `installedWorkloads` 按 `workloadId` 去重（保留首次记录）。
+
+**响应 200：** `{ "batchId": "...", "items": [{ "logId": "...", "workloadId": "...", "workloadName": "..." }] }`
+
+**错误：**
+
+| 状态 | code | 说明 |
+|------|------|------|
+| 400 | `INVALID_WORKLOAD` | 工作负载不存在 / 参数非法 / 依赖展开失败 |
+| 404 | `NOT_FOUND` | 容器不存在 |
+| 409 | `CONTAINER_NOT_ONLINE` | 容器非 `online` |
+| 409 | `CONTAINER_BUSY` | 该容器已有 runtime 批次 |
+
+#### A.2.6 在线容器 runtime 单脚本（系统 Git 设置）
+
+```
+POST /internal/containers/:containerId/runtime-scripts
+Content-Type: application/json
+
+{
+  "workloadId": "<github workload id>",
+  "workloadName": "Git 项目设置",
+  "script": "set -euo pipefail\n...",
+  "params": { "repoFullName": "owner/repo", "targetPath": "/root/workspace" },
+  "source": "system",
+  "githubAuth": true
+}
+```
+
+- `workloadId` 必须为合法 ObjectId（用于日志关联，不要求工作负载存在）；`script` 非空且 ≤16 KiB；`source ∈ user|mcp|system`；`githubAuth` 仅允许布尔。
+- 不写 `installedWorkloads`（Git 设置不是工作负载安装）；日志 `workloadName` 取请求值，`trigger='runtime'`、`source` 取请求值。
+
+**响应 200：** `{ "batchId": "...", "logId": "..." }`
+
+**错误：** 同 A.2.5（`INVALID_SCRIPT` 用于脚本非法）。
+
 ### A.3 CloudContainer JSON 结构
 
 | 字段 | 类型 | 说明 |
@@ -476,6 +528,7 @@ GET /internal/containers/:id/workload-logs
 | `controllerKeyId` | `string \| null` | 标准连接使用的 ControllerKey ID |
 | `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
 | `expiresAt` | `string \| null` | 容器 TTL 到期时间 |
+| `installedWorkloads` | `object[]` | 容器内已安装工作负载（只增不删）；每项 `{ workloadId, name, installedAt, source }` |
 
 > `secrets` 永不出现在列表/详情响应中。
 
@@ -569,6 +622,8 @@ cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 a
 | `script` | `string` | 当时实际执行的脚本内容快照（留档） |
 | `params` | `object` | 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 `{}` |
 | `required` | `boolean` | 本次启动该项是否为「必须」（快照）；历史记录缺省为 `false` |
+| `trigger` | `string` | `start` \| `runtime`；历史记录缺省 `start` |
+| `source` | `string` | `admin` \| `user` \| `mcp` \| `system`；历史记录缺省 `admin` |
 | `exitCode` | `number \| null` | 进程退出码 |
 | `log` | `string` | 合并捕获的输出（尾部 ≤ 256 KiB） |
 | `startedAt` | `string \| null` | 开始时间（ISO） |

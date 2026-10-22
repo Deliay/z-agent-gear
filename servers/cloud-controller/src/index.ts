@@ -145,6 +145,7 @@ export function createCloudControllerApp(): CloudControllerApp {
       image: config.workerImage,
       connectTimeoutMs: config.connectTimeoutMs,
       shutdownGraceMs: 10000,
+      agentApiUrl: config.agentApiUrl,
     },
     logger,
     {
@@ -292,7 +293,7 @@ export function createCloudControllerApp(): CloudControllerApp {
   app.use(
     '/internal',
     internalAuth(config.internalApiToken),
-    createInternalRouter(containerService, { workloadRepository, workloadLogRepository }),
+    createInternalRouter(containerService, { workloadRepository, workloadLogRepository, workloadDispatcher: dispatcher }),
   );
 
   let started = false;

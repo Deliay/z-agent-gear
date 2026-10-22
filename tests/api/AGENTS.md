@@ -55,7 +55,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（33 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（34 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -557,3 +557,9 @@ npm test
 | 测试 | 描述 |
 |------|------|
 | T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |
+
+
+## 云主机工作负载 / Github 设置
+
+- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验与 Github setup 输入校验；不调用真实 GitHub。
+- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖。

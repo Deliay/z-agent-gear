@@ -21,8 +21,9 @@ import { LocalMcpServer } from './mcp/local-server.js';
 import { WorkloadExecutor, type WorkloadRunPayload, collectSecretValues, redactSecrets } from './workload-executor.js';
 
 // 与 package.json 版本保持一致（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
-// 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`（MIN_HARNESS_WORKER_VERSION=2.5.0）。
-const CONTROLLER_VERSION = '2.5.0';
+// 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.6.0）；
+// 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`。
+const CONTROLLER_VERSION = '2.6.0';
 // 进程内全局单实例：工作负载批次严格串行（新批次打断旧批次，见 workload-executor）。
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
@@ -109,6 +110,11 @@ export interface ConnectToServerOptions {
   onRegistered?: (payload: RegisteredPayload) => void;
   /** `workload:run` 批次结束回调（成功/失败都回调；用于 init 完成后建立标准连接）。 */
   onWorkloadBatchComplete?: (summary: WorkloadBatchSummary) => void;
+  /**
+   * `workload:run` 批次开始前的预处理（仅 `githubAuth === true` 批次触发）。
+   * 云电脑 worker 连接用于申请 Github 凭据；抛错时本批所有 item 回报 failed 且不执行脚本。
+   */
+  onBeforeWorkloadBatch?: (payload: WorkloadRunPayload) => Promise<void>;
   /**
    * 不启动本地 MCP 回环服务（双连接时仅由 controller-api 标准连接启动一次，
    * 避免 worker 连接重复监听同一端口）。
@@ -588,7 +594,11 @@ export function connectToServer(
       status: 'completed',
     };
     workloadExecutor
-      .runBatch(data, (result) => socket.emit('workload:result', result))
+      .runBatch(
+        data,
+        (result) => socket.emit('workload:result', result),
+        { beforeGithubAuth: options?.onBeforeWorkloadBatch },
+      )
       .then((outcome) => {
         const status: WorkloadBatchSummary['status'] = outcome.cancelled
           ? 'cancelled'

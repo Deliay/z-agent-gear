@@ -8,6 +8,7 @@ vi.mock('jsonwebtoken', () => ({
 vi.mock('../models/github-account.js', () => ({
   GitHubAccount: {
     find: vi.fn(),
+    findById: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
@@ -167,6 +168,92 @@ describe('GitHubService', () => {
 
       expect(result).toBe(false);
       expect(GitHubInstallation.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createRepoScopedToken', () => {
+    const account = { _id: 'acc1' };
+    const installations = [
+      {
+        installationId: 42,
+        repos: [{ fullName: 'Owner/Repo' }],
+      },
+    ];
+
+    beforeEach(() => {
+      vi.mocked(GitHubAccount.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(account),
+      } as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(installations),
+      } as never);
+    });
+
+    it('T-GH1/T-GH4: 命中安装与仓库（大小写不敏感），body 限定 repositories+contents:write', async () => {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = ((url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              token: 'ghs_scoped',
+              expires_at: '2026-10-22T01:00:00.000Z',
+            }),
+        } as Response);
+      }) as any;
+
+      const result = await githubService.createRepoScopedToken('acc1', 'owner/repo');
+      globalThis.fetch = originalFetch;
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe('https://api.github.com/app/installations/42/access_tokens');
+      expect(JSON.parse(String(calls[0].init.body))).toEqual({
+        repositories: ['repo'],
+        permissions: { contents: 'write' },
+      });
+      expect(result).toEqual({
+        token: 'ghs_scoped',
+        expiresAt: new Date('2026-10-22T01:00:00.000Z'),
+      });
+    });
+
+    it('T-GH2: 仓库不在授权列表时抛错且不发起 fetch', async () => {
+      const fetchSpy = vi.fn();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchSpy as any;
+
+      await expect(
+        githubService.createRepoScopedToken('acc1', 'other/repo'),
+      ).rejects.toThrow('repository is not authorized');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      globalThis.fetch = originalFetch;
+    });
+
+    it('T-GH3: GitHub 非 2xx 抛固定错误且不含响应体', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (() =>
+        Promise.resolve({
+          ok: false,
+          status: 403,
+          json: () => Promise.resolve({ message: 'bad token detail' }),
+        } as Response)) as any;
+
+      await expect(
+        githubService.createRepoScopedToken('acc1', 'Owner/Repo'),
+      ).rejects.toThrow('failed to issue github token');
+      globalThis.fetch = originalFetch;
+    });
+
+    it('T-GH5: account 不存在', async () => {
+      vi.mocked(GitHubAccount.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+
+      await expect(
+        githubService.createRepoScopedToken('missing', 'Owner/Repo'),
+      ).rejects.toThrow('account not found');
     });
   });
 });

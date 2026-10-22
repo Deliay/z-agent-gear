@@ -150,6 +150,7 @@ describe('internal management API', () => {
       [
         'billingAccountId',
         'billingStartedAt',
+        'installedWorkloads',
         'connectedAt',
         'containerApiKeyId',
         'controllerKeyId',
@@ -595,7 +596,7 @@ describe('internal management API', () => {
     const stored = await repo.findById(body.id as string);
     expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
     expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
-    expect(stored?.agentGearMinVersion).toBe('2.5.0');
+    expect(stored?.agentGearMinVersion).toBe('2.6.0');
 
     // Job env 含 harness 变量且模型 Key 不进入 Job env
     const env = k8sClient.getEnv(body.name as string);
@@ -636,7 +637,7 @@ describe('internal management API', () => {
     const lower = await createContainer({ ...base, agentGearMinVersion: '2.1.0' });
     expect(lower.status).toBe(201);
     const lowerBody = (await lower.json()) as { id: string };
-    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.5.0');
+    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.6.0');
 
     const higher = await createContainer({ ...base, agentGearMinVersion: '2.10.0' });
     expect(higher.status).toBe(201);

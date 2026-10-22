@@ -99,6 +99,14 @@ worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日�
 
 > 说明：`/worker` 是 Socket.IO **namespace**，握手实际打 engine path `/socket.io/`；`ZAG_SERVER_ENDPOINT=wss://<host>/worker` 是本仓库既定约定，**不是**让 Ingress 暴露 `/worker`（见契约 `contracts/cloud-controller-websocket.md` §1.2）。
 
+## 在线容器 runtime 工作负载（本期）
+
+- 新增内部端点：`POST /internal/containers/:id/workloads`（依赖展开 + 参数校验 + 单批次安装）与 `POST /internal/containers/:id/runtime-scripts`（系统内联单脚本，Git 设置用）。错误码：`404 NOT_FOUND`、`409 CONTAINER_NOT_ONLINE|CONTAINER_BUSY`、`400 INVALID_WORKLOAD|INVALID_SCRIPT`。
+- `WorkloadDispatcher.startRuntimeBatch`：入口要求 `online`，CAS 到 `initializing` 并写 `initTrigger='runtime'`；完成后直接 `markOnline`，不回 `connecting`；同一容器同时只允许一个 runtime 批次。`workload:run` 仅在该批次携带 `githubAuth:true`，普通批次报文形状不变。
+- 已安装集合：`cloudcontainers.installedWorkloads[{workloadId,name,installedAt,source}]` 只在 `success` 时回填（start→`start`，runtime→`user|mcp`），按 workloadId 去重保留首次；`source=system` 的 Git 脚本不写。失败不注销容器（`required=false`）。
+- 日志：`cloudworkloadlogs.trigger`（`start|runtime`）与 `source`（`admin|user|mcp|system`），历史记录读取缺省 `start/admin`。
+- 门禁：harness `MIN_HARNESS_WORKER_VERSION=2.6.0`（凭据管理器）；普通容器仍 `2.2.0`。harness Job env 新增 `ZAG_AGENT_API_ENDPOINT`（`AGENT_API_URL`）与 `ZAG_CONTROLLER_ID`（请求可选 `controllerId`）；缺失 `AGENT_API_URL` 仅告警。
+
 ## Dev Commands
 
 ```bash

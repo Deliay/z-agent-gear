@@ -22,6 +22,8 @@ const cloudWorkloadLogSchema = new mongoose.Schema(
     params: { type: mongoose.Schema.Types.Mixed, default: {} },
     // 本次启动该项是否为「必须」；历史记录缺省 false（与 cloud-controller 写入结构对齐）
     required: { type: Boolean, default: false },
+    trigger: { type: String, enum: ['start', 'runtime'], default: 'start' },
+    source: { type: String, enum: ['admin', 'user', 'mcp', 'system'], default: 'admin' },
     exitCode: { type: Number, default: null },
     log: { type: String, default: '' },
     startedAt: { type: Date, default: null },

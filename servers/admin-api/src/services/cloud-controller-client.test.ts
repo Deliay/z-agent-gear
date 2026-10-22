@@ -76,6 +76,7 @@ describe('CloudControllerClient', () => {
           currentWorkloadName: null,
           billingAccountId: null,
           billingStartedAt: null,
+          installedWorkloads: [],
         },
       ]);
     });
@@ -268,6 +269,7 @@ describe('CloudControllerClient', () => {
         currentWorkloadName: null,
         billingAccountId: null,
         billingStartedAt: null,
+          installedWorkloads: [],
       });
 
       expect(mapped).toEqual({
@@ -284,6 +286,7 @@ describe('CloudControllerClient', () => {
         currentWorkloadName: null,
         billingAccountId: null,
         billingStartedAt: null,
+          installedWorkloads: [],
       });
     });
 

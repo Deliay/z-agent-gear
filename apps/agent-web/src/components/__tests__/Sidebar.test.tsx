@@ -61,6 +61,21 @@ vi.mock('../cloud-host/NewCloudHostDialog', () => ({
   ) : null,
 }));
 
+vi.mock('../cloud-host/GithubProjectSetupDialog', () => ({
+  default: ({ open, controllerId, cloudHost, onClose }: {
+    open: boolean;
+    controllerId: string;
+    cloudHost: CloudHostData;
+    onClose: () => void;
+  }) => open ? (
+    <div data-testid="github-setup-dialog" data-controller-id={controllerId}>
+      <span>{cloudHost.name}</span>
+      <span data-testid="github-setup-host-default-workspace">{cloudHost.defaultWorkspace}</span>
+      <button type="button" onClick={onClose}>关闭 Github 对话框</button>
+    </div>
+  ) : null,
+}));
+
 vi.mock('../workflow/InstantiateWorkflowDialog', () => ({
   default: ({ open }: { open: boolean }) => open ? <div data-testid="instantiate-workflow-dialog" /> : null,
 }));
@@ -541,6 +556,60 @@ describe('Sidebar 集成测试', () => {
       const sectionButton = buttons.find((button) => button.getAttribute('title') === '云电脑未运行，无法创建会话');
       expect(sectionButton).toBeDefined();
       expect(sectionButton).toBeDisabled();
+    });
+
+    it('T-AW-G1 仅 RUNNING 云电脑的工作区展示 Github 入口，local/STOPPED 不展示', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ defaultWorkspace: '/root/workspace' }),
+          }),
+          makeController({ id: 'ctrl-local', type: 'local' }),
+          makeController({
+            id: 'ctrl-stopped',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ id: 'cloud-stopped', status: 'STOPPED' }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getAllByLabelText('Github 项目设置')).toHaveLength(1);
+    });
+
+    it('T-AW-G2 点击 Github 入口打开设置弹窗并固定当前云电脑', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ defaultWorkspace: '/root/workspace' }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      fireEvent.click(screen.getByLabelText('Github 项目设置'));
+
+      const dialog = screen.getByTestId('github-setup-dialog');
+      expect(dialog).toHaveAttribute('data-controller-id', 'ctrl-cloud');
+      expect(screen.getByTestId('github-setup-host-default-workspace')).toHaveTextContent('/root/workspace');
+    });
+
+    it('T-AW-G1 mobile Sidebar 同样可达 Github 入口', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost() }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" mobile />);
+
+      expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
     });
   });
 });

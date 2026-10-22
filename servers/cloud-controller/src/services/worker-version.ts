@@ -15,7 +15,7 @@ export const MIN_WORKER_VERSION = '2.2.0';
  * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供。
  * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
  */
-export const MIN_HARNESS_WORKER_VERSION = '2.5.0';
+export const MIN_HARNESS_WORKER_VERSION = '2.6.0';
 
 /** 本期支持的 worker major 版本。 */
 export const SUPPORTED_MAJOR = 2;

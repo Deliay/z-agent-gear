@@ -230,6 +230,8 @@ export const CLOUD_HOST_FIELDS = gql`
     activeSessionCount
     failureReason
     deletedAt
+    defaultWorkspace
+    workloadInstalling
   }
 `
 
@@ -285,6 +287,48 @@ export const CLOUD_HOST_STOP_IMPACT = gql`
       }
     }
   }
+`
+
+export const CLOUD_HOST_WORKLOADS = gql`
+  query CloudHostWorkloads($controllerId: ID!) {
+    cloudHostWorkloads(controllerId: $controllerId) {
+      workloadId
+      name
+      paramSchema
+      dependsOnWorkloadIds
+      isPreset
+      installed
+      installedAt
+      source
+    }
+  }
+`
+
+/** 设置操作字段（进度对话框 1.5s 轮询） */
+export const CLOUD_HOST_SETUP_OPERATION_FIELDS = gql`
+  fragment CloudHostSetupOperationFields on CloudHostSetupOperation {
+    id
+    kind
+    status
+    steps {
+      key
+      status
+      detail
+    }
+    sessionId
+    error
+    createdAt
+    updatedAt
+  }
+`
+
+export const CLOUD_HOST_SETUP_OPERATION = gql`
+  query CloudHostSetupOperation($id: ID!) {
+    cloudHostSetupOperation(id: $id) {
+      ...CloudHostSetupOperationFields
+    }
+  }
+  ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
 `
 
 export const GET_CONTROLLER_WORKSPACES = gql`

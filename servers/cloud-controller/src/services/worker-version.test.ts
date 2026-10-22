@@ -13,7 +13,7 @@ import {
 describe('worker-version constants', () => {
   it('T-V0: 最低版本与 supported major 是代码常量', () => {
     expect(MIN_WORKER_VERSION).toBe('2.2.0');
-    expect(MIN_HARNESS_WORKER_VERSION).toBe('2.5.0');
+    expect(MIN_HARNESS_WORKER_VERSION).toBe('2.6.0');
     expect(SUPPORTED_MAJOR).toBe(2);
   });
 });
@@ -119,12 +119,12 @@ describe('isSupportedWorkerVersion', () => {
 });
 
 describe('isSupportedHarnessWorkerVersion', () => {
-  it('T-CC9: harness 门禁为 >=2.5.0 且 major=2（不影响普通容器）', () => {
+  it('T-CC9: harness 门禁为 >=2.6.0 且 major=2（不影响普通容器）', () => {
     for (const version of ['2.4.9', '2.2.0', '2.1.0']) {
       expect(isSupportedHarnessWorkerVersion(version).supported, version).toBe(false);
       expect(isSupportedHarnessWorkerVersion(version).reason).toBe('below-minimum');
     }
-    for (const version of ['2.5.0', '2.6.0', '2.10.0']) {
+    for (const version of ['2.6.0', '2.10.0']) {
       expect(isSupportedHarnessWorkerVersion(version).supported, version).toBe(true);
     }
     expect(isSupportedHarnessWorkerVersion('3.0.0')).toMatchObject({

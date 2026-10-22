@@ -1273,4 +1273,100 @@ describe('WorkloadDispatcher - harness env', () => {
     await dispatcher.handleResult(container.id, { logId: postLog.id, status: 'success' });
     await post;
   });
+
+  describe('runtime batch', () => {
+    it('T-WD-R1/R2/R4: 在线容器 runtime 批次 → githubAuth 透传、成功回填已安装并直接 online', async () => {
+      const { repo, dispatcher, workloadLogRepository, runs } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime1',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+
+      const result = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [
+          {
+            workloadId: 'w-github',
+            workloadName: 'Github',
+            script: 'echo install',
+            params: { repoFullName: 'a/b' },
+          },
+        ],
+        source: 'mcp',
+        githubAuth: true,
+      });
+
+      expect(result.items).toHaveLength(1);
+      const payload = runs('init').at(-1)!.payload;
+      expect(payload).toMatchObject({ githubAuth: true });
+      expect((payload.items[0] as Record<string, unknown>).required).toBe(false);
+
+      const log = await workloadLogRepository.findById(result.items[0].logId);
+      expect(log).toMatchObject({ trigger: 'runtime', source: 'mcp' });
+
+      await dispatcher.handleResult(container.id, {
+        logId: result.items[0].logId,
+        status: 'success',
+      });
+
+      const updated = await repo.findById(container.id);
+      expect(updated?.status).toBe('online');
+      expect(updated?.initTrigger).toBeNull();
+      expect(updated?.installedWorkloads).toEqual([
+        expect.objectContaining({ workloadId: 'w-github', name: 'Github', source: 'mcp' }),
+      ]);
+    });
+
+    it('T-WD-R3: runtime 失败不写已安装、不注销容器', async () => {
+      const { repo, dispatcher, forceDestroyCalls } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime2',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+
+      const result = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [
+          {
+            workloadId: 'w-bad',
+            workloadName: 'Bad',
+            script: 'exit 1',
+            params: {},
+          },
+        ],
+        source: 'user',
+      });
+      await dispatcher.handleResult(container.id, {
+        logId: result.items[0].logId,
+        status: 'failed',
+        exitCode: 1,
+      });
+
+      const updated = await repo.findById(container.id);
+      expect(updated?.installedWorkloads).toEqual([]);
+      expect(updated?.status).toBe('online');
+      expect(forceDestroyCalls).toHaveLength(0);
+    });
+
+    it('T-WD-R5: 非 online 容器拒绝 runtime 批次', async () => {
+      const { repo, dispatcher } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime3',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'connecting',
+      });
+      await expect(
+        dispatcher.startRuntimeBatch(container.id, {
+          entries: [{ workloadId: 'w1', workloadName: 'x', script: 'true', params: {} }],
+          source: 'user',
+        }),
+      ).rejects.toThrow('container is not online');
+    });
+  });
 });

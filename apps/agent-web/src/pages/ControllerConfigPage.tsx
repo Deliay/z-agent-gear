@@ -6,6 +6,8 @@ import WorkspaceSection from '@/components/settings/WorkspaceSection';
 import HarnessToolsSection from '@/components/settings/HarnessToolsSection';
 import StopCloudHostDialog from '@/components/cloud-host/StopCloudHostDialog';
 import DeleteCloudHostDialog from '@/components/cloud-host/DeleteCloudHostDialog';
+import CloudHostWorkloadsSection from '@/components/cloud-host/CloudHostWorkloadsSection';
+import GithubProjectSetupDialog from '@/components/cloud-host/GithubProjectSetupDialog';
 import {
   canDeleteCloudHost,
   canStopCloudHost,
@@ -16,7 +18,7 @@ import { useHomeOverview } from '@/stores/homeOverview';
 import { useIsMobile } from '../hooks/useIsMobile';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
-import { Cloud } from 'lucide-react';
+import { Cloud, GitBranch } from 'lucide-react';
 
 interface ControllerConfigPageProps {
   controllerId: string;
@@ -94,14 +96,41 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
   const cloudHost = controller?.type === 'cloud' ? controller.cloudHost : null;
   const isMobile = useIsMobile();
 
-  const [activeSection, setActiveSection] = useState<'workspace' | 'harness'>('workspace');
+  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'workloads'>('workspace');
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [githubSetupOpen, setGithubSetupOpen] = useState(false);
 
   const refreshHostData = () => {
     void refetch();
     refetchHome();
   };
+
+  const workloadsSection = cloudHost ? (
+    <div className="min-w-0 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          安装后立即在云电脑内生效，不提供卸载。
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-label="Github 项目设置"
+          disabled={cloudHost.status !== 'RUNNING' || Boolean(cloudHost.deletedAt)}
+          onClick={() => setGithubSetupOpen(true)}
+        >
+          <GitBranch className="size-3.5" />
+          Github 项目设置
+        </Button>
+      </div>
+      <CloudHostWorkloadsSection
+        controllerId={controllerId}
+        cloudHost={cloudHost}
+        onChanged={refreshHostData}
+      />
+    </div>
+  ) : null;
 
   const panel = cloudHost ? (
     <CloudHostPanel
@@ -132,6 +161,15 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           onBack();
         }}
       />
+      <GithubProjectSetupDialog
+        open={githubSetupOpen}
+        controllerId={controller.id}
+        cloudHost={cloudHost}
+        onClose={() => {
+          setGithubSetupOpen(false);
+          refreshHostData();
+        }}
+      />
     </>
   ) : null;
 
@@ -147,6 +185,9 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
         <div className="flex shrink-0 gap-1 border-b px-4 py-2">
           <button type="button" data-testid="config-tab-workspace" onClick={() => setActiveSection('workspace')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workspace' ? 'bg-accent' : 'hover:bg-accent'}`}>工作区</button>
           <button type="button" data-testid="config-tab-harness" onClick={() => setActiveSection('harness')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'harness' ? 'bg-accent' : 'hover:bg-accent'}`}>Harness 工具</button>
+          {cloudHost && (
+            <button type="button" data-testid="config-tab-workloads" onClick={() => setActiveSection('workloads')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}>工作负载</button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto" data-testid="mobile-section-scroll">
           {panel && <div className="px-4 pt-4">{panel}</div>}
@@ -157,6 +198,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             {activeSection === 'harness' && (
               <HarnessToolsSection controllerId={controllerId} />
             )}
+            {activeSection === 'workloads' && workloadsSection}
           </div>
         </div>
         {dialogs}
@@ -196,6 +238,15 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             >
               可用 Harness 工具
             </button>
+            {cloudHost && (
+              <button
+                type="button"
+                onClick={() => setActiveSection('workloads')}
+                className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}
+              >
+                工作负载
+              </button>
+            )}
           </div>
         </div>
       </nav>
@@ -203,8 +254,10 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
         {panel}
         {activeSection === 'workspace' ? (
           <WorkspaceSection controllerId={controllerId} controllerOnline={controller?.status === 'online'} />
-        ) : (
+        ) : activeSection === 'harness' ? (
           <HarnessToolsSection controllerId={controllerId} />
+        ) : (
+          workloadsSection
         )}
       </div>
       {dialogs}

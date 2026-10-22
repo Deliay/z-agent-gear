@@ -11,6 +11,7 @@ import type {
 import type { WorkflowInstanceSummaryData } from '../graphql/workflow';
 import NewSessionDialog from './session/NewSessionDialog';
 import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
+import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
 import {
   cloudHostStatusDotClass,
   cloudHostStatusLabel,
@@ -31,6 +32,7 @@ import {
   Archive,
   Cloud,
   CreditCard,
+  GitBranch,
 } from 'lucide-react';
 import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
@@ -51,6 +53,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const [showNewCloudHost, setShowNewCloudHost] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
+  const [showGithubSetup, setShowGithubSetup] = useState<{ controllerId: string } | null>(null);
 
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
   const { data, refetch } = useHomeOverview();
@@ -68,6 +71,11 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const archivedWorkflowInstances = data?.archivedWorkflowInstances ?? [];
 
   const hasActiveCloudHost = controllers.some((controller) => isActiveCloudHost(controller.cloudHost));
+
+  const githubSetupController = showGithubSetup
+    ? controllers.find((controller) => controller.id === showGithubSetup.controllerId)
+    : undefined;
+  const githubSetupHost = githubSetupController?.cloudHost ?? null;
 
   const handleCloudHostCreated = (cloudHost: { id: string; controllerId?: string }) => {
     setShowNewCloudHost(false);
@@ -376,6 +384,19 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       title="工作区"
                       count={controllerWorkspaces.length}
                       emptyMessage="无工作区"
+                      actions={
+                        cloudHostRunning ? (
+                          <button
+                            type="button"
+                            aria-label="Github 项目设置"
+                            title="Github 项目设置"
+                            onClick={() => setShowGithubSetup({ controllerId: controller.id })}
+                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          >
+                            <GitBranch className="size-3" />
+                          </button>
+                        ) : undefined
+                      }
                     >
                       {controllerWorkspaces.map((ws) => (
                         <WorktreeSidebarGroup
@@ -435,6 +456,15 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
           onOpenChange={() => setShowInstantiateDialog(null)}
           controllerId={showInstantiateDialog.controllerId}
           workspaceId={showInstantiateDialog.workspaceId}
+        />
+      )}
+
+      {showGithubSetup && githubSetupController && githubSetupHost && (
+        <GithubProjectSetupDialog
+          open={true}
+          controllerId={githubSetupController.id}
+          cloudHost={githubSetupHost}
+          onClose={() => setShowGithubSetup(null)}
         />
       )}
 

@@ -36,6 +36,57 @@ type CloudHost {
   # 软删除时间；非空表示已从列表隐藏。删除后该记录不再通过 Controller.cloudHost 返回，
   # 会话/消息留档保留；前端只读判定应使用 Session.cloudHost（可返回软删对象）。
   deletedAt: String
+  # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
+  defaultWorkspace: String!
+  # 当前正在 runtime 安装的工作负载名；null 表示空闲
+  workloadInstalling: String
+}
+
+enum CloudHostSetupKind {
+  INSTALL_WORKLOAD
+  GITHUB_SETUP
+}
+
+enum CloudHostSetupStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum CloudHostSetupStepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+type CloudHostWorkloadItem {
+  workloadId: ID!
+  name: String!
+  paramSchema: JSON!
+  dependsOnWorkloadIds: [ID!]!
+  isPreset: Boolean!
+  installed: Boolean!
+  installedAt: String
+  source: String
+}
+
+type CloudHostSetupStep {
+  key: String!
+  status: CloudHostSetupStepStatus!
+  detail: String
+}
+
+type CloudHostSetupOperation {
+  id: ID!
+  kind: CloudHostSetupKind!
+  status: CloudHostSetupStatus!
+  steps: [CloudHostSetupStep!]!
+  sessionId: ID
+  error: String
+  createdAt: String!
+  updatedAt: String!
 }
 
 type CloudHostSessionSummary {
@@ -61,10 +112,27 @@ input CreateCloudHostInput {
   harnessTypes: [HarnessType!]!
 }
 
+input InstallCloudHostWorkloadInput {
+  controllerId: ID!
+  workloadId: ID!
+  params: JSON
+}
+
+input SetupCloudHostGithubProjectInput {
+  controllerId: ID!
+  accountId: ID!
+  repoFullName: String!
+  targetPath: String!
+  # 除固定的 Github 工作负载外，额外选择安装的 standard 工作负载
+  workloadIds: [ID!]
+}
+
 extend type Query {
   cloudHostCapabilities: CloudHostCapabilities!
   myCloudHosts: [CloudHost!]!
   cloudHostStopImpact(id: ID!): CloudHostStopImpact!
+  cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
+  cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
 }
 
 extend type Mutation {
@@ -73,6 +141,9 @@ extend type Mutation {
   stopCloudHost(id: ID!, force: Boolean): CloudHost!
   # 仅 STOPPED/FAILED 可删除；软删除并撤销 Key，Controller/会话保留
   deleteCloudHost(id: ID!): Boolean!
+  installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
+  setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
+  retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
 }
 
 extend type Controller {

@@ -21,6 +21,10 @@ export interface CloudWorkloadLogEntity {
   params: Record<string, unknown>;
   /** 本次启动该项是否为「必须」；历史记录缺省 false。 */
   required: boolean;
+  /** 触发来源：start / runtime；历史记录缺省 start。 */
+  trigger: 'start' | 'runtime';
+  /** 调用来源：admin/user/mcp/system；历史记录缺省 admin。 */
+  source: 'admin' | 'user' | 'mcp' | 'system';
   exitCode: number | null;
   log: string;
   startedAt: Date | null;
@@ -39,6 +43,10 @@ export interface CreateWorkloadLogInput {
   params?: Record<string, unknown>;
   /** 本次启动该项是否为「必须」；缺省 false。 */
   required?: boolean;
+  /** 触发来源；缺省 start。 */
+  trigger?: 'start' | 'runtime';
+  /** 调用来源；缺省 admin。 */
+  source?: 'admin' | 'user' | 'mcp' | 'system';
   exitCode?: number | null;
   log?: string;
   startedAt?: Date | null;
@@ -59,6 +67,8 @@ interface RawDoc {
   script?: string | null;
   params?: Record<string, unknown> | null;
   required?: boolean | null;
+  trigger?: string | null;
+  source?: string | null;
   exitCode?: number | null;
   log?: string | null;
   startedAt?: Date | null;
@@ -86,6 +96,11 @@ function toEntity(doc: RawDoc): CloudWorkloadLogEntity {
     script: doc.script ?? '',
     params: normalizeParams(doc.params),
     required: doc.required === true,
+    trigger: doc.trigger === 'runtime' ? 'runtime' : 'start',
+    source:
+      doc.source === 'user' || doc.source === 'mcp' || doc.source === 'system'
+        ? doc.source
+        : 'admin',
     exitCode: doc.exitCode ?? null,
     log: doc.log ?? '',
     startedAt: doc.startedAt ?? null,
@@ -128,6 +143,8 @@ export class MongoWorkloadLogRepository implements WorkloadLogRepository {
         script: input.script ?? '',
         params: normalizeParams(input.params),
         required: input.required === true,
+        trigger: input.trigger ?? 'start',
+        source: input.source ?? 'admin',
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,
@@ -203,6 +220,8 @@ export class InMemoryWorkloadLogRepository implements WorkloadLogRepository {
         script: input.script ?? '',
         params: normalizeParams(input.params),
         required: input.required === true,
+        trigger: input.trigger ?? 'start',
+        source: input.source ?? 'admin',
         exitCode: input.exitCode ?? null,
         log: input.log ?? '',
         startedAt: input.startedAt ?? null,

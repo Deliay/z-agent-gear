@@ -35,6 +35,10 @@ export interface CloudWorkloadLogDTO {
   params: Record<string, unknown>;
   /** 本次启动该项是否为「必须」；历史记录缺省 false。 */
   required: boolean;
+  /** START / RUNTIME；历史记录缺省 START。 */
+  trigger: string;
+  /** ADMIN / USER / MCP / SYSTEM；历史记录缺省 ADMIN。 */
+  source: string;
   exitCode: number | null;
   log: string;
   startedAt: string | null;
@@ -350,6 +354,15 @@ export function mapWorkloadLog(raw: Record<string, unknown>): CloudWorkloadLogDT
     script: (raw.script as string | undefined) ?? '',
     params: normalizeParamsObject(raw.params),
     required: raw.required === true,
+    trigger: raw.trigger === 'runtime' ? 'RUNTIME' : 'START',
+    source:
+      raw.source === 'user'
+        ? 'USER'
+        : raw.source === 'mcp'
+          ? 'MCP'
+          : raw.source === 'system'
+            ? 'SYSTEM'
+            : 'ADMIN',
     exitCode: typeof raw.exitCode === 'number' ? raw.exitCode : null,
     log: (raw.log as string | undefined) ?? '',
     startedAt: toIso(raw.startedAt),

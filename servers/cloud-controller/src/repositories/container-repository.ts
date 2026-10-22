@@ -4,6 +4,7 @@ import {
   CloudContainer,
   type CloudContainerPurpose,
   type CloudContainerStatus,
+  type InstalledWorkloadEntry,
   type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
 
@@ -48,6 +49,10 @@ export interface CloudContainerEntity {
   mustFailure: boolean;
   /** 初始化中当前正在执行的工作负载脚本名称；非初始化中为 null。 */
   currentWorkloadName: string | null;
+  /** 容器内已安装工作负载（只增不删）；历史容器为 []。 */
+  installedWorkloads: InstalledWorkloadEntry[];
+  /** 当前初始化批次来源；非初始化中为 null。 */
+  initTrigger: 'start' | 'runtime' | null;
   /** 计费账户 ID；null 表示不计费（费用中心）。 */
   billingAccountId: string | null;
   /** 就绪计费起点（首次进入 online）；null 表示未就绪/不计费。 */
@@ -79,6 +84,8 @@ export interface CreateContainerInput {
   workloadPlan?: WorkloadPlanEntry[];
   mustFailure?: boolean;
   currentWorkloadName?: string | null;
+  installedWorkloads?: InstalledWorkloadEntry[];
+  initTrigger?: 'start' | 'runtime' | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
@@ -136,6 +143,13 @@ interface RawDoc {
   workloadPlan?: Array<{ workloadId: unknown; params?: unknown; implicit?: unknown; required?: unknown }> | null;
   mustFailure?: boolean | null;
   currentWorkloadName?: string | null;
+  installedWorkloads?: Array<{
+    workloadId: unknown;
+    name?: unknown;
+    installedAt?: unknown;
+    source?: unknown;
+  }> | null;
+  initTrigger?: string | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
   createdAt: Date;
@@ -169,6 +183,29 @@ function clonePlan(
   return (plan ?? []).map((entry) => normalizePlanEntry(entry));
 }
 
+function cloneInstalledWorkloads(
+  entries:
+    | readonly {
+        workloadId: unknown;
+        name?: unknown;
+        installedAt?: unknown;
+        source?: unknown;
+      }[]
+    | null
+    | undefined,
+): InstalledWorkloadEntry[] {
+  return (entries ?? []).map((entry) => ({
+    workloadId: String(entry.workloadId),
+    name: String(entry.name ?? ''),
+    installedAt:
+      entry.installedAt instanceof Date ? new Date(entry.installedAt) : new Date(0),
+    source:
+      entry.source === 'start' || entry.source === 'user' || entry.source === 'mcp'
+        ? entry.source
+        : 'start',
+  }));
+}
+
 function toEntity(doc: RawDoc): CloudContainerEntity {
   return {
     id: String(doc._id),
@@ -194,6 +231,9 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     workloadPlan: clonePlan(doc.workloadPlan ?? []),
     mustFailure: doc.mustFailure === true,
     currentWorkloadName: doc.currentWorkloadName ?? null,
+    installedWorkloads: cloneInstalledWorkloads(doc.installedWorkloads),
+    initTrigger:
+      doc.initTrigger === 'start' || doc.initTrigger === 'runtime' ? doc.initTrigger : null,
     billingAccountId: doc.billingAccountId ?? null,
     billingStartedAt: doc.billingStartedAt ?? null,
     createdAt: doc.createdAt,
@@ -226,6 +266,8 @@ export class MongoContainerRepository implements ContainerRepository {
       workloadPlan: clonePlan(input.workloadPlan),
       mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
+      installedWorkloads: cloneInstalledWorkloads(input.installedWorkloads),
+      initTrigger: input.initTrigger ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
     });
@@ -305,6 +347,8 @@ export class InMemoryContainerRepository implements ContainerRepository {
       workloadPlan: clonePlan(input.workloadPlan),
       mustFailure: input.mustFailure ?? false,
       currentWorkloadName: input.currentWorkloadName ?? null,
+      installedWorkloads: cloneInstalledWorkloads(input.installedWorkloads),
+      initTrigger: input.initTrigger ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
       createdAt: input.createdAt ?? now,

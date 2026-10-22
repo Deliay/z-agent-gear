@@ -5,7 +5,9 @@ import {
   WorkloadPlanError,
   collectWorkloadDefinitions,
   normalizeDefaultParams,
+  normalizeProvidedParams,
   resolveFallbackWorkloadPlan,
+  resolveRuntimeWorkloadPlan,
   type WorkloadPlanDefinition,
 } from './workload-plan.js';
 
@@ -205,5 +207,64 @@ describe('collectWorkloadDefinitions', () => {
 
     expect(definitions.map((definition) => definition.id).sort()).toEqual(['aspire', 'docker']);
     expect(lookups).toEqual([['aspire'], ['docker', 'dotnet']]);
+  });
+});
+
+
+describe('resolveRuntimeWorkloadPlan', () => {
+  const schema: WorkloadParamField[] = [
+    { key: 'version', label: 'Version', type: 'text', options: [], defaultValue: '20' },
+    {
+      key: 'flavor',
+      label: 'Flavor',
+      type: 'select',
+      options: ['a', 'b'],
+      defaultValue: 'a',
+    },
+  ];
+
+  it('T-RI4: 显式参数覆盖默认值，依赖先行且隐式', () => {
+    const definitions = [
+      def('docker', { schema }),
+      def('aspire', { deps: ['docker'], schema }),
+    ];
+    const plan = resolveRuntimeWorkloadPlan({
+      workloadId: 'aspire',
+      params: {},
+      definitions,
+    });
+    expect(plan.map((entry) => entry.workloadId)).toEqual(['docker', 'aspire']);
+    expect(plan[0]).toMatchObject({ implicit: true, required: false });
+    expect(plan[1]).toMatchObject({ implicit: false, params: {} });
+  });
+
+  it('T-RI5: 未知参数/类型不符/select 越界抛错', () => {
+    const definitions = [def('w', { schema })];
+    expect(() =>
+      resolveRuntimeWorkloadPlan({ workloadId: 'w', params: { nope: 1 }, definitions }),
+    ).toThrow(WorkloadPlanError);
+    expect(() =>
+      resolveRuntimeWorkloadPlan({ workloadId: 'w', params: { version: 2 }, definitions }),
+    ).toThrow('invalid value for parameter version');
+    expect(() =>
+      resolveRuntimeWorkloadPlan({ workloadId: 'w', params: { flavor: 'c' }, definitions }),
+    ).toThrow('invalid value for parameter flavor');
+  });
+
+  it('T-RI4b: 去重与依赖环检测', () => {
+    const definitions = [
+      def('a', { deps: ['b'] }),
+      def('b', { deps: ['a'] }),
+    ];
+    expect(() =>
+      resolveRuntimeWorkloadPlan({ workloadId: 'a', params: {}, definitions }),
+    ).toThrow('dependency cycle detected');
+  });
+
+  it('T-RI5b: normalizeProvidedParams 允许合法覆盖', () => {
+    expect(normalizeProvidedParams(schema, { version: '22', flavor: 'b' })).toEqual({
+      version: '22',
+      flavor: 'b',
+    });
   });
 });
