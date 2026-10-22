@@ -49,29 +49,6 @@ function createSpawner(serverType: string, sessionId: string, cwd: string): AcpS
   return new AcpSpawner({ sessionId, cwd, command: config.command, args: config.args });
 }
 
-/**
- * `acp:initialized` → `acp:start:result` / `acp:resume:result` 的唯一出口。
- * start/resume 共用，避免两处逐字段拼装漂移（漏字段会导致前端永远拿不到能力快照）。
- * 旧 payload 不带 `capabilities` 时不输出该键（零退化）。
- */
-export function buildAcpInitResult(payload: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  result.modes = payload.modes ?? [];
-  if (payload.currentModeId) result.currentModeId = payload.currentModeId;
-  if (payload.currentModel) result.currentModel = payload.currentModel;
-  result.availableModels = payload.availableModels ?? [];
-  if (payload.currentModelId) result.currentModelId = payload.currentModelId;
-  result.configOptions = payload.configOptions ?? [];
-  if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
-  if (payload.agentInfo) result.agentInfo = payload.agentInfo;
-  if (payload.authMethods) result.authMethods = payload.authMethods;
-  if (payload.supportsAdditionalDirectories != null) {
-    result.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
-  }
-  if (payload.capabilities) result.capabilities = payload.capabilities;
-  return result;
-}
-
 interface RegisteredPayload {
   controllerId: string;
   resumeToken?: string;
@@ -671,11 +648,24 @@ export function connectToServer(
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=true externalSessionId=${payload.acpSessionId}`);
-        const result = buildAcpInitResult(payload);
-        result.requestId = data.requestId;
-        result.sessionId = data.sessionId;
-        result.success = true;
-        result.externalSessionId = payload.acpSessionId;
+        const result: Record<string, unknown> = {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: true,
+          externalSessionId: payload.acpSessionId,
+        };
+        result.modes = payload.modes ?? [];
+        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
+        if (payload.currentModel) result.currentModel = payload.currentModel;
+        result.availableModels = payload.availableModels ?? [];
+        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
+        result.configOptions = payload.configOptions ?? [];
+        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
+        if (payload.authMethods) result.authMethods = payload.authMethods;
+        if (payload.supportsAdditionalDirectories != null) {
+          result.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
+        }
         socket.emit('acp:start:result', result);
       };
 
@@ -771,10 +761,20 @@ export function connectToServer(
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
-        const result = buildAcpInitResult(payload);
-        result.requestId = data.requestId;
-        result.sessionId = data.sessionId;
-        result.success = true;
+        const result: Record<string, unknown> = {
+          requestId: data.requestId,
+          sessionId: data.sessionId,
+          success: true,
+        };
+        result.modes = payload.modes ?? [];
+        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
+        if (payload.currentModel) result.currentModel = payload.currentModel;
+        result.availableModels = payload.availableModels ?? [];
+        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
+        result.configOptions = payload.configOptions ?? [];
+        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
+        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
+        if (payload.authMethods) result.authMethods = payload.authMethods;
         socket.emit('acp:resume:result', result);
       };
 

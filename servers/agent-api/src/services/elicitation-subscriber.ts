@@ -5,7 +5,6 @@ import { sessionSSEService } from './session-sse.js';
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
-const ELICITATION_RESOLVED_CHANNEL = 'elicitation:resolved';
 
 interface ElicitationRequestData {
   requestId: string;
@@ -26,14 +25,6 @@ interface ElicitationCompleteData {
   userId: string;
 }
 
-interface ElicitationResolvedData {
-  requestId?: string;
-  sessionId: string;
-  reason: 'unsupported_mode' | 'timeout' | 'cancelled';
-  detail?: string;
-  userId?: string;
-}
-
 export class ElicitationSubscriberService {
   private subscriber: Redis | null = null;
 
@@ -43,18 +34,13 @@ export class ElicitationSubscriberService {
     const redis = getRedisClient();
     this.subscriber = redis.duplicate();
 
-    this.subscriber.subscribe(
-      ELICITATION_REQUEST_CHANNEL,
-      ELICITATION_COMPLETE_CHANNEL,
-      ELICITATION_RESOLVED_CHANNEL,
-      (err) => {
-        if (err) {
-          console.error('Failed to subscribe to elicitation channels:', err);
-          return;
-        }
-        console.log('Subscribed to elicitation:request, elicitation:complete and elicitation:resolved channels');
-      },
-    );
+    this.subscriber.subscribe(ELICITATION_REQUEST_CHANNEL, ELICITATION_COMPLETE_CHANNEL, (err) => {
+      if (err) {
+        console.error('Failed to subscribe to elicitation channels:', err);
+        return;
+      }
+      console.log('Subscribed to elicitation:request and elicitation:complete channels');
+    });
 
     this.subscriber.on('message', async (channel: string, message: string) => {
       try {
@@ -62,8 +48,6 @@ export class ElicitationSubscriberService {
           await this.handleElicitationRequest(JSON.parse(message) as ElicitationRequestData);
         } else if (channel === ELICITATION_COMPLETE_CHANNEL) {
           await this.handleElicitationComplete(JSON.parse(message) as ElicitationCompleteData);
-        } else if (channel === ELICITATION_RESOLVED_CHANNEL) {
-          await this.handleElicitationResolved(JSON.parse(message) as ElicitationResolvedData);
         }
       } catch (err) {
         console.error('Error handling elicitation message:', err);
@@ -109,20 +93,6 @@ export class ElicitationSubscriberService {
         elicitationId: data.elicitationId,
       },
     });
-  }
-
-  private async handleElicitationResolved(data: ElicitationResolvedData): Promise<void> {
-    const resolution = data.reason === 'unsupported_mode'
-      ? 'failed'
-      : data.reason === 'timeout'
-        ? 'expired'
-        : 'cancelled';
-
-    console.log('[Elicitation] resolved reason=%s requestId=%s', data.reason, data.requestId ?? 'n/a');
-
-    if (data.requestId) {
-      await todoService.markElicitationResolved(data.requestId, resolution);
-    }
   }
 
   stop(): void {

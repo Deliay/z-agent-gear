@@ -172,20 +172,6 @@ export class TodoService {
     );
   }
 
-  /**
-   * 写入问询终态（用户响应 / 超时 / 取消 / 链路不支持）。
-   * 找不到待办（如已被 TTL 清理）时 updateOne 无匹配即静默返回（幂等，不抛错）。
-   */
-  async markElicitationResolved(
-    requestId: string,
-    resolution: 'accepted' | 'declined' | 'cancelled' | 'expired' | 'failed',
-  ): Promise<void> {
-    await TodoItem.updateOne(
-      { 'elicitationData.requestId': requestId },
-      { $set: { resolution, resolvedAt: new Date(), isRead: true } },
-    );
-  }
-
   async getTimeoutAction(userId: string, sessionId?: string | null): Promise<string> {
     if (sessionId) {
       const session = await Session.findById(sessionId);

@@ -2,11 +2,6 @@ import * as acp from '@agentclientprotocol/sdk';
 import { EventEmitter } from 'events';
 import type { Socket } from 'socket.io-client';
 import { AcpSpawner } from './spawner.js';
-import {
-  CLIENT_CAPABILITIES,
-  normalizeCapabilities,
-  type AgentCapabilitySnapshot,
-} from './capabilities.js';
 
 const ACP_PROTOCOL_VERSION = 1;
 
@@ -59,8 +54,6 @@ export interface AcpInitializedPayload {
   authMethods: AcpAuthMethodData[];
   supportsAdditionalDirectories: boolean;
   protocolVersion?: number | null;
-  /** 能力快照（Agent 声明 × 平台支持归一化结果） */
-  capabilities: AgentCapabilitySnapshot;
 }
 
 function toMcpServers(servers: AcpBridgeOptions['mcpServers']): acp.McpServer[] {
@@ -238,8 +231,6 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private supportsAdditionalDirectories = false;
   private agentProtocolVersion: number | null = null;
   private agentMcpCapabilities: { http?: boolean | null; sse?: boolean | null } | null = null;
-  private agentCapabilitiesRaw: unknown = null;
-  private clientCapabilitiesRaw: unknown = CLIENT_CAPABILITIES;
 
   constructor(socket: Socket, options: AcpBridgeOptions, spawner?: AcpSpawner) {
     super();
@@ -526,7 +517,12 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.connection = new acp.ClientSideConnection(() => this, stream);
     const result = await this.connection.initialize({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: CLIENT_CAPABILITIES,
+      clientCapabilities: {
+        session: {
+          configOptions: { boolean: {} },
+        },
+        elicitation: { form: {}, url: {} },
+      },
       clientInfo: {
         name: 'agent-gear',
         version: '1.1.5',
@@ -534,8 +530,6 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     });
 
     this.agentProtocolVersion = result.protocolVersion ?? null;
-    this.agentCapabilitiesRaw = result.agentCapabilities ?? null;
-    this.clientCapabilitiesRaw = CLIENT_CAPABILITIES;
     if (result.protocolVersion != null && result.protocolVersion !== ACP_PROTOCOL_VERSION) {
       // 版本不兼容：不断连，由上层提示用户
       this.socket.emit('acp:protocol-version-mismatch', {
@@ -621,17 +615,6 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       authMethods: this.authMethods,
       supportsAdditionalDirectories: this.supportsAdditionalDirectories,
       protocolVersion: this.agentProtocolVersion,
-      capabilities: normalizeCapabilities({
-        protocolVersion: this.agentProtocolVersion,
-        agentInfo: this.agentInfo
-          ? { name: this.agentInfo.name, version: this.agentInfo.version ?? null }
-          : null,
-        agentCapabilities: this.agentCapabilitiesRaw,
-        authMethods: this.authMethods,
-        clientCapabilities: this.clientCapabilitiesRaw,
-        configOptions: this.configOptions,
-        modes,
-      }),
     };
   }
 
@@ -729,16 +712,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   async unstable_createElicitation(
     params: acp.CreateElicitationRequest,
   ): Promise<acp.CreateElicitationResponse> {
-    // custom/未知模式不支持：立即取消，避免挂起 Agent。必须留下日志与 resolved 事件，
-    // 否则「Agent 发起问询但用户从未看到弹窗」无法从日志/待办侧定位。
+    // custom/未知模式不支持：立即取消，避免挂起 Agent
     if (!acp.CreateElicitationRequest.isForm(params) && !acp.CreateElicitationRequest.isUrl(params)) {
-      const mode = (params as { mode?: unknown }).mode ?? 'unknown';
-      console.warn('[ACP bridge] session %s: unsupported elicitation mode=%j', this.sessionId, mode);
-      this.socket.emit('acp:elicitation:resolved', {
-        sessionId: this.sessionId,
-        reason: 'unsupported_mode',
-        detail: String(mode),
-      });
       return { action: 'cancel' };
     }
 
@@ -748,17 +723,6 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingElicitations.delete(requestId);
-        console.warn(
-          '[ACP bridge] session %s: elicitation %s timed out after 65s, auto-cancelling',
-          this.sessionId,
-          requestId,
-        );
-        this.socket.emit('acp:elicitation:resolved', {
-          requestId,
-          sessionId: this.sessionId,
-          reason: 'timeout',
-          detail: 'bridge timeout (65s)',
-        });
         resolve({ action: 'cancel' });
       }, 65_000);
 

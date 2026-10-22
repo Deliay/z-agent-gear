@@ -397,29 +397,3 @@ describe('ModelService', () => {
     });
   });
 });
-
-describe('ModelService.listSourceLibrary', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('T-SS2: 只 select name/scope，scope 归一为 user/global', async () => {
-    const selectFn = vi.fn().mockReturnValue({
-      lean: vi.fn().mockResolvedValue([
-        { name: 'gpt-4o', scope: 'global' },
-        { name: 'my-model', scope: 'user' },
-        { name: 'legacy-model' },
-      ]),
-    });
-    (Model.find as any).mockReturnValue({ select: selectFn });
-
-    const library = await modelService.listSourceLibrary();
-
-    expect(selectFn).toHaveBeenCalledWith('name scope');
-    expect(library).toEqual([
-      { name: 'gpt-4o', scope: 'global' },
-      { name: 'my-model', scope: 'user' },
-      { name: 'legacy-model', scope: 'user' },
-    ]);
-  });
-});

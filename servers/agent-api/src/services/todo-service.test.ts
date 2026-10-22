@@ -595,35 +595,3 @@ describe('TodoService', () => {
     });
   });
 });
-
-describe('TodoService - elicitation resolution', () => {
-  let service: TodoService;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    service = new TodoService();
-  });
-
-  it('T-TD1: markElicitationResolved 写入 resolution/resolvedAt/isRead', async () => {
-    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
-
-    await service.markElicitationResolved('elic-1', 'expired');
-
-    expect(TodoItem.updateOne).toHaveBeenCalledWith(
-      { 'elicitationData.requestId': 'elic-1' },
-      {
-        $set: {
-          resolution: 'expired',
-          resolvedAt: expect.any(Date),
-          isRead: true,
-        },
-      },
-    );
-  });
-
-  it('T-TD2: 不存在的 requestId 不抛错（modifiedCount=0）', async () => {
-    vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 0 } as never);
-
-    await expect(service.markElicitationResolved('missing', 'failed')).resolves.toBeUndefined();
-  });
-});
