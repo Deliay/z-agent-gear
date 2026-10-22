@@ -53,6 +53,29 @@ function createSpawner(serverType: string, sessionId: string, cwd: string): AcpS
   return new AcpSpawner({ sessionId, cwd, command: config.command, args: config.args });
 }
 
+/**
+ * `acp:initialized` → `acp:start:result` / `acp:resume:result` 的唯一出口。
+ * start/resume 共用，避免两处逐字段拼装漂移（漏字段会导致前端永远拿不到能力快照）。
+ * 旧 payload 不带 `capabilities` 时不输出该键（零退化）。
+ */
+export function buildAcpInitResult(payload: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  result.modes = payload.modes ?? [];
+  if (payload.currentModeId) result.currentModeId = payload.currentModeId;
+  if (payload.currentModel) result.currentModel = payload.currentModel;
+  result.availableModels = payload.availableModels ?? [];
+  if (payload.currentModelId) result.currentModelId = payload.currentModelId;
+  result.configOptions = payload.configOptions ?? [];
+  if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
+  if (payload.agentInfo) result.agentInfo = payload.agentInfo;
+  if (payload.authMethods) result.authMethods = payload.authMethods;
+  if (payload.supportsAdditionalDirectories != null) {
+    result.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
+  }
+  if (payload.capabilities) result.capabilities = payload.capabilities;
+  return result;
+}
+
 interface RegisteredPayload {
   controllerId: string;
   resumeToken?: string;
@@ -630,7 +653,8 @@ export function connectToServer(
       if (existingBridge) {
         console.warn(`[ACP ctrl] acp:start for session ${data.sessionId} already has a bridge, stopping the previous one`);
         acpBridges.delete(data.sessionId);
-        await existingBridge.stop().catch(() => {});
+        // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
+        await existingBridge.stop({ silent: true }).catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
@@ -665,10 +689,12 @@ export function connectToServer(
       // Registry lifecycle is bound to the bridge: any stop exit (user close,
       // agent exit, error) deregisters the PID so stale entries cannot pile up
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
-        if (payload.sessionId === data.sessionId) {
-          processRegistry.deregister(data.sessionId);
-          mcpRelay.unregisterSession(data.sessionId);
-        }
+        if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫（与 onStopped 同口径）：旧 bridge 的迟到 stopped 不得注销新会话的
+        // process registry / MCP relay 注册（否则对账盲区 + MCP 断链）。
+        if (acpBridges.get(data.sessionId) !== bridge) return;
+        processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
       });
 
       // Register PID in process registry after spawner starts
@@ -704,34 +730,35 @@ export function connectToServer(
         elicitationRequestBridge.set(requestId, bridge);
       });
 
+      // 超时 / 用户响应 / stop / complete 收敛后清理请求级映射，避免 Map 单调增长并释放 bridge
+      bridge.on('permission:settled', (requestId: string) => {
+        permissionRequestBridge.delete(requestId);
+      });
+      bridge.on('elicitation:settled', (requestId: string) => {
+        elicitationRequestBridge.delete(requestId);
+      });
+
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=true externalSessionId=${payload.acpSessionId}`);
-        const result: Record<string, unknown> = {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
-          externalSessionId: payload.acpSessionId,
-        };
-        result.modes = payload.modes ?? [];
-        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
-        if (payload.currentModel) result.currentModel = payload.currentModel;
-        result.availableModels = payload.availableModels ?? [];
-        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
-        result.configOptions = payload.configOptions ?? [];
-        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
-        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
-        if (payload.authMethods) result.authMethods = payload.authMethods;
-        if (payload.supportsAdditionalDirectories != null) {
-          result.supportsAdditionalDirectories = payload.supportsAdditionalDirectories;
-        }
+        const result = buildAcpInitResult(payload);
+        result.requestId = data.requestId;
+        result.sessionId = data.sessionId;
+        result.success = true;
+        result.externalSessionId = payload.acpSessionId;
         socket.emit('acp:start:result', result);
       };
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
         if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
+        // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        // current === undefined 也视为「已不是当前持有者」（替换路径 delete→set 窗口），
+        // 否则旧 bridge 会注销新会话刚注册的 MCP relay / process registry。
+        const current = acpBridges.get(data.sessionId);
+        if (current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -772,7 +799,8 @@ export function connectToServer(
       if (existingBridge) {
         console.warn(`[ACP ctrl] acp:resume for session ${data.sessionId} already has a bridge, stopping the previous one`);
         acpBridges.delete(data.sessionId);
-        await existingBridge.stop().catch(() => {});
+        // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
+        await existingBridge.stop({ silent: true }).catch(() => {});
       }
       const spawner = createSpawner(data.serverType, data.sessionId, data.cwd);
       if (data.mcpEndpoint) {
@@ -804,10 +832,12 @@ export function connectToServer(
 
       fsHandler.registerAllowedPath(data.cwd);
       bridge.on('acp:stopped', (payload: { sessionId: string }) => {
-        if (payload.sessionId === data.sessionId) {
-          processRegistry.deregister(data.sessionId);
-          mcpRelay.unregisterSession(data.sessionId);
-        }
+        if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫（与 onStopped 同口径）：旧 bridge 的迟到 stopped 不得注销新会话的
+        // process registry / MCP relay 注册（否则对账盲区 + MCP 断链）。
+        if (acpBridges.get(data.sessionId) !== bridge) return;
+        processRegistry.deregister(data.sessionId);
+        mcpRelay.unregisterSession(data.sessionId);
       });
 
       bridge.on('permission:sent', (requestId: string) => {
@@ -818,29 +848,33 @@ export function connectToServer(
         elicitationRequestBridge.set(requestId, bridge);
       });
 
+      // 超时 / 用户响应 / stop / complete 收敛后清理请求级映射，避免 Map 单调增长并释放 bridge
+      bridge.on('permission:settled', (requestId: string) => {
+        permissionRequestBridge.delete(requestId);
+      });
+      bridge.on('elicitation:settled', (requestId: string) => {
+        elicitationRequestBridge.delete(requestId);
+      });
+
       const onInitialized = (payload: Record<string, unknown>) => {
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
-        const result: Record<string, unknown> = {
-          requestId: data.requestId,
-          sessionId: data.sessionId,
-          success: true,
-        };
-        result.modes = payload.modes ?? [];
-        if (payload.currentModeId) result.currentModeId = payload.currentModeId;
-        if (payload.currentModel) result.currentModel = payload.currentModel;
-        result.availableModels = payload.availableModels ?? [];
-        if (payload.currentModelId) result.currentModelId = payload.currentModelId;
-        result.configOptions = payload.configOptions ?? [];
-        if (payload.promptCapabilities) result.promptCapabilities = payload.promptCapabilities;
-        if (payload.agentInfo) result.agentInfo = payload.agentInfo;
-        if (payload.authMethods) result.authMethods = payload.authMethods;
+        const result = buildAcpInitResult(payload);
+        result.requestId = data.requestId;
+        result.sessionId = data.sessionId;
+        result.success = true;
         socket.emit('acp:resume:result', result);
       };
 
       const onStopped = (payload: { sessionId: string; reason: string; error?: string }) => {
         if (payload.sessionId !== data.sessionId) return;
+        // 持有权守卫：同 sessionId 可能已被新 bridge 接管（stop 后立即 resume），
+        // 旧 bridge 的迟到 stopped 不得删除新会话的注册/路由。
+        // current === undefined 也视为「已不是当前持有者」（替换路径 delete→set 窗口），
+        // 否则旧 bridge 会注销新会话刚注册的 MCP relay / process registry。
+        const current = acpBridges.get(data.sessionId);
+        if (current !== bridge) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
         acpBridges.delete(data.sessionId);
@@ -1018,7 +1052,6 @@ export function connectToServer(
     let killedByRegistry = false;
     if (bridge) {
       await bridge.stop();
-      acpBridges.delete(data.sessionId);
     } else {
       // Bridge not found: fallback to registry PID kill
       const entry = processRegistry.get(data.sessionId);
@@ -1043,13 +1076,21 @@ export function connectToServer(
         processRegistry.deregister(data.sessionId);
       }
     }
-    mcpRelay.unregisterSession(data.sessionId);
-    if (data.ackRequired) {
-      socket.emit('acp:stopped', {
-        sessionId: data.sessionId,
-        reason: 'user_close',
-        killed: killedByRegistry,
-      });
+    // await 期间同 sessionId 可能已被新 bridge 接管（stop 后立即 resume）：
+    // 仅当自己仍是当前持有者时才清理映射/回 ack，避免误杀新会话（R6c）。
+    const stillCurrent = bridge
+      ? acpBridges.get(data.sessionId) === bridge
+      : !acpBridges.get(data.sessionId);
+    if (stillCurrent) {
+      if (bridge) acpBridges.delete(data.sessionId);
+      mcpRelay.unregisterSession(data.sessionId);
+      if (data.ackRequired) {
+        socket.emit('acp:stopped', {
+          sessionId: data.sessionId,
+          reason: 'user_close',
+          killed: killedByRegistry,
+        });
+      }
     }
   });
 
@@ -1322,7 +1363,11 @@ export function connectToServer(
         // Also clean up bridge if present
         const bridge = acpBridges.get(entry.sessionId);
         if (bridge) {
+          // 先同步收敛 pending（在 stop 的 5s race 之前），再停止进程；
+          // silent：对账杀掉的是旧会话，不得发 stopped 删除同 sessionId 的新映射。
+          bridge.settlePendingOnDisconnect();
           acpBridges.delete(entry.sessionId);
+          void bridge.stop({ silent: true }).catch(() => { /* ignore */ });
         }
       }
     }
@@ -1374,6 +1419,11 @@ export function connectToServer(
     console.log(`Disconnected: ${reason}`);
     heartbeat.stop();
     gatewayManager.closeAll();
+    // 断线后 pending 计时器必须就地收敛：socket.io 会缓存断线期间 emit，
+    // 不收敛会在重连后补发 65s timeout（待办被误标 expired）。
+    for (const bridge of acpBridges.values()) {
+      bridge.settlePendingOnDisconnect();
+    }
     permissionRequestBridge.clear();
     elicitationRequestBridge.clear();
     mcpRelay.handleDisconnect();

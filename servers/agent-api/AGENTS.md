@@ -23,6 +23,20 @@ src/
 └── index.ts          # Entry point
 ```
 
+## 会话能力快照与模型来源
+
+- `Session.agentCapabilities` 读取 controller-api 落库的 `sessions.agentCapabilities`；`Session.features` 由 `services/agent-capabilities.ts` 的 `featuresFromSnapshot()` 输出（无快照返回 `[]`，不复制 FeatureId 矩阵）。
+- `Session.availableModels` 为字段级 resolver：按平台模型库（`ModelService.listSourceLibrary()`，`AVAILABLE_MODELS_FILTER` 同口径）三档推断来源（`services/model-source.ts`：库比对 → 标识前缀 → 兜底），同一 GraphQL 请求只查一次库（`AuthContext.modelLibraryPromise`）。
+- `TodoItem.resolution/resolvedAt/expiresAt`：`respondElicitation` 写 `accepted|declined|cancelled`；订阅 `elicitation:resolved` 后 `timeout→expired`、`unsupported_mode→failed`、`cancelled→cancelled`。TTL（5 分钟）保持不变。
+- **终态写入不变量（`TodoService.markElicitationResolved`）**：filter 必须同时包含 `userId` 与 `resolution: null`——
+  前者做租户隔离（缺 `userId` 直接拒绝写入），后者保证终态单调（迟到的 timeout 不得覆盖已 accepted/declined）。
+  事件缺 `requestId` 时按 `sessionId + userId` 会话级兜底；契约外 `reason` 收敛为 `failed` 并告警。
+  `todoitems` 上为 `elicitationData.requestId` 建了索引（迁移 006 显式创建，避免关闭 autoIndex 时缺失），避免全集合扫描。
+- **响应动作归属校验**：`respondPermission` / `respondElicitation` 先调 `isRespondableTodo(userId, requestId, type)`
+  （问询还要求 `resolution: null`），未命中直接抛 `Todo item not found or already handled`，**不向 Agent publish**；
+  `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false（Mongoose 会剥离 undefined 条件，必须显式拒绝）。
+- 新增或修改 `Session` 字段级 resolver 时，必须在 `graphql/resolvers/index.ts` 的 `Session` 键登记，否则线上字段不生效（backend-rules 陷阱）。
+
 ## Dev Commands
 
 ```bash

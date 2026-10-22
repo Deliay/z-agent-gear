@@ -53,14 +53,14 @@ export const resolvers = {
   Model: {
     ...modelResolvers.Model,
   },
+  Session: {
+    ...sessionResolvers.Session,
+  },
   TodoItem: {
     ...todoResolvers.TodoItem,
   },
   PermissionRequestData: {
     ...todoResolvers.PermissionRequestData,
-  },
-  Session: {
-    ...sessionResolvers.Session,
   },
   WorkflowInstance: {
     ...workflowResolvers.WorkflowInstance,
