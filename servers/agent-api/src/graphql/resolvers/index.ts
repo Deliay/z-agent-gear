@@ -66,6 +66,9 @@ export const resolvers = {
     ...homeResolvers.Controller,
     ...cloudHostResolvers.Controller,
   },
+  CloudHost: {
+    ...cloudHostResolvers.CloudHost,
+  },
   ControllerWorkspace: {
     ...homeResolvers.ControllerWorkspace,
   },

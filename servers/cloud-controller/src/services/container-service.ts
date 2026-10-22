@@ -45,6 +45,8 @@ export interface ContainerServiceConfig {
   image: string;
   connectTimeoutMs: number;
   shutdownGraceMs: number;
+  /** agent-api 内部地址（harness Job env `ZAG_AGENT_API_ENDPOINT`；缺失则仅告警）。 */
+  agentApiUrl?: string;
 }
 
 interface Logger {
@@ -133,6 +135,8 @@ export interface StartHarnessOptions {
   hostName?: string | null;
   /** harness 类型列表（本期仅 `opencode`）。 */
   harnessTypes?: string[];
+  /** 云电脑 controllerId（Job env `ZAG_CONTROLLER_ID`）。 */
+  controllerId?: string | null;
   /** 标准连接使用的 ControllerKey ID。 */
   controllerKeyId?: string | null;
   /** 运行专用模型 Key ID。 */
@@ -405,6 +409,14 @@ export class ContainerService {
     if (secrets?.defaultWorkspace) env.ZAG_DEFAULT_WORKSPACE = secrets.defaultWorkspace;
     env.ZAG_USER_TYPE = 'front_user';
     if (options.userId) env.ZAG_USER_ID = options.userId;
+    if (options.controllerId) env.ZAG_CONTROLLER_ID = options.controllerId;
+    if (this.cfg.agentApiUrl) {
+      env.ZAG_AGENT_API_ENDPOINT = this.cfg.agentApiUrl.replace(/\/+$/, '');
+    } else {
+      this.logger.warn?.(
+        '[harness] AGENT_API_URL 未配置：Github 凭据申请不可用（Git 项目设置会失败）',
+      );
+    }
     return env;
   }
 

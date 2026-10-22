@@ -109,6 +109,18 @@ enum CloudWorkloadLogStatus {
   TIMEOUT
 }
 
+enum CloudWorkloadLogTrigger {
+  START
+  RUNTIME
+}
+
+enum CloudWorkloadLogSource {
+  ADMIN
+  USER
+  MCP
+  SYSTEM
+}
+
 # 单条工作负载脚本执行记录（含当时实际执行脚本的内容快照）
 type CloudWorkloadLog {
   id: ID!
@@ -121,6 +133,10 @@ type CloudWorkloadLog {
   params: JSON! # 本次执行实际使用的参数值快照（已归一，含默认值）；历史记录缺省为 {}
   # 本次启动该项是否为「必须」（快照）；历史记录缺省 false（按非必须展示）
   required: Boolean!
+  # 触发来源：START=容器启动初始化（历史记录缺省）；RUNTIME=在线容器 runtime 安装/系统脚本
+  trigger: CloudWorkloadLogTrigger
+  # 调用来源：ADMIN/USER/MCP/SYSTEM（历史记录缺省 ADMIN）
+  source: CloudWorkloadLogSource
   exitCode: Int
   log: String!
   startedAt: String

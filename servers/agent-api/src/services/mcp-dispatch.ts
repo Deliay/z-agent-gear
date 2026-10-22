@@ -12,6 +12,10 @@ import {
   handleAdminPlatformMcpRequest,
   ADMIN_PLATFORM_SERVER_NAME,
 } from './workflow/admin-tools.js';
+import {
+  handleCloudHostToolRequest,
+  CLOUD_HOST_TOOLS_SERVER_NAME,
+} from './cloud-host-tools.js';
 
 interface McpTokenPayload {
   sessionId?: string;
@@ -108,7 +112,12 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
               { userId: payload.userId, workflow: payload.workflow },
               request,
             )
-          : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } };
+          : serverName === CLOUD_HOST_TOOLS_SERVER_NAME
+            ? await handleCloudHostToolRequest(
+                { userId: payload.userId ?? '', sessionId: payload.sessionId },
+                request,
+              )
+            : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } };
     if (isPlatformNotification) {
       return { status: 202, body: undefined };
     }

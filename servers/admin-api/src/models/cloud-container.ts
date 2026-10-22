@@ -48,6 +48,8 @@ const cloudContainerSchema = new mongoose.Schema(
     // 计费归属（费用中心）：与 cloud-controller schema 对齐（只读模型）
     billingAccountId: { type: String, default: null },
     billingStartedAt: { type: Date, default: null },
+    // 容器内已安装工作负载（只增不删；只读模型）
+    installedWorkloads: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },
   { collection: 'cloudcontainers', timestamps: true },
 );

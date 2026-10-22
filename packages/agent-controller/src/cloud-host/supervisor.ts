@@ -6,6 +6,11 @@ import {
   parseEndpoint,
   type ConnectToServerOptions,
 } from '../socketio-client.js';
+import {
+  GithubCredentialManager,
+  type GithubCredentialRefreshResult,
+} from '../github/credential-manager.js';
+import type { WorkloadRunPayload } from '../workload-executor.js';
 
 /** 未设置 `HARNESS_INIT_WAIT_MS` 时的初始化等待上限（10 分钟）。 */
 export const DEFAULT_HARNESS_INIT_WAIT_MS = 600_000;
@@ -32,6 +37,10 @@ export interface CloudHostEnv {
   workspace: string;
   /** 初始化等待超时（env `HARNESS_INIT_WAIT_MS`，缺省 10 分钟）。 */
   initWaitMs: number;
+  /** agent-api 内部地址（env `ZAG_AGENT_API_ENDPOINT`；缺失时凭据管理器禁用）。 */
+  agentApiEndpoint?: string;
+  /** 云主机 controllerId（env `ZAG_CONTROLLER_ID`；缺失时凭据管理器禁用）。 */
+  controllerId?: string;
 }
 
 /** 云电脑 env 校验失败（消息只含变量名，不含任何值）。 */
@@ -87,7 +96,16 @@ export function readCloudHostEnv(env: NodeJS.ProcessEnv = process.env): CloudHos
     hostName: nonEmpty(env.ZAG_HOST_NAME) || hostname(),
     workspace: nonEmpty(env.ZAG_DEFAULT_WORKSPACE) || DEFAULT_WORKSPACE,
     initWaitMs: parseInitWaitMs(env.HARNESS_INIT_WAIT_MS),
+    agentApiEndpoint: nonEmpty(env.ZAG_AGENT_API_ENDPOINT) || undefined,
+    controllerId: nonEmpty(env.ZAG_CONTROLLER_ID) || undefined,
   };
+}
+
+/** 凭据管理器最小接口（supervisor 只依赖生命周期与 refreshNow，便于测试注入）。 */
+export interface CredentialManagerLike {
+  start(): void;
+  stop(): void;
+  refreshNow(): Promise<GithubCredentialRefreshResult>;
 }
 
 /** 依赖注入（测试锚定时序与副作用；生产使用默认实现）。 */
@@ -99,6 +117,8 @@ export interface CloudHostSupervisorDeps {
   log?: (message: string) => void;
   /** 是否接管 SIGINT/SIGTERM（默认 true；测试关闭以免污染进程）。 */
   installSignalHandlers?: boolean;
+  /** 注入 Github 凭据管理器（测试用）；缺省按容器 env 创建。 */
+  credentialManager?: CredentialManagerLike;
 }
 
 export interface CloudHostSupervisorHandle {
@@ -141,6 +161,21 @@ export async function startCloudHostSupervisor(
   await makeDir(env.workspace);
   log(`[CloudHost] workspace ready: ${env.workspace}`);
 
+  // Github 凭据管理器：env 缺失时自身只 warn 并禁用，绝不阻塞云主机上线。
+  const credentialManager =
+    deps.credentialManager ??
+    new GithubCredentialManager({ env: deps.env ?? process.env, log });
+  credentialManager.start();
+
+  const beforeWorkloadBatch = async (payload: WorkloadRunPayload): Promise<void> => {
+    if (payload.githubAuth !== true) return;
+    const result = await credentialManager.refreshNow();
+    if (result.ok) return;
+    if (result.error === 'no-binding') throw new Error('未设置 Github 项目');
+    if (result.error === 'disabled') throw new Error('云主机未配置 Github 凭据申请环境');
+    throw new Error(result.error || 'Github 凭据申请失败');
+  };
+
   let controllerSocket: Socket | null = null;
   let initWaitTimer: ReturnType<typeof setTimeout> | null = null;
   let waitingForInit = false;
@@ -159,6 +194,7 @@ export async function startCloudHostSupervisor(
     shutdownStarted = true;
     clearInitTimer();
     log(`[CloudHost] shutting down: ${reason}`);
+    credentialManager.stop();
     try {
       workerSocket.disconnect();
     } catch {
@@ -211,6 +247,7 @@ export async function startCloudHostSupervisor(
     handleWorkload: true,
     skipLocalMcpStart: true,
     persistConfig: false,
+    onBeforeWorkloadBatch: beforeWorkloadBatch,
     onRegistered: (payload) => {
       log(`[CloudHost] worker registered: ${payload.controllerId}${payload.initializing ? ' (initializing)' : ''}`);
       if (payload.initializing) {

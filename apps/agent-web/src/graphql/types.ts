@@ -33,6 +33,73 @@ export interface CloudHostData {
   failureReason?: string | null
   /** 软删除时间；非空表示已从列表隐藏，仅用于前端只读判定 */
   deletedAt?: string | null
+  /** 默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace） */
+  defaultWorkspace?: string
+  /** 当前正在 runtime 安装的工作负载名；null 表示空闲 */
+  workloadInstalling?: string | null
+}
+
+export type CloudHostSetupKind = 'INSTALL_WORKLOAD' | 'GITHUB_SETUP'
+
+export type CloudHostSetupStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export type CloudHostSetupStepStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED'
+
+/** `cloudHostWorkloads` 参数定义（对齐 admin-api 的 paramSchema） */
+export interface CloudHostWorkloadParamFieldData {
+  key: string
+  label: string
+  type: string
+  options?: string[] | null
+  defaultValue?: unknown
+}
+
+export interface CloudHostWorkloadItemData {
+  workloadId: string
+  name: string
+  paramSchema: CloudHostWorkloadParamFieldData[]
+  dependsOnWorkloadIds: string[]
+  isPreset: boolean
+  installed: boolean
+  installedAt?: string | null
+  source?: string | null
+}
+
+export interface CloudHostSetupStepData {
+  key: string
+  status: CloudHostSetupStepStatus
+  detail?: string | null
+}
+
+export interface CloudHostSetupOperationData {
+  id: string
+  kind: CloudHostSetupKind
+  status: CloudHostSetupStatus
+  steps: CloudHostSetupStepData[]
+  sessionId?: string | null
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CloudHostWorkloadsQuery {
+  cloudHostWorkloads: CloudHostWorkloadItemData[]
+}
+
+export interface CloudHostSetupOperationQuery {
+  cloudHostSetupOperation: CloudHostSetupOperationData | null
+}
+
+export interface InstallCloudHostWorkloadMutation {
+  installCloudHostWorkload: CloudHostSetupOperationData
+}
+
+export interface SetupCloudHostGithubProjectMutation {
+  setupCloudHostGithubProject: CloudHostSetupOperationData
+}
+
+export interface RetryCloudHostSetupOperationMutation {
+  retryCloudHostSetupOperation: CloudHostSetupOperationData
 }
 
 export interface CloudHostCapabilitiesData {

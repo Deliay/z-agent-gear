@@ -199,6 +199,50 @@ export class GitHubService {
     await installation.save();
   }
 
+  /**
+   * 签发仅对目标仓库有效的 installation token（`repositories` + `contents:write`）。
+   * 错误信息不含 GitHub 响应体，避免泄露凭据/内部细节。
+   */
+  async createRepoScopedToken(
+    accountId: string,
+    repoFullName: string,
+  ): Promise<{ token: string; expiresAt: Date }> {
+    const account = await GitHubAccount.findById(accountId).lean();
+    if (!account) throw new Error('account not found');
+
+    const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+    const match = installations.find((installation) =>
+      (installation.repos ?? []).some(
+        (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
+      ),
+    );
+    if (!match) throw new Error('repository is not authorized');
+
+    const repoName = repoFullName.split('/').pop();
+    if (!repoName) throw new Error('repository is not authorized');
+
+    const appJwt = this.createAppJwt();
+    const response = await fetch(
+      `https://api.github.com/app/installations/${match.installationId}/access_tokens`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${appJwt}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          repositories: [repoName],
+          permissions: { contents: 'write' },
+        }),
+      },
+    );
+    if (!response.ok) throw new Error('failed to issue github token');
+    const data = (await response.json()) as { token?: string; expires_at?: string };
+    if (!data.token || !data.expires_at) throw new Error('failed to issue github token');
+    return { token: data.token, expiresAt: new Date(data.expires_at) };
+  }
+
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
