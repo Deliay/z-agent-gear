@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review。首轮打回 1 × 🔴 + 8 × 🟠 + 15 × 🟡；二轮复核 REJECT（二次打回）2 残余 + 6 新 🟠（§七）；三轮返工 8 项 🟠 主体真实修复且独立实跑全部复现（tsc ×4 全 0、单测 1979 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、PR CLEAN、merge-tree 0 冲突），但**三轮复核结论 REJECT（三轮打回）**：4 × 🟠（B-1 修复新引入 reconcile 迟到 acp:stopped 误杀重建会话竞态；B-4 收口不完整+新引入副作用——owner='banner' stale 仍阻塞 immediate 自动弹窗与 StrictMode 首条自动弹窗丢失、AGENTS.md 台账失实、N6 浮空断言；「声称大于实际」第三轮复发——§八「每项均有可证伪回归测试」经改坏即红实证不成立 T-S8、契约 cancelled 条目失实自相矛盾、§8.3「入参校验均收口」措辞失实；A-2 收口不完整——billing T-CC-B11 外层 TOKEN 门控残留缺参整套静默 skip 假绿）；四轮返工 R1-R4 主体真实且变异实证全部复现（M1-M4 改坏即红）、独立实跑全部复现声称（tsc ×4 全 0、单测 1989 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、缺参负向均红、PR CLEAN、merge-tree 0 冲突），但**四轮复核结论 REJECT（四轮打回）**：2 × 🟠（R1 收口不完整——迟到 acp:stopped 经内联监听器与 handleError 两条产出口仍可误杀重建会话；R2 修复反向引入生产缺陷——mountedOnceRef 依赖 StrictMode dev-only 语义致生产卸载清理永不注册）+ 1 × 🟡（AGENTS.md 精确化未执行）；详见 §九/§十一；五轮返工 R5a/R5b/R5c 经独立复跑复现（变异 M1-M3 全红、实跑全对齐、缺参负向封死），但**五轮复核结论 REJECT（五轮打回）**：2 × 🟠（R6a `emitStopped` 不认 `silentStop`——stop 在途被替换的迟到 stopped 经第四条产出口误杀重建会话，独立证伪实测红；R6b relay 断言缺位 + `silentStop` 零覆盖，M4 反向变异实证「声称大于测试面」复发）+ 1 × 🟡（R6c `acp:stop` handler 存量同型登记）；详见 §十三
+description: integration→release 集成验收报告（PR #250）——ACP 协议增强（能力快照归一化 / 前端能力门控与能力面板 / 模型来源三档分组 / Elicitation 弹窗链路修复）集成级 AI Review。首轮打回 1 × 🔴 + 8 × 🟠 + 15 × 🟡；二轮复核 REJECT（二次打回）2 残余 + 6 新 🟠（§七）；三轮返工 8 项 🟠 主体真实修复且独立实跑全部复现（tsc ×4 全 0、单测 1979 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、PR CLEAN、merge-tree 0 冲突），但**三轮复核结论 REJECT（三轮打回）**：4 × 🟠（B-1 修复新引入 reconcile 迟到 acp:stopped 误杀重建会话竞态；B-4 收口不完整+新引入副作用——owner='banner' stale 仍阻塞 immediate 自动弹窗与 StrictMode 首条自动弹窗丢失、AGENTS.md 台账失实、N6 浮空断言；「声称大于实际」第三轮复发——§八「每项均有可证伪回归测试」经改坏即红实证不成立 T-S8、契约 cancelled 条目失实自相矛盾、§8.3「入参校验均收口」措辞失实；A-2 收口不完整——billing T-CC-B11 外层 TOKEN 门控残留缺参整套静默 skip 假绿）；四轮返工 R1-R4 主体真实且变异实证全部复现（M1-M4 改坏即红）、独立实跑全部复现声称（tsc ×4 全 0、单测 1989 passed、tests/api 13+6+3、tests/e2e 19 全 passed 0 skip、缺参负向均红、PR CLEAN、merge-tree 0 冲突），但**四轮复核结论 REJECT（四轮打回）**：2 × 🟠（R1 收口不完整——迟到 acp:stopped 经内联监听器与 handleError 两条产出口仍可误杀重建会话；R2 修复反向引入生产缺陷——mountedOnceRef 依赖 StrictMode dev-only 语义致生产卸载清理永不注册）+ 1 × 🟡（AGENTS.md 精确化未执行）；详见 §九/§十一；五轮返工 R5a/R5b/R5c 经独立复跑复现（变异 M1-M3 全红、实跑全对齐、缺参负向封死），但**五轮复核结论 REJECT（五轮打回）**：2 × 🟠（R6a `emitStopped` 不认 `silentStop`——stop 在途被替换的迟到 stopped 经第四条产出口误杀重建会话，独立证伪实测红；R6b relay 断言缺位 + `silentStop` 零覆盖，M4 反向变异实证「声称大于测试面」复发）+ 1 × 🟡（R6c `acp:stop` handler 存量同型登记）；详见 §十三；六/七轮复核续 REJECT（R7a/R7b 断言面缺口、R8a resume 路径守卫零覆盖）；八轮返工 R8a 实证收口后**八轮复核结论 ACCEPT（零 🔴/🟠）**：M6c/M3c 独立复放仅 R8a 红、P1/P2/P3 证三断言非浮空、自查表 6 行声称面=断言面、独立实跑与声称精确一致（1997 单测 / 13+6+3 / 19 / 负向均红 / PR #256 CLEAN）；登记 2×🟡 不阻断（M5c 变异片段恒不触发 erratum、并行噪音不可复现）+ R7c 存量维持，PR #256 提请人类合并；详见 §十九
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **八轮返工完成，待八轮 AI Review 复核（feat/enhance-acp）**——七轮复核仅指 resume 路径监听器零断言（R8a），已新增 resume 建桥 + 替换空档的 registry/mcpRelay/result 三重负断言；M6c/M3c 转红，M1-M5c 复放全红（§十八）。八轮实跑：tsc ×4 全 0、单测 1997 passed（426/775/233/563）、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
+> **状态**: ✅ **八轮 AI Review 复核通过（ACCEPT，零 🔴/🟠）**——R8a 修复经独立复放证实收口（M6c/M3c 仅 R8a 红、P1/P2/P3 三断言非浮空、M6a/M7 证 resume 路径归属）；自查表 6 行声称面=断言面，「声称大于测试面」病灶未复发；独立实跑与声称精确一致（tsc ×4 全 0、单测 1997 passed（426/775/233/563）、tests/api 13+6+3、tests/e2e 19、缺参负向均红、PR #256 CLEAN、merge-tree 0 冲突）。登记 2×🟡 不阻断（R9a M5c 变异片段恒不触发 erratum、R9b 并行噪音不可复现）+ R7c 存量维持；PR #256 提请人类 Review/合并（详见 §十九）。
 
 > **分支注记（2026-10-22）**: 本需求代码与验收报告整体迁移至 **`feat/enhance-acp`** 分支（内容与七轮评审基线 `dad3113` 完全一致，经 `ec56c85` 合入）；`integration` 分支将另作他用，**不再承载本需求**。后续返工（R8a 修复）与八轮 AI Review 均在 `feat/enhance-acp` 上进行。
 
@@ -783,7 +783,7 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 | 变异 | 探测面 | 结果 |
 |---|---|---|
 | M5b `emitStopped` 本地 emit 不认 `silentStop`（仅 socket 面受抑制；`if (silent) return; if (this.silentStop) { this.emit('acp:stopped', …); return; }`） | R6a 用例是否覆盖「在途接管窗口」的**本地** emit | ❌ **41 passed 全绿**——零断言 |
-| M5c `handleError` 在途窗口本地 emit 逃生（`if (wasStopped) { if (!this.stopped) this.emit('acp:stopped', …); return; }`） | R6b 用例是否覆盖「在途窗口」的**本地** emit | ❌ **41 passed 全绿**——零断言 |
+| M5c `handleError` 在途窗口本地 emit 逃生（`if (wasStopped) { if (!this.stopped) this.emit('acp:stopped', …); return; }`） | R6b 用例是否覆盖「在途窗口」的**本地** emit | ❌ **41 passed 全绿**——零断言〔**erratum（八轮 §19.4-R9a）**：该字面片段因 `this.stopped=true` 先于守卫执行而恒不触发，是无效变异写法；语义版（`wasStopped` 分支无条件发本地事件）在七轮补断言后为红，见 §19.1〕 |
 
 **关键事实**：R6a/R6b/R6c 修复本体**行为全部真实收口**（M1-M4 独立复放全红、读码逐条核实），六轮修复质量和证据链继续提升。**打回不针对修复行为，而针对回归用例断言面窄于修复面与明文入口条件**——§13.5-1 要求「不发（服务端 + 本地）」双半可证伪，实际用例只断言服务端半（`mockSocket.emit`），本地半 M5b/M5c 变异存活；且 §14.2 自查表 row1/row2 将 R6a/R6b 列为整条产出口的负断言，声称面大于实测断言面——「声称大于测试面」第六轮复发（三轮台账失实 / 四轮 N6 浮空断言 / 五轮 relay+silentStop 零覆盖，同病灶第六次）。
 
@@ -981,7 +981,7 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 | M3 start `onStopped` 回旧守卫 | R6a-空档 | 红 |
 | M4 `acp:stop` 回 `stillCurrent=true` | R6c | 红 |
 | M5b `emitStopped` 本地 emit 逃生 | R6a | 红 |
-| M5c `handleError` 本地 emit 逃生 | R6b | 红 |
+| M5c `handleError` 本地 emit 逃生 | R6b | 红〔erratum：指语义版变异「`wasStopped` 分支无条件发本地事件」；§15.1 字面片段恒不触发，见 §19.4-R9a〕 |
 | **M6c** resume 内联守卫删除 | **R8a** | **红** |
 | **M3c** resume `onStopped` 回旧守卫 | **R8a** | **红** |
 
@@ -1005,3 +1005,93 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 
 - 代码修复 commit：八轮修复提交（R8a 用例与报告回填，见 git log）
 - PR：由 `feat/enhance-acp` 发起/更新（原 #250 integration→release 随分支用途变更另行处置）
+
+## 十九、八轮 AI Review 复核（2026-10-22）：结论 ACCEPT（八轮验收通过，零 🔴/🟠）
+
+### 19.1 复核方法与独立验证（不采信自报，全部本机实跑）
+
+评审范围 `origin/release...feat/enhance-acp`（PR #256，94 文件 +9714/−201；八轮增量 `9fd3de7..30a9765` 仅 `socketio-client.test.ts` + 本报告，生产代码与七轮基线逐字节一致）。逐行读码核对 R8a 用例与 `startBridgeViaResume` helper + §十八声称逐条对照 + §14.2 自查表 row1-row6 逐行声称面对照 + **变异矩阵 13 条**（M1-M5c 复放、M6a/M7 复放、M6c/M3c 复核、本轮新增反向探针 P1-P3）+ Aspire 全栈 tests/api 三套（含缺参负向）+ tests/e2e + tsc ×4 / 四包单测 / eslint / build + PR 状态 + `git merge-tree` 合并预检。每次变异单独执行并还原，`git status` 校验还原干净。
+
+| 项目 | 八轮复核实跑 | 与返工声称对比 |
+|---|---|---|
+| tsc ×4（agent-controller / agent-api / controller-api / agent-web） | ✅ 全 0 | 一致 |
+| 单测 | ✅ **1997 passed**（426 / 775 / 233 / 563，含并行 4 包复跑 ×2） | **精确一致** |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） | 一致 |
+| agent-web production build | ✅ 成功（tsc -b + vite build） | 一致 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip | 一致 |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip | 一致 |
+| tests/api billing-events | ✅ 3 passed / 0 skip | 一致 |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip | 一致 |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed/exit 1；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed；T-AC5 failed | 一致 |
+| PR #256（feat/enhance-acp → release） | ✅ OPEN / MERGEABLE / CLEAN，head `30a9765` | 一致 |
+| 合并预检 `git merge-tree --write-tree`（vs `origin/release`） | ✅ exit 0 无冲突 | 一致 |
+| 变异 M1-M5c 复放 | ✅ M1/M2/M3/M4/M5b 全红；**M5c 字面片段绿/语义版红**（见 19.4-R9a erratum） | 声称实质属实（片段定义失准） |
+| 变异 M6c/M3c（八轮声称「转红」） | ✅ **R8a 红（且仅 R8a）** | **声称属实** |
+| 变异 M6a/M7 复放 | ✅ R1/R6a-空档/R6a-resume 3 条红；**R8a 保持绿** | R8a 监听器归属 resume 路径属实 |
+| 变异 P1/P2/P3（本轮新增，探测 R8a 三断言非浮空） | ✅ 三条各自使 R8a 红 | R8a 断言①②③全部活跃 |
+
+**变异矩阵（逐条单独执行并还原）**：
+
+| 变异 | 探测面 | 结果 |
+|---|---|---|
+| M1 `emitStopped` 去 `\|\| silentStop` | 六轮声称 R6a | ✅ 红（R6a、R6b） |
+| M2 `wasStopped` 去 `\|\| silentStop` | R6b | ✅ 红（R6b） |
+| M3 start 路径 `onStopped` 回灌 `current && current !== bridge` | R6a-空档 | ✅ 红 |
+| M4 `acp:stop` 回灌 `stillCurrent = true` | R6c | ✅ 红 |
+| M5b `emitStopped` 本地 emit 不认 `silentStop` | R6a/R6b 本地半 | ✅ 红（R6a、R6b） |
+| M5c `handleError` 在途窗口本地 emit 逃生 | R6b 本地半 | ⚠️ 字面片段（`!this.stopped`）**恒不触发→绿**；语义版（`wasStopped` 分支无条件发本地）→ **红（R6b、R5a）**——断言面真实，见 19.4-R9a |
+| M6a 仅删 `acp:start` 内联监听器守卫 | R1/R6a-空档/R6a-resume 断言面 | ✅ 3 条红，R8a 绿（resume 路径隔离） |
+| M7 start 内联 relay 注销提前至守卫前 | R7b relay 断言非浮空 | ✅ 3 条红 |
+| **M6c** 仅删 `acp:resume` 内联监听器守卫 | 八轮声称 R8a 红 | ✅ **R8a 红** |
+| **M3c** 仅 resume 路径 `onStopped` 回灌空档放行 | 八轮声称 R8a 红 | ✅ **R8a 红** |
+| **P1（新增）** resume 内联 `processRegistry.deregister` 提前至守卫前 | R8a 断言①registry 存活非浮空 | ✅ R8a 红 |
+| **P2（新增）** resume 内联 `unregisterSession` 提前至守卫前 | R8a 断言②relay 未注销非浮空 | ✅ R8a 红 |
+| **P3（新增）** resume `onStopped` 不持权仍发 `acp:resume:result` | R8a 断言③不发 resume:result 非浮空 | ✅ R8a 红 |
+
+### 19.2 七轮 R8a 复核结论：✅ FIXED（八轮以来证据质量最高的一次）
+
+- **用例与声称一致**：`startBridgeViaResume` helper 由 `acp:resume` handler 建桥（读码核实：`fake.handlers.get('acp:resume')` 走 resume 路径，返回 bridge 带 `emit`）；R8a 用例同 sessionId `acp:start` 替换 + 旧 `stop` 挂起制造 delete→set 空档 + 空档内发迟到 `acp:stopped`，与 §18.1 描述逐句吻合。
+- **M6c/M3c 独立复放**：两条变异各自**仅**使 R8a 红（其余 55 条全绿）——八轮「转红」声称属实，且变异杀伤精确对位。
+- **三断言全部非浮空**：P1/P2/P3 反向探针证明 registry 存活、`unregisterSession` 未调用、不发 `acp:resume:result` 三条断言各自独立捕获故障（四轮 N6「浮空断言」病灶未复发）。
+- **resume 路径归属精确**：M6a/M7（start 路径变异）下 R8a 保持绿——R8a 触达的确实是 resume 路径独立注册的内联监听器与 `onStopped`，七轮 R8a 问题描述的缺口被精确覆盖。
+- **自查表收口**：§14.2 row4 改 R8a、row5 补 resume 路径（R8a），声称面=断言面（逐行核对见 19.3）。
+
+### 19.3 §14.2 自查表逐行核对（声称面 ? 实测断言面）
+
+| # | 产出口 | 声称负断言 | 实测验证 | 结论 |
+|---|---|---|---|---|
+| 1 | `emitStopped` 非 silent 迟到 | R6a（socket+本地） | M1/M5b 双红 | ✅ 等宽 |
+| 2 | `handleError` | R5a、R6b（socket+本地） | M2 红、M5cP 红（R6b+R5a） | ✅ 等宽 |
+| 3 | `acp:start` 内联 | R1、R6a-空档（registry+mcpRelay） | M6a/M7 双红 | ✅ 等宽 |
+| 4 | `acp:resume` 内联 | R8a（registry+mcpRelay） | M6c 红、P1/P2 红 | ✅ 等宽 |
+| 5 | `onStopped`（含空档） | R1、R6a-空档（start）、R8a（resume） | M3 红、M3c 红 | ✅ 等宽 |
+| 6 | `acp:stop` await 后清理/ack | R6c | M4 红 | ✅ 等宽 |
+
+**「声称大于测试面」病灶本轮未复发**：自查表 6 行声称面全部与实测断言面对齐（含新增 resume 路径两行）。
+
+### 19.4 本轮登记问题（不阻断：1×🟡 + 1×观察）
+
+**【🟡-R9a 变异证据 M5c 片段字面恒不触发（erratum，证据文本精度，断言面无缺口）】**
+
+- **事实**：§15.1 把 M5c 写作 `if (wasStopped) { if (!this.stopped) this.emit('acp:stopped', …); return; }`；但 `handleError` 在守卫**之前**已执行 `this.stopped = true`（`bridge.ts` 966-972，历史版本 `b8fa27b^` 同序），`!this.stopped` 恒为 false——该字面片段是**恒不触发变异**，照字面复放必然全绿（本轮实测 56 passed）。
+- **断言面实态（无缺口）**：按 §16.1 语义（「在 `wasStopped` 分支发本地事件」）实施的 M5cP 变异本轮实测 **R6b、R5a 双红**——两用例的本地负断言真实活跃；且 R6b 在 handleError 后、5s timer 放行前即断言 `localStopped` 为零，「在途窗口」本地半必然被捕获。即 R6b/R5a 声称面=断言面成立，**「声称大于测试面」不成立**；缺陷仅在变异定义文本。
+- **处置**：§15.1/§18.2 M5c 行已加 erratum 标注（以本节为准）。后续轮次变异登记请写「变异后代码全文」而非条件缩写，并在复放时断言「目标用例红 + 其余用例绿」，避免恒不触发片段混入证据链（六/七/八轮的 M5c「红」均应理解为语义版变异）。
+
+**【🟡-R9b agent-web 单测并行负载下偶发 1 unhandled error（不可复现，登记观察）】**：本轮 4 包并行首跑时 vitest 汇总出现 `Errors 1 error`（Tests 仍 563 passed / exit 0）；其后隔离复跑 ×3 + 并行复跑 ×2 共 5 次全部干净。疑似高负载下异步清理噪音，无法复现、不影响结果与判定，登记观察（如后续复发请抓取 unhandled 堆栈定位）。
+
+**【R7c 存量登记维持】**：ack 双路抑制 × `stopSessionWithAck` 5s 重试可杀新 bridge——维持 §15.3 登记（release 存量主导，登记不阻断），建议随后续迭代按专用 `acp:stop:ack` 或 retry 前校验 `startingSessions` 收口。
+
+### 19.5 反证记录（排除的疑点）
+
+| 疑点 | 复核结论 |
+|---|---|
+| R8a 触达的是 start 路径监听器而非 resume 路径 | **排除**：M6a/M7（start 路径变异）下 R8a 保持绿、M6c/M3c（resume 路径变异）下 R8a 红——监听器归属精确 |
+| R8a 三条断言为「永远为真」浮空断言（四轮 N6 同型） | **排除**：P1/P2/P3 三条反向探针各自使 R8a 红 |
+| R8a 未 `mockClear` `socket.emit` 引入假红 | **排除**：setup 路径无任何 `acp:resume:result`（fake bridge 不发 `acp:initialized`），现绿；不 clear 反而使负断言覆盖 setup 全程，更严 |
+| 「被同 sessionId 再次 resume 替换」组合未测是否缺口 | **排除（行等价）**：替换由 `acp:start` 或 `acp:resume` 发起时，旧 bridge 的内联监听器与 `onStopped` 代码/守卫行完全相同（`socketio-client.ts` 834-840 / 870-893）；R8a（resume 建桥+start 替换）与 R6a-resume（start 建桥+resume 替换）合计覆盖全部守卫行，M6c/M3c 在 R8a 下被杀，声称面=断言面 |
+| M5c 复放绿是否意味着 R6b 本地半缺口 | **排除**：M5cP（语义版）实测 R6b+R5a 双红；绿因 §15.1 字面片段恒不触发（19.4-R9a erratum） |
+| 八轮声称摆拍嫌疑 | **排除**：tsc/单测/eslint/build/tests/api 三套+负向/tests/e2e/PR/merge-tree 逐项独立实跑全部复现；M6c/M3c/P1-P3 独立复放全红 |
+
+### 19.6 判定
+
+按验收红线「🔴/🟠 → 打回返工」：本轮 **ACCEPT（八轮验收通过）**，**零 🔴/🟠**。依据：① R8a 修复真实、可证伪，M6c/M3c 独立复放红，三条断言均经反向探针证明活跃，自查表 row4/row5 声称面=断言面；② 「声称大于测试面」连续四轮的病灶本轮未复发（自查表 6 行逐行等宽实证）；③ 全部独立实跑与返工声称精确一致（1997 单测 / 13+6+3 / 19 / 负向均红 / PR CLEAN / merge-tree 0 冲突）。2×🟡 不阻断（R9a 变异片段 erratum——证据文本精度，断言面无缺口；R9b 并行噪音——不可复现），R7c 存量维持登记。PR #256（`feat/enhance-acp` → `release`，head `30a9765`）具备合并条件，提请人类 Review 与合并。后续迭代建议：按 §15.3 方向收口 R7c；变异登记统一「变异后代码全文 + 目标红/其余绿」双确认。
