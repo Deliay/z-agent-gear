@@ -9,8 +9,6 @@ export interface AcpServerOptionsProbeResult {
   availableModels: Array<{ id: string; name: string; provider?: string }>;
   currentModeId: string | null;
   currentModelId: string | null;
-  /** 能力快照（供 API 测试与后续回归复用；旧调用方忽略该字段即可） */
-  capabilities: AcpInitializedPayload['capabilities'];
 }
 
 /**
@@ -58,7 +56,6 @@ export async function probeAcpServerOptions(
           availableModels: payload.availableModels ?? [],
           currentModeId: payload.currentModeId ?? null,
           currentModelId: payload.currentModelId ?? null,
-          capabilities: payload.capabilities,
         }),
       );
     });

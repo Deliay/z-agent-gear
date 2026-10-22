@@ -90,38 +90,3 @@ describe('ModelSwitcher', () => {
     expect(screen.getByText('Switch Model')).toBeDefined();
   });
 });
-
-describe('ModelSwitcher - 能力门控', () => {
-  it('T-W9: config.model unsupported 时禁用并显示 detail', () => {
-    render(
-      <ModelSwitcher
-        currentModelId="gpt-4"
-        availableModels={defaultModels}
-        status="idling"
-        onSetModel={vi.fn()}
-        blocked
-        blockedReason="未声明 configOptions(category=model)"
-      />,
-    );
-
-    const button = screen.getByRole('button');
-    expect(button.hasAttribute('disabled')).toBe(true);
-    expect(button.getAttribute('title')).toContain('未声明');
-  });
-
-  it('partial/无快照（blocked=false）保持可用', () => {
-    const onSetModel = vi.fn();
-    render(
-      <ModelSwitcher
-        currentModelId="gpt-4"
-        availableModels={defaultModels}
-        status="idling"
-        onSetModel={onSetModel}
-        blocked={false}
-      />,
-    );
-
-    const button = screen.getByRole('button');
-    expect(button.hasAttribute('disabled')).toBe(false);
-  });
-});

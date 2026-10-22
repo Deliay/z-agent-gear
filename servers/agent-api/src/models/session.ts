@@ -33,8 +33,6 @@ const sessionSchema = new mongoose.Schema({
   authMethods: { type: [{ id: String, kind: String, name: String, description: String, url: String }], default: [] },
   authRequired: { type: Boolean, default: false },
   supportsAdditionalDirectories: { type: Boolean, default: false },
-  // 能力快照（controller 上报原文；旧 controller 不上报时为 null）
-  agentCapabilities: { type: mongoose.Schema.Types.Mixed },
   permissionTimeoutAction: { type: String, enum: ['use_global', 'allow_once', 'reject', 'cancel'], default: 'use_global' },
   // 工作流打标（引擎内部创建节点会话时写入；GraphQL CreateSessionInput 不暴露）
   workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance' },

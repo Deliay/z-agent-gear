@@ -556,22 +556,3 @@ describe('SocketIO Service', () => {
     });
   });
 });
-
-describe('SocketIO Service - elicitation resolved', () => {
-  it('T-S7: 未认证 socket 发送 acp:elicitation:resolved 时零发布', async () => {
-    const mockSocket = createMockSocket();
-    const mockIO = createMockIO();
-
-    createSocketIOServer(mockIO as never);
-    const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
-    connectionHandler(mockSocket);
-
-    mockSocket._trigger('acp:elicitation:resolved', {
-      sessionId: 'sess-1',
-      reason: 'timeout',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
-  });
-});

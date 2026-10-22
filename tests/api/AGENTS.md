@@ -358,20 +358,6 @@ npm test
 | 超时设置 - 全局设置 | updateGlobalPermissionTimeout → 验证保存成功 |
 | 超时设置 - Session 设置 | updatePermissionTimeout → 验证 session.permissionTimeoutAction |
 
-### ACP 能力快照 API (`agent-api/session-capabilities.test.ts`)
-
-| 测试 | 描述 |
-|------|------|
-| T-AC1 快照落库与读取 | fake controller `acp:start:result.capabilities` → `session.agentCapabilities` 原文 + `features` 20 项 |
-| T-AC2 resume 更新快照 | close → resume 上报新 `agentInfo.version` → 会话快照更新、不残留旧值 |
-| T-AC3 旧 controller 零退化 | 不带 `capabilities` → `agentCapabilities=null`、`features=[]`、其余字段不变 |
-| T-AC4 features 抽样 | `session.load=supported`、`prompt.audio=unsupported`、`elicitation.form=supported` |
-| T-AC5 模型来源分组 | 需 `MONGODB_URI`：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
-| T-AC6 问询 resolved(timeout) | fake controller 发 `acp:elicitation:resolved{reason:'timeout'}` → todo `resolution=expired`、`resolvedAt` 非空 |
-| T-AC7 问询响应 | `respondElicitation(decline)` → controller 收到 decline、todo `resolution=declined` |
-
-> `acp-real-capabilities.test.ts` 属 `test:real` 套件：真实 OpenCode 建会话后校验 `raw.agentCapabilities.sessionCapabilities` 与 `features` 状态（需要本机安装 OpenCode）。
-
 ### Admin Auth API (`admin-api/auth.test.ts`)
 
 | 测试 | 描述 |

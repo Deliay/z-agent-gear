@@ -1,9 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { sessionService } from '../../services/session.js';
 import { sessionImportService } from '../../services/session-import.js';
-import { modelService } from '../../services/model.js';
-import { featuresFromSnapshot } from '../../services/agent-capabilities.js';
-import { inferModelSource } from '../../services/model-source.js';
 import { Controller } from '../../models/controller.js';
 import type { AuthContext } from './auth.js';
 
@@ -255,30 +252,6 @@ export const sessionResolvers = {
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
-    },
-  },
-  Session: {
-    agentCapabilities: (session: Record<string, unknown>) => session.agentCapabilities ?? null,
-    features: (session: Record<string, unknown>) => featuresFromSnapshot(session.agentCapabilities),
-    availableModels: async (
-      session: Record<string, unknown>,
-      _args: unknown,
-      context: AuthContext,
-    ) => {
-      const models = (session.availableModels ?? []) as Array<{
-        id: string;
-        name: string;
-        provider?: string | null;
-      }>;
-      if (models.length === 0) return [];
-      // 同一 GraphQL 请求内只查一次平台库（sessions 列表 N 条会话共享）
-      context.modelLibraryPromise ??= modelService.listSourceLibrary();
-      const library = await context.modelLibraryPromise;
-      return models.map((model) => ({
-        ...model,
-        provider: model.provider ?? null,
-        ...inferModelSource(model, library),
-      }));
     },
   },
 };

@@ -3,7 +3,6 @@ import type { AgentModelInfoData } from '../../graphql/types';
 import type { SessionConfigOptionData } from '../../graphql/types';
 import type { Command } from '../../hooks/useCommandState';
 import { fuzzyMatch } from '../../lib/fuzzyMatch';
-import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import ModeSwitcher from './ModeSwitcher';
 import { ModelSwitcher } from './ModelSwitcher';
 import ConfigOptionsPanel from './ConfigOptionsPanel';
@@ -32,15 +31,13 @@ interface InputBoxProps {
   availableCommands?: Command[];
   configOptions?: SessionConfigOptionData[];
   onSetConfigOption?: (configId: string, value: string) => Promise<void>;
-  /** 会话能力门控（缺省 = 未知能力，全部放行） */
-  capabilities?: AgentCapabilitiesController;
 }
 
 const STORAGE_PREFIX = 'session_input_';
 
 const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 
-export default function InputBox({ onSend, onStop, disabled, sending, isWorking, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId, availableCommands = [], configOptions = [], onSetConfigOption, capabilities }: InputBoxProps) {
+export default function InputBox({ onSend, onStop, disabled, sending, isWorking, modes = [], currentModeId, onSetMode, status = '', availableModels = [], currentModelId, onSetModel, sessionId, availableCommands = [], configOptions = [], onSetConfigOption }: InputBoxProps) {
   const [input, setInput] = useState(() => {
     if (sessionId) {
       return localStorage.getItem(STORAGE_PREFIX + sessionId) || '';
@@ -165,7 +162,6 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
           configOptions={configOptions}
           status={status}
           onSetConfigOption={onSetConfigOption}
-          booleanBlocked={capabilities?.isBlocked('config.boolean') ?? false}
         />
       )}
       <div className="mb-2 flex items-center gap-2">
@@ -176,8 +172,6 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
             status={status}
             onSetMode={onSetMode}
             disabled={isWorking}
-            blocked={capabilities?.isBlocked('config.mode') ?? false}
-            blockedReason={capabilities?.detail('config.mode')}
           />
         )}
         {onSetModel && (
@@ -187,8 +181,6 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
             status={status}
             onSetModel={onSetModel}
             disabled={isWorking}
-            blocked={capabilities?.isBlocked('config.model') ?? false}
-            blockedReason={capabilities?.detail('config.model')}
           />
         )}
       </div>

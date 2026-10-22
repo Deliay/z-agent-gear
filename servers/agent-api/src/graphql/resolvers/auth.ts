@@ -7,8 +7,6 @@ export interface AuthContext {
     id: string;
     username: string;
   } | null;
-  /** 请求级平台模型库缓存（Session.availableModels 来源推断用，避免 N+1） */
-  modelLibraryPromise?: Promise<Array<{ name: string; scope: 'user' | 'global' }>>;
 }
 
 export const authResolvers = {

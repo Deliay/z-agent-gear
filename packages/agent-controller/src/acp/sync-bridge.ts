@@ -1,6 +1,5 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { AcpSpawner } from './spawner.js';
-import { CLIENT_CAPABILITIES } from './capabilities.js';
 
 const ACP_PROTOCOL_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -51,7 +50,7 @@ export class AcpSyncBridge implements acp.Client {
 
     const initPromise = this.connection.initialize({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: CLIENT_CAPABILITIES,
+      clientCapabilities: {},
       clientInfo: { name: 'agent-gear', version: '1.0.0' },
     });
 
@@ -127,9 +126,6 @@ export class AcpSyncBridge implements acp.Client {
   }
 
   async unstable_createElicitation(): Promise<acp.CreateElicitationResponse> {
-    // 同步链路无用户交互通道：声明了 elicitation 能力后 Agent 可能发起问询，
-    // 这里显式取消并留日志（声明 + 立即取消是合法降级，不引入交互链路）。
-    console.warn('[ACP sync-bridge] elicitation request auto-cancelled: no user channel');
     return { action: 'cancel' };
   }
 
