@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import NewCloudHostDialog from '../NewCloudHostDialog';
 import type { CloudHostCapabilitiesData, HarnessType } from '../../../graphql/types';
-
 const mockCreateCloudHost = vi.fn();
+const mockUseQuery = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: () => [mockCreateCloudHost],
+  useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
 const defaultCapabilities: CloudHostCapabilitiesData = {
@@ -28,6 +29,40 @@ function submitButton() {
 describe('NewCloudHostDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseQuery.mockReturnValue({
+      data: {
+        cloudHostWorkloadCatalog: [
+          {
+            workloadId: 'wl-docker',
+            name: 'Docker',
+            workloadKind: 'STANDARD',
+            paramSchema: [],
+            dependsOnWorkloadIds: [],
+            isPreset: false,
+            installed: false,
+          },
+          {
+            workloadId: 'wl-dotnet',
+            name: '.NET',
+            workloadKind: 'STANDARD',
+            paramSchema: [],
+            dependsOnWorkloadIds: [],
+            isPreset: false,
+            installed: false,
+          },
+          {
+            workloadId: 'wl-aspire',
+            name: 'Aspire',
+            workloadKind: 'STANDARD',
+            paramSchema: [],
+            dependsOnWorkloadIds: ['wl-docker', 'wl-dotnet'],
+            isPreset: false,
+            installed: false,
+          },
+        ],
+      },
+      loading: false,
+    });
     mockCreateCloudHost.mockResolvedValue({
       data: {
         createCloudHost: {
@@ -165,5 +200,86 @@ describe('NewCloudHostDialog', () => {
 
     expect(screen.queryByText(/存储会话/)).not.toBeInTheDocument();
     expect(screen.queryByText(/恢复的会话/)).not.toBeInTheDocument();
+  });
+
+  it('T-WEB-N1: 打开弹窗展示 Aspire/Docker/.NET 与依赖名称', () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByLabelText('Docker')).toBeInTheDocument();
+    expect(screen.getByLabelText('.NET')).toBeInTheDocument();
+    expect(screen.getByLabelText('Aspire')).toBeInTheDocument();
+    expect(screen.getByText('依赖：Docker、.NET')).toBeInTheDocument();
+  });
+
+  it('T-WEB-N2: 勾选 Docker 后提交携带 workloadIds 并提示耗时', async () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(screen.getByLabelText('Docker'));
+
+    expect(screen.getByText('勾选运行环境负载会延长首次就绪时间')).toBeInTheDocument();
+
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: {
+          input: {
+            name: '云电脑 A',
+            harnessTypes: ['OPENCODE'],
+            workloadIds: ['wl-docker'],
+          },
+        },
+      });
+    });
+  });
+
+  it('T-WEB-N3: 不勾选负载时提交不含 workloadIds', async () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+      });
+    });
+    expect(mockCreateCloudHost.mock.calls[0][0].variables.input).not.toHaveProperty('workloadIds');
+  });
+
+  it('T-WEB-N4: catalog 失败时提示但仍可提交基础创建', async () => {
+    mockUseQuery.mockReturnValue({
+      data: null,
+      loading: false,
+      error: new Error('boom'),
+    });
+
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByText('负载列表加载失败，可仅创建基础云电脑')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Docker')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    expect(submitButton()).not.toBeDisabled();
+  });
+
+  it.each([
+    ['too many workloads (max 5)', '创建时最多选择 5 个工作负载'],
+    ['invalid workload: wl-x', '所选工作负载不存在或不可用'],
+    ['workload is not installable: OpenCode', '该工作负载不支持创建时预装'],
+  ])('T-WEB-N5: 服务端错误「%s」映射为中文', async (message, expected) => {
+    mockCreateCloudHost.mockRejectedValueOnce(new Error(message));
+
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(submitButton());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
   });
 });

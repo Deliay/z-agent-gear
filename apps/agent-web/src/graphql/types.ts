@@ -14,6 +14,9 @@ export interface ControllerKeyData {
 
 export type HarnessType = 'OPENCODE'
 
+/** 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness */
+export type CloudWorkloadKind = 'STANDARD' | 'HARNESS'
+
 export type CloudHostStatus = 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'FAILED'
 
 /** 前台云电脑（contracts/cloud-host.graphql）；非云电脑控制器为 null */
@@ -57,6 +60,8 @@ export interface CloudHostWorkloadParamFieldData {
 export interface CloudHostWorkloadItemData {
   workloadId: string
   name: string
+  /** 工作负载分类：STANDARD（运行环境/工具）或 HARNESS */
+  workloadKind?: CloudWorkloadKind
   paramSchema: CloudHostWorkloadParamFieldData[]
   dependsOnWorkloadIds: string[]
   isPreset: boolean
@@ -84,6 +89,10 @@ export interface CloudHostSetupOperationData {
 
 export interface CloudHostWorkloadsQuery {
   cloudHostWorkloads: CloudHostWorkloadItemData[]
+}
+
+export interface CloudHostWorkloadCatalogQuery {
+  cloudHostWorkloadCatalog: CloudHostWorkloadItemData[]
 }
 
 export interface CloudHostSetupOperationQuery {
