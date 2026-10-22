@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-21，AI Review）
 
-> **状态**: 🔁 **七轮返工完成，待七轮 AI Review 复核**——六轮复核仅指断言面窄于修复面（R7a/R7b），已补本地 acp:stopped 双断言与 mcpRelay 断言，M5b/M5c 转红、M1-M4 复放全红（§十六）；R7c 存量 ack 重试竞态登记不阻断。七轮实跑：tsc ×4 全 0、单测 1996 passed（425/775/233/563）、tests/api 13+6+3 全 passed 0 skip、tests/e2e 19 passed 0 skip、缺参负向均红。
+> **状态**: ❌ **七轮 AI Review 复核完成：REJECT（七轮打回返工）**——R7a/R7b 全部兑现（M5b/M5c 转红、M7 证明 relay 断言非浮空），六轮遗留入口条件全部补齐（含 Aspire 全栈补跑 tests/api 13+6+3、tests/e2e 19、缺参负向三组）；但本轮反向变异发现 **R8a（🟠）：`acp:resume` 路径两条产出口（内联监听器 + resume 路径 onStopped）持有权守卫零断言覆盖**，M6c/M3c 变异 14 passed 全绿存活，§14.2 row4「R6a-resume（registry + mcpRelay）」声称失实——「声称大于测试面」第七轮复发。详见 §十七。
 
 ## 关联文档
 
@@ -875,3 +875,81 @@ R1 只守住了 `onStopped`，仍有两条产出口可误杀新会话，本轮�
 - 代码修复 commit：七轮修复提交（R7a/R7b 断言补齐，见 git log）
 - 报告回填 commit：本提交
 - PR #250：状态与 head 以 PR 页面为准。
+
+## 十七、七轮 AI Review 复核（2026-10-22）：结论 REJECT（七轮打回）
+
+### 17.1 复核方法与独立验证（不采信自报，全部本机实跑）
+
+逐行核对七轮修复提交 `9fd3de7`（3 文件：`bridge.test.ts` / `socketio-client.test.ts` / 本报告 §14.2 台账）+ §十六声称逐条对照 + **变异复跑 M1-M4 + M5b/M5c** + **本轮新增反向变异 M6a/M6c/M3c/M7**（探测 start/resume 两条路径的断言面与 R7b 新增 relay 断言是否浮空）+ `acp:stopped` 产出口/消费者全枚举 + R7c ack 链路再追迹。六轮遗留的入口条件「tests/api/e2e 在可运行 Aspire 的环境补跑」本轮已补齐（dotnet SDK 10.0.113 环境按环境注记以 `MSBuildEnableWorkloadResolver=false` 启动 Aspire 全栈，8 资源全 healthy）。
+
+| 项目 | 七轮复核实跑 | 与返工声称对比 |
+|---|---|---|
+| tsc ×4（agent-controller / agent-api / controller-api / agent-web） | ✅ 全 0 | 一致 |
+| 单测 | ✅ **1996 passed**（425 / 775 / 233 / 563） | **精确一致** |
+| eslint agent-web | ✅ 0 error / 6 warning（均存量） | 一致 |
+| agent-web production build | ✅ 成功 | 一致 |
+| tests/api session-capabilities + elicitation | ✅ 13 passed / 0 skip | 一致 |
+| tests/api billing-gateway | ✅ 6 passed / 0 skip | 一致 |
+| tests/api billing-events | ✅ 3 passed / 0 skip | 一致 |
+| tests/e2e session-capabilities + permission | ✅ 19 passed / 0 skip | 一致 |
+| 缺参负向 | ✅ billing-events 缺 token 3 failed/exit 1；billing-gateway 缺 MONGODB T-B24/T-B27/T-B28 failed/exit 1；T-AC5 failed/exit 1 | 一致 |
+| PR #250 | ✅ OPEN / MERGEABLE / CLEAN，head `9fd3de7` | 一致 |
+| 合并预检 `git merge-tree --write-tree`（vs `origin/release`） | ✅ exit 0 无冲突 | 一致 |
+| 变异 M1-M4 复放（六轮声称） | ✅ 全部红 | **声称属实** |
+| 变异 M5b/M5c（七轮声称「转红」） | ✅ 全部红 | **声称属实（R7a 兑现）** |
+| 变异 M6a/M7（本轮新增，探测 R7b 断言非浮空） | ✅ 全部红 | **R7b 断言真实活跃** |
+| 变异 M6c/M3c（本轮新增，探测 resume 路径断言面） | ❌ **14 passed 全绿存活** | **发现 R8a（🟠，见 17.3）** |
+
+**变异矩阵（逐条单独执行并还原，每次后 `git status` 校验还原干净）**：
+
+| 变异 | 探测面 | 结果 |
+|---|---|---|
+| M1 `emitStopped` 去 `\|\| silentStop` | 六轮声称 R6a 红 | ✅ 复现（R6a、R6b 红） |
+| M2 `wasStopped` 去 `\|\| silentStop` | 六轮声称 R6b 红 | ✅ 复现（R6b 红） |
+| M3a `onStopped`（start 路径）回灌 `current && current !== bridge` | 六轮声称 R6a-空档 红 | ✅ 复现 |
+| M4 `acp:stop` 回灌 `stillCurrent = true` | 六轮声称 R6c 红 | ✅ 复现 |
+| M5b `emitStopped` 对 `silentStop` 只拦 socket、仍发本地 | 七轮声称 R6a **转红** | ✅ **转红**（R6a、R6b 红） |
+| M5c `handleError` 在途窗口本地 emit 逃生 | 七轮声称 R6b **转红** | ✅ **转红**（R6b 红） |
+| M6a（本轮新增）start 内联监听器去持有权守卫 | R1/R6a-空档/R6a-resume 断言面 | ✅ 3 条全红 |
+| M7（本轮新增）start 内联监听器 relay 注销提前到守卫前 | R7b 新增 relay 断言是否浮空 | ✅ 3 条全红，**失败断言行即 `expect(unregisterSpy).not.toHaveBeenCalledWith(…)`（314/345/370）**——R7b 非浮空 |
+| M6c（本轮新增）**仅**删 `acp:resume` 内联监听器守卫 | §14.2 row4 声称面 | ❌ **14 passed 全绿**（R8a） |
+| M3c（本轮新增）**仅** resume 路径 `onStopped` 回灌空档放行 | resume 路径 `onStopped` 断言面 | ❌ **14 passed 全绿**（R8a） |
+
+### 17.2 六轮 2×🟡/1×🟠 逐项复核结论
+
+| 六轮编号 | 问题 | 七轮结论 | 证据摘要 |
+|---|---|---|---|
+| R7a（🟠） | R6a/R6b 用例本地半零断言、自查表声称失实 | ✅ **FIXED** | R6a/R6b 均挂 `bridge.on('acp:stopped', localStopped)` 双断言（R6b 在 5s race 放行后再断言一次为零）；M5b/M5c 反向变异本轮**实测转红**；§14.2 row1/row2 标注「socket + 本地」与断言面一致 |
+| R7b（🟡） | R6a-空档/R6a-resume 缺 mcpRelay 断言 | ✅ **FIXED（且非浮空）** | 两用例补 `McpRelay.prototype.unregisterSession` 负断言；M7 变异（仅 relay 提前注销）使失败断言行精确落在 `unregisterSpy` 三条断言上——新增断言真实捕获故障，非「永远为真」浮空断言 |
+| R7c（🟡） | ack 双路抑制 × `stopSessionWithAck` 5s 重试可杀新 bridge | ✅ **登记维持** | 再追迹属实：`STOP_ACK_TIMEOUT_MS=5s` + `STOP_MAX_RETRIES=1`，ack 监听器按 `payload.sessionId` 匹配任何 `acp:stopped` 即计 ack（ack 与通知共用事件）；替换场景 ack 两路皆抑制→重试对新 bridge 非 silent `stop()` 并回 ack→服务端删映射。存量主导，登记不阻断 |
+
+**关键事实**：七轮交付对入口条件（§15.5）的字面要求全部兑现，修复质量与证据链继续提升，R7a/R7b 本轮全部真实收口。**打回不针对六轮问题的修复，而针对七轮自查表新声称的覆盖面失实**（下列 R8a）。
+
+### 17.3 七轮问题清单（打回依据）
+
+**【🟠-R8a `acp:resume` 路径两条产出口持有权守卫零断言覆盖，§14.2 row4 声称失实（「声称大于测试面」第七轮复发）】**
+
+- **机制（读码核实）**：`socketio-client.ts` 的 `acp:start` 与 `acp:resume` handler **各自独立注册**一组迟到 `acp:stopped` 监听器（start 路径：内联监听器 ~691-697 + `onStopped` ~754-777；resume 路径：内联监听器 ~834-840 + `onStopped` ~870-893），守卫同构（`acpBridges.get(sessionId) !== bridge` / `current !== bridge`）但代码彼此独立。§14.2 row4 声称 `acp:resume` 内联产出口的负断言测试为 **R6a-resume（registry + mcpRelay）**。
+- **实测证伪（本轮反向变异，单独执行并还原）**：R6a-resume 用例的「旧 bridge」由 `acp:start` 创建（`startBridge` helper 走 `acp:start` handler），迟到 stopped 触达的是 **start 路径**监听器；`acp:resume` 创建的 bridge 的两条监听器**从未被任何用例的迟到 stopped 触达**。删除 `acp:resume` 内联监听器守卫（M6c）→ `socketio-client.test.ts` **14 passed 全绿**；仅 resume 路径 `onStopped` 回灌 `current && current !== bridge` 空档放行（M3c）→ **14 passed 全绿**。对照 start 路径（M6a/M7）断言真实活跃——缺口精确定位在 **resume 创建的 bridge 被替换后迟到 stopped** 这一场景的全部两条产出口。
+- **台账声称失实**：七轮返工说明明确声称「自查表 §14.2 row1/row2 标注 socket+本地双断言，row3/row4 标注 registry+mcpRelay，**声称面=断言面**」——row3（`acp:start` 内联）属实（M6a/M7 实证），**row4（`acp:resume` 内联）声称面（R6a-resume）大于实测断言面（0）**。另 row5 将「`onStopped`（含 `current===undefined`）」列为 R1、R6a-空档，实际只覆盖 start 路径 `onStopped`，resume 路径 `onStopped` 未列入且零覆盖——自查表对 resume 路径两条产出口的声称均失实。
+- **行为危害评估（如实，不夸大）**：resume 路径两条守卫读码与 start 路径完全同构且正确（生产行为无缺陷）；M6c/M3c 存活属**防御纵深缺口 + 台账声称失实**，当前不产生可直接触发的用户可见故障。但按五轮 R6b（同守卫相邻行缺断言即 🟠）、六轮 R7a（断言面窄于声称面即 🟠）同一既定口径判定 🟠。「声称大于测试面」已**连续四轮复发**（四轮 N6 浮空断言 / 五轮 silentStop 标记零覆盖 / 六轮本地半断言缺位 / 七轮 resume 路径守卫零覆盖）。
+- **修复（八轮入口条件）**：补一条「旧 bridge 由 `acp:resume` 创建、被同 sessionId 的再次 start/resume 替换后，迟到 stopped 不得注销新会话 registry/relay、不得发 `acp:resume:result`」可证伪回归用例（改造 R6a-resume 模板或新增走 `acp:resume` 建桥的 helper），使 **M6c/M3c 转红**；自查表 row4/row5 如实标注覆盖面（补齐断言后声称全表面，或收窄声称列）。
+
+### 17.4 反证记录（排除的疑点）
+
+| 疑点 | 复核结论 |
+|---|---|
+| R7b 新增 relay 断言为「永远为真」浮空断言（四轮 N6 同型） | **排除**：`mcpRelay` 为 `connectToServer` 内 `new McpRelay()` 真实实例，M7 变异使失败断言行精确落在 3 条 `unregisterSpy` 断言上 |
+| M5b/M5c「转红」摆拍嫌疑 | **排除**：本轮独立复放均红（R6a/R6b），逐条单独执行并还原 |
+| R6b 放行后只断言本地、socket 半缺位 | **排除**：emitStopped 产出口双半已由 R6a 同场景双断言等宽覆盖 |
+| R7c 登记机制描述失实 | **排除**：`stopSessionWithAck` 重试语义、ack 与通知共用 `acp:stopped`、替换场景 ack 双路抑制逐条读码追迹属实 |
+| 六轮遗留「tests/api/e2e 未复跑」影响判定 | **已补齐**：本轮 Aspire 全栈实跑，13+6+3 / 19 / 缺参负向三组全部复现声称 |
+
+### 17.5 修复要求（八轮复核入口条件）
+
+1. **R8a**：补「`acp:resume` 创建的旧 bridge 被替换后迟到 stopped 不注销新会话、不发 `acp:resume:result`」回归用例（registry + mcpRelay 双面），M6c/M3c 转红；自查表 row4/row5 声称面=断言面（补齐断言或如实收窄）。
+2. 修复后重跑 tsc ×4、四包单测、tests/api 三套（含缺参负向）、tests/e2e，登记实跑与变异证据（**含 M1-M7 全量复放 + M6c/M3c 转红**），重提**八轮 AI Review**。
+
+### 17.6 判定
+
+按验收红线「🔴/🟠 → 打回返工」：**REJECT（七轮打回）**，返工目标节点「修复Review意见」。七轮返工（R7a/R7b）本身全部真实兑现、证据链高质量（M5b/M5c 转红属实、relay 断言经 M7 证实非浮空），六轮遗留入口条件已全部补齐；本轮打回仅针对 R8a（1×🟠：resume 路径断言面缺口 + 自查表 row4/row5 声称失实），修复成本低（1 条用例 + 自查表措辞）。七轮请以「断言面=修复面=声称面」自查，**八轮请把自查表每一行的「负断言测试」逐条反向变异验证后再声称**（本轮 row4 若做过一次 M6c 自查即会发现）。
