@@ -1,11 +1,13 @@
 ---
-description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）
+description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）；第四轮逐条复核返工提交 72baf55：N-5/N-6/N-7 属实闭环（N-6 回退探针实证可红），N-4 有界退避+超限告警+三入口接线属实但核心机制无效——runOutsideTransitionLock 经 KeyedMutex.runDetached 预取实例锁后才执行任务，任务内 workflowEngine.transition 必然再撞自锁 re-entrant，引擎级探针（真实锁+真实引擎）实证延迟路径 4 次尝试全数自撞、fail 转移 0 次执行、节点停留 RUNNING，配套用例 mock 掉被测对象零区分力，1×🟠 N-8（另有 🟡 N-9 持锁内 await runDetached 死锁隐患），独立复跑 tsc×7/lint×2/单测五包 1000/656+1skip/254/235/663/e2e-typecheck 全绿，第四轮打回（REJECT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **第三/四轮问题已修复，待下一轮集成验收**（N-4/N-5/N-6/N-7 见第十二节；全栈证据受环境限制，已按规则申请书面豁免）——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
+> **状态**: ❌ **第四轮集成验收打回（REJECT）**（1 × 🟠 N-8，见[第十四节](#十四第四轮验收记录2026-10-23)）——第四轮对返工提交 `72baf55`（origin/integration，PR #273）逐条复核第三轮 N-4~N-7：**N-5/N-6/N-7 属实闭环**（N-5 `handleSessionIdled` 条件字段级 `updateOne` 无整文档 save、N-6 新用例经回退探针实证有区分力、N-7 C-27 `dependsOn` 断言 + C-11 `MCP_SERVER_NOT_SELECTABLE` 服务/resolver/前端/契约全落地），**N-4 的有界退避（100/200/400ms）+ 超限结构化告警 + ended/idled/removed 三入口接线属实，但核心机制无效**：`engine.runOutsideTransitionLock` 经 `KeyedMutex.runDetached` **预取实例转移锁之后**才执行任务（`keyed-mutex.ts:23-27,46`），任务内 `workflowEngine.transition` 再取同一把锁必然命中自锁 `re-entrant`——引擎级探针（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock，仅 mock DB 模型）实证：延迟路径 1+3 次尝试**全数自撞**、`fail` 转移 **0 次执行**（`findById` 仅外层 1 次）、节点停留 RUNNING 只剩 `retry exhausted` 告警；配套用例 `orchestrator.test.ts:465-486` 把 `workflowEngine.transition` mock 掉，断言的是 mock 再次调用而非真实取锁，**零区分力**（🟠 N-8）；另实证持锁 task 内 `await runDetached` **永久死锁**（🟡 N-9）。独立复跑 tsc×7/lint×2/单测五包 **1000/656+1skip/254/235/663**/tests-e2e-typecheck 全绿（与自报一致）；12.6 全栈书面豁免申请**待人类裁定**（本节点无权豁免）。详见[第十四节](#十四第四轮验收记录2026-10-23)。
+>
+> 第三轮背景（详见[第十二节](#十二第三轮验收记录2026-10-23)）——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
 >
 > 第二轮背景（详见[第九节](#九第二轮验收记录2026-10-23)）：对返工提交 `939936b`/`051cabf` 复核发现修复引入 1×🔴+2×🟠 与首轮未闭环 2×🟠、8×🟡 残留并打回；第二轮修复（第十一节）已解决其中绝大多数，但引入 N-4/N-5 新问题。——第二轮对返工提交 `939936b`/`051cabf`（首轮 3×🔴+7×🟠+28×🟡）经逐条复核：**8 项属实**（R-1/R-2/R-3 断言侧/R-4/R-5/R-8/R-9 主体/R-10，均经回退探针或反证实证有区分力），但**修复引入 1×🔴 + 2×🟠 新问题**（🔴 N-1：R-9 把 KeyedMutex 下沉 `engine.transition` 后，引擎 hook 在锁内 `sessionService.close` 同步触发 `handleSessionEnded` 兜底链路，restart（RUNNING 节点重启，恰是「会话卡住」主场景）必误触发——fallbackSent=true 时嵌套 `transition('fail')` 抛 `KeyedMutex re-entrant lock detected` 整个重启失败并留死会话、false 时复活幽灵会话并发兜底提示词，已做引擎级最小复现；🟠 N-2：C-18 `dirtyRef` 保存成功不清除（自报「保存成功清除 dirty」与代码不符）；🟠 N-3：C-17 `pollStopped` 终态后不复位，重试/重新设置后进度框冻结），**2 项首轮 🟠 未闭环**（🟠 U-1：R-7 仅成功路径回写 `workspaceId`，失败路径不回写，恰是契约声称要区分的「默认会话创建失败」场景；🟠 U-2：R-6 方案②要求「修订 PRD/提案如实收窄」，提案 §9 验收项/§8.1/风险点仍写「立即失效」与 v1.2 TTL 口径矛盾），另有 8×🟡 残留（AppHost.cs stale 注释、C-22 断言允许 0/负、C-24 e2e 侧无哨兵、C-26 文档端口 stale 等）。**按节点定义立即打回**：修复 N-1~N-3、闭环 U-1/U-2、清理 🟡 残留，并以 Aspire 全栈实跑 tests/api 全量 + tests/e2e 随修复一并提交证据（两轮均未执行）。详见[第九节](#九第二轮验收记录2026-10-23)。
 >
@@ -595,3 +597,73 @@ type: Permanent
 - 第三轮已如实记录：宿主机多个其他 worktree 的 AppHost 占用 dashboard/resource-service 端口，`aspire start` 绑定 `127.0.0.1:22149` 失败；手工等价栈因 **本机无 K8s / 无已注册控制器**，无法取得 `tests/api` 全量与 `tests/e2e` 全绿（失败类型与对应环境缺口已逐项列于 11.5）。
 - 本轮代码变更均为后端锁/兜底与前端表单状态，相关行为已由单测与回退探针覆盖；全栈环境缺口未变化，重复执行预计得到同一组环境型失败。
 - **据此申请人类书面豁免**全栈全绿证据要求，或改在干净 CI/主机（含 Aspire 标准编排、K8s 与预置控制器）执行。若需本节点继续，请提供可用的干净环境。
+
+## 十四、第四轮验收记录（2026-10-23）
+
+> 复核对象：`origin/integration @ 72baf55`（第四轮返工修复，PR #273 integration→release）；复核方式：逐条复核第三轮 N-4~N-7 + 主评回读源码 + **独立实跑（不采信自报）** + **引擎级探针（真实锁 + 真实引擎，仅 mock DB 模型）** + 回退探针 + 自报一致性抽查。重点沿第三轮要求③「补用例『re-entrant 一次后重试能取到锁并完成兜底』」核对**验证真实性**（连续三轮经验：mock 掉被测对象的用例不算覆盖）。
+
+### 14.1 第三轮问题逐条复核结论
+
+| # | 复核结论 | 关键证据 |
+|---|---|---|
+| N-4 | ⚠️ 外围属实、核心无效 | 上限 3 次 + 100/200/400ms 指数退避 + 超限结构化告警 `fallback deferred retry exhausted ... manual intervention may be required`（`orchestrator.ts:53,310-341`）、`ended/idled/removed` 三入口统一 `transitionOrDefer`（`orchestrator.ts:82,148,370`）均属实，无热循环 ✅；`keyed-mutex.test` 的 ALS 逃逸用例有区分力 ✅；**但 `runOutsideTransitionLock` 预取锁后才执行任务，任务内 `transition` 必然自锁 re-entrant，延迟路径永远无法完成兜底（→ N-8）；「重试能取到锁并完成兜底」用例 mock 掉 `workflowEngine.transition`，零区分力（→ N-8）** |
+| N-5 | ✅ 属实 | `handleSessionIdled` 改条件 `updateOne`（`nodes.$elemMatch {nodeId, sessionId, status: {$in:['RUNNING','REWORK']}}` + `$set nodes.$.fallbackSent`，`orchestrator.ts:117-134`），`modifiedCount=0` 直接 return，无 `instance.save()`；全文件 grep `fallbackSent` 写路径仅剩 ended（`:408`）/idled（`:131`）两处条件更新 ✅；O10/N-5 用例断言条件 updateOne 且 `save` 未调用，回退为 `save()` 即红 ✅ |
+| N-6 | ✅ 属实（本轮回退探针实证） | 新用例「保存成功→服务端刷新→表单回同步」（`McpDefaultSection.test.tsx:134-158`）：保存回写 `m1` 后父级传入 `m2`，断言按 `m2` 回同步。**本轮回退探针**：删除 `handleSave` 的 `dirtyRef.current=false`（`McpDefaultSection.tsx:106`）→ 该用例确定性红（其余 7 用例绿），区分力成立 ✅ |
+| N-7 | ✅ 属实 | C-27：T-CHW1 断言 `items[0].dependsOnWorkloadIds === ['w2']`、`items[1] === []`（`cloud-host-workload-service.test.ts:70,91-93`），实现侧 `list()` 确实透出该字段（`cloud-host-workload-service.ts:133,153`），契约 `cloud-host.graphql:78` 对齐 ✅；C-11：`setDefaultMcp` 命中平台云工具返回 `MCP_SERVER_NOT_SELECTABLE`、其余仍 `MCP_SERVER_NOT_FOUND`（`controller.ts:138-148`），resolver 透传（`graphql/resolvers/controller.ts:144-152`），前端映射「平台云工具服务由系统自动注入，不可手动选择」（`McpDefaultSection.tsx:38`），契约注释同步（`agent-controller.graphql:91`），服务/前端用例有区分力 ✅；自报范围「服务/前端用例」如实、无失真 |
+
+### 14.2 第四轮问题清单
+
+#### N-8（🟠，修复无效 + 验证零区分力）N-4 延迟重试自锁：`runOutsideTransitionLock` 的任务在「持有实例转移锁」状态下执行，任务内 `transition` 必然再撞 `re-entrant`——兜底升级 FAILED 在延迟路径 100% 不可达，配套用例 mock 掉被测对象制造「已修复」假象
+
+- **问题描述**：`KeyedMutex.runDetached(key, task)`（`keyed-mutex.ts:23-27`）只做了 ALS 逃逸，但最终仍走 `runExclusive(key, task)`，任务经 `heldKeys.run(held, task)`（`keyed-mutex.ts:46`）执行——**执行期间 store 内含 key**。`engine.runOutsideTransitionLock(instanceId, task)`（`engine.ts:170-172`）直接委托 `transitionMutex.runDetached(instanceId, task)`，即 task 在**持有该实例转移锁**的状态下运行。而 `deferSessionFallback` 的 task（`orchestrator.ts:327-331`）是 `handleSessionEnded/Idled/Removed` 完整逻辑，其内部 `workflowEngine.transition(instanceId, ...)`（`engine.ts:163-165`）会再取同一把 `transitionMutex` 的同一 key → `parentHeld.has(key)` 命中 → 抛 `KeyedMutex re-entrant lock detected`（`keyed-mutex.ts:34-37`）→ 被 `transitionOrDefer` 捕获再次 `deferSessionFallback` → 100/200/400ms 三次重试**全部同型自撞** → 超限 warn 后放弃。**无论定时器是否继承 ALS store（`exit` 分支还是 `runExclusive` 等价分支），任务都持锁执行**——不是「脱离锁」而是「提前把锁占死」。
+- **引擎级探针实证（本轮，真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock + 真实 `workflowOrchestrator`，仅 mock DB 模型/会话服务）**：
+  - 探针A（锁语义）：`runDetached('k', task)` 的 task 内再取 `k` 必抛 re-entrant——「定时器继承 store 的生产形态」与「纯净上下文」两种情形均实证；另实证**在持锁 task 内 `await runDetached(同 key)` 永久死锁**（排队等自己释放，5s 超时）→ N-9。
+  - 探针B（生产链路）：锁内 hook 回环触发 `handleSessionRemoved`（`onNodeDone` 在引擎转移锁内被调用，等价锁内回调兜底）→ 共 4 次尝试（首次 + 3 重试）**全数自撞 re-entrant**；`WorkflowInstance.findById` 仅 1 次（外层 complete）——**`fail` 转移从未执行**；节点停留 `RUNNING`；仅剩 `retry exhausted ... manual intervention may be required` 告警。
+  - 探针C（反证）：同一兜底逻辑在锁外直接调用**立即**升级 `FAILED`——缺陷唯一定位在 `runDetached` 预取锁，非 orchestrator/引擎转移逻辑本身。
+- **影响分析**：① 第三轮修复要求③「补用例『re-entrant 一次后重试**能取到锁并完成兜底**』」实际**不可达成**：`orchestrator.test.ts:465-486` 用 `vi.spyOn(workflowEngine, 'transition').mockRejectedValueOnce(...)` 把被测对象换成了 mock，断言的是「mock 又被调了一次」，对真实取锁路径零区分力——真实机制 100% 失败而用例全绿；② 一旦残留回环触发（未来任一锁内 `close` 未带 `suppressFallback`、`updateStatus('ended')` 入锁、或新增 hook 内联动），`handleSessionRemoved` 注释自证的保证「必须让节点可见地失败，否则节点停在 RUNNING、sessionId 悬空，**流程永久卡死**」（`orchestrator.ts:143-147`）失效，`handleSessionIdled` 的人工介入强提醒 todo 也不会创建——即第二轮 🔴 N-1 的「死会话/幽灵会话」影响类；③ 自报 12.1「re-entrant 一次后 100ms **重试成功**」把 mock 用例结果表述为机制验证结论，与真实链路不符（连续第三轮自报表述超出实际：N-2 dirty → N-5 范围 → N-4 有效性）。
+- **缓解因素（如实记录）**：`suppressFallback` 已切断已知锁内受控关闭触发面（`orchestrator` 三处 `sessionService.close` 全部带 `suppressFallback`，grep 3/3），`notifySessionRemoved/Idled` 经 SSE 订阅层跨异步上下文触发不会命中同上下文重入判定，`updateStatus('ended')` 当前无生产调用方——**当前已知生产路径难以触发该分支**。但该机制正是为残留/未来锁内回环兜底而保留（第三轮明确二选一：修好或删掉改告警），现状是「留着一个必然失败的假兜底 + 声称成功的用例」，比删掉更危险。
+- **根因分析**：把两个正交概念混同——`runDetached` 解决的是「**重入判定**假阳性」（ALS 逃逸），而延迟任务需要的是「**不持锁**执行」。任务自身还要走 `transition`（内部取同一把锁）时，任何「预取锁再执行」的封装都是自锁。
+- **修复方案**：① 二选一：(a) `runOutsideTransitionLock` 只做 ALS 逃逸、**不预取锁**（如新增 `heldKeys.exit(() => task())` 语义的 `exitContext`，让 task 内 `workflowEngine.transition` 自行取锁），或 task 改走不取锁的等价入口并自行保证串行；(b) 按第三轮给出的第二选项，评估 `suppressFallback` 已切断误触发面后**放弃兜底重试、只保留结构化告警并删除死代码**（当前代码取 3 次注定失败的重试纯属误导）；② 补**引擎级**用例：真实 `workflowEngine.transition`（禁 mock）+ 锁内 hook 回环触发兜底 → 断言重试后节点升级 FAILED / 或断言告警后节点状态与 todo 行为符合 (b) 的设计（当前代码下 (a) 用例必红，可兼作回退探针）；③ `keyed-mutex.test` 补「task 在持锁状态下执行」语义断言；④ 自报纠正：删除「重试成功」的机制有效性表述，写明用例 mock 边界（「用例断言了什么 ≠ 机制被证明了什么」）。
+- **验证结果**：❌ 本轮引擎级探针 A/B/C 实证；待第五轮复验。
+
+#### N-9（🟡，随 N-8 一并处理）`runDetached` 持锁 task 内 await 同 key 永久死锁
+
+- **问题描述**：探针 A① 实证——在持有 key 的 task 内 `await mutex.runDetached(key, ...)` 永久挂起（`exit` 只绕过重入**检查**，随后排队等待自己释放）。当前 `deferSessionFallback` 从 `setTimeout` 回调调用、持锁方已脱离 await 链，暂不触发；但 `runOutsideTransitionLock` 是引擎公开 API，任何调用方在锁内 await 即死锁，且无超时/告警。
+- **修复方案**：与 N-8① 合并——提供不取锁的 `exitContext` 原语后此风险消除；或 `runDetached` JSDoc 明示禁止锁内 await + 补防御用例。
+
+#### 备注（不计入问题清单）
+
+- tests/api 缺 `MCP_SERVER_NOT_SELECTABLE` 的 API 级用例（`controller.test.ts` 仅覆盖 `MCP_SERVER_NOT_FOUND` 两例）：N-7 自报范围「服务/前端用例」如实可采信，API 级用例建议随全栈门禁恢复补齐，不作打回项。
+- 本报告存在两个「## 十二」（第三轮验收记录 / 第四轮返工修复记录），历史章节不改，本轮起按「十四」续编。
+
+### 14.3 独立验证结果（本机实跑，不采信自报）
+
+| 项目 | 结果 | 与自报对比 |
+|---|---|---|
+| tsc ×7（agent-api / admin-api / cloud-controller / controller-api / agent-web / admin-web / tests-e2e） | ✅ 全 0 error | 一致（自报口径 ×5，本轮加跑 controller-api / tests-e2e） |
+| lint ×2（agent-web / admin-web） | ✅ 0 error（agent-web 5 条存量 exhaustive-deps warning） | 一致 |
+| 单测 agent-api | ✅ **1000 passed**（71 文件） | 一致 |
+| 单测 admin-api | ✅ **656 passed / 1 skipped** | 一致 |
+| 单测 cloud-controller | ✅ **254 passed** | 一致 |
+| 单测 admin-web | ✅ **235 passed** | 一致 |
+| 单测 agent-web | ✅ **663 passed** | 一致 |
+| tests/e2e typecheck | ✅ exit=0 | 一致 |
+| 引擎级探针 A：`runDetached` task 是否持锁 | ❌ **task 持锁执行**（task 内再取同 key 必 re-entrant；锁内 await 另有死锁） | 自报称「runOutsideTransitionLock…脱离后执行」，实为持锁执行 → N-8/N-9 |
+| 引擎级探针 B：延迟重试能否取到锁并完成兜底 | ❌ **4 次尝试全数自撞 re-entrant，`fail` 转移 0 次执行，节点停留 RUNNING** | 自报称「100ms 重试成功」（mock 用例），真实链路不成立 → N-8 |
+| 引擎级探针 C（反证）：锁外直接兜底 | ✅ 立即升级 FAILED | 缺陷唯一定位 `runDetached` 预取锁 |
+| 回退探针：N-6 `dirtyRef.current=false` | ✅ 回退后 N-6 用例确定性红（其余 7 绿） | 与自报一致，区分力成立 |
+| Aspire 全栈 tests/api 全量 + tests/e2e | ⚠️ 未取得全绿证据（连续四轮）；12.6 申请**人类书面豁免** | 环境受限声明与第三轮一致、可采信为如实；**豁免须人类批准，本节点无权豁免**——待人类裁定 |
+
+### 14.4 第四轮判定
+
+- **结论：❌ REJECT（第四轮打回）**。命中判定红线：1 × 🟠（N-8，修复无效 + 验证零区分力）。
+- 已闭环确认：N-5 ✅、N-6 ✅（回退探针实证）、N-7 ✅；N-4 的有界退避/超限告警/三入口接线属实但核心取锁机制无效（→ N-8）；代码类门禁独立复跑全绿且与自报一致（本轮自报除 N-4 有效性表述外无失真）。
+- **下轮要求**：① 修复 N-8（二选一：ALS 逃逸但不预取锁让 `transition` 自行取锁 / 或评估后放弃兜底重试只留结构化告警并删死代码；补引擎级真实取锁用例，禁 mock 被测对象）；② N-9 防御一并处理；③ 自报纠正「重试成功」表述并继续写明覆盖范围与 mock 边界；④ 全栈 tests/api 全量 + tests/e2e 全绿证据随修复交付，或由人类书面豁免落定（连续四轮未交付）。
+
+## 十五、经验总结（第四轮追加）
+
+- **「脱离上下文」与「不持锁」是两个正交概念**：`als.exit()` 只消除重入**判定**的假阳性，锁的**持有权**才是自锁/死锁根源。为「任务自身还要取同一把锁」的场景封装执行器时，绝不能预取锁——预取锁不是串行化，是把回环换成必败的自环。
+- **mock 掉被测对象的用例等于没有用例**：验证「重试能取到锁」就必须让真实的锁参与。机制类修复的验收探针应只 mock 边界（DB/IO），机制本身（锁、引擎、调度）保持真实（本轮探针 B 即此结构）。
+- **修复无效的兜底比没有兜底更危险**：必然失败的重试 + 「已修复」的用例 + 「重试成功」的自报，会把一个已知缺陷伪装成已闭环。二选一（修好 / 删掉改告警）必须真正二选一，不能选「留着但坏了」。
+- **反证探针用于定位而非仅证伪**：探针 C（锁外直接调用成功）把缺陷唯一定位到 `runDetached` 预取锁，避免误伤 orchestrator/引擎转移逻辑，修复面收窄到一处。
+- **自报表述连续三轮超出实际**：N-2「保存成功清除 dirty」、N-5「fallbackSent 改字段级更新」（范围）、N-4「重试成功」（有效性）。自报应严格区分「用例断言了什么」与「机制被证明了什么」，机制性结论必须有不 mock 被测对象的证据。
