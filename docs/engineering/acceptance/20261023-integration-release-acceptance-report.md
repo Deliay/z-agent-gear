@@ -1,11 +1,13 @@
 ---
-description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成级 AI Review 首轮：3 × 🔴 阻断（SessionPage 新建会话 modeId/modelId 位置参数错位致模式被当模型提交、tests/e2e 新增 typecheck 门禁自身不过（workflow.spec.ts 3 处 TS18047 均为本 diff 新代码）、T-IC-EPH1/2 断言 requests 而实现只声明 limits 确定性失败）+ 7 × 🟠 重要（worktree 会话丢弃 modeId/modelId、E2E 旧文案与 P10-CH1 过时断言、后台模型变更不失效 ACP 选项缓存、hasDefaultWorkspace 恒 false 语义失效、PR 事件幂等 TOCTOU、事件流转与人工流转不互斥、CustomModelDialog 编辑中被重置）+ 28 × 🟡 收口项；独立复跑 tsc/lint/单测（agent-api 976 / admin-api 656+1skip / cloud-controller 254 / admin-web 234 / agent-web 654 全绿），tests/e2e typecheck 红、tests/api T-IC-EPH1/2 确定性红，integration 集成验收打回（REJECT）
+description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **首轮打回问题已修复，待第二轮集成验收**（修复提交 `939936b`，详见[第八节](#八返工修复记录2026-10-23-第二轮)）——首轮对 `git diff origin/release...integration`（32 提交 / 167 文件 / +14794 −332，含云容器优化一期、二期、工作流 GitHub PR 联动三特性）做集成级代码评审 + 本机独立验证，发现 **3 × 🔴 阻断 + 7 × 🟠 重要**：前端新建会话数据通路两处参数错位（🔴 R-1 模式被当 modelId 提交、所选模型被丢弃；🟠 R-4 worktree 路径静默丢弃 modeId/modelId）、测试侧两处确定性红（🔴 R-2 本 diff 新增的 `tests/e2e` typecheck 门禁对本 diff 新代码报 3 个 TS18047；🔴 R-3 T-IC-EPH1/2 断言 `resources.requests` 而实现只声明 `limits`，TypeError 必红且与 PRD v1.2/单测/E2E 三方矛盾）、两处 spec 偏离（🟠 R-5 后台模型变更不失效 ACP 选项缓存、🟠 R-6 `hasDefaultWorkspace` 恒 false 语义失效）、两处并发正确性缺口（🟠 R-7 PR 事件幂等 TOCTOU、🟠 R-8 事件驱动流转与人工流转不互斥）与一处表单状态缺陷（🟠 R-9 编辑中表单被重置）。**按节点定义立即打回**，要求修复 R-1~R-9 并收口 28 × 🟡（C-1~C-28）后重新提交集成验收。详见[第四节](#四验收问题清单)。
+> **状态**: ❌ **第二轮打回（REJECT）**——返工提交 `939936b`+`051cabf` 对首轮 3×🔴+7×🟠+28×🟡 的修复经逐条复核：**8 项属实**（R-1/R-2/R-3 断言侧/R-4/R-5/R-8/R-9 主体/R-10，均经回退探针或反证实证有区分力），但**修复引入 1×🔴 + 2×🟠 新问题**（🔴 N-1：R-9 把 KeyedMutex 下沉 `engine.transition` 后，引擎 hook 在锁内 `sessionService.close` 同步触发 `handleSessionEnded` 兜底链路，restart（RUNNING 节点重启，恰是「会话卡住」主场景）必误触发——fallbackSent=true 时嵌套 `transition('fail')` 抛 `KeyedMutex re-entrant lock detected` 整个重启失败并留死会话、false 时复活幽灵会话并发兜底提示词，已做引擎级最小复现；🟠 N-2：C-18 `dirtyRef` 保存成功不清除（自报「保存成功清除 dirty」与代码不符）；🟠 N-3：C-17 `pollStopped` 终态后不复位，重试/重新设置后进度框冻结），**2 项首轮 🟠 未闭环**（🟠 U-1：R-7 仅成功路径回写 `workspaceId`，失败路径不回写，恰是契约声称要区分的「默认会话创建失败」场景；🟠 U-2：R-6 方案②要求「修订 PRD/提案如实收窄」，提案 §9 验收项/§8.1/风险点仍写「立即失效」与 v1.2 TTL 口径矛盾），另有 8×🟡 残留（AppHost.cs stale 注释、C-22 断言允许 0/负、C-24 e2e 侧无哨兵、C-26 文档端口 stale 等）。**按节点定义立即打回**：修复 N-1~N-3、闭环 U-1/U-2、清理 🟡 残留，并以 Aspire 全栈实跑 tests/api 全量 + tests/e2e 随修复一并提交证据（两轮均未执行）。详见[第九节](#九第二轮验收记录2026-10-23)。
+>
+> 首轮背景（已修复项详见[第四节](#四验收问题清单)与[第八节](#八返工修复记录2026-10-23-第二轮)）：首轮对 `git diff origin/release...integration`（32 提交 / 167 文件 / +14794 −332，含云容器优化一期、二期、工作流 GitHub PR 联动三特性）做集成级代码评审 + 本机独立验证，发现 3 × 🔴 + 7 × 🟠 + 28 × 🟡 并打回。
 
 ## 关联文档
 
@@ -184,17 +186,17 @@ type: Permanent
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| R-1 | SessionPage `onCreate` 位置参数错位（模式当模型、模型丢弃） | 9 参签名演进漏改调用点 | ✅ 已修复（补第 7 参 + 映射单测） | `939936b` |
-| R-2 | tests/e2e 新增 typecheck 门禁对本 diff 新代码报 3 × TS18047 | 门禁未自检、可空值未收敛 | ✅ 已修复（typecheck exit=0） | `939936b` |
-| R-3 | T-IC-EPH1/2 断言 `requests` 而实现仅 `limits`，确定性红 | 测试/JSDoc 残留旧口径 | ✅ 已修复（2 用例实跑绿） | `939936b` |
-| R-4 | WorktreeSidebarGroup 丢弃 modeId/modelId | prop 签名未同步扩展 | ✅ 已修复（9 参透传单测） | `939936b` |
-| R-5 | E2E 旧文案断言与 P10-CH1 过时语义 | phase2 改口径未回归旧断言 | ✅ 已修复（文案对齐 + P10-CH1 重写） | `939936b` |
-| R-6 | 后台模型变更不失效 ACP 选项缓存 | 跨服务失效被裁剪未回写 spec | ✅ 按方案②收窄并回写 PRD/提案 v1.2 | `939936b` |
-| R-7 | `hasDefaultWorkspace` 恒 false、语义失效 | 字段无写入方 | ✅ 已修复（Git 设置回写 workspaceId） | `939936b` |
-| R-8 | PR 事件幂等 TOCTOU | 去重读在锁外、非原子 claim | ✅ 已修复（锁内重读 + 并发用例） | `939936b` |
-| R-9 | 事件流转与人工流转不互斥 | 锁在传输层非领域层 | ✅ 已修复（engine.transition 按实例加锁） | `939936b` |
-| R-10 | CustomModelDialog 编辑中被重置 | effect 依赖不稳定数组 | ✅ 已修复（useMemo + 稳定依赖 + 回归测试） | `939936b` |
-| C-1~C-28 | 🟡 收口项（见 C 组表） | — | ✅ 已收口（少部分按说明降级/留尾，见第八节） | `939936b` |
+| R-1 | SessionPage `onCreate` 位置参数错位（模式当模型、模型丢弃） | 9 参签名演进漏改调用点 | ✅ 已修复（补第 7 参 + 映射单测，第二轮探针实证） | `939936b` |
+| R-2 | tests/e2e 新增 typecheck 门禁对本 diff 新代码报 3 × TS18047 | 门禁未自检、可空值未收敛 | ✅ 已修复（typecheck exit=0，反证探针确认） | `939936b` |
+| R-3 | T-IC-EPH1/2 断言 `requests` 而实现仅 `limits`，确定性红 | 测试/JSDoc 残留旧口径 | ⚠️ 断言侧已修复（2 用例实跑绿）；`AppHost.cs:160` stale 注释残留 → U-3 | `939936b` |
+| R-4 | WorktreeSidebarGroup 丢弃 modeId/modelId | prop 签名未同步扩展 | ✅ 已修复（9 参透传单测，探针实证） | `939936b` |
+| R-5 | E2E 旧文案断言与 P10-CH1 过时语义 | phase2 改口径未回归旧断言 | ✅ 已修复（文案对齐 + P10-CH1 重写为强断言） | `939936b` |
+| R-6 | 后台模型变更不失效 ACP 选项缓存 | 跨服务失效被裁剪未回写 spec | ⚠️ 部分修复：PRD v1.2 已收窄，提案 §9/§8.1/风险点残留矛盾 → U-2 | `939936b` |
+| R-7 | `hasDefaultWorkspace` 恒 false、语义失效 | 字段无写入方 | ⚠️ 部分修复：仅成功路径回写，失败路径不回写 → U-1 | `939936b` |
+| R-8 | PR 事件幂等 TOCTOU | 去重读在锁外、非原子 claim | ✅ 已修复（锁内重读 + 并发用例有区分力） | `939936b` |
+| R-9 | 事件流转与人工流转不互斥 | 锁在传输层非领域层 | ⚠️ 主体已修复（engine.transition 串行化 + 并发用例）；**但引入 re-entrant 回归 → N-1（🔴）** | `939936b` |
+| R-10 | CustomModelDialog 编辑中被重置 | effect 依赖不稳定数组 | ✅ 已修复（useMemo + 稳定依赖 + 回归测试，探针实证） | `939936b` |
+| C-1~C-28 | 🟡 收口项（见 C 组表） | — | ⚠️ 大部分收口；C-18 引入新缺陷 → N-2（🟠）、C-17 引入新缺陷 → N-3（🟠），另 8 项残留 → U-3~U-6 | `939936b` |
 
 ## 六、最终验证
 
@@ -222,6 +224,23 @@ type: Permanent
 | tests/api 其余 | ⏳ 需 Aspire 全栈实跑（本机未起完整栈；端口默认值已统一为 10001/35273） |
 | tests/e2e（实机浏览器） | ⏳ 需 Aspire 全栈实跑（用例语义已按 phase2 重写） |
 | 结论 | 🔄 **修复完成，待第二轮集成验收** |
+
+### 6.3 第二轮独立复核（2026-10-23，AI Review 实跑，不采信自报）
+
+| 项目 | 复核结果 |
+|---|---|
+| tsc（agent-api/admin-api/cloud-controller） | ✅ 全 0 error（逐包实跑） |
+| tsc -b（admin-web/agent-web） | ✅ 全 0 error |
+| lint（admin-web/agent-web） | ✅ 0 error（agent-web 5 存量 exhaustive-deps warning） |
+| 单测五包 | ✅ **986** / **656+1skip** / **254** / **235** / **657** 全绿（与自报一致） |
+| tests/e2e typecheck | ✅ exit=0；**反证探针**：换回 `74af2cb` 版 `workflow.spec.ts` 复跑 exit=2（恰 3×TS18047 @645/2471/2504），证明 R-2 修复真实改变行为 |
+| tests/api T-IC-EPH1/2 | ✅ 2 passed（`internal-api.test.ts` 实跑）；`k8s-job-manager.test.ts` 14 passed，三方口径（断言/单测/E2E）一致 |
+| tests/api PR 联动哨兵 | ✅ 三态实证：本地无 token 绿（1 passed/20 skipped）、`CI=1` 缺参确定性红、`CI=1 SKIP_PR_CALLBACK=1` 显式跳过绿 |
+| 回退探针（区分力检查） | ✅ R-1/R-4/R-10 修复回退后对应新单测确定性变红（3/3）；C-15 文案断言探针回退不红（弱断言 → U-5） |
+| R-9 回归复现 | ❌ 引擎级最小复现确定性抛 `KeyedMutex re-entrant lock detected`（见 9.3 N-1） |
+| tests/api（Aspire 全栈全量） | ⏳ 未执行（代码即将返工变更；随下轮修复一并提交证据） |
+| tests/e2e（实机浏览器） | ⏳ 同上 |
+| 结论 | ❌ **REJECT（第二轮）**：1 × 🔴（N-1）+ 4 × 🟠（N-2/N-3/U-1/U-2） |
 
 ## 七、经验总结
 
@@ -297,3 +316,98 @@ type: Permanent
 - 单测：agent-api **986**、admin-api **656+1skip**、cloud-controller **254**、admin-web **235**、agent-web **657** 全绿。
 - `tests/e2e` typecheck exit=0；`tests/api` T-IC-EPH1/2 实跑绿。
 - 待第二轮以 Aspire 全栈实跑 `tests/api` 全量与 `tests/e2e`，完成集成验收。
+
+## 九、第二轮验收记录（2026-10-23）
+
+> 复核对象：`origin/integration @ 051cabf`（返工修复 `939936b` + 报告回填 `051cabf`）；复核方式：三域并行逐条复核（前端 / 测试 / 后端契约文档）+ 主评对全部新发现回读源码交叉复核 + 独立实跑（见 [6.3](#63-第二轮独立复核2026-10-23ai-review-实跑不采信自报)）+ 回退探针与引擎级最小复现。**不采信自报**。
+
+### 9.1 首轮修复项逐条复核结论
+
+| # | 复核结论 | 关键证据 |
+|---|---|---|
+| R-1 | ✅ 属实 | `SessionPage.tsx:20-30` 9 参逐参对照 `NewSessionDialog.tsx:273-284` 实传完全一致，mutation 映射正确；`SessionPage.test.tsx` 2 例有区分力（回退探针：`modeId/modelId` 互换即红） |
+| R-2 | ✅ 属实 | `npm run typecheck` exit=0；反证探针（换回旧 `workflow.spec.ts`）exit=2 恰 3×TS18047，修复真实 |
+| R-3 | ⚠️ 部分属实 | 断言改 `requests===undefined` + `limits` 精确值、2 passed；三方口径一致；**但 `aspire/AgentGear.AppHost/AppHost.cs:160` 注释仍「requests=limits」**（→ U-3） |
+| R-4 | ✅ 属实 | prop/wrapper 9 参透传 + `WorktreeSidebarGroup.test.tsx` 全参断言，回退探针红 |
+| R-5 | ✅ 属实 | spec 文案与 `NewCloudHostDialog.tsx:327-329` 逐字一致、矛盾断言已删；P10-CH1 为强断言（`workspaceId/defaultSessionId` null、`sessions=0`、提示文案精确匹配），与 `cloud-host-service.ts:565-588` 行为对应 |
+| R-6 | ⚠️ 部分属实 | PRD v1.2 收窄完整（含验收项拆分 `:105-107`）；`updateModelSortOrder` 已接失效（`model.ts:105`）；**提案 §9 `:497` 仍写「立即失效」、§8.1 `:477` 声称有不存在的失效范围判定单测、`:394` 风险点与 `:453` 函数名 stale**（→ U-2） |
+| R-7 | ⚠️ 部分属实 | 成功路径 CAS 回写属实（`cloud-host-github-service.ts:357-367`）；**失败路径（`createSession` 抛错）不回写**，恰为契约声称要区分的场景（→ U-1） |
+| R-8 | ✅ 属实 | 锁内 `findById` 重读判重（`pr-event-handler.ts:161-166,194`）；并发用例 `Promise.all` 双投递断言 1×COMPLETE/1×DUPLICATE/0×HANDLER_FAILED，mock 共享 `lastEventId` 有区分力 |
+| R-9 | ⚠️ 主体属实但引入回归 | `transitionMutex` 覆盖 `transitionUnlocked` 全程含级联 save（`engine.ts:155-163`）；并发 complete 用例有区分力；双锁（`instanceMutex`/`transitionMutex`）顺序单向无静态死锁环；**但 hook 在锁内执行 + `close()` 同步触发兜底回调 → re-entrant 抛错回归**（→ N-1，🔴） |
+| R-10 | ✅ 属实 | `enabledProviders` `useMemo`（`ModelSection.tsx:211-218`）、effect 依赖 `[open, model?.id]`（`CustomModelDialog.tsx:59-73`）；回归用例以新数组字面量 rerender 复现，回退探针红 |
+| C-1~C-28 | ⚠️ 大部分收口 | C-2/C-3/C-5/C-6/C-9/C-10/C-12/C-14 等属实；**C-17/C-18 修复引入新缺陷**（→ N-3/N-2）；残留 8 项（→ U-3~U-6） |
+
+### 9.2 第二轮问题清单
+
+#### N-1（🔴，修复引入）R-9 锁内 hook 嵌套流转抛 `re-entrant`：重启 RUNNING 节点必误触发会话兜底链路，确定性失败并留死会话
+
+- **问题描述**：`engine.transition` 经 R-9 下沉 `transitionMutex` 后，**引擎 hook 在锁内同步执行**（`engine.ts` `apply` 内 `await this.hooks.onNode*`）。而 `orchestrator.handleSessionEnded` 兜底链路由 `sessionService.close()` **同步 await 触发**（`session.ts:565` `await this.sessionEndedCallback?.(id)`），且该回调按 `nodes.sessionId` **重读 DB**（`orchestrator.ts:258-266`）判断 `node.status === 'RUNNING'`。`restart` 事件合法来源含 `RUNNING`（`engine.ts:119` `restart: { from: ['RUNNING','REWORK','FAILED'] }`），其 hook `restartNodeSession` 在锁内 `close` 旧会话（`orchestrator.ts:235-240`）——此时外层转移**尚未 save**，DB 仍是转移前状态（`status='RUNNING'`、`sessionId`=旧会话），兜底逻辑必然误判「会话意外终止」，分两支：
+  - **A 支（DB `fallbackSent=true`）**：`handleSessionEnded` 调 `workflowEngine.transition(..., 'fail')`（`orchestrator.ts:267-270`）→ 同 `instanceId` 嵌套 `transitionMutex.runExclusive` → **抛 `KeyedMutex re-entrant lock detected`**（`keyed-mutex.ts:15-20` 非可重入）→ 整个 restart 失败；而旧会话在 close 中已被置 `ended`，新会话未拉起 → 节点卡死 RUNNING 配死会话。**触发场景恰是 restart 的主用例**：「会话卡住→发过一次兜底提醒→再卡住→人工重启」。
+  - **B 支（DB `fallbackSent=false`）**：兜底逻辑把**人为关闭**的旧会话当意外终止：置 `fallbackSent=true` 并 `instance.save()`（独立 findOne 文档，与外层转移 save 竞争，可能互覆/VersionError）、`sessionService.resume` **复活旧会话**并发送「系统提醒」兜底提示词（`orchestrator.ts:275` 之后）→ 同一节点出现幽灵会话。
+- **复现（引擎级最小复现，确定性）**：在 `engine.test.ts` 同型 mock 下注册 `onNodeRestart` hook 内嵌套 `workflowEngine.transition(同 instanceId, nodeId, 'fail')`（模拟 `handleSessionEnded` A 支），`transition('inst-1','n1','restart',{})`（节点 RUNNING）**必抛 `/re-entrant/`**（本轮已实证，1 passed）。真实链路可达性由上述 file:line 逐步确认。
+- **根因分析**：R-9 把锁下沉到 `engine.transition` 但 **hooks 仍在锁内执行**，而 hook→`sessionService.close`→`sessionEndedCallback` 是同步回调链，兜底逻辑又会**回环调用 `engine.transition`**；同时兜底逻辑按「DB 快照」判断，与「转移未持久化就 close 会话」的 hook 时序组合必然误判（`complete`/`completeRework` 分支已通过「先 save 再 onNodeDone」规避，`restart`/`resume` 分支未做同等处理）。修复 R-9 时未回归「hook 内是否还有流转入口」。
+- **修复方案**：① 消除锁内回环：hooks 移到锁外执行（`transitionUnlocked` 返回待执行 hook 队列、`runExclusive` 释放后逐一触发），或 `handleSessionEnded` 改为**延迟出队**（`setImmediate`/任务队列）在锁外再取锁流转，禁止同步嵌套；② 修正兜底误判时序：`restart`/`resume` hook 关闭旧会话前先持久化转移结果（对齐 `complete` 分支「先落库再关会话」注释口径），或 close 时带 `skipFallback`/`deliberate` 标记让 `handleSessionEnded` 直接短路；③ 补回归用例：restart（RUNNING+fallbackSent=true）不断言抛错且恰拉起一个新会话、restart（RUNNING+fallbackSent=false）不复活旧会话不发兜底提示词；④ 评估 `handleSessionEnded` 独立文档 `instance.save()` 与外层转移的互覆（一并用锁保护或改为字段级 `$set`）。
+- **验证结果**：❌ 第二轮实证（引擎级复现 + 链路 file:line 逐步确认）；待第三轮复验。
+
+#### N-2（🟠，修复引入且自报与代码不符）C-18 `dirtyRef` 保存成功不清除：保存后服务端权威值永不回同步，自报「保存成功清除 dirty」不实
+
+- **问题描述**：`McpDefaultSection.tsx` 新增 `dirtyRef` 防覆盖（`:67,72,89,125`），但 `handleSave`（`:96-108`）**全程没有** `dirtyRef.current = false`；同步 effect（`:73-80`）首行 `if (dirtyRef.current) return` → 保存成功后即使后台刷新带回服务端权威值也被跳过，本地表单永远停留在用户手改值；切换控制器（`controller.id` 变化）同样被 dirty 跳过，`ControllerConfigPage` 挂载无 `key` 不重挂载 → **脏值/旧 error 串台到另一控制器**。第八节 8.3 C-18 行自述「保存成功清除 dirty」与代码不符（051cabf 报告失真）。
+- **根因分析**：dirty 生命周期只有置位没有复位；保存成功路径漏接 `dirtyRef.current = false`（或 mutation 结果驱动的权威值回写）。
+- **修复方案**：① `handleSave` 成功后 `dirtyRef.current = false` 并以 mutation 返回值/`refetch` 结果同步表单；② 评估 `McpDefaultSection` 挂载加 `key={controller.id}` 或 `controller.id` 变化时强制重置 dirty/表单；③ 补用例「保存成功后服务端值变更可回同步」「切换控制器不携带脏值」；④ 返工自报须与代码一致（回填失真描述）。
+- **验证结果**：❌ 第二轮实证（`McpDefaultSection.tsx:96-108` 无复位）；待第三轮复验。
+
+#### N-3（🟠，修复引入）C-17 终态停轮询后 `pollStopped` 永不复位：点「重试/重新设置」进度对话框冻结不再刷新
+
+- **问题描述**：`GithubSetupProgressDialog.tsx` 新增 `pollStopped`（`:123,134,142,177`）在操作终态停掉 1.5s 轮询（符合 C-17 意图），但 `pollStopped` **只在 `[open]` 重置**（`:152-156`）；终态后点「重试」（`handleRetry` `:203-213`，仅单次 `refetch()`）或「重新设置」重发 setup，`pollInterval` 恒为 0 → **进度框冻结**，除非关闭重开对话框。修复把「持续轮询」问题改成了「重试后不轮询」问题。
+- **根因分析**：停轮询与重试/重发动作之间缺少状态恢复；`pollStopped` 生命周期与操作生命周期未对齐。
+- **修复方案**：① `handleRetry`/重发 setup 成功后 `setPollStopped(false)` 恢复轮询（或按操作状态派生 `pollInterval` 而非手动开关）；② 顺带落实 C-17 原始尾项：「重新创建」按钮语义与文案对齐（当前文案过度承诺，第二轮复核确认未改）；③ 补用例「终态→重试→进度恢复刷新」。
+- **验证结果**：❌ 第二轮实证；待第三轮复验。
+
+#### U-1（🟠，首轮 R-7 未闭环）失败路径不回写 `workspaceId`：恰是契约声称要区分的「默认会话创建失败」场景
+
+- **问题描述**：`cloud-host-github-service.ts` `runSessionStep` 的 CAS 回写位于 `createSession` 成功之后（`:357-367`）；`createSession` 抛错走 catch（`:383-395`）时 **`ensureWorkspace` 已创建的默认工作区不回写** → `hasDefaultWorkspace` 仍 `false`。而契约注释（`contracts/cloud-host.graphql:47-48`）明确该字段用于「区分『未创建工作区』与『默认会话创建失败』」——失败场景正是需要 `true` 的场景，R-7 修复只覆盖成功路径，语义失效在失败路径上原样保留。
+- **根因分析**：回写时机挂在会话创建成功之后，而非「默认工作区创建/绑定」这个语义事件之后。
+- **修复方案**：① `ensureWorkspace` 成功后立即 CAS 回写 `workspaceId`（成功失败路径共享）；② 补失败路径用例（mock `createSession` 抛错，断言 `workspaceId` 已回写、步骤状态 FAILED/SUCCEEDED-with-error 与现状一致）；③ 多 harness（`createSession=false` 不建工作区）分支口径在契约注释中注明。
+- **验证结果**：❌ 第二轮实证（`:357-367` 在 try 内、catch 无回写）；待第三轮复验。
+
+#### U-2（🟠，首轮 R-6 未闭环）提案收窄不完整：§9 验收项/§8.1/风险点仍与 v1.2 TTL 口径矛盾
+
+- **问题描述**：R-6 采用方案②「修订 PRD/提案如实收窄」，PRD 侧已完成（含验收项拆分 `20261022-...phase1.md:105-107`），但提案 `20261022-feat-cloud-container-optimization-phase1.md` 残留自相矛盾：① `:497` §9 验收项仍写「模型列表新增/启用/禁用/删除后**立即失效**」（未按用户级/global 拆分，与 v1.2 `:15` 直接矛盾）；② `:477` §8.1 声称单测覆盖「`invalidateAcpOptionsCache` 的失效范围判定（用户级/系统内置全局）」——该测试不存在且函数名 stale（实际 `invalidateAcpOptionsForUser/ForController`）；③ `:394` 风险点仍按「全局失效漏掉」旧口径书写；④ `:453` 目录注释 stale。收窄的目的是 spec 与实现一致，矛盾残留使收窄未完成。
+- **根因分析**：方案②回写只改了 PRD 与提案的「说明段」，未回归验收清单/测试清单/风险表的旧口径。
+- **修复方案**：提案 `:497` 按 v1.2 拆分口径（用户级立即失效 / global TTL 5 分钟+刷新）、`:477` 删除或改写不存在的失效范围判定单测描述并更正函数名、`:394`/`:453` 同步；改后全仓 grep「立即失效」「invalidateAcpOptionsCache」应零残留矛盾。
+- **验证结果**：❌ 第二轮实证（grep 复现 4 处）；待第三轮复验。
+
+#### U-3~U-6（🟡 残留，随本轮修复一并清理）
+
+| # | 残留项 | 位置 | 要求 |
+|---|---|---|---|
+| U-3 | 「requests=limits」stale 注释残留（R-3 尾巴） | `aspire/AgentGear.AppHost/AppHost.cs:160` | 改「仅 limits（不设 requests）」 |
+| U-4 | 测试精度/覆盖面残留：C-4 `pr-event-payload` 限长零测试；C-22 `contextLength` 断言 `Number.isInteger` 放行 0/负；C-24 `workflow.spec.ts` 6 处 `skip(!PR_CALLBACK_TOKEN)` 无 CI 哨兵；C-25 E2E-30 reason 仍 allowlist、`session.test.ts:1343` 固定 200ms sleep；C-27 要求的「软删除返回 null」「dependsOn 返回值」两断言未补；C-1 合并注释言过其实（index-only 残留行仍进 merged）；C-11 专用错误文案未做 | `tests/`、`pr-event-payload.ts`、`pr-handler-registry.ts` | 逐项收口或在报告中如实降级说明 |
+| U-5 | 测试不设防/文档失真：C-15 文案断言弱（探针回退不红，`NewSessionDialog.test.tsx:304`）；`apps/agent-web/AGENTS.md` 称「每个调用点保留映射单测」但 `Sidebar` 调用点无映射单测；`SessionPage.test` 对 `existingWorktreePath→enableWorktree=false` 覆写钉得不死 | `tests`、`apps/agent-web/AGENTS.md` | 强化断言或修正文档口径 |
+| U-6 | 文档端口 stale（C-26 尾巴）：代码默认已统一 10001/35273，但 `tests/api/AGENTS.md:73`（及 `:37/:44`）、`tests/e2e/AGENTS.md:69` 仍写 4001/33237 | `tests/*/AGENTS.md` | 与代码默认对齐 |
+
+### 9.3 修复总览（第二轮回填）
+
+| # | 问题 | 级别 | 性质 | 状态 | 修复 commit |
+|---|---|---|---|---|---|
+| N-1 | R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 兜底误触发 | 🔴 | 修复引入 | ❌ 待修复 | — |
+| N-2 | C-18 dirtyRef 保存成功不清除（自报与代码不符） | 🟠 | 修复引入 | ❌ 待修复 | — |
+| N-3 | C-17 pollStopped 后重试/重发进度框冻结 | 🟠 | 修复引入 | ❌ 待修复 | — |
+| U-1 | R-7 失败路径不回写 workspaceId | 🟠 | 首轮未闭环 | ❌ 待修复 | — |
+| U-2 | R-6 提案 §9/§8.1/风险点残留矛盾 | 🟠 | 首轮未闭环 | ❌ 待修复 | — |
+| U-3~U-6 | 🟡 残留 8 项（见 9.2 表） | 🟡 | 首轮未闭环/新发现 | ❌ 待清理 | — |
+
+### 9.4 第二轮判定
+
+- **结论：❌ REJECT（第二轮打回）**。命中判定红线：1 × 🔴（N-1）+ 4 × 🟠（N-2/N-3/U-1/U-2）。
+- 已闭环确认：R-1/R-2/R-4/R-5/R-8/R-10 全闭环，R-3/R-6/R-7/R-9 主体修复属实但有尾巴/回归。
+- **下轮要求**：① 修复 N-1~N-3、闭环 U-1/U-2、清理 U-3~U-6；② **以 Aspire 全栈实跑 `tests/api` 全量与 `tests/e2e` 并提交结果证据**（两轮均未执行，第三轮必须随修复交付）；③ 返工自报须与代码逐条一致（N-2 已发现自报失真，下轮将抽查自报与代码的一致性）；④ 修复 N-1 时补「restart/兜底」回归用例并评估 hook 出锁的时序影响面。
+
+## 十、经验总结（第二轮追加）
+
+- **锁下沉到领域层时必须审计「锁内回调是否回环取锁」**：R-9 把互斥下沉 `engine.transition` 是对的，但 hooks 在锁内执行且 `sessionService.close` 同步触发兜底回调、兜底回调又回环 `transition`——非可重入锁把隐蔽竞态变成确定性抛错。任何「锁内 await 外部回调」的结构都要假设回调会回环。
+- **「先落库再关会话」的时序约定要覆盖所有关会话路径**：`complete` 分支为规避兜底误判特意先 save 再 hook，`restart`/`resume` 分支未对齐，同一陷阱踩第二次（N-1）。
+- **防护性修复要连状态生命周期一起补**：C-17 停轮询、C-18 dirty 保护都只做了「置位」没做「复位」，把一类缺陷换成另一类（N-3/N-2）。
+- **修复覆盖要包含失败路径**：R-7 只在成功路径回写，恰好漏掉字段语义所服务的失败场景（U-1）。
+- **spec 收窄要一次改完全口径**：R-6 只改说明段不改验收/测试/风险清单，矛盾残留使收窄不成立（U-2）。
+- **返工自报须可抽查**：本轮发现自报「保存成功清除 dirty」与代码不符（N-2）；验收已将「自报↔代码一致性」纳入抽查项。
