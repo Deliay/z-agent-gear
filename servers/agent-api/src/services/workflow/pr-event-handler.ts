@@ -268,6 +268,7 @@ export async function handlePullRequestEvent(
       results.push({
         workflowInstanceId: instanceId,
         nodeId: handler.nodeId,
+        registeredNodeId: handler.nodeId,
         reason: 'HANDLER_FAILED',
       });
     }

@@ -593,7 +593,7 @@ describe('WorkflowInstanceService.rejectNode', () => {
     });
   });
 
-  it('AI 节点打回保持既有行为（GraphQL 兼容）', async () => {
+  it('人工打回沿用既有类型无关语义（AI 节点可被打回，见裁决 17）', async () => {
     const instance = {
       _id: oid('inst-1'),
       nodes: [{ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', status: 'RUNNING', dependsOn: ['n1'] }],

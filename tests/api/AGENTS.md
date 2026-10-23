@@ -358,7 +358,7 @@ npm test
 | T-PR13 归档/完成注销 | 归档后 `pullRequestLinks=[]`、事件 `NO_HANDLER`；工作流完成后关联注销、事件不再驱动 |
 | T-PR14 github-pr 注入 | 未勾选无该段；勾选后出现且仅一次；全部取消后移除 |
 | T-PR15 三层透传 | 模板/配置/实例/`updateWorkflowNode` 字段一致；AI 节点传 true 被拒 |
-| T-PR16 READY 打回 | 首节点 READY 直接 `rejectNode` 成功（先 start 再 reject） |
+| T-PR16 READY 打回 | rejected 事件驱动 READY 人类节点打回（内部走 start→reject 路径） |
 | T-PR17 多实例 | 同一 PR 关联两个实例 → `results` 两条且各自完成 |
 | T-PR18 标识归一 | URL / `owner/repo#n` / `owner/repo/pull/n` 归一为同一关联 |
 

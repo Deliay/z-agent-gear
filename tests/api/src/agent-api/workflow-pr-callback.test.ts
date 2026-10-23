@@ -812,6 +812,20 @@ describe.skipIf(!EVENT_TOKEN)('工作流 PR 联动（T-PR4~T-PR18）', () => {
     expect(nodeOf(inst, 'review').status).toBe('INITIALIZING');
   }, 30_000);
 
+  it('T-PR10b 人工 rejectNode 可打回 AI 节点（裁决 17 锁定）', async () => {
+    const ctx = await makeCtx(baseGraph(), 'tpr10b');
+    await completeHuman(ctx, 'input', '人工打回 AI');
+    const exec = await waitForStatus(ctx, 'exec', 'RUNNING');
+
+    const data = await gql<{ rejectNode: any }>(
+      REJECT_NODE,
+      { instanceId: ctx.instanceId, nodeId: exec.id, reason: '人工打回 AI 保持既有语义' },
+      token,
+    );
+    expect(data.rejectNode.status).toBe('REJECT');
+    expect(data.rejectNode.rejectInfo.reason).toBe('人工打回 AI 保持既有语义');
+  }, 30_000);
+
   it('T-PR11 中间隔一个 HUMAN → HUMAN_NODE_IN_BETWEEN', async () => {
     const nodes: NodeSpec[] = [
       human('input', '需求输入', []),

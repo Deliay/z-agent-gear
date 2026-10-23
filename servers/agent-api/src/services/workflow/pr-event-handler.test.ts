@@ -191,6 +191,7 @@ describe('handlePullRequestEvent', () => {
     const result = await handlePullRequestEvent(event('approved'));
     expect(result.handled).toBe(false);
     expect(result.results[0].reason).toBe('HANDLER_FAILED');
+    expect(result.results[0].registeredNodeId).toBe('n1');
     expect(warn).toHaveBeenCalled();
   });
 

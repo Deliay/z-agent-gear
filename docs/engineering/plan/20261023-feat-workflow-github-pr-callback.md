@@ -101,7 +101,7 @@ flowchart TD
 1. **工作流完成判定（D2）**：`workflow-instance` 新增 `finishedAt: Date | null`。`engine.transition()` 在 `apply()` + `refreshCurrentNodeNames()` 之后判定 `nodes.every(n => n.status === 'DONE')`，为真且 `finishedAt == null` 时就地赋值（`instance.finishedAt = new Date()`）并随同一份 `instance.save()` 落库，保存成功后调用新增 hook `onWorkflowFinished(instance)` 一次。判定放在**外层 transition**（`apply` 的递归级联不触发），保证一次完成只触发一次；迁移前已完成的历史实例 `finishedAt` 为空，由事件处理器的「全节点 DONE」兜底识别并顺带补写。
    - `finishedAt` 本期**不**透出 GraphQL；对外的可观测结果是 `pullRequestLinks` 已清空（注销生效）与 `handled=false`。
 
-2. **`rejectNode` 支持 READY（D3）**：`workflowInstanceService.rejectNode` 在节点 `status === 'READY'` 时先 `transition(start)` 再 `transition(reject)`；`RUNNING`/`REWORK` 行为不变。同时补 `node.type !== 'HUMAN'` 拒绝（与 `completeHumanNode` 对称），避免事件驱动误打回 AI 节点。此为对现有 UI 打回入口的顺带修复，需在 API 测试补齐两条断言（READY 打回成功、AI 节点拒绝）。
+2. **`rejectNode` 支持 READY（D3）**：`workflowInstanceService.rejectNode` 在节点 `status === 'READY'` 时先 `transition(start)` 再 `transition(reject)`；`RUNNING`/`REWORK` 行为不变。GraphQL 人工打回入口不增加 `type === 'HUMAN'` 白名单（原因见补充裁决 17）；回调事件驱动路径只对 `resolveCurrentHumanNode` 解析出的 HUMAN 调用，不会误打回 AI 节点。API 断言：READY 打回成功（T-PR16）、事件驱动当前 AI 返回 `CURRENT_NODE_NOT_HUMAN`（T-PR10）。
 
 3. **MCP 工具入参与信息可见性（D5）**：
    - `linkPullRequest` 入参：`pullRequestId` **必填**；`workflowId`、`nodeId` 可选。缺省时取会话作用域（`scope.instanceId` / `scope.nodeId`）；显式提供时必须与作用域一致，否则 `INVALID_PARAMS`。
@@ -148,6 +148,7 @@ flowchart TD
 15. **代码归属与生命周期注销**：`prHandlerRegistry.unregisterByInstance(instanceId, reason)` 在 `setArchived(true)`、`deleteInstance()`、引擎 `onWorkflowFinished` 三处调用；`setArchived(false)`（取消归档）**不**恢复关联（PRD 明确归档即解除）。注册表启动时 `rebuild()` 全量装载并构建内存索引；运行期不依赖索引的强一致（每次查询以 Mongo 为准，索引仅作加速）；查询到实例已归档/删除/完成时顺手注销（惰性清理）。
 
 16. **`pullRequestId` 归一化**：接受 `https://github.com/<owner>/<repo>/pull/<n>`、`<owner>/<repo>#<n>`、`<owner>/<repo>/pull/<n>`（大小写不敏感，去除首尾空白与末尾 `/`）；归一为 `<owner>/<repo>#<n>`（owner/repo 保留原始大小写、比较时小写归一），`prUrl` 统一重建为 `https://github.com/<owner>/<repo>/pull/<n>`；无法归一 → `INVALID_PARAMS`。
+17. **人工打回节点类型（返工补充裁决，替代原 D3 的 HUMAN 白名单）**：`rejectNode` 的 GraphQL 人工入口保持既有类型无关语义。原因：既有 `tests/api/workflow.test.ts` A13/A24/A25 与 `tests/api/agent-api/worktree.test.ts` A10 均通过 GraphQL 打回 AI 节点来覆盖「REJECT → 上游 REWORK → 会话语义」；若在服务层加 HUMAN 白名单，会破坏这些回归且无法在不重写链路的情况下保留同等级覆盖。事件驱动路径的安全性由 `resolveCurrentHumanNode` 保证：当前候选唯一且必须为 HUMAN 才会调用 `rejectNode`，AI 当前节点返回 `CURRENT_NODE_NOT_HUMAN`（T-PR10），不会误打回 AI。READY 支持保留（先 start 再 reject）。API 锁定：A13（人工打回 AI 成功）+ T-PR10（事件路径拒绝 AI）。
 
 ---
 
