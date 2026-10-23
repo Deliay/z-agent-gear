@@ -165,6 +165,10 @@ export class ModelService {
       isEnabled: model.isEnabled as boolean,
       sortOrder: model.sortOrder as number,
       scope: normalizeScope(model.scope),
+      contextLength:
+        typeof model.contextLength === 'number' && Number.isFinite(model.contextLength)
+          ? model.contextLength
+          : null,
       pricing: model.pricing
         ? {
             inputPerMillion: Number((model.pricing as Record<string, unknown>).inputPerMillion ?? 0) / 100,

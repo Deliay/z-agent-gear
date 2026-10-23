@@ -297,12 +297,23 @@ function toApiError(
 function toModelEntry(model: {
   name: string;
   createdAt?: Date;
-}): { id: string; object: string; owned_by: string; created: number } {
+  contextLength?: number | null;
+}): {
+  id: string;
+  object: string;
+  owned_by: string;
+  created: number;
+  context_length?: number;
+} {
   return {
     id: model.name,
     object: 'model',
     owned_by: 'agent-gear',
     created: Math.floor(new Date(model.createdAt ?? Date.now()).getTime() / 1000),
+    // 未设置（null/undefined）时省略字段，下游视为「未知」
+    ...(typeof model.contextLength === 'number' && model.contextLength >= 1
+      ? { context_length: model.contextLength }
+      : {}),
   };
 }
 
@@ -369,7 +380,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         if (seen.has(model.name)) continue;
         seen.add(model.name);
         if (!selectable(model)) continue;
-        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date; contextLength?: number | null }));
       }
       res.json({ object: 'list', data });
       return;
@@ -383,7 +394,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
-      .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date }));
+      .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date; contextLength?: number | null }));
     res.json({ object: 'list', data });
   });
 

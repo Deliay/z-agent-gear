@@ -12,6 +12,8 @@ export const modelTypeDefs = `#graphql
     scope: ConfigScope!
     # 费用中心模型定价（便捷编辑视图）；价目真相在 productprices。
     pricing: ModelPricing
+    # 最长上下文大小（token）；null = 未设置（与 llm.graphql 同步演进）
+    contextLength: Int
     createdAt: String!
     updatedAt: String!
   }
@@ -34,6 +36,8 @@ export const modelTypeDefs = `#graphql
   input CustomModelInput {
     providerId: ID!
     name: String!
+    # 可选：新增时即设置最长上下文（token，正整数）；缺省 = 未设置
+    contextLength: Int
   }
 
   # 上游模型清单条目（导入弹窗数据源）
@@ -68,5 +72,7 @@ export const modelTypeDefs = `#graphql
     deleteGlobalModel(id: ID!): Model!
     toggleGlobalModel(id: ID!): Model!
     updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
+    # 更新模型最长上下文（token）；传 null 表示清空（回到「未设置」）
+    updateModelContextLength(modelId: ID!, contextLength: Int): Model!
   }
 `;

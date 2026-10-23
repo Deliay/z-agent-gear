@@ -28,6 +28,7 @@ const cloudHost = {
   status: 'RUNNING' as const,
   deletedAt: null,
   defaultWorkspace: '/root/workspace',
+  hasDefaultWorkspace: true,
 }
 
 const accounts: GitHubAccountData[] = [
@@ -132,7 +133,7 @@ function mockQueries(
   })
 }
 
-function renderDialog(overrides: Partial<Pick<CloudHostData, 'name' | 'status' | 'deletedAt' | 'defaultWorkspace'>> = {}) {
+function renderDialog(overrides: Partial<Pick<CloudHostData, 'name' | 'status' | 'deletedAt' | 'defaultWorkspace' | 'hasDefaultWorkspace'>> = {}) {
   return render(
     <GithubProjectSetupDialog
       open
@@ -211,6 +212,25 @@ describe('GithubProjectSetupDialog', () => {
 
     fireEvent.change(input, { target: { value: '/root/workspace/custom' } })
     expect(input).toHaveValue('/root/workspace/custom')
+  })
+
+  it('无默认工作区时不预填 /root/workspace，且空值不可提交', async () => {
+    renderDialog({ hasDefaultWorkspace: false })
+
+    const input = screen.getByLabelText('前缀地址')
+    await waitFor(() => expect(input).toHaveValue(''))
+    expect(input).toHaveAttribute('placeholder', '例如：/workspace')
+    expect(screen.queryByDisplayValue('/root/workspace')).not.toBeInTheDocument()
+
+    await selectRepo()
+    expect(screen.getByText('请输入前缀地址')).toBeInTheDocument()
+    expect(submitButton()).toBeDisabled()
+  })
+
+  it('有默认工作区时仍预填 cloudHost.defaultWorkspace', async () => {
+    renderDialog({ hasDefaultWorkspace: true })
+
+    await waitFor(() => expect(screen.getByLabelText('前缀地址')).toHaveValue('/root/workspace'))
   })
 
   it('T-WEB-G1: 选择仓库后展示最终 clone 地址', async () => {

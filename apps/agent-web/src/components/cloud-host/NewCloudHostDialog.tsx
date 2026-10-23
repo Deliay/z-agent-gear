@@ -78,6 +78,7 @@ export default function NewCloudHostDialog({
   const [name, setName] = useState('')
   const [selectedHarnesses, setSelectedHarnesses] = useState<HarnessType[]>([])
   const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>([])
+  const [createDefaultWorkspace, setCreateDefaultWorkspace] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [createCloudHost] = useMutation<CreateCloudHostMutation>(CREATE_CLOUD_HOST)
@@ -96,6 +97,7 @@ export default function NewCloudHostDialog({
       setName('')
       setSelectedHarnesses([])
       setSelectedWorkloadIds([])
+      setCreateDefaultWorkspace(false)
       setSubmitting(false)
       setError(null)
     }
@@ -152,6 +154,8 @@ export default function NewCloudHostDialog({
           input: {
             name: trimmedName,
             harnessTypes: selectedHarnesses,
+            // 语义清晰：未勾选也显式传 false（服务端缺省同为 false）
+            createDefaultWorkspace,
             // 未勾选时不传 workloadIds，保持旧报文形状
             ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
           },
@@ -220,12 +224,35 @@ export default function NewCloudHostDialog({
             {harnessError && supportedHarnesses.length > 0 && (
               <p className="mt-1 text-xs text-destructive">{harnessError}</p>
             )}
-            {selectedHarnesses.length === 1 && (
+            {/* 自动建会话依赖默认工作区：未勾选时不得提示「将自动创建会话」 */}
+            {selectedHarnesses.length === 1 && createDefaultWorkspace && (
               <p className="mt-1 text-xs text-muted-foreground">将自动创建会话</p>
             )}
             {selectedHarnesses.length > 1 && (
               <p className="mt-1 text-xs text-muted-foreground">不自动创建会话</p>
             )}
+          </div>
+
+          <div className="min-w-0 rounded-md border border-border p-3">
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                aria-label="创建默认工作区"
+                checked={createDefaultWorkspace}
+                onChange={(event) => setCreateDefaultWorkspace(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm text-foreground">创建默认工作区</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {createDefaultWorkspace
+                    ? selectedHarnesses.length === 1
+                      ? '将创建默认工作区并自动创建会话'
+                      : '将创建默认工作区'
+                    : '不会创建工作区，就绪后需先创建或绑定工作区'}
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="min-w-0">

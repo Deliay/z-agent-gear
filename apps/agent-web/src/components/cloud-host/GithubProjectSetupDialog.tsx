@@ -31,7 +31,7 @@ import { Badge } from '@/components/ui/badge'
 interface GithubProjectSetupDialogProps {
   open: boolean
   controllerId: string
-  cloudHost: Pick<CloudHostData, 'id' | 'name' | 'status' | 'deletedAt' | 'defaultWorkspace'>
+  cloudHost: Pick<CloudHostData, 'id' | 'name' | 'status' | 'deletedAt' | 'defaultWorkspace' | 'hasDefaultWorkspace'>
   onClose: () => void
 }
 
@@ -114,7 +114,11 @@ export default function GithubProjectSetupDialog({
     if (!open) return
     setAccountId('')
     setRepoFullName('')
-    setTargetPath(cloudHost.defaultWorkspace ?? '/root/workspace')
+    setTargetPath(
+      cloudHost.hasDefaultWorkspace === false
+        ? ''
+        : cloudHost.defaultWorkspace ?? '/root/workspace',
+    )
     setSelectedWorkloadIds([])
     setSubmitting(false)
     setError(null)
@@ -333,7 +337,7 @@ export default function GithubProjectSetupDialog({
               aria-label="前缀地址"
               value={targetPath}
               onChange={(event) => setTargetPath(event.target.value)}
-              placeholder="/root/workspace"
+              placeholder="例如：/workspace"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <p className="mt-1 break-words text-xs text-muted-foreground">

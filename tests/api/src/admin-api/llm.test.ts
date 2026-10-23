@@ -17,7 +17,7 @@ const MODELS = `
   query AdminModels {
     adminModels {
       id providerId provider { id name scope }
-      name isCustom isEnabled sortOrder scope createdAt updatedAt
+      name isCustom isEnabled sortOrder scope contextLength createdAt updatedAt
     }
   }
 `;
@@ -59,7 +59,17 @@ const BATCH_DELETE = `mutation($ids: [ID!]!) { batchDeleteGlobalProviders(ids: $
 
 const CREATE_CUSTOM_MODEL = `
   mutation CreateGlobalCustomModel($input: CustomModelInput!) {
-    createGlobalCustomModel(input: $input) { id providerId name isCustom isEnabled sortOrder scope }
+    createGlobalCustomModel(input: $input) {
+      id providerId name isCustom isEnabled sortOrder scope contextLength
+    }
+  }
+`;
+
+const UPDATE_MODEL_CONTEXT = `
+  mutation UpdateModelContextLength($modelId: ID!, $contextLength: Int) {
+    updateModelContextLength(modelId: $modelId, contextLength: $contextLength) {
+      id name contextLength
+    }
   }
 `;
 
@@ -744,6 +754,94 @@ describe('Admin Global LLM API', () => {
       }
     },
   );
+
+  it('T-CL-API1: createGlobalCustomModel 持久化正整数 contextLength，非法值被拒', async () => {
+    const stamp = Date.now();
+    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+      input: {
+        name: `ctx-provider-${stamp}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, token);
+    const providerId = created.data!.createGlobalProvider.id;
+
+    try {
+      const model = await adminGql<{
+        createGlobalCustomModel: { id: string; contextLength: number | null };
+      }>(CREATE_CUSTOM_MODEL, {
+        input: { providerId, name: `ctx-model-${stamp}`, contextLength: 128000 },
+      }, token);
+      expect(model.errors).toBeUndefined();
+      expect(model.data!.createGlobalCustomModel.contextLength).toBe(128000);
+
+      const list = await adminGql<{ adminModels: Array<{ id: string; contextLength: number | null }> }>(
+        MODELS, undefined, token,
+      );
+      const stored = list.data!.adminModels.find(
+        (item) => item.id === model.data!.createGlobalCustomModel.id,
+      );
+      expect(stored?.contextLength).toBe(128000);
+
+      // 0 / 负数 / 小数 均被服务端或 GraphQL Int 拒绝
+      for (const [index, value] of [0, -1, 1.5].entries()) {
+        const rejected = await adminGql(CREATE_CUSTOM_MODEL, {
+          input: { providerId, name: `ctx-invalid-${stamp}-${index}`, contextLength: value },
+        }, token);
+        expect(rejected.errors, `contextLength=${value} 应被拒绝`).toBeDefined();
+        const message = rejected.errors?.map((error) => error.message).join('\n') ?? '';
+        expect(message).toMatch(/positive integer|Int cannot represent/);
+      }
+    } finally {
+      await adminGql(DELETE_PROVIDER, { id: providerId }, token);
+    }
+  });
+
+  it('T-CL-API2: updateModelContextLength 可修改与清空，adminModels 回读一致', async () => {
+    const stamp = Date.now();
+    const created = await adminGql<{ createGlobalProvider: { id: string } }>(CREATE_PROVIDER, {
+      input: {
+        name: `ctx-update-provider-${stamp}`,
+        type: 'OpenAI',
+        endpoint: `http://127.0.0.1:${mock.port}/v1`,
+        credentialType: 'api_key',
+        credentialValue: 'sk-test-fake-key',
+      },
+    }, token);
+    const providerId = created.data!.createGlobalProvider.id;
+
+    try {
+      const model = await adminGql<{ createGlobalCustomModel: { id: string } }>(CREATE_CUSTOM_MODEL, {
+        input: { providerId, name: `ctx-update-model-${stamp}`, contextLength: 64000 },
+      }, token);
+      const modelId = model.data!.createGlobalCustomModel.id;
+
+      const updated = await adminGql<{
+        updateModelContextLength: { contextLength: number | null };
+      }>(UPDATE_MODEL_CONTEXT, { modelId, contextLength: 200000 }, token);
+      expect(updated.errors).toBeUndefined();
+      expect(updated.data!.updateModelContextLength.contextLength).toBe(200000);
+
+      const cleared = await adminGql<{
+        updateModelContextLength: { contextLength: number | null };
+      }>(UPDATE_MODEL_CONTEXT, { modelId, contextLength: null }, token);
+      expect(cleared.errors).toBeUndefined();
+      expect(cleared.data!.updateModelContextLength.contextLength).toBeNull();
+
+      const list = await adminGql<{ adminModels: Array<{ id: string; contextLength: number | null }> }>(
+        MODELS, undefined, token,
+      );
+      expect(list.data!.adminModels.find((item) => item.id === modelId)?.contextLength).toBeNull();
+
+      const invalid = await adminGql(UPDATE_MODEL_CONTEXT, { modelId, contextLength: 0 }, token);
+      expect(invalid.errors, 'update contextLength=0 应被拒绝').toBeDefined();
+      expect(invalid.errors?.[0].message).toContain('contextLength must be a positive integer');
+    } finally {
+      await adminGql(DELETE_PROVIDER, { id: providerId }, token);
+    }
+  });
 
   it('scope isolation: admin never sees user-scope providers/models (T-SC5 反向)', async () => {
     const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';

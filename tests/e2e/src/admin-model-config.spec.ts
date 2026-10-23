@@ -289,6 +289,63 @@ test.describe('Admin Model Config E2E', () => {
     }
   });
 
+  test('E2E-3: 新增/编辑/清空模型最长上下文并拦截非法值', async ({ page }) => {
+    const token = await adminLoginApi(page);
+    await cleanupProviders(page, token);
+
+    const name = `${PROVIDER_PREFIX}ctx-${Date.now()}`;
+    const customName = `ctx-${Date.now()}`;
+    try {
+      await createProviderViaApi(page, token, name, `http://127.0.0.1:${mock.port}/v1`);
+
+      await adminLoginViaUI(page);
+      const modelSection = page.locator('section').filter({
+        has: page.getByRole('heading', { name: '可用模型' }),
+      });
+
+      // 新增时设置上下文
+      await page.getByRole('button', { name: '自定义模型' }).click();
+      let dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+      await dialog.locator('#custom-model-name').fill(customName);
+      await dialog.locator('#custom-model-context-length').fill('128000');
+      await dialog.getByRole('button', { name: '保存' }).click();
+      await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+      await modelSection.getByRole('button', { name: new RegExp(name) }).click();
+      const row = modelSection
+        .locator('div.flex.items-center.gap-3.rounded-lg.border')
+        .filter({ hasText: customName });
+      await expect(row.getByText('最长上下文：128,000 tokens')).toBeVisible();
+
+      // 编辑修改
+      await row.getByLabel('编辑模型').click();
+      dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: '编辑模型' })).toBeVisible();
+      await expect(dialog.getByText(customName, { exact: true })).toBeVisible();
+      await dialog.locator('#custom-model-context-length').fill('200000');
+      await dialog.getByRole('button', { name: '保存' }).click();
+      await expect(dialog).not.toBeVisible({ timeout: 10000 });
+      await expect(row.getByText('最长上下文：200,000 tokens')).toBeVisible();
+
+      // 非法值前端拦截
+      await row.getByLabel('编辑模型').click();
+      dialog = page.getByRole('dialog');
+      await dialog.locator('#custom-model-context-length').fill('0');
+      await expect(dialog.getByText('请输入正整数')).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
+
+      // 清空 → 未设置
+      await dialog.locator('#custom-model-context-length').fill('');
+      await expect(dialog.getByRole('button', { name: '保存' })).toBeEnabled();
+      await dialog.getByRole('button', { name: '保存' }).click();
+      await expect(dialog).not.toBeVisible({ timeout: 10000 });
+      await expect(row.getByText('最长上下文：未设置')).toBeVisible();
+    } finally {
+      await cleanupProviders(page, token);
+    }
+  });
+
   test('should block duplicate custom model names (T-E26)', async ({ page }) => {
     const token = await adminLoginApi(page);
     await cleanupProviders(page, token);

@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import mongoose from 'mongoose';
 import { ADMIN_WEB_URL, adminGqlRequest, adminLoginApi, adminLoginViaUI } from './helpers.js';
+import { InMemoryK8sClient } from '../../../servers/cloud-controller/src/services/k8s-client';
+import { K8sJobManager } from '../../../servers/cloud-controller/src/services/k8s-job-manager';
 
 // 计划用例覆盖说明（Phase 8）：
 // - T-E1 启动 idle 容器、T-E3 强制销毁：本文件 UI 覆盖。
@@ -501,6 +503,25 @@ test.describe('Admin Cloud Container E2E', () => {
       await db!.collection('cloudworkloadlogs').deleteMany({ containerId });
       await destroyViaApi(page, token, container.id);
     }
+  });
+
+  // E2E-4：云电脑 Job 模板资源约束。K8S_ENABLED=false 时无真实 Job 可读，
+  // 复用 cloud-controller 的 manifest 构造器断言（与运行时同一份代码）。
+  test('E2E-4: 云电脑 Job requests/limits 均含 ephemeral-storage 10Gi', async () => {
+    const manager = new K8sJobManager(new InMemoryK8sClient(), {
+      namespace: 'zag-cloud',
+      image: 'worker:e2e',
+      runtimeClassName: 'sysbox-runc',
+      publicWsEndpoint: 'cloud.example.com:4003',
+    });
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-e2e',
+      containerId: 'container-e2e',
+      token: 'container-e2e.secret',
+    });
+    const resources = manifest.spec.template.spec.containers[0]!.resources;
+    expect(resources.requests['ephemeral-storage']).toBe('10Gi');
+    expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 
   test('T-E20: container list shows the must-failure exit reason (direct Mongo)', async ({ page }) => {

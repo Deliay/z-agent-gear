@@ -245,6 +245,17 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                             : ''}
                         </span>
                         {cloudHostRunning
+                          && cloudHost.hasDefaultWorkspace === false
+                          && controllerWorkspaces.length === 0 && (
+                          <span
+                            className="truncate text-xs text-muted-foreground"
+                            data-testid="cloud-host-no-workspace-hint"
+                          >
+                            未创建默认工作区，请先创建或绑定工作区
+                          </span>
+                        )}
+                        {cloudHostRunning
+                          && cloudHost.hasDefaultWorkspace !== false
                           && cloudHost.harnessTypes.length === 1
                           && !cloudHost.defaultSessionId && (
                             <span
@@ -346,6 +357,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                             type="button"
                             className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                             title="新建会话"
+                            aria-label="新建会话"
                             onClick={() => setShowNewDialog({ controllerId: controller.id })}
                           >
                             <Plus className="size-3" />
@@ -386,15 +398,28 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                       emptyMessage="无工作区"
                       actions={
                         cloudHostRunning ? (
-                          <button
-                            type="button"
-                            aria-label="Github 项目设置"
-                            title="Github 项目设置"
-                            onClick={() => setShowGithubSetup({ controllerId: controller.id })}
-                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                          >
-                            <GitBranch className="size-3" />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              aria-label="Github 项目设置"
+                              title="Github 项目设置"
+                              onClick={() => setShowGithubSetup({ controllerId: controller.id })}
+                              className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <GitBranch className="size-3" />
+                            </button>
+                            {cloudHost?.hasDefaultWorkspace === false && (
+                              <button
+                                type="button"
+                                aria-label="新建工作区"
+                                title="新建工作区"
+                                onClick={() => navigate(`/settings?controllerId=${controller.id}`)}
+                                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                              >
+                                <Plus className="size-3" />
+                              </button>
+                            )}
+                          </>
                         ) : undefined
                       }
                     >

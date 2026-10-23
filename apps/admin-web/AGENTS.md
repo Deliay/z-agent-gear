@@ -42,3 +42,9 @@ npm run preview
 
 - [Common Rules](../../docs/engineering/common-rules.md)
 - [Frontend Rules](../../docs/engineering/frontend-rules.md)
+
+## 云容器优化二期（模型最长上下文）
+
+- 模型条目展示「最长上下文：N tokens / 未设置」并提供铅笔编辑入口（`aria-label=编辑模型`）。
+- `CustomModelDialog` 支持新增与编辑：编辑模式供应商/名称只读，仅可修改/清空「最长上下文大小（token）」；留空提交 `null` 表示未设置，非正整数前端提示「请输入正整数」，服务端为唯一事实源。
+- 新增 `UPDATE_MODEL_CONTEXT_LENGTH` mutation；`ADMIN_MODELS` 查询选择集包含 `contextLength`。

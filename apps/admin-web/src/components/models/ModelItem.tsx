@@ -1,6 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVerticalIcon, Trash2Icon } from 'lucide-react'
+import { GripVerticalIcon, PencilIcon, Trash2Icon } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import type { AdminModelData } from '@/graphql/types'
@@ -9,10 +9,11 @@ interface ModelItemProps {
   model: AdminModelData
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  onEdit: (model: AdminModelData) => void
   togglePending?: boolean
 }
 
-export default function ModelItem({ model, onToggle, onDelete, togglePending = false }: ModelItemProps) {
+export default function ModelItem({ model, onToggle, onDelete, onEdit, togglePending = false }: ModelItemProps) {
   const {
     attributes,
     listeners,
@@ -66,7 +67,22 @@ export default function ModelItem({ model, onToggle, onDelete, togglePending = f
             </span>
           )}
         </div>
+        <div className="mt-0.5 text-xs text-muted-foreground" data-testid="model-context-length">
+          最长上下文：{typeof model.contextLength === 'number'
+            ? `${model.contextLength.toLocaleString('en-US')} tokens`
+            : '未设置'}
+        </div>
       </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground hover:text-foreground"
+        onClick={() => onEdit(model)}
+        aria-label="编辑模型"
+        title="编辑模型"
+      >
+        <PencilIcon className="size-4" />
+      </Button>
       <Button
         variant="ghost"
         size="icon"

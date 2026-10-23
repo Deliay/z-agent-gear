@@ -105,12 +105,17 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('选择 1 个 Harness 时提示将自动创建会话并可提交', () => {
+  it('默认未勾选工作区时单 Harness 不提示自动创建会话，勾选后才提示', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '  云电脑 A  ' } });
     fireEvent.click(screen.getByLabelText('OpenCode'));
 
+    // 默认不建工作区：就绪后不会自动建会话，文案不得自相矛盾
+    expect(screen.queryByText('将自动创建会话')).not.toBeInTheDocument();
+    expect(screen.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('创建默认工作区'));
     expect(screen.getByText('将自动创建会话')).toBeInTheDocument();
     expect(submitButton()).not.toBeDisabled();
   });
@@ -125,7 +130,42 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
+      });
+    });
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'cloud-1' }));
+    });
+  });
+
+  it('T-AW-N1 默认不勾选创建默认工作区并提示不会创建工作区', () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    const checkbox = screen.getByLabelText('创建默认工作区');
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeInTheDocument();
+  });
+
+  it('T-AW-N2 勾选后提交 createDefaultWorkspace=true 并提示自动创建会话', async () => {
+    const onCreated = vi.fn();
+    render(<NewCloudHostDialog {...defaultProps} onCreated={onCreated} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(screen.getByLabelText('创建默认工作区'));
+
+    expect(screen.getByText('将创建默认工作区并自动创建会话')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: {
+          input: {
+            name: '云电脑 A',
+            harnessTypes: ['OPENCODE'],
+            createDefaultWorkspace: true,
+          },
+        },
       });
     });
     await waitFor(() => {
@@ -228,6 +268,7 @@ describe('NewCloudHostDialog', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
+            createDefaultWorkspace: false,
             workloadIds: ['wl-docker'],
           },
         },
@@ -244,7 +285,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
       });
     });
     expect(mockCreateCloudHost.mock.calls[0][0].variables.input).not.toHaveProperty('workloadIds');

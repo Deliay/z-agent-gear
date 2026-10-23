@@ -21,6 +21,7 @@ export interface MappedModel {
   isEnabled: boolean;
   sortOrder: number;
   scope: string;
+  contextLength: number | null;
   pricing: {
     inputPerMillion: number;
     cachedInputPerMillion: number;
@@ -47,6 +48,19 @@ function dedupeModelNames(models: string[]): string[] {
   return result;
 }
 
+/**
+ * 最长上下文统一校验出口：
+ * - `null/undefined` → `null`（未设置）
+ * - 其余必须是 `>= 1` 的整数（拒绝 0/负数/小数/字符串）
+ */
+export function assertContextLength(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error('contextLength must be a positive integer');
+  }
+  return value;
+}
+
 export class ModelService {
   async findAll() {
     const models = await Model.find({ scope: GLOBAL_SCOPE }).sort({ sortOrder: 1, createdAt: 1 }).lean();
@@ -61,7 +75,7 @@ export class ModelService {
     return models.map(this.mapModel.bind(this));
   }
 
-  async createCustom(input: { providerId: string; name: string }) {
+  async createCustom(input: { providerId: string; name: string; contextLength?: number | null }) {
     // 校验目标供应商存在且为全局 scope，防止把 global 模型挂到 user 供应商或悬空 providerId
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
@@ -71,6 +85,7 @@ export class ModelService {
     if (name.length === 0) {
       throw new Error('Model name is required');
     }
+    const contextLength = assertContextLength(input.contextLength);
     const provider = await Provider.findOne({ _id: input.providerId, scope: GLOBAL_SCOPE }).lean();
     if (!provider) {
       throw new Error('Provider not found');
@@ -91,6 +106,7 @@ export class ModelService {
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,
       scope: GLOBAL_SCOPE,
+      contextLength,
     });
 
     return this.mapModel(model.toObject());
@@ -251,6 +267,24 @@ export class ModelService {
     return this.mapModel(model.toObject());
   }
 
+  /**
+   * 更新全局模型的最长上下文：`null` 清空（回到未设置），否则必须是正整数。
+   * 模型不存在/非 global → `Model not found`。
+   */
+  async updateContextLength(id: string, contextLength: unknown) {
+    const value = assertContextLength(contextLength);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new Error('Model not found');
+    }
+    const model = await Model.findById(id);
+    if (!model || model.scope !== GLOBAL_SCOPE) {
+      throw new Error('Model not found');
+    }
+    model.contextLength = value;
+    await model.save();
+    return this.mapModel(model.toObject());
+  }
+
   async updateSortOrder(ids: string[]) {
     // 非法 ObjectId 直接剔除，避免 bulkWrite CastError（问题 27）
     const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
@@ -305,6 +339,10 @@ export class ModelService {
       isEnabled: model.isEnabled as boolean,
       sortOrder: model.sortOrder as number,
       scope: model.scope as string,
+      contextLength:
+        typeof model.contextLength === 'number' && Number.isFinite(model.contextLength)
+          ? model.contextLength
+          : null,
       pricing: model.pricing
         ? {
             inputPerMillion: Number((model.pricing as Record<string, unknown>).inputPerMillion ?? 0) / 100,

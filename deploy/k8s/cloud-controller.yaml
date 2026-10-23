@@ -105,6 +105,9 @@ spec:
               value: '90000'
             - name: WORKLOAD_LOG_MAX_BYTES
               value: '262144'
+            # 云电脑（harness）Job 临时存储上限（requests=limits，默认 10Gi）。
+            - name: JOB_EPHEMERAL_STORAGE
+              value: '10Gi'
             # 云电脑（harness）内部回调与模型 Key 撤销（可空；缺失时只告警不阻断容器生命周期）。
             # 按实际命名空间/Service 端口调整；示例假设 agent-api/admin-api 同命名空间且端口 8000/8002。
             - name: AGENT_API_URL

@@ -29,6 +29,7 @@ paths:
         - `account` Key：仅返回 `isEnabled && pricing.isBillable` 且定价完整的全局模型。
         - `cloud_host` Key：返回系统启用模型（`scope=global,isEnabled=true`）∪ 用户启用模型
           （`scope=user,isEnabled=true`，含未配置定价的自定义模型）。
+        - 每个模型对象可选携带 `context_length`（最长上下文，单位 token）；未设置时**不返回**该字段。
       security:
         - bearerAuth: []
       responses:
@@ -151,6 +152,10 @@ components:
           type: string
         created:
           type: integer
+        # 新增（可选）：模型最长上下文大小（token，>= 1）；未设置时不返回该字段
+        context_length:
+          type: integer
+          minimum: 1
     ChatMessage:
       type: object
       required: [role, content]

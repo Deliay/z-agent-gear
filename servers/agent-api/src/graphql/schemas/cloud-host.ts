@@ -34,6 +34,8 @@ export const cloudHostTypeDefs = `#graphql
     deletedAt: String
     # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
     defaultWorkspace: String!
+    # 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」
+    hasDefaultWorkspace: Boolean!
     # 当前正在 runtime 安装的工作负载名；null 表示空闲
     workloadInstalling: String
   }
@@ -109,6 +111,8 @@ export const cloudHostTypeDefs = `#graphql
     harnessTypes: [HarnessType!]!
     # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
     workloadIds: [ID!]
+    # 是否创建默认工作区（/root/workspace）；默认 false。不勾选时不创建工作区，就绪后不自动创建默认会话。
+    createDefaultWorkspace: Boolean = false
   }
 
   input InstallCloudHostWorkloadInput {
