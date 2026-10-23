@@ -15,7 +15,8 @@ export interface K8sResourceList {
 }
 
 export interface K8sResourceRequirements {
-  requests: K8sResourceList;
+  /** 不设置时由 K8s 处理（当前工作容器只声明 limits）。 */
+  requests?: K8sResourceList;
   limits: K8sResourceList;
 }
 

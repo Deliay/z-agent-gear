@@ -85,8 +85,8 @@ describe('K8sJobManager', () => {
     expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
     expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThan(0);
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toEqual({ cpu: '250m', memory: '1Gi' });
-    expect(resources.limits).toEqual({ cpu: '2', memory: '4Gi' });
+    expect(resources.requests).toBeUndefined();
+    expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi' });
   });
 
   it('T-K2: env injects token via ZAG_CONTROLLER_KEY and a token-free endpoint', () => {
