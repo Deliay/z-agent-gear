@@ -97,7 +97,7 @@ flowchart TD
 
 1. **`hasDefaultWorkspace` 展示字段（新增，最小扩展）**：`CloudHost` 增加 `hasDefaultWorkspace: Boolean!`，由 `mapCloudHost` 输出 `Boolean(host.workspaceId)`。仅用于前端提示与 Git 前缀默认值，不暴露 `workspaceId`，不改变既有字段语义。同步 agent-web 手写类型与 `HOME_OVERVIEW`/`GET_CONTROLLERS` 查询选择集。
 2. **Github 前缀默认值**：`GithubProjectSetupDialog` 当 `hasDefaultWorkspace === false` 时 `targetPath` 初始为空，placeholder 为「例如：/workspace」，提交前仍走既有绝对路径校验；为 true 时保持 `defaultWorkspace` 预填。`CloudHost.defaultWorkspace` 契约与 resolver 不改。
-3. **Sidebar 提示分流**：`RUNNING && hasDefaultWorkspace === false` → 展示「未创建默认工作区，请先创建或绑定工作区」并在展开的「工作区」分组 actions 中提供既有「Github 项目设置」入口 + 「新建工作区」跳转（`/settings?controllerId=...`）；`RUNNING && hasDefaultWorkspace && single harness && !defaultSessionId` → 保留原「默认会话创建失败，可手动创建会话」；多 Harness 不提示。无工作区优先于默认会话失败。
+3. **Sidebar 提示分流**：`RUNNING && hasDefaultWorkspace === false && controllerWorkspaces.length === 0` → 展示「未创建默认工作区，请先创建或绑定工作区」并在展开的「工作区」分组 actions 中提供既有「Github 项目设置」入口 + 「新建工作区」跳转（`/settings?controllerId=...`）；用户添加/绑定工作区后提示消失（避免「已创建仍提示创建」）。`RUNNING && hasDefaultWorkspace && single harness && !defaultSessionId` → 保留原「默认会话创建失败，可手动创建会话」；多 Harness 不提示。无工作区优先于默认会话失败。
 4. **默认会话判定**：`handleReadyLocked` 两处分支增加 `host.workspaceId` 非空条件；无工作区时只 `console.info` 一次，不写 `defaultSessionId`，不新建会话。若一期 `createDefaultSession` 已合入，再叠加 `host.createDefaultSession !== false`。
 5. **导入模型**：`importGlobalModels` 不接收上下文；导入后的模型 `contextLength = null`（未设置），后台编辑入口可补齐。
 6. **后台编辑入口**：`CustomModelDialog` 增加 `model?: AdminModelData` 编辑模式：标题改「编辑模型」，供应商与名称只读，仅可编辑/清空「最长上下文大小」；`ModelItem` 增加铅笔按钮打开该模式。新增模式复用同一表单组件，避免再引入一个弹窗。
@@ -216,7 +216,7 @@ cd servers/admin-api && npm run build && npm test
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `apps/agent-web/src/components/Sidebar.tsx` | 修改 | 云电脑行提示分流（裁决 3）：无工作区优先展示 `data-testid="cloud-host-no-workspace-hint"`「未创建默认工作区，请先创建或绑定工作区」；「工作区」TreeSection actions 在无工作区时同时展示既有 Github 入口与「新建工作区」按钮（navigate `/settings?controllerId=...`）；保留原默认会话失败提示（有工作区且单 Harness 无会话） |
+| `apps/agent-web/src/components/Sidebar.tsx` | 修改 | 云电脑行提示分流（裁决 3）：`hasDefaultWorkspace === false && controllerWorkspaces.length === 0` 时展示 `data-testid="cloud-host-no-workspace-hint"`「未创建默认工作区，请先创建或绑定工作区」，添加/绑定工作区后消失；「工作区」TreeSection actions 在无工作区时同时展示既有 Github 入口与「新建工作区」按钮（navigate `/settings?controllerId=...`）；保留原默认会话失败提示（有工作区且单 Harness 无会话） |
 | `apps/agent-web/src/components/cloud-host/GithubProjectSetupDialog.tsx` | 修改 | `hasDefaultWorkspace === false` 时 `targetPath` 初始 `''`，placeholder「例如：/workspace」；为 true 时保持 `defaultWorkspace` 预填；提交前必填校验沿用现有绝对路径校验（裁决 2） |
 | `apps/agent-web/src/components/cloud-host/__tests__/GithubProjectSetupDialog.test.tsx` | 修改 | 无工作区不预填 `/root/workspace`、空值不可提交；有工作区仍预填 |
 | `apps/agent-web/src/components/__tests__/Sidebar.test.tsx` | 修改/新增 | 无工作区 RUNNING 展示新提示且不展示「默认会话创建失败」；有工作区单 Harness 无会话仍展示旧提示；多 Harness 不提示；入口点击打开 Github 弹窗/跳转设置页 |

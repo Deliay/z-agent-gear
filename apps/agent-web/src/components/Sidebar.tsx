@@ -244,7 +244,9 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                             ? ` · ${cloudHost.failureReason}`
                             : ''}
                         </span>
-                        {cloudHostRunning && cloudHost.hasDefaultWorkspace === false && (
+                        {cloudHostRunning
+                          && cloudHost.hasDefaultWorkspace === false
+                          && controllerWorkspaces.length === 0 && (
                           <span
                             className="truncate text-xs text-muted-foreground"
                             data-testid="cloud-host-no-workspace-hint"
@@ -355,6 +357,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
                             type="button"
                             className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                             title="新建会话"
+                            aria-label="新建会话"
                             onClick={() => setShowNewDialog({ controllerId: controller.id })}
                           >
                             <Plus className="size-3" />

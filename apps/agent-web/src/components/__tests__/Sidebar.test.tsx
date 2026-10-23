@@ -567,6 +567,30 @@ describe('Sidebar 集成测试', () => {
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
     });
 
+    it('无默认工作区但控制器已有工作区时不再展示无工作区提示', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({
+              status: 'RUNNING',
+              defaultSessionId: null,
+              hasDefaultWorkspace: false,
+            }),
+          }),
+        ],
+        workspaces: [
+          makeWorkspace({ id: 'ws-1', controllerId: 'ctrl-cloud', name: 'workspace', path: '/root/workspace' }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+    });
+
     it('无默认工作区时展示 Github 入口与新建工作区入口并跳转设置页', () => {
       mockHome({
         controllers: [

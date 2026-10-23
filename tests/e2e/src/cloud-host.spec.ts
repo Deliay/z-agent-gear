@@ -208,9 +208,9 @@ test.describe('Cloud Host E2E', () => {
       );
       await githubDialog.getByRole('button', { name: '取消' }).click();
 
-      // 添加工作区后，无工作区提示消失且可发起新建会话。
-      // 说明：真实会话创建需要在线 worker/controller；本地 K8S_ENABLED=false 仅验证到
-      // 「工作区绑定完成 + 新建会话入口可用」，完整开工链路由真实集群手工验收。
+      // 添加工作区后，无工作区提示随「控制器已有工作区」条件消失，并可发起新建会话。
+      // 说明：真实 GitHub 绑定与完整开工链路（在线 worker/controller）需外部账号与真实集群，
+      // 本地 K8S_ENABLED=false 仅覆盖到「工作区添加 + 新建会话入口可用」，其余由真实集群手工验收。
       await createWorkspace(page, host!.controllerId, '/root/workspace', token);
       const afterWorkspace = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
       expect(
@@ -221,7 +221,8 @@ test.describe('Cloud Host E2E', () => {
       ).toBe(true);
       await page.reload();
       await expect(page.locator(sidebar())).toBeVisible();
-      await page.getByLabel('新建会话').click();
+      await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveCount(0);
+      await controllerRow.getByLabel('新建会话').click();
       await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
       await page.keyboard.press('Escape');
     } finally {
