@@ -53,6 +53,22 @@ describe('KeyedMutex', () => {
     await expect(mutex.runExclusive('k', async () => 'ok')).resolves.toBe('ok');
   });
 
+  it('N-4: runDetached 可脱离 ALS 上下文并在锁释放后取锁', async () => {
+    const mutex = new KeyedMutex();
+    let scheduled!: Promise<string>;
+
+    await mutex.runExclusive('k', async () => {
+      scheduled = new Promise<string>((resolve, reject) => {
+        // setImmediate 会继承当前 ALS store；runDetached 必须 exit 后才能取锁
+        setImmediate(() => {
+          mutex.runDetached('k', async () => 'ok').then(resolve, reject);
+        });
+      });
+    });
+
+    await expect(scheduled).resolves.toBe('ok');
+  });
+
   it('rejects re-entrant acquisition of the same key instead of hanging (R2-19)', async () => {
     const mutex = new KeyedMutex();
 

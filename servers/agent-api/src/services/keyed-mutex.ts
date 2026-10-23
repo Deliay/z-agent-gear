@@ -13,6 +13,19 @@ export class KeyedMutex {
   private readonly tails = new Map<string, Promise<unknown>>();
   private readonly heldKeys = new AsyncLocalStorage<ReadonlySet<string>>();
 
+  /**
+   * 在调用方 AsyncLocalStorage 上下文之外排队执行（N-4）。
+   *
+   * `setImmediate/setTimeout` 会继承创建时的 ALS store，直接延迟重试仍会被判定为
+   * re-entrant；`exit()` 让新任务不携带「key 已持有」视图，从而在锁释放后正常取锁。
+   * 若调用方未持有该 key，则等价于 `runExclusive`。
+   */
+  async runDetached<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const held = this.heldKeys.getStore();
+    if (!held?.has(key)) return this.runExclusive(key, task);
+    return this.heldKeys.exit(() => this.runExclusive(key, task));
+  }
+
   async runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
     const parentHeld = this.heldKeys.getStore();
     if (parentHeld?.has(key)) {

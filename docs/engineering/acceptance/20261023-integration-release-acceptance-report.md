@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: ❌ **第三轮打回（REJECT）**——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
+> **状态**: 🔄 **第三/四轮问题已修复，待下一轮集成验收**（N-4/N-5/N-6/N-7 见第十二节；全栈证据受环境限制，已按规则申请书面豁免）——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
 >
 > 第二轮背景（详见[第九节](#九第二轮验收记录2026-10-23)）：对返工提交 `939936b`/`051cabf` 复核发现修复引入 1×🔴+2×🟠 与首轮未闭环 2×🟠、8×🟡 残留并打回；第二轮修复（第十一节）已解决其中绝大多数，但引入 N-4/N-5 新问题。——第二轮对返工提交 `939936b`/`051cabf`（首轮 3×🔴+7×🟠+28×🟡）经逐条复核：**8 项属实**（R-1/R-2/R-3 断言侧/R-4/R-5/R-8/R-9 主体/R-10，均经回退探针或反证实证有区分力），但**修复引入 1×🔴 + 2×🟠 新问题**（🔴 N-1：R-9 把 KeyedMutex 下沉 `engine.transition` 后，引擎 hook 在锁内 `sessionService.close` 同步触发 `handleSessionEnded` 兜底链路，restart（RUNNING 节点重启，恰是「会话卡住」主场景）必误触发——fallbackSent=true 时嵌套 `transition('fail')` 抛 `KeyedMutex re-entrant lock detected` 整个重启失败并留死会话、false 时复活幽灵会话并发兜底提示词，已做引擎级最小复现；🟠 N-2：C-18 `dirtyRef` 保存成功不清除（自报「保存成功清除 dirty」与代码不符）；🟠 N-3：C-17 `pollStopped` 终态后不复位，重试/重新设置后进度框冻结），**2 项首轮 🟠 未闭环**（🟠 U-1：R-7 仅成功路径回写 `workspaceId`，失败路径不回写，恰是契约声称要区分的「默认会话创建失败」场景；🟠 U-2：R-6 方案②要求「修订 PRD/提案如实收窄」，提案 §9 验收项/§8.1/风险点仍写「立即失效」与 v1.2 TTL 口径矛盾），另有 8×🟡 残留（AppHost.cs stale 注释、C-22 断言允许 0/负、C-24 e2e 侧无哨兵、C-26 文档端口 stale 等）。**按节点定义立即打回**：修复 N-1~N-3、闭环 U-1/U-2、清理 🟡 残留，并以 Aspire 全栈实跑 tests/api 全量 + tests/e2e 随修复一并提交证据（两轮均未执行）。详见[第九节](#九第二轮验收记录2026-10-23)。
 >
@@ -547,3 +547,51 @@ type: Permanent
 - **自报连续两轮失真，抽查必须保持**：第二轮 N-2、第三轮 N-5 均为「做了但说成全覆盖」型失真。自报应写「覆盖范围」而非「做了什么」，验收抽查以 grep/回退探针核对边界。
 - **「要求收口或如实降级」要落到清单**：静默丢项（N-7）与做错同级不可接受，未完成项必须显式列出遗留原因。
 | U-1 失败路径回写 | `cloud-host-github-service.runSessionStep` 中回写在 `createSession` 之前 |
+
+## 十二、第四轮返工修复记录（2026-10-23）
+
+> 修复提交见本轮 `git log`；下列自报均标注代码证据与覆盖范围（第三轮教训：自报范围必须与代码一致）。
+
+### 12.1 N-4（🟠 修复引入）：setImmediate 重试未脱离 ALS，热循环
+
+- **根因确认**：`KeyedMutex` 用 `AsyncLocalStorage` 判定同上下文重入；`setImmediate` 继承创建时 store，重试必然再次命中 re-entrant。
+- **修复**：
+  - `KeyedMutex.runDetached(key, task)`：若当前上下文持有该 key，使用 `heldKeys.exit()` 在**无 store** 的上下文中排队取锁；未持有时等价 `runExclusive`。
+  - `workflowEngine.runOutsideTransitionLock(instanceId, task)` 暴露该能力。
+  - `orchestrator.deferSessionFallback`：**上限 3 次 + 指数退避（100/200/400ms）**，超限输出结构化告警 `fallback deferred retry exhausted ... manual intervention may be required`，不再无退避热循环。
+  - `handleSessionEnded` / `handleSessionIdled` / `handleSessionRemoved` 统一走 `transitionOrDefer`：命中 re-entrant 时延迟重试并中止本轮后续动作（重试重新走完整逻辑），覆盖第二轮要求「评估 idled/removed 同型嵌套风险」。
+- **测试**：
+  - `keyed-mutex.test.ts`：`setImmediate` 中 `runDetached` 可脱离 ALS 并在锁释放后取锁（裸 `runExclusive` 会 re-entrant）。
+  - `orchestrator.test.ts`：re-entrant 一次后 100ms 重试成功；持续 re-entrant 时恰好 4 次尝试（首次+3 重试）后告警终止，无热循环。
+
+### 12.2 N-5（🟠 修复引入+自报失真）：idled 分支仍整文档 save
+
+- `handleSessionIdled` 的 `fallbackSent` 改为与 ended 相同的条件字段更新：
+  `nodes.$elemMatch({ nodeId, sessionId, status: { $in: ['RUNNING','REWORK'] } })` + `$set {'nodes.$.fallbackSent': true}`；`modifiedCount=0` 直接返回，不再 `instance.save()`。
+- 自报范围修正：第三轮 11.1 的「fallbackSent 改字段级更新」仅限 `handleSessionEnded`，本轮已扩展到 `handleSessionIdled`，并删除了旧的自报表述歧义。
+- 测试：O10a 断言条件 updateOne 且 `instance.save` 未调用；新增 N-5 用例（REWORK 态 idling → 条件更新且不整文档 save）。
+
+### 12.3 N-6（🟡）：N-2 用例无区分力
+
+- 新增「保存成功 → 服务端刷新 → 表单回同步」用例：保存返回权威值 `m1` 后，父级传入新权威值 `m2`；若 `dirtyRef` 未复位，effect 短路将保留 `m1`，用例变红。回退探针已验证该用例对 `dirtyRef.current=false` 有区分力。
+
+### 12.4 N-7（🟡）：U-4 静默丢项
+
+- **C-27 dependsOn**：`cloud-host-workload-service.test.ts` T-CHW1 断言 `items[0].dependsOnWorkloadIds === ['w2']`、`items[1] === []`。
+- **C-11 专用错误**：`controllerService.setDefaultMcp` 命中平台云工具服务时返回 `MCP_SERVER_NOT_SELECTABLE`（其余仍 `MCP_SERVER_NOT_FOUND`）；resolver 透传；前端映射「平台云工具服务由系统自动注入，不可手动选择」；契约注释同步；补服务层与前端用例。
+- 两项均已落地，无降级项。
+
+### 12.5 第四轮验证
+
+| 项目 | 结果 |
+|---|---|
+| tsc ×5 | ✅ 全 0 error |
+| lint ×2 | ✅ 0 error（agent-web 5 条存量 warning） |
+| 单测 | ✅ agent-api **1000**（+5）/ admin-api 656+1skip / cloud-controller 254 / admin-web 235 / agent-web **663**（+2） |
+| tests/e2e typecheck | ✅ exit=0 |
+
+### 12.6 全栈验证与豁免申请
+
+- 第三轮已如实记录：宿主机多个其他 worktree 的 AppHost 占用 dashboard/resource-service 端口，`aspire start` 绑定 `127.0.0.1:22149` 失败；手工等价栈因 **本机无 K8s / 无已注册控制器**，无法取得 `tests/api` 全量与 `tests/e2e` 全绿（失败类型与对应环境缺口已逐项列于 11.5）。
+- 本轮代码变更均为后端锁/兜底与前端表单状态，相关行为已由单测与回退探针覆盖；全栈环境缺口未变化，重复执行预计得到同一组环境型失败。
+- **据此申请人类书面豁免**全栈全绿证据要求，或改在干净 CI/主机（含 Aspire 标准编排、K8s 与预置控制器）执行。若需本节点继续，请提供可用的干净环境。

@@ -49,6 +49,14 @@ interface ConfiguredNodeLike {
   } | null;
 }
 
+/** N-4：锁内兜底回环的延迟重试上限与退避基数（100ms/200ms/400ms） */
+const FALLBACK_RETRY_MAX = 3;
+const FALLBACK_RETRY_BASE_MS = 100;
+
+function isReentrantLockError(err: unknown): boolean {
+  return (err as Error)?.message?.includes('KeyedMutex re-entrant lock detected') === true;
+}
+
 class WorkflowOrchestrator {
   /** 注册为引擎 hook + 会话结束兜底回调（服务启动时调用一次） */
   register(): void {
@@ -71,7 +79,7 @@ class WorkflowOrchestrator {
    * 再次停滞（与 handleSessionEnded 共享 fallbackSent 计数）→ 升级 FAILED 并创建
    * immediate 优先级「人工介入」待办（强提醒）。
    */
-  async handleSessionIdled(sessionId: string): Promise<void> {
+  async handleSessionIdled(sessionId: string, attempt = 0): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
       deletedAt: null,
@@ -81,10 +89,19 @@ class WorkflowOrchestrator {
     if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
 
     if (node.fallbackSent) {
-      await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
-        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止），需要人工介入',
-        source: 'SESSION_STUCK',
-      });
+      const transitioned = await this.transitionOrDefer(
+        'idled',
+        sessionId,
+        instance,
+        node,
+        'fail',
+        {
+          reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止），需要人工介入',
+          source: 'SESSION_STUCK',
+        },
+        attempt,
+      );
+      if (!transitioned) return;
       await todoService.createWorkflowInterventionTodo({
         userId: instance.userId.toString(),
         instanceId: instance._id.toString(),
@@ -97,8 +114,24 @@ class WorkflowOrchestrator {
       return;
     }
 
+    // N-5：与 handleSessionEnded 共享 fallbackSent 计数，必须同样使用字段级条件更新，
+    // 避免整文档 save() 覆盖并发转移（idled 分支允许 RUNNING/REWORK）。
+    const updated = await WorkflowInstance.updateOne(
+      {
+        _id: instance._id,
+        deletedAt: null,
+        nodes: {
+          $elemMatch: {
+            nodeId: node.nodeId,
+            sessionId: node.sessionId,
+            status: { $in: ['RUNNING', 'REWORK'] },
+          },
+        },
+      },
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    if (!updated?.modifiedCount) return;
     node.fallbackSent = true;
-    await instance.save();
     // 会话仍存活（idling，映射仍在）：直接补发提醒提示词即可，无需 resume
     await sessionService.addMessage(sessionId, {
       direction: 'input',
@@ -112,7 +145,7 @@ class WorkflowOrchestrator {
    * 会话文档已删除，兜底 resume 无意义——必须让节点可见地失败，
    * 否则节点停在 RUNNING、sessionId 悬空，流程永久卡死（人工可「重启节点」恢复）。
    */
-  async handleSessionRemoved(sessionId: string): Promise<void> {
+  async handleSessionRemoved(sessionId: string, attempt = 0): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
       deletedAt: null,
@@ -121,10 +154,18 @@ class WorkflowOrchestrator {
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
     if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
 
-    await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
-      reason: '节点会话启动失败或运行中被移除，请人工介入后重启节点',
-      source: 'SESSION_START_FAILED',
-    });
+    await this.transitionOrDefer(
+      'removed',
+      sessionId,
+      instance,
+      node,
+      'fail',
+      {
+        reason: '节点会话启动失败或运行中被移除，请人工介入后重启节点',
+        source: 'SESSION_START_FAILED',
+      },
+      attempt,
+    );
   }
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
@@ -260,11 +301,73 @@ class WorkflowOrchestrator {
   }
 
   /**
+   * N-4：锁内 hook 同步回环兜底时的延迟调度。
+   *
+   * 必须经 `runOutsideTransitionLock`（KeyedMutex.runDetached）真正脱离 ALS 上下文，
+   * 否则 setImmediate/setTimeout 仍携带「key 已持有」视图，重试只会无限撞 re-entrant。
+   * 有上限（3 次）+ 指数退避；超限记录结构化告警，不再热循环。
+   */
+  private deferSessionFallback(
+    kind: 'ended' | 'idled' | 'removed',
+    sessionId: string,
+    instanceId: string,
+    attempt: number,
+  ): void {
+    const nextAttempt = attempt + 1;
+    if (nextAttempt > FALLBACK_RETRY_MAX) {
+      console.warn(
+        `[workflow] ${kind} fallback deferred retry exhausted after ${FALLBACK_RETRY_MAX} attempts ` +
+          `(instance=${instanceId}, session=${sessionId}); manual intervention may be required`,
+      );
+      return;
+    }
+    const delay = FALLBACK_RETRY_BASE_MS * 2 ** attempt;
+    setTimeout(() => {
+      void workflowEngine
+        .runOutsideTransitionLock(instanceId, () => {
+          if (kind === 'ended') return this.handleSessionEnded(sessionId, nextAttempt);
+          if (kind === 'idled') return this.handleSessionIdled(sessionId, nextAttempt);
+          return this.handleSessionRemoved(sessionId, nextAttempt);
+        })
+        .catch((err) => {
+          console.warn(
+            `[workflow] ${kind} fallback deferred retry failed ` +
+              `(instance=${instanceId}, session=${sessionId}, attempt=${nextAttempt}):`,
+            (err as Error).message,
+          );
+        });
+    }, delay);
+  }
+
+  /**
+   * 执行一次转移；若命中同实例锁的 re-entrant（锁内 hook 同步回环），
+   * 延迟到锁外重试并返回 false（调用方应中止本轮后续动作，由重试重新走完整逻辑）。
+   */
+  private async transitionOrDefer(
+    kind: 'ended' | 'idled' | 'removed',
+    sessionId: string,
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    event: 'fail',
+    payload: { reason: string; source: string },
+    attempt: number,
+  ): Promise<boolean> {
+    try {
+      await workflowEngine.transition(instance._id.toString(), node.nodeId, event, payload);
+      return true;
+    } catch (err) {
+      if (!isReentrantLockError(err)) throw err;
+      this.deferSessionFallback(kind, sessionId, instance._id.toString(), attempt);
+      return false;
+    }
+  }
+
+  /**
    * 会话兜底：会话 ended 且绑定节点仍 RUNNING（存续期内未转移）时，
    * resume 会话并发送兜底提示词。每节点仅提醒 1 次（fallbackSent）；
    * 提醒后仍停止 → 节点升级为 FAILED，阻断流程等待人工介入。
    */
-  async handleSessionEnded(sessionId: string): Promise<void> {
+  async handleSessionEnded(sessionId: string, attempt = 0): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
       deletedAt: null,
@@ -274,22 +377,18 @@ class WorkflowOrchestrator {
     if (!node || node.status !== 'RUNNING') return;
 
     if (node.fallbackSent) {
-      try {
-        await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+      await this.transitionOrDefer(
+        'ended',
+        sessionId,
+        instance,
+        node,
+        'fail',
+        {
           reason: '会话在系统提醒后再次停止，节点未能推进',
           source: 'SESSION_STUCK',
-        });
-      } catch (err) {
-        // N-1：兜底回调可能由其它转移的 hook 同步触发（同实例锁内）。
-        // 延迟出队到锁外重试，禁止同步嵌套；其余错误照常抛出。
-        if ((err as Error).message.includes('KeyedMutex re-entrant lock detected')) {
-          setImmediate(() => {
-            void this.handleSessionEnded(sessionId);
-          });
-          return;
-        }
-        throw err;
-      }
+        },
+        attempt,
+      );
       return;
     }
 

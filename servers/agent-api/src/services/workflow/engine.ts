@@ -163,6 +163,14 @@ class WorkflowEngine {
     );
   }
 
+  /**
+   * 在实例转移锁的调用上下文中脱离后执行（仅限从锁内 hook 延迟调度，N-4）。
+   * 不直接执行业务逻辑；由调用方在定时器中调用，确保不会同步嵌套取锁。
+   */
+  runOutsideTransitionLock<T>(instanceId: string, task: () => Promise<T>): Promise<T> {
+    return transitionMutex.runDetached(instanceId, task);
+  }
+
   private async transitionUnlocked(
     instanceId: string,
     nodeId: string,

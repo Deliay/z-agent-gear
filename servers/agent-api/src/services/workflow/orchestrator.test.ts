@@ -141,6 +141,7 @@ describe('WorkflowOrchestrator', () => {
     vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(makeConfigured()));
     vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
     vi.mocked(McpServer.findOneAndUpdate).mockResolvedValue({ _id: oid('mcp-platform-1') } as never);
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
   });
 
   it('O1: AI 节点 start 提示词组装 = 系统提示 + 节点提示词数组 + 全部上游产物', async () => {
@@ -412,7 +413,21 @@ describe('WorkflowOrchestrator', () => {
     expect(sessionService.addMessage).toHaveBeenCalled();
     expect(lastInputMessage()).toContain('工作流');
     expect(instance.nodes[0].fallbackSent).toBe(true);
-    expect(instance.save).toHaveBeenCalled();
+    // N-5：字段级条件更新，且不整文档 save（避免覆盖并发转移）
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: instance._id,
+        nodes: {
+          $elemMatch: expect.objectContaining({
+            nodeId: 'n2',
+            sessionId: 'sess-2',
+            status: { $in: ['RUNNING', 'REWORK'] },
+          }),
+        },
+      }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    expect(instance.save).not.toHaveBeenCalled();
     // 未升级失败
     expect(instance.nodes[0].status).toBe('RUNNING');
   });
@@ -444,6 +459,83 @@ describe('WorkflowOrchestrator', () => {
 
     expect(sessionService.addMessage).not.toHaveBeenCalled();
     expect(instance.save).not.toHaveBeenCalled();
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('N-4: re-entrant 一次后延迟重试能取到锁并完成兜底', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValueOnce(new Error('KeyedMutex re-entrant lock detected for key: inst-1'))
+      .mockResolvedValue({} as never);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      expect(transition).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(transition).toHaveBeenCalledTimes(2);
+    } finally {
+      transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-4: 重试有上限（3 次）并输出结构化告警，不无退避热循环', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValue(new Error('KeyedMutex re-entrant lock detected for key: inst-1'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(transition).toHaveBeenCalledTimes(4); // 首次 + 3 次重试
+
+      await vi.advanceTimersByTimeAsync(800);
+      expect(transition).toHaveBeenCalledTimes(4);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('retry exhausted'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-5: idling 兜底与并发转移不互覆（字段级条件更新，无整文档 save）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2', fallbackSent: false }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-2');
+
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: instance._id,
+        nodes: {
+          $elemMatch: expect.objectContaining({
+            nodeId: 'n2',
+            sessionId: 'sess-2',
+            status: { $in: ['RUNNING', 'REWORK'] },
+          }),
+        },
+      }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    expect(instance.save).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).toHaveBeenCalled();
   });
 
   it('O10d: 非工作流会话的空闲事件 → 忽略', async () => {

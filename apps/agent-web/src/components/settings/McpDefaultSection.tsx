@@ -35,6 +35,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 function parseError(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
+  if (message.includes('MCP_SERVER_NOT_SELECTABLE')) return '平台云工具服务由系统自动注入，不可手动选择'
   if (message.includes('MCP_SERVER_NOT_FOUND')) return '所选 MCP 已停用或不存在，请重新选择'
   if (message.includes('Controller not found')) return '控制器不存在或已删除'
   return message || '保存失败，请稍后重试'
