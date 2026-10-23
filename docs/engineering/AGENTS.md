@@ -194,6 +194,7 @@ flowchart LR
 - [[proposals/20261021-feat-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、最小化凭据 clone 并自动建会话）
 - [[proposals/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
 - [[proposals/20261022-feat-workload-optimization.md]] — 工作负载优化（云电脑创建/展示支持 standard 负载与 MCP 列出安装，Github 项目 clone 地址前缀拼接）
+- [[proposals/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（CreateCloudHostInput.createDefaultWorkspace 默认不建 /root/workspace、Model.contextLength 后台模型最长上下文并下发 harness limit.context、云电脑 Job 模板 ephemeral-storage 上限 10Gi）
 
 ### 实现计划（`plan/`）
 
