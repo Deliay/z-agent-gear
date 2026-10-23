@@ -71,12 +71,42 @@ describe('KeyedMutex', () => {
     await expect(scheduled).resolves.toBe('ok');
   });
 
-  it('N-9: 仍持有锁时调用 runDetached 立即报错而不是死锁', async () => {
+  it('N-10: 持锁任务内调用 runDetached 有界等待后超时报错，不永久死锁', async () => {
     const mutex = new KeyedMutex();
 
     await expect(
-      mutex.runExclusive('k', () => mutex.runDetached('k', async () => 'never')),
-    ).rejects.toThrow('runDetached called while still holding key: k');
+      mutex.runExclusive('k', () =>
+        mutex.runDetached('k', async () => 'never', { timeoutMs: 20 }),
+      ),
+    ).rejects.toThrow('runDetached timed out waiting for key: k after 20ms');
+  });
+
+  it('N-11: 持锁 + 排队等待者时 runDetached 仍能超时退出（不误判/死锁）', async () => {
+    const mutex = new KeyedMutex();
+    let acquired!: () => void;
+    const acquiredPromise = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    let queued!: () => void;
+    const queuedPromise = new Promise<void>((resolve) => {
+      queued = resolve;
+    });
+
+    const holder = mutex.runExclusive('k', async () => {
+      acquired();
+      await queuedPromise; // 等测试体把 B 排入队列
+      await expect(
+        mutex.runDetached('k', async () => 'never', { timeoutMs: 20 }),
+      ).rejects.toThrow('runDetached timed out waiting for key: k after 20ms');
+    });
+
+    await acquiredPromise;
+    // 测试体不在 A 的 ALS 上下文中：B 正常排队等待 A
+    const waiter = mutex.runExclusive('k', async () => 'b');
+    queued();
+    await holder;
+
+    await expect(waiter).resolves.toBe('b');
   });
 
   it('rejects re-entrant acquisition of the same key instead of hanging (R2-19)', async () => {

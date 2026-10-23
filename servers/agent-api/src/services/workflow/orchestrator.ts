@@ -317,8 +317,10 @@ class WorkflowOrchestrator {
     if (nextAttempt > FALLBACK_RETRY_MAX) {
       console.warn(
         `[workflow] ${kind} fallback deferred retry exhausted after ${FALLBACK_RETRY_MAX} attempts ` +
-          `(instance=${instanceId}, session=${sessionId}); manual intervention may be required`,
+          `(instance=${instanceId}, session=${sessionId}); creating intervention todo`,
       );
+      // 禁止静默丢链：超限必须留下人工介入待办
+      void this.notifyFallbackExhausted(kind, sessionId, instanceId);
       return;
     }
     const delay = FALLBACK_RETRY_BASE_MS * 2 ** attempt;
@@ -332,11 +334,43 @@ class WorkflowOrchestrator {
         .catch((err) => {
           console.warn(
             `[workflow] ${kind} fallback deferred retry failed ` +
-              `(instance=${instanceId}, session=${sessionId}, attempt=${nextAttempt}):`,
+              `(instance=${instanceId}, session=${sessionId}, attempt=${nextAttempt}), rescheduling:`,
             (err as Error).message,
           );
+          // N-10(b)：runDetached 超时/异常不能一次性丢弃兜底链，按同一 attempt 预算继续退避重排
+          this.deferSessionFallback(kind, sessionId, instanceId, nextAttempt);
         });
     }, delay);
+  }
+
+  /** 兜底重试超限：创建人工介入待办（失败只告警，不影响主流程） */
+  private async notifyFallbackExhausted(
+    kind: 'ended' | 'idled' | 'removed',
+    sessionId: string,
+    instanceId: string,
+  ): Promise<void> {
+    try {
+      const instance = (await WorkflowInstance.findOne({
+        _id: instanceId,
+        deletedAt: null,
+      })) as unknown as WorkflowInstanceDoc | null;
+      const node = instance?.nodes.find((n) => n.sessionId?.toString() === sessionId);
+      if (!instance || !node) return;
+      await todoService.createWorkflowInterventionTodo({
+        userId: instance.userId.toString(),
+        instanceId: instance._id.toString(),
+        instanceName: instance.name,
+        nodeId: node.nodeId,
+        nodeName: node.name,
+        sessionId,
+        reason: `会话兜底（${kind}）重试 ${FALLBACK_RETRY_MAX} 次后仍失败，请人工介入`,
+      });
+    } catch (err) {
+      console.warn(
+        `[workflow] ${kind} fallback exhausted todo failed (instance=${instanceId}, session=${sessionId}):`,
+        (err as Error).message,
+      );
+    }
   }
 
   /**

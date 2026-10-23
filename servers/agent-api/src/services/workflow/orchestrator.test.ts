@@ -506,6 +506,16 @@ describe('WorkflowOrchestrator', () => {
       await vi.advanceTimersByTimeAsync(800);
       expect(transition).toHaveBeenCalledTimes(4);
       expect(warn.mock.calls.some((call) => String(call[0]).includes('retry exhausted'))).toBe(true);
+      // N-10(b)：超限不得静默丢链，必须创建人工介入待办
+      await vi.advanceTimersByTimeAsync(0);
+      expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instanceId: 'inst-1',
+          nodeId: 'n2',
+          sessionId: 'sess-2',
+          reason: expect.stringContaining('重试 3 次后仍失败'),
+        }),
+      );
     } finally {
       warn.mockRestore();
       transition.mockRestore();
@@ -513,37 +523,42 @@ describe('WorkflowOrchestrator', () => {
     }
   });
 
-  it('N-8: 真实 workflowEngine.transition + 锁内 hook 回环，延迟重试后节点升级 FAILED', async () => {
-    vi.useFakeTimers();
+  it('N-10: 真实定时器 + 外层锁超过退避窗口，延迟重试等待后节点最终 FAILED', async () => {
+    // 关键：不使用 fake timers（不传播 ALS）；真实 setTimeout 继承 held 视图，
+    // 且外层锁持有 350ms > 100/200ms 退避窗口，覆盖 N-10 生产形态。
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+
+    workflowEngine.registerHooks({
+      onNodeStart: undefined,
+      onNodeRework: undefined,
+      onNodeResume: undefined,
+      onNodeDone: undefined,
+      onNodeRestart: async () => {
+        // 锁内 hook 同步触发兜底（re-entrant → 排入 100ms 延迟重试）
+        await workflowOrchestrator.handleSessionRemoved('sess-2');
+        // 模拟锁内网络调用/慢写：持有锁超过首轮退避窗口
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      },
+      onWorkflowFinished: undefined,
+    });
+
     try {
-      const instance = makeInstance([
-        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
-      ]);
-      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
-      vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
-
-      // 真实引擎锁内 hook 同步触发会话移除兜底（生产回环形态）
-      workflowEngine.registerHooks({
-        onNodeStart: undefined,
-        onNodeRework: undefined,
-        onNodeResume: undefined,
-        onNodeDone: undefined,
-        onNodeRestart: async () => {
-          await workflowOrchestrator.handleSessionRemoved('sess-2');
-        },
-        onWorkflowFinished: undefined,
-      });
-
       const outer = workflowEngine.transition('inst-1', 'n2', 'restart', {});
-      await vi.advanceTimersByTimeAsync(0);
-      await outer;
-      // 外层释放前：hook 内 transition 命中 re-entrant，已排入延迟重试
+      // 首次重试在 100ms 触发时外层仍持锁；runDetached 必须等待而不是误抛
+      await new Promise((resolve) => setTimeout(resolve, 150));
       expect(instance.nodes[0].status).toBe('RUNNING');
 
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(0);
+      await outer;
+      // 等外层释放 + 延迟重试真实取锁执行 fail
+      const deadline = Date.now() + 3000;
+      while (instance.nodes[0].status !== 'FAILED' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
 
-      // 重试在锁外重新取锁并真实执行 fail 转移
       expect(instance.nodes[0].status).toBe('FAILED');
       expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
       expect(vi.mocked(WorkflowInstance.findById).mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -556,6 +571,36 @@ describe('WorkflowOrchestrator', () => {
         onNodeRestart: undefined,
         onWorkflowFinished: undefined,
       });
+    }
+  });
+
+  it('N-10(b): runDetached 异常时按退避重排，不一次性丢弃兜底链', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValueOnce(new Error('KeyedMutex re-entrant lock detected for key: inst-1'))
+      .mockResolvedValue({} as never);
+    const runOutside = vi
+      .spyOn(workflowEngine, 'runOutsideTransitionLock')
+      .mockRejectedValueOnce(new Error('runDetached timed out waiting for key: inst-1'))
+      .mockImplementation((_id, task) => task());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      expect(transition).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100); // 第一次 runDetached 失败 → 重排
+      await vi.advanceTimersByTimeAsync(200); // 第二次执行成功
+      expect(transition).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('rescheduling'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      runOutside.mockRestore();
+      transition.mockRestore();
       vi.useRealTimers();
     }
   });
