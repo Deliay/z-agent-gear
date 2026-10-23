@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: ❌ **首轮 AI Review 打回（REJECT）**——本轮对 `git diff origin/release...integration`（32 提交 / 167 文件 / +14794 −332，含云容器优化一期、二期、工作流 GitHub PR 联动三特性）做集成级代码评审 + 本机独立验证，发现 **3 × 🔴 阻断 + 7 × 🟠 重要**：前端新建会话数据通路两处参数错位（🔴 R-1 模式被当 modelId 提交、所选模型被丢弃；🟠 R-4 worktree 路径静默丢弃 modeId/modelId）、测试侧两处确定性红（🔴 R-2 本 diff 新增的 `tests/e2e` typecheck 门禁对本 diff 新代码报 3 个 TS18047；🔴 R-3 T-IC-EPH1/2 断言 `resources.requests` 而实现只声明 `limits`，TypeError 必红且与 PRD v1.2/单测/E2E 三方矛盾）、两处 spec 偏离（🟠 R-5 后台模型变更不失效 ACP 选项缓存、🟠 R-6 `hasDefaultWorkspace` 恒 false 语义失效）、两处并发正确性缺口（🟠 R-7 PR 事件幂等 TOCTOU、🟠 R-8 事件驱动流转与人工流转不互斥）与一处表单状态缺陷（🟠 R-9 编辑中表单被重置）。**按节点定义立即打回**，要求修复 R-1~R-9 并收口 28 × 🟡（C-1~C-28）后重新提交集成验收。详见[第四节](#四验收问题清单)。
+> **状态**: 🔄 **首轮打回问题已修复，待第二轮集成验收**（修复提交 `939936b`，详见[第八节](#八返工修复记录2026-10-23-第二轮)）——首轮对 `git diff origin/release...integration`（32 提交 / 167 文件 / +14794 −332，含云容器优化一期、二期、工作流 GitHub PR 联动三特性）做集成级代码评审 + 本机独立验证，发现 **3 × 🔴 阻断 + 7 × 🟠 重要**：前端新建会话数据通路两处参数错位（🔴 R-1 模式被当 modelId 提交、所选模型被丢弃；🟠 R-4 worktree 路径静默丢弃 modeId/modelId）、测试侧两处确定性红（🔴 R-2 本 diff 新增的 `tests/e2e` typecheck 门禁对本 diff 新代码报 3 个 TS18047；🔴 R-3 T-IC-EPH1/2 断言 `resources.requests` 而实现只声明 `limits`，TypeError 必红且与 PRD v1.2/单测/E2E 三方矛盾）、两处 spec 偏离（🟠 R-5 后台模型变更不失效 ACP 选项缓存、🟠 R-6 `hasDefaultWorkspace` 恒 false 语义失效）、两处并发正确性缺口（🟠 R-7 PR 事件幂等 TOCTOU、🟠 R-8 事件驱动流转与人工流转不互斥）与一处表单状态缺陷（🟠 R-9 编辑中表单被重置）。**按节点定义立即打回**，要求修复 R-1~R-9 并收口 28 × 🟡（C-1~C-28）后重新提交集成验收。详见[第四节](#四验收问题清单)。
 
 ## 关联文档
 
@@ -184,29 +184,44 @@ type: Permanent
 
 | # | 问题 | 根因 | 状态 | 修复 commit |
 |---|---|---|---|---|
-| R-1 | SessionPage `onCreate` 位置参数错位（模式当模型、模型丢弃） | 9 参签名演进漏改调用点 | ⏳ 待修复 | |
-| R-2 | tests/e2e 新增 typecheck 门禁对本 diff 新代码报 3 × TS18047 | 门禁未自检、可空值未收敛 | ⏳ 待修复 | |
-| R-3 | T-IC-EPH1/2 断言 `requests` 而实现仅 `limits`，确定性红 | 测试/JSDoc 残留旧口径 | ⏳ 待修复 | |
-| R-4 | WorktreeSidebarGroup 丢弃 modeId/modelId | prop 签名未同步扩展 | ⏳ 待修复 | |
-| R-5 | E2E 旧文案断言与 P10-CH1 过时语义 | phase2 改口径未回归旧断言 | ⏳ 待修复 | |
-| R-6 | 后台模型变更不失效 ACP 选项缓存 | 跨服务失效被裁剪未回写 spec | ⏳ 待修复 | |
-| R-7 | `hasDefaultWorkspace` 恒 false、语义失效 | 字段无写入方 | ⏳ 待修复 | |
-| R-8 | PR 事件幂等 TOCTOU | 去重读在锁外、非原子 claim | ⏳ 待修复 | |
-| R-9 | 事件流转与人工流转不互斥 | 锁在传输层非领域层 | ⏳ 待修复 | |
-| R-10 | CustomModelDialog 编辑中被重置 | effect 依赖不稳定数组 | ⏳ 待修复 | |
-| C-1~C-28 | 🟡 收口项（见 C 组表） | — | ⏳ 待收口 | |
+| R-1 | SessionPage `onCreate` 位置参数错位（模式当模型、模型丢弃） | 9 参签名演进漏改调用点 | ✅ 已修复（补第 7 参 + 映射单测） | `939936b` |
+| R-2 | tests/e2e 新增 typecheck 门禁对本 diff 新代码报 3 × TS18047 | 门禁未自检、可空值未收敛 | ✅ 已修复（typecheck exit=0） | `939936b` |
+| R-3 | T-IC-EPH1/2 断言 `requests` 而实现仅 `limits`，确定性红 | 测试/JSDoc 残留旧口径 | ✅ 已修复（2 用例实跑绿） | `939936b` |
+| R-4 | WorktreeSidebarGroup 丢弃 modeId/modelId | prop 签名未同步扩展 | ✅ 已修复（9 参透传单测） | `939936b` |
+| R-5 | E2E 旧文案断言与 P10-CH1 过时语义 | phase2 改口径未回归旧断言 | ✅ 已修复（文案对齐 + P10-CH1 重写） | `939936b` |
+| R-6 | 后台模型变更不失效 ACP 选项缓存 | 跨服务失效被裁剪未回写 spec | ✅ 按方案②收窄并回写 PRD/提案 v1.2 | `939936b` |
+| R-7 | `hasDefaultWorkspace` 恒 false、语义失效 | 字段无写入方 | ✅ 已修复（Git 设置回写 workspaceId） | `939936b` |
+| R-8 | PR 事件幂等 TOCTOU | 去重读在锁外、非原子 claim | ✅ 已修复（锁内重读 + 并发用例） | `939936b` |
+| R-9 | 事件流转与人工流转不互斥 | 锁在传输层非领域层 | ✅ 已修复（engine.transition 按实例加锁） | `939936b` |
+| R-10 | CustomModelDialog 编辑中被重置 | effect 依赖不稳定数组 | ✅ 已修复（useMemo + 稳定依赖 + 回归测试） | `939936b` |
+| C-1~C-28 | 🟡 收口项（见 C 组表） | — | ✅ 已收口（少部分按说明降级/留尾，见第八节） | `939936b` |
 
 ## 六、最终验证
 
-| 项目 | 本轮结果 |
+### 6.1 首轮（打回时）
+
+| 项目 | 首轮结果 |
 |---|---|
 | tsc（agent-api/admin-api/cloud-controller/admin-web/agent-web） | ✅ 全 0 error |
 | lint（admin-web/agent-web） | ✅ 0 error |
 | tests/e2e typecheck | ❌ 3 error（R-2） |
 | 单测（五包） | ✅ 976 / 656+1skip / 254 / 234 / 654 全绿 |
-| tests/api | ⚠️ T-IC-EPH1/2 确定性红（R-3）；其余失败为缺实栈环境型，待修复后实栈复跑全量 |
-| tests/e2e（实机浏览器） | 未执行（本轮以打回收口，待第二轮以 Aspire 全栈 + 双栈端口核对方式实跑） |
+| tests/api | ⚠️ T-IC-EPH1/2 确定性红（R-3）；其余失败为缺实栈环境型 |
+| tests/e2e（实机浏览器） | 未执行 |
 | 结论 | ❌ **REJECT**（3 × 🔴 + 7 × 🟠） |
+
+### 6.2 返工修复后（2026-10-23，修复提交 `939936b`）
+
+| 项目 | 复验结果 |
+|---|---|
+| tsc（agent-api/admin-api/cloud-controller/admin-web/agent-web） | ✅ 全 0 error（5 包逐个实跑） |
+| lint（admin-web/agent-web） | ✅ 0 error（仅存量 exhaustive-deps warning） |
+| tests/e2e typecheck | ✅ exit=0（R-2 三处 TS18047 已消除） |
+| 单测五包 | ✅ **986**（agent-api，+10）/ **656+1skip**（admin-api）/ **254**（cloud-controller）/ **235**（admin-web，+1）/ **657**（agent-web，+3） |
+| tests/api T-IC-EPH1/2 | ✅ 2 passed（`src/cloud-controller/internal-api.test.ts` 实跑） |
+| tests/api 其余 | ⏳ 需 Aspire 全栈实跑（本机未起完整栈；端口默认值已统一为 10001/35273） |
+| tests/e2e（实机浏览器） | ⏳ 需 Aspire 全栈实跑（用例语义已按 phase2 重写） |
+| 结论 | 🔄 **修复完成，待第二轮集成验收** |
 
 ## 七、经验总结
 
@@ -216,3 +231,69 @@ type: Permanent
 - **跨服务失效/钩子若裁剪，必须回写 PRD 与提案**：TTL 兜底 ≠ 「立即失效」（R-6）；spec 与实现二选一，但不能沉默偏离。
 - **状态机并发入口必须共锁**：事件驱动与人工入口共享迁移语义时，锁应落在领域层（R-8/R-9）；传输层局部锁只保护了自己那条路。
 - **事件幂等要做原子 claim**：「读-判-写」三步放锁外/锁内混用会产生 TOCTOU，重复投递的响应语义（DUPLICATE vs HANDLER_FAILED）本身就是契约承诺。
+
+## 八、返工修复记录（2026-10-23 第二轮）
+
+> 修复分支：`integration`；修复提交：`939936b`。以下均为本轮实际改动与验证证据。
+
+### 8.1 阻断项（🔴）
+
+| # | 修复内容 | 验证 |
+|---|---|---|
+| R-1 | `SessionPage.handleCreateSession` 补齐第 7 参 `existingWorktreePath`，并按 `Sidebar` 口径透传 `existingWorktreePath`（有预选 worktree 时 `enableWorktree=false`）；`apps/agent-web/AGENTS.md` 更新为 9 参 + 3 个调用点说明；新增 `apps/agent-web/src/pages/__tests__/SessionPage.test.tsx` 钉住 9 参→CreateSessionInput 映射 | 新增 2 例；agent-web 657 passed |
+| R-2 | `tests/e2e/src/workflow.spec.ts`：`waitForNodeStatus` 显式返回 `Promise<InstanceNode>` 并在成功分支非空收敛；`promptText`/`inst` 改用非空断言 | `cd tests/e2e && npm run typecheck` exit=0 |
+| R-3 | `tests/api/.../internal-api.test.ts` T-IC-EPH1/2 改为断言 `resources.requests === undefined` + `limits['ephemeral-storage']`；`k8s-job-manager.ts` JSDoc 与 `deploy/k8s/cloud-controller.yaml` 注释改为「仅 limits（不设 requests），默认 10Gi」 | 该套件实跑 2 passed |
+
+### 8.2 重要项（🟠）
+
+| # | 修复内容 | 验证 |
+|---|---|---|
+| R-4 | `WorktreeSidebarGroup` 的 `onCreate` prop 与转发 wrapper 扩到 9 参，透传 `modeId/modelId`，`existingWorktreePath` 保留预选回退；新增透传单测 | 单测 6 passed（含新用例） |
+| R-5 | `cloud-host.spec.ts` 旧文案断言改为「就绪后不会自动创建会话，需先创建或绑定工作区」，删除同 spec 自相矛盾断言；P10-CH1 重写为 phase2 语义（ready 后 workspaceId/defaultSessionId 均为 null、sessions=0、展示无工作区提示） | tests/e2e typecheck 绿；语义与 `cloud-host-service.ts` 一致 |
+| R-6 | 采用报告方案②：PRD v1.2 / 提案 v1.2 明确「用户级模型变更立即失效；后台（系统内置/global）变更由 300s TTL 兜底 + 刷新按钮立即重取」；`updateModelSortOrder` 补失效调用；`acp-options-cache.ts` 与 `servers/agent-api/AGENTS.md` 同步口径 | agent-api 单测 986 passed |
+| R-7 | Git 项目设置创建默认工作区后 CAS 回写 `CloudHost.workspaceId`（仅空时），`hasDefaultWorkspace`/`defaultWorkspace` 恢复真实语义；契约注释同步；`T-CHG1` 增补回写断言 | cloud-host-github-service.test 通过 |
+| R-8 | `prHandlerRegistry.findById` + `processHandler` 在实例锁内重读登记行判重；新增「同一 eventId 并发重复投递」用例（1×COMPLETE、1×DUPLICATE_EVENT、0×HANDLER_FAILED） | pr-event-handler.test 19 passed |
+| R-9 | `KeyedMutex` 下沉到 `workflowEngine.transition`，按 `instanceId` 串行化 GraphQL/MCP/事件/兜底全部入口；新增并发 complete 用例（恰一次成功、一次拒绝） | engine.test 通过 |
+| R-10 | `ModelSection.enabledProviders` 改 `useMemo`；`CustomModelDialog` 重置 effect 依赖改为 `[open, model?.id]`；新增「父级重渲染不重置在填表单」回归用例 | admin-web 235 passed |
+
+### 8.3 C 组收口
+
+| # | 处理 |
+|---|---|
+| C-1 | `findByPullRequestId` 合并顺序改为「索引先入、DB 后入」，DB 行覆盖陈旧内存行 |
+| C-2 | 新增 `pullRequestIdLower` 字段 + `findByPullRequestId` 精确匹配 + 迁移 `008-workflow-pr-handler-lower-id`（回填 + 索引） |
+| C-3 | approved 分支流转失败回滚 `github-pr-review`（新增 `removeSystemAdditionalPrompt`）；`markEventHandled` 失败仅告警，不误报 HANDLER_FAILED |
+| C-4 | 载荷字段限长（eventId 200 / PR id 512 / prUrl 2048 / reviewer 256 / comment 64k 等）；提示词优先使用登记 `prUrl` |
+| C-5 | `X-Event-Token` 空值改用 `||`，不再遮蔽有效 Bearer |
+| C-6 | `register()` 按实例+节点加 `KeyedMutex`，消除 delete-then-upsert 并发双存活 |
+| C-7 | 提案 §3.1 对齐实现：`workflowId/nodeId` 可选、错误码 `INVALID_PARAMS`/`INVALID_STATE` |
+| C-8 | PRD 3.5 增补「并行分支 `CURRENT_NODE_AMBIGUOUS`」与「REWORK 态事件不驱动」口径 |
+| C-9 | `refreshAcpServerOptions` 删除失败显式报错；读侧按 `probedAt >= 删除时刻-5s` 过滤陈旧探测结果；补服务层单测 |
+| C-10 | `updateModelSortOrder` 接到 `invalidateAcpOptionsForUser`；AGENTS.md 与实现一致（`invalidateAcpOptionsForController` 保留为可复用工具函数） |
+| C-11 | `setControllerDefaultMcp` 契约补注：平台云工具服务不可选、显式提交返回 `MCP_SERVER_NOT_FOUND` |
+| C-12 | 契约改为「缺省或 null 均清空」，与 resolver 行为一致 |
+| C-13 | 重复用例 ID `T-CHG-P1b` 拆分为 `T-CHG-P1d` 并整理合并行格式 |
+| C-14 | 新增 `refreshAcpServerOptions` 服务层覆盖（缓存命中/删除重探/删除失败/陈旧结果过滤/Controller not found） |
+| C-15 | 去掉「新 MCP 上线后自动注入」的不实文案，改为「默认注入全部已启用的 MCP」 |
+| C-16 | 分支后缀改为 `setBranchSuffix(prev => prev || defaultSuffix)`，effect 移除 `workspaces` 依赖，避免列表刷新覆盖用户编辑 |
+| C-17 | `refetchHome` 失败兜底；操作终态停止 1.5s 轮询（`pollStopped`） |
+| C-18 | `McpDefaultSection` 增加 `dirtyRef`，未保存编辑不被后台刷新覆盖；保存成功清除 dirty |
+| C-19 | `Sidebar`/`SessionPage` 创建会话失败增加 `toast.error`（不再仅 console） |
+| C-20 | `WorkflowNodeTree` 在 `prUrl` 为空时渲染 `<span>`，消除无 href 死链接 |
+| C-21 | 集群侧验收项仍按 plan 手工验收；可测部分由 C-22/C-23 与 R-3 覆盖 |
+| C-22 | `llm.test.ts` models 查询增加 `contextLength` 并断言 null/正整数 |
+| C-23 | P10-CH3 重试后断言「进行中」可见，验证重试真的重新进入 RUNNING |
+| C-24 | `workflow-pr-callback.test.ts` 增加 CI 哨兵：CI 下缺 `EVENT_CALLBACK_TOKEN` 且未 `SKIP_PR_CALLBACK=1` 即红 |
+| C-25 | T-CH-API-CS2 改精确 `PENDING`；T-PR13 reason 改精确 `NO_HANDLER`；T-PR1 去 `toHaveProperty` 噪声断言 |
+| C-26 | tests/api 默认端口统一为 Aspire 实际值（agent-api 10001 / controller-api 35273） |
+| C-27 | 契约注释修正：`linkUpstreamPullRequest` true/false 语义、`cloudHost(id)` 软删除返回 null |
+| C-28 | 文档索引修正：产品索引 phase2 语义、tests/api 文件数 34→41、补 `INTERNAL_API_TOKEN` 环境行、E2E 索引补 E2E-1/P10-CH1/P10-CH2 |
+
+> 保留说明：C-19 仍保留「提交即关闭弹窗」，失败通过 toast 提示（未改为 Promise 回调成功后再关闭）；C-24 哨兵仅在 CI 生效，避免本地无栈环境误红；C-21 集群侧（磁盘超限终止/同节点隔离/存量不受影响）仍为手工验收项。
+
+### 8.4 复验结论
+
+- 五包 `tsc` 0 error、双前端 lint 0 error。
+- 单测：agent-api **986**、admin-api **656+1skip**、cloud-controller **254**、admin-web **235**、agent-web **657** 全绿。
+- `tests/e2e` typecheck exit=0；`tests/api` T-IC-EPH1/2 实跑绿。
+- 待第二轮以 Aspire 全栈实跑 `tests/api` 全量与 `tests/e2e`，完成集成验收。
