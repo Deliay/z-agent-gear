@@ -769,7 +769,7 @@ test.describe('Workflow E2E', () => {
       15000,
       'exec node FAILED after second stop',
     );
-    expect(failedNode.failInfo?.source).toBe('SESSION_STUCK');
+    expect(failedNode?.failInfo?.source).toBe('SESSION_STUCK');
 
     // UI 强提醒：节点「失败」badge + 顶部阻断 banner
     await loginViaUI(page, env.username);

@@ -55,7 +55,7 @@ test.describe('Github workload E2E', () => {
   test('T-EG5: Git 设置/新增工作区后「+」重新打开即时可见（无需刷新页面）', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
-    const controller = registerController(rawKey);
+    const controller = await registerController(rawKey);
     const firstPath = `/root/workspace/phase10-first-${Date.now().toString(36)}`;
     await createWorkspace(page, controller.controllerId, firstPath, token);
 

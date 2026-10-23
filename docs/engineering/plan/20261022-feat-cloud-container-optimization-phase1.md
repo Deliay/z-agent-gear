@@ -484,9 +484,10 @@ input SetupCloudHostGithubProjectInput {
   需跨进程读取 controller-api 内部 key，收益低于维护成本，故以该单测为权威覆盖，不新增
   `tests/api/src/controller-api/acp-options-prober.test.ts`。
 - `defaultSessionId` 回填：ready 路径已在 `tests/api/src/agent-api/cloud-host-callback.test.ts`
-  T-CH19/T-CH21/T-CH21b 做 API 断言；项目 setup 会话的 D2 CAS 回填由
-  `servers/agent-api/src/services/cloud-host-github-service.test.ts` T-CHG1 单测覆盖，并在
-  `tests/e2e/src/cloud-host.spec.ts` P10-CH2 断言 `cloudHost(id).defaultSessionId` 非空。
+  T-CH19/T-CH21/T-CH21b 做 API 断言；项目 setup 会话的 D2 CAS 回填权威覆盖为
+  `servers/agent-api/src/services/cloud-host-github-service.test.ts` T-CHG1 单测。
+  `tests/e2e/src/cloud-host.spec.ts` P10-CH2 仅验证 `cloudHost(id).defaultSessionId` 的
+  读取契约（该值与 operation 终态由 E2E fixture 直写，不执行 D2 CAS 代码路径）。
   黑盒 API 成功路径需要真实 worker 完成 clone/会话，本地/CI 无 K8s 时不可达。
 
 ### 实现要点
@@ -541,7 +542,11 @@ input SetupCloudHostGithubProjectInput {
   `session.spec.ts`（P10-S5/S6/S7）、`github-workload.spec.ts`（T-EG5）、
   `workflow.spec.ts`（P10-W8）。
 - 本轮实现受运行环境成本约束未启动 Aspire 全量服务，E2E 待验收环境执行；用例已通过
-  `playwright test --list` 静态加载校验。
+  `npm run typecheck`（`tsc --noEmit`）与 `playwright test --list` 静态加载校验。
+- 「Git 设置自动会话带默认 MCP」未单独起 E2E：该会话与普通会话共用
+  `sessionService.create` 的默认 MCP 解析链路，已由 P10-S5/S6 与
+  `tests/api` T-API-MCP1/T-API-MCP6 等价覆盖；T-EG5 只验证工作区列表即时可见，不创建
+  真实项目会话（无真实 worker/GitHub 环境）。
 
 ### 验收 checklist
 
