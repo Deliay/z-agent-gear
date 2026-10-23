@@ -1,11 +1,13 @@
 ---
-description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）；第四轮逐条复核返工提交 72baf55：N-5/N-6/N-7 属实闭环（N-6 回退探针实证可红），N-4 有界退避+超限告警+三入口接线属实但核心机制无效——runOutsideTransitionLock 经 KeyedMutex.runDetached 预取实例锁后才执行任务，任务内 workflowEngine.transition 必然再撞自锁 re-entrant，引擎级探针（真实锁+真实引擎）实证延迟路径 4 次尝试全数自撞、fail 转移 0 次执行、节点停留 RUNNING，配套用例 mock 掉被测对象零区分力，1×🟠 N-8（另有 🟡 N-9 持锁内 await runDetached 死锁隐患），独立复跑 tsc×7/lint×2/单测五包 1000/656+1skip/254/235/663/e2e-typecheck 全绿，第四轮打回（REJECT）
+description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）；第四轮逐条复核返工提交 72baf55：N-5/N-6/N-7 属实闭环（N-6 回退探针实证可红），N-4 有界退避+超限告警+三入口接线属实但核心机制无效——runOutsideTransitionLock 经 KeyedMutex.runDetached 预取实例锁后才执行任务，任务内 workflowEngine.transition 必然再撞自锁 re-entrant，引擎级探针（真实锁+真实引擎）实证延迟路径 4 次尝试全数自撞、fail 转移 0 次执行、节点停留 RUNNING，配套用例 mock 掉被测对象零区分力，1×🟠 N-8（另有 🟡 N-9 持锁内 await runDetached 死锁隐患），独立复跑 tsc×7/lint×2/单测五包 1000/656+1skip/254/235/663/e2e-typecheck 全绿，第四轮打回（REJECT）；第五轮逐条复核返工提交 7499758：N-8 核心修复属实闭环（runDetached 不预取锁、任务自行取锁，3 个新用例经回退探针实证可红、区分力成立，自报数值与独立复跑逐项一致 1002/656+1skip/254/235/663/tsc×7/tests-e2e-typecheck 全绿），但发现 1×🟠 N-10（N-9 快速失败误伤生产定时器形态——deferSessionFallback 重试 setTimeout 继承 ALS 过期 held 视图，外层锁持有超过 100ms 退避窗口即误抛，.catch 只告警不重排，兜底链静默丢弃、节点永久停 RUNNING，真实定时器探针 P2/P3 实证；交付用例 vi.useFakeTimers 不传播 ALS，结构性看不到 N-8 根因属性而漏检）+2×🟡（N-11 owners 记最后入队者致「持锁+排队等待者」假阴性，runDetached 仍永久死锁、JSDoc 与实现不符，探针 P4 实证；N-12 自报「N-9 不再永久等待」连续第四轮超出实际且未写明 fake-timer/ALS 测试边界），全栈证据连续五轮未交付、12.6 书面豁免待人类裁定，integration 集成验收第五轮打回（REJECT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **第四轮 N-8/N-9 已修复，待第五轮集成验收**（详见[第十六节](#十六第五轮返工修复记录2026-10-23)；全栈证据仍受环境限制，人类书面豁免待裁定）——第四轮对返工提交 `72baf55`（origin/integration，PR #273）逐条复核第三轮 N-4~N-7：**N-5/N-6/N-7 属实闭环**（N-5 `handleSessionIdled` 条件字段级 `updateOne` 无整文档 save、N-6 新用例经回退探针实证有区分力、N-7 C-27 `dependsOn` 断言 + C-11 `MCP_SERVER_NOT_SELECTABLE` 服务/resolver/前端/契约全落地），**N-4 的有界退避（100/200/400ms）+ 超限结构化告警 + ended/idled/removed 三入口接线属实，但核心机制无效**：`engine.runOutsideTransitionLock` 经 `KeyedMutex.runDetached` **预取实例转移锁之后**才执行任务（`keyed-mutex.ts:23-27,46`），任务内 `workflowEngine.transition` 再取同一把锁必然命中自锁 `re-entrant`——引擎级探针（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock，仅 mock DB 模型）实证：延迟路径 1+3 次尝试**全数自撞**、`fail` 转移 **0 次执行**（`findById` 仅外层 1 次）、节点停留 RUNNING 只剩 `retry exhausted` 告警；配套用例 `orchestrator.test.ts:465-486` 把 `workflowEngine.transition` mock 掉，断言的是 mock 再次调用而非真实取锁，**零区分力**（🟠 N-8）；另实证持锁 task 内 `await runDetached` **永久死锁**（🟡 N-9）。独立复跑 tsc×7/lint×2/单测五包 **1000/656+1skip/254/235/663**/tests-e2e-typecheck 全绿（与自报一致）；12.6 全栈书面豁免申请**待人类裁定**（本节点无权豁免）。详见[第十四节](#十四第四轮验收记录2026-10-23)。
+> **状态**: ❌ **第五轮集成验收 REJECT（1 × 🟠 N-10 + 2 × 🟡 N-11/N-12）**（详见[第十七节](#十七第五轮验收记录2026-10-23)）——第五轮对返工提交 `7499758`（origin/integration @ `2f19b3b..7499758`，PR #273）逐条复核第四轮 N-8/N-9：**N-8 核心修复属实闭环**——`KeyedMutex.runDetached` 不再预取锁、任务内 `transition` 自行取锁，第四轮自锁形态消除；3 个新用例经**回退探针**（换回预取锁语义后全部转红）实证区分力成立，自报数值与独立复跑逐项一致（tsc×7/lint×2/单测五包 **1002/656+1skip/254/235/663**/tests-e2e-typecheck 全绿）；**但发现修复引入/残留 1 × 🟠 + 2 × 🟡**：🟠 **N-10**（N-9 快速失败把「`deferSessionFallback` 重试定时器继承 ALS 过期 held 视图」误判为「仍持锁」——真实定时器探针 P2/P3 实证：外层锁持有超过 100ms 退避窗口即误抛 N-9，`.catch` 只告警不重排，**兜底链静默丢弃、节点永久停 RUNNING**；交付的引擎级用例用 `vi.useFakeTimers()`，fake timers 不传播 AsyncLocalStorage，结构性看不到 N-8 根因的 ALS 继承属性而漏检该形态）；🟡 **N-11**（`owners` 记「最后入队者」非「真实持有者」，持锁 + 排队等待者时守卫假阴性，`runDetached` 仍永久死锁——探针 P4 实证，JSDoc/文档与实现不符）；🟡 **N-12**（自报「N-9 一并处理…不再永久等待」超出实际，连续第四轮自报抽查命中，fake-timer/ALS 测试边界未写明）；全栈 tests/api 全量 + tests/e2e 全绿证据连续五轮未交付、12.6 书面豁免申请待人类裁定（本节点无权豁免）；integration 集成验收**第五轮打回（REJECT）**
+>
+> 第四轮背景（详见[第十四节](#十四第四轮验收记录2026-10-23)）——第四轮对返工提交 `72baf55`（origin/integration，PR #273）逐条复核第三轮 N-4~N-7：**N-5/N-6/N-7 属实闭环**（N-5 `handleSessionIdled` 条件字段级 `updateOne` 无整文档 save、N-6 新用例经回退探针实证有区分力、N-7 C-27 `dependsOn` 断言 + C-11 `MCP_SERVER_NOT_SELECTABLE` 服务/resolver/前端/契约全落地），**N-4 的有界退避（100/200/400ms）+ 超限结构化告警 + ended/idled/removed 三入口接线属实，但核心机制无效**：`engine.runOutsideTransitionLock` 经 `KeyedMutex.runDetached` **预取实例转移锁之后**才执行任务（`keyed-mutex.ts:23-27,46`），任务内 `workflowEngine.transition` 再取同一把锁必然命中自锁 `re-entrant`——引擎级探针（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock，仅 mock DB 模型）实证：延迟路径 1+3 次尝试**全数自撞**、`fail` 转移 **0 次执行**（`findById` 仅外层 1 次）、节点停留 RUNNING 只剩 `retry exhausted` 告警；配套用例 `orchestrator.test.ts:465-486` 把 `workflowEngine.transition` mock 掉，断言的是 mock 再次调用而非真实取锁，**零区分力**（🟠 N-8）；另实证持锁 task 内 `await runDetached` **永久死锁**（🟡 N-9）。独立复跑 tsc×7/lint×2/单测五包 **1000/656+1skip/254/235/663**/tests-e2e-typecheck 全绿（与自报一致）；12.6 全栈书面豁免申请**待人类裁定**（本节点无权豁免）。详见[第十四节](#十四第四轮验收记录2026-10-23)。
 >
 > 第三轮背景（详见[第十二节](#十二第三轮验收记录2026-10-23)）——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
 >
@@ -697,3 +699,96 @@ type: Permanent
 | tests/e2e typecheck | ✅ exit=0 |
 
 > 全栈 `tests/api` 全量与 `tests/e2e` 全绿仍受宿主机 AppHost 端口冲突、无 K8s、无预置控制器限制（详见 12.6 与 11.5）；本轮仅改动锁原语与测试，未新增环境依赖。人类书面豁免仍待裁定。
+
+## 十七、第五轮验收记录（2026-10-23）
+
+### 17.1 复核范围与结论
+
+- 复核对象：第五轮返工提交 `7499758`（`origin/integration` @ `2f19b3b..7499758`，PR #273 integration→release；diff 面 `origin/release...origin/integration` 41 提交 / 197 文件 / +16906 −447）。
+- 复核方式：逐行回读 `keyed-mutex.ts` / `engine.ts` / `orchestrator.ts` 改动面 + **引擎级探针实证**（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock 被测对象，仅 mock DB/会话）+ 回退探针 + 本机独立验证（不采信自报）。
+- **结论：❌ REJECT（第五轮打回）**。命中判定红线（1.3）：**1 × 🟠（N-10）**，另有 **2 × 🟡（N-11/N-12）** 随修复一并收口。
+- 属实闭环：**N-8 核心修复成立**（`runDetached` 不预取锁、任务自行取锁；3 个新用例经回退探针实证可红、区分力成立）；N-9 无排队者形态快速失败属实；自报数值与本轮独立复跑逐项一致。
+
+### 17.2 N-8 复核（✅ 属实，回退探针实证区分力）
+
+- `keyed-mutex.ts` 现状核实：`runDetached` 不再调用 `runExclusive`，改为「等待当前 tail 释放 → `heldKeys.exit(() => task())`」，任务内 `transition` 自行取锁——第四轮「预取锁 → 任务内必 re-entrant」的自锁形态**已消除**；`engine.runOutsideTransitionLock` JSDoc 同步改写属实。
+- **回退探针**（临时把 `runDetached` 换回第四轮「exit 后 runExclusive 预取锁」语义后复跑）：
+
+| 用例 | 回退后结果 | 区分力 |
+|---|---|---|
+| `keyed-mutex.test.ts` N-8：任务内可正常 runExclusive 同 key | ❌ 红 | ✅ |
+| `keyed-mutex.test.ts` N-9：持锁调用立即报错 | ❌ 红（5s 超时 = 旧死锁） | ✅ |
+| `orchestrator.test.ts` N-8：真实引擎链路重试后节点 FAILED | ❌ 红 | ✅ |
+
+- 恢复修复后 43 passed（keyed-mutex + orchestrator），与自报「43 passed」一致。**该轮新用例并非零区分力**，与第四轮 N-8 的假用例有本质区别。
+- 原「重试策略」用例已更名为「（mock transition）」并明示 mock 边界，16.2 自报纠正属实。
+
+### 17.3 N-10（🟠）：延迟重试误抛 N-9 → 兜底链静默丢弃 → 节点停 RUNNING（P2/P3 实证）
+
+**问题**：N-9 快速失败把「延迟回调继承 ALS 过期 held 视图」误判为「仍持锁」。`deferSessionFallback` 的重试定时器（`orchestrator.ts:325` `setTimeout`）**正是这一形态**——`setTimeout` 继承创建时的 AsyncLocalStorage store（即 N-8 根因认定的事实）。当重试触发时外层转移仍持锁（锁持有 > 100ms 退避窗口），`runDetached` 按 `owners.get(key) === myToken` 判定「仍持有」立即抛错（`keyed-mutex.ts:55-60`）；而该定时器回调**不在持锁任务链上**，等待释放本是安全且正确的行为。抛错后 `deferSessionFallback` 的 `.catch`（`orchestrator.ts:331-337`）只打 `fallback deferred retry failed` 告警、**不重排、不计数、不建介入 todo**，兜底链一次性丢弃，节点**永久停留 RUNNING**、sessionId 悬空——正是 `orchestrator.ts:143-147` 自证「必须让节点可见地失败」的反面。
+
+**探针 P2（真实定时器，生产形态）**：真实 `KeyedMutex` + 真实引擎 + 真实 orchestrator（仅 mock DB），`onNodeRestart` hook 内同步 `handleSessionRemoved('sess-2')`（命中 re-entrant → defer 100ms）后锁内慢动作 300ms（模拟 hook 内 `startNodeSession`/`sessionService.close` 网络调用或 DB 慢写）：
+
+```
+[P2] node.status = RUNNING
+     warns = ["[workflow] removed fallback deferred retry failed (instance=inst-1, session=sess-2, attempt=1):"]
+```
+
+100/200/400ms 全部退避窗口走完后节点仍 RUNNING，`retry exhausted` 告警与介入 todo 均不出现。正确语义应为等待锁释放后执行兜底 → 节点 FAILED。
+
+**探针 P3（纯 KeyedMutex）**：持锁任务内 `setTimeout(20ms)` 注册回调（继承 held 视图、不被任务 await），任务持锁 60ms：
+
+```
+[P3] timerResult = throw:KeyedMutex.runDetached called while still holding key: k (would deadlock waiting for itself)
+```
+
+回调被误抛而非等待——与 JSDoc「延迟回调常见（过期 held 视图）→ 先等待当前 tail 释放」自相矛盾。
+
+**用例盲区（加重情节）**：交付的引擎级用例用 `vi.useFakeTimers()`，而 vitest fake timers 不经 async_hooks 创建资源、**不传播 AsyncLocalStorage**，重试回调在 fake-timer 形态下不携带任何 held 视图——同一探针结构 fake timers 下全绿、真实定时器下必红。即：N-8 根因正是「`setTimeout` 继承 ALS store」，而交付用例的定时器形态**结构性看不到这个属性**，N-10 因此漏检。mock 边界已明示，但 fake-timer/ALS 边界未写明。
+
+**对比第四轮代码**：同形态下第四轮 `runDetached` 会排队等待并最终以 `retry exhausted` 可见告警收尾（失败原因在预取锁自撞）；第五轮把「可见失败」变成了「静默丢链」——兜底在该形态下比修复前更不可观测。
+
+**缓解因素（如实记录）**：回环触发面仍是残留/未来路径（orchestrator 三处 close 全部 `suppressFallback: true`（3/3 grep 复核）、`updateStatus('ended')` 无生产调用方、`notifySession*` 经 SSE 跨上下文不命中同上下文重入）；外层锁持有 < 100ms 时主路径已修复且可用例证明。但机制即为残留回环兜底而留，「条件必败 + 静默丢链 + 用例结构性盲区」不满足第三/四轮已确立的「二选一必须真正二选一」标准。
+
+### 17.4 N-11（🟡）：N-9 守卫假阴性——持锁 + 排队等待者时仍永久死锁（P4 实证）
+
+`owners` 在**入队时**覆盖（`keyed-mutex.ts:34` `this.owners.set(key, token)`），记的是「最后入队者」而非「真实持有者」。持锁任务 A 之后若有等待者 B 排队，A 内 `await runDetached(key)` 时 `owners.get(key)` 已是 B 的 token → 守卫不抛 → 等待 tailB（其解析依赖 A 自身释放）→ **永久死锁**。探针 P4：
+
+```
+[P4] result = DEADLOCK(timeout), waiterRan = true   // 300ms 内 runDetached 既不抛也不完成
+```
+
+即第四轮探针 A① 的死锁在「有排队者」变体下原样残留，且无超时无日志。`keyed-mutex.ts` JSDoc 与 `engine.ts` 文档「若在仍持有锁时调用（同一 holder token），立即抛错而不是挂起等待自己」未限定条件，与实现不符。修 `owners` 记账（真实持有者集合）只能修假阴性，不能修 N-10 假阳性（P3 与 P4 同源于 ALS 无法区分「detach 回调」与「持锁误用」）；建议改有界等待超时告警或拆分两个 API。
+
+### 17.5 N-12（🟡）：自报表述连续第四轮超出实际
+
+- 修复产物/16.1 称「N-9 一并处理：仍持有锁时调用 `runDetached` 立即抛…**不再永久等待**」——P4 反例证明该保证有缺口（排队者形态仍永久死锁）；「holder token 区分真实持锁与延迟回调中残留的过期 held 视图」同样失真（P3 将 detach 回调误判为持锁）。应限定为「无排队等待者时抛错」并如实记录 P4 缺口。
+- 历轮口径：N-2「保存成功清 dirty」（第二轮）→ N-5「fallbackSent 改字段级」范围（第三轮）→ N-4「重试成功」有效性（第四轮）→ 本轮 N-9 完备性，**连续第四轮抽查命中**。第五轮要求③仅完成了一半（mock 边界已写明；fake-timer/ALS 边界与 N-9 条件性未写明）。
+
+### 17.6 独立验证（本机实跑，不采信自报）
+
+| 项目 | 结果 | 与自报对比 |
+|---|---|---|
+| tsc ×7（agent-api/admin-api/cloud-controller/controller-api/agent-web/admin-web/tests-e2e） | ✅ 全 0 error | 一致（自报仅报 agent-api，其余为保持项） |
+| lint ×2（agent-web/admin-web） | ✅ 0 error（5 条存量 exhaustive-deps warning） | 一致 |
+| 单测 agent-api | ✅ **1002 passed**（另 3 红为本轮临时探针，已删除） | 一致 |
+| 单测 admin-api | ✅ **656 passed / 1 skipped** | 一致 |
+| 单测 cloud-controller | ✅ **254 passed** | 一致 |
+| 单测 admin-web | ✅ **235 passed** | 一致 |
+| 单测 agent-web | ✅ **663 passed** | 一致 |
+| tests/e2e typecheck | ✅ exit=0 | 一致 |
+| 回退探针（runDetached 换回预取锁语义） | ✅ 3 个新用例全部转红 | N-8 修复区分力成立 |
+| 探针 P2（真实定时器 + 锁内慢动作） | ❌ 兜底链丢弃、节点停 RUNNING | → N-10 |
+| 探针 P3（detach 回调 + 持锁） | ❌ 误抛 N-9 | → N-10 |
+| 探针 P4（持锁 + 排队等待者） | ❌ 300ms 无响应（死锁） | → N-11 |
+| Aspire 全栈 tests/api 全量 + tests/e2e | ⚠️ 连续五轮未取得全绿证据；12.6 人类书面豁免仍待裁定 | 与自报一致（环境受限如实）；**本节点无权豁免** |
+
+### 17.7 第五轮判定与下轮要求
+
+- **判定：❌ REJECT（第五轮打回）**：1 × 🟠 N-10 + 2 × 🟡 N-11/N-12。
+- 已闭环确认：N-8 核心（✅ 回退探针实证）、N-9 无排队者形态（✅）、自报数值（✅ 逐项一致）、报告 16 节追加（✅）。
+- **下轮要求**：
+  1. **N-10（🟠）**：延迟重试在原持有者仍持锁时不得丢链——(a) `runDetached` 对「继承 ALS 过期视图的 detach 回调」不误抛（建议改有界等待 + 超时结构化告警，或拆分 `runDetached`/`assertNotHolding` 两个 API）；(b) `deferSessionFallback` 的 `.catch` 必须按退避重排并计入同一 attempt 预算，超限才 `retry exhausted` 告警并创建介入 todo，禁止静默丢链；(c) 补**真实定时器**引擎级用例（禁 fake timers，或以真实 `setTimeout` 等价 harness）覆盖「外层锁持有超过退避窗口」形态——fake-timer 用例结构性看不到 ALS 继承，恰是本轮漏检根源。
+  2. **N-11（🟡）**：消除「持锁 + 排队等待者」假阴性死锁（`owners` 记真实持有者，或随 (a) 的超时守卫一并消除），JSDoc/文档与实现一致，补对应用例。
+  3. **N-12（🟡）**：自报限定 N-9 保证的适用条件并如实记录 P4 缺口；继续写明全部测试边界（本轮新增：fake-timer 不传播 ALS）。
+  4. 全栈 `tests/api` 全量 + `tests/e2e` 全绿证据随修复交付，或人类书面豁免落定（连续五轮未交付，12.6 待人类裁定，本节点无权自行豁免）。
