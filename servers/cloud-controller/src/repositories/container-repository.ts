@@ -53,6 +53,8 @@ export interface CloudContainerEntity {
   installedWorkloads: InstalledWorkloadEntry[];
   /** 当前初始化批次来源；非初始化中为 null。 */
   initTrigger: 'start' | 'runtime' | null;
+  /** 起始初始化已收口（首次 online）时间；非空后断线重连不再执行 init 批次。 */
+  initCompletedAt: Date | null;
   /** 计费账户 ID；null 表示不计费（费用中心）。 */
   billingAccountId: string | null;
   /** 就绪计费起点（首次进入 online）；null 表示未就绪/不计费。 */
@@ -86,6 +88,7 @@ export interface CreateContainerInput {
   currentWorkloadName?: string | null;
   installedWorkloads?: InstalledWorkloadEntry[];
   initTrigger?: 'start' | 'runtime' | null;
+  initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
@@ -150,6 +153,7 @@ interface RawDoc {
     source?: unknown;
   }> | null;
   initTrigger?: string | null;
+  initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
   createdAt: Date;
@@ -234,6 +238,7 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     installedWorkloads: cloneInstalledWorkloads(doc.installedWorkloads),
     initTrigger:
       doc.initTrigger === 'start' || doc.initTrigger === 'runtime' ? doc.initTrigger : null,
+    initCompletedAt: doc.initCompletedAt ?? null,
     billingAccountId: doc.billingAccountId ?? null,
     billingStartedAt: doc.billingStartedAt ?? null,
     createdAt: doc.createdAt,
@@ -268,6 +273,7 @@ export class MongoContainerRepository implements ContainerRepository {
       currentWorkloadName: input.currentWorkloadName ?? null,
       installedWorkloads: cloneInstalledWorkloads(input.installedWorkloads),
       initTrigger: input.initTrigger ?? null,
+      initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
     });
@@ -349,6 +355,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
       currentWorkloadName: input.currentWorkloadName ?? null,
       installedWorkloads: cloneInstalledWorkloads(input.installedWorkloads),
       initTrigger: input.initTrigger ?? null,
+      initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
       createdAt: input.createdAt ?? now,

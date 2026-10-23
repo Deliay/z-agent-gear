@@ -730,6 +730,55 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
+  it('T-WG1d: 已完成初始化的容器重启 agent-gear 后重新 register 不重跑 init（工作流只初始化一次）', async () => {
+    workloadRepository.add(
+      mkWorkload('gw-once', 'gw-once-script', { initScript: 'echo once' }),
+    );
+    const { container, token } = await newContainer(['gw-once']);
+    const first = await connectWith(token);
+    const firstRegistered = waitFor(first, 'registered');
+    const runPromise = waitFor<{ phase: string; items: Array<{ logId: string }> }>(
+      first,
+      'workload:run',
+    );
+    first.emit('register', { hostname: 'worker-once', version: OK_VERSION });
+    await firstRegistered;
+    const run = await runPromise;
+    first.emit('workload:result', {
+      logId: run.items[0]!.logId,
+      status: 'success',
+      exitCode: 0,
+      log: 'once',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
+
+    // agent-gear 进程重启：socket 断开 → online 退回 connecting，随后重新 register。
+    first.close();
+    await waitForCondition(
+      async () => (await repo.findById(container.id))?.status === 'connecting',
+    );
+
+    const second = await connectWith(token);
+    let rerun = false;
+    second.on('workload:run', () => {
+      rerun = true;
+    });
+    const registered = waitFor<{ initializing: boolean }>(second, 'registered');
+    second.emit('register', { hostname: 'worker-once', version: OK_VERSION });
+    expect((await registered).initializing).toBe(false);
+    await waitForCondition(async () => (await repo.findById(container.id))?.status === 'online');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(rerun).toBe(false);
+    const initLogs = (await workloadLogRepository.findByContainer(container.id)).filter(
+      (log) => log.phase === 'init',
+    );
+    expect(initLogs).toHaveLength(1);
+    second.close();
+  });
+
   it('T-WG2: 有 post 脚本的 destroy → 先 post 批次、收到结果后再 shutdown', async () => {
     workloadRepository.add(mkWorkload('gw-post', 'gw-post-script', { postScript: 'echo bye' }));
     const { container, token } = await newContainer(['gw-post']);
