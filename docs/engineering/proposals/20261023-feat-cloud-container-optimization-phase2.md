@@ -1,5 +1,5 @@
 ---
-description: 云容器优化二期技术提案：CreateCloudHostInput.createDefaultWorkspace（默认不建 /root/workspace）、Model.contextLength（后台模型最长上下文 + 经 OpenAI 兼容 GET /v1/models 的 context_length 字段下发）、云电脑 Job 模板 ephemeral-storage 上限 10Gi
+description: 云容器优化二期技术提案：创建期不预置默认工作区（`create()` 一律不建 `/root/workspace`，仅「Git 项目设置」初始化 Github 项目时按 targetPath 建）、Model.contextLength（后台模型最长上下文 + 经 OpenAI 兼容 GET /v1/models 的 context_length 字段下发）、云电脑 Job 模板 ephemeral-storage 上限 10Gi（仅 limits）
 type: Permanent
 ---
 
@@ -7,11 +7,11 @@ type: Permanent
 
 **功能名称**: 云容器优化二期
 **关联 PRD**: `docs/product/draft/20261023-cloud-container-optimization-phase2.md`
-**技术提案版本**: v1.1
+**技术提案版本**: v1.2
 **创建日期**: 2026-10-23
 **作者**: ZeroAsh Agent
 **feat-branch**: `feat/cloud-container-optimization-phase2`
-**变更记录**: v1.1（2026-10-23）返工修订——模型最长上下文改为经 OpenAI 兼容 API（`GET /v1/models` 模型对象 `context_length` 字段）下发给下游，移除 `secrets → ZAG_MODEL_CONTEXT_LENGTHS → opencode.jsonc limit.context` 自研注入链（原实现点 3 / 决策 8 重写）；v1.0 初版。
+**变更记录**: v1.2（2026-10-23）合并期修订（与 phase1/phase10 汇合）——舍弃 `CreateCloudHostInput.createDefaultWorkspace` 开关：`create()` 一律不预置 `/root/workspace`，默认工作区只在「Git 项目设置」初始化 Github 项目时按 `targetPath` 创建（`ensureWorkspace`），与 phase1 `createDefaultSession` 组合成「两开关同时允许才建默认会话」；`ephemeral-storage` 口径改为仅注入 `limits`（不设 `requests`，与 main PR #268 一致）；v1.1（2026-10-23）返工修订——模型最长上下文改为经 OpenAI 兼容 API（`GET /v1/models` 模型对象 `context_length` 字段）下发给下游，移除 `secrets → ZAG_MODEL_CONTEXT_LENGTHS → opencode.jsonc limit.context` 自研注入链（原实现点 3 / 决策 8 重写）；v1.0 初版。
 
 ## 1. 概述
 
@@ -27,17 +27,17 @@ type: Permanent
 
 ### 1.2 目标
 
-- 新建云电脑默认不创建默认工作区：`CreateCloudHostInput` 增加 `createDefaultWorkspace: Boolean = false`，仅显式勾选才创建 `ControllerWorkspace`（`/root/workspace`），否则 `CloudHost.workspaceId` 为空、就绪后不自动建默认会话。
+- 新建云电脑不预置默认工作区：`create()` 一律不再调用 `ensureCloudHostWorkspace`（`CloudHost.workspaceId` 恒 `null` 落库），默认工作区只在「Git 项目设置」初始化 Github 项目时由 `ensureWorkspace(targetPath)` 创建；无工作区时就绪后不自动建默认会话。
 - 模型支持「最长上下文大小」：`Model.contextLength`（正整数 token，null = 未设置），后台可增改清空，双侧 schema/契约同步，并经 OpenAI 兼容 API（`GET /v1/models` 模型对象 `context_length` 字段）下发给下游使用方。
-- 云电脑 Job 模板增加 `ephemeral-storage` 资源约束：requests/limits 均为 10Gi（env 可覆盖），超限由 K8s 按既有失败语义回收。
+- 云电脑 Job 模板增加 `ephemeral-storage` 资源约束：仅 `limits` 为 10Gi（env 可覆盖，不设置 `requests`），超限由 K8s 按既有失败语义回收。
 
 ### 1.3 范围
 
 **做**：
 
-- `contracts/cloud-host.graphql`：`CreateCloudHostInput +createDefaultWorkspace`（默认 `false`）。
+- `contracts/cloud-host.graphql`：`CloudHost +hasDefaultWorkspace` 只读字段；`CreateCloudHostInput` **不**新增工作区开关（创建期一律不建默认工作区，仅保留 phase1 的 `createDefaultSession`）。
 - `contracts/admin-llm.graphql`：`Model +contextLength`、`CustomModelInput +contextLength`、`Mutation.updateModelContextLength`；`contracts/llm.graphql`：`Model +contextLength`（只读镜像）。
-- agent-api：`CloudHost.workspaceId` 可空、按开关创建默认工作区、无工作区时跳过默认会话（`handleReadyLocked` 与重复 ready 补建两处）。
+- agent-api：`CloudHost.workspaceId` 可空且创建期不写入、默认会话按 `createDefaultSession !== false && workspaceId` 双条件建（`handleReadyLocked` 与重复 ready 补建两处）、`hasDefaultWorkspace` 只读映射。
 - admin-api / agent-api：`Model.contextLength` 持久化与 GraphQL 暴露（双侧 schema 同步演进，共用同一 MongoDB `models` 集合）。
 - admin-web：模型新增/编辑表单的「最长上下文大小」输入与校验、模型条目展示与编辑入口。
 - admin-api 计费网关（OpenAI 兼容）：`contracts/billing-openai.openapi.yaml` 的 `Model` 增可选 `context_length`（token），`GET /v1/models` 随模型对象下发（未设置不返回该字段）；下游（云电脑内 harness、第三方 OpenAI 兼容客户端）直接从 API 读取。
@@ -66,6 +66,7 @@ graph TD
         AA[agent-api<br/>CloudHostService / Model]
         AD[admin-api<br/>Model / GraphQL]
         CC[cloud-controller<br/>K8sJobManager]
+        CWS[agent-api<br/>GithubProjectService / WorkspaceService]
     end
 
     subgraph 运行时
@@ -76,7 +77,8 @@ graph TD
 
     DB[(MongoDB<br/>cloudhosts / models / controllerworkspaces)]
 
-    AW -->|createCloudHost input<br/>createDefaultWorkspace| AA
+    AW -->|createCloudHost<br/>不带工作区开关| AA
+    AA -->|Git 项目设置初始化<br/>ensureWorkspace(targetPath)| CWS
     ADW -->|Model.contextLength 增改清| AD
     AA --> DB
     AD --> DB
@@ -114,8 +116,8 @@ graph LR
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
-| agent-api `CloudHostService` | 云电脑创建编排、默认工作区与默认会话 | `createDefaultWorkspace` 分支、`workspaceId` 可空、ready 回调条件化建会话 |
-| agent-api `ControllerWorkspaceService` | 工作区 upsert（`ensureCloudHostWorkspace`） | 幂等 upsert，不触发 10 工作区上限 |
+| agent-api `CloudHostService` | 云电脑创建编排与默认会话 | 创建期不写 `workspaceId`、默认会话按 `createDefaultSession !== false && workspaceId` 双条件建、`hasDefaultWorkspace` 只读映射 |
+| agent-api `ControllerWorkspaceService` | 工作区 upsert（`ensureWorkspace` / `ensureCloudHostWorkspace`） | 幂等 upsert，不触发 10 工作区上限；**创建期不再调用**，仅「Git 项目设置」按 `targetPath` 调用 `ensureWorkspace` |
 | admin-api `ModelService` + agent-api `ModelService` | 模型配置（含 `contextLength`） | 双 schema 同步演进、同一 `models` 集合 |
 | admin-api `/v1` 计费网关（`routes/billing-openai.ts`） | OpenAI 兼容模型发现面 | `toModelEntry` 附带 `context_length`（未设置省略），下游按兼容口径读取 |
 | cloud-controller `K8sJobManager` | Job pod 模板构造 | `JOB_RESOURCES` + `ephemeral-storage`、env 注入 |
@@ -125,7 +127,7 @@ graph LR
 
 ### 3.1 API 契约
 
-#### 契约 1: `contracts/cloud-host.graphql` — 创建云电脑可选默认工作区
+#### 契约 1: `contracts/cloud-host.graphql` — 创建云电脑不提供默认工作区开关
 
 ```graphql
 input CreateCloudHostInput {
@@ -133,11 +135,16 @@ input CreateCloudHostInput {
   harnessTypes: [HarnessType!]!
   workloadIds: [ID!]
   createDefaultSession: Boolean = true
-  # 新增：是否创建默认工作区（/root/workspace）；默认不创建（需求：默认不勾选）
-  createDefaultWorkspace: Boolean = false
+}
+
+type CloudHost {
+  # ...
+  # 新增：是否已创建默认工作区（workspaceId != null）
+  hasDefaultWorkspace: Boolean!
 }
 ```
 
+- 创建期**不**新增任何工作区开关（`createDefaultWorkspace` 方案已舍弃）：`create()` 一律不写 `workspaceId`，默认工作区只在「Git 项目设置」初始化 Github 项目时由 `ensureWorkspace(targetPath)` 创建。
 - `CloudHost.defaultWorkspace: String!` **不变**：`workspaceId → ControllerWorkspace.path`，缺失回退 `CLOUD_HOST_DEFAULT_WORKSPACE`（语义为「Github 项目准备前缀默认值」，见决策 4）。
 - 错误语义不变：`too many cloud hosts` / `control plane unavailable` / `billing service unavailable`。
 
@@ -209,9 +216,12 @@ components:
 #### 内部 2: 云电脑 Job 模板资源约束（cloud-controller 内部）
 
 ```yaml
+# 与 main 口径一致：不设置 requests，仅声明 limits 硬上限
 resources:
-  requests: { cpu: '250m', memory: '1Gi', ephemeral-storage: '10Gi' }
-  limits:   { cpu: '2',    memory: '4Gi', ephemeral-storage: '10Gi' }
+  limits:
+    cpu: '4'
+    memory: '16Gi'
+    ephemeral-storage: '10Gi'   # JOB_EPHEMERAL_STORAGE 可覆盖
 ```
 
 ## 4. 数据模型
@@ -247,7 +257,7 @@ resources:
 
 ### 5.1 核心流程
 
-创建云电脑（默认工作区开关）：
+创建云电脑（不预置默认工作区）：
 
 ```mermaid
 sequenceDiagram
@@ -257,19 +267,18 @@ sequenceDiagram
     participant CW as ControllerWorkspace
     participant CC as cloud-controller
 
-    U->>AW: 新建云电脑（「创建默认工作区」默认不勾选）
-    AW->>AA: createCloudHost(createDefaultWorkspace: false)
-    alt createDefaultWorkspace = true
-        AA->>CW: ensureCloudHostWorkspace(/root/workspace)
-        CW-->>AA: workspaceId
-    else createDefaultWorkspace = false
-        AA->>AA: workspaceId = null（不创建工作区）
-    end
+    U->>AW: 新建云电脑（无「创建默认工作区」勾选项）
+    AW->>AA: createCloudHost（不带工作区开关）
+    AA->>AA: workspaceId = null（创建期不创建工作区）
     AA->>CC: startHarness(secrets: 既有六项)
     CC-->>AA: containerId
-    AA-->>AW: CloudHost(STARTING)
-    Note over AA: ready 回调：仅 workspaceId 非空才建默认会话
+    AA-->>AW: CloudHost(STARTING, hasDefaultWorkspace=false)
+    Note over AA: ready 回调：createDefaultSession!==false 且 workspaceId 非空才建默认会话
     AA-->>AW: RUNNING（defaultSessionId 为空时提示「未创建默认工作区」）
+    U->>AA: Git 项目设置初始化 Github 项目
+    AA->>CW: ensureWorkspace(targetPath)
+    CW-->>AA: workspaceId
+    AA-->>AW: 工作区就位，无工作区提示消失
 ```
 
 模型最长上下文设置与下发：
@@ -293,17 +302,18 @@ sequenceDiagram
 
 ### 5.2 关键实现点
 
-#### 实现点 1: `createDefaultWorkspace` 开关（agent-api + agent-web）
+#### 实现点 1: 创建期不预置默认工作区（agent-api + agent-web）
 
-- **描述**: 创建云电脑不再无条件预置 `/root/workspace` 工作区；开关默认 `false`。
+- **描述**: 创建云电脑不再预置 `/root/workspace` 工作区；`create()` 一律不写 `workspaceId`，默认工作区只在「Git 项目设置」初始化 Github 项目时按 `targetPath` 创建。
 - **技术细节**:
-  - `servers/agent-api/src/services/cloud-host-service.ts`：`validateInput` 返回值增加 `createDefaultWorkspace: input.createDefaultWorkspace === true`；`create()` 中把 `ensureCloudHostWorkspace(...)` 包进 `if (createDefaultWorkspace)`，否则 `workspaceId` 保持 `null` 落库（`CloudHost.create` 传 `workspaceId: workspaceId ?? undefined`）。
+  - `servers/agent-api/src/services/cloud-host-service.ts`：`create()` 移除 `ensureCloudHostWorkspace(...)` 调用（`workspaceId` 恒 `null` 落库），仅保留 phase1 的 `createDefaultSession` 入参；`controllerWorkspaceService` 不再被 `CloudHostService` 引用（改由 `cloud-host-github-service` 的 `ensureWorkspace` 承担）。
   - `servers/agent-api/src/models/cloud-host.ts`：`workspaceId` 改 `required: false, default: null`。
-  - `handleReadyLocked`（STARTING→RUNNING 分支）与重复 ready 补建分支：默认会话条件由 `harnessTypes.length === 1 && wantsDefaultSession` 增加 `host.workspaceId` 判空；无工作区时 `defaultSessionId` 保持 `null`（只 log，不报错）。
-  - `servers/agent-api/src/graphql/schemas/cloud-host.ts` 与 `contracts/cloud-host.graphql` 同步 `CreateCloudHostInput`。
-  - `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx`：新增「创建默认工作区」复选（默认不选中，与 Github 项目/预装工作负载区块并列），`handleSubmit` 组装 `createDefaultWorkspace`；`apps/agent-web/src/graphql/mutations.ts` `CREATE_CLOUD_HOST` 与 `types.ts` 同步。
+  - `handleReadyLocked`（STARTING→RUNNING 分支）与重复 ready 补建分支：默认会话条件为 `harnessTypes.length === 1 && createDefaultSession !== false && host.workspaceId`（与 phase1 开关组合）；无工作区时 `defaultSessionId` 保持 `null`（只 log，日志区分 `createDefaultSession=false` / `no default workspace`，不报错）。
+  - 契约同步：`contracts/cloud-host.graphql` 与 `servers/agent-api/src/graphql/schemas/cloud-host.ts` 仅保留 `createDefaultSession`，并新增只读 `hasDefaultWorkspace`（`Boolean(workspaceId)`）。
+  - `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx`：**不**提供「创建默认工作区」复选；单 Harness 提示「就绪后不会自动创建会话，需先创建或绑定工作区」。
+  - `apps/agent-web/src/hooks/useGithubProjectForm.ts`：`hasDefaultWorkspace === false` 时前缀不预填（placeholder `例如：/workspace`），新建云电脑流程仍以 `defaultWorkspace ?? '/root/workspace'` 兜底。
   - 就绪后无默认会话的提示与入口：复用一期的进度/提示组件语义，给出「Git 项目设置」与新建工作区入口（不新增会话创建逻辑）。
-- **风险点**: 存量调用方若依赖「必有默认工作区」，默认值 `false` 是**有意的行为变更**（PRD 已声明）；`secrets.defaultWorkspace` 保持下发，容器内 `mkdir` 不变，无 agent-gear 版本依赖。
+- **风险点**: 存量调用方若依赖「必有默认工作区」，创建期一律不建是**有意的行为变更**（PRD 已声明，v1.2 合并期口径）；`secrets.defaultWorkspace` 保持下发，容器内 `mkdir` 不变，无 agent-gear 版本依赖；旧入口「就绪后自动进入默认会话」在无工作区时不再发生，需用户先建/绑工作区。
 
 #### 实现点 2: `Model.contextLength`（admin-api + agent-api + admin-web）
 
@@ -329,11 +339,11 @@ sequenceDiagram
 
 - **描述**: 云电脑 Job 模板增加临时存储上限 10Gi。
 - **技术细节**:
-  - `servers/cloud-controller/src/services/k8s-job-manager.ts`：`JOB_RESOURCES` 增加 `requests['ephemeral-storage']` / `limits['ephemeral-storage']`；取值来自 `JobManagerConfig.ephemeralStorage`（缺省 `'10Gi'`，由 env `JOB_EPHEMERAL_STORAGE` 注入，风格对齐 `RUNTIME_CLASS_NAME`）。
+  - `servers/cloud-controller/src/services/k8s-job-manager.ts`：`resources.limits` 增加 `'ephemeral-storage'`（**仅 limits，不设置 requests**，与 main PR #268 口径一致）；取值来自 `JobManagerConfig.ephemeralStorage`（缺省 `'10Gi'`，由 env `JOB_EPHEMERAL_STORAGE` 注入，风格对齐 `RUNTIME_CLASS_NAME`）。
   - `servers/cloud-controller/src/services/k8s-client.ts`：`K8sResourceList` 增加可选 `'ephemeral-storage'?: string`（键名含连字符需引号）。
   - 配置注入：`deploy/k8s/cloud-controller.yaml`（Deployment env）、`aspire/AgentGear.AppHost/AppHost.cs`、`aspire/manifest/docker-compose.yaml` 增加 `JOB_EPHEMERAL_STORAGE=10Gi`。
   - 测试锚点：`servers/cloud-controller/src/services/k8s-job-manager.test.ts`（既有对 `JOB_RESOURCES` 的断言处补 `ephemeral-storage`）。
-- **风险点**: 节点 `allocatable.ephemeral-storage` 不足时 Pod 会 Pending（`Unschedulable`）；超限时 kubelet 以 `Evicted`/容器失败回收，落到既有 `FAILED` + `failureReason` 语义（`k8s-job-manager` 的 watch 映射已在处理 Job 失败）。requests = limits 是 K8s「只给 limit 时 request 默认等于 limit」的显式化，不改变调度结果。
+- **风险点**: 节点 `allocatable.ephemeral-storage` 不足时 Pod 会 Pending（`Unschedulable`）；超限时 kubelet 以 `Evicted`/容器失败回收，落到既有 `FAILED` + `failureReason` 语义（`k8s-job-manager` 的 watch 映射已在处理 Job 失败）。不设置 `requests` 时 K8s 会按 `limits` 推导调度量（默认 `requests = limits`），显式省略 `requests` 与 main 既有 CPU/内存口径一致。
 
 ## 6. 技术决策
 
@@ -341,7 +351,7 @@ sequenceDiagram
 
 | # | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |---|------|--------|--------|---------|------|
-| 1 | 「创建默认工作区」默认值 | `true`（旧行为） | `false` | **B** | 需求明确「默认不勾选」；旧行为可显式勾选完全等价 |
+| 1 | 创建期是否预置默认工作区 | 保留「创建默认工作区」开关 | 一律不预置（舍弃该开关） | **B** | 人类审核结论：`createDefaultWorkspace` 被舍弃；未要求初始化 Github 项目就不创建任何默认工作区，默认工作区只由「Git 项目设置」按 `targetPath` 创建 |
 | 2 | 无默认工作区时的默认会话 | 强制建会话并报错 | 跳过并提示 | **B** | 会话必须绑定工作区；跳过 + 引导创建/绑定工作区最平滑 |
 | 3 | `CloudHost.workspaceId` | 保持 required | 改为可空 | **B** | 无默认工作区即无 workspaceId；可空零迁移、回滚路径已兼容 |
 | 4 | `CloudHost.defaultWorkspace` 契约 | 改 nullable | 保持 `String!` 回退配置值 | **B** | 该字段仅作 Github 项目准备的前缀默认值/占位，改可空会牵连前端与既有测试，收益为零 |
@@ -350,7 +360,7 @@ sequenceDiagram
 | 7 | 修改入口 | 通用 `updateModel` | 独立 `updateModelContextLength` | **B** | 与既有 granular mutation（`toggleGlobalModel`/`updateModelPricing`）风格一致，改动面小 |
 | 8 | `contextLength` 下发渠道 | secrets/env/`opencode.jsonc` 注入（自研链路） | OpenAI 兼容 API `/v1/models` 字段 | **B** | **返工修订**：需求要求经 OpenAI 兼容 API 字段下发给下游；标准协议面任意兼容客户端可读、修改即生效、不耦合 harness 内部配置与容器重建 |
 | 9 | `ephemeral-storage` 单位 | `10G`（10^9 B） | `10Gi`（2^30 B） | **B** | 与 memory 的 `Gi` 口径一致、符合 K8s 惯例；10Gi ≈ 10.7GB，覆盖「10G」语义 |
-| 10 | requests/limits | 只写 limits | 双显式 10Gi | **B** | K8s 只给 limit 时 request 默认等于 limit，显式化便于审计与测试断言 |
+| 10 | requests/limits | 只写 limits | 双显式 10Gi | **A** | 与 main PR #268 既有 CPU/内存口径一致（只声明 `limits`，不设 `requests`），PRD 表述为「上限」；显式补 `requests` 会与 main 的类型/断言冲突 |
 | 11 | 存储上限口径 | 硬编码 | env `JOB_EPHEMERAL_STORAGE` 覆盖 | **B** | 与 `RUNTIME_CLASS_NAME`/`JOB_ACTIVE_DEADLINE_SECONDS` 配置风格一致，便于按环境调整 |
 | 12 | `/v1/models` 上下文字段命名 | `context_length`（OpenRouter 等兼容网关惯例） | `max_model_len`（vLLM 系） | **A** | 语义直指「上下文长度」且单位为 token，贴近 OpenAI 兼容网关常见口径；仅命名差异，契约评审可整体替换 |
 | 13 | 未设置时的字段形态 | 返回 `null` | 省略字段 | **B** | 「未设置」即未知，省略字段对老客户端最友好，也与 OpenAI 可选字段惯例一致 |
@@ -372,7 +382,7 @@ sequenceDiagram
 ```
 z-agent-gear/
 ├── contracts/
-│   ├── cloud-host.graphql              # CreateCloudHostInput +createDefaultWorkspace
+│   ├── cloud-host.graphql              # CloudHost +hasDefaultWorkspace（无创建期工作区开关）
 │   ├── admin-llm.graphql               # Model +contextLength、CustomModelInput +contextLength、updateModelContextLength
 │   ├── llm.graphql                     # Model +contextLength（只读）
 │   └── billing-openai.openapi.yaml     # Model +context_length（OpenAI 兼容下发，未设置省略）
@@ -407,17 +417,17 @@ z-agent-gear/
 
 ### 8.1 测试覆盖要求
 
-- 采用 TDD（红-绿-重构）：先写用例再实现；单测覆盖新增分支（尤其 `createDefaultWorkspace` 两分支与 ready 两分支）。
+- 采用 TDD（红-绿-重构）：先写用例再实现；单测覆盖新增分支（尤其「创建期不写 `workspaceId`」与 ready 双条件跳过默认会话两处）。
 - GraphQL/Mongoose 层保持既有测试风格（如 `servers/admin-api/src/graphql/resolvers/model.test.ts`、`servers/agent-api/src/services/cloud-host-service.test.ts`），新增用例与既有命名（`T-*`/`R-*`）一致。
-- API 测试（`z-test`）覆盖本期新增/变更契约点；E2E 覆盖「新建云电脑（默认不勾选）→ 无默认工作区 → 绑定项目 → 建会话」主链路。
+- API 测试（`z-test`）覆盖本期新增/变更契约点；E2E 覆盖「新建云电脑 → 无默认工作区提示 → Git 项目设置/新建工作区 → 建会话」主链路。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | vitest | `cloud-host-service.test.ts`（开关两分支、rollback、ready 无工作区跳过默认会话）；`graphql/resolvers/cloud-host.test.ts`（input 解析默认值）；admin/agent `model*.test.ts`（`contextLength` 校验：null/正整数/0/负数/小数）；`k8s-job-manager.test.ts`（manifest 含 `ephemeral-storage` 10Gi 与 env 覆盖）；`billing-openai.test.ts`（`/v1/models` 返回 `context_length`、未设置省略字段、`account`/`cloud_host` 两口径） |
-| 组件测试 | vitest + testing-library | `NewCloudHostDialog`（复选默认不选中、提交字段）；admin-web `ModelSection`/`CustomModelDialog`（输入校验、清空、展示） |
-| API 测试 | z-test（GraphQL + OpenAI 兼容 REST） | `createCloudHost(createDefaultWorkspace)` 三种组合；`updateModelContextLength`/`createGlobalCustomModel` 契约行为；`GET /v1/models` 携带/省略 `context_length` |
+| 单元测试 | vitest | `cloud-host-service.test.ts`（创建期不写 `workspaceId`、rollback 不删工作区、ready 双条件跳过默认会话）；`graphql/resolvers/cloud-host.test.ts`（input 解析默认值）；admin/agent `model*.test.ts`（`contextLength` 校验：null/正整数/0/负数/小数）；`k8s-job-manager.test.ts`（`limits` 含 `ephemeral-storage` 10Gi、`requests` 为 undefined、env 覆盖）；`billing-openai.test.ts`（`/v1/models` 返回 `context_length`、未设置省略字段、`account`/`cloud_host` 两口径） |
+| 组件测试 | vitest + testing-library | `NewCloudHostDialog`（无默认工作区勾选项、提示文案、提交字段）；`GithubProjectSetupDialog`/`useGithubProjectForm`（无默认工作区不预填前缀）；admin-web `ModelSection`/`CustomModelDialog`（输入校验、清空、展示） |
+| API 测试 | z-test（GraphQL + OpenAI 兼容 REST） | `createCloudHost` 后 `hasDefaultWorkspace=false`/工作区列表为空；`updateModelContextLength`/`createGlobalCustomModel` 契约行为；`GET /v1/models` 携带/省略 `context_length` |
 | E2E 测试 | z-test | 云电脑创建主链路（无工作区 → Git 项目设置 → 会话）；后台设置/清空最长上下文后，`GET /v1/models` 立即可见/消失 `context_length` |
 
 ## 9. 验收标准

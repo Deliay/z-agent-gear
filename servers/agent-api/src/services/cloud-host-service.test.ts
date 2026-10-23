@@ -282,12 +282,11 @@ describe('CloudHostService', () => {
   });
 
   describe('create orchestration', () => {
-    it('creates controller/key/workspace/host and starts harness container', async () => {
+    it('creates controller/key/host and starts harness container (no default workspace)', async () => {
       setupCreateSuccess();
       const result = await service.create('user-1', {
         name: ' my-cloud ',
         harnessTypes: ['OPENCODE'],
-        createDefaultWorkspace: true,
       });
 
       expect(result.name).toBe('my-cloud');
@@ -298,15 +297,10 @@ describe('CloudHostService', () => {
         'my-cloud',
         'key-1',
       );
-      expect(controllerWorkspaceService.ensureCloudHostWorkspace).toHaveBeenCalledWith(
-        expect.any(String),
-        'user-1',
-        '/root/workspace',
-      );
+      expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
       expect(CloudHost.create).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'STARTING', harnessTypes: ['OPENCODE'] }),
+        expect.objectContaining({ status: 'STARTING', harnessTypes: ['OPENCODE'], workspaceId: null }),
       );
-
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload).toMatchObject({
         hostId: expect.any(String),
@@ -328,13 +322,14 @@ describe('CloudHostService', () => {
       });
     });
 
-    it('T-CW1: does not create default workspace when flag omitted/false', async () => {
+    it('T-CW1: never creates a default workspace at create time', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
 
+      // 默认工作区只在「Git 项目设置」初始化 Github 项目时按 targetPath 创建
       expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
       expect(CloudHost.create).toHaveBeenCalledWith(
-        expect.objectContaining({ workspaceId: undefined }),
+        expect.objectContaining({ workspaceId: null }),
       );
     });
 
@@ -353,30 +348,38 @@ describe('CloudHostService', () => {
       expect(sessionService.create).not.toHaveBeenCalled();
     });
 
-    it('rollback without a default workspace does not delete a workspace', async () => {
+    it('persists createDefaultSession=false so ready skips the default session (D1)', async () => {
       setupCreateSuccess();
-      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
+      await service.create('user-1', {
+        name: 'with-project',
+        harnessTypes: ['OPENCODE'],
+        createDefaultSession: false,
+      });
+
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'STARTING', createDefaultSession: false }),
+      );
+    });
+
+    it('defaults createDefaultSession to true when omitted', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'legacy-shape', harnessTypes: ['OPENCODE'] });
+
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createDefaultSession: true }),
+      );
+    });
+
+    it('rolls back and maps control plane failure', async () => {
+      setupCreateSuccess();      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
 
       await expect(
         service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('control plane unavailable');
 
+      expect(billingClient.revokeApiKeysByHost).toHaveBeenCalled();
       expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
       expect(ControllerWorkspace.deleteOne).not.toHaveBeenCalled();
-      expect(Controller.deleteOne).toHaveBeenCalled();
-      expect(CloudHost.deleteOne).toHaveBeenCalled();
-    });
-
-    it('rolls back and maps control plane failure', async () => {
-      setupCreateSuccess();
-      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
-
-      await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
-      ).rejects.toThrow('control plane unavailable');
-
-      expect(billingClient.revokeApiKeysByHost).toHaveBeenCalled();
-      expect(ControllerWorkspace.deleteOne).toHaveBeenCalled();
       expect(Controller.deleteOne).toHaveBeenCalled();
       expect(evictKeyById).toHaveBeenCalledWith('key-1');
       expect(ControllerKey.deleteOne).toHaveBeenCalled();
@@ -391,7 +394,7 @@ describe('CloudHostService', () => {
       );
 
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('billing service unavailable');
       expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
       expect(CloudHost.deleteOne).toHaveBeenCalled();
@@ -424,7 +427,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('too many cloud hosts');
     });
 
@@ -436,7 +439,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('controllerkeys.keyHash_1');
     });
 
@@ -496,7 +499,7 @@ describe('CloudHostService', () => {
     it('T-CH-C1: 不带 workloadIds 时 plan 与今天一致', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true });
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
@@ -814,8 +817,26 @@ describe('CloudHostService', () => {
       );
     });
 
-    it('does not create a default session when multiple harness types are selected', async () => {
-      const starting = hostDoc({ status: 'STARTING', harnessTypes: ['OPENCODE', 'CODEX'] });
+    it('does not create a default session when createDefaultSession=false', async () => {
+      const starting = hostDoc({ status: 'STARTING', createDefaultSession: false });
+      const running = hostDoc({ status: 'RUNNING', createDefaultSession: false });
+      vi.mocked(CloudHost.findOne).mockReturnValueOnce(chain(starting) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        status: 'RUNNING',
+        defaultSessionId: null,
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
+        { $set: { status: 'RUNNING', readyAt: expect.any(Date) } },
+        { new: true },
+      );
+    });
+
+    it('does not create a default session when multiple harness types are selected', async () => {      const starting = hostDoc({ status: 'STARTING', harnessTypes: ['OPENCODE', 'CODEX'] });
       const running = hostDoc({ status: 'RUNNING', harnessTypes: ['OPENCODE', 'CODEX'] });
       vi.mocked(CloudHost.findOne)
         .mockReturnValueOnce(chain(starting) as never)

@@ -528,3 +528,50 @@ describe('WorkflowEngine.transition', () => {
     expect(inst2.lastNodeStatus).toBe('REWORK');
   });
 });
+
+describe('WorkflowEngine 工作流完成判定', () => {
+  const finishHooks = { onNodeStart: vi.fn(), onNodeDone: vi.fn(), onWorkflowFinished: vi.fn() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workflowEngine.registerHooks(finishHooks);
+  });
+
+  it('全部节点 DONE 时写入 finishedAt 并只触发一次完成 hook（级联 FLAG 亦然）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'DONE' }),
+      makeNode({ nodeId: 'n2', nodeKey: 'n2', type: 'AI', name: '方案', status: 'RUNNING', dependsOn: ['n1'] }),
+      makeNode({ nodeId: 'n3', nodeKey: 'n3', type: 'FLAG', name: '收尾', status: 'INITIALIZING', dependsOn: ['n2'] }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'complete');
+
+    expect(instance.nodes.every((n) => n.status === 'DONE')).toBe(true);
+    expect(instance.finishedAt).toBeInstanceOf(Date);
+    expect(finishHooks.onWorkflowFinished).toHaveBeenCalledTimes(1);
+  });
+
+  it('未全部 DONE 时不写 finishedAt、不触发完成 hook', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RUNNING';
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'complete');
+
+    expect(instance.finishedAt).toBeUndefined();
+    expect(finishHooks.onWorkflowFinished).not.toHaveBeenCalled();
+  });
+
+  it('已标记完成（finishedAt 非空）时不重复触发', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'RUNNING' }),
+    ]);
+    instance.finishedAt = new Date('2026-10-01');
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'complete');
+
+    expect(finishHooks.onWorkflowFinished).not.toHaveBeenCalled();
+  });
+});

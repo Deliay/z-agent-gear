@@ -57,6 +57,7 @@ export default function EditInstanceNodeDialog({
   const [promptsText, setPromptsText] = useState('')
   const [artifactTitlesText, setArtifactTitlesText] = useState('')
   const [requiresWorktree, setRequiresWorktree] = useState(false)
+  const [linkUpstreamPullRequest, setLinkUpstreamPullRequest] = useState(false)
   const [agentConfig, setAgentConfig] = useState<AgentConfigForm>(emptyAgentConfig())
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -74,6 +75,7 @@ export default function EditInstanceNodeDialog({
     setPromptsText((node.prompts ?? []).join('\n'))
     setArtifactTitlesText((node.artifactTitles ?? []).join('\n'))
     setRequiresWorktree(node.requiresWorktree ?? false)
+    setLinkUpstreamPullRequest(node.linkUpstreamPullRequest ?? false)
     setAgentConfig(
       node.agentConfig
         ? {
@@ -145,6 +147,7 @@ export default function EditInstanceNodeDialog({
       prompts: isAi ? splitLines(promptsText) : null,
       artifactTitles: isAi ? splitLines(artifactTitlesText) : null,
       requiresWorktree: isAi ? requiresWorktree : null,
+      linkUpstreamPullRequest: node.type === 'HUMAN' ? linkUpstreamPullRequest : null,
       agentConfig: isAi
         ? {
             acpServerType: agentConfig.acpServerType,
@@ -227,6 +230,17 @@ export default function EditInstanceNodeDialog({
                   placeholder="可选"
                 />
               </div>
+
+              {node.type === 'HUMAN' && (
+                <div className="flex items-center gap-2">
+                  <Switch
+                    aria-label="联动上游 Pull Request"
+                    checked={linkUpstreamPullRequest}
+                    onCheckedChange={(checked) => setLinkUpstreamPullRequest(checked === true)}
+                  />
+                  <Label>联动上游 Pull Request</Label>
+                </div>
+              )}
             </>
           )}
 

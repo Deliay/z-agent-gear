@@ -27,6 +27,7 @@ export interface WorkflowTemplateNodeData {
   artifactTitles: string[] | null
   dependsOn: string[]
   requiresWorktree: boolean
+  linkUpstreamPullRequest: boolean
   sortOrder: number | null
 }
 
@@ -93,6 +94,7 @@ export interface WorkflowNodeData {
   artifactTitles: string[] | null
   agentConfig: AgentNodeConfigData | null
   requiresWorktree: boolean | null
+  linkUpstreamPullRequest: boolean
   sortOrder: number | null
   dependsOn: string[]
   createdAt: string
@@ -107,6 +109,19 @@ export interface BlackboardEntryData {
   key: string
   value: string
   updatedAt: string
+}
+
+export interface WorkflowAdditionalPromptData {
+  key: string
+  value: string
+}
+
+export interface WorkflowPullRequestLinkData {
+  pullRequestId: string
+  prUrl: string | null
+  nodeId: string
+  nodeName: string | null
+  registeredAt: string
 }
 
 export interface WorkflowInstanceSummaryData {
@@ -133,6 +148,8 @@ export interface WorkflowInstanceData extends WorkflowInstanceSummaryData {
   nodes: WorkflowNodeData[]
   blackboard: BlackboardEntryData[]
   blackboardTrash: BlackboardEntryData[]
+  additionalPrompts: WorkflowAdditionalPromptData[]
+  pullRequestLinks: WorkflowPullRequestLinkData[]
 }
 
 export interface WorkflowTemplateNodeInput {
@@ -145,6 +162,7 @@ export interface WorkflowTemplateNodeInput {
   artifactTitles?: string[] | null
   dependsOn: string[]
   requiresWorktree: boolean
+  linkUpstreamPullRequest?: boolean
   sortOrder?: number | null
 }
 
@@ -173,6 +191,7 @@ export interface ConfiguredWorkflowNodeInput {
   requiresWorktree: boolean
   // AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig?: AgentNodeConfigInput | null
+  linkUpstreamPullRequest?: boolean
   sortOrder?: number | null
 }
 
@@ -205,6 +224,7 @@ export interface WorkflowNodeUpdateInput {
   artifactTitles?: string[] | null
   requiresWorktree?: boolean | null
   agentConfig?: AgentNodeConfigInput | null
+  linkUpstreamPullRequest?: boolean | null
   sortOrder?: number | null
 }
 
@@ -221,6 +241,7 @@ const TEMPLATE_NODE_FIELDS = gql`
     artifactTitles
     dependsOn
     requiresWorktree
+    linkUpstreamPullRequest
     sortOrder
   }
 `
@@ -255,6 +276,7 @@ const CONFIGURED_NODE_FIELDS = gql`
     artifactTitles
     dependsOn
     requiresWorktree
+    linkUpstreamPullRequest
     sortOrder
   }
 `
@@ -340,6 +362,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
         requiresWorktree
         sortOrder
         dependsOn
+        linkUpstreamPullRequest
         createdAt
         startedAt
         reworkedAt
@@ -364,6 +387,17 @@ export const GET_WORKFLOW_INSTANCE = gql`
         key
         value
         updatedAt
+      }
+      additionalPrompts {
+        key
+        value
+      }
+      pullRequestLinks {
+        pullRequestId
+        prUrl
+        nodeId
+        nodeName
+        registeredAt
       }
       createdAt
       updatedAt
@@ -483,6 +517,30 @@ export const RESTART_NODE = gql`
     restartNode(instanceId: $instanceId, nodeId: $nodeId, agentConfig: $agentConfig) {
       id
       status
+    }
+  }
+`
+
+export const SET_WORKFLOW_ADDITIONAL_PROMPT = gql`
+  mutation SetWorkflowAdditionalPrompt($instanceId: ID!, $key: String!, $value: String!) {
+    setWorkflowAdditionalPrompt(instanceId: $instanceId, key: $key, value: $value) {
+      id
+      additionalPrompts {
+        key
+        value
+      }
+    }
+  }
+`
+
+export const REMOVE_WORKFLOW_ADDITIONAL_PROMPT = gql`
+  mutation RemoveWorkflowAdditionalPrompt($instanceId: ID!, $key: String!) {
+    removeWorkflowAdditionalPrompt(instanceId: $instanceId, key: $key) {
+      id
+      additionalPrompts {
+        key
+        value
+      }
     }
   }
 `

@@ -204,3 +204,27 @@ describe('WorkflowTemplateService', () => {
     expect(doc.deleteOne).toHaveBeenCalled();
   });
 });
+
+describe('linkUpstreamPullRequest 校验', () => {
+  it('HUMAN 节点开启联动通过', () => {
+    const nodes = [
+      makeNode({ nodeKey: 'A', linkUpstreamPullRequest: true }),
+      aiNode({ nodeKey: 'B', name: '节点B', dependsOn: ['A'] }),
+    ];
+    expect(validateTemplateGraph(nodes)).toEqual(['A', 'B']);
+  });
+
+  it('AI/FLAG 节点开启联动被拒绝', () => {
+    const nodes = [
+      makeNode({ nodeKey: 'A' }),
+      aiNode({ nodeKey: 'B', name: '节点B', dependsOn: ['A'], linkUpstreamPullRequest: true }),
+    ];
+    expect(() => validateTemplateGraph(nodes)).toThrow(/仅人类节点可开启/);
+
+    const flagNodes = [
+      makeNode({ nodeKey: 'A' }),
+      makeNode({ nodeKey: 'F', type: 'FLAG', name: '旗帜', stage: '需求', dependsOn: ['A'], linkUpstreamPullRequest: true }),
+    ];
+    expect(() => validateTemplateGraph(flagNodes)).toThrow(/仅人类节点可开启/);
+  });
+});

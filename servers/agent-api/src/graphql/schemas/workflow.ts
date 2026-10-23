@@ -39,6 +39,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     dependsOn: [String!]!
     requiresWorktree: Boolean!
+    # 人类节点：是否联动上游 Pull Request
+    linkUpstreamPullRequest: Boolean!
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -75,6 +77,8 @@ export const workflowTypeDefs = `#graphql
     dependsOn: [String!]!
     requiresWorktree: Boolean!
     agentConfig: AgentNodeConfig
+    # 人类节点：是否联动上游 Pull Request
+    linkUpstreamPullRequest: Boolean!
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -120,6 +124,8 @@ export const workflowTypeDefs = `#graphql
     agentConfig: AgentNodeConfig
     dependsOn: [String!]
     requiresWorktree: Boolean
+    # 人类节点：是否联动上游 Pull Request（实例快照）
+    linkUpstreamPullRequest: Boolean!
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
     createdAt: String!
@@ -134,6 +140,21 @@ export const workflowTypeDefs = `#graphql
     key: String!
     value: String!
     updatedAt: String!
+  }
+
+  # 工作流级追加提示词（key 去重，同 key 只插入一次；系统键 github-pr / github-pr-review）
+  type WorkflowAdditionalPrompt {
+    key: String!
+    value: String!
+  }
+
+  # 当前实例关联的 Pull Request（工作流完成/归档/删除后为空）
+  type WorkflowPullRequestLink {
+    pullRequestId: String!
+    prUrl: String
+    nodeId: String!
+    nodeName: String
+    registeredAt: String!
   }
 
   type WorkflowInstance {
@@ -154,6 +175,10 @@ export const workflowTypeDefs = `#graphql
     nodes: [WorkflowNode!]!
     blackboard: [BlackboardEntry!]!
     blackboardTrash: [BlackboardEntry!]!
+    # 工作流级追加提示词（只读展示）
+    additionalPrompts: [WorkflowAdditionalPrompt!]!
+    # 当前实例关联的 Pull Request
+    pullRequestLinks: [WorkflowPullRequestLink!]!
     # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
     workspace: ControllerWorkspace
     controller: Controller
@@ -173,6 +198,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     dependsOn: [String!]!
     requiresWorktree: Boolean!
+    # 人类节点：是否联动上游 Pull Request
+    linkUpstreamPullRequest: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -201,6 +228,8 @@ export const workflowTypeDefs = `#graphql
     dependsOn: [String!]!
     requiresWorktree: Boolean!
     agentConfig: AgentNodeConfigInput
+    # 人类节点：是否联动上游 Pull Request
+    linkUpstreamPullRequest: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -235,6 +264,8 @@ export const workflowTypeDefs = `#graphql
     artifactTitles: [String!]
     requiresWorktree: Boolean
     agentConfig: AgentNodeConfigInput
+    # 人类节点：是否联动上游 Pull Request
+    linkUpstreamPullRequest: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -266,5 +297,9 @@ export const workflowTypeDefs = `#graphql
     restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
+    # 写入/覆盖工作流追加提示词（同 key 覆盖）；系统键拒绝人工写入
+    setWorkflowAdditionalPrompt(instanceId: ID!, key: String!, value: String!): WorkflowInstance!
+    # 删除工作流追加提示词（不存在时幂等成功）；系统键拒绝人工删除
+    removeWorkflowAdditionalPrompt(instanceId: ID!, key: String!): WorkflowInstance!
   }
 `;

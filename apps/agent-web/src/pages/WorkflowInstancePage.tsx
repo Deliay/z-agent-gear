@@ -12,6 +12,7 @@ import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
 import WorkflowGraphView from '@/components/workflow/WorkflowGraphView'
 import { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTreeConstants'
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
+import WorkflowContextPanel from '@/components/workflow/WorkflowContextPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import MobileBackButton from '@/components/MobileBackButton'
 import { Badge } from '@/components/ui/badge'
@@ -201,7 +202,11 @@ export default function WorkflowInstancePage() {
 
       <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         {viewMode === 'list' ? (
-          <WorkflowNodeTree instance={instance} onOpenSession={setSideSessionId} />
+          <WorkflowNodeTree
+            instance={instance}
+            onOpenSession={setSideSessionId}
+            pullRequestLinks={instance.pullRequestLinks}
+          />
         ) : (
           <WorkflowGraphView
             instance={instance}
@@ -213,10 +218,16 @@ export default function WorkflowInstancePage() {
             }}
           />
         )}
-        <BlackboardPanel
-          blackboard={instance.blackboard}
-          trash={instance.blackboardTrash}
-        />
+        <div className="min-w-0 space-y-4">
+          <BlackboardPanel
+            blackboard={instance.blackboard}
+            trash={instance.blackboardTrash}
+          />
+          <WorkflowContextPanel
+            additionalPrompts={instance.additionalPrompts}
+            pullRequestLinks={instance.pullRequestLinks}
+          />
+        </div>
       </div>
 
       <SessionSidePanel

@@ -111,8 +111,8 @@ export const cloudHostTypeDefs = `#graphql
     harnessTypes: [HarnessType!]!
     # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
     workloadIds: [ID!]
-    # 是否创建默认工作区（/root/workspace）；默认 false。不勾选时不创建工作区，就绪后不自动创建默认会话。
-    createDefaultWorkspace: Boolean = false
+    # false 时 ready 不自动建默认会话（由 setup 的 session 步骤建项目会话）
+    createDefaultSession: Boolean = true
   }
 
   input InstallCloudHostWorkloadInput {
@@ -128,11 +128,15 @@ export const cloudHostTypeDefs = `#graphql
     # 语义：clone 前缀地址（工作根目录）；最终目录 = <targetPath>/<repoFullName>
     targetPath: String!
     workloadIds: [ID!]
+    # false 时 session 步骤记 SKIPPED（多 Harness）；缺省 true
+    createSession: Boolean = true
   }
 
   extend type Query {
     cloudHostCapabilities: CloudHostCapabilities!
     myCloudHosts: [CloudHost!]!
+    # 进度对话框轮询云电脑启动状态（1.5s 级）；仅返回当前用户的云电脑（软删除仍返回）
+    cloudHost(id: ID!): CloudHost
     cloudHostStopImpact(id: ID!): CloudHostStopImpact!
     cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
     # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）

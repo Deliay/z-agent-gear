@@ -1,5 +1,6 @@
-import { useQuery } from '@apollo/client/react'
+import { useMutation, useQuery } from '@apollo/client/react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import {
   DndContext,
   closestCenter,
@@ -32,7 +33,11 @@ import {
   SelectItemText,
 } from '@/components/ui/select'
 import { GET_ACP_SERVER_OPTIONS } from '@/graphql/queries'
-import type { GetAcpServerOptionsQuery } from '@/graphql/types'
+import { REFRESH_ACP_SERVER_OPTIONS } from '@/graphql/mutations'
+import type {
+  GetAcpServerOptionsQuery,
+  RefreshAcpServerOptionsMutation,
+} from '@/graphql/types'
 import type { WorkflowNodeType } from '@/graphql/workflow'
 import {
   createEmptyNode,
@@ -183,13 +188,30 @@ function AgentNodeOptionFields({
   disabled: boolean
   onChange: (patch: Partial<AgentConfigForm>) => void
 }) {
-  const { data, loading } = useQuery<GetAcpServerOptionsQuery>(GET_ACP_SERVER_OPTIONS, {
+  const { data, loading, refetch } = useQuery<GetAcpServerOptionsQuery>(GET_ACP_SERVER_OPTIONS, {
     variables: { controllerId, acpServerType: config.acpServerType },
     skip: !controllerId || !config.acpServerType,
   })
-  const probing = Boolean(config.acpServerType) && loading
+  const [refreshOptions, { loading: refreshing } = { loading: false }] =
+    useMutation<RefreshAcpServerOptionsMutation>(REFRESH_ACP_SERVER_OPTIONS)
+  const probing = Boolean(config.acpServerType) && (loading || refreshing)
   const modes = data?.acpServerOptions?.modes ?? []
   const models = data?.acpServerOptions?.models ?? []
+
+  // 主动刷新：服务端清缓存重探测后回读同一份 acpServerOptions，与新建会话对话框保持一致
+  const handleRefresh = async () => {
+    if (!controllerId || !config.acpServerType || refreshing) return
+    try {
+      await refreshOptions({
+        variables: { controllerId, acpServerType: config.acpServerType },
+      })
+      await refetch()
+      toast.success('选项已刷新')
+    } catch {
+      toast.error('刷新失败，可重试')
+    }
+  }
+
   return (
     <>
       <AgentOptionField
@@ -210,6 +232,18 @@ function AgentNodeOptionFields({
         disabled={disabled}
         onChange={(v) => onChange({ modelId: v })}
       />
+      <div>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          aria-label={`${nodeName} 刷新选项`}
+          disabled={disabled || !config.acpServerType || refreshing}
+          onClick={() => { void handleRefresh() }}
+        >
+          {refreshing ? '刷新中...' : '刷新选项'}
+        </Button>
+      </div>
     </>
   )
 }
@@ -295,7 +329,7 @@ function SortableNodeItem({
               variant={node.type === t ? 'default' : 'outline'}
               aria-pressed={node.type === t}
               disabled={readOnly}
-              onClick={() => onUpdate(index, { type: t })}
+              onClick={() => onUpdate(index, { type: t, linkUpstreamPullRequest: t === 'HUMAN' ? node.linkUpstreamPullRequest : false })}
             >
               {NODE_TYPE_LABELS[t]}
             </Button>
@@ -416,6 +450,20 @@ function SortableNodeItem({
                 <Label>该节点会话需要 Worktree 隔离</Label>
               </div>
             </>
+          )}
+
+          {node.type === 'HUMAN' && (
+            <div className="flex items-center gap-2">
+              <Switch
+                aria-label={`节点 ${index + 1} 联动上游 Pull Request`}
+                checked={node.linkUpstreamPullRequest}
+                onCheckedChange={(checked) =>
+                  onUpdate(index, { linkUpstreamPullRequest: checked === true })
+                }
+                disabled={readOnly}
+              />
+              <Label>联动上游 Pull Request</Label>
+            </div>
           )}
 
           {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (

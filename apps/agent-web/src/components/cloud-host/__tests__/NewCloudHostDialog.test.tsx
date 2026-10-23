@@ -1,13 +1,37 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import NewCloudHostDialog from '../NewCloudHostDialog';
+import { GET_GITHUB_ACCOUNTS } from '../../../graphql/queries';
 import type { CloudHostCapabilitiesData, HarnessType } from '../../../graphql/types';
 const mockCreateCloudHost = vi.fn();
+const mockSetupGithubProject = vi.fn();
 const mockUseQuery = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
-  useMutation: () => [mockCreateCloudHost],
+  useMutation: (doc: unknown) =>
+    JSON.stringify(doc).includes('setupCloudHostGithubProject')
+      ? [mockSetupGithubProject]
+      : [mockCreateCloudHost],
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+}));
+
+vi.mock('../GithubSetupProgressDialog', () => ({
+  default: ({
+    open,
+    hostId,
+    operationId,
+  }: {
+    open: boolean;
+    hostId?: string;
+    operationId: string | null;
+  }) =>
+    open ? (
+      <div
+        data-testid="cloud-host-progress-dialog"
+        data-host-id={hostId ?? ''}
+        data-operation-id={operationId ?? ''}
+      />
+    ) : null,
 }));
 
 const defaultCapabilities: CloudHostCapabilitiesData = {
@@ -105,18 +129,18 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('默认未勾选工作区时单 Harness 不提示自动创建会话，勾选后才提示', () => {
+  it('不提供「创建默认工作区」勾选，单 Harness 提示就绪后不会自动创建会话', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '  云电脑 A  ' } });
     fireEvent.click(screen.getByLabelText('OpenCode'));
 
-    // 默认不建工作区：就绪后不会自动建会话，文案不得自相矛盾
+    // 默认工作区只在「Git 项目设置」初始化时创建：普通创建不会自动建会话
+    expect(screen.queryByLabelText('创建默认工作区')).not.toBeInTheDocument();
     expect(screen.queryByText('将自动创建会话')).not.toBeInTheDocument();
-    expect(screen.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByLabelText('创建默认工作区'));
-    expect(screen.getByText('将自动创建会话')).toBeInTheDocument();
+    expect(
+      screen.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+    ).toBeInTheDocument();
     expect(submitButton()).not.toBeDisabled();
   });
 
@@ -130,42 +154,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
-      });
-    });
-    await waitFor(() => {
-      expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'cloud-1' }));
-    });
-  });
-
-  it('T-AW-N1 默认不勾选创建默认工作区并提示不会创建工作区', () => {
-    render(<NewCloudHostDialog {...defaultProps} />);
-
-    const checkbox = screen.getByLabelText('创建默认工作区');
-    expect(checkbox).not.toBeChecked();
-    expect(screen.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeInTheDocument();
-  });
-
-  it('T-AW-N2 勾选后提交 createDefaultWorkspace=true 并提示自动创建会话', async () => {
-    const onCreated = vi.fn();
-    render(<NewCloudHostDialog {...defaultProps} onCreated={onCreated} />);
-
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
-    fireEvent.click(screen.getByLabelText('OpenCode'));
-    fireEvent.click(screen.getByLabelText('创建默认工作区'));
-
-    expect(screen.getByText('将创建默认工作区并自动创建会话')).toBeInTheDocument();
-    fireEvent.click(submitButton());
-
-    await waitFor(() => {
-      expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: {
-          input: {
-            name: '云电脑 A',
-            harnessTypes: ['OPENCODE'],
-            createDefaultWorkspace: true,
-          },
-        },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
       });
     });
     await waitFor(() => {
@@ -268,7 +257,6 @@ describe('NewCloudHostDialog', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
-            createDefaultWorkspace: false,
             workloadIds: ['wl-docker'],
           },
         },
@@ -285,7 +273,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
       });
     });
     expect(mockCreateCloudHost.mock.calls[0][0].variables.input).not.toHaveProperty('workloadIds');
@@ -326,5 +314,130 @@ describe('NewCloudHostDialog', () => {
     fireEvent.click(submitButton());
 
     expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+  });
+});
+
+function mockGithubProjectQueries(accounts: unknown[] = [githubAccount()]) {
+  mockUseQuery.mockImplementation((query: unknown) => {
+    if (query === GET_GITHUB_ACCOUNTS) {
+      return { data: { githubAccounts: accounts }, loading: false };
+    }
+    return {
+      data: {
+        cloudHostWorkloadCatalog: [
+          {
+            workloadId: 'wl-docker',
+            name: 'Docker',
+            workloadKind: 'STANDARD',
+            paramSchema: [],
+            dependsOnWorkloadIds: [],
+            isPreset: false,
+            installed: false,
+          },
+        ],
+      },
+      loading: false,
+    };
+  });
+}
+
+function githubAccount() {
+  return {
+    id: 'acc-1',
+    githubUserId: 1,
+    githubLogin: 'alice',
+    createdAt: '',
+    installations: [
+      {
+        id: 'inst-1',
+        installationId: 10,
+        managementUrl: '',
+        createdAt: '',
+        repos: [
+          {
+            id: 'repo-1',
+            repoId: 1,
+            repoName: 'repo-a',
+            fullName: 'alice/repo-a',
+            private: false,
+            permissions: { read: true, write: true },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('NewCloudHostDialog Github 项目编排', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreateCloudHost.mockResolvedValue({
+      data: {
+        createCloudHost: {
+          id: 'cloud-1',
+          name: '云电脑 A',
+          controllerId: 'ctrl-cloud',
+          status: 'STARTING',
+          harnessTypes: ['OPENCODE'],
+          defaultSessionId: null,
+          activeSessionCount: 0,
+          failureReason: null,
+          deletedAt: null,
+        },
+      },
+    });
+    mockGithubProjectQueries();
+  });
+
+  it('未绑定账号时提示且禁用提交', () => {
+    mockGithubProjectQueries([]);
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(screen.getByLabelText('配置 Github 项目'));
+
+    expect(screen.getByText('尚未绑定 Github 帐号，请前往设置页绑定')).toBeInTheDocument();
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it('选择项目后提交 createDefaultSession=false 并进入启动进度框', async () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(screen.getByLabelText('配置 Github 项目'));
+
+    await waitFor(() => expect(screen.getByLabelText('Github 账号')).toHaveValue('acc-1'));
+    fireEvent.change(screen.getByLabelText('仓库'), { target: { value: 'alice/repo-a' } });
+    expect(screen.getByText('最终 clone 地址：/root/workspace/alice/repo-a')).toBeInTheDocument();
+
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: {
+          input: {
+            name: '云电脑 A',
+            harnessTypes: ['OPENCODE'],
+            createDefaultSession: false,
+          },
+        },
+      });
+    });
+    const progress = await screen.findByTestId('cloud-host-progress-dialog');
+    expect(progress).toHaveAttribute('data-host-id', 'cloud-1');
+    expect(progress).toHaveAttribute('data-operation-id', '');
+  });
+
+  it('项目已选但仓库为空时禁用提交', async () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(screen.getByLabelText('配置 Github 项目'));
+
+    await screen.findByLabelText('Github 账号');
+    expect(submitButton()).toBeDisabled();
   });
 });

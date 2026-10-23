@@ -507,7 +507,7 @@ test.describe('Admin Cloud Container E2E', () => {
 
   // E2E-4：云电脑 Job 模板资源约束。K8S_ENABLED=false 时无真实 Job 可读，
   // 复用 cloud-controller 的 manifest 构造器断言（与运行时同一份代码）。
-  test('E2E-4: 云电脑 Job requests/limits 均含 ephemeral-storage 10Gi', async () => {
+  test('E2E-4: 云电脑 Job limits 含 ephemeral-storage 10Gi（不设置 requests）', async () => {
     const manager = new K8sJobManager(new InMemoryK8sClient(), {
       namespace: 'zag-cloud',
       image: 'worker:e2e',
@@ -520,7 +520,8 @@ test.describe('Admin Cloud Container E2E', () => {
       token: 'container-e2e.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests['ephemeral-storage']).toBe('10Gi');
+    // 与 main 口径一致：不设置 requests，仅声明 limits 硬上限
+    expect(resources.requests).toBeUndefined();
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 

@@ -191,3 +191,43 @@ describe('validateTemplateNodes', () => {
     expect(validateTemplateNodes([human, ai]).join('\n')).toContain('至少需要一条提示词');
   });
 });
+
+describe('TemplateEditorDialog 联动上游 Pull Request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseMutation.mockReturnValue([vi.fn().mockResolvedValue({})]);
+  });
+
+  it('人类节点展示联动开关并在保存时提交 true', async () => {
+    const mutate = vi.fn().mockResolvedValue({});
+    mockUseMutation.mockReturnValue([mutate]);
+    renderDialog();
+    expandNode(1);
+
+    expect(screen.getByLabelText('节点 1 联动上游 Pull Request')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('模板名称'), { target: { value: '联动模板' } });
+    fireEvent.change(screen.getByLabelText('节点 1 标识'), { target: { value: 'review' } });
+    fireEvent.change(screen.getByLabelText('节点 1 名称'), { target: { value: '评审' } });
+    fireEvent.change(screen.getByLabelText('节点 1 阶段'), { target: { value: '验收' } });
+    fireEvent.click(screen.getByLabelText('节点 1 联动上游 Pull Request'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variables: {
+          input: expect.objectContaining({
+            nodes: [expect.objectContaining({ linkUpstreamPullRequest: true })],
+          }),
+        },
+      }),
+    );
+  });
+
+  it('切换为 AI 节点后不展示联动开关', () => {
+    renderDialog();
+    expandNode(1);
+    fireEvent.click(screen.getByRole('button', { name: 'AI' }));
+    expect(screen.queryByLabelText('节点 1 联动上游 Pull Request')).not.toBeInTheDocument();
+  });
+});

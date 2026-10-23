@@ -13,8 +13,8 @@ function gqlRequest(page: import('@playwright/test').Page, query: string, variab
 }
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
-const API_BASE = API_URL.replace(/\/graphql\/?$/, '');
 
+// 创建期不再预置默认工作区：需要读取 hasDefaultWorkspace/defaultSessionId 判定就绪后的行为
 const HOST_FLAGS = `
   query {
     myCloudHosts { id name controllerId status defaultSessionId hasDefaultWorkspace }
@@ -22,19 +22,26 @@ const HOST_FLAGS = `
 `;
 const WORKSPACE_LIST = `query { workspaces { id controllerId path } }`;
 
-async function hostFlags(
+async function hostWithFlags(
   page: import('@playwright/test').Page,
   token: string,
   name: string,
-): Promise<{ id: string; controllerId: string; status: string; defaultSessionId: string | null; hasDefaultWorkspace: boolean } | undefined> {
-  const res = await gqlRequest(page, HOST_FLAGS, undefined, token);
-  const body = await res.json();
-  return (body.data?.myCloudHosts ?? []).find((host: { name: string }) => host.name === name);
-}
-
-async function cleanupHost(page: import('@playwright/test').Page, token: string, id: string) {
-  await gqlRequest(page, `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`, { id }, token);
-  await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id }, token);
+): Promise<{
+  id: string;
+  controllerId: string;
+  status: string;
+  defaultSessionId: string | null;
+  hasDefaultWorkspace: boolean;
+} | undefined> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await gqlRequest(page, HOST_FLAGS, undefined, token);
+    const body = await response.json();
+    if (body.errors) throw new Error(body.errors[0].message);
+    const host = (body.data?.myCloudHosts ?? []).find((item: { name: string }) => item.name === name);
+    if (host) return host;
+    await page.waitForTimeout(1000);
+  }
+  return undefined;
 }
 
 test.describe('Cloud Host E2E', () => {
@@ -64,9 +71,7 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      // 未勾选默认工作区时不会自动建会话，文案不得提示「将自动创建会话」
-      await expect(dialog.getByText('将自动创建会话')).toHaveCount(0);
-      await expect(dialog.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeVisible();
+      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
 
       // 预装工作负载来自 cloudHostWorkloadCatalog（迁移 001/002/007 seed）
       await expect(dialog.getByText('预装工作负载（可选）')).toBeVisible();
@@ -143,7 +148,19 @@ test.describe('Cloud Host E2E', () => {
     }
   });
 
-  test('E2E-1: 默认不勾选 → 不创建工作区、不自动建会话并展示无工作区提示', async ({ page }) => {
+  test('T-AW3/T-AW5: surfaces server validation errors', async ({ page }) => {
+    const { username } = await registerUser(page);
+    await loginViaUI(page, username);
+
+    await page.getByRole('button', { name: '新建云电脑' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('#cloud-host-name').fill('x'.repeat(65));
+    await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+    await expect(dialog.getByText('名称不能超过 64 个字符')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '创建云电脑' })).toBeDisabled();
+  });
+
+  test('E2E-1: 普通创建不预置默认工作区、不自动建会话并展示无工作区提示', async ({ page }) => {
     // 缺参显式跳过，而不是在用例内部静默绕过核心断言
     test.skip(!process.env.INTERNAL_API_TOKEN, 'E2E-1 需要 INTERNAL_API_TOKEN 驱动 ready 回调');
     const { token, username } = await registerUser(page);
@@ -156,9 +173,11 @@ test.describe('Cloud Host E2E', () => {
     try {
       await page.getByRole('button', { name: '新建云电脑' }).click();
       const dialog = page.getByRole('dialog');
-      const checkbox = dialog.getByRole('checkbox', { name: /创建默认工作区/ });
-      await expect(checkbox).not.toBeChecked();
-      await expect(dialog.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeVisible();
+      // 「创建默认工作区」勾选项已舍弃：创建期一律不预置 /root/workspace
+      await expect(dialog.getByRole('checkbox', { name: /创建默认工作区/ })).toHaveCount(0);
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
@@ -168,7 +187,7 @@ test.describe('Cloud Host E2E', () => {
       const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
       await expect(controllerRow).toBeVisible({ timeout: 15000 });
 
-      const host = await hostFlags(page, token, hostName);
+      const host = await hostWithFlags(page, token, hostName);
       expect(host, 'created cloud host should be listed').toBeTruthy();
       hostId = host!.id;
       expect(host!.hasDefaultWorkspace).toBe(false);
@@ -194,7 +213,7 @@ test.describe('Cloud Host E2E', () => {
         { timeout: 15000 },
       );
       await expect(controllerRow.getByTestId('cloud-host-default-session-hint')).toHaveCount(0);
-      const running = await hostFlags(page, token, hostName);
+      const running = await hostWithFlags(page, token, hostName);
       expect(running?.status).toBe('RUNNING');
       expect(running?.defaultSessionId).toBeNull();
 
@@ -226,56 +245,361 @@ test.describe('Cloud Host E2E', () => {
       await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
       await page.keyboard.press('Escape');
     } finally {
-      if (hostId) await cleanupHost(page, token, hostId);
+      if (hostId) await cleanupHost(page, token, hostName);
     }
   });
+});
 
-  test('E2E-2: 勾选创建默认工作区 → 与现状一致创建工作区', async ({ page }) => {
+// ---------------------------------------------------------------------------
+// Phase 10：新建云电脑 Github 项目前端编排（四阶段进度、失败重试、旧入口零回归）
+// 真实 clone/工作负载需要运行中的 worker；此处用 Mongo fixture 推进云电脑状态与
+// operation 终态，覆盖前端编排与进度框交互。待验收环境执行。
+// ---------------------------------------------------------------------------
+import mongoose from 'mongoose';
+
+const MONGO_URI = process.env.MONGODB_URI;
+const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN;
+const API_BASE = API_URL.replace(/\/graphql\/?$/, '');
+
+async function phase10Db(): Promise<mongoose.mongo.Db | null> {
+  if (!MONGO_URI) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URI);
+  return mongoose.connection.db ?? null;
+}
+
+async function getMe(page: import('@playwright/test').Page, token: string): Promise<string> {
+  const res = await gqlRequest(page, `query { me { id } }`, undefined, token);
+  const body = await res.json();
+  return body.data.me.id as string;
+}
+
+async function myHost(
+  page: import('@playwright/test').Page,
+  token: string,
+  name: string,
+): Promise<{ id: string; controllerId: string; status: string } | null> {
+  const res = await gqlRequest(page, `query { myCloudHosts { id name controllerId status } }`, undefined, token);
+  const body = await res.json();
+  return (body.data?.myCloudHosts ?? []).find((item: { name: string }) => item.name === name) ?? null;
+}
+
+async function waitForHost(
+  page: import('@playwright/test').Page,
+  token: string,
+  name: string,
+  timeoutMs = 20000,
+): Promise<{ id: string; controllerId: string; status: string }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const host = await myHost(page, token, name);
+    if (host) return host;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`cloud host not found: ${name}`);
+}
+
+async function seedGithub(page: import('@playwright/test').Page, userId: string): Promise<void> {
+  const db = (await phase10Db())!;
+  const accountId = new mongoose.Types.ObjectId();
+  await db.collection('githubaccounts').insertOne({
+    _id: accountId,
+    userId,
+    githubUserId: Date.now(),
+    githubLogin: 'phase10-owner',
+    accessToken: 'encrypted-token',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  await db.collection('githubinstallations').insertOne({
+    _id: new mongoose.Types.ObjectId(),
+    accountId,
+    installationId: Date.now(),
+    accountLogin: 'phase10-owner',
+    accountType: 'User',
+    repos: [
+      {
+        repoId: 10,
+        repoName: 'repo',
+        fullName: 'phase10-owner/repo',
+        private: false,
+        permissions: { read: true, write: true },
+      },
+    ],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+}
+
+async function setHostRunning(hostId: string): Promise<void> {
+  const db = (await phase10Db())!;
+  await db.collection('cloudhosts').updateOne(
+    { _id: new mongoose.Types.ObjectId(hostId) },
+    { $set: { status: 'RUNNING', readyAt: new Date(), updatedAt: new Date() } },
+  );
+}
+
+async function operationFor(controllerId: string): Promise<any | null> {
+  const db = (await phase10Db())!;
+  return db.collection('cloud_host_setup_operations').findOne(
+    { controllerId: new mongoose.Types.ObjectId(controllerId) },
+    { sort: { createdAt: -1 } },
+  );
+}
+
+async function waitForOperation(controllerId: string, timeoutMs = 20000): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const operation = await operationFor(controllerId);
+    if (operation) return operation;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error('setup operation not created');
+}
+
+async function seedProjectSession(
+  userId: string,
+  controllerId: string,
+  controllerName: string,
+): Promise<string> {
+  const db = (await phase10Db())!;
+  const sessionId = new mongoose.Types.ObjectId();
+  await db.collection('sessions').insertOne({
+    _id: sessionId,
+    userId: new mongoose.Types.ObjectId(userId),
+    controllerId: new mongoose.Types.ObjectId(controllerId),
+    controllerName,
+    acpServerType: 'opencode',
+    status: 'idling',
+    title: 'phase10/repo',
+    cwd: '/root/workspace/phase10-owner/repo',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return sessionId.toString();
+}
+
+async function markOperationSucceeded(operationId: string, sessionId: string): Promise<void> {
+  const db = (await phase10Db())!;
+  await db.collection('cloud_host_setup_operations').updateOne(
+    { _id: new mongoose.Types.ObjectId(operationId) },
+    {
+      $set: {
+        status: 'SUCCEEDED',
+        sessionId: new mongoose.Types.ObjectId(sessionId),
+        error: null,
+        updatedAt: new Date(),
+        steps: [
+          { key: 'workload', status: 'SUCCEEDED', detail: 'Github 工作负载已就绪' },
+          { key: 'gitSetup', status: 'SUCCEEDED', detail: null },
+          { key: 'session', status: 'SUCCEEDED', detail: null },
+        ],
+      },
+    },
+  );
+  await db.collection('cloudhosts').updateOne(
+    { controllerId: new mongoose.Types.ObjectId((await operationById(operationId)).controllerId) },
+    { $set: { defaultSessionId: new mongoose.Types.ObjectId(sessionId) } },
+  );
+}
+
+async function operationById(operationId: string): Promise<any> {
+  const db = (await phase10Db())!;
+  return db.collection('cloud_host_setup_operations').findOne({
+    _id: new mongoose.Types.ObjectId(operationId),
+  });
+}
+
+async function markOperationFailed(operationId: string): Promise<void> {
+  const db = (await phase10Db())!;
+  await db.collection('cloud_host_setup_operations').updateOne(
+    { _id: new mongoose.Types.ObjectId(operationId) },
+    {
+      $set: {
+        status: 'FAILED',
+        error: 'git clone failed',
+        updatedAt: new Date(),
+        steps: [
+          { key: 'workload', status: 'SUCCEEDED', detail: 'Github 工作负载已就绪' },
+          { key: 'gitSetup', status: 'FAILED', detail: 'git clone failed' },
+          { key: 'session', status: 'PENDING', detail: null },
+        ],
+      },
+    },
+  );
+}
+
+async function cleanupHost(
+  page: import('@playwright/test').Page,
+  token: string,
+  name: string,
+): Promise<void> {
+  const host = await myHost(page, token, name);
+  if (!host) return;
+  try {
+    await gqlRequest(page, `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`, { id: host.id }, token);
+  } catch {
+    /* 已停止/控制面不可用：继续删除 */
+  }
+  try {
+    await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id: host.id }, token);
+  } catch {
+    /* 无法回收的实例由运维巡检处理 */
+  }
+}
+
+test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
+  test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
+
+  test('P10-CH1: 未选项目 → 不弹四阶段进度框，ready 后自动建默认会话（旧入口零回归）', async ({ page }) => {
+    test.skip(!MONGO_URI || !INTERNAL_TOKEN, '需要 MONGODB_URI + INTERNAL_API_TOKEN');
+    test.setTimeout(90_000);
     const { token, username } = await registerUser(page);
+    const userId = await getMe(page, token);
     await loginViaUI(page, username);
-    await expect(page.locator(sidebar())).toBeVisible();
-
-    const hostName = `e2e-ws-${Date.now().toString(36)}`;
-    let hostId = '';
+    const name = `e2e-p10-legacy-${Date.now().toString(36)}`;
 
     try {
       await page.getByRole('button', { name: '新建云电脑' }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.locator('#cloud-host-name').fill(hostName);
+      await dialog.locator('#cloud-host-name').fill(name);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await dialog.getByRole('checkbox', { name: /创建默认工作区/ }).check();
-      await expect(dialog.getByText('将创建默认工作区并自动创建会话')).toBeVisible();
+      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(dialog.getByRole('checkbox', { name: '配置 Github 项目' })).not.toBeChecked();
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
-      await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toBeVisible({
-        timeout: 15000,
-      });
-      const host = await hostFlags(page, token, hostName);
-      expect(host, 'created cloud host should be listed').toBeTruthy();
-      hostId = host!.id;
-      expect(host!.hasDefaultWorkspace).toBe(true);
+      // 旧入口不进入前端编排：不出现「设置进度」四阶段对话框
+      await expect(page.locator(sidebar()).getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(page.getByRole('heading', { name: '设置进度' })).toHaveCount(0);
 
-      const wsRes = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
-      const workspaces = ((await wsRes.json()).data?.workspaces ?? []).filter(
-        (workspace: { controllerId: string }) => workspace.controllerId === host!.controllerId,
-      );
-      expect(workspaces.map((workspace: { path: string }) => workspace.path)).toContain(
-        '/root/workspace',
-      );
+      const host = await waitForHost(page, token, name);
+      const ready = await page.request.post(`${API_BASE}/internal/cloud-hosts/${host.id}/ready`, {
+        headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      });
+      expect(ready.status()).toBe(200);
+
+      const db = (await phase10Db())!;
+      const deadline = Date.now() + 15000;
+      let hostDoc: any = null;
+      while (Date.now() < deadline) {
+        hostDoc = await db.collection('cloudhosts').findOne({
+          _id: new mongoose.Types.ObjectId(host.id),
+        });
+        if (hostDoc?.defaultSessionId) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      expect(hostDoc?.status).toBe('RUNNING');
+      expect(hostDoc?.defaultSessionId).toBeTruthy();
+      const sessions = await db.collection('sessions').countDocuments({
+        controllerId: new mongoose.Types.ObjectId(host.controllerId),
+      });
+      expect(sessions).toBe(1);
+
+      await page.reload();
+      await expect(page.locator(sidebar()).getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(page.locator(sidebar()).getByText('New Session').first()).toBeVisible();
     } finally {
-      if (hostId) await cleanupHost(page, token, hostId);
+      await cleanupHost(page, token, name);
     }
   });
 
-  test('T-AW3/T-AW5: surfaces server validation errors', async ({ page }) => {
-    const { username } = await registerUser(page);
+  test('P10-CH2: 选项目 → 四阶段进度，成功后进入项目会话且无空默认会话', async ({ page }) => {
+    test.skip(!MONGO_URI, '需要 MONGODB_URI');
+    test.setTimeout(120_000);
+    const { token, username } = await registerUser(page);
+    const userId = await getMe(page, token);
+    await seedGithub(page, userId);
     await loginViaUI(page, username);
+    const name = `e2e-p10-project-${Date.now().toString(36)}`;
 
-    await page.getByRole('button', { name: '新建云电脑' }).click();
-    const dialog = page.getByRole('dialog');
-    await dialog.locator('#cloud-host-name').fill('x'.repeat(65));
-    await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-    await expect(dialog.getByText('名称不能超过 64 个字符')).toBeVisible();
-    await expect(dialog.getByRole('button', { name: '创建云电脑' })).toBeDisabled();
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.locator('#cloud-host-name').fill(name);
+      await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+      await dialog.getByRole('checkbox', { name: '配置 Github 项目' }).check();
+
+      await expect(dialog.getByLabel('Github 账号')).toHaveValue(/.+/);
+      await dialog.getByLabel('仓库').selectOption({ label: 'phase10-owner/repo' });
+      await expect(dialog.getByLabel('前缀地址')).toHaveValue('/root/workspace');
+      await dialog.getByRole('button', { name: '创建云电脑' }).click();
+
+      // 四阶段进度框：启动云电脑为前置阶段
+      await expect(page.getByRole('heading', { name: '设置进度' })).toBeVisible({ timeout: 15000 });
+      const steps = page.getByTestId('github-setup-steps');
+      for (const label of ['启动云电脑', '工作负载设置', 'Git 项目设置', '会话创建']) {
+        await expect(steps.getByText(label, { exact: true })).toBeVisible();
+      }
+      await expect(steps.getByText('进行中')).toBeVisible();
+
+      const host = await waitForHost(page, token, name);
+      await setHostRunning(host.id);
+
+      // 前端轮询 cloudHost(id) 发现 RUNNING 后自动发起 setup
+      const operation = await waitForOperation(host.controllerId);
+      await expect(steps.getByText('成功').first()).toBeVisible({ timeout: 15000 });
+
+      const db = (await phase10Db())!;
+      const controller = await db.collection('controllers').findOne({
+        _id: new mongoose.Types.ObjectId(host.controllerId),
+      });
+      const sessionId = await seedProjectSession(userId, host.controllerId, String(controller?.name ?? ''));
+      await markOperationSucceeded(operation._id.toString(), sessionId);
+
+      await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}`), { timeout: 20000 });
+      const hostAfter = await gqlRequest(
+        page,
+        `query($id: ID!) { cloudHost(id: $id) { id defaultSessionId } }`,
+        { id: host.id },
+        token,
+      ).then((res) => res.json());
+      expect(hostAfter.data.cloudHost.defaultSessionId).toBe(sessionId);
+
+      // 未额外创建空的默认会话：该 controller 下只有项目会话
+      expect(
+        await db.collection('sessions').countDocuments({
+          controllerId: new mongoose.Types.ObjectId(host.controllerId),
+        }),
+      ).toBe(1);
+    } finally {
+      await cleanupHost(page, token, name);
+    }
+  });
+
+  test('P10-CH3: 项目准备失败 → 进度框展示失败步骤并可重试', async ({ page }) => {
+    test.skip(!MONGO_URI, '需要 MONGODB_URI');
+    test.setTimeout(120_000);
+    const { token, username } = await registerUser(page);
+    const userId = await getMe(page, token);
+    await seedGithub(page, userId);
+    await loginViaUI(page, username);
+    const name = `e2e-p10-fail-${Date.now().toString(36)}`;
+
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.locator('#cloud-host-name').fill(name);
+      await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+      await dialog.getByRole('checkbox', { name: '配置 Github 项目' }).check();
+      await dialog.getByLabel('仓库').selectOption({ label: 'phase10-owner/repo' });
+      await dialog.getByRole('button', { name: '创建云电脑' }).click();
+      await expect(page.getByRole('heading', { name: '设置进度' })).toBeVisible({ timeout: 15000 });
+
+      const host = await waitForHost(page, token, name);
+      await setHostRunning(host.id);
+      const operation = await waitForOperation(host.controllerId);
+
+      await markOperationFailed(operation._id.toString());
+      const steps = page.getByTestId('github-setup-steps');
+      await expect(steps.getByText('Git 项目设置', { exact: true })).toBeVisible();
+      await expect(steps.getByText('失败').first()).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('git clone failed').first()).toBeVisible();
+      const retry = page.getByRole('button', { name: '重试', exact: true });
+      await expect(retry).toBeVisible();
+      await retry.click();
+      // 重试入口已触发；随后 operation 重新进入 RUNNING/FAILED 均由后端驱动
+      await expect(page.getByRole('heading', { name: '设置进度' })).toBeVisible();
+    } finally {
+      await cleanupHost(page, token, name);
+    }
   });
 });

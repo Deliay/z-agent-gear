@@ -60,6 +60,8 @@ const instanceNodeSchema = new mongoose.Schema(
     // AI 节点 Agent 配置快照（HUMAN/FLAG 节点为 null/undefined）
     agentConfig: { type: agentNodeConfigSchema, default: undefined },
     requiresWorktree: { type: Boolean, default: undefined },
+    // 人类节点：是否联动上游 Pull Request（实例快照，未开始的人类节点可编辑）
+    linkUpstreamPullRequest: { type: Boolean, default: false },
     // 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: { type: Number, default: undefined },
   },
@@ -82,6 +84,10 @@ const workflowInstanceSchema = new mongoose.Schema(
     blackboardTrash: { type: Map, of: String, default: {} },
     // 每个 key 的最后更新时间（供 BlackboardEntry.updatedAt 使用）
     blackboardUpdatedAt: { type: Map, of: Date, default: {} },
+    // 工作流级追加提示词（key 去重；系统键 github-pr / github-pr-review）
+    additionalPrompts: { type: Map, of: String, default: {} },
+    // 工作流完成时间（全部节点 DONE 时由引擎一次性写入）
+    finishedAt: { type: Date, default: null },
     // 软删除标记：删除实例时置为删除时间（实例数据保留，查询/引擎均排除）
     deletedAt: { type: Date, default: null },
     // 归档标记：归档仅移入「已归档」分组，不影响流程运转

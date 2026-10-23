@@ -1,17 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import GithubSetupProgressDialog from '../GithubSetupProgressDialog'
-import type { CloudHostSetupOperationData } from '../../../graphql/types'
+import { CLOUD_HOST } from '../../../graphql/queries'
+import type { CloudHostData, CloudHostSetupOperationData } from '../../../graphql/types'
 
 const mockUseQuery = vi.fn()
 const mockNavigate = vi.fn()
 const mockRetry = vi.fn()
 const mockRefetch = vi.fn()
 const mockRefetchHome = vi.fn()
+const mockRefetchQueries = vi.fn()
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: () => [mockRetry, { loading: false }],
+  useApolloClient: () => ({ refetchQueries: mockRefetchQueries }),
 }))
 
 vi.mock('react-router-dom', () => ({
@@ -61,6 +64,7 @@ describe('GithubSetupProgressDialog', () => {
     mockRetry.mockResolvedValue({ data: { retryCloudHostSetupOperation: makeOperation() } })
     mockRefetch.mockResolvedValue(undefined)
     mockRefetchHome.mockResolvedValue(undefined)
+    mockRefetchQueries.mockResolvedValue(undefined)
   })
 
   it('T-AW-G8 三步状态渲染且每 1.5s 轮询', () => {
@@ -140,6 +144,9 @@ describe('GithubSetupProgressDialog', () => {
       expect(mockRefetchHome).toHaveBeenCalled()
       expect(mockNavigate).toHaveBeenCalledWith('/sessions/session-9')
     })
+    expect(mockRefetchQueries).toHaveBeenCalledWith(
+      expect.objectContaining({ include: expect.any(Array) }),
+    )
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -209,5 +216,137 @@ describe('GithubSetupProgressDialog', () => {
     expect(options.skip).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+function makeHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
+  return {
+    id: 'cloud-1',
+    name: '云电脑 A',
+    controllerId: 'ctrl-cloud',
+    status: 'STARTING',
+    harnessTypes: ['OPENCODE'],
+    defaultSessionId: null,
+    activeSessionCount: 0,
+    failureReason: null,
+    deletedAt: null,
+    ...overrides,
+  }
+}
+
+function mockHostAndOperation(
+  host: CloudHostData,
+  operation: CloudHostSetupOperationData | null,
+) {
+  mockUseQuery.mockImplementation((query: unknown) => {
+    if (query === CLOUD_HOST) {
+      return { data: { cloudHost: host }, loading: false, error: undefined }
+    }
+    return {
+      data: operation ? { cloudHostSetupOperation: operation } : null,
+      loading: false,
+      error: undefined,
+      refetch: mockRefetch,
+    }
+  })
+}
+
+describe('GithubSetupProgressDialog 新建云电脑编排（四阶段）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockRetry.mockResolvedValue({ data: { retryCloudHostSetupOperation: makeOperation() } })
+    mockRefetch.mockResolvedValue(undefined)
+    mockRefetchHome.mockResolvedValue(undefined)
+    mockRefetchQueries.mockResolvedValue(undefined)
+  })
+
+  it('传入 hostId 时展示「启动云电脑」前置阶段与 1.5s 轮询', () => {
+    mockHostAndOperation(makeHost({ status: 'STARTING' }), null)
+    render(
+      <GithubSetupProgressDialog open hostId="cloud-1" operationId={null} onClose={vi.fn()} />,
+    )
+
+    expect(screen.getByText('启动云电脑')).toBeInTheDocument()
+    expect(screen.getByText('工作负载设置')).toBeInTheDocument()
+    expect(screen.getByText('Git 项目设置')).toBeInTheDocument()
+    expect(screen.getByText('会话创建')).toBeInTheDocument()
+    expect(screen.getByText('正在启动云电脑...')).toBeInTheDocument()
+
+    const hostCall = mockUseQuery.mock.calls.find((call) => call[0] === CLOUD_HOST)
+    expect(hostCall?.[1]).toEqual(
+      expect.objectContaining({ variables: { id: 'cloud-1' }, pollInterval: 1500, skip: false }),
+    )
+  })
+
+  it('云电脑 RUNNING 时只回调一次 onHostRunning', () => {
+    const onHostRunning = vi.fn()
+    mockHostAndOperation(makeHost({ status: 'RUNNING' }), null)
+    const { rerender } = render(
+      <GithubSetupProgressDialog
+        open
+        hostId="cloud-1"
+        operationId={null}
+        onHostRunning={onHostRunning}
+        onClose={vi.fn()}
+      />,
+    )
+
+    rerender(
+      <GithubSetupProgressDialog
+        open
+        hostId="cloud-1"
+        operationId={null}
+        onHostRunning={onHostRunning}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(onHostRunning).toHaveBeenCalledTimes(1)
+    expect(onHostRunning).toHaveBeenCalledWith(expect.objectContaining({ id: 'cloud-1' }))
+  })
+
+  it('启动失败停在「启动云电脑」：展示失败原因与「重新创建」', () => {
+    const onStartupFailed = vi.fn()
+    const onClose = vi.fn()
+    mockHostAndOperation(
+      makeHost({ status: 'FAILED', failureReason: '容器启动超时' }),
+      null,
+    )
+    render(
+      <GithubSetupProgressDialog
+        open
+        hostId="cloud-1"
+        operationId={null}
+        onStartupFailed={onStartupFailed}
+        onClose={onClose}
+      />,
+    )
+
+    expect(screen.getByText('容器启动超时')).toBeInTheDocument()
+    expect(screen.getByText('云电脑启动失败，请删除后重新创建')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '重新创建' }))
+    expect(onStartupFailed).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('项目准备请求失败（无 operation）时展示错误并可原地重试', () => {
+    const onRetrySetup = vi.fn()
+    mockHostAndOperation(makeHost({ status: 'RUNNING' }), null)
+    render(
+      <GithubSetupProgressDialog
+        open
+        hostId="cloud-1"
+        operationId={null}
+        setupError="repository is not authorized"
+        onRetrySetup={onRetrySetup}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('alert')).toHaveTextContent('repository is not authorized')
+    fireEvent.click(screen.getByRole('button', { name: '重新设置' }))
+    expect(onRetrySetup).toHaveBeenCalledTimes(1)
   })
 })

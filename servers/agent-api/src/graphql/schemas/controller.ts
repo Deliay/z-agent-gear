@@ -42,6 +42,13 @@ export const controllerTypeDefs = `#graphql
     worktreeDir: String
     createdAt: String!
     updatedAt: String!
+    defaultMcp: ControllerDefaultMcp!
+  }
+
+  # 新建会话默认注入的 MCP（存量控制器缺失时归一为 { useAllEnabled: true, serverIds: [] }）
+  type ControllerDefaultMcp {
+    useAllEnabled: Boolean!
+    serverIds: [ID!]!
   }
 
   input CreateKeyInput {
@@ -75,6 +82,7 @@ export const controllerTypeDefs = `#graphql
     renameController(input: RenameInput!): Controller!
     unbindController(id: ID!): Boolean!
     setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
+    setControllerDefaultMcp(controllerId: ID!, useAllEnabled: Boolean!, serverIds: [ID!] = []): Controller!
     regenerateControllerKey(input: RegenerateControllerKeyInput!): CreateKeyPayload!
   }
 `;

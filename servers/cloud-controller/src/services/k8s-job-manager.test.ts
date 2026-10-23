@@ -89,11 +89,11 @@ describe('K8sJobManager', () => {
     expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
     expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThan(0);
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toEqual({ cpu: '250m', memory: '1Gi', 'ephemeral-storage': '10Gi' });
-    expect(resources.limits).toEqual({ cpu: '2', memory: '4Gi', 'ephemeral-storage': '10Gi' });
+    expect(resources.requests).toBeUndefined();
+    expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi', 'ephemeral-storage': '10Gi' });
   });
 
-  it('T-K5b: JOB_EPHEMERAL_STORAGE override applies to requests and limits', () => {
+  it('T-K5b: JOB_EPHEMERAL_STORAGE override applies to limits', () => {
     const { manager } = setup(undefined, { ephemeralStorage: '5Gi' });
     const manifest = manager.buildManifest({
       jobName: 'zag-worker-abc123',
@@ -101,7 +101,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests['ephemeral-storage']).toBe('5Gi');
+    expect(resources.requests).toBeUndefined();
     expect(resources.limits['ephemeral-storage']).toBe('5Gi');
   });
 
@@ -113,7 +113,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests['ephemeral-storage']).toBe('10Gi');
+    expect(resources.requests).toBeUndefined();
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 

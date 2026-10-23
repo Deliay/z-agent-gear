@@ -26,9 +26,16 @@ vi.mock('../../services/workflow/instance.js', () => ({
     listForWorkspace: vi.fn(),
     findById: vi.fn(),
     instantiate: vi.fn(),
+    updateNode: vi.fn(),
     completeHumanNode: vi.fn(),
     rejectNode: vi.fn(),
+    setAdditionalPrompt: vi.fn(),
+    removeAdditionalPrompt: vi.fn(),
   },
+}));
+
+vi.mock('../../services/workflow/pr-handler-registry.js', () => ({
+  prHandlerRegistry: { listByInstance: vi.fn() },
 }));
 
 vi.mock('../../services/controller.js', () => ({
@@ -49,6 +56,8 @@ import { configuredWorkflowService } from '../../services/workflow/configured.js
 import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
+import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
+import { mapInstance } from './workflow.js';
 
 const ctx = { currentUser: { id: 'user-1', username: 'u' } } as never;
 const emptyCtx = { currentUser: null } as never;
@@ -367,5 +376,80 @@ describe('workflow resolvers', () => {
         workflowResolvers.Mutation.createWorkflowTemplate({}, { input: input as never }, ctx),
       ).rejects.toThrow(/环上节点/);
     });
+  });
+});
+
+describe('workflow PR 联动字段与 mutation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('mapInstance 输出 additionalPrompts（Map/空态）并按 key 排序', () => {
+    const withPrompts = mapInstance({
+      ...instanceDoc,
+      additionalPrompts: new Map([
+        ['github-pr-review', '评审'],
+        ['github-pr', '指引'],
+      ]),
+    });
+    expect(withPrompts.additionalPrompts).toEqual([
+      { key: 'github-pr', value: '指引' },
+      { key: 'github-pr-review', value: '评审' },
+    ]);
+
+    const empty = mapInstance(instanceDoc);
+    expect(empty.additionalPrompts).toEqual([]);
+  });
+
+  it('pullRequestLinks 按实例查询并映射节点名', async () => {
+    vi.mocked(prHandlerRegistry.listByInstance).mockResolvedValue([
+      {
+        _id: 'h1',
+        pullRequestId: 'Deliay/z-agent-gear#264',
+        prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+        nodeId: 'n1',
+        createdAt: new Date('2026-10-23T06:00:00Z'),
+      },
+    ] as never);
+    const parent = mapInstance(instanceDoc);
+
+    const links = await workflowResolvers.WorkflowInstance.pullRequestLinks(parent as never, {}, ctx);
+
+    expect(prHandlerRegistry.listByInstance).toHaveBeenCalledWith('inst-1');
+    expect(links).toEqual([
+      {
+        pullRequestId: 'Deliay/z-agent-gear#264',
+        prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+        nodeId: 'n1',
+        nodeName: '产品需求',
+        registeredAt: '2026-10-23T06:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('set/removeWorkflowAdditionalPrompt 返回映射后的实例', async () => {
+    vi.mocked(workflowInstanceService.setAdditionalPrompt).mockResolvedValue({
+      ...instanceDoc,
+      additionalPrompts: new Map([['my-note', 'v']]),
+    } as never);
+    const setResult = await workflowResolvers.Mutation.setWorkflowAdditionalPrompt(
+      {},
+      { instanceId: 'inst-1', key: 'my-note', value: 'v' },
+      ctx,
+    );
+    expect(workflowInstanceService.setAdditionalPrompt).toHaveBeenCalledWith(
+      'user-1', 'inst-1', 'my-note', 'v',
+    );
+    expect(setResult.additionalPrompts).toEqual([{ key: 'my-note', value: 'v' }]);
+
+    vi.mocked(workflowInstanceService.removeAdditionalPrompt).mockResolvedValue(instanceDoc as never);
+    await workflowResolvers.Mutation.removeWorkflowAdditionalPrompt(
+      {},
+      { instanceId: 'inst-1', key: 'my-note' },
+      ctx,
+    );
+    expect(workflowInstanceService.removeAdditionalPrompt).toHaveBeenCalledWith(
+      'user-1', 'inst-1', 'my-note',
+    );
   });
 });

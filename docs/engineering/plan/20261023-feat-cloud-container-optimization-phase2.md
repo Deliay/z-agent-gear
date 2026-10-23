@@ -1,19 +1,20 @@
 ---
-description: 云容器优化二期实现计划：CreateCloudHostInput.createDefaultWorkspace（默认不建 /root/workspace + 无工作区提示与入口）、Model.contextLength（后台增改清 + 经 OpenAI 兼容 GET /v1/models 的 context_length 下发）、云电脑 Job 模板 ephemeral-storage 10Gi、API 与 E2E 测试
+description: 云容器优化二期实现计划：创建期不预置默认工作区（仅「Git 项目设置」初始化 Github 项目时按前缀创建）、Model.contextLength（后台增改清 + 经 OpenAI 兼容 GET /v1/models 的 context_length 下发）、云电脑 Job 模板 ephemeral-storage 10Gi（仅 limits）、API 与 E2E 测试
 type: Permanent
 ---
 
 # 云容器优化二期 - 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261023-feat-cloud-container-optimization-phase2.md`（v1.1）
-**关联 PRD**: `docs/product/draft/20261023-cloud-container-optimization-phase2.md`（v1.1）
+**关联 Proposal**: `docs/engineering/proposals/20261023-feat-cloud-container-optimization-phase2.md`（v1.2）
+**关联 PRD**: `docs/product/draft/20261023-cloud-container-optimization-phase2.md`（v1.2）
 **需求总分支（feat-branch）**: `feat/cloud-container-optimization-phase2`（需求总 PR #267）
 **实现分支**: `feat/cloud-container-optimization-phase2-impl`（基于需求总分支）
 **创建日期**: 2026-10-23
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **版本说明**：
 
+- v1.1 合并期修订（与 phase1 / phase10 汇合）：舍弃 `CreateCloudHostInput.createDefaultWorkspace` 开关——Phase 3 改为「创建期一律不写 `workspaceId`」，默认会话条件为 `createDefaultSession !== false && workspaceId`；Phase 5 不再提供勾选项；`ephemeral-storage` 仅注入 `limits`（不设 `requests`，与 main PR #268 一致）。下文相关条目已按修订后口径更新。
 - v1.0 首版，与 PRD v1.1 / 提案 v1.1 对齐，把提案 §5.2 的 4 个实现点拆成 9 个 Phase。
 - 本版给出「上游文档 × 代码现状差异」6 条与「计划期裁决」8 条，收敛提案留白但会阻塞实现的细节（前端如何判定「未创建默认工作区」、`createDefaultSession` 的一期依赖、编辑入口形态等）。
 - 不改变 PRD 产品口径；对提案新增 1 个展示字段 `CloudHost.hasDefaultWorkspace`（见裁决 1），需在实现 PR 描述中声明。
@@ -25,9 +26,9 @@ flowchart TD
     P0["Phase 0 契约<br/>cloud-host / admin-llm / llm / billing-openai"]
     P1["Phase 1 admin-api<br/>Model.contextLength + /v1/models 下发"]
     P2["Phase 2 agent-api<br/>Model 只读镜像字段"]
-    P3["Phase 3 agent-api<br/>createDefaultWorkspace + 无工作区 ready"]
+    P3["Phase 3 agent-api<br/>创建期不写 workspaceId + 无工作区 ready"]
     P4["Phase 4 cloud-controller<br/>ephemeral-storage 10Gi + env"]
-    P5["Phase 5 agent-web<br/>新建云电脑开关 + 无工作区提示/入口"]
+    P5["Phase 5 agent-web<br/>无工作区提示/入口 + Git 前缀不预填"]
     P6["Phase 6 admin-web<br/>模型最长上下文展示/新增/编辑/清空"]
     P7["Phase 7 tests/api<br/>GraphQL + OpenAI 兼容 REST 契约回归"]
     P8["Phase 8 tests/e2e + 文档收口 + PR"]
@@ -58,11 +59,11 @@ flowchart TD
 
 ### 关键约束（实现期不得回退）
 
-- **零回归**：勾选「创建默认工作区」时与现状完全一致；存量云电脑、存量模型、存量工作区行为不变。
+- **零回归**：存量云电脑、存量模型、存量工作区行为不变（存量行 `workspaceId` 均非空，仍按既有逻辑进默认会话）；仅新建云电脑的默认行为改变（PRD 已声明为有意变更）。
 - **契约先行**：先改 `contracts/*`，再改 schema/resolver/service，最后改前端手写类型（本项目无 codegen，`apps/*/src/graphql/types.ts` 为人工对齐文件）。
 - **下发渠道唯一**：模型最长上下文只经 OpenAI 兼容 `GET /v1/models` 的 `context_length` 下发；禁止向 `StartHarnessInput.secrets`、`ZAG_*` env、`opencode.jsonc` 注入，`packages/agent-controller` 零改动。
 - **未设置即省略**：`contextLength = null` 时 `/v1/models` 不返回 `context_length`，不得返回 `null`。
-- **默认工作区判定**：仅 `createDefaultWorkspace === true` 才 `ensureCloudHostWorkspace`；缺省/false 一律不创建工作区。
+- **默认工作区判定**：`create()` 一律不调用 `ensureCloudHostWorkspace`（`workspaceId` 恒 `null` 落库）；默认工作区只由「Git 项目设置」的 `ensureWorkspace(targetPath)` 创建。
 - **凭据零泄露**：模型上下文配置不得进入日志/错误文案；云电脑创建链路不改既有最小化凭据口径。
 - **禁止 rebase/squash**：遵循 z-git 规范，仅允许 merge。
 
@@ -76,7 +77,7 @@ flowchart TD
 - `apps/agent-web` / `apps/admin-web` 的 `src/graphql/types.ts` 均为**手写类型**（文件头注明人工对齐），无 codegen 脚本；契约变更后必须手工同步接口字段。
 - admin-api `ModelService.mapModel` 显式挑选字段输出，新增 `contextLength` 必须同时补 model schema、mapModel、GraphQL typeDefs、resolver、查询语句与手写类型，缺一处即前端读不到。
 - `/v1/models` 的 `toModelEntry(model)` 当前只接收 `name/createdAt` 并输出 `{id, object, owned_by, created}`；`account` 与 `cloud_host` 两种口径共用该函数，需一次性覆盖两条列表路径。
-- cloud-controller `K8sJobManager.buildManifest` 从模块常量 `JOB_RESOURCES` 拷贝 requests/limits；`JobManagerConfig` 只有 `namespace/image/runtimeClassName/publicWsEndpoint`，`config/index.ts` 无 `ephemeralStorage` 配置项。
+- cloud-controller `K8sJobManager.buildManifest` 从模块常量 `JOB_RESOURCES.limits` 拷贝（main PR #268 已移除 `requests`，本期 `ephemeral-storage` 也只进 `limits`）；`JobManagerConfig` 只有 `namespace/image/runtimeClassName/publicWsEndpoint`，`config/index.ts` 无 `ephemeralStorage` 配置项。
 - `deploy/k8s/cloud-controller.yaml` 无 `JOB_EPHEMERAL_STORAGE`；`aspire/AgentGear.AppHost/AppHost.cs` 的 cloudController 未注入 RUNTIME_CLASS_NAME（dev 走 InMemory），但需补新 env；`aspire/manifest/docker-compose.yaml` 的 cloud-controller 段落需补同名 env。
 - 前端云电脑状态来自唯一 `HOME_OVERVIEW.controllers[].cloudHost`；Sidebar 现有提示以 `RUNNING && harnessTypes.length === 1 && !defaultSessionId` 判定「默认会话创建失败」——该判定在新语义下必须改为「无默认工作区」优先，否则未勾选创建会误报失败。
 - `NewCloudHostDialog` 提交时按需拼 `workloadIds`；`onCreated` 后统一跳转控制器设置页，不做会话跳转；新增开关需保持既有报文形状（未勾选不传新字段，保持兼容）。
@@ -110,12 +111,12 @@ flowchart TD
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `contracts/cloud-host.graphql` | 修改 | `CreateCloudHostInput` 增加 `createDefaultWorkspace: Boolean = false`；`CloudHost` 增加 `hasDefaultWorkspace: Boolean!`；注释写明「不勾选不创建 `/root/workspace`，就绪后不自动建会话」 |
+| `contracts/cloud-host.graphql` | 修改 | `CloudHost` 增加 `hasDefaultWorkspace: Boolean!`；`CreateCloudHostInput` **不**新增工作区开关（仅保留 phase1 的 `createDefaultSession`），注释写明「创建期不创建 `/root/workspace`，无工作区时就绪后不自动建会话」 |
 | `contracts/admin-llm.graphql` | 修改 | `Model.contextLength: Int`（null=未设置）；`CustomModelInput.contextLength: Int`；`Mutation.updateModelContextLength(modelId: ID!, contextLength: Int): Model!` |
 | `contracts/llm.graphql` | 修改 | `Model.contextLength: Int`（只读镜像，注释与 admin 侧逐字一致） |
 | `contracts/billing-openai.openapi.yaml` | 修改 | `components.schemas.Model.properties.context_length`（integer, minimum 1，可选）；`/v1/models` 描述注明「未设置不返回该字段」 |
 
-验收：四个契约自洽；`createDefaultWorkspace` 默认 `false`；`hasDefaultWorkspace` 与 `defaultWorkspace` 语义不冲突。
+验收：四个契约自洽；`CreateCloudHostInput` 不含任何工作区开关；`hasDefaultWorkspace` 与 `defaultWorkspace` 语义不冲突。
 
 ## Phase 1: admin-api（`Model.contextLength` + OpenAI 兼容下发）
 
@@ -162,25 +163,25 @@ cd servers/admin-api && npm run build && npm test
 
 测试：`servers/agent-api/src/services/model.test.ts` 断言字段透出与 `null` 兜底；`servers/agent-api/src/graphql/resolvers/model.test.ts` 断言 `models` 可读。
 
-## Phase 3: agent-api（`createDefaultWorkspace` + 无工作区 ready）
+## Phase 3: agent-api（创建期不写 `workspaceId` + 无工作区 ready）
 
 ### Step 3.1 模型与创建编排
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/agent-api/src/models/cloud-host.ts` | 修改 | `workspaceId` 改 `required: false, default: null`；零迁移（存量行非空） |
-| `servers/agent-api/src/services/cloud-host-service.ts` | 修改 | `CreateCloudHostInput` 增加 `createDefaultWorkspace?: boolean`；`validateInput` 归一 `=== true`；`create()` 仅 true 时 `ensureCloudHostWorkspace`，否则 `workspaceId=null`；`CloudHost.create` 传 `workspaceId: workspaceId ?? undefined`；`mapCloudHost` 增加 `hasDefaultWorkspace: Boolean(host.workspaceId)` |
+| `servers/agent-api/src/services/cloud-host-service.ts` | 修改 | `CreateCloudHostInput` 仅保留 `createDefaultSession`（**不**新增工作区开关）；`create()` 一律不调用 `ensureCloudHostWorkspace`，`workspaceId` 恒 `null` 落库；`mapCloudHost` 增加 `hasDefaultWorkspace: Boolean(host.workspaceId)` |
 | `servers/agent-api/src/graphql/schemas/cloud-host.ts` | 修改 | 输入与类型同步契约 |
-| `servers/agent-api/src/graphql/resolvers/cloud-host.ts` | 修改 | 透传 `createDefaultWorkspace`；`hasDefaultWorkspace` 由 `mapCloudHost` 输出（若走类型级 resolver 则登记 `resolvers/index.ts`） |
+| `servers/agent-api/src/graphql/resolvers/cloud-host.ts` | 修改 | 透传 `createDefaultSession`；`hasDefaultWorkspace` 由 `mapCloudHost` 输出（若走类型级 resolver 则登记 `resolvers/index.ts`） |
 
 ### Step 3.2 ready 分支
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/agent-api/src/services/cloud-host-service.ts` | 修改 | `handleReadyLocked` 的 STARTING 分支与重复 ready 补建分支均增加 `host.workspaceId` 判空；无工作区时不建会话、不写 `defaultSessionId`，只 `console.info` |
-| `servers/agent-api/src/services/cloud-host-service.test.ts` | 修改/新增 | T 用例：`createDefaultWorkspace=true` 创建工作区并落库；false/缺省不调用 `ensureCloudHostWorkspace` 且 `workspaceId=null`；rollback 在 null 工作区下不删工作区；ready 无工作区跳过会话；ready 有工作区仍建会话；重复 ready 无工作区不补建 |
+| `servers/agent-api/src/services/cloud-host-service.ts` | 修改 | `handleReadyLocked` 的 STARTING 分支与重复 ready 补建分支条件为 `createDefaultSession !== false && host.workspaceId`；无工作区时不建会话、不写 `defaultSessionId`，只 `console.info`（日志区分 `createDefaultSession=false` / `no default workspace`） |
+| `servers/agent-api/src/services/cloud-host-service.test.ts` | 修改/新增 | T 用例：创建期不调用 `ensureCloudHostWorkspace` 且 `workspaceId=null`；rollback 在 null 工作区下不删工作区；ready 无工作区跳过会话；ready 有工作区仍建会话；重复 ready 无工作区不补建 |
 
-测试重点：mock `controllerWorkspaceService.ensureCloudHostWorkspace` 断言调用次数；断言 `sessionService.create` 未被调用；断言 `hasDefaultWorkspace` 映射。
+测试重点：mock `controllerWorkspaceService.ensureCloudHostWorkspace` 断言**未**被调用；断言 `sessionService.create` 未被调用；断言 `hasDefaultWorkspace` 映射。
 
 ---
 
@@ -189,35 +190,35 @@ cd servers/admin-api && npm run build && npm test
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/cloud-controller/src/config/index.ts` | 修改 | `AppConfig` 增加 `jobEphemeralStorage: string`；`loadConfig` 读取 `env.JOB_EPHEMERAL_STORAGE || '10Gi'`；`index.test.ts` 补默认值与显式值 |
-| `servers/cloud-controller/src/services/k8s-job-manager.ts` | 修改 | `JobManagerConfig` 增加 `ephemeralStorage?: string`；`JOB_RESOURCES` 保持基准 CPU/内存，`buildManifest` 拼 `'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi'`（requests/limits 同值），避免模块常量在测试间被篡改 |
+| `servers/cloud-controller/src/services/k8s-job-manager.ts` | 修改 | `JobManagerConfig` 增加 `ephemeralStorage?: string`；`JOB_RESOURCES` 保持基准 CPU/内存，`buildManifest` 只在 `resources.limits` 拼 `'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi'`（**不设置 requests**，与 main 口径一致），避免模块常量在测试间被篡改 |
 | `servers/cloud-controller/src/services/k8s-client.ts` | 修改 | `K8sResourceList` 增加 `'ephemeral-storage'?: string` |
 | `servers/cloud-controller/src/index.ts` | 修改 | 构造 `K8sJobManager` 时传 `ephemeralStorage: config.jobEphemeralStorage` |
-| `servers/cloud-controller/src/services/k8s-job-manager.test.ts` | 修改 | T-K5 断言 requests/limits 含 `ephemeral-storage: '10Gi'`；新增 env 覆盖用例（如 `5Gi`）与缺省默认用例 |
+| `servers/cloud-controller/src/services/k8s-job-manager.test.ts` | 修改 | T-K5 断言 `limits` 含 `ephemeral-storage: '10Gi'` 且 `requests` 为 `undefined`；新增 env 覆盖用例（如 `5Gi`）与缺省默认用例 |
 | `deploy/k8s/cloud-controller.yaml` | 修改 | Deployment env 增加 `JOB_EPHEMERAL_STORAGE: '10Gi'` 及注释 |
 | `aspire/AgentGear.AppHost/AppHost.cs` | 修改 | cloudController 增加 `.WithEnvironment("JOB_EPHEMERAL_STORAGE", "10Gi")` |
 | `aspire/manifest/docker-compose.yaml` | 修改 | cloud-controller `environment` 增加 `JOB_EPHEMERAL_STORAGE: "10Gi"` |
 
-测试：`cd servers/cloud-controller && npm run build && npm test`；manifest 资源断言必须精确等于 `{ cpu, memory, 'ephemeral-storage' }`。
+测试：`cd servers/cloud-controller && npm run build && npm test`；manifest 资源断言必须精确等于 `{ cpu, memory, 'ephemeral-storage' }`（仅 `limits`，`requests` 为 `undefined`）。
 
 ---
 
-## Phase 5: agent-web（新建开关 + 无工作区提示/入口）
+## Phase 5: agent-web（无工作区提示/入口 + Git 前缀不预填）
 
 ### Step 5.1 新建云电脑
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx` | 修改 | 新增「创建默认工作区」复选，默认不勾选；与 Harness/工作负载区块并列；提交 `createDefaultWorkspace`（未勾选也显式传 `false`，语义清晰）；提示文案：勾选且单 Harness「将创建默认工作区并自动创建会话」，未勾选「不会创建工作区，就绪后需先创建或绑定工作区」 |
-| `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx` | 修改 | 默认不勾选；勾选后提交 `true`；未勾选提交 `false`；既有名称/Harness/负载用例不回归；组合 Github 负载与开关互不影响 |
+| `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx` | 修改 | **不**提供「创建默认工作区」复选；提交报文不含任何工作区字段；提示文案：单 Harness「就绪后不会自动创建会话，需先创建或绑定工作区」，多 Harness「不自动创建会话」 |
+| `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx` | 修改 | 无勾选项且文案正确；既有名称/Harness/负载用例不回归；组合 Github 负载与其它开关互不影响 |
 | `apps/agent-web/src/graphql/mutations.ts` | 修改 | `CREATE_CLOUD_HOST` 返回选择集补 `hasDefaultWorkspace`；变量输入字段由手写类型约束 |
-| `apps/agent-web/src/graphql/types.ts` | 修改 | `CloudHostData` 增加 `hasDefaultWorkspace?: boolean`；`CreateCloudHostInput` 手写类型增加 `createDefaultWorkspace?: boolean`（若有） |
+| `apps/agent-web/src/graphql/types.ts` | 修改 | `CloudHostData` 增加 `hasDefaultWorkspace?: boolean`；`CreateCloudHostInput` 手写类型**不**增加工作区字段 |
 
 ### Step 5.2 就绪提示与入口
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `apps/agent-web/src/components/Sidebar.tsx` | 修改 | 云电脑行提示分流（裁决 3）：`hasDefaultWorkspace === false && controllerWorkspaces.length === 0` 时展示 `data-testid="cloud-host-no-workspace-hint"`「未创建默认工作区，请先创建或绑定工作区」，添加/绑定工作区后消失；「工作区」TreeSection actions 在无工作区时同时展示既有 Github 入口与「新建工作区」按钮（navigate `/settings?controllerId=...`）；保留原默认会话失败提示（有工作区且单 Harness 无会话） |
-| `apps/agent-web/src/components/cloud-host/GithubProjectSetupDialog.tsx` | 修改 | `hasDefaultWorkspace === false` 时 `targetPath` 初始 `''`，placeholder「例如：/workspace」；为 true 时保持 `defaultWorkspace` 预填；提交前必填校验沿用现有绝对路径校验（裁决 2） |
+| `apps/agent-web/src/hooks/useGithubProjectForm.ts` | 修改 | `hasDefaultWorkspace === false` 时 `targetPath` 初始 `''`（判定收口在 hook），placeholder「例如：/workspace」；为 true 或新建流程（未传该值）时保持 `defaultWorkspace ?? '/root/workspace'` 预填；提交前必填校验沿用现有绝对路径校验（裁决 2） |
 | `apps/agent-web/src/components/cloud-host/__tests__/GithubProjectSetupDialog.test.tsx` | 修改 | 无工作区不预填 `/root/workspace`、空值不可提交；有工作区仍预填 |
 | `apps/agent-web/src/components/__tests__/Sidebar.test.tsx` | 修改/新增 | 无工作区 RUNNING 展示新提示且不展示「默认会话创建失败」；有工作区单 Harness 无会话仍展示旧提示；多 Harness 不提示；入口点击打开 Github 弹窗/跳转设置页 |
 
@@ -255,7 +256,7 @@ cd apps/admin-web && npm run build && npm run lint && npm test
 
 | 文件 | 操作 | 覆盖 |
 |------|------|------|
-| `tests/api/src/agent-api/cloud-host.test.ts` | 修改 | `createCloudHost(createDefaultWorkspace=true/false/缺省)` 三种组合；false 后 `myCloudHosts` 的 `hasDefaultWorkspace=false`；工作区列表为空；true 时 `hasDefaultWorkspace=true` 且默认工作区路径正确；`harnessTypes` 多选不再误建会话 |
+| `tests/api/src/agent-api/cloud-host.test.ts` | 修改 | 普通创建后 `myCloudHosts` 的 `hasDefaultWorkspace=false`、`defaultSessionId=null`、该控制器工作区列表为空；就绪后仍不建会话；`harnessTypes` 多选不误建会话 |
 | `tests/api/src/admin-api/llm.test.ts` | 修改 | `createGlobalCustomModel(contextLength)` 正/负/0/小数；`updateModelContextLength` 修改与 `null` 清空；`adminModels` 回读一致 |
 | `tests/api/src/admin-api/billing-gateway.test.ts` | 修改 | `GET /v1/models`：已设置返回 `context_length`；未设置字段缺失；`account` 与 `cloud_host` 两种 Key 各一条；清空后重新请求字段消失 |
 | `tests/api/src/cloud-controller/internal-api.test.ts` | 修改 | 通过真实 manifest 构造断言 `ephemeral-storage: 10Gi`（或复用单测，API 套件至少断言 Job 模板资源） |
@@ -266,16 +267,16 @@ cd apps/admin-web && npm run build && npm run lint && npm test
 
 | # | 场景 | 验证点 | 落点 |
 |---|------|--------|------|
-| E2E-1 | 默认不创建工作区主链路 | 新建对话框默认不勾选 → 创建 → RUNNING 后工作区列表为空、不自动进入会话、展示「未创建默认工作区」提示 → 打开 Github 项目设置 → 绑定后建会话 | `tests/e2e/src/cloud-host.spec.ts` |
-| E2E-2 | 勾选创建工作区回归 | 勾选后与现状一致：有默认工作区、就绪后自动进入默认会话 | `tests/e2e/src/cloud-host.spec.ts` |
+| E2E-1 | 普通创建不预置默认工作区主链路 | 新建对话框无「创建默认工作区」勾选项 → 创建 → RUNNING 后工作区列表为空、不自动进入会话、展示「未创建默认工作区」提示 → 打开 Git 项目设置（前缀不预填）→ 手动建工作区后提示消失、可新建会话 | `tests/e2e/src/cloud-host.spec.ts` |
+| E2E-2 | （随勾选项一并移除） | 原「勾选创建工作区回归」用例已删除；「Git 项目设置初始化即建工作区」由 `cloud-host-github-service` 单测与 P10 用例覆盖 | — |
 | E2E-3 | 后台最长上下文 | 新增/编辑/清空模型上下文；列表展示与回读；非法值提示 | `tests/e2e/src/admin-model-config.spec.ts` |
-| E2E-4 | 存储上限 | 新建云电脑的 Job 资源约束含 ephemeral-storage 10Gi（管理后台云端容器/云端控制器可观测处断言） | `tests/e2e/src/admin-cloud-container.spec.ts` |
+| E2E-4 | 存储上限 | 新建云电脑的 Job 资源约束：`limits` 含 ephemeral-storage 10Gi、`requests` 为 undefined | `tests/e2e/src/admin-cloud-container.spec.ts` |
 
 ### 文档收口
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `apps/agent-web/AGENTS.md` | 修改 | 新建表单增加「创建默认工作区」；默认会话判定改为「有默认工作区才自动会话」；无工作区提示与入口 |
+| `apps/agent-web/AGENTS.md` | 修改 | 新建表单**无**「创建默认工作区」勾选；默认会话判定改为「有默认工作区才自动会话」；无工作区提示与入口；Git 前缀无工作区不预填 |
 | `apps/admin-web/AGENTS.md` | 修改 | 模型配置页增加最长上下文新增/编辑/清空与展示口径 |
 | `servers/agent-api/AGENTS.md` | 修改 | 创建编排不再无条件建工作区；ready 判空；`hasDefaultWorkspace` |
 | `servers/cloud-controller/AGENTS.md` | 修改 | 环境变量表增加 `JOB_EPHEMERAL_STORAGE`；Job 资源含 ephemeral-storage |
@@ -299,11 +300,11 @@ cd tests/e2e && npx playwright test
 ## 总体验收
 
 - [ ] 契约评审通过（`cloud-host.graphql` / `admin-llm.graphql` / `llm.graphql` / `billing-openai.openapi.yaml`）
-- [ ] 新建云电脑默认不创建工作区；勾选后与现状完全一致（PRD 功能点 1）
+- [ ] 新建云电脑不预置默认工作区（无勾选项）；默认工作区仅由「Git 项目设置」或新建工作区产生（PRD 功能点 1）
 - [ ] 无工作区就绪后不自动进入会话，提示与「Git 项目设置 / 新建工作区」入口可用（PRD 功能点 1 验收 4/5）
 - [ ] 后台可新增/修改/清空 `Model.contextLength`；非法值被拒；回读一致（PRD 功能点 2）
 - [ ] `GET /v1/models` 对 `account` / `cloud_host` 两口径下发 `context_length`；未设置省略；清空后立即消失；全程无 secrets/env/`opencode.jsonc` 注入（PRD 功能点 2 验收 5）
-- [ ] 新建云电脑 Job 资源 requests/limits 均含 `ephemeral-storage: 10Gi`；存量不受影响（PRD 功能点 3）
+- [ ] 新建云电脑 Job 资源 `limits` 含 `ephemeral-storage: 10Gi` 且不设 `requests`；存量不受影响（PRD 功能点 3）
 - [ ] 单测/API 测试/E2E 全绿且既有用例零回归
 - [ ] 文档已同步（4 个 AGENTS.md + 本计划索引）
 - [ ] 实现 PR 描述声明：新增 `hasDefaultWorkspace`、Github 前缀空值行为、一期 `createDefaultSession` 合并依赖

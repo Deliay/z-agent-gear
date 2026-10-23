@@ -45,6 +45,10 @@ export const HOME_OVERVIEW = gql`
         lastHeartbeatAt
         createdAt
         updatedAt
+        defaultMcp {
+          useAllEnabled
+          serverIds
+        }
         gateways {
           gateways {
             id

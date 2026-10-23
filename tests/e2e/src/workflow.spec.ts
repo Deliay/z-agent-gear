@@ -303,9 +303,11 @@ async function getInstance(page: Page, token: string, instanceId: string) {
     query WorkflowInstance($id: ID!) {
       workflowInstance(id: $id) {
         id name currentNodeNames
-        nodes { id nodeKey name type status stage sessionId reworkCount prompts artifactTitles requiresWorktree rejectInfo { reason } failInfo { reason source } }
+        nodes { id nodeKey name type status stage sessionId reworkCount prompts artifactTitles requiresWorktree linkUpstreamPullRequest rejectInfo { reason } failInfo { reason source } }
         blackboard { key value }
         blackboardTrash { key value }
+        additionalPrompts { key value }
+        pullRequestLinks { pullRequestId prUrl nodeId nodeName registeredAt }
       }
     }
   `, { id: instanceId }, token);
@@ -319,11 +321,14 @@ async function getInstance(page: Page, token: string, instanceId: string) {
       prompts?: string[] | null;
       artifactTitles?: string[] | null;
       requiresWorktree?: boolean;
+      linkUpstreamPullRequest?: boolean;
       rejectInfo: { reason: string } | null;
       failInfo: { reason: string; source: string } | null;
     })[];
     blackboard: { key: string; value: string }[];
     blackboardTrash: { key: string; value: string }[];
+    additionalPrompts: { key: string; value: string }[];
+    pullRequestLinks: { pullRequestId: string; prUrl: string | null; nodeId: string; nodeName: string | null; registeredAt: string }[];
   };
 }
 
@@ -500,6 +505,196 @@ async function advanceToExecRunning(page: Page, env: WorkflowEnv, instanceName: 
 /** 节点卡片定位（实例视图节点树） */
 function nodeCard(page: Page, nodeName: string) {
   return page.locator('div.rounded-lg.border.p-3').filter({ hasText: nodeName });
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Pull Request 联动（E2E-27..32）
+// ---------------------------------------------------------------------------
+
+const PR_CALLBACK_TOKEN = process.env.EVENT_CALLBACK_TOKEN ?? '';
+let prE2eSeq = Number(String(Date.now()).slice(-6)) * 10;
+function nextE2ePr(): string {
+  return `Deliay/z-agent-gear#${prE2eSeq++}`;
+}
+const PR_CALLBACK_URL = (process.env.API_URL || 'http://localhost:10001/graphql').replace(
+  /\/graphql$/,
+  '',
+) + '/api/events/callback';
+
+interface PrNodeSpec {
+  nodeKey: string;
+  type: 'HUMAN' | 'AI';
+  name: string;
+  stage: string;
+  dependsOn: string[];
+  requiresWorktree: boolean;
+  prompts?: string[];
+  artifactTitles?: string[];
+  linkUpstreamPullRequest?: boolean;
+}
+
+function prGraph(link: boolean): PrNodeSpec[] {
+  return [
+    { nodeKey: 'input', type: 'HUMAN', name: '需求输入', stage: '需求', dependsOn: [], requiresWorktree: false },
+    {
+      nodeKey: 'exec', type: 'AI', name: 'AI执行', stage: '开发',
+      prompts: ['阅读上游产物并完成执行'], artifactTitles: ['开发产物'],
+      dependsOn: ['input'], requiresWorktree: false,
+    },
+    {
+      nodeKey: 'review', type: 'HUMAN', name: 'PR 审核', stage: '验收',
+      dependsOn: ['exec'], requiresWorktree: false, linkUpstreamPullRequest: link,
+    },
+    {
+      nodeKey: 'after', type: 'AI', name: '后续执行', stage: '交付',
+      prompts: ['根据评审意见继续推进'], artifactTitles: ['交付产物'],
+      dependsOn: ['review'], requiresWorktree: false,
+    },
+  ];
+}
+
+function prConfigureNodes(nodes: PrNodeSpec[]) {
+  return nodes.map((n) => ({
+    ...n,
+    linkUpstreamPullRequest: n.type === 'HUMAN' ? Boolean(n.linkUpstreamPullRequest) : false,
+    agentConfig: n.type === 'AI' ? { acpServerType: 'opencode', initNewWorktree: false } : null,
+  }));
+}
+
+interface PrWorkflowEnv extends WorkflowEnv {
+  instanceId: string;
+  instanceNodes: InstanceNode[];
+}
+
+async function setupPrWorkflowEnv(page: Page, tag: string, link: boolean): Promise<PrWorkflowEnv> {
+  const { token, username } = await registerUser(page);
+  const { rawKey } = await createControllerKey(page, token);
+  const hostname = `wf-${tag}-host-${Date.now().toString(36)}`;
+  const controller = await registerWorkflowController(rawKey, hostname);
+  await refreshCapabilities(page, token, controller.controllerId);
+  const workspacePath = `/tmp/e2e-wf-${tag}-${Date.now().toString(36)}`;
+  const ws = await createWorkspace(page, controller.controllerId, workspacePath, token);
+
+  const nodes = prGraph(link);
+  const tplRes = await gqlRequest(page, `
+    mutation CreateWorkflowTemplate($input: WorkflowTemplateInput!) {
+      createWorkflowTemplate(input: $input) { id }
+    }
+  `, { input: { name: `wf-${tag}-模板-${Date.now().toString(36)}`, nodes } }, token);
+  const tplBody = await tplRes.json();
+  if (tplBody.errors) throw new Error(`createWorkflowTemplate failed: ${JSON.stringify(tplBody.errors)}`);
+  const templateId = tplBody.data.createWorkflowTemplate.id;
+
+  const configuredName = `wf-${tag}-配置-${Date.now().toString(36)}`;
+  const cfgRes = await gqlRequest(page, `
+    mutation ConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
+      configureWorkflow(templateId: $templateId, input: $input) { id }
+    }
+  `, {
+    templateId,
+    input: { name: configuredName, controllerId: controller.controllerId, nodes: prConfigureNodes(nodes) },
+  }, token);
+  const cfgBody = await cfgRes.json();
+  if (cfgBody.errors) throw new Error(`configureWorkflow failed: ${JSON.stringify(cfgBody.errors)}`);
+
+  const instanceName = `wf-${tag}-实例-${Date.now().toString(36)}`;
+  const inst = await instantiate(
+    page,
+    token,
+    controller.controllerId,
+    cfgBody.data.configureWorkflow.id,
+    ws.id,
+    instanceName,
+    prConfigureNodes(nodes) as unknown as InstantiateNodeInput[],
+  );
+  return {
+    token,
+    username,
+    rawKey,
+    hostname,
+    controller,
+    workspaceId: ws.id,
+    workspacePath,
+    configuredId: cfgBody.data.configureWorkflow.id,
+    configuredName,
+    instanceId: inst.id,
+    instanceNodes: inst.nodes,
+  };
+}
+
+async function waitForNodeStatus(
+  page: Page,
+  token: string,
+  instanceId: string,
+  nodeKey: string,
+  status: string,
+) {
+  return waitFor(async () => {
+    const inst = await getInstance(page, token, instanceId);
+    const node = inst.nodes.find((n) => n.nodeKey === nodeKey);
+    return node?.status === status ? node : null;
+  }, 15000, `${nodeKey}=${status}`);
+}
+
+/** 完成 input 并返回 exec 的 acp:start（含节点作用域 token） */
+async function startPrExec(page: Page, env: PrWorkflowEnv) {
+  const input = env.instanceNodes.find((n) => n.nodeKey === 'input')!;
+  await completeHumanNode(page, env.token, env.instanceId, input.id, '实现 PR 联动');
+  const execNode = await waitForNodeStatus(page, env.token, env.instanceId, 'exec', 'RUNNING');
+  const execStart = await waitFor(
+    () => env.controller.starts.find((s) => s.sessionId === execNode.sessionId && s.mcpEndpoint?.token),
+    15000,
+    'exec acp:start',
+  );
+  return { execNode, execStart };
+}
+
+async function linkPullRequest(
+  page: Page,
+  env: PrWorkflowEnv,
+  mcpToken: string,
+  sessionId: string,
+  pullRequestId = 'Deliay/z-agent-gear#264',
+) {
+  const linked = await callWorkflowTool(env.controller, sessionId, mcpToken, 'linkPullRequest', { pullRequestId });
+  expect(linked.isError).toBe(false);
+  expect(linked.data.registered).toBe(true);
+}
+
+/** input → exec 关联 PR → 完成 exec → review HUMAN RUNNING */
+async function activatePrReview(page: Page, env: PrWorkflowEnv, pr = nextE2ePr()) {
+  const { execStart } = await startPrExec(page, env);
+  await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
+  const done = await callWorkflowTool(env.controller, execStart.sessionId, execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+    artifacts: [{ title: '开发产物', value: '实现完成' }],
+  });
+  expect(done.isError).toBe(false);
+  return waitForNodeStatus(page, env.token, env.instanceId, 'review', 'RUNNING');
+}
+
+function prEventBody(pullRequestId: string, reviewState: string) {
+  const number = pullRequestId.split('#')[1] ?? '264';
+  return {
+    eventType: 'pull_request',
+    eventId: `gh:e2e:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    payload: {
+      pullRequestId,
+      prUrl: `https://github.com/Deliay/z-agent-gear/pull/${number}`,
+      reviewState,
+      comment: '请按 inline comment 调整',
+      reviewer: 'alice',
+      submittedAt: '2026-10-23T06:00:00Z',
+    },
+  };
+}
+
+async function postPrEvent(body: unknown) {
+  const res = await fetch(PR_CALLBACK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Event-Token': PR_CALLBACK_TOKEN },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
 }
 
 test.describe('Workflow E2E', () => {
@@ -769,7 +964,7 @@ test.describe('Workflow E2E', () => {
       15000,
       'exec node FAILED after second stop',
     );
-    expect(failedNode.failInfo?.source).toBe('SESSION_STUCK');
+    expect(failedNode?.failInfo?.source).toBe('SESSION_STUCK');
 
     // UI 强提醒：节点「失败」badge + 顶部阻断 banner
     await loginViaUI(page, env.username);
@@ -2200,6 +2395,242 @@ test.describe('Workflow E2E', () => {
       artifacts: [{ title: '执行结果', value: '重启后完成' }],
     });
     expect(done.isError).toBe(false);
+
+    env.controller.disconnect();
+  });
+
+  test('P10-W8: 工作流「+」打开即刷新来源列表，MCP 新建的已配置工作流立即可见', async ({ page }) => {
+    test.setTimeout(90_000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-p10-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+    await createWorkspace(
+      page,
+      controller.controllerId,
+      `/tmp/wf-p10-${Math.random().toString(36).slice(2, 8)}`,
+      token,
+    );
+
+    const templateName = `P10模板${Date.now().toString(36)}`;
+    const templateId = await createThreeNodeTemplate(page, token, templateName);
+    const firstConfig = `P10配置A-${Date.now().toString(36)}`;
+    const secondConfig = `P10配置B-${Date.now().toString(36)}`;
+    // 模拟 MCP 新建的第一条已配置工作流
+    await configureFromTemplate(page, token, templateId, controller.controllerId, firstConfig);
+
+    await loginViaUI(page, username);
+    const nav = page.locator(sidebar());
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    let dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible({ timeout: 15000 });
+    await dialog.getByRole('button', { name: '取消' }).click();
+
+    // 对话框关闭期间由 MCP 再新建一条已配置工作流
+    await configureFromTemplate(page, token, templateId, controller.controllerId, secondConfig);
+
+    // 重新打开「+」：打开即 refetch，新工作流无需刷新页面即可见
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: secondConfig })).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible();
+
+    controller.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub Pull Request 联动（E2E-27..E2E-32）
+// ---------------------------------------------------------------------------
+
+test.describe('Workflow PR 联动 E2E', () => {
+  test('E2E-27: 勾选联动 → AI 提示词含 PR 段 → linkPullRequest 后实例页可见关联', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(60000);
+    const env = await setupPrWorkflowEnv(page, 'e27', true);
+    const pr = nextE2ePr();
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+    await expect(page.getByRole('main').getByText(/执行中|待开始/).first()).toBeVisible({ timeout: 15000 });
+
+    const inputCard = nodeCard(page, '需求输入');
+    await inputCard.getByLabel('需求输入 完成输入').fill('实现 PR 联动');
+    await inputCard.getByRole('button', { name: '完成', exact: true }).click();
+
+    const execStart = await waitFor(
+      () => env.controller.starts.find((s) => s.mcpEndpoint?.serverNames.includes('agent-workflow-tools')),
+      15000,
+      'exec acp:start',
+    );
+    const promptText = await waitFor(async () => {
+      const texts = await getSessionMessagesText(page, env.token, execStart.sessionId);
+      const joined = texts.join('\n');
+      return joined.includes('## GitHub Pull Request 联动') ? joined : null;
+    }, 15000, 'github-pr prompt');
+    expect(promptText.match(/## GitHub Pull Request 联动/g)).toHaveLength(1);
+
+    await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
+    await page.reload();
+    await expect(nodeCard(page, 'PR 审核').getByText('等待中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: /关联 Pull Request（1）/ }).click();
+    await expect(page.getByText(pr)).toBeVisible();
+    await expect(page.getByText('所属节点：AI执行')).toBeVisible();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-28: approved 回调 → 人类节点完成，下游 AI 收到 A.2 评审意见', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(70000);
+    const env = await setupPrWorkflowEnv(page, 'e28', true);
+    const pr = nextE2ePr();
+    await activatePrReview(page, env, pr);
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+    await expect(nodeCard(page, 'PR 审核').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    const result = await postPrEvent(prEventBody(pr, 'approved'));
+    expect(result.status).toBe(200);
+    expect(result.body.handled).toBe(true);
+
+    await expect(nodeCard(page, 'PR 审核').getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, '后续执行').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    const inst = await waitFor(async () => {
+      const value = await getInstance(page, env.token, env.instanceId);
+      return value.nodes.find((n) => n.nodeKey === 'after')?.sessionId ? value : null;
+    }, 15000, 'after session');
+    const afterNode = inst.nodes.find((n) => n.nodeKey === 'after')!;
+    await waitFor(
+      () => env.controller.starts.find((s) => s.sessionId === afterNode.sessionId && s.mcpEndpoint?.token),
+      15000,
+      'after acp:start',
+    );
+    const text = await waitFor(async () => {
+      const joined = (await getSessionMessagesText(page, env.token, afterNode.sessionId!)).join('\n');
+      return joined.includes('Pull Request审核通过') ? joined : null;
+    }, 15000, 'approved prompt');
+    expect(text).toContain('请按 inline comment 调整');
+    expect(text).toContain(`https://github.com/Deliay/z-agent-gear/pull/${pr.split('#')[1]}`);
+    expect(text).toContain('审核人：alice');
+
+    await page.getByRole('button', { name: /追加提示词（2）/ }).click();
+    await expect(page.getByText('github-pr-review')).toBeVisible();
+    await expect(page.getByText(/Pull Request审核通过/).last()).toBeVisible();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-29: rejected 回调 → 人类节点打回，上游返工消息含 A.3', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(70000);
+    const env = await setupPrWorkflowEnv(page, 'e29', true);
+    const pr = nextE2ePr();
+    const execStart = await startPrExec(page, env);
+    await linkPullRequest(page, env, execStart.execStart.mcpEndpoint!.token, execStart.execStart.sessionId, pr);
+    const done = await callWorkflowTool(env.controller, execStart.execStart.sessionId, execStart.execStart.mcpEndpoint!.token, 'completeCurrentNode', {
+      artifacts: [{ title: '开发产物', value: '实现完成' }],
+    });
+    expect(done.isError).toBe(false);
+    await waitForNodeStatus(page, env.token, env.instanceId, 'review', 'RUNNING');
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+    await expect(nodeCard(page, 'PR 审核').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+
+    const result = await postPrEvent(prEventBody(pr, 'changes_requested'));
+    expect(result.body.handled).toBe(true);
+    expect(result.body.results[0].action).toBe('REJECT_HUMAN_NODE');
+
+    await expect(nodeCard(page, 'PR 审核').getByText('已打回', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, 'AI执行').getByText('返工中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await waitFor(
+      () => env.controller.resumes.find((r) => r.sessionId === execStart.execStart.sessionId),
+      15000,
+      'exec acp:resume',
+    );
+    const text = await waitFor(async () => {
+      const joined = (await getSessionMessagesText(page, env.token, execStart.execStart.sessionId)).join('\n');
+      return joined.includes('Pull Request审核被拒绝') ? joined : null;
+    }, 15000, 'rejected prompt');
+    expect(text).toContain('注意检查pr的inline comment');
+    expect(text).toContain(`https://github.com/Deliay/z-agent-gear/pull/${pr.split('#')[1]}`);
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-30: 归档清空关联，事件不再驱动节点', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(60000);
+    const env = await setupPrWorkflowEnv(page, 'e30', true);
+    const pr = nextE2ePr();
+    await activatePrReview(page, env, pr);
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+
+    const archived = await gqlRequest(page, `
+      mutation ArchiveWorkflowInstance($id: ID!, $archived: Boolean!) {
+        archiveWorkflowInstance(id: $id, archived: $archived)
+      }
+    `, { id: env.instanceId, archived: true }, env.token);
+    expect((await archived.json()).errors).toBeUndefined();
+
+    await page.reload();
+    await page.getByRole('button', { name: /关联 Pull Request（0）/ }).click();
+    await expect(page.getByText('暂无关联')).toBeVisible();
+
+    const result = await postPrEvent(prEventBody(pr, 'approved'));
+    expect(result.body.handled).toBe(false);
+    expect(['NO_HANDLER', 'INSTANCE_ARCHIVED']).toContain(result.body.reason);
+    const inst = await getInstance(page, env.token, env.instanceId);
+    expect(inst.pullRequestLinks).toHaveLength(0);
+    expect(inst.nodes.find((n) => n.nodeKey === 'review')!.status).toBe('RUNNING');
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-31: 未勾选联动零回归（提示词无 PR 段 + 事件 NO_HANDLER）', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(60000);
+    const env = await setupPrWorkflowEnv(page, 'e31', false);
+    const pr = nextE2ePr();
+    const { execStart } = await startPrExec(page, env);
+    const text = await waitFor(async () => {
+      const joined = (await getSessionMessagesText(page, env.token, execStart.sessionId)).join('\n');
+      return joined.includes('实现 PR 联动') ? joined : null;
+    }, 15000, 'exec prompt');
+    expect(text).not.toContain('## GitHub Pull Request 联动');
+
+    const result = await postPrEvent(prEventBody(pr, 'approved'));
+    expect(result.body.handled).toBe(false);
+    expect(result.body.reason).toBe('NO_HANDLER');
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-32: 实例页编辑未开始 HUMAN 联动开关并生效，开始后编辑入口消失', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(70000);
+    const env = await setupPrWorkflowEnv(page, 'e32', false);
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+
+    const reviewCard = nodeCard(page, 'PR 审核');
+    await expect(reviewCard.getByText('等待中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await reviewCard.getByRole('button', { name: '编辑' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('联动上游 Pull Request').click();
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(dialog).toBeHidden({ timeout: 10000 });
+
+    const edited = await getInstance(page, env.token, env.instanceId);
+    expect(edited.nodes.find((n) => n.nodeKey === 'review')!.linkUpstreamPullRequest).toBe(true);
+
+    await activatePrReview(page, env);
+    await page.reload();
+    await expect(nodeCard(page, 'PR 审核').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(nodeCard(page, 'PR 审核').getByRole('button', { name: '编辑' })).toHaveCount(0);
 
     env.controller.disconnect();
   });
