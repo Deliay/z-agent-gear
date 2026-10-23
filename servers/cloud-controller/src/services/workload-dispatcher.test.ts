@@ -658,6 +658,48 @@ describe('WorkloadDispatcher - 重连不重发', () => {
     expect(runs('init')).toHaveLength(1);
   });
 
+  it('T-WD13b: 已完成的 init 在断线重连后不重跑（工作流只初始化一次）', async () => {
+    const { dispatcher, workloadRepository, createContainer, repo, containerService, runs } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    const container = await createContainer(['w1']);
+    expect((await dispatcher.startInit(container.id)).initializing).toBe(true);
+    const initRun = runs('init')[0]!;
+    await dispatcher.handleResult(container.id, {
+      logId: initRun.payload.items[0]!.logId,
+      status: 'success',
+    });
+    expect((await repo.findById(container.id))?.status).toBe('online');
+
+    // agent-gear 重启：socket 断开把 online 退回 connecting，随后再次 register。
+    await containerService.markConnecting(container.id);
+
+    expect(await dispatcher.hasInitScripts(container.id)).toBe(false);
+    const started = await dispatcher.startInit(container.id);
+    expect(started).toEqual({ initializing: false, requiredFailure: null });
+    expect(runs('init')).toHaveLength(1);
+  });
+
+  it('T-WD13c: 历史容器（无完成标记但曾上线）重连不重跑', async () => {
+    const { dispatcher, workloadRepository, createContainer, repo, containerService, runs } =
+      setup();
+    workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
+    const container = await createContainer(['w1']);
+    await dispatcher.startInit(container.id);
+    await dispatcher.handleResult(container.id, {
+      logId: runs('init')[0]!.payload.items[0]!.logId,
+      status: 'success',
+    });
+    await containerService.markConnecting(container.id);
+    // 模拟升级前落库的历史容器：完成标记缺失，但 connectedAt 证明曾上线。
+    await repo.update(container.id, { initCompletedAt: null });
+
+    expect(await dispatcher.hasInitScripts(container.id)).toBe(false);
+    const started = await dispatcher.startInit(container.id);
+    expect(started).toEqual({ initializing: false, requiredFailure: null });
+    expect(runs('init')).toHaveLength(1);
+  });
+
   it('T-WD15: 非法结果状态回落 failed；看门狗在已有日志后追加说明', async () => {
     const { dispatcher, workloadLogRepository, createContainer, advanceTime } = setup();
     const bad = await createContainer(['x'], 'initializing');
