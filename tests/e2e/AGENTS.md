@@ -66,6 +66,8 @@ npx playwright test
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
+| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32；缺失时该组用例跳过） | - |
+| `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
 
 > 所有套件共享同一套服务与 Mongo：admin 套件会轮换共享管理员（admin）口令、清理全局供应商，因此**必须在 `playwright.config.ts` 中强制 `workers: 1`、`fullyParallel: false` 串行执行**（已写死，勿覆盖为并发），否则用例互相污染：
@@ -233,6 +235,12 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | P2-E2E-16 从空白实例化 | 选「空白」来源 → 配置界面从零搭建节点图 → 确认实例化 |
 | P2-E2E-17 实例视图编辑未开始节点 | 未开始节点展示「编辑」；保存生效；开始后编辑入口消失 |
 | P2-E2E-18 AI 会话装配管理工具集 | AI 节点会话装配 agent-workflow-admin-tools；创建模板→配置→实例化全链路；删除人类资源被拒、AI 资源可删 |
+| E2E-27 联动开关 → PR 关联 | 模板/实例勾选联动 → AI 节点提示词含 `## GitHub Pull Request 联动` → MCP relay 调 `linkPullRequest` → 实例页「关联 Pull Request」展示 PR 与所属节点 |
+| E2E-28 approved 驱动 | 注入 approved 回调 → 人类「PR 审核」自动已完成 → 下游 AI 执行中，首条提示词含「Pull Request审核通过」+ comment/PR 地址；「追加提示词」展示 `github-pr-review` |
+| E2E-29 rejected 驱动 | 注入 rejected 回调 → 人类「已打回」+ 上游「返工中」→ `acp:resume` 返工消息含「Pull Request审核被拒绝」与 inline comment 提示 |
+| E2E-30 归档注销 | 归档实例 → 「关联 Pull Request」清空；再注入事件返回 `NO_HANDLER`/`INSTANCE_ARCHIVED`，人类节点状态不变 |
+| E2E-31 零回归 | 未勾选联动 → AI 提示词无 PR 段；注入事件 → `NO_HANDLER` |
+| E2E-32 实例页编辑开关 | 未开始 HUMAN 节点可编辑联动开关并落库；节点开始后编辑入口消失 |
 
 ### ACP Permission Reminder E2E (`permission.spec.ts`)
 

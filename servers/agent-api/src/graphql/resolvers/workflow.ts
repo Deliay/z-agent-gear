@@ -4,6 +4,7 @@ import { configuredWorkflowService } from '../../services/workflow/configured.js
 import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
+import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -27,6 +28,7 @@ function mapTemplateNode(node: Doc) {
     artifactTitles: node.artifactTitles ?? null,
     dependsOn: node.dependsOn ?? [],
     requiresWorktree: node.requiresWorktree ?? false,
+    linkUpstreamPullRequest: node.linkUpstreamPullRequest ?? false,
     sortOrder: node.sortOrder ?? null,
   };
 }
@@ -97,6 +99,7 @@ function mapInstanceNode(node: Doc) {
         : null,
     requiresWorktree: node.requiresWorktree ?? null,
     dependsOn: node.dependsOn ?? null,
+    linkUpstreamPullRequest: node.linkUpstreamPullRequest ?? false,
     sortOrder: node.sortOrder ?? null,
     createdAt: toIso(node.createdAt),
     startedAt: toIso(node.startedAt),
@@ -123,6 +126,17 @@ function mapBlackboardEntries(map: unknown, updatedAtMap: unknown) {
   }));
 }
 
+function mapAdditionalPrompts(raw: unknown) {
+  const entries =
+    raw instanceof Map
+      ? [...raw.entries()]
+      : Object.entries((raw as Record<string, string>) ?? {});
+  return entries
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .map(([key, value]) => ({ key, value }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
 export function mapInstance(doc: Doc) {
   return {
     id: toId(doc._id),
@@ -139,6 +153,7 @@ export function mapInstance(doc: Doc) {
     nodes: ((doc.nodes as Doc[]) ?? []).map(mapInstanceNode),
     blackboard: mapBlackboardEntries(doc.blackboard, doc.blackboardUpdatedAt),
     blackboardTrash: mapBlackboardEntries(doc.blackboardTrash, doc.blackboardUpdatedAt),
+    additionalPrompts: mapAdditionalPrompts(doc.additionalPrompts),
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -325,8 +340,56 @@ export const workflowResolvers = {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.setArchived(userId, args.id, args.archived));
     },
+    setWorkflowAdditionalPrompt: async (
+      _parent: unknown,
+      args: { instanceId: string; key: string; value: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstance(
+          (await workflowInstanceService.setAdditionalPrompt(
+            userId,
+            args.instanceId,
+            args.key,
+            args.value,
+          )) as unknown as Doc,
+        ),
+      );
+    },
+    removeWorkflowAdditionalPrompt: async (
+      _parent: unknown,
+      args: { instanceId: string; key: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstance(
+          (await workflowInstanceService.removeAdditionalPrompt(
+            userId,
+            args.instanceId,
+            args.key,
+          )) as unknown as Doc,
+        ),
+      );
+    },
   },
   WorkflowInstance: {
+    // 关联 Pull Request：节点名从父对象节点快照映射（不额外查库）
+    pullRequestLinks: async (parent: Doc, _args: unknown, _context: AuthContext) => {
+      if (!parent.id) return [];
+      const nodeNames = new Map(
+        ((parent.nodes as Doc[]) ?? []).map((node) => [String(node.id), String(node.name)]),
+      );
+      const rows = (await prHandlerRegistry.listByInstance(String(parent.id))) as unknown as Doc[];
+      return rows.map((row) => ({
+        pullRequestId: row.pullRequestId,
+        prUrl: row.prUrl ?? null,
+        nodeId: row.nodeId,
+        nodeName: nodeNames.get(String(row.nodeId)) ?? null,
+        registeredAt: toIso(row.createdAt) ?? new Date().toISOString(),
+      }));
+    },
     // 归属字段（惰性解析）：仅查询语句选择时执行；工作区/控制器可能已被删除，返回 null
     workspace: async (parent: Doc, _args: unknown, context: AuthContext) => {
       const userId = context.currentUser?.id;

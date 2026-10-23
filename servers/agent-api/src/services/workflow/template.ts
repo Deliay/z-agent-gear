@@ -12,6 +12,7 @@ export interface WorkflowTemplateNodeInput {
   artifactTitles?: string[] | null;
   dependsOn: string[];
   requiresWorktree: boolean;
+  linkUpstreamPullRequest?: boolean;
 }
 
 export interface WorkflowTemplateCreationMeta {
@@ -80,6 +81,9 @@ export function validateTemplateGraph(nodes: WorkflowTemplateNodeInput[]): strin
       if (node.artifactTitles && node.artifactTitles.length > 0) {
         throw new Error(`${label}节点「${node.name}」（${node.nodeKey}）不允许配置产物标题（artifactTitles）`);
       }
+    }
+    if (node.type !== 'HUMAN' && node.linkUpstreamPullRequest === true) {
+      throw new Error(`仅人类节点可开启「联动上游 Pull Request」：节点「${node.name}」（${node.nodeKey}）类型为 ${node.type}`);
     }
   }
 

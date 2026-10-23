@@ -195,6 +195,7 @@ flowchart LR
 - [[proposals/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
 - [[proposals/20261022-feat-workload-optimization.md]] — 工作负载优化（云电脑创建/展示支持 standard 负载与 MCP 列出安装，Github 项目 clone 地址前缀拼接）
 - [[proposals/20261022-feat-cloud-container-optimization-phase1.md]] — 云容器优化一期（会话/工作流「+」列表实时刷新、云电脑创建前端编排 Github 项目准备并复用工作负载进度框、默认 MCP 注入与控制器默认 MCP、CreateSessionInput 前置 modeId/modelId 与选项 5 分钟缓存/失效/刷新）
+- [[proposals/20261023-feat-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（linkPullRequest MCP 工具与 PR Handler Registry、人类节点「联动上游 Pull Request」、工作流追加提示词 key 去重、事件回调按 review 状态驱动人类节点完成/打回）
 
 ### 实现计划（`plan/`）
 
@@ -248,3 +249,4 @@ flowchart LR
 - [[plan/20261021-feat-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、云主机凭据管理器 clone 并自动建会话）实现计划
 - [[plan/20261022-feat-workload-optimization.md]] — 工作负载优化（创建/展示支持 Aspire/Docker/.NET 与 MCP 列出安装，Github 项目 clone 地址前缀拼接）实现计划
 - [[plan/20261022-feat-cloud-container-optimization-phase1.md]] — 云容器优化一期（「+」列表实时刷新、云电脑创建前端编排 Github 项目并复用进度框、默认 MCP 注入与控制器默认 MCP、前置 modeId/modelId 与选项 300s 缓存/失效/刷新）实现计划
+- [[plan/20261023-feat-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（契约、PR Handler Registry 与迁移、追加提示词 key 去重、人类节点联动字段、linkPullRequest MCP 工具与生命周期注销、事件回调判定链与 review 驱动）实现计划

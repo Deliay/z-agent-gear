@@ -40,8 +40,12 @@ export interface WorkflowInstanceDoc {
   blackboard: Map<string, string>;
   blackboardTrash: Map<string, string>;
   blackboardUpdatedAt: Map<string, Date>;
+  /** 工作流级追加提示词（key 去重，同 key 只插入一次） */
+  additionalPrompts?: Map<string, string> | Record<string, string> | null;
   /** 软删除标记（删除实例时置为删除时间；非空则拒绝一切转移） */
   deletedAt?: Date | null;
+  /** 归档标记（归档即解除 PR 联动） */
+  archivedAt?: Date | null;
   /** 最后执行过的节点（实例对外状态展示；引擎每次转移按时间序更新，级联末位为准） */
   lastNodeName?: string | null;
   lastNodeStatus?: string | null;
@@ -49,6 +53,8 @@ export interface WorkflowInstanceDoc {
   workflowWorktreePath?: string | null;
   /** 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在） */
   workflowWorktreeBranch?: string | null;
+  /** 工作流完成时间（全部节点 DONE 时由引擎一次性写入） */
+  finishedAt?: Date | null;
   save(): Promise<unknown>;
 }
 
@@ -97,6 +103,7 @@ export interface EngineHooks {
   onNodeResume?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeDone?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
+  onWorkflowFinished?(instance: WorkflowInstanceDoc): Promise<void>;
 }
 
 /** 显式状态转移表（event → 允许的源状态 → 目标状态） */
@@ -154,7 +161,18 @@ class WorkflowEngine {
     }
     await this.apply(instance, node, event, payload);
     this.refreshCurrentNodeNames(instance);
+    // 工作流完成判定：外层 transition 一次性置位，避免递归级联重复触发
+    const finishedNow =
+      !instance.finishedAt &&
+      instance.nodes.length > 0 &&
+      instance.nodes.every((n) => n.status === 'DONE');
+    if (finishedNow) {
+      instance.finishedAt = new Date();
+    }
     await instance.save();
+    if (finishedNow) {
+      await this.hooks.onWorkflowFinished?.(instance);
+    }
     return node;
   }
 

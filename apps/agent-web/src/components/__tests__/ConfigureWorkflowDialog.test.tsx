@@ -217,3 +217,30 @@ describe('ConfigureWorkflowDialog Mode/模型动态选项', () => {
     expect(screen.getByLabelText('AI执行 模型').tagName).toBe('INPUT');
   });
 });
+
+describe('ConfigureWorkflowDialog 联动上游 Pull Request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('人类节点可切换联动并随节点图保存', async () => {
+    const mutate = vi.fn().mockResolvedValue({});
+    mockUseMutation.mockReturnValue([mutate]);
+    setupQueries({
+      acpServerOptions: { modes: [], models: [], currentModeId: null, currentModelId: null, probedAt: '2026-08-08T00:00:00Z' },
+    });
+
+    await openDialogAndSelect();
+    fireEvent.click(screen.getByRole('button', { name: '展开节点 1' }));
+    expect(screen.getByLabelText('节点 1 联动上游 Pull Request')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('节点 1 联动上游 Pull Request'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    const variables = mutate.mock.calls[0][0].variables;
+    expect(variables.input.nodes[0]).toMatchObject({
+      nodeKey: 'input',
+      linkUpstreamPullRequest: true,
+    });
+  });
+});

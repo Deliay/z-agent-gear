@@ -329,7 +329,7 @@ function SortableNodeItem({
               variant={node.type === t ? 'default' : 'outline'}
               aria-pressed={node.type === t}
               disabled={readOnly}
-              onClick={() => onUpdate(index, { type: t })}
+              onClick={() => onUpdate(index, { type: t, linkUpstreamPullRequest: t === 'HUMAN' ? node.linkUpstreamPullRequest : false })}
             >
               {NODE_TYPE_LABELS[t]}
             </Button>
@@ -450,6 +450,20 @@ function SortableNodeItem({
                 <Label>该节点会话需要 Worktree 隔离</Label>
               </div>
             </>
+          )}
+
+          {node.type === 'HUMAN' && (
+            <div className="flex items-center gap-2">
+              <Switch
+                aria-label={`节点 ${index + 1} 联动上游 Pull Request`}
+                checked={node.linkUpstreamPullRequest}
+                onCheckedChange={(checked) =>
+                  onUpdate(index, { linkUpstreamPullRequest: checked === true })
+                }
+                disabled={readOnly}
+              />
+              <Label>联动上游 Pull Request</Label>
+            </div>
           )}
 
           {nodes.filter((_, i) => i !== index).some((n) => n.nodeKey.trim()) && (
