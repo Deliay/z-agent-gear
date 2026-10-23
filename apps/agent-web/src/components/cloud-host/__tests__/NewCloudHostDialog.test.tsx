@@ -125,7 +125,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
       });
     });
     await waitFor(() => {
@@ -228,6 +228,7 @@ describe('NewCloudHostDialog', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
+            createDefaultWorkspace: false,
             workloadIds: ['wl-docker'],
           },
         },
@@ -244,7 +245,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], createDefaultWorkspace: false } },
       });
     });
     expect(mockCreateCloudHost.mock.calls[0][0].variables.input).not.toHaveProperty('workloadIds');

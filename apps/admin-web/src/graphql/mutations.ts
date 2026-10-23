@@ -117,6 +117,17 @@ export const CREATE_GLOBAL_CUSTOM_MODEL = gql`
       isEnabled
       sortOrder
       scope
+      contextLength
+    }
+  }
+`
+
+export const UPDATE_MODEL_CONTEXT_LENGTH = gql`
+  mutation UpdateModelContextLength($modelId: ID!, $contextLength: Int) {
+    updateModelContextLength(modelId: $modelId, contextLength: $contextLength) {
+      id
+      name
+      contextLength
     }
   }
 `

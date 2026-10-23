@@ -174,6 +174,98 @@ describe('ModelService (admin / global scope)', () => {
       ).rejects.toThrow('Model name is required');
       expect(create).not.toHaveBeenCalled();
     });
+
+    it('T-CL1: createCustom persists a positive integer contextLength', async () => {
+      const custom = makeModelDoc({
+        _id: { toString: () => 'model-new' },
+        name: 'custom-model',
+        isCustom: true,
+        sortOrder: 3,
+        contextLength: 200000,
+      });
+      const create = vi.fn().mockResolvedValue({ ...custom, toObject: () => custom });
+      (Model.create as any) = create;
+
+      const result = await modelService.createCustom({
+        providerId: VALID_OID,
+        name: 'custom-model',
+        contextLength: 200000,
+      });
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'custom-model', contextLength: 200000 }),
+      );
+      expect(result.contextLength).toBe(200000);
+    });
+
+    it('T-CL1: createCustom defaults contextLength to null (未设置)', async () => {
+      const custom = makeModelDoc({ _id: { toString: () => 'model-new' }, name: 'custom-model' });
+      const create = vi.fn().mockResolvedValue({ ...custom, toObject: () => custom });
+      (Model.create as any) = create;
+
+      const result = await modelService.createCustom({ providerId: VALID_OID, name: 'custom-model' });
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ contextLength: null }));
+      expect(result.contextLength).toBeNull();
+    });
+  });
+
+  describe('updateContextLength', () => {
+    it('T-CL2: updates an existing global model contextLength', async () => {
+      const doc = makeModelDoc({ contextLength: null });
+      const save = vi.fn().mockResolvedValue(undefined);
+      (Model.findById as any).mockResolvedValue({
+        ...doc,
+        contextLength: null,
+        save,
+        toObject: () => ({ ...doc, contextLength: 128000 }),
+      });
+
+      const result = await modelService.updateContextLength(VALID_OID, 128000);
+
+      expect(Model.findById).toHaveBeenCalledWith(VALID_OID);
+      expect(save).toHaveBeenCalled();
+      expect(result).not.toBeNull();
+      expect(result!.contextLength).toBe(128000);
+    });
+
+    it('T-CL2: null clears the value (回到未设置)', async () => {
+      const doc = makeModelDoc({ contextLength: 128000 });
+      const save = vi.fn().mockResolvedValue(undefined);
+      (Model.findById as any).mockResolvedValue({
+        ...doc,
+        contextLength: 128000,
+        save,
+        toObject: () => ({ ...doc, contextLength: null }),
+      });
+
+      const result = await modelService.updateContextLength(VALID_OID, null);
+
+      expect(save).toHaveBeenCalled();
+      expect(result!.contextLength).toBeNull();
+    });
+
+    it('T-CL2: rejects a missing model with Model not found', async () => {
+      (Model.findById as any).mockResolvedValue(null);
+
+      await expect(modelService.updateContextLength(VALID_OID, 1000)).rejects.toThrow('Model not found');
+    });
+
+    it('T-CL2: refuses to update a user-scope model', async () => {
+      (Model.findById as any).mockResolvedValue(makeModelDoc({ scope: 'user' }));
+
+      await expect(modelService.updateContextLength(VALID_OID, 1000)).rejects.toThrow('Model not found');
+    });
+
+    it.each([0, -1, 1.5, '1000'])(
+      'T-CL3: rejects invalid contextLength %s',
+      async (value) => {
+        await expect(
+          modelService.updateContextLength(VALID_OID, value as never),
+        ).rejects.toThrow('contextLength must be a positive integer');
+        expect(Model.findById).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('delete', () => {

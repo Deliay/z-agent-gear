@@ -231,6 +231,7 @@ export const CLOUD_HOST_FIELDS = gql`
     failureReason
     deletedAt
     defaultWorkspace
+    hasDefaultWorkspace
     workloadInstalling
   }
 `

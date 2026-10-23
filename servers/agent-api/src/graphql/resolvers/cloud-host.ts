@@ -101,7 +101,14 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[] } },
+      args: {
+        input: {
+          name: string;
+          harnessTypes: string[];
+          workloadIds?: string[];
+          createDefaultWorkspace?: boolean;
+        };
+      },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);

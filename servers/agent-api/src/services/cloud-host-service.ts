@@ -40,6 +40,8 @@ export interface CreateCloudHostInput {
   harnessTypes: string[];
   /** 创建时附加预装的 standard 负载（去重后 ≤5；缺省/空 = 仅 harness）。 */
   workloadIds?: string[];
+  /** 是否创建默认工作区（/root/workspace）；仅 `=== true` 生效，缺省/ false 不创建。 */
+  createDefaultWorkspace?: boolean;
 }
 
 export interface CloudHostStopImpact {
@@ -167,6 +169,7 @@ export class CloudHostService {
     name: string;
     harnessTypes: HarnessType[];
     workloadIds: string[];
+    createDefaultWorkspace: boolean;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
@@ -175,13 +178,15 @@ export class CloudHostService {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
       workloadIds: parseWorkloadIds(input.workloadIds),
+      // 契约：仅显式 true 才创建默认工作区；缺省/false 一律不创建
+      createDefaultWorkspace: input.createDefaultWorkspace === true,
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds } = this.validateInput(input);
+    const { name, harnessTypes, workloadIds, createDefaultWorkspace } = this.validateInput(input);
 
     // 读取 harness preset 先于任何落库（缺失时不留下半成品记录）
     const presets: HarnessPreset[] = [];
@@ -228,12 +233,15 @@ export class CloudHostService {
 
         await controllerService.createCloudHostController(userId, controllerId, name, keyId);
 
-        const workspace = await controllerWorkspaceService.ensureCloudHostWorkspace(
-          controllerId,
-          userId,
-          config.cloudHostDefaultWorkspace,
-        );
-        workspaceId = String(workspace.id);
+        // 是否创建 /root/workspace 由 createDefaultWorkspace 决定（默认不创建）。
+        if (createDefaultWorkspace) {
+          const workspace = await controllerWorkspaceService.ensureCloudHostWorkspace(
+            controllerId,
+            userId,
+            config.cloudHostDefaultWorkspace,
+          );
+          workspaceId = String(workspace.id);
+        }
 
         await CloudHost.create({
           _id: cloudHostId,
@@ -243,7 +251,7 @@ export class CloudHostService {
           status: 'STARTING',
           controllerId,
           keyId,
-          workspaceId,
+          workspaceId: workspaceId ?? undefined,
           startedAt: new Date(),
         });
 
@@ -560,10 +568,10 @@ export class CloudHostService {
     if (host.status === 'STARTING') {
       const harnessTypes = (host.harnessTypes ?? []) as HarnessType[];
       let defaultSessionId: string | null = null;
-      if (harnessTypes.length === 1) {
+      // 无默认工作区时跳过自动建会话（会话必须绑定工作区）
+      if (harnessTypes.length === 1 && host.workspaceId) {
         try {
-          const session = await sessionService.create(String(host.userId), {
-            controllerId: String(host.controllerId),
+          const session = await sessionService.create(String(host.userId), {            controllerId: String(host.controllerId),
             workspaceId: String(host.workspaceId),
             acpServerType: HARNESS_ACP_TYPES[harnessTypes[0]] ?? 'opencode',
             allowStartingCloudHost: true,
@@ -597,7 +605,7 @@ export class CloudHostService {
     // 已 RUNNING 的重复 ready（历史遗留/回调重试）：仅在缺默认会话时补建，不改变状态。
     let current = host;
     const harnessTypes = (current.harnessTypes ?? []) as HarnessType[];
-    if (harnessTypes.length === 1 && !current.defaultSessionId) {
+    if (harnessTypes.length === 1 && current.workspaceId && !current.defaultSessionId) {
       try {
         const session = await sessionService.create(String(current.userId), {
           controllerId: String(current.controllerId),
@@ -736,6 +744,7 @@ export class CloudHostService {
       stoppedAt: iso(host.stoppedAt),
       failureReason: host.failureReason ?? null,
       deletedAt: iso(host.deletedAt),
+      hasDefaultWorkspace: Boolean(host.workspaceId),
     };
   }
 }

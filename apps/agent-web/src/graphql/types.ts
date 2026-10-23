@@ -38,6 +38,8 @@ export interface CloudHostData {
   deletedAt?: string | null
   /** 默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace） */
   defaultWorkspace?: string
+  /** 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」 */
+  hasDefaultWorkspace?: boolean
   /** 当前正在 runtime 安装的工作负载名；null 表示空闲 */
   workloadInstalling?: string | null
 }

@@ -38,7 +38,12 @@ const cloudHostSchema = new mongoose.Schema(
     },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
     keyId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerKey', required: true },
-    workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', required: true },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ControllerWorkspace',
+      required: false,
+      default: null,
+    },
     containerId: { type: String, default: null },
     defaultSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
     startedAt: { type: Date, default: null },

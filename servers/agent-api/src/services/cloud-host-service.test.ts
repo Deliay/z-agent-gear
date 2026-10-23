@@ -287,6 +287,7 @@ describe('CloudHostService', () => {
       const result = await service.create('user-1', {
         name: ' my-cloud ',
         harnessTypes: ['OPENCODE'],
+        createDefaultWorkspace: true,
       });
 
       expect(result.name).toBe('my-cloud');
@@ -327,12 +328,47 @@ describe('CloudHostService', () => {
       });
     });
 
+    it('T-CW1: does not create default workspace when flag omitted/false', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+
+      expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceId: undefined }),
+      );
+    });
+
+    it('T-CW2: ready without a default workspace skips default session creation', async () => {
+      const starting = hostDoc({ status: 'STARTING', workspaceId: null });
+      const running = hostDoc({ status: 'RUNNING', workspaceId: null });
+      vi.mocked(CloudHost.findOne).mockReturnValueOnce(chain(starting) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        status: 'RUNNING',
+        defaultSessionId: null,
+        hasDefaultWorkspace: false,
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+    });
+
+    it('does not create a default workspace unless explicitly requested', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+
+      expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceId: undefined }),
+      );
+    });
+
     it('rolls back and maps control plane failure', async () => {
       setupCreateSuccess();
       vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
 
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
       ).rejects.toThrow('control plane unavailable');
 
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalled();
@@ -351,7 +387,7 @@ describe('CloudHostService', () => {
       );
 
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
       ).rejects.toThrow('billing service unavailable');
       expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
       expect(CloudHost.deleteOne).toHaveBeenCalled();
@@ -384,7 +420,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
       ).rejects.toThrow('too many cloud hosts');
     });
 
@@ -396,7 +432,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true }),
       ).rejects.toThrow('controllerkeys.keyHash_1');
     });
 
@@ -456,7 +492,7 @@ describe('CloudHostService', () => {
     it('T-CH-C1: 不带 workloadIds 时 plan 与今天一致', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'], createDefaultWorkspace: true });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
