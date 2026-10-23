@@ -65,10 +65,16 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const [error, setError] = useState<string | null>(null)
   // C-18：用户已编辑但未保存时，后台轮询/父级刷新不得覆盖表单
   const dirtyRef = useRef(false)
+  const prevControllerIdRef = useRef(controller.id)
 
   // 控制器数据刷新后同步服务端权威值（保存成功由 mutation 结果/refetch 驱动）
   const serverIdsKey = (defaultMcp?.serverIds ?? []).join(',')
   useEffect(() => {
+    // 切换控制器必须强制重置，不能把上一台的脏值/错误带过去
+    if (prevControllerIdRef.current !== controller.id) {
+      prevControllerIdRef.current = controller.id
+      dirtyRef.current = false
+    }
     if (dirtyRef.current) return
     setUseAllEnabled(defaultMcp?.useAllEnabled !== false)
     setServerIds(defaultMcp?.serverIds ?? [])
@@ -95,13 +101,21 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const handleSave = async () => {
     setError(null)
     try {
-      await saveDefaultMcp({
+      const result = await saveDefaultMcp({
         variables: {
           controllerId: controller.id,
           useAllEnabled,
           serverIds: useAllEnabled ? [] : serverIds,
         },
       })
+      // N-2：保存成功后解除 dirty，并立即回写服务端权威值（不能永久短路同步 effect）
+      dirtyRef.current = false
+      const saved = result?.data?.setControllerDefaultMcp?.defaultMcp
+      if (saved) {
+        setUseAllEnabled(saved.useAllEnabled !== false)
+        setServerIds(saved.serverIds ?? [])
+      }
+      setError(null)
       toast.success('已保存，对后续新建会话生效')
     } catch (err) {
       setError(parseError(err))

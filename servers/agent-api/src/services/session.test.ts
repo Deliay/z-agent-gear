@@ -840,6 +840,25 @@ describe('SessionService', () => {
       );
     });
 
+    it('N-1: suppressFallback=true 时不触发会话结束兜底回调', async () => {
+      const onEnded = vi.fn();
+      sessionService.onSessionEnded(onEnded);
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
+      } as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(
+        mockSessionDoc({ status: 'ended', workflowInstanceId: oid('inst-1') }) as never,
+      );
+
+      await sessionService.close('sess-1', 'user-1', { suppressFallback: true });
+
+      expect(onEnded).not.toHaveBeenCalled();
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+    });
+
     it('should NOT revoke MCP endpoint on close for workflow node session (validity follows workflow)', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),

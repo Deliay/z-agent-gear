@@ -512,6 +512,13 @@ function nodeCard(page: Page, nodeName: string) {
 // ---------------------------------------------------------------------------
 
 const PR_CALLBACK_TOKEN = process.env.EVENT_CALLBACK_TOKEN ?? '';
+
+// U-4：避免 6 处 test.skip(!PR_CALLBACK_TOKEN) 在 CI 静默全绿
+test('PR 回调环境哨兵：CI 下必须配置 EVENT_CALLBACK_TOKEN（SKIP_PR_CALLBACK=1 可显式跳过）', () => {
+  if (process.env.SKIP_PR_CALLBACK === '1') return;
+  if (!process.env.CI) return;
+  expect(PR_CALLBACK_TOKEN).toBeTruthy();
+});
 let prE2eSeq = Number(String(Date.now()).slice(-6)) * 10;
 function nextE2ePr(): string {
   return `Deliay/z-agent-gear#${prE2eSeq++}`;
@@ -2583,7 +2590,8 @@ test.describe('Workflow PR 联动 E2E', () => {
 
     const result = await postPrEvent(prEventBody(pr, 'approved'));
     expect(result.body.handled).toBe(false);
-    expect(['NO_HANDLER', 'INSTANCE_ARCHIVED']).toContain(result.body.reason);
+    // 归档时已注销全部登记：事件入口应为 NO_HANDLER（精确值）
+    expect(result.body.reason).toBe('NO_HANDLER');
     const inst = await getInstance(page, env.token, env.instanceId);
     expect(inst.pullRequestLinks).toHaveLength(0);
     expect(inst.nodes.find((n) => n.nodeKey === 'review')!.status).toBe('RUNNING');

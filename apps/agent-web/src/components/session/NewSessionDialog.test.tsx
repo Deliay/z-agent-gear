@@ -301,7 +301,9 @@ describe('NewSessionDialog 默认 MCP 与模型/模式', () => {
     expect(screen.getByLabelText('MCP A')).toBeChecked();
     expect(screen.getByLabelText('MCP B')).toBeChecked();
     expect(screen.queryByLabelText('MCP Off')).not.toBeInTheDocument();
-    expect(screen.getByText(/默认注入全部已启用的 MCP/)).toBeInTheDocument();
+    // U-5：钉死新文案，且旧文案「新 MCP 上线后自动注入」回退时必须变红
+    expect(screen.getByText(/默认注入全部已启用的 MCP；可取消勾选/)).toBeInTheDocument();
+    expect(screen.queryByText(/新 MCP 上线后自动注入/)).not.toBeInTheDocument();
   });
 
   it('按控制器 serverIds 交集预选（useAllEnabled=false）', () => {

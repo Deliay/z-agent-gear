@@ -22,7 +22,7 @@ aspire start && aspire wait agent-api
 aspire describe agent-api
 ```
 
-输出中查找 `agent-api` 的 URL，例如 `http://localhost:4000`。
+输出中查找 `agent-api` 的 URL，例如 `http://localhost:10001`。
 
 ### 3. 填入环境变量并执行测试
 
@@ -34,14 +34,14 @@ aspire describe controller-api
 
 从输出中查找各服务的 `http://localhost:<port>` URL，例如:
 - `agent-api`: `http://localhost:10001`
-- `controller-api`: `http://localhost:33237`
+- `controller-api`: `http://localhost:35273`
 
 填入实际端口后执行：
 
 ```bash
 API_URL=http://localhost:10001/graphql \
 ADMIN_API_URL=http://localhost:10003/graphql \
-CONTROLLER_API_URL=http://localhost:33237 \
+CONTROLLER_API_URL=http://localhost:35273 \
 npm test
 ```
 
@@ -65,12 +65,12 @@ npm test
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
+| `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:10001/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；billing-events T-CC-B11、billing-gateway T-B24/T-B27/T-B28 同样缺参即失败；**T-PR16（READY 打回）需直写实例快照，缺参时该用例跳过**；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
-| `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
+| `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:35273` |
 | `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token（云电脑 ready/terminal、cloud-host-callback 等内部套件；缺失时相关用例跳过） | - |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC-SHA256 验签密钥（仅 HMAC 用例使用） | - |

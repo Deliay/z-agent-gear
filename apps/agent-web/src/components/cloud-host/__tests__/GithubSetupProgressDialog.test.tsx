@@ -305,7 +305,7 @@ describe('GithubSetupProgressDialog 新建云电脑编排（四阶段）', () =>
     expect(onHostRunning).toHaveBeenCalledWith(expect.objectContaining({ id: 'cloud-1' }))
   })
 
-  it('启动失败停在「启动云电脑」：展示失败原因与「重新创建」', () => {
+  it('启动失败停在「启动云电脑」：展示失败原因与「返回新建」', () => {
     const onStartupFailed = vi.fn()
     const onClose = vi.fn()
     mockHostAndOperation(
@@ -326,9 +326,24 @@ describe('GithubSetupProgressDialog 新建云电脑编排（四阶段）', () =>
     expect(screen.getByText('云电脑启动失败，请删除后重新创建')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '重新创建' }))
+    fireEvent.click(screen.getByRole('button', { name: '返回新建' }))
     expect(onStartupFailed).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('N-3: 终态停止轮询，点击重试后重新启用 1.5s 轮询', async () => {
+    mockOperation(makeOperation({ status: 'FAILED', error: 'git clone failed' }))
+    renderDialog()
+
+    const operationPolls = () =>
+      mockUseQuery.mock.calls
+        .filter(([, options]) => (options as { variables?: { id?: string } })?.variables?.id === 'op-1')
+        .map(([, options]) => (options as { pollInterval?: number }).pollInterval)
+
+    await waitFor(() => expect(operationPolls()).toContain(0))
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+
+    await waitFor(() => expect(operationPolls()).toContain(1500))
   })
 
   it('项目准备请求失败（无 operation）时展示错误并可原地重试', () => {

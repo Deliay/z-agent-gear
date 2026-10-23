@@ -218,7 +218,10 @@ class WorkflowOrchestrator {
     }
     // 关闭下游 REJECT 节点原有的空闲会话，避免资源浪费
     if (node.sessionId) {
-      await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+      await sessionService.close(node.sessionId.toString(), instance.userId.toString(), {
+        suppressFallback: true,
+        reason: 'workflow_node_resume',
+      });
       node.sessionId = undefined;
     }
     await this.startNodeSession(instance, node);
@@ -236,7 +239,10 @@ class WorkflowOrchestrator {
     }
     // 关闭旧会话
     if (node.sessionId) {
-      await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+      await sessionService.close(node.sessionId.toString(), instance.userId.toString(), {
+        suppressFallback: true,
+        reason: 'workflow_node_restart',
+      });
       node.sessionId = undefined;
     }
     // 注意：engine.ts 已在 restart 转移前将新 agentConfig 写入节点快照
@@ -247,7 +253,10 @@ class WorkflowOrchestrator {
   /** 节点 DONE：结束本会话（由引擎保证在下游 start 之后调用） */
   async endNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
     if (!node.sessionId) return;
-    await sessionService.close(node.sessionId.toString(), instance.userId.toString());
+    await sessionService.close(node.sessionId.toString(), instance.userId.toString(), {
+      suppressFallback: true,
+      reason: 'workflow_node_done',
+    });
   }
 
   /**
@@ -265,15 +274,42 @@ class WorkflowOrchestrator {
     if (!node || node.status !== 'RUNNING') return;
 
     if (node.fallbackSent) {
-      await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
-        reason: '会话在系统提醒后再次停止，节点未能推进',
-        source: 'SESSION_STUCK',
-      });
+      try {
+        await workflowEngine.transition(instance._id.toString(), node.nodeId, 'fail', {
+          reason: '会话在系统提醒后再次停止，节点未能推进',
+          source: 'SESSION_STUCK',
+        });
+      } catch (err) {
+        // N-1：兜底回调可能由其它转移的 hook 同步触发（同实例锁内）。
+        // 延迟出队到锁外重试，禁止同步嵌套；其余错误照常抛出。
+        if ((err as Error).message.includes('KeyedMutex re-entrant lock detected')) {
+          setImmediate(() => {
+            void this.handleSessionEnded(sessionId);
+          });
+          return;
+        }
+        throw err;
+      }
       return;
     }
 
+    // N-1④：只做字段级更新，避免整文档 save() 与并发转移互覆
+    const updated = await WorkflowInstance.updateOne(
+      {
+        _id: instance._id,
+        deletedAt: null,
+        nodes: {
+          $elemMatch: {
+            nodeId: node.nodeId,
+            sessionId: node.sessionId,
+            status: 'RUNNING',
+          },
+        },
+      },
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    if (!updated?.modifiedCount) return;
     node.fallbackSent = true;
-    await instance.save();
     // 兜底 resume 同样带内下发节点配置的初始 mode/model；
     // 配置读取失败不阻断兜底（仍以默认配置 resume）
     let initial: { modeId?: string; modelId?: string } | undefined;

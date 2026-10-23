@@ -31,6 +31,7 @@ vi.mock('../../models/workflow-instance.js', () => ({
   WorkflowInstance: {
     findById: vi.fn(),
     findOne: vi.fn(),
+    updateOne: vi.fn(),
   },
 }));
 
@@ -319,7 +320,7 @@ describe('WorkflowOrchestrator', () => {
       expect.objectContaining({ workflowNodeId: 'n3' }),
     );
     // 本会话被结束，且顺序：先 create（下游）后 close（本会话）
-    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(vi.mocked(sessionService.create).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(sessionService.close).mock.invocationCallOrder[0],
     );
@@ -331,6 +332,7 @@ describe('WorkflowOrchestrator', () => {
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
     vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
     await workflowOrchestrator.handleSessionEnded('sess-2');
 
@@ -340,7 +342,11 @@ describe('WorkflowOrchestrator', () => {
     expect(content).toContain('工作流');
     expect(content).toContain('工具');
     expect(instance.nodes[0].fallbackSent).toBe(true);
-    expect(instance.save).toHaveBeenCalled();
+    // N-1④：fallbackSent 用字段级更新，避免整文档 save 与并发转移互覆
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: instance._id }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
 
     // 第二次停止：不再 resume（防死循环），节点升级为 FAILED（阻断流程等待人工介入）
     vi.clearAllMocks();
@@ -476,7 +482,7 @@ describe('WorkflowOrchestrator', () => {
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
     // 关闭阻塞期间的空闲会话
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     // 以全新会话复工（startNodeSession 创建新会话并发送提示词）
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
@@ -516,7 +522,7 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({ workflowNodeId: 'n3' }),
@@ -533,13 +539,74 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowEngine.transition('inst-1', 'n3', 'restart', {});
 
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({ workflowNodeId: 'n3' }),
     );
     expect(instance.nodes[0].status).toBe('RUNNING');
     expect(instance.nodes[0].failInfo).toBeNull();
+  });
+
+  it('N-1: restart(RUNNING + fallbackSent=true) 不触发同步兜底嵌套，且恰拉起一个新会话', async () => {
+    const instance = makeInstance([
+      makeNode({
+        nodeId: 'n3',
+        nodeKey: 'impl',
+        type: 'AI',
+        name: '代码实现',
+        stage: 'impl',
+        status: 'RUNNING',
+        dependsOn: [],
+        sessionId: 'sess-old',
+        fallbackSent: true,
+      }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    workflowOrchestrator.register();
+
+    await expect(
+      workflowEngine.transition('inst-1', 'n3', 'restart', {}),
+    ).resolves.toBeDefined();
+
+    // 受控关闭旧会话（跳过兜底），不会在锁内嵌套 transition('fail')
+    expect(sessionService.close).toHaveBeenCalledWith(
+      'sess-old',
+      'user-1',
+      expect.objectContaining({ suppressFallback: true }),
+    );
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(instance.nodes[0].sessionId).toBe('sess-new');
+    expect(instance.nodes[0].status).toBe('RUNNING');
+  });
+
+  it('N-1: restart(RUNNING + fallbackSent=false) 不复活旧会话、不发兜底提示词', async () => {
+    const instance = makeInstance([
+      makeNode({
+        nodeId: 'n3',
+        nodeKey: 'impl',
+        type: 'AI',
+        name: '代码实现',
+        stage: 'impl',
+        status: 'RUNNING',
+        dependsOn: [],
+        sessionId: 'sess-old',
+        fallbackSent: false,
+      }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    workflowOrchestrator.register();
+
+    await workflowEngine.transition('inst-1', 'n3', 'restart', {});
+
+    // 旧会话不被 resume/兜底提示词复活（create 只发生一次：新会话）
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(instance.nodes[0].sessionId).toBe('sess-new');
   });
 
   it('restart 人类节点不拉起会话（类型守卫）', async () => {

@@ -105,8 +105,10 @@ describe('cloudHostResolvers.Query.cloudHost', () => {
       authContext,
     );
 
+    // C-27：契约承诺「软删除仍返回」——显式断言 deletedAt 透传，而非仅断言对象存在
     expect(CloudHost.findOne).toHaveBeenCalledWith({ _id: HOST_ID, userId: 'user-1' });
     expect(result).toMatchObject({ id: HOST_ID, name: 'host' });
+    expect(result).toMatchObject({ deletedAt: expect.anything() });
   });
 
   it('returns null for a malformed id without querying the database', async () => {

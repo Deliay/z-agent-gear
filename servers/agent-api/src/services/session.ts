@@ -541,7 +541,18 @@ export class SessionService {
     return { success: true, status: 'connecting' };
   }
 
-  async close(id: string, userId: string): Promise<boolean> {
+  /**
+   * 关闭会话。
+   *
+   * `suppressFallback`：主动/受控关闭（工作流节点完成、重启、复工替换会话）时置 true，
+   * 跳过 `sessionEndedCallback`，避免在引擎转移尚未落库时把「人为关闭」误判为会话意外终止，
+   * 也避免在同一实例锁内同步嵌套 `workflowEngine.transition`（N-1）。
+   */
+  async close(
+    id: string,
+    userId: string,
+    opts?: { suppressFallback?: boolean; reason?: string },
+  ): Promise<boolean> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     const result = await Session.findOneAndUpdate(
       { _id: id, userId },
@@ -559,10 +570,12 @@ export class SessionService {
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
         sessionId: id,
-        reason: 'user_close',
+        reason: opts?.reason ?? 'user_close',
       }));
-      // 工作流兜底检查
-      await this.sessionEndedCallback?.(id);
+      // 工作流兜底检查：受控关闭（节点完成/重启/复工）不触发
+      if (!opts?.suppressFallback) {
+        await this.sessionEndedCallback?.(id);
+      }
       return true;
     }
     return false;

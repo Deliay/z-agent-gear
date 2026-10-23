@@ -189,14 +189,9 @@ class PrHandlerRegistry {
       .lean()) as unknown as HandlerDoc[];
 
     for (const row of rows) this.indexOne(row);
-    // 合并进程内索引（DB 为准，索引补位）：索引行先入，DB 行后入覆盖同 _id 的陈旧内存行，
-    // 避免已删除/已更新的登记从索引「复活」。
-    const merged = new Map<string, HandlerDoc>();
-    for (const row of this.index.get(lowerId(normalized))?.values() ?? []) {
-      merged.set(String(row._id), row);
-    }
-    for (const row of rows) merged.set(String(row._id), row);
-    return [...merged.values()];
+    // C-1：以 DB 为唯一事实源。内存索引只用于加速/启动重建，
+    // 不再参与结果合并，避免其它副本已删除的登记从本进程索引「复活」。
+    return rows;
   }
 
   /** 按实例列举（GraphQL pullRequestLinks 数据源） */

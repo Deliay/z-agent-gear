@@ -158,6 +158,24 @@ describe('CloudHostGithubService', () => {
     );
   });
 
+  it('U-1: createSession 失败仍回写 workspaceId（hasDefaultWorkspace 可区分「会话创建失败」）', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
+    const { service, createSession } = makeService();
+    createSession.mockRejectedValue(new Error('create session failed'));
+
+    await (service as any).run('op1');
+
+    expect(CloudHost.updateOne).toHaveBeenCalledWith(
+      { _id: HOST_ID, workspaceId: null },
+      { $set: { workspaceId: 'ws-1' } },
+    );
+    // 会话未成功，不得回填 defaultSessionId
+    expect(CloudHost.updateOne).not.toHaveBeenCalledWith(
+      { _id: HOST_ID, defaultSessionId: null },
+      expect.anything(),
+    );
+  });
+
   it('T-CHG2: workload 已安装 → SKIPPED，仍执行 gitSetup', async () => {
     vi.mocked(CloudContainer.findOne).mockReturnValue({
       sort: vi.fn().mockReturnValue({

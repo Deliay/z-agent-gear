@@ -35,7 +35,7 @@ interface GithubSetupProgressDialogProps {
   hostId?: string
   /** 云电脑启动成功（RUNNING）时回调一次，供调用方发起项目准备 */
   onHostRunning?: (host: CloudHostData) => void
-  /** 启动失败时点击「重新创建」的回调 */
+  /** 启动失败时点击「返回新建」的回调（回到新建表单，不自动重建实例） */
   onStartupFailed?: () => void
   /** 项目准备请求本身失败（尚未生成 operation）时的错误文案 */
   setupError?: string | null
@@ -169,6 +169,8 @@ export default function GithubSetupProgressDialog({
     if (!open || !operation) return
     if (operation.status === 'RUNNING') {
       finishedRef.current = false
+      // N-3：重试后操作重新进入 RUNNING，必须恢复轮询
+      setPollStopped(false)
       return
     }
     if (!finishedRef.current) {
@@ -197,6 +199,8 @@ export default function GithubSetupProgressDialog({
     if (!operation) return
     setRetryError(null)
     finishedRef.current = false
+    // N-3：终态停轮询后重试，先恢复轮询（后续 RUNNING 状态也会再确认一次）
+    setPollStopped(false)
     try {
       await retryOperation({ variables: { id: operation.id } })
       await refetch()
@@ -342,7 +346,7 @@ export default function GithubSetupProgressDialog({
                 onStartupFailed()
               }}
             >
-              重新创建
+              返回新建
             </Button>
           )}
           {operation?.status === 'FAILED' && !startupFailed && (

@@ -223,7 +223,8 @@ describe('LLM Provider & Model API', () => {
       expect(
         body.data.models.every(
           (m: { contextLength: number | null }) =>
-            m.contextLength === null || Number.isInteger(m.contextLength),
+            m.contextLength === null ||
+            (Number.isInteger(m.contextLength) && m.contextLength > 0),
         ),
       ).toBe(true);
     });
