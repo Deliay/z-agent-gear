@@ -66,6 +66,7 @@ export const resolvers = {
     ...workflowResolvers.WorkflowInstance,
   },
   Controller: {
+    ...controllerResolvers.Controller,
     ...homeResolvers.Controller,
     ...cloudHostResolvers.Controller,
   },

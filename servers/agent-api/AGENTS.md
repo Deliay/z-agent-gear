@@ -37,6 +37,13 @@ src/
   `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false（Mongoose 会剥离 undefined 条件，必须显式拒绝）。
 - 新增或修改 `Session` 字段级 resolver 时，必须在 `graphql/resolvers/index.ts` 的 `Session` 键登记，否则线上字段不生效（backend-rules 陷阱）。
 
+## 默认 MCP 与 ACP 选项缓存
+
+- **默认 MCP 口径**：`Controller.defaultMcp`（`{useAllEnabled, serverIds}`）为字段级 resolver，历史行归一为 `{useAllEnabled:true, serverIds:[]}`，并剔除已删除 MCP id。`setControllerDefaultMcp` 校验 `MCP_SERVER_NOT_FOUND` 后落库。
+- **会话注入（`services/session.ts` 的 `resolveInitialMcpServerIds` 纯函数）**：`CreateSessionInput.mcpServerIds` **undefined 才走控制器默认**（`useAllEnabled` → 全部已启用；否则 `serverIds ∩ 已启用`）；显式 `[]` 表示不注入。云会话额外自动并入 `agent-cloud-host-tools`，与用户选择互不影响。
+- **选项缓存**：controller-api `acp:options:<controllerId>:<serverType>` 成功 TTL 300s、失败 60s；`refreshAcpServerOptions` 主动清缓存并重探测（失败返回空选项，不阻断建会话）；`Model` mutation（增删改/排序/启停）经 `services/acp-options-cache.ts` 的 SCAN 失效当前用户全部控制器缓存。
+- **云电脑创建/项目准备开关**：`createCloudHost(createDefaultSession:false)` 时 ready 不建默认会话（由 setup 的 session 步骤建项目会话）；`setupCloudHostGithubProject(createSession:false)` 时 session 步骤记 SKIPPED（多 Harness 场景）。
+
 ## Dev Commands
 
 ```bash
@@ -69,7 +76,7 @@ npm run start   # Start production server
 - 生命周期：创建即启动 → 停止即销毁（`STARTING/RUNNING/STOPPING/STOPPED/FAILED`，无 `startCloudHost`）。每用户同时最多 1 个 `STARTING/RUNNING/STOPPING` 实例（`KeyedMutex` 进程内串行，需单实例部署）。
 - 创建编排：校验开关/名称/harnessTypes/配置 → 读取 `cloudworkloads` preset → 计费账户 → 预生成 cloudHostId/controllerId → `ControllerKey(type=cloud)` → 预创建 `Controller(type=cloud,registering,name=用户命名)` → 默认工作区（`/root/workspace`）→ `CloudHost(STARTING)` → 铸造 `scope=cloud_host` 模型 Key → `POST /internal/containers{purpose:harness}`。失败逆序回滚；cloud-controller 成功后不再回滚。
 - 只读模型：`models/cloud-container.ts`（cloudcontainers）、`models/cloud-workload.ts`（cloudworkloads）、admin-api 只读 `cloudhosts`；写方各自单一。
-- 内部回调：`routes/internal-cloud-host.ts`（Bearer `INTERNAL_API_TOKEN`）。ready → **单 harness 默认会话在 STARTING 窗口创建后与 RUNNING/readyAt 合并为一次 CAS 落库**（避免 `RUNNING+defaultSessionId=null` 竞态；失败只告警）；terminal → STOPPED/FAILED + 批量 ENDED + 撤销模型 Key；均幂等。
+- 内部回调：`routes/internal-cloud-host.ts`（Bearer `INTERNAL_API_TOKEN`）。ready → **单 harness 默认会话在 STARTING 窗口创建后与 RUNNING/readyAt 合并为一次 CAS 落库**（避免 `RUNNING+defaultSessionId=null` 竞态；失败只告警）；`CreateCloudHostInput.createDefaultSession=false` 时跳过默认会话（由 Git 项目 setup 的 session 步骤建项目会话）；terminal → STOPPED/FAILED + 批量 ENDED + 撤销模型 Key；均幂等。
 - 会话只读：停止时 `sessionService.endByController`；`resume`/`sendSessionMessage`/`cancelGeneration` 对云电脑非 RUNNING/软删返回 `session is ended`；`createSession` 对 cloud Controller 校验 `CloudHost.status===RUNNING` 且 `acpServerType` 必须在 `harnessTypes` 映射内，落库前后各复查一次（缩小与 stop/terminal 的竞态窗口）。`Session.controllerType`/`Session.cloudHost`（含软删除留档）由 `resolvers/session.ts` 的 `Session` 类型 resolver 提供，**必须在 `graphql/resolvers/index.ts` 登记 `Session` 键**（否则运行时恒 null）；前端只读判定不依赖 controllers 列表命中。
 - 创建⇄停止并发：`startHarness` 成功后以 `{_id,status:'STARTING'}` CAS 回写 `containerId`；CAS 未命中（并发 stop 已推进）立即销毁容器并撤销模型 Key；stop 以 CAS 后的最新快照决定销毁，终态 CAS 后再扫一次会话。每用户 1 实例另有 DB 部分唯一索引兜底（多副本），索引由迁移 `005-cloud-host-active-unique-index` 显式创建；仅该索引名的 11000 冲突映射为 `too many cloud hosts`。
 - `KeyedMutex` 非可重入：同异步上下文嵌套同 key 会立即抛错（`AsyncLocalStorage` 检测），避免永久挂起。
@@ -83,10 +90,10 @@ npm run start   # Start production server
 - 创建弹窗数据源：`cloudHostWorkloadCatalog` 查询（`cloudHostWorkloadService.listCatalog()`）无主机上下文，返回全部 standard 且 `installed=false`；与 `cloudHostWorkloads` 共用 `CloudHostWorkloadItem`（含 `workloadKind`，standard 固定 `STANDARD`）。
 - Github clone 路径：`SetupCloudHostGithubProjectInput.targetPath` 是**前缀地址（工作根目录）**，不是最终目录。`services/workspace-path.ts` 的 `normalizeWorkspacePrefix`（绝对路径、拒绝 `..`/反斜杠/NUL、`path.posix.normalize` 规整）+ `resolveClonePath`（`path.posix.join`，repo 必须 `owner/repo` 且两段非 `.`/`..`）在 `CloudHostGithubService.createOperation` 内权威计算 finalPath；operation/binding/脚本参数/`ensureWorkspace` 一律使用 finalPath，旧绑定记录保持原值。
 - 编排：`services/cloud-host-workload-service.ts`（列表、单步安装、`cloud_host_setup_operations` runner、`pollBatch` 1s 轮询、单步超时 `CLOUD_HOST_SETUP_STEP_TIMEOUT_MS`）；`services/cloud-host-github-service.ts`（三步：Github 工作负载 → Git 项目设置 → 会话创建）。操作创建后立即返回，前端/ MCP 轮询终态；查询时 RUNNING 超过 `CLOUD_HOST_SETUP_STALE_MS` 标记 FAILED「操作已中断，请重试」。
-- 凭据：`POST /internal/cloud-hosts/:controllerId/github-credential` 双鉴权（`INTERNAL_API_TOKEN` 或 Controller key），仅返回本机 `cloud_host_github_bindings` 绑定仓库的 `{token,expiresAt}`；`GitHubService.createRepoScopedToken` 使用 installation token + `repositories` + `contents:write`。token 不落库/不写日志/不进 operation error（统一 `sanitizeOperationError`）。
+- 凭据：`POST /internal/cloud-hosts/:controllerId/github-credential` 双鉴权（`INTERNAL_API_TOKEN` 或 Controller key），仅返回本机 `cloud_host_github_bindings` 绑定仓库的 `{token,expiresAt}`；`GitHubService.createRepoScopedToken` 使用 installation token + `repositories`，权限对齐 App 安装授权（actions/contents/deployments/environments/issues/pull_requests/workflows 均 write）。token 不落库/不写日志/不进 operation error（统一 `sanitizeOperationError`）。
 - GraphQL：`cloudHostWorkloads`、`cloudHostSetupOperation`、`installCloudHostWorkload`、`setupCloudHostGithubProject`、`retryCloudHostSetupOperation`；`CloudHost.defaultWorkspace/workloadInstalling` 为类型级 resolver（已登记 `resolvers/index.ts`）。
 - MCP：平台服务 `agent-cloud-host-tools`（`transport/source=platform`），工具 `workload_list`/`workload_install`；云会话 `sessionService.create` 自动装配，非云会话不装配；`workload_install` 等待终态（上限 10 分钟），执行记录 `source=mcp`。
-- 会话：`controllerWorkspaceService.ensureWorkspace` 按路径幂等 upsert（不触发 10 个工作区上限）；Git 设置成功后自动建会话，失败仅 session 步骤 FAILED、operation 仍 SUCCEEDED 并提示手动建会话。
+- 会话：`controllerWorkspaceService.ensureWorkspace` 按路径幂等 upsert（不触发 10 个工作区上限）；Git 设置成功后自动建会话，失败仅 session 步骤 FAILED、operation 仍 SUCCEEDED 并提示手动建会话；`createSession=false` 时 session 步骤记 SKIPPED（多 Harness 不自动建会话）。
 
 ## Related Rules
 

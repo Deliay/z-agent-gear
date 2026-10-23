@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -28,11 +28,27 @@ import ConfigureWorkflowDialog from '@/components/workflow/ConfigureWorkflowDial
 import { Plus, Copy, RefreshCw } from 'lucide-react'
 
 export default function WorkflowSection() {
-  const { data: templatesData, loading: templatesLoading } =
-    useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES)
-  const { data: configuredData } =
-    useQuery<GetConfiguredWorkflowsQuery>(GET_CONFIGURED_WORKFLOWS)
+  const { data: templatesData, loading: templatesLoading, refetch: refetchTemplates } =
+    useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES, {
+      fetchPolicy: 'cache-and-network',
+    })
+  const { data: configuredData, refetch: refetchConfigured } =
+    useQuery<GetConfiguredWorkflowsQuery>(GET_CONFIGURED_WORKFLOWS, {
+      fetchPolicy: 'cache-and-network',
+    })
   const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS)
+
+  const [refreshFailed, setRefreshFailed] = useState(false)
+
+  // 进入设置页（或重新切回工作流区块）时刷新一次来源列表
+  useEffect(() => {
+    setRefreshFailed(false)
+    Promise.all([Promise.resolve(refetchTemplates?.()), Promise.resolve(refetchConfigured?.())]).catch(
+      () => setRefreshFailed(true),
+    )
+    // refetch 引用稳定；仅挂载/切回时刷新一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const [deleteTemplate] = useMutation(DELETE_WORKFLOW_TEMPLATE)
   const [deleteConfigured] = useMutation(DELETE_CONFIGURED_WORKFLOW)
@@ -88,6 +104,9 @@ export default function WorkflowSection() {
 
   return (
     <section className="space-y-6">
+      {refreshFailed && (
+        <p className="text-xs text-muted-foreground">列表刷新失败，可重试</p>
+      )}
       <div className="flex items-center justify-end gap-2">
         <Button
           size="sm"

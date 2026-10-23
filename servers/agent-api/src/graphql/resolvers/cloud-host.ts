@@ -36,6 +36,23 @@ export const cloudHostResolvers = {
       const userId = requireUser(context);
       return cloudHostService.list(userId);
     },
+    cloudHost: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      if (!mongoose.isValidObjectId(args.id)) return null;
+      // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本人返回 null。
+      const doc = await CloudHost.findOne({ _id: args.id, userId }).lean();
+      if (!doc) return null;
+      const activeSessionCount = await Session.countDocuments({
+        controllerId: doc.controllerId,
+        userId,
+        status: { $ne: 'ended' },
+      });
+      return cloudHostService.mapCloudHost(doc as Doc, activeSessionCount);
+    },
     cloudHostStopImpact: async (
       _parent: unknown,
       args: { id: string },
@@ -101,12 +118,19 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[] } },
+      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null } },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
       try {
-        return await cloudHostService.create(userId, args.input);
+        return await cloudHostService.create(userId, {
+          name: args.input.name,
+          harnessTypes: args.input.harnessTypes,
+          workloadIds: args.input.workloadIds,
+          ...(args.input.createDefaultSession === undefined || args.input.createDefaultSession === null
+            ? {}
+            : { createDefaultSession: args.input.createDefaultSession }),
+        });
       } catch (err) {
         toCloudHostGraphQLError(err);
       }
@@ -161,6 +185,7 @@ export const cloudHostResolvers = {
           repoFullName: string;
           targetPath: string;
           workloadIds?: string[];
+          createSession?: boolean | null;
         };
       },
       context: AuthContext,
@@ -169,7 +194,14 @@ export const cloudHostResolvers = {
       try {
         return await cloudHostGithubService.createOperation({
           userId,
-          ...args.input,
+          controllerId: args.input.controllerId,
+          accountId: args.input.accountId,
+          repoFullName: args.input.repoFullName,
+          targetPath: args.input.targetPath,
+          workloadIds: args.input.workloadIds,
+          ...(args.input.createSession === undefined || args.input.createSession === null
+            ? {}
+            : { createSession: args.input.createSession }),
         });
       } catch (err) {
         toCloudHostSetupGraphQLError(err);

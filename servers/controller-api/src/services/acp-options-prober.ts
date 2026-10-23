@@ -33,7 +33,7 @@ const EMPTY_OPTIONS: AcpServerOptionsData = {
   probedAt: null,
 };
 
-const SUCCESS_CACHE_TTL = 3600; // 1h
+const SUCCESS_CACHE_TTL = 300; // 5 分钟：模式/模型选项短时有效，模型列表变更后由 agent-api 主动失效
 const FAILURE_CACHE_TTL = 60; // 失败结果短缓存：让 agent-api 轮询尽快返回，同时允许快速重试
 
 function cacheKey(controllerId: string, serverType: string): string {

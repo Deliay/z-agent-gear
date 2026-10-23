@@ -964,7 +964,7 @@ test.describe('Workflow E2E', () => {
       15000,
       'exec node FAILED after second stop',
     );
-    expect(failedNode.failInfo?.source).toBe('SESSION_STUCK');
+    expect(failedNode?.failInfo?.source).toBe('SESSION_STUCK');
 
     // UI 强提醒：节点「失败」badge + 顶部阻断 banner
     await loginViaUI(page, env.username);
@@ -2397,6 +2397,46 @@ test.describe('Workflow E2E', () => {
     expect(done.isError).toBe(false);
 
     env.controller.disconnect();
+  });
+
+  test('P10-W8: 工作流「+」打开即刷新来源列表，MCP 新建的已配置工作流立即可见', async ({ page }) => {
+    test.setTimeout(90_000);
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const hostname = `wf-p10-host-${Date.now().toString(36)}`;
+    const controller = await registerWorkflowController(rawKey, hostname);
+    await refreshCapabilities(page, token, controller.controllerId);
+    await createWorkspace(
+      page,
+      controller.controllerId,
+      `/tmp/wf-p10-${Math.random().toString(36).slice(2, 8)}`,
+      token,
+    );
+
+    const templateName = `P10模板${Date.now().toString(36)}`;
+    const templateId = await createThreeNodeTemplate(page, token, templateName);
+    const firstConfig = `P10配置A-${Date.now().toString(36)}`;
+    const secondConfig = `P10配置B-${Date.now().toString(36)}`;
+    // 模拟 MCP 新建的第一条已配置工作流
+    await configureFromTemplate(page, token, templateId, controller.controllerId, firstConfig);
+
+    await loginViaUI(page, username);
+    const nav = page.locator(sidebar());
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    let dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible({ timeout: 15000 });
+    await dialog.getByRole('button', { name: '取消' }).click();
+
+    // 对话框关闭期间由 MCP 再新建一条已配置工作流
+    await configureFromTemplate(page, token, templateId, controller.controllerId, secondConfig);
+
+    // 重新打开「+」：打开即 refetch，新工作流无需刷新页面即可见
+    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: secondConfig })).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible();
+
+    controller.disconnect();
   });
 });
 

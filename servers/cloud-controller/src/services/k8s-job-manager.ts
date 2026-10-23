@@ -35,11 +35,10 @@ export function computeActiveDeadlineSeconds(
 
 /**
  * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
- * request 保证调度可落地，limit 为资源耗尽时的硬上限。
+ * 仅声明 limit 为资源耗尽时的硬上限；不设置 request（由 K8s 按 limit 处理）。
  */
 export const JOB_RESOURCES = {
-  requests: { cpu: '250m', memory: '1Gi' },
-  limits: { cpu: '2', memory: '4Gi' },
+  limits: { cpu: '4', memory: '16Gi' },
 } as const;
 
 /**
@@ -141,7 +140,6 @@ export class K8sJobManager {
                 ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
               resources: {
-                requests: { ...JOB_RESOURCES.requests },
                 limits: { ...JOB_RESOURCES.limits },
               },
             },

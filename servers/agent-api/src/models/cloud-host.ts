@@ -41,6 +41,8 @@ const cloudHostSchema = new mongoose.Schema(
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', required: true },
     containerId: { type: String, default: null },
     defaultSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
+    // D1：创建时是否由 ready 回调自动建默认会话；历史行缺省视为 true（零迁移）
+    createDefaultSession: { type: Boolean, default: true },
     startedAt: { type: Date, default: null },
     readyAt: { type: Date, default: null },
     stoppedAt: { type: Date, default: null },

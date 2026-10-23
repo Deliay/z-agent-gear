@@ -129,6 +129,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
     worktreeBranchSuffix?: string,
     mcpServerIds?: string[],
     existingWorktreePath?: string,
+    modeId?: string,
+    modelId?: string,
   ) => {
     try {
       const { data: result } = await createSession({
@@ -139,8 +141,11 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             workspaceId,
             enableWorktree: existingWorktreePath ? false : (enableWorktree || false),
             worktreeBranchSuffix: worktreeBranchSuffix || null,
-            mcpServerIds: mcpServerIds || null,
+            // 显式空数组 = 不注入；undefined 走控制器默认
+            mcpServerIds: mcpServerIds === undefined ? null : mcpServerIds,
             existingWorktreePath: existingWorktreePath || null,
+            modeId: modeId || null,
+            modelId: modelId || null,
           },
         },
         refetchQueries: [{ query: HOME_OVERVIEW }],

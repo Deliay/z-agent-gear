@@ -131,6 +131,7 @@ flowchart LR
 - [[draft/20261021-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、云主机申请最小化凭据 clone 并自动建会话）
 - [[draft/20261022-workload-optimization.md]] — 工作负载优化（云电脑支持 Aspire/Docker/.NET 负载展示与使用、MCP 列出与安装，Github 项目 clone 地址前缀拼接）
 - [[draft/20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
+- [[draft/20261022-cloud-container-optimization-phase1.md]] — 云容器优化一期（会话/工作流「+」列表实时刷新、新建云电脑初始化 Github 项目、新建会话默认注入 MCP 与默认 MCP 设置、拉起会话前置选择模型与模式）
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
 
 ### 已发布文档（`released/`）

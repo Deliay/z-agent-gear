@@ -40,6 +40,8 @@ export interface CreateCloudHostInput {
   harnessTypes: string[];
   /** 创建时附加预装的 standard 负载（去重后 ≤5；缺省/空 = 仅 harness）。 */
   workloadIds?: string[];
+  /** D1：false 时 ready 不自动建默认会话（由项目准备 session 步骤建）；缺省 true。 */
+  createDefaultSession?: boolean;
 }
 
 export interface CloudHostStopImpact {
@@ -167,6 +169,7 @@ export class CloudHostService {
     name: string;
     harnessTypes: HarnessType[];
     workloadIds: string[];
+    createDefaultSession: boolean;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
@@ -175,13 +178,14 @@ export class CloudHostService {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
       workloadIds: parseWorkloadIds(input.workloadIds),
+      createDefaultSession: input.createDefaultSession !== false,
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds } = this.validateInput(input);
+    const { name, harnessTypes, workloadIds, createDefaultSession } = this.validateInput(input);
 
     // 读取 harness preset 先于任何落库（缺失时不留下半成品记录）
     const presets: HarnessPreset[] = [];
@@ -244,6 +248,7 @@ export class CloudHostService {
           controllerId,
           keyId,
           workspaceId,
+          createDefaultSession,
           startedAt: new Date(),
         });
 
@@ -559,8 +564,9 @@ export class CloudHostService {
     // 的中间态，消除自动进入丢失与误报失败提示的竞态。
     if (host.status === 'STARTING') {
       const harnessTypes = (host.harnessTypes ?? []) as HarnessType[];
+      const wantsDefaultSession = host.createDefaultSession !== false;
       let defaultSessionId: string | null = null;
-      if (harnessTypes.length === 1) {
+      if (harnessTypes.length === 1 && wantsDefaultSession) {
         try {
           const session = await sessionService.create(String(host.userId), {
             controllerId: String(host.controllerId),
@@ -597,7 +603,7 @@ export class CloudHostService {
     // 已 RUNNING 的重复 ready（历史遗留/回调重试）：仅在缺默认会话时补建，不改变状态。
     let current = host;
     const harnessTypes = (current.harnessTypes ?? []) as HarnessType[];
-    if (harnessTypes.length === 1 && !current.defaultSessionId) {
+    if (harnessTypes.length === 1 && current.createDefaultSession !== false && !current.defaultSessionId) {
       try {
         const session = await sessionService.create(String(current.userId), {
           controllerId: String(current.controllerId),

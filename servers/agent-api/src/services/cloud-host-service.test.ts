@@ -305,7 +305,6 @@ describe('CloudHostService', () => {
       expect(CloudHost.create).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'STARTING', harnessTypes: ['OPENCODE'] }),
       );
-
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload).toMatchObject({
         hostId: expect.any(String),
@@ -327,9 +326,30 @@ describe('CloudHostService', () => {
       });
     });
 
-    it('rolls back and maps control plane failure', async () => {
+    it('persists createDefaultSession=false so ready skips the default session (D1)', async () => {
       setupCreateSuccess();
-      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
+      await service.create('user-1', {
+        name: 'with-project',
+        harnessTypes: ['OPENCODE'],
+        createDefaultSession: false,
+      });
+
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'STARTING', createDefaultSession: false }),
+      );
+    });
+
+    it('defaults createDefaultSession to true when omitted', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'legacy-shape', harnessTypes: ['OPENCODE'] });
+
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createDefaultSession: true }),
+      );
+    });
+
+    it('rolls back and maps control plane failure', async () => {
+      setupCreateSuccess();      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
 
       await expect(
         service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
@@ -774,8 +794,26 @@ describe('CloudHostService', () => {
       );
     });
 
-    it('does not create a default session when multiple harness types are selected', async () => {
-      const starting = hostDoc({ status: 'STARTING', harnessTypes: ['OPENCODE', 'CODEX'] });
+    it('does not create a default session when createDefaultSession=false', async () => {
+      const starting = hostDoc({ status: 'STARTING', createDefaultSession: false });
+      const running = hostDoc({ status: 'RUNNING', createDefaultSession: false });
+      vi.mocked(CloudHost.findOne).mockReturnValueOnce(chain(starting) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        status: 'RUNNING',
+        defaultSessionId: null,
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
+        { $set: { status: 'RUNNING', readyAt: expect.any(Date) } },
+        { new: true },
+      );
+    });
+
+    it('does not create a default session when multiple harness types are selected', async () => {      const starting = hostDoc({ status: 'STARTING', harnessTypes: ['OPENCODE', 'CODEX'] });
       const running = hostDoc({ status: 'RUNNING', harnessTypes: ['OPENCODE', 'CODEX'] });
       vi.mocked(CloudHost.findOne)
         .mockReturnValueOnce(chain(starting) as never)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { CREATE_CLOUD_HOST } from '../../graphql/mutations'
 import { CLOUD_HOST_WORKLOAD_CATALOG } from '../../graphql/queries'
@@ -10,6 +10,9 @@ import type {
   CreateCloudHostMutation,
   HarnessType,
 } from '../../graphql/types'
+import { useGithubProjectForm } from '../../hooks/useGithubProjectForm'
+import { useCloudHostProvisioning } from '../../hooks/useCloudHostProvisioning'
+import GithubSetupProgressDialog from './GithubSetupProgressDialog'
 import {
   Dialog,
   DialogContent,
@@ -78,9 +81,22 @@ export default function NewCloudHostDialog({
   const [name, setName] = useState('')
   const [selectedHarnesses, setSelectedHarnesses] = useState<HarnessType[]>([])
   const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>([])
+  const [projectEnabled, setProjectEnabled] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [setupError, setSetupError] = useState<string | null>(null)
   const [createCloudHost] = useMutation<CreateCloudHostMutation>(CREATE_CLOUD_HOST)
+
+  const provisioning = useCloudHostProvisioning()
+  const projectForm = useGithubProjectForm({
+    open,
+    controllerId: '',
+    // 云电脑尚未创建，没有 controllerId；Github 预制负载由服务端 setup 自动补齐
+    includeWorkloads: false,
+  })
+  // 编排启动后只允许发起一次 setup（云电脑 RUNNING 回调可能重复触发）
+  const setupStartedRef = useRef(false)
+  const runningHostRef = useRef<CloudHostData | null>(null)
 
   const {
     data: catalogData,
@@ -96,9 +112,14 @@ export default function NewCloudHostDialog({
       setName('')
       setSelectedHarnesses([])
       setSelectedWorkloadIds([])
+      setProjectEnabled(false)
       setSubmitting(false)
       setError(null)
+      setupStartedRef.current = false
+      provisioning.reset()
     }
+    // 仅在打开/关闭时重置，避免编排状态变化导致表单被清空
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const workloads = useMemo(
@@ -118,8 +139,14 @@ export default function NewCloudHostDialog({
       : null
   const harnessError = selectedHarnesses.length === 0 ? '请至少选择一种 Harness' : null
   const featureDisabled = !capabilities.enabled
+  const projectIncomplete = projectEnabled && !projectForm.isValid
   const submitDisabled =
-    submitting || featureDisabled || hasActiveCloudHost || Boolean(nameError) || Boolean(harnessError)
+    submitting ||
+    featureDisabled ||
+    hasActiveCloudHost ||
+    Boolean(nameError) ||
+    Boolean(harnessError) ||
+    projectIncomplete
 
   const toggleHarness = (harness: HarnessType, checked: boolean) => {
     setSelectedHarnesses((prev) =>
@@ -140,12 +167,61 @@ export default function NewCloudHostDialog({
   const dependencyNames = (workload: CloudHostWorkloadItemData): string[] =>
     (workload.dependsOnWorkloadIds ?? []).map((id) => workloadNames.get(id) ?? id)
 
+  const handleHostRunning = async (host: CloudHostData) => {
+    runningHostRef.current = host
+    if (setupStartedRef.current) return
+    if (!projectForm.normalizedPrefix) return
+    setupStartedRef.current = true
+    setSetupError(null)
+    try {
+      await provisioning.beginProjectSetup({
+        controllerId: host.controllerId ?? '',
+        harnessTypes: selectedHarnesses,
+        project: {
+          accountId: projectForm.accountId,
+          repoFullName: projectForm.repoFullName,
+          targetPath: projectForm.normalizedPrefix,
+        },
+      })
+    } catch (err) {
+      // 允许用户原地重试（云电脑仍可用）
+      setupStartedRef.current = false
+      setSetupError(getErrorMessage(err))
+    }
+  }
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (submitDisabled) return
-
     setSubmitting(true)
     setError(null)
+
+    // 选了 Github 项目：createCloudHost(createDefaultSession=false) → 等 RUNNING → setup
+    if (projectEnabled) {
+      if (!projectForm.isValid || projectForm.normalizedPrefix === null) {
+        setSubmitting(false)
+        return
+      }
+      setupStartedRef.current = false
+      try {
+        await provisioning.start({
+          name: trimmedName,
+          harnessTypes: selectedHarnesses,
+          ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
+          project: {
+            accountId: projectForm.accountId,
+            repoFullName: projectForm.repoFullName,
+            targetPath: projectForm.normalizedPrefix,
+          },
+        })
+      } catch (err) {
+        setError(getErrorMessage(err))
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
     try {
       const { data } = await createCloudHost({
         variables: {
@@ -170,6 +246,32 @@ export default function NewCloudHostDialog({
   }
 
   const supportedHarnesses = capabilities.supportedHarnesses
+
+  // 编排中：同一对话框推进「启动云电脑 → 工作负载 → Git 项目 → 会话创建」
+  if (provisioning.hostId) {
+    return (
+      <GithubSetupProgressDialog
+        open={open}
+        hostId={provisioning.hostId}
+        operationId={provisioning.operationId}
+        setupError={setupError}
+        onRetrySetup={() => {
+          const host = runningHostRef.current
+          if (host) void handleHostRunning(host)
+        }}
+        onHostRunning={(host) => { void handleHostRunning(host) }}
+        onStartupFailed={() => {
+          setupStartedRef.current = false
+          setSetupError(null)
+          provisioning.reset()
+        }}
+        onClose={() => {
+          provisioning.reset()
+          onClose()
+        }}
+      />
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -273,6 +375,101 @@ export default function NewCloudHostDialog({
               <p className="mt-1 text-xs text-muted-foreground">
                 勾选运行环境负载会延长首次就绪时间
               </p>
+            )}
+          </div>
+
+          <div className="min-w-0 rounded-md border p-3">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label="配置 Github 项目"
+                checked={projectEnabled}
+                onChange={(event) => setProjectEnabled(event.target.checked)}
+                className="h-4 w-4"
+              />
+              <span className="text-sm font-medium">配置 Github 项目（可选）</span>
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              创建后自动安装 Github 工作负载、克隆仓库并进入项目会话
+            </p>
+            {projectEnabled && (
+              <div className="mt-3 space-y-3">
+                {!projectForm.hasAccounts ? (
+                  <p className="text-sm text-muted-foreground">
+                    尚未绑定 Github 帐号，请前往设置页绑定
+                  </p>
+                ) : (
+                  <>
+                    <div className="min-w-0">
+                      <label htmlFor="cloud-host-github-account" className="mb-1 block text-sm font-medium">
+                        Github 账号
+                      </label>
+                      <select
+                        id="cloud-host-github-account"
+                        aria-label="Github 账号"
+                        value={projectForm.accountId}
+                        onChange={(event) => projectForm.setAccountId(event.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        {projectForm.accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.githubLogin}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="min-w-0">
+                      <label htmlFor="cloud-host-github-repo" className="mb-1 block text-sm font-medium">
+                        仓库
+                      </label>
+                      {projectForm.repos.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          该账号暂无授权仓库，请前往设置页授权
+                        </p>
+                      ) : (
+                        <select
+                          id="cloud-host-github-repo"
+                          aria-label="仓库"
+                          value={projectForm.repoFullName}
+                          onChange={(event) => projectForm.setRepoFullName(event.target.value)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <option value="">请选择仓库</option>
+                          {projectForm.repos.map((repo) => (
+                            <option key={repo.fullName} value={repo.fullName}>
+                              {repo.fullName}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div className="min-w-0">
+                      <label htmlFor="cloud-host-github-prefix" className="mb-1 block text-sm font-medium">
+                        前缀地址（工作根目录）
+                      </label>
+                      <input
+                        id="cloud-host-github-prefix"
+                        type="text"
+                        aria-label="前缀地址"
+                        value={projectForm.targetPath}
+                        onChange={(event) => projectForm.setTargetPath(event.target.value)}
+                        placeholder="/root/workspace"
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      {projectForm.prefixError !== null && (
+                        <p className="mt-1 text-xs text-destructive">{projectForm.prefixError}</p>
+                      )}
+                      {projectForm.normalizedPrefix !== null && (
+                        <p className="mt-1 break-all text-xs text-muted-foreground">
+                          最终 clone 地址：{projectForm.finalClonePath ?? '—'}
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
           </div>
 

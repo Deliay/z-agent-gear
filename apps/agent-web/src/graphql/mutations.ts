@@ -502,6 +502,36 @@ export const RETRY_CLOUD_HOST_SETUP_OPERATION = gql`
   ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
 `
 
+// ---------- 控制器默认 MCP / ACP 选项刷新 ----------
+
+export const SET_CONTROLLER_DEFAULT_MCP = gql`
+  mutation SetControllerDefaultMcp($controllerId: ID!, $useAllEnabled: Boolean!, $serverIds: [ID!]) {
+    setControllerDefaultMcp(
+      controllerId: $controllerId
+      useAllEnabled: $useAllEnabled
+      serverIds: $serverIds
+    ) {
+      id
+      defaultMcp {
+        useAllEnabled
+        serverIds
+      }
+    }
+  }
+`
+
+export const REFRESH_ACP_SERVER_OPTIONS = gql`
+  mutation RefreshAcpServerOptions($controllerId: ID!, $acpServerType: AcpServerType!) {
+    refreshAcpServerOptions(controllerId: $controllerId, acpServerType: $acpServerType) {
+      modes { id name description }
+      models { id name provider }
+      currentModeId
+      currentModelId
+      probedAt
+    }
+  }
+`
+
 // ---------- 我的费用（contracts/billing.graphql） ----------
 
 export const CREATE_MY_BILLING_API_KEY = gql`

@@ -8,6 +8,7 @@ import StopCloudHostDialog from '@/components/cloud-host/StopCloudHostDialog';
 import DeleteCloudHostDialog from '@/components/cloud-host/DeleteCloudHostDialog';
 import CloudHostWorkloadsSection from '@/components/cloud-host/CloudHostWorkloadsSection';
 import GithubProjectSetupDialog from '@/components/cloud-host/GithubProjectSetupDialog';
+import McpDefaultSection from '@/components/settings/McpDefaultSection';
 import {
   canDeleteCloudHost,
   canStopCloudHost,
@@ -96,7 +97,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
   const cloudHost = controller?.type === 'cloud' ? controller.cloudHost : null;
   const isMobile = useIsMobile();
 
-  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'workloads'>('workspace');
+  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'mcp' | 'workloads'>('workspace');
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [githubSetupOpen, setGithubSetupOpen] = useState(false);
@@ -182,9 +183,10 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           <span className="font-medium truncate">{controller?.name || '加载中...'}</span>
         </div>
         {/* tab 常驻在滚动容器外，内容滚动时仍可切换 */}
-        <div className="flex shrink-0 gap-1 border-b px-4 py-2">
+        <div className="flex shrink-0 gap-1 overflow-x-auto border-b px-4 py-2">
           <button type="button" data-testid="config-tab-workspace" onClick={() => setActiveSection('workspace')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workspace' ? 'bg-accent' : 'hover:bg-accent'}`}>工作区</button>
           <button type="button" data-testid="config-tab-harness" onClick={() => setActiveSection('harness')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'harness' ? 'bg-accent' : 'hover:bg-accent'}`}>Harness 工具</button>
+          <button type="button" data-testid="config-tab-mcp" onClick={() => setActiveSection('mcp')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'mcp' ? 'bg-accent' : 'hover:bg-accent'}`}>默认 MCP</button>
           {cloudHost && (
             <button type="button" data-testid="config-tab-workloads" onClick={() => setActiveSection('workloads')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}>工作负载</button>
           )}
@@ -197,6 +199,9 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             )}
             {activeSection === 'harness' && (
               <HarnessToolsSection controllerId={controllerId} />
+            )}
+            {activeSection === 'mcp' && controller && (
+              <McpDefaultSection controller={controller} />
             )}
             {activeSection === 'workloads' && workloadsSection}
           </div>
@@ -238,6 +243,14 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
             >
               可用 Harness 工具
             </button>
+            <button
+              type="button"
+              data-testid="config-tab-mcp"
+              onClick={() => setActiveSection('mcp')}
+              className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'mcp' ? 'bg-accent' : 'hover:bg-accent'}`}
+            >
+              默认 MCP
+            </button>
             {cloudHost && (
               <button
                 type="button"
@@ -256,6 +269,8 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           <WorkspaceSection controllerId={controllerId} controllerOnline={controller?.status === 'online'} />
         ) : activeSection === 'harness' ? (
           <HarnessToolsSection controllerId={controllerId} />
+        ) : activeSection === 'mcp' ? (
+          controller ? <McpDefaultSection controller={controller} /> : null
         ) : (
           workloadsSection
         )}
