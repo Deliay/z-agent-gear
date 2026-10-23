@@ -585,6 +585,8 @@ export class CloudHostService {
             (err as Error).message,
           );
         }
+      } else if (harnessTypes.length === 1) {
+        console.info(`[cloud-host] skip default session for ${id}: no default workspace`);
       }
 
       const updated = await CloudHost.findOneAndUpdate(
@@ -624,6 +626,8 @@ export class CloudHostService {
           (err as Error).message,
         );
       }
+    } else if (harnessTypes.length === 1 && !current.defaultSessionId) {
+      console.info(`[cloud-host] skip default session for ${id}: no default workspace`);
     }
     const refreshed = (await this.findRawHost(id)) ?? current;
     return this.mapCloudHost(refreshed, await this.countActive(refreshed));

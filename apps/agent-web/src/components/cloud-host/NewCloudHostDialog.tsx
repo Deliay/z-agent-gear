@@ -224,7 +224,8 @@ export default function NewCloudHostDialog({
             {harnessError && supportedHarnesses.length > 0 && (
               <p className="mt-1 text-xs text-destructive">{harnessError}</p>
             )}
-            {selectedHarnesses.length === 1 && (
+            {/* 自动建会话依赖默认工作区：未勾选时不得提示「将自动创建会话」 */}
+            {selectedHarnesses.length === 1 && createDefaultWorkspace && (
               <p className="mt-1 text-xs text-muted-foreground">将自动创建会话</p>
             )}
             {selectedHarnesses.length > 1 && (

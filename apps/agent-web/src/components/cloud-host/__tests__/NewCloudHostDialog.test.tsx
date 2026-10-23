@@ -105,12 +105,17 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('选择 1 个 Harness 时提示将自动创建会话并可提交', () => {
+  it('默认未勾选工作区时单 Harness 不提示自动创建会话，勾选后才提示', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '  云电脑 A  ' } });
     fireEvent.click(screen.getByLabelText('OpenCode'));
 
+    // 默认不建工作区：就绪后不会自动建会话，文案不得自相矛盾
+    expect(screen.queryByText('将自动创建会话')).not.toBeInTheDocument();
+    expect(screen.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('创建默认工作区'));
     expect(screen.getByText('将自动创建会话')).toBeInTheDocument();
     expect(submitButton()).not.toBeDisabled();
   });

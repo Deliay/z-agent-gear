@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginViaUI, registerUser } from './helpers';
+import { createWorkspace, loginViaUI, registerUser } from './helpers';
 
 // 云电脑 E2E：K8S_ENABLED=false 下只能覆盖 STARTING → 停止 → 已销毁 → 删除。
 // 在线/默认会话/只读消息由 tests/api 回调用例与真实集群手工验收覆盖。
@@ -64,7 +64,9 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      // 未勾选默认工作区时不会自动建会话，文案不得提示「将自动创建会话」
+      await expect(dialog.getByText('将自动创建会话')).toHaveCount(0);
+      await expect(dialog.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeVisible();
 
       // 预装工作负载来自 cloudHostWorkloadCatalog（迁移 001/002/007 seed）
       await expect(dialog.getByText('预装工作负载（可选）')).toBeVisible();
@@ -142,6 +144,8 @@ test.describe('Cloud Host E2E', () => {
   });
 
   test('E2E-1: 默认不勾选 → 不创建工作区、不自动建会话并展示无工作区提示', async ({ page }) => {
+    // 缺参显式跳过，而不是在用例内部静默绕过核心断言
+    test.skip(!process.env.INTERNAL_API_TOKEN, 'E2E-1 需要 INTERNAL_API_TOKEN 驱动 ready 回调');
     const { token, username } = await registerUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
@@ -158,7 +162,7 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(dialog.getByText('将自动创建会话')).toHaveCount(0);
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
       const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
@@ -176,28 +180,50 @@ test.describe('Cloud Host E2E', () => {
       );
       expect(workspaces).toEqual([]);
 
-      // 真实 ready 回调可用时（K8s 关闭的本地链路），验证 RUNNING 后的提示与无默认会话
-      const internalToken = process.env.INTERNAL_API_TOKEN;
-      if (internalToken) {
-        const ready = await page.request.post(`${API_BASE}/internal/cloud-hosts/${hostId}/ready`, {
-          headers: { Authorization: `Bearer ${internalToken}` },
-        });
-        if (ready.ok()) {
-          // 重新拉取首页数据，避免依赖侧栏轮询时机
-          await page.reload();
-          await expect(page.locator(sidebar())).toBeVisible();
-          await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveText(
-            '未创建默认工作区，请先创建或绑定工作区',
-            { timeout: 15000 },
-          );
-          await expect(
-            controllerRow.getByTestId('cloud-host-default-session-hint'),
-          ).toHaveCount(0);
-          const running = await hostFlags(page, token, hostName);
-          expect(running?.status).toBe('RUNNING');
-          expect(running?.defaultSessionId).toBeNull();
-        }
-      }
+      // 驱动真实 ready 回调（K8s 关闭的本地链路），核心断言不得静默跳过
+      const ready = await page.request.post(`${API_BASE}/internal/cloud-hosts/${hostId}/ready`, {
+        headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` },
+      });
+      expect(ready.ok(), 'ready callback should succeed').toBe(true);
+
+      // 重新拉取首页数据，避免依赖侧栏轮询时机
+      await page.reload();
+      await expect(page.locator(sidebar())).toBeVisible();
+      await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveText(
+        '未创建默认工作区，请先创建或绑定工作区',
+        { timeout: 15000 },
+      );
+      await expect(controllerRow.getByTestId('cloud-host-default-session-hint')).toHaveCount(0);
+      const running = await hostFlags(page, token, hostName);
+      expect(running?.status).toBe('RUNNING');
+      expect(running?.defaultSessionId).toBeNull();
+
+      // 无工作区入口：Git 前缀不预填 /root/workspace
+      await controllerRow.getByLabel('Github 项目设置').click();
+      const githubDialog = page.getByRole('dialog');
+      await expect(githubDialog.getByLabel('前缀地址')).toHaveValue('');
+      await expect(githubDialog.getByLabel('前缀地址')).toHaveAttribute(
+        'placeholder',
+        '例如：/workspace',
+      );
+      await githubDialog.getByRole('button', { name: '取消' }).click();
+
+      // 添加工作区后，无工作区提示消失且可发起新建会话。
+      // 说明：真实会话创建需要在线 worker/controller；本地 K8S_ENABLED=false 仅验证到
+      // 「工作区绑定完成 + 新建会话入口可用」，完整开工链路由真实集群手工验收。
+      await createWorkspace(page, host!.controllerId, '/root/workspace', token);
+      const afterWorkspace = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
+      expect(
+        ((await afterWorkspace.json()).data?.workspaces ?? []).some(
+          (workspace: { controllerId: string; path: string }) =>
+            workspace.controllerId === host!.controllerId && workspace.path === '/root/workspace',
+        ),
+      ).toBe(true);
+      await page.reload();
+      await expect(page.locator(sidebar())).toBeVisible();
+      await page.getByLabel('新建会话').click();
+      await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
+      await page.keyboard.press('Escape');
     } finally {
       if (hostId) await cleanupHost(page, token, hostId);
     }
