@@ -531,6 +531,7 @@ describe('WorkflowOrchestrator', () => {
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     workflowEngine.registerHooks({
       onNodeStart: undefined,
@@ -561,8 +562,19 @@ describe('WorkflowOrchestrator', () => {
 
       expect(instance.nodes[0].status).toBe('FAILED');
       expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
-      expect(vi.mocked(WorkflowInstance.findById).mock.calls.length).toBeGreaterThanOrEqual(2);
+      // N-13：不仅看最终状态，必须证明重试「等待而非误抛」——恰一次成功重试，且无重排/误抛告警。
+      // 若 runDetached 回退为第五轮 fast-fail 语义，这里会捕获 'fallback deferred retry failed'（用例转红）。
+      expect(vi.mocked(WorkflowInstance.findById)).toHaveBeenCalledTimes(2);
+      expect(
+        warn.mock.calls.some((call) =>
+          String(call[0]).includes('fallback deferred retry failed'),
+        ),
+      ).toBe(false);
+      expect(
+        warn.mock.calls.some((call) => String(call[0]).includes('still holding')),
+      ).toBe(false);
     } finally {
+      warn.mockRestore();
       workflowEngine.registerHooks({
         onNodeStart: undefined,
         onNodeRework: undefined,
@@ -602,6 +614,48 @@ describe('WorkflowOrchestrator', () => {
       runOutside.mockRestore();
       transition.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it('N-14: 超限时实例/节点不可查也输出结构化告警，不静默跳过', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(null as never);
+      await (workflowOrchestrator as unknown as {
+        notifyFallbackExhausted: (
+          kind: 'removed',
+          sessionId: string,
+          instanceId: string,
+        ) => Promise<void>;
+      }).notifyFallbackExhausted('removed', 'sess-x', 'inst-x');
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('fallback exhausted todo skipped: instance not found') &&
+            String(call[0]).includes('instance=inst-x') &&
+            String(call[0]).includes('session=sess-x'),
+        ),
+      ).toBe(true);
+
+      // 实例存在但会话节点已解绑（restart/复工置空 sessionId 的形态）
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [] }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+      await (workflowOrchestrator as unknown as {
+        notifyFallbackExhausted: (
+          kind: 'removed',
+          sessionId: string,
+          instanceId: string,
+        ) => Promise<void>;
+      }).notifyFallbackExhausted('removed', 'sess-x', 'inst-1');
+      expect(
+        warn.mock.calls.some((call) =>
+          String(call[0]).includes('fallback exhausted todo skipped: node not found'),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
     }
   });
 

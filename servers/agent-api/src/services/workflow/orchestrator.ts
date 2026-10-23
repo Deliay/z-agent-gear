@@ -354,8 +354,22 @@ class WorkflowOrchestrator {
         _id: instanceId,
         deletedAt: null,
       })) as unknown as WorkflowInstanceDoc | null;
-      const node = instance?.nodes.find((n) => n.sessionId?.toString() === sessionId);
-      if (!instance || !node) return;
+      if (!instance) {
+        // N-14：超限链路最后一步也不得静默——实例已删除/不可查时留下可检索告警
+        console.warn(
+          `[workflow] ${kind} fallback exhausted todo skipped: instance not found ` +
+            `(instance=${instanceId}, session=${sessionId})`,
+        );
+        return;
+      }
+      const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
+      if (!node) {
+        console.warn(
+          `[workflow] ${kind} fallback exhausted todo skipped: node not found ` +
+            `(instance=${instanceId}, session=${sessionId})`,
+        );
+        return;
+      }
       await todoService.createWorkflowInterventionTodo({
         userId: instance.userId.toString(),
         instanceId: instance._id.toString(),
