@@ -476,6 +476,19 @@ input SetupCloudHostGithubProjectInput {
 | `tests/api/src/agent-api/session-capabilities.test.ts` | 修改 | `refreshAcpServerOptions` 清缓存 + 重探测 + 失败返回空 |
 | `tests/api/src/controller-api/acp-options-prober.test.ts` | 修改/新增 | TTL 300 / 60、缓存命中不重复探测 |
 
+### 偏差说明（实现阶段裁决）
+
+- `acp-options-prober` 的 TTL 300/60、缓存命中不重复探测：实际覆盖落在
+  `servers/controller-api/src/services/acp-options-prober.test.ts`（成功 TTL 300、失败 TTL 60、
+  缓存命中不向 controller 发探测均已断言）。`tests/api` 为黑盒 GraphQL 层，直接断言 Redis TTL
+  需跨进程读取 controller-api 内部 key，收益低于维护成本，故以该单测为权威覆盖，不新增
+  `tests/api/src/controller-api/acp-options-prober.test.ts`。
+- `defaultSessionId` 回填：ready 路径已在 `tests/api/src/agent-api/cloud-host-callback.test.ts`
+  T-CH19/T-CH21/T-CH21b 做 API 断言；项目 setup 会话的 D2 CAS 回填由
+  `servers/agent-api/src/services/cloud-host-github-service.test.ts` T-CHG1 单测覆盖，并在
+  `tests/e2e/src/cloud-host.spec.ts` P10-CH2 断言 `cloudHost(id).defaultSessionId` 非空。
+  黑盒 API 成功路径需要真实 worker 完成 clone/会话，本地/CI 无 K8s 时不可达。
+
 ### 实现要点
 
 - 缓存断言直接读 Redis（测试 fixture 已提供 ioredis）或通过「第二次查询不触发 acp:probe-options」间接断言。
@@ -521,6 +534,14 @@ input SetupCloudHostGithubProjectInput {
 - `git diff` 自查：无 debug 日志、无 token、无硬编码本地路径。
 - PR：`feat/cloud-container-optimization-phase1-impl` → 需求总分支，描述中声明 D1/D5/D6/D7 口径收敛。
 - 不 squash/rebase，只 merge。
+
+### 执行说明
+
+- Phase 10 四个 spec 已补齐 8 条场景：`cloud-host.spec.ts`（P10-CH1/CH2/CH3）、
+  `session.spec.ts`（P10-S5/S6/S7）、`github-workload.spec.ts`（T-EG5）、
+  `workflow.spec.ts`（P10-W8）。
+- 本轮实现受运行环境成本约束未启动 Aspire 全量服务，E2E 待验收环境执行；用例已通过
+  `playwright test --list` 静态加载校验。
 
 ### 验收 checklist
 
