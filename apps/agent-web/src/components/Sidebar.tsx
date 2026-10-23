@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
+import { toast } from 'sonner';
 import { CREATE_SESSION } from '../graphql/mutations';
 import type {
   CloudHostCapabilitiesData,
@@ -156,6 +157,8 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
       }
     } catch (error) {
       console.error('Failed to create session:', error);
+      // C-19：创建失败不能静默（弹窗已关闭，至少给出可感知反馈）
+      toast.error(error instanceof Error ? error.message : '创建会话失败，请重试');
     }
   };
 

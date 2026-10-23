@@ -817,6 +817,7 @@ export class SessionService {
     controllerId: string,
     acpServerType: string,
     userId: string,
+    opts?: { minProbedAt?: number },
   ): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -825,10 +826,18 @@ export class SessionService {
 
     const redis = getRedisClient();
     const cacheKey = `acp:options:${controllerId}:${acpServerType}`;
+    // C-9：刷新时只接受「本次删除之后」的探测结果，避免并发探测把旧结果写回后立即被读走。
+    // 允许 5s 时钟偏差（controller-api 与 agent-api 可能不同宿主）。
+    const isFresh = (payload: Record<string, unknown>): boolean => {
+      if (!opts?.minProbedAt) return true;
+      const probedAt = Date.parse(String(payload.probedAt ?? ''));
+      return Number.isFinite(probedAt) && probedAt >= opts.minProbedAt - 5_000;
+    };
 
     const cached = await redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached) as Record<string, unknown>;
+      const parsed = JSON.parse(cached) as Record<string, unknown>;
+      if (isFresh(parsed)) return parsed;
     }
 
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -843,7 +852,8 @@ export class SessionService {
       await new Promise((resolve) => setTimeout(resolve, 500));
       const result = await redis.get(cacheKey);
       if (result) {
-        return JSON.parse(result) as Record<string, unknown>;
+        const parsed = JSON.parse(result) as Record<string, unknown>;
+        if (isFresh(parsed)) return parsed;
       }
     }
 
@@ -864,15 +874,20 @@ export class SessionService {
     if (!controller) {
       throw new Error('Controller not found');
     }
+    const startedAt = Date.now();
     try {
       await getRedisClient().del(`acp:options:${controllerId}:${acpServerType}`);
     } catch (err) {
+      // C-9：删除失败不能静默回退到旧缓存（用户点「刷新」却看到陈旧结果）
       console.warn(
         `[session] delete acp options cache failed for ${controllerId}:`,
         (err as Error).message,
       );
+      throw new Error('刷新失败，请重试');
     }
-    return this.getAcpServerOptions(controllerId, acpServerType, userId);
+    return this.getAcpServerOptions(controllerId, acpServerType, userId, {
+      minProbedAt: startedAt,
+    });
   }
 
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {

@@ -26,21 +26,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function requireString(value: unknown, detail: string): string {
+function requireString(value: unknown, detail: string, maxLength?: number): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new EventPayloadError(detail);
+  }
+  if (maxLength !== undefined && value.length > maxLength) {
     throw new EventPayloadError(detail);
   }
   return value;
 }
 
-function optionalString(value: unknown, detail: string): string | undefined {
+function optionalString(value: unknown, detail: string, maxLength?: number): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') throw new EventPayloadError(detail);
+  // C-4：事件载荷直接进入提示词/黑板，限制长度避免膨胀面
+  if (maxLength !== undefined && value.length > maxLength) {
+    throw new EventPayloadError(detail);
+  }
   return value;
 }
 
 function optionalDate(value: unknown, detail: string): string | undefined {
-  const text = optionalString(value, detail);
+  const text = optionalString(value, detail, 64);
   if (text === undefined) return undefined;
   if (Number.isNaN(Date.parse(text))) throw new EventPayloadError(detail);
   return text;
@@ -59,17 +66,17 @@ export function parseEventCallbackPayload(raw: Buffer | string): EventCallbackPa
   }
   if (!isRecord(parsed)) throw new EventPayloadError('body');
 
-  const eventType = requireString(parsed.eventType, 'eventType');
+  const eventType = requireString(parsed.eventType, 'eventType', 64);
   if (eventType !== 'pull_request') {
     throw new EventPayloadError('eventType');
   }
-  const eventId = requireString(parsed.eventId, 'eventId');
+  const eventId = requireString(parsed.eventId, 'eventId', 200);
   const occurredAt = optionalDate(parsed.occurredAt, 'occurredAt');
 
   if (!isRecord(parsed.payload)) throw new EventPayloadError('payload');
   const payload = parsed.payload;
-  const pullRequestId = requireString(payload.pullRequestId, 'payload.pullRequestId');
-  const reviewState = requireString(payload.reviewState, 'payload.reviewState');
+  const pullRequestId = requireString(payload.pullRequestId, 'payload.pullRequestId', 512);
+  const reviewState = requireString(payload.reviewState, 'payload.reviewState', 64);
 
   return {
     eventType: 'pull_request',
@@ -78,10 +85,10 @@ export function parseEventCallbackPayload(raw: Buffer | string): EventCallbackPa
     payload: {
       pullRequestId,
       reviewState,
-      prUrl: optionalString(payload.prUrl, 'payload.prUrl'),
-      action: optionalString(payload.action, 'payload.action'),
-      comment: optionalString(payload.comment, 'payload.comment'),
-      reviewer: optionalString(payload.reviewer, 'payload.reviewer'),
+      prUrl: optionalString(payload.prUrl, 'payload.prUrl', 2048),
+      action: optionalString(payload.action, 'payload.action', 64),
+      comment: optionalString(payload.comment, 'payload.comment', 64_000),
+      reviewer: optionalString(payload.reviewer, 'payload.reviewer', 256),
       submittedAt: optionalDate(payload.submittedAt, 'payload.submittedAt'),
     },
   };

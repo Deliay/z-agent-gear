@@ -56,7 +56,7 @@ npm run preview  # Preview production build
 - **工作区/工作流列表实时刷新**：`NewSessionDialog` 的 `GET_CONTROLLER_WORKSPACES_ENABLED`、`InstantiateWorkflowDialog` 的来源查询、`WorkflowSection` 的来源列表统一 `cache-and-network` + 打开/挂载 `refetch()`；加载分支只认 `loading && !data`，刷新期间不卸载表单、不清空输入，失败展示「刷新失败，可重试」并保留旧列表。
 - **默认 MCP 预选**：按 `controller.defaultMcp` 在「打开 / 切换控制器」时计算一次（`useAllEnabled=false` 取 `serverIds` 与已启用集合交集，否则全部已启用）；用户调整后后台轮询不得覆盖。提交时**显式传数组**：`[]` = 不注入，`undefined` 才走服务端默认。
 - **默认 MCP 设置**：控制器配置页「默认 MCP」页签（`McpDefaultSection`）保存 `SET_CONTROLLER_DEFAULT_MCP`；`MCP_SERVER_NOT_FOUND` 映射为「所选 MCP 已停用或不存在，请重新选择」，成功后提示「对后续新建会话生效」。移动端 tab 常驻滚动容器外。
-- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 在既有 7 个位置参数后追加 `modeId?/modelId?`，`Sidebar` 与 `SessionPage` 两个调用点同步透传。
+- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 为 9 个位置参数（`controllerId, acpServerType, workspaceId, enableWorktree?, worktreeBranchSuffix?, mcpServerIds?, existingWorktreePath?, modeId?, modelId?`），三个调用点 `Sidebar`、`SessionPage`、`WorktreeSidebarGroup` 必须同步透传全部参数（`WorktreeSidebarGroup` 的 `existingWorktreePath` 回退预选路径）；每个调用点保留映射单测，防止位置参数演进漏改。
 
 ## 云电脑（Cloud Host）约定
 

@@ -71,7 +71,9 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
 
       // 预装工作负载来自 cloudHostWorkloadCatalog（迁移 001/002/007 seed）
       await expect(dialog.getByText('预装工作负载（可选）')).toBeVisible();
@@ -181,7 +183,6 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toHaveCount(0);
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
       const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
@@ -450,7 +451,7 @@ async function cleanupHost(
 test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
 
-  test('P10-CH1: 未选项目 → 不弹四阶段进度框，ready 后自动建默认会话（旧入口零回归）', async ({ page }) => {
+  test('P10-CH1: 未选项目 → 不弹四阶段进度框，就绪后不预置工作区/不自动建会话（phase2 零回归）', async ({ page }) => {
     test.skip(!MONGO_URI || !INTERNAL_TOKEN, '需要 MONGODB_URI + INTERNAL_API_TOKEN');
     test.setTimeout(90_000);
     const { token, username } = await registerUser(page);
@@ -463,7 +464,9 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       const dialog = page.getByRole('dialog');
       await dialog.locator('#cloud-host-name').fill(name);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
       await expect(dialog.getByRole('checkbox', { name: '配置 Github 项目' })).not.toBeChecked();
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
@@ -477,6 +480,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       });
       expect(ready.status()).toBe(200);
 
+      // phase2：workspaceId 为 null → 不创建默认工作区、也不自动创建默认会话
       const db = (await phase10Db())!;
       const deadline = Date.now() + 15000;
       let hostDoc: any = null;
@@ -484,19 +488,24 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
         hostDoc = await db.collection('cloudhosts').findOne({
           _id: new mongoose.Types.ObjectId(host.id),
         });
-        if (hostDoc?.defaultSessionId) break;
+        if (hostDoc?.status === 'RUNNING') break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       expect(hostDoc?.status).toBe('RUNNING');
-      expect(hostDoc?.defaultSessionId).toBeTruthy();
+      expect(hostDoc?.workspaceId ?? null).toBeNull();
+      expect(hostDoc?.defaultSessionId ?? null).toBeNull();
       const sessions = await db.collection('sessions').countDocuments({
         controllerId: new mongoose.Types.ObjectId(host.controllerId),
       });
-      expect(sessions).toBe(1);
+      expect(sessions).toBe(0);
 
       await page.reload();
-      await expect(page.locator(sidebar()).getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
-      await expect(page.locator(sidebar()).getByText('New Session').first()).toBeVisible();
+      const controllerRow = page.locator(sidebar()).locator('li', { hasText: name });
+      await expect(controllerRow).toBeVisible({ timeout: 15000 });
+      await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveText(
+        '未创建默认工作区，请先创建或绑定工作区',
+      );
+      await expect(controllerRow.getByTestId('cloud-host-default-session-hint')).toHaveCount(0);
     } finally {
       await cleanupHost(page, token, name);
     }
@@ -596,8 +605,8 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       const retry = page.getByRole('button', { name: '重试', exact: true });
       await expect(retry).toBeVisible();
       await retry.click();
-      // 重试入口已触发；随后 operation 重新进入 RUNNING/FAILED 均由后端驱动
-      await expect(page.getByRole('heading', { name: '设置进度' })).toBeVisible();
+      // C-23：点击后必须观察到操作重新进入 RUNNING（而不是点击前就已存在的终态）
+      await expect(steps.getByText('进行中').first()).toBeVisible({ timeout: 15000 });
     } finally {
       await cleanupHost(page, token, name);
     }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { GET_MCP_SERVERS, GET_CONTROLLERS } from '@/graphql/queries'
@@ -63,10 +63,13 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const [useAllEnabled, setUseAllEnabled] = useState(defaultMcp?.useAllEnabled !== false)
   const [serverIds, setServerIds] = useState<string[]>(defaultMcp?.serverIds ?? [])
   const [error, setError] = useState<string | null>(null)
+  // C-18：用户已编辑但未保存时，后台轮询/父级刷新不得覆盖表单
+  const dirtyRef = useRef(false)
 
   // 控制器数据刷新后同步服务端权威值（保存成功由 mutation 结果/refetch 驱动）
   const serverIdsKey = (defaultMcp?.serverIds ?? []).join(',')
   useEffect(() => {
+    if (dirtyRef.current) return
     setUseAllEnabled(defaultMcp?.useAllEnabled !== false)
     setServerIds(defaultMcp?.serverIds ?? [])
     setError(null)
@@ -83,6 +86,7 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const staleIds = serverIds.filter((id) => !servers.some((s) => s.id === id))
 
   const toggleServer = (serverId: string, checked: boolean) => {
+    dirtyRef.current = true
     setServerIds((prev) =>
       checked ? [...prev.filter((id) => id !== serverId), serverId] : prev.filter((id) => id !== serverId),
     )
@@ -118,7 +122,10 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
             type="checkbox"
             aria-label="默认注入全部 MCP"
             checked={useAllEnabled}
-            onChange={(event) => setUseAllEnabled(event.target.checked)}
+            onChange={(event) => {
+              dirtyRef.current = true
+              setUseAllEnabled(event.target.checked)
+            }}
             className="mt-0.5 h-4 w-4 shrink-0"
           />
           <span className="min-w-0">

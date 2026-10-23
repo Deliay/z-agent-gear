@@ -146,6 +146,11 @@ describe('CloudHostGithubService', () => {
       { _id: 'op1' },
       { $set: { status: 'SUCCEEDED', sessionId: 'session-1', error: null } },
     );
+    // R-7：Git 项目设置创建默认工作区后回写 workspaceId（仅空时），hasDefaultWorkspace 随之翻转
+    expect(CloudHost.updateOne).toHaveBeenCalledWith(
+      { _id: HOST_ID, workspaceId: null },
+      { $set: { workspaceId: 'ws-1' } },
+    );
     // D2：项目会话成功后 CAS 回填 defaultSessionId（仅空时）
     expect(CloudHost.updateOne).toHaveBeenCalledWith(
       { _id: HOST_ID, defaultSessionId: null },
@@ -333,7 +338,8 @@ describe('CloudHostGithubService', () => {
       ]);
     });
 
-    it('T-CHG-P1b: 默认前缀（迁移 008 后）拼出单层目录', async () => {      const { service } = makeService();
+    it('T-CHG-P1d: 默认前缀（迁移 008 后）拼出单层目录', async () => {
+      const { service } = makeService();
       await service.createOperation({
         userId: USER_ID,
         controllerId: CONTROLLER_ID,

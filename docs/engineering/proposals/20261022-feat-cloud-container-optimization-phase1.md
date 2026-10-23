@@ -12,6 +12,8 @@ type: Permanent
 **作者**: ZeroAsh Agent
 **feat-branch**: `feat/cloud-container-optimization-phase1`
 
+> v1.2 变更（集成验收返工）：失效策略按实现收窄并回写——用户级模型变更立即失效；后台（系统内置 / global）模型变更**由 300s TTL 兜底**，不实现跨服务 Redis 失效钩子，用户可通过「刷新」按钮立即重取。理由：admin-api 与 agent-api 分属不同服务且 admin-api 未持有 Redis 客户端，跨服务钩子的运维成本高于 5 分钟陈旧窗口，且「刷新」按钮已覆盖即时性诉求。
+>
 > v1.1 变更（评审返工）：① 「创建云电脑 + Github 项目准备」由后端 ready 回调编排改为**前端调用 API 编排**（`createCloudHost` → 轮询就绪 → `setupCloudHostGithubProject`），进度展示**复用安装工作负载 / Git 设置的进度对话框**，云电脑创建作为其中第一个阶段；② 模式/模型探测缓存由 1h 调整为 **5 分钟**，模型列表新增/启用/禁用/删除后**立即清空缓存**，并在新建会话与工作流节点配置两处增加**「刷新」按钮**（点击即清缓存并重新获取）。
 
 ## 1. 概述
@@ -283,7 +285,7 @@ extend type Mutation {
 
 | 触发 | 处理 |
 |------|------|
-| 用户在模型列表**新增 / 启用 / 禁用 / 删除**模型 | agent-api 模型管理 mutation 成功后调用 `invalidateAcpOptionsCache(...)`：删除受影响的 `acp:options:<controllerId>:<serverType>` key（用户级模型变更删该用户全部控制器的 key；系统内置模型变更删全部用户的 key） |
+| 用户在模型列表**新增 / 启用 / 禁用 / 删除**模型 | agent-api 用户级模型 mutation 成功后调用 `invalidateAcpOptionsForUser(...)`：删除该用户全部控制器的 `acp:options:<controllerId>:*`。后台（系统内置 / global）模型由 admin-api 管理，跨服务不主动失效，交由 300s TTL 兜底（v1.2 取舍，见文首变更说明） |
 | 用户点击**「刷新」按钮** | 前端调用 `refreshAcpServerOptions(controllerId, acpServerType)`：服务端先删 key 再立即重新探测并返回 |
 | TTL 到期（5 分钟） | 自然过期，下次访问触发重新探测 |
 
@@ -386,7 +388,7 @@ sequenceDiagram
   - 前端 `NewSessionDialog` 在控制器 + 工具确定后发起 `GetAcpServerOptions`（与 `WorkflowGraphEditor.AgentNodeOptionFields` 同源同写法）：loading 提示「正在探测可用模式与模型…」，渲染下拉（首项「默认」= 留空不传），无选项时仅「默认」不阻断创建。
   - 契约 `CreateSessionInput.modeId/modelId` → resolver → `SessionService.create` 内参（已存在）→ Redis `acp:start`（已支持），controller-api/agent-controller 链路零改动。
   - **缓存 5 分钟**：controller-api `acp-options-prober.handleProbeResult` 写入 `acp:options:<controllerId>:<serverType>` 的 TTL 由 3600s 调整为 300s（失败缓存保持 60s）；agent-api `SessionService.getAcpServerOptions` 的缓存优先读逻辑不变。
-  - **模型库变化即失效**：agent-api 模型管理相关 mutation（新增模型 / 启用 / 禁用 / 删除，含用户模型与系统内置模型）成功后调用 `invalidateAcpOptionsCache(...)` 删除受影响的探测 key：用户级变更删该用户全部 `acp:options:<controllerId>:*`，系统内置变更删全部用户的 key（SCAN 匹配或按 controllerId 枚举，二选一在实现期定，单测覆盖两个分支的归属判定）。
+  - **用户级模型变化即失效**：agent-api 用户级模型 mutation（新增 / 启用 / 禁用 / 删除 / 排序）成功后调用 `invalidateAcpOptionsForUser(...)` 删除该用户全部 `acp:options:<controllerId>:*`。后台（系统内置 / global）模型由 admin-api 独立管理，跨服务不主动失效，由 300s TTL 兜底；两处选择器均提供「刷新」按钮立即重取（v1.2 取舍）。
   - **「刷新」按钮**：`NewSessionDialog` 与 `WorkflowGraphEditor.AgentNodeOptionFields`（`ConfigureWorkflowDialog` / `InstantiateWorkflowDialog` / `EditInstanceNodeDialog` 共用）的模式/模型选择区各加一个刷新按钮，点击调用 `refreshAcpServerOptions(controllerId, acpServerType)`（服务端先删缓存再重探测并返回），结果就地替换选项列表；探测期间按钮转 loading，失败保留旧选项并提示。
   - 遵循 backend-rules「能力探测」：配置阶段无会话可查，只走空实例探测，不编造 pre-session 能力数据。
 - **风险点**: 探测失败/超时（既有实现返回空列表）不得阻断建会话；模型变更失效若漏掉系统内置模型的全局影响，会出现「删了模型还能选到」的陈旧选项——失效范围判定必须有单测；高频点刷新会拉起空实例探测，按钮在探测进行中禁用以防连点。

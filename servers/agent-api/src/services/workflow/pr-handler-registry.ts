@@ -1,4 +1,5 @@
 import { WorkflowPrHandler, type PrHandlerUnregisterReason } from '../../models/workflow-pr-handler.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { workflowEngine } from './engine.js';
 
 /** PR 标识无法归一化（工具层映射为 INVALID_PARAMS） */
@@ -76,10 +77,6 @@ function build(owner: string, repo: string, numberText: string): NormalizedPullR
   };
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function lowerId(id: string): string {
   return id.toLowerCase();
 }
@@ -95,6 +92,9 @@ export interface RegisterPrHandlerInput {
   prUrl?: string | null;
   sessionId?: string | null;
 }
+
+/** 同实例+节点的注册串行化（C-6：delete-then-upsert 并发可能双存活）。 */
+const registerMutex = new KeyedMutex();
 
 /** PR 联动登记：Mongo 持久化 + 进程内索引（仅加速，查询以 DB 为准）。 */
 class PrHandlerRegistry {
@@ -115,14 +115,20 @@ class PrHandlerRegistry {
 
   /** 注册（同节点换 PR 时旧登记标记 REPLACED 并删除） */
   async register(input: RegisterPrHandlerInput): Promise<HandlerDoc> {
+    const key = `${String(input.workflowInstanceId)}:${String(input.nodeId)}`;
+    return registerMutex.runExclusive(key, () => this.registerUnlocked(input));
+  }
+
+  private async registerUnlocked(input: RegisterPrHandlerInput): Promise<HandlerDoc> {
     const normalized = normalizePullRequestId(input.pullRequestId);
     const pullRequestId = normalized.pullRequestId;
+    const pullRequestIdLower = lowerId(pullRequestId);
     const prUrl = input.prUrl || normalized.prUrl;
 
     await WorkflowPrHandler.deleteMany({
       workflowInstanceId: input.workflowInstanceId,
       nodeId: input.nodeId,
-      pullRequestId: { $ne: pullRequestId },
+      pullRequestIdLower: { $ne: pullRequestIdLower },
     });
 
     let row: HandlerDoc | null = null;
@@ -140,6 +146,7 @@ class PrHandlerRegistry {
             nodeId: input.nodeId,
             nodeKey: input.nodeKey ?? null,
             pullRequestId,
+            pullRequestIdLower,
             prUrl,
             registeredBySessionId: input.sessionId ?? null,
           },
@@ -167,22 +174,28 @@ class PrHandlerRegistry {
     return row;
   }
 
-  /** 按 PR 查登记（大小写不敏感） */
+  /** 按登记 ID 重读（事件处理器在实例锁内做幂等判定，避免锁外陈旧快照 TOCTOU） */
+  async findById(id: string): Promise<HandlerDoc | null> {
+    return (await WorkflowPrHandler.findById(id).lean()) as unknown as HandlerDoc | null;
+  }
+
+  /** 按 PR 查登记（大小写不敏感，小写列精确匹配走索引） */
   async findByPullRequestId(pullRequestId: string): Promise<HandlerDoc[]> {
     const normalized = normalizePullRequestId(pullRequestId).pullRequestId;
     const rows = (await WorkflowPrHandler.find({
-      pullRequestId: { $regex: `^${escapeRegExp(normalized)}$`, $options: 'i' },
+      pullRequestIdLower: lowerId(normalized),
     })
       .sort({ createdAt: 1 })
       .lean()) as unknown as HandlerDoc[];
 
     for (const row of rows) this.indexOne(row);
-    // 合并进程内索引（DB 为准，索引补位）
+    // 合并进程内索引（DB 为准，索引补位）：索引行先入，DB 行后入覆盖同 _id 的陈旧内存行，
+    // 避免已删除/已更新的登记从索引「复活」。
     const merged = new Map<string, HandlerDoc>();
-    for (const row of rows) merged.set(String(row._id), row);
     for (const row of this.index.get(lowerId(normalized))?.values() ?? []) {
       merged.set(String(row._id), row);
     }
+    for (const row of rows) merged.set(String(row._id), row);
     return [...merged.values()];
   }
 

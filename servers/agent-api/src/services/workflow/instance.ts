@@ -445,6 +445,18 @@ class WorkflowInstanceService {
     return updated;
   }
 
+  /** 系统内部移除追加提示词（事件处理器回滚专用）：仅允许 SYSTEM_PROMPT_KEYS。 */
+  async removeSystemAdditionalPrompt(instanceId: string, key: string) {
+    if (!(SYSTEM_PROMPT_KEYS as readonly string[]).includes(key)) {
+      throw new Error('仅允许系统内部移除保留的追加提示词 key');
+    }
+    await WorkflowInstance.updateOne(
+      { _id: instanceId, deletedAt: null },
+      { $unset: { [`additionalPrompts.${key}`]: 1 } },
+    );
+    await this.invalidateInstanceCache(instanceId);
+  }
+
   /** 重算 github-pr 指引：存在任一勾选联动的人类节点则写入，全部取消则移除（内部入口，绕过系统键校验） */
   async syncGithubPrPrompt(instanceId: string): Promise<boolean> {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, deletedAt: null }).lean();

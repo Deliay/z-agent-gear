@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
+import { toast } from 'sonner';
 import { GET_SESSIONS, GET_CONTROLLERS } from '../graphql/queries';
 import { CREATE_SESSION } from '../graphql/mutations';
 import type { GetControllersQuery, CreateSessionMutation } from '../graphql/types';
@@ -23,6 +24,7 @@ export default function SessionPage() {
     enableWorktree?: boolean,
     worktreeBranchSuffix?: string,
     mcpServerIds?: string[],
+    existingWorktreePath?: string,
     modeId?: string,
     modelId?: string,
   ) => {
@@ -33,10 +35,11 @@ export default function SessionPage() {
             controllerId,
             acpServerType,
             workspaceId,
-            enableWorktree: enableWorktree || false,
+            enableWorktree: existingWorktreePath ? false : (enableWorktree || false),
             worktreeBranchSuffix: worktreeBranchSuffix || null,
             // 显式空数组 = 不注入；undefined 走控制器默认
             mcpServerIds: mcpServerIds === undefined ? null : mcpServerIds,
+            existingWorktreePath: existingWorktreePath || null,
             modeId: modeId || null,
             modelId: modelId || null,
           },
@@ -48,6 +51,8 @@ export default function SessionPage() {
       }
     } catch (error) {
       console.error('Failed to create session:', error);
+      // C-19：创建失败不能静默
+      toast.error(error instanceof Error ? error.message : '创建会话失败，请重试');
     }
   };
 

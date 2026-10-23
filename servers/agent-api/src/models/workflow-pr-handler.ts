@@ -16,8 +16,10 @@ const workflowPrHandlerSchema = new mongoose.Schema(
     workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance', required: true },
     nodeId: { type: String, required: true },
     nodeKey: { type: String, default: null },
-    // 归一化 owner/repo#number
+    // 归一化 owner/repo#number（保留原始大小写）
     pullRequestId: { type: String, required: true },
+    // 小写归一（事件入口精确匹配走索引，避免大小写不敏感 regex 全表扫描）
+    pullRequestIdLower: { type: String, required: true },
     prUrl: { type: String, default: null },
     registeredBySessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
     // 最近已处理事件 ID（幂等位）
@@ -29,6 +31,8 @@ const workflowPrHandlerSchema = new mongoose.Schema(
 
 // 事件入口按 PR 查登记
 workflowPrHandlerSchema.index({ pullRequestId: 1 });
+// 事件入口大小写不敏感精确匹配（小写归一列）
+workflowPrHandlerSchema.index({ pullRequestIdLower: 1 });
 // 实例联动列表 / 注销
 workflowPrHandlerSchema.index({ workflowInstanceId: 1 });
 // 并发注册兜底

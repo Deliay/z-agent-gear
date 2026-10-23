@@ -10,8 +10,8 @@ import { createHmac } from 'node:crypto';
  * 并配置 `EVENT_CALLBACK_TOKEN`；缺失时整套跳过。
  * fake controller 经主 WebSocket 自动应答 acp:start/acp:resume，并记录节点作用域 token。
  */
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 const API_BASE = AGENT_API_URL.replace(/\/graphql$/, '');
 const CALLBACK_URL = `${API_BASE}/api/events/callback`;
 const EVENT_TOKEN = process.env.EVENT_CALLBACK_TOKEN ?? '';
@@ -568,6 +568,15 @@ async function waitForMessage(ctx: Ctx, sessionId: string, needle: string): Prom
   throw new Error(`timeout waiting message "${needle}" in ${sessionId}. Got: ${text.slice(-500)}`);
 }
 
+// C-24：缺参即绿的 skipIf 需要 fail-fast 哨兵。CI 下未配置 token 且未显式 SKIP_PR_CALLBACK=1 时红。
+describe('PR 回调环境哨兵', () => {
+  it('CI 下 EVENT_CALLBACK_TOKEN 必须配置（SKIP_PR_CALLBACK=1 可显式跳过）', () => {
+    if (process.env.SKIP_PR_CALLBACK === '1') return;
+    if (!process.env.CI) return;
+    expect(EVENT_TOKEN).toBeTruthy();
+  });
+});
+
 describe.skipIf(!EVENT_TOKEN)('工作流 PR 事件回调（T-PR1~T-PR3）', () => {
   it('T-PR1 鉴权：无凭据/错误 token 401，正确 token 200', async () => {
     expect((await postEvent(eventBody('Deliay/z-agent-gear#999', 'approved'), { 'X-Event-Token': 'wrong-token' })).status).toBe(401);
@@ -579,8 +588,8 @@ describe.skipIf(!EVENT_TOKEN)('工作流 PR 事件回调（T-PR1~T-PR3）', () =
 
     const ok = await postEvent(eventBody('Deliay/z-agent-gear#999', 'approved'));
     expect(ok.status).toBe(200);
-    expect(ok.body).toHaveProperty('handled');
-    expect(ok.body).toHaveProperty('results');
+    expect(typeof ok.body.handled).toBe('boolean');
+    expect(Array.isArray(ok.body.results)).toBe(true);
   });
 
   it('T-PR1 Authorization Bearer 与 HMAC 验签', async () => {
@@ -896,7 +905,8 @@ describe.skipIf(!EVENT_TOKEN)('工作流 PR 联动（T-PR4~T-PR18）', () => {
     expect(inst.pullRequestLinks).toEqual([]);
     const finishedResult = await postEvent(eventBody(finishedPr, 'approved'));
     expect(finishedResult.body.handled).toBe(false);
-    expect(['NO_HANDLER', 'INSTANCE_FINISHED']).toContain(finishedResult.body.reason);
+    // 完成后 hook 已注销全部关联：事件入口应为 NO_HANDLER（精确值，不用 allowlist）
+    expect(finishedResult.body.reason).toBe('NO_HANDLER');
   }, 60_000);
 
   it('T-PR14 github-pr 注入/移除：未勾选无、勾选出现一次、全部取消移除', async () => {

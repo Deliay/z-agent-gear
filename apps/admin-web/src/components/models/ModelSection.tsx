@@ -208,9 +208,14 @@ export default function ModelSection() {
     }
   }
 
-  const enabledProviders = (providersData?.adminProviders ?? [])
-    .filter((p) => p.isEnabled)
-    .map((p) => ({ id: p.id, name: p.name }))
+  // R-10：派生数组必须 memo，否则父级任何重渲染都会让 CustomModelDialog 的重置 effect 重跑
+  const enabledProviders = useMemo(
+    () =>
+      (providersData?.adminProviders ?? [])
+        .filter((p) => p.isEnabled)
+        .map((p) => ({ id: p.id, name: p.name })),
+    [providersData],
+  )
 
   return (
     <section className="space-y-4">

@@ -45,7 +45,10 @@ export async function invalidateAcpOptionsForController(controllerId: string): P
 
 /**
  * 失效某用户全部控制器的工具选项缓存。
- * 枚举该用户的 controllerId 后逐个 SCAN 删除（系统内置模型的全局变更由 5 分钟 TTL 兜底）。
+ * 枚举该用户的 controllerId 后逐个 SCAN 删除。
+ *
+ * 注意：后台（系统内置 / global）模型由 admin-api 独立管理，跨服务不主动失效，
+ * 最长由 300s TTL 兜底；用户可点「刷新」立即重取。该取舍已回写 PRD v1.2 与技术提案 v1.2。
  */
 export async function invalidateAcpOptionsForUser(userId: string): Promise<number> {
   let controllers: Array<{ _id: unknown }>;

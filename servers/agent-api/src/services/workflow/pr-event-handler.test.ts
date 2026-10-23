@@ -10,6 +10,7 @@ vi.mock('./pr-handler-registry.js', async (importOriginal) => {
     ...actual,
     prHandlerRegistry: {
       findByPullRequestId: vi.fn(),
+      findById: vi.fn(),
       unregisterByInstance: vi.fn(),
       markEventHandled: vi.fn(),
     },
@@ -20,6 +21,7 @@ vi.mock('./instance.js', () => ({
   workflowInstanceService: {
     setAdditionalPrompt: vi.fn(),
     setSystemAdditionalPrompt: vi.fn(),
+    removeSystemAdditionalPrompt: vi.fn(),
     completeHumanNode: vi.fn(),
     rejectNode: vi.fn(),
   },
@@ -85,8 +87,11 @@ describe('handlePullRequestEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(prHandlerRegistry.findByPullRequestId).mockResolvedValue([handler()] as never);
+    vi.mocked(prHandlerRegistry.findById).mockResolvedValue(handler() as never);
+    vi.mocked(prHandlerRegistry.markEventHandled).mockResolvedValue(undefined as never);
     loadInstance(linear());
     vi.mocked(workflowInstanceService.setSystemAdditionalPrompt).mockResolvedValue({} as never);
+    vi.mocked(workflowInstanceService.removeSystemAdditionalPrompt).mockResolvedValue(undefined as never);
     vi.mocked(workflowInstanceService.completeHumanNode).mockResolvedValue({} as never);
     vi.mocked(workflowInstanceService.rejectNode).mockResolvedValue({} as never);
   });
@@ -112,8 +117,11 @@ describe('handlePullRequestEvent', () => {
 
   it('DUPLICATE_EVENT 优先于节点判定', async () => {
     vi.mocked(prHandlerRegistry.findByPullRequestId).mockResolvedValue([
-      handler({ lastEventId: 'evt-1' }),
+      handler(),
     ] as never);
+    vi.mocked(prHandlerRegistry.findById).mockResolvedValue(
+      handler({ lastEventId: 'evt-1' }) as never,
+    );
     loadInstance(instance([node('n9', 'AI', 'RUNNING')]));
     const result = await handlePullRequestEvent(event('approved'));
     expect(result.results[0].reason).toBe('DUPLICATE_EVENT');
@@ -193,6 +201,34 @@ describe('handlePullRequestEvent', () => {
     expect(result.results[0].reason).toBe('HANDLER_FAILED');
     expect(result.results[0].registeredNodeId).toBe('n1');
     expect(warn).toHaveBeenCalled();
+    // C-3：流转失败回滚已写入的系统提示词
+    expect(workflowInstanceService.removeSystemAdditionalPrompt).toHaveBeenCalledWith(
+      'inst-1',
+      'github-pr-review',
+    );
+  });
+
+  it('R-8: 同一 eventId 并发重复投递恰一次完成，另一次 DUPLICATE_EVENT（无 HANDLER_FAILED）', async () => {
+    let lastEventId: string | null = null;
+    vi.mocked(prHandlerRegistry.findById).mockImplementation(async () =>
+      handler({ lastEventId }) as never,
+    );
+    vi.mocked(prHandlerRegistry.markEventHandled).mockImplementation(
+      async (_id, eventId) => {
+        lastEventId = eventId;
+      },
+    );
+
+    const [first, second] = await Promise.all([
+      handlePullRequestEvent(event('approved')),
+      handlePullRequestEvent(event('approved')),
+    ]);
+
+    const results = [...first.results, ...second.results];
+    expect(results.filter((r) => r.action === 'COMPLETE_HUMAN_NODE')).toHaveLength(1);
+    expect(results.filter((r) => r.reason === 'DUPLICATE_EVENT')).toHaveLength(1);
+    expect(results.some((r) => r.reason === 'HANDLER_FAILED')).toBe(false);
+    expect(workflowInstanceService.completeHumanNode).toHaveBeenCalledTimes(1);
   });
 
   it('同一 PR 关联两个实例：各自处理并汇总 results', async () => {
@@ -200,6 +236,11 @@ describe('handlePullRequestEvent', () => {
       handler({ _id: 'h1', workflowInstanceId: oid('inst-1') }),
       handler({ _id: 'h2', workflowInstanceId: oid('inst-2') }),
     ] as never);
+    vi.mocked(prHandlerRegistry.findById).mockImplementation(async (id) =>
+      (id === 'h2'
+        ? handler({ _id: 'h2', workflowInstanceId: oid('inst-2') })
+        : handler({ _id: 'h1', workflowInstanceId: oid('inst-1') })) as never,
+    );
     vi.mocked(WorkflowInstance.findById).mockImplementation(((id: string) =>
       ({
         lean: vi.fn().mockResolvedValue(

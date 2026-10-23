@@ -352,7 +352,18 @@ export class CloudHostGithubService {
         acpServerType: 'opencode',
       });
       // D2：项目会话成功后回填云电脑默认会话（CAS：仅当仍为空，避免覆盖既有默认会话）。
+      // phase2：Git 项目设置是创建默认工作区的唯一入口，同时回写 workspaceId，
+      // 使 hasDefaultWorkspace / defaultWorkspace 反映真实工作区（CAS：不覆盖既有绑定）。
       if (op.hostId) {
+        await CloudHost.updateOne(
+          { _id: op.hostId, workspaceId: null },
+          { $set: { workspaceId: workspace.id } },
+        ).catch((err) => {
+          console.warn(
+            '[cloud-host-github] backfill workspaceId failed:',
+            (err as Error).message,
+          );
+        });
         await CloudHost.updateOne(
           { _id: op.hostId, defaultSessionId: null },
           { $set: { defaultSessionId: session.id } },

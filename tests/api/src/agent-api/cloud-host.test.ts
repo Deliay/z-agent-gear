@@ -740,7 +740,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
         key: string;
         status: string;
       }>;
-      expect(steps.find((step) => step.key === 'session')?.status).not.toBe('SKIPPED');
+      expect(steps.find((step) => step.key === 'session')?.status).toBe('PENDING');
     } finally {
       await github.cleanup();
       await seeded.cleanup();

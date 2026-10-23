@@ -352,7 +352,10 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示自动建会话、提交后 Sidebar 云图标 + 启动中 |
+| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| E2E-1 | 普通创建不预置默认工作区、不自动建会话；ready 后展示无工作区提示，defaultSessionId/workspaceId 为 null |
+| P10-CH1 | 未选 Github 项目 → 不弹四阶段进度框；ready 后 phase2 语义（无默认工作区/无默认会话，sessions=0） |
+| P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |
 | T-AW6/T-AW7/T-AW9 | 配置页状态/工作区+Harness 两栏；无活动会话直接停止；已销毁无再次启动；终态可删除并移出列表 |
 | T-AW10 | 已销毁云电脑会话只读回看：无输入框/发送/继续，历史消息保留 |
 

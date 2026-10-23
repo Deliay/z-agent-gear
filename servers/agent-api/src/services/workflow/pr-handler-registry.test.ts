@@ -82,11 +82,17 @@ describe('prHandlerRegistry', () => {
     expect(WorkflowPrHandler.deleteMany).toHaveBeenCalledWith({
       workflowInstanceId: 'inst-1',
       nodeId: 'n2',
-      pullRequestId: { $ne: 'Deliay/z-agent-gear#264' },
+      pullRequestIdLower: { $ne: 'deliay/z-agent-gear#264' },
     });
     expect(WorkflowPrHandler.findOneAndUpdate).toHaveBeenCalledWith(
       { workflowInstanceId: 'inst-1', nodeId: 'n2', pullRequestId: 'Deliay/z-agent-gear#264' },
-      { $set: expect.objectContaining({ nodeKey: 'design', registeredBySessionId: 'sess-1' }) },
+      {
+        $set: expect.objectContaining({
+          nodeKey: 'design',
+          registeredBySessionId: 'sess-1',
+          pullRequestIdLower: 'deliay/z-agent-gear#264',
+        }),
+      },
       { upsert: true, new: true },
     );
     expect(result.pullRequestId).toBe('Deliay/z-agent-gear#264');
@@ -102,9 +108,12 @@ describe('prHandlerRegistry', () => {
     expect(result._id).toBe('h1');
   });
 
-  it('findByPullRequestId 大小写不敏感并返回空数组', async () => {
+  it('findByPullRequestId 使用小写列精确匹配（走索引）并返回空数组', async () => {
     vi.mocked(WorkflowPrHandler.find).mockReturnValue(sortable([row()]) as never);
     await expect(prHandlerRegistry.findByPullRequestId('deliay/z-agent-gear#264')).resolves.toHaveLength(1);
+    expect(WorkflowPrHandler.find).toHaveBeenLastCalledWith({
+      pullRequestIdLower: 'deliay/z-agent-gear#264',
+    });
 
     vi.mocked(WorkflowPrHandler.find).mockReturnValue(sortable([]) as never);
     await expect(prHandlerRegistry.findByPullRequestId('a/b#1')).resolves.toEqual([]);

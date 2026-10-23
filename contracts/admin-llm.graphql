@@ -147,6 +147,6 @@ type Mutation {
   deleteGlobalModel(id: ID!): Model!
   toggleGlobalModel(id: ID!): Model!
   updateGlobalModelSortOrder(ids: [ID!]!): [Model!]!
-  # 更新模型最长上下文（token）；传 null 表示清空（回到「未设置」）
+  # 更新模型最长上下文（token）；缺省或传 null 均表示清空（回到「未设置」）
   updateModelContextLength(modelId: ID!, contextLength: Int): Model!
 }

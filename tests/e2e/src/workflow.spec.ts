@@ -628,12 +628,13 @@ async function waitForNodeStatus(
   instanceId: string,
   nodeKey: string,
   status: string,
-) {
-  return waitFor(async () => {
+): Promise<InstanceNode> {
+  // waitFor 超时会抛错，成功分支必非空
+  return (await waitFor(async () => {
     const inst = await getInstance(page, token, instanceId);
     const node = inst.nodes.find((n) => n.nodeKey === nodeKey);
     return node?.status === status ? node : null;
-  }, 15000, `${nodeKey}=${status}`);
+  }, 15000, `${nodeKey}=${status}`))!;
 }
 
 /** 完成 input 并返回 exec 的 acp:start（含节点作用域 token） */
@@ -2463,11 +2464,11 @@ test.describe('Workflow PR 联动 E2E', () => {
       15000,
       'exec acp:start',
     );
-    const promptText = await waitFor(async () => {
+    const promptText = (await waitFor(async () => {
       const texts = await getSessionMessagesText(page, env.token, execStart.sessionId);
       const joined = texts.join('\n');
       return joined.includes('## GitHub Pull Request 联动') ? joined : null;
-    }, 15000, 'github-pr prompt');
+    }, 15000, 'github-pr prompt'))!;
     expect(promptText.match(/## GitHub Pull Request 联动/g)).toHaveLength(1);
 
     await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
@@ -2497,10 +2498,10 @@ test.describe('Workflow PR 联动 E2E', () => {
     await expect(nodeCard(page, 'PR 审核').getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(nodeCard(page, '后续执行').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
 
-    const inst = await waitFor(async () => {
+    const inst = (await waitFor(async () => {
       const value = await getInstance(page, env.token, env.instanceId);
       return value.nodes.find((n) => n.nodeKey === 'after')?.sessionId ? value : null;
-    }, 15000, 'after session');
+    }, 15000, 'after session'))!;
     const afterNode = inst.nodes.find((n) => n.nodeKey === 'after')!;
     await waitFor(
       () => env.controller.starts.find((s) => s.sessionId === afterNode.sessionId && s.mcpEndpoint?.token),

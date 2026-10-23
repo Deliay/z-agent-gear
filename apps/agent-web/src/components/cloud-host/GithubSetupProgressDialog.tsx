@@ -120,6 +120,8 @@ export default function GithubSetupProgressDialog({
     RETRY_CLOUD_HOST_SETUP_OPERATION,
   )
   const [retryError, setRetryError] = useState<string | null>(null)
+  // C-17：操作进入终态后停止 1.5s 轮询
+  const [pollStopped, setPollStopped] = useState(false)
   const navigatedRef = useRef(false)
   const finishedRef = useRef(false)
   const hostRunningRef = useRef<string | null>(null)
@@ -129,7 +131,7 @@ export default function GithubSetupProgressDialog({
     {
       variables: { id: operationId ?? '' },
       skip: !open || !operationId,
-      pollInterval: 1500,
+      pollInterval: pollStopped ? 0 : 1500,
       fetchPolicy: 'cache-and-network',
     },
   )
@@ -137,7 +139,7 @@ export default function GithubSetupProgressDialog({
   const { data: hostData } = useQuery<CloudHostQuery>(CLOUD_HOST, {
     variables: { id: hostId ?? '' },
     skip: !open || !hostId,
-    pollInterval: 1500,
+    pollInterval: pollStopped ? 0 : 1500,
     fetchPolicy: 'cache-and-network',
   })
 
@@ -150,6 +152,7 @@ export default function GithubSetupProgressDialog({
       finishedRef.current = false
       hostRunningRef.current = null
       setRetryError(null)
+      setPollStopped(false)
     }
   }, [open])
 
@@ -172,6 +175,7 @@ export default function GithubSetupProgressDialog({
       finishedRef.current = true
       onFinished?.(operation)
     }
+    setPollStopped(true)
   }, [open, operation, onFinished])
 
   useEffect(() => {
@@ -182,7 +186,7 @@ export default function GithubSetupProgressDialog({
     // Git 项目设置成功后工作区列表新增条目：刷新首页与控制器工作区查询
     void Promise.resolve(client.refetchQueries({ include: [GET_CONTROLLER_WORKSPACES_ENABLED] }))
       .catch(() => undefined)
-      .then(() => Promise.resolve(refetchHome()))
+      .then(() => Promise.resolve(refetchHome()).catch(() => undefined))
       .finally(() => {
         navigate(`/sessions/${operation.sessionId}`)
         onClose()

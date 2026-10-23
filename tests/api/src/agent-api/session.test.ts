@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '');
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
+const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };

@@ -1,4 +1,5 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { artifactKey, getArtifactKeys, removeKey, addRejectRecord } from './blackboard.js';
 
 /** 引擎可操作的最小节点结构（Mongoose 文档或测试 mock 均可满足） */
@@ -133,6 +134,9 @@ const EVENT_LABEL: Record<WorkflowEvent, string> = {
   restart: '重启节点',
 };
 
+/** 领域层实例锁：事件回调、GraphQL、MCP 与兜底流转共用同一把锁 */
+const transitionMutex = new KeyedMutex();
+
 class WorkflowEngine {
   private hooks: EngineHooks = {};
 
@@ -141,8 +145,25 @@ class WorkflowEngine {
     this.hooks = { ...this.hooks, ...hooks };
   }
 
-  /** 唯一状态转移入口：所有路径（GraphQL mutation / MCP 工具 / 兜底逻辑）统一走此入口 */
+  /**
+   * 唯一状态转移入口：所有路径（GraphQL mutation / MCP 工具 / 事件回调 / 兜底逻辑）统一走此入口。
+   *
+   * R-9：按 `instanceId` 在领域层串行化（findById → mutate → save 读改写），
+   * 覆盖事件驱动与人工/MCP 流转，避免并发互覆节点更新或双触发级联。
+   * 进程内锁，假设 agent-api 单实例部署（与 KeyedMutex 注释同口径）。
+   */
   async transition(
+    instanceId: string,
+    nodeId: string,
+    event: WorkflowEvent,
+    payload: TransitionPayload = {},
+  ): Promise<WorkflowNodeDoc> {
+    return transitionMutex.runExclusive(instanceId, () =>
+      this.transitionUnlocked(instanceId, nodeId, event, payload),
+    );
+  }
+
+  private async transitionUnlocked(
     instanceId: string,
     nodeId: string,
     event: WorkflowEvent,

@@ -55,7 +55,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（34 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（41 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -71,6 +71,7 @@ npm test
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
+| `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token（云电脑 ready/terminal、cloud-host-callback 等内部套件；缺失时相关用例跳过） | - |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC-SHA256 验签密钥（仅 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |

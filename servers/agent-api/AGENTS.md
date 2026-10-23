@@ -41,7 +41,7 @@ src/
 
 - **默认 MCP 口径**：`Controller.defaultMcp`（`{useAllEnabled, serverIds}`）为字段级 resolver，历史行归一为 `{useAllEnabled:true, serverIds:[]}`，并剔除已删除 MCP id。`setControllerDefaultMcp` 校验 `MCP_SERVER_NOT_FOUND` 后落库。
 - **会话注入（`services/session.ts` 的 `resolveInitialMcpServerIds` 纯函数）**：`CreateSessionInput.mcpServerIds` **undefined 才走控制器默认**（`useAllEnabled` → 全部已启用；否则 `serverIds ∩ 已启用`）；显式 `[]` 表示不注入。云会话额外自动并入 `agent-cloud-host-tools`，与用户选择互不影响。
-- **选项缓存**：controller-api `acp:options:<controllerId>:<serverType>` 成功 TTL 300s、失败 60s；`refreshAcpServerOptions` 主动清缓存并重探测（失败返回空选项，不阻断建会话）；`Model` mutation（增删改/排序/启停）经 `services/acp-options-cache.ts` 的 SCAN 失效当前用户全部控制器缓存。
+- **选项缓存**：controller-api `acp:options:<controllerId>:<serverType>` 成功 TTL 300s、失败 60s；`refreshAcpServerOptions` 主动清缓存并重探测（失败返回空选项，不阻断建会话）；`Model` mutation（增删改/排序/启停）经 `services/acp-options-cache.ts` 的 SCAN 失效当前用户全部控制器缓存；后台（系统内置 / global）模型变更不在 agent-api 作用域内，最长由 300s TTL 兜底（PRD v1.2 取舍），「刷新」按钮可立即重取。
 - **云电脑创建/项目准备开关**：`createCloudHost(createDefaultSession:false)` 时 ready 不建默认会话（由 setup 的 session 步骤建项目会话）；`setupCloudHostGithubProject(createSession:false)` 时 session 步骤记 SKIPPED（多 Harness 场景）。
 
 ## Dev Commands

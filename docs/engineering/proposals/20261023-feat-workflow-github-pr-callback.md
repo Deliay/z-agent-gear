@@ -218,13 +218,15 @@ extend type Mutation {
       "nodeId": { "type": "string", "description": "节点 ID（须存在于该实例）" },
       "pullRequestId": { "type": "string", "description": "Pull Request 标识：owner/repo#编号 或完整 PR URL" }
     },
-    "required": ["workflowId", "nodeId", "pullRequestId"]
+    "required": ["pullRequestId"]
   }
 }
 ```
 
+> 对齐实现（v1.1）：`workflowId` / `nodeId` 为**可选**参数，缺省时由会话工具 scope 自动确定；显式传入时必须与 scope 一致，否则 `INVALID_PARAMS`。
+
 - 返回：`{ "registered": true, "pullRequestId": "Deliay/z-agent-gear#264", "prUrl": "https://github.com/Deliay/z-agent-gear/pull/264" }`
-- 错误：`WorkflowToolError('INVALID_ARGUMENT')`（PR 标识无法归一化）、`WorkflowToolError('INVALID_STATE')`（实例/节点不存在、实例已归档/删除、workflowId 与 scope 不符）。
+- 错误：`WorkflowToolError('INVALID_PARAMS')`（PR 标识无法归一化、必填参数缺失、显式 workflowId/nodeId 与 scope 不一致）、`WorkflowToolError('INVALID_STATE')`（实例不存在/已归档/已删除/已完成）。
 
 ### 3.2 内部接口
 

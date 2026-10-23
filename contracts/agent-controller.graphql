@@ -87,6 +87,7 @@ type Mutation {
   renameController(input: RenameInput!): Controller!
   unbindController(id: ID!): Boolean!
   setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
-  # useAllEnabled=true 时忽略并归一 serverIds=[]；false 时 serverIds 需全部属于当前用户且已启用
+  # useAllEnabled=true 时忽略并归一 serverIds=[]；false 时 serverIds 需全部属于当前用户且已启用。
+  # 平台云工具服务（cloud-host-tools）不可选：查询侧不返回，保存时显式提交会返回 MCP_SERVER_NOT_FOUND。
   setControllerDefaultMcp(controllerId: ID!, useAllEnabled: Boolean!, serverIds: [ID!] = []): Controller!
 }
