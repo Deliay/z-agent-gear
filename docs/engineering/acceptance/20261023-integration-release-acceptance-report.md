@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: ❌ **第四轮集成验收打回（REJECT）**（1 × 🟠 N-8，见[第十四节](#十四第四轮验收记录2026-10-23)）——第四轮对返工提交 `72baf55`（origin/integration，PR #273）逐条复核第三轮 N-4~N-7：**N-5/N-6/N-7 属实闭环**（N-5 `handleSessionIdled` 条件字段级 `updateOne` 无整文档 save、N-6 新用例经回退探针实证有区分力、N-7 C-27 `dependsOn` 断言 + C-11 `MCP_SERVER_NOT_SELECTABLE` 服务/resolver/前端/契约全落地），**N-4 的有界退避（100/200/400ms）+ 超限结构化告警 + ended/idled/removed 三入口接线属实，但核心机制无效**：`engine.runOutsideTransitionLock` 经 `KeyedMutex.runDetached` **预取实例转移锁之后**才执行任务（`keyed-mutex.ts:23-27,46`），任务内 `workflowEngine.transition` 再取同一把锁必然命中自锁 `re-entrant`——引擎级探针（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock，仅 mock DB 模型）实证：延迟路径 1+3 次尝试**全数自撞**、`fail` 转移 **0 次执行**（`findById` 仅外层 1 次）、节点停留 RUNNING 只剩 `retry exhausted` 告警；配套用例 `orchestrator.test.ts:465-486` 把 `workflowEngine.transition` mock 掉，断言的是 mock 再次调用而非真实取锁，**零区分力**（🟠 N-8）；另实证持锁 task 内 `await runDetached` **永久死锁**（🟡 N-9）。独立复跑 tsc×7/lint×2/单测五包 **1000/656+1skip/254/235/663**/tests-e2e-typecheck 全绿（与自报一致）；12.6 全栈书面豁免申请**待人类裁定**（本节点无权豁免）。详见[第十四节](#十四第四轮验收记录2026-10-23)。
+> **状态**: 🔄 **第四轮 N-8/N-9 已修复，待第五轮集成验收**（详见[第十六节](#十六第五轮返工修复记录2026-10-23)；全栈证据仍受环境限制，人类书面豁免待裁定）——第四轮对返工提交 `72baf55`（origin/integration，PR #273）逐条复核第三轮 N-4~N-7：**N-5/N-6/N-7 属实闭环**（N-5 `handleSessionIdled` 条件字段级 `updateOne` 无整文档 save、N-6 新用例经回退探针实证有区分力、N-7 C-27 `dependsOn` 断言 + C-11 `MCP_SERVER_NOT_SELECTABLE` 服务/resolver/前端/契约全落地），**N-4 的有界退避（100/200/400ms）+ 超限结构化告警 + ended/idled/removed 三入口接线属实，但核心机制无效**：`engine.runOutsideTransitionLock` 经 `KeyedMutex.runDetached` **预取实例转移锁之后**才执行任务（`keyed-mutex.ts:23-27,46`），任务内 `workflowEngine.transition` 再取同一把锁必然命中自锁 `re-entrant`——引擎级探针（真实 `KeyedMutex` + 真实 `workflowEngine.transition` 不 mock，仅 mock DB 模型）实证：延迟路径 1+3 次尝试**全数自撞**、`fail` 转移 **0 次执行**（`findById` 仅外层 1 次）、节点停留 RUNNING 只剩 `retry exhausted` 告警；配套用例 `orchestrator.test.ts:465-486` 把 `workflowEngine.transition` mock 掉，断言的是 mock 再次调用而非真实取锁，**零区分力**（🟠 N-8）；另实证持锁 task 内 `await runDetached` **永久死锁**（🟡 N-9）。独立复跑 tsc×7/lint×2/单测五包 **1000/656+1skip/254/235/663**/tests-e2e-typecheck 全绿（与自报一致）；12.6 全栈书面豁免申请**待人类裁定**（本节点无权豁免）。详见[第十四节](#十四第四轮验收记录2026-10-23)。
 >
 > 第三轮背景（详见[第十二节](#十二第三轮验收记录2026-10-23)）——第三轮对返工提交 `246eb68`（origin/integration）逐条复核第二轮 N-1~N-3/U-1/U-2/U-3~U-6：**主体修复属实**（N-1 的 `suppressFallback` 受控关闭真实切断 restart 兜底误判链路且有回归用例、N-3 轮询复位+文案对齐属实、U-1 失败路径回写闭环、U-2 提案四处口径统一且 grep 干净、U-3/U-6 等收口属实），**但发现修复引入/残留 2 × 🟠 + 2 × 🟡**：🟠 **N-4**（N-1 修复组成部分「`setImmediate` 延迟出队重试」机制无效——AsyncLocalStorage 上下文穿透 `setImmediate`，重试永远命中 `re-entrant` 判定，引擎级实证 **25,675 次重试 0 次取到锁**，触发即为无退避 DB `findOne` 热循环，且该分支零测试覆盖）；🟠 **N-5**（N-1④ 字段级 `updateOne` 只改 `handleSessionEnded`，共享同一 `fallbackSent` 计数的 `handleSessionIdled` 仍整文档 `instance.save()`（`orchestrator.ts:100-101`）互覆风险原样存在；自报 11.1「fallbackSent 由整文档 save() 改为条件 updateOne」未限定范围，**自报与代码再次不符**）；🟡 **N-6**（N-2「保存成功后解除 dirty」用例无区分力：回退探针删除 `handleSave` 的 `dirtyRef.current=false` 后 6 用例全绿）；🟡 **N-7**（U-4 两项静默消失：C-27 `dependsOn` 断言、C-11 专用错误文案未做也未在 11.4 如实降级说明）。独立复跑 tsc×5/lint×2/单测五包 **995/656+1skip/254/235/661**/tests-e2e-typecheck 全绿（与自报一致）；Aspire 全栈 tests/api+tests/e2e 仍无全绿证据（环境受限已如实声明，作为遗留门禁）。详见[第十二节](#十二第三轮验收记录2026-10-23)。
 >
@@ -667,3 +667,33 @@ type: Permanent
 - **修复无效的兜底比没有兜底更危险**：必然失败的重试 + 「已修复」的用例 + 「重试成功」的自报，会把一个已知缺陷伪装成已闭环。二选一（修好 / 删掉改告警）必须真正二选一，不能选「留着但坏了」。
 - **反证探针用于定位而非仅证伪**：探针 C（锁外直接调用成功）把缺陷唯一定位到 `runDetached` 预取锁，避免误伤 orchestrator/引擎转移逻辑，修复面收窄到一处。
 - **自报表述连续三轮超出实际**：N-2「保存成功清除 dirty」、N-5「fallbackSent 改字段级更新」（范围）、N-4「重试成功」（有效性）。自报应严格区分「用例断言了什么」与「机制被证明了什么」，机制性结论必须有不 mock 被测对象的证据。
+
+## 十六、第五轮返工修复记录（2026-10-23）
+
+### 16.1 N-8（🟠 核心机制无效）：runDetached 预取锁导致延迟重试自锁
+
+- **根因确认**：第四轮 `runDetached` 在 `heldKeys.exit()` 后仍调用 `runExclusive(key, task)`，任务实际**持有该实例锁**执行；任务内 `engine.transition` 再取同锁必 re-entrant，`transitionOrDefer` 再 defer，三次重试全数自撞 → 兜底 fail 转移 0 次执行。原「re-entrant 一次后重试成功」用例 mock 了 `workflowEngine.transition`，未覆盖真实取锁，零区分力。
+- **修复（方案 a：不预取锁）**：
+  - `KeyedMutex.runDetached` 改为「等待当前 tail 释放 → `heldKeys.exit(() => task())`」，**不再调用 runExclusive**，任务内部自行取锁。
+  - 新增 holder token 跟踪（`owners: Map<key, token>` + ALS `Map<key, token>`），区分「真的仍持有锁」与「延迟回调里 ALS 残留的过期 held 视图」。
+- **N-9 一并处理**：若在仍持有锁时调用 `runDetached`（同一 holder token），立即抛 `KeyedMutex.runDetached called while still holding key: <key> (would deadlock waiting for itself)`，不再永久等待；JSDoc 明确语义。
+- **测试**：
+  - `keyed-mutex.test.ts`：`runDetached` 任务内可正常 `runExclusive` 同 key（证明不预取锁）；持锁时调用 `runDetached` 立即报错（N-9）。
+  - `orchestrator.test.ts` 新增**引擎级真实链路**用例：`workflowEngine.transition('restart')` 的 `onNodeRestart` hook 内同步调用 `handleSessionRemoved` → 真实 `transition('fail')` 首次命中 re-entrant → 100ms 后 `runDetached` 重试，真实取锁并落库 `FAILED`（`failInfo.source=SESSION_START_FAILED`），断言 `findById` ≥2 次。**该用例未 mock `workflowEngine.transition`**。
+  - 原「重试策略」用例保留并更名为 mock 边界明确的策略单测，不再表述为机制验证。
+
+### 16.2 自报纠正（连续三轮抽查命中，第五轮仍写明范围）
+
+- 第四轮 12.1 的「re-entrant 一次后 100ms 重试成功」实际是 **mock transition 的策略用例**，不代表真实取锁成功；本轮已改为「策略用例 + 真实 engine 用例」双覆盖，并在报告与提交信息中限定 mock 边界。
+- `runDetached` 旧语义「脱离 ALS 后仍占锁」已纠正为「只逃逸 ALS、不预取锁」；`runOutsideTransitionLock` 文档同步。
+
+### 16.3 第五轮验证
+
+| 项目 | 结果 |
+|---|---|
+| tsc（agent-api） | ✅ 0 error |
+| 单测（变更相关） | ✅ keyed-mutex + orchestrator 43 passed |
+| 全量单测 | ✅ agent-api 1002 passed（+2） |
+| tests/e2e typecheck | ✅ exit=0 |
+
+> 全栈 `tests/api` 全量与 `tests/e2e` 全绿仍受宿主机 AppHost 端口冲突、无 K8s、无预置控制器限制（详见 12.6 与 11.5）；本轮仅改动锁原语与测试，未新增环境依赖。人类书面豁免仍待裁定。

@@ -462,7 +462,7 @@ describe('WorkflowOrchestrator', () => {
     expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
   });
 
-  it('N-4: re-entrant 一次后延迟重试能取到锁并完成兜底', async () => {
+  it('N-4: 重试策略（mock transition）：re-entrant 一次后下一次尝试继续执行', async () => {
     vi.useFakeTimers();
     const transition = vi
       .spyOn(workflowEngine, 'transition')
@@ -509,6 +509,53 @@ describe('WorkflowOrchestrator', () => {
     } finally {
       warn.mockRestore();
       transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-8: 真实 workflowEngine.transition + 锁内 hook 回环，延迟重试后节点升级 FAILED', async () => {
+    vi.useFakeTimers();
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+      vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+
+      // 真实引擎锁内 hook 同步触发会话移除兜底（生产回环形态）
+      workflowEngine.registerHooks({
+        onNodeStart: undefined,
+        onNodeRework: undefined,
+        onNodeResume: undefined,
+        onNodeDone: undefined,
+        onNodeRestart: async () => {
+          await workflowOrchestrator.handleSessionRemoved('sess-2');
+        },
+        onWorkflowFinished: undefined,
+      });
+
+      const outer = workflowEngine.transition('inst-1', 'n2', 'restart', {});
+      await vi.advanceTimersByTimeAsync(0);
+      await outer;
+      // 外层释放前：hook 内 transition 命中 re-entrant，已排入延迟重试
+      expect(instance.nodes[0].status).toBe('RUNNING');
+
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 重试在锁外重新取锁并真实执行 fail 转移
+      expect(instance.nodes[0].status).toBe('FAILED');
+      expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
+      expect(vi.mocked(WorkflowInstance.findById).mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      workflowEngine.registerHooks({
+        onNodeStart: undefined,
+        onNodeRework: undefined,
+        onNodeResume: undefined,
+        onNodeDone: undefined,
+        onNodeRestart: undefined,
+        onWorkflowFinished: undefined,
+      });
       vi.useRealTimers();
     }
   });

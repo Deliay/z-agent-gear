@@ -164,8 +164,10 @@ class WorkflowEngine {
   }
 
   /**
-   * 在实例转移锁的调用上下文中脱离后执行（仅限从锁内 hook 延迟调度，N-4）。
-   * 不直接执行业务逻辑；由调用方在定时器中调用，确保不会同步嵌套取锁。
+   * 在实例转移锁的调用上下文之外执行延迟任务（仅限从锁内 hook 延迟调度，N-4/N-8）。
+   *
+   * 只做 ALS 逃逸并等待当前持有者释放，**不预取锁**；任务内部的 transition 会自行取锁，
+   * 因此不会出现「提前占锁 → 任务内 transition 必 re-entrant」的自锁。若在仍持有锁时调用会抛错（N-9）。
    */
   runOutsideTransitionLock<T>(instanceId: string, task: () => Promise<T>): Promise<T> {
     return transitionMutex.runDetached(instanceId, task);
