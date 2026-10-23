@@ -72,12 +72,12 @@ describe('AcpOptionsProber', () => {
     expect(result.currentModelId).toBe('gpt-5');
     expect(result.probedAt).toBeTruthy();
 
-    // 成功结果缓存 1h
+    // 成功结果缓存 5 分钟（模式/模型变更后由 agent-api 主动失效）
     expect(mockRedis.set).toHaveBeenCalledWith(
       'acp:options:ctrl-1:opencode',
       expect.any(String),
       'EX',
-      3600,
+      300,
     );
   });
 

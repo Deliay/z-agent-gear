@@ -248,6 +248,10 @@ export const GET_CONTROLLERS = gql`
       lastHeartbeatAt
       createdAt
       updatedAt
+      defaultMcp {
+        useAllEnabled
+        serverIds
+      }
       cloudHost {
         ...CloudHostFields
       }
@@ -263,6 +267,17 @@ export const CLOUD_HOST_CAPABILITIES = gql`
       supportedHarnesses
     }
   }
+`
+
+/** 单台云电脑（进度对话框轮询启动状态；1.5s 级） */
+export const CLOUD_HOST = gql`
+  query CloudHost($id: ID!) {
+    cloudHost(id: $id) {
+      controllerId
+      ...CloudHostFields
+    }
+  }
+  ${CLOUD_HOST_FIELDS}
 `
 
 export const MY_CLOUD_HOSTS = gql`

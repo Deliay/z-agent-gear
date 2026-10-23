@@ -46,6 +46,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
   userId: string;
   status: 'STARTING' | 'RUNNING';
   harnessTypes?: string[];
+  createDefaultSession?: boolean;
 }) {
   const hostId = new mongoose.Types.ObjectId();
   const controllerId = new mongoose.Types.ObjectId();
@@ -85,6 +86,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
     workspaceId,
     containerId: `container-${hostId.toString()}`,
     defaultSessionId: null,
+    createDefaultSession: options.createDefaultSession ?? true,
     startedAt: now,
     readyAt: options.status === 'RUNNING' ? now : null,
     stoppedAt: null,
@@ -183,6 +185,38 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
         _id: new mongoose.Types.ObjectId(hostId),
       });
       expect(host).toMatchObject({ status: 'RUNNING', defaultSessionId: null });
+    } finally {
+      if (fixture) await cleanupHost(db, fixture);
+    }
+  });
+
+  it('T-CH21b: createDefaultSession=false 时单 harness 也不建默认会话', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const userId = signup.data.signup.user.id as string;
+    let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
+    try {
+      fixture = await seedHost(db, {
+        userId,
+        status: 'STARTING',
+        harnessTypes: ['OPENCODE'],
+        createDefaultSession: false,
+      });
+      const { hostId, controllerId } = fixture;
+
+      const ready = await callback(`/internal/cloud-hosts/${hostId}/ready`);
+      expect(ready.status).toBe(200);
+      const body = (await ready.json()) as { status: string; defaultSessionId: string | null };
+      expect(body.status).toBe('RUNNING');
+      expect(body.defaultSessionId).toBeNull();
+      expect(
+        await db.collection('sessions').countDocuments({
+          controllerId: new mongoose.Types.ObjectId(controllerId),
+        }),
+      ).toBe(0);
     } finally {
       if (fixture) await cleanupHost(db, fixture);
     }

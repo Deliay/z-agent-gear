@@ -4,12 +4,17 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@playwright/test": "^1.60.0",
     "bcryptjs": "^3.0.3",
     "mongoose": "^9.6.2",
     "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
   }
 }

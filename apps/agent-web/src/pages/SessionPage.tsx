@@ -16,7 +16,16 @@ export default function SessionPage() {
   const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS);
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
-  const handleCreateSession = async (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[]) => {
+  const handleCreateSession = async (
+    controllerId: string,
+    acpServerType: string,
+    workspaceId: string,
+    enableWorktree?: boolean,
+    worktreeBranchSuffix?: string,
+    mcpServerIds?: string[],
+    modeId?: string,
+    modelId?: string,
+  ) => {
     try {
       const { data } = await createSession({
         variables: {
@@ -26,7 +35,10 @@ export default function SessionPage() {
             workspaceId,
             enableWorktree: enableWorktree || false,
             worktreeBranchSuffix: worktreeBranchSuffix || null,
-            mcpServerIds: mcpServerIds || null,
+            // 显式空数组 = 不注入；undefined 走控制器默认
+            mcpServerIds: mcpServerIds === undefined ? null : mcpServerIds,
+            modeId: modeId || null,
+            modelId: modelId || null,
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],

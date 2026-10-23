@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { loginViaUI, registerUser } from './helpers';
+import {
+  loginViaUI,
+  registerUser,
+  createControllerKey,
+  registerController,
+  createWorkspace,
+} from './helpers';
 
 // Github 工作负载 E2E（需要 HARNESS_ENABLED=true 的真实云主机）。
 // 真实 GitHub API 不在 E2E 中调用：未绑定账号路径只验证引导与禁用态；
@@ -45,6 +51,41 @@ async function waitForRunning(
 
 test.describe('Github workload E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
+
+  test('T-EG5: Git 设置/新增工作区后「+」重新打开即时可见（无需刷新页面）', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerController(rawKey);
+    const firstPath = `/root/workspace/phase10-first-${Date.now().toString(36)}`;
+    await createWorkspace(page, controller.controllerId, firstPath, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.locator('#controller').selectOption({ index: 1 });
+    const firstTrigger = dialog.locator('[data-slot="select-trigger"]').nth(1);
+    await firstTrigger.click();
+    await expect(page.getByRole('option', { name: new RegExp(firstPath) })).toBeVisible({ timeout: 15000 });
+    await page.keyboard.press('Escape');
+    await dialog.getByRole('button', { name: '取消' }).click();
+
+    // 模拟 Git 项目设置成功后新增的工作区（真实环境由 setup 写入）
+    const secondPath = `/root/workspace/phase10-git-${Date.now().toString(36)}`;
+    await createWorkspace(page, controller.controllerId, secondPath, token);
+
+    // 再次打开「+」：打开即 refetch 工作区，无需刷新页面
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.locator('#controller').selectOption({ index: 1 });
+    const workspaceTrigger = dialog.locator('[data-slot="select-trigger"]').nth(1);
+    await workspaceTrigger.click();
+    await expect(page.getByRole('option', { name: new RegExp(secondPath) })).toBeVisible({
+      timeout: 15000,
+    });
+
+    controller.disconnect();
+  });
 
   test('T-EG1/T-EG4: 云主机工作区 Github 图标 → 弹窗默认值与固定工作负载', async ({ page }) => {
     test.setTimeout(90_000);

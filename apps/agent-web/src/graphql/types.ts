@@ -153,6 +153,11 @@ export interface DeleteCloudHostMutation {
   deleteCloudHost: boolean
 }
 
+export interface ControllerDefaultMcpData {
+  useAllEnabled: boolean
+  serverIds: string[]
+}
+
 export interface ControllerData {
   id: string
   name: string
@@ -164,6 +169,8 @@ export interface ControllerData {
   lastHeartbeatAt: string | null
   createdAt: string
   updatedAt: string
+  /** 新建会话默认注入的 MCP（历史控制器归一为 useAllEnabled=true） */
+  defaultMcp?: ControllerDefaultMcpData | null
   /** cloud 类型主机返回其云电脑；local/github 为 null */
   cloudHost?: CloudHostData | null
 }
@@ -419,6 +426,18 @@ export interface AcpServerOptionsData {
 
 export interface GetAcpServerOptionsQuery {
   acpServerOptions: AcpServerOptionsData
+}
+
+export interface RefreshAcpServerOptionsMutation {
+  refreshAcpServerOptions: AcpServerOptionsData
+}
+
+export interface CloudHostQuery {
+  cloudHost: CloudHostData | null
+}
+
+export interface SetControllerDefaultMcpMutation {
+  setControllerDefaultMcp: ControllerData
 }
 
 export interface CreateControllerKeyMutation {

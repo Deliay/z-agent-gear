@@ -17,6 +17,7 @@ vi.mock('../../services/session.js', () => ({
     setModel: vi.fn(),
     setConfigOption: vi.fn(),
     refreshAcpCapabilities: vi.fn(),
+    refreshAcpServerOptions: vi.fn(),
     assertSessionWritable: vi.fn(),
   },
 }));
@@ -54,6 +55,7 @@ vi.mock('../../models/cloud-host.js', () => ({
 }));
 
 import { sessionResolvers } from './session.js';
+import { sessionService } from '../../services/session.js';
 import { modelService } from '../../services/model.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
@@ -196,5 +198,107 @@ describe('sessionResolvers.Session cloud host read-only fields', () => {
     const anon = { currentUser: null } as never;
     await expect(sessionResolvers.Session.controllerType(parent, {}, anon)).resolves.toBeNull();
     await expect(sessionResolvers.Session.cloudHost(parent, {}, anon)).resolves.toBeNull();
+  });
+});
+
+describe('sessionResolvers.Mutation.createSession', () => {
+  const context = { currentUser: { id: 'user-1', username: 'u' } } as never;
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('treats an explicit empty mcpServerIds array as "no MCP"', async () => {
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
+
+    await sessionResolvers.Mutation.createSession(
+      {},
+      {
+        input: {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: [],
+        },
+      },
+      context,
+    );
+
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ mcpServerIds: [] }),
+    );
+  });
+
+  it('passes undefined when mcpServerIds is omitted so controller defaults apply', async () => {
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
+
+    await sessionResolvers.Mutation.createSession(
+      {},
+      { input: { controllerId: 'ctrl-1', acpServerType: 'opencode', workspaceId: 'ws-1' } },
+      context,
+    );
+
+    const arg = vi.mocked(sessionService.create).mock.calls[0][1] as Record<string, unknown>;
+    expect(arg.mcpServerIds).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(arg, 'mcpServerIds')).toBe(true);
+  });
+
+  it('forwards modeId/modelId and normalizes null to undefined', async () => {
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
+
+    await sessionResolvers.Mutation.createSession(
+      {},
+      {
+        input: {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          modeId: 'plan',
+          modelId: null,
+        },
+      },
+      context,
+    );
+
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ modeId: 'plan', modelId: undefined }),
+    );
+  });
+});
+
+describe('sessionResolvers.Mutation.refreshAcpServerOptions', () => {
+  const context = { currentUser: { id: 'user-1', username: 'u' } } as never;
+
+  it('delegates to the service with the authenticated user', async () => {
+    vi.mocked(sessionService.refreshAcpServerOptions).mockResolvedValue({
+      modes: [],
+      models: [],
+      currentModeId: null,
+      currentModelId: null,
+      probedAt: null,
+    } as never);
+
+    await sessionResolvers.Mutation.refreshAcpServerOptions(
+      {},
+      { controllerId: 'ctrl-1', acpServerType: 'opencode' },
+      context,
+    );
+
+    expect(sessionService.refreshAcpServerOptions).toHaveBeenCalledWith(
+      'ctrl-1',
+      'opencode',
+      'user-1',
+    );
+  });
+
+  it('requires authentication', async () => {
+    await expect(
+      sessionResolvers.Mutation.refreshAcpServerOptions(
+        {},
+        { controllerId: 'ctrl-1', acpServerType: 'opencode' },
+        { currentUser: null } as never,
+      ),
+    ).rejects.toThrow('Not authenticated');
   });
 });
