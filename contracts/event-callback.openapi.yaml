@@ -1,0 +1,116 @@
+openapi: 3.0.3
+info:
+  title: Agent Gear Event Callback API
+  version: 1.0.0
+  description: 工作流 GitHub Pull Request 联动事件回调入口。鉴权任一通过即放行，未配置凭据时一律 401。
+paths:
+  /api/events/callback:
+    post:
+      summary: 接收 pull request 审核事件并驱动工作流
+      operationId: postEventCallback
+      parameters:
+        - in: header
+          name: X-Event-Token
+          required: false
+          schema: { type: string }
+          description: 平台回调凭据；与 Authorization Bearer 二选一
+        - in: header
+          name: Authorization
+          required: false
+          schema: { type: string }
+          description: 'Bearer <token> 形式的平台回调凭据'
+        - in: header
+          name: X-Hub-Signature-256
+          required: false
+          schema: { type: string, example: 'sha256=0123abcd' }
+          description: 对原始请求字节计算的 HMAC-SHA256 签名（GitHub App Webhook 兼容）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventCallbackRequest'
+      responses:
+        '200':
+          description: 已处理或安全忽略
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventCallbackResponse'
+        '400':
+          description: 载荷非法（error=payload.invalid，detail 为字段路径）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, enum: [payload.invalid] }
+                  detail: { type: string }
+        '401':
+          description: 鉴权失败
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, enum: [unauthorized] }
+components:
+  schemas:
+    EventCallbackRequest:
+      type: object
+      required: [eventType, eventId, payload]
+      properties:
+        eventType: { type: string, enum: [pull_request] }
+        eventId: { type: string, example: 'gh:pull_request_review:987654321' }
+        occurredAt: { type: string, format: date-time }
+        payload:
+          $ref: '#/components/schemas/EventPayload'
+    EventPayload:
+      type: object
+      required: [pullRequestId, reviewState]
+      properties:
+        pullRequestId: { type: string, example: 'Deliay/z-agent-gear#264' }
+        prUrl: { type: string }
+        action: { type: string, example: reviewed }
+        reviewState:
+          type: string
+          enum: [approved, changes_requested, rejected, dismissed, commented]
+        comment: { type: string }
+        reviewer: { type: string }
+        submittedAt: { type: string, format: date-time }
+    EventCallbackResponse:
+      type: object
+      required: [handled]
+      properties:
+        handled: { type: boolean }
+        reason: { type: string, description: 所有结果均为忽略时的聚合原因 }
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCallbackResult'
+    EventCallbackResult:
+      type: object
+      properties:
+        workflowInstanceId: { type: string }
+        nodeId: { type: string }
+        nodeName: { type: string }
+        action: { type: string, enum: [COMPLETE_HUMAN_NODE, REJECT_HUMAN_NODE] }
+        promptKey: { type: string }
+        reason:
+          type: string
+          enum:
+            - NO_HANDLER
+            - INSTANCE_NOT_FOUND
+            - INSTANCE_DELETED
+            - INSTANCE_ARCHIVED
+            - INSTANCE_FINISHED
+            - NODE_NOT_FOUND
+            - CURRENT_NODE_NOT_HUMAN
+            - CURRENT_NODE_AMBIGUOUS
+            - LINK_BROKEN
+            - HUMAN_NODE_IN_BETWEEN
+            - DUPLICATE_EVENT
+            - UNSUPPORTED_REVIEW_STATE
+            - HANDLER_FAILED
