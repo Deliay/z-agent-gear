@@ -2065,6 +2065,11 @@ describe('SessionService.create default MCP injection', () => {
       workspaceId: 'ws-1',
     });
 
+    expect(McpServer.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      enabled: true,
+      name: { $ne: 'agent-cloud-host-tools' },
+    });
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',

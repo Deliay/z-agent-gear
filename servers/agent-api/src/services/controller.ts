@@ -5,6 +5,7 @@ import { CloudHost } from '../models/cloud-host.js';
 import { McpServer } from '../models/mcp-server.js';
 import { evictKeyById } from './key-cache.js';
 import { commandService } from './command.js';
+import { CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 
 export interface ControllerDefaultMcpInput {
   useAllEnabled: boolean;
@@ -134,6 +135,7 @@ export class ControllerService {
           _id: { $in: serverIds },
           userId,
           enabled: true,
+          name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
         });
         if (selectable !== serverIds.length) {
           throw new Error('MCP_SERVER_NOT_FOUND');

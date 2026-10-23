@@ -9,7 +9,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
-import { ensureCloudHostToolsServer } from './cloud-host-tools.js';
+import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
@@ -176,7 +176,13 @@ export class SessionService {
     // 未显式指定（含 undefined）时按控制器 defaultMcp 解析；显式空数组表示不注入。
     let mcpServerIds = input.mcpServerIds;
     if (mcpServerIds === undefined) {
-      const enabledServers = await McpServer.find({ userId, enabled: true })
+      // 平台内置 agent-cloud-host-tools 仅由云会话自动并入（与前端可选列表口径一致），
+      // 不作为「默认 MCP」候选，避免非云会话被注入云主机工具。
+      const enabledServers = await McpServer.find({
+        userId,
+        enabled: true,
+        name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
+      })
         .select('_id')
         .lean();
       mcpServerIds = resolveInitialMcpServerIds(
@@ -869,7 +875,8 @@ export class SessionService {
     return this.getAcpServerOptions(controllerId, acpServerType, userId);
   }
 
-  async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+  async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
