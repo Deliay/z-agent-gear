@@ -532,6 +532,8 @@ describe('WorkflowOrchestrator', () => {
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 直通 spy（不替换实现）：统计延迟重试调度次数。R1 fast-fail 形态会重排 3 次（≥3），用例转红。
+    const runOutside = vi.spyOn(workflowEngine, 'runOutsideTransitionLock');
 
     workflowEngine.registerHooks({
       onNodeStart: undefined,
@@ -562,18 +564,17 @@ describe('WorkflowOrchestrator', () => {
 
       expect(instance.nodes[0].status).toBe('FAILED');
       expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
-      // N-13：不仅看最终状态，必须证明重试「等待而非误抛」——恰一次成功重试，且无重排/误抛告警。
-      // 若 runDetached 回退为第五轮 fast-fail 语义，这里会捕获 'fallback deferred retry failed'（用例转红）。
+      // N-13/N-16：不只看最终状态，直接证明「等待而非误抛 + 无重排」。
+      // ① findById 2 次仅证明「恰一次成功执行」（外层 + 一次成功重试）；R1 形态同样为 2，故不承担「无重排」证明。
       expect(vi.mocked(WorkflowInstance.findById)).toHaveBeenCalledTimes(2);
-      expect(
-        warn.mock.calls.some((call) =>
-          String(call[0]).includes('fallback deferred retry failed'),
-        ),
-      ).toBe(false);
-      expect(
-        warn.mock.calls.some((call) => String(call[0]).includes('still holding')),
-      ).toBe(false);
+      // ② 调度次数：HEAD 恰 1 次（100ms 等待后成功）；R1 fast-fail 会重排 ≥3 次。
+      expect(runOutside).toHaveBeenCalledTimes(1);
+      // ③ 扫描 console.warn 全部参数（误抛文本在 call[1]），无重排/误抛。
+      const warnText = warn.mock.calls.flat().map((arg) => String(arg)).join('\n');
+      expect(warnText).not.toContain('fallback deferred retry failed');
+      expect(warnText).not.toContain('still holding');
     } finally {
+      runOutside.mockRestore();
       warn.mockRestore();
       workflowEngine.registerHooks({
         onNodeStart: undefined,
@@ -631,7 +632,7 @@ describe('WorkflowOrchestrator', () => {
       expect(
         warn.mock.calls.some(
           (call) =>
-            String(call[0]).includes('fallback exhausted todo skipped: instance not found') &&
+            String(call[0]).includes('removed fallback exhausted todo skipped: instance not found') &&
             String(call[0]).includes('instance=inst-x') &&
             String(call[0]).includes('session=sess-x'),
         ),
@@ -650,8 +651,11 @@ describe('WorkflowOrchestrator', () => {
         ) => Promise<void>;
       }).notifyFallbackExhausted('removed', 'sess-x', 'inst-1');
       expect(
-        warn.mock.calls.some((call) =>
-          String(call[0]).includes('fallback exhausted todo skipped: node not found'),
+        warn.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('removed fallback exhausted todo skipped: node not found') &&
+            String(call[0]).includes('instance=inst-1') &&
+            String(call[0]).includes('session=sess-x'),
         ),
       ).toBe(true);
     } finally {
