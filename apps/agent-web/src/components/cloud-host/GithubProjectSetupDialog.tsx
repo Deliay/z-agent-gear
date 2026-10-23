@@ -1,22 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery } from '@apollo/client/react'
+import { useEffect, useState } from 'react'
+import { useMutation } from '@apollo/client/react'
 import { useNavigate } from 'react-router-dom'
-import { GET_GITHUB_ACCOUNTS, CLOUD_HOST_WORKLOADS } from '../../graphql/queries'
 import { SETUP_CLOUD_HOST_GITHUB_PROJECT } from '../../graphql/mutations'
 import type {
   CloudHostData,
-  CloudHostWorkloadItemData,
-  CloudHostWorkloadsQuery,
-  GetGithubAccountsQuery,
-  GitHubRepoData,
   SetupCloudHostGithubProjectMutation,
 } from '../../graphql/types'
 import GithubSetupProgressDialog from './GithubSetupProgressDialog'
-import {
-  normalizeWorkspacePrefixForPreview,
-  previewClonePath,
-  workspacePrefixError,
-} from '../../lib/workspace-path'
+import { useGithubProjectForm } from '../../hooks/useGithubProjectForm'
 import {
   Dialog,
   DialogContent,
@@ -40,20 +31,6 @@ function getErrorMessage(error: unknown): string {
   return 'Git 项目设置失败，请稍后重试'
 }
 
-function isGithubPreset(workload: CloudHostWorkloadItemData): boolean {
-  return workload.isPreset && workload.name === 'Github'
-}
-
-function mergeRepos(installations: GetGithubAccountsQuery['githubAccounts'][number]['installations']): GitHubRepoData[] {
-  const byFullName = new Map<string, GitHubRepoData>()
-  for (const installation of installations ?? []) {
-    for (const repo of installation.repos ?? []) {
-      if (!byFullName.has(repo.fullName)) byFullName.set(repo.fullName, repo)
-    }
-  }
-  return [...byFullName.values()]
-}
-
 /**
  * 云电脑 Git 项目设置：Github 账号 → 仓库 → 工作负载 → 目标路径。
  * 目标主机固定为当前云电脑；确认后创建 operation 并进入分步进度对话框。
@@ -65,105 +42,52 @@ export default function GithubProjectSetupDialog({
   onClose,
 }: GithubProjectSetupDialogProps) {
   const navigate = useNavigate()
-  const [accountId, setAccountId] = useState('')
-  const [repoFullName, setRepoFullName] = useState('')
-  const [targetPath, setTargetPath] = useState('')
-  const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [operationId, setOperationId] = useState<string | null>(null)
+
+  const form = useGithubProjectForm({
+    open,
+    controllerId,
+    defaultWorkspace: cloudHost.defaultWorkspace,
+  })
+  const {
+    accounts,
+    accountsLoading,
+    workloads,
+    workloadsLoading,
+    accountId,
+    setAccountId,
+    repoFullName,
+    setRepoFullName,
+    repos,
+    targetPath,
+    setTargetPath,
+    selectedWorkloadIds,
+    toggleWorkload,
+    prefixError,
+    normalizedPrefix,
+    finalClonePath,
+    hasAccounts,
+  } = form
 
   const [setupGithubProject] = useMutation<SetupCloudHostGithubProjectMutation>(
     SETUP_CLOUD_HOST_GITHUB_PROJECT,
   )
 
-  const {
-    data: accountsData,
-    loading: accountsLoading,
-  } = useQuery<GetGithubAccountsQuery>(GET_GITHUB_ACCOUNTS, {
-    skip: !open,
-    fetchPolicy: 'cache-and-network',
-  })
-
-  const { data: workloadsData, loading: workloadsLoading } = useQuery<CloudHostWorkloadsQuery>(
-    CLOUD_HOST_WORKLOADS,
-    {
-      variables: { controllerId },
-      skip: !open,
-      fetchPolicy: 'cache-and-network',
-    },
-  )
-
-  const accounts = useMemo(
-    () => accountsData?.githubAccounts ?? [],
-    [accountsData],
-  )
-  const workloads = useMemo(
-    () => workloadsData?.cloudHostWorkloads ?? [],
-    [workloadsData],
-  )
-  const githubPresetId = useMemo(
-    () => workloads.find(isGithubPreset)?.workloadId,
-    [workloads],
-  )
-
-  const selectedAccount = accounts.find((account) => account.id === accountId)
-  const repos = mergeRepos(selectedAccount?.installations)
-
   useEffect(() => {
     if (!open) return
-    setAccountId('')
-    setRepoFullName('')
-    setTargetPath(cloudHost.defaultWorkspace ?? '/root/workspace')
-    setSelectedWorkloadIds([])
     setSubmitting(false)
     setError(null)
     setOperationId(null)
-    // 仅在打开时重置；cloudHost 变化由父组件重新挂载
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Github 预制工作负载固定选中且不可取消；保留用户已勾选的其他负载
-  useEffect(() => {
-    if (!open) return
-    setSelectedWorkloadIds((prev) => {
-      const others = prev.filter((id) => id !== githubPresetId)
-      return githubPresetId ? [githubPresetId, ...others] : others
-    })
-  }, [open, githubPresetId])
-
-  // 默认选中第一个已绑定账号
-  useEffect(() => {
-    if (!open) return
-    if (accounts.length === 0) return
-    if (accounts.some((account) => account.id === accountId)) return
-    setAccountId(accounts[0].id)
-  }, [open, accounts, accountId])
-
   const hostRunning = cloudHost.status === 'RUNNING' && !cloudHost.deletedAt
-  const prefixError = workspacePrefixError(targetPath)
-  const normalizedPrefix = normalizeWorkspacePrefixForPreview(targetPath)
-  const finalClonePath = previewClonePath(targetPath, repoFullName)
-  const hasAccounts = accounts.length > 0
   const submitDisabled =
     submitting ||
     !hostRunning ||
-    !hasAccounts ||
-    !accountId ||
-    !repoFullName ||
-    prefixError !== null ||
+    !form.isValid ||
     normalizedPrefix === null
-
-  const handleAccountChange = (nextAccountId: string) => {
-    setAccountId(nextAccountId)
-    setRepoFullName('')
-  }
-
-  const toggleWorkload = (workloadId: string, checked: boolean) => {
-    setSelectedWorkloadIds((prev) =>
-      checked ? [...prev.filter((id) => id !== workloadId), workloadId] : prev.filter((id) => id !== workloadId),
-    )
-  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -229,7 +153,7 @@ export default function GithubProjectSetupDialog({
             )}
           </div>
 
-          {accountsLoading && !accountsData ? (
+          {accountsLoading && !hasAccounts ? (
             <p className="text-sm text-muted-foreground">正在加载 Github 账号...</p>
           ) : !hasAccounts ? (
             <div className="space-y-2 rounded-md border border-dashed p-3">
@@ -252,7 +176,7 @@ export default function GithubProjectSetupDialog({
                 id="github-setup-account"
                 aria-label="Github 账号"
                 value={accountId}
-                onChange={(event) => handleAccountChange(event.target.value)}
+                onChange={(event) => setAccountId(event.target.value)}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 {accounts.map((account) => (
@@ -292,14 +216,14 @@ export default function GithubProjectSetupDialog({
 
           <div className="min-w-0">
             <span className="mb-1 block text-sm font-medium">工作负载</span>
-            {workloadsLoading && !workloadsData ? (
+            {workloadsLoading && workloads.length === 0 ? (
               <p className="text-sm text-muted-foreground">正在加载工作负载...</p>
             ) : workloads.length === 0 ? (
               <p className="text-sm text-muted-foreground">暂无可选工作负载</p>
             ) : (
               <div className="space-y-2 rounded-md border border-border p-3">
                 {workloads.map((workload) => {
-                  const preset = isGithubPreset(workload)
+                  const preset = Boolean(workload.isPreset) && workload.name === 'Github'
                   return (
                     <label key={workload.workloadId} className="flex min-w-0 items-center gap-2">
                       <input
