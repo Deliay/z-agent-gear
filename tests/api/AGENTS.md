@@ -71,6 +71,8 @@ npm test
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
+| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
+| `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC-SHA256 验签密钥（仅 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
@@ -334,6 +336,16 @@ npm test
 | A16 非 RUNNING 状态提示 | REJECT 状态调用 completeCurrentNode 返回 INVALID_STATE 可读提示 |
 | A17 removeBlackboardKey | 移除后黑板无、blackboardTrash 有 |
 | A18 权限隔离 | 他人 workflowInstance 查询为 null、列表为空、mutation 报「不存在或无权限」 |
+
+### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
+
+> 需要 agent-api 就绪且配置 `EVENT_CALLBACK_TOKEN`（缺失时整套跳过）；`GITHUB_WEBHOOK_SECRET` 用于 HMAC 用例（未配置时跳过 HMAC 断言）。
+
+| 测试 | 描述 |
+|------|------|
+| T-PR1 回调鉴权 | 无凭据/错误 token → 401；`X-Event-Token` / `Authorization: Bearer` / 正确 HMAC → 200；错误 HMAC → 401 |
+| T-PR2 载荷非法 | 缺 `eventId` / `eventType` 非 pull_request → 400 且 detail 可读 |
+| T-PR3 未登记 PR | 返回 `handled=false` + `reason=NO_HANDLER` + 空 `results` |
 
 > MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
 

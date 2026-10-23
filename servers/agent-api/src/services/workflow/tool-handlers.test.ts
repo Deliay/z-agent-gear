@@ -12,6 +12,14 @@ vi.mock('./engine.js', () => ({
   },
 }));
 
+vi.mock('./pr-handler-registry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pr-handler-registry.js')>();
+  return {
+    ...actual,
+    prHandlerRegistry: { register: vi.fn() },
+  };
+});
+
 import {
   callWorkflowTool,
   getWorkflowToolDefinitions,
@@ -20,6 +28,7 @@ import {
 } from './tool-handlers.js';
 import { workflowEngine } from './engine.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { prHandlerRegistry } from './pr-handler-registry.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -90,7 +99,7 @@ describe('workflow tool-handlers', () => {
   });
 
   describe('工具定义', () => {
-    it('提供全部 12 个工具且带 inputSchema', () => {
+    it('提供全部 13 个工具且带 inputSchema', () => {
       const defs = getWorkflowToolDefinitions();
       expect(defs.map((d) => d.name).sort()).toEqual(
         [
@@ -106,6 +115,7 @@ describe('workflow tool-handlers', () => {
           'completeCurrentRework',
           'failCurrentNode',
           'resumeFailedNode',
+          'linkPullRequest',
         ].sort(),
       );
       for (const def of defs) {
@@ -344,5 +354,77 @@ describe('workflow tool-handlers', () => {
         expectToolError('UNKNOWN_TOOL'),
       );
     });
+  });
+});
+
+describe('linkPullRequest 工具', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prHandlerRegistry.register).mockResolvedValue({
+      pullRequestId: 'Deliay/z-agent-gear#264',
+      prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+    } as never);
+  });
+
+  it('只传 pullRequestId 时取会话作用域注册', async () => {
+    loadInstance();
+    const result = await callWorkflowTool(SCOPE, 'linkPullRequest', {
+      pullRequestId: 'Deliay/z-agent-gear#264',
+    });
+
+    expect(prHandlerRegistry.register).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workflowInstanceId: 'inst-1',
+      nodeId: 'n2',
+      nodeKey: 'design',
+      pullRequestId: 'Deliay/z-agent-gear#264',
+      prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+      sessionId: 'sess-2',
+    });
+    expect(result).toMatchObject({
+      registered: true,
+      pullRequestId: 'Deliay/z-agent-gear#264',
+      workflowInstanceId: 'inst-1',
+      nodeId: 'n2',
+    });
+  });
+
+  it('显式 workflowId/nodeId 与作用域不一致时拒绝', async () => {
+    loadInstance();
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', {
+        pullRequestId: 'a/b#1',
+        workflowId: 'other-inst',
+      }),
+    ).rejects.toSatisfy(expectToolError('INVALID_PARAMS'));
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', {
+        pullRequestId: 'a/b#1',
+        nodeId: 'other-node',
+      }),
+    ).rejects.toSatisfy(expectToolError('INVALID_PARAMS'));
+  });
+
+  it('非法 PR 标识与实例归档/完成拒绝', async () => {
+    loadInstance();
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', { pullRequestId: 'not-a-pr' }),
+    ).rejects.toSatisfy(expectToolError('INVALID_PARAMS'));
+
+    loadInstance(makeInstance({ archivedAt: new Date() }));
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', { pullRequestId: 'a/b#1' }),
+    ).rejects.toSatisfy(expectToolError('INVALID_STATE'));
+
+    loadInstance(makeInstance({ finishedAt: new Date() }));
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', { pullRequestId: 'a/b#1' }),
+    ).rejects.toSatisfy(expectToolError('INVALID_STATE'));
+  });
+
+  it('getNodeInfo 返回 workflowInstanceId', async () => {
+    loadInstance();
+    const info = (await callWorkflowTool(SCOPE, 'getNodeInfo', {})) as Record<string, unknown>;
+    expect(info.workflowInstanceId).toBe('inst-1');
   });
 });

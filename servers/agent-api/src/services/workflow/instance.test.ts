@@ -51,6 +51,12 @@ vi.mock('./engine.js', () => ({
   },
 }));
 
+vi.mock('./pr-handler-registry.js', () => ({
+  prHandlerRegistry: {
+    unregisterByInstance: vi.fn().mockResolvedValue(0),
+  },
+}));
+
 import { workflowInstanceService } from './instance.js';
 import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
@@ -60,6 +66,7 @@ import { Controller } from '../../models/controller.js';
 import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { prHandlerRegistry } from './pr-handler-registry.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -549,10 +556,14 @@ describe('WorkflowInstanceService.completeHumanNode', () => {
 });
 
 describe('WorkflowInstanceService.rejectNode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('人类打回：走引擎 reject 转移', async () => {
     const instance = {
       _id: oid('inst-1'),
-      nodes: [{ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', status: 'RUNNING', dependsOn: ['n1'] }],
+      nodes: [{ nodeId: 'n2', nodeKey: 'review', type: 'HUMAN', name: '评审', status: 'RUNNING', dependsOn: ['n1'] }],
     };
     vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
     vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
@@ -563,6 +574,36 @@ describe('WorkflowInstanceService.rejectNode', () => {
       reason: '方案不完整',
       fromNodeId: null,
     });
+  });
+
+  it('READY 人类节点：先 start 再 reject', async () => {
+    const instance = {
+      _id: oid('inst-1'),
+      nodes: [{ nodeId: 'n1', nodeKey: 'requirement', type: 'HUMAN', name: '需求', status: 'READY', dependsOn: [] }],
+    };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
+    vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
+
+    await workflowInstanceService.rejectNode('user-1', 'inst-1', 'n1', '不通过');
+
+    expect(workflowEngine.transition).toHaveBeenNthCalledWith(1, 'inst-1', 'n1', 'start', {});
+    expect(workflowEngine.transition).toHaveBeenNthCalledWith(2, 'inst-1', 'n1', 'reject', {
+      reason: '不通过',
+      fromNodeId: null,
+    });
+  });
+
+  it('AI 节点拒绝打回', async () => {
+    const instance = {
+      _id: oid('inst-1'),
+      nodes: [{ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', status: 'RUNNING', dependsOn: ['n1'] }],
+    };
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
+
+    await expect(
+      workflowInstanceService.rejectNode('user-1', 'inst-1', 'n2', 'x'),
+    ).rejects.toThrow(/不是人类节点/);
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
   });
 });
 
@@ -848,5 +889,103 @@ describe('WorkflowInstanceService.setArchived', () => {
 
     await expect(workflowInstanceService.setArchived('user-1', 'inst-x', true)).rejects.toThrow(/不存在/);
     expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkflowInstanceService 追加提示词与联动注销', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    mockRedis.del.mockResolvedValue(1);
+    vi.mocked(prHandlerRegistry.unregisterByInstance).mockResolvedValue(0);
+  });
+
+  it('setAdditionalPrompt 同 key 覆盖并拒绝系统键', async () => {
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValue(leanQuery({ _id: 'inst-1' }));
+    await workflowInstanceService.setAdditionalPrompt('user-1', 'inst-1', 'my-note', 'v');
+    expect(WorkflowInstance.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'inst-1', userId: 'user-1', deletedAt: null },
+      { $set: { 'additionalPrompts.my-note': 'v' } },
+      { new: true },
+    );
+
+    await expect(
+      workflowInstanceService.setAdditionalPrompt('user-1', 'inst-1', 'github-pr', 'x'),
+    ).rejects.toThrow(/系统保留/);
+    await expect(
+      workflowInstanceService.setAdditionalPrompt('user-1', 'inst-1', 'bad.key', 'x'),
+    ).rejects.toThrow(/key 非法/);
+  });
+
+  it('removeAdditionalPrompt 幂等删除并拒绝系统键', async () => {
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValue(leanQuery({ _id: 'inst-1' }));
+    await workflowInstanceService.removeAdditionalPrompt('user-1', 'inst-1', 'my-note');
+    expect(WorkflowInstance.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'inst-1', userId: 'user-1', deletedAt: null },
+      { $unset: { 'additionalPrompts.my-note': 1 } },
+      { new: true },
+    );
+    await expect(
+      workflowInstanceService.removeAdditionalPrompt('user-1', 'inst-1', 'github-pr-review'),
+    ).rejects.toThrow(/系统保留/);
+  });
+
+  it('syncGithubPrPrompt 有勾选写 github-pr，全部取消则删除', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ nodes: [{ type: 'HUMAN', linkUpstreamPullRequest: true }] }),
+    );
+    await expect(workflowInstanceService.syncGithubPrPrompt('inst-1')).resolves.toBe(true);
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $set: { 'additionalPrompts.github-pr': expect.stringContaining('## GitHub Pull Request 联动') } },
+    );
+
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ nodes: [{ type: 'HUMAN', linkUpstreamPullRequest: false }] }),
+    );
+    await expect(workflowInstanceService.syncGithubPrPrompt('inst-1')).resolves.toBe(false);
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1' },
+      { $unset: { 'additionalPrompts.github-pr': 1 } },
+    );
+  });
+
+  it('归档解除关联，取消归档不解除', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery({ _id: 'inst-1' }));
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+
+    await workflowInstanceService.setArchived('user-1', 'inst-1', true);
+    expect(prHandlerRegistry.unregisterByInstance).toHaveBeenCalledWith('inst-1', 'ARCHIVED');
+
+    vi.mocked(prHandlerRegistry.unregisterByInstance).mockClear();
+    await workflowInstanceService.setArchived('user-1', 'inst-1', false);
+    expect(prHandlerRegistry.unregisterByInstance).not.toHaveBeenCalled();
+  });
+
+  it('删除实例解除关联', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery({ _id: 'inst-1', name: 'demo' }));
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({} as never);
+    const select = vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    vi.mocked(Session.find).mockReturnValue({ select } as never);
+
+    await workflowInstanceService.deleteInstance('user-1', 'inst-1');
+    expect(prHandlerRegistry.unregisterByInstance).toHaveBeenCalledWith('inst-1', 'DELETED');
+  });
+
+  it('实例化时任一人类节点勾选则写入 github-pr', async () => {
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace()));
+    mockCapabilities(['opencode']);
+    vi.mocked(WorkflowInstance.create).mockImplementation(((doc: unknown) => Promise.resolve(doc)) as never);
+    const nodes = makeNodes().map((n) =>
+      n.type === 'HUMAN' ? { ...n, linkUpstreamPullRequest: true } : n,
+    );
+
+    await workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never);
+
+    expect(WorkflowInstance.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        additionalPrompts: { 'github-pr': expect.stringContaining('## GitHub Pull Request 联动') },
+      }),
+    );
   });
 });

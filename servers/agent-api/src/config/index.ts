@@ -49,4 +49,7 @@ export const config = {
   ),
   // 操作 RUNNING 超过该时长视为中断（查询时标记 FAILED，默认 30 分钟）
   cloudHostSetupStaleMs: toPositiveInt(process.env.CLOUD_HOST_SETUP_STALE_MS, 1_800_000),
+  // 事件回调鉴权（两者都未配置时回调端点一律 401，默认拒绝）
+  eventCallbackToken: process.env.EVENT_CALLBACK_TOKEN || '',
+  githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET || '',
 };

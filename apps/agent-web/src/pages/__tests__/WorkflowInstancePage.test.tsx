@@ -63,6 +63,7 @@ function makeInstance(): WorkflowInstanceData {
         artifactTitles: null,
         agentConfig: null,
         requiresWorktree: null,
+        linkUpstreamPullRequest: false,
         sortOrder: null,
         dependsOn: [],
         createdAt: '2026-08-08T00:00:00Z',
@@ -75,6 +76,8 @@ function makeInstance(): WorkflowInstanceData {
     ],
     blackboard: [],
     blackboardTrash: [],
+    additionalPrompts: [],
+    pullRequestLinks: [],
     createdAt: '2026-08-08T00:00:00Z',
     updatedAt: '2026-08-08T00:00:00Z',
   };
@@ -251,5 +254,48 @@ describe('WorkflowInstancePage 实例状态与归档', () => {
       ),
     );
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('渲染两个只读区块并可展开查看内容', () => {
+    const instance = {
+      ...makeInstance(),
+      additionalPrompts: [{ key: 'github-pr', value: '## GitHub Pull Request 联动\n指引内容' }],
+      pullRequestLinks: [
+        {
+          pullRequestId: 'Deliay/z-agent-gear#264',
+          prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+          nodeId: 'n1',
+          nodeName: '评审',
+          registeredAt: '2026-10-23T06:00:00Z',
+        },
+      ],
+    };
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /关联 Pull Request（1）/ }));
+    expect(screen.getByText('Deliay/z-agent-gear#264')).toBeInTheDocument();
+    expect(screen.getByText('所属节点：评审')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /追加提示词（1）/ }));
+    expect(screen.getByText('github-pr')).toBeInTheDocument();
+    expect(screen.getByText(/指引内容/)).toBeInTheDocument();
+  });
+
+  it('空态展示暂无关联与暂无', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /关联 Pull Request（0）/ }));
+    expect(screen.getByText('暂无关联')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /追加提示词（0）/ }));
+    expect(screen.getByText('暂无')).toBeInTheDocument();
   });
 });

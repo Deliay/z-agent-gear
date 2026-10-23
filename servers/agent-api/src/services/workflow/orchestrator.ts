@@ -309,7 +309,35 @@ class WorkflowOrchestrator {
     if (artifactLines.length > 0) {
       parts.push('', '## 上游产物', '', ...artifactLines);
     }
+
+    // 工作流追加提示词：按 key 升序、每个 key 一段（Map 天然去重，同 key 只插入一次）
+    const promptsMap = this.readAdditionalPrompts(instance);
+    const keys = [...promptsMap.keys()].sort();
+    if (keys.length > 0) {
+      parts.push('', '## 追加提示词');
+      for (const key of keys) {
+        parts.push('', `### ${key}`, promptsMap.get(key) ?? '');
+      }
+    }
     return parts.join('\n').trim();
+  }
+
+  /** 追加提示词归一化：兼容 Mongoose Map 与 lean 普通对象 */
+  private readAdditionalPrompts(instance: WorkflowInstanceDoc): Map<string, string> {
+    const raw = instance.additionalPrompts;
+    if (!raw) return new Map();
+    if (raw instanceof Map) {
+      const result = new Map<string, string>();
+      for (const [key, value] of raw.entries()) {
+        if (typeof value === 'string') result.set(key, value);
+      }
+      return result;
+    }
+    const result = new Map<string, string>();
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === 'string') result.set(key, value);
+    }
+    return result;
   }
 
   /** 幂等 upsert 平台工作流工具服务（transport/source: platform），返回其 _id */

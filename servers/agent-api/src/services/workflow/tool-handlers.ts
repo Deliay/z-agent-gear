@@ -1,6 +1,7 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
+import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
 
 /** 平台内置工作流工具服务名（transport: platform / source: platform） */
 export const PLATFORM_SERVER_NAME = 'agent-workflow-tools';
@@ -135,6 +136,29 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       '操作当前节点「恢复运行」（FAILED→RUNNING）。仅在人类已在对话中给出明确处理指示后调用',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'linkPullRequest',
+    description:
+      '将 GitHub Pull Request 关联到当前工作流实例与当前节点（注册 PR 联动处理器）。工作流完成/归档后自动解除。同一节点重复关联以最后一次为准。只需传 pullRequestId（形如 owner/repo#123 或 PR 链接）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pullRequestId: {
+          type: 'string',
+          description: 'Pull Request 标识：owner/repo#编号 或完整 PR 链接（必填）',
+        },
+        workflowId: {
+          type: 'string',
+          description: '可选；缺省为当前会话的工作流实例 ID，提供时必须一致',
+        },
+        nodeId: {
+          type: 'string',
+          description: '可选；缺省为当前节点 ID，提供时必须一致',
+        },
+      },
+      required: ['pullRequestId'],
+    },
+  },
 ];
 
 export function getWorkflowToolDefinitions(): ToolDefinition[] {
@@ -218,9 +242,11 @@ async function transition(
   }
 }
 
-function mapNodeInfo(node: WorkflowNodeDoc): Record<string, unknown> {
+function mapNodeInfo(node: WorkflowNodeDoc, instanceId?: string): Record<string, unknown> {
   return {
     nodeId: node.nodeId,
+    // 供 AI 在需要显式传参时自查所属工作流实例
+    workflowInstanceId: instanceId ?? null,
     nodeKey: node.nodeKey,
     type: node.type,
     name: node.name,
@@ -255,7 +281,7 @@ export async function callWorkflowTool(
 
     case 'getNodeInfo': {
       const target = typeof args.nodeId === 'string' && args.nodeId ? findNode(instance, args.nodeId) : node;
-      return mapNodeInfo(target);
+      return mapNodeInfo(target, instance._id.toString());
     }
 
     case 'getNodeArtifactKeys': {
@@ -320,6 +346,61 @@ export async function callWorkflowTool(
 
     case 'resumeFailedNode': {
       return transition(toolScope, 'resumeFailed', {});
+    }
+
+    case 'linkPullRequest': {
+      const rawPullRequestId = requireString(
+        args,
+        'pullRequestId',
+        '请传入 Pull Request 标识（owner/repo#编号 或完整 PR 链接）。',
+      );
+      // 可选显式参数必须与 token 作用域一致
+      if (typeof args.workflowId === 'string' && args.workflowId && args.workflowId !== toolScope.instanceId) {
+        throw new WorkflowToolError(
+          'INVALID_PARAMS',
+          `workflowId「${args.workflowId}」与当前会话所属工作流实例「${toolScope.instanceId}」不一致`,
+        );
+      }
+      if (typeof args.nodeId === 'string' && args.nodeId && args.nodeId !== toolScope.nodeId) {
+        throw new WorkflowToolError(
+          'INVALID_PARAMS',
+          `nodeId「${args.nodeId}」与当前会话所属节点「${toolScope.nodeId}」不一致`,
+        );
+      }
+      if (instance.deletedAt) {
+        throw new WorkflowToolError('INVALID_STATE', '工作流实例已删除，无法关联 Pull Request');
+      }
+      if (instance.archivedAt) {
+        throw new WorkflowToolError('INVALID_STATE', '工作流实例已归档，无法关联 Pull Request');
+      }
+      if (instance.finishedAt) {
+        throw new WorkflowToolError('INVALID_STATE', '工作流已完成，无法关联 Pull Request');
+      }
+      let normalized: { pullRequestId: string; prUrl: string };
+      try {
+        normalized = normalizePullRequestId(rawPullRequestId);
+      } catch (err) {
+        if (err instanceof PullRequestIdError) {
+          throw new WorkflowToolError('INVALID_PARAMS', err.message);
+        }
+        throw err;
+      }
+      const handler = await prHandlerRegistry.register({
+        userId: toolScope.userId,
+        workflowInstanceId: toolScope.instanceId,
+        nodeId: node.nodeId,
+        nodeKey: node.nodeKey,
+        pullRequestId: normalized.pullRequestId,
+        prUrl: normalized.prUrl,
+        sessionId: node.sessionId ? node.sessionId.toString() : null,
+      });
+      return {
+        registered: true,
+        pullRequestId: handler.pullRequestId,
+        prUrl: handler.prUrl ?? normalized.prUrl,
+        workflowInstanceId: toolScope.instanceId,
+        nodeId: node.nodeId,
+      };
     }
 
     default:

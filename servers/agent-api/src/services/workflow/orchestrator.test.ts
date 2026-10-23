@@ -600,3 +600,55 @@ describe('WorkflowOrchestrator', () => {
     );
   });
 });
+
+describe('assemblePrompt 追加提示词', () => {
+  function instanceWith(additionalPrompts: unknown) {
+    return {
+      _id: oid('inst-1'),
+      nodes: [
+        { nodeId: 'n1', nodeKey: 'requirement', type: 'HUMAN', name: '需求', stage: '需求', status: 'DONE', dependsOn: [], reworkCount: 0 },
+        { nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '方案', stage: '设计', status: 'READY', dependsOn: ['n1'], reworkCount: 0 },
+      ],
+      blackboard: new Map([['n1-需求-产物-输入', '需求内容']]),
+      blackboardTrash: new Map(),
+      blackboardUpdatedAt: new Map(),
+      additionalPrompts,
+    } as unknown as WorkflowInstanceDoc;
+  }
+
+  const node = {
+    nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '方案', stage: '设计', status: 'READY', dependsOn: ['n1'], reworkCount: 0,
+  } as unknown as WorkflowNodeDoc;
+
+  it('无追加提示词时与现状一致（不含追加段）', () => {
+    const text = workflowOrchestrator.assemblePrompt(instanceWith(undefined), node, ['产出方案']);
+    expect(text).not.toContain('## 追加提示词');
+  });
+
+  it('按 key 升序追加，每 key 一段且位于上游产物之后', () => {
+    const text = workflowOrchestrator.assemblePrompt(
+      instanceWith(new Map([['github-pr-review', '评审意见'], ['github-pr', '指引']])),
+      node,
+      ['产出方案'],
+    );
+    expect(text.indexOf('## 追加提示词')).toBeGreaterThan(text.indexOf('## 上游产物'));
+    expect(text.indexOf('### github-pr')).toBeLessThan(text.indexOf('### github-pr-review'));
+    expect(text).toContain('### github-pr\n指引');
+  });
+
+  it('同 key 覆盖后只出现一次', () => {
+    const map = new Map<string, string>();
+    map.set('github-pr', '旧值');
+    map.set('github-pr', '新值');
+    const text = workflowOrchestrator.assemblePrompt(instanceWith(map), node, []);
+    expect(text.match(/### github-pr/g)).toHaveLength(1);
+    expect(text).toContain('新值');
+    expect(text).not.toContain('旧值');
+  });
+
+  it('兼容 lean 普通对象', () => {
+    const text = workflowOrchestrator.assemblePrompt(instanceWith({ 'github-pr': '指引' }), node, []);
+    expect(text).toContain('## 追加提示词');
+    expect(text).toContain('### github-pr\n指引');
+  });
+});

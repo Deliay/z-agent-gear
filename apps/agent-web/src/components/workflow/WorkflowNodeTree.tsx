@@ -23,6 +23,7 @@ import {
   type WorkflowNodeData,
   type BlackboardEntryData,
   type WorkflowNodeStatus,
+  type WorkflowPullRequestLinkData,
 } from '@/graphql/workflow'
 import EditInstanceNodeDialog from './EditInstanceNodeDialog'
 import { NODE_TYPE_LABELS, NODE_STATUS_LABELS, NODE_STATUS_BADGE } from './WorkflowNodeTreeConstants'
@@ -31,6 +32,8 @@ import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw 
 interface WorkflowNodeTreeProps {
   instance: WorkflowInstanceData
   onOpenSession: (sessionId: string) => void
+  /** 实例关联的 Pull Request（按 nodeId 展示徽标） */
+  pullRequestLinks?: WorkflowPullRequestLinkData[]
 }
 
 // 产物 key 约定（对齐 agent-api blackboard.ts artifactKey）：{nodeId}-{nodeName}-产物-{title}
@@ -179,17 +182,20 @@ function NodeCard({
   blackboard,
   onOpenSession,
   onEdit,
+  pullRequestLinks = [],
 }: {
   instanceId: string
   node: WorkflowNodeData
   blackboard: BlackboardEntryData[]
   onOpenSession: (sessionId: string) => void
   onEdit: (node: WorkflowNodeData, restartMode?: boolean) => void
+  pullRequestLinks?: WorkflowPullRequestLinkData[]
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
   const collapsed = toggled ?? DEFAULT_COLLAPSED_STATUSES.includes(node.status)
   const nodeArtifacts = artifactsOf(node, blackboard)
+  const nodeLinks = pullRequestLinks.filter((link) => link.nodeId === node.id)
 
   // 头部行折叠/展开均展示（类型、标题、状态 badge、返工次数、会话按钮）；折叠仅隐藏内容区
   return (
@@ -227,6 +233,18 @@ function NodeCard({
         >
           {NODE_STATUS_LABELS[node.status]}
         </span>
+        {nodeLinks.map((link) => (
+          <a
+            key={link.pullRequestId}
+            href={link.prUrl ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+            title={link.pullRequestId}
+            className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
+          >
+            PR
+          </a>
+        ))}
         {node.reworkCount > 0 && (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <RotateCcw className="size-3" />
@@ -312,7 +330,11 @@ function NodeCard({
   )
 }
 
-export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNodeTreeProps) {
+export default function WorkflowNodeTree({
+  instance,
+  onOpenSession,
+  pullRequestLinks = [],
+}: WorkflowNodeTreeProps) {
   const stages: string[] = []
   for (const node of instance.nodes) {
     if (!stages.includes(node.stage)) stages.push(node.stage)
@@ -350,6 +372,7 @@ export default function WorkflowNodeTree({ instance, onOpenSession }: WorkflowNo
                   blackboard={instance.blackboard}
                   onOpenSession={onOpenSession}
                   onEdit={handleEdit}
+                  pullRequestLinks={pullRequestLinks}
                 />
               ))}
           </div>

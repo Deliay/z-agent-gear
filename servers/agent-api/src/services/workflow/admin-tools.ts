@@ -53,6 +53,7 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             artifactTitles: { type: 'array', items: { type: 'string' }, description: 'AI 节点产物标题数组（可选）' },
             dependsOn: { type: 'array', items: { type: 'string' }, description: '上游节点 nodeKey 列表（空数组=首节点候选）' },
             requiresWorktree: { type: 'boolean', description: '该节点会话是否需要 worktree 隔离' },
+            linkUpstreamPullRequest: { type: 'boolean', description: '人类节点：是否联动上游 Pull Request' },
           },
           required: ['nodeKey', 'type', 'name', 'stage', 'dependsOn', 'requiresWorktree'],
         },
@@ -93,6 +94,7 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             artifactTitles: { type: 'array', items: { type: 'string' } },
             dependsOn: { type: 'array', items: { type: 'string' } },
             requiresWorktree: { type: 'boolean' },
+            linkUpstreamPullRequest: { type: 'boolean' },
             agentConfig: {
               type: 'object',
               description: 'AI 节点 Agent 配置（必填）',
@@ -177,6 +179,7 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             artifactTitles: { type: 'array', items: { type: 'string' } },
             dependsOn: { type: 'array', items: { type: 'string' } },
             requiresWorktree: { type: 'boolean' },
+            linkUpstreamPullRequest: { type: 'boolean' },
             agentConfig: { type: 'object' },
           },
           required: ['nodeKey', 'type', 'name', 'stage', 'dependsOn', 'requiresWorktree'],
