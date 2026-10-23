@@ -55,6 +55,12 @@ vi.mock('@/components/cloud-host/GithubProjectSetupDialog', () => ({
   ) : null,
 }));
 
+vi.mock('@/components/settings/McpDefaultSection', () => ({
+  default: ({ controller }: { controller: ControllerData }) => (
+    <div data-testid="mcp-default-section" data-controller-id={controller.id} />
+  ),
+}));
+
 function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
   return {
     id: 'cloud-1',
@@ -321,5 +327,35 @@ describe('ControllerConfigPage', () => {
       expect(screen.getByRole('button', { name: 'Harness 工具' })).toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-panel')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('ControllerConfigPage 默认 MCP 页签', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsMobile.mockReturnValue(false);
+  });
+
+  it('切换「默认 MCP」页签挂载 McpDefaultSection', () => {
+    mockControllers([makeController()]);
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('config-tab-mcp'));
+    expect(screen.getByTestId('mcp-default-section')).toHaveAttribute('data-controller-id', 'ctrl-1');
+  });
+
+  it('移动端「默认 MCP」页签常驻滚动容器外', () => {
+    mockIsMobile.mockReturnValue(true);
+    mockControllers([makeController()]);
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    const scrollArea = screen.getByTestId('mobile-section-scroll');
+    const mcpTab = screen.getByTestId('config-tab-mcp');
+    expect(scrollArea).not.toContainElement(mcpTab);
+
+    fireEvent.click(mcpTab);
+    expect(scrollArea).toContainElement(screen.getByTestId('mcp-default-section'));
   });
 });

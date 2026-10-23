@@ -6,6 +6,9 @@ vi.mock('../models/cloud-container.js', () => ({
 vi.mock('../models/cloud-host-github-binding.js', () => ({
   CloudHostGithubBinding: { findOneAndUpdate: vi.fn() },
 }));
+vi.mock('../models/cloud-host.js', () => ({
+  CloudHost: { updateOne: vi.fn() },
+}));
 vi.mock('../models/cloud-host-setup-operation.js', () => ({
   CloudHostSetupOperation: {
     create: vi.fn(),
@@ -24,6 +27,7 @@ vi.mock('../models/github-installation.js', () => ({
 
 import { CloudContainer } from '../models/cloud-container.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
+import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostSetupOperation } from '../models/cloud-host-setup-operation.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
@@ -106,6 +110,7 @@ describe('CloudHostGithubService', () => {
     } as never);
     vi.mocked(CloudHostGithubBinding.findOneAndUpdate).mockResolvedValue({} as never);
     vi.mocked(CloudHostSetupOperation.updateOne).mockResolvedValue({} as never);
+    vi.mocked(CloudHost.updateOne).mockResolvedValue({} as never);
   });
 
   it('T-CHG1: 三步成功，sessionId 回填', async () => {
@@ -140,6 +145,11 @@ describe('CloudHostGithubService', () => {
     expect(CloudHostSetupOperation.updateOne).toHaveBeenLastCalledWith(
       { _id: 'op1' },
       { $set: { status: 'SUCCEEDED', sessionId: 'session-1', error: null } },
+    );
+    // D2：项目会话成功后 CAS 回填 defaultSessionId（仅空时）
+    expect(CloudHost.updateOne).toHaveBeenCalledWith(
+      { _id: HOST_ID, defaultSessionId: null },
+      { $set: { defaultSessionId: 'session-1' } },
     );
   });
 
@@ -286,8 +296,44 @@ describe('CloudHostGithubService', () => {
       });
     });
 
-    it('T-CHG-P1b: 默认前缀（迁移 008 后）拼出单层目录', async () => {
+    it('T-CHG-P1b: createSession=false 时 session 步骤初始化为 SKIPPED（多 Harness）', async () => {
       const { service } = makeService();
+
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'User/Repo',
+        targetPath: '/root/workspace',
+        createSession: false,
+      });
+
+      expect(created[0].steps).toEqual([
+        { key: 'workload', status: 'PENDING', detail: null },
+        { key: 'gitSetup', status: 'PENDING', detail: null },
+        { key: 'session', status: 'SKIPPED', detail: '多 Harness 不自动创建会话' },
+      ]);
+    });
+
+    it('T-CHG-P1c: 缺省 createSession 保持 PENDING（单 Harness 旧行为）', async () => {
+      const { service } = makeService();
+
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'User/Repo',
+        targetPath: '/root/workspace',
+      });
+
+      expect(created[0].steps).toEqual([
+        { key: 'workload', status: 'PENDING', detail: null },
+        { key: 'gitSetup', status: 'PENDING', detail: null },
+        { key: 'session', status: 'PENDING', detail: null },
+      ]);
+    });
+
+    it('T-CHG-P1b: 默认前缀（迁移 008 后）拼出单层目录', async () => {      const { service } = makeService();
       await service.createOperation({
         userId: USER_ID,
         controllerId: CONTROLLER_ID,

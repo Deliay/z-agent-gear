@@ -443,3 +443,264 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     });
   });
 });
+
+// Phase 9：云电脑创建/查询/项目准备新增开关的 API 契约
+const CLOUD_HOST = `
+  query CloudHost($id: ID!) {
+    cloudHost(id: $id) {
+      id name controllerId status harnessTypes defaultSessionId activeSessionCount
+    }
+  }
+`;
+
+const SETUP_GITHUB = `
+  mutation SetupGithub($input: SetupCloudHostGithubProjectInput!) {
+    setupCloudHostGithubProject(input: $input) {
+      id kind status steps { key status detail } sessionId error
+    }
+  }
+`;
+
+describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSession / cloudHost(id) / createSession', () => {
+  async function seedRunningHost(userId: string) {
+    const db = (await mongoDb())!;
+    const controllerId = new mongoose.Types.ObjectId();
+    const hostId = new mongoose.Types.ObjectId();
+    const workspaceId = new mongoose.Types.ObjectId();
+    const keyId = new mongoose.Types.ObjectId();
+    const now = new Date();
+    await db.collection('controllers').insertOne({
+      _id: controllerId,
+      userId: new mongoose.Types.ObjectId(userId),
+      name: `phase9-${hostId.toString()}`,
+      hostname: `phase9-${hostId.toString()}`,
+      type: 'cloud',
+      status: 'online',
+      keyId,
+      version: '2.6.0',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection('controllerworkspaces').insertOne({
+      _id: workspaceId,
+      userId: new mongoose.Types.ObjectId(userId),
+      controllerId,
+      name: 'workspace',
+      path: '/root/workspace',
+      isEnabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection('cloudhosts').insertOne({
+      _id: hostId,
+      userId: new mongoose.Types.ObjectId(userId),
+      name: `phase9-${hostId.toString()}`,
+      harnessTypes: ['OPENCODE'],
+      status: 'RUNNING',
+      controllerId,
+      keyId,
+      workspaceId,
+      containerId: new mongoose.Types.ObjectId().toString(),
+      defaultSessionId: null,
+      startedAt: now,
+      readyAt: now,
+      stoppedAt: null,
+      failureReason: null,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return {
+      db,
+      controllerId: controllerId.toString(),
+      hostId: hostId.toString(),
+      cleanup: async () => {
+        await db.collection('cloud_host_setup_operations').deleteMany({ controllerId });
+        await db.collection('cloud_host_github_bindings').deleteMany({ controllerId });
+        await db.collection('sessions').deleteMany({ controllerId });
+        await db.collection('cloudhosts').deleteOne({ _id: hostId });
+        await db.collection('controllerworkspaces').deleteOne({ _id: workspaceId });
+        await db.collection('controllers').deleteOne({ _id: controllerId });
+      },
+    };
+  }
+
+  async function seedGithubAccount(userId: string) {
+    const db = (await mongoDb())!;
+    const accountId = new mongoose.Types.ObjectId();
+    await db.collection('githubaccounts').insertOne({
+      _id: accountId,
+      userId,
+      githubUserId: Date.now(),
+      githubLogin: 'phase9-owner',
+      accessToken: 'encrypted-token',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.collection('githubinstallations').insertOne({
+      _id: new mongoose.Types.ObjectId(),
+      accountId,
+      installationId: Date.now(),
+      accountLogin: 'phase9-owner',
+      accountType: 'User',
+      repos: [
+        {
+          repoId: 1,
+          repoName: 'repo',
+          fullName: 'phase9-owner/repo',
+          private: false,
+          permissions: { read: true, write: true },
+        },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return {
+      accountId: accountId.toString(),
+      cleanup: async () => {
+        await db.collection('githubinstallations').deleteOne({ accountId });
+        await db.collection('githubaccounts').deleteOne({ _id: accountId });
+      },
+    };
+  }
+
+  it('T-CH-API-CDS1: createDefaultSession=false 落库，缺省保持 true', async () => {
+    const db = (await mongoDb())!;
+    const token = await signup();
+    const created = await gql(
+      CREATE,
+      {
+        input: {
+          name: `cds-${Date.now().toString(36)}`,
+          harnessTypes: ['OPENCODE'],
+          createDefaultSession: false,
+        },
+      },
+      token,
+    );
+    expect(created.errors).toBeUndefined();
+    const host = created.data.createCloudHost;
+    try {
+      const doc = await db.collection('cloudhosts').findOne({
+        _id: new mongoose.Types.ObjectId(host.id),
+      });
+      expect(doc?.createDefaultSession).toBe(false);
+
+      const legacyToken = await signup();
+      const legacy = await gql(
+        CREATE,
+        {
+          input: {
+            name: `cds-default-${Date.now().toString(36)}`,
+            harnessTypes: ['OPENCODE'],
+          },
+        },
+        legacyToken,
+      );
+      expect(legacy.errors).toBeUndefined();
+      const legacyHost = legacy.data.createCloudHost;
+      const legacyDoc = await db.collection('cloudhosts').findOne({
+        _id: new mongoose.Types.ObjectId(legacyHost.id),
+      });
+      expect(legacyDoc?.createDefaultSession).toBe(true);
+
+      await gql(STOP, { id: legacyHost.id, force: true }, legacyToken);
+      await gql(DELETE, { id: legacyHost.id }, legacyToken);
+    } finally {
+      await gql(STOP, { id: host.id, force: true }, token);
+      await gql(DELETE, { id: host.id }, token);
+    }
+  });
+
+  it('T-CH-API-CHID1: cloudHost(id) 返回本人云电脑，他人/非法 ID 返回 null', async () => {
+    const { token, userId } = await signupWithId();
+    const other = await signup();
+    const seeded = await seedRunningHost(userId);
+    try {
+      const own = await gql(CLOUD_HOST, { id: seeded.hostId }, token);
+      expect(own.errors).toBeUndefined();
+      expect(own.data.cloudHost).toMatchObject({
+        id: seeded.hostId,
+        controllerId: seeded.controllerId,
+        status: 'RUNNING',
+      });
+
+      const foreign = await gql(CLOUD_HOST, { id: seeded.hostId }, other);
+      expect(foreign.errors).toBeUndefined();
+      expect(foreign.data.cloudHost).toBeNull();
+
+      const missing = await gql(CLOUD_HOST, { id: '000000000000000000000000' }, token);
+      expect(missing.errors).toBeUndefined();
+      expect(missing.data.cloudHost).toBeNull();
+
+      const malformed = await gql(CLOUD_HOST, { id: 'not-an-id' }, token);
+      expect(malformed.errors).toBeUndefined();
+      expect(malformed.data.cloudHost).toBeNull();
+    } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-CH-API-CS1: createSession=false 时 session 步骤初始化为 SKIPPED', async () => {
+    const { token, userId } = await signupWithId();
+    const seeded = await seedRunningHost(userId);
+    const github = await seedGithubAccount(userId);
+    try {
+      const result = await gql(
+        SETUP_GITHUB,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: github.accountId,
+            repoFullName: 'phase9-owner/repo',
+            targetPath: '/root/workspace',
+            createSession: false,
+          },
+        },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      const steps = result.data.setupCloudHostGithubProject.steps as Array<{
+        key: string;
+        status: string;
+        detail: string | null;
+      }>;
+      expect(steps.find((step) => step.key === 'session')).toMatchObject({
+        status: 'SKIPPED',
+        detail: '多 Harness 不自动创建会话',
+      });
+    } finally {
+      await github.cleanup();
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-CH-API-CS2: 缺省 createSession 保持 PENDING（单 Harness 旧行为）', async () => {
+    const { token, userId } = await signupWithId();
+    const seeded = await seedRunningHost(userId);
+    const github = await seedGithubAccount(userId);
+    try {
+      const result = await gql(
+        SETUP_GITHUB,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: github.accountId,
+            repoFullName: 'phase9-owner/repo',
+            targetPath: '/root/workspace',
+          },
+        },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      const steps = result.data.setupCloudHostGithubProject.steps as Array<{
+        key: string;
+        status: string;
+      }>;
+      expect(steps.find((step) => step.key === 'session')?.status).not.toBe('SKIPPED');
+    } finally {
+      await github.cleanup();
+      await seeded.cleanup();
+    }
+  });
+});

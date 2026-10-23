@@ -364,8 +364,13 @@ input CreateSessionInput {
   enableWorktree: Boolean = false
   worktreeBranchSuffix: String
   existingWorktreePath: String
+  # 语义：缺省 = 按控制器 defaultMcp 解析；显式传数组（含 []）= 以调用方为准。
+  # 云会话仍自动并入 agent-cloud-host-tools。
   mcpServerIds: [ID!]
   additionalDirectories: [String!]
+  # 新增：拉起前选择的模式/模型；缺省使用工具默认值
+  modeId: ID
+  modelId: ID
 }
 
 type ResumeSessionPayload {
@@ -385,7 +390,7 @@ type Query {
   # hasMore: 返回条数 == limit 则可能还有更多
   sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
   acpCapabilities(controllerId: ID!): [AcpCapability!]!
-  # 拉起空实例探测指定工具的 Mode/模型选项（结果按 controllerId+type 缓存 1h）
+  # 拉起空实例探测指定工具的 Mode/模型选项（结果按 controllerId+type 缓存 5 分钟）
   acpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
   listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   getTodoList: [TodoItem!]!
@@ -413,4 +418,6 @@ type Mutation {
   markAllTodoRead: Boolean!
   updatePermissionTimeout(sessionId: ID, timeoutAction: PermissionTimeoutAction!): Boolean!
   updateGlobalPermissionTimeout(timeoutAction: GlobalPermissionTimeoutAction!): Boolean!
+  # 删除该 controllerId+acpServerType 的探测缓存并立即重新探测（失败返回空选项）
+  refreshAcpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
 }
