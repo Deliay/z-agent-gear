@@ -12,6 +12,8 @@ export interface K8sEnvVar {
 export interface K8sResourceList {
   cpu: string;
   memory: string;
+  /** 临时存储上限（键名含连字符需引号）；云电脑固定 10Gi（env 可覆盖）。 */
+  'ephemeral-storage'?: string;
 }
 
 export interface K8sResourceRequirements {

@@ -87,6 +87,8 @@ export interface JobManagerConfig {
   image: string;
   runtimeClassName?: string;
   publicWsEndpoint: string;
+  /** 工作容器临时存储上限（requests=limits）；缺省 `10Gi`，由 `JOB_EPHEMERAL_STORAGE` 注入。 */
+  ephemeralStorage?: string;
 }
 
 export interface CreateJobInput {
@@ -140,7 +142,11 @@ export class K8sJobManager {
                 ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
               resources: {
-                limits: { ...JOB_RESOURCES.limits },
+                // 与 PR #268 口径一致：不设置 requests，仅声明 limits 硬上限
+                limits: {
+                  ...JOB_RESOURCES.limits,
+                  'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi',
+                },
               },
             },
           ],

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { InMemoryK8sClient } from '../../../../servers/cloud-controller/src/services/k8s-client';
+import { K8sJobManager } from '../../../../servers/cloud-controller/src/services/k8s-job-manager';
 
 // cloud-controller 内部管理 REST（契约附录 A）。由 Aspire 以 K8S_ENABLED=false 启动。
 // INTERNAL_API_TOKEN 已无公开默认值（问题 47）：须经环境注入，未提供时显式跳过而非静默假绿。
@@ -644,5 +646,35 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       if (containerId) await req(`/internal/containers/${containerId}`, { method: 'DELETE' });
       await db!.collection('cloudworkloads').deleteOne({ _id: workloadId });
     }
+  });
+});
+
+// Phase 4：通过真实 Job manifest 构造断言 ephemeral-storage（无需 K8s 集群）
+describe('cloud-controller Job manifest resources', () => {
+  const build = (ephemeralStorage?: string) => {
+    const manager = new K8sJobManager(new InMemoryK8sClient(), {
+      namespace: 'zag-workers',
+      image: 'worker:1.0.0',
+      runtimeClassName: 'sysbox-runc',
+      publicWsEndpoint: 'cloud.example.com:4003',
+      ...(ephemeralStorage ? { ephemeralStorage } : {}),
+    });
+    return manager.buildManifest({
+      jobName: 'zag-worker-e2e',
+      containerId: 'container-e2e',
+      token: 'container-e2e.secret',
+    });
+  };
+
+  it('T-IC-EPH1: requests/limits 均含 ephemeral-storage: 10Gi', () => {
+    const resources = build().spec.template.spec.containers[0]!.resources;
+    expect(resources.requests['ephemeral-storage']).toBe('10Gi');
+    expect(resources.limits['ephemeral-storage']).toBe('10Gi');
+  });
+
+  it('T-IC-EPH2: JOB_EPHEMERAL_STORAGE 覆盖值同时作用于 requests/limits', () => {
+    const resources = build('5Gi').spec.template.spec.containers[0]!.resources;
+    expect(resources.requests['ephemeral-storage']).toBe('5Gi');
+    expect(resources.limits['ephemeral-storage']).toBe('5Gi');
   });
 });

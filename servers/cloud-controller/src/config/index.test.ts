@@ -12,6 +12,18 @@ describe('cloud-controller config', () => {
     expect(cfg.workloadInitTimeoutMs).toBe(300000);
     expect(cfg.workloadPostBudgetMs).toBe(90000);
     expect(cfg.workloadLogMaxBytes).toBe(262144);
+    // 云电脑 Job 临时存储默认 10Gi
+    expect(cfg.jobEphemeralStorage).toBe('10Gi');
+  });
+
+  it('reads JOB_EPHEMERAL_STORAGE override from env', () => {
+    const cfg = loadConfig({ JOB_EPHEMERAL_STORAGE: '5Gi' } as NodeJS.ProcessEnv);
+    expect(cfg.jobEphemeralStorage).toBe('5Gi');
+
+    // 空值回退默认值
+    expect(
+      loadConfig({ JOB_EPHEMERAL_STORAGE: '   ' } as NodeJS.ProcessEnv).jobEphemeralStorage,
+    ).toBe('10Gi');
   });
 
   it('reads workload overrides from env', () => {

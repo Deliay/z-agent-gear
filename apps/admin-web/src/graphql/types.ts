@@ -73,6 +73,8 @@ export interface AdminModelData {
   sortOrder: number;
   scope: ConfigScope;
   pricing?: ModelPricingData | null;
+  /** 最长上下文大小（token）；null/未设置表示未配置 */
+  contextLength?: number | null;
   createdAt: string;
   updatedAt: string;
 }

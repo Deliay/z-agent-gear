@@ -65,6 +65,7 @@ npx playwright test
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
+| `INTERNAL_API_TOKEN` | agent-api 内部回调 Bearer token（`E2E-1` 驱动 cloud host ready 回调；**缺省时 E2E-1 显式 skip，不静默绕过核心断言**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:4001` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32；缺失时该组用例跳过） | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |

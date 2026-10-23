@@ -15,6 +15,7 @@ import {
   UPDATE_GLOBAL_MODEL_SORT_ORDER,
   CREATE_GLOBAL_CUSTOM_MODEL,
   DELETE_GLOBAL_MODEL,
+  UPDATE_MODEL_CONTEXT_LENGTH,
 } from '@/graphql/mutations'
 import type {
   AdminModelData,
@@ -40,9 +41,11 @@ export default function ModelSection() {
   const [toggleModel] = useMutation(TOGGLE_GLOBAL_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_GLOBAL_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_GLOBAL_CUSTOM_MODEL)
+  const [updateContextLength] = useMutation(UPDATE_MODEL_CONTEXT_LENGTH)
   const [deleteModel] = useMutation(DELETE_GLOBAL_MODEL)
 
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
+  const [editingModel, setEditingModel] = useState<AdminModelData | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminModelData | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   // 默认全部折叠；状态保存在页面内存，refetch 不重置
@@ -180,11 +183,29 @@ export default function ModelSection() {
     }
   }
 
-  const handleCustomSave = async (providerId: string, name: string) => {
+  const handleCustomSave = async (providerId: string, name: string, contextLength: number | null) => {
     await createCustom({
-      variables: { input: { providerId, name } },
+      variables: { input: { providerId, name, contextLength } },
       refetchQueries: [ADMIN_MODELS, ADMIN_PROVIDERS],
     })
+  }
+
+  const handleEditSave = async (
+    _providerId: string,
+    _name: string,
+    contextLength: number | null,
+  ) => {
+    if (!editingModel) return
+    try {
+      await updateContextLength({
+        variables: { modelId: editingModel.id, contextLength },
+        refetchQueries: [ADMIN_MODELS],
+      })
+      toast.success('模型最长上下文已更新')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+      throw err
+    }
   }
 
   const enabledProviders = (providersData?.adminProviders ?? [])
@@ -237,6 +258,7 @@ export default function ModelSection() {
                           const target = models.find((m) => m.id === id)
                           if (target) setDeleteTarget(target)
                         }}
+                        onEdit={(model) => setEditingModel(model)}
                       />
                     ))}
                   </div>
@@ -264,6 +286,16 @@ export default function ModelSection() {
         providers={enabledProviders}
         existingNames={models.map((m) => m.name)}
         onSave={handleCustomSave}
+      />
+
+      <CustomModelDialog
+        open={editingModel !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingModel(null)
+        }}
+        providers={enabledProviders}
+        model={editingModel}
+        onSave={handleEditSave}
       />
     </section>
   )

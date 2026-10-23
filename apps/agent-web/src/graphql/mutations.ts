@@ -449,6 +449,7 @@ export const CREATE_CLOUD_HOST = gql`
       activeSessionCount
       failureReason
       deletedAt
+      hasDefaultWorkspace
     }
   }
 `

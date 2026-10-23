@@ -322,8 +322,11 @@ export default function NewCloudHostDialog({
             {harnessError && supportedHarnesses.length > 0 && (
               <p className="mt-1 text-xs text-destructive">{harnessError}</p>
             )}
+            {/* 默认工作区只在「Git 项目设置」初始化时创建：普通创建就绪后不会自动进会话 */}
             {selectedHarnesses.length === 1 && (
-              <p className="mt-1 text-xs text-muted-foreground">将自动创建会话</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                就绪后不会自动创建会话，需先创建或绑定工作区
+              </p>
             )}
             {selectedHarnesses.length > 1 && (
               <p className="mt-1 text-xs text-muted-foreground">不自动创建会话</p>

@@ -36,7 +36,7 @@ const MY_HOSTS = `
   query {
     myCloudHosts {
       id name controllerId status harnessTypes defaultSessionId activeSessionCount
-      containerId createdAt readyAt stoppedAt failureReason deletedAt
+      containerId createdAt readyAt stoppedAt failureReason deletedAt hasDefaultWorkspace
     }
   }
 `;
@@ -44,7 +44,7 @@ const MY_HOSTS = `
 const CREATE = `
   mutation CreateCloudHost($input: CreateCloudHostInput!) {
     createCloudHost(input: $input) {
-      id name controllerId status harnessTypes defaultSessionId activeSessionCount
+      id name controllerId status harnessTypes defaultSessionId activeSessionCount hasDefaultWorkspace
     }
   }
 `;
@@ -128,7 +128,12 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
     const created = await gql(
       CREATE,
-      { input: { name: `cloud-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      {
+        input: {
+          name: `cloud-${Date.now().toString(36)}`,
+          harnessTypes: ['OPENCODE'],
+        },
+      },
       token,
     );
     expect(created.errors).toBeUndefined();
@@ -156,7 +161,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         (workspace: { controllerId: string; path: string }) =>
           workspace.controllerId === host.controllerId && workspace.path === '/root/workspace',
       ),
-    ).toBe(true);
+    ).toBe(false);
     const keys = await gql(KEYS, undefined, token);
     expect(keys.data.controllerKeys.some((key: { type: string }) => key.type === 'cloud')).toBe(
       false,
@@ -216,6 +221,44 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       (item: { id: string }) => item.id === host.controllerId,
     );
     expect(offlined).toBeUndefined();
+  });
+
+  it('T-CH-DW1: 创建期不预置默认工作区（hasDefaultWorkspace=false、工作区列表为空、不自动建会话）', async () => {
+    const createAndInspect = async (input: Record<string, unknown>) => {
+      const token = await signup();
+      const created = await gql(
+        CREATE,
+        { input: { name: `dw-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], ...input } },
+        token,
+      );
+      expect(created.errors).toBeUndefined();
+      const host = created.data.createCloudHost as {
+        id: string;
+        controllerId: string;
+        defaultSessionId: string | null;
+        hasDefaultWorkspace: boolean;
+      };
+      const workspaces = await gql(WORKSPACES, undefined, token);
+      const scoped = workspaces.data.workspaces.filter(
+        (workspace: { controllerId: string }) => workspace.controllerId === host.controllerId,
+      );
+
+      // 清理：先停后删，避免残留活跃云电脑
+      await gql(STOP, { id: host.id, force: true }, token);
+      await gql(DELETE, { id: host.id }, token);
+      return { host, scoped };
+    };
+
+    // 默认工作区只在「Git 项目设置」初始化 Github 项目时创建
+    const omitted = await createAndInspect({});
+    expect(omitted.host.hasDefaultWorkspace).toBe(false);
+    expect(omitted.host.defaultSessionId).toBeNull();
+    expect(omitted.scoped).toEqual([]);
+
+    const explicitEmpty = await createAndInspect({ workloadIds: [] });
+    expect(explicitEmpty.host.hasDefaultWorkspace).toBe(false);
+    expect(explicitEmpty.host.defaultSessionId).toBeNull();
+    expect(explicitEmpty.scoped).toEqual([]);
   });
 
   it.skipIf(!HAS_MONGO)('R2-11: soft delete keeps DB archive row (cloudhosts.deletedAt + controllers row)', async () => {

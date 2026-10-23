@@ -7,13 +7,17 @@ import {
   K8sJobManager,
 } from './k8s-job-manager.js';
 
-function setup(publicWsEndpoint = 'cloud.example.com:4003') {
+function setup(
+  publicWsEndpoint = 'cloud.example.com:4003',
+  overrides: { ephemeralStorage?: string } = {},
+) {
   const client = new InMemoryK8sClient();
   const manager = new K8sJobManager(client, {
     namespace: 'zag-workers',
     image: 'core.harbor.internal.fffdan.com/zero-tools/zag-worker:1.0.0',
     runtimeClassName: 'sysbox-runc',
     publicWsEndpoint,
+    ...overrides,
   });
   return { client, manager };
 }
@@ -86,7 +90,31 @@ describe('K8sJobManager', () => {
     expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThan(0);
     const resources = manifest.spec.template.spec.containers[0]!.resources;
     expect(resources.requests).toBeUndefined();
-    expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi' });
+    expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi', 'ephemeral-storage': '10Gi' });
+  });
+
+  it('T-K5b: JOB_EPHEMERAL_STORAGE override applies to limits', () => {
+    const { manager } = setup(undefined, { ephemeralStorage: '5Gi' });
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-abc123',
+      containerId: 'container-1',
+      token: 'container-1.secret',
+    });
+    const resources = manifest.spec.template.spec.containers[0]!.resources;
+    expect(resources.requests).toBeUndefined();
+    expect(resources.limits['ephemeral-storage']).toBe('5Gi');
+  });
+
+  it('T-K5c: omitting the override falls back to 10Gi', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-abc123',
+      containerId: 'container-1',
+      token: 'container-1.secret',
+    });
+    const resources = manifest.spec.template.spec.containers[0]!.resources;
+    expect(resources.requests).toBeUndefined();
+    expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 
   it('T-K2: env injects token via ZAG_CONTROLLER_KEY and a token-free endpoint', () => {

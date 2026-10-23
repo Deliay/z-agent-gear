@@ -129,13 +129,18 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('选择 1 个 Harness 时提示将自动创建会话并可提交', () => {
+  it('不提供「创建默认工作区」勾选，单 Harness 提示就绪后不会自动创建会话', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '  云电脑 A  ' } });
     fireEvent.click(screen.getByLabelText('OpenCode'));
 
-    expect(screen.getByText('将自动创建会话')).toBeInTheDocument();
+    // 默认工作区只在「Git 项目设置」初始化时创建：普通创建不会自动建会话
+    expect(screen.queryByLabelText('创建默认工作区')).not.toBeInTheDocument();
+    expect(screen.queryByText('将自动创建会话')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+    ).toBeInTheDocument();
     expect(submitButton()).not.toBeDisabled();
   });
 

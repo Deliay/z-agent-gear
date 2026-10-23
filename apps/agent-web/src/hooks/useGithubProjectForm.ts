@@ -38,6 +38,11 @@ export interface GithubProjectFormOptions {
   /** 前缀地址默认值（cloudHost.defaultWorkspace） */
   defaultWorkspace?: string | null
   /**
+   * 是否已创建默认工作区（CloudHost.hasDefaultWorkspace）。
+   * false 时不预填前缀地址——创建期不再预置 /root/workspace，由用户按需填写。
+   */
+  hasDefaultWorkspace?: boolean | null
+  /**
    * 云电脑尚未创建时（新建云电脑流程）没有 controllerId，无法查询工作负载列表，
    * 此时只收集账号/仓库/前缀，工作负载由服务端 setup 时自动补 Github 预制项。
    */
@@ -75,6 +80,7 @@ export function useGithubProjectForm({
   open,
   controllerId,
   defaultWorkspace,
+  hasDefaultWorkspace,
   includeWorkloads = true,
 }: GithubProjectFormOptions): GithubProjectFormState {
   const [accountId, setAccountIdState] = useState('')
@@ -109,12 +115,15 @@ export function useGithubProjectForm({
     [workloads],
   )
 
-  // 打开时重置；includeWorkloads=false 的新建流程仍使用 cloudHost.defaultWorkspace 兜底
+  // 打开时重置；无默认工作区（hasDefaultWorkspace=false）时不预填前缀，
+  // 新建云电脑流程（未传 hasDefaultWorkspace）仍以 cloudHost.defaultWorkspace 兜底
   useEffect(() => {
     if (!open) return
     setAccountIdState('')
     setRepoFullNameState('')
-    setTargetPathState(defaultWorkspace ?? '/root/workspace')
+    setTargetPathState(
+      hasDefaultWorkspace === false ? '' : (defaultWorkspace ?? '/root/workspace'),
+    )
     setSelectedWorkloadIds([])
     // 仅在打开时重置，避免父组件轮询刷新时覆盖用户输入
     // eslint-disable-next-line react-hooks/exhaustive-deps

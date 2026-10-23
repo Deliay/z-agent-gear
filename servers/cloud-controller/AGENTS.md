@@ -125,3 +125,8 @@ npm run test:coverage
 - [Common Rules](../../docs/engineering/common-rules.md)
 - [Backend Rules](../../docs/engineering/backend-rules.md)
 - [WS 契约](../../contracts/cloud-controller-websocket.md)
+
+## 云容器优化二期（ephemeral-storage）
+
+- Job pod 模板 `resources.limits` 增加 `ephemeral-storage`，默认 `10Gi`，可由 `JOB_EPHEMERAL_STORAGE` 覆盖（`JobManagerConfig.ephemeralStorage`）；**不设置 `requests`**（与既有 CPU/内存口径一致）；`K8sResourceList` 已扩展该可选字段。
+- 部署 env 同步：`deploy/k8s/cloud-controller.yaml`、`aspire/AgentGear.AppHost/AppHost.cs`、`aspire/manifest/docker-compose.yaml`。

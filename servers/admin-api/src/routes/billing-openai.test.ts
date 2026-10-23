@@ -498,6 +498,38 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     expect(body.data.map((item) => item.id)).toEqual(['test-model']);
   });
 
+  it('T-CL5: /v1/models 下发 context_length（account 与 cloud_host 两口径）', async () => {
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { contextLength: 200000 } });
+    const { secret } = await seedCloudHostKey();
+
+    for (const key of [apiKeySecret, secret]) {
+      const res = await listModels(key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        data: Array<{ id: string; context_length?: number }>;
+      };
+      const entry = body.data.find((item) => item.id === 'test-model');
+      expect(entry).toBeDefined();
+      expect(entry!.context_length).toBe(200000);
+    }
+  });
+
+  it('T-CL6: 未设置或清空后 /v1/models 省略 context_length 字段', async () => {
+    const { secret } = await seedCloudHostKey();
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { contextLength: 128000 } });
+
+    // 清空后立即消失（无缓存）
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { contextLength: null } });
+
+    for (const key of [apiKeySecret, secret]) {
+      const res = await listModels(key);
+      const body = (await res.json()) as { data: Array<Record<string, unknown>> };
+      const entry = body.data.find((item) => item.id === 'test-model');
+      expect(entry).toBeDefined();
+      expect('context_length' in entry!).toBe(false);
+    }
+  });
+
   it('T-BK11: 系统模型调用 — 计量/outbox、cloudHostId 归因、billable=true', async () => {
     const { secret, cloudHostId } = await seedCloudHostKey();
     const res = await callWithKey(secret, {

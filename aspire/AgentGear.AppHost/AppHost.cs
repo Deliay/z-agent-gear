@@ -157,6 +157,8 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithEnvironment("WORKLOAD_INIT_TIMEOUT_MS", "300000")
     .WithEnvironment("WORKLOAD_POST_BUDGET_MS", "90000")
     .WithEnvironment("WORKLOAD_LOG_MAX_BYTES", "262144")
+    // 云电脑 Job 临时存储上限（requests=limits）
+    .WithEnvironment("JOB_EPHEMERAL_STORAGE", "10Gi")
     // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
     .WithEnvironment("K8S_ENABLED", "false")
     .WithReference(mongodb)

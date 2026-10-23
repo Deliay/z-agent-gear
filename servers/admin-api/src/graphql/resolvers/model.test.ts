@@ -14,6 +14,7 @@ vi.mock('../../services/model.js', () => ({
     delete: vi.fn(),
     toggle: vi.fn(),
     updateSortOrder: vi.fn(),
+    updateContextLength: vi.fn(),
   },
 }));
 
@@ -165,6 +166,35 @@ describe('modelResolvers', () => {
     it('T-M4: updateGlobalModelSortOrder delegates', async () => {
       (modelService.updateSortOrder as any).mockResolvedValue([{ id: 'm1' }]);
       await expect(Mutation.updateGlobalModelSortOrder({}, { ids: ['m1'] }, good)).resolves.toEqual([{ id: 'm1' }]);
+    });
+
+    it('T-CL4: updateModelContextLength delegates and defaults missing arg to null', async () => {
+      (modelService.updateContextLength as any).mockResolvedValue({ id: 'm1', contextLength: 128000 });
+      await expect(
+        Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 128000 }, good),
+      ).resolves.toEqual({ id: 'm1', contextLength: 128000 });
+      expect(modelService.updateContextLength).toHaveBeenCalledWith('m1', 128000);
+
+      (modelService.updateContextLength as any).mockResolvedValue({ id: 'm1', contextLength: null });
+      await expect(
+        Mutation.updateModelContextLength({}, { modelId: 'm1' }, good),
+      ).resolves.toEqual({ id: 'm1', contextLength: null });
+      expect(modelService.updateContextLength).toHaveBeenLastCalledWith('m1', null);
+    });
+
+    it('T-CL4: updateModelContextLength maps validation errors', async () => {
+      (modelService.updateContextLength as any).mockRejectedValue(
+        new Error('contextLength must be a positive integer'),
+      );
+      await expect(
+        Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 0 }, good),
+      ).rejects.toThrow('contextLength must be a positive integer');
+    });
+
+    it('T-CL4: updateModelContextLength requires authentication', async () => {
+      await expect(
+        Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 1 }, anon),
+      ).rejects.toThrow('Not authenticated');
     });
   });
 
