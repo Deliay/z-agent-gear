@@ -98,6 +98,9 @@ var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
 var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: SecretOrDefault("github-token-encryption-key"));
+// 事件回调鉴权（工作流 PR 联动）：平台回调凭据与 GitHub Webhook 签名密钥
+var eventCallbackToken = builder.AddParameter("event-callback-token", secret: true, value: SecretOrDefault("event-callback-token"));
+var githubWebhookSecret = builder.AddParameter("github-webhook-secret", secret: true, value: SecretOrDefault("github-webhook-secret"));
 var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
@@ -124,6 +127,8 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
+    .WithEnvironment("EVENT_CALLBACK_TOKEN", eventCallbackToken)
+    .WithEnvironment("GITHUB_WEBHOOK_SECRET", githubWebhookSecret)
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()

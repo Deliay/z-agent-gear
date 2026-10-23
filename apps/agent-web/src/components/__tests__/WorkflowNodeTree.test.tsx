@@ -35,6 +35,7 @@ function makeNode(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     artifactTitles: null,
     agentConfig: null,
     requiresWorktree: null,
+    linkUpstreamPullRequest: false,
     sortOrder: null,
     dependsOn: [],
     createdAt: '2026-08-08T00:00:00Z',
@@ -65,6 +66,8 @@ function makeInstance(nodes: WorkflowNodeData[]): WorkflowInstanceData {
     nodes,
     blackboard: [],
     blackboardTrash: [],
+    additionalPrompts: [],
+    pullRequestLinks: [],
     createdAt: '2026-08-08T00:00:00Z',
     updatedAt: '2026-08-08T00:00:00Z',
   };
@@ -399,5 +402,34 @@ describe('节点重启（编辑面板模式）', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '重启' }));
     expect(screen.getByText(/重启将关闭当前会话并以新配置重新拉起/)).toBeDefined();
+  });
+});
+
+describe('节点关联 Pull Request 徽标', () => {
+  it('存在关联时展示 PR 徽标与链接', () => {
+    const instance = makeInstance([makeNode()]);
+    render(
+      <WorkflowNodeTree
+        instance={instance}
+        onOpenSession={vi.fn()}
+        pullRequestLinks={[
+          {
+            pullRequestId: 'Deliay/z-agent-gear#264',
+            prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+            nodeId: 'n1',
+            nodeName: '评审',
+            registeredAt: '2026-10-23T06:00:00Z',
+          },
+        ]}
+      />,
+    );
+    const badge = screen.getByText('PR');
+    expect(badge).toHaveAttribute('title', 'Deliay/z-agent-gear#264');
+    expect(badge).toHaveAttribute('href', 'https://github.com/Deliay/z-agent-gear/pull/264');
+  });
+
+  it('无关联时不展示 PR 徽标', () => {
+    render(<WorkflowNodeTree instance={makeInstance([makeNode()])} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText('PR')).not.toBeInTheDocument();
   });
 });
