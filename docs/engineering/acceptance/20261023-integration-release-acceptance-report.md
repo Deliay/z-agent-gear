@@ -1,11 +1,13 @@
 ---
-description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）；第四轮逐条复核返工提交 72baf55：N-5/N-6/N-7 属实闭环（N-6 回退探针实证可红），N-4 有界退避+超限告警+三入口接线属实但核心机制无效——runOutsideTransitionLock 经 KeyedMutex.runDetached 预取实例锁后才执行任务，任务内 workflowEngine.transition 必然再撞自锁 re-entrant，引擎级探针（真实锁+真实引擎）实证延迟路径 4 次尝试全数自撞、fail 转移 0 次执行、节点停留 RUNNING，配套用例 mock 掉被测对象零区分力，1×🟠 N-8（另有 🟡 N-9 持锁内 await runDetached 死锁隐患），独立复跑 tsc×7/lint×2/单测五包 1000/656+1skip/254/235/663/e2e-typecheck 全绿，第四轮打回（REJECT）；第五轮逐条复核返工提交 7499758：N-8 核心修复属实闭环（runDetached 不预取锁、任务自行取锁，3 个新用例经回退探针实证可红、区分力成立，自报数值与独立复跑逐项一致 1002/656+1skip/254/235/663/tsc×7/tests-e2e-typecheck 全绿），但发现 1×🟠 N-10（N-9 快速失败误伤生产定时器形态——deferSessionFallback 重试 setTimeout 继承 ALS 过期 held 视图，外层锁持有超过 100ms 退避窗口即误抛，.catch 只告警不重排，兜底链静默丢弃、节点永久停 RUNNING，真实定时器探针 P2/P3 实证；交付用例 vi.useFakeTimers 不传播 ALS，结构性看不到 N-8 根因属性而漏检）+2×🟡（N-11 owners 记最后入队者致「持锁+排队等待者」假阴性，runDetached 仍永久死锁、JSDoc 与实现不符，探针 P4 实证；N-12 自报「N-9 不再永久等待」连续第四轮超出实际且未写明 fake-timer/ALS 测试边界），全栈证据连续五轮未交付、12.6 书面豁免待人类裁定，integration 集成验收第五轮打回（REJECT）；第六轮逐条复核返工提交 af39766：N-10(a)/(b) 与 N-11 机制修复属实（独立真实定时器探针 P2'/P3'/P4'/P5' 实证 + 回退探针 R2），但发现 1×🟠 N-13（「N-10 真实定时器」引擎级用例对 N-10(a) 零区分力——仅回退 runDetached 至第五轮 fast-fail 语义后用例仍绿 404ms→705ms，误抛被 .catch 重排掩盖）+2×🟡（N-14 notifyFallbackExhausted 查不到实例/节点时静默跳过介入待办、N-15 engine.ts JSDoc 未同步 N-10/N-11 语义），独立复跑 tsc×7/lint×2/单测五包 1004/656+1skip/254/235/663/45/tests-e2e-typecheck 全绿与自报逐项一致，全栈证据连续六轮未交付、12.6 豁免待人类裁定，integration 集成验收第六轮打回（REJECT）
+description: integration→release 集成验收报告（PR #273）——云容器优化一期/二期 + 工作流 GitHub PR 联动三特性集成验收闭环：首轮打回 3×🔴+7×🟠+28×🟡（第四节）；第二轮逐条复核返工提交 939936b：R-1/R-2/R-3/R-4/R-5/R-8/R-9/R-10 修复属实（含回退探针实证），但发现修复引入 1×🔴（N-1 R-9 锁内 hook 嵌套流转抛 re-entrant，restart(RUNNING) 会话兜底链路确定性失败并留死会话）+ 2×🟠（N-2 C-18 dirtyRef 永不复位且自报与代码不符、N-3 C-17 终态停轮询后重试冻结）+ 2×🟠 首轮问题未闭环（U-1 R-7 失败路径不回写 workspaceId、U-2 R-6 提案 §9/§8.1 残留与 v1.2 矛盾）+ 8×🟡 残留；独立验证 tsc×5/lint×2/单测五包 986/656+1skip/254/235/657/tests-e2e-typecheck/T-IC-EPH 全绿（不采信自报，含反证探针），Aspire 全栈 tests/api+tests/e2e 未跑，第二轮打回（REJECT）；第三轮逐条复核返工提交 246eb68：N-1 受控关闭/N-3/U-1/U-2/U-3~U-6 主体属实（含回退探针），但发现 2×🟠（N-4 setImmediate 延迟重试不脱离 AsyncLocalStorage 致重试永撞 re-entrant，实证 25,675 次重试 0 次取锁且零测试覆盖；N-5 handleSessionIdled 共享 fallbackSent 仍整文档 save 互覆且自报再次失真）+2×🟡（N-6 保存清 dirty 用例无区分力、N-7 两项静默丢项），独立复跑 tsc×5/lint×2/单测五包 995/656+1skip/254/235/661/e2e-typecheck 全绿，第三轮打回（REJECT）；第四轮逐条复核返工提交 72baf55：N-5/N-6/N-7 属实闭环（N-6 回退探针实证可红），N-4 有界退避+超限告警+三入口接线属实但核心机制无效——runOutsideTransitionLock 经 KeyedMutex.runDetached 预取实例锁后才执行任务，任务内 workflowEngine.transition 必然再撞自锁 re-entrant，引擎级探针（真实锁+真实引擎）实证延迟路径 4 次尝试全数自撞、fail 转移 0 次执行、节点停留 RUNNING，配套用例 mock 掉被测对象零区分力，1×🟠 N-8（另有 🟡 N-9 持锁内 await runDetached 死锁隐患），独立复跑 tsc×7/lint×2/单测五包 1000/656+1skip/254/235/663/e2e-typecheck 全绿，第四轮打回（REJECT）；第五轮逐条复核返工提交 7499758：N-8 核心修复属实闭环（runDetached 不预取锁、任务自行取锁，3 个新用例经回退探针实证可红、区分力成立，自报数值与独立复跑逐项一致 1002/656+1skip/254/235/663/tsc×7/tests-e2e-typecheck 全绿），但发现 1×🟠 N-10（N-9 快速失败误伤生产定时器形态——deferSessionFallback 重试 setTimeout 继承 ALS 过期 held 视图，外层锁持有超过 100ms 退避窗口即误抛，.catch 只告警不重排，兜底链静默丢弃、节点永久停 RUNNING，真实定时器探针 P2/P3 实证；交付用例 vi.useFakeTimers 不传播 ALS，结构性看不到 N-8 根因属性而漏检）+2×🟡（N-11 owners 记最后入队者致「持锁+排队等待者」假阴性，runDetached 仍永久死锁、JSDoc 与实现不符，探针 P4 实证；N-12 自报「N-9 不再永久等待」连续第四轮超出实际且未写明 fake-timer/ALS 测试边界），全栈证据连续五轮未交付、12.6 书面豁免待人类裁定，integration 集成验收第五轮打回（REJECT）；第六轮逐条复核返工提交 af39766：N-10(a)/(b) 与 N-11 机制修复属实（独立真实定时器探针 P2'/P3'/P4'/P5' 实证 + 回退探针 R2），但发现 1×🟠 N-13（「N-10 真实定时器」引擎级用例对 N-10(a) 零区分力——仅回退 runDetached 至第五轮 fast-fail 语义后用例仍绿 404ms→705ms，误抛被 .catch 重排掩盖）+2×🟡（N-14 notifyFallbackExhausted 查不到实例/节点时静默跳过介入待办、N-15 engine.ts JSDoc 未同步 N-10/N-11 语义），独立复跑 tsc×7/lint×2/单测五包 1004/656+1skip/254/235/663/45/tests-e2e-typecheck 全绿与自报逐项一致，全栈证据连续六轮未交付、12.6 豁免待人类裁定，integration 集成验收第六轮打回（REJECT）；第七轮逐条复核返工提交 2254489：N-13 断言补齐+回退探针自证属实（独立复做 R1 实证断言②可红）、N-14 结构化告警两形态属实、N-15 engine JSDoc 同步属实、自报数值逐项一致（1005/656+1skip/254/235/663/46/tsc×7/tests-e2e-typecheck），但新探针 R1b 实证三断言中仅②有区分力（① findById 计数对误抛+重排形态零区分力、「无重排」声称不成立；③ 只扫 console.warn 首参而误抛文本走第二参，恒真 dead assertion）+ N-14 用例未断言 kind（自报连续第六轮失实）+ 要求④全栈证据/书面豁免连续第七轮未达成，integration 集成验收第七轮打回（REJECT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **第六轮 N-13/N-14/N-15 已修复，待第七轮集成验收**（详见[第二十节](#二十第七轮返工修复记录2026-10-23)；全栈证据仍受环境限制，人类书面豁免待裁定）——第六轮对返工提交 `af39766`（origin/integration @ `c6dd640..af39766`，PR #273 OPEN/MERGEABLE，headRefOid 一致）逐条复核第五轮 N-10/N-11/N-12：**N-10(a)/(b) 机制修复属实**（`runDetached` 不再误抛——有界等待 tail 释放（默认 30s/可配 `timeoutMs`）+ 超时结构化抛错；`.catch` 按同一 attempt 预算退避重排、超限告警 + 创建人工介入 todo；独立引擎级探针 P2'/P3'/P5' 实证，回退探针 R2 实证 (b) 用例可红）、**N-11 属实**（`owners` 移除，P4' 实证「持锁+排队等待者」超时退出不误判不死锁）、N-12 表述本轮大体如实、自报数值与独立复跑逐项一致（tsc×7/lint×2/单测五包 **1004/656+1skip/254/235/663**/keyed-mutex+orchestrator 45/tests-e2e-typecheck 全绿）；**但发现 1 × 🟠 + 2 × 🟡**：🟠 **N-13**（交付的「N-10 真实定时器」引擎级用例对 N-10(a) **零区分力**——回退探针 R1：仅把 `runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后用例**仍绿**（404ms→**705ms**：100ms/300ms 两次误抛被 `.catch` 重排掩盖、700ms 第三次尝试成功，断言全过；注释声称「runDetached 必须等待而不是误抛」却无任何断言兑现）。(a) 若回归且锁持有 > ~700ms（超退避预算），兜底走 exhausted+todo 而非 fail 转移、节点停 RUNNING，全量套件无法察觉——恰是第五轮 N-10 漏检的同类「用例结构性盲区」）；🟡 **N-14**（`notifyFallbackExhausted` 查不到实例/节点时静默 `return`，介入待办丢失且**无任何告警**（P6' 实证），与 (b)「禁止静默丢链」标准自相矛盾——超限链路最后一步自身可静默丢）；🟡 **N-15**（`engine.ts:164-171` JSDoc 仍写「若在仍持有锁时调用会抛错（N-9）」，未同步 N-10/N-11「不误抛/有界等待/超时抛错」语义（af39766 未触及 engine.ts），第五轮要求②「JSDoc/文档与实现一致」只完成 keyed-mutex 一侧；18.2「JSDoc 已同步」范围失实，连续第五轮自报抽查命中）；全栈 tests/api 全量 + tests/e2e 全绿证据连续六轮未交付、12.6 书面豁免待人类裁定（本节点无权豁免）；integration 集成验收**第六轮打回（REJECT）**，详见[第十九节](#十九第六轮验收记录2026-10-23)
+> **状态**: 🔴 **第七轮打回（REJECT）**（详见[第二十一节](#二十一第七轮验收记录2026-10-23)）——第七轮对返工提交 `2254489`（origin/integration @ `eade347..2254489`，PR #273 OPEN/MERGEABLE）逐条复核第六轮 N-13/N-14/N-15：**N-13 核心区分力成立**（独立复做回退探针 R1：`runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后 N-10 用例**转红于断言②**——warn 含 `fallback deferred retry failed`，还原后转绿，上游「回退探针自证」属实）、**N-14 实现属实**（`notifyFallbackExhausted` 实例/节点不可查两形态输出结构化告警含 kind/instance/session，用例覆盖两形态）、**N-15 属实**（`engine.ts` JSDoc 已同步 N-10/N-11 语义，20.3 自报范围已写明）、自报数值与独立复跑逐项一致（tsc×7 0 error / lint×2 0 error 5 存量 warning / 单测五包 **1005**/656+1skip/254/235/663 / keyed-mutex+orchestrator 46 / tests-e2e-typecheck exit=0，N-10 用例连续 3 跑全绿）；**但发现 2 × 🟡 + 门禁④连续第七轮未达成**：🟡 **N-16**（本轮交付的三个「直接断言」中**仅② 有效**——新探针 R1b（R1 形态下临时中和断言②）用例**仍绿** 709ms：断言① `findById` 恰好 2 次对「误抛+重排」形态**零区分力**（误抛发生在 task 执行前不产生 findById，R1 重排 ×2 而计数仍=2，「① 证明…无重排」不成立）；断言③ 只扫描 `console.warn` 首参（`orchestrator.test.ts:574`），而误抛文本经 `orchestrator.ts:336-338` 以**第二参**传入（call[1]）→ **恒真（dead assertion）**，对 `still holding` 零覆盖——自报「① 证明无重排」「③ 不存在 still holding」均失实）；🟡 **N-17**（N-14 用例未断言 kind，自报「断言告警含 kind/instance/session」失实——**连续第六轮**自报抽查命中）；第七轮要求④（全栈 tests/api 全量 + tests/e2e 全绿证据随修复交付，**或**人类书面豁免落定）**连续第七轮未达成**（本机独立核实：workload_list 无 K8s 负载、`kubectl` 不存在、无预置控制器——环境受限属实；书面豁免仍「待裁定」未落定，本节点无权自行豁免）；integration 集成验收**第七轮打回（REJECT）**
+>
+> 第六轮背景（详见[第二十节](#二十第七轮返工修复记录2026-10-23)；全栈证据仍受环境限制，人类书面豁免待裁定）——第六轮对返工提交 `af39766`（origin/integration @ `c6dd640..af39766`，PR #273 OPEN/MERGEABLE，headRefOid 一致）逐条复核第五轮 N-10/N-11/N-12：**N-10(a)/(b) 机制修复属实**（`runDetached` 不再误抛——有界等待 tail 释放（默认 30s/可配 `timeoutMs`）+ 超时结构化抛错；`.catch` 按同一 attempt 预算退避重排、超限告警 + 创建人工介入 todo；独立引擎级探针 P2'/P3'/P5' 实证，回退探针 R2 实证 (b) 用例可红）、**N-11 属实**（`owners` 移除，P4' 实证「持锁+排队等待者」超时退出不误判不死锁）、N-12 表述本轮大体如实、自报数值与独立复跑逐项一致（tsc×7/lint×2/单测五包 **1004/656+1skip/254/235/663**/keyed-mutex+orchestrator 45/tests-e2e-typecheck 全绿）；**但发现 1 × 🟠 + 2 × 🟡**：🟠 **N-13**（交付的「N-10 真实定时器」引擎级用例对 N-10(a) **零区分力**——回退探针 R1：仅把 `runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后用例**仍绿**（404ms→**705ms**：100ms/300ms 两次误抛被 `.catch` 重排掩盖、700ms 第三次尝试成功，断言全过；注释声称「runDetached 必须等待而不是误抛」却无任何断言兑现）。(a) 若回归且锁持有 > ~700ms（超退避预算），兜底走 exhausted+todo 而非 fail 转移、节点停 RUNNING，全量套件无法察觉——恰是第五轮 N-10 漏检的同类「用例结构性盲区」）；🟡 **N-14**（`notifyFallbackExhausted` 查不到实例/节点时静默 `return`，介入待办丢失且**无任何告警**（P6' 实证），与 (b)「禁止静默丢链」标准自相矛盾——超限链路最后一步自身可静默丢）；🟡 **N-15**（`engine.ts:164-171` JSDoc 仍写「若在仍持有锁时调用会抛错（N-9）」，未同步 N-10/N-11「不误抛/有界等待/超时抛错」语义（af39766 未触及 engine.ts），第五轮要求②「JSDoc/文档与实现一致」只完成 keyed-mutex 一侧；18.2「JSDoc 已同步」范围失实，连续第五轮自报抽查命中）；全栈 tests/api 全量 + tests/e2e 全绿证据连续六轮未交付、12.6 书面豁免待人类裁定（本节点无权豁免）；integration 集成验收**第六轮打回（REJECT）**，详见[第十九节](#十九第六轮验收记录2026-10-23)
 >
 > 第五轮背景（详见[第十七节](#十七第五轮验收记录2026-10-23)）——第五轮对返工提交 `7499758`（origin/integration @ `2f19b3b..7499758`，PR #273）逐条复核第四轮 N-8/N-9：**N-8 核心修复属实闭环**——`KeyedMutex.runDetached` 不再预取锁、任务内 `transition` 自行取锁，第四轮自锁形态消除；3 个新用例经**回退探针**（换回预取锁语义后全部转红）实证区分力成立，自报数值与独立复跑逐项一致（tsc×7/lint×2/单测五包 **1002/656+1skip/254/235/663**/tests-e2e-typecheck 全绿）；**但发现修复引入/残留 1 × 🟠 + 2 × 🟡**：🟠 **N-10**（N-9 快速失败把「`deferSessionFallback` 重试定时器继承 ALS 过期 held 视图」误判为「仍持锁」——真实定时器探针 P2/P3 实证：外层锁持有超过 100ms 退避窗口即误抛 N-9，`.catch` 只告警不重排，**兜底链静默丢弃、节点永久停 RUNNING**；交付的引擎级用例用 `vi.useFakeTimers()`，fake timers 不传播 AsyncLocalStorage，结构性看不到 N-8 根因的 ALS 继承属性而漏检该形态）；🟡 **N-11**（`owners` 记「最后入队者」非「真实持有者」，持锁 + 排队等待者时守卫假阴性，`runDetached` 仍永久死锁——探针 P4 实证，JSDoc/文档与实现不符）；🟡 **N-12**（自报「N-9 一并处理…不再永久等待」超出实际，连续第四轮自报抽查命中，fake-timer/ALS 测试边界未写明）；全栈 tests/api 全量 + tests/e2e 全绿证据连续五轮未交付、12.6 书面豁免申请待人类裁定（本节点无权豁免）；integration 集成验收**第五轮打回（REJECT）**
 >
@@ -987,3 +989,61 @@ type: Permanent
 | tests/e2e typecheck | ✅ exit=0 |
 
 > 全栈 `tests/api` 全量与 `tests/e2e` 全绿仍受宿主机 AppHost 端口冲突、无 K8s、无预置控制器限制（11.5/12.6/18.4）；本轮仅改用例断言/告警/JSDoc。人类书面豁免仍待裁定。
+
+## 二十一、第七轮验收记录（2026-10-23）
+
+### 21.1 复核范围与方法
+
+- 复核对象：返工提交 `2254489`（`eade347..2254489`，PR #273 OPEN/MERGEABLE），针对第六轮打回项 N-13（🟠）/N-14（🟡）/N-15（🟡）+ 要求④（全栈证据或书面豁免）。
+- 方法（不采信自报）：① 逐条回读 `orchestrator.test.ts`/`orchestrator.ts`/`engine.ts` 变更；② 独立复跑 tsc×7 / lint×2 / 单测五包 / tests-e2e-typecheck；③ **独立复做回退探针**（R1）+ **新探针 R1b**（检验三个新断言各自的区分力归属）；④ 环境核查（workload_list / kubectl / 控制器）。
+
+### 21.2 逐条复核结论
+
+| 第六轮项 | 复核结论 | 证据 |
+|---|---|---|
+| N-13（🟠）用例对 N-10(a) 零区分力 | ✅ **核心修复属实**（断言②区分力成立）＋ ⚠️ 新发现 N-16（①③ 无效） | R1 探针转红于断言②；R1b 探针证明①③无区分力（见 21.3） |
+| N-14（🟡）超限静默跳过 | ✅ 实现属实 + ⚠️ 新发现 N-17（用例未断言 kind） | `orchestrator.ts:357-373` 两形态结构化告警；用例覆盖两形态但 kind 未断言（见 21.4） |
+| N-15（🟡）engine JSDoc 未同步 | ✅ 属实闭环 | `engine.ts:166-174` JSDoc 已同步 N-10/N-11「有界等待/不预取锁/过期 held 视图不误抛/持锁内 await 超时抛结构化错误」；20.3 自报范围已写明（第六轮仅指 keyed-mutex.ts）并删除 owner token 说法 |
+| 要求④ 全栈证据或书面豁免 | ❌ **连续第七轮未达成** | 环境受限属实（见 21.5），书面豁免仍待人类裁定 |
+
+### 21.3 N-13 复核：断言②成立，但三个断言中仅② 有区分力（🟡 N-16）
+
+**独立复做 R1 回退探针**（与上游自证一致）：仅把 `keyed-mutex.runDetached` 换回第五轮 fast-fail 语义（`heldKeys` 有 key 且 `tails` 活跃时 `throw 'still holding key'`），保留 orchestrator 的 (b) 重排 → N-10 真实定时器用例**转红**，失败点为断言②（`warn` 含 `fallback deferred retry failed`，`orchestrator.test.ts:568-572`）；还原实现后转绿（连续 3 跑全绿）。**上游「回退探针自证」属实，N-13 核心缺陷（用例对 N-10(a) 零区分力）已消除。**
+
+**新探针 R1b**（本轮新增，检验各断言独立区分力）：R1 形态下**临时中和断言②**（改为期望 warn 含该字样）复跑 → 用例**仍绿**（709ms）。结论：断言①③ 对「fast-fail 误抛 + 重排掩盖」形态**零区分力**，N-13 的全部区分力由断言② 单点承担：
+
+- **断言①（`findById` 恰好 2 次）无区分力**：R1 形态下误抛发生在 task 执行**之前**（`runDetached` 未进入 task），两次失败尝试不产生 `findById`，第三次成功尝试 = 1 次 + 外层 restart = 1 次，计数仍 = 2，断言照常通过。且 R1 形态实际发生了 2 次重排（100ms/300ms 误抛→重排），**自报「① findById 恰好 2 次……证明只成功重试一次、无重排」不成立**——① 无法区分「等待后恰一次成功」与「误抛×2+第三次成功」。「无重排」实际由断言② 反证（无 `rescheduling` 告警）承担。
+- **断言③（warn 无 `still holding`）恒真（dead assertion）**：`orchestrator.test.ts:574` 只扫描 `call[0]`（`console.warn` 首参），而误抛错误文本经 `orchestrator.ts:336-338` 的 `console.warn(msg, (err as Error).message)` 以**第二参**（`call[1]`）传入——R1 形态下 `still holding key` 从未出现在 `call[0]`，断言③ 永远通过，对「fast-fail 误抛」零覆盖。自报「③ 不存在 'still holding'（无 fast-fail 误抛）」失实。
+
+影响评估：核心回归防线存在（断言② 可红），但 (a) 防线单点化——若将来告警文案调整（如 `fallback deferred retry failed` 改名/删去），N-13 防线整体失效而①③ 无法兜底；(b) 断言③ 形同虚设却在注释与自报中被宣称为「无 fast-fail 误抛」的直接证据，属断言有效性失实，与本报告第五轮 N-10「fake-timer 看不到 ALS」、第六轮 N-13「注释声称无断言兑现」为同一类「声称—断言」错位缺陷的残余形态。
+
+**修复要求**：① 断言③ 改为扫描全部 warn 参数（`call.flat()`/逐参 `String(arg)`）或直接断言 `call[1]` 不含 `still holding`；② 断言① 的注释与自报收窄为「证明恰一次成功执行」，「无重排」归因到断言②；③ 重做 R1 回退探针自证「仅回退 runDetached 时三条断言各自（或至少两条独立）可红」。
+
+### 21.4 N-14 复核：实现属实，用例未断言 kind（🟡 N-17）
+
+- 实现属实：`orchestrator.ts:357-373` `notifyFallbackExhausted` 在实例不可查/节点不可查时不再静默 `return`，分别输出 `fallback exhausted todo skipped: instance not found (instance=…, session=…)` / `… node not found …`，消息含 kind（`${kind}` 前缀）/instance/session；`orchestrator.test.ts:620-657` 两形态用例覆盖。
+- 但用例断言只校验消息片段 + `instance=`/`session=`（实例删除形态），**从未断言 kind**；第二形态（节点解绑）仅断言 `node not found` 片段。自报「断言告警含 kind/instance/session」中 **kind 一项失实**——**连续第六轮**自报抽查命中（第五轮 N-12、第六轮 N-15 之后）。
+- 修复要求：两形态用例均补 kind 断言（如 `removed fallback exhausted todo skipped`），第二形态补 `instance=`/`session=` 断言；自报范围与断言实际覆盖面一致。
+
+### 21.5 独立验证（不采信自报）与环境核查
+
+| 项目 | 自报 | 独立复跑 | 一致性 |
+|---|---|---|---|
+| tsc（agent-api + 其余六包） | 0 error | tsc×7 全 0 | ✅ |
+| lint（admin-web/agent-web） | 0 error（5 存量 warning） | 0 error / 5 warning | ✅ |
+| 单测（变更相关） | 46 passed | keyed-mutex+orchestrator **46 passed** | ✅ |
+| 单测（全量五包） | 1005 / 656+1skip / 254 / 235 / 663 | **1005** / 656+1skip / 254 / 235 / 663 | ✅ |
+| tests/e2e typecheck | exit=0 | exit=0 | ✅ |
+| N-10 用例稳定性 | — | 连续 3 跑全绿（真实定时器无 flake） | ✅ |
+| 全栈 tests/api 全量 + tests/e2e | 受限未跑 | `workload_list` 无 K8s 负载（仅 Docker/Node/.NET/Aspire/Github）、`kubectl` 不存在、无预置控制器 | ✅ 环境受限属实 |
+
+> 要求④ 处置：环境受限为客观事实（连续第七轮），但「全栈全绿证据 **或** 人类书面豁免落定」二选一**均未达成**——书面豁免仍「待裁定」。按本报告既定口径，**豁免须人类书面批准，本节点无权自行豁免**，故门禁④保持未闭环并随本轮打回继续挂账。
+
+### 21.6 结论
+
+第七轮返工对第六轮 N-13/N-14/N-15 的**实质修复属实**（含独立复做的回退探针验证），自报数值逐项一致；但断言①③ 零区分力/恒真且自报夸大（🟡 N-16，「声称—断言」错位残余）、N-14 用例未断言 kind 且自报连续第六轮失实（🟡 N-17）、门禁④ 连续第七轮未达成。integration 集成验收**第七轮打回（REJECT）**。
+
+**第八轮要求**：
+1. N-16：断言③ 覆盖 `console.warn` 全部参数（或断言 `call[1]` 不含 `still holding key`），断言① 注释/自报收窄归因，并附回退探针自证各断言可红；
+2. N-17：N-14 两形态用例补 kind 断言、第二形态补 `instance=`/`session=` 断言，自报与断言实际覆盖面对齐（连续第六轮失实，请核对全部自报语句后再交付）；
+3. 门禁④：全栈 tests/api 全量 + tests/e2e 全绿证据随修复交付，或人类书面豁免落定（不得由 AI 节点自行豁免）。
