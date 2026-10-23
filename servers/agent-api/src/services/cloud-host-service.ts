@@ -571,7 +571,8 @@ export class CloudHostService {
       // 无默认工作区时跳过自动建会话（会话必须绑定工作区）
       if (harnessTypes.length === 1 && host.workspaceId) {
         try {
-          const session = await sessionService.create(String(host.userId), {            controllerId: String(host.controllerId),
+          const session = await sessionService.create(String(host.userId), {
+            controllerId: String(host.controllerId),
             workspaceId: String(host.workspaceId),
             acpServerType: HARNESS_ACP_TYPES[harnessTypes[0]] ?? 'opencode',
             allowStartingCloudHost: true,

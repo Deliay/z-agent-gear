@@ -110,7 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       5000,
     ),
     adminApiUrl: env.ADMIN_API_URL ?? '',
-    jobEphemeralStorage: env.JOB_EPHEMERAL_STORAGE || '10Gi',
+    jobEphemeralStorage: (env.JOB_EPHEMERAL_STORAGE ?? '').trim() || '10Gi',
   };
 }
 

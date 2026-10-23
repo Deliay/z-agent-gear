@@ -353,14 +353,18 @@ describe('CloudHostService', () => {
       expect(sessionService.create).not.toHaveBeenCalled();
     });
 
-    it('does not create a default workspace unless explicitly requested', async () => {
+    it('rollback without a default workspace does not delete a workspace', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
+
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('control plane unavailable');
 
       expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
-      expect(CloudHost.create).toHaveBeenCalledWith(
-        expect.objectContaining({ workspaceId: undefined }),
-      );
+      expect(ControllerWorkspace.deleteOne).not.toHaveBeenCalled();
+      expect(Controller.deleteOne).toHaveBeenCalled();
+      expect(CloudHost.deleteOne).toHaveBeenCalled();
     });
 
     it('rolls back and maps control plane failure', async () => {
@@ -836,6 +840,23 @@ describe('CloudHostService', () => {
       });
       expect(sessionService.create).not.toHaveBeenCalled();
       expect(CloudHost.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('repeated ready without a default workspace does not backfill a session', async () => {
+      const running = hostDoc({ status: 'RUNNING', workspaceId: null, defaultSessionId: null });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(service.handleReady(HOST_ID)).resolves.toMatchObject({
+        status: 'RUNNING',
+        defaultSessionId: null,
+        hasDefaultWorkspace: false,
+      });
+      expect(sessionService.create).not.toHaveBeenCalled();
+      expect(CloudHost.updateOne).not.toHaveBeenCalledWith(
+        { _id: HOST_ID, defaultSessionId: null },
+        expect.anything(),
+      );
     });
 
     it('terminal ends sessions and revokes model key', async () => {

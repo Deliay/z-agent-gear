@@ -13,6 +13,29 @@ function gqlRequest(page: import('@playwright/test').Page, query: string, variab
 }
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
+const API_BASE = API_URL.replace(/\/graphql\/?$/, '');
+
+const HOST_FLAGS = `
+  query {
+    myCloudHosts { id name controllerId status defaultSessionId hasDefaultWorkspace }
+  }
+`;
+const WORKSPACE_LIST = `query { workspaces { id controllerId path } }`;
+
+async function hostFlags(
+  page: import('@playwright/test').Page,
+  token: string,
+  name: string,
+): Promise<{ id: string; controllerId: string; status: string; defaultSessionId: string | null; hasDefaultWorkspace: boolean } | undefined> {
+  const res = await gqlRequest(page, HOST_FLAGS, undefined, token);
+  const body = await res.json();
+  return (body.data?.myCloudHosts ?? []).find((host: { name: string }) => host.name === name);
+}
+
+async function cleanupHost(page: import('@playwright/test').Page, token: string, id: string) {
+  await gqlRequest(page, `mutation($id: ID!) { stopCloudHost(id: $id, force: true) { id } }`, { id }, token);
+  await gqlRequest(page, `mutation($id: ID!) { deleteCloudHost(id: $id) }`, { id }, token);
+}
 
 test.describe('Cloud Host E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
@@ -115,6 +138,105 @@ test.describe('Cloud Host E2E', () => {
           /* 删除失败无法进一步回收：保留日志由运维巡检处理 */
         }
       }
+    }
+  });
+
+  test('E2E-1: 默认不勾选 → 不创建工作区、不自动建会话并展示无工作区提示', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    await loginViaUI(page, username);
+    await expect(page.locator(sidebar())).toBeVisible();
+
+    const hostName = `e2e-nows-${Date.now().toString(36)}`;
+    let hostId = '';
+
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      const checkbox = dialog.getByRole('checkbox', { name: /创建默认工作区/ });
+      await expect(checkbox).not.toBeChecked();
+      await expect(dialog.getByText('不会创建工作区，就绪后需先创建或绑定工作区')).toBeVisible();
+
+      await dialog.locator('#cloud-host-name').fill(hostName);
+      await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await dialog.getByRole('button', { name: '创建云电脑' }).click();
+
+      const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
+      await expect(controllerRow).toBeVisible({ timeout: 15000 });
+
+      const host = await hostFlags(page, token, hostName);
+      expect(host, 'created cloud host should be listed').toBeTruthy();
+      hostId = host!.id;
+      expect(host!.hasDefaultWorkspace).toBe(false);
+      expect(host!.defaultSessionId).toBeNull();
+
+      const wsRes = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
+      const workspaces = ((await wsRes.json()).data?.workspaces ?? []).filter(
+        (workspace: { controllerId: string }) => workspace.controllerId === host!.controllerId,
+      );
+      expect(workspaces).toEqual([]);
+
+      // 真实 ready 回调可用时（K8s 关闭的本地链路），验证 RUNNING 后的提示与无默认会话
+      const internalToken = process.env.INTERNAL_API_TOKEN;
+      if (internalToken) {
+        const ready = await page.request.post(`${API_BASE}/internal/cloud-hosts/${hostId}/ready`, {
+          headers: { Authorization: `Bearer ${internalToken}` },
+        });
+        if (ready.ok()) {
+          // 重新拉取首页数据，避免依赖侧栏轮询时机
+          await page.reload();
+          await expect(page.locator(sidebar())).toBeVisible();
+          await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveText(
+            '未创建默认工作区，请先创建或绑定工作区',
+            { timeout: 15000 },
+          );
+          await expect(
+            controllerRow.getByTestId('cloud-host-default-session-hint'),
+          ).toHaveCount(0);
+          const running = await hostFlags(page, token, hostName);
+          expect(running?.status).toBe('RUNNING');
+          expect(running?.defaultSessionId).toBeNull();
+        }
+      }
+    } finally {
+      if (hostId) await cleanupHost(page, token, hostId);
+    }
+  });
+
+  test('E2E-2: 勾选创建默认工作区 → 与现状一致创建工作区', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    await loginViaUI(page, username);
+    await expect(page.locator(sidebar())).toBeVisible();
+
+    const hostName = `e2e-ws-${Date.now().toString(36)}`;
+    let hostId = '';
+
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.locator('#cloud-host-name').fill(hostName);
+      await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+      await dialog.getByRole('checkbox', { name: /创建默认工作区/ }).check();
+      await expect(dialog.getByText('将创建默认工作区并自动创建会话')).toBeVisible();
+      await dialog.getByRole('button', { name: '创建云电脑' }).click();
+
+      await expect(page.locator(sidebar()).getByText(hostName, { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
+      const host = await hostFlags(page, token, hostName);
+      expect(host, 'created cloud host should be listed').toBeTruthy();
+      hostId = host!.id;
+      expect(host!.hasDefaultWorkspace).toBe(true);
+
+      const wsRes = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
+      const workspaces = ((await wsRes.json()).data?.workspaces ?? []).filter(
+        (workspace: { controllerId: string }) => workspace.controllerId === host!.controllerId,
+      );
+      expect(workspaces.map((workspace: { path: string }) => workspace.path)).toContain(
+        '/root/workspace',
+      );
+    } finally {
+      if (hostId) await cleanupHost(page, token, hostId);
     }
   });
 
