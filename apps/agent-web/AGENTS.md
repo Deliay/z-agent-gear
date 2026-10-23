@@ -75,3 +75,9 @@ npm run preview  # Preview production build
 
 - [Common Rules](../../docs/engineering/common-rules.md)
 - [Frontend Rules](../../docs/engineering/frontend-rules.md)
+
+## 云容器优化二期（默认工作区）
+
+- 「新建云电脑」新增「创建默认工作区」复选，默认不勾选；提交始终携带 `createDefaultWorkspace`（false 显式下发）。
+- 无工作区（`CloudHost.hasDefaultWorkspace === false`）时 Sidebar 展示 `未创建默认工作区，请先创建或绑定工作区`，并提供 Github 项目设置与新建工作区入口；有工作区才保留「默认会话创建失败」提示。
+- Git 项目设置前缀在无工作区时初始为空（placeholder `例如：/workspace`），有工作区仍预填 `defaultWorkspace`。
