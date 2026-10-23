@@ -82,6 +82,7 @@ export class CloudHostGithubService {
     repoFullName: string;
     targetPath: string;
     workloadIds?: string[];
+    createSession?: boolean;
   }): Promise<Doc> {
     const host = await this.workloadService.requireCloudHost(input.userId, input.controllerId);
     if (host.status !== 'RUNNING') throw new Error('cloud host is not running');
@@ -126,7 +127,13 @@ export class CloudHostGithubService {
         steps: [
           { key: 'workload', status: 'PENDING', detail: null },
           { key: 'gitSetup', status: 'PENDING', detail: null },
-          { key: 'session', status: 'PENDING', detail: null },
+          input.createSession === false
+            ? {
+                key: 'session',
+                status: 'SKIPPED',
+                detail: '多 Harness 不自动创建会话',
+              }
+            : { key: 'session', status: 'PENDING', detail: null },
         ],
         containerId: String(host.containerId),
         accountId: input.accountId,
@@ -344,6 +351,18 @@ export class CloudHostGithubService {
         workspaceId: String(workspace.id),
         acpServerType: 'opencode',
       });
+      // D2：项目会话成功后回填云电脑默认会话（CAS：仅当仍为空，避免覆盖既有默认会话）。
+      if (op.hostId) {
+        await CloudHost.updateOne(
+          { _id: op.hostId, defaultSessionId: null },
+          { $set: { defaultSessionId: session.id } },
+        ).catch((err) => {
+          console.warn(
+            '[cloud-host-github] backfill defaultSessionId failed:',
+            (err as Error).message,
+          );
+        });
+      }
       await CloudHostSetupOperation.updateOne(
         { _id: opId },
         {

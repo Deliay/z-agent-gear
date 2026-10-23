@@ -234,7 +234,11 @@ export const sessionTypeDefs = `#graphql
     enableWorktree: Boolean = false
     worktreeBranchSuffix: String
     existingWorktreePath: String
+    # 缺省 = 按控制器 defaultMcp 解析；显式传数组（含 []）= 以调用方为准；云会话仍并入 agent-cloud-host-tools
     mcpServerIds: [ID!]
+    # 拉起前选择的模式/模型；缺省使用工具默认值
+    modeId: ID
+    modelId: ID
   }
 
   extend type Query {
@@ -260,5 +264,7 @@ export const sessionTypeDefs = `#graphql
     setSessionConfigOption(sessionId: ID!, configId: String!, value: String!): Boolean!
     deleteHistorySession(sessionId: ID!, syncAgent: Boolean = true): DeleteHistorySessionPayload!
     refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
+    # 删除该 controllerId+acpServerType 的探测缓存并立即重新探测（失败返回空选项）
+    refreshAcpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
   }
 `;

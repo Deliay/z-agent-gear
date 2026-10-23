@@ -13,6 +13,11 @@ const controllerSchema = new mongoose.Schema({
   worktreeDir: { type: String },
   homeDir: { type: String },
   platform: { type: String },
+  // 新建会话默认注入的 MCP；历史行缺失该字段时由 resolver 归一为 { useAllEnabled: true, serverIds: [] }
+  defaultMcp: {
+    useAllEnabled: { type: Boolean, default: true },
+    serverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'McpServer' }],
+  },
 }, { timestamps: true });
 
 controllerSchema.index({ userId: 1, status: 1 });

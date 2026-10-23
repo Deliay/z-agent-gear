@@ -143,14 +143,31 @@ export const sessionResolvers = {
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] | null; modeId?: string | null; modelId?: string | null } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        const session = await sessionService.create(context.currentUser.id, args.input);
+        // D7：显式传 mcpServerIds（含 []）由调用方决定；未传/传 null 时按控制器 defaultMcp 解析。
+        const explicitMcpServerIds =
+          Object.prototype.hasOwnProperty.call(args.input, 'mcpServerIds') &&
+          args.input.mcpServerIds !== null &&
+          args.input.mcpServerIds !== undefined
+            ? args.input.mcpServerIds
+            : undefined;
+        const session = await sessionService.create(context.currentUser.id, {
+          controllerId: args.input.controllerId,
+          acpServerType: args.input.acpServerType,
+          workspaceId: args.input.workspaceId,
+          enableWorktree: args.input.enableWorktree,
+          worktreeBranchSuffix: args.input.worktreeBranchSuffix ?? undefined,
+          existingWorktreePath: args.input.existingWorktreePath ?? undefined,
+          mcpServerIds: explicitMcpServerIds,
+          modeId: args.input.modeId ?? undefined,
+          modelId: args.input.modelId ?? undefined,
+        });
         return { session };
       } catch (err) {
         if (err instanceof GraphQLError) {
@@ -312,6 +329,24 @@ export const sessionResolvers = {
       }
       try {
         return await sessionService.refreshAcpCapabilities(args.controllerId, context.currentUser.id);
+      } catch (err) {
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    refreshAcpServerOptions: async (
+      _parent: unknown,
+      args: { controllerId: string; acpServerType: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionService.refreshAcpServerOptions(
+          args.controllerId,
+          args.acpServerType,
+          context.currentUser.id,
+        );
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }

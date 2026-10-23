@@ -14,6 +14,38 @@ import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktree
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
+export interface ControllerDefaultMcpSnapshot {
+  useAllEnabled?: boolean | null;
+  serverIds?: Array<string | null | undefined> | null;
+}
+
+/**
+ * 解析新建会话的初始 MCP 集合（纯函数，便于单测）：
+ * - explicitIds !== undefined（含 []）：以调用方为准，原样返回；
+ * - 未传 + useAllEnabled !== false（缺省视为 true）：注入全部已启用 MCP（动态语义，不物化 id 列表）；
+ * - 未传 + useAllEnabled === false：仅注入 serverIds 中仍存在且 enabled 的子集。
+ * 云会话的 agent-cloud-host-tools 由调用方在解析后并入并去重。
+ */
+export function resolveInitialMcpServerIds(
+  defaultMcp: ControllerDefaultMcpSnapshot | null | undefined,
+  explicitIds: string[] | undefined,
+  enabledServerIds: string[],
+): string[] {
+  if (explicitIds !== undefined) {
+    return [...explicitIds];
+  }
+  const enabled = enabledServerIds.map(String);
+  if (defaultMcp?.useAllEnabled !== false) {
+    return enabled;
+  }
+  const enabledSet = new Set(enabled);
+  const subset = (defaultMcp.serverIds ?? [])
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .map((id) => String(id))
+    .filter((id) => enabledSet.has(id));
+  return Array.from(new Set(subset));
+}
+
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
@@ -141,8 +173,20 @@ export class SessionService {
       }
     }
 
-    // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
+    // 未显式指定（含 undefined）时按控制器 defaultMcp 解析；显式空数组表示不注入。
     let mcpServerIds = input.mcpServerIds;
+    if (mcpServerIds === undefined) {
+      const enabledServers = await McpServer.find({ userId, enabled: true })
+        .select('_id')
+        .lean();
+      mcpServerIds = resolveInitialMcpServerIds(
+        (controller as unknown as { defaultMcp?: ControllerDefaultMcpSnapshot }).defaultMcp,
+        undefined,
+        enabledServers.map((server) => String(server._id)),
+      );
+    }
+
+    // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
     if (controller.type === 'cloud') {
       const cloudToolsId = await ensureCloudHostToolsServer(userId);
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), cloudToolsId]));
@@ -801,8 +845,31 @@ export class SessionService {
     return { modes: [], models: [], currentModeId: null, currentModelId: null, probedAt: null };
   }
 
-  async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
+  /**
+   * 删除该控制器+工具类型的选项缓存并立即重新探测（失败/超时返回空选项，不抛错）。
+   * 与 getAcpServerOptions 共用同一条探测链路，供前端「刷新」按钮使用。
+   */
+  async refreshAcpServerOptions(
+    controllerId: string,
+    acpServerType: string,
+    userId: string,
+  ): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+    try {
+      await getRedisClient().del(`acp:options:${controllerId}:${acpServerType}`);
+    } catch (err) {
+      console.warn(
+        `[session] delete acp options cache failed for ${controllerId}:`,
+        (err as Error).message,
+      );
+    }
+    return this.getAcpServerOptions(controllerId, acpServerType, userId);
+  }
+
+  async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
