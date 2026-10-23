@@ -19,6 +19,7 @@ vi.mock('./pr-handler-registry.js', async (importOriginal) => {
 vi.mock('./instance.js', () => ({
   workflowInstanceService: {
     setAdditionalPrompt: vi.fn(),
+    setSystemAdditionalPrompt: vi.fn(),
     completeHumanNode: vi.fn(),
     rejectNode: vi.fn(),
   },
@@ -85,7 +86,7 @@ describe('handlePullRequestEvent', () => {
     vi.clearAllMocks();
     vi.mocked(prHandlerRegistry.findByPullRequestId).mockResolvedValue([handler()] as never);
     loadInstance(linear());
-    vi.mocked(workflowInstanceService.setAdditionalPrompt).mockResolvedValue({} as never);
+    vi.mocked(workflowInstanceService.setSystemAdditionalPrompt).mockResolvedValue({} as never);
     vi.mocked(workflowInstanceService.completeHumanNode).mockResolvedValue({} as never);
     vi.mocked(workflowInstanceService.rejectNode).mockResolvedValue({} as never);
   });
@@ -166,12 +167,12 @@ describe('handlePullRequestEvent', () => {
       nodeId: 'n2',
       promptKey: 'github-pr-review',
     });
-    expect(workflowInstanceService.setAdditionalPrompt).toHaveBeenCalledWith(
-      'user-1', 'inst-1', 'github-pr-review', expect.stringContaining('Pull Request审核通过'),
+    expect(workflowInstanceService.setSystemAdditionalPrompt).toHaveBeenCalledWith(
+      'inst-1', 'github-pr-review', expect.stringContaining('Pull Request审核通过'),
     );
     expect(workflowInstanceService.completeHumanNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n2');
     expect(
-      vi.mocked(workflowInstanceService.setAdditionalPrompt).mock.invocationCallOrder[0],
+      vi.mocked(workflowInstanceService.setSystemAdditionalPrompt).mock.invocationCallOrder[0],
     ).toBeLessThan(vi.mocked(workflowInstanceService.completeHumanNode).mock.invocationCallOrder[0]);
     expect(prHandlerRegistry.markEventHandled).toHaveBeenCalledWith('h1', 'evt-1', expect.any(Date));
   });

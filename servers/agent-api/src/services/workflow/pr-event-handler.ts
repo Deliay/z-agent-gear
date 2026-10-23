@@ -33,8 +33,11 @@ export type EventAction = 'COMPLETE_HUMAN_NODE' | 'REJECT_HUMAN_NODE';
 
 export interface EventResult {
   workflowInstanceId?: string;
+  /** 当前人类节点（若已判定）；未判定时为登记的 AI 节点 */
   nodeId?: string;
   nodeName?: string;
+  /** PR 登记节点 ID（失败分支也能据响应定位坏登记） */
+  registeredNodeId?: string;
   action?: EventAction;
   promptKey?: string;
   reason?: EventIgnoreReason;
@@ -147,7 +150,11 @@ async function processHandler(
   event: EventCallbackPayload,
 ): Promise<EventResult> {
   const instanceId = String(handler.workflowInstanceId);
-  const base: EventResult = { workflowInstanceId: instanceId, nodeId: handler.nodeId };
+  const base: EventResult = {
+    workflowInstanceId: instanceId,
+    nodeId: handler.nodeId,
+    registeredNodeId: handler.nodeId,
+  };
 
   const instance = (await WorkflowInstance.findById(instanceId).lean()) as unknown as InstanceLike | null;
   if (!instance) {
@@ -185,8 +192,7 @@ async function processHandler(
   const userId = instance.userId.toString();
 
   if (review === 'approved') {
-    await workflowInstanceService.setAdditionalPrompt(
-      userId,
+    await workflowInstanceService.setSystemAdditionalPrompt(
       instanceId,
       GITHUB_PR_REVIEW_PROMPT_KEY,
       buildReviewPassedPrompt({

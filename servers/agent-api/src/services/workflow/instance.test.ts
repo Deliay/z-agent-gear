@@ -593,17 +593,19 @@ describe('WorkflowInstanceService.rejectNode', () => {
     });
   });
 
-  it('AI 节点拒绝打回', async () => {
+  it('AI 节点打回保持既有行为（GraphQL 兼容）', async () => {
     const instance = {
       _id: oid('inst-1'),
       nodes: [{ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', status: 'RUNNING', dependsOn: ['n1'] }],
     };
     vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance));
+    vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
 
-    await expect(
-      workflowInstanceService.rejectNode('user-1', 'inst-1', 'n2', 'x'),
-    ).rejects.toThrow(/不是人类节点/);
-    expect(workflowEngine.transition).not.toHaveBeenCalled();
+    await workflowInstanceService.rejectNode('user-1', 'inst-1', 'n2', 'x');
+    expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n2', 'reject', {
+      reason: 'x',
+      fromNodeId: null,
+    });
   });
 });
 

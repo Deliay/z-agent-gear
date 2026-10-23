@@ -141,8 +141,8 @@ type WorkflowNode {
   artifactTitles: [String!]
   agentConfig: AgentNodeConfig
   requiresWorktree: Boolean
-  # 上游节点 nodeId 列表（DAG 判定与展示用）
-  dependsOn: [String!]!
+  # 上游节点 nodeId 列表（DAG 判定与展示用；旧实例快照可能缺失）
+  dependsOn: [String!]
   # 人类节点：是否联动上游 Pull Request（实例化快照，未开始的人类节点可编辑）
   linkUpstreamPullRequest: Boolean!
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）

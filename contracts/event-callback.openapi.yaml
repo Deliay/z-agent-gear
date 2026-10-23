@@ -76,7 +76,10 @@ components:
         action: { type: string, example: reviewed }
         reviewState:
           type: string
-          enum: [approved, changes_requested, rejected, dismissed, commented]
+          description: >-
+            审核结论。已支持 approved（通过）与 changes_requested/rejected/dismissed（拒绝）；
+            枚举外取值按 UNSUPPORTED_REVIEW_STATE 安全忽略（HTTP 200），不返回 400。
+          example: approved
         comment: { type: string }
         reviewer: { type: string }
         submittedAt: { type: string, format: date-time }
@@ -94,8 +97,9 @@ components:
       type: object
       properties:
         workflowInstanceId: { type: string }
-        nodeId: { type: string }
+        nodeId: { type: string, description: 当前人类节点；未判定当前节点时为登记的 AI 节点 }
         nodeName: { type: string }
+        registeredNodeId: { type: string, description: PR 登记节点 ID（失败分支亦可定位坏登记） }
         action: { type: string, enum: [COMPLETE_HUMAN_NODE, REJECT_HUMAN_NODE] }
         promptKey: { type: string }
         reason:

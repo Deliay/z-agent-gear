@@ -423,6 +423,28 @@ class WorkflowInstanceService {
     return updated;
   }
 
+  /**
+   * 系统内部写入追加提示词（事件处理器专用）：仅允许 SYSTEM_PROMPT_KEYS。
+   *
+   * 人工入口 `setAdditionalPrompt` 会拒绝系统键；PR 事件处理器必须走本方法，
+   * 否则 approved 分支写入 `github-pr-review` 必然失败（P0 回归）。
+   */
+  async setSystemAdditionalPrompt(instanceId: string, key: string, value: string) {
+    if (!(SYSTEM_PROMPT_KEYS as readonly string[]).includes(key)) {
+      throw new Error('仅允许系统内部写入保留的追加提示词 key');
+    }
+    const updated = await WorkflowInstance.findOneAndUpdate(
+      { _id: instanceId, deletedAt: null },
+      { $set: { [`additionalPrompts.${key}`]: value } },
+      { new: true },
+    ).lean();
+    if (!updated) {
+      throw new Error('工作流实例不存在');
+    }
+    await this.invalidateInstanceCache(instanceId);
+    return updated;
+  }
+
   /** 重算 github-pr 指引：存在任一勾选联动的人类节点则写入，全部取消则移除（内部入口，绕过系统键校验） */
   async syncGithubPrPrompt(instanceId: string): Promise<boolean> {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, deletedAt: null }).lean();
@@ -514,9 +536,6 @@ class WorkflowInstanceService {
     const node = instance.nodes.find((n) => n.nodeId === nodeId);
     if (!node) {
       throw new Error(`工作流实例中不存在节点：${nodeId}`);
-    }
-    if (node.type !== 'HUMAN') {
-      throw new Error(`节点「${node.name}」不是人类节点，不能人工打回`);
     }
     // 与 completeHumanNode 的组合语义对称：READY（首节点或刚被激活）先 start 再 reject
     if (node.status === 'READY') {

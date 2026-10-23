@@ -67,7 +67,7 @@ npm test
 |------|------|--------|
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:4000/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
-| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；billing-events T-CC-B11、billing-gateway T-B24/T-B27/T-B28 同样缺参即失败；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；billing-events T-CC-B11、billing-gateway T-B24/T-B27/T-B28 同样缺参即失败；**T-PR16（READY 打回）需直写实例快照，缺参时该用例跳过**；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api 服务地址 | `http://localhost:4001` |
@@ -339,13 +339,28 @@ npm test
 
 ### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
 
-> 需要 agent-api 就绪且配置 `EVENT_CALLBACK_TOKEN`（缺失时整套跳过）；`GITHUB_WEBHOOK_SECRET` 用于 HMAC 用例（未配置时跳过 HMAC 断言）。
+> 需要 agent-api + controller-api 就绪且配置 `EVENT_CALLBACK_TOKEN`（缺失时整套跳过）；`GITHUB_WEBHOOK_SECRET` 用于 HMAC 用例（未配置时跳过 HMAC 断言）。T-PR4~18 通过 fake controller 走 MCP relay 注册/驱动，独立用户与实例避免脏数据。
 
 | 测试 | 描述 |
 |------|------|
 | T-PR1 回调鉴权 | 无凭据/错误 token → 401；`X-Event-Token` / `Authorization: Bearer` / 正确 HMAC → 200；错误 HMAC → 401 |
 | T-PR2 载荷非法 | 缺 `eventId` / `eventType` 非 pull_request → 400 且 detail 可读 |
 | T-PR3 未登记 PR | 返回 `handled=false` + `reason=NO_HANDLER` + 空 `results` |
+| T-PR4 注册与透出 | fake controller 调 `linkPullRequest`（只传 `pullRequestId`）→ `pullRequestLinks` 含 nodeId/nodeName/prUrl；`getNodeInfo.workflowInstanceId` 正确 |
+| T-PR5 工具错误 | `workflowId`/`nodeId` 与作用域不符、非法 PR 标识 → `INVALID_PARAMS`；归档实例 → `INVALID_STATE` |
+| T-PR6 同节点换 PR | 旧关联消失、新关联出现（同节点只保留最新） |
+| T-PR7 approved 驱动 | 人类节点 DONE；下游 AI 首条提示词含「Pull Request审核通过」、comment、PR 地址、审核人/时间；`github-pr-review` 落库 |
+| T-PR8 rejected 驱动 | 人类节点 REJECT、上游 REWORK；返工消息含 A.3 全量文案与 inline comment 提示 |
+| T-PR9 重复投递 | 同一 `eventId` 第二次返回 `DUPLICATE_EVENT`，节点状态不变 |
+| T-PR10 当前 AI | 当前节点为 AI → `CURRENT_NODE_NOT_HUMAN`，状态不变 |
+| T-PR11 中间 HUMAN | 登记 AI 与当前 HUMAN 之间隔一个 HUMAN → `HUMAN_NODE_IN_BETWEEN` |
+| T-PR12 并行分支 | 多个 READY/RUNNING 人类节点 → `CURRENT_NODE_AMBIGUOUS` |
+| T-PR13 归档/完成注销 | 归档后 `pullRequestLinks=[]`、事件 `NO_HANDLER`；工作流完成后关联注销、事件不再驱动 |
+| T-PR14 github-pr 注入 | 未勾选无该段；勾选后出现且仅一次；全部取消后移除 |
+| T-PR15 三层透传 | 模板/配置/实例/`updateWorkflowNode` 字段一致；AI 节点传 true 被拒 |
+| T-PR16 READY 打回 | 首节点 READY 直接 `rejectNode` 成功（先 start 再 reject） |
+| T-PR17 多实例 | 同一 PR 关联两个实例 → `results` 两条且各自完成 |
+| T-PR18 标识归一 | URL / `owner/repo#n` / `owner/repo/pull/n` 归一为同一关联 |
 
 > MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
 

@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, GitPullRequest, MessageSquareText } from 'lucide-react'
-import MarkdownContent from '@/components/session/MarkdownContent'
 import type {
   WorkflowAdditionalPromptData,
   WorkflowPullRequestLinkData,
@@ -97,9 +96,10 @@ export default function WorkflowContextPanel({
         {additionalPrompts.map((prompt) => (
           <div key={prompt.key} className="min-w-0 rounded-md border bg-muted/30 p-2">
             <div className="mb-1 break-all text-xs font-medium text-foreground">{prompt.key}</div>
-            <div className="min-w-0 whitespace-pre-wrap break-all text-xs text-muted-foreground">
-              <MarkdownContent content={prompt.value} />
-            </div>
+            {/* 追加提示词可能来自外部审核意见：按普通文本渲染，不解析 Markdown */}
+            <p className="min-w-0 whitespace-pre-wrap break-all text-xs text-muted-foreground">
+              {prompt.value}
+            </p>
           </div>
         ))}
       </Section>
