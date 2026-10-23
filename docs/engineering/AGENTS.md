@@ -247,3 +247,4 @@ flowchart LR
 - [[plan/20261020-feat-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v3.0：前台交付/停止即销毁/会话只读/每用户 1 实例/harnessTypes 多选）实现计划
 - [[plan/20261021-feat-github-workload.md]] — Github 工作负载与云主机 Git 项目设置（Github 预制工作负载、拉起后安装与 MCP 开放、云主机凭据管理器 clone 并自动建会话）实现计划
 - [[plan/20261022-feat-workload-optimization.md]] — 工作负载优化（创建/展示支持 Aspire/Docker/.NET 与 MCP 列出安装，Github 项目 clone 地址前缀拼接）实现计划
+- [[plan/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（createDefaultWorkspace 默认不建 /root/workspace、Model.contextLength 经 OpenAI 兼容 /v1/models 的 context_length 下发、ephemeral-storage 10Gi）实现计划
