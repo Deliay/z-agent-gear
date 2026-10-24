@@ -172,7 +172,9 @@ async function start() {
     console.warn('[admin-api] ensureDefaultPrices failed (non-fatal):', (err as Error).message);
   }
 
-  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投；运行时自动重连）
+  // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投；运行时自动重连）。
+  // 首次连接有界：AMQP 握手超时（默认 10s，见 MqConnection）后转入后台退避重连，
+  // 代理接受 TCP 但握手卡死的场景不再永久阻塞 listen。
   const mqRuntime = new BillingMqRuntime({
     url: config.rabbitmqUrl,
     billing: billingRuntime,
