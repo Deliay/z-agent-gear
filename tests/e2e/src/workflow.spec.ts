@@ -1634,9 +1634,11 @@ test.describe('Workflow E2E', () => {
     await expect(dialog.getByText('实例化前配置')).toBeVisible();
     await expect(dialog.getByText(/来源：模板/)).toBeVisible();
     await dialog.locator('[data-slot="select-trigger"][aria-label="AI执行 Harness 工具"]').click();
-    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    // Base UI Select 的 popup keepMounted：关闭后残留隐藏 option 节点，
+    // 同名定位须限定当前打开的 popup（[data-open]），否则 click 可能命中残留节点超时（N-21）
+    await page.locator('[data-slot="select-popup"][data-open]').getByRole('option', { name: 'opencode', exact: true }).click();
     await dialog.locator('[data-slot="select-trigger"][aria-label="AI验收 Harness 工具"]').click();
-    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    await page.locator('[data-slot="select-popup"][data-open]').getByRole('option', { name: 'opencode', exact: true }).click();
     await dialog.getByRole('button', { name: '确认实例化', exact: true }).click();
 
     // 跳转到实例视图
