@@ -54,8 +54,8 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     expect((await stat(workspace)).isDirectory()).toBe(true);
 
     const config = parse(await readFile(join(configDir, 'opencode.jsonc'), 'utf-8'));
-    expect(Object.keys(config.provider.zag.models)).toEqual(['model-a', 'model-b']);
-    expect(config.provider.zag.options.apiKey).toBe('zag_sk_super_secret');
+    expect(Object.keys(config.providers.zag.models)).toEqual(['model-a', 'model-b']);
+    expect(config.providers.zag.settings.apiKey).toBe('zag_sk_super_secret');
   });
 
   it('writes limit.context into the config when ZAG_MODEL_CONTEXT_LENGTHS is provided', async () => {
@@ -74,7 +74,7 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     });
 
     const config = parse(await readFile(join(configDir, 'opencode.jsonc'), 'utf-8'));
-    expect(config.provider.zag.models).toEqual({
+    expect(config.providers.zag.models).toEqual({
       'model-a': { name: 'model-a', limit: { context: 128000 } },
       'model-b': { name: 'model-b' },
     });
