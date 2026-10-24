@@ -19,7 +19,6 @@ import { modelService } from './model.js';
 import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
-import { controllerWorkspaceService } from './controller-workspace.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
 import {
   MAX_CREATE_WORKLOADS,
@@ -40,6 +39,8 @@ export interface CreateCloudHostInput {
   harnessTypes: string[];
   /** 创建时附加预装的 standard 负载（去重后 ≤5；缺省/空 = 仅 harness）。 */
   workloadIds?: string[];
+  /** D1：false 时 ready 不自动建默认会话（由项目准备 session 步骤建）；缺省 true。 */
+  createDefaultSession?: boolean;
 }
 
 export interface CloudHostStopImpact {
@@ -167,6 +168,7 @@ export class CloudHostService {
     name: string;
     harnessTypes: HarnessType[];
     workloadIds: string[];
+    createDefaultSession: boolean;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
@@ -175,13 +177,14 @@ export class CloudHostService {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
       workloadIds: parseWorkloadIds(input.workloadIds),
+      createDefaultSession: input.createDefaultSession !== false,
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds } = this.validateInput(input);
+    const { name, harnessTypes, workloadIds, createDefaultSession } = this.validateInput(input);
 
     // 读取 harness preset 先于任何落库（缺失时不留下半成品记录）
     const presets: HarnessPreset[] = [];
@@ -228,12 +231,9 @@ export class CloudHostService {
 
         await controllerService.createCloudHostController(userId, controllerId, name, keyId);
 
-        const workspace = await controllerWorkspaceService.ensureCloudHostWorkspace(
-          controllerId,
-          userId,
-          config.cloudHostDefaultWorkspace,
-        );
-        workspaceId = String(workspace.id);
+        // 创建期不再预置 /root/workspace：默认工作区只在「Git 项目设置」初始化
+        // Github 项目时由 setup 按 targetPath 幂等创建（ensureWorkspace），
+        // 因此 workspaceId 保持 null 落库，就绪后也不会自动建默认会话。
 
         await CloudHost.create({
           _id: cloudHostId,
@@ -244,6 +244,7 @@ export class CloudHostService {
           controllerId,
           keyId,
           workspaceId,
+          createDefaultSession,
           startedAt: new Date(),
         });
 
@@ -559,8 +560,10 @@ export class CloudHostService {
     // 的中间态，消除自动进入丢失与误报失败提示的竞态。
     if (host.status === 'STARTING') {
       const harnessTypes = (host.harnessTypes ?? []) as HarnessType[];
+      const wantsDefaultSession = host.createDefaultSession !== false;
       let defaultSessionId: string | null = null;
-      if (harnessTypes.length === 1) {
+      // 自动建会话需同时满足：单 Harness + 允许默认会话 + 已有工作区（会话必须绑定工作区）
+      if (harnessTypes.length === 1 && wantsDefaultSession && host.workspaceId) {
         try {
           const session = await sessionService.create(String(host.userId), {
             controllerId: String(host.controllerId),
@@ -576,6 +579,10 @@ export class CloudHostService {
             (err as Error).message,
           );
         }
+      } else if (harnessTypes.length === 1) {
+        console.info(
+          `[cloud-host] skip default session for ${id}: ${host.workspaceId ? 'createDefaultSession=false' : 'no default workspace'}`,
+        );
       }
 
       const updated = await CloudHost.findOneAndUpdate(
@@ -597,7 +604,12 @@ export class CloudHostService {
     // 已 RUNNING 的重复 ready（历史遗留/回调重试）：仅在缺默认会话时补建，不改变状态。
     let current = host;
     const harnessTypes = (current.harnessTypes ?? []) as HarnessType[];
-    if (harnessTypes.length === 1 && !current.defaultSessionId) {
+    if (
+      harnessTypes.length === 1 &&
+      current.createDefaultSession !== false &&
+      current.workspaceId &&
+      !current.defaultSessionId
+    ) {
       try {
         const session = await sessionService.create(String(current.userId), {
           controllerId: String(current.controllerId),
@@ -615,6 +627,10 @@ export class CloudHostService {
           (err as Error).message,
         );
       }
+    } else if (harnessTypes.length === 1 && !current.defaultSessionId) {
+      console.info(
+        `[cloud-host] skip default session for ${id}: ${current.workspaceId ? 'createDefaultSession=false' : 'no default workspace'}`,
+      );
     }
     const refreshed = (await this.findRawHost(id)) ?? current;
     return this.mapCloudHost(refreshed, await this.countActive(refreshed));
@@ -736,6 +752,7 @@ export class CloudHostService {
       stoppedAt: iso(host.stoppedAt),
       failureReason: host.failureReason ?? null,
       deletedAt: iso(host.deletedAt),
+      hasDefaultWorkspace: Boolean(host.workspaceId),
     };
   }
 }

@@ -14,8 +14,8 @@ import { homedir, tmpdir } from 'os';
 // Diagnostics: agent-controller local-server/relay log every request + status;
 // server side logs are read via `aspire logs agent-api` / `aspire logs controller-api`.
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 
 const CONTROLLER_PKG = resolve(__dirname, '../../../../packages/agent-controller');
 const CONFIG_DIR = join(homedir(), '.zag');

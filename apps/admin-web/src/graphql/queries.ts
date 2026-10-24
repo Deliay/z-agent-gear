@@ -55,6 +55,7 @@ export const ADMIN_MODELS = gql`
       isEnabled
       sortOrder
       scope
+      contextLength
       pricing {
         inputPerMillion
         cachedInputPerMillion

@@ -25,9 +25,17 @@ vi.mock('./command.js', () => ({
   },
 }));
 
+vi.mock('../models/mcp-server.js', () => ({
+  McpServer: {
+    countDocuments: vi.fn(),
+    exists: vi.fn(),
+  },
+}));
+
 import { controllerService } from '../services/controller.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
+import { McpServer } from '../models/mcp-server.js';
 import { evictKeyById } from '../services/key-cache.js';
 import { commandService } from './command.js';
 
@@ -163,6 +171,135 @@ describe('ControllerService', () => {
 
       const result = await controllerService.setWorktreeDir('ctrl1', 'user1', '/custom/worktrees');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('setDefaultMcp', () => {
+    const controllerDoc = () => {
+      const state: { defaultMcp?: Record<string, unknown> } = {};
+      const doc = {
+        set: vi.fn((key: string, value: Record<string, unknown>) => {
+          if (key === 'defaultMcp') state.defaultMcp = value;
+        }),
+        save: vi.fn().mockResolvedValue(undefined),
+        toObject: vi.fn(() => ({
+          _id: { toString: () => 'ctrl1' },
+          name: 'My Machine',
+          hostname: 'dev-machine',
+          type: 'local',
+          status: 'online',
+          keyId: { toString: () => 'key1' },
+          version: '1.0.0',
+          lastHeartbeatAt: null,
+          createdAt: new Date('2024-01-01'),
+          updatedAt: new Date('2024-01-01'),
+          defaultMcp: state.defaultMcp,
+        })),
+      };
+      return doc;
+    };
+
+    it('returns null when controller does not belong to the user', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue(null as never);
+      await expect(
+        controllerService.setDefaultMcp('user1', 'ctrl1', { useAllEnabled: true }),
+      ).resolves.toBeNull();
+    });
+
+    it('normalizes serverIds to empty when useAllEnabled=true', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+
+      const result = await controllerService.setDefaultMcp('user1', 'ctrl1', {
+        useAllEnabled: true,
+        serverIds: ['507f1f77bcf86cd799439021'],
+      });
+
+      expect(doc.set).toHaveBeenCalledWith('defaultMcp', {
+        useAllEnabled: true,
+        serverIds: [],
+      });
+      expect(McpServer.countDocuments).not.toHaveBeenCalled();
+      expect(result?.defaultMcp).toEqual({ useAllEnabled: true, serverIds: [] });
+    });
+
+    it('dedupes and validates serverIds when useAllEnabled=false', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      const id = '507f1f77bcf86cd799439021';
+
+      await controllerService.setDefaultMcp('user1', 'ctrl1', {
+        useAllEnabled: false,
+        serverIds: [id, id],
+      });
+
+      expect(McpServer.countDocuments).toHaveBeenCalledWith({
+        _id: { $in: [id] },
+        userId: 'user1',
+        enabled: true,
+        name: { $ne: 'agent-cloud-host-tools' },
+      });
+      expect(doc.set).toHaveBeenCalledWith('defaultMcp', {
+        useAllEnabled: false,
+        serverIds: [id],
+      });
+    });
+
+    it('throws MCP_SERVER_NOT_FOUND for disabled or unknown servers', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(0 as never);
+
+      await expect(
+        controllerService.setDefaultMcp('user1', 'ctrl1', {
+          useAllEnabled: false,
+          serverIds: ['507f1f77bcf86cd799439021'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_FOUND');
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('C-11: platform cloud tools server returns MCP_SERVER_NOT_SELECTABLE', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(McpServer.exists).mockResolvedValue({ _id: 'platform' } as never);
+
+      await expect(
+        controllerService.setDefaultMcp('user1', 'ctrl1', {
+          useAllEnabled: false,
+          serverIds: ['507f1f77bcf86cd799439021'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_SELECTABLE');
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed ids without querying the database', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+
+      await expect(
+        controllerService.setDefaultMcp('user1', 'ctrl1', {
+          useAllEnabled: false,
+          serverIds: ['not-an-object-id'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_FOUND');
+    });
+
+    it('accepts an explicit empty array (= inject nothing)', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+
+      await controllerService.setDefaultMcp('user1', 'ctrl1', {
+        useAllEnabled: false,
+        serverIds: [],
+      });
+
+      expect(doc.set).toHaveBeenCalledWith('defaultMcp', {
+        useAllEnabled: false,
+        serverIds: [],
+      });
     });
   });
 });

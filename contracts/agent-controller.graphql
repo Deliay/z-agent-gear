@@ -41,6 +41,17 @@ type Controller {
   updatedAt: String!
 }
 
+# 新建会话默认注入的 MCP（未配置过的存量控制器归一为 { useAllEnabled: true, serverIds: [] }）
+type ControllerDefaultMcp {
+  # true = 动态注入全部已启用 MCP；false = 仅注入 serverIds（允许空数组）
+  useAllEnabled: Boolean!
+  serverIds: [ID!]!
+}
+
+extend type Controller {
+  defaultMcp: ControllerDefaultMcp!
+}
+
 # 云电脑约定（ControllerType.cloud）：
 # - 由 agent-api 在 createCloudHost 时预创建：status=registering、name=用户命名、hostname=name、version='0.0.0'
 # - controller-api register 的 upsert 使用 $setOnInsert{name:hostname}，不覆盖用户命名
@@ -76,4 +87,7 @@ type Mutation {
   renameController(input: RenameInput!): Controller!
   unbindController(id: ID!): Boolean!
   setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
+  # useAllEnabled=true 时忽略并归一 serverIds=[]；false 时 serverIds 需全部属于当前用户且已启用。
+  # 平台云工具服务（cloud-host-tools）不可选：查询侧不返回，保存时显式提交返回 MCP_SERVER_NOT_SELECTABLE。
+  setControllerDefaultMcp(controllerId: ID!, useAllEnabled: Boolean!, serverIds: [ID!] = []): Controller!
 }

@@ -355,3 +355,48 @@ describe('ConfiguredWorkflowService.delete', () => {
     await expect(configuredWorkflowService.delete('user-1', 'cfg-x')).rejects.toThrow(/不存在/);
   });
 });
+
+describe('copyFromTemplate linkUpstreamPullRequest', () => {
+  const template = {
+    _id: oid('tpl-1'),
+    version: 1,
+    nodes: [
+      { nodeKey: 'requirement', type: 'HUMAN', name: '需求', stage: '需求', dependsOn: [], requiresWorktree: false, linkUpstreamPullRequest: true },
+      { nodeKey: 'design', type: 'AI', name: '方案', stage: '设计', dependsOn: ['requirement'], requiresWorktree: false },
+    ],
+  };
+
+  it('缺省回落模板值', () => {
+    const snapshot = copyFromTemplate(template as never, {
+      name: 'cfg', controllerId: 'ctrl-1',
+      nodes: [
+        { nodeKey: 'requirement', agentConfig: null },
+        { nodeKey: 'design', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+      ],
+    });
+    expect(snapshot.nodes[0].linkUpstreamPullRequest).toBe(true);
+  });
+
+  it('input 同 nodeKey 覆盖模板值', () => {
+    const snapshot = copyFromTemplate(template as never, {
+      name: 'cfg', controllerId: 'ctrl-1',
+      nodes: [
+        { nodeKey: 'requirement', linkUpstreamPullRequest: false, agentConfig: null },
+        { nodeKey: 'design', agentConfig: { acpServerType: 'opencode', initNewWorktree: false } },
+      ],
+    });
+    expect(snapshot.nodes[0].linkUpstreamPullRequest).toBe(false);
+  });
+
+  it('非 HUMAN 节点恒为 false', () => {
+    const withAi = {
+      ...template,
+      nodes: [template.nodes[0], { ...template.nodes[1], linkUpstreamPullRequest: true }],
+    };
+    const snapshot = copyFromTemplate(withAi as never, {
+      name: 'cfg', controllerId: 'ctrl-1',
+      nodes: [{ nodeKey: 'requirement', agentConfig: null }],
+    });
+    expect(snapshot.nodes[1].linkUpstreamPullRequest).toBe(false);
+  });
+});

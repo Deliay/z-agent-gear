@@ -35,6 +35,8 @@ export interface AppConfig {
   agentApiTimeoutMs: number;
   /** admin-api 内部地址（`ADMIN_API_URL`，可空；配置后启用模型 Key 撤销）。 */
   adminApiUrl: string;
+  /** 云电脑 Job 临时存储上限（`JOB_EPHEMERAL_STORAGE`，默认 10Gi）。 */
+  jobEphemeralStorage: string;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -108,6 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       5000,
     ),
     adminApiUrl: env.ADMIN_API_URL ?? '',
+    jobEphemeralStorage: (env.JOB_EPHEMERAL_STORAGE ?? '').trim() || '10Gi',
   };
 }
 

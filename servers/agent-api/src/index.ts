@@ -14,6 +14,7 @@ import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
+import { eventCallbackRouter } from './routes/event-callback.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
@@ -21,12 +22,15 @@ import * as migration003 from './migrations/003-mcp-server-registry-fields.js';
 import * as migration004 from './migrations/004-provider-scope-name-index.js';
 import * as migration005 from './migrations/005-cloud-host-active-unique-index.js';
 import * as migration006 from './migrations/006-todo-elicitation-request-id-index.js';
+import * as migration007 from './migrations/007-workflow-pr-handler-index.js';
+import * as migration008 from './migrations/008-workflow-pr-handler-lower-id.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
 import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
+import { prHandlerRegistry } from './services/workflow/pr-handler-registry.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
 const app = express();
@@ -34,6 +38,8 @@ const app = express();
 app.use(cors({ origin: config.corsOrigin }));
 app.use(compressionMiddleware());
 app.use(cookieParser());
+// 事件回调需读取原始报文验签：必须在全局 express.json() 之前挂载
+app.use('/api', eventCallbackRouter);
 app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
@@ -61,18 +67,32 @@ app.get('/health', (_req, res) => {
 async function start() {
   // 注册工作流引擎 hook（节点会话编排）与会话结束兜底回调
   workflowOrchestrator.register();
+  // 工作流完成时注销 PR 联动登记
+  prHandlerRegistry.registerPrHandlerLifecycleHooks();
 
   try {
     await mongoose.connect(config.mongodbUri);
     console.log('Connected to MongoDB');
     // 幂等 upsert 内置「开发工作流」模板
     await seedBuiltinWorkflowTemplate();
+    // 重建 PR 联动进程内索引（失败只告警，不阻断启动）
+    const rebuilt = await prHandlerRegistry.rebuild();
+    console.log(`PR handler registry rebuilt: ${rebuilt}`);
   } catch (err) {
     console.warn('MongoDB not available, starting without database:', (err as Error).message);
   }
 
   try {
-    await runMigrations([migration001, migration002, migration003, migration004, migration005, migration006]);
+    await runMigrations([
+      migration001,
+      migration002,
+      migration003,
+      migration004,
+      migration005,
+      migration006,
+      migration007,
+      migration008,
+    ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }

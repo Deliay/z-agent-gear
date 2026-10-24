@@ -1,4 +1,5 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { KeyedMutex } from '../keyed-mutex.js';
 import { artifactKey, getArtifactKeys, removeKey, addRejectRecord } from './blackboard.js';
 
 /** 引擎可操作的最小节点结构（Mongoose 文档或测试 mock 均可满足） */
@@ -40,8 +41,12 @@ export interface WorkflowInstanceDoc {
   blackboard: Map<string, string>;
   blackboardTrash: Map<string, string>;
   blackboardUpdatedAt: Map<string, Date>;
+  /** 工作流级追加提示词（key 去重，同 key 只插入一次） */
+  additionalPrompts?: Map<string, string> | Record<string, string> | null;
   /** 软删除标记（删除实例时置为删除时间；非空则拒绝一切转移） */
   deletedAt?: Date | null;
+  /** 归档标记（归档即解除 PR 联动） */
+  archivedAt?: Date | null;
   /** 最后执行过的节点（实例对外状态展示；引擎每次转移按时间序更新，级联末位为准） */
   lastNodeName?: string | null;
   lastNodeStatus?: string | null;
@@ -49,6 +54,8 @@ export interface WorkflowInstanceDoc {
   workflowWorktreePath?: string | null;
   /** 工作流 Worktree 分支名（createWorkflowWorktree=true 且 Git 工作区时存在） */
   workflowWorktreeBranch?: string | null;
+  /** 工作流完成时间（全部节点 DONE 时由引擎一次性写入） */
+  finishedAt?: Date | null;
   save(): Promise<unknown>;
 }
 
@@ -97,6 +104,7 @@ export interface EngineHooks {
   onNodeResume?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeDone?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
+  onWorkflowFinished?(instance: WorkflowInstanceDoc): Promise<void>;
 }
 
 /** 显式状态转移表（event → 允许的源状态 → 目标状态） */
@@ -126,6 +134,9 @@ const EVENT_LABEL: Record<WorkflowEvent, string> = {
   restart: '重启节点',
 };
 
+/** 领域层实例锁：事件回调、GraphQL、MCP 与兜底流转共用同一把锁 */
+const transitionMutex = new KeyedMutex();
+
 class WorkflowEngine {
   private hooks: EngineHooks = {};
 
@@ -134,8 +145,37 @@ class WorkflowEngine {
     this.hooks = { ...this.hooks, ...hooks };
   }
 
-  /** 唯一状态转移入口：所有路径（GraphQL mutation / MCP 工具 / 兜底逻辑）统一走此入口 */
+  /**
+   * 唯一状态转移入口：所有路径（GraphQL mutation / MCP 工具 / 事件回调 / 兜底逻辑）统一走此入口。
+   *
+   * R-9：按 `instanceId` 在领域层串行化（findById → mutate → save 读改写），
+   * 覆盖事件驱动与人工/MCP 流转，避免并发互覆节点更新或双触发级联。
+   * 进程内锁，假设 agent-api 单实例部署（与 KeyedMutex 注释同口径）。
+   */
   async transition(
+    instanceId: string,
+    nodeId: string,
+    event: WorkflowEvent,
+    payload: TransitionPayload = {},
+  ): Promise<WorkflowNodeDoc> {
+    return transitionMutex.runExclusive(instanceId, () =>
+      this.transitionUnlocked(instanceId, nodeId, event, payload),
+    );
+  }
+
+  /**
+   * 在实例转移锁的调用上下文之外执行延迟任务（仅限从锁内 hook 延迟调度，N-4/N-8）。
+   *
+   * 只做 ALS 逃逸并**等待当前持有者释放**（默认 30s，可传 timeoutMs），**不预取锁**；
+   * 任务内部的 transition 会自行取锁，因此不会出现「提前占锁 → 任务内 transition 必 re-entrant」的自锁。
+   * 延迟回调继承的过期 held 视图不会被误判为仍持锁（N-10）；持锁任务内 await 本方法会在超时后
+   * 抛结构化错误而非永久死锁（N-9/N-11）。
+   */
+  runOutsideTransitionLock<T>(instanceId: string, task: () => Promise<T>): Promise<T> {
+    return transitionMutex.runDetached(instanceId, task);
+  }
+
+  private async transitionUnlocked(
     instanceId: string,
     nodeId: string,
     event: WorkflowEvent,
@@ -154,7 +194,18 @@ class WorkflowEngine {
     }
     await this.apply(instance, node, event, payload);
     this.refreshCurrentNodeNames(instance);
+    // 工作流完成判定：外层 transition 一次性置位，避免递归级联重复触发
+    const finishedNow =
+      !instance.finishedAt &&
+      instance.nodes.length > 0 &&
+      instance.nodes.every((n) => n.status === 'DONE');
+    if (finishedNow) {
+      instance.finishedAt = new Date();
+    }
     await instance.save();
+    if (finishedNow) {
+      await this.hooks.onWorkflowFinished?.(instance);
+    }
     return node;
   }
 

@@ -128,6 +128,7 @@ services:
       AGENT_API_URL: "http://agent-api:8000"
       AGENT_API_TIMEOUT_MS: "5000"
       ADMIN_API_URL: "http://admin-api:8002"
+      JOB_EPHEMERAL_STORAGE: "10Gi"
       RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"

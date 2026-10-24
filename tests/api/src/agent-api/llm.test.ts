@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
 import { adminGql, ensureAdminLogin } from '../admin-api/helpers.js';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
@@ -45,7 +45,7 @@ const MODELS_QUERY = `
   query Models {
     models {
       id providerId provider { id name type isEnabled scope }
-      name isCustom isEnabled sortOrder scope createdAt updatedAt
+      name isCustom isEnabled sortOrder scope contextLength createdAt updatedAt
     }
   }
 `;
@@ -218,6 +218,14 @@ describe('LLM Provider & Model API', () => {
       // 全局模型必须处于启用态才会出现在用户侧
       expect(
         body.data.models.every((m: { scope: string; isEnabled: boolean }) => m.scope !== 'global' || m.isEnabled),
+      ).toBe(true);
+      // C-22：最长上下文为只读镜像，未设置为 null、设置为正整数
+      expect(
+        body.data.models.every(
+          (m: { contextLength: number | null }) =>
+            m.contextLength === null ||
+            (Number.isInteger(m.contextLength) && m.contextLength > 0),
+        ),
       ).toBe(true);
     });
   });

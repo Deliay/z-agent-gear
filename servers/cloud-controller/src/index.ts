@@ -107,6 +107,7 @@ export function createCloudControllerApp(): CloudControllerApp {
     image: config.workerImage,
     runtimeClassName: config.runtimeClassName,
     publicWsEndpoint: config.publicWsEndpoint,
+    ephemeralStorage: config.jobEphemeralStorage,
   });
   // 云电脑运行期 secret（仅内存）与内部回调客户端；地址为空时对应回调为 no-op。
   const secretStore = new SecretStore();

@@ -44,6 +44,9 @@ type CloudHost {
   deletedAt: String
   # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
   defaultWorkspace: String!
+  # 是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置创建默认工作区后即回写 workspaceId（与 createSession 成败无关）并翻转为 true。
+  # 用于区分「未创建工作区」与「默认会话创建失败」。多 Harness（createSession=false）不执行会话步骤，workspaceId 保持 null。
+  hasDefaultWorkspace: Boolean!
   # 当前正在 runtime 安装的工作负载名；null 表示空闲
   workloadInstalling: String
 }
@@ -120,6 +123,8 @@ input CreateCloudHostInput {
   # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
   # 缺省/空数组 = 仅安装 harness 负载（与历史行为一致）
   workloadIds: [ID!]
+  # 新增：false 时 ready 不自动建默认会话（由 setup 的 session 步骤建项目会话）
+  createDefaultSession: Boolean = true
 }
 
 input InstallCloudHostWorkloadInput {
@@ -137,11 +142,15 @@ input SetupCloudHostGithubProjectInput {
   targetPath: String!
   # 除固定的 Github 工作负载外，额外选择安装的 standard 工作负载
   workloadIds: [ID!]
+  # 新增：false 时 session 步骤记 SKIPPED（多 Harness）；缺省 true
+  createSession: Boolean = true
 }
 
 extend type Query {
   cloudHostCapabilities: CloudHostCapabilities!
   myCloudHosts: [CloudHost!]!
+  # 进度对话框轮询云电脑启动状态（1.5s 级）；仅返回当前用户的云电脑（软删除仍返回，供只读回看）
+  cloudHost(id: ID!): CloudHost
   cloudHostStopImpact(id: ID!): CloudHostStopImpact!
   cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
   # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）

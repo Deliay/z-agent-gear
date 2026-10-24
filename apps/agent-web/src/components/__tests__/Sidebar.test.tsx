@@ -29,8 +29,12 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }));
 
+const newSessionDialogProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
 vi.mock('../session/NewSessionDialog', () => ({
-  default: () => <div data-testid="new-session-dialog" />,
+  default: (props: Record<string, unknown>) => {
+    newSessionDialogProps.current = props;
+    return <div data-testid="new-session-dialog" />;
+  },
 }));
 
 vi.mock('../cloud-host/NewCloudHostDialog', () => ({
@@ -184,6 +188,7 @@ function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
     activeSessionCount: 0,
     failureReason: null,
     deletedAt: null,
+    hasDefaultWorkspace: true,
     ...overrides,
   };
 }
@@ -217,6 +222,45 @@ describe('Sidebar 集成测试', () => {
     vi.clearAllMocks();
     mockCapabilities();
     mockHome();
+  });
+
+  it('U-5: Sidebar 的新建会话回调 9 参映射到 CreateSessionInput', async () => {
+    mockHome({
+      workspaces: [makeWorkspace()],
+    });
+    render(<Sidebar username="testuser" />);
+
+    const newSessionButtons = screen.getAllByLabelText('新建会话');
+    fireEvent.click(newSessionButtons[0]);
+
+    const props = newSessionDialogProps.current as {
+      onCreate: (...args: unknown[]) => Promise<void>;
+    };
+    expect(props).toBeTruthy();
+    mockUseMutation.mockResolvedValue({ data: { createSession: { session: { id: 'sess-new' } } } });
+
+    await props.onCreate(
+      'ctrl-1',
+      'opencode',
+      'ws-1',
+      false,
+      'feat-x',
+      ['mcp-1'],
+      '/repo/.worktrees/feat-a',
+      'mode-1',
+      'model-1',
+    );
+
+    expect(mockUseMutation).toHaveBeenCalledWith({
+      variables: {
+        input: expect.objectContaining({
+          modeId: 'mode-1',
+          modelId: 'model-1',
+          existingWorktreePath: '/repo/.worktrees/feat-a',
+        }),
+      },
+      refetchQueries: expect.any(Array),
+    });
   });
 
   describe('① 四个平级分组渲染', () => {
@@ -540,6 +584,105 @@ describe('Sidebar 集成测试', () => {
         ],
       });
       rerender(<Sidebar username="testuser" />);
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+    });
+
+    it('无默认工作区的 RUNNING 云电脑展示无工作区提示且不展示默认会话失败', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({
+              status: 'RUNNING',
+              defaultSessionId: null,
+              hasDefaultWorkspace: false,
+            }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.getByTestId('cloud-host-no-workspace-hint')).toHaveTextContent(
+        '未创建默认工作区，请先创建或绑定工作区',
+      );
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+    });
+
+    it('无默认工作区但控制器已有工作区时不再展示无工作区提示', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({
+              status: 'RUNNING',
+              defaultSessionId: null,
+              hasDefaultWorkspace: false,
+            }),
+          }),
+        ],
+        workspaces: [
+          makeWorkspace({ id: 'ws-1', controllerId: 'ctrl-cloud', name: 'workspace', path: '/root/workspace' }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
+    });
+
+    it('无默认工作区时展示 Github 入口与新建工作区入口并跳转设置页', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'RUNNING', hasDefaultWorkspace: false }),
+          }),
+        ],
+      });
+
+      const { rerender } = render(<Sidebar username="testuser" />);
+
+      expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText('新建工作区'));
+      expect(mockNavigate).toHaveBeenCalledWith('/settings?controllerId=ctrl-cloud');
+
+      // 有工作区时不展示「新建工作区」入口（避免与已建工作区语义冲突）
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({ status: 'RUNNING', hasDefaultWorkspace: true }),
+          }),
+        ],
+      });
+      rerender(<Sidebar username="testuser" />);
+      expect(screen.queryByLabelText('新建工作区')).not.toBeInTheDocument();
+    });
+
+    it('多 Harness 且无默认会话时不展示任何失败/无工作区提示', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-cloud',
+            type: 'cloud',
+            cloudHost: makeCloudHost({
+              status: 'RUNNING',
+              defaultSessionId: null,
+              harnessTypes: ['OPENCODE', 'CLAUDE_CODE'] as CloudHostData['harnessTypes'],
+            }),
+          }),
+        ],
+      });
+
+      render(<Sidebar username="testuser" />);
+
+      expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
     });
 

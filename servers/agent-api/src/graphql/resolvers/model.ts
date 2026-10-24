@@ -1,8 +1,18 @@
 import { GraphQLError } from 'graphql';
 import { modelService } from '../../services/model.js';
 import { providerService } from '../../services/provider.js';
+import { invalidateAcpOptionsForUser } from '../../services/acp-options-cache.js';
 import { rethrowAsGraphQLError } from './errors.js';
 import type { AuthContext } from './auth.js';
+
+/** 模型增删改/启用停用后，尽力失效该用户的 ACP 选项缓存（失败只告警，不影响 mutation 返回）。 */
+async function invalidateAcpOptionsBestEffort(userId: string): Promise<void> {
+  try {
+    await invalidateAcpOptionsForUser(userId);
+  } catch (err) {
+    console.warn('[model] invalidate acp options failed:', (err as Error).message);
+  }
+}
 
 export const modelResolvers = {
   Query: {
@@ -33,7 +43,9 @@ export const modelResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await modelService.createCustom(args.input);
+        const result = await modelService.createCustom(args.input);
+        await invalidateAcpOptionsBestEffort(context.currentUser.id);
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err, [
           ['E11000', 'Model name already exists for this provider'],
@@ -54,6 +66,7 @@ export const modelResolvers = {
         if (!result) {
           throw new GraphQLError('Model not found or is not a custom model');
         }
+        await invalidateAcpOptionsBestEffort(context.currentUser.id);
         return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
@@ -72,6 +85,7 @@ export const modelResolvers = {
         if (!result) {
           throw new GraphQLError('Model not found or its provider is disabled');
         }
+        await invalidateAcpOptionsBestEffort(context.currentUser.id);
         return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
@@ -86,7 +100,9 @@ export const modelResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await modelService.updateSortOrder(args.ids);
+        const result = await modelService.updateSortOrder(args.ids);
+        await invalidateAcpOptionsBestEffort(context.currentUser.id);
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }

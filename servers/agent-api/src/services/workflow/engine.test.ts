@@ -404,6 +404,29 @@ describe('WorkflowEngine.transition', () => {
     }
   });
 
+  it('R-9: 同实例并发 transition 在领域层串行化，第二次读取到已落库状态并拒绝', async () => {
+    let persisted = linearInstance();
+    persisted.nodes[0].status = 'RUNNING';
+    vi.mocked(WorkflowInstance.findById).mockImplementation((async () => {
+      const snapshot = makeInstance(persisted.nodes.map((n) => ({ ...n })));
+      snapshot.save.mockImplementation(async () => {
+        // 放大持久化窗口，暴露并发读改写
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        persisted = makeInstance(snapshot.nodes.map((n) => ({ ...n })));
+      });
+      return snapshot as never;
+    }) as never);
+
+    const results = await Promise.allSettled([
+      workflowEngine.transition('inst-1', 'n1', 'complete'),
+      workflowEngine.transition('inst-1', 'n1', 'complete'),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(persisted.nodes[0].status).toBe('DONE');
+  });
+
   it('实例或节点不存在时拒绝', async () => {
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(null as never);
     await expect(workflowEngine.transition('inst-x', 'n1', 'start')).rejects.toThrow(/实例不存在/);
@@ -526,5 +549,52 @@ describe('WorkflowEngine.transition', () => {
     await workflowEngine.transition('inst-1', 'n2', 'reject', { reason: '方案不完整' });
     expect(inst2.lastNodeName).toBe('需求');
     expect(inst2.lastNodeStatus).toBe('REWORK');
+  });
+});
+
+describe('WorkflowEngine 工作流完成判定', () => {
+  const finishHooks = { onNodeStart: vi.fn(), onNodeDone: vi.fn(), onWorkflowFinished: vi.fn() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workflowEngine.registerHooks(finishHooks);
+  });
+
+  it('全部节点 DONE 时写入 finishedAt 并只触发一次完成 hook（级联 FLAG 亦然）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'DONE' }),
+      makeNode({ nodeId: 'n2', nodeKey: 'n2', type: 'AI', name: '方案', status: 'RUNNING', dependsOn: ['n1'] }),
+      makeNode({ nodeId: 'n3', nodeKey: 'n3', type: 'FLAG', name: '收尾', status: 'INITIALIZING', dependsOn: ['n2'] }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'complete');
+
+    expect(instance.nodes.every((n) => n.status === 'DONE')).toBe(true);
+    expect(instance.finishedAt).toBeInstanceOf(Date);
+    expect(finishHooks.onWorkflowFinished).toHaveBeenCalledTimes(1);
+  });
+
+  it('未全部 DONE 时不写 finishedAt、不触发完成 hook', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RUNNING';
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'complete');
+
+    expect(instance.finishedAt).toBeUndefined();
+    expect(finishHooks.onWorkflowFinished).not.toHaveBeenCalled();
+  });
+
+  it('已标记完成（finishedAt 非空）时不重复触发', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'RUNNING' }),
+    ]);
+    instance.finishedAt = new Date('2026-10-01');
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'complete');
+
+    expect(finishHooks.onWorkflowFinished).not.toHaveBeenCalled();
   });
 });

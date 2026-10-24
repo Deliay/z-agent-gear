@@ -21,6 +21,8 @@ export interface ConfiguredWorkflowNodeInput {
   artifactTitles?: string[] | null;
   dependsOn?: string[];
   requiresWorktree?: boolean;
+  /** 人类节点：是否联动上游 Pull Request */
+  linkUpstreamPullRequest?: boolean;
   agentConfig?: AgentNodeConfigInput | null;
   sortOrder?: number | null;
 }
@@ -47,6 +49,7 @@ interface SourceNodeLike {
   artifactTitles?: string[] | null;
   dependsOn?: string[] | null;
   requiresWorktree: boolean;
+  linkUpstreamPullRequest?: boolean | null;
 }
 
 interface TemplateLike {
@@ -61,23 +64,32 @@ interface TemplateLike {
  */
 export function copyFromTemplate(template: TemplateLike, input: ConfigureWorkflowInput) {
   const configByKey = new Map(input.nodes.map((n) => [n.nodeKey, n.agentConfig ?? null]));
+  const inputByKey = new Map(input.nodes.map((n) => [n.nodeKey, n]));
   return {
     name: input.name,
     controllerId: input.controllerId,
     sourceTemplateId: template._id?.toString(),
     sourceTemplateVersion: template.version,
-    nodes: template.nodes.map((node) => ({
-      nodeKey: node.nodeKey,
-      type: node.type,
-      name: node.name,
-      description: node.description ?? null,
-      stage: node.stage,
-      prompts: node.prompts ? [...node.prompts] : null,
-      artifactTitles: node.artifactTitles ? [...node.artifactTitles] : null,
-      dependsOn: [...(node.dependsOn ?? [])],
-      requiresWorktree: node.requiresWorktree,
-      agentConfig: configByKey.get(node.nodeKey) ? { ...configByKey.get(node.nodeKey)! } : null,
-    })),
+    nodes: template.nodes.map((node) => {
+      const override = inputByKey.get(node.nodeKey);
+      return {
+        nodeKey: node.nodeKey,
+        type: node.type,
+        name: node.name,
+        description: node.description ?? null,
+        stage: node.stage,
+        prompts: node.prompts ? [...node.prompts] : null,
+        artifactTitles: node.artifactTitles ? [...node.artifactTitles] : null,
+        dependsOn: [...(node.dependsOn ?? [])],
+        requiresWorktree: node.requiresWorktree,
+        // 仅 HUMAN 可联动；input 同 nodeKey 覆盖模板值，缺省回落模板值
+        linkUpstreamPullRequest:
+          node.type === 'HUMAN'
+            ? (override?.linkUpstreamPullRequest ?? node.linkUpstreamPullRequest ?? false)
+            : false,
+        agentConfig: configByKey.get(node.nodeKey) ? { ...configByKey.get(node.nodeKey)! } : null,
+      };
+    }),
   };
 }
 
@@ -190,6 +202,7 @@ class ConfiguredWorkflowService {
       artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
       dependsOn: [...(n.dependsOn ?? [])],
       requiresWorktree: n.requiresWorktree ?? false,
+      linkUpstreamPullRequest: n.type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
       sortOrder: n.sortOrder ?? undefined,
     }));

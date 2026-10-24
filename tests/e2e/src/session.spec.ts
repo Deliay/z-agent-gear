@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
+import mongoose from 'mongoose';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -16,7 +17,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
   return page.request.post(API_URL, { headers, data: body });
 }
 
-async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
+async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string; userId: string }> {
   const username = `es${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
@@ -27,7 +28,7 @@ async function registerUser(page: import('@playwright/test').Page): Promise<{ to
     }
   `, { username, password: 'testpass123' });
   const body = await res.json();
-  return { token: body.data.signup.token, username };
+  return { token: body.data.signup.token, username, userId: body.data.signup.user.id };
 }
 
 async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<{ rawKey: string; keyId: string }> {
@@ -53,7 +54,21 @@ async function createWorkspace(page: import('@playwright/test').Page, controller
   return body.data.createWorkspace;
 }
 
-function registerController(rawKey: string): Promise<{ controllerId: string; disconnect: () => void }> {
+interface AcpStartEvent {
+  requestId: string;
+  sessionId: string;
+  serverType?: string;
+  modeId?: string;
+  modelId?: string;
+  mcpEndpoint?: { token: string; serverNames: string[] };
+}
+
+function registerController(rawKey: string): Promise<{
+  controllerId: string;
+  disconnect: () => void;
+  starts: AcpStartEvent[];
+  setOptionsVersion: (version: number) => void;
+}> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, {
       transports: ['websocket'],
@@ -66,6 +81,9 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       reject(new Error('Timeout registering controller'));
     }, 10000);
 
+    const starts: AcpStartEvent[] = [];
+    let optionsVersion = 1;
+
     client.on("git:worktree:list", (data: { requestId: string }) => {
       client.emit("git:worktree:list:result", { requestId: data.requestId, success: true, worktrees: [] });
     });
@@ -74,6 +92,24 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
       client.emit('acp:check:result', {
         requestId: data.requestId,
         servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
+    // Phase 10：模式/模型前置选择与「刷新」按钮依赖空实例探测链路
+    client.on('acp:probe-options', (data: { requestId: string; serverType: string }) => {
+      client.emit('acp:probe-options:result', {
+        requestId: data.requestId,
+        serverType: data.serverType,
+        success: true,
+        modes: [
+          { id: `mode-v${optionsVersion}`, name: `Mode v${optionsVersion}` },
+          { id: 'ask', name: 'Ask' },
+        ],
+        availableModels: [
+          { id: `model-v${optionsVersion}`, name: `Model v${optionsVersion}`, provider: 'test' },
+        ],
+        currentModeId: `mode-v${optionsVersion}`,
+        currentModelId: `model-v${optionsVersion}`,
       });
     });
 
@@ -88,17 +124,34 @@ function registerController(rawKey: string): Promise<{ controllerId: string; dis
     // 否则删除会话时 acp:stop 无法下发、agent-api 侧只能等 ack 超时。
     // 注意不带 externalSessionId：带了他前端会把会话当“历史会话”走
     // deleteHistorySession（轮询 agent 侧删除确认最长 60s），而非 deleteSession。
-    client.on('acp:start', (data: { requestId: string; sessionId: string }) => {
+    client.on('acp:start', (data: AcpStartEvent) => {
+      starts.push(data);
       client.emit('acp:start:result', {
         requestId: data.requestId,
         sessionId: data.sessionId,
         success: true,
+        modes: [
+          { id: `mode-v${optionsVersion}`, name: `Mode v${optionsVersion}` },
+          { id: 'ask', name: 'Ask' },
+        ],
+        currentModeId: data.modeId ?? `mode-v${optionsVersion}`,
+        availableModels: [
+          { id: `model-v${optionsVersion}`, name: `Model v${optionsVersion}`, provider: 'test' },
+        ],
+        currentModelId: data.modelId ?? `model-v${optionsVersion}`,
       });
     });
 
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
-      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect() });
+      resolve({
+        controllerId: data.controllerId,
+        disconnect: () => client.disconnect(),
+        starts,
+        setOptionsVersion: (version: number) => {
+          optionsVersion = version;
+        },
+      });
     });
 
     client.once('error', (data: { code: string; message: string }) => {
@@ -313,5 +366,180 @@ test.describe('Session E2E', () => {
   test('should redirect unauthenticated user to login', async ({ page }) => {
     await page.goto('/sessions');
     await expect(page.locator('[data-slot="card-title"]')).toContainText('登录', { timeout: 5000 });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 10：默认 MCP / 控制器默认 MCP / 模式模型前置选择与刷新
+  // -------------------------------------------------------------------------
+  const MONGO_URI = process.env.MONGODB_URI;
+
+  async function phase10Db(): Promise<mongoose.mongo.Db | null> {
+    if (!MONGO_URI) return null;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URI);
+    return mongoose.connection.db ?? null;
+  }
+
+  async function waitForStart(
+    starts: Array<{ mcpEndpoint?: { serverNames: string[] }; modeId?: string; modelId?: string }>,
+    timeoutMs = 15000,
+  ) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (starts.length > 0) return starts[starts.length - 1];
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error('acp:start not received');
+  }
+
+  test('P10-S5: 默认 MCP 全选，全部取消后新会话不注入 MCP', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerController(rawKey);
+    await createWorkspace(
+      page,
+      controller.controllerId,
+      `/tmp/e2e-mcp-${Math.random().toString(36).slice(2, 8)}`,
+      token,
+    );
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('#controller').selectOption({ index: 1 });
+    await expect(dialog.getByText(/默认注入全部已启用的 MCP/)).toBeVisible({ timeout: 15000 });
+
+    const adminLabel = dialog.locator('label', { hasText: 'agent-workflow-admin-tools' });
+    const adminCheckbox = adminLabel.getByRole('checkbox');
+    await expect(adminCheckbox).toBeChecked();
+    await adminCheckbox.uncheck();
+
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    const start = await waitForStart(controller.starts);
+    expect(start.mcpEndpoint).toBeUndefined();
+    controller.disconnect();
+  });
+
+  test('P10-S6: 控制器默认 MCP 子集在新建会话中生效', async ({ page }) => {
+    test.skip(!MONGO_URI, '需要 MONGODB_URI 以预置第二个 MCP 服务');
+    const { token, username } = await registerUser(page);
+    const meRes = await gqlRequest(page, `query { me { id } }`, undefined, token);
+    const userId = (await meRes.json()).data.me.id as string;
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerController(rawKey);
+    await createWorkspace(
+      page,
+      controller.controllerId,
+      `/tmp/e2e-mcp-subset-${Math.random().toString(36).slice(2, 8)}`,
+      token,
+    );
+
+    // 触发平台内置 admin-tools 注册，再额外插入一个可选项
+    const listRes = await gqlRequest(page, `query { mcpServers { id name } }`, undefined, token);
+    const listBody = await listRes.json();
+    const admin = (listBody.data.mcpServers as Array<{ id: string; name: string }>).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+
+    const db = (await phase10Db())!;
+    const extraId = new mongoose.Types.ObjectId();
+    // Mongoose 模型 McpServer 的实际集合名是 `mcpservers`（非 camelCase）
+    await db.collection('mcpservers').insertOne({
+      _id: extraId,
+      // McpServer.userId 在 schema 中是 String，直写字符串与 GraphQL 查询一致
+      userId,
+      name: 'e2e-extra-mcp',
+      transport: 'registered_proxy',
+      source: 'manual',
+      enabled: true,
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // 自检：直写后 GraphQL 必须能读到（userId 类型/字段完整性问题在此暴露）
+    const verifyRes = await gqlRequest(page, `query { mcpServers { name } }`, undefined, token);
+    const verifyNames = ((await verifyRes.json()).data.mcpServers as Array<{ name: string }>).map(
+      (server) => server.name,
+    );
+    expect(verifyNames).toContain('e2e-extra-mcp');
+
+    const saveRes = await gqlRequest(
+      page,
+      `mutation($controllerId: ID!, $useAllEnabled: Boolean!, $serverIds: [ID!]) {
+        setControllerDefaultMcp(controllerId: $controllerId, useAllEnabled: $useAllEnabled, serverIds: $serverIds) {
+          id defaultMcp { useAllEnabled serverIds }
+        }
+      }`,
+      { controllerId: controller.controllerId, useAllEnabled: false, serverIds: [admin!.id] },
+      token,
+    );
+    expect((await saveRes.json()).errors).toBeUndefined();
+
+    try {
+      await loginViaUI(page, username);
+      await page.goto('/sessions');
+      await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.locator('#controller').selectOption({ index: 1 });
+      await expect(dialog.getByText(/按控制器默认设置预选/)).toBeVisible({ timeout: 15000 });
+
+      await expect(dialog.locator('label', { hasText: 'agent-workflow-admin-tools' }).getByRole('checkbox')).toBeChecked();
+      await expect(dialog.locator('label', { hasText: 'e2e-extra-mcp' }).getByRole('checkbox')).not.toBeChecked();
+
+      await page.getByRole('button', { name: '创建会话' }).click();
+      await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+      const start = await waitForStart(controller.starts);
+      expect(start.mcpEndpoint?.serverNames).toEqual(['agent-workflow-admin-tools']);
+    } finally {
+      await db.collection('mcpservers').deleteOne({ _id: extraId });
+      controller.disconnect();
+    }
+  });
+
+  test('P10-S7: 模式/模型前置选择与刷新按钮，会话详情回显所选值', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const controller = await registerController(rawKey);
+    await createWorkspace(
+      page,
+      controller.controllerId,
+      `/tmp/e2e-mode-${Math.random().toString(36).slice(2, 8)}`,
+      token,
+    );
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('#controller').selectOption({ index: 1 });
+    const modeTrigger = dialog.locator('[data-slot="select-trigger"][aria-label="模式"]');
+    await expect(modeTrigger).toBeVisible({ timeout: 30000 });
+
+    // 刷新按钮：清缓存后重新探测，下拉出现 v2 选项
+    controller.setOptionsVersion(2);
+    await dialog.getByRole('button', { name: '刷新', exact: true }).click();
+    await modeTrigger.click();
+    await expect(page.getByRole('option', { name: 'Mode v2' })).toBeVisible({ timeout: 15000 });
+    await page.getByRole('option', { name: 'Mode v2' }).click();
+
+    const modelTrigger = dialog.locator('[data-slot="select-trigger"][aria-label="模型"]');
+    await modelTrigger.click();
+    await expect(page.getByRole('option', { name: 'Model v2' })).toBeVisible();
+    await page.getByRole('option', { name: 'Model v2' }).click();
+
+    await page.getByRole('button', { name: '创建会话' }).click();
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+
+    const start = await waitForStart(controller.starts);
+    expect(start.modeId).toBe('mode-v2');
+    expect(start.modelId).toBe('model-v2');
+    await expect(page.getByText('Mode v2', { exact: true }).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Model v2', { exact: true }).first()).toBeVisible();
+    controller.disconnect();
   });
 });

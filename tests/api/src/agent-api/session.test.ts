@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import mongoose from 'mongoose';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '');
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
+const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -2150,5 +2151,316 @@ describe('Session SSE API', () => {
 
       client.disconnect();
     }, 30000);
+  });
+});
+
+// Phase 9：默认 MCP / 前置 modeId·modelId / 云会话工具并入（GraphQL 契约与行为）
+const MCP_SERVERS_QUERY = `
+  query McpServers {
+    mcpServers { id name transport source enabled }
+  }
+`;
+
+const SET_MCP_ENABLED = `
+  mutation SetMcpEnabled($id: ID!, $enabled: Boolean!) {
+    setMcpServerEnabled(id: $id, enabled: $enabled) { id enabled }
+  }
+`;
+
+const SET_CONTROLLER_DEFAULT_MCP = `
+  mutation SetDefaultMcp($controllerId: ID!, $useAllEnabled: Boolean!, $serverIds: [ID!]) {
+    setControllerDefaultMcp(
+      controllerId: $controllerId
+      useAllEnabled: $useAllEnabled
+      serverIds: $serverIds
+    ) {
+      id
+      defaultMcp { useAllEnabled serverIds }
+    }
+  }
+`;
+
+const CONTROLLER_DEFAULT_MCP_QUERY = `
+  query ControllerDefaultMcp($id: ID!) {
+    controller(id: $id) { id defaultMcp { useAllEnabled serverIds } }
+  }
+`;
+
+const HAS_MONGO = Boolean(process.env.MONGODB_URI);
+
+async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  return mongoose.connection.db ?? null;
+}
+
+async function signupWithId(): Promise<{ token: string; userId: string }> {
+  // N-18：用户名上限 20（auth.ts），用 16 字符稳定唯一前缀
+  const uid = `mcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
+  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+  const body = await res.json();
+  return {
+    token: body.data.signup.token as string,
+    userId: body.data.signup.user.id as string,
+  };
+}
+
+async function registerFreshController(
+  token: string,
+  hostname: string,
+): Promise<{ client: ClientSocket; controllerId: string }> {
+  const keyRes = await gqlRequest(
+    CREATE_KEY,
+    { input: { name: `mcp-key-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, type: 'local' } },
+    token,
+  );
+  const keyBody = await keyRes.json();
+  const client = createClient();
+  // 与真实 controller 一致：收到 acp:stop 立即 ack，避免 DELETE_SESSION 等待 ack 超时（N-18 实跑暴露）
+  client.on('acp:stop', (data: { sessionId: string }) => {
+    client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete' });
+  });
+  const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+  client.emit('register', {
+    key: keyBody.data.createControllerKey.rawKey,
+    hostname,
+    version: '2.0.0',
+  });
+  const reg = await registered;
+  return { client, controllerId: reg.controllerId };
+}
+
+async function createWorkspaceFor(token: string, ctrlId: string): Promise<string> {
+  const path = `/tmp/mcp-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const res = await gqlRequest(
+    CREATE_WORKSPACE,
+    { input: { controllerId: ctrlId, path } },
+    token,
+  );
+  const body = await res.json();
+  expect(body.errors).toBeUndefined();
+  return body.data.createWorkspace.id;
+}
+
+async function createSessionCapture(
+  token: string,
+  client: ClientSocket,
+  input: Record<string, unknown>,
+): Promise<{ sessionId: string; start: Record<string, any> }> {
+  const startEvent = waitForEvent<Record<string, any>>(client, 'acp:start', 15000);
+  const res = await gqlRequest(CREATE_SESSION, { input }, token);
+  const body = await res.json();
+  expect(body.errors).toBeUndefined();
+  const sessionId = body.data.createSession.session.id as string;
+  const start = await startEvent;
+  client.emit('acp:start:result', {
+    requestId: start.requestId,
+    sessionId,
+    success: true,
+    externalSessionId: `ext_${Date.now()}`,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  return { sessionId, start };
+}
+
+async function listMcpServers(token: string): Promise<Array<Record<string, any>>> {
+  const res = await gqlRequest(MCP_SERVERS_QUERY, undefined, token);
+  const body = await res.json();
+  expect(body.errors).toBeUndefined();
+  return body.data.mcpServers as Array<Record<string, any>>;
+}
+
+describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
+  afterAll(async () => {
+    if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
+  });
+
+  it('T-API-MCP1: 未传 mcpServerIds 时注入控制器默认（全部已启用）', async () => {
+    const { token } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-default-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+
+    // 读路径会幂等注册平台内置 agent-workflow-admin-tools
+    const servers = await listMcpServers(token);
+    const admin = servers.find((server) => server.name === 'agent-workflow-admin-tools');
+    expect(admin).toBeTruthy();
+
+    const { start } = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+    });
+    expect(start.mcpEndpoint).toBeTruthy();
+    expect(start.mcpEndpoint.serverNames).toContain('agent-workflow-admin-tools');
+    // 平台内置云主机工具不由默认解析注入（仅云会话自动并入）
+    expect(start.mcpEndpoint.serverNames).not.toContain('agent-cloud-host-tools');
+
+    await gqlRequest(DELETE_SESSION, { id: start.sessionId }, token);
+    client.disconnect();
+  });
+
+  it('T-API-MCP2: 显式空数组表示不注入任何 MCP', async () => {
+    const { token } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-empty-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+    await listMcpServers(token); // 确保存在可注入候选，验证「显式 []」优先于默认
+
+    const { sessionId, start } = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+      mcpServerIds: [],
+    });
+    expect(start.mcpEndpoint).toBeUndefined();
+
+    await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+    client.disconnect();
+  });
+
+  it('T-API-MCP3: 显式 ID 仅注入所选服务', async () => {
+    const { token } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-explicit-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+    const admin = (await listMcpServers(token)).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+
+    const { sessionId, start } = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+      mcpServerIds: [admin!.id],
+    });
+    expect(start.mcpEndpoint.serverNames).toEqual(['agent-workflow-admin-tools']);
+
+    await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+    client.disconnect();
+  });
+
+  it('T-API-MCP4: useAllEnabled=false 仅注入子集，停用服务被剔除', async () => {
+    const { token } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-subset-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+    const admin = (await listMcpServers(token)).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+
+    const saved = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId, useAllEnabled: false, serverIds: [admin!.id] },
+      token,
+    );
+    expect((await saved.json()).data.setControllerDefaultMcp.defaultMcp).toEqual({
+      useAllEnabled: false,
+      serverIds: [admin!.id],
+    });
+
+    // 先验证子集命中
+    const first = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+    });
+    expect(first.start.mcpEndpoint.serverNames).toEqual(['agent-workflow-admin-tools']);
+    await gqlRequest(DELETE_SESSION, { id: first.sessionId }, token);
+
+    // 停用后默认解析剔除
+    await gqlRequest(SET_MCP_ENABLED, { id: admin!.id, enabled: false }, token);
+    const second = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+    });
+    expect(second.start.mcpEndpoint).toBeUndefined();
+
+    const queried = await gqlRequest(CONTROLLER_DEFAULT_MCP_QUERY, { id: controllerId }, token);
+    const queriedBody = await queried.json();
+    expect(queriedBody.data.controller.defaultMcp.useAllEnabled).toBe(false);
+
+    await gqlRequest(DELETE_SESSION, { id: second.sessionId }, token);
+    await gqlRequest(SET_MCP_ENABLED, { id: admin!.id, enabled: true }, token);
+    client.disconnect();
+  });
+
+  it('T-API-MCP5: modeId/modelId 透传到 acp:start', async () => {
+    const { token } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-mode-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+
+    const { sessionId, start } = await createSessionCapture(token, client, {
+      controllerId,
+      acpServerType: 'opencode',
+      workspaceId,
+      mcpServerIds: [],
+      modeId: 'plan',
+      modelId: 'anthropic/claude-sonnet',
+    });
+    expect(start.modeId).toBe('plan');
+    expect(start.modelId).toBe('anthropic/claude-sonnet');
+
+    await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+    client.disconnect();
+  });
+
+  it.skipIf(!HAS_MONGO)('T-API-MCP6: 云会话自动并入 agent-cloud-host-tools', async () => {
+    const db = (await mongoDb())!;
+    const { token, userId } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'mcp-cloud-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+
+    const hostId = new mongoose.Types.ObjectId();
+    const now = new Date();
+    try {
+      await db.collection('controllers').updateOne(
+        { _id: new mongoose.Types.ObjectId(controllerId) },
+        { $set: { type: 'cloud' } },
+      );
+      await db.collection('cloudhosts').insertOne({
+        _id: hostId,
+        userId: new mongoose.Types.ObjectId(userId),
+        name: `mcp-cloud-${hostId.toString()}`,
+        harnessTypes: ['OPENCODE'],
+        status: 'RUNNING',
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+        keyId: new mongoose.Types.ObjectId(),
+        workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        containerId: `container-${hostId.toString()}`,
+        defaultSessionId: null,
+        createDefaultSession: true,
+        startedAt: now,
+        readyAt: now,
+        stoppedAt: null,
+        failureReason: null,
+        deletedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const { sessionId, start } = await createSessionCapture(token, client, {
+        controllerId,
+        acpServerType: 'opencode',
+        workspaceId,
+        mcpServerIds: [],
+      });
+      expect(start.mcpEndpoint).toBeTruthy();
+      expect(start.mcpEndpoint.serverNames).toContain('agent-cloud-host-tools');
+
+      await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+    } finally {
+      await db.collection('sessions').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('cloudhosts').deleteOne({ _id: hostId });
+      await db.collection('controllerworkspaces').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('controllers').deleteOne({
+        _id: new mongoose.Types.ObjectId(controllerId),
+      });
+      client.disconnect();
+    }
   });
 });

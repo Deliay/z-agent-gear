@@ -11,6 +11,8 @@ import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { getAvailableServerTypes } from './capability.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
+import { prHandlerRegistry } from './pr-handler-registry.js';
+import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -24,6 +26,8 @@ export interface InstantiateNodeInput {
   artifactTitles?: string[] | null;
   dependsOn?: string[];
   requiresWorktree?: boolean;
+  /** 人类节点：是否联动上游 Pull Request */
+  linkUpstreamPullRequest?: boolean;
   agentConfig?: {
     acpServerType: string;
     modeId?: string | null;
@@ -87,6 +91,8 @@ class WorkflowInstanceService {
       artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
       dependsOn: [...(n.dependsOn ?? [])],
       requiresWorktree: n.requiresWorktree ?? false,
+      // 仅 HUMAN 可开启联动（避免切换节点类型后残留 true）
+      linkUpstreamPullRequest: n.type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
       sortOrder: n.sortOrder ?? undefined,
     }));
@@ -166,6 +172,7 @@ class WorkflowInstanceService {
       artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
       agentConfig: n.agentConfig ? { ...n.agentConfig } : undefined,
       requiresWorktree: n.requiresWorktree,
+      linkUpstreamPullRequest: n.linkUpstreamPullRequest,
       sortOrder: n.sortOrder,
     }));
     // 首节点（入度为 0 的人类节点）READY
@@ -175,6 +182,7 @@ class WorkflowInstanceService {
     }
 
     try {
+      const anyLink = nodes.some((n) => n.type === 'HUMAN' && n.linkUpstreamPullRequest);
       return await WorkflowInstance.create({
         userId,
         controllerId: input.controllerId,
@@ -183,6 +191,7 @@ class WorkflowInstanceService {
         name: input.name,
         nodes,
         currentNodeNames: [],
+        additionalPrompts: anyLink ? { [GITHUB_PR_PROMPT_KEY]: GITHUB_PR_PROMPT } : {},
         lastNodeName: first?.name ?? null,
         lastNodeStatus: first ? 'READY' : null,
         workflowWorktreePath,
@@ -281,6 +290,7 @@ class WorkflowInstanceService {
     prompts?: string[] | null;
     artifactTitles?: string[] | null;
     requiresWorktree?: boolean;
+    linkUpstreamPullRequest?: boolean | null;
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
     sortOrder?: number | null;
   }) {
@@ -303,6 +313,13 @@ class WorkflowInstanceService {
     if (input.artifactTitles !== undefined) patch['nodes.$[n].artifactTitles'] = input.artifactTitles ?? null;
     if (input.agentConfig !== undefined) patch['nodes.$[n].agentConfig'] = input.agentConfig ?? null;
     if (input.sortOrder !== undefined) patch['nodes.$[n].sortOrder'] = input.sortOrder ?? null;
+    if (input.linkUpstreamPullRequest !== undefined && input.linkUpstreamPullRequest !== null) {
+      if (input.linkUpstreamPullRequest && node.type !== 'HUMAN') {
+        throw new Error(`仅人类节点支持「联动上游 Pull Request」，节点「${node.name}」类型为 ${node.type}`);
+      }
+      patch['nodes.$[n].linkUpstreamPullRequest'] =
+        node.type === 'HUMAN' ? input.linkUpstreamPullRequest : false;
+    }
 
     // 若该节点是旧实例（无快照字段），先补齐快照（回查已配置工作流）
     if (node.prompts === undefined && node.agentConfig === undefined) {
@@ -345,6 +362,10 @@ class WorkflowInstanceService {
     // 使节点缓存失效
     const redis = getRedisClient();
     await redis.del(`workflow:instance:${instanceId}`);
+    // 联动开关变化：重算 github-pr 指引提示词
+    if (input.linkUpstreamPullRequest !== undefined) {
+      await this.syncGithubPrPrompt(instanceId);
+    }
     return { instance: updated, node: updatedNode };
   }
 
@@ -370,6 +391,122 @@ class WorkflowInstanceService {
       { $set: fill },
       { arrayFilters: [{ 'n.nodeId': node.nodeId }] },
     );
+  }
+
+  /** 人工写入/覆盖追加提示词（系统键拒绝；同 key 覆盖） */
+  async setAdditionalPrompt(userId: string, instanceId: string, key: string, value: string) {
+    this.assertUserPromptKey(key);
+    const updated = await WorkflowInstance.findOneAndUpdate(
+      { _id: instanceId, userId, deletedAt: null },
+      { $set: { [`additionalPrompts.${key}`]: value } },
+      { new: true },
+    ).lean();
+    if (!updated) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    await this.invalidateInstanceCache(instanceId);
+    return updated;
+  }
+
+  /** 人工删除追加提示词（不存在时幂等成功；系统键拒绝） */
+  async removeAdditionalPrompt(userId: string, instanceId: string, key: string) {
+    this.assertUserPromptKey(key);
+    const updated = await WorkflowInstance.findOneAndUpdate(
+      { _id: instanceId, userId, deletedAt: null },
+      { $unset: { [`additionalPrompts.${key}`]: 1 } },
+      { new: true },
+    ).lean();
+    if (!updated) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+    await this.invalidateInstanceCache(instanceId);
+    return updated;
+  }
+
+  /**
+   * 系统内部写入追加提示词（事件处理器专用）：仅允许 SYSTEM_PROMPT_KEYS。
+   *
+   * 人工入口 `setAdditionalPrompt` 会拒绝系统键；PR 事件处理器必须走本方法，
+   * 否则 approved 分支写入 `github-pr-review` 必然失败（P0 回归）。
+   */
+  async setSystemAdditionalPrompt(instanceId: string, key: string, value: string) {
+    if (!(SYSTEM_PROMPT_KEYS as readonly string[]).includes(key)) {
+      throw new Error('仅允许系统内部写入保留的追加提示词 key');
+    }
+    const updated = await WorkflowInstance.findOneAndUpdate(
+      { _id: instanceId, deletedAt: null },
+      { $set: { [`additionalPrompts.${key}`]: value } },
+      { new: true },
+    ).lean();
+    if (!updated) {
+      throw new Error('工作流实例不存在');
+    }
+    await this.invalidateInstanceCache(instanceId);
+    return updated;
+  }
+
+  /** 系统内部移除追加提示词（事件处理器回滚专用）：仅允许 SYSTEM_PROMPT_KEYS。 */
+  async removeSystemAdditionalPrompt(instanceId: string, key: string) {
+    if (!(SYSTEM_PROMPT_KEYS as readonly string[]).includes(key)) {
+      throw new Error('仅允许系统内部移除保留的追加提示词 key');
+    }
+    await WorkflowInstance.updateOne(
+      { _id: instanceId, deletedAt: null },
+      { $unset: { [`additionalPrompts.${key}`]: 1 } },
+    );
+    await this.invalidateInstanceCache(instanceId);
+  }
+
+  /** 重算 github-pr 指引：存在任一勾选联动的人类节点则写入，全部取消则移除（内部入口，绕过系统键校验） */
+  async syncGithubPrPrompt(instanceId: string): Promise<boolean> {
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, deletedAt: null }).lean();
+    if (!instance) return false;
+    const linked = (instance.nodes ?? []).some(
+      (n) => n.type === 'HUMAN' && n.linkUpstreamPullRequest === true,
+    );
+    if (linked) {
+      await WorkflowInstance.updateOne(
+        { _id: instanceId },
+        { $set: { [`additionalPrompts.${GITHUB_PR_PROMPT_KEY}`]: GITHUB_PR_PROMPT } },
+      );
+    } else {
+      await WorkflowInstance.updateOne(
+        { _id: instanceId },
+        { $unset: { [`additionalPrompts.${GITHUB_PR_PROMPT_KEY}`]: 1 } },
+      );
+    }
+    await this.invalidateInstanceCache(instanceId);
+    return linked;
+  }
+
+  private assertUserPromptKey(key: string): void {
+    if (typeof key !== 'string' || !/^[a-z0-9][a-z0-9-]*$/i.test(key)) {
+      throw new Error('追加提示词 key 非法：仅允许字母、数字与连字符，且需以字母或数字开头');
+    }
+    if ((SYSTEM_PROMPT_KEYS as readonly string[]).includes(key)) {
+      throw new Error('系统保留的追加提示词 key，不允许人工修改');
+    }
+  }
+
+  private async invalidateInstanceCache(instanceId: string): Promise<void> {
+    try {
+      const redis = getRedisClient();
+      await redis.del(`workflow:instance:${instanceId}`);
+    } catch {
+      // 缓存失效失败不阻断主流程
+    }
+  }
+
+  /** 注销实例的 PR 联动登记：失败只告警，不回滚归档/删除主流程 */
+  private async unregisterPrHandlers(
+    instanceId: string,
+    reason: 'ARCHIVED' | 'DELETED',
+  ): Promise<void> {
+    try {
+      await prHandlerRegistry.unregisterByInstance(instanceId, reason);
+    } catch (err) {
+      console.warn(`[workflow-instance] unregister PR handlers failed (${reason}):`, (err as Error).message);
+    }
   }
 
   /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板；
@@ -402,11 +539,19 @@ class WorkflowInstanceService {
     });
   }
 
-  /** 人类打回：RUNNING/REWORK→REJECT 并触发上游 REWORK（引擎校验） */
+  /** 人类打回：READY 先补 start；RUNNING/REWORK→REJECT 并触发上游 REWORK（引擎校验） */
   async rejectNode(userId: string, instanceId: string, nodeId: string, reason: string) {
     const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
+    }
+    const node = instance.nodes.find((n) => n.nodeId === nodeId);
+    if (!node) {
+      throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+    // 与 completeHumanNode 的组合语义对称：READY（首节点或刚被激活）先 start 再 reject
+    if (node.status === 'READY') {
+      await workflowEngine.transition(instanceId, nodeId, 'start', {});
     }
     return workflowEngine.transition(instanceId, nodeId, 'reject', { reason, fromNodeId: null });
   }
@@ -454,6 +599,10 @@ class WorkflowInstanceService {
       { _id: id },
       { $set: { archivedAt: archived ? new Date() : null } },
     );
+    // 归档即解除 PR 联动（取消归档不恢复）
+    if (archived) {
+      await this.unregisterPrHandlers(id, 'ARCHIVED');
+    }
     return true;
   }
 
@@ -468,6 +617,8 @@ class WorkflowInstanceService {
       throw new Error('工作流实例不存在或无权限');
     }
     await WorkflowInstance.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+    // 删除即解除 PR 联动
+    await this.unregisterPrHandlers(id, 'DELETED');
     // 删除流程下全部会话（停止 ACP 会话、清理 worktree 与消息记录）
     const sessions = await Session.find({ workflowInstanceId: id }).select('_id').lean();
     for (const session of sessions) {

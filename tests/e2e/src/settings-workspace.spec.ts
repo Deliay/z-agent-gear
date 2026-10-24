@@ -272,7 +272,7 @@ test.describe('Settings Workspace E2E', () => {
     await page.locator('#controller').selectOption({ index: 1 });
     await expect(page.getByText('workspace-a', { exact: true }).first()).toBeVisible({ timeout: 5000 });
     // Open workspace select popup to verify path is listed
-    await page.locator('[data-slot="select-trigger"]').nth(1).click();
+    await page.locator('[data-slot="select-trigger"][aria-label="工作区"]').click();
     await expect(page.getByText('/home/test/workspace-a')).toBeVisible();
 
     disconnect();

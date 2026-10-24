@@ -26,7 +26,7 @@ describe('MqConnection', () => {
     connectMock.mockResolvedValue(model);
     const connection = new MqConnection('amqp://x', { warn: vi.fn() });
     const channel = await connection.createChannel();
-    expect(connectMock).toHaveBeenCalledWith('amqp://x');
+    expect(connectMock).toHaveBeenCalledWith('amqp://x', { timeout: 10000 });
     expect(channel).toBeDefined();
     await connection.createConfirmChannel();
     expect(model.createConfirmChannel).toHaveBeenCalled();
@@ -49,6 +49,24 @@ describe('MqConnection', () => {
     errorHandler(new Error('boom'));
     expect(warn).toHaveBeenCalled();
     await connection.close();
+    await connection.close();
+  });
+
+  it('默认向 amqp.connect 透传 10s 握手超时（防代理接受 TCP 但握手卡死）', async () => {
+    const { model } = fakeModel();
+    connectMock.mockResolvedValue(model);
+    const connection = new MqConnection('amqp://x', { warn: vi.fn() });
+    await connection.createChannel();
+    expect(connectMock).toHaveBeenCalledWith('amqp://x', { timeout: 10000 });
+    await connection.close();
+  });
+
+  it('握手超时可通过 connectTimeoutMs 覆盖', async () => {
+    const { model } = fakeModel();
+    connectMock.mockResolvedValue(model);
+    const connection = new MqConnection('amqp://x', { warn: vi.fn() }, 3000);
+    await connection.createChannel();
+    expect(connectMock).toHaveBeenCalledWith('amqp://x', { timeout: 3000 });
     await connection.close();
   });
 });

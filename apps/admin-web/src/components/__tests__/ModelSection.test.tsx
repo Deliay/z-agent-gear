@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ModelSection from '../models/ModelSection'
 import CustomModelDialog from '../models/CustomModelDialog'
+import type { AdminModelData } from '@/graphql/types'
 
 const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => void) }))
 
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   toggle: vi.fn(),
   sort: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(),
   remove: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock('@apollo/client/react', () => ({
     if (source.includes('ToggleGlobalModel')) return [mocks.toggle, { loading: false }]
     if (source.includes('SortOrder')) return [mocks.sort, { loading: false }]
     if (source.includes('CreateGlobalCustomModel')) return [mocks.create, { loading: false }]
+    if (source.includes('UpdateModelContextLength')) return [mocks.update, { loading: false }]
     if (source.includes('DeleteGlobalModel')) return [mocks.remove, { loading: false }]
     return [vi.fn(), { loading: false }]
   },
@@ -354,6 +357,92 @@ describe('ModelSection', () => {
       resolveToggle({})
     })
   })
+
+  it('T-CL-W1: 列表展示最长上下文（数值与未设置）', () => {
+    setupQueries([
+      model('a', { contextLength: 200000 }),
+      model('b', { contextLength: null }),
+    ])
+    render(<ModelSection />)
+    expandAllGroups()
+
+    expect(screen.getByText('最长上下文：200,000 tokens')).toBeInTheDocument()
+    expect(screen.getByText('最长上下文：未设置')).toBeInTheDocument()
+  })
+
+  it('T-CL-W2: 新增模型时提交最长上下文', async () => {
+    setupQueries([model('a')], [
+      { id: 'p1', name: 'My OpenAI', type: 'OpenAI', isEnabled: true, scope: 'global', models: [] },
+    ])
+    mocks.create.mockResolvedValue({})
+    render(<ModelSection />)
+
+    fireEvent.click(screen.getByRole('button', { name: '自定义模型' }))
+    fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'new-model' } })
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), {
+      target: { value: '128000' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled())
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({
+      variables: { input: { providerId: 'p1', name: 'new-model', contextLength: 128000 } },
+    })
+  })
+
+  it('T-CL-W3: 编辑模型可修改与清空最长上下文', async () => {
+    setupQueries([model('a', { contextLength: 128000 })])
+    mocks.update.mockResolvedValue({})
+    render(<ModelSection />)
+    expandAllGroups()
+
+    fireEvent.click(screen.getByLabelText('编辑模型'))
+    const input = screen.getByLabelText('最长上下文大小（token）')
+    expect(input).toHaveValue('128000')
+    fireEvent.change(input, { target: { value: '200000' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: { modelId: 'a', contextLength: 200000 },
+        }),
+      ),
+    )
+
+    // 再次打开并清空：空字符串提交 null
+    fireEvent.click(screen.getByLabelText('编辑模型'))
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          variables: { modelId: 'a', contextLength: null },
+        }),
+      ),
+    )
+  })
+
+  it('T-CL-W4: 非法上下文在前端拦截且不提交', async () => {
+    setupQueries([model('a')])
+    render(<ModelSection />)
+    expandAllGroups()
+
+    fireEvent.click(screen.getByLabelText('编辑模型'))
+    const input = screen.getByLabelText('最长上下文大小（token）')
+    fireEvent.change(input, { target: { value: '0' } })
+
+    expect(screen.getByText('请输入正整数')).toBeInTheDocument()
+    const save = screen.getByRole('button', { name: '保存' })
+    expect(save).toBeDisabled()
+    fireEvent.click(save)
+    expect(mocks.update).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: '1.5' } })
+    expect(screen.getByText('请输入正整数')).toBeInTheDocument()
+    expect(save).toBeDisabled()
+  })
 })
 
 describe('CustomModelDialog', () => {
@@ -395,6 +484,36 @@ describe('CustomModelDialog', () => {
 
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: '  gpt-4o  ' } })
     expect(screen.getByText('模型名已存在')).toBeDefined()
+  })
+
+  it('R-10: 弹窗打开期间父级重渲染（providers 新数组引用）不会重置在填表单', () => {
+    const editing = model('m1', { contextLength: 128000 }) as unknown as AdminModelData
+    const onSave = vi.fn()
+    const { rerender } = render(
+      <CustomModelDialog
+        open
+        onOpenChange={() => {}}
+        providers={[{ id: 'p1', name: 'My OpenAI' }]}
+        model={editing}
+        onSave={onSave}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), {
+      target: { value: '200000' },
+    })
+    rerender(
+      <CustomModelDialog
+        open
+        onOpenChange={() => {}}
+        providers={[{ id: 'p1', name: 'My OpenAI' }]}
+        model={editing}
+        onSave={onSave}
+      />,
+    )
+
+    expect(screen.getByLabelText('最长上下文大小（token）')).toHaveValue('200000')
+    expect(screen.getByText('model-m1')).toBeInTheDocument()
   })
 
   it('T-W3: surfaces the duplicate-name error from the mutation', async () => {

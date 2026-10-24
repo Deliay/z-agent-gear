@@ -82,6 +82,7 @@ export class CloudHostGithubService {
     repoFullName: string;
     targetPath: string;
     workloadIds?: string[];
+    createSession?: boolean;
   }): Promise<Doc> {
     const host = await this.workloadService.requireCloudHost(input.userId, input.controllerId);
     if (host.status !== 'RUNNING') throw new Error('cloud host is not running');
@@ -126,7 +127,13 @@ export class CloudHostGithubService {
         steps: [
           { key: 'workload', status: 'PENDING', detail: null },
           { key: 'gitSetup', status: 'PENDING', detail: null },
-          { key: 'session', status: 'PENDING', detail: null },
+          input.createSession === false
+            ? {
+                key: 'session',
+                status: 'SKIPPED',
+                detail: '多 Harness 不自动创建会话',
+              }
+            : { key: 'session', status: 'PENDING', detail: null },
         ],
         containerId: String(host.containerId),
         accountId: input.accountId,
@@ -339,11 +346,37 @@ export class CloudHostGithubService {
         String(op.userId),
         targetPath,
       );
+      // U-1：workspaceId 与 createSession 成败无关——工作区一旦创建即回写，
+      // 否则会话创建失败时 hasDefaultWorkspace 仍为 false，无法区分「无工作区」与「默认会话创建失败」。
+      // phase2：Git 项目设置是创建默认工作区的唯一入口（CAS：不覆盖既有绑定）。
+      if (op.hostId) {
+        await CloudHost.updateOne(
+          { _id: op.hostId, workspaceId: null },
+          { $set: { workspaceId: workspace.id } },
+        ).catch((err) => {
+          console.warn(
+            '[cloud-host-github] backfill workspaceId failed:',
+            (err as Error).message,
+          );
+        });
+      }
       const session = await this.createSession(String(op.userId), {
         controllerId: String(op.controllerId),
         workspaceId: String(workspace.id),
         acpServerType: 'opencode',
       });
+      // D2：项目会话成功后回填云电脑默认会话（CAS：仅当仍为空，避免覆盖既有默认会话）。
+      if (op.hostId) {
+        await CloudHost.updateOne(
+          { _id: op.hostId, defaultSessionId: null },
+          { $set: { defaultSessionId: session.id } },
+        ).catch((err) => {
+          console.warn(
+            '[cloud-host-github] backfill defaultSessionId failed:',
+            (err as Error).message,
+          );
+        });
+      }
       await CloudHostSetupOperation.updateOne(
         { _id: opId },
         {

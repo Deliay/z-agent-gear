@@ -44,6 +44,11 @@ vi.mock('../models/controller-workspace.js', () => ({
 vi.mock('../models/mcp-server.js', () => ({
   McpServer: {
     countDocuments: vi.fn(),
+    find: vi.fn(() => ({
+      select: vi.fn(() => ({
+        lean: vi.fn(async () => []),
+      })),
+    })),
   },
 }));
 
@@ -59,7 +64,7 @@ vi.mock('./mcp-endpoint.js', () => ({
   },
 }));
 
-import { sessionService } from './session.js';
+import { sessionService, resolveInitialMcpServerIds } from './session.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -835,6 +840,25 @@ describe('SessionService', () => {
       );
     });
 
+    it('N-1: suppressFallback=true 时不触发会话结束兜底回调', async () => {
+      const onEnded = vi.fn();
+      sessionService.onSessionEnded(onEnded);
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
+      } as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(
+        mockSessionDoc({ status: 'ended', workflowInstanceId: oid('inst-1') }) as never,
+      );
+
+      await sessionService.close('sess-1', 'user-1', { suppressFallback: true });
+
+      expect(onEnded).not.toHaveBeenCalled();
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+    });
+
     it('should NOT revoke MCP endpoint on close for workflow node session (validity follows workflow)', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
@@ -1392,6 +1416,77 @@ describe('SessionService', () => {
       expect(mockRedis.del).toHaveBeenCalledWith('acp:capability:ctrl-1');
       expect(result).toEqual([]);
       vi.useRealTimers();
+    });
+  });
+
+  describe('acp server options cache', () => {
+    const cachedOptions = {
+      modes: [{ id: 'plan', name: 'Plan' }],
+      models: [{ id: 'm1', name: 'M1' }],
+      currentModeId: 'plan',
+      currentModelId: 'm1',
+      probedAt: '2026-10-23T06:00:00.000Z',
+    };
+
+    beforeEach(() => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+    });
+
+    it('C-14: 命中缓存直接返回，不发布探测命令', async () => {
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(cachedOptions));
+
+      const result = await sessionService.getAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+
+      expect(result).toEqual(cachedOptions);
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('C-14: 刷新先删缓存再重探测', async () => {
+      const fresh = { ...cachedOptions, probedAt: new Date().toISOString() };
+      vi.mocked(mockRedis.del).mockResolvedValue(1);
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(fresh));
+
+      const result = await sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:options:ctrl-1:opencode');
+      expect(result).toEqual(fresh);
+    });
+
+    it('C-9: 刷新时删除缓存失败显式报错，不回退旧缓存', async () => {
+      vi.mocked(mockRedis.del).mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1'),
+      ).rejects.toThrow('刷新失败，请重试');
+    });
+
+    it('C-9: 刷新只接受删除之后写入的探测结果', async () => {
+      vi.useFakeTimers();
+      const stale = { ...cachedOptions, probedAt: '2020-01-01T00:00:00.000Z' };
+      const fresh = { ...cachedOptions, probedAt: new Date().toISOString() };
+      vi.mocked(mockRedis.del).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(JSON.stringify(stale))
+        .mockResolvedValueOnce(JSON.stringify(stale))
+        .mockResolvedValue(JSON.stringify(fresh));
+
+      const promise = sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+
+      await expect(promise).resolves.toEqual(fresh);
+      vi.useRealTimers();
+    });
+
+    it('C-14: Controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) } as never);
+
+      await expect(
+        sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1'),
+      ).rejects.toThrow('Controller not found');
     });
   });
 
@@ -1964,5 +2059,174 @@ describe('SessionService - capability snapshot', () => {
     } as never);
     const withoutSnapshot = await sessionService.findById('sess-1', 'user-1');
     expect(withoutSnapshot!.agentCapabilities).toBeNull();
+  });
+});
+
+describe('resolveInitialMcpServerIds', () => {
+  const enabled = ['srv-a', 'srv-b'];
+
+  it('returns explicit ids as-is (including an explicit empty array)', () => {
+    expect(resolveInitialMcpServerIds({ useAllEnabled: true }, ['srv-x'], enabled)).toEqual([
+      'srv-x',
+    ]);
+    expect(resolveInitialMcpServerIds({ useAllEnabled: true }, [], enabled)).toEqual([]);
+  });
+
+  it('injects every enabled server when useAllEnabled is missing or true', () => {
+    expect(resolveInitialMcpServerIds(undefined, undefined, enabled)).toEqual(enabled);
+    expect(resolveInitialMcpServerIds({ useAllEnabled: true }, undefined, enabled)).toEqual(enabled);
+  });
+
+  it('keeps only the still-enabled subset when useAllEnabled=false', () => {
+    expect(
+      resolveInitialMcpServerIds(
+        { useAllEnabled: false, serverIds: ['srv-a', 'srv-disabled', 'srv-deleted'] },
+        undefined,
+        enabled,
+      ),
+    ).toEqual(['srv-a']);
+  });
+
+  it('accepts ObjectId-like serverIds from Mongo lean (regression: 真实 DB 子集不再被清空)', () => {
+    expect(
+      resolveInitialMcpServerIds(
+        {
+          useAllEnabled: false,
+          serverIds: [
+            { toString: () => 'srv-a' },
+            { toString: () => 'srv-disabled' },
+            null,
+          ],
+        },
+        undefined,
+        enabled,
+      ),
+    ).toEqual(['srv-a']);
+  });
+
+  it('returns an empty list when the configured subset is fully disabled', () => {
+    expect(
+      resolveInitialMcpServerIds(
+        { useAllEnabled: false, serverIds: ['srv-disabled'] },
+        undefined,
+        enabled,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('SessionService.create default MCP injection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
+    vi.mocked(McpServer.find).mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      lean: vi.fn().mockResolvedValue([]),
+    } as never);
+  });
+
+  const controller = {
+    _id: oid('ctrl-1'),
+    userId: oid('user-1'),
+    name: 'Local',
+    type: 'local',
+    defaultMcp: { useAllEnabled: true },
+  };
+
+  function setupCreateMocks() {
+    vi.mocked(Controller.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(controller) } as never);
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: oid('ws-1'), path: '/workspace' }),
+    } as never);
+    vi.mocked(Session.create).mockResolvedValue({ _id: oid('sess-1'), toObject: () => ({
+      _id: oid('sess-1'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      controllerName: 'Local',
+      acpServerType: 'opencode',
+      status: 'creating',
+      title: null,
+      cwd: '/workspace',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) } as never);
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  }
+
+  it('creates an endpoint with all enabled MCP servers when mcpServerIds is omitted', async () => {
+    setupCreateMocks();
+    vi.mocked(McpServer.find).mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      lean: vi.fn().mockResolvedValue([{ _id: 'srv-a' }, { _id: 'srv-b' }]),
+    } as never);
+    vi.mocked(McpServer.countDocuments).mockResolvedValue(2 as never);
+    vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+      token: 'tok',
+      serverNames: ['a', 'b'],
+    } as never);
+
+    await sessionService.create('user-1', {
+      controllerId: 'ctrl-1',
+      acpServerType: 'opencode',
+      workspaceId: 'ws-1',
+    });
+
+    expect(McpServer.find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      enabled: true,
+      name: { $ne: 'agent-cloud-host-tools' },
+    });
+    expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+      'sess-1',
+      'user-1',
+      ['srv-a', 'srv-b'],
+      undefined,
+    );
+  });
+
+  it('does not create an endpoint for an explicit empty array, even with useAllEnabled=true', async () => {
+    setupCreateMocks();
+
+    await sessionService.create('user-1', {
+      controllerId: 'ctrl-1',
+      acpServerType: 'opencode',
+      workspaceId: 'ws-1',
+      mcpServerIds: [],
+    });
+
+    expect(McpServer.find).not.toHaveBeenCalled();
+    expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('skips disabled servers listed in the controller default subset', async () => {
+    setupCreateMocks();
+    vi.mocked(Controller.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        ...controller,
+        defaultMcp: { useAllEnabled: false, serverIds: ['srv-a', 'srv-disabled'] },
+      }),
+    } as never);
+    vi.mocked(McpServer.find).mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      lean: vi.fn().mockResolvedValue([{ _id: 'srv-a' }]),
+    } as never);
+    vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+    vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+      token: 'tok',
+      serverNames: ['a'],
+    } as never);
+
+    await sessionService.create('user-1', {
+      controllerId: 'ctrl-1',
+      acpServerType: 'opencode',
+      workspaceId: 'ws-1',
+    });
+
+    expect(McpServer.countDocuments).toHaveBeenCalledWith({
+      _id: { $in: ['srv-a'] },
+      userId: 'user-1',
+      enabled: true,
+    });
   });
 });

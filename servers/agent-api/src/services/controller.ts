@@ -2,8 +2,15 @@ import mongoose from 'mongoose';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { McpServer } from '../models/mcp-server.js';
 import { evictKeyById } from './key-cache.js';
 import { commandService } from './command.js';
+import { CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
+
+export interface ControllerDefaultMcpInput {
+  useAllEnabled: boolean;
+  serverIds?: string[] | null;
+}
 
 export class ControllerService {
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
@@ -101,7 +108,58 @@ export class ControllerService {
     return this.mapController(controller);
   }
 
+  /**
+   * 保存控制器默认 MCP。
+   * - useAllEnabled=true：忽略入参 serverIds 并归一为 []（保持动态跟随新增 MCP）
+   * - useAllEnabled=false：serverIds 去重后逐个校验归属与启用状态，非法/停用/不存在统一 MCP_SERVER_NOT_FOUND
+   */
+  async setDefaultMcp(
+    userId: string,
+    controllerId: string,
+    input: ControllerDefaultMcpInput,
+  ): Promise<Record<string, unknown> | null> {
+    const controller = await Controller.findOne({ _id: controllerId, userId });
+    if (!controller) return null;
+
+    const useAllEnabled = input.useAllEnabled !== false;
+    let serverIds: string[] = [];
+    if (!useAllEnabled) {
+      serverIds = Array.from(
+        new Set((input.serverIds ?? []).filter((id): id is string => typeof id === 'string' && id.length > 0)),
+      );
+      if (serverIds.some((id) => !mongoose.isValidObjectId(id))) {
+        throw new Error('MCP_SERVER_NOT_FOUND');
+      }
+      if (serverIds.length > 0) {
+        const selectable = await McpServer.countDocuments({
+          _id: { $in: serverIds },
+          userId,
+          enabled: true,
+          name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
+        });
+        if (selectable !== serverIds.length) {
+          // C-11：平台云工具服务由系统自动注入，不可手动选择——给出专用错误，
+          // 而不是笼统的「MCP 不存在」，便于前端提示可操作的原因。
+          const platformSelected = await McpServer.exists({
+            _id: { $in: serverIds },
+            userId,
+            name: CLOUD_HOST_TOOLS_SERVER_NAME,
+          });
+          throw new Error(platformSelected ? 'MCP_SERVER_NOT_SELECTABLE' : 'MCP_SERVER_NOT_FOUND');
+        }
+      }
+    }
+
+    controller.set('defaultMcp', { useAllEnabled, serverIds });
+    await controller.save();
+    return this.mapController(controller.toObject());
+  }
+
   private mapController(controller: Record<string, unknown>): Record<string, unknown> {
+    const rawDefaultMcp = (controller.defaultMcp ?? {}) as {
+      useAllEnabled?: boolean | null;
+      serverIds?: unknown[] | null;
+    };
     return {
       id: (controller._id as mongoose.Types.ObjectId).toString(),
       name: controller.name,
@@ -114,6 +172,10 @@ export class ControllerService {
       lastHeartbeatAt: controller.lastHeartbeatAt ? (controller.lastHeartbeatAt as Date).toISOString() : null,
       createdAt: (controller.createdAt as Date).toISOString(),
       updatedAt: (controller.updatedAt as Date).toISOString(),
+      defaultMcp: {
+        useAllEnabled: rawDefaultMcp.useAllEnabled !== false,
+        serverIds: (rawDefaultMcp.serverIds ?? []).map((id) => String(id)),
+      },
     };
   }
 }

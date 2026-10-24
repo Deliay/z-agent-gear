@@ -79,13 +79,20 @@ export default function InstantiateWorkflowDialog({
   const userTouchedWorktreeRef = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshFailed, setRefreshFailed] = useState(false)
 
-  const { data: configuredData } = useQuery<GetConfiguredWorkflowsQuery>(
+  const { data: configuredData, refetch: refetchConfigured } = useQuery<GetConfiguredWorkflowsQuery>(
     GET_CONFIGURED_WORKFLOWS,
-    { variables: { controllerId } },
+    { variables: { controllerId }, fetchPolicy: 'cache-and-network' },
   )
-  const { data: templatesData } = useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES)
-  const { data: workspacesData } = useQuery<GetWorkspacesQuery>(GET_WORKSPACES)
+  const { data: templatesData, refetch: refetchTemplates } = useQuery<GetWorkflowTemplatesQuery>(
+    GET_WORKFLOW_TEMPLATES,
+    { fetchPolicy: 'cache-and-network' },
+  )
+  const { data: workspacesData, refetch: refetchWorkspaces } = useQuery<GetWorkspacesQuery>(
+    GET_WORKSPACES,
+    { fetchPolicy: 'cache-and-network' },
+  )
   const { data: gitData } = useQuery<DetectGitRepoQuery>(DETECT_GIT_REPO, {
     variables: { controllerId, workspaceId: selectedWorkspaceId },
     skip: !selectedWorkspaceId,
@@ -111,6 +118,19 @@ export default function InstantiateWorkflowDialog({
   const requiresWorktree = nodes.some((n) => n.requiresWorktree)
   const isGitRepo = gitData?.detectGitRepo?.isGitRepo ?? false
   const blockedByGit = requiresWorktree && !isGitRepo
+
+  // 「+」打开即刷新来源列表（MCP 新建的工作流/模板立即可见），失败保留旧列表并提示
+  useEffect(() => {
+    if (!open) return
+    setRefreshFailed(false)
+    Promise.all([
+      Promise.resolve(refetchConfigured?.()),
+      Promise.resolve(refetchTemplates?.()),
+      Promise.resolve(refetchWorkspaces?.()),
+    ]).catch(() => setRefreshFailed(true))
+    // refetch 引用稳定；仅在打开时刷新一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   // 打开对话框时重置状态，并根据 isGitRepo 设置 Worktree 默认值
   useEffect(() => {
@@ -222,6 +242,9 @@ export default function InstantiateWorkflowDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {refreshFailed && (
+            <p className="text-xs text-muted-foreground">列表刷新失败，可重试</p>
+          )}
           {step === 1 ? (
             <>
               <div className="space-y-1.5">

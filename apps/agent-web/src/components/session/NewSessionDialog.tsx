@@ -1,7 +1,22 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useLazyQuery } from '@apollo/client/react';
-import { GET_ACP_CAPABILITIES, GET_CONTROLLER_WORKSPACES_ENABLED, DETECT_GIT_REPO, GET_MCP_SERVERS } from '../../graphql/queries';
-import type { ControllerWorkspaceData, GitRepoInfoData, CloudHostData } from '../../graphql/types';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useQuery, useLazyQuery, useMutation } from '@apollo/client/react';
+import {
+  GET_ACP_CAPABILITIES,
+  GET_ACP_SERVER_OPTIONS,
+  GET_CONTROLLER_WORKSPACES_ENABLED,
+  DETECT_GIT_REPO,
+  GET_MCP_SERVERS,
+} from '../../graphql/queries';
+import { REFRESH_ACP_SERVER_OPTIONS } from '../../graphql/mutations';
+import type {
+  AcpServerOptionsData,
+  CloudHostData,
+  ControllerDefaultMcpData,
+  ControllerWorkspaceData,
+  GetAcpServerOptionsQuery,
+  GitRepoInfoData,
+  RefreshAcpServerOptionsMutation,
+} from '../../graphql/types';
 import {
   Select as SelectRoot,
   SelectTrigger,
@@ -19,6 +34,8 @@ interface Controller {
   /** cloud 类型主机携带云电脑；普通主机为 undefined/null */
   type?: string;
   cloudHost?: CloudHostData | null;
+  /** 新建会话默认注入的 MCP（历史控制器归一为 useAllEnabled=true） */
+  defaultMcp?: ControllerDefaultMcpData | null;
 }
 
 interface AcpCapability {
@@ -43,11 +60,26 @@ interface GetMcpServersData {
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void;
+  onCreate: (
+    controllerId: string,
+    acpServerType: string,
+    workspaceId: string,
+    enableWorktree?: boolean,
+    worktreeBranchSuffix?: string,
+    mcpServerIds?: string[],
+    existingWorktreePath?: string,
+    modeId?: string,
+    modelId?: string,
+  ) => void;
   existingWorktreePath?: string;
   existingControllerId?: string;
   existingWorkspaceId?: string;
 }
+
+/** Radix Select 不接受空字符串 value；用哨兵表示「不传」 */
+const DEFAULT_OPTION_VALUE = '__default__';
+/** 云会话自动装配的平台 MCP，前端不作为可选项 */
+const AGENT_CLOUD_HOST_TOOLS_MCP = 'agent-cloud-host-tools';
 
 export default function NewSessionDialog({
   controllers,
@@ -63,9 +95,16 @@ export default function NewSessionDialog({
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>(existingWorkspaceId ?? '');
   const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([]);
   const [mcpSearch, setMcpSearch] = useState('');
+  const [selectedModeId, setSelectedModeId] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState('');
+  const [optionsOverride, setOptionsOverride] = useState<AcpServerOptionsData | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [workspacesRefreshError, setWorkspacesRefreshError] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [enableWorktree, setEnableWorktree] = useState(false);
   const [branchSuffix, setBranchSuffix] = useState('');
+  // 默认 MCP 预选只在「打开 / 切换控制器」时计算一次，用户手动调整后不被后台刷新覆盖
+  const mcpInitializedForRef = useRef<string | null>(null);
   const [detectGitRepo] = useLazyQuery<{ detectGitRepo: GitRepoInfoData }>(DETECT_GIT_REPO, {
     fetchPolicy: 'network-only',
   });
@@ -88,10 +127,17 @@ export default function NewSessionDialog({
 
   const { data: mcpData } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
 
-  const enabledMcpServers = (mcpData?.mcpServers ?? []).filter((s) => s.enabled);
+  // 云会话由服务端自动并入 agent-cloud-host-tools，前端不作为可选项
+  const enabledMcpServers = (mcpData?.mcpServers ?? []).filter(
+    (s) => s.enabled && s.name !== AGENT_CLOUD_HOST_TOOLS_MCP,
+  );
   const filteredMcpServers = mcpSearch
     ? enabledMcpServers.filter((s) => s.name.toLowerCase().includes(mcpSearch.toLowerCase()))
     : enabledMcpServers;
+  const enabledMcpIds = useMemo(
+    () => enabledMcpServers.map((s) => s.id),
+    [enabledMcpServers],
+  );
 
   const { data: acpData, loading: acpLoading } = useQuery<{ acpCapabilities: AcpCapability[] }>(
     GET_ACP_CAPABILITIES,
@@ -101,16 +147,33 @@ export default function NewSessionDialog({
     },
   );
 
-  const { data: wsData, loading: wsLoading } = useQuery<{ controllerWorkspaces: ControllerWorkspaceData[] }>(
+  const {
+    data: wsData,
+    loading: wsLoading,
+    refetch: refetchWorkspaces,
+  } = useQuery<{ controllerWorkspaces: ControllerWorkspaceData[] }>(
     GET_CONTROLLER_WORKSPACES_ENABLED,
     {
       variables: { controllerId: selectedController },
       skip: !selectedController,
+      // 统一策略：缓存优先 + 打开/切控制器时后台刷新（Git 设置新增的工作区随即可见）
+      fetchPolicy: 'cache-and-network',
     },
   );
 
   const acpServers = acpData?.acpCapabilities?.filter((s) => s.available) ?? [];
   const workspaces = wsData?.controllerWorkspaces ?? [];
+
+  // 「+」打开 / 切换控制器时刷新工作区列表；失败保留旧列表并提示，不阻断提交
+  useEffect(() => {
+    if (!selectedController) return;
+    setWorkspacesRefreshError(false);
+    Promise.resolve(refetchWorkspaces?.())
+      .then(() => setWorkspacesRefreshError(false))
+      .catch(() => setWorkspacesRefreshError(true));
+    // refetch 引用在 Apollo 中稳定；仅在控制器变化时刷新一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedController]);
 
   // Auto-select first available ACP server
   useEffect(() => {
@@ -126,6 +189,61 @@ export default function NewSessionDialog({
     }
   }, [workspaces, selectedWorkspace, isPreselected]);
 
+  // 模式/模型：选定 ACP 服务后探测可选值（与工作流节点同源 acpServerOptions）
+  const {
+    data: optionsData,
+    loading: optionsLoading,
+  } = useQuery<GetAcpServerOptionsQuery>(GET_ACP_SERVER_OPTIONS, {
+    variables: { controllerId: selectedController, acpServerType: selectedAcpServer },
+    skip: !selectedController || !selectedAcpServer,
+  });
+  const [refreshOptions, { loading: refreshingOptions } = { loading: false }] =
+    useMutation<RefreshAcpServerOptionsMutation>(REFRESH_ACP_SERVER_OPTIONS);
+
+  // 切换控制器/ACP 服务时清空模式、模型与本地刷新结果
+  useEffect(() => {
+    setSelectedModeId('');
+    setSelectedModelId('');
+    setOptionsOverride(null);
+    setOptionsError(null);
+  }, [selectedController, selectedAcpServer]);
+
+  const options = optionsOverride ?? optionsData?.acpServerOptions ?? null;
+  const modes = options?.modes ?? [];
+  const models = options?.models ?? [];
+  const optionsProbing = Boolean(selectedAcpServer) && (optionsLoading || refreshingOptions);
+
+  const handleRefreshOptions = async () => {
+    if (!selectedController || !selectedAcpServer || refreshingOptions) return;
+    setOptionsError(null);
+    try {
+      const { data } = await refreshOptions({
+        variables: { controllerId: selectedController, acpServerType: selectedAcpServer },
+      });
+      if (data?.refreshAcpServerOptions) {
+        setOptionsOverride(data.refreshAcpServerOptions);
+      }
+    } catch {
+      setOptionsError('刷新失败，可重试');
+    }
+  };
+
+  // 按控制器默认 MCP 预选：useAllEnabled → 全部已启用；否则取 serverIds 与已启用集合的交集
+  useEffect(() => {
+    if (!selectedController || mcpData === undefined) return;
+    if (mcpInitializedForRef.current === selectedController) return;
+    mcpInitializedForRef.current = selectedController;
+    const configured = controllers.find((c) => c.id === selectedController)?.defaultMcp;
+    if (!configured || configured.useAllEnabled !== false) {
+      setSelectedMcpServerIds(enabledMcpIds);
+      return;
+    }
+    setSelectedMcpServerIds(configured.serverIds.filter((id) => enabledMcpIds.includes(id)));
+  }, [selectedController, mcpData, controllers, enabledMcpIds]);
+
+  const selectedControllerUsesAllEnabledMcp =
+    controllers.find((c) => c.id === selectedController)?.defaultMcp?.useAllEnabled !== false;
+
   // Detect Git repo when workspace is selected
   useEffect(() => {
     if (isPreselected) {
@@ -140,15 +258,14 @@ export default function NewSessionDialog({
       }).then((res) => {
         if (res.data?.detectGitRepo?.isGitRepo) {
           setIsGitRepo(true);
-          const ws = workspaces.find((w) => w.id === selectedWorkspace);
-          if (ws) {
-            const defaultSuffix = `feat-${Math.random().toString(36).slice(2, 8)}`;
-            setBranchSuffix(defaultSuffix);
-          }
+          const defaultSuffix = `feat-${Math.random().toString(36).slice(2, 8)}`;
+          // C-16：后台workspaces 刷新不得覆盖用户已编辑的分支后缀
+          setBranchSuffix((prev) => prev || defaultSuffix);
         }
       });
     }
-  }, [selectedWorkspace, selectedController, detectGitRepo, workspaces, isPreselected]);
+    // workspaces 仅用于旧逻辑查找工作区名；不在依赖中，避免列表 refetch 重置 Worktree 开关
+  }, [selectedWorkspace, selectedController, detectGitRepo, isPreselected]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,15 +276,23 @@ export default function NewSessionDialog({
         selectedWorkspace,
         enableWorktree,
         enableWorktree ? branchSuffix : undefined,
-        selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+        // 显式传数组：空数组 = 不注入（undefined 才走控制器默认）
+        selectedMcpServerIds,
         isPreselected ? existingWorktreePath : undefined,
+        selectedModeId || undefined,
+        selectedModelId || undefined,
       );
       onClose();
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="新建会话"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-foreground">新建会话</h2>
         <form onSubmit={handleSubmit}>
@@ -245,12 +370,94 @@ export default function NewSessionDialog({
             </div>
           )}
 
+          {selectedController && selectedAcpServer && (
+            <div className="mb-4 rounded-md border border-border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-card-foreground">
+                  模式与模型（可选）
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { void handleRefreshOptions(); }}
+                  disabled={optionsProbing}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs text-card-foreground hover:bg-accent disabled:opacity-50"
+                >
+                  {refreshingOptions ? '刷新中...' : '刷新'}
+                </button>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <span className="mb-1 block text-xs text-muted-foreground">模式</span>
+                  <SelectRoot
+                    value={selectedModeId || DEFAULT_OPTION_VALUE}
+                    onValueChange={(value) =>
+                      setSelectedModeId(!value || value === DEFAULT_OPTION_VALUE ? '' : value)
+                    }
+                  >
+                    <SelectTrigger className="w-full" aria-label="模式">
+                      <SelectValue>
+                        {selectedModeId
+                          ? modes.find((m) => m.id === selectedModeId)?.name || selectedModeId
+                          : '默认'}
+                      </SelectValue>
+                      <SelectIcon />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value={DEFAULT_OPTION_VALUE}>
+                        <SelectItemText>默认</SelectItemText>
+                      </SelectItem>
+                      {modes.map((mode) => (
+                        <SelectItem key={mode.id} value={mode.id}>
+                          <SelectItemText>{mode.name}</SelectItemText>
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </SelectRoot>
+                </div>
+                <div>
+                  <span className="mb-1 block text-xs text-muted-foreground">模型</span>
+                  <SelectRoot
+                    value={selectedModelId || DEFAULT_OPTION_VALUE}
+                    onValueChange={(value) =>
+                      setSelectedModelId(!value || value === DEFAULT_OPTION_VALUE ? '' : value)
+                    }
+                  >
+                    <SelectTrigger className="w-full" aria-label="模型">
+                      <SelectValue>
+                        {selectedModelId
+                          ? models.find((m) => m.id === selectedModelId)?.name || selectedModelId
+                          : '默认'}
+                      </SelectValue>
+                      <SelectIcon />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value={DEFAULT_OPTION_VALUE}>
+                        <SelectItemText>默认</SelectItemText>
+                      </SelectItem>
+                      {models.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          <SelectItemText>{model.name}</SelectItemText>
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </SelectRoot>
+                </div>
+              </div>
+              {optionsProbing && (
+                <p className="mt-2 text-xs text-muted-foreground">正在探测可选模式与模型…</p>
+              )}
+              {optionsError && (
+                <p className="mt-2 text-xs text-destructive">{optionsError}</p>
+              )}
+            </div>
+          )}
+
           {selectedController && (
             <div className="mb-6">
               <label className="mb-2 block text-sm font-medium text-card-foreground">
                 工作目录
               </label>
-              {wsLoading ? (
+              {wsLoading && !wsData ? (
                 <p className="text-sm text-muted-foreground">加载工作区中...</p>
               ) : workspaces.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
@@ -262,7 +469,10 @@ export default function NewSessionDialog({
                   onValueChange={(value) => setSelectedWorkspace(value || '')}
                   disabled={isPreselected}
                 >
-                  <SelectTrigger className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}>
+                  <SelectTrigger
+                    aria-label="工作区"
+                    className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}
+                  >
                     <SelectValue>
                       {selectedWorkspace
                         ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace
@@ -283,6 +493,9 @@ export default function NewSessionDialog({
                     ))}
                   </SelectPopup>
                 </SelectRoot>
+              )}
+              {workspacesRefreshError && (
+                <p className="mt-1 text-xs text-muted-foreground">刷新失败，可重试</p>
               )}
             </div>
           )}
@@ -330,47 +543,58 @@ export default function NewSessionDialog({
             </div>
           )}
 
-          {selectedController && enabledMcpServers.length > 0 && (
+          {selectedController && mcpData !== undefined && (
             <div className="mb-6">
               <label className="mb-2 block text-sm font-medium text-card-foreground">
-                MCP 服务（可选，默认不装配）
+                MCP 服务
               </label>
               <div className="rounded-md border border-border p-3">
-                {enabledMcpServers.length > 8 && (
-                  <input
-                    type="text"
-                    value={mcpSearch}
-                    onChange={(e) => setMcpSearch(e.target.value)}
-                    className="mb-2 w-full rounded-md border px-2 py-1.5 text-sm text-foreground"
-                    placeholder="搜索 MCP 服务"
-                  />
+                <p className="mb-2 text-xs text-muted-foreground">
+                  {selectedControllerUsesAllEnabledMcp
+                    ? '默认注入全部已启用的 MCP；可取消勾选'
+                    : '按控制器默认设置预选，可调整；全部取消则不注入'}
+                </p>
+                {enabledMcpServers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">暂无已启用的 MCP 服务</p>
+                ) : (
+                  <>
+                    {enabledMcpServers.length > 8 && (
+                      <input
+                        type="text"
+                        value={mcpSearch}
+                        onChange={(e) => setMcpSearch(e.target.value)}
+                        className="mb-2 w-full rounded-md border px-2 py-1.5 text-sm text-foreground"
+                        placeholder="搜索 MCP 服务"
+                      />
+                    )}
+                    <div className="max-h-40 space-y-1 overflow-y-auto">
+                      {filteredMcpServers.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">无匹配的 MCP 服务</p>
+                      ) : (
+                        filteredMcpServers.map((server) => (
+                          <label key={server.id} className="flex cursor-pointer items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedMcpServerIds.includes(server.id)}
+                              onChange={(e) => {
+                                setSelectedMcpServerIds((prev) =>
+                                  e.target.checked
+                                    ? [...prev, server.id]
+                                    : prev.filter((id) => id !== server.id),
+                                );
+                              }}
+                              className="h-4 w-4"
+                            />
+                            <span className="text-sm text-foreground">{server.name}</span>
+                            {server.source === 'platform' && (
+                              <span className="text-xs text-muted-foreground">平台内置</span>
+                            )}
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </>
                 )}
-                <div className="max-h-40 space-y-1 overflow-y-auto">
-                  {filteredMcpServers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">无匹配的 MCP 服务</p>
-                  ) : (
-                    filteredMcpServers.map((server) => (
-                      <label key={server.id} className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedMcpServerIds.includes(server.id)}
-                          onChange={(e) => {
-                            setSelectedMcpServerIds((prev) =>
-                              e.target.checked
-                                ? [...prev, server.id]
-                                : prev.filter((id) => id !== server.id),
-                            );
-                          }}
-                          className="h-4 w-4"
-                        />
-                        <span className="text-sm text-foreground">{server.name}</span>
-                        {server.source === 'platform' && (
-                          <span className="text-xs text-muted-foreground">平台内置</span>
-                        )}
-                      </label>
-                    ))
-                  )}
-                </div>
               </div>
             </div>
           )}

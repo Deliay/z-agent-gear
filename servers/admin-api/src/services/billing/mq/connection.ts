@@ -6,21 +6,27 @@ export interface MqLogger {
   error?: (...args: unknown[]) => void;
 }
 
-/** RabbitMQ 连接（心跳 30s，自动重连：断线后下次取 channel 时重新建立）。 */
+/** RabbitMQ 连接（自动重连：断线后下次取 channel 时重新建立）。
+ * 握手超时（默认 10s）：amqplib 仅在建连握手期间应用 socket timeout，
+ * 防止代理接受 TCP 但 AMQP 握手永不完成导致 start 永久阻塞（连接建立后自动解除）。 */
 export class MqConnection {
   private model: ChannelModel | null = null;
   private connecting: Promise<ChannelModel> | null = null;
+  private readonly connectTimeoutMs: number;
 
   constructor(
     private readonly url: string,
     private readonly logger: MqLogger = console,
-  ) {}
+    connectTimeoutMs = 10_000,
+  ) {
+    this.connectTimeoutMs = connectTimeoutMs;
+  }
 
   async getModel(): Promise<ChannelModel> {
     if (this.model) return this.model;
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
-      const model = await amqp.connect(this.url);
+      const model = await amqp.connect(this.url, { timeout: this.connectTimeoutMs });
       model.on('close', () => {
         this.model = null;
       });

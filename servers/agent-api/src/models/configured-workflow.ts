@@ -24,6 +24,8 @@ const configuredNodeSchema = new mongoose.Schema(
     artifactTitles: { type: [String], default: undefined },
     dependsOn: { type: [String], default: [] },
     requiresWorktree: { type: Boolean, default: false },
+    // 人类节点：是否联动上游 Pull Request（仅 HUMAN 可为 true）
+    linkUpstreamPullRequest: { type: Boolean, default: false },
     // AI 节点必填；HUMAN/FLAG 节点为 null
     agentConfig: { type: agentNodeConfigSchema, default: undefined },
     // 展示顺序（仅影响 UI 排列，不影响执行顺序）

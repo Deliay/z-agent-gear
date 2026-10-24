@@ -98,6 +98,9 @@ var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
 var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: SecretOrDefault("github-token-encryption-key"));
+// 事件回调鉴权（工作流 PR 联动）：平台回调凭据与 GitHub Webhook 签名密钥
+var eventCallbackToken = builder.AddParameter("event-callback-token", secret: true, value: SecretOrDefault("event-callback-token"));
+var githubWebhookSecret = builder.AddParameter("github-webhook-secret", secret: true, value: SecretOrDefault("github-webhook-secret"));
 var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app-private-key.pem");
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
@@ -124,6 +127,8 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_SETUP_URL", githubSetupUrl)
     .WithEnvironment("GITHUB_APP_PRIVATE_KEY", githubAppPrivateKey)
     .WithEnvironment("GITHUB_TOKEN_ENCRYPTION_KEY", githubTokenEncryptionKey)
+    .WithEnvironment("EVENT_CALLBACK_TOKEN", eventCallbackToken)
+    .WithEnvironment("GITHUB_WEBHOOK_SECRET", githubWebhookSecret)
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()
@@ -152,6 +157,8 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithEnvironment("WORKLOAD_INIT_TIMEOUT_MS", "300000")
     .WithEnvironment("WORKLOAD_POST_BUDGET_MS", "90000")
     .WithEnvironment("WORKLOAD_LOG_MAX_BYTES", "262144")
+    // 云电脑 Job 临时存储上限（仅 limits，不设 requests）
+    .WithEnvironment("JOB_EPHEMERAL_STORAGE", "10Gi")
     // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
     .WithEnvironment("K8S_ENABLED", "false")
     .WithReference(mongodb)

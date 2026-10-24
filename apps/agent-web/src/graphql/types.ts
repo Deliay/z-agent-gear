@@ -38,6 +38,8 @@ export interface CloudHostData {
   deletedAt?: string | null
   /** 默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace） */
   defaultWorkspace?: string
+  /** 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」 */
+  hasDefaultWorkspace?: boolean
   /** 当前正在 runtime 安装的工作负载名；null 表示空闲 */
   workloadInstalling?: string | null
 }
@@ -153,6 +155,11 @@ export interface DeleteCloudHostMutation {
   deleteCloudHost: boolean
 }
 
+export interface ControllerDefaultMcpData {
+  useAllEnabled: boolean
+  serverIds: string[]
+}
+
 export interface ControllerData {
   id: string
   name: string
@@ -164,6 +171,8 @@ export interface ControllerData {
   lastHeartbeatAt: string | null
   createdAt: string
   updatedAt: string
+  /** 新建会话默认注入的 MCP（历史控制器归一为 useAllEnabled=true） */
+  defaultMcp?: ControllerDefaultMcpData | null
   /** cloud 类型主机返回其云电脑；local/github 为 null */
   cloudHost?: CloudHostData | null
 }
@@ -419,6 +428,18 @@ export interface AcpServerOptionsData {
 
 export interface GetAcpServerOptionsQuery {
   acpServerOptions: AcpServerOptionsData
+}
+
+export interface RefreshAcpServerOptionsMutation {
+  refreshAcpServerOptions: AcpServerOptionsData
+}
+
+export interface CloudHostQuery {
+  cloudHost: CloudHostData | null
+}
+
+export interface SetControllerDefaultMcpMutation {
+  setControllerDefaultMcp: ControllerData
 }
 
 export interface CreateControllerKeyMutation {

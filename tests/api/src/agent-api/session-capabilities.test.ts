@@ -4,8 +4,8 @@ import mongoose from 'mongoose';
 // FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
 import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 const MONGODB_URI = process.env.MONGODB_URI || '';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
@@ -423,5 +423,134 @@ describe('ACP 会话能力快照 API', () => {
         await collection.deleteMany({ name: { $in: [globalName, userName] } });
       }
     });
+  });
+});
+
+// Phase 9：refreshAcpServerOptions（清缓存 + 重探测 + 失败空回退）
+const ACP_SERVER_OPTIONS_QUERY = `
+  query AcpServerOptions($controllerId: ID!, $acpServerType: AcpServerType!) {
+    acpServerOptions(controllerId: $controllerId, acpServerType: $acpServerType) {
+      modes { id name description }
+      models { id name provider }
+      currentModeId
+      currentModelId
+      probedAt
+    }
+  }
+`;
+
+const REFRESH_ACP_SERVER_OPTIONS = `
+  mutation RefreshAcpServerOptions($controllerId: ID!, $acpServerType: AcpServerType!) {
+    refreshAcpServerOptions(controllerId: $controllerId, acpServerType: $acpServerType) {
+      modes { id name description }
+      models { id name provider }
+      currentModeId
+      currentModelId
+      probedAt
+    }
+  }
+`;
+
+function answerProbe(
+  client: ClientSocket,
+  result: {
+    version: number;
+    success?: boolean;
+    error?: string;
+  },
+): void {
+  client.on('acp:probe-options', (data: { requestId: string; serverType: string }) => {
+    const success = result.success !== false;
+    client.emit('acp:probe-options:result', {
+      requestId: data.requestId,
+      serverType: data.serverType,
+      success,
+      ...(success
+        ? {
+            modes: [{ id: `mode-v${result.version}`, name: `Mode v${result.version}` }],
+            availableModels: [
+              { id: `model-v${result.version}`, name: `Model v${result.version}`, provider: 'test' },
+            ],
+            currentModeId: `mode-v${result.version}`,
+            currentModelId: `model-v${result.version}`,
+          }
+        : { error: result.error ?? 'probe failed' }),
+    });
+  });
+}
+
+describe('ACP 选项刷新 API（Phase 9）', () => {
+  it('T-AC8: refreshAcpServerOptions 清缓存后重新探测并返回最新选项', async () => {
+    const { controllerId, client } = await createFreshController();
+    let version = 1;
+    answerProbe(client, {
+      get version() {
+        return version;
+      },
+    });
+
+    const first = await gqlRequest(
+      ACP_SERVER_OPTIONS_QUERY,
+      { controllerId, acpServerType: 'opencode' },
+      authToken,
+    );
+    const firstBody = await first.json();
+    expect(firstBody.errors).toBeUndefined();
+    expect(firstBody.data.acpServerOptions.models[0].id).toBe('model-v1');
+
+    // 命中缓存：直接改版本不会影响第二次普通查询（对照组）
+    version = 2;
+    const cached = await gqlRequest(
+      ACP_SERVER_OPTIONS_QUERY,
+      { controllerId, acpServerType: 'opencode' },
+      authToken,
+    );
+    const cachedBody = await cached.json();
+    expect(cachedBody.data.acpServerOptions.models[0].id).toBe('model-v1');
+
+    // 刷新：删除缓存并重探测，拿到新版本
+    const refreshed = await gqlRequest(
+      REFRESH_ACP_SERVER_OPTIONS,
+      { controllerId, acpServerType: 'opencode' },
+      authToken,
+    );
+    const refreshedBody = await refreshed.json();
+    expect(refreshedBody.errors).toBeUndefined();
+    expect(refreshedBody.data.refreshAcpServerOptions.models[0].id).toBe('model-v2');
+    expect(refreshedBody.data.refreshAcpServerOptions.probedAt).toBeTruthy();
+
+    client.disconnect();
+  }, 45000);
+
+  it('T-AC9: 探测失败时返回空选项且不抛错', async () => {
+    const { controllerId, client } = await createFreshController();
+    answerProbe(client, { version: 1, success: false, error: 'auth required' });
+
+    const res = await gqlRequest(
+      REFRESH_ACP_SERVER_OPTIONS,
+      { controllerId, acpServerType: 'opencode' },
+      authToken,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.refreshAcpServerOptions).toEqual({
+      modes: [],
+      models: [],
+      currentModeId: null,
+      currentModelId: null,
+      probedAt: null,
+    });
+
+    client.disconnect();
+  }, 45000);
+
+  it('T-AC10: 不存在的控制器返回 Controller not found', async () => {
+    const res = await gqlRequest(
+      REFRESH_ACP_SERVER_OPTIONS,
+      { controllerId: '000000000000000000000000', acpServerType: 'opencode' },
+      authToken,
+    );
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe('Controller not found');
   });
 });

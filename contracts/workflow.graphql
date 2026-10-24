@@ -48,6 +48,8 @@ type WorkflowTemplateNode {
   dependsOn: [String!]!
   # 该节点会话是否需要 worktree 隔离
   requiresWorktree: Boolean!
+  # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
+  linkUpstreamPullRequest: Boolean!
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -88,6 +90,8 @@ type ConfiguredWorkflowNode {
   requiresWorktree: Boolean!
   # AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig: AgentNodeConfig
+  # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
+  linkUpstreamPullRequest: Boolean!
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -137,6 +141,10 @@ type WorkflowNode {
   artifactTitles: [String!]
   agentConfig: AgentNodeConfig
   requiresWorktree: Boolean
+  # 上游节点 nodeId 列表（DAG 判定与展示用；旧实例快照可能缺失）
+  dependsOn: [String!]
+  # 人类节点：是否联动上游 Pull Request（实例化快照，未开始的人类节点可编辑）
+  linkUpstreamPullRequest: Boolean!
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
   createdAt: String!
@@ -151,6 +159,22 @@ type BlackboardEntry {
   key: String!
   value: String!
   updatedAt: String!
+}
+
+# 工作流级追加提示词（key 去重，同一 key 只插入一次；系统键 github-pr / github-pr-review）
+type WorkflowAdditionalPrompt {
+  key: String!
+  value: String!
+}
+
+# 当前实例关联的 Pull Request（工作流完成/归档/删除后为空）
+type WorkflowPullRequestLink {
+  pullRequestId: String!
+  prUrl: String
+  nodeId: String!
+  nodeName: String
+  # ISO 字符串（本仓库无 DateTime scalar）
+  registeredAt: String!
 }
 
 type WorkflowInstance {
@@ -174,6 +198,10 @@ type WorkflowInstance {
   nodes: [WorkflowNode!]!
   blackboard: [BlackboardEntry!]!
   blackboardTrash: [BlackboardEntry!]!
+  # 工作流级追加提示词（key 去重，只读展示；系统键 github-pr / github-pr-review）
+  additionalPrompts: [WorkflowAdditionalPrompt!]!
+  # 当前实例关联的 Pull Request（工作流完成/归档后为空）
+  pullRequestLinks: [WorkflowPullRequestLink!]!
   # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
   workspace: ControllerWorkspace
   controller: Controller
@@ -193,6 +221,8 @@ input WorkflowTemplateNodeInput {
   artifactTitles: [String!]
   dependsOn: [String!]!
   requiresWorktree: Boolean!
+  # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
+  linkUpstreamPullRequest: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -222,6 +252,8 @@ input ConfiguredWorkflowNodeInput {
   requiresWorktree: Boolean!
   # AI 节点必填；HUMAN/FLAG 节点为 null
   agentConfig: AgentNodeConfigInput
+  # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
+  linkUpstreamPullRequest: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -261,6 +293,8 @@ input WorkflowNodeUpdateInput {
   artifactTitles: [String!]
   requiresWorktree: Boolean
   agentConfig: AgentNodeConfigInput
+  # 人类节点：是否联动上游 Pull Request（仅 HUMAN 可写；true 开启联动，false/缺省关闭）
+  linkUpstreamPullRequest: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -304,4 +338,8 @@ type Mutation {
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）
   archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
+  # 写入/覆盖工作流追加提示词（同 key 覆盖）；系统键 github-pr / github-pr-review 拒绝人工写入
+  setWorkflowAdditionalPrompt(instanceId: ID!, key: String!, value: String!): WorkflowInstance!
+  # 删除工作流追加提示词（不存在时幂等成功）；系统键拒绝人工删除
+  removeWorkflowAdditionalPrompt(instanceId: ID!, key: String!): WorkflowInstance!
 }

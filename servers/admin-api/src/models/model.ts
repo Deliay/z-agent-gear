@@ -26,6 +26,8 @@ const modelSchema = new mongoose.Schema({
   isEnabled: { type: Boolean, default: true },
   sortOrder: { type: Number, default: 0 },
   scope: { type: String, enum: ['user', 'global'], default: 'user', index: true },
+  // 最长上下文大小（token，正整数）；null = 未设置。与 agent-api 同步演进。
+  contextLength: { type: Number, default: null },
   pricing: { type: modelPricingSchema, default: null },
 }, { timestamps: true });
 

@@ -1,0 +1,95 @@
+/** 事件回调载荷（`pull_request` 审核事件的最小契约） */
+export interface EventCallbackPayload {
+  eventType: 'pull_request';
+  eventId: string;
+  occurredAt?: string;
+  payload: {
+    pullRequestId: string;
+    prUrl?: string;
+    action?: string;
+    reviewState: string;
+    comment?: string;
+    reviewer?: string;
+    submittedAt?: string;
+  };
+}
+
+/** 载荷校验失败：detail 为字段路径（响应 400 payload.invalid） */
+export class EventPayloadError extends Error {
+  constructor(public readonly detail: string) {
+    super(`payload.invalid: ${detail}`);
+    this.name = 'EventPayloadError';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireString(value: unknown, detail: string, maxLength?: number): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new EventPayloadError(detail);
+  }
+  if (maxLength !== undefined && value.length > maxLength) {
+    throw new EventPayloadError(detail);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, detail: string, maxLength?: number): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new EventPayloadError(detail);
+  // C-4：事件载荷直接进入提示词/黑板，限制长度避免膨胀面
+  if (maxLength !== undefined && value.length > maxLength) {
+    throw new EventPayloadError(detail);
+  }
+  return value;
+}
+
+function optionalDate(value: unknown, detail: string): string | undefined {
+  const text = optionalString(value, detail, 64);
+  if (text === undefined) return undefined;
+  if (Number.isNaN(Date.parse(text))) throw new EventPayloadError(detail);
+  return text;
+}
+
+/**
+ * 手写载荷校验（不引入 zod）。纯函数：解析失败/字段缺失抛 EventPayloadError。
+ * reviewState 只校验类型，枚举外的值由事件处理器判为 UNSUPPORTED_REVIEW_STATE。
+ */
+export function parseEventCallbackPayload(raw: Buffer | string): EventCallbackPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
+  } catch {
+    throw new EventPayloadError('json');
+  }
+  if (!isRecord(parsed)) throw new EventPayloadError('body');
+
+  const eventType = requireString(parsed.eventType, 'eventType', 64);
+  if (eventType !== 'pull_request') {
+    throw new EventPayloadError('eventType');
+  }
+  const eventId = requireString(parsed.eventId, 'eventId', 200);
+  const occurredAt = optionalDate(parsed.occurredAt, 'occurredAt');
+
+  if (!isRecord(parsed.payload)) throw new EventPayloadError('payload');
+  const payload = parsed.payload;
+  const pullRequestId = requireString(payload.pullRequestId, 'payload.pullRequestId', 512);
+  const reviewState = requireString(payload.reviewState, 'payload.reviewState', 64);
+
+  return {
+    eventType: 'pull_request',
+    eventId,
+    ...(occurredAt ? { occurredAt } : {}),
+    payload: {
+      pullRequestId,
+      reviewState,
+      prUrl: optionalString(payload.prUrl, 'payload.prUrl', 2048),
+      action: optionalString(payload.action, 'payload.action', 64),
+      comment: optionalString(payload.comment, 'payload.comment', 64_000),
+      reviewer: optionalString(payload.reviewer, 'payload.reviewer', 256),
+      submittedAt: optionalDate(payload.submittedAt, 'payload.submittedAt'),
+    },
+  };
+}

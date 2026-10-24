@@ -62,7 +62,7 @@ export const modelResolvers = {
   Mutation: {
     createGlobalCustomModel: async (
       _parent: unknown,
-      args: { input: { providerId: string; name: string } },
+      args: { input: { providerId: string; name: string; contextLength?: number | null } },
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
@@ -115,6 +115,18 @@ export const modelResolvers = {
     ) => {
       assertAdmin(context);
       return modelService.updateSortOrder(args.ids);
+    },
+    updateModelContextLength: async (
+      _parent: unknown,
+      args: { modelId: string; contextLength?: number | null },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      try {
+        return await modelService.updateContextLength(args.modelId, args.contextLength ?? null);
+      } catch (err) {
+        mapModelError(err);
+      }
     },
   },
   Model: {

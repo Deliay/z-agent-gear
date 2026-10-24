@@ -9,10 +9,45 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
-import { ensureCloudHostToolsServer } from './cloud-host-tools.js';
+import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
+
+export interface ControllerDefaultMcpSnapshot {
+  useAllEnabled?: boolean | null;
+  /** Mongo lean 后可能是 ObjectId（schema 为 ObjectId[]），必须允许 toString */
+  serverIds?: Array<string | { toString(): string } | null | undefined> | null;
+}
+
+/**
+ * 解析新建会话的初始 MCP 集合（纯函数，便于单测）：
+ * - explicitIds !== undefined（含 []）：以调用方为准，原样返回；
+ * - 未传 + useAllEnabled !== false（缺省视为 true）：注入全部已启用 MCP（动态语义，不物化 id 列表）；
+ * - 未传 + useAllEnabled === false：仅注入 serverIds 中仍存在且 enabled 的子集。
+ * 云会话的 agent-cloud-host-tools 由调用方在解析后并入并去重。
+ */
+export function resolveInitialMcpServerIds(
+  defaultMcp: ControllerDefaultMcpSnapshot | null | undefined,
+  explicitIds: string[] | undefined,
+  enabledServerIds: string[],
+): string[] {
+  if (explicitIds !== undefined) {
+    return [...explicitIds];
+  }
+  const enabled = enabledServerIds.map(String);
+  if (defaultMcp?.useAllEnabled !== false) {
+    return enabled;
+  }
+  const enabledSet = new Set(enabled);
+  // N-18 联动发现：Mongoose `defaultMcp.serverIds` 是 ObjectId[]，旧实现只接受 string，
+  // 导致真实 DB 路径把子集全部过滤为空（单测用 string 假数据所以未暴露）。
+  const subset = (defaultMcp.serverIds ?? [])
+    .filter((id): id is string | { toString(): string } => id !== null && id !== undefined)
+    .map((id) => String(id))
+    .filter((id) => id.length > 0 && enabledSet.has(id));
+  return Array.from(new Set(subset));
+}
 
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
@@ -141,8 +176,26 @@ export class SessionService {
       }
     }
 
-    // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
+    // 未显式指定（含 undefined）时按控制器 defaultMcp 解析；显式空数组表示不注入。
     let mcpServerIds = input.mcpServerIds;
+    if (mcpServerIds === undefined) {
+      // 平台内置 agent-cloud-host-tools 仅由云会话自动并入（与前端可选列表口径一致），
+      // 不作为「默认 MCP」候选，避免非云会话被注入云主机工具。
+      const enabledServers = await McpServer.find({
+        userId,
+        enabled: true,
+        name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
+      })
+        .select('_id')
+        .lean();
+      mcpServerIds = resolveInitialMcpServerIds(
+        (controller as unknown as { defaultMcp?: ControllerDefaultMcpSnapshot }).defaultMcp,
+        undefined,
+        enabledServers.map((server) => String(server._id)),
+      );
+    }
+
+    // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
     if (controller.type === 'cloud') {
       const cloudToolsId = await ensureCloudHostToolsServer(userId);
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), cloudToolsId]));
@@ -491,7 +544,18 @@ export class SessionService {
     return { success: true, status: 'connecting' };
   }
 
-  async close(id: string, userId: string): Promise<boolean> {
+  /**
+   * 关闭会话。
+   *
+   * `suppressFallback`：主动/受控关闭（工作流节点完成、重启、复工替换会话）时置 true，
+   * 跳过 `sessionEndedCallback`，避免在引擎转移尚未落库时把「人为关闭」误判为会话意外终止，
+   * 也避免在同一实例锁内同步嵌套 `workflowEngine.transition`（N-1）。
+   */
+  async close(
+    id: string,
+    userId: string,
+    opts?: { suppressFallback?: boolean; reason?: string },
+  ): Promise<boolean> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     const result = await Session.findOneAndUpdate(
       { _id: id, userId },
@@ -509,10 +573,12 @@ export class SessionService {
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
         sessionId: id,
-        reason: 'user_close',
+        reason: opts?.reason ?? 'user_close',
       }));
-      // 工作流兜底检查
-      await this.sessionEndedCallback?.(id);
+      // 工作流兜底检查：受控关闭（节点完成/重启/复工）不触发
+      if (!opts?.suppressFallback) {
+        await this.sessionEndedCallback?.(id);
+      }
       return true;
     }
     return false;
@@ -767,6 +833,7 @@ export class SessionService {
     controllerId: string,
     acpServerType: string,
     userId: string,
+    opts?: { minProbedAt?: number },
   ): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -775,10 +842,18 @@ export class SessionService {
 
     const redis = getRedisClient();
     const cacheKey = `acp:options:${controllerId}:${acpServerType}`;
+    // C-9：刷新时只接受「本次删除之后」的探测结果，避免并发探测把旧结果写回后立即被读走。
+    // 允许 5s 时钟偏差（controller-api 与 agent-api 可能不同宿主）。
+    const isFresh = (payload: Record<string, unknown>): boolean => {
+      if (!opts?.minProbedAt) return true;
+      const probedAt = Date.parse(String(payload.probedAt ?? ''));
+      return Number.isFinite(probedAt) && probedAt >= opts.minProbedAt - 5_000;
+    };
 
     const cached = await redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached) as Record<string, unknown>;
+      const parsed = JSON.parse(cached) as Record<string, unknown>;
+      if (isFresh(parsed)) return parsed;
     }
 
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -793,12 +868,42 @@ export class SessionService {
       await new Promise((resolve) => setTimeout(resolve, 500));
       const result = await redis.get(cacheKey);
       if (result) {
-        return JSON.parse(result) as Record<string, unknown>;
+        const parsed = JSON.parse(result) as Record<string, unknown>;
+        if (isFresh(parsed)) return parsed;
       }
     }
 
     // 超时 — 返回空选项
     return { modes: [], models: [], currentModeId: null, currentModelId: null, probedAt: null };
+  }
+
+  /**
+   * 删除该控制器+工具类型的选项缓存并立即重新探测（失败/超时返回空选项，不抛错）。
+   * 与 getAcpServerOptions 共用同一条探测链路，供前端「刷新」按钮使用。
+   */
+  async refreshAcpServerOptions(
+    controllerId: string,
+    acpServerType: string,
+    userId: string,
+  ): Promise<Record<string, unknown>> {
+    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    if (!controller) {
+      throw new Error('Controller not found');
+    }
+    const startedAt = Date.now();
+    try {
+      await getRedisClient().del(`acp:options:${controllerId}:${acpServerType}`);
+    } catch (err) {
+      // C-9：删除失败不能静默回退到旧缓存（用户点「刷新」却看到陈旧结果）
+      console.warn(
+        `[session] delete acp options cache failed for ${controllerId}:`,
+        (err as Error).message,
+      );
+      throw new Error('刷新失败，请重试');
+    }
+    return this.getAcpServerOptions(controllerId, acpServerType, userId, {
+      minProbedAt: startedAt,
+    });
   }
 
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {

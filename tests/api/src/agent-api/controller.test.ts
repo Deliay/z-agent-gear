@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -675,3 +675,184 @@ describe('Controller Online Status', () => {
       client2.disconnect();
     });
   });
+
+// Phase 9：控制器默认 MCP（schema 归一 + 保存校验）
+const MCP_SERVERS_QUERY = `
+  query McpServers {
+    mcpServers { id name enabled transport source }
+  }
+`;
+
+const CONTROLLER_DEFAULT_MCP_QUERY = `
+  query ControllerDefaultMcp($id: ID!) {
+    controller(id: $id) { id defaultMcp { useAllEnabled serverIds } }
+  }
+`;
+
+const SET_CONTROLLER_DEFAULT_MCP = `
+  mutation SetDefaultMcp($controllerId: ID!, $useAllEnabled: Boolean!, $serverIds: [ID!]) {
+    setControllerDefaultMcp(
+      controllerId: $controllerId
+      useAllEnabled: $useAllEnabled
+      serverIds: $serverIds
+    ) {
+      id
+      defaultMcp { useAllEnabled serverIds }
+    }
+  }
+`;
+
+describe('Controller default MCP API (Phase 9)', () => {
+  let token = '';
+  let client: ClientSocket;
+  let testControllerId = '';
+
+  beforeAll(async () => {
+    // N-18：用户名上限 20（auth.ts）
+    const uid = `dmcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
+    const signupRes = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
+    const signupBody = await signupRes.json();
+    token = signupBody.data.signup.token;
+
+    const keyRes = await gqlRequest(
+      CREATE_KEY,
+      { input: { name: `dmcp-key-${Date.now()}`, type: 'local' } },
+      token,
+    );
+    const keyBody = await keyRes.json();
+    client = createWSClient();
+    const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
+    client.emit('register', {
+      key: keyBody.data.createControllerKey.rawKey,
+      hostname: 'dmcp-host',
+      version: '2.0.0',
+    });
+    const reg = await registered;
+    testControllerId = reg.controllerId;
+  });
+
+  afterAll(() => {
+    client?.disconnect();
+  });
+
+  it('T-API-CTRL-MCP1: 历史行缺失 defaultMcp 时归一为 useAllEnabled=true', async () => {
+    const res = await gqlRequest(CONTROLLER_DEFAULT_MCP_QUERY, { id: testControllerId }, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.controller.defaultMcp).toEqual({ useAllEnabled: true, serverIds: [] });
+  });
+
+  it('T-API-CTRL-MCP2: useAllEnabled=false 保存所选服务并持久化', async () => {
+    const listRes = await gqlRequest(MCP_SERVERS_QUERY, undefined, token);
+    const listBody = await listRes.json();
+    const admin = (listBody.data.mcpServers as Array<{ id: string; name: string }>).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+
+    const saveRes = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId: testControllerId, useAllEnabled: false, serverIds: [admin!.id] },
+      token,
+    );
+    const saveBody = await saveRes.json();
+    expect(saveBody.errors).toBeUndefined();
+    expect(saveBody.data.setControllerDefaultMcp.defaultMcp).toEqual({
+      useAllEnabled: false,
+      serverIds: [admin!.id],
+    });
+
+    const queryRes = await gqlRequest(CONTROLLER_DEFAULT_MCP_QUERY, { id: testControllerId }, token);
+    const queryBody = await queryRes.json();
+    expect(queryBody.data.controller.defaultMcp).toEqual({
+      useAllEnabled: false,
+      serverIds: [admin!.id],
+    });
+  });
+
+  it('T-API-CTRL-MCP3: useAllEnabled=true 忽略入参 serverIds 并归一为空数组', async () => {
+    const listRes = await gqlRequest(MCP_SERVERS_QUERY, undefined, token);
+    const listBody = await listRes.json();
+    const admin = (listBody.data.mcpServers as Array<{ id: string; name: string }>).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+
+    const res = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId: testControllerId, useAllEnabled: true, serverIds: [admin!.id] },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.setControllerDefaultMcp.defaultMcp).toEqual({
+      useAllEnabled: true,
+      serverIds: [],
+    });
+  });
+
+  it('T-API-CTRL-MCP4: 不存在/已停用的服务返回 MCP_SERVER_NOT_FOUND', async () => {
+    const missing = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      {
+        controllerId: testControllerId,
+        useAllEnabled: false,
+        serverIds: ['000000000000000000000000'],
+      },
+      token,
+    );
+    expect((await missing.json()).errors?.[0]?.message).toBe('MCP_SERVER_NOT_FOUND');
+
+    const listRes = await gqlRequest(MCP_SERVERS_QUERY, undefined, token);
+    const listBody = await listRes.json();
+    const admin = (listBody.data.mcpServers as Array<{ id: string; name: string }>).find(
+      (server) => server.name === 'agent-workflow-admin-tools',
+    );
+    expect(admin).toBeTruthy();
+    await gqlRequest(
+      `mutation SetMcp($id: ID!, $enabled: Boolean!) { setMcpServerEnabled(id: $id, enabled: $enabled) { id } }`,
+      { id: admin!.id, enabled: false },
+      token,
+    );
+    const disabled = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId: testControllerId, useAllEnabled: false, serverIds: [admin!.id] },
+      token,
+    );
+    expect((await disabled.json()).errors?.[0]?.message).toBe('MCP_SERVER_NOT_FOUND');
+    await gqlRequest(
+      `mutation SetMcp($id: ID!, $enabled: Boolean!) { setMcpServerEnabled(id: $id, enabled: $enabled) { id } }`,
+      { id: admin!.id, enabled: true },
+      token,
+    );
+  });
+
+  it('T-API-CTRL-MCP5: 空数组合法（表示不注入）', async () => {
+    const res = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId: testControllerId, useAllEnabled: false, serverIds: [] },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.setControllerDefaultMcp.defaultMcp).toEqual({
+      useAllEnabled: false,
+      serverIds: [],
+    });
+  });
+
+  it('T-API-CTRL-MCP6: 未认证与不存在的控制器文案与契约一致', async () => {
+    const anonymous = await gqlRequest(SET_CONTROLLER_DEFAULT_MCP, {
+      controllerId: testControllerId,
+      useAllEnabled: true,
+    });
+    expect((await anonymous.json()).errors?.[0]?.message).toBe('Not authenticated');
+
+    const missing = await gqlRequest(
+      SET_CONTROLLER_DEFAULT_MCP,
+      { controllerId: '000000000000000000000000', useAllEnabled: true },
+      token,
+    );
+    expect((await missing.json()).errors?.[0]?.message).toBe('Controller not found');
+  });
+});

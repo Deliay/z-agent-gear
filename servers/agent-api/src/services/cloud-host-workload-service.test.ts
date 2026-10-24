@@ -67,7 +67,7 @@ describe('CloudHostWorkloadService', () => {
             id: 'w1',
             name: 'Github',
             paramSchema: [],
-            dependsOnWorkloadIds: [],
+            dependsOnWorkloadIds: ['w2'],
             isPreset: true,
             workloadKind: 'standard',
             initScript: 'x',
@@ -88,7 +88,9 @@ describe('CloudHostWorkloadService', () => {
     const items = await service.list(USER_ID, CONTROLLER_ID);
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ workloadId: 'w1', installed: true, source: 'user' });
-    expect(items[1]).toMatchObject({ workloadId: 'w2', installed: false });
+    // C-27：dependsOnWorkloadIds 作为契约字段必须原样透出（不能只返回 installed/name）
+    expect(items[0].dependsOnWorkloadIds).toEqual(['w2']);
+    expect(items[1]).toMatchObject({ workloadId: 'w2', installed: false, dependsOnWorkloadIds: [] });
   });
 
   it('T-CHW1-b: list 透出 workloadKind（standard 固定 STANDARD）', async () => {

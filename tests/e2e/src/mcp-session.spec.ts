@@ -12,7 +12,7 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
   return page.request.post(API_URL, { headers, data: body });
 }
 
-async function registerMcpProxy(page: import('@playwright/test').Page, token: string, rawKey: string, serverName: string): Promise<{ proxyId: string; serverId: string }> {
+async function registerMcpProxy(page: import('@playwright/test').Page, token: string, rawKey: string, serverName: string): Promise<{ success?: boolean; proxyId: string; serverId: string }> {
   const res = await page.request.post(`${CONTROLLER_API_URL}/api/mcp-proxy/register`, {
     headers: { 'Content-Type': 'application/json' },
     data: {
