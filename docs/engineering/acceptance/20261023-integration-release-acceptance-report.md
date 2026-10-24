@@ -5,7 +5,11 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **第七轮 N-16/N-17 已修复，待第八轮集成验收**（详见[第二十二节](#二十二第八轮返工修复记录2026-10-23)；门禁④全栈证据仍挂账，人类书面豁免待裁定）——第七轮对返工提交 `2254489`（origin/integration @ `eade347..2254489`，PR #273 OPEN/MERGEABLE）逐条复核第六轮 N-13/N-14/N-15：**N-13 核心区分力成立**（独立复做回退探针 R1：`runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后 N-10 用例**转红于断言②**——warn 含 `fallback deferred retry failed`，还原后转绿，上游「回退探针自证」属实）、**N-14 实现属实**（`notifyFallbackExhausted` 实例/节点不可查两形态输出结构化告警含 kind/instance/session，用例覆盖两形态）、**N-15 属实**（`engine.ts` JSDoc 已同步 N-10/N-11 语义，20.3 自报范围已写明）、自报数值与独立复跑逐项一致（tsc×7 0 error / lint×2 0 error 5 存量 warning / 单测五包 **1005**/656+1skip/254/235/663 / keyed-mutex+orchestrator 46 / tests-e2e-typecheck exit=0，N-10 用例连续 3 跑全绿）；**但发现 2 × 🟡 + 门禁④连续第七轮未达成**：🟡 **N-16**（本轮交付的三个「直接断言」中**仅② 有效**——新探针 R1b（R1 形态下临时中和断言②）用例**仍绿** 709ms：断言① `findById` 恰好 2 次对「误抛+重排」形态**零区分力**（误抛发生在 task 执行前不产生 findById，R1 重排 ×2 而计数仍=2，「① 证明…无重排」不成立）；断言③ 只扫描 `console.warn` 首参（`orchestrator.test.ts:574`），而误抛文本经 `orchestrator.ts:336-338` 以**第二参**传入（call[1]）→ **恒真（dead assertion）**，对 `still holding` 零覆盖——自报「① 证明无重排」「③ 不存在 still holding」均失实）；🟡 **N-17**（N-14 用例未断言 kind，自报「断言告警含 kind/instance/session」失实——**连续第六轮**自报抽查命中）；第七轮要求④（全栈 tests/api 全量 + tests/e2e 全绿证据随修复交付，**或**人类书面豁免落定）**连续第七轮未达成**（本机独立核实：workload_list 无 K8s 负载、`kubectl` 不存在、无预置控制器——环境受限属实；书面豁免仍「待裁定」未落定，本节点无权自行豁免）；integration 集成验收**第七轮打回（REJECT）**
+> **状态**: 🔄 **第八轮 N-16/N-17 修复属实，但门禁④首次实跑捕获 2×🟠 新缺陷，第八轮打回（REJECT）**（详见[第二十三节](#二十三第八轮验收记录2026-10-24)）——第八轮对返工提交 `7d697eb`（origin/integration @ `5821c23..7d697eb`，PR #273）逐条复核第七轮 N-16/N-17：**N-16 属实**（断言③ flat 扫描 `console.warn` 全部参数覆盖 `call[1]`、新增 `runOutsideTransitionLock` 直通 spy 断言恰 1 次调度、`findById=2` 归因收窄；独立三探针实证：R1 → 红于调度次数（1≠3）、R1+中和②′ → 红于 `still holding`（call[1] 路径实证 flat 扫描生效）、反事实 R1+C 换回旧式 call[0] 扫描 → 恒真绿（dead assertion 实证，本轮修复必要））、**N-17 属实**（两形态 kind 前缀 + `instance=`/`session=` 断言与 `orchestrator.ts` 实现消息逐字一致）、自报数值与独立复跑逐项一致（tsc 0 error / agent-api 1005 passed / tests-e2e-typecheck exit=0 / lint×2 0 error 5 存量 warning）；备注 1 处非阻塞叙述笔误（22.1「（来源 call[1]）」应为 call[0]，断言/实现无误）。
+>
+> **门禁④ 首次实跑**（人类指示 `aspire start --isolated`，本节点实跑补证）：环境修复记录——宿主机 `/usr/local/bin/docker` 归一化 shim 把 `docker create --name` 的值误当镜像改写导致 DCP 容器名非法、mongodb/redis/rabbitmq 全部 FailedToStart（修复 shim 后隔离栈一次拉起全绿）；测试环境对齐 `CONTROLLER_API_URL` 基础 URL / `MONGODB_URI` TLS 自签兼容（`tlsAllowInvalidCertificates=true`）/ `HARNESS_ENABLED` / `REDIS_URL`。**tests/api 常规全量（干净实例）535 passed / 6 failed / 8 skipped**——6 红全部为 🟠 **N-18**（本 diff `3c5b7de` 新增 Phase 9/MCP 用例生成 22/23 字符用户名，违反既有 `auth.ts:31`「2-20 字符」校验、signup 恒失败：session T-API-MCP1~6 + controller Phase 9）；**tests/api acp-real 5 passed / 2 failed / 6 skipped**（环境缺口：`minefield-online` fixture 缺失、opencode v2.1.1 agent 侧 `TOOL_MISSING`、共享 PID 文件竞态级联）；**tests/e2e 256 passed / 4 failed / 8 skipped**——4 红全部为 🟠 **N-20**（本 diff 交付的 e2e 与 UI 不自洽：`NewSessionDialog` 根节点无 `role="dialog"` 而 P10-S5/S6/S7 以 `getByRole('dialog')` 定位、settings-workspace 以 `[data-slot="select-trigger"]` 位置索引 `nth(1)` 定位工作区下拉被 `c3d8601` 新增模式/模型 Select 插队错位；4 用例独立单跑均确定性红）；🟡 **N-19**（tests/api AGENTS.md 环境变量表缺 `HARNESS_ENABLED`/`REDIS_URL`）。integration 集成验收**第八轮打回（REJECT）**
+>
+> **第七轮背景**（详见[第二十二节](#二十二第八轮返工修复记录2026-10-23)；门禁④全栈证据仍挂账，人类书面豁免待裁定）——第七轮对返工提交 `2254489`（origin/integration @ `eade347..2254489`，PR #273 OPEN/MERGEABLE）逐条复核第六轮 N-13/N-14/N-15：**N-13 核心区分力成立**（独立复做回退探针 R1：`runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后 N-10 用例**转红于断言②**——warn 含 `fallback deferred retry failed`，还原后转绿，上游「回退探针自证」属实）、**N-14 实现属实**（`notifyFallbackExhausted` 实例/节点不可查两形态输出结构化告警含 kind/instance/session，用例覆盖两形态）、**N-15 属实**（`engine.ts` JSDoc 已同步 N-10/N-11 语义，20.3 自报范围已写明）、自报数值与独立复跑逐项一致（tsc×7 0 error / lint×2 0 error 5 存量 warning / 单测五包 **1005**/656+1skip/254/235/663 / keyed-mutex+orchestrator 46 / tests-e2e-typecheck exit=0，N-10 用例连续 3 跑全绿）；**但发现 2 × 🟡 + 门禁④连续第七轮未达成**：🟡 **N-16**（本轮交付的三个「直接断言」中**仅② 有效**——新探针 R1b（R1 形态下临时中和断言②）用例**仍绿** 709ms：断言① `findById` 恰好 2 次对「误抛+重排」形态**零区分力**（误抛发生在 task 执行前不产生 findById，R1 重排 ×2 而计数仍=2，「① 证明…无重排」不成立）；断言③ 只扫描 `console.warn` 首参（`orchestrator.test.ts:574`），而误抛文本经 `orchestrator.ts:336-338` 以**第二参**传入（call[1]）→ **恒真（dead assertion）**，对 `still holding` 零覆盖——自报「① 证明无重排」「③ 不存在 still holding」均失实）；🟡 **N-17**（N-14 用例未断言 kind，自报「断言告警含 kind/instance/session」失实——**连续第六轮**自报抽查命中）；第七轮要求④（全栈 tests/api 全量 + tests/e2e 全绿证据随修复交付，**或**人类书面豁免落定）**连续第七轮未达成**（本机独立核实：workload_list 无 K8s 负载、`kubectl` 不存在、无预置控制器——环境受限属实；书面豁免仍「待裁定」未落定，本节点无权自行豁免）；integration 集成验收**第七轮打回（REJECT）**
 >
 > 第六轮背景（详见[第二十节](#二十第七轮返工修复记录2026-10-23)；全栈证据仍受环境限制，人类书面豁免待裁定）——第六轮对返工提交 `af39766`（origin/integration @ `c6dd640..af39766`，PR #273 OPEN/MERGEABLE，headRefOid 一致）逐条复核第五轮 N-10/N-11/N-12：**N-10(a)/(b) 机制修复属实**（`runDetached` 不再误抛——有界等待 tail 释放（默认 30s/可配 `timeoutMs`）+ 超时结构化抛错；`.catch` 按同一 attempt 预算退避重排、超限告警 + 创建人工介入 todo；独立引擎级探针 P2'/P3'/P5' 实证，回退探针 R2 实证 (b) 用例可红）、**N-11 属实**（`owners` 移除，P4' 实证「持锁+排队等待者」超时退出不误判不死锁）、N-12 表述本轮大体如实、自报数值与独立复跑逐项一致（tsc×7/lint×2/单测五包 **1004/656+1skip/254/235/663**/keyed-mutex+orchestrator 45/tests-e2e-typecheck 全绿）；**但发现 1 × 🟠 + 2 × 🟡**：🟠 **N-13**（交付的「N-10 真实定时器」引擎级用例对 N-10(a) **零区分力**——回退探针 R1：仅把 `runDetached` 换回第五轮 fast-fail 语义、保留 (b) 重排后用例**仍绿**（404ms→**705ms**：100ms/300ms 两次误抛被 `.catch` 重排掩盖、700ms 第三次尝试成功，断言全过；注释声称「runDetached 必须等待而不是误抛」却无任何断言兑现）。(a) 若回归且锁持有 > ~700ms（超退避预算），兜底走 exhausted+todo 而非 fail 转移、节点停 RUNNING，全量套件无法察觉——恰是第五轮 N-10 漏检的同类「用例结构性盲区」）；🟡 **N-14**（`notifyFallbackExhausted` 查不到实例/节点时静默 `return`，介入待办丢失且**无任何告警**（P6' 实证），与 (b)「禁止静默丢链」标准自相矛盾——超限链路最后一步自身可静默丢）；🟡 **N-15**（`engine.ts:164-171` JSDoc 仍写「若在仍持有锁时调用会抛错（N-9）」，未同步 N-10/N-11「不误抛/有界等待/超时抛错」语义（af39766 未触及 engine.ts），第五轮要求②「JSDoc/文档与实现一致」只完成 keyed-mutex 一侧；18.2「JSDoc 已同步」范围失实，连续第五轮自报抽查命中）；全栈 tests/api 全量 + tests/e2e 全绿证据连续六轮未交付、12.6 书面豁免待人类裁定（本节点无权豁免）；integration 集成验收**第六轮打回（REJECT）**，详见[第十九节](#十九第六轮验收记录2026-10-23)
 >
@@ -1080,3 +1084,102 @@ type: Permanent
 
 - 全栈 `tests/api` 全量 + `tests/e2e` 全绿证据仍未交付：本机无 K8s（`workload_list` 无 K8s 负载、无 kubectl）、无预置控制器，且宿主机其他 worktree AppHost 占用 dashboard/resource-service 端口（11.5/12.6/18.4/20.4 已记录）。
 - **书面豁免仍待人类裁定**，本节点无权自行豁免；门禁保持挂账。
+
+## 二十三、第八轮验收记录（2026-10-24）
+
+### 23.1 复核范围与方法
+
+- 对返工提交 `7d697eb`（origin/integration @ `5821c23..7d697eb`，PR #273）逐条复核第七轮 N-16/N-17；改动面为 `orchestrator.test.ts` + 本报告第二十二节（`git show --stat` 核对）。
+- **不采信自报**：独立复做回退探针（三态对照）、独立复跑代码类门禁、逐字比对断言与实现消息。
+- 门禁④ 按人类指示 `aspire start --isolated` 由本节点**首次实跑**全栈 tests/api 全量 + tests/e2e 补证（此前八轮均未实跑）。
+
+### 23.2 N-16 复核（✅ 属实）
+
+- 断言③ 改 `warn.mock.calls.flat().map(String).join('\n')` 扫描全部参数 ✅（`call[1]` 误抛文本路径纳入覆盖）；
+- 新增断言②′：`vi.spyOn(workflowEngine, 'runOutsideTransitionLock')` 直通 spy（不替换实现）断言延迟调度恰 1 次 ✅；
+- 断言① 归因收窄 ✅（注释仅声称「外层 + 一次成功重试，恰一次成功执行」，「无重排」归因断言②′/③，与第七轮要求一致）。
+- **独立回退探针（三态，均临时改动后还原，工作区干净）**：
+  1. **R1**（`runDetached` 换回第五轮 fast-fail 语义：held 视图含 key 且 tail 活跃即抛 `still holding key`，保留 (b) 重排）→ 用例**转红于断言②′**：`expected "runOutsideTransitionLock" to be called 1 times, but got 3 times`；
+  2. **R1+B**（R1 形态下再临时中和断言②′ 与 `fallback deferred retry failed` 检查）→ 用例**转红于 `not.toContain('still holding')`**，失败输出实证误抛文本经 `console.warn(msg, err.message)` 的 **`call[1]`** 传入、被 flat 扫描捕获（修复前旧式 `String(call[0])` 扫描不可见）；
+  3. **R1+C 反事实**（同场景把③ 换回旧式 `call[0]` 扫描）→ 用例**仍绿**——dead assertion 实证，本轮修复确有必要且已闭环；
+  4. 还原后 N-10 用例连续 3 跑全绿。
+
+### 23.3 N-17 复核（✅ 属实）
+
+- 两形态断言与 `orchestrator.ts:360/368` 实现消息逐字比对一致：`removed fallback exhausted todo skipped: instance not found` + `instance=inst-x` + `session=sess-x`；`removed fallback exhausted todo skipped: node not found` + `instance=inst-1` + `session=sess-x`（`${kind}` 前缀 + `(instance=.., session=..)` 全覆盖）；用例绿。自报「断言实际一致」本轮属实。
+
+### 23.4 独立验证（不采信自报，逐项一致）
+
+| 项目 | 独立复跑 | 自报 |
+|---|---|---|
+| tsc（agent-api） | ✅ 0 error | 一致 |
+| 全量 agent-api 单测 | ✅ **1005 passed** | 一致 |
+| tests/e2e typecheck | ✅ exit=0 | 一致 |
+| lint（agent-web/admin-web） | ✅ 0 error / 5 存量 warning | 一致 |
+| N-10 真实定时器用例 | ✅ 连续 3 跑全绿 | 一致 |
+
+- **备注（非阻塞，叙述笔误）**：22.1 回退探针叙述「红于断言③（`warnText` 含 `fallback deferred retry failed`，来自 `call[1]`）」归因有误——该文本来自 `call[0]`（`orchestrator.ts:336` 消息模板），`call[1]` 是 `err.message`（`still holding key…`）。断言与实现均正确，仅探针描述错标来源（与本节 R1+B 实证的 call 分布一致）。
+
+### 23.5 门禁④ 首次实跑（`aspire start --isolated`）
+
+#### 环境修复与对齐记录（宿主机/操作层，非仓库代码）
+
+1. **宿主机 `/usr/local/bin/docker` 归一化 shim 缺陷（已修复，备份 `docker.bak-20261024`）**：shim 对 `pull|run|create` 的「第一个非 flag 参数」做镜像名归一化，把 `docker create --name mongodb-jaejfbwk <image>` 中 `--name` 的**值**误当镜像改写 → Docker 拒绝 `invalid container name (core.harbor.internal.fffdan.com/docker-hub-proxy/mongodb-jaejfbwk)`，mongodb/redis/rabbitmq 全部 `FailedToStart`（DCP `ContainerReconciler` 日志实证）。修复为跳过取值型 flag 的参数后，隔离栈一次拉起全绿。此项解释了此前多轮「AppHost 端口/容器冲突」类环境挂账的一类根因。
+2. **测试环境对齐**：`CONTROLLER_API_URL` 须为**基础 URL**（Socket.IO 直连注册控制器；文档示例含 `/graphql` 会致注册超时级联）；`MONGODB_URI` 含 `&` 须引号注入并追加 `tlsAllowInvalidCertificates=true`（Aspire dev cert 自签，mongoose 直连报 `self-signed certificate`）；`HARNESS_ENABLED=true`/`REDIS_URL` 与栈对齐（见 N-19）。
+
+#### tests/api 常规全量（35 文件 / 549 用例）
+
+| 轮次 | 结果 | 说明 |
+|---|---|---|
+| run2（CONTROLLER_API_URL 误带 /graphql） | 456 passed / 48 failed / 45 skipped | 控制器注册超时级联，作废 |
+| run5（干净实例） | 515 passed / 7 failed / 27 skipped | 含 T-CH2 env 失配 |
+| **run6（规范记录，干净实例 + env 对齐）** | **535 passed / 6 failed / 8 skipped** | 6 红全部 N-18 |
+
+- run6 的 6 个失败：`session.test.ts` T-API-MCP1~6（beforeAll `signup` 抛 `Cannot read properties of null (reading 'signup')`）+ `controller.test.ts` Phase 9（同因，套件级）。
+
+#### tests/api acp-real（6 文件 / 13 用例，run4 干净实例）
+
+- **5 passed / 2 failed / 6 skipped**；失败定性：
+  - `acp-real-session-import`：依赖本机 fixture `/home/ash/Repositories/minefield-online`（种子 opencode 会话历史），本机不存在 → `Found 0 sessions` → `load-session` 报 `session not found`；
+  - `acp-real-mcp-passthrough`：MCP relay 链路**实证全通**（mcp-proxy 日志：`initialize`/`tools/list` 双向转发并应答成功），真实 opencode v2.1.1 agent 侧未挂载工具（`agent text: TOOL_MISSING`）——失败在 agent 侧工具挂载/版本配合，非 relay 链路缺陷；
+  - 共享 PID 文件/端口竞态使失败级联（`Controller is already running. Stop it first or remove the PID file.`）。
+
+#### tests/e2e（37 spec / run7 干净实例，15.6 分钟）
+
+- **256 passed / 4 failed / 8 skipped**；4 个失败经**独立单跑复核均为确定性红**（非长跑状态劣化）：
+  - `session.spec.ts` P10-S5/S6/S7：`locator.selectOption: waiting for getByRole('dialog').locator('#controller')` 超时——页面快照实证「新建会话」面板渲染于 `main` 内、**无 `role="dialog"`**；
+  - `settings-workspace.spec.ts`「should show workspace selection in New Session dialog」：`[data-slot="select-trigger"]` 位置索引 `nth(1)` 点击后工作区选项（`/home/test/workspace-a`）始终 hidden。
+
+### 23.6 发现
+
+#### 🟠 N-18：本 diff 新增测试的用户名生成违反既有校验，tests/api 必然红
+
+- **问题描述**：`tests/api/src/agent-api/session.test.ts` `signupWithId`（`sess_mcp_${base36(now)}_${rand4}`，22 字符）与 `controller.test.ts` Phase 9（`ctrl_dmcp_${Date.now()}`，23 字符）生成的用户名超出既有校验 `servers/agent-api/src/graphql/resolvers/auth.ts:31`「Username must be between 2 and 20 characters」（`98cd1b1` 存量），`signup` 恒返回 `errors` + `data:null`，后续 `body.data.signup.token` 抛 TypeError → T-API-MCP1~6 与 controller Phase 9 共 7 处确定性失败。
+- **实证**：`curl` 以 22/23 字符用户名 signup 均返回该校验错误；run6 干净实例 + env 全对齐后 6 用例仍红；单文件复跑并探针打印原始返回体确认。
+- **来源归属**：两处生成器均来自本 diff 提交 `3c5b7de`（on integration / not on release）；校验为存量。属「本 diff 交付的测试与交付的 API 不自洽」，此前八轮只跑包内单测未实跑 tests/api，**首次实跑即捕获**。
+- **修复要求**：生成 ≤20 字符用户名（或与产品口径统一放宽校验并同步前端/文档）；tests/api 常规全量转绿。
+
+#### 🟠 N-20：本 diff 交付的 e2e 与 UI 不自洽，4 用例确定性红
+
+- **问题描述**：① `NewSessionDialog.tsx:290` 根节点为普通 `div`（`fixed inset-0 z-50…`），未声明 `role="dialog"`（同目录 `ModeSelectDialog.tsx:32`/`ModelSelectDialog.tsx:55` 均有），而本 diff 的 P10-S5/S6/S7 以 `page.getByRole('dialog')` 限定作用域 → 定位器永不解析（页面快照实证面板渲染于 `main` 内、无 dialog 角色）；② `settings-workspace.spec.ts:275` 以 `[data-slot="select-trigger"]` **位置索引** `nth(1)` 定位工作区下拉，被 `c3d8601` 新增的模式/模型 Select 插入后索引错位 → 点击非工作区下拉，工作区选项始终 hidden。
+- **实证**：run7 全量 4 红；P10-S5 与 settings-workspace 用例独立单跑仍红（确定性）；快照/源码比对确认两个根因。
+- **修复要求**：`NewSessionDialog` 补 `role="dialog"`（与其模态语义及同目录组件一致）；e2e 改用稳定定位（`aria-label`/文本/`#controller`）替代位置索引；或同步更新用例与 UI 结构并附回退探针自证可红。
+
+#### 🟡 N-19：tests/api 环境开关未文档化
+
+- `HARNESS_ENABLED`（`cloud-host.test.ts` 分支开关）、`REDIS_URL`（`workflow.test.ts`）不在 `tests/api/AGENTS.md` 环境变量表；按文档默认值实跑会误入「feature disabled」分支（run5 的 T-CH2 即此因）。要求补文档（含 `CONTROLLER_API_URL` 基础 URL 口径、`MONGODB_URI` TLS 参数说明）。
+
+#### 环境缺口（挂账，非本 diff 代码缺陷）
+
+- acp-real：`minefield-online` fixture 缺失、opencode v2.1.1 agent 侧工具挂载、共享 PID 文件/端口竞态级联——需在预置环境复跑或人类书面豁免该项；
+- 无 K8s（`workload_list` 无 K8s 负载、无 kubectl）——cloud-controller/admin 云容器相关用例已在套件内自防护（skipIf）。
+
+### 23.7 结论
+
+第八轮返工对 N-16/N-17 的**修复属实且质量到位**（独立三探针实证区分力，含反事实 dead-assertion 闭环），自报数值逐项一致；但按人类指示首次实跑门禁④即暴露 **2×🟠 新缺陷**：🟠 N-18（本 diff 新增 tests/api 用例用户名超长违反既有校验，6 用例确定性红）、🟠 N-20（本 diff 新增 e2e 与 UI 不自洽，4 用例确定性红），另有 🟡 N-19 文档缺口与 acp-real 环境缺口挂账。integration 集成验收**第八轮打回（REJECT）**。
+
+**第九轮要求**：
+1. **N-18**：修正 Phase 9/MCP 用例用户名生成（≤20 字符）或与产品口径统一放宽校验；tests/api 常规全量转绿证据随修复交付；
+2. **N-20**：`NewSessionDialog` 补 `role="dialog"`、e2e 选择器改稳定定位（或同步用例与 UI 结构），4 用例转绿并附回退探针自证；
+3. **N-19**：`tests/api/AGENTS.md` 环境变量表补 `HARNESS_ENABLED`/`REDIS_URL`/`CONTROLLER_API_URL` 口径/`MONGODB_URI` TLS 说明；
+4. **门禁④**：随修复交付 tests/api 全量（含 acp-real）+ tests/e2e 全绿证据；acp-real 的 fixture/版本/PID 竞态前置须给出可复现环境清单，或申请人类书面豁免（本节点无权自行豁免）。
