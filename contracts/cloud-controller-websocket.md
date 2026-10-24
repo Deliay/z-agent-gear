@@ -197,11 +197,13 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
   "ZAG_USER_ID": "<前台用户 ID>",
   "ZAG_MODEL_API_KEY": "zag_sk_…",
   "ZAG_MODEL_BASE_URL": "http://admin-api:8002/v1",
-  "ZAG_MODEL_IDS": "[\"model-a\",\"model-b\"]"
+  "ZAG_MODEL_IDS": "[\"model-a\",\"model-b\"]",
+  "ZAG_MODEL_CONTEXT_LENGTHS": "{\"model-a\":128000}"
 }
 ```
 
 - `env` 仅随下发报文存在；worker 内存持有，`ZAG_MODEL_API_KEY`/`ZAG_HOST_KEY`/`ZAG_CONTROLLER_KEY` 在日志与错误消息中脱敏为 `***`。
+- `ZAG_MODEL_CONTEXT_LENGTHS`（可选）：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串；仅当 harness secrets 携带 `modelContextLengths` 时下发，未配置上下文长度的模型不出现在其中；旧 worker 忽略该变量不受影响。
 - `item.params` 的 `WORKLOAD_PARAM_*` 与容器 `env` 同名时，以 item 参数优先。
 - 普通容器不携带 `env`，行为不变。
 
@@ -397,6 +399,7 @@ Content-Type: application/json
     "modelApiKey": "zag_sk_…",
     "modelBaseUrl": "http://admin-api:8002/v1",
     "modelIds": "[\"model-a\"]",
+    "modelContextLengths": "{\"model-a\":128000}",
     "defaultWorkspace": "/root/workspace"
   },
   "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
@@ -406,6 +409,7 @@ Content-Type: application/json
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
 - `expiresAt` 同时用于 Job `activeDeadlineSeconds = max(60, floor((expiresAt-now)/1000))`；缺省沿用 `JOB_ACTIVE_DEADLINE_SECONDS=86400`。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
+- `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
 - Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`、`ZAG_AGENT_API_ENDPOINT`（agent-api 内部地址，来自 `AGENT_API_URL`）、`ZAG_CONTROLLER_ID`（云主机 controllerId）。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 - `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。

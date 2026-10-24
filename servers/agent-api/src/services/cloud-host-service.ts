@@ -257,6 +257,17 @@ export class CloudHostService {
               .filter(Boolean),
           ),
         );
+        // 模型 ID → 最长上下文快照（同名保留首个有效值；未设置 contextLength 的模型不出现）。
+        const modelContextLengths: Record<string, number> = {};
+        for (const model of models) {
+          if ((model as { isEnabled?: boolean }).isEnabled === false) continue;
+          const name = String((model as { name?: string }).name ?? '').trim();
+          if (!name || modelContextLengths[name] !== undefined) continue;
+          const contextLength = (model as { contextLength?: number | null }).contextLength;
+          if (typeof contextLength === 'number' && Number.isInteger(contextLength) && contextLength > 0) {
+            modelContextLengths[name] = contextLength;
+          }
+        }
 
         const modelKey = await billingClient.createCloudHostApiKey({
           accountId: account.id,
@@ -287,6 +298,7 @@ export class CloudHostService {
               modelApiKey: modelKey.secret,
               modelBaseUrl: config.cloudHostModelBaseUrl,
               modelIds: JSON.stringify(modelIds),
+              modelContextLengths: JSON.stringify(modelContextLengths),
               defaultWorkspace: config.cloudHostDefaultWorkspace,
             },
           })

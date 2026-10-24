@@ -20,7 +20,7 @@ export interface ZagProviderConfig {
     baseURL: string;
     apiKey: string;
   };
-  models: Record<string, { name: string }>;
+  models: Record<string, { name: string; limit?: { context: number } }>;
 }
 
 /** 写入 OpenCode 配置失败（消息只含路径/变量名，不含 key 等 secret）。 */
@@ -34,14 +34,19 @@ export class OpencodeConfigError extends Error {
 /** `provider.zag` 固定使用 OpenAI compatible provider 包。 */
 export const ZAG_PROVIDER_NPM = '@ai-sdk/openai-compatible';
 
-/** 由 harness env 构造 `provider.zag`（模型列表为空时 `models: {}`）。 */
+/** 由 harness env 构造 `provider.zag`（模型列表为空时 `models: {}`；有上下文长度时写 `limit.context`）。 */
 export function buildZagProvider(
-  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'>,
+  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'> &
+    Partial<Pick<HarnessEnv, 'modelContextLengths'>>,
 ): ZagProviderConfig {
-  const models: Record<string, { name: string }> = {};
+  const models: Record<string, { name: string; limit?: { context: number } }> = {};
   for (const id of env.modelIds) {
     if (!id) continue;
-    models[id] = { name: id };
+    const context = env.modelContextLengths?.[id];
+    models[id] =
+      typeof context === 'number' && Number.isInteger(context) && context > 0
+        ? { name: id, limit: { context } }
+        : { name: id };
   }
   return {
     npm: ZAG_PROVIDER_NPM,
@@ -84,7 +89,8 @@ export async function resolveOpencodeConfigPath(configDir = defaultConfigDir()):
 }
 
 export interface WriteOpencodeConfigOptions {
-  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'>;
+  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'> &
+    Partial<Pick<HarnessEnv, 'modelContextLengths'>>;
   /** 覆盖配置目录（测试/定制场景；缺省 `~/.config/opencode`）。 */
   configDir?: string;
 }

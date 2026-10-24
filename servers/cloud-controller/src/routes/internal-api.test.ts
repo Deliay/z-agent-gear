@@ -548,6 +548,7 @@ describe('internal management API', () => {
       modelApiKey: 'zag_sk_api-secret',
       modelBaseUrl: 'http://admin-api:8002/v1',
       modelIds: '["model-a"]',
+      modelContextLengths: '{"model-a":128000}',
       defaultWorkspace: '/root/workspace',
     };
     const expiresAt = new Date(Date.now() + 3600_000);
