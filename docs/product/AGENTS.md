@@ -135,6 +135,10 @@ flowchart LR
 - [[draft/20261022-cloud-container-optimization-phase1.md]] — 云容器优化一期（会话/工作流「+」列表实时刷新、新建云电脑初始化 Github 项目、新建会话默认注入 MCP 与默认 MCP 设置、拉起会话前置选择模型与模式）
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
 
+### 实现中文档（`shipping/`）
+
+- [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
+
 ### 已发布文档（`released/`）
 
 - [[released/20260517-agent-controller-v1.md]] — Agent 控制器管理 v1

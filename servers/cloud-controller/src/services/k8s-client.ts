@@ -32,7 +32,6 @@ export interface K8sJobManifest {
   };
   spec: {
     backoffLimit: number;
-    activeDeadlineSeconds: number;
     ttlSecondsAfterFinished: number;
     template: {
       metadata: { labels: Record<string, string> };
