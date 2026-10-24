@@ -708,7 +708,8 @@ describe('Controller default MCP API (Phase 9)', () => {
   let testControllerId = '';
 
   beforeAll(async () => {
-    const uid = `ctrl_dmcp_${Date.now()}`;
+    // N-18：用户名上限 20（auth.ts）
+    const uid = `dmcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
     const signupRes = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
     const signupBody = await signupRes.json();
     token = signupBody.data.signup.token;

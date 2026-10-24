@@ -2196,7 +2196,8 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
 }
 
 async function signupWithId(): Promise<{ token: string; userId: string }> {
-  const uid = `sess_mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  // N-18：用户名上限 20（auth.ts），用 16 字符稳定唯一前缀
+  const uid = `mcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
   const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
   const body = await res.json();
   return {
@@ -2216,6 +2217,10 @@ async function registerFreshController(
   );
   const keyBody = await keyRes.json();
   const client = createClient();
+  // 与真实 controller 一致：收到 acp:stop 立即 ack，避免 DELETE_SESSION 等待 ack 超时（N-18 实跑暴露）
+  client.on('acp:stop', (data: { sessionId: string }) => {
+    client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete' });
+  });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
   client.emit('register', {
     key: keyBody.data.createControllerKey.rawKey,

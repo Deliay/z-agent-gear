@@ -287,7 +287,12 @@ export default function NewSessionDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="新建会话"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-foreground">新建会话</h2>
         <form onSubmit={handleSubmit}>
@@ -464,7 +469,10 @@ export default function NewSessionDialog({
                   onValueChange={(value) => setSelectedWorkspace(value || '')}
                   disabled={isPreselected}
                 >
-                  <SelectTrigger className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}>
+                  <SelectTrigger
+                    aria-label="工作区"
+                    className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}
+                  >
                     <SelectValue>
                       {selectedWorkspace
                         ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace

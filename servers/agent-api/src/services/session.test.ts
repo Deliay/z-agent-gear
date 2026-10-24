@@ -2087,6 +2087,23 @@ describe('resolveInitialMcpServerIds', () => {
     ).toEqual(['srv-a']);
   });
 
+  it('accepts ObjectId-like serverIds from Mongo lean (regression: 真实 DB 子集不再被清空)', () => {
+    expect(
+      resolveInitialMcpServerIds(
+        {
+          useAllEnabled: false,
+          serverIds: [
+            { toString: () => 'srv-a' },
+            { toString: () => 'srv-disabled' },
+            null,
+          ],
+        },
+        undefined,
+        enabled,
+      ),
+    ).toEqual(['srv-a']);
+  });
+
   it('returns an empty list when the configured subset is fully disabled', () => {
     expect(
       resolveInitialMcpServerIds(

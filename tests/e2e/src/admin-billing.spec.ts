@@ -42,7 +42,8 @@ test.describe('Admin Billing E2E', () => {
     await expect(page.getByRole('heading', { name: '费用中心' })).toBeVisible();
     await expect(page.getByText('账户', { exact: true }).first()).toBeVisible();
 
-    // 选择账户后展示账单/收据/汇总
+    // 选择账户后展示账单/收据/汇总；先按关键字过滤，避免累积测试账户导致分页
+    await page.getByRole('textbox', { name: '按用户名 / 账户 ID 检索' }).fill('admin');
     await page.getByRole('row', { name: /admin/ }).first().click();
     await expect(page.getByText('账单明细')).toBeVisible();
     await expect(page.getByText(/后台充值/).first()).toBeVisible();

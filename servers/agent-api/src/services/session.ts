@@ -16,7 +16,8 @@ const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
 export interface ControllerDefaultMcpSnapshot {
   useAllEnabled?: boolean | null;
-  serverIds?: Array<string | null | undefined> | null;
+  /** Mongo lean 后可能是 ObjectId（schema 为 ObjectId[]），必须允许 toString */
+  serverIds?: Array<string | { toString(): string } | null | undefined> | null;
 }
 
 /**
@@ -39,10 +40,12 @@ export function resolveInitialMcpServerIds(
     return enabled;
   }
   const enabledSet = new Set(enabled);
+  // N-18 联动发现：Mongoose `defaultMcp.serverIds` 是 ObjectId[]，旧实现只接受 string，
+  // 导致真实 DB 路径把子集全部过滤为空（单测用 string 假数据所以未暴露）。
   const subset = (defaultMcp.serverIds ?? [])
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .filter((id): id is string | { toString(): string } => id !== null && id !== undefined)
     .map((id) => String(id))
-    .filter((id) => enabledSet.has(id));
+    .filter((id) => id.length > 0 && enabledSet.has(id));
   return Array.from(new Set(subset));
 }
 

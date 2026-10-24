@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-23，AI Review）
 
-> **状态**: 🔄 **第八轮 N-16/N-17 修复属实，但门禁④首次实跑捕获 2×🟠 新缺陷，第八轮打回（REJECT）**（详见[第二十三节](#二十三第八轮验收记录2026-10-24)）——第八轮对返工提交 `7d697eb`（origin/integration @ `5821c23..7d697eb`，PR #273）逐条复核第七轮 N-16/N-17：**N-16 属实**（断言③ flat 扫描 `console.warn` 全部参数覆盖 `call[1]`、新增 `runOutsideTransitionLock` 直通 spy 断言恰 1 次调度、`findById=2` 归因收窄；独立三探针实证：R1 → 红于调度次数（1≠3）、R1+中和②′ → 红于 `still holding`（call[1] 路径实证 flat 扫描生效）、反事实 R1+C 换回旧式 call[0] 扫描 → 恒真绿（dead assertion 实证，本轮修复必要））、**N-17 属实**（两形态 kind 前缀 + `instance=`/`session=` 断言与 `orchestrator.ts` 实现消息逐字一致）、自报数值与独立复跑逐项一致（tsc 0 error / agent-api 1005 passed / tests-e2e-typecheck exit=0 / lint×2 0 error 5 存量 warning）；备注 1 处非阻塞叙述笔误（22.1「（来源 call[1]）」应为 call[0]，断言/实现无误）。
+> **状态**: 🔄 **第九轮 N-18/N-19/N-20 已修复；隔离栈 tests/api 常规全量 + tests/e2e 全量双绿（547+2skip / 267+1skip），acp-real 环境型失败申请书面豁免**（详见[第二十三节](#二十三第八轮验收记录2026-10-24)）——第八轮对返工提交 `7d697eb`（origin/integration @ `5821c23..7d697eb`，PR #273）逐条复核第七轮 N-16/N-17：**N-16 属实**（断言③ flat 扫描 `console.warn` 全部参数覆盖 `call[1]`、新增 `runOutsideTransitionLock` 直通 spy 断言恰 1 次调度、`findById=2` 归因收窄；独立三探针实证：R1 → 红于调度次数（1≠3）、R1+中和②′ → 红于 `still holding`（call[1] 路径实证 flat 扫描生效）、反事实 R1+C 换回旧式 call[0] 扫描 → 恒真绿（dead assertion 实证，本轮修复必要））、**N-17 属实**（两形态 kind 前缀 + `instance=`/`session=` 断言与 `orchestrator.ts` 实现消息逐字一致）、自报数值与独立复跑逐项一致（tsc 0 error / agent-api 1005 passed / tests-e2e-typecheck exit=0 / lint×2 0 error 5 存量 warning）；备注 1 处非阻塞叙述笔误（22.1「（来源 call[1]）」应为 call[0]，断言/实现无误）。
 >
 > **门禁④ 首次实跑**（人类指示 `aspire start --isolated`，本节点实跑补证）：环境修复记录——宿主机 `/usr/local/bin/docker` 归一化 shim 把 `docker create --name` 的值误当镜像改写导致 DCP 容器名非法、mongodb/redis/rabbitmq 全部 FailedToStart（修复 shim 后隔离栈一次拉起全绿）；测试环境对齐 `CONTROLLER_API_URL` 基础 URL / `MONGODB_URI` TLS 自签兼容（`tlsAllowInvalidCertificates=true`）/ `HARNESS_ENABLED` / `REDIS_URL`。**tests/api 常规全量（干净实例）535 passed / 6 failed / 8 skipped**——6 红全部为 🟠 **N-18**（本 diff `3c5b7de` 新增 Phase 9/MCP 用例生成 22/23 字符用户名，违反既有 `auth.ts:31`「2-20 字符」校验、signup 恒失败：session T-API-MCP1~6 + controller Phase 9）；**tests/api acp-real 5 passed / 2 failed / 6 skipped**（环境缺口：`minefield-online` fixture 缺失、opencode v2.1.1 agent 侧 `TOOL_MISSING`、共享 PID 文件竞态级联）；**tests/e2e 256 passed / 4 failed / 8 skipped**——4 红全部为 🟠 **N-20**（本 diff 交付的 e2e 与 UI 不自洽：`NewSessionDialog` 根节点无 `role="dialog"` 而 P10-S5/S6/S7 以 `getByRole('dialog')` 定位、settings-workspace 以 `[data-slot="select-trigger"]` 位置索引 `nth(1)` 定位工作区下拉被 `c3d8601` 新增模式/模型 Select 插队错位；4 用例独立单跑均确定性红）；🟡 **N-19**（tests/api AGENTS.md 环境变量表缺 `HARNESS_ENABLED`/`REDIS_URL`）。integration 集成验收**第八轮打回（REJECT）**
 >
@@ -1183,3 +1183,49 @@ type: Permanent
 2. **N-20**：`NewSessionDialog` 补 `role="dialog"`、e2e 选择器改稳定定位（或同步用例与 UI 结构），4 用例转绿并附回退探针自证；
 3. **N-19**：`tests/api/AGENTS.md` 环境变量表补 `HARNESS_ENABLED`/`REDIS_URL`/`CONTROLLER_API_URL` 口径/`MONGODB_URI` TLS 说明；
 4. **门禁④**：随修复交付 tests/api 全量（含 acp-real）+ tests/e2e 全绿证据；acp-real 的 fixture/版本/PID 竞态前置须给出可复现环境清单，或申请人类书面豁免（本节点无权自行豁免）。
+
+## 二十四、第九轮返工修复记录（2026-10-24）
+
+> 本轮按人类指示用 `aspire start --isolated` 隔离栈首次完成真实全栈回归；所有修复均在隔离栈实跑验证。
+
+### 24.1 N-18（🟠）：tests/api 用户名超 20 字符
+
+- `session.test.ts signupWithId`：`sess_mcp_...`（22 字符）→ `mcp_<base36 8><rand4>`（16 字符）。
+- `controller.test.ts` Phase 9：`ctrl_dmcp_<Date.now()>`（23 字符）→ `dmcp_<base36 8><rand4>`（17 字符）。
+- **实跑又暴露两个真问题并一并修复**：
+  1. `resolveInitialMcpServerIds` 只接受 `string[]`，而 `Controller.defaultMcp.serverIds` 经 Mongoose lean 后是 **ObjectId[]**，真实 DB 路径把子集全部过滤为空 → T-API-MCP4 首个会话无 `mcpEndpoint`。修复为接受 `{ toString() }` 并 `String()` 归一，补 ObjectId-like 单测。
+  2. `createSessionCapture` 未 ack `acp:stop`，DELETE_SESSION 等 ack 超时导致 15s 用例超时。`registerFreshController` 增加 acp:stop 即时 ack（与真实 controller 行为一致）。
+
+### 24.2 N-20（🟠）：e2e 与 UI 不自洽
+
+| 项 | 修复 |
+|---|---|
+| P10-S5/S6/S7 `getByRole('dialog')` 失效 | `NewSessionDialog` 根节点补 `role="dialog" aria-modal="true" aria-label="新建会话"` |
+| settings-workspace 下拉索引错位 | 工作区 `SelectTrigger` 补 `aria-label="工作区"`；`settings-workspace.spec`、`github-workload.spec` 改用稳定 `[data-slot="select-trigger"][aria-label="工作区"]` |
+| P10-S6 插入的 MCP 不可见 | 集合名错误：测试写 `mcpServers`，Mongoose 实际集合为 **`mcpservers`**；并补「seed 后 GraphQL 必须可读」自检断言 |
+| P10-CH2/CH3 GitHub 账号不可见 | seed 的 `githubUserId/installationId = Date.now()` 超出 GraphQL **32 位 Int**；改为 32 位安全值，`installationId` 用 10 位随机数避免全局唯一索引冲突 |
+| P10-CH3 重试后「进行中」断言过严 | 无 worker 时重试会立即再次失败；改为直查 `cloud_host_setup_operations.updatedAt` 前移，证明重试链路生效 |
+| E2E-1 提示断言早于 Harness 勾选 | 将「就绪后不会自动创建会话…」断言移到勾选 OpenCode 之后（UI 条件为单 Harness） |
+| 新云电脑弹窗 footer 不可点击 | `DialogContent` 增加 `max-h-[calc(100vh-2rem)] overflow-y-auto`，长表单可滚动到「创建云电脑」 |
+| admin 账单行定位受历史账户分页影响 | 先按「按用户名 / 账户 ID 检索」过滤再点行（稳定定位） |
+
+### 24.3 N-19（🟡）：tests/api 环境变量文档
+
+`tests/api/AGENTS.md` 环境表补充/修正：
+- `CONTROLLER_API_URL` 明确为 **基础地址**（Socket.IO 直连，不要带 `/graphql`）；
+- `MONGODB_URI` 注明 Aspire `tls=true` 自签需 `tlsAllowInvalidCertificates=true`、shell 单引号包裹；
+- 新增 `HARNESS_ENABLED=true`（否则误入 feature-disabled 分支）与 `REDIS_URL`（workflow 套件直连 Redis）。
+
+### 24.4 门禁④ 实跑证据（隔离栈）
+
+环境：`aspire start --isolated`；agent-api `http://localhost:34995`、admin-api `46133`、controller-api `42259`、cloud-controller `39739`、agent-web `32923`、admin-web `35835`；Mongo/Redis TLS 参数按 24.3。
+
+| 套件 | 命令/环境 | 结果 |
+|---|---|---|
+| tests/api 常规全量 | `npm test` + 完整 env | ✅ **35 文件 / 547 passed / 2 skipped（exit 0）** |
+| tests/e2e 全量 | `npx playwright test` + `BASE_URL`/`ADMIN_WEB_URL` + 完整 env | ✅ **267 passed / 1 skipped（exit 0，16.0m）** |
+| tests/api acp-real | `npm run test:real` | ⚠️ **5 passed / 2 failed / 6 skipped**：`acp-real-mcp-passthrough`（opencode 环境 TOOL_MISSING）、`acp-real-session-import`（本机无 minefield fixture）；其余 4 文件因 fixture/版本缺失整文件 skip |
+| 单测 | 五包 | ✅ agent-api **1006** / admin-api 656+1skip / cloud-controller 254 / admin-web 235 / agent-web **663** |
+| tsc / lint / e2e typecheck | — | ✅ tsc×7 0 error；lint 0 error（5 存量 warning）；typecheck exit=0 |
+
+**acp-real 豁免申请**：2 个失败与 4 个整文件 skip 均依赖本机不具备的真实 ACP fixture（minefield-online 会话、opencode v2.1.1 工具集）与共享 PID/端口独占；常规 `tests/api` 全量与 `tests/e2e` 全量已全绿。请人类裁定 acp-real 环境型失败是否书面豁免，或提供预置 fixture 的干净主机复跑。
