@@ -134,6 +134,7 @@ flowchart LR
 - [[draft/20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑，v5.0 停止即销毁/会话只读/每用户 1 实例；会话导入导出与统一存储二期）
 - [[draft/20261022-cloud-container-optimization-phase1.md]] — 云容器优化一期（会话/工作流「+」列表实时刷新、新建云电脑初始化 Github 项目、新建会话默认注入 MCP 与默认 MCP 设置、拉起会话前置选择模型与模式）
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
+- [[draft/20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（后台配置的模型最长上下文随模型清单写入云电脑内 OpenCode 配置）
 
 ### 已发布文档（`released/`）
 

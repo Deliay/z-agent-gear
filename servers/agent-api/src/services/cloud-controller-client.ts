@@ -25,6 +25,8 @@ export interface StartHarnessInput {
     modelApiKey: string;
     modelBaseUrl: string;
     modelIds: string;
+    /** 模型 ID → 最长上下文（token）JSON object 字符串（无有效条目时为 `{}`）。 */
+    modelContextLengths: string;
     defaultWorkspace: string;
   };
 }

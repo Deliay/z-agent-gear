@@ -116,6 +116,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         modelApiKey: 'zag_sk_test_secret',
         modelBaseUrl: 'http://admin-api:8002/v1',
         modelIds: '["model-a"]',
+        modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/root/workspace',
       };
 

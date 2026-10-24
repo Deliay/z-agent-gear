@@ -113,7 +113,8 @@ RUN printf '%s\n' \
 
 # 4) npm 走内网代理并全局预装 Agent 工具链（镜像 3 包；OpenCode 由 harness 工作负载安装）
 #    镜像只预装 agent-gear + ACP 适配器（claude-agent-acp / codex-acp）：
-#    - agent-gear 固定 2.6.x：`workload:run.githubAuth` 与云电脑 Github 凭据管理器自 2.6.0 起提供；
+#    - agent-gear 固定 2.7.x：opencode 配置模型上下文长度（`limit.context`，ZAG_MODEL_CONTEXT_LENGTHS）自 2.7.0 起；
+#      `workload:run.githubAuth` 与云电脑 Github 凭据管理器自 2.6.0 起提供；
 #      云电脑双连接与 `harness prepare` 自 2.5.0 起；工作负载「必须」短路（items[].required）自 2.4.0 起、
 #      参数注入自 2.3.0 起；避免构建期取到不支持这些能力的旧版本（普通容器门禁仍为 >=2.2.0）。
 #    - **不预装 `@opencode/cli`**：OpenCode 由「OpenCode（Harness）」工作负载的 init 脚本按
@@ -121,7 +122,7 @@ RUN printf '%s\n' \
 #      （见 servers/admin-api 迁移 005 与 BUILD.md）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.6.x \
+      agent-gear@2.7.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force

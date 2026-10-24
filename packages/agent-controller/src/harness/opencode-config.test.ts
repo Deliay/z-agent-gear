@@ -47,6 +47,19 @@ describe('buildZagProvider (T-AG9/T-AG11)', () => {
   it('writes models:{} for an empty model list', () => {
     expect(buildZagProvider({ ...ENV, modelIds: [] }).models).toEqual({});
   });
+
+  it('writes limit.context for models with a context length and omits it otherwise', () => {
+    const provider = buildZagProvider({
+      ...ENV,
+      modelIds: ['model-a', 'model-b', 'model-c'],
+      modelContextLengths: { 'model-a': 128000, 'model-c': 0 },
+    });
+    expect(provider.models).toEqual({
+      'model-a': { name: 'model-a', limit: { context: 128000 } },
+      'model-b': { name: 'model-b' },
+      'model-c': { name: 'model-c' },
+    });
+  });
 });
 
 describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {

@@ -13,6 +13,8 @@ export interface HarnessEnv {
   modelApiKey: string;
   /** 可用模型 ID 列表（`ZAG_MODEL_IDS`，JSON 数组字符串，去空去重）。 */
   modelIds: string[];
+  /** 模型 ID → 最长上下文 token 数（`ZAG_MODEL_CONTEXT_LENGTHS`，可选；缺省 `{}`）。 */
+  modelContextLengths: Record<string, number>;
   /** 默认工作区（`ZAG_DEFAULT_WORKSPACE`）。 */
   defaultWorkspace: string;
 }
@@ -60,10 +62,37 @@ export function parseModelIds(raw: string): string[] {
 }
 
 /**
+ * 解析 `ZAG_MODEL_CONTEXT_LENGTHS`（可选）：必须是「值为正整数」的 JSON object；
+ * 键 trim 后去空。非法 JSON / 非 object / 值非正整数 → 明确报错（不输出原始值）。
+ */
+export function parseModelContextLengths(raw: string): Record<string, number> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new HarnessEnvError('ZAG_MODEL_CONTEXT_LENGTHS must be a JSON object of positive integers (invalid JSON)');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HarnessEnvError('ZAG_MODEL_CONTEXT_LENGTHS must be a JSON object of positive integers');
+  }
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const id = key.trim();
+    if (!id) continue;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new HarnessEnvError('ZAG_MODEL_CONTEXT_LENGTHS must be a JSON object of positive integers (invalid value)');
+    }
+    result[id] = value;
+  }
+  return result;
+}
+
+/**
  * 读取并校验 harness env。
  *
  * 必需：`ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS` / `ZAG_DEFAULT_WORKSPACE`
  * （云电脑 Job env 与 `workload:run.env` 均由 agent-api 注入，缺失说明编排不正确）。
+ * 可选：`ZAG_MODEL_CONTEXT_LENGTHS`（缺省/空串归一为 `{}`；旧服务端不下发时优雅降级）。
  */
 export function readHarnessEnv(env: NodeJS.ProcessEnv = process.env): HarnessEnv {
   const missing: string[] = [];
@@ -80,10 +109,13 @@ export function readHarnessEnv(env: NodeJS.ProcessEnv = process.env): HarnessEnv
     throw new HarnessEnvError(`missing required environment variable(s): ${missing.join(', ')}`);
   }
 
+  const rawModelContextLengths = nonEmpty(env.ZAG_MODEL_CONTEXT_LENGTHS);
+
   return {
     modelBaseUrl,
     modelApiKey,
     modelIds: parseModelIds(rawModelIds),
+    modelContextLengths: rawModelContextLengths ? parseModelContextLengths(rawModelContextLengths) : {},
     defaultWorkspace,
   };
 }

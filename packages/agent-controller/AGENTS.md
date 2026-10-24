@@ -55,8 +55,9 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.6.0`（major 保持 2；Github 凭据管理器 / `workload:run.githubAuth`，cloud-controller 对
-  `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`）。云电脑双连接 / `harness prepare` 自
+- 版本：包版本 `2.7.0`（major 保持 2；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起；Github 凭据管理器 /
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`——
+  上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
@@ -125,11 +126,14 @@ init 脚本（admin-api 迁移 005）在安装固定版本 OpenCode 后执行 `a
 
 1. 校验 `ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS`（JSON 数组，去空去重）/
    `ZAG_DEFAULT_WORKSPACE`；缺失项按变量名报错并非零退出（不泄漏其它 env 值）。
+   可选 `ZAG_MODEL_CONTEXT_LENGTHS`（JSON object：模型 ID → 最长上下文 token 正整数；
+   缺省/空串归一 `{}`，非法值报错）——2.7.0 起写入 opencode 模型条目 `limit.context`。
 2. `opencode --version` 硬校验（旧版兼容 `opencode -v`），失败非零退出。
 3. `mkdir -p ZAG_DEFAULT_WORKSPACE`。
 4. 定位 `~/.config/opencode/opencode.jsonc`：同目录已有 `.json` 且无 `.jsonc` 时合并 `.json`；否则新建
    `.jsonc`。使用 `jsonc-parser` 保留注释与既有 provider，仅替换 `provider.zag`；权限 0600。
-   `provider.zag = { npm: '@ai-sdk/openai-compatible', name: 'ZAG', options: { baseURL, apiKey }, models: { <id>: { name: <id> } } }`。
+   `provider.zag = { npm: '@ai-sdk/openai-compatible', name: 'ZAG', options: { baseURL, apiKey }, models: { <id>: { name: <id>, limit?: { context } } } }`
+   （`limit.context` 仅在 `ZAG_MODEL_CONTEXT_LENGTHS` 含该模型正整数上下文时写入）。
 
 > 镜像**不预装** `@opencode/cli`，由 harness 工作负载按 `OPENCODE_CLI_VERSION` 固定版本安装。
 

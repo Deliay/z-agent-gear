@@ -1219,6 +1219,41 @@ describe('WorkloadDispatcher - harness env', () => {
     expect((await repo.findById(container.id))?.status).toBe('initializing');
   });
 
+  it('harness init 批次在 secrets 携带 modelContextLengths 时注入 ZAG_MODEL_CONTEXT_LENGTHS', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'agent-gear harness prepare' }));
+    const container = await createHarnessContainer(['w1'], { harnessTypes: ['opencode'] });
+    secretStore.put(container.id, {
+      ...secrets,
+      modelContextLengths: '{"model-a":128000}',
+    });
+
+    const started = await dispatcher.startInit(container.id);
+
+    expect(started).toEqual({ initializing: true, requiredFailure: null });
+    expect(runs('init')[0]!.payload.env).toMatchObject({
+      ZAG_MODEL_CONTEXT_LENGTHS: '{"model-a":128000}',
+    });
+  });
+
+  it('secrets 缺失 modelContextLengths 时 env 不携带 ZAG_MODEL_CONTEXT_LENGTHS（向后兼容）', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'agent-gear harness prepare' }));
+    const container = await createHarnessContainer(['w1'], { harnessTypes: ['opencode'] });
+    secretStore.put(container.id, secrets);
+
+    await dispatcher.startInit(container.id);
+
+    const env = runs('init')[0]!.payload.env as Record<string, string>;
+    expect('ZAG_MODEL_CONTEXT_LENGTHS' in env).toBe(false);
+  });
+
   it('T-CC1/T-CC8: idle init 批次不携带 env（行为不变）', async () => {
     const { dispatcher, workloadRepository, createContainer, runs } = setup();
     workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));

@@ -287,6 +287,9 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     modelIds: nonEmptyString(record.modelIds) ?? '',
     defaultWorkspace: nonEmptyString(record.defaultWorkspace) ?? '',
   };
+  // 可选字段（滚动升级期间旧调用方不下发）：非空字符串才透传，不参与必填校验。
+  const modelContextLengths = nonEmptyString(record.modelContextLengths);
+  if (modelContextLengths) secrets.modelContextLengths = modelContextLengths;
   if (Object.values(secrets).some((value) => value.length === 0)) return null;
 
   const controllerId = nonEmptyString(body.controllerId);

@@ -229,6 +229,8 @@ export function buildHarnessEnv(
   env.ZAG_MODEL_API_KEY = secrets.modelApiKey;
   env.ZAG_MODEL_BASE_URL = secrets.modelBaseUrl;
   env.ZAG_MODEL_IDS = secrets.modelIds;
+  // 可选：模型 ID → 最长上下文（契约 §2.9）；缺失不下发，旧 worker 无感。
+  if (secrets.modelContextLengths) env.ZAG_MODEL_CONTEXT_LENGTHS = secrets.modelContextLengths;
 
   return { ok: true, env };
 }

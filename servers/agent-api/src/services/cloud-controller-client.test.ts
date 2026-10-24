@@ -39,6 +39,7 @@ describe('CloudControllerClient', () => {
         modelApiKey: 'zag_sk_x',
         modelBaseUrl: 'http://admin-api/v1',
         modelIds: '["a"]',
+        modelContextLengths: '{"a":128000}',
         defaultWorkspace: '/root/workspace',
       },
     });
