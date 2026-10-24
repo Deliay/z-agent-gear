@@ -12,11 +12,11 @@ import {
 } from 'jsonc-parser';
 import type { HarnessEnv } from './env.js';
 
-/** OpenCode 配置中 `provider.zag` 的结构（OpenAI-compatible 自定义 provider）。 */
+/** OpenCode 配置中 `providers.zag` 的结构（OpenCode v2 OpenAI-compatible 自定义 provider）。 */
 export interface ZagProviderConfig {
-  npm: string;
+  package: string;
   name: string;
-  options: {
+  settings: {
     baseURL: string;
     apiKey: string;
   };
@@ -31,10 +31,10 @@ export class OpencodeConfigError extends Error {
   }
 }
 
-/** `provider.zag` 固定使用 OpenAI compatible provider 包。 */
-export const ZAG_PROVIDER_NPM = '@ai-sdk/openai-compatible';
+/** `providers.zag` 固定使用 OpenCode v2 OpenAI compatible provider 包。 */
+export const ZAG_PROVIDER_PACKAGE = '@opencode/ai/providers/openai-compatible';
 
-/** 由 harness env 构造 `provider.zag`（模型列表为空时 `models: {}`；有上下文长度时写 `limit.context`）。 */
+/** 由 harness env 构造 `providers.zag`（模型列表为空时 `models: {}`；有上下文长度时写 `limit.context`）。 */
 export function buildZagProvider(
   env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'> &
     Partial<Pick<HarnessEnv, 'modelContextLengths'>>,
@@ -49,9 +49,9 @@ export function buildZagProvider(
         : { name: id };
   }
   return {
-    npm: ZAG_PROVIDER_NPM,
+    package: ZAG_PROVIDER_PACKAGE,
     name: 'ZAG',
-    options: {
+    settings: {
       baseURL: env.modelBaseUrl,
       apiKey: env.modelApiKey,
     },
@@ -107,7 +107,7 @@ export interface WriteOpencodeConfigResult {
 /**
  * 写入/合并 OpenCode 配置：
  *
- * - 用 `jsonc-parser` 的 `modify` 仅替换 `provider.zag`，保留注释与既有 provider；
+ * - 用 `jsonc-parser` 的 `modify` 仅替换 `providers.zag`，保留注释与既有 provider；
  * - 文件权限固定 `0600`（含已存在文件），目录权限收紧为 `0700`（含已存在目录）；
  * - 同目录临时文件 + `rename` 原子替换（避免半写文件，C-7）；
  * - 非法 JSONC 直接报错（不覆盖用户配置，避免静默丢数据）。
@@ -159,7 +159,7 @@ export async function writeOpencodeConfig(
     eol: text.includes('\r\n') ? '\r\n' : '\n',
   };
   const provider = buildZagProvider(options.env);
-  const edits = modify(text, ['provider', 'zag'], provider, { formattingOptions });
+  const edits = modify(text, ['providers', 'zag'], provider, { formattingOptions });
   let content = applyEdits(text, edits);
   if (!content.endsWith('\n')) content += '\n';
 

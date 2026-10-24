@@ -26,7 +26,7 @@ export interface PrepareHarnessOptions {
  * 1. 校验 harness env（缺失项明确报错）；
  * 2. `opencode --version` 硬校验（不通过即失败）；
  * 3. `mkdir -p ZAG_DEFAULT_WORKSPACE`（幂等）；
- * 4. 写入/合并 `opencode.jsonc` 的 `provider.zag`（权限 0600）。
+ * 4. 写入/合并 `opencode.jsonc` 的 `providers.zag`（权限 0600）。
  *
  * secret 只写入配置文件，不进入日志/错误/返回值。
  */

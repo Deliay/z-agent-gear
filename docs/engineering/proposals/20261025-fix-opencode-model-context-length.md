@@ -7,20 +7,24 @@ type: Permanent
 
 **功能名称**: 云电脑 OpenCode 模型上下文长度下发
 **关联 PRD**: [[../../product/draft/20261025-opencode-model-context-length.md]]
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-25
 **作者**: ZeroAsh
 **feat-branch**: `fix/opencode-model-context-length`
+
+> v1.1 变更：修正 opencode 配置为 OpenCode v2 形态——顶层键 `provider` → `providers`，provider 条目
+> `npm`/`options` → `package`/`settings`（`@opencode/ai/providers/openai-compatible`）；v1.0 写入的 `provider`
+> 为 v1 遗留键，在 OpenCode 2.x 配置 schema 中已废弃。agent-gear 包版本相应 `2.7.0 → 2.7.1`。
 
 ## 1. 概述
 
 ### 1.1 背景
 
-云容器优化二期在 `Model.contextLength` 上落库了模型最长上下文，并经计费网关 `/v1/models` 的 `context_length` 透出。但云电脑 OpenCode 的 `provider.zag` 配置（`agent-gear harness prepare` 写入）只含模型 ID 清单（`ZAG_MODEL_IDS`），不含上下文长度，OpenCode 对每个模型按自身默认上下文窗口工作，与后台配置脱节。
+云容器优化二期在 `Model.contextLength` 上落库了模型最长上下文，并经计费网关 `/v1/models` 的 `context_length` 透出。但云电脑 OpenCode 的 `providers.zag` 配置（`agent-gear harness prepare` 写入）只含模型 ID 清单（`ZAG_MODEL_IDS`），不含上下文长度，OpenCode 对每个模型按自身默认上下文窗口工作，与后台配置脱节。
 
 ### 1.2 目标
 
-复用既有「模型清单快照」下发链路，把各模型的 `contextLength` 一并下发到 opencode 配置的 `provider.zag.models.<id>.limit.context`；未设置 `contextLength` 的模型不写 `limit`。
+复用既有「模型清单快照」下发链路，把各模型的 `contextLength` 一并下发到 opencode 配置的 `providers.zag.models.<id>.limit.context`；未设置 `contextLength` 的模型不写 `limit`。
 
 ### 1.3 范围
 
@@ -38,7 +42,7 @@ type: Permanent
 flowchart LR
     A[agent-api<br/>Model.contextLength] -->|secrets.modelContextLengths<br/>JSON object string| B[cloud-controller<br/>SecretStore]
     B -->|workload:run.env<br/>ZAG_MODEL_CONTEXT_LENGTHS| C[agent-gear<br/>harness prepare]
-    C -->|provider.zag.models.id.limit.context| D[opencode.jsonc]
+    C -->|providers.zag.models.id.limit.context| D[opencode.jsonc]
 ```
 
 ### 2.2 技术栈
@@ -72,7 +76,7 @@ opencode 配置模型条目：
 
 ```jsonc
 {
-  "provider": {
+  "providers": {
     "zag": {
       "models": {
         "model-a": { "name": "model-a", "limit": { "context": 128000 } },
@@ -100,7 +104,7 @@ opencode 配置模型条目：
 ### 5.2 关键实现点
 
 - **向后兼容**：新 env 全程可选——旧 agent-api/旧 cloud-controller/旧 worker 任意组合均不产生错误（旧 worker 忽略新 env，新 worker 容忍缺省）。
-- **版本**：agent-gear 包版本 `2.6.0 → 2.7.0`；worker 镜像 `agent-gear@2.6.x → @2.7.x`。`MIN_HARNESS_WORKER_VERSION` 不提升（缺失仅表现为不写 `limit`，优雅降级）。
+- **版本**：agent-gear 包版本 `2.6.0 → 2.7.0`（v1.1 修正 v2 配置形态后 `2.7.1`）；worker 镜像 `agent-gear@2.6.x → @2.7.x`。`MIN_HARNESS_WORKER_VERSION` 不提升（缺失仅表现为不写 `limit`，优雅降级）。
 - secret 约束不变：`modelContextLengths` 不含密钥，但仍遵循不落库、不打印。
 
 ## 6. 技术决策
@@ -130,7 +134,7 @@ opencode 配置模型条目：
 
 ## 9. 验收标准
 
-- 后台配置 `contextLength` 后新建云电脑，`~/.config/opencode/opencode.jsonc` 的 `provider.zag.models.<id>` 含 `limit.context`。
+- 后台配置 `contextLength` 后新建云电脑，`~/.config/opencode/opencode.jsonc` 的 `providers.zag.models.<id>` 含 `limit.context`。
 - 未配置的模型条目不含 `limit`。
 - 三个包 `npm run build` + `npm test` 全绿。
 
