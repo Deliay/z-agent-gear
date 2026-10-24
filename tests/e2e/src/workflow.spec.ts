@@ -512,6 +512,13 @@ function nodeCard(page: Page, nodeName: string) {
 // ---------------------------------------------------------------------------
 
 const PR_CALLBACK_TOKEN = process.env.EVENT_CALLBACK_TOKEN ?? '';
+
+// U-4：避免 6 处 test.skip(!PR_CALLBACK_TOKEN) 在 CI 静默全绿
+test('PR 回调环境哨兵：CI 下必须配置 EVENT_CALLBACK_TOKEN（SKIP_PR_CALLBACK=1 可显式跳过）', () => {
+  if (process.env.SKIP_PR_CALLBACK === '1') return;
+  if (!process.env.CI) return;
+  expect(PR_CALLBACK_TOKEN).toBeTruthy();
+});
 let prE2eSeq = Number(String(Date.now()).slice(-6)) * 10;
 function nextE2ePr(): string {
   return `Deliay/z-agent-gear#${prE2eSeq++}`;
@@ -628,12 +635,13 @@ async function waitForNodeStatus(
   instanceId: string,
   nodeKey: string,
   status: string,
-) {
-  return waitFor(async () => {
+): Promise<InstanceNode> {
+  // waitFor 超时会抛错，成功分支必非空
+  return (await waitFor(async () => {
     const inst = await getInstance(page, token, instanceId);
     const node = inst.nodes.find((n) => n.nodeKey === nodeKey);
     return node?.status === status ? node : null;
-  }, 15000, `${nodeKey}=${status}`);
+  }, 15000, `${nodeKey}=${status}`))!;
 }
 
 /** 完成 input 并返回 exec 的 acp:start（含节点作用域 token） */
@@ -1626,9 +1634,11 @@ test.describe('Workflow E2E', () => {
     await expect(dialog.getByText('实例化前配置')).toBeVisible();
     await expect(dialog.getByText(/来源：模板/)).toBeVisible();
     await dialog.locator('[data-slot="select-trigger"][aria-label="AI执行 Harness 工具"]').click();
-    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    // Base UI Select 的 popup keepMounted：关闭后残留隐藏 option 节点，
+    // 同名定位须限定当前打开的 popup（[data-open]），否则 click 可能命中残留节点超时（N-21）
+    await page.locator('[data-slot="select-popup"][data-open]').getByRole('option', { name: 'opencode', exact: true }).click();
     await dialog.locator('[data-slot="select-trigger"][aria-label="AI验收 Harness 工具"]').click();
-    await page.getByRole('option', { name: 'opencode', exact: true }).click();
+    await page.locator('[data-slot="select-popup"][data-open]').getByRole('option', { name: 'opencode', exact: true }).click();
     await dialog.getByRole('button', { name: '确认实例化', exact: true }).click();
 
     // 跳转到实例视图
@@ -2463,11 +2473,11 @@ test.describe('Workflow PR 联动 E2E', () => {
       15000,
       'exec acp:start',
     );
-    const promptText = await waitFor(async () => {
+    const promptText = (await waitFor(async () => {
       const texts = await getSessionMessagesText(page, env.token, execStart.sessionId);
       const joined = texts.join('\n');
       return joined.includes('## GitHub Pull Request 联动') ? joined : null;
-    }, 15000, 'github-pr prompt');
+    }, 15000, 'github-pr prompt'))!;
     expect(promptText.match(/## GitHub Pull Request 联动/g)).toHaveLength(1);
 
     await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
@@ -2497,10 +2507,10 @@ test.describe('Workflow PR 联动 E2E', () => {
     await expect(nodeCard(page, 'PR 审核').getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(nodeCard(page, '后续执行').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
 
-    const inst = await waitFor(async () => {
+    const inst = (await waitFor(async () => {
       const value = await getInstance(page, env.token, env.instanceId);
       return value.nodes.find((n) => n.nodeKey === 'after')?.sessionId ? value : null;
-    }, 15000, 'after session');
+    }, 15000, 'after session'))!;
     const afterNode = inst.nodes.find((n) => n.nodeKey === 'after')!;
     await waitFor(
       () => env.controller.starts.find((s) => s.sessionId === afterNode.sessionId && s.mcpEndpoint?.token),
@@ -2582,7 +2592,8 @@ test.describe('Workflow PR 联动 E2E', () => {
 
     const result = await postPrEvent(prEventBody(pr, 'approved'));
     expect(result.body.handled).toBe(false);
-    expect(['NO_HANDLER', 'INSTANCE_ARCHIVED']).toContain(result.body.reason);
+    // 归档时已注销全部登记：事件入口应为 NO_HANDLER（精确值）
+    expect(result.body.reason).toBe('NO_HANDLER');
     const inst = await getInstance(page, env.token, env.instanceId);
     expect(inst.pullRequestLinks).toHaveLength(0);
     expect(inst.nodes.find((n) => n.nodeKey === 'review')!.status).toBe('RUNNING');

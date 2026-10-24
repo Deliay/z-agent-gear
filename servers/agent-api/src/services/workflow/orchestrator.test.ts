@@ -31,6 +31,7 @@ vi.mock('../../models/workflow-instance.js', () => ({
   WorkflowInstance: {
     findById: vi.fn(),
     findOne: vi.fn(),
+    updateOne: vi.fn(),
   },
 }));
 
@@ -140,6 +141,7 @@ describe('WorkflowOrchestrator', () => {
     vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(makeConfigured()));
     vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
     vi.mocked(McpServer.findOneAndUpdate).mockResolvedValue({ _id: oid('mcp-platform-1') } as never);
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
   });
 
   it('O1: AI 节点 start 提示词组装 = 系统提示 + 节点提示词数组 + 全部上游产物', async () => {
@@ -319,7 +321,7 @@ describe('WorkflowOrchestrator', () => {
       expect.objectContaining({ workflowNodeId: 'n3' }),
     );
     // 本会话被结束，且顺序：先 create（下游）后 close（本会话）
-    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(vi.mocked(sessionService.create).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(sessionService.close).mock.invocationCallOrder[0],
     );
@@ -331,6 +333,7 @@ describe('WorkflowOrchestrator', () => {
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
     vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
     await workflowOrchestrator.handleSessionEnded('sess-2');
 
@@ -340,7 +343,11 @@ describe('WorkflowOrchestrator', () => {
     expect(content).toContain('工作流');
     expect(content).toContain('工具');
     expect(instance.nodes[0].fallbackSent).toBe(true);
-    expect(instance.save).toHaveBeenCalled();
+    // N-1④：fallbackSent 用字段级更新，避免整文档 save 与并发转移互覆
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: instance._id }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
 
     // 第二次停止：不再 resume（防死循环），节点升级为 FAILED（阻断流程等待人工介入）
     vi.clearAllMocks();
@@ -406,7 +413,21 @@ describe('WorkflowOrchestrator', () => {
     expect(sessionService.addMessage).toHaveBeenCalled();
     expect(lastInputMessage()).toContain('工作流');
     expect(instance.nodes[0].fallbackSent).toBe(true);
-    expect(instance.save).toHaveBeenCalled();
+    // N-5：字段级条件更新，且不整文档 save（避免覆盖并发转移）
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: instance._id,
+        nodes: {
+          $elemMatch: expect.objectContaining({
+            nodeId: 'n2',
+            sessionId: 'sess-2',
+            status: { $in: ['RUNNING', 'REWORK'] },
+          }),
+        },
+      }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    expect(instance.save).not.toHaveBeenCalled();
     // 未升级失败
     expect(instance.nodes[0].status).toBe('RUNNING');
   });
@@ -438,6 +459,233 @@ describe('WorkflowOrchestrator', () => {
 
     expect(sessionService.addMessage).not.toHaveBeenCalled();
     expect(instance.save).not.toHaveBeenCalled();
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('N-4: 重试策略（mock transition）：re-entrant 一次后下一次尝试继续执行', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValueOnce(new Error('KeyedMutex re-entrant lock detected for key: inst-1'))
+      .mockResolvedValue({} as never);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      expect(transition).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(transition).toHaveBeenCalledTimes(2);
+    } finally {
+      transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-4: 重试有上限（3 次）并输出结构化告警，不无退避热循环', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValue(new Error('KeyedMutex re-entrant lock detected for key: inst-1'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(transition).toHaveBeenCalledTimes(4); // 首次 + 3 次重试
+
+      await vi.advanceTimersByTimeAsync(800);
+      expect(transition).toHaveBeenCalledTimes(4);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('retry exhausted'))).toBe(true);
+      // N-10(b)：超限不得静默丢链，必须创建人工介入待办
+      await vi.advanceTimersByTimeAsync(0);
+      expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instanceId: 'inst-1',
+          nodeId: 'n2',
+          sessionId: 'sess-2',
+          reason: expect.stringContaining('重试 3 次后仍失败'),
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+      transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-10: 真实定时器 + 外层锁超过退避窗口，延迟重试等待后节点最终 FAILED', async () => {
+    // 关键：不使用 fake timers（不传播 ALS）；真实 setTimeout 继承 held 视图，
+    // 且外层锁持有 350ms > 100/200ms 退避窗口，覆盖 N-10 生产形态。
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 直通 spy（不替换实现）：统计延迟重试调度次数。R1 fast-fail 形态会重排 3 次（≥3），用例转红。
+    const runOutside = vi.spyOn(workflowEngine, 'runOutsideTransitionLock');
+
+    workflowEngine.registerHooks({
+      onNodeStart: undefined,
+      onNodeRework: undefined,
+      onNodeResume: undefined,
+      onNodeDone: undefined,
+      onNodeRestart: async () => {
+        // 锁内 hook 同步触发兜底（re-entrant → 排入 100ms 延迟重试）
+        await workflowOrchestrator.handleSessionRemoved('sess-2');
+        // 模拟锁内网络调用/慢写：持有锁超过首轮退避窗口
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      },
+      onWorkflowFinished: undefined,
+    });
+
+    try {
+      const outer = workflowEngine.transition('inst-1', 'n2', 'restart', {});
+      // 首次重试在 100ms 触发时外层仍持锁；runDetached 必须等待而不是误抛
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(instance.nodes[0].status).toBe('RUNNING');
+
+      await outer;
+      // 等外层释放 + 延迟重试真实取锁执行 fail
+      const deadline = Date.now() + 3000;
+      while (instance.nodes[0].status !== 'FAILED' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      expect(instance.nodes[0].status).toBe('FAILED');
+      expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_START_FAILED' });
+      // N-13/N-16：不只看最终状态，直接证明「等待而非误抛 + 无重排」。
+      // ① findById 2 次仅证明「恰一次成功执行」（外层 + 一次成功重试）；R1 形态同样为 2，故不承担「无重排」证明。
+      expect(vi.mocked(WorkflowInstance.findById)).toHaveBeenCalledTimes(2);
+      // ② 调度次数：HEAD 恰 1 次（100ms 等待后成功）；R1 fast-fail 会重排 ≥3 次。
+      expect(runOutside).toHaveBeenCalledTimes(1);
+      // ③ 扫描 console.warn 全部参数（误抛文本在 call[1]），无重排/误抛。
+      const warnText = warn.mock.calls.flat().map((arg) => String(arg)).join('\n');
+      expect(warnText).not.toContain('fallback deferred retry failed');
+      expect(warnText).not.toContain('still holding');
+    } finally {
+      runOutside.mockRestore();
+      warn.mockRestore();
+      workflowEngine.registerHooks({
+        onNodeStart: undefined,
+        onNodeRework: undefined,
+        onNodeResume: undefined,
+        onNodeDone: undefined,
+        onNodeRestart: undefined,
+        onWorkflowFinished: undefined,
+      });
+    }
+  });
+
+  it('N-10(b): runDetached 异常时按退避重排，不一次性丢弃兜底链', async () => {
+    vi.useFakeTimers();
+    const transition = vi
+      .spyOn(workflowEngine, 'transition')
+      .mockRejectedValueOnce(new Error('KeyedMutex re-entrant lock detected for key: inst-1'))
+      .mockResolvedValue({} as never);
+    const runOutside = vi
+      .spyOn(workflowEngine, 'runOutsideTransitionLock')
+      .mockRejectedValueOnce(new Error('runDetached timed out waiting for key: inst-1'))
+      .mockImplementation((_id, task) => task());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+      await workflowOrchestrator.handleSessionEnded('sess-2');
+      expect(transition).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100); // 第一次 runDetached 失败 → 重排
+      await vi.advanceTimersByTimeAsync(200); // 第二次执行成功
+      expect(transition).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('rescheduling'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      runOutside.mockRestore();
+      transition.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('N-14: 超限时实例/节点不可查也输出结构化告警，不静默跳过', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(null as never);
+      await (workflowOrchestrator as unknown as {
+        notifyFallbackExhausted: (
+          kind: 'removed',
+          sessionId: string,
+          instanceId: string,
+        ) => Promise<void>;
+      }).notifyFallbackExhausted('removed', 'sess-x', 'inst-x');
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('removed fallback exhausted todo skipped: instance not found') &&
+            String(call[0]).includes('instance=inst-x') &&
+            String(call[0]).includes('session=sess-x'),
+        ),
+      ).toBe(true);
+
+      // 实例存在但会话节点已解绑（restart/复工置空 sessionId 的形态）
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [] }),
+      ]);
+      vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+      await (workflowOrchestrator as unknown as {
+        notifyFallbackExhausted: (
+          kind: 'removed',
+          sessionId: string,
+          instanceId: string,
+        ) => Promise<void>;
+      }).notifyFallbackExhausted('removed', 'sess-x', 'inst-1');
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('removed fallback exhausted todo skipped: node not found') &&
+            String(call[0]).includes('instance=inst-1') &&
+            String(call[0]).includes('session=sess-x'),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('N-5: idling 兜底与并发转移不互覆（字段级条件更新，无整文档 save）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2', fallbackSent: false }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await workflowOrchestrator.handleSessionIdled('sess-2');
+
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: instance._id,
+        nodes: {
+          $elemMatch: expect.objectContaining({
+            nodeId: 'n2',
+            sessionId: 'sess-2',
+            status: { $in: ['RUNNING', 'REWORK'] },
+          }),
+        },
+      }),
+      { $set: { 'nodes.$.fallbackSent': true } },
+    );
+    expect(instance.save).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).toHaveBeenCalled();
   });
 
   it('O10d: 非工作流会话的空闲事件 → 忽略', async () => {
@@ -476,7 +724,7 @@ describe('WorkflowOrchestrator', () => {
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
     // 关闭阻塞期间的空闲会话
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     // 以全新会话复工（startNodeSession 创建新会话并发送提示词）
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
@@ -516,7 +764,7 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({ workflowNodeId: 'n3' }),
@@ -533,13 +781,74 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowEngine.transition('inst-1', 'n3', 'restart', {});
 
-    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', expect.objectContaining({ suppressFallback: true }));
     expect(sessionService.create).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({ workflowNodeId: 'n3' }),
     );
     expect(instance.nodes[0].status).toBe('RUNNING');
     expect(instance.nodes[0].failInfo).toBeNull();
+  });
+
+  it('N-1: restart(RUNNING + fallbackSent=true) 不触发同步兜底嵌套，且恰拉起一个新会话', async () => {
+    const instance = makeInstance([
+      makeNode({
+        nodeId: 'n3',
+        nodeKey: 'impl',
+        type: 'AI',
+        name: '代码实现',
+        stage: 'impl',
+        status: 'RUNNING',
+        dependsOn: [],
+        sessionId: 'sess-old',
+        fallbackSent: true,
+      }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    workflowOrchestrator.register();
+
+    await expect(
+      workflowEngine.transition('inst-1', 'n3', 'restart', {}),
+    ).resolves.toBeDefined();
+
+    // 受控关闭旧会话（跳过兜底），不会在锁内嵌套 transition('fail')
+    expect(sessionService.close).toHaveBeenCalledWith(
+      'sess-old',
+      'user-1',
+      expect.objectContaining({ suppressFallback: true }),
+    );
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(instance.nodes[0].sessionId).toBe('sess-new');
+    expect(instance.nodes[0].status).toBe('RUNNING');
+  });
+
+  it('N-1: restart(RUNNING + fallbackSent=false) 不复活旧会话、不发兜底提示词', async () => {
+    const instance = makeInstance([
+      makeNode({
+        nodeId: 'n3',
+        nodeKey: 'impl',
+        type: 'AI',
+        name: '代码实现',
+        stage: 'impl',
+        status: 'RUNNING',
+        dependsOn: [],
+        sessionId: 'sess-old',
+        fallbackSent: false,
+      }),
+    ]);
+    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    workflowOrchestrator.register();
+
+    await workflowEngine.transition('inst-1', 'n3', 'restart', {});
+
+    // 旧会话不被 resume/兜底提示词复活（create 只发生一次：新会话）
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(instance.nodes[0].sessionId).toBe('sess-new');
   });
 
   it('restart 人类节点不拉起会话（类型守卫）', async () => {

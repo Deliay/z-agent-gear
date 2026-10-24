@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { GET_MCP_SERVERS, GET_CONTROLLERS } from '@/graphql/queries'
@@ -35,6 +35,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 function parseError(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
+  if (message.includes('MCP_SERVER_NOT_SELECTABLE')) return '平台云工具服务由系统自动注入，不可手动选择'
   if (message.includes('MCP_SERVER_NOT_FOUND')) return '所选 MCP 已停用或不存在，请重新选择'
   if (message.includes('Controller not found')) return '控制器不存在或已删除'
   return message || '保存失败，请稍后重试'
@@ -63,10 +64,19 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const [useAllEnabled, setUseAllEnabled] = useState(defaultMcp?.useAllEnabled !== false)
   const [serverIds, setServerIds] = useState<string[]>(defaultMcp?.serverIds ?? [])
   const [error, setError] = useState<string | null>(null)
+  // C-18：用户已编辑但未保存时，后台轮询/父级刷新不得覆盖表单
+  const dirtyRef = useRef(false)
+  const prevControllerIdRef = useRef(controller.id)
 
   // 控制器数据刷新后同步服务端权威值（保存成功由 mutation 结果/refetch 驱动）
   const serverIdsKey = (defaultMcp?.serverIds ?? []).join(',')
   useEffect(() => {
+    // 切换控制器必须强制重置，不能把上一台的脏值/错误带过去
+    if (prevControllerIdRef.current !== controller.id) {
+      prevControllerIdRef.current = controller.id
+      dirtyRef.current = false
+    }
+    if (dirtyRef.current) return
     setUseAllEnabled(defaultMcp?.useAllEnabled !== false)
     setServerIds(defaultMcp?.serverIds ?? [])
     setError(null)
@@ -83,6 +93,7 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const staleIds = serverIds.filter((id) => !servers.some((s) => s.id === id))
 
   const toggleServer = (serverId: string, checked: boolean) => {
+    dirtyRef.current = true
     setServerIds((prev) =>
       checked ? [...prev.filter((id) => id !== serverId), serverId] : prev.filter((id) => id !== serverId),
     )
@@ -91,13 +102,21 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
   const handleSave = async () => {
     setError(null)
     try {
-      await saveDefaultMcp({
+      const result = await saveDefaultMcp({
         variables: {
           controllerId: controller.id,
           useAllEnabled,
           serverIds: useAllEnabled ? [] : serverIds,
         },
       })
+      // N-2：保存成功后解除 dirty，并立即回写服务端权威值（不能永久短路同步 effect）
+      dirtyRef.current = false
+      const saved = result?.data?.setControllerDefaultMcp?.defaultMcp
+      if (saved) {
+        setUseAllEnabled(saved.useAllEnabled !== false)
+        setServerIds(saved.serverIds ?? [])
+      }
+      setError(null)
       toast.success('已保存，对后续新建会话生效')
     } catch (err) {
       setError(parseError(err))
@@ -118,7 +137,10 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
             type="checkbox"
             aria-label="默认注入全部 MCP"
             checked={useAllEnabled}
-            onChange={(event) => setUseAllEnabled(event.target.checked)}
+            onChange={(event) => {
+              dirtyRef.current = true
+              setUseAllEnabled(event.target.checked)
+            }}
             className="mt-0.5 h-4 w-4 shrink-0"
           />
           <span className="min-w-0">

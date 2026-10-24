@@ -144,8 +144,11 @@ export const controllerResolvers = {
         return result;
       } catch (err) {
         if (err instanceof GraphQLError) throw err;
-        if ((err as Error).message === 'MCP_SERVER_NOT_FOUND') {
-          throw new GraphQLError('MCP_SERVER_NOT_FOUND');
+        if (
+          (err as Error).message === 'MCP_SERVER_NOT_FOUND' ||
+          (err as Error).message === 'MCP_SERVER_NOT_SELECTABLE'
+        ) {
+          throw new GraphQLError((err as Error).message);
         }
         throw new GraphQLError((err as Error).message);
       }

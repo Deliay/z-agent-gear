@@ -346,6 +346,20 @@ export class CloudHostGithubService {
         String(op.userId),
         targetPath,
       );
+      // U-1：workspaceId 与 createSession 成败无关——工作区一旦创建即回写，
+      // 否则会话创建失败时 hasDefaultWorkspace 仍为 false，无法区分「无工作区」与「默认会话创建失败」。
+      // phase2：Git 项目设置是创建默认工作区的唯一入口（CAS：不覆盖既有绑定）。
+      if (op.hostId) {
+        await CloudHost.updateOne(
+          { _id: op.hostId, workspaceId: null },
+          { $set: { workspaceId: workspace.id } },
+        ).catch((err) => {
+          console.warn(
+            '[cloud-host-github] backfill workspaceId failed:',
+            (err as Error).message,
+          );
+        });
+      }
       const session = await this.createSession(String(op.userId), {
         controllerId: String(op.controllerId),
         workspaceId: String(workspace.id),

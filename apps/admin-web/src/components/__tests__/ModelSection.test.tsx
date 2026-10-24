@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ModelSection from '../models/ModelSection'
 import CustomModelDialog from '../models/CustomModelDialog'
+import type { AdminModelData } from '@/graphql/types'
 
 const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => void) }))
 
@@ -483,6 +484,36 @@ describe('CustomModelDialog', () => {
 
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: '  gpt-4o  ' } })
     expect(screen.getByText('模型名已存在')).toBeDefined()
+  })
+
+  it('R-10: 弹窗打开期间父级重渲染（providers 新数组引用）不会重置在填表单', () => {
+    const editing = model('m1', { contextLength: 128000 }) as unknown as AdminModelData
+    const onSave = vi.fn()
+    const { rerender } = render(
+      <CustomModelDialog
+        open
+        onOpenChange={() => {}}
+        providers={[{ id: 'p1', name: 'My OpenAI' }]}
+        model={editing}
+        onSave={onSave}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), {
+      target: { value: '200000' },
+    })
+    rerender(
+      <CustomModelDialog
+        open
+        onOpenChange={() => {}}
+        providers={[{ id: 'p1', name: 'My OpenAI' }]}
+        model={editing}
+        onSave={onSave}
+      />,
+    )
+
+    expect(screen.getByLabelText('最长上下文大小（token）')).toHaveValue('200000')
+    expect(screen.getByText('model-m1')).toBeInTheDocument()
   })
 
   it('T-W3: surfaces the duplicate-name error from the mutation', async () => {

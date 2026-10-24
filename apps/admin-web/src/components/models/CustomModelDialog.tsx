@@ -56,6 +56,8 @@ export default function CustomModelDialog({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // R-10：仅在「打开」或「切换到另一模型」时重置表单；
+  // 不能依赖 providers/model 引用（父级轮询/refetch 重渲染会清空用户正在填写的内容）。
   useEffect(() => {
     if (!open) return
     setProviderId(model?.providerId ?? providers[0]?.id ?? '')
@@ -66,7 +68,9 @@ export default function CustomModelDialog({
         : '',
     )
     setError(null)
-  }, [open, providers, model])
+    // providers 仅用于打开时的初值；不随其引用变化重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, model?.id])
 
   const trimmedName = name.trim()
   const duplicateName =

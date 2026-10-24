@@ -87,7 +87,7 @@ export interface JobManagerConfig {
   image: string;
   runtimeClassName?: string;
   publicWsEndpoint: string;
-  /** 工作容器临时存储上限（requests=limits）；缺省 `10Gi`，由 `JOB_EPHEMERAL_STORAGE` 注入。 */
+  /** 工作容器临时存储上限（仅 limits，不设 requests）；缺省 `10Gi`，由 `JOB_EPHEMERAL_STORAGE` 注入。 */
   ephemeralStorage?: string;
 }
 

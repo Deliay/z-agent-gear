@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const API_BASE = process.env.API_URL ? process.env.API_URL.replace('/graphql', '') : 'http://localhost:4000';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const API_BASE = process.env.API_URL ? process.env.API_URL.replace('/graphql', '') : 'http://localhost:10001';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };

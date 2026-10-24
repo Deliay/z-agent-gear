@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:4000').replace(/\/graphql\/?$/, '');
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
+const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -2196,7 +2196,8 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
 }
 
 async function signupWithId(): Promise<{ token: string; userId: string }> {
-  const uid = `sess_mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  // N-18：用户名上限 20（auth.ts），用 16 字符稳定唯一前缀
+  const uid = `mcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
   const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
   const body = await res.json();
   return {
@@ -2216,6 +2217,10 @@ async function registerFreshController(
   );
   const keyBody = await keyRes.json();
   const client = createClient();
+  // 与真实 controller 一致：收到 acp:stop 立即 ack，避免 DELETE_SESSION 等待 ack 超时（N-18 实跑暴露）
+  client.on('acp:stop', (data: { sessionId: string }) => {
+    client.emit('acp:stopped', { sessionId: data.sessionId, reason: 'user_delete' });
+  });
   const registered = waitForEvent<{ controllerId: string }>(client, 'registered');
   client.emit('register', {
     key: keyBody.data.createControllerKey.rawKey,

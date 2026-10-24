@@ -35,7 +35,7 @@ interface GithubSetupProgressDialogProps {
   hostId?: string
   /** 云电脑启动成功（RUNNING）时回调一次，供调用方发起项目准备 */
   onHostRunning?: (host: CloudHostData) => void
-  /** 启动失败时点击「重新创建」的回调 */
+  /** 启动失败时点击「返回新建」的回调（回到新建表单，不自动重建实例） */
   onStartupFailed?: () => void
   /** 项目准备请求本身失败（尚未生成 operation）时的错误文案 */
   setupError?: string | null
@@ -120,6 +120,8 @@ export default function GithubSetupProgressDialog({
     RETRY_CLOUD_HOST_SETUP_OPERATION,
   )
   const [retryError, setRetryError] = useState<string | null>(null)
+  // C-17：操作进入终态后停止 1.5s 轮询
+  const [pollStopped, setPollStopped] = useState(false)
   const navigatedRef = useRef(false)
   const finishedRef = useRef(false)
   const hostRunningRef = useRef<string | null>(null)
@@ -129,7 +131,7 @@ export default function GithubSetupProgressDialog({
     {
       variables: { id: operationId ?? '' },
       skip: !open || !operationId,
-      pollInterval: 1500,
+      pollInterval: pollStopped ? 0 : 1500,
       fetchPolicy: 'cache-and-network',
     },
   )
@@ -137,7 +139,7 @@ export default function GithubSetupProgressDialog({
   const { data: hostData } = useQuery<CloudHostQuery>(CLOUD_HOST, {
     variables: { id: hostId ?? '' },
     skip: !open || !hostId,
-    pollInterval: 1500,
+    pollInterval: pollStopped ? 0 : 1500,
     fetchPolicy: 'cache-and-network',
   })
 
@@ -150,6 +152,7 @@ export default function GithubSetupProgressDialog({
       finishedRef.current = false
       hostRunningRef.current = null
       setRetryError(null)
+      setPollStopped(false)
     }
   }, [open])
 
@@ -166,12 +169,15 @@ export default function GithubSetupProgressDialog({
     if (!open || !operation) return
     if (operation.status === 'RUNNING') {
       finishedRef.current = false
+      // N-3：重试后操作重新进入 RUNNING，必须恢复轮询
+      setPollStopped(false)
       return
     }
     if (!finishedRef.current) {
       finishedRef.current = true
       onFinished?.(operation)
     }
+    setPollStopped(true)
   }, [open, operation, onFinished])
 
   useEffect(() => {
@@ -182,7 +188,7 @@ export default function GithubSetupProgressDialog({
     // Git 项目设置成功后工作区列表新增条目：刷新首页与控制器工作区查询
     void Promise.resolve(client.refetchQueries({ include: [GET_CONTROLLER_WORKSPACES_ENABLED] }))
       .catch(() => undefined)
-      .then(() => Promise.resolve(refetchHome()))
+      .then(() => Promise.resolve(refetchHome()).catch(() => undefined))
       .finally(() => {
         navigate(`/sessions/${operation.sessionId}`)
         onClose()
@@ -193,6 +199,8 @@ export default function GithubSetupProgressDialog({
     if (!operation) return
     setRetryError(null)
     finishedRef.current = false
+    // N-3：终态停轮询后重试，先恢复轮询（后续 RUNNING 状态也会再确认一次）
+    setPollStopped(false)
     try {
       await retryOperation({ variables: { id: operation.id } })
       await refetch()
@@ -338,7 +346,7 @@ export default function GithubSetupProgressDialog({
                 onStartupFailed()
               }}
             >
-              重新创建
+              返回新建
             </Button>
           )}
           {operation?.status === 'FAILED' && !startupFailed && (

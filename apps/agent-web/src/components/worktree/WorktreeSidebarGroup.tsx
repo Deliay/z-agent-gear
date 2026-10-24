@@ -28,7 +28,17 @@ interface WorktreeSidebarGroupProps {
   worktrees: WorkspaceWorktreeData[]
   /** worktree 会话平铺展示的回退数据（无 worktree 时使用） */
   fallbackSessions: SessionData[]
-  onCreate: (controllerId: string, acpServerType: string, workspaceId: string, enableWorktree?: boolean, worktreeBranchSuffix?: string, mcpServerIds?: string[], existingWorktreePath?: string) => void
+  onCreate: (
+    controllerId: string,
+    acpServerType: string,
+    workspaceId: string,
+    enableWorktree?: boolean,
+    worktreeBranchSuffix?: string,
+    mcpServerIds?: string[],
+    existingWorktreePath?: string,
+    modeId?: string,
+    modelId?: string,
+  ) => void
 }
 
 export default function WorktreeSidebarGroup({
@@ -171,8 +181,18 @@ export default function WorktreeSidebarGroup({
               setShowNewSession(false)
               setNewSessionWorktreePath(undefined)
             }}
-            onCreate={(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath) => {
-              onCreate(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath ?? newSessionWorktreePath)
+            onCreate={(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath, modeId, modelId) => {
+              onCreate(
+                controllerId,
+                acpServerType,
+                workspaceId,
+                enableWorktree,
+                worktreeBranchSuffix,
+                mcpServerIds,
+                existingWorktreePath ?? newSessionWorktreePath,
+                modeId,
+                modelId,
+              )
               setShowNewSession(false)
               setNewSessionWorktreePath(undefined)
             }}

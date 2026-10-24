@@ -125,6 +125,8 @@ const cloudContainerSchema = new mongoose.Schema(
     installedWorkloads: { type: [installedWorkloadSchema], default: [] },
     // 当前初始化批次来源：start（创建启动）/ runtime（在线安装）；用于收口判定与重连防重放
     initTrigger: { type: String, enum: ['start', 'runtime', null], default: null },
+    // 起始初始化已收口（首次 online）时间：非空后断线重连不得再次执行 init 批次（工作流只初始化一次）
+    initCompletedAt: { type: Date, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },
 );

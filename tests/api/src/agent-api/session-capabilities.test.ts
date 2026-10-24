@@ -4,8 +4,8 @@ import mongoose from 'mongoose';
 // FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
 import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 const MONGODB_URI = process.env.MONGODB_URI || '';
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {

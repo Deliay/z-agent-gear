@@ -233,18 +233,29 @@ function NodeCard({
         >
           {NODE_STATUS_LABELS[node.status]}
         </span>
-        {nodeLinks.map((link) => (
-          <a
-            key={link.pullRequestId}
-            href={link.prUrl ?? undefined}
-            target="_blank"
-            rel="noreferrer"
-            title={link.pullRequestId}
-            className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
-          >
-            PR
-          </a>
-        ))}
+        {nodeLinks.map((link) =>
+          link.prUrl ? (
+            <a
+              key={link.pullRequestId}
+              href={link.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={link.pullRequestId}
+              className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
+            >
+              PR
+            </a>
+          ) : (
+            // C-20：无链接时渲染 span，避免无障碍树中出现无 href 的死链接
+            <span
+              key={link.pullRequestId}
+              title={link.pullRequestId}
+              className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+            >
+              PR
+            </span>
+          ),
+        )}
         {node.reworkCount > 0 && (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <RotateCcw className="size-3" />

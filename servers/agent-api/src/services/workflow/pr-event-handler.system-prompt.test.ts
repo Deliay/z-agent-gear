@@ -42,6 +42,7 @@ vi.mock('./pr-handler-registry.js', async (importOriginal) => {
     ...actual,
     prHandlerRegistry: {
       findByPullRequestId: vi.fn(),
+      findById: vi.fn(),
       unregisterByInstance: vi.fn(),
       markEventHandled: vi.fn(),
     },
@@ -86,6 +87,13 @@ describe('系统键写入通道（不 mock instance.ts）', () => {
         lastEventId: null,
       },
     ] as never);
+    vi.mocked(prHandlerRegistry.findById).mockResolvedValue({
+      _id: 'h1',
+      workflowInstanceId: { toString: () => 'inst-1' },
+      nodeId: 'n1',
+      lastEventId: null,
+    } as never);
+    vi.mocked(prHandlerRegistry.markEventHandled).mockResolvedValue(undefined as never);
   });
 
   it('approved 事件可写入 github-pr-review 并完成人类节点', async () => {

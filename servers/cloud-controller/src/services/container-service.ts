@@ -470,6 +470,8 @@ export class ContainerService {
       connectedAt: now,
       exitReason: null,
       currentWorkloadName: null,
+      // 起始初始化已收口（工作流只初始化一次）：首次 online 落标记，后续断线重连不得重跑 init。
+      ...(current.initCompletedAt ? {} : { initCompletedAt: now }),
     };
     if (current.billingStartedAt) {
       return this.updateGuarded(containerId, basePatch);

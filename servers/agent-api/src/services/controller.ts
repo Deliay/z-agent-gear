@@ -138,7 +138,14 @@ export class ControllerService {
           name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
         });
         if (selectable !== serverIds.length) {
-          throw new Error('MCP_SERVER_NOT_FOUND');
+          // C-11：平台云工具服务由系统自动注入，不可手动选择——给出专用错误，
+          // 而不是笼统的「MCP 不存在」，便于前端提示可操作的原因。
+          const platformSelected = await McpServer.exists({
+            _id: { $in: serverIds },
+            userId,
+            name: CLOUD_HOST_TOOLS_SERVER_NAME,
+          });
+          throw new Error(platformSelected ? 'MCP_SERVER_NOT_SELECTABLE' : 'MCP_SERVER_NOT_FOUND');
         }
       }
     }

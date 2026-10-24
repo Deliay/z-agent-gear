@@ -12,6 +12,8 @@ type: Permanent
 **作者**: ZeroAsh Agent
 **feat-branch**: `feat/cloud-container-optimization-phase1`
 
+> v1.2 变更（集成验收返工）：失效策略按实现收窄并回写——用户级模型变更立即失效；后台（系统内置 / global）模型变更**由 300s TTL 兜底**，不实现跨服务 Redis 失效钩子，用户可通过「刷新」按钮立即重取。理由：admin-api 与 agent-api 分属不同服务且 admin-api 未持有 Redis 客户端，跨服务钩子的运维成本高于 5 分钟陈旧窗口，且「刷新」按钮已覆盖即时性诉求。
+>
 > v1.1 变更（评审返工）：① 「创建云电脑 + Github 项目准备」由后端 ready 回调编排改为**前端调用 API 编排**（`createCloudHost` → 轮询就绪 → `setupCloudHostGithubProject`），进度展示**复用安装工作负载 / Git 设置的进度对话框**，云电脑创建作为其中第一个阶段；② 模式/模型探测缓存由 1h 调整为 **5 分钟**，模型列表新增/启用/禁用/删除后**立即清空缓存**，并在新建会话与工作流节点配置两处增加**「刷新」按钮**（点击即清缓存并重新获取）。
 
 ## 1. 概述
@@ -283,7 +285,7 @@ extend type Mutation {
 
 | 触发 | 处理 |
 |------|------|
-| 用户在模型列表**新增 / 启用 / 禁用 / 删除**模型 | agent-api 模型管理 mutation 成功后调用 `invalidateAcpOptionsCache(...)`：删除受影响的 `acp:options:<controllerId>:<serverType>` key（用户级模型变更删该用户全部控制器的 key；系统内置模型变更删全部用户的 key） |
+| 用户在模型列表**新增 / 启用 / 禁用 / 删除**模型 | agent-api 用户级模型 mutation 成功后调用 `invalidateAcpOptionsForUser(...)`：删除该用户全部控制器的 `acp:options:<controllerId>:*`。后台（系统内置 / global）模型由 admin-api 管理，跨服务不主动失效，交由 300s TTL 兜底（v1.2 取舍，见文首变更说明） |
 | 用户点击**「刷新」按钮** | 前端调用 `refreshAcpServerOptions(controllerId, acpServerType)`：服务端先删 key 再立即重新探测并返回 |
 | TTL 到期（5 分钟） | 自然过期，下次访问触发重新探测 |
 
@@ -386,10 +388,10 @@ sequenceDiagram
   - 前端 `NewSessionDialog` 在控制器 + 工具确定后发起 `GetAcpServerOptions`（与 `WorkflowGraphEditor.AgentNodeOptionFields` 同源同写法）：loading 提示「正在探测可用模式与模型…」，渲染下拉（首项「默认」= 留空不传），无选项时仅「默认」不阻断创建。
   - 契约 `CreateSessionInput.modeId/modelId` → resolver → `SessionService.create` 内参（已存在）→ Redis `acp:start`（已支持），controller-api/agent-controller 链路零改动。
   - **缓存 5 分钟**：controller-api `acp-options-prober.handleProbeResult` 写入 `acp:options:<controllerId>:<serverType>` 的 TTL 由 3600s 调整为 300s（失败缓存保持 60s）；agent-api `SessionService.getAcpServerOptions` 的缓存优先读逻辑不变。
-  - **模型库变化即失效**：agent-api 模型管理相关 mutation（新增模型 / 启用 / 禁用 / 删除，含用户模型与系统内置模型）成功后调用 `invalidateAcpOptionsCache(...)` 删除受影响的探测 key：用户级变更删该用户全部 `acp:options:<controllerId>:*`，系统内置变更删全部用户的 key（SCAN 匹配或按 controllerId 枚举，二选一在实现期定，单测覆盖两个分支的归属判定）。
+  - **用户级模型变化即失效**：agent-api 用户级模型 mutation（新增 / 启用 / 禁用 / 删除 / 排序）成功后调用 `invalidateAcpOptionsForUser(...)` 删除该用户全部 `acp:options:<controllerId>:*`。后台（系统内置 / global）模型由 admin-api 独立管理，跨服务不主动失效，由 300s TTL 兜底；两处选择器均提供「刷新」按钮立即重取（v1.2 取舍）。
   - **「刷新」按钮**：`NewSessionDialog` 与 `WorkflowGraphEditor.AgentNodeOptionFields`（`ConfigureWorkflowDialog` / `InstantiateWorkflowDialog` / `EditInstanceNodeDialog` 共用）的模式/模型选择区各加一个刷新按钮，点击调用 `refreshAcpServerOptions(controllerId, acpServerType)`（服务端先删缓存再重探测并返回），结果就地替换选项列表；探测期间按钮转 loading，失败保留旧选项并提示。
   - 遵循 backend-rules「能力探测」：配置阶段无会话可查，只走空实例探测，不编造 pre-session 能力数据。
-- **风险点**: 探测失败/超时（既有实现返回空列表）不得阻断建会话；模型变更失效若漏掉系统内置模型的全局影响，会出现「删了模型还能选到」的陈旧选项——失效范围判定必须有单测；高频点刷新会拉起空实例探测，按钮在探测进行中禁用以防连点。
+- **风险点**: 探测失败/超时（既有实现返回空列表）不得阻断建会话；用户级模型变更失效范围必须有单测；后台（系统内置 / global）模型变更依赖 300s TTL 兜底，存在最长 5 分钟陈旧窗口（已回写 PRD v1.2，用户可点「刷新」立即重取）；高频点刷新会拉起空实例探测，按钮在探测进行中禁用以防连点。
 
 #### 实现点 5: 工作流「+」列表刷新（含 MCP 创建的条目）
 
@@ -448,7 +450,7 @@ z-agent-gear/
 │   │   └── resolvers/{agent-controller,cloud-host,session}.ts # 字段 resolver 归一 + 登记
 │   └── services/
 │       ├── session.ts                 # 默认 MCP 解析合并、modeId/modelId 透传、getAcpServerOptions
-│       ├── acp-options-cache.ts       # 新增：invalidateAcpOptionsCache（模型变更失效）
+│       ├── acp-options-cache.ts       # 新增：invalidateAcpOptionsForUser / ForController（模型变更失效）
 │       ├── model.ts / llm 相关 resolver # 模型增删改/启用停用处挂失效钩子
 │       ├── cloud-host-service.ts      # createDefaultSession 开关；defaultSessionId 回填
 │       └── cloud-host-github-service.ts # createSession 开关（多 Harness 记 SKIPPED）
@@ -472,8 +474,8 @@ z-agent-gear/
 ### 8.1 测试覆盖要求
 
 - 全程 TDD 红-绿-重构：先写失败测试（契约/服务行为），再写最少实现，最后重构。
-- 单元测试（vitest）覆盖：默认 MCP 解析矩阵（显式传参 / 未传 + useAllEnabled / 未传 + 子集 / 空数组 / 停用与删除剔除）、`setControllerDefaultMcp` 校验、`createDefaultSession` / `createSession` 开关语义（含 `SKIPPED` 步骤）、`modeId/modelId` 透传、`invalidateAcpOptionsCache` 的失效范围判定（用户级 / 系统内置全局）。
-- API 测试（`tests/api`，vitest + supertest）覆盖：`createSession`（默认 MCP / 显式 MCP / modeId/modelId）、`setControllerDefaultMcp`、`createCloudHost(createDefaultSession)`、`setupCloudHostGithubProject(createSession)`、`cloudHost(id)`、`refreshAcpServerOptions`（清缓存 + 重探测 + 返回）、`cloudHostSetupOperation` 进度与重试、模型 mutation 后探测缓存确实失效、`acpServerOptions` 5 分钟缓存复用。
+- 单元测试（vitest）覆盖：默认 MCP 解析矩阵（显式传参 / 未传 + useAllEnabled / 未传 + 子集 / 空数组 / 停用与删除剔除）、`setControllerDefaultMcp` 校验、`createDefaultSession` / `createSession` 开关语义（含 `SKIPPED` 步骤）、`modeId/modelId` 透传、`invalidateAcpOptionsForUser` 的用户级失效判定（后台 / global 模型由 300s TTL 兜底，不在此单测范围）。
+- API 测试（`tests/api`，vitest + supertest）覆盖：`createSession`（默认 MCP / 显式 MCP / modeId/modelId）、`setControllerDefaultMcp`、`createCloudHost(createDefaultSession)`、`setupCloudHostGithubProject(createSession)`、`cloudHost(id)`、`refreshAcpServerOptions`（清缓存 + 重探测 + 返回）、`cloudHostSetupOperation` 进度与重试、用户级模型 mutation 后探测缓存确实失效（后台 global 模型由 TTL 兜底）、`acpServerOptions` 5 分钟缓存复用。
 
 ### 8.2 测试类型
 
@@ -492,7 +494,7 @@ z-agent-gear/
 - [ ] 新建会话 MCP 默认全选并按控制器默认配置预选；会话内 MCP 工具可用；「Git 项目设置」自动创建的会话同样带默认 MCP
 - [ ] 控制器设置可配置「默认注入 MCP」，保存后对后续新建会话生效；清空选择即回到不注入
 - [ ] 新建会话可前置选择模式与模型（与工作流节点选项一致），留空走工具默认；探测中/无选项不阻断创建
-- [ ] 模式/模型选项缓存 5 分钟内复用；模型列表新增/启用/禁用/删除后立即失效；「刷新」按钮（新建会话与工作流节点配置两处）点击即取到最新选项
+- [ ] 模式/模型选项缓存 5 分钟内复用；**用户级**模型新增/启用/禁用/删除后立即失效，后台（系统内置 / global）模型变更最长 5 分钟 TTL 后失效；「刷新」按钮（新建会话与工作流节点配置两处）点击即取到最新选项
 - [ ] 通过 MCP 创建已配置工作流/模板后，不刷新页面打开工作流「+」即可看到并实例化
 - [ ] 单元测试覆盖达标、API 测试通过、E2E 测试通过
 

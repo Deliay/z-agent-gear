@@ -840,6 +840,25 @@ describe('SessionService', () => {
       );
     });
 
+    it('N-1: suppressFallback=true 时不触发会话结束兜底回调', async () => {
+      const onEnded = vi.fn();
+      sessionService.onSessionEnded(onEnded);
+      vi.mocked(Session.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
+      } as never);
+      vi.mocked(Session.findOneAndUpdate).mockResolvedValue(
+        mockSessionDoc({ status: 'ended', workflowInstanceId: oid('inst-1') }) as never,
+      );
+
+      await sessionService.close('sess-1', 'user-1', { suppressFallback: true });
+
+      expect(onEnded).not.toHaveBeenCalled();
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"type":"acp:stop"'),
+      );
+    });
+
     it('should NOT revoke MCP endpoint on close for workflow node session (validity follows workflow)', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(mockSessionDoc({ workflowInstanceId: oid('inst-1') })),
@@ -1397,6 +1416,77 @@ describe('SessionService', () => {
       expect(mockRedis.del).toHaveBeenCalledWith('acp:capability:ctrl-1');
       expect(result).toEqual([]);
       vi.useRealTimers();
+    });
+  });
+
+  describe('acp server options cache', () => {
+    const cachedOptions = {
+      modes: [{ id: 'plan', name: 'Plan' }],
+      models: [{ id: 'm1', name: 'M1' }],
+      currentModeId: 'plan',
+      currentModelId: 'm1',
+      probedAt: '2026-10-23T06:00:00.000Z',
+    };
+
+    beforeEach(() => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'ctrl' }),
+      } as never);
+    });
+
+    it('C-14: 命中缓存直接返回，不发布探测命令', async () => {
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(cachedOptions));
+
+      const result = await sessionService.getAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+
+      expect(result).toEqual(cachedOptions);
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('C-14: 刷新先删缓存再重探测', async () => {
+      const fresh = { ...cachedOptions, probedAt: new Date().toISOString() };
+      vi.mocked(mockRedis.del).mockResolvedValue(1);
+      vi.mocked(mockRedis.get).mockResolvedValue(JSON.stringify(fresh));
+
+      const result = await sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+
+      expect(mockRedis.del).toHaveBeenCalledWith('acp:options:ctrl-1:opencode');
+      expect(result).toEqual(fresh);
+    });
+
+    it('C-9: 刷新时删除缓存失败显式报错，不回退旧缓存', async () => {
+      vi.mocked(mockRedis.del).mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1'),
+      ).rejects.toThrow('刷新失败，请重试');
+    });
+
+    it('C-9: 刷新只接受删除之后写入的探测结果', async () => {
+      vi.useFakeTimers();
+      const stale = { ...cachedOptions, probedAt: '2020-01-01T00:00:00.000Z' };
+      const fresh = { ...cachedOptions, probedAt: new Date().toISOString() };
+      vi.mocked(mockRedis.del).mockResolvedValue(1);
+      vi.mocked(mockRedis.get)
+        .mockResolvedValueOnce(JSON.stringify(stale))
+        .mockResolvedValueOnce(JSON.stringify(stale))
+        .mockResolvedValue(JSON.stringify(fresh));
+
+      const promise = sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1');
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+
+      await expect(promise).resolves.toEqual(fresh);
+      vi.useRealTimers();
+    });
+
+    it('C-14: Controller not found', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({ lean: vi.fn().mockResolvedValue(null) } as never);
+
+      await expect(
+        sessionService.refreshAcpServerOptions('ctrl-1', 'opencode', 'user-1'),
+      ).rejects.toThrow('Controller not found');
     });
   });
 
@@ -1991,6 +2081,23 @@ describe('resolveInitialMcpServerIds', () => {
     expect(
       resolveInitialMcpServerIds(
         { useAllEnabled: false, serverIds: ['srv-a', 'srv-disabled', 'srv-deleted'] },
+        undefined,
+        enabled,
+      ),
+    ).toEqual(['srv-a']);
+  });
+
+  it('accepts ObjectId-like serverIds from Mongo lean (regression: 真实 DB 子集不再被清空)', () => {
+    expect(
+      resolveInitialMcpServerIds(
+        {
+          useAllEnabled: false,
+          serverIds: [
+            { toString: () => 'srv-a' },
+            { toString: () => 'srv-disabled' },
+            null,
+          ],
+        },
         undefined,
         enabled,
       ),

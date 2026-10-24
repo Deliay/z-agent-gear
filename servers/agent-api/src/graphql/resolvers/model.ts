@@ -100,7 +100,9 @@ export const modelResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await modelService.updateSortOrder(args.ids);
+        const result = await modelService.updateSortOrder(args.ids);
+        await invalidateAcpOptionsBestEffort(context.currentUser.id);
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }

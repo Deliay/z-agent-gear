@@ -87,6 +87,91 @@ describe('McpDefaultSection', () => {
     })
   })
 
+  it('N-2: 保存成功后解除 dirty 并回写服务端权威值', async () => {
+    mockSaveDefaultMcp.mockResolvedValue({
+      data: {
+        setControllerDefaultMcp: makeController({
+          defaultMcp: { useAllEnabled: false, serverIds: ['m2'] },
+        }),
+      },
+    })
+    render(
+      <McpDefaultSection
+        controller={makeController({ defaultMcp: { useAllEnabled: false, serverIds: ['m2'] } })}
+      />,
+    )
+
+    fireEvent.click(screen.getByLabelText('MCP A'))
+    fireEvent.click(screen.getByRole('button', { name: '保存默认 MCP' }))
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled())
+    // 回写权威值：MCP A 回到未勾选、MCP B 保持勾选
+    expect(screen.getByLabelText('MCP A')).not.toBeChecked()
+    expect(screen.getByLabelText('MCP B')).toBeChecked()
+  })
+
+  it('N-2: 切换控制器强制重置，不携带上一台未保存的脏值', () => {
+    const { rerender } = render(
+      <McpDefaultSection
+        controller={makeController({ defaultMcp: { useAllEnabled: false, serverIds: ['m1'] } })}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('MCP B'))
+
+    rerender(
+      <McpDefaultSection
+        controller={makeController({
+          id: 'ctrl-2',
+          defaultMcp: { useAllEnabled: false, serverIds: ['m2'] },
+        })}
+      />,
+    )
+
+    expect(screen.getByLabelText('MCP A')).not.toBeChecked()
+    expect(screen.getByLabelText('MCP B')).toBeChecked()
+  })
+
+  it('N-6: 保存成功后解除 dirty，后台刷新可回同步权威值', async () => {
+    // 保存返回服务端权威值 m1（覆盖用户刚才勾选的 m2）
+    mockSaveDefaultMcp.mockResolvedValue({
+      data: {
+        setControllerDefaultMcp: makeController({
+          defaultMcp: { useAllEnabled: false, serverIds: ['m1'] },
+        }),
+      },
+    })
+    const { rerender } = render(
+      <McpDefaultSection
+        controller={makeController({ defaultMcp: { useAllEnabled: false, serverIds: ['m1'] } })}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('MCP B'))
+    fireEvent.click(screen.getByRole('button', { name: '保存默认 MCP' }))
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled())
+
+    // 后台刷新带来新的权威值 m2：若 dirty 未解除，effect 会短路，MCP B 不会被取消
+    rerender(
+      <McpDefaultSection
+        controller={makeController({ defaultMcp: { useAllEnabled: false, serverIds: ['m2'] } })}
+      />,
+    )
+    expect(screen.getByLabelText('MCP A')).not.toBeChecked()
+    expect(screen.getByLabelText('MCP B')).toBeChecked()
+  })
+
+  it('C-11: MCP_SERVER_NOT_SELECTABLE 映射为平台云工具专用提示', async () => {
+    mockSaveDefaultMcp.mockRejectedValueOnce(new Error('MCP_SERVER_NOT_SELECTABLE'))
+    render(<McpDefaultSection controller={makeController()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '保存默认 MCP' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        '平台云工具服务由系统自动注入，不可手动选择',
+      ),
+    )
+  })
+
   it('MCP_SERVER_NOT_FOUND 映射为中文提示', async () => {
     mockSaveDefaultMcp.mockRejectedValueOnce(new Error('MCP_SERVER_NOT_FOUND'))
     render(<McpDefaultSection controller={makeController()} />)

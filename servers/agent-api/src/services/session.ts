@@ -16,7 +16,8 @@ const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
 export interface ControllerDefaultMcpSnapshot {
   useAllEnabled?: boolean | null;
-  serverIds?: Array<string | null | undefined> | null;
+  /** Mongo lean 后可能是 ObjectId（schema 为 ObjectId[]），必须允许 toString */
+  serverIds?: Array<string | { toString(): string } | null | undefined> | null;
 }
 
 /**
@@ -39,10 +40,12 @@ export function resolveInitialMcpServerIds(
     return enabled;
   }
   const enabledSet = new Set(enabled);
+  // N-18 联动发现：Mongoose `defaultMcp.serverIds` 是 ObjectId[]，旧实现只接受 string，
+  // 导致真实 DB 路径把子集全部过滤为空（单测用 string 假数据所以未暴露）。
   const subset = (defaultMcp.serverIds ?? [])
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .filter((id): id is string | { toString(): string } => id !== null && id !== undefined)
     .map((id) => String(id))
-    .filter((id) => enabledSet.has(id));
+    .filter((id) => id.length > 0 && enabledSet.has(id));
   return Array.from(new Set(subset));
 }
 
@@ -541,7 +544,18 @@ export class SessionService {
     return { success: true, status: 'connecting' };
   }
 
-  async close(id: string, userId: string): Promise<boolean> {
+  /**
+   * 关闭会话。
+   *
+   * `suppressFallback`：主动/受控关闭（工作流节点完成、重启、复工替换会话）时置 true，
+   * 跳过 `sessionEndedCallback`，避免在引擎转移尚未落库时把「人为关闭」误判为会话意外终止，
+   * 也避免在同一实例锁内同步嵌套 `workflowEngine.transition`（N-1）。
+   */
+  async close(
+    id: string,
+    userId: string,
+    opts?: { suppressFallback?: boolean; reason?: string },
+  ): Promise<boolean> {
     const session = await Session.findOne({ _id: id, userId }).lean();
     const result = await Session.findOneAndUpdate(
       { _id: id, userId },
@@ -559,10 +573,12 @@ export class SessionService {
       await redis.publish('session:command', JSON.stringify({
         type: 'acp:stop',
         sessionId: id,
-        reason: 'user_close',
+        reason: opts?.reason ?? 'user_close',
       }));
-      // 工作流兜底检查
-      await this.sessionEndedCallback?.(id);
+      // 工作流兜底检查：受控关闭（节点完成/重启/复工）不触发
+      if (!opts?.suppressFallback) {
+        await this.sessionEndedCallback?.(id);
+      }
       return true;
     }
     return false;
@@ -817,6 +833,7 @@ export class SessionService {
     controllerId: string,
     acpServerType: string,
     userId: string,
+    opts?: { minProbedAt?: number },
   ): Promise<Record<string, unknown>> {
     const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
     if (!controller) {
@@ -825,10 +842,18 @@ export class SessionService {
 
     const redis = getRedisClient();
     const cacheKey = `acp:options:${controllerId}:${acpServerType}`;
+    // C-9：刷新时只接受「本次删除之后」的探测结果，避免并发探测把旧结果写回后立即被读走。
+    // 允许 5s 时钟偏差（controller-api 与 agent-api 可能不同宿主）。
+    const isFresh = (payload: Record<string, unknown>): boolean => {
+      if (!opts?.minProbedAt) return true;
+      const probedAt = Date.parse(String(payload.probedAt ?? ''));
+      return Number.isFinite(probedAt) && probedAt >= opts.minProbedAt - 5_000;
+    };
 
     const cached = await redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached) as Record<string, unknown>;
+      const parsed = JSON.parse(cached) as Record<string, unknown>;
+      if (isFresh(parsed)) return parsed;
     }
 
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -843,7 +868,8 @@ export class SessionService {
       await new Promise((resolve) => setTimeout(resolve, 500));
       const result = await redis.get(cacheKey);
       if (result) {
-        return JSON.parse(result) as Record<string, unknown>;
+        const parsed = JSON.parse(result) as Record<string, unknown>;
+        if (isFresh(parsed)) return parsed;
       }
     }
 
@@ -864,15 +890,20 @@ export class SessionService {
     if (!controller) {
       throw new Error('Controller not found');
     }
+    const startedAt = Date.now();
     try {
       await getRedisClient().del(`acp:options:${controllerId}:${acpServerType}`);
     } catch (err) {
+      // C-9：删除失败不能静默回退到旧缓存（用户点「刷新」却看到陈旧结果）
       console.warn(
         `[session] delete acp options cache failed for ${controllerId}:`,
         (err as Error).message,
       );
+      throw new Error('刷新失败，请重试');
     }
-    return this.getAcpServerOptions(controllerId, acpServerType, userId);
+    return this.getAcpServerOptions(controllerId, acpServerType, userId, {
+      minProbedAt: startedAt,
+    });
   }
 
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {

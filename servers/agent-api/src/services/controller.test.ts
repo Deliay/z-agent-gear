@@ -28,6 +28,7 @@ vi.mock('./command.js', () => ({
 vi.mock('../models/mcp-server.js', () => ({
   McpServer: {
     countDocuments: vi.fn(),
+    exists: vi.fn(),
   },
 }));
 
@@ -256,6 +257,21 @@ describe('ControllerService', () => {
           serverIds: ['507f1f77bcf86cd799439021'],
         }),
       ).rejects.toThrow('MCP_SERVER_NOT_FOUND');
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('C-11: platform cloud tools server returns MCP_SERVER_NOT_SELECTABLE', async () => {
+      const doc = controllerDoc();
+      vi.mocked(Controller.findOne).mockResolvedValue(doc as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(McpServer.exists).mockResolvedValue({ _id: 'platform' } as never);
+
+      await expect(
+        controllerService.setDefaultMcp('user1', 'ctrl1', {
+          useAllEnabled: false,
+          serverIds: ['507f1f77bcf86cd799439021'],
+        }),
+      ).rejects.toThrow('MCP_SERVER_NOT_SELECTABLE');
       expect(doc.save).not.toHaveBeenCalled();
     });
 

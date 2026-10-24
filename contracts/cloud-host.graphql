@@ -44,7 +44,8 @@ type CloudHost {
   deletedAt: String
   # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
   defaultWorkspace: String!
-  # 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」
+  # 是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置创建默认工作区后即回写 workspaceId（与 createSession 成败无关）并翻转为 true。
+  # 用于区分「未创建工作区」与「默认会话创建失败」。多 Harness（createSession=false）不执行会话步骤，workspaceId 保持 null。
   hasDefaultWorkspace: Boolean!
   # 当前正在 runtime 安装的工作负载名；null 表示空闲
   workloadInstalling: String
@@ -148,7 +149,7 @@ input SetupCloudHostGithubProjectInput {
 extend type Query {
   cloudHostCapabilities: CloudHostCapabilities!
   myCloudHosts: [CloudHost!]!
-  # 进度对话框轮询云电脑启动状态（1.5s 级）；仅返回当前用户的云电脑（软删除仍返回）
+  # 进度对话框轮询云电脑启动状态（1.5s 级）；仅返回当前用户的云电脑（软删除仍返回，供只读回看）
   cloudHost(id: ID!): CloudHost
   cloudHostStopImpact(id: ID!): CloudHostStopImpact!
   cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!

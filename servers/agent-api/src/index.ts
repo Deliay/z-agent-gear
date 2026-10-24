@@ -23,6 +23,7 @@ import * as migration004 from './migrations/004-provider-scope-name-index.js';
 import * as migration005 from './migrations/005-cloud-host-active-unique-index.js';
 import * as migration006 from './migrations/006-todo-elicitation-request-id-index.js';
 import * as migration007 from './migrations/007-workflow-pr-handler-index.js';
+import * as migration008 from './migrations/008-workflow-pr-handler-lower-id.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
@@ -90,6 +91,7 @@ async function start() {
       migration005,
       migration006,
       migration007,
+      migration008,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);

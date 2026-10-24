@@ -4,8 +4,8 @@ import { writeFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from '
 import { join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 
 const CONTROLLER_PKG = resolve(__dirname, '../../../../packages/agent-controller');
 const CONFIG_DIR = join(homedir(), '.zag');

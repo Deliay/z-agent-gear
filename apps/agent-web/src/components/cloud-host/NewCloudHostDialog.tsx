@@ -275,7 +275,7 @@ export default function NewCloudHostDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className="min-w-0 sm:max-w-md">
+      <DialogContent className="min-w-0 max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>新建云电脑</DialogTitle>
           <DialogDescription>

@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+/** 延迟脱离执行默认等待锁释放的上限（超时后结构化报错，避免永久挂起） */
+const DEFAULT_DETACH_TIMEOUT_MS = 30_000;
+
 /**
  * 按 key 串行化异步操作（同一 key 的并发调用排队执行）。
  *
@@ -37,5 +40,43 @@ export class KeyedMutex {
         this.tails.delete(key);
       }
     }
+  }
+
+  /**
+   * 在调用方 AsyncLocalStorage 上下文之外、且**不预取锁**地执行任务（N-8/N-10/N-11）。
+   *
+   * 用于锁内 hook 派生的延迟回调（setTimeout/setImmediate 会继承 ALS store）：
+   * - 等待当前持有者释放（有超时，默认 30s），**不**替任务持有 key；
+   * - 任务内部自行调用 `runExclusive`，因此不会自锁/re-entrant；
+   * - 无法区分「延迟回调里残留的过期 held 视图」与「持锁任务内误用」，因此不抛
+   *   "still holding"，而是统一有界等待：延迟回调形态正常等待后执行；持锁任务内
+   *   await 本方法则超时并抛结构化错误，不会永久死锁（N-9/N-11）。
+   */
+  async runDetached<T>(
+    key: string,
+    task: () => Promise<T>,
+    opts?: { timeoutMs?: number },
+  ): Promise<T> {
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_DETACH_TIMEOUT_MS;
+    const tail = this.tails.get(key);
+    if (tail) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = Symbol('timeout');
+      const winner = await Promise.race([
+        tail.catch(() => undefined).then(() => 'released' as const),
+        new Promise<typeof timedOut>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), timeoutMs);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (winner === timedOut) {
+        throw new Error(
+          `KeyedMutex.runDetached timed out waiting for key: ${key} after ${timeoutMs}ms ` +
+            '(caller may still hold the lock; refusing to deadlock)',
+        );
+      }
+    }
+    // exit：不把「key 已持有」视图带给任务的异步链；任务内部自行 runExclusive
+    return this.heldKeys.exit(() => task());
   }
 }

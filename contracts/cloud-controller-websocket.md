@@ -315,6 +315,10 @@ Worker                              cloud-controller
 
 - 容器断线后按指数退避自动重连，使用注入的同一 token 重新握手。
 - 同一容器在存活期间允许重复握手；`register` 成功后状态重新置 `online`。
+- **工作流只初始化一次**：起始 `init` 批次一旦收口（首次进入 `online`，落库 `initCompletedAt`），
+  后续断线重连（`online` → `connecting` → 再次 `register`）不再下发 `workload:run{phase:"init"}`，
+  `registered.initializing` 固定为 `false`。`initializing` 期间掉线保持原状态，由看门狗收口，同样不重放批次。
+  历史容器（无 `initCompletedAt`）以 `connectedAt` 非空的 `connecting` 状态识别为已初始化，升级后不会重跑。
 
 ### 3.4 版本兼容
 

@@ -64,7 +64,7 @@ test.describe('Github workload E2E', () => {
     await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     let dialog = page.getByRole('dialog');
     await dialog.locator('#controller').selectOption({ index: 1 });
-    const firstTrigger = dialog.locator('[data-slot="select-trigger"]').nth(1);
+    const firstTrigger = dialog.locator('[data-slot="select-trigger"][aria-label="工作区"]');
     await firstTrigger.click();
     await expect(page.getByRole('option', { name: new RegExp(firstPath) })).toBeVisible({ timeout: 15000 });
     await page.keyboard.press('Escape');
@@ -78,7 +78,7 @@ test.describe('Github workload E2E', () => {
     await page.locator('main').getByRole('button', { name: '新建会话' }).click();
     dialog = page.getByRole('dialog');
     await dialog.locator('#controller').selectOption({ index: 1 });
-    const workspaceTrigger = dialog.locator('[data-slot="select-trigger"]').nth(1);
+    const workspaceTrigger = dialog.locator('[data-slot="select-trigger"][aria-label="工作区"]');
     await workspaceTrigger.click();
     await expect(page.getByRole('option', { name: new RegExp(secondPath) })).toBeVisible({
       timeout: 15000,

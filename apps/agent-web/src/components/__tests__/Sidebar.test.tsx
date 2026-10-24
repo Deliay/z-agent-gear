@@ -29,8 +29,12 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }));
 
+const newSessionDialogProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
 vi.mock('../session/NewSessionDialog', () => ({
-  default: () => <div data-testid="new-session-dialog" />,
+  default: (props: Record<string, unknown>) => {
+    newSessionDialogProps.current = props;
+    return <div data-testid="new-session-dialog" />;
+  },
 }));
 
 vi.mock('../cloud-host/NewCloudHostDialog', () => ({
@@ -218,6 +222,45 @@ describe('Sidebar 集成测试', () => {
     vi.clearAllMocks();
     mockCapabilities();
     mockHome();
+  });
+
+  it('U-5: Sidebar 的新建会话回调 9 参映射到 CreateSessionInput', async () => {
+    mockHome({
+      workspaces: [makeWorkspace()],
+    });
+    render(<Sidebar username="testuser" />);
+
+    const newSessionButtons = screen.getAllByLabelText('新建会话');
+    fireEvent.click(newSessionButtons[0]);
+
+    const props = newSessionDialogProps.current as {
+      onCreate: (...args: unknown[]) => Promise<void>;
+    };
+    expect(props).toBeTruthy();
+    mockUseMutation.mockResolvedValue({ data: { createSession: { session: { id: 'sess-new' } } } });
+
+    await props.onCreate(
+      'ctrl-1',
+      'opencode',
+      'ws-1',
+      false,
+      'feat-x',
+      ['mcp-1'],
+      '/repo/.worktrees/feat-a',
+      'mode-1',
+      'model-1',
+    );
+
+    expect(mockUseMutation).toHaveBeenCalledWith({
+      variables: {
+        input: expect.objectContaining({
+          modeId: 'mode-1',
+          modelId: 'model-1',
+          existingWorktreePath: '/repo/.worktrees/feat-a',
+        }),
+      },
+      refetchQueries: expect.any(Array),
+    });
   });
 
   describe('① 四个平级分组渲染', () => {

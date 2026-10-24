@@ -404,6 +404,29 @@ describe('WorkflowEngine.transition', () => {
     }
   });
 
+  it('R-9: 同实例并发 transition 在领域层串行化，第二次读取到已落库状态并拒绝', async () => {
+    let persisted = linearInstance();
+    persisted.nodes[0].status = 'RUNNING';
+    vi.mocked(WorkflowInstance.findById).mockImplementation((async () => {
+      const snapshot = makeInstance(persisted.nodes.map((n) => ({ ...n })));
+      snapshot.save.mockImplementation(async () => {
+        // 放大持久化窗口，暴露并发读改写
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        persisted = makeInstance(snapshot.nodes.map((n) => ({ ...n })));
+      });
+      return snapshot as never;
+    }) as never);
+
+    const results = await Promise.allSettled([
+      workflowEngine.transition('inst-1', 'n1', 'complete'),
+      workflowEngine.transition('inst-1', 'n1', 'complete'),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(persisted.nodes[0].status).toBe('DONE');
+  });
+
   it('实例或节点不存在时拒绝', async () => {
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(null as never);
     await expect(workflowEngine.transition('inst-x', 'n1', 'start')).rejects.toThrow(/实例不存在/);

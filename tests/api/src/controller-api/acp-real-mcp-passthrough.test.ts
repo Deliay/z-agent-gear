@@ -19,8 +19,8 @@ import http, { type Server } from 'node:http';
 // Requires: agent-api + controller-api + redis + mongo running (aspire),
 // the `opencode` binary, and network access for the agent's model.
 
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:4000/graphql';
-const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 
 const CONTROLLER_PKG = resolve(__dirname, '../../../../packages/agent-controller');
 const MCP_FIXTURE = resolve(__dirname, '../../fixtures/mock-mcp-stdio.mjs');

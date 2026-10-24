@@ -258,15 +258,14 @@ export default function NewSessionDialog({
       }).then((res) => {
         if (res.data?.detectGitRepo?.isGitRepo) {
           setIsGitRepo(true);
-          const ws = workspaces.find((w) => w.id === selectedWorkspace);
-          if (ws) {
-            const defaultSuffix = `feat-${Math.random().toString(36).slice(2, 8)}`;
-            setBranchSuffix(defaultSuffix);
-          }
+          const defaultSuffix = `feat-${Math.random().toString(36).slice(2, 8)}`;
+          // C-16：后台workspaces 刷新不得覆盖用户已编辑的分支后缀
+          setBranchSuffix((prev) => prev || defaultSuffix);
         }
       });
     }
-  }, [selectedWorkspace, selectedController, detectGitRepo, workspaces, isPreselected]);
+    // workspaces 仅用于旧逻辑查找工作区名；不在依赖中，避免列表 refetch 重置 Worktree 开关
+  }, [selectedWorkspace, selectedController, detectGitRepo, isPreselected]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,7 +287,12 @@ export default function NewSessionDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="新建会话"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-foreground">新建会话</h2>
         <form onSubmit={handleSubmit}>
@@ -465,7 +469,10 @@ export default function NewSessionDialog({
                   onValueChange={(value) => setSelectedWorkspace(value || '')}
                   disabled={isPreselected}
                 >
-                  <SelectTrigger className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}>
+                  <SelectTrigger
+                    aria-label="工作区"
+                    className={`w-full${isPreselected ? ' opacity-50 cursor-not-allowed' : ''}`}
+                  >
                     <SelectValue>
                       {selectedWorkspace
                         ? workspaces.find((w) => w.id === selectedWorkspace)?.name || selectedWorkspace
@@ -544,7 +551,7 @@ export default function NewSessionDialog({
               <div className="rounded-md border border-border p-3">
                 <p className="mb-2 text-xs text-muted-foreground">
                   {selectedControllerUsesAllEnabledMcp
-                    ? '默认注入全部已启用的 MCP，新 MCP 上线后自动注入；可取消勾选'
+                    ? '默认注入全部已启用的 MCP；可取消勾选'
                     : '按控制器默认设置预选，可调整；全部取消则不注入'}
                 </p>
                 {enabledMcpServers.length === 0 ? (

@@ -293,7 +293,7 @@ input WorkflowNodeUpdateInput {
   artifactTitles: [String!]
   requiresWorktree: Boolean
   agentConfig: AgentNodeConfigInput
-  # 人类节点：是否联动上游 Pull Request（仅 HUMAN 可写；true 时开启）
+  # 人类节点：是否联动上游 Pull Request（仅 HUMAN 可写；true 开启联动，false/缺省关闭）
   linkUpstreamPullRequest: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int

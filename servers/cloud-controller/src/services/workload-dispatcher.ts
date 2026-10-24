@@ -284,6 +284,9 @@ export class WorkloadDispatcher {
       await this.deps.containerRepository.update(containerId, { initTrigger: null });
       return noInit;
     }
+    // 已完成的初始化不重跑（工作流只初始化一次）：agent-gear 重启 → 断线把 online 退回
+    // connecting → 再次 register，不得重新执行一遍 init 批次。
+    if (this.hasSettledInit(container)) return noInit;
     // 仅 creating/connecting（回连注册路径）触发初始化；online 重连不重跑。
     if (container.status !== 'connecting' && container.status !== 'creating') return noInit;
 
@@ -408,6 +411,19 @@ export class WorkloadDispatcher {
     await this.deps.containerRepository.update(containerId, { initTrigger: 'start' });
     this.emitRun(containerId, 'init', runLogs, runEnv.env);
     return { initializing: true, requiredFailure: null };
+  }
+
+  /**
+   * 起始初始化是否已收口（工作流只初始化一次）。
+   *
+   * - `initCompletedAt` 非空：首次进入 online 时由 `ContainerService.markOnline` 写入；
+   * - 历史容器兜底：升级前落库的记录没有标记，但 `connectedAt` 非空证明容器曾上线过；
+   *   此时若处于断线重连的 `connecting`，初始化必然已经结束（init 进行中掉线保持
+   *   `initializing`，不会退回 `connecting`）。
+   */
+  private hasSettledInit(container: CloudContainerEntity): boolean {
+    if (container.initCompletedAt) return true;
+    return container.status === 'connecting' && container.connectedAt !== null;
   }
 
   /**
@@ -558,6 +574,9 @@ export class WorkloadDispatcher {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container) return false;
     if (container.status === 'initializing') return true;
+    // 已完成的初始化不重跑；否则会把 `registered.initializing=true` 发给 worker，
+    // 让它空等一个永远不会下发的 init 批次（工作流只初始化一次）。
+    if (this.hasSettledInit(container)) return false;
     if (container.status !== 'connecting' && container.status !== 'creating') return false;
     const plan = resolveContainerPlan(container);
     if (plan.length === 0) return false;

@@ -71,7 +71,9 @@ test.describe('Cloud Host E2E', () => {
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
 
       // 预装工作负载来自 cloudHostWorkloadCatalog（迁移 001/002/007 seed）
       await expect(dialog.getByText('预装工作负载（可选）')).toBeVisible();
@@ -175,13 +177,13 @@ test.describe('Cloud Host E2E', () => {
       const dialog = page.getByRole('dialog');
       // 「创建默认工作区」勾选项已舍弃：创建期一律不预置 /root/workspace
       await expect(dialog.getByRole('checkbox', { name: /创建默认工作区/ })).toHaveCount(0);
-      await expect(
-        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
-      ).toBeVisible();
 
       await dialog.locator('#cloud-host-name').fill(hostName);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toHaveCount(0);
+      // 单 Harness 选中后才展示「不自动建会话」提示（与 UI 条件一致）
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
       const controllerRow = page.locator(sidebar()).locator('li', { hasText: hostName });
@@ -304,7 +306,8 @@ async function seedGithub(page: import('@playwright/test').Page, userId: string)
   await db.collection('githubaccounts').insertOne({
     _id: accountId,
     userId,
-    githubUserId: Date.now(),
+    // GraphQL Int 为 32 位；Date.now() 会溢出导致 githubAccounts 查询整体报错
+    githubUserId: 20261024,
     githubLogin: 'phase10-owner',
     accessToken: 'encrypted-token',
     createdAt: new Date(),
@@ -313,7 +316,8 @@ async function seedGithub(page: import('@playwright/test').Page, userId: string)
   await db.collection('githubinstallations').insertOne({
     _id: new mongoose.Types.ObjectId(),
     accountId,
-    installationId: Date.now(),
+    // installationId 全局唯一且为 32 位 Int：取 10 位随机数避免唯一索引冲突
+    installationId: 1_000_000_000 + Math.floor(Math.random() * 1_000_000_000),
     accountLogin: 'phase10-owner',
     accountType: 'User',
     repos: [
@@ -450,7 +454,7 @@ async function cleanupHost(
 test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
 
-  test('P10-CH1: 未选项目 → 不弹四阶段进度框，ready 后自动建默认会话（旧入口零回归）', async ({ page }) => {
+  test('P10-CH1: 未选项目 → 不弹四阶段进度框，就绪后不预置工作区/不自动建会话（phase2 零回归）', async ({ page }) => {
     test.skip(!MONGO_URI || !INTERNAL_TOKEN, '需要 MONGODB_URI + INTERNAL_API_TOKEN');
     test.setTimeout(90_000);
     const { token, username } = await registerUser(page);
@@ -463,7 +467,9 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       const dialog = page.getByRole('dialog');
       await dialog.locator('#cloud-host-name').fill(name);
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
-      await expect(dialog.getByText('将自动创建会话')).toBeVisible();
+      await expect(
+        dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),
+      ).toBeVisible();
       await expect(dialog.getByRole('checkbox', { name: '配置 Github 项目' })).not.toBeChecked();
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
@@ -477,6 +483,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       });
       expect(ready.status()).toBe(200);
 
+      // phase2：workspaceId 为 null → 不创建默认工作区、也不自动创建默认会话
       const db = (await phase10Db())!;
       const deadline = Date.now() + 15000;
       let hostDoc: any = null;
@@ -484,19 +491,24 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
         hostDoc = await db.collection('cloudhosts').findOne({
           _id: new mongoose.Types.ObjectId(host.id),
         });
-        if (hostDoc?.defaultSessionId) break;
+        if (hostDoc?.status === 'RUNNING') break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       expect(hostDoc?.status).toBe('RUNNING');
-      expect(hostDoc?.defaultSessionId).toBeTruthy();
+      expect(hostDoc?.workspaceId ?? null).toBeNull();
+      expect(hostDoc?.defaultSessionId ?? null).toBeNull();
       const sessions = await db.collection('sessions').countDocuments({
         controllerId: new mongoose.Types.ObjectId(host.controllerId),
       });
-      expect(sessions).toBe(1);
+      expect(sessions).toBe(0);
 
       await page.reload();
-      await expect(page.locator(sidebar()).getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
-      await expect(page.locator(sidebar()).getByText('New Session').first()).toBeVisible();
+      const controllerRow = page.locator(sidebar()).locator('li', { hasText: name });
+      await expect(controllerRow).toBeVisible({ timeout: 15000 });
+      await expect(controllerRow.getByTestId('cloud-host-no-workspace-hint')).toHaveText(
+        '未创建默认工作区，请先创建或绑定工作区',
+      );
+      await expect(controllerRow.getByTestId('cloud-host-default-session-hint')).toHaveCount(0);
     } finally {
       await cleanupHost(page, token, name);
     }
@@ -508,6 +520,19 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
     const { token, username } = await registerUser(page);
     const userId = await getMe(page, token);
     await seedGithub(page, userId);
+    // 自检：seed 后 GraphQL 必须能读到账号与仓库（集合名/userId 类型问题在此暴露）
+    const accountsCheck = await gqlRequest(
+      page,
+      `query { githubAccounts { githubLogin installations { repos { fullName } } } }`,
+      undefined,
+      token,
+    );
+    const accountsBody = await accountsCheck.json();
+    expect(accountsBody.errors).toBeUndefined();
+    expect(accountsBody.data.githubAccounts).toHaveLength(1);
+    expect(accountsBody.data.githubAccounts[0].installations[0].repos[0].fullName).toBe(
+      'phase10-owner/repo',
+    );
     await loginViaUI(page, username);
     const name = `e2e-p10-project-${Date.now().toString(36)}`;
 
@@ -595,9 +620,28 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       await expect(page.getByText('git clone failed').first()).toBeVisible();
       const retry = page.getByRole('button', { name: '重试', exact: true });
       await expect(retry).toBeVisible();
+      const db = (await phase10Db())!;
+      const opId = new mongoose.Types.ObjectId(operation._id);
+      const before = await db.collection('cloud_host_setup_operations').findOne({ _id: opId });
       await retry.click();
-      // 重试入口已触发；随后 operation 重新进入 RUNNING/FAILED 均由后端驱动
-      await expect(page.getByRole('heading', { name: '设置进度' })).toBeVisible();
+      // C-23：环境无真实 worker 时重试可能立刻再次失败，不能只等 UI「进行中」；
+      // 改为断言操作文档确实被重新推进（updatedAt 前移），证明重试链路生效。
+      const deadline = Date.now() + 15000;
+      let after = before;
+      while (Date.now() < deadline) {
+        after = await db.collection('cloud_host_setup_operations').findOne({ _id: opId });
+        if (
+          after?.updatedAt &&
+          before?.updatedAt &&
+          new Date(after.updatedAt).getTime() > new Date(before.updatedAt).getTime()
+        ) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      expect(new Date(after!.updatedAt).getTime()).toBeGreaterThan(
+        new Date(before!.updatedAt).getTime(),
+      );
     } finally {
       await cleanupHost(page, token, name);
     }

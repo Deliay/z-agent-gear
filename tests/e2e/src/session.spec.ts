@@ -425,7 +425,9 @@ test.describe('Session E2E', () => {
 
   test('P10-S6: 控制器默认 MCP 子集在新建会话中生效', async ({ page }) => {
     test.skip(!MONGO_URI, '需要 MONGODB_URI 以预置第二个 MCP 服务');
-    const { token, username, userId } = await registerUser(page);
+    const { token, username } = await registerUser(page);
+    const meRes = await gqlRequest(page, `query { me { id } }`, undefined, token);
+    const userId = (await meRes.json()).data.me.id as string;
     const { rawKey } = await createControllerKey(page, token);
     const controller = await registerController(rawKey);
     await createWorkspace(
@@ -445,8 +447,10 @@ test.describe('Session E2E', () => {
 
     const db = (await phase10Db())!;
     const extraId = new mongoose.Types.ObjectId();
-    await db.collection('mcpServers').insertOne({
+    // Mongoose 模型 McpServer 的实际集合名是 `mcpservers`（非 camelCase）
+    await db.collection('mcpservers').insertOne({
       _id: extraId,
+      // McpServer.userId 在 schema 中是 String，直写字符串与 GraphQL 查询一致
       userId,
       name: 'e2e-extra-mcp',
       transport: 'registered_proxy',
@@ -456,6 +460,13 @@ test.describe('Session E2E', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+
+    // 自检：直写后 GraphQL 必须能读到（userId 类型/字段完整性问题在此暴露）
+    const verifyRes = await gqlRequest(page, `query { mcpServers { name } }`, undefined, token);
+    const verifyNames = ((await verifyRes.json()).data.mcpServers as Array<{ name: string }>).map(
+      (server) => server.name,
+    );
+    expect(verifyNames).toContain('e2e-extra-mcp');
 
     const saveRes = await gqlRequest(
       page,
@@ -485,7 +496,7 @@ test.describe('Session E2E', () => {
       const start = await waitForStart(controller.starts);
       expect(start.mcpEndpoint?.serverNames).toEqual(['agent-workflow-admin-tools']);
     } finally {
-      await db.collection('mcpServers').deleteOne({ _id: extraId });
+      await db.collection('mcpservers').deleteOne({ _id: extraId });
       controller.disconnect();
     }
   });

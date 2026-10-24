@@ -27,8 +27,9 @@ function bearerToken(header: string | undefined): string | null {
  * 两者都未配置时一律拒绝（默认拒绝，无「无鉴权放行」）。
  */
 function isAuthorized(req: Request): boolean {
+  // C-5：空 X-Event-Token 不得遮蔽有效的 Bearer（`??` 只跳过 null/undefined）
   const providedToken =
-    req.header('x-event-token') ?? bearerToken(req.header('authorization'));
+    req.header('x-event-token') || bearerToken(req.header('authorization'));
   if (providedToken && config.eventCallbackToken) {
     if (timingSafeEquals(providedToken, config.eventCallbackToken)) return true;
   }

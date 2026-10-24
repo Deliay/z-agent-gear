@@ -31,6 +31,21 @@ describe('parseEventCallbackPayload', () => {
   });
 
   it.each([
+    ['eventId 超长', JSON.stringify({ ...valid, eventId: 'e'.repeat(201) }), 'eventId'],
+    ['pullRequestId 超长', JSON.stringify({ ...valid, payload: { ...valid.payload, pullRequestId: 'a'.repeat(513) } }), 'payload.pullRequestId'],
+    ['prUrl 超长', JSON.stringify({ ...valid, payload: { ...valid.payload, prUrl: `https://github.com/${'a'.repeat(2048)}` } }), 'payload.prUrl'],
+    ['reviewer 超长', JSON.stringify({ ...valid, payload: { ...valid.payload, reviewer: 'r'.repeat(257) } }), 'payload.reviewer'],
+    ['comment 超长', JSON.stringify({ ...valid, payload: { ...valid.payload, comment: 'c'.repeat(64_001) } }), 'payload.comment'],
+  ])('C-4 限长：%s → 400 detail=%s', (_label, raw, detail) => {
+    expect(() => parseEventCallbackPayload(Buffer.from(raw))).toThrow(EventPayloadError);
+    try {
+      parseEventCallbackPayload(Buffer.from(raw));
+    } catch (err) {
+      expect((err as EventPayloadError).detail).toBe(detail);
+    }
+  });
+
+  it.each([
     ['非法 JSON', 'not-json', 'json'],
     ['非 pull_request', JSON.stringify({ ...valid, eventType: 'push' }), 'eventType'],
     ['空 eventId', JSON.stringify({ ...valid, eventId: '' }), 'eventId'],

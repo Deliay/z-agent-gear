@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import WorktreeSidebarGroup from './WorktreeSidebarGroup';
 import type { SessionData, WorkspaceWorktreeData } from '@/graphql/types';
 
@@ -7,7 +7,13 @@ vi.mock('react-router-dom', () => ({
   NavLink: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 
-vi.mock('@/components/session/NewSessionDialog', () => ({ default: () => null }));
+const newSessionDialog = vi.hoisted(() => ({ props: null as null | Record<string, unknown> }));
+vi.mock('@/components/session/NewSessionDialog', () => ({
+  default: (props: Record<string, unknown>) => {
+    newSessionDialog.props = props;
+    return null;
+  },
+}));
 vi.mock('@/components/workflow/InstantiateWorkflowDialog', () => ({ default: () => null }));
 vi.mock('./DeleteWorktreeConfirmDialog', () => ({ default: () => null }));
 
@@ -78,6 +84,51 @@ describe('WorktreeSidebarGroup', () => {
     expect(screen.getByText('project（默认）')).toBeDefined();
     // 无删除按钮
     expect(screen.queryByRole('button', { name: '删除 Worktree' })).not.toBeInTheDocument();
+  });
+
+  it('R-4: 预选 worktree 建会话时透传 modeId/modelId 与路径', () => {
+    const onCreate = vi.fn();
+    render(
+      <WorktreeSidebarGroup
+        workspaceId="ws-1"
+        controllerId="ctrl-1"
+        workspaceName="my-repo"
+        controllers={[]}
+        worktrees={[makeWorktree()]}
+        onCreate={onCreate}
+        fallbackSessions={[makeSession()]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建会话' }));
+    const props = newSessionDialog.props as {
+      onCreate: (...args: unknown[]) => void;
+    };
+    expect(props).toBeTruthy();
+    props.onCreate(
+      'ctrl-1',
+      'opencode',
+      'ws-1',
+      false,
+      undefined,
+      ['mcp-1'],
+      '/repo/.worktrees/feat-a',
+      'mode-1',
+      'model-1',
+    );
+
+    expect(onCreate).toHaveBeenCalledWith(
+      'ctrl-1',
+      'opencode',
+      'ws-1',
+      false,
+      undefined,
+      ['mcp-1'],
+      '/repo/.worktrees/feat-a',
+      'mode-1',
+      'model-1',
+    );
   });
 
   it('无 worktree 但有根目录会话时，会话聚合在默认工作区条目下', () => {
