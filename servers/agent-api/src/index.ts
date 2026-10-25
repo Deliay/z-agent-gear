@@ -25,8 +25,10 @@ import * as migration005 from './migrations/005-cloud-host-active-unique-index.j
 import * as migration006 from './migrations/006-todo-elicitation-request-id-index.js';
 import * as migration007 from './migrations/007-workflow-pr-handler-index.js';
 import * as migration008 from './migrations/008-workflow-pr-handler-lower-id.js';
+import * as migration009 from './migrations/009-todo-harness-login.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
+import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
 import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
@@ -94,6 +96,7 @@ async function start() {
       migration006,
       migration007,
       migration008,
+      migration009,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
@@ -110,6 +113,10 @@ async function start() {
     // Start elicitation subscriber
     elicitationSubscriberService.start();
     console.log('Elicitation subscriber started');
+
+    // Start harness login subscriber (Kimi Code login guidance)
+    harnessLoginSubscriberService.start();
+    console.log('Harness login subscriber started');
 
     // Revoke session MCP endpoints when sessions reach a terminal status
     mcpEndpointRevokeSubscriber.start();

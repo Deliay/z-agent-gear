@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { InMemoryK8sClient } from './k8s-client.js';
 import {
   buildServerEndpoint,
-  computeActiveDeadlineSeconds,
-  JOB_ACTIVE_DEADLINE_SECONDS,
   K8sJobManager,
 } from './k8s-job-manager.js';
 
@@ -78,7 +76,7 @@ describe('K8sJobManager', () => {
     expect(manifest.spec.template.spec.hostUsers).toBeUndefined();
   });
 
-  it('T-K5: manifest declares resource constraints and activeDeadlineSeconds', () => {
+  it('T-K5: manifest declares resource constraints and no activeDeadlineSeconds', () => {
     const { manager } = setup();
     const manifest = manager.buildManifest({
       jobName: 'zag-worker-abc123',
@@ -86,8 +84,8 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
 
-    expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
-    expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThan(0);
+    // 最长运行时间无限制：不设置 activeDeadlineSeconds，避免活跃容器被 K8s 到期强杀
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
     const resources = manifest.spec.template.spec.containers[0]!.resources;
     expect(resources.requests).toBeUndefined();
     expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi', 'ephemeral-storage': '10Gi' });
@@ -191,7 +189,6 @@ describe('K8sJobManager', () => {
       jobName: 'zag-worker-harness',
       containerId: 'container-h',
       token: 'container-h.secret',
-      activeDeadlineSeconds: 3600,
       env: {
         ZAG_HOST_ENDPOINT: 'wss://controller.example.com',
         ZAG_HOST_KEY: 'zag_k_1_host',
@@ -220,10 +217,10 @@ describe('K8sJobManager', () => {
     expect(env.ZAG_USER_ID).toBe('user-1');
     // 模型 Key 仅走 workload:run.env，不进入 Job env
     expect(env.ZAG_MODEL_API_KEY).toBeUndefined();
-    expect(manifest.spec.activeDeadlineSeconds).toBe(3600);
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
   });
 
-  it('T-CC8: idle Job 保持旧两项 env 与默认 activeDeadlineSeconds', () => {
+  it('T-CC8: idle Job 保持旧两项 env 且不设置 activeDeadlineSeconds', () => {
     const { manager } = setup();
     const manifest = manager.buildManifest({
       jobName: 'zag-worker-idle',
@@ -234,17 +231,6 @@ describe('K8sJobManager', () => {
       'ZAG_SERVER_ENDPOINT',
       'ZAG_CONTROLLER_KEY',
     ]);
-    expect(manifest.spec.activeDeadlineSeconds).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
-  });
-
-  it('T-CC22: expiresAt 换算 activeDeadlineSeconds（最小 60s，缺省 86400）', () => {
-    const now = new Date('2026-10-20T00:00:00.000Z').getTime();
-    expect(
-      computeActiveDeadlineSeconds(new Date(now + 3600_000), now),
-    ).toBe(3600);
-    expect(computeActiveDeadlineSeconds(new Date(now + 10_000), now)).toBe(60);
-    expect(computeActiveDeadlineSeconds(new Date(now - 10_000), now)).toBe(60);
-    expect(computeActiveDeadlineSeconds(null, now)).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
-    expect(computeActiveDeadlineSeconds(undefined, now)).toBe(JOB_ACTIVE_DEADLINE_SECONDS);
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
   });
 });

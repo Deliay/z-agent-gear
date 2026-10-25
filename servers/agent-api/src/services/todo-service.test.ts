@@ -7,6 +7,7 @@ vi.mock('../models/todo-item.js', () => ({
     countDocuments: vi.fn(),
     updateOne: vi.fn(),
     updateMany: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 
@@ -466,7 +467,11 @@ describe('TodoService', () => {
       expect(TodoItem.updateOne).toHaveBeenCalledWith(
         {
           userId: 'user-1',
-          $or: [{ 'data.requestId': 'req-1' }, { 'elicitationData.requestId': 'req-1' }],
+          $or: [
+            { 'data.requestId': 'req-1' },
+            { 'elicitationData.requestId': 'req-1' },
+            { 'harnessLoginData.requestId': 'req-1' },
+          ],
         },
         { $set: { isRead: true } },
       );
@@ -734,5 +739,119 @@ describe('TodoService - elicitation resolution', () => {
     await expect(service.markTodoAsResponded('req-1', '')).resolves.toBe(false);
     await expect(service.markElicitationCompleted('elic-1', '')).resolves.toBe(false);
     expect(TodoItem.updateOne).not.toHaveBeenCalled();
+  });
+
+  describe('harness login todo', () => {
+    it('T-TD11: createHarnessLoginTodo 按 requestId+userId upsert（immediate）', async () => {
+      const doc = mockTodoDoc({ type: 'harness_login_request' });
+      vi.mocked(TodoItem.findOneAndUpdate).mockResolvedValue({
+        value: doc,
+        lastErrorObject: { n: 1, updatedExisting: false },
+      } as never);
+
+      const result = await service.createHarnessLoginTodo({
+        requestId: 'hl-1',
+        controllerId: 'ctrl-1',
+        userId: 'user-1',
+        serverType: 'kimi_code',
+        trigger: 'probe-options',
+        url: 'https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG',
+        userCode: '4CQ4-0XIG',
+        expiresInSeconds: 1800,
+      });
+
+      const [, update, options] = vi.mocked(TodoItem.findOneAndUpdate).mock.calls[0];
+      expect(update).toMatchObject({
+        $setOnInsert: expect.objectContaining({
+          type: 'harness_login_request',
+          priority: 'immediate',
+          title: 'Kimi Code 需要登录',
+          harnessLoginData: expect.objectContaining({
+            requestId: 'hl-1',
+            controllerId: 'ctrl-1',
+            serverType: 'kimi_code',
+            userCode: '4CQ4-0XIG',
+          }),
+        }),
+      });
+      expect(options).toMatchObject({ upsert: true, new: true });
+      expect(result.created).toBe(true);
+    });
+
+    it('T-TD12: 重复 required 不新建（updatedExisting=true → created=false）', async () => {
+      vi.mocked(TodoItem.findOneAndUpdate).mockResolvedValue({
+        value: mockTodoDoc(),
+        lastErrorObject: { n: 1, updatedExisting: true },
+      } as never);
+
+      const result = await service.createHarnessLoginTodo({
+        requestId: 'hl-1',
+        controllerId: 'ctrl-1',
+        userId: 'user-1',
+        serverType: 'kimi_code',
+        trigger: 'acp:start',
+        url: 'https://example.com/x',
+        userCode: 'CODE-1',
+      });
+
+      expect(result.created).toBe(false);
+    });
+
+    it('T-TD13: expiresAt 缺省 1800s，非法值回退缺省', async () => {
+      vi.mocked(TodoItem.findOneAndUpdate).mockResolvedValue({
+        value: mockTodoDoc(),
+        lastErrorObject: { updatedExisting: false },
+      } as never);
+
+      const before = Date.now();
+      await service.createHarnessLoginTodo({
+        requestId: 'hl-1',
+        controllerId: 'ctrl-1',
+        userId: 'user-1',
+        serverType: 'kimi_code',
+        trigger: 'acp:resume',
+        url: 'https://example.com/x',
+        userCode: 'CODE-1',
+        expiresInSeconds: -5,
+      });
+
+      const update = vi.mocked(TodoItem.findOneAndUpdate).mock.calls[0][1] as {
+        $setOnInsert: { expiresAt: Date };
+      };
+      const delta = update.$setOnInsert.expiresAt.getTime() - before;
+      expect(delta).toBeGreaterThan(1_700_000);
+      expect(delta).toBeLessThan(1_900_000);
+    });
+
+    it('T-TD14: isRespondableTodo(harness_login_request) 要求归属 + resolution:null', async () => {
+      vi.mocked(TodoItem.countDocuments).mockResolvedValue(1 as never);
+
+      await expect(
+        service.isRespondableTodo('user-1', 'hl-1', 'harness_login_request'),
+      ).resolves.toBe(true);
+      expect(TodoItem.countDocuments).toHaveBeenCalledWith({
+        userId: 'user-1',
+        'harnessLoginData.requestId': 'hl-1',
+        resolution: null,
+      });
+    });
+
+    it('T-TD15: markHarnessLoginResolved 终态单调（userId + resolution:null，置已读）', async () => {
+      vi.mocked(TodoItem.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+
+      const updated = await service.markHarnessLoginResolved('hl-1', 'accepted', { userId: 'user-1' });
+
+      expect(updated).toBe(1);
+      expect(TodoItem.updateOne).toHaveBeenCalledWith(
+        { userId: 'user-1', 'harnessLoginData.requestId': 'hl-1', resolution: null },
+        { $set: { resolution: 'accepted', resolvedAt: expect.any(Date), isRead: true } },
+      );
+    });
+
+    it('T-TD16: markHarnessLoginResolved 缺 userId/requestId 拒绝写入', async () => {
+      await expect(service.markHarnessLoginResolved('hl-1', 'cancelled', { userId: '' })).resolves.toBe(0);
+      await expect(service.markHarnessLoginResolved('', 'cancelled', { userId: 'user-1' })).resolves.toBe(0);
+      expect(TodoItem.updateOne).not.toHaveBeenCalled();
+    });
   });
 });

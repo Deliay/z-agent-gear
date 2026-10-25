@@ -16,6 +16,7 @@ import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { gatewayRelayService } from './services/gateway-relay.js';
 import { permissionManager } from './services/permission-manager.js';
 import { elicitationManager } from './services/elicitation-manager.js';
+import { harnessLoginManager } from './services/harness-login-manager.js';
 import { DisconnectTimer } from './services/disconnect-timer.js';
 import { Session } from './models/session.js';
 import { createMcpProxyKeyRouter } from './routes/mcp-proxy-key.js';
@@ -79,6 +80,7 @@ async function start() {
   gatewayRelayService.start(io);
   permissionManager.start(io);
   elicitationManager.start(io);
+  harnessLoginManager.start(io);
 
   disconnectTimer.start();
 
@@ -92,6 +94,7 @@ async function gracefulShutdown() {
   heartbeatService.stop();
   permissionManager.stop();
   elicitationManager.stop();
+  harnessLoginManager.stop();
   disconnectTimer.stop();
   mcpForwardConsumer.stop();
   io.close();

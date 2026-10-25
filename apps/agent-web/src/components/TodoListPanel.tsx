@@ -11,6 +11,7 @@ import { PermissionDialog } from './PermissionDialog';
 import { ElicitationDialog } from './ElicitationDialog';
 import { useHomeOverview } from '../stores/homeOverview';
 import { useElicitationDialogState } from '../stores/elicitationDialog';
+import { openHarnessLoginDialog } from '../stores/harnessLoginDialog';
 import type { TodoItemData } from '../graphql/types';
 
 function isActionablePermission(todo: TodoItemData): boolean {
@@ -21,9 +22,13 @@ function isActionableElicitation(todo: TodoItemData): boolean {
   return todo.type === 'elicitation_request' && !!todo.elicitationData && !todo.resolution;
 }
 
+function isActionableHarnessLogin(todo: TodoItemData): boolean {
+  return todo.type === 'harness_login_request' && !!todo.harnessLoginData && !todo.resolution;
+}
+
 // 可交互弹窗的待办类型（已 resolved 的问询不再自动弹出）
 function isActionable(todo: TodoItemData): boolean {
-  return isActionablePermission(todo) || isActionableElicitation(todo);
+  return isActionablePermission(todo) || isActionableElicitation(todo) || isActionableHarnessLogin(todo);
 }
 
 export function TodoListPanel() {
@@ -97,6 +102,9 @@ export function TodoListPanel() {
     processedImmediateRef.current.add(immediate.id);
     if (isActionableElicitation(immediate)) {
       openElicitation(immediate, 'todo');
+    } else if (isActionableHarnessLogin(immediate)) {
+      // 登录引导弹窗独立层级：不占用 elicitation owner，且可由 SSE 即时打开
+      if (immediate.harnessLoginData) openHarnessLoginDialog(immediate.harnessLoginData);
     } else {
       setImmediateTodoId(immediate.id);
     }
@@ -109,6 +117,10 @@ export function TodoListPanel() {
 
   const handleTodoClick = (todo: TodoItemData) => {
     if (todo.isRead || !isActionable(todo)) return;
+    if (isActionableHarnessLogin(todo)) {
+      if (todo.harnessLoginData) openHarnessLoginDialog(todo.harnessLoginData);
+      return;
+    }
     if (isActionableElicitation(todo)) {
       // 问询走共享弹窗状态：与 Banner 互斥，避免同一 requestId 双弹窗
       setSelectedTodoId(null);
@@ -177,6 +189,9 @@ export function TodoListPanel() {
                         )}
                         {todo.type === 'elicitation_request' && (
                           <Badge variant="outline" className="text-xs">信息请求</Badge>
+                        )}
+                        {todo.type === 'harness_login_request' && (
+                          <Badge variant="outline" className="text-xs">登录</Badge>
                         )}
                         {todo.type === 'workflow_intervention' && (
                           <Badge variant="destructive" className="text-xs">人工介入</Badge>

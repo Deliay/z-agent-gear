@@ -271,6 +271,19 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E38 问询过期 | 发 `acp:elicitation:resolved{timeout}` → 弹窗显示「已过期」且操作按钮隐藏 |
 | T-E39 移动端问询 | 移动视口 → 提示条可见、可打开弹窗（Sidebar 未挂载场景） |
 
+### Kimi Code 登录引导 E2E (`harness-login.spec.ts`)
+
+> 需要 `HARNESS_ENABLED=true` + Aspire 全量服务（agent-web / agent-api / controller-api / Redis）。fake controller 注入 `harness:login:required/succeeded/failed` 驱动全局弹窗（SSE 即时下发）；真实 `kimi login` 浏览器授权链路列部署侧手工验收（计划 §3 A20）。
+
+| 测试 | 描述 |
+|------|------|
+| T-E-HL1/T-E-HL2 | 不刷新即时弹出：链接/验证码逐字、「复制链接/验证码」、`target=_blank rel=noreferrer`、倒计时；注入 `succeeded` → 自动关闭 + toast「Kimi Code 已登录」 |
+| T-E-HL3 | 取消：fake controller 收到 `harness:login:cancel` → 注入 `failed(cancelled)` → toast「Kimi Code 未登录」；再次注入新 requestId 可重新弹出 |
+| T-E-HL4 | 注入 `failed(timeout)` → toast「登录未完成，可重试」，弹窗与取消按钮隐藏 |
+| T-E-HL5 | 移动视口（375px）弹窗可见、无横向溢出、取消可点 |
+| T-E-HL6 | OpenCode 探测（`acpServerOptions`）零弹窗（零回归） |
+| T-E-HL7 | 新建云电脑对话框 `Kimi Code` 与 `OpenCode` 均可见可勾选、多选提示「不自动创建会话」（见 `cloud-host.spec.ts`） |
+
 ### Admin Auth E2E (`admin-auth.spec.ts`)
 
 | 测试 | 描述 |
@@ -341,7 +354,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E12 参数配置全流程 | 新建工作负载配置四种参数类型（下拉单选/下拉多选/文本/布尔）与默认值 → 保存 → 列表展示参数数量（4）→ 编辑回显类型/默认值 |
 | T-E12 非法值拦截 | 非法 key（数字开头）与下拉类型无可选项时给出提示且「保存」禁用 |
 | T-E13 多依赖 | 勾选多个依赖 → 展示「已选依赖（按初始化顺序）」→ 列表展示依赖名称；依赖环 → 「检测到依赖环」提示且「保存」禁用 |
-| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Github 与「预制」徽章（恰 6 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
+| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/Github 与「预制」徽章（恰 7 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
 
 > 覆盖裁剪（计划裁决 17）：Aspire 以 `K8S_ENABLED=false` 启动、无真实工作容器回连，`INITIALIZING` 与脚本执行链路改由 cloud-controller/agent-controller 单测与 tests/api（直写 Mongo + 内部 API/GraphQL 查询）覆盖；E2E 只覆盖 CRUD、启动多选、状态/日志展示。真实集群链路（init/post 下发执行、超时保护、旧 worker 兼容、镜像重建）列部署侧手工验收。
 

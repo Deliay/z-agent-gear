@@ -10,7 +10,6 @@ import type {
   UpdateContainerInput,
 } from '../repositories/container-repository.js';
 import type { K8sJobManager } from './k8s-job-manager.js';
-import { computeActiveDeadlineSeconds } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
@@ -145,7 +144,7 @@ export interface StartHarnessOptions {
   agentGearMinVersion?: string | null;
   /** 关联前台用户 ID。 */
   userId?: string | null;
-  /** 容器 TTL 到期时间（harness；换算 Job activeDeadlineSeconds）。 */
+  /** 容器 TTL 到期时间（harness；仅落库留存，Job 不再设置最长运行时间）。 */
   expiresAt?: Date | null;
   /** 云电脑运行期 secret（仅内存，不落库）。 */
   secrets?: HarnessSecrets | null;
@@ -353,12 +352,8 @@ export class ContainerService {
             jobName: name,
             containerId: created.id,
             token,
-            ...(purpose === 'harness'
-              ? {
-                  activeDeadlineSeconds: computeActiveDeadlineSeconds(options.expiresAt),
-                  env: this.buildHarnessJobEnv(options),
-                }
-              : {}),
+            // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
+            ...(purpose === 'harness' ? { env: this.buildHarnessJobEnv(options) } : {}),
           });
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);

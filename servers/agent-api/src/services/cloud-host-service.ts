@@ -32,7 +32,31 @@ const ACTIVE_STATUSES = ['STARTING', 'RUNNING', 'STOPPING'] as const;
 
 const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
   OPENCODE: 'opencode',
+  KIMI_CODE: 'kimi_code',
 };
+
+/** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.6.0 基线） */
+export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {
+  OPENCODE: '2.6.0',
+  KIMI_CODE: '2.8.0',
+};
+
+/** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.6.0 的最大值 */
+export function resolveAgentGearMinVersion(types: HarnessType[]): string {
+  const versions = [CLOUD_HOST_AGENT_GEAR_MIN_VERSION, ...types.map((type) => HARNESS_MIN_AGENT_GEAR_VERSION[type] ?? CLOUD_HOST_AGENT_GEAR_MIN_VERSION)];
+  return versions.reduce((max, current) => (compareVersions(current, max) > 0 ? current : max), CLOUD_HOST_AGENT_GEAR_MIN_VERSION);
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const pb = b.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(pa.length, pb.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 export interface CreateCloudHostInput {
   name: string;
@@ -139,8 +163,17 @@ export class CloudHostService {
       return { enabled: false, supportedHarnesses: [] };
     }
     try {
-      await this.workloadReader.findHarnessPreset('OPENCODE');
-      return { enabled: true, supportedHarnesses: ['OPENCODE'] };
+      // 逐个 harness 探测 preset：存在即列出，缺失跳过
+      const supportedHarnesses: HarnessType[] = [];
+      for (const type of HARNESS_TYPES) {
+        try {
+          await this.workloadReader.findHarnessPreset(type);
+          supportedHarnesses.push(type);
+        } catch {
+          // 单个 preset 缺失不阻断其他 harness
+        }
+      }
+      return { enabled: true, supportedHarnesses };
     } catch {
       // preset 缺失：能力列表为空，create 返回明确错误
       return { enabled: true, supportedHarnesses: [] };
@@ -290,7 +323,7 @@ export class CloudHostService {
             harnessTypes: harnessTypes.map((type) => harnessSlug(type)),
             expiresAt,
             billingAccountId: account.id,
-            agentGearMinVersion: CLOUD_HOST_AGENT_GEAR_MIN_VERSION,
+            agentGearMinVersion: resolveAgentGearMinVersion(harnessTypes),
             workloadPlan,
             secrets: {
               hostEndpoint: config.controllerApiPublicEndpoint,

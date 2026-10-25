@@ -147,6 +147,15 @@ export const HOME_OVERVIEW = gql`
           elicitationId
           url
         }
+        harnessLoginData {
+          requestId
+          controllerId
+          serverType
+          trigger
+          url
+          userCode
+          expiresAt
+        }
         resolution
         resolvedAt
         expiresAt

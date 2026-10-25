@@ -682,8 +682,8 @@ describe('ContainerService workload state machine', () => {
     expect(env.ZAG_MODEL_API_KEY).toBeUndefined();
 
     const manifest = client.getManifest(created.name)!;
-    expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThanOrEqual(3598);
-    expect(manifest.spec.activeDeadlineSeconds).toBeLessThanOrEqual(3600);
+    // 最长运行时间无限制：Job 不再设置 activeDeadlineSeconds
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
 
     expect(secretStore.get(created.id)).toEqual(secrets);
     // secret 不落库：实体无 secrets 字段
@@ -700,7 +700,7 @@ describe('ContainerService workload state machine', () => {
       'ZAG_SERVER_ENDPOINT',
       'ZAG_CONTROLLER_KEY',
     ]);
-    expect(manifest.spec.activeDeadlineSeconds).toBe(86400);
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
     expect(secretStore.size).toBe(0);
   });
 

@@ -16,6 +16,7 @@ export const todoTypeDefs = `#graphql
   enum TodoType {
     permission_request
     elicitation_request
+    harness_login_request
     workflow_intervention
   }
 
@@ -84,6 +85,23 @@ export const todoTypeDefs = `#graphql
     url: String
   }
 
+  # harness 登录引导数据（required 事件落库；链接/验证码为 kimi login stdio 原文）
+  type HarnessLoginRequestData {
+    requestId: String!
+    controllerId: ID!
+    serverType: AcpServerType!
+    # 触发登录检查的使用动作：probe-options / acp:start / acp:resume
+    trigger: String!
+    url: String!
+    userCode: String!
+    expiresAt: String!
+  }
+
+  # 登录引导弹窗动作（本期仅支持取消；关闭弹窗等同取消）
+  enum HarnessLoginAction {
+    cancel
+  }
+
   type TodoItem {
     id: ID!
     type: TodoType!
@@ -93,6 +111,8 @@ export const todoTypeDefs = `#graphql
     isRead: Boolean!
     data: PermissionRequestData
     elicitationData: ElicitationRequestData
+    # Kimi Code（Harness）登录引导；type=harness_login_request 时存在
+    harnessLoginData: HarnessLoginRequestData
     # 问询终态：null = 仍待处理；expired = 超时未响应；failed = 链路不支持
     resolution: ElicitationResolution
     resolvedAt: String
@@ -108,6 +128,8 @@ export const todoTypeDefs = `#graphql
   extend type Mutation {
     respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!
     respondElicitation(requestId: String!, action: ElicitationAction!, values: JSON): Boolean!
+    # 响应用户侧的 harness 登录引导（本期仅 cancel）；未命中/非本人/已收敛抛错
+    respondHarnessLogin(requestId: String!, action: HarnessLoginAction!): Boolean!
     markTodoRead(todoId: ID!): Boolean!
     markAllTodoRead: Boolean!
     updatePermissionTimeout(sessionId: ID, timeoutAction: PermissionTimeoutAction!): Boolean!

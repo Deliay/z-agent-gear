@@ -648,6 +648,77 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       await db!.collection('cloudworkloads').deleteOne({ _id: workloadId });
     }
   });
+
+  // Kimi Code（Harness）：白名单 + 按 harnessTypes 取最大版本门禁（计划 §3 A7）
+  function harnessBody(harnessTypes: unknown): Record<string, unknown> {
+    return {
+      purpose: 'harness',
+      hostId: new mongoose.Types.ObjectId().toString(),
+      refId: new mongoose.Types.ObjectId().toString(),
+      userId: new mongoose.Types.ObjectId().toString(),
+      hostName: 'kimi-gate',
+      harnessTypes,
+      agentGearMinVersion: '2.5.0',
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      secrets: {
+        hostEndpoint: 'wss://controller-api.internal',
+        hostKey: 'zag_k_gate_secret',
+        modelApiKey: 'zag_sk_gate_secret',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["model-a"]',
+        defaultWorkspace: '/root/workspace',
+      },
+    };
+  }
+
+  it('T-IC-HARNESS1: accepts kimi_code and rejects unknown types (400 INVALID_HARNESS)', async () => {
+    const created = await req('/internal/containers', {
+      method: 'POST',
+      body: JSON.stringify(harnessBody(['kimi_code'])),
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { id: string; harnessTypes: string[] };
+    expect(body.harnessTypes).toEqual(['kimi_code']);
+    await req(`/internal/containers/${body.id}`, { method: 'DELETE' });
+
+    const invalid = await req('/internal/containers', {
+      method: 'POST',
+      body: JSON.stringify(harnessBody(['kimi_code', 'bogus'])),
+    });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({ error: 'INVALID_HARNESS' });
+  });
+
+  it.skipIf(!HAS_MONGO)(
+    'T-IC-HARNESS2: per-type version gate (kimi_code→2.8.0, opencode→2.6.0)',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
+
+      const cases: Array<{ types: string[]; expected: string }> = [
+        { types: ['kimi_code'], expected: '2.8.0' },
+        { types: ['opencode', 'kimi_code'], expected: '2.8.0' },
+        { types: ['opencode'], expected: '2.6.0' },
+      ];
+
+      for (const testCase of cases) {
+        const res = await req('/internal/containers', {
+          method: 'POST',
+          body: JSON.stringify(harnessBody(testCase.types)),
+        });
+        expect(res.status, testCase.types.join(',')).toBe(201);
+        const created = (await res.json()) as { id: string };
+        try {
+          const doc = await db!.collection('cloudcontainers').findOne({
+            $or: [{ _id: new mongoose.Types.ObjectId(created.id) }, { id: created.id }],
+          });
+          expect(doc?.agentGearMinVersion, testCase.types.join(',')).toBe(testCase.expected);
+        } finally {
+          await req(`/internal/containers/${created.id}`, { method: 'DELETE' });
+        }
+      }
+    },
+  );
 });
 
 // Phase 4：通过真实 Job manifest 构造断言 ephemeral-storage（无需 K8s 集群）

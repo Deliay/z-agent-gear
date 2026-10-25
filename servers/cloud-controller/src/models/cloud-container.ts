@@ -23,8 +23,8 @@ export const CONTAINER_PURPOSES = [
 /** 可被 `/internal/containers` 启动的用途白名单（契约 A.2.2）。 */
 export const STARTABLE_PURPOSES = ['idle', 'harness'] as const;
 
-/** 本期支持的 harness 类型白名单。 */
-export const SUPPORTED_HARNESS_TYPES = ['opencode'] as const;
+/** 本期支持的 harness 类型白名单（opencode / kimi_code）。 */
+export const SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code'] as const;
 
 export type CloudContainerPurpose = (typeof CONTAINER_PURPOSES)[number];
 
@@ -103,7 +103,7 @@ const cloudContainerSchema = new mongoose.Schema(
     containerApiKeyId: { type: String, default: null },
     /** 云电脑最低 agent-gear 版本（max(服务端常量, 请求值)）；普通容器为 null。 */
     agentGearMinVersion: { type: String, default: null },
-    /** 容器 TTL 到期时间（同时用于 Job activeDeadlineSeconds）；历史记录为 null。 */
+    /** 容器 TTL 到期时间（仅落库留存，供计费凭证到期等业务使用；不再映射 Job 硬截止）；历史记录为 null。 */
     expiresAt: { type: Date, default: null },
     tokenHash: { type: String, default: null },
     image: { type: String, required: true },

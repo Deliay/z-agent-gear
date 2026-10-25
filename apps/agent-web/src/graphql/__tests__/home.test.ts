@@ -10,6 +10,7 @@ import {
 import {
   CREATE_CLOUD_HOST,
   DELETE_CLOUD_HOST,
+  RESPOND_HARNESS_LOGIN,
   STOP_CLOUD_HOST,
 } from '../mutations';
 
@@ -45,5 +46,20 @@ describe('云电脑 GraphQL 文档（T-AW15）', () => {
     expect(print(CREATE_CLOUD_HOST)).toContain('createCloudHost(input: $input)');
     expect(print(STOP_CLOUD_HOST)).toContain('stopCloudHost(id: $id, force: $force)');
     expect(print(DELETE_CLOUD_HOST)).toContain('deleteCloudHost(id: $id)');
+  });
+
+  it('HOME_OVERVIEW.todos 携带 harnessLoginData 全部字段', () => {
+    const document = print(HOME_OVERVIEW);
+
+    expect(document).toContain('harnessLoginData');
+    for (const field of ['requestId', 'controllerId', 'serverType', 'trigger', 'url', 'userCode', 'expiresAt']) {
+      expect(document).toContain(field);
+    }
+  });
+
+  it('RESPOND_HARNESS_LOGIN 与契约一致', () => {
+    const document = print(RESPOND_HARNESS_LOGIN);
+
+    expect(document).toContain('respondHarnessLogin(requestId: $requestId, action: $action)');
   });
 });

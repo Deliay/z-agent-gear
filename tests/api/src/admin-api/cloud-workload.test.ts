@@ -661,13 +661,13 @@ describe('Admin Cloud Workload API', () => {
   // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
   // -------------------------------------------------------------------------
 
-  it('T-IA: exposes the five preset workloads with stable ids (idempotent)', async () => {
+  it('T-IA: exposes the seven preset workloads with stable ids (idempotent)', async () => {
     const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
     expect(first.errors).toBeUndefined();
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Github']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'Github']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -695,14 +695,21 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(6);
+    expect(presetIds(all)).toHaveLength(7);
 
-    // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/opencode）
+    // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/<slug>）
     expect(docker.workloadKind).toBe('STANDARD');
     expect(docker.harnessType).toBeNull();
     const harness = byName.get('OpenCode（Harness）')!;
     expect(harness.workloadKind).toBe('HARNESS');
     expect(harness.harnessType).toBe('opencode');
+    const kimi = byName.get('Kimi Code（Harness）')!;
+    expect(kimi.workloadKind).toBe('HARNESS');
+    expect(kimi.harnessType).toBe('kimi_code');
+    expect(kimi.paramSchema).toEqual([]);
+    expect(kimi.initScript).toContain('@moonshot-ai/kimi-code@2.3.2');
+    expect(kimi.initScript).toContain('kimi --version');
+    expect(kimi.initScript).not.toContain('agent-gear harness prepare');
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
     }

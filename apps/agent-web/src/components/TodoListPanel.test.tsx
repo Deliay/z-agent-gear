@@ -308,4 +308,41 @@ describe('TodoListPanel - resolved elicitation', () => {
       expect(screen.queryByText('Agent请求输入：已过期问询')).toBeNull();
     });
   });
+
+  it('点击 harness_login_request 待办打开全局登录弹窗（兜底路径）', async () => {
+    const harnessRequest = {
+      requestId: 'hl-1',
+      controllerId: 'ctrl-1',
+      serverType: 'kimi_code',
+      trigger: 'probe-options',
+      url: 'https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG',
+      userCode: '4CQ4-0XIG',
+      expiresAt: '2026-10-25T12:30:00.000Z',
+    };
+    mockOverview([
+      {
+        id: 'todo-hl',
+        type: 'harness_login_request',
+        priority: 'immediate',
+        title: 'Kimi Code 需要登录',
+        description: null,
+        isRead: false,
+        data: null,
+        harnessLoginData: harnessRequest,
+        createdAt: '2026-10-25T12:00:00.000Z',
+      },
+    ]);
+
+    const { useHarnessLoginDialogState, resetHarnessLoginDialog } = await import(
+      '../stores/harnessLoginDialog'
+    );
+    resetHarnessLoginDialog();
+    const { result } = renderHook(() => useHarnessLoginDialogState());
+
+    render(<TodoListPanel />);
+
+    // immediate 未读待办自动打开（无需点击）
+    await waitFor(() => expect(result.current.current?.requestId).toBe('hl-1'));
+    expect(result.current.current?.userCode).toBe('4CQ4-0XIG');
+  });
 });
