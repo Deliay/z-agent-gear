@@ -332,13 +332,16 @@ Worker                              cloud-controller
 - **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.6.0`（云电脑双连接 / `harness prepare` / Github 凭据管理器），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - **按 `harnessTypes` 细分的最低版本**：`agentGearMinVersion` 落库值 =
   `max(请求值, MIN_HARNESS_WORKER_VERSION, 按 harnessTypes 取最大)`；本期
-  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0' }`（`MIN_KIMI_HARNESS_WORKER_VERSION`），
+  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.9.0' }`
+  （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
   仅 `opencode` 的运行仍为 2.6.0。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
-- **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code']`；非白名单类型返回
+- **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
   `400 INVALID_HARNESS`，不创建 Job。
-- **预置工作负载映射**：`kimi_code → presetKey 'harness-kimi-code'`（`workloadKind='harness'`、
-  `harnessType='kimi_code'`），由 admin-api 迁移 009 预置；`ZAG_HARNESS_TYPES` 仍按 harness slug
-  逗号拼接（如 `opencode,kimi_code`），语义不变。
+- **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
+  `kimi_code → presetKey 'harness-kimi-code'`（迁移 009）、
+  `deepseek_harness → presetKey 'harness-deepseek-harness'`（迁移 010，`workloadKind='harness'`、
+  `harnessType='deepseek_harness'`）；`ZAG_HARNESS_TYPES` 仍按 harness slug
+  逗号拼接（如 `opencode,kimi_code` / `opencode,deepseek_harness`），语义不变。
 - 任一条件不满足返回 `VERSION_MISMATCH`（§2.4，含 `currentVersion`/`minimumVersion`/`supportedMajor`）并 `disconnect(true)`。
 - **拒绝副作用约束**：版本校验必须位于所有注册副作用之前——不设置 `socket.data.registered`，不调用心跳计时、初始化脚本查询/下发、`online`/`initializing` 状态迁移，不写入 `connectedAt`，不下发 `workload:run`。因此被拒绝的容器销毁时按「从未完成兼容注册」处理：不发送 shutdown、不等待宽限，直接删除 Job。
 - 兼容 worker（`>=2.2.0` 且 major 为 `2`）的注册、心跳、工作负载、重连与销毁协议不变。
@@ -416,7 +419,7 @@ Content-Type: application/json
 ```
 
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
-- `harnessTypes` 仅接受 `opencode` / `kimi_code`（可多选）；落库的 `agentGearMinVersion` 会按类型细分取最大值（含 `kimi_code` → `2.8.0`，见 §3.4）。
+- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 会按类型细分取最大值（含 `kimi_code` → `2.8.0`、含 `deepseek_harness` → `2.9.0`，见 §3.4）。
 - `expiresAt` 仅落库留存（供计费模型 Key 到期等业务使用）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。

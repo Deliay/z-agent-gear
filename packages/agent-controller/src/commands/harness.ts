@@ -10,8 +10,12 @@ export interface RegisterHarnessCommandsDeps {
  * 注册 `agent-gear harness` 命令组。
  *
  * ```
- * agent-gear harness prepare   # 校验 env → opencode --version → 写 opencode.jsonc
+ * agent-gear harness prepare   # 按 ZAG_HARNESS_TYPES 校验 env → CLI 硬校验 → 注入配置
  * ```
+ *
+ * 注入目标（按 `ZAG_HARNESS_TYPES` 分流；缺省/空 → `opencode`）：
+ * - `opencode`：`opencode.jsonc` 的 `providers.zag`；
+ * - `deepseek_harness`：`profiles/acp/cordis.patch.yml` + `.credentials.yaml`。
  *
  * 失败以退出码 1 结束（供 harness 工作负载 `required=true` 触发容器强制注销）；
  * 输出/错误均对 `ZAG_MODEL_API_KEY` 等 secret 脱敏。
@@ -22,11 +26,13 @@ export function registerHarnessCommands(
 ): Command {
   const harness = program
     .command('harness')
-    .description('Prepare harness runtime (OpenCode) for cloud-host containers');
+    .description('Prepare harness runtime (OpenCode / DeepSeek Harness) for cloud-host containers');
 
   harness
     .command('prepare')
-    .description('Validate harness env, verify OpenCode CLI and write providers.zag into opencode.jsonc')
+    .description(
+      'Validate harness env, verify CLI and write providers.zag into opencode.jsonc or profiles/acp for dsh',
+    )
     .action(async () => {
       try {
         const result = await (deps.prepare ?? prepareHarness)();

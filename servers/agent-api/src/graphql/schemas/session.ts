@@ -17,6 +17,7 @@ export const sessionTypeDefs = `#graphql
     codex
     mimo_code
     kimi_code
+    deepseek_harness
   }
 
   enum AcpMessageDirection {

@@ -59,6 +59,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
     codex: 'Codex',
     mimo_code: 'MiMo Code',
     kimi_code: 'Kimi Code',
+    deepseek_harness: 'DeepSeek Harness',
   };
 
   const continueBlocked = (capabilities?.isBlocked('session.resume') ?? false)

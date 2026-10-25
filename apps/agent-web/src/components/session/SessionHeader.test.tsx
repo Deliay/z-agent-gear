@@ -57,6 +57,12 @@ describe('SessionHeader', () => {
     expect(screen.getByText('Kimi Code')).toBeDefined();
   });
 
+  it('should display DeepSeek Harness label for deepseek_harness server type', () => {
+    const deepseekSession = { ...baseSession, acpServerType: 'deepseek_harness' };
+    render(<SessionHeader session={deepseekSession} status="running" onClose={noop} onDelete={noop} />);
+    expect(screen.getByText('DeepSeek Harness')).toBeDefined();
+  });
+
   it('should display cwd', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
     expect(screen.getByText('/home/user/project')).toBeDefined();

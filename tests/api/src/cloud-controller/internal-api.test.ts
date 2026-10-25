@@ -671,7 +671,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
     };
   }
 
-  it('T-IC-HARNESS1: accepts kimi_code and rejects unknown types (400 INVALID_HARNESS)', async () => {
+  it('T-IC-HARNESS1: accepts kimi_code / deepseek_harness and rejects unknown types (400 INVALID_HARNESS)', async () => {
     const created = await req('/internal/containers', {
       method: 'POST',
       body: JSON.stringify(harnessBody(['kimi_code'])),
@@ -680,6 +680,15 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
     const body = (await created.json()) as { id: string; harnessTypes: string[] };
     expect(body.harnessTypes).toEqual(['kimi_code']);
     await req(`/internal/containers/${body.id}`, { method: 'DELETE' });
+
+    const deepseek = await req('/internal/containers', {
+      method: 'POST',
+      body: JSON.stringify(harnessBody(['deepseek_harness'])),
+    });
+    expect(deepseek.status).toBe(201);
+    const deepseekBody = (await deepseek.json()) as { id: string; harnessTypes: string[] };
+    expect(deepseekBody.harnessTypes).toEqual(['deepseek_harness']);
+    await req(`/internal/containers/${deepseekBody.id}`, { method: 'DELETE' });
 
     const invalid = await req('/internal/containers', {
       method: 'POST',
@@ -690,13 +699,15 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
   });
 
   it.skipIf(!HAS_MONGO)(
-    'T-IC-HARNESS2: per-type version gate (kimi_code→2.8.0, opencode→2.6.0)',
+    'T-IC-HARNESS2: per-type version gate (kimi_code→2.8.0, deepseek_harness→2.9.0, opencode→2.6.0)',
     async () => {
       const db = await mongoDb();
       expect(db).not.toBeNull();
 
       const cases: Array<{ types: string[]; expected: string }> = [
         { types: ['kimi_code'], expected: '2.8.0' },
+        { types: ['deepseek_harness'], expected: '2.9.0' },
+        { types: ['kimi_code', 'deepseek_harness'], expected: '2.9.0' },
         { types: ['opencode', 'kimi_code'], expected: '2.8.0' },
         { types: ['opencode'], expected: '2.6.0' },
       ];

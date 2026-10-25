@@ -96,20 +96,24 @@ describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
 });
 
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
-  it('T-CH1: capabilities exposes OPENCODE (and KIMI_CODE once its preset exists)', async () => {
+  it('T-CH1: capabilities exposes OPENCODE (and KIMI_CODE / DEEPSEEK_HARNESS once their presets exist)', async () => {
     const token = await signup();
     const result = await gql(CAPABILITIES, undefined, token);
     expect(result.errors).toBeUndefined();
     expect(result.data.cloudHostCapabilities.enabled).toBe(true);
     expect(result.data.cloudHostCapabilities.supportedHarnesses).toContain('OPENCODE');
-    // preset 由 admin-api 迁移 009 写入：存在即列出（缺失时跳过，不误伤旧库）
+    // preset 由 admin-api 迁移 009/010 写入：存在即列出（缺失时跳过，不误伤旧库）
     if (HAS_MONGO) {
-      const preset = await (await mongoDb())!.collection('cloudworkloads').findOne({
-        presetKey: 'harness-kimi-code',
-      });
-      expect(
-        result.data.cloudHostCapabilities.supportedHarnesses.includes('KIMI_CODE'),
-      ).toBe(Boolean(preset));
+      const db = (await mongoDb())!;
+      for (const [presetKey, harness] of [
+        ['harness-kimi-code', 'KIMI_CODE'],
+        ['harness-deepseek-harness', 'DEEPSEEK_HARNESS'],
+      ] as const) {
+        const preset = await db.collection('cloudworkloads').findOne({ presetKey });
+        expect(result.data.cloudHostCapabilities.supportedHarnesses.includes(harness)).toBe(
+          Boolean(preset),
+        );
+      }
     }
   });
 
@@ -528,6 +532,53 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
       await gql(STOP, { id: host.id, force: true }, token);
       await gql(DELETE, { id: host.id }, token);
     }
+  });
+});
+
+// DeepSeek Harness（Harness）：创建校验 + 逐容器 2.9.0 版本门禁（T-DS-API2/3）
+describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', () => {
+  it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.9.0', async () => {
+    const token = await signup();
+    const created = await gql(
+      CREATE,
+      {
+        input: {
+          name: `deepseek-${Date.now().toString(36)}`,
+          harnessTypes: ['OPENCODE', 'DEEPSEEK_HARNESS'],
+        },
+      },
+      token,
+    );
+    expect(created.errors, JSON.stringify(created.errors)).toBeUndefined();
+    const host = created.data.createCloudHost;
+    expect(host.harnessTypes).toEqual(['OPENCODE', 'DEEPSEEK_HARNESS']);
+
+    try {
+      if (!HAS_MONGO) return;
+      const db = (await mongoDb())!;
+      let doc: any = null;
+      for (let i = 0; i < 20; i += 1) {
+        doc = await db.collection('cloudcontainers').findOne({ hostId: host.id });
+        if (doc) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(doc, 'cloud-controller should persist the container').toBeTruthy();
+      expect(doc.harnessTypes).toEqual(['opencode', 'deepseek_harness']);
+      expect(doc.agentGearMinVersion).toBe('2.9.0');
+    } finally {
+      await gql(STOP, { id: host.id, force: true }, token);
+      await gql(DELETE, { id: host.id }, token);
+    }
+  });
+
+  it('T-DS-API2b: unsupported harness type 文案不变', async () => {
+    const token = await signup();
+    const result = await gql(
+      CREATE,
+      { input: { name: `bad-${Date.now().toString(36)}`, harnessTypes: ['FOO'] } },
+      token,
+    );
+    expect(result.errors?.[0].message).toBe('unsupported harness type: FOO');
   });
 });
 

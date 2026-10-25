@@ -44,6 +44,8 @@ vi.mock('../models/controller-workspace.js', () => ({
 vi.mock('../models/mcp-server.js', () => ({
   McpServer: {
     countDocuments: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(async () => ({ _id: { toString: () => 'mcp-tools' } })),
     find: vi.fn(() => ({
       select: vi.fn(() => ({
         lean: vi.fn(async () => []),
@@ -1963,6 +1965,36 @@ describe('SessionService', () => {
         }),
       ).rejects.toThrow('unsupported harness type: claude_code');
       expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('T-MAP2: A-11 会话工具 ∈ 创建时所选 harnessTypes（deepseek_harness 生效）', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'RUNNING', harnessTypes: ['DEEPSEEK_HARNESS'] }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'deepseek_harness',
+          workspaceId: 'ws-1',
+        }),
+      ).resolves.toBeDefined();
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'kimi_code',
+          workspaceId: 'ws-1',
+        }),
+      ).rejects.toThrow('unsupported harness type: kimi_code');
     });
 
     it('A-2 rejects send/cancel writes to a stopped cloud host session', async () => {

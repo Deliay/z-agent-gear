@@ -46,6 +46,14 @@ export function extractVersion(stdout: string, stderr = ''): string | undefined 
 }
 
 /**
+ * 版本串归一化：取最后一个空白分隔段（容忍 `dsh 0.1.2` / `v0.1.2` 等输出前缀），
+ * 去掉 `v` 前缀。预发布段（如 `0.1.2-alpha.2`）原样保留。
+ */
+export function normalizeCliVersion(version: string): string {
+  return (version.trim().split(/\s+/).pop() ?? '').replace(/^v/i, '');
+}
+
+/**
  * `opencode --version` 硬校验（`opencode -v` 仅作旧版 CLI 的兼容探测）。
  *
  * `expectedVersion` 非空时要求实际版本严格一致（去掉 `v` 前缀后比较），不一致立即失败，
@@ -60,8 +68,7 @@ export async function verifyOpencodeCli(
 ): Promise<string> {
   const failures: string[] = [];
 
-  const normalizeVersion = (version: string): string =>
-    (version.trim().split(/\s+/).pop() ?? '').replace(/^v/i, '');
+  const normalizeVersion = normalizeCliVersion;
 
   const ensureExpected = (version: string): string => {
     if (expectedVersion && normalizeVersion(version) !== normalizeVersion(expectedVersion)) {

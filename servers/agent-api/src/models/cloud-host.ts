@@ -10,7 +10,7 @@ export const CLOUD_HOST_STATUSES = [
 
 export type CloudHostStatus = (typeof CLOUD_HOST_STATUSES)[number];
 
-export const HARNESS_TYPES = ['OPENCODE', 'KIMI_CODE'] as const;
+export const HARNESS_TYPES = ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'] as const;
 
 export type HarnessType = (typeof HARNESS_TYPES)[number];
 

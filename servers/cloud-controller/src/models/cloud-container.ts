@@ -23,8 +23,8 @@ export const CONTAINER_PURPOSES = [
 /** 可被 `/internal/containers` 启动的用途白名单（契约 A.2.2）。 */
 export const STARTABLE_PURPOSES = ['idle', 'harness'] as const;
 
-/** 本期支持的 harness 类型白名单（opencode / kimi_code）。 */
-export const SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code'] as const;
+/** 本期支持的 harness 类型白名单（opencode / kimi_code / deepseek_harness）。 */
+export const SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness'] as const;
 
 export type CloudContainerPurpose = (typeof CONTAINER_PURPOSES)[number];
 
