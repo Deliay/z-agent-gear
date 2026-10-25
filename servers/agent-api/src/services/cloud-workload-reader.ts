@@ -12,11 +12,13 @@ export interface HarnessPreset {
 const PRESET_KEYS: Record<HarnessType, string> = {
   OPENCODE: 'harness-opencode',
   KIMI_CODE: 'harness-kimi-code',
+  DEEPSEEK_HARNESS: 'harness-deepseek-harness',
 };
 
 const HARNESS_SLUGS: Record<HarnessType, string> = {
   OPENCODE: 'opencode',
   KIMI_CODE: 'kimi_code',
+  DEEPSEEK_HARNESS: 'deepseek_harness',
 };
 
 /**
