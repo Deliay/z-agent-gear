@@ -1,10 +1,17 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { useEffect, useRef, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { useAuth } from '../stores/auth';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
 import { Button } from '../components/ui/button';
+import { HarnessLoginDialog } from '../components/harness/HarnessLoginDialog';
+import {
+  openHarnessLoginDialog,
+  resolveHarnessLoginDialog,
+} from '../stores/harnessLoginDialog';
 import { HOME_OVERVIEW } from '../graphql/home';
 import type { HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
@@ -37,6 +44,27 @@ export default function MainLayout() {
   // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
   // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
   const homeData = data?.homeOverview ?? null;
+
+  // 用户级 SSE：harness 登录引导即时下发（待办轮询保留为断线兜底）
+  useUserEventStream({
+    enabled: Boolean(user) && !loading,
+    onHarnessLoginRequired: (request) => {
+      openHarnessLoginDialog(request);
+    },
+    onHarnessLoginResolved: (event) => {
+      const matched = resolveHarnessLoginDialog(event.requestId);
+      if (event.result === 'succeeded') {
+        toast.success('Kimi Code 已登录');
+      } else if (event.result === 'cancelled') {
+        toast.info('Kimi Code 未登录');
+      } else if (event.result === 'expired') {
+        toast.info('登录未完成，可重试');
+      } else {
+        toast.error(event.error || 'Kimi Code 登录失败');
+      }
+      if (matched) void refetch();
+    },
+  });
 
   // D-2：云电脑就绪且服务端已建好默认会话时，自动进入该会话。
   // - `startingHosts` 记录本次会话观测到过 STARTING 的主机：即使中间轮询到 RUNNING+null
@@ -120,6 +148,8 @@ export default function MainLayout() {
   return (
     <HomeOverviewContext.Provider value={{ data: homeData, loading: homeLoading, error, refetch }}>
       {layout}
+      {/* 全站单例：登录引导弹窗挂在最高层级，不受 Sidebar / NewSessionDialog 挂载影响 */}
+      <HarnessLoginDialog />
     </HomeOverviewContext.Provider>
   );
 }
