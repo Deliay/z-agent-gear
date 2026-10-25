@@ -51,6 +51,7 @@ function registerControllerWithMultiAcp(rawKey: string): Promise<{ controllerId:
           { type: 'claude_code', available: true, version: '1.0.0' },
           { type: 'gemini_cli', available: true, version: '1.0.0' },
           { type: 'codex', available: true, version: '1.0.0' },
+          { type: 'deepseek_harness', available: true, version: '0.1.2-alpha.2' },
         ],
       });
     });
@@ -247,6 +248,7 @@ test.describe('Session ACP Server Type', () => {
     await expect(page.getByRole('option', { name: /claude_code/ })).toBeVisible();
     await expect(page.getByRole('option', { name: /gemini_cli/ })).toBeVisible();
     await expect(page.getByRole('option', { name: /codex/ })).toBeVisible();
+    await expect(page.getByRole('option', { name: /deepseek_harness/ })).toBeVisible();
 
     disconnect();
   });
@@ -312,6 +314,38 @@ test.describe('Session ACP Server Type', () => {
 
     // Verify OpenCode badge is visible
     await expect(page.getByText('OpenCode')).toBeVisible({ timeout: 10000 });
+
+    disconnect();
+  });
+
+  test('should create session with deepseek_harness and show DeepSeek Harness badge', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerControllerWithMultiAcp(rawKey);
+    await createWorkspace(page, controllerId, `/tmp/e2e-acp-dsh-${Math.random().toString(36).slice(2, 8)}`, token);
+
+    await loginViaUI(page, username);
+    await page.goto('/sessions');
+    await expect(page.locator('main').getByRole('button', { name: '新建会话' })).toBeVisible({ timeout: 5000 });
+    await page.locator('main').getByRole('button', { name: '新建会话' }).click();
+    await expect(page.getByRole('heading', { name: '新建会话' })).toBeVisible();
+
+    await page.locator('#controller').selectOption({ index: 1 });
+
+    await expect(page.getByText('检测 ACP 服务中...')).not.toBeVisible({ timeout: 10000 });
+    const acpTrigger = page.locator('[role="combobox"]').first();
+    await expect(acpTrigger).toBeVisible({ timeout: 5000 });
+    await acpTrigger.click();
+    await page.getByRole('option', { name: /deepseek_harness/ }).click();
+    await expect(acpTrigger).toContainText('deepseek_harness', { timeout: 5000 });
+
+    await expect(page.getByRole('button', { name: '创建会话' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: '创建会话' }).click();
+
+    await expect(page).toHaveURL(/\/sessions\/[a-f0-9]+/, { timeout: 15000 });
+    await expect(page.getByText('DeepSeek Harness')).toBeVisible({ timeout: 10000 });
+    // 无登录引导：DeepSeek Harness 走平台渠道注入，不应出现任何登录弹窗
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     disconnect();
   });
