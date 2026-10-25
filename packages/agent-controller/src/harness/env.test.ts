@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { HarnessEnvError, parseModelContextLengths, parseModelIds, readHarnessEnv } from './env.js';
+import {
+  HarnessEnvError,
+  parseModelContextLengths,
+  parseModelIds,
+  readHarnessEnv,
+  resolvePrepareTypes,
+} from './env.js';
 
 const VALID_ENV: NodeJS.ProcessEnv = {
   ZAG_MODEL_BASE_URL: 'http://admin-api:8002/v1',
@@ -118,5 +124,30 @@ describe('parseModelContextLengths', () => {
     expect(() => parseModelContextLengths('{"a":0}')).toThrowError(/invalid value/);
     expect(() => parseModelContextLengths('{"a":-1}')).toThrowError(/invalid value/);
     expect(() => parseModelContextLengths('{"a":1.5}')).toThrowError(/invalid value/);
+  });
+});
+
+describe('resolvePrepareTypes (T-PREP2)', () => {
+  it('未设置/空串 → 回退 opencode', () => {
+    expect(resolvePrepareTypes({})).toEqual(['opencode']);
+    expect(resolvePrepareTypes({ ZAG_HARNESS_TYPES: '   ' })).toEqual(['opencode']);
+  });
+
+  it('解析逗号分隔、去空去重并保持顺序', () => {
+    expect(resolvePrepareTypes({ ZAG_HARNESS_TYPES: 'opencode, deepseek_harness ,opencode' })).toEqual([
+      'opencode',
+      'deepseek_harness',
+    ]);
+    expect(resolvePrepareTypes({ ZAG_HARNESS_TYPES: 'deepseek_harness,opencode' })).toEqual([
+      'deepseek_harness',
+      'opencode',
+    ]);
+  });
+
+  it('白名单过滤 kimi_code / 未知类型；过滤后为空回退 opencode', () => {
+    expect(resolvePrepareTypes({ ZAG_HARNESS_TYPES: 'kimi_code,deepseek_harness' })).toEqual([
+      'deepseek_harness',
+    ]);
+    expect(resolvePrepareTypes({ ZAG_HARNESS_TYPES: 'kimi_code,bogus' })).toEqual(['opencode']);
   });
 });
