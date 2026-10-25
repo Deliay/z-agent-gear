@@ -485,4 +485,51 @@ describe('SessionSSEService', () => {
       expect(res.end).toHaveBeenCalled();
     });
   });
+
+  describe('user-level connections', () => {
+    it('T-HS1: 建立连接立即推送 ready 与心跳', () => {
+      vi.useFakeTimers();
+      const res = createMockResponse();
+
+      sessionSSEService.addUserConnection('user-u1', res as never);
+
+      expect(res.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+        'Content-Type': 'text/event-stream',
+      }));
+      expect(res._written[0]).toBe(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
+
+      vi.advanceTimersByTime(30_000);
+      expect(res._written.at(-1)).toBe(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`);
+
+      res._triggerClose();
+      vi.useRealTimers();
+    });
+
+    it('T-HS1b: pushToUser 同时写用户级连接，且仅同用户', () => {
+      const resA = createMockResponse();
+      const resB = createMockResponse();
+      sessionSSEService.addUserConnection('user-a', resA as never);
+      sessionSSEService.addUserConnection('user-b', resB as never);
+
+      const beforeB = resB._written.length;
+      sessionSSEService.pushToUser('user-a', { type: 'harness_login_required', data: { requestId: 'hl-1' } });
+
+      expect(resA._written.at(-1)).toContain('harness_login_required');
+      expect(resB._written.length).toBe(beforeB);
+
+      resA._triggerClose();
+      resB._triggerClose();
+    });
+
+    it('T-HS1c: 连接关闭后清理（不再推送）', () => {
+      const res = createMockResponse();
+      sessionSSEService.addUserConnection('user-c', res as never);
+
+      res._triggerClose();
+      const before = res._written.length;
+      sessionSSEService.pushToUser('user-c', { type: 'harness_login_resolved', data: { requestId: 'hl-1' } });
+
+      expect(res._written.length).toBe(before);
+    });
+  });
 });
