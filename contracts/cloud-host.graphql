@@ -123,6 +123,36 @@ type CloudHostCapabilities {
   supportedHarnesses: [HarnessType!]!
 }
 
+# 云电脑 GitHub Issues 联动配置（每控制器多条）
+type CloudHostIssuesLinkage {
+  id: ID!
+  controllerId: ID!
+  configuredWorkflowId: ID!
+  # 工作流名称快照（配置删除后仍可读）
+  configuredWorkflowName: String!
+  # 触发标签（默认 start-{工作流名字}，用户可改；≤50 字符、不含逗号）
+  labelName: String!
+  repoFullNames: [String!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input CloudHostIssuesLinkageInput {
+  # update 时忽略（以 id 定位）
+  controllerId: ID!
+  configuredWorkflowId: ID!
+  labelName: String!
+  # 至少 1 个；去重后 ≤50
+  repoFullNames: [String!]!
+}
+
+type CloudHostIssuesLabelCleanupResult {
+  # 已删除的 "repo#label"
+  deleted: [String!]!
+  # 删除失败的 "repo#label"
+  failed: [String!]!
+}
+
 input CreateCloudHostInput {
   name: String!
   harnessTypes: [HarnessType!]!
@@ -162,6 +192,8 @@ extend type Query {
   # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
   cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
   cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
+  # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）
+  cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
 }
 
 extend type Mutation {
@@ -173,6 +205,12 @@ extend type Mutation {
   installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
   setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
   retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
+  # Issues 联动配置：create/update 校验通过落库后逐仓库同步标签（失败汇总报错，配置已保存）
+  createCloudHostIssuesLinkage(input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+  updateCloudHostIssuesLinkage(id: ID!, input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+  deleteCloudHostIssuesLinkage(id: ID!): Boolean!
+  # 销毁云电脑前清理平台同步过的标签（逐配置 × 仓库；404 视为成功）
+  cleanupCloudHostIssuesLabels(controllerId: ID!): CloudHostIssuesLabelCleanupResult!
 }
 
 extend type Controller {
