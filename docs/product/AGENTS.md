@@ -136,6 +136,10 @@ flowchart LR
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
 - [[draft/20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（后台配置的模型最长上下文随模型清单写入云电脑内 OpenCode 配置）
 
+### 实现中文档（`shipping/`）
+
+- [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
+
 ### 已发布文档（`released/`）
 
 - [[released/20260517-agent-controller-v1.md]] — Agent 控制器管理 v1

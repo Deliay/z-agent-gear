@@ -103,7 +103,7 @@ const cloudContainerSchema = new mongoose.Schema(
     containerApiKeyId: { type: String, default: null },
     /** 云电脑最低 agent-gear 版本（max(服务端常量, 请求值)）；普通容器为 null。 */
     agentGearMinVersion: { type: String, default: null },
-    /** 容器 TTL 到期时间（同时用于 Job activeDeadlineSeconds）；历史记录为 null。 */
+    /** 容器 TTL 到期时间（仅落库留存，供计费凭证到期等业务使用；不再映射 Job 硬截止）；历史记录为 null。 */
     expiresAt: { type: Date, default: null },
     tokenHash: { type: String, default: null },
     image: { type: String, required: true },

@@ -611,8 +611,8 @@ describe('internal management API', () => {
     expect(env.ZAG_MODEL_API_KEY).toBeUndefined();
 
     const manifest = k8sClient.getManifest(body.name as string)!;
-    expect(manifest.spec.activeDeadlineSeconds).toBeGreaterThanOrEqual(3598);
-    expect(manifest.spec.activeDeadlineSeconds).toBeLessThanOrEqual(3600);
+    // 最长运行时间无限制：Job 不再设置 activeDeadlineSeconds
+    expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
   });
 
   it('C-4: agentGearMinVersion 落库为 max(服务端常量, 请求值)', async () => {
