@@ -256,6 +256,25 @@ function NodeCard({
             </span>
           ),
         )}
+        {/* check-run 同步信息：未同步时不渲染（保持现状观感） */}
+        {nodeLinks.map((link) =>
+          link.checkRunUrl ? (
+            <a
+              key={`check-run-${link.pullRequestId}`}
+              href={link.checkRunUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={
+                link.lastSyncedCommitSha
+                  ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}`
+                  : '检查项'
+              }
+              className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+            >
+              检查项
+            </a>
+          ) : null,
+        )}
         {node.reworkCount > 0 && (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <RotateCcw className="size-3" />

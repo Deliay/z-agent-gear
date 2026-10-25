@@ -419,6 +419,10 @@ describe('节点关联 Pull Request 徽标', () => {
             nodeId: 'n1',
             nodeName: '评审',
             registeredAt: '2026-10-23T06:00:00Z',
+            checkRunUrl: null,
+            lastSyncedCommitSha: null,
+            lastSyncAt: null,
+            lastSyncError: null,
           },
         ]}
       />,
@@ -426,6 +430,38 @@ describe('节点关联 Pull Request 徽标', () => {
     const badge = screen.getByText('PR');
     expect(badge).toHaveAttribute('title', 'Deliay/z-agent-gear#264');
     expect(badge).toHaveAttribute('href', 'https://github.com/Deliay/z-agent-gear/pull/264');
+    // 未同步 check-run 时不渲染「检查项」
+    expect(screen.queryByText('检查项')).not.toBeInTheDocument();
+  });
+
+  it('已同步时展示「检查项」链接与短 sha', () => {
+    const instance = makeInstance([makeNode()]);
+    render(
+      <WorkflowNodeTree
+        instance={instance}
+        onOpenSession={vi.fn()}
+        pullRequestLinks={[
+          {
+            pullRequestId: 'Deliay/z-agent-gear#264',
+            prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
+            nodeId: 'n1',
+            nodeName: '评审',
+            registeredAt: '2026-10-23T06:00:00Z',
+            checkRunUrl: 'https://github.com/Deliay/z-agent-gear/runs/1001',
+            lastSyncedCommitSha: 'deadbeefcafebabe',
+            lastSyncAt: '2026-10-25T00:00:00.000Z',
+            lastSyncError: null,
+          },
+        ]}
+      />,
+    );
+
+    const link = screen.getByText('检查项');
+    expect(link).toHaveAttribute(
+      'href',
+      'https://github.com/Deliay/z-agent-gear/runs/1001',
+    );
+    expect(link).toHaveAttribute('title', '检查项 · commit deadbee');
   });
 
   it('无关联时不展示 PR 徽标', () => {

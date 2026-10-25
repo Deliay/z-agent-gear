@@ -67,7 +67,8 @@ npx playwright test
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `INTERNAL_API_TOKEN` | agent-api 内部回调 Bearer token（`E2E-1` 驱动 cloud host ready 回调；**缺省时 E2E-1 显式 skip，不静默绕过核心断言**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:35273` |
-| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32；缺失时该组用例跳过） | - |
+| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32 / E2E-CR*；缺失时该组用例跳过） | - |
+| `GITHUB_API_BASE` | Check Runs 同步展示用例（E2E-CR*）不依赖出站调用；出站行为由 `tests/api` mock GitHub 覆盖 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
 
@@ -242,6 +243,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-30 归档注销 | 归档实例 → 「关联 Pull Request」清空；再注入事件返回 `NO_HANDLER`/`INSTANCE_ARCHIVED`，人类节点状态不变 |
 | E2E-31 零回归 | 未勾选联动 → AI 提示词无 PR 段；注入事件 → `NO_HANDLER` |
 | E2E-32 实例页编辑开关 | 未开始 HUMAN 节点可编辑联动开关并落库；节点开始后编辑入口消失 |
+| E2E-CR1 检查项展示 | 直写登记同步字段后：节点徽标区「检查项」外链（短 sha tooltip）+ 右栏最近同步/写入提交 |
+| E2E-CR2 失败提示 | `lastSyncError` 在右栏红色副行展示，页面其它操作不受影响 |
+| E2E-CR3 零回归 | 未绑定 PR 的实例：右栏「暂无关联」，无「检查项」元素 |
 
 ### ACP Permission Reminder E2E (`permission.spec.ts`)
 
