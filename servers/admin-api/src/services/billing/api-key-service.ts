@@ -79,23 +79,17 @@ export class ApiKeyService {
     name: string;
     scope?: BillingApiKeyScope;
     cloudHostId?: string | null;
-    expiresAt?: Date | string | null;
   }): Promise<{ apiKey: BillingApiKeyDTO; secret: string }> {
     const name = input.name.trim();
     if (!name) throw new Error('API Key 名称不能为空');
     const scope = normalizeScope(input.scope);
 
     let cloudHostId: string | null = null;
-    let expiresAt: Date | null = null;
     if (scope === 'cloud_host') {
       if (!input.cloudHostId || !mongoose.isValidObjectId(input.cloudHostId)) {
         throw new Error('云电脑 ID 非法');
       }
-      if (!input.expiresAt) throw new Error('API Key 有效期非法');
-      const parsed = new Date(input.expiresAt);
-      if (Number.isNaN(parsed.getTime())) throw new Error('API Key 有效期非法');
       cloudHostId = input.cloudHostId;
-      expiresAt = parsed;
     }
 
     const secret = `${API_KEY_PREFIX}${crypto.randomBytes(16).toString('hex')}`;
@@ -111,7 +105,8 @@ export class ApiKeyService {
       status: 'active',
       scope,
       cloudHostId,
-      expiresAt,
+      // 云电脑 Key 随容器生命周期回收（stop/terminal/delete + 对账兜底），不再写固定有效期。
+      expiresAt: null,
     });
     return { apiKey: toDTO(doc), secret };
   }
@@ -121,7 +116,8 @@ export class ApiKeyService {
    * - **先铸造成功再撤销同宿主旧 active Key**，避免铸造失败导致旧 Key 提前失效；
    * - B-4：同一 `cloudHostId` 的「铸造 + 撤销」由 `cloudHostKeyMutex` 串行化，避免并发轮换时
    *   两次铸造互相撤销导致全部失效；
-   * - `expiresAt` 由调用方按容器 TTL 提供，必须为未来时间。
+   * - **无固定有效期**：Key 随容器回收（宿主非 `RUNNING`/删除/缺失由网关实时拒绝并与对账撤销），
+   *   不再使用容器 TTL 作为到期时间。
    */
   async createCloudHostScopedKey(input: {
     accountId: string;
@@ -129,19 +125,13 @@ export class ApiKeyService {
     ownerId: string;
     name: string;
     cloudHostId: string;
-    expiresAt: Date | string;
   }): Promise<{ apiKey: BillingApiKeyDTO; secret: string }> {
     if (!mongoose.isValidObjectId(input.cloudHostId)) throw new Error('云电脑 ID 非法');
-    const expiresAt = new Date(input.expiresAt);
-    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
-      throw new Error('API Key 有效期非法');
-    }
     return cloudHostKeyMutex.runExclusive(`cloudHost:${input.cloudHostId}`, async () => {
       const created = await this.create({
         ...input,
         scope: 'cloud_host',
         cloudHostId: input.cloudHostId,
-        expiresAt,
       });
       await BillingApiKey.updateMany(
         {

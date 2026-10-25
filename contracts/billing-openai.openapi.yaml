@@ -6,8 +6,9 @@ info:
     平台对外提供的独立模型调用入口，兼容 OpenAI 风格的请求/响应与错误格式。
 
     - 鉴权：`Authorization: Bearer zag_sk_<32 hex>`（API Key 仅生成时完整可见）。
-    - Key 范围：`account`（用户设置页生成）与 `cloud_host`（云电脑运行专用，绑定 `cloudHostId` + `expiresAt`）。
-      `cloud_host` Key 在过期、云电脑不存在/已软删除/状态非 `RUNNING` 时一律返回 `401 invalid_api_key`。
+    - Key 范围：`account`（用户设置页生成）与 `cloud_host`（云电脑运行专用，绑定 `cloudHostId`）。
+      `cloud_host` Key **随容器回收**（不设固定有效期）：云电脑不存在/已软删除/状态非 `RUNNING`
+      或显式撤销后一律返回 `401 invalid_api_key`；历史遗留的 `expiresAt` 若已过期同样拒绝。
     - 模型范围：`cloud_host` Key 的 `/v1/models` 返回系统启用模型 ∪ 用户启用模型（含自定义模型）；
       `account` Key 仍只返回定价完整的全局模型。
     - 计费：调用前统一预扣费检查（余额不足且无授信返回 402，不产生账单）；

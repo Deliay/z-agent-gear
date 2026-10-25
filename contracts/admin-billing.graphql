@@ -126,7 +126,7 @@ type BillingApiKey {
   status: String! # active | revoked
   scope: BillingApiKeyScope! # account（设置页）| cloud_host（云电脑运行专用）
   cloudHostId: ID # scope=cloud_host 时的云电脑 ID
-  expiresAt: String # scope=cloud_host 的有效期（ISO）；account 为 null
+  expiresAt: String # 历史遗留有效期（ISO，仅展示）；新 cloud_host Key 恒为 null，失效由容器状态决定
   lastUsedAt: String
   createdAt: String!
 }

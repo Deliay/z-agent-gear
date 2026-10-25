@@ -57,14 +57,15 @@ function rejectInvalidApiKey(res: Response, source: string, message: string): vo
 
 /**
  * B9/A16：`scope=cloud_host` 的 Key 必须同时满足：
- * - 有 `cloudHostId` 且 `expiresAt` 未到期；
+ * - 有 `cloudHostId`，且历史遗留的 `expiresAt`（若存在）未到期（新 Key 不再写有效期，随容器回收）；
  * - 云电脑存在、未软删除、状态为 `RUNNING`（STARTING 创建窗口也拒绝：初始化阶段不调模型网关）。
  * 账号 Key 维持原行为（不做宿主校验）。
  */
 async function isCloudHostKeyUsable(verified: VerifiedApiKey): Promise<boolean> {
   if (verified.scope !== 'cloud_host') return true;
   if (!verified.cloudHostId || !mongoose.isValidObjectId(verified.cloudHostId)) return false;
-  if (!verified.expiresAt || verified.expiresAt.getTime() <= Date.now()) return false;
+  // 云电脑 Key 的失效开关是容器状态而非时间；仅对历史遗留的 expiresAt 做防御性校验。
+  if (verified.expiresAt && verified.expiresAt.getTime() <= Date.now()) return false;
   const host = await CloudHost.findById(verified.cloudHostId)
     .select({ status: 1, deletedAt: 1, userId: 1 })
     .lean<{ status?: string; deletedAt?: Date | null; userId?: unknown } | null>();

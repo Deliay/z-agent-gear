@@ -308,7 +308,6 @@ export class CloudHostService {
           ownerId: userId,
           name: `cloud-host:${name}`.slice(0, 64),
           cloudHostId,
-          expiresAt: expiresAt.toISOString(),
         });
         modelKeyId = modelKey.apiKey.id;
 

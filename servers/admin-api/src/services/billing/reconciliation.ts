@@ -592,11 +592,14 @@ export class ReconciliationService {
 
   /**
    * A16/B9 对账线：扫描 `scope=cloud_host,status=active` 的运行专用 Key，宿主不存在/已软删除/
-   * **非合法中间态**（`STOPPING/STOPPED/FAILED`）或 Key 已过期时幂等撤销，并写入报告。
+   * **非合法中间态**（`STOPPING/STOPPED/FAILED`）或历史遗留的 `expiresAt` 已过期时幂等撤销，并写入报告。
    * `STARTING` 属于创建窗口（Key 在 STARTING 期铸造、本期无重铸），必须放行——由网关实时校验
    * 拒绝非 `RUNNING` 调用；账号 Key 不在扫描范围，绝不误伤。
    *
-   * 网关鉴权已做实时失效（双保险）；本线兜底「停止/删除编排未显式 revoke」「TTL 自然退出」等遗漏。
+   * 云电脑 Key 已改为**随容器回收**（新 Key 不再写 `expiresAt`），因此无有效期的 Key 属于正常状态，
+   * 撤销依据只为宿主状态与历史过期值。
+   *
+   * 网关鉴权已做实时失效（双保险）；本线兜底「停止/删除编排未显式 revoke」「容器自然退出」等遗漏。
    */
   private async reconcileCloudHostKeys(): Promise<ReconciliationReport> {
     const now = this.now();
@@ -636,8 +639,7 @@ export class ReconciliationService {
       else if (host.deletedAt) reason = 'cloud_host_deleted';
       else if (host.status !== 'RUNNING' && host.status !== 'STARTING') {
         reason = 'cloud_host_not_running';
-      } else if (!key.expiresAt) reason = 'missing_expiry';
-      else if (expired) reason = 'expired';
+      } else if (expired) reason = 'expired';
       if (!reason) continue;
 
       const result = await BillingApiKey.updateOne(
