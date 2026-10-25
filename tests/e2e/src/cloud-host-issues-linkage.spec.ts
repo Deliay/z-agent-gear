@@ -139,7 +139,7 @@ test.describe('Cloud Host Issues linkage', () => {
       await expect(page.getByText('start-开发流程')).toBeVisible();
       await expect(page.getByText('a/b')).toBeVisible();
 
-      await page.getByRole('button', { name: '加 Issue 联动配置' }).click();
+      await page.getByRole('button', { name: '加Issue联动配置' }).click();
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByLabel('标签名')).toHaveValue('start-开发流程');
       await expect(dialog.getByTestId('issue-linkage-sync-hint')).toContainText('start-开发流程');
@@ -157,7 +157,7 @@ test.describe('Cloud Host Issues linkage', () => {
       await page.goto(`/settings?controllerId=${fixture.controllerId.toString()}`);
 
       await page.getByTestId('config-tab-github').click();
-      await page.getByRole('button', { name: '加 Issue 联动配置' }).click();
+      await page.getByRole('button', { name: '加Issue联动配置' }).click();
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByText('暂无包含人类节点的工作流。')).toBeVisible();
       await expect(dialog.getByRole('button', { name: '配置工作流' })).toBeVisible();

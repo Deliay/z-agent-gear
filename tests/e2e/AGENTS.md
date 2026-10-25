@@ -251,10 +251,10 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 |------|------|
 | E2E-33 配置列表与弹窗 | 「Github」tab → 列表展示工作流名/标签/仓库 → 加配置弹窗默认标签 `start-{工作流名字}` 与同步提示 |
 | E2E-34 校验引导 | 无可用工作流 → 展示「配置工作流」入口且保存禁用 |
-| E2E-35 触发链路 | 注入 issues(labeled) webhook → 实例创建 → 回评文案与地址 → 首人类节点自动完成（见 T-GHI3） |
-| E2E-36 幂等与多配置 | 同 Issue 重复注入只触发一次；双标签双配置各触发一次（见 T-GHI4/5） |
-| E2E-37 销毁清理 | 有配置销毁出现询问 → 勾选清理标签；取消则标签保留、配置失效 |
-| E2E-38 零回归 | 未配置联动云电脑与 `pull_request_review` 联动（E2E-27..32）行为如旧 |
+| E2E-35 触发链路 | **未实现**（需真实 Github App/仓库与云电脑）：状态机语义由 `issues-event-handler.runner.test.ts` 覆盖，webhook 判定链由 `tests/api` T-GHI1/2/4 覆盖 |
+| E2E-36 幂等与多配置 | **未实现**（同 E2E-35 环境依赖）：多配置与幂等由 `issues-event-handler.flow.test.ts` 与唯一索引单测覆盖 |
+| E2E-37 销毁清理 | 有配置的云电脑销毁时出现标签清理询问（1 条配置）；确认删除后云电脑从面板移除（实际标签删除依赖真实仓库，见 T-GHIL4/5） |
+| E2E-38 零回归 | **未单独建用例**：未配置联动云电脑与 `pull_request_review` 联动（E2E-27..32）由既有套件回归，`pull_request_review` 分支代码未改动 |
 
 
 ### ACP Permission Reminder E2E (`permission.spec.ts`)

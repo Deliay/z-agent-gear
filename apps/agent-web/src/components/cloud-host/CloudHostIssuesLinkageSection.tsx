@@ -65,7 +65,7 @@ export default function CloudHostIssuesLinkageSection({
             setDialogOpen(true)
           }}
         >
-          加 Issue 联动配置
+          加Issue联动配置
         </Button>
       </div>
 

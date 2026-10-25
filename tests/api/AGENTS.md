@@ -396,12 +396,13 @@ npm test
 | T-GHIL2 校验矩阵 | 非云电脑 → `cloud host not found`；非法标签 → `invalid label name`；空仓库 → `at least one repo is required`；未授权仓库 → `repo not authorized: <fullName>` |
 | T-GHIL3 同步失败汇总 | `label sync failed: <repo>` 且配置已保存（幂等重发不建重复行） |
 | T-GHIL4/5 修改删除与清理 | 改名不同步删旧标签；删除后标签保留；`cleanupCloudHostIssuesLabels` 返回 `deleted/failed` 清单并删除配置行 |
-| T-GHIL6 级联 | `deleteCloudHost` 后该控制器配置行清空（触发记录与仓库标签保留） |
-| T-GHI1 鉴权与载荷 | 错误 HMAC → 401；非法载荷 → 400 detail；不受理 action → `UNSUPPORTED_EVENT` |
-| T-GHI2 判定链 | 仓库未启用 → `REPO_NOT_ENABLED`；标签不中 → `NO_MATCHING_LINKAGE`；命中 → `CREATE_TRIGGER` |
-| T-GHI3 全链路 | 建配置 → 事件 → 工作区就绪 → 实例化 → 回评 → 首人类节点自动完成、下游上下文含 Issue 内容与链接（需真实仓库） |
+| T-GHIL6 级联 | **未实现**（需先创建并可删除真实云电脑）：`deleteCloudHost` 后配置行清空的语义由 `servers/agent-api/src/services/cloud-host-service.test.ts`「soft deletes…」用例断言 `deleteByController(controllerId)` 覆盖 |
+| T-GHI1 鉴权与载荷 | 错误 HMAC → 401；非法载荷 → 400 detail；不受理 action → `UNSUPPORTED_EVENT`（`T-GHI1a~d`） |
+| T-GHI2 判定链 | 仓库未启用 → `REPO_NOT_ENABLED`；标签不中 → `NO_MATCHING_LINKAGE`；命中 → `CREATE_TRIGGER`（`T-GHI2a~c`） |
+| T-GHI3 全链路 | **未实现**：需真实 Github 仓库（App 已订阅 issues、标签可写），当前环境无法黑盒落地；工作区准备→实例化→回评→首人类节点自动完成的语义由 `servers/agent-api/src/services/workflow/issues-event-handler.runner.test.ts` 单测覆盖 |
 | T-GHI4 幂等 | 同 Issue 同标签重投 → `ALREADY_TRIGGERED`，实例数不变 |
-| T-GHI5 多配置 | 同 Issue 双标签命中双配置 → 各触发一次 |
+| T-GHI5 多配置 | **未实现**：同 T-GHI3 的环境依赖；多配置各自独立触发的判定语义由 `issues-event-handler.flow.test.ts`「多配置各自独立触发一次」与唯一索引单测覆盖 |
+
 
 ### ACP Permission Reminder API (`agent-api/permission.test.ts`)
 

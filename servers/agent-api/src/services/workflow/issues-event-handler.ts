@@ -45,6 +45,11 @@ export interface IssuesHandleResponse {
 }
 
 const POLL_INTERVAL_MS = 1000;
+const PENDING_STATUSES = new Set([
+  'PENDING_WORKSPACE',
+  'PENDING_INSTANTIATE',
+  'PENDING_HUMAN_NODE',
+]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -178,6 +183,9 @@ export class IssuesTriggerRunner {
   /** 推进单条触发记录（幂等可重入；锁内重读）。 */
   async advance(triggerId: string): Promise<void> {
     if (!mongoose.isValidObjectId(triggerId)) return;
+    // 预检：避免定时扫描与事件推进在锁上堆积（锁内仍会重读）
+    const snapshot = await IssueWorkflowTrigger.findById(triggerId).lean();
+    if (!snapshot || !PENDING_STATUSES.has(String(snapshot.status ?? ''))) return;
     await this.triggerMutex.runExclusive(`issues-trigger:${triggerId}`, async () => {
       const trigger = (await IssueWorkflowTrigger.findById(triggerId).lean()) as unknown as Doc | null;
       if (!trigger) return;

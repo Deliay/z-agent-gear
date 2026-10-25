@@ -269,6 +269,9 @@ components:
           enum: [CREATE_TRIGGER, null]
         reason:
           type: string
+          description: >-
+            逐配置处理结果。注意 CLOUD_HOST_NOT_RUNNING 仅异步落在触发记录的
+            failureReason（状态机校验云电脑 RUNNING），webhook 同步响应不会返回该值。
           enum:
             - REPO_NOT_ENABLED
             - NO_MATCHING_LINKAGE
