@@ -1,4 +1,5 @@
 import { io as createSocketIOClient, type Socket } from 'socket.io-client';
+import { createRequire } from 'node:module';
 import * as acp from '@agentclientprotocol/sdk';
 import { hostname, platform } from 'os';
 import { readdir, access } from 'fs/promises';
@@ -10,6 +11,7 @@ import { acpDetector } from './acp/detector.js';
 import { probeAcpServerOptions } from './acp/prober.js';
 import { AcpSpawner } from './acp/spawner.js';
 import { AcpSessionBridge } from './acp/bridge.js';
+import { AcpAuthGate, AuthRequiredError } from './acp/auth-gate.js';
 import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
@@ -20,10 +22,13 @@ import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
 import { WorkloadExecutor, type WorkloadRunPayload, collectSecretValues, redactSecrets } from './workload-executor.js';
 
-// 与 package.json 版本保持一致（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
+// 版本号唯一事实源为 package.json（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
+// 2.8.0 起 `kimi_code` 使用前登录闸门（`kimi login` stdio 判定 + `harness:login:*` 事件族）；
 // 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.6.0）；
 // 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`。
-const CONTROLLER_VERSION = '2.6.0';
+const { version: CONTROLLER_VERSION } = createRequire(import.meta.url)('../package.json') as {
+  version: string;
+};
 // 进程内全局单实例：工作负载批次严格串行（新批次打断旧批次，见 workload-executor）。
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
@@ -75,6 +80,14 @@ export function buildAcpInitResult(payload: Record<string, unknown>): Record<str
   }
   if (payload.capabilities) result.capabilities = payload.capabilities;
   return result;
+}
+
+/**
+ * 登录闸门失败时追加 `reason:'auth'`（A11，可选字段，向后兼容）；
+ * 文案沿用 `AuthRequiredError` 的「Kimi Code 未登录」。
+ */
+export function authFailureFields(error: unknown): { reason?: 'auth' } {
+  return error instanceof AuthRequiredError ? { reason: 'auth' } : {};
 }
 
 interface RegisteredPayload {
@@ -419,6 +432,12 @@ export function connectToServer(
   const controllerName = options?.serverName || hostname();
   const persistConfig = options?.persistConfig !== false;
   const mcpRelay = new McpRelay((payload) => socket.emit('mcp:request', payload));
+  // harness 使用前登录闸门：仅 `kimi_code` 生效（探测/拉起/恢复三处前置 ensure）。
+  const authGate = new AcpAuthGate({
+    emit: (event, payload) => {
+      socket.emit(event, payload);
+    },
+  });
   const handleWorkload = options?.handleWorkload !== false;
   // 双连接（云电脑）只启动一个本地 MCP 回环服务：worker 连接传 skipLocalMcpStart=true，
   // controller-api 标准连接负责启动（ACP 会话的 `mcpEndpoint` 走标准连接）。
@@ -634,6 +653,7 @@ export function connectToServer(
   socket.on('acp:probe-options', async (data: AcpProbeOptionsPayload) => {
     console.log(`[ACP ctrl] acp:probe-options received: requestId=${data.requestId} serverType=${data.serverType}`);
     try {
+      await authGate.ensure(data.serverType, 'probe-options');
       const options = await probeAcpServerOptions(data.serverType);
       console.log(`[ACP ctrl] probe-options success: serverType=${data.serverType} modes=${options.modes.length} models=${options.availableModels.length}`);
       socket.emit('acp:probe-options:result', {
@@ -649,6 +669,7 @@ export function connectToServer(
         serverType: data.serverType,
         success: false,
         error: (error as Error).message,
+        ...authFailureFields(error),
       });
     }
   });
@@ -657,6 +678,7 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
 
     try {
+      await authGate.ensure(data.serverType, 'acp:start');
       // 同 sessionId 重复 start（如 start 超时后的兜底 resume/重试与迟到初始化交叠）：
       // 先停掉旧 bridge，避免同会话双进程、旧 bridge 泄漏
       const existingBridge = acpBridges.get(data.sessionId);
@@ -796,6 +818,7 @@ export function connectToServer(
         sessionId: data.sessionId,
         success: false,
         error: (error as Error).message,
+        ...authFailureFields(error),
       });
     }
   });
@@ -804,6 +827,7 @@ export function connectToServer(
     console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
 
     try {
+      await authGate.ensure(data.serverType, 'acp:resume');
       // 同 sessionId 重复 resume/start：先停掉旧 bridge（同 acp:start 的防双进程处理）
       const existingBridge = acpBridges.get(data.sessionId);
       if (existingBridge) {
@@ -911,8 +935,18 @@ export function connectToServer(
         sessionId: data.sessionId,
         success: false,
         error: (error as Error).message,
+        ...authFailureFields(error),
       });
     }
+  });
+
+  // harness 登录取消（Server → Controller，契约 §2.38）：requestId 不匹配时忽略
+  socket.on('harness:login:cancel', (data: { requestId?: string }) => {
+    if (!data || typeof data.requestId !== 'string') {
+      console.warn('[ACP ctrl] harness:login:cancel ignored: invalid payload');
+      return;
+    }
+    authGate.cancel(data.requestId);
   });
 
   socket.on('acp:list-sessions', async (data: AcpListSessionsPayload) => {
