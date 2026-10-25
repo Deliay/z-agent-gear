@@ -699,6 +699,50 @@ describe('internal management API', () => {
     expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
+  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.9.0；混合取最大；白名单外 400', async () => {
+    const base = {
+      purpose: 'harness',
+      hostId: 'host-deepseek',
+      refId: 'ck-deepseek',
+      userId: 'user-deepseek',
+      hostName: 'pc-deepseek',
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.5.0',
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_deepseek',
+        modelApiKey: 'zag_sk_deepseek',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/root/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    };
+
+    const deepseek = await createContainer({ ...base, harnessTypes: ['deepseek_harness'] });
+    expect(deepseek.status).toBe(201);
+    const deepseekBody = (await deepseek.json()) as { id: string; harnessTypes: string[] };
+    expect(deepseekBody.harnessTypes).toEqual(['deepseek_harness']);
+    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.9.0');
+
+    const mixed = await createContainer({
+      ...base,
+      hostId: 'host-deepseek-mixed',
+      harnessTypes: ['opencode', 'kimi_code', 'deepseek_harness'],
+    });
+    expect(mixed.status).toBe(201);
+    const mixedBody = (await mixed.json()) as { id: string };
+    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.9.0');
+
+    const bogus = await createContainer({
+      ...base,
+      hostId: 'host-deepseek-bogus',
+      harnessTypes: ['deepseek_harness', 'bogus'],
+    });
+    expect(bogus.status).toBe(400);
+    expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+  });
+
   it('T-CC5: harness 缺字段 / secrets 不完整 / harnessTypes 非法 / workloadPlan 缺失 → 400 INVALID_HARNESS 且不创建 Job', async () => {
     const valid = {
       purpose: 'harness',
