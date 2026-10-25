@@ -243,8 +243,7 @@ export class HarnessLoginManager {
       console.warn(`[HarnessLogin] dropped ${phase} event for unknown requestId=%j`, requestId);
       return null;
     }
-    this.pendingRequests.delete(pending.requestId);
-    this.registry.clear(pending.controllerId);
+    // 先校验归属再清理：非属主 socket 携带他人 requestId 不得清掉进行中的登录与超时守卫。
     if (pending.socketId !== socket.id) {
       console.warn(
         '[HarnessLogin] %s event from non-owner socket (expected=%s actual=%s)',
@@ -252,6 +251,8 @@ export class HarnessLoginManager {
       );
       return null;
     }
+    this.pendingRequests.delete(pending.requestId);
+    this.registry.clear(pending.controllerId);
     return pending;
   }
 

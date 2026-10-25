@@ -187,6 +187,21 @@ describe('HarnessLoginManager', () => {
       expect(published('harness:login:resolved')[1]).toMatchObject({ result: 'failed', error: 'boom' });
     });
 
+    it('非属主 socket 上报 succeeded/failed 不清理、不发布（P2-4）', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
+      const intruder = createMockSocket('socket-other');
+
+      await manager.handleLoginSucceeded(intruder as never, { requestId: 'req-1' });
+      await manager.handleLoginFailed(intruder as never, { requestId: 'req-1', reason: 'cancelled' });
+
+      expect(manager.getPendingCount()).toBe(1);
+      expect(registry.pendingFor('ctrl-1')?.requestId).toBe('req-1');
+      expect(published('harness:login:resolved')).toEqual([]);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
     it('未知 requestId / 未知 reason 丢弃且不发布', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await manager.handleLoginSucceeded(socket as never, { requestId: 'nope' });
