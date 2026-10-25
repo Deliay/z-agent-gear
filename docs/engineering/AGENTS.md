@@ -198,6 +198,7 @@ flowchart LR
 - [[proposals/20261023-feat-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（linkPullRequest MCP 工具与 PR Handler Registry、人类节点「联动上游 Pull Request」、工作流追加提示词 key 去重、事件回调按 review 状态驱动人类节点完成/打回）
 - [[proposals/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区：仅「Git 项目设置」初始化 Github 项目才创建工作区、Model.contextLength 后台模型最长上下文并经 OpenAI 兼容 /v1/models 的 context_length 下发、云电脑 Job 模板 ephemeral-storage 上限 10Gi）
 - [[proposals/20261025-fix-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（secrets.modelContextLengths → ZAG_MODEL_CONTEXT_LENGTHS → opencode models.limit.context）
+- [[proposals/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（harnessTypes 扩展 kimi_code 与预置工作负载 009、agent-gear 2.8.0 kimi 登录闸门 `kimi login` stdio 判定、harness:login 事件族与登录引导弹窗、按 harnessTypes 细分版本门禁）
 - [[proposals/20261025-feat-github-native-webhook.md]] — GitHub 原生 Webhook 入口（POST /api/events/github/webhook 直连 pull_request_review，HMAC-SHA256 验签后归一化复用 PR 联动判定链）
 - [[proposals/20261025-fix-cloud-container-active-deadline.md]] — 云电脑取消 Job 最长运行时间限制（移除 activeDeadlineSeconds，expiresAt 仅落库留存）
 
