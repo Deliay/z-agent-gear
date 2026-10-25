@@ -54,8 +54,30 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     expect((await stat(workspace)).isDirectory()).toBe(true);
 
     const config = parse(await readFile(join(configDir, 'opencode.jsonc'), 'utf-8'));
-    expect(Object.keys(config.provider.zag.models)).toEqual(['model-a', 'model-b']);
-    expect(config.provider.zag.options.apiKey).toBe('zag_sk_super_secret');
+    expect(Object.keys(config.providers.zag.models)).toEqual(['model-a', 'model-b']);
+    expect(config.providers.zag.settings.apiKey).toBe('zag_sk_super_secret');
+  });
+
+  it('writes limit.context into the config when ZAG_MODEL_CONTEXT_LENGTHS is provided', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const configDir = join(dir, 'config');
+
+    await prepareHarness({
+      env: {
+        ...VALID_ENV,
+        ZAG_MODEL_CONTEXT_LENGTHS: '{"model-a":128000}',
+      },
+      runner: async () => ({ stdout: '1.2.3', stderr: '' }),
+      configDir,
+      makeDir: async () => {},
+    });
+
+    const config = parse(await readFile(join(configDir, 'opencode.jsonc'), 'utf-8'));
+    expect(config.providers.zag.models).toEqual({
+      'model-a': { name: 'model-a', limit: { context: 128000 } },
+      'model-b': { name: 'model-b' },
+    });
   });
 
   it('fails on missing env before touching OpenCode or the filesystem', async () => {

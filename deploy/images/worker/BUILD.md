@@ -180,8 +180,8 @@ docker run --rm --entrypoint bash \
 # 1) OpenCode 已由 harness 工作负载安装，且版本与 OPENCODE_CLI_VERSION 一致
 opencode --version
 
-# 2) 模型配置已写入（provider.zag；保留既有 provider/注释）
-agent-gear harness prepare           # 幂等：重复执行只替换 provider.zag
+# 2) 模型配置已写入（providers.zag；保留既有 provider/注释）
+agent-gear harness prepare           # 幂等：重复执行只替换 providers.zag
 cat ~/.config/opencode/opencode.jsonc
 stat -c '%a' ~/.config/opencode/opencode.jsonc   # 期望 600
 
@@ -196,7 +196,7 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
 
 - [ ] 镜像内 `command -v opencode` 无输出（未预装）；harness 初始化后 `opencode --version` 成功
 - [ ] 安装版本为 `OPENCODE_CLI_VERSION` 固定值（默认 `2.1.1`），非 `latest`
-- [ ] `agent-gear harness prepare` 成功；`opencode.jsonc` 的 `provider.zag` 含 `baseURL`/`apiKey`/`models`，权限 `600`
+- [ ] `agent-gear harness prepare` 成功；`opencode.jsonc` 的 `providers.zag` 含 `settings.baseURL`/`settings.apiKey`/`models`，权限 `600`
 - [ ] 重复执行 `agent-gear harness prepare` 不破坏既有 `provider`/注释（幂等）
 - [ ] `ZAG_DEFAULT_WORKSPACE` 已创建；`ZAG_MODEL_API_KEY`/`ZAG_HOST_KEY`/`ZAG_CONTROLLER_KEY` 不出现在日志/错误中
 - [ ] 缺失 harness env 或 `opencode` 不可用时，init 工作负载失败 → 容器被强制注销（不上线）

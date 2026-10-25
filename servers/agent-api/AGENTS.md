@@ -25,6 +25,7 @@ src/
 
 ## 会话能力快照与模型来源
 
+- **PR 联动事件入口**：`routes/event-callback.ts`（`POST /api/events/callback`，平台 token 或 GitHub 验签双通道）与 `routes/github-webhook.ts`（`POST /api/events/github/webhook`，GitHub 原生 webhook 直连，仅 `X-Hub-Signature-256` 验签 + `GITHUB_WEBHOOK_SECRET`，仅处理 `pull_request_review` submitted，经 `services/workflow/github-webhook-payload.ts` 归一化）都必须在全局 `express.json()` 之前挂载（验签需要原始字节）；两者共用 `handlePullRequestEvent` 判定链。
 - `Session.agentCapabilities` 读取 controller-api 落库的 `sessions.agentCapabilities`；`Session.features` 由 `services/agent-capabilities.ts` 的 `featuresFromSnapshot()` 输出（无快照返回 `[]`，不复制 FeatureId 矩阵）。
 - `Session.availableModels` 为字段级 resolver：按平台模型库（`ModelService.listSourceLibrary()`，`AVAILABLE_MODELS_FILTER` 同口径）三档推断来源（`services/model-source.ts`：库比对 → 标识前缀 → 兜底），同一 GraphQL 请求只查一次库（`AuthContext.modelLibraryPromise`）。
 - `TodoItem.resolution/resolvedAt/expiresAt`：`respondElicitation` 写 `accepted|declined|cancelled`；订阅 `elicitation:resolved` 后 `timeout→expired`、`unsupported_mode→failed`、`cancelled→cancelled`。TTL（5 分钟）保持不变。
@@ -121,4 +122,4 @@ npm run start   # Start production server
 
 - 创建：`CreateCloudHostInput` 仅保留 `createDefaultSession`（缺省 `true`）；**创建期不再预置 `/root/workspace`**（`CloudHost.workspaceId` 恒 `null` 落库，`required:false, default:null`），默认工作区只在「Git 项目设置」初始化 Github 项目时由 `cloud-host-github-service.ensureWorkspace` 按 `targetPath` 幂等创建。`CloudHost.hasDefaultWorkspace`（`Boolean(workspaceId)`）为只读展示字段。
 - ready：`handleReadyLocked` 的 STARTING 与重复 ready 两处建默认会话均要求 `createDefaultSession !== false && host.workspaceId`（两开关同时允许才建）；无工作区只记 info（日志区分 `createDefaultSession=false` / `no default workspace`），不建会话、不写 `defaultSessionId`。
-- 模型：`Model.contextLength`（Int，null=未设置）只读镜像 admin-api，经 `mapModel` 透出；上下文下发只走 OpenAI 兼容 `/v1/models` 的 `context_length`。
+- 模型：`Model.contextLength`（Int，null=未设置）只读镜像 admin-api，经 `mapModel` 透出；上下文下发走两条通道：OpenAI 兼容 `/v1/models` 的 `context_length`（运行时网关），以及创建云电脑时 `secrets.modelContextLengths`（模型 ID → contextLength JSON object，仅启用且正整数；同名保留首个）经 cloud-controller `ZAG_MODEL_CONTEXT_LENGTHS` 写入 opencode 配置 `models.<id>.limit.context`（agent-gear ≥2.7.0，缺失优雅降级）。

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse } from 'jsonc-parser';
 import {
   OpencodeConfigError,
-  ZAG_PROVIDER_NPM,
+  ZAG_PROVIDER_PACKAGE,
   buildZagProvider,
   resolveOpencodeConfigPath,
   writeOpencodeConfig,
@@ -30,9 +30,9 @@ async function fileMode(path: string): Promise<number> {
 describe('buildZagProvider (T-AG9/T-AG11)', () => {
   it('builds an OpenAI-compatible provider with baseURL/apiKey/models', () => {
     expect(buildZagProvider(ENV)).toEqual({
-      npm: '@ai-sdk/openai-compatible',
+      package: '@opencode/ai/providers/openai-compatible',
       name: 'ZAG',
-      options: {
+      settings: {
         baseURL: 'http://admin-api:8002/v1',
         apiKey: 'zag_sk_super_secret',
       },
@@ -41,11 +41,24 @@ describe('buildZagProvider (T-AG9/T-AG11)', () => {
         'model-b': { name: 'model-b' },
       },
     });
-    expect(ZAG_PROVIDER_NPM).toBe('@ai-sdk/openai-compatible');
+    expect(ZAG_PROVIDER_PACKAGE).toBe('@opencode/ai/providers/openai-compatible');
   });
 
   it('writes models:{} for an empty model list', () => {
     expect(buildZagProvider({ ...ENV, modelIds: [] }).models).toEqual({});
+  });
+
+  it('writes limit.context for models with a context length and omits it otherwise', () => {
+    const provider = buildZagProvider({
+      ...ENV,
+      modelIds: ['model-a', 'model-b', 'model-c'],
+      modelContextLengths: { 'model-a': 128000, 'model-c': 0 },
+    });
+    expect(provider.models).toEqual({
+      'model-a': { name: 'model-a', limit: { context: 128000 } },
+      'model-b': { name: 'model-b' },
+      'model-c': { name: 'model-c' },
+    });
   });
 });
 
@@ -56,7 +69,7 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('T-AG9: creates opencode.jsonc with provider.zag and 0600 permissions', async () => {
+  it('T-AG9: creates opencode.jsonc with providers.zag and 0600 permissions', async () => {
     const dir = await makeDir();
     dirs.push(dir);
 
@@ -68,15 +81,15 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
     expect(await fileMode(result.path)).toBe(0o600);
 
     const config = parse(await readFile(result.path, 'utf-8'));
-    expect(config.provider.zag.options.baseURL).toBe('http://admin-api:8002/v1');
-    expect(config.provider.zag.options.apiKey).toBe('zag_sk_super_secret');
-    expect(config.provider.zag.models).toEqual({
+    expect(config.providers.zag.settings.baseURL).toBe('http://admin-api:8002/v1');
+    expect(config.providers.zag.settings.apiKey).toBe('zag_sk_super_secret');
+    expect(config.providers.zag.models).toEqual({
       'model-a': { name: 'model-a' },
       'model-b': { name: 'model-b' },
     });
   });
 
-  it('T-AG10: merges an existing config, preserving comments and other providers and replacing provider.zag', async () => {
+  it('T-AG10: merges an existing config, preserving comments and other providers and replacing providers.zag', async () => {
     const dir = await makeDir();
     dirs.push(dir);
     const target = join(dir, 'opencode.jsonc');
@@ -85,18 +98,18 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
       `{
   // keep this comment
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
+  "providers": {
     // existing provider must survive
     "other": {
-      "npm": "@example/other",
+      "package": "@example/other",
       "name": "Other",
-      "options": { "baseURL": "http://other" },
+      "settings": { "baseURL": "http://other" },
       "models": { "x": { "name": "x" } }
     },
     "zag": {
-      "npm": "old-npm",
+      "package": "old-package",
       "name": "Old ZAG",
-      "options": { "baseURL": "http://old", "apiKey": "old-key" },
+      "settings": { "baseURL": "http://old", "apiKey": "old-key" },
       "models": {}
     }
   }
@@ -113,11 +126,11 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
 
     const config = parse(text);
     expect(config.$schema).toBe('https://opencode.ai/config.json');
-    expect(config.provider.other).toMatchObject({ npm: '@example/other', name: 'Other' });
-    expect(config.provider.zag).toMatchObject({
-      npm: ZAG_PROVIDER_NPM,
+    expect(config.providers.other).toMatchObject({ package: '@example/other', name: 'Other' });
+    expect(config.providers.zag).toMatchObject({
+      package: ZAG_PROVIDER_PACKAGE,
       name: 'ZAG',
-      options: { baseURL: 'http://admin-api:8002/v1', apiKey: 'zag_sk_super_secret' },
+      settings: { baseURL: 'http://admin-api:8002/v1', apiKey: 'zag_sk_super_secret' },
     });
     // 旧 apiKey/baseURL 已被替换
     expect(text).not.toContain('old-key');
@@ -131,7 +144,7 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
     await writeOpencodeConfig({ env: { ...ENV, modelIds: [] }, configDir: dir });
 
     const config = parse(await readFile(join(dir, 'opencode.jsonc'), 'utf-8'));
-    expect(config.provider.zag.models).toEqual({});
+    expect(config.providers.zag.models).toEqual({});
   });
 
   it('T-AG12: merges an existing opencode.json instead of creating a new .jsonc', async () => {
@@ -148,7 +161,7 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
 
     const config = parse(await readFile(jsonPath, 'utf-8'));
     expect(config.theme).toBe('dark');
-    expect(config.provider.zag.name).toBe('ZAG');
+    expect(config.providers.zag.name).toBe('ZAG');
 
     // 不创建并存的 .jsonc
     await expect(stat(join(dir, 'opencode.jsonc'))).rejects.toThrow();
@@ -189,7 +202,7 @@ describe('writeOpencodeConfig (T-AG9..T-AG12)', () => {
     expect(await fileMode(target)).toBe(0o600);
     const config = parse(await readFile(target, 'utf-8'));
     expect(config.theme).toBe('dark');
-    expect(config.provider.zag.name).toBe('ZAG');
+    expect(config.providers.zag.name).toBe('ZAG');
   });
 
   it('C-7: keeps the original file intact when the write path fails', async () => {

@@ -15,6 +15,7 @@ import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
+import { githubWebhookRouter } from './routes/github-webhook.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
@@ -40,6 +41,7 @@ app.use(compressionMiddleware());
 app.use(cookieParser());
 // 事件回调需读取原始报文验签：必须在全局 express.json() 之前挂载
 app.use('/api', eventCallbackRouter);
+app.use('/api', githubWebhookRouter);
 app.use(express.json());
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });

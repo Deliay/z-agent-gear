@@ -12,15 +12,15 @@ import {
 } from 'jsonc-parser';
 import type { HarnessEnv } from './env.js';
 
-/** OpenCode 配置中 `provider.zag` 的结构（OpenAI-compatible 自定义 provider）。 */
+/** OpenCode 配置中 `providers.zag` 的结构（OpenCode v2 OpenAI-compatible 自定义 provider）。 */
 export interface ZagProviderConfig {
-  npm: string;
+  package: string;
   name: string;
-  options: {
+  settings: {
     baseURL: string;
     apiKey: string;
   };
-  models: Record<string, { name: string }>;
+  models: Record<string, { name: string; limit?: { context: number } }>;
 }
 
 /** 写入 OpenCode 配置失败（消息只含路径/变量名，不含 key 等 secret）。 */
@@ -31,22 +31,27 @@ export class OpencodeConfigError extends Error {
   }
 }
 
-/** `provider.zag` 固定使用 OpenAI compatible provider 包。 */
-export const ZAG_PROVIDER_NPM = '@ai-sdk/openai-compatible';
+/** `providers.zag` 固定使用 OpenCode v2 OpenAI compatible provider 包。 */
+export const ZAG_PROVIDER_PACKAGE = '@opencode/ai/providers/openai-compatible';
 
-/** 由 harness env 构造 `provider.zag`（模型列表为空时 `models: {}`）。 */
+/** 由 harness env 构造 `providers.zag`（模型列表为空时 `models: {}`；有上下文长度时写 `limit.context`）。 */
 export function buildZagProvider(
-  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'>,
+  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'> &
+    Partial<Pick<HarnessEnv, 'modelContextLengths'>>,
 ): ZagProviderConfig {
-  const models: Record<string, { name: string }> = {};
+  const models: Record<string, { name: string; limit?: { context: number } }> = {};
   for (const id of env.modelIds) {
     if (!id) continue;
-    models[id] = { name: id };
+    const context = env.modelContextLengths?.[id];
+    models[id] =
+      typeof context === 'number' && Number.isInteger(context) && context > 0
+        ? { name: id, limit: { context } }
+        : { name: id };
   }
   return {
-    npm: ZAG_PROVIDER_NPM,
+    package: ZAG_PROVIDER_PACKAGE,
     name: 'ZAG',
-    options: {
+    settings: {
       baseURL: env.modelBaseUrl,
       apiKey: env.modelApiKey,
     },
@@ -84,7 +89,8 @@ export async function resolveOpencodeConfigPath(configDir = defaultConfigDir()):
 }
 
 export interface WriteOpencodeConfigOptions {
-  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'>;
+  env: Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey' | 'modelIds'> &
+    Partial<Pick<HarnessEnv, 'modelContextLengths'>>;
   /** 覆盖配置目录（测试/定制场景；缺省 `~/.config/opencode`）。 */
   configDir?: string;
 }
@@ -101,7 +107,7 @@ export interface WriteOpencodeConfigResult {
 /**
  * 写入/合并 OpenCode 配置：
  *
- * - 用 `jsonc-parser` 的 `modify` 仅替换 `provider.zag`，保留注释与既有 provider；
+ * - 用 `jsonc-parser` 的 `modify` 仅替换 `providers.zag`，保留注释与既有 provider；
  * - 文件权限固定 `0600`（含已存在文件），目录权限收紧为 `0700`（含已存在目录）；
  * - 同目录临时文件 + `rename` 原子替换（避免半写文件，C-7）；
  * - 非法 JSONC 直接报错（不覆盖用户配置，避免静默丢数据）。
@@ -153,7 +159,7 @@ export async function writeOpencodeConfig(
     eol: text.includes('\r\n') ? '\r\n' : '\n',
   };
   const provider = buildZagProvider(options.env);
-  const edits = modify(text, ['provider', 'zag'], provider, { formattingOptions });
+  const edits = modify(text, ['providers', 'zag'], provider, { formattingOptions });
   let content = applyEdits(text, edits);
   if (!content.endsWith('\n')) content += '\n';
 

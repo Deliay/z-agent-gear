@@ -26,7 +26,7 @@ export function registerHarnessCommands(
 
   harness
     .command('prepare')
-    .description('Validate harness env, verify OpenCode CLI and write provider.zag into opencode.jsonc')
+    .description('Validate harness env, verify OpenCode CLI and write providers.zag into opencode.jsonc')
     .action(async () => {
       try {
         const result = await (deps.prepare ?? prepareHarness)();

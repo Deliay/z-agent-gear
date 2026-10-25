@@ -164,10 +164,10 @@ function setupCreateSuccess() {
   } as never);
   vi.mocked(CloudHost.create).mockResolvedValue({} as never);
   vi.mocked(modelService.findAll).mockResolvedValue([
-    { name: 'model-a', isEnabled: true },
-    { name: 'model-a', isEnabled: true },
-    { name: 'model-b', isEnabled: true },
-    { name: 'disabled', isEnabled: false },
+    { name: 'model-a', isEnabled: true, contextLength: 128000 },
+    { name: 'model-a', isEnabled: true, contextLength: 64000 },
+    { name: 'model-b', isEnabled: true, contextLength: null },
+    { name: 'disabled', isEnabled: false, contextLength: 1000 },
   ] as never);
   vi.mocked(billingClient.createCloudHostApiKey).mockResolvedValue({
     apiKey: { id: 'model-key-1' },
@@ -318,6 +318,8 @@ describe('CloudHostService', () => {
         hostKey: 'zag_k_1_raw',
         modelApiKey: 'zag_sk_secret',
         modelIds: '["model-a","model-b"]',
+        // 同名保留首个有效值；contextLength=null 与禁用模型不出现
+        modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/root/workspace',
       });
     });

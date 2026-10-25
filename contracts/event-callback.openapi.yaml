@@ -56,6 +56,66 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string, enum: [unauthorized] }
+  /api/events/github/webhook:
+    post:
+      summary: 接收 GitHub 原生 webhook（pull_request_review）并驱动工作流
+      operationId: postGithubWebhook
+      description: >-
+        GitHub 仓库 / App Webhook 直连入口。仅接受 X-Hub-Signature-256 验签
+        （GITHUB_WEBHOOK_SECRET，未配置时一律 401）；仅处理 pull_request_review
+        且 action=submitted 的事件，归一化为平台事件载荷后按与
+        /api/events/callback 完全一致的判定链驱动工作流；ping、其他事件类型与
+        其他 action 安全忽略（200 UNSUPPORTED_EVENT）。eventId 取
+        gh:pull_request_review:{review.id}，跨重投稳定，重复投递返回
+        DUPLICATE_EVENT。
+      parameters:
+        - in: header
+          name: X-Hub-Signature-256
+          required: true
+          schema: { type: string, example: 'sha256=0123abcd' }
+          description: 对原始请求字节计算的 HMAC-SHA256 签名（GitHub Webhook Secret）
+        - in: header
+          name: X-GitHub-Event
+          required: true
+          schema: { type: string, example: pull_request_review }
+          description: GitHub 事件类型；非 pull_request_review 一律忽略
+        - in: header
+          name: X-GitHub-Delivery
+          required: false
+          schema: { type: string }
+          description: GitHub 投递 GUID，仅用于日志，不参与幂等
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GithubPullRequestReviewEvent'
+      responses:
+        '200':
+          description: 已处理或安全忽略（含 UNSUPPORTED_EVENT / HANDLER_FAILED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GithubWebhookResponse'
+        '400':
+          description: 载荷非法（error=payload.invalid，detail 为字段路径；含非 JSON Content-Type）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, enum: [payload.invalid] }
+                  detail: { type: string }
+        '401':
+          description: 验签失败或未配置 GITHUB_WEBHOOK_SECRET
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, enum: [unauthorized] }
 components:
   schemas:
     EventCallbackRequest:
@@ -118,3 +178,54 @@ components:
             - DUPLICATE_EVENT
             - UNSUPPORTED_REVIEW_STATE
             - HANDLER_FAILED
+    GithubPullRequestReviewEvent:
+      type: object
+      description: >-
+        GitHub 原生 pull_request_review 事件载荷（仅列本端点消费的字段，其余字段原样忽略）。
+        归一化映射：eventId=gh:pull_request_review:{review.id}；
+        pullRequestId={repository.full_name}#{pull_request.number}；reviewState=review.state；
+        comment=review.body；reviewer=review.user.login；submittedAt=review.submitted_at。
+      required: [action, review, repository, pull_request]
+      properties:
+        action: { type: string, enum: [submitted], description: 其他 action 忽略（UNSUPPORTED_EVENT） }
+        review:
+          type: object
+          required: [id, state]
+          properties:
+            id: { type: integer, description: 幂等位来源，跨重投稳定 }
+            state:
+              type: string
+              description: approved / changes_requested / commented / dismissed 等，原样透传给既有判定链
+              example: approved
+            body: { type: [string, 'null'] }
+            user:
+              type: [object, 'null']
+              properties:
+                login: { type: string }
+            submitted_at: { type: string, format: date-time }
+        repository:
+          type: object
+          required: [full_name]
+          properties:
+            full_name: { type: string, example: 'Deliay/z-agent-gear' }
+        pull_request:
+          type: object
+          required: [number]
+          properties:
+            number: { type: integer, example: 264 }
+            html_url: { type: string }
+    GithubWebhookResponse:
+      type: object
+      required: [handled, results]
+      properties:
+        handled: { type: boolean }
+        reason:
+          type: string
+          description: >-
+            忽略原因；除 EventCallbackResult.reason 枚举外，本端点另有
+            UNSUPPORTED_EVENT（ping / 非关注事件 / 非 submitted action）。
+            处理器异常时返回 HANDLER_FAILED（HTTP 仍为 200，避免 GitHub 重投风暴）。
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCallbackResult'
