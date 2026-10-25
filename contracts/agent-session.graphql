@@ -432,7 +432,8 @@ type Mutation {
   authenticateAcpSession(sessionId: ID!, methodId: String!, input: JSON): AuthenticateSessionPayload!
   logoutAcpSession(sessionId: ID!): Boolean!
   respondElicitation(requestId: String!, action: ElicitationAction!, values: JSON): Boolean!
-  # 响应用户侧的 harness 登录引导（本期仅 cancel）；未命中/非本人/已收敛返回 Boolean=false
+  # 响应用户侧的 harness 登录引导（本期仅 cancel）；未命中/非本人/已收敛抛错
+  # `Todo item not found or already handled`（与 respondElicitation 同口径）
   respondHarnessLogin(requestId: String!, action: HarnessLoginAction!): Boolean!
   refreshAcpCapabilities(controllerId: ID!): [AcpCapability!]!
   respondPermission(requestId: String!, outcome: String!, optionId: String): Boolean!

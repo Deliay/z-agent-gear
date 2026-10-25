@@ -104,6 +104,11 @@ paths:
         1. 立即推送 `ready` 事件
         2. 每 30s 发送心跳保活（`heartbeat` 事件）
         3. 服务端事件到达时推送对应事件
+
+        `harness_login_required.data` 字段：`requestId`、`controllerId`、`serverType`、`trigger`、
+        `url`、`userCode`、`expiresAt`、`todoId`（对应待办 ID，供前端关联待办；可缺省）。
+        `harness_login_resolved.data` 字段：`requestId`、`result`（`succeeded`/`cancelled`/`expired`/`failed`）、
+        `account?`、`error?`。
       tags:
         - User SSE
       parameters:
@@ -128,7 +133,7 @@ paths:
                 harness_login_required:
                   summary: Kimi Code 需要登录
                   value: |
-                    data: {"type":"harness_login_required","data":{"requestId":"hl_1","controllerId":"ctrl_1","serverType":"kimi_code","trigger":"probe-options","url":"https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG","userCode":"4CQ4-0XIG","expiresAt":"2026-10-25T12:00:00.000Z"}}
+                    data: {"type":"harness_login_required","data":{"requestId":"hl_1","controllerId":"ctrl_1","serverType":"kimi_code","trigger":"probe-options","url":"https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG","userCode":"4CQ4-0XIG","expiresAt":"2026-10-25T12:00:00.000Z","todoId":"todo_1"}}
                 harness_login_resolved:
                   summary: 登录流程结束
                   value: |
