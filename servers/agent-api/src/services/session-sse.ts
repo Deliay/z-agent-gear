@@ -9,7 +9,15 @@ interface SSEConnection {
   heartbeat: NodeJS.Timeout;
 }
 
+interface UserSSEConnection {
+  res: Response;
+  userId: string;
+  heartbeat: NodeJS.Timeout;
+}
+
 const connections = new Map<string, SSEConnection>();
+// 用户级 SSE（不绑定会话）：GET /api/user/stream，用于登录引导等全局事件即时下发
+const userConnections = new Map<string, Set<UserSSEConnection>>();
 let globalStatusSubscriber: ReturnType<ReturnType<typeof getRedisClient>['duplicate']> | null = null;
 
 export class SessionSSEService {
@@ -82,6 +90,44 @@ export class SessionSSEService {
       subscriber.unsubscribe();
       subscriber.quit();
       connections.delete(connectionId);
+    });
+  }
+
+  /**
+   * 用户级 SSE 连接（main layout 全局订阅）：不依赖任何会话存在。
+   * 建立后立即推 `ready`，每 30s 心跳保活；连接关闭时清理。
+   */
+  addUserConnection(userId: string, res: Response): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    res.write(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
+
+    const connection: UserSSEConnection = {
+      res,
+      userId,
+      heartbeat: setInterval(() => {
+        res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`);
+      }, 30000),
+    };
+
+    let set = userConnections.get(userId);
+    if (!set) {
+      set = new Set();
+      userConnections.set(userId, set);
+    }
+    set.add(connection);
+
+    res.on('close', () => {
+      clearInterval(connection.heartbeat);
+      const current = userConnections.get(userId);
+      if (!current) return;
+      current.delete(connection);
+      if (current.size === 0) userConnections.delete(userId);
     });
   }
 
@@ -203,6 +249,13 @@ export class SessionSSEService {
     const message = JSON.stringify(data);
     for (const [key, connection] of connections) {
       if (connection.userId === userId) {
+        connection.res.write(`data: ${message}\n\n`);
+      }
+    }
+    // 同一条用户事件同时下发用户级 SSE（未打开会话页时也能即时收到）
+    const userSet = userConnections.get(userId);
+    if (userSet) {
+      for (const connection of userSet) {
         connection.res.write(`data: ${message}\n\n`);
       }
     }

@@ -4,6 +4,7 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
 const EXTERNAL_SESSION_CACHE_TTL = 86400; // 24h
 // 单次 ack 等待窗口：2 次尝试合计 ~10s，与 agent-api waitForStopAck 的 10s 等待上限对齐
@@ -22,13 +23,21 @@ interface ACPSession {
 }
 
 interface PendingRequest {
+  requestId: string;
   resolve: (value: { success: boolean; error?: string; externalSessionId?: string; modes?: Array<{ id: string; name: string; description?: string }>; currentModeId?: string; currentModel?: { id: string; name: string; provider?: string }; availableModels?: Array<{ id: string; name: string; provider?: string }>; currentModelId?: string; configOptions?: Array<Record<string, unknown>>; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; agentInfo?: { name: string; version?: string }; authMethods?: Array<{ id: string; kind: string; description?: string; url?: string }>; supportsAdditionalDirectories?: boolean; capabilities?: Record<string, unknown> }) => void;
   timeout: ReturnType<typeof setTimeout>;
   sessionId: string;
   statusAtStart: string;
+  /** 归属 controller（来自 socket.data），供登录超时守卫查询。 */
+  controllerId?: string;
 }
 
 export class ACPSessionManager {
+  private registry: HarnessLoginRegistry;
+
+  constructor(registry: HarnessLoginRegistry = harnessLoginRegistry) {
+    this.registry = registry;
+  }
   private sessions = new Map<string, ACPSession>();
   private socketToSessions = new Map<string, Set<string>>();
   // MCP 转发归属记录：在 acp:start/acp:resume 发出时即登记（早于 start:result），
@@ -932,14 +941,53 @@ export class ACPSessionManager {
     this.ensureSocketDispatcher(socket);
     const dispatcher = this.socketDispatchers.get(socket.id)!;
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        dispatcher.delete(requestId);
-        console.log(`[ACP session] TIMEOUT after ${timeoutMs}ms for session ${sessionId} requestId=${requestId}`);
-        this.cleanupFailedSession(sessionId, statusAtStart);
-        resolve({ success: false, error: timeoutMessage ?? 'ACP start timeout' });
-      }, timeoutMs);
-      dispatcher.set(requestId, { resolve, timeout, sessionId, statusAtStart });
+      const pending: PendingRequest = {
+        requestId,
+        resolve,
+        timeout: undefined as unknown as ReturnType<typeof setTimeout>,
+        sessionId,
+        statusAtStart,
+        controllerId: socket.data?.controllerId,
+      };
+      pending.timeout = setTimeout(
+        () => this.handlePendingTimeout(dispatcher, pending, timeoutMs, timeoutMessage),
+        timeoutMs,
+      );
+      dispatcher.set(requestId, pending);
     });
+  }
+
+  /**
+   * start/resume 超时守卫：登录进行中（注册表命中）时不结算，改为重新挂起（受绝对上限约束），
+   * 由 agent-gear 在登录结束后上抛的真实结果事件结算，避免「登录成功前就判超时」。
+   */
+  private handlePendingTimeout(
+    dispatcher: Map<string, PendingRequest>,
+    pending: PendingRequest,
+    timeoutMs: number,
+    timeoutMessage?: string,
+  ): void {
+    const loginPending = pending.controllerId
+      ? this.registry.pendingFor(pending.controllerId)
+      : undefined;
+
+    if (loginPending) {
+      const remaining = loginPending.deadlineMs - Date.now();
+      if (remaining > 0) {
+        pending.timeout = setTimeout(
+          () => this.handlePendingTimeout(dispatcher, pending, timeoutMs, timeoutMessage),
+          Math.min(timeoutMs, remaining),
+        );
+        return;
+      }
+      console.log(`[ACP session] Login guard deadline exceeded for session ${pending.sessionId} requestId=${pending.requestId}, forcing settle`);
+    } else {
+      console.log(`[ACP session] TIMEOUT after ${timeoutMs}ms for session ${pending.sessionId} requestId=${pending.requestId}`);
+    }
+
+    dispatcher.delete(pending.requestId);
+    this.cleanupFailedSession(pending.sessionId, pending.statusAtStart);
+    pending.resolve({ success: false, error: timeoutMessage ?? 'ACP start timeout' });
   }
 
   /**

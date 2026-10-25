@@ -5,6 +5,7 @@ vi.mock('../middleware/redis.js', () => ({
 }));
 
 import { AcpOptionsProber } from './acp-options-prober.js';
+import { HarnessLoginRegistry } from './harness-login-registry.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const mockRedis = {
@@ -121,5 +122,38 @@ describe('AcpOptionsProber', () => {
       }),
     ).resolves.toBeUndefined();
     expect(mockRedis.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('AcpOptionsProber 登录超时守卫', () => {
+  it('T-HLM8 登录进行中 30s 超时不结算，绝对上限后强制结算', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      mockRedis.get.mockResolvedValue(null);
+      const registry = new HarnessLoginRegistry();
+      registry.mark('ctrl-1', 'login-1', Date.now() + 90_000);
+      const prober = new AcpOptionsProber(registry);
+      const socket = createMockSocket();
+
+      let settled = false;
+      const promise = prober.probeOptions(socket as never, 'ctrl-1', 'kimi_code');
+      promise.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.emit).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      const result = await promise;
+      expect(settled).toBe(true);
+      expect(result.models).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

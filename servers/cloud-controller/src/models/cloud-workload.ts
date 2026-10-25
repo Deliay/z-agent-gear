@@ -47,8 +47,8 @@ const cloudWorkloadSchema = new mongoose.Schema(
       default: 'standard',
       index: true,
     },
-    // harness 类型（本期仅 opencode）；standard 为 null
-    harnessType: { type: String, enum: ['opencode', null], default: null },
+    // harness 类型（本期 opencode / kimi_code）；standard 为 null
+    harnessType: { type: String, enum: ['opencode', 'kimi_code', null], default: null },
   },
   { timestamps: true, collection: 'cloudworkloads' },
 );

@@ -646,6 +646,59 @@ describe('internal management API', () => {
     expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.10.0');
   });
 
+  it('A7: harnessTypes 含 kimi_code → 落库 2.8.0；仅 opencode 维持 2.6.0；非法类型 400', async () => {
+    const base = {
+      purpose: 'harness',
+      hostId: 'host-kimi',
+      refId: 'ck-kimi',
+      userId: 'user-kimi',
+      hostName: 'pc-kimi',
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.5.0',
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_kimi',
+        modelApiKey: 'zag_sk_kimi',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/root/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    };
+
+    const kimi = await createContainer({ ...base, harnessTypes: ['kimi_code'] });
+    expect(kimi.status).toBe(201);
+    const kimiBody = (await kimi.json()) as { id: string; harnessTypes: string[] };
+    expect(kimiBody.harnessTypes).toEqual(['kimi_code']);
+    expect((await repo.findById(kimiBody.id))?.agentGearMinVersion).toBe('2.8.0');
+
+    const both = await createContainer({
+      ...base,
+      hostId: 'host-both',
+      harnessTypes: ['opencode', 'kimi_code'],
+    });
+    expect(both.status).toBe(201);
+    const bothBody = (await both.json()) as { id: string };
+    expect((await repo.findById(bothBody.id))?.agentGearMinVersion).toBe('2.8.0');
+
+    const opencode = await createContainer({
+      ...base,
+      hostId: 'host-opencode',
+      harnessTypes: ['opencode'],
+    });
+    expect(opencode.status).toBe(201);
+    const opencodeBody = (await opencode.json()) as { id: string };
+    expect((await repo.findById(opencodeBody.id))?.agentGearMinVersion).toBe('2.6.0');
+
+    const bogus = await createContainer({
+      ...base,
+      hostId: 'host-bogus',
+      harnessTypes: ['kimi_code', 'bogus'],
+    });
+    expect(bogus.status).toBe(400);
+    expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+  });
+
   it('T-CC5: harness 缺字段 / secrets 不完整 / harnessTypes 非法 / workloadPlan 缺失 → 400 INVALID_HARNESS 且不创建 Job', async () => {
     const valid = {
       purpose: 'harness',

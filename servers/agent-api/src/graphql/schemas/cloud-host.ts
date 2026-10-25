@@ -2,6 +2,7 @@
 export const cloudHostTypeDefs = `#graphql
   enum HarnessType {
     OPENCODE
+    KIMI_CODE
   }
 
   # 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness

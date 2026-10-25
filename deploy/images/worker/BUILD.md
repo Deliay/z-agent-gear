@@ -84,8 +84,9 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 在镜像内应无输出，OpenCode 由 harness 工作负载安装，见下文）
-- [ ] `agent-gear --version` ≥ `2.5.0`（云电脑双连接与 `harness prepare`；参数注入需 ≥ `2.3.0`、`items[].required` 短路需 ≥ `2.4.0`）
+- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）与 `@moonshot-ai/kimi-code`（`command -v kimi` 应无输出），二者分别由 OpenCode / Kimi Code 工作负载安装
+- [ ] `agent-gear --version` ≥ `2.8.0`（`kimi_code` 使用前登录闸门；`kimi login` stdio 判定自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
+
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
 - [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
 - [ ] **未选择「.NET」/「Aspire」时容器内不存在 .NET 能力**：`command -v dotnet` 无输出
@@ -123,6 +124,7 @@ docker run --rm -it --entrypoint bash \
   core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
     agent-gear --version && \
     agent-gear harness --help && \
+    { command -v kimi || echo "kimi not preinstalled (expected)"; } && \
     bash -c "echo workload-ok" && \
     bash -c "echo out; echo err 1>&2; exit 7" ; echo "exit=$?"
   '
@@ -130,7 +132,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.5.0`（云电脑双连接 + `harness prepare`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`；普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`，harness 容器门禁为 `>=2.5.0`）
+- [ ] `agent-gear --version` ≥ `2.8.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.6.0`，含 `kimi_code` 的运行要求 `2.8.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
 - [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）

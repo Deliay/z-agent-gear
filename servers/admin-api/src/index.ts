@@ -44,6 +44,7 @@ import * as migration005ModelNameUnique from './migrations/005-model-name-unique
 import * as migration006HarnessOpencode from './migrations/006-preset-harness-opencode.js';
 import * as migration007PresetGithub from './migrations/007-preset-github.js';
 import * as migration008FixGithubWorkloadPrefix from './migrations/008-fix-github-workload-prefix.js';
+import * as migration009HarnessKimiCode from './migrations/009-preset-harness-kimi-code.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -115,6 +116,7 @@ async function start() {
   // 005-model-name-unique-global——整理 global 存量重名模型并建立 name 部分唯一索引（本期）
   // 006-preset-harness-opencode——写入云电脑 harness 运行环境预置项「OpenCode（Harness）」（云电脑）
   // 007-preset-github——写入 Github 工作负载预置项（安装 gh CLI，Github 工作负载）
+  // 009-preset-harness-kimi-code——写入云电脑 harness 运行环境预置项「Kimi Code（Harness）」（Kimi Code 云电脑）
   try {
     await runMigrations([
       migration001,
@@ -126,6 +128,7 @@ async function start() {
       migration006HarnessOpencode,
       migration007PresetGithub,
       migration008FixGithubWorkloadPrefix,
+      migration009HarnessKimiCode,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);

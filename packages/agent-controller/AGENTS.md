@@ -55,12 +55,23 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.7.1`（major 保持 2；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
+- 版本：包版本 `2.8.0`（major 保持 2；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
   `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`——
   上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
+
+## Kimi Code 登录闸门（2.8.0）
+
+- 仅 `kimi_code`：`acp:probe-options` / `acp:start` / `acp:resume` 三处 handler 最前
+  `await authGate.ensure(serverType, trigger)`；其它 serverType 立即放行（零开销）。
+- `src/harness/kimi-login.ts`：`kimi login` 子进程（stdin 关闭、stdout+stderr 合并解析、8 KiB 行缓冲、
+  默认等待 30 分钟）；设备码链接/验证码仅按契约 `harness:login:required` 上抛，原始输出不入日志。
+- `src/acp/auth-gate.ts`：进程内 TTL 缓存（`KIMI_AUTH_CACHE_TTL_MS`，默认 5 分钟）+ single-flight；
+  失败抛 `AuthRequiredError`（文案 `Kimi Code 未登录`），result 带 `reason:'auth'`；
+  `harness:login:cancel` 按 requestId 定向终止。
+- `CONTROLLER_VERSION` 从 `package.json` 读取（单一来源）。
 
 ## 容器级 env 与 secret 脱敏（2.5.0）
 

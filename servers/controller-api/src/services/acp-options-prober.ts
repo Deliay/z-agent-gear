@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
 export interface AcpServerOptionsData {
   modes: Array<{ id: string; name: string; description?: string }>;
@@ -11,6 +12,8 @@ export interface AcpServerOptionsData {
 
 interface ProbeRequest {
   requestId: string;
+  controllerId: string;
+  timeout: ReturnType<typeof setTimeout>;
   resolve: (options: AcpServerOptionsData) => void;
 }
 
@@ -35,6 +38,9 @@ const EMPTY_OPTIONS: AcpServerOptionsData = {
 
 const SUCCESS_CACHE_TTL = 300; // 5 分钟：模式/模型选项短时有效，模型列表变更后由 agent-api 主动失效
 const FAILURE_CACHE_TTL = 60; // 失败结果短缓存：让 agent-api 轮询尽快返回，同时允许快速重试
+const PROBE_TIMEOUT_MS = 30_000;
+// 登录进行中时的超时重挂间隔（与登录等待上限无关，仅决定复检节奏）
+const LOGIN_GUARD_REARM_MS = 30_000;
 
 function cacheKey(controllerId: string, serverType: string): string {
   return `acp:options:${controllerId}:${serverType}`;
@@ -47,6 +53,11 @@ function cacheKey(controllerId: string, serverType: string): string {
  */
 export class AcpOptionsProber {
   private pendingRequests = new Map<string, ProbeRequest>();
+  private readonly registry: HarnessLoginRegistry;
+
+  constructor(registry: HarnessLoginRegistry = harnessLoginRegistry) {
+    this.registry = registry;
+  }
 
   async probeOptions(
     controllerSocket: Socket,
@@ -64,23 +75,46 @@ export class AcpOptionsProber {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        console.warn(`[ACP options] Probe timeout for ${controllerId}/${serverType}`);
-        resolve(EMPTY_OPTIONS);
-      }, 30000);
-
-      this.pendingRequests.set(requestId, {
+      const entry: ProbeRequest = {
         requestId,
+        controllerId,
+        timeout: undefined as unknown as ReturnType<typeof setTimeout>,
         resolve: (options) => {
-          clearTimeout(timeout);
+          clearTimeout(entry.timeout);
           this.pendingRequests.delete(requestId);
           resolve(options);
         },
-      });
+      };
+
+      entry.timeout = setTimeout(() => this.handleProbeTimeout(entry, serverType), PROBE_TIMEOUT_MS);
+      this.pendingRequests.set(requestId, entry);
 
       controllerSocket.emit('acp:probe-options', { requestId, serverType });
     });
+  }
+
+  /**
+   * 探测超时守卫：登录进行中（注册表命中）时不结算，改为重新挂起（受绝对上限约束），
+   * 等 agent-gear 在登录结束后上抛真实探测结果再结算。
+   */
+  private handleProbeTimeout(entry: ProbeRequest, serverType: string): void {
+    const pending = this.registry.pendingFor(entry.controllerId);
+    if (pending) {
+      const remaining = pending.deadlineMs - Date.now();
+      if (remaining > 0) {
+        entry.timeout = setTimeout(
+          () => this.handleProbeTimeout(entry, serverType),
+          Math.min(LOGIN_GUARD_REARM_MS, remaining),
+        );
+        return;
+      }
+      console.warn(
+        `[ACP options] Login guard deadline exceeded for ${entry.controllerId}/${serverType}, forcing settle`,
+      );
+    } else {
+      console.warn(`[ACP options] Probe timeout for ${entry.controllerId}/${serverType}`);
+    }
+    entry.resolve(EMPTY_OPTIONS);
   }
 
   async handleProbeResult(controllerId: string, payload: ProbeResultPayload): Promise<void> {

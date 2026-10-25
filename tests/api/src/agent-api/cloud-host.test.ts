@@ -96,14 +96,21 @@ describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
 });
 
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
-  it('T-CH1: capabilities exposes OPENCODE when enabled', async () => {
+  it('T-CH1: capabilities exposes OPENCODE (and KIMI_CODE once its preset exists)', async () => {
     const token = await signup();
     const result = await gql(CAPABILITIES, undefined, token);
     expect(result.errors).toBeUndefined();
-    expect(result.data.cloudHostCapabilities).toEqual({
-      enabled: true,
-      supportedHarnesses: ['OPENCODE'],
-    });
+    expect(result.data.cloudHostCapabilities.enabled).toBe(true);
+    expect(result.data.cloudHostCapabilities.supportedHarnesses).toContain('OPENCODE');
+    // preset 由 admin-api 迁移 009 写入：存在即列出（缺失时跳过，不误伤旧库）
+    if (HAS_MONGO) {
+      const preset = await (await mongoDb())!.collection('cloudworkloads').findOne({
+        presetKey: 'harness-kimi-code',
+      });
+      expect(
+        result.data.cloudHostCapabilities.supportedHarnesses.includes('KIMI_CODE'),
+      ).toBe(Boolean(preset));
+    }
   });
 
   it('T-CH3/T-CH4: validates name and harnessTypes', async () => {
@@ -484,6 +491,43 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         // 清理失败不影响断言（容器可能在 STARTING 无法停止）
       }
     });
+  });
+});
+
+// Kimi Code（Harness）：创建校验 + 逐容器 2.8.0 版本门禁（T-CH-API-K1）
+describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
+  it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.8.0', async () => {
+    const token = await signup();
+    const created = await gql(
+      CREATE,
+      {
+        input: {
+          name: `kimi-${Date.now().toString(36)}`,
+          harnessTypes: ['OPENCODE', 'KIMI_CODE'],
+        },
+      },
+      token,
+    );
+    expect(created.errors, JSON.stringify(created.errors)).toBeUndefined();
+    const host = created.data.createCloudHost;
+    expect(host.harnessTypes).toEqual(['OPENCODE', 'KIMI_CODE']);
+
+    try {
+      if (!HAS_MONGO) return;
+      const db = (await mongoDb())!;
+      let doc: any = null;
+      for (let i = 0; i < 20; i += 1) {
+        doc = await db.collection('cloudcontainers').findOne({ hostId: host.id });
+        if (doc) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(doc, 'cloud-controller should persist the container').toBeTruthy();
+      expect(doc.harnessTypes).toEqual(['opencode', 'kimi_code']);
+      expect(doc.agentGearMinVersion).toBe('2.8.0');
+    } finally {
+      await gql(STOP, { id: host.id, force: true }, token);
+      await gql(DELETE, { id: host.id }, token);
+    }
   });
 });
 

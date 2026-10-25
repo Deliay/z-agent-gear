@@ -42,4 +42,15 @@ router.get('/session/:id/stream', async (req: Request, res: Response) => {
   await sessionSSEService.addConnection(sessionId, currentUser.id, res);
 });
 
+// 用户级事件流（不绑定会话）：登录引导等全局事件即时下发；HOME_OVERVIEW 轮询仍为兜底
+router.get('/user/stream', async (req: Request, res: Response) => {
+  const currentUser = await authenticateExpressUser(req);
+  if (!currentUser) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return;
+  }
+
+  sessionSSEService.addUserConnection(currentUser.id, res);
+});
+
 export const sessionStreamRouter = router;

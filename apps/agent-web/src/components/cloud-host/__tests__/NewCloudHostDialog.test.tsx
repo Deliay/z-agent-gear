@@ -440,4 +440,24 @@ describe('NewCloudHostDialog Github 项目编排', () => {
     await screen.findByLabelText('Github 账号');
     expect(submitButton()).toBeDisabled();
   });
+
+  it('T-E-HL7 supportedHarnesses 含 KIMI_CODE 时展示 Kimi Code 并可多选', () => {
+    render(
+      <NewCloudHostDialog
+        {...defaultProps}
+        capabilities={{ enabled: true, supportedHarnesses: ['OPENCODE', 'KIMI_CODE'] }}
+      />,
+    );
+
+    expect(screen.getByLabelText('OpenCode')).toBeInTheDocument();
+    const kimi = screen.getByLabelText('Kimi Code');
+    expect(kimi).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'Kimi 云电脑' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    fireEvent.click(kimi);
+
+    expect(screen.getByText('不自动创建会话')).toBeInTheDocument();
+    expect(submitButton()).not.toBeDisabled();
+  });
 });
