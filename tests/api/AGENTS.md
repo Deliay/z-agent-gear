@@ -55,7 +55,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（35 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（37 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -501,6 +501,7 @@ npm test
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
+| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（kimi→2.8.0、仅 opencode→2.6.0，需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
@@ -519,7 +520,7 @@ npm test
 | T-IA paramSchema CRUD | 四种类型（SELECT/MULTI_SELECT/TEXT/BOOLEAN）保存与回显；非下拉类型 `options` 归一为 `[]`；编辑改默认值；`paramSchema: []` 清空（空表单无配置） |
 | T-IA paramSchema 校验边界 | key 非法/重复、label 空/超长、options 空/重复/超限、默认值不在 options/类型不符 → 字段路径错误（`paramSchema[i].xxx is invalid`）；参数 >20 → `too many parameters` |
 | T-IA 依赖保存 | 正常（按配置顺序、去重）、自依赖 `workload cannot depend on itself`、依赖环 `dependency cycle detected`、依赖不存在 `dependency workload not found`、超 5 `too many dependencies` |
-| T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire 存在且 `isPreset=true`；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；重复查询 ID 集合稳定（迁移不重复写入） |
+| T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/Github 共 7 项存在且 `isPreset=true`；Kimi Code `workloadKind=HARNESS`/`harnessType=kimi_code`、`paramSchema=[]`、init 脚本固定 2.3.2 且不含 `harness prepare`；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；重复查询 ID 集合稳定（迁移不重复写入） |
 | T-IA 预制 Aspire 代理下载 | 预制「Aspire」`paramSchema` 含 `aspire_cli_url`（TEXT 默认 = 内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`）；`initScript` 含 `curl -fsSL`/`tar -xzf` 直连下载解压，**不含** `install.sh`/`aspire.dev`/`aka.ms`/`ASPIRE_INSTALL_URL`（迁移 004 升级结果，脚本内不内置默认地址）；重复查询预制项 ID 集合稳定 |
 | T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
@@ -590,9 +591,10 @@ npm test
 
 | 文件 | 说明 |
 |------|------|
-| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权 |
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.8.0` |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
+| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.8.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。
 
