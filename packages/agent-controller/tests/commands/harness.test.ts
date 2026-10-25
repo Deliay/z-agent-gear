@@ -11,17 +11,27 @@ function buildProgram(deps: Parameters<typeof registerHarnessCommands>[1] = {}) 
 }
 
 const SUCCESS_RESULT: HarnessPrepareResult = {
-  opencodeVersion: '1.2.3',
   env: {
     modelBaseUrl: 'http://admin-api:8002/v1',
     defaultWorkspace: '/root/workspace',
     modelCount: 2,
+    types: ['opencode'],
   },
-  config: {
-    path: '/root/.config/opencode/opencode.jsonc',
-    created: true,
-    modelCount: 2,
-  },
+  items: [
+    {
+      type: 'opencode',
+      ok: true,
+      version: '1.2.3',
+      modelCount: 2,
+      summary:
+        'opencode: version=1.2.3 models=2 config=/root/.config/opencode/opencode.jsonc (created)',
+      config: {
+        path: '/root/.config/opencode/opencode.jsonc',
+        created: true,
+        modelCount: 2,
+      },
+    },
+  ],
 };
 
 describe('agent-gear harness command (T-AG15)', () => {
@@ -67,7 +77,7 @@ describe('agent-gear harness command (T-AG15)', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
     const output = vi.mocked(console.log).mock.calls.flat().join(' ');
-    expect(output).toContain('OpenCode harness prepared');
+    expect(output).toContain('Harness prepared: types=opencode');
     expect(output).toContain('version=1.2.3');
     expect(output).not.toContain('zag_sk_');
   });

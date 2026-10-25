@@ -84,8 +84,8 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）与 `@moonshot-ai/kimi-code`（`command -v kimi` 应无输出），二者分别由 OpenCode / Kimi Code 工作负载安装
-- [ ] `agent-gear --version` ≥ `2.8.0`（`kimi_code` 使用前登录闸门；`kimi login` stdio 判定自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
+- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] `agent-gear --version` ≥ `2.9.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
 - [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
@@ -125,6 +125,7 @@ docker run --rm -it --entrypoint bash \
     agent-gear --version && \
     agent-gear harness --help && \
     { command -v kimi || echo "kimi not preinstalled (expected)"; } && \
+    { command -v dsh || echo "dsh not preinstalled (expected)"; } && \
     bash -c "echo workload-ok" && \
     bash -c "echo out; echo err 1>&2; exit 7" ; echo "exit=$?"
   '
@@ -132,7 +133,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.8.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.6.0`，含 `kimi_code` 的运行要求 `2.8.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
+- [ ] `agent-gear --version` ≥ `2.9.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.6.0`，含 `kimi_code` 的运行要求 `2.8.0`、含 `deepseek_harness` 要求 `2.9.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
 - [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
@@ -202,6 +203,47 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
 - [ ] 重复执行 `agent-gear harness prepare` 不破坏既有 `provider`/注释（幂等）
 - [ ] `ZAG_DEFAULT_WORKSPACE` 已创建；`ZAG_MODEL_API_KEY`/`ZAG_HOST_KEY`/`ZAG_CONTROLLER_KEY` 不出现在日志/错误中
 - [ ] 缺失 harness env 或 `opencode` 不可用时，init 工作负载失败 → 容器被强制注销（不上线）
+
+### DeepSeek Harness（Harness）工作负载自验
+
+镜像**不预装** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-acp-app`；二者由「DeepSeek Harness（Harness）」工作负载
+（admin-api 迁移 010）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
+`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与
+`agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 含 `deepseek_harness`）。任一失败以非零退出，
+`required=true` 会触发 cloud-controller 强制注销容器。
+
+`DSH_CLI_VERSION` / `DSH_ACP_APP_VERSION` 锁定口径：
+
+- 迁移 010 脚本内硬编码默认值（当前 `0.1.2-alpha.2`）；**验收以该固定版本为准**。
+- 运行时可经同名 env 覆盖（仅排障/临时验证，不作为验收依据）。
+
+真实集群启动一个仅选 DeepSeek Harness 的云电脑后，在容器内自验：
+
+```bash
+# 1) dsh 由 harness 工作负载安装，且版本与 DSH_CLI_VERSION 一致（输出纯版本号）
+dsh --version
+
+# 2) 注入文件已写入、权限正确
+agent-gear harness prepare                        # 幂等：按 id 替换 patch 条目
+cat ~/.dsh/profiles/acp/cordis.patch.yml          # llm-deepseek 禁用 + providers.zag + 默认路由
+stat -c '%a' ~/.dsh/profiles/acp                 # 期望 700
+stat -c '%a' ~/.dsh/.credentials.yaml            # 期望 600
+dsh --dump-config | head -n 40                   # patch 归属与 acp profile 组合树
+
+# 3) 默认工作区已创建
+test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
+
+# 4) 日志不含模型 Key（secret 脱敏为 ***）
+```
+
+逐项核对：
+
+- [ ] 镜像内 `command -v dsh` 无输出（未预装）；harness 初始化后 `dsh --version` 为固定值
+- [ ] `~/.dsh/profiles/acp/cordis.patch.yml` 含 `llm-deepseek.disabled=true`、`providers.zag`（`apiKeyEnv` 引用而非明文 Key）与 `agent-default-model`/`acp` 默认路由
+- [ ] `.credentials.yaml` 为 `version: 1` + `refs.ZAG_MODEL_API_KEY`，权限 `600`；patch 目录 `700`
+- [ ] 重复执行 `agent-gear harness prepare` 幂等（4 条目按 id 替换、非我方条目与注释保留）
+- [ ] `dsh --profile acp` 可拉起会话，模型选择仅 `ZAG` 组、默认选中，无内建官方渠道分组、无登录引导
+- [ ] `ZAG_MODEL_API_KEY` 不出现在日志/错误/命令行；缺失 harness env 或 `dsh` 不可用时 init 失败 → 容器被强制注销
 
 ### 预制工作负载脚本手工验收（真实集群）
 

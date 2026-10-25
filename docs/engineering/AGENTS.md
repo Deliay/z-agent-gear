@@ -199,6 +199,7 @@ flowchart LR
 - [[proposals/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区：仅「Git 项目设置」初始化 Github 项目才创建工作区、Model.contextLength 后台模型最长上下文并经 OpenAI 兼容 /v1/models 的 context_length 下发、云电脑 Job 模板 ephemeral-storage 上限 10Gi）
 - [[proposals/20261025-fix-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（secrets.modelContextLengths → ZAG_MODEL_CONTEXT_LENGTHS → opencode models.limit.context）
 - [[proposals/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（harnessTypes 扩展 kimi_code 与预置工作负载 009、agent-gear 2.8.0 kimi 登录闸门 `kimi login` stdio 判定、harness:login 事件族与登录引导弹窗、按 harnessTypes 细分版本门禁）
+- [[proposals/20261025-feat-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（harnessTypes 扩展 deepseek_harness 与预置工作负载 010 双包固定版本安装、agent-gear 2.9.0 harness prepare 按 ZAG_HARNESS_TYPES 分流、平台渠道模型注入 profiles/acp/cordis.patch.yml providers.zag + .credentials.yaml refs 与默认路由覆写含实测验证、按 harnessTypes 细分版本门禁）
 - [[proposals/20261025-feat-github-native-webhook.md]] — GitHub 原生 Webhook 入口（POST /api/events/github/webhook 直连 pull_request_review，HMAC-SHA256 验签后归一化复用 PR 联动判定链）
 - [[proposals/20261025-fix-cloud-container-active-deadline.md]] — 云电脑取消 Job 最长运行时间限制（移除 activeDeadlineSeconds，expiresAt 仅落库留存）
 - [[proposals/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（引擎 onNodesTransitioned hook、Checks REST 客户端与 checks:write 权限、stale 编排、session:message 中央订阅 todo panel 同步 check-run 子项）
@@ -259,3 +260,4 @@ flowchart LR
 - [[plan/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区、Model.contextLength 经 OpenAI 兼容 /v1/models 的 context_length 下发、ephemeral-storage 10Gi）实现计划
 - [[plan/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（HarnessType 扩展 KIMI_CODE 与预置工作负载 009、agent-gear 2.8.0 使用前登录闸门 `kimi login` stdio 判定、`harness:login` 事件族 + 用户级 SSE 即时弹窗、按 harnessTypes 细分版本门禁）实现计划
 - [[plan/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（契约同步字段、WorkflowPrHandler 同步字段、Checks 客户端与 checks:write 凭据、引擎 onNodesTransitioned hook 与 stale 编排、todo panel 中央订阅与子项同步、linkPullRequest 首同步、GraphQL 透出与前端展示、API/E2E 测试）实现计划
+- [[plan/20261025-feat-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（HarnessType 扩展 DEEPSEEK_HARNESS 与预置工作负载 010 双包固定版本安装 + `dsh --version` 硬校验、agent-gear 2.9.0 `harness prepare` 按 `ZAG_HARNESS_TYPES` 分流、平台渠道模型注入 `profiles/acp/cordis.patch.yml` + `.credentials.yaml` refs 与默认路由覆写、ACP `deepseek_harness` 探测/拉起、按 harnessTypes 细分版本门禁 2.9.0）实现计划

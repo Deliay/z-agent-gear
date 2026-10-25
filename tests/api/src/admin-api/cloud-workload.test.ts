@@ -661,13 +661,13 @@ describe('Admin Cloud Workload API', () => {
   // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
   // -------------------------------------------------------------------------
 
-  it('T-IA: exposes the seven preset workloads with stable ids (idempotent)', async () => {
+  it('T-IA: exposes the eight preset workloads with stable ids (idempotent)', async () => {
     const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
     expect(first.errors).toBeUndefined();
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'Github']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -695,7 +695,7 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(7);
+    expect(presetIds(all)).toHaveLength(8);
 
     // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/<slug>）
     expect(docker.workloadKind).toBe('STANDARD');
@@ -710,6 +710,16 @@ describe('Admin Cloud Workload API', () => {
     expect(kimi.initScript).toContain('@moonshot-ai/kimi-code@2.3.2');
     expect(kimi.initScript).toContain('kimi --version');
     expect(kimi.initScript).not.toContain('agent-gear harness prepare');
+    const deepseek = byName.get('DeepSeek Harness（Harness）')!;
+    expect(deepseek.workloadKind).toBe('HARNESS');
+    expect(deepseek.harnessType).toBe('deepseek_harness');
+    expect(deepseek.paramSchema).toEqual([]);
+    expect(deepseek.initScript).toContain(
+      'npm install -g "@deepseek-ai/dsh@${DSH_CLI_VERSION}" "@deepseek-ai/dsh-acp-app@${DSH_ACP_APP_VERSION}"',
+    );
+    expect(deepseek.initScript).toContain('dsh --version');
+    expect(deepseek.initScript).toContain('agent-gear harness prepare');
+    expect(deepseek.dependsOnWorkloadIds).toEqual([]);
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
     }
