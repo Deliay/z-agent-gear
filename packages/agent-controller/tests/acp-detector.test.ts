@@ -28,11 +28,17 @@ describe('AcpDetector', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // 默认按「命令不可用」兜底：个别用例未显式 mock 的探测不会挂起。
+    vi.mocked(exec).mockImplementation(((...args: unknown[]) => {
+      const cb = args.find((a) => typeof a === 'function') as ((err: Error) => void) | undefined;
+      if (cb) cb(new Error('command not found'));
+      return {} as any;
+    }) as never);
     detector = new AcpDetector();
   });
 
   describe('detect', () => {
-    it('should detect all 7 servers when all available', async () => {
+    it('should detect all 8 servers when all available', async () => {
       mockExecSuccessOnce('opencode v1.2.3\n');
       mockExecSuccessOnce('copilot 1.0.0\n');
       mockExecSuccessOnce('claude-agent-acp 0.1.0\n');
@@ -40,10 +46,11 @@ describe('AcpDetector', () => {
       mockExecSuccessOnce('codex-acp 0.5.0\n');
       mockExecSuccessOnce('mimo 0.1.0\n');
       mockExecSuccessOnce('kimi 1.0.0\n');
+      mockExecSuccessOnce('0.1.2-alpha.2\n');
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[0]).toEqual({ type: 'opencode', available: true, version: '1.2.3' });
       expect(result[1]).toEqual({ type: 'github_copilot', available: true, version: '1.0.0' });
       expect(result[2]).toEqual({ type: 'claude_code', available: true, version: '0.1.0' });
@@ -51,6 +58,11 @@ describe('AcpDetector', () => {
       expect(result[4]).toEqual({ type: 'codex', available: true, version: '0.5.0' });
       expect(result[5]).toEqual({ type: 'mimo_code', available: true, version: '0.1.0' });
       expect(result[6]).toEqual({ type: 'kimi_code', available: true, version: '1.0.0' });
+      expect(result[7]).toEqual({
+        type: 'deepseek_harness',
+        available: true,
+        version: '0.1.2-alpha.2',
+      });
     });
 
     it('should detect as unavailable when command fails', async () => {
@@ -64,7 +76,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[0]).toEqual({ type: 'opencode', available: false });
       expect(result[1]).toEqual({ type: 'github_copilot', available: false });
       expect(result[2]).toEqual({ type: 'claude_code', available: false });
@@ -72,6 +84,7 @@ describe('AcpDetector', () => {
       expect(result[4]).toEqual({ type: 'codex', available: false });
       expect(result[5]).toEqual({ type: 'mimo_code', available: false });
       expect(result[6]).toEqual({ type: 'kimi_code', available: false });
+      expect(result[7]).toEqual({ type: 'deepseek_harness', available: false });
     });
 
     it('should detect claude_code only when other servers fail', async () => {
@@ -85,7 +98,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[0]).toEqual({ type: 'opencode', available: false });
       expect(result[1]).toEqual({ type: 'github_copilot', available: false });
       expect(result[2]).toEqual({ type: 'claude_code', available: true, version: '0.1.0' });
@@ -106,7 +119,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[3]).toEqual({ type: 'gemini_cli', available: true, version: '2.0.0' });
     });
 
@@ -121,7 +134,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[4]).toEqual({ type: 'codex', available: true, version: '0.5.0' });
     });
 
@@ -136,7 +149,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[5]).toEqual({ type: 'mimo_code', available: true, version: '0.1.0' });
     });
 
@@ -151,7 +164,7 @@ describe('AcpDetector', () => {
 
       const result = await detector.detect();
 
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(8);
       expect(result[6]).toEqual({ type: 'kimi_code', available: true, version: '2.0.0' });
     });
 
@@ -163,6 +176,7 @@ describe('AcpDetector', () => {
       mockExecSuccessOnce('codex-acp version 0.5.0\n');
       mockExecSuccessOnce('MiMo CLI v1.0.0\n');
       mockExecSuccessOnce('kimi 2.0.0\n');
+      mockExecSuccessOnce('0.1.2-alpha.2\n');
 
       const result = await detector.detect();
 
@@ -173,6 +187,7 @@ describe('AcpDetector', () => {
       expect(result[4].version).toBe('0.5.0');
       expect(result[5].version).toBe('1.0.0');
       expect(result[6].version).toBe('2.0.0');
+      expect(result[7].version).toBe('0.1.2-alpha.2');
     });
   });
 
@@ -210,6 +225,11 @@ describe('AcpDetector', () => {
     it('should return kimi_code spawner config', () => {
       const config = detector.getSpawnerConfig('kimi_code');
       expect(config).toEqual({ command: 'kimi', args: ['acp'] });
+    });
+
+    it('should return deepseek_harness spawner config', () => {
+      const config = detector.getSpawnerConfig('deepseek_harness');
+      expect(config).toEqual({ command: 'dsh', args: ['--profile', 'acp'] });
     });
 
     it('should return opencode as default for unknown serverType', () => {

@@ -11,7 +11,7 @@ interface AcpServerInfo {
 
 export class AcpDetector {
   async detect(): Promise<AcpServerInfo[]> {
-    const [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode] = await Promise.all([
+    const [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode, deepseekHarness] = await Promise.all([
       this.detectOpenCode(),
       this.detectGitHubCopilot(),
       this.detectClaudeCode(),
@@ -19,8 +19,9 @@ export class AcpDetector {
       this.detectCodex(),
       this.detectMiMoCode(),
       this.detectKimiCode(),
+      this.detectDeepseekHarness(),
     ]);
-    return [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode];
+    return [opencode, copilot, claudeCode, geminiCli, codex, mimoCode, kimiCode, deepseekHarness];
   }
 
   private async detectOpenCode(): Promise<AcpServerInfo> {
@@ -93,6 +94,17 @@ export class AcpDetector {
     }
   }
 
+  /** DeepSeek Harness：`dsh --version` 输出纯版本号（预发布段如 `0.1.2-alpha.2` 保留）。 */
+  private async detectDeepseekHarness(): Promise<AcpServerInfo> {
+    try {
+      const { stdout } = await execAsync('dsh --version');
+      const version = this.parseVersion(stdout);
+      return { type: 'deepseek_harness', available: true, version };
+    } catch {
+      return { type: 'deepseek_harness', available: false };
+    }
+  }
+
   getSpawnerConfig(serverType: string): { command: string; args: string[] } {
     switch (serverType) {
       case 'github_copilot':
@@ -107,6 +119,8 @@ export class AcpDetector {
         return { command: 'mimo', args: ['acp'] };
       case 'kimi_code':
         return { command: 'kimi', args: ['acp'] };
+      case 'deepseek_harness':
+        return { command: 'dsh', args: ['--profile', 'acp'] };
       case 'opencode':
       default:
         return { command: 'opencode', args: ['acp'] };
@@ -114,7 +128,8 @@ export class AcpDetector {
   }
 
   private parseVersion(output: string): string {
-    const match = output.match(/(\d+\.\d+\.\d+)/);
+    // 预发布段保留（如 dsh 的 `0.1.2-alpha.2`）。
+    const match = output.match(/(\d+\.\d+\.\d+(?:-[\w.]+)?)/);
     return match ? match[1] : 'unknown';
   }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MIN_DEEPSEEK_HARNESS_WORKER_VERSION,
   MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
   MIN_KIMI_HARNESS_WORKER_VERSION,
@@ -20,9 +21,13 @@ describe('worker-version constants', () => {
     expect(SUPPORTED_MAJOR).toBe(2);
   });
 
-  it('T-V0b: kimi_code 按类型门禁为 2.8.0（全局 harness 门禁不上调）', () => {
+  it('T-V0b: kimi_code / deepseek_harness 按类型门禁分别为 2.8.0 / 2.9.0（全局 harness 门禁不上调）', () => {
     expect(MIN_KIMI_HARNESS_WORKER_VERSION).toBe('2.8.0');
-    expect(MIN_HARNESS_VERSION_BY_TYPE).toEqual({ kimi_code: '2.8.0' });
+    expect(MIN_DEEPSEEK_HARNESS_WORKER_VERSION).toBe('2.9.0');
+    expect(MIN_HARNESS_VERSION_BY_TYPE).toEqual({
+      kimi_code: '2.8.0',
+      deepseek_harness: '2.9.0',
+    });
   });
 });
 
@@ -34,6 +39,13 @@ describe('harnessMinVersion', () => {
     expect(harnessMinVersion(['kimi_code', 'opencode'])).toBe('2.8.0');
     expect(harnessMinVersion(['bogus'])).toBe('2.6.0');
     expect(harnessMinVersion([])).toBe('2.6.0');
+  });
+
+  it('T-V6b: 含 deepseek_harness 取 2.9.0（与其它 harness 混合仍取最大）', () => {
+    expect(harnessMinVersion(['deepseek_harness'])).toBe('2.9.0');
+    expect(harnessMinVersion(['opencode', 'deepseek_harness'])).toBe('2.9.0');
+    expect(harnessMinVersion(['kimi_code', 'deepseek_harness'])).toBe('2.9.0');
+    expect(harnessMinVersion(['opencode', 'kimi_code', 'deepseek_harness'])).toBe('2.9.0');
   });
 });
 

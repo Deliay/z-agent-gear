@@ -2463,4 +2463,68 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       client.disconnect();
     }
   });
+
+  it.skipIf(!HAS_MONGO)('T-DS-API4: A-11 仅选 deepseek 的云电脑可建 deepseek_harness 会话，kimi_code 被拒', async () => {
+    const db = (await mongoDb())!;
+    const { token, userId } = await signupWithId();
+    const { client, controllerId } = await registerFreshController(token, 'deepseek-cloud-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+
+    const hostId = new mongoose.Types.ObjectId();
+    const now = new Date();
+    try {
+      await db.collection('controllers').updateOne(
+        { _id: new mongoose.Types.ObjectId(controllerId) },
+        { $set: { type: 'cloud' } },
+      );
+      await db.collection('cloudhosts').insertOne({
+        _id: hostId,
+        userId: new mongoose.Types.ObjectId(userId),
+        name: `deepseek-cloud-${hostId.toString()}`,
+        harnessTypes: ['DEEPSEEK_HARNESS'],
+        status: 'RUNNING',
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+        keyId: new mongoose.Types.ObjectId(),
+        workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        containerId: `container-${hostId.toString()}`,
+        defaultSessionId: null,
+        createDefaultSession: false,
+        startedAt: now,
+        readyAt: now,
+        stoppedAt: null,
+        failureReason: null,
+        deletedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const { sessionId } = await createSessionCapture(token, client, {
+        controllerId,
+        acpServerType: 'deepseek_harness',
+        workspaceId,
+        mcpServerIds: [],
+      });
+      await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+
+      const rejected = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'kimi_code', workspaceId, mcpServerIds: [] } },
+        token,
+      );
+      const rejectedBody = await rejected.json();
+      expect(rejectedBody.errors?.[0].message).toBe('unsupported harness type: kimi_code');
+    } finally {
+      await db.collection('sessions').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('cloudhosts').deleteOne({ _id: hostId });
+      await db.collection('controllerworkspaces').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('controllers').deleteOne({
+        _id: new mongoose.Types.ObjectId(controllerId),
+      });
+      client.disconnect();
+    }
+  });
 });
