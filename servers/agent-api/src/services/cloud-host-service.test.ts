@@ -321,7 +321,19 @@ describe('CloudHostService', () => {
         harnessTypes: ['opencode'],
         billingAccountId: 'account-1',
         agentGearMinVersion: '2.6.0',
+        // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
+        expiresAt: expect.any(Date),
       });
+      expect(billingClient.createCloudHostApiKey).toHaveBeenCalledWith({
+        accountId: 'account-1',
+        ownerType: 'front_user',
+        ownerId: 'user-1',
+        name: 'cloud-host:my-cloud',
+        cloudHostId: expect.any(String),
+      });
+      expect(
+        vi.mocked(billingClient.createCloudHostApiKey).mock.calls[0][0],
+      ).not.toHaveProperty('expiresAt');
       expect(payload.workloadPlan).toEqual([
         { workloadId: 'preset-1', params: {}, implicit: false, required: true },
       ]);

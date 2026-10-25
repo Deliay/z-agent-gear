@@ -41,7 +41,7 @@ function toDate(value: unknown): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
-/** API Key DTO → 内部 REST wire（时间 ISO；新增 scope/cloudHostId/expiresAt）。 */
+/** API Key DTO → 内部 REST wire（时间 ISO；含 scope/cloudHostId/expiresAt；expiresAt 仅历史数据可能非空）。 */
 function apiKeyToWire(key: {
   scope: string;
   cloudHostId: string | null;
@@ -220,14 +220,14 @@ export function createInternalBillingRouter(): Router {
       return;
     }
     let hostId: string | null = null;
-    let expires: Date | undefined;
     if (scope === 'cloud_host') {
       if (typeof cloudHostId !== 'string' || !mongoose.isValidObjectId(cloudHostId)) {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }
-      expires = toDate(expiresAt);
-      if (!expires) {
+      // `expiresAt` 已废弃：云电脑 Key 随容器回收，不再按时间失效。仍接受旧版 agent-api
+      // 传入的合法 ISO 时间（滚动发布兼容）但忽略其值；不可解析时按脏输入拒绝。
+      if (expiresAt !== undefined && expiresAt !== null && !toDate(expiresAt)) {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }
@@ -254,7 +254,6 @@ export function createInternalBillingRouter(): Router {
               ownerId,
               name,
               cloudHostId: hostId!,
-              expiresAt: expires!,
             })
           : await apiKeyService.create({
               accountId: account.id,
@@ -269,11 +268,7 @@ export function createInternalBillingRouter(): Router {
     } catch (err) {
       // P3：校验类失败 400，其余（Mongo/驱动等）500——基建故障不误报为请求错误。
       const message = (err as Error).message;
-      if (
-        message === 'API Key 名称不能为空' ||
-        message === '云电脑 ID 非法' ||
-        message === 'API Key 有效期非法'
-      ) {
+      if (message === 'API Key 名称不能为空' || message === '云电脑 ID 非法') {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }

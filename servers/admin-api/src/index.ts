@@ -45,6 +45,7 @@ import * as migration006HarnessOpencode from './migrations/006-preset-harness-op
 import * as migration007PresetGithub from './migrations/007-preset-github.js';
 import * as migration008FixGithubWorkloadPrefix from './migrations/008-fix-github-workload-prefix.js';
 import * as migration009HarnessKimiCode from './migrations/009-preset-harness-kimi-code.js';
+import * as migration010ClearCloudHostKeyExpiry from './migrations/010-clear-cloud-host-key-expiry.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -117,6 +118,7 @@ async function start() {
   // 006-preset-harness-opencode——写入云电脑 harness 运行环境预置项「OpenCode（Harness）」（云电脑）
   // 007-preset-github——写入 Github 工作负载预置项（安装 gh CLI，Github 工作负载）
   // 009-preset-harness-kimi-code——写入云电脑 harness 运行环境预置项「Kimi Code（Harness）」（Kimi Code 云电脑）
+  // 010-clear-cloud-host-key-expiry——清空云电脑运行专用 Key 的固定有效期（改为随容器回收）
   try {
     await runMigrations([
       migration001,
@@ -129,6 +131,7 @@ async function start() {
       migration007PresetGithub,
       migration008FixGithubWorkloadPrefix,
       migration009HarnessKimiCode,
+      migration010ClearCloudHostKeyExpiry,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
