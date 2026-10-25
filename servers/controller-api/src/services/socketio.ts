@@ -19,6 +19,7 @@ import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
 import { harnessLoginManager } from './harness-login-manager.js';
 import { mcpRelayService } from './mcp-relay.js';
+import { describeConnection, describeDisconnect } from './socket-diagnostics.js';
 
 const CURRENT_MAJOR_VERSION = '2';
 
@@ -32,15 +33,38 @@ interface RegisterPayload {
 }
 
 export function createSocketIOServer(io: SocketIOServer): void {
+  // 引擎级错误监听只注册一次；放在 connection 回调内会随每条连接叠加监听器并重复刷日志。
+  const transportErrorHandler = (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[ENGINE] transport error: ${msg}`);
+  };
+  io.on('error', (err) => {
+    console.error(`[ENGINE] error: ${err.message}`);
+  });
+  io.engine?.on?.('error', transportErrorHandler);
+  io.on('open', () => {
+    io.engine?.on?.('error', transportErrorHandler);
+  });
+
   io.on('connection', (socket: Socket) => {
     let authenticated = false;
+
+    // 记录握手来源：用于定位未 register 即断开的匿名连接（IP / Origin / UA / 凭据键名）。
+    console.log(describeConnection(socket));
 
     socket.on('register', async (payload: RegisterPayload) => {
       try {
         const { key, hostname, version } = payload;
 
+        console.log(
+          `[socket] register attempt id=${socket.id} address=${socket.handshake.address ?? '-'} hostname=${hostname ?? '-'} version=${version ?? '-'} platform=${payload.platform ?? '-'}`,
+        );
+
         const cached = await lookupKey(key);
         if (!cached) {
+          console.warn(
+            `[socket] register rejected id=${socket.id} address=${socket.handshake.address ?? '-'} hostname=${hostname ?? '-'} reason=INVALID_KEY detail=key not found`,
+          );
           socket.emit('error', { code: 'INVALID_KEY', message: 'Key not found' });
           socket.disconnect(true);
           return;
@@ -50,6 +74,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
         const valid = await bcrypt.compare(key, keyHash);
         if (!valid) {
+          console.warn(
+            `[socket] register rejected id=${socket.id} address=${socket.handshake.address ?? '-'} hostname=${hostname ?? '-'} keyId=${keyId} reason=INVALID_KEY detail=hash mismatch`,
+          );
           socket.emit('error', { code: 'INVALID_KEY', message: 'Invalid key' });
           socket.disconnect(true);
           return;
@@ -57,6 +84,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
         const clientMajor = version?.split('.')[0];
         if (clientMajor !== CURRENT_MAJOR_VERSION) {
+          console.warn(
+            `[socket] register rejected id=${socket.id} address=${socket.handshake.address ?? '-'} hostname=${hostname ?? '-'} keyId=${keyId} reason=VERSION_MISMATCH clientMajor=${clientMajor ?? '-'} expectedMajor=${CURRENT_MAJOR_VERSION}`,
+          );
           socket.emit('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
           socket.disconnect(true);
           return;
@@ -64,6 +94,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
 
         const acquired = await sessionService.acquireSession(keyId, socket.id, payload.resumeToken);
         if (!acquired) {
+          console.warn(
+            `[socket] register rejected id=${socket.id} address=${socket.handshake.address ?? '-'} hostname=${hostname ?? '-'} keyId=${keyId} reason=KEY_ALREADY_ONLINE`,
+          );
           socket.emit('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
           socket.disconnect(true);
           return;
@@ -99,6 +132,10 @@ export function createSocketIOServer(io: SocketIOServer): void {
         socket.data.lastIp = socket.handshake.address;
         socket.join(`user:${userId}`);
 
+        console.log(
+          `[socket] registered id=${socket.id} keyId=${keyId} controllerId=${controller._id.toString()} hostname=${hostname ?? '-'} version=${version ?? '-'} platform=${payload.platform ?? '-'}`,
+        );
+
         // Generate resume token for reconnection after server restart
         const resumeToken = await sessionService.storeResumeToken(keyId);
         socket.emit('registered', { controllerId: controller._id.toString(), resumeToken });
@@ -106,7 +143,10 @@ export function createSocketIOServer(io: SocketIOServer): void {
         // 重连对账：下发权威活跃会话与待清理会话，controller 据此收割孤儿进程（内部容错，不影响注册）
         await acpSessionManager.reconcileOnRegister(socket, controller._id.toString());
       } catch (err) {
-        console.error('Register error:', err);
+        console.error(
+          `[socket] register error id=${socket.id} address=${socket.handshake.address ?? '-'}:`,
+          err,
+        );
         socket.emit('error', { code: 'INVALID_KEY', message: 'Registration failed' });
         socket.disconnect(true);
       }
@@ -514,18 +554,6 @@ export function createSocketIOServer(io: SocketIOServer): void {
       console.error(`Connection error: ${err.message}`);
     });
 
-    io.on('error', (err) => {
-      console.error(`[ENGINE] error: ${err.message}`);
-    });
-    const transportErrorHandler = (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[ENGINE] transport error: ${msg}`);
-    };
-    io.engine?.on?.('error', transportErrorHandler);
-    io.on('open', () => {
-      io.engine?.on?.('error', transportErrorHandler);
-    });
-
     // Port Forward events (event names kept unchanged for backward compatibility)
     socket.on('port-forward:created', async (payload: { tunnelId: string; success: boolean; error?: string }) => {
       if (!authenticated) return;
@@ -567,8 +595,8 @@ export function createSocketIOServer(io: SocketIOServer): void {
       });
     });
 
-    socket.on('disconnect', async () => {
-      console.log(`disconnecting ${socket.data.keyId} [${socket.id}]`);
+    socket.on('disconnect', async (reason: string, description?: unknown) => {
+      console.log(describeDisconnect(socket, reason, description));
       
       try {
         mcpRelayService.handleSocketDisconnect(socket.id);

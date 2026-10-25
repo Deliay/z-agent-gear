@@ -65,7 +65,13 @@ function createMockSocket() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
   return {
     id: 'socket-123',
-    handshake: { address: '127.0.0.1' },
+    handshake: {
+      address: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      query: { transport: 'websocket' },
+      auth: {},
+    },
+    nsp: { name: '/' },
     data: {} as Record<string, unknown>,
     join: vi.fn(),
     emit: vi.fn(),
@@ -453,6 +459,52 @@ describe('SocketIO Service', () => {
   });
 
   describe('disconnect', () => {
+    it('logs connection handshake so anonymous sources can be traced', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      createSocketIOServer(mockIO as never);
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('[socket] connected id=socket-123 address=127.0.0.1'),
+      );
+
+      mockSocket._trigger('disconnect', 'transport close');
+
+      await vi.waitFor(() => {
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(
+            '[socket] disconnected id=socket-123 address=127.0.0.1 ns=/ key=- authenticated=false reason=transport close',
+          ),
+        );
+      });
+
+      log.mockRestore();
+    });
+
+    it('does not print undefined for anonymous disconnect', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      createSocketIOServer(mockIO as never);
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('disconnect', 'client namespace disconnect');
+
+      await vi.waitFor(() => {
+        const lines = log.mock.calls.map((call) => String(call[0]));
+        expect(lines.some((line) => line.includes('[socket] disconnected'))).toBe(true);
+        expect(lines.join('\n')).not.toContain('undefined');
+      });
+
+      log.mockRestore();
+    });
+
     it('should remove session when authenticated', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
