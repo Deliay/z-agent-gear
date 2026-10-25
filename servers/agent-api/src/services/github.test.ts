@@ -264,4 +264,96 @@ describe('GitHubService', () => {
       ).rejects.toThrow('account not found');
     });
   });
+
+  describe('resolveRepoAccount', () => {
+    it('大小写不敏感命中安装仓库并返回账号 ID', async () => {
+      vi.mocked(GitHubAccount.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([{ _id: 'acc-1' }]),
+        }),
+      } as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue({
+        lean: vi
+          .fn()
+          .mockResolvedValue([{ repos: [{ fullName: 'Deliay/Z-Agent-Gear' }] }]),
+      } as never);
+
+      await expect(
+        githubService.resolveRepoAccount('user-1', 'deliay/z-agent-gear'),
+      ).resolves.toBe('acc-1');
+    });
+
+    it('无匹配安装 → repo not authorized', async () => {
+      vi.mocked(GitHubAccount.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([{ _id: 'acc-1' }]) }),
+      } as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ repos: [{ fullName: 'a/b' }] }]),
+      } as never);
+
+      await expect(githubService.resolveRepoAccount('user-1', 'c/d')).rejects.toThrow(
+        'repo not authorized: c/d',
+      );
+    });
+  });
+
+  describe('labels / comments', () => {
+    beforeEach(() => {
+      vi.spyOn(githubService, 'createRepoScopedToken').mockResolvedValue({
+        token: 'token-1',
+        expiresAt: new Date(),
+      });
+    });
+
+    it('ensureIssueLabel：已存在不发 POST', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await githubService.ensureIssueLabel('user-1', 'a/b', 'start-dev');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0][0])).toContain('/repos/a/b/labels/start-dev');
+      vi.unstubAllGlobals();
+    });
+
+    it('ensureIssueLabel：404 后 POST 创建；422 视为成功', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 404 })
+        .mockResolvedValueOnce({ ok: false, status: 422 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        githubService.ensureIssueLabel('user-1', 'a/b', 'start dev'),
+      ).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' });
+      vi.unstubAllGlobals();
+    });
+
+    it('deleteIssueLabel：404 视为成功；其他失败抛错', async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 404 });
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(githubService.deleteIssueLabel('user-1', 'a/b', 'x')).resolves.toBeUndefined();
+
+      const failing = vi.fn().mockResolvedValueOnce({ ok: false, status: 500 });
+      vi.stubGlobal('fetch', failing);
+      await expect(githubService.deleteIssueLabel('user-1', 'a/b', 'x')).rejects.toThrow(
+        'label delete failed: a/b',
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it('createIssueComment 返回 comment id', async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ id: 99 }) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(githubService.createIssueComment('user-1', 'a/b', 42, 'hi')).resolves.toBe(99);
+      expect(String(fetchMock.mock.calls[0][0])).toContain('/repos/a/b/issues/42/comments');
+      vi.unstubAllGlobals();
+    });
+  });
 });

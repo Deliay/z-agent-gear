@@ -101,6 +101,9 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMock }));
+vi.mock('./cloud-host-issues-linkage.js', () => ({
+  cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
+}));
 
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
@@ -117,6 +120,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
@@ -784,6 +788,7 @@ describe('CloudHostService', () => {
         { $set: { deletedAt: expect.any(Date) } },
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(cloudHostIssuesLinkageService.deleteByController).toHaveBeenCalledWith(CONTROLLER_ID);
     });
 
     it('is idempotent for already soft-deleted hosts', async () => {

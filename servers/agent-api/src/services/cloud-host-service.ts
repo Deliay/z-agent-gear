@@ -20,6 +20,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
+import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 import {
   MAX_CREATE_WORKLOADS,
   resolveCreateWorkloadPlan,
@@ -584,6 +585,10 @@ export class CloudHostService {
       await ControllerKey.deleteOne({ _id: keyId });
       await controllerService.markCloudHostOffline(String(host.controllerId), userId);
       await CloudHost.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+      // Issues 联动配置随云电脑销毁失效（标签是否清理由前端销毁确认流程调用 cleanup）
+      await cloudHostIssuesLinkageService.deleteByController(String(host.controllerId)).catch((err) => {
+        console.warn('[cloud-host] cascade delete issues linkages failed:', (err as Error).message);
+      });
       return true;
     });
   }
@@ -817,6 +822,13 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'stop the cloud host before deleting',
   'stopping this cloud host will permanently lose all active sessions',
   'session is ended',
+  // Issues 联动配置
+  'cloud host not found',
+  'workflow must contain a human node',
+  'invalid label name',
+  'at least one repo is required',
+  'too many repos',
+  'linkage not found',
 ]);
 
 /** 供 resolver 统一把 service 错误转为 GraphQLError（白名单透传契约文案）。 */
@@ -830,6 +842,9 @@ const CLOUD_HOST_PUBLIC_ERROR_PREFIXES = [
   'too many workloads (max',
   'workloads exceed',
   '前缀地址',
+  'label name already exists:',
+  'repo not authorized:',
+  'label sync failed:',
 ] as const;
 
 export function toCloudHostGraphQLError(err: unknown): never {
