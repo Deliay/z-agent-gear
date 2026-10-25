@@ -24,6 +24,7 @@ vi.mock('../middleware/redis.js', () => ({
 }));
 
 import { ACPSessionManager } from './acp-session-manager.js';
+import { HarnessLoginRegistry } from './harness-login-registry.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
@@ -1474,5 +1475,49 @@ describe('ACPSessionManager - capability snapshot 落库', () => {
     const wroteCapabilities = vi.mocked(Session.findByIdAndUpdate).mock.calls
       .some((c) => (c[1] as Record<string, unknown>).agentCapabilities !== undefined);
     expect(wroteCapabilities).toBe(false);
+  });
+});
+
+describe('ACPSessionManager 登录超时守卫 (T-HLM8)', () => {
+  it('登录进行中 30s 超时不结算，绝对上限后强制结算', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.clearAllMocks();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
+      vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+      vi.mocked(AcpMessage.deleteMany).mockResolvedValue({} as never);
+      vi.mocked(Session.findByIdAndDelete).mockResolvedValue({} as never);
+
+      const registry = new HarnessLoginRegistry();
+      registry.mark('ctrl-1', 'login-1', Date.now() + 65_000);
+      const guarded = new ACPSessionManager(registry);
+      const socket = createMockSocket();
+      (socket as unknown as { data: Record<string, unknown> }).data = { controllerId: 'ctrl-1' };
+
+      let settled = false;
+      const promise = guarded.startSession(
+        socket as never, 'sess-1', 'ctrl-1', 'user-1', 'kimi_code', '/tmp',
+      );
+      promise.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.emit).toHaveBeenCalledWith('acp:start', expect.anything());
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+      expect(Session.findByIdAndDelete).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await promise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('ACP start timeout');
+      expect(Session.findByIdAndDelete).toHaveBeenCalledWith('sess-1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

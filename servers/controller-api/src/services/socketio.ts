@@ -17,6 +17,7 @@ import { fsMkdirService } from './fs-mkdir-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
+import { harnessLoginManager } from './harness-login-manager.js';
 import { mcpRelayService } from './mcp-relay.js';
 
 const CURRENT_MAJOR_VERSION = '2';
@@ -213,6 +214,41 @@ export function createSocketIOServer(io: SocketIOServer): void {
         await elicitationManager.handleElicitationResolved(socket, data);
       } catch (error) {
         console.error('Error handling elicitation resolved:', error);
+      }
+    });
+
+    socket.on('harness:login:required', async (data: {
+      requestId: string;
+      serverType: string;
+      trigger: string;
+      url: string;
+      userCode: string;
+      expiresInSeconds?: number;
+      account?: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await harnessLoginManager.handleLoginRequired(socket, data);
+      } catch (error) {
+        console.error('Error handling harness login required:', error);
+      }
+    });
+
+    socket.on('harness:login:succeeded', async (data: { requestId: string; account?: string }) => {
+      if (!authenticated) return;
+      try {
+        await harnessLoginManager.handleLoginSucceeded(socket, data);
+      } catch (error) {
+        console.error('Error handling harness login succeeded:', error);
+      }
+    });
+
+    socket.on('harness:login:failed', async (data: { requestId: string; reason: 'cancelled' | 'timeout' | 'error'; error?: string }) => {
+      if (!authenticated) return;
+      try {
+        await harnessLoginManager.handleLoginFailed(socket, data);
+      } catch (error) {
+        console.error('Error handling harness login failed:', error);
       }
     });
 
@@ -539,6 +575,8 @@ export function createSocketIOServer(io: SocketIOServer): void {
         acpSessionSyncService.cleanupSocket(socket);
         // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 60s 后误发 timeout
         elicitationManager.clearForSocket(socket.id);
+        // 登录中的请求随 socket 断开收敛：发布 resolved(failed) + 清注册表
+        harnessLoginManager.clearForSocket(socket.id);
         if (socket.data.keyId) {
           await Controller.updateOne(
             { keyId: socket.data.keyId, status: { $ne: 'unbound' } },
