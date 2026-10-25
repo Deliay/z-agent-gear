@@ -55,7 +55,13 @@ export function HarnessLoginDialog() {
   };
 
   const handleCancel = async () => {
-    if (expired || cancelling) return;
+    if (cancelling) return;
+    // 设备码已过期：允许直接关闭弹窗（不发 cancel，避免把已终结请求再改写）；
+    // 防止 SSE 漏掉 resolved / worker 被杀时弹窗永久遮挡全站。
+    if (expired) {
+      close();
+      return;
+    }
     setCancelling(true);
     try {
       await respondHarnessLogin({ variables: { requestId: request.requestId, action: 'cancel' } });

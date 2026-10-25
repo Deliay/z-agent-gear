@@ -96,6 +96,17 @@ describe('HarnessLoginDialog（T-W2）', () => {
     expect(screen.queryByRole('link', { name: '打开登录链接' })).toBeNull();
   });
 
+  it('本地倒计时到期后仍可关闭弹窗且不调用 mutation（P1-1）', async () => {
+    openHarnessLoginDialog({ ...request, expiresAt: new Date(Date.now() - 1000).toISOString() });
+    render(<HarnessLoginDialog />);
+    expect(screen.getByTestId('harness-login-url')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    await waitFor(() => expect(screen.queryByTestId('harness-login-url')).toBeNull());
+    expect(mockRespondHarnessLogin).not.toHaveBeenCalled();
+  });
+
   it('AI 关闭 store（resolved）后自动卸载弹窗', async () => {
     openHarnessLoginDialog(request);
     render(<HarnessLoginDialog />);
