@@ -225,8 +225,9 @@ class WorkflowEngine {
       .filter((n) => statusBefore.get(n.nodeId) !== n.status)
       .map((n) => ({ node: n, event: eventByNode.get(n.nodeId) ?? event }));
     if (changes.length > 0) {
-      // 同步调用以尽早捕获登记快照（首个 await 之前的同步段），随后 fire-and-forget：
-      // 不 await、不进 transitionMutex，失败只告警，绝不回流工作流流转。
+      // 这里同步发起 hook，但快照捕获实际发生在 syncNodeStatus 的首个 await（findByNode）之后；
+      // 保证来自「findOne 查询先于 onWorkflowFinished 的 deleteMany 发出」——旧登记行仍能被读到。
+      // 随后 fire-and-forget：不 await、不进 transitionMutex，失败只告警，绝不回流工作流流转。
       try {
         const pending = this.hooks.onNodesTransitioned?.(instance, changes);
         void Promise.resolve(pending).catch((err: unknown) => {

@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
-import { prHandlerRegistry, normalizePullRequestId } from './pr-handler-registry.js';
+import {
+  prHandlerRegistry,
+  normalizePullRequestId,
+  onPrHandlerInstanceUnregistered,
+} from './pr-handler-registry.js';
 import {
   workflowEngine,
   type NodeTransitionChange,
@@ -82,16 +86,39 @@ export const SYNC_ERROR_MESSAGES = {
 const syncMutex = new KeyedMutex();
 
 interface TodoThrottleState {
+  handlerId: string;
+  instanceId: string;
   lastSentAt: number;
   timer: ReturnType<typeof setTimeout> | null;
   pending: { snapshot: PrSyncSnapshot; text: string; digest: string } | null;
 }
 const todoThrottle = new Map<number, TodoThrottleState>();
 
+function disposeThrottleState(checkRunId: number, state: TodoThrottleState): void {
+  if (state.timer) clearTimeout(state.timer);
+  todoThrottle.delete(checkRunId);
+}
+
+/**
+ * 清理某个 check-run 的节流状态（commit 前进/注销时调用，避免 Map 随历史 check-run 单调增长）。
+ * 清理后仅会多发生一次 PATCH，落库 `lastTodoDigest` 仍负责幂等兜底。
+ */
+export function clearTodoThrottleForCheckRun(checkRunId: number): void {
+  const state = todoThrottle.get(checkRunId);
+  if (state) disposeThrottleState(checkRunId, state);
+}
+
+/** 清理实例下全部节流状态（工作流完成/归档注销时调用） */
+export function clearTodoThrottleForInstance(instanceId: string): void {
+  for (const [checkRunId, state] of todoThrottle.entries()) {
+    if (state.instanceId === instanceId) disposeThrottleState(checkRunId, state);
+  }
+}
+
 /** 测试用：重置 todo 节流状态（生产代码不调用） */
 export function resetTodoThrottle(): void {
-  for (const state of todoThrottle.values()) {
-    if (state.timer) clearTimeout(state.timer);
+  for (const [checkRunId, state] of todoThrottle.entries()) {
+    disposeThrottleState(checkRunId, state);
   }
   todoThrottle.clear();
 }
@@ -212,6 +239,21 @@ function buildOutput(
   return output;
 }
 
+/**
+ * 旧提交检查项的过期标记（仅写应用可写字段）。
+ *
+ * GitHub 明确禁止应用把 `conclusion` 改为 `stale`（PATCH 会 422）；新提交推送后
+ * 旧提交上的 check-run 由 GitHub 自动置 stale。应用侧只需 PATCH `output.title/summary`
+ * 让审核人看到「已过期：PR 已有新提交」，不得写 `status`/`conclusion`。
+ */
+function buildExpiredOutput(snapshot: PrSyncSnapshot, newSha: string): CheckRunOutput {
+  const oldSha = snapshot.lastWrittenCommitSha;
+  return {
+    title: `${snapshot.nodeName} · 已过期：PR 已有新提交`,
+    summary: `工作流：${snapshot.instanceName} · 阶段：${snapshot.stage} · 此检查项对应旧提交${oldSha ? ` ${oldSha.slice(0, 7)}` : ''}，PR 最新提交为 ${newSha.slice(0, 7)}，请查看新提交上的检查项`,
+  };
+}
+
 async function recordError(snapshot: PrSyncSnapshot, err: unknown): Promise<void> {
   const message = syncErrorMessage(err);
   const detail = err instanceof GitHubChecksError ? err.code : (err as Error)?.message;
@@ -225,7 +267,7 @@ async function recordError(snapshot: PrSyncSnapshot, err: unknown): Promise<void
 
 /**
  * 节点状态同步（永不抛出）。
- * 三分支：同 sha 原地 PATCH / commit 前进（旧 stale + 新 create）/ 无旧 check-run 直接 create。
+ * 三分支：同 sha 原地 PATCH / commit 前进（旧 output 标记已过期 + 新 create）/ 无旧 check-run 直接 create。
  */
 export async function syncNodeStatus(
   instance: WorkflowInstanceDoc,
@@ -283,12 +325,19 @@ async function syncNodeStatusUnlocked(snapshot: PrSyncSnapshot): Promise<void> {
       });
     } else {
       if (snapshot.lastCheckRunId !== null) {
-        // 旧提交上的检查项标记过期
-        await updateCheckRun(token, target.repo, snapshot.lastCheckRunId, {
-          status: 'completed',
-          conclusion: 'stale',
-          completed_at: nowIso,
-        });
+        // 旧提交上的检查项标记过期：只 PATCH 允许写入的 output 字段。
+        // `conclusion=stale` 仅 GitHub 可写（应用 PATCH 会 422），旧检查项的 stale
+        // 结论由 GitHub 在新提交推送后自行管理；这里失败也不能阻断新提交上的 create。
+        try {
+          await updateCheckRun(token, target.repo, snapshot.lastCheckRunId, {
+            output: buildExpiredOutput(snapshot, head.sha),
+          });
+        } catch (err) {
+          console.warn(
+            `[pr-check-run] mark stale output failed for ${snapshot.pullRequestId}: ${(err as Error)?.message}`,
+          );
+        }
+        clearTodoThrottleForCheckRun(snapshot.lastCheckRunId);
       }
       result = await createCheckRun(token, target.repo, {
         name: checkRunName(snapshot.nodeName),
@@ -308,6 +357,8 @@ async function syncNodeStatusUnlocked(snapshot: PrSyncSnapshot): Promise<void> {
       checkRunUrl: result.htmlUrl,
       nodeStatus: snapshot.nodeStatus,
       at: new Date(),
+      // 新 check-run 上尚无 todo 子项：清空 digest，避免旧 check-run 的 digest 抑制下一次刷新
+      resetTodoDigest: !sameCommit,
     });
   } catch (err) {
     await recordError(snapshot, err);
@@ -331,7 +382,7 @@ export async function syncTodoPanel(
     if (snapshot.lastTodoDigest === digest) return;
 
     const now = Date.now();
-    const state = getThrottleState(checkRunId);
+    const state = getThrottleState(checkRunId, snapshot);
     const wait = state.lastSentAt + TODO_MIN_INTERVAL_MS - now;
     if (wait > 0) {
       // 窗口内只保留最后一次（尾沿合并）
@@ -354,10 +405,16 @@ export async function syncTodoPanel(
   }
 }
 
-function getThrottleState(checkRunId: number): TodoThrottleState {
+function getThrottleState(checkRunId: number, snapshot: PrSyncSnapshot): TodoThrottleState {
   let state = todoThrottle.get(checkRunId);
   if (!state) {
-    state = { lastSentAt: 0, timer: null, pending: null };
+    state = {
+      handlerId: snapshot.handlerId,
+      instanceId: snapshot.workflowInstanceId,
+      lastSentAt: 0,
+      timer: null,
+      pending: null,
+    };
     todoThrottle.set(checkRunId, state);
   }
   return state;
@@ -373,6 +430,15 @@ async function flushTodo(item: {
   if (!checkRunId) return;
   try {
     await syncMutex.runExclusive(snapshot.handlerId, async () => {
+      // 窄竞态兜底：节流项可能持 commit 前进前的旧快照。写入前按登记行复核
+      // 「当前 check-run 仍是这一条」，已作废则丢弃（新 check-run 由后续 plan 消息刷新）。
+      const fresh = await prHandlerRegistry.findById(snapshot.handlerId);
+      const freshCheckRunId = toNumber((fresh as Record<string, unknown> | null)?.lastCheckRunId);
+      if (!fresh || freshCheckRunId !== checkRunId) {
+        clearTodoThrottleForCheckRun(checkRunId);
+        return;
+      }
+
       const state = todoThrottle.get(checkRunId);
       if (state) state.lastSentAt = Date.now();
 
@@ -385,7 +451,11 @@ async function flushTodo(item: {
       await updateCheckRun(token, target.repo, checkRunId, {
         output: buildOutput(snapshot, projection.label, text),
       });
-      await prHandlerRegistry.markTodoSynced(snapshot.handlerId, { digest, at: new Date() });
+      await prHandlerRegistry.markTodoSynced(snapshot.handlerId, {
+        digest,
+        at: new Date(),
+        checkRunId,
+      });
     });
   } catch (err) {
     await recordError(snapshot, err);
@@ -441,4 +511,7 @@ export function registerPrCheckRunSyncHooks(): void {
   workflowEngine.registerHooks({
     onNodesTransitioned: (instance, changes) => handleNodesTransitioned(instance, changes),
   });
+  // 实例完成/归档注销登记时清理该实例的节流缓存，避免 Map 随历史 check-run 单调增长。
+  // 用注销监听而非 onWorkflowFinished：后者已被 pr-handler 生命周期 hook 占用（registerHooks 为覆盖式合并）。
+  onPrHandlerInstanceUnregistered(clearTodoThrottleForInstance);
 }

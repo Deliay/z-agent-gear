@@ -27,6 +27,13 @@ export class GitHubChecksError extends Error {
 }
 
 export type CheckRunStatus = 'queued' | 'in_progress' | 'completed';
+/**
+ * 应用可写结论。
+ *
+ * 注意：`stale` 是 GitHub 保留结论（仅 GitHub 在 PR 有新提交后可自行设置），
+ * 应用侧 PATCH/POST `conclusion: 'stale'` 会被 422 拒绝，故不纳入可写联合类型。
+ * 旧提交上的检查项由 GitHub 自动置 stale；本服务只 PATCH 允许写入的 `output` 字段。
+ */
 export type CheckRunConclusion =
   | 'action_required'
   | 'cancelled'
@@ -34,7 +41,6 @@ export type CheckRunConclusion =
   | 'neutral'
   | 'success'
   | 'skipped'
-  | 'stale'
   | 'timed_out';
 
 export interface CheckRunOutput {

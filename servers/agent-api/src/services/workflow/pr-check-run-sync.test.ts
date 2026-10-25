@@ -10,6 +10,7 @@ vi.mock('./pr-handler-registry.js', async (importOriginal) => {
     ...actual,
     prHandlerRegistry: {
       findByNode: vi.fn(),
+      findById: vi.fn(),
       markCheckRunSynced: vi.fn(),
       markTodoSynced: vi.fn(),
       markSyncError: vi.fn(),
@@ -40,6 +41,7 @@ import {
   parseTodoEntries,
   captureSnapshot,
   resetTodoThrottle,
+  clearTodoThrottleForInstance,
   TODO_MIN_INTERVAL_MS,
   type PrSyncSnapshot,
   type TodoEntry,
@@ -136,6 +138,9 @@ beforeEach(() => {
   vi.mocked(getPullRequestHead).mockResolvedValue({ sha: 'sha-old', state: 'open', merged: false });
   vi.mocked(createCheckRun).mockResolvedValue({ id: 2002, htmlUrl: 'https://github.test/runs/2002' });
   vi.mocked(updateCheckRun).mockResolvedValue({ id: 1001, htmlUrl: 'https://github.test/runs/1001' });
+  vi.mocked(prHandlerRegistry.findById).mockResolvedValue(
+    handlerRow({ lastCheckRunId: 1001, lastWrittenCommitSha: 'sha-old' }) as never,
+  );
   vi.mocked(prHandlerRegistry.markSyncError).mockResolvedValue(undefined);
   vi.mocked(prHandlerRegistry.markCheckRunSynced).mockResolvedValue(undefined);
   vi.mocked(prHandlerRegistry.markTodoSynced).mockResolvedValue(undefined);
@@ -193,7 +198,7 @@ describe('syncNodeStatus', () => {
     );
   });
 
-  it('commit 前进：旧 check-run 置 stale + 新 commit create', async () => {
+  it('commit 前进：旧 check-run 只 PATCH output 标记已过期（不写 stale）+ 新 commit create', async () => {
     vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue(
       handlerRow({ lastCheckRunId: 1001, lastWrittenCommitSha: 'sha-old' }) as never,
     );
@@ -201,11 +206,14 @@ describe('syncNodeStatus', () => {
 
     await syncNodeStatus(makeInstance(), makeNode({ status: 'DONE' }));
 
-    expect(updateCheckRun).toHaveBeenCalledWith(
-      'ghs_test',
-      'Deliay/z-agent-gear',
-      1001,
-      expect.objectContaining({ status: 'completed', conclusion: 'stale' }),
+    const oldPatch = vi.mocked(updateCheckRun).mock.calls.find((call) => call[2] === 1001);
+    expect(oldPatch).toBeTruthy();
+    const oldPayload = oldPatch?.[3] as Record<string, unknown>;
+    // GitHub 只允许 GitHub 自己置 stale：应用侧不得写 status/conclusion（会 422）
+    expect(oldPayload.status).toBeUndefined();
+    expect(oldPayload.conclusion).toBeUndefined();
+    expect((oldPayload.output as { title?: string })?.title).toBe(
+      '代码实现 · 已过期：PR 已有新提交',
     );
     expect(createCheckRun).toHaveBeenCalledWith(
       'ghs_test',
@@ -220,8 +228,33 @@ describe('syncNodeStatus', () => {
     );
     expect(prHandlerRegistry.markCheckRunSynced).toHaveBeenCalledWith(
       'h1',
+      expect.objectContaining({ commitSha: 'sha-new', checkRunId: 2002, resetTodoDigest: true }),
+    );
+  });
+
+  it('旧 check-run 过期标记失败（422）不阻断新提交 create 与回写', async () => {
+    vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue(
+      handlerRow({ lastCheckRunId: 1001, lastWrittenCommitSha: 'sha-old' }) as never,
+    );
+    vi.mocked(getPullRequestHead).mockResolvedValue({ sha: 'sha-new', state: 'open', merged: false });
+    vi.mocked(updateCheckRun).mockRejectedValueOnce(
+      new GitHubChecksError('INVALID_PAYLOAD', 'rejected'),
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await syncNodeStatus(makeInstance(), makeNode({ status: 'DONE' }));
+
+    expect(createCheckRun).toHaveBeenCalledWith(
+      'ghs_test',
+      'Deliay/z-agent-gear',
+      expect.objectContaining({ head_sha: 'sha-new' }),
+    );
+    expect(prHandlerRegistry.markCheckRunSynced).toHaveBeenCalledWith(
+      'h1',
       expect.objectContaining({ commitSha: 'sha-new', checkRunId: 2002 }),
     );
+    expect(prHandlerRegistry.markSyncError).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('无旧 check-run 时直接 create', async () => {
@@ -403,6 +436,38 @@ describe('syncTodoPanel', () => {
     };
     expect(lastPayload.output?.text).toContain('C');
     expect(lastPayload.output?.text).not.toContain('B');
+  });
+
+  it('节流 flush 前复核：check-run 已作废则丢弃且不回写 digest', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-25T00:00:00Z'));
+
+    await syncTodoPanel(snapshot(), [entry('A', 'pending')]);
+    await syncTodoPanel(snapshot(), [entry('B', 'pending')]);
+    expect(updateCheckRun).toHaveBeenCalledTimes(1);
+
+    // commit 前进后登记行已指向新 check-run
+    vi.mocked(prHandlerRegistry.findById).mockResolvedValue(
+      handlerRow({ lastCheckRunId: 2002, lastWrittenCommitSha: 'sha-new' }) as never,
+    );
+    await vi.advanceTimersByTimeAsync(TODO_MIN_INTERVAL_MS);
+
+    expect(updateCheckRun).toHaveBeenCalledTimes(1);
+    expect(prHandlerRegistry.markTodoSynced).toHaveBeenCalledTimes(1);
+  });
+
+  it('注销实例清理节流状态，挂起项不再写入', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-25T00:00:00Z'));
+
+    await syncTodoPanel(snapshot(), [entry('A', 'pending')]);
+    await syncTodoPanel(snapshot(), [entry('B', 'pending')]);
+    expect(updateCheckRun).toHaveBeenCalledTimes(1);
+
+    clearTodoThrottleForInstance('inst-1');
+    await vi.advanceTimersByTimeAsync(TODO_MIN_INTERVAL_MS);
+
+    expect(updateCheckRun).toHaveBeenCalledTimes(1);
   });
 
   it('PATCH 失败记白名单文案且不抛出', async () => {

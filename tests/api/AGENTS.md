@@ -95,12 +95,12 @@ npm test
 
 ### 工作流 Check Runs 同步 (`workflow-check-runs.test.ts`)
 
-出站行为经 `src/mock-github-server.ts`（进程内 mock，端口 `MOCK_GITHUB_PORT`，默认 19418）验证；agent-api 以 `GITHUB_API_BASE` 指向该端口。
+出站行为经 `src/mock-github-server.ts`（进程内 mock，端口 `MOCK_GITHUB_PORT`，默认 19418）验证；agent-api 以 `GITHUB_API_BASE` 指向该端口。mock 按真实 GitHub 行为拒绝 `conclusion=stale`（422，仅 GitHub 可置 stale），由 `src/mock-github-server.test.ts` 守卫。
 
 | 测试 | 描述 |
 |------|------|
 | T-CR02 | 状态变化同 sha → PATCH 同一 check-run（completed/success），无新建 |
-| T-CR03 | commit 前进 → 旧 check-run `stale` + 新 sha 新建，登记记录新 commit |
+| T-CR03 | commit 前进 → 旧 check-run 仅 PATCH output（`已过期`，不写 stale）+ 新 sha 新建，登记记录新 commit |
 | T-CR04 | 重复绑定同 PR → 零重复 create / PATCH |
 | T-CR06 | plan 消息满足四条件刷新 `output.text`；非工作流会话零写入 |
 | T-CR08 | mock 注入 403 → `lastSyncError=检查项写入权限不足`，节点仍正常完成 |

@@ -74,14 +74,14 @@ describe('github-checks-client', () => {
 
     await updateCheckRun('ghs_token', 'o/r', 1001, {
       status: 'completed',
-      conclusion: 'stale',
+      conclusion: 'success',
     });
 
     expect(calls[0].url).toBe('http://127.0.0.1:9911/repos/o/r/check-runs/1001');
     expect(calls[0].init.method).toBe('PATCH');
     expect(JSON.parse(String(calls[0].init.body))).toEqual({
       status: 'completed',
-      conclusion: 'stale',
+      conclusion: 'success',
     });
   });
 

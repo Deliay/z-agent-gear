@@ -6,8 +6,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
  * 覆盖 agent-api Check Runs 同步链路用到的三条路由：
  * - `POST /app/installations/:id/access_tokens`（签发假 installation token）
  * - `POST /repos/:owner/:repo/check-runs`（创建）
- * - `PATCH /repos/:owner/:repo/check-runs/:id`（更新，含 stale 收尾）
+ * - `PATCH /repos/:owner/:repo/check-runs/:id`（更新）
  * - `GET /repos/:owner/:repo/pulls/:n`（PR 最新 head / state / merged）
+ *
+ * 真实对端约束：GitHub 只允许 GitHub 自己把 `conclusion` 置为 `stale`
+ * （应用侧 POST/PATCH `conclusion=stale` 返回 422），mock 必须同样拒绝，
+ * 否则会放过「依赖 GitHub 禁止能力」的实现（controller-api/AGENTS.md 跨服务协议教训）。
  *
  * 记录全部调用，支持 `failNext(status)` 注入失败、`setHead`/`setPullRequestState` 改状态。
  */
@@ -107,6 +111,12 @@ export async function startMockGitHubServer(options?: {
     // create check-run
     if (method === 'POST' && /^\/repos\/[^/]+\/[^/]+\/check-runs$/.test(url)) {
       const body = parsed ?? {};
+      if (body.conclusion === 'stale') {
+        json(res, 422, {
+          message: 'You cannot change a check run conclusion to stale, only GitHub can set this.',
+        });
+        return;
+      }
       const now = new Date().toISOString();
       const checkRun: MockCheckRun = {
         id: nextId++,
@@ -134,6 +144,12 @@ export async function startMockGitHubServer(options?: {
         return;
       }
       const body = parsed ?? {};
+      if (body.conclusion === 'stale') {
+        json(res, 422, {
+          message: 'You cannot change a check run conclusion to stale, only GitHub can set this.',
+        });
+        return;
+      }
       if (typeof body.status === 'string') target.status = body.status;
       if (typeof body.conclusion === 'string') target.conclusion = body.conclusion;
       if (body.output && typeof body.output === 'object') {

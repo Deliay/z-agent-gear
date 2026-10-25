@@ -526,20 +526,28 @@ describe.skipIf(!hasEnv)('工作流节点状态 → Check Runs（T-CR02~T-CR12�
     expect(createCalls().length).toBe(before);
   }, 30_000);
 
-  it('T-CR03 commit 前进：旧 check-run stale + 新 sha 新建并记录', async () => {
+  it('T-CR03 commit 前进：旧 check-run output 标记已过期（不写 stale）+ 新 sha 新建并记录', async () => {
     const ctx = await createCtx(token, userId, fake, 'tcr03');
     const pr = `${REPO}#${Date.now() % 100000}`;
     const { exec, run: old } = await linkAndWaitCreate(ctx, pr);
     const newSha = `sha-${Date.now()}-next`;
     mock.setHead(newSha);
 
+    const patchesBefore = patchCalls().length;
     await callTool(ctx, exec.sessionId, exec.token, 'completeCurrentNode', {
       artifacts: [{ title: '代码执行产物', value: 'done' }],
     });
 
     await waitFor(async () => (mock.checkRuns.some((r) => r.head_sha === newSha) ? true : null));
     const oldRun = mock.checkRuns.find((r) => r.id === old.id);
-    expect(oldRun?.conclusion).toBe('stale');
+    // GitHub 只允许 GitHub 自己置 stale：应用侧只 PATCH output，结论保持原值
+    expect(oldRun?.conclusion).not.toBe('stale');
+    expect(String(oldRun?.output?.title ?? '')).toContain('已过期');
+    const oldPatches = patchCalls()
+      .slice(patchesBefore)
+      .filter((c) => c.path.endsWith(`/check-runs/${old.id}`));
+    expect(oldPatches.length).toBeGreaterThan(0);
+    expect(oldPatches.every((c) => c.body?.conclusion === undefined)).toBe(true);
     const created = mock.checkRuns.find((r) => r.head_sha === newSha);
     expect(created?.status).toBe('completed');
     expect(created?.conclusion).toBe('success');
