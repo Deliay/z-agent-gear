@@ -2,6 +2,7 @@ import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
 import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
+import { syncNodeStatus } from './pr-check-run-sync.js';
 
 /** 平台内置工作流工具服务名（transport: platform / source: platform） */
 export const PLATFORM_SERVER_NAME = 'agent-workflow-tools';
@@ -393,6 +394,10 @@ export async function callWorkflowTool(
         pullRequestId: normalized.pullRequestId,
         prUrl: normalized.prUrl,
         sessionId: node.sessionId ? node.sessionId.toString() : null,
+      });
+      // 绑定即同步：fire-and-forget，失败只记 lastSyncError，不影响工具返回
+      void syncNodeStatus(instance, node).catch((err: unknown) => {
+        console.warn('[workflow] first check-run sync failed:', (err as Error)?.message);
       });
       return {
         registered: true,

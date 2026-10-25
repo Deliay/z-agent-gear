@@ -34,7 +34,7 @@ vi.mock('../config/index.js', () => ({
   },
 }));
 
-import { githubService } from './github.js';
+import { githubService, resetRepoTokenCache } from './github.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 
@@ -181,6 +181,7 @@ describe('GitHubService', () => {
     ];
 
     beforeEach(() => {
+      resetRepoTokenCache();
       vi.mocked(GitHubAccount.findById).mockReturnValue({
         lean: vi.fn().mockResolvedValue(account),
       } as never);
@@ -213,6 +214,7 @@ describe('GitHubService', () => {
         repositories: ['repo'],
         permissions: {
           actions: 'write',
+          checks: 'write',
           contents: 'write',
           deployments: 'write',
           environments: 'write',
@@ -262,6 +264,92 @@ describe('GitHubService', () => {
       await expect(
         githubService.createRepoScopedToken('missing', 'Owner/Repo'),
       ).rejects.toThrow('account not found');
+    });
+
+    it('T-GH6: token 进程内缓存命中不重复签发', async () => {
+      const fetchSpy = vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({ token: 'ghs_cached', expires_at: '2099-01-01T00:00:00.000Z' }),
+        } as Response),
+      );
+      globalThis.fetch = fetchSpy as never;
+
+      const first = await githubService.createRepoScopedToken('acc1', 'Owner/Repo');
+      const second = await githubService.createRepoScopedToken('acc1', 'owner/repo');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    });
+
+    it('T-GH7: 到期前 5 分钟内作废并重新签发', async () => {
+      const fetchSpy = vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              token: 'ghs_short',
+              expires_at: new Date(Date.now() + 60_000).toISOString(),
+            }),
+        } as Response),
+      );
+      globalThis.fetch = fetchSpy as never;
+
+      await githubService.createRepoScopedToken('acc1', 'Owner/Repo');
+      await githubService.createRepoScopedToken('acc1', 'Owner/Repo');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('createRepoScopedTokenForUser', () => {
+    beforeEach(() => {
+      resetRepoTokenCache();
+    });
+
+    it('T-GH8: 逐帐号匹配，首个授权仓库的安装胜出', async () => {
+      vi.mocked(GitHubAccount.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ _id: 'acc1' }, { _id: 'acc2' }]),
+      } as never);
+      vi.mocked(GitHubInstallation.find)
+        .mockReturnValueOnce({ lean: vi.fn().mockResolvedValue([]) } as never)
+        .mockReturnValueOnce({
+          lean: vi.fn().mockResolvedValue([
+            { installationId: 77, repos: [{ fullName: 'Owner/Repo' }] },
+          ]),
+        } as never);
+
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      globalThis.fetch = ((url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({ token: 'ghs_user', expires_at: '2099-01-01T00:00:00.000Z' }),
+        } as Response);
+      }) as never;
+
+      const result = await githubService.createRepoScopedTokenForUser('user-1', 'owner/repo');
+
+      expect(result.token).toBe('ghs_user');
+      expect(calls[0].url).toBe('https://api.github.com/app/installations/77/access_tokens');
+    });
+
+    it('T-GH9: 全部帐号均未授权时抛错', async () => {
+      vi.mocked(GitHubAccount.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ _id: 'acc1' }]),
+      } as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ installationId: 42, repos: [{ fullName: 'a/b' }] }]),
+      } as never);
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy as never;
+
+      await expect(
+        githubService.createRepoScopedTokenForUser('user-1', 'owner/repo'),
+      ).rejects.toThrow('repository is not authorized');
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });

@@ -34,6 +34,8 @@ import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { prHandlerRegistry } from './services/workflow/pr-handler-registry.js';
+import { registerPrCheckRunSyncHooks } from './services/workflow/pr-check-run-sync.js';
+import { prCheckRunSubscriber } from './services/workflow/pr-check-run-subscriber.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
 const app = express();
@@ -73,6 +75,8 @@ async function start() {
   workflowOrchestrator.register();
   // 工作流完成时注销 PR 联动登记
   prHandlerRegistry.registerPrHandlerLifecycleHooks();
+  // 节点状态变化投影到 GitHub Check Runs（先于注销 hook 触发）
+  registerPrCheckRunSyncHooks();
 
   try {
     await mongoose.connect(config.mongodbUri);
@@ -129,6 +133,10 @@ async function start() {
     // Workflow session lifecycle events (removed / prompt-completed idling)
     sessionLifecycleSubscriber.start();
     console.log('Session lifecycle subscriber started');
+
+    // Workflow todo panel → check-run 子项同步
+    prCheckRunSubscriber.start();
+    console.log('PR check-run subscriber started');
   } catch (err) {
     console.warn('Redis not available:', (err as Error).message);
   }

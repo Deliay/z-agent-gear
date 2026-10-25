@@ -1,5 +1,5 @@
 ---
-description: 工作流节点状态通过 GitHub Check Runs 同步实现计划：契约（WorkflowPullRequestLink 同步字段）、agent-api（WorkflowPrHandler 同步字段、GitHub Checks 客户端与 checks:write 凭据、引擎 onNodesTransitioned hook、pr-check-run-sync stale 编排、pr-check-run-subscriber todo 同步、linkPullRequest 首同步）、GraphQL 透出与 agent-web 只读展示、API 与 E2E 测试
+description: 工作流节点状态通过 GitHub Check Runs 同步实现计划：契约（WorkflowPullRequestLink 同步字段）、agent-api（WorkflowPrHandler 同步字段、GitHub Checks 客户端与 checks:write 凭据、引擎 onNodesTransitioned hook、pr-check-run-sync 过期检查项编排、pr-check-run-subscriber todo 同步、linkPullRequest 首同步）、GraphQL 透出与 agent-web 只读展示、API 与 E2E 测试
 type: Permanent
 ---
 
@@ -51,7 +51,7 @@ flowchart TD
 - **P2 / P3 可并行**（都依赖 P1）：状态同步与 todo 同步互不依赖，共用 `pr-check-run-sync` 的渲染与回写；P3 的 `syncTodoPanel` 挂进 `pr-check-run-sync.ts`，与 P2 协调落文件（同文件并行时按函数分区合入）。
 - **P4 依赖 P2**：首同步复用 `syncNodeStatus` 同一路径。
 - **P5 依赖 P0 + P1**（读 handler 新字段），不等 P2/P3/P4。
-- **P6 依赖 P2 + P3 + P4**：mock GitHub server 断言首同步 / stale / todo 子项全链路。
+- **P6 依赖 P2 + P3 + P4**：mock GitHub server 断言首同步 / 旧检查项过期 output / todo 子项全链路，并按真实 API 拒绝 `conclusion=stale`。
 - **P7 串行收口**：E2E 与 API 共用 Aspire 服务与 Mongo/Redis，禁止并行执行。
 
 开发模式采用 TDD（红-绿-重构）：每个 Phase 先落失败测试（RED）再写实现（GREEN），最后重构。编码前按目录加载 `docs/engineering/common-rules.md`、`backend-rules.md`、`frontend-rules.md`、`servers/agent-api/AGENTS.md`、`apps/agent-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`。
@@ -140,7 +140,7 @@ type WorkflowPullRequestLink {
 | 用途 | 方法与路径 | 关键参数 |
 |------|-----------|---------|
 | 创建 check-run | `POST /repos/{owner}/{repo}/check-runs` | `name`、`head_sha`、`external_id`、`status`（queued/in_progress/completed）、`conclusion`、`started_at`、`completed_at`、`output{title,summary,text}` |
-| 更新 check-run | `PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}` | 同上可写子集；stale 收尾 = `status=completed` + `conclusion=stale` |
+| 更新 check-run | `PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}` | 同上可写子集；旧检查项过期 = 仅 PATCH `output{title,summary}`（`conclusion=stale` 仅 GitHub 可写，应用写入返回 422） |
 | 取 PR head | `GET /repos/{owner}/{repo}/pulls/{pull_number}` | 响应取 `head.sha`、`state`、`merged` |
 
 约束：`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2026-03-10`、`Authorization: Bearer {installation token}`；HTTP 403/404/422/429 与网络错误统一收敛为 `GitHubChecksError`（code + 白名单短文案，见裁决 12）。
@@ -217,7 +217,7 @@ type WorkflowPullRequestLink {
 | `servers/agent-api/src/services/workflow/engine.test.ts` | 改 | 变更集合断言（含级联） |
 | `servers/agent-api/src/services/workflow/pr-handler-registry.ts` | 改 | `findByNode` / `markCheckRunSynced` / `markSyncError` |
 | `servers/agent-api/src/services/workflow/pr-handler-registry.test.ts` | 改 | 新方法断言 |
-| `servers/agent-api/src/services/workflow/pr-check-run-sync.ts` | 新 | 状态映射 + stale 编排 + 同步编排 |
+| `servers/agent-api/src/services/workflow/pr-check-run-sync.ts` | 新 | 状态映射 + 过期检查项编排 + 同步编排 |
 | `servers/agent-api/src/services/workflow/pr-check-run-sync.test.ts` | 新 | RED 先行 |
 | `servers/agent-api/src/index.ts` | 改 | `registerPrCheckRunSyncHooks()` 注册（与 `prHandlerRegistry.registerPrHandlerLifecycleHooks()` 并列，`index.ts:75` 附近） |
 
@@ -249,7 +249,7 @@ export interface EngineHooks {
 | DONE | `completed` | `success` | 已完成 |
 | REJECT | `completed` | `action_required` | 被打回，待处理 |
 | FAILED | `completed` | `failure` | 执行失败 |
-| —（旧提交上的检查项） | `completed` | `stale` | 已过期：PR 已有新提交 |
+| —（旧提交上的检查项） | 保持原状态（不写） | 保持原结论（不写） | 已过期：PR 已有新提交（仅 PATCH output.title；`stale` 由 GitHub 自动设置） |
 
 ### 同步编排（`pr-check-run-sync.syncNodeStatus`）
 
@@ -272,7 +272,7 @@ sequenceDiagram
         else sha == lastWrittenCommitSha 且有 lastCheckRunId
             S->>GH: PATCH check-run（最新状态）
         else commit 已前进
-            S->>GH: PATCH 旧 check-run（completed + conclusion=stale）
+            S->>GH: PATCH 旧 check-run output（已过期文案；stale 由 GitHub 管理）
             S->>GH: POST 新 check-run（head.sha，最新状态）
         end
         S->>R: markCheckRunSynced / markSyncError（按 _id 定位）
@@ -295,7 +295,7 @@ sequenceDiagram
 ### 测试（RED 先行）
 
 - `engine.test.ts` 回填：`onNodesTransitioned` 在 9 个事件（start/complete/reject/rework/completeRework/resume/fail/resumeFailed/restart）各触发一次且 `changes` 正确；complete 级联下游 start、reject 级联上游 rework、FLAG 直通 DONE 级联均进 `changes`；hook 抛错不影响 `transition` 返回值。
-- `pr-check-run-sync.test.ts`（mock fetch + mock registry）：映射全表 7 行；同 sha PATCH；新 sha stale+create；无旧 id 直接 create；幂等跳过；PR 关闭/合并短路；403/404/网络失败记 `markSyncError` 不抛出；capture-then-execute（执行中登记被删仍完成写入）。
+- `pr-check-run-sync.test.ts`（mock fetch + mock registry）：映射全表 7 行；同 sha PATCH；新 sha 旧 output 标记已过期 + create（不写 stale）；无旧 id 直接 create；旧项 PATCH 失败不阻断 create；幂等跳过；PR 关闭/合并短路；403/404/网络失败记 `markSyncError` 不抛出；capture-then-execute（执行中登记被删仍完成写入）。
 - `pr-handler-registry.test.ts` 扩展：`findByNode` 命中/未命中；`markCheckRunSynced` 逐字段回写；`markSyncError` 截断 200；成功回写清空 `lastSyncError`。
 
 ### 实现要点
@@ -307,7 +307,7 @@ sequenceDiagram
 ### 验收 checklist
 
 - [ ] 9 事件 × 级联的变更集合断言全绿
-- [ ] stale 编排三分支（同 sha / 新 sha / 无旧 id）测试全绿
+- [ ] 过期检查项编排三分支（同 sha / 新 sha 旧 output 标记已过期 + create / 无旧 id）测试全绿
 - [ ] 同步失败不影响 `transition` 返回与工作流流转
 - [ ] hook 触发顺序：`onNodesTransitioned` 先于 `onWorkflowFinished`（API 测试覆盖）
 
@@ -449,7 +449,7 @@ sequenceDiagram
 |------|------|
 | T-CR01 绑定即首同步 | `linkPullRequest` 后 mock GitHub 收到 create（name=`ZAG 工作流 · {节点名}`、external_id、head_sha=当前 head） |
 | T-CR02 状态变化同 sha | complete → 同一 check-run 被 PATCH（status=completed、conclusion=success），无 create |
-| T-CR03 commit 前进 | 推进 mock head.sha 后状态变化 → 旧 check-run PATCH(conclusion=stale) + 新 sha create；handler `lastWrittenCommitSha` 更新 |
+| T-CR03 commit 前进 | 推进 mock head.sha 后状态变化 → 旧 check-run 仅 PATCH output（title=已过期，不写 conclusion）+ 新 sha create；handler `lastWrittenCommitSha` 更新；mock 对 `conclusion=stale` 返回 422 |
 | T-CR04 幂等 | 同状态同 sha 重复触发 → 零 GitHub 调用 |
 | T-CR05 级联状态 | complete 级联下游 start：下游 check-run `in_progress`；reject 级联上游 rework：上游 `in_progress`（返工中） |
 | T-CR06 todo 四条件 | plan 消息满足四条件 → `output.text` 刷新；缺任一条件（非工作流会话/未绑定/无 check-run）零写入 |
@@ -469,7 +469,7 @@ sequenceDiagram
 ### 验收 checklist
 
 - [ ] 12 条 `T-CR*` 全绿
-- [ ] mock GitHub 断言覆盖 create/PATCH/stale 三类调用与请求头
+- [ ] mock GitHub 断言覆盖 create/PATCH/过期 output 三类调用与请求头，且拒绝 `conclusion=stale`（422）
 - [ ] 403/404/429 三类失败文案与白名单一致
 
 ---
@@ -492,7 +492,7 @@ sequenceDiagram
 | E2E-CR2 | 同步失败提示展示（`lastSyncError` tooltip/副行），不影响页面其它操作 |
 | E2E-CR3 | 回归：未绑定 PR 的工作流实例详情与既有 PR 联动展示零变化（对照 E2E-1..3 / E2E-31 口径） |
 
-> 出站行为（create/stale/todo PATCH）的自动化验证在 Phase 6（`tests/api` + mock GitHub server）完成；E2E 不引入 GitHub 代理层（裁决 13）。
+> 出站行为（create / 旧检查项过期 output / todo PATCH）的自动化验证在 Phase 6（`tests/api` + mock GitHub server）完成；E2E 不引入 GitHub 代理层（裁决 13）。
 
 ### 收口动作
 
@@ -542,7 +542,7 @@ git checkout -b feat/workflow-check-runs-sync-impl
 
 - [ ] Phase 0 契约逐字落地，五处字段（契约/schema/resolver/前端类型/selection）一致
 - [ ] 绑定 PR 即出现 check-run；状态变化秒级同步（PRD 1.3）
-- [ ] commit 前进：旧 check-run=stale、新 commit 上为最新、handler 记录上次写入 commit
+- [ ] commit 前进：旧 check-run 由 GitHub 置 stale 且 output.title 标记已过期、新 commit 上为最新、handler 记录上次写入 commit
 - [ ] todo panel 满足四条件时子项刷新（完成/进行中/等待中 + 汇总行），digest/节流生效
 - [ ] 同步失败仅记 `lastSyncError` 并可见于实例详情，工作流流转零影响（T-CR08）
 - [ ] 未绑定 PR 的工作流零回归；既有 PR review 联动零回归
@@ -550,6 +550,15 @@ git checkout -b feat/workflow-check-runs-sync-impl
 - [ ] 凭据零泄露（token 不落库/日志/错误；响应体不进日志）
 - [ ] 单元测试覆盖率 ≥ 80%；`T-CR*`（12）与 `E2E-CR*`（3）全绿
 - [ ] 文档索引与测试 AGENTS 用例表更新；实现 PR 声明 2 项口径收敛
+
+## 返工修订（2026-10-25）
+
+审核阻断：原计划 Phase 2 的「旧 check-run 置 `conclusion=stale`」依赖 GitHub 禁止的能力——官方文档明确应用不能把 `conclusion` 改为 `stale`（https://docs.github.com/en/rest/checks/runs?apiVersion=2026-03-10），PATCH 会 422，导致 commit 前进分支在真实 GitHub 上永久卡死。修订口径：
+
+- 应用侧**不再写** `conclusion=stale`；commit 前进时旧 check-run 仅尽力 PATCH `output.title/summary`（`{节点名} · 已过期：PR 已有新提交`），失败不阻断新提交上的 create；stale 结论由 GitHub 在新提交推送后自动管理。
+- `github-checks-client` 的可写 `CheckRunConclusion` 联合类型移除 `stale`，从类型层阻止误用。
+- `tests/api` mock GitHub server 对 POST/PATCH `conclusion=stale` 返回 422（附独立守卫用例），与真实对端对齐。
+- 同步修正：`todoThrottle` 按 check-run 清理（commit 前进/实例注销）、节流 flush 前复核当前 check-run、`markTodoSynced` 按 `checkRunId` 条件回写、新 check-run 清空 `lastTodoDigest`；`engine.ts` 快照捕获注释改为与真实机制一致（findOne 先于注销 deleteMany 发出）。
 
 ## 相关文档
 
