@@ -25,6 +25,7 @@ src/
 
 ## 会话能力快照与模型来源
 
+- **PR 联动事件入口**：`routes/event-callback.ts`（`POST /api/events/callback`，平台 token 或 GitHub 验签双通道）与 `routes/github-webhook.ts`（`POST /api/events/github/webhook`，GitHub 原生 webhook 直连，仅 `X-Hub-Signature-256` 验签 + `GITHUB_WEBHOOK_SECRET`，仅处理 `pull_request_review` submitted，经 `services/workflow/github-webhook-payload.ts` 归一化）都必须在全局 `express.json()` 之前挂载（验签需要原始字节）；两者共用 `handlePullRequestEvent` 判定链。
 - `Session.agentCapabilities` 读取 controller-api 落库的 `sessions.agentCapabilities`；`Session.features` 由 `services/agent-capabilities.ts` 的 `featuresFromSnapshot()` 输出（无快照返回 `[]`，不复制 FeatureId 矩阵）。
 - `Session.availableModels` 为字段级 resolver：按平台模型库（`ModelService.listSourceLibrary()`，`AVAILABLE_MODELS_FILTER` 同口径）三档推断来源（`services/model-source.ts`：库比对 → 标识前缀 → 兜底），同一 GraphQL 请求只查一次库（`AuthContext.modelLibraryPromise`）。
 - `TodoItem.resolution/resolvedAt/expiresAt`：`respondElicitation` 写 `accepted|declined|cancelled`；订阅 `elicitation:resolved` 后 `timeout→expired`、`unsupported_mode→failed`、`cancelled→cancelled`。TTL（5 分钟）保持不变。
