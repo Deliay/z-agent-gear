@@ -7,10 +7,12 @@ type: Permanent
 
 **功能名称**: 工作负载「DeepSeek Harness」（Harness）与平台渠道模型默认注入
 **关联 PRD**: [[../../product/draft/20261025-deepseek-harness.md]]
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-25
 **作者**: ZeroAsh
 **feat-branch**: `feat/deepseek-harness`
+
+> v1.1 修订（PR #284 评审）：核实并修正「默认会话自动创建」口径——自 `20261023-feat-cloud-container-optimization-phase2` 起，`createCloudHost` 不再预置默认工作区（`workspaceId=null` 落库），ready 回调的自动建会话分支（要求 `workspaceId` 非空）对新建云电脑不再触发；**就绪后不自动创建会话**（与 harness 数量无关），现存分支仅服务历史带工作区云电脑。本文相关段落（§3.1.1 / §3.2.3 / §5.1.1 / §8.2 / §9）已按最新代码行为修订。
 
 ## 1. 概述
 
@@ -51,7 +53,7 @@ type: Permanent
 - admin-api migration `010-preset-harness-deepseek`（预置项 + init 脚本，幂等不覆盖管理员修改）。
 - agent-gear 2.9.0：`harness/dsh-config.ts`（patch 与凭据写入）、`harness/prepare.ts`（按 `ZAG_HARNESS_TYPES` 分流）、`acp/detector.ts`（探测与 spawner）、`harness/env.ts`（`ZAG_HARNESS_TYPES` 解析，可选缺省）。
 - agent-web：`graphql/types.ts`、`NewCloudHostDialog.tsx`（选项与标签）、`SessionHeader.tsx`（工具标签）。
-- 测试：单测（dsh-config 合并/权限/幂等、prepare 分流、detector/spawner、映射与门禁）、tests/api（harnessTypes 白名单与展开、默认会话映射）、tests/e2e（创建/会话链路）。
+- 测试：单测（dsh-config 合并/权限/幂等、prepare 分流、detector/spawner、映射与门禁）、tests/api（harnessTypes 白名单与展开、会话工具映射 `harnessAcpTypes`）、tests/e2e（创建/会话链路）。
 
 **不做**：
 
@@ -123,7 +125,7 @@ graph LR
 |------|------|-----------|
 | admin-api migration 010 | 预置工作负载写入 | 双包固定版本安装 + `dsh --version` 硬校验 + `agent-gear harness prepare`；幂等不覆盖 |
 | cloud-controller | 白名单/枚举/版本门禁 | `SUPPORTED_HARNESS_TYPES` + `MIN_HARNESS_VERSION_BY_TYPE`；展开机制不动 |
-| agent-api | 映射与门禁计算 | PRESET_KEYS / HARNESS_SLUGS / 版本映射 / 默认会话 `harnessAcpTypes` |
+| agent-api | 映射与门禁计算 | PRESET_KEYS / HARNESS_SLUGS / 版本映射 / 会话工具映射 `harnessAcpTypes` |
 | agent-gear `harness/prepare.ts` | 按 `ZAG_HARNESS_TYPES` 分流 | 缺省回退 `['opencode']`（本地/旧场景零退化）；逐类型硬校验 + 写入，摘要不含 secret |
 | agent-gear `harness/dsh-config.ts` | dsh 配置与凭据写入 | `yaml` Document 合并（保留其他条目/注释）、原子写（临时文件 + rename）、0600/0700 |
 | agent-gear `acp/detector.ts` | 探测与拉起 | `detectDeepseekHarness()`（`dsh --version`）；`getSpawnerConfig('deepseek_harness') → { command: 'dsh', args: ['--profile', 'acp'] }` |
@@ -144,7 +146,7 @@ enum HarnessType {
 ```
 
 - 映射注释同步：`DEEPSEEK_HARNESS → acpServerType deepseek_harness`；预置展开 `DEEPSEEK_HARNESS → harness-deepseek-harness`；`cloudHostCapabilities.supportedHarnesses` 仅在对应预置工作负载存在时列出该类型（既有口径）。
-- 校验与错误文案不变：`harnessTypes` 去重后 ≥1、全部在白名单，否则 `unsupported harness type: <type>`；默认会话「恰好 1 项」规则不变。
+- 校验与错误文案不变：`harnessTypes` 去重后 ≥1、全部在白名单，否则 `unsupported harness type: <type>`；**默认会话自动创建已随云容器优化二期移除**（创建期不预置工作区 → ready 不自动建会话，现存分支仅服务历史带工作区云电脑；`createDefaultSession` 字段与 A-11「会话工具 ∈ 创建时所选 harnessTypes」校验口径不变）。
 
 #### 3.1.2 `contracts/agent-session.graphql`（扩展）
 
@@ -222,7 +224,7 @@ export function resolvePrepareTypes(env: NodeJS.ProcessEnv): Array<'opencode' | 
 - `servers/controller-api/src/models/session.ts`：`acpServerType` 枚举追加 `deepseek_harness`。
 - `servers/agent-api/src/services/cloud-workload-reader.ts`：`PRESET_KEYS += { DEEPSEEK_HARNESS: 'harness-deepseek-harness' }`、`HARNESS_SLUGS += { DEEPSEEK_HARNESS: 'deepseek_harness' }`。
 - `servers/agent-api/src/services/cloud-host-service.ts`：slug 映射与版本映射（`DEEPSEEK_HARNESS: '2.9.0'`）。
-- `servers/agent-api/src/services/session.ts`：`harnessAcpTypes += { DEEPSEEK_HARNESS: 'deepseek_harness' }`（默认会话创建）。
+- `servers/agent-api/src/services/session.ts`：`harnessAcpTypes += { DEEPSEEK_HARNESS: 'deepseek_harness' }`（A-11 会话工具白名单校验 + 历史默认会话补建映射；**缺该映射则 DeepSeek Harness 会话创建被 `unsupported harness type` 拒绝**）。
 
 ## 4. 数据模型
 
@@ -278,7 +280,7 @@ sequenceDiagram
     W->>W: agent-gear harness prepare（ZAG_HARNESS_TYPES 含 deepseek_harness）
     W->>D: 写 profiles/acp/cordis.patch.yml（providers.zag + 默认路由 + 禁用内建）
     W->>D: 写 .credentials.yaml（refs.ZAG_MODEL_API_KEY，0600）
-    CC-->>AA: 就绪 → RUNNING（恰好 1 个 harness → 自动建默认会话）
+    CC-->>AA: 就绪 → RUNNING（不自动建默认会话：创建期 workspaceId=null；用户创建/绑定工作区后经 A-11 校验创建会话）
 ```
 
 #### 5.1.2 探测可用模型 / 创建会话（configOptions 复用，无闸门）
@@ -518,7 +520,7 @@ tests/api / tests/e2e                      # 见 §8（fetch 风格 API 测试 +
 ### 8.1 测试覆盖要求
 
 - 单元测试覆盖率 ≥ 80%（`dsh-config.ts` 合并全分支、`prepare` 分流、`resolvePrepareTypes`、detector/spawner、映射与门禁）。
-- API 测试覆盖：harnessTypes 白名单/展开/门禁（含 deepseek_harness）、默认会话映射、`agentGearMinVersion` 计算。
+- API 测试覆盖：harnessTypes 白名单/展开/门禁（含 deepseek_harness）、会话工具映射（`harnessAcpTypes`，A-11 校验）、`agentGearMinVersion` 计算。
 - 回归：OpenCode / Kimi Code 云电脑全链路；`harnessTypes=['opencode']` / `['kimi_code']` 展开与门禁逐字一致。
 
 ### 8.2 测试类型
@@ -526,8 +528,8 @@ tests/api / tests/e2e                      # 见 §8（fetch 风格 API 测试 +
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
 | 单元测试 | Vitest | `dsh-config`：patch 合并（我方 4 条目替换/他条目与注释保留/新建/非法 YAML 报错/原子写/0600·0700）、credentials 合并（refs 替换/records 保留/版本头/非法报错）、空清单/上下文长度写否；`prepare` 分流（缺省回退/多类型/未知类型过滤/kimi_code 忽略）；`verifyDshCli`（版本一致/不一致/无输出/命令缺失）；migration 010 幂等；映射与门禁（含混合类型取最大） |
-| API 测试 | tests/api（fetch 风格 + fake controller） | 创建云电脑 `DEEPSEEK_HARNESS`（单选自动建会话/多选不建/非法类型 400）；`agentGearMinVersion` 含 deepseek_harness → 2.9.0；workloadPlan 展开含 harness-deepseek-harness 且 required=true；探测/会话创建经 fake dsh（configOptions 夹具）返回 ZAG 组模型 |
-| E2E 测试 | tests/e2e | 新建云电脑三选项展示与多选；仅选 DeepSeek Harness 就绪后自动进会话；会话模型选择仅 ZAG 组且默认选中；OpenCode / Kimi Code 路径回归 |
+| API 测试 | tests/api（fetch 风格 + fake controller） | 创建云电脑 `DEEPSEEK_HARNESS`（单选/多选就绪均不自动建会话、非法类型 400、A-11 会话工具白名单校验）；`agentGearMinVersion` 含 deepseek_harness → 2.9.0；workloadPlan 展开含 harness-deepseek-harness 且 required=true；探测/会话创建经 fake dsh（configOptions 夹具）返回 ZAG 组模型 |
+| E2E 测试 | tests/e2e | 新建云电脑三选项展示与多选；仅选 DeepSeek Harness 就绪后不自动建会话、创建/绑定工作区后可创建会话；会话模型选择仅 ZAG 组且默认选中；OpenCode / Kimi Code 路径回归 |
 | 实机核对 | Aspire 全栈 + 真实 dsh | 附录 A.9 核对清单逐项验证 |
 
 ### 8.3 调研核对清单（实现期，附录 A）
@@ -546,7 +548,7 @@ tests/api / tests/e2e                      # 见 §8（fetch 风格 API 测试 +
 
 - [ ] 技术方案评审通过
 - [ ] Contract 评审通过（`cloud-host.graphql` / `agent-session.graphql` / `cloud-controller-websocket.md`）
-- [ ] 创建云电脑可选 DeepSeek Harness（与 OpenCode / Kimi Code 同级、多选、默认会话规则不变）
+- [ ] 创建云电脑可选 DeepSeek Harness（与 OpenCode / Kimi Code 同级、多选；就绪不自动建会话的现状不变，A-11 工具范围校验生效）
 - [ ] 云电脑就绪后 DeepSeek Harness 可用；环境准备/注入失败启动失败并展示原因
 - [ ] 就绪云电脑上创建会话无需登录、无需手工配置；模型选择仅 ZAG 组（平台渠道模型清单）且默认选中；内建官方渠道不出现
 - [ ] 模型清单含模型最长上下文（`contextWindow` 与后台模型设置一致）

@@ -6,9 +6,11 @@ type: Permanent
 # 增加工作负载「DeepSeek Harness」（Harness）：DeepSeek Harness 接入与平台渠道模型注入
 
 **功能名称**: 工作负载「DeepSeek Harness」（Harness）与平台渠道模型默认注入
-**PRD 版本**: v1.0
+**PRD 版本**: v1.1
 **创建日期**: 2026-10-25
 **作者**: ZeroAsh
+
+> v1.1 修订（PR #284 评审）：移除「恰好选 1 个 harness 工具就绪后自动创建会话」的过时口径——自《云容器优化二期》（[[20261023-cloud-container-optimization-phase2.md]]）起，新建云电脑不预置工作区、就绪后不再自动创建会话（与选择几个 harness 工具无关），本文已按最新行为修订。
 
 > 术语：「云电脑」「harness 工具」沿用《容器启动任务支持 harness 类型》（[[20261020-container-harness-support.md]]）的口径——云电脑是用户自助创建的云端机器，在左侧导航栏以「主机」形态呈现；创建时选择 harness 工具。
 >
@@ -30,12 +32,12 @@ type: Permanent
 
 随着用户工具偏好多样化，DeepSeek Harness 用户希望在云电脑上使用自己的工具：
 
-1. **DeepSeek Harness 用户希望在云电脑上使用该工具**。DeepSeek Harness 是 DeepSeek 官方开源的 AI 编程工具（harness），支持平台标准的会话能力，应作为 harness 工具的新选项出现在创建云电脑的选择中，体验与 OpenCode / Kimi Code 一致（可多选、恰好选 1 个时自动创建会话等规则不变）。
+1. **DeepSeek Harness 用户希望在云电脑上使用该工具**。DeepSeek Harness 是 DeepSeek 官方开源的 AI 编程工具（harness），支持平台标准的会话能力，应作为 harness 工具的新选项出现在创建云电脑的选择中，体验与 OpenCode / Kimi Code 一致（可多选；可创建会话的工具范围为创建时所选工具；就绪后不自动创建会话、需先创建或绑定工作区的现状不变）。
 2. **模型应默认注入平台渠道，开箱即用**。DeepSeek Harness 官方默认模型走 DeepSeek 官方渠道（需要用户自己的 DeepSeek 凭证）。平台云电脑的既有口径（OpenCode）是启动时把平台渠道模型注入工具配置，用户无需关心凭证与端点。DeepSeek Harness 应采用同一口径：启动初始化环境时默认注入平台渠道模型，未注入前工具不可用——注入失败则云电脑启动失败并展示原因。
 
 ### 1.2 目标
 
-- 云电脑创建时，harness 工具可选「**DeepSeek Harness**」，与 OpenCode、Kimi Code **同级**（可多选；恰好选 1 个时的默认会话规则不变）。
+- 云电脑创建时，harness 工具可选「**DeepSeek Harness**」，与 OpenCode、Kimi Code **同级**（可多选；可创建会话的工具范围为创建时所选工具；就绪后不自动创建会话的现状不变）。
 - 云电脑启动后 DeepSeek Harness **开箱可用**：环境自动准备好、校验可用；环境准备失败则云电脑启动失败并展示原因。
 - **平台渠道模型默认注入**：云电脑启动初始化环境时，把平台渠道模型（网关地址、运行专用模型凭证、可用模型清单与模型最长上下文）写入 DeepSeek Harness 的工具配置；注入后新建会话默认使用平台渠道模型，模型选择中呈现平台渠道模型清单。
 - 注入的平台渠道模型清单与后台模型设置保持一致（含模型最长上下文），与 OpenCode 云电脑同口径。
@@ -45,7 +47,7 @@ type: Permanent
 
 ### 1.3 成功标准
 
-- 新建云电脑的 harness 工具选项包含「DeepSeek Harness」「OpenCode」「Kimi Code」；可多选；仅选 DeepSeek Harness 时就绪后自动创建并进入一个 DeepSeek Harness 会话（沿用默认会话规则）。
+- 新建云电脑的 harness 工具选项包含「DeepSeek Harness」「OpenCode」「Kimi Code」；可多选；仅选 DeepSeek Harness 创建后，就绪的云电脑**不**自动创建会话（沿用现状），创建/绑定工作区后可创建并进入 DeepSeek Harness 会话。
 - 云电脑就绪后，主机界面的支持工具列表中 DeepSeek Harness 显示为可用；其会话可正常创建、对话。
 - 就绪后的云电脑上，创建 DeepSeek Harness 会话**无需登录、无需手工配置模型**；会话的模型选择中呈现平台渠道模型清单（与 OpenCode 云电脑同一来源），默认选中平台渠道模型。
 - 模型选择中**不**出现 DeepSeek Harness 内建的官方渠道模型。
@@ -86,14 +88,13 @@ type: Permanent
 #### 功能点 1: harness 工具新增「DeepSeek Harness」（与 OpenCode / Kimi Code 同级）
 
 - **描述**: 新建云电脑的 harness 工具选择中新增「DeepSeek Harness」，与「OpenCode」「Kimi Code」同级并列、可多选（至少选一个）。既有规则保持不变：
-  - 恰好选择 **1 个** harness 工具 → 就绪后自动创建并进入一个使用该工具的会话；
-  - 选择 **≥2 个** → 不默认创建会话；
+  - 就绪后**不自动创建会话**（与选择几个工具无关）：新建云电脑不预置工作区，需先创建或绑定工作区（或经「Git 项目设置」初始化 Github 项目）后再创建会话；
   - 可创建会话的工具范围 = 创建时所选工具。
 - **用户价值**: DeepSeek Harness 用户一步得到自己工具的云电脑；多工具用户一台电脑全都要。
 - **验收标准**:
   - [ ] 新建云电脑的 harness 工具选项包含「DeepSeek Harness」「OpenCode」「Kimi Code」，可多选、至少选一个
-  - [ ] 仅选 DeepSeek Harness 创建 → 就绪后自动创建并进入一个 DeepSeek Harness 会话
-  - [ ] 同选 DeepSeek Harness 与其他工具 → 不默认创建会话；之后可分别创建各工具的会话
+  - [ ] 仅选 DeepSeek Harness 创建 → 就绪后不自动创建会话（沿用现状）；创建/绑定工作区后可创建并进入 DeepSeek Harness 会话
+  - [ ] 同选 DeepSeek Harness 与其他工具 → 同样不自动创建会话；之后可分别创建各工具的会话
   - [ ] 未选/少选校验、实例上限等既有规则行为不变
 
 #### 功能点 2: DeepSeek Harness 环境准备与模型注入（启动即就绪）
@@ -143,8 +144,9 @@ flowchart TD
     A[新建云电脑<br/>harness 工具选择「DeepSeek Harness」] --> B[创建即启动<br/>自动准备环境并注入平台渠道模型]
     B --> C{环境准备与注入成功?}
     C -->|否| C1[启动失败并展示原因<br/>可删除后重建]
-    C -->|是| D[云电脑就绪<br/>恰好选 1 个工具 → 自动创建会话]
-    D --> E[创建会话 / 自动探测可用模型<br/>无需登录、无需手工配置]
+    C -->|是| D[云电脑就绪<br/>不自动创建会话（沿用现状）]
+    D --> D1[创建或绑定工作区<br/>或经「Git 项目设置」初始化 Github 项目]
+    D1 --> E[创建会话 / 自动探测可用模型<br/>无需登录、无需手工配置]
     E --> F[模型选择呈现平台渠道模型清单<br/>默认选中平台渠道模型]
     F --> G[正常对话<br/>走平台渠道计费]
 ```
@@ -165,15 +167,15 @@ flowchart TD
     A[新建云电脑<br/>同选 DeepSeek Harness + 其他 harness 工具] --> B[启动：各工具环境分别准备<br/>DeepSeek Harness 注入平台渠道模型]
     B --> C{全部准备成功?}
     C -->|否| C1[启动失败并展示原因]
-    C -->|是| D[就绪（不默认创建会话）]
-    D --> E[按需创建各工具会话<br/>DeepSeek Harness 开箱即用<br/>Kimi Code 仍按既有登录引导]
+    C -->|是| D[就绪（不自动创建会话）]
+    D --> E[创建/绑定工作区后按需创建各工具会话<br/>DeepSeek Harness 开箱即用<br/>Kimi Code 仍按既有登录引导]
 ```
 
 ### 3.4 页面/界面描述
 
 | 页面 | 描述 | 关键元素 |
 |------|------|---------|
-| 新建云电脑对话框 | harness 工具选择扩展 | 名称输入、harness 工具多选（**OpenCode / Kimi Code / DeepSeek Harness**）、默认会话规则提示、实例上限提示 |
+| 新建云电脑对话框 | harness 工具选择扩展 | 名称输入、harness 工具多选（**OpenCode / Kimi Code / DeepSeek Harness**）、「就绪后不会自动创建会话，需先创建或绑定工作区」提示（沿用既有）、实例上限提示 |
 | 主机界面（云电脑） | 与普通主机一致 | 支持的工具（ACP）列表（含 **DeepSeek Harness**）、工作区、会话入口 |
 | 新建会话/会话界面 | 与既有会话一致 | 工具选择（DeepSeek Harness）、模型选择（平台渠道模型清单，按来源分组）、消息流 |
 | 只读会话（已销毁云电脑） | 历史回看 | 与既有只读会话一致 |
@@ -236,6 +238,7 @@ flowchart TD
 
 - [[20261020-container-harness-support.md]] — 容器启动任务支持 harness 类型（OpenCode 云电脑）
 - [[20261025-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）
+- [[20261023-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区：就绪后不自动创建会话）
 - [[20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发
 - [[20261021-acp-protocol-enhancement.md]] — ACP 协议增强（能力透明化与模型来源分组）
 - [[../../engineering/proposals/20261025-feat-deepseek-harness.md]] — 本期技术提案
