@@ -152,7 +152,7 @@ describe('T-GHIL 云电脑 Issues 联动配置', () => {
     expect(listed.cloudHostIssuesLinkages.some((row) => row.labelName === label)).toBe(true);
   });
 
-  it.skipIf(!hasConfigEnv)('T-GHIL3 未授权仓库 → repo not authorized', async () => {
+  it.skipIf(!hasConfigEnv)('T-GHIL2d 未授权仓库 → repo not authorized', async () => {
     await expect(
       gql(
         CREATE_LINKAGE,
