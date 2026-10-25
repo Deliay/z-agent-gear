@@ -7,6 +7,7 @@ import HarnessToolsSection from '@/components/settings/HarnessToolsSection';
 import StopCloudHostDialog from '@/components/cloud-host/StopCloudHostDialog';
 import DeleteCloudHostDialog from '@/components/cloud-host/DeleteCloudHostDialog';
 import CloudHostWorkloadsSection from '@/components/cloud-host/CloudHostWorkloadsSection';
+import CloudHostIssuesLinkageSection from '@/components/cloud-host/CloudHostIssuesLinkageSection';
 import GithubProjectSetupDialog from '@/components/cloud-host/GithubProjectSetupDialog';
 import McpDefaultSection from '@/components/settings/McpDefaultSection';
 import {
@@ -97,7 +98,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
   const cloudHost = controller?.type === 'cloud' ? controller.cloudHost : null;
   const isMobile = useIsMobile();
 
-  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'mcp' | 'workloads'>('workspace');
+  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'mcp' | 'workloads' | 'github'>('workspace');
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [githubSetupOpen, setGithubSetupOpen] = useState(false);
@@ -133,6 +134,10 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
     </div>
   ) : null;
 
+  const githubSection = cloudHost ? (
+    <CloudHostIssuesLinkageSection controllerId={controllerId} onConfigureWorkflow={onBack} />
+  ) : null;
+
   const panel = cloudHost ? (
     <CloudHostPanel
       cloudHost={cloudHost}
@@ -155,6 +160,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
       <DeleteCloudHostDialog
         open={deleteDialogOpen}
         cloudHost={cloudHost}
+        controllerId={controllerId}
         onClose={() => setDeleteDialogOpen(false)}
         onDeleted={() => {
           setDeleteDialogOpen(false);
@@ -190,6 +196,9 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           {cloudHost && (
             <button type="button" data-testid="config-tab-workloads" onClick={() => setActiveSection('workloads')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}>工作负载</button>
           )}
+          {cloudHost && (
+            <button type="button" data-testid="config-tab-github" onClick={() => setActiveSection('github')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}>Github</button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto" data-testid="mobile-section-scroll">
           {panel && <div className="px-4 pt-4">{panel}</div>}
@@ -204,6 +213,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
               <McpDefaultSection controller={controller} />
             )}
             {activeSection === 'workloads' && workloadsSection}
+            {activeSection === 'github' && githubSection}
           </div>
         </div>
         {dialogs}
@@ -260,6 +270,16 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
                 工作负载
               </button>
             )}
+            {cloudHost && (
+              <button
+                type="button"
+                data-testid="config-tab-github"
+                onClick={() => setActiveSection('github')}
+                className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}
+              >
+                Github
+              </button>
+            )}
           </div>
         </div>
       </nav>
@@ -271,6 +291,8 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           <HarnessToolsSection controllerId={controllerId} />
         ) : activeSection === 'mcp' ? (
           controller ? <McpDefaultSection controller={controller} /> : null
+        ) : activeSection === 'github' ? (
+          githubSection
         ) : (
           workloadsSection
         )}
