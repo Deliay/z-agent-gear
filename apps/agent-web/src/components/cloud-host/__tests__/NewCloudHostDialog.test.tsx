@@ -460,4 +460,27 @@ describe('NewCloudHostDialog Github 项目编排', () => {
     expect(screen.getByText('不自动创建会话')).toBeInTheDocument();
     expect(submitButton()).not.toBeDisabled();
   });
+
+  it('T-E-DS1 supportedHarnesses 含 DEEPSEEK_HARNESS 时展示 DeepSeek Harness 并可多选', () => {
+    render(
+      <NewCloudHostDialog
+        {...defaultProps}
+        capabilities={{ enabled: true, supportedHarnesses: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'] }}
+      />,
+    );
+
+    expect(screen.getByLabelText('OpenCode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Kimi Code')).toBeInTheDocument();
+    const deepseek = screen.getByLabelText('DeepSeek Harness');
+    expect(deepseek).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'DeepSeek 云电脑' } });
+    fireEvent.click(deepseek);
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    expect(screen.getByText('不自动创建会话')).toBeInTheDocument();
+    expect(submitButton()).not.toBeDisabled();
+
+    expect(screen.getByLabelText('DeepSeek Harness')).toBeChecked();
+    expect(screen.getByLabelText('OpenCode')).toBeChecked();
+  });
 });

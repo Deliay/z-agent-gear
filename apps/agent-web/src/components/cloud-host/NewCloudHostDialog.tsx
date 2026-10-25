@@ -36,6 +36,7 @@ interface NewCloudHostDialogProps {
 const HARNESS_LABELS: Record<string, string> = {
   OPENCODE: 'OpenCode',
   KIMI_CODE: 'Kimi Code',
+  DEEPSEEK_HARNESS: 'DeepSeek Harness',
 }
 
 const NAME_MAX_LENGTH = 64
