@@ -136,6 +136,7 @@ flowchart LR
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
 - [[draft/20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（后台配置的模型最长上下文随模型清单写入云电脑内 OpenCode 配置）
 - [[draft/20261025-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（与 OpenCode 同级的第二个 harness 工具、使用前登录确认与登录引导弹窗：按 stdio 登录链接授权后自动继续）
+- [[draft/20261025-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（云电脑设置启用 Issues 联动：选定含人类节点的已配置工作流与多个已绑定仓库并确保 workflow-request 标签；带标签 Issue 自动完成工作区准备、实例化工作流、回评工作流地址、首个人类节点自动完成）
 
 ### 实现中文档（`shipping/`）
 

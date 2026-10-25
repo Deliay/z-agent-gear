@@ -201,6 +201,7 @@ flowchart LR
 - [[proposals/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（harnessTypes 扩展 kimi_code 与预置工作负载 009、agent-gear 2.8.0 kimi 登录闸门 `kimi login` stdio 判定、harness:login 事件族与登录引导弹窗、按 harnessTypes 细分版本门禁）
 - [[proposals/20261025-feat-github-native-webhook.md]] — GitHub 原生 Webhook 入口（POST /api/events/github/webhook 直连 pull_request_review，HMAC-SHA256 验签后归一化复用 PR 联动判定链）
 - [[proposals/20261025-fix-cloud-container-active-deadline.md]] — 云电脑取消 Job 最长运行时间限制（移除 activeDeadlineSeconds，expiresAt 仅落库留存）
+- [[proposals/20261025-feat-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（CloudHostIssuesLinkage + IssueWorkflowTrigger 状态机、github-webhook 扩展 issues 事件、ensureIssueLabel/createIssueComment、复用 Git 项目设置编排与 completeHumanNode 完成首个人类节点）
 
 ### 实现计划（`plan/`）
 
