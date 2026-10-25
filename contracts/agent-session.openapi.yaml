@@ -91,6 +91,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /user/stream:
+    get:
+      operationId: streamUserEvents
+      summary: 用户级 SSE 事件流
+      description: |
+        建立用户级 Server-Sent Events 连接，实时接收与具体 Session 无关的用户事件
+        （如 Kimi Code harness 登录引导）。前端在 `MainLayout` 全局订阅，用于即时呈现登录弹窗；
+        `HOME_OVERVIEW` 待办轮询保留为断线兜底。
+
+        连接建立后：
+        1. 立即推送 `ready` 事件
+        2. 每 30s 发送心跳保活（`heartbeat` 事件）
+        3. 服务端事件到达时推送对应事件
+      tags:
+        - User SSE
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: 前台用户 JWT（EventSource 无法自定义请求头，故用查询参数）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                ready:
+                  summary: 连接就绪
+                  value: |
+                    data: {"type":"ready"}
+                harness_login_required:
+                  summary: Kimi Code 需要登录
+                  value: |
+                    data: {"type":"harness_login_required","data":{"requestId":"hl_1","controllerId":"ctrl_1","serverType":"kimi_code","trigger":"probe-options","url":"https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG","userCode":"4CQ4-0XIG","expiresAt":"2026-10-25T12:00:00.000Z"}}
+                harness_login_resolved:
+                  summary: 登录流程结束
+                  value: |
+                    data: {"type":"harness_login_resolved","data":{"requestId":"hl_1","result":"succeeded","account":"managed:kimi-code"}}
+                heartbeat:
+                  summary: 心跳（每30s）
+                  value: |
+                    data: {"type":"heartbeat"}
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     AcpMessage:

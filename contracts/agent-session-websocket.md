@@ -897,6 +897,92 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 3. `reason` 映射：`unsupported_mode → failed`、`timeout → expired`、`cancelled → cancelled`；契约外取值收敛为 `failed` 并告警。
 4. `requestId` 缺省且 `sessionId` 存在时，按 `sessionId + userId + resolution:null` 兜底收敛。
 
+### 2.35 `harness:login:required`（Controller → Server）
+
+Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登录态；未登录时拉起 `kimi login` 设备码流程，
+把 stdio 原文中的登录链接与验证码上抛。服务端据此创建 `harness_login_request` 待办并经用户级 SSE 推送引导弹窗。
+
+**Payload（Controller 上行，字段不可信，由 controller-api 校验）：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | Controller 生成的请求 ID（single-flight 归并键，≤200） |
+| `serverType` | `'kimi_code'` | 是 | 本期仅 Kimi Code |
+| `trigger` | `'probe-options' \| 'acp:start' \| 'acp:resume'` | 是 | 触发登录检查的使用动作 |
+| `url` | `string` | 是 | `kimi login` stdio 原文链接（`http(s)`，≤2048） |
+| `userCode` | `string` | 是 | `kimi login` stdio 原文验证码（≤64） |
+| `expiresInSeconds` | `number` | 否 | stdio 解析的有效期秒数（60~3600，缺省 1800） |
+| `account` | `string` | 否 | provider 名（≤200，仅日志；前端不展示） |
+
+**服务端行为：**
+
+1. controller-api 用 `socket.data.controllerId` / `socket.data.userId` 注入归属（不信任上行值），
+   校验通过后发布 Redis `harness:login:required`
+   `{requestId, controllerId, userId, serverType, trigger, url, userCode, expiresInSeconds, receivedAt}`。
+2. 非法字段直接丢弃并告警，不建待办、不冻结既有超时。
+3. 同一 `controllerId` 已有进行中的 `requestId` 时，新 `required` 仅告警并忽略（single-flight 防御）。
+4. agent-api 创建 `harness_login_request` 待办（priority `immediate`，`requestId + userId` 幂等），
+   并推送用户级 SSE `harness_login_required`。
+
+**语义：**
+
+- 登录进行中时，原有探测（30s）与 `acp:start` / `acp:resume`（30s）超时不结算，重新挂起；
+  登录结束（succeeded/failed）后由真实结果事件结算，绝对上限为登录等待上限 + 60s。
+- 登录只发生在使用前：初始化脚本不做登录，凭证只在容器 `~/.kimi-code/`，平台不读写。
+
+### 2.36 `harness:login:succeeded`（Controller → Server）
+
+`kimi login` 退出码 0（含已登录快速路径）。Controller 同时写入进程内登录缓存（默认 5 分钟），
+挂起的使用动作自动继续。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应 `harness:login:required` 的请求 ID |
+| `account` | `string` | 否 | provider 名（≤200，不展示） |
+
+**服务端行为：**
+
+1. controller-api 发布 Redis `harness:login:resolved {requestId, controllerId, userId, result:'succeeded', account}`，
+   清除进行中注册表，并失效 `acp:options:<controllerId>:kimi_code` 缓存（探测失败写入的 60s 空结果缓存）。
+2. agent-api 收敛待办 `resolution=accepted`、`isRead=true`，并推送用户级 SSE `harness_login_resolved`。
+3. 原使用动作（探测/拉起/恢复）由 Controller 自动继续，用户无需重试。
+
+### 2.37 `harness:login:failed`（Controller → Server）
+
+登录流程未成功（用户取消 / 设备码过期 / 其它错误）。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应 `harness:login:required` 的请求 ID |
+| `reason` | `'cancelled' \| 'timeout' \| 'error'` | 是 | 结束原因（契约外取值丢弃并告警） |
+| `error` | `string` | 否 | 脱敏摘要（≤200，不含 `kimi login` 原始输出与凭证） |
+
+**服务端行为：**
+
+1. controller-api 发布 Redis `harness:login:resolved`，`result` 按 `reason` 映射：
+   `cancelled → cancelled`、`timeout → expired`、`error → failed`；清除注册表。
+2. agent-api 收敛待办（`cancelled → cancelled`、`expired → expired`、其它 `failed`），`isRead=true`。
+3. 原使用动作失败，错误文案统一 `Kimi Code 未登录`（`acp:start:result.error` / 探测失败 error）。
+
+### 2.38 `harness:login:cancel`（Server → Controller）
+
+用户关闭引导弹窗或点击「取消」时，服务端要求 Controller 终止进行中的 `kimi login`。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 要取消的登录请求 ID |
+
+**客户端行为：**
+
+1. `AcpAuthGate.cancel(requestId)`：`requestId` 不匹配时忽略；匹配时终止 `kimi login` 子进程并标记 `cancelled`。
+2. 随后上行 `harness:login:failed {requestId, reason:'cancelled'}`，原使用动作按失败结算。
+
 ---
 
 ## 3. 文件系统与 Git 事件协议
