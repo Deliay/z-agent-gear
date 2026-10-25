@@ -202,6 +202,7 @@ flowchart LR
 - [[proposals/20261025-feat-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（harnessTypes 扩展 deepseek_harness 与预置工作负载 010 双包固定版本安装、agent-gear 2.9.0 harness prepare 按 ZAG_HARNESS_TYPES 分流、平台渠道模型注入 profiles/acp/cordis.patch.yml providers.zag + .credentials.yaml refs 与默认路由覆写含实测验证、按 harnessTypes 细分版本门禁）
 - [[proposals/20261025-feat-github-native-webhook.md]] — GitHub 原生 Webhook 入口（POST /api/events/github/webhook 直连 pull_request_review，HMAC-SHA256 验签后归一化复用 PR 联动判定链）
 - [[proposals/20261025-fix-cloud-container-active-deadline.md]] — 云电脑取消 Job 最长运行时间限制（移除 activeDeadlineSeconds，expiresAt 仅落库留存）
+- [[proposals/20261025-feat-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（entrypoint 无限保活循环 + 服务端终止退出码 42；worker 用户降权运行 agent-gear、免密 sudo、预置脚本 sudo 化与 /home/worker 路径迁移、harness 版本门禁提升）
 
 ### 实现计划（`plan/`）
 

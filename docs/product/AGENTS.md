@@ -137,6 +137,7 @@ flowchart LR
 - [[draft/20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（后台配置的模型最长上下文随模型清单写入云电脑内 OpenCode 配置）
 - [[draft/20261025-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（与 OpenCode 同级的第二个 harness 工具、使用前登录确认与登录引导弹窗：按 stdio 登录链接授权后自动继续）
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
+- [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
 
 ### 实现中文档（`shipping/`）
 
