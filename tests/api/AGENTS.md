@@ -75,7 +75,7 @@ npm test
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
 | `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
-| `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC-SHA256 验签密钥（仅 HMAC 用例使用） | - |
+| `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* 整套依赖）HMAC-SHA256 验签密钥 | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
@@ -366,6 +366,20 @@ npm test
 | T-PR18 标识归一 | URL / `owner/repo#n` / `owner/repo/pull/n` 归一为同一关联 |
 
 > MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
+
+### GitHub 原生 Webhook 入口 (`agent-api/github-webhook.test.ts` T-GHWH*)
+
+> 需要 agent-api + controller-api 就绪且配置 `GITHUB_WEBHOOK_SECRET`（缺失时整套跳过；CI 下缺参且未 `SKIP_GITHUB_WEBHOOK=1` 即红）。端点 `POST /api/events/github/webhook` 仅接受 `X-Hub-Signature-256` 验签（平台 token 无效），仅处理 `pull_request_review`（action=submitted），归一化后复用 PR 联动判定链；eventId 取 `gh:pull_request_review:{review.id}`。
+
+| 测试 | 描述 |
+|------|------|
+| T-GHWH1 鉴权 | 无签名/错误签名 401；`X-Event-Token` 无效；正确 HMAC 200 |
+| T-GHWH2 忽略 | ping / 其他事件类型 / 非 submitted action → 200 `UNSUPPORTED_EVENT` |
+| T-GHWH3 载荷非法 | 缺 review.state / 非法 full_name / 非 JSON → 400 带 detail |
+| T-GHWH4 未登记 PR | 返回 `handled=false` + `reason=NO_HANDLER` |
+| T-GHWH5 approved 驱动 | fake controller 关联 PR 后 approved → 人类节点 DONE，下游 AI 提示词含 A.2 文案 |
+| T-GHWH6 rejected 驱动 | changes_requested → 人类节点 REJECT、上游 REWORK，返工消息含 A.3 文案 |
+| T-GHWH7 重复投递 | 同一 review.id 第二次返回 `DUPLICATE_EVENT`，节点状态只变化一次 |
 
 ### ACP Permission Reminder API (`agent-api/permission.test.ts`)
 
