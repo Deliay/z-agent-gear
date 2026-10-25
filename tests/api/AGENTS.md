@@ -74,7 +74,8 @@ npm test
 | `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token（云电脑 ready/terminal、cloud-host-callback 等内部套件；缺失时相关用例跳过） | - |
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
 | `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
-| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
+| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* / T-CR* 用例；缺失时整套跳过） | - |
+| `GITHUB_API_BASE` | Check Runs 出站用例（T-CR*）的 GitHub API 地址。需在启动 Aspire 前指向本地 mock（示例：`GITHUB_API_BASE=http://127.0.0.1:19418 aspire start`，端口即 `MOCK_GITHUB_PORT`）；缺失时整套跳过 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* 整套依赖）HMAC-SHA256 验签密钥 | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
 
@@ -91,6 +92,24 @@ npm test
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
 
 ## 测试清单
+
+### 工作流 Check Runs 同步 (`workflow-check-runs.test.ts`)
+
+出站行为经 `src/mock-github-server.ts`（进程内 mock，端口 `MOCK_GITHUB_PORT`，默认 19418）验证；agent-api 以 `GITHUB_API_BASE` 指向该端口。
+
+| 测试 | 描述 |
+|------|------|
+| T-CR02 | 状态变化同 sha → PATCH 同一 check-run（completed/success），无新建 |
+| T-CR03 | commit 前进 → 旧 check-run `stale` + 新 sha 新建，登记记录新 commit |
+| T-CR04 | 重复绑定同 PR → 零重复 create / PATCH |
+| T-CR06 | plan 消息满足四条件刷新 `output.text`；非工作流会话零写入 |
+| T-CR08 | mock 注入 403 → `lastSyncError=检查项写入权限不足`，节点仍正常完成 |
+| T-CR09 | PR 已关闭 → 停止同步，`lastSyncError` 为空 |
+| T-CR10 | 末节点完成触发注销后仍写入 DONE check-run（capture-then-execute） |
+| T-CR11 | GraphQL `pullRequestLinks` 透出 checkRunUrl / lastSyncedCommitSha / ISO lastSyncAt |
+| T-CR12 | 存量登记（同步字段为 null）首次状态变化自然补齐，无迁移 |
+
+> T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
 ### Auth API (`auth.test.ts`)
 

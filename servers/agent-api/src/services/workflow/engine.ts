@@ -90,6 +90,14 @@ export interface TransitionPayload {
   } | null;
 }
 
+/** 一次 transition（含级联）后状态发生变化的最小变更项 */
+export interface NodeTransitionChange {
+  /** 指向 `instance.nodes` 内同一子文档引用（读到最终状态） */
+  node: WorkflowNodeDoc;
+  /** 使该节点落到最终状态的转移事件（级联节点用其级联事件） */
+  event: WorkflowEvent;
+}
+
 /**
  * 引擎副作用 hook（由 Orchestrator 注册，引擎不直接 import Orchestrator，避免循环依赖）。
  * - onNodeStart：AI 节点 READY→RUNNING 前拉起会话
@@ -97,6 +105,7 @@ export interface TransitionPayload {
  * - onNodeResume：REJECT→RUNNING（通知其重新获取产物）
  * - onNodeDone：节点 DONE 后结束本会话（在下游 start 之后调用）
  * - onNodeRestart：重启节点（可携带新 agentConfig 更新节点快照）
+ * - onNodesTransitioned：一次 transition（含级联）最终 save 后调用一次（状态同步投影用）
  */
 export interface EngineHooks {
   onNodeStart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
@@ -104,6 +113,11 @@ export interface EngineHooks {
   onNodeResume?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeDone?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void>;
   onNodeRestart?(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc, payload: TransitionPayload): Promise<void>;
+  /** 实现方不得阻塞、不得抛出；GitHub I/O 不得进入转移锁 */
+  onNodesTransitioned?(
+    instance: WorkflowInstanceDoc,
+    changes: NodeTransitionChange[],
+  ): Promise<void> | void;
   onWorkflowFinished?(instance: WorkflowInstanceDoc): Promise<void>;
 }
 
@@ -192,7 +206,10 @@ class WorkflowEngine {
     if (!node) {
       throw new Error(`工作流实例中不存在节点：${nodeId}`);
     }
-    await this.apply(instance, node, event, payload);
+    // 变更集合以「apply 前快照 vs 最终落库状态」的 diff 为准（含级联）
+    const statusBefore = new Map(instance.nodes.map((n) => [n.nodeId, n.status]));
+    const eventByNode = new Map<string, WorkflowEvent>();
+    await this.apply(instance, node, event, payload, eventByNode);
     this.refreshCurrentNodeNames(instance);
     // 工作流完成判定：外层 transition 一次性置位，避免递归级联重复触发
     const finishedNow =
@@ -203,6 +220,23 @@ class WorkflowEngine {
       instance.finishedAt = new Date();
     }
     await instance.save();
+
+    const changes: NodeTransitionChange[] = instance.nodes
+      .filter((n) => statusBefore.get(n.nodeId) !== n.status)
+      .map((n) => ({ node: n, event: eventByNode.get(n.nodeId) ?? event }));
+    if (changes.length > 0) {
+      // 同步调用以尽早捕获登记快照（首个 await 之前的同步段），随后 fire-and-forget：
+      // 不 await、不进 transitionMutex，失败只告警，绝不回流工作流流转。
+      try {
+        const pending = this.hooks.onNodesTransitioned?.(instance, changes);
+        void Promise.resolve(pending).catch((err: unknown) => {
+          console.warn('[workflow] onNodesTransitioned failed:', (err as Error).message);
+        });
+      } catch (err) {
+        console.warn('[workflow] onNodesTransitioned failed:', (err as Error).message);
+      }
+    }
+
     if (finishedNow) {
       await this.hooks.onWorkflowFinished?.(instance);
     }
@@ -214,6 +248,7 @@ class WorkflowEngine {
     node: WorkflowNodeDoc,
     event: WorkflowEvent,
     payload: TransitionPayload,
+    eventByNode?: Map<string, WorkflowEvent>,
   ): Promise<void> {
     const rule = TRANSITIONS[event];
     if (!rule.from.includes(node.status)) {
@@ -221,11 +256,12 @@ class WorkflowEngine {
         `节点「${node.name}」当前状态为 ${node.status}，不允许执行「${EVENT_LABEL[event]}」（${event}）`,
       );
     }
+    eventByNode?.set(node.nodeId, event);
 
     switch (event) {
       case 'start': {
         node.status = 'READY';
-        await this.maybeActivate(instance, node);
+        await this.maybeActivate(instance, node, eventByNode);
         // FLAG 透传已在 maybeActivate 内按时间序记录，避免覆盖下游
         if (node.type !== 'FLAG') this.markLastNode(instance, node);
         break;
@@ -239,9 +275,9 @@ class WorkflowEngine {
         // - 其余 → start（新建会话/激活）
         for (const downstream of this.downstreamsOf(instance, node)) {
           if (downstream.status === 'REJECT') {
-            await this.apply(instance, downstream, 'resume', {});
+            await this.apply(instance, downstream, 'resume', {}, eventByNode);
           } else {
-            await this.apply(instance, downstream, 'start', {});
+            await this.apply(instance, downstream, 'start', {}, eventByNode);
           }
         }
         // 先落库再结束本会话：onNodeDone 关闭会话会触发兜底检查（读取 DB 节点状态），
@@ -265,7 +301,13 @@ class WorkflowEngine {
         for (const upstream of upstreams) {
           if (targets && !targets.has(upstream.nodeId)) continue;
           if (TRANSITIONS.rework.from.includes(upstream.status)) {
-            await this.apply(instance, upstream, 'rework', { reason: payload.reason, fromNodeId: node.nodeId });
+            await this.apply(
+              instance,
+              upstream,
+              'rework',
+              { reason: payload.reason, fromNodeId: node.nodeId },
+              eventByNode,
+            );
           }
         }
         break;
@@ -289,7 +331,7 @@ class WorkflowEngine {
         // 通知下游 REJECT 节点复工
         for (const downstream of this.downstreamsOf(instance, node)) {
           if (downstream.status === 'REJECT') {
-            await this.apply(instance, downstream, 'resume', {});
+            await this.apply(instance, downstream, 'resume', {}, eventByNode);
           }
         }
         this.refreshCurrentNodeNames(instance);
@@ -346,7 +388,11 @@ class WorkflowEngine {
   }
 
   /** READY 节点的激活评估：上游全部 DONE 后按类型推进 */
-  private async maybeActivate(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
+  private async maybeActivate(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    eventByNode?: Map<string, WorkflowEvent>,
+  ): Promise<void> {
     if (node.status !== 'READY') return;
     if (!this.upstreamsAllDone(instance, node)) return;
 
@@ -355,7 +401,7 @@ class WorkflowEngine {
       node.status = 'DONE';
       this.markLastNode(instance, node);
       for (const downstream of this.downstreamsOf(instance, node)) {
-        await this.apply(instance, downstream, 'start', {});
+        await this.apply(instance, downstream, 'start', {}, eventByNode);
       }
       return;
     }

@@ -136,6 +136,73 @@ describe('prHandlerRegistry', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it('findByNode 命中/未命中', async () => {
+    vi.mocked(WorkflowPrHandler.findOne).mockReturnValue(lean(row()) as never);
+    await expect(prHandlerRegistry.findByNode('inst-1', 'n2')).resolves.toMatchObject({ _id: 'h1' });
+    expect(WorkflowPrHandler.findOne).toHaveBeenCalledWith({
+      workflowInstanceId: 'inst-1',
+      nodeId: 'n2',
+    });
+
+    vi.mocked(WorkflowPrHandler.findOne).mockReturnValue(lean(null) as never);
+    await expect(prHandlerRegistry.findByNode('inst-1', 'n3')).resolves.toBeNull();
+  });
+
+  it('markCheckRunSynced 逐字段回写并清空失败文案', async () => {
+    vi.mocked(WorkflowPrHandler.updateOne).mockResolvedValue({} as never);
+    const at = new Date('2026-10-25T00:00:00.000Z');
+
+    await prHandlerRegistry.markCheckRunSynced('h1', {
+      commitSha: 'abc123',
+      checkRunId: 1001,
+      checkRunUrl: 'https://github.com/o/r/runs/1001',
+      nodeStatus: 'RUNNING',
+      at,
+    });
+
+    expect(WorkflowPrHandler.updateOne).toHaveBeenCalledWith(
+      { _id: 'h1' },
+      {
+        $set: {
+          lastWrittenCommitSha: 'abc123',
+          lastCheckRunId: 1001,
+          lastCheckRunUrl: 'https://github.com/o/r/runs/1001',
+          lastSyncedNodeStatus: 'RUNNING',
+          lastSyncAt: at,
+          lastSyncError: null,
+        },
+      },
+    );
+  });
+
+  it('markTodoSynced 回写 digest', async () => {
+    vi.mocked(WorkflowPrHandler.updateOne).mockResolvedValue({} as never);
+    const at = new Date('2026-10-25T00:00:00.000Z');
+
+    await prHandlerRegistry.markTodoSynced('h1', { digest: 'sha1', at });
+
+    expect(WorkflowPrHandler.updateOne).toHaveBeenCalledWith(
+      { _id: 'h1' },
+      { $set: { lastTodoDigest: 'sha1', lastSyncAt: at, lastSyncError: null } },
+    );
+  });
+
+  it('markSyncError 截断 200 字符，null 清空', async () => {
+    vi.mocked(WorkflowPrHandler.updateOne).mockResolvedValue({} as never);
+
+    await prHandlerRegistry.markSyncError('h1', 'x'.repeat(300));
+    expect(WorkflowPrHandler.updateOne).toHaveBeenLastCalledWith(
+      { _id: 'h1' },
+      { $set: { lastSyncError: 'x'.repeat(200) } },
+    );
+
+    await prHandlerRegistry.markSyncError('h1', null);
+    expect(WorkflowPrHandler.updateOne).toHaveBeenLastCalledWith(
+      { _id: 'h1' },
+      { $set: { lastSyncError: null } },
+    );
+  });
+
   it('registerPrHandlerLifecycleHooks 在完成时注销', async () => {
     vi.mocked(WorkflowPrHandler.deleteMany).mockResolvedValue({ deletedCount: 1 } as never);
     prHandlerRegistry.registerPrHandlerLifecycleHooks();

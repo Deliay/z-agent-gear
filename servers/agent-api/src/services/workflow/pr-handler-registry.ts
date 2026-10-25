@@ -194,6 +194,56 @@ class PrHandlerRegistry {
     return rows;
   }
 
+  /** 按实例+节点查登记（Check Runs 同步入口；未绑定返回 null） */
+  async findByNode(workflowInstanceId: string, nodeId: string): Promise<HandlerDoc | null> {
+    return (await WorkflowPrHandler.findOne({
+      workflowInstanceId,
+      nodeId,
+    }).lean()) as unknown as HandlerDoc | null;
+  }
+
+  /** 记录一次成功的 check-run 写入（成功路径同时清空失败文案） */
+  async markCheckRunSynced(
+    id: string,
+    input: {
+      commitSha: string;
+      checkRunId: number;
+      checkRunUrl: string | null;
+      nodeStatus: string;
+      at: Date;
+    },
+  ): Promise<void> {
+    await WorkflowPrHandler.updateOne(
+      { _id: id },
+      {
+        $set: {
+          lastWrittenCommitSha: input.commitSha,
+          lastCheckRunId: input.checkRunId,
+          lastCheckRunUrl: input.checkRunUrl,
+          lastSyncedNodeStatus: input.nodeStatus,
+          lastSyncAt: input.at,
+          lastSyncError: null,
+        },
+      },
+    );
+  }
+
+  /** 记录 todo 子项写入的渲染 digest（内容未变时跳过） */
+  async markTodoSynced(id: string, input: { digest: string; at: Date }): Promise<void> {
+    await WorkflowPrHandler.updateOne(
+      { _id: id },
+      { $set: { lastTodoDigest: input.digest, lastSyncAt: input.at, lastSyncError: null } },
+    );
+  }
+
+  /** 记录同步失败短文案（`null` = 清空，如 PR 已关闭停止同步）；截断 200 字符 */
+  async markSyncError(id: string, message: string | null): Promise<void> {
+    await WorkflowPrHandler.updateOne(
+      { _id: id },
+      { $set: { lastSyncError: message === null ? null : message.slice(0, 200) } },
+    );
+  }
+
   /** 按实例列举（GraphQL pullRequestLinks 数据源） */
   async listByInstance(instanceId: string): Promise<HandlerDoc[]> {
     return (await WorkflowPrHandler.find({ workflowInstanceId: instanceId })

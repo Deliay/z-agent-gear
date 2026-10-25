@@ -13,7 +13,17 @@ describe('工作流 PR 联动 GraphQL 文档', () => {
     const document = print(GET_WORKFLOW_INSTANCE)
     expect(document).toContain('additionalPrompts')
     expect(document).toContain('pullRequestLinks')
-    for (const field of ['pullRequestId', 'prUrl', 'nodeId', 'nodeName', 'registeredAt']) {
+    for (const field of [
+      'pullRequestId',
+      'prUrl',
+      'nodeId',
+      'nodeName',
+      'registeredAt',
+      'checkRunUrl',
+      'lastSyncedCommitSha',
+      'lastSyncAt',
+      'lastSyncError',
+    ]) {
       expect(document).toContain(field)
     }
     expect(document).toContain('linkUpstreamPullRequest')

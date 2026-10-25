@@ -25,6 +25,21 @@ const workflowPrHandlerSchema = new mongoose.Schema(
     // 最近已处理事件 ID（幂等位）
     lastEventId: { type: String, default: null },
     lastEventAt: { type: Date, default: null },
+    // ---- Check Runs 同步状态（只读投影；存量行为 null 等价「从未同步」） ----
+    // 上次写入 check-run 的 commit（需求口径「记录上次写入的 commit」）
+    lastWrittenCommitSha: { type: String, default: null },
+    // 当前有效 check-run id（PATCH 目标；非空 = 当前提交曾写入检查项）
+    lastCheckRunId: { type: Number, default: null },
+    // 最近写入的 check-run 页面地址
+    lastCheckRunUrl: { type: String, default: null },
+    // 最近已同步的节点状态（幂等比对）
+    lastSyncedNodeStatus: { type: String, default: null },
+    // 最近同步时间
+    lastSyncAt: { type: Date, default: null },
+    // 最近失败短文案（成功时清空；截断 200 字符）
+    lastSyncError: { type: String, default: null },
+    // 最近一次 todo 渲染内容的 sha1（内容未变跳过写入）
+    lastTodoDigest: { type: String, default: null },
   },
   { timestamps: true },
 );
