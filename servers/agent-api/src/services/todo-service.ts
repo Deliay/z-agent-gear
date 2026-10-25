@@ -42,6 +42,21 @@ const SUMMARY_MAX_LENGTH = 200;
 
 export type ElicitationResolution = 'accepted' | 'declined' | 'cancelled' | 'expired' | 'failed';
 
+/** harness 登录引导：required 事件（controller-api 经 Redis 透传，userId 已注入） */
+export interface HarnessLoginRequestData {
+  requestId: string;
+  controllerId: string;
+  userId: string;
+  sessionId?: string;
+  serverType: string;
+  trigger: string;
+  url: string;
+  userCode: string;
+  expiresInSeconds?: number;
+}
+
+const HARNESS_LOGIN_DEFAULT_EXPIRES_SECONDS = 1800;
+
 /** 终态写入的归属目标：userId 必填（租户隔离），requestId 缺失时用 sessionId 会话级兜底 */
 export interface ElicitationResolvedTarget {
   userId: string;
@@ -140,6 +155,52 @@ export class TodoService {
     return todo;
   }
 
+  /**
+   * harness 登录引导待办（Kimi Code 需要登录）。
+   *
+   * 幂等：同一 `requestId + userId` 重复 required 不重复建（`$setOnInsert` upsert），
+   * 返回值 `created=false` 时调用方不得重复推送 SSE。优先级 immediate（铃铛即时可见）。
+   */
+  async createHarnessLoginTodo(
+    data: HarnessLoginRequestData,
+  ): Promise<{ todo: InstanceType<typeof TodoItem>; created: boolean }> {
+    const expiresInSeconds = Number.isFinite(data.expiresInSeconds) && (data.expiresInSeconds ?? 0) > 0
+      ? (data.expiresInSeconds as number)
+      : HARNESS_LOGIN_DEFAULT_EXPIRES_SECONDS;
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+
+    const result = await TodoItem.findOneAndUpdate(
+      { userId: data.userId, 'harnessLoginData.requestId': data.requestId },
+      {
+        $setOnInsert: {
+          userId: data.userId,
+          type: 'harness_login_request',
+          priority: 'immediate',
+          title: 'Kimi Code 需要登录',
+          description: 'Kimi Code 尚未登录，完成登录后原操作会自动继续。',
+          isRead: false,
+          harnessLoginData: {
+            requestId: data.requestId,
+            controllerId: data.controllerId,
+            sessionId: data.sessionId,
+            serverType: data.serverType,
+            trigger: data.trigger,
+            url: data.url,
+            userCode: data.userCode,
+            expiresAt,
+          },
+          expiresAt,
+        },
+      },
+      { upsert: true, new: true, includeResultMetadata: true },
+    );
+
+    return {
+      todo: result.value as InstanceType<typeof TodoItem>,
+      created: !result.lastErrorObject?.updatedExisting,
+    };
+  }
+
   async getTodoList(userId: string): Promise<InstanceType<typeof TodoItem>[]> {
     return TodoItem.find({ userId })
       .sort({ priority: 1, createdAt: -1 })
@@ -173,12 +234,17 @@ export class TodoService {
   async isRespondableTodo(
     userId: string,
     requestId: string,
-    type: 'permission_request' | 'elicitation_request',
+    type: 'permission_request' | 'elicitation_request' | 'harness_login_request',
   ): Promise<boolean> {
     if (!userId || !requestId) return false;
-    const filter: Record<string, unknown> = type === 'elicitation_request'
-      ? { userId, 'elicitationData.requestId': requestId, resolution: null }
-      : { userId, 'data.requestId': requestId };
+    let filter: Record<string, unknown>;
+    if (type === 'elicitation_request') {
+      filter = { userId, 'elicitationData.requestId': requestId, resolution: null };
+    } else if (type === 'harness_login_request') {
+      filter = { userId, 'harnessLoginData.requestId': requestId, resolution: null };
+    } else {
+      filter = { userId, 'data.requestId': requestId };
+    }
     return (await TodoItem.countDocuments(filter)) > 0;
   }
 
@@ -188,7 +254,11 @@ export class TodoService {
     const result = await TodoItem.updateOne(
       {
         userId,
-        $or: [{ 'data.requestId': requestId }, { 'elicitationData.requestId': requestId }],
+        $or: [
+          { 'data.requestId': requestId },
+          { 'elicitationData.requestId': requestId },
+          { 'harnessLoginData.requestId': requestId },
+        ],
       },
       { $set: { isRead: true } },
     );
@@ -238,6 +308,25 @@ export class TodoService {
     const result = requestId
       ? await TodoItem.updateOne(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } })
       : await TodoItem.updateMany(filter, { $set: { resolution, resolvedAt: new Date(), isRead: true } });
+    return result.modifiedCount ?? 0;
+  }
+
+  /**
+   * 写入 harness 登录引导终态（登录成功 / 取消 / 超时 / 检查失败）。
+   *
+   * 与问询终态同口径：filter 必须同时含 `userId`（租户隔离）与 `resolution: null`（单调），
+   * 迟到的 resolved 不会覆盖已终结状态；收敛时置 `isRead=true`（铃铛计数归零）。
+   */
+  async markHarnessLoginResolved(
+    requestId: string,
+    resolution: ElicitationResolution,
+    target: { userId: string },
+  ): Promise<number> {
+    if (!target.userId || !requestId) return 0;
+    const result = await TodoItem.updateOne(
+      { userId: target.userId, 'harnessLoginData.requestId': requestId, resolution: null },
+      { $set: { resolution, resolvedAt: new Date(), isRead: true } },
+    );
     return result.modifiedCount ?? 0;
   }
 

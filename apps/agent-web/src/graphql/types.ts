@@ -12,7 +12,7 @@ export interface ControllerKeyData {
   updatedAt: string
 }
 
-export type HarnessType = 'OPENCODE'
+export type HarnessType = 'OPENCODE' | 'KIMI_CODE'
 
 /** 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness */
 export type CloudWorkloadKind = 'STANDARD' | 'HARNESS'
@@ -639,6 +639,27 @@ export interface ElicitationRequestDataFields {
   url?: string | null
 }
 
+/** Kimi Code（Harness）登录引导数据（contracts/agent-session.graphql） */
+export interface HarnessLoginRequestDataFields {
+  requestId: string
+  controllerId: string
+  serverType: string
+  /** 触发登录检查的使用动作：probe-options / acp:start / acp:resume */
+  trigger: string
+  /** `kimi login` stdio 原文登录链接（http(s)） */
+  url: string
+  /** `kimi login` stdio 原文设备码 */
+  userCode: string
+  expiresAt: string
+}
+
+/** 登录引导弹窗动作（本期仅取消） */
+export type HarnessLoginAction = 'cancel'
+
+export interface RespondHarnessLoginMutation {
+  respondHarnessLogin: boolean
+}
+
 export interface TodoItemData {
   id: string
   type: string
@@ -648,6 +669,8 @@ export interface TodoItemData {
   isRead: boolean
   data: PermissionRequestDataFields | null
   elicitationData?: ElicitationRequestDataFields | null
+  /** type=harness_login_request 时存在 */
+  harnessLoginData?: HarnessLoginRequestDataFields | null
   resolution?: ElicitationResolution | null
   resolvedAt?: string | null
   expiresAt?: string | null

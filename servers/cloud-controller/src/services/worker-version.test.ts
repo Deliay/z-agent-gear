@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
+  MIN_KIMI_HARNESS_WORKER_VERSION,
   MIN_WORKER_VERSION,
   SUPPORTED_MAJOR,
+  harnessMinVersion,
   isSupportedHarnessWorkerVersion,
   isSupportedWorkerVersion,
   maxWorkerVersion,
@@ -15,6 +18,22 @@ describe('worker-version constants', () => {
     expect(MIN_WORKER_VERSION).toBe('2.2.0');
     expect(MIN_HARNESS_WORKER_VERSION).toBe('2.6.0');
     expect(SUPPORTED_MAJOR).toBe(2);
+  });
+
+  it('T-V0b: kimi_code 按类型门禁为 2.8.0（全局 harness 门禁不上调）', () => {
+    expect(MIN_KIMI_HARNESS_WORKER_VERSION).toBe('2.8.0');
+    expect(MIN_HARNESS_VERSION_BY_TYPE).toEqual({ kimi_code: '2.8.0' });
+  });
+});
+
+describe('harnessMinVersion', () => {
+  it('T-V6: 仅 opencode 维持 2.6.0，含 kimi_code 取最大 2.8.0，未知类型回退 2.6.0', () => {
+    expect(harnessMinVersion(['opencode'])).toBe('2.6.0');
+    expect(harnessMinVersion(['opencode', 'kimi_code'])).toBe('2.8.0');
+    expect(harnessMinVersion(['kimi_code'])).toBe('2.8.0');
+    expect(harnessMinVersion(['kimi_code', 'opencode'])).toBe('2.8.0');
+    expect(harnessMinVersion(['bogus'])).toBe('2.6.0');
+    expect(harnessMinVersion([])).toBe('2.6.0');
   });
 });
 

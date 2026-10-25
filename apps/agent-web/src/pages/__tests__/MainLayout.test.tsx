@@ -7,6 +7,33 @@ const mockUseQuery = vi.fn();
 const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
 
+const { sseOptions, mockToast, mockOpenHarnessLogin } = vi.hoisted(() => ({
+  sseOptions: {} as {
+    enabled?: boolean;
+    onHarnessLoginRequired?: (data: unknown) => void;
+    onHarnessLoginResolved?: (data: unknown) => void;
+  },
+  mockToast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
+  mockOpenHarnessLogin: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({ toast: mockToast }));
+
+vi.mock('../../hooks/useUserEventStream', () => ({
+  useUserEventStream: (options: typeof sseOptions) => {
+    Object.assign(sseOptions, options);
+  },
+}));
+
+vi.mock('../../stores/harnessLoginDialog', () => ({
+  openHarnessLoginDialog: mockOpenHarnessLogin,
+  resolveHarnessLoginDialog: vi.fn(() => true),
+}));
+
+vi.mock('../../components/harness/HarnessLoginDialog', () => ({
+  HarnessLoginDialog: () => <div data-testid="harness-login-dialog" />,
+}));
+
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
@@ -118,6 +145,46 @@ describe('MainLayout 首页聚合查询', () => {
     expect(screen.getByText('首页数据加载失败')).toBeInTheDocument();
     fireEvent.click(screen.getByText('重试'));
     expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('全局挂载登录引导弹窗且启用用户级 SSE', () => {
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+
+    render(<MainLayout />);
+
+    expect(screen.getByTestId('harness-login-dialog')).toBeInTheDocument();
+    expect(sseOptions.enabled).toBe(true);
+    expect(typeof sseOptions.onHarnessLoginRequired).toBe('function');
+    expect(typeof sseOptions.onHarnessLoginResolved).toBe('function');
+  });
+
+  it('SSE required 打开单例弹窗；resolved 关闭并 toast', () => {
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+    render(<MainLayout />);
+
+    const request = {
+      requestId: 'hl-1',
+      controllerId: 'ctrl-1',
+      serverType: 'kimi_code',
+      trigger: 'probe-options',
+      url: 'https://www.kimi.com/code/authorize_device?user_code=4CQ4-0XIG',
+      userCode: '4CQ4-0XIG',
+      expiresAt: '2026-10-25T12:30:00.000Z',
+    };
+    sseOptions.onHarnessLoginRequired?.(request);
+    expect(mockOpenHarnessLogin).toHaveBeenCalledWith(request);
+
+    sseOptions.onHarnessLoginResolved?.({ requestId: 'hl-1', result: 'succeeded' });
+    expect(mockToast.success).toHaveBeenCalledWith('Kimi Code 已登录');
+
+    sseOptions.onHarnessLoginResolved?.({ requestId: 'hl-1', result: 'cancelled' });
+    expect(mockToast.info).toHaveBeenCalledWith('Kimi Code 未登录');
+
+    sseOptions.onHarnessLoginResolved?.({ requestId: 'hl-1', result: 'expired' });
+    expect(mockToast.info).toHaveBeenCalledWith('登录未完成，可重试');
+
+    sseOptions.onHarnessLoginResolved?.({ requestId: 'hl-1', result: 'failed', error: 'boom' });
+    expect(mockToast.error).toHaveBeenCalledWith('boom');
   });
 
   describe('D-2 默认会话就绪后自动进入', () => {

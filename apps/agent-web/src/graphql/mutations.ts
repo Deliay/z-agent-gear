@@ -341,6 +341,12 @@ export const RESPOND_ELICITATION = gql`
   }
 `
 
+export const RESPOND_HARNESS_LOGIN = gql`
+  mutation RespondHarnessLogin($requestId: String!, $action: HarnessLoginAction!) {
+    respondHarnessLogin(requestId: $requestId, action: $action)
+  }
+`
+
 export const MARK_TODO_READ = gql`
   mutation MarkTodoRead($todoId: ID!) {
     markTodoRead(todoId: $todoId)

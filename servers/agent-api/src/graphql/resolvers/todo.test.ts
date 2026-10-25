@@ -9,6 +9,7 @@ vi.mock('../../services/todo-service.js', () => ({
     markAllTodoRead: vi.fn(),
     markTodoAsResponded: vi.fn(),
     markElicitationResolved: vi.fn(),
+    markHarnessLoginResolved: vi.fn(),
     isRespondableTodo: vi.fn(),
     updatePermissionTimeout: vi.fn(),
     updateGlobalPermissionTimeout: vi.fn(),
@@ -204,5 +205,48 @@ describe('Todo Resolvers - elicitation resolution', () => {
     expect(todoResolvers.TodoItem.resolvedAt({ resolvedAt: null })).toBeNull();
     expect(todoResolvers.TodoItem.resolution({})).toBeNull();
     expect(todoResolvers.TodoItem.resolution({ resolution: 'expired' })).toBe('expired');
+  });
+
+  describe('Mutation.respondHarnessLogin', () => {
+    it('T-TD1a: 他人 requestId 拒绝（不 publish、不写终态）', async () => {
+      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+
+      await expect(
+        todoResolvers.Mutation.respondHarnessLogin(
+          {}, { requestId: 'hl-of-other', action: 'cancel' }, mockContext,
+        ),
+      ).rejects.toThrow('Todo item not found or already handled');
+
+      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'hl-of-other', 'harness_login_request');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+      expect(todoService.markHarnessLoginResolved).not.toHaveBeenCalled();
+    });
+
+    it('T-TD1b: 本人 → 发布 harness:login:cancel + 终态 cancelled', async () => {
+      const result = await todoResolvers.Mutation.respondHarnessLogin(
+        {}, { requestId: 'hl-1', action: 'cancel' }, mockContext,
+      );
+
+      expect(result).toBe(true);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'harness:login:cancel',
+        JSON.stringify({ requestId: 'hl-1' }),
+      );
+      expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('hl-1', 'user1');
+      expect(todoService.markHarnessLoginResolved).toHaveBeenCalledWith('hl-1', 'cancelled', { userId: 'user1' });
+    });
+
+    it('T-TD1c: 未认证抛 Not authenticated', async () => {
+      await expect(
+        todoResolvers.Mutation.respondHarnessLogin({}, { requestId: 'hl-1', action: 'cancel' }, emptyContext),
+      ).rejects.toThrow('Not authenticated');
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  it('TodoItem.harnessLoginData 归一为 null（未赋值子文档）', () => {
+    expect(todoResolvers.TodoItem.harnessLoginData({})).toBeNull();
+    const data = { requestId: 'hl-1', userCode: 'CODE' };
+    expect(todoResolvers.TodoItem.harnessLoginData({ harnessLoginData: data })).toBe(data);
   });
 });

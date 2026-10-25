@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../config/index.js', () => ({ config: h.config }));
 
 vi.mock('../models/cloud-host.js', () => ({
-  HARNESS_TYPES: ['OPENCODE'],
+  HARNESS_TYPES: ['OPENCODE', 'KIMI_CODE'],
   CloudHost: {
     countDocuments: vi.fn(),
     create: vi.fn(),
@@ -211,8 +211,19 @@ describe('CloudHostService', () => {
   const service = new CloudHostService();
 
   describe('capabilities', () => {
-    it('returns OPENCODE when enabled and preset exists', async () => {
+    it('returns every harness whose preset exists', async () => {
       vi.mocked(cloudWorkloadReader.findHarnessPreset).mockResolvedValue({} as never);
+      await expect(service.getCapabilities()).resolves.toEqual({
+        enabled: true,
+        supportedHarnesses: ['OPENCODE', 'KIMI_CODE'],
+      });
+    });
+
+    it('T-HL-API10: skips harnesses whose preset is missing', async () => {
+      vi.mocked(cloudWorkloadReader.findHarnessPreset).mockImplementation((async (type: string) => {
+        if (type === 'OPENCODE') return {};
+        throw new Error('missing');
+      }) as never);
       await expect(service.getCapabilities()).resolves.toEqual({
         enabled: true,
         supportedHarnesses: ['OPENCODE'],
@@ -322,6 +333,23 @@ describe('CloudHostService', () => {
         modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/root/workspace',
       });
+    });
+
+    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.8.0', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.harnessTypes).toEqual(['kimi_code']);
+      expect(payload.agentGearMinVersion).toBe('2.8.0');
+    });
+
+    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.8.0）', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.agentGearMinVersion).toBe('2.8.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
