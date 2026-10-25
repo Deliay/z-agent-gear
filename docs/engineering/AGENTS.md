@@ -258,3 +258,4 @@ flowchart LR
 - [[plan/20261023-feat-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（契约、PR Handler Registry 与迁移、追加提示词 key 去重、人类节点联动字段、linkPullRequest MCP 工具与生命周期注销、事件回调判定链与 review 驱动）实现计划
 - [[plan/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区、Model.contextLength 经 OpenAI 兼容 /v1/models 的 context_length 下发、ephemeral-storage 10Gi）实现计划
 - [[plan/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（HarnessType 扩展 KIMI_CODE 与预置工作负载 009、agent-gear 2.8.0 使用前登录闸门 `kimi login` stdio 判定、`harness:login` 事件族 + 用户级 SSE 即时弹窗、按 harnessTypes 细分版本门禁）实现计划
+- [[plan/20261025-feat-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（契约 CloudHostIssuesLinkage 多配置 + cleanup、issues 报文归一化与命中判定、IssueWorkflowTrigger 状态机（工作区准备→实例化→回评→首个人类节点自动完成）、deleteCloudHost 级联清理、agent-web Github 区块与销毁标签清理询问、T-GHIL*/T-GHI*/E2E-33+）实现计划
