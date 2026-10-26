@@ -204,6 +204,8 @@ cd apps/agent-web && npm run build && npm run lint && npm test -- ControllerConf
 | `tests/api/src/agent-api/cloud-host-workload.test.ts` | 修改 | `T-GH-API-P1~P3` 前缀校验补 `~` 矩阵：`T-GH-API-P4`（`~/workspace` 接受并归一、`~abc` 拒绝、`/a/~` 接受、`~/a/../b` 拒绝）；错误文案断言随裁决 2 更新 |
 | `tests/api/src/agent-api/cloud-host-issues-linkage.test.ts` | 修改 | 回归：Issues 联动 clone 前缀走同一归一（如无 `~` 用例则补 1 条 `~/workspace` 归一断言） |
 
+**实现偏差（复审返工补记）**：CS1 原拟的「全流程后 `controllerWorkspaces` 出现 finalPath 工作区、`myCloudHosts.hasDefaultWorkspace=true`、无默认会话」断言依赖真实 K8s 容器完成 clone；本地 API 环境 runner 在 workload 步即失败、不可达。该断言未在 CS1 落地，由单测 `T-CHG9`（工作区初始化三件套）+ 验收环境 E2E-1 覆盖；WS1 已按计划直连 `cloud_host_setup_operations` 断言归一后的 `targetPath`，binding/工作区最终路径同因容器不可达由上述替代口径覆盖。
+
 验收：新增用例全绿；既有 `cloud-host`/`cloud-host-workload`/`cloud-host-issues-linkage` 用例零失败（基线更新清单除外）；测试结束无残留活跃云电脑。
 
 ## Phase 6: E2E + 文档收口 + PR

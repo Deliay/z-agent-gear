@@ -231,15 +231,24 @@ test.describe('Cloud Host E2E', () => {
       expect(running?.status).toBe('RUNNING');
       expect(running?.defaultSessionId).toBeNull();
 
-      // 无工作区入口：Git 前缀不预填 /root/workspace
+      // 无默认工作区时预填 ~/workspace（服务端展开为 /root/workspace）
       await controllerRow.getByLabel('Github 项目设置').click();
       const githubDialog = page.getByRole('dialog');
-      await expect(githubDialog.getByLabel('前缀地址')).toHaveValue('');
+      await expect(githubDialog.getByLabel('前缀地址')).toHaveValue('~/workspace');
       await expect(githubDialog.getByLabel('前缀地址')).toHaveAttribute(
         'placeholder',
-        '例如：/workspace',
+        '例如：~/workspace',
       );
       await githubDialog.getByRole('button', { name: '取消' }).click();
+
+      // E2E-2：入口迁移——工作负载页签无入口，Github 页签可发起设置
+      await page.goto(`/settings?controllerId=${host!.controllerId}`);
+      await page.getByRole('button', { name: '工作负载' }).click();
+      await expect(page.getByRole('button', { name: 'Github 项目设置' })).toHaveCount(0);
+      await page.getByTestId('config-tab-github').click();
+      await expect(page.getByRole('button', { name: 'Github 项目设置' })).toBeVisible();
+      await page.goto('/');
+      await expect(page.locator(sidebar())).toBeVisible();
 
       // 添加工作区后，无工作区提示随「控制器已有工作区」条件消失，并可发起新建会话。
       // 说明：真实 GitHub 绑定与完整开工链路（在线 worker/controller）需外部账号与真实集群，
@@ -557,7 +566,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
 
       await expect(dialog.getByLabel('Github 账号')).toHaveValue(/.+/);
       await dialog.getByLabel('仓库').selectOption({ label: 'phase10-owner/repo' });
-      await expect(dialog.getByLabel('前缀地址')).toHaveValue('/root/workspace');
+      await expect(dialog.getByLabel('前缀地址')).toHaveValue('~/workspace');
       await dialog.getByRole('button', { name: '创建云电脑' }).click();
 
       // 四阶段进度框：启动云电脑为前置阶段
