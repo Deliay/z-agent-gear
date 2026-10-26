@@ -6,7 +6,7 @@ type: Permanent
 # 云Agent二期：云端工作容器（cloud-controller）
 
 **功能名称**: 云Agent二期 —— K8s 云端工作容器管理
-**PRD 版本**: v1.0
+**PRD 版本**: v1.1
 **创建日期**: 2026-10-14
 **作者**: ZeroAsh
 
@@ -83,18 +83,17 @@ type: Permanent
   - Docker 镜像拉取走内网代理：Docker Hub 镜像使用 `core.harbor.internal.fffdan.com/docker-hub-proxy/{image}`（如 `ubuntu:latest` → `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:latest`），ghcr.io 镜像使用 `core.harbor.internal.fffdan.com/ghcr/{image}`
   - 通过 npm 全局预装以下包：
     - `agent-gear`
-    - `@agentclientprotocol/claude-agent-acp`
-    - `@agentclientprotocol/codex-acp`
     - `@opencode/cli`
     - `@openai/codex`
     - `@anthropic-ai/claude-code`
     - `@google/gemini-cli`
+  - 不预装 Claude Code / Codex 的 ACP 适配器（`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`），由用户按需自行安装
   - 镜像启动命令为：使用 agent-gear 连接到 cloud-controller（连接参数来自注入的环境变量）
 - **用户价值**: 内网环境开箱即用的标准化执行环境，避免每个任务重复安装工具链。
 - **验收标准**:
   - [ ] 镜像在内网环境可无代理构建成功
   - [ ] 容器内 `node`、`git`、`gh`、`docker buildx` 可用
-  - [ ] 容器内上述 7 个 npm 全局包均可正常执行
+  - [ ] 容器内上述 npm 全局包均可正常执行
   - [ ] 容器内拉取 Docker Hub / ghcr.io 镜像时自动走内网代理地址
   - [ ] 容器默认启动命令即回连 cloud-controller，无需额外参数
 

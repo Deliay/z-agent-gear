@@ -36,7 +36,7 @@ type: Permanent
 `20261014-feat-cloud-agent-phase2` 交付了 K8s 云端工作容器基线；`20261017-feat-cloud-controller-workload` / `20261018-feat-workload-phase1` 交付了工作负载体系；`20261018-feat-credits-billing` 交付了费用中心（计费账户、API Key、OpenAI 兼容计费网关）；「主机」体系（`Controller` + ControllerKey + `homeOverview` + 标准会话 + Harness 工具（ACP）探测）已在 agent-api/controller-api/agent-web 稳定运行。当前事实：
 
 - 云端容器启动任务类型（`purpose`）**仅开放 `idle`**：`servers/admin-api/src/graphql/resolvers/cloud-container.ts`、`servers/cloud-controller/src/routes/internal-api.ts`、`servers/cloud-controller/src/services/container-service.ts` 三处硬编码拒绝其余值。
-- worker 镜像（`deploy/images/worker/Dockerfile`）预装 `agent-gear@2.4.x`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`，**不含 `@opencode/cli`**；`packages/agent-controller` 当前版本 `2.4.0`。
+- worker 镜像（`deploy/images/worker/Dockerfile`）预装 `agent-gear@2.4.x`，**不含 `@opencode/cli`**，也**不再预装** Claude Code / Codex 的 ACP 适配器（`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`）；`packages/agent-controller` 当前版本 `2.4.0`。
 - agent-gear 连接端点抽象（`parseEndpoint` + `connectToServer`），同一二进制既可拨 `/worker`（工作负载通道），也可按标准 ControllerKey 拨 controller-api 注册为「主机」；`ZAG_CONTROLLER_KEY` 今天承载 `/worker` 一次性 token，与标准 ControllerKey **不可同名复用**。
 - `ControllerType` 枚举已有 `cloud` 值；前端硬编码 `type:'local'`，无按主机类型区分的图标。
 - 计费 Key（`billingapikeys`）无有效期/作用域概念；多会话由标准会话机制天然支持（`sessions` 按 `controllerId` 多条）；会话消息留档（`acpmessages`）支持历史只读回看。
