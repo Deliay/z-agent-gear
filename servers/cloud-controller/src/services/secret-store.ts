@@ -19,7 +19,7 @@ export interface HarnessSecrets {
   modelIds: string;
   /** 模型 ID → 最长上下文（token）JSON object 字符串；可选，缺省/空串表示无上下文信息。 */
   modelContextLengths?: string;
-  /** 默认工作区（如 `/root/workspace`）。 */
+  /** 默认工作区（如 `/home/worker/workspace`）。 */
   defaultWorkspace: string;
 }
 

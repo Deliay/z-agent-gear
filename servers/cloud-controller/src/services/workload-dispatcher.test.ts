@@ -1186,7 +1186,7 @@ describe('WorkloadDispatcher - harness env', () => {
     modelApiKey: 'zag_sk_model-secret',
     modelBaseUrl: 'http://admin-api:8002/v1',
     modelIds: '["model-a","model-b"]',
-    defaultWorkspace: '/root/workspace',
+    defaultWorkspace: '/home/worker/workspace',
   };
 
   it('T-CC12: harness init 批次 env 含全部 ZAG_*（含 model 配置）', async () => {

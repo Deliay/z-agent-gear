@@ -542,7 +542,7 @@ npm test
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
-| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（kimi→2.8.0、仅 opencode→2.6.0，需 `MONGODB_URI`） |
+| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（全局基线 2.10.0；kimi/deepseek/opencode 组合均为 2.10.0，需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
@@ -632,10 +632,10 @@ npm test
 
 | 文件 | 说明 |
 |------|------|
-| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.8.0` |
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
-| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.8.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
+| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.10.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。
 

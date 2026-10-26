@@ -34,7 +34,7 @@ export const cloudHostTypeDefs = `#graphql
     stoppedAt: String
     failureReason: String
     deletedAt: String
-    # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
+    # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /home/worker/workspace）
     defaultWorkspace: String!
     # 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」
     hasDefaultWorkspace: Boolean!

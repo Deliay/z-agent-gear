@@ -170,7 +170,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     expect(
       workspaces.data.workspaces.some(
         (workspace: { controllerId: string; path: string }) =>
-          workspace.controllerId === host.controllerId && workspace.path === '/root/workspace',
+          workspace.controllerId === host.controllerId && workspace.path === '/home/worker/workspace',
       ),
     ).toBe(false);
     const keys = await gql(KEYS, undefined, token);
@@ -498,9 +498,9 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 });
 
-// Kimi Code（Harness）：创建校验 + 逐容器 2.8.0 版本门禁（T-CH-API-K1）
+// Kimi Code（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-CH-API-K1）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
-  it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.8.0', async () => {
+  it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.10.0', async () => {
     const token = await signup();
     const created = await gql(
       CREATE,
@@ -527,7 +527,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
       }
       expect(doc, 'cloud-controller should persist the container').toBeTruthy();
       expect(doc.harnessTypes).toEqual(['opencode', 'kimi_code']);
-      expect(doc.agentGearMinVersion).toBe('2.8.0');
+      expect(doc.agentGearMinVersion).toBe('2.10.0');
     } finally {
       await gql(STOP, { id: host.id, force: true }, token);
       await gql(DELETE, { id: host.id }, token);
@@ -535,9 +535,9 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
   });
 });
 
-// DeepSeek Harness（Harness）：创建校验 + 逐容器 2.9.0 版本门禁（T-DS-API2/3）
+// DeepSeek Harness（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-DS-API2/3）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', () => {
-  it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.9.0', async () => {
+  it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.10.0', async () => {
     const token = await signup();
     const created = await gql(
       CREATE,
@@ -564,7 +564,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
       }
       expect(doc, 'cloud-controller should persist the container').toBeTruthy();
       expect(doc.harnessTypes).toEqual(['opencode', 'deepseek_harness']);
-      expect(doc.agentGearMinVersion).toBe('2.9.0');
+      expect(doc.agentGearMinVersion).toBe('2.10.0');
     } finally {
       await gql(STOP, { id: host.id, force: true }, token);
       await gql(DELETE, { id: host.id }, token);
@@ -624,7 +624,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       userId: new mongoose.Types.ObjectId(userId),
       controllerId,
       name: 'workspace',
-      path: '/root/workspace',
+      path: '/home/worker/workspace',
       isEnabled: true,
       createdAt: now,
       updatedAt: now,
@@ -791,7 +791,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
-            targetPath: '/root/workspace',
+            targetPath: '/home/worker/workspace',
             createSession: false,
           },
         },
@@ -825,7 +825,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
-            targetPath: '/root/workspace',
+            targetPath: '/home/worker/workspace',
           },
         },
         token,

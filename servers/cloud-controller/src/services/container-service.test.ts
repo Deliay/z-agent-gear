@@ -52,7 +52,7 @@ function harnessSecrets(overrides: Partial<HarnessSecrets> = {}): HarnessSecrets
     modelApiKey: 'zag_sk_model-secret',
     modelBaseUrl: 'http://admin-api:8002/v1',
     modelIds: '["model-a"]',
-    defaultWorkspace: '/root/workspace',
+    defaultWorkspace: '/home/worker/workspace',
     ...overrides,
   };
 }

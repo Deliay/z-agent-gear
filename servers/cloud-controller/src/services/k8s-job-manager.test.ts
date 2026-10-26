@@ -194,7 +194,7 @@ describe('K8sJobManager', () => {
         ZAG_HOST_KEY: 'zag_k_1_host',
         ZAG_HOST_NAME: 'my-pc',
         ZAG_HARNESS_TYPES: 'opencode',
-        ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+        ZAG_DEFAULT_WORKSPACE: '/home/worker/workspace',
         ZAG_USER_TYPE: 'front_user',
         ZAG_USER_ID: 'user-1',
       },
@@ -212,7 +212,7 @@ describe('K8sJobManager', () => {
     expect(env.ZAG_HOST_KEY).toBe('zag_k_1_host');
     expect(env.ZAG_HOST_NAME).toBe('my-pc');
     expect(env.ZAG_HARNESS_TYPES).toBe('opencode');
-    expect(env.ZAG_DEFAULT_WORKSPACE).toBe('/root/workspace');
+    expect(env.ZAG_DEFAULT_WORKSPACE).toBe('/home/worker/workspace');
     expect(env.ZAG_USER_TYPE).toBe('front_user');
     expect(env.ZAG_USER_ID).toBe('user-1');
     // 模型 Key 仅走 workload:run.env，不进入 Job env
