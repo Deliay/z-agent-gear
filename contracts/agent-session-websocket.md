@@ -44,6 +44,7 @@
 | Server → Controller | `acp:set-config-option` | 请求设置会话配置项（含模式/模型 category） |
 | Controller → Server | `acp:set-config-option:result` | 设置配置项结果（成功/失败回执） |
 | Controller → Server | `acp:config-options` | 上报会话配置项全量快照（初始化与变更后） |
+| Controller → Server | `acp:initial-config:result` | 初始模式/模型应用确认结果（请求了 modeId/modelId 时收敛后恰好一次） |
 | Server → Controller | `acp:delete-history-session` | 请求删除 Agent 侧历史会话 |
 | Controller → Server | `acp:delete-history-session:result` | 删除结果 |
 | Server → Controller | `acp:authenticate` | 请求执行 Agent 认证 |
@@ -138,8 +139,24 @@
 
 1. 拉起 `opencode acp` 进程
 2. 建立 stdio JSON-RPC 通信
-3. 回复 `acp:start:result`
-4. 开始转发 ACP 消息
+3. 调用 `session/new` 建立会话
+4. 若 payload 携带 `modeId`/`modelId`：在首条 prompt 前应用初始模式/模型，并完成「初始模式/模型应用确认」（见下）
+5. 回复 `acp:start:result`
+6. 开始转发 ACP 消息
+
+**初始模式/模型应用确认（`acp:start`/`acp:resume` 携带 `modeId`/`modelId` 时适用）：**
+
+1. 应用通道：Agent 暴露对应 category（`mode`/`model`）的 config-option 时走 `session/set_config_option`；
+   mode 在无 config-option 时可回退旧 `session/setMode`；model 无 config-option 时无可用通道。
+2. **回读确认**：config-option 通道以 `set_config_option` 响应携带的全量快照回读，要求对应 category 的
+   `currentValue === 请求值`；应用成功后须以响应快照刷新本地 configOptions 并回发 `acp:config-options`
+   （行为同 `acp:set-config-option`）。旧 `session/setMode` 通道无协议级回读手段，不抛错即视为生效。
+3. **失败重试**：应用抛错或回读不一致时重试一次；仍失败记 `failed`。
+4. **挂起补应用**：`session/new`（或 `session/resume`）响应未携带 configOptions 且缺少可用应用通道时，
+   不立即判失败——挂起等待，首个 `config_option_update` 通知到达后补应用并回读确认；等待上限
+   `INITIAL_CONFIG_PENDING_TIMEOUT_MS`（默认 10000ms），超时按 `failed` 收敛。
+5. **结果上报**：确认收敛（全部确认完 / 挂起超时）时恰好发送一次 `acp:initial-config:result`（见 §2.39）。
+   未携带 `modeId`/`modelId` 时不发送该事件。
 
 ### 2.5 `acp:start:result`（Controller → Server）
 
@@ -251,6 +268,7 @@
 3. 在 Redis 中缓存映射关系 `session:{sessionId}:acpSessionId = externalSessionId`（TTL 24h）
 4. 注册 session WebSocket 映射
 5. 发布 `session:status`（含 `modes`、`currentModeId`、`currentModel`）
+6. 初始模式/模型的应用确认结果由 §2.39 `acp:initial-config:result` 独立上报处理（可能迟于本事件）
 
 ### 2.6 `acp:message`（Server → Controller）
 
@@ -386,7 +404,7 @@ Controller 转发 ACP 输出。
 3. 调用 SDK `connection.initialize()` — 不声明 `fs`/`terminal` 能力
 4. 调用 SDK `connection.resumeSession({ sessionId: externalSessionId })`
 5. 如果 agent 不支持 `session.resume`，fallback 到 `newSession`
-6. 若 payload 携带 `modeId`/`modelId`，在回复结果前应用初始工作模式/模型（同 `acp:start` §2.4：必须在 `acp:initialized`/`acp:resume:result` 之前完成，保证首条 prompt 以配置值执行）
+6. 若 payload 携带 `modeId`/`modelId`，在回复结果前应用初始工作模式/模型并完成回读确认（语义同 `acp:start` §2.4「初始模式/模型应用确认」：必须在 `acp:initialized`/`acp:resume:result` 之前完成应用，保证首条 prompt 以配置值执行；确认收敛后发送 `acp:initial-config:result`，见 §2.39）
 7. 回复 `acp:resume:result`
 
 ### 2.12 `acp:resume:result`（Controller → Server）
@@ -982,6 +1000,30 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 
 1. `AcpAuthGate.cancel(requestId)`：`requestId` 不匹配时忽略；匹配时终止 `kimi login` 子进程并标记 `cancelled`。
 2. 随后上行 `harness:login:failed {requestId, reason:'cancelled'}`，原使用动作按失败结算。
+
+### 2.39 `acp:initial-config:result`（Controller → Server）
+
+上报初始模式/模型的应用确认结果。仅当 `acp:start`/`acp:resume` 携带了 `modeId`/`modelId` 时发送；
+确认收敛（同步确认完 / 挂起补确认完 / 挂起超时）时恰好发送一次，可能迟于 `acp:start:result`/`acp:resume:result`。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | Session ID |
+| `modeId` | `string` | 否 | 请求的初始模式 ID（请求过才携带） |
+| `modelId` | `string` | 否 | 请求的初始模型 ID（请求过才携带） |
+| `modeStatus` | `"applied" \| "failed"` | 否 | 模式确认结果（请求过才携带） |
+| `modelStatus` | `"applied" \| "failed"` | 否 | 模型确认结果（请求过才携带） |
+| `error` | `string` | 否 | 失败原因（脱敏摘要，≤200 字符） |
+
+**服务端行为：**
+
+1. controller-api 白名单校验：`sessionId` 缺失/为空、status 为契约外取值时丢弃并 `console.warn`；
+   `error` 截断到 200 字符（controller payload 不可信）。
+2. 任一 status 为 `failed`：写 Session 文档 `initialConfigError = { modeId?, modelId?, error, at }`，
+   并随 `session:status` extra 下发 `initialConfigError`（沿用既有 statusExtra 机制透传至 SSE）。
+3. 全部 `applied`：清除 Session 文档 `initialConfigError` 字段（`$unset`）。
 
 ---
 
