@@ -111,9 +111,10 @@ RUN printf '%s\n' \
       '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
       > /etc/profile.d/nvm.sh
 
-# 4) npm 走内网代理并全局预装 Agent 工具链（镜像 3 包；OpenCode 由 harness 工作负载安装）
-#    镜像只预装 agent-gear + ACP 适配器（claude-agent-acp / codex-acp）：
+# 4) npm 走内网代理并全局预装 Agent 工具链（仅 agent-gear；OpenCode 由 harness 工作负载安装）
 #    - agent-gear 固定 2.9.x：`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，
+#      不固定版本会在内网 npm 代理 `latest` 滞后时静默装到 2.8.x（无分流逻辑，harness prepare 会
+#      误校验 opencode 而失败）；构建期代理未同步 2.9.0 时必须**失败暴露**而非放行旧版；
 #      **不预装** `dsh`（DeepSeek Harness CLI 由「DeepSeek Harness（Harness）」工作负载安装）；
 #      `kimi_code` 使用前登录闸门（`kimi login` stdio 判定）自 2.8.0 起，
 #      **不预装** `kimi`（Kimi Code CLI 由「Kimi Code（Harness）」工作负载安装）；
@@ -127,8 +128,7 @@ RUN printf '%s\n' \
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
       agent-gear@2.9.x \
-      @agentclientprotocol/claude-agent-acp \
-      @agentclientprotocol/codex-acp \
+ && agent-gear --version \
  && npm cache clean --force
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

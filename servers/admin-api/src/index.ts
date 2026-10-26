@@ -47,6 +47,7 @@ import * as migration008FixGithubWorkloadPrefix from './migrations/008-fix-githu
 import * as migration009HarnessKimiCode from './migrations/009-preset-harness-kimi-code.js';
 import * as migration010PresetHarnessDeepseek from './migrations/010-preset-harness-deepseek.js';
 import * as migration010ClearCloudHostKeyExpiry from './migrations/010-clear-cloud-host-key-expiry.js';
+import * as migration011RefreshHarnessPrepareScope from './migrations/011-refresh-harness-prepare-scope.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -121,6 +122,8 @@ async function start() {
   // 009-preset-harness-kimi-code——写入云电脑 harness 运行环境预置项「Kimi Code（Harness）」（Kimi Code 云电脑）
   // 010-preset-harness-deepseek——写入云电脑 harness 运行环境预置项「DeepSeek Harness（Harness）」（DeepSeek 云电脑）
   // 010-clear-cloud-host-key-expiry——清空云电脑运行专用 Key 的固定有效期（改为随容器回收）
+  // 011-refresh-harness-prepare-scope——把未定制过的 OpenCode/DeepSeek harness 预置脚本中裸
+  //   `agent-gear harness prepare` 刷新为按类型限定（多 harness 主机顺序安装 CLI 时裸调用会误失败）
   try {
     await runMigrations([
       migration001,
@@ -135,6 +138,7 @@ async function start() {
       migration009HarnessKimiCode,
       migration010PresetHarnessDeepseek,
       migration010ClearCloudHostKeyExpiry,
+      migration011RefreshHarnessPrepareScope,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);

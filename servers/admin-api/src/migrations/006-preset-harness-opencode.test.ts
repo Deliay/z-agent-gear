@@ -57,7 +57,7 @@ describe('migration 006-preset-harness-opencode', () => {
       postScript: null,
       dependsOnWorkloadIds: [],
     });
-    expect(arg.initScript).toContain('agent-gear harness prepare');
+    expect(arg.initScript).toContain('ZAG_HARNESS_TYPES=opencode agent-gear harness prepare');
   });
 
   it('T-MIG6-2: 二次执行跳过，不覆盖管理员修改', async () => {
@@ -103,7 +103,9 @@ describe('migration 006-preset-harness-opencode', () => {
     expect(script).toContain('npm install -g "@opencode/cli@${OPENCODE_CLI_VERSION}"');
     expect(script).toContain('opencode --version');
     expect(script).toContain('mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"');
-    expect(script).toContain('agent-gear harness prepare');
+    expect(script).toContain('ZAG_HARNESS_TYPES=opencode agent-gear harness prepare');
+    // prepare 必须带类型限定：多 harness 主机脚本顺序执行，裸调用会对未安装的类型硬校验而误失败
+    expect(script).not.toMatch(/(?<!ZAG_HARNESS_TYPES=opencode )agent-gear harness prepare/);
 
     const install = script.indexOf('npm install -g');
     const version = script.lastIndexOf('opencode --version');

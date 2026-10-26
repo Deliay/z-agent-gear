@@ -74,8 +74,7 @@ docker run --rm -it --entrypoint bash \
     nvm --version && nvm ls && \
     which node npm && node -v && npm -v && npm config get registry && \
     git --version && gh --version && \
-    agent-gear --version && agent-gear harness --help && \
-    claude-agent-acp --help >/dev/null 2>&1 || true
+    agent-gear --version && agent-gear harness --help
   '
 ```
 
@@ -84,7 +83,7 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像 3 个 npm 全局包**已安装：`agent-gear`、`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.9.x`）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
 - [ ] `agent-gear --version` ≥ `2.9.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
@@ -167,8 +166,10 @@ docker run --rm --entrypoint bash \
 
 ### OpenCode（Harness）工作负载自验
 
-镜像**不预装** `@opencode/cli`；OpenCode 由「OpenCode（Harness）」工作负载（admin-api 迁移 005）在
-`init` 阶段按固定版本安装，随后执行 `opencode --version` 硬校验与 `agent-gear harness prepare`。
+镜像**不预装** `@opencode/cli`；OpenCode 由「OpenCode（Harness）」工作负载（admin-api 迁移 006）在
+`init` 阶段按固定版本安装，随后执行 `opencode --version` 硬校验与按类型限定的
+`ZAG_HARNESS_TYPES=opencode agent-gear harness prepare`（多 harness 主机顺序安装 CLI，裸调用会对
+尚未安装的类型硬校验而误失败）。
 任一失败以非零退出，`required=true` 会触发 cloud-controller 强制注销容器。
 
 `OPENCODE_CLI_VERSION` 锁定口径：
@@ -208,8 +209,9 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
 
 镜像**不预装** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-acp-app`；二者由「DeepSeek Harness（Harness）」工作负载
 （admin-api 迁移 010）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
-`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与
-`agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 含 `deepseek_harness`）。任一失败以非零退出，
+`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与按类型限定的
+`ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 前缀限定本类型，
+多 harness 主机顺序安装 CLI 时裸调用会对尚未安装的类型硬校验而误失败）。任一失败以非零退出，
 `required=true` 会触发 cloud-controller 强制注销容器。
 
 `DSH_CLI_VERSION` / `DSH_ACP_APP_VERSION` 锁定口径：
