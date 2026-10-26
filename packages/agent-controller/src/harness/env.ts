@@ -27,6 +27,32 @@ export class HarnessEnvError extends Error {
   }
 }
 
+/** `harness prepare` 可处理的 harness 类型（与 `ZAG_HARNESS_TYPES` 的 harness slug 对齐）。 */
+export const PREPARE_HARNESS_TYPES = ['opencode', 'deepseek_harness'] as const;
+
+export type PrepareHarnessType = (typeof PREPARE_HARNESS_TYPES)[number];
+
+/**
+ * 解析 `ZAG_HARNESS_TYPES`（计划 §3 B5）：
+ *
+ * - 逗号分隔、trim、去重，保持输入顺序；
+ * - 白名单过滤（`kimi_code` 等无 prepare 步骤的类型忽略）；
+ * - 未设置/空串/过滤后为空 → `['opencode']`（旧 worker 手工执行零退化）。
+ */
+export function resolvePrepareTypes(env: NodeJS.ProcessEnv = process.env): PrepareHarnessType[] {
+  const raw = typeof env.ZAG_HARNESS_TYPES === 'string' ? env.ZAG_HARNESS_TYPES : '';
+  const allowed = new Set<string>(PREPARE_HARNESS_TYPES);
+  const types: PrepareHarnessType[] = [];
+  const seen = new Set<string>();
+  for (const item of raw.split(',')) {
+    const value = item.trim();
+    if (!value || seen.has(value) || !allowed.has(value)) continue;
+    seen.add(value);
+    types.push(value as PrepareHarnessType);
+  }
+  return types.length > 0 ? types : ['opencode'];
+}
+
 function nonEmpty(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }

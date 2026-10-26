@@ -83,6 +83,26 @@ export default function WorkflowContextPanel({
             <div className="mt-0.5 text-xs text-muted-foreground">
               关联时间：{link.registeredAt}
             </div>
+            {link.checkRunUrl && (
+              <div className="mt-0.5 break-all text-xs text-muted-foreground">
+                检查项：
+                <a
+                  href={link.checkRunUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  {link.checkRunUrl}
+                </a>
+                {link.lastSyncAt && <> · 最近同步：{link.lastSyncAt}</>}
+                {link.lastSyncedCommitSha && (
+                  <> · 写入提交：{link.lastSyncedCommitSha.slice(0, 7)}</>
+                )}
+              </div>
+            )}
+            {link.lastSyncError && (
+              <div className="mt-0.5 break-all text-xs text-destructive">{link.lastSyncError}</div>
+            )}
           </div>
         ))}
       </Section>

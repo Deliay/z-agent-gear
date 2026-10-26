@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../config/index.js', () => ({ config: h.config }));
 
 vi.mock('../models/cloud-host.js', () => ({
-  HARNESS_TYPES: ['OPENCODE', 'KIMI_CODE'],
+  HARNESS_TYPES: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
   CloudHost: {
     countDocuments: vi.fn(),
     create: vi.fn(),
@@ -101,6 +101,9 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMock }));
+vi.mock('./cloud-host-issues-linkage.js', () => ({
+  cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
+}));
 
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
@@ -117,6 +120,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
@@ -215,7 +219,7 @@ describe('CloudHostService', () => {
       vi.mocked(cloudWorkloadReader.findHarnessPreset).mockResolvedValue({} as never);
       await expect(service.getCapabilities()).resolves.toEqual({
         enabled: true,
-        supportedHarnesses: ['OPENCODE', 'KIMI_CODE'],
+        supportedHarnesses: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
     });
 
@@ -362,6 +366,22 @@ describe('CloudHostService', () => {
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.agentGearMinVersion).toBe('2.8.0');
+    });
+
+    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.9.0，混合取最大', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.harnessTypes).toEqual(['deepseek_harness']);
+      expect(payload.agentGearMinVersion).toBe('2.9.0');
+
+      await service.create('user-1', {
+        name: 'deepseek-mixed',
+        harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
+      });
+      const mixedPayload = vi.mocked(cloudControllerClient.startHarness).mock.calls[1][0];
+      expect(mixedPayload.agentGearMinVersion).toBe('2.9.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
@@ -796,6 +816,7 @@ describe('CloudHostService', () => {
         { $set: { deletedAt: expect.any(Date) } },
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(cloudHostIssuesLinkageService.deleteByController).toHaveBeenCalledWith(CONTROLLER_ID);
     });
 
     it('is idempotent for already soft-deleted hosts', async () => {

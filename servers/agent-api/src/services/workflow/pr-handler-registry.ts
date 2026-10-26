@@ -96,6 +96,17 @@ export interface RegisterPrHandlerInput {
 /** 同实例+节点的注册串行化（C-6：delete-then-upsert 并发可能双存活）。 */
 const registerMutex = new KeyedMutex();
 
+type InstanceUnregisteredListener = (instanceId: string) => void;
+const instanceUnregisteredListeners = new Set<InstanceUnregisteredListener>();
+
+/**
+ * 注册「实例登记注销」进程内监听（用于清理按 check-run 维护的进程内缓存）。
+ * 监听器必须同步返回且自行吞掉异常，不得阻塞注销主流程。
+ */
+export function onPrHandlerInstanceUnregistered(listener: InstanceUnregisteredListener): void {
+  instanceUnregisteredListeners.add(listener);
+}
+
 /** PR 联动登记：Mongo 持久化 + 进程内索引（仅加速，查询以 DB 为准）。 */
 class PrHandlerRegistry {
   private index = new Map<string, Map<string, HandlerDoc>>();
@@ -194,6 +205,63 @@ class PrHandlerRegistry {
     return rows;
   }
 
+  /** 按实例+节点查登记（Check Runs 同步入口；未绑定返回 null） */
+  async findByNode(workflowInstanceId: string, nodeId: string): Promise<HandlerDoc | null> {
+    return (await WorkflowPrHandler.findOne({
+      workflowInstanceId,
+      nodeId,
+    }).lean()) as unknown as HandlerDoc | null;
+  }
+
+  /** 记录一次成功的 check-run 写入（成功路径同时清空失败文案） */
+  async markCheckRunSynced(
+    id: string,
+    input: {
+      commitSha: string;
+      checkRunId: number;
+      checkRunUrl: string | null;
+      nodeStatus: string;
+      at: Date;
+      /** 写入新 check-run 时清空 todo digest（新检查项尚无子项，需下一次 plan 刷新） */
+      resetTodoDigest?: boolean;
+    },
+  ): Promise<void> {
+    const update: Record<string, unknown> = {
+      lastWrittenCommitSha: input.commitSha,
+      lastCheckRunId: input.checkRunId,
+      lastCheckRunUrl: input.checkRunUrl,
+      lastSyncedNodeStatus: input.nodeStatus,
+      lastSyncAt: input.at,
+      lastSyncError: null,
+    };
+    if (input.resetTodoDigest) update.lastTodoDigest = null;
+    await WorkflowPrHandler.updateOne({ _id: id }, { $set: update });
+  }
+
+  /**
+   * 记录 todo 子项写入的渲染 digest（内容未变时跳过）。
+   * 传入 `checkRunId` 时仅在「该 check-run 仍是当前写入目标」时回写，
+   * 避免 commit 前进后旧节流项把 digest 记到新检查项上、抑制后续刷新。
+   */
+  async markTodoSynced(
+    id: string,
+    input: { digest: string; at: Date; checkRunId?: number },
+  ): Promise<void> {
+    const filter: Record<string, unknown> = { _id: id };
+    if (input.checkRunId !== undefined) filter.lastCheckRunId = input.checkRunId;
+    await WorkflowPrHandler.updateOne(filter, {
+      $set: { lastTodoDigest: input.digest, lastSyncAt: input.at, lastSyncError: null },
+    });
+  }
+
+  /** 记录同步失败短文案（`null` = 清空，如 PR 已关闭停止同步）；截断 200 字符 */
+  async markSyncError(id: string, message: string | null): Promise<void> {
+    await WorkflowPrHandler.updateOne(
+      { _id: id },
+      { $set: { lastSyncError: message === null ? null : message.slice(0, 200) } },
+    );
+  }
+
   /** 按实例列举（GraphQL pullRequestLinks 数据源） */
   async listByInstance(instanceId: string): Promise<HandlerDoc[]> {
     return (await WorkflowPrHandler.find({ workflowInstanceId: instanceId })
@@ -212,6 +280,13 @@ class PrHandlerRegistry {
         if (String(row.workflowInstanceId) === instanceId) entries.delete(id);
       }
       if (entries.size === 0) this.index.delete(key);
+    }
+    for (const listener of instanceUnregisteredListeners) {
+      try {
+        listener(instanceId);
+      } catch {
+        // 进程内缓存清理失败不影响注销结果
+      }
     }
     if (count > 0) {
       console.log(`[pr-handler] unregistered ${count} handler(s) for instance ${instanceId} (${reason})`);

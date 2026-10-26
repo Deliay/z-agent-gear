@@ -154,7 +154,17 @@ export const workflowTypeDefs = `#graphql
     prUrl: String
     nodeId: String!
     nodeName: String
+    # ISO 字符串（本仓库无 DateTime scalar）
     registeredAt: String!
+    # ---- 本期新增：check-run 同步状态（只读投影） ----
+    # 最近写入的 check-run 页面地址
+    checkRunUrl: String
+    # 上次写入 check-run 的 commit
+    lastSyncedCommitSha: String
+    # 最近同步时间（ISO 字符串，与 registeredAt 同口径）
+    lastSyncAt: String
+    # 最近同步失败提示（白名单短文案，不含凭据）
+    lastSyncError: String
   }
 
   type WorkflowInstance {

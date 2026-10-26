@@ -67,7 +67,8 @@ npx playwright test
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `INTERNAL_API_TOKEN` | agent-api 内部回调 Bearer token（`E2E-1` 驱动 cloud host ready 回调；**缺省时 E2E-1 显式 skip，不静默绕过核心断言**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:35273` |
-| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32；缺失时该组用例跳过） | - |
+| `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32 / E2E-CR*；缺失时该组用例跳过） | - |
+| `GITHUB_API_BASE` | Check Runs 同步展示用例（E2E-CR*）不依赖出站调用；出站行为由 `tests/api` mock GitHub 覆盖 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
 
@@ -242,6 +243,23 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-30 归档注销 | 归档实例 → 「关联 Pull Request」清空；再注入事件返回 `NO_HANDLER`/`INSTANCE_ARCHIVED`，人类节点状态不变 |
 | E2E-31 零回归 | 未勾选联动 → AI 提示词无 PR 段；注入事件 → `NO_HANDLER` |
 | E2E-32 实例页编辑开关 | 未开始 HUMAN 节点可编辑联动开关并落库；节点开始后编辑入口消失 |
+| E2E-CR1 检查项展示 | 直写登记同步字段后：节点徽标区「检查项」外链（短 sha tooltip）+ 右栏最近同步/写入提交 |
+| E2E-CR2 失败提示 | `lastSyncError` 在右栏红色副行展示，页面其它操作不受影响 |
+| E2E-CR3 零回归 | 未绑定 PR 的实例：右栏「暂无关联」，无「检查项」元素 |
+
+### Cloud Host Issues Linkage E2E (`cloud-host-issues-linkage.spec.ts`)
+
+> fixture 驱动（`MONGODB_URI`）：直接写云电脑 / 已配置工作流 / 联动配置，不依赖真实 K8s 与 GitHub App；触发链路与标签同步由 `tests/api` T-GHIL/T-GHI 覆盖。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-33 配置列表与弹窗 | 「Github」tab → 列表展示工作流名/标签/仓库 → 加配置弹窗默认标签 `start-{工作流名字}` 与同步提示 |
+| E2E-34 校验引导 | 无可用工作流 → 展示「配置工作流」入口且保存禁用 |
+| E2E-35 触发链路 | **未实现**（需真实 Github App/仓库与云电脑）：状态机语义由 `issues-event-handler.runner.test.ts` 覆盖，webhook 判定链由 `tests/api` T-GHI1/2/4 覆盖 |
+| E2E-36 幂等与多配置 | **未实现**（同 E2E-35 环境依赖）：多配置与幂等由 `issues-event-handler.flow.test.ts` 与唯一索引单测覆盖 |
+| E2E-37 销毁清理 | 有配置的云电脑销毁时出现标签清理询问（1 条配置）；确认删除后云电脑从面板移除（实际标签删除依赖真实仓库，见 T-GHIL4/5） |
+| E2E-38 零回归 | **未单独建用例**：未配置联动云电脑与 `pull_request_review` 联动（E2E-27..32）由既有套件回归，`pull_request_review` 分支代码未改动 |
+
 
 ### ACP Permission Reminder E2E (`permission.spec.ts`)
 

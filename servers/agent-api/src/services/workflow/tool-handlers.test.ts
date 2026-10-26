@@ -20,6 +20,10 @@ vi.mock('./pr-handler-registry.js', async (importOriginal) => {
   };
 });
 
+vi.mock('./pr-check-run-sync.js', () => ({
+  syncNodeStatus: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   callWorkflowTool,
   getWorkflowToolDefinitions,
@@ -29,6 +33,7 @@ import {
 import { workflowEngine } from './engine.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
+import { syncNodeStatus } from './pr-check-run-sync.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -387,6 +392,23 @@ describe('linkPullRequest 工具', () => {
       workflowInstanceId: 'inst-1',
       nodeId: 'n2',
     });
+    // 绑定即同步：以当前实例与节点触发一次首同步
+    expect(syncNodeStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: expect.anything() }),
+      expect.objectContaining({ nodeId: 'n2' }),
+    );
+  });
+
+  it('首同步抛错不影响工具结果', async () => {
+    loadInstance();
+    vi.mocked(syncNodeStatus).mockRejectedValueOnce(new Error('github down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      callWorkflowTool(SCOPE, 'linkPullRequest', { pullRequestId: 'Deliay/z-agent-gear#264' }),
+    ).resolves.toMatchObject({ registered: true });
+
+    warn.mockRestore();
   });
 
   it('显式 workflowId/nodeId 与作用域不一致时拒绝', async () => {

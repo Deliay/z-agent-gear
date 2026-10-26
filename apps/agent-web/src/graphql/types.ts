@@ -12,7 +12,7 @@ export interface ControllerKeyData {
   updatedAt: string
 }
 
-export type HarnessType = 'OPENCODE' | 'KIMI_CODE'
+export type HarnessType = 'OPENCODE' | 'KIMI_CODE' | 'DEEPSEEK_HARNESS'
 
 /** 工作负载分类：standard = 运行环境/工具，harness = 云电脑 harness */
 export type CloudWorkloadKind = 'STANDARD' | 'HARNESS'
@@ -945,4 +945,48 @@ export interface MyBillingApiCallData {
 
 export interface GetMyBillingApiCallsQuery {
   myBillingApiCalls: MyBillingApiCallData[]
+}
+
+/** 云电脑 GitHub Issues 联动配置（对齐 contracts/cloud-host.graphql） */
+export interface CloudHostIssuesLinkageData {
+  id: string
+  controllerId: string
+  configuredWorkflowId: string
+  configuredWorkflowName: string
+  labelName: string
+  repoFullNames: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CloudHostIssuesLinkagesQuery {
+  cloudHostIssuesLinkages: CloudHostIssuesLinkageData[]
+}
+
+export interface CloudHostIssuesLinkageInput {
+  controllerId: string
+  configuredWorkflowId: string
+  labelName: string
+  repoFullNames: string[]
+}
+
+export interface CreateCloudHostIssuesLinkageMutation {
+  createCloudHostIssuesLinkage: CloudHostIssuesLinkageData
+}
+
+export interface UpdateCloudHostIssuesLinkageMutation {
+  updateCloudHostIssuesLinkage: CloudHostIssuesLinkageData
+}
+
+export interface DeleteCloudHostIssuesLinkageMutation {
+  deleteCloudHostIssuesLinkage: boolean
+}
+
+export interface CleanupCloudHostIssuesLabelsResultData {
+  deleted: string[]
+  failed: string[]
+}
+
+export interface CleanupCloudHostIssuesLabelsMutation {
+  cleanupCloudHostIssuesLabels: CleanupCloudHostIssuesLabelsResultData
 }
