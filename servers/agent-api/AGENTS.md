@@ -96,6 +96,29 @@ npm run start   # Start production server
 - MCP：平台服务 `agent-cloud-host-tools`（`transport/source=platform`），工具 `workload_list`/`workload_install`；云会话 `sessionService.create` 自动装配，非云会话不装配；`workload_install` 等待终态（上限 10 分钟），执行记录 `source=mcp`。
 - 会话：`controllerWorkspaceService.ensureWorkspace` 按路径幂等 upsert（不触发 10 个工作区上限）；Git 设置成功后自动建会话，失败仅 session 步骤 FAILED、operation 仍 SUCCEEDED 并提示手动建会话；`createSession=false` 时 session 步骤记 SKIPPED（多 Harness 不自动建会话）。
 
+## Commit 设置与提交身份（本期）
+
+- 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一）+
+  迁移 `011-user-commit-settings-index` 显式创建唯一索引；按 userId upsert，每用户单行。
+- 契约：`contracts/github.graphql` 的 `CommitSettings` / `CommitSettingsInput` /
+  `CommitterMode` / `CommitterType`，GraphQL `commitSettings` / `updateCommitSettings`
+  （`schemas/github.ts` + `resolvers/github.ts`，未登录 `Not authenticated`）。
+- `services/commit-settings-service.ts`：服务端权威校验白名单（三行逐字：
+  `committer is required for the selected mode` / `invalid github account` /
+  `invalid custom committer`）；归一仅按 `committerType`（`committerMode=UNSET` 不清空提交人）；
+  自定义校验 trim / ≤100 / ≤254 / 禁 `\n\r\0` / 邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`。
+- `resolveCommitIdentity(controllerId)` 五步：云主机（未删）→ userId → 设置（未保存 unset）→
+  提交人归一（解绑 / 越权 / 非法 → unset）→ 模式门控（`agent_only` 需
+  `cloud_host_github_bindings` 或 `cloudcontainers.installedWorkloads[].name==='Github'`；
+  `human_only` = 提交人；`co_author` = 提交人 + bot）→ bot 失败降级 unset。
+  任一异常一律 `{mode:'unset'}`，响应按字段存在性缺省（unset 仅 mode；co_author 才含 coAuthor*）。
+- 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity`，与 `github-credential`
+  双鉴权一致（`INTERNAL_API_TOKEN` 或本机 Controller key，鉴权失败 401/403），**永不 404**。
+- bot 身份：`githubService.resolveAppBotIdentity()`（`GET /app` → `GET /users/{slug}[bot]`，裸 fetch），
+  Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底；
+  GitHub 帐号 / bot 邮箱均使用 `{id}+{login}@users.noreply.github.com`。
+- 仅云容器生效；本地控制器链路零改动；不改 `MIN_HARNESS_WORKER_VERSION`（旧 worker 行为即未设置）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

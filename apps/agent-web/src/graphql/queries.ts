@@ -568,6 +568,18 @@ export const GET_GITHUB_APP_URL = gql`
   }
 `
 
+export const GET_COMMIT_SETTINGS = gql`
+  query GetCommitSettings {
+    commitSettings {
+      committerMode
+      committerType
+      githubAccountId
+      customName
+      customEmail
+    }
+  }
+`
+
 export const WORKSPACE_WORKTREES = gql`
   query WorkspaceWorktrees($controllerId: ID!, $workspaceId: ID!) {
     workspaceWorktrees(controllerId: $controllerId, workspaceId: $workspaceId) {

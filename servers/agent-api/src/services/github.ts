@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+import { getRedisClient } from '../middleware/redis.js';
 
 export interface GitHubRepoInfo {
   repoId: number;
@@ -487,6 +488,190 @@ export class GitHubService {
     if (!response.ok && response.status !== 404) {
       throw new Error(`Failed to uninstall app: ${response.status}`);
     }
+  }
+
+  /**
+   * 解析 GitHub App bot 身份（提交身份来源）。
+   *
+   * `createAppJwt()` → `GET /app` 取 `slug` → `GET /users/{slug}[bot]` 取 `id`；
+   * 组装 `{ slug, botUserId, name, email }`，邮箱固定为 GitHub noreply 形式。
+   *
+   * 缓存：Redis `github:app-bot-identity` 成功 TTL 24h、失败 sentinel 60s（防击穿），
+   * 进程内 Map 同口径兜底。任何异常一律返回 `null`（调用方按 `unset` 降级），
+   * 告警不含 JWT / slug 以外的敏感信息。
+   */
+  async resolveAppBotIdentity(): Promise<AppBotIdentity | null> {
+    const cached = readBotIdentityMemory();
+    if (cached !== undefined) return cached;
+
+    const redis = safeRedis();
+    if (redis) {
+      try {
+        const raw = await redis.get(APP_BOT_IDENTITY_CACHE_KEY);
+        if (raw === APP_BOT_IDENTITY_FAIL_SENTINEL) {
+          writeBotIdentityMemory(null, Date.now() + APP_BOT_IDENTITY_FAIL_TTL_MS);
+          return null;
+        }
+        if (raw) {
+          const parsed = parseBotIdentity(raw);
+          if (parsed) {
+            writeBotIdentityMemory(parsed, Date.now() + APP_BOT_IDENTITY_TTL_MS);
+            return parsed;
+          }
+        }
+      } catch {
+        // Redis 不可用：继续走外部解析（内存兜底仍然生效）。
+      }
+    }
+
+    try {
+      const identity = await this.fetchAppBotIdentity();
+      await writeBotIdentityCache(identity);
+      return identity;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      // 只记录状态 / 结构错误，绝不记录 JWT 或身份之外的响应内容。
+      console.warn(`[GitHub] app bot identity unavailable: ${reason}`);
+      await writeBotIdentityCache(null);
+      return null;
+    }
+  }
+
+  private async fetchAppBotIdentity(): Promise<AppBotIdentity> {
+    const appJwt = this.createAppJwt();
+    const base = config.githubApiBaseUrl || GITHUB_API;
+    const headers = {
+      Authorization: `Bearer ${appJwt}`,
+      Accept: 'application/vnd.github+json',
+    };
+
+    const appResponse = await fetchWithTimeout(`${base}/app`, headers);
+    if (!appResponse.ok) throw new Error(`GET /app failed: ${appResponse.status}`);
+    const app = (await appResponse.json()) as { slug?: unknown };
+    const slug = typeof app.slug === 'string' ? app.slug.trim() : '';
+    if (!slug) throw new Error('GET /app response missing slug');
+
+    const botLogin = `${slug}[bot]`;
+    const userResponse = await fetchWithTimeout(
+      `${base}/users/${encodeURIComponent(botLogin)}`,
+      headers,
+    );
+    if (!userResponse.ok) {
+      throw new Error(`GET /users/${botLogin} failed: ${userResponse.status}`);
+    }
+    const user = (await userResponse.json()) as { id?: unknown };
+    const botUserId = typeof user.id === 'number' ? user.id : Number.NaN;
+    if (!Number.isFinite(botUserId)) {
+      throw new Error('GET /users/{slug}[bot] response missing id');
+    }
+
+    return {
+      slug,
+      botUserId,
+      name: botLogin,
+      email: `${botUserId}+${botLogin}@users.noreply.github.com`,
+    };
+  }
+}
+
+/** App bot 身份（提交身份来源；`email` 为 GitHub noreply 形式）。 */
+export interface AppBotIdentity {
+  slug: string;
+  botUserId: number;
+  name: string;
+  email: string;
+}
+
+const APP_BOT_FETCH_TIMEOUT_MS = 10_000;
+
+/** GitHub App 身份解析的出站请求超时（10s）；失败统一走降级。 */
+async function fetchWithTimeout(url: string, headers: Record<string, string>): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), APP_BOT_FETCH_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    return await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const APP_BOT_IDENTITY_CACHE_KEY = 'github:app-bot-identity';
+const APP_BOT_IDENTITY_TTL_MS = 24 * 60 * 60 * 1000;
+const APP_BOT_IDENTITY_FAIL_TTL_MS = 60 * 1000;
+const APP_BOT_IDENTITY_FAIL_SENTINEL = '__fail__';
+
+interface BotIdentityMemoryEntry {
+  value: AppBotIdentity | null;
+  expiresAt: number;
+}
+
+const botIdentityMemory = new Map<string, BotIdentityMemoryEntry>();
+
+/** 测试用：清空进程内 bot 身份缓存（生产代码不调用）。 */
+export function resetAppBotIdentityCache(): void {
+  botIdentityMemory.clear();
+}
+
+function readBotIdentityMemory(): AppBotIdentity | null | undefined {
+  const entry = botIdentityMemory.get(APP_BOT_IDENTITY_CACHE_KEY);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    botIdentityMemory.delete(APP_BOT_IDENTITY_CACHE_KEY);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function writeBotIdentityMemory(value: AppBotIdentity | null, expiresAt: number): void {
+  botIdentityMemory.set(APP_BOT_IDENTITY_CACHE_KEY, { value, expiresAt });
+}
+
+function parseBotIdentity(raw: string): AppBotIdentity | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<AppBotIdentity> | null;
+    if (!parsed || typeof parsed.slug !== 'string' || typeof parsed.botUserId !== 'number') {
+      return null;
+    }
+    if (typeof parsed.name !== 'string' || typeof parsed.email !== 'string') return null;
+    return {
+      slug: parsed.slug,
+      botUserId: parsed.botUserId,
+      name: parsed.name,
+      email: parsed.email,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function safeRedis(): { get(key: string): Promise<string | null>; set(...args: unknown[]): Promise<unknown> } | null {
+  try {
+    return getRedisClient() as never;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBotIdentityCache(identity: AppBotIdentity | null): Promise<void> {
+  const ttlSeconds = identity
+    ? APP_BOT_IDENTITY_TTL_MS / 1000
+    : APP_BOT_IDENTITY_FAIL_TTL_MS / 1000;
+  writeBotIdentityMemory(
+    identity,
+    Date.now() + (identity ? APP_BOT_IDENTITY_TTL_MS : APP_BOT_IDENTITY_FAIL_TTL_MS),
+  );
+  const redis = safeRedis();
+  if (!redis) return;
+  try {
+    await redis.set(
+      APP_BOT_IDENTITY_CACHE_KEY,
+      identity ? JSON.stringify(identity) : APP_BOT_IDENTITY_FAIL_SENTINEL,
+      'EX',
+      ttlSeconds,
+    );
+  } catch {
+    // 缓存写失败不影响本次结果。
   }
 }
 

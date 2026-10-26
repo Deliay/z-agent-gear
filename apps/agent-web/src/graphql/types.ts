@@ -759,6 +759,34 @@ export interface UnbindGitHubAccountMutation {
   unbindGitHubAccount: boolean
 }
 
+export type CommitterModeValue = 'AGENT_ONLY' | 'CO_AUTHOR' | 'HUMAN_ONLY' | 'UNSET'
+
+export type CommitterTypeValue = 'GITHUB_ACCOUNT' | 'CUSTOM' | 'UNSET'
+
+export interface CommitSettingsData {
+  committerMode: CommitterModeValue
+  committerType: CommitterTypeValue
+  githubAccountId: string | null
+  customName: string | null
+  customEmail: string | null
+}
+
+export interface CommitSettingsInputData {
+  committerMode: CommitterModeValue
+  committerType: CommitterTypeValue
+  githubAccountId?: string | null
+  customName?: string | null
+  customEmail?: string | null
+}
+
+export interface GetCommitSettingsQuery {
+  commitSettings: CommitSettingsData
+}
+
+export interface UpdateCommitSettingsMutation {
+  updateCommitSettings: CommitSettingsData
+}
+
 export interface RefreshGitHubInstallationsMutation {
   refreshGitHubInstallations: GitHubAccountData
 }

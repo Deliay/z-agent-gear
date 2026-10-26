@@ -12,10 +12,12 @@ import {
   readCloudHostEnv,
   resolveShutdownExitCode,
   startCloudHostSupervisor,
+  type CommitIdentityManagerLike,
   type CredentialManagerLike,
 } from './supervisor.js';
 import type { ConnectToServerOptions } from '../socketio-client.js';
 import type { GithubCredentialRefreshResult } from '../github/credential-manager.js';
+import type { CommitIdentityRefreshResult } from '../github/commit-identity-manager.js';
 
 const TMP_BASE = '/tmp/opencode';
 
@@ -41,6 +43,9 @@ function setup(overrides: {
   env?: NodeJS.ProcessEnv;
   makeDir?: (path: string) => Promise<void>;
   credentialManager?: CredentialManagerLike;
+  commitIdentityManager?: CommitIdentityManagerLike;
+  /** 为 true 时不注入 commit-identity manager，用于覆盖缺省注入路径。 */
+  useDefaultCommitIdentityManager?: boolean;
 } = {}) {
   const worker = fakeSocket();
   const controller = fakeSocket();
@@ -66,7 +71,20 @@ function setup(overrides: {
       log: (message: string) => logs.push(message),
       installSignalHandlers: false,
       credentialManager: overrides.credentialManager,
+      commitIdentityManager: overrides.useDefaultCommitIdentityManager
+        ? undefined
+        : (overrides.commitIdentityManager ?? fakeCommitIdentityManager()),
     },
+  };
+}
+
+function fakeCommitIdentityManager(
+  result: CommitIdentityRefreshResult = { ok: true, mode: 'unset' },
+): CommitIdentityManagerLike {
+  return {
+    start: vi.fn(),
+    stop: vi.fn(),
+    refreshNow: vi.fn(async () => result),
   };
 }
 
@@ -464,6 +482,46 @@ describe('cloud host github credential manager (T-SUP-G)', () => {
     expect(context.exit).not.toHaveBeenCalled();
     const output = context.logs.join('\n');
     expect(output).toContain('disabled');
+    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
+    expect(output).toContain('ZAG_CONTROLLER_ID');
+    expect(output).not.toContain(BASE_ENV.ZAG_HOST_KEY);
+  });
+});
+
+describe('cloud host commit identity manager (T-SUP-CI)', () => {
+  it('T-SUP-CI1: starts the commit identity manager independently and stops it on shutdown', async () => {
+    const credentials = fakeCredentialManager();
+    const commitIdentity = fakeCommitIdentityManager();
+    const context = setup({
+      credentialManager: credentials,
+      commitIdentityManager: commitIdentity,
+    });
+
+    const handle = await startCloudHostSupervisor(context.deps);
+
+    // 与凭据管理器相互独立：两者各自 start（不依赖 gh 凭据 / Git 项目绑定）
+    expect(credentials.start).toHaveBeenCalledTimes(1);
+    expect(commitIdentity.start).toHaveBeenCalledTimes(1);
+    expect(commitIdentity.refreshNow).not.toHaveBeenCalled();
+
+    handle.shutdown('test');
+    handle.shutdown('again');
+
+    expect(credentials.stop).toHaveBeenCalledTimes(1);
+    expect(commitIdentity.stop).toHaveBeenCalledTimes(1);
+    expect(context.exit).toHaveBeenCalledWith(42);
+  });
+
+  it('T-SUP-CI2: default commit identity manager only warns when its env is missing', async () => {
+    const context = setup({ env: { ...BASE_ENV }, useDefaultCommitIdentityManager: true });
+
+    const handle = await startCloudHostSupervisor(context.deps);
+
+    expect(handle.workerSocket).toBe(context.worker);
+    expect(context.connect).toHaveBeenCalledTimes(1);
+    expect(context.exit).not.toHaveBeenCalled();
+    const output = context.logs.join('\n');
+    expect(output).toContain('[CommitIdentity] disabled');
     expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
     expect(output).toContain('ZAG_CONTROLLER_ID');
     expect(output).not.toContain(BASE_ENV.ZAG_HOST_KEY);
