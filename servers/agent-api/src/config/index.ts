@@ -51,6 +51,11 @@ export const config = {
   ),
   // 操作 RUNNING 超过该时长视为中断（查询时标记 FAILED，默认 30 分钟）
   cloudHostSetupStaleMs: toPositiveInt(process.env.CLOUD_HOST_SETUP_STALE_MS, 1_800_000),
+  // Issues 联动：首个人类节点自动完成等待上限（默认 24 小时）
+  issuesTriggerHumanNodeTimeoutMs: toPositiveInt(
+    process.env.ISSUES_TRIGGER_HUMAN_NODE_TIMEOUT_MS,
+    86_400_000,
+  ),
   // 事件回调鉴权（两者都未配置时回调端点一律 401，默认拒绝）
   eventCallbackToken: process.env.EVENT_CALLBACK_TOKEN || '',
   githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET || '',

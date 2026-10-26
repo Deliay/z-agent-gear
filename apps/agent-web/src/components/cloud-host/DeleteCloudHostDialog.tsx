@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
-import { useMutation } from '@apollo/client/react'
-import { DELETE_CLOUD_HOST } from '../../graphql/mutations'
-import type { CloudHostData, DeleteCloudHostMutation } from '../../graphql/types'
+import { useMutation, useQuery } from '@apollo/client/react'
+import {
+  CLEANUP_CLOUD_HOST_ISSUES_LABELS,
+  DELETE_CLOUD_HOST,
+} from '../../graphql/mutations'
+import { CLOUD_HOST_ISSUES_LINKAGES } from '../../graphql/queries'
+import type {
+  CleanupCloudHostIssuesLabelsMutation,
+  CloudHostData,
+  CloudHostIssuesLinkagesQuery,
+  DeleteCloudHostMutation,
+} from '../../graphql/types'
 import { canDeleteCloudHost, cloudHostStatusLabel } from './cloud-host-status'
 import {
   Dialog,
@@ -16,6 +25,8 @@ import { Button } from '@/components/ui/button'
 interface DeleteCloudHostDialogProps {
   open: boolean
   cloudHost: Pick<CloudHostData, 'id' | 'name' | 'status' | 'deletedAt'>
+  /** 用于查询联动配置（缺失时不展示标签清理勾选项） */
+  controllerId?: string
   onClose: () => void
   onDeleted: () => void
 }
@@ -32,26 +43,60 @@ function getErrorMessage(error: unknown): string {
 export default function DeleteCloudHostDialog({
   open,
   cloudHost,
+  controllerId,
   onClose,
   onDeleted,
 }: DeleteCloudHostDialogProps) {
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [cleanupLabels, setCleanupLabels] = useState(false)
+  const [cleanupDone, setCleanupDone] = useState(false)
+  const [failedLabels, setFailedLabels] = useState<string[]>([])
   const [deleteCloudHost] = useMutation<DeleteCloudHostMutation>(DELETE_CLOUD_HOST)
+  const [cleanupIssuesLabels] = useMutation<CleanupCloudHostIssuesLabelsMutation>(
+    CLEANUP_CLOUD_HOST_ISSUES_LABELS,
+  )
+  const deletable = canDeleteCloudHost(cloudHost)
+  const { data: linkagesData } = useQuery<CloudHostIssuesLinkagesQuery>(
+    CLOUD_HOST_ISSUES_LINKAGES,
+    {
+      variables: { controllerId: controllerId ?? '' },
+      skip: !open || !deletable || !controllerId,
+      errorPolicy: 'ignore',
+    },
+  )
+  const linkageCount = linkagesData?.cloudHostIssuesLinkages.length ?? 0
 
   useEffect(() => {
     if (open) {
       setDeleting(false)
       setError(null)
+      setCleanupLabels(false)
+      setCleanupDone(false)
+      setFailedLabels([])
     }
   }, [open])
-
-  const deletable = canDeleteCloudHost(cloudHost)
 
   const handleDelete = async () => {
     if (!deletable || deleting) return
     setDeleting(true)
     setError(null)
+    if (cleanupLabels && controllerId && !cleanupDone) {
+      try {
+        const { data } = await cleanupIssuesLabels({ variables: { controllerId } })
+        const failed = data?.cleanupCloudHostIssuesLabels.failed ?? []
+        setCleanupDone(true)
+        if (failed.length > 0) {
+          setFailedLabels(failed)
+          setDeleting(false)
+          return
+        }
+      } catch {
+        setFailedLabels(['清理标签失败，可重试或直接删除'])
+        setDeleting(false)
+        return
+      }
+    }
     try {
       await deleteCloudHost({ variables: { id: cloudHost.id } })
       onDeleted()
@@ -81,6 +126,29 @@ export default function DeleteCloudHostDialog({
           </p>
         )}
 
+        {deletable && linkageCount > 0 && (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="同时删除已同步到仓库的标签"
+              checked={cleanupLabels}
+              onChange={(event) => setCleanupLabels(event.target.checked)}
+            />
+            <span>同时删除已同步到仓库的标签（{linkageCount} 条配置）</span>
+          </label>
+        )}
+
+        {failedLabels.length > 0 && (
+          <div role="alert" className="rounded-md bg-muted p-2 text-sm text-destructive">
+            <p>以下标签清理失败（不影响删除云电脑）：</p>
+            <ul className="mt-1 list-disc pl-5">
+              {failedLabels.map((item) => (
+                <li key={item} className="break-all">{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {error && (
           <p role="alert" className="break-words text-sm text-destructive">
             {error}
@@ -98,7 +166,7 @@ export default function DeleteCloudHostDialog({
               disabled={deleting}
               onClick={() => { void handleDelete() }}
             >
-              {deleting ? '删除中...' : '确认删除'}
+              {deleting ? '删除中...' : failedLabels.length > 0 ? '仍要删除' : '确认删除'}
             </Button>
           )}
         </DialogFooter>

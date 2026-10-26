@@ -562,3 +562,48 @@ export const REVOKE_MY_BILLING_API_KEY = gql`
     }
   }
 `
+
+export const CREATE_CLOUD_HOST_ISSUES_LINKAGE = gql`
+  mutation CreateCloudHostIssuesLinkage($input: CloudHostIssuesLinkageInput!) {
+    createCloudHostIssuesLinkage(input: $input) {
+      id
+      controllerId
+      configuredWorkflowId
+      configuredWorkflowName
+      labelName
+      repoFullNames
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const UPDATE_CLOUD_HOST_ISSUES_LINKAGE = gql`
+  mutation UpdateCloudHostIssuesLinkage($id: ID!, $input: CloudHostIssuesLinkageInput!) {
+    updateCloudHostIssuesLinkage(id: $id, input: $input) {
+      id
+      controllerId
+      configuredWorkflowId
+      configuredWorkflowName
+      labelName
+      repoFullNames
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+export const DELETE_CLOUD_HOST_ISSUES_LINKAGE = gql`
+  mutation DeleteCloudHostIssuesLinkage($id: ID!) {
+    deleteCloudHostIssuesLinkage(id: $id)
+  }
+`
+
+export const CLEANUP_CLOUD_HOST_ISSUES_LABELS = gql`
+  mutation CleanupCloudHostIssuesLabels($controllerId: ID!) {
+    cleanupCloudHostIssuesLabels(controllerId: $controllerId) {
+      deleted
+      failed
+    }
+  }
+`

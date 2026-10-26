@@ -31,6 +31,12 @@ export interface GitHubAccountInfo {
 
 const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
 
+/** Issues 联动同步标签的固定颜色与描述（用于识别平台同步过的标签） */
+export const ISSUES_LINKAGE_LABEL_COLOR = '0e8a16';
+export const ISSUES_LINKAGE_LABEL_DESCRIPTION = '由 z-agent-gear 云电脑 Issues 联动同步';
+
+const GITHUB_API = 'https://api.github.com';
+
 /** 仓库级 installation token 进程内缓存（不落库、不写日志；到期前 5 分钟作废） */
 interface RepoTokenCacheEntry {
   token: string;
@@ -323,6 +329,91 @@ export class GitHubService {
     const issued = { token: data.token, expiresAt: new Date(data.expires_at) };
     repoTokenCache.set(tokenCacheKey(accountId, repoFullName), issued);
     return issued;
+  }
+
+  /** 确保仓库存在同名标签（存在即返回；并发创建 422 视为幂等成功）。 */
+  async ensureIssueLabel(userId: string, repoFullName: string, name: string): Promise<void> {
+    const token = await this.repoToken(userId, repoFullName);
+    const base = `${GITHUB_API}/repos/${repoFullName}/labels`;
+    const existing = await fetch(`${base}/${encodeURIComponent(name)}`, {
+      headers: this.githubHeaders(token),
+    });
+    if (existing.ok) return;
+    if (existing.status !== 404) throw new Error(`label sync failed: ${repoFullName}`);
+
+    const created = await fetch(base, {
+      method: 'POST',
+      headers: this.githubHeaders(token),
+      body: JSON.stringify({
+        name,
+        color: ISSUES_LINKAGE_LABEL_COLOR,
+        description: ISSUES_LINKAGE_LABEL_DESCRIPTION,
+      }),
+    });
+    if (created.ok || created.status === 422) return;
+    throw new Error(`label sync failed: ${repoFullName}`);
+  }
+
+  /** 删除仓库同名标签（404 视为成功）。 */
+  async deleteIssueLabel(userId: string, repoFullName: string, name: string): Promise<void> {
+    const token = await this.repoToken(userId, repoFullName);
+    const response = await fetch(
+      `${GITHUB_API}/repos/${repoFullName}/labels/${encodeURIComponent(name)}`,
+      { method: 'DELETE', headers: this.githubHeaders(token) },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`label delete failed: ${repoFullName}`);
+    }
+  }
+
+  /** 发布 Issue 评论，返回 comment id。 */
+  async createIssueComment(
+    userId: string,
+    repoFullName: string,
+    issueNumber: number,
+    body: string,
+  ): Promise<number> {
+    const token = await this.repoToken(userId, repoFullName);
+    const response = await fetch(
+      `${GITHUB_API}/repos/${repoFullName}/issues/${issueNumber}/comments`,
+      {
+        method: 'POST',
+        headers: this.githubHeaders(token),
+        body: JSON.stringify({ body }),
+      },
+    );
+    if (!response.ok) throw new Error(`issue comment failed: ${repoFullName}`);
+    const data = (await response.json()) as { id?: number };
+    if (typeof data.id !== 'number') throw new Error(`issue comment failed: ${repoFullName}`);
+    return data.id;
+  }
+
+  /** 解析仓库归属账号（`GitHubInstallation.repos[].fullName` 大小写不敏感反查，多匹配取首个）。 */
+  async resolveRepoAccount(userId: string, repoFullName: string): Promise<string> {
+    const target = repoFullName.trim().toLowerCase();
+    const accounts = await GitHubAccount.find({ userId }).sort({ createdAt: 1 }).lean();
+    for (const account of accounts) {
+      const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+      const matched = installations.some((installation) =>
+        (installation.repos ?? []).some((repo) => repo.fullName.toLowerCase() === target),
+      );
+      if (matched) return account._id.toString();
+    }
+    throw new Error(`repo not authorized: ${repoFullName}`);
+  }
+
+  private githubHeaders(token: string): Record<string, string> {
+    return {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async repoToken(userId: string, repoFullName: string): Promise<string> {
+    const accountId = await this.resolveRepoAccount(userId, repoFullName);
+    const { token } = await this.createRepoScopedToken(accountId, repoFullName);
+    return token;
   }
 
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
