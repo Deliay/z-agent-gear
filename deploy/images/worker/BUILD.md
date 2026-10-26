@@ -166,8 +166,10 @@ docker run --rm --entrypoint bash \
 
 ### OpenCode（Harness）工作负载自验
 
-镜像**不预装** `@opencode/cli`；OpenCode 由「OpenCode（Harness）」工作负载（admin-api 迁移 005）在
-`init` 阶段按固定版本安装，随后执行 `opencode --version` 硬校验与 `agent-gear harness prepare`。
+镜像**不预装** `@opencode/cli`；OpenCode 由「OpenCode（Harness）」工作负载（admin-api 迁移 006）在
+`init` 阶段按固定版本安装，随后执行 `opencode --version` 硬校验与按类型限定的
+`ZAG_HARNESS_TYPES=opencode agent-gear harness prepare`（多 harness 主机顺序安装 CLI，裸调用会对
+尚未安装的类型硬校验而误失败）。
 任一失败以非零退出，`required=true` 会触发 cloud-controller 强制注销容器。
 
 `OPENCODE_CLI_VERSION` 锁定口径：
@@ -207,8 +209,9 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
 
 镜像**不预装** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-acp-app`；二者由「DeepSeek Harness（Harness）」工作负载
 （admin-api 迁移 010）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
-`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与
-`agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 含 `deepseek_harness`）。任一失败以非零退出，
+`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与按类型限定的
+`ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 前缀限定本类型，
+多 harness 主机顺序安装 CLI 时裸调用会对尚未安装的类型硬校验而误失败）。任一失败以非零退出，
 `required=true` 会触发 cloud-controller 强制注销容器。
 
 `DSH_CLI_VERSION` / `DSH_ACP_APP_VERSION` 锁定口径：
