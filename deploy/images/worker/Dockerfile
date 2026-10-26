@@ -126,9 +126,7 @@ RUN printf '%s\n' \
 #      （见 servers/admin-api 迁移 005 与 BUILD.md）。
 RUN npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.9.x \
-      @agentclientprotocol/claude-agent-acp \
-      @agentclientprotocol/codex-acp \
+      agent-gear@2.8.x \
  && npm cache clean --force
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
