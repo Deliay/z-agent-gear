@@ -288,6 +288,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E37 问询提示条 | fake controller 发 `acp:elicitation` → 会话内提示条可打开弹窗 |
 | T-E38 问询过期 | 发 `acp:elicitation:resolved{timeout}` → 弹窗显示「已过期」且操作按钮隐藏 |
 | T-E39 移动端问询 | 移动视口 → 提示条可见、可打开弹窗（Sidebar 未挂载场景） |
+| T-E40 初始配置失败 toast | fake controller 发 `acp:initial-config:result{modelStatus:'failed',error}` → 会话页 toast「模式/模型设置未生效：<error>」+ 副行「当前生效模型」 |
 
 ### Kimi Code 登录引导 E2E (`harness-login.spec.ts`)
 

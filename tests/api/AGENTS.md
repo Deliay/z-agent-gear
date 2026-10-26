@@ -454,6 +454,9 @@ npm test
 | T-AC5 模型来源分组 | 必须注入 `MONGODB_URI`（缺失即失败）：直写平台库（global/user）+ fake 上报 4 个模型 → 四组与 basis |
 | T-AC6 问询 resolved(timeout) | fake controller 发 `acp:elicitation:resolved{reason:'timeout'}` → todo `resolution=expired`、`resolvedAt` 非空 |
 | T-AC7 问询响应 | `respondElicitation(decline)` → controller 收到 decline、todo `resolution=declined` |
+| T-AC11 初始配置失败 SSE 透传 | fake controller 发 `acp:initial-config:result{modelStatus:'failed'}` → SSE `status` 事件携带 `initialConfigError`（modelId/error/at） |
+| T-AC12 初始配置落库与清除 | 需 `MONGODB_URI`（缺省 skip）：failed → Session 文档写 `initialConfigError`；全部 applied → `$unset` 清除 |
+| T-AC13 初始配置非法 payload | 需 `MONGODB_URI`（缺省 skip）：缺 `sessionId` / status 越界被丢弃，Session 文档既有 `initialConfigError` 无变化 |
 
 > `acp-real-capabilities.test.ts` 属 `test:real` 套件：真实 OpenCode 建会话后校验 `raw.agentCapabilities.sessionCapabilities` 与 `features` 状态（需要本机安装 OpenCode）。
 

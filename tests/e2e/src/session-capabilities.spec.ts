@@ -386,4 +386,32 @@ test.describe('ACP 能力透明化 E2E', () => {
 
     disconnect();
   });
+
+  test('T-E40: 初始模型应用失败 → 会话页 toast 提示「模式/模型设置未生效」', async ({ page }) => {
+    const { socket, sessionId, disconnect } = await setupSession(page, {
+      capabilities: makeCapabilities(),
+      availableModels: [{ id: 'gpt-4o', name: 'GPT-4o' }],
+      currentModelId: 'gpt-4o',
+    });
+    await openSessionPage(page, sessionId);
+
+    // SSE 连接注册先于事件注入：短间隔重发直至 toast 出现（同文档重复写幂等，无副作用）。
+    // 重发会产生多条相同文案的 toast，断言统一取 first()。
+    const toast = page.getByText('模式/模型设置未生效：model unavailable').first();
+    for (let i = 0; i < 5; i++) {
+      socket.emit('acp:initial-config:result', {
+        sessionId,
+        modelId: 'gpt-4o',
+        modelStatus: 'failed',
+        error: 'model unavailable',
+      });
+      if (await toast.isVisible().catch(() => false)) break;
+      await page.waitForTimeout(1000);
+    }
+    await expect(toast).toBeVisible({ timeout: 10000 });
+    // toast 副行展示实际生效值，避免用户误以为所选模型已生效
+    await expect(page.getByText('当前生效模型：GPT-4o').first()).toBeVisible();
+
+    disconnect();
+  });
 });
