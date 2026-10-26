@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
 const MONGODB_URI = process.env.MONGODB_URI || '';
 
@@ -422,6 +423,138 @@ describe('ACP 会话能力快照 API', () => {
       } finally {
         await collection.deleteMany({ name: { $in: [globalName, userName] } });
       }
+    });
+  });
+
+  describe('初始模式/模型应用确认结果（acp:initial-config:result，契约 §2.39）', () => {
+    it('T-AC11: modelStatus=failed → SSE status 事件透传 initialConfigError', async () => {
+      const { controllerId, client } = await createFreshController();
+      const sessionId = await createSession(client, controllerId, { capabilities: makeCapabilities() });
+
+      const controller = new AbortController();
+      const res = await fetch(`${SSE_BASE_URL}/api/session/${sessionId}/stream`, {
+        headers: { Authorization: `Bearer ${authToken}`, 'Accept-Encoding': 'identity' },
+        signal: controller.signal,
+      });
+      expect(res.status).toBe(200);
+
+      // 等待 SSE 连接注册后再注入结果，避免 publish 早于订阅
+      await sleep(500);
+      client.emit('acp:initial-config:result', {
+        sessionId,
+        modelId: 'gpt-x-not-exist',
+        modelStatus: 'failed',
+        error: 'model not available',
+      });
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let matched: any = null;
+      const deadline = Date.now() + 10000;
+      while (!matched && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const evt = JSON.parse(line.slice(6));
+          if (evt.type === 'status' && evt.data?.initialConfigError) matched = evt;
+        }
+      }
+      expect(matched).toBeTruthy();
+      expect(matched.data.initialConfigError.modelId).toBe('gpt-x-not-exist');
+      expect(matched.data.initialConfigError.error).toBe('model not available');
+      expect(matched.data.initialConfigError.at).toBeTruthy();
+
+      reader.cancel();
+      controller.abort();
+      client.disconnect();
+    }, 20_000);
+
+    // 直读 Mongo 断言 Session 文档；缺 MONGODB_URI 时 skip（遵循既有 DB 断言用例惯例）
+    describe.skipIf(!MONGODB_URI)('Session 文档断言（需 MONGODB_URI）', () => {
+      async function findSessionDoc(
+        sessions: mongoose.Collection,
+        sessionId: string,
+        predicate: (doc: any) => boolean,
+      ): Promise<any> {
+        const id = new mongoose.Types.ObjectId(sessionId);
+        for (let i = 0; i < 20; i++) {
+          await sleep(300);
+          const doc = await sessions.findOne({ _id: id });
+          if (doc && predicate(doc)) return doc;
+        }
+        return sessions.findOne({ _id: id });
+      }
+
+      it('T-AC12: failed 写 initialConfigError；全部 applied 后 $unset 清除', async () => {
+        mongoConnection = await mongoose.connect(MONGODB_URI);
+        const sessions = mongoConnection.connection.collection('sessions');
+        const { controllerId, client } = await createFreshController();
+        const sessionId = await createSession(client, controllerId, {});
+
+        client.emit('acp:initial-config:result', {
+          sessionId,
+          modelId: 'gpt-x-not-exist',
+          modelStatus: 'failed',
+          error: 'model not available',
+        });
+        const failed = await findSessionDoc(sessions, sessionId, (doc) => !!doc.initialConfigError);
+        expect(failed?.initialConfigError).toBeTruthy();
+        expect(failed.initialConfigError.modelId).toBe('gpt-x-not-exist');
+        expect(failed.initialConfigError.error).toBe('model not available');
+        expect(failed.initialConfigError.at).toBeTruthy();
+        expect(failed.initialConfigError.modeId).toBeUndefined();
+
+        client.emit('acp:initial-config:result', {
+          sessionId,
+          modelId: 'gpt-x-not-exist',
+          modelStatus: 'applied',
+        });
+        const cleared = await findSessionDoc(sessions, sessionId, (doc) => !doc.initialConfigError);
+        expect(cleared?.initialConfigError ?? null).toBeNull();
+
+        client.disconnect();
+      }, 30_000);
+
+      it('T-AC13: 非法 payload（缺 sessionId / status 越界）被丢弃，Session 文档无变化', async () => {
+        mongoConnection = await mongoose.connect(MONGODB_URI);
+        const sessions = mongoConnection.connection.collection('sessions');
+        const { controllerId, client } = await createFreshController();
+        const sessionId = await createSession(client, controllerId, {});
+
+        // 先写入一条合法的 failed 结果作为「已有状态」
+        client.emit('acp:initial-config:result', {
+          sessionId,
+          modelId: 'gpt-x-not-exist',
+          modelStatus: 'failed',
+          error: 'model not available',
+        });
+        const before = await findSessionDoc(sessions, sessionId, (doc) => !!doc.initialConfigError);
+        expect(before?.initialConfigError?.error).toBe('model not available');
+
+        // status 越界：若未被丢弃会走 $unset 分支清掉已有字段
+        client.emit('acp:initial-config:result', {
+          sessionId,
+          modelId: 'gpt-x-not-exist',
+          modelStatus: 'bogus',
+        });
+        // 缺 sessionId
+        client.emit('acp:initial-config:result', {
+          modelId: 'gpt-x-not-exist',
+          modelStatus: 'applied',
+        });
+        await sleep(1000);
+
+        const after = await sessions.findOne({ _id: new mongoose.Types.ObjectId(sessionId) });
+        expect(after?.initialConfigError?.error).toBe('model not available');
+        expect(after?.initialConfigError?.modelId).toBe('gpt-x-not-exist');
+
+        client.disconnect();
+      }, 30_000);
     });
   });
 });
