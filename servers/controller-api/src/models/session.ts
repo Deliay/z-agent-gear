@@ -34,6 +34,8 @@ const sessionSchema = new mongoose.Schema({
   supportsAdditionalDirectories: { type: Boolean, default: false },
   // 能力快照（controller 上报原文；旧 controller 不上报时为 null）
   agentCapabilities: { type: mongoose.Schema.Types.Mixed },
+  // 初始 mode/model 应用确认失败记录（acp:initial-config:result，全部 applied 时 $unset）
+  initialConfigError: { type: { modeId: String, modelId: String, error: String, at: Date } },
   // 工作流打标（与 agent-api 同步的副本字段，两服务共享 Mongo）
   workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance' },
   workflowNodeId: { type: String },

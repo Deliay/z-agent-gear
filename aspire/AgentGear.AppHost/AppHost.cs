@@ -206,7 +206,7 @@ agentApi
     .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
     .WithEnvironment("CONTROLLER_API_PUBLIC_WS_ENDPOINT", controllerApi.GetEndpoint("http"))
     .WithEnvironment("CLOUD_HOST_MODEL_BASE_URL", $"{adminApi.GetEndpoint("http")}/v1")
-    .WithEnvironment("CLOUD_HOST_DEFAULT_WORKSPACE", "/root/workspace")
+    .WithEnvironment("CLOUD_HOST_DEFAULT_WORKSPACE", "/home/worker/workspace")
     .WithEnvironment("CLOUD_HOST_MAX_PER_USER", "1")
     .WithEnvironment("HARNESS_CONTAINER_TTL_SECONDS", "86400");
 

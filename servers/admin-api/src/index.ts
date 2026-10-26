@@ -46,6 +46,7 @@ import * as migration007PresetGithub from './migrations/007-preset-github.js';
 import * as migration008FixGithubWorkloadPrefix from './migrations/008-fix-github-workload-prefix.js';
 import * as migration009HarnessKimiCode from './migrations/009-preset-harness-kimi-code.js';
 import * as migration010PresetHarnessDeepseek from './migrations/010-preset-harness-deepseek.js';
+import * as migration012WorkerUserScripts from './migrations/012-worker-user-scripts.js';
 import * as migration010ClearCloudHostKeyExpiry from './migrations/010-clear-cloud-host-key-expiry.js';
 import * as migration011RefreshHarnessPrepareScope from './migrations/011-refresh-harness-prepare-scope.js';
 import { CloudHost } from './models/cloud-host.js';
@@ -137,6 +138,7 @@ async function start() {
       migration008FixGithubWorkloadPrefix,
       migration009HarnessKimiCode,
       migration010PresetHarnessDeepseek,
+      migration012WorkerUserScripts,
       migration010ClearCloudHostKeyExpiry,
       migration011RefreshHarnessPrepareScope,
     ]);

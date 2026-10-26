@@ -627,3 +627,23 @@ describe('SocketIO Service - elicitation resolved', () => {
     expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
   });
 });
+
+describe('SocketIO Service - initial-config result', () => {
+  it('未认证 socket 发送 acp:initial-config:result 时零落库零发布', async () => {
+    const mockSocket = createMockSocket();
+    const mockIO = createMockIO();
+
+    createSocketIOServer(mockIO as never);
+    const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+    connectionHandler(mockSocket);
+
+    mockSocket._trigger('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modeStatus: 'failed',
+      error: 'boom',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.anything());
+  });
+});

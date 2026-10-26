@@ -306,8 +306,8 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
-    // C-4 / A7：请求值不得低于服务端常量；含 kimi_code 的运行按类型上调到 2.8.0，
-    // 注册门禁按落库值生效（仅 opencode 仍为 2.6.0）。
+    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.10.0）；按类型常量为能力引入历史，
+    // 与 2.10.0 取 max 后不再改变落库值，注册门禁按落库值生效。
     agentGearMinVersion: maxWorkerVersion(
       maxWorkerVersion(agentGearMinVersion, harnessMinVersion(harnessTypes as string[])),
       MIN_HARNESS_WORKER_VERSION,

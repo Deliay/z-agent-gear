@@ -77,60 +77,46 @@ RUN if [ -n "$DOTNET_APT_SOURCE" ] && [ -n "$DOTNET_APT_KEY_URL" ]; then \
       echo "DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL not set; using the configured Ubuntu mirror for dotnet10"; \
     fi
 
-# 3) 用 nvm 安装 Node.js / npm（替代系统包管理器提供的 node/npm）
-#    - 安装脚本取自内网 GitHub raw 代理；脚本内硬编码的 raw.githubusercontent.com
-#      被改写为同一代理地址，保证 nvm.sh / nvm-exec / bash_completion 都只走内网
-#    - METHOD=script 强制脚本安装方式，避免回退到 `git clone https://github.com/nvm-sh/nvm.git`
-#    - PROFILE=/dev/null 不让安装脚本写 profile，容器内改用 /etc/profile.d/nvm.sh
-#    - NVM_NODEJS_ORG_MIRROR 指向内网 node-proxy：nvm 的 index.tab / SHASUMS256.txt /
-#      node 发行包全部取自该地址，不会访问 nodejs.org（nvm v0.40.8 读取的变量名即为此）
-ENV NVM_DIR=/usr/local/nvm
-ENV NVM_NODEJS_ORG_MIRROR="$NODEJS_DIST_MIRROR"
+# 3) worker 用户（uid/gid 1000，home /home/worker）与免密 sudo
+#    - 移除基础镜像自带的 ubuntu 用户（uid 1000），避免与 worker 冲突
+#    - PID 1 保持 root；agent-gear / npm / node 以 worker 身份运行（setpriv 降权）
+RUN userdel -r ubuntu 2>/dev/null || true \
+ && groupadd -g 1000 worker 2>/dev/null || true \
+ && useradd -m -s /bin/bash -u 1000 -g worker worker \
+ && printf 'worker ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/90-worker \
+ && chmod 0440 /etc/sudoers.d/90-worker \
+ && printf '%s\n' \
+      'export NVM_DIR="$HOME/.nvm"' \
+      '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' \
+      '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
+      > /etc/profile.d/nvm.sh
+
+# 4) per-user nvm / Node.js / npm：全部装在 worker 的 home 下（root 环境没有 nodejs）
+#    - nvm 安装脚本、Node.js 发行包、npm 源全部走内网代理（不回退公网）
+#    - USER worker 层安装后 nvm 由 worker 拥有；current 软链供 WORKER_PATH 使用
+ENV NVM_DIR=/home/worker/.nvm \
+    NVM_NODEJS_ORG_MIRROR="$NODEJS_DIST_MIRROR" \
+    NVM_SYMLINK_CURRENT=true
+USER worker
 RUN mkdir -p "$NVM_DIR" \
  && METHOD=script \
     PROFILE=/dev/null \
-    NVM_SOURCE="https://nexus.internal.fffdan.com/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8/install.sh" \
-    NVM_NODEJS_ORG_MIRROR="$NODEJS_DIST_MIRROR" \
+    NVM_INSTALL_URL="$NVM_INSTALL_URL" \
+    NVM_SOURCE="$GITHUB_RAW_PROXY/nvm-sh/nvm/$NVM_VERSION/install.sh" \
+    NVM_NODEJS_ORG_MIRROR="$NVM_NODEJS_ORG_MIRROR" \
     curl -o- "$NVM_INSTALL_URL" | bash \
  && . "$NVM_DIR/nvm.sh" \
  && nvm install --default "$NODE_VERSION" \
  && nvm alias default "$NODE_VERSION" \
  && ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current" \
- && node -v && npm -v
-
-# 3.1) 让 nvm 的 node/npm 进入 PATH（version 目录用 current 软链固定，运行时同样生效）
-#      Node 镜像源固化为内网地址，运行时 `nvm install` 也不会回退公网
-ENV PATH=$NVM_DIR/current/bin:$PATH \
-    NVM_NODEJS_ORG_MIRROR=$NODEJS_DIST_MIRROR \
-    NVM_SYMLINK_CURRENT=true
-
-# 3.2) 登录 shell 可用的 nvm 初始化片段（bash_completion 缺失时自动跳过）
-RUN printf '%s\n' \
-      'export NVM_DIR="/usr/local/nvm"' \
-      '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' \
-      '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
-      > /etc/profile.d/nvm.sh
-
-# 4) npm 走内网代理并全局预装 Agent 工具链（仅 agent-gear；OpenCode 由 harness 工作负载安装）
-#    - agent-gear 固定 2.9.x：`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，
-#      不固定版本会在内网 npm 代理 `latest` 滞后时静默装到 2.8.x（无分流逻辑，harness prepare 会
-#      误校验 opencode 而失败）；构建期代理未同步 2.9.0 时必须**失败暴露**而非放行旧版；
-#      **不预装** `dsh`（DeepSeek Harness CLI 由「DeepSeek Harness（Harness）」工作负载安装）；
-#      `kimi_code` 使用前登录闸门（`kimi login` stdio 判定）自 2.8.0 起，
-#      **不预装** `kimi`（Kimi Code CLI 由「Kimi Code（Harness）」工作负载安装）；
-#      opencode 配置模型上下文长度（`limit.context`，ZAG_MODEL_CONTEXT_LENGTHS）自 2.7.0 起；
-#      `workload:run.githubAuth` 与云电脑 Github 凭据管理器自 2.6.0 起提供；
-#      云电脑双连接与 `harness prepare` 自 2.5.0 起；工作负载「必须」短路（items[].required）自 2.4.0 起、
-#      参数注入自 2.3.0 起；避免构建期取到不支持这些能力的旧版本（普通容器门禁仍为 >=2.2.0）。
-#    - **不预装 `@opencode/cli`**：OpenCode 由「OpenCode（Harness）」工作负载的 init 脚本按
-#      `OPENCODE_CLI_VERSION` 固定版本安装，并执行 `opencode --version` 硬校验 + `agent-gear harness prepare`
-#      （见 servers/admin-api 迁移 005 与 BUILD.md）。
-RUN npm config set registry "$NPM_REGISTRY" \
+ && npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.9.x \
- && agent-gear --version \
- && npm cache clean --force
-
+      agent-gear@2.10.x \
+      @agentclientprotocol/claude-agent-acp \
+      @agentclientprotocol/codex-acp \
+ && npm cache clean --force \
+ && node -v && npm -v && agent-gear --version
+USER root
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

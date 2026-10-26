@@ -11,7 +11,7 @@ const VALID_ENV: NodeJS.ProcessEnv = {
   ZAG_MODEL_BASE_URL: 'http://admin-api:8002/v1',
   ZAG_MODEL_API_KEY: 'zag_sk_super_secret',
   ZAG_MODEL_IDS: '["model-a","model-b"]',
-  ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+  ZAG_DEFAULT_WORKSPACE: '/home/worker/workspace',
 };
 
 describe('readHarnessEnv (T-AG7/T-AG11)', () => {
@@ -21,7 +21,7 @@ describe('readHarnessEnv (T-AG7/T-AG11)', () => {
       modelApiKey: 'zag_sk_super_secret',
       modelIds: ['model-a', 'model-b'],
       modelContextLengths: {},
-      defaultWorkspace: '/root/workspace',
+      defaultWorkspace: '/home/worker/workspace',
     });
   });
 

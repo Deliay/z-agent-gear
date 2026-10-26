@@ -288,6 +288,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E37 问询提示条 | fake controller 发 `acp:elicitation` → 会话内提示条可打开弹窗 |
 | T-E38 问询过期 | 发 `acp:elicitation:resolved{timeout}` → 弹窗显示「已过期」且操作按钮隐藏 |
 | T-E39 移动端问询 | 移动视口 → 提示条可见、可打开弹窗（Sidebar 未挂载场景） |
+| T-E40 初始配置失败 toast | fake controller 发 `acp:initial-config:result{modelStatus:'failed',error}` → 会话页 toast「模式/模型设置未生效：<error>」+ 副行「当前生效模型」 |
 
 ### Kimi Code 登录引导 E2E (`harness-login.spec.ts`)
 
@@ -395,5 +396,5 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 ## Github 工作负载
 
-- `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀地址（`/root/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
+- `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀 `~/workspace`（无默认工作区时预填，预览展开为 `/home/worker/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
 - `src/cloud-host.spec.ts`：新建云电脑弹窗断言 `cloudHostWorkloadCatalog` 的真实数据（Aspire/Docker/.NET 可见、Aspire 依赖文案、勾选 Docker 出现耗时提示），再提交创建；K8S 关闭时只断言到「启动中」，不做就绪断言。

@@ -110,9 +110,22 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
 
   const workloadsSection = cloudHost ? (
     <div className="min-w-0 space-y-4">
+      <p className="text-sm text-muted-foreground">
+        安装后立即在云电脑内生效，不提供卸载。
+      </p>
+      <CloudHostWorkloadsSection
+        controllerId={controllerId}
+        cloudHost={cloudHost}
+        onChanged={refreshHostData}
+      />
+    </div>
+  ) : null;
+
+  const githubSection = cloudHost ? (
+    <div className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          安装后立即在云电脑内生效，不提供卸载。
+          Github 项目设置：安装后自动克隆仓库并初始化项目工作区。
         </p>
         <Button
           type="button"
@@ -126,16 +139,8 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
           Github 项目设置
         </Button>
       </div>
-      <CloudHostWorkloadsSection
-        controllerId={controllerId}
-        cloudHost={cloudHost}
-        onChanged={refreshHostData}
-      />
+      <CloudHostIssuesLinkageSection controllerId={controllerId} onConfigureWorkflow={onBack} />
     </div>
-  ) : null;
-
-  const githubSection = cloudHost ? (
-    <CloudHostIssuesLinkageSection controllerId={controllerId} onConfigureWorkflow={onBack} />
   ) : null;
 
   const panel = cloudHost ? (

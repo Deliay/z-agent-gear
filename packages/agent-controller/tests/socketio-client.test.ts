@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { version as PACKAGE_VERSION } from '../package.json';
 
 const { mockStart, mockStop, MockHeartbeat } = vi.hoisted(() => {
   const start = vi.fn();
@@ -229,7 +230,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '2.9.0',
+        version: PACKAGE_VERSION,
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -247,7 +248,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '2.9.0',
+        version: PACKAGE_VERSION,
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -289,7 +290,7 @@ describe('SocketIO Client', () => {
       expect(mockStop).toHaveBeenCalled();
       expect(clearConfigKey).toHaveBeenCalled();
       expect(mockSocket.close).toHaveBeenCalled();
-      expect(process.exit).toHaveBeenCalledWith(0);
+      expect(process.exit).toHaveBeenCalledWith(42);
     });
 
     it('should clear config and exit on shutdown', () => {
@@ -303,7 +304,7 @@ describe('SocketIO Client', () => {
       expect(mockStop).toHaveBeenCalled();
       expect(clearConfigKey).toHaveBeenCalled();
       expect(mockSocket.close).toHaveBeenCalled();
-      expect(process.exit).toHaveBeenCalledWith(0);
+      expect(process.exit).toHaveBeenCalledWith(42);
     });
 
     it('should stop heartbeat on disconnect', () => {

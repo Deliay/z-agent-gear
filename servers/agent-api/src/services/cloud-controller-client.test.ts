@@ -40,7 +40,7 @@ describe('CloudControllerClient', () => {
         modelBaseUrl: 'http://admin-api/v1',
         modelIds: '["a"]',
         modelContextLengths: '{"a":128000}',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       },
     });
 

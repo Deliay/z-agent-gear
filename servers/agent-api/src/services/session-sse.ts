@@ -149,6 +149,7 @@ export class SessionSSEService {
           if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
           if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
           if (Array.isArray(parsed.configOptions) && parsed.configOptions.length) extra.configOptions = parsed.configOptions;
+          if (parsed.initialConfigError) extra.initialConfigError = parsed.initialConfigError;
           this.dispatchStatus(sessionId, status, error, extra);
         }
         this.broadcastModeChanged(sessionId, parsed);
@@ -192,6 +193,7 @@ export class SessionSSEService {
       if (Array.isArray(extra.availableModels) && extra.availableModels.length) payload.availableModels = extra.availableModels;
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
       if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
+      if (extra.initialConfigError) payload.initialConfigError = extra.initialConfigError;
     }
     const data = JSON.stringify({ type: 'status', data: payload });
     for (const [key, connection] of connections) {
