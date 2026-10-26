@@ -207,6 +207,7 @@ flowchart LR
 - [[proposals/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（引擎 onNodesTransitioned hook、Checks REST 客户端与 checks:write 权限、stale 编排、session:message 中央订阅 todo panel 同步 check-run 子项）
 - [[proposals/20261026-fix-cloud-host-key-lifecycle.md]] — 云电脑 LLM API Key 随容器回收（取消 24h 固定有效期，宿主非 RUNNING/删除/缺失即失效，迁移清理存量有效期）
 - [[proposals/20261026-fix-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置 clone 成功后无条件 ensureWorkspace 并 CAS 回写 workspaceId、Github 项目设置入口迁至云电脑配置 Github 页签、前缀地址默认 ~/workspace 并支持 ~ 展开为容器主目录）
+- [[proposals/20261027-feat-commit-author-settings.md]] — 云容器 Commit 提交人设置（user_commit_settings 用户级设置与 commitSettings/updateCommitSettings 契约、POST /internal/cloud-hosts/:id/commit-identity 身份下发端点与 agent_only 负载门控、agent-gear 容器内 include.path 托管 git 配置 + Co-Author prepare-commit-msg hook、未设置零残留）
 
 ### 实现计划（`plan/`）
 
