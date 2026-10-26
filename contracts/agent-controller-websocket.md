@@ -251,7 +251,7 @@ Controller 重连注册成功后，Server 立即下发此事件。
 | controller-api（标准连接） | `ZAG_HOST_ENDPOINT` | `ZAG_HOST_KEY`（`ControllerKey.type=cloud`，`zag_k_1_...`） | 会话 / ACP / 工作区 / 心跳 |
 
 - 标准连接必须使用 `ZAG_HOST_KEY`，**不得**把 `ZAG_CONTROLLER_KEY` 当作控制器 Key，也**不得**把 `ZAG_HOST_KEY` 放入 URL/query（仅经握手 `auth.token`）。
-- `register.version` 上报 `2.5.0`；`register.hostname` 使用 `ZAG_HOST_NAME`（用户命名）。agent-api 已预创建同 `controllerId` 的 Controller 行（`status=registering`），controller-api 的 register upsert 不得覆盖用户命名。
+- `register.version` 上报 `package.json` 版本（本期 `2.10.0`，单一事实源）；`register.hostname` 使用 `ZAG_HOST_NAME`（用户命名）。agent-api 已预创建同 `controllerId` 的 Controller 行（`status=registering`），controller-api 的 register upsert 不得覆盖用户命名。
 - **不发送 `unregister`**：容器销毁由 agent-api 编排（`stopCloudHost` / TTL / 失败回调），worker 退出仅断开 socket。
 - Controller 状态口径：register 成功 → `online`；心跳超时/断线 → `offline`；`CloudHost.status` 才是云电脑生命周期的唯一事实源。
 
