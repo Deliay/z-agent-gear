@@ -142,7 +142,7 @@
 
 **Payload：** 空对象 `{}`
 
-**客户端行为：** 容器清理本地状态并退出进程。
+**客户端行为：** 容器清理本地状态并**以退出码 `42` 退出进程**（服务端终止语义，入口不保活重启；判定口径见 `agent-controller-websocket.md` §3.7）。
 
 ### 2.8 `shutdown`（Server → Worker）
 
@@ -155,7 +155,7 @@ cloud-controller 在强制销毁流程中通知容器退出。
 | `reason` | `string` | 是 | 退出原因（如 `强制销毁`） |
 | `graceMs` | `number` | 否 | 客户端退出前可用的宽限时间（仅追加提示，缺省行为与现状一致） |
 
-**客户端行为：** 停止心跳、清理并退出进程。服务端发送后宽限 10s 等待断开，随后删除 K8s Job。
+**客户端行为：** 停止心跳、清理并退出进程。按 reason 分类退出码：服务端终止（非失败类 `shutdown` / `unregistered` / `INVALID_TOKEN`）→ **`42`**（入口不保活重启）；失败类（`version_mismatch:*` / `error:*` 且非 `INVALID_TOKEN` / 必须工作负载初始化失败）→ **`1`**；信号退出 → **`0`**（入口保活重启）。完整约定见 `agent-controller-websocket.md` §3.7。服务端发送后宽限 10s 等待断开，随后删除 K8s Job。
 
 **发送时序（工作负载清理脚本）：** 若容器挂载了带 `postScript` 的工作负载，cloud-controller 在销毁流程中**先**通过 `workload:run { phase: "post" }` 下发清理脚本批次并等待全部结果（或 post 预算耗尽），**再**发送 `shutdown`。无 post 脚本时，`shutdown` 的发送时机与载荷与现状完全一致（向后兼容）。
 
@@ -192,7 +192,7 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
   "ZAG_HOST_NAME": "<用户命名>",
   "ZAG_HOST_ENDPOINT": "wss://<controller-api>",
   "ZAG_HOST_KEY": "zag_k_1_…",
-  "ZAG_DEFAULT_WORKSPACE": "/root/workspace",
+  "ZAG_DEFAULT_WORKSPACE": "/home/worker/workspace",
   "ZAG_USER_TYPE": "front_user",
   "ZAG_USER_ID": "<前台用户 ID>",
   "ZAG_MODEL_API_KEY": "zag_sk_…",
@@ -328,13 +328,13 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.6.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
-- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.6.0`（云电脑双连接 / `harness prepare` / Github 凭据管理器），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.10.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.10.0`（worker 用户 + 保活退出码 42 约定自 2.10.0 起），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - **按 `harnessTypes` 细分的最低版本**：`agentGearMinVersion` 落库值 =
   `max(请求值, MIN_HARNESS_WORKER_VERSION, 按 harnessTypes 取最大)`；本期
   `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.9.0' }`
   （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
-  仅 `opencode` 的运行仍为 2.6.0。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
+  仅 `opencode` 的运行仍为 2.10.0（max 语义自动收编）。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
 - **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
   `400 INVALID_HARNESS`，不创建 Job。
 - **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
@@ -412,7 +412,7 @@ Content-Type: application/json
     "modelBaseUrl": "http://admin-api:8002/v1",
     "modelIds": "[\"model-a\"]",
     "modelContextLengths": "{\"model-a\":128000}",
-    "defaultWorkspace": "/root/workspace"
+    "defaultWorkspace": "/home/worker/workspace"
   },
   "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
 }
@@ -509,7 +509,7 @@ Content-Type: application/json
   "workloadId": "<github workload id>",
   "workloadName": "Git 项目设置",
   "script": "set -euo pipefail\n...",
-  "params": { "repoFullName": "owner/repo", "targetPath": "/root/workspace" },
+  "params": { "repoFullName": "owner/repo", "targetPath": "/home/worker/workspace" },
   "source": "system",
   "githubAuth": true
 }

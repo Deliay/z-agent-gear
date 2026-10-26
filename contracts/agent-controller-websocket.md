@@ -113,7 +113,7 @@
 
 **Payload：** 空对象 `{}`
 
-**客户端行为：** 清除本地配置中的 Key，退出进程。
+**客户端行为：** 清除本地配置中的 Key，**以退出码 `42` 退出进程**（服务端终止语义：容器入口不保活重启；详见 §3.7）。
 
 ### 2.8 `shutdown`（Server → Controller）
 
@@ -125,7 +125,7 @@
 |------|------|------|------|
 | `reason` | `string` | 是 | `key_revoked` |
 
-**客户端行为：** 清除本地配置中的 Key，退出进程。
+**客户端行为：** 清除本地配置中的 Key，按 `reason` 分类**以退出码 `42`（服务端终止）或 `1`（失败类）退出进程**；详见 §3.7。云电脑双连接模式下不直接退出，由 supervisor 统一关闭两端后按同一分类退出。
 
 ---
 
@@ -204,6 +204,20 @@ Controller 重连注册成功后，Server 立即下发此事件。
 3. 对注册表中存在但不在 `activeSessionIds` 中的条目（孤儿进程）：kill 进程组并注销
 4. 对注册表中存在且在 `activeSessionIds` 中的条目：保留（正常运行）
 
+### 3.7 进程退出码约定
+
+客户端进程退出码与容器入口的保活策略绑定（云电脑 / worker 容器）：
+
+| 退出码 | 语义 | 容器入口行为 |
+|--------|------|--------------|
+| `42` | **服务端终止**：`unregistered`、`shutdown`（非失败类）、`connect_error(INVALID_TOKEN)`（token 已失效 = 已被服务端注销） | 正常结束容器，**不重启** |
+| `0` | **自发 / 信号退出**：`SIGINT` / `SIGTERM`、服务端主动 shutdown 收尾外的正常收尾 | 保活重启（被 `SIGTERM` 命中时与 K8s 删除 Pod 的入口信号并发，入口自身置位后不再重启） |
+| `1` | **失败类**：`version_mismatch:*`、`error:*`（除 `INVALID_TOKEN`）、必须工作负载初始化失败 | 退避后自更新并重启 |
+
+判定口径：信号前置 → 服务端终止覆盖失败（`INVALID_TOKEN` 虽匹配 `error:` 前缀仍归 `42`）→ 失败 `1` → 其余 `42`。分类实现为共享模块 `packages/agent-controller/src/exit-codes.ts`（`isFailureShutdownReason` 语义逐字不变）。
+
+> 被 `SIGTERM` 命中后客户端正常收尾退出 `0`，容器内保活将其重新拉起（被误杀恢复）；K8s 删除 Pod 时入口自身同时收到 `SIGTERM` 并置位 `shutting_down`，不再重启。
+
 ---
 
 ## 4. cloud-controller 接入场景（向后兼容说明）
@@ -222,7 +236,7 @@ Controller 重连注册成功后，Server 立即下发此事件。
 
 ### 4.2 兼容性约定
 
-- **握手鉴权**：cloud-controller 场景下，鉴权 token 由握手 query（`?token=`）承载并在连接建立阶段校验，失败时服务端在握手阶段返回 `connect_error`（`INVALID_TOKEN`），不会进入 `register`。
+- **握手鉴权**：cloud-controller 场景下，鉴权 token 由握手 query（`?token=`）承载并在连接建立阶段校验，失败时服务端在握手阶段返回 `connect_error`（`INVALID_TOKEN`），不会进入 `register`；客户端**以退出码 `42` 退出**（token 已失效 = 已被服务端注销，容器入口不保活重启；详见 §3.7）。
 - **`key` 字段被服务端忽略**：本文档 §2.2 的 `register.key` 为 controller-api 场景的必填项；cloud-controller 侧不读取、不校验该字段（token 由握手 query 替代）。`agent-gear` 现有参数体系仍照常发送 `key`，**不破坏既有握手**。
 - `register`/`heartbeat`/`unregister`/`shutdown` 事件面与上文字段完全一致，无需为 cloud-controller 场景新增事件。
 - 断线自动重连使用同一 endpoint（含同一 token）；token 在容器存活期内可重复握手，容器进入终态即作废。
