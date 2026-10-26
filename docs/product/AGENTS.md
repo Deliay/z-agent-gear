@@ -141,6 +141,7 @@ flowchart LR
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
 - [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
 - [[draft/20261026-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置不建会话时也初始化项目工作区、云电脑配置「Github 项目设置」入口迁移至 Github 页面、前缀地址默认 ~/workspace）
+- [[draft/20261027-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建收费 5 credits、创建对话框收费详情、放开每用户数量限制、Github 帐号跟随云电脑选定后不可修改）
 
 ### 实现中文档（`shipping/`）
 
