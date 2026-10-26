@@ -13,6 +13,7 @@ import { getAvailableServerTypes } from './capability.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
+import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -128,25 +129,44 @@ class WorkflowInstanceService {
     validateTemplateGraph(fullNodes as never);
     validateAgentConfigs(fullNodes as unknown as Parameters<typeof validateAgentConfigs>[0], availableServerTypes);
 
-    // 4. requiresWorktree git 校验
+    // 4. requiresWorktree git 校验（缺失时先自动识别默认分支；识别失败按场景显式报错）
     const needsWorktree = fullNodes.some((n) => n.requiresWorktree && n.agentConfig?.initNewWorktree);
-    if (needsWorktree && !workspace.defaultBranch) {
-      throw new Error(
-        '该工作流包含需要 Worktree 隔离的节点，但工作区不是 Git 仓库（未设置默认分支），无法实例化',
-      );
+    if ((needsWorktree || input.createWorkflowWorktree) && !workspace.defaultBranch) {
+      const resolved = await resolveWorkspaceDefaultBranch({
+        userId,
+        controllerId: input.controllerId,
+        workspaceId: input.workspaceId,
+      });
+      if (resolved) {
+        workspace.defaultBranch = resolved;
+      } else if (needsWorktree) {
+        throw new Error(
+          '该工作流包含需要 Worktree 隔离的节点，但工作区不是 Git 仓库（未设置默认分支），无法实例化',
+        );
+      } else {
+        throw new Error(
+          '无法创建独立 Worktree：未能识别工作区默认分支（非 Git 仓库或候选分支均不存在）',
+        );
+      }
     }
 
     // 5. 创建工作流 Worktree（如果启用）
     let workflowWorktreePath: string | undefined;
     let workflowWorktreeBranch: string | undefined;
-    if (input.createWorkflowWorktree && workspace.defaultBranch) {
+    if (input.createWorkflowWorktree) {
+      const defaultBranch = workspace.defaultBranch;
+      if (!defaultBranch) {
+        throw new Error(
+          '无法创建独立 Worktree：未能识别工作区默认分支（非 Git 仓库或候选分支均不存在）',
+        );
+      }
       const result = await this.createWorkflowWorktree(
         input.controllerId,
         {
           _id: workspace._id.toString(),
           name: workspace.name,
           path: workspace.path,
-          defaultBranch: workspace.defaultBranch,
+          defaultBranch,
         },
         input.name,
       );
