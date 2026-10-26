@@ -355,6 +355,22 @@ export function createSocketIOServer(io: SocketIOServer): void {
       }
     });
 
+    socket.on('acp:initial-config:result', async (payload: {
+      sessionId: string;
+      modeId?: string;
+      modelId?: string;
+      modeStatus?: 'applied' | 'failed';
+      modelStatus?: 'applied' | 'failed';
+      error?: string;
+    }) => {
+      if (!authenticated) return;
+      try {
+        await acpSessionManager.handleInitialConfigResult(payload);
+      } catch (err) {
+        console.error(`ACP initial-config result error for session ${payload?.sessionId}:`, err);
+      }
+    });
+
     socket.on('acp:protocol-version-mismatch', async (payload: {
       sessionId: string;
       expectedVersion: number;
