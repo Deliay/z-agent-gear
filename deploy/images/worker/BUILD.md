@@ -83,8 +83,8 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.9.x`）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
-- [ ] `agent-gear --version` ≥ `2.9.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
+- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.10.x`）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] `agent-gear --version` ≥ `2.10.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
 - [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
@@ -132,7 +132,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.9.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.6.0`，含 `kimi_code` 的运行要求 `2.8.0`、含 `deepseek_harness` 要求 `2.9.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
+- [ ] `agent-gear --version` ≥ `2.10.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.10.0`（任意 harness 组合恒为 `2.10.0`）；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
 - [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
@@ -190,7 +190,7 @@ cat ~/.config/opencode/opencode.jsonc
 stat -c '%a' ~/.config/opencode/opencode.jsonc   # 期望 600
 
 # 3) 默认工作区已创建
-test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
+test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 
 # 4) 日志不含模型/控制器 Key（secret 脱敏为 ***）
 #    检查 cloud-controller 的 workload 日志与容器 stdout
@@ -233,7 +233,7 @@ stat -c '%a' ~/.dsh/.credentials.yaml            # 期望 600
 dsh --dump-config | head -n 40                   # patch 归属与 acp profile 组合树
 
 # 3) 默认工作区已创建
-test -d "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}" && echo workspace-ok
+test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 
 # 4) 日志不含模型 Key（secret 脱敏为 ***）
 ```
@@ -310,7 +310,7 @@ aspire --version
 
 ### 必须工作负载失败强制注销手工验收（真实集群）
 
-前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`（当前镜像为 2.5.x）。
+前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`（当前镜像为 2.10.x）。
 
 内网 K8s 受控验收步骤：
 
@@ -344,7 +344,7 @@ aspire --version
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
-- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.5.0`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
+- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
 - 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
 - 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
@@ -362,7 +362,7 @@ bash entrypoint.test.sh
 
 自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），因此不会启动真实 dockerd、不访问网络。
 
-> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.5.0`（harness 容器门禁）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.5.0` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
+> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 

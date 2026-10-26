@@ -404,7 +404,7 @@ Content-Type: application/json
   "harnessTypes": ["opencode"],
   "containerApiKeyId": "<运行专用模型 Key ID>",
   "expiresAt": "2026-10-21T00:00:00.000Z",
-  "agentGearMinVersion": "2.5.0",
+  "agentGearMinVersion": "2.10.0",
   "secrets": {
     "hostEndpoint": "wss://<controller-api>",
     "hostKey": "zag_k_1_…",
@@ -419,7 +419,7 @@ Content-Type: application/json
 ```
 
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
-- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 会按类型细分取最大值（含 `kimi_code` → `2.8.0`、含 `deepseek_harness` → `2.9.0`，见 §3.4）。
+- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.10.0`（以 2.10.0 为底取 max，见 §3.4）。
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。

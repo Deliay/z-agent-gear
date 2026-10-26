@@ -25,7 +25,7 @@ import { EXIT_SERVER_SHUTDOWN, resolveShutdownExitCode } from './exit-codes.js';
 
 // 版本号唯一事实源为 package.json（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
 // 2.8.0 起 `kimi_code` 使用前登录闸门（`kimi login` stdio 判定 + `harness:login:*` 事件族）；
-// 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.6.0）；
+// 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.10.0）；
 // 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`。
 const { version: CONTROLLER_VERSION } = createRequire(import.meta.url)('../package.json') as {
   version: string;

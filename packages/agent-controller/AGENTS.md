@@ -58,7 +58,7 @@ src/
 - 版本：包版本 `2.10.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
-  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`——
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
   上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。

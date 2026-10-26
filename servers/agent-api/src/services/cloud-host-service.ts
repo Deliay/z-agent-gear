@@ -27,7 +27,7 @@ import {
   type CreateWorkloadPlanEntry,
 } from './cloud-host-workload-plan.js';
 
-export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.6.0';
+export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.10.0';
 
 const ACTIVE_STATUSES = ['STARTING', 'RUNNING', 'STOPPING'] as const;
 
@@ -37,14 +37,14 @@ const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
   DEEPSEEK_HARNESS: 'deepseek_harness',
 };
 
-/** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.6.0 基线） */
+/** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.10.0 基线） */
 export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {
   OPENCODE: '2.6.0',
   KIMI_CODE: '2.8.0',
   DEEPSEEK_HARNESS: '2.9.0',
 };
 
-/** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.6.0 的最大值 */
+/** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.10.0 的最大值 */
 export function resolveAgentGearMinVersion(types: HarnessType[]): string {
   const versions = [CLOUD_HOST_AGENT_GEAR_MIN_VERSION, ...types.map((type) => HARNESS_MIN_AGENT_GEAR_VERSION[type] ?? CLOUD_HOST_AGENT_GEAR_MIN_VERSION)];
   return versions.reduce((max, current) => (compareVersions(current, max) > 0 ? current : max), CLOUD_HOST_AGENT_GEAR_MIN_VERSION);
