@@ -611,7 +611,8 @@ describe('ReconciliationService（三线对账）', () => {
       keyHash: 'h',
       scope: 'cloud_host',
       cloudHostId: startingHostId,
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      // 新语义：云电脑 Key 无固定有效期（随容器回收）。
+      expiresAt: null,
     });
 
     const recon = new ReconciliationService(
@@ -626,7 +627,7 @@ describe('ReconciliationService（三线对账）', () => {
     expect((await BillingApiKey.findById(key._id).lean())?.status).toBe('active');
   });
 
-  it('T-BK17: cloud-host-keys — 宿主非 RUNNING/已删除/过期 Key 被撤销，RUNNING 保留，账号 Key 不受影响', async () => {
+  it('T-BK17: cloud-host-keys — 宿主非 RUNNING/已删除/历史过期 Key 被撤销，RUNNING（无有效期）保留，账号 Key 不受影响', async () => {
     const { BillingApiKey } = await import('../../models/billing-api-key.js');
     const accountId = new mongoose.Types.ObjectId();
     const host = (status: string, deletedAt: Date | null = null) => {
@@ -637,7 +638,6 @@ describe('ReconciliationService（三线对账）', () => {
     const stopped = host('STOPPED');
     const deleted = host('STOPPED', new Date());
     const missingId = new mongoose.Types.ObjectId();
-    const future = new Date(Date.now() + 60 * 60 * 1000);
     const past = new Date(Date.now() - 1000);
 
     for (const item of [running, stopped, deleted]) {
@@ -649,7 +649,11 @@ describe('ReconciliationService（三线对账）', () => {
       });
     }
 
-    const makeKey = (cloudHostId: mongoose.Types.ObjectId | null, expiresAt: Date, scope = 'cloud_host') =>
+    const makeKey = (
+      cloudHostId: mongoose.Types.ObjectId | null,
+      expiresAt: Date | null,
+      scope = 'cloud_host',
+    ) =>
       BillingApiKey.create({
         accountId,
         ownerType: 'front_user',
@@ -662,10 +666,12 @@ describe('ReconciliationService（三线对账）', () => {
         expiresAt,
       });
 
-    const runningKey = await makeKey(running._id, future);
-    const stoppedKey = await makeKey(stopped._id, future);
-    const deletedKey = await makeKey(deleted._id, future);
-    const missingKey = await makeKey(missingId, future);
+    // 新语义：运行中的宿主 Key 无有效期，对账不得误杀。
+    const runningKey = await makeKey(running._id, null);
+    const stoppedKey = await makeKey(stopped._id, null);
+    const deletedKey = await makeKey(deleted._id, null);
+    const missingKey = await makeKey(missingId, null);
+    // 历史遗留的过期 Key 仍按防御口径撤销。
     const expiredKey = await makeKey(running._id, past);
     const accountKey = await BillingApiKey.create({
       accountId,

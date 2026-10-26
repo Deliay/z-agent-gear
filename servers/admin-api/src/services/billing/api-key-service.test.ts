@@ -100,27 +100,26 @@ describe('ApiKeyService', () => {
     expect(list[0].scope).toBe('account');
   });
 
-  it('T-BK2: createCloudHostScopedKey 落库 scope/cloudHostId/expiresAt，明文仅一次且不落库', async () => {
+  it('T-BK2: createCloudHostScopedKey 落库 scope/cloudHostId（无有效期），明文仅一次且不落库', async () => {
     const accountId = new mongoose.Types.ObjectId().toString();
     const ownerId = new mongoose.Types.ObjectId().toString();
     const cloudHostId = new mongoose.Types.ObjectId().toString();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     const { apiKey, secret } = await apiKeyService.createCloudHostScopedKey({
       accountId,
       ownerType: 'front_user',
       ownerId,
       name: 'host-key',
       cloudHostId,
-      expiresAt,
     });
 
     expect(apiKey.scope).toBe('cloud_host');
     expect(apiKey.cloudHostId).toBe(cloudHostId);
-    expect(apiKey.expiresAt?.getTime()).toBe(expiresAt.getTime());
+    // 云电脑 Key 随容器回收：不再写固定有效期。
+    expect(apiKey.expiresAt).toBeNull();
 
     const verified = await apiKeyService.verify(secret);
     expect(verified).toMatchObject({ id: apiKey.id, scope: 'cloud_host', cloudHostId });
-    expect(verified?.expiresAt?.getTime()).toBe(expiresAt.getTime());
+    expect(verified?.expiresAt).toBeNull();
 
     const list = await apiKeyService.list('front_user', ownerId);
     expect(list).toHaveLength(1);
@@ -135,7 +134,6 @@ describe('ApiKeyService', () => {
       ownerId: 'u-secret',
       name: 'host-key',
       cloudHostId,
-      expiresAt: new Date(Date.now() + 60_000),
     });
     const raw = await mongoose.connection.db!
       .collection('billingapikeys')
@@ -156,7 +154,6 @@ describe('ApiKeyService', () => {
       ownerId: 'u-rotate',
       name: 'host-key-1',
       cloudHostId,
-      expiresAt: new Date(Date.now() + 60_000),
     });
     const second = await apiKeyService.createCloudHostScopedKey({
       accountId,
@@ -164,7 +161,6 @@ describe('ApiKeyService', () => {
       ownerId: 'u-rotate',
       name: 'host-key-2',
       cloudHostId,
-      expiresAt: new Date(Date.now() + 120_000),
     });
 
     expect(await apiKeyService.verify(first.secret)).toBeNull();
@@ -186,7 +182,6 @@ describe('ApiKeyService', () => {
           ownerId: 'u-concurrent',
           name: `host-key-${index}`,
           cloudHostId,
-          expiresAt: new Date(Date.now() + 60_000),
         }),
       ),
     );
@@ -226,7 +221,6 @@ describe('ApiKeyService', () => {
             ownerId: 'u-lock',
             name: `lock-${index}`,
             cloudHostId,
-            expiresAt: new Date(Date.now() + 60_000),
           }),
         ),
       );
@@ -238,14 +232,13 @@ describe('ApiKeyService', () => {
     expect(await BillingApiKey.countDocuments({ cloudHostId, status: 'active' })).toBe(1);
   });
 
-  it('T-BK4: verify 对过期 Key 返回 null', async () => {
+  it('T-BK4: verify 对历史遗留的过期 Key 仍返回 null（兼容旧数据）', async () => {
     const { secret } = await apiKeyService.createCloudHostScopedKey({
       accountId: new mongoose.Types.ObjectId().toString(),
       ownerType: 'front_user',
       ownerId: 'u-expired',
       name: 'expired-key',
       cloudHostId: new mongoose.Types.ObjectId().toString(),
-      expiresAt: new Date(Date.now() + 60_000),
     });
     const { BillingApiKey } = await import('../../models/billing-api-key.js');
     await BillingApiKey.updateMany(
@@ -261,8 +254,7 @@ describe('ApiKeyService', () => {
       ownerType: 'front_user',
       ownerId: 'u-revoke',
       name: 'k',
-      cloudHostId: new mongoose.Types.ObjectId().toString(),
-      expiresAt: new Date(Date.now() + 60_000),
+      cloudHostId: new mongoose.Types.ObjectId().toString()
     });
 
     const first = await apiKeyService.revokeById(apiKey.id);
@@ -295,7 +287,6 @@ describe('ApiKeyService', () => {
         keyHash: 'h1',
         scope: 'cloud_host',
         cloudHostId,
-        expiresAt: new Date(Date.now() + 60_000),
       },
       {
         accountId,
@@ -306,7 +297,6 @@ describe('ApiKeyService', () => {
         keyHash: 'h2',
         scope: 'cloud_host',
         cloudHostId,
-        expiresAt: new Date(Date.now() + 60_000),
       },
       {
         accountId,
@@ -317,7 +307,6 @@ describe('ApiKeyService', () => {
         keyHash: 'h3',
         scope: 'cloud_host',
         cloudHostId: otherHostId,
-        expiresAt: new Date(Date.now() + 60_000),
       },
     ]);
 
@@ -328,7 +317,7 @@ describe('ApiKeyService', () => {
     expect(await apiKeyService.revokeByCloudHost(cloudHostId)).toBe(0);
   });
 
-  it('T-BK2/U: cloud_host 必填 cloudHostId 与合法有效期', async () => {
+  it('T-BK2/U: cloud_host 必填合法 cloudHostId', async () => {
     await expect(
       apiKeyService.createCloudHostScopedKey({
         accountId: new mongoose.Types.ObjectId().toString(),
@@ -336,17 +325,6 @@ describe('ApiKeyService', () => {
         ownerId: 'u',
         name: 'k',
         cloudHostId: 'not-an-object-id',
-        expiresAt: new Date(Date.now() + 60_000),
-      }),
-    ).rejects.toThrow();
-    await expect(
-      apiKeyService.createCloudHostScopedKey({
-        accountId: new mongoose.Types.ObjectId().toString(),
-        ownerType: 'front_user',
-        ownerId: 'u',
-        name: 'k',
-        cloudHostId: new mongoose.Types.ObjectId().toString(),
-        expiresAt: new Date('invalid'),
       }),
     ).rejects.toThrow();
   });
