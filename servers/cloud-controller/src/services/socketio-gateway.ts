@@ -262,7 +262,7 @@ export function registerWorkerGateway(
     socket.on('register', async (payload: RegisterPayload = {}) => {
       // key 字段被忽略（由握手 token 替代）。
       // 版本门禁必须先于全部注册副作用（心跳计时 / 初始化查询下发 / online / connectedAt）：
-      // 先读取容器 purpose，再按 purpose 选择门禁（harness 2.5.0 / 普通 2.2.0，契约 §3.4）。
+      // 先读取容器 purpose，再按 purpose 选择门禁（harness 逐容器 agentGearMinVersion，恒 ≥2.10.0 / 普通 2.2.0，契约 §3.4）。
       // 读取本身只读、无副作用；历史记录缺少 purpose 时按 idle 处理。
       // 读取失败（DB 抖动）按注册失败处理，避免 async handler 产生未捕获 rejection。
       let record: Awaited<ReturnType<ContainerService['getById']>>;

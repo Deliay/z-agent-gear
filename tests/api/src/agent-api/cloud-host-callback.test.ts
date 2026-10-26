@@ -70,7 +70,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
     userId: new mongoose.Types.ObjectId(options.userId),
     controllerId,
     name: 'workspace',
-    path: '/root/workspace',
+    path: '/home/worker/workspace',
     isEnabled: true,
     createdAt: now,
     updatedAt: now,

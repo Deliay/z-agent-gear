@@ -395,5 +395,5 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 ## Github 工作负载
 
-- `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀地址（`/root/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
+- `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀 `~/workspace`（无默认工作区时预填，预览展开为 `/home/worker/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
 - `src/cloud-host.spec.ts`：新建云电脑弹窗断言 `cloudHostWorkloadCatalog` 的真实数据（Aspire/Docker/.NET 可见、Aspire 依赖文案、勾选 Docker 出现耗时提示），再提交创建；K8S 关闭时只断言到「启动中」，不做就绪断言。

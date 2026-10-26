@@ -184,6 +184,50 @@ describe('cloud-host reconnect backoff (C-3)', () => {
   });
 });
 
+describe('idle-path exit codes (contract §3.7)', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.on.mockClear();
+    fake.socket.emit.mockClear();
+    fake.socket.disconnect.mockClear();
+    fake.socket.close.mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('unregistered exits 42 (server termination)', () => {
+    setup(false);
+    expect(() => fake.handlers.get('unregistered')?.()).toThrow('exit:42');
+  });
+
+  it('server shutdown exits 42, failure shutdown exits 1', () => {
+    setup(false);
+    expect(() => shutdownHandler()({ reason: 'server requested shutdown' })).toThrow('exit:42');
+
+    fake.handlers.clear();
+    setup(false);
+    expect(() => shutdownHandler()({ reason: 'error: REGISTER_FAILED' })).toThrow('exit:1');
+  });
+
+  it('error INVALID_TOKEN exits 42 instead of the generic failure code', () => {
+    setup(false);
+    expect(() => errorHandler()({ code: 'INVALID_TOKEN', message: 'token expired' })).toThrow('exit:42');
+  });
+
+  it('connect_error INVALID_TOKEN exits 42', () => {
+    setup(false);
+    const error = Object.assign(new Error('INVALID_TOKEN'), { data: { code: 'INVALID_TOKEN' } });
+    expect(() => fake.handlers.get('connect_error')?.(error)).toThrow('exit:42');
+  });
+});
+
 describe('buildAcpInitResult', () => {
   it('T-SC1: payload 带 capabilities 时透传，既有字段一个不少', () => {
     const capabilities = {

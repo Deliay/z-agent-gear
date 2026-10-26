@@ -93,7 +93,7 @@ const operation = {
   containerId: CONTAINER_ID,
   accountId: ACCOUNT_ID,
   repoFullName: 'owner/repo',
-  targetPath: '/root/workspace/repo',
+  targetPath: '/home/worker/workspace/repo',
   status: 'RUNNING',
   steps: [
     { key: 'workload', status: 'PENDING', detail: null },
@@ -128,14 +128,14 @@ describe('CloudHostGithubService', () => {
         workloadName: 'Git 项目设置',
         githubAuth: true,
         source: 'system',
-        params: { repoFullName: 'owner/repo', targetPath: '/root/workspace/repo' },
+        params: { repoFullName: 'owner/repo', targetPath: '/home/worker/workspace/repo' },
       }),
     );
     expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalled();
     expect(ensureWorkspace).toHaveBeenCalledWith(
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/repo',
+      '/home/worker/workspace/repo',
     );
     expect(createSession).toHaveBeenCalledWith(USER_ID, {
       controllerId: CONTROLLER_ID,
@@ -235,6 +235,115 @@ describe('CloudHostGithubService', () => {
     });
   });
 
+  it('T-CHG9: createSession=false（多 Harness）在 gitSetup 收尾初始化工作区并 CAS 回写', async () => {
+    const skippedOperation = {
+      ...operation,
+      steps: [
+        { key: 'workload', status: 'SUCCEEDED', detail: 'Github' },
+        { key: 'gitSetup', status: 'PENDING', detail: null },
+        { key: 'session', status: 'SKIPPED', detail: '多 Harness 不自动创建会话' },
+      ],
+    };
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(skippedOperation));
+    const { service, workloadService, ensureWorkspace, createSession } = makeService();
+
+    await (service as any).run('op1');
+
+    // 工作区初始化不再依赖 session 步骤
+    expect(ensureWorkspace).toHaveBeenCalledTimes(1);
+    expect(ensureWorkspace).toHaveBeenCalledWith(
+      CONTROLLER_ID,
+      USER_ID,
+      '/home/worker/workspace/repo',
+    );
+    expect(CloudHost.updateOne).toHaveBeenCalledWith(
+      { _id: HOST_ID, workspaceId: null },
+      { $set: { workspaceId: 'ws-1' } },
+    );
+    expect(workloadService.updateStep).toHaveBeenCalledWith('op1', 'gitSetup', {
+      status: 'SUCCEEDED',
+      detail: 'owner/repo',
+    });
+    expect(workloadService.updateStep).not.toHaveBeenCalledWith(
+      'op1',
+      'session',
+      expect.anything(),
+    );
+    expect(createSession).not.toHaveBeenCalled();
+    expect(CloudHostSetupOperation.updateOne).toHaveBeenLastCalledWith(
+      { _id: 'op1' },
+      { $set: { status: 'SUCCEEDED', error: null } },
+    );
+  });
+
+  it('T-CHG10: ensureWorkspace 抛错 → gitSetup FAILED、operation FAILED，session 不执行', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
+    const { service, workloadService, ensureWorkspace, createSession } = makeService();
+    ensureWorkspace.mockRejectedValue(new Error('ensure workspace failed'));
+
+    await (service as any).run('op1');
+
+    expect(workloadService.fail).toHaveBeenCalledWith(
+      'op1',
+      'ensure workspace failed',
+      'gitSetup',
+    );
+    expect(workloadService.updateStep).not.toHaveBeenCalledWith(
+      'op1',
+      'gitSetup',
+      expect.objectContaining({ status: 'SUCCEEDED' }),
+    );
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('T-CHG10b: 初始化失败后重试幂等收敛（不重复创建 operation）', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
+    const { service, ensureWorkspace, workloadService, createSession } = makeService();
+    ensureWorkspace.mockRejectedValueOnce(new Error('ensure workspace failed'));
+
+    await (service as any).run('op1');
+    expect(workloadService.fail).toHaveBeenCalledTimes(1);
+
+    // 重试重跑同一 operation：clone 脚本幂等（git pull --ff-only），工作区 upsert 幂等
+    await (service as any).run('op1');
+    // 首轮仅 gitSetup 收尾 1 次（session 未执行）；次轮 gitSetup 收尾 + session 兜底 2 次
+    expect(ensureWorkspace).toHaveBeenCalledTimes(3);
+    expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-CHG11: createSession=true 时收尾与 session 兜底两次幂等初始化，defaultSessionId 回写不变', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
+    const { service, ensureWorkspace, createSession } = makeService();
+
+    await (service as any).run('op1');
+
+    expect(ensureWorkspace).toHaveBeenCalledTimes(2);
+    expect(ensureWorkspace).toHaveBeenNthCalledWith(
+      1,
+      CONTROLLER_ID,
+      USER_ID,
+      '/home/worker/workspace/repo',
+    );
+    expect(ensureWorkspace).toHaveBeenNthCalledWith(
+      2,
+      CONTROLLER_ID,
+      USER_ID,
+      '/home/worker/workspace/repo',
+    );
+    const workspaceCasCalls = vi
+      .mocked(CloudHost.updateOne)
+      .mock.calls.filter(
+        ([filter]) => (filter as unknown as Record<string, unknown>).workspaceId === null,
+      );
+    expect(workspaceCasCalls).toHaveLength(2);
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(CloudHost.updateOne).toHaveBeenCalledWith(
+      { _id: HOST_ID, defaultSessionId: null },
+      { $set: { defaultSessionId: 'session-1' } },
+    );
+  });
+
   it('T-CHG3: gitSetup 失败 → operation FAILED，session 保持 PENDING', async () => {
     vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(lean(operation));
     const { service, controllerClient, workloadService, createSession } = makeService();
@@ -310,12 +419,12 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: ' User/Repo ',
-        targetPath: '/root/workspace/',
+        targetPath: '/home/worker/workspace/',
       });
 
       expect(created[0]).toMatchObject({
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace/User/Repo',
+        targetPath: '/home/worker/workspace/User/Repo',
       });
     });
 
@@ -327,7 +436,7 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
         createSession: false,
       });
 
@@ -346,7 +455,7 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
       });
 
       expect(created[0].steps).toEqual([
@@ -363,9 +472,21 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
       });
-      expect(created[0].targetPath).toBe('/root/workspace/User/Repo');
+      expect(created[0].targetPath).toBe('/home/worker/workspace/User/Repo');
+    });
+
+    it('T-CHG-P7: ~ 前缀展开后落库为绝对路径', async () => {
+      const { service } = makeService();
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'User/Repo',
+        targetPath: '~/workspace',
+      });
+      expect(created[0].targetPath).toBe('/home/worker/workspace/User/Repo');
     });
 
     it('T-CHG-P2/P3/P4: binding / 脚本 / 会话均使用 finalPath', async () => {
@@ -378,7 +499,7 @@ describe('CloudHostGithubService', () => {
           containerId: CONTAINER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'User/Repo',
-          targetPath: '/root/workspace/User/Repo',
+          targetPath: '/home/worker/workspace/User/Repo',
           status: 'RUNNING',
           steps: [
             { key: 'workload', status: 'PENDING', detail: null },
@@ -394,19 +515,19 @@ describe('CloudHostGithubService', () => {
       expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalledWith(
         { controllerId: CONTROLLER_ID },
         expect.objectContaining({
-          $set: expect.objectContaining({ targetPath: '/root/workspace/User/Repo' }),
+          $set: expect.objectContaining({ targetPath: '/home/worker/workspace/User/Repo' }),
         }),
         { upsert: true, new: true },
       );
       expect(controllerClient.startRuntimeScript).toHaveBeenCalledWith(
         expect.objectContaining({
-          params: { repoFullName: 'User/Repo', targetPath: '/root/workspace/User/Repo' },
+          params: { repoFullName: 'User/Repo', targetPath: '/home/worker/workspace/User/Repo' },
         }),
       );
       expect(ensureWorkspace).toHaveBeenCalledWith(
         CONTROLLER_ID,
         USER_ID,
-        '/root/workspace/User/Repo',
+        '/home/worker/workspace/User/Repo',
       );
     });
 
@@ -421,7 +542,7 @@ describe('CloudHostGithubService', () => {
           repoFullName: 'User/Repo',
           targetPath: 'root/workspace',
         }),
-      ).rejects.toThrow('前缀地址必须是绝对路径');
+      ).rejects.toThrow('前缀地址必须以 / 或 ~ 开头');
 
       await expect(
         service.createOperation({
@@ -429,7 +550,7 @@ describe('CloudHostGithubService', () => {
           controllerId: CONTROLLER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'User/Repo',
-          targetPath: '/root/../etc',
+          targetPath: '/home/worker/../etc',
         }),
       ).rejects.toThrow('前缀地址不能包含 ..');
 
@@ -439,7 +560,7 @@ describe('CloudHostGithubService', () => {
           controllerId: CONTROLLER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'owner/..',
-          targetPath: '/root/workspace',
+          targetPath: '/home/worker/workspace',
         }),
       ).rejects.toThrow('仓库格式应为 owner/repo');
 

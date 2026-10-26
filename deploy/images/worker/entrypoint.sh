@@ -1,65 +1,72 @@
 #!/usr/bin/env bash
-# 默认工作容器入口：更新 agent-gear，然后以「受监督」方式运行 agent-gear 回连 cloud-controller。
+# 默认工作容器入口：以 worker 用户保活运行 agent-gear（回连 cloud-controller）。
 #
-# 容器内 docker 能力（命令行、镜像代理包装器、Docker 守护进程）全部由「Docker」工作负载的初始化
-# 脚本提供：入口不装配包装器、不调用 docker、也不拉起守护进程；未选择该工作负载时容器内没有 docker。
-# Docker 脚本见 servers/admin-api/src/migrations/002-refresh-docker-preset-script.ts（v2）。
+# 保活口径（docs/engineering/plan/20261025-feat-cloud-host-keepalive.md）：
+# - 退出码 42（服务端终止：unregistered / 非失败类 shutdown / INVALID_TOKEN）→ 停止保活、入口 0；
+# - 其余退出（0 / 1 / 信号 / 被误杀）→ 退避 1/2/5/10/30s → 自更新 → 重启；
+# - PID 1 保持 root；agent-gear / npm / node 一律经 run_as_worker() 以 worker 身份执行
+#   （root 环境没有 nodejs），显式构造 HOME/USER/LOGNAME/NVM_DIR/PATH；
+# - stdout/stderr 实时透传；stderr 流式扫描仅记录 VERSION_MISMATCH 标记（0 字节）；
+# - 作为 PID 1 向当前子进程转发 SIGTERM/SIGINT，销毁后不重启、不自更新。
 #
-# 监督职责（见 docs/engineering/plan/20261017-feat-controller-version-requirement.md）：
-# - stdout/stderr 实时透传；stderr 流式扫描，只记录是否出现稳定错误码 VERSION_MISMATCH；
-# - 仅在「非零退出 + 出现 VERSION_MISMATCH + 本轮未升级 + 未设置跳过开关」时执行一次
-#   `npm install -g agent-gear`，成功后重启；第二次不匹配/安装失败/普通错误均收敛退出；
-# - 作为 PID 1 向当前子进程（agent-gear / npm）转发 SIGTERM/SIGINT 并等待退出，销毁后不重启。
-#
-# 连接参数来自注入的环境变量：
-#   ZAG_SERVER_ENDPOINT  形如 wss://<cloud-controller>/worker（不含 token）
-#   ZAG_CONTROLLER_KEY   /worker 一次性容器 token（agent-gear 连接 cloud-controller 时经 Socket.IO
-#                        握手 auth.token 携带，不进 URL；**不是** controller-api 的控制器 Key）
-#   ZAG_HOST_ENDPOINT    云电脑标准连接地址（controller-api；仅 harness 容器注入）
-#   ZAG_HOST_KEY         云电脑标准连接凭据（ControllerKey type=cloud；仅经握手 auth.token 携带，
-#                        不进 URL；普通 idle 容器不注入）
-# 云电脑容器由 agent-gear 自动进入双连接模式（/worker + controller-api），退出时不发送 unregister；
-# 普通容器的连接行为与既有版本完全一致。
+# 连接参数：
+#   ZAG_SERVER_ENDPOINT / ZAG_CONTROLLER_KEY（cloud-controller /worker）
+#   ZAG_HOST_ENDPOINT / ZAG_HOST_KEY（controller-api 标准连接，仅云电脑模式）
 # 可选开关：
-#   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过启动更新与版本不匹配后的自动升级
+#   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过全部自更新（启动与每轮），但仍保活重启
+#   ZAG_KEEPALIVE_BACKOFF_MS      退避整体缩放（毫秒；仅测试用）
 set -euo pipefail
 
-# 当前正在运行的子进程（agent-gear 或 npm）：PID 1 收到信号时转发给它。
+WORKER_UID=1000
+WORKER_GID=1000
+WORKER_HOME=/home/worker
+WORKER_NVM_DIR="$WORKER_HOME/.nvm"
+WORKER_PATH="$WORKER_NVM_DIR/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 CHILD_PID=""
 SCAN_PID=""
-# 置位后主循环不再拉起 agent-gear / 执行升级。
 shutting_down=0
 
 log() { echo "[worker] $*"; }
 
-# ---------------------------------------------------------------------------
-# 启动更新：`npm install -g agent-gear`（走镜像内置的内网 npm 代理）。
-# 失败**不阻断**启动：镜像内已预装可用的 agent-gear，避免代理抖动/离线时容器起不来。
-# 设 ZAG_SKIP_AGENT_GEAR_UPDATE=1 可跳过（离线或排障时；亦跳过版本不匹配后的自动升级）。
-# ---------------------------------------------------------------------------
+# 以 worker 身份执行：setpriv 降权 + 显式构造环境（root 环境无 nodejs）。
+run_as_worker() {
+  setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
+    env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
+        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+}
+
+# 后台子进程专用：exec 替换当前 shell，保证 PID 1 的转发信号直达子进程本体。
+run_as_worker_exec() {
+  exec setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
+    env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
+        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+}
+
+# 启动 / 每轮自更新：npm install -g agent-gear（写入 worker 的 per-user nvm 前缀）。
+# 失败不阻断保活；skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
     log "skipping agent-gear update (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
     return 0
   fi
-  log "updating agent-gear via npm (registry=$(npm config get registry 2>/dev/null || echo unknown))"
+  local registry
+  registry=$(run_as_worker npm config get registry 2>/dev/null || echo unknown)
+  log "updating agent-gear via npm (registry=$registry)"
   local rc=0
-  npm install -g agent-gear --no-fund --no-audit &
+  run_as_worker_exec npm install -g agent-gear --no-fund --no-audit &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
   if [ "$rc" -eq 0 ]; then
-    log "agent-gear updated: $(agent-gear --version 2>/dev/null || echo 'version unknown')"
+    log "agent-gear updated: $(run_as_worker agent-gear --version 2>/dev/null || echo 'version unknown')"
   else
-    log "WARN: agent-gear update failed; continuing with the pre-installed version ($(agent-gear --version 2>/dev/null || echo 'version unknown'))"
+    log "WARN: agent-gear update failed; continuing with the pre-installed version ($(run_as_worker agent-gear --version 2>/dev/null || echo 'version unknown'))"
   fi
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# stderr 流式扫描：逐行原样回写 fd 2，只在出现稳定错误码 VERSION_MISMATCH 时落一个标记文件。
-# 不把完整运行日志落盘（标记文件为 0 字节），避免磁盘无界增长。
-# ---------------------------------------------------------------------------
+# stderr 流式扫描：逐行回写 fd 2，仅 VERSION_MISMATCH 落 0 字节标记（不落盘完整日志）。
 scan_stderr() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
@@ -73,10 +80,7 @@ scan_stderr() {
   done
 }
 
-# ---------------------------------------------------------------------------
-# 运行 agent-gear：stdout 直接透传到入口 stdout；stderr 经 FIFO 交给 scan_stderr 流式扫描。
-# 返回 agent-gear 的退出码；$CHILD_PID 供信号转发使用。
-# ---------------------------------------------------------------------------
+# 运行 agent-gear：stdout 直通；stderr 经 FIFO 扫描；返回其退出码。
 run_agent_gear() {
   local fifo="$RUN_DIR/stderr.fifo"
   rm -f "$fifo"
@@ -84,7 +88,7 @@ run_agent_gear() {
   scan_stderr < "$fifo" &
   local scan_pid=$!
   SCAN_PID=$scan_pid
-  agent-gear 2> "$fifo" &
+  run_as_worker_exec agent-gear 2> "$fifo" &
   CHILD_PID=$!
   local rc=0
   wait "$CHILD_PID" || rc=$?
@@ -95,80 +99,51 @@ run_agent_gear() {
   return "$rc"
 }
 
-# ---------------------------------------------------------------------------
-# 版本不匹配后的一次性升级：固定包名 + 固定 registry（不读取服务端下发的任何地址）。
-# 成功判据：npm 退出 0 且 `agent-gear --version` 输出非空。
-# ---------------------------------------------------------------------------
-maybe_upgrade_agent_gear() {
-  log "upgrading agent-gear after VERSION_MISMATCH (registry=$(npm config get registry 2>/dev/null || echo unknown))"
-  local rc=0
-  npm install -g agent-gear --no-fund --no-audit &
-  CHILD_PID=$!
-  wait "$CHILD_PID" || rc=$?
-  CHILD_PID=""
-  if [ "$rc" -ne 0 ]; then
-    log "ERROR: agent-gear upgrade failed (exit=$rc); stopping recovery loop"
-    return 1
+# 退避毫秒：1/2/5/10/30s 封顶；ZAG_KEEPALIVE_BACKOFF_MS 整体缩放（仅测试）。
+backoff_delay_ms() {
+  local attempt="$1"
+  local steps=(1 2 5 10 30)
+  local idx=$attempt
+  [ "$idx" -ge 5 ] && idx=4
+  local seconds=${steps[$idx]}
+  if [ -n "${ZAG_KEEPALIVE_BACKOFF_MS:-}" ]; then
+    echo $(( seconds * ZAG_KEEPALIVE_BACKOFF_MS ))
+  else
+    echo $(( seconds * 1000 ))
   fi
-  local version
-  version=$(agent-gear --version 2>/dev/null | head -n 1 || true)
-  if [ -z "$version" ]; then
-    log "ERROR: agent-gear --version is unavailable after upgrade; stopping recovery loop"
-    return 1
-  fi
-  log "agent-gear upgraded: $version"
-  return 0
 }
 
-# ---------------------------------------------------------------------------
-# 受监督运行：
-# - exit 0 / 信号退出 / 普通非零退出 → 结束，不升级不重启；
-# - 非零退出 + mismatch 标记 + 未尝试升级 + 未设置跳过开关 → 升级一次后重启；
-# - 第二次 mismatch / 安装失败 / skip → 非零退出（有界收敛）。
-# ---------------------------------------------------------------------------
+sleep_ms() {
+  local ms="$1"
+  sleep "$(printf '%d.%03d' $((ms / 1000)) $((ms % 1000)))"
+}
+
+# 保活循环：42 停止；其余退避 → 每轮自更新 → 重启；稳定运行 >=60s 重置退避。
 supervise_agent_gear() {
-  local upgrade_attempted=0
+  local attempt=0
   while true; do
-    if [ "$shutting_down" -eq 1 ]; then
-      return 0
-    fi
+    [ "$shutting_down" -eq 1 ] && return 0
     rm -f "$MISMATCH_MARKER"
-    local rc=0
-    if run_agent_gear; then
-      rc=0
-    else
-      rc=$?
-    fi
-    if [ "$shutting_down" -eq 1 ]; then
+    local rc=0 start_ts=$SECONDS
+    run_agent_gear || rc=$?
+    [ "$shutting_down" -eq 1 ] && return 0
+    if [ "$rc" -eq 42 ]; then
+      log "agent-gear exited (code=42): server shutdown; stopping keepalive"
       return 0
     fi
-    if [ "$rc" -eq 0 ]; then
-      log "agent-gear exited normally"
-      return 0
-    fi
-    if [ ! -f "$MISMATCH_MARKER" ]; then
-      log "agent-gear exited with code $rc (no VERSION_MISMATCH); not upgrading"
-      return "$rc"
-    fi
-    if [ "$upgrade_attempted" -eq 1 ]; then
-      log "ERROR: agent-gear still reports VERSION_MISMATCH after upgrade; exiting"
-      return 1
-    fi
-    if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
-      log "ERROR: agent-gear VERSION_MISMATCH; auto-upgrade disabled (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
-      return 1
-    fi
-    if ! maybe_upgrade_agent_gear; then
-      return 1
-    fi
-    upgrade_attempted=1
+    [ $((SECONDS - start_ts)) -ge 60 ] && attempt=0
+    local delay_ms delay_log
+    delay_ms=$(backoff_delay_ms "$attempt")
+    delay_log=$(printf '%d.%03ds' $((delay_ms / 1000)) $((delay_ms % 1000)))
+    log "agent-gear exited (code=$rc); self-update then restarting in ${delay_log} (attempt #$((attempt + 1)))"
+    sleep_ms "$delay_ms"
+    [ "$shutting_down" -eq 1 ] && return 0
+    update_agent_gear
+    attempt=$((attempt + 1))
   done
 }
 
-# ---------------------------------------------------------------------------
-# PID 1 信号语义：置位 shutting_down，向当前子进程转发 SIGTERM（必要时 SIGINT）并等待退出。
-# 销毁信号后绝不重启 agent-gear 或执行升级。
-# ---------------------------------------------------------------------------
+# PID 1 信号：置位 shutting_down，转发 SIGTERM（必要时 SIGINT）并等待；绝不重启/自更新。
 shutdown() {
   local signal="${1:-SIGTERM}"
   shutting_down=1
@@ -215,7 +190,9 @@ main() {
   exit "$rc"
 }
 
-# 仅直接执行时运行 main；便于测试/排障按需 source 单个纯函数（不改变 PID 1 行为）。
+# 仅直接执行时运行 main；便于测试按需 source 单个纯函数。
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi
+
+

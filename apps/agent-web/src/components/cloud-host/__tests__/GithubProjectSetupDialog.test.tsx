@@ -27,7 +27,7 @@ const cloudHost = {
   name: '云电脑 A',
   status: 'RUNNING' as const,
   deletedAt: null,
-  defaultWorkspace: '/root/workspace',
+  defaultWorkspace: '/home/worker/workspace',
   hasDefaultWorkspace: true,
 }
 
@@ -208,36 +208,36 @@ describe('GithubProjectSetupDialog', () => {
     renderDialog()
 
     const input = screen.getByLabelText('前缀地址')
-    await waitFor(() => expect(input).toHaveValue('/root/workspace'))
+    await waitFor(() => expect(input).toHaveValue('/home/worker/workspace'))
 
-    fireEvent.change(input, { target: { value: '/root/workspace/custom' } })
-    expect(input).toHaveValue('/root/workspace/custom')
+    fireEvent.change(input, { target: { value: '/home/worker/workspace/custom' } })
+    expect(input).toHaveValue('/home/worker/workspace/custom')
   })
 
-  it('无默认工作区时不预填 /root/workspace，且空值不可提交', async () => {
+  it('无默认工作区时预填 ~/workspace，且可直接提交', async () => {
     renderDialog({ hasDefaultWorkspace: false })
 
     const input = screen.getByLabelText('前缀地址')
-    await waitFor(() => expect(input).toHaveValue(''))
-    expect(input).toHaveAttribute('placeholder', '例如：/workspace')
-    expect(screen.queryByDisplayValue('/root/workspace')).not.toBeInTheDocument()
+    await waitFor(() => expect(input).toHaveValue('~/workspace'))
+    expect(input).toHaveAttribute('placeholder', '例如：~/workspace')
 
     await selectRepo()
-    expect(screen.getByText('请输入前缀地址')).toBeInTheDocument()
-    expect(submitButton()).toBeDisabled()
+    expect(screen.queryByText('请输入前缀地址')).not.toBeInTheDocument()
+    expect(screen.getByText('最终 clone 地址：/home/worker/workspace/alice/repo-a')).toBeInTheDocument()
+    expect(submitButton()).not.toBeDisabled()
   })
 
   it('有默认工作区时仍预填 cloudHost.defaultWorkspace', async () => {
     renderDialog({ hasDefaultWorkspace: true })
 
-    await waitFor(() => expect(screen.getByLabelText('前缀地址')).toHaveValue('/root/workspace'))
+    await waitFor(() => expect(screen.getByLabelText('前缀地址')).toHaveValue('/home/worker/workspace'))
   })
 
   it('T-WEB-G1: 选择仓库后展示最终 clone 地址', async () => {
     renderDialog()
     await selectRepo('alice/repo-a')
 
-    expect(screen.getByText('最终 clone 地址：/root/workspace/alice/repo-a')).toBeInTheDocument()
+    expect(screen.getByText('最终 clone 地址：/home/worker/workspace/alice/repo-a')).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '/work/' } })
     expect(screen.getByText('最终 clone 地址：/work/alice/repo-a')).toBeInTheDocument()
@@ -253,14 +253,14 @@ describe('GithubProjectSetupDialog', () => {
     expect(submitButton()).toBeDisabled()
 
     fireEvent.change(input, { target: { value: 'workspace/repo' } })
-    expect(screen.getByText('前缀地址必须以 / 开头')).toBeInTheDocument()
+    expect(screen.getByText('前缀地址必须以 / 或 ~ 开头')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
-    fireEvent.change(input, { target: { value: '/root/../etc' } })
+    fireEvent.change(input, { target: { value: '/home/worker/../etc' } })
     expect(screen.getByText('前缀地址不能包含 ..')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
-    fireEvent.change(input, { target: { value: '/root\\workspace' } })
+    fireEvent.change(input, { target: { value: '/home/worker\\workspace' } })
     expect(screen.getByText('前缀地址包含非法字符')).toBeInTheDocument()
     expect(submitButton()).toBeDisabled()
 
@@ -284,7 +284,7 @@ describe('GithubProjectSetupDialog', () => {
   it('T-WEB-G3 提交的是归一后的前缀（非最终目录）', async () => {
     renderDialog()
     await selectRepo()
-    fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '/root//workspace/' } })
+    fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '/home/worker//workspace/' } })
     fireEvent.click(submitButton())
 
     await waitFor(() => {
@@ -294,7 +294,7 @@ describe('GithubProjectSetupDialog', () => {
             controllerId: 'ctrl-1',
             accountId: 'acc-1',
             repoFullName: 'alice/repo-a',
-            targetPath: '/root/workspace',
+            targetPath: '/home/worker/workspace',
             workloadIds: ['wl-github'],
           },
         },
@@ -302,6 +302,27 @@ describe('GithubProjectSetupDialog', () => {
     })
     const dialog = await screen.findByTestId('github-progress-dialog')
     expect(dialog).toHaveAttribute('data-operation-id', 'op-1')
+  })
+
+  it('T-CH-WS1 前端将 ~/workspace 展开为 /home/worker/workspace 后提交', async () => {
+    renderDialog({ hasDefaultWorkspace: false })
+    await selectRepo()
+    fireEvent.change(screen.getByLabelText('前缀地址'), { target: { value: '~/workspace' } })
+    fireEvent.click(submitButton())
+
+    await waitFor(() => {
+      expect(mockSetupGithubProject).toHaveBeenCalledWith({
+        variables: {
+          input: {
+            controllerId: 'ctrl-1',
+            accountId: 'acc-1',
+            repoFullName: 'alice/repo-a',
+            targetPath: '/home/worker/workspace',
+            workloadIds: ['wl-github'],
+          },
+        },
+      })
+    })
   })
 
   it('服务端错误原样展示', async () => {

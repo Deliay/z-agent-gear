@@ -10,6 +10,13 @@ import { startMcpProxy } from './commands/mcp.js';
 import { registerHarnessCommands } from './commands/harness.js';
 import { isCloudHostMode, startCloudHostSupervisor } from './cloud-host/supervisor.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
+export {
+  EXIT_SERVER_SHUTDOWN,
+  isFailureShutdownReason,
+  isServerTerminationReason,
+  isSignalShutdownReason,
+  resolveShutdownExitCode,
+} from './exit-codes.js';
 
 // 版本号唯一事实源为 package.json（`--version` 与 npm 发布版本保持一致，避免手工同步漂移）。
 const { version: CLI_VERSION } = createRequire(import.meta.url)('../package.json') as {
