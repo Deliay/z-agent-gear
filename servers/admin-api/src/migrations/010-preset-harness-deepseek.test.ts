@@ -65,7 +65,9 @@ describe('migration 010-preset-harness-deepseek', () => {
     expect(arg.initScript).toContain('dsh --version');
     expect(arg.initScript).toContain('DeepSeek Harness version mismatch');
     expect(arg.initScript).toContain('mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"');
-    expect(arg.initScript).toContain('agent-gear harness prepare');
+    expect(arg.initScript).toContain('ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare');
+    // prepare 必须带类型限定：多 harness 主机脚本顺序执行，裸调用会对未安装的类型硬校验而误失败
+    expect(arg.initScript).not.toMatch(/(?<!ZAG_HARNESS_TYPES=deepseek_harness )agent-gear harness prepare/);
     expect(arg.initScript).not.toContain('kimi');
   });
 
