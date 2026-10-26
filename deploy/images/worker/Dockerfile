@@ -9,6 +9,10 @@
 # 按需提供（见 docs/engineering/proposals/20261018-feat-workload-phase4.md）。Node.js 保留——它是
 # 容器内 agent-gear 的运行基础。
 #
+# ACP 适配器口径：镜像**不再预装** Claude Code / Codex 的 ACP 适配器
+# （`@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp`）。如需使用，
+# 由用户在目标主机自行全局安装；agent-controller 仍保留对二者的探测与启动能力。
+#
 # 构建期可覆盖的参数（均为内网地址，如不可达请通过 --build-arg 替换）：
 #   UBUNTU_MIRROR       Ubuntu apt 代理源
 #   GITHUB_RAW_PROXY    GitHub raw 代理根地址（nvm 安装脚本及其 nvm.sh/nvm-exec/bash_completion）
@@ -109,11 +113,11 @@ RUN mkdir -p "$NVM_DIR" \
  && nvm install --default "$NODE_VERSION" \
  && nvm alias default "$NODE_VERSION" \
  && ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current" \
- && npm config set registry "$NPM_REGISTRY" \
- && npm install -g \
-      agent-gear@2.10.x \
-      @agentclientprotocol/claude-agent-acp \
-      @agentclientprotocol/codex-acp \
+ && npm config set registry "$NPM_REGISTRY"
+# 镜像唯一预装的 npm 全局包：agent-gear。
+# 不预装 Claude Code / Codex 的 ACP 适配器（claude-agent-acp、codex-acp）。
+RUN . "$NVM_DIR/nvm.sh" \
+ && npm install -g agent-gear@2.10.x \
  && npm cache clean --force \
  && node -v && npm -v && agent-gear --version
 USER root
