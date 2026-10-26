@@ -570,7 +570,7 @@ describe('WorkloadExecutor container env + secret redaction (T-AG13/T-AG14)', ()
         phase: 'init',
         env: {
           ZAG_MODEL_IDS: '["model-a","model-b"]',
-          ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+          ZAG_DEFAULT_WORKSPACE: '/home/worker/workspace',
           ZAG_USER_ID: 'user-1',
           WORKLOAD_PARAM_VERSION: 'from-container-env',
         },
@@ -595,7 +595,7 @@ describe('WorkloadExecutor container env + secret redaction (T-AG13/T-AG14)', ()
 
     expect(results.map((r) => r.logId)).toEqual(['first', 'second']);
     expect(results[0].log).toContain('IDS=["model-a","model-b"]');
-    expect(results[0].log).toContain('WS=/root/workspace');
+    expect(results[0].log).toContain('WS=/home/worker/workspace');
     expect(results[0].log).toContain('USER=user-1');
     // item 参数优先于容器 env 的同名 WORKLOAD_PARAM_*
     expect(results[0].log).toContain('V=from-item-param');

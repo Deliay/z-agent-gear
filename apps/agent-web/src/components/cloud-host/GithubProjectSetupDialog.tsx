@@ -53,7 +53,7 @@ export default function GithubProjectSetupDialog({
     open,
     controllerId,
     defaultWorkspace: cloudHost.defaultWorkspace,
-    // 创建期不再预置默认工作区：无默认工作区时不预填前缀（由用户按需填写）
+    // 有默认工作区预填 defaultWorkspace；无默认工作区（多 Harness 不建会话场景）预填 ~/workspace
     hasDefaultWorkspace: cloudHost.hasDefaultWorkspace,
   })
   const {
@@ -262,7 +262,7 @@ export default function GithubProjectSetupDialog({
               aria-label="前缀地址"
               value={targetPath}
               onChange={(event) => setTargetPath(event.target.value)}
-              placeholder="例如：/workspace"
+              placeholder="例如：~/workspace"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <p className="mt-1 break-words text-xs text-muted-foreground">

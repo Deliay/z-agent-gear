@@ -139,6 +139,8 @@ flowchart LR
 - [[draft/20261025-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（云电脑设置「Github」区块以列表维护多条联动配置：先选含人类节点的已配置工作流、默认标签 start-{工作流名字}可改、多选仓库并同步标签；带标签 Issue 自动完成工作区准备、实例化工作流、回评工作流地址、首个人类节点自动完成；销毁云电脑时经确认清理已同步标签）
 - [[draft/20261025-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（绑定 PR 的节点状态写入 PR 最新提交检查项、旧提交标记 stale、todo panel 同步为检查项子项）
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
+- [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
+- [[draft/20261026-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置不建会话时也初始化项目工作区、云电脑配置「Github 项目设置」入口迁移至 Github 页面、前缀地址默认 ~/workspace）
 
 ### 实现中文档（`shipping/`）
 

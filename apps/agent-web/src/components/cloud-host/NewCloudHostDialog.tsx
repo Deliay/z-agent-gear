@@ -460,7 +460,7 @@ export default function NewCloudHostDialog({
                         aria-label="前缀地址"
                         value={projectForm.targetPath}
                         onChange={(event) => projectForm.setTargetPath(event.target.value)}
-                        placeholder="/root/workspace"
+                        placeholder="~/workspace"
                         className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
                       />
                       {projectForm.prefixError !== null && (

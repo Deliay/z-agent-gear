@@ -39,7 +39,7 @@ export interface GithubProjectFormOptions {
   defaultWorkspace?: string | null
   /**
    * 是否已创建默认工作区（CloudHost.hasDefaultWorkspace）。
-   * false 时不预填前缀地址——创建期不再预置 /root/workspace，由用户按需填写。
+   * true → 预填 `defaultWorkspace`；false/未传 → 预填 `~/workspace`（新建云电脑流程兜底）。
    */
   hasDefaultWorkspace?: boolean | null
   /**
@@ -115,14 +115,14 @@ export function useGithubProjectForm({
     [workloads],
   )
 
-  // 打开时重置；无默认工作区（hasDefaultWorkspace=false）时不预填前缀，
-  // 新建云电脑流程（未传 hasDefaultWorkspace）仍以 cloudHost.defaultWorkspace 兜底
+  // 打开时重置；有默认工作区（hasDefaultWorkspace=true）预填 defaultWorkspace，
+  // 无默认工作区（false）或新建云电脑流程（未传）统一预填 `~/workspace`（裁决 3）
   useEffect(() => {
     if (!open) return
     setAccountIdState('')
     setRepoFullNameState('')
     setTargetPathState(
-      hasDefaultWorkspace === false ? '' : (defaultWorkspace ?? '/root/workspace'),
+      hasDefaultWorkspace === true ? (defaultWorkspace ?? '~/workspace') : '~/workspace',
     )
     setSelectedWorkloadIds([])
     // 仅在打开时重置，避免父组件轮询刷新时覆盖用户输入

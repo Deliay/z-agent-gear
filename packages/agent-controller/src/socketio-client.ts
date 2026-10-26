@@ -21,10 +21,11 @@ import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
 import { WorkloadExecutor, type WorkloadRunPayload, collectSecretValues, redactSecrets } from './workload-executor.js';
+import { EXIT_SERVER_SHUTDOWN, resolveShutdownExitCode } from './exit-codes.js';
 
 // 版本号唯一事实源为 package.json（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
 // 2.8.0 起 `kimi_code` 使用前登录闸门（`kimi login` stdio 判定 + `harness:login:*` 事件族）；
-// 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.6.0）；
+// 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（MIN_HARNESS_WORKER_VERSION=2.10.0）；
 // 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`。
 const { version: CONTROLLER_VERSION } = createRequire(import.meta.url)('../package.json') as {
   version: string;
@@ -527,6 +528,17 @@ export function connectToServer(
 
   socket.on('error', (data: ErrorPayload) => {
     console.error(`Server error: ${data.code} - ${data.message}`);
+    if (data.code === 'INVALID_TOKEN') {
+      // token 已失效 = 已被服务端注销：服务端终止语义（退出码 42，入口不保活重启）。
+      console.error('Handshake token is no longer valid; the container has been deregistered.');
+      socket.disconnect();
+      if (options?.onShutdown) {
+        notifyShutdown({ reason: `error: ${data.code}` });
+        return;
+      }
+      process.exit(EXIT_SERVER_SHUTDOWN);
+      return;
+    }
     if (data.code === 'VERSION_MISMATCH') {
       console.error('The agent-controller version is not supported by the server.');
       console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
@@ -569,7 +581,7 @@ export function connectToServer(
       return;
     }
     socket.close();
-    process.exit(0);
+    process.exit(EXIT_SERVER_SHUTDOWN);
   });
 
   socket.on('shutdown', (data: ShutdownPayload) => {
@@ -585,7 +597,8 @@ export function connectToServer(
       }
       if (persistConfig) clearConfigKey();
       socket.close();
-      process.exit(0);
+      // idle / 单连接：服务端终止 42、失败类 1（与云电脑 supervisor 同一分类）。
+      process.exit(resolveShutdownExitCode(data.reason));
     };
     // post 批次仍在执行时，等待其结束（≤5s）后再退出，避免清理脚本被中途打断。
     // 无批次在跑时保持同步退出，行为与现状完全一致。
@@ -1477,6 +1490,17 @@ export function connectToServer(
     // 传输层失败时 err.message 往往只有笼统的 "websocket error"，真实原因在 description/context
     // （如 HTTP 404/502、TLS 失败、协议错误）里——一并打印，避免"看不出为何连不上"。
     console.error(`Connection error: ${err.message}${describeConnectError(err)}`);
+    // 握手鉴权失败（cloud-controller 一次性 token 已失效）：服务端终止语义，退出码 42。
+    const code = (err as Error & { data?: { code?: string } }).data?.code;
+    if (code === 'INVALID_TOKEN' || err.message.includes('INVALID_TOKEN')) {
+      console.error('Handshake token is no longer valid; the container has been deregistered.');
+      socket.disconnect();
+      if (options?.onShutdown) {
+        notifyShutdown({ reason: 'error: INVALID_TOKEN' });
+        return;
+      }
+      process.exit(EXIT_SERVER_SHUTDOWN);
+    }
   });
 
   return socket;
