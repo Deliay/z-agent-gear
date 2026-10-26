@@ -28,6 +28,8 @@ export const config = {
   githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY || '',
   githubSetupUrl: process.env.GITHUB_SETUP_URL || 'http://localhost:4000/api/github/setup',
   githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000',
+  // GitHub API base（测试指向本地 mock；默认官方 API）
+  githubApiBaseUrl: process.env.GITHUB_API_BASE || 'https://api.github.com',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   // 费用中心：agent-api 不直写计费库，经 admin-api `/internal/billing/*` 转发（缺失时不 fail-fast）
   adminApiUrl: process.env.ADMIN_API_URL || '',

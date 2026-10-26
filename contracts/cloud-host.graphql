@@ -11,14 +11,20 @@
 enum HarnessType {
   OPENCODE
   KIMI_CODE
+  DEEPSEEK_HARNESS
 }
 
-# HarnessType → AcpServerType 映射：OPENCODE → opencode、KIMI_CODE → kimi_code。
+# HarnessType → AcpServerType 映射：OPENCODE → opencode、KIMI_CODE → kimi_code、
+# DEEPSEEK_HARNESS → deepseek_harness。
 # `harnessTypes` 中的类型均须存在对应预置工作负载（presetKey：
-# OPENCODE → harness-opencode、KIMI_CODE → harness-kimi-code）；
+# OPENCODE → harness-opencode、KIMI_CODE → harness-kimi-code、
+# DEEPSEEK_HARNESS → harness-deepseek-harness）；
 # 缺失时 `cloudHostCapabilities.supportedHarnesses` 不列出该类型。
+# 白名单外类型创建报 `unsupported harness type: <type>`；预置缺失报
+# `harness workload preset not found: <slug>`。
+# 就绪后不自动创建会话（创建期不预置工作区）；会话工具须 ∈ 创建时所选 harnessTypes（A-11）。
 
-# 工作负载分类：standard = 运行环境/工具（Aspire/Docker/.NET/Github 等），harness = 云电脑 harness（如 OpenCode / Kimi Code）
+# 工作负载分类：standard = 运行环境/工具（Aspire/Docker/.NET/Github 等），harness = 云电脑 harness（如 OpenCode / Kimi Code / DeepSeek Harness）
 enum CloudWorkloadKind {
   STANDARD
   HARNESS

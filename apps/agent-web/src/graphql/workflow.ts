@@ -122,6 +122,11 @@ export interface WorkflowPullRequestLinkData {
   nodeId: string
   nodeName: string | null
   registeredAt: string
+  // ---- check-run 同步状态（只读投影；未同步时为 null） ----
+  checkRunUrl: string | null
+  lastSyncedCommitSha: string | null
+  lastSyncAt: string | null
+  lastSyncError: string | null
 }
 
 export interface WorkflowInstanceSummaryData {
@@ -398,6 +403,10 @@ export const GET_WORKFLOW_INSTANCE = gql`
         nodeId
         nodeName
         registeredAt
+        checkRunUrl
+        lastSyncedCommitSha
+        lastSyncAt
+        lastSyncError
       }
       createdAt
       updatedAt

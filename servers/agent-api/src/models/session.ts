@@ -14,7 +14,7 @@ const sessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
   controllerName: { type: String, required: true },
-  acpServerType: { type: String, enum: ['opencode', 'github_copilot', 'claude_code', 'gemini_cli', 'codex', 'mimo_code', 'kimi_code'], required: true },
+  acpServerType: { type: String, enum: ['opencode', 'github_copilot', 'claude_code', 'gemini_cli', 'codex', 'mimo_code', 'kimi_code', 'deepseek_harness'], required: true },
   status: { type: String, enum: ['creating', 'connecting', 'idling', 'running', 'disconnected', 'ended'], default: 'creating' },
   title: { type: String, default: 'New Session' },
   externalSessionId: { type: String },

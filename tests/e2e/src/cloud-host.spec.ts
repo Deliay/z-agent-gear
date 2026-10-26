@@ -70,14 +70,18 @@ test.describe('Cloud Host E2E', () => {
       await expect(dialog.getByText('请输入云电脑名称')).toBeVisible();
 
       await dialog.locator('#cloud-host-name').fill(hostName);
-      // T-E-HL7：Kimi Code 与 OpenCode 均可选、可多选（多选提示「不自动创建会话」）
+      // T-E-HL7 / T-E-DS1：Kimi Code / DeepSeek Harness 与 OpenCode 均可选、可多选（多选提示「不自动创建会话」）
       const kimi = dialog.getByRole('checkbox', { name: 'Kimi Code' });
       await expect(kimi).toBeVisible({ timeout: 15000 });
       await expect(dialog.getByRole('checkbox', { name: 'OpenCode' })).toBeVisible();
+      const deepseek = dialog.getByRole('checkbox', { name: 'DeepSeek Harness' });
+      await expect(deepseek).toBeVisible({ timeout: 15000 });
       await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
       await kimi.check();
+      await deepseek.check();
       await expect(dialog.getByText('不自动创建会话')).toBeVisible();
       await kimi.uncheck();
+      await deepseek.uncheck();
 
       await expect(
         dialog.getByText('就绪后不会自动创建会话，需先创建或绑定工作区'),

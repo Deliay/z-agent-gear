@@ -167,7 +167,7 @@ export class SessionService {
         throw new Error('cloud host is not running');
       }
       // A-11：会话 ACP 工具必须落在云电脑已启用的 harnessTypes 映射内。
-      const harnessAcpTypes: Record<string, string> = { OPENCODE: 'opencode', KIMI_CODE: 'kimi_code' };
+      const harnessAcpTypes: Record<string, string> = { OPENCODE: 'opencode', KIMI_CODE: 'kimi_code', DEEPSEEK_HARNESS: 'deepseek_harness' };
       const allowed = ((host.harnessTypes ?? []) as string[])
         .map((type) => harnessAcpTypes[type])
         .filter((type): type is string => Boolean(type));
