@@ -58,16 +58,19 @@ paths:
                   error: { type: string, enum: [unauthorized] }
   /api/events/github/webhook:
     post:
-      summary: 接收 GitHub 原生 webhook（pull_request_review）并驱动工作流
+      summary: 接收 GitHub 原生 webhook（pull_request_review / issues）并驱动工作流
       operationId: postGithubWebhook
       description: >-
         GitHub 仓库 / App Webhook 直连入口。仅接受 X-Hub-Signature-256 验签
-        （GITHUB_WEBHOOK_SECRET，未配置时一律 401）；仅处理 pull_request_review
-        且 action=submitted 的事件，归一化为平台事件载荷后按与
-        /api/events/callback 完全一致的判定链驱动工作流；ping、其他事件类型与
-        其他 action 安全忽略（200 UNSUPPORTED_EVENT）。eventId 取
-        gh:pull_request_review:{review.id}，跨重投稳定，重复投递返回
-        DUPLICATE_EVENT。
+        （GITHUB_WEBHOOK_SECRET，未配置时一律 401）；支持 pull_request_review
+        （action=submitted）与 issues（action ∈ opened/labeled/edited/reopened）两类事件。
+        pull_request_review 归一化为平台事件载荷后按与 /api/events/callback
+        完全一致的判定链驱动工作流；issues 事件按「仓库命中联动配置 + Issue 标签命中配置标签名」
+        创建 IssueWorkflowTrigger 并异步推进（工作区初始化 → 实例化 → Issue 回评 → 首个人类节点自动完成）。
+        ping、其他事件类型与不受理 action 安全忽略（200 UNSUPPORTED_EVENT）。
+        pull_request_review 的 eventId 取 gh:pull_request_review:{review.id}，
+        issues 的幂等由 issue_workflow_triggers 唯一索引
+        (controllerId, repoFullName, labelName, issueId) 保证。
       parameters:
         - in: header
           name: X-Hub-Signature-256
@@ -78,7 +81,9 @@ paths:
           name: X-GitHub-Event
           required: true
           schema: { type: string, example: pull_request_review }
-          description: GitHub 事件类型；非 pull_request_review 一律忽略
+          description: >-
+            GitHub 事件类型；本端点处理 pull_request_review 与 issues，
+            其余（含 ping）一律忽略（200 UNSUPPORTED_EVENT）。App 侧需订阅 issues 事件。
         - in: header
           name: X-GitHub-Delivery
           required: false
@@ -89,7 +94,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GithubPullRequestReviewEvent'
+              oneOf:
+                - $ref: '#/components/schemas/GithubPullRequestReviewEvent'
+                - $ref: '#/components/schemas/GithubIssuesEvent'
       responses:
         '200':
           description: 已处理或安全忽略（含 UNSUPPORTED_EVENT / HANDLER_FAILED）
@@ -214,6 +221,63 @@ components:
           properties:
             number: { type: integer, example: 264 }
             html_url: { type: string }
+    GithubIssuesEvent:
+      type: object
+      description: >-
+        GitHub 原生 issues 事件载荷（仅列本端点消费的字段，其余字段原样忽略）。
+        归一化映射：issueId=issue.id（幂等键）；issueNumber=issue.number；
+        title=issue.title（≤256）；body=issue.body（≤64000，可空）；
+        issueUrl=issue.html_url；author=issue.user.login（可空）；
+        labels=issue.labels[].name；repoFullName=repository.full_name（owner/repo 两段）。
+        action ∈ opened/labeled/edited/reopened，其余忽略（UNSUPPORTED_EVENT）。
+      required: [action, issue, repository]
+      properties:
+        action: { type: string, enum: [opened, labeled, edited, reopened] }
+        issue:
+          type: object
+          required: [id, number, title, html_url, labels]
+          properties:
+            id: { type: integer, description: 幂等键组成部分，跨重投稳定 }
+            number: { type: integer, example: 42 }
+            title: { type: string, maxLength: 256 }
+            body: { type: [string, 'null'], maxLength: 64000 }
+            html_url: { type: string, example: 'https://github.com/Deliay/z-agent-gear/issues/42' }
+            user:
+              type: [object, 'null']
+              properties:
+                login: { type: string }
+            labels:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+        repository:
+          type: object
+          required: [full_name]
+          properties:
+            full_name: { type: string, example: 'Deliay/z-agent-gear' }
+    GithubIssuesEventResult:
+      type: object
+      description: issues 事件逐配置处理结果（多配置命中时 results 逐项给出）
+      properties:
+        controllerId: { type: string }
+        linkageId: { type: string }
+        labelName: { type: string }
+        action:
+          type: [string, 'null']
+          enum: [CREATE_TRIGGER, null]
+        reason:
+          type: string
+          description: >-
+            逐配置处理结果。注意 CLOUD_HOST_NOT_RUNNING 仅异步落在触发记录的
+            failureReason（状态机校验云电脑 RUNNING），webhook 同步响应不会返回该值。
+          enum:
+            - REPO_NOT_ENABLED
+            - NO_MATCHING_LINKAGE
+            - ALREADY_TRIGGERED
+            - CLOUD_HOST_NOT_RUNNING
+            - HANDLER_FAILED
     GithubWebhookResponse:
       type: object
       required: [handled, results]
@@ -222,10 +286,14 @@ components:
         reason:
           type: string
           description: >-
-            忽略原因；除 EventCallbackResult.reason 枚举外，本端点另有
-            UNSUPPORTED_EVENT（ping / 非关注事件 / 非 submitted action）。
+            忽略原因；除 EventCallbackResult.reason 枚举与 issues 的
+            REPO_NOT_ENABLED / NO_MATCHING_LINKAGE / ALREADY_TRIGGERED /
+            CLOUD_HOST_NOT_RUNNING 外，本端点另有 UNSUPPORTED_EVENT
+            （ping / 非关注事件 / 非受理 action）。
             处理器异常时返回 HANDLER_FAILED（HTTP 仍为 200，避免 GitHub 重投风暴）。
         results:
           type: array
           items:
-            $ref: '#/components/schemas/EventCallbackResult'
+            oneOf:
+              - $ref: '#/components/schemas/EventCallbackResult'
+              - $ref: '#/components/schemas/GithubIssuesEventResult'

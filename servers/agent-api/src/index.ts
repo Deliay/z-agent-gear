@@ -26,6 +26,7 @@ import * as migration006 from './migrations/006-todo-elicitation-request-id-inde
 import * as migration007 from './migrations/007-workflow-pr-handler-index.js';
 import * as migration008 from './migrations/008-workflow-pr-handler-lower-id.js';
 import * as migration009 from './migrations/009-todo-harness-login.js';
+import * as migration010 from './migrations/010-issues-linkage-indexes.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -34,6 +35,9 @@ import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { prHandlerRegistry } from './services/workflow/pr-handler-registry.js';
+import { issuesTriggerRunner } from './services/workflow/issues-event-handler.js';
+import { registerPrCheckRunSyncHooks } from './services/workflow/pr-check-run-sync.js';
+import { prCheckRunSubscriber } from './services/workflow/pr-check-run-subscriber.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
 const app = express();
@@ -73,6 +77,8 @@ async function start() {
   workflowOrchestrator.register();
   // 工作流完成时注销 PR 联动登记
   prHandlerRegistry.registerPrHandlerLifecycleHooks();
+  // 节点状态变化投影到 GitHub Check Runs（先于注销 hook 触发）
+  registerPrCheckRunSyncHooks();
 
   try {
     await mongoose.connect(config.mongodbUri);
@@ -97,10 +103,14 @@ async function start() {
       migration007,
       migration008,
       migration009,
+      migration010,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
   }
+
+  // Issues 联动触发状态机：启动扫描 + 1s 定时（Redis 不可用也照常运行）
+  issuesTriggerRunner.start();
 
   try {
     getRedisClient();
@@ -129,6 +139,10 @@ async function start() {
     // Workflow session lifecycle events (removed / prompt-completed idling)
     sessionLifecycleSubscriber.start();
     console.log('Session lifecycle subscriber started');
+
+    // Workflow todo panel → check-run 子项同步
+    prCheckRunSubscriber.start();
+    console.log('PR check-run subscriber started');
   } catch (err) {
     console.warn('Redis not available:', (err as Error).message);
   }

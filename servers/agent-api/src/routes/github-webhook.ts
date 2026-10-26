@@ -6,6 +6,8 @@ import {
   GithubWebhookPayloadError,
 } from '../services/workflow/github-webhook-payload.js';
 import { handlePullRequestEvent } from '../services/workflow/pr-event-handler.js';
+import { parseGithubIssuesEvent } from '../services/workflow/github-issues-webhook-payload.js';
+import { handleIssuesEvent } from '../services/workflow/issues-event-handler.js';
 
 export const githubWebhookRouter = express.Router();
 
@@ -47,6 +49,29 @@ githubWebhookRouter.post(
     if (!isAuthorized(req)) {
       console.warn('[github-webhook] unauthorized');
       res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+
+    // issues 事件：独立分支，与 pull_request_review 判定链互不干扰
+    if (req.header('x-github-event') === 'issues') {
+      let issuesEvent;
+      try {
+        issuesEvent = parseGithubIssuesEvent(req.body);
+      } catch (err) {
+        const detail = err instanceof GithubWebhookPayloadError ? err.detail : 'body';
+        res.status(400).json({ error: 'payload.invalid', detail });
+        return;
+      }
+      if (issuesEvent === null) {
+        res.json(UNSUPPORTED_EVENT);
+        return;
+      }
+      try {
+        res.json(await handleIssuesEvent(issuesEvent));
+      } catch (err) {
+        console.error('[github-webhook] issues handler failed:', (err as Error).message);
+        res.json({ handled: false, reason: 'HANDLER_FAILED', results: [] });
+      }
       return;
     }
 

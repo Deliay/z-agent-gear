@@ -14,7 +14,7 @@ const VALID_ENV: NodeJS.ProcessEnv = {
   ZAG_MODEL_BASE_URL: 'http://admin-api:8002/v1',
   ZAG_MODEL_API_KEY: 'zag_sk_super_secret',
   ZAG_MODEL_IDS: '["model-a","model-a"," model-b ",""]',
-  ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+  ZAG_DEFAULT_WORKSPACE: '/home/worker/workspace',
 };
 
 async function makeDir(): Promise<string> {
@@ -135,7 +135,7 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     expect(summary).toContain('Harness prepared: types=opencode');
     expect(summary).toContain('- opencode: version=1.2.3');
     expect(summary).toContain('models=2');
-    expect(summary).toContain('workspace=/root/workspace');
+    expect(summary).toContain('workspace=/home/worker/workspace');
     expect(summary).not.toContain('zag_sk_super_secret');
     expect(summary).not.toContain('admin-api');
   });
@@ -148,7 +148,11 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     const runner = vi.fn<CommandRunner>(async () => ({ stdout: '0.1.2-alpha.2\n', stderr: '' }));
 
     const result = await prepareHarness({
-      env: { ...VALID_ENV, ZAG_HARNESS_TYPES: 'deepseek_harness' },
+      env: {
+        ...VALID_ENV,
+        ZAG_HARNESS_TYPES: 'deepseek_harness',
+        ZAG_DEFAULT_WORKSPACE: join(dir, 'workspace'),
+      },
       runner,
       configDir,
       dshHome,

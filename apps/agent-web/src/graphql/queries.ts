@@ -722,3 +722,18 @@ export const MY_BILLING_API_CALLS = gql`
     }
   }
 `
+
+export const CLOUD_HOST_ISSUES_LINKAGES = gql`
+  query CloudHostIssuesLinkages($controllerId: ID!) {
+    cloudHostIssuesLinkages(controllerId: $controllerId) {
+      id
+      controllerId
+      configuredWorkflowId
+      configuredWorkflowName
+      labelName
+      repoFullNames
+      createdAt
+      updatedAt
+    }
+  }
+`

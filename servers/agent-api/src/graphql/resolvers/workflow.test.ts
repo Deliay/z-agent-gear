@@ -409,6 +409,10 @@ describe('workflow PR 联动字段与 mutation', () => {
         prUrl: 'https://github.com/Deliay/z-agent-gear/pull/264',
         nodeId: 'n1',
         createdAt: new Date('2026-10-23T06:00:00Z'),
+        lastCheckRunUrl: 'https://github.com/Deliay/z-agent-gear/runs/1001',
+        lastWrittenCommitSha: 'deadbeef',
+        lastSyncAt: new Date('2026-10-25T00:00:00Z'),
+        lastSyncError: null,
       },
     ] as never);
     const parent = mapInstance(instanceDoc);
@@ -423,8 +427,38 @@ describe('workflow PR 联动字段与 mutation', () => {
         nodeId: 'n1',
         nodeName: '产品需求',
         registeredAt: '2026-10-23T06:00:00.000Z',
+        checkRunUrl: 'https://github.com/Deliay/z-agent-gear/runs/1001',
+        lastSyncedCommitSha: 'deadbeef',
+        lastSyncAt: '2026-10-25T00:00:00.000Z',
+        lastSyncError: null,
       },
     ]);
+  });
+
+  it('pullRequestLinks 未同步时四个同步字段为 null（存量兼容）', async () => {
+    vi.mocked(prHandlerRegistry.listByInstance).mockResolvedValue([
+      {
+        _id: 'h2',
+        pullRequestId: 'Deliay/z-agent-gear#264',
+        prUrl: null,
+        nodeId: 'n1',
+        createdAt: new Date('2026-10-23T06:00:00Z'),
+        lastCheckRunUrl: null,
+        lastWrittenCommitSha: null,
+        lastSyncAt: null,
+        lastSyncError: null,
+      },
+    ] as never);
+    const parent = mapInstance(instanceDoc);
+
+    const links = await workflowResolvers.WorkflowInstance.pullRequestLinks(parent as never, {}, ctx);
+
+    expect(links[0]).toMatchObject({
+      checkRunUrl: null,
+      lastSyncedCommitSha: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+    });
   });
 
   it('set/removeWorkflowAdditionalPrompt 返回映射后的实例', async () => {

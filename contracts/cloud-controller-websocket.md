@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 须 `>=2.5.0`（见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（恒 `>=2.10.0`，见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,7 +69,7 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 要求 `>=2.5.0`；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
+2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（恒 `>=2.10.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
 3. 查询是否存在待执行初始化脚本（`hasInitScripts`），据此计算 `initializing`。
 4. 将 socket 绑定到 `containerId`；无初始化脚本时容器状态置 `online` 并写入 `connectedAt`。
 5. 回复 `registered`（含可选 `initializing`）。
@@ -142,7 +142,7 @@
 
 **Payload：** 空对象 `{}`
 
-**客户端行为：** 容器清理本地状态并退出进程。
+**客户端行为：** 容器清理本地状态并**以退出码 `42` 退出进程**（服务端终止语义，入口不保活重启；判定口径见 `agent-controller-websocket.md` §3.7）。
 
 ### 2.8 `shutdown`（Server → Worker）
 
@@ -155,7 +155,7 @@ cloud-controller 在强制销毁流程中通知容器退出。
 | `reason` | `string` | 是 | 退出原因（如 `强制销毁`） |
 | `graceMs` | `number` | 否 | 客户端退出前可用的宽限时间（仅追加提示，缺省行为与现状一致） |
 
-**客户端行为：** 停止心跳、清理并退出进程。服务端发送后宽限 10s 等待断开，随后删除 K8s Job。
+**客户端行为：** 停止心跳、清理并退出进程。按 reason 分类退出码：服务端终止（非失败类 `shutdown` / `unregistered` / `INVALID_TOKEN`）→ **`42`**（入口不保活重启）；失败类（`version_mismatch:*` / `error:*` 且非 `INVALID_TOKEN` / 必须工作负载初始化失败）→ **`1`**；信号退出 → **`0`**（入口保活重启）。完整约定见 `agent-controller-websocket.md` §3.7。服务端发送后宽限 10s 等待断开，随后删除 K8s Job。
 
 **发送时序（工作负载清理脚本）：** 若容器挂载了带 `postScript` 的工作负载，cloud-controller 在销毁流程中**先**通过 `workload:run { phase: "post" }` 下发清理脚本批次并等待全部结果（或 post 预算耗尽），**再**发送 `shutdown`。无 post 脚本时，`shutdown` 的发送时机与载荷与现状完全一致（向后兼容）。
 
@@ -192,7 +192,7 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
   "ZAG_HOST_NAME": "<用户命名>",
   "ZAG_HOST_ENDPOINT": "wss://<controller-api>",
   "ZAG_HOST_KEY": "zag_k_1_…",
-  "ZAG_DEFAULT_WORKSPACE": "/root/workspace",
+  "ZAG_DEFAULT_WORKSPACE": "/home/worker/workspace",
   "ZAG_USER_TYPE": "front_user",
   "ZAG_USER_ID": "<前台用户 ID>",
   "ZAG_MODEL_API_KEY": "zag_sk_…",
@@ -328,13 +328,13 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.6.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
-- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.6.0`（云电脑双连接 / `harness prepare` / Github 凭据管理器），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.10.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.10.0`（worker 用户 + 保活退出码 42 约定自 2.10.0 起），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - **按 `harnessTypes` 细分的最低版本**：`agentGearMinVersion` 落库值 =
   `max(请求值, MIN_HARNESS_WORKER_VERSION, 按 harnessTypes 取最大)`；本期
   `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.9.0' }`
   （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
-  仅 `opencode` 的运行仍为 2.6.0。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
+  仅 `opencode` 的运行仍为 2.10.0（max 语义自动收编）。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
 - **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
   `400 INVALID_HARNESS`，不创建 Job。
 - **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
@@ -404,7 +404,7 @@ Content-Type: application/json
   "harnessTypes": ["opencode"],
   "containerApiKeyId": "<运行专用模型 Key ID>",
   "expiresAt": "2026-10-21T00:00:00.000Z",
-  "agentGearMinVersion": "2.5.0",
+  "agentGearMinVersion": "2.10.0",
   "secrets": {
     "hostEndpoint": "wss://<controller-api>",
     "hostKey": "zag_k_1_…",
@@ -412,15 +412,15 @@ Content-Type: application/json
     "modelBaseUrl": "http://admin-api:8002/v1",
     "modelIds": "[\"model-a\"]",
     "modelContextLengths": "{\"model-a\":128000}",
-    "defaultWorkspace": "/root/workspace"
+    "defaultWorkspace": "/home/worker/workspace"
   },
   "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
 }
 ```
 
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
-- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 会按类型细分取最大值（含 `kimi_code` → `2.8.0`、含 `deepseek_harness` → `2.9.0`，见 §3.4）。
-- `expiresAt` 仅落库留存（供计费模型 Key 到期等业务使用）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
+- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.10.0`（以 2.10.0 为底取 max，见 §3.4）。
+- `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
 - Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`、`ZAG_AGENT_API_ENDPOINT`（agent-api 内部地址，来自 `AGENT_API_URL`）、`ZAG_CONTROLLER_ID`（云主机 controllerId）。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
@@ -509,7 +509,7 @@ Content-Type: application/json
   "workloadId": "<github workload id>",
   "workloadName": "Git 项目设置",
   "script": "set -euo pipefail\n...",
-  "params": { "repoFullName": "owner/repo", "targetPath": "/root/workspace" },
+  "params": { "repoFullName": "owner/repo", "targetPath": "/home/worker/workspace" },
   "source": "system",
   "githubAuth": true
 }
@@ -548,7 +548,7 @@ Content-Type: application/json
 | `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`） |
 | `controllerKeyId` | `string \| null` | 标准连接使用的 ControllerKey ID |
 | `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
-| `expiresAt` | `string \| null` | 容器 TTL 到期时间 |
+| `expiresAt` | `string \| null` | 容器 TTL 留档时间（不驱动模型 Key 失效） |
 | `installedWorkloads` | `object[]` | 容器内已安装工作负载（只增不删）；每项 `{ workloadId, name, installedAt, source }` |
 
 > `secrets` 永不出现在列表/详情响应中。

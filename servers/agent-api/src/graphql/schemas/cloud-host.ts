@@ -34,7 +34,7 @@ export const cloudHostTypeDefs = `#graphql
     stoppedAt: String
     failureReason: String
     deletedAt: String
-    # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
+    # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /home/worker/workspace）
     defaultWorkspace: String!
     # 是否已创建默认工作区（workspaceId != null）；用于区分「未创建工作区」与「默认会话创建失败」
     hasDefaultWorkspace: Boolean!
@@ -108,6 +108,30 @@ export const cloudHostTypeDefs = `#graphql
     supportedHarnesses: [HarnessType!]!
   }
 
+  # 云电脑 GitHub Issues 联动配置（每控制器多条）
+  type CloudHostIssuesLinkage {
+    id: ID!
+    controllerId: ID!
+    configuredWorkflowId: ID!
+    configuredWorkflowName: String!
+    labelName: String!
+    repoFullNames: [String!]!
+    createdAt: String!
+    updatedAt: String!
+  }
+
+  input CloudHostIssuesLinkageInput {
+    controllerId: ID!
+    configuredWorkflowId: ID!
+    labelName: String!
+    repoFullNames: [String!]!
+  }
+
+  type CloudHostIssuesLabelCleanupResult {
+    deleted: [String!]!
+    failed: [String!]!
+  }
+
   input CreateCloudHostInput {
     name: String!
     harnessTypes: [HarnessType!]!
@@ -144,6 +168,8 @@ export const cloudHostTypeDefs = `#graphql
     # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
     cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
     cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
+    # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）
+    cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
   }
 
   extend type Mutation {
@@ -153,6 +179,10 @@ export const cloudHostTypeDefs = `#graphql
     installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
     setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
     retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
+    createCloudHostIssuesLinkage(input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+    updateCloudHostIssuesLinkage(id: ID!, input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+    deleteCloudHostIssuesLinkage(id: ID!): Boolean!
+    cleanupCloudHostIssuesLabels(controllerId: ID!): CloudHostIssuesLabelCleanupResult!
   }
 
   extend type Controller {

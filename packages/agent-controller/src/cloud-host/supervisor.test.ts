@@ -25,7 +25,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   ZAG_CONTROLLER_KEY: 'controller-token-secret',
   ZAG_SERVER_ENDPOINT: 'wss://cloud-controller.example.com/worker',
   ZAG_HOST_NAME: 'my-cloud-host',
-  ZAG_DEFAULT_WORKSPACE: '/root/workspace',
+  ZAG_DEFAULT_WORKSPACE: '/home/worker/workspace',
 };
 
 interface FakeSocket {
@@ -298,7 +298,7 @@ describe('startCloudHostSupervisor', () => {
     expect(context.connect).toHaveBeenCalledTimes(2);
   });
 
-  it('T-AG17: shutdown from either side closes both sockets and exits 0 without unregister', async () => {
+  it('T-AG17: server shutdown from either side closes both sockets and exits 42 without unregister', async () => {
     const context = setup();
     const handle = await startCloudHostSupervisor(context.deps);
     const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
@@ -309,7 +309,7 @@ describe('startCloudHostSupervisor', () => {
 
     expect(context.worker.disconnect).toHaveBeenCalled();
     expect(context.controller.disconnect).toHaveBeenCalled();
-    expect(context.exit).toHaveBeenCalledWith(0);
+    expect(context.exit).toHaveBeenCalledWith(42);
     expect(context.worker.emit).not.toHaveBeenCalledWith('unregister', expect.anything());
     expect(context.controller.emit).not.toHaveBeenCalledWith('unregister', expect.anything());
 
@@ -328,6 +328,15 @@ describe('startCloudHostSupervisor', () => {
 
     expect(context.worker.disconnect).toHaveBeenCalled();
     expect(context.controller.disconnect).not.toHaveBeenCalled();
+    expect(context.exit).toHaveBeenCalledWith(42);
+  });
+
+  it('C-2: signal shutdown exits 0 (keepalive restarts after accidental kill)', async () => {
+    const context = setup();
+    const handle = await startCloudHostSupervisor(context.deps);
+
+    handle.shutdown('SIGTERM');
+
     expect(context.exit).toHaveBeenCalledWith(0);
   });
 
@@ -339,9 +348,9 @@ describe('startCloudHostSupervisor', () => {
     expect(resolveShutdownExitCode('worker shutdown: 必须工作负载「OpenCode（Harness）」初始化失败')).toBe(1);
     expect(resolveShutdownExitCode('required init failed')).toBe(1);
     // 正常路径
-    expect(resolveShutdownExitCode('controller-api shutdown: server requested')).toBe(0);
+    expect(resolveShutdownExitCode('controller-api shutdown: server requested')).toBe(42);
     expect(resolveShutdownExitCode('SIGINT')).toBe(0);
-    expect(resolveShutdownExitCode('unregistered')).toBe(0);
+    expect(resolveShutdownExitCode('unregistered')).toBe(42);
   });
 
   it('C-2: required init failure closes both sockets and exits 1', async () => {
@@ -442,7 +451,7 @@ describe('cloud host github credential manager (T-SUP-G)', () => {
     handle.shutdown('again');
 
     expect(credentials.stop).toHaveBeenCalledTimes(1);
-    expect(context.exit).toHaveBeenCalledWith(0);
+    expect(context.exit).toHaveBeenCalledWith(42);
   });
 
   it('T-SUP-G3: missing credential env does not block the supervisor, only warns', async () => {

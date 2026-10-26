@@ -14,7 +14,7 @@ type: Permanent
 
 **版本说明**：
 
-- v1.0（2026-10-26）首版。对齐提案 **v1.2**（PR #291 两轮评审结论已吸收：nvm/Node/agent-gear 下放 worker 的 per-user nvm、root 环境无 nodejs、每次 backoff 后重启前自更新、内网代理环境变量下放、setpriv 降权）。§3 计划期裁决对提案含混处定口径：退出码分类细化为 **42/1/0 三分**（信号退出必须 0，否则「误杀恢复」失效）、共享分类模块抽离（避免 socketio-client ↔ supervisor 循环依赖）、迁移 011 编号与刷新口径、`MIN_HARNESS_VERSION_BY_TYPE` 与全局门禁的关系等。
+- v1.0（2026-10-26）首版。对齐提案 **v1.2**（PR #291 两轮评审结论已吸收：nvm/Node/agent-gear 下放 worker 的 per-user nvm、root 环境无 nodejs、每次 backoff 后重启前自更新、内网代理环境变量下放、setpriv 降权）。§3 计划期裁决对提案含混处定口径：退出码分类细化为 **42/1/0 三分**（信号退出必须 0，否则「误杀恢复」失效）、共享分类模块抽离（避免 socketio-client ↔ supervisor 循环依赖）、迁移 012 编号与刷新口径、`MIN_HARNESS_VERSION_BY_TYPE` 与全局门禁的关系等。
 
 ## 1. 实现顺序
 
@@ -31,7 +31,7 @@ flowchart TD
     P3["Phase 3 entrypoint 保活循环<br/>退避 + 每轮自更新 + 42 分流 +<br/>setpriv 降权与显式构造 env（T-EP1~11）"] --> P8
     P4["Phase 4 Dockerfile worker 用户<br/>per-user nvm / sudoers / root 无 nodejs /<br/>代理 ARG-ENV 下放（BUILD.md 自验）"] --> P8
 
-    P5["Phase 5 admin-api 迁移 011<br/>预置脚本 sudo 化 + dockerd -G worker +<br/>/home/worker 路径迁移"] --> P8
+    P5["Phase 5 admin-api 迁移 012<br/>预置脚本 sudo 化 + dockerd -G worker +<br/>/home/worker 路径迁移"] --> P8
     P6["Phase 6 agent-api / cloud-controller<br/>默认工作区默认值 + MIN_HARNESS_WORKER_VERSION=2.10.0"] --> P8
 
     P2 --> P7
@@ -134,8 +134,8 @@ runuser -l worker -c 'sudo -n true && echo sudo-ok'
 | B2 | §7 项目结构：`cloud-host/supervisor.ts` 同文件改 `EXIT_SERVER_SHUTDOWN` 与 `DEFAULT_WORKSPACE` | `socketio-client.ts` 与 `cloud-host/supervisor.ts` 都需要退出码分类；`supervisor.ts` 已 `import { connectToServer } from '../socketio-client'`，反向 import 会**循环依赖** | 新增共享模块 `packages/agent-controller/src/exit-codes.ts`（`EXIT_SERVER_SHUTDOWN` + `isFailureShutdownReason` + `isServerTerminationReason` + `resolveShutdownExitCode`），`socketio-client.ts` / `cloud-host/supervisor.ts` 共用，`index.ts` 再导出 `EXIT_SERVER_SHUTDOWN` |
 | B3 | §5.2 实现点 5：仅提 `MIN_HARNESS_WORKER_VERSION` 提升 | `worker-version.ts` 另有 `MIN_HARNESS_VERSION_BY_TYPE={kimi_code:'2.8.0', deepseek_harness:'2.9.0'}` + `harnessMinVersion()` 取 max；`internal-api.ts:311` 落库 `max(请求值, harnessMinVersion(types), MIN_HARNESS_WORKER_VERSION)`；`socketio-gateway.ts:281` 读 `record?.agentGearMinVersion ?? MIN_HARNESS_WORKER_VERSION` | **只上调 `MIN_HARNESS_WORKER_VERSION='2.10.0'`**；`MIN_HARNESS_VERSION_BY_TYPE` 与其常量不动（max 语义自动收编，逐类型门禁不再单独体现）；`worker-version.test.ts` 的 T-V0b/T-V6 等锚点同步（`harnessMinVersion(['opencode'])` → `2.10.0`） |
 | B4 | §5.2 实现点 3b：构建期代理 ARG `NVM_INSTALL_URL` / `NVM_NODEJS_ORG_MIRROR` / `NPM_REGISTRY` | Dockerfile 已有 ARG `NVM_INSTALL_URL` / `NPM_REGISTRY` / `NODEJS_DIST_MIRROR`（经 ENV 映射为 nvm v0.40.8 实际读取的 `NVM_NODEJS_ORG_MIRROR`）；`ENV NPM_REGISTRY`、`ENV NVM_NODEJS_ORG_MIRROR` 已固化到运行期 | **沿用现有 ARG 名**（`NODEJS_DIST_MIRROR` 不改名），`USER worker` 安装层显式传入 `NVM_INSTALL_URL` / `NVM_NODEJS_ORG_MIRROR=$NODEJS_DIST_MIRROR` / `NPM_REGISTRY`（及可选 `http_proxy`/`https_proxy`）；运行期 ENV 三件套 + `DOTNET_APT_*` 保持镜像级注入（PID 1 持有，经 setpriv 原样透传） |
-| B5 | §5.2 实现点 4：`007-preset-github` 的 `/root/workspaces/{repo}` → `/home/worker/workspaces/{repo}` | 迁移 008 已把 `targetPath` 语义改为「clone 前缀地址」，现存默认值是 `GITHUB_PREFIX_DEFAULT='/root/workspace`（legacy `/root/workspaces/{repo}` 仅存量残留） | 迁移 011 刷新口径：`targetPath.defaultValue` 为 `/root/workspace` → `/home/worker/workspace`；残留 legacy `/root/workspaces/{repo}` → `/home/worker/workspaces/{repo}`；其余值视为管理员定制、告警跳过 |
-| B6 | §7：`0XX-worker-user-scripts.ts` | admin-api 迁移已用至 `010`；既有刷新型迁移（002/003）采用「与已知旧版**严格相等**才刷新、定制 `console.warn` 跳过、缺失则按新版创建」口径 | 新增 **`011-worker-user-scripts(.test).ts`** 并在 `index.ts` 迁移数组登记；001/002/003/006/007/009/010 源文件**不改**（历史快照），其单测锚点不改；011 携带刷新后的完整脚本文本 |
+| B5 | §5.2 实现点 4：`007-preset-github` 的 `/root/workspaces/{repo}` → `/home/worker/workspaces/{repo}` | 迁移 008 已把 `targetPath` 语义改为「clone 前缀地址」，现存默认值是 `GITHUB_PREFIX_DEFAULT='/root/workspace`（legacy `/root/workspaces/{repo}` 仅存量残留） | 迁移 012 刷新口径：`targetPath.defaultValue` 为 `/root/workspace` → `/home/worker/workspace`；残留 legacy `/root/workspaces/{repo}` → `/home/worker/workspaces/{repo}`；其余值视为管理员定制、告警跳过 |
+| B6 | §7：`0XX-worker-user-scripts.ts` | admin-api 迁移已用至 `010`；既有刷新型迁移（002/003）采用「与已知旧版**严格相等**才刷新、定制 `console.warn` 跳过、缺失则按新版创建」口径 | 新增 **`012-worker-user-scripts(.test).ts`** 并在 `index.ts` 迁移数组登记；001/002/003/006/007/009/010 源文件**不改**（历史快照），其单测锚点不改；012 携带刷新后的完整脚本文本 |
 | B7 | §3.1/§5.2 实现点 1：保活循环、每轮自更新、退避 | 现 `supervise_agent_gear()` 是「一次升级收敛」模型（`upgrade_attempted` 计次、无重启循环、无退避）；`update_agent_gear` / `maybe_upgrade_agent_gear` / `agent-gear --version` 均以 **root + 全局 nvm PATH** 执行 | 全量重写监督循环（见 Phase 3）；删除 `maybe_upgrade_agent_gear` 与 `upgrade_attempted`；所有 npm/node 操作统一经 `run_as_worker()`（setpriv + 显式 env）；mismatch 标记保留**仅作日志观测** |
 | B8 | §5.2 实现点 5：门禁提升到「如 2.10.0」；§7 镜像预装 `agent-gear@2.9.x` | `packages/agent-controller/package.json` = `2.9.0`；Dockerfile pin `agent-gear@2.9.x`；`MIN_HARNESS_WORKER_VERSION='2.6.0'` | 版本链统一为 **agent-gear `2.10.0`**（package.json）→ Dockerfile `agent-gear@2.10.x` → `MIN_HARNESS_WORKER_VERSION='2.10.0'`；`MIN_WORKER_VERSION='2.2.0'`（普通 idle 容器）不动 |
 | B9 | §5.2 实现点 3b/3c：`$NVM_DIR/current` 软链 + `WORKER_PATH` | Dockerfile 已设 `ENV NVM_SYMLINK_CURRENT=true` 并建 `$NVM_DIR/current` 软链；`/etc/profile.d/nvm.sh` 写死 `/usr/local/nvm` | 软链机制沿用（改指 `/home/worker/.nvm/current`）；`/etc/profile.d/nvm.sh` 改为 `export NVM_DIR="$HOME/.nvm"`（worker 登录 shell 获得 node/nvm）；`WORKER_PATH` 以 `/home/worker/.nvm/current/bin` 打头 |
@@ -153,10 +153,10 @@ runuser -l worker -c 'sudo -n true && echo sudo-ok'
 4. **每轮自更新**：`sleep(退避)` 之后、拉起之前执行 `run_as_worker npm install -g agent-gear --no-fund --no-audit`；失败仅 `WARN` 不阻断重启；`ZAG_SKIP_AGENT_GEAR_UPDATE=1` 跳过**全部**自更新（含启动更新），但仍保活重启。mismatch 标记仅用于日志（`agent-gear reported VERSION_MISMATCH`）。
 5. **setpriv env 构造**：`run_as_worker()` 固定注入 `HOME=/home/worker USER=worker LOGNAME=worker NVM_DIR=/home/worker/.nvm PATH="$WORKER_PATH"`；`ZAG_*`（K8s 注入）与镜像 ENV（`NPM_REGISTRY` / `NVM_NODEJS_ORG_MIRROR` / `DOTNET_APT_*`）经 setpriv 原样透传，不枚举。`RUN_DIR`/FIFO/mismatch 标记维持 root 拥有，fd 继承给子进程。
 6. **Dockerfile 层序**：基础工具链（含 `sudo`，已装）→（可选 .NET feed）→ `userdel -r ubuntu`（容错）→ `useradd -m -s /bin/bash -u 1000 worker` → `/etc/sudoers.d/90-worker`（`worker ALL=(ALL:ALL) NOPASSWD: ALL`，0440）→ `USER worker` 安装层（per-user nvm + Node + `npm config set registry` + 全局包）→ `USER root` → `COPY entrypoint.sh`。**镜像不再把 worker 的 nvm bin 放入全局 `ENV PATH`**（root 无 nodejs，且避免 root 执行 worker 可写目录中的二进制）。
-7. **迁移 011 刷新口径**（沿用 002/003 模式）：对每个目标预置项，`initScript` 与已知旧版**严格相等**才覆盖为新版；已是新版则跳过；其余值视为管理员定制 `console.warn` 不覆盖；记录缺失时按新版创建（按 `presetKey` → 精确 `name` 双查）。涉及：`docker`（v3 → v4：`SUDO` 兜底 + `dockerd -G worker`）、dotnet apt 脚本（001，`apt-get` → `${SUDO} apt-get`）、`github`（007，apt sudo 化 + `targetPath` 默认值迁移）、`harness-opencode` / `harness-kimi-code` / `harness-deepseek-harness`（006/009/010，`mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}"`）。Node.js 工作负载脚本（001）`npm install -g` 以 worker 身份运行即写 worker 的 nvm 前缀，**不需要 sudo，不改**。
+7. **迁移 012 刷新口径**（沿用 002/003 模式）：对每个目标预置项，`initScript` 与已知旧版**严格相等**才覆盖为新版；已是新版则跳过；其余值视为管理员定制 `console.warn` 不覆盖；记录缺失时按新版创建（按 `presetKey` → 精确 `name` 双查）。涉及：`docker`（v3 → v4：`SUDO` 兜底 + `dockerd -G worker`）、dotnet apt 脚本（001，`apt-get` → `${SUDO} apt-get`）、`github`（007，apt sudo 化 + `targetPath` 默认值迁移）、`harness-opencode` / `harness-kimi-code` / `harness-deepseek-harness`（006/009/010，`mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}"`）。Node.js 工作负载脚本（001）`npm install -g` 以 worker 身份运行即写 worker 的 nvm 前缀，**不需要 sudo，不改**。
 8. **脚本 sudo 兜底统一写法**：脚本头 `SUDO=sudo; command -v sudo >/dev/null || SUDO=`，随后 `${SUDO} apt-get ...`——兼容旧镜像无 sudo 的执行环境（与提案一致）。
 9. **github `targetPath` 参数迁移**：`defaultValue` `/root/workspace` → `/home/worker/workspace`（legacy `/root/workspaces/{repo}` → `/home/worker/workspaces/{repo}`），`label`/语义文案不变；`agent-api` 的 clone 前缀拼接逻辑零改动。
-10. **门禁与发布顺序**：`MIN_HARNESS_WORKER_VERSION='2.10.0'`（仅 `purpose=harness`）；`agentGearMinVersion` 落库与注册门禁逻辑零改动。发布顺序硬约束：**agent-gear 2.10.0 → worker 镜像（预装 2.10.x）→ cloud-controller（门禁）→ admin-api（迁移 011）**。存量运行中容器不处理（一次性 Job，重建即生效）。
+10. **门禁与发布顺序**：`MIN_HARNESS_WORKER_VERSION='2.10.0'`（仅 `purpose=harness`）；`agentGearMinVersion` 落库与注册门禁逻辑零改动。发布顺序硬约束：**agent-gear 2.10.0 → worker 镜像（预装 2.10.x）→ cloud-controller（门禁）→ admin-api（迁移 012）**。存量运行中容器不处理（一次性 Job，重建即生效）。
 11. **兼容窗口**（照提案 §5.2 实现点 2）：旧镜像 + 新 agent-gear = 42 退出后容器照常结束，与现状等价；新镜像 + 旧 agent-gear = shutdown 后多重启一轮、`INVALID_TOKEN` 收敛，Job 删除兜底。仅存在于镜像滚动窗口，可接受。
 12. **契约锚点**：`packages/agent-controller` 新增「契约对齐锚点」单测（`EXIT_SERVER_SHUTDOWN === 42` 与 `contracts/*-websocket.md` 文本锚点互检，沿用 `deepseek_harness` 枚举锚点的既有做法）；`cloud-controller` 门禁常量同口径。
 
@@ -178,7 +178,7 @@ runuser -l worker -c 'sudo -n true && echo sudo-ok'
 - **不改销毁链路与 K8s 层**：destroy → post 批次 → shutdown → 删除 Job → exited 状态机不变；`restartPolicy: Never` / `backoffLimit: 0` 不变。
 - **日志有界**：重启/自更新日志仅 stdout 逐行，不落盘；mismatch 标记 0 字节。
 - **失败类退出码维持 1**：`version_mismatch:*` / `error:*`（非 INVALID_TOKEN）/ 初始化失败 → 1，让 Job 终态映射与语义可观测性不变。
-- **预置脚本幂等且不覆盖管理员定制**：迁移 011 严格相等刷新 + 告警跳过。
+- **预置脚本幂等且不覆盖管理员定制**：迁移 012 严格相等刷新 + 告警跳过。
 - **旧版本兼容**：见 §3.2 裁决 11；`agentGearMinVersion` 校验口径不变。
 - **测试纪律**：新增代码单测覆盖率 ≥ 80%；entrypoint 全部 Bash 用例通过；API 与 E2E 串行；测试服务只用 Aspire 编排。
 
@@ -279,9 +279,9 @@ supervise_agent_gear() {
 
 | 文件 | 变更 |
 |------|------|
-| `servers/admin-api/src/migrations/011-worker-user-scripts.ts` | **新增**：按 §3.2 裁决 7/8/9 刷新 6 个预置项脚本与 github `targetPath` 默认值；严格相等刷新、定制告警跳过、缺失按新版创建；导出各新版脚本常量（如 `DOCKER_SCRIPT_V4`、`GITHUB_SCRIPT_V2`、`HARNESS_*_SCRIPT_V2`）供测试锚定 |
-| `servers/admin-api/src/migrations/011-worker-user-scripts.test.ts` | **新增**：断言新脚本含 `SUDO=sudo; command -v sudo` 兜底、`${SUDO} apt-get`、`dockerd -G worker`（含 `sh -c` 内重定向）、`/home/worker/workspace`（`mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}"`）、github `targetPath` 默认值 `/home/worker/workspace` 与 legacy 迁移；幂等（二次 run 不新增/不覆盖）；定制内容不覆盖（warn）；名称/presetKey 冲突跳过 |
-| `servers/admin-api/src/index.ts` | 迁移数组追加 `migration011WorkerUserScripts` |
+| `servers/admin-api/src/migrations/012-worker-user-scripts.ts` | **新增**：按 §3.2 裁决 7/8/9 刷新 6 个预置项脚本与 github `targetPath` 默认值；严格相等刷新、定制告警跳过、缺失按新版创建；导出各新版脚本常量（如 `DOCKER_SCRIPT_V4`、`GITHUB_SCRIPT_V2`、`HARNESS_*_SCRIPT_V2`）供测试锚定 |
+| `servers/admin-api/src/migrations/012-worker-user-scripts.test.ts` | **新增**：断言新脚本含 `SUDO=sudo; command -v sudo` 兜底、`${SUDO} apt-get`、`dockerd -G worker`（含 `sh -c` 内重定向）、`/home/worker/workspace`（`mkdir -p "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}"`）、github `targetPath` 默认值 `/home/worker/workspace` 与 legacy 迁移；幂等（二次 run 不新增/不覆盖）；定制内容不覆盖（warn）；名称/presetKey 冲突跳过 |
+| `servers/admin-api/src/index.ts` | 迁移数组追加 `migration012WorkerUserScripts` |
 
 **脚本刷新明细**：
 
@@ -352,7 +352,7 @@ supervise_agent_gear() {
 | `agent-controller/exit-codes.test.ts` | 退出码三分全表（§3.2 裁决 1）+ 包装前缀 |
 | `agent-controller/socketio-client*.test.ts` | idle 路径 42/1/0、`INVALID_TOKEN` 新分支、`onShutdown` 转发不变 |
 | `agent-controller/cloud-host/supervisor.test.ts` | 服务端 shutdown → 42、信号 → 0、失败类 → 1、默认工作区 `/home/worker/workspace`、T-AG3~T-AG17 不回归 |
-| `admin-api/011-*.test.ts` | 脚本内容锚点（`SUDO` 兜底、`${SUDO} apt-get`、`dockerd -G worker`、路径）、幂等、定制跳过、legacy 迁移 |
+| `admin-api/012-*.test.ts` | 脚本内容锚点（`SUDO` 兜底、`${SUDO} apt-get`、`dockerd -G worker`、路径）、幂等、定制跳过、legacy 迁移 |
 | `cloud-controller/worker-version.test.ts` | 门禁常量锚点（2.10.0）与 max 语义 |
 | `agent-api` | `cloudHostDefaultWorkspace` 默认值、workspace fallback |
 
@@ -380,7 +380,7 @@ supervise_agent_gear() {
 - [ ] Phase 2：`exit-codes` 三分单测全绿；SIGTERM → 0、服务端终止 → 42 有独立锚点
 - [ ] Phase 3：T-EP0~T-EP11 全绿；每轮自更新与退避可观测（日志文案）
 - [ ] Phase 4：镜像构建 + BUILD.md 自验通过（root 无 nodejs / worker 侧 nodejs / sudo -n / 保活手工验证）
-- [ ] Phase 5：迁移 011 幂等、不覆盖定制；脚本锚点全绿
+- [ ] Phase 5：迁移 012 幂等、不覆盖定制；脚本锚点全绿
 - [ ] Phase 6：默认工作区 `/home/worker/workspace`、门禁 `2.10.0` 锚点全绿
 - [ ] Phase 7：全库路径检索收口（仅存量文档残留）
 - [ ] Phase 8：单测 / API / E2E 全绿；实机核对 7 项通过并登记验收报告
@@ -394,10 +394,11 @@ supervise_agent_gear() {
 | 新镜像 + 旧 agent-gear 兼容窗口 | shutdown 后多重启一轮（30s 退避上限） | Job 删除兜底；发布顺序收窄窗口（裁决 10/11） |
 | agent-gear 2.10.0 未先发布 | 镜像 `agent-gear@2.10.x` 构建失败 | 开发期本地 `npm pack` + `--build-arg`/临时 tag 验证；发布顺序硬约束 |
 | per-user nvm 层序错误（先 USER 后 useradd） | 构建失败或工具链归属错误 | BUILD.md 自验断言 `ls -ld /home/worker/.nvm` 属 worker；`--init-groups` 依赖 `/etc/group`（构建期自验） |
-| dockerd 重定向权限（B13） | Docker 工作负载初始化失败 | `sh -c` 内重定向口径 + 011 单测锚点 + 实机核对 6 |
+| dockerd 重定向权限（B13） | Docker 工作负载初始化失败 | `sh -c` 内重定向口径 + 012 单测锚点 + 实机核对 6 |
 | 无限崩溃循环（配置损坏） | 日志噪声、CPU 空转 | 退避封顶 30s + 每轮自更新（旧版本崩溃可收敛）+ 云电脑销毁链路/人工兜底；日志有界 |
-| 迁移 011 覆盖管理员定制 | 运维脚本丢失 | 严格相等刷新 + 定制告警跳过（沿用 002/003 既有口径） |
+| 迁移 012 覆盖管理员定制 | 运维脚本丢失 | 严格相等刷新 + 定制告警跳过（沿用 002/003 既有口径） |
 | `sudo sh -c` 与 `nohup` 交互差异 | dockerd 随脚本退出被回收 | 实机核对 6 验证 30s 就绪与进程存活；必要时 `setsid` 兜底（记录验收报告） |
+| 前端既有 `/root/workspace` fallback / placeholder（`useGithubProjectForm.ts`、`NewCloudHostDialog.tsx`） | 旧路径仅在未配置前缀时展示，功能不受本期后端默认值影响 | 本期 `apps/*` 零改动；登记后续跟进统一为 `/home/worker/workspace` |
 
 回滚：各 Phase 独立提交、merge-only，可按提交粒度 revert；镜像与门禁回滚须**反向**执行发布顺序（先回 cloud-controller 门禁、再回镜像）。
 
@@ -426,7 +427,7 @@ supervise_agent_gear() {
 | 3 | `deploy/images/worker/entrypoint.test.sh` | 改（T-EP1~8 语义 + T-EP9~11 新增） |
 | 4 | `deploy/images/worker/Dockerfile` | 改（worker 用户、per-user nvm、sudoers、root 无 nodejs） |
 | 4 | `deploy/images/worker/BUILD.md` | 改（自验步骤） |
-| 5 | `servers/admin-api/src/migrations/011-worker-user-scripts.ts` / `.test.ts` | 新增 |
+| 5 | `servers/admin-api/src/migrations/012-worker-user-scripts.ts` / `.test.ts` | 新增 |
 | 5 | `servers/admin-api/src/index.ts` | 改（迁移登记） |
 | 6 | `servers/agent-api/src/config/index.ts`、`services/controller-workspace.ts` | 改（默认工作区） |
 | 6 | `servers/agent-api/src/services/cloud-host-service.test.ts` 等 | 改（夹具） |
@@ -447,7 +448,7 @@ supervise_agent_gear() {
 | 循环依赖面 | `supervisor.ts` 已 import `socketio-client.ts` → 退出码分类须独立模块（B2） |
 | 版本门禁结构 | `MIN_HARNESS_VERSION_BY_TYPE` + `harnessMinVersion` max 语义 + `internal-api` 落库三重 max → 只上调基线（B3） |
 | Dockerfile 代理 ARG | `NVM_INSTALL_URL`/`NODEJS_DIST_MIRROR`/`NPM_REGISTRY` 已存在并有运行期 ENV（B4） |
-| admin-api 迁移号 | 已用至 `010` → 本期 `011`（B6） |
+| admin-api 迁移号 | 已用至 `010` → 本期 `012`（B6） |
 | github `targetPath` 现状 | 008 后默认值为 `/root/workspace`（前缀语义）→ 迁移口径修正（B5） |
 | `/root/workspace` 硬编码 | 代码/测试/编排/契约共 20+ 处，清单见 B11 与附录 A（B11） |
 | entrypoint 测试基线 | T-EP0~T-EP8 存在，T-EP9~11 缺失（B14） |

@@ -946,3 +946,47 @@ export interface MyBillingApiCallData {
 export interface GetMyBillingApiCallsQuery {
   myBillingApiCalls: MyBillingApiCallData[]
 }
+
+/** 云电脑 GitHub Issues 联动配置（对齐 contracts/cloud-host.graphql） */
+export interface CloudHostIssuesLinkageData {
+  id: string
+  controllerId: string
+  configuredWorkflowId: string
+  configuredWorkflowName: string
+  labelName: string
+  repoFullNames: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CloudHostIssuesLinkagesQuery {
+  cloudHostIssuesLinkages: CloudHostIssuesLinkageData[]
+}
+
+export interface CloudHostIssuesLinkageInput {
+  controllerId: string
+  configuredWorkflowId: string
+  labelName: string
+  repoFullNames: string[]
+}
+
+export interface CreateCloudHostIssuesLinkageMutation {
+  createCloudHostIssuesLinkage: CloudHostIssuesLinkageData
+}
+
+export interface UpdateCloudHostIssuesLinkageMutation {
+  updateCloudHostIssuesLinkage: CloudHostIssuesLinkageData
+}
+
+export interface DeleteCloudHostIssuesLinkageMutation {
+  deleteCloudHostIssuesLinkage: boolean
+}
+
+export interface CleanupCloudHostIssuesLabelsResultData {
+  deleted: string[]
+  failed: string[]
+}
+
+export interface CleanupCloudHostIssuesLabelsMutation {
+  cleanupCloudHostIssuesLabels: CleanupCloudHostIssuesLabelsResultData
+}

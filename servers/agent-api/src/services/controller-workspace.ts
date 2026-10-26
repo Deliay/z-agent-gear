@@ -77,7 +77,7 @@ export class ControllerWorkspaceService {
     userId: string,
     workspacePath: string,
   ): Promise<Record<string, unknown>> {
-    const path = workspacePath.trim() || '/root/workspace';
+    const path = workspacePath.trim() || '/home/worker/workspace';
     const name = path.split('/').filter(Boolean).pop() || 'workspace';
     const workspace = await ControllerWorkspace.findOneAndUpdate(
       { controllerId, userId, path },

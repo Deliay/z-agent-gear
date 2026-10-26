@@ -55,10 +55,10 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.9.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.10.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
-  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.6.0`——
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
   上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
@@ -134,17 +134,20 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - 先连 `/worker`：`registered.initializing=true` 时等待首个 `workload:run` init 批次结束（成功/失败）后
   再连 controller-api；`false`/缺省立即连接；等待上限 `HARNESS_INIT_WAIT_MS`（默认 10 分钟）。
   **被打断（cancelled）的批次不算完成**（重连重放时继续等待）；超时后迟到的 `registered` 不再次进入等待。
-- 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/root/workspace`，幂等）。
+- 启动时 `mkdir -p ZAG_DEFAULT_WORKSPACE`（默认 `/home/worker/workspace`，幂等）。
 - 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
   本地单连接保持原行为，配置写入使用权限 `0600`。
-- 任一端 `shutdown` → 关闭两端并退出：正常（服务端主动 shutdown/SIGTERM/SIGINT）退出 0；`version_mismatch:*` / `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
+- 任一端 `shutdown` → 关闭两端并退出：服务端终止（非失败类 shutdown / `unregistered` / `INVALID_TOKEN`）退出 42（入口不重启）；信号退出 0（入口保活重启）；`version_mismatch:*` / 其它 `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
 - `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 
 ## harness prepare（OpenCode）
 
-init 脚本（admin-api 迁移 005）在安装固定版本 OpenCode 后执行 `agent-gear harness prepare`：
+init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
+`ZAG_HARNESS_TYPES=opencode agent-gear harness prepare`（按类型限定：多 harness 主机上各预置脚本
+顺序执行，裸调用会对 `ZAG_HARNESS_TYPES` 全部选中类型做 CLI 硬校验，排在其后的类型 CLI 尚未安装
+而误失败；DeepSeek 脚本同口径限定 `deepseek_harness`，存量脚本由 admin-api 迁移 011 刷新）：
 
 1. 校验 `ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS`（JSON 数组，去空去重）/
    `ZAG_DEFAULT_WORKSPACE`；缺失项按变量名报错并非零退出（不泄漏其它 env 值）。

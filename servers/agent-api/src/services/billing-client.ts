@@ -256,14 +256,13 @@ export class BillingClient {
     );
   }
 
-  /** 云电脑运行专用 Key：`scope=cloud_host`，绑定 hostId 与有效期。 */
+  /** 云电脑运行专用 Key：`scope=cloud_host`，绑定 hostId；无固定有效期，随容器回收。 */
   async createCloudHostApiKey(input: {
     accountId: string;
     ownerType: 'front_user' | 'admin_user';
     ownerId: string;
     name: string;
     cloudHostId: string;
-    expiresAt: string;
   }): Promise<BillingApiKeyPayloadWire> {
     return this.request<BillingApiKeyPayloadWire>('/internal/billing/api-keys', {
       method: 'POST',
@@ -273,7 +272,6 @@ export class BillingClient {
         name: input.name,
         scope: 'cloud_host',
         cloudHostId: input.cloudHostId,
-        expiresAt: input.expiresAt,
         accountId: input.accountId,
       }),
     });

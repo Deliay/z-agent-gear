@@ -109,15 +109,14 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     expect((await apiKeyService.verify(payload.secret))?.scope).toBe('account');
   });
 
-  it('T-BK2: 云电脑 Key 接受 scope/cloudHostId/expiresAt 并落库', async () => {
+  it('T-BK2: 云电脑 Key 接受 scope/cloudHostId，旧版 expiresAt 被忽略（不落有效期）', async () => {
     const base = owner();
     const cloudHostId = await seedCloudHost(base.ownerId);
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     const res = await post('/api-keys', {
       ...base,
       scope: 'cloud_host',
       cloudHostId,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     });
     expect(res.status).toBe(201);
     const payload = (await res.json()) as {
@@ -125,20 +124,22 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
         id: string;
         scope: string;
         cloudHostId: string;
-        expiresAt: string;
+        expiresAt: string | null;
       };
       secret: string;
     };
     expect(payload.apiKey.scope).toBe('cloud_host');
     expect(payload.apiKey.cloudHostId).toBe(cloudHostId);
-    expect(payload.apiKey.expiresAt).toBe(expiresAt.toISOString());
+    // 云电脑 Key 随容器回收，不再按时间过期。
+    expect(payload.apiKey.expiresAt).toBeNull();
 
     const verified = await apiKeyService.verify(payload.secret);
     expect(verified?.scope).toBe('cloud_host');
     expect(verified?.cloudHostId).toBe(cloudHostId);
+    expect(verified?.expiresAt).toBeNull();
   });
 
-  it('T-BK2: 云电脑 Key 参数非法（缺 cloudHostId / 非法有效期 / 非法 scope）→ 400', async () => {
+  it('T-BK2: 云电脑 Key 参数非法（缺 cloudHostId / 非法 scope / 非法 expiresAt）→ 400', async () => {
     const base = owner();
     expect((await post('/api-keys', { ...base, scope: 'cloud_host' })).status).toBe(400);
     expect(
@@ -161,26 +162,15 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
         })
       ).status,
     ).toBe(400);
-    expect(
-      (
-        await post('/api-keys', {
-          ...base,
-          scope: 'cloud_host',
-          cloudHostId: new mongoose.Types.ObjectId().toString(),
-        })
-      ).status,
-    ).toBe(400);
     expect((await post('/api-keys', { ...base, scope: 'root' })).status).toBe(400);
   });
 
   it('B-5: 云电脑 Key 铸造校验 cloudHostId↔ownerId 绑定（不存在/属主不符/已软删 → 404）', async () => {
     const base = owner();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const body = (cloudHostId: string) => ({
       ...base,
       scope: 'cloud_host',
       cloudHostId,
-      expiresAt,
     });
 
     // 宿主不存在
@@ -204,7 +194,6 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
       ownerId: new mongoose.Types.ObjectId().toString(),
       scope: 'cloud_host',
       cloudHostId: adminHostId,
-      expiresAt,
     });
     expect(admin.status).toBe(201);
 
@@ -226,7 +215,6 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
       ownerId: new mongoose.Types.ObjectId().toString(),
       name: 'k',
       cloudHostId: new mongoose.Types.ObjectId().toString(),
-      expiresAt: new Date(Date.now() + 60_000),
     });
 
     const first = await post(`/api-keys/${created.apiKey.id}/revoke`, {});
@@ -261,7 +249,6 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
         keyHash: 'h',
         scope: 'cloud_host',
         cloudHostId: id,
-        expiresAt: new Date(Date.now() + 60_000),
       });
     }
 

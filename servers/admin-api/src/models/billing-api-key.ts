@@ -5,8 +5,8 @@ import mongoose from 'mongoose';
  *
  * scope：
  * - `account`：用户设置页生成的通用 Key（行为与历史一致，无有效期）。
- * - `cloud_host`：云电脑运行专用 Key，绑定 `cloudHostId`（CloudHost._id）与 `expiresAt`；
- *   网关鉴权时实时校验宿主状态（见 billing-key-auth）。
+ * - `cloud_host`：云电脑运行专用 Key，绑定 `cloudHostId`（CloudHost._id），**随容器回收**：
+ *   不写固定有效期；网关鉴权实时校验宿主状态，停止/失败/删除时撤销（见 billing-key-auth）。
  */
 const billingApiKeySchema = new mongoose.Schema(
   {
@@ -20,7 +20,7 @@ const billingApiKeySchema = new mongoose.Schema(
     scope: { type: String, enum: ['account', 'cloud_host'], default: 'account', index: true },
     // 云电脑 ID（CloudHost._id）；仅 scope=cloud_host 时非空
     cloudHostId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
-    // 云电脑 Key 有效期（容器 TTL）；account Key 为 null
+    // 历史遗留有效期（已废弃）：云电脑 Key 随容器回收，新 Key 恒为 null；保留字段兼容旧数据
     expiresAt: { type: Date, default: null },
     lastUsedAt: { type: Date, default: null },
   },

@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
     internalApiToken: 'internal-token',
     controllerApiPublicEndpoint: 'wss://controller-api',
     cloudHostModelBaseUrl: 'http://admin-api:8002/v1',
-    cloudHostDefaultWorkspace: '/root/workspace',
+    cloudHostDefaultWorkspace: '/home/worker/workspace',
   },
 }));
 
@@ -101,6 +101,9 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMock }));
+vi.mock('./cloud-host-issues-linkage.js', () => ({
+  cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
+}));
 
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
@@ -117,6 +120,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
@@ -320,8 +324,20 @@ describe('CloudHostService', () => {
         hostName: 'my-cloud',
         harnessTypes: ['opencode'],
         billingAccountId: 'account-1',
-        agentGearMinVersion: '2.6.0',
+        agentGearMinVersion: '2.10.0',
+        // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
+        expiresAt: expect.any(Date),
       });
+      expect(billingClient.createCloudHostApiKey).toHaveBeenCalledWith({
+        accountId: 'account-1',
+        ownerType: 'front_user',
+        ownerId: 'user-1',
+        name: 'cloud-host:my-cloud',
+        cloudHostId: expect.any(String),
+      });
+      expect(
+        vi.mocked(billingClient.createCloudHostApiKey).mock.calls[0][0],
+      ).not.toHaveProperty('expiresAt');
       expect(payload.workloadPlan).toEqual([
         { workloadId: 'preset-1', params: {}, implicit: false, required: true },
       ]);
@@ -331,41 +347,41 @@ describe('CloudHostService', () => {
         modelIds: '["model-a","model-b"]',
         // 同名保留首个有效值；contextLength=null 与禁用模型不出现
         modelContextLengths: '{"model-a":128000}',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       });
     });
 
-    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.8.0', async () => {
+    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.10.0', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['kimi_code']);
-      expect(payload.agentGearMinVersion).toBe('2.8.0');
+      expect(payload.agentGearMinVersion).toBe('2.10.0');
     });
 
-    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.8.0）', async () => {
+    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.10.0）', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
-      expect(payload.agentGearMinVersion).toBe('2.8.0');
+      expect(payload.agentGearMinVersion).toBe('2.10.0');
     });
 
-    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.9.0，混合取最大', async () => {
+    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.10.0，混合取最大', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['deepseek_harness']);
-      expect(payload.agentGearMinVersion).toBe('2.9.0');
+      expect(payload.agentGearMinVersion).toBe('2.10.0');
 
       await service.create('user-1', {
         name: 'deepseek-mixed',
         harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
       const mixedPayload = vi.mocked(cloudControllerClient.startHarness).mock.calls[1][0];
-      expect(mixedPayload.agentGearMinVersion).toBe('2.9.0');
+      expect(mixedPayload.agentGearMinVersion).toBe('2.10.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
@@ -800,6 +816,7 @@ describe('CloudHostService', () => {
         { $set: { deletedAt: expect.any(Date) } },
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(cloudHostIssuesLinkageService.deleteByController).toHaveBeenCalledWith(CONTROLLER_ID);
     });
 
     it('is idempotent for already soft-deleted hosts', async () => {

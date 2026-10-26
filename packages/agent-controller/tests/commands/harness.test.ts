@@ -13,7 +13,7 @@ function buildProgram(deps: Parameters<typeof registerHarnessCommands>[1] = {}) 
 const SUCCESS_RESULT: HarnessPrepareResult = {
   env: {
     modelBaseUrl: 'http://admin-api:8002/v1',
-    defaultWorkspace: '/root/workspace',
+    defaultWorkspace: '/home/worker/workspace',
     modelCount: 2,
     types: ['opencode'],
   },
