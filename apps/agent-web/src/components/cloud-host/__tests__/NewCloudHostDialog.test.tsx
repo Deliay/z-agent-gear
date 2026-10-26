@@ -413,7 +413,7 @@ describe('NewCloudHostDialog Github 项目编排', () => {
     expect(prefixInput).toHaveValue('~/workspace');
     expect(prefixInput).toHaveAttribute('placeholder', '~/workspace');
     fireEvent.change(screen.getByLabelText('仓库'), { target: { value: 'alice/repo-a' } });
-    expect(screen.getByText('最终 clone 地址：/root/workspace/alice/repo-a')).toBeInTheDocument();
+    expect(screen.getByText('最终 clone 地址：/home/worker/workspace/alice/repo-a')).toBeInTheDocument();
 
     fireEvent.click(submitButton());
 

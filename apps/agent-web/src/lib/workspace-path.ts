@@ -8,11 +8,11 @@
 /** 容器用户主目录常量；与服务端 `servers/agent-api/src/services/workspace-path.ts` 导出及
  *  `packages/agent-controller/src/cloud-host/supervisor.ts` 的 `DEFAULT_WORKSPACE`/`ZAG_DEFAULT_WORKSPACE`
  * 同源约定。 */
-export const CONTAINER_HOME = '/root'
+export const CONTAINER_HOME = '/home/worker'
 
 /**
- * 展开首字符 `~` 为容器用户主目录（`/root`）：
- * - `~` / `~/` → `/root`；`~/workspace` → `/root/workspace`；`~/workspace/` → `/root/workspace`；
+ * 展开首字符 `~` 为容器用户主目录（`/home/worker`）：
+ * - `~` / `~/` → `/home/worker`；`~/workspace` → `/home/worker/workspace`；`~/workspace/` → `/home/worker/workspace`；
  * - 仅首字符 `~` 触发展开，`/a/~` 按普通分段处理（不展开、不拒绝）；
  * - `~abc` 等非法形态返回 null（调用方回退 `workspacePrefixError` 文案）。
  * 纯字符串替换，不访问文件系统；非法形态返回 null 而非抛错（预览容错）。

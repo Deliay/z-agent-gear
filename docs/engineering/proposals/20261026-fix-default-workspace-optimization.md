@@ -7,26 +7,27 @@ type: Permanent
 
 **功能名称**: 默认工作区优化
 **关联 PRD**: [[../../product/draft/20261026-default-workspace-optimization.md]]
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-26
 **作者**: z-agent-bot
 **feat-branch**: `feat/default-workspace-optimization`
+**变更记录**: v1.1（2026-10-26 合并期对齐）——需求总分支并入 main 的「云电脑保活与 worker 用户」（PR #307）后，容器用户主目录由 `/root` 收口为 `/home/worker`：`~` 展开目标与默认工作区默认值统一为 `/home/worker/workspace`，本提案的路径示例与常量口径同步对齐；v1.0 初版。
 
 ## 1. 概述
 
 ### 1.1 背景
 
-来源 Issue：[Deliay/z-agent-gear#304 默认工作区优化](https://github.com/Deliay/z-agent-gear/issues/304)。云容器优化二期后创建云电脑不再预置 `/root/workspace`，默认工作区仅由「Git 项目设置」创建。线上遗留三个问题：
+来源 Issue：[Deliay/z-agent-gear#304 默认工作区优化](https://github.com/Deliay/z-agent-gear/issues/304)。云容器优化二期后创建云电脑不再预置 `/home/worker/workspace`，默认工作区仅由「Git 项目设置」创建。线上遗留三个问题：
 
 1. **BUG（工作区未初始化）**：新建云电脑勾选「配置 Github 项目」时前端按 `createSession = harnessTypes.length === 1` 发起 setup（`apps/agent-web/src/hooks/useCloudHostProvisioning.ts`）。多 Harness 场景 `createSession=false`，`CloudHostGithubService.createOperation` 把 session 步骤直接记为 `SKIPPED`（`servers/agent-api/src/services/cloud-host-github-service.ts:130`），而 `ensureWorkspace` + `CloudHost.workspaceId` CAS 回写只存在于 `runSessionStep`——仓库已 clone，但工作区从未创建，`hasDefaultWorkspace` 恒为 false。
 2. **入口分散**：「Github 项目设置」按钮位于云电脑配置页「工作负载」页签（`apps/agent-web/src/pages/ControllerConfigPage.tsx:117-128`），与同配置页的「Github」页签（Issues 联动）分离。
-3. **前缀默认值不友好**：无默认工作区时前缀地址为空（`useGithubProjectForm.ts:124-126` 的 `hasDefaultWorkspace === false` 分支），新建云电脑流程兜底为 `/root/workspace`；且前后端路径校验仅接受 `/` 开头的绝对路径，不识别 `~`。
+3. **前缀默认值不友好**：无默认工作区时前缀地址为空（`useGithubProjectForm.ts:124-126` 的 `hasDefaultWorkspace === false` 分支），新建云电脑流程兜底为 `/home/worker/workspace`；且前后端路径校验仅接受 `/` 开头的绝对路径，不识别 `~`。
 
 ### 1.2 目标
 
 1. 工作区初始化与会话创建解耦：Git 项目设置 clone 成功后无条件 `ensureWorkspace` 并回写 `CloudHost.workspaceId`，`createSession=false` 不再跳过工作区初始化。
 2. 「Github 项目设置」入口从「工作负载」页签迁移至云电脑配置页「Github」页签，可用条件（RUNNING 且未删除）不变。
-3. 「前缀地址（工作根目录）」默认值调整为 `~/workspace`；前后端路径归一化支持 `~` 展开为容器用户主目录（`/root`）。
+3. 「前缀地址（工作根目录）」默认值调整为 `~/workspace`；前后端路径归一化支持 `~` 展开为容器用户主目录（`/home/worker`）。
 
 ### 1.3 范围
 
@@ -96,7 +97,7 @@ input SetupCloudHostGithubProjectInput {
   repoFullName: String!
   # 语义：clone 前缀地址（工作根目录），不是最终目录。
   # 最终目录 = <targetPath>/<repoFullName>，由服务端用 path.posix.join 权威拼接。
-  # 支持 ~ 或 ~/ 开头：服务端展开为容器用户主目录（/root）后再归一。
+  # 支持 ~ 或 ~/ 开头：服务端展开为容器用户主目录（/home/worker）后再归一。
   targetPath: String!
   workloadIds: [ID!]
   # false 时 session 步骤记 SKIPPED（多 Harness）；工作区初始化不受影响，缺省 true
@@ -202,14 +203,14 @@ sequenceDiagram
 
 #### 实现点 3: 前缀地址默认 `~/workspace` 与 `~` 展开
 
-- **描述**: `useGithubProjectForm` 默认值规则改为：有默认工作区预填 `defaultWorkspace`；否则（含新建云电脑流程）预填 `~/workspace`。前端 `lib/workspace-path.ts` 与服务端 `services/workspace-path.ts` 同步支持 `~` 展开：输入以 `~` 或 `~/` 开头时展开为 `/root` 前缀后再按既有规则归一。
+- **描述**: `useGithubProjectForm` 默认值规则改为：有默认工作区预填 `defaultWorkspace`；否则（含新建云电脑流程）预填 `~/workspace`。前端 `lib/workspace-path.ts` 与服务端 `services/workspace-path.ts` 同步支持 `~` 展开：输入以 `~` 或 `~/` 开头时展开为 `/home/worker` 前缀后再按既有规则归一。
 - **技术细节**:
-  - 展开常量：容器用户主目录 `/root`（与 agent-controller `DEFAULT_WORKSPACE = '/root/workspace'`、`ZAG_DEFAULT_WORKSPACE` 同源约定）；服务端 `normalizeWorkspacePrefix('~/workspace') === '/root/workspace'`。
+  - 展开常量：容器用户主目录 `/home/worker`（与 agent-controller `DEFAULT_WORKSPACE = '/home/worker/workspace'`、`ZAG_DEFAULT_WORKSPACE` 同源约定）；服务端 `normalizeWorkspacePrefix('~/workspace') === '/home/worker/workspace'`。
   - 校验顺序保持：空 → 非法字符（`\0`/反斜杠）→ 起始字符（`/` 或 `~`）→ `..` 分段拒绝。`~` 仅允许出现在首字符，`/a/~` 之类的输入按普通分段处理（不展开也不拒绝，与 shell 不同但更简单、可预测）。
-  - `~` 单独提交展开为 `/root`；`~/` 展开为 `/root`；`~/workspace/` 归一为 `/root/workspace`。
+  - `~` 单独提交展开为 `/home/worker`；`~/` 展开为 `/home/worker`；`~/workspace/` 归一为 `/home/worker/workspace`。
   - 前端错误文案「前缀地址必须以 / 开头」调整为「前缀地址必须以 / 或 ~ 开头」；服务端 `PREFIX_ERRORS.notAbsolute` 同步。
   - 最终 clone 地址预览（`previewClonePath`/`finalClonePath`）展示展开后的绝对路径。
-  - placeholder 由 `例如：/workspace` / `/root/workspace` 统一为 `~/workspace`。
+  - placeholder 由 `例如：/workspace` / `/home/worker/workspace` 统一为 `~/workspace`。
 - **风险点**: 存量输入均为绝对路径，`~` 支持为纯增量；服务端权威归一保证旧客户端提交绝对路径行为不变。
 
 ## 6. 技术决策
@@ -228,7 +229,7 @@ sequenceDiagram
 | 类型 | 内容 | 说明 |
 |------|------|------|
 | 依赖 | `ensureWorkspace` 幂等 upsert | 既有能力，无改动 |
-| 依赖 | 容器 HOME = `/root` 约定 | 与 agent-controller `DEFAULT_WORKSPACE` 同源 |
+| 依赖 | 容器 HOME = `/home/worker` 约定 | 与 agent-controller `DEFAULT_WORKSPACE` 同源 |
 | 约束 | 禁止 rebase/squash，仅 merge | z-git 规范 |
 | 约束 | TDD 红-绿-重构 | 先写失败测试再实现 |
 
@@ -276,7 +277,7 @@ tests/e2e/src/cloud-host.spec.ts                  # 入口迁移与默认值场�
 
 ### 9.2 配置管理
 
-无新增配置项；`~` 展开目标 `/root` 为代码常量（与 `DEFAULT_WORKSPACE` 约定一致）。
+无新增配置项；`~` 展开目标 `/home/worker` 为代码常量（与 `DEFAULT_WORKSPACE` 约定一致）。
 
 ## 10. 验收标准
 

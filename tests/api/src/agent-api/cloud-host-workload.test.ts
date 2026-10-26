@@ -180,7 +180,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
             controllerId: seeded.controllerId,
             accountId: new mongoose.Types.ObjectId().toString(),
             repoFullName: 'owner/repo',
-            targetPath: '/root/../etc',
+            targetPath: '/home/worker/../etc',
           },
         },
         token,

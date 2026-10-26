@@ -7,24 +7,24 @@ import {
 
 describe('normalizeWorkspacePrefixForPreview', () => {
   it('保留标准前缀并合并重复斜杠/末斜杠', () => {
-    expect(normalizeWorkspacePrefixForPreview('/root/workspace')).toBe('/root/workspace')
-    expect(normalizeWorkspacePrefixForPreview('/root//workspace/')).toBe('/root/workspace')
+    expect(normalizeWorkspacePrefixForPreview('/home/worker/workspace')).toBe('/home/worker/workspace')
+    expect(normalizeWorkspacePrefixForPreview('/home/worker//workspace/')).toBe('/home/worker/workspace')
     expect(normalizeWorkspacePrefixForPreview('/')).toBe('/')
   })
 
   it('空/相对路径/含 .. 返回 null', () => {
     expect(normalizeWorkspacePrefixForPreview('')).toBeNull()
     expect(normalizeWorkspacePrefixForPreview('root/workspace')).toBeNull()
-    expect(normalizeWorkspacePrefixForPreview('/root/../etc')).toBeNull()
-    expect(normalizeWorkspacePrefixForPreview('/root\\workspace')).toBeNull()
+    expect(normalizeWorkspacePrefixForPreview('/home/worker/../etc')).toBeNull()
+    expect(normalizeWorkspacePrefixForPreview('/home/worker\\workspace')).toBeNull()
   })
 
-  it('T-PATH8: ~ 展开矩阵（仅首字符 ~ 展开为 /root）', () => {
-    expect(normalizeWorkspacePrefixForPreview('~')).toBe('/root')
-    expect(normalizeWorkspacePrefixForPreview('~/')).toBe('/root')
-    expect(normalizeWorkspacePrefixForPreview('~/workspace')).toBe('/root/workspace')
-    expect(normalizeWorkspacePrefixForPreview('~/workspace/')).toBe('/root/workspace')
-    expect(normalizeWorkspacePrefixForPreview('~//a')).toBe('/root/a')
+  it('T-PATH8: ~ 展开矩阵（仅首字符 ~ 展开为 /home/worker）', () => {
+    expect(normalizeWorkspacePrefixForPreview('~')).toBe('/home/worker')
+    expect(normalizeWorkspacePrefixForPreview('~/')).toBe('/home/worker')
+    expect(normalizeWorkspacePrefixForPreview('~/workspace')).toBe('/home/worker/workspace')
+    expect(normalizeWorkspacePrefixForPreview('~/workspace/')).toBe('/home/worker/workspace')
+    expect(normalizeWorkspacePrefixForPreview('~//a')).toBe('/home/worker/a')
     expect(normalizeWorkspacePrefixForPreview('~/a/../b')).toBeNull()
     expect(normalizeWorkspacePrefixForPreview('~/..')).toBeNull()
   })
@@ -39,19 +39,19 @@ describe('normalizeWorkspacePrefixForPreview', () => {
 
 describe('previewClonePath', () => {
   it('拼接前缀与 owner/repo', () => {
-    expect(previewClonePath('/root/workspace', 'User/Repo')).toBe('/root/workspace/User/Repo')
+    expect(previewClonePath('/home/worker/workspace', 'User/Repo')).toBe('/home/worker/workspace/User/Repo')
     expect(previewClonePath('/', 'User/Repo')).toBe('/User/Repo')
   })
 
   it('T-PATH8: ~/workspace 前缀展开后拼接', () => {
-    expect(previewClonePath('~/workspace', 'alice/repo-a')).toBe('/root/workspace/alice/repo-a')
+    expect(previewClonePath('~/workspace', 'alice/repo-a')).toBe('/home/worker/workspace/alice/repo-a')
   })
 
   it('非法前缀或仓库返回 null', () => {
     expect(previewClonePath('', 'User/Repo')).toBeNull()
-    expect(previewClonePath('/root/workspace', '')).toBeNull()
-    expect(previewClonePath('/root/workspace', 'owner/..')).toBeNull()
-    expect(previewClonePath('/root/workspace', 'repo')).toBeNull()
+    expect(previewClonePath('/home/worker/workspace', '')).toBeNull()
+    expect(previewClonePath('/home/worker/workspace', 'owner/..')).toBeNull()
+    expect(previewClonePath('/home/worker/workspace', 'repo')).toBeNull()
   })
 })
 
@@ -59,9 +59,9 @@ describe('workspacePrefixError', () => {
   it('按输入返回对应提示', () => {
     expect(workspacePrefixError('')).toBe('请输入前缀地址')
     expect(workspacePrefixError('root/workspace')).toBe('前缀地址必须以 / 或 ~ 开头')
-    expect(workspacePrefixError('/root/../etc')).toBe('前缀地址不能包含 ..')
-    expect(workspacePrefixError('/root\\workspace')).toBe('前缀地址包含非法字符')
-    expect(workspacePrefixError('/root/workspace')).toBeNull()
+    expect(workspacePrefixError('/home/worker/../etc')).toBe('前缀地址不能包含 ..')
+    expect(workspacePrefixError('/home/worker\\workspace')).toBe('前缀地址包含非法字符')
+    expect(workspacePrefixError('/home/worker/workspace')).toBeNull()
   })
 
   it('T-PATH9: ~ 合法形态无提示；~abc 提示起始字符错误', () => {

@@ -23,12 +23,12 @@ describe('useGithubProjectForm 前缀默认值', () => {
       useGithubProjectForm({
         open: true,
         controllerId: 'ctrl-1',
-        defaultWorkspace: '/root/custom',
+        defaultWorkspace: '/home/worker/custom',
         hasDefaultWorkspace: true,
       }),
     )
 
-    await waitFor(() => expect(result.current.targetPath).toBe('/root/custom'))
+    await waitFor(() => expect(result.current.targetPath).toBe('/home/worker/custom'))
   })
 
   it('hasDefaultWorkspace=false 预填 ~/workspace', async () => {
@@ -52,7 +52,7 @@ describe('useGithubProjectForm 前缀默认值', () => {
     await waitFor(() => expect(result.current.targetPath).toBe('~/workspace'))
   })
 
-  it('~/workspace 前缀无错误、归一为 /root/workspace 且预览展开', async () => {
+  it('~/workspace 前缀无错误、归一为 /home/worker/workspace 且预览展开', async () => {
     const { result } = renderHook(() =>
       useGithubProjectForm({ open: true, controllerId: 'ctrl-1' }),
     )
@@ -61,8 +61,8 @@ describe('useGithubProjectForm 前缀默认值', () => {
     act(() => result.current.setRepoFullName('alice/repo-a'))
 
     expect(result.current.prefixError).toBeNull()
-    expect(result.current.normalizedPrefix).toBe('/root/workspace')
-    expect(result.current.finalClonePath).toBe('/root/workspace/alice/repo-a')
+    expect(result.current.normalizedPrefix).toBe('/home/worker/workspace')
+    expect(result.current.finalClonePath).toBe('/home/worker/workspace/alice/repo-a')
   })
 
   it('~abc 返回起始字符错误文案', async () => {

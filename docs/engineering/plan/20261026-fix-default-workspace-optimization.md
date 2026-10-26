@@ -10,6 +10,9 @@ type: Permanent
 **需求总分支（feat-branch）**: `feat/default-workspace-optimization`（需求总 PR #305）
 **实现分支**: `feat/default-workspace-optimization-impl`（基于需求总分支）
 **创建日期**: 2026-10-26
+
+> **合并期对齐（2026-10-26）**：本计划执行期间 main 已合入「云电脑保活与 worker 用户」（PR #307），容器主目录由 `/root` 收口为 `/home/worker`。本计划的 `CONTAINER_HOME`、`~` 展开矩阵、默认工作区示例与相关断言统一按 `/home/worker` 执行（即 `~/workspace` → `/home/worker/workspace`）；条目文字中的 `/root` 一律视为 `/home/worker` 的历史口径。
+
 **计划版本**: v1.0
 
 **上游评审结论（PR #305）**：Deliay 于 2026-10-26T11:34:49Z APPROVED 产品文档与技术提案，评审无正文、无 inline comment、无修改要求，按原计划推进本实现计划。若后续复审提出修改，在对应 Phase 中落实并回评。
@@ -55,7 +58,7 @@ flowchart TD
 
 - **策略不变**：不改变「创建期不预置默认工作区」（`CloudHost.workspaceId` 创建期恒 `null`）；不改变多 Harness「不自动创建会话」；设置进度对话框保持三步（workload / gitSetup / session），不新增步骤 key。
 - **契约零字段变更**：`contracts/cloud-host.graphql` 仅注释修订；`hasDefaultWorkspace` 语义随行为更新注释，但字段类型/可空性不动。
-- **`~` 双端同规则**：展开目标固定 `/root`（与 `packages/agent-controller/src/cloud-host/supervisor.ts` 的 `DEFAULT_WORKSPACE = '/root/workspace'`、`ZAG_DEFAULT_WORKSPACE` 同源约定）；服务端权威展开，前端仅同规则预览；`~` 仅允许出现在首字符，禁止路径逃逸（`..` 拒绝规则不变）。
+- **`~` 双端同规则**：展开目标固定 `/home/worker`（与 `packages/agent-controller/src/cloud-host/supervisor.ts` 的 `DEFAULT_WORKSPACE = '/home/worker/workspace'`、`ZAG_DEFAULT_WORKSPACE` 同源约定）；服务端权威展开，前端仅同规则预览；`~` 仅允许出现在首字符，禁止路径逃逸（`..` 拒绝规则不变）。
 - **落库一律绝对路径**：operation.targetPath / binding.targetPath / 脚本参数 / `ensureWorkspace` 路径均为展开后的绝对路径，旧绑定记录保持原值。
 - **工作区初始化幂等**：`ensureWorkspace` 为幂等 upsert 且不触发 10 个工作区上限；`CloudHost.workspaceId` 回写为 CAS（`{_id, workspaceId: null}`），不覆盖既有绑定（沿用 U-1 不变量）。
 - **旧断言基线更新是预期变更**：下表「基线更新清单」中的断言随 PRD 行为调整同步改写，不视为回归；除此之外既有用例必须零失败。
@@ -68,10 +71,10 @@ flowchart TD
 - `retry()` 将 FAILED 及其后续步骤重置 `PENDING`（保留 SUCCEEDED/SKIPPED），`GITHUB_SETUP_SCRIPT` 对已存在目录 `git pull --ff-only`，clone 侧已幂等；`ensureWorkspace` 亦幂等 upsert，重试不产生重复工作区。
 - `servers/agent-api/src/services/workspace-path.ts`：`PREFIX_ERRORS.notAbsolute = '前缀地址必须是绝对路径'`，`normalizeWorkspacePrefix` 只接受 `/` 开头；`resolveClonePath` 用 `path.posix.join(prefix, owner/repo)`。该函数同时被 `services/workflow/issues-event-handler.ts` 复用（Issues 联动 clone 路径），`~` 支持会自然生效，需回归其既有用例。
 - `apps/agent-web/src/lib/workspace-path.ts`：`normalizeWorkspacePrefixForPreview` / `previewClonePath` / `workspacePrefixError`（前端文案「前缀地址必须以 / 开头」），纯展示、容错返回 `null`，与服务端同序校验。
-- `apps/agent-web/src/hooks/useGithubProjectForm.ts:125`：`setTargetPathState(hasDefaultWorkspace === false ? '' : (defaultWorkspace ?? '/root/workspace'))`——「无工作区不预填」是云容器优化二期的裁决口径，**被 PRD v1.0 推翻**（改预填 `~/workspace`）；新建云电脑流程（未传 `hasDefaultWorkspace`）当前兜底 `/root/workspace`。
+- `apps/agent-web/src/hooks/useGithubProjectForm.ts:125`：`setTargetPathState(hasDefaultWorkspace === false ? '' : (defaultWorkspace ?? '/home/worker/workspace'))`——「无工作区不预填」是云容器优化二期的裁决口径，**被 PRD v1.0 推翻**（改预填 `~/workspace`）；新建云电脑流程（未传 `hasDefaultWorkspace`）当前兜底 `/home/worker/workspace`。
 - 提交报文：`GithubProjectSetupDialog` / `NewCloudHostDialog` 均提交 `targetPath: form.normalizedPrefix`（归一后的**前缀**，非最终目录），服务端 `createOperation` 再 `resolveClonePath` 权威拼接——`~` 展开后 `normalizedPrefix` 为绝对路径，此契约不变。
 - `apps/agent-web/src/pages/ControllerConfigPage.tsx`：`workloadsSection` 顶部持有「Github 项目设置」按钮（`aria-label="Github 项目设置"`，禁用条件 `status !== 'RUNNING' || deletedAt`）；`githubSection` 直接渲染 `CloudHostIssuesLinkageSection`；桌面/移动两套布局共用这两个 section，`dialogs` 中 `GithubProjectSetupDialog` 挂载点不变。
-- placeholder 现状不一致：`GithubProjectSetupDialog.tsx:265` 为「例如：/workspace」，`NewCloudHostDialog.tsx:463` 为「/root/workspace」，需统一为 `~/workspace`。
+- placeholder 现状不一致：`GithubProjectSetupDialog.tsx:265` 为「例如：/workspace」，`NewCloudHostDialog.tsx:463` 为「/home/worker/workspace」，需统一为 `~/workspace`。
 - `servers/agent-api/src/graphql/schemas/cloud-host.ts` 内联注释与 `contracts/cloud-host.graphql` 逐条对应；`hasDefaultWorkspace` 注释当前写「多 Harness（createSession=false）不执行会话步骤，workspaceId 保持 null」，新语义下不再成立，必须同步。
 - `apps/agent-web/src/graphql/types.ts` 为手写类型（无 codegen）；本次无字段增删，仅注释/文档同步，不动类型文件。
 
@@ -81,26 +84,26 @@ flowchart TD
 |---|----------|------------------|------------|
 | D1 | PRD 功能点 3：无默认工作区时前缀预填 `~/workspace` | 云容器优化二期裁决为「无工作区不预填（空值 + placeholder）」，`useGithubProjectForm.ts:125` 与 3 处测试断言固化该行为 | 以 PRD v1.0 为准推翻空值口径；预填 `~/workspace`、placeholder 统一 `~/workspace`（裁决 3）；旧断言列入基线更新清单 |
 | D2 | 提案 §5.2 实现点 3：服务端 `PREFIX_ERRORS.notAbsolute`「同步」前端新文案 | 服务端文案为「前缀地址必须是绝对路径」，前端为「前缀地址必须以 / 开头」，两者本就不同 | 双端统一为「前缀地址必须以 / 或 ~ 开头」（裁决 2），`workspace-path.test.ts` 既有 `toThrow` 断言随文案更新 |
-| D3 | 提案 §5.2 实现点 3：`~` 展开为 `/root`，`~` 仅首字符 | 两端 `workspace-path` 均只接受 `/` 开头，未定义 `~abc`、`~` 单独、`/a/~` 的形态归属 | 裁决 1 给出完整展开/拒绝矩阵（含 `~abc` 拒绝），双端逐条实现并以同一组用例命名对齐 |
+| D3 | 提案 §5.2 实现点 3：`~` 展开为 `/home/worker`，`~` 仅首字符 | 两端 `workspace-path` 均只接受 `/` 开头，未定义 `~abc`、`~` 单独、`/a/~` 的形态归属 | 裁决 1 给出完整展开/拒绝矩阵（含 `~abc` 拒绝），双端逐条实现并以同一组用例命名对齐 |
 | D4 | 提案 §5.2 实现点 2：按钮置于 `CloudHostIssuesLinkageSection` 之上 | `githubSection` 当前为单组件表达式，无容器；按钮在 `workloadsSection` 的 flex 行内与说明文案并排 | `githubSection` 改为 `space-y-4` 容器：顶部按钮行（含可用条件与禁用提示）+ `CloudHostIssuesLinkageSection`；`workloadsSection` 移除按钮后说明文案独占一行（裁决 6） |
 | D5 | 提案 §8 测试策略：新增用例为主 | 多处既有断言固化旧默认值/旧入口位置，新行为会使其失败 | 列出「基线更新清单」，RED 阶段区分「预期变更」与「真实回归」（裁决 7） |
 | D6 | 提案 §3.1：`hasDefaultWorkspace` 注释「与 createSession 开关无关」 | 现契约注释写「多 Harness（createSession=false）workspaceId 保持 null」，与新行为矛盾 | Phase 0 一并修订契约与 `graphql/schemas/cloud-host.ts` 内联注释，避免文档与实现漂移 |
 
 ## 计划期裁决（提案留白 / 含混处的实现口径）
 
-1. **`~` 展开矩阵（双端逐字一致）**：展开常量 `CONTAINER_HOME = '/root'`（`servers/agent-api/src/services/workspace-path.ts` 导出，前端 `apps/agent-web/src/lib/workspace-path.ts` 同值常量并注释「与服务端同源」）。规则：
-   - `~` → `/root`；`~/` → `/root`；`~/workspace` → `/root/workspace`；`~/workspace/` → `/root/workspace`（去尾斜杠）；`~//a` → `/root/a`。
+1. **`~` 展开矩阵（双端逐字一致）**：展开常量 `CONTAINER_HOME = '/home/worker'`（`servers/agent-api/src/services/workspace-path.ts` 导出，前端 `apps/agent-web/src/lib/workspace-path.ts` 同值常量并注释「与服务端同源」）。规则：
+   - `~` → `/home/worker`；`~/` → `/home/worker`；`~/workspace` → `/home/worker/workspace`；`~/workspace/` → `/home/worker/workspace`（去尾斜杠）；`~//a` → `/home/worker/a`。
    - 仅首字符 `~` 触发展开；`/a/~`、`/a/~/b` 按普通分段处理（不展开、不拒绝）；`~abc`、`~x/y` 非法（走 `notAbsolute` 报错）。
    - 展开后继续走既有规则：非法字符（`\0`/反斜杠）→ `..` 段拒绝 → `path.posix.normalize` 归一；校验顺序保持「空 → 非法字符 → 起始字符 → `..`」不变（`/a/~` 含 `..` 仍拒绝）。
-   - 安全性：展开仅是字符串前缀替换，不访问文件系统，不接受 `~user`，不可能逃逸出 `/root` 之外（`..` 拒绝前置），满足 PRD 4.2。
+   - 安全性：展开仅是字符串前缀替换，不访问文件系统，不接受 `~user`，不可能逃逸出 `/home/worker` 之外（`..` 拒绝前置），满足 PRD 4.2。
 2. **错误文案逐字**：`PREFIX_ERRORS.notAbsolute` 改为 `前缀地址必须以 / 或 ~ 开头`；前端 `workspacePrefixError` 的「前缀地址必须以 / 开头」同步为同一文案。其余文案（空/非法字符/`..`/仓库格式）不动。
 3. **前缀默认值规则**：`hasDefaultWorkspace === true` → 预填 `defaultWorkspace`（`String!`，服务端已回退）；`false` 或未传（新建云电脑流程）→ 预填 `~/workspace`。两处 placeholder 统一 `~/workspace`。`CloudHost.defaultWorkspace` 契约与 resolver 不改。
 4. **工作区初始化落点**：`runGitSetupStep` 在 `pollBatch` 成功后、`gitSetup` 标记 `SUCCEEDED` 前执行 `ensureWorkspace(controllerId, userId, targetPath)` + `CloudHost.updateOne({_id, workspaceId: null}, {$set: {workspaceId}})`（失败仅 `console.warn`，与现状一致）。`ensureWorkspace` 抛错 → `gitSetup` FAILED → operation FAILED，可 `retry` 重试收敛；`runSessionStep` 内既有 ensureWorkspace + CAS 保留为兜底（幂等，CAS 未命中即 no-op），会话逻辑与 D2 `defaultSessionId` 回写不动。
 5. **提交报文口径**：前端仍提交 `normalizedPrefix`（归一后的前缀）；`~` 输入经前端展开后提交绝对路径，服务端 `normalizeWorkspacePrefix` 同样支持 `~` 以兼容旧客户端/直接 API 调用；最终目录一律由服务端 `resolveClonePath` 权威拼接。
 6. **入口迁移细节**：`workloadsSection` 移除按钮与触发后保留说明文案「安装后立即在云电脑内生效，不提供卸载。」独占一行；`githubSection` 改为容器（`<div className="min-w-0 space-y-4">`），顶部为「Github 项目设置」按钮行（`aria-label`、禁用条件、禁用提示与现状逐字一致），下方 `CloudHostIssuesLinkageSection`；`GithubProjectSetupDialog` 挂载点（`dialogs`）与侧边栏 TreeSection 快捷入口（`Sidebar`）均不动。
 7. **基线更新清单（预期变更，非回归）**：
-   - `apps/agent-web/src/components/cloud-host/__tests__/GithubProjectSetupDialog.test.tsx`：「无默认工作区时不预填 `/root/workspace`，且空值不可提交」改为「无默认工作区预填 `~/workspace` 且可直接提交」；placeholder 断言 `例如：/workspace` → `~/workspace`；「前缀地址必须以 / 开头」断言同步新文案。
-   - `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx`：`最终 clone 地址：/root/workspace/alice/repo-a` 相关默认值断言按 `~/workspace` 预填口径更新。
+   - `apps/agent-web/src/components/cloud-host/__tests__/GithubProjectSetupDialog.test.tsx`：「无默认工作区时不预填 `/home/worker/workspace`，且空值不可提交」改为「无默认工作区预填 `~/workspace` 且可直接提交」；placeholder 断言 `例如：/workspace` → `~/workspace`；「前缀地址必须以 / 开头」断言同步新文案。
+   - `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx`：`最终 clone 地址：/home/worker/workspace/alice/repo-a` 相关默认值断言按 `~/workspace` 预填口径更新。
    - `apps/agent-web/src/pages/__tests__/ControllerConfigPage.test.tsx`：`T-AW-G1/G12`、`T-AW-G13` 的入口定位从「工作负载」页签改到「Github」页签。
    - `tests/e2e/src/cloud-host.spec.ts`（E2E-1 段 234-240 行附近）、`tests/e2e/src/github-workload.spec.ts`（T-EG1/T-EG4 段 111-115 行附近）：空值预填/placeholder 断言改为 `~/workspace` 预填。
    - `servers/agent-api/src/services/workspace-path.test.ts`：`T-PATH3` 相对路径拒绝断言文案随裁决 2 更新。
@@ -112,7 +115,7 @@ flowchart TD
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `contracts/cloud-host.graphql` | 修改 | `SetupCloudHostGithubProjectInput.targetPath` 注释补「支持 `~` 或 `~/` 开头：服务端展开为容器用户主目录（/root）后再归一」；`createSession` 注释改为「false 时 session 步骤记 SKIPPED（多 Harness 不自动创建会话）；工作区初始化照常执行，缺省 true」；`CloudHost.hasDefaultWorkspace` 注释改为「是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置 clone 成功后即创建默认工作区并回写 workspaceId（与 createSession 开关及会话创建成败无关）。用于区分「未创建工作区」与「默认会话创建失败」」 |
+| `contracts/cloud-host.graphql` | 修改 | `SetupCloudHostGithubProjectInput.targetPath` 注释补「支持 `~` 或 `~/` 开头：服务端展开为容器用户主目录（/home/worker）后再归一」；`createSession` 注释改为「false 时 session 步骤记 SKIPPED（多 Harness 不自动创建会话）；工作区初始化照常执行，缺省 true」；`CloudHost.hasDefaultWorkspace` 注释改为「是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置 clone 成功后即创建默认工作区并回写 workspaceId（与 createSession 开关及会话创建成败无关）。用于区分「未创建工作区」与「默认会话创建失败」」 |
 | `servers/agent-api/src/graphql/schemas/cloud-host.ts` | 修改 | 同步上述三处内联注释（逐字对齐契约），字段/类型零变更 |
 
 验收：契约与 schema 注释逐字一致；`git diff` 确认无字段增删改；`hasDefaultWorkspace` 与 `defaultWorkspace` 语义不冲突。
@@ -125,8 +128,8 @@ flowchart TD
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/agent-api/src/services/workspace-path.test.ts` | 修改 | 新增 `T-PATH8`（展开矩阵：`~`→`/root`、`~/`→`/root`、`~/workspace`→`/root/workspace`、`~/workspace/`→`/root/workspace`、`~//a`→`/root/a`、`~`+`..` 段仍拒绝、`~/a/../b` 拒绝）与 `T-PATH9`（`~abc`、`~x/y` 报 `notAbsolute`；`/a/~` 不展开不拒绝）；`T-PATH3` 相对路径断言文案更新为裁决 2 文案；`resolveClonePath` 新增 `~/workspace` 前缀拼接用例 |
-| `servers/agent-api/src/services/workspace-path.ts` | 修改 | 导出 `CONTAINER_HOME = '/root'`（注释指向 `packages/agent-controller/src/cloud-host/supervisor.ts` 的 `DEFAULT_WORKSPACE`/`ZAG_DEFAULT_WORKSPACE` 约定）；`normalizeWorkspacePrefix` 开头做 `~` 展开（仅 `~`/`~/` 前缀，`~abc` 抛 `PREFIX_ERRORS.notAbsolute`），其余校验顺序不变；`PREFIX_ERRORS.notAbsolute` 文案按裁决 2；JSDoc 补展开规则 |
+| `servers/agent-api/src/services/workspace-path.test.ts` | 修改 | 新增 `T-PATH8`（展开矩阵：`~`→`/home/worker`、`~/`→`/home/worker`、`~/workspace`→`/home/worker/workspace`、`~/workspace/`→`/home/worker/workspace`、`~//a`→`/home/worker/a`、`~`+`..` 段仍拒绝、`~/a/../b` 拒绝）与 `T-PATH9`（`~abc`、`~x/y` 报 `notAbsolute`；`/a/~` 不展开不拒绝）；`T-PATH3` 相对路径断言文案更新为裁决 2 文案；`resolveClonePath` 新增 `~/workspace` 前缀拼接用例 |
+| `servers/agent-api/src/services/workspace-path.ts` | 修改 | 导出 `CONTAINER_HOME = '/home/worker'`（注释指向 `packages/agent-controller/src/cloud-host/supervisor.ts` 的 `DEFAULT_WORKSPACE`/`ZAG_DEFAULT_WORKSPACE` 约定）；`normalizeWorkspacePrefix` 开头做 `~` 展开（仅 `~`/`~/` 前缀，`~abc` 抛 `PREFIX_ERRORS.notAbsolute`），其余校验顺序不变；`PREFIX_ERRORS.notAbsolute` 文案按裁决 2；JSDoc 补展开规则 |
 
 回归：`services/workflow/issues-event-handler.ts` 复用同一函数，`servers/agent-api/src/services/workflow/issues-event-handler.runner.test.ts` 既有用例必须零失败（mock 的 `normalizeWorkspacePrefix` 不受影响）。
 
@@ -159,8 +162,8 @@ cd servers/agent-api && npm run build && npm test -- cloud-host-github-service
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `apps/agent-web/src/lib/workspace-path.test.ts` | 修改 | 新增 `~` 展开矩阵（与服务端 `T-PATH8/T-PATH9` 同名对齐）、`previewClonePath('~/workspace', 'alice/repo-a') === '/root/workspace/alice/repo-a'`、`workspacePrefixError('~abc')` 返回新文案；既有断言按裁决 2/7 更新 |
-| `apps/agent-web/src/lib/workspace-path.ts` | 修改 | 同值常量 `CONTAINER_HOME = '/root'`（注释「与服务端同源」）；`normalizeSegments`/`normalizeWorkspacePrefixForPreview` 支持 `~` 展开（同裁决 1 矩阵）；`workspacePrefixError` 起始字符规则改 `~` 或 `/`，文案「前缀地址必须以 / 或 ~ 开头」 |
+| `apps/agent-web/src/lib/workspace-path.test.ts` | 修改 | 新增 `~` 展开矩阵（与服务端 `T-PATH8/T-PATH9` 同名对齐）、`previewClonePath('~/workspace', 'alice/repo-a') === '/home/worker/workspace/alice/repo-a'`、`workspacePrefixError('~abc')` 返回新文案；既有断言按裁决 2/7 更新 |
+| `apps/agent-web/src/lib/workspace-path.ts` | 修改 | 同值常量 `CONTAINER_HOME = '/home/worker'`（注释「与服务端同源」）；`normalizeSegments`/`normalizeWorkspacePrefixForPreview` 支持 `~` 展开（同裁决 1 矩阵）；`workspacePrefixError` 起始字符规则改 `~` 或 `/`，文案「前缀地址必须以 / 或 ~ 开头」 |
 
 ### Step 3.2 表单默认值与文案
 
@@ -169,7 +172,7 @@ cd servers/agent-api && npm run build && npm test -- cloud-host-github-service
 | `apps/agent-web/src/hooks/useGithubProjectForm.test.tsx` | 新增 | 打开重置默认值矩阵：`hasDefaultWorkspace=true` 预填 `defaultWorkspace`；`false` 预填 `~/workspace`；未传（新建流程）预填 `~/workspace`；`prefixError`/`finalClonePath` 对 `~/workspace` 的联动 |
 | `apps/agent-web/src/hooks/useGithubProjectForm.ts` | 修改 | `setTargetPathState(hasDefaultWorkspace === true ? (defaultWorkspace ?? '~/workspace') : '~/workspace')`；类型注释与 JSDoc 同步（删除「不预填」旧口径） |
 | `apps/agent-web/src/components/cloud-host/GithubProjectSetupDialog.tsx` | 修改 | placeholder `例如：/workspace` → `~/workspace`；如有「必须绝对路径」提示文案同步「/ 或 ~」口径 |
-| `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx` | 修改 | placeholder `/root/workspace` → `~/workspace`；Github 项目区块提示文案同上 |
+| `apps/agent-web/src/components/cloud-host/NewCloudHostDialog.tsx` | 修改 | placeholder `/home/worker/workspace` → `~/workspace`；Github 项目区块提示文案同上 |
 | `apps/agent-web/src/components/cloud-host/__tests__/GithubProjectSetupDialog.test.tsx` | 修改 | 按基线更新清单改写默认值/placeholder/文案断言；补「`~/workspace` 直接提交成功且预览展示展开后路径」用例 |
 | `apps/agent-web/src/components/cloud-host/__tests__/NewCloudHostDialog.test.tsx` | 修改 | 新建流程前缀预填 `~/workspace`、最终地址预览展开断言 |
 
@@ -200,7 +203,7 @@ cd apps/agent-web && npm run build && npm run lint && npm test -- ControllerConf
 
 | 文件 | 操作 | 覆盖 |
 |------|------|------|
-| `tests/api/src/agent-api/cloud-host.test.ts` | 修改 | 扩展 `T-CH-API-CS1`：`createSession=false` 全流程后 `controllerWorkspaces` 出现 finalPath 工作区、`myCloudHosts` 的 `hasDefaultWorkspace=true`、无默认会话；新增 `T-CH-API-WS1`：`targetPath: '~/workspace'` 经服务端归一落库为 `/root/workspace/<owner>/<repo>`（binding/operation/工作区路径一致为绝对路径）；`T-CH-API-CS2` 补「`createSession=true` 时同样初始化工作区」断言 |
+| `tests/api/src/agent-api/cloud-host.test.ts` | 修改 | 扩展 `T-CH-API-CS1`：`createSession=false` 全流程后 `controllerWorkspaces` 出现 finalPath 工作区、`myCloudHosts` 的 `hasDefaultWorkspace=true`、无默认会话；新增 `T-CH-API-WS1`：`targetPath: '~/workspace'` 经服务端归一落库为 `/home/worker/workspace/<owner>/<repo>`（binding/operation/工作区路径一致为绝对路径）；`T-CH-API-CS2` 补「`createSession=true` 时同样初始化工作区」断言 |
 | `tests/api/src/agent-api/cloud-host-workload.test.ts` | 修改 | `T-GH-API-P1~P3` 前缀校验补 `~` 矩阵：`T-GH-API-P4`（`~/workspace` 接受并归一、`~abc` 拒绝、`/a/~` 接受、`~/a/../b` 拒绝）；错误文案断言随裁决 2 更新 |
 | `tests/api/src/agent-api/cloud-host-issues-linkage.test.ts` | 修改 | 回归：Issues 联动 clone 前缀走同一归一（如无 `~` 用例则补 1 条 `~/workspace` 归一断言） |
 
@@ -224,7 +227,7 @@ cd apps/agent-web && npm run build && npm run lint && npm test -- ControllerConf
 | `apps/agent-web/AGENTS.md` | 修改 | 「Github 项目设置入口」位置改为云电脑配置「Github」页签（工作负载页签不再出现）；「Github 设置表单」默认值改为「有默认工作区预填 `defaultWorkspace`，否则预填 `~/workspace`（placeholder `~/workspace`）」并补 `~` 展开说明 |
 | `servers/agent-api/AGENTS.md` | 修改 | `workspace-path` 段补 `~` 展开矩阵与新错误文案；`hasDefaultWorkspace` 段改为「Git 项目设置 clone 成功后即创建默认工作区（与 `createSession` 无关）」；`CloudHostGithubService` 段补「`gitSetup` 收尾 `ensureWorkspace` + CAS，session 内为幂等兜底」 |
 | `tests/api/AGENTS.md` | 修改 | `cloud-host-workload.test.ts` 说明补 `~` 前缀校验矩阵 |
-| `tests/e2e/AGENTS.md` | 修改 | `github-workload.spec.ts` 说明中「设置弹窗默认前缀地址（`/root/workspace`）」改为「默认前缀 `~/workspace`（预览展开为 `/root/workspace`）」 |
+| `tests/e2e/AGENTS.md` | 修改 | `github-workload.spec.ts` 说明中「设置弹窗默认前缀地址（`/home/worker/workspace`）」改为「默认前缀 `~/workspace`（预览展开为 `/home/worker/workspace`）」 |
 | `docs/engineering/AGENTS.md` | 修改 | 实现计划索引登记本文件（随本 PR 提交） |
 
 ### PR 收口
@@ -251,7 +254,7 @@ cd tests/e2e && npx playwright test cloud-host.spec.ts github-workload.spec.ts
 - [ ] 多 Harness + Github 项目场景设置完成后工作区出现且 `hasDefaultWorkspace=true`、不创建会话（PRD 功能点 1 / Issue #304-1）
 - [ ] 运行中云电脑发起 Git 项目设置成功后同样初始化工作区；初始化失败明确报错、重试幂等不重复建工作区（PRD 功能点 1 验收 3/4）
 - [ ] 云电脑配置「Github」页签可发起「Github 项目设置」，「工作负载」页签无入口，非 RUNNING 禁用提示不变；侧边栏入口与新建云电脑区块不受影响（PRD 功能点 2 / Issue #304-2）
-- [ ] 前缀地址默认 `~/workspace`（有默认工作区仍预填既有路径），直接提交成功、预览展示展开后路径；`~` 解析限定 `/root` 内、无逃逸（PRD 功能点 3 与 4.2 / Issue #304-3）
+- [ ] 前缀地址默认 `~/workspace`（有默认工作区仍预填既有路径），直接提交成功、预览展示展开后路径；`~` 解析限定 `/home/worker` 内、无逃逸（PRD 功能点 3 与 4.2 / Issue #304-3）
 - [ ] 存量绝对路径输入行为零变化；存量云电脑/工作区/绑定记录不受影响（PRD 4.3）
 - [ ] 单测 / API 测试 / E2E 全绿，除基线更新清单外既有用例零回归
 - [ ] 文档已同步（4 个 AGENTS.md + `docs/engineering/AGENTS.md` 索引 + 本计划）

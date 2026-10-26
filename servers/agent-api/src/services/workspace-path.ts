@@ -8,7 +8,7 @@ import path from 'node:path';
  */
 
 /** 容器用户主目录常量；与 `packages/agent-controller/src/cloud-host/supervisor.ts` 的 DEFAULT_WORKSPACE / ZAG_DEFAULT_WORKSPACE 同源约定。 */
-export const CONTAINER_HOME = '/root';
+export const CONTAINER_HOME = '/home/worker';
 
 /** 错误文案（契约级，前端映射为中文提示；服务端逐字返回）。 */
 export const PREFIX_ERRORS = {
@@ -20,8 +20,8 @@ export const PREFIX_ERRORS = {
 } as const;
 
 /**
- * 展开首字符 `~` 为容器用户主目录（`/root`）：
- * - `~` / `~/` → `/root`；`~/workspace` → `/root/workspace`；
+ * 展开首字符 `~` 为容器用户主目录（`/home/worker`）：
+ * - `~` / `~/` → `/home/worker`；`~/workspace` → `/home/worker/workspace`；
  * - 仅首字符 `~` 触发展开，`/a/~` 按普通分段处理（不展开、不拒绝）；
  * - `~user` 等形式不支持，抛 `notAbsolute`。
  * 纯字符串前缀替换，不访问文件系统。
@@ -38,7 +38,7 @@ function expandHomePrefix(value: string): string {
  * 归一化 clone 前缀地址：
  * - trim 后不得为空；
  * - 不允许反斜杠与 NUL；
- * - 支持首字符 `~`（展开为 `/root`），否则必须为绝对路径（`/` 开头）；
+ * - 支持首字符 `~`（展开为 `/home/worker`），否则必须为绝对路径（`/` 开头）；
  * - 任一分段为 `..` 直接拒绝（不依赖 normalize 的折叠行为）；
  * - 用 `path.posix.normalize` 合并重复斜杠与 `.`，保留根 `/`，去掉末尾斜杠（根除外）。
  */

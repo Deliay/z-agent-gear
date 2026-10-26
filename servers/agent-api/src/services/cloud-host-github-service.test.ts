@@ -254,7 +254,7 @@ describe('CloudHostGithubService', () => {
     expect(ensureWorkspace).toHaveBeenCalledWith(
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/repo',
+      '/home/worker/workspace/repo',
     );
     expect(CloudHost.updateOne).toHaveBeenCalledWith(
       { _id: HOST_ID, workspaceId: null },
@@ -323,13 +323,13 @@ describe('CloudHostGithubService', () => {
       1,
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/repo',
+      '/home/worker/workspace/repo',
     );
     expect(ensureWorkspace).toHaveBeenNthCalledWith(
       2,
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/repo',
+      '/home/worker/workspace/repo',
     );
     const workspaceCasCalls = vi
       .mocked(CloudHost.updateOne)
@@ -486,7 +486,7 @@ describe('CloudHostGithubService', () => {
         repoFullName: 'User/Repo',
         targetPath: '~/workspace',
       });
-      expect(created[0].targetPath).toBe('/root/workspace/User/Repo');
+      expect(created[0].targetPath).toBe('/home/worker/workspace/User/Repo');
     });
 
     it('T-CHG-P2/P3/P4: binding / 脚本 / 会话均使用 finalPath', async () => {
@@ -550,7 +550,7 @@ describe('CloudHostGithubService', () => {
           controllerId: CONTROLLER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'User/Repo',
-          targetPath: '/root/../etc',
+          targetPath: '/home/worker/../etc',
         }),
       ).rejects.toThrow('前缀地址不能包含 ..');
 

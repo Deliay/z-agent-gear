@@ -153,7 +153,7 @@ export const cloudHostTypeDefs = `#graphql
     accountId: ID!
     repoFullName: String!
     # 语义：clone 前缀地址（工作根目录），不是最终目录。
-    # 支持 \`~\` 或 \`~/\` 开头：服务端展开为容器用户主目录（/root）后再归一。
+    # 支持 \`~\` 或 \`~/\` 开头：服务端展开为容器用户主目录（/home/worker）后再归一。
     # 最终目录 = <targetPath>/<repoFullName>，由服务端用 path.posix.join 权威拼接。
     targetPath: String!
     workloadIds: [ID!]

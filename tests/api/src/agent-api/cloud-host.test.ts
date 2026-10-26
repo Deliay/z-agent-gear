@@ -851,7 +851,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       });
 
       // operation 在 createOperation 内同步落库：直连断言服务端把 '~/workspace' 归一为
-      // /root/workspace 并与 owner/repo 权威拼接后的 targetPath。
+      // /home/worker/workspace 并与 owner/repo 权威拼接后的 targetPath。
       // binding / 工作区（controllerWorkspaces、CloudHost.workspaceId）的最终路径断言依赖
       // 真实容器 clone 成功；本地 runner 在 workload 步即失败、不可达，由单测 T-CHG9/T-CHG10
       // 与验收环境 E2E-1 覆盖。
@@ -859,7 +859,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       const storedOperation = await seeded.db
         .collection('cloud_host_setup_operations')
         .findOne({ _id: new mongoose.Types.ObjectId(operationId) });
-      expect(storedOperation?.targetPath).toBe('/root/workspace/phase9-owner/repo');
+      expect(storedOperation?.targetPath).toBe('/home/worker/workspace/phase9-owner/repo');
     } finally {
       await github.cleanup();
       await seeded.cleanup();

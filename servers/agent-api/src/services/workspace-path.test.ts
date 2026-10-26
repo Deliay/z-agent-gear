@@ -26,12 +26,12 @@ describe('normalizeWorkspacePrefix', () => {
     expect(() => normalizeWorkspacePrefix('./workspace')).toThrow('前缀地址必须以 / 或 ~ 开头');
   });
 
-  it('T-PATH8: ~ 展开矩阵（仅首字符 ~ 展开为 /root）', () => {
-    expect(normalizeWorkspacePrefix('~')).toBe('/root');
-    expect(normalizeWorkspacePrefix('~/')).toBe('/root');
-    expect(normalizeWorkspacePrefix('~/workspace')).toBe('/root/workspace');
-    expect(normalizeWorkspacePrefix('~/workspace/')).toBe('/root/workspace');
-    expect(normalizeWorkspacePrefix('~//a')).toBe('/root/a');
+  it('T-PATH8: ~ 展开矩阵（仅首字符 ~ 展开为 /home/worker）', () => {
+    expect(normalizeWorkspacePrefix('~')).toBe('/home/worker');
+    expect(normalizeWorkspacePrefix('~/')).toBe('/home/worker');
+    expect(normalizeWorkspacePrefix('~/workspace')).toBe('/home/worker/workspace');
+    expect(normalizeWorkspacePrefix('~/workspace/')).toBe('/home/worker/workspace');
+    expect(normalizeWorkspacePrefix('~//a')).toBe('/home/worker/a');
     expect(() => normalizeWorkspacePrefix('~/a/../b')).toThrow('前缀地址不能包含 ..');
     expect(() => normalizeWorkspacePrefix('~/..')).toThrow('前缀地址不能包含 ..');
   });
@@ -44,13 +44,13 @@ describe('normalizeWorkspacePrefix', () => {
   });
 
   it('T-PATH4: 含 .. 段拒绝', () => {
-    expect(() => normalizeWorkspacePrefix('/root/../etc')).toThrow('前缀地址不能包含 ..');
+    expect(() => normalizeWorkspacePrefix('/home/worker/../etc')).toThrow('前缀地址不能包含 ..');
     expect(() => normalizeWorkspacePrefix('/home/worker/workspace/..')).toThrow('前缀地址不能包含 ..');
   });
 
   it('T-PATH5: 含反斜杠或 NUL 拒绝', () => {
-    expect(() => normalizeWorkspacePrefix('/root\\workspace')).toThrow('前缀地址包含非法字符');
-    expect(() => normalizeWorkspacePrefix('/root/work\0space')).toThrow('前缀地址包含非法字符');
+    expect(() => normalizeWorkspacePrefix('/home/worker\\workspace')).toThrow('前缀地址包含非法字符');
+    expect(() => normalizeWorkspacePrefix('/home/worker/work\0space')).toThrow('前缀地址包含非法字符');
   });
 });
 
@@ -65,7 +65,7 @@ describe('resolveClonePath', () => {
 
   it('T-PATH8: ~/workspace 前缀拼接', () => {
     expect(resolveClonePath(normalizeWorkspacePrefix('~/workspace'), 'User/Repo')).toBe(
-      '/root/workspace/User/Repo',
+      '/home/worker/workspace/User/Repo',
     );
   });
 
