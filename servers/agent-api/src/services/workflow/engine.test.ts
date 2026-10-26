@@ -598,3 +598,91 @@ describe('WorkflowEngine 工作流完成判定', () => {
     expect(finishHooks.onWorkflowFinished).not.toHaveBeenCalled();
   });
 });
+
+describe('WorkflowEngine.onNodesTransitioned', () => {
+  const transitionedHooks = {
+    onNodeStart: vi.fn(),
+    onNodeDone: vi.fn(),
+    onNodesTransitioned: vi.fn(),
+    onWorkflowFinished: vi.fn(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workflowEngine.registerHooks(transitionedHooks);
+  });
+
+  it('E-CR1: complete 级联下游 start 均进 changes（event 取级联事件）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'RUNNING' }),
+      makeNode({ nodeId: 'n2', nodeKey: 'n2', name: '下游', status: 'INITIALIZING', dependsOn: ['n1'] }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'complete');
+
+    expect(transitionedHooks.onNodesTransitioned).toHaveBeenCalledTimes(1);
+    const [, changes] = transitionedHooks.onNodesTransitioned.mock.calls[0];
+    expect(changes).toEqual([
+      expect.objectContaining({ node: expect.objectContaining({ nodeId: 'n1', status: 'DONE' }), event: 'complete' }),
+      expect.objectContaining({ node: expect.objectContaining({ nodeId: 'n2', status: 'RUNNING' }), event: 'start' }),
+    ]);
+  });
+
+  it('E-CR2: reject 级联上游 rework 均进 changes', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'DONE' }),
+      makeNode({ nodeId: 'n2', nodeKey: 'n2', name: '评审', status: 'RUNNING', dependsOn: ['n1'] }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'reject', { reason: '不合格', fromNodeId: 'n2' });
+
+    const [, changes] = transitionedHooks.onNodesTransitioned.mock.calls[0];
+    expect(changes).toEqual([
+      expect.objectContaining({ node: expect.objectContaining({ nodeId: 'n1', status: 'REWORK' }), event: 'rework' }),
+      expect.objectContaining({ node: expect.objectContaining({ nodeId: 'n2', status: 'REJECT' }), event: 'reject' }),
+    ]);
+  });
+
+  it('E-CR3: 状态未变化时不触发（上游未完成，start READY→READY）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n0', nodeKey: 'n0', name: '起点', status: 'INITIALIZING' }),
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'READY', dependsOn: ['n0'] }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'start');
+
+    expect(instance.nodes[1].status).toBe('READY');
+    expect(transitionedHooks.onNodesTransitioned).not.toHaveBeenCalled();
+  });
+
+  it('E-CR4: hook 抛错不影响 transition 返回值', async () => {
+    transitionedHooks.onNodesTransitioned.mockImplementationOnce(() => {
+      throw new Error('github down');
+    });
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'RUNNING' }),
+    ]);
+    loadInstance(instance);
+
+    await expect(workflowEngine.transition('inst-1', 'n1', 'complete')).resolves.toMatchObject({
+      nodeId: 'n1',
+      status: 'DONE',
+    });
+  });
+
+  it('E-CR5: onNodesTransitioned 先于 onWorkflowFinished 触发', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n1', nodeKey: 'n1', name: '需求', status: 'RUNNING' }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'complete');
+
+    const order = transitionedHooks.onNodesTransitioned.mock.invocationCallOrder[0];
+    const finishOrder = transitionedHooks.onWorkflowFinished.mock.invocationCallOrder[0];
+    expect(order).toBeLessThan(finishOrder);
+  });
+});

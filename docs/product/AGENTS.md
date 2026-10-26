@@ -136,6 +136,8 @@ flowchart LR
 - [[draft/20261023-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（工作流关联 GitHub PR 并随完成/归档注销、人类节点「联动上游 Pull Request」由审核结果驱动完成/打回、工作流追加提示词与 PR 工具使用指引）
 - [[draft/20261025-opencode-model-context-length.md]] — 云电脑 OpenCode 模型上下文长度下发修复（后台配置的模型最长上下文随模型清单写入云电脑内 OpenCode 配置）
 - [[draft/20261025-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（与 OpenCode 同级的第二个 harness 工具、使用前登录确认与登录引导弹窗：按 stdio 登录链接授权后自动继续）
+- [[draft/20261025-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（云电脑设置「Github」区块以列表维护多条联动配置：先选含人类节点的已配置工作流、默认标签 start-{工作流名字}可改、多选仓库并同步标签；带标签 Issue 自动完成工作区准备、实例化工作流、回评工作流地址、首个人类节点自动完成；销毁云电脑时经确认清理已同步标签）
+- [[draft/20261025-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（绑定 PR 的节点状态写入 PR 最新提交检查项、旧提交标记 stale、todo panel 同步为检查项子项）
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
 - [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
 

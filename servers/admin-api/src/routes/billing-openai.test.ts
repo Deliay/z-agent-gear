@@ -127,10 +127,7 @@ async function seedCloudHost(input: { status?: string; userId?: string } = {}): 
 }
 
 /** 云电脑运行专用 Key：账号需有余额（系统模型仍走预扣费检查）。 */
-async function seedCloudHostKey(
-  cloudHostId?: string,
-  expiresAt = new Date(Date.now() + 60 * 60 * 1000),
-): Promise<{ secret: string; cloudHostId: string }> {
+async function seedCloudHostKey(cloudHostId?: string): Promise<{ secret: string; cloudHostId: string }> {
   const userId = new mongoose.Types.ObjectId().toString();
   const hostId = cloudHostId ?? (await seedCloudHost({ userId }));
   if (cloudHostId) {
@@ -156,7 +153,6 @@ async function seedCloudHostKey(
     ownerId: userId,
     name: 'host-key',
     cloudHostId: hostId,
-    expiresAt,
   });
   return { secret: created.secret, cloudHostId: hostId };
 }

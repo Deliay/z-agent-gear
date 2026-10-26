@@ -108,6 +108,30 @@ export const cloudHostTypeDefs = `#graphql
     supportedHarnesses: [HarnessType!]!
   }
 
+  # 云电脑 GitHub Issues 联动配置（每控制器多条）
+  type CloudHostIssuesLinkage {
+    id: ID!
+    controllerId: ID!
+    configuredWorkflowId: ID!
+    configuredWorkflowName: String!
+    labelName: String!
+    repoFullNames: [String!]!
+    createdAt: String!
+    updatedAt: String!
+  }
+
+  input CloudHostIssuesLinkageInput {
+    controllerId: ID!
+    configuredWorkflowId: ID!
+    labelName: String!
+    repoFullNames: [String!]!
+  }
+
+  type CloudHostIssuesLabelCleanupResult {
+    deleted: [String!]!
+    failed: [String!]!
+  }
+
   input CreateCloudHostInput {
     name: String!
     harnessTypes: [HarnessType!]!
@@ -144,6 +168,8 @@ export const cloudHostTypeDefs = `#graphql
     # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
     cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
     cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
+    # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）
+    cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
   }
 
   extend type Mutation {
@@ -153,6 +179,10 @@ export const cloudHostTypeDefs = `#graphql
     installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
     setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
     retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
+    createCloudHostIssuesLinkage(input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+    updateCloudHostIssuesLinkage(id: ID!, input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
+    deleteCloudHostIssuesLinkage(id: ID!): Boolean!
+    cleanupCloudHostIssuesLabels(controllerId: ID!): CloudHostIssuesLabelCleanupResult!
   }
 
   extend type Controller {

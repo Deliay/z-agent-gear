@@ -388,6 +388,11 @@ export const workflowResolvers = {
         nodeId: row.nodeId,
         nodeName: nodeNames.get(String(row.nodeId)) ?? null,
         registeredAt: toIso(row.createdAt) ?? new Date().toISOString(),
+        // ---- check-run 同步状态（只读投影，未同步时为 null） ----
+        checkRunUrl: row.lastCheckRunUrl ?? null,
+        lastSyncedCommitSha: row.lastWrittenCommitSha ?? null,
+        lastSyncAt: toIso(row.lastSyncAt),
+        lastSyncError: row.lastSyncError ?? null,
       }));
     },
     // 归属字段（惰性解析）：仅查询语句选择时执行；工作区/控制器可能已被删除，返回 null

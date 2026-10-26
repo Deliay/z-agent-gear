@@ -144,7 +144,10 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 
 ## harness prepare（OpenCode）
 
-init 脚本（admin-api 迁移 005）在安装固定版本 OpenCode 后执行 `agent-gear harness prepare`：
+init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
+`ZAG_HARNESS_TYPES=opencode agent-gear harness prepare`（按类型限定：多 harness 主机上各预置脚本
+顺序执行，裸调用会对 `ZAG_HARNESS_TYPES` 全部选中类型做 CLI 硬校验，排在其后的类型 CLI 尚未安装
+而误失败；DeepSeek 脚本同口径限定 `deepseek_harness`，存量脚本由 admin-api 迁移 011 刷新）：
 
 1. 校验 `ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS`（JSON 数组，去空去重）/
    `ZAG_DEFAULT_WORKSPACE`；缺失项按变量名报错并非零退出（不泄漏其它 env 值）。

@@ -2,10 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import DeleteCloudHostDialog from '../DeleteCloudHostDialog';
 
-const mockDeleteCloudHost = vi.fn();
+const { mockDeleteCloudHost, mockCleanupLabels, mockUseQuery } = vi.hoisted(() => ({
+  mockDeleteCloudHost: vi.fn(),
+  mockCleanupLabels: vi.fn(),
+  mockUseQuery: vi.fn(),
+}));
 
 vi.mock('@apollo/client/react', () => ({
-  useMutation: () => [mockDeleteCloudHost],
+  useQuery: () => mockUseQuery(),
+  useMutation: (mutation: { definitions?: Array<{ name?: { value?: string } }> }) => {
+    const name = mutation?.definitions?.[0]?.name?.value ?? '';
+    return [name.includes('Cleanup') ? mockCleanupLabels : mockDeleteCloudHost];
+  },
 }));
 
 const stoppedHost = {
@@ -19,6 +27,7 @@ describe('DeleteCloudHostDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDeleteCloudHost.mockResolvedValue({ data: { deleteCloudHost: true } });
+    mockUseQuery.mockReturnValue({ data: { cloudHostIssuesLinkages: [] }, error: undefined });
   });
 
   it.each(['STOPPED', 'FAILED'] as const)('%s 可删除，二次确认后调用 mutation', async (status) => {
@@ -78,5 +87,84 @@ describe('DeleteCloudHostDialog', () => {
 
     expect(mockDeleteCloudHost).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('存在联动配置时展示清理勾选项；勾选后先 cleanup 再删除', async () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        cloudHostIssuesLinkages: [
+          { id: 'l1' },
+          { id: 'l2' },
+        ],
+      },
+      error: undefined,
+    });
+    mockCleanupLabels.mockResolvedValue({
+      data: { cleanupCloudHostIssuesLabels: { deleted: ['a/b#x'], failed: [] } },
+    });
+    const onDeleted = vi.fn();
+
+    render(
+      <DeleteCloudHostDialog
+        open
+        controllerId="ctrl-1"
+        cloudHost={stoppedHost}
+        onClose={vi.fn()}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('同时删除已同步到仓库的标签'));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => {
+      expect(mockCleanupLabels).toHaveBeenCalledWith({ variables: { controllerId: 'ctrl-1' } });
+    });
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+    expect(mockDeleteCloudHost).toHaveBeenCalled();
+  });
+
+  it('清理失败项展示且不阻断删除（按钮变为仍要删除）', async () => {
+    mockUseQuery.mockReturnValue({
+      data: { cloudHostIssuesLinkages: [{ id: 'l1' }] },
+      error: undefined,
+    });
+    mockCleanupLabels.mockResolvedValue({
+      data: { cleanupCloudHostIssuesLabels: { deleted: [], failed: ['a/b#x'] } },
+    });
+    const onDeleted = vi.fn();
+
+    render(
+      <DeleteCloudHostDialog
+        open
+        controllerId="ctrl-1"
+        cloudHost={stoppedHost}
+        onClose={vi.fn()}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('同时删除已同步到仓库的标签'));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    expect(await screen.findByText('a/b#x')).toBeInTheDocument();
+    expect(mockDeleteCloudHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '仍要删除' }));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it('查询联动配置失败时降级为不展示勾选项（不阻断删除）', async () => {
+    mockUseQuery.mockReturnValue({ data: undefined, error: new Error('boom') });
+    render(
+      <DeleteCloudHostDialog
+        open
+        controllerId="ctrl-1"
+        cloudHost={stoppedHost}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText('同时删除已同步到仓库的标签')).not.toBeInTheDocument();
   });
 });

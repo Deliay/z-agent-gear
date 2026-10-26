@@ -101,6 +101,9 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMock }));
+vi.mock('./cloud-host-issues-linkage.js', () => ({
+  cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
+}));
 
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { CloudHost } from '../models/cloud-host.js';
@@ -117,6 +120,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
@@ -321,7 +325,19 @@ describe('CloudHostService', () => {
         harnessTypes: ['opencode'],
         billingAccountId: 'account-1',
         agentGearMinVersion: '2.6.0',
+        // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
+        expiresAt: expect.any(Date),
       });
+      expect(billingClient.createCloudHostApiKey).toHaveBeenCalledWith({
+        accountId: 'account-1',
+        ownerType: 'front_user',
+        ownerId: 'user-1',
+        name: 'cloud-host:my-cloud',
+        cloudHostId: expect.any(String),
+      });
+      expect(
+        vi.mocked(billingClient.createCloudHostApiKey).mock.calls[0][0],
+      ).not.toHaveProperty('expiresAt');
       expect(payload.workloadPlan).toEqual([
         { workloadId: 'preset-1', params: {}, implicit: false, required: true },
       ]);
@@ -800,6 +816,7 @@ describe('CloudHostService', () => {
         { $set: { deletedAt: expect.any(Date) } },
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(cloudHostIssuesLinkageService.deleteByController).toHaveBeenCalledWith(CONTROLLER_ID);
     });
 
     it('is idempotent for already soft-deleted hosts', async () => {

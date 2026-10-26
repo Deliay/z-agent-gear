@@ -62,11 +62,11 @@ function formatDeepseekSummary(
  * 准备 harness 环境（契约/计划 Phase 4）：
  *
  * 1. 校验 harness env（缺失项明确报错，只执行一次）；
- * 2. `mkdir -p ZAG_DEFAULT_WORKSPACE`（幂等，只执行一次）；
- * 3. 按 `ZAG_HARNESS_TYPES` 分流（缺省/空/全非法 → `['opencode']`）逐类型执行：
- *    - `opencode`：`opencode --version` 硬校验 → 合并 `opencode.jsonc`；
- *    - `deepseek_harness`：`dsh --version` 硬校验 → 合并 `cordis.patch.yml` / `.credentials.yaml`；
- * 4. 任一类型失败整体抛错（CLI 非零退出），已成功部分不回滚（幂等重跑）。
+ * 2. 按 `ZAG_HARNESS_TYPES` 分流（缺省/空/全非法 → `['opencode']`）逐类型 CLI 硬校验
+ *    （`opencode --version` / `dsh --version`），全部通过前不触碰文件系统；
+ * 3. `mkdir -p ZAG_DEFAULT_WORKSPACE`（幂等，只执行一次）；
+ * 4. 逐类型写入：`opencode` → 合并 `opencode.jsonc`；`deepseek_harness` → 合并
+ *    `cordis.patch.yml` / `.credentials.yaml`。任一类型失败整体抛错，已成功部分不回滚（幂等重跑）。
  *
  * 只对所选类型做 CLI 校验与写入：`deepseek_harness` 单选时不触碰 opencode（反之亦然）。
  * secret 只写入配置文件，不进入日志/错误/返回值。
@@ -80,13 +80,25 @@ export async function prepareHarness(
 
   const makeDir =
     options.makeDir ?? ((path: string) => mkdir(path, { recursive: true }).then(() => undefined));
+
+  const versions = new Map<PrepareHarnessType, string>();
+  for (const type of types) {
+    // init 脚本 export OPENCODE_CLI_VERSION / DSH_CLI_VERSION：agent-gear 侧做二次硬校验
+    //（opencode C-5 缺省不启用；dsh 预发布段精确比较）。
+    versions.set(
+      type,
+      type === 'opencode'
+        ? await verifyOpencodeCli(options.runner, sourceEnv.OPENCODE_CLI_VERSION)
+        : await verifyDshCli(options.runner, sourceEnv.DSH_CLI_VERSION),
+    );
+  }
+
   await makeDir(env.defaultWorkspace);
 
   const items: HarnessPrepareItemResult[] = [];
   for (const type of types) {
+    const version = versions.get(type)!;
     if (type === 'opencode') {
-      // init 脚本 export OPENCODE_CLI_VERSION：agent-gear 侧做二次硬校验（C-5，缺省不启用）。
-      const version = await verifyOpencodeCli(options.runner, sourceEnv.OPENCODE_CLI_VERSION);
       const config = await writeOpencodeConfig({ env, configDir: options.configDir });
       items.push({
         type,
@@ -99,8 +111,6 @@ export async function prepareHarness(
       continue;
     }
 
-    // init 脚本 export DSH_CLI_VERSION：agent-gear 侧做二次硬校验（预发布段精确比较）。
-    const version = await verifyDshCli(options.runner, sourceEnv.DSH_CLI_VERSION);
     const config = await writeDshConfig({
       env,
       dshHome: options.dshHome ?? defaultDshHome(sourceEnv),

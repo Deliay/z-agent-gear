@@ -203,6 +203,9 @@ flowchart LR
 - [[proposals/20261025-feat-github-native-webhook.md]] — GitHub 原生 Webhook 入口（POST /api/events/github/webhook 直连 pull_request_review，HMAC-SHA256 验签后归一化复用 PR 联动判定链）
 - [[proposals/20261025-fix-cloud-container-active-deadline.md]] — 云电脑取消 Job 最长运行时间限制（移除 activeDeadlineSeconds，expiresAt 仅落库留存）
 - [[proposals/20261025-feat-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（entrypoint 无限保活循环每轮自更新 + 服务端终止退出码 42；nvm/Node/agent-gear 下放 worker 用户 per-user nvm 安装、root 环境无 nodejs、setpriv 降权并显式构造 worker 环境、免密 sudo、预置脚本 sudo 化与 /home/worker 路径迁移、harness 版本门禁提升）
+- [[proposals/20261025-feat-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（CloudHostIssuesLinkage 多配置列表 + 自定义标签 start-{工作流名字} + IssueWorkflowTrigger 状态机、github-webhook 扩展 issues 事件、ensureIssueLabel/deleteIssueLabel/createIssueComment、销毁云电脑 cleanup 标签清理、复用 Git 项目设置编排与 completeHumanNode 完成首个人类节点）
+- [[proposals/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（引擎 onNodesTransitioned hook、Checks REST 客户端与 checks:write 权限、stale 编排、session:message 中央订阅 todo panel 同步 check-run 子项）
+- [[proposals/20261026-fix-cloud-host-key-lifecycle.md]] — 云电脑 LLM API Key 随容器回收（取消 24h 固定有效期，宿主非 RUNNING/删除/缺失即失效，迁移清理存量有效期）
 
 ### 实现计划（`plan/`）
 
@@ -259,5 +262,7 @@ flowchart LR
 - [[plan/20261023-feat-workflow-github-pr-callback.md]] — 工作流 GitHub Pull Request 联动（契约、PR Handler Registry 与迁移、追加提示词 key 去重、人类节点联动字段、linkPullRequest MCP 工具与生命周期注销、事件回调判定链与 review 驱动）实现计划
 - [[plan/20261023-feat-cloud-container-optimization-phase2.md]] — 云容器优化二期（创建期不预置默认工作区、Model.contextLength 经 OpenAI 兼容 /v1/models 的 context_length 下发、ephemeral-storage 10Gi）实现计划
 - [[plan/20261025-feat-kimi-code-harness.md]] — 增加工作负载「Kimi Code」（Harness）（HarnessType 扩展 KIMI_CODE 与预置工作负载 009、agent-gear 2.8.0 使用前登录闸门 `kimi login` stdio 判定、`harness:login` 事件族 + 用户级 SSE 即时弹窗、按 harnessTypes 细分版本门禁）实现计划
+- [[plan/20261025-feat-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（契约 CloudHostIssuesLinkage 多配置 + cleanup、issues 报文归一化与命中判定、IssueWorkflowTrigger 状态机（工作区准备→实例化→回评→首个人类节点自动完成）、deleteCloudHost 级联清理、agent-web Github 区块与销毁标签清理询问、T-GHIL*/T-GHI*/E2E-33+）实现计划
+- [[plan/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（契约同步字段、WorkflowPrHandler 同步字段、Checks 客户端与 checks:write 凭据、引擎 onNodesTransitioned hook 与 stale 编排、todo panel 中央订阅与子项同步、linkPullRequest 首同步、GraphQL 透出与前端展示、API/E2E 测试）实现计划
 - [[plan/20261025-feat-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（HarnessType 扩展 DEEPSEEK_HARNESS 与预置工作负载 010 双包固定版本安装 + `dsh --version` 硬校验、agent-gear 2.9.0 `harness prepare` 按 `ZAG_HARNESS_TYPES` 分流、平台渠道模型注入 `profiles/acp/cordis.patch.yml` + `.credentials.yaml` refs 与默认路由覆写、ACP `deepseek_harness` 探测/拉起、按 harnessTypes 细分版本门禁 2.9.0）实现计划
 - [[plan/20261025-feat-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户实现计划（entrypoint 无限保活循环：退避 + 每轮自更新 + 退出码 42/1/0 三分分流与 setpriv 降权显式构造 env；agent-gear `EXIT_SERVER_SHUTDOWN=42` 与 `/home/worker/workspace`；Dockerfile worker 用户 per-user nvm + 免密 sudo + root 无 nodejs；admin-api 迁移 011 预置脚本 sudo 化与 `dockerd -G worker`；harness 门禁 2.10.0）

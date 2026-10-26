@@ -45,7 +45,6 @@ async function seedCloudHost(input: {
 async function seedKey(input: {
   scope: 'account' | 'cloud_host';
   cloudHostId?: string;
-  expiresAt?: Date;
 }): Promise<string> {
   const accountId = new mongoose.Types.ObjectId().toString();
   if (input.scope === 'account') {
@@ -63,7 +62,6 @@ async function seedKey(input: {
     ownerId: 'probe-user',
     name: 'host-key',
     cloudHostId: input.cloudHostId!,
-    expiresAt: input.expiresAt ?? new Date(Date.now() + 60 * 60 * 1000),
   });
   return secret;
 }
@@ -96,11 +94,12 @@ describe('billingKeyAuth（CLOUD_HOST Key 实时失效）', () => {
     const res = await probe(secret);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      billing: { scope: string; cloudHostId: string; expiresAt: string };
+      billing: { scope: string; cloudHostId: string; expiresAt: string | null };
     };
     expect(body.billing.scope).toBe('cloud_host');
     expect(body.billing.cloudHostId).toBe(cloudHostId);
-    expect(typeof body.billing.expiresAt).toBe('string');
+    // 新 Key 不再写固定有效期（随容器回收）。
+    expect(body.billing.expiresAt).toBeNull();
   });
 
   it('T-BK5: 创建窗口 STARTING 拒绝（401 invalid_api_key）', async () => {
@@ -152,19 +151,17 @@ describe('billingKeyAuth（CLOUD_HOST Key 实时失效）', () => {
       ownerId: 'admin-1',
       name: 'admin-host-key',
       cloudHostId,
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
 
     const res = await probe(secret);
     expect(res.status).toBe(200);
   });
 
-  it('T-BK4: 过期 Key 拒绝', async () => {
+  it('T-BK4: 历史遗留的过期 Key 仍拒绝（兼容旧数据）', async () => {
     const cloudHostId = await seedCloudHost({ status: 'RUNNING' });
     const secret = await seedKey({
       scope: 'cloud_host',
       cloudHostId,
-      expiresAt: new Date(Date.now() + 60_000),
     });
     await mongoose.connection.db!.collection('billingapikeys').updateMany(
       { scope: 'cloud_host' },

@@ -274,6 +274,10 @@ describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
           nodeId: 'n1',
           nodeName: '评审',
           registeredAt: '2026-10-23T06:00:00Z',
+          checkRunUrl: 'https://github.com/Deliay/z-agent-gear/runs/1001',
+          lastSyncedCommitSha: 'deadbeefcafebabe',
+          lastSyncAt: '2026-10-25T00:00:00.000Z',
+          lastSyncError: '检查项写入权限不足',
         },
       ],
     };
@@ -283,6 +287,13 @@ describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
     fireEvent.click(screen.getByRole('button', { name: /关联 Pull Request（1）/ }));
     expect(screen.getByText('Deliay/z-agent-gear#264')).toBeInTheDocument();
     expect(screen.getByText('所属节点：评审')).toBeInTheDocument();
+    // check-run 同步信息（链接 / 最近同步 / 写入提交短 sha / 失败提示）
+    expect(
+      screen.getByText('https://github.com/Deliay/z-agent-gear/runs/1001'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/最近同步：2026-10-25T00:00:00.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/写入提交：deadbee/)).toBeInTheDocument();
+    expect(screen.getByText('检查项写入权限不足')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /追加提示词（1）/ }));
     expect(screen.getByText('github-pr')).toBeInTheDocument();

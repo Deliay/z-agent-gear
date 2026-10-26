@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
+import mongoose from 'mongoose';
 import { registerUser, createControllerKey, loginViaUI, createWorkspace, gqlRequest } from './helpers';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
@@ -2642,6 +2643,108 @@ test.describe('Workflow PR 联动 E2E', () => {
     await page.reload();
     await expect(nodeCard(page, 'PR 审核').getByText('执行中', { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(nodeCard(page, 'PR 审核').getByRole('button', { name: '编辑' })).toHaveCount(0);
+
+    env.controller.disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // E2E-CR1..3 Check Runs 同步展示（出站行为由 tests/api mock GitHub 覆盖）
+  // -------------------------------------------------------------------------
+
+  async function mongoDb() {
+    const uri = process.env.MONGODB_URI;
+    if (!uri) throw new Error('MONGODB_URI 未配置');
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    return mongoose.connection.db!;
+  }
+
+  async function seedCheckRunSync(
+    env: PrWorkflowEnv,
+    nodeKey: string,
+    fields: Record<string, unknown>,
+  ) {
+    const db = await mongoDb();
+    const node = env.instanceNodes.find((n) => n.nodeKey === nodeKey)!;
+    await db.collection('workflowprhandlers').updateOne(
+      {
+        workflowInstanceId: new mongoose.Types.ObjectId(env.instanceId),
+        nodeId: node.id,
+      },
+      { $set: fields },
+    );
+  }
+
+  test('E2E-CR1: 已同步节点展示「检查项」链接与最近同步信息', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未配置');
+    test.setTimeout(70000);
+    const env = await setupPrWorkflowEnv(page, 'ecr1', true);
+    const pr = nextE2ePr();
+    const { execStart } = await startPrExec(page, env);
+    await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
+
+    await seedCheckRunSync(env, 'exec', {
+      lastCheckRunUrl: 'https://github.com/Deliay/z-agent-gear/runs/4242',
+      lastWrittenCommitSha: 'abcdef1234567890',
+      lastSyncAt: new Date('2026-10-25T00:00:00Z'),
+      lastSyncedNodeStatus: 'RUNNING',
+      lastSyncError: null,
+    });
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+    const execCard = nodeCard(page, 'AI执行');
+    await expect(execCard.getByRole('link', { name: '检查项' })).toHaveAttribute(
+      'href',
+      'https://github.com/Deliay/z-agent-gear/runs/4242',
+    );
+
+    await page.getByRole('button', { name: /关联 Pull Request（1）/ }).click();
+    await expect(
+      page.getByRole('link', { name: 'https://github.com/Deliay/z-agent-gear/runs/4242' }),
+    ).toBeVisible();
+    await expect(page.getByText(/最近同步：2026-10-25T00:00:00/)).toBeVisible();
+    await expect(page.getByText(/写入提交：abcdef1/)).toBeVisible();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-CR2: 同步失败提示展示且不影响页面其它操作', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未配置');
+    test.setTimeout(70000);
+    const env = await setupPrWorkflowEnv(page, 'ecr2', true);
+    const pr = nextE2ePr();
+    const { execStart } = await startPrExec(page, env);
+    await linkPullRequest(page, env, execStart.mcpEndpoint!.token, execStart.sessionId, pr);
+
+    await seedCheckRunSync(env, 'exec', {
+      lastCheckRunUrl: null,
+      lastWrittenCommitSha: null,
+      lastSyncAt: null,
+      lastSyncError: '检查项写入权限不足',
+    });
+
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+    await page.getByRole('button', { name: /关联 Pull Request（1）/ }).click();
+    await expect(page.getByText('检查项写入权限不足')).toBeVisible();
+    // 页面其它操作不受影响：节点状态徽标与黑板仍可渲染
+    await expect(nodeCard(page, 'AI执行').getByText('执行中', { exact: true })).toBeVisible();
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-CR3: 未绑定 PR 的实例零变化（无检查项元素）', async ({ page }) => {
+    test.skip(!PR_CALLBACK_TOKEN, 'EVENT_CALLBACK_TOKEN 未配置');
+    test.setTimeout(60000);
+    const env = await setupPrWorkflowEnv(page, 'ecr3', false);
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${env.instanceId}`);
+
+    await page.getByRole('button', { name: /关联 Pull Request（0）/ }).click();
+    await expect(page.getByText('暂无关联')).toBeVisible();
+    await expect(page.getByRole('link', { name: '检查项' })).toHaveCount(0);
 
     env.controller.disconnect();
   });

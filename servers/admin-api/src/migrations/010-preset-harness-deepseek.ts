@@ -10,6 +10,8 @@ import { CloudWorkload } from '../models/cloud-workload.js';
  * - init 固定版本**双包同装**（`@deepseek-ai/dsh` 提供 `dsh` bin，`@deepseek-ai/dsh-acp-app`
  *   是 profile 组合包、无 bin）+ `dsh --version` 硬校验 + 默认工作区 + `agent-gear harness prepare`
  *   注入平台渠道模型（cordis.patch.yml + .credentials.yaml，dsh 侧无登录）；
+ *   prepare 以 `ZAG_HARNESS_TYPES=deepseek_harness` 限定本类型（多 harness 主机上脚本顺序执行，
+ *   裸调用会对尚未安装的其他类型 CLI 硬校验而误失败；存量脚本由 011 迁移刷新）；
  * - 已存在（presetKey 或精确 name 命中）则跳过并告警，**不覆盖管理员修改**。
  */
 export const name = '010-preset-harness-deepseek';
@@ -24,6 +26,44 @@ export const PRESET_KEY = 'harness-deepseek-harness';
 export const PRESET_NAME = 'DeepSeek Harness（Harness）';
 
 export const HARNESS_DEEPSEEK_INIT_SCRIPT = `#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
+
+# 1) 固定版本安装 / 版本收敛（缺失或版本不一致时重装，幂等）
+#    实测：@deepseek-ai/dsh-acp-app 是 profile 组合包（无 bin），dsh bin 由 @deepseek-ai/dsh 提供
+export DSH_CLI_VERSION="\${DSH_CLI_VERSION:-0.1.2-alpha.2}"
+export DSH_ACP_APP_VERSION="\${DSH_ACP_APP_VERSION:-0.1.2-alpha.2}"
+installed_version=""
+if command -v dsh >/dev/null 2>&1; then
+  installed_version="$(dsh --version 2>/dev/null | head -n 1 | awk '{print $NF}')" || installed_version=""
+  installed_version="\${installed_version#v}"
+fi
+if [ "\${installed_version}" != "\${DSH_CLI_VERSION}" ]; then
+  echo "Installing DeepSeek Harness \${DSH_CLI_VERSION} + acp-app \${DSH_ACP_APP_VERSION} (installed: \${installed_version:-none})"
+  npm install -g "@deepseek-ai/dsh@\${DSH_CLI_VERSION}" "@deepseek-ai/dsh-acp-app@\${DSH_ACP_APP_VERSION}"
+fi
+
+# 2) 硬校验：命令不可用或版本不一致均视为失败（安装成功但不可用 = 启动失败）
+actual_version="$(dsh --version | head -n 1 | awk '{print $NF}')"
+actual_version="\${actual_version#v}"
+if [ "\${actual_version}" != "\${DSH_CLI_VERSION}" ]; then
+  echo "DeepSeek Harness version mismatch: expected \${DSH_CLI_VERSION}, got \${actual_version:-unknown}" >&2
+  exit 1
+fi
+
+# 3) 默认工作区 + 平台渠道模型注入（cordis.patch.yml + .credentials.yaml）
+#    prepare 必须限定本类型：多 harness 主机上各脚本顺序执行，此时其他类型的 CLI
+#    可能尚未安装；裸调用会对 ZAG_HARNESS_TYPES 全部选中类型做 CLI 硬校验而误失败
+mkdir -p "\${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"
+ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare
+`;
+
+/**
+ * 010 初版脚本（裸 `agent-gear harness prepare`）：与历史落库文本逐字一致，仅供
+ * 011-refresh-harness-prepare-scope 做「未定制」严格相等判定，不再用于创建。
+ */
+export const HARNESS_DEEPSEEK_INIT_SCRIPT_V1 = `#!/usr/bin/env bash
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
