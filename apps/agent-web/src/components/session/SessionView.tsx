@@ -94,6 +94,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
   const [protocolMismatch, setProtocolMismatch] = useState<{ expectedVersion: number; agentVersion: number } | null>(null);
+  const [initialConfigError, setInitialConfigError] = useState<{ modeId?: string; modelId?: string; error: string; at?: string } | null>(null);
+  const lastInitialConfigToastRef = useRef<string | null>(null);
   const [currentModeId, setCurrentModeId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -249,6 +251,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         if (data.data.availableModels) mergeModelSources(data.data.availableModels);
         if (data.data.currentModelId) setCurrentModelId(data.data.currentModelId);
         if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
+        if (data.data.initialConfigError) setInitialConfigError(data.data.initialConfigError);
       } else if (data.type === 'config:changed') {
         if (data.data.configOptions != null) setConfigOptions(data.data.configOptions);
       } else if (data.type === 'mode:changed') {
@@ -273,6 +276,27 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       eventSource.close();
     };
   }, [id, updateCommands, handleSendMessage, mergeModelSources]);
+
+  // 初始模式/模型应用失败（acp:initial-config:result 经 session:status 透传）：
+  // 提示用户实际生效值，避免误以为所选模式/模型已生效。同一错误签名只提示一次。
+  useEffect(() => {
+    if (!initialConfigError) return;
+    const signature = `${initialConfigError.modeId ?? ''}|${initialConfigError.modelId ?? ''}|${initialConfigError.error}|${initialConfigError.at ?? ''}`;
+    if (lastInitialConfigToastRef.current === signature) return;
+    lastInitialConfigToastRef.current = signature;
+    const actualParts: string[] = [];
+    if (initialConfigError.modeId) {
+      const modeName = modes.find((mode) => mode.id === currentModeId)?.name ?? currentModeId;
+      actualParts.push(`当前生效模式：${modeName ?? '默认'}`);
+    }
+    if (initialConfigError.modelId) {
+      const modelName = availableModels.find((model) => model.id === currentModelId)?.name ?? currentModelId;
+      actualParts.push(`当前生效模型：${modelName ?? '默认'}`);
+    }
+    toast.error(`模式/模型设置未生效：${initialConfigError.error}`, {
+      description: actualParts.length ? actualParts.join('，') : undefined,
+    });
+  }, [initialConfigError, modes, currentModeId, availableModels, currentModelId]);
 
   // Resume timeout protection
   useEffect(() => {

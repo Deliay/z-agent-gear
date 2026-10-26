@@ -1657,6 +1657,7 @@ Session 状态变更时推送。恢复操作失败时携带 `error` 字段。Ses
 | `currentModel` | `AgentModelInfo` | 否 | 当前 LLM 模型信息 |
 | `availableModels` | `AgentModel[]` | 否 | 可用 LLM 模型列表，Session 创建/恢复成功后携带 |
 | `currentModelId` | `string` | 否 | 当前 LLM 模型 ID |
+| `initialConfigError` | `object` | 否 | 初始模式/模型确认失败信息（`{ modeId?, modelId?, error, at }`；确认全部生效时缺省，见 §2.39） |
 
 #### `mode:changed` 事件
 

@@ -374,6 +374,67 @@ describe('SessionSSEService', () => {
     });
   });
 
+  describe('broadcastStatus with initialConfigError', () => {
+    it('should include initialConfigError when provided', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'idling', undefined, {
+        initialConfigError: { modeId: 'plan', modelId: 'gpt-5', error: 'set model failed', at: '2026-10-26T00:00:00Z' },
+      });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"status"');
+      expect(lastWrite).toContain('"initialConfigError"');
+      expect(lastWrite).toContain('"set model failed"');
+    });
+
+    it('should omit initialConfigError when absent', async () => {
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      await sessionSSEService.addConnection('sess-1', 'user-1', res as never);
+
+      sessionSSEService.broadcastStatus('sess-1', 'idling', undefined, { currentModeId: 'code' });
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).not.toContain('"initialConfigError"');
+    });
+  });
+
+  describe('global status subscriber forwards initialConfigError', () => {
+    it('should forward initialConfigError from session:status Redis message to SSE', async () => {
+      vi.resetModules();
+      vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });
+      vi.mocked(sessionService.getMessages).mockResolvedValue([]);
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      const res = createMockResponse();
+
+      const { sessionSSEService: freshService } = await import('./session-sse.js');
+      await freshService.addConnection('sess-1', 'user-1', res as never);
+
+      mockRedis._emitMessage('session:status', JSON.stringify({
+        sessionId: 'sess-1',
+        status: 'idling',
+        initialConfigError: { modeId: 'plan', error: 'mode not supported', at: '2026-10-26T00:00:00Z' },
+      }));
+
+      const lastWrite = res._written.at(-1);
+      expect(lastWrite).toContain('"type":"status"');
+      expect(lastWrite).toContain('"initialConfigError"');
+      expect(lastWrite).toContain('"mode not supported"');
+    });
+  });
+
   describe('broadcastModeChanged', () => {
     it('should write mode:changed event to matching connections', async () => {
       vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' });

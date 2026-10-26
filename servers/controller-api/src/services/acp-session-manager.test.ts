@@ -1521,3 +1521,154 @@ describe('ACPSessionManager 登录超时守卫 (T-HLM8)', () => {
     }
   });
 });
+
+describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result)', () => {
+  let manager: ACPSessionManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    manager = new ACPSessionManager();
+  });
+
+  it('任一 status 为 failed：写 initialConfigError 并随 session:status extra 下发', async () => {
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+    vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'idling' }) } as never);
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modeId: 'plan',
+      modelId: 'gpt-5',
+      modeStatus: 'failed',
+      modelStatus: 'applied',
+      error: 'model not supported',
+    });
+
+    expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', {
+      initialConfigError: {
+        modeId: 'plan',
+        modelId: 'gpt-5',
+        error: 'model not supported',
+        at: expect.any(Date),
+      },
+    });
+    const statusCall = mockRedis.publish.mock.calls.find((c) => c[0] === 'session:status');
+    expect(statusCall).toBeDefined();
+    const payload = JSON.parse(statusCall![1]);
+    expect(payload.sessionId).toBe('sess-1');
+    expect(payload.status).toBe('idling');
+    expect(payload.initialConfigError.modeId).toBe('plan');
+    expect(payload.initialConfigError.modelId).toBe('gpt-5');
+    expect(payload.initialConfigError.error).toBe('model not supported');
+    expect(payload.initialConfigError.at).toBeDefined();
+  });
+
+  it('仅 modelStatus failed 时也落库并下发（任一 failed 即生效）', async () => {
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+    vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'running' }) } as never);
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modelId: 'gpt-5',
+      modelStatus: 'failed',
+      error: 'timeout',
+    });
+
+    expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', {
+      initialConfigError: {
+        modelId: 'gpt-5',
+        error: 'timeout',
+        at: expect.any(Date),
+      },
+    });
+    const payload = JSON.parse(
+      mockRedis.publish.mock.calls.find((c) => c[0] === 'session:status')![1],
+    );
+    expect(payload.status).toBe('running');
+    expect(payload.initialConfigError.error).toBe('timeout');
+  });
+
+  it('全部 applied：$unset initialConfigError，不发布 session:status', async () => {
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modeId: 'plan',
+      modelId: 'gpt-5',
+      modeStatus: 'applied',
+      modelStatus: 'applied',
+    });
+
+    expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', {
+      $unset: { initialConfigError: '' },
+    });
+    expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.anything());
+  });
+
+  it('缺失/空 sessionId：丢弃并 console.warn，不触库不发布', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await manager.handleInitialConfigResult({ modeStatus: 'failed' } as never);
+    await manager.handleInitialConfigResult({ sessionId: '', modeStatus: 'failed' });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+    expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('status 为契约外取值：丢弃并 console.warn，不触库不发布', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modeStatus: 'pending' as never,
+    });
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modelStatus: 'ok' as never,
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    for (const call of warnSpy.mock.calls) {
+      expect(String(call[0])).toContain('invalid status');
+    }
+    expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('error 超长时截断到 200 字符后落库', async () => {
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+    vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'idling' }) } as never);
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modeId: 'plan',
+      modeStatus: 'failed',
+      error: 'e'.repeat(500),
+    });
+
+    const updateData = vi.mocked(Session.findByIdAndUpdate).mock.calls[0][1] as {
+      initialConfigError: { error: string };
+    };
+    expect(updateData.initialConfigError.error).toHaveLength(200);
+  });
+
+  it('非字符串 modeId/modelId/error 不进入落库字段（白名单重建）', async () => {
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+    vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'idling' }) } as never);
+
+    await manager.handleInitialConfigResult({
+      sessionId: 'sess-1',
+      modeId: { evil: 'x'.repeat(10_000) } as never,
+      modeStatus: 'failed',
+      error: 42 as never,
+    });
+
+    const updateData = vi.mocked(Session.findByIdAndUpdate).mock.calls[0][1] as {
+      initialConfigError: Record<string, unknown>;
+    };
+    expect(Object.keys(updateData.initialConfigError).sort()).toEqual(['at']);
+  });
+});
