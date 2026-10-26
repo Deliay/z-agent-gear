@@ -148,7 +148,11 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     const runner = vi.fn<CommandRunner>(async () => ({ stdout: '0.1.2-alpha.2\n', stderr: '' }));
 
     const result = await prepareHarness({
-      env: { ...VALID_ENV, ZAG_HARNESS_TYPES: 'deepseek_harness' },
+      env: {
+        ...VALID_ENV,
+        ZAG_HARNESS_TYPES: 'deepseek_harness',
+        ZAG_DEFAULT_WORKSPACE: join(dir, 'workspace'),
+      },
       runner,
       configDir,
       dshHome,
