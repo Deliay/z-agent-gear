@@ -215,6 +215,23 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
 
+## 初始模式/模型应用确认（acp:initial-config:result）
+
+- `acp:start`/`acp:resume` 携带 `modeId`/`modelId` 时，bridge 在首条 prompt 前应用并**回读确认**（契约
+  `contracts/agent-session-websocket.md` §2.4「初始模式/模型应用确认」+ §2.39）。
+- `setMode`/`setModel` 的 config-option 通道复用 `setConfigOption`：响应全量快照刷新 `this.configOptions`
+  并回发 `acp:config-options`；确认要求对应 category 的 `currentValue === 请求值`。旧 `session/setMode`
+  通道无协议级回读，不抛错即视为 applied。
+- 失败重试一次（`INITIAL_CONFIG_RETRY_DELAY_MS`，默认 300ms）；仍失败记 `failed`，不再静默。
+- 缺少可用通道（session/new 未带 configOptions 且 model 无旧通道）时挂起等待：首个 `config_option_update`
+  到达后补应用并确认，上限 `INITIAL_CONFIG_PENDING_TIMEOUT_MS`（默认 10000ms），超时按 `failed` 收敛；
+  `stop()`/`handleError()` 清理 pending 不再补发。
+- 确认收敛时恰好 emit 一次 `acp:initial-config:result`；未请求 modeId/modelId 时不发送。
+- `start()` 的 `buildInitializedPayload` 在 apply 之后构造（session 快照由 `absorbSessionConfigOptions`
+  在 apply 前装载，`buildInitializedPayload` 不得再重复吸收旧快照，否则会覆盖生效值）。
+- 回归：`bridge.test.ts`（确认/重试/挂起/超时/时序）、`initial-config.integration.test.ts`
+  （真实 SDK + 假 Agent 进程，覆盖异步 `config_option_update` 补应用跨协议路径）。
+
 ## ACP 能力快照（capabilities.ts）
 
 - `src/acp/capabilities.ts` 是 FeatureId 全集（20 项）与平台支持矩阵的**唯一事实源**；其他位置不得复制清单或矩阵。

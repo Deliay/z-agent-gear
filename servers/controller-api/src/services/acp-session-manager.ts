@@ -6,6 +6,11 @@ import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
+// acp:initial-config:result 入参上限（controller payload 不可信）
+const INITIAL_CONFIG_ERROR_MAX_LENGTH = 200;
+const INITIAL_CONFIG_SESSION_ID_MAX_LENGTH = 200;
+const INITIAL_CONFIG_STATUSES = new Set(['applied', 'failed']);
+
 const EXTERNAL_SESSION_CACHE_TTL = 86400; // 24h
 // 单次 ack 等待窗口：2 次尝试合计 ~10s，与 agent-api waitForStopAck 的 10s 等待上限对齐
 const STOP_ACK_TIMEOUT_MS = 5_000;
@@ -399,6 +404,58 @@ export class ACPSessionManager {
 
   async stopSession(sessionId: string, reason: string): Promise<void> {
     return this.stopSessionWithAck(sessionId, reason);
+  }
+
+  /**
+   * acp:initial-config:result（契约 §2.39）：初始 mode/model 应用确认结果。
+   * 白名单校验（sessionId 非空、status 枚举合法）；任一 failed 写 Session.initialConfigError
+   * 并随 session:status extra 下发；全部 applied 时 $unset 该字段。
+   */
+  async handleInitialConfigResult(data: {
+    sessionId?: string;
+    modeId?: string;
+    modelId?: string;
+    modeStatus?: 'applied' | 'failed';
+    modelStatus?: 'applied' | 'failed';
+    error?: string;
+  }): Promise<void> {
+    if (
+      !data
+      || typeof data.sessionId !== 'string'
+      || data.sessionId.length === 0
+      || data.sessionId.length > INITIAL_CONFIG_SESSION_ID_MAX_LENGTH
+    ) {
+      console.warn('[ACP session] dropped initial-config result with invalid sessionId');
+      return;
+    }
+    const validStatus = (value: unknown): boolean =>
+      value === undefined || INITIAL_CONFIG_STATUSES.has(value as string);
+    if (!validStatus(data.modeStatus) || !validStatus(data.modelStatus)) {
+      console.warn('[ACP session] dropped initial-config result with invalid status: modeStatus=%j modelStatus=%j', data.modeStatus, data.modelStatus);
+      return;
+    }
+
+    const sessionId = data.sessionId;
+    const anyFailed = data.modeStatus === 'failed' || data.modelStatus === 'failed';
+
+    if (!anyFailed) {
+      await Session.findByIdAndUpdate(sessionId, { $unset: { initialConfigError: '' } });
+      return;
+    }
+
+    const initialConfigError: Record<string, unknown> = { at: new Date() };
+    if (typeof data.modeId === 'string' && data.modeId.length > 0) {
+      initialConfigError.modeId = data.modeId;
+    }
+    if (typeof data.modelId === 'string' && data.modelId.length > 0) {
+      initialConfigError.modelId = data.modelId;
+    }
+    if (typeof data.error === 'string' && data.error.length > 0) {
+      initialConfigError.error = data.error.slice(0, INITIAL_CONFIG_ERROR_MAX_LENGTH);
+    }
+    await Session.findByIdAndUpdate(sessionId, { initialConfigError });
+    const currentStatus = await this.getCurrentSessionStatus(sessionId);
+    await this.publishStatus(sessionId, currentStatus, undefined, { initialConfigError });
   }
 
   async handlePromptStart(sessionId: string): Promise<void> {
@@ -859,6 +916,7 @@ export class ACPSessionManager {
       if (extra.currentModelId) payload.currentModelId = extra.currentModelId;
       if (Array.isArray(extra.configOptions) && extra.configOptions.length) payload.configOptions = extra.configOptions;
       if (extra.promptCompleted === true) payload.promptCompleted = true;
+      if (extra.initialConfigError) payload.initialConfigError = extra.initialConfigError;
     }
     await redis.publish('session:status', JSON.stringify(payload));
   }

@@ -10,6 +10,14 @@ import {
 
 const ACP_PROTOCOL_VERSION = 1;
 
+/** 初始 mode/model 应用后回读确认失败时的重试间隔 */
+const INITIAL_CONFIG_RETRY_DELAY_MS = 300;
+
+function initialConfigPendingTimeoutMs(): number {
+  const raw = Number(process.env.INITIAL_CONFIG_PENDING_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 10_000;
+}
+
 export interface AcpBridgeOptions {
   sessionId: string;
   cwd: string;
@@ -234,6 +242,19 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     /** url 模式的 elicitationId：用于 Agent 自发 complete 时精确定位 pending 请求 */
     elicitationId?: string;
   }>();
+  /** 初始 mode/model 应用确认结果（契约 §2.39；仅请求过 modeId/modelId 时非空） */
+  private initialConfigResult: {
+    modeId?: string;
+    modelId?: string;
+    modeStatus?: 'applied' | 'failed';
+    modelStatus?: 'applied' | 'failed';
+    error?: string;
+  } | null = null;
+  /** apply 时缺少可用通道（configOptions 未随 session/new 到达）而挂起等待 config_option_update 的类目 */
+  private pendingInitialConfigKinds: Array<'mode' | 'model'> = [];
+  private initialConfigPendingTimer: ReturnType<typeof setTimeout> | null = null;
+  private initialConfigRetrying = false;
+  private initialConfigEmitted = false;
 
   // Capability snapshot from initialize / session/new / resume
   private configOptions: SessionConfigOptionData[] = [];
@@ -301,10 +322,11 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.acpSessionId = result.sessionId;
       this.initializing = false;
 
-      const initialized = this.buildInitializedPayload(result);
-      // 工作流节点配置的初始 mode/model：在首条 prompt 前应用，而非使用 harness 默认设置
+      this.absorbSessionConfigOptions(result);
+      // 工作流节点配置的初始 mode/model：在首条 prompt 前应用，而非使用 harness 默认设置；
+      // initialized payload 须在应用之后构造，携带确认后的生效值而非默认值
       await this.applyInitialModeModel();
-      this.emit('acp:initialized', initialized);
+      this.emit('acp:initialized', this.buildInitializedPayload(result));
       this.flushInputQueue();
     } catch (error) {
       this.initializing = false;
@@ -331,6 +353,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       this.acpSessionId = externalSessionId;
       this.initializing = false;
 
+      this.absorbSessionConfigOptions(result);
       // 初始 mode/model 在 acp:initialized 之前应用（时序同 start：initialized → resume:result → prompt 补发）
       await this.applyInitialModeModel();
       this.emit('acp:initialized', this.buildInitializedPayload(result));
@@ -346,6 +369,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         this.acpSessionId = result.sessionId;
         this.initializing = false;
 
+        this.absorbSessionConfigOptions(result);
         await this.applyInitialModeModel();
         this.emit('acp:initialized', this.buildInitializedPayload(result));
       } catch (fallbackError) {
@@ -362,6 +386,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     // 会话关闭：所有在途问询/授权必须先同步收敛（在 cancel/closeSession 的 5s race 之前），
     // 否则 race 窗口内 65s timer 仍可能迟到发 timeout。
     this.settlePendingRequests('session stopped by user');
+    this.clearPendingInitialConfig();
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (this.acpSessionId && this.connection) {
@@ -435,12 +460,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (!this.connection || !this.acpSessionId) return;
     const modeConfig = findConfigByCategory(this.configOptions, 'mode');
     if (modeConfig) {
-      // 配置项通道：Agent 提供 configOptions 时以配置项为准
-      await this.connection.setSessionConfigOption({
-        sessionId: this.acpSessionId,
-        configId: modeConfig.id,
-        value: modeId,
-      });
+      // 配置项通道：Agent 提供 configOptions 时以配置项为准；复用 setConfigOption
+      // 以获得响应快照刷新 + acp:config-options 回发（与 acp:set-config-option 行为一致）
+      await this.setConfigOption(modeConfig.id, modeId);
       return;
     }
     await this.connection.setSessionMode({
@@ -453,11 +475,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (!this.connection || !this.acpSessionId) return;
     const modelConfig = findConfigByCategory(this.configOptions, 'model');
     if (modelConfig) {
-      await this.connection.setSessionConfigOption({
-        sessionId: this.acpSessionId,
-        configId: modelConfig.id,
-        value: modelId,
-      });
+      await this.setConfigOption(modelConfig.id, modelId);
       return;
     }
     // SDK 1.x 已移除 unstable_setSessionModel：无 configOptions 的旧 Agent 无法走配置项通道。
@@ -465,25 +483,157 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     throw new Error('Model switching is not supported: agent does not expose a model config option');
   }
 
-  /** 会话初始化（session/new 之后、首条 prompt 之前）应用工作流节点配置的初始 mode/model */
+  /**
+   * 会话初始化（session/new 之后、首条 prompt 之前）应用工作流节点配置的初始 mode/model。
+   * 契约 §2.4「初始模式/模型应用确认」：应用 → 回读确认 → 重试一次 → 结果上报；
+   * apply 时缺少可用通道（configOptions 未随响应到达）则挂起，待 config_option_update 补应用。
+   */
   private async applyInitialModeModel(): Promise<void> {
+    if (!this.initialModeId && !this.initialModelId) return;
+    this.initialConfigResult = {
+      ...(this.initialModeId ? { modeId: this.initialModeId } : {}),
+      ...(this.initialModelId ? { modelId: this.initialModelId } : {}),
+    };
+
     if (this.initialModeId) {
-      try {
-        await this.setMode(this.initialModeId);
-        console.log(`[ACP bridge] session ${this.sessionId}: applied initial mode=${this.initialModeId}`);
-      } catch (err) {
-        // 应用初始 mode 失败不阻断会话：回退 harness 默认，仅记录日志
-        console.warn(`[ACP bridge] session ${this.sessionId}: failed to apply initial mode: ${(err as Error).message}`);
-      }
+      const error = await this.confirmInitialConfig('mode', this.initialModeId);
+      this.recordInitialConfigStatus('mode', error ? 'failed' : 'applied', error);
     }
     if (this.initialModelId) {
-      try {
-        await this.setModel(this.initialModelId);
-        console.log(`[ACP bridge] session ${this.sessionId}: applied initial model=${this.initialModelId}`);
-      } catch (err) {
-        console.warn(`[ACP bridge] session ${this.sessionId}: failed to apply initial model: ${(err as Error).message}`);
+      if (findConfigByCategory(this.configOptions, 'model')) {
+        const error = await this.confirmInitialConfig('model', this.initialModelId);
+        this.recordInitialConfigStatus('model', error ? 'failed' : 'applied', error);
+      } else {
+        // model 无旧通道可走：不判失败，挂起等待 config_option_update 补应用
+        this.pendingInitialConfigKinds.push('model');
       }
     }
+
+    if (this.pendingInitialConfigKinds.length > 0) {
+      // 挂起不阻塞会话：initialized 照常发出，结果事件在补确认/超时收敛后补发
+      this.armInitialConfigPendingTimeout();
+      return;
+    }
+    this.emitInitialConfigResult();
+  }
+
+  /**
+   * 应用并回读确认单个初始配置项，失败重试一次；返回 null 表示 confirmed，否则为失败原因。
+   * config-option 通道以 set_config_option 响应快照回读（currentValue === 请求值）；
+   * 旧 session/setMode 通道（无 config-option）无协议级回读，不抛错即视为 applied。
+   */
+  private async confirmInitialConfig(kind: 'mode' | 'model', requested: string): Promise<string | null> {
+    let lastError = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, INITIAL_CONFIG_RETRY_DELAY_MS));
+      }
+      try {
+        if (kind === 'mode') await this.setMode(requested);
+        else await this.setModel(requested);
+        const config = findConfigByCategory(this.configOptions, kind);
+        if (!config || config.currentValue === requested) {
+          console.log(`[ACP bridge] session ${this.sessionId}: applied initial ${kind}=${requested}`);
+          return null;
+        }
+        lastError = `agent confirmed "${config.currentValue ?? 'null'}" instead of "${requested}"`;
+      } catch (err) {
+        lastError = (err as Error).message;
+      }
+    }
+    console.warn(
+      `[ACP bridge] session ${this.sessionId}: failed to apply initial ${kind}: ` +
+      `requested=${requested}, ${lastError}`,
+    );
+    return `requested "${requested}": ${lastError}`;
+  }
+
+  private recordInitialConfigStatus(
+    kind: 'mode' | 'model',
+    status: 'applied' | 'failed',
+    error?: string | null,
+  ): void {
+    if (!this.initialConfigResult) return;
+    if (kind === 'mode') this.initialConfigResult.modeStatus = status;
+    else this.initialConfigResult.modelStatus = status;
+    if (status === 'failed' && error) {
+      this.initialConfigResult.error = this.initialConfigResult.error
+        ? `${this.initialConfigResult.error}; ${kind}: ${error}`
+        : `${kind}: ${error}`;
+    }
+  }
+
+  /** 挂起等待上限：超时后未确认的类目按 failed 收敛（契约 §2.4） */
+  private armInitialConfigPendingTimeout(): void {
+    if (this.initialConfigPendingTimer) return;
+    const timeoutMs = initialConfigPendingTimeoutMs();
+    this.initialConfigPendingTimer = setTimeout(() => {
+      this.initialConfigPendingTimer = null;
+      for (const kind of this.pendingInitialConfigKinds.splice(0)) {
+        const requested = kind === 'mode' ? this.initialModeId : this.initialModelId;
+        const error = `agent did not expose a ${kind} config option within ${timeoutMs}ms`;
+        console.warn(
+          `[ACP bridge] session ${this.sessionId}: failed to apply initial ${kind}: ` +
+          `requested=${requested}, ${error}`,
+        );
+        this.recordInitialConfigStatus(kind, 'failed', `requested "${requested}": ${error}`);
+      }
+      this.emitInitialConfigResult();
+    }, timeoutMs);
+  }
+
+  /** config_option_update 到达后对挂起的类目补应用 + 回读确认；全部收敛时上报结果 */
+  private async retryPendingInitialConfig(): Promise<void> {
+    if (
+      this.initialConfigEmitted ||
+      this.initialConfigRetrying ||
+      this.pendingInitialConfigKinds.length === 0
+    ) return;
+    this.initialConfigRetrying = true;
+    try {
+      for (const kind of this.pendingInitialConfigKinds.splice(0)) {
+        const requested = kind === 'mode' ? this.initialModeId : this.initialModelId;
+        if (!requested) continue;
+        if (!findConfigByCategory(this.configOptions, kind)) {
+          // 本次通知仍未暴露对应 category：继续挂起，等待后续通知或超时收敛
+          this.pendingInitialConfigKinds.push(kind);
+          continue;
+        }
+        const error = await this.confirmInitialConfig(kind, requested);
+        this.recordInitialConfigStatus(kind, error ? 'failed' : 'applied', error);
+      }
+      if (this.pendingInitialConfigKinds.length === 0) {
+        this.emitInitialConfigResult();
+      }
+    } finally {
+      this.initialConfigRetrying = false;
+    }
+  }
+
+  /** 确认收敛时恰好发送一次 acp:initial-config:result（契约 §2.39） */
+  private emitInitialConfigResult(): void {
+    if (this.initialConfigEmitted || !this.initialConfigResult) return;
+    this.initialConfigEmitted = true;
+    if (this.initialConfigPendingTimer) {
+      clearTimeout(this.initialConfigPendingTimer);
+      this.initialConfigPendingTimer = null;
+    }
+    const result = this.initialConfigResult;
+    this.socket.emit('acp:initial-config:result', {
+      sessionId: this.sessionId,
+      ...(result.modeId ? { modeId: result.modeId, modeStatus: result.modeStatus } : {}),
+      ...(result.modelId ? { modelId: result.modelId, modelStatus: result.modelStatus } : {}),
+      ...(result.error ? { error: result.error.slice(0, 200) } : {}),
+    });
+  }
+
+  /** 会话关闭/初始化失败后不再补发确认结果（语义同 settlePendingRequests） */
+  private clearPendingInitialConfig(): void {
+    if (this.initialConfigPendingTimer) {
+      clearTimeout(this.initialConfigPendingTimer);
+      this.initialConfigPendingTimer = null;
+    }
+    this.pendingInitialConfigKinds = [];
   }
 
   async setConfigOption(configId: string, value: string | boolean): Promise<acp.SetSessionConfigOptionResponse> {
@@ -636,11 +786,19 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     }
   }
 
+  /** session/new 与 session/resume 响应携带的 configOptions 是全量快照：非空时以其刷新本地状态 */
+  private absorbSessionConfigOptions(
+    result: acp.NewSessionResponse | acp.ResumeSessionResponse,
+  ): void {
+    const configOptions = extractConfigOptions(result.configOptions);
+    if (configOptions.length > 0) this.configOptions = configOptions;
+  }
+
   private buildInitializedPayload(
     result: acp.NewSessionResponse | acp.ResumeSessionResponse,
   ): AcpInitializedPayload {
-    const configOptions = extractConfigOptions(result.configOptions);
-    this.configOptions = configOptions.length > 0 ? configOptions : this.configOptions;
+    // this.configOptions 已由 absorbSessionConfigOptions（start/resume 在 apply 前）装载，
+    // apply 阶段的 set_config_option 响应快照也已刷新，此处不得再用 session/new 旧快照覆盖
 
     // 协议要求：响应含 configOptions 时以其为准（忽略 modes）
     const configModes = extractConfigModes(this.configOptions);
@@ -742,6 +900,8 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
           sessionId: this.sessionId,
           configOptions: this.configOptions,
         });
+        // session/new 未携带 configOptions 时挂起的初始 mode/model 在此补应用（契约 §2.4）
+        await this.retryPendingInitialConfig();
         break;
       case 'user_message_chunk':
         break;
@@ -967,6 +1127,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.stopped = true;
     // 进程崩溃同样必须收敛 pending：否则 65s timer 泄漏且迟发 timeout 事件
     this.settlePendingRequests('session failed');
+    this.clearPendingInitialConfig();
     // 已停止（含 silent 替换/对账）后迟到的初始化失败：不得再发 stopped，
     // 否则内联监听器/服务端会按 sessionId 删除新会话的注册与映射。
     if (wasStopped) return;
