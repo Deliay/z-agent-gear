@@ -15,6 +15,10 @@ import {
   toCloudHostSetupGraphQLError,
 } from '../../services/cloud-host-workload-service.js';
 import { cloudHostGithubService } from '../../services/cloud-host-github-service.js';
+import {
+  cloudHostIssuesLinkageService,
+  type CloudHostIssuesLinkageInput,
+} from '../../services/cloud-host-issues-linkage.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -113,6 +117,18 @@ export const cloudHostResolvers = {
         }
       }
       return mapOperation(doc as Record<string, unknown>);
+    },
+    cloudHostIssuesLinkages: async (
+      _parent: unknown,
+      args: { controllerId: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostIssuesLinkageService.list(userId, args.controllerId);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
     },
   },
   Mutation: {
@@ -225,6 +241,54 @@ export const cloudHostResolvers = {
         return await cloudHostWorkloadService.retryInstall(args.id, userId);
       } catch (err) {
         toCloudHostSetupGraphQLError(err);
+      }
+    },
+    createCloudHostIssuesLinkage: async (
+      _parent: unknown,
+      args: { input: CloudHostIssuesLinkageInput },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostIssuesLinkageService.create(userId, args.input);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
+    },
+    updateCloudHostIssuesLinkage: async (
+      _parent: unknown,
+      args: { id: string; input: CloudHostIssuesLinkageInput },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostIssuesLinkageService.update(userId, args.id, args.input);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
+    },
+    deleteCloudHostIssuesLinkage: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostIssuesLinkageService.remove(userId, args.id);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
+    },
+    cleanupCloudHostIssuesLabels: async (
+      _parent: unknown,
+      args: { controllerId: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostIssuesLinkageService.cleanup(userId, args.controllerId);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
       }
     },
   },

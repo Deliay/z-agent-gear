@@ -243,6 +243,20 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-31 零回归 | 未勾选联动 → AI 提示词无 PR 段；注入事件 → `NO_HANDLER` |
 | E2E-32 实例页编辑开关 | 未开始 HUMAN 节点可编辑联动开关并落库；节点开始后编辑入口消失 |
 
+### Cloud Host Issues Linkage E2E (`cloud-host-issues-linkage.spec.ts`)
+
+> fixture 驱动（`MONGODB_URI`）：直接写云电脑 / 已配置工作流 / 联动配置，不依赖真实 K8s 与 GitHub App；触发链路与标签同步由 `tests/api` T-GHIL/T-GHI 覆盖。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-33 配置列表与弹窗 | 「Github」tab → 列表展示工作流名/标签/仓库 → 加配置弹窗默认标签 `start-{工作流名字}` 与同步提示 |
+| E2E-34 校验引导 | 无可用工作流 → 展示「配置工作流」入口且保存禁用 |
+| E2E-35 触发链路 | **未实现**（需真实 Github App/仓库与云电脑）：状态机语义由 `issues-event-handler.runner.test.ts` 覆盖，webhook 判定链由 `tests/api` T-GHI1/2/4 覆盖 |
+| E2E-36 幂等与多配置 | **未实现**（同 E2E-35 环境依赖）：多配置与幂等由 `issues-event-handler.flow.test.ts` 与唯一索引单测覆盖 |
+| E2E-37 销毁清理 | 有配置的云电脑销毁时出现标签清理询问（1 条配置）；确认删除后云电脑从面板移除（实际标签删除依赖真实仓库，见 T-GHIL4/5） |
+| E2E-38 零回归 | **未单独建用例**：未配置联动云电脑与 `pull_request_review` 联动（E2E-27..32）由既有套件回归，`pull_request_review` 分支代码未改动 |
+
+
 ### ACP Permission Reminder E2E (`permission.spec.ts`)
 
 | 测试 | 描述 |

@@ -75,7 +75,11 @@ npm test
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
 | `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* 用例；缺失时整套跳过） | - |
-| `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* 整套依赖）HMAC-SHA256 验签密钥 | - |
+| `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* / T-GHI* 整套依赖）HMAC-SHA256 验签密钥 | - |
+| `CLOUD_HOST_CONTROLLER_ID` | 云电脑 Issues 联动配置套件（T-GHIL*）使用的 RUNNING 云电脑控制器 | - |
+| `CLOUD_HOST_WORKFLOW_ID` | 上述控制器下含 HUMAN 节点的已配置工作流（T-GHIL*） | - |
+| `GITHUB_TEST_REPO` | 已绑定 Github 账号的仓库（T-GHIL* 标签同步 / T-GHI* 全链路） | - |
+| `CLOUD_HOST_ISSUES_LABEL` | T-GHI* 全链路使用的联动标签名（需已建配置并同步到仓库） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
@@ -380,6 +384,24 @@ npm test
 | T-GHWH5 approved 驱动 | fake controller 关联 PR 后 approved → 人类节点 DONE，下游 AI 提示词含 A.2 文案 |
 | T-GHWH6 rejected 驱动 | changes_requested → 人类节点 REJECT、上游 REWORK，返工消息含 A.3 文案 |
 | T-GHWH7 重复投递 | 同一 review.id 第二次返回 `DUPLICATE_EVENT`，节点状态只变化一次 |
+
+### 云电脑 GitHub Issues 联动 (`agent-api/cloud-host-issues-linkage.test.ts` T-GHIL* / `agent-api/github-issues-webhook.test.ts` T-GHI*)
+
+> 配置套件需要 `CLOUD_HOST_CONTROLLER_ID`（RUNNING 云电脑）与 `CLOUD_HOST_WORKFLOW_ID`（含 HUMAN 的已配置工作流），标签同步相关用例另需 `GITHUB_TEST_REPO`（已绑定仓库）；缺失时相关用例跳过。Webhook 套件需要 `GITHUB_WEBHOOK_SECRET`（缺失整套跳过），全链路用例另需 `GITHUB_TEST_REPO` / `CLOUD_HOST_ISSUES_LABEL`。
+
+| 测试 | 描述 |
+|------|------|
+| T-GHIL0 鉴权 | 未认证查询返回 `Not authenticated` |
+| T-GHIL1 创建与列表 | 创建配置 → 列表含工作流名/标签/仓库；标签同步到仓库 |
+| T-GHIL2 校验矩阵 | 非云电脑 → `cloud host not found`；非法标签 → `invalid label name`；空仓库 → `at least one repo is required`；未授权仓库 → `repo not authorized: <fullName>` |
+| T-GHIL3 同步失败汇总 | **未实现**（需可令标签同步失败的真实仓库）：`label sync failed: <repo>` 且配置已保存、幂等重发不建重复行的语义由 `servers/agent-api/src/services/cloud-host-issues-linkage.test.ts`「部分仓库同步失败汇总报错（配置已保存）」「同标签同工作流同仓库重发视为幂等重试（不重复建行）」覆盖 |
+| T-GHIL4/5 修改删除与清理 | 改名不同步删旧标签；删除后标签保留；`cleanupCloudHostIssuesLabels` 返回 `deleted/failed` 清单并删除配置行 |
+| T-GHIL6 级联 | **未实现**（需先创建并可删除真实云电脑）：`deleteCloudHost` 后配置行清空的语义由 `servers/agent-api/src/services/cloud-host-service.test.ts`「soft deletes…」用例断言 `deleteByController(controllerId)` 覆盖 |
+| T-GHI1 鉴权与载荷 | 错误 HMAC → 401；非法载荷 → 400 detail；不受理 action → `UNSUPPORTED_EVENT`（`T-GHI1a~d`） |
+| T-GHI2 判定链 | 仓库未启用 → `REPO_NOT_ENABLED`；标签不中 → `NO_MATCHING_LINKAGE`；命中 → `CREATE_TRIGGER`（`T-GHI2a~c`） |
+| T-GHI3 全链路 | **未实现**：需真实 Github 仓库（App 已订阅 issues、标签可写），当前环境无法黑盒落地；工作区准备→实例化→回评→首人类节点自动完成的语义由 `servers/agent-api/src/services/workflow/issues-event-handler.runner.test.ts` 单测覆盖 |
+| T-GHI4 幂等 | 同 Issue 同标签重投 → `ALREADY_TRIGGERED`，实例数不变 |
+| T-GHI5 多配置 | **未实现**：同 T-GHI3 的环境依赖；多配置各自独立触发的判定语义由 `issues-event-handler.flow.test.ts`「多配置各自独立触发一次」与唯一索引单测覆盖 |
 
 ### ACP Permission Reminder API (`agent-api/permission.test.ts`)
 
