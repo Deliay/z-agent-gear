@@ -111,9 +111,11 @@ test.describe('Github workload E2E', () => {
     // 创建期不再预置默认工作区：无默认工作区时预填 ~/workspace（预览展开为 /root/workspace）
     await expect(dialog.getByLabel('前缀地址')).toHaveValue('~/workspace');
     await expect(dialog.getByLabel('前缀地址')).toHaveAttribute('placeholder', '例如：~/workspace');
-    // 前缀语义：最终地址 = <前缀>/<owner>/<repo>（前缀已预填 ~/workspace；未选仓库时以占位符展示）
-    await expect(dialog.getByText(/项目将 clone 到 <前缀>\/<User\/Repo>/)).toBeVisible();
-    await expect(dialog.getByText(/最终 clone 地址：/)).not.toBeVisible();
+    // 前缀语义：预览 = <归一后前缀>/<User/Repo>；预填 ~/workspace 归一为 /root/workspace，
+    // 故显示具体路径而非 `<前缀>` 占位（`<前缀>` 仅在前缀为空/非法、normalizedPrefix === null 时出现）；
+    // 未选仓库时最终地址行随之渲染，地址取值回退为 '—'
+    await expect(dialog.getByText(/项目将 clone 到 \/root\/workspace\/<User\/Repo>/)).toBeVisible();
+    await expect(dialog.getByText(/最终 clone 地址：—/)).toBeVisible();
 
     const githubCheckbox = dialog.getByRole('checkbox', { name: 'Github' });
     await expect(githubCheckbox).toBeChecked();
