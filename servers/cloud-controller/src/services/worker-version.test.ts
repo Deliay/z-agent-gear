@@ -21,7 +21,7 @@ describe('worker-version constants', () => {
     expect(SUPPORTED_MAJOR).toBe(2);
   });
 
-  it('T-V0b: kimi_code / deepseek_harness 按类型门禁分别为 2.8.0 / 2.9.0（全局 harness 门禁不上调）', () => {
+  it('T-V0b: 按类型常量保持 2.8.0 / 2.9.0（能力引入历史；落库下限恒为 2.10.0）', () => {
     expect(MIN_KIMI_HARNESS_WORKER_VERSION).toBe('2.8.0');
     expect(MIN_DEEPSEEK_HARNESS_WORKER_VERSION).toBe('2.9.0');
     expect(MIN_HARNESS_VERSION_BY_TYPE).toEqual({

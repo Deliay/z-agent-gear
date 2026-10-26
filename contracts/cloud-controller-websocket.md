@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 须 `>=2.5.0`（见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（恒 `>=2.10.0`，见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,7 +69,7 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 要求 `>=2.5.0`；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
+2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（恒 `>=2.10.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
 3. 查询是否存在待执行初始化脚本（`hasInitScripts`），据此计算 `initializing`。
 4. 将 socket 绑定到 `containerId`；无初始化脚本时容器状态置 `online` 并写入 `connectedAt`。
 5. 回复 `registered`（含可选 `initializing`）。
