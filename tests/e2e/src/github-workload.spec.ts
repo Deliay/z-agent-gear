@@ -56,7 +56,7 @@ test.describe('Github workload E2E', () => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const controller = await registerController(rawKey);
-    const firstPath = `/root/workspace/phase10-first-${Date.now().toString(36)}`;
+    const firstPath = `/home/worker/workspace/phase10-first-${Date.now().toString(36)}`;
     await createWorkspace(page, controller.controllerId, firstPath, token);
 
     await loginViaUI(page, username);
@@ -71,7 +71,7 @@ test.describe('Github workload E2E', () => {
     await dialog.getByRole('button', { name: '取消' }).click();
 
     // 模拟 Git 项目设置成功后新增的工作区（真实环境由 setup 写入）
-    const secondPath = `/root/workspace/phase10-git-${Date.now().toString(36)}`;
+    const secondPath = `/home/worker/workspace/phase10-git-${Date.now().toString(36)}`;
     await createWorkspace(page, controller.controllerId, secondPath, token);
 
     // 再次打开「+」：打开即 refetch 工作区，无需刷新页面

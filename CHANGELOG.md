@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### 修复
+
+- 修复新建会话/工作流拉起会话时设置的「模式与模型」偶现失效：agent-controller 应用初始 mode/model 后
+  经 ACP 协议回读确认（config-option 响应快照比对），失败重试一次；`session/new` 未携带 configOptions 时
+  挂起等待 `config_option_update` 补应用（上限 `INITIAL_CONFIG_PENDING_TIMEOUT_MS`，默认 10s），不再静默回退默认值
+- 新增 `acp:initial-config:result` 事件（Controller → Server）：确认收敛后恰好上报一次，
+  controller-api 校验落库 `initialConfigError` 并经 `session:status` 透传至前端，失败时前端 toast 提示实际生效值
+- 修复 initialized payload 先于应用构造导致落库默认值的问题（payload 现携带确认后的生效值）
+
 ## [1.1.4] - 2026-07-10
 
 ### ACP Server 扩展

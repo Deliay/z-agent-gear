@@ -33,6 +33,10 @@ src/
   `ElicitationManager.handleElicitationResolved` 做运行时校验：缺失/空 `sessionId` 或契约外 `reason` 直接丢弃并 `console.warn`；
   `requestId`/`detail` 截断到 200 字符后才入 Redis（controller payload 不可信）；payload 按白名单重建，
   非字符串 `detail`/未知字段直接丢弃（不能靠 `{...data}` 绕过截断）；`sessionId` 也有 200 上限。
+- `acp:initial-config:result`（controller → server，契约 §2.39）：初始 mode/model 应用确认结果，仅当 acp:start/acp:resume 携带 modeId/modelId 时收敛后恰好一次。
+  `ACPSessionManager.handleInitialConfigResult` 白名单校验（sessionId 非空、status ∈ applied|failed、error 截断 200，非法丢弃 + console.warn）；
+  任一 failed 写 `Session.initialConfigError = { modeId?, modelId?, error, at }` 并经 publishStatus extra 下发（session-sse 透传见 agent-api）；
+  全部 applied 时 `$unset` 该字段。
 - `handleElicitationRequest` 校验 requestId/sessionId/mode/message/`requestedSchema`（≤64 KiB）/`url`（url 模式仅 http(s)、≤2048）/`toolCallId`/`elicitationId`；
   重复 requestId 先清旧 timer；controller `disconnect` 调 `clearForSocket` 清理该 socket 的 pending 与 timer。
 - `acp:start:result.capabilities` 落库前有 64 KiB 体积防护：超限时保留 20 项 `features`，仅把 `raw` 替换为

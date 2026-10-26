@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection } = vi.hoisted(() => {
+const { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection, mockSetSessionConfigOption } = vi.hoisted(() => {
   const mockNewSession = vi.fn().mockResolvedValue({ sessionId: 'acp-sess-abc' });
   const mockResumeSession = vi.fn().mockResolvedValue({});
   const mockInitialize = vi.fn().mockResolvedValue({ protocolVersion: 1 });
+  const mockSetSessionConfigOption = vi.fn().mockResolvedValue({});
   const mockClientSideConnection = vi.fn(function () {
     return {
       initialize: mockInitialize,
@@ -13,10 +14,10 @@ const { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnect
       cancel: vi.fn().mockResolvedValue(undefined),
       closeSession: vi.fn().mockResolvedValue({}),
       setSessionMode: vi.fn().mockResolvedValue({}),
-      setSessionConfigOption: vi.fn().mockResolvedValue({}),
+      setSessionConfigOption: mockSetSessionConfigOption,
     };
   });
-  return { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection };
+  return { mockNewSession, mockResumeSession, mockInitialize, mockClientSideConnection, mockSetSessionConfigOption };
 });
 
 vi.mock('@agentclientprotocol/sdk', () => ({
@@ -378,6 +379,28 @@ describe('AcpSessionBridge - initial mode/model', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockSpawner: MockAcpSpawner;
 
+  function modeConfigOption(currentValue: string) {
+    return {
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue,
+      options: [{ value: 'build', name: 'Build' }, { value: 'code', name: 'Code' }],
+    };
+  }
+
+  function modelConfigOption(currentValue: string) {
+    return {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue,
+      options: [{ value: 'gpt-4', name: 'GPT-4' }, { value: 'gpt-5', name: 'GPT-5' }],
+    };
+  }
+
   function createBridge(opts: { modeId?: string; modelId?: string } = {}) {
     const options: { sessionId: string; cwd: string; initialModeId?: string; initialModelId?: string } = {
       sessionId: 'sess-1',
@@ -390,6 +413,7 @@ describe('AcpSessionBridge - initial mode/model', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSetSessionConfigOption.mockReset().mockResolvedValue({});
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
@@ -398,6 +422,7 @@ describe('AcpSessionBridge - initial mode/model', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    delete process.env.INITIAL_CONFIG_PENDING_TIMEOUT_MS;
   });
 
   it('should apply initial mode via setSessionMode after session/new', async () => {
@@ -411,47 +436,158 @@ describe('AcpSessionBridge - initial mode/model', () => {
       sessionId: 'acp-sess-abc',
       modeId: 'code',
     });
+    // 旧 session/setMode 通道无协议级回读：不抛错即视为 applied
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modeId: 'code',
+      modeStatus: 'applied',
+    });
   });
 
   it('should apply initial mode via setSessionConfigOption when agent exposes mode config option', async () => {
     mockNewSession.mockResolvedValueOnce({
       sessionId: 'acp-sess-abc',
-      configOptions: [
-        { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'build', options: [{ value: 'build', name: 'Build' }, { value: 'code', name: 'Code' }] },
-      ],
+      configOptions: [modeConfigOption('build')],
     });
+    // set_config_option 响应快照确认生效值
+    mockSetSessionConfigOption.mockResolvedValueOnce({ configOptions: [modeConfigOption('code')] });
     const bridge = createBridge({ modeId: 'code' });
 
     await bridge.start();
 
-    const conn = mockClientSideConnection.mock.results[0].value;
-    expect(conn.setSessionConfigOption).toHaveBeenCalledWith({
+    expect(mockSetSessionConfigOption).toHaveBeenCalledWith({
       sessionId: 'acp-sess-abc',
       configId: 'mode',
       value: 'code',
+    });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modeId: 'code',
+      modeStatus: 'applied',
     });
   });
 
   it('should apply initial model via setSessionConfigOption when agent exposes model config option', async () => {
     mockNewSession.mockResolvedValueOnce({
       sessionId: 'acp-sess-abc',
-      configOptions: [
-        { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gpt-4', options: [{ value: 'gpt-4', name: 'GPT-4' }, { value: 'gpt-5', name: 'GPT-5' }] },
-      ],
+      configOptions: [modelConfigOption('gpt-4')],
     });
+    mockSetSessionConfigOption.mockResolvedValueOnce({ configOptions: [modelConfigOption('gpt-5')] });
     const bridge = createBridge({ modelId: 'gpt-5' });
 
     await bridge.start();
 
-    const conn = mockClientSideConnection.mock.results[0].value;
-    expect(conn.setSessionConfigOption).toHaveBeenCalledWith({
+    expect(mockSetSessionConfigOption).toHaveBeenCalledWith({
       sessionId: 'acp-sess-abc',
       configId: 'model',
       value: 'gpt-5',
     });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modelId: 'gpt-5',
+      modelStatus: 'applied',
+    });
   });
 
-  it('should warn and continue the session when agent does not expose model config option', async () => {
+  it('initialized payload 携带 config-option 通道生效的 currentModeId/currentModelId（非 harness 默认值）', async () => {
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [modeConfigOption('build'), modelConfigOption('gpt-4')],
+    });
+    // 模拟有状态 Agent：set_config_option 应答的全量快照保留此前已生效的类目值
+    const state = { mode: 'build', model: 'gpt-4' };
+    mockSetSessionConfigOption.mockImplementation((req: { configId: string; value: string }) => {
+      if (req.configId === 'mode') state.mode = req.value;
+      if (req.configId === 'model') state.model = req.value;
+      return Promise.resolve({
+        configOptions: [modeConfigOption(state.mode), modelConfigOption(state.model)],
+      });
+    });
+    const bridge = createBridge({ modeId: 'code', modelId: 'gpt-5' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.start();
+
+    expect(initialized).toHaveBeenCalledWith(expect.objectContaining({
+      currentModeId: 'code',
+      currentModelId: 'gpt-5',
+    }));
+    // 应用成功须以响应快照刷新本地 configOptions 并回发 acp:config-options
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:config-options', expect.objectContaining({
+      sessionId: 'sess-1',
+    }));
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modeId: 'code',
+      modeStatus: 'applied',
+      modelId: 'gpt-5',
+      modelStatus: 'applied',
+    });
+  });
+
+  it('响应快照 currentValue 与请求值不一致 → 重试一次 → 仍不符 → emit failed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [modeConfigOption('build')],
+    });
+    // Agent 应答快照始终停留在旧值：回读确认不通过
+    mockSetSessionConfigOption.mockResolvedValue({ configOptions: [modeConfigOption('build')] });
+    const bridge = createBridge({ modeId: 'code' });
+
+    const startPromise = bridge.start();
+    await vi.runAllTimersAsync();
+    await startPromise;
+
+    expect(mockSetSessionConfigOption).toHaveBeenCalledTimes(2);
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', expect.objectContaining({
+      sessionId: 'sess-1',
+      modeId: 'code',
+      modeStatus: 'failed',
+      error: expect.stringContaining('code'),
+    }));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('requested=code'));
+  });
+
+  it('session/new 无 configOptions：config_option_update 到达后补应用 + 回读确认 + emit applied', async () => {
+    mockSetSessionConfigOption.mockResolvedValue({ configOptions: [modelConfigOption('gpt-5')] });
+    const bridge = createBridge({ modelId: 'gpt-5' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.start();
+
+    // 缺少应用通道时不判失败：initialized 照常发出，结果事件挂起等待
+    expect(initialized).toHaveBeenCalled();
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:initial-config:result', expect.anything());
+
+    await bridge.sessionUpdate({
+      sessionId: 'acp-sess-abc',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [modelConfigOption('gpt-4')],
+      },
+    } as never);
+
+    expect(mockSetSessionConfigOption).toHaveBeenCalledWith({
+      sessionId: 'acp-sess-abc',
+      configId: 'model',
+      value: 'gpt-5',
+    });
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', {
+      sessionId: 'sess-1',
+      modelId: 'gpt-5',
+      modelStatus: 'applied',
+    });
+
+    // 已收敛：挂起 timer 已清理，超时后不再补发第二次结果
+    mockSocket.emit.mockClear();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:initial-config:result', expect.anything());
+  });
+
+  it('agent 不暴露 model config-option：挂起超时后 warn 并 emit failed（不阻断会话）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge({ modelId: 'gpt-5' });
     const initialized = vi.fn();
@@ -459,11 +595,63 @@ describe('AcpSessionBridge - initial mode/model', () => {
 
     await bridge.start();
 
-    // session still initializes successfully; only a warning is logged
+    // 挂起不阻断：会话照常初始化
     expect(initialized).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sess-1',
     }));
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:initial-config:result', expect.anything());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', expect.objectContaining({
+      sessionId: 'sess-1',
+      modelId: 'gpt-5',
+      modelStatus: 'failed',
+      error: expect.any(String),
+    }));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('initial model'));
+  });
+
+  it('INITIAL_CONFIG_PENDING_TIMEOUT_MS 覆盖默认挂起等待上限', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.INITIAL_CONFIG_PENDING_TIMEOUT_MS = '1500';
+    const bridge = createBridge({ modelId: 'gpt-5' });
+
+    await bridge.start();
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:initial-config:result', expect.anything());
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', expect.objectContaining({
+      modelStatus: 'failed',
+    }));
+  });
+
+  it('apply 抛错（agent 拒绝 model 切换）→ 重试一次仍失败 → warn 并 emit failed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [modelConfigOption('gpt-4')],
+    });
+    mockSetSessionConfigOption.mockRejectedValue(new Error('model switching is not supported'));
+    const bridge = createBridge({ modelId: 'gpt-5' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    const startPromise = bridge.start();
+    await vi.runAllTimersAsync();
+    await startPromise;
+
+    expect(mockSetSessionConfigOption).toHaveBeenCalledTimes(2);
+    // 失败不阻断会话，但必须上报确认结果
+    expect(initialized).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-1' }));
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:initial-config:result', expect.objectContaining({
+      sessionId: 'sess-1',
+      modelId: 'gpt-5',
+      modelStatus: 'failed',
+      error: expect.stringContaining('model switching is not supported'),
+    }));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('requested=gpt-5'));
   });
 
   it('should not apply mode/model when not provided', async () => {
@@ -474,6 +662,26 @@ describe('AcpSessionBridge - initial mode/model', () => {
     const conn = mockClientSideConnection.mock.results[0].value;
     expect(conn.setSessionMode).not.toHaveBeenCalled();
     expect(conn.setSessionConfigOption).not.toHaveBeenCalled();
+    // 未携带 modeId/modelId 时不发送确认结果事件
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:initial-config:result', expect.anything());
+  });
+
+  it('start() 中 acp:initialized 在初始 mode/model 应用之后发出', async () => {
+    mockNewSession.mockResolvedValueOnce({
+      sessionId: 'acp-sess-abc',
+      configOptions: [modeConfigOption('build')],
+    });
+    mockSetSessionConfigOption.mockResolvedValueOnce({ configOptions: [modeConfigOption('code')] });
+    const bridge = createBridge({ modeId: 'code' });
+    const initialized = vi.fn();
+    bridge.on('acp:initialized', initialized);
+
+    await bridge.start();
+
+    expect(mockSetSessionConfigOption).toHaveBeenCalled();
+    expect(mockSetSessionConfigOption.mock.invocationCallOrder[0]).toBeLessThan(
+      initialized.mock.invocationCallOrder[0],
+    );
   });
 
   it('resume: should apply initial mode before acp:initialized (rework 时序受控)', async () => {

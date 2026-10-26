@@ -133,7 +133,7 @@ beforeEach(() => {
   );
   h.workspaceFindOne.mockReturnValue(lean(null));
   h.findHost.mockResolvedValue({ status: 'RUNNING', userId: USER_ID });
-  h.defaultWorkspace.mockResolvedValue('/root/workspace');
+  h.defaultWorkspace.mockResolvedValue('/home/worker/workspace');
   h.resolveRepoAccount.mockResolvedValue('acc-1');
   h.comment.mockResolvedValue(99);
 });
@@ -175,14 +175,14 @@ describe('IssuesTriggerRunner PENDING_WORKSPACE', () => {
       expect.objectContaining({
         controllerId: CONTROLLER_ID,
         repoFullName: 'Deliay/z-agent-gear',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
         createSession: false,
       }),
     );
     expect(h.ensureWorkspace).toHaveBeenCalledWith(
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/Deliay/z-agent-gear',
+      '/home/worker/workspace/Deliay/z-agent-gear',
     );
     expect(h.triggerUpdateOne).toHaveBeenCalledWith(
       { _id: TRIGGER_ID, status: 'PENDING_WORKSPACE' },

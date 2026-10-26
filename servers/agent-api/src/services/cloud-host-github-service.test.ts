@@ -93,7 +93,7 @@ const operation = {
   containerId: CONTAINER_ID,
   accountId: ACCOUNT_ID,
   repoFullName: 'owner/repo',
-  targetPath: '/root/workspace/repo',
+  targetPath: '/home/worker/workspace/repo',
   status: 'RUNNING',
   steps: [
     { key: 'workload', status: 'PENDING', detail: null },
@@ -128,14 +128,14 @@ describe('CloudHostGithubService', () => {
         workloadName: 'Git 项目设置',
         githubAuth: true,
         source: 'system',
-        params: { repoFullName: 'owner/repo', targetPath: '/root/workspace/repo' },
+        params: { repoFullName: 'owner/repo', targetPath: '/home/worker/workspace/repo' },
       }),
     );
     expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalled();
     expect(ensureWorkspace).toHaveBeenCalledWith(
       CONTROLLER_ID,
       USER_ID,
-      '/root/workspace/repo',
+      '/home/worker/workspace/repo',
     );
     expect(createSession).toHaveBeenCalledWith(USER_ID, {
       controllerId: CONTROLLER_ID,
@@ -419,12 +419,12 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: ' User/Repo ',
-        targetPath: '/root/workspace/',
+        targetPath: '/home/worker/workspace/',
       });
 
       expect(created[0]).toMatchObject({
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace/User/Repo',
+        targetPath: '/home/worker/workspace/User/Repo',
       });
     });
 
@@ -436,7 +436,7 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
         createSession: false,
       });
 
@@ -455,7 +455,7 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
       });
 
       expect(created[0].steps).toEqual([
@@ -472,9 +472,9 @@ describe('CloudHostGithubService', () => {
         controllerId: CONTROLLER_ID,
         accountId: ACCOUNT_ID,
         repoFullName: 'User/Repo',
-        targetPath: '/root/workspace',
+        targetPath: '/home/worker/workspace',
       });
-      expect(created[0].targetPath).toBe('/root/workspace/User/Repo');
+      expect(created[0].targetPath).toBe('/home/worker/workspace/User/Repo');
     });
 
     it('T-CHG-P7: ~ 前缀展开后落库为绝对路径', async () => {
@@ -499,7 +499,7 @@ describe('CloudHostGithubService', () => {
           containerId: CONTAINER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'User/Repo',
-          targetPath: '/root/workspace/User/Repo',
+          targetPath: '/home/worker/workspace/User/Repo',
           status: 'RUNNING',
           steps: [
             { key: 'workload', status: 'PENDING', detail: null },
@@ -515,19 +515,19 @@ describe('CloudHostGithubService', () => {
       expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalledWith(
         { controllerId: CONTROLLER_ID },
         expect.objectContaining({
-          $set: expect.objectContaining({ targetPath: '/root/workspace/User/Repo' }),
+          $set: expect.objectContaining({ targetPath: '/home/worker/workspace/User/Repo' }),
         }),
         { upsert: true, new: true },
       );
       expect(controllerClient.startRuntimeScript).toHaveBeenCalledWith(
         expect.objectContaining({
-          params: { repoFullName: 'User/Repo', targetPath: '/root/workspace/User/Repo' },
+          params: { repoFullName: 'User/Repo', targetPath: '/home/worker/workspace/User/Repo' },
         }),
       );
       expect(ensureWorkspace).toHaveBeenCalledWith(
         CONTROLLER_ID,
         USER_ID,
-        '/root/workspace/User/Repo',
+        '/home/worker/workspace/User/Repo',
       );
     });
 
@@ -560,7 +560,7 @@ describe('CloudHostGithubService', () => {
           controllerId: CONTROLLER_ID,
           accountId: ACCOUNT_ID,
           repoFullName: 'owner/..',
-          targetPath: '/root/workspace',
+          targetPath: '/home/worker/workspace',
         }),
       ).rejects.toThrow('仓库格式应为 owner/repo');
 

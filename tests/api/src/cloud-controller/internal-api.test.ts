@@ -117,7 +117,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         modelBaseUrl: 'http://admin-api:8002/v1',
         modelIds: '["model-a"]',
         modelContextLengths: '{"model-a":128000}',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       };
 
       let containerId: string | null = null;
@@ -666,7 +666,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         modelApiKey: 'zag_sk_gate_secret',
         modelBaseUrl: 'http://admin-api:8002/v1',
         modelIds: '["model-a"]',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       },
     };
   }
@@ -699,17 +699,17 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
   });
 
   it.skipIf(!HAS_MONGO)(
-    'T-IC-HARNESS2: per-type version gate (kimi_code→2.8.0, deepseek_harness→2.9.0, opencode→2.6.0)',
+    'T-IC-HARNESS2: per-type version gate (all harness combos converge to 2.10.0)',
     async () => {
       const db = await mongoDb();
       expect(db).not.toBeNull();
 
       const cases: Array<{ types: string[]; expected: string }> = [
-        { types: ['kimi_code'], expected: '2.8.0' },
-        { types: ['deepseek_harness'], expected: '2.9.0' },
-        { types: ['kimi_code', 'deepseek_harness'], expected: '2.9.0' },
-        { types: ['opencode', 'kimi_code'], expected: '2.8.0' },
-        { types: ['opencode'], expected: '2.6.0' },
+        { types: ['kimi_code'], expected: '2.10.0' },
+        { types: ['deepseek_harness'], expected: '2.10.0' },
+        { types: ['kimi_code', 'deepseek_harness'], expected: '2.10.0' },
+        { types: ['opencode', 'kimi_code'], expected: '2.10.0' },
+        { types: ['opencode'], expected: '2.10.0' },
       ];
 
       for (const testCase of cases) {

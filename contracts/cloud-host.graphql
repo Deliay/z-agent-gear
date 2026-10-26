@@ -54,7 +54,7 @@ type CloudHost {
   # 软删除时间；非空表示已从列表隐藏。删除后该记录不再通过 Controller.cloudHost 返回，
   # 会话/消息留档保留；前端只读判定应使用 Session.cloudHost（可返回软删对象）。
   deletedAt: String
-  # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
+  # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /home/worker/workspace）
   defaultWorkspace: String!
   # 是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置 clone 成功后即创建默认工作区并回写 workspaceId（与 createSession 开关及会话创建成败无关）并翻转为 true。
   # 用于区分「未创建工作区」与「默认会话创建失败」。

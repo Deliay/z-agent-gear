@@ -12,10 +12,10 @@
 export const MIN_WORKER_VERSION = '2.2.0';
 
 /**
- * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供。
+ * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供（worker 用户 + 保活退出码 42 自 2.10.0 起）。
  * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
  */
-export const MIN_HARNESS_WORKER_VERSION = '2.6.0';
+export const MIN_HARNESS_WORKER_VERSION = '2.10.0';
 
 /** Kimi Code harness 最低兼容版本：使用前 `kimi login` 登录闸门自 2.8.0 起提供。 */
 export const MIN_KIMI_HARNESS_WORKER_VERSION = '2.8.0';
@@ -25,7 +25,7 @@ export const MIN_DEEPSEEK_HARNESS_WORKER_VERSION = '2.9.0';
 
 /**
  * 按 harness 类型细分的最低版本（计划 §3 A7）：仅列出的类型才上调，
- * 未列出的类型沿用 `MIN_HARNESS_WORKER_VERSION`（仅 opencode 的运行仍为 2.6.0）。
+ * 未列出的类型沿用 `MIN_HARNESS_WORKER_VERSION`（仅 opencode 的运行仍为 2.10.0）。
  */
 export const MIN_HARNESS_VERSION_BY_TYPE: Record<string, string> = {
   kimi_code: MIN_KIMI_HARNESS_WORKER_VERSION,
@@ -138,8 +138,8 @@ export function maxWorkerVersion(a: string, b: string, fallback = MIN_HARNESS_WO
 /**
  * 按 harness 类型取最低版本（计划 §3 A7）：逐类型与
  * `MIN_HARNESS_VERSION_BY_TYPE` 比对后取最大，缺省/未知类型回退
- * `MIN_HARNESS_WORKER_VERSION`（仅 opencode → 2.6.0；含 kimi_code → 2.8.0；
- * 含 deepseek_harness → 2.9.0）。
+ * `MIN_HARNESS_WORKER_VERSION`。以 2.10.0 为底取 max 后，任何 harness 组合的结果恒为
+ * `2.10.0`（逐类型常量仅记录能力引入历史）。
  */
 export function harnessMinVersion(harnessTypes: readonly string[]): string {
   let minimum: string = MIN_HARNESS_WORKER_VERSION;

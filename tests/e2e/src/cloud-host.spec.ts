@@ -187,7 +187,7 @@ test.describe('Cloud Host E2E', () => {
     try {
       await page.getByRole('button', { name: '新建云电脑' }).click();
       const dialog = page.getByRole('dialog');
-      // 「创建默认工作区」勾选项已舍弃：创建期一律不预置 /root/workspace
+      // 「创建默认工作区」勾选项已舍弃：创建期一律不预置 /home/worker/workspace
       await expect(dialog.getByRole('checkbox', { name: /创建默认工作区/ })).toHaveCount(0);
 
       await dialog.locator('#cloud-host-name').fill(hostName);
@@ -231,7 +231,7 @@ test.describe('Cloud Host E2E', () => {
       expect(running?.status).toBe('RUNNING');
       expect(running?.defaultSessionId).toBeNull();
 
-      // 无默认工作区时预填 ~/workspace（服务端展开为 /root/workspace）
+      // 无默认工作区时预填 ~/workspace（服务端展开为 /home/worker/workspace）
       await controllerRow.getByLabel('Github 项目设置').click();
       const githubDialog = page.getByRole('dialog');
       await expect(githubDialog.getByLabel('前缀地址')).toHaveValue('~/workspace');
@@ -253,12 +253,12 @@ test.describe('Cloud Host E2E', () => {
       // 添加工作区后，无工作区提示随「控制器已有工作区」条件消失，并可发起新建会话。
       // 说明：真实 GitHub 绑定与完整开工链路（在线 worker/controller）需外部账号与真实集群，
       // 本地 K8S_ENABLED=false 仅覆盖到「工作区添加 + 新建会话入口可用」，其余由真实集群手工验收。
-      await createWorkspace(page, host!.controllerId, '/root/workspace', token);
+      await createWorkspace(page, host!.controllerId, '/home/worker/workspace', token);
       const afterWorkspace = await gqlRequest(page, WORKSPACE_LIST, undefined, token);
       expect(
         ((await afterWorkspace.json()).data?.workspaces ?? []).some(
           (workspace: { controllerId: string; path: string }) =>
-            workspace.controllerId === host!.controllerId && workspace.path === '/root/workspace',
+            workspace.controllerId === host!.controllerId && workspace.path === '/home/worker/workspace',
         ),
       ).toBe(true);
       await page.reload();
@@ -396,7 +396,7 @@ async function seedProjectSession(
     acpServerType: 'opencode',
     status: 'idling',
     title: 'phase10/repo',
-    cwd: '/root/workspace/phase10-owner/repo',
+    cwd: '/home/worker/workspace/phase10-owner/repo',
     createdAt: new Date(),
     updatedAt: new Date(),
   });
