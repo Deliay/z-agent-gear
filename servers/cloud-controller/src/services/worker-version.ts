@@ -138,8 +138,8 @@ export function maxWorkerVersion(a: string, b: string, fallback = MIN_HARNESS_WO
 /**
  * 按 harness 类型取最低版本（计划 §3 A7）：逐类型与
  * `MIN_HARNESS_VERSION_BY_TYPE` 比对后取最大，缺省/未知类型回退
- * `MIN_HARNESS_WORKER_VERSION`（仅 opencode → 2.10.0；含 kimi_code → 2.8.0；
- * 含 deepseek_harness → 2.9.0）。
+ * `MIN_HARNESS_WORKER_VERSION`。以 2.10.0 为底取 max 后，任何 harness 组合的结果恒为
+ * `2.10.0`（逐类型常量仅记录能力引入历史）。
  */
 export function harnessMinVersion(harnessTypes: readonly string[]): string {
   let minimum: string = MIN_HARNESS_WORKER_VERSION;
