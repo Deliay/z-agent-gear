@@ -542,7 +542,7 @@ npm test
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
-| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（kimi→2.8.0、仅 opencode→2.6.0，需 `MONGODB_URI`） |
+| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（全局基线 2.10.0；kimi/deepseek/opencode 组合均为 2.10.0，需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
