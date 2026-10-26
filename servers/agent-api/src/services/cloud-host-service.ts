@@ -267,7 +267,7 @@ export class CloudHostService {
 
         await controllerService.createCloudHostController(userId, controllerId, name, keyId);
 
-        // 创建期不再预置 /root/workspace：默认工作区只在「Git 项目设置」初始化
+        // 创建期不再预置 /home/worker/workspace：默认工作区只在「Git 项目设置」初始化
         // Github 项目时由 setup 按 targetPath 幂等创建（ensureWorkspace），
         // 因此 workspaceId 保持 null 落库，就绪后也不会自动建默认会话。
 

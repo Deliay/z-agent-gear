@@ -117,7 +117,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         modelBaseUrl: 'http://admin-api:8002/v1',
         modelIds: '["model-a"]',
         modelContextLengths: '{"model-a":128000}',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       };
 
       let containerId: string | null = null;
@@ -666,7 +666,7 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
         modelApiKey: 'zag_sk_gate_secret',
         modelBaseUrl: 'http://admin-api:8002/v1',
         modelIds: '["model-a"]',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       },
     };
   }

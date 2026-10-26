@@ -214,7 +214,7 @@ Controller 重连注册成功后，Server 立即下发此事件。
 | `0` | **自发 / 信号退出**：`SIGINT` / `SIGTERM`、服务端主动 shutdown 收尾外的正常收尾 | 保活重启（被 `SIGTERM` 命中时与 K8s 删除 Pod 的入口信号并发，入口自身置位后不再重启） |
 | `1` | **失败类**：`version_mismatch:*`、`error:*`（除 `INVALID_TOKEN`）、必须工作负载初始化失败 | 退避后自更新并重启 |
 
-判定口径：信号前置 → 服务端终止覆盖失败（`INVALID_TOKEN` 虽匹配 `error:` 前缀仍归 `42`）→ 失败 `1` → 其余 `42`。分类实现为共享模块 `packages/agent-controller/src/exit-codes.ts`（`isFailureShutdownReason` 语义逐字不变）。
+判定口径：信号前置 → 服务端终止覆盖失败（`INVALID_TOKEN` 虽匹配 `error:` 前缀仍归 `42`）→ 失败 `1` → 其余 `42`。分类实现为共享模块 `packages/agent-controller/src/exit-codes.ts`（`EXIT_SERVER_SHUTDOWN = 42`；`isFailureShutdownReason` 语义逐字不变）。
 
 > 被 `SIGTERM` 命中后客户端正常收尾退出 `0`，容器内保活将其重新拉起（被误杀恢复）；K8s 删除 Pod 时入口自身同时收到 `SIGTERM` 并置位 `shutting_down`，不再重启。
 

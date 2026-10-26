@@ -170,7 +170,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     expect(
       workspaces.data.workspaces.some(
         (workspace: { controllerId: string; path: string }) =>
-          workspace.controllerId === host.controllerId && workspace.path === '/root/workspace',
+          workspace.controllerId === host.controllerId && workspace.path === '/home/worker/workspace',
       ),
     ).toBe(false);
     const keys = await gql(KEYS, undefined, token);
@@ -624,7 +624,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       userId: new mongoose.Types.ObjectId(userId),
       controllerId,
       name: 'workspace',
-      path: '/root/workspace',
+      path: '/home/worker/workspace',
       isEnabled: true,
       createdAt: now,
       updatedAt: now,
@@ -791,7 +791,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
-            targetPath: '/root/workspace',
+            targetPath: '/home/worker/workspace',
             createSession: false,
           },
         },
@@ -825,7 +825,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
-            targetPath: '/root/workspace',
+            targetPath: '/home/worker/workspace',
           },
         },
         token,

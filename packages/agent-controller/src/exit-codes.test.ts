@@ -62,3 +62,12 @@ describe('exit codes (contract §3.7)', () => {
     expect(resolveShutdownExitCode('error: INVALID_TOKEN')).toBe(42);
   });
 });
+
+describe('contract anchor', () => {
+  it('T-EC7: contract documents exit code 42', async () => {
+    const { readFileSync } = await import('node:fs');
+    const contract = readFileSync(new URL('../../../contracts/agent-controller-websocket.md', import.meta.url), 'utf8');
+    expect(contract).toContain('`42`');
+    expect(contract).toContain('EXIT_SERVER_SHUTDOWN');
+  });
+});

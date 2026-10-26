@@ -17,7 +17,7 @@ import {
 describe('worker-version constants', () => {
   it('T-V0: 最低版本与 supported major 是代码常量', () => {
     expect(MIN_WORKER_VERSION).toBe('2.2.0');
-    expect(MIN_HARNESS_WORKER_VERSION).toBe('2.6.0');
+    expect(MIN_HARNESS_WORKER_VERSION).toBe('2.10.0');
     expect(SUPPORTED_MAJOR).toBe(2);
   });
 
@@ -32,20 +32,20 @@ describe('worker-version constants', () => {
 });
 
 describe('harnessMinVersion', () => {
-  it('T-V6: 仅 opencode 维持 2.6.0，含 kimi_code 取最大 2.8.0，未知类型回退 2.6.0', () => {
-    expect(harnessMinVersion(['opencode'])).toBe('2.6.0');
-    expect(harnessMinVersion(['opencode', 'kimi_code'])).toBe('2.8.0');
-    expect(harnessMinVersion(['kimi_code'])).toBe('2.8.0');
-    expect(harnessMinVersion(['kimi_code', 'opencode'])).toBe('2.8.0');
-    expect(harnessMinVersion(['bogus'])).toBe('2.6.0');
-    expect(harnessMinVersion([])).toBe('2.6.0');
+  it('T-V6: 仅 opencode 为 2.10.0，含 kimi_code 仍取最大 2.10.0', () => {
+    expect(harnessMinVersion(['opencode'])).toBe('2.10.0');
+    expect(harnessMinVersion(['opencode', 'kimi_code'])).toBe('2.10.0');
+    expect(harnessMinVersion(['kimi_code'])).toBe('2.10.0');
+    expect(harnessMinVersion(['kimi_code', 'opencode'])).toBe('2.10.0');
+    expect(harnessMinVersion(['bogus'])).toBe('2.10.0');
+    expect(harnessMinVersion([])).toBe('2.10.0');
   });
 
   it('T-V6b: 含 deepseek_harness 取 2.9.0（与其它 harness 混合仍取最大）', () => {
-    expect(harnessMinVersion(['deepseek_harness'])).toBe('2.9.0');
-    expect(harnessMinVersion(['opencode', 'deepseek_harness'])).toBe('2.9.0');
-    expect(harnessMinVersion(['kimi_code', 'deepseek_harness'])).toBe('2.9.0');
-    expect(harnessMinVersion(['opencode', 'kimi_code', 'deepseek_harness'])).toBe('2.9.0');
+    expect(harnessMinVersion(['deepseek_harness'])).toBe('2.10.0');
+    expect(harnessMinVersion(['opencode', 'deepseek_harness'])).toBe('2.10.0');
+    expect(harnessMinVersion(['kimi_code', 'deepseek_harness'])).toBe('2.10.0');
+    expect(harnessMinVersion(['opencode', 'kimi_code', 'deepseek_harness'])).toBe('2.10.0');
   });
 });
 
@@ -110,11 +110,11 @@ describe('isSupportedWorkerVersion', () => {
       expect(isSupportedWorkerVersion(version).reason).toBe('below-minimum');
     }
 
-    expect(isSupportedWorkerVersion('2.5.0', '2.6.0')).toMatchObject({
+    expect(isSupportedWorkerVersion('2.5.0', '2.10.0')).toMatchObject({
       supported: false,
       reason: 'below-minimum',
     });
-    expect(isSupportedWorkerVersion('2.6.0', '2.6.0').supported).toBe(true);
+    expect(isSupportedWorkerVersion('2.10.0', '2.10.0').supported).toBe(true);
   });
 
   it('T-V3: major 不在兼容范围时被拒绝（含自定义 supportedMajor 生效）', () => {
@@ -150,12 +150,12 @@ describe('isSupportedWorkerVersion', () => {
 });
 
 describe('isSupportedHarnessWorkerVersion', () => {
-  it('T-CC9: harness 门禁为 >=2.6.0 且 major=2（不影响普通容器）', () => {
+  it('T-CC9: harness 门禁为 >=2.10.0 且 major=2（不影响普通容器）', () => {
     for (const version of ['2.4.9', '2.2.0', '2.1.0']) {
       expect(isSupportedHarnessWorkerVersion(version).supported, version).toBe(false);
       expect(isSupportedHarnessWorkerVersion(version).reason).toBe('below-minimum');
     }
-    for (const version of ['2.6.0', '2.10.0']) {
+    for (const version of ['2.10.0', '2.11.0']) {
       expect(isSupportedHarnessWorkerVersion(version).supported, version).toBe(true);
     }
     expect(isSupportedHarnessWorkerVersion('3.0.0')).toMatchObject({
@@ -175,12 +175,12 @@ describe('maxWorkerVersion (C-4)', () => {
   it('取常量与请求值的较大者（数字段比较，非字典序）', () => {
     expect(maxWorkerVersion('2.1.0', '2.5.0')).toBe('2.5.0');
     expect(maxWorkerVersion('2.5.0', '2.5.0')).toBe('2.5.0');
-    expect(maxWorkerVersion('2.6.0', '2.5.0')).toBe('2.6.0');
+    expect(maxWorkerVersion('2.10.0', '2.5.0')).toBe('2.10.0');
     expect(maxWorkerVersion('2.5.0', '2.10.0')).toBe('2.10.0');
     expect(maxWorkerVersion('2.10.0', '2.9.0')).toBe('2.10.0');
     // 非法输入回退到合法一侧
     expect(maxWorkerVersion('bad', '2.5.0')).toBe('2.5.0');
-    expect(maxWorkerVersion('2.6.0', 'bad')).toBe('2.6.0');
+    expect(maxWorkerVersion('2.10.0', 'bad')).toBe('2.10.0');
     expect(maxWorkerVersion('bad', 'bad')).toBe(MIN_HARNESS_WORKER_VERSION);
   });
 });

@@ -857,7 +857,7 @@ describe('worker Socket.IO gateway', () => {
     socket.close();
   });
 
-  it('T-CC9/T-CC10: harness 2.4.0 被拒（VERSION_MISMATCH 2.6.0）且无注册副作用', async () => {
+  it('T-CC9/T-CC10: harness 2.4.0 被拒（VERSION_MISMATCH 2.10.0）且无注册副作用', async () => {
     const { container, token } = await newContainer([], {
       purpose: 'harness',
       hostId: 'host-gate-1',
@@ -870,7 +870,7 @@ describe('worker Socket.IO gateway', () => {
     expect(error).toMatchObject({
       code: 'VERSION_MISMATCH',
       currentVersion: '2.4.0',
-      minimumVersion: '2.6.0',
+      minimumVersion: '2.10.0',
       supportedMajor: 2,
     });
     const stored = await repo.findById(container.id);
@@ -884,23 +884,23 @@ describe('worker Socket.IO gateway', () => {
     const { container, token } = await newContainer([], {
       purpose: 'harness',
       hostId: 'host-gate-minver',
-      agentGearMinVersion: '2.10.0',
+      agentGearMinVersion: '2.11.0',
     });
     const socket = await connectWith(token);
     const errorPromise = waitFor<Record<string, unknown>>(socket, 'error');
-    socket.emit('register', { hostname: 'harness-minver', version: '2.9.0' });
+    socket.emit('register', { hostname: 'harness-minver', version: '2.10.0' });
     const error = await errorPromise;
 
     expect(error).toMatchObject({
       code: 'VERSION_MISMATCH',
-      currentVersion: '2.9.0',
-      minimumVersion: '2.10.0',
+      currentVersion: '2.10.0',
+      minimumVersion: '2.11.0',
     });
     expect((await repo.findById(container.id))?.status).toBe('connecting');
     socket.close();
   });
 
-  it('T-CC9/T-CC11: harness 2.6.0 通过，无 init 时 registered.initializing=false 且 online', async () => {
+  it('T-CC9/T-CC11: harness 2.10.0 通过，无 init 时 registered.initializing=false 且 online', async () => {
     const { container, token } = await newContainer([], {
       purpose: 'harness',
       hostId: 'host-gate-2',
@@ -910,7 +910,7 @@ describe('worker Socket.IO gateway', () => {
       socket,
       'registered',
     );
-    socket.emit('register', { hostname: 'harness-new', version: '2.6.0' });
+    socket.emit('register', { hostname: 'harness-new', version: '2.10.0' });
     const payload = await registered;
 
     expect(payload.controllerId).toBe(container.id);
@@ -937,7 +937,7 @@ describe('worker Socket.IO gateway', () => {
       modelApiKey: 'zag_sk_gateway-secret',
       modelBaseUrl: 'http://admin-api:8002/v1',
       modelIds: '["model-a"]',
-      defaultWorkspace: '/root/workspace',
+      defaultWorkspace: '/home/worker/workspace',
     });
     const socket = await connectWith(token);
     const runPromise = waitFor<{ phase: string; env?: Record<string, string> }>(
@@ -945,7 +945,7 @@ describe('worker Socket.IO gateway', () => {
       'workload:run',
     );
     const registered = waitFor<{ initializing: boolean }>(socket, 'registered');
-    socket.emit('register', { hostname: 'harness-init', version: '2.6.0' });
+    socket.emit('register', { hostname: 'harness-init', version: '2.10.0' });
 
     expect((await registered).initializing).toBe(true);
     const run = await runPromise;

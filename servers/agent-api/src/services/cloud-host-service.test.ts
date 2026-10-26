@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
     internalApiToken: 'internal-token',
     controllerApiPublicEndpoint: 'wss://controller-api',
     cloudHostModelBaseUrl: 'http://admin-api:8002/v1',
-    cloudHostDefaultWorkspace: '/root/workspace',
+    cloudHostDefaultWorkspace: '/home/worker/workspace',
   },
 }));
 
@@ -347,7 +347,7 @@ describe('CloudHostService', () => {
         modelIds: '["model-a","model-b"]',
         // 同名保留首个有效值；contextLength=null 与禁用模型不出现
         modelContextLengths: '{"model-a":128000}',
-        defaultWorkspace: '/root/workspace',
+        defaultWorkspace: '/home/worker/workspace',
       });
     });
 

@@ -76,7 +76,7 @@ async function seedCloudController(
     userId: new mongoose.Types.ObjectId(userId),
     controllerId,
     name: 'workspace',
-    path: '/root/workspace',
+    path: '/home/worker/workspace',
     isEnabled: true,
     createdAt: now,
     updatedAt: now,

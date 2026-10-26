@@ -43,7 +43,7 @@ export const config = {
   // 容器内标准连接地址与模型网关地址（随创建请求下发，不落库）
   controllerApiPublicEndpoint: process.env.CONTROLLER_API_PUBLIC_WS_ENDPOINT || '',
   cloudHostModelBaseUrl: process.env.CLOUD_HOST_MODEL_BASE_URL || '',
-  cloudHostDefaultWorkspace: process.env.CLOUD_HOST_DEFAULT_WORKSPACE || '/root/workspace',
+  cloudHostDefaultWorkspace: process.env.CLOUD_HOST_DEFAULT_WORKSPACE || '/home/worker/workspace',
   // 云主机操作单步超时（等待工作负载执行完成，默认 10 分钟）
   cloudHostSetupStepTimeoutMs: toPositiveInt(
     process.env.CLOUD_HOST_SETUP_STEP_TIMEOUT_MS,
