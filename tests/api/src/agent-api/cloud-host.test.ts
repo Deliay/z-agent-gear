@@ -813,6 +813,44 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     }
   });
 
+  it('T-CH-API-WS1: targetPath=~/workspace 服务端接受并归一（createSession=false 仍 SKIPPED）', async () => {
+    const { token, userId } = await signupWithId();
+    const seeded = await seedRunningHost(userId);
+    const github = await seedGithubAccount(userId);
+    try {
+      const result = await gql(
+        SETUP_GITHUB,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: github.accountId,
+            repoFullName: 'phase9-owner/repo',
+            targetPath: '~/workspace',
+            createSession: false,
+          },
+        },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      const steps = result.data.setupCloudHostGithubProject.steps as Array<{
+        key: string;
+        status: string;
+        detail: string | null;
+      }>;
+      expect(steps.find((step) => step.key === 'gitSetup')).toMatchObject({
+        status: 'PENDING',
+        detail: null,
+      });
+      expect(steps.find((step) => step.key === 'session')).toMatchObject({
+        status: 'SKIPPED',
+        detail: '多 Harness 不自动创建会话',
+      });
+    } finally {
+      await github.cleanup();
+      await seeded.cleanup();
+    }
+  });
+
   it('T-CH-API-CS2: 缺省 createSession 保持 PENDING（单 Harness 旧行为）', async () => {
     const { token, userId } = await signupWithId();
     const seeded = await seedRunningHost(userId);

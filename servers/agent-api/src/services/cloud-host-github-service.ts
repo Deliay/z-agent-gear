@@ -328,10 +328,38 @@ export class CloudHostGithubService {
       githubAuth: true,
     });
     await this.workloadService.pollBatch(opId, String(op.containerId), [result.logId], 'gitSetup');
+    // Issue #304-1：clone 成功后无条件初始化项目工作区（与 createSession 开关无关）。
+    // 多 Harness 时 session 步骤初始即 SKIPPED、runSessionStep 永不执行，工作区初始化必须前移到这里。
+    // ensureWorkspace 为幂等 upsert；抛错则 gitSetup FAILED → operation FAILED，可由 retry 收敛。
+    await this.initializeWorkspace(op, targetPath);
     await this.workloadService.updateStep(opId, 'gitSetup', {
       status: 'SUCCEEDED',
       detail: repoFullName,
     });
+  }
+
+  /**
+   * 初始化项目工作区并 CAS 回写 workspaceId（仅空时，不覆盖既有绑定）。
+   * `gitSetup` 收尾与 `runSessionStep` 兜底共用；确保工作区创建与 createSession 成败解耦（U-1）。
+   */
+  private async initializeWorkspace(op: Doc, targetPath: string) {
+    const workspace = await this.ensureWorkspace(
+      String(op.controllerId),
+      String(op.userId),
+      targetPath,
+    );
+    if (op.hostId) {
+      await CloudHost.updateOne(
+        { _id: op.hostId, workspaceId: null },
+        { $set: { workspaceId: workspace.id } },
+      ).catch((err) => {
+        console.warn(
+          '[cloud-host-github] backfill workspaceId failed:',
+          (err as Error).message,
+        );
+      });
+    }
+    return workspace;
   }
 
   private async runSessionStep(opId: string, op: Doc): Promise<void> {
@@ -341,25 +369,10 @@ export class CloudHostGithubService {
         status: 'RUNNING',
         detail: targetPath,
       });
-      const workspace = await this.ensureWorkspace(
-        String(op.controllerId),
-        String(op.userId),
-        targetPath,
-      );
       // U-1：workspaceId 与 createSession 成败无关——工作区一旦创建即回写，
       // 否则会话创建失败时 hasDefaultWorkspace 仍为 false，无法区分「无工作区」与「默认会话创建失败」。
-      // phase2：Git 项目设置是创建默认工作区的唯一入口（CAS：不覆盖既有绑定）。
-      if (op.hostId) {
-        await CloudHost.updateOne(
-          { _id: op.hostId, workspaceId: null },
-          { $set: { workspaceId: workspace.id } },
-        ).catch((err) => {
-          console.warn(
-            '[cloud-host-github] backfill workspaceId failed:',
-            (err as Error).message,
-          );
-        });
-      }
+      // 初始化已在 gitSetup 收尾执行，此处为幂等兜底（ensureWorkspace upsert + CAS 未命中即 no-op）。
+      const workspace = await this.initializeWorkspace(op, targetPath);
       const session = await this.createSession(String(op.userId), {
         controllerId: String(op.controllerId),
         workspaceId: String(workspace.id),

@@ -409,6 +409,9 @@ describe('NewCloudHostDialog Github 项目编排', () => {
     fireEvent.click(screen.getByLabelText('配置 Github 项目'));
 
     await waitFor(() => expect(screen.getByLabelText('Github 账号')).toHaveValue('acc-1'));
+    const prefixInput = screen.getByLabelText('前缀地址');
+    expect(prefixInput).toHaveValue('~/workspace');
+    expect(prefixInput).toHaveAttribute('placeholder', '~/workspace');
     fireEvent.change(screen.getByLabelText('仓库'), { target: { value: 'alice/repo-a' } });
     expect(screen.getByText('最终 clone 地址：/root/workspace/alice/repo-a')).toBeInTheDocument();
 
