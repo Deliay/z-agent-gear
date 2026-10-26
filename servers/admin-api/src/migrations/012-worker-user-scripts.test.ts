@@ -109,3 +109,26 @@ describe('migration 012-worker-user-scripts', () => {
 });
 
 
+
+describe('012 root-write anchors', () => {
+  const bare = /^\s*(install|curl|chmod|rm|mkdir|ln|cat) .*(\/etc\/|\/usr\/local|\$SHIM_PATH)|\s> \/etc\//m;
+  it('docker v4 has no bare root-requiring writes', () => {
+    const lines = migration.DOCKER_SCRIPT_V4.split('\n').filter((l) => !l.includes('${SUDO}'));
+    expect(lines.join('\n')).not.toMatch(bare);
+    expect(migration.DOCKER_SCRIPT_V4).toContain('${SUDO} install -m 0755 -d /etc/apt/keyrings');
+    expect(migration.DOCKER_SCRIPT_V4).toContain('${SUDO} tee "$SHIM_PATH"');
+    expect(migration.DOCKER_SCRIPT_V4).toContain('${SUDO} chmod +x "$SHIM_PATH"');
+    expect(migration.DOCKER_SCRIPT_V4).toContain("${SUDO} sh -c 'nohup dockerd -G worker");
+  });
+  it('github v2 falls back with sudo', () => {
+    expect(migration.GITHUB_SCRIPT_V2).toContain('${SUDO} install -m 0755 -d /etc/apt/keyrings');
+    expect(migration.GITHUB_SCRIPT_V2).toContain('${SUDO} curl ');
+    expect(migration.GITHUB_SCRIPT_V2).toContain('| ${SUDO} tee /etc/apt/sources.list.d/github-cli.list');
+  });
+  it('aspire v3 elevates link and profile writes', () => {
+    expect(migration.ASPIRE_SCRIPT_V3).toContain('${SUDO} ln -sfn "$HOME/.aspire/bin/aspire" /usr/local/bin/aspire');
+    expect(migration.ASPIRE_SCRIPT_V3).toContain('${SUDO} ln -sfn "$ASPIRE_BIN" /usr/local/bin/aspire');
+    expect(migration.ASPIRE_SCRIPT_V3).toContain('| ${SUDO} tee /etc/profile.d/aspire.sh');
+    expect(migration.ASPIRE_SCRIPT_V3).toContain('${SUDO} chmod +x /etc/profile.d/aspire.sh');
+  });
+});

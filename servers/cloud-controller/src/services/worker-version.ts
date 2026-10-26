@@ -12,7 +12,7 @@
 export const MIN_WORKER_VERSION = '2.2.0';
 
 /**
- * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供。
+ * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供（worker 用户 + 保活退出码 42 自 2.10.0 起）。
  * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
  */
 export const MIN_HARNESS_WORKER_VERSION = '2.10.0';

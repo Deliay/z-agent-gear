@@ -398,6 +398,7 @@ supervise_agent_gear() {
 | 无限崩溃循环（配置损坏） | 日志噪声、CPU 空转 | 退避封顶 30s + 每轮自更新（旧版本崩溃可收敛）+ 云电脑销毁链路/人工兜底；日志有界 |
 | 迁移 012 覆盖管理员定制 | 运维脚本丢失 | 严格相等刷新 + 定制告警跳过（沿用 002/003 既有口径） |
 | `sudo sh -c` 与 `nohup` 交互差异 | dockerd 随脚本退出被回收 | 实机核对 6 验证 30s 就绪与进程存活；必要时 `setsid` 兜底（记录验收报告） |
+| 前端既有 `/root/workspace` fallback / placeholder（`useGithubProjectForm.ts`、`NewCloudHostDialog.tsx`） | 旧路径仅在未配置前缀时展示，功能不受本期后端默认值影响 | 本期 `apps/*` 零改动；登记后续跟进统一为 `/home/worker/workspace` |
 
 回滚：各 Phase 独立提交、merge-only，可按提交粒度 revert；镜像与门禁回滚须**反向**执行发布顺序（先回 cloud-controller 门禁、再回镜像）。
 
