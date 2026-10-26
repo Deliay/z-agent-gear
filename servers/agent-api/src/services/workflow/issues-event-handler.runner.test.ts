@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   resolveRepoAccount: vi.fn(),
   instantiate: vi.fn(),
   completeHumanNode: vi.fn(),
+  resolveDefaultBranch: vi.fn(),
 }));
 
 vi.mock('../../models/issue-workflow-trigger.js', () => ({
@@ -74,6 +75,9 @@ vi.mock('./instance.js', () => ({
 vi.mock('../workspace-path.js', () => ({
   normalizeWorkspacePrefix: (value: string) => value,
   resolveClonePath: (prefix: string, repo: string) => `${prefix}/${repo}`,
+}));
+vi.mock('../workspace-default-branch.js', () => ({
+  resolveWorkspaceDefaultBranch: h.resolveDefaultBranch,
 }));
 
 import { IssuesTriggerRunner } from './issues-event-handler.js';
@@ -136,6 +140,7 @@ beforeEach(() => {
   h.defaultWorkspace.mockResolvedValue('/home/worker/workspace');
   h.resolveRepoAccount.mockResolvedValue('acc-1');
   h.comment.mockResolvedValue(99);
+  h.resolveDefaultBranch.mockResolvedValue('main');
 });
 
 describe('IssuesTriggerRunner PENDING_WORKSPACE', () => {
@@ -430,5 +435,76 @@ describe('IssuesTriggerRunner 终态与快照', () => {
       expect.objectContaining({ _id: '507f1f77bcf86cd799439026' }),
     );
     expect(h.instantiate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('IssuesTriggerRunner 强制 Worktree 隔离', () => {
+  const pendingInstantiate = () =>
+    lean(triggerDoc({ status: 'PENDING_INSTANTIATE', workspaceId: WORKSPACE_ID }));
+
+  it('R-WT1: instantiate 携带 createWorkflowWorktree: true', async () => {
+    h.triggerFindById.mockReturnValue(pendingInstantiate());
+    h.instantiate.mockResolvedValue({
+      _id: INSTANCE_ID,
+      nodes: [{ nodeId: 'human', type: 'HUMAN', status: 'INITIALIZING', dependsOn: [] }],
+    });
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.instantiate).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ createWorkflowWorktree: true }),
+    );
+  });
+
+  it('R-WT2: 缺失默认分支时按 trigger.repoFullName 前置解析后实例化', async () => {
+    h.triggerFindById.mockReturnValue(pendingInstantiate());
+    h.instantiate.mockResolvedValue({
+      _id: INSTANCE_ID,
+      nodes: [{ nodeId: 'human', type: 'HUMAN', status: 'INITIALIZING', dependsOn: [] }],
+    });
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.resolveDefaultBranch).toHaveBeenCalledWith({
+      userId: USER_ID,
+      controllerId: CONTROLLER_ID,
+      workspaceId: WORKSPACE_ID,
+      repoFullName: 'Deliay/z-agent-gear',
+    });
+    expect(h.triggerUpdateOne).toHaveBeenCalledWith(
+      { _id: TRIGGER_ID },
+      { $set: { workflowInstanceId: INSTANCE_ID, humanNodeId: 'human', status: 'PENDING_HUMAN_NODE' } },
+    );
+  });
+
+  it('R-WT3: 解析失败 → FAILED 且不调用 instantiate', async () => {
+    h.triggerFindById.mockReturnValue(pendingInstantiate());
+    h.resolveDefaultBranch.mockResolvedValue(null);
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.triggerUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: TRIGGER_ID }),
+      {
+        $set: {
+          status: 'FAILED',
+          failureReason: 'cannot resolve workspace default branch (not a git repository?)',
+        },
+      },
+    );
+    expect(h.instantiate).not.toHaveBeenCalled();
+  });
+
+  it('R-WT4: instantiate 抛错 → FAILED 且原因可读', async () => {
+    h.triggerFindById.mockReturnValue(pendingInstantiate());
+    h.instantiate.mockRejectedValue(new Error('worktree add failed'));
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.triggerUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: TRIGGER_ID }),
+      { $set: { status: 'FAILED', failureReason: 'worktree add failed' } },
+    );
   });
 });
