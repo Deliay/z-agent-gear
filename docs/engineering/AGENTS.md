@@ -207,6 +207,7 @@ flowchart LR
 - [[proposals/20261025-feat-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（引擎 onNodesTransitioned hook、Checks REST 客户端与 checks:write 权限、stale 编排、session:message 中央订阅 todo panel 同步 check-run 子项）
 - [[proposals/20261026-fix-cloud-host-key-lifecycle.md]] — 云电脑 LLM API Key 随容器回收（取消 24h 固定有效期，宿主非 RUNNING/删除/缺失即失效，迁移清理存量有效期）
 - [[proposals/20261026-fix-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置 clone 成功后无条件 ensureWorkspace 并 CAS 回写 workspaceId、Github 项目设置入口迁至云电脑配置 Github 页签、前缀地址默认 ~/workspace 并支持 ~ 展开为容器主目录）
+- [[proposals/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（dsh-header-masq 插件：预置脚本 V4 固定版本 0.1.2-alpha.2 → 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq`、agent-gear 2.11.0 dsh-config insert 形态第 5 受管条目、migration 013 存量刷新、deepseek_harness 版本门禁 2.9.0 → 2.11.0）
 
 ### 实现计划（`plan/`）
 
