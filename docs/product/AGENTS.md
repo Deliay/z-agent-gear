@@ -139,6 +139,7 @@ flowchart LR
 - [[draft/20261025-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（云电脑设置「Github」区块以列表维护多条联动配置：先选含人类节点的已配置工作流、默认标签 start-{工作流名字}可改、多选仓库并同步标签；带标签 Issue 自动完成工作区准备、实例化工作流、回评工作流地址、首个人类节点自动完成；销毁云电脑时经确认清理已同步标签）
 - [[draft/20261025-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（绑定 PR 的节点状态写入 PR 最新提交检查项、旧提交标记 stale、todo panel 同步为检查项子项）
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
+- [[draft/20261026-issues-workflow-force-worktree.md]] — GitHub Issues 联动工作流强制 Worktree 隔离（联动触发的工作流强制启用独立 Worktree 副本执行、主分支零改动、多 Issue 并发互不干扰、无法建立隔离时明确失败不降级到主分支）
 
 ### 实现中文档（`shipping/`）
 
