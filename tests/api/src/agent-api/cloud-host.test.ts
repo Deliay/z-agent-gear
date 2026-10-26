@@ -779,6 +779,10 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     }
   });
 
+  // 计划 Phase 5 原拟在 CS1 中断言「全流程后 controllerWorkspaces 出现 finalPath 工作区、
+  // myCloudHosts.hasDefaultWorkspace=true、无默认会话」。该断言需真实 K8s 容器完成 clone，
+  // 本地 API 环境 runner 在 workload 步即失败、不可达；等价行为由单测 T-CHG9 覆盖，
+  // 全流程工作区断言由单测 T-CHG9 + 验收环境 E2E-1 覆盖。
   it('T-CH-API-CS1: createSession=false 时 session 步骤初始化为 SKIPPED', async () => {
     const { token, userId } = await signupWithId();
     const seeded = await seedRunningHost(userId);
@@ -807,6 +811,55 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
         status: 'SKIPPED',
         detail: '多 Harness 不自动创建会话',
       });
+    } finally {
+      await github.cleanup();
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-CH-API-WS1: targetPath=~/workspace 服务端归一落库为绝对路径（createSession=false 仍 SKIPPED）', async () => {
+    const { token, userId } = await signupWithId();
+    const seeded = await seedRunningHost(userId);
+    const github = await seedGithubAccount(userId);
+    try {
+      const result = await gql(
+        SETUP_GITHUB,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: github.accountId,
+            repoFullName: 'phase9-owner/repo',
+            targetPath: '~/workspace',
+            createSession: false,
+          },
+        },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+      const steps = result.data.setupCloudHostGithubProject.steps as Array<{
+        key: string;
+        status: string;
+        detail: string | null;
+      }>;
+      expect(steps.find((step) => step.key === 'gitSetup')).toMatchObject({
+        status: 'PENDING',
+        detail: null,
+      });
+      expect(steps.find((step) => step.key === 'session')).toMatchObject({
+        status: 'SKIPPED',
+        detail: '多 Harness 不自动创建会话',
+      });
+
+      // operation 在 createOperation 内同步落库：直连断言服务端把 '~/workspace' 归一为
+      // /home/worker/workspace 并与 owner/repo 权威拼接后的 targetPath。
+      // binding / 工作区（controllerWorkspaces、CloudHost.workspaceId）的最终路径断言依赖
+      // 真实容器 clone 成功；本地 runner 在 workload 步即失败、不可达，由单测 T-CHG9/T-CHG10
+      // 与验收环境 E2E-1 覆盖。
+      const operationId = result.data.setupCloudHostGithubProject.id as string;
+      const storedOperation = await seeded.db
+        .collection('cloud_host_setup_operations')
+        .findOne({ _id: new mongoose.Types.ObjectId(operationId) });
+      expect(storedOperation?.targetPath).toBe('/home/worker/workspace/phase9-owner/repo');
     } finally {
       await github.cleanup();
       await seeded.cleanup();

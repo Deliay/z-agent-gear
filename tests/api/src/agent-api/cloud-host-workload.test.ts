@@ -171,7 +171,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
         },
         token,
       );
-      expect(relative.errors?.[0]?.message).toBe('前缀地址必须是绝对路径');
+      expect(relative.errors?.[0]?.message).toBe('前缀地址必须以 / 或 ~ 开头');
 
       const traversal = await gql(
         SETUP,
@@ -180,7 +180,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
             controllerId: seeded.controllerId,
             accountId: new mongoose.Types.ObjectId().toString(),
             repoFullName: 'owner/repo',
-            targetPath: '/root/../etc',
+            targetPath: '/home/worker/../etc',
           },
         },
         token,
@@ -229,6 +229,46 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
         token,
       );
       expect(unauthorized.errors?.[0]?.message).toBe('Github 账号不存在或不属于当前用户');
+    } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-GH-API-P4: ~ 前缀矩阵（合法形态归一后进入授权校验，非法形态拒绝）', async () => {
+    const { token, userId } = await signup();
+    const seeded = await seedHost(userId);
+    try {
+      const setup = (targetPath: string) =>
+        gql(
+          SETUP,
+          {
+            input: {
+              controllerId: seeded.controllerId,
+              accountId: new mongoose.Types.ObjectId().toString(),
+              repoFullName: 'owner/repo',
+              targetPath,
+            },
+          },
+          token,
+        );
+
+      // 合法 ~ 形态通过归一，进入 Github 账号归属校验
+      for (const targetPath of ['~/workspace', '~', '~/', '~//a', '/a/~']) {
+        const result = await setup(targetPath);
+        expect(result.errors?.[0]?.message).toBe(
+          'Github 账号不存在或不属于当前用户',
+        );
+      }
+
+      expect((await setup('~abc')).errors?.[0]?.message).toBe(
+        '前缀地址必须以 / 或 ~ 开头',
+      );
+      expect((await setup('~x/y')).errors?.[0]?.message).toBe(
+        '前缀地址必须以 / 或 ~ 开头',
+      );
+      expect((await setup('~/a/../b')).errors?.[0]?.message).toBe(
+        '前缀地址不能包含 ..',
+      );
     } finally {
       await seeded.cleanup();
     }
