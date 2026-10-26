@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { version as PACKAGE_VERSION } from '../package.json';
 
 const { mockStart, mockStop, MockHeartbeat } = vi.hoisted(() => {
   const start = vi.fn();
@@ -229,7 +230,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'my-machine',
-        version: '2.10.0',
+        version: PACKAGE_VERSION,
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',
@@ -247,7 +248,7 @@ describe('SocketIO Client', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('register', {
         key: 'zag_k_1_abc123',
         hostname: 'test-machine',
-        version: '2.10.0',
+        version: PACKAGE_VERSION,
         resumeToken: undefined,
         homeDir: '/home/user',
         platform: 'linux',

@@ -75,11 +75,11 @@ function emitted(event: string) {
 }
 
 describe('CONTROLLER_VERSION', () => {
-  it('register 上报版本取自 package.json（2.10.0，无第二处常量）', () => {
+  it('register 上报版本取自 package.json（无第二处常量）', () => {
     setup();
     fake.handlers.get('connect')?.();
-    expect(PACKAGE_VERSION).toBe('2.10.0');
-    expect(emitted('register')[0]).toMatchObject({ version: '2.10.0' });
+    expect(PACKAGE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+    expect(emitted('register')[0]).toMatchObject({ version: PACKAGE_VERSION });
   });
 });
 
