@@ -36,8 +36,8 @@ export const cloudHostTypeDefs = `#graphql
     deletedAt: String
     # 云电脑默认工作区路径（workspaceId → ControllerWorkspace.path；缺失回退 /root/workspace）
     defaultWorkspace: String!
-    # 是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置 clone 成功后即创建默认工作区并回写 workspaceId（与 createSession 开关及会话创建成败无关）
-    # 用于区分「未创建工作区」与「默认会话创建失败」
+    # 是否已创建默认工作区（workspaceId != null）；创建期恒为 false，Git 项目设置 clone 成功后即创建默认工作区并回写 workspaceId（与 createSession 开关及会话创建成败无关）并翻转为 true。
+    # 用于区分「未创建工作区」与「默认会话创建失败」。
     hasDefaultWorkspace: Boolean!
     # 当前正在 runtime 安装的工作负载名；null 表示空闲
     workloadInstalling: String
@@ -152,8 +152,9 @@ export const cloudHostTypeDefs = `#graphql
     controllerId: ID!
     accountId: ID!
     repoFullName: String!
-    # 语义：clone 前缀地址（工作根目录）；支持 ~ 或 ~/ 开头（服务端展开为容器用户主目录 /root 后归一）
-    # 最终目录 = <targetPath>/<repoFullName>
+    # 语义：clone 前缀地址（工作根目录），不是最终目录。
+    # 支持 \`~\` 或 \`~/\` 开头：服务端展开为容器用户主目录（/root）后再归一。
+    # 最终目录 = <targetPath>/<repoFullName>，由服务端用 path.posix.join 权威拼接。
     targetPath: String!
     workloadIds: [ID!]
     # false 时 session 步骤记 SKIPPED（多 Harness 不自动创建会话）；工作区初始化照常执行，缺省 true
