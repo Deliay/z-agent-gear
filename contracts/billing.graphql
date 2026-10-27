@@ -9,8 +9,9 @@
 # 前台账户仅支持预付费（creditLimit 恒 0），不提供任何自助充值 mutation。
 
 enum BillingOwnerType {
-  front_user
-  admin_user
+  front_user # 已废弃：存量前台行由迁移转为 tenant，仅作历史兼容保留读
+  admin_user # 后台账户计费：保持原样，与 tenant 并存
+  tenant # 前台租户计费账户（ownerId=tenantId）
 }
 
 enum BillingLedgerType {
