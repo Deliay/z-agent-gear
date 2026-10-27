@@ -106,6 +106,18 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 退出登录 | 点击退出登录 → 跳转回登录页 |
 | 未登录重定向 | 直接访问 `/` → 重定向到登录页 |
 
+### Settings Commit 作者 E2E (`settings-commit-author.spec.ts`)
+
+> 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `githubAccounts` 经 `page.route` mock，
+> 不依赖真实 GitHub 与云容器。容器内真实提交身份由 `agent-controller` 单测与人工验收覆盖。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-1 | 「GitHub 绑定」下方出现「Commit 设置」与常驻提示「设置只对云容器环境生效」；四模式 / 三提交人可切换并保存成功 toast |
+| E2E-2 | Co-Author / 仅人类 + 提交人未设置 → 禁用保存并提示「请先设置提交人」；自定义空用户名 / 非法邮箱拦截 |
+| E2E-3 | 提交人条件渲染：Github帐号下拉（org 不出现）、未绑定引导「请先绑定 Github 帐号」、自定义用户名 + 邮箱输入 |
+| E2E-4 | 双未设置保存 / 刷新回显一致（未设置零回归） |
+
 ### Settings LLM E2E (`settings-llm.spec.ts`)
 
 | 测试 | 描述 |
@@ -390,6 +402,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |
 | T-AW6/T-AW7/T-AW9 | 配置页状态/工作区+Harness 两栏；无活动会话直接停止；已销毁无再次启动；终态可删除并移出列表 |
 | T-AW10 | 已销毁云电脑会话只读回看：无输入框/发送/继续，历史消息保留 |
+| E2E-39/E2E-41 | 新建对话框展示「收费详情」（创建花费 / 运行消费 / 欠费强制销毁提示）；余额不足提示但**不前置禁用**创建 |
+| E2E-40 | **未单独建用例**（需真实创建多台并各自启停）：数量放开语义由 `cloud-host-service.test.ts` T-CH-C7 与 `tests/api` 多台并行用例覆盖 |
+| E2E-42 | **未单独建用例**（需真实 Github App 与云电脑）：帐号跟随/置灰由 `useGithubProjectForm.test.tsx`、`GithubProjectSetupDialog` 单测与 `T-CHG12..14` 覆盖 |
 
 > RUNNING/默认会话/ACP 链路不在 E2E 断言（无真实 worker），由单测 + 真实集群手工验收覆盖。
 

@@ -107,6 +107,16 @@ export class BillingServiceUnavailableError extends Error {
   }
 }
 
+/** 创建云电脑扣费被拒（admin-api 409）；`available` 为 credits。 */
+export class InsufficientBalanceError extends Error {
+  readonly code = 'INSUFFICIENT_BALANCE';
+
+  constructor(readonly available?: number) {
+    super('insufficient balance');
+    this.name = 'InsufficientBalanceError';
+  }
+}
+
 /** C2：按 HTTP 状态码映射稳定、脱敏的错误文案，绝不回传服务端内部 message。 */
 function stableErrorMessage(status: number): string {
   if (status === 400) return '费用请求参数不合法';
@@ -154,6 +164,16 @@ export class BillingClient {
       clearTimeout(timer);
     }
     if (!response.ok) {
+      if (response.status === 409) {
+        let available: number | undefined;
+        try {
+          const body = (await response.json()) as { available?: unknown };
+          if (typeof body.available === 'number') available = body.available;
+        } catch {
+          // 非 JSON 409 仍按余额不足上抛（调用方按错误码处理）
+        }
+        throw new InsufficientBalanceError(available);
+      }
       throw new BillingServiceUnavailableError(stableErrorMessage(response.status), response.status);
     }
     try {
@@ -291,6 +311,44 @@ export class BillingClient {
       method: 'POST',
       body: JSON.stringify({ cloudHostId }),
     });
+  }
+
+  /** 一次性扣费（云电脑创建）；409 抛 InsufficientBalanceError。 */
+  async createCharge(input: {
+    accountId: string;
+    productId: string;
+    quantity: number;
+    idempotentKey: string;
+    refType: string;
+    refId: string;
+    description: string;
+  }): Promise<{ charged: boolean; invoice: unknown; receipt: unknown }> {
+    return this.request<{ charged: boolean; invoice: unknown; receipt: unknown }>('/internal/billing/charges', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** 一次性扣费退款（幂等；调用方 best-effort 处理失败）。 */
+  async refundCharge(input: {
+    idempotentKey: string;
+    refundKey: string;
+    reason: string;
+  }): Promise<{ invoice: unknown; receipt: unknown }> {
+    return this.request<{ invoice: unknown; receipt: unknown }>('/internal/billing/refunds', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** 价目报价（credits）。 */
+  async getPriceQuote(
+    productIds: string[],
+  ): Promise<Array<{ productId: string; unitPrice: number; currency: string }>> {
+    const params = new URLSearchParams({ productIds: productIds.join(',') });
+    return this.request<Array<{ productId: string; unitPrice: number; currency: string }>>(
+      `/internal/billing/price-quote?${params.toString()}`,
+    );
   }
 
   private params(values: Record<string, unknown>): string {

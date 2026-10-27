@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { fundFrontUser } from './funding.js';
 
 // 内部 ready/terminal 回调（cloud-controller → agent-api）。
 // 需要 Aspire 全量服务 + Mongo + INTERNAL_API_TOKEN；无需真实 worker。
@@ -7,6 +8,10 @@ const GRAPHQL_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const API_BASE = GRAPHQL_URL.replace(/\/graphql\/?$/, '');
 const TOKEN = process.env.INTERNAL_API_TOKEN;
 const HAS_MONGO = Boolean(process.env.MONGODB_URI);
+const ADMIN_BASE = (process.env.ADMIN_API_URL || 'http://localhost:10003/graphql').replace(
+  /\/graphql\/?$/,
+  '',
+);
 
 function gql(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -108,6 +113,39 @@ async function cleanupHost(
   await db.collection('cloudhosts').deleteOne({ _id: new mongoose.Types.ObjectId(fixture.hostId) });
   await db.collection('controllerworkspaces').deleteMany({ controllerId });
   await db.collection('controllers').deleteOne({ _id: controllerId });
+}
+
+/** 为直插的云电脑补一笔真实创建扣费（用于 terminal 退款断言）。 */
+async function chargeHost(
+  db: mongoose.mongo.Db,
+  userId: string,
+  hostId: string,
+): Promise<{ accountId: string; cashBalance: number }> {
+  await fundFrontUser(userId, userId);
+  const account = await db.collection('billingaccounts').findOne({
+    ownerType: 'front_user',
+    ownerId: userId,
+  });
+  const accountId = String(account!._id);
+  const res = await fetch(`${ADMIN_BASE}/internal/billing/charges`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${TOKEN}`,
+    },
+    body: JSON.stringify({
+      accountId,
+      productId: 'cloud_host.create',
+      quantity: 1,
+      idempotentKey: `cloud_host.create:${hostId}`,
+      refType: 'cloud_host',
+      refId: hostId,
+      description: '创建云电脑 callback-test',
+    }),
+  });
+  expect(res.status).toBe(200);
+  const after = await db.collection('billingaccounts').findOne({ _id: account!._id });
+  return { accountId, cashBalance: after?.cashBalance ?? 0 };
 }
 
 describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
@@ -289,6 +327,74 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
         _id: new mongoose.Types.ObjectId(hostId),
       });
       expect(host).toMatchObject({ status: 'FAILED', containerId: null });
+    } finally {
+      if (fixture) await cleanupHost(db, fixture);
+    }
+  });
+
+  it('T-CH-API-B5: 未 ready terminal 自动退款并留痕', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const userId = signup.data.signup.user.id as string;
+    let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
+    try {
+      fixture = await seedHost(db, { userId, status: 'STARTING' });
+      const { hostId } = fixture;
+      const charged = await chargeHost(db, userId, hostId);
+      expect(charged.cashBalance).toBe(9500);
+
+      const terminal = await callback(`/internal/cloud-hosts/${hostId}/terminal`, {
+        status: 'failed',
+        reason: 'start failed',
+      });
+      expect(terminal.status).toBe(200);
+
+      const adjust = await db.collection('billinginvoices').findOne({
+        refType: 'cloud_host',
+        refId: hostId,
+        type: 'adjust',
+      });
+      expect(adjust).toMatchObject({ amount: 500 });
+      const after = await db.collection('billingaccounts').findOne({
+        _id: new mongoose.Types.ObjectId(charged.accountId),
+      });
+      expect(after?.cashBalance).toBe(10000);
+    } finally {
+      if (fixture) await cleanupHost(db, fixture);
+    }
+  });
+
+  it('T-CH-API-B6: ready 后 terminal 不退款', async () => {
+    const db = (await mongoDb())!;
+    const signup = await gql(SIGNUP, {
+      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
+      password: 'password123',
+    });
+    const userId = signup.data.signup.user.id as string;
+    let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
+    try {
+      fixture = await seedHost(db, { userId, status: 'RUNNING' });
+      const { hostId } = fixture;
+      const charged = await chargeHost(db, userId, hostId);
+      expect(charged.cashBalance).toBe(9500);
+
+      const terminal = await callback(`/internal/cloud-hosts/${hostId}/terminal`, {
+        status: 'stopped',
+      });
+      expect(terminal.status).toBe(200);
+      const adjust = await db.collection('billinginvoices').findOne({
+        refType: 'cloud_host',
+        refId: hostId,
+        type: 'adjust',
+      });
+      expect(adjust).toBeNull();
+      const after = await db.collection('billingaccounts').findOne({
+        _id: new mongoose.Types.ObjectId(charged.accountId),
+      });
+      expect(after?.cashBalance).toBe(9500);
     } finally {
       if (fixture) await cleanupHost(db, fixture);
     }

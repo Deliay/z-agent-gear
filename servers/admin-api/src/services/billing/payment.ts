@@ -260,7 +260,11 @@ export class PaymentService {
     let giftDelta = 0;
     for (const allocation of ledger.allocations ?? []) {
       const signed =
-        bizType === 'charge' ? -allocation.amount : bizType === 'recharge' ? allocation.amount : 0;
+        bizType === 'charge'
+          ? -allocation.amount
+          : bizType === 'recharge' || bizType === 'adjust'
+            ? allocation.amount
+            : 0;
       if (allocation.pool === 'gift') giftDelta += signed;
       else if (allocation.pool === 'cash' || allocation.pool === 'credit') cashDelta += signed;
     }
@@ -533,6 +537,68 @@ export class PaymentService {
         frozenAmount: wallet.frozenAmount,
         ledgerId: documentId(ledger),
         allocations: [{ pool: 'cash', amount: input.amountCents }],
+      };
+    });
+  }
+
+  /** 退款入现金池：写 adjust 正向流水并增加余额（仅用于一次性费用的失败退款）。 */
+  async refund(input: {
+    accountId: string;
+    amountCents: number;
+    idempotentKey: string;
+    bizId: string;
+    invoiceId?: string | null;
+  }): Promise<WalletMutationResult> {
+    if (input.amountCents <= 0) throw new Error('退款金额必须为正数');
+    const amount = Math.round(input.amountCents);
+    let ledger: LedgerDoc | null = null;
+    return this.accountMutex.runExclusive(`account:${input.accountId}`, async () => {
+      try {
+        ledger = await BillingLedger.create({
+          accountId: input.accountId,
+          pool: 'cash',
+          bizType: 'adjust',
+          deltaBalance: amount,
+          deltaFrozen: 0,
+          allocations: [{ pool: 'cash', amount }],
+          bizId: input.bizId,
+          idempotentKey: input.idempotentKey,
+          createdAt: new Date(this.now()),
+        });
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        ledger = await this.loadLedger(input.idempotentKey, input.accountId);
+      }
+      if (!ledger) throw new Error('refund ledger not found after conflict');
+
+      const wallet = await this.applyLedgerDelta(ledger, input.accountId);
+      if (wallet.applied) {
+        await BillingPayment.create({
+          invoiceId: input.invoiceId ?? null,
+          accountId: input.accountId,
+          amount,
+          pools: [{ pool: 'cash', amount }],
+          releasedFrozen: 0,
+          status: 'succeeded',
+          idempotentKey: input.idempotentKey,
+          createdAt: new Date(this.now()),
+        }).catch((err: { code?: number }) => {
+          if (err.code !== 11000) throw err;
+        });
+        const updated = await this.loadAccount(input.accountId);
+        if (updated && availableCents(updated) >= 0) {
+          await BillingAccount.updateOne(
+            { _id: input.accountId },
+            { $set: { insufficientSince: null } },
+          );
+        }
+      }
+      return {
+        applied: wallet.applied,
+        cashBalance: wallet.cashBalance,
+        frozenAmount: wallet.frozenAmount,
+        ledgerId: documentId(ledger),
+        allocations: [{ pool: 'cash', amount }],
       };
     });
   }

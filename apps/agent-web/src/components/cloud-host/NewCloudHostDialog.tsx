@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { CREATE_CLOUD_HOST } from '../../graphql/mutations'
-import { CLOUD_HOST_WORKLOAD_CATALOG } from '../../graphql/queries'
+import { CLOUD_HOST_BILLING_QUOTE, CLOUD_HOST_WORKLOAD_CATALOG } from '../../graphql/queries'
 import type {
+  CloudHostBillingQuoteQuery,
   CloudHostCapabilitiesData,
   CloudHostData,
   CloudHostWorkloadCatalogQuery,
@@ -27,8 +28,6 @@ import { Badge } from '@/components/ui/badge'
 interface NewCloudHostDialogProps {
   open: boolean
   capabilities: CloudHostCapabilitiesData
-  /** 已有 STARTING/RUNNING/STOPPING 云电脑时禁用提交 */
-  hasActiveCloudHost?: boolean
   onClose: () => void
   onCreated: (cloudHost: CloudHostData) => void
 }
@@ -49,7 +48,8 @@ function harnessLabel(harness: HarnessType): string {
 
 /** 服务端契约错误 → 前台中文文案；未登记的契约错误仍原样展示 */
 const SERVER_ERROR_MESSAGES: Record<string, string> = {
-  'too many cloud hosts': '每用户同时最多 1 个云电脑实例',
+  'insufficient balance': '账户余额不足，请联系管理员充值后重试',
+  'github account is locked': '云电脑已绑定其他 Github 帐号，不可修改',
   'too many workloads (max 5)': '创建时最多选择 5 个工作负载',
   'workloads exceed 10': '展开依赖后超过工作负载上限（10 个）',
 }
@@ -76,7 +76,6 @@ function getErrorMessage(error: unknown): string {
 export default function NewCloudHostDialog({
   open,
   capabilities,
-  hasActiveCloudHost = false,
   onClose,
   onCreated,
 }: NewCloudHostDialogProps) {
@@ -108,6 +107,21 @@ export default function NewCloudHostDialog({
     skip: !open,
     fetchPolicy: 'cache-and-network',
   })
+
+  const {
+    data: quoteData,
+    loading: quoteLoading,
+    error: quoteError,
+    refetch: refetchQuote,
+  } = useQuery<CloudHostBillingQuoteQuery>(CLOUD_HOST_BILLING_QUOTE, {
+    skip: !open,
+    fetchPolicy: 'cache-and-network',
+  })
+  const quote = quoteData?.cloudHostBillingQuote
+  const balanceInsufficient =
+    quote?.availableBalance !== null &&
+    quote?.availableBalance !== undefined &&
+    quote.availableBalance < quote.createCredits
 
   useEffect(() => {
     if (open) {
@@ -145,10 +159,16 @@ export default function NewCloudHostDialog({
   const submitDisabled =
     submitting ||
     featureDisabled ||
-    hasActiveCloudHost ||
     Boolean(nameError) ||
     Boolean(harnessError) ||
     projectIncomplete
+
+  const handleCreateError = (err: unknown) => {
+    setError(getErrorMessage(err));
+    if (err instanceof Error && err.message.includes('insufficient balance')) {
+      if (typeof refetchQuote === 'function') void refetchQuote();
+    }
+  };
 
   const toggleHarness = (harness: HarnessType, checked: boolean) => {
     setSelectedHarnesses((prev) =>
@@ -209,6 +229,7 @@ export default function NewCloudHostDialog({
         await provisioning.start({
           name: trimmedName,
           harnessTypes: selectedHarnesses,
+          githubAccountId: projectForm.accountId,
           ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
           project: {
             accountId: projectForm.accountId,
@@ -217,7 +238,7 @@ export default function NewCloudHostDialog({
           },
         })
       } catch (err) {
-        setError(getErrorMessage(err))
+        handleCreateError(err)
       } finally {
         setSubmitting(false)
       }
@@ -240,8 +261,8 @@ export default function NewCloudHostDialog({
         onCreated(created)
       }
     } catch (err) {
-      // 服务端错误文案原样展示（name is required / too many cloud hosts / ...）
-      setError(getErrorMessage(err))
+      // 服务端错误文案原样展示（name is required / insufficient balance / ...）
+      handleCreateError(err)
     } finally {
       setSubmitting(false)
     }
@@ -478,11 +499,33 @@ export default function NewCloudHostDialog({
             )}
           </div>
 
+          <div className="min-w-0 rounded-md border p-3">
+            <span className="mb-1 block text-sm font-medium">收费详情</span>
+            {quoteError && !quote ? (
+              <p className="text-xs text-muted-foreground">创建与运行将产生费用，详见账单</p>
+            ) : quoteLoading && !quote ? (
+              <p className="text-xs text-muted-foreground">正在加载报价...</p>
+            ) : quote ? (
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>创建花费：{quote.createCredits} credits（一次性，确认创建即扣费）</p>
+                <p>
+                  运行消费：{quote.perMinuteCredits} credit/分钟（自云电脑就绪起按分钟计费，不足
+                  1 分钟按 1 分钟计）
+                </p>
+                <p>余额不足持续 10 分钟云电脑将被强制销毁</p>
+                {balanceInsufficient && (
+                  <p className="text-destructive">
+                    当前可用余额：{quote.availableBalance} credits，余额不足，请联系管理员充值
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">创建与运行将产生费用，详见账单</p>
+            )}
+          </div>
+
           {featureDisabled && (
             <p className="text-sm text-destructive">云电脑功能未开启</p>
-          )}
-          {hasActiveCloudHost && (
-            <p className="text-sm text-destructive">每用户同时最多 1 个云电脑实例</p>
           )}
           {error && (
             <p role="alert" className="break-words text-sm text-destructive">

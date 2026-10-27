@@ -145,4 +145,48 @@ describe('PaymentService（冻结/解冻/扣费/充值幂等）', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('refund 入账恢复余额并清欠费；同 refundKey 幂等不重复入账', async () => {
+    const accountId = await account();
+    const payments = new PaymentService(checks);
+    const preCheck = (
+      await checks.check({
+        accountId,
+        estimatedCredits: 500,
+        policy: 'accrue-and-track',
+        ref: { type: 'cloud_host', id: 'h1' },
+      })
+    ).preCheck!;
+    await payments.charge({
+      accountId,
+      amountCents: 500,
+      idempotentKey: 'cloud_host.create:h1',
+      bizId: 'b1',
+      preCheck,
+      ref: { type: 'cloud_host', id: 'h1' },
+    });
+    await BillingAccount.updateOne({ _id: accountId }, { $set: { insufficientSince: new Date() } });
+
+    const refunded = await payments.refund({
+      accountId,
+      amountCents: 500,
+      idempotentKey: 'cloud_host.create.refund:h1',
+      bizId: 'b1-refund',
+    });
+    expect(refunded.applied).toBe(true);
+    expect(refunded.cashBalance).toBe(1000);
+    expect((await BillingAccount.findById(accountId))?.insufficientSince).toBeNull();
+
+    const again = await payments.refund({
+      accountId,
+      amountCents: 500,
+      idempotentKey: 'cloud_host.create.refund:h1',
+      bizId: 'b1-refund',
+    });
+    expect(again.applied).toBe(false);
+    expect((await BillingAccount.findById(accountId))?.cashBalance).toBe(1000);
+    await expect(
+      payments.refund({ accountId, amountCents: 0, idempotentKey: 'zero-refund', bizId: 'x' }),
+    ).rejects.toThrow();
+  });
 });

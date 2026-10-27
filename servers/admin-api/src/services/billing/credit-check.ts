@@ -8,7 +8,7 @@ export type CreditCheckPolicy = 'reject-on-insufficient' | 'accrue-and-track';
 export type CreditCheckReason = 'INSUFFICIENT_BALANCE' | 'ACCOUNT_FROZEN' | 'NOT_FOUND';
 
 export interface CreditCheckRef {
-  type: 'container_reservation' | 'model_call';
+  type: 'container_reservation' | 'model_call' | 'cloud_host';
   id: string;
 }
 

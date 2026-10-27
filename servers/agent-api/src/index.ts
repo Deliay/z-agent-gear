@@ -27,6 +27,8 @@ import * as migration007 from './migrations/007-workflow-pr-handler-index.js';
 import * as migration008 from './migrations/008-workflow-pr-handler-lower-id.js';
 import * as migration009 from './migrations/009-todo-harness-login.js';
 import * as migration010 from './migrations/010-issues-linkage-indexes.js';
+import * as migration011CloudHostActiveUniqueIndexDrop from './migrations/011-drop-cloud-host-active-unique-index.js';
+import * as migration011UserCommitSettingsIndex from './migrations/011-user-commit-settings-index.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -104,6 +106,8 @@ async function start() {
       migration008,
       migration009,
       migration010,
+      migration011CloudHostActiveUniqueIndexDrop,
+      migration011UserCommitSettingsIndex,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);

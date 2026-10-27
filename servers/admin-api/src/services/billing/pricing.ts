@@ -32,6 +32,8 @@ export interface PricedUsage {
 }
 
 const DEFAULT_CONTAINER_MINUTE_CENTS = 100; // 1 credit / 分钟
+/** 云电脑创建一次性费用：5 credits（价目档存在时不覆盖既有调价）。 */
+export const DEFAULT_CLOUD_HOST_CREATE_CENTS = 500;
 
 /** 定价：按消费时段取生效价目（effectiveFrom <= at 的最新档），产出单价快照。 */
 export class PricingService {
@@ -44,6 +46,21 @@ export class PricingService {
           productName: '云端工作容器（分钟）',
           pricingModel: 'per_unit',
           unitPrice: DEFAULT_CONTAINER_MINUTE_CENTS,
+          rates: { inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0 },
+          isBillable: true,
+          effectiveFrom: new Date(0),
+        },
+      },
+      { upsert: true },
+    );
+    await ProductPrice.updateOne(
+      { productId: 'cloud_host.create' },
+      {
+        $setOnInsert: {
+          productId: 'cloud_host.create',
+          productName: '云电脑创建（一次性）',
+          pricingModel: 'per_unit',
+          unitPrice: DEFAULT_CLOUD_HOST_CREATE_CENTS,
           rates: { inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0 },
           isBillable: true,
           effectiveFrom: new Date(0),

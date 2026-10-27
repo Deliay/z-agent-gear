@@ -57,6 +57,10 @@ vi.mock('./pr-handler-registry.js', () => ({
   },
 }));
 
+vi.mock('../workspace-default-branch.js', () => ({
+  resolveWorkspaceDefaultBranch: vi.fn(),
+}));
+
 import { workflowInstanceService } from './instance.js';
 import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
@@ -67,6 +71,7 @@ import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
+import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -169,6 +174,22 @@ function mockCapabilities(types: string[]) {
   );
 }
 
+/** Worktree 命令成功 + 能力探测可用（避免 get mock 覆盖 capabilities）。 */
+function mockWorktreeRedis() {
+  mockRedis.get.mockImplementation(async (key: string) => {
+    if (key.startsWith('git:worktree:add:')) {
+      return JSON.stringify({ success: true, worktreePath: '/wt/repo/workflow-x' });
+    }
+    if (key.startsWith('git:worktree:remove:')) {
+      return JSON.stringify({ success: true });
+    }
+    return JSON.stringify({
+      servers: [{ type: 'opencode', available: true }],
+      checkedAt: new Date().toISOString(),
+    });
+  });
+}
+
 describe('WorkflowInstanceService.instantiate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -177,6 +198,7 @@ describe('WorkflowInstanceService.instantiate', () => {
     mockCapabilities(['opencode', 'claude_code']);
     vi.mocked(ConfiguredWorkflow.findOne).mockReturnValue(leanQuery(makeConfigured()));
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace()));
+    vi.mocked(resolveWorkspaceDefaultBranch).mockResolvedValue(null);
   });
 
   it('I1: CONFIGURED 正常实例化：节点全量快照落库，首节点 READY，其余 INITIALIZING', async () => {
@@ -308,15 +330,16 @@ describe('WorkflowInstanceService.instantiate', () => {
     ).rejects.toThrow(/gemini_cli/);
   });
 
-  it('I5: requiresWorktree 但工作区非 git 拒绝', async () => {
+  it('I5: requiresWorktree 但解析不到默认分支 → 抛原错误文案', async () => {
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
     await expect(
       workflowInstanceService.instantiate('user-1', instantiateInput() as never),
     ).rejects.toThrow(/Git|git/);
+    expect(resolveWorkspaceDefaultBranch).toHaveBeenCalled();
     expect(WorkflowInstance.create).not.toHaveBeenCalled();
   });
 
-  it('I5b: 无 requiresWorktree 节点时非 git 工作区也可实例化', async () => {
+  it('I5b: 无 requiresWorktree 节点且不建实例 Worktree → 非 git 工作区可实例化且不调用解析器', async () => {
     const nodes = makeNodes();
     nodes[1].requiresWorktree = false;
     nodes[1].agentConfig = { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false };
@@ -326,6 +349,88 @@ describe('WorkflowInstanceService.instantiate', () => {
     await expect(
       workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never),
     ).resolves.toBeTruthy();
+    expect(resolveWorkspaceDefaultBranch).not.toHaveBeenCalled();
+  });
+
+  it('I7: needsWorktree 且默认分支缺失 → 解析回填后实例化成功', async () => {
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
+    vi.mocked(resolveWorkspaceDefaultBranch).mockResolvedValue('main');
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput() as never),
+    ).resolves.toBeTruthy();
+
+    expect(resolveWorkspaceDefaultBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', controllerId: 'ctrl-1', workspaceId: 'ws-1' }),
+    );
+    expect(WorkflowInstance.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('I8: createWorkflowWorktree 且默认分支缺失 → 解析后创建实例级 Worktree', async () => {
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
+    vi.mocked(resolveWorkspaceDefaultBranch).mockResolvedValue('main');
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+    mockWorktreeRedis();
+
+    await workflowInstanceService.instantiate(
+      'user-1',
+      instantiateInput({ createWorkflowWorktree: true }) as never,
+    );
+
+    const addCall = vi
+      .mocked(mockRedis.publish)
+      .mock.calls.map(([, payload]) => JSON.parse(payload as string))
+      .find((p: { type?: string }) => p.type === 'git:worktree:add');
+    expect(addCall).toBeTruthy();
+    const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as {
+      workflowWorktreePath?: string;
+      workflowWorktreeBranch?: string;
+    };
+    expect(created.workflowWorktreePath).toBe('/wt/repo/workflow-x');
+    expect(created.workflowWorktreeBranch).toBeTruthy();
+  });
+
+  it('I9a: needsWorktree 且解析失败 → 原错误文案', async () => {
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
+
+    await expect(
+      workflowInstanceService.instantiate('user-1', instantiateInput() as never),
+    ).rejects.toThrow(/未设置默认分支/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I9b: createWorkflowWorktree 且解析失败 → 显式报错而非静默跳过', async () => {
+    const nodes = makeNodes();
+    nodes[1].requiresWorktree = false;
+    nodes[1].agentConfig = { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false };
+    vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace({ defaultBranch: null })));
+
+    await expect(
+      workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ nodes, createWorkflowWorktree: true }) as never,
+      ),
+    ).rejects.toThrow(/无法创建独立 Worktree/);
+    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+  });
+
+  it('I10: 实例创建失败 → 回滚 Worktree 并继续抛错', async () => {
+    vi.mocked(WorkflowInstance.create).mockRejectedValueOnce(new Error('db down'));
+    mockWorktreeRedis();
+
+    await expect(
+      workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true }) as never,
+      ),
+    ).rejects.toThrow('db down');
+
+    const types = vi
+      .mocked(mockRedis.publish)
+      .mock.calls.map(([, payload]) => JSON.parse(payload as string).type);
+    expect(types).toContain('git:worktree:add');
+    expect(types).toContain('git:worktree:remove');
   });
 
   it('I6: 提交图与来源图不同（实例化前被修改）时以提交图为准落库', async () => {

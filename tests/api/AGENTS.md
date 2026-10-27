@@ -115,6 +115,23 @@ npm test
 
 > T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
+### Commit 设置与提交身份 (`agent-api/github.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回双 UNSET |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人全字段（trim 归一） |
+| T-CS-API3 | 白名单错误逐字：committer required / invalid github account / invalid custom committer |
+| T-CS-API4 | 归一落库：mode=UNSET 不清提交人、type=UNSET 清空冗余字段 |
+| T-CI-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401 |
+| T-CI-API2 | `co_author` 返回提交人 + bot 全字段（需 `GITHUB_API_BASE` 指向 mock-github-server） |
+| T-CI-API3 | 主机不存在 / 未保存设置均 200 `{mode:'unset'}`（永不 404） |
+| T-CI-API4 | 帐号解绑 / 越权降级 unset |
+| T-CI-API5 | unset 响应缺省字段（仅 mode） |
+
+> `tests/api/src/mock-github-server.ts` 提供 `GET /app`（slug）与 `GET /users/{slug}[bot]`（id）mock，
+> 并支持 `failNext` 注入失败（60s 失败 sentinel / 降级路径）。
+
 ### Auth API (`auth.test.ts`)
 
 | 测试 | 描述 |
@@ -635,8 +652,10 @@ npm test
 
 | 文件 | 说明 |
 |------|------|
-| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/1 实例/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
-| `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/admin-api/cloud-host-charges.test.ts` | 内部一次性扣费/退款/报价：401、扣费 5 credits 与账单/收据、余额不足 409 `INSUFFICIENT_BALANCE`（带 `available`）、退款幂等、`price-quote` 5/1（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
+| `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
 | `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.10.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
@@ -651,7 +670,7 @@ npm test
 
 ## 云主机工作负载 / Github 设置
 
-- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
+- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
 - 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖。
