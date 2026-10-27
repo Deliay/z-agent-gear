@@ -46,7 +46,6 @@ describe('auth resolvers (three-tier account model)', () => {
     const result = await authResolvers.Mutation.login(
       undefined,
       { username: 'alice', password: 'secret1' },
-      {} as AuthContext,
     );
 
     expect(h.account.findOne).toHaveBeenCalledWith({ username: 'alice' });
@@ -58,13 +57,13 @@ describe('auth resolvers (three-tier account model)', () => {
 
   it('keeps the same error message for unknown user and wrong password', async () => {
     await expect(
-      authResolvers.Mutation.login(undefined, { username: 'nobody', password: 'x' }, {} as AuthContext),
+      authResolvers.Mutation.login(undefined, { username: 'nobody', password: 'x' }),
     ).rejects.toThrow('Invalid username or password');
 
     h.account.findOne.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'h' });
     h.verifyPassword.mockResolvedValue(false);
     await expect(
-      authResolvers.Mutation.login(undefined, { username: 'alice', password: 'bad' }, {} as AuthContext),
+      authResolvers.Mutation.login(undefined, { username: 'alice', password: 'bad' }),
     ).rejects.toThrow('Invalid username or password');
   });
 

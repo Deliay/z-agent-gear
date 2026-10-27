@@ -32,7 +32,8 @@ const workflowTemplateSchema = new mongoose.Schema(
   {
     // 可空：null 表示内置模板（isBuiltin=true）
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
-    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
+    // 系统内置模板 userId 为空（无归属），tenantId 跟随可选（迁移 013 只清洗带 userId 行）。
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', default: null, index: true },
     name: { type: String, required: true },
     description: { type: String },
     version: { type: Number, default: 1 },
