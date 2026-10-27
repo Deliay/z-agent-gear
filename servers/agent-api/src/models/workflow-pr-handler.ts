@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 /** 注销原因（供日志与排查；记录落库前删除，不单独持久化） */
 export const PR_HANDLER_UNREGISTER_REASONS = [
@@ -13,6 +14,7 @@ export type PrHandlerUnregisterReason = (typeof PR_HANDLER_UNREGISTER_REASONS)[n
 const workflowPrHandlerSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance', required: true },
     nodeId: { type: String, required: true },
     nodeKey: { type: String, default: null },
@@ -55,6 +57,8 @@ workflowPrHandlerSchema.index(
   { workflowInstanceId: 1, nodeId: 1, pullRequestId: 1 },
   { unique: true, name: 'uniq_workflow_pr_handler' },
 );
+
+applyTenantScope(workflowPrHandlerSchema);
 
 export const WorkflowPrHandler = mongoose.model('WorkflowPrHandler', workflowPrHandlerSchema);
 export type IWorkflowPrHandler = mongoose.InferSchemaType<typeof workflowPrHandlerSchema>;

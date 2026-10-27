@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 /** 提交人模式（DB 小写字面量；GraphQL 侧为大写枚举）。 */
 export const COMMITTER_MODES = ['agent_only', 'co_author', 'human_only', 'unset'] as const;
@@ -17,6 +18,7 @@ export type CommitterType = (typeof COMMITTER_TYPES)[number];
 const userCommitSettingSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true, unique: true, index: true },
+    tenantId: { type: String, required: true, index: true },
     committerMode: {
       type: String,
       enum: COMMITTER_MODES,
@@ -38,7 +40,10 @@ const userCommitSettingSchema = new mongoose.Schema(
   { collection: 'user_commit_settings', timestamps: true },
 );
 
-userCommitSettingSchema.index({ userId: 1 }, { unique: true });
+// 多租户一期（F6）：唯一索引扩展为 {tenantId,userId}，保留 userId 维度。
+userCommitSettingSchema.index({ tenantId: 1, userId: 1 }, { unique: true });
+
+applyTenantScope(userCommitSettingSchema);
 
 export const UserCommitSetting = mongoose.model('UserCommitSetting', userCommitSettingSchema);
 export type IUserCommitSetting = mongoose.InferSchemaType<typeof userCommitSettingSchema>;

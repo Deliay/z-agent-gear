@@ -10,6 +10,8 @@ const cloudContainerSchema = new mongoose.Schema(
     controllerKeyId: { type: String, default: null },
     containerApiKeyId: { type: String, default: null },
     userId: { type: String, default: null },
+    // 与 cloud-controller 写方同步演进（多租户一期）：tenantId 与 userId 同值。
+    tenantId: { type: String, default: null, index: true },
     purpose: { type: String, default: 'idle' },
     status: { type: String, default: 'creating' },
     harnessTypes: { type: [String], default: [] },

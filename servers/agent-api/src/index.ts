@@ -29,6 +29,10 @@ import * as migration009 from './migrations/009-todo-harness-login.js';
 import * as migration010 from './migrations/010-issues-linkage-indexes.js';
 import * as migration011CloudHostActiveUniqueIndexDrop from './migrations/011-drop-cloud-host-active-unique-index.js';
 import * as migration011UserCommitSettingsIndex from './migrations/011-user-commit-settings-index.js';
+import * as migration012AccountUserTenant from './migrations/012-account-user-tenant.js';
+import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfill.js';
+import { internalUsersRouter } from './routes/internal-users.js';
+import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -58,7 +62,7 @@ const yoga = createYoga({
   schema,
   context: async ({ request }) => {
     const currentUser = await authenticateUser(request);
-    return { currentUser };
+    return { currentUser, tenantId: currentUser?.tenantId ?? null };
   },
   graphiql: true,
 });
@@ -69,6 +73,7 @@ app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
+app.use('/internal/users', internalUsersRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -108,6 +113,8 @@ async function start() {
       migration010,
       migration011CloudHostActiveUniqueIndexDrop,
       migration011UserCommitSettingsIndex,
+      migration012AccountUserTenant,
+      migration013TenantIdBackfill,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
@@ -153,6 +160,8 @@ async function start() {
 
   app.listen(config.port, () => {
     console.log(`Agent Gear API running at http://localhost:${config.port}/graphql`);
+    // 多租户一期：启动后轻量异步自检（不阻塞对外服务，异常仅告警）
+    scheduleTenantSelfCheck();
   });
 }
 

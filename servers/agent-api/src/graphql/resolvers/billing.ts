@@ -6,11 +6,18 @@ import {
 } from '../../services/billing-client.js';
 import type { AuthContext } from './auth.js';
 
-function requireUser(context: AuthContext): { id: string; username: string } {
+interface BillingOwner {
+  tenantId: string;
+  name?: string;
+}
+
+/** 前台计费归属：租户口径（ownerType=tenant，ownerId=tenantId；personal 期 == userId）。 */
+function requireUser(context: AuthContext): BillingOwner {
   if (!context.currentUser) {
     throw new GraphQLError('Not authenticated', { extensions: { code: 'UNAUTHENTICATED' } });
   }
-  return context.currentUser;
+  const tenantId = context.currentUser.tenantId ?? context.currentUser.id;
+  return { tenantId, name: context.currentUser.name ?? context.currentUser.username };
 }
 
 /** C2/R2-3：按上游状态码映射稳定 GraphQL 错误码（与 admin-api/cloud-container 统一词汇：
@@ -35,7 +42,7 @@ async function run<T>(task: () => Promise<T>): Promise<T> {
 
 async function myAccount(context: AuthContext): Promise<BillingAccountWire> {
   const user = requireUser(context);
-  return run(() => billingClient.getAccount('front_user', user.id, user.username));
+  return run(() => billingClient.getAccount('tenant', user.tenantId, user.name));
 }
 
 /** 前台「我的费用」：只读 + API Key 管理；无充值 mutation（仅后台充值）。 */
@@ -91,7 +98,7 @@ export const billingResolvers = {
         const user = requireUser(context);
         // B-3：费用中心「API Key」列表只展示账号 Key；`scope=cloud_host` 是云电脑运行专用 Key，
         // 生命周期与宿主绑定（创建/轮换/撤销由云端编排管理），不应出现在用户可管理列表中。
-        const keys = await billingClient.listApiKeys('front_user', user.id);
+        const keys = await billingClient.listApiKeys('tenant', user.tenantId);
         return keys.filter((key) => key.scope !== 'cloud_host');
       }),
     myBillingApiCalls: async (
@@ -112,7 +119,7 @@ export const billingResolvers = {
     ) =>
       run(async () => {
         const user = requireUser(context);
-        return billingClient.createApiKey('front_user', user.id, args.name);
+        return billingClient.createApiKey('tenant', user.tenantId, args.name);
       }),
     revokeMyBillingApiKey: async (
       _parent: unknown,
@@ -121,7 +128,7 @@ export const billingResolvers = {
     ) =>
       run(async () => {
         const user = requireUser(context);
-        const result = await billingClient.revokeApiKey(args.id, 'front_user', user.id);
+        const result = await billingClient.revokeApiKey(args.id, 'tenant', user.tenantId);
         return result.apiKey;
       }),
   },
