@@ -1,30 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
+import { registerUser } from './helpers';
 
-const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-
-async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const body: Record<string, unknown> = { query };
-  if (variables) body.variables = variables;
-  return page.request.post(API_URL, { headers, data: body });
-}
-
-async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `er${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($username: String!, $password: String!) {
-      signup(username: $username, password: $password) {
-        token
-        user { id username }
-      }
-    }
-  `, { username, password: 'testpass123' });
-  const body = await res.json();
-  return { token: body.data.signup.token, username };
-}
 
 async function loginViaUI(page: import('@playwright/test').Page, username: string) {
   await page.goto('/login');

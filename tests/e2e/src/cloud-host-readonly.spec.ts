@@ -31,6 +31,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId,
+      tenantId: userId, // 多租户一期：personal 期 tenantId == userId
       name: `readonly-${controllerId.toString()}`,
       hostname: `readonly-${controllerId.toString()}`,
       type: 'cloud',
@@ -43,6 +44,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
     await db.collection('controllerworkspaces').insertOne({
       _id: workspaceId,
       userId,
+      tenantId: userId,
       controllerId,
       name: 'workspace',
       path: '/home/worker/workspace',
@@ -53,6 +55,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
     await db.collection('cloudhosts').insertOne({
       _id: hostId,
       userId,
+      tenantId: userId,
       name: `readonly-${hostId.toString()}`,
       harnessTypes: ['OPENCODE'],
       status: 'STOPPED',
@@ -71,6 +74,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
     });
     const session = await db.collection('sessions').insertOne({
       userId,
+      tenantId: userId,
       controllerId,
       controllerName: `readonly-${controllerId.toString()}`,
       acpServerType: 'opencode',

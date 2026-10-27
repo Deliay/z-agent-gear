@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { adminGqlRequest, adminLoginApi, startMockLlmServer } from './helpers.js';
+import { adminGqlRequest, adminLoginApi, createFrontUser, startMockLlmServer } from './helpers.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const TEST_PASS = 'testpass123';
@@ -18,17 +18,12 @@ async function gqlRequest(
   });
 }
 
+// 前台注册已硬关闭：造用户统一走后台开户 + login（helpers.createFrontUser）。
 async function registerUserWithToken(
   page: import('@playwright/test').Page,
 ): Promise<{ username: string; token: string }> {
-  const username = `ll${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($u: String!, $p: String!) {
-      signup(username: $u, password: $p) { token user { id username } }
-    }
-  `, { u: username, p: TEST_PASS });
-  const body = await res.json();
-  return { username, token: body.data.signup.token as string };
+  const { username, token } = await createFrontUser(page, { prefix: 'll' });
+  return { username, token };
 }
 
 async function registerUser(page: import('@playwright/test').Page): Promise<string> {

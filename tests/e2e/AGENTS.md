@@ -65,7 +65,7 @@ npx playwright test
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
-| `INTERNAL_API_TOKEN` | agent-api 内部回调 Bearer token（`E2E-1` 驱动 cloud host ready 回调；**缺省时 E2E-1 显式 skip，不静默绕过核心断言**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
+| `INTERNAL_API_TOKEN` | agent-api 内部 Bearer token（前台账号开户 `POST /internal/users`、`E2E-1` 驱动 cloud host ready 回调；**缺省时开户回落 admin-api `adminCreateFrontUser`，E2E-1 显式 skip**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:35273` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调凭据（E2E-27~32 / E2E-CR*；缺失时该组用例跳过） | - |
 | `GITHUB_API_BASE` | Check Runs 同步展示用例（E2E-CR*）不依赖出站调用；出站行为由 `tests/api` mock GitHub 覆盖 | - |
@@ -95,16 +95,34 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 ### Auth E2E (`auth.spec.ts`)
 
+> 前台注册已硬关闭（无 `/register` 路由、登录页无注册入口、auth 契约删除 signup）：测试造用户统一经
+> `helpers.createFrontUser`（`POST /internal/users`，需 `INTERNAL_API_TOKEN`；未注入时回落 admin-api
+> `adminCreateFrontUser`，需 `MONGODB_URI` 归一化管理员口令）+ `login`。
+
 | 测试 | 描述 |
 |------|------|
-| 注册新用户 | 填写注册表单 → 跳转到主界面，侧边栏可见 |
-| 登录后展示布局 | 正确凭证登录 → 2-column 布局，Sessions 可见 |
-| 侧边栏显示用户名 | 登录后侧边栏底部显示当前用户 |
+| 登录页无注册入口 | 登录页无「注册」链接/按钮，也无「没有账号？去注册」文案（E2E-MT1） |
+| `/register` 直达不可用 | 直达 `/register` 不渲染注册表单，重定向登录页或 404（E2E-MT1） |
+| 登录后展示布局 | 正确凭证登录 → 2-column 布局，「我的费用」入口可见 |
+| 侧边栏显示展示名 | 登录后侧边栏底部显示 `user.name`（迁移后=原用户名） |
+| login/me 暴露 name + tenant | `me` 返回 `name` 与 personal 租户（`tenant.id == userId`、`memberCount=1`） |
 | 错误密码提示 | 错误密码 → 显示错误信息 |
 | 设置页导航 | 点击设置按钮 → 设置页显示退出登录按钮 |
 | 设置页布局 | 设置页 2-column 布局，显示用户名 |
 | 退出登录 | 点击退出登录 → 跳转回登录页 |
 | 未登录重定向 | 直接访问 `/` → 重定向到登录页 |
+
+### Admin Tenant E2E (`admin-tenant.spec.ts`)
+
+> 需要 admin-web / admin-api / agent-api 就绪（`aspire start && aspire wait admin-web admin-api agent-api`）；
+> 后台不做多租户设计：租户页只读，开户是唯一写操作（转发 `POST /internal/users`）。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-MT5 租户只读 | 租户列表/详情可见（新开户租户与成员用户名），无编辑/删除/停用/新建租户按钮；introspection 无租户写 mutation（仅 `adminCreateFrontUser`） |
+| E2E-MT2 开户闭环 | 后台「租户管理」开户（用户名 + 初始密码）→ 租户列表可见同名租户 → 新账户前台登录 → 侧边栏展示名 |
+| E2E-MT3 租户口径计费 | 后台按租户（ownerType=tenant）检索计费账户 → `rechargeBillingAccount` 充值 → 前台「我的费用」可用余额与账单明细可见 |
+| E2E-MT4 双用户隔离（最小锚定） | A 创建 controller key 后 B 的 `controllerKeys` 为空（会话/工作区的完整隔离链路由 `tests/api` T-MT2 覆盖） |
 
 ### Settings Commit 作者 E2E (`settings-commit-author.spec.ts`)
 
@@ -138,7 +156,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| 注册用户并显示 controller section | API 注册用户 → 登录 → 设置页显示 controller-section |
+| 后台开户用户并显示 controller section | 后台开户（无 signup）→ 登录 → 设置页显示 controller-section |
 | 导航显示本地控制器管理 | 设置页导航显示「本地控制器」和「控制器管理」 |
 | controller section 布局 | 显示「控制器管理」标题和「控制器」卡片 |
 | controller section 空状态 | 显示「生成 Key」按钮和「暂无控制器」空状态文字 |
@@ -349,6 +367,17 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 页面与空状态 | 「基础镜像」页空状态 |
 | CRUD + 删除确认 | UI 新建 → 列表展示 → 删除二次确认（T-W4/T-E5） |
 | 同名拒绝 | API 同名创建报错 `Base image name already exists`（T-E5） |
+
+### Admin Billing E2E (`admin-billing.spec.ts`)
+
+> 需要 admin-web / admin-api 就绪。多租户一期：`BillingOwnerType` 增 `tenant`，`admin_user` 原样保留；
+> 前台租户计费账户以 `adminCreateFrontUser` 开户自动创建（零余额）。
+
+| 测试 | 描述 |
+|------|------|
+| 费用中心可进入，充值后账单与收据可见 | 后台管理员账户（`admin_user`）充值 → 账单/收据/汇总可见（双 owner 回归基线） |
+| 对账中心可进入并手动运行 | 运行全部对账 → 资金/计量/资源对账结果可见 |
+| ownerType 支持 tenant 检索且可按租户充值 | API：`adminBillingAccounts(ownerType: tenant)` 命中开户租户（`ownerId == userId`）、`admin_user` 检索零回归；UI：类型下拉含「租户」→ 按租户检索 → 行内「充值」对话框可用 |
 
 ### Admin Cloud Container E2E (`admin-cloud-container.spec.ts`)
 

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
+import { registerUser } from './helpers';
 
 // Kimi Code（Harness）登录引导 E2E（T-E-HL1~7）。
 // fake controller 注入 `harness:login:required/succeeded/failed` 驱动全局弹窗；
@@ -20,21 +21,6 @@ function gqlRequest(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   return page.request.post(API_URL, { headers, data: { query, variables } });
-}
-
-async function registerUser(
-  page: import('@playwright/test').Page,
-): Promise<{ token: string; username: string }> {
-  const username = `hl${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(
-    page,
-    `mutation Signup($username: String!, $password: String!) {
-      signup(username: $username, password: $password) { token user { id } }
-    }`,
-    { username, password: 'testpass123' },
-  );
-  const body = await res.json();
-  return { token: body.data.signup.token as string, username };
 }
 
 interface FakeController {

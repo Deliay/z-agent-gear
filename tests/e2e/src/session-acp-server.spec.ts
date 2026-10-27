@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { registerUser } from './helpers';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -8,17 +9,6 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return page.request.post(API_URL, { headers, data: { query, variables } });
-}
-
-async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `acp_${Date.now().toString(36)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($u: String!, $p: String!) {
-      signup(username: $u, password: $p) { token user { id username } }
-    }
-  `, { u: username, p: 'testpass123' });
-  const body = await res.json();
-  return { token: body.data.signup.token, username };
 }
 
 async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<{ rawKey: string }> {
