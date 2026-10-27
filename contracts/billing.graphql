@@ -4,7 +4,7 @@
 # 未认证返回 `UNAUTHENTICATED`。
 #
 # 数据归属：计费写路径全部在 admin-api；agent-api 仅经 `/internal/billing/*`
-# 做只读查询与 API Key 管理转发，不直接写计费库。
+# 转发（只读查询、API Key 管理、云电脑创建一次性扣费/退款委托），不直接写计费库。
 #
 # 前台账户仅支持预付费（creditLimit 恒 0），不提供任何自助充值 mutation。
 

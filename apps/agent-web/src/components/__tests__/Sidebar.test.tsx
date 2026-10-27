@@ -481,7 +481,7 @@ describe('Sidebar 集成测试', () => {
       expect(screen.getByTestId('new-cloud-host-dialog')).toBeInTheDocument();
     });
 
-    it('T-AW2 已有 RUNNING 云电脑时禁用并提示 1 实例上限', () => {
+    it('T-AW2 已有 RUNNING 云电脑时入口仍可点击并打开对话框', () => {
       mockHome({
         controllers: [
           makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),
@@ -491,11 +491,13 @@ describe('Sidebar 集成测试', () => {
       render(<Sidebar username="testuser" />);
 
       const entry = screen.getByLabelText('新建云电脑');
-      expect(entry).toBeDisabled();
-      expect(entry).toHaveAttribute('title', '每用户同时最多 1 个云电脑实例');
+      expect(entry).not.toBeDisabled();
+      expect(entry).toHaveAttribute('title', '新建云电脑');
+      fireEvent.click(entry);
+      expect(screen.getByTestId('new-cloud-host-dialog')).toBeInTheDocument();
     });
 
-    it.each(['STARTING', 'STOPPING'] as const)('%s 状态同样占用实例上限', (status) => {
+    it.each(['STARTING', 'STOPPING'] as const)('%s 状态不再禁用新建入口', (status) => {
       mockHome({
         controllers: [
           makeController({ id: 'ctrl-cloud', type: 'cloud', cloudHost: makeCloudHost({ status }) }),
@@ -504,7 +506,7 @@ describe('Sidebar 集成测试', () => {
 
       render(<Sidebar username="testuser" />);
 
-      expect(screen.getByLabelText('新建云电脑')).toBeDisabled();
+      expect(screen.getByLabelText('新建云电脑')).not.toBeDisabled();
     });
 
     it('T-AW4 新建成功后 refetch HOME_OVERVIEW 并进入主机配置页', () => {

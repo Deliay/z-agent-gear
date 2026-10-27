@@ -110,6 +110,25 @@ export class CloudHostGithubService {
     if (!authorized) throw new Error('仓库未授权，请前往设置页重新授权');
 
     return this.mutex.runExclusive(`github-setup:${input.controllerId}`, async () => {
+      const lockedAccountId = host.githubAccountId ? String(host.githubAccountId) : null;
+      if (lockedAccountId && lockedAccountId !== String(input.accountId)) {
+        throw new Error('github account is locked');
+      }
+      if (!lockedAccountId) {
+        const bound = await CloudHost.updateOne(
+          { _id: host._id, githubAccountId: null } as any,
+          { $set: { githubAccountId: input.accountId } },
+        );
+        if (bound.matchedCount === 0) {
+          const latest = await CloudHost.findById(host._id).lean();
+          const latestAccountId = latest?.githubAccountId
+            ? String(latest.githubAccountId)
+            : null;
+          if (latestAccountId !== String(input.accountId)) {
+            throw new Error('github account is locked');
+          }
+        }
+      }
       const running = await CloudHostSetupOperation.findOne({
         controllerId: input.controllerId,
         userId: input.userId,

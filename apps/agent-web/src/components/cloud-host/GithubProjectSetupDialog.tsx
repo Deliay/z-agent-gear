@@ -24,7 +24,7 @@ interface GithubProjectSetupDialogProps {
   controllerId: string
   cloudHost: Pick<
     CloudHostData,
-    'id' | 'name' | 'status' | 'deletedAt' | 'defaultWorkspace' | 'hasDefaultWorkspace'
+    'id' | 'name' | 'status' | 'deletedAt' | 'defaultWorkspace' | 'hasDefaultWorkspace' | 'githubAccountId'
   >
   onClose: () => void
 }
@@ -55,6 +55,7 @@ export default function GithubProjectSetupDialog({
     defaultWorkspace: cloudHost.defaultWorkspace,
     // 有默认工作区预填 defaultWorkspace；无默认工作区（多 Harness 不建会话场景）预填 ~/workspace
     hasDefaultWorkspace: cloudHost.hasDefaultWorkspace,
+    lockedAccountId: cloudHost.githubAccountId ?? null,
   })
   const {
     accounts,
@@ -74,6 +75,7 @@ export default function GithubProjectSetupDialog({
     normalizedPrefix,
     finalClonePath,
     hasAccounts,
+    lockedAccountMissing,
   } = form
 
   const [setupGithubProject] = useMutation<SetupCloudHostGithubProjectMutation>(
@@ -162,15 +164,19 @@ export default function GithubProjectSetupDialog({
             <p className="text-sm text-muted-foreground">正在加载 Github 账号...</p>
           ) : !hasAccounts ? (
             <div className="space-y-2 rounded-md border border-dashed p-3">
-              <p className="text-sm text-muted-foreground">尚未绑定 Github 帐号</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => navigate('/settings#github-section')}
-              >
-                前往设置页绑定 Github 帐号
-              </Button>
+              <p className="text-sm text-muted-foreground">
+                {lockedAccountMissing ? '该帐号授权已失效、仓库不可用' : '尚未绑定 Github 帐号'}
+              </p>
+              {!lockedAccountMissing && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/settings#github-section')}
+                >
+                  前往设置页绑定 Github 帐号
+                </Button>
+              )}
             </div>
           ) : (
             <div className="min-w-0">
@@ -181,8 +187,9 @@ export default function GithubProjectSetupDialog({
                 id="github-setup-account"
                 aria-label="Github 账号"
                 value={accountId}
+                disabled={Boolean(cloudHost.githubAccountId)}
                 onChange={(event) => setAccountId(event.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
@@ -190,6 +197,14 @@ export default function GithubProjectSetupDialog({
                   </option>
                 ))}
               </select>
+              {cloudHost.githubAccountId && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  帐号跟随云电脑，选定后不可修改
+                </p>
+              )}
+              {lockedAccountMissing && (
+                <p className="mt-1 text-xs text-destructive">该帐号授权已失效、仓库不可用</p>
+              )}
             </div>
           )}
 

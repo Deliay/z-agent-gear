@@ -233,6 +233,7 @@ export const CLOUD_HOST_FIELDS = gql`
     defaultWorkspace
     hasDefaultWorkspace
     workloadInstalling
+    githubAccountId
   }
 `
 
@@ -266,6 +267,17 @@ export const CLOUD_HOST_CAPABILITIES = gql`
     cloudHostCapabilities {
       enabled
       supportedHarnesses
+    }
+  }
+`
+
+/** 云电脑创建/运行报价（credits；计费不可用时 availableBalance=null） */
+export const CLOUD_HOST_BILLING_QUOTE = gql`
+  query CloudHostBillingQuote {
+    cloudHostBillingQuote {
+      createCredits
+      perMinuteCredits
+      availableBalance
     }
   }
 `

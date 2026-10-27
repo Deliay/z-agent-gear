@@ -104,7 +104,6 @@ services:
       # 前台云电脑（harness）：publish 默认关闭；打开前请把 CONTROLLER_API_PUBLIC_WS_ENDPOINT
       # 改为集群内可达的 controller-api 地址（worker 在 K8s 内运行）。
       HARNESS_ENABLED: "${HARNESS_ENABLED}"
-      CLOUD_HOST_MAX_PER_USER: "1"
       HARNESS_CONTAINER_TTL_SECONDS: "86400"
       CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
       CONTROLLER_API_PUBLIC_WS_ENDPOINT: "http://controller-api:8001"

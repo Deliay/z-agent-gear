@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useGithubProjectForm } from './useGithubProjectForm'
+import { GET_GITHUB_ACCOUNTS } from '../graphql/queries'
 
 const mockUseQuery = vi.fn()
 
@@ -75,5 +76,61 @@ describe('useGithubProjectForm 前缀默认值', () => {
 
     expect(result.current.prefixError).toBe('前缀地址必须以 / 或 ~ 开头')
     expect(result.current.normalizedPrefix).toBeNull()
+  })
+
+  it('T-AW-G15: 锁定帐号固定不可切换，仓库列表来自该帐号', async () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (query === GET_GITHUB_ACCOUNTS) {
+        return {
+          data: {
+            githubAccounts: [
+              {
+                id: 'acc-1',
+                githubLogin: 'alice',
+                installations: [{ repos: [{ fullName: 'alice/a' }] }],
+              },
+              {
+                id: 'acc-2',
+                githubLogin: 'bob',
+                installations: [{ repos: [{ fullName: 'bob/b' }] }],
+              },
+            ],
+          },
+          loading: false,
+        }
+      }
+      return { data: null, loading: false }
+    })
+    const { result } = renderHook(() =>
+      useGithubProjectForm({
+        open: true,
+        controllerId: 'ctrl-1',
+        lockedAccountId: 'acc-2',
+      }),
+    )
+    await waitFor(() => expect(result.current.accountId).toBe('acc-2'))
+    expect(result.current.repos.map((repo) => repo.fullName)).toEqual(['bob/b'])
+    act(() => result.current.setAccountId('acc-1'))
+    expect(result.current.accountId).toBe('acc-2')
+  })
+
+  it('T-AW-G16: 锁定帐号不在账号列表时标记授权失效', async () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (query === GET_GITHUB_ACCOUNTS) {
+        return {
+          data: { githubAccounts: [{ id: 'acc-1', githubLogin: 'alice', installations: [] }] },
+          loading: false,
+        }
+      }
+      return { data: null, loading: false }
+    })
+    const { result } = renderHook(() =>
+      useGithubProjectForm({
+        open: true,
+        controllerId: 'ctrl-1',
+        lockedAccountId: 'acc-missing',
+      }),
+    )
+    await waitFor(() => expect(result.current.lockedAccountMissing).toBe(true))
   })
 })

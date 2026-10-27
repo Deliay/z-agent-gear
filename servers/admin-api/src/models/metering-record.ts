@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-export const METERING_RESOURCE_TYPES = ['container', 'model'] as const;
+export const METERING_RESOURCE_TYPES = ['container', 'model', 'cloud_host'] as const;
 
 /** 计量事实（可重放、可复核）：用量不因调价改变。 */
 const meteringRecordSchema = new mongoose.Schema(
