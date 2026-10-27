@@ -36,7 +36,6 @@ export const config = {
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
   // 前台云电脑（harness）：默认关闭，由发布参数/灰度打开
   harnessEnabled: toBool(process.env.HARNESS_ENABLED, false),
-  cloudHostMaxPerUser: toPositiveInt(process.env.CLOUD_HOST_MAX_PER_USER, 1),
   harnessContainerTtlSeconds: toPositiveInt(process.env.HARNESS_CONTAINER_TTL_SECONDS, 86400),
   // cloud-controller 内部 API
   cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',

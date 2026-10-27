@@ -23,10 +23,15 @@ vi.mock('../../models/session.js', () => ({
   Session: { countDocuments: vi.fn() },
 }));
 
+vi.mock('../../services/billing-client.js', () => ({
+  billingClient: { getPriceQuote: vi.fn(), getAccount: vi.fn() },
+}));
+
 import { cloudHostResolvers } from './cloud-host.js';
 import { cloudHostService } from '../../services/cloud-host-service.js';
 import { CloudHost } from '../../models/cloud-host.js';
 import { Session } from '../../models/session.js';
+import { billingClient } from '../../services/billing-client.js';
 
 const context = { currentUser: null } as never;
 const authContext = { currentUser: { id: 'user-1', username: 'u' } } as never;
@@ -45,6 +50,7 @@ describe('cloudHostResolvers authentication', () => {
   it.each([
     ['cloudHostCapabilities', () => cloudHostResolvers.Query.cloudHostCapabilities({}, {}, context)],
     ['myCloudHosts', () => cloudHostResolvers.Query.myCloudHosts({}, {}, context)],
+    ['cloudHostBillingQuote', () => cloudHostResolvers.Query.cloudHostBillingQuote({}, {}, context)],
     [
       'cloudHostWorkloadCatalog',
       () => cloudHostResolvers.Query.cloudHostWorkloadCatalog({}, {}, context),
@@ -148,5 +154,42 @@ describe('cloudHostResolvers.Query.cloudHost', () => {
     expect(vi.mocked(cloudHostService.create).mock.calls[1][1]).not.toHaveProperty(
       'createDefaultSession',
     );
+  });
+
+  it('passes githubAccountId through to the service', async () => {
+    vi.mocked(cloudHostService.create).mockResolvedValue({ id: HOST_ID } as never);
+    await cloudHostResolvers.Mutation.createCloudHost(
+      {},
+      { input: { name: 'x', harnessTypes: ['OPENCODE'], githubAccountId: '507f1f77bcf86cd799439099' } },
+      authContext,
+    );
+    expect(vi.mocked(cloudHostService.create).mock.calls[0][1]).toMatchObject({
+      githubAccountId: '507f1f77bcf86cd799439099',
+    });
+  });
+});
+
+describe('cloudHostResolvers.Query.cloudHostBillingQuote', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-CH-QL1: 聚合价目与可用余额', async () => {
+    vi.mocked(billingClient.getPriceQuote).mockResolvedValue([
+      { productId: 'cloud_host.create', unitPrice: 5, currency: 'credits' },
+      { productId: 'container.minute', unitPrice: 1, currency: 'credits' },
+    ] as never);
+    vi.mocked(billingClient.getAccount).mockResolvedValue({ availableBalance: 12.5 } as never);
+    await expect(
+      cloudHostResolvers.Query.cloudHostBillingQuote({}, {}, authContext),
+    ).resolves.toEqual({ createCredits: 5, perMinuteCredits: 1, availableBalance: 12.5 });
+  });
+
+  it('T-CH-QL2: 计费不可用时降级回退默认价目且余额为 null', async () => {
+    vi.mocked(billingClient.getPriceQuote).mockRejectedValue(new Error('down'));
+    vi.mocked(billingClient.getAccount).mockRejectedValue(new Error('down'));
+    await expect(
+      cloudHostResolvers.Query.cloudHostBillingQuote({}, {}, authContext),
+    ).resolves.toEqual({ createCredits: 5, perMinuteCredits: 1, availableBalance: null });
   });
 });

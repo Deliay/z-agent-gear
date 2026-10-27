@@ -156,4 +156,17 @@ describe('PricingService（用量 × 价目 → 费用，单价快照）', () =>
     expect(priced.amountCents).toBe(0);
     expect(priced.items).toEqual([]);
   });
+
+  it('T-PRICE-C1: 初始化云电脑创建价目且不覆盖既有调价档', async () => {
+    const updateOne = ProductPrice.updateOne as unknown as ReturnType<typeof vi.fn>;
+    updateOne.mockResolvedValue({ acknowledged: true });
+    await new PricingService().ensureDefaultPrices();
+    const createCall = updateOne.mock.calls.find(
+      ([filter]) => (filter as { productId?: string }).productId === 'cloud_host.create',
+    );
+    expect(createCall).toBeDefined();
+    expect(createCall![1]).toMatchObject({
+      $setOnInsert: { unitPrice: 500, isBillable: true, pricingModel: 'per_unit' },
+    });
+  });
 });

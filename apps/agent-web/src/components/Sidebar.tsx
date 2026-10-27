@@ -16,7 +16,6 @@ import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
 import {
   cloudHostStatusDotClass,
   cloudHostStatusLabel,
-  isActiveCloudHost,
   isTerminalCloudHost,
 } from './cloud-host/cloud-host-status';
 import { getStatusDotColor } from './session/status-colors';
@@ -70,8 +69,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
   const allWorkspaces = data?.workspaces ?? [];
   const workflowInstances = data?.workflowInstances ?? [];
   const archivedWorkflowInstances = data?.archivedWorkflowInstances ?? [];
-
-  const hasActiveCloudHost = controllers.some((controller) => isActiveCloudHost(controller.cloudHost));
 
   const githubSetupController = showGithubSetup
     ? controllers.find((controller) => controller.id === showGithubSetup.controllerId)
@@ -183,10 +180,9 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
             <button
               type="button"
               aria-label="新建云电脑"
-              title={hasActiveCloudHost ? '每用户同时最多 1 个云电脑实例' : '新建云电脑'}
-              disabled={hasActiveCloudHost}
+              title="新建云电脑"
               onClick={() => setShowNewCloudHost(true)}
-              className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
             >
               <span className="relative inline-flex">
                 <Cloud className="size-4" />
@@ -468,7 +464,6 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
         <NewCloudHostDialog
           open={showNewCloudHost}
           capabilities={capabilities}
-          hasActiveCloudHost={hasActiveCloudHost}
           onClose={() => setShowNewCloudHost(false)}
           onCreated={handleCloudHostCreated}
         />

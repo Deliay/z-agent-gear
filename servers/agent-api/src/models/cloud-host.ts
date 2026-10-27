@@ -18,7 +18,7 @@ export type HarnessType = (typeof HARNESS_TYPES)[number];
  * 前台云电脑（集合 `cloudhosts`）。
  *
  * 生命周期：创建即启动 → 停止即销毁。`status` 是云电脑生命周期的唯一事实源；
- * `STARTING/RUNNING/STOPPING` 计入每用户 1 实例上限，`STOPPED/FAILED` 为终态。
+ * `STARTING/RUNNING/STOPPING` 为活跃态，`STOPPED/FAILED` 为终态。数量无限制（PRD v1.0）。
  * `deletedAt` 非空表示软删除（列表隐藏，Controller/会话/消息留档）。
  */
 const cloudHostSchema = new mongoose.Schema(
@@ -46,6 +46,13 @@ const cloudHostSchema = new mongoose.Schema(
     },
     containerId: { type: String, default: null },
     defaultSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
+    // 锁定的 Github 帐号；null=未选定（创建时可选定，或首次 Git 项目设置时 CAS 绑定一次）
+    githubAccountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'GitHubAccount',
+      required: false,
+      default: null,
+    },
     // D1：创建时是否由 ready 回调自动建默认会话；历史行缺省视为 true（零迁移）
     createDefaultSession: { type: Boolean, default: true },
     startedAt: { type: Date, default: null },
@@ -59,18 +66,8 @@ const cloudHostSchema = new mongoose.Schema(
 
 cloudHostSchema.index({ userId: 1, status: 1 });
 cloudHostSchema.index({ controllerId: 1 });
-// A-5：每用户同时最多 1 个活跃云电脑（多副本部署时由 DB 兜底；进程内 KeyedMutex 仅单实例优化）。
-cloudHostSchema.index(
-  { userId: 1 },
-  {
-    unique: true,
-    name: 'uniq_active_cloud_host_per_user',
-    partialFilterExpression: {
-      status: { $in: ['STARTING', 'RUNNING', 'STOPPING'] },
-      deletedAt: null,
-    },
-  },
-);
+// A-5（PRD v1.0）：数量无限制；活跃唯一索引 uniq_active_cloud_host_per_user
+// 已由迁移 011 下线（迁移 005 只读不回改），此处不得再声明。
 
 export const CloudHost = mongoose.model('CloudHost', cloudHostSchema);
 export type ICloudHost = mongoose.InferSchemaType<typeof cloudHostSchema>;

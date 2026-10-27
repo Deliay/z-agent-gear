@@ -7,6 +7,9 @@
 #   STARTING → RUNNING → STOPPING → STOPPED（终态，不可重新运行）
 #   启动/运行失败 → FAILED（终态）
 # 无 `startCloudHost`；需要新云电脑时重新 `createCloudHost`。
+#
+# 计费：创建收取一次性创建费（余额不足拒绝、拉起失败自动退款）；运行期按分钟计费（口径不变）。
+# Github 帐号：创建时可选绑定，创建后首次 Git 项目设置可选定一次，选定后不可修改（跟随云电脑）。
 
 enum HarnessType {
   OPENCODE
@@ -61,6 +64,18 @@ type CloudHost {
   hasDefaultWorkspace: Boolean!
   # 当前正在 runtime 安装的工作负载名；null 表示空闲
   workloadInstalling: String
+  # 云电脑锁定的 Github 帐号；null = 未选定（可在首次 Git 项目设置时选定一次），一经绑定不可修改
+  githubAccountId: ID
+}
+
+# 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
+type CloudHostBillingQuote {
+  # 一次性创建费（credits）；创建确认即扣费
+  createCredits: Float!
+  # 运行期每分钟费用（credits）
+  perMinuteCredits: Float!
+  # 当前可用余额（credits）；计费不可用/查询失败为 null（前端仅提示，不阻断创建）
+  availableBalance: Float
 }
 
 enum CloudHostSetupKind {
@@ -167,6 +182,9 @@ input CreateCloudHostInput {
   workloadIds: [ID!]
   # 新增：false 时 ready 不自动建默认会话（由 setup 的 session 步骤建项目会话）
   createDefaultSession: Boolean = true
+  # 可选：创建时锁定 Github 帐号（勾选「配置 Github 项目」时前端必传）；必须是当前用户已绑定帐号；
+  # 缺省 = 创建时未选定（后续首次 Git 项目设置时选定并锁定）
+  githubAccountId: ID
 }
 
 input InstallCloudHostWorkloadInput {
@@ -177,6 +195,7 @@ input InstallCloudHostWorkloadInput {
 
 input SetupCloudHostGithubProjectInput {
   controllerId: ID!
+  # 云电脑已锁定帐号时必须等于锁定帐号（否则 `github account is locked`）；未锁定时本次设置将其锁定
   accountId: ID!
   repoFullName: String!
   # 语义：clone 前缀地址（工作根目录），不是最终目录。
@@ -201,6 +220,8 @@ extend type Query {
   cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
   # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）
   cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
+  # 云电脑创建/运行报价（服务端权威价目；计费不可用时 availableBalance=null、价格回退默认值）
+  cloudHostBillingQuote: CloudHostBillingQuote!
 }
 
 extend type Mutation {

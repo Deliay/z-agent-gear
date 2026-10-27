@@ -20,6 +20,8 @@ export interface StartCloudHostProvisioningInput {
   name: string
   harnessTypes: HarnessType[]
   workloadIds?: string[]
+  /** 勾选 Github 项目时锁定帐号（未勾选保持旧报文形状） */
+  githubAccountId?: string
   project: CloudHostProjectSelection
 }
 
@@ -68,6 +70,7 @@ export function useCloudHostProvisioning() {
             ...(input.workloadIds && input.workloadIds.length > 0
               ? { workloadIds: input.workloadIds }
               : {}),
+            ...(input.githubAccountId ? { githubAccountId: input.githubAccountId } : {}),
             createDefaultSession: false,
           },
         },

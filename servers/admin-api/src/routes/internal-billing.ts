@@ -17,6 +17,13 @@ import {
   toBillingRollup,
 } from '../services/billing/mappers.js';
 import { rollupService, type RollupGranularity } from '../services/billing/rollup-service.js';
+import {
+  AccountFrozenError,
+  AccountNotFoundError,
+  InsufficientBalanceError,
+  InvalidChargeInputError,
+  oneTimeChargeService,
+} from '../services/billing/one-time-charge.js';
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -92,6 +99,110 @@ export function createInternalBillingRouter(): Router {
     } catch (err) {
       // C2：内部错误详情只记服务端日志，绝不把 Mongo/驱动信息原样吐给调用方/终端用户。
       console.error('[internal-billing] GET /account failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  router.post('/charges', async (req: Request, res: Response) => {
+    const {
+      accountId,
+      productId,
+      quantity,
+      idempotentKey,
+      refType,
+      refId,
+      description,
+    } = req.body ?? {};
+    if (
+      typeof accountId !== 'string' ||
+      !mongoose.isValidObjectId(accountId) ||
+      typeof productId !== 'string' ||
+      !productId ||
+      !Number.isInteger(quantity) ||
+      quantity <= 0 ||
+      typeof idempotentKey !== 'string' ||
+      !idempotentKey ||
+      typeof refType !== 'string' ||
+      !refType ||
+      typeof refId !== 'string' ||
+      !refId ||
+      typeof description !== 'string'
+    ) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const result = await oneTimeChargeService.createOneTimeCharge({
+        accountId,
+        productId,
+        quantity,
+        idempotentKey,
+        refType,
+        refId,
+        description,
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof InvalidChargeInputError) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      if (err instanceof AccountNotFoundError) {
+        res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
+        return;
+      }
+      if (err instanceof AccountFrozenError) {
+        res.status(403).json({ error: 'ACCOUNT_FROZEN' });
+        return;
+      }
+      if (err instanceof InsufficientBalanceError) {
+        res.status(409).json({ error: 'INSUFFICIENT_BALANCE', available: err.available });
+        return;
+      }
+      console.error('[internal-billing] POST /charges failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  router.post('/refunds', async (req: Request, res: Response) => {
+    const { idempotentKey, refundKey, reason } = req.body ?? {};
+    if (
+      typeof idempotentKey !== 'string' ||
+      !idempotentKey ||
+      typeof refundKey !== 'string' ||
+      !refundKey ||
+      typeof reason !== 'string'
+    ) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const result = await oneTimeChargeService.refundCharge({
+        idempotentKey,
+        refundKey,
+        reason,
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[internal-billing] POST /refunds failed', (err as Error).message);
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  router.get('/price-quote', async (req: Request, res: Response) => {
+    const raw = req.query.productIds;
+    const productIds = (typeof raw === 'string' ? raw : '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (productIds.length === 0) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      res.json(await oneTimeChargeService.getPriceQuote(productIds));
+    } catch (err) {
+      console.error('[internal-billing] GET /price-quote failed', (err as Error).message);
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });

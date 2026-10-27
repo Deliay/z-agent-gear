@@ -47,6 +47,23 @@ async function hostWithFlags(
 test.describe('Cloud Host E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
 
+  test('E2E-39/41: 收费详情展示且余额不足不前置禁用创建', async ({ page }) => {
+    const { username } = await registerUser(page);
+    await loginViaUI(page, username);
+    await expect(page.locator(sidebar())).toBeVisible();
+
+    await page.getByRole('button', { name: '新建云电脑' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('收费详情')).toBeVisible();
+    await expect(dialog.getByText(/创建花费：/)).toBeVisible();
+    await expect(dialog.getByText(/运行消费：/)).toBeVisible();
+    await expect(dialog.getByText('余额不足持续 10 分钟云电脑将被强制销毁')).toBeVisible();
+
+    await dialog.locator('#cloud-host-name').fill(`e2e-quote-${Date.now().toString(36)}`);
+    await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
+    await expect(dialog.getByRole('button', { name: '创建云电脑' })).toBeEnabled();
+  });
+
   test('T-AW2..T-AW9: create → starting → stop → stopped → delete', async ({ page }) => {
     const { token, username } = await registerUser(page);
     await loginViaUI(page, username);

@@ -7,7 +7,7 @@ vi.mock('../models/cloud-host-github-binding.js', () => ({
   CloudHostGithubBinding: { findOneAndUpdate: vi.fn() },
 }));
 vi.mock('../models/cloud-host.js', () => ({
-  CloudHost: { updateOne: vi.fn() },
+  CloudHost: { updateOne: vi.fn(), findById: vi.fn() },
 }));
 vi.mock('../models/cloud-host-setup-operation.js', () => ({
   CloudHostSetupOperation: {
@@ -564,6 +564,98 @@ describe('CloudHostGithubService', () => {
         }),
       ).rejects.toThrow('仓库格式应为 owner/repo');
 
+      expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Github 帐号锁定（T-CHG12..T-CHG14）', () => {
+    const baseWorkload = {
+      updateStep: vi.fn().mockResolvedValue(undefined),
+      pollBatch: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+
+    beforeEach(() => {
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(lean({ _id: ACCOUNT_ID }) as never);
+      vi.mocked(GitHubInstallation.find).mockReturnValue(
+        lean([{ repos: [{ fullName: 'owner/repo' }] }]) as never,
+      );
+      vi.mocked(CloudHostSetupOperation.findOne).mockReturnValue(lean(null) as never);
+      vi.mocked(CloudHostSetupOperation.create).mockReturnValue({
+        _id: 'op1',
+        toObject: () => ({ _id: 'op1' }),
+      } as never);
+    });
+
+    it('T-CHG12: 未锁定首绑 CAS 后创建 operation', async () => {
+      vi.mocked(CloudHost.updateOne).mockResolvedValue({ matchedCount: 1 } as never);
+      const host = {
+        _id: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        status: 'RUNNING',
+        containerId: CONTAINER_ID,
+      };
+      const { service } = makeService({
+        workloadService: { ...baseWorkload, requireCloudHost: vi.fn().mockResolvedValue(host) },
+      });
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'owner/repo',
+        targetPath: '/home/worker/workspace',
+      });
+      expect(CloudHost.updateOne).toHaveBeenCalledWith(
+        { _id: HOST_ID, githubAccountId: null },
+        { $set: { githubAccountId: ACCOUNT_ID } },
+      );
+      expect(CloudHostSetupOperation.create).toHaveBeenCalled();
+    });
+
+    it('T-CHG13: 已锁定同帐号照常执行', async () => {
+      const host = {
+        _id: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        status: 'RUNNING',
+        containerId: CONTAINER_ID,
+        githubAccountId: ACCOUNT_ID,
+      };
+      const { service } = makeService({
+        workloadService: { ...baseWorkload, requireCloudHost: vi.fn().mockResolvedValue(host) },
+      });
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'owner/repo',
+        targetPath: '/home/worker/workspace',
+      });
+      expect(CloudHostSetupOperation.create).toHaveBeenCalled();
+    });
+
+    it('T-CHG14: 已锁定异帐号拒绝且不创建 operation', async () => {
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(
+        lean({ _id: '507f1f77bcf86cd799439099' }) as never,
+      );
+      const host = {
+        _id: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        status: 'RUNNING',
+        containerId: CONTAINER_ID,
+        githubAccountId: ACCOUNT_ID,
+      };
+      const { service } = makeService({
+        workloadService: { ...baseWorkload, requireCloudHost: vi.fn().mockResolvedValue(host) },
+      });
+      await expect(
+        service.createOperation({
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          accountId: '507f1f77bcf86cd799439099',
+          repoFullName: 'owner/repo',
+          targetPath: '/home/worker/workspace',
+        }),
+      ).rejects.toThrow('github account is locked');
       expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
     });
   });

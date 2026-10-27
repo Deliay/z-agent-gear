@@ -41,6 +41,15 @@ export const cloudHostTypeDefs = `#graphql
     hasDefaultWorkspace: Boolean!
     # 当前正在 runtime 安装的工作负载名；null 表示空闲
     workloadInstalling: String
+    # 云电脑锁定的 Github 帐号；null = 未选定（可在首次 Git 项目设置时选定一次），一经绑定不可修改
+    githubAccountId: ID
+  }
+
+  # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
+  type CloudHostBillingQuote {
+    createCredits: Float!
+    perMinuteCredits: Float!
+    availableBalance: Float
   }
 
   enum CloudHostSetupKind {
@@ -140,6 +149,8 @@ export const cloudHostTypeDefs = `#graphql
     workloadIds: [ID!]
     # false 时 ready 不自动建默认会话（由 setup 的 session 步骤建项目会话）
     createDefaultSession: Boolean = true
+    # 可选：创建时锁定 Github 帐号（必须是当前用户已绑定帐号；缺省 = 未选定）
+    githubAccountId: ID
   }
 
   input InstallCloudHostWorkloadInput {
@@ -150,6 +161,7 @@ export const cloudHostTypeDefs = `#graphql
 
   input SetupCloudHostGithubProjectInput {
     controllerId: ID!
+    # 云电脑已锁定帐号时必须等于锁定帐号（否则 github account is locked）；未锁定时本次设置将其锁定
     accountId: ID!
     repoFullName: String!
     # 语义：clone 前缀地址（工作根目录），不是最终目录。
@@ -173,6 +185,8 @@ export const cloudHostTypeDefs = `#graphql
     cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
     # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）
     cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
+    # 云电脑创建/运行报价（计费不可用时 availableBalance=null、价格回退默认值）
+    cloudHostBillingQuote: CloudHostBillingQuote!
   }
 
   extend type Mutation {

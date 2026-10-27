@@ -69,6 +69,22 @@ describe('useCloudHostProvisioning', () => {
     expect(mockSetupGithubProject).not.toHaveBeenCalled()
   })
 
+  it('勾选 Github 项目时创建报文携带 githubAccountId', async () => {
+    const { result } = renderHook(() => useCloudHostProvisioning())
+    await act(async () => {
+      await result.current.start({
+        name: '云电脑 A',
+        harnessTypes: ['OPENCODE'],
+        project,
+        githubAccountId: 'acc-1',
+      })
+    })
+    expect(mockCreateCloudHost.mock.calls[0][0].variables.input).toMatchObject({
+      githubAccountId: 'acc-1',
+      createDefaultSession: false,
+    })
+  })
+
   it('单 Harness 时 setup 传 createSession=true 并记录 operationId', async () => {
     const { result } = renderHook(() => useCloudHostProvisioning())
     await act(async () => {

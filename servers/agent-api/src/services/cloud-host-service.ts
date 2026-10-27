@@ -5,8 +5,9 @@ import { CloudHost, HARNESS_TYPES, type HarnessType } from '../models/cloud-host
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
+import { GitHubAccount } from '../models/github-account.js';
 import { Session } from '../models/session.js';
-import { billingClient, BillingServiceUnavailableError } from './billing-client.js';
+import { billingClient, BillingServiceUnavailableError, InsufficientBalanceError } from './billing-client.js';
 import {
   CloudControllerClient,
   CloudControllerUnavailableError,
@@ -68,6 +69,8 @@ export interface CreateCloudHostInput {
   workloadIds?: string[];
   /** D1：false 时 ready 不自动建默认会话（由项目准备 session 步骤建）；缺省 true。 */
   createDefaultSession?: boolean;
+  /** 可选：创建时锁定 Github 帐号（必须是当前用户已绑定帐号）。 */
+  githubAccountId?: string | null;
 }
 
 export interface CloudHostStopImpact {
@@ -92,7 +95,6 @@ interface CloudHostServiceDeps {
   controllerClient?: CloudControllerClient;
   workloadReader?: typeof cloudWorkloadReader;
   catalog?: typeof cloudWorkloadCatalog;
-  maxPerUser?: number;
   ttlSeconds?: number;
 }
 
@@ -141,7 +143,7 @@ function parseWorkloadIds(raw: unknown): string[] {
 }
 
 /**
- * 前台云电脑领域服务：创建编排 / 每用户 1 实例 / 停止即销毁 / 软删除 /
+ * 前台云电脑领域服务：创建编排（扣费/退款）/ 数量无限制 / 停止即销毁 / 软删除 /
  * ready+terminal 回调 / 默认会话 / 会话只读判定入口。
  */
 export class CloudHostService {
@@ -150,14 +152,12 @@ export class CloudHostService {
   private readonly controllerClient: CloudControllerClient;
   private readonly workloadReader: typeof cloudWorkloadReader;
   private readonly catalog: typeof cloudWorkloadCatalog;
-  private readonly maxPerUser: number;
   private readonly ttlSeconds: number;
 
   constructor(deps: CloudHostServiceDeps = {}) {
     this.controllerClient = deps.controllerClient ?? cloudControllerClient;
     this.workloadReader = deps.workloadReader ?? cloudWorkloadReader;
     this.catalog = deps.catalog ?? cloudWorkloadCatalog;
-    this.maxPerUser = deps.maxPerUser ?? config.cloudHostMaxPerUser;
     this.ttlSeconds = deps.ttlSeconds ?? config.harnessContainerTtlSeconds;
   }
 
@@ -205,22 +205,39 @@ export class CloudHostService {
     harnessTypes: HarnessType[];
     workloadIds: string[];
     createDefaultSession: boolean;
+    githubAccountId: string | null;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
     if (name.length > 64) throw new Error('name is too long');
+    const rawAccountId =
+      input.githubAccountId === undefined || input.githubAccountId === null
+        ? ''
+        : String(input.githubAccountId).trim();
+    if (rawAccountId && !mongoose.isValidObjectId(rawAccountId)) {
+      throw new Error('Github 账号不存在或不属于当前用户');
+    }
     return {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
       workloadIds: parseWorkloadIds(input.workloadIds),
       createDefaultSession: input.createDefaultSession !== false,
+      githubAccountId: rawAccountId || null,
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds, createDefaultSession } = this.validateInput(input);
+    const { name, harnessTypes, workloadIds, createDefaultSession, githubAccountId } =
+      this.validateInput(input);
+    if (githubAccountId) {
+      const account = await GitHubAccount.findOne({
+        _id: githubAccountId,
+        userId,
+      }).lean();
+      if (!account) throw new Error('Github 账号不存在或不属于当前用户');
+    }
 
     // 读取 harness preset 先于任何落库（缺失时不留下半成品记录）
     const presets: HarnessPreset[] = [];
@@ -232,15 +249,6 @@ export class CloudHostService {
     const workloadPlan = await this.resolveWorkloadPlan(presets, workloadIds);
 
     return this.userMutex.runExclusive(`user:${userId}`, async () => {
-      const activeCount = await CloudHost.countDocuments({
-        userId,
-        status: { $in: ACTIVE_STATUSES },
-        deletedAt: null,
-      });
-      if (activeCount >= this.maxPerUser) {
-        throw new Error('too many cloud hosts');
-      }
-
       let account: { id: string };
       try {
         account = await billingClient.getAccount('front_user', userId);
@@ -251,6 +259,26 @@ export class CloudHostService {
       const cloudHostId = new mongoose.Types.ObjectId().toString();
       const controllerId = new mongoose.Types.ObjectId().toString();
       const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
+      const chargeKey = `cloud_host.create:${cloudHostId}`;
+
+      // 服务端权威扣费：先扣费再落库/拉起；余额不足直接外抛（不产生任何落库与账单）。
+      try {
+        await billingClient.createCharge({
+          accountId: account.id,
+          productId: 'cloud_host.create',
+          quantity: 1,
+          idempotentKey: chargeKey,
+          refType: 'cloud_host',
+          refId: cloudHostId,
+          description: `创建云电脑 ${name}`,
+        });
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) throw new Error('insufficient balance');
+        if (err instanceof BillingServiceUnavailableError) {
+          throw new Error('billing service unavailable');
+        }
+        throw err;
+      }
 
       let keyId: string | null = null;
       let workspaceId: string | null = null;
@@ -281,6 +309,7 @@ export class CloudHostService {
           keyId,
           workspaceId,
           createDefaultSession,
+          githubAccountId,
           startedAt: new Date(),
         });
 
@@ -360,6 +389,19 @@ export class CloudHostService {
         return this.mapCloudHost(updated as Doc, 0);
       } catch (err) {
         if (!containerStarted) {
+          // 无机器不收费：拉起/落库失败时先退款（best-effort，幂等），再回滚半成品。
+          await billingClient
+            .refundCharge({
+              idempotentKey: chargeKey,
+              refundKey: `cloud_host.create.refund:${cloudHostId}`,
+              reason: (err as Error)?.message || 'create failed',
+            })
+            .catch((refundErr) => {
+              console.warn(
+                '[cloud-host] refund create charge failed:',
+                (refundErr as Error).message,
+              );
+            });
           await this.rollback({
             userId,
             cloudHostId,
@@ -373,14 +415,6 @@ export class CloudHostService {
         }
         if (err instanceof BillingServiceUnavailableError) {
           throw new Error('billing service unavailable');
-        }
-        if (
-          (err as { code?: number }).code === 11000 &&
-          String((err as Error).message).includes('uniq_active_cloud_host_per_user')
-        ) {
-          // A-5/R2-18：仅云电脑活跃唯一索引冲突映射为业务文案；
-          // ControllerKey/Controller 等其它唯一键冲突仍按原始错误抛出。
-          throw new Error('too many cloud hosts');
         }
         throw err;
       }
@@ -700,6 +734,7 @@ export class CloudHostService {
     if (!host) return null;
     if (host.status === 'STOPPED' || host.status === 'FAILED') {
       // A-4：早退分支仍需幂等补做副作用收尾（回调重试可能命中早退）。
+      await this.refundUnreadyHost(host, id, 'cloud host terminal before ready (retry)');
       await sessionService.endByController(String(host.controllerId), String(host.userId));
       await billingClient.revokeApiKeysByHost(id).catch((err) => {
         console.warn('[cloud-host] revoke model key on terminal retry failed:', (err as Error).message);
@@ -723,6 +758,7 @@ export class CloudHostService {
     const current = updated ?? (await this.findRawHost(id));
     if (!current) return null;
 
+    await this.refundUnreadyHost(current, id, input.reason ?? 'cloud host terminal before ready');
     await sessionService.endByController(String(current.controllerId), String(current.userId));
     await billingClient.revokeApiKeysByHost(id).catch((err) => {
       console.warn('[cloud-host] revoke model key on terminal failed:', (err as Error).message);
@@ -730,6 +766,20 @@ export class CloudHostService {
     // A-3：终态 CAS 后再兜一次，确保晚到创建的会话也被结束。
     await sessionService.endByController(String(current.controllerId), String(current.userId));
     return this.mapCloudHost(current, 0);
+  }
+
+  /** 未就绪即终态：退回一次性创建费（best-effort 幂等；已 ready 的销毁不退款）。 */
+  private async refundUnreadyHost(host: Doc, id: string, reason: string): Promise<void> {
+    if (host.readyAt) return;
+    await billingClient
+      .refundCharge({
+        idempotentKey: `cloud_host.create:${id}`,
+        refundKey: `cloud_host.create.refund:${id}`,
+        reason,
+      })
+      .catch((err) => {
+        console.warn('[cloud-host] refund create charge on terminal failed:', (err as Error).message);
+      });
   }
 
   /** 内部路由用于区分「不存在」「非云电脑」。 */
@@ -803,6 +853,7 @@ export class CloudHostService {
       stoppedAt: iso(host.stoppedAt),
       failureReason: host.failureReason ?? null,
       deletedAt: iso(host.deletedAt),
+      githubAccountId: host.githubAccountId ? String(host.githubAccountId) : null,
       hasDefaultWorkspace: Boolean(host.workspaceId),
     };
   }
@@ -812,12 +863,14 @@ export class CloudHostService {
 const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'name is required',
   'name is too long',
-  'too many cloud hosts',
+  'insufficient balance',
   'harness feature is disabled',
   'at least one harness type is required',
   'cloud host is not configured',
   'control plane unavailable',
   'billing service unavailable',
+  'Github 账号不存在或不属于当前用户',
+  'github account is locked',
   'Cloud host not found',
   'cloud host is not running',
   'stop the cloud host before deleting',
